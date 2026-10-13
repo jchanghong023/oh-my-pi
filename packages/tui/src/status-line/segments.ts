@@ -626,69 +626,42 @@ function pathSpans(value: string): TspSpan[] {
 	return [span(value.slice(0, slash + 1), "statusLinePath dim"), leaf];
 }
 
+function gitText(ctx: SegmentContext): string {
+	const { branch, status } = ctx.git;
+	const opts = ctx.options.git ?? {};
+	const showStaged = opts.showStaged !== false;
+	const showUnstaged = opts.showUnstaged !== false;
+	let changed = 0;
+	if (status) {
+		changed =
+			(showStaged ? status.staged : 0) +
+			(showUnstaged ? status.unstaged : 0) +
+			(opts.showUntracked !== false ? status.untracked : 0);
+		if (showStaged && showUnstaged) {
+			// A file changed in both the index and worktree contributes only once.
+			changed -= status.staged + status.unstaged + status.untracked - status.changed;
+		}
+	}
+	const branchText = opts.showBranch !== false && branch ? branch : "";
+	if (!branchText && changed === 0) return "";
+	return `git${branchText ? ` ${branchText}` : ""}${changed > 0 ? `${branchText ? " · " : " "}改动${changed}` : ""}`;
+}
+
 const gitSegment: StatusLineSegment = {
 	id: "git",
 	render(ctx) {
-		const { branch, status } = ctx.git;
-		if (!branch && !status) return { content: "", visible: false };
-
-		const opts = ctx.options.git ?? {};
-		const gitStatus = status;
-		const isDirty = gitStatus && (gitStatus.staged > 0 || gitStatus.unstaged > 0 || gitStatus.untracked > 0);
-
-		const showBranch = opts.showBranch !== false;
-		let content = "";
-		if (showBranch && branch) {
-			content = withIcon(theme.icon.branch, branch);
-		}
-
-		// Add status indicators
-		if (gitStatus) {
-			const indicators: string[] = [];
-			if (opts.showUnstaged !== false && gitStatus.unstaged > 0) {
-				indicators.push(theme.fg("statusLineDirty", `*${gitStatus.unstaged}`));
-			}
-			if (opts.showStaged !== false && gitStatus.staged > 0) {
-				indicators.push(theme.fg("statusLineStaged", `+${gitStatus.staged}`));
-			}
-			if (opts.showUntracked !== false && gitStatus.untracked > 0) {
-				indicators.push(theme.fg("statusLineUntracked", `?${gitStatus.untracked}`));
-			}
-			if (indicators.length > 0) {
-				const indicatorText = indicators.join(" ");
-				if (!content && showBranch === false) {
-					content = withIcon(theme.icon.git, indicatorText);
-				} else {
-					content += content ? ` ${indicatorText}` : indicatorText;
-				}
-			}
-		}
-
+		const content = gitText(ctx);
 		if (!content) return { content: "", visible: false };
-
-		const colorName = isDirty ? "statusLineGitDirty" : "statusLineGitClean";
+		const colorName = (ctx.git.status?.changed ?? 0) > 0 ? "statusLineGitDirty" : "statusLineGitClean";
 		return { content: theme.fg(colorName, content), visible: true };
 	},
 	describe(ctx) {
-		const { branch, status } = ctx.git;
-		if (!branch && !status) return null;
-		const opts = ctx.options.git ?? {};
-		const isDirty = status !== null && (status.staged > 0 || status.unstaged > 0 || status.untracked > 0);
+		const content = gitText(ctx);
+		if (!content) return null;
+		const isDirty = (ctx.git.status?.changed ?? 0) > 0;
 		const colorName = isDirty ? "statusLineGitDirty" : "statusLineGitClean";
-		const showBranch = opts.showBranch !== false;
-		const spans: TspSpan[] = [];
-		if (showBranch && branch) spans.push(span(branch, colorName));
-		if (status) {
-			// Spans join as one text: each count after the branch or a previous count leads with a space.
-			const push = (text: string, token: string): void => {
-				spans.push(span(spans.length > 0 ? ` ${text}` : text, token));
-			};
-			if (opts.showUnstaged !== false && status.unstaged > 0) push(`*${status.unstaged}`, "statusLineDirty");
-			if (opts.showStaged !== false && status.staged > 0) push(`+${status.staged}`, "statusLineStaged");
-			if (opts.showUntracked !== false && status.untracked > 0) push(`?${status.untracked}`, "statusLineUntracked");
-		}
-		if (spans.length === 0) return null;
-		return segView(spans, showBranch && branch ? "branch" : "git", isDirty ? "warning" : undefined);
+		const spans = [span(content, colorName)];
+		return isDirty ? { spans, tone: "warning" } : { spans };
 	},
 };
 

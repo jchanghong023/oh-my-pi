@@ -9,7 +9,6 @@ import { setCodexAttestationProvider } from "@oh-my-pi/pi-ai/providers/openai-co
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
 import { OAuthRefreshUnavailableError } from "@oh-my-pi/pi-ai/error";
-import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-ai/stream";
 import type {
 	Api,
 	Context,
@@ -49,6 +48,7 @@ import {
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
+import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
 import { generateCodexAttestation } from "../live/attestation";
@@ -577,8 +577,12 @@ export class ModelRegistry {
 			fetch: options?.jchToolsDiscovery?.fetch ?? this.#fetch,
 		};
 		if (this.#canDiscoverJchTools()) registerCustomApi(JCHTOOLS_API, streamJchToolsAgent, "builtin:jchtools");
-		if (!this.#ignoreLocalModelConfig && !isCompanyLaneActive() &&
-			!getDisabledProviderIdsFromSettings(this.#settings).has(CODEAGENT_PROVIDER_ID)) initializeCodeAgentProvider();
+		if (
+			!this.#ignoreLocalModelConfig &&
+			!isCompanyLaneActive() &&
+			!getDisabledProviderIdsFromSettings(this.#settings).has(CODEAGENT_PROVIDER_ID)
+		)
+			initializeCodeAgentProvider();
 		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath ?? path.join(getAgentDir(), "models.yml"));
 		this.#cacheDbPath =
 			options?.cacheDbPath ?? (modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined);
@@ -1400,7 +1404,9 @@ export class ModelRegistry {
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		if (this.#ignoreLocalModelConfig) return models;
 		const stripped = models.filter(
-			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== ZCODE_API_PROVIDER_ID &&
+			model =>
+				model.provider !== COMPANY_PROVIDER_ID &&
+				model.provider !== ZCODE_API_PROVIDER_ID &&
 				model.provider !== CODEAGENT_PROVIDER_ID,
 		);
 		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
@@ -2048,8 +2054,10 @@ export class ModelRegistry {
 		const configuredProviders = new Set(Object.keys(value.providers ?? {}));
 		for (const [providerName, providerConfig] of providerEntries) {
 			if (providerName === CODEAGENT_PROVIDER_ID) {
-				this.#warnReservedProviderConfig(providerName,
-					"this built-in provider uses only the current-user registry token; the whole section is ignored");
+				this.#warnReservedProviderConfig(
+					providerName,
+					"this built-in provider uses only the current-user registry token; the whole section is ignored",
+				);
 				continue;
 			}
 			if (providerName === JCHTOOLS_PROVIDER_ID) {
@@ -3819,7 +3827,8 @@ export class ModelRegistry {
 	registerProvider(providerName: string, config: ProviderConfigInput, sourceId?: string): void {
 		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
 		if (providerName === JCHTOOLS_PROVIDER_ID) throw new Error("The live JchTools provider cannot be replaced.");
-		if (providerName === CODEAGENT_PROVIDER_ID) throw new Error("The built-in CodeAgent provider cannot be replaced.");
+		if (providerName === CODEAGENT_PROVIDER_ID)
+			throw new Error("The built-in CodeAgent provider cannot be replaced.");
 		if (config.streamSimple && !config.api) {
 			throw new Error(`Provider ${providerName}: "api" is required when registering streamSimple.`);
 		}

@@ -124,7 +124,7 @@ effect(cfgColorBlindMode, setColorBlindMode);
 export const cfgComposerShape = register({
 	id: "composer.shape",
 	type: "string",
-	default: "pi",
+	default: "box",
 	ui: {
 		tab: "appearance",
 		group: "Composer",
@@ -222,7 +222,7 @@ export const cfgStatusLineContextLine = register({
 			{
 				value: "embedded",
 				label: "Embedded",
-				description: "Annotated line with the context percentage and window embedded in the gauge",
+				description: "Percentage line with right-aligned context percentage and window, without boundary ticks",
 			},
 		],
 	},
@@ -1064,7 +1064,7 @@ export const cfgPasteLargeMenuThreshold = register({
 export const cfgStartupQuiet = register({
 	id: "startup.quiet",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "interaction",
 		group: "Startup & Updates",
@@ -1230,7 +1230,7 @@ export const cfgErrorNotify = register({
 export const cfgAskTimeout = register({
 	id: "ask.timeout",
 	type: "number",
-	default: 0,
+	default: 30,
 	ui: {
 		tab: "interaction",
 		group: "Notifications",

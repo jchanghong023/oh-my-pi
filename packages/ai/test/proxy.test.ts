@@ -15,6 +15,7 @@ import {
 	getProxyForUrl,
 	installGlobalProxyFetch,
 	isLocalOrMetadataHost,
+	matchesForkSystemProxyBypass,
 	parseInternetSettingsProxy,
 	shouldBypassProxy,
 	wrapFetchForProxy,
@@ -444,6 +445,36 @@ describe("parseInternetSettingsProxy", () => {
 	});
 });
 
+describe("matchesForkSystemProxyBypass", () => {
+	it("matches company domain suffixes, specific hosts, and dotted-label containment", () => {
+		expect(matchesForkSystemProxyBypass("portal.huawei.com")).toBe(true);
+		expect(matchesForkSystemProxyBypass("huawei.com")).toBe(true);
+		expect(matchesForkSystemProxyBypass("models.ascend.huawei.com")).toBe(true);
+		expect(matchesForkSystemProxyBypass("www.hisilicon.com")).toBe(true);
+		expect(matchesForkSystemProxyBypass("e.huawei.hisilicon.cn")).toBe(true);
+		expect(matchesForkSystemProxyBypass("irad.huaweigsc.com")).toBe(true);
+	});
+
+	it("matches internal IP prefixes and globs without leaking public neighbors", () => {
+		expect(matchesForkSystemProxyBypass("100.120.1.2")).toBe(true);
+		expect(matchesForkSystemProxyBypass("100.75.1.2")).toBe(true);
+		expect(matchesForkSystemProxyBypass("100.11.4.5")).toBe(true);
+		expect(matchesForkSystemProxyBypass("172.32.1.1")).toBe(true);
+		expect(matchesForkSystemProxyBypass("wo-dr2.dbankcloud.ru")).toBe(true);
+		// Public look-alikes stay on the system proxy.
+		expect(matchesForkSystemProxyBypass("101.120.1.2")).toBe(false);
+		expect(matchesForkSystemProxyBypass("100.3.1.2")).toBe(false);
+		expect(matchesForkSystemProxyBypass("wo.dbankcloud.ru")).toBe(false);
+	});
+
+	it("leaves unrelated public hosts unmatched", () => {
+		expect(matchesForkSystemProxyBypass("api.anthropic.com")).toBe(false);
+		expect(matchesForkSystemProxyBypass("api.github.com")).toBe(false);
+		expect(matchesForkSystemProxyBypass("build.stencil.so")).toBe(false);
+		expect(matchesForkSystemProxyBypass("huawei.example.org")).toBe(false);
+	});
+});
+
 describe("installGlobalProxyFetch windows system proxy fallback", () => {
 	const nativeFetch = globalThis.fetch;
 	let calls: Array<{ url: string; proxy: unknown }>;
@@ -469,6 +500,19 @@ describe("installGlobalProxyFetch windows system proxy fallback", () => {
 		installGlobalProxyFetch();
 		await fetch("https://api.anthropic.com/v1/messages");
 		expect(calls[0].proxy).toBe("http://127.0.0.1:7890");
+	});
+
+	it("keeps fork intranet hosts direct while public hosts use the system proxy", async () => {
+		__setWindowsSystemProxyReader(() => ({ http: "http://system-proxy:7890", https: "http://system-proxy:7890" }));
+		installGlobalProxyFetch();
+		await fetch("https://api.anthropic.com/v1/messages");
+		await fetch("https://models.ascend.huawei.com/v1/messages");
+		await fetch("https://portal.huawei.com/");
+		await fetch("http://100.120.1.2/api");
+		expect(calls[0].proxy).toBe("http://system-proxy:7890");
+		expect(calls[1].proxy).toBeUndefined();
+		expect(calls[2].proxy).toBeUndefined();
+		expect(calls[3].proxy).toBeUndefined();
 	});
 
 	it("yields to the protocol env proxy instead of overriding it", async () => {

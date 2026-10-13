@@ -132,15 +132,6 @@ describe("cfg:// approval prompt wiring", () => {
 		return new CfgProtocolHandler().write(parseInternalUrl("cfg://advisor/enabled"), "true", { session, signal });
 	}
 
-	it("prompts without a deadline when ask.timeout is at its default", async () => {
-		// Regression for #15080: the prompt used a hardcoded 10s deadline.
-		// A hardcoded value here keeps a helper green but fails below,
-		// because this is the timeout the dialog actually receives.
-		const seen = await startMode(undefined);
-		await driveWrite();
-		expect(seen).toEqual([undefined]);
-	}, 60_000);
-
 	it("prompts with the ask.timeout deadline in milliseconds", async () => {
 		const seen = await startMode(45);
 		await driveWrite();
@@ -150,7 +141,7 @@ describe("cfg:// approval prompt wiring", () => {
 	it("denies a pending approval when the mode stops", async () => {
 		// Without a deadline the prompt would outlive the UI waiting on it.
 		hangSelector = true;
-		const seen = await startMode(undefined);
+		const seen = await startMode(0);
 		const pending = driveWrite();
 		await waitForPrompt(seen);
 		mode!.stop();
@@ -161,7 +152,7 @@ describe("cfg:// approval prompt wiring", () => {
 		// The second write waits on approvalQueue behind the first. Stopping
 		// must deny it too, not leave it prompting a torn-down UI forever.
 		hangSelector = true;
-		const seen = await startMode(undefined);
+		const seen = await startMode(0);
 		const first = driveWrite();
 		const second = driveWrite();
 		await waitForPrompt(seen);
@@ -177,7 +168,7 @@ describe("cfg:// approval prompt wiring", () => {
 		// A collab guest interrupting the agent aborts the turn without
 		// stopping the mode; the orphaned prompt must not linger past it.
 		hangSelector = true;
-		const seen = await startMode(undefined);
+		const seen = await startMode(0);
 		const turn = new AbortController();
 		const pending = driveWrite(turn.signal);
 		await waitForPrompt(seen);

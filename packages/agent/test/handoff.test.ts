@@ -256,6 +256,27 @@ describe("handoff helpers", () => {
 		});
 	});
 
+	test.each([
+		[503, "503 Service Unavailable"],
+		[400, "400 Bad Request: Only a tool_choice of 'auto' is supported for this model; param=tool_choice"],
+	] as const)("generateHandoffFromContext honors the retry opt-out for HTTP %s", async (status, message) => {
+		let requests = 0;
+		const completion = generateHandoffFromContext(
+			{ messages: [{ role: "user", content: "prepare handoff", timestamp: 1 }], tools: [createHandoffTool()] },
+			getTestModel(),
+			{
+				streamOptions: { apiKey: "test-key" },
+				oneshotRetry: false,
+				completeImpl: async () => {
+					requests++;
+					return createAssistantError(status, message);
+				},
+			},
+		);
+		await expect(completion).rejects.toThrow(message);
+		expect(requests).toBe(1);
+	});
+
 	test("generateHandoffFromContext surfaces unrelated provider 400 without retrying", async () => {
 		const completeSimpleSpy = vi
 			.spyOn(ai, "completeSimple")

@@ -184,6 +184,18 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
   `ANTHROPIC_BASE_URL` points to a non-Anthropic host (e.g. a corporate API
   gateway), so enterprise gateways requiring proprietary auth headers work
   without enabling Foundry mode.
+- `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` (same contract as Claude Code) makes
+  provider `anthropic` requests omit pre-release body fields and their
+  `anthropic-beta` tokens: `context_management`, the beta tool fields
+  (`strict`, `defer_loading`, `eager_input_streaming`) and mid-conversation
+  tool changes, `output_config.format` and `output_config.task_budget`, plus
+  `thinking.block_binding` and Anthropic server compaction. Effort, adaptive
+  thinking, interleaved thinking, and extended context stay. Unlike Claude
+  Code, the matching betas are also removed from caller-supplied betas and
+  `anthropic-beta` headers. Use it when an `ANTHROPIC_BASE_URL` gateway
+  rejects them; it works with or without Foundry mode. Which providers honor
+  it is the `honors-claude-code-beta-kill-switch` compat axis
+  (`compat.honorsClaudeCodeBetaKillSwitch` in `models.yml`).
 - TLS client/server material can be injected from env values:
   `NODE_EXTRA_CA_CERTS`, `CLAUDE_CODE_CLIENT_CERT`, `CLAUDE_CODE_CLIENT_KEY`.
   Each accepts either:
@@ -202,6 +214,7 @@ When `CLAUDE_CODE_USE_FOUNDRY` is enabled, Anthropic requests switch to Foundry 
 | `FOUNDRY_BASE_URL`          | URL string                                     | Anthropic endpoint base URL in Foundry mode                                                                                                                   |
 | `ANTHROPIC_FOUNDRY_API_KEY` | Token string                                   | Used for `Authorization: Bearer <token>`                                                                                                                      |
 | `ANTHROPIC_CUSTOM_HEADERS`  | Header list string                             | Extra headers; format `header-a: value, header-b: value` or newline-separated. Also forwarded outside Foundry whenever `ANTHROPIC_BASE_URL` is non-Anthropic. |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | Boolean-like string (`1`, `true`, `yes`, `on`) | Omits pre-release fields (`context_management`, beta tool fields, task budgets, structured-output format, `thinking.block_binding`, server compaction) and their beta headers on provider `anthropic` |
 | `NODE_EXTRA_CA_CERTS`       | PEM path or inline PEM                         | Extra CA chain for server certificate validation                                                                                                              |
 | `CLAUDE_CODE_CLIENT_CERT`   | PEM path or inline PEM                         | mTLS client certificate                                                                                                                                       |
 | `CLAUDE_CODE_CLIENT_KEY`    | PEM path or inline PEM                         | mTLS client private key (must be paired with cert)                                                                                                            |

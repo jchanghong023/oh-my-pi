@@ -512,6 +512,7 @@ export class CustomEditor extends Editor {
 	 */
 	constructor(...args: readonly unknown[]) {
 		super(pickEditorTheme(args));
+		this.minContentRows = 2;
 		const requestTextAssistRepaint = (): void => {
 			this.invalidate();
 			this.#requestShimmerRepaint?.();

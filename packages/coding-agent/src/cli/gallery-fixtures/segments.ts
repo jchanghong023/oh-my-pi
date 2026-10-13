@@ -75,7 +75,7 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		turnElapsedMs: null,
 		git: {
 			branch: "gallery/reference",
-			status: { staged: 2, unstaged: 3, untracked: 1 },
+			status: { staged: 2, unstaged: 3, untracked: 1, changed: 6 },
 			pr: { number: 1842, url: "https://github.com/can1357/oh-my-pi/pull/1842" },
 		},
 		worktree: null,
@@ -170,7 +170,9 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 			return [
 				{
 					label: "clean",
-					context: { git: { branch: "main", status: { staged: 0, unstaged: 0, untracked: 0 }, pr: null } },
+					context: {
+						git: { branch: "main", status: { staged: 0, unstaged: 0, untracked: 0, changed: 0 }, pr: null },
+					},
 				},
 				{ label: "dirty" },
 			];

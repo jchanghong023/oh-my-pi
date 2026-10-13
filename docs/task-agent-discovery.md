@@ -237,6 +237,12 @@ Compaction triggers are separate from model and service-tier selection: an exact
 `compaction.threshold*` settings for that agent only; agents without an entry, including agents it
 spawns, use the main session's thresholds. See [Settings](./settings.md#context-compaction-and-memory).
 
+Request budgets follow the same exact-name pattern: a `task.agentSoftRequestBudget[agentName]` entry
+(a non-negative integer) is that agent's soft request budget, replacing both `task.softRequestBudget`
+and the bundled scout/sonic ceiling, so it can raise a budget the global setting can only lower; `0`
+disables that agent's guard, and `null` clears an entry from a lower settings layer. Agents without an
+entry keep the global setting capped by their bundled ceiling. See [task](./tools/task.md#limits--caps).
+
 Service-tier precedence is independent of model selection: an exact, case-sensitive
 `task.agentServiceTierOverrides[agentName]` entry overrides `tier.subagent`; an absent entry preserves
 the global behavior. `inherit` snapshots the parent session's live per-family tiers (including

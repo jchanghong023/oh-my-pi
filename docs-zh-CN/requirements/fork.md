@@ -22,9 +22,9 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.10.1`
-- **Upstream commit**：`5d0aaffaf1f987503ce129a642fb6e30339615af`
-- **同步日期**：2026-10-12
+* **版本**：`v18.10.3`
+- **Upstream commit**：`818dd42b73ab1caad17fa06d4edcc3a97086dc57`
+- **同步日期**：2026-10-13
 
 ## 当前功能差异
 
@@ -88,7 +88,7 @@
 - `/jchgitdiscardall [--ignored=true|false]`：始终无交互确认，先执行 `git fetch --all --prune`、`git reset --hard @{upstream}`。无参数或 `--ignored=false` 时以 `git clean -df` 清理未跟踪内容，保留 ignored；`--ignored=true` 时以 `git clean -xdf` 同时清理 ignored 文件和目录。clean 以 `git rev-parse --show-toplevel` 解析的仓库根为工作目录，会话位于仓库子目录时同样清理整个工作树（reset 本就是全仓生效）。该命令在交互界面（TUI）执行；ACP/RPC 通道返回提示、不派发；print/SDK 通道没有内置命令派发，命令文本会原样作为用户消息进入模型。非法、重复或多余参数在任何 Git 操作前报用法错误；任一步失败即停止。重置目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
 - `/jchdftexplain`：面向 DFT 新手解释文件、目录、代码和业务概念，命令参数为待解释对象。只读：可读取文件、搜索代码和调用 `wiki`，不修改文件、不执行待解释脚本、不启动 EDA 流程；内部术语主动用 `wiki` 核对并标注来源，代码解释按命令去重、结论先行。
 - `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>`：内置提示词快捷命令，两个数量必须为正的安全整数，正文非空；非法输入只报用法，不启动模型回合。展开为以独立 `workflowz` 关键词开头的普通用户消息，保留正文中的换行与字面量，不新增关键词、调度器或配置写入。
-  - 用于全仓审查、补日志、格式优化等互不依赖的批处理。任务块数量是期望最多约该数量的软目标，按工作量调整，不凑数或扩大范围；任务块数与并发槽数独立，可以多于并发槽数，不以并发上限决定拆分数量。并发数量是向 OMP 下达的同时运行子代理总数上限指令（含嵌套），不是命令新增的程序级限制，现有配置上限更低时仍遵守。
+  - 用于全仓审查、补日志、格式优化等互不依赖的批处理。任务块数量是期望最多约该数量的软目标，按工作量调整，不凑数或扩大范围；任务块数与并发槽数独立，可以多于并发槽数，不以并发上限决定拆分数量。并发数量是向 OMP 下达的同时运行子代理总数上限指令（含嵌套），不是命令新增的程序级限制，现有配置上限更低时仍遵守，由工作池自动截断为较低值；提示词明确要求不向用户询问是否覆盖或修改并发上限，也不修改任何全局配置。
   - 按任务正文确认实际范围和统一规则，向子代理提供已核实的适用规则/需求路径，修改型任务分配不重叠文件集合并保留无关已有修改；复用现有工作池排队、完成即补位，不等待整批屏障。
   - 子代理按任务正文自主完成所属范围：只读任务只报告，修改任务完成证据充分且已授权的最小修改及允许的文件级检查；证据不足只列候选，不推测性修改或扩大范围。跨界发现交主代理协调，不越过文件归属直接修改；跨文件修改由主代理调整归属并指定单一修复责任人。
   - 主代理负责调度、及时补位、跨界协调和结果汇总，不默认重复读取已分配文件的完整 diff 或重审全部改动，仅对争议发现、跨文件修改和结果冲突作必要的定点核对，不集中补跑检查；子代理对所属修改的自查与允许检查不受此限制。
@@ -125,7 +125,7 @@
 - Windows 非 offline 启动内置 `codeagent/DeepSeek-V4-Flash-0731-CodeAgent`，无需配置或登录；非 Windows 平台不注册该内置模型，`OMP_OFFLINE` 生效时所有入口隐藏，其他 Provider 行为不变。
 - 固定 base URL `https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2`，API `openai-completions`，`auth: none`，禁用严格工具模式（OpenAI 兼容轴 `supports-strict-mode #false`，不使用仅适用于 Anthropic 的 `disableStrictTools`）；模型 ID 与名称均为 `DeepSeek-V4-Flash-0731-CodeAgent`，支持 reasoning 与 tools，contextWindow `200000`，maxTokens `32768`。
 - Windows 启动直接读取 `HKCU\Environment\JCH_CODEAGENT3_X_AUTH_TOKEN` 并在内存缓存，作为 `x-auth-token` 请求头；正常请求不重读注册表，不使用进程环境变量快照。
-- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
+- 认证或 API 请求失败时重读注册表；新 Token 与请求所用 Token 不同则刷新缓存，并仅在尚无流式正文、思考或工具输出且未取消时自动重试一次；Token 未变化不重试。此限制覆盖对话、压缩摘要与 handoff，不允许外层重试或认证、模型、压缩方法回退重新发送失败请求。已产生流式输出的请求只刷新后续请求的缓存，禁止重放；刷新无需重启、切模型或创建新会话。
 - 凭据不写配置或日志，不改变其他 Provider 的缓存、认证或重试行为；注册表读取失败不清除已缓存 Token。
 
 ### JchTools 零配置发现与远端 Agent
@@ -177,6 +177,7 @@
 - `packages/utils/src/ar/open.ts`：Windows EPERM 时降级为 junction 或文件复制、跳过 dangling link 已由上游提供；fork 仅保留文件复制时的独占目标语义，不能覆盖现有文件或跟随已有 symlink。
 - `packages/coding-agent/src/tools/read-archive.ts`：Windows 同尺寸快速重写归档并恢复 mtime 时，ctime 也可能不变；该平台不复用仅由文件元数据验证的归档目录缓存，避免返回旧成员名称或读取错误成员。其他平台保留既有有界缓存。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
+- `crates/pi-builtins/src/uptime.rs`、`du.rs`：仅在 Unix 导入 `std::io` 与声明可变 mount 集合；Windows 保留实际使用的 `Write` 和不可变空集合，满足现有零警告 Rust 静态门禁，不改变命令行为。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
@@ -185,10 +186,11 @@
 保持以下 fork 默认值：
 
 - `recap.enabled=false`
-- `startup.quiet=true`（任何机器零配置启动均不显示欢迎界面、启动 splash、启动 changelog 与启动状态消息；用户显式改为 `false` 可恢复）
+- `ask.timeout=30`（秒；显式 `0` 关闭超时，计划模式继续关闭 ask 自动选择；同一设置也约束 `cfg://` 审批，未回答时拒绝写入）
+- `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
 - `statusLine.compactThinkingLevel=false`
-- `composer.shape=pi`
+- `composer.shape=box`（Rounded Box）
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 - `display.showTurnTime=true`
 - `mnemopi.embeddingVariant=multilingual`
@@ -200,8 +202,12 @@
 - `Ctrl+T`：临时模型。
 - `Alt+P`：thinking blocks 显示/隐藏。
 - `Shift+F1`：循环切换 thinking level。
-- 状态栏默认配置（`statusLine.preset` 的 `default` 定义，零配置启动即生效）：左组依次 `pi`、`model`、`mode`、`collab`、`stream`、`path`、`git`、`subagents`、`token_rate`、`cache_hit`、`context_pct`、`time_spent`，右组为空，分隔符 `powerline-thin`；segmentOptions 沿用上游 default 定义（模型显示思考等级、路径缩写上限 40、git 分支与 staged/unstaged/untracked 计数全部显示）。该清单之外的状态栏段（会话名/ID、主机名、vim、hook 状态、PR、输入/输出/总 token、费用、缓存读写、上下文窗口大小、挂钟时间、订阅额度）默认不显示；用户选择 `custom` preset 时仍可完整自定义。
+- ANSI 终端的空输入框固定显示 `Ctrl+T 临时模型 · Ctrl+Q 排队发送 · Esc Esc 回退对话 · /tree 会话历史 · /goal 目标 · 有使用问题反馈j00808874`，只作为帮助文字，不随状态、使用次数或自定义按键变化；输入文字后隐藏，清空后恢复。复用既有占位提示布局，宽度不足时隐藏，不新增配置或轮播；“回退对话”不表示撤销文件修改。
+- ANSI 终端主输入区至少占两行内容：空输入、一行和两行内容均显示两行；超过两行按实际显示行数（含自动换行）展开，仍受现有屏幕高度上限约束。不足两行时仅在框内底部补空白，不额外增加框外间距。
+- 状态栏默认配置（`statusLine.preset` 的 `default` 定义，零配置启动即生效）：左组依次 `pi`、`model`、`mode`、`collab`、`stream`、`path`、`git`、`subagents`、`token_rate`、`cache_hit`、`context_pct`、`time_spent`，右组为空，分隔符 `powerline-thin`；segmentOptions 沿用上游 default 定义（模型显示思考等级、路径缩写上限 40、git 分支显示且 staged/unstaged/untracked 三类改动均计入合并数量）。该清单之外的状态栏段（会话名/ID、主机名、vim、hook 状态、PR、输入/输出/总 token、费用、缓存读写、上下文窗口大小、挂钟时间、订阅额度）默认不显示；用户选择 `custom` preset 时仍可完整自定义。
+- Git 段统一显示纯文本 `git main · 改动5`，不显示 Git／分支图标及 `*`、`+`、`?` 分类符号；改动数为已暂存、未暂存、未跟踪文件的并集，同一文件同时有暂存与未暂存改动只计一次，未跟踪目录内按文件逐个统计，忽略文件不计入。零改动时省略数量；无分支或用户关闭分支显示时只显示 `git 改动5`，分支与数量都不可见时隐藏该段。ANSI 与 native 界面采用同一文字与计数规则；既有三类显示选项仍控制是否计入对应类别。
 - 配置中的 `subagents` 段按所属组与顺序显示，运行中的子代理徽章不得强制移到右组或重复显示；未配置该段时保留上游临时右侧徽章。后台作业徽章沿用上游显示机制，右组配置为空不关闭这些临时徽章。
+- 输入框顶边的 `statusLine.contextLine=embedded` 模式把上下文使用率与窗口容量合并为靠右的 `ctx 3% · 500K` 信息组，容量与说明文字弱化，组后留两个字符间距；使用率变化不让标签沿横线移动。保留用量横线，不显示预压缩与自动压缩的两根刻度，不改变压缩功能（显式选择 `annotated` 模式仍显示刻度）；未知用量只显示容量，超过 100% 的真实比例仍以错误色显示。路径先按配置的缩写上限显示，仅在状态段与上下文信息确实放不下时从左侧截断、保留末尾目录；状态段移入溢出行后，释放的宽度必须重新分配给路径（不超过配置上限），用量横线只填剩余空间；顶边放不下时沿用状态栏溢出显示。
 - 状态栏支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
 - `composer.shape=pi` 时状态栏独立位于输入框下方。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
@@ -248,7 +254,7 @@
 - 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。发布物为 Linux x64/arm64（各含 glibc 与 musl）和 Windows x64 二进制、`omp-browser-relay-extension.zip`、`LICENSE`、`THIRD-PARTY-NOTICES.txt`、`SHA256SUMS.txt`；不构建 macOS 或 Windows arm64 二进制。
 - 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64；`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
 - 两个平台的安装器都下载到安装目录中的唯一临时文件，先确认可启动且 `omp --version` 与所选 Release 完全一致，再替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。Windows 优先 `curl.exe`；未设置目标协议的代理环境变量及 `ALL_PROXY` 时，自动解析当前用户的 Windows 系统代理并传给 curl，不要求额外设置环境变量。显式代理环境变量优先，curl 遵循 `NO_PROXY`；curl 失败或不可用时仍回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`。安装器只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。安装器自身的全部 Web 请求（Release 元数据与二进制下载）默认放宽 TLS 校验，与运行时零配置姿态一致：curl 追加 `--insecure --ssl-no-revoke`（Schannel 吊销检查在拦截代理后常失败），PowerShell 5.1 启用 TLS 1.2 并挂接放行证书回调，PowerShell 7+ 对 `Invoke-RestMethod`/`Invoke-WebRequest` 传 `-SkipCertificateCheck`；下载完整性仍由装后 `omp --version` 与所选 Release 完全一致的校验兜底。
-- 运行时代理与安装器同序：Windows 主进程内所有经全局 `fetch` 的出网请求（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）按「请求自带显式 `proxy`（`PI_PROXY_<PROVIDER>`/`PI_PROXY`）→ 标准代理环境变量（`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，Bun 原生应用）→ 当前用户 Windows 系统代理 → 直连」解析。系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`/`ProxyServer`（含 `http=`/`https=` per-protocol 形式，`socks=` 条目与 PAC/WPAD 不支持），每进程读取一次并缓存；未启用或读取失败时行为与无此改动一致。`NO_PROXY` 与回环/内网硬 bypass 同样约束系统代理。仅 win32 生效；worker 子进程入口（本地服务）不经此链路。
+- 运行时代理与安装器同序：Windows 主进程内所有经全局 `fetch` 的出网请求（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）按「请求自带显式 `proxy`（`PI_PROXY_<PROVIDER>`/`PI_PROXY`）→ 标准代理环境变量（`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，Bun 原生应用）→ 当前用户 Windows 系统代理 → 直连」解析。系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`/`ProxyServer`（含 `http=`/`https=` per-protocol 形式，`socks=` 条目与 PAC/WPAD 不支持），每进程读取一次并缓存；未启用或读取失败时行为与无此改动一致。`NO_PROXY` 与回环/内网硬 bypass 同样约束系统代理。仅 win32 生效；worker 子进程入口（本地服务）不经此链路。系统代理层另有 fork 内网绕行清单（`packages/ai` proxy.ts 的 `FORK_SYSTEM_PROXY_BYPASS`，抄自公司代理 override 清单）：公司域名后缀、点名内网主机、CGNAT/RFC1918 式 IP 前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）与 `*` 通配条目命中的目标不走系统代理、直连；清单只约束系统代理层，不约束 `PI_PROXY` 与环境变量代理（它们的绕行机制仍是 `NO_PROXY`）。条目语义与来源格式对应：前导 `-` 剥离、数字开头为 IP 前缀、含 `*` 为整机名 glob、首尾皆点为点号标签包含、仅前导点为域名后缀、其余为精确或点后缀。
 - 零配置 TLS 默认：主进程网络引导时，未显式设置即默认 `NODE_TLS_REJECT_UNAUTHORIZED=0`（Bun fetch 认可，覆盖全部 fetch 请求的证书验证）与 `GIT_SSL_NO_VERIFY=true`（主进程拉起的 git 子进程继承），使拦截代理/私有网关的自有根证书场景免配置可用。显式设置任何值（如 `NODE_TLS_REJECT_UNAUTHORIZED=1`、`GIT_SSL_NO_VERIFY=false`）即恢复严格校验，agent 目录 `.env` 同样先于此默认生效；worker 子进程入口不经此默认。这是个人 fork 的安全姿态取舍：进程内所有 TLS 不再验证端点身份，凭据在可劫持网络下有被截获风险，仅在个人受控环境接受。
 - 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。Windows 的已验证下载在替换失败时保留为 `.omp.tmp.*`，包括旧安装已成功回滚的情况；回滚失败同时保留旧映像供恢复。
 - Windows 下载成功后，校验、旧映像重命名/强杀回退、换入、回滚或 PATH 设置失败，MUST 打印失败阶段、原始错误、错误类型/代码、安装目标及可用的诊断日志路径，并输出正确引用路径的可执行 PowerShell 命令：未通过验证的二进制不能引导运行；已验证的保留下载可直接启动；旧映像恢复只在目标不存在时执行；重试固定本次 Release 与安装目录，最后核对目标文件及 PATH 命中的版本。二进制已换入但 PATH 设置失败时明确标为部分完成，不能提前报告安装成功。非致命清理失败须说明具体错误和安全重试命令；仍被旧会话占用的映像可留待会话退出后清理，不影响新版安装结果。详细错误仅向终端展示，落盘日志继续遵循脱敏契约。
@@ -261,7 +267,7 @@
 
 | 入口 | 当前有效范围 | 非编译硬上限 |
 | --- | --- | --- |
-| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 60 秒 |
+| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 90 秒 |
 | `bun run fulltest` | 全部 fastcheck 检查 + 完整 fork 差异中的 TS 测试、现有 `test:rs --affected` 选择的 Rust 测试、仓库脚本测试、native 构建和隔离 dev-TUI 公开入口 E2E；无跨 WSL | 900 秒 |
 | `bun run slowtest` | fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux 验证；无适用 WSL 时覆盖等于 fulltest | 1500 秒 |
 

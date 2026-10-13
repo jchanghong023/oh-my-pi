@@ -6,6 +6,7 @@ import { formatKeyHint, formatKeyHints, KeybindingsManager } from "@oh-my-pi/pi-
 import type {
 	CompactOptions,
 	ExtensionActions,
+	ExtensionApprovalPrompt,
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
 	ExtensionAskDialogResultItem,
@@ -24,6 +25,7 @@ import type {
 	TerminalInputHandler,
 } from "../../extensibility/extensions";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
+import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import {
 	type AskDialogPrompt,
 	type AskDialogPromptValue,
@@ -44,6 +46,9 @@ import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { launchTerminal } from "../../subprocess/terminal-launch";
 
 const MAX_WIDGET_LINES = 10;
+/** Approval answers, as a collab guest's select shows them. */
+const APPROVE_OPTION = "Approve";
+const DENY_OPTION = "Deny";
 
 /**
  * Footer hint for a guest-rendered ask selector. The guest's selector handles
@@ -143,6 +148,7 @@ export class ExtensionUiController {
 			confirm: (title, message, dialogOptions) => this.showHookConfirm(title, message, dialogOptions),
 			input: (title, placeholder, dialogOptions) => this.showHookInput(title, placeholder, dialogOptions),
 			askDialog: (questions, dialogOptions) => this.showAskDialog(questions, dialogOptions),
+			approve: (prompt, dialogOptions) => this.showCollabAwareApproval(prompt, dialogOptions),
 			notify: (message, type) => this.showHookNotify(message, type),
 			onTerminalInput: handler => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setHookStatus(key, text),
@@ -233,6 +239,8 @@ export class ExtensionUiController {
 			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => this.ctx.requestShutdown(),
+			resolvePlanReview: (reviewId, choice, input) => this.ctx.resolvePlanReview(reviewId, choice, input),
+			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
@@ -461,6 +469,8 @@ export class ExtensionUiController {
 			abort: () => this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL }),
 			hasPendingMessages: () => this.ctx.session.queuedMessageCount > 0,
 			shutdown: () => this.ctx.requestShutdown(),
+			resolvePlanReview: (reviewId, choice, input) => this.ctx.resolvePlanReview(reviewId, choice, input),
+			getPendingPlanReview: () => this.ctx.getPendingPlanReview(),
 			getContextUsage: () => this.ctx.session.getContextUsage(),
 			compact: instructionsOrOptions => this.#compactSession(instructionsOrOptions),
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
@@ -637,6 +647,51 @@ export class ExtensionUiController {
 		return this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
 			this.showHookEditor(title, prefill, { ...dialogOptions, signal }, editorOptions),
 		);
+	}
+
+	/**
+	 * The tool-approval prompt in the composer's place; a collab guest answers it as an Approve/Deny
+	 * select over the full prompt. Locally the compact prompt stands in for multi-line details only
+	 * while tool activity shows the call in the transcript; hidden, the dialog wraps the full one.
+	 */
+	async showCollabAwareApproval(
+		prompt: ExtensionApprovalPrompt,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<boolean> {
+		const request: CollabUiRequestDraft = {
+			kind: "select",
+			title: prompt.full,
+			options: [APPROVE_OPTION, DENY_OPTION],
+		};
+		const choice = await this.#raceCollabDialog(request, dialogOptions?.signal, signal =>
+			this.#presentDialog(signal, settle => {
+				const callHidden = this.ctx.hideToolActivity;
+				const dialog = new ApprovalDialogComponent(
+					callHidden ? prompt.full : prompt.compact,
+					{ onApprove: () => settle(APPROVE_OPTION), onDeny: () => settle(DENY_OPTION) },
+					{
+						tui: this.ctx.ui,
+						wrapDetails: callHidden,
+						timeout: dialogOptions?.timeout,
+						onTimeout: dialogOptions?.onTimeout,
+						onTimeoutStart: dialogOptions?.onTimeoutStart,
+						onTimeoutReset: dialogOptions?.onTimeoutReset,
+					},
+				);
+				this.ctx.editorContainer.clear();
+				this.ctx.editorContainer.addChild(dialog);
+				this.ctx.ui.setFocus(dialog);
+				this.ctx.ui.requestRender();
+				return () => {
+					dialog.dispose();
+					this.ctx.editorContainer.clear();
+					this.ctx.editorContainer.addChild(this.ctx.editor);
+					this.ctx.ui.setFocus(this.ctx.editor);
+					this.ctx.ui.requestRender();
+				};
+			}),
+		);
+		return choice === APPROVE_OPTION;
 	}
 
 	async showAskDialog(

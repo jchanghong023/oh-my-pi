@@ -602,6 +602,8 @@ export class Editor implements Component, Focusable {
 	};
 	/** Focusable interface - set by TUI when focus changes */
 	focused: boolean = false;
+	/** Minimum painted ANSI content rows, still bounded by the configured maximum height. */
+	minContentRows = 1;
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
@@ -1195,7 +1197,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#getVisibleContentHeight(contentLines: number): number {
-		if (this.#maxHeight === undefined) return contentLines;
+		if (this.#maxHeight === undefined) return Math.max(this.minContentRows, contentLines);
 		return Math.max(1, this.#maxHeight - this.#effectiveStyle().verticalChrome);
 	}
 	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
@@ -1367,6 +1369,7 @@ export class Editor implements Component, Focusable {
 		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
 		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
+		const contentRows = Math.min(visibleContentHeight, Math.max(this.minContentRows, visibleLayoutLines.length));
 
 		const result: string[] = [];
 		// Scrollbar: shown only when content overflows and the caller opted in.
@@ -1620,11 +1623,25 @@ export class Editor implements Component, Focusable {
 					text: renderedText,
 					pad: linePad,
 					gutter: gutterText,
-					isLastRow: visibleIndex === visibleLayoutLines.length - 1,
+					isLastRow: visibleIndex === contentRows - 1,
 					cursorOverflow: cursorPaddingOverflow,
 					imeSafeCursorTail,
 					scrollbarThumb:
 						scrollbarThumb !== null && visibleIndex >= scrollbarThumb.start && visibleIndex < scrollbarThumb.end,
+				}),
+			);
+		}
+		for (let index = visibleLayoutLines.length; index < contentRows; index++) {
+			result.push(
+				...style.renderRow({
+					...chromeCtx,
+					text: "",
+					pad: padding(lineContentWidth),
+					gutter: promptGutter?.continuation ?? "",
+					isLastRow: index === contentRows - 1,
+					cursorOverflow: 0,
+					imeSafeCursorTail: false,
+					scrollbarThumb: false,
 				}),
 			);
 		}

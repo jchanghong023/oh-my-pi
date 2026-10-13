@@ -73,6 +73,14 @@ export type EffectiveStatusLineSettings = Required<
 
 export type RGB = readonly [number, number, number];
 
+/** Changed files, with each path counted once even when both index and worktree differ. */
+export interface GitStatus {
+	staged: number;
+	unstaged: number;
+	untracked: number;
+	changed: number;
+}
+
 export interface SegmentContext {
 	session: StatusLineSession;
 	/** Deterministic wall clock for previews/tests; production omits it. */
@@ -180,7 +188,7 @@ export interface SegmentContext {
 	brandFgAnsi?: string;
 	git: {
 		branch: string | null;
-		status: { staged: number; unstaged: number; untracked: number } | null;
+		status: GitStatus | null;
 		pr: { number: number; url: string } | null;
 	};
 	/**

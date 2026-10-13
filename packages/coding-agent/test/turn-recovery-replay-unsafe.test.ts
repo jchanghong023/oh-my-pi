@@ -163,7 +163,7 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 			hostname: "127.0.0.1",
 			port: 0,
 			async fetch(request) {
-				const body = await request.json() as { tool_choice?: { function?: { name?: string } } };
+				const body = (await request.json()) as { tool_choice?: { function?: { name?: string } } };
 				requests.push(body);
 				if (requests.length === 1) {
 					firstStarted.resolve();
@@ -171,12 +171,21 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 				}
 				const forceYield = body.tool_choice?.function?.name === "yield";
 				const delta = forceYield
-					? { tool_calls: [{ index: 0, id: "yield_1", type: "function", function: { name: "yield", arguments: '{"data":"completed"}' } }] }
+					? {
+							tool_calls: [
+								{
+									index: 0,
+									id: "yield_1",
+									type: "function",
+									function: { name: "yield", arguments: '{"data":"completed"}' },
+								},
+							],
+						}
 					: { content: "ordinary answer" };
 				return new Response(
 					`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason: null }] })}\n\n` +
-					`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: forceYield ? "tool_calls" : "stop" }] })}\n\n` +
-					"data: [DONE]\n\n",
+						`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: forceYield ? "tool_calls" : "stop" }] })}\n\n` +
+						"data: [DONE]\n\n",
 					{ headers: { "content-type": "text/event-stream" } },
 				);
 			},
@@ -185,7 +194,8 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 		const cache = new CodeAgentTokenCache(() => "synthetic-token");
 		const agent: Agent = new Agent({
 			getApiKey: () => "synthetic-token",
-			streamFn: (_model, context, options) => streamCodeAgent(codeagent, context, { ...options, fetch }, cache),
+			streamFn: (_model, context, options) =>
+				streamCodeAgent(codeagent, context, { ...options, apiKey: undefined, fetch }, cache),
 			afterToolCall: () => {
 				agent.abort(TERMINAL_TOOL_RESULT_ABORT_REASON);
 				return undefined;
@@ -206,15 +216,25 @@ describe("TurnRecovery replay-unsafe output classification", () => {
 				{ toolChoice: { type: "function", name: "yield" } },
 			);
 			// Observe rejection immediately if the busy-delivery regression returns.
-			const deliveryOutcome = delivered.then(() => undefined, error => error);
+			const deliveryOutcome = delivered.then(
+				() => undefined,
+				error => error,
+			);
 			releaseFirst.resolve();
 			await first;
 			expect(await deliveryOutcome).toBeUndefined();
 			expect(submitted).toEqual(["completed"]);
 			expect(requests).toHaveLength(2);
-			expect(agent.state.messages.filter(message => message.role === "user" && message.content === "submit result")).toHaveLength(1);
+			expect(
+				agent.state.messages.filter(message => message.role === "user" && message.content === "submit result"),
+			).toHaveLength(1);
 			const result = agent.state.messages.find(message => message.role === "toolResult");
-			expect(result).toMatchObject({ role: "toolResult", toolName: "yield", isError: false, content: [{ type: "text", text: "submitted" }] });
+			expect(result).toMatchObject({
+				role: "toolResult",
+				toolName: "yield",
+				isError: false,
+				content: [{ type: "text", text: "submitted" }],
+			});
 		} finally {
 			releaseFirst.resolve();
 			agent.abort();

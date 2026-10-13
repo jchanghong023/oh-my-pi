@@ -840,7 +840,7 @@ async fn create_session_for_run(
 	// implementations that run without spawning a process and resolve paths
 	// against the shell working directory. The whole set can be disabled
 	// (falling back to system binaries) via PI_DISABLE_UUTILS_BUILTINS; the
-	// destructive set (`rm`, `mv`, `cp`, `ln`) additionally honors
+	// destructive set (`rm`, `mv`, `cp`, `ln`, `dd`) additionally honors
 	// PI_DISABLE_UUTILS_DESTRUCTIVE, and `rm`/`mv` have their own switches.
 	if !env_flag(config, "PI_DISABLE_UUTILS_BUILTINS") {
 		let destructive_disabled = env_flag(config, "PI_DISABLE_UUTILS_DESTRUCTIVE");
@@ -850,9 +850,9 @@ async fn create_session_for_run(
 			let disabled = match name {
 				"rm" => rm_disabled,
 				"mv" => mv_disabled,
-				// cp overwrites existing files, ln can clobber them via -f; gate
-				// both with the destructive set.
-				"cp" | "ln" => destructive_disabled,
+				// cp and dd (`of=`) overwrite existing files, ln can clobber them
+				// via -f; gate them with the destructive set.
+				"cp" | "ln" | "dd" => destructive_disabled,
 				_ => false,
 			};
 			if !disabled {
@@ -4687,6 +4687,8 @@ mod tests {
 			"base64",
 			"basename",
 			"cat",
+			#[cfg(unix)]
+			"chmod",
 			"cksum",
 			"cmp",
 			"combine",
@@ -4694,15 +4696,22 @@ mod tests {
 			"cp",
 			"cut",
 			"date",
+			"dd",
+			"df",
 			"diff",
 			"dirname",
+			"du",
+			"env",
 			#[cfg(unix)]
 			"errno",
 			"fd",
 			"find",
+			"fold",
 			"grep",
 			"head",
 			"hostname",
+			#[cfg(unix)]
+			"id",
 			"ifne",
 			"isutf8",
 			"jq",
@@ -4712,13 +4721,16 @@ mod tests {
 			"mkdir",
 			"mktemp",
 			"mv",
+			"nl",
 			"nproc",
+			"od",
 			"paste",
 			"printenv",
 			"readlink",
 			"realpath",
 			"rg",
 			"rm",
+			"rmdir",
 			"sed",
 			"seq",
 			"sha1sum",
@@ -4738,6 +4750,7 @@ mod tests {
 			"ts",
 			"uname",
 			"uniq",
+			"uptime",
 			"wc",
 			"which",
 			"whoami",

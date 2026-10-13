@@ -9,6 +9,7 @@ import { isAnthropicOAuthToken } from "@oh-my-pi/pi-catalog/utils";
 import { parseGitHubCopilotApiKey } from "@oh-my-pi/pi-catalog/wire/github-copilot";
 import {
 	$env,
+	$flag,
 	isEnoent,
 	logger,
 	parseJsonWithRepair,
@@ -116,10 +117,12 @@ import {
 	type MessageCreateParams,
 	type MessageCreateParamsStreaming,
 	type MessageParam,
+	type OutputConfig,
 	parseAnthropicInputTransformations,
 	type RawMessageStreamEvent,
 	THINKING_BINDING_CONTROLS_BETA,
 	type TextBlockParam,
+	type ThinkingConfigParam,
 } from "./anthropic-wire";
 import {
 	claudeCodeSdkVersion,
@@ -138,6 +141,7 @@ import {
 	resolveGitHubCopilotBaseUrl,
 	wrapFetchForCopilotFallback,
 } from "./github-copilot-headers";
+import { prepareAnthropicImageContext } from "./anthropic-images";
 import { servedModelFromAnthropicSignature } from "./anthropic-signature";
 import { getOpenAIPromptCacheKey } from "./openai-shared";
 import { applyInferenceHeaders } from "./inference-headers";
@@ -273,24 +277,41 @@ const promptCacheBetas: Record<string, true> = {
 };
 
 /**
- * Remove the prompt-cache betas from every `anthropic-beta` entry in a header
+ * Betas withheld under the kill switch: they gate the pre-release body fields
+ * it removes (Claude Code's gateway contract: context management, beta tool
+ * fields, structured-output format, task budgets, tool search), plus the
+ * thinking-binding and compaction controls omp also withholds.
+ */
+const killSwitchBetas: Record<string, true> = {
+	[THINKING_BINDING_CONTROLS_BETA]: true,
+	[contextManagementBeta]: true,
+	[COMPACTION_BETA]: true,
+	[LEGACY_COMPACTION_BETA]: true,
+	[structuredOutputsBeta]: true,
+	[taskBudgetBeta]: true,
+	[midConversationToolChangesBeta]: true,
+};
+
+/**
+ * Remove the `dropped` betas from every `anthropic-beta` entry in a header
  * record. Header names are case-insensitive and the value is a comma-separated
  * list, so each matching key keeps its own casing and its remaining tokens;
  * an entry left with no token is deleted rather than sent empty. The input is
- * returned untouched when it advertises no cache beta.
+ * returned untouched when it advertises none of them.
  *
  * `model.headers` and `options.headers` are caller-controlled channels that
  * reach the wire through `buildAnthropicHeaders` (as `modelHeaders`, which an
  * override-enabled endpoint lets replace our own beta header outright), the
  * GitHub Copilot default headers, and the per-request beta override built for
- * injected clients — each of which must go through here once breakpoints drop.
+ * injected clients — each of which must go through here once breakpoints drop
+ * or the experimental-beta kill switch is on.
  */
-function stripPromptCacheBetas(headers: Record<string, string>): Record<string, string> {
+function stripHeaderBetas(headers: Record<string, string>, dropped: Record<string, true>): Record<string, string> {
 	let stripped: Record<string, string> | undefined;
 	for (const key in headers) {
 		if (key.toLowerCase() !== "anthropic-beta") continue;
 		const betas = normalizeExtraBetas(headers[key]);
-		const kept = betas.filter(beta => promptCacheBetas[beta] !== true);
+		const kept = betas.filter(beta => dropped[beta] !== true);
 		if (kept.length === betas.length) continue;
 		stripped ??= { ...headers };
 		if (kept.length === 0) {
@@ -950,253 +971,6 @@ function encodeAnthropicToolName(
 function decodeAnthropicToolName(name: string, isOAuthToken: boolean, escapeBuiltinToolNames: boolean): string {
 	if (isOAuthToken || escapeBuiltinToolNames) return stripClaudeToolPrefix(name);
 	return name;
-}
-
-const ANTHROPIC_MANY_IMAGE_THRESHOLD = 20;
-const ANTHROPIC_MANY_IMAGE_MAX_DIMENSION = 2000;
-/**
- * Image contract of the canonical Anthropic Messages API, used when resolved
- * model policy names no other: 8000px per side ("At least one of the image
- * dimensions exceed max allowed size: 8000 pixels") and a 10 MB base64
- * payload per block ("image exceeds 10 MB maximum: 14012300 bytes >
- * 10485760 bytes"), measured on the encoded string rather than the decoded
- * bytes. Either rejection poisons every retry and model fallback because the
- * block stays in context, so both are clamped before the request goes out.
- * A host with a different image contract sets `max-image-dimension` /
- * `max-image-payload-bytes` in the KDL compatibility rules.
- */
-const ANTHROPIC_MAX_IMAGE_DIMENSION = 8000;
-const ANTHROPIC_MAX_IMAGE_PAYLOAD_BYTES = 10 * 1024 * 1024;
-/** Headroom for the surrounding JSON and any provider-side accounting. */
-const ANTHROPIC_IMAGE_PAYLOAD_HEADROOM = 0.9;
-/** Re-encode passes allowed to bring one image under the byte budget. */
-const ANTHROPIC_IMAGE_RESIZE_ATTEMPTS = 4;
-
-/**
- * Image bounds for one request. `maxDimension` and `payloadBudget` come from
- * resolved model policy (`max-image-dimension`, `max-image-payload-bytes`) so
- * a deployment whose image contract differs from the canonical API can
- * override them, and the many-image path tightens `maxDimension` further
- * because many images share one request budget.
- */
-interface AnthropicImageCaps {
-	maxDimension: number;
-	payloadBudget: number;
-}
-
-function countAnthropicImageBlocks(messages: Message[]): number {
-	let count = 0;
-	for (const message of messages) {
-		if (message.role !== "user" && message.role !== "developer" && message.role !== "toolResult") continue;
-		if (!Array.isArray(message.content)) continue;
-		for (const block of message.content) {
-			if (block.type === "image") count++;
-		}
-	}
-	return count;
-}
-
-/**
- * Ceiling on encoder output pixels in flight. One 8000x8000 RGBA surface is
- * roughly 256 MiB, so admitting four of them would spike the CLI by a
- * gigabyte; at the full-resolution cap this yields a single pipeline, while
- * the many-image cap encodes at most 2000px and keeps the four-way fan-out.
- */
-const ANTHROPIC_IMAGE_RESIZE_PIXEL_BUDGET = 16_000_000;
-const ANTHROPIC_IMAGE_RESIZE_MAX_CONCURRENCY = 4;
-
-function anthropicImageResizeConcurrency(maxDimension: number): number {
-	const perPipeline = maxDimension * maxDimension;
-	if (perPipeline <= 0) return ANTHROPIC_IMAGE_RESIZE_MAX_CONCURRENCY;
-	return Math.max(
-		1,
-		Math.min(ANTHROPIC_IMAGE_RESIZE_MAX_CONCURRENCY, Math.floor(ANTHROPIC_IMAGE_RESIZE_PIXEL_BUDGET / perPipeline)),
-	);
-}
-
-/**
- * Memoized resize results keyed on ImageContent identity, per cap pair.
- * Callers keep message objects stable across turns, so without this every
- * request (and every in-provider retry of a fresh turn) re-decodes and
- * re-encodes the same oversized screenshots. A cached value identical to the
- * key means "already within bounds / unresizable — skip the decode". The caps
- * depend on image count and on resolved policy, so each pair keeps its own
- * cache: a value cached at 8000px is not reusable at 2000px.
- */
-const anthropicImageResizeCaches = new Map<string, WeakMap<ImageContent, ImageContent>>();
-
-function anthropicImageResizeCache(caps: AnthropicImageCaps): WeakMap<ImageContent, ImageContent> {
-	const key = `${caps.maxDimension}:${caps.payloadBudget}`;
-	const existing = anthropicImageResizeCaches.get(key);
-	if (existing) return existing;
-	const created = new WeakMap<ImageContent, ImageContent>();
-	anthropicImageResizeCaches.set(key, created);
-	return created;
-}
-
-type ResizeLimiter = <R>(fn: () => Promise<R>) => Promise<R>;
-
-/**
- * Bounded-concurrency gate for image decode/encode work. The many-image path
- * fans out over every block of every message; unbounded, 100+ oversized images
- * would decode concurrently and spike memory by gigabytes. Slots are handed
- * off directly to the next waiter on release.
- */
-function createResizeLimiter(limit: number): ResizeLimiter {
-	let active = 0;
-	const queue: (() => void)[] = [];
-	return async fn => {
-		if (active >= limit) {
-			const { promise, resolve } = Promise.withResolvers<void>();
-			queue.push(resolve);
-			await promise;
-		} else {
-			active++;
-		}
-		try {
-			return await fn();
-		} finally {
-			const next = queue.shift();
-			if (next) next();
-			else active--;
-		}
-	};
-}
-
-async function resizeAnthropicImageBlock(block: ImageContent, caps: AnthropicImageCaps): Promise<ImageContent> {
-	const { maxDimension, payloadBudget } = caps;
-	try {
-		const inputBuffer = Buffer.from(block.data, "base64");
-		const { width, height } = await new Bun.Image(inputBuffer).metadata();
-		if (!width || !height) return block;
-		const overDimension = width > maxDimension || height > maxDimension;
-		const overBudget = block.data.length > payloadBudget;
-		if (!overDimension && !overBudget) return block;
-
-		// Fitting the pixel cap does not imply fitting the byte cap: a dense
-		// screenshot re-encodes large even at the cap. Shrink by the overshoot in
-		// area terms until the payload fits or the passes run out.
-		let scale = Math.min(1, maxDimension / width, maxDimension / height);
-		let best: { buffer: Uint8Array; mimeType: string } | undefined;
-		for (let attempt = 0; attempt < ANTHROPIC_IMAGE_RESIZE_ATTEMPTS; attempt++) {
-			const targetWidth = Math.max(1, Math.min(maxDimension, Math.round(width * scale)));
-			const targetHeight = Math.max(1, Math.min(maxDimension, Math.round(height * scale)));
-			// One encoder at a time: a full-resolution surface is hundreds of
-			// megabytes, so the two candidates never coexist.
-			const png = await new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).png().bytes();
-			const jpeg = await new Bun.Image(inputBuffer).resize(targetWidth, targetHeight).jpeg({ quality: 85 }).bytes();
-			best =
-				png.length <= jpeg.length
-					? { buffer: png, mimeType: "image/png" }
-					: { buffer: jpeg, mimeType: "image/jpeg" };
-
-			// Base64 expands three bytes into four characters; the encoded length
-			// is what Anthropic measures, so derive it without encoding.
-			const encoded = Math.ceil(best.buffer.length / 3) * 4;
-			if (encoded <= payloadBudget) break;
-			if (targetWidth === 1 && targetHeight === 1) break;
-			scale *= Math.max(0.25, Math.sqrt(payloadBudget / encoded) * 0.9);
-		}
-		if (!best) return block;
-
-		const data = Buffer.from(best.buffer).toString("base64");
-		// An image inside the pixel cap is only worth replacing if it shrank.
-		if (!overDimension && data.length >= block.data.length) return block;
-		// The rebuilt block carries no `url` or `providerFile`: those reference
-		// the original bytes, and Anthropic validates a referenced image after
-		// fetching it, so keeping either would resend the oversized copy.
-		return {
-			type: "image",
-			data,
-			mimeType: best.mimeType,
-		};
-	} catch (error) {
-		logger.warn("anthropic: failed to resize oversized image", {
-			mimeType: block.mimeType,
-			...logger.diagnosticError(error),
-		});
-		return block;
-	}
-}
-
-async function resizeAnthropicImageContent(
-	content: (TextContent | ImageContent)[],
-	state: { resized: number },
-	limit: ResizeLimiter,
-	caps: AnthropicImageCaps,
-): Promise<(TextContent | ImageContent)[]> {
-	let changed = false;
-	const cache = anthropicImageResizeCache(caps);
-	const next = await Promise.all(
-		content.map(async block => {
-			if (block.type !== "image") return block;
-			let resized = cache.get(block);
-			if (resized === undefined) {
-				resized = await limit(() => resizeAnthropicImageBlock(block, caps));
-				cache.set(block, resized);
-			}
-			if (resized !== block) {
-				changed = true;
-				state.resized++;
-			}
-			return resized;
-		}),
-	);
-	return changed ? next : content;
-}
-
-async function resizeAnthropicImageMessage(
-	message: Message,
-	state: { resized: number },
-	limit: ResizeLimiter,
-	caps: AnthropicImageCaps,
-): Promise<Message> {
-	if (message.role === "user" || message.role === "developer") {
-		if (!Array.isArray(message.content)) return message;
-		const content = await resizeAnthropicImageContent(message.content, state, limit, caps);
-		return content === message.content ? message : { ...message, content };
-	}
-	if (message.role === "toolResult") {
-		const content = await resizeAnthropicImageContent(message.content, state, limit, caps);
-		return content === message.content ? message : { ...message, content };
-	}
-	return message;
-}
-
-async function prepareAnthropicImageContext(context: Context, model: Model<"anthropic-messages">): Promise<Context> {
-	if (!model.input.includes("image")) return context;
-	const imageCount = countAnthropicImageBlocks(context.messages);
-	if (imageCount === 0) return context;
-	// Many images share one request size budget, so they get the tighter cap.
-	// A smaller set only has to clear the host's per-image limit.
-	const hostMaxDimension = model.compat.maxImageDimension ?? ANTHROPIC_MAX_IMAGE_DIMENSION;
-	const maxDimension =
-		imageCount > ANTHROPIC_MANY_IMAGE_THRESHOLD
-			? Math.min(ANTHROPIC_MANY_IMAGE_MAX_DIMENSION, hostMaxDimension)
-			: hostMaxDimension;
-	const maxPayloadBytes = model.compat.maxImagePayloadBytes ?? ANTHROPIC_MAX_IMAGE_PAYLOAD_BYTES;
-	const caps: AnthropicImageCaps = {
-		maxDimension,
-		payloadBudget: Math.floor(maxPayloadBytes * ANTHROPIC_IMAGE_PAYLOAD_HEADROOM),
-	};
-
-	let changed = false;
-	const state = { resized: 0 };
-	const limit = createResizeLimiter(anthropicImageResizeConcurrency(maxDimension));
-	const messages = await Promise.all(
-		context.messages.map(async message => {
-			const next = await resizeAnthropicImageMessage(message, state, limit, caps);
-			if (next !== message) changed = true;
-			return next;
-		}),
-	);
-	if (!changed) return context;
-	logger.debug("anthropic: resized oversized images", {
-		imageCount,
-		resized: state.resized,
-		maxDimension,
-	});
-	return { ...context, messages };
 }
 
 type AnthropicImageSource =
@@ -2452,6 +2226,9 @@ const streamAnthropicOnce = (
 			};
 			let dropAllThinking = droppedAllThinkingForSignature;
 			let prefixBindingRetryAttempted = false;
+			// Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`; the wrapper
+			// already turned the gated compat off, this covers caller/frozen inputs.
+			const killSwitchActive = experimentalBetasDisabled(model);
 			// A live fallback-credit redemption replays its frozen body.
 			const frozenRedemption =
 				options?.fallbackCreditRedemption &&
@@ -2459,6 +2236,24 @@ const streamAnthropicOnce = (
 				options.fallbackCreditRedemption.params
 					? options.fallbackCreditRedemption
 					: undefined;
+			// A body frozen before the kill switch was set still carries the fields
+			// it withholds; the credit token is bound to that body, so forfeit it
+			// and build a fresh request. Server tools that already ran would re-run
+			// and re-bill on a tokenless retry, so surface that case instead.
+			const frozenBody = frozenRedemption?.params as MessageCreateParamsStreaming | undefined;
+			// The redemption drops `fallbacks` before sending, so they cannot force a forfeit.
+			const forfeitFrozenForKillSwitch =
+				killSwitchActive &&
+				frozenBody !== undefined &&
+				carriesKillSwitchField({ ...frozenBody, fallbacks: undefined });
+			if (
+				forfeitFrozenForKillSwitch &&
+				frozenRedemption?.refusedContent?.some(block => block.type === "anthropicServerTool")
+			) {
+				throw new AIError.ConfigurationError(
+					"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS was set after a refused turn that ran server tools; its fallback credit cannot be redeemed without the experimental fields the switch withholds.",
+				);
+			}
 			// Collected at most once, on first params build; a frozen redemption
 			// body never builds params.
 			let controlRecords: AnthropicControlRecord[] | undefined;
@@ -2477,12 +2272,16 @@ const streamAnthropicOnce = (
 			// `anthropic-beta` value, so once breakpoints are dropped an unstripped
 			// base would re-attach the very cache beta the replay abandoned. Both
 			// prompt-cache betas govern `ttl`/`scope`, so the options rung has to
-			// strip them too. Read through a closure because both flags flip
-			// mid-turn.
-			const callerBetaBaseHeaders = (): Record<string, string> =>
-				dropCacheControl || dropCacheControlOptions
-					? stripPromptCacheBetas(mergedCallerHeaders)
-					: mergedCallerHeaders;
+			// strip them too. The kill switch's betas never ride, whatever the
+			// caller's header says. Read through a closure because both cache
+			// flags flip mid-turn.
+			const callerBetaBaseHeaders = (): Record<string, string> => {
+				const headers =
+					dropCacheControl || dropCacheControlOptions
+						? stripHeaderBetas(mergedCallerHeaders, promptCacheBetas)
+						: mergedCallerHeaders;
+				return killSwitchActive ? stripHeaderBetas(headers, killSwitchBetas) : headers;
+			};
 			// Keep fallback payloads aligned with the top-level Vertex effort gate:
 			// no nested effort field means the fallback scan cannot re-add its beta.
 			let fallbacks = options?.fallbacks;
@@ -2611,7 +2410,9 @@ const streamAnthropicOnce = (
 				if (!isOAuth && isOfficialAnthropicApiUrl(baseUrl) && !extraBetas.includes(fallbackCreditBeta)) {
 					extraBetas.push(fallbackCreditBeta);
 				}
-				if (options?.fallbackCreditRedemption) {
+				// A forfeited frozen body is rebuilt fresh, so it keeps the betas
+				// computed above instead of the saved list describing the old body.
+				if (options?.fallbackCreditRedemption && !forfeitFrozenForKillSwitch) {
 					const frozenBetas = (options.fallbackCreditRedemption.betas ?? []).filter(
 						b => !b.startsWith("server-side-fallback-"),
 					);
@@ -2644,6 +2445,8 @@ const streamAnthropicOnce = (
 						}
 					}
 				}
+				// Caller betas and a frozen redemption's beta list bypass compat.
+				if (killSwitchActive) extraBetas = extraBetas.filter(beta => killSwitchBetas[beta] !== true);
 
 				clientArgs = {
 					model,
@@ -2711,6 +2514,8 @@ const streamAnthropicOnce = (
 				if (replacementPayload !== undefined) {
 					nextParams = replacementPayload as typeof nextParams;
 				}
+				// After `onPayload`, so a hook cannot restore a field the switch withholds.
+				if (killSwitchActive) withholdKillSwitchFields(nextParams);
 				if (nextParams.compaction) stripCompactionIncompatibleParams(nextParams);
 				// After `onPayload`, so a hook cannot restore a field Bedrock rejects.
 				if (model.compat.bedrockMessagesApi) fitBedrockAnthropicPayload(nextParams);
@@ -2755,7 +2560,7 @@ const streamAnthropicOnce = (
 			let params: MessageCreateParamsStreaming;
 			// Recheck expiry here: preparation (image resizing) is async, and an
 			// expired token must fall back to a fresh request as before.
-			if (frozenRedemption && Date.now() <= frozenRedemption.expiresAt) {
+			if (frozenRedemption && !forfeitFrozenForKillSwitch && Date.now() <= frozenRedemption.expiresAt) {
 				const redemption = frozenRedemption;
 				usingFallbackCredit = true;
 				const frozenParams = structuredClone(redemption.params as MessageCreateParamsStreaming);
@@ -2987,7 +2792,12 @@ const streamAnthropicOnce = (
 					const rawBetas = options.fallbackCreditRedemption.betaHeader
 						.split(",")
 						.map(b => b.trim())
-						.filter(b => b && !b.startsWith("server-side-fallback-"));
+						.filter(
+							b =>
+								b &&
+								!b.startsWith("server-side-fallback-") &&
+								(!killSwitchActive || killSwitchBetas[b] !== true),
+						);
 					if (!rawBetas.includes(fallbackCreditBeta) && !rawBetas.includes("fallback-credit-2026-06-01")) {
 						rawBetas.push(fallbackCreditBeta);
 					}
@@ -4236,8 +4046,98 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (model, con
 			call_id: `anthropic-${crypto.randomUUID()}`,
 			...(options?.sessionId ? { session_id: options.sessionId } : {}),
 		},
-		() => withReplaySafeStreamRetry(model, context, options, streamAnthropicOnce, { retryEmptyCompletion: true }),
+		() =>
+			withReplaySafeStreamRetry(withoutDisabledExperimentalBetas(model), context, options, streamAnthropicOnce, {
+				retryEmptyCompletion: true,
+			}),
 	);
+
+/** Whether Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` applies to this model's provider. */
+function experimentalBetasDisabled(model: Model<"anthropic-messages">): boolean {
+	return model.compat.honorsClaudeCodeBetaKillSwitch === true && $flag("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS");
+}
+
+/**
+ * Whether a request body carries a field the kill switch withholds. A frozen
+ * fallback-credit body that does cannot be redeemed under the switch. Defined
+ * as "the sanitizer would change it" so detection and stripping cannot drift.
+ */
+function carriesKillSwitchField(params: MessageCreateParamsStreaming): boolean {
+	const sanitized = structuredClone(params);
+	withholdKillSwitchFields(sanitized);
+	return !Bun.deepEquals(sanitized, params);
+}
+
+/**
+ * Remove every field the kill switch withholds from a final request body, for
+ * payloads an `onPayload` hook replaced after compat already shaped them, and
+ * for the switch's fields compat has no axis for (task budgets). Compaction
+ * blocks keep their readable summary as text, the same form an endpoint
+ * without compaction support receives.
+ */
+function withholdKillSwitchFields(params: MessageCreateParamsStreaming): void {
+	withholdKillSwitchControls(params);
+	delete params.context_management;
+	delete params.compaction;
+	// Server-side fallback entries carry their own per-attempt controls.
+	for (const entry of params.fallbacks ?? []) withholdKillSwitchControls(entry);
+	for (const tool of params.tools ?? []) {
+		if ("strict" in tool) delete tool.strict;
+		if ("defer_loading" in tool) delete tool.defer_loading;
+		if ("eager_input_streaming" in tool) delete tool.eager_input_streaming;
+	}
+	for (const message of params.messages) {
+		// Per-message `output_config` (mid-conversation effort) may carry the same controls.
+		if ("output_config" in message && message.output_config) withholdKillSwitchControls(message);
+		if (!Array.isArray(message.content)) continue;
+		for (let i = 0; i < message.content.length; i++) {
+			const block = message.content[i];
+			if (block.type === "compaction") message.content[i] = { type: "text", text: block.content };
+		}
+	}
+	if (params.anthropic_beta) {
+		params.anthropic_beta = params.anthropic_beta.filter(beta => killSwitchBetas[beta] !== true);
+	}
+}
+
+/** Withhold the kill switch's thinking/output controls on a body, fallback entry, or message. */
+function withholdKillSwitchControls(holder: { thinking?: ThinkingConfigParam; output_config?: OutputConfig }): void {
+	if (holder.thinking && "block_binding" in holder.thinking) delete holder.thinking.block_binding;
+	if (!holder.output_config) return;
+	delete holder.output_config.task_budget;
+	delete holder.output_config.format;
+	if (Object.keys(holder.output_config).length === 0) delete holder.output_config;
+}
+
+/**
+ * Honor Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` kill switch on
+ * providers whose compat opts in (`honors-claude-code-beta-kill-switch`).
+ * Gateways behind `ANTHROPIC_BASE_URL` often reject pre-release body fields,
+ * so the switch withholds what Claude Code's gateway contract lists — context
+ * management, beta tool fields (`strict`, `defer_loading`,
+ * `eager_input_streaming`), tool search (mid-conversation tool changes),
+ * structured-output format, task budgets — plus `thinking.block_binding` and
+ * server compaction (whose legacy replay needs a `context_management` edit),
+ * together with their betas. Effort, adaptive thinking, interleaved thinking
+ * and extended context stay, as in Claude Code. Applied through compat so every
+ * request builder and retry rung sees one decision; {@link withholdKillSwitchFields}
+ * and {@link killSwitchBetas} cover the rest where bodies and betas are finalized.
+ */
+function withoutDisabledExperimentalBetas(model: Model<"anthropic-messages">): Model<"anthropic-messages"> {
+	if (!experimentalBetasDisabled(model)) return model;
+	return {
+		...model,
+		compat: {
+			...model.compat,
+			supportsContextManagement: false,
+			supportsThinkingBindingControls: false,
+			supportsServerCompaction: false,
+			disableStrictTools: true,
+			supportsEagerToolInputStreaming: false,
+			supportsMidConversationToolChanges: false,
+		},
+	};
+}
 
 export type AnthropicSystemBlock = {
 	type: "text";
@@ -4395,7 +4295,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		// Unlike the generic builder below, this branch has no enforced-key
 		// filter: a caller-supplied `anthropic-beta` lands in the default
 		// headers verbatim, cache betas included.
-		const defaultHeaders = dropPromptCacheBetas ? stripPromptCacheBetas(mergedCopilotHeaders) : mergedCopilotHeaders;
+		const defaultHeaders = dropPromptCacheBetas
+			? stripHeaderBetas(mergedCopilotHeaders, promptCacheBetas)
+			: mergedCopilotHeaders;
 		applyInferenceHeaders(defaultHeaders, {
 			provider: model.provider,
 			protocol: "anthropic",
@@ -4440,9 +4342,13 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// value outright — but `allowAnthropicHeaderOverrides` lets it replace our
 	// built beta header wholesale, which would put a cache beta back on a
 	// breakpoint-free request.
-	const requestModelHeaders = dropPromptCacheBetas
-		? stripPromptCacheBetas(mergedRequestHeaders)
+	// The kill switch's betas are stripped on the same channel.
+	const cacheStrippedHeaders = dropPromptCacheBetas
+		? stripHeaderBetas(mergedRequestHeaders, promptCacheBetas)
 		: mergedRequestHeaders;
+	const requestModelHeaders = experimentalBetasDisabled(model)
+		? stripHeaderBetas(cacheStrippedHeaders, killSwitchBetas)
+		: cacheStrippedHeaders;
 	const defaultHeaders = buildAnthropicHeaders({
 		apiKey,
 		baseUrl,

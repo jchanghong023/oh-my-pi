@@ -108,9 +108,9 @@ process.exit(exitCode);
 describe("standard gate charged-budget parameters", () => {
 	test("fastcheck accepts only a finite positive downward limit", () => {
 		expect(parseFastcheckArgs(["--limit-seconds=0.25"])).toEqual({ limitSeconds: 0.25 });
-		expect(parseFastcheckArgs(["--limit-seconds=60"])).toEqual({ limitSeconds: 60 });
+		expect(parseFastcheckArgs(["--limit-seconds=90"])).toEqual({ limitSeconds: 90 });
 		for (const args of [
-			["--limit-seconds=60.01"],
+			["--limit-seconds=90.01"],
 			["--limit-seconds=0"],
 			["--limit-seconds=-1"],
 			["--limit-seconds=Infinity"],

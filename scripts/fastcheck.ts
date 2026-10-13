@@ -3,7 +3,7 @@
 // remain in their existing package scripts and Rust runner.
 import * as os from "node:os";
 import * as path from "node:path";
-import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { GATE_LIMIT_SECONDS, GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 
 export const gateRepoRoot = path.resolve(import.meta.dir, "..");
 
@@ -15,7 +15,9 @@ export function parseFastcheckArgs(args: readonly string[]): FastcheckOptions | 
 	if (args.length === 0) return {};
 	if (args.length !== 1 || !args[0]!.startsWith("--limit-seconds=")) return null;
 	const limitSeconds = Number(args[0]!.slice("--limit-seconds=".length));
-	return Number.isFinite(limitSeconds) && limitSeconds > 0 && limitSeconds <= 60 ? { limitSeconds } : null;
+	return Number.isFinite(limitSeconds) && limitSeconds > 0 && limitSeconds <= GATE_LIMIT_SECONDS.fastcheck
+		? { limitSeconds }
+		: null;
 }
 
 /** Bounded parallelism; the first failure cancels queued and live siblings. */
@@ -99,7 +101,11 @@ if (import.meta.main) {
 	const result = await runGate(
 		"fastcheck",
 		async gate => {
-			if (!options) throw new GateCommandError("Usage: bun run fastcheck [--limit-seconds=<seconds <= 60>]", 2);
+			if (!options)
+				throw new GateCommandError(
+					`Usage: bun run fastcheck [--limit-seconds=<seconds <= ${GATE_LIMIT_SECONDS.fastcheck}>]`,
+					2,
+				);
 			await runFastcheck(gate);
 		},
 		{ ...options, reportFailure: true },

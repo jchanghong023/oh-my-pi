@@ -707,7 +707,7 @@ it("rejects invalid budgets and reserves with a complete final summary", async (
 		const output: string[] = [];
 		const result = await runGate("fastcheck", async () => {}, { ...options, print: line => output.push(line) });
 		expect(result.status).toBe("FAIL");
-		expect(output.at(-1)).toMatch(/FAIL total=\d+\.\ds compile_excluded=0\.0s budgeted=\d+\.\ds limit=60\.0s exit=1/);
+		expect(output.at(-1)).toMatch(/FAIL total=\d+\.\ds compile_excluded=0\.0s budgeted=\d+\.\ds limit=90\.0s exit=1/);
 	}
 });
 it("keeps one cumulative clock across successive stages", async () => {

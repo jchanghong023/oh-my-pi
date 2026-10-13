@@ -843,6 +843,127 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(session.messages).toHaveLength(0);
 	});
 
+	for (const compactionKind of ["summary", "openai-native", "anthropic-native"] as const) {
+		it(`projects original ${compactionKind} history through model switch, clear and SDK resume`, async () => {
+			const f = await fixture(
+				body => completed(body.model === "normal" ? "ordinary source answer" : "remote answer"),
+				true,
+			);
+			const session = await f.create(f.ordinary);
+			await session.prompt("original source task");
+			const sourceTask = session.messages.find(
+				message =>
+					message.role === "user" &&
+					!message.synthetic &&
+					message.attribution !== "agent" &&
+					(typeof message.content === "string"
+						? message.content
+						: message.content
+								.filter(block => block.type === "text")
+								.map(block => block.text)
+								.join("")) === "original source task",
+			);
+			if (!sourceTask) throw new Error("Expected genuine original source task");
+			const sourceAnswer = session.getLastAssistantMessage();
+			if (!sourceAnswer) throw new Error("Expected ordinary source answer");
+			f.manager.appendMessage({
+				...sourceAnswer,
+				content: [
+					{ type: "text", text: "visible failed source answer" },
+					{ type: "thinking", thinking: "PRIVATE_THINKING" },
+					{ type: "toolCall", id: "unpaired", name: "frontend_probe", arguments: {} },
+				],
+				stopReason: "error",
+			});
+			f.manager.appendCustomMessageEntry("runtime-notice", "PRIVATE_NOTIFICATION", true);
+			f.manager.appendCustomMessageEntry(
+				"explicit-user-background",
+				"  使用 scout；保留 system/developer 与 {{literal}}  ",
+				true,
+				undefined,
+				"user",
+			);
+			const preserveData =
+				compactionKind === "openai-native"
+					? {
+							openaiRemoteCompaction: {
+								provider: f.ordinary.provider,
+								replacementHistory: [{ type: "compaction", encrypted_content: "PRIVATE_NATIVE_REPLAY" }],
+							},
+						}
+					: compactionKind === "anthropic-native"
+						? {
+								anthropicCompaction: {
+									provider: "anthropic",
+									content: "PRIVATE_NATIVE_SUMMARY",
+									signature: "PRIVATE_NATIVE_SIGNATURE",
+								},
+							}
+						: undefined;
+			const compact = (task: string) => {
+				const kept = f.manager.appendMessage({ role: "user", content: task, timestamp: Date.now() });
+				f.manager.appendMessage({
+					...sourceAnswer,
+					content: [{ type: "text", text: "retained source answer" }],
+				});
+				f.manager.appendCompaction("PRIVATE_GENERATED_SUMMARY", undefined, kept, 1000, { preserveData });
+				session.agent.replaceMessages(f.manager.buildSessionContext().messages);
+			};
+			compact("retained source task");
+			expect(session.messages[0]).toMatchObject({
+				role: "compactionSummary",
+				summary: "PRIVATE_GENERATED_SUMMARY",
+			});
+			expect(session.messages).not.toContainEqual(sourceTask);
+			if (compactionKind === "openai-native") {
+				expect(transcriptContent(session)).toEqual([]);
+			} else {
+				expect(transcriptContent(session).map(message => message.role)).toEqual(["user", "assistant"]);
+			}
+			await session.setModelTemporary(f.remote);
+			await session.prompt("remote task after compaction");
+			expect(f.requests.at(-1)?.messages).toEqual([
+				{ role: "user", content: "original source task" },
+				{ role: "assistant", content: "ordinary source answer" },
+				{ role: "assistant", content: "visible failed source answer" },
+				{ role: "user", content: "  使用 scout；保留 system/developer 与 {{literal}}  " },
+				{ role: "user", content: "retained source task" },
+				{ role: "assistant", content: "retained source answer" },
+				{ role: "user", content: "remote task after compaction" },
+			]);
+			expect(f.toolExecutions()).toBe(0);
+
+			await session.resetSessionContext();
+			await session.prompt("first source task after clear");
+			expect(f.requests.at(-1)?.messages).toEqual([{ role: "user", content: "first source task after clear" }]);
+			await session.setModelTemporary(f.ordinary);
+			compact("retained source task after clear");
+			await session.setModelTemporary(f.remote);
+			await session.prompt("remote task after second compaction");
+			const visibleAfterClear = [
+				{ role: "user", content: "first source task after clear" },
+				{ role: "assistant", content: "remote answer" },
+				{ role: "user", content: "retained source task after clear" },
+				{ role: "assistant", content: "retained source answer" },
+				{ role: "user", content: "remote task after second compaction" },
+			];
+			expect(f.requests.at(-1)?.messages).toEqual(visibleAfterClear);
+			expect(f.manager.buildSessionContext({ transcript: true }).messages).toContainEqual(sourceTask);
+			await f.manager.ensureOnDisk();
+			const file = session.sessionFile;
+			if (!file) throw new Error("Expected persisted compacted session");
+			await session.dispose();
+			const resumed = await f.create(f.remote, await SessionManager.open(file));
+			await resumed.prompt("explicit resumed task");
+			expect(f.requests.at(-1)?.messages).toEqual([
+				...visibleAfterClear,
+				{ role: "assistant", content: "remote answer" },
+				{ role: "user", content: "explicit resumed task" },
+			]);
+			expect(f.toolExecutions()).toBe(0);
+		});
+	}
+
 	it("preserves ordinary tool history while switch-back and SDK resume isolate remote text epochs", async () => {
 		let ordinaryCalls = 0;
 		const f = await fixture(body => {

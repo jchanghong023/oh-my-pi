@@ -770,8 +770,13 @@ export class TurnRecovery {
 	/** Applies automatic retry, credential rotation, and model fallback policy. */
 	handleRetryableError(message: AssistantMessage, options?: RetryPolicyOptions): Promise<boolean> {
 		// CodeAgent 已在流层完成唯一的换 Token 重试，禁止会话层再次发送同一任务。
-		if (message.provider === "codeagent" || this.#host.model()?.provider === "codeagent" ||
-			isJchToolsAgentModel(message) || isJchToolsAgentModel(this.#host.model())) return Promise.resolve(false);
+		if (
+			message.provider === "codeagent" ||
+			this.#host.model()?.provider === "codeagent" ||
+			isJchToolsAgentModel(message) ||
+			isJchToolsAgentModel(this.#host.model())
+		)
+			return Promise.resolve(false);
 		return this.#handleRetryableError(message, options);
 	}
 

@@ -1,3 +1,32 @@
+import type { GitStatus } from "./types";
+
+/** Count porcelain v1 -z entries; rename/copy source paths are not separate changes. */
+export function parseGitStatus(porcelain: string): GitStatus {
+	const status: GitStatus = { staged: 0, unstaged: 0, untracked: 0, changed: 0 };
+	let offset = 0;
+	while (offset < porcelain.length) {
+		const end = porcelain.indexOf("\0", offset);
+		if (end < 0) break;
+		const index = porcelain[offset];
+		const worktree = porcelain[offset + 1];
+		if (index === "?" && worktree === "?") {
+			status.untracked++;
+			status.changed++;
+		} else if (index !== "!" && (index !== " " || worktree !== " ")) {
+			if (index !== " ") status.staged++;
+			if (worktree !== " ") status.unstaged++;
+			status.changed++;
+		}
+		offset = end + 1;
+		if (index === "R" || index === "C" || worktree === "R" || worktree === "C") {
+			const sourceEnd = porcelain.indexOf("\0", offset);
+			if (sourceEnd < 0) break;
+			offset = sourceEnd + 1;
+		}
+	}
+	return status;
+}
+
 /**
  * Extract "owner/repo" from a GitHub remote URL.
  * Handles HTTPS, SSH (scp-style), and git:// protocols.

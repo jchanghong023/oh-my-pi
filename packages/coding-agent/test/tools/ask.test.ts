@@ -128,39 +128,6 @@ describe("AskTool cancellation", () => {
 		expect(abort).toHaveBeenCalledTimes(1);
 	});
 
-	it("defaults to no timeout when ask.timeout is unset", async () => {
-		// Regression for the surprise-auto-select report: a fresh install must let the user
-		// deliberate indefinitely. The dialog timeout is opt-in via the `ask.timeout` setting.
-		const tool = new AskTool(createSession());
-		const select = vi.fn(
-			async (
-				_prompt: string,
-				options: ExtensionUISelectItem[],
-				_dialogOptions?: { initialIndex?: number; timeout?: number },
-			) => (typeof options[0] === "string" ? options[0] : options[0]?.label),
-		);
-		const context = createContext({ select });
-
-		await tool.execute(
-			"call-default-no-timeout",
-			{
-				questions: [
-					{
-						id: "confirm",
-						question: "Proceed?",
-						options: [{ label: "yes" }, { label: "no" }],
-					},
-				],
-			},
-			undefined,
-			undefined,
-			context,
-		);
-
-		expect(select).toHaveBeenCalledTimes(1);
-		expect(select.mock.calls[0]?.[2]?.timeout).toBeUndefined();
-	});
-
 	it("still aborts when user explicitly cancels with timeout configured", async () => {
 		const tool = new AskTool(
 			createSession({

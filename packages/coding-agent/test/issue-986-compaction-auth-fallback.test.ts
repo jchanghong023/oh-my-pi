@@ -74,6 +74,9 @@ describe("issue #986 compaction auth fallback", () => {
 			authStorage.keys.setRuntime(fallbackModel.provider, "anthropic-token");
 		}
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		// Keep this auth-fallback fixture on its configured remote endpoint:
+		// unrelated catalog models may otherwise replace the current candidate.
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([currentModel, fallbackModel]);
 
 		session = new AgentSession({
 			agent,

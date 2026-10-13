@@ -8,12 +8,27 @@ provider "cursor" {
 	}
 
 	thinking-mode "effort"
-	// Cursor's default route selects a differently priced backing model per request.
+	// Cursor relays its upstream's image count (Claude 600, GPT 1,500) and took
+	// a 64 MB body; 60 images at the 500 KiB resize target stay near 31 MB.
+	image-count-budget 60
+	// Cursor's default route selects a differently priced backing model per
+	// request, Claude and GPT included, so it keeps Claude's image count and
+	// their 1024px edge; Gemini and Composer read 1024px pages as well as
+	// larger ones.
 	models "default" {
 		pricing-status "variable"
+		image-count-budget 20
+		image-max-edge 1024
 	}
 
+	// Cursor re-encodes every image for its Claude and GPT upstreams to fit
+	// 1024×1024 before the model reads it; Gemini and Composer read larger
+	// images as sent.
 	class "anthropic" {
+		image-max-edge 1024
+		// Past 20 images Claude rejects any image edge over 3,000 px, checked
+		// before Cursor downsizes.
+		image-count-budget 20
 		family "fable" {
 			requires-cursor-tool-schema-projection #true
 			// Cursor advertised Context window 300k (Max 1M recovered elsewhere).
@@ -56,6 +71,8 @@ provider "cursor" {
 		}
 	}
 	class "openai" {
+		// GPT images are fitted to 1024×1024 like Claude's (see above).
+		image-max-edge 1024
 		revision ">=5.6 <5.7" {
 			// Cursor advertised GPT-5.6 Sol/Terra/Luna Context window 272k;
 			// raises unlabeled -fast variants from the 200k default.
@@ -709,5 +726,17 @@ provider "cursor" {
 			cache-read 0.15
 			cache-write 0
 		}
+	}
+}
+
+// The same 1024px edge for targets that name only Cursor's wire (`{ api, id }`,
+// no host). priority=-1: a fallback, so the equally specific provider rule
+// above wins when both match.
+on-api "cursor-agent" {
+	class "anthropic" priority=-1 {
+		image-max-edge 1024
+	}
+	class "openai" priority=-1 {
+		image-max-edge 1024
 	}
 }
