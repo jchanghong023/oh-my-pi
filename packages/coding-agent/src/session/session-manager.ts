@@ -61,9 +61,11 @@ import {
 	type ModeChangeEntry,
 	type ModelChangeEntry,
 	type ModelUsageEntry,
+	lastSelfSelectedLeafId,
 	type NewSessionOptions,
 	type ResetBoundaryEntry,
 	type ServiceTierChangeEntry,
+	sessionEntryLeafId,
 	type SessionEntry,
 	type SessionHeader,
 	type SessionInitEntry,
@@ -544,17 +546,22 @@ class SessionEntryIndex {
 	rebuild(entries: readonly SessionEntry[]): void {
 		this.clear();
 		for (const entry of entries) this.insert(entry);
+		// A captured late-usage leaf can dangle after its target was rolled back or rewritten away.
+		if (this.#leaf !== null && !this.#entriesById.has(this.#leaf)) this.setLeaf(lastSelfSelectedLeafId(entries));
 	}
 
 	insert(entry: SessionEntry): void {
 		const previousLeaf = this.#leaf;
 		const isNew = !this.#entriesById.has(entry.id);
 		this.#entriesById.set(entry.id, entry);
-		this.#leaf = entry.id;
+		// Late usage is physically last but replays to the active leaf captured at append time.
+		const nextLeaf = sessionEntryLeafId(entry);
+		this.#leaf = nextLeaf;
 		this.#generation++;
 		const cache = this.#branchCache;
 		if (
 			isNew &&
+			nextLeaf === entry.id &&
 			cache !== undefined &&
 			cache.generation === this.#generation - 1 &&
 			cache.leaf === previousLeaf &&
@@ -2093,7 +2100,13 @@ export class SessionManager {
 			return id;
 		};
 		const retained = this.#entries.filter(entry => !batch.entryIds.has(entry.id));
-		for (const entry of retained) entry.parentId = retainedAncestor(entry.parentId);
+		for (const entry of retained) {
+			entry.parentId = retainedAncestor(entry.parentId);
+			// A late-usage marker captured a staged leaf; keep it pointing at a surviving entry.
+			if (entry.type === "model_usage" && typeof entry.activeLeafId === "string") {
+				entry.activeLeafId = retainedAncestor(entry.activeLeafId);
+			}
+		}
 		const restoredLeaf = retainedAncestor(batch.externalLeafChanged ? batch.externalLeafId : batch.preBatchLeafId);
 		this.#entries = retained;
 		this.#index.rebuild(retained);
@@ -3436,9 +3449,11 @@ export class SessionManager {
 			parentId: owner.parentId,
 			timestamp: nowIso(),
 			...usage,
+			...(activeLeafId !== owner.parentId ? { activeLeafId } : {}),
 		};
 		this.#recordEntry(entry);
-		if (activeLeafId !== owner.parentId) this.#index.setLeaf(activeLeafId);
+		// Through #setLeaf so an in-flight atomic batch restores this leaf, not the usage entry, on rollback.
+		if (activeLeafId !== owner.parentId) this.#setLeaf(activeLeafId);
 		return entry.id;
 	}
 
@@ -3863,7 +3878,16 @@ export class SessionManager {
 		if (branchPath.length === 0) throw new Error(`Entry ${leafId} not found`);
 
 		// Drop label entries from the path; recreate them fresh from the resolved map.
-		const entriesToKeep = branchPath.filter(entry => entry.type !== "label");
+		// Every kept entry lies on the forked path, so a late-usage leaf marker no longer applies.
+		const entriesToKeep: SessionEntry[] = [];
+		for (const entry of branchPath) {
+			if (entry.type === "label") continue;
+			entriesToKeep.push(
+				entry.type === "model_usage" && entry.activeLeafId !== undefined
+					? { ...entry, activeLeafId: undefined }
+					: entry,
+			);
+		}
 		const keptIds = new Set(entriesToKeep.map(entry => entry.id));
 		const labelsToCarry: Array<{ targetId: string; label: string }> = [];
 		for (const [targetId, label] of this.#index.labelsInEffect()) {
