@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /** Real CLI and tool dispatch; only the model's Anthropic stream is scripted. */
-it("imports wiki evidence through the CLI, reads it without source files, and reports deletion through real tool dispatch", async () => {
+it("dispatches complete cursor pages, exact-name and zero-match successes, and missing-index errors without source files", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wiki-cli-"));
 	const root = path.join(directory, "project");
 	const documents = path.join(directory, "documents");
@@ -12,16 +12,21 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 	const profile = "wiki-e2e";
 	const agentDir = path.join(configRoot, "profiles", profile, "agent");
 	const observed: Array<{ text: string; isError: boolean }> = [];
+	let query = "WIKIE2EBEACON";
+	let callNumber = 0;
+	const observedCalls = new Set<string>();
 	await Promise.all([root, documents, agentDir].map(dir => fs.mkdir(dir, { recursive: true })));
 	await Bun.write(
 		path.join(documents, "guide.md"),
-		"# Workflow\n``` `WIKIE2EBEACON`\nThe workflow requires exactly seven cycles.\n",
+		"# Workflow\nWIKIE2EBEACON\nThe workflow requires exactly seven cycles.\nInspect MBIST_CHECK.RPT for the pass criterion.\n",
 	);
 	const sections = Array.from(
 		{ length: 12 },
-		(_, index) => `## Procedure ${index}\nWIKIE2EBEACON ${index} ${"evidence ".repeat(260)}\nEND_PROCEDURE_${index}\n`,
+		(_, index) =>
+			`## Procedure ${index}\nWIKIE2EBEACON ${index} ${"evidence ".repeat(260)}\nEND_PROCEDURE_${index}\n`,
 	);
 	await Bun.write(path.join(documents, "procedures.md"), sections.join("\n"));
+	await Bun.write(path.join(documents, "related.md"), "# Reports\nInspect another_check.rpt for report syntax.\n");
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
 		"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
@@ -34,7 +39,8 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 			const blocks = (body.messages ?? []).flatMap(message =>
 				Array.isArray(message.content) ? message.content : [],
 			);
-			const result = blocks.find(block => block.type === "tool_result" && block.tool_use_id === "wiki_e2e_call");
+			const result = blocks.findLast(block => block.type === "tool_result");
+			let nextInput: { query: string; cursor?: string } | undefined = result ? undefined : { query };
 			if (result) {
 				const text =
 					typeof result.content === "string"
@@ -43,8 +49,14 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 								.filter((part: { type: string; text?: string }) => part.type === "text")
 								.map((part: { text: string }) => part.text)
 								.join("\n");
-				observed.push({ text, isError: Boolean(result.is_error) });
+				if (!observedCalls.has(result.tool_use_id)) {
+					observedCalls.add(result.tool_use_id);
+					observed.push({ text, isError: Boolean(result.is_error) });
+				}
+				const continuation = text.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
+				if (continuation && !result.is_error) nextInput = JSON.parse(continuation);
 			}
+			const callId = `wiki_e2e_call_${callNumber++}`;
 			const frames = [
 				[
 					"message_start",
@@ -66,9 +78,9 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 					{
 						type: "content_block_start",
 						index: 0,
-						content_block: result
-							? { type: "text", text: "" }
-							: { type: "tool_use", id: "wiki_e2e_call", name: "wiki", input: {} },
+						content_block: nextInput
+							? { type: "tool_use", id: callId, name: "wiki", input: {} }
+							: { type: "text", text: "" },
 					},
 				],
 				[
@@ -76,9 +88,9 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 					{
 						type: "content_block_delta",
 						index: 0,
-						delta: result
-							? { type: "text_delta", text: "WIKI_E2E_DONE" }
-							: { type: "input_json_delta", partial_json: JSON.stringify({ query: "WIKIE2EBEACON" }) },
+						delta: nextInput
+							? { type: "input_json_delta", partial_json: JSON.stringify(nextInput) }
+							: { type: "text_delta", text: "WIKI_E2E_DONE" },
 					},
 				],
 				["content_block_stop", { type: "content_block_stop", index: 0 }],
@@ -86,7 +98,7 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 					"message_delta",
 					{
 						type: "message_delta",
-						delta: { stop_reason: result ? "end_turn" : "tool_use" },
+						delta: { stop_reason: nextInput ? "tool_use" : "end_turn" },
 						usage: { output_tokens: 32 },
 					},
 				],
@@ -129,19 +141,19 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 	}
 	try {
 		expect(JSON.parse(await cli(["docs", "init", documents, "--name", "manual", "--json"])).index.documentCount).toBe(
-			2,
+			3,
 		);
-		await fs.rename(documents, path.join(directory, "documents-unavailable"));
-		const query = [
+		await fs.rm(documents, { recursive: true });
+		const toolArgs = [
 			"--print",
 			"--no-session",
 			"--model",
 			"zcode-api/glm-5.2",
 			"--tools",
 			"wiki",
-			"Retrieve WIKIE2EBEACON from wiki.",
+			"Retrieve all matching evidence from wiki, continuing until exhausted.",
 		];
-		expect(await cli(query)).toContain("WIKI_E2E_DONE");
+		expect(await cli(toolArgs)).toContain("WIKI_E2E_DONE");
 		expect(
 			observed.some(
 				result =>
@@ -151,21 +163,67 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 					/sha256=[a-f0-9]{64}/.test(result.text),
 			),
 		).toBe(true);
-		const page = observed.find(result => !result.isError)?.text ?? "";
-		expect(page.length).toBeLessThan(8_300);
-		const shown = [...page.matchAll(/^## Procedure (\d+)$/gm)].map(match => Number(match[1]));
-		expect(shown.length).toBeGreaterThan(0);
-		expect(shown.length).toBeLessThan(sections.length);
-		for (const index of shown) expect(page).toContain(sections[index]!);
+		const pages = observed.filter(result => !result.isError).map(result => result.text);
+		expect(pages.length).toBeGreaterThan(1);
+		expect(observed.every(result => !result.isError)).toBe(true);
+		const shown: number[] = [];
+		const ids: string[] = [];
+		for (const page of pages) {
+			expect(page.length).toBeLessThanOrEqual(8_000);
+			for (const match of page.matchAll(/^## Procedure (\d+)$/gm)) {
+				const index = Number(match[1]);
+				shown.push(index);
+				expect(page).toContain(sections[index]!);
+			}
+			for (const match of page.matchAll(/sectionId=(\d+)/g)) ids.push(match[1]!);
+		}
+		expect(shown.toSorted((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, index) => index));
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(pages.at(-1)).toContain("All matching results exhausted");
+
+		for (const nameQuery of ["mbist_check.rpt", "Explain mbist_check.rpt."]) {
+			observed.length = 0;
+			query = nameQuery;
+			await cli(toolArgs);
+			const names = observed.map(result => result.text).join("\n");
+			expect(observed.length).toBeGreaterThan(0);
+			expect(observed.every(result => !result.isError)).toBe(true);
+			expect(names).toMatch(/guide\.md:[^\n]+match=exact-name/);
+			expect(names).toMatch(/related\.md:[^\n]+match=related/);
+			expect(names.indexOf("guide.md:")).toBeLessThan(names.indexOf("related.md:"));
+			expect(names).toContain("Inspect MBIST_CHECK.RPT for the pass criterion.");
+			expect(names).not.toContain("未找到完整名称命中");
+		}
+
+		for (const nameQuery of ["missing_check.rpt", "mbist_check.rpt."]) {
+			observed.length = 0;
+			query = nameQuery;
+			await cli(toolArgs);
+			const names = observed.map(result => result.text).join("\n");
+			expect(observed.length).toBeGreaterThan(0);
+			expect(observed.every(result => !result.isError)).toBe(true);
+			expect(names).toContain("未找到完整名称命中");
+			expect(names).toMatch(/guide\.md:[^\n]+match=related/);
+			expect(names).not.toContain("match=exact-name");
+		}
+
+		observed.length = 0;
+		query = "NO_MATCH_WIKI_E2E_ZZXQ";
+		await cli(toolArgs);
+		expect(observed).toHaveLength(1);
+		expect(observed[0]?.isError).toBe(false);
+		expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
+		expect(observed[0]?.text).toContain("All matching results exhausted");
+
 		expect(JSON.parse(await cli(["docs", "remove", "manual", "--force", "--json"]))).toEqual({ removed: "manual" });
 		observed.length = 0;
-		await cli(query);
-		expect(observed.some(result => result.isError && result.text.includes("No document indexes"))).toBe(true);
-		expect(await Bun.file(path.join(directory, "documents-unavailable", "guide.md")).text()).toContain(
-			"exactly seven cycles",
-		);
+		query = "WIKIE2EBEACON";
+		await cli(toolArgs);
+		expect(observed).toHaveLength(1);
+		expect(observed[0]?.isError).toBe(true);
+		expect(observed[0]?.text).toContain("No document indexes");
 	} finally {
 		server.stop(true);
 		await fs.rm(directory, { recursive: true, force: true });
 	}
-}, 30_000);
+}, 90_000);

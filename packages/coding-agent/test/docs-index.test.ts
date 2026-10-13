@@ -107,7 +107,7 @@ describe("Markdown parsing", () => {
 		expect(kept.some(section => section.includes("个人目录"))).toBe(true);
 	});
 
-	it("caps sections below the page budget so every hit can be delivered whole", () => {
+	it("splits oversized sections into bounded complete chunks", () => {
 		const parsed = parseMarkdown(new TextEncoder().encode(`# Doc\n${"y".repeat(40_000)}\n`));
 		expect(parsed.sections.length).toBeGreaterThan(1);
 		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThan(20_000);
@@ -249,7 +249,6 @@ describe("DocsService indexing contract", () => {
 			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
 			.run(row.id, row.index_id, "notes.md", "Notes", "Notes Ordinary paragraph", row.id);
 		writer.storage.db.run("PRAGMA user_version=6");
-		expect(writer.search("repairfencebeacon").sections).toEqual([]);
 		writer.close();
 		await fs.rm(root, { recursive: true });
 		const reader = new DocsService({ agentDir });
@@ -582,6 +581,10 @@ describe("DocsService indexing contract", () => {
 		{ query: "foo_bar", exact: "Call `foo_bar`.", loose: "foo bar foo_bar_baz" },
 		{ query: "v1.2.3", exact: "Install v1.2.3.", loose: "v1 2 3 v1.2.30" },
 		{ query: "src/foo.ts", exact: "Edit `src/foo.ts`.", loose: "ts elsewhere foo src src/foo.ts.bak" },
+		{ query: "MBIST_CHECK.RPT", exact: "Read `mbist_check.rpt`.", loose: "rpt mbist_check.rpt.bak" },
+		{ query: "E123", exact: "Handle e123.", loose: "E1234 E123_extra" },
+		{ query: "ERR-123", exact: "Handle `err-123`.", loose: "ERR 123 ERR-1234 prefixERR-123 ERR-123-extra" },
+		{ query: "E-FATAL", exact: "Handle `e-fatal`.", loose: "E FATAL E-FATALity prefixE-FATAL E-FATAL-next" },
 	])("prioritizes the complete technical name $query", async ({ query, exact, loose }) => {
 		const root = await tempDir("docs-technical-rank-");
 		const agentDir = await tempDir("docs-technical-agent-");
@@ -592,12 +595,175 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "manual");
 			const hits = service.search(query, { index: "manual" }).sections;
 			expect(hits.map(hit => hit.path)).toEqual(["exact.md", "loose.md"]);
+			expect(hits[0].matchKind).toBe("exact-name");
+			expect(hits[1].matchKind).toBe("related");
+			expect(service.search(query, { index: "manual" })).toMatchObject({
+				total: 2,
+				exactNameMatches: 1,
+				technicalName: query,
+				hasMore: false,
+			});
 		} finally {
 			service.close();
 		}
 	});
 
-	it("keeps path and inherited-heading matches out of the full-body term tier", async () => {
+	it.each(["hisms", "scan", "resolveWidget"])(
+		"classifies the bounded plain command or identifier %s without trusting prefixes or filenames",
+		async command => {
+			const root = await tempDir("docs-plain-name-root-");
+			const agentDir = await tempDir("docs-plain-name-agent-");
+			await fs.writeFile(path.join(root, "exact.md"), `# Notes\nInvoke \`${command.toUpperCase()}\`.\n`);
+			await fs.writeFile(
+				path.join(root, "continued.md"),
+				`# Notes\n${command}_extended prefix${command} ${command}-next\n`,
+			);
+			await fs.writeFile(path.join(root, `${command}.md`), "# Notes\nMetadata only; no command evidence.\n");
+			const service = new DocsService({ agentDir, cwd: root });
+			try {
+				await service.init(".", "manual");
+				const result = service.search(command, { index: "manual" });
+				expect(result).toMatchObject({ total: 3, technicalName: command, exactNameMatches: 1, hasMore: false });
+				expect(result.sections[0]).toMatchObject({ path: "exact.md", matchKind: "exact-name" });
+				expect(result.sections.find(hit => hit.path === "continued.md")?.matchKind).toBe("related");
+				expect(result.sections.find(hit => hit.path === `${command}.md`)?.matchKind).toBe("related");
+			} finally {
+				service.close();
+			}
+		},
+	);
+
+	it.each([
+		{ query: "Why does err-123 occur?", name: "err-123" },
+		{ query: "How should e-fatal be handled?", name: "e-fatal" },
+		{ query: "Explain mbist_check.rpt.", name: "mbist_check.rpt" },
+		{ query: "Explain v1.2.3.", name: "v1.2.3" },
+		{ query: "Explain std::vector.", name: "std::vector" },
+		{ query: "Explain src/foo.ts.", name: "src/foo.ts" },
+	])("recognizes the complete technical name inside $query", async ({ query, name }) => {
+		const root = await tempDir("docs-hyphen-name-root-");
+		const agentDir = await tempDir("docs-hyphen-name-agent-");
+		await fs.writeFile(path.join(root, "exact.md"), `# Notes\nHandle \`${name.toUpperCase()}\`.\n`);
+		await fs.writeFile(path.join(root, "continued.md"), `# Notes\nprefix${name} ${name}_extra ${name}-next\n`);
+		const service = new DocsService({ agentDir, cwd: root });
+		try {
+			await service.init(".", "manual");
+			const result = service.search(query, { index: "manual" });
+			expect(result).toMatchObject({ total: 2, technicalName: name, exactNameMatches: 1, hasMore: false });
+			expect(result.sections.map(hit => ({ path: hit.path, matchKind: hit.matchKind }))).toEqual([
+				{ path: "exact.md", matchKind: "exact-name" },
+				{ path: "continued.md", matchKind: "related" },
+			]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it.each(["file.rpt.", "`file.rpt.`"])("keeps terminal punctuation in the standalone spelling %s", async query => {
+		const root = await tempDir("docs-literal-punctuation-root-");
+		const agentDir = await tempDir("docs-literal-punctuation-agent-");
+		await fs.writeFile(path.join(root, "literal.md"), "# Notes\nfile.rpt.\n");
+		await fs.writeFile(path.join(root, "dotless.md"), "# Notes\nfile.rpt\n");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const result = service.search(query, { index: "manual" });
+			expect(result).toMatchObject({ total: 2, technicalName: "file.rpt.", exactNameMatches: 1, hasMore: false });
+			expect(result.sections.map(hit => ({ path: hit.path, matchKind: hit.matchKind }))).toEqual([
+				{ path: "literal.md", matchKind: "exact-name" },
+				{ path: "dotless.md", matchKind: "related" },
+			]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it.each([
+		{ spelling: "C++", suffix: "17", query: "C++" },
+		{ spelling: "Ｃ＋＋", suffix: "17", query: "C++" },
+		{ spelling: "mbist\\_check.rpt", suffix: ".bak", query: "mbist_check.rpt" },
+	])("rejects the artificial right boundary after $spelling", async ({ spelling, suffix, query }) => {
+		const root = await tempDir("docs-right-boundary-root-");
+		const agentDir = await tempDir("docs-right-boundary-agent-");
+		const padding = "x ".repeat(Math.floor((18_000 - spelling.length) / 2));
+		const body = `${padding}${" ".repeat(18_000 - padding.length - spelling.length)}${spelling}${suffix}\n`;
+		const source = `# Notes\n${body}`;
+		await fs.writeFile(path.join(root, "continued.md"), source);
+		await fs.writeFile(path.join(root, "standalone.md"), query);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const truncated = service.storage.db
+				.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown=?")
+				.get(body.slice(0, 18_000)) as { id: number; raw_markdown: string };
+			await fs.rm(root, { recursive: true });
+			const result = service.search(query, { index: "manual", limit: 500 });
+			expect(result.exactNameMatches).toBe(1);
+			expect(result.sections[0]).toMatchObject({ path: "standalone.md", text: query, matchKind: "exact-name" });
+			expect(result.sections.find(hit => hit.sectionId === truncated.id)).toMatchObject({
+				text: truncated.raw_markdown,
+				matchKind: "related",
+			});
+			if (query === "C++") {
+				const complete = service.search("C++17", { index: "manual", limit: 500 });
+				expect(complete.exactNameMatches).toBe(1);
+				expect(complete.sections[0]).toMatchObject({ path: "continued.md", matchKind: "exact-name" });
+				expect(complete.sections[0].text.normalize("NFKC")).toContain("C++17");
+			}
+		} finally {
+			service.close();
+		}
+	});
+
+	it.each([
+		{ padding: `${"x ".repeat(8749)} p`, whole: "pC++" },
+		{ padding: `${"x ".repeat(8748)}x 𐐀`, whole: "𐐀C++" },
+	])("rejects the artificial left boundary inside $whole using UTF-8 offsets", async ({ padding, whole }) => {
+		const root = await tempDir("docs-left-boundary-root-");
+		const agentDir = await tempDir("docs-left-boundary-agent-");
+		const source = `# Notes\n${padding}C++ ${"x ".repeat(1000)}\n`;
+		await fs.writeFile(path.join(root, "continued.md"), source);
+		await fs.writeFile(path.join(root, "standalone.md"), "C++");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const fragment = service.storage.db
+				.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown LIKE 'C++ %'")
+				.get() as { id: number; raw_markdown: string };
+			await fs.rm(root, { recursive: true });
+			const result = service.search("C++", { index: "manual", limit: 500 });
+			expect(result.exactNameMatches).toBe(1);
+			expect(result.sections[0]).toMatchObject({ path: "standalone.md", text: "C++", matchKind: "exact-name" });
+			expect(result.sections.find(hit => hit.sectionId === fragment.id)).toMatchObject({
+				text: fragment.raw_markdown,
+				matchKind: "related",
+			});
+			const complete = service.search(whole, { index: "manual", limit: 500 });
+			expect(complete.exactNameMatches).toBe(1);
+			expect(complete.sections[0].text).toContain(whole);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("never borrows an exact name that exists only before the overlapping body", async () => {
+		const root = await tempDir("docs-boundary-evidence-root-");
+		const agentDir = await tempDir("docs-boundary-evidence-agent-");
+		const source = `# Notes\n${"x ".repeat(8749)}E1. ${"x ".repeat(1000)}\n`;
+		await fs.writeFile(path.join(root, "evidence.md"), source);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const result = service.search("E1", { index: "manual", limit: 500 });
+			expect(result).toMatchObject({ total: 1, exactNameMatches: 1, hasMore: false });
+			expect(result.sections[0].text).toContain("E1.");
+		} finally {
+			service.close();
+		}
+	});
+
+	it("prefers complete topical evidence over partial path or inherited-heading matches", async () => {
 		const root = await tempDir("docs-metadata-rank-");
 		const agentDir = await tempDir("docs-metadata-agent-");
 		await fs.writeFile(path.join(root, "body-all.md"), "# Notes\npathparent appears first; needle appears later.\n");
@@ -619,11 +785,9 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("ranks a complete technical name past the scoring prefix above scattered terms", async () => {
+	it("ranks full stored evidence beyond its opening text above scattered terms", async () => {
 		const root = await tempDir("docs-late-phrase-rank-");
 		const agentDir = await tempDir("docs-late-phrase-agent-");
-		// Both sections carry both terms within the 2000-char scoring prefix; the
-		// complete name sits ~4k chars into the long section, past that prefix.
 		await fs.writeFile(
 			path.join(root, "late-exact.md"),
 			`# Notes\nstd and vector mentioned separately at first.\n${"background ".repeat(400)}\nUse std::vector here.\n`,
@@ -634,12 +798,14 @@ describe("DocsService indexing contract", () => {
 			await service.init(".", "manual");
 			const hits = service.search("std::vector", { index: "manual" }).sections;
 			expect(hits.map(hit => hit.path)).toEqual(["late-exact.md", "early-loose.md"]);
+			expect(hits[0].matchKind).toBe("exact-name");
+			expect(hits[0].text).toContain("Use std::vector here.");
 		} finally {
 			service.close();
 		}
 	});
 
-	it("scores the full section when astral text makes the SQLite prefix longer in UTF-16 units", async () => {
+	it("preserves long astral Unicode evidence when matching a technical name", async () => {
 		const root = await tempDir("docs-astral-phrase-root-");
 		const agentDir = await tempDir("docs-astral-phrase-agent-");
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n${"\u{1d11e}".repeat(2_500)}\nUse std::vector here.\n`);
@@ -709,8 +875,7 @@ describe("DocsService indexing contract", () => {
 						);
 				});
 			};
-			// Interleave the swap exactly between the candidate read and the
-			// page-text read of the next search.
+			// Interleave the swap between snapshot reads of the next search.
 			let reads = 0;
 			(reader.storage as { db: Database }).db = new Proxy(realDb, {
 				get(target, property) {
@@ -767,14 +932,79 @@ describe("DocsService indexing contract", () => {
 		await fs.writeFile(path.join(root, "topic.md"), `# Cache invalidation\n${"background ".repeat(150)}`);
 		await fs.writeFile(path.join(root, "mention.md"), "# Notes\nCache invalidation.\n");
 		await fs.writeFile(path.join(root, "inherited.md"), "# Cache invalidation\n## Unrelated appendix\nNotes.\n");
+		await fs.writeFile(path.join(root, "indented-code.md"), "    # cache invalidation\n");
 		const service = new DocsService({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
-			const hits = service.search("cache invalidation", { index: "manual" }).sections;
+			const result = service.search("cache invalidation", { index: "manual" });
+			expect(result.technicalName).toBeUndefined();
+			expect(service.search("How does cache invalidation work?", { index: "manual" }).technicalName).toBeUndefined();
+			const hits = result.sections;
 			const topic = hits.findIndex(hit => hit.path === "topic.md");
 			expect(topic).toBeGreaterThanOrEqual(0);
 			expect(topic).toBeLessThan(hits.findIndex(hit => hit.path === "mention.md"));
 			expect(topic).toBeLessThan(hits.findIndex(hit => hit.headingPath.endsWith("Unrelated appendix")));
+			expect(topic).toBeLessThan(hits.findIndex(hit => hit.path === "indented-code.md"));
+		} finally {
+			service.close();
+		}
+	});
+
+	it.each([
+		"# Cache invalidation\n",
+		"   # Cache invalidation\n",
+		"Cache invalidation\n---\n",
+		"   Cache invalidation\n   ---\n",
+	])("recognizes legal title indentation without promoting code for %j", async heading => {
+		const root = await tempDir("docs-title-context-root-");
+		const agentDir = await tempDir("docs-title-context-agent-");
+		const topic = `${heading}${"background ".repeat(160)}`;
+		await fs.writeFile(path.join(root, "topic.md"), topic);
+		await fs.writeFile(path.join(root, "indented-atx.md"), "    # cache invalidation\n");
+		await fs.writeFile(path.join(root, "tab-atx.md"), "\t# cache invalidation\n");
+		await fs.writeFile(path.join(root, "indented-setext.md"), "    cache invalidation\n    ---\n");
+		await fs.writeFile(
+			path.join(root, "fenced.md"),
+			`# Notes\n\`\`\`md\n${"x\n".repeat(8993)}# cache invalidation\n\`\`\`\n`,
+		);
+		await fs.writeFile(
+			path.join(root, "continued-line.md"),
+			`# Notes\n${"x ".repeat(8750)}# cache invalidation ${"x ".repeat(300)}\n`,
+		);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const result = service.search("cache invalidation", { index: "manual", limit: 500 });
+			expect(result.sections[0]).toMatchObject({ path: "topic.md", text: topic });
+			for (const file of ["indented-atx.md", "tab-atx.md", "indented-setext.md", "fenced.md", "continued-line.md"])
+				expect(result.sections.some(hit => hit.path === file)).toBe(true);
+			expect(
+				result.sections.some(hit => hit.path === "fenced.md" && hit.text.startsWith("# cache invalidation")),
+			).toBe(true);
+			expect(
+				result.sections.some(
+					hit => hit.path === "continued-line.md" && hit.text.startsWith("# cache invalidation"),
+				),
+			).toBe(true);
+		} finally {
+			service.close();
+		}
+	});
+
+	it.each(["constructor", "toString", "prototype"])("treats %s as a topic rather than a function word", async term => {
+		const root = await tempDir("docs-own-term-root-");
+		const agentDir = await tempDir("docs-own-term-agent-");
+		const topic = `# ${term} diagnostics\n${term} troubleshooting log analysis.\n`;
+		await fs.writeFile(path.join(root, "topic.md"), topic);
+		await fs.writeFile(path.join(root, "log.md"), "# Log\nlog.\n");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const result = service.search(`${term} log`, { index: "manual" });
+			expect(result).toMatchObject({ total: 2, exactNameMatches: 0, hasMore: false });
+			expect(result.sections.map(hit => hit.path)).toEqual(["topic.md", "log.md"]);
+			expect(result.sections[0].text).toBe(topic);
 		} finally {
 			service.close();
 		}
@@ -795,11 +1025,13 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("reranks beyond the requested result window and keeps index isolation", async () => {
+	it("globally ranks complete names beyond a thousand misleading matches with index isolation", async () => {
 		const root = await tempDir("docs-candidates-rank-");
 		const agentDir = await tempDir("docs-candidates-agent-");
-		for (let index = 0; index < 20; index++)
-			await fs.writeFile(path.join(root, `loose-${index}.md`), "# Notes\nvector std\n");
+		await fs.writeFile(
+			path.join(root, "misleading.md"),
+			Array.from({ length: 1_201 }, (_, index) => `## Notes ${index}\nvector std\n`).join("\n"),
+		);
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\nUse std::vector.\n${"background ".repeat(150)}`);
 		await fs.writeFile(path.join(root, "partial.md"), "# Notes\nstd only\n");
 		const service = new DocsService({ agentDir, cwd: root });
@@ -809,7 +1041,14 @@ describe("DocsService indexing contract", () => {
 			expect(service.search("std::vector", { index: "manual", limit: 1 }).sections.map(hit => hit.path)).toEqual([
 				"exact.md",
 			]);
-			const all = service.search("std::vector", { index: "manual", limit: 50 }).sections;
+			let page = service.search("std::vector", { index: "manual", limit: 500 });
+			const all = [...page.sections];
+			while (page.cursor) {
+				page = service.search("std::vector", { index: "manual", limit: 500, cursor: page.cursor });
+				all.push(...page.sections);
+			}
+			expect(all).toHaveLength(1_203);
+			expect(new Set(all.map(hit => hit.sectionId)).size).toBe(1_203);
 			expect(all.every(hit => hit.index === "manual")).toBe(true);
 			// A section holding one term only still matches the union, but ranks below
 			// the section carrying the complete name.
@@ -824,7 +1063,7 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
-	it("finds the readable hits of a query whose whole candidate window is stubs", async () => {
+	it("keeps legacy stubs reachable after distinct readable evidence", async () => {
 		const root = await tempDir("docs-stub-window-");
 		const agentDir = await tempDir("docs-stub-window-agent-");
 		for (let index = 0; index < 150; index++)
@@ -836,10 +1075,8 @@ describe("DocsService indexing contract", () => {
 		try {
 			await service.init(".", "manual");
 			const indexId = service.list()[0].id as number;
-			// A legacy index keeps the converter's structural labels, and a short row
-			// repeating the term outscores a long section that mentions it once: more
-			// of them match than the first window can hold, so widening is the only
-			// way to reach the readable sections ranked behind them.
+			// Legacy converter labels remain indexed, but never displace readable
+			// evidence. They must still be reachable through continuation pages.
 			service.storage.transaction(() => {
 				for (let index = 0; index < 700; index++) {
 					const document = service.storage.db
@@ -860,12 +1097,19 @@ describe("DocsService indexing contract", () => {
 				}
 			});
 			const hits = service.search("needle", { index: "manual", limit: 200 }).sections;
-			// Every readable hit outranks the labels filling the window: without
-			// widening, this page is 200 stubs and no body text at all. Stubs only
-			// remain as padding after all of them, which the caller filters.
+			// Readable evidence comes first; stubs retain their own locators later.
 			const readable = hits.filter(hit => hit.text.includes("必须记录"));
 			expect(readable.length).toBe(150);
 			expect(hits.slice(0, 150).every(hit => hit.text.includes("必须记录"))).toBe(true);
+			const delivered = [...hits];
+			let page = service.search("needle", { index: "manual", limit: 200 });
+			while (page.cursor) {
+				page = service.search("needle", { index: "manual", limit: 200, cursor: page.cursor });
+				delivered.push(...page.sections);
+			}
+			expect(delivered).toHaveLength(850);
+			expect(new Set(delivered.map(hit => hit.sectionId)).size).toBe(850);
+			expect(page).toMatchObject({ total: 850, hasMore: false });
 		} finally {
 			service.close();
 		}
@@ -917,6 +1161,240 @@ describe("DocsService indexing contract", () => {
 			// sentence's final term must still reach the corpus.
 			const query = [...Array.from({ length: 33 }, (_, index) => `zz${index}`), "needle"].join(" ");
 			expect(service.search(query).sections.map(hit => hit.path)).toEqual(["tail.md"]);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("prefers the natural-language technology topic over generic checklist term saturation", async () => {
+		const root = await tempDir("docs-topic-query-root-");
+		const agentDir = await tempDir("docs-topic-query-agent-");
+		await fs.writeFile(
+			path.join(root, "topic.md"),
+			"# SERDES sim log\n编译必须完成，仿真日志必须包含 Test Finished，错误计数为零。\n",
+		);
+		await fs.writeFile(
+			path.join(root, "template.md"),
+			"# 全面的检查项\n检查项和通过判据有哪些：仿真 log 检查项，通过判据。技术清单含 SERDES、ATPG、CPU。\n",
+		);
+		await fs.writeFile(
+			path.join(root, "inherited.md"),
+			"# SERDES\n## 无关模板\n检查项和通过判据有哪些，仿真 log，检查项，通过判据。\n",
+		);
+		await fs.writeFile(path.join(root, "clock-checklist.md"), "# SERDES 仿真检查项和通过判据有哪些：时钟必须正常\n");
+		await fs.writeFile(
+			path.join(root, "quality.md"),
+			"# SERDES 过程质量检查\n检查仿真设计是否最新，检查各阶段 log 和报告，确认各项 pass。\n",
+		);
+		await fs.writeFile(
+			path.join(root, "overview.md"),
+			"# SERDES 概述\n仿真 log 的检查项和通过判据有哪些，SERDES 包括编译、运行和结果分析。\n",
+		);
+		await fs.writeFile(
+			path.join(root, "different-flow.md"),
+			"# MASIS waveform 检查\n仿真 log 检查项和通过判据有哪些，SERDES 是其他流程。\n",
+		);
+		await fs.writeFile(path.join(root, "heading-only.md"), "# SERDES sim log\n");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const result = service.search("serdes 仿真 log 的检查项和通过判据有哪些", { index: "manual" });
+			expect(result.sections[0].path).toBe("topic.md");
+			expect(result.sections[0].text).toContain("错误计数为零");
+			expect(result.total).toBeGreaterThan(1);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("recovers literal names absent from FTS without labeling inherited or continued names exact", async () => {
+		const root = await tempDir("docs-literal-scan-root-");
+		const agentDir = await tempDir("docs-literal-scan-agent-");
+		await fs.writeFile(path.join(root, "exact.md"), "# Notes\nRead MBIST_CHECK.RPT for evidence.\n");
+		await fs.writeFile(
+			path.join(root, "continued.md"),
+			"# Notes\nrpt mbist_check.rpt.bak prefixmbist_check.rpt mbist_check.rpt_extra mbist_check.rpt/next\n",
+		);
+		await fs.writeFile(path.join(root, "inherited.md"), "# mbist_check.rpt\n## Other\nrpt only.\n");
+		await fs.writeFile(path.join(root, "escaped.md"), "# Notes\nRead mbist\\_check.rpt for evidence.\n");
+		await fs.writeFile(path.join(root, "path.md"), "# Notes\nRead /reports/mbist_check.rpt for evidence.\n");
+		await fs.writeFile(
+			path.join(root, "escaped-path.md"),
+			"# Notes\nRead /reports/mbist\\_check.rpt for evidence.\n",
+		);
+		await fs.writeFile(
+			path.join(root, "windows-path.md"),
+			"# Notes\nRead C:\\reports\\mbist_check.rpt for evidence.\n",
+		);
+		await fs.writeFile(
+			path.join(root, "spliced.md"),
+			"# Notes\nrpt only: `mbist`_check.rpt and mbist_`check`.rpt and `mbist_``check.rpt`.\n",
+		);
+		await fs.writeFile(
+			path.join(root, "escaped-continued.md"),
+			"# Notes\nrpt mbist\\_check.rpt.bak my\\_mbist\\_check.rpt namespace::mbist\\_check.rpt\n",
+		);
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const initial = service.search("mbist_check.rpt", { limit: 500 }).sections;
+			const exact = initial.find(hit => hit.path === "exact.md")!;
+			for (const file of ["exact.md", "escaped.md", "path.md", "escaped-path.md", "windows-path.md"])
+				service.storage.db
+					.query("DELETE FROM sections_fts WHERE rowid=?")
+					.run(initial.find(hit => hit.path === file)!.sectionId);
+			await fs.rm(root, { recursive: true });
+			const result = service.search("mbist_check.rpt", { index: "manual", limit: 500 });
+			expect(result.exactNameMatches).toBe(6);
+			expect(result.sections.find(hit => hit.path === "exact.md")).toMatchObject({
+				sectionId: exact.sectionId,
+				matchKind: "exact-name",
+				text: "# Notes\nRead MBIST_CHECK.RPT for evidence.\n",
+			});
+			expect(result.sections.find(hit => hit.path === "continued.md")?.matchKind).toBe("related");
+			expect(result.sections.find(hit => hit.headingPath.endsWith("Other"))?.matchKind).toBe("related");
+			for (const file of ["escaped.md", "path.md", "escaped-path.md", "windows-path.md"])
+				expect(result.sections.find(hit => hit.path === file)?.matchKind).toBe("exact-name");
+			for (const file of ["spliced.md", "escaped-continued.md"])
+				expect(result.sections.find(hit => hit.path === file)?.matchKind).toBe("related");
+			const firstRelated = result.sections.findIndex(hit => hit.matchKind === "related");
+			expect(result.sections.slice(0, firstRelated).every(hit => hit.matchKind === "exact-name")).toBe(true);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("traverses contiguous full evidence exactly once across budgets, limits and service reopen", async () => {
+		const root = await tempDir("docs-pagination-root-");
+		const agentDir = await tempDir("docs-pagination-agent-");
+		const sources: Record<string, string> = {
+			"a.md": `# Notes\nmbist_check.rpt evidence\n${"same background ".repeat(30)}`,
+			"b.md": `# Notes\nmbist_check.rpt evidence\n${"same background ".repeat(30)}`,
+			"distinct.md": `# Notes\nmbist_check.rpt distinct evidence\n${"long background ".repeat(400)}`,
+			"related.md": "# Notes\nrpt related evidence\n",
+			"other.md": "# Notes\nrpt additional evidence\n",
+		};
+		for (const [name, text] of Object.entries(sources)) await fs.writeFile(path.join(root, name), text);
+		let service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const complete = service.search("mbist_check.rpt", { index: "manual", limit: 500 });
+			expect(complete).toMatchObject({ total: 5, exactNameMatches: 3, hasMore: false });
+			expect(complete.sections.findIndex(hit => hit.path === "distinct.md")).toBeLessThan(
+				complete.sections.findIndex(hit => hit.path === "b.md"),
+			);
+			const ordered = complete.sections.map(hit => hit.sectionId);
+			const cost = (hit: (typeof complete.sections)[number]) => (hit.sectionId === ordered[1] ? 20_000 : 10);
+			let page = service.search("mbist_check.rpt", {
+				index: "manual",
+				limit: 500,
+				characterBudget: 30,
+				sectionCost: cost,
+			});
+			expect(page.sections.map(hit => hit.sectionId)).toEqual(ordered.slice(0, 1));
+			const delivered = [...page.sections];
+			let pageNumber = 0;
+			while (page.cursor) {
+				const cursor = page.cursor;
+				service.close();
+				service = new DocsService({ agentDir });
+				const positions: number[] = [];
+				page = service.search("mbist_check.rpt", {
+					index: "manual",
+					cursor,
+					limit: pageNumber === 0 ? 500 : 2,
+					characterBudget: pageNumber === 0 ? 5 : 35,
+					sectionCost: (hit, position) => {
+						positions.push(position);
+						return cost(hit);
+					},
+				});
+				expect(positions).toEqual(Array.from({ length: positions.length }, (_, index) => index));
+				if (pageNumber === 0) expect(page.sections.map(hit => hit.sectionId)).toEqual(ordered.slice(1, 2));
+				expect(page.total).toBe(5);
+				expect(page.exactNameMatches).toBe(3);
+				delivered.push(...page.sections);
+				pageNumber++;
+			}
+			expect(delivered.map(hit => hit.sectionId)).toEqual(ordered);
+			expect(page).toMatchObject({ hasMore: false });
+			expect(page.cursor).toBeUndefined();
+			for (const hit of delivered) {
+				expect(hit.text).toBe(sources[hit.path]);
+				expect(hit.documentHash).toBe(new Bun.CryptoHasher("sha256").update(sources[hit.path]).digest("hex"));
+				expect(hit.lineStart).toBe(1);
+				expect(hit.lineEnd).toBeGreaterThanOrEqual(2);
+			}
+		} finally {
+			service.close();
+		}
+	});
+
+	it("rejects malformed, mismatched and stale continuations instead of returning empty success", async () => {
+		const root = await tempDir("docs-cursor-root-");
+		const agentDir = await tempDir("docs-cursor-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle first\n## Two\nneedle second\n");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const first = service.search("needle", { index: "manual", limit: 1 });
+			expect(first.hasMore).toBe(true);
+			expect(first.total).toBe(2);
+			expect(() => service.search("needle", { cursor: "not a cursor" })).toThrow(
+				"Invalid documentation search cursor",
+			);
+			expect(() => service.search("needle", { cursor: "" })).toThrow("Invalid documentation search cursor");
+			expect(() => service.search("different", { index: "manual", cursor: first.cursor })).toThrow(
+				"does not match query or index",
+			);
+			expect(() => service.search("needle", { index: "other", cursor: first.cursor })).toThrow(
+				"does not match query or index",
+			);
+			service.storage.db
+				.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?")
+				.run("\nChanged stored evidence.\n", first.sections[0].sectionId);
+			expect(() => service.search("needle", { index: "manual", cursor: first.cursor })).toThrow(
+				"Stale documentation search cursor",
+			);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("returns successful complete metadata for no terms, zero matches and related-only names", async () => {
+		const root = await tempDir("docs-zero-query-root-");
+		const agentDir = await tempDir("docs-zero-query-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# Notes\nrpt evidence\n");
+		await fs.writeFile(path.join(root, "missingcmd.md"), "# Notes\nMetadata only; no command evidence.\n");
+		const service = new DocsService({ agentDir });
+		try {
+			await service.init(root, "manual");
+			for (const query of ["!!!", "absentword"]) {
+				expect(service.search(query, { index: "manual" })).toEqual({
+					sections: [],
+					total: 0,
+					hasMore: false,
+					exactNameMatches: 0,
+					...(query === "absentword" ? { technicalName: query } : {}),
+				});
+			}
+			const result = service.search("missing_check.rpt", { index: "manual" });
+			expect(result).toMatchObject({
+				total: 1,
+				hasMore: false,
+				technicalName: "missing_check.rpt",
+				exactNameMatches: 0,
+			});
+			expect(result.sections[0].matchKind).toBe("related");
+			const plainName = service.search("missingcmd", { index: "manual" });
+			expect(plainName).toMatchObject({
+				total: 1,
+				hasMore: false,
+				technicalName: "missingcmd",
+				exactNameMatches: 0,
+			});
+			expect(plainName.sections[0]).toMatchObject({ path: "missingcmd.md", matchKind: "related" });
 		} finally {
 			service.close();
 		}

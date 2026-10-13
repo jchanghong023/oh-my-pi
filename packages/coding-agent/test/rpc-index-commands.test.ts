@@ -66,6 +66,28 @@ async function fixture() {
 	return { cwd, agentDir, docsDir, session, controller, runtime, tasks, output, select, input, confirm, run };
 }
 
+interface WikiEvidenceLocation {
+	cwd: string;
+	agentDir: string;
+	docsDir: string;
+}
+
+async function importWikiEvidence(f: WikiEvidenceLocation, count: number) {
+	await fs.rm(path.join(f.docsDir, "manual.md"));
+	for (let index = 0; index < count; index++)
+		await Bun.write(
+			path.join(f.docsDir, `p${String(index).padStart(2, "0")}.md`),
+			`# Evidence\nmbist_check.rpt evidence ${index}\nStored final line ${index}.\n`,
+		);
+	const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+	try {
+		await docs.init(f.docsDir, "manual");
+		return docs.search("mbist_check.rpt", { limit: 100 });
+	} finally {
+		docs.close();
+	}
+}
+
 describe("RPC index commands use the real index services", () => {
 	test("wiki creates, searches and deletes an index through host dialogs without modifying source documents", async () => {
 		const f = await fixture();
@@ -100,6 +122,110 @@ describe("RPC index commands use the real index services", () => {
 			removed.close();
 		}
 		expect(await Bun.file(path.join(f.docsDir, "manual.md")).text()).toContain("sensorbeacon");
+	});
+
+	test("wiki browses every DB page without rewriting its query and outputs complete snapshot citations", async () => {
+		const f = await fixture();
+		const expected = await importWikiEvidence(f, 45);
+		expect(expected.total).toBe(45);
+		await fs.rm(f.docsDir, { recursive: true });
+		const seen: string[] = [];
+		let pageKey: string | undefined;
+		f.select.mockImplementation(async (title, options) => {
+			if (title === "Document indexes") return "Search document indexes";
+			const labels = options.map(getExtensionUISelectOptionLabel);
+			if (labels[0] !== pageKey) {
+				pageKey = labels[0];
+				seen.push(...labels.filter(label => /^\d+\./.test(label)));
+				return labels[0];
+			}
+			return labels.includes("Next page") ? "Next page" : "Done browsing";
+		});
+		f.input.mockResolvedValueOnce("mbist_check.rpt");
+		await f.run("/wiki");
+		expect(f.input).toHaveBeenCalledTimes(1);
+		expect(seen).toHaveLength(45);
+		expect(new Set(seen).size).toBe(45);
+		expect(seen).toEqual(
+			expected.sections.map(
+				(section, position) =>
+					`${position + 1}. [exact-name] [${section.index}] ${section.path}:${section.lineStart}-${section.lineEnd} ${section.headingPath}`,
+			),
+		);
+		const output = f.output.join("\n");
+		expect(output).toContain("Section hits: 45 · showing 1-20");
+		expect(output).toContain("showing 21-40");
+		expect(output).toContain("showing 41-45");
+		expect(output).toContain("exact-name matches: 45");
+		expect(output).toContain("Results exhausted.");
+		for (const position of [0, 20, 40]) {
+			const section = expected.sections[position]!;
+			expect(output).toContain(
+				`[exact-name] [${section.index}] ${section.path}:${section.lineStart}-${section.lineEnd} ${section.headingPath}\nsha256=${section.documentHash} · sectionId=${section.sectionId}\n\n${section.text}`,
+			);
+		}
+		const finalOptions = f.select.mock.calls.at(-1)![1].map(getExtensionUISelectOptionLabel);
+		expect(finalOptions).not.toContain("Next page");
+		expect(finalOptions).toContain("Done browsing");
+	});
+
+	test("wiki opens the selected snapshot but reports stale continuation instead of restarting", async () => {
+		const f = await fixture();
+		const expected = await importWikiEvidence(f, 25);
+		f.input.mockResolvedValueOnce("mbist_check.rpt");
+		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockImplementationOnce(async (_title, options) => {
+			const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+			try {
+				docs.remove("manual");
+				await fs.rm(f.docsDir, { recursive: true });
+				await fs.mkdir(f.docsDir);
+				await Bun.write(path.join(f.docsDir, "replacement.md"), "# Replacement\nmbist_check.rpt new snapshot\n");
+				await docs.init(f.docsDir, "manual");
+			} finally {
+				docs.close();
+			}
+			return getExtensionUISelectOptionLabel(options[0]!);
+		});
+		f.select.mockResolvedValueOnce("Next page");
+		await f.run("/wiki");
+		const output = f.output.join("\n");
+		const section = expected.sections[0]!;
+		expect(output).toContain(`sha256=${section.documentHash} · sectionId=${section.sectionId}`);
+		expect(output).toContain(section.text);
+		expect(output).toContain("/wiki failed: Stale documentation search cursor: indexed snapshot has changed");
+		expect(output).not.toContain("replacement.md");
+		expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
+		expect(f.input).toHaveBeenCalledTimes(1);
+	});
+
+	test("wiki reports zero indexed matches as exhausted without opening an evidence dialog", async () => {
+		const f = await fixture();
+		await importWikiEvidence(f, 1);
+		f.select.mockResolvedValueOnce("Search document indexes");
+		f.input.mockResolvedValueOnce("zxqv_missing.noexist");
+		await f.run("/wiki");
+		expect(f.output.join("\n")).toContain("Section hits: 0 · showing 0-0");
+		expect(f.output.join("\n")).toContain("未找到完整名称命中");
+		expect(f.output.join("\n")).toContain("Results exhausted.");
+		expect(f.output.join("\n")).not.toContain("/wiki failed:");
+		expect(f.select).toHaveBeenCalledTimes(1);
+	});
+
+	test("wiki cannot advance a pending result page after its owning session changes", async () => {
+		const f = await fixture();
+		await importWikiEvidence(f, 21);
+		f.select.mockResolvedValueOnce("Search document indexes");
+		f.input.mockResolvedValueOnce("mbist_check.rpt");
+		f.select.mockImplementationOnce(async (_title, options) => {
+			expect(options.map(getExtensionUISelectOptionLabel)).toContain("Next page");
+			f.session.sessionGeneration++;
+			return "Next page";
+		});
+		await f.run("/wiki");
+		expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
+		expect(f.output.join("\n")).not.toContain("showing 21-21");
+		expect(f.select).toHaveBeenCalledTimes(2);
 	});
 
 	test("wiki reports duplicate-name failure and keeps the original searchable index", async () => {

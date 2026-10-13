@@ -83,11 +83,7 @@ export function formatSessionWorktreeSummary(worktree: SessionWorktree): string 
  * Resolve the worktree for `/wt`. Throws with a user-facing message when `cwd`
  * is not a git checkout, `branch` is invalid, or git refuses.
  */
-export async function createSessionWorktree(
-	cwd: string,
-	settings: Settings,
-	branch: string,
-): Promise<SessionWorktree> {
+export async function createSessionWorktree(cwd: string, settings: Settings, branch: string): Promise<SessionWorktree> {
 	try {
 		await settings.flush();
 	} catch (err) {

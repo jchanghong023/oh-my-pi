@@ -199,7 +199,7 @@ describe("session worktree helpers (real git)", () => {
 		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
 		const wt = await createSessionWorktree(
 			repo,
-			Settings.isolated({ "worktree.cleanSource": true, "worktree.base": path.join(root, "configured-base") }),
+			Settings.isolated({ "worktree.base": path.join(root, "configured-base") }),
 			branch,
 		);
 		expect(wt.created).toBe(true);
@@ -227,15 +227,21 @@ describe("session worktree helpers (real git)", () => {
 	it("checks out an existing branch at its own tip and keeps the branch after exit removal", async () => {
 		git(repo, "branch", branch);
 		const tip = branchSha(repo, branch);
+		if (!tip) throw new Error("Expected existing branch tip");
 		await commitFile(repo, "main-only.txt");
 		const wt = await create();
 		expect(wt.created).toBe(true);
 		expect(wt.createdBranch).toBe(false);
 		expect(wt.baseCommit).toBe(tip);
-		expect(git(wt.path, "rev-parse", "HEAD")).toBe(tip!);
+		expect(git(wt.path, "rev-parse", "HEAD")).toBe(tip);
 		expect(wt.baseCommit).not.toBe(git(repo, "rev-parse", "HEAD"));
 		expect(await exists(path.join(wt.path, "main-only.txt"))).toBe(false);
-		const plan = await planWorktreeExit([wt], "remove", async () => true, () => {});
+		const plan = await planWorktreeExit(
+			[wt],
+			"remove",
+			async () => true,
+			() => {},
+		);
 		await removeExitWorktrees(plan);
 		expect(await exists(wt.path)).toBe(false);
 		expect(branchSha(repo, branch)).toBe(tip);

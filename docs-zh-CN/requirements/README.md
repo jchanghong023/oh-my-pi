@@ -4,8 +4,9 @@
 
 | 文档 | 权威范围 | 状态 |
 | --- | --- | --- |
-| [Fork 定位、功能与默认值](fork.md) | 个人 fork 定位、三种使用场景与零配置目标、上游基线、个人模型与命令、文档检索、交互与默认值、分发、运行诊断日志与简薄验证编排 | 本批审查修复已通过下列 Windows／Ubuntu-24.04 同提交 fork-affected 门禁；相关静态检查、差异测试和真实 dev-TUI 边界已验证。公司实网、真实模型、ZCode GUI、独立发布与全仓库覆盖不属于本地通过结论 |
+| [Fork 定位、功能与默认值](fork.md) | 个人 fork 定位、三种使用场景与零配置目标、上游基线、个人模型与命令、文档检索、交互与默认值、分发、运行诊断日志与简薄验证编排 | 既有批次审查修复已通过下列 Windows／Ubuntu-24.04 同提交 fork-affected 门禁；相关静态检查、差异测试和真实 dev-TUI 边界已有验证证据。文档索引最新审查修复的验证状态见该域行；公司实网、真实模型、ZCode GUI、独立发布与全仓库覆盖不属于本地通过结论 |
 | [会话工作树切换](fork.md#wt-会话工作树) | `/wt` 与 `/worktree` 的分支复用、目录位置及源目录改动保留契约 | 实现与现有回归已按契约更新；11 个受影响 TS 文件的 Bun 语法／转译检查通过。针对性回归与真实 CLI ACP 冒烟在启动时因缺少本地 native addon 受阻，类型检查缺少 `tsgo`，lint／格式检查工具不可用；功能未验收，未运行完整门禁 |
+| [Markdown 文档索引](fork.md#markdown-文档索引) | `/wiki` 与 `wiki` 的技术相关性、完整名称证据、DB-only 连续分页与引用、正常零命中及错误边界 | 独立审查确认的 4 个 P2 问题已修复，相关 4 个测试文件 105 通过／2 跳过，含真实 dev CLI 工具派发；fastcheck 通过，LSP 无错误。最新修复后 Windows fork-affected fulltest 通过（265 个 TS 测试文件，288.3 秒，exit=0），包含全部静态检查、Rust 测试（3135 通过／6 跳过）、脚本测试（277 通过／15 跳过）、native 构建及真实 dev-TUI 冒烟。仅使用指定资料的数据库复验：MBIST 仿真 log 判据仍排名第 1，文件名及带句末标点的问题均找到 15 个完整名称章节；全部 919 节经服务连续页读取，无遗漏／重复，正文及引用逐项核验，工具续页及成功零命中通过，源目录读取尝试为 0。先前 19 份 Markdown／139549 节的 443 工具页完整遍历、167 个超长首节页、28 个重复指针及真实 wiki TUI 翻页／打开引用／返回／正常退出仍保留为审查前专项证据，本轮未重跑全部 443 工具页或 slowtest。Linux／WSL、真实模型质量及全项目覆盖未验收，CLI 模型响应仅用 localhost stub |
 | [三层本地门禁](fork.md#fork-验证体系) | fastcheck/fulltest/slowtest 的覆盖包含关系、非编译预算与计时、缓存、授权、固定提交 WSL、禁止 CI/桌面输入及验证状态 | 验收提交 `ef5b8dd1d9`：Windows 与 Ubuntu-24.04 WSL2 同提交 slowtest 通过，两端各 262 个 fork TS 测试文件；Windows Rust 3135 通过／6 跳过、Linux Rust 3474 通过／6 跳过；脚本测试分别 277 通过／15 跳过、274 通过／18 跳过。全部 fastcheck 检查、native 构建与真实 dev-TUI 的基础、team 运行／取消、repo 链路通过；Windows fulltest 341.5 秒、Linux fulltest 304.7 秒，slowtest PASS，344.8 秒，exit=0，固定 SHA 与源码稳定性通过。范围为 fork-affected；混合 Cargo 编译排除未完整观测，保守计费，compile_excluded=0.0 秒 |
 | [多模型方案讨论](team.md) | `/team` 的行为、集成约束与验收 | 本批修复已随 fork-affected 测试集合通过；Windows／Linux 真实 dev-TUI 的 localhost 模型 stub 五阶段、持久报告和取消链路通过。公司真实模型的完整讨论、模型遵从与最终方案质量未验收 |
 | [Goal 自动编排](goal-auto-orchestrate.md) | `/goal-auto-orchestrate` 的命令与模式持久化、上游 Goal 正常历史消息链、首次通知及成功压缩后的完整目标／共享 Orchestrate 重构、构造去重与历史不变性、全过程授权与无人值守、持久化与 WebSocket／严格前缀验收 | 通知／压缩／排队及 JchTools 专项 68 例、真实 CLI 20 个场景已有通过证据，覆盖普通 Goal 对照、HTTP 与 Codex WebSocket 十轮严格前缀、两次压缩及生命周期。本批 fork-affected 静态检查及 fulltest／slowtest 通过；该范围不代表完整上游测试套件，既有上游原样 RPC plan fixture 的独立失败未复验。完整 Goal TUI／ZCode GUI、真实模型无人值守遵从、缓存命中、任务质量与账单未验证 |
@@ -36,4 +37,4 @@ CodeAgent 认证专项：当前用户 DPAPI 合成密文经真实 JchTools 独�
 
 输入框路径宽度专项：状态栏溢出与上下文回归 46 例通过；真实 `bun run dev` ConPTY 验证 80 列路径恢复到配置上限、42 列按实际剩余宽度截断、再扩至 80 列恢复，上下文标签靠右且正常退出。使用隔离配置和本地模型定义，未发模型请求；未运行 fulltest/slowtest，Linux/WSL 未验证。
 
-文档检索返回预算：wiki 的常规单页目标已降为约 8000 字符，保持章节完整、来源引用与超长首条证据。`wiki-tool.test.ts` 与 `wiki-cli.test.ts` 23 例通过，后者经真实 `bun run dev` 导入、移走源目录、模型工具派发与删除错误验证缩小后的返回；独立真实数据库／WikiTool 冒烟观测 12 个命中返回 3 个完整章节、7756 字符。未运行 fulltest/slowtest，Linux/WSL 与真实模型检索质量未验证。
+文档检索的当前行为统一以[Markdown 文档索引契约](fork.md#markdown-文档索引)为准，实施与验收状态见上表；隔离验收 profile 为 `wiki-acceptance`、索引为 `acceptance-mds`。数据库与原验收证据保留在本地忽略目录 `node_modules/.cache/wiki-acceptance-20261014/`，独立审查修复后的数据库冒烟报告在 `node_modules/.cache/wiki-review-20261014/post-review-smoke.json`；不提交原始验收材料或派生正文。

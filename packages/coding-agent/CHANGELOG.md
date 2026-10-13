@@ -13,7 +13,7 @@
 
 ### Changed
 
-- Reduced wiki result pages to an ~8,000-character target while preserving complete sections, citations, and oversized best hits.
+- Wiki now prioritizes technical topics and complete names, exposes all matches through cursor pagination and TUI next-page navigation, and returns successful scoped zero-match results while preserving complete evidence and citations in ~8,000-character pages.
 - The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
 - Ask dialogs now auto-select after 30 seconds by default; explicit zero still disables the timeout, and unanswered settings approvals are denied.
 - Default startup skips automatic setup while retaining the welcome screen and startup status messages; explicit startup settings and `--setup` remain available.
@@ -21,6 +21,7 @@
 
 ### Fixed
 
+- Wiki now distinguishes prose sentence punctuation from literal names, respects stored chunk boundaries and code context, and keeps focused technical topics ahead of generic matches.
 - Windows installer kill fallback preserves the previous executable so a failed replacement can still roll back.
 - Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
 - CodeAgent keeps working cached credentials when the Windows registry contains an empty token value.

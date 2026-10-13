@@ -33,6 +33,12 @@ export class DocsHubComponent implements Component {
 	#search = new Input();
 	#hits: SearchHit[] = [];
 	#hitIndex = 0;
+	#searchQuery = "";
+	#searchIndex?: string;
+	#nextCursor?: string;
+	#pageStart = 0;
+	#resultSummary: string[] = [];
+	#showingHit = false;
 	#wizard?: DocsAddWizard;
 	#abort?: AbortController;
 	#progress?: DocsProgress;
@@ -135,25 +141,39 @@ export class DocsHubComponent implements Component {
 		);
 	}
 
-	#runSearch(): void {
-		const query = this.#search.getValue().trim();
+	#runSearch(cursor?: string): void {
+		const query = cursor ? this.#searchQuery : this.#search.getValue().trim();
 		if (!query) return;
+		const index = cursor ? this.#searchIndex : this.#selectedIndex()?.name;
 		try {
-			// Index-scoped searches do not report a total; cap hits and mark the
-			// truncation instead of silently showing the limit as the count.
-			const limit = 20;
-			const result: DocsSearchResult = this.service.search(query, { index: this.#selectedIndex()?.name, limit });
+			const result: DocsSearchResult = this.service.search(query, { index, limit: 20, cursor });
 			this.#latestError = undefined;
+			this.#pageStart = cursor ? this.#pageStart + this.#hits.length : 0;
+			this.#searchQuery = query;
+			this.#searchIndex = index;
+			this.#nextCursor = result.cursor;
 			this.#hits = result.sections.map(hit => ({
 				section: hit,
 				label: sanitizeTerminalLine(
-					`[${hit.index}] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath} · sectionId=${hit.sectionId}`,
+					`[${hit.matchKind}] [${hit.index}] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath} · sectionId=${hit.sectionId}`,
 				),
 			}));
 			this.#hitIndex = 0;
+			this.#showingHit = false;
 			this.#mode = "detail";
-			const hits = result.sections.length;
-			this.#detail = [`Section hits: ${result.total ?? (hits >= limit ? `${hits}+` : `${hits}`)}`];
+			this.#resultSummary = [
+				`Section hits: ${result.total} · showing ${result.sections.length ? this.#pageStart + 1 : 0}-${this.#pageStart + result.sections.length}`,
+				...(result.technicalName
+					? [
+							sanitizeTerminalLine(
+								`Full name: ${result.technicalName} · exact-name matches: ${result.exactNameMatches}`,
+							),
+							...(result.exactNameMatches === 0 ? ["未找到完整名称命中"] : []),
+						]
+					: []),
+				result.cursor ? "More results available. Press n for next page." : "Results exhausted.",
+			];
+			this.#detail = this.#resultSummary;
 		} catch (error) {
 			this.#latestError = errorLine(error);
 		}
@@ -168,13 +188,13 @@ export class DocsHubComponent implements Component {
 			this.#latestError = undefined;
 			this.#detail = [
 				sanitizeTerminalLine(
-					`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
+					`[${value.matchKind}] [${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
 				),
 				sanitizeTerminalLine(`sha256=${value.documentHash} · sectionId=${value.sectionId}`),
 				"",
 				sanitizeTerminalText(value.text),
 			];
-			this.#hits = [];
+			this.#showingHit = true;
 		} catch (error) {
 			this.#latestError = errorLine(error);
 		}
@@ -233,10 +253,17 @@ export class DocsHubComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		if (this.#mode === "detail" && this.#hits.length > 0) {
-			if (matchesKey(data, "up")) this.#hitIndex = Math.max(0, this.#hitIndex - 1);
-			else if (matchesKey(data, "down")) this.#hitIndex = Math.min(this.#hits.length - 1, this.#hitIndex + 1);
-			else if (matchesKey(data, "enter") || data === "\n") this.#openHit();
+		if (this.#mode === "detail" && !(this.#showingHit && (data === "/" || data === "d" || data === "c"))) {
+			if (data === "n") {
+				if (this.#nextCursor) this.#runSearch(this.#nextCursor);
+			} else if (this.#showingHit && data === "b") {
+				this.#showingHit = false;
+				this.#detail = this.#resultSummary;
+			} else if (!this.#showingHit) {
+				if (matchesKey(data, "up")) this.#hitIndex = Math.max(0, this.#hitIndex - 1);
+				else if (matchesKey(data, "down")) this.#hitIndex = Math.min(this.#hits.length - 1, this.#hitIndex + 1);
+				else if (matchesKey(data, "enter") || data === "\n") this.#openHit();
+			}
 			this.tui.requestRender();
 			return;
 		}
@@ -254,8 +281,6 @@ export class DocsHubComponent implements Component {
 			this.#search = new Input();
 		} else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (data === "c" && this.#abort) this.#abort.abort();
-		// In detail mode without a hit list the arrows must not move the hidden
-		// list selection that `d` and scoped `/` searches act on.
 		else if (matchesKey(data, "up") && this.#mode !== "detail") this.#selected = Math.max(0, this.#selected - 1);
 		else if (matchesKey(data, "down") && this.#mode !== "detail")
 			this.#selected = Math.min(this.#indexes.length - 1, this.#selected + 1);
@@ -266,7 +291,12 @@ export class DocsHubComponent implements Component {
 		if (this.#wizard) return this.#wizard.render(width);
 		const lines = [
 			theme.bold(theme.fg("accent", "Document indexes")),
-			theme.fg("dim", "n new  / search  d delete  c cancel  Esc close"),
+			theme.fg(
+				"dim",
+				this.#mode === "detail"
+					? `${this.#showingHit ? "b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  Esc indexes`
+					: "n new  / search  d delete  c cancel  Esc close",
+			),
 		];
 		if (this.#mode === "confirm-remove")
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
@@ -275,8 +305,9 @@ export class DocsHubComponent implements Component {
 		else if (this.#mode === "search") lines.push(`Search: ${this.#search.render(Math.max(10, width - 10))[0] ?? ""}`);
 		else if (this.#mode === "detail") {
 			lines.push(...this.#detail);
-			for (let index = 0; index < this.#hits.length; index++)
-				lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
+			if (!this.#showingHit)
+				for (let index = 0; index < this.#hits.length; index++)
+					lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
 		} else if (this.#indexes.length === 0) lines.push("No document indexes. Press n to add one.");
 		else
 			for (let index = 0; index < this.#indexes.length; index++) {

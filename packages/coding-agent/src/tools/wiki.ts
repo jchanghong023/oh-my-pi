@@ -2,7 +2,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { logger, prompt, sanitizeText } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { normalizePlainText, truncateHeading } from "../docs/markdown";
+import { truncateHeading } from "../docs/markdown";
 import { DocsService } from "../docs/service";
 import type { DocsSectionHit } from "../docs/types";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
@@ -11,15 +11,15 @@ import { toolResult } from "./tool-result";
 
 const wikiSchema = type({
 	query: type("string").describe("keywords, or a whole question; results are ranked by relevance"),
+	"cursor?": type("string").describe("continuation from the previous page; keep query unchanged"),
 	"+": "reject",
 });
 
 export type WikiToolParams = typeof wikiSchema.infer;
 
 /**
- * Target for rendered Markdown per call, including hit locators and the page
- * header. Keep the best section whole if it exceeds this target; later hits
- * only fill the remaining space.
+ * Target for rendered Markdown per call, including locators and continuation.
+ * The service carries the first section whole even when it exceeds this target.
  */
 const TEXT_BUDGET_CHARS = 8_000;
 
@@ -27,10 +27,8 @@ const TEXT_BUDGET_CHARS = 8_000;
 const PAGE_SECTIONS = 200;
 
 /**
- * Longest query served verbatim. The page header and the no-match errors echo
- * the query, and an unbounded echo would spend the very page it asks for: the
- * cut query is what gets searched, so the echo can never misrepresent the
- * search.
+ * Longest query served verbatim. The cut query is searched and echoed, so an
+ * oversized input cannot spend the whole page on its header and continuation.
  */
 const MAX_QUERY_CHARS = 500;
 
@@ -46,7 +44,7 @@ function lineRange(path: string, start: number, end: number): string {
 function sectionHeader(index: number, section: DocsSectionHit): string {
 	const heading = truncateHeading(section.headingPath);
 	return sanitizeText(
-		`[${index}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${heading} · index=${section.index} · sha256=${section.documentHash} · sectionId=${section.sectionId}`,
+		`[${index}] ${lineRange(section.path, section.lineStart, section.lineEnd)} · ${heading} · index=${section.index} · sha256=${section.documentHash} · sectionId=${section.sectionId} · match=${section.matchKind}`,
 	).replace(/[\r\n\t]+/g, " ");
 }
 
@@ -95,6 +93,11 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 							`wiki requires a query. Received: ${received.length > 0 ? received.join(", ") : "nothing"}. Example: {"query":"MBIST"}`,
 						);
 					}
+					if ("cursor" in raw && (typeof raw.cursor !== "string" || !raw.cursor.trim())) {
+						expectedResult = "invalid_cursor";
+						throw new ToolError("wiki cursor must be a nonempty string returned by the previous page.");
+					}
+					const cursor = raw.cursor as string | undefined;
 					const query =
 						receivedQuery.length > MAX_QUERY_CHARS
 							? truncateHeading(receivedQuery, MAX_QUERY_CHARS)
@@ -105,7 +108,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						result: "completed",
 						query_length: query.length,
 						query_truncated: receivedQuery.length > MAX_QUERY_CHARS,
-						ignored_argument_count: received.filter(key => key !== "query").length,
+						ignored_argument_count: received.filter(key => key !== "query" && key !== "cursor").length,
 					});
 					stage = "open";
 
@@ -122,133 +125,71 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						}
 						logger.info("wiki.query.indexes", { ...fields, stage, result: "completed", index_count: indexCount });
 						stage = "query";
-						const result = service.search(query, { limit: PAGE_SECTIONS });
-						if (result.sections.length === 0) {
-							expectedResult = "no_match";
-							throw new ToolError(
-								`No section matches "${query}". Use one distinctive term rather than a sentence.`,
-							);
-						}
-						stage = "render";
-
-						// `total` counts every FTS row, the structural labels included; see the
-						// footer comment for why that is not measured against `bodies`.
-						const scope =
-							result.total !== undefined
-								? `${result.total} matching section(s)`
-								: `${result.sections.length}+ matching section(s)`;
-						// The rendered page opens with a header of its own, so its cost is
-						// reserved before the first body is charged: the six placeholder digits
-						// are the widest `used` can print, and joining the header to the page
-						// costs two more.
-						const headerAllowance = `"${query}" · ${scope} · 000000/${TEXT_BUDGET_CHARS} characters`.length + 2;
-						const bodies: string[] = [];
-						const seen = new Set<string>();
-						let used = headerAllowance;
-						let skippedForSize = 0;
+						const header = `"${query}" · searched imported Markdown corpus`;
+						// Reserve the query repeated in continuation JSON and bounded service
+						// cursor/summary overhead; charge every rendered locator/body exactly.
+						const footerAllowance = 512 + JSON.stringify({ query, cursor: "" }).length;
+						const rendered: string[] = [];
+						const shown = new Map<string, number>();
 						let duplicates = 0;
-						let oversizeCarried = 0;
-						for (const section of result.sections) {
-							// Structural labels (`#### Cell`) hold nothing the header line does not
-							// already carry. Indexes built before this rule keep them, so skip here;
-							// a heading that reads as a real phrase is content and stays.
-							const shape = section.shape;
-							if (shape === "stub") continue;
-							const header = sectionHeader(bodies.length + 1, section);
-							// The same text often ships in several documents (attachment copies,
-							// re-exports). Repeating it spends the page on nothing new, so a later
-							// copy is reduced to a pointer at the first one.
-							const alreadyShown = section.text.length > 200 && seen.has(section.text);
-							const headingOnlyInHeader =
-								shape === "heading-only" && header.includes(normalizePlainText(section.text));
-							const body = alreadyShown
-								? "(identical text to an earlier hit on this page)"
-								: shape === "heading-only"
-									? headingOnlyInHeader
-										? "(heading only — the title above is the content)"
-										: `(heading only)\n${section.text}`
-									: section.text;
-							// Headers are context too, so the whole rendered page counts.
-							const cost = header.length + 1 + body.length + (bodies.length > 0 ? 2 : 0);
-							if (used + cost > TEXT_BUDGET_CHARS) {
-								// Keep the best hit whole even when a legacy section or a long
-								// locator makes its rendered cost exceed the page budget.
-								if (bodies.length > 0) {
-									skippedForSize += 1;
-									continue;
+						const result = service.search(query, {
+							cursor,
+							limit: PAGE_SECTIONS,
+							characterBudget: Math.max(0, TEXT_BUDGET_CHARS - header.length - 2 - footerAllowance),
+							sectionCost: (section, position) => {
+								if (position === 0) {
+									shown.clear();
+									rendered.length = 0;
 								}
-								oversizeCarried += 1;
-							}
-							bodies.push(`${header}\n${body}`);
-							used += cost;
-							// Only text this page actually carries counts as shown: a section dropped
-							// for size was never delivered, and a pointer to it would be a lie.
-							seen.add(section.text);
-							duplicates += alreadyShown ? 1 : 0;
-						}
-						// Every match is a stub: the document's first section is indexed on purpose
-						// (its row is the only one carrying the relative path), and a name search
-						// lands on it. Its header still locates the document — the text it would
-						// have carried says no more — so the call answers instead of failing.
-						if (bodies.length === 0) {
-							for (const section of result.sections) {
-								const header = sectionHeader(bodies.length + 1, section);
-								if (used + header.length + 2 > TEXT_BUDGET_CHARS) break;
-								bodies.push(header);
-								used += header.length + 2;
-							}
-							// On this path the header is all a hit delivers, so one that did not fit
-							// is withheld like any other section; the stub rule skipped these before
-							// the budget was consulted, so nothing is counted twice.
-							skippedForSize += result.sections.length - bodies.length;
-						}
-						if (bodies.length === 0) {
-							expectedResult = "no_body";
-							throw new ToolError(`Sections matching "${query}" carry no body text.`);
-						}
-
-						// `total` counts every FTS row, the structural labels included, and those
-						// never reach `bodies` by design: measured against `bodies` it reported a cut
-						// page whenever a document title matched, and it swallowed the collapse note
-						// whenever duplicates were the only reduction. What this page withholds is
-						// what it dropped for size here, plus the hits the ranked page never reached
-						// — hits the page did reach count as served even when they render no text.
-						const beyondPage =
-							result.total !== undefined ? Math.max(0, result.total - result.sections.length) : 0;
-						const hidden = skippedForSize > 0 || beyondPage > 0 || oversizeCarried > 0;
-						const skipped = skippedForSize > 0 ? ` (${skippedForSize} too long for what was left)` : "";
-						const collapsed = duplicates > 0 ? ` (${duplicates} repeated hit(s) collapsed to a pointer)` : "";
-						const oversized =
-							oversizeCarried > 0
-								? ` — ${oversizeCarried} hit exceeds the available page budget and is carried whole`
-								: "";
-						const budget =
-							oversizeCarried > 0
-								? `with a ${TEXT_BUDGET_CHARS}-character target`
-								: `within ${TEXT_BUDGET_CHARS} characters`;
-						const rest =
-							skippedForSize > 0 || beyondPage > 0 ? "; search again with narrower terms for the rest." : ".";
-						const footer = hidden
-							? `\n… this page carries ${bodies.length} of ${result.total ?? result.sections.length} sections ${budget}${skipped}${collapsed}${oversized}${rest}`
-							: collapsed
-								? `\n… this page carries ${bodies.length} matching section(s)${collapsed}.`
-								: "";
-						const text = [`"${query}" · ${scope} · ${used}/${TEXT_BUDGET_CHARS} characters`, ...bodies].join(
-							"\n\n",
-						);
-						const response = toolResult()
-							.text(text + footer)
-							.done();
+								const earlier = section.text.length > 200 ? shown.get(section.text) : undefined;
+								const body =
+									earlier !== undefined
+										? `(identical text to hit [${earlier + 1}] on this page)`
+										: section.shape === "heading-only"
+											? `(heading only)\n${section.text}`
+											: section.shape === "stub"
+												? `(structural label)\n${section.text}`
+												: section.text;
+								rendered[position] = `${sectionHeader(position + 1, section)}\n${body}`;
+								if (earlier === undefined) shown.set(section.text, position);
+								return rendered[position]!.length + (position > 0 ? 2 : 0);
+							},
+						});
+						stage = "render";
+						const bodies = rendered.slice(0, result.sections.length);
+						duplicates = bodies.filter(body => body.includes("\n(identical text to hit [")).length;
+						const evidence = [header, ...bodies].join("\n\n");
+						const oversized = bodies.length > 0 && evidence.length + footerAllowance > TEXT_BUDGET_CHARS;
+						const summary = [
+							`${result.total} matching section(s) in the searched imported corpus; this page carries ${bodies.length}.`,
+							result.technicalName
+								? result.exactNameMatches > 0
+									? `${result.exactNameMatches} exact-name section(s); other hits are related, not complete-name evidence.`
+									: "未找到完整名称命中; any returned hits are related, not complete-name evidence."
+								: undefined,
+							result.total === 0
+								? "0 matches does not establish that the information does not exist elsewhere."
+								: undefined,
+							duplicates > 0
+								? `${duplicates} repeated hit(s) collapsed to a page-local pointer; all source locators retained.`
+								: undefined,
+							oversized
+								? "The first section exceeds the ~8000-character target and is carried whole."
+								: undefined,
+							result.hasMore
+								? `More results remain. Continue with the same query: ${JSON.stringify({ query, cursor: result.cursor })}`
+								: "All matching results exhausted in the searched imported corpus.",
+						].filter((line): line is string => line !== undefined);
+						const text = `${evidence}\n\n${summary.join("\n")}`;
 						completion = {
 							match_count: result.total,
 							section_count: result.sections.length,
 							rendered_section_count: bodies.length,
-							rendered_characters: text.length + footer.length,
-							skipped_section_count: skippedForSize,
+							rendered_characters: text.length,
 							duplicate_count: duplicates,
-							oversize_count: oversizeCarried,
+							oversize_count: oversized ? 1 : 0,
 						};
-						return response;
+						return toolResult().text(text).done();
 					} finally {
 						const operationStage = stage;
 						const operationExpectedResult = expectedResult;

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
+import { Lexer, type Token, type Tokens } from "@oh-my-pi/pi-utils/marked";
 import {
 	enumerateMarkdownFiles,
 	markdownSectionContexts,
@@ -126,110 +127,187 @@ function normalizeSearchText(text: string): string {
 	return text.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ").trim();
 }
 
-function literalPattern(text: string): RegExp {
-	// Han terms may occur inside longer Chinese text. Technical names must not
-	// match identifier/version continuations, but may touch surrounding Chinese.
-	const start = /^\p{Script=Han}/u.test(text) ? "" : "(?:(?<=\\p{Script=Han})|(?<![\\p{L}\\p{N}_+#-]))";
-	const end = /\p{Script=Han}$/u.test(text) ? "" : "(?:(?=\\p{Script=Han})|(?![\\p{L}\\p{N}_+#-]|\\.[\\p{L}\\p{N}_]))";
+function literalPattern(text: string, pathBasename = false): RegExp {
+	// Names can touch Chinese prose, but not a larger identifier, namespace,
+	// extension or version. A basename may follow a path separator; a query
+	// naming an entire path must still start at that path's boundary.
+	const prefix = pathBasename ? "[\\p{L}\\p{N}_+#.:-]" : "[\\p{L}\\p{N}_+#/\\\\.:-]";
+	const start = /^\p{Script=Han}/u.test(text) ? "" : `(?:(?<=\\p{Script=Han})|(?<!${prefix}))`;
+	const end = /\p{Script=Han}$/u.test(text)
+		? ""
+		: "(?:(?=\\p{Script=Han})|(?![\\p{L}\\p{N}_+#/\\\\-]|[.:][\\p{L}\\p{N}_:]))";
 	return new RegExp(`${start}${RegExp.escape(text)}${end}`, "u");
 }
 
-/**
- * Hard ceiling on one page. Callers size pages by returned characters, but the
- * ranked list still needs an upper bound: corpora converted from slides and
- * spreadsheets hold hundreds of thousands of tiny sections.
- */
 const MAX_PAGE_SECTIONS = 500;
 
-/** Candidate rows reranked per query. Reordering only ever promotes hits inside
- * this window, so it stays small: the caller's page is filled from the top. */
-const CANDIDATE_WINDOW_MAX = 1_000;
+/** Only function words are scaffolding; nouns like log can define the topic. */
+const QUERY_GENERIC_TERMS: Record<string, true> = Object.fromEntries(
+	"the a an and or for of to in on is are what which how does do can should"
+		.split(" ")
+		.map(term => [term, true] as const),
+);
 
-/**
- * Ceiling for that window when a query matches nothing but stubs: widening is the
- * only way to reach the readable hits sitting below them, so the retry may read
- * more rows. It stays bounded because such a query is answered from its first hit.
- */
-const CANDIDATE_LIMIT_MAX = 10_000;
-
-/**
- * Markdown characters fetched per candidate for scoring. Sections cap at 18k
- * characters (`MAX_SECTION_CHARS` in `markdown.ts`), and pulling every
- * candidate's full text dominated query time on large corpora; the page's real
- * text is loaded afterwards, by id. Tier flags are still judged on the whole
- * section: `scoreCandidate` loads the full text (point lookup, once per
- * candidate thanks to the `#fill` cache) for every section longer than this
- * prefix.
- */
-const CANDIDATE_SNIPPET_CHARS = 2_000;
-
-/**
- * Candidate windows to try, widest last: the page is cut from the top of the
- * window, so a window that holds no readable hit is retried larger, up to the
- * ceiling. The last value is the ceiling itself — multiplying past it would
- * leave the widest window never read.
- */
-function* candidateWindows(first: number): Generator<number> {
-	let limit = Math.min(first, CANDIDATE_LIMIT_MAX);
-	while (true) {
-		yield limit;
-		if (limit === CANDIDATE_LIMIT_MAX) return;
-		limit = Math.min(limit * 4, CANDIDATE_LIMIT_MAX);
-	}
+/** Render names without joining identifiers across literal-code boundaries. */
+function normalizeNameText(markdown: string, fencePrefix?: string, continuesLine = false): string {
+	const render = (tokens: readonly Token[]): string =>
+		tokens
+			.map(token => {
+				if (token.type === "table") {
+					const table = token as Tokens.Table;
+					return [table.header, ...table.rows]
+						.map(row => row.map(cell => render(cell.tokens)).join(" "))
+						.join("\n");
+				}
+				if (token.type === "list") return (token as Tokens.List).items.map(item => render(item.tokens)).join("\n");
+				if (token.type === "space" || token.type === "hr" || token.type === "br") return "\n";
+				if (token.type === "def") return "";
+				const text =
+					"tokens" in token && Array.isArray(token.tokens)
+						? render(token.tokens)
+						: "text" in token && typeof token.text === "string"
+							? token.text
+							: "";
+				return /^(?:heading|paragraph|blockquote|code|codespan)$/.test(token.type) ? `\n${text}\n` : text;
+			})
+			.join("");
+	let source = markdown.replace(/^\uFEFF/u, "");
+	if (continuesLine) source = `    ${source}`;
+	return normalizeSearchText(render(Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source)));
 }
 
-/** One scored candidate row within a window. */
+function technicalQueryName(query: string): string | undefined {
+	// A whole identifier can name a command without punctuation. Multiword
+	// plain text stays prose: command phrases and ordinary topics are ambiguous.
+	const spelling = query.normalize("NFKC").trim();
+	if (/^[\p{L}_][\p{L}\p{N}_]*$/u.test(spelling) && !/\p{Script=Han}/u.test(spelling)) return spelling;
+	// Prose punctuation is not part of a name. A standalone spelling (including
+	// a quoted literal) keeps its punctuation; dots inside names always survive.
+	const literal = /^(?:`([^`]+)`|"([^"]+)"|'([^']+)')$/u.exec(spelling);
+	const standalone = literal?.slice(1).find(value => value !== undefined) ?? spelling;
+	const tokens = (spelling.match(/[^\s\u3400-\u4dbf\u4e00-\u9fff`"'(),;!?。！？]+/gu) ?? []).map(token =>
+		token === standalone ? token : token.replace(/[.:]+$/u, ""),
+	);
+	return tokens.find(
+		token =>
+			/[\p{L}\p{N}]/u.test(token) &&
+			(/[_+#/\\]|::|^[.-]{1,2}\p{L}|[\p{L}\p{N}][.-][\p{L}\p{N}]/u.test(token) ||
+				/^[a-z]+\d[\p{L}\p{N}]*$/iu.test(token)),
+	);
+}
+
+interface SectionContext {
+	shape: DocsSectionHit["shape"];
+	fencePrefix?: string;
+	continuesLine: boolean;
+	before: string;
+	after: string;
+}
+
+/** Adjacent stored characters constrain matches, but never supply their body. */
+function matchesSectionName(name: RegExp, text: string, markdown: string, context: SectionContext): boolean {
+	// Rendering trims block whitespace. Keep actual source whitespace at the
+	// edges so it still separates names from characters in neighboring chunks.
+	const before = /^\s/u.test(markdown) ? " " : context.before.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
+	const after = /\s$/u.test(markdown) ? " " : context.after.normalize("NFKC").toLowerCase().replace(/\s+/gu, " ");
+	const contextual = `${before}${text}${after}`;
+	const end = before.length + text.length;
+	name.lastIndex = 0;
+	for (let match = name.exec(contextual); match; match = name.exec(contextual)) {
+		if (match.index >= before.length && match.index + match[0].length <= end) return true;
+	}
+	return false;
+}
+
 interface RankedRow {
 	row: Record<string, unknown>;
-	literalCount: number;
 	shape: DocsSectionHit["shape"];
+	matchKind: DocsSectionHit["matchKind"];
 	titlePhrase: boolean;
 	phrase: boolean;
+	topicTitle: number;
+	topicBody: number;
+	relevance: number;
 	bodyHash?: string;
 }
 
-/**
- * Score one candidate row against the query's literal patterns. Window-stable
- * per section: the snippet is a fixed prefix of the stored Markdown, the BM25
- * rank is row-local, and the full text (when loaded) depends only on the
- * section id — so a row scored in one window keeps its score in every wider
- * one and `#fill` can reuse it.
- */
+interface SearchCursor {
+	v: 1;
+	q: string;
+	s: string;
+	p: number;
+}
+
+function digest(text: string): string {
+	return new Bun.CryptoHasher("sha256").update(text).digest("hex");
+}
+
+function decodeCursor(value: string): SearchCursor {
+	try {
+		if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error();
+		const decoded = Buffer.from(value, "base64url");
+		if (decoded.toString("base64url") !== value) throw new Error();
+		const cursor = JSON.parse(decoded.toString("utf8")) as SearchCursor;
+		if (
+			cursor.v !== 1 ||
+			!/^[a-f0-9]{64}$/.test(cursor.q) ||
+			!/^[a-f0-9]{64}$/.test(cursor.s) ||
+			!Number.isSafeInteger(cursor.p) ||
+			cursor.p < 1 ||
+			Object.keys(cursor).sort().join(",") !== "p,q,s,v"
+		)
+			throw new Error();
+		return cursor;
+	} catch {
+		throw new Error("Invalid documentation search cursor");
+	}
+}
+
 function scoreCandidate(
 	row: Record<string, unknown>,
 	patterns: readonly RegExp[],
+	weights: readonly number[],
+	topics: readonly boolean[],
 	phrase: RegExp,
-	loadFullText: (sectionId: number) => string | undefined,
-	loadShape: (row: Record<string, unknown>) => DocsSectionHit["shape"],
+	loadContext: (row: Record<string, unknown>) => SectionContext,
 ): RankedRow {
-	// Sections longer than the fetched prefix are re-judged on their full stored
-	// text: a phrase or complete term set past the prefix must still earn its
-	// ranking tier instead of losing it to the truncation.
-	const snippet = row.snippet as string;
-	// SQLite length/substr count Unicode scalars; JS string length counts UTF-16 units.
-	const text =
-		(row.raw_len as number) > CANDIDATE_SNIPPET_CHARS ? (loadFullText(row.section_id as number) ?? snippet) : snippet;
-	const raw = normalizeSearchText(text);
-	const plain = normalizeSearchText(normalizePlainText(text));
-	const heading = normalizeSearchText(normalizePlainText(row.heading_path as string));
-	const separator = heading.lastIndexOf(" > ");
-	const title = separator < 0 ? heading : heading.slice(separator + 3);
-	let literalCount = 0;
-	// The title is ranked separately; body phrase and all-term tiers are judged
-	// only against this section's complete stored text, never its parent heading
-	// path or filename.
-	for (const term of patterns) {
-		if (term.test(raw) || term.test(plain)) literalCount++;
+	const text = row.raw_markdown as string;
+	const raw = row.search_raw as string;
+	const plain = row.search_plain as string;
+	// Only a heading actually present in this section is a local title. Parent
+	// heading paths and filenames remain recall metadata, not topical evidence.
+	const context = loadContext(row);
+	const lines = text.replace(/^\uFEFF/u, "").split("\n", 2);
+	const localHeading =
+		context.fencePrefix || context.continuesLine
+			? ""
+			: (/^ {0,3}#{1,6}\s+(.+)/u.exec(lines[0])?.[1] ??
+				(/^ {0,3}\S/u.test(lines[0]) && /^ {0,3}(?:=+|-+)\s*$/u.test(lines[1] ?? "") ? lines[0] : ""));
+	const title = normalizeSearchText(normalizePlainText(localHeading));
+	let relevance = 0;
+	let topicTitle = 0;
+	let topicBody = 0;
+	for (let index = 0; index < patterns.length; index++) {
+		const inTitle = patterns[index].test(title);
+		const inBody = patterns[index].test(raw) || patterns[index].test(plain);
+		if (inBody) relevance += weights[index];
+		if (inTitle) relevance += weights[index] * 3;
+		if (topics[index]) {
+			if (inBody) topicBody++;
+			if (inTitle) topicTitle++;
+		}
 	}
 	const shape = sectionShape(text);
-	const contextualShape = shape === "content" ? shape : loadShape(row);
 	return {
 		row,
-		literalCount,
-		shape: contextualShape,
+		shape: shape === "content" ? shape : context.shape,
+		matchKind: row.search_exact ? "exact-name" : "related",
 		titlePhrase: phrase.test(title),
 		phrase: phrase.test(raw) || phrase.test(plain),
-		bodyHash: text.length > 200 ? new Bun.CryptoHasher("sha256").update(text).digest("hex") : undefined,
+		topicTitle,
+		topicBody,
+		relevance,
+		bodyHash: text.length > 200 ? digest(text) : undefined,
 	};
 }
 
@@ -702,7 +780,16 @@ export class DocsService {
 		}
 	}
 
-	search(query: string, options: { index?: string; limit?: number } = {}): DocsSearchResult {
+	search(
+		query: string,
+		options: {
+			index?: string;
+			limit?: number;
+			cursor?: string;
+			characterBudget?: number;
+			sectionCost?: (section: DocsSectionHit, position: number) => number;
+		} = {},
+	): DocsSearchResult {
 		return logger.withLogContext(
 			{
 				operation_id: logger.getLogContext().operation_id ?? `docs-search-${crypto.randomUUID()}`,
@@ -715,30 +802,68 @@ export class DocsService {
 				const fields = { component: "docs", event: "docs.search", stage: "query" };
 				logger.info("docs.search.started", { ...fields, result: "started", query_length: query.length });
 				try {
-					const filter = indexFilter(options.index);
-					const limit = Math.max(1, Math.min(MAX_PAGE_SECTIONS, options.limit ?? 10));
+					const limit = Math.max(1, Math.min(MAX_PAGE_SECTIONS, Math.floor(options.limit ?? 10)));
+					const budget = options.characterBudget ?? Number.POSITIVE_INFINITY;
+					if (!Number.isFinite(limit) || Number.isNaN(budget) || budget < 0)
+						throw new Error("Invalid documentation search page size");
 					const terms = analyzeQuery(query);
-					if (terms.length === 0) {
-						logger.info("docs.search.completed", {
-							...fields,
-							result: "no_terms",
-							elapsed_ms: performance.now() - started,
-							match_count: 0,
-							section_count: 0,
-						});
-						return { sections: [], total: 0 };
-					}
-					const match = compileFtsQuery(terms);
-					// One read snapshot for candidates, page texts and the count: section ids
-					// are rowids and get reused after a remove, so a query that straddled a
-					// concurrent remove+re-import could pair a surviving id with unrelated
-					// new text while keeping the old path and line numbers.
+					const technicalName = technicalQueryName(query);
+					const cursor = options.cursor === undefined ? undefined : decodeCursor(options.cursor);
+					const queryKey = digest(
+						JSON.stringify([normalizeSearchText(query), options.index ?? null, this.storage.path]),
+					);
+					if (cursor && cursor.q !== queryKey)
+						throw new Error("Documentation search cursor does not match query or index");
+					// Version, every ranked hit, counts, text and provenance share a read
+					// snapshot. Cursors survive reopening, but never silently cross edits.
 					const result = this.storage.read(() => {
-						const sections = this.#rank(match, query, terms, filter, limit);
-						// Only the unscoped caller asks for a count, and it must cover what the
-						// page itself may serve.
-						const total = options.index === undefined ? this.#countMatches(match) : undefined;
-						return { sections, total };
+						const { ranked, version } = this.#rank(query, terms, technicalName, options.index);
+						if (cursor && cursor.s !== version)
+							throw new Error("Stale documentation search cursor: indexed snapshot has changed");
+						const start = cursor?.p ?? 0;
+						if (cursor && start >= ranked.length) throw new Error("Invalid documentation search cursor");
+						const sections: DocsSectionHit[] = [];
+						let cost = 0;
+						for (let position = start; position < ranked.length && sections.length < limit; position++) {
+							const { row, shape, matchKind } = ranked[position];
+							const hit: DocsSectionHit = {
+								sectionId: row.section_id as number,
+								index: row.index_name as string,
+								documentHash: row.document_hash as string,
+								path: row.relative_path as string,
+								headingPath: row.heading_path as string,
+								lineStart: row.line_start as number,
+								lineEnd: row.line_end as number,
+								text: row.raw_markdown as string,
+								shape,
+								matchKind,
+								rank: row.rank as number,
+							};
+							const sectionCost = options.sectionCost?.(hit, sections.length) ?? hit.text.length;
+							if (!Number.isFinite(sectionCost) || sectionCost < 0)
+								throw new Error("Invalid documentation search section cost");
+							// Never skip an oversized next hit. The first hit is always
+							// delivered whole, even when it exceeds the caller's target.
+							if (sections.length > 0 && cost + sectionCost > budget) break;
+							sections.push(hit);
+							cost += sectionCost;
+						}
+						const next = start + sections.length;
+						const hasMore = next < ranked.length;
+						return {
+							sections,
+							total: ranked.length,
+							hasMore,
+							exactNameMatches: ranked.filter(entry => entry.matchKind === "exact-name").length,
+							...(technicalName === undefined ? {} : { technicalName }),
+							...(hasMore
+								? {
+										cursor: Buffer.from(
+											JSON.stringify({ v: 1, q: queryKey, s: version, p: next } satisfies SearchCursor),
+										).toString("base64url"),
+									}
+								: {}),
+						};
 					});
 					logger.info("docs.search.completed", {
 						...fields,
@@ -763,191 +888,188 @@ export class DocsService {
 	}
 
 	/**
-	 * Matching sections across the corpus, hidden indexes excluded. Reading nothing
-	 * but `sections_fts` is the only cheap form (~200x faster than the join measured
-	 * on a 386k-section corpus), so the join is paid only while a half-built index
-	 * is present — otherwise its rows would promise hits the page never serves.
+	 * Exhaustive DB ranking. FTS supplies recall and a tie-breaker, never a
+	 * bounded candidate window. A stored-body scan also recovers complete names
+	 * whose punctuation/tokenization differs from the FTS terms.
 	 */
-	#countMatches(match: string): number {
-		const hidden = `${BUILDING_INDEX_PREFIX}*`;
-		const probeBuilding = this.storage.db.query("SELECT 1 FROM doc_indexes WHERE name GLOB ? LIMIT 1");
-		const countHiddenExcluded = () =>
-			(
-				this.storage.db
-					.query(`SELECT count(*) n FROM sections_fts f JOIN sections s ON s.id=f.rowid
-							 JOIN doc_indexes i ON i.id=s.index_id WHERE sections_fts MATCH ? AND i.name NOT GLOB ?`)
-					.get(match, hidden) as { n: number } | null
-			)?.n ?? 0;
-		if (probeBuilding.get(hidden)) return countHiddenExcluded();
-		const row = this.storage.db
-			.query("SELECT count(*) n FROM sections_fts WHERE sections_fts MATCH ?")
-			.get(match) as { n: number } | null;
-		return row?.n ?? 0;
-	}
-
-	/** Ranked page for one compiled FTS expression. */
 	#rank(
-		match: string,
 		query: string,
 		terms: readonly string[],
-		filter: { sql: string; args: string[] },
-		limit: number,
-	): DocsSectionHit[] {
-		const patterns = terms.map(literalPattern);
+		technicalName: string | undefined,
+		index: string | undefined,
+	): { ranked: RankedRow[]; version: string } {
+		const filter = indexFilter(index);
+		const patterns = terms.map(term => literalPattern(term));
 		const phrase = literalPattern(normalizeSearchText(query));
-		// Stubs are indexed on purpose — a document's first section carries the
-		// relative path — so they must not hold page slots meant for readable text.
-		// The window is cut from the top, so a query that matches nothing but
-		// structural labels (`#### Cell`, hundreds of thousands of them in a legacy
-		// index) widens it until readable hits appear or the corpus runs out.
-		// Every wider window re-reads the rows the narrower one already scored, so
-		// each section is scored once and reused across the whole widening chain.
-		const scored = new Map<number, RankedRow>();
-		const documentShapes = new Map<number, Map<number, DocsSectionHit["shape"]>>();
-		const loadShape = (row: Record<string, unknown>): DocsSectionHit["shape"] => {
+		const name =
+			technicalName === undefined
+				? undefined
+				: new RegExp(literalPattern(normalizeSearchText(technicalName), !/[\\/]|::/u.test(technicalName)), "gu");
+		const ranks = new Map<number, number>();
+		if (terms.length > 0) {
+			const matches = this.storage.db
+				.query(`SELECT f.rowid section_id,bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
+					FROM sections_fts f JOIN sections s ON s.id=f.rowid JOIN doc_indexes i ON i.id=s.index_id
+					WHERE sections_fts MATCH ?${filter.sql} ORDER BY f.rowid`)
+				.all(compileFtsQuery(terms), ...filter.args) as Array<{ section_id: number; rank: number }>;
+			for (const match of matches) ranks.set(match.section_id, match.rank);
+		}
+		const snapshot = new Bun.CryptoHasher("sha256");
+		// A logical version is independent of the SQLite connection's data_version
+		// (which resets on reopen). Include empty indexes/documents and all visible
+		// stored sections, not only today's matches, so later pages cannot mix edits.
+		for (const row of this.storage.db
+			.query(`SELECT i.id,i.name,i.root_path,d.id document_id,d.relative_path,d.title,d.source_kind,d.sha256,d.size_bytes,d.mtime_ms
+				FROM doc_indexes i LEFT JOIN documents d ON d.index_id=i.id
+				WHERE i.name NOT GLOB '${BUILDING_INDEX_PREFIX}*' ORDER BY i.id,d.id`)
+			.iterate()) {
+			snapshot.update(JSON.stringify(row));
+		}
+		const documentContexts = new Map<number, Map<number, SectionContext>>();
+		const loadContext = (row: Record<string, unknown>): SectionContext => {
 			const documentId = row.document_id as number;
-			let shapes = documentShapes.get(documentId);
-			if (!shapes) {
-				shapes = this.#sectionShapes(documentId);
-				documentShapes.set(documentId, shapes);
+			let contexts = documentContexts.get(documentId);
+			if (!contexts) {
+				contexts = this.#sectionContexts(documentId);
+				documentContexts.set(documentId, contexts);
 			}
-			return shapes.get(row.section_id as number) as DocsSectionHit["shape"];
+			return contexts.get(row.section_id as number) as SectionContext;
 		};
-		const loadFullText = (sectionId: number): string | undefined =>
-			(
-				this.storage.db.query("SELECT raw_markdown FROM sections WHERE id=?").get(sectionId) as {
-					raw_markdown: string;
-				} | null
-			)?.raw_markdown;
-		let entries: RankedRow[] = [];
-		for (const candidateLimit of candidateWindows(Math.min(CANDIDATE_WINDOW_MAX, limit * 3 + 50))) {
-			const candidates = this.#candidates(match, filter, candidateLimit);
-			const page = this.#fill(scored, candidates, patterns, phrase, loadFullText, loadShape, limit);
-			entries = page.entries;
-			if (page.readable >= limit || candidates.length < candidateLimit) break;
+		const candidates: Array<Record<string, unknown>> = [];
+		const rows = this.storage.db
+			.query(`SELECT s.id section_id,s.document_id,s.index_id,s.ordinal,s.byte_start,s.byte_end,s.heading_level,
+				i.name index_name,d.relative_path,d.sha256 document_hash,s.heading_path,s.line_start,s.line_end,s.raw_markdown
+				FROM sections s JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
+				WHERE i.name NOT GLOB '${BUILDING_INDEX_PREFIX}*' ORDER BY s.id`)
+			.iterate() as Iterable<Record<string, unknown>>;
+		for (const row of rows) {
+			snapshot.update(JSON.stringify(row));
+			if (index !== undefined && row.index_name !== index) continue;
+			const rank = ranks.get(row.section_id as number);
+			if (rank === undefined && !name) continue;
+			const markdown = row.raw_markdown as string;
+			const raw = normalizeSearchText(markdown);
+			const context = loadContext(row);
+			const { fencePrefix, continuesLine } = context;
+			const plain = normalizeSearchText(normalizePlainText(markdown, fencePrefix, continuesLine));
+			const rawExact = name ? matchesSectionName(name, raw, markdown, context) : false;
+			// Render recovered names with the same stored fence/line context,
+			// keeping inline code fragments distinct from adjacent text.
+			const exact =
+				rawExact ||
+				(name && matchesSectionName(name, plain, markdown, context)
+					? matchesSectionName(name, normalizeNameText(markdown, fencePrefix, continuesLine), markdown, context)
+					: false);
+			if (rank === undefined && !exact) continue;
+			row.rank = rank ?? 0;
+			row.search_raw = raw;
+			row.search_plain = plain;
+			row.search_exact = exact;
+			candidates.push(row);
 		}
-		return this.#hits(entries);
-	}
-
-	/** Candidate rows for one compiled FTS expression, best BM25 first. */
-	#candidates(
-		match: string,
-		filter: { sql: string; args: string[] },
-		candidateLimit: number,
-	): Array<Record<string, unknown>> {
-		return this.storage.db
-			.query(`SELECT f.rowid section_id,s.document_id,i.name index_name,d.relative_path,d.sha256 document_hash,s.heading_path,s.line_start,s.line_end,
-			 substr(s.raw_markdown,1,${CANDIDATE_SNIPPET_CHARS}) snippet, length(s.raw_markdown) raw_len, bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank
-			 FROM sections_fts f JOIN sections s ON s.id=f.rowid JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id
-			 WHERE sections_fts MATCH ?${filter.sql} ORDER BY rank,s.id LIMIT ?`)
-			.all(match, ...filter.args, candidateLimit) as Array<Record<string, unknown>>;
-	}
-
-	/**
-	 * One candidate window, ranked, split into readable hits and stub padding.
-	 * `scored` caches every row already scored in an earlier (narrower) window,
-	 * keyed by section id, so only the never-seen tail of a window pays for
-	 * scoring.
-	 */
-	#fill(
-		scored: Map<number, RankedRow>,
-		candidates: Array<Record<string, unknown>>,
-		patterns: readonly RegExp[],
-		phrase: RegExp,
-		loadFullText: (sectionId: number) => string | undefined,
-		loadShape: (row: Record<string, unknown>) => DocsSectionHit["shape"],
-		limit: number,
-	): { entries: RankedRow[]; readable: number } {
-		const ranked: RankedRow[] = [];
-		for (const row of candidates) {
-			const sectionId = row.section_id as number;
-			let entry = scored.get(sectionId);
-			if (entry === undefined) {
-				entry = scoreCandidate(row, patterns, phrase, loadFullText, loadShape);
-				scored.set(sectionId, entry);
-			}
-			ranked.push(entry);
-		}
-		// Ranking tiers, most precise first: the query's own spelling in the heading,
-		// then in the body (`std::vector` beats a scattered `vector std`), then
-		// sections carrying every analyzed term. BM25 closes each tier — it is the
-		// IDF- and length-normalized relevance score, so raw term counts must never
-		// outrank it (long boilerplate sections collect them).
+		// FTS-only changes affecting this query also invalidate its continuation.
+		snapshot.update(JSON.stringify([...ranks]));
+		const frequencies = patterns.map(pattern =>
+			candidates.reduce(
+				(count, row) =>
+					count + Number(pattern.test(row.search_raw as string) || pattern.test(row.search_plain as string)),
+				0,
+			),
+		);
+		const weights = terms.map(
+			(term, position) =>
+				(Object.hasOwn(QUERY_GENERIC_TERMS, term) ? 0.2 : 1) *
+				(1 + Math.log(1 + candidates.length / (1 + frequencies[position]))),
+		);
+		// A standalone Han run is also a query topic (e.g. an explicitly named
+		// activity). Bigrams inside a longer question remain recall/detail terms,
+		// so its generic prose cannot outvote the technical combination.
+		const hanTopics = new Set(query.normalize("NFKC").match(/[\u3400-\u4dbf\u4e00-\u9fff]+/gu) ?? []);
+		const topics = terms.map(
+			term => !Object.hasOwn(QUERY_GENERIC_TERMS, term) && (/[a-z]/iu.test(term) || hanTopics.has(term)),
+		);
+		const ranked = candidates.map(row => scoreCandidate(row, patterns, weights, topics, phrase, loadContext));
+		// Topic coverage is a conjunction signal, not a frequency contest: a
+		// section about both requested technical nouns beats one about only one.
+		// Once coverage ties, prefer its own topical title and substantive body.
 		ranked.sort(
 			(a, b) =>
+				Number(b.matchKind === "exact-name") - Number(a.matchKind === "exact-name") ||
+				Number(a.shape === "stub") - Number(b.shape === "stub") ||
 				Number(b.titlePhrase) - Number(a.titlePhrase) ||
+				b.topicBody - a.topicBody ||
+				b.topicTitle - a.topicTitle ||
+				Number(b.shape === "content") - Number(a.shape === "content") ||
 				Number(b.phrase) - Number(a.phrase) ||
-				Number(b.literalCount === patterns.length) - Number(a.literalCount === patterns.length) ||
+				b.relevance - a.relevance ||
 				(a.row.rank as number) - (b.row.rank as number) ||
 				(a.row.section_id as number) - (b.row.section_id as number),
 		);
-		// Stubs go after every readable hit, keeping their own relative order so the
-		// readable page is identical whether or not the padding was needed.
+		// Keep every locator, but prefer distinct evidence inside each match class.
+		// Exact-name evidence, even repeated, always precedes related evidence.
 		const seen = new Set<string>();
-		const readable: RankedRow[] = [];
-		const repeated: RankedRow[] = [];
+		const distinctExact: RankedRow[] = [];
+		const repeatedExact: RankedRow[] = [];
+		const distinctRelated: RankedRow[] = [];
+		const repeatedRelated: RankedRow[] = [];
+		const stubs: RankedRow[] = [];
 		for (const entry of ranked) {
-			if (entry.shape === "stub") continue;
-			if (entry.bodyHash && seen.has(entry.bodyHash)) repeated.push(entry);
-			else {
-				readable.push(entry);
-				if (entry.bodyHash) seen.add(entry.bodyHash);
+			if (entry.shape === "stub" && entry.matchKind === "related") {
+				stubs.push(entry);
+				continue;
 			}
+			const repeated = entry.bodyHash !== undefined && seen.has(entry.bodyHash);
+			if (entry.bodyHash) seen.add(entry.bodyHash);
+			if (entry.matchKind === "exact-name") (repeated ? repeatedExact : distinctExact).push(entry);
+			else (repeated ? repeatedRelated : distinctRelated).push(entry);
 		}
-		// Duplicate locators are useful, but must never take a slot away from
-		// distinct evidence. Widening likewise counts unique readable bodies.
-		const bodies = readable.filter(entry => entry.shape === "content");
-		const headings = readable.filter(entry => entry.shape === "heading-only");
-		const entries = [...bodies, ...headings, ...repeated, ...ranked.filter(entry => entry.shape === "stub")].slice(
-			0,
-			limit,
-		);
-		return { entries, readable: Math.min(bodies.length, limit) };
+		return {
+			ranked: [...distinctExact, ...repeatedExact, ...distinctRelated, ...repeatedRelated, ...stubs],
+			version: snapshot.digest("hex"),
+		};
 	}
 
-	/** Page rows as hits, with the stored Markdown loaded by id. */
-	#hits(page: RankedRow[]): DocsSectionHit[] {
-		const texts = this.#pageTexts(page.map(({ row }) => row.section_id as number));
-		return page.map(({ row, shape }) => ({
-			sectionId: row.section_id as number,
-			index: row.index_name as string,
-			documentHash: row.document_hash as string,
-			path: row.relative_path as string,
-			headingPath: row.heading_path as string,
-			lineStart: row.line_start as number,
-			lineEnd: row.line_end as number,
-			text: texts.get(row.section_id as number) ?? (row.snippet as string),
-			shape,
-			rank: row.rank as number,
-		}));
-	}
-
-	/** Recover ambiguous heading-like shapes from their stored document context. */
-	#sectionShapes(documentId: number): Map<number, DocsSectionHit["shape"]> {
+	/** Recover stored fence/line context, original name boundaries, and shapes together. */
+	#sectionContexts(documentId: number): Map<number, SectionContext> {
 		const rows = this.storage.db
 			.query(`SELECT id,document_id documentId,byte_start byteStart,byte_end byteEnd,raw_markdown rawMarkdown
 				FROM sections WHERE document_id=? ORDER BY ordinal`)
-			.iterate(documentId) as Iterable<{
+			.all(documentId) as Array<{
 			id: number;
 			documentId: number;
 			byteStart: number;
 			byteEnd: number;
 			rawMarkdown: string;
 		}>;
-		const shapes = new Map<number, DocsSectionHit["shape"]>();
-		for (const { section, fencePrefix, continuesLine } of markdownSectionContexts(rows))
-			shapes.set(section.id, fencePrefix || continuesLine ? "content" : sectionShape(section.rawMarkdown));
-		return shapes;
-	}
-
-	/** Full Markdown for the sections on one page, keyed by section id. */
-	#pageTexts(ids: readonly number[]): Map<number, string> {
-		const texts = new Map<number, string>();
-		if (ids.length === 0) return texts;
-		const rows = this.storage.db
-			.query(`SELECT id,raw_markdown FROM sections WHERE id IN (${ids.map(() => "?").join(",")})`)
-			.all(...ids) as Array<{ id: number; raw_markdown: string }>;
-		for (const row of rows) texts.set(row.id, row.raw_markdown);
-		return texts;
+		const contexts = new Map<number, SectionContext>();
+		const bytes = rows.map(row => Buffer.from(row.rawMarkdown));
+		let position = 0;
+		for (const { section, fencePrefix, continuesLine } of markdownSectionContexts(rows)) {
+			const previous = rows[position - 1];
+			const next = rows[position + 1];
+			const beforeOffset = previous ? section.byteStart - previous.byteStart : 0;
+			const afterOffset = next ? section.byteEnd - next.byteStart : 0;
+			// Overlapping chunks share byte coordinates. Read only the adjacent
+			// original characters, not the overlap as new evidence for this body.
+			const before =
+				previous && previous.byteStart < section.byteStart && previous.byteEnd >= section.byteStart
+					? [...bytes[position - 1].subarray(Math.max(0, beforeOffset - 8), beforeOffset).toString()]
+							.slice(-2)
+							.join("")
+					: "";
+			const after =
+				next && next.byteStart <= section.byteEnd && next.byteEnd > section.byteEnd
+					? [...bytes[position + 1].subarray(afterOffset, afterOffset + 8).toString()].slice(0, 2).join("")
+					: "";
+			contexts.set(section.id, {
+				shape: fencePrefix || continuesLine ? "content" : sectionShape(section.rawMarkdown),
+				fencePrefix,
+				continuesLine,
+				before,
+				after,
+			});
+			position++;
+		}
+		return contexts;
 	}
 }

@@ -220,24 +220,50 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 					await runtime.ui.input("Search document indexes", undefined, { signal: scope.signal })
 				)?.trim();
 				if (!scope.current() || !query) return scope.cancel();
-				scope.stage("docs_search");
-				const result = service.search(query, { limit: 20 });
-				scope.stage("index_output");
-				await scope.output(`Section hits: ${result.total ?? result.sections.length}`);
-				if (!scope.current() || !result.sections.length) return;
-				const labels = result.sections.map(
-					(section, position) =>
-						`${position + 1}. [${line(section.index)}] ${line(section.path)}:${section.lineStart}-${section.lineEnd} ${line(section.headingPath)}`,
-				);
-				scope.stage("section_select");
-				const selected = await runtime.ui.select("Document sections", labels, { signal: scope.signal });
-				if (!scope.current() || selected === undefined) return scope.cancel();
-				const section = result.sections[labels.indexOf(selected)];
-				if (section) {
-					scope.stage("section_output");
+				let cursor: string | undefined;
+				let pageStart = 0;
+				while (scope.current()) {
+					scope.stage("docs_search");
+					const result = service.search(query, { limit: 20, cursor });
+					scope.stage("index_output");
 					await scope.output(
-						`[${line(section.index)}] ${line(section.path)}:${section.lineStart}-${section.lineEnd} ${line(section.headingPath)}\n\n${section.text}`,
+						[
+							`Section hits: ${result.total} · showing ${result.sections.length ? pageStart + 1 : 0}-${pageStart + result.sections.length}`,
+							...(result.technicalName
+								? [
+										`Full name: ${line(result.technicalName)} · exact-name matches: ${result.exactNameMatches}`,
+										...(result.exactNameMatches === 0 ? ["未找到完整名称命中"] : []),
+									]
+								: []),
+							result.cursor ? "More results available. Select Next page to continue." : "Results exhausted.",
+						].join("\n"),
 					);
+					if (!scope.current() || !result.sections.length) return;
+					const labels = result.sections.map(
+						(section, position) =>
+							`${pageStart + position + 1}. [${section.matchKind}] [${line(section.index)}] ${line(section.path)}:${section.lineStart}-${section.lineEnd} ${line(section.headingPath)}`,
+					);
+					while (scope.current()) {
+						scope.stage("section_select");
+						const selected = await runtime.ui.select(
+							"Document sections",
+							[...labels, ...(result.cursor ? ["Next page"] : []), "Done browsing"],
+							{ signal: scope.signal },
+						);
+						if (!scope.current() || selected === undefined) return scope.cancel();
+						if (selected === "Done browsing") return;
+						if (selected === "Next page" && result.cursor) {
+							cursor = result.cursor;
+							pageStart += result.sections.length;
+							break;
+						}
+						const section = result.sections[labels.indexOf(selected)];
+						if (!section) return;
+						scope.stage("section_output");
+						await scope.output(
+							`[${section.matchKind}] [${line(section.index)}] ${line(section.path)}:${section.lineStart}-${section.lineEnd} ${line(section.headingPath)}\nsha256=${section.documentHash} · sectionId=${section.sectionId}\n\n${section.text}`,
+						);
+					}
 				}
 			}
 		} finally {

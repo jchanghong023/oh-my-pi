@@ -40,6 +40,29 @@ function run(tool: WikiTool, params: unknown): Promise<ToolResult> {
 	return tool.execute("t", params as never) as Promise<ToolResult>;
 }
 
+function continuation(page: string): { query: string; cursor: string } | undefined {
+	const json = page.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
+	return json ? (JSON.parse(json) as { query: string; cursor: string }) : undefined;
+}
+
+async function pages(tool: WikiTool, query: string): Promise<string[]> {
+	const result: string[] = [];
+	let params: { query: string; cursor?: string } = { query };
+	for (let count = 0; count < 100; count += 1) {
+		const page = text(await run(tool, params));
+		result.push(page);
+		const next = continuation(page);
+		if (!next) {
+			expect(page).toContain("All matching results exhausted");
+			return result;
+		}
+		expect(next.query).toBe(query);
+		expect(next.cursor).toBeTruthy();
+		params = next;
+	}
+	throw new Error("Wiki continuation did not exhaust within 100 pages");
+}
+
 /** Indexes `files` (name → Markdown) into a throwaway agent directory. */
 async function indexedFixture(files: Record<string, string>): Promise<{ root: string; agent: string }> {
 	const root = await tempDir("docs-tool-root-");
@@ -74,18 +97,20 @@ describe("WikiTool", () => {
 		expect(page).toContain("seven cycles");
 	});
 
-	it("fills the page with distinct evidence before duplicate locators even across candidate windows", async () => {
+	it("keeps duplicate sources reachable while prioritizing distinct evidence", async () => {
 		const duplicate = "# Topic\ndedupbeacon " + "same boilerplate ".repeat(25) + "\n";
 		const files: Record<string, string> = Object.fromEntries(
-			Array.from({ length: 700 }, (_, i) => [`copy-${i}.md`, duplicate]),
+			Array.from({ length: 40 }, (_, i) => [`copy-${i}.md`, duplicate]),
 		);
-		files["unique.md"] = "# Topic\ndedupbeacon UNIQUE_CRITICAL_CONTENT " + "supporting material ".repeat(300) + "\n";
+		files["unique.md"] = "# Topic\ndedupbeacon UNIQUE_CRITICAL_CONTENT " + "supporting material ".repeat(180) + "\n";
 		const fixture = await indexedFixture(files);
-		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "dedupbeacon" }));
-		expect(page).toContain("UNIQUE_CRITICAL_CONTENT");
-		expect(page).toContain("unique.md:");
-		expect(page).toContain("collapsed to a pointer");
-		expect(page.length).toBeLessThan(8_300);
+		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "dedupbeacon");
+		expect(result[0]).toContain("UNIQUE_CRITICAL_CONTENT");
+		const locators = result.flatMap(page => [...page.matchAll(/^\[\d+\] (\S+\.md):/gm)].map(match => match[1]));
+		expect(locators).toHaveLength(41);
+		expect(new Set(locators).size).toBe(41);
+		expect(result.join("\n")).toContain("collapsed to a page-local pointer");
+		for (const page of result) expect(page.length).toBeLessThanOrEqual(8_000);
 	});
 	it("returns the stored section text after the source directory is removed", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
@@ -113,23 +138,33 @@ describe("WikiTool", () => {
 		);
 	});
 
-	it("fills a page to the character budget and reports the matches left out", async () => {
+	it("resumes complete contiguous budget pages after sources disappear", async () => {
 		const filler = "pad ".repeat(600);
 		const files = Object.fromEntries(
 			Array.from({ length: 12 }, (_, index) => [`sec-${index}.md`, `# sec-${index}\n${filler}\nneedle ${index}\n`]),
 		);
 		const fixture = await indexedFixture(files);
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "needle" }));
-		expect(page.length).toBeLessThan(8_300);
-		const shown = [...page.matchAll(/^\[\d+\] (sec-\d+\.md)/gmu)];
-		expect(shown.length).toBeGreaterThanOrEqual(2);
-		expect(shown.length).toBeLessThanOrEqual(3);
-		for (const hit of shown) expect(page).toContain(files[hit[1]!]);
-		// The caller can see both the total and the withheld count without a
-		// partial section being mistaken for complete evidence.
-		expect(page).toMatch(/12 matching section/);
-		expect(page).toMatch(new RegExp(`carries ${shown.length} of 12 sections`));
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		let ranked: string[];
+		try {
+			ranked = service.search("needle", { limit: 200 }).sections.map(section => section.path);
+		} finally {
+			service.close();
+		}
+		await fs.rm(fixture.root, { recursive: true });
+		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "needle");
+		expect(result.length).toBeGreaterThan(1);
+		const shown: string[] = [];
+		for (const page of result) {
+			expect(page.length).toBeLessThanOrEqual(8_000);
+			expect(page).toContain("12 matching section(s)");
+			for (const hit of page.matchAll(/^\[\d+\] (sec-\d+\.md):/gm)) {
+				shown.push(hit[1]!);
+				expect(page).toContain(files[hit[1]!]!);
+			}
+		}
+		expect(shown).toEqual(ranked);
+		expect(new Set(shown).size).toBe(12);
 	});
 
 	it("carries a fresh best hit whole when its locator exceeds the page budget", async () => {
@@ -167,43 +202,40 @@ describe("WikiTool", () => {
 		expect(page).not.toContain("x".repeat(1_000));
 	});
 
-	it("cuts the query echoed by a no-match error", async () => {
+	it("returns bounded successful zero-match text scoped to the imported corpus", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const error = await run(tool, { query: `zzz ${"q".repeat(5_000)}` }).then(
-			() => undefined,
-			error => error as Error,
-		);
-		expect(error?.message).toContain("No section matches");
-		expect(error?.message.length).toBeLessThan(1_000);
+		const page = text(await run(tool, { query: `zzz ${"q".repeat(5_000)}` }));
+		expect(page).toContain("0 matching section(s) in the searched imported corpus");
+		expect(page).toContain("does not establish");
+		expect(page).toContain("All matching results exhausted");
+		expect(page.length).toBeLessThan(1_000);
 	});
 
-	it("does not claim a cut page when the withheld hits carry no text", async () => {
-		// A document title matches once per document and occupies a page slot while
-		// rendering nothing; the readable hit below it is delivered whole. Nothing
-		// was withheld, so the footer must not send the caller after narrower terms.
+	it("delivers heading-only sections as complete evidence alongside body sections", async () => {
 		const fixture = await indexedFixture({
 			"title.md": "# Guide\n",
 			"body.md": "# Guide\nCommand: scan\n",
 		});
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "guide" }));
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "guide" }));
 		expect(page).toContain("2 matching section(s)");
+		expect(page).toContain("title.md:1-1");
+		expect(page).toContain("(heading only)\n# Guide\n");
 		expect(page).toContain("Command: scan");
-		expect(page).not.toContain("search again with narrower terms");
+		expect(page).toContain("All matching results exhausted");
 	});
 
-	it("reports collapsed duplicates even when the page was not cut", async () => {
-		// Two documents ship the same section verbatim, so the second becomes a
-		// pointer at the first. Everything fit the budget, but the page still owes
-		// the caller the count of hits it collapsed.
+	it("collapses duplicate bodies only after complete text while preserving each citation", async () => {
 		const section = `## Shared\n${"长".repeat(220)} needle\n`;
 		const fixture = await indexedFixture({ "a.md": section, "b.md": section });
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "needle" }));
-		expect(page).toContain("(identical text to an earlier hit on this page)");
-		expect(page).toContain("1 repeated hit(s) collapsed to a pointer");
-		expect(page).not.toContain("search again with narrower terms");
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "needle" }));
+		expect(page).toContain(section);
+		expect(page).toContain("(identical text to hit [1] on this page)");
+		expect(page).toContain("1 repeated hit(s) collapsed to a page-local pointer");
+		expect(page).toContain("a.md:1-2");
+		expect(page).toContain("b.md:1-2");
+		expect([...page.matchAll(/sha256=[a-f0-9]{64} · sectionId=\d+/g)]).toHaveLength(2);
+		expect(page).toContain("All matching results exhausted");
 	});
 
 	it("collapses repeated long heading-only sections without exceeding the page budget", async () => {
@@ -215,8 +247,8 @@ describe("WikiTool", () => {
 
 		expect(page).toContain("2 matching section(s)");
 		expect(page.split(section).length - 1).toBe(1);
-		expect(page).toContain("(identical text to an earlier hit on this page)");
-		expect(page).toContain("1 repeated hit(s) collapsed to a pointer");
+		expect(page).toContain("(identical text to hit [1] on this page)");
+		expect(page).toContain("1 repeated hit(s) collapsed to a page-local pointer");
 		expect(page.length).toBeLessThan(20_000);
 	});
 
@@ -228,24 +260,26 @@ describe("WikiTool", () => {
 		expect(page).toContain("2 matching section(s)");
 		expect(page).toContain("a.md:1-1");
 		expect(page).toContain("b.md:1-1");
-		expect(page).not.toContain("(identical text to an earlier hit on this page)");
-		expect(page).not.toContain("repeated hit(s) collapsed to a pointer");
+		expect(page.split(section).length - 1).toBe(2);
+		expect(page).not.toContain("repeated hit(s) collapsed");
 	});
 
-	it("delivers an oversized best section whole without adding later matches", async () => {
+	it("carries an oversized first section whole and resumes remaining evidence", async () => {
 		const body = `# Long\n${"pad ".repeat(4300)}\nneedle here\n`;
 		const fixture = await indexedFixture({
 			"long.md": body,
 			"other.md": "# Other\nneedle and other evidence\n",
 		});
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "needle here" }));
-		expect(page).toContain("long.md:");
-		expect(page).toContain(body);
-		expect(page).not.toContain("other.md:");
+		const result = await pages(tool, "needle here");
+		expect(result[0]).toContain("long.md:");
+		expect(result[0]).toContain(body);
+		expect(result[0]).not.toContain("other.md:");
+		expect(result[0]).toContain("carried whole");
+		expect(result.slice(1).join("\n")).toContain("needle and other evidence");
 	});
 
-	it("keeps a heading-only requirement line as a pointer hit", async () => {
+	it("keeps a heading-only requirement line as complete evidence", async () => {
 		const fixture = await indexedFixture({
 			"req.md": "# 需求\n## 支持单DIE/多DIE同构分组\n",
 			"noise.md": "# Noise\n#### Cell\n",
@@ -255,9 +289,8 @@ describe("WikiTool", () => {
 		// Requirement documents state the requirement in the heading itself.
 		expect(result).toContain("支持单DIE/多DIE同构分组");
 		expect(result).toContain("heading only");
-		// The converter's structural label is indexed nowhere, so the query finds
-		// nothing at all rather than a page of `#### Cell` noise.
-		await expect(run(tool, { query: "Cell" })).rejects.toThrow("No section matches");
+		// Converter-only structural noise is not a corpus match.
+		expect(text(await run(tool, { query: "Cell" }))).toContain("0 matching section(s)");
 	});
 
 	it("returns the full heading-only requirement when its label is truncated", async () => {
@@ -279,74 +312,100 @@ describe("WikiTool", () => {
 		expect(result).toContain("1 matching section(s)");
 	});
 
-	it("skips heading-only sections so the budget carries body text", async () => {
-		const fixture = await indexedFixture({
-			"stub.md": "# 6 MBIST 方案选择\n",
-			"body.md": "# MBIST 方案选择\n选择依据见下表。\n",
-		});
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const result = text(await run(tool, { query: "MBIST 方案选择" }));
-		expect(result).toContain("选择依据见下表");
-		expect(result.split("\n").filter(line => line.includes("# 6 MBIST 方案选择"))).toHaveLength(0);
-	});
-
-	it("keeps body sections on the page when matched titles alone would fill it", async () => {
-		// Every document keeps its first section so the file name stays searchable, and
-		// that section is a title. A shared title therefore matches once per document:
-		// with more documents than page slots, those structural hits must not crowd out
-		// the readable sections, which is what the page and the error check look at.
-		const files = Object.fromEntries(
-			Array.from({ length: 250 }, (_, index) => [
-				`guide-${index}.md`,
-				`# Guide\n## 安装\n这里是 guide 的安装说明，第 ${index} 份。\n`,
-			]),
-		);
+	it("never skips a nonfitting section in order to fit a later smaller one", async () => {
+		const files = {
+			"a.md": `# Budget\nbudgetbeacon ${"first ".repeat(550)}\n`,
+			"b.md": `# Budget\nbudgetbeacon ${"second ".repeat(900)}\n`,
+			"c.md": "# Budget\nbudgetbeacon small tail\n",
+		};
 		const fixture = await indexedFixture(files);
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "guide" }));
-		const shown = [...page.matchAll(/^\[(\d+)\] (\S+):(\d+)-(\d+)/gmu)].map(match => ({
-			path: match[2],
-			body: page.slice(match.index, (match.index ?? 0) + 400),
-		}));
-		expect(shown.length).toBeGreaterThan(0);
-		for (const hit of shown) expect(hit.body).toContain("的安装说明");
-		expect(shown.map(hit => hit.path).includes("guide-0.md")).toBe(true);
+		const service = new DocsService({ agentDir: fixture.agent });
+		let ranked: string[];
+		try {
+			ranked = service.search("budgetbeacon").sections.map(section => section.path);
+		} finally {
+			service.close();
+		}
+		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "budgetbeacon");
+		const delivered = result.flatMap(page => [...page.matchAll(/^\[\d+\] (\S+\.md):/gm)].map(hit => hit[1]));
+		expect(delivered).toEqual(ranked);
+		for (const [name, body] of Object.entries(files)) {
+			expect(result.join("\n")).toContain(`${name}:`);
+			expect(result.join("\n")).toContain(body);
+		}
 	});
 
-	it("never points at a copy it did not deliver", async () => {
-		// The filler takes almost the whole budget, so no copy of the shared text
-		// fits: each one is dropped for size, and the page must not then claim the
-		// text was already delivered above.
-		const shared = `## Body\n${"长".repeat(4_800)} needle needle\n`;
-		const fixture = await indexedFixture({
-			"filler.md": `# Needle notes\n${"pad ".repeat(3_800)}\nneedle\n`,
-			...Object.fromEntries(
-				Array.from({ length: 8 }, (_, index) => [`dup-${index + 1}.md`, `# Copy ${index + 1}\n${shared}`]),
-			),
-		});
-		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "needle" }));
-		const pointers = [...page.matchAll(/^\[(\d+)\][^\n]*\n\(identical text to an earlier hit on this page\)$/gmu)];
-		// Nothing was delivered whole, so nothing may be reduced to a pointer at it.
-		expect(pointers).toEqual([]);
+	it("starts duplicate text afresh on a new page, never pointing across pages", async () => {
+		const shared = `## Shared\nneedle ${"shared ".repeat(1_200)}\n`;
+		const fixture = await indexedFixture({ "a.md": shared, "b.md": shared });
+		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "needle");
+		expect(result).toHaveLength(2);
+		for (const page of result) {
+			expect(page).toContain(shared);
+			expect(page).not.toContain("(identical text to hit");
+		}
 	});
 
-	it("answers a document-name query whose only hit is a structural label", async () => {
-		// A document's first section is indexed whatever it holds, so that its file
-		// name stays reachable; a page break or single-word heading then means the
-		// name search matches nothing but that label. The header still locates the
-		// file, so the call answers with it instead of reporting no match.
+	it("delivers stored structural-label text and its provenance", async () => {
+		const fixture = await indexedFixture({ "SailorV6Scan培训_v3_ppt.md": "-----\n" });
+		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "SailorV6Scan" }));
+		expect(page).toContain("SailorV6Scan培训_v3_ppt.md:1-1");
+		expect(page).toContain("(structural label)\n-----\n");
+		expect(page).toMatch(/sha256=[a-f0-9]{64} · sectionId=\d+/);
+		expect(page).toContain("All matching results exhausted");
+	});
+
+	it("labels complete technical names separately from related partial evidence", async () => {
 		const fixture = await indexedFixture({
-			"SailorV6Scan培训_v3_ppt.md": "-----\n",
-			"OLE_12345.md": "# Glossary\n",
-			"normal.md": "# Guide\nordinary body\n",
+			"exact.md": "# Output\nInspect MBIST_CHECK.RPT for the pass criterion.\n",
+			"partial.md": "# Output\nInspect another_check.rpt for unrelated reports.\n",
 		});
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		expect(text(await run(tool, { query: "SailorV6Scan" }))).toContain("SailorV6Scan培训_v3_ppt.md:1-1");
-		const glossary = text(await run(tool, { query: "Glossary" }));
-		expect(glossary).toContain("OLE_12345.md:1-1 · Glossary");
-		// The label is not turned into evidence: the body text is never returned.
-		expect(glossary).not.toContain("-----");
+		for (const query of ["mbist_check.rpt", "Explain mbist_check.rpt."]) {
+			const page = text(await run(tool, { query }));
+			expect(page).toMatch(/exact\.md:[^\n]+match=exact-name/);
+			expect(page).toMatch(/partial\.md:[^\n]+match=related/);
+			expect(page.indexOf("exact.md:")).toBeLessThan(page.indexOf("partial.md:"));
+			expect(page).toContain("Inspect MBIST_CHECK.RPT for the pass criterion.");
+			expect(page).not.toContain("未找到完整名称命中");
+		}
+		// A standalone name preserves its literal punctuation; only prose has a sentence delimiter.
+		for (const query of ["missing_check.rpt", "mbist_check.rpt."]) {
+			const absent = text(await run(tool, { query }));
+			expect(absent).toContain("未找到完整名称命中");
+			expect(absent).toMatch(/exact\.md:[^\n]+match=related/);
+			expect(absent).not.toContain("match=exact-name");
+		}
+	});
+
+	it("validates cursor arguments and rejects malformed, mismatched and stale continuation", async () => {
+		const fixture = await indexedFixture({
+			"a.md": `# Page\ncursorbeacon ${"a ".repeat(3_000)}\n`,
+			"b.md": `# Page\ncursorbeacon ${"b ".repeat(3_000)}\n`,
+		});
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		for (const cursor of [null, 1, "", "   ", {}]) {
+			await expect(run(tool, { query: "cursorbeacon", cursor })).rejects.toThrow("cursor");
+		}
+		await expect(run(tool, { query: "cursorbeacon", cursor: "not-a-cursor" })).rejects.toThrow();
+		const next = continuation(text(await run(tool, { query: "cursorbeacon" })));
+		expect(next).toBeDefined();
+		await expect(run(tool, { ...next, query: "different" })).rejects.toThrow();
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		try {
+			await fs.writeFile(path.join(fixture.root, "c.md"), "# Page\ncursorbeacon changed corpus\n");
+			await service.init(".", "replacement");
+		} finally {
+			service.close();
+		}
+		await expect(run(tool, next)).rejects.toThrow();
+	});
+
+	it("propagates a corrupt database as an error rather than zero-match success", async () => {
+		const root = await tempDir("docs-tool-corrupt-root-");
+		const agent = await tempDir("docs-tool-corrupt-agent-");
+		await fs.writeFile(path.join(agent, "docs.db"), "not a SQLite database");
+		await expect(run(new WikiTool(session(agent, root)), { query: "anything" })).rejects.toThrow();
 	});
 
 	it("reports user-run FTS initialization without creating an index", async () => {

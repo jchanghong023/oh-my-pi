@@ -1,6 +1,6 @@
 # wiki
 
-> Searches the indexed Markdown corpus and returns the matching section text — ranked, deduplicated, and budgeted.
+> Searches the imported Markdown corpus and returns complete evidence and citations in ranked, resumable pages.
 
 ## Source
 - Entry: `packages/coding-agent/src/tools/wiki.ts`
@@ -10,53 +10,64 @@
   - `packages/coding-agent/src/docs/markdown.ts` — section shape classification and heading truncation
   - Index lifecycle: `omp docs init "<dir>" --name <name>` / `omp docs remove <name> --force`
 
+The behavior authority is [Markdown document indexing](../../docs-zh-CN/requirements/fork.md#markdown-文档索引); this page describes its tool surface.
+
 ## Inputs
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `query` | `string` | Yes | Keywords or a whole question; results are ranked by relevance. There is no query syntax to learn: `AND`/`OR`, quotes, and wildcards are treated as plain characters. |
+| `cursor` | `string` | No | Opaque continuation returned by the previous page; reuse it unchanged with the same `query`. Omit it to start a new search. |
 
-Extra keys are ignored rather than rejected (lenient argument validation); a missing or empty `query` fails with an error naming the keys that actually arrived plus a usage example. A `query` longer than 500 characters is truncated (with an ellipsis) before it is searched and echoed, so the echo can never outgrow the page it asks for.
+Extra keys are ignored by execution's lenient argument validation; the advertised schema contains only `query` and optional `cursor`. Missing, non-string, empty or whitespace-only `query` fails with an error naming the received keys and showing a usage example. A supplied cursor must be a nonempty string. Queries are trimmed; a query longer than 500 characters is truncated with an ellipsis before search and echo. Continuation JSON carries that effective query.
 
 ## Analysis & Ranking
 - Latin words and digits match as whole words (mixed CJK+Latin like `MBIST是什么` keeps the Latin run whole); CJK runs are segmented into adjacent bigrams, with function words dropped whole so no nonexistent combinations are produced.
-- Multiple query terms combine as a union, not a filter — the more terms a section matches, the higher it ranks.
-- Queries longer than 32 tokens are evenly downsampled, keeping head and tail, so trailing technical points of a requirement sentence survive.
-- Ranking precedence: the query appearing literally in the heading → literally in the body (`std::vector` beats scattered `vector std`) → all tokens present → BM25 within the same tier.
-- With several indexes configured, one query covers all of them.
+- Query terms provide union recall, not an all-token filter. Technical-topic coverage, continuous phrases, substantive evidence and the section's own title determine relevance; generic wording or simply containing every token does not outrank stronger technical evidence.
+- Queries longer than 32 tokens are evenly downsampled, keeping head and tail.
+- Name-shaped queries such as `mbist_check.rpt`, `std::vector`, `--flag`, `foo_bar`, `E123`, `ERR-123`, `C++` and paths preserve punctuation and match case-insensitively at complete-name boundaries. Standalone non-Han identifiers/commands such as `hisms` or `scan` also express name intent; ordinary multiword text such as `git status` stays a phrase/natural-language query. Partial identifiers, namespace fragments, extensions and scattered tokens are related evidence, not complete-name hits.
+- All `match=exact-name` hits precede `match=related` hits. If a recognized name has no complete hit, the result explicitly says `未找到完整名称命中`; related results may still follow.
+- Ranking examines the entire matching set, with stored-text name recall supplementing FTS tokenization. There is no bounded candidate window or truncated scoring body that can make later matching evidence unreachable. BM25 breaks relevance ties.
+- With several indexes configured, the tool searches all of them; the `/wiki` panel searches its selected index.
 
 ## Outputs
-- Single-shot result; `content[0].text` is one page of Markdown built from the matched sections.
-- Each hit renders a header line `[n] <relative path>:<start>-<end> · <heading path> · index=<name> · sha256=<document fingerprint> · sectionId=<id>` followed by the section's full text. Index names disambiguate identical relative paths; the fingerprint identifies the imported document version even when section IDs are reused.
-- The page opens with the total hit count and closes with a footer reporting how many sections were skipped for size and how many duplicate hits were collapsed.
-- A normal page carries at most ~8,000 characters and 200 sections; the best hit is always carried in full even when its body or locating header exceeds the available budget. An oversized page reports the 8,000-character target instead of claiming a hard cap.
-- Distinct body sections fill the page before heading-only hits and duplicate pointers. Deduplication happens before page selection, and candidate widening counts distinct bodies. Cross-document verbatim duplicate sections (longer than ~200 characters) appear once; later copies collapse to a pointer line. Known converter labels `Cell` and `Row` are skipped; one-word technical headings remain evidence. Heading-only sections omit their body only when the locating header already contains their full content; otherwise the complete indexed Markdown follows "(heading only)".
-- The tool does not stream updates.
+- `content[0].text` contains one Markdown page; calls do not stream updates.
+- Each hit renders `[n] <relative path>:<start>-<end> · <heading path> · index=<name> · sha256=<document fingerprint> · sectionId=<id> · match=<exact-name|related>` followed by its complete indexed text. Cite index + path + lines; the fingerprint identifies the imported document version, while section IDs may be reused after re-import.
+- The page identifies the searched imported corpus. Its footer reports total matching sections, the number carried on this page, name-match status when applicable, and either an explicit next-call JSON object or `All matching results exhausted in the searched imported corpus.`
+- Normal pages target ~8,000 characters including headers, locators, bodies and continuation information, with at most 200 sections. Every page carries its first section whole even if it exceeds the target, with an oversized-section notice.
+- Successive pages follow one deterministic, contiguous ranked order. The first section that does not fit is deferred, not skipped; every matching section and source locator is reachable exactly once when following cursors to exhaustion.
+- Verbatim duplicate text longer than 200 characters may point to a complete hit on the same page; every duplicate retains its own full source locator and match label. A new page supplies its own complete text, never a pointer into an earlier page. Within each name-match class, distinct evidence precedes repeated sources; complete-name evidence still precedes all related hits.
+- Heading-only sections retain their full indexed Markdown after `(heading only)`. New imports skip known empty converter labels `Cell`/`Row`, not one-word technical headings; legacy structural labels remain reachable and are marked `(structural label)`.
+- Zero matches is a normal successful result: it reports `0 matching section(s)` in the searched imported corpus and exhaustion, not that the information does not exist elsewhere.
 
 ## Flow
-1. Instantiates `DocsService` from the agent directory and session cwd; if no index exists, fails with the `omp docs init` usage hint instead of searching.
-2. Runs the ranked search with the 200-section ceiling; zero matches fail with the advice to use one distinctive term rather than a sentence.
-3. Builds the page: classifies each hit's shape, collapses duplicates, charges headers against the same character budget as bodies, and never drops the best hit for size.
-4. If every match is a stub, the call still answers with the locating headers instead of failing.
+1. Opens `DocsService` using the agent directory and session cwd. Missing indexes fail with the `omp docs init` usage hint.
+2. Searches stored database text and builds the page under the character target and 200-section ceiling. Version, ranked matches, counts, text and provenance come from the same read snapshot.
+3. Returns evidence and either exhaustion or continuation JSON. For example, start with `{"query":"MBIST 仿真日志"}`; follow the exact next-call JSON in the footer with unchanged query and the emitted cursor. Do not narrow or rewrite a query to retrieve its remaining pages.
+4. The cursor binds the effective query, index scope and logical database version. It survives service close/reopen; malformed, mismatched or stale cursors fail rather than silently mixing index generations or returning zero matches. Restart with the original query and no cursor after an index change.
+5. Query, continuation and citations use the database only: no source-file access, source freshness checks, automatic synchronization, models or vectors.
 
 ## Side Effects
 - Does not import or remove indexes, modify source documents, or change session state (`approval: "read"`). Opening the local database may create its storage or migrate older searchable text from stored Markdown; queries also write bounded diagnostic logs.
 
 ## Limits & Caps
-- Page target: ~8,000 characters, the opening header line included; sections per call: 200.
-- Query cap: 500 characters — a longer query is truncated, then searched and echoed.
-- Indexed sections are capped at 18,000 characters at ingestion. A best hit larger than the page target still returns whole, with an oversized-page notice; later hits only fill the remaining budget.
-- Long lines use a 500-character overlap without splitting Unicode scalars; each overlapping section retains its original byte and line range. Code punctuation remains searchable inside code spans and fenced blocks, including blocks split across sections.
-- Search semantics are fixed (union of terms, whole-word Latin, CJK bigrams); there are no operators, filters, or field restrictions.
+- Normal rendered page target: ~8,000 characters, including continuation information; sections per tool call: 200. These page limits do not cap the total matching set.
+- Query cap: 500 characters — a longer query is truncated with an ellipsis, then searched and echoed; continuation uses the echoed effective query.
+- Indexed sections are capped at 18,000 characters at ingestion. Each page's first oversized section still returns whole; later nonfitting sections become the next page's first section.
+- Long lines use a 500-character overlap without splitting Unicode scalars; overlapping sections retain original byte and line ranges. Code punctuation remains searchable in code spans and fenced blocks, including blocks split across sections.
+- No query operators, filters or field restrictions. The only optional input is the returned continuation cursor.
 
 ## Errors
-- Missing `query`: `wiki requires a query. Received: <keys>. Example: {"query":"MBIST"}`.
+- Missing or invalid `query`: `wiki requires a query. Received: <keys>. Example: {"query":"MBIST"}`.
+- Non-string or empty supplied cursor: `wiki cursor must be a nonempty string returned by the previous page.`
+- Malformed cursor: `Invalid documentation search cursor`.
+- Different effective query or index scope: `Documentation search cursor does not match query or index`.
+- Changed logical database version: `Stale documentation search cursor: indexed snapshot has changed`.
 - No indexes configured: `No document indexes. Run: omp docs init "<dir>" --name <name>`.
-- No section matches: `No section matches "<query>". Use one distinctive term rather than a sentence.`
-- Matches carry no body text at all: `Sections matching "<query>" carry no body text.`
+- Database failures and other operational errors remain errors. Zero matches, heading-only hits and structural labels are not errors.
 
 ## Notes
-- The corpus is a snapshot taken by `omp docs init`: source files changed or added since that import are not in it. Imports require valid UTF-8; UTF-8 BOM and CRLF files retain correct byte and line provenance. Re-import the directory to pick up changes.
+- The corpus is the Markdown snapshot imported by `omp docs init`; later source edits/additions are not included. Imports require valid UTF-8; BOM and CRLF retain correct provenance. If a newer snapshot is needed, remove then re-import manually; queries never inspect source freshness or initialize/delete indexes automatically.
 - Older searchable text is automatically regenerated from stored Markdown to repair code punctuation, without reading source files or changing the database tables. Content discarded during an older import (such as a technical heading), and long lines partitioned without overlap, require remove + init to use the new ingestion rules.
-- The corpus is maintained by the two index commands; the `/wiki` panel lists existing indexes and can initiate both actions, while this tool only reads.
-- Heading paths are truncated when a legacy index stored a whole document as one heading. This bounds the locator, not the section body: long heading-only content still returns in full. The `/wiki` panel opens the selected search-result snapshot rather than resolving its old `sectionId` in a later index generation.
+- The only lifecycle commands are `omp docs init "<dir>" --name <name>` and `omp docs remove <name> --force`; there are no update/list/status/rebuild commands. The `/wiki` panel lists indexes and can initiate those two actions. In search results, `n` requests the next page and `b` returns from a section to the current result page.
+- Legacy heading paths may be truncated to bound locators, never bodies. The `/wiki` panel opens the selected hit's stored search-result snapshot rather than resolving its `sectionId` in another index generation.

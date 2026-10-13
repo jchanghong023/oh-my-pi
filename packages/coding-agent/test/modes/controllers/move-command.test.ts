@@ -92,7 +92,14 @@ describe("CommandController /move", () => {
 			const target = path.join(sourceDir, "checkout");
 			vi.spyOn(sessionWorktree, "createSessionWorktree").mockImplementation(async () => {
 				await fs.mkdir(target);
-				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", created: true, createdBranch: true };
+				return {
+					path: target,
+					branch: "feature",
+					sourceCwd: sourceDir,
+					baseCommit: "0",
+					created: true,
+					createdBranch: true,
+				};
 			});
 			ctx.withBtwSessionMove = vi.fn(async () => false);
 			await new CommandController(ctx).handleWorktreeCommand("feature");
@@ -136,7 +143,14 @@ describe("CommandController /move", () => {
 				creating.resolve();
 				await created.promise;
 				await fs.mkdir(target);
-				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", created: true, createdBranch: true };
+				return {
+					path: target,
+					branch: "feature",
+					sourceCwd: sourceDir,
+					baseCommit: "0",
+					created: true,
+					createdBranch: true,
+				};
 			});
 			ctx.session.moveSession = async cwd => {
 				expect(held).toBe(true);
@@ -179,7 +193,10 @@ describe("CommandController /move", () => {
 			expect(state.completedBtwVisible).toBe(true);
 			expect(ctx.session.moveSession).not.toHaveBeenCalled();
 			expect(ctx.statusContainer.children).toHaveLength(0);
-			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("git worktree add failed"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith(
+				"error",
+				expect.stringContaining("git worktree add failed"),
+			);
 			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
 			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {
