@@ -30,3 +30,5 @@ Windows 运行时代理专项（installGlobalProxyFetch 系统代理回退）：
 README CMD 安装命令：根 README 新增的 CMD 等价安装命令（curl 下载脚本 + `powershell -File` 执行）已在真实 cmd.exe 完整验证一次：隔离 `PI_INSTALL_DIR` 下解析最新 Release、自动经本机 Windows 系统代理下载二进制、安装成功 exit 0、`omp --version` 报告 `omp/18.9.2+fork.307`；验证后用户 PATH 已恢复原值、临时安装与配置目录已清理。PowerShell 5.1/7 的原有单行命令行为未变，未重复验证。
 
 CodeAgent 认证专项：当前用户 DPAPI 合成密文经真实 JchTools 独立后台写入隔离原生 `REG_SZ`，真实 OMP CLI 无手工模型／认证配置完成旧 Token 失败、后台轮换、唯一重试、实际 read 工具执行及最终回答；认证比较仅在内存进行，输出和日志无 Token。OMP 认证、压缩、handoff、恢复及普通模型回归 203 通过／4 跳过，修复前已复现空注册表值破坏缓存及摘要／handoff 外层重放。JchTools 原生后台与 GUI TestingBackend 回调验证通过，SQLite 争用期间维持同一实例；共享桌面和真实 CodeAgent 服务尚未验证（本机缺少真实凭据）。
+
+系统代理内网绕行清单：`proxy.test.ts` 61 例通过（新增匹配器 3 例：公司域名后缀/点名主机/点号标签包含命中、IP 前缀与 glob 命中且公网邻近段不误伤、无关公网主机不命中；安装行为 1 例：公网 URL 注入系统代理、内网域名/IP 目标不注入）；fastcheck 通过。真实内网目标连通性与 fulltest/slowtest 未验证。
