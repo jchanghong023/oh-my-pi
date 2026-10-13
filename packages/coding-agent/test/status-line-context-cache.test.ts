@@ -400,15 +400,13 @@ describe("StatusLineComponent context breakdown", () => {
 			const border = comp.getTopBorder(120);
 			const plain = border.content.replaceAll(/\x1b\[[0-9;]*m/g, "");
 			const percentIndex = plain.indexOf("8%");
-			const speculationIndex = plain.indexOf("╎");
-			const compactionIndex = plain.indexOf("┃");
 			const windowIndex = plain.indexOf("1M");
 			expect(border.width).toBe(120);
 			expect(plain).not.toContain("8.0%/1M");
 			expect(percentIndex).toBeGreaterThanOrEqual(0);
-			expect(speculationIndex).toBeGreaterThan(percentIndex);
-			expect(compactionIndex).toBeGreaterThan(speculationIndex);
-			expect(windowIndex).toBeGreaterThan(compactionIndex);
+			expect(plain).not.toContain("╎");
+			expect(plain).not.toContain("┃");
+			expect(windowIndex).toBeGreaterThan(percentIndex);
 			expect(plain.indexOf("1M", windowIndex + 1)).toBe(-1);
 		} finally {
 			cfgStatusLineContextLine.clearOverride(settings);
@@ -490,7 +488,7 @@ describe("StatusLineComponent context breakdown", () => {
 		expect(border.width).toBe(8);
 	});
 
-	it("embedded overflow (>100%) breaks the raw percent past the window label in error color", () => {
+	it("embedded overflow keeps the raw percent before capacity in error color", () => {
 		const { session } = makeSession({
 			messages: [userMessage("hi"), assistantMessage("done")],
 			contextWindow: 200_000,
@@ -509,7 +507,8 @@ describe("StatusLineComponent context breakdown", () => {
 			const percentIndex = plain.indexOf("120%");
 			expect(border.width).toBe(120);
 			expect(windowIndex).toBeGreaterThanOrEqual(0);
-			expect(percentIndex).toBeGreaterThan(windowIndex);
+			expect(percentIndex).toBeGreaterThanOrEqual(0);
+			expect(windowIndex).toBeGreaterThan(percentIndex);
 			// The clamped label must not render alongside the overflow one.
 			expect(plain).not.toContain("100%");
 			expect(border.content).toContain(`${theme.getFgAnsi("error")}120%`);
