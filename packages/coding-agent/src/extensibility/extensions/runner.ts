@@ -684,6 +684,11 @@ export class ExtensionRunner {
 		return this.#nativeToolResolver?.(name) !== undefined;
 	}
 
+	/** Guidance a same-name replacement inherits from the native `name` tool it can delegate to. */
+	getNativeDelegationGuidance(name: string): string {
+		return this.#nativeToolResolver?.(name)?.tool.delegationGuidance ?? "";
+	}
+
 	/**
 	 * Run the native built-in of `name` with `params` and return its result — the delegation target
 	 * of a same-tool `ctx.invokeTool`. Calls the unwrapped native `execute` directly with the loop's

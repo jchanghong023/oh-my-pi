@@ -721,20 +721,10 @@ export interface SpeculativePhysicalOutcome {
 	evidence?: unknown;
 }
 
-/** How an approval prompt will show what `formatApprovalDetails` returns. */
-export interface ApprovalDetailsOptions {
-	/**
-	 * The prompt keeps only each detail's first line plus a count of the rest (the transcript
-	 * shows the call in full): return bodies untruncated so the count is the whole value's.
-	 * The host truncates the rows it keeps. Otherwise truncate long values as usual.
-	 */
-	compact?: boolean;
-}
-
 export interface SpeculativeToolReference {
 	name: string;
 	approval?: ToolApproval;
-	formatApprovalDetails?: (args: unknown, options?: ApprovalDetailsOptions) => string | string[] | undefined;
+	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 }
 
 export interface SpeculativeOperationContext extends ToolSpeculationExecutionContext {
@@ -1156,6 +1146,11 @@ export interface AgentTool<
 	/** Short one-line summary used for tool discovery indexes. */
 	summary?: string;
 	/**
+	 * Instructions a same-name extension replacement inherits in its description, because results it
+	 * obtains by delegating to this native tool through `ctx.invokeTool` follow this tool's contract.
+	 */
+	readonly delegationGuidance?: string;
+	/**
 	 * On-demand documentation topics (`topic → markdown`), readable as
 	 * `xd://<tool>/<topic>`. Lets a tool keep large sub-surfaces out of its
 	 * description and advertise only a one-line pointer per topic.
@@ -1231,7 +1226,7 @@ export interface AgentTool<
 	approval?: ToolApproval;
 
 	/** Lines appended after the standard approval prompt header. */
-	formatApprovalDetails?: (args: unknown, options?: ApprovalDetailsOptions) => string | string[] | undefined;
+	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;

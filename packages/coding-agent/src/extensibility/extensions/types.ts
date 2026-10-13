@@ -300,8 +300,9 @@ export interface ExtensionUIContext {
 
 	/**
 	 * Show a tool-approval prompt; true only for an explicit approval. Each prompt is a title line
-	 * then details: `compact` collapses multi-line details for a host that shows the call itself
-	 * beside the prompt, `full` keeps them. Absent: callers fall back to an Approve/Deny `select`.
+	 * then details: `compact` summarizes the tool's own details (command, path, content) to one
+	 * row for a host with little room, `full` keeps them whole. Absent: callers fall back to an
+	 * Approve/Deny `select`.
 	 */
 	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
 

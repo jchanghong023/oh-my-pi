@@ -7,6 +7,17 @@
 - Wiki searches and continuations now keep the interface responsive and can be cancelled, reusing complete snapshot-bound rankings while preserving all evidence and citations across pages. Failed continuations retain the current results.
 - Successful wiki searches now honor an asynchronous, cancellable 500ms minimum duration, with separate database-work and minimum-wait timing. Awaitable shutdown releases the owned worker before database cleanup.
 
+### Added
+
+- The composer stays usable while a tool approval is pending: sending a message denies the call and steers the turn with it, so the agent knows why it was denied ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+### Changed
+
+- Background task guidance now lives in the Task tool description (and in same-name extension replacements that delegate to Task) instead of being repeated in every spawn acknowledgment ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

@@ -10,7 +10,6 @@ import type * as TypeBox from "@oh-my-pi/omptype/typebox";
 import type * as zod from "@oh-my-pi/omptype/zod";
 import type {
 	AgentToolResult,
-	ApprovalDetailsOptions,
 	AgentToolUpdateCallback,
 	ToolApproval,
 	ToolApprovalDecision,
@@ -221,8 +220,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	/** Capability tier declaration used by approval gates. Omitted means "exec". */
 	approval?: ToolApproval;
 
-	/** Lines appended after the standard approval prompt header; see {@link ApprovalDetailsOptions} for `compact`. */
-	formatApprovalDetails?: (args: unknown, options?: ApprovalDetailsOptions) => string | string[] | undefined;
+	/** Lines appended after the standard approval prompt header. */
+	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
 	/**
 	 * Execute the tool.
 	 * @param toolCallId - Unique ID for this tool call

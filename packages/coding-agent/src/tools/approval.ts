@@ -6,14 +6,13 @@
  * - compare a tool capability tier against the active approval mode,
  * - format the generic approval prompt body.
  */
-import type { AgentTool, ApprovalDetailsOptions, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
 import type { ExtensionUIContext } from "../extensibility/extensions/types";
 
-import { countNewlines } from "@oh-my-pi/pi-utils";
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
-export type { ApprovalDetailsOptions, ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
+export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 export type ApprovalMode = "always-ask" | "write" | "yolo";
@@ -362,25 +361,8 @@ export function truncateForPrompt(value: string, maxChars = DEFAULT_PROMPT_TRUNC
 	return `${value.slice(0, maxChars)}[…${omitted}ch elided…]`;
 }
 
-/**
- * A `formatApprovalDetails` value as the prompt needs it: whole for a compact prompt (which
- * counts its lines and truncates the row it keeps), else {@link truncateForPrompt}ed.
- */
-export function truncateApprovalDetail(value: string, options?: ApprovalDetailsOptions): string {
-	return options?.compact ? value : truncateForPrompt(value);
-}
-
-/**
- * Format the approval prompt body shown to the user. `compact` keeps one row per detail: a
- * multi-line value (file content, code, a long command) keeps its first line and counts the
- * rest, for surfaces that show the tool call itself in the transcript beside the prompt.
- */
-export function formatApprovalPrompt(
-	tool: ApprovalSubject,
-	args: unknown,
-	reason?: string,
-	options?: ApprovalDetailsOptions,
-): string {
+/** The prompt's header rows: tool name, MCP origin, and the reason it asks. */
+function approvalHeader(tool: ApprovalSubject, reason?: string): string[] {
 	const lines = [`Allow tool: ${tool.name}`];
 
 	if (tool.name.startsWith("mcp__") && tool.approval === undefined) {
@@ -390,32 +372,43 @@ export function formatApprovalPrompt(
 	if (reason) {
 		lines.push(`Reason: ${reason}`);
 	}
-
-	const compact = options?.compact === true;
-	const details = tool.formatApprovalDetails?.(args, { compact });
-	for (const detail of typeof details === "string" ? [details] : (details ?? [])) {
-		if (detail.length === 0) continue;
-		lines.push(compact ? compactApprovalDetail(detail) : detail);
-	}
-
-	return lines.join("\n");
+	return lines;
 }
 
-/** `Content:\n<40 lines>` → `Content: 40 lines in the tool call`; `Command: a\nb` → `Command: a … +1 line in the tool call`. */
-function compactApprovalDetail(detail: string): string {
-	const newline = detail.indexOf("\n");
-	if (newline < 0) return truncateForPrompt(detail);
-	const head = truncateForPrompt(detail.slice(0, newline).trimEnd());
-	// Every newline starts one more line after the head; counted without splitting a body that may be megabytes.
-	const rest = countNewlines(detail);
-	const count = `${rest} line${rest === 1 ? "" : "s"} in the tool call`;
-	return head.endsWith(":") ? `${head} ${count}` : `${head} … +${count}`;
+/** The tool's own detail rows for `args` (command, path, content), blanks dropped. */
+function approvalDetails(tool: ApprovalSubject, args: unknown): string[] {
+	const details = tool.formatApprovalDetails?.(args);
+	return (typeof details === "string" ? [details] : (details ?? [])).filter(detail => detail.length > 0);
+}
+
+/** Format the approval prompt body shown to the user: the header, then the tool's own details. */
+export function formatApprovalPrompt(tool: ApprovalSubject, args: unknown, reason?: string): string {
+	return [...approvalHeader(tool, reason), ...approvalDetails(tool, args)].join("\n");
 }
 
 /**
- * Ask the user to approve a call: the host's approval dialog when it has one (it gets both the
- * full prompt and one with multi-line details compacted, and picks by whether the call shows
- * beside it), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
+ * The details as one row for a prompt that must stay small: each detail's first line, joined
+ * by ` · `, ending in `…` when any detail has more lines. A label alone (`Code:`, its body on
+ * the following lines) takes the body's first line after it.
+ */
+function approvalSummary(details: readonly string[]): string | undefined {
+	if (details.length === 0) return undefined;
+	let omitted = false;
+	const heads = details.map(detail => {
+		const lines = detail.split("\n", 3);
+		const head = lines[0]!.trimEnd();
+		const labelOnly = head.endsWith(":") && lines.length > 1;
+		if (lines.length > (labelOnly ? 2 : 1)) omitted = true;
+		return labelOnly ? `${head} ${lines[1]!.trim()}` : head;
+	});
+	const row = heads.join(" · ");
+	return omitted ? `${row} …` : row;
+}
+
+/**
+ * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
+ * prompt and a compact one with the details summarized to a row, so the composer beneath it
+ * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
  * `appendix` lines follow the prompt on both. True only for an explicit approval.
  */
 export async function requestApproval(
@@ -425,9 +418,12 @@ export async function requestApproval(
 	reason?: string,
 	appendix: readonly string[] = [],
 ): Promise<boolean> {
-	const full = [formatApprovalPrompt(tool, args, reason), ...appendix].join("\n");
+	const header = approvalHeader(tool, reason);
+	const details = approvalDetails(tool, args);
+	const full = [...header, ...details, ...appendix].join("\n");
 	if (ui.approve) {
-		const compact = [formatApprovalPrompt(tool, args, reason, { compact: true }), ...appendix].join("\n");
+		const summary = approvalSummary(details);
+		const compact = [...header, ...(summary === undefined ? [] : [summary]), ...appendix].join("\n");
 		return (await ui.approve({ full, compact })) === true;
 	}
 	return (await ui.select(full, ["Approve", "Deny"])) === "Approve";

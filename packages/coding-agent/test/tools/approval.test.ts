@@ -5,6 +5,7 @@ import {
 	type ApprovalMode,
 	denyError,
 	formatApprovalPrompt,
+	requestApproval,
 	requiresApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
@@ -237,24 +238,37 @@ describe("MCP fallback and prompt formatting", () => {
 		]);
 	});
 
-	it("compact prompts keep one row per detail, counting multi-line bodies instead of showing them", () => {
-		const subject = tool("write", "write", () => ["Path: /tmp/out", "Content:\nsecret\nbody", "Command: ls\n-la"]);
-		expect(formatApprovalPrompt(subject, {}, undefined, { compact: true }).split("\n")).toEqual([
-			"Allow tool: write",
-			"Path: /tmp/out",
-			"Content: 2 lines in the tool call",
-			"Command: ls … +1 line in the tool call",
-		]);
-	});
-
-	it("compact prompts count every line of a detail the formatter would truncate", () => {
-		const command = Array.from({ length: 1000 }, (_, i) => `echo ${i}`).join("\n");
-		const bash = createBashTool();
-		expect(formatApprovalPrompt(bash, { command }, undefined, { compact: true })).toBe(
-			"Allow tool: bash\nCommand: echo 0 … +999 lines in the tool call",
+	it("the dialog's compact prompt summarizes the details to one row, keeping origin, reason, and appendix", async () => {
+		const prompts: { full: string; compact: string }[] = [];
+		const ui = {
+			select: async () => undefined,
+			approve: async (prompt: { full: string; compact: string }) => {
+				prompts.push(prompt);
+				return true;
+			},
+		};
+		const write = tool("mcp__server__write", undefined, () => ["Path: /tmp/out", "Content:\nsecret\nbody"]);
+		expect(await requestApproval(ui, write, {}, "Critical pattern", ["Provider safety checks:", "- check"])).toBe(
+			true,
 		);
-		// The full prompt keeps the formatter's truncation.
-		expect(formatApprovalPrompt(bash, { command })).toContain("ch elided…]");
+		expect(prompts[0]!.compact.split("\n")).toEqual([
+			"Allow tool: mcp__server__write",
+			"Origin: MCP server tool",
+			"Reason: Critical pattern",
+			// A label alone takes its body's first line; `…` marks the lines left out.
+			"Path: /tmp/out · Content: secret …",
+			"Provider safety checks:",
+			"- check",
+		]);
+		// The full prompt, which the dialog's expand key shows, keeps every detail whole.
+		expect(prompts[0]!.full).toContain("Content:\nsecret\nbody");
+		// A detail that fits on its row is shown as is, without an ellipsis.
+		await requestApproval(
+			ui,
+			tool("bash", "exec", () => ["Command: git push"]),
+			{},
+		);
+		expect(prompts[1]!.compact).toBe("Allow tool: bash\nCommand: git push");
 	});
 
 	it("does not add MCP origin for annotated MCP tools", () => {
