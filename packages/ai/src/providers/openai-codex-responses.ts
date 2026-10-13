@@ -33,6 +33,7 @@ import type {
 	CodexCompactionRequestContext,
 	Context,
 	FetchImpl,
+	Message,
 	Model,
 	ProviderSessionState,
 	RawSseEvent,
@@ -61,6 +62,7 @@ import {
 } from "../utils";
 import {
 	clearStreamingPartialJson,
+	getPerCallContextHistoryOrigin,
 	isPerCallContextMessage,
 	kStreamingLastParseLen,
 	kStreamingPartialJson,
@@ -1986,12 +1988,29 @@ async function openCodexWebSocketTransport(
 	};
 }
 
+/** Context hooks may rewrite history without creating a new conversational role. */
+function getCodexTurnRole(message: Message | undefined): Message["role"] | undefined {
+	const origin = getPerCallContextHistoryOrigin(message);
+	if (!origin) return isPerCallContextMessage(message) ? undefined : message?.role;
+	switch (origin.role) {
+		case "user":
+		case "assistant":
+		case "toolResult":
+		case "developer":
+			return origin.role;
+		default:
+			// Domain messages (custom, fileMention, …) retain their existing LLM projection.
+			return message?.role;
+	}
+}
+
 function getCodexTurnStartedAtUnixMs(context: Context): number {
 	for (let i = context.messages.length - 1; i >= 0; i--) {
 		const message = context.messages[i];
-		if (isPerCallContextMessage(message)) continue;
-		if (message?.role === "user" && Number.isFinite(message.timestamp)) {
-			return Math.trunc(message.timestamp);
+		if (getCodexTurnRole(message) !== "user") continue;
+		const timestamp = getPerCallContextHistoryOrigin(message)?.timestamp ?? message?.timestamp;
+		if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+			return Math.trunc(timestamp);
 		}
 	}
 	return Date.now();
@@ -2006,8 +2025,8 @@ function getCodexTurnStartedAtUnixMs(context: Context): number {
 function isCodexWithinTurnContinuation(context: Context): boolean {
 	for (let i = context.messages.length - 1; i >= 0; i--) {
 		const message = context.messages[i];
-		if (isPerCallContextMessage(message)) continue;
-		const role = message?.role;
+		const role = getCodexTurnRole(message);
+		if (role === undefined) continue;
 		if (role === "toolResult") continue;
 		return role === "assistant";
 	}

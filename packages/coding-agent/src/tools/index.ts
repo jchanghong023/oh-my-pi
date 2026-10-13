@@ -633,13 +633,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		if (!requestedTools.includes("wiki")) requestedTools.push("wiki");
 		if (!requestedTools.includes("repo")) requestedTools.push("repo");
 	}
-	// createTools may be called more than once for the same ToolSession. A later
-	// explicit (or full-set) write request is a real grant and must upgrade any
-	// device-only transport left by an earlier read-only call.
-	if (requestedTools === undefined || requestedTools.includes("write")) {
-		session.deviceOnlyWrite = undefined;
-		session.pendingFullWriteDescription = undefined;
-	}
 	const goalEnabled = cfgGoalEnabled.get(session.settings);
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	const externalThinkingActive =

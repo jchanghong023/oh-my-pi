@@ -2005,6 +2005,8 @@ export class ExtensionRunner {
 		// the context object or cloning; this runs on every provider request.
 		if (!this.hasHandlers("context")) return messages;
 		const ctx = this.createContext();
+		// Capture turn identity before handlers can rewrite roles or timestamps.
+		const historyOrigins = messages.map(message => ({ role: message.role, timestamp: message.timestamp }));
 
 		let currentMessages: AgentMessage[];
 		try {
@@ -2060,7 +2062,12 @@ export class ExtensionRunner {
 			const unchanged = historyMessage !== undefined && Bun.deepEquals(message, historyMessage);
 			clearContextHistoryIndex(message);
 			if (historyMessage) clearContextHistoryIndex(historyMessage);
-			if (!unchanged) markPerCallContextMessage(message);
+			if (!unchanged)
+				markPerCallContextMessage(
+					message,
+					undefined,
+					historyMessage && historyIndex !== undefined ? historyOrigins[historyIndex] : undefined,
+				);
 		}
 		for (const message of messages) clearContextHistoryIndex(message);
 		// An aborted handler is skipped and its input kept unchanged. Never hand that

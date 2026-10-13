@@ -1629,7 +1629,7 @@ export class SettingsSelectorComponent implements Component {
 			onPreview = value => shapePreview.setValue(value);
 			footer = shapePreview;
 		} else if (def.path === "composer.shape") {
-			const shapePreview = new ComposerShapePreview(String(currentValue ?? "pi"), {
+			const shapePreview = new ComposerShapePreview(String(currentValue ?? "box"), {
 				requestRender: this.#context.requestRender,
 				status: this.#context.composerPreviewStatus,
 			});

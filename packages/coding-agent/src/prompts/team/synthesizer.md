@@ -105,10 +105,13 @@
 {{/if}}
 {{#if initialReview}}
 审查意见与处理结果：
+{{#if initialReview.reviewSummary}}
+初次审查依据与结论：{{{initialReview.reviewSummary}}}
+{{/if}}
 {{#if initialReview.findings.length}}
 初次审查意见：
 {{#each initialReview.findings}}
-{{add @index 1}}. [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}）
+{{add @index 1}}. [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}；针对部分：{{{targetAspect}}}）
 {{/each}}
 {{else}}初次审查：未发现实质问题。{{/if}}
 {{#if revision}}

@@ -499,10 +499,10 @@ export function __resetGlobalProxyFetch(): void {
  * default for a personal fork, not an upstream mechanism.
  */
 export function applyForkNetworkDefaults(): void {
-	if (!Bun.env.NODE_TLS_REJECT_UNAUTHORIZED && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+	if (Bun.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED === undefined) {
 		Bun.env.NODE_TLS_REJECT_UNAUTHORIZED = process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 	}
-	if (!Bun.env.GIT_SSL_NO_VERIFY && !process.env.GIT_SSL_NO_VERIFY) {
+	if (Bun.env.GIT_SSL_NO_VERIFY === undefined && process.env.GIT_SSL_NO_VERIFY === undefined) {
 		Bun.env.GIT_SSL_NO_VERIFY = process.env.GIT_SSL_NO_VERIFY = "true";
 	}
 }

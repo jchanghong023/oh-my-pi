@@ -15,6 +15,7 @@ import {
 	prompt,
 } from "@oh-my-pi/pi-utils";
 
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -895,7 +896,10 @@ async function runStage1Job(options: {
 						reasoning: clampThinkingLevelForModel(model, Effort.Low),
 					},
 				),
-			{ provider: model.provider },
+			{
+				provider: model.provider,
+				maxAttempts: model.provider === "codeagent" || isJchToolsAgentModel(model) ? 1 : undefined,
+			},
 		);
 
 		if (response.stopReason === "error") {
@@ -1039,7 +1043,10 @@ async function runConsolidationModel(options: {
 					reasoning: clampThinkingLevelForModel(model, Effort.Medium),
 				},
 			),
-		{ provider: model.provider },
+		{
+			provider: model.provider,
+			maxAttempts: model.provider === "codeagent" || isJchToolsAgentModel(model) ? 1 : undefined,
+		},
 	);
 	if (response.stopReason === "error") {
 		throw new Error(response.errorMessage || "phase2 model error");

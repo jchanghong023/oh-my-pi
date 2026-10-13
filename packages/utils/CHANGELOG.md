@@ -14,6 +14,9 @@
 - Flushed log-directory fallback warnings during initialization even when INFO records are disabled.
 - Preserved YAML comments and unrelated alias values when editing or removing a single configuration field.
 - Fatal diagnostic records now retain only safe error summaries instead of copying exception messages and raw stacks; terminal error output is unchanged.
+- Corrected stdout EOF and pre-aborted cancellation accounting so completed subprocess pipes are not treated as live descendants.
+- Preserved numeric and boolean YAML scalar keys when updating or removing custom model roles.
+- Classified HTTP timeout and cancellation diagnostics using the actual request signal and transport error.
 
 ## [18.10.0] - 2026-10-12
 

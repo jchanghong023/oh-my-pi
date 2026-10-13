@@ -230,7 +230,8 @@ export async function resolveWslRemoteSource(
 		return result.stdout.trim();
 	};
 	const admin = await git("wsl/source-admin", ["rev-parse", "--absolute-git-dir"]);
-	await gate.charged(async () => {
+	// Preflight rejection must not cancel the reachable current-platform leg.
+	const operationFailure = await gate.charged(async () => {
 		for (const marker of [
 			"MERGE_HEAD",
 			"CHERRY_PICK_HEAD",
@@ -239,16 +240,18 @@ export async function resolveWslRemoteSource(
 			"rebase-apply",
 			"BISECT_LOG",
 		]) {
-			let exists = false;
 			try {
 				await fs.access(path.join(admin, marker));
-				exists = true;
 			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") return { error };
+				continue;
 			}
-			if (exists) throw new Error(`BLOCKED: Windows Git operation ${marker} is in progress; no WSL synchronization`);
+			return {
+				error: new Error(`BLOCKED: Windows Git operation ${marker} is in progress; no WSL synchronization`),
+			};
 		}
 	});
+	if (operationFailure) throw operationFailure.error;
 	const branch = await git("wsl/source-branch", ["symbolic-ref", "--short", "HEAD"]);
 	const target = await git("wsl/push-target", [
 		"for-each-ref",
@@ -752,6 +755,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		stdin: script,
 		eventToken: token,
 		allowFailure: true,
+		streamOutput: true,
 		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, control)),
 	};
 	stage = "sync-and-fulltest";
@@ -794,8 +798,6 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		throw error;
 	}
 	stage = "returned-result";
-	console.log(result.stdout);
-	if (result.stderr) console.error(result.stderr);
 	// Nested orchestration selftests may log their own inert marker fixtures.
 	// The helper's final records, not the first matching test log, own identity.
 	const testCode = [...result.stdout.matchAll(/^TEST_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];

@@ -8,13 +8,12 @@ import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import type { GateProcessOwner } from "./test-gate-process";
 import { ownGateProcess } from "./test-gate-process";
 import type { GateEventRelay } from "./test-gate-events";
-import { createGateEventRelay } from "./test-gate-events";
+import { createGateEventRelay, emitEvent, GATE_EVENT_PREFIX, withCompilerActivity } from "./test-gate-events";
 import { gateClockNanoseconds } from "./test-gate-clock";
 
 export type GateLevel = "fastcheck" | "fulltest" | "slowtest";
 export type GateStatus = "PASS" | "FAIL" | "TIMEOUT" | "INTERRUPTED" | "MISSING_TOOL";
 export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = { fastcheck: 90, fulltest: 900, slowtest: 1500 };
-export const GATE_EVENT_PREFIX = "OMP_GATE_EVENT ";
 type Activity = "charged" | "compile";
 export interface GateActivityEvent {
 	id: string;
@@ -29,6 +28,8 @@ export interface GateCommand {
 	stdin?: string | Uint8Array;
 	eventToken?: string;
 	decodeOutput?: (bytes: Uint8Array) => string;
+	/** Echo captured output as it arrives; capture remains silent by default. */
+	streamOutput?: boolean;
 	onAbort?: () => Promise<void>;
 	/** Only for read-only optional-environment discovery; required checks must propagate failure. */
 	allowFailure?: boolean;
@@ -207,17 +208,6 @@ function reconcile(scope: Scope, now = performance.now()): void {
 	}
 	accrue(scope, now);
 }
-function emitEvent(
-	token: string | undefined,
-	id: string,
-	kind: Activity | "idle",
-	env: Record<string, string | undefined> = process.env,
-): void {
-	if (!token) return;
-	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({ id, kind, at: gateClockNanoseconds().toString(), clock: env.OMP_GATE_CLOCK_TOKEN })}\n`;
-	if (env.OMP_GATE_EVENT_FILE) appendFileSync(env.OMP_GATE_EVENT_FILE, line);
-	else process.stderr.write(line);
-}
 /** Relay the first concrete nested check/compiler failure before waiting for its other work. */
 export function reportGateFailure(error: unknown): void {
 	const token = process.env.OMP_GATE_EVENT_TOKEN;
@@ -232,27 +222,6 @@ export function reportGateFailure(error: unknown): void {
 	})}\n`;
 	if (process.env.OMP_GATE_EVENT_FILE) appendFileSync(process.env.OMP_GATE_EVENT_FILE, line);
 	else process.stderr.write(line);
-}
-/** Mark only a real compiler-only boundary; preparation, downloads, checks and installation stay charged. */
-export async function withCompilerActivity<T>(work: () => Promise<T>): Promise<T> {
-	const token = process.env.OMP_GATE_EVENT_TOKEN;
-	const id = randomUUID();
-	emitEvent(token, id, "compile");
-	try {
-		return await work();
-	} finally {
-		emitEvent(token, id, "idle");
-	}
-}
-/** Mark actual doctest/test process execution when it overlaps a compiler. */
-export async function withChargedActivity<T>(work: () => Promise<T>): Promise<T> {
-	const id = randomUUID();
-	emitEvent(process.env.OMP_GATE_EVENT_TOKEN, id, "charged");
-	try {
-		return await work();
-	} finally {
-		emitEvent(process.env.OMP_GATE_EVENT_TOKEN, id, "idle");
-	}
 }
 
 let reportedRustAccountingLimitation = false;
@@ -1149,13 +1118,13 @@ export class GateRun {
 						? command.decodeOutput(bytes)
 						: decoder.decode(bytes, { stream: true });
 					parser.push(chunk);
-					if (!capture) target.write(chunk);
+					if (!capture || command.streamOutput) target.write(chunk);
 					if (capture) text += chunk;
 				}
 				const final = command.decodeOutput ? "" : decoder.decode();
 				if (final) {
 					parser.push(final);
-					if (!capture) target.write(final);
+					if (!capture || command.streamOutput) target.write(final);
 					if (capture) text += final;
 				}
 				return text;

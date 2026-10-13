@@ -1100,6 +1100,7 @@ export class SessionTools {
 			const writeRegistration = this.#ensureWriteRegistered?.();
 			builtInWriteAvailable = writeRegistration ? (await untilAborted(signal, writeRegistration)) === true : false;
 			if (builtInWriteAvailable) this.#recordBuiltInTool("write");
+			this.#assertCurrentToolMutation();
 		}
 		if (transportNeeded && builtInWriteAvailable) {
 			const write = this.#toolRegistry.get("write");
@@ -1939,6 +1940,7 @@ export class SessionTools {
 			}
 			if (!this.#toolRegistry.has("think")) {
 				const tool = await this.#createThinkTool?.();
+				this.#assertCurrentToolMutation();
 				if (tool?.name !== "think") return false;
 				const wrapped = this.#wrapRuntimeTool(tool);
 				this.#toolRegistry.set(wrapped.name, wrapped);
@@ -1975,6 +1977,7 @@ export class SessionTools {
 				this.setToolBuiltIn(name, builtIn);
 				if (activate) enabled.add(name);
 			}
+			this.#assertCurrentToolMutation();
 			const xdevChanged = delta.xdev !== this.#xdev;
 			if (xdevChanged) {
 				this.#xdev = delta.xdev;

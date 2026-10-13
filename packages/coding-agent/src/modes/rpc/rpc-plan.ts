@@ -221,7 +221,11 @@ export class RpcPlanController {
 			}
 			if (context.mode === "plan") {
 				const path = context.modeData?.planFilePath;
-				await this.#enter(typeof path === "string" ? path : undefined, options?.preserveRestoredModel !== false);
+				await this.#enter(
+					typeof path === "string" ? path : undefined,
+					options?.preserveRestoredModel !== false,
+					current,
+				);
 			}
 			this.#log("plan_reconcile_completed", "reconcile", this.#entered ? "restored" : "inactive", {
 				elapsed_ms: performance.now() - started,
@@ -573,7 +577,7 @@ export class RpcPlanController {
 		else await this.#session.setModelTemporary(previous.model, previous.thinkingLevel);
 	}
 
-	async #exit(paused: boolean, journal = true): Promise<void> {
+	async #exit(paused: boolean, journal = true, ensureRead = false): Promise<void> {
 		const started = performance.now();
 		this.#log("plan_exit_started", "exit", "started", { paused });
 		const session = this.#session;
@@ -584,8 +588,12 @@ export class RpcPlanController {
 		const currentModel = model ? { model, thinkingLevel: session.configuredThinkingLevel() } : undefined;
 		session.setPlanModeState(undefined);
 		try {
-			if (this.#previousTools)
-				await session.restoreNonMCPToolPresentation(this.#previousTools.enabled, this.#previousTools.mounted);
+			if (this.#previousTools) {
+				// Approved execution keeps the durable plan readable, as in the TUI approval flow.
+				const enabled = this.#previousTools.enabled;
+				const executionTools = ensureRead && !enabled.includes("read") ? [...enabled, "read"] : enabled;
+				await session.restoreNonMCPToolPresentation(executionTools, this.#previousTools.mounted);
+			}
 			if (this.#previousModel) await this.#restoreModel(this.#previousModel);
 		} catch (error) {
 			this.#log("plan_rollback_started", "exit_rollback", "started", { elapsed_ms: performance.now() - started });
@@ -655,7 +663,7 @@ export class RpcPlanController {
 			await this.#enqueue(async () => {
 				result = "cancelled";
 				if (!current() || !this.#session.getPlanModeState()?.enabled) return;
-				await this.#exit(false);
+				await this.#exit(false, true, true);
 			});
 			if (!current()) return;
 			result = "cancelled";

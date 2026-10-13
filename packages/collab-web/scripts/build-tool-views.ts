@@ -8,7 +8,7 @@
  * Run via `bun run gen:tool-views` after changing src/tool-render/.
  */
 import * as path from "node:path";
-import { withCompilerActivity } from "../../../scripts/test-gate-runtime";
+import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const root = path.join(import.meta.dir, "..");
 const outFile = path.join(root, "../coding-agent/src/export/html/tool-views.generated.js");

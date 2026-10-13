@@ -548,10 +548,16 @@ export async function runCli(argv: string[]): Promise<void> {
 		resolvedArgv[0] === "--version" ||
 		resolvedArgv[0] === "-v" ||
 		resolvedArgv[0] === "help";
-	if (isProcessEntry && !helpOrVersion) {
-		// Latency boundary: help/version and SDK imports must not load diagnostic initialization.
-		const { initializeDiagnosticLogging } = await import("@oh-my-pi/pi-utils/logger");
-		initializeDiagnosticLogging("cli");
+	if (!helpOrVersion) {
+		// Static import cannot work: it would load the default profile's dotenv
+		// before setProfile. Explicit dotenv values must also precede fork network
+		// defaults and diagnostic directory resolution.
+		await import("@oh-my-pi/pi-utils/env");
+		if (isProcessEntry) {
+			// Latency boundary: help/version and SDK imports must not load diagnostic initialization.
+			const { initializeDiagnosticLogging } = await import("@oh-my-pi/pi-utils/logger");
+			initializeDiagnosticLogging("cli");
+		}
 	}
 	await Promise.all([setFullProcessName(), helpOrVersion ? Promise.resolve() : installNetworkBootstrap()]);
 

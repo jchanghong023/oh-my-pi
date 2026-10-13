@@ -15,10 +15,17 @@
 // loopback model stub; unlike the model, repository indexing and tools are real.
 
 import * as fs from "node:fs/promises";
-import { rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { PtySession } from "@oh-my-pi/pi-natives";
+import { IpcConnection, Process, PtySession } from "@oh-my-pi/pi-natives";
+import { isEnoent, postmortem } from "@oh-my-pi/pi-utils";
+import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
+import { daemonBrokerEndpoint } from "../packages/coding-agent/src/launch/paths";
+import {
+	parseDaemonRpcResult,
+	parseDaemonWireMessage,
+	type DaemonWireRequest,
+} from "../packages/coding-agent/src/launch/protocol";
 import { runRepoSmoke } from "./repo-ui-smoke";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
@@ -32,13 +39,93 @@ interface Outcome {
 const debugDump = process.argv.includes("--debug");
 const teamOnly = process.argv.includes("--team-only");
 
-// Filled once the /team stub server exists. fail() exits the process, which
-// bypasses the try/finally that normally stops the server and removes the team
-// config root — this cleanup gives the failure path the same teardown. Declared
-// before any fail() call site can run: base-case failures happen before the
-// server (and teamConfigRoot below) even exist, and `.run?.()` must stay a
-// no-op there rather than hit a temporal dead zone.
-const stubServerCleanup: { run?: () => void } = {};
+// Both normal teardown and fatal cleanup must await fixture-owned brokers.
+const stubServerCleanup: { run?: () => Promise<void> } = {};
+const activeTuis = new Set<TuiHandle>();
+
+async function cleanupSmokeFixture(): Promise<void> {
+	const cleanup = stubServerCleanup.run;
+	stubServerCleanup.run = undefined;
+	await cleanup?.();
+}
+
+postmortem.register("ui-smoke-fixture", cleanupSmokeFixture);
+
+async function removeFixture(configRoot: string): Promise<void> {
+	// PTY completion only reaps the dev command. Detached brokers have their
+	// own lease and idle shutdown; deleting first races their final meta writes.
+	for (const handle of activeTuis) {
+		try {
+			handle.session.kill();
+		} catch {}
+		const exited = await Promise.race([handle.exitPromise, sleep(20_000).then(() => undefined)]);
+		if (!exited) throw new Error("Fixture TUI did not exit before cleanup");
+	}
+	const runtimeRoot = path.join(configRoot, "run", "daemons");
+	try {
+		await fs.access(runtimeRoot);
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+		await removeWithRetries(configRoot);
+		return;
+	}
+	// Only authenticated scopes inside this mkdtemp root are ours. Never use
+	// daemonClientForGlobal(), which would resolve the user's shared broker.
+	for await (const tokenFile of new Bun.Glob("**/broker.token").scan(runtimeRoot)) {
+		const runtimeDir = path.dirname(path.join(runtimeRoot, tokenFile));
+		let lease: { pid: number };
+		try {
+			lease = JSON.parse(await fs.readFile(path.join(runtimeDir, "broker.pid"), "utf8")) as { pid: number };
+		} catch (error) {
+			if (isEnoent(error)) continue; // Already released; never spawn a replacement.
+			throw error;
+		}
+		if (!Number.isInteger(lease.pid) || lease.pid <= 0)
+			throw new Error(`Invalid fixture broker lease: ${runtimeDir}`);
+		const broker = Process.fromPid(lease.pid);
+		if (!broker || broker.status() === "exited") continue;
+		let connection: IpcConnection | undefined;
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			const token = (await fs.readFile(path.join(runtimeDir, "broker.token"), "utf8")).trim();
+			connection = await IpcConnection.connect(daemonBrokerEndpoint(runtimeDir), {
+				framing: "lines",
+				timeoutMs: 250,
+			});
+			const id = crypto.randomUUID();
+			const response = Promise.withResolvers<void>();
+			timer = setTimeout(() => response.reject(new Error("Fixture broker shutdown response timed out")), 5_000);
+			connection.start(
+				line => {
+					try {
+						const message = parseDaemonWireMessage(JSON.parse(line));
+						if ("event" in message || message.id !== id) return;
+						if (!message.ok) throw new Error(message.error);
+						parseDaemonRpcResult({ op: "shutdown" }, message.result);
+						response.resolve();
+					} catch (error) {
+						response.reject(error);
+					}
+				},
+				() => response.reject(new Error("Fixture broker connection closed")),
+			);
+			console.log(`ui-smoke: releasing fixture broker (${runtimeDir})`);
+			connection.send(JSON.stringify({ id, token, operation: { op: "shutdown" } } satisfies DaemonWireRequest));
+			await response.promise;
+		} catch (error) {
+			// The normal idle timer may win the shutdown race. Only a stable
+			// process-exit observation makes that an already-released scope.
+			if (broker.status() !== "exited") throw error;
+		} finally {
+			clearTimeout(timer);
+			connection?.destroy();
+		}
+		if (!(await broker.waitForExit({ timeoutMs: 5_000 }))) {
+			throw new Error(`Fixture broker did not exit after shutdown: ${runtimeDir}`);
+		}
+	}
+	await removeWithRetries(configRoot);
+}
 
 function dumpTail(handle: TuiHandle, bytes = 3500): void {
 	const normalizedTail = normalizePtyOutput(handle.output).slice(-bytes);
@@ -78,6 +165,7 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 		exited = resolve;
 	});
 	handle.exitPromise = exitPromise;
+	activeTuis.add(handle);
 	const result = session.startArgv(
 		{
 			application: process.execPath,
@@ -114,8 +202,15 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 		},
 	);
 	result.then(
-		outcome => exited?.(outcome as Outcome),
-		error => fail(`PTY session failed: ${error instanceof Error ? error.message : String(error)}`, session),
+		outcome => {
+			activeTuis.delete(handle);
+			exited?.(outcome as Outcome);
+		},
+		error => {
+			activeTuis.delete(handle);
+			exited?.({ exitCode: 1, cancelled: false, timedOut: false });
+			fail(`PTY session failed: ${error instanceof Error ? error.message : String(error)}`, session);
+		},
 	);
 	return handle;
 }
@@ -131,9 +226,8 @@ function fail(message: string, ...sessions: PtySession[]): never {
 			session.kill();
 		} catch {}
 	}
-	// process.exit() below skips the try/finally cleanup, so run it here too.
-	stubServerCleanup.run?.();
-	process.exit(1);
+	// Throw so finally/postmortem can await child and broker teardown before exit.
+	throw new Error(message);
 }
 
 /** Strip ANSI escape sequences and line wraps so assertions survive TUI repaints. */
@@ -153,11 +247,7 @@ if (process.argv.includes("--repo-only")) {
 // ── 1. Startup render ────────────────────────────────────────────────────────
 console.log("ui-smoke: waiting for the full-screen interface to render…");
 const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
-stubServerCleanup.run = () => {
-	try {
-		rmSync(baseConfigRoot, { recursive: true, force: true });
-	} catch {}
-};
+stubServerCleanup.run = () => removeFixture(baseConfigRoot);
 const main = startTui(["--profile", "localci-ui"], {
 	PI_CONFIG_DIR: path.basename(baseConfigRoot),
 	OMP_OFFLINE: "1",
@@ -209,8 +299,7 @@ main.session.write("\x04");
 	}
 }
 console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
-await fs.rm(baseConfigRoot, { recursive: true, force: true });
-stubServerCleanup.run = undefined;
+await cleanupSmokeFixture();
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
 // The `/team` case runs a real TUI (no OMP_OFFLINE) whose session model and
@@ -221,6 +310,7 @@ stubServerCleanup.run = undefined;
 // report must land in the transcript.
 const TEAM_PROFILE = "localci-ui-team";
 const teamConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-team-smoke-"));
+stubServerCleanup.run = () => removeFixture(teamConfigRoot);
 const TEAM_CONFIG_DIR_NAME = path.basename(teamConfigRoot);
 
 interface StubRequestLog {
@@ -434,10 +524,11 @@ function stubSseBody(
 	return frames.join("");
 }
 
-function messageTexts(message: unknown): { texts: string[]; hasToolResult: boolean } {
+function messageTexts(message: unknown): { texts: string[]; hasToolResult: boolean; toolResultFailed: boolean } {
 	const content = (message as { content?: unknown }).content;
 	const texts: string[] = [];
 	let hasToolResult = false;
+	let toolResultFailed = false;
 	if (typeof content === "string") {
 		texts.push(content);
 	} else if (Array.isArray(content)) {
@@ -445,10 +536,13 @@ function messageTexts(message: unknown): { texts: string[]; hasToolResult: boole
 			if (typeof block !== "object" || block === null) continue;
 			const type = (block as { type?: string }).type;
 			if (type === "text") texts.push((block as { text?: string }).text ?? "");
-			if (type === "tool_result") hasToolResult = true;
+			if (type === "tool_result") {
+				hasToolResult = true;
+				toolResultFailed ||= !("is_error" in block) || block.is_error !== false;
+			}
 		}
 	}
-	return { texts, hasToolResult };
+	return { texts, hasToolResult, toolResultFailed };
 }
 
 const stubServer = Bun.serve({
@@ -483,7 +577,7 @@ const stubServer = Bun.serve({
 			// - the tool-result follow-up of that write call → closing text;
 			// - anything else → warm-up chatter.
 			const last = messages.at(-1);
-			const lastInfo = last ? messageTexts(last) : { texts: [], hasToolResult: false };
+			const lastInfo = last ? messageTexts(last) : { texts: [], hasToolResult: false, toolResultFailed: false };
 			const wantsCancel = lastInfo.texts.some(text => text.includes("CANCELTEAM"));
 			if (wantsCancel && dispatchJobId) {
 				stubRequests.push({ model: requestModel, stage: "proc-cancel" });
@@ -497,6 +591,9 @@ const stubServer = Bun.serve({
 						},
 					},
 				);
+			}
+			if (lastInfo.toolResultFailed) {
+				return new Response("Cancellation tool returned an error", { status: 500 });
 			}
 			const closing = lastInfo.hasToolResult;
 			stubRequests.push({ model: requestModel, stage: closing ? "main-close" : "main-chat" });
@@ -521,15 +618,12 @@ const stubServer = Bun.serve({
 	},
 });
 console.log(`ui-smoke: /team stub Anthropic server on 127.0.0.1:${stubServer.port}`);
-stubServerCleanup.run = () => {
-	try {
-		stubServer.stop(true);
-	} catch {}
-	try {
-		rmSync(teamConfigRoot, { recursive: true, force: true });
-	} catch {}
+stubServerCleanup.run = async () => {
+	stubServer.stop(true);
+	await removeFixture(teamConfigRoot);
 };
 
+let teamFailed = false;
 try {
 	const profileAgentDir = path.join(teamConfigRoot, "profiles", TEAM_PROFILE, "agent");
 	await fs.mkdir(profileAgentDir, { recursive: true });
@@ -786,9 +880,14 @@ try {
 		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`);
 	}
 	console.log("ui-smoke: /team cancellation case PASS — cancel reached the orchestrator before any later stage");
+} catch (error) {
+	teamFailed = true;
+	throw error;
 } finally {
-	stubServer.stop(true);
-	await fs.rm(teamConfigRoot, { recursive: true, force: true }).catch(() => {});
+	await cleanupSmokeFixture().catch(error => {
+		console.error(`ui-smoke: team fixture cleanup failed: ${String(error)}`);
+		if (!teamFailed) throw error;
+	});
 }
 
 await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });

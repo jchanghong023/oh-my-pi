@@ -32,8 +32,14 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
+	const env = buildChildEnv();
+	// GateRun overlays command environments on the host environment. Preserve
+	// the shared scrubber's deletions so that overlay cannot restore credentials.
+	for (const key of Object.keys(process.env)) {
+		if (!(key in env)) env[key] = undefined;
+	}
 	return {
-		...buildChildEnv(),
+		...env,
 		HOME: home,
 		USERPROFILE: home,
 		// Ignore host profile/root selectors; children may explicitly select fixtures.
@@ -312,6 +318,9 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 				1,
 			);
 		}
+	} catch (error) {
+		// Record the triggering failure before cleanup can report its own error.
+		throw gate.fail(error);
 	} finally {
 		const cleanupStarted = performance.now();
 		logger.info("Fulltest isolated home cleanup started", {
@@ -338,7 +347,7 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 				elapsed_ms: performance.now() - cleanupStarted,
 				...logger.diagnosticError(error),
 			});
-			throw error;
+			throw gate.fail(error);
 		}
 	}
 }

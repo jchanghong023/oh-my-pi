@@ -13,6 +13,7 @@
 
 - Running subagent counts stay in their configured status-line group instead of always moving to the right.
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.
+- Kept the Rounded Box default consistent during uncached startup, shape previews, and setup selection.
 
 ### Added
 

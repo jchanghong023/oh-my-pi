@@ -67,12 +67,37 @@ if (plan.nested) {
 }
 if (plan.nestedCapture) {
   // This intentionally exercises module loading in an independently spawned harness.
-  const {runGate} = await import(plan.runtime);
+  const {GateCommandError,runGate} = await import(plan.runtime);
+  const controller = new AbortController();
   let captured;
+  let captureError;
   const result = await runGate("fulltest", async gate => {
-    captured = await gate.capture({label:"capture fixture",argv:[process.execPath,import.meta.path,JSON.stringify({output:"private fixture bytes\\n"})]});
-  }, {print:()=>{}});
-  process.stdout.write("CAPTURE_RESULT" + JSON.stringify(captured));
+    const capture = gate.capture({
+      label:"capture fixture",
+      argv:[process.execPath,import.meta.path,JSON.stringify({
+        output:"private fixture bytes\\n",
+        barrierReady:plan.barrierReady,
+        barrierRelease:plan.barrierRelease,
+        trailingBytes:plan.streamOutput && !plan.cancelCapture,
+        ms:plan.cancelCapture ? 30000 : 0,
+      })],
+      streamOutput:plan.streamOutput,
+    }).then(value => { captured=value; }, error => {
+      captureError={message:error.message,exitCode:error.exitCode,status:error.status};
+      throw error;
+    });
+    if (plan.cancelCapture) await Promise.all([capture,gate.charged(async () => {
+      while (!gate.signal.aborted) {
+        try { await fs.access(plan.cancelFile); break; } catch (error) { if(error.code !== "ENOENT") throw error; }
+        await Bun.sleep(5);
+      }
+      if (gate.signal.aborted) throw gate.signal.reason;
+      controller.abort(new GateCommandError("fixture capture interrupted",130,"INTERRUPTED"));
+    })]);
+    else await capture;
+  }, {signal:controller.signal,limitSeconds:plan.streamOutput ? 2 : undefined,print:()=>{}});
+  process.stdout.write("CAPTURE_RESULT" + JSON.stringify(captured ?? null));
+  if (plan.streamOutput) process.stdout.write("\\nCAPTURE_STATUS" + JSON.stringify({result,captureError}));
   process.exit(result.exitCode);
 }
 if (plan.rustCargo) {
@@ -161,6 +186,10 @@ await waiting.promise;
 const phaseEnd=gateClockNanoseconds();
 if (plan.events) process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + " " + JSON.stringify({id:"compiler",kind:"idle",at:phaseEnd.toString(),clock:process.env.OMP_GATE_CLOCK_TOKEN}) + "\\n");
 if (plan.phaseTiming) process.stdout.write(JSON.stringify({start:phaseStart.toString(),end:phaseEnd.toString()}));
+if (plan.trailingBytes) {
+  process.stdout.write(new Uint8Array([0xe2]));
+  process.stderr.write(new Uint8Array([0xe2]));
+}
 process.exit(plan.exit ?? 0);
 `,
 	);
@@ -1205,6 +1234,7 @@ it("returns captured bytes without echoing them into the surrounding stream", as
 				}),
 			);
 			expect(captured.stdout.startsWith("CAPTURE_RESULT")).toBe(true);
+			expect(captured.stderr).toBe("");
 			const nested: unknown = JSON.parse(captured.stdout.slice("CAPTURE_RESULT".length));
 			expect(nested).toEqual({ exitCode: 0, stdout: "private fixture bytes\n", stderr: "stderr preserved\n" });
 		},
@@ -1212,6 +1242,88 @@ it("returns captured bytes without echoing them into the surrounding stream", as
 	);
 	expect(result.status).toBe("PASS");
 });
+for (const cancelCapture of [false, true]) {
+	it(
+		cancelCapture
+			? "preserves streamed diagnostics once when capture is cancelled"
+			: "streams capture before completion and returns every byte including decoder tails",
+		async () => {
+			const prefix = cancelCapture ? "stream-cancel" : "stream-complete";
+			const ready = path.join(directory, `${prefix}.ready`);
+			const release = path.join(directory, `${prefix}.release`);
+			const cancelFile = path.join(directory, `${prefix}.cancel`);
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					stub,
+					JSON.stringify({
+						nestedCapture: true,
+						streamOutput: true,
+						cancelCapture,
+						cancelFile,
+						barrierReady: ready,
+						barrierRelease: release,
+						runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+					}),
+				],
+				{ stdout: "pipe", stderr: "pipe" },
+			);
+			let stdout = "";
+			let stderr = "";
+			let exited = false;
+			const visible = Promise.withResolvers<void>();
+			const pump = async (stream: ReadableStream<Uint8Array>, output: "stdout" | "stderr") => {
+				const decoder = new TextDecoder();
+				for await (const bytes of stream) {
+					const chunk = decoder.decode(bytes, { stream: true });
+					if (output === "stdout") stdout += chunk;
+					else stderr += chunk;
+					if (stdout.includes("private fixture bytes\n") && stderr.includes("stderr preserved\n"))
+						visible.resolve();
+				}
+				if (output === "stdout") stdout += decoder.decode();
+				else stderr += decoder.decode();
+			};
+			const pumps = Promise.all([pump(child.stdout, "stdout"), pump(child.stderr, "stderr")]);
+			const exit = child.exited.then(code => {
+				exited = true;
+				return code;
+			});
+			try {
+				await Promise.race([visible.promise, exit]);
+				expect(exited).toBe(false);
+				expect(stdout).toBe("private fixture bytes\n");
+				expect(stderr).toBe("stderr preserved\n");
+				expect(stdout).not.toContain("CAPTURE_RESULT");
+				await fs.writeFile(cancelCapture ? cancelFile : release, "ready");
+				const exitCode = await exit;
+				await pumps;
+				expect(exitCode).toBe(cancelCapture ? 130 : 0);
+				const [captured, status] = stdout.split("CAPTURE_RESULT")[1]!.split("\nCAPTURE_STATUS");
+				expect(stdout.split("CAPTURE_RESULT")[0]).toBe(`private fixture bytes\n${cancelCapture ? "" : "\uFFFD"}`);
+				expect(stderr).toBe(`stderr preserved\n${cancelCapture ? "" : "\uFFFD"}`);
+				expect(JSON.parse(captured!)).toEqual(
+					cancelCapture
+						? null
+						: { exitCode: 0, stdout: "private fixture bytes\n\uFFFD", stderr: "stderr preserved\n\uFFFD" },
+				);
+				const record = JSON.parse(status!);
+				expect(record.result.status).toBe(cancelCapture ? "INTERRUPTED" : "PASS");
+				expect(record.result.exitCode).toBe(cancelCapture ? 130 : 0);
+				if (cancelCapture)
+					expect(record.captureError).toEqual({
+						message: "fixture capture interrupted",
+						exitCode: 130,
+						status: "INTERRUPTED",
+					});
+			} finally {
+				await Promise.all([fs.writeFile(release, "ready"), fs.writeFile(cancelFile, "ready")]);
+				await Promise.all([exit, pumps]);
+			}
+		},
+		15000,
+	);
+}
 it("computes timestamped compiler union despite delayed out-of-order event delivery", async () => {
 	let observed = 0;
 	const result = await runGate(

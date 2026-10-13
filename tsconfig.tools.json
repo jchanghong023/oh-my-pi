@@ -6,6 +6,12 @@
 		"emitDeclarationOnly": false,
 		"allowImportingTsExtensions": true
 	},
-	"include": ["scripts", "packages/natives/scripts/gen-npm-packages.ts"],
+	"include": [
+		"scripts",
+		"packages/natives/scripts/gen-npm-packages.ts",
+		"packages/coding-agent/src/launch/paths.ts",
+		"packages/coding-agent/src/launch/protocol.ts",
+		"packages/coding-agent/src/cli/worker-selectors.ts"
+	],
 	"exclude": ["node_modules"]
 }

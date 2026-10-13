@@ -851,7 +851,7 @@ tui:
 
 | Key                           | Type    | Default          | Values                                                                    |
 | ----------------------------- | ------- | ---------------- | ------------------------------------------------------------------------- |
-| `theme.dark`                  | string  | `titanium`       | Theme used on a dark terminal background.                                 |
+| `theme.dark`                  | string  | `dark-terminal`  | Theme used on a dark terminal background.                                 |
 | `theme.light`                 | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`                | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`              | boolean | `false`          | Use blue instead of green for diff additions.                             |
@@ -896,7 +896,7 @@ The `cost` segment shows recorded session costs. For an active provider/model wi
 | `startup.quiet` | boolean | `false` | Suppress welcome/startup chrome, including the splash. |
 | `startup.showSplash` | boolean | `false` | Show the full setup animation on ordinary interactive startup without rerunning setup. |
 | `startup.changelogMode` | enum | `summary` | `summary`, `expanded`, `hidden`: choose startup release-note presentation. |
-| `startup.setupWizard` | boolean | `true` | Show newly added onboarding steps once per setup version. |
+| `startup.setupWizard` | boolean | `false` | Show newly added onboarding steps once per setup version. |
 
 ### Providers and services
 
@@ -954,7 +954,7 @@ searxng:
 | `speech.voice`                      | enum    | `af_heart` | Kokoro voice used when assistant-output vocalization is enabled.                                                                                                                                                                                                                                                                                                                                                                     |
 | `speech.speed`                      | number  | `1`       | Speaking rate for assistant-output vocalization. `1` is normal; values are clamped to `0.5`–`2.5`.                                                                                                                                                                                                                                                                                                                                   |
 | `stt.enabled`                       | boolean | `false`   | Enable microphone speech-to-text; choose the recognition model with `modelRoles.dictation`.                                                                                                                                                                                                                                                                                                                                           |
-| `stt.language`                      | string  | `en`      | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `stt.language`                      | string  | `zh-CN`   | Source language hint for speech-to-text.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `stt.submitTrigger`                 | enum    | `never`   | When completed dictation auto-submits: `never`, `release`, `release-complete`, or `say-submit`.                                                                                                                                                                                                                                                                                                                                        |
 | `providers.openaiWebsockets`        | enum    | `auto`    | `auto`, `off`, `on`.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `providers.streamFirstEventTimeoutSeconds` | number | `-1` | First stream-event watchdog: `-1` uses provider/env defaults, `0` disables, positive values set seconds. |

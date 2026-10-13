@@ -92,7 +92,8 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			// the submission back for the user to fix and resubmit; a successful one
 			// consumes the text and the submitted images it still owns.
 			if (outcome.started) {
-				clearSubmittedText(runtime);
+				const currentText = ctx.editor.getExpandedText();
+				if (!currentText || currentText === command.text) clearSubmittedText(runtime);
 				dropSubmittedImages(runtime);
 			} else if (runtime.draftDetached) {
 				// The follow-up path took the draft's images out of the editor

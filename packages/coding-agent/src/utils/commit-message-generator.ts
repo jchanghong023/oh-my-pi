@@ -5,8 +5,10 @@
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -61,14 +63,15 @@ function getSmolModelCandidates(
 		matchPreferences,
 	});
 	addCandidate(configuredSmol.model, concreteThinkingLevel(configuredSmol.thinkingLevel));
+	const automaticModels = availableModels.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
 
 	for (const pattern of MODEL_PRIO.smol) {
 		const needle = pattern.toLowerCase();
-		addCandidate(availableModels.find(m => m.id.toLowerCase() === needle));
-		addCandidate(availableModels.find(m => m.id.toLowerCase().includes(needle)));
+		addCandidate(automaticModels.find(m => m.id.toLowerCase() === needle));
+		addCandidate(automaticModels.find(m => m.id.toLowerCase().includes(needle)));
 	}
 
-	for (const model of availableModels) {
+	for (const model of automaticModels) {
 		addCandidate(model);
 	}
 
@@ -102,8 +105,12 @@ export async function generateCommitMessage(
 	const userMessage = `<diff>\n${truncatedDiff}\n</diff>`;
 
 	for (const candidate of candidates) {
+		const terminalFailure = candidate.model.provider === "codeagent" || isJchToolsAgentModel(candidate.model);
 		const apiKey = await registry.getApiKey(candidate.model, sessionId);
-		if (!apiKey) continue;
+		if (!apiKey) {
+			if (terminalFailure) return null;
+			continue;
+		}
 
 		try {
 			const maxTokens = COMMIT_MAX_TOKENS;
@@ -123,11 +130,13 @@ export async function generateCommitMessage(
 							reasoning: toReasoningEffort(candidate.thinkingLevel),
 						},
 					),
-				{ provider: candidate.model.provider },
+				{ provider: candidate.model.provider, maxAttempts: terminalFailure ? 1 : undefined },
 			);
+			if (terminalFailure && response.stopReason === "aborted") return null;
 
 			if (response.stopReason === "error") {
 				logger.debug("commit-msg-generator: error", { model: candidate.model.id, error: response.errorMessage });
+				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -136,7 +145,10 @@ export async function generateCommitMessage(
 				if (content.type === "text") msg += content.text;
 			}
 			msg = msg.trim();
-			if (!msg) continue;
+			if (!msg) {
+				if (terminalFailure) return null;
+				continue;
+			}
 
 			// Clean up: remove wrapping quotes, backticks, trailing period
 			msg = msg.replace(/^[`"']|[`"']$/g, "").replace(/\.$/, "");
@@ -148,6 +160,7 @@ export async function generateCommitMessage(
 				model: candidate.model.id,
 				error: err instanceof Error ? err.message : String(err),
 			});
+			if (terminalFailure) return null;
 		}
 	}
 

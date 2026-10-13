@@ -40,7 +40,7 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 4. If every match is a stub, the call still answers with the locating headers instead of failing.
 
 ## Side Effects
-- None on disk or session state; the tool is read-only (`approval: "read"`).
+- Does not import or remove indexes, modify source documents, or change session state (`approval: "read"`). Opening the local database may create its storage or migrate older searchable text from stored Markdown; queries also write bounded diagnostic logs.
 
 ## Limits & Caps
 - Page budget: ~20,000 characters, the opening header line included; sections per call: 200.

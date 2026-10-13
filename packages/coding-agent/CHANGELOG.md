@@ -15,14 +15,31 @@
 
 - The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
 - Ask dialogs now auto-select after 30 seconds by default; explicit zero still disables the timeout, and unanswered settings approvals are denied.
-- Default startup now hides the welcome screen, splash, changelog, and status messages, and skips automatic setup; explicit startup settings and `--setup` remain available.
+- Default startup skips automatic setup while retaining the welcome screen and startup status messages; explicit startup settings and `--setup` remain available.
 
 ### Fixed
 
+- Windows installer kill fallback preserves the previous executable so a failed replacement can still roll back.
 - Preserved CodeAgent forced tool choice and busy-agent input delivery, restored truncation warnings and context maintenance without replay, and hid the Windows-only provider on unsupported platforms.
 - CodeAgent keeps working cached credentials when the Windows registry contains an empty token value.
 - Prevented compaction summary and handoff retries from bypassing CodeAgent and JchTools replay policy.
 - Switching or resuming a compacted conversation with JchTools preserves its original visible messages without replaying history from before `/clear`.
+- Prevented outer retries and model fallbacks from replaying failed CodeAgent and JchTools auxiliary requests, and kept automatic model choices consistent with provider policy.
+- Preserved remote ACP task text and rejected unsupported media; remote steer and follow-up commands no longer collide with local extension commands.
+- Cleared unavailable JchTools sessions reported through SSE and excluded generated magic-keyword notices from remote history.
+- Applied offline model routing to `if-bench` and loaded agent `.env` overrides before CLI network bootstrap.
+- Rebuilt stored Markdown search tokens for BOM-prefixed split code fences and displayed full source identity in the wiki hub.
+- Preserved session ownership across asynchronous tool creation, kept device-only write restrictions during reconciliation, and respected the caller's revision when deleting RPC sessions.
+- Restored read access when approved RPC plans execute and stopped cancelled plan restoration before changing modes.
+- Preserved new drafts during `/team` dispatch, handled synchronous progress-output failures, and retained review evidence in revision and synthesis prompts.
+- Used each isolation worktree's directory for generated commit summaries and kept descendant-cleanup diagnostics free of exception bodies.
+- Applied the installer's TLS defaults to POSIX downloads and completed release-metadata diagnostics.
+- Kept WSL preflight refusal from cancelling local verification, preserved isolated gate environments and first-failure reporting, and included prototype-named source paths in stability fingerprints.
+- Restored dependency-free browser-relay release builds without changing compiler-activity accounting.
+- Tightened cancellation and cleanup reporting in the existing UI verification scripts without changing their acceptance criteria.
+- Preserved `/team` subagent originals in the existing discussion job result for source review, including failed or cancelled outputs, and rejected results from a different concrete participant model.
+- Shut down fixture-owned detached brokers before deleting UI-smoke directories, avoiding Windows cleanup failures without touching shared user services.
+- Stream captured Linux verification output during slowtest so timeout and first-failure cancellation preserve diagnostics without replaying the output at completion.
 
 ### Added
 

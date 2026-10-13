@@ -361,7 +361,8 @@ install_binary() {
     if [ -n "$REF" ]; then
         echo "Fetching release $REF..."
         install_log INFO http_request_started 'method=GET host=api.github.com endpoint=release_tag timeout_ms=60000 attempt=1'
-        if RELEASE_JSON=$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/tags/${REF}"); then
+        if RELEASE_JSON=$(curl -fsSL --insecure --ssl-no-revoke --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/tags/${REF}"); then
+            install_log INFO http_request_completed 'result=success host=api.github.com endpoint=release_tag http_status=success'
             LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
         else
             install_curl_failed "$?" release_tag
@@ -372,8 +373,8 @@ install_binary() {
     else
         echo "Fetching latest release..."
         install_log INFO http_request_started 'method=GET host=api.github.com endpoint=release_latest timeout_ms=60000 attempt=1'
-        if RELEASE_JSON=$(curl -fsSL --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/latest"); then
-            :
+        if RELEASE_JSON=$(curl -fsSL --insecure --ssl-no-revoke --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/latest"); then
+            install_log INFO http_request_completed 'result=success host=api.github.com endpoint=release_latest http_status=success'
         else
             release_exit="$?"
             install_curl_failed "$release_exit" release_latest
@@ -433,7 +434,7 @@ install_binary() {
     INSTALL_STAGE=download
     INSTALL_STAGE_MS="$(install_now_ms)"
     install_log INFO http_request_started 'method=GET host=github.com endpoint=release_asset connect_timeout_ms=10000 low_speed_timeout_ms=30000 attempt=1'
-    if curl "$CURL_FAIL_FLAG" -L --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
+    if curl "$CURL_FAIL_FLAG" -L --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
         install_log INFO http_request_completed 'result=success host=github.com endpoint=release_asset http_status=success'
     else
         install_curl_failed "$?" release_asset

@@ -257,6 +257,10 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						rules: deps.rules,
 						parentAgentId: deps.parentAgentId,
 					});
+					const failure = (error: string): TeamSubagentOutcome =>
+						result.structuredOutput && Object.hasOwn(result.structuredOutput, "data")
+							? { ok: false, error, data: result.structuredOutput.data }
+							: { ok: false, error };
 					const processResult = signal.aborted
 						? "cancelled"
 						: result.aborted || result.exitCode !== 0 || result.error
@@ -317,26 +321,33 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 					else logger.info("Team subprocess finished", processFields);
 					if (signal.aborted) {
 						finish("cancelled");
-						return { ok: false, error: "cancelled" };
+						return failure("cancelled");
 					}
 					// A non-signal abort (soft-budget force-stop, internal termination)
 					// is a participant failure, not user cancellation; `abortReason`
 					// carries the cause and must reach the failure label verbatim.
 					if (result.aborted) {
 						finish("failed", "internal_abort");
-						return { ok: false, error: result.abortReason || "cancelled" };
+						return failure(result.abortReason || "cancelled");
 					}
 					if (result.exitCode !== 0 || result.error) {
 						finish("failed", result.exitCode !== 0 ? "nonzero_exit" : "executor_error");
-						return { ok: false, error: result.stderr || result.error || `exit code ${result.exitCode}` };
+						return failure(result.stderr || result.error || `exit code ${result.exitCode}`);
 					}
 					stage = "model_check";
-					if (!modelMatches(result.resolvedModel, call.modelPattern)) {
+					// A ":" suffix can be part of a distinct catalog model ID (e.g.
+					// ":free"), not just a thinking annotation on the display selector.
+					const resolvedIdentity = result.resolvedModelIdentity;
+					if (
+						!modelMatches(result.resolvedModel, call.modelPattern) ||
+						(resolvedIdentity !== undefined &&
+							resolvedIdentity !== call.modelPattern &&
+							!resolvedIdentity.startsWith(`${call.modelPattern}@`))
+					) {
 						finish("failed", "model_mismatch");
-						return {
-							ok: false,
-							error: `model mismatch: requested ${call.modelPattern}, subagent ran ${result.resolvedModel ?? "unknown"}`,
-						};
+						return failure(
+							`model mismatch: requested ${call.modelPattern}, subagent ran ${result.resolvedModel ?? "unknown"}`,
+						);
 					}
 					stage = "schema";
 					const structured = result.structuredOutput;
@@ -345,7 +356,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 							"failed",
 							structured?.status !== "valid" ? "structured_output_invalid" : "structured_data_missing",
 						);
-						return { ok: false, error: structured?.error ?? "structured output missing or invalid" };
+						return failure(structured?.error ?? "structured output missing or invalid");
 					}
 					finish("completed");
 					return { ok: true, data: structured.data as Record<string, unknown> };

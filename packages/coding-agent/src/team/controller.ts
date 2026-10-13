@@ -9,6 +9,7 @@
  * transcript via `appendCustomMessage`, never as a model-facing delivery.
  */
 import { logger } from "@oh-my-pi/pi-utils";
+import { AsyncJobError, type AsyncJobRunResult } from "../async";
 import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import { getCompanyChatModels } from "../config/company-models";
@@ -258,24 +259,24 @@ async function startTeamDiscussionImpl(
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks } = args;
-	// Best-effort transcript output: a rejecting output hook must never become
-	// an unhandled rejection (it can take down the whole process).
-	const emitOutput = (text: string): void => {
-		const pending = hooks.output?.(text);
-		if (pending instanceof Promise)
-			void pending.catch(error => {
-				logger.warn("Team output hook failed", {
-					component: "team.controller",
-					event: "team_output_failed",
-					stage: "ui",
-					result: "failed",
-					...logger.diagnosticError(error),
-				});
+	// Best-effort transcript output: synchronous throws and rejected promises
+	// must not turn a UI failure into a failed dispatch or discussion.
+	const emitOutput = async (text: string): Promise<void> => {
+		try {
+			await hooks.output?.(text);
+		} catch (error) {
+			logger.warn("Team output hook failed", {
+				component: "team.controller",
+				event: "team_output_failed",
+				stage: "ui",
+				result: "failed",
+				...logger.diagnosticError(error),
 			});
+		}
 	};
 	const report = (text: string): void => {
 		hooks.showError?.(text);
-		emitOutput(text);
+		void emitOutput(text);
 	};
 
 	const sessionModel = session.model;
@@ -343,6 +344,7 @@ async function startTeamDiscussionImpl(
 					let stage = "discussion";
 					let discussionStatus: string | undefined;
 					let deliveryCompleted = false;
+					let jobResult: AsyncJobRunResult | undefined;
 					logger.info("Team job started", {
 						component: "team.controller",
 						event: "team_job_started",
@@ -368,7 +370,7 @@ async function startTeamDiscussionImpl(
 						const onProgress = (update: TeamProgressUpdate): void => {
 							void reportProgress(update.text, { stage: update.stage, participants: update.participants });
 							hooks.showStatus?.(update.text);
-							emitOutput(update.text);
+							void emitOutput(update.text);
 						};
 						const onReportPersisted = (): void | Promise<void> => {
 							const ackStarted = performance.now();
@@ -411,6 +413,18 @@ async function startTeamDiscussionImpl(
 							maxConcurrency: cfgTaskMaxConcurrency.get(settings),
 							onProgress,
 						});
+						jobResult = {
+							// proc:// reads this complete text with line selectors, not just
+							// renderer-only structured details or a soon-deleted child file.
+							text: JSON.stringify(result, null, 2),
+							structured: {
+								// The aggregate is audit data, not another schema-validated yield.
+								source: "none",
+								mode: "permissive",
+								status: "unavailable",
+								data: result,
+							},
+						};
 						discussionStatus = result.status;
 						stage = "delivery";
 						if (result.status === "completed") {
@@ -423,11 +437,13 @@ async function startTeamDiscussionImpl(
 							);
 							deliveryCompleted = delivered;
 							finishJob(delivered ? "completed" : signal.aborted ? "cancelled" : "failed");
-							return delivered ? "team discussion complete" : "team discussion cancelled";
+							jobResult.text = `${delivered ? "team discussion complete" : "team discussion cancelled"}\n${jobResult.text}`;
+							return jobResult;
 						}
 						if (result.status === "cancelled") {
 							finishJob("cancelled");
-							return "team discussion cancelled";
+							jobResult.text = `team discussion cancelled\n${jobResult.text}`;
+							return jobResult;
 						}
 						const delivered = await deliverTeamReport(
 							session,
@@ -438,8 +454,14 @@ async function startTeamDiscussionImpl(
 						);
 						deliveryCompleted = delivered;
 						if (!delivered) finishJob(signal.aborted ? "cancelled" : "failed");
-						if (!delivered) return "team discussion cancelled";
-						throw new Error(result.failureReason ?? "team discussion failed");
+						if (!delivered) {
+							jobResult.text = `team discussion cancelled\n${jobResult.text}`;
+							return jobResult;
+						}
+						throw new AsyncJobError(
+							`${result.failureReason ?? "team discussion failed"}\n${jobResult.text}`,
+							jobResult.structured,
+						);
 					} catch (error) {
 						logger[signal.aborted ? "info" : "error"]("Team job threw", {
 							component: "team.controller",
@@ -451,6 +473,12 @@ async function startTeamDiscussionImpl(
 							elapsed_ms: performance.now() - started,
 							...logger.diagnosticError(error),
 						});
+						if (jobResult && !(error instanceof AsyncJobError)) {
+							throw new AsyncJobError(
+								`${error instanceof Error ? error.message : String(error)}\n${jobResult.text}`,
+								jobResult.structured,
+							);
+						}
 						throw error;
 					}
 				}),

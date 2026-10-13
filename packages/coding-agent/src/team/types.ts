@@ -153,7 +153,14 @@ export interface TeamSubagentCall {
 	schema: unknown;
 }
 
-export type TeamSubagentOutcome = { ok: true; data: Record<string, unknown> } | { ok: false; error: string };
+export type TeamSubagentOutcome =
+	| { ok: true; data: Record<string, unknown> }
+	| {
+			ok: false;
+			error: string;
+			/** Received yield retained for audit only, never accepted as success. */
+			data?: unknown;
+	  };
 
 /**
  * Executes one subagent call. The default implementation drives
@@ -217,4 +224,11 @@ export interface TeamRunResult {
 	failureReason?: string;
 	/** Set when a recommendation was mechanically dropped by structured tracking. */
 	droppedRecommendation?: boolean;
+	/** Original child yields and failures, retained independently of temporary transcripts. */
+	subagentResults?: Array<{
+		role: TeamRole;
+		modelPattern: string;
+		label: string;
+		outcome: TeamSubagentOutcome;
+	}>;
 }

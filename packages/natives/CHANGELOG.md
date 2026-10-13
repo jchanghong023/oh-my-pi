@@ -6,6 +6,8 @@
 
 - Restored Windows native checks for the `uptime` and `du` builtins without unused-import or unused-mutability errors.
 - Prevented Windows `rmdir` from deleting a directory when its operand ends in `.`.
+- Kept embedded native extraction under `OMP_CONFIG_ROOT` while preserving explicit `PI_NATIVES_DIR` overrides.
+- Honored `--skip-load-probe` for local Cargo builds and the missing-Bazel fallback.
 
 ### Fixed
 

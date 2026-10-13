@@ -1,9 +1,49 @@
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import type { FSWatcher } from "node:fs";
-import { watch } from "node:fs";
+import { appendFileSync, watch } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { gateClockNanoseconds } from "./test-gate-clock";
+
+export const GATE_EVENT_PREFIX = "OMP_GATE_EVENT ";
+
+/** Emit activity without loading workspace packages; standalone build scripts share this protocol. */
+export function emitEvent(
+	token: string | undefined,
+	id: string,
+	kind: "charged" | "compile" | "idle",
+	env: Record<string, string | undefined> = process.env,
+): void {
+	if (!token) return;
+	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({ id, kind, at: gateClockNanoseconds().toString(), clock: env.OMP_GATE_CLOCK_TOKEN })}\n`;
+	if (env.OMP_GATE_EVENT_FILE) appendFileSync(env.OMP_GATE_EVENT_FILE, line);
+	else process.stderr.write(line);
+}
+
+/** Mark only a real compiler-only boundary; preparation, downloads, checks and installation stay charged. */
+export async function withCompilerActivity<T>(work: () => Promise<T>): Promise<T> {
+	const token = process.env.OMP_GATE_EVENT_TOKEN;
+	const id = randomUUID();
+	emitEvent(token, id, "compile");
+	try {
+		return await work();
+	} finally {
+		emitEvent(token, id, "idle");
+	}
+}
+
+/** Mark actual doctest/test process execution when it overlaps a compiler. */
+export async function withChargedActivity<T>(work: () => Promise<T>): Promise<T> {
+	const id = randomUUID();
+	emitEvent(process.env.OMP_GATE_EVENT_TOKEN, id, "charged");
+	try {
+		return await work();
+	} finally {
+		emitEvent(process.env.OMP_GATE_EVENT_TOKEN, id, "idle");
+	}
+}
 
 export interface GateEventRelay {
 	path: string;

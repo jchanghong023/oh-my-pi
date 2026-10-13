@@ -7,6 +7,7 @@ import type { MnemopiLlmCompleteOptions } from "@oh-my-pi/pi-mnemopi/core/runtim
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
 import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger, prompt, withLoopPhase } from "@oh-my-pi/pi-utils";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -592,6 +593,7 @@ async function resolveMnemopiProviderOptions(
 
 			for (const { model } of candidates) {
 				if (signal?.aborted) return null;
+				const replayForbidden = model.provider === "codeagent" || isJchToolsAgentModel(model);
 				try {
 					if (model.api === "local-inference") {
 						const result = await tinyModelClient.complete(model.id, request.prompt, {
@@ -646,10 +648,19 @@ async function resolveMnemopiProviderOptions(
 									},
 								),
 							),
-						{ provider: model.provider, signal },
+						{ provider: model.provider, signal, maxAttempts: replayForbidden ? 1 : undefined },
 					);
 					if (message.stopReason === "aborted" || signal?.aborted) return null;
 					if (message.stopReason === "error") {
+						if (replayForbidden) {
+							logger.warn("Mnemopi: memory completion failed; replay and model fallback disabled.", {
+								provider: model.provider,
+								model: model.id,
+								stop_reason: message.stopReason,
+								status: message.errorStatus,
+							});
+							return null;
+						}
 						logger.warn("Mnemopi: memory completion model failed; trying the next configured fallback.", {
 							provider: model.provider,
 							model: model.id,
@@ -667,6 +678,14 @@ async function resolveMnemopiProviderOptions(
 						.trim();
 				} catch (error) {
 					if (signal?.aborted) return null;
+					if (replayForbidden) {
+						logger.warn("Mnemopi: memory completion threw; replay and model fallback disabled.", {
+							provider: model.provider,
+							model: model.id,
+							...logger.diagnosticError(error),
+						});
+						return null;
+					}
 					logger.warn("Mnemopi: memory completion model threw; trying the next configured fallback.", {
 						provider: model.provider,
 						model: model.id,

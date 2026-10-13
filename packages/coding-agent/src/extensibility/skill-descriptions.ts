@@ -17,6 +17,7 @@ import { getModelMatchPreferences, parseModelPattern, resolveRoleSelection } fro
 import type { Settings } from "../config/settings";
 import MODEL_PRIO from "../priority.json" with { type: "json" };
 import compressDescriptionPrompt from "../prompts/skills/compress-description.md" with { type: "text" };
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Semaphore } from "../task/parallel";
 import type { Skill } from "./skills";
 
@@ -46,8 +47,9 @@ export function createSkillDescriptionCompressor(
 		let preferred: Model<Api> | undefined;
 		if (!configured) {
 			const preferences = getModelMatchPreferences(settings);
+			const automaticModels = available.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
 			for (const pattern of MODEL_PRIO.smol) {
-				preferred = parseModelPattern(pattern, available, preferences).model;
+				preferred = parseModelPattern(pattern, automaticModels, preferences).model;
 				if (preferred) break;
 			}
 		}
