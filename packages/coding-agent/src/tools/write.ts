@@ -35,7 +35,7 @@ import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" w
 import type { ToolSession } from "../sdk";
 
 import { routeWriteThroughBridge, shouldRouteWriteThroughBridge } from "./acp-bridge";
-import { truncateForPrompt } from "./approval";
+import { type ApprovalDetailsOptions, truncateApprovalDetail, truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 
 import { isReadTruncationNotice } from "@oh-my-pi/pi-tui/tools/hashline-format";
@@ -470,11 +470,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			this.session,
 		);
 	};
-	readonly formatApprovalDetails = (args: unknown): string[] => {
+	readonly formatApprovalDetails = (args: unknown, options?: ApprovalDetailsOptions): string[] => {
 		const params = args as Partial<WriteParams>;
 		const targetPath = typeof params.path === "string" ? params.path : "(missing)";
 		const content = typeof params.content === "string" ? params.content : "";
-		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateForPrompt(content)}`];
+		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateApprovalDetail(content, options)}`];
 	};
 	readonly label = "Write";
 	get description(): string {

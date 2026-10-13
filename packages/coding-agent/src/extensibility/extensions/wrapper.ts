@@ -14,7 +14,7 @@ import { sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import {
 	denyError,
-	formatApprovalPrompt,
+	requestApproval,
 	resolveApproval,
 	resolveApprovalFromContext,
 	truncateForPrompt,
@@ -400,20 +400,16 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 			}
 
 			const uiContext = this.runner.getUIContext();
-			const basePrompt = formatApprovalPrompt(this.tool, resolvedArgs, approvalCheck.reason);
-			const safetyPrompt =
-				pendingSafetyChecks.length > 0
-					? `${basePrompt}\nProvider safety checks:\n${safetyCheckLines(pendingSafetyChecks).join("\n")}`
-					: basePrompt;
-			let choice: string | undefined;
+			const safetyAppendix =
+				pendingSafetyChecks.length > 0 ? ["Provider safety checks:", ...safetyCheckLines(pendingSafetyChecks)] : [];
+			let approved: boolean;
 			try {
-				choice = await uiContext.select(safetyPrompt, ["Approve", "Deny"]);
+				approved = await requestApproval(uiContext, this.tool, resolvedArgs, approvalCheck.reason, safetyAppendix);
 			} catch (err) {
 				await emitApprovalResolved(false, err instanceof Error ? err.message : "approval aborted");
 				cancelPreflight();
 				throw err;
 			}
-			const approved = choice === "Approve";
 			await emitApprovalResolved(approved, approved ? undefined : "denied by user");
 			if (!approved) {
 				cancelPreflight();

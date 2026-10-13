@@ -102,6 +102,8 @@ Tools can add approval-prompt body lines with `formatApprovalDetails(args)`. The
 - `Reason: <reason>` when the tool decision supplies one
 - tool-specific details such as command, path, code, browser action, or subagent assignment
 
+In the interactive UI the prompt replaces the composer until answered: `Ctrl+Enter` (or `Ctrl+Q`; rebind `app.approval.approve`) approves, `Esc` denies, and plain `Enter` does nothing, so typing into the composer as the prompt appears cannot approve a call. The approve key is ignored for the first half second, since it is also the follow-up key. The prompt shows one row per detail, with multi-line values (file content, code) reduced to a line count, since the tool call in the transcript shows them in full; with `display.hideToolActivity` on, it shows the full details instead. RPC, ACP, and other hosts without an approval dialog get an Approve/Deny select with the full details.
+
 ## Defining approval on tools
 
 Built-in and custom tools share the same shape:

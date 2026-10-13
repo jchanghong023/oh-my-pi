@@ -721,10 +721,20 @@ export interface SpeculativePhysicalOutcome {
 	evidence?: unknown;
 }
 
+/** How an approval prompt will show what `formatApprovalDetails` returns. */
+export interface ApprovalDetailsOptions {
+	/**
+	 * The prompt keeps only each detail's first line plus a count of the rest (the transcript
+	 * shows the call in full): return bodies untruncated so the count is the whole value's.
+	 * The host truncates the rows it keeps. Otherwise truncate long values as usual.
+	 */
+	compact?: boolean;
+}
+
 export interface SpeculativeToolReference {
 	name: string;
 	approval?: ToolApproval;
-	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
+	formatApprovalDetails?: (args: unknown, options?: ApprovalDetailsOptions) => string | string[] | undefined;
 }
 
 export interface SpeculativeOperationContext extends ToolSpeculationExecutionContext {
@@ -1221,7 +1231,7 @@ export interface AgentTool<
 	approval?: ToolApproval;
 
 	/** Lines appended after the standard approval prompt header. */
-	formatApprovalDetails?: (args: unknown) => string | string[] | undefined;
+	formatApprovalDetails?: (args: unknown, options?: ApprovalDetailsOptions) => string | string[] | undefined;
 
 	/** The main execution callback for this tool. */
 	execute: AgentToolExecFn<TParameters, TDetails, TTheme>;

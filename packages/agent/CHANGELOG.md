@@ -15,6 +15,18 @@
 - Preserved output room across repeated request-only context injection, accounting only for changes since the previous provider usage report.
 - Kept Codex Luna compaction handoffs at the required low reasoning effort even when the session has reasoning disabled.
 
+### Added
+
+- `AgentTool.formatApprovalDetails` receives `ApprovalDetailsOptions`; `compact: true` asks for untruncated bodies so a compact approval prompt can count their lines ([#15550](https://github.com/can1357/oh-my-pi/pull/15550) by [@H4vC](https://github.com/H4vC))
+
+### Changed
+
+- Before-model-call hooks now receive the loop context as a second argument, and `buildProviderContext` receives the summarizer model ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Fixed a Claude compaction or branch summarizer receiving assistant reasoning from a snapcompact archive rendered under another model, which Claude refuses (`reasoning_extraction`) ([#15436](https://github.com/can1357/oh-my-pi/pull/15436) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.10.3] - 2026-10-12
 
 ### Breaking Changes

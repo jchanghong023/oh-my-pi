@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from "node:util";
 import { md } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeSurfaceProvider } from "@oh-my-pi/pi-tui/native/node";
 import { AskDialogComponent, type ExtensionAskDialogQuestion } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
+import { APPROVE_ARM_MS, ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { LoginDialogComponent } from "@oh-my-pi/pi-tui/overlays/login-dialog";
 import { PlanReviewOverlay } from "@oh-my-pi/pi-tui/overlays/plan-review-overlay";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
@@ -230,6 +231,123 @@ describe("dialogs under a native surface", () => {
 		expect(line()).toContain("/⏎ show");
 		dialog.handleInput("\x1bh");
 		expect(dialog.render(200).length).toBeGreaterThan(1);
+	});
+
+	it("approval: Enter never approves; the follow-up chord is ignored until armed, then approves; Esc denies", () => {
+		const prompt = "Allow tool: write\nPath: /tmp/out.txt";
+		const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+		try {
+			const keyed = { onApprove: vi.fn(), onDeny: vi.fn() };
+			const dialog = new ApprovalDialogComponent(prompt, keyed);
+			// An Enter typed for the composer, and a follow-up (Ctrl+Enter, Ctrl+Q) sent as the prompt mounts.
+			for (const key of [ENTER, "\r", "\x1b[13;5u", "\x11"]) dialog.handleInput(key);
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS - 1);
+			dialog.handleInput("\x1b[13;5u");
+			expect(keyed.onApprove).not.toHaveBeenCalled();
+			expect(keyed.onDeny).not.toHaveBeenCalled();
+			now.mockReturnValue(1_000 + APPROVE_ARM_MS);
+			dialog.handleInput("\x1b[13;5u");
+			// Settled once: a later Esc does not also deny.
+			dialog.handleInput("\x1b");
+			expect(keyed.onApprove).toHaveBeenCalledTimes(1);
+			expect(keyed.onDeny).not.toHaveBeenCalled();
+
+			// Denying and clicking Approve are deliberate, so neither waits to arm.
+			const denied = { onApprove: vi.fn(), onDeny: vi.fn() };
+			new ApprovalDialogComponent(prompt, denied).handleInput("\x1b");
+			expect(denied.onDeny).toHaveBeenCalledTimes(1);
+			const pointed = { onApprove: vi.fn(), onDeny: vi.fn() };
+			const clicked = new ApprovalDialogComponent(prompt, pointed);
+			const approve = find(clicked.describe(), node => node.p?.role === "omp.btn" && node.key === "approve");
+			clicked.handleNativeEvent({ type: "action", key: approve!.path, act: "approve", mods: [] });
+			expect(pointed.onApprove).toHaveBeenCalledTimes(1);
+		} finally {
+			now.mockRestore();
+		}
+	});
+
+	it("approval: any key restarts the timeout (reporting start and reset), so a scroll before the deadline keeps it open", () => {
+		vi.useFakeTimers();
+		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+		const onTimeout = vi.fn();
+		const onTimeoutStart = vi.fn();
+		const onTimeoutReset = vi.fn();
+		const dialog = new ApprovalDialogComponent("Allow tool: bash\nCommand: ls", callbacks, {
+			timeout: 1_000,
+			onTimeout,
+			onTimeoutStart,
+			onTimeoutReset,
+		});
+		try {
+			expect(onTimeoutStart).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(900);
+			dialog.handleInput(DOWN);
+			expect(onTimeoutReset).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(200);
+			expect(onTimeout).not.toHaveBeenCalled();
+			expect(callbacks.onDeny).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(800);
+			expect(onTimeout).toHaveBeenCalledTimes(1);
+			expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+		} finally {
+			dialog.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("approval: an expired timeout denies (never approves) and reports the timeout", async () => {
+		const denied = Promise.withResolvers<void>();
+		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn(() => denied.resolve()) };
+		const onTimeout = vi.fn();
+		const dialog = new ApprovalDialogComponent("Allow tool: bash\nCommand: ls", callbacks, { timeout: 1, onTimeout });
+		try {
+			await denied.promise;
+			expect(onTimeout).toHaveBeenCalledTimes(1);
+			expect(callbacks.onDeny).toHaveBeenCalledTimes(1);
+			expect(callbacks.onApprove).not.toHaveBeenCalled();
+		} finally {
+			dialog.dispose();
+		}
+	});
+
+	it("approval: wrapDetails shows a long detail whole instead of clipping it to one row", () => {
+		const command = `Command: echo ok && ${"x".repeat(120)} && rm -rf ~`;
+		const callbacks = { onApprove: vi.fn(), onDeny: vi.fn() };
+		const body = (dialog: ApprovalDialogComponent) =>
+			stripVTControlCharacters(dialog.render(60).join("\n")).replace(/[│\s]+/g, "");
+		expect(body(new ApprovalDialogComponent(`Allow tool: bash\n${command}`, callbacks))).not.toContain("rm-rf~");
+		const wrapped = new ApprovalDialogComponent(`Allow tool: bash\n${command}`, callbacks, { wrapDetails: true });
+		expect(body(wrapped)).toContain("rm-rf~");
+		const row = find(wrapped.describe(), node => node.p?.role === "omp.approval.details")?.node.c?.[0];
+		expect((row as NativeNode).p).not.toHaveProperty("truncate");
+	});
+
+	it("approval: docks in place of the composer with its details, not a card over the transcript", async () => {
+		const transcript: Component = { render: () => [], invalidate: () => {}, describe: () => md("Why this write") };
+		const dialog = new ApprovalDialogComponent("Allow tool: write\nPath: /tmp/out.txt", {
+			onApprove: vi.fn(),
+			onDeny: vi.fn(),
+		});
+		const provider: TerminalFrameProvider & NativeSurfaceProvider = {
+			renderFrame: () => ({ viewport: [] }),
+			acknowledgeHistory: () => {},
+			describeSurface: () => ({ main: [transcript], dock: [dialog] }),
+		};
+		const harness = await TspHarness.start(tui => {
+			tui.setFrameProvider(provider);
+			tui.setFocus(dialog);
+		});
+		try {
+			expect(harness.errors).toEqual([]);
+			const root = harness.region("dock")!.c?.find(node => node.p?.role === "omp.editor.ask.approval");
+			const details = root?.c?.find(node => node.p?.role === "omp.approval.details");
+			expect(details?.c?.map(node => node.p)).toEqual([
+				expect.objectContaining({ text: "Path: /tmp/out.txt", truncate: "end" }),
+			]);
+			expect(harness.findAll(node => node.k === "overlay" || node.k === "card")).toEqual([]);
+		} finally {
+			harness.stop();
+		}
 	});
 
 	it("plan review: the title heading titles the sheet and is not repeated in the body; Copy copies what `c` does", () => {

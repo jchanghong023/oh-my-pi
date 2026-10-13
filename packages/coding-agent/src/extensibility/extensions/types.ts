@@ -256,6 +256,12 @@ export interface ExtensionCustomOptions {
 /** Wrap the current autocomplete provider with additional behavior (pi-compatible). */
 export type AutocompleteProviderFactory = (current: AutocompleteProvider) => AutocompleteProvider;
 
+/** The two renderings of a tool-approval prompt passed to `ExtensionUIContext.approve()`. */
+export interface ExtensionApprovalPrompt {
+	full: string;
+	compact: string;
+}
+
 /**
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
@@ -290,6 +296,13 @@ export interface ExtensionUIContext {
 		questions: ExtensionAskDialogQuestion[],
 		dialogOptions?: ExtensionUIDialogOptions,
 	): Promise<ExtensionAskDialogResult | undefined>;
+
+	/**
+	 * Show a tool-approval prompt; true only for an explicit approval. Each prompt is a title line
+	 * then details: `compact` collapses multi-line details for a host that shows the call itself
+	 * beside the prompt, `full` keeps them. Absent: callers fall back to an Approve/Deny `select`.
+	 */
+	approve?(prompt: ExtensionApprovalPrompt, dialogOptions?: ExtensionUIDialogOptions): Promise<boolean>;
 
 	/** Show a notification to the user. */
 	notify(message: string, type?: "info" | "warning" | "error"): void;

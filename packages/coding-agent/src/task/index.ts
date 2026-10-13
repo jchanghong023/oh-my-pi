@@ -36,7 +36,7 @@ import taskSpawnFeedbackTemplate from "../prompts/tools/task-spawn-feedback.md" 
 import taskSpecializationAdvisoryTemplate from "../prompts/tools/task-specialization-advisory.md" with { type: "text" };
 import taskFollowUpTemplate from "../prompts/tools/task-follow-up.md" with { type: "text" };
 import { TASK_EFFORTS, type TaskEffort } from "@oh-my-pi/pi-tui/thinking";
-import { truncateForPrompt } from "../tools/approval";
+import { type ApprovalDetailsOptions, truncateApprovalDetail, truncateForPrompt } from "../tools/approval";
 import { hasWaitTool } from "../tools/wait";
 import { isIrcEnabled } from "../irc/messaging";
 import { isReadOnlyAgent } from "./read-only-policy";
@@ -556,7 +556,7 @@ export async function refreshAgentDiscovery(cwd: string, extensionRoots?: Effect
 export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetails, Theme> {
 	readonly name = "task";
 	readonly approval = "exec" as const;
-	readonly formatApprovalDetails = (args: unknown): string[] => {
+	readonly formatApprovalDetails = (args: unknown, options?: ApprovalDetailsOptions): string[] => {
 		const params = args as Partial<TaskParams>;
 		const lines: string[] = [];
 		if (typeof params.agent === "string") {
@@ -566,10 +566,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			lines.push(`Name: ${truncateForPrompt(params.name)}`);
 		}
 		if (typeof params.task === "string") {
-			lines.push(`Task:\n${truncateForPrompt(params.task)}`);
+			lines.push(`Task:\n${truncateApprovalDetail(params.task, options)}`);
 		}
 		if (typeof params.context === "string" && params.context.trim()) {
-			lines.push(`Context:\n${truncateForPrompt(params.context)}`);
+			lines.push(`Context:\n${truncateApprovalDetail(params.context, options)}`);
 		}
 		const tasks: unknown[] = Array.isArray(params.tasks) ? params.tasks : [];
 		if (tasks.length > 0) {
@@ -596,7 +596,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				}
 				lines.push(`Agent: ${truncateForPrompt(effectiveAgent(firstTask))}`);
 				if ("task" in firstTask && typeof firstTask.task === "string") {
-					lines.push(`Task:\n${truncateForPrompt(firstTask.task)}`);
+					lines.push(`Task:\n${truncateApprovalDetail(firstTask.task, options)}`);
 				}
 			}
 			if (tasks.length > 1) {

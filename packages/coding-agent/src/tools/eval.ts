@@ -39,7 +39,7 @@ import { canSpawnAtDepth } from "../task/types";
 import { webpExclusionForModel } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import type { ToolSession } from ".";
-import { truncateForPrompt } from "./approval";
+import { type ApprovalDetailsOptions, truncateApprovalDetail } from "./approval";
 import { type EvalBackendsAllowance, resolveEvalBackends } from "./eval-backends";
 import { recordStatusEvent, type StatusEventLog } from "@oh-my-pi/pi-tui/tools/eval";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
@@ -345,12 +345,12 @@ function formatEvalInputLanguage(value: string): string {
 export class EvalTool implements AgentTool<typeof evalSchema> {
 	readonly name = "eval";
 	readonly approval = "exec" as const;
-	readonly formatApprovalDetails = (args: unknown): string[] => {
+	readonly formatApprovalDetails = (args: unknown, options?: ApprovalDetailsOptions): string[] => {
 		const params = isRecord(args) ? args : {};
 		const language =
 			typeof params.language === "string" ? formatEvalInputLanguage(params.language) : "javascript (default)";
 		const code = typeof params.code === "string" ? params.code : "";
-		return [`Language: ${language}`, `Code:\n${truncateForPrompt(code)}`];
+		return [`Language: ${language}`, `Code:\n${truncateApprovalDetail(code, options)}`];
 	};
 	get summary(): string {
 		return summarizeEvalLanguages(this.#enabledLanguages());
