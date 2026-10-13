@@ -5,7 +5,7 @@
 ### Fixed
 
 - Wiki searches and continuations now keep the interface responsive and can be cancelled, reusing complete snapshot-bound rankings while preserving all evidence and citations across pages. Failed continuations retain the current results.
-- Successful wiki searches now honor an asynchronous, cancellable 500ms minimum duration, with separate database-work and minimum-wait timing. Awaitable shutdown releases the owned worker before database cleanup.
+- Successful wiki searches now honor an asynchronous, cancellable 500ms minimum duration, with separate database-work and minimum-wait timing. Awaitable shutdown releases the owned worker before database cleanup; buffered diagnostics are persisted before worker replies.
 
 ### Added
 

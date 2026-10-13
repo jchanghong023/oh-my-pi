@@ -1371,20 +1371,56 @@ describe("DocsSearchEngine indexing contract", () => {
 	it("reopens original relative-path cursors when the worker uses an absolute database opening path", async () => {
 		const root = await tempDir("docs-relative-cursor-root-");
 		const agentDir = await tempDir("docs-relative-cursor-agent-");
-		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle evidence first\n## Two\nneedle evidence second\n");
+		const source = "# One\nneedle evidence first\n## Two\nneedle evidence second\n";
+		await fs.writeFile(path.join(root, "guide.md"), source);
 		const relativeAgentDir = path.relative(process.cwd(), agentDir);
-		let engine = new DocsSearchEngine({ agentDir: relativeAgentDir });
+		const relativeDatabasePath = path.join(relativeAgentDir, "docs.db");
+		const query = "needle evidence";
+		const legacyQueryKey = new Bun.CryptoHasher("sha256")
+			.update(JSON.stringify([query, "manual", relativeDatabasePath]))
+			.digest("hex");
+		let engine = new DocsSearchEngine({ agentDir });
 		try {
 			await engine.init(root, "manual");
-			const first = engine.search("needle evidence", { index: "manual", limit: 1 });
+			const complete = engine.search(query, { index: "manual" });
+			const first = engine.search(query, { index: "manual", limit: 1 });
 			expect(first).toMatchObject({ total: 2, hasMore: true });
+			expect(first.sections).toHaveLength(1);
+			expect(first.cursor).toBeDefined();
+			const absoluteCursor = JSON.parse(Buffer.from(first.cursor!, "base64url").toString("utf8"));
+			expect(absoluteCursor.q).not.toBe(legacyQueryKey);
+			// Independently reproduce the legacy relative-path query identity, retaining
+			// the real database snapshot and page position without opening a relative directory.
+			const legacyCursor = Buffer.from(JSON.stringify({ ...absoluteCursor, q: legacyQueryKey })).toString(
+				"base64url",
+			);
 			engine.close();
 			await fs.rm(root, { recursive: true });
-			engine = new DocsSearchEngine({ agentDir, cursorPath: path.join(relativeAgentDir, "docs.db") });
-			const last = engine.search("needle evidence", { index: "manual", cursor: first.cursor });
+			engine = new DocsSearchEngine({ agentDir, cursorPath: relativeDatabasePath });
+			expect(() => engine.search(query, { index: "manual", cursor: first.cursor })).toThrow(
+				"does not match query or index",
+			);
+			const reopenedFirst = engine.search(query, { index: "manual", limit: 1 });
+			expect(reopenedFirst.sections).toEqual(first.sections);
+			expect(reopenedFirst.cursor).toBe(legacyCursor);
+			const last = engine.search(query, { index: "manual", cursor: legacyCursor });
 			expect(last).toMatchObject({ total: 2, hasMore: false });
 			expect(last.sections).toHaveLength(1);
 			expect(last.sections[0].sectionId).not.toBe(first.sections[0].sectionId);
+			expect(last.cursor).toBeUndefined();
+			const delivered = [...first.sections, ...last.sections];
+			expect(delivered).toEqual(complete.sections);
+			expect(delivered.map(hit => hit.text).sort()).toEqual(
+				["# One\nneedle evidence first\n", "## Two\nneedle evidence second\n"].sort(),
+			);
+			for (const hit of delivered) {
+				expect(hit).toMatchObject({
+					index: "manual",
+					path: "guide.md",
+					documentHash: new Bun.CryptoHasher("sha256").update(source).digest("hex"),
+				});
+				expect([hit.lineStart, hit.lineEnd]).toEqual(hit.text.startsWith("# One") ? [1, 2] : [3, 4]);
+			}
 		} finally {
 			engine.close();
 		}

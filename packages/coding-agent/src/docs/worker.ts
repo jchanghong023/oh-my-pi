@@ -15,13 +15,18 @@ function safeLogContext(context: DocsWorkerLogContext): Record<string, string> {
 export function startDocsWorker(transport: DocsWorkerTransport): void {
 	let engine: DocsSearchEngine | undefined;
 	let busy = false;
+	const send: DocsWorkerTransport["send"] = message => {
+		// Owned workers are killed after replies; persist buffered diagnostics first.
+		logger.flush();
+		transport.send(message);
+	};
 	const handle = async (message: DocsWorkerInbound): Promise<void> => {
 		const started = performance.now();
 		try {
 			if (message.type === "configure") {
 				if (engine) throw new Error("Document worker is already configured");
 				engine = new DocsSearchEngine({ ...message.options, cursorPath: message.databasePath });
-				transport.send({
+				send({
 					type: "result",
 					id: message.id,
 					command: "configure",
@@ -33,7 +38,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 			if (!engine) throw new Error("Document worker is not configured");
 			switch (message.type) {
 				case "list":
-					transport.send({
+					send({
 						type: "result",
 						id: message.id,
 						command: "list",
@@ -43,9 +48,9 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 					break;
 				case "init": {
 					const value = await engine.init(message.directory, message.name, {
-						onProgress: progress => transport.send({ type: "progress", id: message.id, progress }),
+						onProgress: progress => send({ type: "progress", id: message.id, progress }),
 					});
-					transport.send({
+					send({
 						type: "result",
 						id: message.id,
 						command: "init",
@@ -56,7 +61,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 				}
 				case "remove":
 					engine.remove(message.name);
-					transport.send({
+					send({
 						type: "result",
 						id: message.id,
 						command: "remove",
@@ -65,7 +70,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 					});
 					break;
 				case "searchWindow":
-					transport.send({
+					send({
 						type: "result",
 						id: message.id,
 						command: "searchWindow",
@@ -75,7 +80,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 					break;
 			}
 		} catch (error) {
-			transport.send({
+			send({
 				type: "error",
 				id: message.id,
 				error: {
@@ -93,7 +98,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 	};
 	transport.onMessage(message => {
 		if (busy) {
-			transport.send({
+			send({
 				type: "error",
 				id: message.id,
 				error: { name: "Error", message: "Document worker received overlapping requests" },
