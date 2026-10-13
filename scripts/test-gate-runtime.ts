@@ -28,6 +28,8 @@ export interface GateCommand {
 	stdin?: string | Uint8Array;
 	eventToken?: string;
 	decodeOutput?: (bytes: Uint8Array) => string;
+	/** Echo captured output as it arrives; capture remains silent by default. */
+	streamOutput?: boolean;
 	onAbort?: () => Promise<void>;
 	/** Only for read-only optional-environment discovery; required checks must propagate failure. */
 	allowFailure?: boolean;
@@ -1116,13 +1118,13 @@ export class GateRun {
 						? command.decodeOutput(bytes)
 						: decoder.decode(bytes, { stream: true });
 					parser.push(chunk);
-					if (!capture) target.write(chunk);
+					if (!capture || command.streamOutput) target.write(chunk);
 					if (capture) text += chunk;
 				}
 				const final = command.decodeOutput ? "" : decoder.decode();
 				if (final) {
 					parser.push(final);
-					if (!capture) target.write(final);
+					if (!capture || command.streamOutput) target.write(final);
 					if (capture) text += final;
 				}
 				return text;

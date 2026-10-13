@@ -755,6 +755,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		stdin: script,
 		eventToken: token,
 		allowFailure: true,
+		streamOutput: true,
 		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, control)),
 	};
 	stage = "sync-and-fulltest";
@@ -797,8 +798,6 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		throw error;
 	}
 	stage = "returned-result";
-	console.log(result.stdout);
-	if (result.stderr) console.error(result.stderr);
 	// Nested orchestration selftests may log their own inert marker fixtures.
 	// The helper's final records, not the first matching test log, own identity.
 	const testCode = [...result.stdout.matchAll(/^TEST_EXIT_CODE=(\d+)$/gm)].at(-1)?.[1];

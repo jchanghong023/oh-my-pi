@@ -39,6 +39,7 @@
 - Tightened cancellation and cleanup reporting in the existing UI verification scripts without changing their acceptance criteria.
 - Preserved `/team` subagent originals in the existing discussion job result for source review, including failed or cancelled outputs, and rejected results from a different concrete participant model.
 - Shut down fixture-owned detached brokers before deleting UI-smoke directories, avoiding Windows cleanup failures without touching shared user services.
+- Stream captured Linux verification output during slowtest so timeout and first-failure cancellation preserve diagnostics without replaying the output at completion.
 
 ### Added
 
