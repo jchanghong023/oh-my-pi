@@ -29,7 +29,7 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - Single-shot result; `content[0].text` is one page of Markdown built from the matched sections.
 - Each hit renders a header line `[n] <relative path>:<start>-<end> · <heading path> · index=<name> · sha256=<document fingerprint> · sectionId=<id>` followed by the section's full text. Index names disambiguate identical relative paths; the fingerprint identifies the imported document version even when section IDs are reused.
 - The page opens with the total hit count and closes with a footer reporting how many sections were skipped for size and how many duplicate hits were collapsed.
-- A normal page carries at most ~20,000 characters (≈10–12k tokens on this corpus) and 200 sections; the best hit is always carried in full even when its body or locating header exceeds the available budget. An oversized page reports the 20,000-character target instead of claiming a hard cap.
+- A normal page carries at most ~8,000 characters and 200 sections; the best hit is always carried in full even when its body or locating header exceeds the available budget. An oversized page reports the 8,000-character target instead of claiming a hard cap.
 - Distinct body sections fill the page before heading-only hits and duplicate pointers. Deduplication happens before page selection, and candidate widening counts distinct bodies. Cross-document verbatim duplicate sections (longer than ~200 characters) appear once; later copies collapse to a pointer line. Known converter labels `Cell` and `Row` are skipped; one-word technical headings remain evidence. Heading-only sections omit their body only when the locating header already contains their full content; otherwise the complete indexed Markdown follows "(heading only)".
 - The tool does not stream updates.
 
@@ -43,9 +43,9 @@ Extra keys are ignored rather than rejected (lenient argument validation); a mis
 - Does not import or remove indexes, modify source documents, or change session state (`approval: "read"`). Opening the local database may create its storage or migrate older searchable text from stored Markdown; queries also write bounded diagnostic logs.
 
 ## Limits & Caps
-- Page budget: ~20,000 characters, the opening header line included; sections per call: 200.
+- Page target: ~8,000 characters, the opening header line included; sections per call: 200.
 - Query cap: 500 characters — a longer query is truncated, then searched and echoed.
-- Indexed sections are capped at 18,000 characters at ingestion, so any hit can be returned whole.
+- Indexed sections are capped at 18,000 characters at ingestion. A best hit larger than the page target still returns whole, with an oversized-page notice; later hits only fill the remaining budget.
 - Long lines use a 500-character overlap without splitting Unicode scalars; each overlapping section retains its original byte and line range. Code punctuation remains searchable inside code spans and fenced blocks, including blocks split across sections.
 - Search semantics are fixed (union of terms, whole-word Latin, CJK bigrams); there are no operators, filters, or field restrictions.
 

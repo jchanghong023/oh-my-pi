@@ -17,6 +17,11 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 		path.join(documents, "guide.md"),
 		"# Workflow\n``` `WIKIE2EBEACON`\nThe workflow requires exactly seven cycles.\n",
 	);
+	const sections = Array.from(
+		{ length: 12 },
+		(_, index) => `## Procedure ${index}\nWIKIE2EBEACON ${index} ${"evidence ".repeat(260)}\nEND_PROCEDURE_${index}\n`,
+	);
+	await Bun.write(path.join(documents, "procedures.md"), sections.join("\n"));
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
 		"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
@@ -124,7 +129,7 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 	}
 	try {
 		expect(JSON.parse(await cli(["docs", "init", documents, "--name", "manual", "--json"])).index.documentCount).toBe(
-			1,
+			2,
 		);
 		await fs.rename(documents, path.join(directory, "documents-unavailable"));
 		const query = [
@@ -146,6 +151,12 @@ it("imports wiki evidence through the CLI, reads it without source files, and re
 					/sha256=[a-f0-9]{64}/.test(result.text),
 			),
 		).toBe(true);
+		const page = observed.find(result => !result.isError)?.text ?? "";
+		expect(page.length).toBeLessThan(8_300);
+		const shown = [...page.matchAll(/^## Procedure (\d+)$/gm)].map(match => Number(match[1]));
+		expect(shown.length).toBeGreaterThan(0);
+		expect(shown.length).toBeLessThan(sections.length);
+		for (const index of shown) expect(page).toContain(sections[index]!);
 		expect(JSON.parse(await cli(["docs", "remove", "manual", "--force", "--json"]))).toEqual({ removed: "manual" });
 		observed.length = 0;
 		await cli(query);

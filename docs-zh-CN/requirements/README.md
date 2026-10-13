@@ -35,3 +35,5 @@ CodeAgent 认证专项：当前用户 DPAPI 合成密文经真实 JchTools 独�
 系统代理内网绕行清单：`proxy.test.ts` 61 例通过（新增匹配器 3 例：公司域名后缀/点名主机/点号标签包含命中、IP 前缀与 glob 命中且公网邻近段不误伤、无关公网主机不命中；安装行为 1 例：公网 URL 注入系统代理、内网域名/IP 目标不注入）；fastcheck 通过。真实内网目标连通性与 fulltest/slowtest 未验证。
 
 输入框路径宽度专项：状态栏溢出与上下文回归 46 例通过；真实 `bun run dev` ConPTY 验证 80 列路径恢复到配置上限、42 列按实际剩余宽度截断、再扩至 80 列恢复，上下文标签靠右且正常退出。使用隔离配置和本地模型定义，未发模型请求；未运行 fulltest/slowtest，Linux/WSL 未验证。
+
+文档检索返回预算：wiki 的常规单页目标已降为约 8000 字符，保持章节完整、来源引用与超长首条证据。`wiki-tool.test.ts` 与 `wiki-cli.test.ts` 23 例通过，后者经真实 `bun run dev` 导入、移走源目录、模型工具派发与删除错误验证缩小后的返回；独立真实数据库／WikiTool 冒烟观测 12 个命中返回 3 个完整章节、7756 字符。未运行 fulltest/slowtest，Linux/WSL 与真实模型检索质量未验证。

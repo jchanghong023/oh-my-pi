@@ -17,12 +17,11 @@ const wikiSchema = type({
 export type WikiToolParams = typeof wikiSchema.infer;
 
 /**
- * Characters of stored Markdown one call returns. The search result is the
- * content, so the page is bounded by text: ~20000 characters is 10-12k tokens
- * on this corpus (measured 1.7-2.1 chars/token), enough for a dozen or more
- * sections while several searches still fit comfortably in one conversation.
+ * Target for rendered Markdown per call, including hit locators and the page
+ * header. Keep the best section whole if it exceeds this target; later hits
+ * only fill the remaining space.
  */
-const TEXT_BUDGET_CHARS = 20_000;
+const TEXT_BUDGET_CHARS = 8_000;
 
 /** Sections one call may return; the character budget normally binds first. */
 const PAGE_SECTIONS = 200;

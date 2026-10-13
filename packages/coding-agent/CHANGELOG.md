@@ -13,6 +13,7 @@
 
 ### Changed
 
+- Reduced wiki result pages to an ~8,000-character target while preserving complete sections, citations, and oversized best hits.
 - The fork now defaults to Rounded Box, embedding the status line in the input editor's top border; explicit composer shape settings remain unchanged.
 - Ask dialogs now auto-select after 30 seconds by default; explicit zero still disables the timeout, and unanswered settings approvals are denied.
 - Default startup skips automatic setup while retaining the welcome screen and startup status messages; explicit startup settings and `--setup` remain available.

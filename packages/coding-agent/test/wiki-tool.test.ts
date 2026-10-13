@@ -85,7 +85,7 @@ describe("WikiTool", () => {
 		expect(page).toContain("UNIQUE_CRITICAL_CONTENT");
 		expect(page).toContain("unique.md:");
 		expect(page).toContain("collapsed to a pointer");
-		expect(page.length).toBeLessThan(20_300);
+		expect(page.length).toBeLessThan(8_300);
 	});
 	it("returns the stored section text after the source directory is removed", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
@@ -121,13 +121,15 @@ describe("WikiTool", () => {
 		const fixture = await indexedFixture(files);
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
 		const page = text(await run(tool, { query: "needle" }));
-		expect(page).toContain("12 matching section(s)");
-		expect(page.length).toBeLessThan(21_000);
-		// The page fills up to the budget and reports the sections it left out.
-		const shown = [...page.matchAll(/^\[\d+\] sec-\d+\.md/gmu)].length;
-		expect(shown).toBeGreaterThan(3);
-		expect(shown).toBeLessThan(12);
-		expect(page).toContain(`carries ${shown} of 12 sections within 20000 characters`);
+		expect(page.length).toBeLessThan(8_300);
+		const shown = [...page.matchAll(/^\[\d+\] (sec-\d+\.md)/gmu)];
+		expect(shown.length).toBeGreaterThanOrEqual(2);
+		expect(shown.length).toBeLessThanOrEqual(3);
+		for (const hit of shown) expect(page).toContain(files[hit[1]!]);
+		// The caller can see both the total and the withheld count without a
+		// partial section being mistaken for complete evidence.
+		expect(page).toMatch(/12 matching section/);
+		expect(page).toMatch(new RegExp(`carries ${shown.length} of 12 sections`));
 	});
 
 	it("carries a fresh best hit whole when its locator exceeds the page budget", async () => {
@@ -230,16 +232,17 @@ describe("WikiTool", () => {
 		expect(page).not.toContain("repeated hit(s) collapsed to a pointer");
 	});
 
-	it("delivers a long section whole inside one page", async () => {
-		// ~17.2k characters: the largest a stored section can be (the parser caps at
-		// 18k so that every hit fits the 20000-character page), delivered unabridged.
-		const fixture = await indexedFixture({ "long.md": `# Long\n${"pad ".repeat(4300)}\nneedle here\n` });
+	it("delivers an oversized best section whole without adding later matches", async () => {
+		const body = `# Long\n${"pad ".repeat(4300)}\nneedle here\n`;
+		const fixture = await indexedFixture({
+			"long.md": body,
+			"other.md": "# Other\nneedle and other evidence\n",
+		});
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
-		const page = text(await run(tool, { query: "needle" }));
-		expect(page).toContain("1 matching section(s)");
-		expect(page).not.toContain("truncated");
-		expect(page.length).toBeGreaterThan(17_000);
-		expect(page).toContain("needle here");
+		const page = text(await run(tool, { query: "needle here" }));
+		expect(page).toContain("long.md:");
+		expect(page).toContain(body);
+		expect(page).not.toContain("other.md:");
 	});
 
 	it("keeps a heading-only requirement line as a pointer hit", async () => {
