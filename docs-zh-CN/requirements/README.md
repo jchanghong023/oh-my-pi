@@ -32,3 +32,5 @@ README CMD 安装命令：根 README 新增的 CMD 等价安装命令（curl 下
 CodeAgent 认证专项：当前用户 DPAPI 合成密文经真实 JchTools 独立后台写入隔离原生 `REG_SZ`，真实 OMP CLI 无手工模型／认证配置完成旧 Token 失败、后台轮换、唯一重试、实际 read 工具执行及最终回答；认证比较仅在内存进行，输出和日志无 Token。OMP 认证、压缩、handoff、恢复及普通模型回归 203 通过／4 跳过，修复前已复现空注册表值破坏缓存及摘要／handoff 外层重放。JchTools 原生后台与 GUI TestingBackend 回调验证通过，SQLite 争用期间维持同一实例；共享桌面和真实 CodeAgent 服务尚未验证（本机缺少真实凭据）。
 
 系统代理内网绕行清单：`proxy.test.ts` 61 例通过（新增匹配器 3 例：公司域名后缀/点名主机/点号标签包含命中、IP 前缀与 glob 命中且公网邻近段不误伤、无关公网主机不命中；安装行为 1 例：公网 URL 注入系统代理、内网域名/IP 目标不注入）；fastcheck 通过。真实内网目标连通性与 fulltest/slowtest 未验证。
+
+输入框路径宽度专项：状态栏溢出与上下文回归 46 例通过；真实 `bun run dev` ConPTY 验证 80 列路径恢复到配置上限、42 列按实际剩余宽度截断、再扩至 80 列恢复，上下文标签靠右且正常退出。使用隔离配置和本地模型定义，未发模型请求；未运行 fulltest/slowtest，Linux/WSL 未验证。

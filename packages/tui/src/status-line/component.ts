@@ -3155,6 +3155,34 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 				leftSegIds.splice(dropIdx, 1);
 				leftWidth = left.length > 0 ? leftWidth - removedWidth - leftSepWidth - 2 : 0;
 			}
+			// Dropping whole segments can free more cells than needed. Return that
+			// space to a squeezed path before filling it with the gauge.
+			const retainedPathIdx = leftSegIds.indexOf("path");
+			if (retainedPathIdx >= 0) {
+				const originalPath = originalLeft[leftSourceIndices[retainedPathIdx]];
+				const currentPathWidth = leftWidths[retainedPathIdx];
+				const availablePathWidth = currentPathWidth + Math.max(0, topFillWidth - totalWidth());
+				if (left[retainedPathIdx] !== originalPath && availablePathWidth > currentPathWidth) {
+					let restoredPath = originalPath;
+					let restoredWidth = visibleWidth(restoredPath);
+					let maxLength = ctx.options.path?.maxLength ?? 40;
+					while (restoredWidth > availablePathWidth && maxLength > 4) {
+						maxLength = Math.max(4, maxLength - (restoredWidth - availablePathWidth));
+						const rendered = renderSegment("path", {
+							...ctx,
+							options: { ...ctx.options, path: { ...ctx.options.path, maxLength } },
+						});
+						if (!rendered.visible || !rendered.content) break;
+						restoredPath = rendered.content;
+						restoredWidth = visibleWidth(restoredPath);
+					}
+					if (restoredWidth <= availablePathWidth && restoredWidth > currentPathWidth) {
+						left[retainedPathIdx] = restoredPath;
+						leftWidths[retainedPathIdx] = restoredWidth;
+						leftWidth += restoredWidth - currentPathWidth;
+					}
+				}
+			}
 		}
 
 		const renderGroup = (parts: string[], direction: "left" | "right"): string => {

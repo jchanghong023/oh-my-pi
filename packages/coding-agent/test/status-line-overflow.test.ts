@@ -383,6 +383,48 @@ describe("overflow: embedded context fallback", () => {
 		}
 	});
 
+	it("returns freed gauge space to the path after a model moves to overflow", () => {
+		const previousProjectDir = getProjectDir();
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-path-parent-"));
+		const cwd = path.join(root, "directory-with-a-long-leaf-name");
+		fs.mkdirSync(cwd);
+		setProjectDir(cwd);
+		try {
+			const session = createStatusLineSession("context", `MODEL_OVERFLOW_${"x".repeat(90)}`);
+			const component = statusLines.track(new StatusLineComponent(session, statusLineHost));
+			const pathOptions = { abbreviate: false, maxLength: 40, stripWorkPrefix: false };
+			component.updateSettings({
+				preset: "custom",
+				leftSegments: ["pi", "model", "path", "context_pct"],
+				rightSegments: [],
+				separator: "none",
+				transparent: true,
+				contextLine: "embedded",
+				sessionAccent: false,
+				segmentOptions: { model: { showThinkingLevel: false }, path: pathOptions },
+			});
+			const expectedPath = Bun.stripANSI(
+				renderSegment("path", { ...createCtx(), options: { path: pathOptions } }).content,
+			);
+			const wide = Bun.stripANSI(component.getTopBorder(80).content);
+			expect(wide).toContain(expectedPath);
+			expect(wide).not.toContain("MODEL_OVERFLOW");
+			expect(wide.lastIndexOf("128K")).toBe(80 - "128K".length - 2);
+			expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("MODEL_OVERFLOW");
+
+			const narrow = Bun.stripANSI(component.getTopBorder(40).content);
+			expect(narrow).not.toContain(expectedPath);
+			expect(narrow).toContain("…");
+			expect(narrow).toContain("leaf-name");
+			expect(narrow.lastIndexOf("128K")).toBe(40 - "128K".length - 2);
+			expect(visibleWidth(narrow)).toBe(40);
+			expect(narrow).not.toContain(theme.boxRound.horizontal.repeat(2));
+		} finally {
+			setProjectDir(previousProjectDir);
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps context usage visible when the box gauge cannot fit labels beside the last segment", () => {
 		const component = statusLines.track(new StatusLineComponent(createStatusLineSession("context"), statusLineHost));
 		component.updateSettings({
