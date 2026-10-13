@@ -92,7 +92,7 @@ describe("CommandController /move", () => {
 			const target = path.join(sourceDir, "checkout");
 			vi.spyOn(sessionWorktree, "createSessionWorktree").mockImplementation(async () => {
 				await fs.mkdir(target);
-				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", keptChanges: true };
+				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", created: true, createdBranch: true };
 			});
 			ctx.withBtwSessionMove = vi.fn(async () => false);
 			await new CommandController(ctx).handleWorktreeCommand("feature");
@@ -108,7 +108,7 @@ describe("CommandController /move", () => {
 		}
 	});
 
-	it("holds one migration gate through worktree creation, relocation and source cleanup", async () => {
+	it("holds one migration gate through worktree creation and relocation", async () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-lifecycle-"));
 		const creating = Promise.withResolvers<void>();
 		const created = Promise.withResolvers<void>();
@@ -136,7 +136,7 @@ describe("CommandController /move", () => {
 				creating.resolve();
 				await created.promise;
 				await fs.mkdir(target);
-				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", keptChanges: true };
+				return { path: target, branch: "feature", sourceCwd: sourceDir, baseCommit: "0", created: true, createdBranch: true };
 			});
 			ctx.session.moveSession = async cwd => {
 				expect(held).toBe(true);
@@ -144,12 +144,6 @@ describe("CommandController /move", () => {
 				await relocated.promise;
 				state.cwd = cwd;
 			};
-			const cleanupError = new Error("source cleanup refused");
-			const cleanup = vi.spyOn(sessionWorktree, "cleanSourceCheckoutIfConfigured").mockImplementation(async () => {
-				expect(held).toBe(true);
-				expect(state.cwd).toBe(target);
-				return { cleaned: false, errorMessage: cleanupError.message };
-			});
 			command = new CommandController(ctx).handleWorktreeCommand("feature");
 			await creating.promise;
 			expect(held).toBe(true);
@@ -158,7 +152,6 @@ describe("CommandController /move", () => {
 			await relocating.promise;
 			expect(held).toBe(true);
 			expect(state.cwd).toBe(sourceDir);
-			expect(cleanup).not.toHaveBeenCalled();
 			relocated.resolve();
 			await command;
 			expect(held).toBe(false);
@@ -166,9 +159,6 @@ describe("CommandController /move", () => {
 			expect(state.cwd).toBe(target);
 			expect(ctx.present).toHaveBeenCalled();
 			expect(ctx.statusContainer.children).toHaveLength(0);
-			expect(ctx.session.emitNotice).toHaveBeenCalledWith("warning", expect.stringContaining(cleanupError.message));
-			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
-			expect(ctx.showWarning).not.toHaveBeenCalled();
 		} finally {
 			created.resolve();
 			relocated.resolve();
@@ -181,7 +171,7 @@ describe("CommandController /move", () => {
 		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-failure-"));
 		try {
 			const { ctx, state, withBtwSessionMove } = createMoveContext(sourceDir);
-			vi.spyOn(sessionWorktree, "createSessionWorktree").mockRejectedValue(new Error("Branch already exists"));
+			vi.spyOn(sessionWorktree, "createSessionWorktree").mockRejectedValue(new Error("git worktree add failed"));
 			await new CommandController(ctx).handleWorktreeCommand("feature");
 
 			expect(await withBtwSessionMove.mock.results[0]?.value).toBe(false);
@@ -189,7 +179,7 @@ describe("CommandController /move", () => {
 			expect(state.completedBtwVisible).toBe(true);
 			expect(ctx.session.moveSession).not.toHaveBeenCalled();
 			expect(ctx.statusContainer.children).toHaveLength(0);
-			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("Branch already exists"));
+			expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("git worktree add failed"));
 			expect(ctx.session.emitNotice).toHaveBeenCalledTimes(1);
 			expect(ctx.showError).not.toHaveBeenCalled();
 		} finally {

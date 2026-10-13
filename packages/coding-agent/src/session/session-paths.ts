@@ -260,16 +260,17 @@ const WORKTREE_NAME_PROBE = "{worktree}";
 /**
  * Session directories for the `prefix` folder of agent-managed worktrees of
  * the repository at `primaryRoot`, matched by directory name. Those worktrees
- * live at `<worktree base>/<slug>-<hashPath(primaryRoot)>[-<n>]` (see
- * `createSessionWorktree` and `resolveAvailableWorktreePath`), so the match
- * needs no git metadata and survives the worktree's removal.
+ * use `<slug>-<hashPath(primaryRoot)>[-<n>]` names, either beside the primary
+ * checkout (`/wt`) or under the managed base (task/PR worktrees). Matching
+ * their session directory names survives the worktree's removal.
  */
 function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, sessionsRoot: string): string[] {
-	// Encode against the canonical base: a live worktree's directory was named
-	// from its realpath, and the probe path does not exist to be resolved.
-	const probe = path.join(resolveEquivalentPath(getWorktreesDir()), WORKTREE_NAME_PROBE, prefix);
-	const [head, tail] = path.basename(sessionDirForCwd(probe, sessionsRoot)).split(WORKTREE_NAME_PROBE);
-	if (tail === undefined) return [];
+	// Encode against canonical bases: live worktrees were named from their
+	// realpaths, and the probe paths do not exist to be resolved.
+	const probes = [getWorktreesDir(), path.dirname(primaryRoot)].map(base => {
+		const probe = path.join(resolveEquivalentPath(base), WORKTREE_NAME_PROBE, prefix);
+		return path.basename(sessionDirForCwd(probe, sessionsRoot)).split(WORKTREE_NAME_PROBE);
+	});
 	// The name hashes the root as spelled when the worktree was made; a symlinked
 	// spelling (macOS `/tmp` vs `/private/tmp`) hashes differently, so accept both.
 	const hashes = new Set([hashPath(primaryRoot), hashPath(resolveEquivalentPath(primaryRoot))]);
@@ -282,8 +283,14 @@ function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, session
 	}
 	const dirs: string[] = [];
 	for (const entry of entries) {
-		if (entry.length <= head.length + tail.length || !entry.startsWith(head) || !entry.endsWith(tail)) continue;
-		if (name.test(entry.slice(head.length, entry.length - tail.length))) dirs.push(path.join(sessionsRoot, entry));
+		for (const [head, tail] of probes) {
+			if (tail === undefined || entry.length <= head.length + tail.length) continue;
+			if (!entry.startsWith(head) || !entry.endsWith(tail)) continue;
+			if (name.test(entry.slice(head.length, entry.length - tail.length))) {
+				dirs.push(path.join(sessionsRoot, entry));
+				break;
+			}
+		}
 	}
 	return dirs;
 }

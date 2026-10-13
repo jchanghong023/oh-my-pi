@@ -62,7 +62,6 @@ import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-stora
 import type { CompactMode } from "../../session/compact-modes";
 import type { NewSessionOptions } from "../../session/session-entries";
 import {
-	cleanSourceCheckoutIfConfigured,
 	createSessionWorktree,
 	defaultSessionWorktreeBranch,
 	formatSessionWorktreeSummary,
@@ -1678,15 +1677,11 @@ export class CommandController {
 	}
 
 	/**
-	 * `/wt [<branch>]` — fork the checkout into a new linked git worktree on
-	 * `branch` (default `wt/<timestamp>`), carrying uncommitted changes along
-	 * unless `keepChanges` is false, then relocate the session there like `/move`.
+	 * `/wt [<branch>]` — create or reuse a worktree on `branch` (default
+	 * `wt/<timestamp>`), leaving source changes untouched, then relocate like `/move`.
 	 * Returns the worktree only when the session now lives in it.
 	 */
-	async handleWorktreeCommand(
-		branch?: string,
-		options: { keepChanges?: boolean } = {},
-	): Promise<SessionWorktree | undefined> {
+	async handleWorktreeCommand(branch?: string): Promise<SessionWorktree | undefined> {
 		if (this.ctx.session.isStreaming) {
 			this.ctx.session.emitNotice(
 				"warning",
@@ -1694,7 +1689,7 @@ export class CommandController {
 			);
 			return undefined;
 		}
-		let created: SessionWorktree | undefined;
+		let selected: SessionWorktree | undefined;
 		await this.#withSessionMove(async () => {
 			const branchName = branch?.trim() || defaultSessionWorktreeBranch();
 			const cwd = this.ctx.sessionManager.getCwd();
@@ -1703,14 +1698,14 @@ export class CommandController {
 				this.ctx.ui,
 				spinner => theme.fg("accent", spinner),
 				text => theme.fg("muted", text),
-				`Creating worktree on ${branchName}…`,
+				`Preparing worktree on ${branchName}…`,
 				getSymbolTheme().spinnerFrames,
 			);
 			this.ctx.statusContainer.addChild(loader);
 			this.ctx.ui.requestRender();
 			let worktree: SessionWorktree;
 			try {
-				worktree = await createSessionWorktree(cwd, this.ctx.settings, branchName, options);
+				worktree = await createSessionWorktree(cwd, this.ctx.settings, branchName);
 			} catch (err) {
 				this.ctx.session.emitNotice(
 					"error",
@@ -1727,28 +1722,19 @@ export class CommandController {
 					error: worktree.cloneError,
 				});
 			}
-			if (!(await this.#relocateSession(worktree.path))) return false;
-			created = worktree;
-			const cleanup = worktree.keptChanges
-				? await cleanSourceCheckoutIfConfigured(cwd, this.ctx.settings)
-				: { cleaned: false, errorMessage: undefined };
-			if (cleanup.errorMessage !== undefined) {
-				this.ctx.session.emitNotice(
-					"warning",
-					`Worktree created, but cleaning source checkout failed: ${cleanup.errorMessage}`,
-				);
-			}
+			if (worktree.path !== cwd && !(await this.#relocateSession(worktree.path))) return false;
+			selected = worktree;
 			this.ctx.present([
 				new Spacer(1),
 				new Text(
-					`${theme.fg("accent", `${theme.status.success} ${formatSessionWorktreeSummary(worktree, cleanup.cleaned)}`)}`,
+					`${theme.fg("accent", `${theme.status.success} ${formatSessionWorktreeSummary(worktree)}`)}`,
 					1,
 					1,
 				),
 			]);
 			return true;
 		});
-		return created;
+		return selected;
 	}
 
 	/** Save source settings before acquiring the gate for a complete relocation operation. */
