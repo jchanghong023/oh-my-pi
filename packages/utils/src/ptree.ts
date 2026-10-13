@@ -551,36 +551,32 @@ export class ChildProcess<In extends InMask = InMask> {
 		const reader = this.proc.stdout.getReader();
 		this.#pipeReaders.add(reader);
 		// Empty stdout can reach EOF without any consumer pulling the wrapper.
-		// Let that EOF release lifecycle listeners even when stdout stays unused.
-		void reader.closed.then(
-			() => {
-				this.#pipeReaders.delete(reader);
-				this.#markStdoutDone();
-			},
-			() => {
-				this.#pipeReaders.delete(reader);
-				this.#markStdoutDone();
-			},
-		);
-		let finished = false;
-		// A reader that has never issued a read cannot tell an open pipe from a
-		// closed one, so the wrapper only counts as evidence that the group's
-		// stdout pipe still has live writers once a consumer actually pulls.
+		// Drop its liveness evidence at raw EOF even if the consumer stops after
+		// the last chunk instead of requesting the wrapper's final done result.
 		let pulled = false;
+		let pipeSettled = false;
+		const settlePipe = () => {
+			if (pipeSettled) return;
+			pipeSettled = true;
+			this.#pipeReaders.delete(reader);
+			if (pulled) this.#openPipeReaders--;
+			this.#markStdoutDone();
+		};
+		void reader.closed.then(settlePipe, settlePipe);
+		let finished = false;
+		// An unpulled reader is not evidence of a live pipe writer.
 		const trackPull = () => {
-			if (pulled) return;
+			if (pulled || pipeSettled) return;
 			pulled = true;
 			this.#openPipeReaders++;
 		};
 		const finish = () => {
 			if (finished) return;
 			finished = true;
-			this.#pipeReaders.delete(reader);
-			if (pulled) this.#openPipeReaders--;
 			try {
 				reader.releaseLock();
 			} finally {
-				this.#markStdoutDone();
+				settlePipe();
 			}
 		};
 		this.#stdoutStream = new ReadableStream<Uint8Array>(
@@ -695,8 +691,8 @@ export class ChildProcess<In extends InMask = InMask> {
 
 	attachSignal(signal: AbortSignal): void {
 		const onAbort = () => this.kill(new AbortError(signal.reason, "<cancelled>"));
-		if (signal.aborted) return void onAbort();
 		const stdoutTracked = this.#trackStdout();
+		if (signal.aborted) return void onAbort();
 		signal.addEventListener("abort", onAbort, { once: true });
 		const stdoutDone =
 			this.#stdoutDone || !stdoutTracked

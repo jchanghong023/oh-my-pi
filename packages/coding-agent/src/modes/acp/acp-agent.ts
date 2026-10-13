@@ -853,7 +853,7 @@ export class AcpAgent implements Agent {
 			}
 			this.#throwIfRecordClosed(record);
 
-			const converted = this.#convertPromptBlocks(params.prompt);
+			const converted = this.#convertPromptBlocks(params.prompt, isJchToolsAgentModel(record.session.model));
 			const pendingPrompt = Promise.withResolvers<PromptResponse>();
 			record.promptTurn = {
 				abortController: new AbortController(),
@@ -1710,10 +1710,21 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	#convertPromptBlocks(blocks: PromptRequest["prompt"]): { text: string; images: AgentImageContent[] } {
+	#convertPromptBlocks(
+		blocks: PromptRequest["prompt"],
+		remoteAgent: boolean,
+	): { text: string; images: AgentImageContent[] } {
 		const textParts: string[] = [];
 		const images: AgentImageContent[] = [];
 		for (const block of blocks) {
+			if (
+				remoteAgent &&
+				(block.type === "image" ||
+					block.type === "audio" ||
+					(block.type === "resource" && !("text" in block.resource)))
+			) {
+				throw new Error("JchTools remote Agent supports text-only ACP input.");
+			}
 			switch (block.type) {
 				case "text":
 					textParts.push(block.text);
@@ -1743,7 +1754,7 @@ export class AcpAgent implements Agent {
 			}
 		}
 		return {
-			text: textParts.join("\n\n").trim(),
+			text: remoteAgent ? textParts.join("\n\n") : textParts.join("\n\n").trim(),
 			images,
 		};
 	}

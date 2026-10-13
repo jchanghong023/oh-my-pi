@@ -583,6 +583,8 @@ export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions =
 			} finally {
 				clearTimeout(timer);
 				options.signal?.removeEventListener("abort", abort);
+				// Rejected headers may leave an unread streaming body; do not outlive discovery.
+				abort();
 				const fields = {
 					component: "jchtools",
 					event: "jchtools_models_finished",

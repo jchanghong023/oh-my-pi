@@ -338,10 +338,11 @@ async function executeCompletion(
 	let lastError: unknown;
 	let retriesUsed = 0;
 	let completed = false;
-	// Backend Agent failures are terminal, even inside an ordinary model's fallback chain.
+	// Backend Agent and CodeAgent failures are terminal, even inside an ordinary model's fallback chain.
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
+		const terminalFailure = model.provider === "codeagent" || isJchToolsAgentModel(model);
 		try {
 			// Forward the session id so session-sticky OAuth credentials
 			// resolve (see #5325); without it a usable fallback looks keyless.
@@ -350,7 +351,7 @@ async function executeCompletion(
 				lastError = new ToolError(
 					`completion() has no API key for ${formatModelString(model)}. Configure credentials for this provider or choose another tier.`,
 				);
-				if (isJchToolsAgentModel(model)) throw lastError;
+				if (terminalFailure) throw lastError;
 				continue;
 			}
 			if (index > 0) retriesUsed += 1;
@@ -373,7 +374,7 @@ async function executeCompletion(
 			);
 		} catch (error) {
 			lastError = error;
-			if (isJchToolsAgentModel(model) || signal.aborted || index === candidates.length - 1) throw error;
+			if (terminalFailure || signal.aborted || index === candidates.length - 1) throw error;
 			continue;
 		}
 		if (response.stopReason === "aborted") {
@@ -381,7 +382,7 @@ async function executeCompletion(
 		}
 		if (response.stopReason === "error") {
 			lastError = new ToolError(response.errorMessage ?? "completion() request failed.");
-			if (!isJchToolsAgentModel(model) && !signal.aborted && index < candidates.length - 1) continue;
+			if (!terminalFailure && !signal.aborted && index < candidates.length - 1) continue;
 			throw lastError;
 		}
 		completed = true;

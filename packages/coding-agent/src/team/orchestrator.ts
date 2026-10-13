@@ -45,6 +45,7 @@ import type {
 	TeamReviewOutput,
 	TeamRunResult,
 	TeamSubagentCall,
+	TeamSubagentOutcome,
 	TeamSubagentRunner,
 } from "./types";
 
@@ -128,7 +129,7 @@ function proposalLabel(index: number): string {
 interface TeamCallDiagnosticsOutcome {
 	ok: boolean;
 	error?: string;
-	data?: Record<string, unknown>;
+	data?: unknown;
 	diagnostics: Record<string, unknown>;
 }
 
@@ -139,6 +140,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 		async () => {
 			const started = performance.now();
 			const diagnostics = { stage: "dispatch", reason: "stage_incomplete" };
+			const subagentResults: NonNullable<TeamRunResult["subagentResults"]> = [];
 			logger.info("Team discussion started", {
 				component: "team.orchestrator",
 				event: "team_run_started",
@@ -149,7 +151,8 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				revision_round_cap: TEAM_MAX_REVISION_ROUNDS,
 			});
 			try {
-				const result = await runTeamDiscussionImpl(options, diagnostics);
+				const result = await runTeamDiscussionImpl(options, diagnostics, subagentResults);
+				result.subagentResults = subagentResults;
 				const fields = {
 					component: "team.orchestrator",
 					event: `team_run_${result.status}`,
@@ -173,7 +176,11 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				};
 				if (options.signal.aborted) logger.info("Team discussion interrupted", fields);
 				else logger.error("Team discussion threw", fields);
-				throw error;
+				return {
+					status: options.signal.aborted ? "cancelled" : "failed",
+					failureReason: error instanceof Error ? error.message : String(error),
+					subagentResults,
+				};
 			}
 		},
 	);
@@ -182,6 +189,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 async function runTeamDiscussionImpl(
 	options: TeamOrchestratorOptions,
 	diagnostics: { stage: string; reason: string },
+	subagentResults: NonNullable<TeamRunResult["subagentResults"]>,
 ): Promise<TeamRunResult> {
 	const { question, cwd, participants, runner, signal } = options;
 	const semaphore = new Semaphore(options.maxConcurrency);
@@ -228,6 +236,10 @@ async function runTeamDiscussionImpl(
 			label: call.label,
 			requested_model: call.modelPattern.slice(0, 192),
 		};
+		const retainOutcome = (outcome: TeamSubagentOutcome): TeamCallDiagnosticsOutcome => {
+			subagentResults.push({ role: call.role, modelPattern: call.modelPattern, label: call.label, outcome });
+			return { ...outcome, diagnostics: fields };
+		};
 		return logger.withLogContext(fields, async () => {
 			const started = performance.now();
 			logger.info("Team call started", {
@@ -248,7 +260,7 @@ async function runTeamDiscussionImpl(
 					elapsed_ms: performance.now() - started,
 					...logger.diagnosticError(error),
 				});
-				return { ok: false, error: "cancelled while waiting for a concurrency slot", diagnostics: fields };
+				return retainOutcome({ ok: false, error: "cancelled while waiting for a concurrency slot" });
 			}
 			try {
 				logger.info("Team runner started", {
@@ -258,6 +270,8 @@ async function runTeamDiscussionImpl(
 					result: "started",
 				});
 				const outcome = await runner(call, signal);
+				// Retain the original yield before stage parsers trim or budget it.
+				const retained = retainOutcome(outcome);
 				const result = signal.aborted ? "cancelled" : outcome.ok ? "completed" : "failed";
 				const terminal = {
 					component: "team.orchestrator",
@@ -269,9 +283,7 @@ async function runTeamDiscussionImpl(
 				};
 				if (result === "failed") logger.warn("Team call failed", terminal);
 				else logger.info("Team call finished", terminal);
-				return outcome.ok
-					? { ok: true, data: outcome.data, diagnostics: fields }
-					: { ok: false, error: outcome.error, diagnostics: fields };
+				return retained;
 			} catch (error) {
 				const terminal = {
 					component: "team.orchestrator",
@@ -284,11 +296,10 @@ async function runTeamDiscussionImpl(
 				if (signal.aborted) logger.info("Team call interrupted", terminal);
 				else logger.warn("Team runner threw", terminal);
 				// A throwing runner remains a failed participant, not a rejected run.
-				return {
+				return retainOutcome({
 					ok: false,
 					error: signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error),
-					diagnostics: fields,
-				};
+				});
 			} finally {
 				semaphore.release();
 			}

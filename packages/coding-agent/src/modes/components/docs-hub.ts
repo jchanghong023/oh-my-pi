@@ -146,7 +146,9 @@ export class DocsHubComponent implements Component {
 			this.#latestError = undefined;
 			this.#hits = result.sections.map(hit => ({
 				section: hit,
-				label: sanitizeTerminalLine(`[section] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath}`),
+				label: sanitizeTerminalLine(
+					`[${hit.index}] ${hit.path}:${hit.lineStart}-${hit.lineEnd} ${hit.headingPath} · sectionId=${hit.sectionId}`,
+				),
 			}));
 			this.#hitIndex = 0;
 			this.#mode = "detail";
@@ -168,6 +170,7 @@ export class DocsHubComponent implements Component {
 				sanitizeTerminalLine(
 					`[${value.index}] ${value.path}:${value.lineStart}-${value.lineEnd} ${value.headingPath}`,
 				),
+				sanitizeTerminalLine(`sha256=${value.documentHash} · sectionId=${value.sectionId}`),
 				"",
 				sanitizeTerminalText(value.text),
 			];

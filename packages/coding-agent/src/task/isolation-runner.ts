@@ -154,7 +154,7 @@ function deltaFingerprint(rootPatch: string, nestedPatches: readonly NestedRepoP
 }
 
 /** Build a commit-message callback for branch/nested commits; `undefined` ⇒ fall back to generic message. */
-export type BuildCommitMessage = () => undefined | ((diff: string) => Promise<string | null>);
+export type BuildCommitMessage = (cwd: string) => undefined | ((diff: string) => Promise<string | null>);
 
 /**
  * Construct the commit-message factory used by isolation branch commits and
@@ -168,13 +168,13 @@ export type BuildCommitMessage = () => undefined | ((diff: string) => Promise<st
  * generators for the same setting.
  */
 export function makeIsolationCommitMessage(session: ToolSession): BuildCommitMessage {
-	return () => {
+	return cwd => {
 		const style = cfgTaskIsolationCommits.get(session.settings);
 		if (style !== "ai" || !session.modelRegistry) return undefined;
 		const registry = session.modelRegistry;
 		const settings = session.settings;
 		const sessionId = session.getSessionId?.() ?? undefined;
-		return async (diff: string) => generateCommitMessage(diff, registry, settings, session.cwd, sessionId);
+		return async (diff: string) => generateCommitMessage(diff, registry, settings, cwd, sessionId);
 	};
 }
 
@@ -487,7 +487,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					baseline,
 					opts.agentId,
 					opts.description,
-					opts.buildCommitMessage?.(),
+					opts.buildCommitMessage?.(isolationDir),
 				);
 			} catch (mergeErr) {
 				// Agent succeeded but the branch commit failed. `commitToBranch`

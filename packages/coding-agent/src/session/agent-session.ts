@@ -8968,7 +8968,7 @@ export class AgentSession implements SettingsScope {
 	 * Throw an error if the text is an extension command.
 	 */
 	#throwIfExtensionCommand(text: string): void {
-		if (!this.#extensionRunner) return;
+		if (isJchToolsAgentModel(this.model) || !this.#extensionRunner) return;
 
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);

@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { withCompilerActivity } from "../../scripts/test-gate-runtime";
+import { withCompilerActivity } from "../../scripts/test-gate-events";
 
 // Clean dist
 await fs.rm("./dist/client", { recursive: true, force: true });

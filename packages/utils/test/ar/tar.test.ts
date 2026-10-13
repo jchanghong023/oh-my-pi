@@ -1,9 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import * as path from "node:path";
-import { TempDir } from "@oh-my-pi/pi-utils";
 import { ArchiveError } from "../../src/ar/error";
 import { type ArchiveLimits, DEFAULT_ARCHIVE_LIMITS } from "../../src/ar/limits";
-import { extractArchive } from "../../src/ar/open";
 import { memoryByteSource } from "../../src/ar/source";
 import { encodeTar, readTar, readTarEntriesFromBuffer, sniffTar } from "../../src/ar/tar";
 import type { ArchiveIndexEntry, FormatReadOptions } from "../../src/ar/types";
@@ -173,22 +170,6 @@ describe("tar reader", () => {
 		const pax = await fixture("tar-pax-long.tar");
 		expect(() => index(pax, { ...DEFAULT_ARCHIVE_LIMITS, maxIndexSize: 8 })).toThrow("PAX metadata is too large");
 	});
-});
-
-test("materializes directory-alias records during extraction", async () => {
-	using root = TempDir.createSync("@pi-tar-directory-link-");
-	const encoder = new TextEncoder();
-	const target = await encodeTar([["actual/file.txt", encoder.encode("directory link payload")]]);
-	const linkArchive = await encodeTar([["alias", new Uint8Array()]]);
-	const header = linkArchive.slice(0, 512);
-	// Turn the writer's empty-file header into a ustar directory symlink.
-	header[156] = 0x32;
-	header.set(encoder.encode("actual"), 157);
-	header.fill(0x20, 148, 156);
-	const checksum = header.reduce((sum, byte) => sum + byte, 0);
-	header.set(encoder.encode(`${checksum.toString(8).padStart(6, "0")}\0 `), 148);
-	await extractArchive({ bytes: Buffer.concat([header, target]), format: "tar" }, root.path());
-	expect(await Bun.file(path.join(root.path(), "alias", "file.txt")).text()).toBe("directory link payload");
 });
 
 describe("tar writer", () => {

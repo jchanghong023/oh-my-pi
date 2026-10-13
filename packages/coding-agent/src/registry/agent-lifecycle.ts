@@ -542,7 +542,7 @@ export class AgentLifecycleManager {
 						if (Date.now() >= deadlineAt) trackLateCleanup(release, { id: ref.id, resource: "adopted-agent" });
 						logger.warn("Agent cleanup exceeded its deadline", {
 							id: ref.id,
-							error: error instanceof Error ? error.message : String(error),
+							...logger.diagnosticError(error),
 						});
 					}
 				}),

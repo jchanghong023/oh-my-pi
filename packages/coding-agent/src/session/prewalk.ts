@@ -263,9 +263,18 @@ export class PrewalkCoordinator {
 		}
 		const source = this.#host.model();
 		const sourceThinkingLevel = this.#host.configuredThinkingLevel();
+		const handoffStarted = performance.now();
 		try {
 			await this.#host.setModelTemporary(target, prewalk.thinkingLevel, { ephemeral: true });
 		} catch (error) {
+			logger.warn("Prewalk model handoff failed", {
+				component: "session.prewalk",
+				event: "prewalk_handoff_failed",
+				stage: "model_handoff",
+				result: "failed",
+				elapsed_ms: performance.now() - handoffStarted,
+				...logger.diagnosticError(error),
+			});
 			this.#host.emitNotice(
 				"warning",
 				`Prewalk: handoff failed: ${error instanceof Error ? error.message : String(error)}`,

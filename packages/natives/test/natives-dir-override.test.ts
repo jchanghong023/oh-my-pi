@@ -8,6 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 const ENV_KEYS = [
 	"HOME",
 	"USERPROFILE",
+	"OMP_CONFIG_ROOT",
 	"PI_NATIVES_DIR",
 	"XDG_DATA_HOME",
 	"PI_NATIVE_VARIANT",

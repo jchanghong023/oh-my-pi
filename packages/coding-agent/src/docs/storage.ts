@@ -5,7 +5,8 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { markdownSectionContexts, normalizePlainText } from "./markdown";
 import type { DocsIndexSummary } from "./types";
 
-const SCHEMA_VERSION = 9;
+// Version 10 also rebuilds v9 FTS rows imported with BOM-prefixed chunked fences.
+const SCHEMA_VERSION = 10;
 
 /** Indexes being built are named with this prefix and renamed once complete. */
 export const BUILDING_INDEX_PREFIX = "__building__";

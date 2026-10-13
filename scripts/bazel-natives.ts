@@ -352,7 +352,7 @@ export async function verifyHostAddonLoads(
 }
 
 /** Build and install the host addon through the local Cargo/N-API path. */
-async function buildLocalHostAddon(host: HostInfo, destDir: string): Promise<void> {
+async function buildLocalHostAddon(host: HostInfo, destDir: string, skipLoadProbe = false): Promise<void> {
 	const script = path.join(repoRoot, "packages/natives/scripts/build-bindings.ts");
 	console.log(`local host build: using ${path.relative(repoRoot, script)}`);
 	const proc = Bun.spawn([process.execPath, script], {
@@ -370,7 +370,9 @@ async function buildLocalHostAddon(host: HostInfo, destDir: string): Promise<voi
 		await installAddon(builtPath, path.join(destDir, filename), await nativesPackageVersion(), false);
 	}
 	console.log(`installed ${filename} → ${path.join(destDir, filename)}`);
-	await verifyHostAddonLoads(path.join(destDir, filename), undefined, await nativesPackageVersion());
+	if (!skipLoadProbe) {
+		await verifyHostAddonLoads(path.join(destDir, filename), undefined, await nativesPackageVersion());
+	}
 }
 
 async function main(): Promise<void> {
@@ -408,7 +410,7 @@ async function main(): Promise<void> {
 			}
 			throw new Error("OMP_NATIVE_BUILD_BACKEND=cargo supports only the host target");
 		}
-		await buildLocalHostAddon(host, destDir);
+		await buildLocalHostAddon(host, destDir, options.skipLoadProbe);
 		return;
 	}
 	let outputs: string[];
@@ -429,7 +431,7 @@ async function main(): Promise<void> {
 				);
 			}
 			console.log("bazelisk/bazel not found; falling back to the local Cargo/N-API host build");
-			await buildLocalHostAddon(host, destDir);
+			await buildLocalHostAddon(host, destDir, options.skipLoadProbe);
 			return;
 		}
 		// CI hands cache wiring (remote or disk) through a bazelrc fragment so

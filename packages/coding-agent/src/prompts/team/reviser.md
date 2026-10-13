@@ -47,6 +47,10 @@
 
 ## 审查意见（逐项回应）
 
+{{#if review.reviewSummary}}
+审查摘要：{{{review.reviewSummary}}}
+{{/if}}
+
 {{#if review.findings.length}}
 {{#each review.findings}}
 - [{{{severity}}}] {{{issue}}}

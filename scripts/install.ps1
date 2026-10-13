@@ -502,10 +502,11 @@ function Install-Binary {
                 $renameFailure = $_
                 Write-InstallLog WARN old_binary_rename_failed (Get-InstallFailureFields $_)
                 Stop-RunningOmp -TargetPath $OutPath
-                Set-InstallStage "fallback_remove"
-                Write-InstallLog WARN old_binary_remove_started @{ result = "started"; reason = "rename_blocked" }
-                Remove-Item -LiteralPath $OutPath -Force
-                Write-InstallLog INFO old_binary_remove_completed @{ result = "success" }
+                Set-InstallStage "fallback_rename"
+                Write-InstallLog WARN old_binary_rename_started @{ result = "started"; reason = "after_kill_fallback"; attempt = 2 }
+                Move-Item -LiteralPath $OutPath -Destination $OldPath
+                $renamedAside = $true
+                Write-InstallLog INFO old_binary_rename_completed @{ result = "success"; old_image = "retained_aside"; attempt = 2 }
             }
         }
         try {

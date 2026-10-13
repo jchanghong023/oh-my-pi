@@ -10,6 +10,7 @@
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { offlineFromEnv } from "../cli/args";
 import {
 	type BenchRuntime,
 	createDefaultBenchRuntime,
@@ -105,7 +106,9 @@ export async function runIfBenchCommand(
 	};
 	const board = json ? undefined : createIfBenchBoard({ maxTurns, arrayLength, nyaMax }, stdout, stderr);
 
-	const runtime = await (deps.createRuntime ?? createDefaultBenchRuntime)();
+	const runtime = await (deps.createRuntime
+		? deps.createRuntime()
+		: createDefaultBenchRuntime({ offline: offlineFromEnv() }));
 	try {
 		const targets = await resolveBenchTargets(command.models, runtime.modelRegistry, runtime.settings, writeStderr);
 		board?.log(

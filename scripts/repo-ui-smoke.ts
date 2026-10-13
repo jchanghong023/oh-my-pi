@@ -114,13 +114,13 @@ function sse(model: string, call?: ToolCall, text = "REPO_SMOKE_DONE"): string {
 
 /** Remove a smoke directory, tolerating Windows handle-release lag: the killed
  * TUI child and its SQLite/git helpers can keep -shm/-wal handles open for a
- * moment after kill(). Never throws — a cleanup failure must not crash the
- * harness and mask the actual smoke verdict. */
-async function rmSmokeDir(target: string): Promise<void> {
+ * moment after kill(). Reports terminal cleanup errors to the caller so a
+ * successful smoke cannot conceal leftover resources. */
+async function rmSmokeDir(target: string): Promise<boolean> {
 	for (let attempt = 1; ; attempt++) {
 		try {
 			await fs.rm(target, { recursive: true, force: true });
-			return;
+			return true;
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code ?? "";
 			const transient = code === "EBUSY" || code === "EPERM" || code === "EACCES" || code === "ENOTEMPTY";
@@ -128,7 +128,7 @@ async function rmSmokeDir(target: string): Promise<void> {
 				console.error(
 					`ui-smoke: cleanup of ${target} failed after ${attempt} attempt(s): ${code || String(error)}`,
 				);
-				return;
+				return false;
 			}
 			await new Promise(resolve => setTimeout(resolve, 250 * attempt));
 		}
@@ -163,6 +163,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		MISSING: [{ name: "repo", input: { action: "status" } }],
 	};
 	let serverError: string | undefined;
+	let failed = false;
 	try {
 		await fs.mkdir(path.dirname(source), { recursive: true });
 		await fs.writeFile(source, original);
@@ -431,9 +432,9 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		const outcome = await Promise.race([current.exitPromise, sleep(20_000).then(() => undefined)]);
 		if (!outcome || outcome.exitCode !== 0)
 			throw new Error(`repo TUI did not exit cleanly: ${JSON.stringify(outcome)}`);
-		console.log(
-			"ui-smoke: /repo PASS — real panel build/status/reconcile/cancel/delete, native-backed tool results, and source edit",
-		);
+	} catch (error) {
+		failed = true;
+		throw error;
 	} finally {
 		if (tui) {
 			try {
@@ -441,7 +442,10 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 			} catch {}
 		}
 		server?.stop(true);
-		await rmSmokeDir(configRoot);
-		await rmSmokeDir(temp);
+		const removed = await Promise.all([rmSmokeDir(configRoot), rmSmokeDir(temp)]);
+		if (removed.includes(false) && !failed) throw new Error("repo smoke fixture cleanup failed");
 	}
+	console.log(
+		"ui-smoke: /repo PASS — real panel build/status/reconcile/cancel/delete, native-backed tool results, and source edit",
+	);
 }

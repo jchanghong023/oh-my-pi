@@ -15,6 +15,8 @@
 - Fixed schema references to definition names containing `/` or `~`, including an empty definition name.
 - Fixed schema validation and strict-mode conversion resolving percent-encoded definition references incorrectly.
 - Fixed root schema references retaining definition blocks in provider tool schemas.
+- Respected explicitly set TLS environment values, including empty strings, instead of replacing them with fork defaults.
+- Started a new Codex turn when a context extension rewrites a historical user message, while keeping synthesized per-call context out of conversational turn boundaries.
 
 ### Removed
 

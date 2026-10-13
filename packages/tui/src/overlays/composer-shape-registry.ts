@@ -13,7 +13,7 @@ export const BUILTIN_COMPOSER_SHAPES = [
 	},
 	{
 		value: "box",
-		label: "Rounded Box",
+		label: "Rounded Box (Default)",
 		description: "Status line embedded in top border, compact 2-line prompt",
 	},
 	{
@@ -23,7 +23,7 @@ export const BUILTIN_COMPOSER_SHAPES = [
 	},
 	{
 		value: "pi",
-		label: "Pi (Default)",
+		label: "Pi",
 		description: "Framed horizontal rules with status line at bottom",
 	},
 	{

@@ -21,6 +21,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
 import { $env, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
 import { roleCandidatePool } from "../config/model-roles";
 import { formatModelStringWithRouting } from "../config/model-resolver";
@@ -291,6 +292,7 @@ async function generateTitleOnlineWithModels(
 	const userMessage = formatTitleUserMessage(firstMessage);
 
 	for (const model of models) {
+		const terminalFailure = model.provider === "codeagent" || isJchToolsAgentModel(model);
 		const modelName = `${model.provider}/${model.id}`;
 		const modelContext = {
 			sessionId,
@@ -320,6 +322,7 @@ async function generateTitleOnlineWithModels(
 			const apiKey = await registry.getApiKey(model, sessionId);
 			if (!apiKey) {
 				logger.warn("title-generator: no API key", { ...modelContext, reason: "missing-api-key" });
+				if (terminalFailure) return null;
 				continue;
 			}
 			if (signal?.aborted) {
@@ -365,7 +368,7 @@ async function generateTitleOnlineWithModels(
 							signal,
 						},
 					),
-				{ signal, provider: model.provider },
+				{ signal, provider: model.provider, maxAttempts: terminalFailure ? 1 : undefined },
 			);
 
 			if (response.stopReason === "aborted" || signal?.aborted) {
@@ -384,6 +387,7 @@ async function generateTitleOnlineWithModels(
 					stopReason: response.stopReason,
 					errorMessage: response.errorMessage,
 				});
+				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -396,6 +400,7 @@ async function generateTitleOnlineWithModels(
 					usage: response.usage,
 					stopReason: response.stopReason,
 				});
+				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -421,6 +426,7 @@ async function generateTitleOnlineWithModels(
 				reason: "exception",
 				error: err instanceof Error ? err.message : String(err),
 			});
+			if (terminalFailure) return null;
 		}
 	}
 	return null;

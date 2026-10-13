@@ -849,7 +849,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 					mergeMode: policy.mergeMode,
 					changesApplied: outcome.changesApplied,
 					mergedBranchForNestedPatches: outcome.mergedBranchForNestedPatches,
-					commitMessage: makeIsolationCommitMessage(request.session)(),
+					commitMessage: makeIsolationCommitMessage(request.session)(request.session.cwd),
 				});
 				mergeSummary += nestedPatchSummary;
 				requiresRecoveryArtifacts ||=

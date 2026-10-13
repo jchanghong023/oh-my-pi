@@ -130,27 +130,6 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : { left: A; right: 
 
 type CommandName = RpcCommand["type"];
 
-/**
- * Negotiated protocol-v3 interaction frames are outside the generated stock
- * command schema. Conformance below pins stock commands while accounting for
- * fork-only fields on stock commands: `inputMode` on `prompt`,
- * `get_messages_page` paging fields, rich-ask `sensitive`, and project-mode
- * `ready` stamps. Each carve-out shrinks when the corresponding field lands
- * upstream.
- */
-type StockCommandName = CommandName;
-
-/** Fork-only parameter fields the server accepts on stock commands. */
-interface ForkParamFields {
-	prompt: "inputMode";
-	get_messages_page: "after" | "before" | "order";
-}
-// The Omit only applies where the table names keys: a generic `Omit<T, never>`
-// defers instantiation and breaks the required-key inference below.
-type ServerParamsStock<K extends StockCommandName> = K extends keyof ForkParamFields
-	? Omit<ServerParams<K>, ForkParamFields[K]>
-	: ServerParams<K>;
-
 type ServerParams<K extends CommandName> = Omit<Extract<RpcCommand, { type: K }>, "id" | "type">;
 type ServerResult<K extends CommandName> =
 	Extract<RpcResponse, { command: K; success: true }> extends infer R
@@ -161,17 +140,17 @@ type ServerResult<K extends CommandName> =
 			: undefined
 		: never;
 
-export type CommandSet = Assert<Same<keyof Wire.RpcWireCommands, StockCommandName>>;
+export type CommandSet = Assert<Same<keyof Wire.RpcWireCommands, CommandName>>;
 export type CommandParams = Assert<
 	AllTrue<{
-		[K in StockCommandName]: Wire.RpcWireCommands[K]["params"] extends undefined
-			? Same<keyof ServerParamsStock<K>, never>
-			: Inbound<Wire.RpcWireCommands[K]["params"], ServerParamsStock<K>>;
+		[K in CommandName]: Wire.RpcWireCommands[K]["params"] extends undefined
+			? Same<keyof ServerParams<K>, never>
+			: Inbound<Wire.RpcWireCommands[K]["params"], ServerParams<K>>;
 	}>
 >;
 export type CommandResults = Assert<
 	AllTrue<{
-		[K in StockCommandName]: Wire.RpcWireCommands[K]["result"] extends undefined
+		[K in CommandName]: Wire.RpcWireCommands[K]["result"] extends undefined
 			? Same<ServerResult<K>, undefined>
 			: [Exclude<Wire.RpcWireCommands[K]["result"], null>] extends [Wire.ModelInfo]
 				? OutboundSubset<
@@ -184,7 +163,7 @@ export type CommandResults = Assert<
 /** A nullable result is exactly a server result that can be `null`. */
 export type CommandNullability = Assert<
 	AllTrue<{
-		[K in StockCommandName]: Same<
+		[K in CommandName]: Same<
 			null extends ServerResult<K> ? true : false,
 			null extends Wire.RpcWireCommands[K]["result"] ? true : false
 		>;
@@ -209,7 +188,7 @@ export type UiRequestSet = Assert<Same<Wire.ExtensionUiRequest["method"], Server
 export type UiRequests = Assert<
 	AllTrue<{
 		[K in ServerUiMethod]: Outbound<
-			Omit<Extract<RpcExtensionUIRequest, { method: K }>, "sensitive">,
+			Extract<RpcExtensionUIRequest, { method: K }>,
 			Extract<Wire.ExtensionUiRequest, { method: K }>
 		>;
 	}>
@@ -217,10 +196,7 @@ export type UiRequests = Assert<
 
 export type Frames = Assert<
 	AllTrue<{
-		ready: Outbound<
-			Omit<RpcReadyFrame, "capabilities" | "mode" | "processInstanceId" | "projectIdentity">,
-			Wire.ReadyEvent
-		>;
+		ready: Outbound<RpcReadyFrame, Wire.ReadyEvent>;
 		promptResult: Outbound<RpcPromptResultFrame, Wire.PromptResultEvent>;
 		promptError: Outbound<RpcPromptError, Wire.PromptError>;
 		sessionSettled: Outbound<RpcSessionSettledFrame, Wire.SessionSettledEvent>;
@@ -237,7 +213,7 @@ export type Frames = Assert<
 		liveEnd: Outbound<RpcLiveEndFrame, Wire.LiveEndEvent>;
 		btwDelta: Outbound<RpcBtwDeltaFrame, Wire.BtwDeltaEvent>;
 		btwRecord: Outbound<RpcBtwRecordFrame, Wire.BtwRecordEvent>;
-		hostToolCall: Outbound<Omit<RpcHostToolCallRequest, "sessionId" | "sessionGeneration">, Wire.HostToolCallRequest>;
+		hostToolCall: Outbound<RpcHostToolCallRequest, Wire.HostToolCallRequest>;
 		hostToolCancel: Outbound<RpcHostToolCancelRequest, Wire.HostToolCancelRequest>;
 		hostUriRequest: Outbound<RpcHostUriRequest, Wire.HostUriRequest>;
 		hostUriCancel: Outbound<RpcHostUriCancelRequest, Wire.HostUriCancelRequest>;
@@ -246,8 +222,8 @@ export type Frames = Assert<
 		askAnswer: Inbound<Wire.AskAnswer, Extract<RpcExtensionUIResponse, { answers: unknown }>["answers"][number]>;
 		hostToolDefinition: Inbound<Wire.HostToolDefinition, RpcHostToolDefinition>;
 		hostUriScheme: Inbound<Wire.HostUriSchemeDefinition, RpcHostUriSchemeDefinition>;
-		hostToolUpdate: Inbound<Wire.HostToolUpdate, Omit<RpcHostToolUpdate, "sessionId" | "sessionGeneration">>;
-		hostToolResult: Inbound<Wire.HostToolResult, Omit<RpcHostToolResult, "sessionId" | "sessionGeneration">>;
+		hostToolUpdate: Inbound<Wire.HostToolUpdate, RpcHostToolUpdate>;
+		hostToolResult: Inbound<Wire.HostToolResult, RpcHostToolResult>;
 		hostToolPayload: Inbound<Wire.HostToolResultPayload, RpcHostToolResult["result"]>;
 		hostUriResult: Inbound<Wire.HostUriResult, RpcHostUriResult>;
 		uiValue: Inbound<Wire.ValueUiResponse, Extract<RpcExtensionUIResponse, { value: unknown }>>;

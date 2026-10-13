@@ -5,7 +5,7 @@ import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/script
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
-import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-runtime";
+import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
 /** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);

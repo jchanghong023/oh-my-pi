@@ -305,7 +305,8 @@ export class RpcSessionDirectoryService {
 			diagnostic.progress("read", "completed");
 			diagnostic.progress("revision", "started");
 			this.#assertRevision(sessionId, entry.path, expectedRevision);
-			const authorizedRevision = revisionFor(this.#storage, sessionId, entry.path);
+			// Keep the caller's authorized revision even if another writer changes the file after the check.
+			const authorizedRevision = expectedRevision ?? revisionFor(this.#storage, sessionId, entry.path);
 			diagnostic.progress("revision", "completed");
 			diagnostic.stage = "storage_guard";
 			const remove = this.#storage.deleteSessionWithArtifactsIf;

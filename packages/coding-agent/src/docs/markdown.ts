@@ -290,7 +290,7 @@ function chunkDraft(draft: SectionDraft): SectionDraft[] {
 	let fence: Fence | undefined;
 	for (const line of draft.lines) {
 		if (fence) fences.set(line.byteStart, fence.marker.repeat(fence.length));
-		fence = nextFence(fence, line.text);
+		fence = nextFence(fence, line.byteStart === 0 ? line.text.replace(/^\uFEFF/u, "") : line.text);
 	}
 	const chunks: SectionDraft[] = [];
 	let current: MarkdownSourceLine[] = [];

@@ -2,6 +2,7 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import type { ResolvedCommitModel } from "../model-selection";
 import { extractTextContent } from "../utils";
 import { type CommitInferenceCache, computeCommitCacheKey } from "./cache";
@@ -113,7 +114,9 @@ export class OmpCommitInference implements CommitInference {
 			reasoning,
 		});
 		let lastError: Error | undefined;
-		for (let attempt = 1; attempt <= Math.max(1, this.#config.maxRetries); attempt += 1) {
+		const terminalFailure = target.model.provider === "codeagent" || isJchToolsAgentModel(target.model);
+		const maxAttempts = terminalFailure ? 1 : Math.max(1, this.#config.maxRetries);
+		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			this.#signal?.throwIfAborted();
 			let responseText = "";
 			try {
@@ -136,6 +139,8 @@ export class OmpCommitInference implements CommitInference {
 					},
 				);
 				responseText = extractTextContent(message);
+				if (terminalFailure && message.stopReason === "aborted")
+					throw new Error("Commit inference request aborted");
 				if (message.stopReason === "error") throw new Error(message.errorMessage ?? "Provider error");
 				if (!responseText.trim()) throw new Error("Empty model response");
 				const raw = { text: responseText, stopReason: message.stopReason };
@@ -166,7 +171,7 @@ export class OmpCommitInference implements CommitInference {
 					response: responseText,
 					error: lastError.message,
 				});
-				if (attempt < this.#config.maxRetries) {
+				if (attempt < maxAttempts) {
 					await Bun.sleep(Math.max(0, this.#config.initialBackoffMs) * 2 ** (attempt - 1));
 				}
 			}

@@ -16,6 +16,7 @@ import {
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { isPerCallContextMessage } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { isRecord, logger, readSseEvents } from "@oh-my-pi/pi-utils";
+import { isHiddenUserCompanion } from "../session/queued-messages";
 
 export const JCHTOOLS_PROVIDER_ID = "jchtools";
 export const JCHTOOLS_API = "jchtools-agent";
@@ -88,7 +89,12 @@ export function projectJchToolsMessages(messages: readonly AgentMessage[]): Agen
 			case "fileMention":
 				return [message];
 			case "custom": {
-				if (message.attribution !== "user" || message.customType === "goal-auto-orchestrate-context") return [];
+				if (
+					message.attribution !== "user" ||
+					message.customType === "goal-auto-orchestrate-context" ||
+					isHiddenUserCompanion(message)
+				)
+					return [];
 				// Skill bodies are harness instructions; only the submitted draft is caller-owned.
 				const details = isRecord(message.details) ? message.details : undefined;
 				const content = message.customType === "skill-prompt" ? details?.prompt : message.content;
@@ -180,6 +186,9 @@ export function streamJchToolsAgent(
 		let sessionState: JchToolsSessionState | undefined;
 		let requestPublished = false;
 		const detachCancelledTask = () => sessionState?.close(callId);
+		const forgetUnavailableSession = (error: unknown) => {
+			if (isRecord(error) && error.code === "session_unavailable") sessionState?.close(callId);
+		};
 		let finished = false;
 		let done = false;
 		let modelIdHash: string | undefined;
@@ -301,8 +310,7 @@ export function streamJchToolsAgent(
 				try {
 					const envelope: unknown = JSON.parse(body);
 					if (isRecord(envelope) && envelope.error !== undefined) {
-						if (isRecord(envelope.error) && envelope.error.code === "session_unavailable")
-							sessionState?.close(callId);
+						forgetUnavailableSession(envelope.error);
 						detail = errorDetail(envelope.error);
 					}
 				} catch (error) {
@@ -344,6 +352,14 @@ export function streamJchToolsAgent(
 				stage = "validate_sse";
 				if (event.event === "error") {
 					stage = "backend_error";
+					try {
+						const envelope: unknown = JSON.parse(event.data);
+						forgetUnavailableSession(
+							isRecord(envelope) && envelope.error !== undefined ? envelope.error : envelope,
+						);
+					} catch {
+						// Plain-text error events remain supported and retain their original detail.
+					}
 					throw responseError(`backend error: ${event.data}`, "output");
 				}
 				if (!event.data) {
@@ -374,6 +390,7 @@ export function streamJchToolsAgent(
 				if (!isRecord(chunk)) throw responseError("SSE data must be a completion object");
 				if (chunk.error !== undefined) {
 					stage = "backend_error";
+					forgetUnavailableSession(chunk.error);
 					throw responseError(`backend error: ${errorDetail(chunk.error)}`, "output");
 				}
 				if (finished) throw responseError("completion data arrived after finish_reason");

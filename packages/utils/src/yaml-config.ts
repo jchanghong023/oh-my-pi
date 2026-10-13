@@ -1,5 +1,5 @@
 import { YAML } from "bun";
-import { type Alias, isAlias, isMap, isNode, type Node, parseDocument, visit } from "yaml";
+import { type Alias, isAlias, isMap, isNode, isScalar, type Node, parseDocument, visit } from "yaml";
 
 const YAML_MAPPING_HEADER_TRAILING_SPACE = /: +$/gm;
 
@@ -19,16 +19,23 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 		expanded.spaceBefore = alias.spaceBefore;
 		return expanded;
 	};
+	// YAML scalar keys become strings in settings records, but AST lookup compares their types.
+	// Retain the actual key nodes so numeric/boolean custom role IDs update or delete in place.
+	const resolvedKeys: unknown[] = [];
 	// A role may live behind an alias. Edit a private copy rather than its shared source.
-	for (let length = 1; length <= keys.length; length++) {
-		const prefix = keys.slice(0, length);
-		const node = doc.getIn(prefix, true);
-		if (isAlias(node)) doc.setIn(prefix, expandAlias(node));
+	for (const key of keys) {
+		const parent = doc.getIn(resolvedKeys, true);
+		const pair = isMap(parent)
+			? parent.items.find(item => isScalar(item.key) && String(item.key.value) === key)
+			: undefined;
+		resolvedKeys.push(pair ? pair.key : key);
+		const node = doc.getIn(resolvedKeys, true);
+		if (isAlias(node)) doc.setIn(resolvedKeys, expandAlias(node));
 	}
-	const existing = doc.getIn(keys, true);
+	const existing = doc.getIn(resolvedKeys, true);
 	const changedNodes = new Set<Node>();
 	for (let length = 0; length < keys.length; length++) {
-		const ancestor = doc.getIn(keys.slice(0, length), true);
+		const ancestor = doc.getIn(resolvedKeys.slice(0, length), true);
 		if (isNode(ancestor)) changedNodes.add(ancestor);
 	}
 	if (isNode(existing))
@@ -56,9 +63,9 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 		});
 	}
 	if (value === undefined) {
-		const parent = doc.getIn(keys.slice(0, -1), true);
+		const parent = doc.getIn(resolvedKeys.slice(0, -1), true);
 		if (isMap(parent)) {
-			const pair = parent.items.find(item => isNode(item.key) && item.key.toJSON() === keys.at(-1));
+			const pair = parent.items.find(item => item.key === resolvedKeys.at(-1));
 			// 删除角色仍保留其注释；否则 GUI 取消模型会悄悄丢掉用户说明。
 			const retainedComments = [
 				isNode(pair?.key) ? pair.key.commentBefore : undefined,
@@ -68,12 +75,12 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 			if (retainedComments.length > 0)
 				parent.comment = [parent.comment, ...retainedComments].filter(Boolean).join("\n");
 		}
-		doc.deleteIn(keys);
+		doc.deleteIn(resolvedKeys);
 	} else {
 		const replacement = doc.createNode(value);
 		if (comments.length > 0) replacement.commentBefore = comments.join("\n");
 		if (isNode(existing)) replacement.spaceBefore = existing.spaceBefore;
-		doc.setIn(keys, replacement);
+		doc.setIn(resolvedKeys, replacement);
 	}
 	return doc.toString({ lineWidth: 0 });
 }

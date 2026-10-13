@@ -169,17 +169,31 @@ export function isSyntheticUser(message: SyntheticUserCarrier | null | undefined
  */
 export const kPerCallContextMessage = Symbol("agent.message.perCallContext");
 const kPerCallContextSource = Symbol("agent.message.perCallContextSource");
+const kPerCallContextHistoryOrigin = Symbol("agent.message.perCallContextHistoryOrigin");
+
+/** Turn identity only; never retain the historical message or its contents. */
+export interface PerCallContextHistoryOrigin {
+	readonly role: string;
+	readonly timestamp: number;
+}
 
 /** Carries per-call context provenance without exposing a string-keyed property. */
 export type PerCallContextMessageCarrier = object & {
 	[kPerCallContextMessage]?: true;
 	[kPerCallContextSource]?: string;
+	[kPerCallContextHistoryOrigin]?: PerCallContextHistoryOrigin;
 };
 
 /** Marks a message as synthesized for the current provider call. */
-export function markPerCallContextMessage(message: PerCallContextMessageCarrier, source?: string): void {
+export function markPerCallContextMessage(
+	message: PerCallContextMessageCarrier,
+	source?: string,
+	historyOrigin?: PerCallContextHistoryOrigin,
+): void {
 	message[kPerCallContextMessage] = true;
 	if (source !== undefined) message[kPerCallContextSource] = source;
+	if (historyOrigin) message[kPerCallContextHistoryOrigin] = historyOrigin;
+	else delete message[kPerCallContextHistoryOrigin];
 }
 
 /** Copies per-call context provenance to a converted or projected message. */
@@ -187,7 +201,12 @@ export function copyPerCallContextMessage(
 	target: PerCallContextMessageCarrier,
 	source: PerCallContextMessageCarrier,
 ): void {
-	if (source[kPerCallContextMessage] === true) target[kPerCallContextMessage] = true;
+	if (source[kPerCallContextMessage] === true) {
+		target[kPerCallContextMessage] = true;
+		const historyOrigin = source[kPerCallContextHistoryOrigin];
+		if (historyOrigin) target[kPerCallContextHistoryOrigin] = historyOrigin;
+		else delete target[kPerCallContextHistoryOrigin];
+	}
 	if (source[kPerCallContextSource] !== undefined) target[kPerCallContextSource] = source[kPerCallContextSource];
 }
 
@@ -199,6 +218,13 @@ export function isPerCallContextMessage(message: PerCallContextMessageCarrier | 
 /** Stable producer identity for independently reserving request-only context in compaction. */
 export function getPerCallContextSource(message: PerCallContextMessageCarrier): string | undefined {
 	return message[kPerCallContextSource];
+}
+
+/** Original turn boundary for a transformed message with a trusted history index. */
+export function getPerCallContextHistoryOrigin(
+	message: PerCallContextMessageCarrier | null | undefined,
+): PerCallContextHistoryOrigin | undefined {
+	return message?.[kPerCallContextHistoryOrigin];
 }
 
 /**

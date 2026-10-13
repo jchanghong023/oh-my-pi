@@ -13,7 +13,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { $ } from "bun";
-import { withCompilerActivity } from "../../../scripts/test-gate-runtime";
+import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const root = path.resolve(import.meta.dir, "..");
 const repoRoot = path.resolve(root, "../..");

@@ -280,7 +280,6 @@ describe("native security coordinator", () => {
 	});
 	test("ref-diff execution checks out the immutable head and supplies the exact diff", async () => {
 		await $`git init --initial-branch=main`.cwd(repositoryRoot).quiet();
-		await $`git config core.autocrlf false`.cwd(repositoryRoot).quiet();
 		await $`git config user.name Fixture`.cwd(repositoryRoot).quiet();
 		await $`git config user.email fixture@example.invalid`.cwd(repositoryRoot).quiet();
 		// The checked-out head is compared byte-for-byte; Git for Windows'

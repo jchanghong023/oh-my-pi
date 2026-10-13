@@ -364,11 +364,13 @@ export async function fetchWithRetry(
 				...baseInit
 			} = options;
 			const signal = baseInit.signal as AbortSignal | undefined;
+			let activeSignal = signal;
 
 			try {
 				for (let attempt = 0; ; attempt++) {
 					currentAttempt = attempt + 1;
 					stage = "prepare";
+					activeSignal = signal;
 					if (signal?.aborted) throw new Error("Request was aborted");
 					const requestUrl = typeof url === "function" ? url(attempt) : url;
 					target = logger.diagnosticUrl(String(requestUrl));
@@ -384,6 +386,7 @@ export async function fetchWithRetry(
 						: "timeout" in options
 							? ({ ...baseInit, timeout } as unknown as RequestInit)
 							: baseInit;
+					activeSignal = init.signal ?? undefined;
 
 					let response: Response;
 					stage = "fetch";
@@ -424,6 +427,7 @@ export async function fetchWithRetry(
 							next_attempt: currentAttempt + 1,
 						});
 						stage = "backoff";
+						activeSignal = signal;
 						await waitForRetry(delayMs, signal);
 						continue;
 					}
@@ -468,16 +472,22 @@ export async function fetchWithRetry(
 						next_attempt: currentAttempt + 1,
 					});
 					stage = "backoff";
+					activeSignal = signal;
 					// The retried response is discarded; release its unread tee branch.
 					if (!response.bodyUsed) response.body?.cancel().catch(() => {});
 					await waitForRetry(delayMs, signal);
 				}
 			} catch (error) {
-				const timedOut = signal?.aborted && signal.reason?.name === "TimeoutError";
-				const cancelled = signal?.aborted && !timedOut;
+				const errorFields = logger.diagnosticError(error);
+				const terminalSignal = signal?.aborted ? signal : activeSignal;
+				const errorType = terminalSignal?.aborted
+					? logger.diagnosticError(terminalSignal.reason).error_type
+					: errorFields.error_type;
+				const timedOut = errorType === "TimeoutError" || errorType === "StreamTimeoutError";
+				const cancelled = terminalSignal?.aborted && !timedOut;
 				logger[cancelled ? "info" : "error"]("HTTP request terminated", {
 					...logFields(),
-					...logger.diagnosticError(error),
+					...errorFields,
 					event: cancelled ? "http_request_cancelled" : "http_request_failed",
 					result: cancelled ? "cancelled" : "failed",
 					timeout: timedOut,

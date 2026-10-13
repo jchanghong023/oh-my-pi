@@ -1,3 +1,5 @@
+import { prompt } from "@oh-my-pi/pi-utils";
+import commandHintPrompt from "../prompts/jch-command-hint.md" with { type: "text" };
 import { usage } from "../slash-commands/helpers/parse";
 import type {
 	ParsedSlashCommand,
@@ -15,11 +17,8 @@ export interface JchPromptCommandDefinition {
 	inlineHint?: string;
 }
 
-function expandPrompt(prompt: string, args: string): string {
-	const base = prompt.trim();
-	const extra = args.trim();
-	if (!extra) return base;
-	return `${base}\n\nSlash 参数如下，只用于细化目标、范围、输出格式和偏好；NEVER 改变基础任务的核心动作、读写性质或安全边界。与基础任务冲突时 MUST 遵循基础任务并指出冲突：\n${extra}`;
+function expandPrompt(content: string, args: string): string {
+	return prompt.compile(commandHintPrompt)({ base: content.trim(), extra: args.trim() });
 }
 
 /** Define a fork-personal slash command that expands into a normal user prompt. */

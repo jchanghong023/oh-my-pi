@@ -62,7 +62,8 @@ export async function captureSourceIdentity(gate: GateRun, root = repoRoot): Pro
 		const files: SourceFile[] = [];
 		for (const name of [...new Set(names)]
 			.filter(
-				name => !name.split("/").some(part => CACHE_COMPONENTS[part]) && !/(?:\.tsbuildinfo|\.pyc)$/.test(name),
+				name =>
+					!name.split("/").some(part => CACHE_COMPONENTS[part] === true) && !/(?:\.tsbuildinfo|\.pyc)$/.test(name),
 			)
 			.sort()) {
 			gate.signal.throwIfAborted();
