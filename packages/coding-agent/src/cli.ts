@@ -33,6 +33,7 @@ import {
 	BLOB_BROKER_WORKER_ARG,
 	COMPUTER_WORKER_ARG,
 	DAEMON_BROKER_WORKER_ARG,
+	DOCS_WORKER_ARG,
 	IDA_HOST_WORKER_ARG,
 	LSP_MUX_WORKER_ARG,
 	MNEMOPI_EMBED_SERVER_WORKER_ARG,
@@ -143,6 +144,8 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTtsWorker } = await import("./tts/tts-client");
 	const { smokeTestMnemopiEmbedWorker } = await import("./mnemopi/embed-client");
 	const { smokeTestStatsActivityWorker } = await import("./stats/activity-client");
+	// Keep the smoke-only subprocess graph out of normal CLI startup.
+	const { smokeTestDocsWorker } = await import("./docs/service");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
 	// Other smoke dependencies stay lazy so normal CLI startup does not load their worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
@@ -153,6 +156,7 @@ async function runSmokeTest(): Promise<void> {
 	const { smokeTestTextPredictDaemon } = await import("./predict/client");
 	await smokeTestSyncWorker();
 	await smokeTestStatsActivityWorker();
+	await smokeTestDocsWorker();
 
 	const statsServer = await startServer(0);
 	try {
@@ -276,6 +280,12 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === MNEMOPI_EMBED_SERVER_WORKER_ARG) {
 		const { startMnemopiEmbedServerFromEnvironment } = await import("./mnemopi/embed-server");
 		await startMnemopiEmbedServerFromEnvironment();
+		return true;
+	}
+	if (arg === DOCS_WORKER_ARG) {
+		// This import is the isolation boundary: static loading would open the SQLite runtime in ordinary CLI startup.
+		const { startDocsWorker } = await import("./docs/worker");
+		await runIpcSubprocessWorker(startDocsWorker);
 		return true;
 	}
 	if (arg === STATS_ACTIVITY_WORKER_ARG) {

@@ -7,7 +7,9 @@ import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { discoverJchTools, discoverJchToolsModels } from "../../src/config/jchtools-discovery";
 import { JCHTOOLS_API, streamJchToolsAgent } from "../../src/config/jchtools-provider";
 import { Settings } from "../../src/config/settings";
+import { DocsSearchEngine } from "../../src/docs/engine";
 import { DocsService } from "../../src/docs/service";
+import { DocsStorage } from "../../src/docs/storage";
 import {
 	type PendingExtensionRequest,
 	type RpcExtensionUIResponse,
@@ -21,27 +23,40 @@ const [mode, root, canary] = process.argv.slice(2);
 if (!root || !canary || !process.env.OMP_CONFIG_ROOT) throw new Error("Expected an isolated diagnostic fixture");
 
 async function docsProbe() {
-	const service = new DocsService({ agentDir: getAgentDir(), cwd: root });
+	// The interrupted-build fixture observes raw SQL at an exact FTS commit boundary.
+	const service =
+		mode === "wiki"
+			? new DocsService({ agentDir: getAgentDir(), cwd: root })
+			: new DocsSearchEngine({ agentDir: getAgentDir(), cwd: root });
 	try {
 		if (mode === "wiki") {
+			const cleanups: Array<() => void | Promise<void>> = [];
 			const tool = new WikiTool({
 				cwd: root,
 				hasUI: false,
 				settings: Settings.isolated(),
 				getSessionFile: () => null,
 				getSessionSpawns: () => null,
+				registerDisposeCallback: callback => {
+					cleanups.push(callback);
+				},
 			});
-			const result = await tool.execute("diagnostic-wiki", { query: `${canary}QUERY` });
-			return {
-				indexes: service.list(),
-				text: result.content.map(part => (part.type === "text" ? part.text : "")).join("\n"),
-			};
+			try {
+				const result = await tool.execute("diagnostic-wiki", { query: `${canary}QUERY` });
+				return {
+					indexes: await service.list(),
+					text: result.content.map(part => (part.type === "text" ? part.text : "")).join("\n"),
+				};
+			} finally {
+				for (const cleanup of cleanups) await cleanup();
+				await tool.dispose();
+			}
 		}
 		const documents = path.join(root, "interrupted-documents");
 		fs.mkdirSync(documents);
 		fs.writeFileSync(path.join(documents, "first.md"), `# Evidence\n${canary}ROLLBACKBODY\n`);
 		fs.writeFileSync(path.join(documents, "second.md"), `# Evidence\n${canary}ROLLBACKBODY\n`);
-		const before = service.list();
+		const before = await service.list();
 		const controller = new AbortController();
 		let visibleDuringBuild: unknown;
 		let failure: string | undefined;
@@ -50,7 +65,7 @@ async function docsProbe() {
 				signal: controller.signal,
 				onProgress(progress) {
 					if (progress.phase !== "fts" || progress.completed !== 1) return;
-					visibleDuringBuild = service.list();
+					visibleDuringBuild = (service as DocsSearchEngine).list();
 					if (mode === "cancel") controller.abort();
 					else {
 						// Remove only the unread file, after one real FTS commit, without relying on scan order.
@@ -63,12 +78,13 @@ async function docsProbe() {
 		} catch (error) {
 			failure = error instanceof Error ? error.name : typeof error;
 		}
-		const hidden = service.storage.db
+		const hidden = (service as DocsSearchEngine).storage.db
 			.query("SELECT COUNT(*) AS count FROM doc_indexes WHERE name GLOB '__building__*'")
 			.get();
-		return { before, visibleDuringBuild, after: service.list(), hidden, failure };
+		return { before, visibleDuringBuild, after: await service.list(), hidden, failure };
 	} finally {
-		service.close();
+		if (service instanceof DocsService) await service.close();
+		else service.close();
 	}
 }
 
@@ -261,15 +277,20 @@ async function boundariesProbe() {
 	const service = new DocsService({ agentDir: getAgentDir(), cwd: root });
 	let listFailure: string | undefined;
 	try {
-		service.list();
-		service.storage.db.exec("DROP TABLE doc_indexes");
+		await service.list();
+		const storage = new DocsStorage(service.databasePath);
 		try {
-			service.list();
+			storage.db.exec("DROP TABLE doc_indexes");
+		} finally {
+			storage.close();
+		}
+		try {
+			await service.list();
 		} catch (error) {
 			listFailure = error instanceof Error ? error.name : typeof error;
 		}
 	} finally {
-		service.close();
+		await service.close();
 	}
 	const dialogs: Array<{ kind: string; value?: string; failure?: string; pending: number; methods: unknown[] }> = [];
 	for (const kind of ["responded", "cancelled", "timed_out", "aborted", "failed", "disconnected", "editor_aborted"]) {

@@ -6,7 +6,8 @@
 - Entry: `packages/coding-agent/src/tools/wiki.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/wiki.md`
 - Key collaborators:
-  - `packages/coding-agent/src/docs/service.ts` — index discovery and search
+  - `packages/coding-agent/src/docs/service.ts` — asynchronous, cancellable index discovery and search
+  - `packages/coding-agent/src/docs/engine.ts` — database-only ranking and snapshot-bound complete-rank reuse
   - `packages/coding-agent/src/docs/markdown.ts` — section shape classification and heading truncation
   - Index lifecycle: `omp docs init "<dir>" --name <name>` / `omp docs remove <name> --force`
 
@@ -41,11 +42,12 @@ Extra keys are ignored by execution's lenient argument validation; the advertise
 - Zero matches is a normal successful result: it reports `0 matching section(s)` in the searched imported corpus and exhaustion, not that the information does not exist elsewhere.
 
 ## Flow
-1. Opens `DocsService` using the agent directory and session cwd. Missing indexes fail with the `omp docs init` usage hint.
-2. Searches stored database text and builds the page under the character target and 200-section ceiling. Version, ranked matches, counts, text and provenance come from the same read snapshot.
+1. Lazily retains an owner-scoped `DocsService` using the agent directory and session cwd; creating the service does not open the database. Session disposal or a profile/database change releases its owned resources. Missing indexes fail with the `omp docs init` usage hint.
+2. Searches stored database text asynchronously, without blocking interactive input or rendering, and forwards the caller's cancellation signal. An unchanged query reuses its retained complete ranked set; bounded retention evicts whole queries, not evidence tails. Builds the page under the character target and 200-section ceiling; version, ranked matches, counts, text and provenance come from the same validated read snapshot.
 3. Returns evidence and either exhaustion or continuation JSON. For example, start with `{"query":"MBIST 仿真日志"}`; follow the exact next-call JSON in the footer with unchanged query and the emitted cursor. Do not narrow or rewrite a query to retrieve its remaining pages.
 4. The cursor binds the effective query, index scope and logical database version. It survives service close/reopen; malformed, mismatched or stale cursors fail rather than silently mixing index generations or returning zero matches. Restart with the original query and no cursor after an index change.
 5. Query, continuation and citations use the database only: no source-file access, source freshness checks, automatic synchronization, models or vectors.
+6. Every successful outward search, including continuation and zero matches, takes **at least 500ms (≥500ms, not a 500ms upper bound)**. Any remaining time after query and page-budget work is an abortable asynchronous wait, without a held database transaction. Diagnostic timing distinguishes execution work, minimum-duration wait and total outward time; errors and cancellation are not padded.
 
 ## Side Effects
 - Does not import or remove indexes, modify source documents, or change session state (`approval: "read"`). Opening the local database may create its storage or migrate older searchable text from stored Markdown; queries also write bounded diagnostic logs.
@@ -65,9 +67,11 @@ Extra keys are ignored by execution's lenient argument validation; the advertise
 - Changed logical database version: `Stale documentation search cursor: indexed snapshot has changed`.
 - No indexes configured: `No document indexes. Run: omp docs init "<dir>" --name <name>`.
 - Database failures and other operational errors remain errors. Zero matches, heading-only hits and structural labels are not errors.
+- Cancellation aborts the pending call promptly; it is not a zero-match result and is not automatically retried. A cancelled queued call does not cancel another active call.
 
 ## Notes
 - The corpus is the Markdown snapshot imported by `omp docs init`; later source edits/additions are not included. Imports require valid UTF-8; BOM and CRLF retain correct provenance. If a newer snapshot is needed, remove then re-import manually; queries never inspect source freshness or initialize/delete indexes automatically.
 - Older searchable text is automatically regenerated from stored Markdown to repair code punctuation, without reading source files or changing the database tables. Content discarded during an older import (such as a technical heading), and long lines partitioned without overlap, require remove + init to use the new ingestion rules.
-- The only lifecycle commands are `omp docs init "<dir>" --name <name>` and `omp docs remove <name> --force`; there are no update/list/status/rebuild commands. The `/wiki` panel lists indexes and can initiate those two actions. In search results, `n` requests the next page and `b` returns from a section to the current result page.
+- The only lifecycle commands are `omp docs init "<dir>" --name <name>` and `omp docs remove <name> --force`; there are no update/list/status/rebuild commands. The `/wiki` panel lists indexes and can initiate those two actions. In search results, `n` requests the next page and `b` returns from a section to the current result page. Loading, search/continuation, deletion and import show their current operation state; `c` or `Esc` directly cancels the pending operation without waiting for a close confirmation, and closing the panel also cancels it. A failed or cancelled continuation retains the prior result page and selected stored evidence; late replies cannot replace newer results.
+- SDK owners must await `DocsService.close()` or `WikiTool.dispose()` before removing the database or its directory. Shutdown cancels pending calls immediately; its promise resolves after the owned worker exits and releases its handles.
 - Legacy heading paths may be truncated to bound locators, never bodies. The `/wiki` panel opens the selected hit's stored search-result snapshot rather than resolving its `sectionId` in another index generation.

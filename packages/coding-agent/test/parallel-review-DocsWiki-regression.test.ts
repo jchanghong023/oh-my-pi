@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "../src/config/settings";
 import { endingMarkdownFence, markdownSectionContexts } from "../src/docs/markdown";
-import { DocsService } from "../src/docs/service";
+import { DocsSearchEngine } from "../src/docs/engine";
 import { WikiTool } from "../src/tools/wiki";
 
 const tempDirs: string[] = [];
@@ -89,7 +89,7 @@ describe("Document fence indexing regressions", () => {
 		const agentDir = await tempDir("docs-unicode-fence-agent-");
 		const source = "# Notes\n```python\u2028metadata\ncounter*factor*next\n```\n";
 		await Bun.write(path.join(root, "notes.md"), source);
-		const writer = new DocsService({ agentDir });
+		const writer = new DocsSearchEngine({ agentDir });
 		let sectionId: number;
 		try {
 			await writer.init(root, "manual");
@@ -108,7 +108,7 @@ describe("Document fence indexing regressions", () => {
 			writer.close();
 		}
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsService({ agentDir });
+		const reader = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reader.search("counter*factor*next").sections[0]).toMatchObject({ sectionId, text: source });
 			expect(reader.search("counterfactornext").sections).toEqual([]);
@@ -124,7 +124,7 @@ describe("Document fence indexing regressions", () => {
 		await Bun.write(path.join(root, "code.md"), source);
 		const overlapSource = `\`\`\`python\n${"z".repeat(35_000)}\`\`\`${" ".repeat(600)}\nmask*value*tail\n\`\`\`\n`;
 		await Bun.write(path.join(root, "overlap.md"), overlapSource);
-		const writer = new DocsService({ agentDir });
+		const writer = new DocsSearchEngine({ agentDir });
 		try {
 			await writer.init(root, "manual");
 			const hit = writer.search("Row").sections[0];
@@ -135,7 +135,7 @@ describe("Document fence indexing regressions", () => {
 			writer.close();
 		}
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsService({ agentDir });
+		const reader = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reader.search("Row").sections[0].text).toBe("# Row\n");
 			expect(reader.search("Cell").sections).toEqual([]);
@@ -150,13 +150,17 @@ describe("Document fence indexing regressions", () => {
 				getSessionFile: () => null,
 				getSessionSpawns: () => null,
 			});
-			const result = await tool.execute("continuation", { query: "Row" });
-			const page = result.content.map(item => ("text" in item ? item.text : "")).join("\n");
-			expect(page).toContain("# Row\n");
-			expect(page).not.toContain("heading only");
-			const headingResult = await tool.execute("heading", { query: "ATPG" });
-			const headingPage = headingResult.content.map(item => ("text" in item ? item.text : "")).join("\n");
-			expect(headingPage).toContain("heading only");
+			try {
+				const result = await tool.execute("continuation", { query: "Row" });
+				const page = result.content.map(item => ("text" in item ? item.text : "")).join("\n");
+				expect(page).toContain("# Row\n");
+				expect(page).not.toContain("heading only");
+				const headingResult = await tool.execute("heading", { query: "ATPG" });
+				const headingPage = headingResult.content.map(item => ("text" in item ? item.text : "")).join("\n");
+				expect(headingPage).toContain("heading only");
+			} finally {
+				await tool.dispose();
+			}
 		} finally {
 			reader.close();
 		}

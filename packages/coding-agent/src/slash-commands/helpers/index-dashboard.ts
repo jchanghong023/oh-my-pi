@@ -155,7 +155,8 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 		const service = new DocsService({ agentDir: runtime.settings.getAgentDir(), cwd: runtime.cwd });
 		try {
 			scope.stage("docs_list");
-			const indexes = service.list();
+			const indexes = await service.list({ signal: scope.signal });
+			if (!scope.current()) return;
 			scope.stage("index_output");
 			await scope.output(
 				indexes.length
@@ -194,8 +195,10 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 					signal: scope.signal,
 					onProgress: value => scope.progress(value.phase, value.completed, value.total),
 				});
+				if (!scope.current()) return;
 				scope.stage("index_output");
 				await scope.output(`Created document index ${line(result.index.name)}: ${result.processed} documents.`);
+				if (!scope.current()) return;
 			} else if (action === "Delete document index") {
 				const labels = indexes.map((index, position) => `${position + 1}. ${line(index.name)}`);
 				scope.stage("index_select");
@@ -211,9 +214,11 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 				);
 				if (!scope.current() || !confirmed) return scope.cancel();
 				scope.stage("docs_remove");
-				service.remove(index.name);
+				await service.remove(index.name, { signal: scope.signal });
+				if (!scope.current()) return;
 				scope.stage("index_output");
 				await scope.output(`Deleted document index ${line(index.name)}. Source files are preserved.`);
+				if (!scope.current()) return;
 			} else if (action === "Search document indexes") {
 				scope.stage("query_input");
 				const query = (
@@ -224,7 +229,8 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 				let pageStart = 0;
 				while (scope.current()) {
 					scope.stage("docs_search");
-					const result = service.search(query, { limit: 20, cursor });
+					const result = await service.search(query, { limit: 20, cursor, signal: scope.signal });
+					if (!scope.current()) return;
 					scope.stage("index_output");
 					await scope.output(
 						[
@@ -263,12 +269,13 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 						await scope.output(
 							`[${section.matchKind}] [${line(section.index)}] ${line(section.path)}:${section.lineStart}-${section.lineEnd} ${line(section.headingPath)}\nsha256=${section.documentHash} · sectionId=${section.sectionId}\n\n${section.text}`,
 						);
+						if (!scope.current()) return;
 					}
 				}
 			}
 		} finally {
 			const previous = scope.stage("docs_close");
-			service.close();
+			await service.close();
 			scope.stage(previous);
 		}
 	});

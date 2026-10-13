@@ -82,9 +82,9 @@ async function importWikiEvidence(f: WikiEvidenceLocation, count: number) {
 	const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 	try {
 		await docs.init(f.docsDir, "manual");
-		return docs.search("mbist_check.rpt", { limit: 100 });
+		return await docs.search("mbist_check.rpt", { limit: 100 });
 	} finally {
-		docs.close();
+		await docs.close();
 	}
 }
 
@@ -108,18 +108,18 @@ describe("RPC index commands use the real index services", () => {
 		await f.run("/wiki");
 		const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
-			expect(docs.list().map(index => index.name)).toEqual(["manual"]);
+			expect((await docs.list()).map(index => index.name)).toEqual(["manual"]);
 		} finally {
-			docs.close();
+			await docs.close();
 		}
 		f.select.mockResolvedValueOnce("Delete document index").mockResolvedValueOnce("1. manual");
 		f.confirm.mockResolvedValueOnce(true);
 		await f.run("/wiki");
 		const removed = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
-			expect(removed.list()).toEqual([]);
+			expect(await removed.list()).toEqual([]);
 		} finally {
-			removed.close();
+			await removed.close();
 		}
 		expect(await Bun.file(path.join(f.docsDir, "manual.md")).text()).toContain("sensorbeacon");
 	});
@@ -177,13 +177,13 @@ describe("RPC index commands use the real index services", () => {
 		f.select.mockImplementationOnce(async (_title, options) => {
 			const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 			try {
-				docs.remove("manual");
+				await docs.remove("manual");
 				await fs.rm(f.docsDir, { recursive: true });
 				await fs.mkdir(f.docsDir);
 				await Bun.write(path.join(f.docsDir, "replacement.md"), "# Replacement\nmbist_check.rpt new snapshot\n");
 				await docs.init(f.docsDir, "manual");
 			} finally {
-				docs.close();
+				await docs.close();
 			}
 			return getExtensionUISelectOptionLabel(options[0]!);
 		});
@@ -235,7 +235,7 @@ describe("RPC index commands use the real index services", () => {
 		try {
 			await docs.init(f.docsDir, indexName);
 		} finally {
-			docs.close();
+			await docs.close();
 		}
 		const events: LogEvent[] = [];
 		const operationId = "rpc-wiki-duplicate-regression";
@@ -249,10 +249,10 @@ describe("RPC index commands use the real index services", () => {
 			expect(f.output.join("\n")).toContain(`/wiki failed: Document index already exists: ${indexName}`);
 			const retained = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
 			try {
-				expect(retained.list().map(index => index.name)).toEqual([indexName]);
-				expect(retained.search("sensorbeacon").sections).not.toHaveLength(0);
+				expect((await retained.list()).map(index => index.name)).toEqual([indexName]);
+				expect((await retained.search("sensorbeacon")).sections).not.toHaveLength(0);
 			} finally {
-				retained.close();
+				await retained.close();
 			}
 			expect(events.map(event => event.context?.event)).toEqual([
 				"rpc_index_dashboard_started",

@@ -1,3 +1,44 @@
+export interface DocsServiceOptions {
+	agentDir: string;
+	cwd?: string;
+}
+
+export interface DocsBuildOptions {
+	signal?: AbortSignal;
+	onProgress?: (progress: DocsProgress) => void;
+}
+
+export interface DocsSearchOptions {
+	index?: string;
+	limit?: number;
+	cursor?: string;
+	characterBudget?: number;
+	sectionCost?: (section: DocsSectionHit, position: number) => number;
+	signal?: AbortSignal;
+}
+
+export interface DocsSearchWindowOptions {
+	index?: string;
+	limit?: number;
+	cursor?: string;
+}
+
+export interface DocsSearchCursor {
+	v: 1;
+	q: string;
+	s: string;
+	p: number;
+}
+
+export interface DocsSearchWindow {
+	sections: DocsSectionHit[];
+	total: number;
+	exactNameMatches: number;
+	technicalName?: string;
+	/** Start of this window, not the position after its prefetched sections. */
+	cursorBase: DocsSearchCursor;
+}
+
 export type DocsProgressPhase = "scan" | "fts";
 
 export interface DocsProgress {

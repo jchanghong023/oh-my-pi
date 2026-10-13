@@ -7,6 +7,8 @@ import { DocsService } from "../src/docs/service";
 import { WikiTool } from "../src/tools/wiki";
 
 const tempDirs: string[] = [];
+const sessionCleanups: Array<() => void | Promise<void>> = [];
+const tools = new Set<WikiTool>();
 async function tempDir(prefix: string): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	tempDirs.push(dir);
@@ -14,6 +16,9 @@ async function tempDir(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
+	for (const cleanup of sessionCleanups.splice(0)) await cleanup();
+	for (const tool of tools) await tool.dispose();
+	tools.clear();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -23,6 +28,14 @@ function session(agentDir: string, cwd: string) {
 		hasUI: false,
 		settings: { getAgentDir: () => agentDir } as unknown as Settings,
 		getSessionFile: () => null,
+		registerDisposeCallback: (callback: () => void | Promise<void>) => {
+			sessionCleanups.push(callback);
+			return () => {
+				const index = sessionCleanups.indexOf(callback);
+				if (index !== -1) sessionCleanups.splice(index, 1);
+			};
+		},
+		registerSessionChangeCallback: () => () => {},
 		getSessionSpawns: () => null,
 	};
 }
@@ -37,6 +50,7 @@ function text(result: ToolResult): string {
 
 /** Runs the tool with unvalidated arguments, as the agent loop does for this tool. */
 function run(tool: WikiTool, params: unknown): Promise<ToolResult> {
+	tools.add(tool);
 	return tool.execute("t", params as never) as Promise<ToolResult>;
 }
 
@@ -72,12 +86,26 @@ async function indexedFixture(files: Record<string, string>): Promise<{ root: st
 	try {
 		await service.init(".", "manual");
 	} finally {
-		service.close();
+		await service.close();
 	}
 	return { root, agent };
 }
 
 describe("WikiTool", () => {
+	it("awaits explicit disposal after the real session callback starts teardown", async () => {
+		const fixture = await indexedFixture({ "guide.md": "# Guide\nshutdownbeacon complete evidence\n" });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		expect(text(await run(tool, { query: "shutdownbeacon" }))).toContain("complete evidence");
+		for (const cleanup of sessionCleanups.splice(0)) await cleanup();
+		const shutdown = tool.dispose();
+		expect(tool.dispose()).toBe(shutdown);
+		await shutdown;
+		expect(tool.dispose()).toBe(shutdown);
+		await expect(run(tool, { query: "shutdownbeacon" })).rejects.toThrow("disposed");
+		await fs.rm(fixture.agent, { recursive: true });
+		expect(await Bun.file(path.join(fixture.agent, "docs.db")).exists()).toBe(false);
+	});
+
 	it("identifies conflicting same-path evidence by index and stable document fingerprint", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Policy\nsharedpolicybeacon requires five cycles.\n" });
 		const second = await tempDir("docs-tool-other-");
@@ -86,7 +114,7 @@ describe("WikiTool", () => {
 		try {
 			await service.init(second, "other-version");
 		} finally {
-			service.close();
+			await service.close();
 		}
 		const page = text(await run(new WikiTool(session(fixture.agent, fixture.root)), { query: "sharedpolicybeacon" }));
 		expect(page).toContain("guide.md:1-2 · Policy · index=manual");
@@ -147,9 +175,9 @@ describe("WikiTool", () => {
 		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
 		let ranked: string[];
 		try {
-			ranked = service.search("needle", { limit: 200 }).sections.map(section => section.path);
+			ranked = (await service.search("needle", { limit: 200 })).sections.map(section => section.path);
 		} finally {
-			service.close();
+			await service.close();
 		}
 		await fs.rm(fixture.root, { recursive: true });
 		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "needle");
@@ -179,7 +207,7 @@ describe("WikiTool", () => {
 		try {
 			await service.init(".", "manual");
 		} finally {
-			service.close();
+			await service.close();
 		}
 
 		const page = text(await run(new WikiTool(session(agent, root)), { query: "needle" }));
@@ -322,9 +350,9 @@ describe("WikiTool", () => {
 		const service = new DocsService({ agentDir: fixture.agent });
 		let ranked: string[];
 		try {
-			ranked = service.search("budgetbeacon").sections.map(section => section.path);
+			ranked = (await service.search("budgetbeacon")).sections.map(section => section.path);
 		} finally {
-			service.close();
+			await service.close();
 		}
 		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "budgetbeacon");
 		const delivered = result.flatMap(page => [...page.matchAll(/^\[\d+\] (\S+\.md):/gm)].map(hit => hit[1]));
@@ -396,7 +424,7 @@ describe("WikiTool", () => {
 			await fs.writeFile(path.join(fixture.root, "c.md"), "# Page\ncursorbeacon changed corpus\n");
 			await service.init(".", "replacement");
 		} finally {
-			service.close();
+			await service.close();
 		}
 		await expect(run(tool, next)).rejects.toThrow();
 	});
@@ -416,9 +444,9 @@ describe("WikiTool", () => {
 
 		const service = new DocsService({ agentDir: agent, cwd: root });
 		try {
-			expect(service.list()).toEqual([]);
+			expect(await service.list()).toEqual([]);
 		} finally {
-			service.close();
+			await service.close();
 		}
 	});
 });

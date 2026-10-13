@@ -55,11 +55,7 @@ function commandRejectionReason(error: unknown, input: DocsCommandInput, service
 		if (error.message === `Markdown root is not a directory: ${root}`) return "source_not_directory";
 		if (error.message === `No Markdown files found in: ${root}`) return "no_documents";
 	}
-	const storagePath = service.storage?.path;
-	if (
-		typeof storagePath === "string" &&
-		error.message === `Another document index build is already running for this profile: ${storagePath}`
-	) {
+	if (error.message === `Another document index build is already running for this profile: ${service.databasePath}`) {
 		return "lock_contended";
 	}
 	return undefined;
@@ -98,7 +94,7 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 							break;
 						}
 						case "remove":
-							service.remove(input.target as string);
+							await service.remove(input.target as string, { signal: input.signal });
 							value = { removed: input.target };
 							break;
 					}
@@ -118,7 +114,7 @@ export async function runDocsCommand(input: DocsCommandInput, dependencies: Docs
 				} finally {
 					const operationStage = stage;
 					stage = "close";
-					service.close();
+					await service.close();
 					stage = operationStage;
 					if (resultCode !== undefined) {
 						logger.info(resultCode === 130 ? "docs.cli.command.cancelled" : "docs.cli.command.completed", {

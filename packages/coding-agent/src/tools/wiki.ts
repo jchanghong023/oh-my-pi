@@ -60,7 +60,84 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 	/** Near-miss arguments are normalized in `execute`, not rejected up front. */
 	readonly lenientArgValidation = true;
 
-	constructor(private readonly session: ToolSession) {}
+	#service?: DocsService;
+	#identity?: string;
+	#lifetime = new AbortController();
+	#disposed = false;
+	#disposePromise?: Promise<void>;
+	#retiredServices = new Set<Promise<void>>();
+	#unregisterDispose?: () => void;
+	#unregisterSessionChange?: () => void;
+
+	constructor(private readonly session: ToolSession) {
+		this.#unregisterDispose = session.registerDisposeCallback?.(() => this.dispose()) || undefined;
+		this.#unregisterSessionChange =
+			session.registerSessionChangeCallback?.(() => this.#releaseService()) || undefined;
+	}
+
+	/** Standalone consumers must dispose the tool when its owner is finished. */
+	dispose(): Promise<void> {
+		if (this.#disposePromise) return this.#disposePromise;
+		this.#disposed = true;
+		this.#releaseService();
+		this.#unregisterDispose?.();
+		this.#unregisterSessionChange?.();
+		this.#unregisterDispose = undefined;
+		this.#unregisterSessionChange = undefined;
+		this.#disposePromise = Promise.all(this.#retiredServices).then(() => {});
+		return this.#disposePromise;
+	}
+
+	#sessionIdentity(): string {
+		return JSON.stringify([
+			this.session.settings.getAgentDir(),
+			this.session.cwd,
+			this.session.getSessionId?.(),
+			this.session.getSessionFile(),
+		]);
+	}
+
+	#releaseService(): void {
+		this.#lifetime.abort();
+		if (this.#service) {
+			const shutdown = this.#service.close();
+			this.#retiredServices.add(shutdown);
+			void shutdown.then(
+				() => {
+					this.#retiredServices.delete(shutdown);
+				},
+				() => {
+					// Keep failed shutdowns observable by the explicit owner awaiting dispose.
+				},
+			);
+		}
+		this.#service = undefined;
+		this.#identity = undefined;
+		this.#lifetime = new AbortController();
+	}
+
+	#getService(): DocsService {
+		if (this.#disposed || this.session.isDisposed?.()) {
+			throw new DOMException("Wiki tool owner has been disposed", "AbortError");
+		}
+		const identity = this.#sessionIdentity();
+		if (this.#identity !== identity) this.#releaseService();
+		if (!this.#service) {
+			this.#service = new DocsService({
+				agentDir: this.session.settings.getAgentDir(),
+				cwd: this.session.cwd,
+			});
+			this.#identity = identity;
+		}
+		return this.#service;
+	}
+
+	#assertCurrent(service: DocsService, signal: AbortSignal): void {
+		if (this.#identity !== this.#sessionIdentity() || this.session.isDisposed?.()) this.#releaseService();
+		if (signal.aborted || this.#disposed || this.#service !== service) {
+			throw new DOMException("Wiki query cancelled", "AbortError");
+		}
+	}
 
 	async execute(
 		_toolCallId: string,
@@ -80,6 +157,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 				let expectedResult: string | undefined;
 				let completion: Record<string, number | undefined> | undefined;
 				const fields = { component: "wiki", event: "wiki.query" };
+				let operationSignal = _signal;
 				logger.info("wiki.query.started", { ...fields, stage, result: "started" });
 				try {
 					// Argument validation is lenient so a stray extra key cannot fail a call;
@@ -112,13 +190,13 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 					});
 					stage = "open";
 
-					const service = new DocsService({
-						agentDir: this.session.settings.getAgentDir(),
-						cwd: this.session.cwd,
-					});
+					const service = this.#getService();
+					operationSignal = _signal ? AbortSignal.any([_signal, this.#lifetime.signal]) : this.#lifetime.signal;
+					this.#assertCurrent(service, operationSignal);
 					try {
 						stage = "indexes";
-						const indexCount = service.list().length;
+						const indexCount = (await service.list({ signal: operationSignal })).length;
+						this.#assertCurrent(service, operationSignal);
 						if (indexCount === 0) {
 							expectedResult = "no_index";
 							throw new ToolError('No document indexes. Run: omp docs init "<dir>" --name <name>');
@@ -132,7 +210,8 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						const rendered: string[] = [];
 						const shown = new Map<string, number>();
 						let duplicates = 0;
-						const result = service.search(query, {
+						const result = await service.search(query, {
+							signal: operationSignal,
 							cursor,
 							limit: PAGE_SECTIONS,
 							characterBudget: Math.max(0, TEXT_BUDGET_CHARS - header.length - 2 - footerAllowance),
@@ -155,6 +234,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 								return rendered[position]!.length + (position > 0 ? 2 : 0);
 							},
 						});
+						this.#assertCurrent(service, operationSignal);
 						stage = "render";
 						const bodies = rendered.slice(0, result.sections.length);
 						duplicates = bodies.filter(body => body.includes("\n(identical text to hit [")).length;
@@ -191,13 +271,6 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						};
 						return toolResult().text(text).done();
 					} finally {
-						const operationStage = stage;
-						const operationExpectedResult = expectedResult;
-						stage = "close";
-						expectedResult = undefined;
-						service.close();
-						stage = operationStage;
-						expectedResult = operationExpectedResult;
 						if (completion)
 							logger.info("wiki.query.completed", {
 								...fields,
@@ -208,6 +281,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 							});
 					}
 				} catch (error) {
+					if (operationSignal?.aborted) error = new DOMException("Wiki query cancelled", "AbortError");
 					const cancelled = error instanceof Error && error.name === "AbortError";
 					const log = expectedResult || cancelled ? logger.info : logger.error;
 					log("wiki.query.finished", {

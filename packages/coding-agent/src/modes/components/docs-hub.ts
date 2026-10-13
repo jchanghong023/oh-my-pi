@@ -2,14 +2,14 @@ import { type Component, Input, matchesKey, type TUI, truncateToWidth } from "@o
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import { DocsService } from "../../docs/service";
-import type { DocsIndexSummary, DocsProgress, DocsSearchResult, DocsSectionHit } from "../../docs/types";
+import type { DocsIndexSummary, DocsProgress, DocsSectionHit } from "../../docs/types";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { DocsAddWizard, type DocsAddWizardResult } from "./docs-add-wizard";
 
 export interface DocsHubCallbacks {
 	onCancel: () => void;
 }
-type HubMode = "list" | "search" | "detail" | "confirm-remove" | "confirm-cancel-close";
+type HubMode = "list" | "search" | "detail" | "confirm-remove";
 type SearchHit = { section: DocsSectionHit; label: string };
 
 function sanitizeTerminalText(text: string): string {
@@ -27,6 +27,7 @@ function errorLine(error: unknown): string {
 
 export class DocsHubComponent implements Component {
 	#indexes: DocsIndexSummary[] = [];
+	#listed = false;
 	#selected = 0;
 	#mode: HubMode = "list";
 	#detail: string[] = [];
@@ -44,7 +45,8 @@ export class DocsHubComponent implements Component {
 	#progress?: DocsProgress;
 	#latestError?: string;
 	#disposed = false;
-	#work?: Promise<void>;
+	#disposePromise?: Promise<void>;
+	#busy?: string;
 
 	private constructor(
 		private readonly tui: TUI,
@@ -66,29 +68,25 @@ export class DocsHubComponent implements Component {
 			}),
 			callbacks,
 		);
-		try {
-			hub.#refresh();
-		} catch (error) {
-			// Opening the database can succeed on a damaged or exclusively locked
-			// index file only to fail on the first read. `create` never returns the
-			// component then, so the caller cannot dispose it — close it here.
-			hub.service.close();
-			throw error;
-		}
+		hub.#start("Loading document indexes…", (signal, current) => hub.#refresh(signal, current));
 		return hub;
 	}
 
 	invalidate(): void {}
 
-	dispose(): void {
+	dispose(): Promise<void> {
+		if (this.#disposePromise) return this.#disposePromise;
 		this.#disposed = true;
-		this.#abort?.abort();
-		if (this.#work) void this.#work.finally(() => this.service.close());
-		else this.service.close();
+		this.#cancel();
+		this.#disposePromise = this.service.close();
+		return this.#disposePromise;
 	}
 
-	#refresh(): void {
-		this.#indexes = this.service.list();
+	async #refresh(signal: AbortSignal, current: () => boolean): Promise<void> {
+		const indexes = await this.service.list({ signal });
+		if (!current()) return;
+		this.#indexes = indexes;
+		this.#listed = true;
 		this.#selected = Math.max(0, Math.min(this.#selected, this.#indexes.length - 1));
 		this.tui.requestRender();
 	}
@@ -97,58 +95,63 @@ export class DocsHubComponent implements Component {
 		return this.#indexes[this.#selected];
 	}
 
-	#start(work: (signal: AbortSignal) => Promise<unknown>): void {
-		if (this.#abort) return;
+	#cancel(): void {
+		this.#abort?.abort();
+		this.#abort = undefined;
+		this.#busy = undefined;
+		this.#progress = undefined;
+	}
+
+	#start(busy: string, work: (signal: AbortSignal, current: () => boolean) => Promise<unknown>): void {
+		if (this.#disposed || this.#abort) return;
 		const controller = new AbortController();
+		const current = () => !this.#disposed && this.#abort === controller && !controller.signal.aborted;
 		this.#abort = controller;
+		this.#busy = busy;
 		this.#latestError = undefined;
-		const pending = work(controller.signal)
-			.then(() => undefined)
+		void Promise.resolve()
+			.then(() => {
+				if (current()) return work(controller.signal, current);
+			})
 			.catch(error => {
-				if (!(error instanceof Error && error.name === "AbortError")) {
+				if (current() && !(error instanceof Error && error.name === "AbortError")) {
 					this.#latestError = errorLine(error);
 				}
 			})
 			.finally(() => {
-				if (this.#abort === controller) this.#abort = undefined;
-				if (this.#work === pending) this.#work = undefined;
+				if (this.#abort !== controller) return;
+				this.#abort = undefined;
+				this.#busy = undefined;
 				this.#progress = undefined;
-				// The list read can fail after `create` succeeded (damage, exclusive
-				// lock); a throw here would reject the voided `#work` chain as an
-				// unhandled rejection instead of reaching the panel's error line.
-				if (!this.#disposed) {
-					try {
-						this.#refresh();
-					} catch (error) {
-						this.#latestError = errorLine(error);
-						this.tui.requestRender();
-					}
-				}
+				if (!this.#disposed) this.tui.requestRender();
 			});
-		this.#work = pending;
+		this.tui.requestRender();
 	}
 
 	#create(result: DocsAddWizardResult): void {
 		this.#wizard = undefined;
-		this.#start(signal =>
-			this.service.init(result.directory, result.name, {
+		this.#start("Indexing document index…", async (signal, current) => {
+			await this.service.init(result.directory, result.name, {
 				signal,
 				onProgress: progress => {
+					if (!current()) return;
 					this.#progress = progress;
 					this.tui.requestRender();
 				},
-			}),
-		);
+			});
+			if (current()) await this.#refresh(signal, current);
+		});
 	}
 
 	#runSearch(cursor?: string): void {
 		const query = cursor ? this.#searchQuery : this.#search.getValue().trim();
 		if (!query) return;
 		const index = cursor ? this.#searchIndex : this.#selectedIndex()?.name;
-		try {
-			const result: DocsSearchResult = this.service.search(query, { index, limit: 20, cursor });
-			this.#latestError = undefined;
-			this.#pageStart = cursor ? this.#pageStart + this.#hits.length : 0;
+		const pageStart = cursor ? this.#pageStart + this.#hits.length : 0;
+		this.#start("Searching document indexes…", async (signal, current) => {
+			const result = await this.service.search(query, { index, limit: 20, cursor, signal });
+			if (!current()) return;
+			this.#pageStart = pageStart;
 			this.#searchQuery = query;
 			this.#searchIndex = index;
 			this.#nextCursor = result.cursor;
@@ -174,10 +177,7 @@ export class DocsHubComponent implements Component {
 				result.cursor ? "More results available. Press n for next page." : "Results exhausted.",
 			];
 			this.#detail = this.#resultSummary;
-		} catch (error) {
-			this.#latestError = errorLine(error);
-		}
-		this.tui.requestRender();
+		});
 	}
 
 	#openHit(): void {
@@ -202,8 +202,15 @@ export class DocsHubComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#disposed) return;
 		if (this.#wizard) {
 			this.#wizard.handleInput(data);
+			this.tui.requestRender();
+			return;
+		}
+		if (this.#abort && (data === "c" || matchesKey(data, "escape"))) {
+			this.#cancel();
+			if (this.#mode === "search") this.#mode = "list";
 			this.tui.requestRender();
 			return;
 		}
@@ -211,30 +218,14 @@ export class DocsHubComponent implements Component {
 			if (data.toLowerCase() === "y") {
 				const name = this.#selectedIndex()?.name;
 				if (name) {
-					try {
-						this.service.remove(name);
-						this.#latestError = undefined;
-					} catch (error) {
-						this.#latestError = errorLine(error);
-					}
+					this.#start("Deleting document index…", async (signal, current) => {
+						await this.service.remove(name, { signal });
+						if (current()) await this.#refresh(signal, current);
+					});
 				}
 				this.#mode = "list";
-				// The follow-up list read must not escape `handleInput`: the TUI's
-				// key dispatch does not catch component exceptions.
-				try {
-					this.#refresh();
-				} catch (error) {
-					this.#latestError = errorLine(error);
-					this.tui.requestRender();
-				}
 			} else if (data.toLowerCase() === "n" || matchesKey(data, "escape")) this.#mode = "list";
-			return;
-		}
-		if (this.#mode === "confirm-cancel-close") {
-			if (data.toLowerCase() === "y") {
-				this.#abort?.abort();
-				void (this.#work ?? Promise.resolve()).finally(() => this.callbacks.onCancel());
-			} else if (data.toLowerCase() === "n" || matchesKey(data, "escape")) this.#mode = "list";
+			this.tui.requestRender();
 			return;
 		}
 		if (this.#mode === "search") {
@@ -248,8 +239,7 @@ export class DocsHubComponent implements Component {
 			if (this.#mode === "detail") {
 				this.#mode = "list";
 				this.#hits = [];
-			} else if (this.#abort) this.#mode = "confirm-cancel-close";
-			else this.callbacks.onCancel();
+			} else this.callbacks.onCancel();
 			this.tui.requestRender();
 			return;
 		}
@@ -268,7 +258,7 @@ export class DocsHubComponent implements Component {
 			return;
 		}
 		if (data === "n") {
-			if (this.#abort) this.#latestError = "Indexing already in progress.";
+			if (this.#abort) this.#latestError = "Document index operation already in progress.";
 			else
 				this.#wizard = new DocsAddWizard(
 					result => this.#create(result),
@@ -280,7 +270,6 @@ export class DocsHubComponent implements Component {
 			this.#mode = "search";
 			this.#search = new Input();
 		} else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
-		else if (data === "c" && this.#abort) this.#abort.abort();
 		else if (matchesKey(data, "up") && this.#mode !== "detail") this.#selected = Math.max(0, this.#selected - 1);
 		else if (matchesKey(data, "down") && this.#mode !== "detail")
 			this.#selected = Math.min(this.#indexes.length - 1, this.#selected + 1);
@@ -294,20 +283,20 @@ export class DocsHubComponent implements Component {
 			theme.fg(
 				"dim",
 				this.#mode === "detail"
-					? `${this.#showingHit ? "b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  Esc indexes`
+					? `${this.#showingHit ? "b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  c cancel  Esc indexes`
 					: "n new  / search  d delete  c cancel  Esc close",
 			),
 		];
 		if (this.#mode === "confirm-remove")
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
-		else if (this.#mode === "confirm-cancel-close")
-			lines.push(theme.fg("warning", "Indexing active. Cancel and close? y/N"));
 		else if (this.#mode === "search") lines.push(`Search: ${this.#search.render(Math.max(10, width - 10))[0] ?? ""}`);
 		else if (this.#mode === "detail") {
 			lines.push(...this.#detail);
 			if (!this.#showingHit)
 				for (let index = 0; index < this.#hits.length; index++)
 					lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
+		} else if (!this.#listed) {
+			if (!this.#busy) lines.push("Document indexes have not been loaded.");
 		} else if (this.#indexes.length === 0) lines.push("No document indexes. Press n to add one.");
 		else
 			for (let index = 0; index < this.#indexes.length; index++) {
@@ -319,6 +308,7 @@ export class DocsHubComponent implements Component {
 					sanitizeTerminalLine(`    ${item.rootPath}`),
 				);
 			}
+		if (this.#busy) lines.push(theme.fg("dim", `${this.#busy}  c cancel`));
 		if (this.#progress)
 			lines.push(
 				"",

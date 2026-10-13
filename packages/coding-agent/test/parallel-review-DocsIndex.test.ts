@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "../src/config/settings";
-import { DocsService } from "../src/docs/service";
+import { DocsSearchEngine } from "../src/docs/engine";
 import { WikiTool } from "../src/tools/wiki";
 
 it("returns indented code followed by a rule instead of discarding it as a converter heading", async () => {
@@ -13,7 +13,7 @@ it("returns indented code followed by a rule instead of discarding it as a conve
 	const source = "# Notes\n\n    Cell\n----\n";
 	try {
 		await Bun.write(path.join(root, "guide.md"), source);
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 		} finally {
@@ -27,11 +27,15 @@ it("returns indented code followed by a rule instead of discarding it as a conve
 			getSessionFile: () => null,
 			getSessionSpawns: () => null,
 		});
-		const result = await tool.execute("indented-code", { query: "Cell" });
-		const text = result.content.map(item => (item.type === "text" ? item.text : "")).join("\n");
-		expect(text).toContain(source);
-		expect(text).toContain("guide.md:1-4");
-		expect(text).not.toContain("heading only");
+		try {
+			const result = await tool.execute("indented-code", { query: "Cell" });
+			const text = result.content.map(item => (item.type === "text" ? item.text : "")).join("\n");
+			expect(text).toContain(source);
+			expect(text).toContain("guide.md:1-4");
+			expect(text).not.toContain("heading only");
+		} finally {
+			await tool.dispose();
+		}
 	} finally {
 		await fs.rm(temporary, { recursive: true, force: true });
 	}

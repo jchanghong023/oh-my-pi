@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { enumerateMarkdownFiles, parseMarkdown, readMarkdownDocument, sectionShape } from "../src/docs/markdown";
-import { DocsService } from "../src/docs/service";
+import { DocsSearchEngine } from "../src/docs/engine";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -190,14 +190,14 @@ describe("Markdown parsing", () => {
 		expect(parsed.sections.map(section => section.rawMarkdown)).toEqual(["# Doc\r\n", "需求条款\r\n====\r\n"]);
 	});
 });
-describe("DocsService indexing contract", () => {
+describe("DocsSearchEngine indexing contract", () => {
 	it("indexes rejected backtick fence openers without losing paragraph or valid fenced code", async () => {
 		const root = await tempDir("docs-invalid-fence-root-");
 		const agentDir = await tempDir("docs-invalid-fence-agent-");
 		const source =
 			"# Notes\n``` `invalidfencebeacon`\nThis is a normal paragraph.\n\n~~~ `valid-language`\ncounter*factor*next\n~~~\n";
 		await Bun.write(path.join(root, "notes.md"), source);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			expect(service.search("invalidfencebeacon").sections[0]?.text).toBe(source);
@@ -213,7 +213,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-v5-fence-agent-");
 		const source = "# Notes\n``` `migrationfencebeacon`\nOrdinary paragraph.\n";
 		await Bun.write(path.join(root, "notes.md"), source);
-		const writer = new DocsService({ agentDir });
+		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "manual");
 		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
 			id: number;
@@ -226,7 +226,7 @@ describe("DocsService indexing contract", () => {
 		expect(writer.search("migrationfencebeacon").sections).toHaveLength(1);
 		writer.close();
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsService({ agentDir });
+		const reader = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reader.search("migrationfencebeacon").sections[0]).toMatchObject({ sectionId: row.id, text: source });
 		} finally {
@@ -239,7 +239,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-v6-fence-agent-");
 		const source = "# Notes\n``` `repairfencebeacon`\nOrdinary paragraph.\n";
 		await Bun.write(path.join(root, "notes.md"), source);
-		const writer = new DocsService({ agentDir });
+		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "manual");
 		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
 			id: number;
@@ -251,7 +251,7 @@ describe("DocsService indexing contract", () => {
 		writer.storage.db.run("PRAGMA user_version=6");
 		writer.close();
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsService({ agentDir });
+		const reader = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reader.search("repairfencebeacon").sections[0]).toMatchObject({ sectionId: row.id, text: source });
 		} finally {
@@ -266,7 +266,7 @@ describe("DocsService indexing contract", () => {
 			path.join(root, "code.md"),
 			"# Formula\n```python\ncounter*factor\n```\nUse `mask~value` and 缓**存**配置.\n",
 		);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "code");
 			expect(service.search("counter*factor").sections[0]?.text).toContain("counter*factor");
@@ -286,7 +286,7 @@ describe("DocsService indexing contract", () => {
 			path.join(root, "code.md"),
 			"# Formula\n```python\n" + "padding = 1\n".repeat(1600) + "counter*factor*next\n```\n",
 		);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "code");
 			expect(
@@ -305,7 +305,7 @@ describe("DocsService indexing contract", () => {
 			path.join(root, "features.md"),
 			"# Features\nAuthoritative list.\n## ATPG\n## C#\n#### Cell\n##### Row\n## MBIST\nMemory flow.\n",
 		);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "features");
 			expect(service.search("ATPG").sections[0]?.text.trim()).toBe("## ATPG");
@@ -331,7 +331,7 @@ describe("DocsService indexing contract", () => {
 			expect(section.rawMarkdown.length).toBeLessThanOrEqual(18_000);
 			expect(bytes.subarray(section.byteStart, section.byteEnd).toString()).toBe(section.rawMarkdown);
 		}
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "long");
 			expect(service.search("boundarybeacon").sections.some(hit => hit.text.includes("boundarybeacon"))).toBe(true);
@@ -344,7 +344,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-old-code-root-");
 		const agentDir = await tempDir("docs-old-code-agent-");
 		await Bun.write(path.join(root, "formula.md"), "# Formula\n`counter*factor`\n");
-		const writer = new DocsService({ agentDir });
+		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "legacy");
 		const sectionId = writer.search("counter*factor").sections[0].sectionId;
 		writer.storage.db
@@ -353,7 +353,7 @@ describe("DocsService indexing contract", () => {
 		writer.storage.db.run("PRAGMA user_version=5");
 		writer.close();
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsService({ agentDir });
+		const reader = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reader.search("counter*factor").sections[0]).toMatchObject({
 				sectionId,
@@ -370,7 +370,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-utf8-agent-");
 		await fs.writeFile(path.join(root, "a.md"), "# Guide\nvalid corpus needle\n");
 		await fs.writeFile(path.join(root, "b.md"), new Uint8Array([0x23, 0x20, 0xff, 0x0a]));
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await expect(service.init(".", "manual")).rejects.toThrow('Unable to parse Markdown "b.md"');
 			expect(service.list()).toEqual([]);
@@ -388,7 +388,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-atomic-agent-");
 		await fs.writeFile(path.join(root, "a.md"), "# A\nAlpha\n");
 		await fs.writeFile(path.join(root, "b.md"), "# B\nBeta\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			const controller = new AbortController();
 			await expect(
@@ -473,7 +473,7 @@ describe("DocsService indexing contract", () => {
 		legacy.run(`PRAGMA user_version=${version}`);
 		legacy.close();
 
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			expect(service.list().map(index => index.name)).toEqual(["fulltext", "structured"]);
 			for (const [id, name] of [
@@ -494,7 +494,7 @@ describe("DocsService indexing contract", () => {
 		} finally {
 			service.close();
 		}
-		const reopened = new DocsService({ agentDir });
+		const reopened = new DocsSearchEngine({ agentDir });
 		try {
 			expect(reopened.search("Alpha", { index: "fulltext" }).sections[0].text).toBe(
 				"# Guide\r\nAlpha 中文 fulltext\r\n",
@@ -508,7 +508,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-search-root-");
 		const agent = await tempDir("docs-search-agent-");
 		await fs.writeFile(path.join(root, "mixed.md"), "# Mixed\nItem: Alpha\n中文接口说明\n");
-		const service = new DocsService({ agentDir: agent, cwd: root });
+		const service = new DocsSearchEngine({ agentDir: agent, cwd: root });
 		try {
 			await service.init(".", "mixed");
 			expect(service.search("Alpha", { index: "mixed" }).sections.length).toBe(1);
@@ -523,7 +523,7 @@ describe("DocsService indexing contract", () => {
 		const agent = await tempDir("docs-case-agent-");
 		await fs.writeFile(path.join(root, "A.md"), "# Upper\nItem: Alpha one\n");
 		await fs.writeFile(path.join(root, "a.md"), "# Lower\nItem: Alpha two\n");
-		const service = new DocsService({ agentDir: agent, cwd: root });
+		const service = new DocsSearchEngine({ agentDir: agent, cwd: root });
 		try {
 			await service.init(".", "case");
 			const hits = service.search("Alpha", { index: "case" }).sections;
@@ -539,7 +539,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-visible-root-");
 		const agent = await tempDir("docs-visible-agent-");
 		await fs.writeFile(path.join(root, "guide.md"), "# Guide\nbuilding visibility\n");
-		const service = new DocsService({ agentDir: agent, cwd: root });
+		const service = new DocsSearchEngine({ agentDir: agent, cwd: root });
 		const name = "abbuildingcd";
 		try {
 			await service.init(".", name);
@@ -560,7 +560,7 @@ describe("DocsService indexing contract", () => {
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n缓**存**配置。\n${"背景说明 ".repeat(100)}`);
 		await fs.writeFile(path.join(root, "scattered.md"), "# Notes\n缓慢增长，存储优化。\n");
 		await fs.writeFile(path.join(root, "punctuated.md"), "# Notes\n缓，存。\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			await fs.rm(root, { recursive: true });
@@ -590,7 +590,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-technical-agent-");
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n${exact}\n${"background ".repeat(100)}`);
 		await fs.writeFile(path.join(root, "loose.md"), `# Notes\n${loose}\n`);
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const hits = service.search(query, { index: "manual" }).sections;
@@ -619,7 +619,7 @@ describe("DocsService indexing contract", () => {
 				`# Notes\n${command}_extended prefix${command} ${command}-next\n`,
 			);
 			await fs.writeFile(path.join(root, `${command}.md`), "# Notes\nMetadata only; no command evidence.\n");
-			const service = new DocsService({ agentDir, cwd: root });
+			const service = new DocsSearchEngine({ agentDir, cwd: root });
 			try {
 				await service.init(".", "manual");
 				const result = service.search(command, { index: "manual" });
@@ -645,7 +645,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-hyphen-name-agent-");
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\nHandle \`${name.toUpperCase()}\`.\n`);
 		await fs.writeFile(path.join(root, "continued.md"), `# Notes\nprefix${name} ${name}_extra ${name}-next\n`);
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const result = service.search(query, { index: "manual" });
@@ -664,7 +664,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-literal-punctuation-agent-");
 		await fs.writeFile(path.join(root, "literal.md"), "# Notes\nfile.rpt.\n");
 		await fs.writeFile(path.join(root, "dotless.md"), "# Notes\nfile.rpt\n");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const result = service.search(query, { index: "manual" });
@@ -690,7 +690,7 @@ describe("DocsService indexing contract", () => {
 		const source = `# Notes\n${body}`;
 		await fs.writeFile(path.join(root, "continued.md"), source);
 		await fs.writeFile(path.join(root, "standalone.md"), query);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const truncated = service.storage.db
@@ -724,7 +724,7 @@ describe("DocsService indexing contract", () => {
 		const source = `# Notes\n${padding}C++ ${"x ".repeat(1000)}\n`;
 		await fs.writeFile(path.join(root, "continued.md"), source);
 		await fs.writeFile(path.join(root, "standalone.md"), "C++");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const fragment = service.storage.db
@@ -751,7 +751,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-boundary-evidence-agent-");
 		const source = `# Notes\n${"x ".repeat(8749)}E1. ${"x ".repeat(1000)}\n`;
 		await fs.writeFile(path.join(root, "evidence.md"), source);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			await fs.rm(root, { recursive: true });
@@ -770,7 +770,7 @@ describe("DocsService indexing contract", () => {
 		await fs.mkdir(path.join(root, "needle"), { recursive: true });
 		await fs.writeFile(path.join(root, "needle", "path.md"), "# PathParent\nlocal body\n");
 		await fs.writeFile(path.join(root, "inherited.md"), "# PathParent\n## Local\nneedle here\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const hits = service.search("pathparent needle", { index: "manual" }).sections;
@@ -793,7 +793,7 @@ describe("DocsService indexing contract", () => {
 			`# Notes\nstd and vector mentioned separately at first.\n${"background ".repeat(400)}\nUse std::vector here.\n`,
 		);
 		await fs.writeFile(path.join(root, "early-loose.md"), "# Notes\nstd and vector mentioned separately.\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const hits = service.search("std::vector", { index: "manual" }).sections;
@@ -810,7 +810,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-astral-phrase-agent-");
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\n${"\u{1d11e}".repeat(2_500)}\nUse std::vector here.\n`);
 		await fs.writeFile(path.join(root, "loose.md"), "# Notes\nvector std\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const hits = service.search("std::vector").sections;
@@ -825,8 +825,8 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-snapshot-root-");
 		const agentDir = await tempDir("docs-snapshot-agent-");
 		await fs.writeFile(path.join(root, "evidence.md"), "# Evidence\nold-evidence needle content\n");
-		const reader = new DocsService({ agentDir, cwd: root });
-		const writer = new DocsService({ agentDir, cwd: root });
+		const reader = new DocsSearchEngine({ agentDir, cwd: root });
+		const writer = new DocsSearchEngine({ agentDir, cwd: root });
 		// Restore the raw handle before close(): the proxy below is read-only.
 		const realDb = reader.storage.db;
 		try {
@@ -919,6 +919,12 @@ describe("DocsService indexing contract", () => {
 			expect(hits[0].path).toBe("evidence.md");
 			expect(hits[0].text).toContain("old-evidence needle content");
 			expect(hits[0].text).not.toContain("UNRELATED NEW EVIDENCE");
+			// The old snapshot must not be cached under the post-swap guard.
+			expect(reader.search("needle").sections).toEqual([]);
+			expect(reader.search("unrelated new").sections[0]).toMatchObject({
+				path: "policy.md",
+				text: "UNRELATED NEW EVIDENCE: different policy",
+			});
 		} finally {
 			(reader.storage as { db: Database }).db = realDb;
 			reader.close();
@@ -933,7 +939,7 @@ describe("DocsService indexing contract", () => {
 		await fs.writeFile(path.join(root, "mention.md"), "# Notes\nCache invalidation.\n");
 		await fs.writeFile(path.join(root, "inherited.md"), "# Cache invalidation\n## Unrelated appendix\nNotes.\n");
 		await fs.writeFile(path.join(root, "indented-code.md"), "    # cache invalidation\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const result = service.search("cache invalidation", { index: "manual" });
@@ -971,7 +977,7 @@ describe("DocsService indexing contract", () => {
 			path.join(root, "continued-line.md"),
 			`# Notes\n${"x ".repeat(8750)}# cache invalidation ${"x ".repeat(300)}\n`,
 		);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			await fs.rm(root, { recursive: true });
@@ -998,7 +1004,7 @@ describe("DocsService indexing contract", () => {
 		const topic = `# ${term} diagnostics\n${term} troubleshooting log analysis.\n`;
 		await fs.writeFile(path.join(root, "topic.md"), topic);
 		await fs.writeFile(path.join(root, "log.md"), "# Log\nlog.\n");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const result = service.search(`${term} log`, { index: "manual" });
@@ -1015,7 +1021,7 @@ describe("DocsService indexing contract", () => {
 		const agentDir = await tempDir("docs-quoted-agent-");
 		await fs.writeFile(path.join(root, "quoted.md"), `# Notes\n"foo"\n${"background ".repeat(300)}`);
 		await fs.writeFile(path.join(root, "plain.md"), "# Notes\nfoo\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const hits = service.search('"foo"', { index: "manual" }).sections;
@@ -1034,7 +1040,7 @@ describe("DocsService indexing contract", () => {
 		);
 		await fs.writeFile(path.join(root, "exact.md"), `# Notes\nUse std::vector.\n${"background ".repeat(150)}`);
 		await fs.writeFile(path.join(root, "partial.md"), "# Notes\nstd only\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			await service.init(".", "other");
@@ -1071,7 +1077,7 @@ describe("DocsService indexing contract", () => {
 				path.join(root, `req-${index}.md`),
 				`# Requirement ${index}\n## 检查项\n${"背景说明 ".repeat(120)}本项检查 needle 的结果必须记录。\n`,
 			);
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			const indexId = service.list()[0].id as number;
@@ -1119,7 +1125,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-hidden-count-");
 		const agentDir = await tempDir("docs-hidden-count-agent-");
 		await fs.writeFile(path.join(root, "visible.md"), "# Visible\nneedle in the visible index\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			// A half-built import shares this database under a hidden name; its rows
@@ -1154,7 +1160,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-query-tail-");
 		const agentDir = await tempDir("docs-query-tail-agent-");
 		await fs.writeFile(path.join(root, "tail.md"), "# Tail\nneedle here\n");
-		const service = new DocsService({ agentDir, cwd: root });
+		const service = new DocsSearchEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 			// 33 filler terms push the query past the 32-term sampling budget; a
@@ -1195,7 +1201,7 @@ describe("DocsService indexing contract", () => {
 			"# MASIS waveform 检查\n仿真 log 检查项和通过判据有哪些，SERDES 是其他流程。\n",
 		);
 		await fs.writeFile(path.join(root, "heading-only.md"), "# SERDES sim log\n");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const result = service.search("serdes 仿真 log 的检查项和通过判据有哪些", { index: "manual" });
@@ -1234,7 +1240,7 @@ describe("DocsService indexing contract", () => {
 			path.join(root, "escaped-continued.md"),
 			"# Notes\nrpt mbist\\_check.rpt.bak my\\_mbist\\_check.rpt namespace::mbist\\_check.rpt\n",
 		);
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const initial = service.search("mbist_check.rpt", { limit: 500 }).sections;
@@ -1275,7 +1281,7 @@ describe("DocsService indexing contract", () => {
 			"other.md": "# Notes\nrpt additional evidence\n",
 		};
 		for (const [name, text] of Object.entries(sources)) await fs.writeFile(path.join(root, name), text);
-		let service = new DocsService({ agentDir });
+		let service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			await fs.rm(root, { recursive: true });
@@ -1298,7 +1304,7 @@ describe("DocsService indexing contract", () => {
 			while (page.cursor) {
 				const cursor = page.cursor;
 				service.close();
-				service = new DocsService({ agentDir });
+				service = new DocsSearchEngine({ agentDir });
 				const positions: number[] = [];
 				page = service.search("mbist_check.rpt", {
 					index: "manual",
@@ -1335,7 +1341,7 @@ describe("DocsService indexing contract", () => {
 		const root = await tempDir("docs-cursor-root-");
 		const agentDir = await tempDir("docs-cursor-agent-");
 		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle first\n## Two\nneedle second\n");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			const first = service.search("needle", { index: "manual", limit: 1 });
@@ -1362,12 +1368,138 @@ describe("DocsService indexing contract", () => {
 		}
 	});
 
+	it("reopens original relative-path cursors when the worker uses an absolute database opening path", async () => {
+		const root = await tempDir("docs-relative-cursor-root-");
+		const agentDir = await tempDir("docs-relative-cursor-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle evidence first\n## Two\nneedle evidence second\n");
+		const relativeAgentDir = path.relative(process.cwd(), agentDir);
+		let engine = new DocsSearchEngine({ agentDir: relativeAgentDir });
+		try {
+			await engine.init(root, "manual");
+			const first = engine.search("needle evidence", { index: "manual", limit: 1 });
+			expect(first).toMatchObject({ total: 2, hasMore: true });
+			engine.close();
+			await fs.rm(root, { recursive: true });
+			engine = new DocsSearchEngine({ agentDir, cursorPath: path.join(relativeAgentDir, "docs.db") });
+			const last = engine.search("needle evidence", { index: "manual", cursor: first.cursor });
+			expect(last).toMatchObject({ total: 2, hasMore: false });
+			expect(last.sections).toHaveLength(1);
+			expect(last.sections[0].sectionId).not.toBe(first.sections[0].sectionId);
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("reuses complete ordering while materializing bounded windows with start-based cursors", async () => {
+		const root = await tempDir("docs-rank-cache-root-");
+		const agentDir = await tempDir("docs-rank-cache-agent-");
+		await fs.writeFile(
+			path.join(root, "guide.md"),
+			"# One\nneedle evidence first\n## Two\nneedle evidence second\n## Three\nneedle evidence third\n",
+		);
+		const engine = new DocsSearchEngine({ agentDir });
+		// This fixture deliberately substitutes a forwarding DB handle to count ranking.
+		const mutableStorage = engine.storage as { db: Database };
+		const realDb = mutableStorage.db;
+		let rankBuilds = 0;
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			mutableStorage.db = new Proxy(realDb, {
+				get(target, property) {
+					const value = Reflect.get(target, property, target);
+					if (property === "query") {
+						return (sql: string) => {
+							if (sql.includes("bm25(")) rankBuilds++;
+							return (value as (this: Database, sql: string) => unknown).call(target, sql);
+						};
+					}
+					return typeof value === "function" ? value.bind(target) : value;
+				},
+			});
+			const complete = engine.search("needle evidence", { index: "manual", limit: 500 });
+			const first = engine.searchWindow("needle evidence", { index: "manual", limit: 1 });
+			expect(first).toMatchObject({ total: 3, exactNameMatches: 0, cursorBase: { v: 1, p: 0 } });
+			expect(first.sections).toEqual(complete.sections.slice(0, 1));
+			const cursor = Buffer.from(JSON.stringify({ ...first.cursorBase, p: 1 })).toString("base64url");
+			const rest = engine.searchWindow("needle evidence", { index: "manual", limit: 500, cursor });
+			expect(rest.cursorBase.p).toBe(1);
+			expect(rest.sections).toEqual(complete.sections.slice(1));
+			const positions: number[] = [];
+			const budgeted = engine.search("needle evidence", {
+				index: "manual",
+				limit: 500,
+				characterBudget: 0,
+				sectionCost: (_hit, position) => {
+					positions.push(position);
+					return 1;
+				},
+			});
+			expect(positions).toEqual([0, 1]);
+			expect(budgeted.sections).toEqual(complete.sections.slice(0, 1));
+			expect(engine.search("needle evidence", { index: "manual", cursor: budgeted.cursor }).sections).toEqual(
+				complete.sections.slice(1),
+			);
+			expect(rankBuilds).toBe(1);
+		} finally {
+			mutableStorage.db = realDb;
+			engine.close();
+		}
+	});
+
+	it.each([
+		{ external: false, ftsOnly: false },
+		{ external: true, ftsOnly: false },
+		{ external: false, ftsOnly: true },
+		{ external: true, ftsOnly: true },
+	])("invalidates cached continuations after SQL mutation $external/$ftsOnly", async ({ external, ftsOnly }) => {
+		const root = await tempDir("docs-cache-mutation-root-");
+		const agentDir = await tempDir("docs-cache-mutation-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle evidence first\n## Two\nneedle evidence second\n");
+		const reader = new DocsSearchEngine({ agentDir });
+		let writer: DocsSearchEngine | undefined;
+		try {
+			await reader.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const first = reader.search("needle evidence", { index: "manual", limit: 1 });
+			expect(first).toMatchObject({ total: 2, hasMore: true });
+			// Warm the continuation too, so this covers reuse rather than cold ranking.
+			expect(reader.search("needle evidence", { index: "manual", cursor: first.cursor }).sections).toHaveLength(1);
+			writer = external ? new DocsSearchEngine({ agentDir }) : undefined;
+			const db = (writer ?? reader).storage.db;
+			if (ftsOnly) {
+				db.query("DELETE FROM sections_fts WHERE rowid=?").run(first.sections[0].sectionId);
+			} else {
+				db.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?").run(
+					"\nChanged stored evidence.\n",
+					first.sections[0].sectionId,
+				);
+			}
+			expect(() => reader.search("needle evidence", { index: "manual", cursor: first.cursor })).toThrow(
+				"Stale documentation search cursor",
+			);
+			const fresh = reader.search("needle evidence", { index: "manual" });
+			if (ftsOnly) {
+				expect(fresh.total).toBe(1);
+				expect(fresh.sections.some(hit => hit.sectionId === first.sections[0].sectionId)).toBe(false);
+			} else {
+				expect(fresh.total).toBe(2);
+				expect(fresh.sections.find(hit => hit.sectionId === first.sections[0].sectionId)?.text).toContain(
+					"Changed stored evidence.",
+				);
+			}
+		} finally {
+			writer?.close();
+			reader.close();
+		}
+	});
+
 	it("returns successful complete metadata for no terms, zero matches and related-only names", async () => {
 		const root = await tempDir("docs-zero-query-root-");
 		const agentDir = await tempDir("docs-zero-query-agent-");
 		await fs.writeFile(path.join(root, "guide.md"), "# Notes\nrpt evidence\n");
 		await fs.writeFile(path.join(root, "missingcmd.md"), "# Notes\nMetadata only; no command evidence.\n");
-		const service = new DocsService({ agentDir });
+		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
 			for (const query of ["!!!", "absentword"]) {

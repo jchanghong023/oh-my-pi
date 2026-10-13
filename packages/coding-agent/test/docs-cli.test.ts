@@ -79,12 +79,31 @@ describe("runDocsCommand", () => {
 		expect(initValue.index).toMatchObject({ name: "manual", documentCount: 1 });
 		expect(stderr).toEqual([]);
 
+		const observer = new DocsService({ agentDir, cwd });
+		try {
+			expect((await observer.list()).map(index => index.name)).toEqual(["manual"]);
+			await fs.rm(path.join(cwd, "guide.md"));
+			const stored = await observer.search("indexing");
+			expect(stored.sections).toHaveLength(1);
+			expect(stored.sections[0]).toMatchObject({ index: "manual", path: "guide.md", lineStart: 1, lineEnd: 2 });
+			expect(stored.sections[0]!.text).toContain("Text for indexing");
+		} finally {
+			await observer.close();
+		}
+
 		const removeCode = await runDocsCommand({ action: "remove", target: "manual", json: true, cwd }, dependencies);
 		expect(removeCode).toBe(0);
 		expect(JSON.parse(stdout.pop() as string)).toEqual({ removed: "manual" });
 		await expect(
 			runDocsCommand({ action: "remove", target: "manual", json: true, cwd }, dependencies),
 		).rejects.toThrow("Unknown document index");
+		const removed = new DocsService({ agentDir, cwd });
+		try {
+			expect(await removed.list()).toEqual([]);
+			expect((await removed.search("indexing")).sections).toEqual([]);
+		} finally {
+			await removed.close();
+		}
 	});
 
 	// Windows filenames cannot contain control characters (\r, \t, ESC…), so the
@@ -131,29 +150,90 @@ describe("runDocsCommand", () => {
 			},
 		);
 		expect(code).toBe(130);
-		expect(JSON.parse(output[0] as string)).toEqual({ state: "cancelled", error: "Document indexing cancelled" });
+		expect(output).toHaveLength(1);
+		expect(JSON.parse(output[0]!)).toEqual({ state: "cancelled", error: expect.stringMatching(/\S/) });
+		const observer = new DocsService({ agentDir, cwd });
+		try {
+			expect(await observer.list()).toEqual([]);
+			expect((await observer.search("Text")).sections).toEqual([]);
+		} finally {
+			await observer.close();
+		}
 	});
 
 	it("returns 130 when cancelled while waiting for the import lock", async () => {
 		const cwd = await tempDir("docs-cli-lock-root-");
 		const agentDir = await tempDir("docs-cli-lock-agent-");
 		await fs.writeFile(path.join(cwd, "guide.md"), "# Guide\nText\n");
-		const lease = await acquireFileLock(path.join(agentDir, "docs.db"));
+		const seed = new DocsService({ agentDir, cwd });
 		try {
+			await seed.init(".", "manual");
+		} finally {
+			await seed.close();
+		}
+		await fs.writeFile(path.join(cwd, "guide.md"), "# Replacement\nUncommitted replacement evidence\n");
+		const lease = await acquireFileLock(path.join(agentDir, "docs.db"));
+		const blocked = new DocsService({ agentDir, cwd });
+		let timer: NodeJS.Timeout | undefined;
+		try {
+			await blocked.list();
 			const controller = new AbortController();
-			setTimeout(() => controller.abort(), 20);
+			// Exercise real subprocess cancellation while an OS-backed import lease is held.
+			// Fake timers cannot drive the worker's file-lock wait.
+			timer = setTimeout(() => controller.abort(), 20);
 			const output: string[] = [];
 			const code = await runDocsCommand(
 				{ action: "init", target: ".", name: "cancelled", json: true, cwd, signal: controller.signal },
 				{
-					createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd }),
+					createService: async () => blocked,
 					stdout: text => output.push(text),
 				},
 			);
 			expect(code).toBe(130);
-			expect(JSON.parse(output[0] as string)).toEqual({ state: "cancelled", error: "Document indexing cancelled" });
+			expect(output).toHaveLength(1);
+			expect(JSON.parse(output[0]!)).toEqual({ state: "cancelled", error: expect.stringMatching(/\S/) });
+			const observer = new DocsService({ agentDir, cwd });
+			try {
+				expect((await observer.list()).map(index => index.name)).toEqual(["manual"]);
+				const original = await observer.search("Text");
+				expect(original.sections).toHaveLength(1);
+				expect(original.sections[0]!.text).toContain("Text");
+				expect((await observer.search("replacement")).sections).toEqual([]);
+			} finally {
+				await observer.close();
+			}
 		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+			await blocked.close();
 			lease.release();
+		}
+	});
+
+	it("does not report success or remove stored evidence when removal is cancelled", async () => {
+		const cwd = await tempDir("docs-cli-remove-abort-root-");
+		const agentDir = await tempDir("docs-cli-remove-abort-agent-");
+		await fs.writeFile(path.join(cwd, "guide.md"), "# Guide\nOriginal stored evidence\n");
+		const observer = new DocsService({ agentDir, cwd });
+		try {
+			await observer.init(".", "manual");
+			const controller = new AbortController();
+			controller.abort();
+			const output: string[] = [];
+			const code = await runDocsCommand(
+				{ action: "remove", target: "manual", json: true, cwd, signal: controller.signal },
+				{
+					createService: async serviceCwd => new DocsService({ agentDir, cwd: serviceCwd }),
+					stdout: value => output.push(value),
+				},
+			);
+			expect(code).toBe(130);
+			expect(output).toHaveLength(1);
+			expect(JSON.parse(output[0]!)).toMatchObject({ state: "cancelled", error: expect.stringMatching(/\S/) });
+			expect(output.join("")).not.toContain('"removed"');
+			expect((await observer.list()).map(index => index.name)).toEqual(["manual"]);
+			expect((await observer.search("Original")).sections[0]!.text).toContain("Original stored evidence");
+		} finally {
+			await observer.close();
 		}
 	});
 });

@@ -19,6 +19,45 @@ function typeText(component: { handleInput(data: string): void }, value: string)
 	for (const character of value) component.handleInput(character);
 }
 
+async function observedHub(sourceDir: string, profileDir: string, onCancel = vi.fn()) {
+	const state: { hub?: DocsHubComponent } = {};
+	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
+	const renderedFrames: string[] = [];
+	const tui = {
+		requestRender: () => {
+			const hub = state.hub;
+			if (!hub) return;
+			const rendered = text(hub);
+			renderedFrames.push(rendered);
+			for (const waiter of waiters) {
+				if (waiter.matches(rendered)) {
+					waiters.delete(waiter);
+					waiter.resolve();
+				}
+			}
+		},
+	} as unknown as TUI;
+	const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });
+	const component = await DocsHubComponent.create(tui, sourceDir, settings, { onCancel });
+	state.hub = component;
+	const waitFor = (matches: (rendered: string) => boolean): Promise<void> => {
+		const ready = (rendered: string) =>
+			!/(?:Loading|Searching|Deleting|Indexing) document index/.test(rendered) && matches(rendered);
+		if (ready(text(component))) return Promise.resolve();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		waiters.add({ matches: ready, resolve });
+		return promise;
+	};
+	await waitFor(rendered => !rendered.includes("Loading document indexes…"));
+	return { hub: component, waitFor, renderedFrames };
+}
+
+function submitSearch(hub: DocsHubComponent, query: string): void {
+	hub.handleInput("/");
+	typeText(hub, query);
+	hub.handleInput("\n");
+}
+
 describe("DocsHubComponent shared interaction contract", () => {
 	it("imports, reads without source files, and requires confirmation before deletion", async () => {
 		await initTheme();
@@ -27,29 +66,21 @@ describe("DocsHubComponent shared interaction contract", () => {
 		const docsDir = path.join(sourceDir, "handbook");
 		await fs.mkdir(docsDir);
 		await fs.writeFile(path.join(docsDir, "runbook.md"), "# Runbook\nScanFlow executes scan jobs.\n", "utf8");
-		let hub!: DocsHubComponent;
-		const ready = Promise.withResolvers<void>();
-		const tui = {
-			requestRender: () => {
-				if (hub && text(hub).includes("handbook  docs=")) ready.resolve();
-			},
-		} as unknown as TUI;
-		const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });
+		let hub: DocsHubComponent | undefined;
 		const onCancel = vi.fn();
 		try {
-			hub = await DocsHubComponent.create(tui, sourceDir, settings, { onCancel });
+			const observed = await observedHub(sourceDir, profileDir, onCancel);
+			hub = observed.hub;
 			hub.handleInput("n");
 			typeText(hub, "handbook");
 			hub.handleInput("\n");
 			typeText(hub, "handbook");
 			hub.handleInput("\n");
 			hub.handleInput("\n");
-			await ready.promise;
+			await observed.waitFor(rendered => rendered.includes("handbook  docs="));
 			await fs.rm(docsDir, { recursive: true });
-			hub.handleInput("/");
-			typeText(hub, "ScanFlow");
-			hub.handleInput("\n");
-			expect(text(hub)).toContain("runbook.md:1-2");
+			submitSearch(hub, "ScanFlow");
+			await observed.waitFor(rendered => rendered.includes("runbook.md:1-2"));
 			hub.handleInput("\n");
 			expect(text(hub)).toContain("ScanFlow executes scan jobs.");
 			hub.handleInput("\x1b");
@@ -57,17 +88,18 @@ describe("DocsHubComponent shared interaction contract", () => {
 			hub.handleInput("n");
 			const stored = new DocsService({ agentDir: profileDir });
 			try {
-				expect(stored.list().map(index => index.name)).toEqual(["handbook"]);
+				expect((await stored.list()).map(index => index.name)).toEqual(["handbook"]);
 				hub.handleInput("d");
 				hub.handleInput("y");
-				expect(stored.list()).toEqual([]);
-				expect(stored.search("ScanFlow").sections).toEqual([]);
+				await observed.waitFor(rendered => rendered.includes("No document indexes."));
+				expect(await stored.list()).toEqual([]);
+				expect((await stored.search("ScanFlow")).sections).toEqual([]);
 			} finally {
-				stored.close();
+				await stored.close();
 			}
 			expect(onCancel).not.toHaveBeenCalled();
 		} finally {
-			hub?.dispose();
+			await hub?.dispose();
 			await Promise.all([
 				fs.rm(profileDir, { recursive: true, force: true }),
 				fs.rm(sourceDir, { recursive: true, force: true }),
@@ -84,29 +116,25 @@ describe("DocsHubComponent shared interaction contract", () => {
 		try {
 			await fs.writeFile(path.join(sourceDir, "old.md"), "# Original\noriginal snapshot needle\n");
 			await writer.init(".", "handbook");
-			const originalId = writer.search("needle").sections[0].sectionId;
-			const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });
-			hub = await DocsHubComponent.create({ requestRender: () => {} } as unknown as TUI, sourceDir, settings, {
-				onCancel: vi.fn(),
-			});
-			hub.handleInput("/");
-			typeText(hub, "needle");
-			hub.handleInput("\n");
-			expect(text(hub)).toContain("old.md:1-2");
+			const originalId = (await writer.search("needle")).sections[0]!.sectionId;
+			const observed = await observedHub(sourceDir, profileDir);
+			hub = observed.hub;
+			submitSearch(hub, "needle");
+			await observed.waitFor(rendered => rendered.includes("old.md:1-2"));
 
-			writer.remove("handbook");
+			await writer.remove("handbook");
 			await fs.rm(path.join(sourceDir, "old.md"));
 			await fs.writeFile(path.join(sourceDir, "new.md"), "# Replacement\nunrelated replacement policy\n");
 			await writer.init(".", "handbook");
-			expect(writer.search("replacement").sections[0].sectionId).toBe(originalId);
+			expect((await writer.search("replacement")).sections[0]!.sectionId).toBe(originalId);
 
 			hub.handleInput("\n");
 			expect(text(hub)).toContain("old.md:1-2");
 			expect(text(hub)).toContain("original snapshot needle");
 			expect(text(hub)).not.toContain("unrelated replacement policy");
 		} finally {
-			hub?.dispose();
-			writer.close();
+			await hub?.dispose();
+			await writer.close();
 			await Promise.all([
 				fs.rm(profileDir, { recursive: true, force: true }),
 				fs.rm(sourceDir, { recursive: true, force: true }),
@@ -127,19 +155,15 @@ describe("DocsHubComponent shared interaction contract", () => {
 					`# Evidence\nmbist_check.rpt evidence ${index}\nStored final line ${index}.\n`,
 				);
 			await writer.init(".", "handbook");
-			const expected = writer.search("mbist_check.rpt", { limit: 100 });
+			const expected = await writer.search("mbist_check.rpt", { limit: 100 });
 			expect(expected.total).toBe(45);
 			expect(expected.sections).toHaveLength(45);
 			await fs.rm(sourceDir, { recursive: true });
 			await fs.mkdir(sourceDir);
-			const settings = await Settings.loadIsolated({ cwd: sourceDir, agentDir: profileDir, inMemory: true });
-			hub = await DocsHubComponent.create({ requestRender: () => {} } as unknown as TUI, sourceDir, settings, {
-				onCancel: vi.fn(),
-			});
-			hub.handleInput("/");
-			typeText(hub, "mbist_check.rpt");
-			hub.handleInput("\n");
-			expect(text(hub)).toContain("Section hits: 45 · showing 1-20");
+			const observed = await observedHub(sourceDir, profileDir);
+			hub = observed.hub;
+			submitSearch(hub, "mbist_check.rpt");
+			await observed.waitFor(rendered => rendered.includes("Section hits: 45 · showing 1-20"));
 			expect(text(hub)).toContain("exact-name matches: 45");
 			expect(text(hub)).toContain("n next page");
 			const seen: number[] = [];
@@ -148,7 +172,7 @@ describe("DocsHubComponent shared interaction contract", () => {
 			};
 			collectPage();
 			hub.handleInput("n");
-			expect(text(hub)).toContain("showing 21-40");
+			await observed.waitFor(rendered => rendered.includes("showing 21-40"));
 			collectPage();
 			hub.handleInput("\n");
 			const section = expected.sections[20]!;
@@ -159,7 +183,7 @@ describe("DocsHubComponent shared interaction contract", () => {
 			hub.handleInput("b");
 			expect(text(hub)).toContain("showing 21-40");
 			hub.handleInput("n");
-			expect(text(hub)).toContain("showing 41-45");
+			await observed.waitFor(rendered => rendered.includes("showing 41-45"));
 			expect(text(hub)).toContain("Results exhausted.");
 			expect(text(hub)).not.toContain("n next page");
 			collectPage();
@@ -169,31 +193,87 @@ describe("DocsHubComponent shared interaction contract", () => {
 			expect(text(hub)).toContain("showing 41-45");
 
 			hub.handleInput("\x1b");
-			hub.handleInput("/");
-			typeText(hub, "mbist_check.rpt");
-			hub.handleInput("\n");
-			writer.remove("handbook");
+			submitSearch(hub, "mbist_check.rpt");
+			await observed.waitFor(rendered => rendered.includes("showing 1-20"));
+			await writer.remove("handbook");
 			await fs.writeFile(path.join(sourceDir, "replacement.md"), "# Replacement\nmbist_check.rpt new snapshot\n");
 			await writer.init(".", "handbook");
+			hub.handleInput("\x1b[B");
 			hub.handleInput("n");
+			await observed.waitFor(rendered => /cursor|continuation/i.test(rendered));
 			expect(text(hub)).toContain("showing 1-20");
 			expect(text(hub)).not.toContain("replacement.md");
-			expect(text(hub)).toMatch(/cursor|continuation/i);
 			hub.handleInput("\n");
-			expect(text(hub)).toContain(expected.sections[0]!.text.trim());
+			expect(text(hub)).toContain(expected.sections[1]!.text.trim());
+			expect(text(hub)).toContain(
+				`sha256=${expected.sections[1]!.documentHash} · sectionId=${expected.sections[1]!.sectionId}`,
+			);
 
 			hub.handleInput("\x1b");
-			hub.handleInput("/");
-			typeText(hub, "zxqv_missing.noexist");
-			hub.handleInput("\n");
-			expect(text(hub)).toContain("Section hits: 0 · showing 0-0");
+			submitSearch(hub, "zxqv_missing.noexist");
+			await observed.waitFor(rendered => rendered.includes("Section hits: 0 · showing 0-0"));
 			expect(text(hub)).toContain("未找到完整名称命中");
 			expect(text(hub)).toContain("Results exhausted.");
 			hub.handleInput("n");
 			expect(text(hub)).toContain("Section hits: 0");
 		} finally {
-			hub?.dispose();
-			writer.close();
+			await hub?.dispose();
+			await writer.close();
+			await Promise.all([
+				fs.rm(profileDir, { recursive: true, force: true }),
+				fs.rm(sourceDir, { recursive: true, force: true }),
+			]);
+		}
+	}, 10_000);
+
+	it("keeps input responsive, cancels real searches, and never replaces newer results with a cancelled page", async () => {
+		await initTheme();
+		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-cancel-profile-"));
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-cancel-source-"));
+		const writer = new DocsService({ agentDir: profileDir, cwd: sourceDir });
+		let hub: DocsHubComponent | undefined;
+		try {
+			await fs.writeFile(path.join(sourceDir, "cancelled.md"), "# Cancelled\ncancelneedle old evidence\n");
+			await fs.writeFile(path.join(sourceDir, "retained.md"), "# Retained\nretainedneedle current evidence\n");
+			await writer.init(".", "handbook");
+			const observed = await observedHub(sourceDir, profileDir);
+			hub = observed.hub;
+
+			submitSearch(hub, "cancelneedle");
+			expect(text(hub)).toContain("Searching document indexes…");
+			// A real event-loop turn proves responsiveness during the actual worker/floor wait.
+			// Fake timers cannot exercise the subprocess and the monotonic public search floor.
+			await Bun.sleep(0);
+			expect(text(hub)).toContain("Searching document indexes…");
+			hub.handleInput("c");
+			await observed.waitFor(rendered => !rendered.includes("Searching document indexes…"));
+			expect(text(hub)).not.toContain("cancelled.md:1-2");
+
+			submitSearch(hub, "cancelneedle");
+			expect(text(hub)).toContain("Searching document indexes…");
+			await Bun.sleep(0);
+			hub.handleInput("\x1b");
+			await observed.waitFor(rendered => !rendered.includes("Searching document indexes…"));
+			expect(text(hub)).not.toContain("cancelled.md:1-2");
+
+			submitSearch(hub, "retainedneedle");
+			await observed.waitFor(rendered => rendered.includes("retained.md:1-2"));
+			expect(text(hub)).not.toContain("cancelled.md:1-2");
+			hub.handleInput("\n");
+			expect(text(hub)).toContain("retainedneedle current evidence");
+			expect(text(hub)).not.toContain("cancelneedle old evidence");
+
+			hub.handleInput("\x1b");
+			submitSearch(hub, "cancelneedle");
+			expect(text(hub)).toContain("Searching document indexes…");
+			await Bun.sleep(0);
+			const framesBeforeDispose = observed.renderedFrames.length;
+			await hub.dispose();
+			await writer.list();
+			expect(observed.renderedFrames).toHaveLength(framesBeforeDispose);
+		} finally {
+			await hub?.dispose();
+			await writer.close();
 			await Promise.all([
 				fs.rm(profileDir, { recursive: true, force: true }),
 				fs.rm(sourceDir, { recursive: true, force: true }),

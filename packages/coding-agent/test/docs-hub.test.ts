@@ -1,11 +1,10 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import type { Settings } from "../src/config/settings";
-import { DocsService } from "../src/docs/service";
-import type { DocsBuildResult, DocsProgress } from "../src/docs/types";
+import { DocsSearchEngine } from "../src/docs/engine";
 import { DocsHubComponent } from "../src/modes/components/docs-hub";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -26,26 +25,50 @@ function expectControlSequencesNeutralized(rendered: string): void {
 	expect(rendered).not.toContain("\u0085");
 }
 
-async function fixture(): Promise<{
-	hub: DocsHubComponent;
-	result: DocsBuildResult;
-}> {
+async function fixture() {
 	const root = await tempDir("docs-hub-root-");
 	const agentDir = await tempDir("docs-hub-agent-");
 	await fs.writeFile(path.join(root, `guide-${attack}.md`), `# Guide\nneedle ${attack}\n`);
-	const seed = new DocsService({ agentDir, cwd: root });
-	const result = await seed.init(".", "safe");
-	seed.storage.db
-		.query("UPDATE doc_indexes SET name=?,root_path=? WHERE id=?")
-		.run(`index-${attack}`, `root-${attack}`, result.index.id);
-	seed.close();
+	const seed = new DocsSearchEngine({ agentDir, cwd: root });
+	try {
+		const result = await seed.init(".", "safe");
+		seed.storage.db
+			.query("UPDATE doc_indexes SET name=?,root_path=? WHERE id=?")
+			.run(`index-${attack}`, `root-${attack}`, result.index.id);
+	} finally {
+		seed.close();
+	}
 
-	const tui = { requestRender: () => {} } as unknown as TUI;
-	const settings = {
-		getAgentDir: () => agentDir,
-	} as unknown as Settings;
-	const hub = await DocsHubComponent.create(tui, root, settings, { onCancel: () => {} });
-	return { hub, result };
+	const state: { hub?: DocsHubComponent } = {};
+	const renderedFrames: string[] = [];
+	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
+	const tui = {
+		requestRender: () => {
+			const hub = state.hub;
+			if (!hub) return;
+			const rendered = hub.render(200).join("\n");
+			renderedFrames.push(rendered);
+			for (const waiter of waiters) {
+				if (waiter.matches(rendered)) {
+					waiters.delete(waiter);
+					waiter.resolve();
+				}
+			}
+		},
+	} as unknown as TUI;
+	const settings = { getAgentDir: () => agentDir } as unknown as Settings;
+	const component = await DocsHubComponent.create(tui, root, settings, { onCancel: () => {} });
+	state.hub = component;
+	const waitFor = (matches: (rendered: string) => boolean): Promise<void> => {
+		const ready = (rendered: string) =>
+			!/(?:Loading|Searching|Deleting|Indexing) document index/.test(rendered) && matches(rendered);
+		if (ready(component.render(200).join("\n"))) return Promise.resolve();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		waiters.add({ matches: ready, resolve });
+		return promise;
+	};
+	await waitFor(rendered => rendered.includes("docs=1 sections=1"));
+	return { hub: component, waitFor, renderedFrames };
 }
 
 beforeAll(async () => {
@@ -53,15 +76,14 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-	vi.restoreAllMocks();
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
 // Windows filenames cannot contain control characters (\r, \t, ESC…), so the
 // attack-path fixture cannot be created there; the sanitization surface is POSIX-only.
 describe.skipIf(process.platform === "win32")("DocsHub terminal text safety", () => {
-	it("sanitizes listed indexes, search details, stored Markdown, and error text", async () => {
-		const { hub } = await fixture();
+	it("sanitizes listed indexes, search details, stored Markdown, and real error text", async () => {
+		const { hub, waitFor } = await fixture();
 		try {
 			const list = hub.render(200).join("\n");
 			expectControlSequencesNeutralized(list);
@@ -70,58 +92,45 @@ describe.skipIf(process.platform === "win32")("DocsHub terminal text safety", ()
 			expect(list).toContain("root-");
 
 			hub.handleInput("/");
-
 			hub.handleInput("needle");
 			hub.handleInput("\r");
-			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("Section hits: 1"));
 			expectControlSequencesNeutralized(hub.render(200).join("\n"));
+			hub.handleInput("\r");
+			const stored = hub.render(200).join("\n");
+			expect(stored).toContain("needle");
+			expectControlSequencesNeutralized(stored);
 
 			hub.handleInput("\x1b");
-			vi.spyOn(DocsService.prototype, "search").mockImplementation(() => {
-				throw new Error(`search-${attack}`);
-			});
-			hub.handleInput("/");
-			hub.handleInput("failure");
-			hub.handleInput("\r");
+			hub.handleInput("n");
+			for (const input of ["failure", "\r", `missing-${attack}`, "\r", "\r"]) hub.handleInput(input);
+			await waitFor(rendered => rendered.includes("Markdown root is not a directory"));
 			const error = hub.render(200).join("\n");
+			expect(error).toContain("FORGED");
 			expectControlSequencesNeutralized(error);
 			expect(error).not.toContain("\nFORGED");
 		} finally {
-			hub.dispose();
+			await hub.dispose();
 		}
 	});
 
-	it("sanitizes progress paths and messages", async () => {
-		const { hub, result } = await fixture();
-		let release!: () => void;
-		const gate = new Promise<void>(resolve => {
-			release = resolve;
-		});
-		vi.spyOn(DocsService.prototype, "init").mockImplementation(
-			async (_directory: string, _name: string, options?: { onProgress?: (progress: DocsProgress) => void }) => {
-				options?.onProgress?.({
-					phase: "fts",
-					total: 1,
-					completed: 0,
-					failed: 0,
-					currentPath: `path-${attack}`,
-					message: `message-${attack}`,
-				});
-				await gate;
-				return result;
-			},
-		);
+	it("sanitizes actual import progress paths and messages", async () => {
+		const { hub, waitFor, renderedFrames } = await fixture();
 		try {
 			hub.handleInput("n");
 			for (const input of ["new", "\r", ".", "\r", "\r"]) hub.handleInput(input);
-			const progress = hub.render(200).join("\n");
-			expectControlSequencesNeutralized(progress);
-			expect(progress).not.toContain("\nFORGED");
+			await waitFor(rendered => rendered.includes("new  docs=1 sections=1"));
+			const progressFrames = renderedFrames.filter(rendered =>
+				/(?:section|fts|complete) \d+\/\d+/.test(Bun.stripANSI(rendered)),
+			);
+			expect(progressFrames.length).toBeGreaterThan(0);
+			expect(progressFrames.some(rendered => rendered.includes("guide-") && rendered.includes("FORGED"))).toBe(true);
+			for (const progress of progressFrames) {
+				expectControlSequencesNeutralized(progress);
+				expect(progress).not.toContain("\nFORGED");
+			}
 		} finally {
-			release();
-			await gate;
-			await Promise.resolve();
-			hub.dispose();
+			await hub.dispose();
 		}
 	});
 });

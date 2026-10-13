@@ -11,10 +11,11 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 	const configRoot = path.join(directory, "config");
 	const profile = "wiki-e2e";
 	const agentDir = path.join(configRoot, "profiles", profile, "agent");
-	const observed: Array<{ text: string; isError: boolean }> = [];
+	const observed: Array<{ text: string; isError: boolean; elapsedMs: number }> = [];
 	let query = "WIKIE2EBEACON";
 	let callNumber = 0;
 	const observedCalls = new Set<string>();
+	const issuedCalls = new Map<string, number>();
 	await Promise.all([root, documents, agentDir].map(dir => fs.mkdir(dir, { recursive: true })));
 	await Bun.write(
 		path.join(documents, "guide.md"),
@@ -51,7 +52,9 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 								.join("\n");
 				if (!observedCalls.has(result.tool_use_id)) {
 					observedCalls.add(result.tool_use_id);
-					observed.push({ text, isError: Boolean(result.is_error) });
+					const issuedAt = issuedCalls.get(result.tool_use_id);
+					if (issuedAt === undefined) throw new Error(`Unexpected wiki result: ${result.tool_use_id}`);
+					observed.push({ text, isError: Boolean(result.is_error), elapsedMs: performance.now() - issuedAt });
 				}
 				const continuation = text.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
 				if (continuation && !result.is_error) nextInput = JSON.parse(continuation);
@@ -104,6 +107,7 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 				],
 				["message_stop", { type: "message_stop" }],
 			];
+			if (nextInput) issuedCalls.set(callId, performance.now());
 			return new Response(
 				frames.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join(""),
 				{ headers: { "content-type": "text/event-stream" } },
@@ -137,6 +141,10 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 			return stdout;
 		} finally {
 			clearTimeout(timer);
+			if (child.exitCode === null) {
+				child.kill();
+				await child.exited;
+			}
 		}
 	}
 	try {
@@ -166,6 +174,7 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 		const pages = observed.filter(result => !result.isError).map(result => result.text);
 		expect(pages.length).toBeGreaterThan(1);
 		expect(observed.every(result => !result.isError)).toBe(true);
+		for (const result of observed) expect(result.elapsedMs).toBeGreaterThanOrEqual(500);
 		const shown: number[] = [];
 		const ids: string[] = [];
 		for (const page of pages) {
