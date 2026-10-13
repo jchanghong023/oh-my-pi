@@ -1,5 +1,5 @@
 /**
- * Composer hints: the right-aligned placeholder shown in the empty composer to
+ * Composer hints: the placeholder shown after the cursor in the empty composer to
  * surface gestures that matter right now (e.g. background agents are running).
  *
  * Hints are checked in priority order; the first one that applies wins. A hint

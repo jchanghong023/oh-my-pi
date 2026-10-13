@@ -8,6 +8,7 @@
 - Embedded context labels stay together at the right end of the composer border, with a muted window capacity and no compaction boundary ticks.
 - Git status uses plain `git <branch> · 改动N` text with one deduplicated file count for staged, unstaged, and untracked changes, excluding ignored files.
 - The ANSI prompt input keeps at least two content rows and grows with longer drafts, including wrapped lines.
+- Empty-composer help stays near the cursor on the left instead of leaving a large blank gap before the shortcuts.
 
 ### Fixed
 

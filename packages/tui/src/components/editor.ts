@@ -453,7 +453,7 @@ const VIM_NAV_KEYS: Record<string, string | undefined> = {
 	space: "l",
 };
 
-/** Minimum free cells between an end-of-line cursor and a right-aligned placeholder. */
+/** Minimum free cells between an end-of-line cursor and a placeholder. */
 const PLACEHOLDER_MIN_GAP = 2;
 
 const DEFAULT_PAGE_SCROLL_LINES = 10;
@@ -768,7 +768,7 @@ export class Editor implements Component, Focusable {
 	protected get nativeSendable(): boolean {
 		return false;
 	}
-	/** Placeholder painted right-aligned on the cursor row while the editor is empty and no
+	/** Placeholder painted after the cursor while the editor is empty and no
 	 *  autocomplete is open; hidden when it can't keep {@link PLACEHOLDER_MIN_GAP} cells from the
 	 *  cursor. The host styles it (ANSI allowed). Re-evaluated on every render, so hosts can derive
 	 *  it from live state. */
@@ -1412,14 +1412,14 @@ export class Editor implements Component, Focusable {
 		const lineContentWidth = contentAreaWidth;
 
 		// Text painted after an end-of-line cursor with `avail` free cells: dim ghost text
-		// against the cursor, or the placeholder flush right.
+		// against the cursor, or the placeholder after a small gap.
 		const placeholder = this.#getPlaceholder();
 		const inlineHint = placeholder ? null : this.#getInlineHint();
 		const hintStyle = this.#theme.hintStyle ?? ((t: string) => `\x1b[2m${t}\x1b[0m`);
 		const hintTail = (avail: number): { text: string; width: number } | undefined => {
 			if (placeholder) {
-				const gap = avail - visibleWidth(placeholder);
-				return gap >= PLACEHOLDER_MIN_GAP ? { text: padding(gap) + placeholder, width: avail } : undefined;
+				const width = PLACEHOLDER_MIN_GAP + visibleWidth(placeholder);
+				return width <= avail ? { text: padding(PLACEHOLDER_MIN_GAP) + placeholder, width } : undefined;
 			}
 			if (!inlineHint) return undefined;
 			return {

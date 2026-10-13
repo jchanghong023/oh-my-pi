@@ -23,6 +23,41 @@ describe("Editor component", () => {
 		setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS));
 	});
 
+	describe("Empty-editor hint spacing", () => {
+		it("keeps the hint next to the cursor instead of shifting it across free space on resize", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
+
+			const wide = editor.render(80)[1]!;
+			const cursorEnd = wide.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
+			const gap = stripVTControlCharacters(wide.slice(cursorEnd, wide.indexOf("帮助")));
+			expect(gap).toBe(`${defaultEditorTheme.symbols.inputCursor}  `);
+			const hintColumn = visibleWidth(wide.slice(0, wide.indexOf("帮助")));
+
+			const narrow = editor.render(40)[1]!;
+			expect(visibleWidth(narrow.slice(0, narrow.indexOf("帮助")))).toBe(hintColumn);
+			editor.setText("draft");
+			expect(editor.render(40).join("\n")).not.toContain("帮助");
+			editor.setText("");
+			expect(editor.render(40)[1]).toContain("帮助");
+		});
+
+		it("hides the full hint when the cursor gap cannot fit without overflowing the border", () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
+
+			const fits = editor.render(13)[1]!;
+			expect(fits).toContain("帮助");
+			expect(visibleWidth(fits)).toBe(13);
+			const tooNarrow = editor.render(12)[1]!;
+			expect(tooNarrow).not.toContain("帮助");
+			expect(visibleWidth(tooNarrow)).toBe(12);
+			expect(tooNarrow).toContain(CURSOR_MARKER);
+		});
+	});
+
 	describe("Word delete keybindings", () => {
 		it("honors a keybindings.yml remap of deleteWordBackward in the multi-line editor", () => {
 			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.deleteWordBackward": "alt+g" }));
