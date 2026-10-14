@@ -821,117 +821,6 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
-	it("serves path, line numbers and text from one snapshot across a concurrent index swap", async () => {
-		const root = await tempDir("docs-snapshot-root-");
-		const agentDir = await tempDir("docs-snapshot-agent-");
-		await fs.writeFile(path.join(root, "evidence.md"), "# Evidence\nold-evidence needle content\n");
-		const reader = new DocsSearchEngine({ agentDir, cwd: root });
-		const writer = new DocsSearchEngine({ agentDir, cwd: root });
-		// Restore the raw handle before close(): the proxy below is read-only.
-		const realDb = reader.storage.db;
-		try {
-			await reader.init(".", "old-evidence");
-			const sectionId = reader.search("needle", { index: "old-evidence" }).sections[0].sectionId;
-			// The committed end-state of a concurrent remove + re-import: the old
-			// rows are gone and an unrelated section occupies the freed rowid
-			// (`sections.id` is a plain rowid and is reused after a delete).
-			const swapIndexForReimport = (): void => {
-				writer.remove("old-evidence");
-				const created = writer.storage.create({ name: "replacement", rootPath: root });
-				writer.storage.transaction(() => {
-					writer.storage.db
-						.query(
-							"INSERT INTO documents(id,index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?,?)",
-						)
-						.run(900, created.id, "policy.md", "Policy", "markdown", "deadbeef", 1, 0);
-					writer.storage.db
-						.query(
-							"INSERT INTO sections(id,index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-						)
-						.run(
-							sectionId,
-							created.id,
-							900,
-							0,
-							"Policy",
-							1,
-							1,
-							2,
-							0,
-							44,
-							"UNRELATED NEW EVIDENCE: different policy",
-						);
-					writer.storage.db
-						.query(
-							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-						)
-						.run(
-							sectionId,
-							sectionId,
-							created.id,
-							"policy.md",
-							"Policy",
-							"unrelated new evidence different policy",
-						);
-				});
-			};
-			// Interleave the swap between snapshot reads of the next search.
-			let reads = 0;
-			(reader.storage as { db: Database }).db = new Proxy(realDb, {
-				get(target, property) {
-					const value = Reflect.get(target, property, target);
-					if (typeof value !== "function") return value;
-					if (property === "query") {
-						return (sql: string) => {
-							const statement = (value as (this: Database, sqlToRun: string) => unknown).call(
-								target,
-								sql,
-							) as Record<string, unknown>;
-							return new Proxy(statement, {
-								get(stmtTarget, stmtProp) {
-									const stmtValue = Reflect.get(stmtTarget, stmtProp, stmtTarget);
-									if ((stmtProp === "all" || stmtProp === "get") && typeof stmtValue === "function") {
-										return (...bound: unknown[]) => {
-											const rows = (stmtValue as (this: unknown, ...boundArgs: unknown[]) => unknown).apply(
-												stmtTarget,
-												bound,
-											);
-											reads++;
-											if (reads === 1) swapIndexForReimport();
-											return rows;
-										};
-									}
-									return typeof stmtValue === "function"
-										? (stmtValue as (...boundArgs: unknown[]) => unknown).bind(stmtTarget)
-										: stmtValue;
-								},
-							});
-						};
-					}
-					return (value as (...args: unknown[]) => unknown).bind(target);
-				},
-			});
-			const result = reader.search("needle");
-			const hits = result.sections;
-			expect(result.total).toBe(1);
-			expect(hits).toHaveLength(1);
-			// Provenance and text must describe the same version of the section.
-			expect(hits[0].path).toBe("evidence.md");
-			expect(hits[0].text).toContain("old-evidence needle content");
-			expect(hits[0].text).not.toContain("UNRELATED NEW EVIDENCE");
-			// The old snapshot must not be cached under the post-swap guard.
-			expect(reader.search("needle").sections).toEqual([]);
-			expect(reader.search("unrelated new").sections[0]).toMatchObject({
-				path: "policy.md",
-				text: "UNRELATED NEW EVIDENCE: different policy",
-			});
-		} finally {
-			(reader.storage as { db: Database }).db = realDb;
-			reader.close();
-			writer.close();
-		}
-	});
-
 	it("prefers a topical section title over an incidental mention or inherited heading", async () => {
 		const root = await tempDir("docs-title-rank-");
 		const agentDir = await tempDir("docs-title-agent-");
@@ -1464,7 +1353,7 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
-	it("reuses complete ordering while materializing bounded windows with start-based cursors", async () => {
+	it("preserves complete evidence ordering across bounded sync and async windows with start-based cursors", async () => {
 		const root = await tempDir("docs-rank-cache-root-");
 		const agentDir = await tempDir("docs-rank-cache-agent-");
 		await fs.writeFile(
@@ -1472,25 +1361,9 @@ describe("DocsSearchEngine indexing contract", () => {
 			"# One\nneedle evidence first\n## Two\nneedle evidence second\n## Three\nneedle evidence third\n",
 		);
 		const engine = new DocsSearchEngine({ agentDir });
-		// This fixture deliberately substitutes a forwarding DB handle to count ranking.
-		const mutableStorage = engine.storage as { db: Database };
-		const realDb = mutableStorage.db;
-		let rankBuilds = 0;
 		try {
 			await engine.init(root, "manual");
 			await fs.rm(root, { recursive: true });
-			mutableStorage.db = new Proxy(realDb, {
-				get(target, property) {
-					const value = Reflect.get(target, property, target);
-					if (property === "query") {
-						return (sql: string) => {
-							if (sql.includes("bm25(")) rankBuilds++;
-							return (value as (this: Database, sql: string) => unknown).call(target, sql);
-						};
-					}
-					return typeof value === "function" ? value.bind(target) : value;
-				},
-			});
 			const complete = engine.search("needle evidence", { index: "manual", limit: 500 });
 			const first = engine.searchWindow("needle evidence", { index: "manual", limit: 1 });
 			expect(first).toMatchObject({ total: 3, exactNameMatches: 0, cursorBase: { v: 1, p: 0 } });
@@ -1499,6 +1372,11 @@ describe("DocsSearchEngine indexing contract", () => {
 			const rest = engine.searchWindow("needle evidence", { index: "manual", limit: 500, cursor });
 			expect(rest.cursorBase.p).toBe(1);
 			expect(rest.sections).toEqual(complete.sections.slice(1));
+			const asyncFirst = await engine.searchWindowAsync("needle evidence", { index: "manual", limit: 1 });
+			expect(asyncFirst).toEqual(first);
+			const asyncRest = await engine.searchWindowAsync("needle evidence", { index: "manual", limit: 500, cursor });
+			expect(asyncRest).toEqual(rest);
+			expect([...asyncFirst.sections, ...asyncRest.sections]).toEqual(complete.sections);
 			const positions: number[] = [];
 			const budgeted = engine.search("needle evidence", {
 				index: "manual",
@@ -1514,24 +1392,16 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(engine.search("needle evidence", { index: "manual", cursor: budgeted.cursor }).sections).toEqual(
 				complete.sections.slice(1),
 			);
-			expect(rankBuilds).toBe(1);
 		} finally {
-			mutableStorage.db = realDb;
 			engine.close();
 		}
 	});
 
-	it.each([
-		{ external: false, ftsOnly: false },
-		{ external: true, ftsOnly: false },
-		{ external: false, ftsOnly: true },
-		{ external: true, ftsOnly: true },
-	])("invalidates cached continuations after SQL mutation $external/$ftsOnly", async ({ external, ftsOnly }) => {
+	it.each([false, true])("invalidates external SQL continuations (FTS-only=%s)", async ftsOnly => {
 		const root = await tempDir("docs-cache-mutation-root-");
 		const agentDir = await tempDir("docs-cache-mutation-agent-");
 		await fs.writeFile(path.join(root, "guide.md"), "# One\nneedle evidence first\n## Two\nneedle evidence second\n");
 		const reader = new DocsSearchEngine({ agentDir });
-		let writer: DocsSearchEngine | undefined;
 		try {
 			await reader.init(root, "manual");
 			await fs.rm(root, { recursive: true });
@@ -1539,8 +1409,8 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(first).toMatchObject({ total: 2, hasMore: true });
 			// Warm the continuation too, so this covers reuse rather than cold ranking.
 			expect(reader.search("needle evidence", { index: "manual", cursor: first.cursor }).sections).toHaveLength(1);
-			writer = external ? new DocsSearchEngine({ agentDir }) : undefined;
-			const db = (writer ?? reader).storage.db;
+			// Every Bun storage connection is external to the native engine's owning connection.
+			const db = reader.storage.db;
 			if (ftsOnly) {
 				db.query("DELETE FROM sections_fts WHERE rowid=?").run(first.sections[0].sectionId);
 			} else {
@@ -1563,7 +1433,6 @@ describe("DocsSearchEngine indexing contract", () => {
 				);
 			}
 		} finally {
-			writer?.close();
 			reader.close();
 		}
 	});

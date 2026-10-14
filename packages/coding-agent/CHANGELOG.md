@@ -14,6 +14,7 @@
 
 ### Changed
 
+- Wiki searches now use a native Rust engine while preserving matching algorithms, complete ranking, stored evidence, pagination, existing indexes and cursors, cancellation, and the 500ms minimum duration.
 - The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 ### Changed
 

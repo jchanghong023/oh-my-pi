@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added an owner-scoped native documentation search engine with cancellable queries and snapshot-compatible cursors.
+
 ## [18.10.4] - 2026-10-13
 
 ### Fixed

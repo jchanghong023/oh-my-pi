@@ -79,6 +79,7 @@ pub mod tokens;
 pub mod tty_writer;
 pub(crate) mod utils;
 pub mod vectors;
+pub mod wiki;
 pub mod workspace;
 
 #[cfg(target_os = "windows")]

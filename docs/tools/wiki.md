@@ -7,8 +7,9 @@
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/wiki.md`
 - Key collaborators:
   - `packages/coding-agent/src/docs/service.ts` — asynchronous, cancellable index discovery and search
-  - `packages/coding-agent/src/docs/engine.ts` — database-only ranking and snapshot-bound complete-rank reuse
-  - `packages/coding-agent/src/docs/markdown.ts` — section shape classification and heading truncation
+  - `packages/coding-agent/src/docs/engine.ts` — shared import/storage owner and mandatory native query adapter
+  - `crates/pi-natives/src/wiki/` — Rust query analysis, default Markdown lexer projection, SQLite FTS5/BM25, complete ranking/cache, snapshot-compatible cursors and page hydration; async queries use the same native blocking-task mechanism as `grep`
+  - `packages/coding-agent/src/docs/markdown.ts` — shared ingestion parser and heading truncation; the native query lexer preserves its default semantics
   - Index lifecycle: `omp docs init "<dir>" --name <name>` / `omp docs remove <name> --force`
 
 The behavior authority is [Markdown document indexing](../../docs-zh-CN/requirements/fork.md#markdown-文档索引); this page describes its tool surface.

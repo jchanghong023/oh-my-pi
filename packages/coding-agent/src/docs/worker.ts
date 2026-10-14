@@ -74,7 +74,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 						type: "result",
 						id: message.id,
 						command: "searchWindow",
-						value: engine.searchWindow(message.query, message.options),
+						value: await engine.searchWindowAsync(message.query, message.options),
 						engine_ms: performance.now() - started,
 					});
 					break;

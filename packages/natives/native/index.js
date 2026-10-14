@@ -45,6 +45,7 @@ export const TtyWriter = nativeBindings.TtyWriter;
 export const VcsGitRepo = nativeBindings.VcsGitRepo;
 export const VcsJjWorkspace = nativeBindings.VcsJjWorkspace;
 export const VcsRepo = nativeBindings.VcsRepo;
+export const WikiSearchEngine = nativeBindings.WikiSearchEngine;
 
 // functions
 export const __ompInstallTokioRuntime = nativeBindings.__ompInstallTokioRuntime ?? missingNativeExport("__ompInstallTokioRuntime");

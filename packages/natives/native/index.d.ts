@@ -788,6 +788,19 @@ export declare class VcsRepo {
 }
 
 /**
+ * One search connection and bounded complete-ranking cache per documentation
+ * owner.
+ */
+export declare class WikiSearchEngine {
+  /** Opening is deferred until TypeScript has prepared the storage schema. */
+  constructor(databasePath: string, cursorPath: string)
+  searchWindow(query: string, options: WikiSearchOptions): WikiSearchOutput
+  searchWindowAsync(query: string, options: WikiSearchOptions, signal?: unknown | undefined | null): Promise<WikiSearchOutput>
+  /** Closing never waits on the mutex held by an active search. */
+  close(): void
+}
+
+/**
  * Install the bounded Tokio runtime napi-rs adopts for async exports and the
  * bounded Rayon global pool used by native parallel iterators.
  *
@@ -3918,6 +3931,48 @@ export interface WasmGrammarQuery {
   lang?: string
   /** File whose extension selects the language. */
   path?: string
+}
+
+/** Output positions are JS numbers; the decoded cursor retains its u64. */
+export interface WikiCursorBase {
+  v: 1
+  q: string
+  s: string
+  p: number
+}
+
+export interface WikiSearchHit {
+  sectionId: number
+  index: string
+  documentHash: string
+  path: string
+  headingPath: string
+  lineStart: number
+  lineEnd: number
+  text: string
+  shape: 'content' | 'heading-only' | 'stub'
+  matchKind: 'exact-name' | 'related'
+  rank: number
+}
+
+export interface WikiSearchOptions {
+  index?: string
+  cursor?: string
+  limit?: number
+}
+
+export interface WikiSearchOutput {
+  result: WikiSearchWindow
+  cacheHit: boolean
+  termCount: number
+}
+
+export interface WikiSearchWindow {
+  sections: Array<WikiSearchHit>
+  total: number
+  exactNameMatches: number
+  technicalName?: string
+  cursorBase: WikiCursorBase
 }
 
 /** Profiling results returned to JavaScript. */

@@ -73,6 +73,9 @@ portable-pty.workspace = true
 png.workspace = true
 rayon.workspace = true
 regex.workspace = true
+rusqlite.workspace = true
+ryu-js.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
@@ -81,6 +84,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml.workspace = true
 xutf.workspace = true
+unicode-normalization.workspace = true
 zstd.workspace = true
 xxhash-rust.workspace = true
 
@@ -135,3 +139,4 @@ syntect.workspace = true
 # participates in resolution, but the unused-dependency lint stays quiet.
 [target."cfg(false)".dependencies]
 find-msvc-tools.workspace = true
+libsqlite3-sys.workspace = true
