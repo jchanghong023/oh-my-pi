@@ -37,9 +37,9 @@ const TSP_TIPS: readonly string[] = TIP_LINES.filter(line => !NO_TERN_TIP_MARKER
 const NEW_TIP_MARKER = /\s*\[NEW\]\s*$/;
 
 /** Visible text rendered in place of {@link NEW_TIP_MARKER}. */
-const NEW_TAG_TEXT = "NEW!";
+const NEW_TAG_TEXT = "新功能";
 
-/** Milliseconds for one full hue rotation of the rainbow "NEW!" tag. */
+/** Milliseconds for one full hue rotation of the rainbow new-feature tag. */
 const NEW_GLOW_PERIOD_MS = 1500;
 
 /** Selection weight for "[NEW]" tips; ordinary tips weigh 1, so a freshly added
@@ -144,12 +144,12 @@ function tipSpans(tip: string): TspSpan[] {
 }
 
 /**
- * The welcome tip as lines of at most `width` columns: `Tip:` and the body
+ * The welcome tip as lines of at most `width` columns: the label and body
  * wrapped together, with no indent, so the banner can center each line.
  * `[]` when `width` leaves no room for a useful line.
  */
 export function renderWelcomeTip(tip: string, width: number, phase = 0): string[] {
-	const label = "Tip: ";
+	const label = "提示：";
 	if (width - visibleWidth(label) < 8) return [];
 
 	const isNew = NEW_TIP_MARKER.test(tip);
@@ -218,7 +218,7 @@ export class WelcomeComponent implements Component {
 		this.#nagRoll ??= Math.random();
 		this.#tipRoll ??= Math.random();
 		if (theme.getSymbolPreset() === "unicode" && this.#nagRoll < 0.1) {
-			return "Please use nerdfont 😭.";
+			return "请使用 Nerd Font 字体。";
 		}
 		return pickWeightedTip(isNativeRendering() ? TSP_TIPS : TIPS, this.#tipRoll) || undefined;
 	}
@@ -279,7 +279,7 @@ export class WelcomeComponent implements Component {
 				node("icon", { name: "lightbulb", role: "omp.welcome.tip-icon" }),
 				text(tipText, { wrap: "word", role: "omp.welcome.tip-text" }),
 			];
-			if (isNew) tipRow.push(node("shimmer", { text: "New", role: "omp.welcome.new" }));
+			if (isNew) tipRow.push(node("shimmer", { text: NEW_TAG_TEXT, role: "omp.welcome.new" }));
 			body.push(node("row", { gap: "sm", align: "start", role: "omp.welcome.tip" }, tipRow, "tip"));
 		}
 		// No head row or chevron: the card is the hero; the version sits under the wordmark.
@@ -391,7 +391,7 @@ export class WelcomeComponent implements Component {
 	#renderTip(room: number): string[] {
 		const tip = this.tip;
 		if (!tip) return [];
-		// A trailing "[NEW]" marker paints an animated rainbow "NEW!" tag. Derive
+		// A trailing "[NEW]" marker paints an animated rainbow new-feature tag. Derive
 		// its hue phase from wall-clock time so it shimmers across the welcome
 		// intro's re-render frames, then settles into a still rainbow once the
 		// banner caches its resting frame. Non-"[NEW]" tips ignore the phase entirely.

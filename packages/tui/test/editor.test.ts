@@ -15,6 +15,7 @@ import { CombinedAutocompleteProvider } from "@oh-my-pi/pi-tui/autocomplete";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@oh-my-pi/pi-tui/keybindings";
 import { setKittyProtocolActive } from "@oh-my-pi/pi-tui/keys";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
+import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { defaultEditorTheme } from "./test-themes";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -43,7 +44,7 @@ describe("Editor component", () => {
 			expect(editor.render(40)[1]).toContain("帮助");
 		});
 
-		it("hides the full hint when the cursor gap cannot fit without overflowing the border", () => {
+		it("wraps a wide-character hint instead of hiding it when only part fits beside the cursor", () => {
 			const editor = new Editor(defaultEditorTheme);
 			editor.focused = true;
 			editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
@@ -51,10 +52,72 @@ describe("Editor component", () => {
 			const fits = editor.render(13)[1]!;
 			expect(fits).toContain("帮助");
 			expect(visibleWidth(fits)).toBe(13);
-			const tooNarrow = editor.render(12)[1]!;
-			expect(tooNarrow).not.toContain("帮助");
-			expect(visibleWidth(tooNarrow)).toBe(12);
-			expect(tooNarrow).toContain(CURSOR_MARKER);
+			const wrapped = editor.render(12);
+			expect(wrapped.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe("帮助");
+			for (const row of wrapped) expect(visibleWidth(row)).toBe(12);
+			expect(wrapped.join("").split(CURSOR_MARKER)).toHaveLength(2);
+		});
+
+		for (const terminalCursor of [false, true]) {
+			it(`reflows long styled help on resize and bounds its height with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
+				const editor = new Editor(defaultEditorTheme);
+				editor.focused = true;
+				editor.minContentRows = 2;
+				editor.setUseTerminalCursor(terminalCursor);
+				const help = "快捷键帮助".repeat(12) + "最终反馈";
+				editor.placeholder = () => `\x1b[2m${help}\x1b[0m`;
+
+				const wide = editor.render(160);
+				expect(wide[1]).toContain(help);
+				const narrow = editor.render(80);
+				expect(narrow.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
+				expect(narrow[narrow.length - 1]).toContain("最终反馈");
+				for (const row of narrow) expect(visibleWidth(row)).toBe(80);
+				expect(narrow.join("").split(CURSOR_MARKER)).toHaveLength(2);
+				expect(editor.getText()).toBe("");
+				expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+
+				editor.setMaxHeight(3);
+				const bounded = editor.render(40);
+				expect(bounded.length).toBeLessThanOrEqual(3);
+				expect(bounded[1]).toContain("快捷键帮助");
+				for (const row of bounded) expect(visibleWidth(row)).toBe(40);
+				editor.setText("draft");
+				expect(editor.render(40).join("")).not.toContain("快捷键帮助");
+				editor.setText("");
+				editor.setMaxHeight(undefined);
+				const restored = editor.render(80);
+				expect(restored.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
+			});
+		}
+
+		it("keeps a completely blank bottom row below wrapped help and multiline drafts", () => {
+			const editor = new CustomEditor(defaultEditorTheme);
+			editor.focused = true;
+			const help = "快捷键帮助".repeat(12) + "最终反馈";
+			editor.placeholder = () => `\x1b[2m${help}\x1b[0m`;
+
+			const hintRows = editor.render(80);
+			expect(hintRows.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe(help);
+			expect(stripVTControlCharacters(hintRows[hintRows.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
+			expect(hintRows[hintRows.length - 2]).toContain("最终反馈");
+
+			editor.setText("first\nsecond");
+			const draftRows = editor.render(80);
+			expect(draftRows.join("")).toContain("first");
+			expect(draftRows.join("")).toContain("second");
+			expect(stripVTControlCharacters(draftRows[draftRows.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
+			expect(draftRows.join("").split(CURSOR_MARKER)).toHaveLength(2);
+			expect(editor.getText()).toBe("first\nsecond");
+			for (const row of draftRows) expect(visibleWidth(row)).toBe(80);
+
+			editor.setMaxHeight(4);
+			editor.setText("one\ntwo\nthree\nfour");
+			const capped = editor.render(80);
+			expect(capped.length).toBeLessThanOrEqual(4);
+			expect(capped.join("")).toContain("four");
+			expect(capped.join("").split(CURSOR_MARKER)).toHaveLength(2);
+			expect(stripVTControlCharacters(capped[capped.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
 		});
 	});
 

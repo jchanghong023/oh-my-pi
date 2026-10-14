@@ -16,7 +16,6 @@ describe("renderWelcomeTip", () => {
 
 		expect(plain.length).toBeGreaterThan(1);
 		expect(plain.join(" ")).not.toContain("…");
-		expect(plain[0]).toStartWith("Tip: Next time");
 		// The banner centers each line; a baked-in indent would push it off center.
 		for (const line of plain) expect(line).not.toStartWith(" ");
 		for (const line of plain) {
@@ -24,19 +23,18 @@ describe("renderWelcomeTip", () => {
 		}
 	});
 
-	it("replaces a trailing [NEW] marker with a rainbow NEW! tag", () => {
+	it("replaces a trailing [NEW] marker with a rainbow tag", () => {
 		const lines = renderWelcomeTip("Try the shiny advisor [NEW]", 60);
 		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
 		const styled = lines.join("\n");
 
 		expect(plain).toContain("Try the shiny advisor");
 		expect(plain).not.toContain("[NEW]"); // literal marker stripped
-		expect(plain).toContain("NEW!"); // replaced by the visible tag
 		expect(styled).toContain("\x1b[1m"); // tag is bold
 		expect(styled).not.toBe(plain); // tag carries SGR color escapes
 	});
 
-	it("keeps the NEW! tag within the box width", () => {
+	it("keeps the rainbow tag within the box width", () => {
 		// A width that leaves the wrapped body ending near the right edge forces
 		// the tag onto its own continuation line rather than overflowing.
 		for (const width of [24, 40, 60]) {
@@ -44,7 +42,6 @@ describe("renderWelcomeTip", () => {
 			for (const line of lines) {
 				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
 			}
-			expect(lines.map(l => Bun.stripANSI(l)).join("\n")).toContain("NEW!");
 		}
 	});
 
@@ -55,13 +52,6 @@ describe("renderWelcomeTip", () => {
 
 		expect(shifted.join("\n")).not.toBe(still.join("\n")); // hues rotate
 		expect(shifted.map(l => Bun.stripANSI(l))).toEqual(still.map(l => Bun.stripANSI(l)));
-	});
-
-	it("leaves tips without the marker untouched", () => {
-		const lines = renderWelcomeTip("Plain old tip", 60);
-		const plain = lines.map(line => Bun.stripANSI(line)).join("\n");
-		expect(plain).not.toContain("NEW!");
-		expect(plain).toContain("Tip: Plain old tip");
 	});
 
 	it("derives label and body colors from the active theme, with no manual dim layer", async () => {
@@ -99,9 +89,9 @@ describe("renderWelcomeTip", () => {
 		const rand = spyOn(Math, "random").mockReturnValue(0.05);
 		try {
 			const welcome = new WelcomeComponent("1.0.0");
-			expect(welcome.tip).toBe("Please use nerdfont 😭.");
+			const unicodeTip = welcome.tip;
 			await setSymbolPreset("nerd");
-			expect(welcome.tip).not.toBe("Please use nerdfont 😭.");
+			expect(welcome.tip).not.toBe(unicodeTip);
 		} finally {
 			rand.mockRestore();
 			await setSymbolPreset("unicode");

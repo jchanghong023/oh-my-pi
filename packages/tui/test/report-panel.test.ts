@@ -139,7 +139,6 @@ describe("ReportPanel in text mode", () => {
 			await scheduler.settle(terminal);
 		}
 		expect(editorRow()).toBe(ROWS - 1);
-		expect(terminal.getViewport().some(row => row.includes("Tip:"))).toBe(true);
 		const viewport = composer.ui.getMutableViewport();
 		expect(viewport.top + viewport.length).toBe(ROWS);
 

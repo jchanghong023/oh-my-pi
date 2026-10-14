@@ -39,6 +39,7 @@ import {
 	sliceByColumn,
 	truncateToWidth,
 	visibleWidth,
+	wrapTextWithAnsi,
 } from "../utils";
 import {
 	lastGraphemeStart,
@@ -604,6 +605,8 @@ export class Editor implements Component, Focusable {
 	focused: boolean = false;
 	/** Minimum painted ANSI content rows, still bounded by the configured maximum height. */
 	minContentRows = 1;
+	/** Blank ANSI content rows kept below the draft or placeholder, subject to the maximum height. */
+	contentPaddingBottom = 0;
 
 	#theme: EditorTheme;
 	#useTerminalCursor = false;
@@ -769,9 +772,9 @@ export class Editor implements Component, Focusable {
 		return false;
 	}
 	/** Placeholder painted after the cursor while the editor is empty and no
-	 *  autocomplete is open; hidden when it can't keep {@link PLACEHOLDER_MIN_GAP} cells from the
-	 *  cursor. The host styles it (ANSI allowed). Re-evaluated on every render, so hosts can derive
-	 *  it from live state. */
+	 *  autocomplete is open; wraps within the content width and maximum height,
+	 *  keeping {@link PLACEHOLDER_MIN_GAP} cells from the cursor. The host styles it
+	 *  (ANSI allowed). Re-evaluated on every render, so hosts can derive it from live state. */
 	placeholder?: () => string | undefined;
 	/** Whole-message prediction for the next prompt, painted as ghost text after the cursor while
 	 *  the single-line buffer is a strict prefix of it, the cursor sits at its end, and no
@@ -1329,7 +1332,9 @@ export class Editor implements Component, Focusable {
 
 	#getPageScrollStep(totalVisualLines: number): number {
 		const visibleHeight =
-			this.#maxHeight === undefined ? DEFAULT_PAGE_SCROLL_LINES : this.#getVisibleContentHeight(totalVisualLines);
+			this.#maxHeight === undefined
+				? DEFAULT_PAGE_SCROLL_LINES
+				: Math.max(1, this.#getVisibleContentHeight(totalVisualLines) - this.contentPaddingBottom);
 		return Math.max(1, visibleHeight - 1);
 	}
 
@@ -1366,17 +1371,42 @@ export class Editor implements Component, Focusable {
 
 		// Layout the text
 		const layoutLines = this.#layoutText(layoutWidth);
-		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
-		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
-		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
-		const contentRows = Math.min(visibleContentHeight, Math.max(this.minContentRows, visibleLayoutLines.length));
+		const placeholder = this.#getPlaceholder();
+		let placeholderLines: string[] | undefined;
+		let placeholderIndent = 0;
+		if (
+			placeholder &&
+			(!this.#useTerminalCursor || this.focused) &&
+			!(this.#imeSafeCursorLayout && this.#useTerminalCursor && isSideBordered)
+		) {
+			const cursorWidth = this.#useTerminalCursor
+				? 0
+				: this.cursorOverride
+					? visibleWidth(this.cursorOverride)
+					: this.#getStyledInputCursor().width;
+			placeholderIndent = cursorWidth + PLACEHOLDER_MIN_GAP;
+			const placeholderWidth = contentAreaWidth - placeholderIndent;
+			if (placeholderWidth > 0) placeholderLines = wrapTextWithAnsi(replaceTabs(placeholder), placeholderWidth);
+		}
+		const paintedContentLines = Math.max(layoutLines.length, placeholderLines?.length ?? 0);
+		const visibleContentHeight = this.#getVisibleContentHeight(paintedContentLines + this.contentPaddingBottom);
+		const visibleTextHeight = Math.max(1, visibleContentHeight - this.contentPaddingBottom);
+		this.#updateScrollOffset(layoutWidth, layoutLines, visibleTextHeight);
+		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleTextHeight);
+		const contentRows = Math.min(
+			visibleContentHeight,
+			Math.max(
+				this.minContentRows,
+				Math.max(visibleLayoutLines.length, placeholderLines?.length ?? 0) + this.contentPaddingBottom,
+			),
+		);
 
 		const result: string[] = [];
 		// Scrollbar: shown only when content overflows and the caller opted in.
-		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleContentHeight;
+		const needsScrollbar = this.#scrollbarVisible && layoutLines.length > visibleTextHeight;
 		let scrollbarThumb: { start: number; end: number } | null = null;
-		if (needsScrollbar && visibleContentHeight > 0) {
-			scrollbarThumb = scrollbarThumbRange(visibleContentHeight, layoutLines.length, this.#scrollOffset);
+		if (needsScrollbar && visibleTextHeight > 0) {
+			scrollbarThumb = scrollbarThumbRange(visibleTextHeight, layoutLines.length, this.#scrollOffset);
 		}
 
 		// Resolve the custom top-border content once per frame; the style decides
@@ -1413,13 +1443,14 @@ export class Editor implements Component, Focusable {
 
 		// Text painted after an end-of-line cursor with `avail` free cells: dim ghost text
 		// against the cursor, or the placeholder after a small gap.
-		const placeholder = this.#getPlaceholder();
 		const inlineHint = placeholder ? null : this.#getInlineHint();
 		const hintStyle = this.#theme.hintStyle ?? ((t: string) => `\x1b[2m${t}\x1b[0m`);
 		const hintTail = (avail: number): { text: string; width: number } | undefined => {
 			if (placeholder) {
-				const width = PLACEHOLDER_MIN_GAP + visibleWidth(placeholder);
-				return width <= avail ? { text: padding(PLACEHOLDER_MIN_GAP) + placeholder, width } : undefined;
+				const firstLine = placeholderLines?.[0];
+				if (!firstLine) return undefined;
+				const width = PLACEHOLDER_MIN_GAP + visibleWidth(firstLine);
+				return width <= avail ? { text: padding(PLACEHOLDER_MIN_GAP) + firstLine, width } : undefined;
 			}
 			if (!inlineHint) return undefined;
 			return {
@@ -1632,11 +1663,13 @@ export class Editor implements Component, Focusable {
 			);
 		}
 		for (let index = visibleLayoutLines.length; index < contentRows; index++) {
+			const placeholderLine = index < visibleTextHeight ? placeholderLines?.[index] : undefined;
+			const text = placeholderLine ? padding(placeholderIndent) + placeholderLine : "";
 			result.push(
 				...style.renderRow({
 					...chromeCtx,
-					text: "",
-					pad: padding(lineContentWidth),
+					text,
+					pad: padding(Math.max(0, lineContentWidth - (placeholderLine ? visibleWidth(text) : 0))),
 					gutter: promptGutter?.continuation ?? "",
 					isLastRow: index === contentRows - 1,
 					cursorOverflow: 0,

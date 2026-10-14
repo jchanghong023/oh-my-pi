@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
 - Embedded context labels stay together at the right end of the composer border, with a muted window capacity and no compaction boundary ticks.
 - Git status uses plain `git <branch> · 改动N` text with one deduplicated file count for staged, unstaged, and untracked changes, excluding ignored files.
@@ -12,6 +13,7 @@
 
 ### Fixed
 
+- Long composer help wraps instead of disappearing, with one empty row kept below help and drafts.
 - Running subagent counts stay in their configured status-line group instead of always moving to the right.
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.
 - Kept the Rounded Box default consistent during uncached startup, shape previews, and setup selection.

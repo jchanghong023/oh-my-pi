@@ -17,6 +17,7 @@
 
 ### Changed
 
+- Empty-composer help now includes subagent navigation, `/wiki`, and `/repo`, with space separators instead of dots and with the usage-feedback contact kept last.
 - Wiki now uses Rust for Markdown discovery, a faithful port of shared parsing/chunking semantics, hashing, schema/legacy migrations, index lifecycle/import/rollback, query/ranking/cache/snapshot/cursor/hydration, page budgets/deduplication/rendering/sanitization and cancellable minimum-duration waiting. Retained TypeScript code only adapts host tool/schema, session, IPC, UI and logger boundaries; algorithms, database format, stored evidence, valid old cursor identity, DB-only behavior, errors and the ≥500ms successful duration remain unchanged.
 - The Ask tool now selects a clear affirmative Chinese or English answer on timeout when no option is recommended, including calls that send `recommended: null`, instead of always selecting the first.
 - Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.

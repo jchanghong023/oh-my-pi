@@ -31,27 +31,20 @@ describe("WelcomeComponent", () => {
 		});
 	});
 
-	it("selects standard tip when preset is not unicode", () => {
-		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("nerd");
-
+	it("selects the font reminder only below 10% under the unicode preset", () => {
+		const preset = vi.spyOn(theme, "getSymbolPreset").mockReturnValue("unicode");
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.099);
 		const welcome = new WelcomeComponent("1.0.0");
-		expect(welcome.tip).not.toBe("Please use nerdfont 😭.");
-		expect(welcome.tip).toBeDefined();
-	});
+		const fontReminder = welcome.tip;
 
-	it("selects nerdfont tip with 10% probability under unicode preset", () => {
-		vi.spyOn(theme, "getSymbolPreset").mockReturnValue("unicode");
+		preset.mockReturnValue("nerd");
+		const standardTip = welcome.tip;
+		expect(standardTip).not.toBe(fontReminder);
 
-		// 9% chance => selects special tip
-		vi.spyOn(Math, "random").mockReturnValue(0.09);
-		const welcomeSpecial = new WelcomeComponent("1.0.0");
-		expect(welcomeSpecial.tip).toBe("Please use nerdfont 😭.");
-
-		// 10% chance => selects regular tip
-		vi.spyOn(Math, "random").mockReturnValue(0.1);
-		const welcomeRegular = new WelcomeComponent("1.0.0");
-		expect(welcomeRegular.tip).not.toBe("Please use nerdfont 😭.");
-		expect(welcomeRegular.tip).toBeDefined();
+		preset.mockReturnValue("unicode");
+		expect(welcome.tip).toBe(fontReminder);
+		random.mockReturnValueOnce(0.1).mockReturnValueOnce(0.099);
+		expect(new WelcomeComponent("1.0.0").tip).toBe(standardTip);
 	});
 
 	it("weights [NEW] tips above ordinary tips in selection", () => {
@@ -82,7 +75,8 @@ describe("WelcomeComponent", () => {
 
 	it("centers the lockup and every tip line in the terminal width", () => {
 		const columns = 140;
-		const rows = new WelcomeComponent("1.0.0").render(columns).map(row => Bun.stripANSI(row).trimEnd());
+		const welcome = new WelcomeComponent("1.0.0");
+		const rows = welcome.render(columns).map(row => Bun.stripANSI(row).trimEnd());
 		const indent = (row: string) => visibleWidth(row) - visibleWidth(row.trimStart());
 		const expectCentered = (left: number, right: number) => expect(Math.abs(left - right)).toBeLessThanOrEqual(1);
 
@@ -92,15 +86,18 @@ describe("WelcomeComponent", () => {
 		expectCentered(indent(bar), columns - visibleWidth(word));
 
 		// Each tip line centers on its own.
-		const below = rows.slice(rows.findIndex(row => row.includes("Tip: "))).filter(row => row.length > 0);
-		expect(below.length).toBeGreaterThanOrEqual(1);
+		const tipStart = rows.indexOf("");
+		expect(tipStart).toBeGreaterThanOrEqual(0);
+		const below = rows.slice(tipStart).filter(row => row.length > 0);
 		for (const row of below) expectCentered(indent(row), columns - visibleWidth(row));
 	});
 
 	it("drops the tip below 50 columns", () => {
-		const text = (columns: number) => Bun.stripANSI(new WelcomeComponent("1.0.0").render(columns).join("\n"));
-		expect(text(50)).toContain("Tip: ");
-		expect(text(49)).not.toContain("Tip: ");
+		const welcome = new WelcomeComponent("1.0.0");
+		const tip = welcome.tip ?? "";
+		const text = (columns: number) => Bun.stripANSI(welcome.render(columns).join("\n"));
+		expect(text(50)).toContain(tip.slice(0, 4));
+		expect(text(49)).not.toContain(tip.slice(0, 4));
 		expect(text(49)).toContain("v1.0.0");
 	});
 

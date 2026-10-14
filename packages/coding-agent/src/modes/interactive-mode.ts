@@ -3926,7 +3926,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#composerHint(): string {
 		return theme.fg(
 			"dim",
-			"Ctrl+T临时模型Ctrl+Q排队发送EscEsc回退对话/tree会话历史/goal目标双击左方向键<-子代理/wiki文档检索/repo代码索引有使用问题反馈j00808874",
+			"Ctrl+T 临时模型 Ctrl+Q 排队发送 Esc Esc 回退对话 /tree 会话历史 /goal 目标 双击左方向键<- 子代理 /wiki 文档检索 /repo 代码索引 有使用问题反馈j00808874",
 		);
 	}
 
