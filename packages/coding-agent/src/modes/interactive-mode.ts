@@ -397,7 +397,7 @@ import { cfgExpandThinkingBlocks, cfgProseOnlyThinking } from "../session/settin
 import { cfgHideThinkingBlock } from "../session/settings";
 import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
-import { goalContinuationActivity, goalFromModeData } from "../goals/state";
+import { GoalContinuationGuard, goalFromModeData } from "../goals/state";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
@@ -1527,7 +1527,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#goalContinuationDiagnostics: { operation_id: string; goal_id: string; started_at: number } | undefined;
 	/** Submitted continuation turns awaiting their asynchronously delivered `agent_end`. */
 	#pendingGoalContinuationTurns = 0;
-	#previousGoalContinuationActivity: string | undefined;
+	readonly #goalContinuationGuard = new GoalContinuationGuard();
 	#goalSuppressNextContinuation = false;
 	#planModePreviousModelState: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
 	#pendingModelSwitch: { model: Model; thinkingLevel?: ConfiguredThinkingLevel } | undefined;
@@ -2886,7 +2886,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if ((this.editor.pendingImages?.length ?? 0) > 0) return stop("editor_has_images");
 		const state = this.session.getGoalModeState();
 		if (!state?.enabled || state.goal.status !== "active") return stop("goal_not_active");
-		const prompt = this.session.goalRuntime.buildContinuationPrompt();
+		const prompt = this.session.goalRuntime.buildContinuationPrompt(this.#goalContinuationGuard.recoveryPending);
 		if (!prompt) return stop("continuation_unavailable");
 		const diagnostics = {
 			operation_id: `goal-continuation-${crypto.randomUUID()}`,
@@ -2913,13 +2913,16 @@ export class InteractiveMode implements InteractiveModeContext {
 			const latestState = this.session.getGoalModeState();
 			if (!latestState?.enabled || latestState.goal.status !== "active") return stopWaiting("goal_not_active");
 			if (this.#goalOpenWorkAllBlocked()) return stopWaiting("all_work_blocked");
+			const recovery = this.#goalContinuationGuard.recoveryPending;
+			// Failed admission has no agent_end; keep it stopped unless this turn proves progress.
+			if (recovery) this.#goalSuppressNextContinuation = true;
 			this.#pendingGoalContinuationTurns++;
 			this.#logGoalContinuation("started", "idle_ready", { ...elapsed(), stage: "submit" });
 			try {
 				this.onInputCallback(
 					this.startPendingSubmission({
 						text: prompt,
-						customType: "goal-continuation",
+						customType: recovery ? "goal-tool-recovery" : "goal-continuation",
 						display: false,
 					}),
 				);
@@ -3336,7 +3339,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			cancelled: false,
 			started: false,
 		};
-		if (submission.customType !== "goal-continuation") {
+		if (submission.customType !== "goal-continuation" && submission.customType !== "goal-tool-recovery") {
 			this.#pendingGoalContinuationTurns = 0;
 		}
 		this.#pendingSubmittedInput = submission;
@@ -3386,7 +3389,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#pendingSubmissionPreservesDraft = false;
 		this.clearOptimisticUserMessage();
 		this.#pendingWorkingMessage = undefined;
-		if (submission.customType === "goal-continuation") {
+		if (submission.customType === "goal-continuation" || submission.customType === "goal-tool-recovery") {
 			this.#pendingGoalContinuationTurns = Math.max(0, this.#pendingGoalContinuationTurns - 1);
 			this.#logGoalContinuation("cancelled", "pending_submission_cancelled", { stage: "submit" });
 		}
@@ -4674,7 +4677,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#resetGoalContinuationSuppression(): void {
 		this.#goalSuppressNextContinuation = false;
-		this.#previousGoalContinuationActivity = undefined;
+		this.#goalContinuationGuard.reset();
 	}
 
 	#getPausedGoalState(): GoalModeState | undefined {
@@ -4710,7 +4713,9 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#updateGoalModeStatus();
 			return;
 		}
-		if (event.type !== "agent_end") {
+		if (event.type !== "agent_end") return;
+		if (event.isTerminal === false) {
+			if (this.#pendingGoalContinuationTurns > 0) this.#goalContinuationGuard.recordActivity(event.messages);
 			return;
 		}
 		if (this.#guidedGoalInterviewActive && event.messages.some(hasAssistantToolCall)) {
@@ -4718,13 +4723,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (this.#pendingGoalContinuationTurns > 0) {
 			this.#pendingGoalContinuationTurns--;
-			const activity = goalContinuationActivity(event.messages);
-			this.#goalSuppressNextContinuation =
-				activity.length === 0 || activity === this.#previousGoalContinuationActivity;
-			this.#previousGoalContinuationActivity = activity;
+			const decision = this.#goalContinuationGuard.observe(event.messages);
+			this.#goalSuppressNextContinuation = decision === "stop";
+			const state = this.session.getGoalModeState();
+			const notice = this.#goalContinuationGuard.stopNotice;
+			if (notice && state?.enabled && state.mode === "active" && state.goal.status === "active") {
+				this.session.emitNotice("warning", notice, "goal");
+			}
 			this.#logGoalContinuation(
 				this.#goalSuppressNextContinuation ? "suppressed" : "completed",
-				this.#goalSuppressNextContinuation ? "no_new_activity" : "new_activity",
+				decision === "recover" ? "tool_recovery" : decision === "stop" ? "no_new_activity" : "new_activity",
 				{ stage: "turn_end" },
 			);
 		} else {
@@ -4874,7 +4882,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.goalModePaused = false;
 			this.#goalModePreviousTools = undefined;
 			this.#pendingGoalContinuationTurns = 0;
-			this.#previousGoalContinuationActivity = undefined;
+			this.#goalContinuationGuard.reset();
 			this.#goalSuppressNextContinuation = false;
 			this.#cancelGoalContinuation();
 			this.#updateGoalModeStatus();
@@ -5328,7 +5336,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.goalModePaused = options?.paused ?? false;
 		this.#goalModePreviousTools = undefined;
 		this.#pendingGoalContinuationTurns = 0;
-		this.#previousGoalContinuationActivity = undefined;
+		this.#goalContinuationGuard.reset();
 		this.#goalSuppressNextContinuation = false;
 		this.#cancelGoalContinuation();
 		this.#updateGoalModeStatus();

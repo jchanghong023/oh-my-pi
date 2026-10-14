@@ -510,6 +510,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 */
 	getToolChoice?: () => ToolChoiceDirective | undefined;
 
+	/** Prompt-scoped fallback sampled per model-request attempt, including same-turn retries. */
+	getToolChoiceOnce?: () => ToolChoice | undefined;
+
 	/**
 	 * Soft-requirement lifecycle retained by the host when a pre-model-call
 	 * gate stops a run before its pending reminder or escalation is served.

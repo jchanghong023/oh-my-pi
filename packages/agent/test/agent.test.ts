@@ -1425,6 +1425,47 @@ describe("Agent", () => {
 		expect(beforeModelCalls).toBe(2);
 	});
 
+	it("one-shot tool choice executes a tool once, then permits the final answer and leaves later prompts unforced", async () => {
+		const schema = type({});
+		let executions = 0;
+		const tool: AgentTool<typeof schema, { executions: number }> = {
+			name: "inspect",
+			label: "Inspect",
+			description: "Inspect the current task",
+			parameters: schema,
+			async execute() {
+				executions++;
+				return { content: [{ type: "text", text: `Inspection ${executions}` }], details: { executions } };
+			},
+		};
+		const mock = createMockModel({
+			handler: (_context, options) => {
+				if (options?.toolChoice !== "required") return { content: ["Inspection finished."] };
+				if (executions > 0)
+					return { throw: "One-shot choice forced another tool instead of allowing the final answer." };
+				return { content: [{ type: "toolCall", name: "inspect", arguments: {} }] };
+			},
+		});
+		const agent = new Agent({ initialState: { model: mock.model, tools: [tool] }, streamFn: mock.stream });
+		await agent.prompt("Inspect once.", { toolChoiceOnce: "required" });
+		await agent.prompt("Report normally.");
+		expect(executions).toBe(1);
+		expect(mock.calls.map(call => call.options?.toolChoice)).toEqual(["required", undefined, undefined]);
+		const last = agent.state.messages.findLast(message => message.role === "assistant");
+		expect(last?.role === "assistant" && last.stopReason === "stop").toBe(true);
+	});
+
+	it("does not defer a one-shot choice into another prompt when a pre-model gate stops the recovery", async () => {
+		const mock = createMockModel({ handler: () => ({ content: ["Normal response."] }) });
+		let blocked = true;
+		const agent = new Agent({ initialState: { model: mock.model }, streamFn: mock.stream });
+		agent.setBeforeModelCall(() => (blocked ? { stop: true, reason: "budget reached" } : undefined));
+		await agent.prompt("Recover.", { toolChoiceOnce: "required" });
+		blocked = false;
+		await agent.prompt("New user request.");
+		expect(mock.calls.map(call => call.options?.toolChoice)).toEqual([undefined]);
+	});
+
 	it("prompt() drops stale forced toolChoice after same-turn tool refresh", async () => {
 		const toolSchema = type({ value: type("string") });
 		type Details = { value: string };

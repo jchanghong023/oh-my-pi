@@ -2044,8 +2044,12 @@ async function streamAssistantResponse(
 	const resolvedMetadata = config.metadataResolver ? config.metadataResolver(model.provider) : config.metadata;
 	const effectiveTemperature =
 		harmonyRetryAttempt > 0 && config.temperature !== undefined ? config.temperature + 0.05 : config.temperature;
+	// Sample even when a higher-priority directive wins; never postpone the one-shot to a later attempt.
+	const promptToolChoice = config.getToolChoiceOnce?.();
 	// Owned tool calling sends no native tools, so any tool_choice would error.
-	const effectiveToolChoice = ownedDialect ? undefined : (hostToolChoice ?? forcedToolChoice ?? config.toolChoice);
+	const effectiveToolChoice = ownedDialect
+		? undefined
+		: (hostToolChoice ?? forcedToolChoice ?? promptToolChoice ?? config.toolChoice);
 	const effectiveReasoning = dynamicReasoning ?? config.reasoning;
 	const effectiveDisableReasoning = dynamicDisableReasoning ?? config.disableReasoning;
 	// `getCwd` is read once per LLM call so a mid-run session move (`/move`) reaches

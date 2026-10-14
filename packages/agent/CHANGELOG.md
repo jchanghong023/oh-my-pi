@@ -7,6 +7,7 @@
 - Removed `ApprovalDetailsOptions`; `formatApprovalDetails` takes only `args` again, since the compact approval prompt no longer shows tool details ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 ### Added
 
+- Added prompt-scoped one-shot tool choice that releases after the first model-request attempt, including same-turn retries, without overriding queued directives or surviving a pre-model stop into a later prompt.
 - `AgentTool.delegationGuidance`: instructions a same-name extension replacement inherits in its description when it delegates to the native tool ([#15477](https://github.com/can1357/oh-my-pi/pull/15477) by [@iliaal](https://github.com/iliaal))
 
 ## [18.10.4] - 2026-10-13

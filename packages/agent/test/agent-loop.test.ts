@@ -393,6 +393,25 @@ describe("agentLoop with AgentMessage", () => {
 		expect(JSON.stringify(messages)).not.toContain("to=functions.");
 	});
 
+	it("releases a prompt-scoped force before a same-turn Harmony retry without dropping queued directives", async () => {
+		const leak = "Some prose. analysis to=functions.edit code \u5927\u53d1\u5b98\u7f51";
+		for (const queued of [undefined, "none"] as const) {
+			const mock = createMockModel({
+				provider: "openai-codex",
+				responses: [{ content: [leak] }, { content: ["Clean retry response."] }],
+			});
+			const agent = new Agent({
+				initialState: { model: harmonyMitigationModel },
+				streamFn: mock.stream,
+				getToolChoice: () => queued,
+			});
+			await agent.prompt("Recover the tool call.", { toolChoiceOnce: "required" });
+			expect(mock.calls.map(call => call.options?.toolChoice)).toEqual([queued ?? "required", queued]);
+			const last = agent.state.messages.findLast(message => message.role === "assistant");
+			expect(last?.role === "assistant" && last.stopReason === "stop").toBe(true);
+		}
+	});
+
 	it("does not hard-abort a codex tool call whose argument legitimately carries the marker", async () => {
 		// A legit edit of a file (e.g. these harmony fixtures) whose content carries
 		// `to=functions.*` next to a channel word + non-Latin script. tool_arg is
