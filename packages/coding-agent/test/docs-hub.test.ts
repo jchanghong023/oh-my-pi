@@ -26,13 +26,22 @@ function expectControlSequencesNeutralized(rendered: string): void {
 	expect(rendered).not.toContain("\u0085");
 }
 
+// TEMP-DEBUG: breadcrumb tracing for the WSL hang; remove before merge.
+process.on("unhandledRejection", error => console.error("DHDBG unhandledRejection", error));
+const dhdbg = (step: string, detail?: unknown): void =>
+	console.error(`DHDBG ${step}${detail === undefined ? "" : ` ${String(detail).slice(0, 200)}`}`);
+let dhdbgFrames = 0;
+
 async function fixture() {
+	dhdbg("fixture-start");
 	const root = await tempDir("docs-hub-root-");
 	const agentDir = await tempDir("docs-hub-agent-");
 	await fs.writeFile(path.join(root, `guide-${attack}.md`), `# Guide\nneedle ${attack}\n`);
+	dhdbg("fixture-files-written");
 	const seed = new DocsSearchEngine({ agentDir, cwd: root });
 	try {
 		const result = await seed.init(".", "safe");
+		dhdbg("fixture-seeded", result.index.id);
 		const db = new Database(seed.databasePath, { strict: true });
 		try {
 			db.exec("PRAGMA foreign_keys=ON");
@@ -57,6 +66,10 @@ async function fixture() {
 			if (!hub) return;
 			const rendered = hub.render(200).join("\n");
 			renderedFrames.push(rendered);
+			if (dhdbgFrames < 15) {
+				dhdbgFrames += 1;
+				dhdbg("render", rendered.replaceAll("\n", "|"));
+			}
 			for (const waiter of waiters) {
 				if (waiter.matches(rendered)) {
 					waiters.delete(waiter);
@@ -66,8 +79,10 @@ async function fixture() {
 		},
 	} as unknown as TUI;
 	const settings = { getAgentDir: () => agentDir } as unknown as Settings;
+	dhdbg("fixture-create-start");
 	const component = await DocsHubComponent.create(tui, root, settings, { onCancel: () => {} });
 	state.hub = component;
+	dhdbg("fixture-created");
 	const waitFor = (matches: (rendered: string) => boolean): Promise<void> => {
 		const ready = (rendered: string) =>
 			!/(?:Loading|Searching|Deleting|Indexing) document index/.test(rendered) && matches(rendered);
@@ -76,7 +91,9 @@ async function fixture() {
 		waiters.add({ matches: ready, resolve });
 		return promise;
 	};
+	dhdbg("fixture-wait-list");
 	await waitFor(rendered => rendered.includes("docs=1 sections=1"));
+	dhdbg("fixture-listed");
 	return { hub: component, waitFor, renderedFrames };
 }
 
