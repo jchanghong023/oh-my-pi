@@ -7,7 +7,7 @@ use std::{cmp::Ordering, collections::HashSet, sync::LazyLock};
 
 use napi::{
 	Result as NapiResult, ValueType,
-	bindgen_prelude::{ToNapiValue, TypeName},
+	bindgen_prelude::{FromNapiValue, ToNapiValue, TypeName, ValidateNapiValue},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,24 @@ impl ToNapiValue for Shape {
 	}
 }
 
+impl FromNapiValue for Shape {
+	unsafe fn from_napi_value(
+		env: napi::sys::napi_env,
+		value: napi::sys::napi_value,
+	) -> NapiResult<Self> {
+		// SAFETY: the enclosing typed object provides the live N-API environment.
+		let name = unsafe { String::from_napi_value(env, value)? };
+		match name.as_str() {
+			"content" => Ok(Self::Content),
+			"heading-only" => Ok(Self::HeadingOnly),
+			"stub" => Ok(Self::Stub),
+			_ => Err(napi::Error::from_reason("Invalid documentation section shape")),
+		}
+	}
+}
+
+impl ValidateNapiValue for Shape {}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MatchKind {
@@ -79,6 +97,23 @@ impl ToNapiValue for MatchKind {
 		unsafe { <&str>::to_napi_value(env, name) }
 	}
 }
+
+impl FromNapiValue for MatchKind {
+	unsafe fn from_napi_value(
+		env: napi::sys::napi_env,
+		value: napi::sys::napi_value,
+	) -> NapiResult<Self> {
+		// SAFETY: the enclosing typed object provides the live N-API environment.
+		let name = unsafe { String::from_napi_value(env, value)? };
+		match name.as_str() {
+			"exact-name" => Ok(Self::ExactName),
+			"related" => Ok(Self::Related),
+			_ => Err(napi::Error::from_reason("Invalid documentation section match kind")),
+		}
+	}
+}
+
+impl ValidateNapiValue for MatchKind {}
 
 #[derive(Clone, Debug)]
 pub(crate) struct SectionContext {

@@ -1,0 +1,579 @@
+//! The exclusive import lease owns hidden rows until full publication or
+//! rollback.
+use std::{
+	path::Path,
+	sync::Arc,
+	time::{Duration, Instant},
+};
+
+use napi::{
+	Env, Error, Result, Status,
+	bindgen_prelude::*,
+	threadsafe_function::{ThreadsafeFunction, UnknownReturnValue},
+};
+use napi_derive::napi;
+
+use super::{
+	Owner,
+	database::WikiError,
+	diagnostics::{self, DiagnosticCallback, WikiDiagnosticEvent},
+	import,
+	storage::{BUILDING_INDEX_PREFIX, WikiIndexSummary},
+};
+use crate::{file_lock::FileLock, task::CancelToken};
+
+#[napi(object, object_from_js = false)]
+pub struct WikiBuildProgress {
+	pub phase:        String,
+	pub total:        i64,
+	pub completed:    i64,
+	pub failed:       i64,
+	pub current_path: Option<String>,
+}
+#[napi(object, object_from_js = false)]
+pub struct WikiBuildResult {
+	pub processed: i64,
+	pub failed:    i64,
+	pub index:     WikiIndexSummary,
+}
+pub(super) type ProgressFunction<'a> = Function<'a, WikiBuildProgress, UnknownReturnValue>;
+pub(super) type ProgressCallback = ThreadsafeFunction<
+	WikiBuildProgress,
+	UnknownReturnValue,
+	WikiBuildProgress,
+	Status,
+	false,
+	false,
+>;
+
+pub enum ImportError {
+	Core(WikiError),
+	Callback(Error, String),
+}
+impl From<WikiError> for ImportError {
+	fn from(value: WikiError) -> Self {
+		Self::Core(value)
+	}
+}
+impl From<Error> for ImportError {
+	fn from(value: Error) -> Self {
+		Self::Callback(value, "Error".into())
+	}
+}
+impl From<diagnostics::CallbackFailure> for ImportError {
+	fn from(value: diagnostics::CallbackFailure) -> Self {
+		Self::Callback(value.error, value.error_type)
+	}
+}
+impl ImportError {
+	pub(super) fn into_napi(env: Env, error: Self) -> Error {
+		match error {
+			Self::Core(error) => error.into_napi(env),
+			Self::Callback(error, _) => error,
+		}
+	}
+
+	fn cancelled(&self) -> bool {
+		match self {
+			Self::Core(error) => error.diagnostic_error_type() == "AbortError",
+			Self::Callback(_, name) => name == "AbortError",
+		}
+	}
+
+	fn annotate(&self, event: &mut WikiDiagnosticEvent) {
+		match self {
+			Self::Core(error) => event.error(error),
+			Self::Callback(_, name) => event.error_type = Some(name.clone()),
+		}
+	}
+}
+pub(super) fn cancel_error(env: Env, _reason: crate::task::AbortReason) -> Error {
+	WikiError::named("Document indexing cancelled", "AbortError", None).into_napi(env)
+}
+pub struct WikiImportOutput {
+	pub(super) owner:  Arc<Owner>,
+	pub(super) cancel: CancelToken,
+	pub(super) result: WikiBuildResult,
+}
+impl TypeName for WikiImportOutput {
+	fn type_name() -> &'static str {
+		WikiBuildResult::type_name()
+	}
+
+	fn value_type() -> napi::ValueType {
+		WikiBuildResult::value_type()
+	}
+}
+impl ToNapiValue for WikiImportOutput {
+	unsafe fn to_napi_value(env: napi::sys::napi_env, value: Self) -> Result<napi::sys::napi_value> {
+		let wrapper = Env::from_raw(env);
+		value
+			.owner
+			.check_import(&value.cancel)
+			.map_err(|error| error.into_napi(wrapper))?;
+		// SAFETY: N-API supplies the live env for this conversion; the owned
+		// result is converted only after the retained owner's
+		// import/cancellation check.
+		unsafe { WikiBuildResult::to_napi_value(env, value.result) }
+	}
+}
+struct Build<'a> {
+	owner:      &'a Owner,
+	cancel:     &'a CancelToken,
+	diagnostic: Option<&'a DiagnosticCallback>,
+	progress:   Option<&'a ProgressCallback>,
+	started:    Instant,
+	stage:      &'static str,
+	documents:  i64,
+	sections:   i64,
+	files:      i64,
+	cleanup:    &'static str,
+	reason:     Option<&'static str>,
+	published:  bool,
+}
+impl Build<'_> {
+	fn event(&self, message: &str, stage: &str, result: &str) -> WikiDiagnosticEvent {
+		let mut event =
+			WikiDiagnosticEvent::operation(message, "docs.init", stage, result, self.started);
+		event.file_count = Some(self.files);
+		event.document_count = Some(self.documents);
+		event.section_count = Some(self.sections);
+		event
+	}
+
+	fn emit(&self, event: WikiDiagnosticEvent) -> std::result::Result<(), ImportError> {
+		// Storage SQL diagnostics are enqueued under the owner mutex and
+		// delivered only after it has been released. This also covers
+		// failed statements.
+		diagnostics::flush_async(&self.owner.diagnostics, self.diagnostic)?;
+		if let Some(callback) = self.diagnostic {
+			diagnostics::acknowledge(callback, event)?;
+		}
+		Ok(())
+	}
+
+	fn log(&self, message: &str, stage: &str, result: &str) -> std::result::Result<(), ImportError> {
+		self.emit(self.event(message, stage, result))
+	}
+
+	fn progress(&self, phase: &str, path: Option<String>) -> std::result::Result<(), ImportError> {
+		diagnostics::flush_async(&self.owner.diagnostics, self.diagnostic)?;
+		if let Some(callback) = self.progress {
+			diagnostics::acknowledge_named(callback, WikiBuildProgress {
+				phase:        phase.into(),
+				total:        self.files,
+				completed:    self.documents,
+				failed:       0,
+				current_path: path,
+			})?;
+		}
+		Ok(())
+	}
+
+	fn check(&self) -> std::result::Result<(), ImportError> {
+		self.owner.check_import(self.cancel).map_err(Into::into)
+	}
+
+	#[allow(
+		clippy::suboptimal_flops,
+		reason = "Preserve original ECMAScript IEEE-754 multiplication/addition order for timing \
+		          accumulation."
+	)]
+	fn ingest(
+		&mut self,
+		id: i64,
+		root: &Path,
+		files: Vec<String>,
+		name: &str,
+	) -> std::result::Result<WikiBuildResult, ImportError> {
+		self.progress("scan", None)?;
+		self.stage = "read_parse";
+		self.log("docs.init.ingest.started", self.stage, "started")?;
+		let mut read_ms = 0.0;
+		let mut fts_ms = 0.0;
+		for relative in files {
+			self.check()?;
+			self.stage = "read_parse";
+			let started = Instant::now();
+			let document = match import::read_markdown_document(root, &relative, &|| {
+				self.owner.check_import(self.cancel)
+			}) {
+				Ok(document) => document,
+				Err(error) => {
+					self.stage = if error
+						.error_message()
+						.starts_with("Unable to parse Markdown ")
+					{
+						"parse"
+					} else {
+						"read"
+					};
+					return Err(error.into());
+				},
+			};
+			read_ms += started.elapsed().as_secs_f64() * 1000.0;
+			self.check()?;
+			self.stage = "fts";
+			if self.documents == 0 {
+				self.log("docs.init.fts.started", self.stage, "started")?;
+			}
+			let started = Instant::now();
+			self
+				.owner
+				.with_storage(self.cancel, |storage| storage.commit_document(id, &document))?;
+			fts_ms += started.elapsed().as_secs_f64() * 1000.0;
+			self.documents += 1;
+			self.sections += document.sections.len() as i64;
+			// The reader cannot advance until synchronous JS side effects
+			// complete. Returned Promises are ignored, just as the old
+			// optional callback call.
+			self.progress("fts", Some(relative))?;
+		}
+		let mut event = self.event("docs.init.read_parse.completed", "read_parse", "completed");
+		event.elapsed_ms = Some(read_ms);
+		self.emit(event)?;
+		self.log("docs.init.parse.completed", "parse", "completed")?;
+		let mut event = self.event("docs.init.fts.completed", "fts", "completed");
+		event.elapsed_ms = Some(fts_ms);
+		self.emit(event)?;
+		self.check()?;
+		self.stage = "publish";
+		let index = self
+			.owner
+			.with_storage(self.cancel, |storage| storage.promote(id, name))?;
+		self.published = true;
+		Ok(WikiBuildResult { processed: self.documents, failed: 0, index })
+	}
+
+	fn rollback(
+		&mut self,
+		id: i64,
+		error: ImportError,
+	) -> std::result::Result<WikiBuildResult, ImportError> {
+		let failed_stage = self.stage;
+		let mut event = self.event(
+			"docs.init.ingest.finished",
+			self.stage,
+			if error.cancelled() {
+				"cancelled"
+			} else {
+				"failed"
+			},
+		);
+		event.level = if error.cancelled() { "info" } else { "error" }.into();
+		error.annotate(&mut event);
+		// Diagnostic failures must not prevent cleanup of accepted commits.
+		let logging = self.emit(event);
+		self.cleanup = "started";
+		let mut event = self.event("docs.init.rollback.started", "rollback", "started");
+		event.failed_stage = Some(failed_stage.into());
+		let rollback_logging = self.emit(event);
+		match self.owner.rollback(id) {
+			Ok(()) => {
+				self.cleanup = "completed";
+				let mut event = self.event("docs.init.rollback.completed", "rollback", "completed");
+				event.failed_stage = Some(failed_stage.into());
+				self.emit(event)?;
+				logging?;
+				rollback_logging?;
+				Err(error)
+			},
+			Err(cleanup_error) => {
+				self.cleanup = "failed";
+				self.stage = "rollback";
+				let mut event = self.event("docs.init.rollback.failed", self.stage, "failed");
+				event.level = "error".into();
+				event.failed_stage = Some(failed_stage.into());
+				event.error(&cleanup_error);
+				let _ = self.emit(event);
+				Err(cleanup_error.into())
+			},
+		}
+	}
+
+	fn locked(
+		&mut self,
+		root: &Path,
+		files: Vec<String>,
+		name: &str,
+	) -> std::result::Result<WikiBuildResult, ImportError> {
+		self.check()?;
+		self.stage = "validate";
+		if self
+			.owner
+			.with_storage(self.cancel, |storage| storage.get(name))?
+			.is_some()
+		{
+			self.reason = Some("duplicate_name");
+			return Err(WikiError::message(format!("Document index already exists: {name}")).into());
+		}
+		self.stage = "recovery";
+		self
+			.owner
+			.with_storage(self.cancel, |storage| storage.remove_abandoned())?;
+		self.stage = "create";
+		let hidden = format!("{BUILDING_INDEX_PREFIX}{}", build_uuid()?);
+		let root = root.to_string_lossy();
+		let temp = self
+			.owner
+			.with_storage(self.cancel, |storage| storage.create(&hidden, &root))?;
+		match self.ingest(temp.id, Path::new(root.as_ref()), files, name) {
+			Ok(result) => Ok(result),
+			Err(error) => self.rollback(temp.id, error),
+		}
+	}
+
+	fn build(
+		&mut self,
+		root: &str,
+		name: &str,
+	) -> std::result::Result<WikiBuildResult, ImportError> {
+		self.log("docs.init.started", self.stage, "started")?;
+		self.check()?;
+		self.stage = "name_validation";
+		let name = validate_name(name)?;
+		self.stage = "validate";
+		if self
+			.owner
+			.with_storage(self.cancel, |storage| storage.get(name))?
+			.is_some()
+		{
+			self.reason = Some("duplicate_name");
+			return Err(WikiError::message(format!("Document index already exists: {name}")).into());
+		}
+		let root = import::resolve_root(Path::new(root))?;
+		self.stage = "scan";
+		let started = Instant::now();
+		self.log("docs.init.scan.started", self.stage, "started")?;
+		let files =
+			import::enumerate_markdown_files(&root, &|| self.owner.check_import(self.cancel))?;
+		self.files = files.len() as i64;
+		let mut event = self.event("docs.init.scan.completed", self.stage, "completed");
+		event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+		self.emit(event)?;
+		self.check()?;
+		if files.is_empty() {
+			self.reason = Some("no_documents");
+			return Err(
+				WikiError::message(format!("No Markdown files found in: {}", root.display())).into(),
+			);
+		}
+		self.stage = "lock";
+		let started = Instant::now();
+		let mut event = self.event("docs.init.lock.started", self.stage, "started");
+		event.retry_limit = Some(3);
+		self.emit(event)?;
+		let mut lease = match acquire(self.owner, self.cancel) {
+			Ok(lease) => lease,
+			Err(error) => {
+				let mut event = self.event(
+					"docs.init.lock.failed",
+					self.stage,
+					if error.diagnostic_error_type() == "AbortError" {
+						"cancelled"
+					} else {
+						"contended"
+					},
+				);
+				event.level = if error.diagnostic_error_type() == "AbortError" {
+					"info"
+				} else {
+					"warn"
+				}
+				.into();
+				event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+				event.error(&error);
+				self.emit(event)?;
+				self.check()?;
+				return Err(
+					WikiError::message(format!(
+						"Another document index build is already running for this profile: {}",
+						self.owner.database_path
+					))
+					.into(),
+				);
+			},
+		};
+		let result = (|| {
+			let mut event = self.event("docs.init.lock.completed", self.stage, "completed");
+			event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+			self.emit(event)?;
+			self.locked(&root, files, name)
+		})();
+		let operation_stage = self.stage;
+		let release_log = self.log("docs.init.lock.release.started", "lock_release", "started");
+		self.stage = "lock_release";
+		// Explicit release failure supersedes publication, callback, and rollback
+		// failure. FileLock::drop is only an emergency fallback.
+		if let Err(error) = lease.release_native() {
+			return Err(
+				WikiError::message(format!("Failed to release native file lock: {error}")).into(),
+			);
+		}
+		self.stage = operation_stage;
+		self.log("docs.init.lock.release.completed", "lock_release", "completed")?;
+		release_log?;
+		if self.published {
+			let mut event = self.event("docs.init.completed", self.stage, "completed");
+			event.cleanup = Some(self.cleanup.into());
+			self.emit(event)?;
+		}
+		result
+	}
+}
+pub(super) fn run(
+	owner: &Owner,
+	root: &str,
+	name: &str,
+	cancel: &CancelToken,
+	progress: Option<&ProgressCallback>,
+	diagnostic: Option<&DiagnosticCallback>,
+) -> std::result::Result<WikiBuildResult, ImportError> {
+	let mut build = Build {
+		owner,
+		cancel,
+		diagnostic,
+		progress,
+		started: Instant::now(),
+		stage: "validate",
+		documents: 0,
+		sections: 0,
+		files: 0,
+		cleanup: "not_needed",
+		reason: None,
+		published: false,
+	};
+	let result = build.build(root, name);
+	if let Err(error) = &result {
+		if build.stage == "scan"
+			&& matches!(error,ImportError::Core(error) if error.error_message().starts_with("Markdown root is not a directory: "))
+		{
+			build.reason = Some("source_not_directory");
+		}
+		let cancelled = error.cancelled();
+		let rejected = build.reason.is_some() || build.stage == "name_validation";
+		let mut event = build.event(
+			"docs.init.finished",
+			build.stage,
+			if cancelled {
+				"cancelled"
+			} else if rejected {
+				"rejected"
+			} else {
+				"failed"
+			},
+		);
+		event.level = if cancelled || rejected {
+			"info"
+		} else if build.stage == "lock" {
+			"warn"
+		} else {
+			"error"
+		}
+		.into();
+		event.reason = build.reason.map(str::to_owned);
+		event.cleanup = Some(build.cleanup.into());
+		error.annotate(&mut event);
+		// Never replace a callback Error or explicit cleanup/release failure
+		// merely because logging that failure also throws.
+		let _ = build.emit(event);
+	}
+	let flushed = diagnostics::flush_async(&owner.diagnostics, diagnostic);
+	if result.is_ok() {
+		flushed?;
+	}
+	result
+}
+fn validate_name(name: &str) -> std::result::Result<&str, WikiError> {
+	let name=name.trim_matches(|character:char|matches!(character,'\u{0009}'..='\u{000d}'|'\u{0020}'|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'));
+	if name.is_empty() {
+		return Err(WikiError::message("Document index name must not be empty"));
+	}
+	if name.chars().count() > 64 {
+		return Err(WikiError::message(
+			"Document index name must contain at most 64 Unicode scalar values",
+		));
+	}
+	if name.chars().any(char::is_control) {
+		return Err(WikiError::message("Document index name must not contain control characters"));
+	}
+	if name.starts_with(BUILDING_INDEX_PREFIX) {
+		return Err(WikiError::message(format!(
+			"Document index name uses reserved prefix: {BUILDING_INDEX_PREFIX}"
+		)));
+	}
+	Ok(name)
+}
+fn acquire(owner: &Owner, cancel: &CancelToken) -> std::result::Result<FileLock, WikiError> {
+	let path = import::resolve_root(Path::new(&owner.database_path))?;
+	let lock_path = format!("{}.lock", path.display());
+	for attempt in 0..3 {
+		owner.check_import(cancel)?;
+		let lease = FileLock::try_acquire_path(Path::new(&lock_path))?;
+		if lease.is_acquired() {
+			return Ok(lease);
+		}
+		if attempt < 2 {
+			for _ in 0..10 {
+				owner.check_import(cancel)?;
+				std::thread::sleep(Duration::from_millis(10));
+			}
+		}
+	}
+	Err(WikiError::message(format!(
+		"Failed to acquire lock for {} after 3 attempts",
+		owner.database_path
+	)))
+}
+fn build_uuid() -> std::result::Result<String, WikiError> {
+	let mut bytes = [0_u8; 16];
+	#[cfg(unix)]
+	{
+		use std::io::Read;
+		std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+	}
+	#[cfg(windows)]
+	{
+		let mut guid = windows_sys::core::GUID::default();
+		// SAFETY: CoCreateGuid writes the live GUID; the existing crate enables
+		// COM.
+		let status = unsafe { windows_sys::Win32::System::Com::CoCreateGuid(&raw mut guid) };
+		if status < 0 {
+			return Err(WikiError::message(format!(
+				"Unable to generate document index UUID: {status}"
+			)));
+		}
+		bytes[..4].copy_from_slice(&guid.data1.to_be_bytes());
+		bytes[4..6].copy_from_slice(&guid.data2.to_be_bytes());
+		bytes[6..8].copy_from_slice(&guid.data3.to_be_bytes());
+		bytes[8..].copy_from_slice(&guid.data4);
+	}
+	#[cfg(not(any(unix, windows)))]
+	{
+		return Err(WikiError::message(
+			"Document import UUID generation is unsupported on this platform",
+		));
+	}
+	bytes[6] = (bytes[6] & 0x0f) | 0x40;
+	bytes[8] = (bytes[8] & 0x3f) | 0x80;
+	Ok(format!(
+		"{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:\
+		 02x}{:02x}",
+		bytes[0],
+		bytes[1],
+		bytes[2],
+		bytes[3],
+		bytes[4],
+		bytes[5],
+		bytes[6],
+		bytes[7],
+		bytes[8],
+		bytes[9],
+		bytes[10],
+		bytes[11],
+		bytes[12],
+		bytes[13],
+		bytes[14],
+		bytes[15]
+	))
+}

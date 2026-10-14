@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added an owner-scoped native documentation search engine with cancellable queries and snapshot-compatible cursors.
+- Added an owner-scoped Rust documentation engine covering Markdown discovery, a faithful port of shared parsing/chunking semantics, hashing, schema/legacy migrations, index lifecycle/import/rollback, query/ranking/cache/snapshot/cursor/hydration, page budgets/deduplication/rendering/sanitization and cancellable minimum-duration waiting, preserving algorithms, database format, stored evidence, valid old cursor identity, DB-only behavior, errors and the ≥500ms successful duration.
 
 ## [18.10.4] - 2026-10-13
 

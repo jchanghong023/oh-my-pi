@@ -347,49 +347,89 @@ fn buffer_slice(source: &str, start: i64, end: i64) -> std::borrow::Cow<'_, str>
 	String::from_utf8_lossy(&bytes[start..end])
 }
 
-// The neighbor must contain bytes on the requested side of the edge, not the
-// entire current section. Equality at the opposite boundary is intentional.
-const fn contains_bytes_before_edge(neighbor: &ContextSection, edge: i64) -> bool {
+/// Borrowed stored-source coordinates let migrations retain only the previous,
+/// current and next SQLite row, rather than copying the raw corpus.
+#[derive(Clone, Copy)]
+pub(crate) struct ContextSectionRef<'a> {
+	pub document_id:  i64,
+	pub byte_start:   i64,
+	pub byte_end:     i64,
+	pub raw_markdown: &'a str,
+}
+
+impl<'a> From<&'a ContextSection> for ContextSectionRef<'a> {
+	fn from(section: &'a ContextSection) -> Self {
+		Self {
+			document_id:  section.document_id,
+			byte_start:   section.byte_start,
+			byte_end:     section.byte_end,
+			raw_markdown: &section.raw_markdown,
+		}
+	}
+}
+
+// Equality at the opposite boundary is intentional; neighbors need bytes on
+// the requested side of the edge, not the entire current section.
+const fn contains_bytes_before_edge(neighbor: ContextSectionRef<'_>, edge: i64) -> bool {
 	neighbor.byte_start < edge && neighbor.byte_end >= edge
 }
 
-const fn contains_bytes_after_edge(neighbor: &ContextSection, edge: i64) -> bool {
+const fn contains_bytes_after_edge(neighbor: ContextSectionRef<'_>, edge: i64) -> bool {
 	neighbor.byte_start <= edge && neighbor.byte_end > edge
 }
 
-pub(crate) fn contexts(
-	sections: impl IntoIterator<Item = ContextSection>,
-) -> Vec<(i64, SectionContext)> {
-	let mut rows = sections.into_iter();
-	let mut previous: Option<ContextSection> = None;
-	let mut current = rows.next();
-	let mut scanner = MarkdownFenceScanner::default();
-	let mut output = Vec::new();
-	while let Some(section) = current {
-		if let Some(previous) = previous
-			.as_ref()
-			.filter(|previous| previous.document_id == section.document_id)
+#[derive(Default)]
+pub(crate) struct SectionContextScanner {
+	scanner: MarkdownFenceScanner,
+}
+
+impl SectionContextScanner {
+	/// FTS reconstruction needs only lexer state, not query edge/shape work.
+	pub(crate) fn lex_context(
+		&mut self,
+		previous: Option<ContextSectionRef<'_>>,
+		section: ContextSectionRef<'_>,
+	) -> SectionContext {
+		if let Some(previous) =
+			previous.filter(|previous| previous.document_id == section.document_id)
 		{
 			let source = if section.byte_start < previous.byte_end {
-				buffer_slice(&previous.raw_markdown, 0, section.byte_start - previous.byte_start)
+				buffer_slice(previous.raw_markdown, 0, section.byte_start - previous.byte_start)
 			} else {
-				std::borrow::Cow::Borrowed(previous.raw_markdown.as_str())
+				std::borrow::Cow::Borrowed(previous.raw_markdown)
 			};
-			scanner.append(if previous.byte_start == 0 {
+			self.scanner.append(if previous.byte_start == 0 {
 				source.strip_prefix('\u{feff}').unwrap_or(&source)
 			} else {
 				&source
 			});
 		} else {
-			scanner = MarkdownFenceScanner::default();
+			self.scanner = MarkdownFenceScanner::default();
 		}
-		let next = rows.next();
-		let before = if let Some(previous) = previous
-			.as_ref()
-			.filter(|previous| contains_bytes_before_edge(previous, section.byte_start))
+		SectionContext {
+			shape:          Shape::Content,
+			fence_prefix:   self
+				.scanner
+				.fence
+				.map(|fence| std::iter::repeat_n(fence.marker, fence.length).collect()),
+			continues_line: self.scanner.continues_line,
+			before:         String::new(),
+			after:          String::new(),
+		}
+	}
+
+	pub(crate) fn context(
+		&mut self,
+		previous: Option<ContextSectionRef<'_>>,
+		section: ContextSectionRef<'_>,
+		next: Option<ContextSectionRef<'_>>,
+	) -> SectionContext {
+		let mut context = self.lex_context(previous, section);
+		let before = if let Some(previous) =
+			previous.filter(|previous| contains_bytes_before_edge(*previous, section.byte_start))
 		{
 			let offset = section.byte_start - previous.byte_start;
-			let slice = buffer_slice(&previous.raw_markdown, (offset - 8).max(0), offset);
+			let slice = buffer_slice(previous.raw_markdown, (offset - 8).max(0), offset);
 			let mut characters = slice.chars().rev();
 			let last = characters.next();
 			let penultimate = characters.next();
@@ -404,33 +444,42 @@ pub(crate) fn contexts(
 		} else {
 			String::new()
 		};
-		let after = if let Some(next) = next
-			.as_ref()
-			.filter(|next| contains_bytes_after_edge(next, section.byte_end))
+		let after = if let Some(next) =
+			next.filter(|next| contains_bytes_after_edge(*next, section.byte_end))
 		{
 			let offset = section.byte_end - next.byte_start;
-			buffer_slice(&next.raw_markdown, offset, offset + 8)
+			buffer_slice(next.raw_markdown, offset, offset + 8)
 				.chars()
 				.take(2)
 				.collect()
 		} else {
 			String::new()
 		};
-		let fence_prefix = scanner
-			.fence
-			.map(|fence| std::iter::repeat_n(fence.marker, fence.length).collect());
-		let shape = if fence_prefix.is_some() || scanner.continues_line {
-			Shape::Content
-		} else {
-			section_shape(&section.raw_markdown)
-		};
-		output.push((section.section_id, SectionContext {
-			shape,
-			fence_prefix,
-			continues_line: scanner.continues_line,
-			before,
-			after,
-		}));
+		if context.fence_prefix.is_none() && !context.continues_line {
+			context.shape = section_shape(section.raw_markdown);
+		}
+		context.before = before;
+		context.after = after;
+		context
+	}
+}
+
+pub(crate) fn contexts(
+	sections: impl IntoIterator<Item = ContextSection>,
+) -> Vec<(i64, SectionContext)> {
+	let mut rows = sections.into_iter();
+	let mut previous: Option<ContextSection> = None;
+	let mut current = rows.next();
+	let mut scanner = SectionContextScanner::default();
+	let mut output = Vec::new();
+	while let Some(section) = current {
+		let next = rows.next();
+		let context = scanner.context(
+			previous.as_ref().map(ContextSectionRef::from),
+			ContextSectionRef::from(&section),
+			next.as_ref().map(ContextSectionRef::from),
+		);
+		output.push((section.section_id, context));
 		previous = Some(section);
 		current = next;
 	}
@@ -511,6 +560,117 @@ mod tests {
 		assert!(overlap[1].1.continues_line);
 		assert_eq!(overlap[1].1.fence_prefix, None);
 		assert_eq!(plain_text(&lex_section("```x\nz", &overlap[1].1)), "```x\n\nz");
+	}
+
+	#[test]
+	fn character_split_fences_agree_with_whole_line_context() {
+		let source = "\u{feff}   ````python\r\nbody\r\n   ````\t \r\n~~~~`info`\nbody\n~~~~\n    \
+		              ```bad\nbody\n```bad`info\nbody\n```info\rinside\nbody\n```valid\nbody\n```\n";
+		// Independent whole-line oracle from endingMarkdownFence, not another
+		// instance of the incremental scanner under test.
+		let delimiter = Regex::new(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)$").unwrap();
+		let whole_line_fence = |prefix: &str| {
+			let mut fence: Option<Fence> = None;
+			for line in prefix.split('\n') {
+				let line = line.strip_suffix('\r').unwrap_or(line);
+				let Some(matched) = delimiter.captures(line) else {
+					continue;
+				};
+				let run = matched.get(1).unwrap().as_str();
+				let marker = run.chars().next().unwrap();
+				let trailing = matched.get(2).unwrap().as_str();
+				fence = match fence {
+					None if marker != '`' || !trailing.contains('`') => {
+						Some(Fence { marker, length: run.len() })
+					},
+					Some(active)
+						if active.marker == marker
+							&& run.len() >= active.length
+							&& trailing
+								.chars()
+								.all(|character| matches!(character, ' ' | '\t')) =>
+					{
+						None
+					},
+					fence => fence,
+				};
+			}
+			fence.map(|fence| std::iter::repeat_n(fence.marker, fence.length).collect::<String>())
+		};
+		let mut sections = source
+			.char_indices()
+			.map(|(start, character)| ContextSectionRef {
+				document_id:  1,
+				byte_start:   start as i64,
+				byte_end:     (start + character.len_utf8()) as i64,
+				raw_markdown: &source[start..start + character.len_utf8()],
+			})
+			.peekable();
+		let mut scanner = SectionContextScanner::default();
+		let mut previous = None;
+		while let Some(section) = sections.next() {
+			let context = scanner.context(previous, section, sections.peek().copied());
+			let prefix = source[..section.byte_start as usize]
+				.strip_prefix('\u{feff}')
+				.unwrap_or(&source[..section.byte_start as usize]);
+			let line_end = prefix.rfind('\n').map_or(0, |position| position + 1);
+			assert_eq!(context.fence_prefix, whole_line_fence(&prefix[..line_end]));
+			assert_eq!(context.continues_line, prefix.len() > line_end);
+			previous = Some(section);
+		}
+	}
+
+	#[test]
+	fn long_overlapping_line_retains_fence_and_resets_between_documents() {
+		const CHUNK_COUNT: usize = 8192;
+		let chunk = "x".repeat(18_000);
+		let mut byte_start = 0i64;
+		// Every long section borrows the same chunk. Only the three-row window
+		// and the scalar scanner state survive each iteration.
+		let mut sections = (0..CHUNK_COUNT + 6)
+			.map(|index| {
+				let (document_id, raw_markdown, advance) = match index {
+					0 => (1, "```python\n", 10),
+					1..=CHUNK_COUNT => {
+						(1, chunk.as_str(), if index == CHUNK_COUNT { 18_000 } else { 17_500 })
+					},
+					index if index == CHUNK_COUNT + 1 => (1, "```\n", 4),
+					index if index == CHUNK_COUNT + 2 => (1, "# Row\n", 6),
+					index if index == CHUNK_COUNT + 3 => (1, "```\n", 4),
+					index if index == CHUNK_COUNT + 4 => (1, "## ATPG\n", 8),
+					_ => {
+						byte_start = 0;
+						(2, "## Next\n", 8)
+					},
+				};
+				let section = ContextSectionRef {
+					document_id,
+					byte_start,
+					byte_end: byte_start + raw_markdown.len() as i64,
+					raw_markdown,
+				};
+				byte_start += advance;
+				section
+			})
+			.peekable();
+		let mut scanner = SectionContextScanner::default();
+		let mut previous = None;
+		let mut headings = Vec::new();
+		let mut count = 0;
+		while let Some(section) = sections.next() {
+			let context = scanner.context(previous, section, sections.peek().copied());
+			count += 1;
+			if section.raw_markdown.starts_with('#') {
+				headings.push((section.raw_markdown, context.fence_prefix, context.continues_line));
+			}
+			previous = Some(section);
+		}
+		assert_eq!(count, CHUNK_COUNT + 6);
+		assert_eq!(headings, [
+			("# Row\n", Some("```".to_owned()), false),
+			("## ATPG\n", None, false),
+			("## Next\n", None, false),
+		]);
 	}
 
 	#[test]

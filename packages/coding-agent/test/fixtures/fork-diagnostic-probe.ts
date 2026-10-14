@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
@@ -9,7 +10,6 @@ import { JCHTOOLS_API, streamJchToolsAgent } from "../../src/config/jchtools-pro
 import { Settings } from "../../src/config/settings";
 import { DocsSearchEngine } from "../../src/docs/engine";
 import { DocsService } from "../../src/docs/service";
-import { DocsStorage } from "../../src/docs/storage";
 import {
 	type PendingExtensionRequest,
 	type RpcExtensionUIResponse,
@@ -78,10 +78,13 @@ async function docsProbe() {
 		} catch (error) {
 			failure = error instanceof Error ? error.name : typeof error;
 		}
-		const hidden = (service as DocsSearchEngine).storage.db
-			.query("SELECT COUNT(*) AS count FROM doc_indexes WHERE name GLOB '__building__*'")
-			.get();
-		return { before, visibleDuringBuild, after: await service.list(), hidden, failure };
+		const db = new Database(service.databasePath, { strict: true, readonly: true });
+		try {
+			const hidden = db.query("SELECT COUNT(*) AS count FROM doc_indexes WHERE name GLOB '__building__*'").get();
+			return { before, visibleDuringBuild, after: await service.list(), hidden, failure };
+		} finally {
+			db.close();
+		}
 	} finally {
 		if (service instanceof DocsService) await service.close();
 		else service.close();
@@ -278,11 +281,12 @@ async function boundariesProbe() {
 	let listFailure: string | undefined;
 	try {
 		await service.list();
-		const storage = new DocsStorage(service.databasePath);
+		const db = new Database(service.databasePath, { strict: true });
 		try {
-			storage.db.exec("DROP TABLE doc_indexes");
+			db.exec("PRAGMA foreign_keys=ON");
+			db.exec("DROP TABLE doc_indexes");
 		} finally {
-			storage.close();
+			db.close();
 		}
 		try {
 			await service.list();

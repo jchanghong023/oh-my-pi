@@ -1,7 +1,6 @@
 import * as path from "node:path";
 import { getAgentDir, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { DocsService } from "../docs/service";
-import { BUILDING_INDEX_PREFIX } from "../docs/storage";
 import type { DocsProgress } from "../docs/types";
 
 export type DocsAction = "init" | "remove";
@@ -44,7 +43,7 @@ function commandRejectionReason(error: unknown, input: DocsCommandInput, service
 			case "Document index name must not be empty":
 			case "Document index name must contain at most 64 Unicode scalar values":
 			case "Document index name must not contain control characters":
-			case `Document index name uses reserved prefix: ${BUILDING_INDEX_PREFIX}`:
+			case "Document index name uses reserved prefix: __building__":
 				return "invalid_name";
 			case `Document index already exists: ${name}`:
 				return "duplicate_name";

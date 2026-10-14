@@ -4,8 +4,14 @@ import { unlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { enumerateMarkdownFiles, parseMarkdown, readMarkdownDocument, sectionShape } from "../src/docs/markdown";
+import {
+	wikiEnumerateMarkdownFiles as enumerateMarkdownFiles,
+	wikiParseMarkdown as parseMarkdown,
+	wikiReadMarkdownDocument as readMarkdownDocument,
+	wikiSectionShape as sectionShape,
+} from "@oh-my-pi/pi-natives";
 import { DocsSearchEngine } from "../src/docs/engine";
+import { withSqliteDatabase } from "./helpers/sqlite-inspect";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -215,14 +221,17 @@ describe("DocsSearchEngine indexing contract", () => {
 		await Bun.write(path.join(root, "notes.md"), source);
 		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "manual");
-		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
-			id: number;
-			index_id: number;
-		};
-		writer.storage.db
-			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
-			.run(row.id, row.index_id, "notes.md", "Notes", "Notes migrationfencebeacon Ordinary paragraph", row.id);
-		writer.storage.db.run("PRAGMA user_version=5");
+		const row = withSqliteDatabase(writer.databasePath, db => {
+			const row = db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
+				id: number;
+				index_id: number;
+			};
+			db.query(
+				"UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?",
+			).run(row.id, row.index_id, "notes.md", "Notes", "Notes migrationfencebeacon Ordinary paragraph", row.id);
+			db.run("PRAGMA user_version=5");
+			return row;
+		});
 		expect(writer.search("migrationfencebeacon").sections).toHaveLength(1);
 		writer.close();
 		await fs.rm(root, { recursive: true });
@@ -241,14 +250,17 @@ describe("DocsSearchEngine indexing contract", () => {
 		await Bun.write(path.join(root, "notes.md"), source);
 		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "manual");
-		const row = writer.storage.db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
-			id: number;
-			index_id: number;
-		};
-		writer.storage.db
-			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
-			.run(row.id, row.index_id, "notes.md", "Notes", "Notes Ordinary paragraph", row.id);
-		writer.storage.db.run("PRAGMA user_version=6");
+		const row = withSqliteDatabase(writer.databasePath, db => {
+			const row = db.query("SELECT id,index_id FROM sections ORDER BY id LIMIT 1").get() as {
+				id: number;
+				index_id: number;
+			};
+			db.query(
+				"UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?",
+			).run(row.id, row.index_id, "notes.md", "Notes", "Notes Ordinary paragraph", row.id);
+			db.run("PRAGMA user_version=6");
+			return row;
+		});
 		writer.close();
 		await fs.rm(root, { recursive: true });
 		const reader = new DocsSearchEngine({ agentDir });
@@ -311,9 +323,16 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(service.search("ATPG").sections[0]?.text.trim()).toBe("## ATPG");
 			expect(service.search("C#").sections[0]?.text.trim()).toBe("## C#");
 			expect(
-				service.storage.db
-					.query("SELECT raw_markdown FROM sections WHERE raw_markdown LIKE '%Cell%' OR raw_markdown LIKE '%Row%'")
-					.all(),
+				withSqliteDatabase(
+					service.databasePath,
+					db =>
+						db
+							.query(
+								"SELECT raw_markdown FROM sections WHERE raw_markdown LIKE '%Cell%' OR raw_markdown LIKE '%Row%'",
+							)
+							.all(),
+					{ readonly: true },
+				),
 			).toEqual([]);
 		} finally {
 			service.close();
@@ -347,10 +366,13 @@ describe("DocsSearchEngine indexing contract", () => {
 		const writer = new DocsSearchEngine({ agentDir });
 		await writer.init(root, "legacy");
 		const sectionId = writer.search("counter*factor").sections[0].sectionId;
-		writer.storage.db
-			.query("UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?")
-			.run(sectionId, writer.storage.get("legacy")!.id, "formula.md", "Formula", "Formula counterfactor", sectionId);
-		writer.storage.db.run("PRAGMA user_version=5");
+		const indexId = writer.list().find(index => index.name === "legacy")!.id;
+		withSqliteDatabase(writer.databasePath, db => {
+			db.query(
+				"UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?",
+			).run(sectionId, indexId, "formula.md", "Formula", "Formula counterfactor", sectionId);
+			db.run("PRAGMA user_version=5");
+		});
 		writer.close();
 		await fs.rm(root, { recursive: true });
 		const reader = new DocsSearchEngine({ agentDir });
@@ -488,7 +510,11 @@ describe("DocsSearchEngine indexing contract", () => {
 					text: `# Guide\r\nAlpha 中文 ${name}\r\n`,
 				});
 			}
-			expect(service.storage.db.query("PRAGMA foreign_key_check").all()).toEqual([]);
+			expect(
+				withSqliteDatabase(service.databasePath, db => db.query("PRAGMA foreign_key_check").all(), {
+					readonly: true,
+				}),
+			).toEqual([]);
 			service.remove("structured");
 			expect(service.search("Alpha").sections.map(hit => hit.index)).toEqual(["fulltext"]);
 		} finally {
@@ -693,9 +719,15 @@ describe("DocsSearchEngine indexing contract", () => {
 		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
-			const truncated = service.storage.db
-				.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown=?")
-				.get(body.slice(0, 18_000)) as { id: number; raw_markdown: string };
+			const truncated = withSqliteDatabase(
+				service.databasePath,
+				db =>
+					db.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown=?").get(body.slice(0, 18_000)) as {
+						id: number;
+						raw_markdown: string;
+					},
+				{ readonly: true },
+			);
 			await fs.rm(root, { recursive: true });
 			const result = service.search(query, { index: "manual", limit: 500 });
 			expect(result.exactNameMatches).toBe(1);
@@ -727,9 +759,15 @@ describe("DocsSearchEngine indexing contract", () => {
 		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
-			const fragment = service.storage.db
-				.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown LIKE 'C++ %'")
-				.get() as { id: number; raw_markdown: string };
+			const fragment = withSqliteDatabase(
+				service.databasePath,
+				db =>
+					db.query("SELECT id,raw_markdown FROM sections WHERE raw_markdown LIKE 'C++ %'").get() as {
+						id: number;
+						raw_markdown: string;
+					},
+				{ readonly: true },
+			);
 			await fs.rm(root, { recursive: true });
 			const result = service.search("C++", { index: "manual", limit: 500 });
 			expect(result.exactNameMatches).toBe(1);
@@ -972,24 +1010,24 @@ describe("DocsSearchEngine indexing contract", () => {
 			const indexId = service.list()[0].id as number;
 			// Legacy converter labels remain indexed, but never displace readable
 			// evidence. They must still be reachable through continuation pages.
-			service.storage.transaction(() => {
-				for (let index = 0; index < 700; index++) {
-					const document = service.storage.db
-						.query(
-							"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
-						)
-						.get(indexId, `legacy/label-${index}.md`, "Cell", "doc", "0", 0, 0) as { id: number };
-					const section = service.storage.db
-						.query(
-							"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
-						)
-						.get(indexId, document.id, 0, "Cell", 2, 1, 1, 0, 11, "## Cell\n") as { id: number };
-					service.storage.db
-						.query(
+			withSqliteDatabase(service.databasePath, db => {
+				db.transaction(() => {
+					for (let index = 0; index < 700; index++) {
+						const document = db
+							.query(
+								"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
+							)
+							.get(indexId, `legacy/label-${index}.md`, "Cell", "doc", "0", 0, 0) as { id: number };
+						const section = db
+							.query(
+								"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+							)
+							.get(indexId, document.id, 0, "Cell", 2, 1, 1, 0, 11, "## Cell\n") as { id: number };
+						db.query(
 							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-						)
-						.run(section.id, section.id, indexId, "", "Cell", "needle needle needle needle needle needle");
-				}
+						).run(section.id, section.id, indexId, "", "Cell", "needle needle needle needle needle needle");
+					}
+				})();
 			});
 			const hits = service.search("needle", { index: "manual", limit: 200 }).sections;
 			// Readable evidence comes first; stubs retain their own locators later.
@@ -1019,24 +1057,39 @@ describe("DocsSearchEngine indexing contract", () => {
 			await service.init(".", "manual");
 			// A half-built import shares this database under a hidden name; its rows
 			// must not pad a count the page is never allowed to serve from.
-			const hidden = service.storage.create({ name: "__building__count", rootPath: root });
-			const document = service.storage.db
-				.query(
-					"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
-				)
-				.get(hidden.id, "hidden.md", "Hidden", "doc", "0", 0, 0) as { id: number };
-			const section = service.storage.db
-				.query(
-					"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
-				)
-				.get(hidden.id, document.id, 0, "Hidden", 1, 1, 2, 0, 30, "# Hidden\nneedle in the hidden index\n") as {
-				id: number;
-			};
-			service.storage.db
-				.query(
-					"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-				)
-				.run(section.id, section.id, hidden.id, "hidden.md", "Hidden", "needle hidden body");
+			withSqliteDatabase(service.databasePath, db => {
+				db.transaction(() => {
+					const hidden = db
+						.query("INSERT INTO doc_indexes(name,root_path) VALUES(?,?) RETURNING id")
+						.get("__building__count", root) as { id: number };
+					const document = db
+						.query(
+							"INSERT INTO documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) VALUES(?,?,?,?,?,?,?) RETURNING id",
+						)
+						.get(hidden.id, "hidden.md", "Hidden", "doc", "0", 0, 0) as { id: number };
+					const section = db
+						.query(
+							"INSERT INTO sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,byte_start,byte_end,raw_markdown) VALUES(?,?,?,?,?,?,?,?,?,?) RETURNING id",
+						)
+						.get(
+							hidden.id,
+							document.id,
+							0,
+							"Hidden",
+							1,
+							1,
+							2,
+							0,
+							30,
+							"# Hidden\nneedle in the hidden index\n",
+						) as {
+						id: number;
+					};
+					db.query(
+						"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+					).run(section.id, section.id, hidden.id, "hidden.md", "Hidden", "needle hidden body");
+				})();
+			});
 			const result = service.search("needle");
 			expect(result.sections.map(hit => hit.path)).toEqual(["visible.md"]);
 			expect(result.total).toBe(1);
@@ -1134,10 +1187,14 @@ describe("DocsSearchEngine indexing contract", () => {
 			await service.init(root, "manual");
 			const initial = service.search("mbist_check.rpt", { limit: 500 }).sections;
 			const exact = initial.find(hit => hit.path === "exact.md")!;
-			for (const file of ["exact.md", "escaped.md", "path.md", "escaped-path.md", "windows-path.md"])
-				service.storage.db
-					.query("DELETE FROM sections_fts WHERE rowid=?")
-					.run(initial.find(hit => hit.path === file)!.sectionId);
+			withSqliteDatabase(service.databasePath, db => {
+				db.transaction(() => {
+					for (const file of ["exact.md", "escaped.md", "path.md", "escaped-path.md", "windows-path.md"])
+						db.query("DELETE FROM sections_fts WHERE rowid=?").run(
+							initial.find(hit => hit.path === file)!.sectionId,
+						);
+				})();
+			});
 			await fs.rm(root, { recursive: true });
 			const result = service.search("mbist_check.rpt", { index: "manual", limit: 500 });
 			expect(result.exactNameMatches).toBe(6);
@@ -1171,13 +1228,18 @@ describe("DocsSearchEngine indexing contract", () => {
 		const service = new DocsSearchEngine({ agentDir });
 		try {
 			await service.init(root, "manual");
-			const chunks = service.storage.db
-				.query(
-					"SELECT count(*) count FROM sections s JOIN documents d ON d.id=s.document_id WHERE d.relative_path=?",
-				)
-				.get("chunked.md") as { count: number };
+			const chunks = withSqliteDatabase(
+				service.databasePath,
+				db =>
+					db
+						.query(
+							"SELECT count(*) count FROM sections s JOIN documents d ON d.id=s.document_id WHERE d.relative_path=?",
+						)
+						.get("chunked.md") as { count: number },
+				{ readonly: true },
+			);
 			expect(chunks.count).toBeGreaterThan(3);
-			service.storage.db.run("DELETE FROM sections_fts");
+			withSqliteDatabase(service.databasePath, db => db.run("DELETE FROM sections_fts"));
 			await fs.rm(root, { recursive: true });
 			const result = service.search("mbist_check.rpt", { index: "manual", limit: 500 });
 			expect(result).toMatchObject({ total: 1, exactNameMatches: 1, hasMore: false });
@@ -1279,9 +1341,12 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(() => service.search("needle", { index: "other", cursor: first.cursor })).toThrow(
 				"does not match query or index",
 			);
-			service.storage.db
-				.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?")
-				.run("\nChanged stored evidence.\n", first.sections[0].sectionId);
+			withSqliteDatabase(service.databasePath, db => {
+				db.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?").run(
+					"\nChanged stored evidence.\n",
+					first.sections[0].sectionId,
+				);
+			});
 			expect(() => service.search("needle", { index: "manual", cursor: first.cursor })).toThrow(
 				"Stale documentation search cursor",
 			);
@@ -1409,16 +1474,17 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(first).toMatchObject({ total: 2, hasMore: true });
 			// Warm the continuation too, so this covers reuse rather than cold ranking.
 			expect(reader.search("needle evidence", { index: "manual", cursor: first.cursor }).sections).toHaveLength(1);
-			// Every Bun storage connection is external to the native engine's owning connection.
-			const db = reader.storage.db;
-			if (ftsOnly) {
-				db.query("DELETE FROM sections_fts WHERE rowid=?").run(first.sections[0].sectionId);
-			} else {
-				db.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?").run(
-					"\nChanged stored evidence.\n",
-					first.sections[0].sectionId,
-				);
-			}
+			// Mutate through a connection independent of the native engine's owning connection.
+			withSqliteDatabase(reader.databasePath, db => {
+				if (ftsOnly) {
+					db.query("DELETE FROM sections_fts WHERE rowid=?").run(first.sections[0].sectionId);
+				} else {
+					db.query("UPDATE sections SET raw_markdown=raw_markdown || ? WHERE id=?").run(
+						"\nChanged stored evidence.\n",
+						first.sections[0].sectionId,
+					);
+				}
+			});
 			expect(() => reader.search("needle evidence", { index: "manual", cursor: first.cursor })).toThrow(
 				"Stale documentation search cursor",
 			);

@@ -1,10 +1,10 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DOCS_WORKER_ARG } from "../src/cli/worker-selectors";
 import { DocsService, smokeTestDocsWorker } from "../src/docs/service";
-import { DocsStorage, normalizeFts } from "../src/docs/storage";
 import type { DocsWorkerInbound } from "../src/docs/worker-protocol";
 
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -29,8 +29,10 @@ async function fixture() {
 
 /** Give real removals finite CPU-bound SQLite work without holding a competing writer lock. */
 function expensiveRemoval(service: DocsService) {
-	const storage = new DocsStorage(service.databasePath);
-	storage.db.exec(`
+	const db = new Database(service.databasePath, { strict: true });
+	try {
+		db.exec("PRAGMA foreign_keys=ON");
+		db.exec(`
 		CREATE TRIGGER test_expensive_docs_removal BEFORE DELETE ON doc_indexes
 		BEGIN
 			SELECT sum(value) FROM (
@@ -41,16 +43,19 @@ function expensiveRemoval(service: DocsService) {
 				SELECT value FROM work
 			);
 		END;
-	`);
-	storage.close();
+		`);
+	} finally {
+		db.close();
+	}
 	cleanups.push(async () => {
 		// Never change the trigger while the owned worker may still be executing it.
 		await service.close();
-		const cleanupStorage = new DocsStorage(service.databasePath);
+		const cleanupDb = new Database(service.databasePath, { strict: true });
 		try {
-			cleanupStorage.db.exec("DROP TRIGGER test_expensive_docs_removal");
+			cleanupDb.exec("PRAGMA foreign_keys=ON");
+			cleanupDb.exec("DROP TRIGGER test_expensive_docs_removal");
 		} finally {
-			cleanupStorage.close();
+			cleanupDb.close();
 		}
 	});
 }
@@ -287,19 +292,23 @@ describe("DocsService real owned worker", () => {
 		expect(before.total).toBe(3);
 		expect(before.cursor).toBeDefined();
 		const original = before.sections[0]!;
-		const storage = new DocsStorage(f.service.databasePath);
-		cleanups.push(() => storage.close());
 		const changed = "# Changed evidence\nworkerbeacon UPDATED_COMPLETE_FINAL_LINE\n";
-		storage.transaction(() => {
-			storage.db
-				.query("UPDATE sections SET raw_markdown=?,heading_path=?,line_end=2 WHERE id=?")
-				.run(changed, "Changed evidence", original.sectionId);
-			storage.db
-				.query(
+		const db = new Database(f.service.databasePath, { strict: true });
+		try {
+			db.exec("PRAGMA foreign_keys=ON");
+			db.transaction(() => {
+				db.query("UPDATE sections SET raw_markdown=?,heading_path=?,line_end=2 WHERE id=?").run(
+					changed,
+					"Changed evidence",
+					original.sectionId,
+				);
+				db.query(
 					"UPDATE documents SET relative_path=?,sha256=? WHERE id=(SELECT document_id FROM sections WHERE id=?)",
-				)
-				.run("renamed.md", "f".repeat(64), original.sectionId);
-		});
+				).run("renamed.md", "f".repeat(64), original.sectionId);
+			})();
+		} finally {
+			db.close();
+		}
 		await expect(f.service.search("workerbeacon", { limit: 1, cursor: before.cursor })).rejects.toThrow("Stale");
 		const fresh = await f.service.search("workerbeacon");
 		const updated = fresh.sections.find(section => section.sectionId === original.sectionId)!;
@@ -308,24 +317,30 @@ describe("DocsService real owned worker", () => {
 		expect(updated.documentHash).toBe("f".repeat(64));
 		expect(updated.headingPath).toBe("Changed evidence");
 		const page = await f.service.search("workerbeacon", { limit: 1 });
-		const row = storage.db.query("SELECT index_id FROM sections WHERE id=?").get(original.sectionId) as {
-			index_id: number;
-		};
-		storage.transaction(() => {
-			storage.db.query("DELETE FROM sections_fts WHERE rowid=?").run(original.sectionId);
-			storage.db
-				.query(
-					"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-				)
-				.run(
-					original.sectionId,
-					original.sectionId,
-					row.index_id,
-					"renamed.md",
-					"Changed evidence",
-					normalizeFts("isolated_fts_token"),
-				);
-		});
+		const ftsDb = new Database(f.service.databasePath, { strict: true });
+		try {
+			ftsDb.exec("PRAGMA foreign_keys=ON");
+			const row = ftsDb.query("SELECT index_id FROM sections WHERE id=?").get(original.sectionId) as {
+				index_id: number;
+			};
+			ftsDb.transaction(() => {
+				ftsDb.query("DELETE FROM sections_fts WHERE rowid=?").run(original.sectionId);
+				ftsDb
+					.query(
+						"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+					)
+					.run(
+						original.sectionId,
+						original.sectionId,
+						row.index_id,
+						"renamed.md",
+						"Changed evidence",
+						"isolated_fts_token",
+					);
+			})();
+		} finally {
+			ftsDb.close();
+		}
 		await expect(f.service.search("workerbeacon", { limit: 1, cursor: page.cursor })).rejects.toThrow("Stale");
 		const fts = await f.service.search("isolated_fts_token");
 		expect(fts.sections.map(section => section.sectionId)).toContain(original.sectionId);
@@ -335,13 +350,17 @@ describe("DocsService real owned worker", () => {
 	it("reports a broken warm database instead of returning cached evidence or zero matches", async () => {
 		const f = await fixture();
 		expect((await f.service.search("workerbeacon")).total).toBe(3);
-		const storage = new DocsStorage(f.service.databasePath);
-		cleanups.push(() => storage.close());
-		storage.db.exec("DROP TABLE sections_fts");
+		const db = new Database(f.service.databasePath, { strict: true });
+		try {
+			db.exec("PRAGMA foreign_keys=ON");
+			db.exec("DROP TABLE sections_fts");
+		} finally {
+			db.close();
+		}
 		await expect(f.service.search("workerbeacon")).rejects.toThrow();
 	}, 10_000);
 
-	it("runs page-local budgeting in the parent and resumes the excluded next hit", async () => {
+	it("runs page-local budgeting lazily and resumes the excluded next hit", async () => {
 		const f = await fixture();
 		const ranked = await f.service.search("workerbeacon");
 		const positions: number[] = [];

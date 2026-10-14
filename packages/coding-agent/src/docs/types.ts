@@ -50,35 +50,6 @@ export interface DocsProgress {
 	message?: string;
 }
 
-export interface MarkdownSourceLine {
-	text: string;
-	line: number;
-	byteStart: number;
-	byteEnd: number;
-}
-
-export interface MarkdownSection {
-	ordinal: number;
-	headingPath: string[];
-	headingLevel: number;
-	lineStart: number;
-	lineEnd: number;
-	byteStart: number;
-	byteEnd: number;
-	rawMarkdown: string;
-	plainText: string;
-}
-
-export interface MarkdownDocument {
-	relativePath: string;
-	title: string;
-	sourceKind: string;
-	sha256: string;
-	sizeBytes: number;
-	mtimeMs: number;
-	sections: MarkdownSection[];
-}
-
 export interface DocsIndexSummary {
 	id: number;
 	name: string;

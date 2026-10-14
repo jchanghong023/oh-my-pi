@@ -1,5 +1,12 @@
 import * as path from "node:path";
-import { isBunTestRuntime, logger, sleepLong } from "@oh-my-pi/pi-utils";
+import {
+	wikiNormalizeSearchOptions,
+	wikiSelectPage,
+	wikiToolPage,
+	type WikiToolPage,
+	wikiWaitMinimum,
+} from "@oh-my-pi/pi-natives";
+import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { DOCS_WORKER_ARG } from "../cli/worker-selectors";
 import {
@@ -28,8 +35,6 @@ import type {
 	DocsWorkerOutbound,
 	DocsWorkerResults,
 } from "./worker-protocol";
-
-const SEARCH_MINIMUM_MS = 500;
 
 type RequestCommand = Exclude<DocsWorkerCommand, { type: "configure" }>;
 type DocsWorkerHandle = WorkerHandle<DocsWorkerInbound, DocsWorkerOutbound>;
@@ -138,7 +143,24 @@ export class DocsService {
 		await this.#request({ type: "remove", name }, options.signal);
 	}
 
-	async search(query: string, options: DocsSearchOptions = {}): Promise<DocsSearchResult> {
+	search(query: string, options: DocsSearchOptions = {}): Promise<DocsSearchResult> {
+		return this.#search(query, options, false);
+	}
+
+	searchWiki(
+		query: string,
+		options: Pick<DocsSearchOptions, "index" | "cursor" | "signal"> = {},
+	): Promise<WikiToolPage> {
+		return this.#search(query, options, true);
+	}
+
+	#search(query: string, options: DocsSearchOptions, renderWiki: false): Promise<DocsSearchResult>;
+	#search(query: string, options: DocsSearchOptions, renderWiki: true): Promise<WikiToolPage>;
+	async #search(
+		query: string,
+		options: DocsSearchOptions,
+		renderWiki: boolean,
+	): Promise<DocsSearchResult | WikiToolPage> {
 		const started = performance.now();
 		const context = logContext();
 		return logger.withLogContext(context, async () => {
@@ -155,10 +177,10 @@ export class DocsService {
 			try {
 				if (this.#closed) throw new Error("Document service is closed");
 				controller.signal.throwIfAborted();
-				const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 10)));
-				const budget = options.characterBudget ?? Number.POSITIVE_INFINITY;
-				if (!Number.isFinite(limit) || Number.isNaN(budget) || budget < 0)
-					throw new Error("Invalid documentation search page size");
+				const { limit, characterBudget } = wikiNormalizeSearchOptions(
+					renderWiki ? 200 : options.limit,
+					options.characterBudget,
+				);
 				reply = await this.#request(
 					{ type: "searchWindow", query, options: { index: options.index, limit, cursor: options.cursor } },
 					controller.signal,
@@ -166,34 +188,20 @@ export class DocsService {
 				controller.signal.throwIfAborted();
 				const budgetStarted = performance.now();
 				const window = reply.value;
-				const sections: DocsSearchResult["sections"] = [];
-				let cost = 0;
-				for (const hit of window.sections) {
-					controller.signal.throwIfAborted();
-					const sectionCost = options.sectionCost?.(hit, sections.length) ?? hit.text.length;
-					if (!Number.isFinite(sectionCost) || sectionCost < 0)
-						throw new Error("Invalid documentation search section cost");
-					if (sections.length > 0 && cost + sectionCost > budget) break;
-					sections.push(hit);
-					cost += sectionCost;
-				}
-				const next = window.cursorBase.p + sections.length;
-				const hasMore = next < window.total;
-				const result: DocsSearchResult = {
-					sections,
-					total: window.total,
-					exactNameMatches: window.exactNameMatches,
-					hasMore,
-					...(window.technicalName === undefined ? {} : { technicalName: window.technicalName }),
-					...(hasMore
-						? { cursor: Buffer.from(JSON.stringify({ ...window.cursorBase, p: next })).toString("base64url") }
-						: {}),
-				};
+				const page = renderWiki ? wikiToolPage(query, window) : undefined;
+				const result = page
+					? page.result
+					: wikiSelectPage(
+							window,
+							characterBudget,
+							(hit, position) => options.sectionCost?.(hit, position),
+							controller.signal,
+							false,
+						);
 				budgetMs = performance.now() - budgetStarted;
 				const floorStarted = performance.now();
 				try {
-					// sleepLong rechecks a monotonic deadline and removes its abortable timer on cancellation.
-					await sleepLong(Math.max(0, started + SEARCH_MINIMUM_MS - performance.now()), controller.signal);
+					await wikiWaitMinimum(performance.now() - started, controller.signal);
 				} finally {
 					floorWaitMs = performance.now() - floorStarted;
 				}
@@ -202,10 +210,10 @@ export class DocsService {
 					...fields,
 					stage: "complete",
 					result: "completed",
-					returned_count: sections.length,
-					total_matches: window.total,
-					exact_name_matches: window.exactNameMatches,
-					has_more: hasMore,
+					returned_count: result.sections.length,
+					total_matches: result.total,
+					exact_name_matches: result.exactNameMatches,
+					has_more: result.hasMore,
 					engine_ms: reply.engine_ms,
 					startup_engine_ms: reply.startup_engine_ms,
 					ipc_ms: reply.ipc_ms,
@@ -214,9 +222,9 @@ export class DocsService {
 					floor_wait_ms: floorWaitMs,
 					total_ms: performance.now() - started,
 				});
-				return result;
+				return page ?? result;
 			} catch (error) {
-				// Node's timer wraps its abort reason; retain our caller cancellation/close semantics.
+				// Native waits use their own AbortError; preserve our cancellation/close reason.
 				const failure = controller.signal.aborted ? controller.signal.reason : error;
 				logger.info("docs.search.outward.finished", {
 					...fields,

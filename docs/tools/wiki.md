@@ -6,13 +6,15 @@
 - Entry: `packages/coding-agent/src/tools/wiki.ts`
 - Model-facing prompt: `packages/coding-agent/src/prompts/tools/wiki.md`
 - Key collaborators:
-  - `packages/coding-agent/src/docs/service.ts` — asynchronous, cancellable index discovery and search
-  - `packages/coding-agent/src/docs/engine.ts` — shared import/storage owner and mandatory native query adapter
-  - `crates/pi-natives/src/wiki/` — Rust query analysis, default Markdown lexer projection, SQLite FTS5/BM25, complete ranking/cache, snapshot-compatible cursors and page hydration; async queries use the same native blocking-task mechanism as `grep`
-  - `packages/coding-agent/src/docs/markdown.ts` — shared ingestion parser and heading truncation; the native query lexer preserves its default semantics
+  - `packages/coding-agent/src/docs/service.ts` — host adapter for owner-scoped worker IPC, cancellation, shutdown and logger context; delegates wiki search, page construction and minimum-duration waiting to Rust
+  - `packages/coding-agent/src/docs/engine.ts` — host path, progress/cancellation callback and logger adapter for the mandatory native owner
+  - `crates/pi-natives/src/wiki/` — Rust Markdown discovery, faithful parsing/chunking, document hashing, schema/legacy migrations and index lifecycle/import/publication/rollback; query analysis, name boundaries and chunk context, SQLite FTS5/BM25, complete ranking/cache, validated snapshots, compatible cursors and body/provenance hydration; page budgets, same-page deduplication, evidence rendering, display sanitization and cancellable minimum-duration waiting. Async operations use the same native blocking-task mechanism as `grep`.
+  - Retained TypeScript engine/service/tool code only adapts host paths, tool/schema and session boundaries, worker IPC, UI, logging and cancellation/disposal; there is no TypeScript wiki implementation or search fallback.
   - Index lifecycle: `omp docs init "<dir>" --name <name>` / `omp docs remove <name> --force`
 
 The behavior authority is [Markdown document indexing](../../docs-zh-CN/requirements/fork.md#markdown-文档索引); this page describes its tool surface.
+
+Markdown ingestion and legacy searchable-text recovery use a faithful Rust port of the existing shared parser semantics, not a second parsing contract. The migration preserves algorithms, database format, result order, stored text/provenance and valid old cursor identity without requiring an index rebuild. DB-only queries, the ≥500ms successful outward duration and error behavior remain unchanged.
 
 ## Inputs
 

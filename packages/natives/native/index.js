@@ -150,6 +150,19 @@ export const visibleWidth = nativeBindings.visibleWidth ?? missingNativeExport("
 export const warmBlockParse = nativeBindings.warmBlockParse ?? missingNativeExport("warmBlockParse");
 export const warmHighlighter = nativeBindings.warmHighlighter ?? missingNativeExport("warmHighlighter");
 export const wasmGrammarFor = nativeBindings.wasmGrammarFor ?? missingNativeExport("wasmGrammarFor");
+export const wikiCheckIndexingCancellation = nativeBindings.wikiCheckIndexingCancellation ?? missingNativeExport("wikiCheckIndexingCancellation");
+export const wikiEnumerateMarkdownFiles = nativeBindings.wikiEnumerateMarkdownFiles ?? missingNativeExport("wikiEnumerateMarkdownFiles");
+export const wikiNormalizeFts = nativeBindings.wikiNormalizeFts ?? missingNativeExport("wikiNormalizeFts");
+export const wikiNormalizePlainText = nativeBindings.wikiNormalizePlainText ?? missingNativeExport("wikiNormalizePlainText");
+export const wikiNormalizeSearchOptions = nativeBindings.wikiNormalizeSearchOptions ?? missingNativeExport("wikiNormalizeSearchOptions");
+export const wikiParseMarkdown = nativeBindings.wikiParseMarkdown ?? missingNativeExport("wikiParseMarkdown");
+export const wikiPrepareToolQuery = nativeBindings.wikiPrepareToolQuery ?? missingNativeExport("wikiPrepareToolQuery");
+export const wikiReadMarkdownDocument = nativeBindings.wikiReadMarkdownDocument ?? missingNativeExport("wikiReadMarkdownDocument");
+export const wikiSectionShape = nativeBindings.wikiSectionShape ?? missingNativeExport("wikiSectionShape");
+export const wikiSelectPage = nativeBindings.wikiSelectPage ?? missingNativeExport("wikiSelectPage");
+export const wikiToolPage = nativeBindings.wikiToolPage ?? missingNativeExport("wikiToolPage");
+export const wikiTruncateHeading = nativeBindings.wikiTruncateHeading ?? missingNativeExport("wikiTruncateHeading");
+export const wikiWaitMinimum = nativeBindings.wikiWaitMinimum ?? missingNativeExport("wikiWaitMinimum");
 export const wrapTextWithAnsi = nativeBindings.wrapTextWithAnsi ?? missingNativeExport("wrapTextWithAnsi");
 
 // string/numeric enums (napi-rs string_enum produces TS-only const enum)

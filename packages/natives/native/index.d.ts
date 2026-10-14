@@ -787,16 +787,13 @@ export declare class VcsRepo {
   lsFiles(others: boolean, excludeStandard: boolean, signal?: unknown | undefined | null): Promise<Array<string>>
 }
 
-/**
- * One search connection and bounded complete-ranking cache per documentation
- * owner.
- */
 export declare class WikiSearchEngine {
-  /** Opening is deferred until TypeScript has prepared the storage schema. */
-  constructor(databasePath: string, cursorPath: string)
-  searchWindow(query: string, options: WikiSearchOptions): WikiSearchOutput
-  searchWindowAsync(query: string, options: WikiSearchOptions, signal?: unknown | undefined | null): Promise<WikiSearchOutput>
-  /** Closing never waits on the mutex held by an active search. */
+  constructor(databasePath: string, cursorPath: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown)
+  list(diagnostic?: (event: WikiDiagnosticEvent) => unknown): Array<WikiIndexSummary>
+  remove(name: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown): void
+  init(rootPath: string, name: string, onProgress?: (progress: WikiBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiBuildResult>
+  searchWindow(query: string, options: WikiSearchOptions, diagnostic?: (event: WikiDiagnosticEvent) => unknown): WikiSearchOutput
+  searchWindowAsync(query: string, options: WikiSearchOptions, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiSearchOutput>
   close(): void
 }
 
@@ -3933,6 +3930,22 @@ export interface WasmGrammarQuery {
   path?: string
 }
 
+export interface WikiBuildProgress {
+  phase: string
+  total: number
+  completed: number
+  failed: number
+  currentPath?: string
+}
+
+export interface WikiBuildResult {
+  processed: number
+  failed: number
+  index: WikiIndexSummary
+}
+
+export declare function wikiCheckIndexingCancellation(signal?: AbortSignal | undefined | null): void
+
 /** Output positions are JS numbers; the decoded cursor retains its u64. */
 export interface WikiCursorBase {
   v: 1
@@ -3940,6 +3953,105 @@ export interface WikiCursorBase {
   s: string
   p: number
 }
+
+export interface WikiDiagnosticEvent {
+  message: string
+  level: string
+  component: string
+  event: string
+  stage: string
+  result: string
+  elapsedMs?: number
+  fileCount?: number
+  documentCount?: number
+  sectionCount?: number
+  indexCount?: number
+  abandonedIndexCount?: number
+  retryLimit?: number
+  schemaVersion?: number
+  supportedVersion?: number
+  fromVersion?: number
+  toVersion?: number
+  indexId?: number
+  indexHash?: string
+  cleanup?: string
+  rollback?: string
+  failedStage?: string
+  reason?: string
+  errorType?: string
+  errorCode?: string
+  errorErrno?: number
+}
+
+export declare function wikiEnumerateMarkdownFiles(root: string): Promise<string[]>
+
+export interface WikiIndexSummary {
+  id: number
+  name: string
+  rootPath: string
+  documentCount: number
+  sectionCount: number
+}
+
+export interface WikiMarkdownDocument {
+  relativePath: string
+  title: string
+  sourceKind: string
+  sha256: string
+  sizeBytes: number
+  mtimeMs: number
+  sections: Array<WikiMarkdownSection>
+}
+
+export interface WikiMarkdownSection {
+  ordinal: number
+  headingPath: Array<string>
+  headingLevel: number
+  lineStart: number
+  lineEnd: number
+  byteStart: number
+  byteEnd: number
+  rawMarkdown: string
+  plainText: string
+}
+
+export interface WikiNormalizedSearchOptions {
+  limit: number
+  characterBudget: number
+}
+
+export declare function wikiNormalizeFts(text: string): string
+
+export declare function wikiNormalizePlainText(markdown: string, fencePrefix?: string | undefined | null, continuesLine?: boolean | undefined | null): string
+
+/** Math.floor, then the historical [1,500] clamp, including infinities. */
+export declare function wikiNormalizeSearchOptions(limit?: number | undefined | null, characterBudget?: number | undefined | null): WikiNormalizedSearchOptions
+
+export interface WikiParsedMarkdown {
+  title?: string
+  sections: Array<WikiMarkdownSection>
+}
+
+export declare function wikiParseMarkdown(bytes: Uint8Array): WikiParsedMarkdown
+
+export interface WikiPreparedToolQuery {
+  query?: string
+  cursor?: string
+  queryTruncated: boolean
+  ignoredArgumentCount: number
+  error?: string
+  errorKind?: string
+}
+
+/**
+ * Validation returns domain text for the host's `ToolError`, not a native
+ * error pretending to be the host class. Host-provided cursor presence
+ * preserves the old `in` check, including inherited and explicitly undefined
+ * values.
+ */
+export declare function wikiPrepareToolQuery(query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: boolean | undefined | null): WikiPreparedToolQuery
+
+export declare function wikiReadMarkdownDocument(root: string, relative: string): Promise<WikiMarkdownDocument>
 
 export interface WikiSearchHit {
   sectionId: number
@@ -3967,6 +4079,16 @@ export interface WikiSearchOutput {
   termCount: number
 }
 
+/** Public shape for both the native renderer and caller-local selection. */
+export interface WikiSearchResult {
+  sections: Array<WikiSearchHit>
+  total: number
+  exactNameMatches: number
+  technicalName?: string
+  hasMore: boolean
+  cursor?: string
+}
+
 export interface WikiSearchWindow {
   sections: Array<WikiSearchHit>
   total: number
@@ -3974,6 +4096,30 @@ export interface WikiSearchWindow {
   technicalName?: string
   cursorBase: WikiCursorBase
 }
+
+export declare function wikiSectionShape(markdown: string): Shape
+
+export declare function wikiSelectPage(window: WikiSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: WikiSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): WikiSearchResult
+
+export declare function wikiToolPage(query: string, window: WikiSearchWindow): WikiToolPage
+
+export interface WikiToolPage {
+  result: WikiSearchResult
+  text: string
+  renderedSectionCount: number
+  renderedCharacters: number
+  duplicateCount: number
+  oversizeCount: number
+}
+
+export declare function wikiTruncateHeading(text: string, maxChars?: number | undefined | null): string
+
+/**
+ * Caller elapsed time includes startup, IPC queueing, query and page work.
+ * A Tokio monotonic deadline is rechecked after every wake; no DB/owner lock
+ * or worker-thread sleep is involved. Settlement also rejects late aborts.
+ */
+export declare function wikiWaitMinimum(elapsedMilliseconds: number, signal?: AbortSignal | undefined | null): Promise<void>
 
 /** Profiling results returned to JavaScript. */
 export interface WorkProfile {

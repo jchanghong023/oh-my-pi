@@ -42,25 +42,71 @@ type CoreResult<T> = std::result::Result<T, WikiError>;
 type Check<'a> = &'a dyn Fn() -> CoreResult<()>;
 
 #[derive(Debug)]
-pub(super) struct WikiError {
+pub struct WikiError {
 	message: String,
 	sqlite:  Option<i32>,
+	name:    Option<String>,
+	code:    Option<String>,
 }
 impl WikiError {
 	pub(super) fn message(message: impl Into<String>) -> Self {
-		Self { message: message.into(), sqlite: None }
+		Self { message: message.into(), sqlite: None, name: None, code: None }
+	}
+
+	pub(super) fn named(message: impl Into<String>, name: &str, code: Option<&str>) -> Self {
+		Self {
+			message: message.into(),
+			sqlite:  None,
+			name:    Some(name.to_owned()),
+			code:    code.map(str::to_owned),
+		}
+	}
+
+	pub(super) fn error_message(&self) -> &str {
+		&self.message
+	}
+
+	pub(super) fn diagnostic_error_type(&self) -> &str {
+		self.name.as_deref().unwrap_or_else(|| {
+			if self.sqlite.is_some() {
+				"SQLiteError"
+			} else {
+				"Error"
+			}
+		})
+	}
+
+	pub(super) fn diagnostic_code(&self) -> Option<&str> {
+		self
+			.code
+			.as_deref()
+			.or_else(|| self.sqlite.map(sqlite_code))
+	}
+
+	pub(super) const fn diagnostic_sqlite_code(&self) -> Option<i32> {
+		self.sqlite
 	}
 
 	pub(super) fn into_napi(self, env: Env) -> Error {
 		let fallback = Error::from_reason(self.message.clone());
-		let Some(code) = self.sqlite else {
+		if self.sqlite.is_none() && self.name.is_none() && self.code.is_none() {
 			return fallback;
-		};
+		}
 		let built = (|| -> napi::Result<Error> {
-			let mut error = env.create_error(Error::from_reason(self.message))?;
-			error.set_named_property("name", "SQLiteError")?;
-			error.set_named_property("code", sqlite_code(code))?;
-			error.set_named_property("errno", code)?;
+			let mut error = if self.diagnostic_error_type() == "TypeError" {
+				napi::JsTypeError::from(Error::from_reason(self.message.clone()))
+					.into_unknown(env)
+					.coerce_to_object()?
+			} else {
+				env.create_error(Error::from_reason(self.message.clone()))?
+			};
+			error.set_named_property("name", self.diagnostic_error_type())?;
+			if let Some(code) = self.diagnostic_code() {
+				error.set_named_property("code", code)?;
+			}
+			if let Some(code) = self.sqlite {
+				error.set_named_property("errno", code)?;
+			}
 			Ok(Error::from(error.to_unknown()))
 		})();
 		built.unwrap_or(fallback)
@@ -72,6 +118,8 @@ impl From<rusqlite::Error> for WikiError {
 			Self {
 				message: message.unwrap_or_else(|| code.to_string()),
 				sqlite:  Some(code.extended_code),
+				name:    None,
+				code:    None,
 			}
 		} else {
 			Self::message(error.to_string())
@@ -262,7 +310,7 @@ fn decode_cursor(value: &str) -> CoreResult<Cursor> {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Serialize))]
 #[cfg_attr(test, serde(rename_all = "camelCase"))]
-#[napi(object, object_from_js = false)]
+#[napi(object)]
 pub struct WikiSearchHit {
 	pub section_id:    i64,
 	pub index:         String,
@@ -282,7 +330,7 @@ pub struct WikiSearchHit {
 /// Output positions are JS numbers; the decoded cursor retains its u64.
 #[derive(Debug)]
 #[cfg_attr(test, derive(Serialize))]
-#[napi(object, object_from_js = false)]
+#[napi(object)]
 pub struct WikiCursorBase {
 	#[napi(ts_type = "1")]
 	pub v: u8,
@@ -294,7 +342,7 @@ pub struct WikiCursorBase {
 #[derive(Debug)]
 #[cfg_attr(test, derive(Serialize))]
 #[cfg_attr(test, serde(rename_all = "camelCase"))]
-#[napi(object, object_from_js = false, object_to_js = false)]
+#[napi(object, object_to_js = false)]
 pub struct WikiSearchWindow {
 	pub sections:           Vec<WikiSearchHit>,
 	pub total:              i64,
@@ -675,7 +723,7 @@ fn rank(
 		let mut rows = if filter.is_empty() {
 			statement.query([&plan.fts])?
 		} else {
-			statement.query(rusqlite::params![plan.fts, index])?
+			statement.query(rusqlite::params![plan.fts, index.map(super::storage::sqlite_text)])?
 		};
 		while let Some(row) = rows.next()? {
 			check()?;
@@ -894,7 +942,7 @@ fn hash_row(snapshot: &mut Sha256, row: &Row<'_>, output: &mut String) -> CoreRe
 fn digest(bytes: &[u8]) -> String {
 	format!("{:x}", Sha256::digest(bytes))
 }
-fn file_identity(path: &Path) -> CoreResult<String> {
+pub(super) fn file_identity(path: &Path) -> CoreResult<String> {
 	let metadata = fs::metadata(path)?;
 	#[cfg(unix)]
 	{

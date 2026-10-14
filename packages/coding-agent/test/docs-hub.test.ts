@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -32,9 +33,17 @@ async function fixture() {
 	const seed = new DocsSearchEngine({ agentDir, cwd: root });
 	try {
 		const result = await seed.init(".", "safe");
-		seed.storage.db
-			.query("UPDATE doc_indexes SET name=?,root_path=? WHERE id=?")
-			.run(`index-${attack}`, `root-${attack}`, result.index.id);
+		const db = new Database(seed.databasePath, { strict: true });
+		try {
+			db.exec("PRAGMA foreign_keys=ON");
+			db.query("UPDATE doc_indexes SET name=?,root_path=? WHERE id=?").run(
+				`index-${attack}`,
+				`root-${attack}`,
+				result.index.id,
+			);
+		} finally {
+			db.close();
+		}
 	} finally {
 		seed.close();
 	}
