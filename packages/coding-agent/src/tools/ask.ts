@@ -13,7 +13,7 @@ import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask"
  *   - Users will always be able to select "Other" to provide custom text input
  *   - Use multi: true to allow multiple answers to be selected for a question
  *   - Use recommended: <index> to mark the default option; "(Recommended)" suffix is added automatically
- *   - Questions may time out and auto-select the recommended option (configurable, disabled in plan mode)
+ *   - Questions may time out and auto-select the recommended option, else one clear affirmative option (disabled in plan mode)
  */
 
 import { type as arkType } from "@oh-my-pi/omptype";
@@ -131,6 +131,8 @@ function toSelectOption(option: AskOption, label = option.label): ExtensionUISel
 // =============================================================================
 
 const RECOMMENDED_SUFFIX = " (Recommended)";
+const AFFIRMATIVE_ANSWER = /^(?:是(?=$|[\s，,。.!！？？])|同意|允许|授权|批准|确认|继续|执行|提交|推送|可以|肯定|好的|yes\b|approve\b|allow\b|authorize\b|confirm\b|proceed\b|continue\b|accept\b|go ahead\b)/iu;
+const NEGATIVE_ANSWER = /(?:不|否|勿|别|拒绝|取消|停止|撤销|暂停|稍后|暂缓)|\b(?:no|not|never|without|don't|do not|stop|cancel|deny|decline|reject)\b/iu;
 // Window after the timeout deadline within which an `undefined` selection is
 // attributed to a UI-enforced timeout (for surfaces that close the dialog at
 // the deadline but never invoke `onTimeout`). Cancels beyond it are user Esc.
@@ -152,6 +154,18 @@ function addRecommendedSuffix(options: AskOption[], recommendedIndex?: number): 
 				: option.label;
 		return toSelectOption(option, label);
 	});
+}
+
+function getAskTimeoutRecommendation(options: AskOption[], recommended?: number): number | undefined {
+	if (recommended !== undefined) return recommended;
+	let affirmative: number | undefined;
+	for (let index = 0; index < options.length; index++) {
+		const label = options[index]!.label.trim();
+		if (!AFFIRMATIVE_ANSWER.test(label) || NEGATIVE_ANSWER.test(label)) continue;
+		if (affirmative !== undefined) return undefined;
+		affirmative = index;
+	}
+	return affirmative;
 }
 
 function getAutoSelectionOnTimeout(options: AskOption[], recommended?: number): string[] {
@@ -766,18 +780,22 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 			try {
 				const showRichDialog = () =>
 					richAskDialog(
-						params.questions.map(q => ({
-							id: q.id,
-							question: q.question,
-							...(q.header?.trim() ? { header: q.header } : {}),
-							options: q.options.map(option => ({
-								label: option.label,
-								...(option.description?.trim() ? { description: option.description.trim() } : {}),
-								...(option.preview?.trim() ? { preview: option.preview } : {}),
-							})),
-							...(q.multi !== undefined ? { multi: q.multi } : {}),
-							...(q.recommended !== undefined ? { recommended: q.recommended } : {}),
-						})),
+						params.questions.map(q => {
+							const recommended =
+								timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended);
+							return {
+								id: q.id,
+								question: q.question,
+								...(q.header?.trim() ? { header: q.header } : {}),
+								options: q.options.map(option => ({
+									label: option.label,
+									...(option.description?.trim() ? { description: option.description.trim() } : {}),
+									...(option.preview?.trim() ? { preview: option.preview } : {}),
+								})),
+								...(q.multi !== undefined ? { multi: q.multi } : {}),
+								...(recommended !== undefined ? { recommended } : {}),
+							};
+						}),
 						{ timeout: timeout ?? undefined, signal, acceptImages: true },
 					);
 				const richResult = signal ? await untilAborted(signal, showRichDialog) : await showRichDialog();
@@ -886,7 +904,8 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					questionOptions,
 					q.multi ?? false,
 					{
-						recommended: q.recommended,
+						recommended:
+							timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended),
 						timeout: timeout ?? undefined,
 						signal,
 						initialSelection: options?.previous,

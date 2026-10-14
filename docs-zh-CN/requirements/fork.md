@@ -204,7 +204,7 @@
 保持以下 fork 默认值：
 
 - `recap.enabled=false`
-- `ask.timeout=30`（秒；显式 `0` 关闭超时，计划模式继续关闭 ask 自动选择；同一设置也约束 `cfg://` 审批，未回答时拒绝写入）
+- `ask.timeout=30`（秒；显式 `0` 关闭超时，计划模式继续关闭 ask 自动选择；内置 `ask` 工具超时优先采用有效的显式 `recommended`，否则选择唯一明确的中文或英文肯定选项，无法明确判断时沿用首项；同一设置也约束 `cfg://` 审批，未回答时拒绝写入）
 - `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
 - `statusLine.compactThinkingLevel=false`
