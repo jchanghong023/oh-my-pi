@@ -810,9 +810,11 @@ fn relative_path(root: &Path, absolute: &Path) -> String {
 	parts.join(std::path::MAIN_SEPARATOR_STR)
 }
 
-// The infallible POSIX variant keeps the fallible Windows variant's Result
-// signature so shared call sites can use `?` on both platforms.
-#[allow(clippy::unnecessary_wraps)]
+#[allow(
+	clippy::unnecessary_wraps,
+	reason = "the infallible POSIX variant keeps the fallible Windows variant's Result signature \
+	          for shared `?` call sites"
+)]
 #[cfg(not(windows))]
 fn node_symlink(_path: &Path, metadata: &Metadata) -> CoreResult<bool> {
 	Ok(metadata.file_type().is_symlink())
