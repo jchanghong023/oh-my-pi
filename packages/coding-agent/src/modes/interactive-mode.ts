@@ -1225,6 +1225,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	#loopIntervalMs: number | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
 	#modelCycleClearTimer: NodeJS.Timeout | undefined;
@@ -2828,20 +2829,34 @@ export class InteractiveMode implements InteractiveModeContext {
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
+		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
+			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
+			return;
+		}
 		const prompt = this.loopPrompt;
 		const loopAction = cfgLoopMode.get(settings);
-		this.#deferLoopAutoSubmit(() => {
-			void this.#runLoopIteration(loopAction, prompt);
-		});
+		this.#deferLoopAutoSubmit(
+			() => {
+				void this.#runLoopIteration(loopAction, prompt);
+			},
+			this.#loopIntervalMs ?? 800,
+		);
 	}
 
-	#deferLoopAutoSubmit(callback: () => void): void {
-		// Brief delay so the user has a chance to press Esc between iterations.
+	#deferLoopAutoSubmit(callback: () => void, delayMs = 800): void {
+		// Maintenance retries use the interrupt window, not another full interval.
+		if (this.#loopIntervalMs !== undefined && this.loopLimit?.kind === "duration") {
+			delayMs = Math.min(delayMs, Math.max(0, this.loopLimit.deadlineMs - Date.now()));
+		}
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
-			if (!this.loopModeEnabled || !this.onInputCallback) return;
+			if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
+			if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
+				this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
+				return;
+			}
 			callback();
-		}, 800);
+		}, delayMs);
 	}
 
 	#cancelLoopAutoSubmit(): void {
@@ -3122,6 +3137,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
 		this.loopCondition = undefined;
+		this.#loopIntervalMs = undefined;
 		this.#cancelLoopAutoSubmit();
 		this.#abortLoopCondition();
 		this.#syncLoopModeStatus();
@@ -3132,6 +3148,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	setLoopPrompt(prompt: string): void {
 		if (!this.loopModeEnabled) return;
+		this.#cancelLoopAutoSubmit();
 		// Any manual submit supersedes whatever gate is currently pending, even
 		// one resubmitting identical text: the gate was checking the *previous*
 		// iteration, and that iteration's turn is about to be superseded either
@@ -3180,16 +3197,25 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.loopModePaused = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(parsed.limit);
+		this.#loopIntervalMs = parsed.intervalMs;
+		if (parsed.intervalMs !== undefined && this.loopLimit?.kind === "iterations") {
+			// The inline prompt (or the next manual prompt) is the first turn.
+			consumeLoopLimitIteration(this.loopLimit);
+		}
 		this.loopCondition = parsed.condition;
 		this.#syncLoopModeStatus();
 		const limitSuffix = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
+		const intervalSuffix =
+			parsed.intervalMs !== undefined
+				? ` Delay after each turn: ${describeLoopLimit({ kind: "duration", durationMs: parsed.intervalMs })}.`
+				: "";
 		// The condition is a *continuation* signal: the first iteration always
 		// runs, and it is re-evaluated before each subsequent one.
 		const conditionSuffix = parsed.condition ? ` Continuing ${describeLoopCondition(parsed.condition)}.` : "";
 		const tail = parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn.";
 		this.showStatus(
-			`Loop mode enabled.${limitSuffix}${remainingSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
+			`Loop mode enabled.${limitSuffix}${remainingSuffix}${intervalSuffix}${conditionSuffix} ${tail} ${appKey(this.keybindings, "app.interrupt")} suspends the ongoing loop; /loop again to disable.`,
 		);
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
@@ -3900,7 +3926,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#composerHint(): string {
 		return theme.fg(
 			"dim",
-			"Ctrl+T 临时模型 · Ctrl+Q 排队发送 · Esc Esc 回退对话 · /tree 会话历史 · /goal 目标 · 有使用问题反馈j00808874",
+			"Ctrl+T临时模型Ctrl+Q排队发送EscEsc回退对话/tree会话历史/goal目标双击左方向键<-子代理/wiki文档检索/repo代码索引有使用问题反馈j00808874",
 		);
 	}
 

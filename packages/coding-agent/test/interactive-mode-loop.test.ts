@@ -212,6 +212,193 @@ describe("InteractiveMode loop auto-submit", () => {
 		expect(setLoopModeStatus).toHaveBeenLastCalledWith(undefined);
 	});
 
+	describe("positional interval", () => {
+		let nowMs: number;
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			nowMs = 1_000_000;
+			vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+			Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });
+			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => false });
+			Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => false });
+		});
+
+		async function advance(ms: number): Promise<void> {
+			nowMs += ms;
+			vi.advanceTimersByTime(ms);
+			await flushMicrotasks();
+		}
+
+		function waitForNextInput(): SubmittedUserInput[] {
+			const resolved: SubmittedUserInput[] = [];
+			pendingInput = mode.getUserInput();
+			void pendingInput.then(input => resolved.push(input));
+			return resolved;
+		}
+
+		it("submits the first turn immediately and waits the full interval after each terminal turn", async () => {
+			new InputController(mode).setupEditorSubmitHandler();
+			const first = waitForNextInput();
+			await mode.editor.onSubmit?.("/loop 3 5s repeat this");
+			await flushMicrotasks();
+			expect(first).toHaveLength(1);
+			expect(first[0].text).toBe("repeat this");
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+			mode.cancelPendingSubmission();
+
+			// A long first turn does not consume any of the requested idle gap.
+			await advance(20_000);
+			const second = waitForNextInput();
+			await advance(4_999);
+			expect(second).toHaveLength(0);
+			await advance(1);
+			expect(second).toHaveLength(1);
+			expect(second[0].text).toBe("repeat this");
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+			mode.cancelPendingSubmission();
+
+			await advance(2_000);
+			const third = waitForNextInput();
+			await advance(4_999);
+			expect(third).toHaveLength(0);
+			await advance(1);
+			expect(third).toHaveLength(1);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 0 });
+			mode.cancelPendingSubmission();
+
+			const fourth = waitForNextInput();
+			expect(mode.loopModeEnabled).toBe(false);
+			await advance(10_000);
+			expect(fourth).toHaveLength(0);
+		});
+
+		it("counts the first manual prompt when the command has no inline prompt", async () => {
+			new InputController(mode).setupEditorSubmitHandler();
+			const first = waitForNextInput();
+			await mode.editor.onSubmit?.("/loop 1 5s");
+			expect(first).toHaveLength(0);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 0 });
+
+			await mode.editor.onSubmit?.("manual first turn");
+			await flushMicrotasks();
+			expect(first).toHaveLength(1);
+			expect(first[0].text).toBe("manual first turn");
+			mode.cancelPendingSubmission();
+			const next = waitForNextInput();
+			await advance(5_000);
+			expect(next).toHaveLength(0);
+			expect(mode.loopModeEnabled).toBe(false);
+		});
+
+		it("preserves the repeat-count budget and 800ms delay without an interval", async () => {
+			expect(await mode.handleLoopCommand("1 repeat this")).toBe("repeat this");
+			mode.setLoopPrompt("repeat this");
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 1 });
+			const repeat = waitForNextInput();
+			await advance(799);
+			expect(repeat).toHaveLength(0);
+			await advance(1);
+			expect(repeat).toHaveLength(1);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 1, remaining: 0 });
+		});
+
+		it.each(["pauseLoop", "disableLoopMode"] as const)("cancels the interval timer on %s", async cancel => {
+			await mode.handleLoopCommand("3 5s repeat this");
+			mode.setLoopPrompt("repeat this");
+			const next = waitForNextInput();
+			await advance(1_000);
+			mode[cancel]();
+			await advance(10_000);
+			expect(next).toHaveLength(0);
+			expect(mode.loopPrompt).toBeUndefined();
+			expect(mode.loopModeEnabled).toBe(cancel === "pauseLoop");
+		});
+
+		it("cancels a pending interval when a manual prompt supersedes it", async () => {
+			await mode.handleLoopCommand("3 5s repeat this");
+			mode.setLoopPrompt("repeat this");
+			const next = waitForNextInput();
+			await advance(1_000);
+			mode.setLoopPrompt("replacement");
+			await advance(10_000);
+			expect(next).toHaveLength(0);
+
+			mode.armLoopAutoSubmit();
+			await advance(4_999);
+			expect(next).toHaveLength(0);
+			await advance(1);
+			expect(next).toHaveLength(1);
+			expect(next[0].text).toBe("replacement");
+		});
+
+		it("wakes at the duration deadline even when it is sooner than the interrupt window", async () => {
+			await mode.handleLoopCommand("1s 5s repeat this");
+			mode.setLoopPrompt("repeat this");
+			await advance(700);
+			const next = waitForNextInput();
+			await advance(299);
+			expect(mode.loopModeEnabled).toBe(true);
+			await advance(1);
+			expect(next).toHaveLength(0);
+			expect(mode.loopModeEnabled).toBe(false);
+		});
+
+		it("expires at the deadline while post-prompt work blocks maintenance retries", async () => {
+			Object.defineProperty(session, "hasPostPromptWork", { configurable: true, get: () => true });
+			await mode.handleLoopCommand("2s 1s repeat this");
+			mode.setLoopPrompt("repeat this");
+			const next = waitForNextInput();
+			await advance(1_000);
+			expect(next).toHaveLength(0);
+			expect(mode.loopModeEnabled).toBe(true);
+			await advance(800);
+			expect(mode.loopModeEnabled).toBe(true);
+			await advance(200);
+			expect(next).toHaveLength(0);
+			expect(mode.loopModeEnabled).toBe(false);
+		});
+
+		it("polls blocked submissions without spending budget or waiting another full interval", async () => {
+			let streaming = true;
+			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
+			await mode.handleLoopCommand("3 5s repeat this");
+			mode.setLoopPrompt("repeat this");
+			const next = waitForNextInput();
+			await advance(5_000);
+			expect(next).toHaveLength(0);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+			streaming = false;
+			await advance(799);
+			expect(next).toHaveLength(0);
+			await advance(1);
+			expect(next).toHaveLength(1);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+		});
+
+		it("does not recompact or repeat the interval while waiting for compact maintenance to settle", async () => {
+			cfgLoopMode.set(settings, "compact");
+			let streaming = false;
+			Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
+			const compact = vi.spyOn(mode, "handleCompactCommand").mockImplementation(async () => {
+				streaming = true;
+				return "ok";
+			});
+			await mode.handleLoopCommand("3 5s repeat this");
+			mode.setLoopPrompt("repeat this");
+			const next = waitForNextInput();
+			await advance(5_000);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(next).toHaveLength(0);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+			streaming = false;
+			await advance(800);
+			expect(compact).toHaveBeenCalledTimes(1);
+			expect(next).toHaveLength(1);
+			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+		});
+	});
+
 	describe("continue condition", () => {
 		function idleSession(): void {
 			Object.defineProperty(session, "isCompacting", { configurable: true, get: () => false });

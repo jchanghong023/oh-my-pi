@@ -100,4 +100,25 @@ describe("InteractiveMode shutdown during a loop condition gate", () => {
 		}
 		await pendingInput;
 	});
+
+	it("cancels a positional interval timer before disposing the session", async () => {
+		vi.useFakeTimers();
+		await mode.handleLoopCommand("3 5s keep going");
+		mode.setLoopPrompt("keep going");
+		const resolved: SubmittedUserInput[] = [];
+		const pendingInput = mode.getUserInput();
+		void pendingInput.then(input => resolved.push(input));
+
+		vi.advanceTimersByTime(1_000);
+		await mode.shutdown();
+		vi.advanceTimersByTime(10_000);
+		await flushMicrotasks();
+		expect(resolved).toHaveLength(0);
+
+		mode.cancelPendingSubmission();
+		if (mode.onInputCallback) {
+			mode.onInputCallback({ text: "", cancelled: true, started: false });
+		}
+		await pendingInput;
+	});
 });

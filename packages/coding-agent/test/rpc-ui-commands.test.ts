@@ -476,6 +476,8 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 
 	test("loop prompts stop at their limit, and deleting that session reports rollover without reviving old dialogs", async () => {
 		const requests: RpcFrame[] = [];
+		const requestStarts: number[] = [];
+		const responseEnds: number[] = [];
 		const model = "rpc-loop-model";
 		const prompt = "RPC loop dispatch fixture";
 		const modelServer = Bun.serve({
@@ -490,6 +492,10 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 				const body: unknown = await request.json();
 				if (!isRecord(body)) return new Response("invalid request", { status: 400 });
 				requests.push(body);
+				requestStarts.push(performance.now());
+				// The real CLI child owns its clock; a slow turn distinguishes end-to-start from start-to-start timing.
+				if (requests.length === 3) await Bun.sleep(1_200);
+				responseEnds.push(performance.now());
 				const text = `loop-reply-${requests.length}`;
 				const base = { id: `chatcmpl-loop-${requests.length}`, object: "chat.completion.chunk", created: 0, model };
 				const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 };
@@ -562,6 +568,16 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 								.join("");
 						});
 					expect(replies).toEqual(["loop-reply-1", "loop-reply-2"]);
+					expect(
+						await server.request({ id: "loop-interval", type: "prompt", message: `/loop 2 1s ${prompt}` }),
+					).toMatchObject({ success: true });
+					await server.next(frame => frame.type === "agent_end" && frame.isTerminal !== false);
+					await server.next(frame => frame.type === "agent_end" && frame.isTerminal !== false);
+					await server.next(
+						frame => frame.type === "command_output" && /loop limit reached/i.test(String(frame.text)),
+					);
+					expect(requests).toHaveLength(4);
+					expect(requestStarts[3]! - responseEnds[2]!).toBeGreaterThanOrEqual(1_000);
 					const settled = await server.request({ id: "loop-settled", type: "get_state" });
 					expect(settled).toMatchObject({
 						success: true,

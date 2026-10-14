@@ -29,8 +29,9 @@ const TIME_UNITS_MS = new Map<string, number>([
 	["hours", 3_600_000],
 ]);
 
+const MAX_LOOP_INTERVAL_MS = 2_147_483_647;
 const LOOP_USAGE =
-	"Usage: /loop [count|duration] [--while|--until '<command>'] [prompt]. Examples: /loop 10, /loop 10m, /loop 20 --until 'bun test' fix the failing tests.";
+	"Usage: /loop [count|duration] [interval] [--while|--until '<command>'] [prompt]. Examples: /loop 10 30s check status, /loop 10m 30s check status, /loop 10, /loop 20 --until 'bun test' fix the failing tests.";
 
 /**
  * Flag → `until` polarity. `--while` continues while the command succeeds;
@@ -44,15 +45,17 @@ const CONDITION_FLAGS: Record<string, boolean | undefined> = {
 export interface ParsedLoopArgs {
 	/** Iteration/duration budget, when the user supplied a leading limit token. */
 	limit?: LoopLimitConfig;
-	/** Continue-condition from `--while` / `--until`, re-evaluated before each iteration. */
+	/** Delay after each completed turn; numeric limits include the initial turn when set. */
+	intervalMs?: number;
+	/** Continue-condition from `/loop --while` / `--until`, re-evaluated before each iteration. */
 	condition?: LoopConditionConfig;
 	/** Inline loop prompt: text after the limit and flags, or the whole argument when neither was given. */
 	prompt?: string;
 }
 
 /**
- * Parse `/loop` arguments into an optional leading limit, an optional
- * continue-condition flag, and an optional inline prompt.
+ * Parse `/loop` arguments into an optional leading limit, repeat interval,
+ * continue-condition, and inline prompt.
  *
  * A leading token that *looks* like a limit (starts with a digit or sign) or
  * like a flag (starts with `--`) but fails to parse is a hard error, so a typo
@@ -67,11 +70,26 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	const limitResult = takeLoopLimit(trimmed);
 	if (typeof limitResult === "string") return limitResult;
 
-	const conditionResult = takeLoopCondition(limitResult.rest);
+	let rest = limitResult.rest;
+	let intervalMs: number | undefined;
+	if (limitResult.limit) {
+		const token = /^\S+/.exec(rest)?.[0];
+		const interval = token === undefined ? undefined : parseCompoundDuration(token.toLowerCase());
+		if (typeof interval === "string") return interval;
+		if (interval?.kind === "duration") {
+			if (!Number.isSafeInteger(interval.durationMs) || interval.durationMs > MAX_LOOP_INTERVAL_MS) {
+				return `Loop interval must not exceed ${MAX_LOOP_INTERVAL_MS} milliseconds.`;
+			}
+			intervalMs = interval.durationMs;
+			rest = rest.slice(token!.length).trim();
+		}
+	}
+	const conditionResult = takeLoopCondition(rest);
 	if (typeof conditionResult === "string") return conditionResult;
 
 	return {
 		limit: limitResult.limit,
+		intervalMs,
 		condition: conditionResult.condition,
 		prompt: conditionResult.rest || undefined,
 	};

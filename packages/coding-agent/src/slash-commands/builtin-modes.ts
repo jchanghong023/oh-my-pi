@@ -431,9 +431,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		icon: "loop",
 		acpDescription: "Repeat the next prompt after each turn; Stop pauses the loop and /loop again disables it",
 		get description() {
-			return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Bound it with a count/duration, or gate it with \`--until '<cmd>'\` / \`--while '<cmd>'\` — the command's exit status decides whether the next iteration runs. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
+			return `Toggle loop mode. While enabled, the next prompt you send re-submits after every yield. Use a count/duration followed by an optional interval (10 30s: 10 total turns, waiting 30s after each turn); without an interval, a count limits repeats after the first turn. Gate repeats with \`--until '<cmd>'\` / \`--while '<cmd>'\`. ${formatKeyHint("escape")} suspends the ongoing loop; /loop again to disable.`;
 		},
-		inlineHint: "[count|duration] [--while|--until '<cmd>'] [prompt]",
+		inlineHint: "[count|duration] [interval] [--while|--until '<cmd>'] [prompt]",
 		allowArgs: true,
 		handleRpc: (command, runtime) => runtime.runModeCommand("loop", command.args),
 		getTuiAutocompleteDescription: runtime => {

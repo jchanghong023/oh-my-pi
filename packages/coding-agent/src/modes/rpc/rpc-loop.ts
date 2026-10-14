@@ -37,9 +37,11 @@ export class RpcLoopController {
 	#paused = false;
 	#prompt: string | undefined;
 	#limit: LoopLimitRuntime | undefined;
+	#intervalMs: number | undefined;
 	#condition: LoopConditionConfig | undefined;
 	#transcriptId: string | undefined;
 	#timer: Timer | undefined;
+	#deadlineTimer: Timer | undefined;
 	#conditionAbort: AbortController | undefined;
 	#scheduled = false;
 	#generation = 0;
@@ -71,6 +73,10 @@ export class RpcLoopController {
 		this.#paused = false;
 		this.#prompt = undefined;
 		this.#limit = createLoopLimitRuntime(parsed.limit);
+		this.#intervalMs = parsed.intervalMs;
+		if (parsed.intervalMs !== undefined && this.#limit?.kind === "iterations") {
+			consumeLoopLimitIteration(this.#limit);
+		}
 		this.#condition = parsed.condition;
 		this.#transcriptId = this.#session.sessionManager.getSessionId();
 		this.#logContext = {
@@ -91,8 +97,12 @@ export class RpcLoopController {
 		});
 		const limit = parsed.limit ? ` Limited to ${describeLoopLimit(parsed.limit)}.` : "";
 		const condition = parsed.condition ? ` Continuing ${describeLoopCondition(parsed.condition)}.` : "";
+		const interval =
+			parsed.intervalMs === undefined
+				? ""
+				: ` Waiting ${describeLoopLimit({ kind: "duration", durationMs: parsed.intervalMs })} between turns.`;
 		this.#options.output(
-			`Loop mode enabled.${limit}${condition} ${parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn."} Stop pauses the loop; /loop again disables it.`,
+			`Loop mode enabled.${limit}${condition}${interval} ${parsed.prompt ? "Repeating it after each turn." : "Your next prompt will repeat after each turn."} Stop pauses the loop; /loop again disables it.`,
 		);
 		return parsed.prompt ? { prompt: parsed.prompt } : undefined;
 	}
@@ -127,8 +137,10 @@ export class RpcLoopController {
 				generation: this.#generation,
 			});
 		this.#generation++;
-		if (this.#timer) clearTimeout(this.#timer);
+		clearTimeout(this.#timer);
 		this.#timer = undefined;
+		clearTimeout(this.#deadlineTimer);
+		this.#deadlineTimer = undefined;
 		this.#conditionAbort?.abort();
 		this.#conditionAbort = undefined;
 		const pending = this.#scheduled;
@@ -149,6 +161,7 @@ export class RpcLoopController {
 		this.#paused = false;
 		this.#prompt = undefined;
 		this.#limit = undefined;
+		this.#intervalMs = undefined;
 		this.#condition = undefined;
 		this.#transcriptId = undefined;
 		this.cancel();
@@ -190,9 +203,26 @@ export class RpcLoopController {
 		) {
 			return;
 		}
+		if (this.#intervalMs !== undefined && isLoopLimitExhausted(this.#limit)) {
+			this.#disable("Loop limit reached. Loop mode disabled.");
+			return;
+		}
 		this.#scheduled = true;
 		const generation = ++this.#generation;
-		// Match the TUI's interrupt window between repeated submissions.
+		const waitMs = this.#intervalMs ?? 800;
+		// Keep the legacy interrupt window unless an explicit interval was supplied.
+		clearTimeout(this.#deadlineTimer);
+		this.#deadlineTimer = undefined;
+		if (this.#intervalMs !== undefined && this.#limit?.kind === "duration") {
+			// Expire during the interval, idle wait, or condition instead of awaiting
+			// a potentially much longer interval or maintenance operation.
+			this.#deadlineTimer = setTimeout(() => {
+				this.#deadlineTimer = undefined;
+				if (this.#current(generation, prompt) && isLoopDurationExpired(this.#limit)) {
+					this.#disable("Loop time limit reached. Loop mode disabled.");
+				}
+			}, Math.min(2_147_483_647, Math.max(0, this.#limit.deadlineMs - Date.now())));
+		}
 		logger.info("RPC loop iteration scheduled", {
 			...this.#logContext,
 			component: "rpc-loop",
@@ -200,7 +230,7 @@ export class RpcLoopController {
 			stage: "interrupt_wait",
 			result: "scheduled",
 			generation,
-			wait_ms: 800,
+			wait_ms: waitMs,
 		});
 		this.#timer = logger.withLogContext(
 			{
@@ -215,7 +245,7 @@ export class RpcLoopController {
 					void this.#iterate(generation, prompt).catch(error => {
 						if (this.#current(generation, prompt)) this.#disable(`Loop failed: ${String(error)}`);
 					});
-				}, 800),
+				}, waitMs),
 		);
 	}
 
@@ -348,6 +378,8 @@ export class RpcLoopController {
 				this.#disable("Loop time limit reached. Loop mode disabled.");
 				return;
 			}
+			clearTimeout(this.#deadlineTimer);
+			this.#deadlineTimer = undefined;
 			// The submission claims the session synchronously. A following agent_end can
 			// then schedule its own continuation, including skills submitted inline.
 			this.#scheduled = false;
@@ -380,6 +412,8 @@ export class RpcLoopController {
 			if (result !== "failed")
 				logger.info("RPC loop iteration ended", { ...fields(), event: "loop_iteration_terminal", result });
 			if (generation === this.#generation) {
+				clearTimeout(this.#deadlineTimer);
+				this.#deadlineTimer = undefined;
 				this.#scheduled = false;
 				this.#options.onContinuationDropped();
 			}

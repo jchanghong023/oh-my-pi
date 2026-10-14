@@ -86,6 +86,39 @@ describe("loop limit parsing", () => {
 	});
 });
 
+describe("positional loop intervals", () => {
+	test("separates a positional interval from the prompt while retaining bare-limit behavior", () => {
+		expect(parseLoopArgs("10 30s xxx")).toEqual({
+			limit: { kind: "iterations", iterations: 10 },
+			intervalMs: 30_000,
+			prompt: "xxx",
+		});
+		expect(parseLoopArgs("10 xxx")).toEqual({
+			limit: { kind: "iterations", iterations: 10 },
+			prompt: "xxx",
+		});
+	});
+
+	test("combines a duration budget, compound interval and condition without consuming prompt text", () => {
+		expect(parseLoopArgs("10m 1m30s --until 'bun test' fix 30s timeout")).toEqual({
+			limit: { kind: "duration", durationMs: 600_000 },
+			intervalMs: 90_000,
+			condition: { command: "bun test", until: true },
+			prompt: "fix 30s timeout",
+		});
+		expect(parseLoopArgs("10 fix 30s timeout")).toEqual({
+			limit: { kind: "iterations", iterations: 10 },
+			prompt: "fix 30s timeout",
+		});
+	});
+
+	test("rejects unusable intervals and conflicting interval declarations", () => {
+		expect(typeof parseLoopArgs("10 0s xxx")).toBe("string");
+		expect(typeof parseLoopArgs("10 999999999999h xxx")).toBe("string");
+		expect(typeof parseLoopArgs("10 30s --interval 1m xxx")).toBe("string");
+	});
+});
+
 describe("loop condition parsing", () => {
 	test("composes a limit, a condition, and an inline prompt", () => {
 		expect(parseLoopArgs("20 --until 'bun test' fix the failing tests")).toEqual({
