@@ -623,8 +623,8 @@ export interface CreateAgentSessionOptions {
 	 * (session-restore retry, default-role resolution) use the cache-only
 	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
 	 * catalog degrades to the default role instead of reaching the network.
-	 * Explicit `modelPattern` resolution keeps its normal cache-aware strategy;
-	 * patterns marked as a CLI scope remain cache-only.
+	 * Explicit top-level `modelPattern` resolution keeps its normal cache-aware strategy;
+	 * CLI scopes and automatic subagent patterns remain cache-only.
 	 */
 	offline?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
@@ -2885,7 +2885,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// starter in CreateAgentSessionResult and calls it after mode.init paints.
 		let runtimeDiscoveryPromise: Promise<void> | undefined;
 		const deferredDiscoveryStrategy =
-			options.offline && (options.modelPatternSource === "scope" || deferredModelPatterns.length === 0)
+			options.offline &&
+			(agentKind === SUB_AGENT_RULE_NAME ||
+				options.modelPatternSource === "scope" ||
+				deferredModelPatterns.length === 0)
 				? "offline"
 				: "online-if-uncached";
 		const startRuntimeDiscovery = (
@@ -3013,8 +3016,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				}),
 			);
 			if (!runtimeResolved && modelRegistry.getDiscoverableProviders().length > 0) {
-				// Explicit `--model` patterns keep the cache-aware online strategy even
-				// in an offline process; deferred CLI scopes remain cache-only.
+				// Explicit top-level `--model` keeps the online discovery exception;
+				// automatic task spawns and cold revives, like CLI scopes, use cache only.
 				await logger.time("resolveModelDiscoveryFallbackNonRuntime", () =>
 					modelRegistry.refresh(deferredDiscoveryStrategy),
 				);

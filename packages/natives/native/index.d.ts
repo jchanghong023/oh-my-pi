@@ -4097,7 +4097,7 @@ export interface WikiSearchWindow {
   cursorBase: WikiCursorBase
 }
 
-export declare function wikiSectionShape(markdown: string): Shape
+export declare function wikiSectionShape(markdown: string): 'content' | 'heading-only' | 'stub'
 
 export declare function wikiSelectPage(window: WikiSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: WikiSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): WikiSearchResult
 

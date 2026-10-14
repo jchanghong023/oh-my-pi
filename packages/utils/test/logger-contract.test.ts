@@ -572,6 +572,133 @@ describe("diagnostic consumer contracts", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	test("debug readers and reports resolve the actual fallback after their own flush", async () => {
+		const reportUrl = pathToFileURL(
+			path.resolve(import.meta.dir, "../../coding-agent/src/debug/report-bundle.ts"),
+		).href;
+		for (const firstReader of ["text", "view", "report"]) {
+			const result = await runDiagnosticConsumer(`
+				import { getLogsDir, getReportsDir, getConfigRootDir, localDay, setProfile } from
+					${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../src/dirs.ts")).href)};
+				import { getLogText, createDebugLogSource, createReportBundle } from ${JSON.stringify(reportUrl)};
+				setProfile("debug-readers");
+				const configured = { file: getLogPath(), logs: getLogsDir(), reports: getReportsDir(), root: getConfigRootDir() };
+				// A directory at the exact file target denies opening even under root or on Windows.
+				fs.mkdirSync(configured.file, { recursive: true });
+				logger.info("debug_reader_fallback_marker");
+				const readBundle = async options => {
+					const bundle = await createReportBundle({ sessionFile: undefined, ...options });
+					const archive = new Bun.Archive(await Bun.file(bundle.path).bytes());
+					const logs = (await (await archive.files()).get("logs.txt")?.text()) ?? "";
+					return { path: bundle.path, files: bundle.files, logs };
+				};
+				const first = ${JSON.stringify(firstReader)} === "text" ? await getLogText()
+					: ${JSON.stringify(firstReader)} === "view" ? await (await createDebugLogSource()).getInitialText()
+					: (await readBundle()).logs;
+				const actual = { file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir() };
+				const yesterday = new Date();
+				yesterday.setDate(yesterday.getDate() - 1);
+				fs.writeFileSync(path.join(actual.logs, "omp." + localDay(yesterday) + ".99991.log"), "older_fallback_marker\\n");
+				fs.writeFileSync(path.join(actual.logs, "omp." + localDay(new Date()) + ".99992.log"), "other_pid_fallback_marker\\n");
+				const source = await createDebugLogSource();
+				const initial = await source.getInitialText();
+				const hadOlder = source.hasOlderLogs();
+				const older = await source.loadOlderLogs(10);
+				const bundle = await readBundle();
+				const overrideLogs = path.join(root, "override-logs");
+				const overrideReports = path.join(root, "override-reports");
+				fs.mkdirSync(overrideLogs);
+				fs.writeFileSync(path.join(overrideLogs, "omp." + localDay(new Date()) + ".99993.log"), "explicit_logs_marker\\n");
+				const override = await readBundle({ logsDir: overrideLogs, reportsDir: overrideReports });
+				const after = { file: getLogPath(), logs: getLogsDir(), reports: getReportsDir(), root: getConfigRootDir() };
+				logger.setTransports({ file: false });
+				fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({
+					configured, actual, after, first, initial, hadOlder, older, bundle, override
+				}));
+			`);
+			const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
+			const fallback = consumerFallbackDir(result.root);
+			expect(payload.actual.logs).toBe(fallback);
+			expect(path.dirname(payload.actual.file)).toBe(fallback);
+			expect(payload.actual.file).not.toBe(payload.configured.file);
+			expect(payload.after).toEqual(payload.configured);
+			expect(payload.configured.root).toBe(path.join(result.root, "primary", "profiles", "debug-readers"));
+			expect(payload.first).toContain("debug_reader_fallback_marker");
+			expect(payload.initial).toContain("debug_reader_fallback_marker");
+			expect(payload.initial).toContain("log_directory_fallback");
+			expect(payload.hadOlder).toBe(true);
+			expect(payload.older).toContain("older_fallback_marker");
+			expect(payload.bundle.files).toContain("logs.txt");
+			expect(payload.bundle.logs).toContain("debug_reader_fallback_marker");
+			expect(payload.bundle.logs).toContain("other_pid_fallback_marker");
+			expect(payload.bundle.logs).not.toContain("older_fallback_marker");
+			expect(path.dirname(payload.bundle.path)).toBe(payload.configured.reports);
+			expect(path.dirname(payload.override.path)).toBe(path.join(result.root, "override-reports"));
+			expect(payload.override.logs).toContain("explicit_logs_marker");
+			expect(payload.override.logs).not.toContain("debug_reader_fallback_marker");
+			expect(await fs.readFile(payload.actual.file, "utf8")).toContain("debug_reader_fallback_marker");
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe("");
+		}
+	}, 30_000);
+
+	test("debug reads preserve lazy defaults and console-only mode and follow reconfiguration and rotation", async () => {
+		const reportUrl = pathToFileURL(
+			path.resolve(import.meta.dir, "../../coding-agent/src/debug/report-bundle.ts"),
+		).href;
+		const result = await runDiagnosticConsumer(`
+			import { getLogsDir } from ${JSON.stringify(pathToFileURL(path.resolve(import.meta.dir, "../src/dirs.ts")).href)};
+			import { getLogText, createDebugLogSource, createReportBundle } from ${JSON.stringify(reportUrl)};
+			const defaultFile = getLogPath();
+			const defaultDir = getLogsDir();
+			const lazy = { file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir(), exists: fs.existsSync(defaultFile) };
+			logger.setTransports({ console: true, file: false });
+			logger.info("console_only_reader_marker");
+			const consoleText = await getLogText();
+			const consoleSource = await createDebugLogSource();
+			const consoleInitial = await consoleSource.getInitialText();
+			const consoleBundle = await createReportBundle({ sessionFile: undefined });
+			const consoleState = {
+				file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir(), exists: fs.existsSync(defaultFile),
+				text: consoleText, initial: consoleInitial, older: consoleSource.hasOlderLogs(), files: consoleBundle.files
+			};
+			logger.setTransports({ file: true });
+			logger.info("default_reader_marker");
+			const defaultText = await getLogText();
+			const normal = { file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir(), text: defaultText };
+			const customDir = path.join(root, "custom");
+			logger.setTransports({ file: customDir });
+			const source = await createDebugLogSource();
+			logger.info("fills_custom_file", { padding: "x".repeat(10 * 1024 * 1024 + 1) });
+			logger.info("rotated_reader_marker");
+			const rotatedText = await source.getInitialText();
+			const rotated = { file: logger.getCurrentLogPath(), logs: logger.getCurrentLogsDir(), text: rotatedText };
+			logger.setTransports({ file: false });
+			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ defaultFile, defaultDir, lazy, consoleState, normal, rotated }));
+		`);
+		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
+		expect(payload.lazy).toEqual({ file: payload.defaultFile, logs: payload.defaultDir, exists: false });
+		expect(payload.consoleState).toMatchObject({
+			file: payload.defaultFile,
+			logs: payload.defaultDir,
+			exists: false,
+			text: "",
+			initial: "",
+			older: false,
+		});
+		expect(payload.consoleState.files).not.toContain("logs.txt");
+		expect(JSON.parse(result.stdout.trim())).toMatchObject({ message: "console_only_reader_marker" });
+		expect(payload.normal.file).toBe(payload.defaultFile);
+		expect(payload.normal.logs).toBe(payload.defaultDir);
+		expect(payload.normal.text).toContain("default_reader_marker");
+		expect(payload.rotated.file).toBe(path.join(result.root, "custom", path.basename(payload.defaultFile) + ".1"));
+		expect(payload.rotated.logs).toBe(path.join(result.root, "custom"));
+		expect(payload.rotated.text).toContain("rotated_reader_marker");
+		expect(payload.rotated.text).not.toContain("default_reader_marker");
+		expect(payload.rotated.text).not.toContain("fills_custom_file");
+		expect(result.stderr).toBe("");
+	}, 30_000);
+
 	test("uses a distinct fallback when the selected primary is already the platform log directory", async () => {
 		const result = await runDiagnosticConsumer(`
 			const standard = process.platform === "win32"

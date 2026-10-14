@@ -1,3 +1,4 @@
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import { lookupBuiltinSlashCommand } from "./builtin-registry";
 import { parseSlashCommand } from "./helpers/parse";
 import type { AcpBuiltinSlashCommandResult, RpcSlashCommandRuntime, SlashCommandRuntime } from "./types";
@@ -25,6 +26,7 @@ export async function executeAcpBuiltinSlashCommand(
 	// instead (for example, /model). Preserve the normal allowArgs gate unless
 	// the spec explicitly overrides it for ACP.
 	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) return false;
+	if (command.remoteTask && isJchToolsAgentModel(runtime.session.model)) return { prompt: text };
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;
@@ -45,6 +47,7 @@ export async function executeRpcBuiltinSlashCommand(
 	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
 		throw new Error(`/${command.name} does not accept arguments.`);
 	}
+	if (command.remoteTask && isJchToolsAgentModel(runtime.session.model)) return { prompt: text };
 	const result = command.handleRpc ? await command.handleRpc(parsed, runtime) : await command.handle!(parsed, runtime);
 	return result ?? { consumed: true };
 }

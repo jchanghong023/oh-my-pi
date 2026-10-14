@@ -330,6 +330,7 @@ async function runTeamDiscussionImpl(
 		label: proposalLabel(index),
 		participant,
 		reviews: [],
+		revisionHistory: [],
 		roundsUsed: 0,
 		unresolvedBlocking: [],
 		proposerFailed: false,
@@ -520,6 +521,10 @@ async function runTeamDiscussionImpl(
 			if (signal.aborted) return;
 			const hasFindings = record.reviews[0]!.findings.length > 0;
 			if (!hasFindings) return; // nothing to revise; no padding rounds
+			// Failed rechecks leave this audited baseline and all later deltas
+			// pending, so a subsequent reviewer cannot overlook an earlier change.
+			let previousProposal = record.latestProposal!;
+			let pendingRevisions: TeamProposalRecord["revisionHistory"] = [];
 			for (let round = 1; round <= TEAM_MAX_REVISION_ROUNDS; round++) {
 				if (signal.aborted) return;
 				record.roundsUsed = round;
@@ -560,8 +565,13 @@ async function runTeamDiscussionImpl(
 					emitProgress("revision", `阶段四：修订与复核（${record.label} 修订失败）`);
 					break; // conservative: unresolved state stands as-is
 				}
-				const previousProposal = record.latestProposal!;
-				record.revision = revision;
+				const revisionRecord: TeamProposalRecord["revisionHistory"][number] = {
+					round,
+					revision,
+					recheckFailed: false,
+				};
+				record.revisionHistory.push(revisionRecord);
+				pendingRevisions.push(revisionRecord);
 				if (revision.revisedProposal.trim())
 					record.latestProposal = { ...record.latestProposal!, proposal: revision.revisedProposal };
 				trackParticipant(`revision-${record.label}`, "reviser", "completed");
@@ -592,7 +602,7 @@ async function runTeamDiscussionImpl(
 								round,
 								recheck: true,
 								unresolvedBlocking: record.unresolvedBlocking,
-								recheckContext: { previousProposal, revision, reviews: record.reviews },
+								recheckContext: { previousProposal, revisions: pendingRevisions, reviews: record.reviews },
 							}),
 							schema: TEAM_REVIEW_SCHEMA,
 						},
@@ -613,18 +623,19 @@ async function runTeamDiscussionImpl(
 						// stands and is reported as incomplete participation. The revised
 						// version itself also stays unverified (pendingRecheck): it must
 						// not ride on the pre-revision review's adoptable status.
+						revisionRecord.recheckFailed = true;
 						record.recheckFailed = true;
 						record.pendingRecheck = true;
 						trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
 						emitProgress("revision", `阶段四：修订与复核（${record.label} 复核失败）`);
 					} else {
+						revisionRecord.recheck = recheck;
+						previousProposal = record.latestProposal!;
+						pendingRevisions = [];
 						record.reviews.push(recheck);
 						record.pendingRecheck = false;
-						// The latest recheck verified the revised version (§2.5 恢复路径),
-						// so the earlier failure is no longer a fact about the run's final
-						// state: stale "复核失败" notes must not survive into the final
-						// report or the synthesis inputs. Gate semantics ride on
-						// pendingRecheck/excludedFromOptions and are untouched.
+						// Recovery clears the current eligibility failure, not the paired
+						// historical failure retained in revisionHistory.
 						record.recheckFailed = false;
 						trackParticipant(`recheck-${record.label}`, "reviewer", "completed");
 						emitProgress("revision", `阶段四：修订与复核（${record.label} 复核完成）`);

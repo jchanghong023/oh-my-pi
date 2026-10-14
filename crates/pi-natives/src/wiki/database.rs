@@ -460,17 +460,20 @@ impl DatabaseEngine {
 			return Ok(());
 		}
 		self.close();
-		let connection = Connection::open_with_flags(
-			&self.path,
-			OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-		)?;
+		let (connection, identity) = open_identified_connection(Path::new(&self.path), || {
+			Ok(Connection::open_with_flags(
+				&self.path,
+				OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+			)?)
+		})?;
 		connection.busy_timeout(Duration::from_secs(5))?;
 		// Share up to 500 MiB of file pages without enlarging the private page
 		// cache.
 		connection.execute_batch(
 			"PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA mmap_size=524288000;",
 		)?;
-		self.identity = file_identity(Path::new(&self.path))?;
+		check_file_identity(Path::new(&self.path), &identity)?;
+		self.identity = identity;
 		self.generation += 1;
 		self.connection = Some(connection);
 		Ok(())
@@ -946,11 +949,30 @@ fn hash_row(snapshot: &mut Sha256, row: &Row<'_>, output: &mut String) -> CoreRe
 fn digest(bytes: &[u8]) -> String {
 	format!("{:x}", Sha256::digest(bytes))
 }
+/// Never label a connection with an identity observed only after opening it.
+/// A replacement racing the open fails this operation and drops its connection.
+pub(super) fn open_identified_connection(
+	path: &Path,
+	open: impl FnOnce() -> CoreResult<Connection>,
+) -> CoreResult<(Connection, String)> {
+	let identity = file_identity(path)?;
+	let connection = open()?;
+	check_file_identity(path, &identity)?;
+	Ok((connection, identity))
+}
+
+pub(super) fn check_file_identity(path: &Path, expected: &str) -> CoreResult<()> {
+	if file_identity(path)? != expected {
+		return Err(WikiError::message("Documentation database was replaced during the operation"));
+	}
+	Ok(())
+}
+
 pub(super) fn file_identity(path: &Path) -> CoreResult<String> {
-	let metadata = fs::metadata(path)?;
 	#[cfg(unix)]
 	{
 		use std::os::unix::fs::MetadataExt;
+		let metadata = fs::metadata(path)?;
 		let birth = metadata
 			.created()
 			.ok()
@@ -960,7 +982,7 @@ pub(super) fn file_identity(path: &Path) -> CoreResult<String> {
 	}
 	#[cfg(windows)]
 	{
-		use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+		use std::os::windows::io::AsRawHandle;
 
 		use windows_sys::Win32::Storage::FileSystem::{
 			BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
@@ -979,12 +1001,13 @@ pub(super) fn file_identity(path: &Path) -> CoreResult<String> {
 			"{}:{}:{}",
 			info.dwVolumeSerialNumber,
 			(u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
-			metadata.creation_time()
+			(u64::from(info.ftCreationTime.dwHighDateTime) << 32)
+				| u64::from(info.ftCreationTime.dwLowDateTime)
 		))
 	}
 	#[cfg(not(any(unix, windows)))]
 	{
-		Ok(format!("{:?}", metadata.created()?))
+		Ok(format!("{:?}", fs::metadata(path)?.created()?))
 	}
 }
 
@@ -1519,5 +1542,58 @@ mod tests {
 			)
 			.unwrap_err();
 		assert_eq!(stale.message, "Stale documentation search cursor: indexed snapshot has changed");
+	}
+}
+
+#[cfg(test)]
+mod connection_identity_tests {
+	use super::*;
+
+	#[test]
+	fn replacement_during_open_is_rejected_and_the_next_open_binds_the_actual_file() {
+		let directory = std::env::temp_dir().join(format!(
+			"omp-wiki-open-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		fs::create_dir_all(&directory).unwrap();
+		let path = directory.join("docs.db");
+		let replacement = directory.join("replacement.db");
+		for (file, value) in [(&path, "old"), (&replacement, "replacement")] {
+			let connection = Connection::open(file).unwrap();
+			connection
+				.execute_batch("CREATE TABLE marker(value TEXT)")
+				.unwrap();
+			connection
+				.execute("INSERT INTO marker VALUES(?)", [value])
+				.unwrap();
+		}
+		let original = file_identity(&path).unwrap();
+		let result = open_identified_connection(&path, || {
+			// Unix exercises replacing an already-open SQLite file. Windows
+			// exercises the same pre/post identity guard before its VFS locks
+			// the file, without relying on renaming an open database.
+			#[cfg(unix)]
+			let connection = Connection::open(&path)?;
+			fs::rename(&path, directory.join("old.db"))?;
+			fs::rename(&replacement, &path)?;
+			#[cfg(not(unix))]
+			let connection = Connection::open(&path)?;
+			Ok(connection)
+		});
+		assert!(result.is_err());
+		let (connection, identity) =
+			open_identified_connection(&path, || Ok(Connection::open(&path)?)).unwrap();
+		assert_ne!(identity, original);
+		assert_eq!(identity, file_identity(&path).unwrap());
+		let value: String = connection
+			.query_row("SELECT value FROM marker", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(value, "replacement");
+		drop(connection);
+		fs::remove_dir_all(directory).unwrap();
 	}
 }

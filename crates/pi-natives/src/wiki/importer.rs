@@ -18,7 +18,7 @@ use super::{
 	database::WikiError,
 	diagnostics::{self, DiagnosticCallback, WikiDiagnosticEvent},
 	import,
-	storage::{BUILDING_INDEX_PREFIX, WikiIndexSummary},
+	storage::{BUILDING_INDEX_PREFIX, BuildIdentity, WikiIndexSummary},
 };
 use crate::{file_lock::FileLock, task::CancelToken};
 
@@ -181,7 +181,7 @@ impl Build<'_> {
 	)]
 	fn ingest(
 		&mut self,
-		id: i64,
+		build: &BuildIdentity,
 		root: &Path,
 		files: Vec<String>,
 		name: &str,
@@ -220,7 +220,7 @@ impl Build<'_> {
 			let started = Instant::now();
 			self
 				.owner
-				.with_storage(self.cancel, |storage| storage.commit_document(id, &document))?;
+				.with_storage(self.cancel, |storage| storage.commit_document(build, &document))?;
 			fts_ms += started.elapsed().as_secs_f64() * 1000.0;
 			self.documents += 1;
 			self.sections += document.sections.len() as i64;
@@ -240,14 +240,14 @@ impl Build<'_> {
 		self.stage = "publish";
 		let index = self
 			.owner
-			.with_storage(self.cancel, |storage| storage.promote(id, name))?;
+			.with_storage(self.cancel, |storage| storage.promote(build, name))?;
 		self.published = true;
 		Ok(WikiBuildResult { processed: self.documents, failed: 0, index })
 	}
 
 	fn rollback(
 		&mut self,
-		id: i64,
+		build: &BuildIdentity,
 		error: ImportError,
 	) -> std::result::Result<WikiBuildResult, ImportError> {
 		let failed_stage = self.stage;
@@ -268,7 +268,7 @@ impl Build<'_> {
 		let mut event = self.event("docs.init.rollback.started", "rollback", "started");
 		event.failed_stage = Some(failed_stage.into());
 		let rollback_logging = self.emit(event);
-		match self.owner.rollback(id) {
+		match self.owner.rollback(build) {
 			Ok(()) => {
 				self.cleanup = "completed";
 				let mut event = self.event("docs.init.rollback.completed", "rollback", "completed");
@@ -317,9 +317,9 @@ impl Build<'_> {
 		let temp = self
 			.owner
 			.with_storage(self.cancel, |storage| storage.create(&hidden, &root))?;
-		match self.ingest(temp.id, Path::new(root.as_ref()), files, name) {
+		match self.ingest(&temp, Path::new(root.as_ref()), files, name) {
 			Ok(result) => Ok(result),
-			Err(error) => self.rollback(temp.id, error),
+			Err(error) => self.rollback(&temp, error),
 		}
 	}
 

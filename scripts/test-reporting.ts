@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { GateRun } from "./test-gate-runtime";
 
 const reportRoot = path.join(import.meta.dir, "..", "runs", "test-timing");
 
@@ -135,27 +136,55 @@ export async function recordTestProducer(info: TestProducerRecord): Promise<void
 	}
 }
 
+/** Gate reports settle after owned work, and are republished if finalization itself cancels the gate. */
+export function finalizeTestRun(gate: GateRun, run: TestReportRun, unreconciledScope?: string): void {
+	if (!run.owner) return;
+	let prepared: Promise<ReconciledTestRun> | undefined;
+	gate.onFinalize(async exitCode => {
+		try {
+			prepared ??= reconcileTestRun(run, gate);
+			const { producers, reconciliation } = await prepared;
+			await writeTestRun(run, exitCode, producers, reconciliation, unreconciledScope);
+		} catch (error) {
+			// A failed outcome write must not leave an earlier complete/0 report.
+			try {
+				await fs.unlink(path.join(run.dir, "run.json"));
+			} catch (removeError) {
+				if ((removeError as NodeJS.ErrnoException).code !== "ENOENT")
+					throw new AggregateError([error, removeError], "Could not finalize or invalidate test timing metadata");
+			}
+			throw error;
+		}
+	});
+}
+
 export async function endTestRun(run: TestReportRun, exitCode: number, unreconciledScope?: string): Promise<void> {
 	if (!run.owner) return;
+	const { producers, reconciliation } = await reconcileTestRun(run);
+	await writeTestRun(run, exitCode, producers, reconciliation, unreconciledScope);
+}
+
+type ReportProducer = TestProducerRecord & { report: string; reportPath: string | null };
+interface ReportReconciliation {
+	status: string;
+	cases?: number;
+	executed?: number;
+	failures?: number;
+	python?: string;
+	reason?: string;
+}
+interface ReconciledTestRun {
+	producers: ReportProducer[];
+	reconciliation: ReportReconciliation;
+}
+
+async function reconcileTestRun(run: TestReportRun, gate?: GateRun): Promise<ReconciledTestRun> {
 	const files = (await fs.readdir(run.dir)).filter(file => file.endsWith(".producer.json"));
 	const producers = await Promise.all(
-		files.map(
-			async file =>
-				JSON.parse(await Bun.file(path.join(run.dir, file)).text()) as TestProducerRecord & {
-					report: string;
-					reportPath: string | null;
-				},
-		),
+		files.map(async file => JSON.parse(await Bun.file(path.join(run.dir, file)).text()) as ReportProducer),
 	);
 	const available = producers.filter(producer => producer.report === "available" && producer.reportPath);
-	let reconciliation: {
-		status: string;
-		cases?: number;
-		executed?: number;
-		failures?: number;
-		python?: string;
-		reason?: string;
-	} = {
+	let reconciliation: ReportReconciliation = {
 		status: "unavailable",
 		reason: "No XML files to reconcile",
 	};
@@ -191,21 +220,43 @@ print(json.dumps({"status": "validated", "cases": cases, "executed": executed, "
 `;
 		try {
 			const python = process.platform === "win32" ? "python" : "python3";
-			const result = Bun.spawnSync([python, "-c", verifier, run.dir], {
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			reconciliation =
-				result.exitCode === 0
-					? JSON.parse(result.stdout.toString())
-					: {
-							status: "invalid",
-							reason: result.stderr.toString().trim().slice(-600) || `XML verifier exit ${result.exitCode}`,
-						};
+			if (gate) {
+				if (gate.signal.aborted) throw gate.signal.reason;
+				// Invalid XML remains a partial report, as for standalone producers.
+				// The verifier process itself is owned and cancellable by the gate.
+				const guardedVerifier = `import json\ntry:\n exec(${JSON.stringify(verifier)})\nexcept Exception as error:\n print(json.dumps({"status": "invalid", "reason": str(error)[-600:]}))`;
+				const result = await gate.capture({
+					label: "test/timing XML reconciliation",
+					argv: [python, "-c", guardedVerifier, run.dir],
+				});
+				reconciliation = JSON.parse(result.stdout);
+			} else {
+				const result = Bun.spawnSync([python, "-c", verifier, run.dir], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				reconciliation =
+					result.exitCode === 0
+						? JSON.parse(result.stdout.toString())
+						: {
+								status: "invalid",
+								reason: result.stderr.toString().trim().slice(-600) || `XML verifier exit ${result.exitCode}`,
+							};
+			}
 		} catch (error) {
 			reconciliation = { status: "unavailable", reason: `XML verifier unavailable: ${String(error)}` };
 		}
 	}
+	return { producers, reconciliation };
+}
+
+async function writeTestRun(
+	run: TestReportRun,
+	exitCode: number,
+	producers: ReportProducer[],
+	reconciliation: ReportReconciliation,
+	unreconciledScope?: string,
+): Promise<void> {
 	const completion =
 		!unreconciledScope &&
 		exitCode === 0 &&

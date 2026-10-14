@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
 use super::{
-	database::WikiError,
+	database::{WikiError, check_file_identity, open_identified_connection},
 	import::WikiMarkdownDocument,
 	markdown::{self, ContextSectionRef, SectionContextScanner},
 	query::is_ecmascript_whitespace,
@@ -138,6 +138,16 @@ pub(super) type StorageDiagnosticHook =
 pub(super) struct Storage {
 	connection:  Connection,
 	diagnostics: Option<StorageDiagnosticHook>,
+	path:        String,
+	identity:    String,
+}
+
+/// A row id alone is not an import identity: replacement databases and deleted
+/// rows can reuse it. Keep the database and unguessable hidden name together.
+pub(super) struct BuildIdentity {
+	database: String,
+	id:       i64,
+	hidden:   String,
 }
 
 /// Bun binds non-8-bit strings as UTF-16, whose initial BOM SQLite consumes:
@@ -193,15 +203,28 @@ impl Storage {
 			),
 			None,
 		);
-		let connection = match (|| -> CoreResult<Connection> {
+		let (connection, identity) = match (|| -> CoreResult<(Connection, String)> {
 			let parent = Path::new(database_path)
 				.parent()
 				.filter(|parent| !parent.as_os_str().is_empty())
 				.unwrap_or_else(|| Path::new("."));
 			fs::create_dir_all(parent)?;
-			Ok(Connection::open(database_path)?)
+			// Establish an identity even on the first open, before SQLite can
+			// race a path replacement. Never truncate an existing database.
+			match fs::OpenOptions::new()
+				.write(true)
+				.create_new(true)
+				.open(database_path)
+			{
+				Ok(_) => {},
+				Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+				Err(error) => return Err(error.into()),
+			}
+			open_identified_connection(Path::new(database_path), || {
+				Ok(Connection::open(database_path)?)
+			})
 		})() {
-			Ok(connection) => connection,
+			Ok(opened) => opened,
 			Err(error) => {
 				emit(
 					diagnostics.as_ref(),
@@ -279,7 +302,7 @@ impl Storage {
 				 {SCHEMA_VERSION}"
 			)));
 		}
-		let storage = Self { connection, diagnostics };
+		let storage = Self { connection, diagnostics, path: database_path.into(), identity };
 		let mut stage = "schema";
 		let schema = (|| -> CoreResult<()> {
 			storage.connection.execute_batch(SCHEMA_SQL)?;
@@ -289,6 +312,7 @@ impl Storage {
 			} else if version == 0 {
 				storage.connection.execute_batch("PRAGMA user_version=10")?;
 			}
+			check_file_identity(Path::new(&storage.path), &storage.identity)?;
 			Ok(())
 		})();
 		if let Err(error) = schema {
@@ -336,6 +360,47 @@ impl Storage {
 
 	fn emit(&self, event: StorageDiagnostic, error: Option<&WikiError>) {
 		emit(self.diagnostics.as_ref(), event, error);
+	}
+
+	pub(super) fn identity(&self) -> &str {
+		&self.identity
+	}
+
+	fn check_build(&self, build: &BuildIdentity) -> CoreResult<()> {
+		if self.identity != build.database {
+			return Err(WikiError::message("Documentation database changed during document indexing"));
+		}
+		check_file_identity(Path::new(&self.path), &build.database)?;
+		let exists: bool = self.connection.query_row(
+			"SELECT EXISTS(SELECT 1 FROM doc_indexes WHERE id=? AND name=?)",
+			params![build.id, build.hidden],
+			|row| row.get(0),
+		)?;
+		if !exists {
+			return Err(WikiError::message("Document index build was removed or replaced"));
+		}
+		Ok(())
+	}
+
+	/// Cleanup is allowed after cancellation/close, but never against a
+	/// replacement database or a row no longer owned by this hidden build.
+	pub(super) fn rollback_build(&self, build: &BuildIdentity) -> CoreResult<()> {
+		if self.identity != build.database
+			|| super::database::file_identity(Path::new(&self.path))? != build.database
+		{
+			return Ok(());
+		}
+		self.transaction(|storage| {
+			let exists: bool = storage.connection.query_row(
+				"SELECT EXISTS(SELECT 1 FROM doc_indexes WHERE id=? AND name=?)",
+				params![build.id, build.hidden],
+				|row| row.get(0),
+			)?;
+			if exists {
+				storage.remove_by_id(build.id)?;
+			}
+			Ok(())
+		})
 	}
 
 	fn migrate(&self, version: i64, stage: &mut &'static str) -> CoreResult<()> {
@@ -494,21 +559,16 @@ impl Storage {
 			.optional()?)
 	}
 
-	pub(super) fn create(&self, name: &str, root: &str) -> CoreResult<WikiIndexSummary> {
-		self
-			.connection
-			.execute("INSERT INTO doc_indexes(name,root_path) VALUES(?,?)", params![
-				sqlite_text(name),
-				sqlite_text(root)
-			])?;
-		let id = self.connection.query_row(
-			"SELECT id FROM doc_indexes WHERE name=?",
-			[sqlite_text(name)],
-			|row| row.get(0),
-		)?;
-		self
-			.get_by_id(id)?
-			.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows.into())
+	pub(super) fn create(&self, name: &str, root: &str) -> CoreResult<BuildIdentity> {
+		self.transaction(|storage| {
+			check_file_identity(Path::new(&storage.path), &storage.identity)?;
+			let id = storage.connection.query_row(
+				"INSERT INTO doc_indexes(name,root_path) VALUES(?,?) RETURNING id",
+				params![sqlite_text(name), sqlite_text(root)],
+				|row| row.get(0),
+			)?;
+			Ok(BuildIdentity { database: storage.identity.clone(), id, hidden: name.into() })
+		})
 	}
 
 	pub(super) fn remove_abandoned(&self) -> CoreResult<()> {
@@ -620,12 +680,14 @@ impl Storage {
 
 	pub(super) fn commit_document(
 		&self,
-		index_id: i64,
+		build: &BuildIdentity,
 		document: &WikiMarkdownDocument,
 	) -> CoreResult<()> {
 		let started = Instant::now();
 		let mut stage = "document_insert";
 		let result = self.transaction(|storage| {
+			storage.check_build(build)?;
+			let index_id = build.id;
 			let document_id: i64 = storage.connection.query_row(
 				"INSERT INTO \
 				 documents(index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) \
@@ -710,8 +772,9 @@ impl Storage {
 		result
 	}
 
-	pub(super) fn promote(&self, id: i64, name: &str) -> CoreResult<WikiIndexSummary> {
+	pub(super) fn promote(&self, build: &BuildIdentity, name: &str) -> CoreResult<WikiIndexSummary> {
 		let started = Instant::now();
+		let id = build.id;
 		let index_hash = format!("{:x}", Sha256::digest(name.as_bytes()));
 		let mut event = StorageDiagnostic::new(
 			"docs.storage.publish.started",
@@ -722,12 +785,14 @@ impl Storage {
 		event.index_id = Some(id);
 		event.index_hash = Some(index_hash.clone());
 		self.emit(event, None);
-		let result = (|| -> CoreResult<WikiIndexSummary> {
-			let changes = self
-				.connection
-				.execute("UPDATE doc_indexes SET name=? WHERE id=?", params![sqlite_text(name), id])?;
+		let result = self.transaction(|storage| {
+			storage.check_build(build)?;
+			let changes = storage.connection.execute(
+				"UPDATE doc_indexes SET name=? WHERE id=? AND name=?",
+				params![sqlite_text(name), id, build.hidden],
+			)?;
 			let published = if changes > 0 {
-				self.get_by_id(id)?
+				storage.get_by_id(id)?
 			} else {
 				None
 			};
@@ -736,7 +801,7 @@ impl Storage {
 					"Document index build was removed before it could be published: {name}"
 				))
 			})
-		})();
+		});
 		let mut event = StorageDiagnostic::new(
 			if result.is_ok() {
 				"docs.storage.publish.completed"
@@ -879,6 +944,232 @@ impl Drop for TransactionGuard<'_> {
 			} else {
 				"ROLLBACK"
 			});
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	struct Fixture {
+		directory: std::path::PathBuf,
+		path:      String,
+	}
+	impl Fixture {
+		fn new() -> Self {
+			let directory = std::env::temp_dir().join(format!(
+				"omp-wiki-build-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			));
+			fs::create_dir_all(&directory).unwrap();
+			let path = directory.join("docs.db").to_string_lossy().into_owned();
+			Self { directory, path }
+		}
+
+		fn open(&self) -> Storage {
+			Storage::open_impl(&self.path, None).unwrap()
+		}
+	}
+	impl Drop for Fixture {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.directory);
+		}
+	}
+
+	pub(super) fn document() -> WikiMarkdownDocument {
+		let source = b"# Lifetime\nneedle evidence\n";
+		let parsed = super::super::import::parse_markdown(source).unwrap();
+		WikiMarkdownDocument {
+			relative_path: "lifetime.md".into(),
+			title:         parsed.title.unwrap(),
+			source_kind:   "markdown".into(),
+			sha256:        "lifetime-hash".into(),
+			size_bytes:    source.len() as i64,
+			mtime_ms:      0.0,
+			sections:      parsed.sections,
+		}
+	}
+
+	#[test]
+	fn build_guard_preserves_colliding_ids_in_another_database() {
+		let original = Fixture::new();
+		let replacement = Fixture::new();
+		let old = original.open();
+		let new = replacement.open();
+		let build = old.create("__building__original", "/source").unwrap();
+		let other = new
+			.create("__building__replacement", "/replacement")
+			.unwrap();
+		assert_eq!(build.id, 1);
+		assert_eq!(build.id, other.id);
+		new.commit_document(&other, &document()).unwrap();
+		assert!(new.commit_document(&build, &document()).is_err());
+		assert!(new.promote(&build, "hijacked").is_err());
+		new.rollback_build(&build).unwrap();
+		assert!(new.list().unwrap().is_empty());
+		let published = new.promote(&other, "replacement").unwrap();
+		assert_eq!(published.id, build.id);
+		assert_eq!(published.document_count, 1);
+		assert!(new.commit_document(&build, &document()).is_err());
+		assert!(new.promote(&build, "hijacked").is_err());
+		new.rollback_build(&build).unwrap();
+		assert_eq!(new.list().unwrap()[0].name, "replacement");
+		assert_eq!(new.list().unwrap()[0].document_count, 1);
+	}
+
+	#[test]
+	fn build_guard_rejects_reused_rowid_and_does_not_remove_a_published_build() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let removed = storage.create("__building__removed", "/source").unwrap();
+		storage.remove_by_id(removed.id).unwrap();
+		let current = storage.create("__building__current", "/source").unwrap();
+		assert_eq!(removed.id, current.id);
+		assert!(storage.commit_document(&removed, &document()).is_err());
+		assert!(storage.promote(&removed, "hijacked").is_err());
+		storage.rollback_build(&removed).unwrap();
+		storage.commit_document(&current, &document()).unwrap();
+		let published = storage.promote(&current, "current").unwrap();
+		assert_eq!(published.document_count, 1);
+		storage.rollback_build(&current).unwrap();
+		assert_eq!(storage.list().unwrap()[0].name, "current");
+	}
+
+	#[test]
+	fn rollback_removes_only_its_hidden_documents_and_fts_rows() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let published = storage.create("__building__published", "/source").unwrap();
+		storage.commit_document(&published, &document()).unwrap();
+		let retained = storage.promote(&published, "retained").unwrap();
+		let cancelled = storage.create("__building__cancelled", "/source").unwrap();
+		storage.commit_document(&cancelled, &document()).unwrap();
+		storage.rollback_build(&cancelled).unwrap();
+		assert!(storage.get_by_id(cancelled.id).unwrap().is_none());
+		assert_eq!(storage.list().unwrap().len(), 1);
+		assert_eq!(storage.list().unwrap()[0].document_count, 1);
+		let remaining_fts: i64 = storage
+			.connection
+			.query_row("SELECT count(*) FROM sections_fts", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(remaining_fts, retained.section_count);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn replaced_path_rejects_old_build_before_owner_reopen_and_cleanup_cannot_delete_new_index() {
+		let original = Fixture::new();
+		let replacement = Fixture::new();
+		let old = original.open();
+		let build = old.create("__building__original", "/source").unwrap();
+		old.connection
+			.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+			.unwrap();
+		{
+			let new = replacement.open();
+			let other = new
+				.create("__building__replacement", "/replacement")
+				.unwrap();
+			assert_eq!(build.id, other.id);
+			new.commit_document(&other, &document()).unwrap();
+			new.promote(&other, "replacement").unwrap();
+			new.connection
+				.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+				.unwrap();
+		}
+		fs::rename(&original.path, original.directory.join("old.db")).unwrap();
+		for suffix in ["-wal", "-shm"] {
+			let path = format!("{}{suffix}", original.path);
+			if Path::new(&path).exists() {
+				fs::rename(path, original.directory.join(format!("old.db{suffix}"))).unwrap();
+			}
+		}
+		fs::rename(&replacement.path, &original.path).unwrap();
+		assert!(old.commit_document(&build, &document()).is_err());
+		assert!(old.promote(&build, "hijacked").is_err());
+		old.rollback_build(&build).unwrap();
+		let reopened = original.open();
+		assert!(reopened.commit_document(&build, &document()).is_err());
+		assert!(reopened.promote(&build, "hijacked").is_err());
+		reopened.rollback_build(&build).unwrap();
+		let indexes = reopened.list().unwrap();
+		assert_eq!(indexes.len(), 1);
+		assert_eq!(indexes[0].name, "replacement");
+		assert_eq!(indexes[0].document_count, 1);
+	}
+}
+
+#[cfg(test)]
+mod owner_cleanup_tests {
+	use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+	use super::{
+		super::{ImportGuard, Owner, StorageState, WikiSearchEngine, database::DatabaseEngine},
+		*,
+	};
+	use crate::task::{AbortReason, CancelToken};
+
+	#[test]
+	fn owner_rolls_back_accepted_build_after_cancellation_and_close() {
+		for close in [false, true] {
+			let directory = std::env::temp_dir().join(format!(
+				"omp-wiki-owner-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			));
+			let path = directory.join("docs.db").to_string_lossy().into_owned();
+			let storage = Storage::open_impl(&path, None).unwrap();
+			let identity = storage.identity().to_owned();
+			let owner = Arc::new(Owner {
+				closed:        Arc::new(AtomicBool::new(false)),
+				imports:       AtomicUsize::new(1),
+				engine:        parking_lot::Mutex::new(DatabaseEngine::new(path.clone(), path.clone())),
+				storage:       parking_lot::Mutex::new(StorageState {
+					storage: Some(storage),
+					identity,
+				}),
+				database_path: path,
+				diagnostics:   Arc::new(parking_lot::Mutex::new(Vec::new())),
+			});
+			let guard = ImportGuard(Arc::clone(&owner));
+			let mut cancel = CancelToken::default();
+			let build = owner
+				.with_storage(&cancel, |storage| storage.create("__building__cancelled", "/source"))
+				.unwrap();
+			let document = super::tests::document();
+			owner
+				.with_storage(&cancel, |storage| storage.commit_document(&build, &document))
+				.unwrap();
+			cancel.emplace_abort_token().abort(AbortReason::Signal);
+			let engine = WikiSearchEngine { owner: Arc::clone(&owner) };
+			if close {
+				engine.close();
+			}
+			assert!(owner.check_import(&cancel).is_err());
+			owner.rollback(&build).unwrap();
+			{
+				let state = owner.storage.lock();
+				let storage = state.storage.as_ref().unwrap();
+				assert!(storage.get_by_id(build.id).unwrap().is_none());
+				let rows: i64 = storage
+					.connection
+					.query_row("SELECT count(*) FROM sections_fts", [], |row| row.get(0))
+					.unwrap();
+				assert_eq!(rows, 0);
+			}
+			drop(engine);
+			drop(guard);
+			assert!(owner.storage.lock().storage.is_none());
+			drop(owner);
+			fs::remove_dir_all(directory).unwrap();
 		}
 	}
 }

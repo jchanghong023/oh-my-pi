@@ -1101,7 +1101,7 @@ pub fn wiki_read_markdown_document(
 	)
 }
 
-#[napi]
+#[napi(ts_return_type = "'content' | 'heading-only' | 'stub'")]
 pub fn wiki_section_shape(markdown: String) -> Shape {
 	section_shape(&markdown)
 }

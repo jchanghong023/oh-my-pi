@@ -12,6 +12,7 @@ import {
 	withRustCompilerEvents,
 } from "./test-gate-runtime";
 import { splitGoCommand } from "./test-gate-go";
+import { finalizeTestRun, writeCommandCase, type TestReportRun } from "./test-reporting";
 
 let directory: string;
 let stub: string;
@@ -199,6 +200,37 @@ afterAll(async () => {
 });
 function command(plan: Record<string, unknown>, extra: Partial<GateCommand> = {}): GateCommand {
 	return { label: "isolated stub", argv: [process.execPath, stub, JSON.stringify(plan)], ...extra };
+}
+
+async function reportFixture(label: string): Promise<TestReportRun> {
+	const dir = path.join(directory, `report-${label}`);
+	await fs.mkdir(dir);
+	await writeCommandCase(path.join(dir, "case.xml"), "gate finalization", "completed work", 0.001, "passed");
+	await fs.writeFile(
+		path.join(dir, "fixture.producer.json"),
+		JSON.stringify({
+			producer: "gate fixture",
+			command: [process.execPath, stub],
+			scope: "temporary gate task",
+			startedAt: new Date().toISOString(),
+			durationSeconds: 0.001,
+			exitCode: 0,
+			reportPath: "case.xml",
+			report: "available",
+			status: "passed",
+		}),
+	);
+	return {
+		id: label,
+		dir,
+		startedAt: new Date().toISOString(),
+		startedMs: performance.now(),
+		scope: "temporary gate task",
+		owner: true,
+		sourceRevision: null,
+		dirtyState: null,
+		dirtyStateIdentity: null,
+	};
 }
 
 async function waitForFiles(files: string[], signal: AbortSignal): Promise<void> {
@@ -429,6 +461,185 @@ it("drains finally cleanup registered after an interrupted child scope settles",
 	expect(events.at(-1)).toContain("slowtest: FAIL");
 	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.035);
 	expect(result.totalSeconds).toBeCloseTo(result.budgetedSeconds + result.compileExcludedSeconds, 5);
+});
+
+it("settles a successful gate only after its charged report finalizer writes complete/0", async () => {
+	const run = await reportFixture("pass");
+	let finalizerEnded = false;
+	const output: string[] = [];
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			finalizeTestRun(gate, run);
+			gate.onFinalize(async () => {
+				await sleep(20);
+				finalizerEnded = true;
+			});
+			await gate.charged(() => sleep(5));
+		},
+		{
+			limitSeconds: 5,
+			print: line => {
+				expect(finalizerEnded).toBe(true);
+				output.push(line);
+			},
+		},
+	);
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("PASS");
+	expect(report.exitCode).toBe(result.exitCode);
+	expect(report.completion).toBe("complete");
+	expect(report.reconciliation.status).toBe("validated");
+	expect(output.at(-1)).toContain("fulltest: PASS");
+	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.02);
+});
+
+it("awaits report finalization after its own budget expires and records partial/nonzero", async () => {
+	const run = await reportFixture("timeout");
+	let finalizerEnded = false;
+	const result = await runGate(
+		"slowtest",
+		async gate => {
+			gate.onFinalize(async () => {
+				if (!gate.signal.aborted) {
+					await new Promise<void>(resolve =>
+						gate.signal.addEventListener("abort", () => resolve(), { once: true }),
+					);
+					await sleep(20);
+				}
+				finalizerEnded = true;
+			});
+			finalizeTestRun(gate, run);
+			await gate.charged(() => sleep(5));
+		},
+		{
+			limitSeconds: 0.1,
+			cleanupReserveMs: 0,
+			print: () => expect(finalizerEnded).toBe(true),
+		},
+	);
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("TIMEOUT");
+	expect(result.exitCode).toBe(124);
+	expect(report.exitCode).toBe(result.exitCode);
+	expect(report.completion).toBe("partial");
+	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.1);
+});
+
+it("republishes a complete report when interrupted next to its last write, before closing the scope", async () => {
+	const run = await reportFixture("interrupt-after-write");
+	const controller = new AbortController();
+	let finalizerEnded = false;
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			finalizeTestRun(gate, run);
+			gate.onFinalize(async exitCode => {
+				if (exitCode === 0) {
+					const provisional = await Bun.file(path.join(run.dir, "run.json")).json();
+					expect(provisional.completion).toBe("complete");
+					expect(provisional.exitCode).toBe(0);
+					controller.abort();
+					await sleep(20);
+				}
+				finalizerEnded = true;
+			});
+		},
+		{
+			signal: controller.signal,
+			limitSeconds: 5,
+			print: () => expect(finalizerEnded).toBe(true),
+		},
+	);
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("INTERRUPTED");
+	expect(result.exitCode).toBe(130);
+	expect(report.exitCode).toBe(result.exitCode);
+	expect(report.completion).toBe("partial");
+	expect(result.budgetedSeconds).toBeGreaterThanOrEqual(0.02);
+});
+
+it("republishes a successful report if the remaining charged budget expires after its last write", async () => {
+	const run = await reportFixture("timeout-after-write");
+	let finalizerEnded = false;
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			finalizeTestRun(gate, run);
+			gate.onFinalize(async exitCode => {
+				if (exitCode === 0) {
+					const provisional = await Bun.file(path.join(run.dir, "run.json")).json();
+					expect(provisional.completion).toBe("complete");
+					expect(provisional.exitCode).toBe(0);
+					if (!gate.signal.aborted)
+						await new Promise<void>(resolve =>
+							gate.signal.addEventListener("abort", () => resolve(), { once: true }),
+						);
+					await sleep(20);
+				}
+				finalizerEnded = true;
+			});
+		},
+		{ limitSeconds: 2, print: () => expect(finalizerEnded).toBe(true) },
+	);
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("TIMEOUT");
+	expect(result.exitCode).toBe(124);
+	expect(report.exitCode).toBe(result.exitCode);
+	expect(report.completion).toBe("partial");
+});
+
+it("preserves the first gate failure in finalized partial metadata", async () => {
+	const run = await reportFixture("first-failure");
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			finalizeTestRun(gate, run);
+			throw new GateCommandError("temporary task failed", 47);
+		},
+		{ limitSeconds: 5, print: quiet },
+	);
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(47);
+	expect(report.exitCode).toBe(result.exitCode);
+	expect(report.completion).toBe("partial");
+});
+
+it("keeps a missing producer report partial without treating unreported cases as passed", async () => {
+	const run = await reportFixture("missing-report");
+	const producerPath = path.join(run.dir, "fixture.producer.json");
+	const producer = await Bun.file(producerPath).json();
+	producer.report = "missing";
+	producer.status = "partial";
+	await fs.writeFile(producerPath, JSON.stringify(producer));
+	await fs.unlink(path.join(run.dir, "case.xml"));
+	const result = await runGate("fulltest", async gate => finalizeTestRun(gate, run), {
+		limitSeconds: 5,
+		print: quiet,
+	});
+	const report = await Bun.file(path.join(run.dir, "run.json")).json();
+	expect(result.status).toBe("PASS");
+	expect(report.exitCode).toBe(0);
+	expect(report.completion).toBe("partial");
+	expect(report.reconciliation.status).toBe("unavailable");
+});
+
+it("fails explicitly instead of passing when gate metadata cannot be recorded", async () => {
+	const run = await reportFixture("unwritable");
+	await fs.mkdir(path.join(run.dir, "run.json"));
+	const output: string[] = [];
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			finalizeTestRun(gate, run);
+		},
+		{ limitSeconds: 5, print: line => output.push(line) },
+	);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).not.toBe(0);
+	expect(output.some(line => line.includes("FINALIZE_FAIL"))).toBe(true);
+	expect(output.at(-1)).toContain("fulltest: FAIL");
 });
 
 it("rejects late charged finally work from an untracked continuation after the failed summary", async () => {

@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { Settings } from "../../../src/config/settings";
 import { DocsService } from "../../../src/docs/service";
 import { DocsHubComponent } from "../../../src/modes/components/docs-hub";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
-function text(component: { render(width: number): string[] }): string {
+function text(component: { render(width: number): string[] }, width = 120): string {
 	return component
-		.render(120)
+		.render(width)
 		.map(line => Bun.stripANSI(line))
 		.join("\n");
 }
@@ -23,11 +23,13 @@ async function observedHub(sourceDir: string, profileDir: string, onCancel = vi.
 	const state: { hub?: DocsHubComponent } = {};
 	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
 	const renderedFrames: string[] = [];
+	const terminal = { rows: 40, columns: 120 };
 	const tui = {
+		terminal,
 		requestRender: () => {
 			const hub = state.hub;
 			if (!hub) return;
-			const rendered = text(hub);
+			const rendered = text(hub, terminal.columns);
 			renderedFrames.push(rendered);
 			for (const waiter of waiters) {
 				if (waiter.matches(rendered)) {
@@ -43,13 +45,13 @@ async function observedHub(sourceDir: string, profileDir: string, onCancel = vi.
 	const waitFor = (matches: (rendered: string) => boolean): Promise<void> => {
 		const ready = (rendered: string) =>
 			!/(?:Loading|Searching|Deleting|Indexing) document index/.test(rendered) && matches(rendered);
-		if (ready(text(component))) return Promise.resolve();
+		if (ready(text(component, terminal.columns))) return Promise.resolve();
 		const { promise, resolve } = Promise.withResolvers<void>();
 		waiters.add({ matches: ready, resolve });
 		return promise;
 	};
 	await waitFor(rendered => !rendered.includes("Loading document indexes…"));
-	return { hub: component, waitFor, renderedFrames };
+	return { hub: component, waitFor, renderedFrames, terminal };
 }
 
 function submitSearch(hub: DocsHubComponent, query: string): void {
@@ -132,6 +134,83 @@ describe("DocsHubComponent shared interaction contract", () => {
 			expect(text(hub)).toContain("old.md:1-2");
 			expect(text(hub)).toContain("original snapshot needle");
 			expect(text(hub)).not.toContain("unrelated replacement policy");
+		} finally {
+			await hub?.dispose();
+			await writer.close();
+			await Promise.all([
+				fs.rm(profileDir, { recursive: true, force: true }),
+				fs.rm(sourceDir, { recursive: true, force: true }),
+			]);
+		}
+	});
+
+	it("keeps every stored long-line character reachable across width and height changes", async () => {
+		await initTheme();
+		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-wrap-profile-"));
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-wrap-source-"));
+		const writer = new DocsService({ agentDir: profileDir, cwd: sourceDir });
+		let hub: DocsHubComponent | undefined;
+		try {
+			const longLine =
+				"wrapneedle " +
+				Array.from({ length: 90 }, (_, index) => `${index}:汉字😀e\u0301👩‍💻  `).join("") +
+				"REQUIRED_EVIDENCE_TAIL";
+			await fs.writeFile(path.join(sourceDir, "wrapped.md"), `# Wrapped evidence\n${longLine}\n最后证据🧪\n`);
+			await writer.init(".", "handbook");
+			const stored = (await writer.search("wrapneedle")).sections[0]!;
+			await fs.rm(path.join(sourceDir, "wrapped.md"));
+			const observed = await observedHub(sourceDir, profileDir);
+			hub = observed.hub;
+			observed.terminal.rows = 12;
+			submitSearch(hub, "wrapneedle");
+			await observed.waitFor(rendered => rendered.includes("wrapped.md:1-"));
+
+			for (const width of [80, 24, 120]) {
+				expect(hub.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
+			}
+			hub.handleInput("\n");
+			for (const [width, height] of [
+				[80, 12],
+				[24, 8],
+				[120, 16],
+				[36, 10],
+				[160, 12],
+			] as const) {
+				observed.terminal.columns = width;
+				observed.terminal.rows = height;
+				const frame = () => {
+					const lines = hub!.render(width);
+					expect(lines.length).toBeLessThanOrEqual(height);
+					expect(lines.every(line => visibleWidth(line) <= width)).toBe(true);
+					return lines.slice(2).map(line => Bun.stripANSI(line));
+				};
+				// Reflow from the previous viewport, then use the standard scroll keys.
+				frame();
+				hub.handleInput("\x1b[F");
+				expect(frame().join("")).toContain("REQUIRED_EVIDENCE_TAIL");
+				expect(frame().join("")).toContain("最后证据🧪");
+				hub.handleInput("\x1b[H");
+				const initial = frame();
+				hub.handleInput("\x1b[6~");
+				expect(frame()).not.toEqual(initial);
+				hub.handleInput("\x1b[5~");
+				expect(frame()).toEqual(initial);
+
+				const reached = [...initial];
+				let previous = initial;
+				for (let step = 0; step < stored.text.length; step++) {
+					hub.handleInput("\x1b[B");
+					const next = frame();
+					if (JSON.stringify(next) === JSON.stringify(previous)) break;
+					reached.push(next[next.length - 1]!);
+					previous = next;
+				}
+				expect(reached.join("")).toContain(stored.text.replaceAll("\n", ""));
+				hub.handleInput("\x1b[A");
+				expect(frame()).not.toEqual(previous);
+			}
+			hub.handleInput("b");
+			expect(text(hub)).toContain("Section hits: 1");
 		} finally {
 			await hub?.dispose();
 			await writer.close();

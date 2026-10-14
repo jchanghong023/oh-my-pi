@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
-import { unlinkSync } from "node:fs";
+import { existsSync, rmdirSync, symlinkSync, unlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -449,6 +449,95 @@ describe("DocsSearchEngine indexing contract", () => {
 			service.close();
 		}
 	});
+
+	it.each(["continue", "cancel"] as const)(
+		"preserves a colliding published index when a progress callback replaces the database (%s)",
+		async transition => {
+			const owned = await tempDir("docs-callback-replacement-");
+			const root = path.join(owned, "source");
+			const replacementRoot = path.join(owned, "replacement-source");
+			const agentDir = path.join(owned, "agent");
+			const replacementDir = path.join(owned, "replacement-agent");
+			const originalDir = path.join(owned, "original-agent");
+			await fs.mkdir(root);
+			await fs.mkdir(replacementRoot);
+			await fs.mkdir(originalDir);
+			const aliasType = process.platform === "win32" ? "junction" : "dir";
+			symlinkSync(originalDir, agentDir, aliasType);
+			const removeAgentAlias = () => {
+				if (process.platform === "win32") rmdirSync(agentDir);
+				else unlinkSync(agentDir);
+			};
+			await fs.writeFile(path.join(root, "old.md"), "# Original\noldbuildboundarybeacon\n");
+			const body = "# Replacement\nreplacementboundarybeacon\nFull retained evidence.\n";
+			await fs.writeFile(path.join(replacementRoot, "kept.md"), body);
+			const replacement = new DocsSearchEngine({ agentDir: replacementDir });
+			const published = await replacement
+				.init(replacementRoot, "published")
+				.then(result => result.index)
+				.finally(() => replacement.close());
+			expect(published).toMatchObject({ name: "published", documentCount: 1, sectionCount: 1 });
+			const tables = ["doc_indexes", "documents", "sections", "sections_fts"] as const;
+			const retained = withSqliteDatabase(
+				replacement.databasePath,
+				db => tables.map(table => db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all()),
+				{ readonly: true },
+			);
+			const service = new DocsSearchEngine({ agentDir });
+			try {
+				const controller = new AbortController();
+				let swapped = false;
+				const importing = service.init(root, "old-build", {
+					signal: controller.signal,
+					onProgress: progress => {
+						// Native scan progress runs after hidden-build creation, before the first commit.
+						if (progress.phase !== "scan" || swapped) return;
+						expect(progress.completed).toBe(0);
+						const builds = withSqliteDatabase(
+							service.databasePath,
+							db =>
+								db.query("SELECT id,name FROM doc_indexes ORDER BY id").all() as { id: number; name: string }[],
+							{ readonly: true },
+						);
+						expect(builds).toHaveLength(1);
+						expect(builds[0].name).toStartWith("__building__");
+						expect(builds[0].id).toBe(published.id);
+						expect(service.list()).toEqual([]);
+						// Retarget only the owned alias; both physical databases and open handles stay put.
+						removeAgentAlias();
+						symlinkSync(replacementDir, agentDir, aliasType);
+						swapped = true;
+						// Reenter the real native owner so rollback also sees the replacement connection.
+						expect(service.list()).toEqual([published]);
+						if (transition === "cancel") controller.abort();
+					},
+				});
+				if (transition === "cancel") {
+					await expect(importing).rejects.toMatchObject({ name: "AbortError" });
+				} else {
+					await expect(importing).rejects.toThrow("Documentation database changed during document indexing");
+				}
+				expect(swapped).toBe(true);
+				expect(
+					withSqliteDatabase(
+						service.databasePath,
+						db => tables.map(table => db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all()),
+						{ readonly: true },
+					),
+				).toEqual(retained);
+				expect(service.list()).toEqual([published]);
+				await fs.rm(replacementRoot, { recursive: true });
+				await fs.rm(root, { recursive: true });
+				const result = service.search("replacementboundarybeacon", { index: "published" });
+				expect(result.total).toBe(1);
+				expect(result.sections.map(section => section.text)).toEqual([body]);
+				expect(service.search("oldbuildboundarybeacon").sections).toEqual([]);
+			} finally {
+				service.close();
+				if (existsSync(agentDir)) removeAgentAlias();
+			}
+		},
+	);
 
 	it.each([1, 2, 3])("migrates v%i structured and FTS indexes without source files", async version => {
 		const agentDir = await tempDir("docs-legacy-agent-");

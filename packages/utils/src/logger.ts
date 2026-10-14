@@ -19,7 +19,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
-import { APP_NAME, getLogsDir, localDay, VERSION } from "./dirs";
+import { APP_NAME, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { setStderrRedirectTarget } from "./stderr-guard";
 import { drainModuleLoadEvents } from "./timing-buffer";
@@ -499,6 +499,22 @@ interface LocalTransports {
 let activeTransports: LocalTransports | undefined;
 let diagnosticStartedAt: number | undefined;
 let diagnosticStopped = false;
+
+/**
+ * Current file destination, including rotation and user-level fallback.
+ * Flush before resolving a read path: flushing may recover to another directory.
+ * Without an active file destination, retain the configured default without
+ * initializing a transport or changing the application's data root.
+ */
+export function getCurrentLogPath(): string {
+	return activeTransports?.file?.filePath ?? getLogPath();
+}
+
+/** Directory containing the current file destination, or the configured default. */
+export function getCurrentLogsDir(): string {
+	const filePath = activeTransports?.file?.filePath;
+	return filePath ? path.dirname(filePath) : getLogsDir();
+}
 
 /** Opt the executable into lifecycle diagnostics; pure logger/SDK users remain unchanged. */
 export function initializeDiagnosticLogging(mode?: string): void {

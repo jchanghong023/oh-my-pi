@@ -385,6 +385,37 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 				data: { agentInvoked: false },
 			});
 
+			server.send({ id: "wiki-rebind", type: "prompt", message: "/wiki" });
+			const rebindDialog = await server.next(
+				frame => frame.type === "extension_ui_request" && frame.method === "select",
+			);
+			const beforeRebind = await server.request({ id: "dialog-before-rebind", type: "get_state" });
+			if (!isRecord(beforeRebind.data) || typeof beforeRebind.data.sessionFile !== "string") {
+				throw new Error("Missing session file for directory rebind");
+			}
+			const rebindStart = server.seen.length;
+			expect(
+				await server.request({
+					id: "dialog-rebind",
+					type: "open_session",
+					sessionDir: path.dirname(beforeRebind.data.sessionFile),
+				}),
+			).toMatchObject({ success: true, data: { sessionId: beforeRebind.data.sessionId, cancelled: false } });
+			expect(
+				server.seen
+					.slice(rebindStart)
+					.some(frame => frame.type === "extension_ui_request" && frame.method === "cancel"),
+			).toBe(false);
+			server.send({ type: "extension_ui_response", id: rebindDialog.id, value: "New document index" });
+			const directoryInput = await server.next(
+				frame => frame.type === "extension_ui_request" && frame.method === "input",
+			);
+			expect(directoryInput.title).toBe("Markdown directory");
+			server.send({ type: "extension_ui_response", id: directoryInput.id, cancelled: true });
+			expect(await server.next(frame => frame.type === "response" && frame.id === "wiki-rebind")).toMatchObject({
+				success: true,
+				data: { agentInvoked: false },
+			});
 			server.send({ id: "wiki-abort", type: "prompt", message: "/wiki" });
 			const pending = await server.next(frame => frame.type === "extension_ui_request" && frame.method === "select");
 			expect(await server.request({ id: "abort", type: "abort" })).toMatchObject({ success: true });
@@ -474,12 +505,207 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 		});
 	}, 300_000);
 
+	test("reopening an active plan preserves its turn and mode, while real open and new session cancel the old turn", async () => {
+		const model = "rpc-plan-rebind-model";
+		const started = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+		const releases = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+		let requestCount = 0;
+		const modelServer = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
+					return new Response("not found", { status: 404 });
+				}
+				const index = requestCount++;
+				// The seed completes normally; only the subsequent active-plan turns are controlled.
+				if (index > 0) {
+					started[index - 1]!.resolve();
+					await releases[index - 1]!.promise;
+				}
+				const base = { id: `chatcmpl-plan-${index}`, object: "chat.completion.chunk", created: 0, model };
+				const chunks = [
+					{
+						...base,
+						choices: [
+							{ index: 0, delta: { role: "assistant", content: "Inspection complete." }, finish_reason: null },
+						],
+					},
+					{ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+					{ ...base, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+				];
+				return new Response(
+					`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		try {
+			await withCommandServer(
+				async server => {
+					// Sessions persist lazily after an assistant response. Seed through public RPC before
+					// blocking the plan turn so open_session can resolve the actual saved session.
+					expect(
+						await server.request({
+							id: "plan-rebind-seed",
+							type: "prompt",
+							message: "Seed the session before inspecting plan rebind behavior.",
+						}),
+					).toMatchObject({ success: true });
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "plan-rebind-seed"),
+					).toMatchObject({ status: "completed", agentInvoked: true });
+					const seeded = await server.request({ id: "plan-rebind-seeded", type: "get_state" });
+					expect(seeded).toMatchObject({ success: true, data: { isStreaming: false } });
+					if (!isRecord(seeded.data)) throw new Error("Missing seeded session state");
+					expect(
+						await server.request({
+							id: "plan-rebind-run",
+							type: "prompt",
+							message: "/plan Inspect rebind behavior",
+						}),
+					).toMatchObject({ success: true });
+					await started[0]!.promise;
+					const active = await server.request({ id: "plan-rebind-active", type: "get_state" });
+					expect(active).toMatchObject({ success: true, data: { isStreaming: true } });
+					if (!isRecord(active.data) || typeof active.data.sessionFile !== "string") {
+						throw new Error("Active plan lacks its session file");
+					}
+					const sessionFile = active.data.sessionFile;
+					const sessionId = active.data.sessionId;
+					const readModes = async () => {
+						const modes: RpcFrame[] = [];
+						for await (const entry of readJsonl<unknown>(Bun.file(sessionFile).stream())) {
+							if (isRecord(entry) && entry.type === "mode_change") modes.push(entry);
+						}
+						return modes;
+					};
+					const modesBefore = await readModes();
+					expect(modesBefore.at(-1)).toMatchObject({ mode: "plan" });
+					expect(
+						await server.request({
+							id: "plan-rebind",
+							type: "open_session",
+							sessionDir: path.dirname(sessionFile),
+						}),
+					).toMatchObject({ success: true, data: { sessionId, sessionFile, cancelled: false, resumed: true } });
+					expect(await server.request({ id: "plan-rebind-after", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { sessionId, sessionFile, isStreaming: true, dumpTools: active.data.dumpTools },
+					});
+					expect(await readModes()).toEqual(modesBefore);
+					expect(server.seen.some(frame => frame.type === "prompt_result" && frame.id === "plan-rebind-run")).toBe(
+						false,
+					);
+					releases[0]!.resolve();
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "plan-rebind-run"),
+					).toMatchObject({ status: "completed", agentInvoked: true });
+
+					// A different directory really creates a new session and detaches the old mode.
+					const fresh = await server.request({
+						id: "plan-open-fresh",
+						type: "open_session",
+						sessionDir: path.join(path.dirname(path.dirname(sessionFile)), "fresh-sessions"),
+					});
+					expect(fresh).toMatchObject({ success: true, data: { cancelled: false, resumed: false } });
+					if (!isRecord(fresh.data)) throw new Error("Missing fresh session identity");
+					expect(fresh.data.sessionId).not.toBe(sessionId);
+					expect(await server.request({ id: "plan-open-fresh-state", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { sessionId: fresh.data.sessionId, isStreaming: false, dumpTools: seeded.data.dumpTools },
+					});
+					const start = server.seen.length;
+					expect(
+						await server.request({
+							id: "plan-switch-run",
+							type: "prompt",
+							message: "/plan Inspect real switching",
+						}),
+					).toMatchObject({ success: true });
+					await started[1]!.promise;
+					expect(commandOutputSince(server, start)).toMatch(/plan mode enabled/i);
+					expect(
+						await server.request({
+							id: "plan-open-saved",
+							type: "open_session",
+							sessionDir: path.dirname(sessionFile),
+						}),
+					).toMatchObject({ success: true, data: { sessionId, sessionFile, cancelled: false, resumed: true } });
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "plan-switch-run"),
+					).toMatchObject({ status: "aborted", agentInvoked: true });
+					expect(await server.request({ id: "plan-switch-settled", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { sessionId, isStreaming: false },
+					});
+
+					// The saved session restores its plan. A new session must detach that active plan too.
+					expect(
+						await server.request({
+							id: "plan-new-run",
+							type: "prompt",
+							message: "Inspect new session switching.",
+						}),
+					).toMatchObject({ success: true });
+					await started[2]!.promise;
+					expect(await server.request({ id: "plan-new-active", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { sessionId, sessionFile, isStreaming: true, dumpTools: active.data.dumpTools },
+					});
+					expect(await server.request({ id: "plan-new", type: "new_session" })).toMatchObject({
+						success: true,
+						data: { cancelled: false },
+					});
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "plan-new-run"),
+					).toMatchObject({ status: "aborted", agentInvoked: true });
+					const newState = await server.request({ id: "plan-new-settled", type: "get_state" });
+					expect(newState).toMatchObject({
+						success: true,
+						data: { isStreaming: false, dumpTools: seeded.data.dumpTools },
+					});
+					if (!isRecord(newState.data)) throw new Error("Missing new session identity");
+					expect(newState.data.sessionId).not.toBe(sessionId);
+					expect(newState.data.sessionFile).not.toBe(sessionFile);
+					const newPlanStart = server.seen.length;
+					expect(await server.request({ id: "plan-new-enable", type: "prompt", message: "/plan" })).toMatchObject({
+						success: true,
+						data: { agentInvoked: false },
+					});
+					expect(commandOutputSince(server, newPlanStart)).toMatch(/plan mode enabled/i);
+				},
+				{
+					provider: "rpc-plan-rebind",
+					model,
+					tools: "read",
+					modelsYaml: [
+						"providers:",
+						"  rpc-plan-rebind:",
+						`    baseUrl: http://127.0.0.1:${modelServer.port}/v1`,
+						"    auth: none",
+						"    api: openai-completions",
+						"    models:",
+						`      - id: ${model}`,
+						"        reasoning: false",
+						"",
+					].join("\n"),
+				},
+			);
+		} finally {
+			for (const release of releases) release.resolve();
+			modelServer.stop(true);
+		}
+	}, 300_000);
+
 	test("loop prompts stop at their limit, and deleting that session reports rollover without reviving old dialogs", async () => {
 		const requests: RpcFrame[] = [];
 		const requestStarts: number[] = [];
 		const responseEnds: number[] = [];
 		const model = "rpc-loop-model";
 		const prompt = "3D modeling regression fixture";
+		let firstRequest = Promise.withResolvers<void>();
+		let releaseFirst = Promise.withResolvers<void>();
 		const modelServer = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,
@@ -493,6 +719,10 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 				if (!isRecord(body)) return new Response("invalid request", { status: 400 });
 				requests.push(body);
 				requestStarts.push(performance.now());
+				if (requests.length === 1) {
+					firstRequest.resolve();
+					await releaseFirst.promise;
+				}
 				// The real CLI child owns its clock; a slow turn distinguishes end-to-start from start-to-start timing.
 				if (requests.length === 3) await Bun.sleep(1_200);
 				responseEnds.push(performance.now());
@@ -523,11 +753,46 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 		try {
 			await withCommandServer(
 				async server => {
+					// Materialize a real conversation before testing already-open directory rebinding.
+					expect(
+						await server.request({ id: "loop-seed", type: "prompt", message: "Persist the loop fixture" }),
+					).toMatchObject({ success: true });
+					await firstRequest.promise;
+					releaseFirst.resolve();
+					await server.next(frame => frame.type === "agent_end" && frame.isTerminal !== false);
+					expect(
+						await server.next(frame => frame.type === "prompt_result" && frame.id === "loop-seed"),
+					).toMatchObject({ status: "completed" });
+					requests.length = 0;
+					requestStarts.length = 0;
+					responseEnds.length = 0;
+					const loopFrameStart = server.seen.length;
+					firstRequest = Promise.withResolvers<void>();
+					releaseFirst = Promise.withResolvers<void>();
+
 					expect(
 						await server.request({ id: "loop-run", type: "prompt", message: `/loop 1 ${prompt}` }),
 					).toMatchObject({
 						success: true,
 					});
+					await firstRequest.promise;
+					const active = await server.request({ id: "loop-active", type: "get_state" });
+					expect(active).toMatchObject({ success: true, data: { isStreaming: true } });
+					if (!isRecord(active.data) || typeof active.data.sessionFile !== "string") {
+						throw new Error("Active loop lacks its session file");
+					}
+					expect(
+						await server.request({
+							id: "loop-rebind",
+							type: "open_session",
+							sessionDir: path.dirname(active.data.sessionFile),
+						}),
+					).toMatchObject({ success: true, data: { sessionId: active.data.sessionId, cancelled: false } });
+					expect(await server.request({ id: "loop-after-rebind", type: "get_state" })).toMatchObject({
+						success: true,
+						data: { sessionId: active.data.sessionId, isStreaming: true },
+					});
+					releaseFirst.resolve();
 					await server.next(frame => frame.type === "agent_end" && frame.isTerminal !== false);
 					await server.next(frame => frame.type === "agent_end" && frame.isTerminal !== false);
 					const limited = await server.next(
@@ -555,6 +820,7 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 					}
 					expect(userTasks).toEqual([prompt, prompt]);
 					const replies = server.seen
+						.slice(loopFrameStart)
 						.filter(
 							frame =>
 								frame.type === "message_end" && isRecord(frame.message) && frame.message.role === "assistant",
@@ -642,6 +908,7 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 				},
 			);
 		} finally {
+			releaseFirst.resolve();
 			modelServer.stop(true);
 		}
 	}, 300_000);

@@ -18,9 +18,11 @@ import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-a
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
+import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
@@ -162,21 +164,22 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test.each(["scope", "explicit"] as const)(
-		"offline deferred %s keeps its discovery policy after extension registration",
+	test.each(["scope", "explicit", "spawn", "revive"] as const)(
+		"offline deferred %s keeps its runtime discovery policy after extension registration",
 		async source => {
 			const settings = Settings.isolated({ prewalk: { enabled: false } });
 			const modelRegistry = new ModelRegistry(fixtureAuthStorage, path.join(tempDir, "models.yml"), { settings });
 			const fetchModels = vi.fn(dynamicOnlyProviderConfig.fetchDynamicModels!);
+			const provider = `offline-pattern-${Snowflake.next()}`;
 			const extension: ExtensionFactory = pi => {
-				pi.registerProvider("offline-pattern-provider", {
+				pi.registerProvider(provider, {
 					...dynamicOnlyProviderConfig,
 					fetchDynamicModels: fetchModels,
 				});
 			};
 			const cliOptions = await buildCliSessionOptions(
 				{
-					...parseArgs([source === "scope" ? "--models" : "--model", "offline-pattern-provider/*"]),
+					...parseArgs([source === "scope" ? "--models" : "--model", `${provider}/*`]),
 					offline: true,
 				},
 				[],
@@ -188,17 +191,20 @@ describe("createAgentSession deferred model pattern resolution", () => {
 				...buildSessionOptions([]),
 				...cliOptions,
 				settings,
+				modelPatternSource: source === "spawn" || source === "revive" ? undefined : cliOptions.modelPatternSource,
+				taskDepth: source === "spawn" ? 1 : undefined,
+				parentTaskPrefix: source === "revive" ? "ColdRuntimeTask" : undefined,
 				modelRegistry,
 				extensions: [extension],
 			});
 			try {
-				if (source === "scope") {
+				if (source !== "explicit") {
 					expect(fetchModels).not.toHaveBeenCalled();
 					expect(modelFallbackMessage).toContain("not found");
 					expect(session.model).toBeUndefined();
 				} else {
 					expect(fetchModels).toHaveBeenCalledTimes(1);
-					expect(session.model?.provider).toBe("offline-pattern-provider");
+					expect(session.model?.provider).toBe(provider);
 					expect(session.model?.id).toBe("cached-runtime-model");
 				}
 			} finally {
@@ -206,6 +212,171 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			}
 		},
 	);
+
+	test.each(["spawn", "revive", "explicit", "online-subagent"] as const)(
+		"cold config discovery respects the %s model-selection boundary",
+		async source => {
+			const provider = `task-discovery-${Snowflake.next()}`;
+			const pattern = `${provider}/dynamic-model`;
+			const modelsPath = path.join(tempDir, "offline-task-models.yml");
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: {
+						[provider]: {
+							baseUrl: "http://127.0.0.1:9992",
+							api: "openai-completions",
+							auth: "none",
+							discovery: { type: "openai-models-list" },
+						},
+					},
+				}),
+			);
+			let modelListCalls = 0;
+			const localFetch: FetchImpl = async input => {
+				if (String(input) !== "http://127.0.0.1:9992/v1/models") {
+					throw new Error(`Unexpected discovery URL: ${String(input)}`);
+				}
+				modelListCalls++;
+				return Response.json({ data: [{ id: "dynamic-model", context_length: 65_536 }] });
+			};
+			const settings = Settings.isolated({
+				prewalk: { enabled: false },
+				modelRoles: { task: pattern, default: "runtime-provider/runtime-model" },
+			});
+			const rolesBefore = { ...settings.getModelRoles() };
+			const modelRegistry = new ModelRegistry(fixtureAuthStorage, modelsPath, { settings, fetch: localFetch });
+			const { session, modelFallbackMessage } = await createAgentSession({
+				...buildSessionOptions("@task"),
+				modelRegistry,
+				settings,
+				offline: source !== "online-subagent",
+				// These are the existing spawn/revive identity inputs. Neither
+				// automatic caller marks its pattern as a CLI model selection.
+				taskDepth: source === "spawn" || source === "online-subagent" ? 1 : undefined,
+				parentTaskPrefix: source === "revive" ? "ColdTask" : undefined,
+			});
+			try {
+				if (source === "spawn" || source === "revive") {
+					expect(modelListCalls).toBe(0);
+					expect(session.model).toBeUndefined();
+					expect(modelFallbackMessage).toContain("not found");
+				} else {
+					expect(modelListCalls).toBeGreaterThan(0);
+					expect(session.model?.provider).toBe(provider);
+					expect(session.model?.id).toBe("dynamic-model");
+					expect(modelFallbackMessage).toBeUndefined();
+				}
+				expect(settings.getModelRoles()).toEqual(rolesBefore);
+			} finally {
+				await session.dispose();
+			}
+		},
+	);
+
+	test("cold task revival uses a cached role fallback without fetching its uncached primary", async () => {
+		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		const provider = `cold-revive-${Snowflake.next()}`;
+		const pattern = `${provider}/dynamic-model`;
+		const modelsPath = path.join(tempDir, "revive-models.yml");
+		await Bun.write(
+			modelsPath,
+			JSON.stringify({
+				providers: {
+					[provider]: {
+						baseUrl: "http://127.0.0.1:9991",
+						api: "openai-completions",
+						auth: "none",
+						discovery: { type: "openai-models-list" },
+					},
+				},
+			}),
+		);
+		let modelListCalls = 0;
+		const localFetch: FetchImpl = async input => {
+			if (String(input) !== "http://127.0.0.1:9991/v1/models") {
+				throw new Error(`Unexpected discovery URL: ${String(input)}`);
+			}
+			modelListCalls++;
+			return Response.json({ data: [{ id: "dynamic-model", context_length: 65_536 }] });
+		};
+		const fallback = "runtime-provider/runtime-fallback-model";
+		const settings = Settings.isolated({
+			prewalk: { enabled: false },
+			modelRoles: { default: "runtime-provider/runtime-model", task: pattern },
+			"retry.fallbackChains": { task: [fallback] },
+		});
+		const modelRegistry = new ModelRegistry(fixtureAuthStorage, modelsPath, { settings, fetch: localFetch });
+		const { session: owner } = await createAgentSession({
+			...buildSessionOptions([]),
+			settings,
+			modelRegistry,
+		});
+		let revived: typeof owner | undefined;
+		try {
+			const manager = SessionManager.create(tempDir, path.join(tempDir, "cold-task-sessions"));
+			manager.appendSessionInit({
+				systemPrompt: ["Inspect the target."],
+				task: "Inspect the target.",
+				agent: "worker",
+				tools: ["read"],
+				restrictToolNames: true,
+				spawns: "",
+				modelRole: "task",
+				resolvedModel: pattern,
+				retryFallback: { primary: pattern, chain: [fallback] },
+			});
+			manager.appendMessage({ role: "user", content: "Inspect the target.", timestamp: Date.now() });
+			manager.appendMessage({
+				role: "assistant",
+				provider,
+				model: "dynamic-model",
+				api: "openai-completions",
+				content: [{ type: "text", text: "Persist the inspected task." }],
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				stopReason: "stop",
+				timestamp: Date.now(),
+			});
+			const sessionFile = manager.getSessionFile();
+			if (!sessionFile) throw new Error("Expected a persisted task session");
+			await manager.close();
+			const ref = AgentRegistry.global().register({
+				id: `ColdRevive${Snowflake.next()}`,
+				displayName: "Cold task",
+				kind: "sub",
+				parentId: MAIN_AGENT_ID,
+				status: "parked",
+				session: null,
+				sessionFile,
+			});
+			const reviver = await createPersistedSubagentReviverFactory({
+				session: owner,
+				authStorage: fixtureAuthStorage,
+				modelRegistry,
+				settings,
+				enableLsp: false,
+			})(ref);
+			if (!reviver) throw new Error("Expected a cold task reviver");
+			revived = await reviver(ref);
+			expect(modelListCalls).toBe(0);
+			expect(revived.model?.provider).toBe("runtime-provider");
+			expect(revived.model?.id).toBe("runtime-fallback-model");
+			expect(settings.getModelRole("task")).toBe(pattern);
+			expect(cfgRetryFallbackChains.get(settings).task).toEqual([fallback]);
+			expect(revived.settings.getModelRole(`subagent:${ref.id}`)).toBe(pattern);
+			expect(cfgRetryFallbackChains.get(revived.settings)[`subagent:${ref.id}`]).toEqual([fallback]);
+		} finally {
+			await revived?.dispose();
+			await owner.dispose();
+		}
+	});
 
 	test("headless sessions inherit process offline mode without a caller option", async () => {
 		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
@@ -436,7 +607,7 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
-	test("resolves explicit dynamic-only modelPattern from fresh runtime cache", async () => {
+	test.each([false, true])("resolves a cached dynamic model for offline subagents=%s", async offline => {
 		const authStorage = createInMemoryAuthStorage();
 		authStoragesToClose.push(authStorage);
 		const modelsPath = path.join(tempDir, "models.yml");
@@ -464,6 +635,8 @@ describe("createAgentSession deferred model pattern resolution", () => {
 			preloadedCustomToolPaths: [],
 			toolNames: ["read"],
 			modelPattern: "runtime-provider/cached-runtime-model",
+			offline,
+			taskDepth: offline ? 1 : undefined,
 		});
 
 		try {

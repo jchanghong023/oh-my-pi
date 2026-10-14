@@ -121,6 +121,43 @@ describe("Editor component", () => {
 		});
 	});
 
+	describe("Frame height budgeting", () => {
+		for (const terminalCursor of [false, true]) {
+			it(`keeps the current input row before chrome and bottom padding with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
+				const editor = new CustomEditor(defaultEditorTheme);
+				editor.focused = true;
+				editor.setUseTerminalCursor(terminalCursor);
+				editor.setText("first\n输入🙂line\nlast");
+				editor.render(24);
+				editor.handleInput("\x1b[A");
+				editor.moveToLineEnd();
+				let rows = 8;
+				editor.renderHeightProvider = () => rows;
+
+				for (rows of [1, 2, 3, 5]) {
+					const frame = editor.render(24);
+					expect(frame.length).toBeLessThanOrEqual(rows);
+					expect(editor.renderedRows).toBe(frame.length);
+					expect(frame.filter(row => row.includes(CURSOR_MARKER))).toHaveLength(1);
+					expect(frame.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
+					for (const row of frame) expect(visibleWidth(row)).toBeLessThanOrEqual(24);
+				}
+
+				rows = 8;
+				const restored = editor.render(24);
+				expect(restored.join("")).toContain("first");
+				expect(restored.join("")).toContain("last");
+				expect(stripVTControlCharacters(restored[restored.length - 1]!).replace(/[-+|\s]/g, "")).toBe("");
+				editor.setMaxHeight(3);
+				expect(editor.render(24).length).toBeLessThanOrEqual(3);
+				rows = 1;
+				expect(editor.render(24).find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
+				rows = 8;
+				expect(editor.render(24).length).toBeLessThanOrEqual(3);
+			});
+		}
+	});
+
 	describe("Word delete keybindings", () => {
 		it("honors a keybindings.yml remap of deleteWordBackward in the multi-line editor", () => {
 			setKeybindings(new KeybindingsManager(TUI_KEYBINDINGS, { "tui.editor.deleteWordBackward": "alt+g" }));

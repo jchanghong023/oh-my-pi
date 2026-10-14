@@ -23,7 +23,7 @@ use importer::{ImportError, ProgressFunction, WikiImportOutput};
 use napi::{Env, Error, Result, Status, bindgen_prelude::*};
 use napi_derive::napi;
 use parking_lot::Mutex;
-use storage::{Storage, WikiIndexSummary};
+use storage::{BuildIdentity, Storage, WikiIndexSummary};
 
 use crate::task::{self, CancelToken};
 
@@ -87,8 +87,9 @@ impl Owner {
 		let identity = database::file_identity(Path::new(&self.database_path))?;
 		if state.storage.is_none() || state.identity != identity {
 			state.storage = None;
-			state.storage = Some(open_storage(&self.database_path, &self.diagnostics)?);
-			state.identity = database::file_identity(Path::new(&self.database_path))?;
+			let storage = open_storage(&self.database_path, &self.diagnostics)?;
+			state.identity = storage.identity().into();
+			state.storage = Some(storage);
 		}
 		let result = work(
 			state
@@ -104,13 +105,13 @@ impl Owner {
 
 	// Cleanup deliberately ignores cancellation and owner closure. An accepted
 	// commit must remain removable even after close() interrupted the importer.
-	fn rollback(&self, id: i64) -> CoreResult<()> {
+	fn rollback(&self, build: &BuildIdentity) -> CoreResult<()> {
 		let state = self.storage.lock();
 		let storage = state
 			.storage
 			.as_ref()
 			.ok_or_else(|| WikiError::message("Documentation storage closed during rollback"))?;
-		storage.remove_by_id(id)
+		storage.rollback_build(build)
 	}
 
 	fn search(
@@ -203,8 +204,7 @@ impl WikiSearchEngine {
 		let storage = open_storage(&database_path, &queue);
 		diagnostics::flush_sync(&queue, diagnostic.as_ref())?;
 		let storage = storage.map_err(|error| error.into_napi(env))?;
-		let identity = database::file_identity(Path::new(&database_path))
-			.map_err(|error| error.into_napi(env))?;
+		let identity = storage.identity().into();
 		Ok(Self {
 			owner: Arc::new(Owner {
 				closed: Arc::new(AtomicBool::new(false)),

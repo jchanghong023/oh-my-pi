@@ -720,6 +720,14 @@ export class Editor implements Component, Focusable {
 	onTextAssistApplied?: () => void;
 	/** Terminal height source for clamping the autocomplete dropdown. Hosts wire this to their Terminal's rows. */
 	viewportRowsProvider?: () => number;
+	/** Optional frame budget for the complete ANSI editor, independent of the configured content cap. */
+	renderHeightProvider?: () => number;
+	#renderedRows = 0;
+
+	/** Complete row count of the last ANSI render, for hosts budgeting chrome below the input. */
+	get renderedRows(): number {
+		return this.#renderedRows;
+	}
 
 	// Paste tracking for large pastes
 	#pastes: Map<number, string> = new Map();
@@ -1200,8 +1208,13 @@ export class Editor implements Component, Focusable {
 	}
 
 	#getVisibleContentHeight(contentLines: number): number {
-		if (this.#maxHeight === undefined) return Math.max(this.minContentRows, contentLines);
-		return Math.max(1, this.#maxHeight - this.#effectiveStyle().verticalChrome);
+		const frameHeight = this.renderHeightProvider?.();
+		const maxHeight =
+			frameHeight === undefined
+				? this.#maxHeight
+				: Math.min(this.#maxHeight ?? Number.POSITIVE_INFINITY, frameHeight);
+		if (maxHeight === undefined) return Math.max(this.minContentRows, contentLines);
+		return Math.max(1, maxHeight - this.#effectiveStyle().verticalChrome);
 	}
 	/** Apply the optional input decorator to a plain (ANSI-free) text segment.
 	 *  Decoration only adds zero-width SGR codes, so visible width is unchanged.
@@ -1694,6 +1707,18 @@ export class Editor implements Component, Focusable {
 			result.push(...autocompleteList.render(width));
 		}
 
+		const frameHeight = this.renderHeightProvider?.();
+		if (frameHeight !== undefined && result.length > frameHeight) {
+			// At very short heights even the frame and one content row cannot
+			// coexist. Drop chrome/padding before the insertion row, not the input.
+			const height = Math.max(0, Math.floor(frameHeight));
+			const cursorRow = result.findIndex(row => row.includes(CURSOR_MARKER));
+			const start = Math.max(0, Math.min(cursorRow < 0 ? 0 : cursorRow, result.length - height));
+			const bounded = result.slice(start, start + height);
+			this.#renderedRows = bounded.length;
+			return bounded;
+		}
+		this.#renderedRows = result.length;
 		return result;
 	}
 

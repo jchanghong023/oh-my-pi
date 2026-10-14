@@ -17,6 +17,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
+import * as companyProvider from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import {
 	normalizeModelPatternList,
@@ -52,7 +53,7 @@ import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
-import { cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgRetryFallbackChains, cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const AGENT: AgentDefinition = {
@@ -158,6 +159,7 @@ async function withConsumerCatalog(
 		parent: ToolSession;
 		selections: Array<{ model?: Model<Api>; thinkingLevel?: string }>;
 		advisors: Array<{ model?: Model<Api>; thinkingLevel?: string } | undefined>;
+		sessionOptions: sdkModule.CreateAgentSessionOptions[];
 		setModels: (models: Model<Api>[]) => void;
 	}) => Promise<void>,
 ): Promise<void> {
@@ -168,9 +170,11 @@ async function withConsumerCatalog(
 	const available = vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
 	const selections: Array<{ model?: Model<Api>; thinkingLevel?: string }> = [];
 	const advisors: Array<{ model?: Model<Api>; thinkingLevel?: string } | undefined> = [];
+	const sessionOptions: sdkModule.CreateAgentSessionOptions[] = [];
 	// Exercise the actual executor's resolution and deferred SDK inputs, stopping
 	// at session creation so this selection regression sends no provider request.
 	const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+		if (options) sessionOptions.push(options);
 		const selected = options?.model
 			? { model: options.model, thinkingLevel: options.thinkingLevel }
 			: resolveModelOverride(normalizeModelPatternList(options?.modelPattern), modelRegistry, options?.settings);
@@ -192,6 +196,7 @@ async function withConsumerCatalog(
 			parent,
 			selections,
 			advisors,
+			sessionOptions,
 			setModels: next => {
 				models = next;
 			},
@@ -229,6 +234,38 @@ describe("structured subagent primitive", () => {
 				expect(selections.at(-1)?.thinkingLevel).toBe("high");
 			}
 			expect(selections).toHaveLength(4);
+		});
+	});
+
+	it("preserves an offline agent-definition role and its deferred fallback context without an override", async () => {
+		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		await withConsumerCatalog(async ({ parent, selections, sessionOptions }) => {
+			parent.settings.setModelRole("task", "cold-provider/primary");
+			cfgRetryFallbackChains.override(parent.settings, { task: ["cold-provider/fallback:low"] });
+			const rolesBefore = { ...parent.settings.getModelRoles() };
+			const child = await executorModule.runSubprocess({
+				cwd: parent.cwd,
+				agent: { ...AGENT, model: ["@task"] },
+				task: "Inspect the target.",
+				index: 0,
+				id: "ColdDefinition",
+				settings: parent.settings,
+				modelRegistry: parent.modelRegistry,
+				authStorage: parent.authStorage,
+				parentActiveModelPattern: "parent-provider/parent-model",
+				enableLsp: false,
+				enableIrc: false,
+				enableMCP: false,
+				asyncJobManager: parent.asyncJobManager,
+			});
+			expect(child.exitCode).toBe(1);
+			expect(selections.at(-1)?.model).toBeUndefined();
+			const deferred = sessionOptions.at(-1);
+			expect(deferred?.modelPattern).toEqual(["@task"]);
+			expect(deferred?.modelPatternAuthFallback).toBe("parent-provider/parent-model");
+			expect(deferred?.modelPatternFallbackRole).toBe("subagent:ColdDefinition");
+			expect(deferred?.modelPatternDefaultFallbackChain).toEqual(["cold-provider/fallback:low"]);
+			expect(parent.settings.getModelRoles()).toEqual(rolesBefore);
 		});
 	});
 
@@ -1247,6 +1284,99 @@ describe("agent frontmatter structured opt-in", () => {
 		AgentStorage.close();
 		closeModelCache();
 		await removeWithRetries(root);
+	});
+
+	it("does not discover or dispatch an uncached automatic task role in offline mode", async () => {
+		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
+		const cwd = path.join(root, "home", "offline-work");
+		await fs.mkdir(cwd, { recursive: true });
+		let discoveries = 0;
+		let chatRequests = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				if (new URL(request.url).pathname === "/v1/models") {
+					discoveries++;
+					return Response.json({ data: [{ id: "uncached-task-model", context_length: 65_536 }] });
+				}
+				chatRequests++;
+				return Response.json({ error: { message: "Unexpected model dispatch" } }, { status: 500 });
+			},
+		});
+		const authStorage = createInMemoryAuthStorage();
+		try {
+			const modelsPath = path.join(cwd, "models.yml");
+			await Bun.write(
+				modelsPath,
+				JSON.stringify({
+					providers: {
+						"offline-primary": {
+							baseUrl: server.url.toString(),
+							api: "openai-completions",
+							auth: "none",
+							discovery: { type: "openai-models-list" },
+						},
+						"local-parent": {
+							baseUrl: server.url.toString(),
+							api: "openai-completions",
+							auth: "none",
+							models: [
+								{
+									id: "cached-parent",
+									name: "Cached Parent",
+									reasoning: false,
+									input: ["text"],
+									cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+									contextWindow: 65_536,
+									maxTokens: 8192,
+								},
+							],
+						},
+					},
+				}),
+			);
+			const settings = Settings.isolated({
+				modelRoles: { default: "local-parent/cached-parent", task: "offline-primary/uncached-task-model" },
+				"retry.fallbackChains": { task: [] },
+				"retry.enabled": false,
+				"compaction.enabled": false,
+				"task.agentIdleTtlMs": 0,
+			});
+			const modelRegistry = new ModelRegistry(authStorage, modelsPath, { settings });
+			const child = await executorModule.runSubprocess({
+				cwd,
+				agent: { ...AGENT, model: ["@task"], tools: ["read"], output: undefined },
+				task: "Inspect the target.",
+				index: 0,
+				id: "OfflineAutomatic",
+				settings,
+				modelRegistry,
+				authStorage,
+				parentActiveModelPattern: "local-parent/cached-parent",
+				structured: false,
+				enableLsp: false,
+				enableIrc: false,
+				enableMCP: false,
+				preloadedExtensionPaths: [],
+				preloadedCustomToolPaths: [],
+				contextFiles: [],
+				skills: [],
+				promptTemplates: [],
+				rules: [],
+			});
+			expect(child.exitCode).toBe(1);
+			expect(child.resolvedModel).toBeUndefined();
+			expect(discoveries).toBe(0);
+			expect(chatRequests).toBe(0);
+			expect(settings.getModelRole("task")).toBe("offline-primary/uncached-task-model");
+			expect(settings.getModelRole("default")).toBe("local-parent/cached-parent");
+			expect(cfgRetryFallbackChains.get(settings).task).toEqual([]);
+		} finally {
+			await AgentLifecycleManager.global().dispose();
+			authStorage.close();
+			await server.stop(true);
+		}
 	});
 
 	it.each([

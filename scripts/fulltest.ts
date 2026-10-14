@@ -11,7 +11,7 @@ import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, gatePoolWidth, runFastcheck, runGateCommands } from "./fastcheck";
 import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { captureSourceIdentity } from "./test-gate-source";
-import { beginTestRun, endTestRun } from "./test-reporting";
+import { beginTestRun, finalizeTestRun } from "./test-reporting";
 
 export interface FulltestOptions {
 	debug: boolean;
@@ -369,20 +369,8 @@ if (import.meta.main) {
 			if (!options)
 				throw new GateCommandError("Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= 900>]", 2);
 			const run = await gate.charged(() => beginTestRun("fulltest: fork-affected current-platform tests"));
-			let exitCode = 0;
-			try {
-				await runFulltest(gate, options);
-			} catch (error) {
-				exitCode = error instanceof GateCommandError ? error.exitCode : 1;
-				throw error;
-			} finally {
-				try {
-					await endTestRun(run, exitCode);
-				} catch (error) {
-					console.error(`Could not finalize fulltest timing metadata: ${String(error)}`);
-					if (exitCode === 0) throw error;
-				}
-			}
+			finalizeTestRun(gate, run);
+			await runFulltest(gate, options);
 		},
 		{ limitSeconds: options?.limitSeconds, reportFailure: true },
 	);

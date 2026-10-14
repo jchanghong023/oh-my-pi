@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Preserved the draft and cursor row when full or custom status lines overflow short terminals, restoring the configured layout after expansion.
 - Long composer help wraps instead of disappearing, with one empty row kept below help and drafts.
 - Running subagent counts stay in their configured status-line group instead of always moving to the right.
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.

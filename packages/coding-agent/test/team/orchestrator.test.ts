@@ -562,12 +562,106 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).toContain("【推荐】方案 A");
 		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
 		expect(rechecks).toHaveLength(6); // one failed + one successful per proposal
-		// The round-1 recheck failure is no longer a fact about the final state:
-		// neither the report nor the synthesis input may carry the stale note.
+		// Recovery removes the current failure note without deleting the
+		// failed first attempt from the historical review/revision pairing.
 		expect(result.reportMarkdown).not.toContain("复核子代理失败，阻断问题是否解决未能确认");
 		const synthesisTask = calls.find(call => call.role === "synthesizer")!.task;
 		expect(synthesisTask).not.toContain("参与不完整");
-		expect(synthesisTask).not.toContain("复核失败");
+	});
+
+	it.each([false, true])(
+		"keeps V0 as the reviewed baseline across an unverified V1 and rechecks the cumulative V2 changes (recovery=%s)",
+		async recovery => {
+			const original = "V0: use the existing durable queue";
+			const firstChange = "V1: replace the queue with an in-memory handoff";
+			const secondChange = "V2: add a handoff timeout";
+			const firstEvidence = "docs/queue-contract.md:84 proves durability is required";
+			const firstRebuttal = "The caller retries after process restart; keep the durability objection open";
+			const { result, calls } = await run(
+				{
+					proposal: () => ({ ...proposalData("A"), proposal: original }),
+					review: ({ recheck, round }) => {
+						if (!recheck) return reviewData({ important: 1 });
+						if (round === 1 || !recovery) return { __fail: "review process unavailable" };
+						return reviewData({ priorStatus: "resolved" });
+					},
+					revision: ({ round }) => ({
+						...revisionData(
+							{ changedCoreDesign: true },
+							round === 1
+								? [{ finding: "重要问题 1", disposition: "rejected-with-evidence", explanation: firstEvidence }]
+								: [{ finding: "timeout", disposition: "accepted-and-revised", explanation: "Bound waiting" }],
+						),
+						revisedProposal: round === 1 ? firstChange : secondChange,
+						revisionSummary: round === 1 ? firstRebuttal : "Add timeout only",
+					}),
+					synthesis: () => ({ ...synthesisData("A"), reportMarkdown: "Compare durability and timeout evidence." }),
+				},
+				{ participants: [participantOf(MODEL_A, 0, true)] },
+			);
+			const rechecks = calls.filter(call => parseMarker(call.task).recheck);
+			expect(rechecks).toHaveLength(2);
+			expect(rechecks[0]!.task).toContain(original);
+			// V1 never completed review. The next reviewer must compare V2 to
+			// V0, not merely inspect the timeout delta from unreviewed V1.
+			expect(rechecks[1]!.task).toContain(original);
+			expect(rechecks[1]!.task).toContain(firstChange);
+			expect(rechecks[1]!.task).toContain(secondChange);
+			expect(rechecks[1]!.task).toContain(firstEvidence);
+			expect(rechecks[1]!.task).toContain(firstRebuttal);
+			const synthesisTask = calls.find(call => call.role === "synthesizer")!.task;
+			expect(synthesisTask).toContain(firstEvidence);
+			expect(synthesisTask).toContain(firstRebuttal);
+			expect(synthesisTask).toContain(firstChange);
+			expect(synthesisTask).toContain(secondChange);
+			expect(synthesisTask).toMatch(/"recheckFailed":\s*true/);
+			expect(result.status).toBe("completed");
+			if (recovery) {
+				expect(result.reportMarkdown).toContain("| 方案 A | ✅ 可作为选项");
+				expect(result.reportMarkdown).toContain("【推荐】方案 A");
+				expect(result.droppedRecommendation).toBeFalsy();
+			} else {
+				expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
+				expect(result.reportMarkdown).toContain("修订后必需复核未完成");
+				expect(result.droppedRecommendation).toBe(true);
+			}
+		},
+	);
+
+	it("advances the recheck baseline only after success while keeping earlier responses at synthesis", async () => {
+		const firstEvidence = "src/legacy-reader.ts:41 accepts the previous wire format";
+		const { result, calls } = await run(
+			{
+				proposal: () => ({ ...proposalData("A"), proposal: "V0: current wire format" }),
+				review: ({ recheck, round }) =>
+					!recheck || round === 1
+						? reviewData({ blocking: 1, priorStatus: recheck ? "unresolved" : "not-applicable" })
+						: reviewData({ priorStatus: "resolved" }),
+				revision: ({ round }) => ({
+					...revisionData({ claimsResolvedBlocking: true }, [
+						{
+							finding: "阻断问题 1",
+							disposition: "accepted-and-revised",
+							explanation: round === 1 ? firstEvidence : "Preserve both versions",
+						},
+					]),
+					revisedProposal: round === 1 ? "V1: versioned wire format" : "V2: dual format reader",
+					revisionSummary: round === 1 ? "Introduce version tags" : "Restore compatibility",
+				}),
+				synthesis: () => ({ ...synthesisData("A"), reportMarkdown: "Evaluate both wire format revisions." }),
+			},
+			{ participants: [participantOf(MODEL_A, 0, true)] },
+		);
+		const secondRecheck = calls.filter(call => parseMarker(call.task).recheck)[1]!.task;
+		expect(secondRecheck).toContain("V1: versioned wire format");
+		expect(secondRecheck).not.toContain("V0: current wire format");
+		expect(secondRecheck).not.toContain(firstEvidence);
+		const synthesisTask = calls.find(call => call.role === "synthesizer")!.task;
+		expect(synthesisTask).toContain(firstEvidence);
+		expect(synthesisTask).toContain("Introduce version tags");
+		expect(synthesisTask).toContain("Restore compatibility");
+		expect(result.status).toBe("completed");
+		expect(result.droppedRecommendation).toBeFalsy();
 	});
 
 	it("drops a recommendation that structured tracking rejects", async () => {
@@ -633,6 +727,10 @@ describe("team orchestrator", () => {
 		for (const [reportMarkdown, expectedStatus] of [
 			["方案 A，可以采用。", "failed"],
 			["方案 A\n可以采用。", "failed"],
+			["建议采用方案 A。", "failed"],
+			["方案 A 建议采用。", "failed"],
+			["不建议采用方案 A。", "completed"],
+			["问题解决后，建议采用方案 A。", "completed"],
 			["方案 A 不作为首选。", "completed"],
 			["问题解决后，方案 A 即可采用。", "completed"],
 		] as const) {
@@ -863,32 +961,6 @@ describe("team orchestrator", () => {
 		const { result, calls } = await run({ onCall: () => controller.abort() }, { signal: controller.signal });
 		expect(result.status).toBe("cancelled");
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
-	});
-
-	it("feeds the full review processing narrative to the synthesis stage", async () => {
-		const { result, calls } = await run({
-			review: ({ recheck }) => (recheck ? reviewData({ priorStatus: "resolved" }) : reviewData({ blocking: 1 })),
-			revision: () =>
-				revisionData({ claimsResolvedBlocking: true }, [
-					{
-						finding: "阻断问题 1",
-						disposition: "rejected-with-evidence",
-						explanation: "接口 Z 实际存在（src/z.ts:12），该质疑不成立",
-					},
-				]),
-		});
-		expect(result.status).toBe("completed");
-		const synthesisCall = calls.find(call => parseMarker(call.task).role === "synthesis")!;
-		const task = synthesisCall.task;
-		// Initial findings with their evidence reach the synthesis input.
-		expect(task).toContain("阻断问题 1");
-		expect(task).toContain("方案不能采用");
-		expect(task).toContain("src/x.ts");
-		// The proposer's per-finding response with its disposition and evidence.
-		expect(task).toContain("举证不接受");
-		expect(task).toContain("接口 Z 实际存在（src/z.ts:12）");
-		// The recheck's adjudication of the prior blocking finding.
-		expect(task).toContain("此前阻断问题 resolved");
 	});
 
 	it("excludes a no-viable proposal from options and review targets", async () => {

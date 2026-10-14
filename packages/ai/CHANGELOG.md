@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Preserved JSON literal values and annotation data while dereferencing schema keywords, including definition names that themselves contain schema keyword names.
 - Preserved CodeAgent stream-timeout diagnostics instead of reporting watchdog timeouts as caller cancellations.
 - Fixed Anthropic SDK timeouts being recorded as non-timeout failures while preserving user-cancellation classification.
 - Fixed root schema reference siblings retaining dangling local references after definition blocks were removed.

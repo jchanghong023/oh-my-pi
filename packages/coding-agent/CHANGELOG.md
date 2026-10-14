@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Rejected malformed saved-session revisions before mutation and preserved active plans, loops and dialogs when reopening the current RPC session.
+- Forwarded remote Agent task slash commands without local expansion and explicitly rejected media in projected skill history instead of silently discarding it.
+- Kept automatic offline subagent model discovery cache-only during creation and cold restoration.
+- Retained every team revision and recheck, compared cumulative unreviewed changes against the last reviewed proposal, and rejected contradictory adoption recommendations.
+- Kept complete stored wiki detail text reachable through wrapping, scrolling and terminal resize.
+- Made diagnostic log viewing and report bundles follow the active file sink after fallback or rotation.
+- Finalized gate timing reports inside the owned lifecycle and charged budget, preserving the final failure, interruption or timeout status.
 - `/loop` preserves task text starting with unknown-unit or incomplete duration tokens, such as `3D modeling`, instead of rejecting it as an interval.
 - Sessions from sibling worktrees outside the main checkout remain available to resume after those worktrees are deleted.
 - Preserved recent advisor messages after native compaction of only the older prefix, without duplicating tails included in full native replacements.

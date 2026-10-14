@@ -100,9 +100,6 @@
 {{#if latestProposal.noViableProposal}}
 提案者声明：依据不足，未形成可行方案（见正文中的缺口说明）。
 {{/if}}
-{{#if revision}}
-修订说明（第 {{{roundsUsed}}} 轮）：{{{revision.revisionSummary}}}
-{{/if}}
 {{#if initialReview}}
 审查意见与处理结果：
 {{#if initialReview.reviewSummary}}
@@ -114,24 +111,12 @@
 {{add @index 1}}. [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}；针对部分：{{{targetAspect}}}）
 {{/each}}
 {{else}}初次审查：未发现实质问题。{{/if}}
-{{#if revision}}
-修订者逐项回应：
-{{#if revision.responses.length}}
-{{#each revision.responses}}
-- 针对“{{{finding}}}”：{{#when disposition "==" "accepted-and-revised"}}接受并修订{{else}}{{#when disposition "==" "rejected-with-evidence"}}举证不接受{{else}}{{#when disposition "==" "genuine-tradeoff"}}保留为真实取舍{{else}}仍无法解决{{/when}}{{/when}}{{/when}} — {{{explanation}}}
-{{/each}}
-{{else}}（未提供逐项回应）{{/if}}
 {{/if}}
-{{#each rechecks}}
-复核 {{add @index 1}}：{{#when priorBlockingStatus "==" "not-applicable"}}（未报告）{{else}}此前阻断问题 {{{priorBlockingStatus}}}{{/when}}；{{#if noSubstantiveIssues}}未发现新实质问题{{else}}新发现：{{#each findings}}[{{{severity}}}] {{{issue}}}{{#unless @last}}；{{/unless}}{{/each}}{{/if}}。
-{{#if reviewSummary}}
-复核依据与结论：{{{reviewSummary}}}
+{{#if revisionHistory.length}}
+各轮修订与对应复核（完整结构化材料；历史失败不代表当前资格）：
+{{{jsonStringify revisionHistory}}}
 {{/if}}
-{{#each findings}}
-- [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}；针对部分：{{{targetAspect}}}）
-{{/each}}
-{{/each}}
-{{/if}}
+
 {{#if unresolvedBlocking.length}}
 未解决的阻断问题（机械标注，该方案尚不可采用）：
 {{#each unresolvedBlocking}}

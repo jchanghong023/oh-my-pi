@@ -263,7 +263,7 @@ describe("direct JCH git slash commands", () => {
 				args: "full packages/coding-agent",
 				text: "/jchcatchup full packages/coding-agent",
 			},
-			{} as SlashCommandRuntime,
+			{ session: { model: undefined } } as unknown as SlashCommandRuntime,
 		);
 
 		if (!result || !("prompt" in result)) throw new Error("Expected full catchup to invoke the agent");

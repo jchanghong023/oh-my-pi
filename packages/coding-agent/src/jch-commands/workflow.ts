@@ -1,4 +1,5 @@
 import { prompt } from "@oh-my-pi/pi-utils";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import workflowPrompt from "../prompts/jch-workflow.md" with { type: "text" };
 import workflowzBatchPrompt from "../prompts/jch-workflowzbatch.md" with { type: "text" };
 import { parseSubcommand, usage } from "../slash-commands/helpers/parse";
@@ -44,6 +45,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jch-workflowzbatch",
 		description: "JCH：展开独立任务工作流批处理要求，禁止测试和全仓检查",
 		allowArgs: true,
+		remoteTask: true,
 		inlineHint: "<任务块软目标> <并发上限> <任务正文>",
 		handle(command, runtime) {
 			const match = /^([1-9]\d*)\s+([1-9]\d*)\s+([\s\S]+)$/.exec(command.args.trim());
@@ -75,6 +77,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jchfuncreview",
 		description: "JCH：只读审查高置信、现实可达的功能问题",
 		allowArgs: true,
+		remoteTask: true,
 		inlineHint: "<uncommitted|commit <ref>|path <path>>",
 		subcommands: [
 			{ name: "uncommitted", description: "只读 Review 当前未提交修改" },
@@ -91,6 +94,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jchfuncreviewfix",
 		description: "JCH：审查高置信功能问题并在复核后修复",
 		allowArgs: true,
+		remoteTask: true,
 		inlineHint: "<uncommitted|commit <ref>|repo>",
 		subcommands: [
 			{ name: "uncommitted", description: "Review 并修复当前未提交修改" },
@@ -107,6 +111,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jchverify",
 		description: "JCH：独立验证指定修改并报告是否可交付",
 		allowArgs: true,
+		remoteTask: true,
 		inlineHint: "<uncommitted|commit <ref>|path <path>>",
 		subcommands: [
 			{ name: "uncommitted", description: "验证当前未提交修改" },
@@ -140,6 +145,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb) return handleQuickGitSummary(runtime);
 			if (verb !== "full") return usage(JCH_CATCHUP_USAGE, runtime);
+			if (isJchToolsAgentModel(runtime.session.model)) return { prompt: command.text };
 			return { prompt: renderWorkflowPrompt({ renderCatchup: true, focus: rest }) };
 		},
 	},

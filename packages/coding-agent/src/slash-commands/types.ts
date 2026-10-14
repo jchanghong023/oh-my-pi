@@ -156,6 +156,8 @@ export interface TuiSlashCommandRuntime {
 
 /** Unified slash-command spec consumed by both TUI and ACP dispatchers. */
 export interface SlashCommandSpec extends BuiltinSlashCommand {
+	/** Prompt/task expansion only: forward the original invocation unchanged to a JchTools remote Agent. */
+	remoteTask?: boolean;
 	/** When false, the dispatcher refuses to handle invocations that include arguments. */
 	allowArgs?: boolean;
 	/** ACP-only argument allowance when the TUI handler remains argument-free. */

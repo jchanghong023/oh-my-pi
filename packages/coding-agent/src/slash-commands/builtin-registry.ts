@@ -1,6 +1,7 @@
 import { clearSubmittedText } from "./helpers/draft";
 import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import { COLLAB_GUEST_ALLOWED_COMMANDS } from "../collab/guest";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import { JCH_SLASH_COMMANDS } from "../jch-commands";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import {
@@ -160,6 +161,14 @@ export async function executeBuiltinSlashCommand(
 		runtime.ctx.showStatus(`/${command.name} is host-only during a collab session`);
 		clearSubmittedText(runtime);
 		return true;
+	}
+	if (command.remoteTask && isJchToolsAgentModel(runtime.ctx.session.model)) {
+		if (runtime.ctx.collabGuest?.readOnly) {
+			runtime.ctx.showStatus("This collab link is read-only — prompting is disabled");
+			return true;
+		}
+		clearSubmittedText(runtime);
+		return text;
 	}
 	if (command.handleTui) {
 		const result = await command.handleTui(parsed, runtime);

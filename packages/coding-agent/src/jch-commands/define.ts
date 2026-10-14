@@ -28,6 +28,7 @@ export function defineJchPromptCommand(definition: JchPromptCommandDefinition): 
 		aliases: definition.aliases,
 		description: definition.description,
 		allowArgs: true,
+		remoteTask: true,
 		inlineHint: definition.inlineHint,
 	};
 	spec.handle = (

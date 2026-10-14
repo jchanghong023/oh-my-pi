@@ -11,7 +11,6 @@ import type {
 	TeamProposalRecord,
 	TeamProposalOutput,
 	TeamReviewOutput,
-	TeamRevisionOutput,
 	TeamRole,
 } from "./types";
 
@@ -78,7 +77,8 @@ export function buildReviewTask(args: {
 	unresolvedBlocking?: readonly string[];
 	recheckContext?: {
 		previousProposal: TeamProposalOutput;
-		revision: TeamRevisionOutput;
+		/** All revisions since the last successfully reviewed proposal. */
+		revisions: readonly TeamProposalRecord["revisionHistory"][number][];
 		reviews: readonly TeamReviewOutput[];
 	};
 }): string {
@@ -127,7 +127,6 @@ export function buildSynthesisTask(args: {
 		proposals: args.proposals.map(record => ({
 			...record,
 			initialReview: record.reviews[0],
-			rechecks: record.reviews.slice(1),
 		})),
 	});
 }

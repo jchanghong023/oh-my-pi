@@ -95,18 +95,17 @@
 
 {{#if recheck}}
 {{#if recheckContext}}
-## 修订前方案（用于比较受影响部分）
+## 最后成功审查的方案（用于比较累计未复核变更）
 
 {{{recheckContext.previousProposal.proposal}}}
 
-## 本轮修订说明、逐项回应与复核标志
+## 自该版本以来的全部修订、逐项回应与复核状态
 
-{{{jsonStringify recheckContext.revision}}}
+{{{jsonStringify recheckContext.revisions}}}
 
 ## 已有审查记录（含问题、影响、依据与针对部分）
 
 {{{jsonStringify recheckContext.reviews}}}
-
 {{/if}}
 {{#if unresolvedBlocking.length}}
 ## 此前未解决的阻断问题
@@ -120,10 +119,10 @@
 {{#if recheck}}
 ## 你的任务
 
-你是一名新的审查子代理，复核该方案本轮修订中受影响的部分：
+你是一名新的审查子代理，复核从最后成功审查版本到当前方案的全部累计变更：
 1. 判断此前未解决的阻断问题现在是否真正解决（priorBlockingStatus）。
-2. 检查修订是否引入新的错误或新的阻断/重要问题。
-3. 只复核受影响部分；作者自述不作为结论，未解决就是未解决。
+2. 检查累计修订是否引入新的错误或新的阻断/重要问题；失败复核留下的变更同样必须检查。
+3. 只复核累计受影响部分；作者自述不作为结论，未解决就是未解决。
 {{else}}
 ## 你的任务
 

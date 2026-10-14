@@ -1062,6 +1062,50 @@ export type RpcOpenSessionSession = Pick<
 	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages" | "model" | "setModel"
 >;
 
+interface RpcSessionOpenTarget {
+	dir: string;
+	latest: string | null;
+	alreadyOpen: boolean;
+}
+
+async function resolveRpcSessionOpenTarget(
+	session: RpcOpenSessionSession,
+	sessionDir: string,
+): Promise<RpcSessionOpenTarget> {
+	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
+	const dir = path.resolve(sessionDir);
+	const latest = await findMostRecentNonEmptySession(dir);
+	const current = path.resolve(session.sessionFile);
+	const alreadyOpen = latest
+		? current === path.resolve(latest)
+		: path.dirname(current) === dir && session.messages.length === 0;
+	return { dir, latest, alreadyOpen };
+}
+
+async function openResolvedRpcSession(
+	session: RpcOpenSessionSession,
+	{ dir, latest, alreadyOpen }: RpcSessionOpenTarget,
+	subagentRegistry?: RpcSubagentResetRegistry,
+	model?: Model,
+): Promise<RpcOpenSessionResult> {
+	let cancelled = false;
+	if (!alreadyOpen) {
+		cancelled = latest
+			? !(await session.switchSession(latest, model ? { model } : undefined))
+			: !(await session.newSession({ sessionDir: dir }));
+		if (!cancelled) subagentRegistry?.clear();
+	}
+	// A resumed session is bound to the model by the switch; an already-open or
+	// fresh one selects it as `set_model` would.
+	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
+	return {
+		cancelled,
+		resumed: !cancelled && latest !== null,
+		sessionId: session.sessionId,
+		sessionFile: session.sessionFile,
+	};
+}
+
 /**
  * Continue the newest non-empty session in `sessionDir`, or start a fresh one
  * there — the runtime equivalent of `--session-dir <dir> --continue`, so a host
@@ -1080,29 +1124,8 @@ export async function openRpcSession(
 	subagentRegistry?: RpcSubagentResetRegistry,
 	model?: Model,
 ): Promise<RpcOpenSessionResult> {
-	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
-	const dir = path.resolve(sessionDir);
-	const latest = await findMostRecentNonEmptySession(dir);
-	const current = path.resolve(session.sessionFile);
-	const alreadyOpen = latest
-		? current === path.resolve(latest)
-		: path.dirname(current) === dir && session.messages.length === 0;
-	let cancelled = false;
-	if (!alreadyOpen) {
-		cancelled = latest
-			? !(await session.switchSession(latest, model ? { model } : undefined))
-			: !(await session.newSession({ sessionDir: dir }));
-		if (!cancelled) subagentRegistry?.clear();
-	}
-	// A resumed session is bound to the model by the switch; an already-open or
-	// fresh one selects it as `set_model` would.
-	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
-	return {
-		cancelled,
-		resumed: !cancelled && latest !== null,
-		sessionId: session.sessionId,
-		sessionFile: session.sessionFile,
-	};
+	const target = await resolveRpcSessionOpenTarget(session, sessionDir);
+	return openResolvedRpcSession(session, target, subagentRegistry, model);
 }
 
 type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
@@ -2664,20 +2687,25 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "open_session": {
 				return sessionChangeGate.enqueue(async () => {
 					const requestedModel = await resolveRequestedRpcModel(session, command);
+					// Resolve once, inside the session gate, before tearing down any current work.
+					const target = await resolveRpcSessionOpenTarget(session, command.sessionDir);
 					const fileBeforeOpen = session.sessionFile;
-					await btw.close();
-					await beginModeSessionChange();
+					if (!target.alreadyOpen) {
+						await btw.close();
+						await beginModeSessionChange();
+					}
 					let result: RpcOpenSessionResult | undefined;
 					try {
-						result = await openRpcSession(session, command.sessionDir, subagentRegistry, requestedModel);
+						result = await openResolvedRpcSession(session, target, subagentRegistry, requestedModel);
 					} finally {
-						// Opening the session that is already open leaves a live run going (see below).
-						await endModeSessionChange({ detachedRun: session.sessionFile !== fileBeforeOpen });
+						if (!target.alreadyOpen) {
+							await endModeSessionChange({ detachedRun: session.sessionFile !== fileBeforeOpen });
+						}
 						// Respond only once this change's reattach (and any queued ahead of it) has run.
 						await goalController.settled();
 					}
 					if (!result.cancelled) {
-						inputGate.commitSessionChange(command);
+						if (!target.alreadyOpen) inputGate.commitSessionChange(command);
 						// Opening the session that is already open switches nothing and leaves a live run
 						// going. Any real open (switch or new) changes the file, even when an aliased path
 						// reopens a transcript with the same id.
@@ -3391,10 +3419,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 									return error(id, "rename_session", "rename_session requires sessionId", "invalid_params");
 								if (typeof name !== "string")
 									return error(id, "rename_session", "rename_session requires name", "invalid_params");
+								if ("expectedRevision" in forkCommand && typeof forkCommand.expectedRevision !== "string")
+									return error(id, "rename_session", "expectedRevision must be a string", "invalid_params");
 								const summary = await getSessionDirectory().rename(
 									sessionId,
 									name,
-									typeof forkCommand.expectedRevision === "string" ? forkCommand.expectedRevision : undefined,
+									forkCommand.expectedRevision as string | undefined,
 								);
 								return forkSuccess(summary);
 							} catch (cause) {
@@ -3406,9 +3436,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 								const sessionId = forkCommand.sessionId;
 								if (typeof sessionId !== "string")
 									return error(id, "delete_session", "delete_session requires sessionId", "invalid_params");
+								if ("expectedRevision" in forkCommand && typeof forkCommand.expectedRevision !== "string")
+									return error(id, "delete_session", "expectedRevision must be a string", "invalid_params");
 								await getSessionDirectory().delete(
 									sessionId,
-									typeof forkCommand.expectedRevision === "string" ? forkCommand.expectedRevision : undefined,
+									forkCommand.expectedRevision as string | undefined,
 								);
 								return forkSuccess({ sessionId, deleted: true });
 							} catch (cause) {

@@ -640,6 +640,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#standaloneGap = false;
 	#autocompleteActiveProbe: (() => boolean) | undefined;
 	#topBorderWidthProvider: ((terminalWidth: number) => number) | undefined;
+	/** Live frame rows left below the editor; omitted for standalone renders and previews. */
+	availableRowsProvider?: () => number;
 	#renderRevision = 0;
 	/** Fully rendered bars for the current revision/clock tick, keyed by layout. */
 	#statusLineRenderCache: Record<StatusLineLayout, CachedStatusLine | undefined> = {
@@ -3958,6 +3960,12 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		const showHooks = this.#settings.showHookStatus ?? true;
 		if (showHooks && this.#sortedHookStatuses.length > 0) {
 			lines.push(...this.#sortedHookStatuses.map(text => truncateToWidth(sanitizeHookStatusText(text), width)));
+		}
+		const availableRows = this.availableRowsProvider?.();
+		if (availableRows !== undefined && lines.length > availableRows) {
+			// A standalone gap is expendable when it would displace a status row.
+			if (lines[0] === "") lines.shift();
+			return lines.slice(0, Math.max(0, Math.floor(availableRows)));
 		}
 		return lines;
 	}

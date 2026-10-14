@@ -11,7 +11,10 @@ function textRuntime() {
 	const output: string[] = [];
 	return {
 		output,
-		runtime: { output: (text: string) => output.push(text) } as unknown as SlashCommandRuntime,
+		runtime: {
+			session: { model: undefined },
+			output: (text: string) => output.push(text),
+		} as unknown as SlashCommandRuntime,
 	};
 }
 
@@ -28,6 +31,7 @@ describe("magic keyword public slash dispatch", () => {
 			expect(
 				await executeBuiltinSlashCommand(editor, {
 					ctx: {
+						session: { model: undefined },
 						editor: {
 							setText: (text: string) => {
 								editor = text;
@@ -47,6 +51,7 @@ describe("magic keyword public slash dispatch", () => {
 		const statuses: string[] = [];
 		const result = await executeBuiltinSlashCommand(draft, {
 			ctx: {
+				session: { model: undefined },
 				collabGuest: { readOnly: true },
 				editor: {
 					setText: (text: string) => {
@@ -69,6 +74,7 @@ describe("magic keyword public slash dispatch", () => {
 		const statuses: string[] = [];
 		const result = await executeBuiltinSlashCommand(editor, {
 			ctx: {
+				session: { model: undefined },
 				collabGuest: { readOnly: false },
 				editor: {
 					setText: (text: string) => {
@@ -217,6 +223,7 @@ describe("JCH DFT explanation target handoff", () => {
 		let editorText = "/jchdftexplain DFT-target-marker-43d";
 		const prompt = await executeBuiltinSlashCommand(editorText, {
 			ctx: {
+				session: { model: undefined },
 				editor: {
 					setText: (text: string) => {
 						editorText = text;

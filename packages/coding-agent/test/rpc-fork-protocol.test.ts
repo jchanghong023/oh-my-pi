@@ -232,6 +232,40 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			expect(sessions.map(session => session.sessionId)).toEqual(["e2e-saved"]);
 			const saved = sessions[0]!;
 			expect(saved).toMatchObject({ current: false, name: "Saved session" });
+			const savedPath = path.join(sessionDir, "e2e-saved.jsonl");
+			const originalBytes = await fs.readFile(savedPath);
+			// Invalid optimistic-concurrency tokens must fail before any mutation.
+			for (const [index, expectedRevision] of [null, 42, {}, []].entries()) {
+				for (const type of ["rename_session", "delete_session"]) {
+					const id = `invalid-revision-${type}-${index}`;
+					controls.send({ id, type, sessionId: "e2e-saved", name: "must-not-rename", expectedRevision });
+					expect(await next(frame => frame.type === "response" && frame.id === id)).toMatchObject({
+						success: false,
+						code: "invalid_params",
+					});
+					expect(await fs.readFile(savedPath)).toEqual(originalBytes);
+				}
+			}
+			for (const type of ["rename_session", "delete_session"]) {
+				const id = `stale-revision-${type}`;
+				controls.send({
+					id,
+					type,
+					sessionId: "e2e-saved",
+					name: "must-not-rename",
+					expectedRevision: "stale-revision",
+				});
+				expect(await next(frame => frame.type === "response" && frame.id === id)).toMatchObject({
+					success: false,
+					code: "revision_conflict",
+				});
+				expect(await fs.readFile(savedPath)).toEqual(originalBytes);
+			}
+			controls.send({ id: "ls-after-invalid", type: "list_sessions" });
+			expect(await next(frame => frame.type === "response" && frame.id === "ls-after-invalid")).toMatchObject({
+				success: true,
+				data: { sessions: [saved] },
+			});
 			controls.send({
 				id: "rn1",
 				type: "rename_session",
@@ -301,6 +335,11 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 			expect(await next(frame => frame.type === "response" && frame.id === "moved-delete")).toMatchObject({
 				success: false,
 				code: "unsupported",
+			});
+			controls.send({ id: "moved-saved-delete", type: "delete_session", sessionId: "moved-saved" });
+			expect(await next(frame => frame.type === "response" && frame.id === "moved-saved-delete")).toMatchObject({
+				success: true,
+				data: { deleted: true },
 			});
 			// Renegotiating down to v2 revokes the v3-only command surface.
 			controls.send({ id: "n2-again", type: "negotiate_protocol", protocolVersion: 2 });

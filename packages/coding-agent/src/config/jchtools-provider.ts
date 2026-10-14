@@ -95,6 +95,10 @@ export function projectJchToolsMessages(messages: readonly AgentMessage[]): Agen
 					isHiddenUserCompanion(message)
 				)
 					return [];
+				if (message.customType === "skill-prompt") {
+					// Reject attachments before replacing the expanded skill with the original draft.
+					textContent({ role: "user", content: message.content, timestamp: message.timestamp });
+				}
 				// Skill bodies are harness instructions; only the submitted draft is caller-owned.
 				const details = isRecord(message.details) ? message.details : undefined;
 				const content = message.customType === "skill-prompt" ? details?.prompt : message.content;

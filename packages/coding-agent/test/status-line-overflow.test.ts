@@ -10,7 +10,11 @@ import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/segments";
 import { renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-pi/pi-tui/theme/session-color";
-import { visibleWidth } from "@oh-my-pi/pi-tui";
+import { Container, CURSOR_MARKER, getComposerStyle, visibleWidth } from "@oh-my-pi/pi-tui";
+import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
+import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import type { StatusLineStartupData } from "@oh-my-pi/pi-tui/status-line/startup";
+import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
 import { StatusLineTestComponents } from "./helpers/status-line";
 
@@ -577,4 +581,98 @@ describe("overflow: automatic row wrapping", () => {
 		expect(boxPreviewPlain).toContain("session-marker");
 		expect(boxPreview.every(line => visibleWidth(line) <= 24)).toBe(true);
 	});
+});
+
+describe("overflow: live composer screen budget", () => {
+	for (const preset of ["full", "custom"] as const) {
+		for (const shape of ["box", "pi", "claude"] as const) {
+			for (const running of [false, true]) {
+				it(`keeps the cursor input row on short narrow ${running ? "running" : "startup"} frames (${preset}/${shape})`, () => {
+					const modelName = `MODEL_MARKER_${"列🙂".repeat(80)}`;
+					const session = createStatusLineSession("SESSION_MARKER", modelName);
+					const customSegments: Pick<StatusLineStartupData["settings"], "leftSegments" | "rightSegments"> = {
+						leftSegments: ["pi", "model", "path", "context_pct", "context_total", "time", "hostname"],
+						rightSegments: ["session_name", "cost"],
+					};
+					const startup: StatusLineStartupData = {
+						settings: {
+							preset,
+							...(preset === "custom" ? customSegments : {}),
+							separator: "slash",
+							sessionAccent: false,
+						},
+						gitEnabled: false,
+						model: session.model,
+						autoThinking: false,
+						fastMode: false,
+						usingSubscription: false,
+						autoCompactEnabled: false,
+						compactionBoundaries: null,
+					};
+					const style = getComposerStyle(shape);
+					const terminal = new VirtualTerminal(24, 5);
+					const composer = new Composer({
+						terminal,
+						preferences: {
+							quiet: true,
+							composerShape: shape,
+							spellingTypoDetection: false,
+							spellingAutocomplete: "off",
+							spellingAutocorrect: false,
+						},
+						status: { statusLine: startup },
+					});
+					let live: StatusLineComponent | undefined;
+					if (running) {
+						session.isStreaming = true;
+						live = statusLines.track(new StatusLineComponent(session, statusLineHost));
+						live.updateSettings(startup.settings);
+						composer.setStatusComponent(live);
+						live.setTopBorderWidthProvider(width => composer.editor.getTopBorderAvailableWidth(width));
+						live.attachToEditor(composer.editor, style);
+						const transcript = new TranscriptContainer();
+						transcript.addChild({ render: () => ["Running response"] });
+						const editorRoot = new Container();
+						editorRoot.addChild(composer.editor);
+						composer.setRuntimeChildren([transcript, editorRoot]);
+					}
+					composer.start({ playWelcomeIntro: false });
+					try {
+						composer.editor.setText("older\n输入🙂line\nnewer");
+						composer.renderFrame({ columns: 24, rows: 8 });
+						composer.editor.handleInput("\x1b[A");
+						composer.editor.moveToLineEnd();
+						for (const rows of [1, 2, 3, 5, 8]) {
+							const frame = composer.renderFrame({ columns: 24, rows }).viewport;
+							expect(frame.length).toBeLessThanOrEqual(rows);
+							expect(frame.filter(row => row.includes(CURSOR_MARKER))).toHaveLength(1);
+							expect(frame.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
+							for (const row of frame) expect(visibleWidth(row)).toBeLessThanOrEqual(24);
+							const resizeFrame = composer.renderResizeFrame({ columns: 24, rows });
+							expect(resizeFrame.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
+							for (const row of resizeFrame) expect(visibleWidth(row)).toBeLessThanOrEqual(24);
+						}
+						const taller = composer.renderFrame({ columns: 24, rows: 60 }).viewport;
+						expect(taller.find(row => row.includes(CURSOR_MARKER))).toContain("输入🙂line");
+						const wide = composer.renderFrame({ columns: 600, rows: 60 }).viewport;
+						const plain = stripAnsi(wide.join("\n"));
+						expect(plain).toContain(modelName);
+						expect(plain).toContain("输入🙂line");
+						if (running) expect(plain).toContain("SESSION_MARKER");
+						if (live) {
+							// Live viewport limits must not bleed into /settings previews.
+							composer.renderFrame({ columns: 24, rows: 1 });
+							expect(stripAnsi(live.getPreviewLines(600, style).join("\n"))).toContain("SESSION_MARKER");
+						}
+						composer.ui.renderNow();
+						expect(terminal.getViewport().join("\n")).toContain("输入🙂line");
+						const cursor = terminal.getCursor();
+						expect(terminal.getViewport()[cursor.row]).toContain("输入🙂line");
+					} finally {
+						composer.stop();
+					}
+				});
+			}
+		}
+	}
 });

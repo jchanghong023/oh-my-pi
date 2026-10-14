@@ -53,6 +53,7 @@ function markerRecord(): TeamProposalRecord {
 		originalProposal: latest,
 		latestProposal: latest,
 		reviews: [],
+		revisionHistory: [],
 		roundsUsed: 0,
 		unresolvedBlocking: [],
 		proposerFailed: false,
@@ -99,6 +100,58 @@ describe("team prompt handoff", () => {
 		expect(task).not.toContain("provider/model-x");
 	});
 
+	it("gives a recheck all unverified revision responses since the successfully reviewed baseline", () => {
+		const record = markerRecord();
+		const baseline = { ...record.latestProposal!, proposal: "Audited baseline: use transaction snapshots" };
+		const revisions: TeamProposalRecord["revisionHistory"] = [1, 2].map(round => ({
+			round,
+			revision: {
+				revisedProposal: round === 1 ? "Use incremental snapshots" : "Add snapshot expiry",
+				revisionSummary: round === 1 ? "Change the snapshot boundary" : "Bound retained history",
+				responses: [
+					{
+						finding: round === 1 ? "Readers may observe a partial transaction" : "Old snapshots may accumulate",
+						disposition: "accepted-and-revised",
+						explanation:
+							round === 1
+								? "src/snapshots.ts:63 pins the transaction generation"
+								: "Expire after readers release the generation",
+					},
+				],
+				reviewFlags: {
+					changedCoreDesign: true,
+					claimsResolvedBlocking: true,
+					newEvidenceChangesAssumptions: false,
+					disputesBlockingFinding: false,
+				},
+			},
+			recheckFailed: round === 1,
+		}));
+		const task = buildReviewTask({
+			question: "How can snapshot storage be bounded?",
+			cwd: "/tmp/repo",
+			alignment,
+			targetLabel: "A",
+			proposalText: revisions[1]!.revision.revisedProposal,
+			keyAssumptions: baseline.keyAssumptions,
+			risks: baseline.risks,
+			unknowns: baseline.unknowns,
+			evidence: baseline.evidence,
+			ambiguityInterpretations: baseline.ambiguityInterpretations,
+			round: 2,
+			recheck: true,
+			recheckContext: { previousProposal: baseline, revisions, reviews: [] },
+		});
+		expect(task).toContain(baseline.proposal);
+		for (const entry of revisions) {
+			expect(task).toContain(entry.revision.revisedProposal);
+			expect(task).toContain(entry.revision.revisionSummary);
+			expect(task).toContain(entry.revision.responses[0]!.finding);
+			expect(task).toContain(entry.revision.responses[0]!.explanation);
+		}
+		expect(task).not.toContain(record.participant.modelPattern);
+	});
+
 	it("gives the isolated reviser the common acceptance criteria and complete proposal evidence", () => {
 		const task = buildRevisionTask({
 			question: "如何实现 X？",
@@ -127,5 +180,79 @@ describe("team prompt handoff", () => {
 			proposals: [markerRecord()],
 		});
 		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
+	});
+
+	it("passes every revision/recheck pair, including first-round-only rebuttal evidence, into synthesis", () => {
+		const record = markerRecord();
+		record.roundsUsed = 2;
+		record.revisionHistory = [
+			{
+				round: 1,
+				revision: {
+					revisedProposal: "V1: introduce a versioned storage reader",
+					revisionSummary: "Keep the rollback path pending review",
+					responses: [
+						{
+							finding: "Rollback may lose previous records",
+							disposition: "rejected-with-evidence",
+							explanation: "src/storage/reader.ts:87 retains the original records during rollback",
+						},
+					],
+					reviewFlags: {
+						changedCoreDesign: true,
+						claimsResolvedBlocking: false,
+						newEvidenceChangesAssumptions: false,
+						disputesBlockingFinding: true,
+					},
+				},
+				recheckFailed: true,
+			},
+			{
+				round: 2,
+				revision: {
+					revisedProposal: "V2: add reader version negotiation",
+					revisionSummary: "Negotiate the storage version before switching readers",
+					responses: [
+						{
+							finding: "Version mismatch",
+							disposition: "accepted-and-revised",
+							explanation: "Read the stored version before selecting the reader",
+						},
+					],
+					reviewFlags: {
+						changedCoreDesign: true,
+						claimsResolvedBlocking: true,
+						newEvidenceChangesAssumptions: false,
+						disputesBlockingFinding: false,
+					},
+				},
+				recheck: {
+					noSubstantiveIssues: true,
+					reviewSummary: "src/storage/version.ts:24 confirms both reader versions are supported",
+					findings: [],
+					priorBlockingStatus: "resolved",
+				},
+				recheckFailed: false,
+			},
+		];
+		const task = buildSynthesisTask({
+			question: "How can storage readers be upgraded safely?",
+			cwd: "/tmp/repo",
+			alignment,
+			proposals: [record],
+		});
+		for (const entry of record.revisionHistory) {
+			expect(task).toContain(entry.revision.revisedProposal);
+			expect(task).toContain(entry.revision.revisionSummary);
+			for (const response of entry.revision.responses) {
+				expect(task).toContain(response.finding);
+				expect(task).toContain(response.explanation);
+			}
+			if (entry.recheck) expect(task).toContain(entry.recheck.reviewSummary);
+		}
+		expect(task).toMatch(/"round":\s*1/);
+		expect(task).toMatch(/"round":\s*2/);
+		expect(task).toMatch(/"recheckFailed":\s*true/);
+		expect(task).toMatch(/"recheckFailed":\s*false/);
 	});
 });

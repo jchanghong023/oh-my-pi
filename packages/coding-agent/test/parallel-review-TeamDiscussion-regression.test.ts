@@ -97,6 +97,7 @@ function blockedRecord(): TeamProposalRecord {
 		originalProposal: proposal,
 		latestProposal: proposal,
 		reviews: [blockingReview],
+		revisionHistory: [],
 		roundsUsed: 0,
 		unresolvedBlocking: [blockingReview.findings[0]!.issue],
 		proposerFailed: false,

@@ -88,6 +88,7 @@ interface Scope {
 	events: Array<{ at: number; key: object; kind?: Activity; source?: string; compilerEvents?: boolean }>;
 	controller: AbortController;
 	failure?: GateCommandError;
+	finalizers: Array<(exitCode: number) => Promise<void>>;
 	closed: boolean;
 	reportFailure: boolean;
 	runId: string;
@@ -541,6 +542,7 @@ class Runtime {
 			events: [],
 			controller: new AbortController(),
 			closed: false,
+			finalizers: [],
 			reportFailure: options.reportFailure ?? false,
 			runId: this.runId,
 			operationId: this.operationId,
@@ -813,11 +815,25 @@ class Runtime {
 				if (scope.failure) print(`${scope.level}: CLEANUP_FAIL ${diagnostic}`);
 				else this.cancel(scope, new GateCommandError(diagnostic, 1));
 			}
-			accrue(scope);
-			// Event arrival already reconciled the same compiler union used by
-			// the live budget timer; final output never swaps accounting clocks.
-			if (!scope.failure && scope.charged >= scope.limit)
-				this.cancel(scope, new GateCommandError("Charged budget exhausted", 124, "TIMEOUT"));
+			// Final metadata is part of the same charged lifetime, including cancellation.
+			// If a successful write crosses the budget or receives an interrupt, publish
+			// the preserved first failure before closing the scope.
+			let finalizedExitCode: number;
+			do {
+				finalizedExitCode = scope.failure?.exitCode ?? 0;
+				for (const finalizer of scope.finalizers) {
+					try {
+						await gate.charged(() => finalizer(finalizedExitCode));
+					} catch (error) {
+						print(`${scope.level}: FINALIZE_FAIL ${String(error)}`);
+					}
+				}
+				accrue(scope);
+				// Final output uses the live clock; include the last write before
+				// deciding whether reports need the failed outcome published again.
+				if (!scope.failure && scope.charged >= scope.limit)
+					this.cancel(scope, new GateCommandError("Charged budget exhausted", 124, "TIMEOUT"));
+			} while (finalizedExitCode === 0 && scope.failure);
 			scope.closed = true;
 			clearInterval(timer);
 			options.signal?.removeEventListener("abort", external);
@@ -851,6 +867,14 @@ export class GateRun {
 	) {}
 	get signal(): AbortSignal {
 		return this.scope.controller.signal;
+	}
+	/**
+	 * Register charged report cleanup that settles before the gate closes, even after cancellation.
+	 * It must permit a second call with the first failure's exit code if finalization began successfully.
+	 */
+	onFinalize(finalizer: (exitCode: number) => Promise<void>): void {
+		if (this.scope.closed) throw this.scope.failure ?? new GateCommandError("Gate already settled", 1);
+		this.scope.finalizers.push(finalizer);
 	}
 	/** Stop every scope and owned process while preserving the first triggering failure. */
 	fail(error: unknown): GateCommandError {

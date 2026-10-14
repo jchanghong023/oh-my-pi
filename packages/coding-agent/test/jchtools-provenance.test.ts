@@ -9,7 +9,7 @@ import {
 	projectJchToolsMessages,
 	streamJchToolsAgent,
 } from "../src/config/jchtools-provider";
-import { convertToLlm } from "../src/session/messages";
+import { type CustomMessage, convertToLlm } from "../src/session/messages";
 import { SessionManager } from "../src/session/session-manager";
 
 // Fork JchTools: caller-visible text survives model switches; internal sources never reach HTTP.
@@ -171,4 +171,86 @@ test("projects persisted source provenance across compaction without replaying t
 	expect(JSON.stringify(projected)).not.toContain("PRIVATE_");
 	expect(failed.content).toHaveLength(3);
 	expect(failed.stopReason).toBe("aborted");
+});
+
+test("rejects user skill history attachments before discarding the expanded body or a missing draft", () => {
+	const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+	const contents: CustomMessage["content"][] = [
+		[image],
+		[{ type: "text", text: "PRIVATE_SKILL_BODY" }, image],
+		[image, { type: "text", text: "PRIVATE_SKILL_BODY" }, image],
+	];
+	for (const content of contents) {
+		for (const prompt of ["/skill:inspect keep original", undefined]) {
+			const manager = SessionManager.inMemory(process.cwd());
+			manager.appendMessage({ role: "user", content: "visible earlier task", timestamp: 1 });
+			manager.appendCustomMessageEntry("skill-prompt", content, true, { prompt }, "user");
+			manager.appendMessage({ role: "user", content: "visible next task", timestamp: 2 });
+			const source = manager.buildSessionContext();
+			expect(() =>
+				projectJchToolsContext({ messages: convertToLlm(projectJchToolsMessages(source.messages)) }),
+			).toThrow("JchTools remote Agent input rejected: image content is unsupported; send text only");
+			// Ordinary model conversion still receives the skill body and every attachment.
+			expect(convertToLlm(source.messages)[1]?.content).toEqual(content);
+		}
+	}
+});
+
+test("preserves the original skill draft for string and text-block bodies without forwarding local instructions", () => {
+	const prompt = "  /skill:inspect 使用 scout；保留 system/developer 与 {{literal}}\n  ";
+	const contents: CustomMessage["content"][] = [
+		"PRIVATE_SKILL_BODY",
+		[
+			{ type: "text", text: "PRIVATE_SKILL_" },
+			{ type: "text", text: "BODY" },
+		],
+	];
+	for (const content of contents) {
+		const manager = SessionManager.inMemory(process.cwd());
+		manager.appendMessage({ role: "user", content: "visible earlier task", timestamp: 1 });
+		manager.appendCustomMessageEntry("skill-prompt", content, true, { prompt }, "user");
+		manager.appendMessage({ role: "user", content: "visible next task", timestamp: 2 });
+		const source = manager.buildSessionContext();
+		const projected = projectJchToolsContext({ messages: convertToLlm(projectJchToolsMessages(source.messages)) });
+		expect(projected.messages.map(message => ({ role: message.role, content: message.content }))).toEqual([
+			{ role: "user", content: "visible earlier task" },
+			{ role: "user", content: prompt },
+			{ role: "user", content: "visible next task" },
+		]);
+		expect(JSON.stringify(projected)).not.toContain("PRIVATE_SKILL_");
+		expect(convertToLlm(source.messages)[1]?.content).toEqual(
+			typeof content === "string" ? [{ type: "text", text: content }] : content,
+		);
+	}
+});
+
+test("ignores non-user and hidden media sources before applying text-only validation", () => {
+	const content: CustomMessage["content"] = [{ type: "image", data: "AA==", mimeType: "image/png" }];
+	const manager = SessionManager.inMemory(process.cwd());
+	manager.appendMessage({ role: "user", content, synthetic: true, timestamp: 1 });
+	manager.appendMessage({ role: "user", content, attribution: "agent", timestamp: 2 });
+	manager.appendMessage({ role: "developer", content, attribution: "user", synthetic: true, timestamp: 3 });
+	manager.appendCustomMessageEntry("skill-prompt", content, true, { prompt: "PRIVATE_AGENT_DRAFT" }, "agent");
+	manager.appendCustomMessageEntry("skill-prompt", content, false, { prompt: "PRIVATE_AUTOLOAD_DRAFT" });
+	manager.appendCustomMessageEntry("goal-auto-orchestrate-context", content, true, undefined, "user");
+	manager.appendCustomMessageEntry("orchestrate-notice", content, false, undefined, "user");
+	manager.appendCustomMessageEntry("image-attachment", content, false, undefined, "user");
+	manager.appendMessage({ role: "user", content: "visible task", timestamp: 4 });
+	const source = manager.buildSessionContext();
+	const perCall: CustomMessage = {
+		role: "custom",
+		customType: "skill-prompt",
+		content,
+		display: true,
+		attribution: "user",
+		details: { prompt: "PRIVATE_PER_CALL_DRAFT" },
+		timestamp: 5,
+	};
+	markPerCallContextMessage(perCall, "runtime");
+	const projected = projectJchToolsContext({
+		messages: convertToLlm(projectJchToolsMessages([...source.messages, perCall])),
+	});
+	expect(projected.messages.map(message => ({ role: message.role, content: message.content }))).toEqual([
+		{ role: "user", content: "visible task" },
+	]);
 });

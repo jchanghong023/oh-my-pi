@@ -8,7 +8,7 @@ import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { WorkProfile } from "@oh-my-pi/pi-natives";
-import { APP_NAME, getLogPath, getLogsDir, getReportsDir, isEnoent, localDay, logger } from "@oh-my-pi/pi-utils";
+import { APP_NAME, getReportsDir, isEnoent, localDay, logger } from "@oh-my-pi/pi-utils";
 import { writeArchive } from "@oh-my-pi/pi-utils/ar";
 import type { CpuProfile, MemoryStats } from "./profiler";
 import { collectSystemInfo, sanitizeEnv } from "./system-info";
@@ -42,7 +42,7 @@ export interface ReportBundleOptions {
 	sessionFile: string | undefined;
 	/** Reports directory override (tests isolate here; defaults to ~/.omp/reports). */
 	reportsDir?: string;
-	/** Logs directory override (tests isolate here; defaults to ~/.omp/logs). */
+	/** Logs directory override (tests isolate here; defaults to the logger's current destination). */
 	logsDir?: string;
 	/** Settings to include */
 	settings?: Record<string, unknown>;
@@ -88,7 +88,6 @@ export interface DebugLogSource {
  */
 export async function createReportBundle(options: ReportBundleOptions): Promise<ReportBundleResult> {
 	const reportsDir = options.reportsDir ?? getReportsDir();
-	const logsDir = options.logsDir ?? getLogsDir();
 	await fs.mkdir(reportsDir, { recursive: true });
 
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -115,7 +114,7 @@ export async function createReportBundle(options: ReportBundleOptions): Promise<
 	// Recent logs (last 1000 lines) across every same-day process. PID-qualified
 	// filenames mean a report generated from a later invocation must still gather
 	// the crashed process's log, so read all of today's files, not just our own.
-	const logs = await collectSameDayLogs(1000, logsDir);
+	const logs = await collectSameDayLogs(1000, options.logsDir);
 	if (logs) {
 		data["logs.txt"] = logs;
 		files.push("logs.txt");
@@ -212,7 +211,7 @@ async function addDirectoryToArchive(
 export async function getLogText(): Promise<string> {
 	// The file transport batches writes; include this process's latest records.
 	logger.flush();
-	return readLastLines(getLogPath(), MAX_LOG_LINES);
+	return readLastLines(logger.getCurrentLogPath(), MAX_LOG_LINES);
 }
 
 /**
@@ -222,8 +221,10 @@ export async function getLogText(): Promise<string> {
  * naming (see `localDay`). Files are ordered oldest-first by mtime and
  * separated by a filename header.
  */
-async function collectSameDayLogs(linesPerFile: number, logsDir = getLogsDir()): Promise<string> {
+async function collectSameDayLogs(linesPerFile: number, logsDir?: string): Promise<string> {
 	logger.flush();
+	// Resolve after flushing: the buffered write may have selected a fallback.
+	logsDir ??= logger.getCurrentLogsDir();
 	// Log files are named with the local day (see localDay / RotatingFileSink),
 	// so match them with the local day too — the UTC key misses the live log
 	// between local midnight and UTC midnight.
@@ -258,8 +259,10 @@ async function collectSameDayLogs(linesPerFile: number, logsDir = getLogsDir()):
 const LOG_FILE_PATTERN = new RegExp(`^${APP_NAME}\\.(\\d{4}-\\d{2}-\\d{2})\\.\\d+\\.log(?:\\.\\d+)?$`);
 
 export async function createDebugLogSource(): Promise<DebugLogSource> {
-	const logsDir = getLogsDir();
-	const todayPath = getLogPath();
+	// Flushing can recover a buffered write to a fallback before we snapshot older files.
+	logger.flush();
+	const logsDir = logger.getCurrentLogsDir();
+	const todayPath = logger.getCurrentLogPath();
 	const todayName = path.basename(todayPath);
 	let olderFiles: string[] = [];
 	try {
@@ -279,11 +282,6 @@ export async function createDebugLogSource(): Promise<DebugLogSource> {
 	}
 
 	let cursor = 0;
-
-	const getInitialText = async (): Promise<string> => {
-		logger.flush();
-		return readLastLines(todayPath, MAX_LOG_LINES);
-	};
 
 	const hasOlderLogs = (): boolean => cursor < olderFiles.length;
 
@@ -312,7 +310,7 @@ export async function createDebugLogSource(): Promise<DebugLogSource> {
 	};
 
 	return {
-		getInitialText,
+		getInitialText: getLogText,
 		hasOlderLogs,
 		loadOlderLogs,
 	};

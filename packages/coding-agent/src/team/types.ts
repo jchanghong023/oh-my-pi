@@ -192,7 +192,14 @@ export interface TeamProposalRecord {
 	participant: TeamParticipant;
 	originalProposal?: TeamProposalOutput;
 	latestProposal?: TeamProposalOutput;
-	revision?: TeamRevisionOutput;
+	/** Every completed revision, paired with its own required recheck outcome. */
+	revisionHistory: Array<{
+		round: number;
+		revision: TeamRevisionOutput;
+		recheck?: TeamReviewOutput;
+		/** Historical failure; a later successful recheck does not erase it. */
+		recheckFailed: boolean;
+	}>;
 	reviews: TeamReviewOutput[];
 	/** Reviewer participant (rotation-resolved); audit only, never enters prompts. */
 	reviewer?: TeamParticipant;

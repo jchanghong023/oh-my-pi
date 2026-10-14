@@ -7,6 +7,7 @@ export const BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 	name: keyword.word,
 	description: `Send the ${keyword.word} magic keyword`,
 	allowArgs: true,
+	remoteTask: true,
 	inlineHint: "[task]",
 	acpInputHint: "[task]",
 	handle: command => {

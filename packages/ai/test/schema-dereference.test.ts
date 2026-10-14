@@ -225,4 +225,114 @@ describe("dereferenceJsonSchema", () => {
 		expect(result.properties.a).toEqual({ type: "string", maxLength: 100 });
 		expect(result.properties.b).toEqual({ type: "string", maxLength: 100 });
 	});
+
+	for (const referenced of [false, true]) {
+		it(`preserves literal JSON inside ${referenced ? "$ref siblings" : "ordinary schemas"}`, () => {
+			const literal = {
+				$ref: "#/$defs/Text",
+				$defs: { keep: "literal" },
+				definitions: { keep: "literal" },
+				properties: { nested: { $ref: "#/$defs/Text" } },
+			};
+			const annotations = {
+				const: literal,
+				enum: [literal, { nested: [literal] }],
+				default: literal,
+				examples: [literal, { nested: [literal] }],
+				"x-payload": { nested: literal },
+			};
+			const schema = {
+				$defs: {
+					Text: { type: "string", minLength: 2 },
+					Obj: { type: "object" },
+				},
+				type: "object",
+				properties: {
+					value: {
+						...(referenced ? { $ref: "#/$defs/Obj" } : { type: "object" }),
+						...annotations,
+						properties: { actual: { $ref: "#/$defs/Text" } },
+					},
+				},
+			};
+			expect(dereferenceJsonSchema(schema)).toEqual({
+				type: "object",
+				properties: {
+					value: {
+						type: "object",
+						...annotations,
+						properties: { actual: { type: "string", minLength: 2 } },
+					},
+				},
+			});
+			expect(JSON.stringify(schema.properties.value.const)).toBe(JSON.stringify(literal));
+		});
+	}
+
+	it("preserves reserved property names while dereferencing their nested schemas", () => {
+		const namedSchemas = {
+			$ref: { $ref: "#/$defs/Text" },
+			$defs: {
+				type: "object",
+				properties: { definitions: { $ref: "#/$defs/Text" } },
+			},
+			definitions: { $ref: "#/$defs/Text" },
+			allowed: true,
+			forbidden: false,
+		};
+		const expanded = {
+			$ref: { type: "string", minLength: 2 },
+			$defs: {
+				type: "object",
+				properties: { definitions: { type: "string", minLength: 2 } },
+			},
+			definitions: { type: "string", minLength: 2 },
+			allowed: true,
+			forbidden: false,
+		};
+		for (const keyword of ["properties", "patternProperties", "dependentSchemas", "dependencies"]) {
+			expect(
+				dereferenceJsonSchema({
+					$defs: { Text: { type: "string", minLength: 2 } },
+					[keyword]: namedSchemas,
+				}),
+			).toEqual({ [keyword]: expanded });
+		}
+	});
+
+	it("dereferences schema-valued keywords and preserves boolean and dependency-array values", () => {
+		const definitions = { Text: { type: "string", minLength: 2 } };
+		for (const keyword of [
+			"items",
+			"additionalItems",
+			"contains",
+			"contentSchema",
+			"propertyNames",
+			"if",
+			"then",
+			"else",
+			"not",
+			"additionalProperties",
+			"unevaluatedItems",
+			"unevaluatedProperties",
+		]) {
+			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: { $ref: "#/$defs/Text" } })).toEqual({
+				[keyword]: { type: "string", minLength: 2 },
+			});
+			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: false })).toEqual({ [keyword]: false });
+		}
+		for (const keyword of ["items", "prefixItems", "anyOf", "oneOf", "allOf"]) {
+			expect(
+				dereferenceJsonSchema({ $defs: definitions, [keyword]: [{ $ref: "#/$defs/Text" }, true, false] }),
+			).toEqual({
+				[keyword]: [{ type: "string", minLength: 2 }, true, false],
+			});
+		}
+		expect(
+			dereferenceJsonSchema({
+				$defs: definitions,
+				dependencies: { names: ["$ref", "$defs", "definitions"] },
+			}),
+		).toEqual({ dependencies: { names: ["$ref", "$defs", "definitions"] } });
+	});
 });

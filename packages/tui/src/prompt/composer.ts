@@ -118,8 +118,11 @@ export interface ComposerStartOptions {
 class StatusHost implements Component {
 	#component: Component | undefined;
 
-	setComponent(component: Component): void {
+	constructor(readonly availableRows: () => number) {}
+
+	setComponent(component: Component & Pick<StatusLineComponent, "availableRowsProvider">): void {
 		this.#component = component;
+		component.availableRowsProvider = this.availableRows;
 	}
 
 	render(width: number): readonly string[] {
@@ -194,7 +197,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#editor: CustomEditor;
 	readonly #header = new Container();
 	readonly #bootstrapInputGap = new Spacer(1);
-	readonly #statusHost = new StatusHost();
+	readonly #statusHost = new StatusHost(() =>
+		Math.max(0, (this.#frameRows ?? this.ui.terminal.rows) - this.editor.renderedRows),
+	);
+	#frameRows: number | undefined;
 	readonly #exit: (code: number) => void;
 	readonly #now: () => number;
 	#preferences: ComposerPreferences;
@@ -287,6 +293,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.setResizeScrollback(this.#preferences.resizeScrollback);
 
 		this.#editor = new CustomEditor(getEditorTheme());
+		this.#editor.renderHeightProvider = () => this.#frameRows ?? this.ui.terminal.rows;
 		this.editor.disableSubmit = true;
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setImeSafeCursorLayout(this.#preferences.imeSafeCursor);
@@ -345,6 +352,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (!this.#started || this.#stopped) return { viewport: [] };
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		this.#frameRows = rows;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
 			this.#resizeRetiredHeaderStart = undefined;
@@ -592,6 +600,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (!this.#started || this.#stopped) return [];
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
+		this.#frameRows = rows;
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -869,6 +878,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	setEditor(editor: CustomEditor): void {
 		this.ui.replaceHeldFocus(this.#editor, editor);
 		this.#editor = editor;
+		editor.renderHeightProvider = () => this.#frameRows ?? this.ui.terminal.rows;
 	}
 
 	/**

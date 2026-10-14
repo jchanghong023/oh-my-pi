@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Exposed the active log file and directory after fallback or rotation without changing the profile's data root.
 - Fixed HTTP diagnostics reporting disabled timeouts when native defaults were active and downgrading terminal request failures to warnings.
 - Preserved direct Error metadata when logging inside asynchronous diagnostic contexts.
 - Flushed log-directory fallback warnings during initialization even when INFO records are disabled.

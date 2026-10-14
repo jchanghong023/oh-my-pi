@@ -92,8 +92,8 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
  */
 const CONDITIONAL_ADOPTION_CLAUSE = new RegExp(
 	[
-		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
-		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:[，,]|方案[A-Z]+|[A-Z]+方案){0,4}(?:即|便|才|再|就|方)?(?:可|可以)?(?:采用|作为(?:最终)?选项|推荐|首选)",
+		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以|建议)?(?:采用|作为(?:最终)?选项|推荐|首选)",
+		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:[，,]|方案[A-Z]+|[A-Z]+方案){0,4}(?:即|便|才|再|就|方)?(?:可|可以|建议)?(?:采用|作为(?:最终)?选项|推荐|首选)",
 	].join("|"),
 	"gu",
 );
@@ -133,7 +133,7 @@ function synthesisBodyConflict(
 			}
 		}
 		mentions.sort((left, right) => left.index - right.index);
-		for (const claim of positiveClaims.matchAll(/(?:可(?:以)?(?:采用|作为(?:最终)?选项)|推荐|首选)/gu)) {
+		for (const claim of positiveClaims.matchAll(/(?:可(?:以)?(?:采用|作为(?:最终)?选项)|建议采用|推荐|首选)/gu)) {
 			// A comparison can mention a blocked proposal and recommend its sibling.
 			// Bind each claim to its nearest named proposal, in either word order.
 			let nearestIndex = -1;

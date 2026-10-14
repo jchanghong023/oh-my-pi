@@ -1,4 +1,13 @@
-import { type Component, Input, matchesKey, type TUI, truncateToWidth } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Ellipsis,
+	Input,
+	matchesKey,
+	ScrollView,
+	type TUI,
+	truncateToWidth,
+	wrapLiteralLine,
+} from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import { DocsService } from "../../docs/service";
@@ -31,6 +40,18 @@ export class DocsHubComponent implements Component {
 	#selected = 0;
 	#mode: HubMode = "list";
 	#detail: string[] = [];
+	readonly #detailView = new ScrollView(
+		{
+			render: width =>
+				this.#detail.flatMap((line, index) =>
+					index < 3
+						? [truncateToWidth(line, width)]
+						: line.split("\n").flatMap(row => wrapLiteralLine(row, width)),
+				),
+			invalidate: () => {},
+		},
+		{ height: 0, scrollbar: "never", ellipsis: Ellipsis.Omit },
+	);
 	#search = new Input();
 	#hits: SearchHit[] = [];
 	#hitIndex = 0;
@@ -72,12 +93,15 @@ export class DocsHubComponent implements Component {
 		return hub;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.#detailView.invalidate();
+	}
 
 	dispose(): Promise<void> {
 		if (this.#disposePromise) return this.#disposePromise;
 		this.#disposed = true;
 		this.#cancel();
+		this.#detailView.dispose();
 		this.#disposePromise = this.service.close();
 		return this.#disposePromise;
 	}
@@ -195,6 +219,7 @@ export class DocsHubComponent implements Component {
 				sanitizeTerminalText(value.text),
 			];
 			this.#showingHit = true;
+			this.#detailView.scrollToTop();
 		} catch (error) {
 			this.#latestError = errorLine(error);
 		}
@@ -253,6 +278,8 @@ export class DocsHubComponent implements Component {
 				if (matchesKey(data, "up")) this.#hitIndex = Math.max(0, this.#hitIndex - 1);
 				else if (matchesKey(data, "down")) this.#hitIndex = Math.min(this.#hits.length - 1, this.#hitIndex + 1);
 				else if (matchesKey(data, "enter") || data === "\n") this.#openHit();
+			} else {
+				this.#detailView.handleScrollKey(data);
 			}
 			this.tui.requestRender();
 			return;
@@ -283,7 +310,7 @@ export class DocsHubComponent implements Component {
 			theme.fg(
 				"dim",
 				this.#mode === "detail"
-					? `${this.#showingHit ? "b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  c cancel  Esc indexes`
+					? `${this.#showingHit ? "↑↓ PgUp/PgDn Home/End scroll  b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  c cancel  Esc indexes`
 					: "n new  / search  d delete  c cancel  Esc close",
 			),
 		];
@@ -291,7 +318,7 @@ export class DocsHubComponent implements Component {
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
 		else if (this.#mode === "search") lines.push(`Search: ${this.#search.render(Math.max(10, width - 10))[0] ?? ""}`);
 		else if (this.#mode === "detail") {
-			lines.push(...this.#detail);
+			if (!this.#showingHit) lines.push(...this.#detail);
 			if (!this.#showingHit)
 				for (let index = 0; index < this.#hits.length; index++)
 					lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
@@ -318,6 +345,10 @@ export class DocsHubComponent implements Component {
 				sanitizeTerminalLine(this.#progress.message ?? ""),
 			);
 		if (this.#latestError) lines.push(theme.fg("error", sanitizeTerminalLine(this.#latestError)));
+		if (this.#mode === "detail" && this.#showingHit) {
+			this.#detailView.setHeight(Math.max(1, this.tui.terminal.rows - lines.length));
+			lines.splice(2, 0, ...this.#detailView.render(width));
+		}
 		return lines.flatMap(line => line.split("\n")).map(line => truncateToWidth(line, width));
 	}
 }

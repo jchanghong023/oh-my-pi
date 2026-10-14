@@ -10,6 +10,11 @@
 
 - Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.
 
+### Fixed
+
+- Bound wiki import commits, publication and rollback to the original database and hidden build identity, preventing reused row IDs from modifying replacement indexes.
+- Verified database identity around connection opens and generated a valid literal return type for `wikiSectionShape`.
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed
