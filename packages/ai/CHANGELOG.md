@@ -18,6 +18,10 @@
 - Respected explicitly set TLS environment values, including empty strings, instead of replacing them with fork defaults.
 - Started a new Codex turn when a context extension rewrites a historical user message, while keeping synthesized per-call context out of conversational turn boundaries.
 
+### Fixed
+
+- Fixed parallel tool calls failing with "Tool call arguments are not valid JSON" on some OpenAI-compatible gateways, such as Gemini ([#15682](https://github.com/can1357/oh-my-pi/pull/15682) by [@Zzz141592653](https://github.com/Zzz141592653))
+
 ## [18.10.4] - 2026-10-13
 
 ### Fixed
