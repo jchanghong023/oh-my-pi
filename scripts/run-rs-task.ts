@@ -6,6 +6,7 @@ import { $ } from "bun";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure, withRustCompilerEvents } from "./test-gate-runtime";
 import { forwardNextestOutput } from "./test-gate-native-events";
+import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import {
 	parseFulltestChangedPaths,
 	selectRustTestScope,
@@ -90,7 +91,9 @@ const TASK_COMMANDS = {
 		// vendored uutils docs. `--doc` overrides a crate's own
 		// `doctest = false`, so a vendored crate whose examples do not compile
 		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
-		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES, "--", "-Zunstable-options", "--fail-fast"],
+		// Nightly libtest JSON reports per-case exec_time only with --report-time;
+		// Rust's existing -Zunstable-options also enables the JSON format.
+		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES, "--", "-Zunstable-options", "--fail-fast", "--format=json", "--report-time"],
 	],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
@@ -124,7 +127,7 @@ if (taskName === "test:rs" && taskOptions.affected) {
 
 	Object.assign(process.env, windowsTestTempOverride());
 	prepareWindowsRustEnvironment();
-	await runCommands(commands);
+	await runCommands(commands, taskName === "test:rs" ? "rust-workspace" : undefined);
 }
 
 async function runAffectedRustTests(dryRun: boolean): Promise<void> {
@@ -165,7 +168,7 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 		}
 		Object.assign(process.env, windowsTestTempOverride());
 		prepareWindowsRustEnvironment();
-		await runCommands(commands);
+		await runCommands(commands, "rust-affected-full-workspace");
 		return;
 	}
 	if (scope.crates.length === 0) {
@@ -183,7 +186,7 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 
 	Object.assign(process.env, windowsTestTempOverride());
 	prepareWindowsRustEnvironment();
-	await runCommands(commands);
+	await runCommands(commands, "rust-affected");
 }
 
 function parseTaskOptions(name: RustTaskName, args: readonly string[]): { affected: boolean; dryRun: boolean } | null {
@@ -223,7 +226,7 @@ function affectedTestCommands(crates: readonly string[]): readonly (readonly str
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		["cargo", "test", "--doc", ...packageArgs, "--", "-Zunstable-options", "--fail-fast"],
+		["cargo", "test", "--doc", ...packageArgs, "--", "-Zunstable-options", "--fail-fast", "--format=json", "--report-time"],
 	];
 }
 
@@ -237,11 +240,27 @@ function printTestPlan(
 	for (const command of commands) console.log(`  ${command.join(" ")}`);
 }
 
-async function runCommands(commands: readonly (readonly string[])[]): Promise<void> {
-	for (const command of commands) {
-		const exitCode = await runCommand(command);
-		if (exitCode !== 0) process.exit(exitCode);
+async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
+	const run = scope ? await beginTestRun(scope) : undefined;
+	let exitCode = 0;
+	try {
+		for (const command of commands) {
+			exitCode = await runCommand(command, scope);
+			if (exitCode !== 0) break;
+		}
+	} catch (error) {
+		exitCode = 1;
+		throw error;
+	} finally {
+		if (run) {
+			try {
+				await endTestRun(run, exitCode);
+			} catch (error) {
+				console.warn(`Warning: unable to finalize Rust test timing: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
+	if (exitCode !== 0) process.exit(exitCode);
 }
 
 async function loadCargoWorkspaceMetadata(): Promise<CargoMetadataForRustScope> {
@@ -417,39 +436,208 @@ async function resolveCargoBinary(): Promise<string> {
 	return "cargo";
 }
 
-async function runCommand(command: readonly string[]): Promise<number> {
+function toolVersion(command: string[], env: Record<string, string>): string | undefined {
+	try {
+		const result = Bun.spawnSync(command, { cwd: repoRoot, env, stdout: "pipe", stderr: "ignore" });
+		return result.exitCode === 0 ? result.stdout.toString().trim() : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+async function runCommand(command: readonly string[], scope?: string): Promise<number> {
 	const [head, ...rest] = command;
 	const isCargo = head === "cargo";
 	const isNextest = isCargo && rest[0] === "nextest" && rest[1] === "run";
+	const isDoctest = isCargo && rest[0] === "test" && rest.includes("--doc");
 	const executable = isCargo ? await ensureCargoBinary() : head;
 	const argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
 	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
-	return withRustCompilerEvents(env, async compilerEnv => {
+	const reportPath = scope && (isNextest || isDoctest) ? testReportPath(isNextest ? "rust-nextest" : "rust-doctests") : undefined;
+	let nextestStore: string | undefined;
+	if (reportPath && isNextest) {
+		// Nextest's JUnit path is relative to store.dir/<profile>. A lower-priority
+		// tool config isolates the store for this invocation while leaving Cargo's
+		// stable target directory, build profile and workspace config untouched.
+		nextestStore = `${reportPath}.nextest`;
+		const toolConfigPath = `${reportPath}.nextest.toml`;
+		await Bun.write(toolConfigPath, `[store]\ndir = ${JSON.stringify(nextestStore)}\n`);
+		argv.push("--tool-config-file", `omp-test-report:${toolConfigPath}`);
+	}
+	const startedAt = new Date().toISOString();
+	const startedMs = performance.now();
+	const doctests = isDoctest && reportPath ? new DoctestResults() : undefined;
+	const exitCode = await withRustCompilerEvents(env, async compilerEnv => {
 		const proc = Bun.spawn(argv, {
 			cwd: repoRoot,
 			env: compilerEnv,
 			stdin: "inherit",
-			stdout: isNextest ? "pipe" : "inherit",
+			stdout: isNextest || doctests ? "pipe" : "inherit",
 			stderr: "inherit",
 		});
 		let reportedFailure = false;
+		const writeOutput = (bytes: Uint8Array) =>
+			new Promise<void>((resolve, reject) => {
+				process.stdout.write(bytes, error => (error ? reject(error) : resolve()));
+			});
 		const output = isNextest
-			? forwardNextestOutput(
-					proc.stdout as ReadableStream<Uint8Array>,
-					bytes =>
-						new Promise<void>((resolve, reject) => {
-							process.stdout.write(bytes, error => (error ? reject(error) : resolve()));
-						}),
-					error => {
-						reportedFailure = true;
-						reportGateFailure(error);
-					},
-				)
-			: Promise.resolve();
-		const [exitCode] = await Promise.all([proc.exited, output]);
-		if (exitCode !== 0 && !reportedFailure)
-			reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, exitCode));
-		return exitCode;
+			? forwardNextestOutput(proc.stdout as ReadableStream<Uint8Array>, writeOutput, error => {
+					reportedFailure = true;
+					reportGateFailure(error);
+				})
+			: doctests
+				? doctests.forward(proc.stdout as ReadableStream<Uint8Array>, writeOutput)
+				: Promise.resolve();
+		const [code] = await Promise.all([proc.exited, output]);
+		if (code !== 0 && !reportedFailure)
+			reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, code));
+		return code;
 	});
+	if (reportPath && scope) {
+		let partial = false;
+		if (nextestStore) {
+			const profile = process.env.NEXTEST_PROFILE || "default";
+			const source = path.join(nextestStore, profile, "junit.xml");
+			try {
+				if (path.basename(profile) !== profile || profile === "." || profile === "..")
+					throw new Error(`Invalid nextest profile path: ${profile}`);
+				await fs.promises.copyFile(source, reportPath);
+			} catch (error) {
+				partial = true;
+				console.warn(`Warning: nextest JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		} else if (doctests) {
+			partial = !doctests.complete;
+			if (doctests.suites > 0) {
+				try {
+					await Bun.write(reportPath, doctests.junitXml());
+				} catch (error) {
+					partial = true;
+					console.warn(`Warning: rustdoc JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} else console.warn("Warning: rustdoc emitted no structured libtest JSON suite; doctest timing is partial.");
+		}
+		try {
+			await recordTestProducer({
+				producer: isNextest ? "cargo nextest run" : "cargo test --doc",
+				command: argv,
+				scope,
+				startedAt,
+				durationSeconds: (performance.now() - startedMs) / 1000,
+				exitCode,
+				reportPath,
+				status: partial ? "partial" : undefined,
+				timingBasis: isNextest ? "nextest native JUnit case time" : "rustdoc libtest JSON exec_time (--report-time)",
+				runnerVersion: toolVersion(isNextest ? [executable, "nextest", "--version"] : ["rustdoc", "--version"], env),
+			});
+		} catch (error) {
+			// Reporting must not replace the actual Rust test exit status.
+			console.warn(`Warning: unable to record Rust timing metadata: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+	return exitCode;
+}
+
+interface DoctestCase {
+	name: string;
+	suite: number;
+	source?: string;
+	event: "ok" | "failed" | "ignored";
+	seconds?: number;
+	output?: string;
+}
+
+/** Only libtest JSON events, never Rust's human-readable test output, become cases. */
+class DoctestResults {
+	readonly cases: DoctestCase[] = [];
+	suites = 0;
+	private finishedSuites = 0;
+	private incomplete = false;
+	private expectedCases = 0;
+
+	get complete(): boolean {
+		return !this.incomplete && this.suites > 0 && this.finishedSuites === this.suites && this.cases.length === this.expectedCases;
+	}
+
+	async forward(stream: ReadableStream<Uint8Array>, writeOutput: (bytes: Uint8Array) => Promise<void>): Promise<void> {
+		const decoder = new TextDecoder();
+		const reader = stream.getReader();
+		let pending = "";
+		try {
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				await writeOutput(value);
+				pending += decoder.decode(value, { stream: true });
+				let newline: number;
+				while ((newline = pending.indexOf("\n")) !== -1) {
+					this.observe(pending.slice(0, newline));
+					pending = pending.slice(newline + 1);
+				}
+			}
+			this.observe(pending + decoder.decode());
+		} finally {
+			reader.releaseLock();
+		}
+	}
+
+	private observe(line: string): void {
+		if (!line.trimStart().startsWith("{")) return;
+		let event: Record<string, unknown>;
+		try {
+			event = JSON.parse(line) as Record<string, unknown>;
+		} catch {
+			return;
+		}
+		if (event.type === "suite") {
+			if (event.event === "started") {
+				this.suites++;
+				if (typeof event.test_count === "number") this.expectedCases += event.test_count;
+				else this.incomplete = true;
+			} else if (event.event === "ok" || event.event === "failed") this.finishedSuites++;
+		} else if (event.type === "test") {
+			if (event.event === "timeout") this.incomplete = true;
+			if (event.event !== "ok" && event.event !== "failed" && event.event !== "ignored") return;
+			if (typeof event.name !== "string") {
+				this.incomplete = true;
+				return;
+			}
+			const seconds = event.exec_time;
+			if (event.event !== "ignored" && (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0))
+				this.incomplete = true;
+			const source = event.name.match(/^(.+\.rs) - /)?.[1];
+			if (!source) this.incomplete = true;
+			this.cases.push({
+				name: event.name,
+				suite: this.suites,
+				event: event.event,
+				...(typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0 ? { seconds } : {}),
+				...(typeof event.stdout === "string" ? { output: event.stdout } : {}),
+				...(source ? { source: source.replaceAll("\\", "/") } : {}),
+			});
+		}
+	}
+
+	junitXml(): string {
+		const cases = this.cases.map(test => {
+			const suite = `rustdoc/${escapeXml(test.source ?? `unidentified-suite-${test.suite}`)}`;
+			const time = test.seconds === undefined ? "" : ` time="${test.seconds}"`;
+			const failure = test.event === "failed" ? `<failure message="doctest failed">${escapeXml(test.output ?? "")}</failure>` : "";
+			const skipped = test.event === "ignored" ? "<skipped/>" : "";
+			return `    <testcase classname="${suite}" name="${escapeXml(test.name)}"${time}>${failure}${skipped}</testcase>`;
+		});
+		const failures = this.cases.filter(test => test.event === "failed").length;
+		return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites tests="${this.cases.length}" failures="${failures}">\n  <testsuite name="rustdoc-doctests" tests="${this.cases.length}" failures="${failures}">\n${cases.join("\n")}\n  </testsuite>\n</testsuites>\n`;
+	}
+}
+
+function escapeXml(value: string): string {
+	return value
+		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "")
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
 }

@@ -24,7 +24,7 @@
 		"bench:tb": "bun src/tb/cli.ts",
 		"bench:tb-floor": "bun scripts/tb-floor.ts",
 		"dev": "bun --hot src/server.ts",
-		"test": "bun test"
+		"test": "bun ../../scripts/test-report-bun.ts"
 	},
 	"dependencies": {
 		"@oh-my-pi/pi-agent-core": "catalog:",

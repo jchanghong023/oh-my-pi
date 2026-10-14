@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 type Mode =
 	| "all"
@@ -425,19 +427,80 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
+const reportScope = `ci-test-ts:${requestedMode}${args.includes("--local-gate") ? ":local-gate" : ""}${Bun.env.OMP_TEST_SHARD?.trim() ? `:shard-${Bun.env.OMP_TEST_SHARD.trim()}` : ""}`;
+
+const reportRunnerId = randomUUID().slice(0, 8);
+// Bun's JUnit reporter writes a separate file without replacing console output.
+// The Rust wrapper inherits the same run directory and records its own native report.
+function reportedCommand(testCommand: TestCommand, attempt: number): { command: string[]; reportPath?: string } {
+	if (testCommand.parallel === undefined) return { command: testCommand.command };
+	const reportPath = testReportPath(`${testCommand.label}-attempt-${attempt}`);
+	return {
+		command: [...testCommand.command, "--reporter=junit", `--reporter-outfile=${reportPath}`],
+		reportPath,
+	};
+}
+
+async function recordAttempt(
+	testCommand: TestCommand,
+	attempt: number,
+	command: string[],
+	reportPath: string | undefined,
+	startedAt: string,
+	durationSeconds: number,
+	exitCode: number,
+	timedOut: boolean,
+): Promise<boolean> {
+	let missing = false;
+	if (reportPath) {
+		try {
+			const stat = await fs.stat(reportPath);
+			missing = !stat.isFile() || stat.size === 0;
+		} catch {
+			missing = true;
+		}
+	}
+	const partial = missing || timedOut || exitCode >= 128 || (gateFailFast && exitCode !== 0);
+	try {
+		await recordTestProducer({
+			producer: `${reportScope}:${reportRunnerId}:${testCommand.label}:attempt-${attempt}`,
+			command,
+			scope: reportScope,
+			attempt,
+			logicalGroup: `${reportScope}:${reportRunnerId}:${testCommand.label}`,
+			concurrency: testCommand.parallel,
+			startedAt,
+			durationSeconds,
+			exitCode,
+			reportPath,
+			status: reportPath ? (partial ? "partial" : exitCode === 0 ? "passed" : "failed") : "stage",
+			timingBasis: "Bun testcase execution time (seconds); durationSeconds is command wall time",
+		});
+	} catch (error) {
+		// Preserve the test process's exit status when recording fails.
+		if (missing) return true;
+		if (exitCode === 0) throw error;
+		console.error(`Failed to record ${testCommand.label} attempt ${attempt} (exit ${exitCode}):`, error);
+	}
+	return missing;
+}
+
 async function runTestCommand(testCommand: TestCommand): Promise<void> {
 	const cwd = path.join(repoRoot, testCommand.cwd);
-	const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 	console.log(`\n==> ${testCommand.label}`);
-	console.log(`$ ${renderedCommand}`);
-
 	if (isDryRun) {
+		console.log(`$ ${testCommand.command.map(shellQuote).join(" ")}`);
 		return;
 	}
 
 	const env = buildChildEnv();
 	for (let attempt = 1; ; attempt++) {
-		const proc = Bun.spawn(testCommand.command, {
+		const { command, reportPath } = reportedCommand(testCommand, attempt);
+		const renderedCommand = command.map(shellQuote).join(" ");
+		console.log(`$ ${renderedCommand}`);
+		const startedAt = new Date().toISOString();
+		const start = performance.now();
+		const proc = Bun.spawn(command, {
 			cwd,
 			env,
 			stdout: "inherit",
@@ -460,7 +523,11 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
 			);
 		clearTimeout(killTimer);
+		const missing = await recordAttempt(
+			testCommand, attempt, command, reportPath, startedAt, (performance.now() - start) / 1000, exitCode, timedOut,
+		);
 		if (exitCode === 0) {
+			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 			return;
 		}
 		if (!gateFailFast && !timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
@@ -933,8 +1000,12 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	// can't keep the runner's event loop alive.
 	async function runAttempt(
 		testCommand: TestCommand,
-	): Promise<{ exitCode: number; output: string; timedOut: boolean }> {
-		const proc = Bun.spawn(testCommand.command, {
+		attempt: number,
+	): Promise<{ exitCode: number; output: string; timedOut: boolean; missing: boolean; command: string }> {
+		const { command, reportPath } = reportedCommand(testCommand, attempt);
+		const startedAt = new Date().toISOString();
+		const start = performance.now();
+		const proc = Bun.spawn(command, {
 			cwd: path.join(repoRoot, testCommand.cwd),
 			env,
 			stdout: "pipe",
@@ -966,10 +1037,17 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			stderrDrain.cancel();
 			await drains;
 		}
+		const missing = await recordAttempt(
+			testCommand, attempt, command, reportPath, startedAt, (performance.now() - start) / 1000, exitCode, timedOut,
+		);
+		if (missing && exitCode === 0)
+			console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 		return {
 			exitCode,
 			timedOut,
-			output: `${stdout.text}${stderr.text}${timedOut ? `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}`,
+			missing,
+			command: command.map(shellQuote).join(" "),
+			output: `${stdout.text}${stderr.text}${timedOut ? `\n${stuckTree}[watchdog] chunk exceeded ${Math.round(chunkTimeoutMs() / 1000)}s; killed with SIGKILL (OMP_TEST_CHUNK_TIMEOUT to change)\n` : ""}${missing ? `\nMissing or empty JUnit report: ${reportPath}\n` : ""}`,
 		};
 	}
 
@@ -980,10 +1058,9 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			if (!testCommand) {
 				return;
 			}
-			const renderedCommand = testCommand.command.map(shellQuote).join(" ");
 			const startedAt = performance.now();
 			let attempt = 1;
-			let result = await runAttempt(testCommand);
+			let result = await runAttempt(testCommand, attempt);
 			// Bun-crash retry: a 128+signal exit means the runtime died (GC
 			// segfault/abort), not that tests failed — rerun in a fresh heap.
 			while (!gateFailFast && !result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
@@ -991,12 +1068,12 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 				process.stdout.write(
 					`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
 				);
-				result = await runAttempt(testCommand);
+				result = await runAttempt(testCommand, attempt);
 			}
 			completed += 1;
 			const outcome: ChunkOutcome = {
 				label: testCommand.label,
-				command: renderedCommand,
+				command: result.command,
 				exitCode: result.exitCode,
 				seconds: (performance.now() - startedAt) / 1000,
 				output: result.output,
@@ -1004,17 +1081,17 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			};
 			if (quiet) {
 				let msg = `${formatProgressLine(outcome)}\n`;
-				if (!gateFailFast && (result.exitCode !== 0 || result.timedOut)) {
+				if (!gateFailFast && (outcome.exitCode !== 0 || result.timedOut)) {
 					msg += `${formatChunkFailure(outcome, true)}\n`;
 				}
 				process.stdout.write(msg);
 			} else {
-				const status = result.exitCode === 0 ? "ok" : `FAILED exit ${result.exitCode}`;
+				const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
 				process.stdout.write(
-					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${renderedCommand}\n${gateFailFast ? "" : outcome.output}`,
+					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${result.command}\n${gateFailFast ? "" : outcome.output}`,
 				);
 			}
-			if (result.exitCode !== 0 || result.timedOut) {
+			if (outcome.exitCode !== 0 || result.timedOut) {
 				failures.push(outcome);
 			}
 		}
@@ -1073,19 +1150,35 @@ if (import.meta.main) {
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
 	// explicitly opt into bounded process concurrency. Local runs fan out by
-	// default and may use the same override. Resolved before the dry-run check so
-	// `--dry-run` prints the argv the real run would use, budget included.
+	// default and may use the same override. Resolve before dry-run so it prints
+	// the selected test argv with the CPU budget; reporter paths are live-run only.
 	const pooled = requestedCommands.length > 1 && (!isCI() || explicitConcurrency);
 	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 	const poolWidth = pooled
 		? testConcurrency(requestedCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
 		: 1;
 	const testCommands = applyChunkBudget(requestedCommands, poolWidth);
-	if (pooled && !isDryRun) {
-		await runTestCommandsInParallel(testCommands, poolWidth);
-	} else {
-		for (const testCommand of testCommands) {
-			await runTestCommand(testCommand);
+	const run = isDryRun ? undefined : await beginTestRun(reportScope);
+	let failed = false;
+	try {
+		if (pooled && !isDryRun) {
+			await runTestCommandsInParallel(testCommands, poolWidth);
+		} else {
+			for (const testCommand of testCommands) {
+				await runTestCommand(testCommand);
+			}
+		}
+	} catch (error) {
+		failed = true;
+		throw error;
+	} finally {
+		if (run) {
+			try {
+				await endTestRun(run, Number(process.exitCode) || (failed ? 1 : 0));
+			} catch (error) {
+				if (failed || process.exitCode) console.error("Failed to finalize test report:", error);
+				else throw error;
+			}
 		}
 	}
 }

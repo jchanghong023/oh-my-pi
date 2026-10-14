@@ -24,16 +24,17 @@ section() {
 
 smoke_cli() {
    local omp_bin="$1"
+   local kind="$2"
    local runtime_dir
    runtime_dir="$(mktemp -d "$WORK_DIR/compiled-runtime.XXXXXX")"
-   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --version
-   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --help >/dev/null
-   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" stats --summary >/dev/null
+   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" bun "$ROOT_DIR/scripts/test-report-command.ts" "$kind/version" -- "$omp_bin" --version
+   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" bun "$ROOT_DIR/scripts/test-report-command.ts" "$kind/help" -- "$omp_bin" --help >/dev/null
+   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" bun "$ROOT_DIR/scripts/test-report-command.ts" "$kind/stats" -- "$omp_bin" stats --summary >/dev/null
    # Spawns bundled workers and serves the stats dashboard once. Regression
    # probe for #1011/#1027 worker loading and for npm/compiled distributions
    # missing the dashboard assets that `stats --summary` never touches.
-   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" "$omp_bin" --smoke-test
-   bun "$ROOT_DIR/scripts/install-tests/settings-session.ts" "$omp_bin"
+   XDG_DATA_HOME="$runtime_dir/xdg" HOME="$runtime_dir/home" bun "$ROOT_DIR/scripts/test-report-command.ts" "$kind/worker" -- "$omp_bin" --smoke-test
+   bun "$ROOT_DIR/scripts/test-report-command.ts" "$kind/settings-session" -- bun "$ROOT_DIR/scripts/install-tests/settings-session.ts" "$omp_bin"
 }
 
 find_tarball() {
@@ -92,7 +93,7 @@ bun --cwd=packages/coding-agent run build
 BINARY_DIR="$WORK_DIR/binary-bin"
 mkdir -p "$BINARY_DIR"
 cp packages/coding-agent/dist/omp "$BINARY_DIR/omp"
-smoke_cli "$BINARY_DIR/omp"
+smoke_cli "$BINARY_DIR/omp" binary
 
 section "Tarball install smoke"
 TARBALL_DIR="$WORK_DIR/tarballs"
@@ -222,7 +223,7 @@ mkdir -p "$TARBALL_APP_DIR"
       echo "Collab web tarball did not install built dist/index.html"
       exit 1
    }
-   smoke_cli ./node_modules/.bin/omp
+   smoke_cli ./node_modules/.bin/omp tarball
 )
 
 echo ""

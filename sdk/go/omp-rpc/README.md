@@ -161,10 +161,30 @@ mid-way (`session_busy`, `stale_cursor`); under v1 it sends `get_messages`.
 
 ## Tests
 
+From the repository root, the timed unit-test entry point is:
+
 ```sh
-go test -race ./...
-OMP_RPC_SMOKE=1 go test -run TestSmoke -v ./...   # real servers via bun, from this checkout
+bun scripts/sdk-test-go.ts
 ```
 
+This runs `go test -json -race ./...` in `sdk/go/omp-rpc`: the same `-race` and
+`./...` selection as `go test -race ./...`, with Go's built-in JSON events used
+for each test/subtest's reported `Elapsed` seconds. It does not change Go's
+package-test cache. The JUnit XML and producer/run metadata are written under
+`runs/test-timing/<run-id>/`; each invocation gets a unique report name. A
+missing duration, invalid event stream or package failure outside a test case
+is marked partial rather than assigned an invented case time. Go and Bun must
+be on `PATH` to use the reporting command.
+
+Optional real-server smoke tests are a separate invocation (do not run them
+as part of the unit-test command):
+
+```sh
+bun scripts/sdk-test-go.ts --smoke
+```
+
+This sets `OMP_RPC_SMOKE=1` and runs `go test -json -run TestSmoke -v ./...`
+against real servers via Bun from this checkout. It retains the original
+`TestSmoke` selector and does not add `-race` to the smoke command.
 `TestSmokeModel` drives full prompt turns against the scripted model in
 `packages/coding-agent/test/rpc-wire/fake-openai-server.ts`.

@@ -40,11 +40,13 @@
 | TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
 | Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
 | Python 测试 | `bun run test:py` |
+| 独立 SDK 计时测试 | `bun scripts/sdk-test-go.ts`、`bun scripts/sdk-test-rust.ts`（需相应工具链；不属于 fork-affected 门禁） |
 | 仓库脚本测试 | `bun run test:scripts` |
 | 端到端冒烟（真实 CLI 公开入口） | `bun run ci:test:smoke` |
 | 安装器端到端 | `bun run ci:test:install-methods` |
 | 当前平台 fork 本地门禁（全部 fastcheck 检查 + fork TS 测试、受影响 Rust 测试、脚本测试、native 构建及隔离 TUI 冒烟；非编译预算 900 秒） | `bun run fulltest` |
 | 本机 + 可用的项目所需 WSL 本地门禁（不推送、不触发 CI；非编译预算 1500 秒） | `bun run slowtest` |
+| 测试计时报告 | 已运行的测试在被忽略的 `runs/test-timing/<run-id>/` 中记录 JUnit XML、producer 元数据及 `run.json`；范围与时间口径见 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」 |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
 | 启动独立 profile（内置短参数，无需 shell alias） | `omp -P <name>`（等同 `omp --profile <name>`） |
 

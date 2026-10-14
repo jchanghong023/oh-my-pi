@@ -16,6 +16,12 @@ failure-output = "immediate-final"
 # Report every failing test in one pass instead of stopping at the first.
 fail-fast = false
 
+# Enabled for the active default profile (and profiles inheriting it). The
+# runner sets a per-invocation nextest store via --tool-config-file; Cargo's
+# build target and profile stay unchanged.
+[profile.default.junit]
+path = "junit.xml"
+
 [profile.ci]
 failure-output = "immediate-final"
 fail-fast = false

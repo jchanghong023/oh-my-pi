@@ -27,6 +27,7 @@ import {
 	type DaemonWireRequest,
 } from "../packages/coding-agent/src/launch/protocol";
 import { runRepoSmoke } from "./repo-ui-smoke";
+import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 
@@ -239,8 +240,32 @@ function normalizePtyOutput(text: string): string {
 		.replace(/[\r\n]+/g, "");
 }
 
+const timingRun = await beginTestRun("dev TUI PTY smoke scenarios");
+let caseStartedAt = new Date().toISOString();
+let caseStarted = performance.now();
+async function recordUiCase(name: string): Promise<void> {
+	const durationSeconds = (performance.now() - caseStarted) / 1000;
+	const reportPath = testReportPath(`ui-${name}`);
+	await writeCommandCase(reportPath, "dev-tui/pty", name, durationSeconds, "passed");
+	await recordTestProducer({
+		producer: `dev-tui/${name}`,
+		command: ["bun", "scripts/fulltest-ui-smoke.ts", ...process.argv.slice(2)],
+		scope: name,
+		concurrency: 1,
+		startedAt: caseStartedAt,
+		durationSeconds,
+		exitCode: 0,
+		reportPath,
+		timingBasis: "one real PTY scenario wall time (seconds), including fixture work",
+	});
+	caseStartedAt = new Date().toISOString();
+	caseStarted = performance.now();
+}
+
 if (process.argv.includes("--repo-only")) {
 	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
+	await recordUiCase("repo-only");
+	await endTestRun(timingRun, 0);
 	process.exit(0);
 }
 
@@ -300,6 +325,7 @@ main.session.write("\x04");
 }
 console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
 await cleanupSmokeFixture();
+await recordUiCase("startup-render-liveness-and-exit");
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
 // The `/team` case runs a real TUI (no OMP_OFFLINE) whose session model and
@@ -775,6 +801,7 @@ try {
 	}
 	if (!reportPersisted) fail("/team report rendered but was not durably saved in the session");
 	console.log("ui-smoke: /team case PASS — real TUI run rendered and persisted the final /team report");
+	await recordUiCase("team-report-persisted");
 
 	// ── 5. /team cancellation propagation against a slow stub ──────────────────
 	// team.md §7 requires cancellation across concurrent subagents to be
@@ -890,6 +917,9 @@ try {
 	});
 }
 
+await recordUiCase("team-cancel-propagation");
 await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
+await recordUiCase("repo-index-e2e");
 
 console.log("ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end");
+await endTestRun(timingRun, 0);

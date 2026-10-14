@@ -110,6 +110,40 @@ Once the server sends `host_uri_cancel`, nothing is sent for that request, even 
 
 ## Tests
 
-`cargo test` runs the wire tests and the transport tests, which use a scripted server on in-memory pipes.
+From the repository root, use `bun scripts/sdk-test-rust.ts` for a timed
+`cargo test` run. This leaves Cargo's default test targets, ignored tests,
+doctests, target/platform selection, profile and cache intact. The installed
+nightly toolchain supports libtest's `--format=json --report-time
+-Zunstable-options` flags; the script passes them to the test harness after
+`cargo test --`. Libtest's `exec_time` supplies each executed test's duration
+in seconds; ignored tests have no execution time and are marked skipped
+without a fabricated duration. Individual suites are numbered because
+libtest's event stream does not identify the Cargo target. The JUnit XML and
+producer/run metadata are saved under `runs/test-timing/<run-id>/` with a
+unique report name for every invocation. If the toolchain lacks these nightly
+flags, the stream is incomplete, or a case has no measured execution time,
+the script reports partial/unsupported timing instead of claiming full case
+coverage. `cargo test` remains the normal unreported command on toolchains
+without nightly libtest JSON support.
 
-`cargo test -- --ignored --nocapture` also runs two smoke tests against the repository's server (`bun packages/coding-agent/src/cli.ts --mode rpc`). The first never calls a model. The second uses the scripted model in `packages/coding-agent/test/rpc-wire/fake-openai-server.ts`.
+On Windows, the existing `tests/smoke.rs` uses Unix-only `libc` APIs without
+a platform gate, so the unfiltered `cargo test` can fail while compiling that
+target even though its tests are ignored. The reporting command deliberately
+does not exclude or modify that target; such a run is partial, not a timed
+success.
+
+`cargo test` runs the wire and transport tests (the latter use a scripted
+server on in-memory pipes). The optional real-server smoke invocation remains
+separate, from this crate:
+
+```sh
+cargo test -- --ignored --nocapture
+```
+
+It runs two ignored smoke tests against the repository's server
+(`bun packages/coding-agent/src/cli.ts --mode rpc`); the first never calls a
+model, while the second uses the scripted model in
+`packages/coding-agent/test/rpc-wire/fake-openai-server.ts`. No smoke JUnit
+report is claimed: preserving `--nocapture` allows arbitrary test/server
+stdout to interleave with libtest JSON, so per-case event framing cannot be
+trusted without changing that smoke command's output contract.
