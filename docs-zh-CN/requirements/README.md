@@ -20,6 +20,8 @@
 
 各功能域的验证状态以本表为准；不得将静态检查、文档更新或先前工作树测试视为当前功能验收。只有相应验证实际通过，才可标记验收通过。
 
+当前上游基线的 Windows 本地验证：fork-affected `fulltest` 通过（233.5 秒，compile_excluded=0.0 秒，exit=0），包含全部既有静态／类型检查、276 个 fork TS 测试文件、Rust nextest 3178 通过／6 跳过、脚本 278 通过／15 跳过、native 构建及真实 dev-TUI 的基础、team 运行／取消和 repo 链路。advisor 前缀压缩与 hook 回放边界专项另有 29 例通过；保留 luna/low 和 CodeAgent／JchTools 禁重放边界。计时报告为 `runs/test-timing/2026-10-14T15-13-32.932Z-54348-1f315090/run.json`；混合 Cargo 编译未完整观测，保守全部计费。本次未运行 slowtest／实际 WSL、全上游 TS 套件、Python／独立 SDK、真实模型与 ZCode GUI；脚本中的合成 WSL 结果不是 Linux 验收。
+
 补充验证：显式继承 `OMP_CONFIG_ROOT` 的 YAML／native 目录三个回归文件 15 例通过；捕获流两个回归文件 106 例及真实 CLI 的 stdout／stderr 流式捕获和去重冒烟通过。实际 WSL 输出在执行期间转发，超时／首个失败取消不再丢失已输出诊断；最终判据仍使用完整捕获的固定 SHA、工作树、退出码与活动事件，不把门禁自测中的模拟 WSL PASS 当作 Linux 验收。
 
 Windows 安装器专项：Windows PowerShell 5.1 下 14 个用例通过，11 个 POSIX 用例按平台跳过；覆盖系统代理、显式环境代理优先级及下载回退的真实 HTTP 边界，以及校验失败、替换/回滚失败、PATH 部分完成、带单引号路径的可执行恢复/重试命令和运行中映像替换。真实 `install.ps1 -Binary` 入口已验证清空代理环境变量后经本机 Windows 系统代理下载 fork Release 并运行版本命令；实际文件锁故障非零退出、打印恢复指令、保留可运行下载且不损坏旧安装，临时 PATH 项已移除。未运行 fulltest/slowtest；PowerShell 7、另一台机器和 ZCode GUI 未验证。

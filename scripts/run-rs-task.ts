@@ -93,7 +93,18 @@ const TASK_COMMANDS = {
 		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
 		// Nightly libtest JSON reports per-case exec_time only with --report-time;
 		// Rust's existing -Zunstable-options also enables the JSON format.
-		["cargo", "test", "--doc", "--workspace", ...VENDORED_FORK_EXCLUDES, "--", "-Zunstable-options", "--fail-fast", "--format=json", "--report-time"],
+		[
+			"cargo",
+			"test",
+			"--doc",
+			"--workspace",
+			...VENDORED_FORK_EXCLUDES,
+			"--",
+			"-Zunstable-options",
+			"--fail-fast",
+			"--format=json",
+			"--report-time",
+		],
 	],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 
@@ -226,7 +237,17 @@ function affectedTestCommands(crates: readonly string[]): readonly (readonly str
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		["cargo", "test", "--doc", ...packageArgs, "--", "-Zunstable-options", "--fail-fast", "--format=json", "--report-time"],
+		[
+			"cargo",
+			"test",
+			"--doc",
+			...packageArgs,
+			"--",
+			"-Zunstable-options",
+			"--fail-fast",
+			"--format=json",
+			"--report-time",
+		],
 	];
 }
 
@@ -256,7 +277,9 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 			try {
 				await endTestRun(run, exitCode);
 			} catch (error) {
-				console.warn(`Warning: unable to finalize Rust test timing: ${error instanceof Error ? error.message : String(error)}`);
+				console.warn(
+					`Warning: unable to finalize Rust test timing: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		}
 	}
@@ -454,7 +477,8 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 	const argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
 	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
-	const reportPath = scope && (isNextest || isDoctest) ? testReportPath(isNextest ? "rust-nextest" : "rust-doctests") : undefined;
+	const reportPath =
+		scope && (isNextest || isDoctest) ? testReportPath(isNextest ? "rust-nextest" : "rust-doctests") : undefined;
 	let nextestStore: string | undefined;
 	if (reportPath && isNextest) {
 		// Nextest's JUnit path is relative to store.dir/<profile>. A lower-priority
@@ -490,8 +514,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				? doctests.forward(proc.stdout as ReadableStream<Uint8Array>, writeOutput)
 				: Promise.resolve();
 		const [code] = await Promise.all([proc.exited, output]);
-		if (code !== 0 && !reportedFailure)
-			reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, code));
+		if (code !== 0 && !reportedFailure) reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, code));
 		return code;
 	});
 	if (reportPath && scope) {
@@ -505,7 +528,9 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				await fs.promises.copyFile(source, reportPath);
 			} catch (error) {
 				partial = true;
-				console.warn(`Warning: nextest JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`);
+				console.warn(
+					`Warning: nextest JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		} else if (doctests) {
 			partial = !doctests.complete;
@@ -514,7 +539,9 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 					await Bun.write(reportPath, doctests.junitXml());
 				} catch (error) {
 					partial = true;
-					console.warn(`Warning: rustdoc JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`);
+					console.warn(
+						`Warning: rustdoc JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`,
+					);
 				}
 			} else console.warn("Warning: rustdoc emitted no structured libtest JSON suite; doctest timing is partial.");
 		}
@@ -528,12 +555,19 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				exitCode,
 				reportPath,
 				status: partial ? "partial" : undefined,
-				timingBasis: isNextest ? "nextest native JUnit case time" : "rustdoc libtest JSON exec_time (--report-time)",
-				runnerVersion: toolVersion(isNextest ? [executable, "nextest", "--version"] : ["rustdoc", "--version"], env),
+				timingBasis: isNextest
+					? "nextest native JUnit case time"
+					: "rustdoc libtest JSON exec_time (--report-time)",
+				runnerVersion: toolVersion(
+					isNextest ? [executable, "nextest", "--version"] : ["rustdoc", "--version"],
+					env,
+				),
 			});
 		} catch (error) {
 			// Reporting must not replace the actual Rust test exit status.
-			console.warn(`Warning: unable to record Rust timing metadata: ${error instanceof Error ? error.message : String(error)}`);
+			console.warn(
+				`Warning: unable to record Rust timing metadata: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 	}
 	return exitCode;
@@ -557,7 +591,12 @@ class DoctestResults {
 	private expectedCases = 0;
 
 	get complete(): boolean {
-		return !this.incomplete && this.suites > 0 && this.finishedSuites === this.suites && this.cases.length === this.expectedCases;
+		return (
+			!this.incomplete &&
+			this.suites > 0 &&
+			this.finishedSuites === this.suites &&
+			this.cases.length === this.expectedCases
+		);
 	}
 
 	async forward(stream: ReadableStream<Uint8Array>, writeOutput: (bytes: Uint8Array) => Promise<void>): Promise<void> {
@@ -623,7 +662,10 @@ class DoctestResults {
 		const cases = this.cases.map(test => {
 			const suite = `rustdoc/${escapeXml(test.source ?? `unidentified-suite-${test.suite}`)}`;
 			const time = test.seconds === undefined ? "" : ` time="${test.seconds}"`;
-			const failure = test.event === "failed" ? `<failure message="doctest failed">${escapeXml(test.output ?? "")}</failure>` : "";
+			const failure =
+				test.event === "failed"
+					? `<failure message="doctest failed">${escapeXml(test.output ?? "")}</failure>`
+					: "";
 			const skipped = test.event === "ignored" ? "<skipped/>" : "";
 			return `    <testcase classname="${suite}" name="${escapeXml(test.name)}"${time}>${failure}${skipped}</testcase>`;
 		});

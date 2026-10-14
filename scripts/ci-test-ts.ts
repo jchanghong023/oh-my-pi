@@ -524,7 +524,14 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			);
 		clearTimeout(killTimer);
 		const missing = await recordAttempt(
-			testCommand, attempt, command, reportPath, startedAt, (performance.now() - start) / 1000, exitCode, timedOut,
+			testCommand,
+			attempt,
+			command,
+			reportPath,
+			startedAt,
+			(performance.now() - start) / 1000,
+			exitCode,
+			timedOut,
 		);
 		if (exitCode === 0) {
 			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
@@ -1038,10 +1045,16 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			await drains;
 		}
 		const missing = await recordAttempt(
-			testCommand, attempt, command, reportPath, startedAt, (performance.now() - start) / 1000, exitCode, timedOut,
+			testCommand,
+			attempt,
+			command,
+			reportPath,
+			startedAt,
+			(performance.now() - start) / 1000,
+			exitCode,
+			timedOut,
 		);
-		if (missing && exitCode === 0)
-			console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
+		if (missing && exitCode === 0) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 		return {
 			exitCode,
 			timedOut,

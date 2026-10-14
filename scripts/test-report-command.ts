@@ -3,7 +3,8 @@
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
 const separator = process.argv.indexOf("--");
-if (separator !== 3 || separator + 1 >= process.argv.length) throw new Error("Usage: test-report-command.ts <case-name> -- <command> [args...]");
+if (separator !== 3 || separator + 1 >= process.argv.length)
+	throw new Error("Usage: test-report-command.ts <case-name> -- <command> [args...]");
 const name = process.argv[2];
 const command = process.argv.slice(separator + 1);
 const suite = "install-methods/cli";

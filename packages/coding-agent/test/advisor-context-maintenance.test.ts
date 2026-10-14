@@ -462,6 +462,35 @@ describe("AgentSession advisor context maintenance", () => {
 		}
 	});
 
+	it("retains the advisor tail when native compaction covers only the summarized prefix", async () => {
+		const { advisor, advisorMock, settings } = createAdvisorFallbackHarness();
+		cfgCompactionKeepRecentTokens.set(settings, 1);
+		const retained = advisor.state.messages.at(-1);
+		if (retained?.role !== "assistant") throw new Error("Expected retained advisor output");
+		retained.content = [{ type: "text", text: "retained-prefix-advisor-tail" }];
+		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "prefix summary",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			preserveData: nativeSummary(advisor.state.model.provider).preserveData,
+			providerReplayThroughEntryId: preparation.lastSummarizedEntryId,
+		}));
+
+		await session.prompt("review after prefix-only advisor compaction");
+
+		const wire = JSON.stringify(
+			buildParams(
+				advisor.state.model as Model<"openai-responses">,
+				advisorMock.calls[0].context,
+				undefined,
+				undefined,
+			).params.input,
+		);
+		expect(wire.match(/retained-prefix-advisor-tail/g)).toHaveLength(1);
+		expect(wire.match(/advisor-native-state/g)).toHaveLength(1);
+		expect(wire.indexOf("advisor-native-state")).toBeLessThan(wire.indexOf("retained-prefix-advisor-tail"));
+	});
+
 	it.each([true, false])(
 		"replays consecutive native compactions when the reader's native endpoint is enabled=%s",
 		async readerNativeEnabled => {

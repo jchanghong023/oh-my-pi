@@ -3,7 +3,8 @@
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 const integration = process.argv[2] === "integration";
-if (process.argv.length > 3 || (process.argv[2] && !integration)) throw new Error("Expected integration or no arguments");
+if (process.argv.length > 3 || (process.argv[2] && !integration))
+	throw new Error("Expected integration or no arguments");
 const python = process.platform === "win32" ? "python" : "python3";
 const directories = integration
 	? ["python/robomp/tests/test_worker_smoke.py"]
@@ -15,7 +16,15 @@ let exitCode = 0;
 try {
 	for (const directory of directories) {
 		const reportPath = testReportPath(directory);
-		const command = [python, "-m", "pytest", "-x", directory, `--junitxml=${reportPath}`, `--junit-prefix=${directory}`];
+		const command = [
+			python,
+			"-m",
+			"pytest",
+			"-x",
+			directory,
+			`--junitxml=${reportPath}`,
+			`--junit-prefix=${directory}`,
+		];
 		const startedAt = new Date().toISOString();
 		const started = performance.now();
 		const env = integration ? { ...process.env, ROBOMP_INTEGRATION: "1" } : process.env;

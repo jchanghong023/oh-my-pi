@@ -241,7 +241,9 @@ if (import.meta.main) {
 		async gate => {
 			if (!options)
 				throw new GateCommandError("Usage: bun run slowtest [--debug] [--limit-seconds=N] (0 < N <= 1500)", 2);
-			const run = await gate.charged(() => beginTestRun("slowtest: fork-affected current platform; Linux reports stay in the WSL native workspace"));
+			const run = await gate.charged(() =>
+				beginTestRun("slowtest: fork-affected current platform; Linux reports stay in the WSL native workspace"),
+			);
 			let exitCode = 0;
 			try {
 				await runSlowtest(gate, options);
@@ -250,7 +252,11 @@ if (import.meta.main) {
 				throw error;
 			} finally {
 				try {
-					await endTestRun(run, exitCode, "WSL reports remain in the Linux native workspace and are not reconciled in this host run; an unavailable WSL leg is documented only in the gate log");
+					await endTestRun(
+						run,
+						exitCode,
+						"WSL reports remain in the Linux native workspace and are not reconciled in this host run; an unavailable WSL leg is documented only in the gate log",
+					);
 				} catch (error) {
 					console.error(`Could not finalize slowtest timing metadata: ${String(error)}`);
 					if (exitCode === 0) throw error;

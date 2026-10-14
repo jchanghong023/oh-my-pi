@@ -11,7 +11,8 @@ type GoEvent = {
 };
 type GoCase = { name: string; seconds?: number; result: "pass" | "fail" | "skip"; output: string };
 
-const mode = process.argv[2] === "--smoke" && process.argv.length === 3 ? "smoke" : process.argv.length === 2 ? "unit" : null;
+const mode =
+	process.argv[2] === "--smoke" && process.argv.length === 3 ? "smoke" : process.argv.length === 2 ? "unit" : null;
 if (!mode) {
 	console.error("Usage: bun scripts/sdk-test-go.ts [--smoke]");
 	process.exit(2);
@@ -20,7 +21,10 @@ if (!mode) {
 const cwd = path.join(import.meta.dir, "..", "sdk", "go", "omp-rpc");
 const run = await beginTestRun(`sdk/go/omp-rpc ${mode}`);
 const reportPath = testReportPath(`sdk-go-omp-rpc-${mode}`);
-const command = mode === "smoke" ? ["go", "test", "-json", "-run", "TestSmoke", "-v", "./..."] : ["go", "test", "-json", "-race", "./..."];
+const command =
+	mode === "smoke"
+		? ["go", "test", "-json", "-run", "TestSmoke", "-v", "./..."]
+		: ["go", "test", "-json", "-race", "./..."];
 const startedAt = new Date().toISOString();
 const started = performance.now();
 const suites = new Map<string, Map<string, GoCase>>();
@@ -34,8 +38,16 @@ let runnerVersion: string | undefined;
 const key = (pkg: string, test: string) => `${pkg}\0${test}`;
 
 function escapeXml(value: string): string {
-	return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd")
-		.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+	return value
+		.replace(
+			/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+			"\ufffd",
+		)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
 }
 
 function accept(line: string): void {
@@ -61,17 +73,23 @@ function accept(line: string): void {
 		}
 	}
 	if (event.Test && (event.Action === "pass" || event.Action === "fail" || event.Action === "skip")) {
-		const seconds = typeof event.Elapsed === "number" && Number.isFinite(event.Elapsed) && event.Elapsed >= 0
-			? event.Elapsed
-			: undefined;
+		const seconds =
+			typeof event.Elapsed === "number" && Number.isFinite(event.Elapsed) && event.Elapsed >= 0
+				? event.Elapsed
+				: undefined;
 		if (event.Action !== "skip" && seconds === undefined) {
 			console.error(`No Go-reported case duration for ${pkg}/${event.Test}`);
 			incomplete = true;
 			return;
 		}
 		let cases = suites.get(pkg);
-		if (!cases) suites.set(pkg, cases = new Map());
-		cases.set(event.Test, { name: event.Test, seconds, result: event.Action, output: logs.get(key(pkg, event.Test)) ?? "" });
+		if (!cases) suites.set(pkg, (cases = new Map()));
+		cases.set(event.Test, {
+			name: event.Test,
+			seconds,
+			result: event.Action,
+			output: logs.get(key(pkg, event.Test)) ?? "",
+		});
 		logs.delete(key(pkg, event.Test));
 	} else if (!event.Test && event.Action === "fail") {
 		packageFailures.add(pkg);
@@ -79,16 +97,21 @@ function accept(line: string): void {
 }
 
 function xml(): string {
-	const chunks = ['<?xml version="1.0" encoding="UTF-8"?>', '<testsuites>'];
+	const chunks = ['<?xml version="1.0" encoding="UTF-8"?>', "<testsuites>"];
 	for (const pkg of packages) {
 		const cases = [...(suites.get(pkg)?.values() ?? [])];
 		const failures = cases.filter(test => test.result === "fail").length;
 		const skipped = cases.filter(test => test.result === "skip").length;
-		chunks.push(`  <testsuite name="${escapeXml(pkg)}" tests="${cases.length}" failures="${failures}" skipped="${skipped}">`);
+		chunks.push(
+			`  <testsuite name="${escapeXml(pkg)}" tests="${cases.length}" failures="${failures}" skipped="${skipped}">`,
+		);
 		for (const test of cases) {
-			chunks.push(`    <testcase classname="${escapeXml(pkg)}" name="${escapeXml(test.name)}"${test.seconds === undefined ? "" : ` time="${test.seconds}"`}>`);
+			chunks.push(
+				`    <testcase classname="${escapeXml(pkg)}" name="${escapeXml(test.name)}"${test.seconds === undefined ? "" : ` time="${test.seconds}"`}>`,
+			);
 			if (test.result === "skip") chunks.push("      <skipped/>");
-			if (test.result === "fail") chunks.push(`      <failure message="go test failed">${escapeXml(test.output)}</failure>`);
+			if (test.result === "fail")
+				chunks.push(`      <failure message="go test failed">${escapeXml(test.output)}</failure>`);
 			chunks.push("    </testcase>");
 		}
 		chunks.push("  </testsuite>");

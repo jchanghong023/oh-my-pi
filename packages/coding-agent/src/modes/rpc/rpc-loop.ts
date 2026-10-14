@@ -216,12 +216,15 @@ export class RpcLoopController {
 		if (this.#intervalMs !== undefined && this.#limit?.kind === "duration") {
 			// Expire during the interval, idle wait, or condition instead of awaiting
 			// a potentially much longer interval or maintenance operation.
-			this.#deadlineTimer = setTimeout(() => {
-				this.#deadlineTimer = undefined;
-				if (this.#current(generation, prompt) && isLoopDurationExpired(this.#limit)) {
-					this.#disable("Loop time limit reached. Loop mode disabled.");
-				}
-			}, Math.min(2_147_483_647, Math.max(0, this.#limit.deadlineMs - Date.now())));
+			this.#deadlineTimer = setTimeout(
+				() => {
+					this.#deadlineTimer = undefined;
+					if (this.#current(generation, prompt) && isLoopDurationExpired(this.#limit)) {
+						this.#disable("Loop time limit reached. Loop mode disabled.");
+					}
+				},
+				Math.min(2_147_483_647, Math.max(0, this.#limit.deadlineMs - Date.now())),
+			);
 		}
 		logger.info("RPC loop iteration scheduled", {
 			...this.#logContext,

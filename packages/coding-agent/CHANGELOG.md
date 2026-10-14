@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Preserved recent advisor messages after native compaction of only the older prefix, without duplicating tails included in full native replacements.
 - Active goals now make one bounded forced-tool recovery when a continuation only narrates work, retaining progress across maintenance runs and visibly reporting unfinished work on recovery failure, including pre-model stops.
 - Wiki searches and continuations now keep the interface responsive and can be cancelled, reusing complete snapshot-bound rankings while preserving all evidence and citations across pages. Failed continuations retain the current results.
 - Successful wiki searches now honor an asynchronous, cancellable 500ms minimum duration, with separate database-work and minimum-wait timing. Awaitable shutdown releases the owned worker before database cleanup; buffered diagnostics are persisted before worker replies.
@@ -31,6 +32,8 @@
 - Fixed the macOS `computer` tool keeping the display awake for the rest of the session after a native call hung; the call's timeout or closing the session now lets it sleep ([#15414](https://github.com/can1357/oh-my-pi/pull/15414) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed `page.waitForNetworkIdle` in a browser `run` timing out on a request an earlier `run` started ([#15495](https://github.com/can1357/oh-my-pi/pull/15495) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
 - Fixed a tab that a relay page opens over its own CDP session (`Target.createTarget`) landing in a separate Chrome window with `newWindow`, under an id omp could not attach to, activate or close; it now opens as a relay tab in that page's browser ([#15494](https://github.com/can1357/oh-my-pi/pull/15494) by [@alnaggar-dev](https://github.com/alnaggar-dev) and [@will-bogusz](https://github.com/will-bogusz))
+- Fixed an Anthropic refusal fallback redeeming its fallback credit with an outdated system prompt and tools after switching models; it now sends a fresh request ([#15702](https://github.com/can1357/oh-my-pi/pull/15702) by [@H4vC](https://github.com/H4vC))
+- Fixed OpenAI/Codex auto-compaction failing with "Remote compaction input exceeds the context window" after a turn's final response pushed history past the window; native compaction now compacts the history before the kept recent turns, which stay in context as-is ([#15712](https://github.com/can1357/oh-my-pi/pull/15712) by [@H4vC](https://github.com/H4vC))
 
 ## [18.10.4] - 2026-10-13
 

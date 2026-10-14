@@ -2566,9 +2566,10 @@ export class SessionAdvisors {
 		if (!canReplayRemoteCompaction(compactResult.preserveData, advisorModel)) {
 			throw new NativeCompactionError(new Error("Compaction result cannot be replayed by the advisor model"));
 		}
-		// Native replacement history already contains the retained tail. Replaying
-		// that tail again as raw messages duplicates turns and tool-call IDs.
-		const recentMessages = providerPayload ? [] : preparation.recentMessages;
+		// Full native replacement history already contains the retained tail.
+		// Prefix-only compaction leaves that tail for the caller to replay intact.
+		const recentMessages =
+			providerPayload && !compactResult.providerReplayThroughEntryId ? [] : preparation.recentMessages;
 
 		// The retained messages still carry provider usage from before this
 		// compaction. Record their exact array boundary on the in-memory summary so

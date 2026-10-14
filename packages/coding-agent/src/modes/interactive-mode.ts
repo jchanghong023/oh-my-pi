@@ -2835,12 +2835,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		const prompt = this.loopPrompt;
 		const loopAction = cfgLoopMode.get(settings);
-		this.#deferLoopAutoSubmit(
-			() => {
-				void this.#runLoopIteration(loopAction, prompt);
-			},
-			this.#loopIntervalMs ?? 800,
-		);
+		this.#deferLoopAutoSubmit(() => {
+			void this.#runLoopIteration(loopAction, prompt);
+		}, this.#loopIntervalMs ?? 800);
 	}
 
 	#deferLoopAutoSubmit(callback: () => void, delayMs = 800): void {

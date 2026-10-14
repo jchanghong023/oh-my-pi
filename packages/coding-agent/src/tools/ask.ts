@@ -131,8 +131,10 @@ function toSelectOption(option: AskOption, label = option.label): ExtensionUISel
 // =============================================================================
 
 const RECOMMENDED_SUFFIX = " (Recommended)";
-const AFFIRMATIVE_ANSWER = /^(?:是(?=$|[\s，,。.!！？？])|同意|允许|授权|批准|确认|继续|执行|提交|推送|可以|肯定|好的|yes\b|approve\b|allow\b|authorize\b|confirm\b|proceed\b|continue\b|accept\b|go ahead\b)/iu;
-const NEGATIVE_ANSWER = /(?:不|否|勿|别|拒绝|取消|停止|撤销|暂停|稍后|暂缓)|\b(?:no|not|never|without|don't|do not|stop|cancel|deny|decline|reject)\b/iu;
+const AFFIRMATIVE_ANSWER =
+	/^(?:是(?=$|[\s，,。.!！？？])|同意|允许|授权|批准|确认|继续|执行|提交|推送|可以|肯定|好的|yes\b|approve\b|allow\b|authorize\b|confirm\b|proceed\b|continue\b|accept\b|go ahead\b)/iu;
+const NEGATIVE_ANSWER =
+	/(?:不|否|勿|别|拒绝|取消|停止|撤销|暂停|稍后|暂缓)|\b(?:no|not|never|without|don't|do not|stop|cancel|deny|decline|reject)\b/iu;
 // Window after the timeout deadline within which an `undefined` selection is
 // attributed to a UI-enforced timeout (for surfaces that close the dialog at
 // the deadline but never invoke `onTimeout`). Cancels beyond it are user Esc.
@@ -904,8 +906,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					questionOptions,
 					q.multi ?? false,
 					{
-						recommended:
-							timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended),
+						recommended: timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended),
 						timeout: timeout ?? undefined,
 						signal,
 						initialSelection: options?.previous,

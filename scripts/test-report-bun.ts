@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 const args = process.argv.slice(2);
-const scope = path.relative(path.join(import.meta.dir, ".."), process.cwd()).replaceAll(path.sep, "/") || "repository scripts";
+const scope =
+	path.relative(path.join(import.meta.dir, ".."), process.cwd()).replaceAll(path.sep, "/") || "repository scripts";
 const run = await beginTestRun(`bun test: ${scope}`);
 const reportPath = testReportPath(`bun-${scope}`);
 const command = ["bun", "test", ...args, "--reporter=junit", `--reporter-outfile=${reportPath}`];
@@ -13,7 +14,13 @@ const startedAt = new Date().toISOString();
 const started = performance.now();
 let exitCode = 1;
 try {
-	const child = Bun.spawn(command, { cwd: process.cwd(), env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+	const child = Bun.spawn(command, {
+		cwd: process.cwd(),
+		env: process.env,
+		stdin: "inherit",
+		stdout: "inherit",
+		stderr: "inherit",
+	});
 	exitCode = await child.exited;
 	await recordTestProducer({
 		producer: `bun/${scope}`,

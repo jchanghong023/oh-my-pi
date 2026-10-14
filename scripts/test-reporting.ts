@@ -40,17 +40,28 @@ export async function writeCommandCase(
 	durationSeconds: number,
 	outcome: "passed" | "failed" | "error",
 ): Promise<void> {
-	if (!Number.isFinite(durationSeconds) || durationSeconds < 0) throw new Error(`Invalid command case duration: ${name}`);
+	if (!Number.isFinite(durationSeconds) || durationSeconds < 0)
+		throw new Error(`Invalid command case duration: ${name}`);
 	const escapeXml = (text: string) =>
-		text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-	const failure = outcome === "passed" ? "" : `<${outcome === "failed" ? "failure" : "error"} message="Command ${outcome}"/>`;
+		text
+			.replaceAll("&", "&amp;")
+			.replaceAll("<", "&lt;")
+			.replaceAll(">", "&gt;")
+			.replaceAll('"', "&quot;")
+			.replaceAll("'", "&apos;");
+	const failure =
+		outcome === "passed" ? "" : `<${outcome === "failed" ? "failure" : "error"} message="Command ${outcome}"/>`;
 	const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<testsuite name="${escapeXml(suite)}" tests="1" failures="${outcome === "failed" ? 1 : 0}" errors="${outcome === "error" ? 1 : 0}"><testcase classname="${escapeXml(suite)}" name="${escapeXml(name)}" time="${durationSeconds.toFixed(6)}">${failure}</testcase></testsuite>\n`;
 	await Bun.write(reportPath, xml);
 }
 
 function gitResult(...args: string[]): string | null {
 	try {
-		const result = Bun.spawnSync(["git", ...args], { cwd: path.join(import.meta.dir, ".."), stdout: "pipe", stderr: "ignore" });
+		const result = Bun.spawnSync(["git", ...args], {
+			cwd: path.join(import.meta.dir, ".."),
+			stdout: "pipe",
+			stderr: "ignore",
+		});
 		return result.exitCode === 0 ? result.stdout.toString().trimEnd() : null;
 	} catch {
 		return null;
@@ -78,7 +89,13 @@ export async function beginTestRun(scope: string): Promise<TestReportRun> {
 		owner,
 		sourceRevision: revision,
 		dirtyState: dirty === null ? null : dirty === "" ? "clean" : "dirty",
-		dirtyStateIdentity: dirty === null || (dirty && diff === null) ? null : createHash("sha256").update(dirty).update(diff ?? "").digest("hex"),
+		dirtyStateIdentity:
+			dirty === null || (dirty && diff === null)
+				? null
+				: createHash("sha256")
+						.update(dirty)
+						.update(diff ?? "")
+						.digest("hex"),
 	};
 	if (owner) await writeRun(run, "running", null, []);
 	return run;
@@ -121,9 +138,24 @@ export async function recordTestProducer(info: TestProducerRecord): Promise<void
 export async function endTestRun(run: TestReportRun, exitCode: number, unreconciledScope?: string): Promise<void> {
 	if (!run.owner) return;
 	const files = (await fs.readdir(run.dir)).filter(file => file.endsWith(".producer.json"));
-	const producers = await Promise.all(files.map(async file => JSON.parse(await Bun.file(path.join(run.dir, file)).text()) as TestProducerRecord & { report: string; reportPath: string | null }));
+	const producers = await Promise.all(
+		files.map(
+			async file =>
+				JSON.parse(await Bun.file(path.join(run.dir, file)).text()) as TestProducerRecord & {
+					report: string;
+					reportPath: string | null;
+				},
+		),
+	);
 	const available = producers.filter(producer => producer.report === "available" && producer.reportPath);
-	let reconciliation: { status: string; cases?: number; executed?: number; failures?: number; python?: string; reason?: string } = {
+	let reconciliation: {
+		status: string;
+		cases?: number;
+		executed?: number;
+		failures?: number;
+		python?: string;
+		reason?: string;
+	} = {
 		status: "unavailable",
 		reason: "No XML files to reconcile",
 	};
@@ -163,9 +195,13 @@ print(json.dumps({"status": "validated", "cases": cases, "executed": executed, "
 				stdout: "pipe",
 				stderr: "pipe",
 			});
-			reconciliation = result.exitCode === 0
-				? JSON.parse(result.stdout.toString())
-				: { status: "invalid", reason: result.stderr.toString().trim().slice(-600) || `XML verifier exit ${result.exitCode}` };
+			reconciliation =
+				result.exitCode === 0
+					? JSON.parse(result.stdout.toString())
+					: {
+							status: "invalid",
+							reason: result.stderr.toString().trim().slice(-600) || `XML verifier exit ${result.exitCode}`,
+						};
 		} catch (error) {
 			reconciliation = { status: "unavailable", reason: `XML verifier unavailable: ${String(error)}` };
 		}
@@ -185,7 +221,8 @@ print(json.dumps({"status": "validated", "cases": cases, "executed": executed, "
 			? "complete"
 			: "partial";
 	await writeRun(run, completion, exitCode, producers, reconciliation, unreconciledScope);
-	if (reconciliation.status !== "validated") console.error(`Test timing XML ${reconciliation.status}: ${reconciliation.reason}`);
+	if (reconciliation.status !== "validated")
+		console.error(`Test timing XML ${reconciliation.status}: ${reconciliation.reason}`);
 	console.log(`Test timing: ${path.join(run.dir, "run.json")} (${completion})`);
 }
 
@@ -194,7 +231,14 @@ async function writeRun(
 	completion: string,
 	exitCode: number | null,
 	producers: TestProducerRecord[],
-	reconciliation: { status: string; cases?: number; executed?: number; failures?: number; python?: string; reason?: string } | null = null,
+	reconciliation: {
+		status: string;
+		cases?: number;
+		executed?: number;
+		failures?: number;
+		python?: string;
+		reason?: string;
+	} | null = null,
 	unreconciledScope: string | null = null,
 ): Promise<void> {
 	await Bun.write(
@@ -209,8 +253,16 @@ async function writeRun(
 				dirtyStateIdentityBasis: "git status plus tracked diff; untracked file names, not their contents",
 				platform: process.platform,
 				architecture: process.arch,
-				runtimeVersions: { bun: Bun.version, node: process.versions.node, python: reconciliation?.python ?? null, rust: null },
-				runnerVersions: { bun: Bun.version, ...Object.fromEntries(producers.map(producer => [producer.producer, producer.runnerVersion ?? null])) },
+				runtimeVersions: {
+					bun: Bun.version,
+					node: process.versions.node,
+					python: reconciliation?.python ?? null,
+					rust: null,
+				},
+				runnerVersions: {
+					bun: Bun.version,
+					...Object.fromEntries(producers.map(producer => [producer.producer, producer.runnerVersion ?? null])),
+				},
 				scope: run.scope,
 				wallSeconds: completion === "running" ? null : (performance.now() - run.startedMs) / 1000,
 				exitCode,

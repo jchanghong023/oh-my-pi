@@ -211,41 +211,45 @@ describe("AskTool cancellation", () => {
 	it.each([
 		["中文", "是否授权提交并推送？", "停止，不推送", "授权提交推送"],
 		["English", "Commit and push?", "Stop, do not push", "Yes, commit and push"],
-	])("auto-selects the affirmative %s answer after timeout", async (_language, question, negative, affirmative) => {
-		const tool = new AskTool(
-			createSession({
-				settings: Settings.isolated({ "ask.timeout": 0.001 }),
-			}),
-		);
-		const abort = vi.fn();
-		const context = createContext({
-			select: async (_prompt, _options, dialogOptions) => {
-				dialogOptions?.onTimeout?.();
-				return undefined;
-			},
-			abort,
-		});
+	])(
+		"auto-selects the affirmative %s answer after timeout",
+		async (_language, question, negative, affirmative) => {
+			const tool = new AskTool(
+				createSession({
+					settings: Settings.isolated({ "ask.timeout": 0.001 }),
+				}),
+			);
+			const abort = vi.fn();
+			const context = createContext({
+				select: async (_prompt, _options, dialogOptions) => {
+					dialogOptions?.onTimeout?.();
+					return undefined;
+				},
+				abort,
+			});
 
-		const result = await tool.execute(
-			"call-timeout-none",
-			{
-				questions: [
-					{
-						id: "confirm",
-						question,
-						options: [{ label: negative }, { label: affirmative }],
-					},
-				],
-			},
-			undefined,
-			undefined,
-			context,
-		);
+			const result = await tool.execute(
+				"call-timeout-none",
+				{
+					questions: [
+						{
+							id: "confirm",
+							question,
+							options: [{ label: negative }, { label: affirmative }],
+						},
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			);
 
-		expect(result.details?.selectedOptions).toEqual([affirmative]);
-		expect(result.details?.timedOut).toBe(true);
-		expect(abort).not.toHaveBeenCalled();
-	}, 30_000);
+			expect(result.details?.selectedOptions).toEqual([affirmative]);
+			expect(result.details?.timedOut).toBe(true);
+			expect(abort).not.toHaveBeenCalled();
+		},
+		30_000,
+	);
 
 	it("routes custom input through editor with promptStyle after choosing Other", async () => {
 		const tool = new AskTool(
@@ -1432,7 +1436,11 @@ describe("AskTool rich ask dialog", () => {
 					const answer = Promise.withResolvers<ExtensionAskDialogResult | undefined>();
 					const dialog = new AskDialogComponent(
 						questions,
-						{ onSubmit: answer.resolve, onCancel: () => answer.resolve(undefined), onPrompt: async () => undefined },
+						{
+							onSubmit: answer.resolve,
+							onCancel: () => answer.resolve(undefined),
+							onPrompt: async () => undefined,
+						},
 						{ timeout: options?.timeout },
 					);
 					try {

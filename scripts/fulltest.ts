@@ -130,7 +130,13 @@ export function fulltestCommands(
 		const testHome = path.join(home, "fork-tests", String(commands.length));
 		commands.push({
 			label: `test/fork ${file}`,
-			argv: ["bun", "../../scripts/test-report-bun.ts", "--bail=1", `--timeout=${testTimeoutMs()}`, file.slice(separator + 1)],
+			argv: [
+				"bun",
+				"../../scripts/test-report-bun.ts",
+				"--bail=1",
+				`--timeout=${testTimeoutMs()}`,
+				file.slice(separator + 1),
+			],
 			cwd: path.join(root, packageRoot),
 			env: localTestEnvironment(testHome),
 		});

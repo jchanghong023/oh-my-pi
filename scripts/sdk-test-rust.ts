@@ -11,7 +11,13 @@ type LibtestEvent = {
 	message?: string;
 	test_count?: number;
 };
-type RustCase = { name: string; result: "ok" | "failed" | "ignored"; seconds?: number; output?: string; message?: string };
+type RustCase = {
+	name: string;
+	result: "ok" | "failed" | "ignored";
+	seconds?: number;
+	output?: string;
+	message?: string;
+};
 type Suite = { cases: RustCase[]; count: number; completed: boolean };
 
 if (process.argv.length !== 2) {
@@ -35,8 +41,16 @@ let reportWritten = false;
 let runnerVersion: string | undefined;
 
 function escapeXml(value: string): string {
-	return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd")
-		.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+	return value
+		.replace(
+			/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g,
+			"\ufffd",
+		)
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&apos;");
 }
 
 function accept(line: string): void {
@@ -87,12 +101,21 @@ function accept(line: string): void {
 		incomplete = true;
 		return;
 	}
-	if (event.event !== "ignored" && (typeof event.exec_time !== "number" || !Number.isFinite(event.exec_time) || event.exec_time < 0)) {
+	if (
+		event.event !== "ignored" &&
+		(typeof event.exec_time !== "number" || !Number.isFinite(event.exec_time) || event.exec_time < 0)
+	) {
 		console.error(`No libtest exec_time for ${event.name}`);
 		incomplete = true;
 		return;
 	}
-	active.cases.push({ name: event.name, result: event.event, seconds: event.exec_time, output: event.stdout, message: event.message });
+	active.cases.push({
+		name: event.name,
+		result: event.event,
+		seconds: event.exec_time,
+		output: event.stdout,
+		message: event.message,
+	});
 	if (event.event === "failed") {
 		console.error(`Rust SDK test failed: ${event.name}${event.message ? `: ${event.message}` : ""}`);
 		if (event.stdout) console.error(event.stdout);
@@ -100,18 +123,24 @@ function accept(line: string): void {
 }
 
 function xml(): string {
-	const chunks = ['<?xml version="1.0" encoding="UTF-8"?>', '<testsuites>'];
+	const chunks = ['<?xml version="1.0" encoding="UTF-8"?>', "<testsuites>"];
 	for (const [index, suite] of suites.entries()) {
 		// cargo does not attach a target identity to libtest events. Do not guess one.
 		const label = `sdk/rust/omp-rpc libtest suite ${index + 1}`;
 		const failures = suite.cases.filter(test => test.result === "failed").length;
 		const skipped = suite.cases.filter(test => test.result === "ignored").length;
-		chunks.push(`  <testsuite name="${label}" tests="${suite.cases.length}" failures="${failures}" skipped="${skipped}">`);
+		chunks.push(
+			`  <testsuite name="${label}" tests="${suite.cases.length}" failures="${failures}" skipped="${skipped}">`,
+		);
 		for (const test of suite.cases) {
 			const duration = test.seconds === undefined ? "" : ` time="${test.seconds}"`;
 			chunks.push(`    <testcase classname="${label}" name="${escapeXml(test.name)}"${duration}>`);
-			if (test.result === "ignored") chunks.push(`      <skipped${test.message ? ` message="${escapeXml(test.message)}"` : ""}/>`);
-			if (test.result === "failed") chunks.push(`      <failure message="${escapeXml(test.message ?? "cargo test failed")}">${escapeXml(test.output ?? "")}</failure>`);
+			if (test.result === "ignored")
+				chunks.push(`      <skipped${test.message ? ` message="${escapeXml(test.message)}"` : ""}/>`);
+			if (test.result === "failed")
+				chunks.push(
+					`      <failure message="${escapeXml(test.message ?? "cargo test failed")}">${escapeXml(test.output ?? "")}</failure>`,
+				);
 			chunks.push("    </testcase>");
 		}
 		chunks.push("  </testsuite>");
@@ -160,7 +189,9 @@ try {
 			exitCode,
 			reportPath,
 			status: "partial", // Cargo's libtest JSON omits stable target/binary identity across suites.
-			timingBasis: reportWritten ? "nightly libtest --report-time per-case exec_time (seconds); ignored cases have no execution duration" : "libtest case timing unavailable",
+			timingBasis: reportWritten
+				? "nightly libtest --report-time per-case exec_time (seconds); ignored cases have no execution duration"
+				: "libtest case timing unavailable",
 			runnerVersion,
 		});
 	} catch (error) {
