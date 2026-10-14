@@ -20,7 +20,7 @@
 
 各功能域的验证状态以本表为准；不得将静态检查、文档更新或先前工作树测试视为当前功能验收。只有相应验证实际通过，才可标记验收通过。
 
-当前上游基线的 Windows 本地验证：整体 review 修复后的 fork-affected `fulltest` 通过（227.1 秒，compile_excluded=0.0 秒，exit=0），包含全部既有静态／类型检查、276 个 fork TS 测试文件、Rust nextest 3178 通过／6 跳过、脚本 278 通过／15 跳过、native 构建及真实 dev-TUI 的基础、team 运行／取消和 repo 链路。JchTools 并发刷新回归在认证初始化后使用可控时钟，消除短截止与手动 HTTP 屏障竞争；欢迎提示用确定性的实际宽度／占位符展开回归替代随机原文断言，不改变产品行为或门禁预算。计时报告为 `runs/test-timing/2026-10-14T16-04-49.508Z-33276-eac0d978/run.json`；混合 Cargo 编译未完整观测，保守全部计费。本次尚未运行 slowtest／实际 WSL、全上游 TS 套件、Python／独立 SDK、真实模型与 ZCode GUI；脚本中的合成 WSL 结果不是 Linux 验收。
+修复阶段（上游基线 `ce932132ab87`）的 Windows 本地验证：整体 review 修复后的 fork-affected `fulltest` 通过（227.1 秒，compile_excluded=0.0 秒，exit=0），包含全部既有静态／类型检查、276 个 fork TS 测试文件、Rust nextest 3178 通过／6 跳过、脚本 278 通过／15 跳过、native 构建及真实 dev-TUI 的基础、team 运行／取消和 repo 链路。JchTools 并发刷新回归在认证初始化后使用可控时钟，消除短截止与手动 HTTP 屏障竞争；欢迎提示用确定性的实际宽度／占位符展开回归替代随机原文断言，不改变产品行为或门禁预算。计时报告为 `runs/test-timing/2026-10-14T16-04-49.508Z-33276-eac0d978/run.json`；混合 Cargo 编译未完整观测，保守全部计费。最新上游同步后的 slowtest／实际 WSL 尚待验证；全上游 TS 套件、Python／独立 SDK、真实模型与 ZCode GUI 未验证，脚本中的合成 WSL 结果不是 Linux 验收。
 
 补充验证：显式继承 `OMP_CONFIG_ROOT` 的 YAML／native 目录三个回归文件 15 例通过；捕获流两个回归文件 106 例及真实 CLI 的 stdout／stderr 流式捕获和去重冒烟通过。实际 WSL 输出在执行期间转发，超时／首个失败取消不再丢失已输出诊断；最终判据仍使用完整捕获的固定 SHA、工作树、退出码与活动事件，不把门禁自测中的模拟 WSL PASS 当作 Linux 验收。
 
