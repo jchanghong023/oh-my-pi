@@ -68,8 +68,8 @@ export function goalFromModeData(modeData: Record<string, unknown> | undefined):
 }
 
 /**
- * Digest of a turn's tool calls and results. Two continuation turns with the same
- * (or empty) activity made no progress, so automatic continuation stops.
+ * Digest of a turn's tool calls and results. Identical activity is terminal;
+ * empty activity is eligible only for the guard's bounded tool-call recovery.
  */
 export function goalContinuationActivity(messages: readonly AgentMessage[]): string {
 	const digests: string[] = [];
@@ -87,4 +87,60 @@ export function goalContinuationActivity(messages: readonly AgentMessage[]): str
 		}
 	}
 	return digests.join(":");
+}
+
+/** One forced-tool recovery per uninterrupted continuation stretch; real work does not replenish it. */
+export class GoalContinuationGuard {
+	#previousActivity: string | undefined;
+	#pendingActivity = "";
+	#recoveryUsed = false;
+	#recoveryPending = false;
+	#stoppedWithoutTools = false;
+
+	get recoveryPending(): boolean {
+		return this.#recoveryPending;
+	}
+
+	get stopNotice(): string | undefined {
+		return this.#stoppedWithoutTools
+			? "Goal automatic continuation stopped: the model did not produce a tool call after one forced-tool recovery. The goal is still unfinished; check the model or gateway's tool-calling support."
+			: undefined;
+	}
+
+	reset(): void {
+		this.#previousActivity = undefined;
+		this.#pendingActivity = "";
+		this.#recoveryUsed = false;
+		this.#recoveryPending = false;
+		this.#stoppedWithoutTools = false;
+	}
+
+	/** Keep only tool evidence across maintenance runs of the same pending submission. */
+	recordActivity(messages: readonly AgentMessage[]): void {
+		const activity = goalContinuationActivity(messages);
+		if (activity.length === 0) return;
+		this.#pendingActivity = this.#pendingActivity ? `${this.#pendingActivity}:${activity}` : activity;
+	}
+
+	observe(messages: readonly AgentMessage[]): "continue" | "recover" | "stop" {
+		this.recordActivity(messages);
+		const activity = this.#pendingActivity;
+		this.#pendingActivity = "";
+		const previous = this.#previousActivity;
+		this.#previousActivity = activity;
+		this.#recoveryPending = false;
+		this.#stoppedWithoutTools = false;
+		if (activity.length > 0) return activity === previous ? "stop" : "continue";
+		const assistant = messages.findLast(message => message.role === "assistant");
+		if (assistant?.role === "assistant" && assistant.stopReason === "aborted") return "stop";
+		if (this.#recoveryUsed) {
+			this.#stoppedWithoutTools = true;
+			return "stop";
+		}
+		if (assistant?.role !== "assistant" || assistant.stopReason !== "stop") return "stop";
+		if (!assistant.content.some(block => block.type === "text" && block.text.trim().length > 0)) return "stop";
+		this.#recoveryUsed = true;
+		this.#recoveryPending = true;
+		return "recover";
+	}
 }

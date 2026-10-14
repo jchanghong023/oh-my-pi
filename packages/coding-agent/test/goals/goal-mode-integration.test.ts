@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -1029,6 +1030,135 @@ describe("InteractiveMode goal mode integration", () => {
 		await waitForMicrotasks();
 		expect(waiter.getResolvedInput()?.customType).toBe("goal-continuation");
 		await waiter.inputPromise;
+	});
+
+	it.each([true, false])("bounds forced-tool recovery when the model obeys tool choice: %s", async obeys => {
+		vi.spyOn(vcs, "repo").mockReturnValue(null);
+		vi.spyOn(vcs, "git").mockReturnValue(null);
+		await harness.mode.init({ suppressWelcomeIntro: true });
+		await harness.session.setActiveToolsByName(["read"]);
+		await Bun.write(path.join(harness.tempDir.path(), "task-input.txt"), "GOAL_READ_EVIDENCE");
+		await harness.mode.handleGoalModeCommand("Inspect task-input.txt without claiming completion.");
+		const notices: string[] = [];
+		const unsubscribe = harness.session.subscribe(event => {
+			if (event.type === "notice" && event.source === "goal") notices.push(event.message);
+		});
+		const model = createMockModel({
+			handler: (_context, options) =>
+				obeys && options?.toolChoice === "required"
+					? { content: [{ type: "toolCall", name: "read", arguments: { path: "task-input.txt" } }] }
+					: { content: ["I will call read now."] },
+		});
+		harness.session.agent.streamFn = model.stream;
+		const runContinuation = async (): Promise<SubmittedUserInput> => {
+			vi.useFakeTimers();
+			const waiter = await armInputWaiter(harness.mode);
+			vi.advanceTimersByTime(800);
+			await waitForMicrotasks();
+			vi.useRealTimers();
+			const input = waiter.getResolvedInput();
+			if (!input) throw new Error("Expected a goal continuation");
+			await waiter.inputPromise;
+			await submitInteractiveInput(harness.mode, harness.session, input);
+			return input;
+		};
+		try {
+			expect((await runContinuation()).customType).toBe("goal-continuation");
+			expect((await runContinuation()).customType).toBe("goal-tool-recovery");
+			if (obeys) {
+				expect(
+					harness.session.messages.some(
+						message =>
+							message.role === "toolResult" &&
+							message.toolName === "read" &&
+							message.content.some(block => block.type === "text" && block.text.includes("GOAL_READ_EVIDENCE")),
+					),
+				).toBe(true);
+				expect((await runContinuation()).customType).toBe("goal-continuation");
+			}
+			expect(model.calls.filter(call => call.options?.toolChoice === "required")).toHaveLength(1);
+			expect(harness.session.getGoalModeState()?.goal.status).toBe("active");
+			expect(notices.some(notice => notice.includes("unfinished"))).toBe(true);
+			vi.useFakeTimers();
+			const stopped = await armInputWaiter(harness.mode);
+			vi.advanceTimersByTime(800);
+			await waitForMicrotasks();
+			expect(stopped.getResolvedInput()).toBeUndefined();
+			harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+			await stopped.inputPromise;
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it("does not attribute a later background turn to a recovery cancelled before dispatch", async () => {
+		vi.spyOn(vcs, "repo").mockReturnValue(null);
+		vi.spyOn(vcs, "git").mockReturnValue(null);
+		await harness.mode.init({ suppressWelcomeIntro: true });
+		await harness.mode.handleGoalModeCommand("Inspect the current task.");
+		harness.session.agent.streamFn = createMockModel({ handler: () => ({ content: ["I will call read now."] }) }).stream;
+		vi.useFakeTimers();
+		const first = await armInputWaiter(harness.mode);
+		vi.advanceTimersByTime(800);
+		await first.inputPromise;
+		vi.useRealTimers();
+		const firstInput = first.getResolvedInput();
+		if (!firstInput) throw new Error("Expected the initial continuation");
+		await submitInteractiveInput(harness.mode, harness.session, firstInput);
+
+		vi.useFakeTimers();
+		const recovery = await armInputWaiter(harness.mode);
+		vi.advanceTimersByTime(800);
+		await recovery.inputPromise;
+		expect(recovery.getResolvedInput()?.customType).toBe("goal-tool-recovery");
+		expect(harness.mode.cancelPendingSubmission()).toBe(true);
+		vi.useRealTimers();
+		await harness.session.promptCustomMessage({
+			customType: "job-wake",
+			content: "Background work ended.",
+			display: false,
+		});
+
+		vi.useFakeTimers();
+		const resumed = await armInputWaiter(harness.mode);
+		vi.advanceTimersByTime(800);
+		await waitForMicrotasks();
+		try {
+			expect(resumed.getResolvedInput()?.customType).toBe("goal-continuation");
+		} finally {
+			if (!resumed.getResolvedInput()) {
+				harness.mode.onInputCallback?.(harness.mode.startPendingSubmission({ text: "cleanup" }));
+			}
+			await resumed.inputPromise;
+		}
+	});
+
+	it("does not leak a forced-tool recovery into the next prompt when admission fails", async () => {
+		await harness.mode.handleGoalModeCommand("Inspect the current task.");
+		const model = createMockModel({
+			handler: (_context, options) =>
+				options?.toolChoice === "required"
+					? { throw: "A previous recovery leaked into this prompt." }
+					: { content: ["Normal prompt completed."] },
+		});
+		harness.session.agent.streamFn = model.stream;
+		await expect(
+			harness.session.promptCustomMessage(
+				{ customType: "goal-tool-recovery", content: "Recover the tool call.", display: false },
+				{
+					onPromptAdmitted: () => {
+						throw new Error("Admission failed before the model request.");
+					},
+				},
+			),
+		).rejects.toThrow("Admission failed");
+		await harness.session.promptCustomMessage({
+			customType: "goal-continuation",
+			content: "Continue normally.",
+			display: false,
+		});
+		const last = harness.session.messages.findLast(message => message.role === "assistant");
+		expect(last?.role === "assistant" && last.stopReason === "stop").toBe(true);
 	});
 
 	it("stops repeated goal continuations when identical tool evidence adds no new signal", async () => {

@@ -69,7 +69,7 @@ const { session } = await createAgentSession({
 });
 // GOAL_RPC_SCRIPT="slow": the first turn stalls long enough for the host to abort it.
 const turns: MockResponse[] =
-	Bun.env.GOAL_RPC_SCRIPT === "idle"
+	Bun.env.GOAL_RPC_SCRIPT === "idle" || Bun.env.GOAL_RPC_SCRIPT === "gate-stop"
 		? []
 		: Bun.env.GOAL_RPC_SCRIPT === "slow"
 			? [{ content: [{ type: "toolCall", id: "s1", name: "goal", arguments: { op: "get" } }], delayMs: 10_000 }]
@@ -79,8 +79,30 @@ const turns: MockResponse[] =
 					{ content: [{ type: "toolCall", id: "t2", name: "goal", arguments: { op: "complete" } }] },
 					{ content: ["Goal complete."] },
 				];
-const mock = createMockModel({ handler: () => turns.shift() ?? { content: ["Nothing left to do."] } });
+let recoveryRead = false;
+let recoveryComplete = false;
+const mock = createMockModel({
+	handler: (_context, options) => {
+		if (Bun.env.GOAL_RPC_SCRIPT !== "recover") return turns.shift() ?? { content: ["Nothing left to do."] };
+		if (options?.toolChoice === "required") {
+			if (recoveryRead) return { throw: "Recovery kept forcing tool calls after its first model request." };
+			recoveryRead = true;
+			return { content: [{ type: "toolCall", name: "read", arguments: { path: "task-input.txt" } }] };
+		}
+		if (recoveryRead && !recoveryComplete) {
+			recoveryComplete = true;
+			return { content: [{ type: "toolCall", name: "goal", arguments: { op: "complete" } }] };
+		}
+		return { content: [recoveryComplete ? "Goal complete." : "I will read task-input.txt now."] };
+	},
+});
 session.agent.streamFn = mock.stream;
+if (Bun.env.GOAL_RPC_SCRIPT === "gate-stop") {
+	let calls = 0;
+	session.agent.addBeforeModelCallHook(() =>
+		++calls > 1 ? { stop: true, reason: "Goal test policy stopped model dispatch." } : undefined,
+	);
+}
 if (Bun.env.GOAL_RPC_PLAN === "1") {
 	session.setPlanModeState({ enabled: true, planFilePath: path.join(cwd, "plan.md") });
 }

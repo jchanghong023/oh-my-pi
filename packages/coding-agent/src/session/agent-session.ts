@@ -26,6 +26,7 @@ import {
 	AgentBusyError,
 	type AgentEvent,
 	type AgentMessage,
+	type AgentPromptOptions,
 	type AgentState,
 	type AgentTool,
 	type AgentToolCall,
@@ -7814,7 +7815,27 @@ export class AgentSession implements SettingsScope {
 			queueOnly?: boolean;
 		},
 	): Promise<boolean> {
-		return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		if (message.customType !== "goal-tool-recovery") {
+			return this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		}
+		try {
+			return await this.#admitSubmission(() => this.#promptCustomMessage(message, options));
+		} catch (error) {
+			const state = this.getGoalModeState();
+			if (
+				state?.enabled &&
+				state.mode === "active" &&
+				state.goal.status === "active" &&
+				!(error instanceof Error && error.name === "AbortError")
+			) {
+				this.emitNotice(
+					"warning",
+					"Goal automatic continuation stopped: the forced-tool recovery could not run. The goal is still unfinished.",
+					"goal",
+				);
+			}
+			throw error;
+		}
 	}
 
 	async #promptCustomMessage<T = unknown>(
@@ -7862,6 +7883,19 @@ export class AgentSession implements SettingsScope {
 		}
 		if (isJchToolsAgentModel(this.model) && message.attribution !== "user") {
 			throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
+		}
+		if (message.customType === "goal-tool-recovery") {
+			const state = this.getGoalModeState();
+			if (!state?.enabled || state.mode !== "active" || state.goal.status !== "active") return false;
+			const toolName = this.getActiveToolNames()[0];
+			if (this.isStreaming || options?.queueOnly || !toolName || !buildNamedToolChoice(toolName, this.model)) {
+				this.emitNotice(
+					"warning",
+					"Goal automatic continuation stopped: forced-tool recovery is unavailable for the current model or active tool set. The goal is still unfinished.",
+					"goal",
+				);
+				return false;
+			}
 		}
 		const textContent =
 			typeof message.content === "string"
@@ -8369,7 +8403,12 @@ export class AgentSession implements SettingsScope {
 				);
 			}
 
-			const agentPromptOptions = options?.toolChoice ? { toolChoice: options.toolChoice } : undefined;
+			const agentPromptOptions: AgentPromptOptions | undefined =
+				message.role === "custom" && message.customType === "goal-tool-recovery"
+					? { toolChoiceOnce: "required" }
+					: options?.toolChoice
+						? { toolChoice: options.toolChoice }
+						: undefined;
 			this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
 			const contextWindow = this.model?.contextWindow ?? 0;

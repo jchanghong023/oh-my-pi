@@ -16,7 +16,7 @@ import { cfgGoalContinuationModes, cfgGoalEnabled } from "../../goals/settings";
 import {
 	type GoalModeState,
 	type GoalSubcommand,
-	goalContinuationActivity,
+	GoalContinuationGuard,
 	goalFromModeData,
 	parseGoalSubcommand,
 } from "../../goals/state";
@@ -68,6 +68,7 @@ export type RpcGoalSession = Pick<
 	| "isSessionTransitioning"
 	| "hasAdmittedSubmission"
 	| "queuedMessageCount"
+	| "emitNotice"
 >;
 
 export class RpcGoalController {
@@ -76,7 +77,7 @@ export class RpcGoalController {
 	#previousTools: string[] | undefined;
 	/** Continuation turns submitted whose terminal `agent_end` has not arrived. */
 	#pendingContinuationTurns = 0;
-	#previousContinuationActivity: string | undefined;
+	readonly #continuationGuard = new GoalContinuationGuard();
 	/** A continuation turn made no new progress; wait for the host before continuing. */
 	#suppressContinuation = false;
 	/**
@@ -261,7 +262,7 @@ export class RpcGoalController {
 	async endSessionChange(options?: { detachedRun?: boolean }): Promise<void> {
 		if (options?.detachedRun) {
 			this.#pendingContinuationTurns = 0;
-			this.#previousContinuationActivity = undefined;
+			this.#continuationGuard.reset();
 		}
 		if (--this.#sessionChanges > 0) return;
 		const switched =
@@ -646,7 +647,7 @@ export class RpcGoalController {
 			});
 		this.#pendingContinuationDiagnostics = [];
 		this.#pendingContinuationTurns = 0;
-		this.#previousContinuationActivity = undefined;
+		this.#continuationGuard.reset();
 		this.#suppressContinuation = false;
 		this.#hostStopped = false;
 	}
@@ -761,7 +762,11 @@ export class RpcGoalController {
 			}
 			return;
 		}
-		if (event.type !== "agent_end" || event.isTerminal === false) return;
+		if (event.type !== "agent_end") return;
+		if (event.isTerminal === false) {
+			if (this.#pendingContinuationTurns > 0) this.#continuationGuard.recordActivity(event.messages);
+			return;
+		}
 		if (this.#pendingContinuationTurns > 0) {
 			this.#pendingContinuationTurns--;
 			const diagnostic = this.#pendingContinuationDiagnostics.shift();
@@ -773,9 +778,13 @@ export class RpcGoalController {
 				result: this.#hostStopped ? "cancelled" : "yielded",
 				elapsed_ms: diagnostic ? performance.now() - diagnostic.started : undefined,
 			});
-			const activity = goalContinuationActivity(event.messages);
-			this.#suppressContinuation = activity.length === 0 || activity === this.#previousContinuationActivity;
-			this.#previousContinuationActivity = activity;
+			const decision = this.#continuationGuard.observe(event.messages);
+			this.#suppressContinuation = decision === "stop";
+			const state = this.#session.getGoalModeState();
+			const notice = this.#continuationGuard.stopNotice;
+			if (notice && state?.enabled && state.mode === "active" && state.goal.status === "active") {
+				this.#session.emitNotice("warning", notice, "goal");
+			}
 			if (this.#suppressContinuation)
 				this.#log("goal_continuation_stopped", "progress_gate", "stopped", { stop_reason: "no_progress" });
 		} else {
@@ -783,7 +792,7 @@ export class RpcGoalController {
 			// or job wake, an extension-triggered turn) re-arms after a no-progress stop.
 			// A host abort stays in force (#hostStopped).
 			this.#suppressContinuation = false;
-			this.#previousContinuationActivity = undefined;
+			this.#continuationGuard.reset();
 		}
 		if (this.#session.getGoalModeState()?.mode === "exiting") {
 			// Journal now, while the transcript is certainly the one that completed the
@@ -894,7 +903,8 @@ export class RpcGoalController {
 					result: "started",
 				});
 				const gate = idle ? this.#continuationGate() : "session_busy";
-				const prompt = idle && !gate ? session.goalRuntime.buildContinuationPrompt() : undefined;
+				const recovery = this.#continuationGuard.recoveryPending;
+				const prompt = idle && !gate ? session.goalRuntime.buildContinuationPrompt(recovery) : undefined;
 				if (!prompt) {
 					logger.info("RPC goal continuation dropped", {
 						...fields(),
@@ -906,6 +916,8 @@ export class RpcGoalController {
 					return;
 				}
 				logger.info("RPC goal continuation built", { ...fields(), event: "goal_stage_completed", result: "built" });
+				// Failed admission has no terminal event to suppress another recovery.
+				if (recovery) this.#suppressContinuation = true;
 				this.#pendingContinuationTurns++;
 				const diagnostic = { context, started: performance.now() };
 				this.#pendingContinuationDiagnostics.push(diagnostic);
@@ -925,7 +937,7 @@ export class RpcGoalController {
 				});
 				session
 					.promptCustomMessage({
-						customType: "goal-continuation",
+						customType: recovery ? "goal-tool-recovery" : "goal-continuation",
 						content: prompt,
 						display: false,
 					})

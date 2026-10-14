@@ -26,3 +26,8 @@ Before `goal({op:"complete"})`, MUST audit current repo state:
 Call `goal({op:"complete"})` only when every deliverable has direct current-state evidence proving satisfaction. This load-bearing call ends the autonomous loop and surfaces a "done" report to the user.
 
 Unfinished: keep working. NEVER narrate continuation — execute.
+
+{{#if toolRecovery}}
+Your last continuation produced no tool calls. This is the only forced-tool recovery attempt.
+MUST call an available tool that advances the unfinished objective. NEVER substitute a promise, a fabricated tool result, or premature completion for execution.
+{{/if}}

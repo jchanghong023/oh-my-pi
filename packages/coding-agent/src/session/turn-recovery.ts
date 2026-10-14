@@ -2,6 +2,7 @@ import {
 	type Agent,
 	AgentBusyError,
 	type AgentMessage,
+	type AgentPromptOptions,
 	isSyntheticToolResultMessage,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
@@ -15,7 +16,6 @@ import type {
 	ModelUsageHealth,
 	TextContent,
 	ThinkingContent,
-	ToolChoice,
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@oh-my-pi/pi-ai";
@@ -826,7 +826,7 @@ export class TurnRecovery {
 	}
 
 	/** Prompts after transient overlap with a prior agent run. */
-	promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
+	promptAgentWithIdleRetry(messages: AgentMessage[], options?: AgentPromptOptions): Promise<void> {
 		if (isJchToolsAgentModel(this.#host.model())) {
 			return this.#host.agent.prompt(messages);
 		}
@@ -3093,7 +3093,7 @@ export class TurnRecovery {
 		this.resolveRetry();
 	}
 
-	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: { toolChoice?: ToolChoice }): Promise<void> {
+	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: AgentPromptOptions): Promise<void> {
 		const deadline = Date.now() + 30_000;
 		for (;;) {
 			try {

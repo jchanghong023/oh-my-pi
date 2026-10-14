@@ -365,6 +365,8 @@ export interface AgentOptions {
 
 export interface AgentPromptOptions {
 	toolChoice?: ToolChoice;
+	/** Force only the first model-call attempt in this prompt; never defer it into another prompt. */
+	toolChoiceOnce?: ToolChoice;
 }
 
 /** Buffered Cursor exec-channel tool result waiting to be emitted after the assistant message. */
@@ -1829,6 +1831,7 @@ export class Agent {
 		};
 
 		let claimedToolChoice: ToolChoice | undefined;
+		let pendingPromptToolChoice = options?.toolChoiceOnce;
 		const getToolChoice = (): ToolChoiceDirective | undefined => {
 			claimedToolChoice = undefined;
 			const deferred = this.#deferredToolChoice;
@@ -1932,6 +1935,14 @@ export class Agent {
 			onHarmonyLeak: this.#onHarmonyLeak,
 			onTurnEnd: (messages, signal, context) => this.#onTurnEnd?.(messages, signal, context),
 			getToolChoice,
+			getToolChoiceOnce:
+				options?.toolChoiceOnce === undefined
+					? undefined
+					: () => {
+							const choice = pendingPromptToolChoice;
+							pendingPromptToolChoice = undefined;
+							return refreshToolChoiceForActiveTools(choice, this.#state.tools);
+						},
 			softToolRequirementState: this.#softToolRequirementState,
 			onToolChoiceRejected: () => {
 				if (claimedToolChoice !== undefined) this.#deferredToolChoice = claimedToolChoice;
