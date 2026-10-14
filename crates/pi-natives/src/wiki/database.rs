@@ -250,6 +250,8 @@ pub struct WikiSearchOptions {
 	pub index:  Option<String>,
 	pub cursor: Option<String>,
 	pub limit:  Option<f64>,
+	pub mode:   Option<String>,
+	pub r#case: Option<bool>,
 }
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -322,7 +324,7 @@ pub struct WikiSearchHit {
 	pub text:          String,
 	#[napi(ts_type = "'content' | 'heading-only' | 'stub'")]
 	pub shape:         query::Shape,
-	#[napi(ts_type = "'exact-name' | 'related'")]
+	#[napi(ts_type = "'exact-name' | 'related' | 'regex'")]
 	pub match_kind:    MatchKind,
 	pub rank:          f64,
 }
@@ -533,13 +535,52 @@ impl DatabaseEngine {
 			return Err(WikiError::message("Invalid documentation search page size"));
 		}
 		let limit = limit.clamp(1.0, 500.0) as usize;
-		let plan = query::analyze_query(query_text);
+		let grep = match options.mode.as_deref().unwrap_or("search") {
+			"search" => None,
+			"grep" => {
+				if query_text
+					.trim_matches(query::is_ecmascript_whitespace)
+					.is_empty()
+				{
+					return Err(WikiError::message("Missing documentation grep query"));
+				}
+				if query_text.encode_utf16().count() > 500 {
+					return Err(WikiError::message("Documentation grep query exceeds 500 UTF-16 units"));
+				}
+				Some(
+					crate::grep::build_strict_matcher(query_text, !options.r#case.unwrap_or(true))
+						.map_err(|error| WikiError::message(error.reason))?,
+				)
+			},
+			_ => return Err(WikiError::message("Invalid documentation search mode")),
+		};
+		let plan = if grep.is_some() {
+			query::QueryPlan {
+				terms:          Vec::new(),
+				technical_name: None,
+				fts:            String::new(),
+			}
+		} else {
+			query::analyze_query(query_text)
+		};
 		let cursor = options.cursor.as_deref().map(decode_cursor).transpose()?;
-		let key_json = serde_json::to_string(&(
-			query::normalize_search_text(query_text),
-			&options.index,
-			&self.cursor_path,
-		))
+		let key_json = if grep.is_some() {
+			serde_json::to_string(&(
+				query_text,
+				"grep",
+				options.r#case.unwrap_or(true),
+				&options.index,
+				&self.cursor_path,
+			))
+		} else {
+			// Preserve the original search cursor identity, including ignored
+			// case.
+			serde_json::to_string(&(
+				query::normalize_search_text(query_text),
+				&options.index,
+				&self.cursor_path,
+			))
+		}
 		.expect("JSON strings");
 		let key = digest(key_json.as_bytes());
 		if cursor.as_ref().is_some_and(|cursor| cursor.q != key) {
@@ -599,13 +640,12 @@ impl DatabaseEngine {
 					{
 						self.rank_builds += 1;
 					}
-					let ranking = Arc::new(rank(
-						self.connection.as_ref().expect("connection"),
-						query_text,
-						&plan,
-						options.index.as_deref(),
-						&check,
-					)?);
+					let connection = self.connection.as_ref().expect("connection");
+					let ranking = Arc::new(if let Some(matcher) = grep.as_ref() {
+						rank_grep(connection, matcher, options.index.as_deref(), &check)?
+					} else {
+						rank(connection, query_text, &plan, options.index.as_deref(), &check)?
+					});
 					built = Some(Arc::clone(&ranking));
 					ranking
 				};
@@ -704,6 +744,55 @@ impl DatabaseEngine {
 			return Ok(WikiSearchOutput { result, cache_hit, term_count: plan.terms.len() as i64 });
 		}
 	}
+}
+
+fn rank_grep(
+	connection: &Connection,
+	matcher: &pi_builtins::CompiledMatcher,
+	index: Option<&str>,
+	check: Check<'_>,
+) -> CoreResult<Ranking> {
+	let mut snapshot = Sha256::new();
+	let mut buffer = String::new();
+	for sql in [INDEX_ROWS, SECTION_ROWS] {
+		let mut statement = connection.prepare_cached(sql)?;
+		let mut rows = statement.query([])?;
+		while let Some(row) = rows.next()? {
+			check()?;
+			hash_row(&mut snapshot, row, &mut buffer)?;
+		}
+	}
+	// FTS changes still invalidate the database snapshot, although FTS never
+	// supplies grep candidates. Stream shadow payloads without any schema work.
+	for sql in [
+		"SELECT id,block FROM sections_fts_data ORDER BY id",
+		"SELECT segid,term,pgno FROM sections_fts_idx ORDER BY segid,term",
+		"SELECT id,sz FROM sections_fts_docsize ORDER BY id",
+		"SELECT k,v FROM sections_fts_config ORDER BY k",
+	] {
+		snapshot.update(sql.as_bytes());
+		let mut statement = connection.prepare_cached(sql)?;
+		let mut rows = statement.query([])?;
+		while let Some(row) = rows.next()? {
+			check()?;
+			for column in 0..row.as_ref().column_count() {
+				match row.get_ref(column)? {
+					ValueRef::Blob(bytes) | ValueRef::Text(bytes) => {
+						snapshot.update((bytes.len() as u64).to_le_bytes());
+						for chunk in bytes.chunks(16_384) {
+							check()?;
+							snapshot.update(chunk);
+						}
+					},
+					ValueRef::Integer(number) => snapshot.update(number.to_le_bytes()),
+					ValueRef::Real(number) => snapshot.update(number.to_le_bytes()),
+					ValueRef::Null => snapshot.update(b"null"),
+				}
+			}
+		}
+	}
+	let ranked = super::grep::scan(connection, matcher, index, check)?;
+	Ok(Ranking { ranked, version: format!("{:x}", snapshot.finalize()), exact_name_matches: 0 })
 }
 
 fn rank(
@@ -1542,6 +1631,367 @@ mod tests {
 			)
 			.unwrap_err();
 		assert_eq!(stale.message, "Stale documentation search cursor: indexed snapshot has changed");
+	}
+
+	fn grep_options() -> WikiSearchOptions {
+		WikiSearchOptions { mode: Some("grep".into()), limit: Some(500.0), ..Default::default() }
+	}
+
+	fn grep_fixture(documents: &[&str]) -> Fixture {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute_batch(
+				"DELETE FROM sections_fts; DELETE FROM sections; DELETE FROM documents; DELETE FROM \
+				 doc_indexes; INSERT INTO doc_indexes VALUES(1,'raw','/missing-source');",
+			)
+			.unwrap();
+		for (position, body) in documents.iter().enumerate() {
+			let document_id = position as i64 + 1;
+			connection
+				.execute(
+					"INSERT INTO documents VALUES(?,1,?,'Title','markdown','hash',?,1.0)",
+					rusqlite::params![document_id, format!("{position}.md"), body.len() as i64],
+				)
+				.unwrap();
+			let parsed = super::super::import::parse_markdown(body.as_bytes()).unwrap();
+			let count = parsed.sections.len() as i64;
+			for section in parsed.sections {
+				// IDs deliberately disagree with source order.
+				let id = document_id * 1_000_000 + count - section.ordinal;
+				connection
+					.execute("INSERT INTO sections VALUES(?,1,?,?,?,1,?,?,?,?,?)", rusqlite::params![
+						id,
+						document_id,
+						section.ordinal,
+						"Heading",
+						section.line_start,
+						section.line_end,
+						section.byte_start,
+						section.byte_end,
+						section.raw_markdown,
+					])
+					.unwrap();
+				connection
+					.execute(
+						"INSERT INTO \
+						 sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) \
+						 VALUES(?,?,1,'raw.md','Heading','unrelated FTS words')",
+						rusqlite::params![id, id],
+					)
+					.unwrap();
+			}
+		}
+		fixture
+	}
+
+	fn grep_slice_fixture(source: &str, slices: &[(usize, usize)]) -> Fixture {
+		let fixture = grep_fixture(&[source]);
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection.execute("DELETE FROM sections", []).unwrap();
+		for (ordinal, &(start, end)) in slices.iter().enumerate() {
+			let raw = &source[start..end];
+			let line_start = source[..start]
+				.bytes()
+				.filter(|byte| *byte == b'\n')
+				.count() as i64
+				+ 1;
+			let line_end = line_start + raw.bytes().filter(|byte| *byte == b'\n').count() as i64
+				- i64::from(raw.ends_with('\n'));
+			connection
+				.execute("INSERT INTO sections VALUES(?,1,1,?,'Raw',0,?,?,?,?,?)", rusqlite::params![
+					(slices.len() - ordinal) as i64,
+					ordinal as i64,
+					line_start,
+					line_end,
+					start as i64,
+					end as i64,
+					raw
+				])
+				.unwrap();
+		}
+		fixture
+	}
+
+	#[test]
+	fn grep_adjacent_and_overlapping_slices_preserve_crlf_blank_and_utf8_positions() {
+		let source = "αLONG\r\n\nlast";
+		let fixture = grep_slice_fixture(source, &[(0, 3), (3, 7), (6, source.len())]);
+		let mut engine = fixture.engine();
+		assert_eq!(search(&mut engine, "^αLONG\\r$", grep_options())["result"]["total"], 3);
+		assert_eq!(search(&mut engine, "^αLONG$", grep_options())["result"]["total"], 0);
+		assert_eq!(search(&mut engine, "^$", grep_options())["result"]["total"], 1);
+		assert_eq!(search(&mut engine, "(?<=α)LONG", grep_options())["result"]["total"], 2);
+		assert_eq!(search(&mut engine, "last$", grep_options())["result"]["total"], 1);
+		assert_eq!(search(&mut engine, "(?s)LONG.*last", grep_options())["result"]["total"], 0);
+	}
+
+	#[test]
+	fn grep_dense_and_distant_matches_preserve_overlapping_slice_results() {
+		let source = format!("α{}{}{}ω", "a".repeat(128), "gap".repeat(16), "z".repeat(128));
+		let slices =
+			[(0, 40), (30, 90), (80, 140), (130, 165), (155, 195), (185, 250), (240, source.len())];
+		let fixture = grep_slice_fixture(&source, &slices);
+		let mut engine = fixture.engine();
+		let dense = search(&mut engine, ".", grep_options());
+		let sections = dense["result"]["sections"].as_array().unwrap();
+		assert_eq!(dense["result"]["total"], slices.len());
+		for (ordinal, (hit, &(start, end))) in sections.iter().zip(&slices).enumerate() {
+			assert_eq!(hit["sectionId"], (slices.len() - ordinal) as i64);
+			assert_eq!(hit["text"], &source[start..end]);
+			assert_eq!(hit["lineStart"], 1);
+			assert_eq!(hit["lineEnd"], 1);
+			assert_eq!(hit["matchKind"], "regex");
+		}
+		for expression in ["^αa+(?:gap)+z+ω$", "(?=.)"] {
+			assert_eq!(
+				search(&mut engine, expression, grep_options())["result"]["sections"],
+				dense["result"]["sections"],
+				"{expression}"
+			);
+		}
+		for (expression, expected) in
+			[("^α|ω$", vec![7, 1]), ("(?<=α)a|z(?=ω)", vec![7, 1]), ("^α|gap|ω$", vec![7, 5, 4, 3, 1])]
+		{
+			let found = search(&mut engine, expression, grep_options());
+			let actual: Vec<_> = found["result"]["sections"]
+				.as_array()
+				.unwrap()
+				.iter()
+				.map(|hit| hit["sectionId"].as_i64().unwrap())
+				.collect();
+			assert_eq!(found["result"]["total"], expected.len(), "{expression}");
+			assert_eq!(actual, expected, "{expression}");
+		}
+	}
+
+	#[test]
+	fn grep_empty_shared_edges_and_later_lines_preserve_pending_slices() {
+		let source = "αab\r\n\nlater TARGET\r\nend";
+		let slices = [(0, 2), (2, 4), (4, 6), (6, 10), (9, 16), (15, 22), (21, source.len())];
+		let anchors = [(1, 1), (1, 1), (1, 1), (2, 3), (3, 3), (3, 4), (4, 4)];
+		let fixture = grep_slice_fixture(source, &slices);
+		let mut engine = fixture.engine();
+		for (expression, expected) in [
+			("(?<=α)", vec![7, 6]),
+			("(?=a)", vec![7, 6, 4]),
+			("^α|(?=b)", vec![7, 6]),
+			("b|TARGET|end", vec![6, 3, 2, 1]),
+			("^$|TARGET|end", vec![4, 3, 2, 1]),
+			("$", vec![5, 4, 2, 1]),
+		] {
+			let found = search(&mut engine, expression, grep_options());
+			let hits = found["result"]["sections"].as_array().unwrap();
+			let actual: Vec<_> = hits
+				.iter()
+				.map(|hit| hit["sectionId"].as_i64().unwrap())
+				.collect();
+			assert_eq!(found["result"]["total"], expected.len(), "{expression}");
+			assert_eq!(actual, expected, "{expression}");
+			for hit in hits {
+				let ordinal = slices.len() - hit["sectionId"].as_i64().unwrap() as usize;
+				let (start, end) = slices[ordinal];
+				assert_eq!(hit["text"], &source[start..end], "{expression}");
+				assert_eq!(hit["lineStart"], anchors[ordinal].0, "{expression}");
+				assert_eq!(hit["lineEnd"], anchors[ordinal].1, "{expression}");
+				assert_eq!(hit["matchKind"], "regex", "{expression}");
+			}
+		}
+	}
+
+	#[test]
+	fn grep_reconstructs_arbitrarily_long_original_lines_and_overlap_ranges() {
+		let line = format!("LEFT{}RIGHT\r\n", "界".repeat(40_000));
+		let body = format!("# Raw\r\n{line}# Unrelated\r\nnot a match\r\n");
+		let fixture = grep_fixture(&[&body]);
+		let mut engine = fixture.engine();
+		let full = search(&mut engine, "LEFT界+RIGHT", grep_options());
+		let sections = full["result"]["sections"].as_array().unwrap();
+		assert!(sections.len() >= 3);
+		assert!(
+			sections
+				.windows(2)
+				.all(|pair| pair[0]["sectionId"].as_i64() > pair[1]["sectionId"].as_i64())
+		);
+		assert!(sections.iter().all(|hit| hit["matchKind"] == "regex"));
+		assert_eq!(full["result"]["exactNameMatches"], 0);
+		assert!(full["result"]["technicalName"].is_null());
+		assert_eq!(
+			search(&mut engine, "^LEFT界+RIGHT\\r$", grep_options())["result"]["total"],
+			full["result"]["total"]
+		);
+		for expression in ["^界", "界$", "LEFT界+RIGHT$", "Raw.*LEFT", "RIGHT.*Unrelated"] {
+			assert_eq!(
+				search(&mut engine, expression, grep_options())["result"]["total"],
+				0,
+				"{expression}"
+			);
+		}
+		// A later match on the same line must not be hidden by its first match.
+		let ends = search(&mut engine, "LEFT|RIGHT", grep_options());
+		assert_eq!(ends["result"]["total"], 2);
+		let empty = search(&mut engine, "(?=界)", grep_options());
+		assert_eq!(empty["result"]["total"], full["result"]["total"]);
+	}
+
+	#[test]
+	fn grep_full_scan_is_db_only_and_preserves_spaces_case_and_document_isolation() {
+		let mut body = String::new();
+		for ordinal in 0..1400 {
+			body.push_str(&format!("# Section {ordinal}\nunrelated\n"));
+		}
+		body.push_str("# Last\n  MARK::123  \n");
+		let fixture = grep_fixture(&[&body, "start-only", "end-only"]);
+		let mut engine = fixture.engine();
+		let found = search(&mut engine, "  MARK::\\d+  ", grep_options());
+		assert_eq!(found["result"]["total"], 1);
+		assert!(
+			found["result"]["sections"][0]["text"]
+				.as_str()
+				.unwrap()
+				.contains("MARK::123")
+		);
+		assert_eq!(search(&mut engine, "MARK(?=::123)", grep_options())["result"]["total"], 1);
+		assert_eq!(search(&mut engine, "(?<=MARK::)123", grep_options())["result"]["total"], 1);
+		assert_eq!(search(&mut engine, "mark::123", grep_options())["result"]["total"], 0);
+		assert_eq!(
+			search(&mut engine, "mark::123", WikiSearchOptions {
+				r#case: Some(false),
+				..grep_options()
+			})["result"]["total"],
+			1
+		);
+		assert_eq!(search(&mut engine, "start-onlyend-only", grep_options())["result"]["total"], 0);
+		assert_eq!(search(&mut engine, "no such evidence", grep_options())["result"]["total"], 0);
+	}
+
+	#[test]
+	fn grep_rejects_invalid_blank_and_overlong_expressions_without_literal_fallback() {
+		let fixture = grep_fixture(&["# Raw\nliteral (\n"]);
+		let mut engine = fixture.engine();
+		for expression in ["(", "[", "*", "(?notregex)"] {
+			let error = engine
+				.search(expression, &grep_options(), &|| Ok(()))
+				.unwrap_err();
+			assert!(
+				error.message.contains("Invalid documentation grep regex"),
+				"{expression}: {}",
+				error.message
+			);
+		}
+		for expression in ["", " \t\r\n"] {
+			assert!(
+				engine
+					.search(expression, &grep_options(), &|| Ok(()))
+					.is_err()
+			);
+		}
+		for expression in ["x".repeat(501), "😀".repeat(251)] {
+			assert!(
+				engine
+					.search(&expression, &grep_options(), &|| Ok(()))
+					.unwrap_err()
+					.message
+					.contains("500 UTF-16")
+			);
+		}
+		assert!(engine.cache.is_empty());
+	}
+
+	#[test]
+	fn grep_pages_cache_and_reopen_preserve_source_order_and_isolate_cursor_options() {
+		let fixture = grep_fixture(&["# One\nALPHA\n# Two\nALPHA\n# Three\nALPHA\n"]);
+		let mut engine = fixture.engine();
+		let full = search(&mut engine, "ALPHA", grep_options());
+		let first =
+			search(&mut engine, "ALPHA", WikiSearchOptions { limit: Some(1.0), ..grep_options() });
+		assert_eq!(first["cacheHit"], true);
+		let continuation = cursor(&first, 1);
+		let rest = search(&mut engine, "ALPHA", WikiSearchOptions {
+			cursor: Some(continuation.clone()),
+			..grep_options()
+		});
+		assert_eq!(rest["cacheHit"], true);
+		assert_eq!(
+			&full["result"]["sections"].as_array().unwrap()[1..],
+			rest["result"]["sections"].as_array().unwrap()
+		);
+		assert_eq!(engine.rank_builds, 1);
+		for options in [
+			WikiSearchOptions { cursor: Some(continuation.clone()), ..Default::default() },
+			WikiSearchOptions {
+				cursor: Some(continuation.clone()),
+				r#case: Some(false),
+				..grep_options()
+			},
+		] {
+			assert!(
+				engine
+					.search("ALPHA", &options, &|| Ok(()))
+					.unwrap_err()
+					.message
+					.contains("does not match")
+			);
+		}
+		engine.close();
+		let reopened = search(&mut engine, "ALPHA", WikiSearchOptions {
+			cursor: Some(continuation),
+			..grep_options()
+		});
+		assert_eq!(reopened["cacheHit"], false);
+		assert_eq!(reopened["result"]["sections"], rest["result"]["sections"]);
+		let default = search(&mut engine, "unrelated FTS", WikiSearchOptions::default());
+		let ignored = search(&mut engine, "unrelated FTS", WikiSearchOptions {
+			mode: Some("search".into()),
+			r#case: Some(false),
+			..Default::default()
+		});
+		assert_eq!(default["result"]["cursorBase"]["q"], ignored["result"]["cursorBase"]["q"]);
+		assert_eq!(ignored["cacheHit"], true);
+	}
+
+	#[test]
+	fn grep_snapshot_changes_expire_cursor_and_cancelled_scan_never_publishes_partial_rank() {
+		let fixture = grep_fixture(&["# One\nALPHA\n# Two\nALPHA\n# Three\nALPHA\n"]);
+		let mut engine = fixture.engine();
+		let first = search(&mut engine, "ALPHA", grep_options());
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.execute("DELETE FROM sections_fts WHERE rowid=?", [first["result"]["sections"][0]
+				["sectionId"]
+				.as_i64()
+				.unwrap()])
+			.unwrap();
+		assert!(
+			engine
+				.search(
+					"ALPHA",
+					&WikiSearchOptions { cursor: Some(cursor(&first, 1)), ..grep_options() },
+					&|| Ok(())
+				)
+				.unwrap_err()
+				.message
+				.contains("Stale documentation search cursor")
+		);
+		assert_eq!(search(&mut engine, "ALPHA", grep_options())["result"]["total"], 3);
+		engine.clear_cache();
+		let checks = Arc::new(AtomicU64::new(0));
+		let calls = Arc::clone(&checks);
+		let error = engine
+			.search("(?=.)", &grep_options(), move || {
+				if calls.fetch_add(1, Ordering::Relaxed) > 40 {
+					Err(WikiError::message("cancelled grep"))
+				} else {
+					Ok(())
+				}
+			})
+			.unwrap_err();
+		assert_eq!(error.message, "cancelled grep");
+		assert!(engine.cache.is_empty());
+		assert!(engine.connection.as_ref().unwrap().is_autocommit());
+		assert_eq!(search(&mut engine, "ALPHA", grep_options())["result"]["total"], 3);
 	}
 }
 

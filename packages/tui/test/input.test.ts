@@ -276,6 +276,89 @@ describe("Input component", () => {
 		expect(renderedWidth(input, 12)).toBeLessThanOrEqual(12);
 	});
 
+	it.each(["bracketed paste", "pasteText", "host edit"])(
+		"%s preserves spelling and tabs only in verbatim inputs while removing controls",
+		(transport: string) => {
+			const raw = "cafe\u0301\t😀\r\n\x00\x1b\x7f";
+			for (const verbatimText of [false, true]) {
+				const input = setupAtEnd("");
+				input.verbatimText = verbatimText;
+				if (transport === "bracketed paste") input.handleInput(`\x1b[200~${raw}\x1b[201~`);
+				else if (transport === "pasteText") input.pasteText(raw);
+				else input.applyHostEdit({ from: 0, to: 0, text: raw, cursor: raw.length, len: 0 });
+				const expected = verbatimText ? "cafe\u0301\t😀" : `café${" ".repeat(DEFAULT_TAB_WIDTH)}😀`;
+				expect(input.getValue()).toBe(expected);
+				expect(input.getCursor()).toBe(expected.length);
+				input.handleInput("\x1f"); // Undo the ingress as one edit.
+				expect(input.getValue()).toBe("");
+			}
+		},
+	);
+
+	it("renders verbatim tabs safely with a logical caret across decomposed and astral text", () => {
+		const input = setupAtEnd("e\u0301\t😀z");
+		input.verbatimText = true;
+		input.prompt = "";
+		const beforeCaret = () => {
+			const line = input.render(30)[0];
+			expect(line).not.toContain("\t");
+			return Bun.stripANSI(line.slice(0, line.indexOf(CURSOR_MARKER)));
+		};
+		input.handleInput("\x1b[D"); // Before z, after the surrogate pair.
+		expect(input.getCursor()).toBe(5);
+		expect(beforeCaret()).toBe(`é${" ".repeat(DEFAULT_TAB_WIDTH)}😀`);
+		input.handleInput("\x1b[D"); // After the tab.
+		expect(input.getCursor()).toBe(3);
+		expect(visibleWidth(beforeCaret())).toBe(1 + DEFAULT_TAB_WIDTH);
+		input.handleInput("\x1b[D"); // Before the tab, after the decomposed grapheme.
+		expect(input.getCursor()).toBe(2);
+		expect(beforeCaret()).toBe("é");
+		expect(renderedWidth(input, 5)).toBeLessThanOrEqual(5);
+		input.handleInput("\x7f");
+		expect(input.getValue()).toBe("\t😀z");
+	});
+
+	it("measures verbatim NFD Hangul in display cells without changing logical text or native offsets", () => {
+		const input = setupAtEnd("");
+		input.verbatimText = true;
+		const raw = "화\t면z".normalize("NFD");
+		input.pasteText(raw);
+		input.handleInput("\x1b[D"); // Before z, after the decomposed Hangul syllable.
+		const line = input.render(40)[0];
+		const beforeCaret = Bun.stripANSI(line.slice(0, line.indexOf(CURSOR_MARKER)));
+		expect(beforeCaret).toBe(`> 화${" ".repeat(DEFAULT_TAB_WIDTH)}면`);
+		expect(visibleWidth(beforeCaret)).toBe(2 + 2 + DEFAULT_TAB_WIDTH + 2);
+		expect(input.getValue()).toBe(raw);
+		expect(input.getCursor()).toBe(raw.length - 1);
+		expect(
+			input.describe({ cols: 40, reduceMotion: false, dark: true, supports: () => true, feature: () => true }).p,
+		).toMatchObject({ text: raw, cursor: raw.length - 1 });
+		input.handleInput("\x1b[D"); // Before the entire decomposed 면 grapheme, after the tab.
+		const moved = input.render(40)[0];
+		expect(Bun.stripANSI(moved.slice(0, moved.indexOf(CURSOR_MARKER)))).toBe(`> 화${" ".repeat(DEFAULT_TAB_WIDTH)}`);
+		expect(input.getCursor()).toBe("화\t".normalize("NFD").length);
+		expect(input.getValue()).toBe(raw);
+	});
+
+	it("keeps native verbatim selection edits and caret offsets in logical UTF-16 text", () => {
+		const input = setupAtEnd("L😀R");
+		input.verbatimText = true;
+		const text = "e\u0301\t😀";
+		input.applyHostEdit({ from: 1, to: 3, text, cursor: 1 + text.length, len: 4 });
+		expect(input.getValue()).toBe(`L${text}R`);
+		expect(input.getCursor()).toBe(6);
+		expect(
+			input.describe({ cols: 30, reduceMotion: false, dark: true, supports: () => true, feature: () => true }).p,
+		).toMatchObject({ text: `L${text}R`, cursor: 6 });
+		// A terminal selection after the tab still addresses the original value, not its rendered spaces.
+		input.applyHostEdit({ from: 4, to: 6, text: "X", cursor: 5, len: 7 });
+		expect(input.getValue()).toBe("Le\u0301\tXR");
+		expect(input.getCursor()).toBe(5);
+		input.handleInput("\x1f");
+		expect(input.getValue()).toBe(`L${text}R`);
+		expect(input.getCursor()).toBe(6);
+	});
+
 	it("normalizes NFD Korean pastes (macOS Finder drag-drop) to NFC", () => {
 		// macOS Finder drag-drops file paths in NFD (decomposed Unicode).
 		// Korean syllable `화` is U+D654 (1 char, 2 cells) in NFC, but

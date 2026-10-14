@@ -149,7 +149,7 @@ export class DocsService {
 
 	searchWiki(
 		query: string,
-		options: Pick<DocsSearchOptions, "index" | "cursor" | "signal"> = {},
+		options: Pick<DocsSearchOptions, "index" | "cursor" | "mode" | "case" | "signal"> = {},
 	): Promise<WikiToolPage> {
 		return this.#search(query, options, true);
 	}
@@ -182,13 +182,23 @@ export class DocsService {
 					options.characterBudget,
 				);
 				reply = await this.#request(
-					{ type: "searchWindow", query, options: { index: options.index, limit, cursor: options.cursor } },
+					{
+						type: "searchWindow",
+						query,
+						options: {
+							index: options.index,
+							limit,
+							cursor: options.cursor,
+							mode: options.mode,
+							case: options.case,
+						},
+					},
 					controller.signal,
 				);
 				controller.signal.throwIfAborted();
 				const budgetStarted = performance.now();
 				const window = reply.value;
-				const page = renderWiki ? wikiToolPage(query, window) : undefined;
+				const page = renderWiki ? wikiToolPage(query, window, options.mode, options.case) : undefined;
 				const result = page
 					? page.result
 					: wikiSelectPage(

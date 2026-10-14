@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
+
 ### Fixed
 
 - Rejected malformed saved-session revisions before mutation and preserved active plans, loops and dialogs when reopening the current RPC session.
@@ -11,6 +15,7 @@
 - Kept complete stored wiki detail text reachable through wrapping, scrolling and terminal resize.
 - Made diagnostic log viewing and report bundles follow the active file sink after fallback or rotation.
 - Finalized gate timing reports inside the owned lifecycle and charged budget, preserving the final failure, interruption or timeout status.
+- Wiki grep input preserves pasted Unicode spelling and literal tabs; opening a new search cancels the older operation so late continuation failures cannot dismiss the new input.
 - `/loop` preserves task text starting with unknown-unit or incomplete duration tokens, such as `3D modeling`, instead of rejecting it as an interval.
 - Sessions from sibling worktrees outside the main checkout remain available to resume after those worktrees are deleted.
 - Preserved recent advisor messages after native compaction of only the older prefix, without duplicating tails included in full native replacements.

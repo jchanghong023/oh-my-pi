@@ -174,7 +174,7 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 			const action = await runtime.ui.select(
 				"Document indexes",
 				[
-					...(indexes.length ? ["Search document indexes"] : []),
+					...(indexes.length ? ["Search document indexes", "Grep document indexes"] : []),
 					"New document index",
 					...(indexes.length ? ["Delete document index"] : []),
 				],
@@ -219,17 +219,23 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 				scope.stage("index_output");
 				await scope.output(`Deleted document index ${line(index.name)}. Source files are preserved.`);
 				if (!scope.current()) return;
-			} else if (action === "Search document indexes") {
+			} else if (action === "Search document indexes" || action === "Grep document indexes") {
+				const mode = action === "Grep document indexes" ? "grep" : "search";
 				scope.stage("query_input");
-				const query = (
-					await runtime.ui.input("Search document indexes", undefined, { signal: scope.signal })
-				)?.trim();
-				if (!scope.current() || !query) return scope.cancel();
+				const input = await runtime.ui.input(action, undefined, { signal: scope.signal });
+				const query = mode === "grep" ? input : input?.trim();
+				if (!scope.current() || query === undefined || (mode === "search" && !query)) return scope.cancel();
 				let cursor: string | undefined;
 				let pageStart = 0;
 				while (scope.current()) {
 					scope.stage("docs_search");
-					const result = await service.search(query, { limit: 20, cursor, signal: scope.signal });
+					const result = await service.search(query, {
+						limit: 20,
+						cursor,
+						signal: scope.signal,
+						mode,
+						case: true,
+					});
 					if (!scope.current()) return;
 					scope.stage("index_output");
 					await scope.output(

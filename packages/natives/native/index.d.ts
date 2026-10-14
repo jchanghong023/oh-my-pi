@@ -4037,6 +4037,8 @@ export declare function wikiParseMarkdown(bytes: Uint8Array): WikiParsedMarkdown
 export interface WikiPreparedToolQuery {
   query?: string
   cursor?: string
+  mode?: string
+  case?: boolean
   queryTruncated: boolean
   ignoredArgumentCount: number
   error?: string
@@ -4049,7 +4051,7 @@ export interface WikiPreparedToolQuery {
  * preserves the old `in` check, including inherited and explicitly undefined
  * values.
  */
-export declare function wikiPrepareToolQuery(query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: boolean | undefined | null): WikiPreparedToolQuery
+export declare function wikiPrepareToolQuery(query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: boolean | undefined | null, mode?: unknown, caseSensitive?: unknown): WikiPreparedToolQuery
 
 export declare function wikiReadMarkdownDocument(root: string, relative: string): Promise<WikiMarkdownDocument>
 
@@ -4063,7 +4065,7 @@ export interface WikiSearchHit {
   lineEnd: number
   text: string
   shape: 'content' | 'heading-only' | 'stub'
-  matchKind: 'exact-name' | 'related'
+  matchKind: 'exact-name' | 'related' | 'regex'
   rank: number
 }
 
@@ -4071,6 +4073,8 @@ export interface WikiSearchOptions {
   index?: string
   cursor?: string
   limit?: number
+  mode?: string
+  case?: boolean
 }
 
 export interface WikiSearchOutput {
@@ -4101,7 +4105,7 @@ export declare function wikiSectionShape(markdown: string): 'content' | 'heading
 
 export declare function wikiSelectPage(window: WikiSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: WikiSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): WikiSearchResult
 
-export declare function wikiToolPage(query: string, window: WikiSearchWindow): WikiToolPage
+export declare function wikiToolPage(query: string, window: WikiSearchWindow, mode?: string | undefined | null, caseSensitive?: boolean | undefined | null): WikiToolPage
 
 export interface WikiToolPage {
   result: WikiSearchResult

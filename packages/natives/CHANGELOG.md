@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added strict Rust/PCRE2 wiki regex search over database-stored original Markdown lines, preserving overlapping slice boundaries, cancellable scans, snapshot-bound caching and existing relevance-search cursors without schema changes.
 - Added an owner-scoped Rust documentation engine covering Markdown discovery, a faithful port of shared parsing/chunking semantics, hashing, schema/legacy migrations, index lifecycle/import/rollback, query/ranking/cache/snapshot/cursor/hydration, page budgets/deduplication/rendering/sanitization and cancellable minimum-duration waiting, preserving algorithms, database format, stored evidence, valid old cursor identity, DB-only behavior, errors and the ≥500ms successful duration.
 
 ### Changed
@@ -14,6 +15,10 @@
 
 - Bound wiki import commits, publication and rollback to the original database and hidden build identity, preventing reused row IDs from modifying replacement indexes.
 - Verified database identity around connection opens and generated a valid literal return type for `wikiSectionShape`.
+
+### Fixed
+
+- Wiki grep maps ordered matches to overlapping sections without rescanning every section for each match on a long line, preserving empty-match boundaries, complete section results and cancellation.
 
 ## [18.11.0] - 2026-10-14
 

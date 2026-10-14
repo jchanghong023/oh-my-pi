@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /** Real CLI and tool dispatch; only the model's Anthropic stream is scripted. */
-it("dispatches complete cursor pages, exact-name and zero-match successes, and missing-index errors without source files", async () => {
+it("dispatches complete search and explicit grep pages, errors and zero matches without source files", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-wiki-cli-"));
 	const root = path.join(directory, "project");
 	const documents = path.join(directory, "documents");
@@ -13,13 +13,15 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 	const agentDir = path.join(configRoot, "profiles", profile, "agent");
 	const observed: Array<{ text: string; isError: boolean; elapsedMs: number }> = [];
 	let query = "WIKIE2EBEACON";
+	let mode: "search" | "grep" | undefined;
+	let caseSensitive: boolean | undefined;
 	let callNumber = 0;
 	const observedCalls = new Set<string>();
 	const issuedCalls = new Map<string, number>();
 	await Promise.all([root, documents, agentDir].map(dir => fs.mkdir(dir, { recursive: true })));
 	await Bun.write(
 		path.join(documents, "guide.md"),
-		"# Workflow\nWIKIE2EBEACON\nThe workflow requires exactly seven cycles.\nInspect MBIST_CHECK.RPT for the pass criterion.\n",
+		"# Workflow\nWIKIE2EBEACON\nThe workflow requires exactly seven cycles.\nInspect MBIST_CHECK.RPT for the pass criterion.\nUse C++ and docs/src/main.rs.\nPAIR=echo echo\n",
 	);
 	const sections = Array.from(
 		{ length: 12 },
@@ -41,7 +43,14 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 				Array.isArray(message.content) ? message.content : [],
 			);
 			const result = blocks.findLast(block => block.type === "tool_result");
-			let nextInput: { query: string; cursor?: string } | undefined = result ? undefined : { query };
+			let nextInput: { query: string; cursor?: string; mode?: "search" | "grep"; case?: boolean } | undefined =
+				result
+					? undefined
+					: {
+							query,
+							...(mode === undefined ? {} : { mode }),
+							...(caseSensitive === undefined ? {} : { case: caseSensitive }),
+						};
 			if (result) {
 				const text =
 					typeof result.content === "string"
@@ -224,9 +233,95 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 		expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
 		expect(observed[0]?.text).toContain("All matching results exhausted");
 
+		observed.length = 0;
+		query = "C++";
+		await cli(toolArgs);
+		expect(observed.every(result => !result.isError)).toBe(true);
+		expect(observed.map(result => result.text).join("\n")).toMatch(/guide\.md:[^\n]+match=exact-name/);
+
+		mode = "grep";
+		caseSensitive = false;
+		observed.length = 0;
+		query = "^WIKIE2EBEACON(?: [0-9]+)?";
+		await cli(toolArgs);
+		expect(observed.length).toBeGreaterThan(1);
+		const grepIds: string[] = [];
+		const grepProcedures: number[] = [];
+		for (const result of observed) {
+			expect(result.isError).toBe(false);
+			expect(result.elapsedMs).toBeGreaterThanOrEqual(500);
+			expect(result.text).toContain("13 matching section(s)");
+			expect(result.text).toContain("match=regex");
+			expect(result.text).not.toContain("match=exact-name");
+			expect(result.text).not.toContain("match=related");
+			expect(result.text).not.toContain("未找到完整名称命中");
+			const next = result.text.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
+			if (next)
+				expect(JSON.parse(next)).toMatchObject({ query, mode: "grep", case: false, cursor: expect.any(String) });
+			for (const match of result.text.matchAll(/^## Procedure (\d+)$/gm)) {
+				const index = Number(match[1]);
+				grepProcedures.push(index);
+				expect(result.text).toContain(sections[index]!);
+			}
+			for (const match of result.text.matchAll(/sectionId=(\d+)/g)) grepIds.push(match[1]!);
+		}
+		expect(grepProcedures).toEqual(Array.from({ length: 12 }, (_, index) => index));
+		expect(grepIds).toHaveLength(13);
+		expect(new Set(grepIds).size).toBe(13);
+		expect(observed.at(-1)?.text).toContain("All matching results exhausted");
+
+		for (const regex of ["C\\+\\+", "docs/src/main\\.rs", "(?<=PAIR=)(echo) \\1"]) {
+			observed.length = 0;
+			query = regex;
+			await cli(toolArgs);
+			expect(observed).toHaveLength(1);
+			expect(observed[0]?.isError).toBe(false);
+			expect(observed[0]?.text).toMatch(/guide\.md:[^\n]+match=regex/);
+			expect(observed[0]?.text).toContain("PAIR=echo echo");
+			expect(observed[0]?.text).not.toContain("related.md:");
+		}
+
+		query = "mbist_check\\.rpt";
+		for (const sensitive of [true, false]) {
+			caseSensitive = sensitive;
+			observed.length = 0;
+			await cli(toolArgs);
+			expect(observed).toHaveLength(1);
+			expect(observed[0]?.isError).toBe(false);
+			if (sensitive) {
+				expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
+				expect(observed[0]?.text).not.toContain("guide.md:");
+			} else {
+				expect(observed[0]?.text).toMatch(/guide\.md:[^\n]+match=regex/);
+				expect(observed[0]?.text).toContain("Inspect MBIST_CHECK.RPT for the pass criterion.");
+			}
+			expect(observed[0]?.text).toContain("All matching results exhausted");
+		}
+
+		for (const regex of ["NO_MATCH_WIKI_E2E_ZZXQ", "  WIKIE2EBEACON  "]) {
+			observed.length = 0;
+			query = regex;
+			await cli(toolArgs);
+			expect(observed).toHaveLength(1);
+			expect(observed[0]?.isError).toBe(false);
+			expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
+			expect(observed[0]?.text).toContain("All matching results exhausted");
+		}
+		for (const regex of ["[", "x".repeat(501)]) {
+			observed.length = 0;
+			query = regex;
+			await cli(toolArgs);
+			expect(observed).toHaveLength(1);
+			expect(observed[0]?.isError).toBe(true);
+			expect(observed[0]?.text).toMatch(regex === "[" ? /regex/i : /500/);
+			expect(observed[0]?.text).not.toContain("0 matching section(s)");
+		}
+
 		expect(JSON.parse(await cli(["docs", "remove", "manual", "--force", "--json"]))).toEqual({ removed: "manual" });
 		observed.length = 0;
 		query = "WIKIE2EBEACON";
+		mode = undefined;
+		caseSensitive = undefined;
 		await cli(toolArgs);
 		expect(observed).toHaveLength(1);
 		expect(observed[0]?.isError).toBe(true);
@@ -235,4 +330,4 @@ it("dispatches complete cursor pages, exact-name and zero-match successes, and m
 		server.stop(true);
 		await fs.rm(directory, { recursive: true, force: true });
 	}
-}, 90_000);
+}, 120_000);

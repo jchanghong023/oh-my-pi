@@ -9,8 +9,14 @@ import type { ToolSession } from ".";
 import { toolResult } from "./tool-result";
 
 const wikiSchema = type({
-	query: type("string").describe("keywords, or a whole question; results are ranked by relevance"),
-	"cursor?": type("string").describe("continuation from the previous page; keep query unchanged"),
+	query: type("string").describe("keywords or a whole question for search; regular expression for grep"),
+	"mode?": type("'search' | 'grep'").describe(
+		"default search ranks by relevance; grep matches original Markdown lines",
+	),
+	"case?": type("boolean").describe("grep only: case-sensitive by default (true); false ignores case"),
+	"cursor?": type("string").describe(
+		"continuation from the previous page; keep query, mode and effective case unchanged",
+	),
 	"+": "reject",
 });
 
@@ -131,13 +137,22 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 					// Argument validation is lenient so a stray extra key cannot fail a call;
 					// `query` itself is still required, and the error names what arrived.
 					const raw = params !== null && typeof params === "object" ? (params as Record<string, unknown>) : {};
-					const prepared = wikiPrepareToolQuery(raw.query, raw.cursor, Object.keys(raw), "cursor" in raw);
+					const prepared = wikiPrepareToolQuery(
+						raw.query,
+						raw.cursor,
+						Object.keys(raw),
+						"cursor" in raw,
+						raw.mode,
+						raw.case,
+					);
 					if (prepared.error !== undefined) {
 						expectedResult = prepared.errorKind;
 						throw new ToolError(prepared.error);
 					}
 					const query = prepared.query!;
 					const cursor = prepared.cursor;
+					const mode = prepared.mode as WikiToolParams["mode"];
+					const caseSensitive = prepared.case;
 					logger.info("wiki.query.validated", {
 						...fields,
 						stage,
@@ -161,7 +176,12 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						}
 						logger.info("wiki.query.indexes", { ...fields, stage, result: "completed", index_count: indexCount });
 						stage = "query";
-						const page = await service.searchWiki(query, { signal: operationSignal, cursor });
+						const page = await service.searchWiki(query, {
+							signal: operationSignal,
+							cursor,
+							mode,
+							case: caseSensitive,
+						});
 						this.#assertCurrent(service, operationSignal);
 						stage = "render";
 						const result = page.result;

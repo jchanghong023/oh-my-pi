@@ -88,6 +88,31 @@ async function importWikiEvidence(f: WikiEvidenceLocation, count: number) {
 	}
 }
 
+const grepExpression = String.raw` raw\.Token\[42\] `;
+
+async function importGrepEvidence(f: WikiEvidenceLocation, count: number) {
+	await fs.rm(path.join(f.docsDir, "manual.md"));
+	for (let index = 0; index < count; index++)
+		await Bun.write(
+			path.join(f.docsDir, `p${String(index).padStart(2, "0")}.md`),
+			`# Evidence\n raw.Token[42] marker ${index}\nStored final line ${index}.\n`,
+		);
+	for (const [name, text] of [
+		["normalized", " raw Token 42 marker"],
+		["uppercase", " RAW.Token[42] marker"],
+		["unspaced", "raw.Token[42] marker"],
+		["suffix", " raw.Token[42]suffix"],
+	])
+		await Bun.write(path.join(f.docsDir, `${name}.md`), `# Decoy\n${text}\n`);
+	const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+	try {
+		await docs.init(f.docsDir, "manual");
+		return await docs.search(grepExpression, { mode: "grep", case: true, limit: 100 });
+	} finally {
+		await docs.close();
+	}
+}
+
 describe("RPC index commands use the real index services", () => {
 	test("wiki creates, searches and deletes an index through host dialogs without modifying source documents", async () => {
 		const f = await fixture();
@@ -168,6 +193,152 @@ describe("RPC index commands use the real index services", () => {
 		expect(finalOptions).not.toContain("Next page");
 		expect(finalOptions).toContain("Done browsing");
 	});
+
+	test("wiki grep preserves expression spaces and regex mode for every DB-only page", async () => {
+		const f = await fixture();
+		const expected = await importGrepEvidence(f, 45);
+		expect(expected.total).toBe(45);
+		await fs.rm(f.docsDir, { recursive: true });
+		const seen: string[] = [];
+		let pageKey: string | undefined;
+		f.select.mockImplementation(async (title, options) => {
+			const labels = options.map(getExtensionUISelectOptionLabel);
+			if (title === "Document indexes") {
+				expect(labels).toContain("Search document indexes");
+				expect(labels).toContain("Grep document indexes");
+				return "Grep document indexes";
+			}
+			if (labels[0] !== pageKey) {
+				pageKey = labels[0];
+				seen.push(...labels.filter(label => /^\d+\./.test(label)));
+				return labels[0];
+			}
+			return labels.includes("Next page") ? "Next page" : "Done browsing";
+		});
+		f.input.mockResolvedValueOnce(grepExpression);
+		await f.run("/wiki");
+		expect(f.input).toHaveBeenCalledTimes(1);
+		expect(f.input.mock.calls[0]![0]).toBe("Grep document indexes");
+		expect(seen).toEqual(
+			expected.sections.map(
+				(section, position) =>
+					`${position + 1}. [regex] [${section.index}] ${section.path}:${section.lineStart}-${section.lineEnd} ${section.headingPath}`,
+			),
+		);
+		expect(new Set(seen).size).toBe(45);
+		const output = f.output.join("\n");
+		for (const range of ["1-20", "21-40", "41-45"]) expect(output).toContain(`showing ${range}`);
+		for (const position of [0, 20, 40]) {
+			const section = expected.sections[position]!;
+			expect(output).toContain(
+				`[regex] [${section.index}] ${section.path}:${section.lineStart}-${section.lineEnd} ${section.headingPath}\nsha256=${section.documentHash} · sectionId=${section.sectionId}\n\n${section.text}`,
+			);
+		}
+		for (const decoy of ["normalized.md", "uppercase.md", "unspaced.md", "suffix.md"])
+			expect(seen.join("\n")).not.toContain(decoy);
+		expect(output).toContain("Results exhausted.");
+		expect(output).not.toContain("Full name:");
+		expect(output).not.toContain("/wiki failed:");
+	}, 15_000);
+
+	test("wiki keeps default technical names distinct from explicit grep and accepts PCRE2", async () => {
+		const f = await fixture();
+		await importGrepEvidence(f, 1);
+		await fs.rm(f.docsDir, { recursive: true });
+		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockImplementationOnce(async (_title, options) => {
+			const labels = options.map(getExtensionUISelectOptionLabel);
+			expect(labels.some(label => label.includes("[exact-name]") && label.includes("uppercase.md"))).toBe(true);
+			expect(labels.some(label => label.includes("[exact-name]") && label.includes("unspaced.md"))).toBe(true);
+			return labels.find(label => label.includes("p00.md"));
+		});
+		f.select.mockResolvedValueOnce("Done browsing");
+		f.input.mockResolvedValueOnce(" raw.Token[42] ");
+		await f.run("/wiki");
+		expect(f.output.join("\n")).toContain("[exact-name]");
+		f.output.length = 0;
+		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.input.mockResolvedValueOnce("raw.Token[42]");
+		await f.run("/wiki");
+		expect(f.output.join("\n")).toContain("Section hits: 0");
+		expect(f.output.join("\n")).not.toContain("Full name:");
+		f.output.length = 0;
+		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
+		f.select.mockResolvedValueOnce("Done browsing");
+		f.input.mockResolvedValueOnce(String.raw`(?<= )raw\.Token\[42\](?= )`);
+		await f.run("/wiki");
+		expect(f.output.join("\n")).toContain("Section hits: 1");
+		expect(f.output.join("\n")).toContain("[regex] [manual] p00.md:");
+		expect(f.output.join("\n")).toContain(" raw.Token[42] marker 0");
+		expect(f.output.join("\n")).not.toContain("/wiki failed:");
+	}, 15_000);
+
+	test("wiki reports invalid and oversized grep without erasing existing snapshot evidence", async () => {
+		const f = await fixture();
+		const expected = await importGrepEvidence(f, 1);
+		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
+		f.select.mockResolvedValueOnce("Done browsing");
+		f.input.mockResolvedValueOnce(grepExpression);
+		await f.run("/wiki");
+		const evidence = expected.sections[0]!;
+		const retained = f.output.find(value => value.includes(`sha256=${evidence.documentHash}`))!;
+		expect(retained).toContain(evidence.text);
+		for (const expression of ["[", "x".repeat(501)]) {
+			const start = f.output.length;
+			f.select.mockResolvedValueOnce("Grep document indexes");
+			f.input.mockResolvedValueOnce(expression);
+			await f.run("/wiki");
+			const failure = f.output.slice(start).join("\n");
+			expect(failure).toContain("/wiki failed:");
+			expect(failure).not.toContain("Section hits:");
+			expect(failure).toMatch(expression === "[" ? /invalid.*regex/i : /500/);
+			expect(f.output).toContain(retained);
+		}
+	}, 15_000);
+
+	for (const failure of ["cancel", "stale"] as const) {
+		test(`wiki grep ${failure} continuation retains the selected snapshot without restarting`, async () => {
+			const f = await fixture();
+			const expected = await importGrepEvidence(f, 25);
+			f.input.mockResolvedValueOnce(grepExpression);
+			f.select.mockResolvedValueOnce("Grep document indexes");
+			f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
+			f.select.mockImplementationOnce(async (_title, options) => {
+				expect(options.map(getExtensionUISelectOptionLabel)).toContain("Next page");
+				if (failure === "cancel") {
+					f.controller.abort();
+				} else {
+					const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+					try {
+						await docs.remove("manual");
+						await fs.rm(f.docsDir, { recursive: true });
+						await fs.mkdir(f.docsDir);
+						await Bun.write(
+							path.join(f.docsDir, "replacement.md"),
+							"# Replacement\n raw.Token[42] new snapshot\n",
+						);
+						await docs.init(f.docsDir, "manual");
+					} finally {
+						await docs.close();
+					}
+				}
+				return "Next page";
+			});
+			await f.run("/wiki");
+			const output = f.output.join("\n");
+			const section = expected.sections[0]!;
+			expect(output).toContain(`sha256=${section.documentHash} · sectionId=${section.sectionId}`);
+			expect(output).toContain(section.text);
+			expect(output).not.toContain("replacement.md");
+			expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
+			expect(f.input).toHaveBeenCalledTimes(1);
+			if (failure === "stale")
+				expect(output).toContain("/wiki failed: Stale documentation search cursor: indexed snapshot has changed");
+			else expect(output).not.toContain("/wiki failed:");
+		}, 15_000);
+	}
 
 	test("wiki opens the selected snapshot but reports stale continuation instead of restarting", async () => {
 		const f = await fixture();

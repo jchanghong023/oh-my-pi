@@ -33,10 +33,9 @@ const segmenter = getSegmenter();
 /**
  * Clean text entering the single-line value from outside the keyboard (pastes, dictation) —
  * decode tmux's re-encoded control bytes (both extended-keys formats, e.g. Ctrl+J → "\n") back to
- * literal bytes so the escape tail does not leak in, remove newlines/carriage returns, expand tabs,
- * NFC-normalize, then strip any remaining control bytes. The decoder can synthesize Ctrl+A..Ctrl+Z
- * (0x01..0x1A) from a paste, and a single-line value must hold none of them — newlines are already
- * gone and tabs are already spaces by the time the C0/DEL strip runs.
+ * literal bytes so the escape tail does not leak in, remove newlines/carriage returns and strip
+ * controls. Ordinary inputs also expand tabs and NFC-normalize; verbatim fields retain both
+ * Unicode spelling and tabs (expanded only for terminal rendering).
  *
  * NFC normalization rationale: macOS Finder drag-drops file paths in NFD
  * (Conjoining Jamo, U+1100..U+11FF). `Bun.stringWidth` counts each
@@ -48,8 +47,11 @@ const segmenter = getSegmenter();
  * with N Korean syllables. NFC normalization at insert time stores the
  * value in the same form everything else in the codebase assumes.
  */
-function toSingleLine(text: string): string {
-	return replaceTabs(decodeReencodedPasteControls(text).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, ""))
+function toSingleLine(text: string, verbatimText = false): string {
+	const singleLine = decodeReencodedPasteControls(text).replace(/\r\n/g, "").replace(/\r/g, "").replace(/\n/g, "");
+	// Regex fields retain their spelling and tabs, but never terminal control bytes.
+	if (verbatimText) return singleLine.replace(/[\x00-\x08\x0A-\x1F\x7F-\x9F]/g, "");
+	return replaceTabs(singleLine)
 		.normalize("NFC")
 		.replace(/[\x00-\x1F\x7F]/g, "");
 }
@@ -70,6 +72,8 @@ export class Input implements Component, Focusable {
 	prompt = "> ";
 	/** Render the editable value as bullets while retaining the real value internally. */
 	mask = false;
+	/** Preserve Unicode spelling and literal tabs on text ingress; render tabs as spaces. */
+	verbatimText = false;
 	/** Dim hint a native terminal shows while the value is empty. */
 	placeholder: string | undefined;
 	onSubmit?: (value: string) => void;
@@ -332,7 +336,7 @@ export class Input implements Component, Focusable {
 				len: this.#value.length,
 			};
 		}
-		const resolved = resolveTextEdit(this.#value, valueEdit, toSingleLine);
+		const resolved = resolveTextEdit(this.#value, valueEdit, text => toSingleLine(text, this.verbatimText));
 		if (!resolved) return;
 		this.#lastAction = null;
 		if (resolved.changed) {
@@ -359,7 +363,7 @@ export class Input implements Component, Focusable {
 	/** Show or replace a volatile speech-to-text preview at the cursor, outside undo history.
 	 *  Finalize it with {@link commitVolatileText} or drop it with {@link clearVolatileText}. */
 	setVolatileText(text: string): void {
-		const clean = toSingleLine(text);
+		const clean = toSingleLine(text, this.verbatimText);
 		this.#replaceBeforeCursor(this.#volatileTextLen, clean);
 		this.#volatileTextLen = clean.length;
 	}
@@ -372,7 +376,7 @@ export class Input implements Component, Focusable {
 	/** Drop any volatile preview, then insert `text` as a single undoable edit. */
 	commitVolatileText(text: string): void {
 		this.clearVolatileText();
-		const clean = toSingleLine(text);
+		const clean = toSingleLine(text, this.verbatimText);
 		if (!clean) return;
 		this.#lastAction = null;
 		this.#pushUndo();
@@ -566,7 +570,7 @@ export class Input implements Component, Focusable {
 	#handlePaste(pastedText: string): void {
 		this.#lastAction = null;
 		this.#pushUndo();
-		this.#replaceBeforeCursor(0, toSingleLine(pastedText));
+		this.#replaceBeforeCursor(0, toSingleLine(pastedText, this.verbatimText));
 	}
 
 	invalidate(): void {
@@ -618,6 +622,10 @@ export class Input implements Component, Focusable {
 			const graphemes = [...segmenter.segment(this.#value)];
 			visibleValue = "•".repeat(graphemes.length);
 			cursorIndex = graphemes.filter(grapheme => grapheme.index < this.#cursor).length;
+		} else if (this.verbatimText) {
+			// Normalize only the display for terminal cell widths; keep logical text/offsets verbatim.
+			visibleValue = replaceTabs(this.#value).normalize("NFC");
+			cursorIndex = replaceTabs(this.#value.slice(0, this.#cursor)).normalize("NFC").length;
 		}
 		// At end of text the cursor sits on trailing padding, sized to fit a (possibly wide) cursor override.
 		const atEnd = this.#cursor >= this.#value.length;

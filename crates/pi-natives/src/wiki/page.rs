@@ -58,6 +58,8 @@ pub struct WikiPreparedToolQuery {
 	pub query:                  Option<Utf16String>,
 	#[napi(ts_type = "string")]
 	pub cursor:                 Option<Utf16String>,
+	pub mode:                   Option<String>,
+	pub r#case:                 Option<bool>,
 	pub query_truncated:        bool,
 	pub ignored_argument_count: u32,
 	#[napi(ts_type = "string")]
@@ -107,26 +109,69 @@ fn truncate_units(units: &[u16], maximum: usize) -> Vec<u16> {
 /// error pretending to be the host class. Host-provided cursor presence
 /// preserves the old `in` check, including inherited and explicitly undefined
 /// values.
-#[napi]
+#[napi(ts_args_type = "query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: \
+                       boolean | undefined | null, mode?: unknown, caseSensitive?: unknown")]
 pub fn wiki_prepare_tool_query(
 	query: Unknown<'_>,
 	cursor: Unknown<'_>,
-	#[napi(ts_arg_type = "string[]")] received_keys: Vec<Utf16String>,
+	received_keys: Vec<Utf16String>,
 	cursor_present: Option<bool>,
+	mode: Unknown<'_>,
+	r#case: Unknown<'_>,
 ) -> Result<WikiPreparedToolQuery> {
 	let mut received = received_keys;
 	received.retain(|key| !ascii_units_equal(key, b"__parseError"));
 	let mut result = WikiPreparedToolQuery {
 		query:                  None,
 		cursor:                 None,
+		mode:                   None,
+		r#case:                 None,
 		query_truncated:        false,
 		ignored_argument_count: received
 			.iter()
-			.filter(|key| !ascii_units_equal(key, b"query") && !ascii_units_equal(key, b"cursor"))
+			.filter(|key| {
+				!ascii_units_equal(key, b"query")
+					&& !ascii_units_equal(key, b"cursor")
+					&& !ascii_units_equal(key, b"mode")
+					&& !ascii_units_equal(key, b"case")
+			})
 			.count() as u32,
 		error:                  None,
 		error_kind:             None,
 	};
+	let mode_type = mode.get_type()?;
+	if mode_type != ValueType::Undefined
+		|| received.iter().any(|key| ascii_units_equal(key, b"mode"))
+	{
+		let mode = if mode_type == ValueType::String {
+			Some(String::from_unknown(mode)?)
+		} else {
+			None
+		};
+		if let Some("search" | "grep") = mode.as_deref() {
+			result.mode = mode;
+		} else {
+			result.error =
+				Some(Utf16String::from("wiki mode must be \"search\" or \"grep\".".to_owned()));
+			result.error_kind = Some("invalid_mode".to_owned());
+			return Ok(result);
+		}
+	}
+	let case_type = r#case.get_type()?;
+	if case_type != ValueType::Undefined
+		|| received.iter().any(|key| ascii_units_equal(key, b"case"))
+	{
+		if case_type != ValueType::Boolean {
+			result.error = Some(Utf16String::from("wiki case must be a boolean.".to_owned()));
+			result.error_kind = Some("invalid_case".to_owned());
+			return Ok(result);
+		}
+		result.r#case = Some(bool::from_unknown(r#case)?);
+	}
+	let grep = result.mode.as_deref() == Some("grep");
+	if grep {
+		result.r#case = Some(result.r#case.unwrap_or(true));
+	}
 	let query = if query.get_type()? == ValueType::String {
 		Some(Utf16String::from_unknown(query)?)
 	} else {
@@ -134,8 +179,8 @@ pub fn wiki_prepare_tool_query(
 	};
 	let query = query
 		.as_deref()
-		.map(trim_units)
-		.filter(|units| !units.is_empty());
+		.map(|units| if grep { units } else { trim_units(units) })
+		.filter(|units| !trim_units(units).is_empty());
 	let Some(query) = query else {
 		let mut error = Vec::new();
 		append(&mut error, "wiki requires a query. Received: ");
@@ -154,6 +199,12 @@ pub fn wiki_prepare_tool_query(
 		result.error_kind = Some("invalid_query".to_owned());
 		return Ok(result);
 	};
+	if grep && query.len() > 500 {
+		result.error =
+			Some(Utf16String::from("wiki grep query must not exceed 500 UTF-16 units.".to_owned()));
+		result.error_kind = Some("invalid_query".to_owned());
+		return Ok(result);
+	}
 	if cursor_present.unwrap_or_else(|| received.iter().any(|key| ascii_units_equal(key, b"cursor")))
 	{
 		let cursor = if cursor.get_type()? == ValueType::String {
@@ -172,8 +223,12 @@ pub fn wiki_prepare_tool_query(
 			},
 		}
 	}
-	result.query_truncated = query.len() > 500;
-	result.query = Some(Utf16String::from(truncate_units(query, 500)));
+	result.query_truncated = !grep && query.len() > 500;
+	result.query = Some(Utf16String::from(if grep {
+		query.to_vec()
+	} else {
+		truncate_units(query, 500)
+	}));
 	Ok(result)
 }
 
@@ -355,10 +410,14 @@ fn json_string(output: &mut Vec<u16>, units: &[u16]) {
 	output.push(b'"' as u16);
 }
 
-fn continuation_json(query: &[u16], cursor: &str) -> Vec<u16> {
-	let mut output = Vec::with_capacity(query.len() + cursor.len() + 24);
+fn continuation_json(query: &[u16], cursor: &str, grep: bool, case_sensitive: bool) -> Vec<u16> {
+	let mut output = Vec::with_capacity(query.len() + cursor.len() + 24 + if grep { 27 } else { 0 });
 	append(&mut output, "{\"query\":");
 	json_string(&mut output, query);
+	if grep {
+		append(&mut output, ",\"mode\":\"grep\",\"case\":");
+		append(&mut output, if case_sensitive { "true" } else { "false" });
+	}
 	append(&mut output, ",\"cursor\":\"");
 	// Only the empty allowance cursor or a generated base64url cursor enters
 	// here.
@@ -459,12 +518,27 @@ pub fn wiki_tool_page<'env>(
 	env: &'env Env,
 	query: Utf16String,
 	#[napi(ts_arg_type = "WikiSearchWindow")] window: Object<'env>,
+	mode: Option<String>,
+	case_sensitive: Option<bool>,
 ) -> Result<WikiToolPage<'env>> {
+	let grep = match mode.as_deref() {
+		None | Some("search") => false,
+		Some("grep") => true,
+		_ => return Err(Error::from_reason("wiki mode must be \"search\" or \"grep\".")),
+	};
+	let case_sensitive = case_sensitive.unwrap_or(true);
 	let mut header = Vec::with_capacity(query.len() + 50);
 	append(&mut header, "\"");
 	header.extend_from_slice(&query);
-	append(&mut header, "\" · searched imported Markdown corpus");
-	let footer_allowance = 512 + continuation_json(&query, "").len();
+	append(
+		&mut header,
+		if grep {
+			"\" · grep searched imported Markdown corpus"
+		} else {
+			"\" · searched imported Markdown corpus"
+		},
+	);
+	let footer_allowance = 512 + continuation_json(&query, "", grep, case_sensitive).len();
 	let budget = TEXT_BUDGET.saturating_sub(header.len() + 2 + footer_allowance);
 	let hits: Array = window.get_named_property("sections")?;
 	let mut selected = env.create_array(0)?;
@@ -532,7 +606,7 @@ pub fn wiki_tool_page<'env>(
 			bodies.len()
 		),
 	);
-	if technical.as_ref().is_some_and(|name| !name.is_empty()) {
+	if !grep && technical.as_ref().is_some_and(|name| !name.is_empty()) {
 		if exact > 0 {
 			append(
 				&mut text,
@@ -571,7 +645,7 @@ pub fn wiki_tool_page<'env>(
 	}
 	if let Some(cursor) = cursor {
 		append(&mut text, "\nMore results remain. Continue with the same query: ");
-		text.extend(continuation_json(&query, &cursor));
+		text.extend(continuation_json(&query, &cursor, grep, case_sensitive));
 	} else {
 		append(&mut text, "\nAll matching results exhausted in the searched imported corpus.");
 	}
