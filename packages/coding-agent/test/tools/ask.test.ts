@@ -199,19 +199,18 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.content[0]?.type).toBe("text");
-		if (result.content[0]?.type !== "text") {
-			throw new Error("Expected text result");
-		}
-		expect(result.content[0].text).toContain("User selected: no");
 		expect(result.details?.selectedOptions).toEqual(["no"]);
+		expect(result.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 		expect(select).toHaveBeenCalledTimes(1);
 		expect(select.mock.calls[0]?.[2]?.initialIndex).toBe(1);
 		expect(select.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
 	}, 30_000);
 
-	it("auto-selects the first option when timeout elapses without a selected option", async () => {
+	it.each([
+		["中文", "是否授权提交并推送？", "停止，不推送", "授权提交推送"],
+		["English", "Commit and push?", "Stop, do not push", "Yes, commit and push"],
+	])("auto-selects the affirmative %s answer after timeout", async (_language, question, negative, affirmative) => {
 		const tool = new AskTool(
 			createSession({
 				settings: Settings.isolated({ "ask.timeout": 0.001 }),
@@ -232,8 +231,8 @@ describe("AskTool cancellation", () => {
 				questions: [
 					{
 						id: "confirm",
-						question: "Proceed?",
-						options: [{ label: "yes" }, { label: "no" }],
+						question,
+						options: [{ label: negative }, { label: affirmative }],
 					},
 				],
 			},
@@ -242,12 +241,8 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.content[0]?.type).toBe("text");
-		if (result.content[0]?.type !== "text") {
-			throw new Error("Expected text result");
-		}
-		expect(result.content[0].text).toContain("User selected: yes");
-		expect(result.details?.selectedOptions).toEqual(["yes"]);
+		expect(result.details?.selectedOptions).toEqual([affirmative]);
+		expect(result.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	}, 30_000);
 
@@ -341,13 +336,9 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.content[0]?.type).toBe("text");
-		if (result.content[0]?.type !== "text") {
-			throw new Error("Expected text result");
-		}
-		expect(result.content[0].text).toContain("User selected: yes");
 		expect(result.details?.selectedOptions).toEqual(["yes"]);
 		expect(result.details?.customInput).toBeUndefined();
+		expect(result.details?.timedOut).toBe(true);
 		expect(editor).not.toHaveBeenCalled();
 		expect(abort).not.toHaveBeenCalled();
 	}, 30_000);
