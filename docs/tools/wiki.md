@@ -60,6 +60,7 @@ Extra keys are ignored by execution's lenient argument validation; the advertise
 - Query cap: 500 characters — a longer query is truncated with an ellipsis, then searched and echoed; continuation uses the echoed effective query.
 - Indexed sections are capped at 18,000 characters at ingestion. Each page's first oversized section still returns whole; later nonfitting sections become the next page's first section.
 - Long lines use a 500-character overlap without splitting Unicode scalars; overlapping sections retain original byte and line ranges. Code punctuation remains searchable in code spans and fenced blocks, including blocks split across sections.
+- Query connections request memory-mapped reads of up to 500 MiB per database file, subject to SQLite/platform limits. Processes reading the same file can reuse operating-system file pages without enlarging their private SQLite page caches. Ranking/parsed objects remain owner-local; the mapping range is not a process or machine-wide RAM limit, and shutdown releases the mapping handles.
 - No query operators, filters or field restrictions. The only optional input is the returned continuation cursor.
 
 ## Errors

@@ -465,7 +465,11 @@ impl DatabaseEngine {
 			OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
 		)?;
 		connection.busy_timeout(Duration::from_secs(5))?;
-		connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;")?;
+		// Share up to 500 MiB of file pages without enlarging the private page
+		// cache.
+		connection.execute_batch(
+			"PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA mmap_size=524288000;",
+		)?;
 		self.identity = file_identity(Path::new(&self.path))?;
 		self.generation += 1;
 		self.connection = Some(connection);

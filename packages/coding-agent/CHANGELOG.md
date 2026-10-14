@@ -15,6 +15,7 @@
 ### Changed
 
 - Wiki now uses Rust for Markdown discovery, a faithful port of shared parsing/chunking semantics, hashing, schema/legacy migrations, index lifecycle/import/rollback, query/ranking/cache/snapshot/cursor/hydration, page budgets/deduplication/rendering/sanitization and cancellable minimum-duration waiting. Retained TypeScript code only adapts host tool/schema, session, IPC, UI and logger boundaries; algorithms, database format, stored evidence, valid old cursor identity, DB-only behavior, errors and the ≥500ms successful duration remain unchanged.
+- Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.
 - The in-composer tool approval prompt summarizes the command, path, or content to one row so the composer keeps its room; `Ctrl+O` shows them in full ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
 ### Changed
 
