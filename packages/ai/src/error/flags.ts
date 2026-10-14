@@ -243,6 +243,18 @@ export function isAnthropicAccountPolicyText(text: string, provider?: string, st
 	return ANTHROPIC_ACCOUNT_POLICY_PATTERN.test(text);
 }
 
+const IMMUTABLE_LATEST_THINKING_PATTERN =
+	/messages\.\d+\.content\.\d+.*\b(?:thinking|redacted_thinking)\b.*\blatest assistant message cannot be modified\b/is;
+
+/**
+ * Anthropic's rejection of a replayed latest assistant turn whose `thinking` or
+ * `redacted_thinking` blocks no longer verify. Resending the same turn fails the
+ * same way; only a request that changes that turn's reasoning can succeed.
+ */
+export function isImmutableLatestThinkingText(text: string): boolean {
+	return IMMUTABLE_LATEST_THINKING_PATTERN.test(text);
+}
+
 const CODEX_CHATGPT_ACCOUNT_MODEL_POLICY_PATTERN =
 	/\bThe ['"]([^'"\r\n]+)['"] model is not supported when using Codex with a ChatGPT account\./i;
 const CODEX_CHATGPT_ACCOUNT_MODEL_MAX_LENGTH = 256;

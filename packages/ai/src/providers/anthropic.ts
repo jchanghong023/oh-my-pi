@@ -600,7 +600,11 @@ type AnthropicProviderSessionState = ProviderSessionState & {
 	 * Cleared on session close.
 	 */
 	cacheControlOptionsUnsupported: boolean;
-	/** Thinking blocks stripped after a prefix-binding 400 forced a retry without `drop_block`. */
+	/**
+	 * Thinking blocks the client strips after a 400 rejected their replay: a
+	 * prefix-binding 400 that forced a retry without `drop_block`, or a latest
+	 * assistant turn whose reasoning the API refused as modified.
+	 */
 	prefixDroppedThinkingBlocks: Set<string>;
 	/**
 	 * Server-reported `prefix_binding_mismatch` drops already warned about. A
@@ -1121,7 +1125,8 @@ export interface AnthropicOptions extends StreamOptions {
 	 * header is auto-attached; the response parser then honors mid-stream
 	 * `fallback` content blocks and `usage.iterations` for served-model
 	 * promotion and per-attempt pricing. Opt-in ONLY — leaving this
-	 * undefined preserves the pre-fallback behavior on every code path.
+	 * undefined sends neither and keeps both off; a `fallback` block in the
+	 * response (a gateway opted in) is still persisted as a replay boundary.
 	 */
 	fallbacks?: FallbackParam[];
 }
@@ -1604,6 +1609,10 @@ function unwrapAnthropicThinkingEnvelope(text: string): string | undefined {
  * The refused response's content as the continuation prefix: client tool
  * calls (no matching tool_result) are omitted and a trailing text block is
  * right-trimmed, per the fallback-credit continuation contract.
+ *
+ * A `fallback` boundary stays exactly where it appeared: the API accepts it on
+ * any request, beta or not, and uses its position to validate the thinking
+ * blocks on either side, so the echo must not collapse or move it.
  */
 function refusalContinuationPrefix(content: AssistantMessage["content"]): AssistantMessage["content"] {
 	const prefix = structuredClone(content.filter(block => block.type !== "toolCall"));
@@ -2018,6 +2027,33 @@ function rememberPrefixDroppedThinking(
 	}
 }
 
+/**
+ * Replay keys of the thinking blocks in the request's latest assistant turn.
+ * Anthropic validates every assistant message after the last user message
+ * carrying more than tool results as one "latest assistant message" (its error
+ * indices count blocks across that whole run).
+ */
+function latestAssistantTurnThinkingKeys(params: MessageCreateParamsStreaming): string[] {
+	const keys: string[] = [];
+	for (let index = params.messages.length - 1; index >= 0; index--) {
+		const message = params.messages[index]!;
+		if (message.role !== "assistant") {
+			const toolResultsOnly =
+				Array.isArray(message.content) &&
+				message.content.length > 0 &&
+				message.content.every(block => block.type === "tool_result");
+			if (!toolResultsOnly) break;
+			continue;
+		}
+		if (!Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			const key = thinkingReplayKey(block);
+			if (key) keys.push(key);
+		}
+	}
+	return keys;
+}
+
 function rememberPrefixBindingFailure(
 	params: MessageCreateParamsStreaming,
 	message: string,
@@ -2247,6 +2283,7 @@ const streamAnthropicOnce = (
 			};
 			let dropAllThinking = droppedAllThinkingForSignature;
 			let prefixBindingRetryAttempted = false;
+			let latestTurnThinkingRetryAttempted = false;
 			// Claude Code's `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`; the wrapper
 			// already turned the gated compat off, this covers caller/frozen inputs.
 			const killSwitchActive = experimentalBetasDisabled(model);
@@ -3090,15 +3127,15 @@ const streamAnthropicOnce = (
 							}
 							if (!firstTokenTime) firstTokenTime = performance.now();
 							if (event.content_block.type === "fallback") {
-								// Fallback boundary is only meaningful when the request
-								// opted into the beta chain — silently drop otherwise so
-								// unopted-in sessions never see the block persisted or
-								// influence downstream converters.
+								// The boundary between the primary's output and the
+								// fallback model's. Persist it even when this request did
+								// not opt into the beta chain: a gateway can opt in on the
+								// client's behalf, and without the marker the replay
+								// converter cannot tell the two models' signed reasoning
+								// apart (see `collapseFallbackSegments`).
 								const fallback = parseAnthropicFallbackWireBlock(event.content_block);
-								if (!serverSideFallback || !fallback) {
-									if (!fallback) {
-										reportAnthropicEnvelopeAnomaly("fallback content_block missing model refs");
-									}
+								if (!fallback) {
+									reportAnthropicEnvelopeAnomaly("fallback content_block missing model refs");
 									openBlocks.set(event.index, { contentIndex: -1, kind: "ignored" });
 									continue;
 								}
@@ -3112,8 +3149,9 @@ const streamAnthropicOnce = (
 								// classifier block on the primary was retried on the
 								// fallback model. Adopt the served id immediately so
 								// pricing decisions downstream (final usage.iterations may
-								// arrive before/after) see the right model.
-								output.model = fallback.to.model;
+								// arrive before/after) see the right model. Served-model
+								// promotion and per-iteration pricing stay opt-in.
+								if (serverSideFallback) output.model = fallback.to.model;
 								continue;
 							}
 							if (event.content_block.type === "text") {
@@ -3664,6 +3702,54 @@ const streamAnthropicOnce = (
 						output.stopReason = "stop";
 						firstTokenTime = undefined;
 						continue;
+					}
+					if (
+						!latestTurnThinkingRetryAttempted &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						AIError.isImmutableLatestThinkingText(streamFailureMessage)
+					) {
+						// The API refused the latest assistant turn's reasoning as modified
+						// (e.g. a mid-turn fallback persisted without its boundary marker).
+						// Resending the turn fails the same way forever, so drop its
+						// reasoning on the wire — stored history keeps it — and retry once.
+						// The session remembers the dropped blocks so later requests replay
+						// the same prefix; without session state, drop every block instead.
+						const keys = latestAssistantTurnThinkingKeys(params);
+						if (keys.length > 0) {
+							logger.warn(
+								"anthropic: latest assistant turn's thinking rejected as modified, dropping it and retrying",
+								{
+									...diagnosticFields(),
+									event: "anthropic_compat_retry",
+									result: "retrying",
+									retry_reason: "immutable_latest_thinking",
+									backoff_ms: 0,
+									next_attempt: wireAttempt + 1,
+									...logger.diagnosticUrl(baseUrl),
+									blocks: keys.length,
+								},
+							);
+							latestTurnThinkingRetryAttempted = true;
+							if (providerSessionState) {
+								for (const key of keys) providerSessionState.prefixDroppedThinkingBlocks.add(key);
+							} else {
+								dropAllThinking = true;
+							}
+							params = await rebuildParams(streamFailure);
+							providerRetryAttempt = 0;
+							output.content.length = 0;
+							output.model = model.id;
+							output.responseId = undefined;
+							output.upstreamModel = undefined;
+							output.errorMessage = undefined;
+							output.inputTransformations = undefined;
+							output.providerPayload = undefined;
+							output.usage = createEmptyUsage(copilotDynamicHeaders?.premiumRequests);
+							output.stopReason = "stop";
+							firstTokenTime = undefined;
+							continue;
+						}
 					}
 					if (
 						!forceDemoteUnsignedThinking &&
@@ -5296,6 +5382,23 @@ function wantsAnthropicFastMode(model: Model<"anthropic-messages">, options: Ant
 }
 
 /**
+ * The block that decides whether an assistant turn is thinking-led. A
+ * `fallback` boundary is bookkeeping, not model output: a response that fell
+ * back before the primary emitted any reasoning opens with
+ * `[fallback, thinking(fallbackModel), …]` and is still a thinking-led turn,
+ * so treat the marker as transparent. Tolerates malformed blocks replayed off
+ * disk.
+ */
+function thinkingLedLeadBlock(content: readonly unknown[]): { type?: unknown } | undefined {
+	for (const block of content) {
+		if (block == null || typeof block !== "object") return undefined;
+		const typed = block as { type?: unknown };
+		if (typed.type !== "fallback") return typed;
+	}
+	return undefined;
+}
+
+/**
  * Native Factory Droid history predicate (ported from the CLI's request
  * builder): true when the conversation contains assistant turns but none of
  * them leads with a `thinking`/`redactedThinking` block.
@@ -5306,14 +5409,8 @@ function hasThinkinglessAssistantHistory(messages: readonly Message[]): boolean 
 		if (message.role !== "assistant") continue;
 		if (!Array.isArray(message.content) || message.content.length === 0) continue;
 		hasAssistant = true;
-		const first = message.content[0];
-		if (
-			first != null &&
-			typeof first === "object" &&
-			(first.type === "thinking" || first.type === "redactedThinking")
-		) {
-			return false;
-		}
+		const first = thinkingLedLeadBlock(message.content);
+		if (first?.type === "thinking" || first?.type === "redactedThinking") return false;
 	}
 	return hasAssistant;
 }
@@ -5336,8 +5433,8 @@ function hasNonThinkingTurnAfterLastUser(messages: readonly Message[]): boolean 
 	const next = messages[lastUser + 1];
 	if (next.role !== "assistant") return false;
 	if (!Array.isArray(next.content) || next.content.length === 0) return false;
-	const first = next.content[0];
-	if (first == null || typeof first !== "object") return false;
+	const first = thinkingLedLeadBlock(next.content);
+	if (first === undefined) return false;
 	return first.type !== "thinking" && first.type !== "redactedThinking";
 }
 
@@ -5849,13 +5946,45 @@ function toWellFormedDeep(value: unknown): unknown {
 }
 
 /**
+ * Collapse a server-side-fallback turn for a request that cannot carry the
+ * `fallback` boundary marker: drop the markers and keep reasoning from one
+ * model only — the last segment that has any. Each model signed its reasoning
+ * against the turn's original prefix; replayed back-to-back without the
+ * marker, Anthropic validates them as one chain and rejects the latest turn
+ * with "`thinking` or `redacted_thinking` blocks in the latest assistant
+ * message cannot be modified". A turn whose reasoning sits in one segment
+ * keeps all of it.
+ */
+function collapseFallbackSegments(content: AssistantMessage["content"]): AssistantMessage["content"] {
+	let segments = 0;
+	let reasoningSegment = 0;
+	for (const block of content) {
+		if (block.type === "fallback") segments++;
+		else if (block.type === "thinking" || block.type === "redactedThinking") reasoningSegment = segments;
+	}
+	if (segments === 0) return content;
+	const collapsed: AssistantMessage["content"] = [];
+	let segment = 0;
+	for (const block of content) {
+		if (block.type === "fallback") {
+			segment++;
+			continue;
+		}
+		if ((block.type === "thinking" || block.type === "redactedThinking") && segment !== reasoningSegment) continue;
+		collapsed.push(block);
+	}
+	return collapsed;
+}
+
+/**
  * Serialize omp {@link Message}s to Anthropic wire messages.
  *
  * `opts.serverSideFallbackEnabled` — when the CURRENT request itself
- * opts into the server-side-fallback beta chain. Only then may a persisted
- * `fallback` content block from a prior turn be replayed on the wire;
- * otherwise the block is dropped to avoid a 400 on non-fallback requests
- * that don't send the beta.
+ * opts into the server-side-fallback beta chain. Only then, and only on the
+ * official endpoint, may a persisted `fallback` content block from a prior
+ * turn be replayed on the wire; otherwise the block is dropped to avoid a 400
+ * on requests that don't send the beta, and its turn keeps one model's
+ * reasoning (see {@link collapseFallbackSegments}).
  *
  * `opts.replayCompaction` — replay a user-role compaction summary that
  * carries an {@link AnthropicCompactionPayload} from this provider as a
@@ -6024,7 +6153,14 @@ export function convertAnthropicMessages(
 			params.push(param);
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
-			const hasSignedThinking = msg.content.some(
+			// The fallback boundary replays ONLY when both sides are aligned: the
+			// current request opted into the beta chain, and the target is
+			// official Anthropic (the only endpoint that accepts the block).
+			const content =
+				opts?.serverSideFallbackEnabled && model.compat.officialEndpoint
+					? msg.content
+					: collapseFallbackSegments(msg.content);
+			const hasSignedThinking = content.some(
 				block =>
 					block.type === "thinking" && !!block.thinkingSignature && block.thinkingSignature.trim().length > 0,
 			);
@@ -6042,7 +6178,7 @@ export function convertAnthropicMessages(
 				blocks.push(compactionBlockParam(msg.providerPayload));
 			}
 
-			for (const block of msg.content) {
+			for (const block of content) {
 				if (block.type === "text") {
 					if (block.text.trim().length === 0) continue;
 					blocks.push({
@@ -6103,13 +6239,7 @@ export function convertAnthropicMessages(
 				} else if (block.type === "anthropicServerTool") {
 					blocks.push(block.block);
 				} else if (block.type === "fallback") {
-					// Replay ONLY when both sides are aligned: the current
-					// request opted into the beta chain, and the target is
-					// official Anthropic (the only endpoint that accepts the
-					// block on the wire). `transformMessages` already drops
-					// the block for cross-provider / non-official replays, so
-					// this is defense-in-depth for direct convert calls.
-					if (!opts?.serverSideFallbackEnabled || !model.compat.officialEndpoint) continue;
+					// Present only when this request can carry it (see `content`).
 					blocks.push({
 						type: "fallback",
 						from: block.from,

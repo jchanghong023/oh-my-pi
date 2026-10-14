@@ -2,9 +2,12 @@
 
 ## [Unreleased]
 
+## [18.11.0] - 2026-10-14
+
 ### Breaking Changes
 
 - Removed `ApprovalDetailsOptions`; `formatApprovalDetails` takes only `args` again, since the compact approval prompt no longer shows tool details ([#15642](https://github.com/can1357/oh-my-pi/pull/15642) by [@H4vC](https://github.com/H4vC))
+
 ### Added
 
 - Added prompt-scoped one-shot tool choice that releases after the first model-request attempt, including same-turn retries, without overriding queued directives or surviving a pre-model stop into a later prompt.

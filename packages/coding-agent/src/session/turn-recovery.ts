@@ -115,8 +115,6 @@ const HTTP2_STREAM_RESET_ERROR_RE =
 // eligible for preserved-turn continuation on resolved tool turns.
 const PREMATURE_STREAM_CLOSE_ERROR_RE =
 	/(?:stream closed before a (?:finish_reason|terminal response event)|Codex stream ended before terminal completion event|Cursor stream ended before turnEnded)/i;
-const IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN =
-	/messages\.\d+\.content\.\d+.*\b(?:thinking|redacted_thinking)\b.*\blatest assistant message cannot be modified\b/is;
 
 /**
  * Bare abort sentinels with no provider reason: our own `"Request was aborted"`
@@ -1440,7 +1438,11 @@ export class TurnRecovery {
 		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
 		if (
 			(message.stopReason !== "aborted" && message.stopReason !== "error") ||
-			message.content.length !== 0 ||
+			// A `fallback` boundary is bookkeeping, not output: a stream aborted
+			// right after a mid-turn server-side fallback persists `[fallback]`,
+			// which is as replay-safe to retry as an empty turn (`isEmptyErrorTurn`
+			// already counts the marker as no output).
+			message.content.some(block => block.type !== "fallback") ||
 			this.#host.abortInProgress() ||
 			this.#host.isDisposed() ||
 			this.#host.streamingEditAbortTriggered()
@@ -1516,7 +1518,7 @@ export class TurnRecovery {
 			(message.errorStatus === 400 ||
 				message.errorId === 400 ||
 				message.errorMessage?.startsWith("400 ") === true) &&
-			IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN.test(message.errorMessage ?? "");
+			AIError.isImmutableLatestThinkingText(message.errorMessage ?? "");
 		if (immutableAnthropicThinkingError) return false;
 
 		const id = this.#classifyRetryMessage(message);
@@ -2384,7 +2386,7 @@ export class TurnRecovery {
 			(message.errorStatus === 400 ||
 				message.errorId === 400 ||
 				message.errorMessage?.startsWith("400 ") === true) &&
-			IMMUTABLE_ANTHROPIC_THINKING_ERROR_PATTERN.test(message.errorMessage ?? "");
+			AIError.isImmutableLatestThinkingText(message.errorMessage ?? "");
 		if (immutableAnthropicThinkingError) return false;
 		const retrySettings = cfgRetry.get(this.#host.settings);
 		if (!retrySettings.enabled || !retrySettings.modelFallback) return false;

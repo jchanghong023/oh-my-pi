@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.11.0] - 2026-10-14
+
 ### Added
 
 - Added `local/nemotron-streaming-en-0.6b` for local streaming English dictation ([#15759](https://github.com/can1357/oh-my-pi/pull/15759) by [@daaximus](https://github.com/daaximus)).
