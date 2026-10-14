@@ -137,7 +137,7 @@ describe("resolveActiveProjectRegistryPath", () => {
 		const tempRoot = path.join(tmpDir, "tmp");
 		const alias = path.join(tmpDir, "tmp-link");
 		fs.mkdirSync(path.join(tempRoot, ".omp"), { recursive: true });
-		fs.symlinkSync(tempRoot, alias, "dir");
+		fs.symlinkSync(tempRoot, alias, process.platform === "win32" ? "junction" : "dir");
 		vi.spyOn(os, "tmpdir").mockReturnValue(`${alias}${path.sep}`);
 		vi.spyOn(os, "homedir").mockReturnValue(path.join(tmpDir, "home"));
 

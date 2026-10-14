@@ -33,7 +33,11 @@ import type { HarmonyDetection } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import * as harmonyLeak from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { createAssistantMessage, createHarmonyMitigationModel, createUserMessage } from "./helpers";
-import { fitOutputTokensToContextWindow, OUTPUT_FIT_HEADWAY_TOKENS } from "../src/output-budget";
+import {
+	fitOutputTokensToContextWindow,
+	MESSAGE_FRAMING_TOKENS,
+	OUTPUT_FIT_HEADWAY_TOKENS,
+} from "../src/output-budget";
 import { Tokenizer } from "../src/tokenizer";
 
 declare module "@oh-my-pi/pi-agent-core/types" {
@@ -149,7 +153,10 @@ describe("agentLoop with AgentMessage", () => {
 		const toolResult = agent.state.messages.find(message => message.role === "toolResult");
 		if (!toolResult) throw new Error("Missing tool result");
 		const tail = tokenizer.countMessage(toolResult);
-		expect(caps).toEqual([384_000, 1_000_000 - 700_000 - tail - Math.ceil(tail / 10) - OUTPUT_FIT_HEADWAY_TOKENS]);
+		expect(caps).toEqual([
+			384_000,
+			1_000_000 - 700_000 - tail - Math.ceil(tail / 10) - 2 * MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
+		]);
 		expect(agent.state.messages.some(message => message === temporary)).toBe(false);
 	});
 
