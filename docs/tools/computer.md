@@ -133,6 +133,8 @@ Menu/app labels are untrusted data. A takeover grant does not authorize unrelate
 - reads: `value()`, `bounds()`, `attributes()`, `actions()`, `parent()`, `children()`;
 - mutations: `setValue(value)`, `perform(action)`, `press()`, `click({ button?, count?, modifiers?, takeover? })`, `doubleClick({ button?, modifiers?, takeover? })`, and `focus()`.
 
+On macOS, `press()` in a Mac Catalyst app first requests `AXScrollToVisible` when the element offers that action, then presses it: in those apps a press on a row scrolled out of view otherwise reports success and does nothing. A failed scroll request does not prevent the press.
+
 On macOS, `setValue` on a date or time control (one whose `AXValue` is a date) takes ISO-8601: `YYYY-MM-DD` changes the day and keeps the control's time of day, `YYYY-MM-DDTHH:MM[:SS]` is local time, and a date-time followed by `Z` or `±HH:MM` is that exact instant. Anything else is refused before a write, naming these forms and the control's current date, as is a local time that daylight saving skips or repeats (add an offset to pick a repeated one).
 
 On macOS, a ref whose element the app has since removed throws `StaleRef` from every element operation, without waiting for the snapshots to expire it.

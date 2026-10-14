@@ -60,6 +60,12 @@ import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { ResetSessionContextResult } from "../../session/agent-session-types";
 import type { AuthStorage, OAuthAccountIdentity } from "../../session/auth-storage";
 import type { CompactMode } from "../../session/compact-modes";
+import {
+	currentRuntimeIdentity,
+	formatRuntimeIdentity,
+	runtimeIdentityHistory,
+	sameRuntimeIdentity,
+} from "../../session/runtime-identity";
 import type { NewSessionOptions } from "../../session/session-entries";
 import {
 	createSessionWorktree,
@@ -121,6 +127,9 @@ const TERN_FORK_TIMEOUT_MS = 10_000;
 
 /** Fork failures after which Tern may still open the pane, so `/fork` must not also fork in place. */
 const TERN_FORK_UNCONFIRMED: Partial<Record<TernErrorKind, true>> = { closed: true, timeout: true, protocol: true };
+
+/** Rows `/session` spends on the builds that wrote the session, including the elision row. */
+const MAX_LISTED_BUILDS = 5;
 
 function formatCreditValue(value: number): string {
 	return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
@@ -565,6 +574,23 @@ export class CommandController {
 		let info = "";
 		info += `${theme.fg("dim", "File:")} ${stats.sessionFile ?? "In-memory"}\n`;
 		info += `${theme.fg("dim", "ID:")} ${stats.sessionId}\n`;
+		const builds = runtimeIdentityHistory(this.ctx.session.sessionManager.getEntries());
+		const running = currentRuntimeIdentity();
+		// A source checkout's diff hash changes with each edit, so a long-lived session can collect
+		// many builds: keep the first and the latest few. Every row is keyed so the overlay never
+		// mistakes a colourless continuation row for a section heading.
+		const hidden = builds.length > MAX_LISTED_BUILDS ? builds.length - MAX_LISTED_BUILDS + 1 : 0;
+		for (const [index, build] of builds.entries()) {
+			if (hidden > 0 && index > 0 && index <= hidden) {
+				if (index === 1) info += `${theme.fg("dim", `Builds 2–${hidden + 1}:`)} ${hidden} more\n`;
+				continue;
+			}
+			const key = builds.length === 1 ? "Build:" : `Build ${index + 1}:`;
+			info += `${theme.fg("dim", key)} ${replaceTabs(sanitizeText(formatRuntimeIdentity(build)))}\n`;
+		}
+		if (!sameRuntimeIdentity(builds[builds.length - 1], running)) {
+			info += `${theme.fg("dim", "Running:")} ${replaceTabs(sanitizeText(formatRuntimeIdentity(running)))}\n`;
+		}
 		info += `\n${theme.bold("Provider")}\n`;
 		const model = this.ctx.session.model;
 		if (!model) {

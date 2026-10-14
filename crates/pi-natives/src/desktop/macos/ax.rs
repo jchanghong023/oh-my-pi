@@ -1,15 +1,14 @@
+mod enablement;
 pub(crate) mod menus;
 mod popup;
 
 use std::{
-	collections::{HashSet, VecDeque},
+	collections::VecDeque,
 	ffi::c_void,
 	mem,
 	ops::Range,
 	ptr::{self, NonNull},
-	sync::{LazyLock, Mutex},
-	thread,
-	time::Duration,
+	sync::LazyLock,
 };
 
 use objc2_application_services::{
@@ -24,6 +23,7 @@ use super::{
 	super::{
 		ax::{AxBounds, AxHandle, AxProps, WalkBounds, normalize_role_macos},
 		backend::AxBackend,
+		control,
 		error::{CoreResult, DesktopError},
 		types::DesktopWindow,
 	},
@@ -36,6 +36,8 @@ const AX_TIMEOUT_SECONDS: f32 = 2.0;
 const PROBE_TIMEOUT_SECONDS: f32 = 0.5;
 /// Bounded `AXParent` ascent when an element does not expose `AXWindow`.
 const MAX_ANCESTRY_DEPTH: usize = 40;
+/// The action that scrolls an element into its view.
+const SCROLL_TO_VISIBLE: &str = "AXScrollToVisible";
 /// Bounds the search for a sheet, popover, or open menu that `AXWindows` does
 /// not list, matching the snapshot walk's own node and depth budget.
 const MAX_ATTACHED_SEARCH_NODES: usize = 5_000;
@@ -215,10 +217,6 @@ static GET_WINDOW_ID: LazyLock<Option<GetWindowIdFn>> = LazyLock::new(|| {
 	}
 });
 
-/// Processes already asked to expose their renderer accessibility tree.
-static MANUAL_ACCESSIBILITY: LazyLock<Mutex<HashSet<libc::pid_t>>> =
-	LazyLock::new(|| Mutex::new(HashSet::new()));
-
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
 	fn AXUIElementCreateApplication(pid: libc::pid_t) -> *mut AXUIElement;
@@ -239,8 +237,18 @@ impl MacAx {
 	}
 
 	pub(super) fn raise(&mut self, window: &DesktopWindow) -> CoreResult<()> {
-		let root = self.window_root(window)?;
+		let root = Self::window_element(window)?;
 		self.perform(&root, "AXRaise")
+	}
+
+	/// `window`'s element for an operation on the window itself, such as
+	/// raising it or reading its menus: unlike
+	/// [`AxBackend::window_root`], it never waits for web content, so the
+	/// session's first read of the app still does.
+	pub(super) fn window_element(window: &DesktopWindow) -> CoreResult<AxHandle> {
+		let (_, _, element) = window_parts(window)?;
+		set_timeout(&element)?;
+		Ok(AxHandle::Mac(element))
 	}
 }
 
@@ -288,7 +296,9 @@ pub(super) fn key_window_id(pid: libc::pid_t) -> Option<u32> {
 pub(super) fn window_records(pid: libc::pid_t) -> Option<Vec<AxWindowRecord>> {
 	(*GET_WINDOW_ID)?;
 	let app = probe_application(pid)?;
-	enable_web_accessibility(pid, &app);
+	// As on every window lookup, the role query switches on Chromium's web
+	// accessibility; only the first content read waits for it.
+	enablement::activate(&app);
 	let windows = copy_elements_optional(&app, "AXWindows")?;
 	// An unmappable sibling is still a possible keyboard destination. Dropping
 	// it would turn an incomplete AX tree into false proof of exclusivity.
@@ -427,6 +437,60 @@ enum AttachedSearch {
 	},
 }
 
+/// The accessibility window of `app` that represents `win`: matched by native
+/// window id, among `AXWindows` and then its sheets, popovers and open menus,
+/// or, without the window-id SPI, by a unique title and frame.
+fn find_window(app: &AXUIElement, win: &DesktopWindow) -> CoreResult<CFRetained<AXUIElement>> {
+	let windows = copy_elements(app, "AXWindows")?;
+	let expected_id = win.id.parse::<u32>().ok();
+	if let (Some(get_id), Some(expected_id)) = (*GET_WINDOW_ID, expected_id) {
+		for element in windows {
+			let mut actual_id = 0u32;
+			// SAFETY: `actual_id` is writable and this retained AX element
+			// remains alive for the call.
+			if unsafe { get_id(&element, &mut actual_id) } == AXError::Success
+				&& actual_id == expected_id
+			{
+				return Ok(element);
+			}
+		}
+		// Sheets, popovers, and open menus are separate native windows that
+		// `AXWindows` omits.
+		let truncated = match attached_window(app, expected_id, win)? {
+			AttachedSearch::Found(element) => return Ok(element),
+			AttachedSearch::Missing { truncated } => truncated,
+		};
+		let scope = if truncated {
+			format!(
+				"; the search stopped at its limit of {MAX_ATTACHED_SEARCH_NODES} nodes or depth \
+				 {MAX_ATTACHED_SEARCH_DEPTH}, so the window may be nested deeper"
+			)
+		} else {
+			String::new()
+		};
+		return Err(DesktopError::ax_failed(format!(
+			"native window {expected_id} was not found in the application's accessibility windows, \
+			 sheets, popovers, or open menus{scope}"
+		)));
+	}
+	// Without the native id SPI, require a unique title AND frame match.
+	// A same-title replacement window must never inherit a stale target.
+	let mut matches = windows.into_iter().filter(|element| {
+		copy_string(element, "AXTitle").as_deref() == Some(win.title.as_str())
+			&& bounds(element).is_some_and(|bounds| bounds_matches_window(bounds, win))
+	});
+	let element = matches.next().ok_or_else(|| {
+		DesktopError::ax_failed(format!(
+			"accessibility window for native window {} ('{}') was not found",
+			win.id, win.title,
+		))
+	})?;
+	if matches.next().is_some() {
+		return Err(DesktopError::ax_failed("accessibility window title/frame match is ambiguous"));
+	}
+	Ok(element)
+}
+
 /// Finds the sheet, popover, or open menu of `app` that represents `win`,
 /// by a bounded breadth-first walk of the application's accessibility tree.
 /// `AppKit` gives each its own `WindowServer` window but lists only standard
@@ -491,71 +555,32 @@ fn attached_window(
 	})
 }
 
+/// `win`'s owning process, its application element (role queried, which
+/// switches on Chromium's web accessibility) and its window element.
+fn window_parts(
+	win: &DesktopWindow,
+) -> CoreResult<(libc::pid_t, CFRetained<AXUIElement>, CFRetained<AXUIElement>)> {
+	ensure_trusted()?;
+	let pid = win.pid.ok_or_else(|| {
+		DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
+	})?;
+	let pid = i32::try_from(pid).map_err(|_| {
+		DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
+	})?;
+	let app = create_application(pid)?;
+	set_timeout(&app)?;
+	enablement::activate(&app);
+	let element = find_window(&app, win)?;
+	Ok((pid, app, element))
+}
+
 impl AxBackend for MacAx {
+	/// For a read of the window's content: the session's first read of a
+	/// Chromium-family app waits for its web content ([`enablement`]).
 	fn window_root(&mut self, win: &DesktopWindow) -> CoreResult<AxHandle> {
-		ensure_trusted()?;
-		let pid = win.pid.ok_or_else(|| {
-			DesktopError::ax_failed(format!("window {} has no owning process id", win.id))
-		})?;
-		let pid = i32::try_from(pid).map_err(|_| {
-			DesktopError::ax_failed(format!("window {} has an invalid process id", win.id))
-		})?;
-		let app = create_application(pid)?;
-		set_timeout(&app)?;
-		enable_web_accessibility(pid, &app);
-		let windows = copy_elements(&app, "AXWindows")?;
-		let expected_id = win.id.parse::<u32>().ok();
-		if let (Some(get_id), Some(expected_id)) = (*GET_WINDOW_ID, expected_id) {
-			for element in &windows {
-				let mut actual_id = 0u32;
-				// SAFETY: `actual_id` is writable and this retained AX element
-				// remains alive for the call.
-				if unsafe { get_id(element, &mut actual_id) } == AXError::Success
-					&& actual_id == expected_id
-				{
-					set_timeout(element)?;
-					return Ok(AxHandle::Mac(element.clone()));
-				}
-			}
-			// Sheets, popovers, and open menus are separate native windows that
-			// `AXWindows` omits.
-			let truncated = match attached_window(&app, expected_id, win)? {
-				AttachedSearch::Found(element) => {
-					set_timeout(&element)?;
-					return Ok(AxHandle::Mac(element));
-				},
-				AttachedSearch::Missing { truncated } => truncated,
-			};
-			let scope = if truncated {
-				format!(
-					"; the search stopped at its limit of {MAX_ATTACHED_SEARCH_NODES} nodes or depth \
-					 {MAX_ATTACHED_SEARCH_DEPTH}, so the window may be nested deeper"
-				)
-			} else {
-				String::new()
-			};
-			return Err(DesktopError::ax_failed(format!(
-				"native window {expected_id} was not found in the application's accessibility \
-				 windows, sheets, popovers, or open menus{scope}"
-			)));
-		}
-		// Without the native id SPI, require a unique title AND frame match.
-		// A same-title replacement window must never inherit a stale target.
-		let mut matches = windows.into_iter().filter(|element| {
-			copy_string(element, "AXTitle").as_deref() == Some(win.title.as_str())
-				&& bounds(element).is_some_and(|bounds| bounds_matches_window(bounds, win))
-		});
-		let element = matches.next().ok_or_else(|| {
-			DesktopError::ax_failed(format!(
-				"accessibility window for native window {} ('{}') was not found",
-				win.id, win.title,
-			))
-		})?;
-		if matches.next().is_some() {
-			return Err(DesktopError::ax_failed(
-				"accessibility window title/frame match is ambiguous",
-			));
-		}
+		let (pid, app, element) = window_parts(win)?;
+		enablement::before_first_read(pid, &app, &element)?;
+		// The wait gives the window's requests shorter timeouts.
 		set_timeout(&element)?;
 		Ok(AxHandle::Mac(element))
 	}
@@ -647,14 +672,16 @@ impl AxBackend for MacAx {
 				actions.join(", "),
 			)));
 		}
-		let perform = || element_action_result(&native, send_action(element, &native));
 		// AXRaise is an explicit request to change stacking, including the
 		// takeover preparation path. Other semantic actions must stay background.
 		if native == "AXRaise" {
-			perform()
-		} else {
-			skylight::with_background_guard(element_pid(element)?, perform)
+			return element_action_result(&native, send_action(element, &native));
 		}
+		let pid = element_pid(element)?;
+		let scroll_first = scrolls_before_press(&native, &actions, || process::is_uikit(pid));
+		skylight::with_background_guard(pid, || {
+			press_into_view(&native, scroll_first, |action| send_action(element, action))
+		})
 	}
 
 	fn set_value(&mut self, h: &AxHandle, value: &str) -> CoreResult<()> {
@@ -990,6 +1017,28 @@ fn replace_utf16_selection(
 	Some(result)
 }
 
+/// In a Mac Catalyst (`UIKit`) app, pressing a row scrolled out of its view
+/// reports success and does nothing. Scrolling it into view first lets the
+/// press land; for an element already in view the scroll changes nothing.
+fn scrolls_before_press(native: &str, actions: &[String], uikit: impl FnOnce() -> bool) -> bool {
+	native == "AXPress" && actions.iter().any(|action| action == SCROLL_TO_VISIBLE) && uikit()
+}
+
+/// Sends `native`, after [`SCROLL_TO_VISIBLE`] when `scroll_first`. A failed
+/// scroll leaves the action to report its own outcome; a run cancelled during
+/// the scroll sends nothing more.
+fn press_into_view(
+	native: &str,
+	scroll_first: bool,
+	mut send: impl FnMut(&str) -> AXError,
+) -> CoreResult<()> {
+	if scroll_first {
+		let _ = send(SCROLL_TO_VISIBLE);
+		control::check()?;
+	}
+	element_action_result(native, send(native))
+}
+
 fn perform_action(element: &AXUIElement, action: &str) -> CoreResult<()> {
 	ax_result(send_action(element, action), format!("AX action '{action}' failed"))
 }
@@ -1036,36 +1085,6 @@ fn create_application(pid: libc::pid_t) -> CoreResult<CFRetained<AXUIElement>> {
 	// SAFETY: Create-rule ownership transfers the +1 AXUIElement reference into
 	// CFRetained.
 	Ok(unsafe { CFRetained::from_raw(pointer) })
-}
-
-/// Chromium-family apps build their renderer accessibility tree lazily. Reading
-/// the application role activates modern Chrome's native AX mode, while older
-/// Chromium/Electron builds also honor `AXManualAccessibility`. A process that
-/// rejects the manual setter incurs no readiness delay.
-fn enable_web_accessibility(pid: libc::pid_t, app: &AXUIElement) {
-	// Modern Chromium treats an assistive client's role query as the activation
-	// signal. Older Chromium/Electron builds use the manual setter below.
-	let _ = copy_string(app, "AXRole");
-	{
-		let mut enabled = MANUAL_ACCESSIBILITY
-			.lock()
-			.unwrap_or_else(|error| error.into_inner());
-		if !enabled.insert(pid) {
-			return;
-		}
-		let attribute = CFString::from_str("AXManualAccessibility");
-		// SAFETY: The retained element, attribute, and singleton CFBoolean remain
-		// valid for the synchronous setter call.
-		let error = unsafe { app.set_attribute_value(&attribute, CFBoolean::new(true)) };
-		if error != AXError::Success {
-			// Manual activation is unsupported; leave no stale pid marker.
-			enabled.remove(&pid);
-			return;
-		}
-	}
-	// The renderers publish their trees over IPC after the switch flips, so the
-	// first snapshot would otherwise race a still-empty web area.
-	thread::sleep(Duration::from_millis(500));
 }
 
 fn create_system_wide() -> CFRetained<AXUIElement> {
@@ -1521,5 +1540,61 @@ mod tests {
 			frame_matches: true,
 		}];
 		assert!(select_attached(&candidates, 57).is_err());
+	}
+
+	#[test]
+	fn only_a_uikit_press_scrolls_its_element_into_view_first() {
+		use super::scrolls_before_press;
+
+		let actions = |names: &[&str]| {
+			names
+				.iter()
+				.map(|name| (*name).to_owned())
+				.collect::<Vec<_>>()
+		};
+		let row = actions(&["AXPress", "AXScrollToVisible", "AXShowMenu"]);
+		assert!(scrolls_before_press("AXPress", &row, || true));
+		// An AppKit app, another action, or an element that cannot scroll: press
+		// as is.
+		assert!(!scrolls_before_press("AXPress", &row, || false));
+		assert!(!scrolls_before_press("AXShowMenu", &row, || true));
+		assert!(!scrolls_before_press("AXPress", &actions(&["AXPress"]), || true));
+		// The app is only classified when the press could scroll.
+		assert!(!scrolls_before_press("AXShowMenu", &row, || unreachable!()));
+	}
+
+	#[test]
+	fn a_press_follows_its_scroll_unless_the_run_was_cancelled() {
+		use super::{SCROLL_TO_VISIBLE, press_into_view};
+		use crate::desktop::control;
+
+		let run = |scroll_first: bool, scroll_result: AXError, cancel: bool| {
+			let source = control::CancellationSource::default();
+			let token = source.token();
+			let mut sent = Vec::new();
+			let result = control::with_token_for_test(&token, || {
+				press_into_view("AXPress", scroll_first, |action| {
+					sent.push(action.to_owned());
+					if action != SCROLL_TO_VISIBLE {
+						return AXError::Success;
+					}
+					if cancel {
+						source.cancel();
+					}
+					scroll_result
+				})
+			});
+			(result.map_err(|error| error.code), sent)
+		};
+		let both = vec![SCROLL_TO_VISIBLE.to_owned(), "AXPress".to_owned()];
+		assert_eq!(run(true, AXError::Success, false), (Ok(()), both.clone()));
+		// A failed scroll still presses.
+		assert_eq!(run(true, AXError::Failure, false), (Ok(()), both));
+		assert_eq!(run(false, AXError::Success, false), (Ok(()), vec!["AXPress".to_owned()]));
+		// Cancelled while scrolling: the press is never sent.
+		assert_eq!(
+			run(true, AXError::Success, true),
+			(Err(ErrorCode::Cancelled), vec![SCROLL_TO_VISIBLE.to_owned()])
+		);
 	}
 }

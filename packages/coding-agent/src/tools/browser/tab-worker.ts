@@ -10,6 +10,7 @@ import type {
 	CDPSession,
 	ElementHandle,
 	Frame,
+	HTTPRequest,
 	HTTPResponse,
 	JSHandle,
 	KeyboardTypeOptions,
@@ -417,8 +418,10 @@ interface TabApi {
 	dialog(): Promise<DialogState>;
 	handleDialog(opts: { accept: boolean; text?: string }): Promise<void>;
 	setDialogs(policy: DialogPolicy | null): Promise<void>;
-	text(selector: string): Promise<string | null>;
-	html(selector: string): Promise<string | null>;
+	/** Without a selector, reads the page `<body>`. */
+	text(selector?: string): Promise<string | null>;
+	/** Without a selector, reads the page `<body>`. */
+	html(selector?: string): Promise<string | null>;
 	value(selector: string): Promise<string | null>;
 	attr(selector: string, name: string): Promise<string | null>;
 	count(selector: string): Promise<number>;
@@ -895,53 +898,90 @@ interface RunPageScope {
  * The facade removes only run-owned listeners, preserving worker-level routing,
  * request logging, dialogs, and console capture. Raw interception is restored
  * to the tab's persistent route/allowlist state after a run that changed it.
+ *
+ * A listener added to the page while the run is attached is run-owned, whichever
+ * reference reached the page, except one added while the page is delivering an
+ * event to a handler the run did not add. Puppeteer's in-flight request tracking
+ * subscribes to request completion from inside its own `request` handler; removing
+ * those subscriptions with the run left `waitForNetworkIdle` waiting on a request
+ * an earlier run started.
  */
 function createRunPageScope(page: Page, restoreInterception: () => Promise<void>): RunPageScope {
-	const handlers = new Map<unknown, unknown[]>();
+	const handlers = new Map<unknown, Function[]>();
+	/**
+	 * The listener the page holds for each run-owned handler. It runs the handler with
+	 * `delivering` cleared, so what the handler registers stays run-owned. One per handler,
+	 * so duplicate registrations and removals keep puppeteer's own ordering.
+	 */
+	const listeners = new Map<Function, (...args: unknown[]) => unknown>();
 	const on = page.on;
 	const off = page.off;
 	const once = page.once;
+	const emit = page.emit;
 	const setRequestInterception = page.setRequestInterception;
 	const onDescriptor = Object.getOwnPropertyDescriptor(page, "on");
 	const offDescriptor = Object.getOwnPropertyDescriptor(page, "off");
 	const onceDescriptor = Object.getOwnPropertyDescriptor(page, "once");
+	const emitDescriptor = Object.getOwnPropertyDescriptor(page, "emit");
 	const removeAllDescriptor = Object.getOwnPropertyDescriptor(page, "removeAllListeners");
 	const interceptionDescriptor = Object.getOwnPropertyDescriptor(page, "setRequestInterception");
 	let interceptionChanged = false;
-
-	const remember = (type: unknown, handler: unknown): void => {
+	/** Set while the page delivers an event; a listener the run added clears it while it runs. */
+	let delivering = false;
+	const withDelivering = <T>(value: boolean, fn: () => T): T => {
+		const outer = delivering;
+		delivering = value;
+		try {
+			return fn();
+		} finally {
+			delivering = outer;
+		}
+	};
+	const listenerFor = (handler: Function): ((...args: unknown[]) => unknown) => {
+		let listener = listeners.get(handler);
+		if (!listener) {
+			listener = (...args: unknown[]): unknown =>
+				withDelivering(false, () => Reflect.apply(handler, undefined, args));
+			listeners.set(handler, listener);
+		}
+		return listener;
+	};
+	const remember = (type: unknown, handler: Function): void => {
 		const owned = handlers.get(type);
 		if (owned) owned.push(handler);
 		else handlers.set(type, [handler]);
+		Reflect.apply(on, page, [type, listenerFor(handler)]);
 	};
-	const forget = (type: unknown, handler?: unknown): void => {
+	/** Remove run-owned registrations; reports whether any matched. */
+	const forget = (type: unknown, handler?: unknown): boolean => {
 		const owned = handlers.get(type);
-		if (!owned) return;
+		if (!owned) return false;
 		if (handler === undefined) {
-			for (const registered of owned) Reflect.apply(off, page, [type, registered]);
+			for (const registered of owned) Reflect.apply(off, page, [type, listenerFor(registered)]);
 			handlers.delete(type);
-			return;
+			return true;
 		}
-		const index = owned.lastIndexOf(handler);
-		if (index < 0) return;
-		Reflect.apply(off, page, [type, handler]);
+		const index = owned.findLastIndex(registered => registered === handler);
+		if (index < 0) return false;
+		Reflect.apply(off, page, [type, listenerFor(owned[index])]);
 		owned.splice(index, 1);
 		if (owned.length === 0) handlers.delete(type);
+		return true;
 	};
 
 	Object.defineProperties(page, {
 		on: {
 			configurable: true,
 			value: (type: unknown, handler: unknown): Page => {
-				Reflect.apply(on, page, [type, handler]);
-				remember(type, handler);
+				if (delivering || typeof handler !== "function") Reflect.apply(on, page, [type, handler]);
+				else remember(type, handler);
 				return page;
 			},
 		},
 		once: {
 			configurable: true,
 			value: (type: unknown, handler: unknown): Page => {
-				if (typeof handler !== "function") {
+				if (delivering || typeof handler !== "function") {
 					Reflect.apply(once, page, [type, handler]);
 					return page;
 				}
@@ -950,15 +990,42 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 					Reflect.apply(handler, page, [event]);
 				};
 				remember(type, wrapper);
-				Reflect.apply(on, page, [type, wrapper]);
 				return page;
 			},
 		},
 		off: {
 			configurable: true,
 			value: (type: unknown, handler?: unknown): Page => {
-				forget(type, handler);
+				// Puppeteer's own subscriptions unsubscribe through here too.
+				if (!forget(type, handler) && handler !== undefined) Reflect.apply(off, page, [type, handler]);
 				return page;
+			},
+		},
+		emit: {
+			configurable: true,
+			value: (type: unknown, event?: unknown): boolean => {
+				// Puppeteer defers every `request` listener to an interception action that runs after
+				// `emit` returns, so each action queued during `emit` keeps the delivery it came from.
+				const request = type === "request" && typeof event === "object" ? (event as HTTPRequest | null) : null;
+				const enqueue = request?.enqueueInterceptAction;
+				if (!request || typeof enqueue !== "function") {
+					return withDelivering(true, () => Reflect.apply(emit, page, [type, event]));
+				}
+				const enqueueDescriptor = Object.getOwnPropertyDescriptor(request, "enqueueInterceptAction");
+				Object.defineProperty(request, "enqueueInterceptAction", {
+					configurable: true,
+					value: (action: () => unknown): void => {
+						const queued = delivering;
+						Reflect.apply(enqueue, request, [() => withDelivering(queued, action)]);
+					},
+				});
+				try {
+					return withDelivering(true, () => Reflect.apply(emit, page, [type, event]));
+				} finally {
+					// The tab's request log keeps requests well after the run; do not let them hold this scope.
+					if (enqueueDescriptor) Object.defineProperty(request, "enqueueInterceptAction", enqueueDescriptor);
+					else Reflect.deleteProperty(request, "enqueueInterceptAction");
+				}
 			},
 		},
 		removeAllListeners: {
@@ -990,12 +1057,14 @@ function createRunPageScope(page: Page, restoreInterception: () => Promise<void>
 			else Reflect.deleteProperty(page, "off");
 			if (onceDescriptor) Object.defineProperty(page, "once", onceDescriptor);
 			else Reflect.deleteProperty(page, "once");
+			if (emitDescriptor) Object.defineProperty(page, "emit", emitDescriptor);
+			else Reflect.deleteProperty(page, "emit");
 			if (removeAllDescriptor) Object.defineProperty(page, "removeAllListeners", removeAllDescriptor);
 			else Reflect.deleteProperty(page, "removeAllListeners");
 			if (interceptionDescriptor) Object.defineProperty(page, "setRequestInterception", interceptionDescriptor);
 			else Reflect.deleteProperty(page, "setRequestInterception");
 			for (const [type, owned] of handlers) {
-				for (const handler of owned) Reflect.apply(off, page, [type, handler]);
+				for (const handler of owned) Reflect.apply(off, page, [type, listenerFor(handler)]);
 			}
 			handlers.clear();
 		},
@@ -2566,11 +2635,11 @@ export class WorkerCore {
 					throwIfAborted(sig);
 					return this.#requireDownloads().list();
 				}),
-			text: selector =>
+			text: (selector = "body") =>
 				op(`tab.text(${JSON.stringify(selector)})`, quickOpMs, sig =>
 					queryText(page, normalizeSelector(selector), sig),
 				),
-			html: selector =>
+			html: (selector = "body") =>
 				op(`tab.html(${JSON.stringify(selector)})`, quickOpMs, sig =>
 					queryHtml(page, normalizeSelector(selector), sig),
 				),
