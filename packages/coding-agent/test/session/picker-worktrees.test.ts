@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createSessionWorktree } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
-import { getConfigRootDir, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
+import { sessionDirForCwd, worktreeSessionDirs } from "@oh-my-pi/pi-coding-agent/session/session-paths";
+import { getConfigRootDir, hashPath, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import { makeAssistantMessage } from "../session-manager/helpers";
 
@@ -26,7 +27,7 @@ const TEST_ENV_KEYS = [
  * (and the reverse), without widening a subfolder's scope to the repo root,
  * and a session whose worktree was removed must resume from the checkout.
  */
-describe.skipIf(process.platform === "win32")("resume picker across git worktrees", () => {
+describe("resume picker across git worktrees", () => {
 	const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const originalEnv = Object.fromEntries(TEST_ENV_KEYS.map(key => [key, process.env[key]]));
 	let root: string;
@@ -35,7 +36,7 @@ describe.skipIf(process.platform === "win32")("resume picker across git worktree
 	beforeEach(async () => {
 		root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "omp-picker-wt-")));
 		Object.assign(process.env, {
-			GIT_CONFIG_GLOBAL: "/dev/null",
+			GIT_CONFIG_GLOBAL: path.join(root, "empty-gitconfig"),
 			GIT_CONFIG_NOSYSTEM: "1",
 			GIT_AUTHOR_NAME: "Test",
 			GIT_AUTHOR_EMAIL: "test@example.com",
@@ -43,8 +44,9 @@ describe.skipIf(process.platform === "win32")("resume picker across git worktree
 			GIT_COMMITTER_EMAIL: "test@example.com",
 			OMP_WORKTREE_DIR: path.join(root, "wt-base"),
 		});
+		await Bun.write(process.env.GIT_CONFIG_GLOBAL!, "");
 		setAgentDir(path.join(root, "agent"));
-		repo = path.join(root, "repo");
+		repo = path.join(root, "projects", "repo");
 		fs.mkdirSync(path.join(repo, "pkg"), { recursive: true });
 		await $`git init -q && git commit -q --allow-empty -m init`.cwd(repo).quiet();
 	});
@@ -81,37 +83,103 @@ describe.skipIf(process.platform === "win32")("resume picker across git worktree
 		return { id: session.getSessionId(), worktree };
 	}
 
-	it("lists a session moved into a worktree from the original checkout, and vice versa", async () => {
-		const moved = await sessionMovedByWt("wt/live");
-		const stayed = await answeredSession(repo);
-		await stayed.close();
-		const nested = await answeredSession(path.join(repo, "pkg"));
-		await nested.close();
+	// Preserve the existing platform restriction on session migration/resume.
+	// Bucket discovery below still exercises real git worktree removal on Windows.
+	it.skipIf(process.platform === "win32")(
+		"lists a session moved into a worktree from the original checkout, and vice versa",
+		async () => {
+			const moved = await sessionMovedByWt("wt/live");
+			const stayed = await answeredSession(repo);
+			await stayed.close();
+			const nested = await answeredSession(path.join(repo, "pkg"));
+			await nested.close();
 
-		const ids = async (cwd: string) => (await SessionManager.listForPicker(cwd)).map(s => s.id).sort();
-		const rootIds = [moved.id, stayed.getSessionId()].sort();
-		expect(await ids(repo)).toEqual(rootIds);
-		expect(await ids(moved.worktree)).toEqual(rootIds);
-		expect(await ids(path.join(repo, "pkg"))).toEqual([nested.getSessionId()]);
+			const ids = async (cwd: string) => (await SessionManager.listForPicker(cwd)).map(s => s.id).sort();
+			const rootIds = [moved.id, stayed.getSessionId()].sort();
+			expect(await ids(repo)).toEqual(rootIds);
+			expect(await ids(moved.worktree)).toEqual(rootIds);
+			expect(await ids(path.join(repo, "pkg"))).toEqual([nested.getSessionId()]);
 
-		// A live worktree is not removed: its session resumes in place.
-		const listed = (await SessionManager.listForPicker(repo)).find(s => s.id === moved.id)!;
-		expect(await SessionManager.isFromRemovedWorktree(listed, repo)).toBe(false);
-	});
+			// A live worktree is not removed: its session resumes in place.
+			const listed = (await SessionManager.listForPicker(repo)).find(s => s.id === moved.id)!;
+			expect(await SessionManager.isFromRemovedWorktree(listed, repo)).toBe(false);
+		},
+	);
 
-	it("keeps a removed worktree's session listed and relocates it into the checkout on resume", async () => {
-		const moved = await sessionMovedByWt("wt/gone");
-		// `omp worktree clear` removes and prunes: git no longer knows the worktree.
-		await $`git worktree remove --force ${moved.worktree} && git worktree prune`.cwd(repo).quiet();
+	it.skipIf(process.platform === "win32")(
+		"keeps a removed worktree's session listed and relocates it into the checkout on resume",
+		async () => {
+			const moved = await sessionMovedByWt("wt/gone");
+			// `omp worktree clear` removes and prunes: git no longer knows the worktree.
+			await $`git worktree remove --force ${moved.worktree} && git worktree prune`.cwd(repo).quiet();
 
-		const listed = (await SessionManager.listForPicker(repo)).find(s => s.id === moved.id);
-		expect(listed?.cwd).toBe(moved.worktree);
-		expect(await SessionManager.isFromRemovedWorktree(listed!, repo)).toBe(true);
+			const listed = (await SessionManager.listForPicker(repo)).find(s => s.id === moved.id);
+			expect(listed?.cwd).toBe(moved.worktree);
+			expect(await SessionManager.isFromRemovedWorktree(listed!, repo)).toBe(true);
 
-		const relocated = await SessionManager.openRelocated(listed!.path, listed!.cwd, repo);
-		await relocated.close();
-		const own = await SessionManager.list(repo);
-		expect(own.map(s => [s.id, s.cwd])).toEqual([[moved.id, repo]]);
-		expect(fs.existsSync(listed!.path)).toBe(false);
+			const relocated = await SessionManager.openRelocated(listed!.path, listed!.cwd, repo);
+			await relocated.close();
+			const own = await SessionManager.list(repo);
+			expect(own.map(s => [s.id, s.cwd])).toEqual([[moved.id, repo]]);
+			expect(fs.existsSync(listed!.path)).toBe(false);
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"recovers a session moved from an external linked worktree after both worktrees are pruned",
+		async () => {
+			const linked = path.join(root, "elsewhere", "current");
+			fs.mkdirSync(path.dirname(linked), { recursive: true });
+			await $`git worktree add -q -b external ${linked}`.cwd(repo).quiet();
+			const session = await answeredSession(linked);
+			const id = session.getSessionId();
+			const messages = session.buildSessionContext().messages;
+			const { path: worktree } = await createSessionWorktree(linked, Settings.isolated(), "wt/next");
+			expect(path.dirname(worktree)).toBe(path.dirname(linked));
+			await session.moveTo(worktree);
+			await session.close();
+
+			await $`git worktree remove --force ${worktree} && git worktree remove --force ${linked} && git worktree prune`
+				.cwd(repo)
+				.quiet();
+			const listed = (await SessionManager.listForPicker(repo)).find(s => s.id === id);
+			expect(listed?.cwd).toBe(worktree);
+			expect(await SessionManager.isFromRemovedWorktree(listed!, repo)).toBe(true);
+
+			const relocated = await SessionManager.openRelocated(listed!.path, listed!.cwd, repo);
+			expect(relocated.buildSessionContext().messages).toEqual(messages);
+			await relocated.close();
+			expect((await SessionManager.list(repo)).map(s => [s.id, s.cwd])).toEqual([[id, repo]]);
+			expect(fs.existsSync(listed!.path)).toBe(false);
+		},
+	);
+
+	it("discovers pruned external worktree buckets without leaking another repo or subfolder", async () => {
+		const linked = path.join(root, "elsewhere", "current");
+		fs.mkdirSync(path.dirname(linked), { recursive: true });
+		await $`git worktree add -q -b external ${linked}`.cwd(repo).quiet();
+		const { path: worktree } = await createSessionWorktree(linked, Settings.isolated(), "wt/next");
+		const sessionsRoot = path.join(root, "buckets");
+		const own = sessionDirForCwd(repo, sessionsRoot);
+		const sibling = sessionDirForCwd(worktree, sessionsRoot);
+		const nested = sessionDirForCwd(path.join(worktree, "pkg"), sessionsRoot);
+		const wrongPrefix = sessionDirForCwd(path.join(worktree, "pkg-other"), sessionsRoot);
+		const otherRepo = sessionDirForCwd(
+			path.join(root, "elsewhere", `wt-next-${hashPath(path.join(root, "other-repo"))}`),
+			sessionsRoot,
+		);
+		const oldSibling = sessionDirForCwd(path.join(path.dirname(repo), `wt-old-${hashPath(repo)}`), sessionsRoot);
+		const managed = sessionDirForCwd(path.join(root, "wt-base", `pr-1-${hashPath(repo)}-2`), sessionsRoot);
+		for (const dir of [own, sibling, nested, wrongPrefix, otherRepo, oldSibling, managed]) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+
+		await $`git worktree remove --force ${worktree} && git worktree remove --force ${linked} && git worktree prune`
+			.cwd(repo)
+			.quiet();
+		expect((await worktreeSessionDirs(repo, own)).sort()).toEqual([sibling, oldSibling, managed].sort());
+		const nestedCwd = path.join(repo, "pkg");
+		expect(await worktreeSessionDirs(nestedCwd, sessionDirForCwd(nestedCwd, sessionsRoot))).toEqual([nested]);
+		expect(await worktreeSessionDirs(repo, path.join(sessionsRoot, "custom"))).toEqual([]);
 	});
 });

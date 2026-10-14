@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- `/loop` preserves task text starting with unknown-unit or incomplete duration tokens, such as `3D modeling`, instead of rejecting it as an interval.
+- Sessions from sibling worktrees outside the main checkout remain available to resume after those worktrees are deleted.
 - Preserved recent advisor messages after native compaction of only the older prefix, without duplicating tails included in full native replacements.
 - Active goals now make one bounded forced-tool recovery when a continuation only narrates work, retaining progress across maintenance runs and visibly reporting unfinished work on recovery failure, including pre-model stops.
 - Wiki searches and continuations now keep the interface responsive and can be cancelled, reusing complete snapshot-bound rankings while preserving all evidence and citations across pages. Failed continuations retain the current results.

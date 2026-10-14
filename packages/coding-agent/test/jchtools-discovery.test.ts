@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs";
 import { createServer, type Socket } from "node:net";
 import * as os from "node:os";
@@ -25,6 +25,7 @@ import { AuthStorage } from "../src/session/auth-storage";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
+	vi.useRealTimers();
 	for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
 
@@ -537,6 +538,9 @@ describe("JchTools live registry catalogs", () => {
 				},
 			});
 			registry.getAll();
+			// Freeze only after auth initialization: this checks policy invalidation,
+			// not a 250ms discovery deadline racing manually released HTTP barriers.
+			vi.useFakeTimers();
 			let oldSettled = false;
 			const pending = registry.refreshLocalProviders().then(changed => {
 				oldSettled = true;

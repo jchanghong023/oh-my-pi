@@ -479,7 +479,7 @@ describe("rpc-ui command entry (rpc-ui-protocol.md)", () => {
 		const requestStarts: number[] = [];
 		const responseEnds: number[] = [];
 		const model = "rpc-loop-model";
-		const prompt = "RPC loop dispatch fixture";
+		const prompt = "3D modeling regression fixture";
 		const modelServer = Bun.serve({
 			hostname: "127.0.0.1",
 			port: 0,

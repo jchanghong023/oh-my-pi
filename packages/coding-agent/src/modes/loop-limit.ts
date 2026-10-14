@@ -74,7 +74,7 @@ export function parseLoopArgs(args: string): ParsedLoopArgs | string {
 	let intervalMs: number | undefined;
 	if (limitResult.limit) {
 		const token = /^\S+/.exec(rest)?.[0];
-		const interval = token === undefined ? undefined : parseCompoundDuration(token.toLowerCase());
+		const interval = token === undefined ? undefined : parseCompoundDuration(token.toLowerCase(), true);
 		if (typeof interval === "string") return interval;
 		if (interval?.kind === "duration") {
 			if (!Number.isSafeInteger(interval.durationMs) || interval.durationMs > MAX_LOOP_INTERVAL_MS) {
@@ -177,29 +177,31 @@ function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | str
 
 /**
  * Parse a compact duration token such as `10m`, or a compound one like `1h30m`.
- * Returns `undefined` when the token is not duration-shaped, or an error string
- * when it is shaped like a duration but uses an unknown unit / non-positive
- * amount.
+ * Returns `undefined` when the token is not duration-shaped (or has an unknown
+ * unit when parsing an optional interval), otherwise an error for an unknown
+ * unit / non-positive amount.
  */
-function parseCompoundDuration(token: string): LoopLimitConfig | string | undefined {
+function parseCompoundDuration(token: string, unknownUnitsArePrompt = false): LoopLimitConfig | string | undefined {
 	if (!/^(?:\d+[a-z]+)+$/.test(token)) return undefined;
 	const segments = token.match(/\d+[a-z]+/g);
 	if (!segments) return undefined;
 	let totalMs = 0;
+	let invalidAmount = false;
 	for (const segment of segments) {
 		const match = /^(\d+)([a-z]+)$/.exec(segment);
 		if (!match) return LOOP_USAGE;
 		const unitMs = TIME_UNITS_MS.get(match[2]);
 		if (unitMs === undefined) {
-			return "Loop duration unit must be seconds, minutes, or hours.";
+			return unknownUnitsArePrompt ? undefined : "Loop duration unit must be seconds, minutes, or hours.";
 		}
 		const amount = Number(match[1]);
 		if (!Number.isSafeInteger(amount) || amount <= 0) {
-			return "Loop duration must be positive.";
+			if (!unknownUnitsArePrompt) return "Loop duration must be positive.";
+			invalidAmount = true;
 		}
 		totalMs += amount * unitMs;
 	}
-	if (totalMs <= 0) return "Loop duration must be positive.";
+	if (invalidAmount || totalMs <= 0) return "Loop duration must be positive.";
 	return { kind: "duration", durationMs: totalMs };
 }
 

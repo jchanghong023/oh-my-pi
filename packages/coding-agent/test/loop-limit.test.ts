@@ -99,6 +99,16 @@ describe("positional loop intervals", () => {
 		});
 	});
 
+	test("keeps unknown-unit and incomplete duration tokens as prompt text", () => {
+		for (const prompt of ["3D modeling", "0s3D modeling", "30s. timeout"]) {
+			expect(parseLoopArgs(`3 ${prompt}`)).toEqual({
+				limit: { kind: "iterations", iterations: 3 },
+				intervalMs: undefined,
+				prompt,
+			});
+		}
+	});
+
 	test("combines a duration budget, compound interval and condition without consuming prompt text", () => {
 		expect(parseLoopArgs("10m 1m30s --until 'bun test' fix 30s timeout")).toEqual({
 			limit: { kind: "duration", durationMs: 600_000 },

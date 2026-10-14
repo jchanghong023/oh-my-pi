@@ -7,7 +7,6 @@ import {
 	getCustomSessionFilesDir,
 	getSessionsDir,
 	getTerminalSessionsDir,
-	getWorktreesDir,
 	hashPath,
 	pathIsWithin,
 	resolveEquivalentPath,
@@ -254,27 +253,20 @@ export async function worktreeSessionDirs(cwd: string, sessionDir: string): Prom
 	}
 }
 
-/** Stand-in worktree name: encoding a path through it yields the name around any managed worktree's. */
-const WORKTREE_NAME_PROBE = "{worktree}";
-
 /**
  * Session directories for the `prefix` folder of agent-managed worktrees of
  * the repository at `primaryRoot`, matched by directory name. Those worktrees
- * use `<slug>-<hashPath(primaryRoot)>[-<n>]` names, either beside the primary
- * checkout (`/wt`) or under the managed base (task/PR worktrees). Matching
- * their session directory names survives the worktree's removal.
+ * use `<slug>-<hashPath(primaryRoot)>[-<n>]` names. `/wt` can create them beside
+ * any current cwd, not just the primary checkout; task/PR worktrees use the
+ * managed base. The encoded name retains the repo hash after either is removed.
  */
 function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, sessionsRoot: string): string[] {
-	// Encode against canonical bases: live worktrees were named from their
-	// realpaths, and the probe paths do not exist to be resolved.
-	const probes = [getWorktreesDir(), path.dirname(primaryRoot)].map(base => {
-		const probe = path.join(resolveEquivalentPath(base), WORKTREE_NAME_PROBE, prefix);
-		return path.basename(sessionDirForCwd(probe, sessionsRoot)).split(WORKTREE_NAME_PROBE);
-	});
+	const suffix = encodeRelativeSessionDirName("", prefix.replace(/[/\\]+$/, ""));
+	const suffixes = [suffix, `${suffix}--`];
 	// The name hashes the root as spelled when the worktree was made; a symlinked
 	// spelling (macOS `/tmp` vs `/private/tmp`) hashes differently, so accept both.
 	const hashes = new Set([hashPath(primaryRoot), hashPath(resolveEquivalentPath(primaryRoot))]);
-	const name = new RegExp(`^[\\w.-]+-(?:${[...hashes].join("|")})(?:-\\d+)?$`);
+	const name = new RegExp(`(?:^|-)[\\w.-]+-(?:${[...hashes].join("|")})(?:-\\d+)?$`);
 	let entries: string[];
 	try {
 		entries = fs.readdirSync(sessionsRoot);
@@ -283,10 +275,14 @@ function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, session
 	}
 	const dirs: string[] = [];
 	for (const entry of entries) {
-		for (const [head, tail] of probes) {
-			if (tail === undefined || entry.length <= head.length + tail.length) continue;
-			if (!entry.startsWith(head) || !entry.endsWith(tail)) continue;
-			if (name.test(entry.slice(head.length, entry.length - tail.length))) {
+		// Match the exact subfolder suffix, including legacy absolute buckets'
+		// closing "--". The encoded parent can be anywhere; no session files are read.
+		if (!entry.startsWith("-")) continue;
+		for (const tail of suffixes) {
+			if (tail !== suffix && !entry.startsWith("--")) continue;
+			if (!entry.endsWith(tail)) continue;
+			const worktreePath = tail ? entry.slice(0, -tail.length) : entry;
+			if (name.test(worktreePath)) {
 				dirs.push(path.join(sessionsRoot, entry));
 				break;
 			}

@@ -92,13 +92,15 @@ describe("WelcomeComponent", () => {
 		for (const row of below) expectCentered(indent(row), columns - visibleWidth(row));
 	});
 
-	it("drops the tip below 50 columns", () => {
+	it("renders expanded tip content only when the terminal meets its width boundary", () => {
 		const welcome = new WelcomeComponent("1.0.0");
-		const tip = welcome.tip ?? "";
-		const text = (columns: number) => Bun.stripANSI(welcome.render(columns).join("\n"));
-		expect(text(50)).toContain(tip.slice(0, 4));
-		expect(text(49)).not.toContain(tip.slice(0, 4));
-		expect(text(49)).toContain("v1.0.0");
+		Object.defineProperty(welcome, "tip", { value: "TipBoundary {tap:left}" });
+		const wide = Bun.stripANSI(welcome.render(50).join("\n"));
+		const narrow = Bun.stripANSI(welcome.render(49).join("\n"));
+		expect(wide).toContain("TipBoundary");
+		expect(wide).not.toContain("{tap:left}");
+		expect(narrow).not.toContain("TipBoundary");
+		expect(narrow).toContain("v1.0.0");
 	});
 
 	it("sets the version under the wordmark while the lockup fits, else keeps the logo alone", () => {
