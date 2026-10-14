@@ -130,6 +130,7 @@ describe("async speculative compaction", () => {
 			reconnectToAgent: () => {},
 			drainStrandedQueuedMessages: () => {},
 			buildDisplaySessionContext: () => sessionManager.buildSessionContext(),
+			persistEvalStateContext: () => {},
 			convertToLlmForSideRequest:
 				options.convertToLlmForSideRequest ?? ((messages: AgentMessage[]) => messages as never),
 			buildLiveProviderContext:
@@ -144,7 +145,6 @@ describe("async speculative compaction", () => {
 			resetAdvisorRuntimes: () => {},
 			rebaseAfterCompaction: () => {},
 			restoreGoalAutoOrchestrateContext: () => undefined,
-			persistEvalStateContext: () => {},
 			recordAnchoredHistoryRewrite: () => {},
 			getContextBreakdown: () => undefined,
 			getContextUsage: () => undefined,

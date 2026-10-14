@@ -879,6 +879,11 @@ describe("detachGitDir", () => {
 					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
 					expect(admin.startsWith(root + path.sep)).toBe(true);
 				}
+				// Submodule clones don't inherit the superproject's identity; CI has no global one.
+				for (const dir of [module, nested]) {
+					await runGit(dir, ["config", "user.email", "src@example.com"]);
+					await runGit(dir, ["config", "user.name", "Source User"]);
+				}
 				await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
 				expect(await runGit(nested, ["diff", "--", "leaf.txt"])).toContain("+isolated");
 				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);

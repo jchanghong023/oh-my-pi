@@ -48,10 +48,28 @@ function server(name: string, startupMs = 0, callMs = 0): MCPStdioServerConfig {
 async function startServers(): Promise<{ manager: MCPManager; elapsedMs: number }> {
 	const manager = new MCPManager(import.meta.dir);
 	managers.push(manager);
-	await manager.connectServers({ instant: server("instant"), slowcall: server("slowcall", 0, 320) }, {}, undefined, 0);
+	// Ready the fast fixtures before starting slowstart so scheduler jitter
+	// cannot consume the strict-readiness observation window.
+	await manager.connectServers({ instant: server("instant"), slowcall: server("slowcall", 0, 320) }, {});
+	await waitForTools(manager, expectedTools.slice(0, 2));
 	const start = Date.now();
 	await manager.connectServers({ slowstart: server("slowstart", SLOW_START_MS) }, {});
 	return { manager, elapsedMs: Date.now() - start };
+}
+
+/** Resolve once every named tool is registered, however late its server's handshake lands. */
+async function waitForTools(manager: MCPManager, names: string[]): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const check = () => {
+		if (names.every(name => manager.getTools().some(tool => tool.name === name))) resolve();
+	};
+	const unsubscribe = manager.addToolsChangedListener(check);
+	check();
+	try {
+		await promise;
+	} finally {
+		unsubscribe();
+	}
 }
 
 function printSession(manager: MCPManager, refreshGate?: Promise<void>, onRefreshStarted?: () => void) {
