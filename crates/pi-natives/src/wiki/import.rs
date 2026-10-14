@@ -750,7 +750,7 @@ fn resolve_paths(paths: &[&str]) -> CoreResult<PathBuf> {
 fn resolve_paths(paths: &[&str]) -> CoreResult<PathBuf> {
 	let mut tail = String::new();
 	let mut absolute = false;
-	for path in paths.iter().rev().copied() {
+	for path in paths.iter().rev() {
 		if path.is_empty() {
 			continue;
 		}
@@ -810,6 +810,9 @@ fn relative_path(root: &Path, absolute: &Path) -> String {
 	parts.join(std::path::MAIN_SEPARATOR_STR)
 }
 
+// The infallible POSIX variant keeps the fallible Windows variant's Result
+// signature so shared call sites can use `?` on both platforms.
+#[allow(clippy::unnecessary_wraps)]
 #[cfg(not(windows))]
 fn node_symlink(_path: &Path, metadata: &Metadata) -> CoreResult<bool> {
 	Ok(metadata.file_type().is_symlink())
