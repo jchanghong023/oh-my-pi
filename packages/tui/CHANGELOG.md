@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
+
 ### Changed
 
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.

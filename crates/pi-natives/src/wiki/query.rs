@@ -71,6 +71,7 @@ impl ValidateNapiValue for Shape {}
 pub enum MatchKind {
 	ExactName,
 	Related,
+	Regex,
 }
 
 impl TypeName for MatchKind {
@@ -91,6 +92,7 @@ impl ToNapiValue for MatchKind {
 		let name = match value {
 			Self::ExactName => "exact-name",
 			Self::Related => "related",
+			Self::Regex => "regex",
 		};
 		// SAFETY: N-API supplies the live environment; no owned Rust string
 		// allocation is needed for these static metadata values.
@@ -108,6 +110,7 @@ impl FromNapiValue for MatchKind {
 		match name.as_str() {
 			"exact-name" => Ok(Self::ExactName),
 			"related" => Ok(Self::Related),
+			"regex" => Ok(Self::Regex),
 			_ => Err(napi::Error::from_reason("Invalid documentation section match kind")),
 		}
 	}

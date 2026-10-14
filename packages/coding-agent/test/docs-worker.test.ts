@@ -163,21 +163,25 @@ describe("DocsService real owned worker", () => {
 		expect(await f.service.list()).toEqual([]);
 	}, 15_000);
 
-	it("cancels queued work without killing or rejecting its active peer", async () => {
-		const f = await fixture();
-		expensiveRemoval(f.service);
-		let settled = false;
-		const removing = f.service.remove("manual").finally(() => {
-			settled = true;
-		});
-		const controller = new AbortController();
-		const queued = failure(f.service.list({ signal: controller.signal }));
-		controller.abort();
-		expect((await queued).name).toBe("AbortError");
-		expect(settled).toBe(false);
-		await removing;
-		expect(await f.service.list()).toEqual([]);
-	}, 15_000);
+	it.each(["search", "grep"] as const)(
+		"cancels queued %s work without killing or rejecting its active peer",
+		async mode => {
+			const f = await fixture();
+			expensiveRemoval(f.service);
+			let settled = false;
+			const removing = f.service.remove("manual").finally(() => {
+				settled = true;
+			});
+			const controller = new AbortController();
+			const queued = failure(f.service.search("workerbeacon", { mode, signal: controller.signal }));
+			controller.abort();
+			expect((await queued).name).toBe("AbortError");
+			expect(settled).toBe(false);
+			await removing;
+			expect(await f.service.list()).toEqual([]);
+		},
+		15_000,
+	);
 
 	it("kills an actively cancelled real worker and continues independent queued work on a fresh child", async () => {
 		const f = await fixture();
@@ -206,6 +210,38 @@ describe("DocsService real owned worker", () => {
 		expect(observed.workers).toHaveLength(2);
 		expect(observed.workers[1]!.pid).not.toBe(proc.pid);
 	}, 15_000);
+
+	it("cancels an owned grep request, recovers on a fresh worker and scans beyond file grep's size limit", async () => {
+		const f = await fixture();
+		const source = `# Large\n${"padding ".repeat(530_000)}FARBEACON\n`;
+		expect(Buffer.byteLength(source)).toBeGreaterThan(4 * 1024 * 1024);
+		await Bun.write(path.join(f.documents, "a.md"), source);
+		await f.service.remove("manual");
+		await f.service.init(f.documents, "manual");
+		await fs.rm(f.documents, { recursive: true });
+		await f.service.close();
+		const observed = observeWorkers(f.agentDir);
+		const service = new DocsService({ agentDir: f.agentDir });
+		cleanups.push(() => service.close());
+		await service.list();
+		const controller = new AbortController();
+		const active = failure(service.search("FARBEACON$", { mode: "grep", signal: controller.signal }));
+		const proc = await observed.next("searchWindow");
+		const queued = service.search("^workerbeacon", { mode: "grep" });
+		controller.abort();
+		expect((await active).name).toBe("AbortError");
+		await proc.exited;
+		const recovered = await queued;
+		expect(recovered.sections.map(hit => hit.path)).toEqual(["b.md", "c.md"]);
+		expect(recovered.sections.every(hit => hit.matchKind === "regex")).toBe(true);
+		expect(observed.workers).toHaveLength(2);
+		expect(observed.workers[1]!.pid).not.toBe(proc.pid);
+		const far = await service.search("FARBEACON$", { mode: "grep" });
+		expect(far.total).toBe(1);
+		expect(far.sections[0]).toMatchObject({ path: "a.md", matchKind: "regex", lineStart: 2, lineEnd: 2 });
+		expect(far.sections[0]?.text).toContain("FARBEACON\n");
+		expect(far.sections[0]?.documentHash).toBe(new Bun.CryptoHasher("sha256").update(source).digest("hex"));
+	}, 20_000);
 
 	it("settles active and queued calls immediately, then reaps the real worker on repeated close", async () => {
 		const f = await fixture();
@@ -285,67 +321,86 @@ describe("DocsService real owned worker", () => {
 		expect(observed.workers).toHaveLength(2);
 	}, 15_000);
 
-	it("invalidates cached cursor evidence after raw SQL and FTS-only commits", async () => {
-		const f = await fixture();
-		await fs.rm(f.documents, { recursive: true });
-		const before = await f.service.search("workerbeacon", { limit: 1 });
-		expect(before.total).toBe(3);
-		expect(before.cursor).toBeDefined();
-		const original = before.sections[0]!;
-		const changed = "# Changed evidence\nworkerbeacon UPDATED_COMPLETE_FINAL_LINE\n";
-		const db = new Database(f.service.databasePath, { strict: true });
-		try {
-			db.exec("PRAGMA foreign_keys=ON");
-			db.transaction(() => {
-				db.query("UPDATE sections SET raw_markdown=?,heading_path=?,line_end=2 WHERE id=?").run(
-					changed,
-					"Changed evidence",
-					original.sectionId,
-				);
-				db.query(
-					"UPDATE documents SET relative_path=?,sha256=? WHERE id=(SELECT document_id FROM sections WHERE id=?)",
-				).run("renamed.md", "f".repeat(64), original.sectionId);
-			})();
-		} finally {
-			db.close();
-		}
-		await expect(f.service.search("workerbeacon", { limit: 1, cursor: before.cursor })).rejects.toThrow("Stale");
-		const fresh = await f.service.search("workerbeacon");
-		const updated = fresh.sections.find(section => section.sectionId === original.sectionId)!;
-		expect(updated.text).toBe(changed);
-		expect(updated.path).toBe("renamed.md");
-		expect(updated.documentHash).toBe("f".repeat(64));
-		expect(updated.headingPath).toBe("Changed evidence");
-		const page = await f.service.search("workerbeacon", { limit: 1 });
-		const ftsDb = new Database(f.service.databasePath, { strict: true });
-		try {
-			ftsDb.exec("PRAGMA foreign_keys=ON");
-			const row = ftsDb.query("SELECT index_id FROM sections WHERE id=?").get(original.sectionId) as {
-				index_id: number;
-			};
-			ftsDb.transaction(() => {
-				ftsDb.query("DELETE FROM sections_fts WHERE rowid=?").run(original.sectionId);
-				ftsDb
-					.query(
-						"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
-					)
-					.run(
-						original.sectionId,
-						original.sectionId,
-						row.index_id,
-						"renamed.md",
+	it.each(["search", "grep"] as const)(
+		"invalidates %s cached cursor evidence after raw SQL and FTS-only commits",
+		async mode => {
+			const f = await fixture();
+			await fs.rm(f.documents, { recursive: true });
+			const before = await f.service.search("workerbeacon", { mode, limit: 1 });
+			expect(before.total).toBe(3);
+			expect(before.cursor).toBeDefined();
+			const original = before.sections[0]!;
+			const changed = "# Changed evidence\nworkerbeacon UPDATED_COMPLETE_FINAL_LINE\n";
+			const db = new Database(f.service.databasePath, { strict: true });
+			try {
+				db.exec("PRAGMA foreign_keys=ON");
+				db.transaction(() => {
+					db.query("UPDATE sections SET raw_markdown=?,heading_path=?,line_end=2,byte_end=? WHERE id=?").run(
+						changed,
 						"Changed evidence",
-						"isolated_fts_token",
+						Buffer.byteLength(changed),
+						original.sectionId,
 					);
-			})();
-		} finally {
-			ftsDb.close();
-		}
-		await expect(f.service.search("workerbeacon", { limit: 1, cursor: page.cursor })).rejects.toThrow("Stale");
-		const fts = await f.service.search("isolated_fts_token");
-		expect(fts.sections.map(section => section.sectionId)).toContain(original.sectionId);
-		expect(fts.sections.find(section => section.sectionId === original.sectionId)?.text).toBe(changed);
-	}, 15_000);
+					db.query(
+						"UPDATE documents SET relative_path=?,sha256=?,size_bytes=? WHERE id=(SELECT document_id FROM sections WHERE id=?)",
+					).run("renamed.md", "f".repeat(64), Buffer.byteLength(changed), original.sectionId);
+				})();
+			} finally {
+				db.close();
+			}
+			await expect(f.service.search("workerbeacon", { mode, limit: 1, cursor: before.cursor })).rejects.toThrow(
+				"Stale",
+			);
+			const fresh = await f.service.search("workerbeacon", { mode });
+			const updated = fresh.sections.find(section => section.sectionId === original.sectionId)!;
+			expect(updated.text).toBe(changed);
+			expect(updated.path).toBe("renamed.md");
+			expect(updated.documentHash).toBe("f".repeat(64));
+			expect(updated.headingPath).toBe("Changed evidence");
+			const page = await f.service.search("workerbeacon", { mode, limit: 1 });
+			const ftsDb = new Database(f.service.databasePath, { strict: true });
+			try {
+				ftsDb.exec("PRAGMA foreign_keys=ON");
+				const row = ftsDb.query("SELECT index_id FROM sections WHERE id=?").get(original.sectionId) as {
+					index_id: number;
+				};
+				ftsDb.transaction(() => {
+					ftsDb.query("DELETE FROM sections_fts WHERE rowid=?").run(original.sectionId);
+					ftsDb
+						.query(
+							"INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) VALUES(?,?,?,?,?,?)",
+						)
+						.run(
+							original.sectionId,
+							original.sectionId,
+							row.index_id,
+							"renamed.md",
+							"Changed evidence",
+							"isolated_fts_token",
+						);
+				})();
+			} finally {
+				ftsDb.close();
+			}
+			await expect(f.service.search("workerbeacon", { mode, limit: 1, cursor: page.cursor })).rejects.toThrow(
+				"Stale",
+			);
+			if (mode === "grep") {
+				const freshGrep = await f.service.search("workerbeacon", { mode });
+				expect(freshGrep.total).toBe(3);
+				expect(freshGrep.sections.find(section => section.sectionId === original.sectionId)).toMatchObject({
+					text: changed,
+					path: "renamed.md",
+					documentHash: "f".repeat(64),
+					matchKind: "regex",
+				});
+			}
+			const fts = await f.service.search("isolated_fts_token");
+			expect(fts.sections.map(section => section.sectionId)).toContain(original.sectionId);
+			expect(fts.sections.find(section => section.sectionId === original.sectionId)?.text).toBe(changed);
+		},
+		15_000,
+	);
 
 	it("reports a broken warm database instead of returning cached evidence or zero matches", async () => {
 		const f = await fixture();
@@ -360,57 +415,67 @@ describe("DocsService real owned worker", () => {
 		await expect(f.service.search("workerbeacon")).rejects.toThrow();
 	}, 10_000);
 
-	it("runs page-local budgeting lazily and resumes the excluded next hit", async () => {
-		const f = await fixture();
-		const ranked = await f.service.search("workerbeacon");
-		const positions: number[] = [];
-		const page = await f.service.search("workerbeacon", {
-			limit: 3,
-			characterBudget: 3,
-			sectionCost: (_section, position) => {
-				positions.push(position);
-				return 2;
-			},
-		});
-		expect(positions).toEqual([0, 1]);
-		expect(page.sections).toEqual(ranked.sections.slice(0, 1));
-		const rest = await f.service.search("workerbeacon", { cursor: page.cursor });
-		expect(rest.sections).toEqual(ranked.sections.slice(1));
-		expect(rest.hasMore).toBe(false);
-	}, 10_000);
-
-	it("enforces the successful >=500ms floor asynchronously and aborts after DB work without padding errors", async () => {
-		// Platform time is the integration contract; fake time cannot prove the outward floor.
-		const f = await fixture();
-		const started = performance.now();
-		let heartbeats = 0;
-		const timer = setInterval(() => {
-			heartbeats++;
-		}, 5);
-		try {
-			const result = await f.service.search("workerbeacon");
-			expect(result.total).toBe(3);
-			expect(performance.now() - started).toBeGreaterThanOrEqual(500);
-			expect(heartbeats).toBeGreaterThan(0);
-		} finally {
-			clearInterval(timer);
-		}
-		const controller = new AbortController();
-		const examined = Promise.withResolvers<void>();
-		const pending = failure(
-			f.service.search("workerbeacon", {
-				signal: controller.signal,
-				sectionCost: section => {
-					examined.resolve();
-					return section.text.length;
+	it.each(["search", "grep"] as const)(
+		"runs %s page-local budgeting lazily and resumes the excluded next hit",
+		async mode => {
+			const f = await fixture();
+			const ranked = await f.service.search("workerbeacon", { mode });
+			const positions: number[] = [];
+			const page = await f.service.search("workerbeacon", {
+				mode,
+				limit: 3,
+				characterBudget: 3,
+				sectionCost: (_section, position) => {
+					positions.push(position);
+					return 2;
 				},
-			}),
-		);
-		await examined.promise;
-		const abortStarted = performance.now();
-		controller.abort();
-		expect((await pending).name).toBe("AbortError");
-		expect(performance.now() - abortStarted).toBeLessThan(500);
-		expect((await f.service.search("workerbeacon")).total).toBe(3);
-	}, 10_000);
+			});
+			expect(positions).toEqual([0, 1]);
+			expect(page.sections).toEqual(ranked.sections.slice(0, 1));
+			const rest = await f.service.search("workerbeacon", { mode, cursor: page.cursor });
+			expect(rest.sections).toEqual(ranked.sections.slice(1));
+			expect(rest.hasMore).toBe(false);
+		},
+		10_000,
+	);
+
+	it.each(["search", "grep"] as const)(
+		"enforces the %s successful >=500ms floor asynchronously and aborts after DB work",
+		async mode => {
+			// Platform time is the integration contract; fake time cannot prove the outward floor.
+			const f = await fixture();
+			const started = performance.now();
+			let heartbeats = 0;
+			const timer = setInterval(() => {
+				heartbeats++;
+			}, 5);
+			try {
+				const result = await f.service.search("workerbeacon", { mode });
+				expect(result.total).toBe(3);
+				expect(performance.now() - started).toBeGreaterThanOrEqual(500);
+				expect(heartbeats).toBeGreaterThan(0);
+			} finally {
+				clearInterval(timer);
+			}
+			const controller = new AbortController();
+			const examined = Promise.withResolvers<void>();
+			const pending = failure(
+				f.service.search("workerbeacon", {
+					mode,
+					signal: controller.signal,
+					sectionCost: section => {
+						examined.resolve();
+						return section.text.length;
+					},
+				}),
+			);
+			await examined.promise;
+			const abortStarted = performance.now();
+			controller.abort();
+			expect((await pending).name).toBe("AbortError");
+			expect(performance.now() - abortStarted).toBeLessThan(500);
+			expect((await f.service.search("workerbeacon", { mode })).total).toBe(3);
+		},
+		10_000,
+	);
 });

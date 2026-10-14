@@ -4,8 +4,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { TUI } from "@oh-my-pi/pi-tui";
+import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../src/config/settings";
 import { DocsSearchEngine } from "../src/docs/engine";
+import { DocsService } from "../src/docs/service";
+import type { DocsSearchResult } from "../src/docs/types";
 import { DocsHubComponent } from "../src/modes/components/docs-hub";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -47,7 +50,10 @@ async function fixture() {
 	} finally {
 		seed.close();
 	}
+	return openHub(root, agentDir);
+}
 
+async function openHub(root: string, agentDir: string) {
 	const state: { hub?: DocsHubComponent } = {};
 	const renderedFrames: string[] = [];
 	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
@@ -76,7 +82,7 @@ async function fixture() {
 		waiters.add({ matches: ready, resolve });
 		return promise;
 	};
-	await waitFor(rendered => rendered.includes("docs=1 sections=1"));
+	await waitFor(rendered => rendered.includes("docs="));
 	return { hub: component, waitFor, renderedFrames };
 }
 
@@ -86,6 +92,227 @@ beforeAll(async () => {
 
 afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+});
+
+const grepExpression = String.raw` raw\.Token\[42\] `;
+
+async function grepFixture(count = 25) {
+	const root = await tempDir("docs-hub-regex-");
+	const agentDir = await tempDir("docs-hub-regex-agent-");
+	const docsDir = path.join(root, "docs");
+	const otherDir = path.join(root, "other");
+	await fs.mkdir(docsDir);
+	await fs.mkdir(otherDir);
+	for (let index = 0; index < count; index++)
+		await fs.writeFile(
+			path.join(docsDir, `p${String(index).padStart(2, "0")}.md`),
+			`# Evidence\n raw.Token[42] marker ${index}\nStored final line ${index}.\n`,
+		);
+	for (const [name, text] of [
+		["normalized", " raw Token 42 marker"],
+		["uppercase", " RAW.Token[42] marker"],
+		["unspaced", "raw.Token[42] marker"],
+		["suffix", " raw.Token[42]suffix"],
+		["decomposed", "cafe\u0301"],
+		["precomposed", "café"],
+		["tab", "left\tright"],
+		["spaces", `left${" ".repeat(DEFAULT_TAB_WIDTH)}right`],
+	])
+		await fs.writeFile(path.join(docsDir, `${name}.md`), `# Decoy\n${text}\n`);
+	await fs.writeFile(path.join(otherDir, "outside.md"), "# Outside\n raw.Token[42] outside selected index\n");
+	const service = new DocsService({ agentDir, cwd: root });
+	let expected: DocsSearchResult;
+	try {
+		await service.init(docsDir, "a-manual");
+		await service.init(otherDir, "z-other");
+		expected = await service.search(grepExpression, { index: "a-manual", mode: "grep", case: true, limit: 100 });
+	} finally {
+		await service.close();
+	}
+	await fs.rm(docsDir, { recursive: true });
+	await fs.rm(otherDir, { recursive: true });
+	return { ...(await openHub(root, agentDir)), root, agentDir, docsDir, expected };
+}
+
+describe("DocsHub explicit grep with real native snapshots", () => {
+	it("g preserves regex spaces, selected-index scope and mode across DB-only pages", async () => {
+		const { hub, waitFor, expected } = await grepFixture();
+		try {
+			expect(expected.total).toBe(25);
+			hub.handleInput("g");
+			hub.handleInput(grepExpression);
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("Section hits: 25"));
+			const firstPage = hub.render(200).join("\n");
+			expect(firstPage).toContain("showing 1-20");
+			for (const section of expected.sections.slice(0, 20))
+				expect(firstPage).toContain(`[regex] [a-manual] ${section.path}:${section.lineStart}-${section.lineEnd}`);
+			for (const decoy of ["normalized.md", "uppercase.md", "unspaced.md", "suffix.md", "outside.md"])
+				expect(firstPage).not.toContain(decoy);
+			hub.handleInput("\r");
+			expect(hub.render(200).join("\n")).toContain(expected.sections[0]!.text.trimEnd());
+			hub.handleInput("n");
+			await waitFor(rendered => rendered.includes("showing 21-25"));
+			const finalPage = hub.render(200).join("\n");
+			for (const section of expected.sections.slice(20))
+				expect(finalPage).toContain(`[regex] [a-manual] ${section.path}:${section.lineStart}-${section.lineEnd}`);
+			for (const section of expected.sections.slice(0, 20)) expect(finalPage).not.toContain(`${section.path}:`);
+			expect(finalPage).toContain("Results exhausted.");
+			hub.handleInput("\r");
+			expect(hub.render(200).join("\n")).toContain(expected.sections[20]!.text.trimEnd());
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
+
+	it("slash retains technical-name search while g uses literal raw regex and inline case flags", async () => {
+		const { hub, waitFor } = await grepFixture(1);
+		try {
+			hub.handleInput("/");
+			hub.handleInput(" raw.Token[42] ");
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("exact-name matches:"));
+			const normal = hub.render(200).join("\n");
+			expect(normal).toContain("[exact-name]");
+			expect(normal).toContain("uppercase.md");
+			expect(normal).toContain("unspaced.md");
+			expect(normal).not.toContain("[regex]");
+			hub.handleInput("\x1b");
+			hub.handleInput("g");
+			hub.handleInput("raw.Token[42]");
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("Section hits: 0"));
+			expect(hub.render(200).join("\n")).not.toContain("Full name:");
+			hub.handleInput("\x1b");
+			hub.handleInput("g");
+			hub.handleInput(`(?i)${grepExpression}`);
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("Section hits: 2"));
+			const insensitive = hub.render(200).join("\n");
+			expect(insensitive).toContain("[regex]");
+			expect(insensitive).toContain("uppercase.md");
+			expect(insensitive).not.toContain("unspaced.md");
+			expect(insensitive).not.toContain("outside.md");
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
+
+	it.each([
+		{ query: "^cafe\u0301$", match: "decomposed.md", decoy: "precomposed.md" },
+		{ query: "^left\tright$", match: "tab.md", decoy: "spaces.md" },
+	])(
+		"pasted raw regex selects $match rather than $decoy",
+		async ({ query, match, decoy }) => {
+			const { hub, waitFor } = await grepFixture(1);
+			try {
+				hub.handleInput("g");
+				hub.handleInput(`\x1b[200~${query}\x1b[201~`);
+				expect(hub.render(200).join("\n")).not.toContain("\t");
+				hub.handleInput("\r");
+				await waitFor(rendered => rendered.includes("Section hits: 1"));
+				const results = hub.render(200).join("\n");
+				expect(results).toContain(`[regex] [a-manual] ${match}:`);
+				expect(results).not.toContain(decoy);
+			} finally {
+				await hub.dispose();
+			}
+		},
+		15_000,
+	);
+
+	it.each(["g", "/"])(
+		"keeps a fresh %s input editable after an older stale continuation",
+		async key => {
+			const { hub, waitFor, root, agentDir, docsDir } = await grepFixture();
+			try {
+				hub.handleInput("g");
+				hub.handleInput(grepExpression);
+				hub.handleInput("\r");
+				await waitFor(rendered => rendered.includes("Section hits: 25"));
+				hub.handleInput("\r");
+				const service = new DocsService({ agentDir, cwd: root });
+				try {
+					await service.remove("a-manual");
+					await fs.mkdir(docsDir);
+					await fs.writeFile(path.join(docsDir, "replacement.md"), "# New snapshot\nreplacement\n");
+					await service.init(docsDir, "a-manual");
+				} finally {
+					await service.close();
+				}
+				hub.handleInput("n");
+				// Let the real service receive the continuation before replacing its input/view.
+				await Promise.resolve();
+				hub.handleInput(key);
+				hub.handleInput(key === "g" ? "^replace" : "replace");
+				// With the old behavior this waits for the stale error, which hid the fresh input.
+				await waitFor(() => true);
+				const input = hub.render(200).join("\n");
+				expect(input).toContain(key === "g" ? "Grep (regex, case-sensitive):" : "Search (relevance):");
+				expect(input).toContain("replace");
+				hub.handleInput(key === "g" ? "ment$" : "ment");
+				hub.handleInput("\r");
+				await waitFor(rendered => rendered.includes("Section hits: 1"));
+				const results = hub.render(200).join("\n");
+				expect(results).toContain("replacement.md:");
+				expect(results).toContain(
+					key === "g" ? "Search type: Grep (regex, case-sensitive)" : "Search type: Search (relevance)",
+				);
+				expect(results).not.toContain("Stale documentation search cursor");
+			} finally {
+				await hub.dispose();
+			}
+		},
+		15_000,
+	);
+
+	it("invalid input, cancelled continuation and stale continuation retain the opened snapshot", async () => {
+		const { hub, waitFor, expected, root, agentDir, docsDir } = await grepFixture();
+		try {
+			hub.handleInput("g");
+			hub.handleInput(grepExpression);
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("Section hits: 25"));
+			hub.handleInput("\r");
+			const evidence = expected.sections[0]!;
+			hub.handleInput("g");
+			hub.handleInput("[");
+			hub.handleInput("\r");
+			await waitFor(rendered => /invalid.*regex/i.test(rendered));
+			expect(hub.render(200).join("\n")).toContain(evidence.text.trimEnd());
+			hub.handleInput("g");
+			hub.handleInput("x".repeat(501));
+			hub.handleInput("\r");
+			await waitFor(rendered => rendered.includes("500"));
+			expect(hub.render(200).join("\n")).toContain(evidence.text.trimEnd());
+			hub.handleInput("g");
+			hub.handleInput(grepExpression);
+			hub.handleInput("\x1b");
+			expect(hub.render(200).join("\n")).toContain(evidence.text.trimEnd());
+			hub.handleInput("n");
+			hub.handleInput("c");
+			expect(hub.render(200).join("\n")).toContain(evidence.text.trimEnd());
+			const service = new DocsService({ agentDir, cwd: root });
+			try {
+				await service.remove("a-manual");
+				await fs.mkdir(docsDir);
+				await fs.writeFile(path.join(docsDir, "replacement.md"), "# New snapshot\n raw.Token[42] replacement\n");
+				await service.init(docsDir, "a-manual");
+			} finally {
+				await service.close();
+			}
+			hub.handleInput("n");
+			await waitFor(rendered => rendered.includes("Stale documentation search cursor"));
+			const stale = hub.render(200).join("\n");
+			expect(stale).toContain(evidence.text.trimEnd());
+			expect(stale).toContain(`sha256=${evidence.documentHash} · sectionId=${evidence.sectionId}`);
+			expect(stale).not.toContain("replacement.md");
+			hub.handleInput("b");
+			expect(hub.render(200).join("\n")).toContain("showing 1-20");
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
 });
 
 // Windows filenames cannot contain control characters (\r, \t, ESC…), so the

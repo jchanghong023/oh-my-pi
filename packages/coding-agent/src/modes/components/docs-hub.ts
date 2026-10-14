@@ -32,9 +32,13 @@ export class DocsHubComponent implements Component {
 	#mode: HubMode = "list";
 	#detail: string[] = [];
 	#search = new Input();
+	#inputSearchMode: "search" | "grep" = "search";
+	#searchOrigin: "list" | "detail" = "list";
 	#hits: SearchHit[] = [];
 	#hitIndex = 0;
 	#searchQuery = "";
+	#queryMode: "search" | "grep" = "search";
+	#queryCase = true;
 	#searchIndex?: string;
 	#nextCursor?: string;
 	#pageStart = 0;
@@ -116,6 +120,7 @@ export class DocsHubComponent implements Component {
 			.catch(error => {
 				if (current() && !(error instanceof Error && error.name === "AbortError")) {
 					this.#latestError = errorLine(error);
+					if (this.#mode === "search") this.#mode = this.#searchOrigin;
 				}
 			})
 			.finally(() => {
@@ -144,15 +149,30 @@ export class DocsHubComponent implements Component {
 	}
 
 	#runSearch(cursor?: string): void {
-		const query = cursor ? this.#searchQuery : this.#search.getValue().trim();
-		if (!query) return;
+		const mode = cursor ? this.#queryMode : this.#inputSearchMode;
+		const caseSensitive = cursor ? this.#queryCase : true;
+		const query = cursor
+			? this.#searchQuery
+			: mode === "grep"
+				? this.#search.getValue()
+				: this.#search.getValue().trim();
+		if (mode === "search" && !query) return;
 		const index = cursor ? this.#searchIndex : this.#selectedIndex()?.name;
 		const pageStart = cursor ? this.#pageStart + this.#hits.length : 0;
 		this.#start("Searching document indexes…", async (signal, current) => {
-			const result = await this.service.search(query, { index, limit: 20, cursor, signal });
+			const result = await this.service.search(query, {
+				index,
+				limit: 20,
+				cursor,
+				signal,
+				mode,
+				case: caseSensitive,
+			});
 			if (!current()) return;
 			this.#pageStart = pageStart;
 			this.#searchQuery = query;
+			this.#queryMode = mode;
+			this.#queryCase = caseSensitive;
 			this.#searchIndex = index;
 			this.#nextCursor = result.cursor;
 			this.#hits = result.sections.map(hit => ({
@@ -210,7 +230,7 @@ export class DocsHubComponent implements Component {
 		}
 		if (this.#abort && (data === "c" || matchesKey(data, "escape"))) {
 			this.#cancel();
-			if (this.#mode === "search") this.#mode = "list";
+			if (this.#mode === "search") this.#mode = this.#searchOrigin;
 			this.tui.requestRender();
 			return;
 		}
@@ -229,7 +249,7 @@ export class DocsHubComponent implements Component {
 			return;
 		}
 		if (this.#mode === "search") {
-			if (matchesKey(data, "escape")) this.#mode = "list";
+			if (matchesKey(data, "escape")) this.#mode = this.#searchOrigin;
 			else if (matchesKey(data, "enter") || matchesKey(data, "return") || data === "\n") this.#runSearch();
 			else this.#search.handleInput(data);
 			this.tui.requestRender();
@@ -243,7 +263,10 @@ export class DocsHubComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		if (this.#mode === "detail" && !(this.#showingHit && (data === "/" || data === "d" || data === "c"))) {
+		if (
+			this.#mode === "detail" &&
+			!(this.#showingHit && (data === "/" || data === "g" || data === "d" || data === "c"))
+		) {
 			if (data === "n") {
 				if (this.#nextCursor) this.#runSearch(this.#nextCursor);
 			} else if (this.#showingHit && data === "b") {
@@ -266,9 +289,14 @@ export class DocsHubComponent implements Component {
 						this.#wizard = undefined;
 					},
 				);
-		} else if (data === "/") {
+		} else if (data === "/" || data === "g") {
+			// A continuation belongs to the old view, not the newly opened input.
+			this.#cancel();
+			this.#searchOrigin = this.#mode === "detail" ? "detail" : "list";
+			this.#inputSearchMode = data === "g" ? "grep" : "search";
 			this.#mode = "search";
 			this.#search = new Input();
+			this.#search.verbatimText = this.#inputSearchMode === "grep";
 		} else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (matchesKey(data, "up") && this.#mode !== "detail") this.#selected = Math.max(0, this.#selected - 1);
 		else if (matchesKey(data, "down") && this.#mode !== "detail")
@@ -284,14 +312,21 @@ export class DocsHubComponent implements Component {
 				"dim",
 				this.#mode === "detail"
 					? `${this.#showingHit ? "b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  c cancel  Esc indexes`
-					: "n new  / search  d delete  c cancel  Esc close",
+					: "n new  / search  g grep  d delete  c cancel  Esc close",
 			),
 		];
 		if (this.#mode === "confirm-remove")
 			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
-		else if (this.#mode === "search") lines.push(`Search: ${this.#search.render(Math.max(10, width - 10))[0] ?? ""}`);
-		else if (this.#mode === "detail") {
-			lines.push(...this.#detail);
+		else if (this.#mode === "search") {
+			const label = this.#inputSearchMode === "grep" ? "Grep (regex, case-sensitive)" : "Search (relevance)";
+			lines.push(`${label}: ${this.#search.render(Math.max(10, width - label.length - 2))[0] ?? ""}`);
+		} else if (this.#mode === "detail") {
+			lines.push(
+				this.#queryMode === "grep"
+					? "Search type: Grep (regex, case-sensitive)"
+					: "Search type: Search (relevance)",
+				...this.#detail,
+			);
 			if (!this.#showingHit)
 				for (let index = 0; index < this.#hits.length; index++)
 					lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);

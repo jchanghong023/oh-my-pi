@@ -9,6 +9,10 @@ export interface DocsBuildOptions {
 }
 
 export interface DocsSearchOptions {
+	/** Default relevance search, or explicit regular-expression matching. */
+	mode?: "search" | "grep";
+	/** Grep only: true is case-sensitive (default); false ignores case. */
+	case?: boolean;
 	index?: string;
 	limit?: number;
 	cursor?: string;
@@ -18,6 +22,9 @@ export interface DocsSearchOptions {
 }
 
 export interface DocsSearchWindowOptions {
+	mode?: "search" | "grep";
+	/** Grep only; defaults to case-sensitive matching. */
+	case?: boolean;
 	index?: string;
 	limit?: number;
 	cursor?: string;
@@ -70,22 +77,22 @@ export interface DocsSectionHit {
 	text: string;
 	/** Context-aware shape; a chunk inside fenced code is always content. */
 	shape: "stub" | "heading-only" | "content";
-	/** Whole user-spelled technical name in this section, or a related match. */
-	matchKind: "exact-name" | "related";
+	/** Search evidence category, or an actual raw Markdown regex match in grep mode. */
+	matchKind: "exact-name" | "related" | "regex";
 	rank: number;
 }
 
 export interface DocsSearchResult {
-	/** Sections on the requested page, in relevance order. */
+	/** Requested page in relevance order (search), or stable source order (grep). */
 	sections: DocsSectionHit[];
 	/** All matching sections in the selected visible indexed corpus. */
 	total: number;
 	hasMore: boolean;
-	/** Opaque continuation bound to the query, index and stored snapshot. */
+	/** Opaque continuation bound to the query, mode, effective case, index and snapshot. */
 	cursor?: string;
-	/** Technical spelling detected in the query, preserved for presentation. */
+	/** Technical spelling detected in search mode; absent in grep mode. */
 	technicalName?: string;
-	/** Complete-name sections across all pages, before related evidence. */
+	/** Complete-name sections across search pages; always zero in grep mode. */
 	exactNameMatches: number;
 }
 

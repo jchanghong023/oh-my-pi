@@ -1219,6 +1219,20 @@ fn build_pcre_matcher(
 	builder.build(pattern)
 }
 
+/// Compile the expression unchanged, without filesystem grep's literal repairs.
+pub(crate) fn build_strict_matcher(pattern: &str, ignore_case: bool) -> Result<CompiledMatcher> {
+	match build_regex_matcher(pattern, ignore_case, false) {
+		Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
+		Err(rust_error) => build_pcre_matcher(pattern, ignore_case, false)
+			.map(CompiledMatcher::Pcre)
+			.map_err(|pcre_error| {
+				Error::from_reason(format!(
+					"Invalid documentation grep regex: {rust_error}; PCRE2: {pcre_error}"
+				))
+			}),
+	}
+}
+
 fn build_matcher(pattern: &str, ignore_case: bool, multiline: bool) -> Result<CompiledMatcher> {
 	let sanitized = sanitize_braces(pattern);
 	let err = match build_regex_matcher(sanitized.as_ref(), ignore_case, multiline) {

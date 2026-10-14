@@ -1,6 +1,7 @@
 //! Owner-scoped documentation storage, importing, and complete-ranking search.
 mod database;
 mod diagnostics;
+mod grep;
 mod import;
 mod importer;
 pub(crate) mod markdown;

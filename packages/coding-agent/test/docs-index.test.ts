@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	WikiSearchEngine,
 	wikiEnumerateMarkdownFiles as enumerateMarkdownFiles,
 	wikiParseMarkdown as parseMarkdown,
 	wikiReadMarkdownDocument as readMarkdownDocument,
@@ -197,6 +198,285 @@ describe("Markdown parsing", () => {
 	});
 });
 describe("DocsSearchEngine indexing contract", () => {
+	it("keeps default technical-name search distinct from explicit raw Markdown regex matching", async () => {
+		const root = await tempDir("docs-regex-root-");
+		const agentDir = await tempDir("docs-regex-agent-");
+		const sources = {
+			"exact.md": "# Notes\nUse C++ and docs/src/main.rs.\nCaseBeacon\n`counter*factor`\n",
+			"continued.md": "# Notes\nUse C++17 and docs/src/main.rs.bak.\ncasebeacon\n",
+			"plain.md": "# Notes\nCCCC docs/src/mainXrs\ncounterfactor\n",
+			"escaped.md": "# Notes\nmbist\\_check.rpt\nPAIR=echo echo\n",
+		};
+		for (const [name, source] of Object.entries(sources)) await Bun.write(path.join(root, name), source);
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			for (const query of ["C++", "docs/src/main.rs"]) {
+				const search = engine.search(query);
+				expect(search.sections.find(hit => hit.path === "exact.md")?.matchKind).toBe("exact-name");
+				expect(search.sections.find(hit => hit.path === "continued.md")?.matchKind).toBe("related");
+				expect(engine.search(query, { mode: "search", case: true })).toEqual(search);
+				expect(engine.search(query, { mode: "search", case: false })).toEqual(search);
+			}
+			const regex = (query: string, caseSensitive?: boolean) =>
+				engine.search(query, { mode: "grep", case: caseSensitive, limit: 500 });
+			expect(regex("C++").sections.map(hit => hit.path)).toEqual(["continued.md", "exact.md", "plain.md"]);
+			expect(regex("C\\+\\+").sections.map(hit => hit.path)).toEqual(["continued.md", "exact.md"]);
+			expect(regex("docs/src/main\\.rs").sections.map(hit => hit.path)).toEqual(["continued.md", "exact.md"]);
+			expect(regex("docs/src/main.rs").sections.map(hit => hit.path)).toEqual([
+				"continued.md",
+				"exact.md",
+				"plain.md",
+			]);
+			expect(regex("CaseBeacon").sections.map(hit => hit.path)).toEqual(["exact.md"]);
+			expect(regex("CaseBeacon", true)).toEqual(regex("CaseBeacon"));
+			expect(regex("CaseBeacon", false).sections.map(hit => hit.path)).toEqual(["continued.md", "exact.md"]);
+			expect(regex("`counter\\*factor`").sections.map(hit => hit.path)).toEqual(["exact.md"]);
+			expect(regex("mbist\\\\_check\\.rpt").sections.map(hit => hit.path)).toEqual(["escaped.md"]);
+			expect(regex("mbist_check\\.rpt").total).toBe(0);
+			expect(regex("(?<=PAIR=)(echo) \\1").sections.map(hit => hit.path)).toEqual(["escaped.md"]);
+			expect(regex("C\\+\\+(?!17)").sections.map(hit => hit.path)).toEqual(["exact.md"]);
+			for (const hit of regex("C\\+\\+").sections) {
+				expect(hit.matchKind).toBe("regex");
+				expect(hit.text).toBe(sources[hit.path as keyof typeof sources]);
+			}
+			expect(regex("C\\+\\+").exactNameMatches).toBe(0);
+			expect(regex("C\\+\\+").technicalName).toBeUndefined();
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("scans every stored section beyond FTS candidates and returns only actual regex evidence", async () => {
+		const root = await tempDir("docs-regex-candidates-root-");
+		const agentDir = await tempDir("docs-regex-candidates-agent-");
+		await Bun.write(
+			path.join(root, "guide.md"),
+			Array.from({ length: 1_205 }, (_, index) => `## Item ${index}\n!!!:${index}\n`).join("\n"),
+		);
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			withSqliteDatabase(engine.databasePath, db => db.run("DELETE FROM sections_fts"));
+			await fs.rm(root, { recursive: true });
+			let page = engine.search("^!!!:[0-9]+$", { mode: "grep", limit: 500 });
+			const hits = [...page.sections];
+			for (let count = 0; page.cursor && count < 20; count++) {
+				page = engine.search("^!!!:[0-9]+$", { mode: "grep", limit: 137, cursor: page.cursor });
+				hits.push(...page.sections);
+			}
+			expect(hits).toHaveLength(1_205);
+			expect(new Set(hits.map(hit => hit.sectionId)).size).toBe(1_205);
+			expect(hits.map(hit => Number(hit.text.match(/!!!:(\d+)/)![1]))).toEqual(
+				Array.from({ length: 1_205 }, (_, index) => index),
+			);
+			expect(hits.every(hit => hit.matchKind === "regex")).toBe(true);
+			expect(page).toMatchObject({ total: 1_205, exactNameMatches: 0, hasMore: false });
+			expect(engine.search("^!!!:1204$", { mode: "grep" }).sections).toEqual(hits.slice(-1));
+			expect(engine.search("^!!!:9999$", { mode: "grep" }).sections).toEqual([]);
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("rejects invalid and overlong regex without repair while preserving spaces and original line boundaries", async () => {
+		const root = await tempDir("docs-regex-validation-root-");
+		const agentDir = await tempDir("docs-regex-validation-agent-");
+		const source = "# Notes\r\n padded \r\npadded\r\nPAIR=echo echo\r\nfirst\r\nsecond\r\nAND OR NOT\r\n";
+		await Bun.write(path.join(root, "guide.md"), source);
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			for (const query of ["[", "(", "\\", "foo.*(bar", " ", "\t\r\n"])
+				expect(() => engine.search(query, { mode: "grep" })).toThrow();
+			for (const query of ["x".repeat(501), "𐐀".repeat(251)])
+				expect(() => engine.search(query, { mode: "grep" })).toThrow("500");
+			expect(engine.search("x".repeat(500), { mode: "grep" })).toMatchObject({ total: 0, hasMore: false });
+			expect(engine.search("𐐀".repeat(250), { mode: "grep" })).toMatchObject({ total: 0, hasMore: false });
+			expect(engine.search(" padded ", { mode: "grep" }).sections[0]?.text).toBe(source);
+			expect(engine.search("  padded ", { mode: "grep" }).total).toBe(0);
+			expect(engine.search(" padded  ", { mode: "grep" }).total).toBe(0);
+			expect(engine.search("^ padded \\r?$", { mode: "grep" }).total).toBe(1);
+			expect(engine.search("^AND OR NOT\\r?$", { mode: "grep" }).total).toBe(1);
+			for (const query of ["first\\nsecond", "(?s)first.*second", "(?m)^first\\s+second$"])
+				expect(engine.search(query, { mode: "grep" })).toMatchObject({ sections: [], total: 0, hasMore: false });
+			expect(engine.search("^ABSENT$", { mode: "grep" })).toEqual({
+				sections: [],
+				total: 0,
+				exactNameMatches: 0,
+				hasMore: false,
+			});
+			expect(engine.search("(?<=PAIR=)(echo) \\1", { mode: "grep" }).sections[0]?.text).toBe(source);
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("searches original lines on both sides of omitted converter headings without concatenating gaps", async () => {
+		const root = await tempDir("docs-regex-gap-root-");
+		const agentDir = await tempDir("docs-regex-gap-agent-");
+		const source = "# Start\nfirstbeacon\n# Cell\n# Final\nlastbeacon\n";
+		await Bun.write(path.join(root, "guide.md"), source);
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const first = engine.search("^firstbeacon$", { mode: "grep" });
+			const last = engine.search("^lastbeacon$", { mode: "grep" });
+			expect(first.total).toBe(1);
+			expect(last.total).toBe(1);
+			expect(first.sections[0]).toMatchObject({
+				text: "# Start\nfirstbeacon\n",
+				lineStart: 1,
+				lineEnd: 2,
+				matchKind: "regex",
+			});
+			expect(last.sections[0]).toMatchObject({
+				text: "# Final\nlastbeacon\n",
+				lineStart: 4,
+				lineEnd: 5,
+				matchKind: "regex",
+			});
+			expect(engine.search("^# Cell$", { mode: "grep" }).total).toBe(0);
+			expect(engine.search("^firstbeaconlastbeacon$", { mode: "grep" }).total).toBe(0);
+			expect(engine.search("firstbeacon\\nlastbeacon", { mode: "grep" }).total).toBe(0);
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("reconstructs overlapping Unicode CRLF slices before matching long lines and real anchors", async () => {
+		const root = await tempDir("docs-regex-overlap-root-");
+		const agentDir = await tempDir("docs-regex-overlap-agent-");
+		const line = `中START${"前".repeat(17_300)}LEFT${"界".repeat(1_200)}RIGHT${"后".repeat(30_000)}END中`;
+		const source = `# Long\r\n${line}\r\n`;
+		await Bun.write(path.join(root, "long.md"), source);
+		const bytes = Buffer.from(source);
+		const parsed = parseMarkdown(bytes);
+		expect(parsed.sections.length).toBeGreaterThan(2);
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const expected = (start: number, end: number) =>
+				parsed.sections.filter(section => section.byteStart < end && section.byteEnd > start);
+			const check = (query: string, start: number, end: number) => {
+				const result = engine.search(query, { mode: "grep", limit: 500 });
+				const sections = expected(start, end);
+				expect(result.total).toBe(sections.length);
+				expect(result.sections.map(hit => hit.text)).toEqual(sections.map(section => section.rawMarkdown));
+				expect(result.sections.map(hit => [hit.lineStart, hit.lineEnd])).toEqual(
+					sections.map(section => [section.lineStart, section.lineEnd]),
+				);
+				for (const hit of result.sections)
+					expect(hit.documentHash).toBe(new Bun.CryptoHasher("sha256").update(bytes).digest("hex"));
+			};
+			const begin = bytes.indexOf(Buffer.from("LEFT"));
+			const end = bytes.indexOf(Buffer.from("RIGHT")) + Buffer.byteLength("RIGHT");
+			expect(
+				expected(begin, end).every(section => !section.rawMarkdown.includes(`LEFT${"界".repeat(1_200)}RIGHT`)),
+			).toBe(true);
+			check("LEFT界{1200}RIGHT", begin, end);
+			check("LEFT", begin, begin + 4);
+			const lineStart = Buffer.byteLength("# Long\r\n");
+			const lineEnd = lineStart + Buffer.byteLength(line);
+			check("^中START.*END中\\r?$", lineStart, lineEnd);
+			check("^中START", lineStart, lineStart + Buffer.byteLength("中START"));
+			check("END中\\r?$", lineEnd - Buffer.byteLength("END中"), lineEnd);
+			for (const query of ["^前|^界|^后", "前$|界$|后$", "(?s)START.*\\r\\n"])
+				expect(engine.search(query, { mode: "grep" }).total).toBe(0);
+		} finally {
+			engine.close();
+		}
+	});
+
+	it("binds grep cache and cursors to exact expression, effective case, scope and snapshot across reopen", async () => {
+		const root = await tempDir("docs-regex-pages-root-");
+		const agentDir = await tempDir("docs-regex-pages-agent-");
+		await Bun.write(path.join(root, "a.md"), "# First\n pagebeacon \n## Second\n PAGEBEACON \n");
+		await Bun.write(path.join(root, "b.md"), "# Third\n pagebeacon \n");
+		let native = new WikiSearchEngine(path.join(agentDir, "docs.db"), path.join(agentDir, "docs.db"));
+		try {
+			await native.init(root, "first");
+			await native.init(root, "second");
+			await fs.rm(root, { recursive: true });
+			const options = { mode: "grep", case: false, limit: 500 };
+			const query = " pagebeacon ";
+			const complete = native.searchWindow(query, options);
+			expect(complete.result.total).toBe(6);
+			expect(complete.result.exactNameMatches).toBe(0);
+			expect(complete.result.technicalName).toBeUndefined();
+			expect(complete.result.sections.map(hit => [hit.index, hit.path, hit.lineStart])).toEqual([
+				["first", "a.md", 1],
+				["first", "a.md", 3],
+				["first", "b.md", 1],
+				["second", "a.md", 1],
+				["second", "a.md", 3],
+				["second", "b.md", 1],
+			]);
+			const first = native.searchWindow(query, { ...options, limit: 1 });
+			expect(first.cacheHit).toBe(true);
+			expect(first.result.sections).toEqual(complete.result.sections.slice(0, 1));
+			const cursor = Buffer.from(JSON.stringify({ ...first.result.cursorBase, p: 1 })).toString("base64url");
+			for (const [changedQuery, changedOptions] of [
+				["pagebeacon ", options],
+				[query, { ...options, case: true }],
+				[query, { mode: "search" }],
+				[query, { ...options, index: "first" }],
+			] as const)
+				expect(() => native.searchWindow(changedQuery, { ...changedOptions, cursor })).toThrow();
+			const otherIdentity = new WikiSearchEngine(path.join(agentDir, "docs.db"), path.join(agentDir, "other.db"));
+			try {
+				expect(() => otherIdentity.searchWindow(query, { ...options, cursor })).toThrow();
+			} finally {
+				otherIdentity.close();
+			}
+			const insensitive = native.searchWindow(query, { ...options, cursor });
+			expect(insensitive.cacheHit).toBe(true);
+			expect(insensitive.result.sections).toEqual(complete.result.sections.slice(1));
+			expect(native.searchWindow(query, { mode: "grep" }).result.total).toBe(4);
+			expect(native.searchWindow(query, { mode: "grep", case: true }).cacheHit).toBe(true);
+			const search = native.searchWindow("pagebeacon", { limit: 1 });
+			const searchCursor = Buffer.from(JSON.stringify({ ...search.result.cursorBase, p: 1 })).toString("base64url");
+			expect(native.searchWindow("pagebeacon", { mode: "search", case: false, limit: 1 }).result).toEqual(
+				search.result,
+			);
+			expect(() => native.searchWindow("pagebeacon", { mode: "grep", cursor: searchCursor })).toThrow();
+			const delivered = [...first.result.sections];
+			let position = 1;
+			while (position < complete.result.total) {
+				const nextCursor = Buffer.from(JSON.stringify({ ...first.result.cursorBase, p: position })).toString(
+					"base64url",
+				);
+				native.close();
+				native = new WikiSearchEngine(path.join(agentDir, "docs.db"), path.join(agentDir, "docs.db"));
+				const page = native.searchWindow(query, { ...options, limit: 2, cursor: nextCursor });
+				expect(page.cacheHit).toBe(false);
+				expect(page.result.cursorBase.p).toBe(position);
+				expect(page.result.sections.length).toBeGreaterThan(0);
+				delivered.push(...page.result.sections);
+				position += page.result.sections.length;
+			}
+			expect(delivered).toEqual(complete.result.sections);
+			expect(new Set(delivered.map(hit => hit.sectionId)).size).toBe(6);
+			withSqliteDatabase(path.join(agentDir, "docs.db"), db =>
+				db
+					.query("UPDATE sections SET raw_markdown=replace(raw_markdown, 'pagebeacon', 'gonebeacon') WHERE id=?")
+					.run(first.result.sections[0].sectionId),
+			);
+			expect(() => native.searchWindow(query, { ...options, cursor })).toThrow("Stale");
+			const fresh = native.searchWindow(query, options);
+			expect(fresh.cacheHit).toBe(false);
+			expect(fresh.result.total).toBe(5);
+			expect(fresh.result.sections.some(hit => hit.sectionId === first.result.sections[0].sectionId)).toBe(false);
+			expect(native.searchWindow(query, options).cacheHit).toBe(true);
+		} finally {
+			native.close();
+		}
+	});
+
 	it("indexes rejected backtick fence openers without losing paragraph or valid fenced code", async () => {
 		const root = await tempDir("docs-invalid-fence-root-");
 		const agentDir = await tempDir("docs-invalid-fence-agent-");

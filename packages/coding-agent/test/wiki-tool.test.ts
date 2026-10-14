@@ -54,14 +54,21 @@ function run(tool: WikiTool, params: unknown): Promise<ToolResult> {
 	return tool.execute("t", params as never) as Promise<ToolResult>;
 }
 
-function continuation(page: string): { query: string; cursor: string } | undefined {
-	const json = page.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
-	return json ? (JSON.parse(json) as { query: string; cursor: string }) : undefined;
+interface WikiQuery {
+	query: string;
+	mode?: "search" | "grep";
+	case?: boolean;
+	cursor?: string;
 }
 
-async function pages(tool: WikiTool, query: string): Promise<string[]> {
+function continuation(page: string): (WikiQuery & { cursor: string }) | undefined {
+	const json = page.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
+	return json ? (JSON.parse(json) as WikiQuery & { cursor: string }) : undefined;
+}
+
+async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mode" | "case"> = {}): Promise<string[]> {
 	const result: string[] = [];
-	let params: { query: string; cursor?: string } = { query };
+	let params: WikiQuery = { query, ...options };
 	for (let count = 0; count < 100; count += 1) {
 		const page = text(await run(tool, params));
 		result.push(page);
@@ -72,6 +79,13 @@ async function pages(tool: WikiTool, query: string): Promise<string[]> {
 		}
 		expect(next.query).toBe(query);
 		expect(next.cursor).toBeTruthy();
+		if (options.mode === "grep") {
+			expect(next.mode).toBe("grep");
+			expect(next.case).toBe(options.case ?? true);
+		} else {
+			expect(next.mode).toBeUndefined();
+			expect(next.case).toBeUndefined();
+		}
 		params = next;
 	}
 	throw new Error("Wiki continuation did not exhaust within 100 pages");
@@ -148,6 +162,114 @@ describe("WikiTool", () => {
 		expect(result).toContain("guide.md:1-2");
 		expect(result).toContain("Command: scan");
 	});
+
+	it("renders DB-only explicit regex evidence without reinterpreting default C++ and path queries", async () => {
+		const fixture = await indexedFixture({
+			"exact.md": "# Output\nUse C++ and docs/src/main.rs.\nCaseBeacon\nPAIR=echo echo\n`counter*factor`\n",
+			"continued.md": "# Output\nC++17 docs/src/main.rs.bak\ncasebeacon\n",
+			"plain.md": "# Output\nCCCC docs/src/mainXrs\n",
+		});
+		await fs.rm(fixture.root, { recursive: true });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		for (const query of ["C++", "docs/src/main.rs"]) {
+			const search = text(await run(tool, { query }));
+			expect(search).toMatch(/exact\.md:[^\n]+match=exact-name/);
+			expect(search).toMatch(/continued\.md:[^\n]+match=related/);
+			expect(text(await run(tool, { query, mode: "search", case: false }))).toBe(search);
+		}
+		const unescaped = text(await run(tool, { query: "C++", mode: "grep" }));
+		expect(unescaped).toMatch(/plain\.md:[^\n]+match=regex/);
+		expect(unescaped).toContain("CCCC docs/src/mainXrs");
+		const page = text(await run(tool, { query: "C\\+\\+", mode: "grep" }));
+		expect(page).toMatch(/exact\.md:[^\n]+match=regex/);
+		expect(page).toMatch(/continued\.md:[^\n]+match=regex/);
+		expect(page).not.toContain("plain.md:");
+		expect(page).not.toContain("match=exact-name");
+		expect(page).not.toContain("match=related");
+		expect(page).not.toContain("未找到完整名称命中");
+		expect(page).toContain("Use C++ and docs/src/main.rs.");
+		const paths = text(await run(tool, { query: "docs/src/main\\.rs(?!\\.bak)", mode: "grep" }));
+		expect(paths).toContain("exact.md:1-5");
+		expect(paths).not.toContain("continued.md:");
+		expect(paths).not.toContain("plain.md:");
+		for (const query of ["(?<=PAIR=)(echo) \\1", "`counter\\*factor`"]) {
+			const evidence = text(await run(tool, { query, mode: "grep" }));
+			expect(evidence).toMatch(/exact\.md:[^\n]+match=regex/);
+			expect(evidence).not.toContain("continued.md:");
+		}
+		const sensitive = text(await run(tool, { query: "CaseBeacon", mode: "grep" }));
+		expect(sensitive).toContain("exact.md:");
+		expect(sensitive).not.toContain("continued.md:");
+		expect(text(await run(tool, { query: "CaseBeacon", mode: "grep", case: true }))).toBe(sensitive);
+		const insensitive = text(await run(tool, { query: "CaseBeacon", mode: "grep", case: false }));
+		expect(insensitive).toContain("exact.md:");
+		expect(insensitive).toContain("continued.md:");
+	}, 20_000);
+
+	it("preserves regex spaces, reports legal zero matches and rejects malformed expressions and options", async () => {
+		const fixture = await indexedFixture({ "guide.md": "# Guide\n padded \nfirst\nsecond\n" });
+		await fs.rm(fixture.root, { recursive: true });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		expect(text(await run(tool, { query: " padded ", mode: "grep" }))).toContain("guide.md:1-4");
+		for (const query of ["  padded ", " padded  ", "absent", "first\\nsecond", "(?s)first.*second"]) {
+			const page = text(await run(tool, { query, mode: "grep" }));
+			expect(page).toContain("0 matching section(s) in the searched imported corpus");
+			expect(page).toContain("All matching results exhausted");
+			expect(page).not.toContain("guide.md:");
+			expect(page).not.toContain("未找到完整名称命中");
+		}
+		for (const query of ["[", "(", "\\", "foo.*(bar", "", " \t "])
+			await expect(run(tool, { query, mode: "grep" })).rejects.toThrow();
+		for (const query of ["x".repeat(501), "𐐀".repeat(251)])
+			await expect(run(tool, { query, mode: "grep" })).rejects.toThrow("500");
+		for (const mode of ["regex", null, false, 1, {}])
+			await expect(run(tool, { query: "padded", mode })).rejects.toThrow("mode");
+		for (const caseValue of ["false", null, 1, {}])
+			await expect(run(tool, { query: "padded", mode: "grep", case: caseValue })).rejects.toThrow("case");
+		const zero = text(await run(tool, { query: "𐐀".repeat(250), mode: "grep", unrelated: "ignored" }));
+		expect(zero).toContain("0 matching section(s)");
+		expect(zero).toContain("All matching results exhausted");
+	}, 15_000);
+
+	it("returns stable complete grep pages and option-bearing continuations with cursor isolation", async () => {
+		const files = Object.fromEntries(
+			Array.from({ length: 8 }, (_, index) => [
+				`sec-${index}.md`,
+				`# Source ${index}\n ${index % 2 ? "PAGEBEACON" : "pagebeacon"} ${"evidence ".repeat(280)}\nFINAL_${index}\n`,
+			]),
+		);
+		const fixture = await indexedFixture(files);
+		await fs.rm(fixture.root, { recursive: true });
+		const tool = new WikiTool(session(fixture.agent, fixture.root));
+		const query = " pagebeacon ";
+		const first = text(await run(tool, { query, mode: "grep", case: false }));
+		const next = continuation(first);
+		expect(next).toBeDefined();
+		expect(next).toMatchObject({ query, mode: "grep", case: false });
+		for (const params of [
+			{ ...next, query: query.trim() },
+			{ ...next, mode: "search" },
+			{ ...next, case: true },
+			{ query, cursor: next!.cursor },
+		])
+			await expect(run(tool, params)).rejects.toThrow();
+		const defaultNext = continuation(text(await run(tool, { query, mode: "grep" })));
+		expect(defaultNext).toMatchObject({ query, mode: "grep", case: true });
+		expect(text(await run(tool, defaultNext))).toContain("match=regex");
+		const searchNext = continuation(text(await run(tool, { query: "pagebeacon" })));
+		expect(searchNext).toBeDefined();
+		await expect(run(tool, { ...searchNext, mode: "grep" })).rejects.toThrow();
+		const result = await pages(tool, query, { mode: "grep", case: false });
+		expect(result.length).toBeGreaterThan(1);
+		const shown = result.flatMap(page => [...page.matchAll(/^\[\d+\] (sec-\d+\.md):/gm)].map(hit => hit[1]!));
+		expect(shown).toEqual(Object.keys(files));
+		expect(new Set(shown).size).toBe(8);
+		for (const page of result) {
+			expect(page.length).toBeLessThanOrEqual(8_000);
+			expect(page).toContain("8 matching section(s)");
+			for (const name of shown.filter(name => page.includes(`${name}:`))) expect(page).toContain(files[name]!);
+		}
+	}, 20_000);
 
 	it("ignores stray keys but names what arrived when the query is missing", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
