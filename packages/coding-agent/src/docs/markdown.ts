@@ -244,14 +244,23 @@ function plainTokens(tokens: readonly Token[]): string {
 		.join("");
 }
 
-export function normalizePlainText(markdown: string, fencePrefix?: string, continuesLine = false): string {
+/** Lex once when a search needs both plain text and literal-code boundaries. */
+export function lexMarkdownSection(markdown: string, fencePrefix?: string, continuesLine = false): Token[] {
 	let source = markdown.replace(/^\uFEFF/u, "");
 	// A long-line fragment has no Markdown block boundary at its first character.
 	// Indent it for literal tokenization so a mid-line fence cannot consume it as info.
 	if (continuesLine) source = `    ${source}`;
-	return plainTokens(Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source))
+	return Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source);
+}
+
+export function plainTextFromTokens(tokens: readonly Token[]): string {
+	return plainTokens(tokens)
 		.replace(/[ \t]+/g, " ")
 		.trim();
+}
+
+export function normalizePlainText(markdown: string, fencePrefix?: string, continuesLine = false): string {
+	return plainTextFromTokens(lexMarkdownSection(markdown, fencePrefix, continuesLine));
 }
 
 // Heading recognition here must agree with `parseHeading`: at most three

@@ -2,11 +2,13 @@ import { statSync } from "node:fs";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
-import { Lexer, type Token, type Tokens } from "@oh-my-pi/pi-utils/marked";
+import type { Token, Tokens } from "@oh-my-pi/pi-utils/marked";
 import {
 	enumerateMarkdownFiles,
+	lexMarkdownSection,
 	markdownSectionContexts,
 	normalizePlainText,
+	plainTextFromTokens,
 	readMarkdownDocument,
 	sectionShape,
 } from "./markdown";
@@ -145,7 +147,7 @@ const QUERY_GENERIC_TERMS: Record<string, true> = Object.fromEntries(
 );
 
 /** Render names without joining identifiers across literal-code boundaries. */
-function normalizeNameText(markdown: string, fencePrefix?: string, continuesLine = false): string {
+function normalizeNameText(tokens: readonly Token[]): string {
 	const render = (tokens: readonly Token[]): string =>
 		tokens
 			.map(token => {
@@ -167,9 +169,7 @@ function normalizeNameText(markdown: string, fencePrefix?: string, continuesLine
 				return /^(?:heading|paragraph|blockquote|code|codespan)$/.test(token.type) ? `\n${text}\n` : text;
 			})
 			.join("");
-	let source = markdown.replace(/^\uFEFF/u, "");
-	if (continuesLine) source = `    ${source}`;
-	return normalizeSearchText(render(Lexer.lex(fencePrefix ? `${fencePrefix}\n${source}` : source)));
+	return normalizeSearchText(render(tokens));
 }
 
 function technicalQueryName(query: string): string | undefined {
@@ -290,7 +290,7 @@ function scoreCandidate(
 			? ""
 			: (/^ {0,3}#{1,6}\s+(.+)/u.exec(lines[0])?.[1] ??
 				(/^ {0,3}\S/u.test(lines[0]) && /^ {0,3}(?:=+|-+)\s*$/u.test(lines[1] ?? "") ? lines[0] : ""));
-	const title = normalizeSearchText(normalizePlainText(localHeading));
+	const title = localHeading ? normalizeSearchText(normalizePlainText(localHeading)) : "";
 	let relevance = 0;
 	let topicTitle = 0;
 	let topicBody = 0;
@@ -304,10 +304,9 @@ function scoreCandidate(
 			if (inTitle) topicTitle++;
 		}
 	}
-	const shape = sectionShape(text);
 	return {
 		row,
-		shape: shape === "content" ? shape : context.shape,
+		shape: context.shape,
 		matchKind: row.search_exact ? "exact-name" : "related",
 		titlePhrase: phrase.test(title),
 		phrase: phrase.test(raw) || phrase.test(plain),
@@ -1101,14 +1100,15 @@ export class DocsSearchEngine {
 			const raw = normalizeSearchText(markdown);
 			const context = loadContext(row);
 			const { fencePrefix, continuesLine } = context;
-			const plain = normalizeSearchText(normalizePlainText(markdown, fencePrefix, continuesLine));
+			const tokens = lexMarkdownSection(markdown, fencePrefix, continuesLine);
+			const plain = normalizeSearchText(plainTextFromTokens(tokens));
 			const rawExact = name ? matchesSectionName(name, raw, markdown, context) : false;
 			// Render recovered names with the same stored fence/line context,
 			// keeping inline code fragments distinct from adjacent text.
 			const exact =
 				rawExact ||
 				(name && matchesSectionName(name, plain, markdown, context)
-					? matchesSectionName(name, normalizeNameText(markdown, fencePrefix, continuesLine), markdown, context)
+					? matchesSectionName(name, normalizeNameText(tokens), markdown, context)
 					: false);
 			if (rank === undefined && !exact) continue;
 			row.rank = rank ?? 0;
@@ -1185,37 +1185,50 @@ export class DocsSearchEngine {
 		};
 	}
 
-	/** Recover stored fence/line context, original name boundaries, and shapes together. */
+	/** Stream stored bodies; retain only compact context and adjacent chunk rows. */
 	#sectionContexts(documentId: number): Map<number, SectionContext> {
-		const rows = this.storage.db
-			.query(`SELECT id,document_id documentId,byte_start byteStart,byte_end byteEnd,raw_markdown rawMarkdown
-				FROM sections WHERE document_id=? ORDER BY ordinal`)
-			.all(documentId) as Array<{
+		type ContextSection = {
 			id: number;
 			documentId: number;
 			byteStart: number;
 			byteEnd: number;
 			rawMarkdown: string;
-		}>;
+		};
+		const rows = this.storage.db
+			.query(`SELECT id,document_id documentId,byte_start byteStart,byte_end byteEnd,raw_markdown rawMarkdown
+				FROM sections WHERE document_id=? ORDER BY ordinal`)
+			.iterate(documentId) as Iterable<ContextSection>;
 		const contexts = new Map<number, SectionContext>();
-		const bytes = rows.map(row => Buffer.from(row.rawMarkdown));
-		let position = 0;
-		for (const { section, fencePrefix, continuesLine } of markdownSectionContexts(rows)) {
-			const previous = rows[position - 1];
-			const next = rows[position + 1];
+		const iterator = markdownSectionContexts(rows);
+		let previous: ContextSection | undefined;
+		let current = iterator.next();
+		while (!current.done) {
+			const { section, fencePrefix, continuesLine } = current.value;
+			const following = iterator.next();
+			const next = following.done ? undefined : following.value.section;
 			const beforeOffset = previous ? section.byteStart - previous.byteStart : 0;
 			const afterOffset = next ? section.byteEnd - next.byteStart : 0;
 			// Overlapping chunks share byte coordinates. Read only the adjacent
 			// original characters, not the overlap as new evidence for this body.
 			const before =
 				previous && previous.byteStart < section.byteStart && previous.byteEnd >= section.byteStart
-					? [...bytes[position - 1].subarray(Math.max(0, beforeOffset - 8), beforeOffset).toString()]
+					? [
+							...Buffer.from(previous.rawMarkdown)
+								.subarray(Math.max(0, beforeOffset - 8), beforeOffset)
+								.toString(),
+						]
 							.slice(-2)
 							.join("")
 					: "";
 			const after =
 				next && next.byteStart <= section.byteEnd && next.byteEnd > section.byteEnd
-					? [...bytes[position + 1].subarray(afterOffset, afterOffset + 8).toString()].slice(0, 2).join("")
+					? [
+							...Buffer.from(next.rawMarkdown)
+								.subarray(afterOffset, afterOffset + 8)
+								.toString(),
+						]
+							.slice(0, 2)
+							.join("")
 					: "";
 			contexts.set(section.id, {
 				shape: fencePrefix || continuesLine ? "content" : sectionShape(section.rawMarkdown),
@@ -1224,7 +1237,8 @@ export class DocsSearchEngine {
 				before,
 				after,
 			});
-			position++;
+			previous = section;
+			current = following;
 		}
 		return contexts;
 	}

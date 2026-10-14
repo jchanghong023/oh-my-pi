@@ -1270,6 +1270,39 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
+	it("recovers table names after streamed fenced chunks without joining code spans outside FTS", async () => {
+		const root = await tempDir("docs-streamed-render-root-");
+		const agentDir = await tempDir("docs-streamed-render-agent-");
+		const table = "# Rendered\n| Name |\n| --- |\n| mbist\\_check.rpt |\n";
+		await fs.writeFile(
+			path.join(root, "chunked.md"),
+			`# Literal\n~~~~txt\n${"padding=1\n".repeat(4000)}mbist\\_check.rpt\n~~~~\n\n${table}`,
+		);
+		await fs.writeFile(path.join(root, "spliced.md"), "# Notes\n| Name |\n| --- |\n| `mbist`_check.rpt |\n");
+		const service = new DocsSearchEngine({ agentDir });
+		try {
+			await service.init(root, "manual");
+			const chunks = service.storage.db
+				.query(
+					"SELECT count(*) count FROM sections s JOIN documents d ON d.id=s.document_id WHERE d.relative_path=?",
+				)
+				.get("chunked.md") as { count: number };
+			expect(chunks.count).toBeGreaterThan(3);
+			service.storage.db.run("DELETE FROM sections_fts");
+			await fs.rm(root, { recursive: true });
+			const result = service.search("mbist_check.rpt", { index: "manual", limit: 500 });
+			expect(result).toMatchObject({ total: 1, exactNameMatches: 1, hasMore: false });
+			expect(result.sections[0]).toMatchObject({
+				path: "chunked.md",
+				text: table,
+				shape: "content",
+				matchKind: "exact-name",
+			});
+		} finally {
+			service.close();
+		}
+	});
+
 	it("traverses contiguous full evidence exactly once across budgets, limits and service reopen", async () => {
 		const root = await tempDir("docs-pagination-root-");
 		const agentDir = await tempDir("docs-pagination-agent-");
@@ -1370,11 +1403,16 @@ describe("DocsSearchEngine indexing contract", () => {
 
 	it("reopens original relative-path cursors when the worker uses an absolute database opening path", async () => {
 		const root = await tempDir("docs-relative-cursor-root-");
-		const agentDir = await tempDir("docs-relative-cursor-agent-");
+		const repoRoot = path.resolve(import.meta.dir, "../../..");
+		const cacheDir = path.join(repoRoot, "node_modules", ".cache");
+		await fs.mkdir(cacheDir, { recursive: true });
+		const agentDir = await fs.mkdtemp(path.join(cacheDir, "docs-relative-cursor-agent-"));
+		tempDirs.push(agentDir);
 		const source = "# One\nneedle evidence first\n## Two\nneedle evidence second\n";
 		await fs.writeFile(path.join(root, "guide.md"), source);
 		const relativeAgentDir = path.relative(process.cwd(), agentDir);
 		const relativeDatabasePath = path.join(relativeAgentDir, "docs.db");
+		expect(path.isAbsolute(relativeDatabasePath)).toBe(false);
 		const query = "needle evidence";
 		const legacyQueryKey = new Bun.CryptoHasher("sha256")
 			.update(JSON.stringify([query, "manual", relativeDatabasePath]))
