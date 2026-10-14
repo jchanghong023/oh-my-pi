@@ -1309,6 +1309,87 @@ export function cerebrasModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// 3.5 SambaNova
+// ---------------------------------------------------------------------------
+
+/** SambaNova discovery inputs: `apiKey` enables the live roster; `baseUrl` defaults to SambaNova Cloud. */
+export interface SambaNovaModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+	fetch?: FetchImpl;
+}
+
+/**
+ * One SambaNova per-token USD rate (a decimal string) as a per-million rate.
+ * `absent` is the value for a missing field; a present field that is not a
+ * nonnegative number yields `undefined`.
+ */
+function sambanovaRate(value: unknown, absent: number | undefined): number | undefined {
+	if (value === undefined || value === null) return absent;
+	const parsed = toNumber(value);
+	return parsed !== undefined && parsed >= 0 ? Math.round(parsed * 1e12) / 1e6 : undefined;
+}
+
+/**
+ * Map SambaNova's `pricing` block. Prompt and completion rates are required;
+ * cache rates default to 0 when absent. An unreadable card stays unpriced
+ * (`unknown`) instead of reading as free, and an all-zero card is a declared
+ * free tier.
+ */
+function sambanovaPricing(
+	pricing: unknown,
+	fallback: TokenCost,
+): Pick<ModelSpec<"openai-completions">, "cost" | "pricingStatus"> {
+	const rates = isRecord(pricing) ? pricing : {};
+	const input = sambanovaRate(rates.prompt, undefined);
+	const output = sambanovaRate(rates.completion, undefined);
+	const cacheRead = sambanovaRate(rates.input_cache_read, 0);
+	const cacheWrite = sambanovaRate(rates.input_cache_write, 0);
+	if (input === undefined || output === undefined || cacheRead === undefined || cacheWrite === undefined) {
+		return { cost: fallback, pricingStatus: "unknown" };
+	}
+	const cost = { input, output, cacheRead, cacheWrite };
+	return input + output + cacheRead + cacheWrite === 0 ? { cost, pricingStatus: "free" } : { cost };
+}
+
+/**
+ * SambaNova Cloud's model manager. `/v1/models` requires a key, so a keyless
+ * manager serves only the bundled seed; with a key the live roster replaces
+ * it. Rows carry pricing and limits but no capability metadata: reasoning,
+ * thinking wire format, and image input come from `providers/sambanova.kdl`.
+ */
+export function sambanovaModelManagerOptions(
+	config?: SambaNovaModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.sambanova.ai/v1";
+	return {
+		providerId: "sambanova",
+		dynamicModelsAuthoritative: true,
+		// The live `pricing` block is the tariff: an explicit `0` must not revert
+		// to the bundled seed's rate.
+		dynamicCostAuthoritative: true,
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "sambanova",
+					baseUrl,
+					apiKey,
+					filterModel: (_entry, model) => !isExcludedModel("sambanova", model.id),
+					mapModel: (entry, defaults) => ({
+						...defaults,
+						...sambanovaPricing(entry.pricing, defaults.cost),
+						contextWindow: toPositiveNumber(entry.context_length, defaults.contextWindow),
+						maxTokens: toPositiveNumber(entry.max_completion_tokens, defaults.maxTokens),
+					}),
+					fetch: config?.fetch,
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 4. Hugging Face
 // ---------------------------------------------------------------------------
 
@@ -3276,7 +3357,12 @@ function openCodeBaseUrlForApi(api: Api, basePath: string): string {
 // rules (`runtime/behavior.kdl`; #887, #1617, #8957).
 // Runtime-discovered rows cached before model-identity corrections retain
 // stale capability metadata until the authoritative catalog TTL expires.
-const OPENCODE_CACHE_MIGRATION_MODEL_IDS = ["glm-5.3-flash", "longcat-2.5-preview-free", "space-bunny-free"] as const;
+const OPENCODE_CACHE_MIGRATION_MODEL_IDS = [
+	"deepseek-flash",
+	"glm-5.3-flash",
+	"longcat-2.5-preview-free",
+	"space-bunny-free",
+] as const;
 const OPENCODE_ZEN_CACHE_MIGRATION_MODEL_IDS = ["gemini-3.7-flash", "gemini-3.8-flash"] as const;
 
 // Billing-variant suffixes the OpenCode gateways append to a base model id
@@ -3311,7 +3397,10 @@ function openCodeModelManagerOptions(
 	const apiOverrides = (id: string): Api | undefined => {
 		// Route pins live in the `api-routes` behavior rules.
 		const route = apiRouteFor(providerId, id)?.api;
-		return route === "openai-completions" || route === "openai-responses" || route === "anthropic-messages"
+		return route === "openai-completions" ||
+			route === "openai-responses" ||
+			route === "anthropic-messages" ||
+			route === "google-generative-ai"
 			? route
 			: undefined;
 	};
@@ -7055,7 +7144,7 @@ function createOpenCodeApiResolution(
 	const baseUrlForApi = (api: Api): string => (api === "anthropic-messages" ? basePath : completionsBaseUrl);
 	// Per-id route pins live in the `api-routes` behavior rules.
 	const overrideRules: ApiResolutionRule[] = (
-		["openai-completions", "openai-responses", "anthropic-messages"] as const
+		["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"] as const
 	).map(api => ({
 		matches: modelId => apiRouteFor(providerId, modelId)?.api === api,
 		resolved: { api, baseUrl: baseUrlForApi(api) },
@@ -7085,7 +7174,16 @@ function createOpenCodeApiResolution(
 // Resolver rules for the models.dev descriptor path; the per-id pins live in
 // the `api-routes` behavior rules, which also drive the live-discovery mapper.
 const OPENCODE_ZEN_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen", "opencode-zen");
-const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution("https://opencode.ai/zen/go", "opencode-go");
+const OPENCODE_GO_BASE_PATH = "https://opencode.ai/inference/go";
+const OPENCODE_GO_API_RESOLUTION = createOpenCodeApiResolution(OPENCODE_GO_BASE_PATH, "opencode-go");
+
+/**
+ * OpenCode Go endpoint for one request API. The model generator re-bases
+ * previous-snapshot rows with it so retained rows follow endpoint moves.
+ */
+export function openCodeGoBaseUrlForApi(api: Api): string {
+	return openCodeBaseUrlForApi(api, OPENCODE_GO_BASE_PATH);
+}
 
 const COPILOT_BASE_URL = "https://api.githubcopilot.com";
 
@@ -7463,7 +7561,7 @@ const OPENCODE_MODELS_DEV_DESCRIPTORS: readonly ModelsDevProviderDescriptor[] = 
 				OPENCODE_ZEN_API_RESOLUTION.defaultResolution,
 			),
 	}),
-	openAiCompletionsDescriptor("opencode-go", "opencode-go", "https://opencode.ai/zen/go/v1", {
+	openAiCompletionsDescriptor("opencode-go", "opencode-go", `${OPENCODE_GO_BASE_PATH}/v1`, {
 		filterModel: filterActiveToolCallModels,
 		resolveApi: (modelId, raw) =>
 			resolveApiByRules(

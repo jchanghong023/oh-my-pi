@@ -1694,6 +1694,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	readonly #uiHelpers: UiHelpers;
 	#sttController: STTController | undefined;
+	#dictationStarting = false;
 	#micCursor: MicCursor | undefined;
 	#resizeHandler?: () => void;
 	#observerRegistry: SessionObserverRegistry;
@@ -1762,6 +1763,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.editor.placeholder = () => this.#composerHint();
 		this.editor.prediction = () => this.#eventController.composerPrediction.text;
 		this.editor.composerState = () => this.#composerNativeState();
+		this.editor.onToggleDictation = () => void this.#toggleComposerDictation();
 		this.editor.imageReferenceHyperlink = imageReferenceHyperlink;
 		this.editor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
 		this.editor.modelMentionLabel = selector => {
@@ -2390,14 +2392,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		// restored). SDK startup metadata and extension `custom` state entries are
 		// ignored. This way `omp --continue` (or auto-resume) that finds no recent
 		// session and creates a fresh one still honors the default, while a session
-		// with restored context or an explicit mode keeps its reconciled mode. Scoped
-		// to launch (not the switch reconciler above) so /new and the plan-approval →
-		// execution handoff clear never get dragged back into plan mode. #enterPlanMode
-		// is idempotent and self-guards against an already-active plan/goal mode; it
-		// does not check plan.enabled itself.
-		if (shouldEnterPlanModeOnStartup(this.sessionManager, this.session.settings)) {
-			await this.#enterPlanMode();
-		}
+		// with restored context or an explicit mode keeps its reconciled mode. Not
+		// part of the switch reconciler above: the plan-approval → execution handoff
+		// and loop resets also start sessions through handleClearCommand and must
+		// never be dragged back into plan mode; user-initiated /new re-applies the
+		// default through handleNewCommand instead.
+		await this.#applyPlanModeDefault();
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
@@ -3888,6 +3888,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#composerNativeState(): ComposerNativeState {
 		const draft = this.editor.getText().trimStart();
+		const dictation = this.#sttController?.state ?? "idle";
 		return {
 			shell: this.isBashMode
 				? { kind: "bash", excluded: draft.startsWith("!!") }
@@ -3898,6 +3899,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			thinkingInModel: cfgStatusLineCompactThinkingLevel.get(settings),
 			rate: this.#nativeTokenRate(),
 			running: this.loadingAnimation !== undefined || this.session.isStreaming,
+			dictation:
+				cfgSttEnabled.get(settings) || this.#dictationStarting || dictation !== "idle"
+					? this.#dictationStarting && dictation === "idle"
+						? "starting"
+						: dictation
+					: undefined,
 			viewing: this.#viewingLineage(),
 			title: this.sessionManager.getSessionName(),
 		};
@@ -5049,6 +5056,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.planModePaused = true;
 			this.#planModeHasEntered = true;
 			this.#updatePlanModeStatus();
+		}
+	}
+
+	/**
+	 * Enters plan mode when `plan.defaultOnStartup` applies to the current session
+	 * (see {@link shouldEnterPlanModeOnStartup}). Called at launch and after `/new`.
+	 * #enterPlanMode is idempotent and self-guards against an active plan/goal/vibe
+	 * mode; plan.enabled is checked by shouldEnterPlanModeOnStartup.
+	 */
+	async #applyPlanModeDefault(): Promise<void> {
+		if (shouldEnterPlanModeOnStartup(this.sessionManager, this.session.settings)) {
+			await this.#enterPlanMode();
 		}
 	}
 
@@ -7501,6 +7520,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		nextEditor.placeholder = () => this.#composerHint();
 		nextEditor.prediction = () => this.#eventController.composerPrediction.text;
 		nextEditor.composerState = () => this.#composerNativeState();
+		nextEditor.onToggleDictation = () => void this.#toggleComposerDictation();
 		nextEditor.attachmentChips = previousEditor.attachmentChips;
 		nextEditor.imageReferenceHyperlink = imageReferenceHyperlink;
 		nextEditor.skillFilePath = name => this.skillCommands.get(`skill:${name}`)?.filePath;
@@ -8110,6 +8130,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		await this.#commandController.handleClearCommand();
 	}
 
+	/**
+	 * User-initiated `/new` (slash command and `app.session.new`): starts a new
+	 * session like {@link handleClearCommand}, then honors `plan.defaultOnStartup`
+	 * as launch does. Internal resets keep calling handleClearCommand directly.
+	 */
+	async handleNewCommand(): Promise<void> {
+		const previousSessionId = this.sessionManager.getSessionId();
+		await this.handleClearCommand();
+		if (this.sessionManager.getSessionId() === previousSessionId) return;
+		await this.#applyPlanModeDefault();
+	}
+
 	handleFreshCommand(): Promise<void> {
 		return this.#commandController.handleFreshCommand();
 	}
@@ -8183,6 +8215,25 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async handleSTTToggle(): Promise<void> {
 		await this.#readySTTController()?.toggle(this.editor, this.#dictationCallbacks(this.editor));
+	}
+
+	/** The composer microphone: start a draft-only capture, or stop (or cancel the start of) the running one. */
+	async #toggleComposerDictation(): Promise<void> {
+		if (this.#dictationStarting || this.#sttController?.state === "recording") {
+			await this.#sttController?.stop();
+			return;
+		}
+		if (this.#sttController?.state === "transcribing") return;
+		const controller = this.#readySTTController();
+		if (!controller) return;
+		this.#dictationStarting = true;
+		this.ui.requestRender();
+		try {
+			await controller.start(this.editor, { ...this.#dictationCallbacks(this.editor), manualSubmit: true });
+		} finally {
+			this.#dictationStarting = false;
+			this.ui.requestRender();
+		}
 	}
 
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler {

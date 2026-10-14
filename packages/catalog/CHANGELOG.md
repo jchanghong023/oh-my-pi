@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `local/nemotron-streaming-en-0.6b` for local streaming English dictation ([#15759](https://github.com/can1357/oh-my-pi/pull/15759) by [@daaximus](https://github.com/daaximus)).
+- Added SambaNova Cloud (`sambanova`) as a provider: `/login sambanova` with an API key, and the live `/v1/models` roster with its prices, reasoning models, and Gemma 4 image input ([#14986](https://github.com/can1357/oh-my-pi/pull/14986) by [@rjuez00](https://github.com/rjuez00))
+
+### Changed
+
+- OpenCode Go requests now go to the current `https://opencode.ai/inference/go/v1` endpoint instead of the legacy `/zen/go` one ([#15722](https://github.com/can1357/oh-my-pi/issues/15722))
+
+### Fixed
+
+- Fixed OpenCode Go's `deepseek-flash` alias showing $0, unknown limits, and no reasoning instead of the V4.1 Flash rate card and capabilities ([#15357](https://github.com/can1357/oh-my-pi/issues/15357))
+- Fixed OpenCode Go's Gemini 4 Argon Contributor failing with an unsupported protocol and thinking level; it now uses the native Gemini endpoint ([#15722](https://github.com/can1357/oh-my-pi/issues/15722))
+
 ## [18.10.4] - 2026-10-13
 
 ### Added

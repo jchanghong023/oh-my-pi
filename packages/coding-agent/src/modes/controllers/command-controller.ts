@@ -982,7 +982,12 @@ export class CommandController {
 		const backend = await resolveMemoryBackend(this.ctx.settings);
 
 		if (action === "view") {
-			const payload = await backend.buildDeveloperInstructions(agentDir, this.ctx.settings, this.ctx.session);
+			const payload = await backend.buildDeveloperInstructions(
+				agentDir,
+				this.ctx.sessionManager.getCwd(),
+				this.ctx.settings,
+				this.ctx.session,
+			);
 			if (!payload) {
 				this.ctx.showWarning("Memory payload is empty (memory backend off, disabled, or no memory available).");
 				return;

@@ -28,6 +28,7 @@ import sessionAgentNoticePrompt from "../prompts/system/session-agent-notice.md"
 import toolRosterNoticePrompt from "../prompts/system/tool-roster-notice.md" with { type: "text" };
 import xdevMountNoticePrompt from "../prompts/system/xdev-mount-notice.md" with { type: "text" };
 import { isMCPToolName, normalizeToolNames } from "../tools/builtin-names";
+import { denyError, resolveApproval, resolveApprovalFromContext } from "../tools/approval";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
@@ -911,21 +912,19 @@ export class SessionTools {
 	 * Only wraps tools whose name is in PERMISSION_REQUIRED_TOOLS and only when
 	 * the bridge exposes `requestPermission`. No-ops for all other cases.
 	 *
-	 * When the user has explicitly opted into `yolo` / auto-approve behavior (via
-	 * the SDK/CLI `autoApprove` flag or a configured `tools.approvalMode: yolo`),
-	 * skips the gate unless the per-tool policy explicitly requires a prompt or
-	 * deny. The schema default is also `yolo`, so an explicit configuration or
-	 * explicit session flag is required: default-config ACP sessions keep the
-	 * client-side permission gate.
+	 * Bash follows its own approval resolution, including pattern allows, denials,
+	 * and critical overrides. The schema's implicit yolo default retains ACP's
+	 * client permission gate for unmatched bash commands; explicitly selecting
+	 * yolo opts out. Other tools keep their existing ACP gate behavior.
 	 */
 	#wrapToolForAcpPermission<T extends AgentTool>(tool: T): T {
 		const bridge = this.#host.clientBridge();
 		// Match the capability+method gating pattern used by read/write/bash.
 		if (!bridge?.capabilities.requestPermission || !bridge.requestPermission) return tool;
 		if (PERMISSION_REQUIRED_TOOLS[tool.name] !== true) return tool;
-		// Skip the gate only on explicit yolo opt-in; honour per-tool policies
-		// that require a prompt or deny (matching the normal approval wrapper).
-		if (this.#isExplicitAutoApproveMode()) {
+		// Default-config ACP sessions still ask for executable calls even though
+		// the schema defaults to yolo; explicit yolo is an intentional opt-in.
+		if (tool.name !== "bash" && this.#isExplicitAutoApproveMode()) {
 			const userPolicies: Record<string, unknown> = cfgToolsApproval.get(this.#host.settings);
 			const toolPolicy = userPolicies[tool.name];
 			if (!toolPolicy || toolPolicy === "allow") return tool;
@@ -940,6 +939,23 @@ export class SessionTools {
 					onUpdate: never,
 					ctx: AgentToolContext | undefined,
 				) => {
+					let cacheable = true;
+					if (target.name === "bash") {
+						const explicitAutoApprove = this.#isExplicitAutoApproveMode();
+						const { approvalMode, userPolicies } = resolveApprovalFromContext({
+							autoApprove: this.#autoApprove,
+							settings: this.#host.settings,
+						});
+						const mode = approvalMode === "yolo" && !explicitAutoApprove ? "always-ask" : approvalMode;
+						const resolved = resolveApproval(target, args, mode, userPolicies);
+						if (resolved.policy === "deny") throw denyError(resolved, target.name);
+						if (resolved.policy === "allow") {
+							return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
+						}
+						// A prompt forced by a critical command or an explicit pattern
+						// remains per-call, even after the client selects Always allow.
+						cacheable = !resolved.override;
+					}
 					const permissionIntent = getPermissionIntent(target.name, args);
 					if (!permissionIntent) {
 						return await target.execute(toolCallId, args as never, signal, onUpdate, ctx as never);
@@ -955,7 +971,7 @@ export class SessionTools {
 						? [{ type: "content" as const, content: { type: "text" as const, text: `$ ${command}` } }]
 						: undefined;
 					// Short-circuit on persisted decisions.
-					const persisted = this.#acpPermissionDecisions.get(permissionIntent.cacheKey);
+					const persisted = cacheable ? this.#acpPermissionDecisions.get(permissionIntent.cacheKey) : undefined;
 					if (persisted === "allow_always") {
 						return await target.execute(toolCallId, args as never, signal, onUpdate, approvedCtx);
 					}
@@ -1006,9 +1022,9 @@ export class SessionTools {
 					if (!selectedOption) {
 						throw new ToolError(`Tool permission response used unknown option ID: ${outcome.optionId}`);
 					}
-					if (selectedOption.kind === "allow_always") {
+					if (cacheable && selectedOption.kind === "allow_always") {
 						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "allow_always");
-					} else if (selectedOption.kind === "reject_always") {
+					} else if (cacheable && selectedOption.kind === "reject_always") {
 						this.#acpPermissionDecisions.set(permissionIntent.cacheKey, "reject_always");
 					}
 					if (selectedOption.kind === "reject_once" || selectedOption.kind === "reject_always") {

@@ -736,10 +736,17 @@ The table's `images` column reports what the transport will actually send, so a 
 stripped (`compat.stripImageInput`, see [Image handling](#compatibility-and-routing-fields)) shows `no`
 even when its spec declares `input: [text, image]`; `--json` keeps the declared `input`.
 
-## Context promotion (model-level fallback chains)
+## Context promotion
 
 Context promotion switches to an explicitly configured larger-context model before compaction.
 It is attempted on context overflow errors and at pre-prompt or post-turn compaction thresholds.
+
+Context promotion and [retry model fallback](./non-compaction-retry-policy.md) are independent.
+Turning off **Auto-Promote Context** (`contextPromotion.enabled`) does not disable
+`retry.fallbackChains`: provider errors still switch the active model while `retry.modelFallback`
+is on, even when the fallback model happens to have a larger context window. To stop those
+switches, set `retry.modelFallback: false`; same-model retries (`retry.enabled`) and automatic
+compaction (`compaction.enabled`) are unaffected.
 
 ### Trigger and order
 
@@ -768,16 +775,16 @@ Promotion uses temporary switching (`setModelTemporary`):
 - recorded as a `model_change` with the ephemeral role `"fallback"` (not a durable user model selection)
 - does not rewrite saved role mapping
 
-### Configuring explicit fallback chains
+### Configuring promotion targets
 
-Configure fallback directly in model metadata via `contextPromotionTarget`.
+Configure the target directly in model metadata via `contextPromotionTarget`.
 
 `contextPromotionTarget` accepts either:
 
 - `provider/model-id` (explicit)
 - `model-id` (resolved within current provider)
 
-Example (`models.yml`) for an explicit OpenAI fallback:
+Example (`models.yml`) for an explicit OpenAI promotion target:
 
 ```yaml
 providers:

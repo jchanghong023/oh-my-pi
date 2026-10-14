@@ -395,6 +395,16 @@ describe("error-id classification", () => {
 		}
 	});
 
+	it("retries Go closed-connection transport errors forwarded by a gateway (#15385)", () => {
+		const errorMessage = "read tcp 127.0.0.1:9426->127.0.0.1:9050: use of closed network connection";
+		const id = AIError.classifyMessage(
+			message({ api: "openai-completions", provider: "custom-gateway", model: "mimo", errorId: 0, errorMessage }),
+		);
+		expect(AIError.is(id, AIError.Flag.Transient)).toBe(true);
+		expect(AIError.retriable(id)).toBe(true);
+		expect(AIError.isProviderRetryableError(new Error(errorMessage))).toBe(true);
+	});
+
 	it("retries remote Python HTTP/2 internal and refused stream resets", () => {
 		for (const code of [2, 7]) {
 			const assistant = message({

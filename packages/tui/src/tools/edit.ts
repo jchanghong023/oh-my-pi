@@ -1142,7 +1142,10 @@ export const editToolRenderer = {
 				while (bodyLines.length > 0 && bodyLines[0].trim() === "") bodyLines.shift();
 				return {
 					header,
-					sections: bodyLines.length > 0 ? [{ content: bodyLines }] : [],
+					sections:
+						bodyLines.length > 0
+							? [{ content: bodyLines.flatMap(line => wrapEditRendererLine(line, Math.max(1, width - 2))) }]
+							: [],
 					phase: applyPatchError ? "error" : "pending",
 					borderColor: applyPatchError ? "error" : "borderMuted",
 					contentPaddingLeft: 0,

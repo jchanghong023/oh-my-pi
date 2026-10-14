@@ -674,7 +674,7 @@ export class InputController {
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
-			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleClearCommand());
+			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.handleNewCommand());
 		}
 		for (const key of this.ctx.keybindings.getKeys("app.session.tree")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.ctx.showTreeSelector());

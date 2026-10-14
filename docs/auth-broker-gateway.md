@@ -223,7 +223,7 @@ Two layers cache the aggregate provider-usage report. Both are intentional and s
 
 ### Server-side cache (broker `AuthStorage`)
 
-`AuthStorage` caches successful per-credential `UsageReport`s in the broker's SQLite store with a **5-minute TTL and ±25 % jitter** to stagger upstream probes. Cached good values receive a 24-hour durable retention window. On fetch failure, providers normally retain the last-good report and apply a short jittered cooldown (default 10 s); a provider can override this policy. Definitive auth failures purge stale usage, and explicit invalidation does not replay invalidated last-good data.
+`AuthStorage` caches successful per-credential `UsageReport`s in the broker's SQLite store with a **5-minute TTL and ±25 % jitter** to stagger upstream probes. Cached good values are retained for 24 hours after their last successful fetch (`fetchedAt`). On fetch failure, providers normally retain the last-good report and apply a short jittered cooldown (default 10 s); a provider can override this policy. Repeated failures never extend the 24-hour window: past it, the account reports no usage until a fetch succeeds. Definitive auth failures (a thrown 401/403 from the usage provider) purge stale usage, and explicit invalidation does not replay invalidated last-good data.
 
 Constants: `USAGE_REPORT_TTL_MS = 5 * 60_000` in `packages/ai/src/auth/sqlite-credential-store.ts`; `USAGE_LAST_GOOD_RETENTION_MS = 24 * 60 * 60_000` and `USAGE_FAILURE_BACKOFF_MS = 10_000` in `packages/ai/src/auth/usage-cache.ts`. Fetch policy is in `packages/ai/src/auth/usage.ts`.
 

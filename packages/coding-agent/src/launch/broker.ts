@@ -616,7 +616,7 @@ class DaemonBroker {
 			case "ping":
 				return { op: "ping", projectDir: this.#projectDir };
 			case "start":
-				return this.#start(operation.spec, operation.owner, operation.replace);
+				return this.#start(operation.spec, operation.owner, operation.replace, operation.awaitReady);
 			case "list": {
 				await Promise.all([...this.#records.values()].map(record => this.#refreshDetached(record)));
 				return {
@@ -651,7 +651,7 @@ class DaemonBroker {
 		}
 	}
 
-	async #start(spec: DaemonSpec, owner?: string, replace = false): Promise<DaemonRpcResult> {
+	async #start(spec: DaemonSpec, owner?: string, replace = false, awaitReady = true): Promise<DaemonRpcResult> {
 		if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/.test(spec.name)) {
 			throw new Error("Daemon name must be 1-48 letters, numbers, dots, underscores, or hyphens");
 		}
@@ -730,7 +730,7 @@ class DaemonBroker {
 		}
 		await this.#launch(record);
 		let readyTimedOut = false;
-		if (spec.ready && !terminalState(record.snapshot.state)) {
+		if (spec.ready && awaitReady && !terminalState(record.snapshot.state)) {
 			// Wake on the sticky readyAt marker or any terminal state, not the live
 			// state: a fast process flips starting→ready→exited within one poll
 			// interval, so sampling `state === "ready"` never observes readiness even

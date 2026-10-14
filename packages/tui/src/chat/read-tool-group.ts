@@ -16,6 +16,8 @@ import {
 } from "../tools/read";
 import { PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
+import { wrapTreeLine } from "../render/hanging-wrap";
+import { wrapTextWithAnsi } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
@@ -891,7 +893,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 		// Clear previous children and rebuild the summary and preview blocks.
 		this.clear();
-		this.#text = new Text("", 0, 0);
+		this.#text = new Text("", 0, 0).setWrapLine(
+			(line, width) => wrapTreeLine(line, width, theme) ?? wrapTextWithAnsi(line, width),
+		);
 
 		if (displayRows.length === 0) {
 			this.#text.setText(` ${theme.format.bullet} ${theme.fg("toolTitle", theme.bold("Read"))}`);

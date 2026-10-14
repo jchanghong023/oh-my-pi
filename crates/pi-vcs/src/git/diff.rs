@@ -649,6 +649,14 @@ fn render_change(
 	binary_patch: bool,
 	budget: Option<RenderBudget>,
 ) -> Result<Rendered> {
+	if change
+		.old_mode
+		.iter()
+		.chain(change.new_mode.iter())
+		.all(|mode| mode.kind() == gix::objs::tree::EntryKind::Commit)
+	{
+		return Ok(render_gitlink(change));
+	}
 	let old_kind = change
 		.old_mode
 		.or(change.new_mode)
@@ -752,6 +760,29 @@ fn render_change(
 			Err(Error::backend("git diff", "external diff drivers cannot be rendered in-process"))
 		},
 	}
+}
+
+fn render_gitlink(change: &FileChange) -> Rendered {
+	let mut text = format!("diff --git a/{} b/{}\n", change.old_path, change.new_path);
+	append_metadata(&mut text, change, None, false);
+	text.push_str("--- ");
+	push_old_path(&mut text, change);
+	text.push_str("\n+++ ");
+	push_new_path(&mut text, change);
+	text.push('\n');
+	match (change.old_mode, change.new_mode) {
+		(Some(_), Some(_)) => text.push_str("@@ -1 +1 @@\n"),
+		(None, Some(_)) => text.push_str("@@ -0,0 +1 @@\n"),
+		(Some(_), None) => text.push_str("@@ -1 +0,0 @@\n"),
+		(None, None) => unreachable!("a change has at least one mode"),
+	}
+	if change.old_mode.is_some() {
+		let _ = writeln!(text, "-Subproject commit {}", change.old_id);
+	}
+	if change.new_mode.is_some() {
+		let _ = writeln!(text, "+Subproject commit {}", change.new_id);
+	}
+	Rendered { text, added: change.new_mode.map(|_| 1), removed: change.old_mode.map(|_| 1) }
 }
 
 fn append_metadata(out: &mut String, change: &FileChange, similarity: Option<u8>, full_ids: bool) {
@@ -1504,6 +1535,7 @@ mod tests {
 	use tempfile::TempDir;
 
 	use super::*;
+	use crate::types::ApplyOptions;
 
 	// Diff oracles pass `--no-ext-diff`: a developer's `diff.external` (e.g.
 	// difftastic) would otherwise replace git's patch with its own output.
@@ -1658,6 +1690,38 @@ mod tests {
 		assert_eq!(
 			repo.diff_text(&filtered).expect("filtered diff"),
 			git(dir.path(), &["diff", "--no-ext-diff", "--cached", "--", "added.txt"])
+		);
+	}
+
+	#[test]
+	fn gitlink_patch_matches_git_and_preserves_commit_ids() {
+		let dir = fixture();
+		let old = git(dir.path(), &["rev-parse", "HEAD"]).trim().to_owned();
+		let new = "b".repeat(40); // Valid gitlink, absent from the root object database.
+		git(dir.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{old},module")]);
+		git(dir.path(), &["commit", "-qm", "add gitlink"]);
+		git(dir.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{new},module")]);
+		let repo = GitRepo::discover(dir.path())
+			.expect("discover")
+			.expect("repository");
+		let patch = git(dir.path(), &["diff", "--no-ext-diff", "--cached"]);
+		assert_eq!(
+			repo
+				.diff_text(&DiffOptions { cached: true, ..DiffOptions::default() })
+				.expect("staged gitlink"),
+			patch
+		);
+		git(dir.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{old},module")]);
+		repo
+			.apply_patch(&patch, &ApplyOptions { cached: true, ..ApplyOptions::default() })
+			.expect("apply gitlink without its commit object in the root repo");
+		assert!(git(dir.path(), &["ls-files", "--stage", "module"]).contains(&new));
+		git(dir.path(), &["commit", "-qm", "update gitlink"]);
+		assert_eq!(
+			repo
+				.diff_tree("HEAD^", "HEAD", true)
+				.expect("committed gitlink"),
+			git(dir.path(), &["diff-tree", "-r", "-p", "HEAD^", "HEAD"])
 		);
 	}
 

@@ -694,7 +694,8 @@ export const cfgRetryModelFallback = register({
 		tab: "model",
 		group: "Retry & Fallback",
 		label: "Retry Model Fallback",
-		description: "Allow retry recovery to switch to configured fallback models",
+		description:
+			"Allow retry recovery to switch to models in retry.fallbackChains after provider errors. Independent of Auto-Promote Context",
 	},
 });
 

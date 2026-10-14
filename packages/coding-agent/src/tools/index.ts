@@ -219,6 +219,8 @@ export interface ToolSession {
 	hasUI: boolean;
 	/** Whether `ask` can reach a human. Defaults to `hasUI`. */
 	canPromptUser?: boolean;
+	/** Keep `ask` in a headless fork's roster; execution still requires UI. */
+	advertiseHeadlessAsk?: boolean;
 	/** The user approves `cfg://` writes for this session (top-level TUI session only). */
 	settingsApproval?: boolean;
 	/** Whether this session has begun disposal. */

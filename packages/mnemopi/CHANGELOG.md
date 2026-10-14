@@ -11,6 +11,10 @@
 - Fixed custom embedding gateways containing `openrouter.ai` in their path or hostname being mistaken for the official OpenRouter endpoint.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 
+### Fixed
+
+- Fixed polyphonic recall ranking unrelated memories above relevant ones when the query shared only a common word such as "that" with an extracted fact subject ([#15512](https://github.com/can1357/oh-my-pi/issues/15512)).
+
 ## [18.9.0] - 2026-10-11
 
 ### Added

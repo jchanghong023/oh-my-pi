@@ -162,7 +162,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Start a new session",
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
-			await runtime.ctx.handleClearCommand();
+			await runtime.ctx.handleNewCommand();
 		},
 	},
 	{
@@ -583,6 +583,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 				case "view": {
 					const payload = await backend.buildDeveloperInstructions(
 						runtime.settings.getAgentDir(),
+						runtime.cwd,
 						runtime.settings,
 						runtime.session,
 					);

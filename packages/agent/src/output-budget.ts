@@ -19,13 +19,24 @@ export const MIN_FITTED_OUTPUT_TOKENS = 1024;
 const PROMPT_ESTIMATE_MARGIN_DIVISOR = 10;
 
 /**
+ * Chat-template framing charged per locally counted message. `Tokenizer.countMessage`
+ * counts content only, but every template wraps each message in role markers and
+ * separators, and tool results in response wrappers: about 5 tokens per merged
+ * Qwen3 `<tool_response>` or Llama 3 turn, 10–15 for harmony or Mistral tool results.
+ * The proportional margin scales with content, so many short messages (a turn's
+ * parallel tool results) leave this uncovered. Persisted provider-anchored messages
+ * need no charge: the host's report includes their framing. Request-only messages
+ * retain a conservative framing charge because their saved metadata counts content,
+ * not how many message wrappers the anchored request contained.
+ */
+export const MESSAGE_FRAMING_TOKENS = 16;
+
+/**
  * Absolute headway subtracted from the remaining room (unconditionally, on anchored and
- * fully-local counts alike). Proportional padding covers
- * tokenizer drift that scales with the prompt, but a host can still count a few tokens more
- * than any local estimate can see (chat-template framing, reasoning wrappers). Measured
- * against a 262,144-token host: fitted caps landed +11 to +42 tokens over and were rejected
- * with 400s. 64 tokens covers the observed drift with margin to spare; the
- * {@link MIN_FITTED_OUTPUT_TOKENS} floor still applies.
+ * fully-local counts alike). Covers per-request framing no message count sees: the
+ * generation prompt, the anchoring turn's end marker, reasoning wrappers. Measured
+ * against a 262,144-token host: fitted caps landed +11 to +42 tokens over and were
+ * rejected with 400s. The {@link MIN_FITTED_OUTPUT_TOKENS} floor still applies.
  */
 export const OUTPUT_FIT_HEADWAY_TOKENS = 64;
 
@@ -44,7 +55,9 @@ export const OUTPUT_FIT_HEADWAY_TOKENS = 64;
  * The prompt size is the provider's own report from the newest trustworthy
  * assistant turn (see {@link findRequestUsageAnchor}) plus a local count of
  * only the messages appended after it; the whole context is counted locally
- * only when no turn can anchor (fresh or freshly rewritten context).
+ * only when no turn can anchor (fresh or freshly rewritten context). Local
+ * counts carry a proportional tokenizer margin plus
+ * {@link MESSAGE_FRAMING_TOKENS} per message.
  *
  * Returns `maxTokens` unchanged when the requested cap already fits, the
  * model declares no window, the host ends generation at the window itself
@@ -148,7 +161,9 @@ export function countPerCallContextTokensBySource(
 function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 	const { messages } = context;
 	const anchor = findRequestUsageAnchor(messages);
-	if (!anchor) return withMargin(countContextTokens(context, tokenizer));
+	if (!anchor) {
+		return withMargin(countContextTokens(context, tokenizer)) + messages.length * MESSAGE_FRAMING_TOKENS;
+	}
 	// Anonymous transforms may replace persisted history, not merely append
 	// request-only text. Their usage cannot safely anchor a later restored view.
 	let namedPerCallTokens = 0;
@@ -157,14 +172,29 @@ function countPromptTokens(context: Context, tokenizer: Tokenizer): number {
 		(anchor.message.perCallContextTokens ?? 0) > namedPerCallTokens ||
 		messages.some(message => isPerCallContextMessage(message) && getPerCallContextSource(message) === undefined)
 	) {
-		return withMargin(countContextTokens(context, tokenizer));
+		return withMargin(countContextTokens(context, tokenizer)) + messages.length * MESSAGE_FRAMING_TOKENS;
 	}
 	let tail = 0;
-	for (let index = anchor.index + 1; index < messages.length; index++) {
-		if (!isPerCallContextMessage(messages[index])) tail += tokenizer.countMessage(messages[index]);
+	let perCallTokens = 0;
+	let locallyFramedMessages = 0;
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (isPerCallContextMessage(message)) {
+			perCallTokens += tokenizer.countMessage(message);
+			// These messages can be inserted before the anchor. Its metadata records
+			// content tokens, not message counts, so keep their framing conservative.
+			locallyFramedMessages++;
+		} else if (index > anchor.index) {
+			tail += tokenizer.countMessage(message);
+			locallyFramedMessages++;
+		}
 	}
-	const delta = countPerCallContextTokens(context, tokenizer) - (anchor.message.perCallContextTokens ?? 0);
-	return Math.max(0, anchor.tokens + Math.min(0, delta)) + withMargin(tail + Math.max(0, delta));
+	const delta = perCallTokens - (anchor.message.perCallContextTokens ?? 0);
+	return (
+		Math.max(0, anchor.tokens + Math.min(0, delta)) +
+		withMargin(tail + Math.max(0, delta)) +
+		locallyFramedMessages * MESSAGE_FRAMING_TOKENS
+	);
 }
 
 function countContextTokens(context: Context, tokenizer: Tokenizer): number {

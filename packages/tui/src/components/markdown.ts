@@ -52,6 +52,18 @@ function normalizeOsc8Terminators(text: string): string {
 	return text.replace(OSC8_ST_PREFIX_REGEX, "$1\x07");
 }
 
+/**
+ * `text` as the streaming renderer lexes it: OSC 8 terminators unified and
+ * tabs expanded. {@link Markdown.getLastRenderStableText} is a prefix of this
+ * form, not of the raw source, so append-only publishers that mix settled
+ * prefixes with whole blocks must compare both in this form. Rendering it is
+ * byte-identical to rendering `text`.
+ */
+export function streamingMarkdownSource(text: string): string {
+	if (!text.includes("\t") && !text.includes("\x1b")) return text;
+	return replaceTabs(normalizeOsc8Terminators(text));
+}
+
 /** The longest suffix of `text` a future append could still complete into a
  *  full `\x1b]8;[^\x07\x1b]*\x1b\\` match: the last `\x1b]8;` plus clean
  *  body (or that plus the pending ST-ESC `\x1b`), or a strict prefix of the

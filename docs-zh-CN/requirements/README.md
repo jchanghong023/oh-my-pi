@@ -20,7 +20,7 @@
 
 各功能域的验证状态以本表为准；不得将静态检查、文档更新或先前工作树测试视为当前功能验收。只有相应验证实际通过，才可标记验收通过。
 
-当前上游基线 `f979f4639777` 的验证状态见上表；实际验收源码为集成提交 `31fe1f9d6e`。Windows／Ubuntu-24.04 的 slowtest 固定 SHA、源状态、退出码及活动事件均通过；宿主报告为 `runs/test-timing/2026-10-14T16-17-54.387Z-66080-845b17dc/run.json`，Linux 报告为 `/root/oh-my-pi/runs/test-timing/2026-10-14T16-18-28.171Z-317-44a35756/run.json`。Linux JUnit 未复制到宿主，宿主报告保持 partial，不把脚本中的合成 WSL PASS 当作 Linux 验收。JchTools 并发刷新使用认证初始化后的可控时钟，欢迎提示使用确定性的实际宽度／占位符展开回归；产品行为与门禁预算不变。完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 和共享桌面输入不属于本次通过结论。
+上表既有验证覆盖的上游基线为 `f979f4639777`，实际验收源码为集成提交 `31fe1f9d6e`；当前同步基线的运行时验证尚未执行，不能沿用这些结果宣称已验收。Windows／Ubuntu-24.04 的 slowtest 固定 SHA、源状态、退出码及活动事件均通过；宿主报告为 `runs/test-timing/2026-10-14T16-17-54.387Z-66080-845b17dc/run.json`，Linux 报告为 `/root/oh-my-pi/runs/test-timing/2026-10-14T16-18-28.171Z-317-44a35756/run.json`。Linux JUnit 未复制到宿主，宿主报告保持 partial，不把脚本中的合成 WSL PASS 当作 Linux 验收。JchTools 并发刷新使用认证初始化后的可控时钟，欢迎提示使用确定性的实际宽度／占位符展开回归；产品行为与门禁预算不变。完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 和共享桌面输入不属于本次通过结论。
 
 补充验证：显式继承 `OMP_CONFIG_ROOT` 的 YAML／native 目录三个回归文件 15 例通过；捕获流两个回归文件 106 例及真实 CLI 的 stdout／stderr 流式捕获和去重冒烟通过。实际 WSL 输出在执行期间转发，超时／首个失败取消不再丢失已输出诊断；最终判据仍使用完整捕获的固定 SHA、工作树、退出码与活动事件，不把门禁自测中的模拟 WSL PASS 当作 Linux 验收。
 

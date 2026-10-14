@@ -31,6 +31,7 @@ import type { DescribeContext, NativeNode, NativeScreen, NativeSurfaceProvider, 
 import { STDOUT_BACKLOG_CLEAR_BYTES, setAltScreenActive, type Terminal } from "./terminal";
 import { classifyTerminalMultiplexerModule, terminalMultiplexerSessions } from "./terminal-multiplexer";
 import {
+	directPlacementLift,
 	encodeKittyDeleteAllImages,
 	encodeKittyDeleteImage,
 	encodeKittyDeletePlacement,
@@ -3205,7 +3206,12 @@ export class TUI extends Container {
 		return output;
 	}
 
-	/** Clip a direct placement and record its live owner; history placements have no mutable owner. */
+	/**
+	 * Clip a Kitty direct placement and record its live owner; history
+	 * placements have no mutable owner. Other direct placements (SIXEL,
+	 * iTerm2) have no delete command and composite over whatever pixels they
+	 * land on, so the rows they paint above `screenRow` are erased first.
+	 */
 	#imageLineSequence(
 		line: string,
 		screenRow: number,
@@ -3214,7 +3220,10 @@ export class TUI extends Container {
 	): string {
 		if (screenRow < 0) return line;
 		const parsed = parseKittyDirectPlacementLine(line);
-		if (!parsed) return line;
+		if (!parsed) {
+			const lift = Math.min(directPlacementLift(line), screenRow);
+			return lift > 0 ? `\x1b[${lift}A${`${ERASE_LINE}\x1b[B`.repeat(lift)}${line}` : line;
+		}
 		const previous = placements?.get(placementRow);
 		const placementId = previous?.placementId ?? this.#nextImagePlacementId++;
 		const erase = previous ? encodeKittyDeletePlacement(previous.imageId, previous.placementId) : "";

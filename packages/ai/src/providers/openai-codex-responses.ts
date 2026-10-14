@@ -1,5 +1,6 @@
 import { scheduler } from "node:timers/promises";
 import { type } from "@oh-my-pi/omptype";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
 import { calculateCost } from "@oh-my-pi/pi-catalog/models";
 import {
 	applyCodexResidencyHeader,
@@ -164,6 +165,12 @@ import { redactSensitiveInObject, transformMessages } from "./transform-messages
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
 	reasoning?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+	/**
+	 * Run with the least reasoning the model allows; takes precedence over
+	 * `reasoning`. Sends the `none` tier where the catalog's disable mode is
+	 * `none-effort`, else the model's lowest supported effort.
+	 */
+	disableReasoning?: boolean;
 	reasoningSummary?: "auto" | "concise" | "detailed" | null;
 	/** Explicit `reasoning.context` replay scope. Omitted by default so Codex applies its native request policy. */
 	reasoningContext?: CodexReasoningContext;
@@ -1554,6 +1561,22 @@ async function buildCodexRequestContext(
 	});
 }
 
+/**
+ * Codex reasoning controls for the caller's request. `forceReasoningOff` always
+ * sends the `none` tier. `disableReasoning` follows the catalog disable mode:
+ * `none` where the model accepts it, else the lowest supported effort —
+ * omitting effort would let the backend apply its default tier instead.
+ */
+function codexReasoningControls(
+	model: Model<"openai-codex-responses">,
+	options: OpenAICodexResponsesOptions | undefined,
+): Pick<CodexRequestOptions, "reasoningEffort" | "reasoningOff"> {
+	if (options?.forceReasoningOff) return { reasoningOff: true };
+	if (!options?.disableReasoning) return { reasoningEffort: options?.reasoning };
+	if (model.reasoning && model.compat.reasoningDisableMode === "none-effort") return { reasoningOff: true };
+	return { reasoningEffort: getSupportedEfforts(model)[0] };
+}
+
 /** Serialize normal Codex turns and V2 compaction with the same cacheable prefix. */
 export async function buildTransformedCodexRequestBody(
 	model: Model<"openai-codex-responses">,
@@ -1598,8 +1621,7 @@ export async function buildTransformedCodexRequestBody(
 		params.client_metadata = { ...options.clientMetadata };
 	}
 	const codexOptions: CodexRequestOptions = {
-		reasoningEffort: options?.reasoning,
-		reasoningOff: options?.forceReasoningOff,
+		...codexReasoningControls(model, options),
 		reasoningSummary: options?.reasoningSummary,
 		reasoningContext: options?.reasoningContext,
 		textVerbosity: options?.textVerbosity,
@@ -3209,6 +3231,9 @@ class CodexStreamProcessor {
 		this.runtime.sawTerminalEvent = false;
 		resetOutputState(this.output);
 		this.firstTokenTime = undefined;
+		if (this.requestSetup.requestAbortController.signal.aborted) {
+			this.requestSetup = createRequestSetup(this.options);
+		}
 		await scheduler.wait(CODEX_RETRY_DELAY_MS * this.runtime.providerRetryAttempt, {
 			signal: this.requestSetup.requestSignal,
 		});

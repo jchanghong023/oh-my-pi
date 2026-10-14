@@ -1473,7 +1473,7 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/olla
 - **Output Token Ceiling & Token Parameter Omission**: `isOllamaCloudOutputCapped` (`packages/catalog/src/provider-models/ollama.ts`) identifies DeepSeek V4 Pro/Flash models, pinning `maxTokens` to `Math.min(contextWindow, OLLAMA_CLOUD_MAX_OUTPUT_TOKENS)` (65,536) to prevent backend rejected requests (ollama/ollama#16890, #7266). All discovered cloud models set `omitMaxOutputTokens: true` (also enforced via `applyGeneratedModelPolicy` in `packages/catalog/scripts/generated-policies.ts`).
 
 ## OpenCode Go (`opencode-go`)
-OpenCode Go provides access to multi-provider subscription models (including Kimi, DeepSeek, GLM, Qwen, and MiniMax) through a unified gateway at `https://opencode.ai/zen/go`. Depending on the target model, requests route over the OpenAI Chat Completions or Anthropic Messages transport pipelines with dynamic API resolution.
+OpenCode Go serves subscription models (including Kimi, DeepSeek, GLM, Qwen, MiniMax, and Gemini) at `https://opencode.ai/inference/go/v1`. Models use Chat Completions, Responses, Anthropic Messages, or native Google Generative AI according to `api-routes`; account usage remains on the separate `/zen/go/v1/usage` route.
 
 ### Special casings
 
@@ -1501,18 +1501,18 @@ Provider-specific overrides in `packages/catalog/src/compat/rules/providers/open
 - For models minimax-m2.5: `thinking.effortMap={"low":"adaptive","medium":"adaptive","high":"adaptive"}`, `thinking.mode="anthropic-adaptive"`.
 - Provider defaults: `whenThinking={"requiresReasoningContentForToolCalls":true,"allowsSyntheticReasoningContentForToolCalls":false,"reasoningContentField":"reasoning_content"}`.
 
-- **API Resolution & Model ID Overrides**: `createOpenCodeApiResolution` (`packages/catalog/src/provider-models/openai-compat.ts`) constructs `OPENCODE_GO_API_RESOLUTION` for `https://opencode.ai/zen/go`. Explicit ID overrides (`minimax-m2.7`, `minimax-m3`, `minimax-m3-free`, `qwen3.5-plus`, `qwen3.6-plus`) take precedence over npm-based heuristics (`@ai-sdk/anthropic`), forcing route resolution to `openai-completions` at `/v1/chat/completions` to prevent gateway 404 HTML errors or raw tool-call markup leaks.
+- **API Resolution & Model ID Overrides**: `createOpenCodeApiResolution` (`packages/catalog/src/provider-models/openai-compat.ts`) resolves the model endpoint under `https://opencode.ai/inference/go`. Route pins override npm hints; `gemini-4-argon-contributor` uses `google-generative-ai` at `/v1/models/{id}:streamGenerateContent`, while MiniMax M3 and selected Qwen IDs use `openai-completions` at `/v1/chat/completions`.
 - **`X-Api-Key` Auth Normalization**: In `packages/ai/src/providers/anthropic.ts`, when `model.provider === "opencode-go"`, the transport deletes auto-generated `Authorization` Bearer headers so `AnthropicMessagesClient` emits `X-Api-Key`. Bearer-only requests to OpenCode Anthropic endpoints fail with HTTP `401 Missing API key` (#6510).
 
 ### Auth & usage
 - **API Key Login Flow**: Declared in `packages/catalog/src/compat/rules/auth/opencode-go.kdl` as a `login "api-key"` rule (`packages/ai/src/registry/engine/api-key.ts`). It directs the user to `https://opencode.ai/auth`, prompts for the API key, and returns the trimmed key stored under `OPENCODE_API_KEY`.
-- **Spend Windows**: `opencodeGoUsageProvider` (`packages/ai/src/usage/opencode-go.ts`) polls `GET /zen/go/v1/usage` per stored key (Bearer + `User-Agent` + `x-opencode-session`) and decodes the three server-computed windows (`rolling` → `rolling-5h`, `weekly`, `monthly`; each `{status: "ok" | "rate-limited", percent: 0-100, resetsAt}`) into percent limits with `resetsAt` deadlines. Ranking (`opencodeGoRankingStrategy`) uses rolling/weekly headroom; `monthly` is display-only because an exhausted monthly can still serve when the console "Use balance" fallback is on — hard monthly failures still rotate via the `401 Insufficient balance` usage-limit classification (#3169). Reactive quota 429s (`Resets in …` quota errors) rotate through `markUsageLimitReached`, with the server-stated window parsed by `extractRetryHint` (`packages/utils/src/fetch-retry.ts`).
+- **Spend Windows**: `opencodeGoUsageProvider` (`packages/ai/src/usage/opencode-go.ts`) polls the account endpoint `GET https://opencode.ai/zen/go/v1/usage` per stored key (Bearer + `User-Agent` + `x-opencode-session`). Bundled `/inference/go[/v1]` model URLs map back to this route; user-configured proxy URLs retain their own prefixes. The response's `rolling`, `weekly`, and `monthly` windows (`{status, percent, resetsAt}`) become percent limits with reset deadlines. Ranking uses rolling/weekly headroom; monthly is display-only because the console's "Use balance" fallback can still serve on an exhausted monthly window.
 - **Account funds 402**: Go can return `402 Upstream request failed: Insufficient account funds (type=server_error)` when an account cannot fund a request. OMP treats this as an account-local usage cap and retries a stored sibling API key instead of backing off on the exhausted key (#13019).
 
 ### Catalog model handling
 - **Provider entry (`opencode-go`)**: `packages/catalog/src/compat/rules/providers/opencode-go.kdl` declares default model `kimi-k2.7-code`. Environment keys: `OPENCODE_API_KEY`.
 - **Discovery replacement**: Successful authoritative discovery replaces fallback provider rows rather than retaining retired seed models.
-- **Authoritative Dynamic Models**: `opencodeGoModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) and descriptor configuration (`packages/catalog/src/compat/rules/providers/opencode-go.kdl`, default model `kimi-k2.7-code`) specify `dynamicModelsAuthoritative: true`. Successful runtime discovery via `fetchOpenAICompatibleModels` from `https://opencode.ai/zen/go/v1/models` completely replaces bundled provider models instead of merging fallback-only IDs (`model-manager.ts`).
+- **Authoritative Dynamic Models**: `opencodeGoModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) uses `dynamicModelsAuthoritative: true`. Successful discovery from `https://opencode.ai/inference/go/v1/models` replaces bundled provider rows rather than merging retired IDs (`model-manager.ts`); the bundled Go rows use the same inference endpoint for startup fallback.
 
 ## OpenCode Zen (`opencode-zen`)
 OpenCode Zen (`opencode-zen`) is a subscription service providing access to multi-vendor AI models (Anthropic Claude, DeepSeek, MiniMax, Gemini, etc.) routed through unified proxy endpoints at `https://opencode.ai/zen`. Requests are dispatched dynamically across multiple underlying transport APIs—primarily "Anthropic Messages" (`/zen`), "OpenAI Chat Completions" (`/zen/v1`), "OpenAI Responses" (`/zen/v1`), and "Google Generative AI" (`/zen/v1`)—based on catalog resolution rules, with `claude-opus-5` designated as its default model.
@@ -1651,6 +1651,21 @@ Requests are routed through the stateful OpenAI Responses transport (`api: "open
 - **Authored seeds**: `fugu`, `fugu-ultra`, `fugu-ultra-20260615`; bundle policy `fallback`. Limits, capabilities, and prices are authored alongside these rows.
 - **Dynamic Model Manager**: `sakanaModelManagerOptions` marks live `/models` discovery as authoritative
   (`dynamicModelsAuthoritative: true`) and purges stale cached model rows on seed changes via `dropCachedModelIdsOnStaticMismatch`.
+
+## SambaNova (`sambanova`)
+SambaNova Cloud serves open-weight models through the OpenAI Chat Completions transport at `https://api.sambanova.ai/v1`.
+
+### Special casings
+- **Thinking wire format**: `packages/catalog/src/compat/rules/providers/sambanova.kdl` sends `reasoning_effort` (low/medium/high) for gpt-oss and MiniMax M3. DeepSeek V3.1+ and Gemma 4 think only when `chat_template_kwargs.enable_thinking` is set, so they use the `qwen-chat-template` format with a single on-rung.
+- **Gemma 4 image input**: the same rule file declares `text` + `image` input for Gemma 4 and newer; `/v1/models` reports no modalities.
+
+### Auth & usage
+- **API Key Login**: `packages/catalog/src/compat/rules/auth/sambanova.kdl` declares a `login "api-key"` rule pointing at `https://cloud.sambanova.ai/apis` and validates the key against `https://api.sambanova.ai/v1/models`. Environment key: `SAMBANOVA_API_KEY`.
+
+### Catalog model handling
+- **Discovery**: `sambanovaModelManagerOptions` (`packages/catalog/src/provider-models/openai-compat.ts`) fetches `/v1/models` when a key is configured. The live roster is authoritative for models and prices (`dynamicModelsAuthoritative`, `dynamicCostAuthoritative`). Per-token USD price strings become per-million rates; an unreadable card is marked `unknown` instead of free.
+- **Roster exclusions**: embedding, Whisper/audio, and CLIP SKUs are dropped through the `exclude-models provider="sambanova"` rule in `runtime/behavior.kdl`.
+- **Authored seed**: `gpt-oss-120b` with its published $0.22 / $0.59 per 1M rate card; bundle policy `fallback`. It keeps the provider visible in `/model` before login and is replaced by the first live roster. SambaNova is credential-scoped in `generate-models.ts`, so the bundle never carries a generator account's roster.
 
 ## SiliconFlow (`siliconflow`)
 SiliconFlow is a high-performance AI inference platform providing access to open-source models (such as DeepSeek and GLM). It uses the OpenAI Chat Completions transport (`https://api.siliconflow.com/v1` for global, `https://api.siliconflow.cn/v1` for China region).

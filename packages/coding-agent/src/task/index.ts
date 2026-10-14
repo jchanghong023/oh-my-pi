@@ -179,6 +179,8 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		description: agent.description,
 		readOnly: isReadOnlyAgent(agent),
 		blocking: agent.blocking === true,
+		// Marked only while `task.structured` is off; with it on, every agent's result is structured.
+		structured: !options.structured && agent.structured === true,
 	}));
 	const scoutAvailable = isScoutSpawnable(options.disabledAgents, options.parentSpawns);
 	return prompt.render(taskDescriptionTemplate, {
@@ -194,6 +196,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 		structured: options.structured,
 		asyncEnabled: options.asyncEnabled,
 		hasBlockingAgents: renderedAgents.some(agent => agent.blocking),
+		hasStructuredAgents: renderedAgents.some(agent => agent.structured),
 		hasModelMentions: options.sessionAgents.length > 0,
 		ircEnabled: options.ircEnabled,
 		asyncGuidance: options.asyncGuidance,
@@ -203,6 +206,7 @@ function renderDescription(options: TaskDescriptionOptions): string {
 function createTaskModeError(text: string): AgentToolResult<TaskToolDetails> {
 	return {
 		content: [{ type: "text", text }],
+		isError: true,
 		details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 	};
 }
@@ -743,7 +747,8 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	/**
 	 * Result contract for a spawn: with `task.structured` the caller's
 	 * `outputSchema`/`schemaMode` pass through; without it the child gets no
-	 * schema or `yield` tool and returns its final message.
+	 * schema or `yield` tool and returns its final message, unless its agent
+	 * declares `structured: true` (resolved in the shared subagent policy).
 	 */
 	#resultParams(params: TaskParams): Pick<StructuredSubagentRequest, "outputSchema" | "schemaMode" | "structured"> {
 		if (!this.#isStructured()) return { structured: false };

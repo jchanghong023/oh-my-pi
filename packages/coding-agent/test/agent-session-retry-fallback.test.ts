@@ -3593,6 +3593,108 @@ describe("AgentSession retry fallback", () => {
 		expect(getLastAssistantMessage(session).stopReason).toBe("error");
 	});
 
+	describe("when a fallback candidate's provider is outside the session's account pool", () => {
+		// A session restricted to an OAuth account pool (`task.agentAccountPools`) gets a
+		// MissingApiKeyError, not `undefined`, for any provider whose pooled accounts are
+		// all unavailable. The fallback walk must treat that candidate as unavailable.
+		function blockProvider(provider: string): void {
+			const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+			vi.spyOn(modelRegistry, "getApiKey").mockImplementation((model, sessionId, options) => {
+				if (model.provider === provider) {
+					return Promise.reject(
+						new AIError.MissingApiKeyError(
+							provider,
+							`No API key for provider: ${provider} (session ${sessionId} is restricted to its OAuth account pool and none of those accounts is available)`,
+						),
+					);
+				}
+				return originalGetApiKey(model, sessionId, options);
+			});
+		}
+
+		it("skips the blocked candidate and switches to the next one in the chain", async () => {
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+			const blockedModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+			const nextModel = getBundledModel("openai", "gpt-4o-mini");
+			if (!primaryModel || !blockedModel || !nextModel) throw new Error("Expected bundled test models to exist");
+			blockProvider(blockedModel.provider);
+
+			const mock = createMockModel();
+			const requestedModels: string[] = [];
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					if (model.provider === primaryModel.provider) {
+						mock.push({ throw: "overloaded_error: provider returned error 503" });
+					} else {
+						mock.push({ content: [`ok:${model.provider}/${model.id}`] });
+					}
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.fallbackChains": {
+					default: [`${blockedModel.provider}/${blockedModel.id}`, `${nextModel.provider}/${nextModel.id}`],
+				},
+			});
+			settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+			const { retryEndEvents } = trackRetryEvents(session);
+
+			await session.prompt("Recover past a pool-blocked fallback");
+			await session.waitForIdle();
+
+			expect(requestedModels).toEqual([
+				`${primaryModel.provider}/${primaryModel.id}`,
+				`${nextModel.provider}/${nextModel.id}`,
+			]);
+			expect(retryEndEvents).toEqual([expect.objectContaining({ success: true })]);
+			expect(getLastAssistantMessage(session).stopReason).toBe("stop");
+		});
+
+		it("ends the retry as a failure when the blocked candidate is the only one left", async () => {
+			const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+			const blockedModel = getBundledModel("openai-codex", "gpt-5.6-sol");
+			if (!primaryModel || !blockedModel) throw new Error("Expected bundled test models to exist");
+			blockProvider(blockedModel.provider);
+
+			const mock = createMockModel();
+			const requestedModels: string[] = [];
+			const agent = new Agent({
+				getApiKey: model => `${model.provider}-test-key`,
+				initialState: { model: primaryModel, systemPrompt: ["Test"], tools: [], messages: [] },
+				streamFn: (model, context, options) => {
+					requestedModels.push(`${model.provider}/${model.id}`);
+					mock.push({ throw: "overloaded_error: provider returned error 503" });
+					return mock.stream(model, context, options);
+				},
+			});
+			const settings = Settings.isolated({
+				"compaction.enabled": false,
+				"retry.baseDelayMs": 5,
+				"retry.maxRetries": 1,
+				"retry.fallbackChains": { default: [`${blockedModel.provider}/${blockedModel.id}`] },
+			});
+			settings.setModelRole("default", `${primaryModel.provider}/${primaryModel.id}`);
+			session = new AgentSession({ agent, sessionManager: SessionManager.inMemory(), settings, modelRegistry });
+			const { retryEndEvents } = trackRetryEvents(session);
+
+			await session.prompt("Fail with only a pool-blocked fallback");
+			await session.waitForIdle();
+
+			const primarySelector = `${primaryModel.provider}/${primaryModel.id}`;
+			expect(requestedModels).toEqual([primarySelector, primarySelector]);
+			expect(retryEndEvents).toEqual([expect.objectContaining({ success: false, attempt: 1 })]);
+			const last = getLastAssistantMessage(session);
+			expect(last.stopReason).toBe("error");
+			expect(last.errorMessage).toStartWith("Retry budget exhausted after 1 retry:");
+		});
+	});
+
 	it("substitutes the failing model id into provider-wildcard chain entries", async () => {
 		const primaryModel = getBundledModel("google", "gemini-3.5-flash");
 		const fallbackModel = getBundledModel("google-vertex", "gemini-3.5-flash");

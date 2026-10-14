@@ -7027,6 +7027,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "heapless 0.9.3",
+ "html-escape",
  "html-to-markdown-rs",
  "icu_collator",
  "icu_locale_core",

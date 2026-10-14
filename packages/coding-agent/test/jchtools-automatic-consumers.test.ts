@@ -329,9 +329,9 @@ describe("automatic roles in text consumers", () => {
 			getCwd: () => cwd,
 		});
 
-		expect(await compress("skill", "description", "request")).toBe(firstMarker);
+		expect(await compress.compress("skill", "description", "request")).toBe(firstMarker);
 		cwd = secondDir;
-		expect(await compress("skill", "description", "request")).toBe(secondMarker);
+		expect(await compress.compress("skill", "description", "request")).toBe(secondMarker);
 		cwd = firstDir;
 		expect(await enhancer.rewrite("first speech block")).toBe(firstMarker);
 		cwd = secondDir;

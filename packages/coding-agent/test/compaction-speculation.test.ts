@@ -144,6 +144,7 @@ describe("async speculative compaction", () => {
 			resetAdvisorRuntimes: () => {},
 			rebaseAfterCompaction: () => {},
 			restoreGoalAutoOrchestrateContext: () => undefined,
+			persistEvalStateContext: () => {},
 			recordAnchoredHistoryRewrite: () => {},
 			getContextBreakdown: () => undefined,
 			getContextUsage: () => undefined,

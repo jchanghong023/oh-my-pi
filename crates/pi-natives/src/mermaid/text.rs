@@ -8,6 +8,8 @@
 //! columns is stored whole in one cell followed by [`WIDE_PAD`] in the
 //! continuation cell it covers.
 
+use std::borrow::Cow;
+
 /// Placeholder occupying the second cell of a fullwidth glyph on the canvas.
 ///
 /// U+0000 cannot appear in parsed Mermaid labels, is treated as occupied
@@ -144,6 +146,11 @@ pub fn wrap_label(label: &str, width: usize) -> String {
 /// strikethrough markers) to plain text. The ASCII renderer has no styled
 /// spans, so preserving the markup would print raw tags and markers inside
 /// node boxes. Passes run in the same order as the reference renderer.
+/// Character references (`&lt;`, `&#60;`, Mermaid's `#lt;` / `#60;`) are
+/// decoded last, so an escaped tag or marker stays literal text, the way the
+/// browser shows it. Tabs, carriage returns, and form feeds become spaces;
+/// standalone zero-width clusters are omitted, because neither occupies the
+/// canvas cell that the renderer would reserve for it.
 pub fn normalize_label(label: &str) -> String {
 	let unquoted = label
 		.strip_prefix('"')
@@ -155,7 +162,73 @@ pub fn normalize_label(label: &str) -> String {
 	let text = replace_tags(&text, &["b", "strong", "i", "em", "u", "s", "del"], false, "");
 	let text = strip_paired_marker(&text, "**");
 	let text = strip_single_star_emphasis(&text);
-	strip_paired_marker(&text, "~~")
+	let text = strip_paired_marker(&text, "~~");
+	let text = mermaid_codes_to_html(&text);
+	let text = html_escape::decode_html_entities(&text);
+	let text = if text.contains(['\t', '\r', '\u{c}']) {
+		text.replace(['\t', '\r', '\u{c}'], " ")
+	} else {
+		text.into_owned()
+	};
+	if text.is_ascii() {
+		return text;
+	}
+	let mut offset = 0;
+	let mut clusters = xutf::graphemes_str(&text);
+	for cluster in &mut clusters {
+		if cluster != "\n" && xutf::width_str(cluster) == 0 {
+			let mut visible = String::with_capacity(text.len());
+			visible.push_str(&text[..offset]);
+			for cluster in clusters {
+				if cluster == "\n" || xutf::width_str(cluster) != 0 {
+					visible.push_str(cluster);
+				}
+			}
+			return visible;
+		}
+		offset += cluster.len();
+	}
+	text
+}
+
+/// Rewrite Mermaid entity codes (`#\w+;`) as HTML character references:
+/// `#60;` → `&#60;`, `#quot;` → `&quot;`, as Mermaid does before handing
+/// labels to the browser. Codes that name no character are kept verbatim
+/// (`step #1;` is not U+0001), and so is the `#` of an HTML numeric
+/// reference (`&#60;`).
+fn mermaid_codes_to_html(text: &str) -> Cow<'_, str> {
+	if !text.contains('#') {
+		return Cow::Borrowed(text);
+	}
+	let mut out = String::with_capacity(text.len());
+	let mut reference = String::new();
+	let mut rest = text;
+	while let Some(hash) = rest.find('#') {
+		out.push_str(&rest[..hash]);
+		let after = &rest[hash + 1..];
+		let name_len = after
+			.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+			.unwrap_or(after.len());
+		let name = &after[..name_len];
+		if name_len > 0 && after[name_len..].starts_with(';') && !out.ends_with('&') {
+			reference.clear();
+			reference.push('&');
+			if name.bytes().all(|b| b.is_ascii_digit()) {
+				reference.push('#');
+			}
+			reference.push_str(name);
+			reference.push(';');
+			if matches!(html_escape::decode_html_entities(&reference), Cow::Owned(_)) {
+				out.push_str(&reference);
+				rest = &after[name_len + 1..];
+				continue;
+			}
+		}
+		out.push('#');
+		rest = after;
+	}
+	out.push_str(rest);
+	Cow::Owned(out)
 }
 
 /// Replace every `<name>` / `</name>` tag (case-insensitive, optional
@@ -318,5 +391,25 @@ mod tests {
 		assert_eq!(normalize_label("****"), "****");
 		assert_eq!(normalize_label("***a**"), "*a");
 		assert_eq!(normalize_label("**a\n**b**"), "**a\nb");
+	}
+
+	#[test]
+	fn normalize_decodes_character_references() {
+		assert_eq!(normalize_label("x &lt; y &amp;&amp; y &gt; z"), "x < y && y > z");
+		assert_eq!(normalize_label("\"&quot;q&quot; &#60;&#x3E; &rarr;\""), "\"q\" <> →");
+		assert_eq!(normalize_label("#quot;q#quot; #60;b#62; #9829;"), "\"q\" <b> ♥");
+		// Escaped markup is literal text, not a tag or emphasis marker.
+		assert_eq!(normalize_label("&lt;b&gt;x&lt;/b&gt; &#42;y&#42;"), "<b>x</b> *y*");
+		assert_eq!(normalize_label("&amp;lt; #amp;gt;"), "&lt; &gt;");
+		// Decoded tabs, CRs, and form feeds would misalign the canvas.
+		assert_eq!(normalize_label("a&#9;b#9;c&Tab;d&#13;e&#12;f"), "a b c d e f");
+		// Retain emoji ZWJ.
+		assert_eq!(normalize_label("a&ZeroWidthSpace;b#8203;c"), "abc");
+		assert_eq!(normalize_label("👩‍💻\na"), "👩‍💻\na");
+		// Unknown names, controls, and unterminated codes stay verbatim.
+		assert_eq!(
+			normalize_label("step #1; #nope; #x2192; C# &bogus; &lt"),
+			"step #1; #nope; #x2192; C# &bogus; &lt"
+		);
 	}
 }

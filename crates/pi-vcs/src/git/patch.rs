@@ -817,6 +817,30 @@ fn apply_patches_to_map(
 				message: format!("mode does not match for {}", source_path.unwrap_or_default()),
 			});
 		}
+		if source
+			.as_ref()
+			.is_some_and(|entry| entry.mode == Mode::COMMIT)
+			|| target_mode == Some(Mode::COMMIT)
+		{
+			if let Some(entry) = &source
+				&& entry.id != gitlink_id(patch, if options.reverse { b'+' } else { b'-' })?
+			{
+				return Err(Error::PatchFailed {
+					message: format!("gitlink does not match for {}", source_path.unwrap_or_default()),
+				});
+			}
+			if let Some(path) = source_path
+				&& target_path != Some(path)
+			{
+				state.remove(path);
+			}
+			if let Some(path) = target_path {
+				validate_repo_path(path).map_err(ApplyFailure::into_error)?;
+				let id = gitlink_id(patch, if options.reverse { b'-' } else { b'+' })?;
+				state.insert(path.to_owned(), FileEntry::new(id, Mode::COMMIT));
+			}
+			continue;
+		}
 		let source_bytes = match source.as_ref() {
 			Some(entry) => blob_bytes(repo, entry.id)?,
 			None => Vec::new(),
@@ -848,6 +872,18 @@ fn apply_patches_to_map(
 		}
 	}
 	Ok(())
+}
+
+fn gitlink_id(patch: &FilePatch, kind: u8) -> Result<gix::ObjectId> {
+	let id = patch
+		.hunks
+		.iter()
+		.flat_map(|hunk| &hunk.lines)
+		.find(|line| line.kind == kind)
+		.and_then(|line| line.data.strip_prefix(b"Subproject commit "))
+		.ok_or_else(|| Error::PatchFailed { message: "gitlink patch lacks a commit id".into() })?;
+	gix::ObjectId::from_hex(id)
+		.map_err(|_| Error::PatchFailed { message: "gitlink patch has an invalid commit id".into() })
 }
 
 fn patch_sides(
@@ -1769,7 +1805,9 @@ fn checkout_changed_paths(
 	unstaged: &BTreeSet<String>,
 ) -> Result<()> {
 	for path in changed {
+		// A gitlink changes the index, not the initialized submodule directory.
 		match worktree.get(path) {
+			Some(entry) if entry.mode == Mode::COMMIT => {},
 			Some(entry) => write_worktree_entry(repo, gix_repo, filter, path, entry)?,
 			None => remove_worktree_path(repo, path)?,
 		}
@@ -1780,7 +1818,7 @@ fn checkout_changed_paths(
 		let Some(entry) = merged.get(path) else {
 			continue;
 		};
-		let stat = if unstaged.contains(path) {
+		let stat = if entry.mode == Mode::COMMIT || unstaged.contains(path) {
 			Stat::default()
 		} else {
 			let metadata = gix::index::fs::Metadata::from_path_no_follow(&repo.root().join(path))?;

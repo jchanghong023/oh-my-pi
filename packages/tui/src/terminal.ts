@@ -30,7 +30,7 @@ import {
 } from "./terminal-capabilities";
 import { tmuxMultiplexer } from "./multiplexers/tmux";
 import type { TerminalMultiplexerBackgroundColorCache } from "./multiplexers/types";
-import { terminalMultiplexerSessions } from "./terminal-multiplexer";
+import { classifyTerminalMultiplexerModule, terminalMultiplexerSessions } from "./terminal-multiplexer";
 import { setTmuxPaneApcTitles, tmuxSessionSpeaksTsp } from "./tmux";
 import { setHangulCompatibilityJamoWidth } from "./utils";
 import { translateWindowsAltGrSequence } from "./windows-altgr";
@@ -889,6 +889,12 @@ export class ProcessTerminal implements Terminal {
 	/** Resolved DECRQM support per private mode (mode → supported). */
 	#privateModeSupport = new Map<number, boolean>();
 	#privateModeCallbacks: PrivateModeReportHandler[] = [];
+	/**
+	 * Whether output and input reassert DEC 2004: set once DECRPM confirms it,
+	 * or at input attach inside a multiplexer that gates paste markers on the
+	 * pane's own mode without answering DECRQM (tmux <= 3.5a, #15596).
+	 */
+	#rearmBracketedPaste = false;
 	/** Whether DEC 2048 in-band resize notifications are currently enabled. */
 	#inBandResizeActive = false;
 	/** Reassembly buffer for a DEC 2048 in-band resize report split across stdin reads. */
@@ -1128,6 +1134,9 @@ export class ProcessTerminal implements Terminal {
 
 		// Enable bracketed paste mode - terminal will wrap pastes in \x1b[200~ ... \x1b[201~
 		this.#safeWrite("\x1b[?2004h");
+		this.#rearmBracketedPaste =
+			terminalMultiplexerSessions($env).some(multiplexer => multiplexer.gatesBracketedPaste) ||
+			classifyTerminalMultiplexerModule($env)?.gatesBracketedPaste === true;
 
 		// Force normal cursor-key (DECCKM) and numeric-keypad mode (terminfo
 		// `rmkx` = "\x1b[?1l\x1b>"). omp decodes both CSI ("\x1b[A") and SS3
@@ -1674,7 +1683,7 @@ export class ProcessTerminal implements Terminal {
 		// Handler that pipes stdin data through the buffer
 		this.#stdinDataHandler = (data: string) => {
 			// Recover modes reset by the host before the user's next paste.
-			if (data && this.#active && this.#privateModeSupport.get(2004)) this.#safeWrite("\x1b[?2004h");
+			if (data && this.#active && this.#rearmBracketedPaste) this.#safeWrite("\x1b[?2004h");
 			if (this.#win32PasteNormalizer) this.#win32PasteNormalizer.process(data);
 			else this.#stdinBuffer!.process(data);
 		};
@@ -2075,6 +2084,7 @@ export class ProcessTerminal implements Terminal {
 		// only true here after an explicit DECRPM reply (the DA1-sentinel
 		// fallback resolves unsupported).
 		if (mode === 2004 && supported) {
+			this.#rearmBracketedPaste = true;
 			this.#stdinBuffer?.setRawPasteStallProbe(this.#isLoopStalled);
 		}
 	}
@@ -2302,6 +2312,7 @@ export class ProcessTerminal implements Terminal {
 		this.#da1SentinelOwners.length = 0;
 		this.#privateModeCallbacks = [];
 		this.#privateModeSupport.clear();
+		this.#rearmBracketedPaste = false;
 		this.#xtermScrollToBottomRestoreModes.clear();
 		this.#reportedColumns = undefined;
 		this.#reportedRows = undefined;
@@ -2413,7 +2424,7 @@ export class ProcessTerminal implements Terminal {
 	write(data: string): void {
 		// Hosts can reset bracketed paste (e.g. iTerm2's Terminal State toggle).
 		// Reassert it with existing output, never on a timer while idle.
-		if (data && this.#active && this.#privateModeSupport.get(2004)) data = `\x1b[?2004h${data}`;
+		if (data && this.#active && this.#rearmBracketedPaste) data = `\x1b[?2004h${data}`;
 		this.#safeWrite(data);
 		if (this.#writeLogPath) {
 			try {

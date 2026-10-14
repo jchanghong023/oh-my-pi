@@ -2281,7 +2281,15 @@ export class TurnRecovery {
 				if (!this.#host.contextFitsModel(candidate, options?.preserveFailedTurn ? undefined : failedMessage)) {
 					continue;
 				}
-				const apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+				// A session restricted to an OAuth account pool throws for a provider
+				// none of its pooled accounts can serve; that candidate is unavailable,
+				// exactly like one without a credential.
+				let apiKey: string | undefined;
+				try {
+					apiKey = await this.#host.modelRegistry.getApiKey(candidate, this.#host.sessionId());
+				} catch (error) {
+					if (!(error instanceof AIError.MissingApiKeyError)) throw error;
+				}
 				if (!apiKey) continue;
 				const previousEditMode = this.#host.resolveActiveEditMode();
 				const previousSystemPrompt = [...this.#host.agent.state.systemPrompt];
