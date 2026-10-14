@@ -8,7 +8,7 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
-import { gateRepoRoot, runFastcheck, runGateCommands } from "./fastcheck";
+import { gateRepoRoot, gatePoolWidth, runFastcheck, runGateCommands } from "./fastcheck";
 import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { captureSourceIdentity } from "./test-gate-source";
 
@@ -285,9 +285,11 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		);
 		// Share one bounded command budget instead of opening two full pools.
 		// Reserve one live test worker; release the other slots after the strict
-		// fastcheck gate settles. Each side still runs independent work in parallel.
-		const concurrency = Math.min(4, Math.max(2, os.availableParallelism()));
-		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, concurrency - 1));
+		// fastcheck gate settles. Each side still runs independent work in
+		// parallel: per-file tests spread wide, multithreaded static checks
+		// (tsgo/clippy) keep their narrower pool so they do not thrash.
+		const concurrency = gatePoolWidth();
+		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(undefined, 3, 12)));
 		const results = await Promise.allSettled([fastcheck, runGateCommands(gate, tests, concurrency, fastcheck)]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
 		// Runtime mechanism selftests use short injected charged budgets. Run

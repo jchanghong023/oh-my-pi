@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
-import { parseFastcheckArgs, runGateCommands } from "./fastcheck";
+import { parseFastcheckArgs, gatePoolWidth, runGateCommands } from "./fastcheck";
 import { parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
@@ -106,6 +106,21 @@ process.exit(exitCode);
 });
 
 describe("standard gate charged-budget parameters", () => {
+	test("independent-command pool width scales with the host and stays clamped", () => {
+		expect(gatePoolWidth(0)).toBe(4);
+		expect(gatePoolWidth(1)).toBe(4);
+		expect(gatePoolWidth(4)).toBe(4);
+		expect(gatePoolWidth(8)).toBe(4);
+		expect(gatePoolWidth(9)).toBe(4);
+		expect(gatePoolWidth(10)).toBe(5);
+		expect(gatePoolWidth(32)).toBe(16);
+		expect(gatePoolWidth(64)).toBe(16);
+		// The narrower multithreaded static-check pool (tsgo/clippy lanes).
+		expect(gatePoolWidth(32, 3, 12)).toBe(10);
+		expect(gatePoolWidth(12, 3, 12)).toBe(4);
+		expect(gatePoolWidth(48, 3, 12)).toBe(12);
+	});
+
 	test("fastcheck accepts only a finite positive downward limit", () => {
 		expect(parseFastcheckArgs(["--limit-seconds=0.25"])).toEqual({ limitSeconds: 0.25 });
 		expect(parseFastcheckArgs(["--limit-seconds=90"])).toEqual({ limitSeconds: 90 });

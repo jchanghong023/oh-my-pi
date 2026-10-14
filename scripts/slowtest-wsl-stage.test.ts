@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,6 +18,21 @@ import {
 import type { GateCapture, GateCommand, GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-runtime";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
+
+/**
+ * Git for Windows layouts ship bash.exe beside git.exe (mingw64/bin), in the
+ * top-level bin/, or only in usr/bin; resolve whichever one this install has.
+ */
+function resolveGitBash(): string | null {
+	if (process.platform !== "win32") return Bun.which("bash");
+	const git = Bun.which("git");
+	if (!git) return null;
+	return (
+		["../bin/bash.exe", "../../bin/bash.exe", "../../usr/bin/bash.exe"]
+			.map(relative => path.resolve(path.dirname(git), relative))
+			.find(existsSync) ?? null
+	);
+}
 
 function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCapture> = async () => "") {
 	const commands: GateCommand[] = [];
@@ -334,8 +350,7 @@ describe("streamed deployed fixed-commit execution", () => {
 		const git = Bun.which("git");
 		if (process.platform === "win32" && !git)
 			throw new Error("Source stability selftest requires the existing Git Bash installation");
-		const bash =
-			process.platform === "win32" ? path.resolve(path.dirname(git!), "../bin/bash.exe") : Bun.which("bash");
+		const bash = resolveGitBash();
 		if (!bash) throw new Error("Source stability selftest requires the existing shell");
 		await fs.access(bash);
 		// The read-only Git stub models a fixed tracked binding and an initially
@@ -557,10 +572,7 @@ describe("streamed deployed fixed-commit execution", () => {
 		await fs.mkdir(control);
 		const python = Bun.which(process.platform === "win32" ? "python" : "python3");
 		if (!python) throw new Error("Cancellation selftest requires the existing Python interpreter");
-		const bash =
-			process.platform === "win32"
-				? path.resolve(path.dirname(Bun.which("git")!), "../bin/bash.exe")
-				: Bun.which("bash");
+		const bash = resolveGitBash();
 		if (!bash) throw new Error("Cancellation selftest requires the existing shell");
 		const bin = path.join(directory, "bin");
 		await fs.mkdir(bin);
