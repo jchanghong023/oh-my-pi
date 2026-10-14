@@ -12,6 +12,7 @@ import { getThemeByName, initTheme, theme, type Theme } from "@oh-my-pi/pi-tui/t
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { AskTool } from "@oh-my-pi/pi-coding-agent/tools/ask";
 import { askToolRenderer } from "@oh-my-pi/pi-tui/tools/ask";
+import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
@@ -1409,6 +1410,44 @@ describe("askToolRenderer malformed call args", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
+	it("auto-selects 提交 in the real ask dialog when recommended is null", async () => {
+		const tool = new AskTool(createSession({ settings: Settings.isolated({ "ask.timeout": 0.001 }) }));
+		const result = await tool.execute(
+			"call-null-recommendation",
+			{
+				questions: [
+					{
+						id: "commit",
+						question: "是否提交？",
+						options: [{ label: "不提交" }, { label: "提交" }],
+						// Optional provider fields arrive as null in the real dev call.
+						recommended: null as unknown as number,
+					},
+				],
+			},
+			undefined,
+			undefined,
+			createContext({
+				askDialog: async (questions, options) => {
+					const answer = Promise.withResolvers<ExtensionAskDialogResult | undefined>();
+					const dialog = new AskDialogComponent(
+						questions,
+						{ onSubmit: answer.resolve, onCancel: () => answer.resolve(undefined), onPrompt: async () => undefined },
+						{ timeout: options?.timeout },
+					);
+					try {
+						dialog.render(80);
+						return await answer.promise;
+					} finally {
+						dialog.dispose();
+					}
+				},
+			}),
+		);
+		expect(result.details?.selectedOptions).toEqual(["提交"]);
+		expect(result.details?.timedOut).toBe(true);
+	});
+
 	it("accepts new schema fields (header, preview, note) and maps them into AskToolDetails", async () => {
 		const tool = new AskTool(createSession());
 		const askDialog = vi.fn().mockResolvedValue({

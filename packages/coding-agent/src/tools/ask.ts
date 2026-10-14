@@ -157,7 +157,7 @@ function addRecommendedSuffix(options: AskOption[], recommendedIndex?: number): 
 }
 
 function getAskTimeoutRecommendation(options: AskOption[], recommended?: number): number | undefined {
-	if (recommended !== undefined) return recommended;
+	if (recommended != null) return recommended;
 	let affirmative: number | undefined;
 	for (let index = 0; index < options.length; index++) {
 		const label = options[index]!.label.trim();
