@@ -91,7 +91,7 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 		const presetIds = Object.keys(modelRoles);
 		return (
 			presetIds.length === roleIds.length &&
-			presetIds.every(role => Object.hasOwn(roles, role) && roles[role] === modelRoles[role])
+			roleIds.every(role => Object.hasOwn(modelRoles, role) && roles[role] === modelRoles[role])
 		);
 	});
 }

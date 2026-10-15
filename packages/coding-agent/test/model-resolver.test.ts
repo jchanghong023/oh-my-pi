@@ -481,6 +481,7 @@ describe("pickDefaultAvailableModel", () => {
 		const lateRegistry = { getAvailable: () => [remote, latePriority], getAll: () => [remote, latePriority] };
 		const resolvedCli = resolveCliModel({ cliModel: "@smol", modelRegistry: lateRegistry, settings });
 		expect(resolvedCli.model).toBe(latePriority);
+		expect(resolvedCli.configuredPatternIndex).toBe(0);
 		const resumedPatterns = resolvedCli.configuredPatterns?.slice(resolvedCli.configuredPatternIndex) ?? [];
 		expect(resolveModelOverride(resumedPatterns, lateRegistry, settings).model).toBe(latePriority);
 		for (const source of [{ requestModel: "@smol" }, { settingsOverride: "@smol" }, { agentModel: "@smol" }]) {
@@ -1725,7 +1726,31 @@ describe("resolveCliModel", () => {
 
 		expect(result.model?.provider).toBe("anthropic");
 		expect(result.configuredPatternIndex).toBe(1);
+		expect(result.expandedPatternIndex).toBe(1);
 		expect(result.configuredPatterns).toEqual(["runtime-provider/runtime-model", "anthropic/claude-sonnet-4-5"]);
+	});
+
+	test("retains automatic role aliases without losing earlier unresolved primary candidates", () => {
+		const fallback = roleChainModel("anthropic", "claude-haiku-4-5");
+		const primary = roleChainModel("runtime-provider", "runtime-model");
+		const settings = Settings.isolated({
+			modelRoles: { smol: "runtime-provider/runtime-model,@smol" },
+		});
+		const registry = { getAll: () => [fallback], getAvailable: () => [fallback] };
+		const result = resolveCliModel({ cliModel: "smol", modelRegistry: registry, settings });
+
+		expect(result.model).toBe(fallback);
+		expect(result.expandedPatternIndex).toBeGreaterThan(0);
+		expect(result.configuredPatterns).toEqual(["@smol"]);
+		expect(result.configuredPatternIndex).toBe(0);
+		const retainedPatterns = result.configuredPatterns?.slice(result.configuredPatternIndex) ?? [];
+		expect(resolveModelOverride(retainedPatterns, registry, settings).model).toBe(fallback);
+
+		const extendedRegistry = { getAll: () => [fallback, primary], getAvailable: () => [fallback, primary] };
+		const afterExtensions = resolveCliModel({ cliModel: "smol", modelRegistry: extendedRegistry, settings });
+		expect(afterExtensions.model).toBe(primary);
+		expect(afterExtensions.expandedPatternIndex).toBe(0);
+		expect(resolveModelOverride(retainedPatterns, extendedRegistry, settings).model).toBe(primary);
 	});
 
 	test("does not fuzzy-match unresolved configured roles", () => {

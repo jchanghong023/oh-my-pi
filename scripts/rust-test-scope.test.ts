@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 
 import {
+	affectedRustTestCommands,
 	parseFulltestChangedPaths,
 	selectRustTestScope,
 	type CargoLockPackageForRustScope,
@@ -11,15 +12,25 @@ import {
 const REPO_ROOT = "/repo";
 const VENDORED_EXCLUDES = ["brush-core", "brush-parser", "cfg_aliases", "napi"];
 
-function workspace(packages: { name: string; path: string; dependencies?: string[] }[]): CargoMetadataForRustScope {
-	const metadataPackages = packages.map(({ name, path, dependencies = [] }) => ({
-		id: `${name}@1.0.0`,
-		name,
-		version: "1.0.0",
-		source: null,
-		manifest_path: `${REPO_ROOT}/${path}/Cargo.toml`,
-		dependencies: dependencies.map(dependency => ({ name: dependency })),
-	}));
+function workspace(
+	packages: {
+		name: string;
+		path: string;
+		dependencies?: string[];
+		targets?: { kind: string[]; doctest: boolean }[];
+	}[],
+): CargoMetadataForRustScope {
+	const metadataPackages = packages.map(
+		({ name, path, dependencies = [], targets = [{ kind: ["lib"], doctest: true }] }) => ({
+			id: `${name}@1.0.0`,
+			name,
+			version: "1.0.0",
+			source: null,
+			manifest_path: `${REPO_ROOT}/${path}/Cargo.toml`,
+			dependencies: dependencies.map(dependency => ({ name: dependency })),
+			targets,
+		}),
+	);
 	return {
 		packages: metadataPackages,
 		workspace_members: metadataPackages.map(pkg => pkg.id),
@@ -185,6 +196,51 @@ describe("Rust affected test scope", () => {
 				crates: ["leaf"],
 			});
 		}
+	});
+
+	it("keeps cdylib-only affected tests without scheduling an invalid doctest phase", () => {
+		const metadata = workspace([
+			{ name: "pi-natives", path: "crates/pi-natives", targets: [{ kind: ["cdylib"], doctest: true }] },
+			{ name: "unrelated", path: "crates/unrelated" },
+		]);
+		const scope = selectRustTestScope(["crates/pi-natives/src/lib.rs"], metadata, REPO_ROOT, VENDORED_EXCLUDES);
+		const commands = affectedRustTestCommands(scope.crates, metadata);
+
+		expect(scope.crates).toEqual(["pi-natives"]);
+		expect(commands).toHaveLength(1);
+		expect(commands[0]?.slice(0, 3)).toEqual(["cargo", "nextest", "run"]);
+		expect(commands[0]?.filter((_, index, command) => command[index - 1] === "-p")).toEqual(["pi-natives"]);
+	});
+
+	it("keeps every selected nextest package but only enabled Rust library doctests", () => {
+		const metadata = workspace([
+			{ name: "native", path: "crates/native", targets: [{ kind: ["cdylib"], doctest: true }] },
+			{ name: "library", path: "crates/library" },
+			{ name: "disabled", path: "crates/disabled", targets: [{ kind: ["lib"], doctest: false }] },
+			{ name: "binary", path: "crates/binary", targets: [{ kind: ["bin"], doctest: true }] },
+			{ name: "static", path: "crates/static", targets: [{ kind: ["staticlib"], doctest: true }] },
+			{ name: "dynamic", path: "crates/dynamic", targets: [{ kind: ["dylib"], doctest: true }] },
+			{ name: "rlib", path: "crates/rlib", targets: [{ kind: ["rlib", "cdylib"], doctest: true }] },
+			{ name: "macro", path: "crates/macro", targets: [{ kind: ["proc-macro"], doctest: true }] },
+			{ name: "unrelated", path: "crates/unrelated" },
+		]);
+		const scope = selectRustTestScope(
+			metadata.packages.filter(pkg => pkg.name !== "unrelated").map(pkg => `crates/${pkg.name}/src/lib.rs`),
+			metadata,
+			REPO_ROOT,
+			VENDORED_EXCLUDES,
+		);
+		const commands = affectedRustTestCommands(scope.crates, metadata);
+
+		expect(scope.kind).toBe("affected");
+		expect(commands).toHaveLength(2);
+		expect(commands[0]?.filter((_, index, command) => command[index - 1] === "-p")).toEqual(scope.crates);
+		expect(commands[1]?.slice(0, 3)).toEqual(["cargo", "test", "--doc"]);
+		expect(commands[1]?.filter((_, index, command) => command[index - 1] === "-p")).toEqual([
+			"library",
+			"macro",
+			"rlib",
+		]);
 	});
 
 	it("fails closed when the fulltest changed-path input is missing or malformed", () => {

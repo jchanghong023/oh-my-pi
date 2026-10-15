@@ -47,6 +47,12 @@ try {
 } catch (error) {
 	console.error(error instanceof Error ? error.message : String(error));
 	const exitCode = (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1;
-	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode));
+	reportGateFailure(
+		new GateCommandError(
+			error instanceof Error ? error.message : String(error),
+			exitCode,
+			exitCode === 127 ? "MISSING_TOOL" : "FAIL",
+		),
+	);
 	process.exit(exitCode);
 }

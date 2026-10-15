@@ -104,6 +104,32 @@ impl Owner {
 		result
 	}
 
+	// Recovery runs before a BuildIdentity exists. It must use the connection
+	// covered by the physical import lease, never reopen a retargeted profile.
+	fn with_import_storage<T>(
+		&self,
+		cancel: &CancelToken,
+		database: &str,
+		work: impl FnOnce(&Storage) -> CoreResult<T>,
+	) -> CoreResult<T> {
+		let state = loop {
+			self.check_import(cancel)?;
+			if let Some(state) = self.storage.try_lock_for(Duration::from_millis(10)) {
+				break state;
+			}
+		};
+		self.check_import(cancel)?;
+		if state.identity != database
+			|| database::file_identity(Path::new(&self.database_path))? != database
+		{
+			return Err(WikiError::message("Documentation database changed during document indexing"));
+		}
+		let storage = state.storage.as_ref().ok_or_else(|| {
+			WikiError::message("Documentation storage closed during document indexing")
+		})?;
+		work(storage)
+	}
+
 	// Cleanup deliberately ignores cancellation and owner closure. An accepted
 	// commit must remain removable even after close() interrupted the importer.
 	fn rollback(&self, build: &BuildIdentity) -> CoreResult<()> {

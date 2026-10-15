@@ -137,9 +137,11 @@ describe("JCH scope parsing through the public ACP dispatcher", () => {
 });
 
 describe("JCH batch argument parsing", () => {
-	it("separates both counts while preserving task markup and whitespace-sensitive code", async () => {
+	it.each([" ", "\n", "\r\n"])("preserves task markup and code whitespace after delimiter %j", async delimiter => {
 		const { runtime, output } = textRuntime();
 		const task = [
+			"    first()",
+			"    second()",
 			"审查 src/a.ts & src/b.ts",
 			"保留 <T>、{{targetItems}} 和 $& 原文",
 			"```ts",
@@ -149,8 +151,10 @@ describe("JCH batch argument parsing", () => {
 			"",
 			"",
 			"| padded | cells |",
+			"  \t",
+			"",
 		].join("\r\n");
-		const result = await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch 200\t30\n${task}`, runtime);
+		const result = await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch 200\t30${delimiter}${task}`, runtime);
 		if (!result || !("prompt" in result)) throw new Error("Expected a residual model prompt");
 		expect(result.prompt.startsWith("workflowz\n")).toBe(true);
 		expect(result.prompt.split("## 任务正文\n\n")[1]).toBe(task);
@@ -160,6 +164,8 @@ describe("JCH batch argument parsing", () => {
 	it.each([
 		["non-positive count", "0 30 审查"],
 		["missing task", "200 30"],
+		["blank task", "2 1\r\n    \r\n\t"],
+		["unsafe task target", "9007199254740992 30 审查"],
 		["unsafe count", "200 9007199254740992 审查"],
 	])("rejects %s without starting a model turn", async (_boundary, args) => {
 		const { runtime, output } = textRuntime();

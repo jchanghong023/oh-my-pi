@@ -51,6 +51,7 @@ const invoke = async () => {
 			new GateCommandError(
 				error instanceof Error ? error.message : String(error),
 				(error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
+				(error as NodeJS.ErrnoException).code === "ENOENT" ? "MISSING_TOOL" : "FAIL",
 			),
 		);
 		throw error;

@@ -124,6 +124,36 @@ describe("RpcSessionDirectoryService", () => {
 		expect(content).toContain('"id":"s-save"');
 	});
 
+	test("rename refuses an externally owned session without changing it and succeeds after release", async () => {
+		const fx = await setup();
+		const sessionId = `s-rename-leased-${crypto.randomUUID()}`;
+		const file = await writeSession(fx.sessionDir, sessionId, fx.cwd, "Original owner title");
+		const original = await Bun.file(file).text();
+		const [entry] = await fx.service.list();
+		const lease = tryAcquireSessionLease(sessionId);
+		expect(lease).not.toBeNull();
+		try {
+			await expect(fx.service.rename(sessionId, "Renamed externally", entry!.revision)).rejects.toMatchObject({
+				code: "execution_failed",
+				message: expect.stringContaining("another process"),
+			});
+			expect(await Bun.file(file).text()).toBe(original);
+			expect((await fx.service.list())[0]!.name).toBe("Original owner title");
+		} finally {
+			lease!.release();
+		}
+		expect(await fx.service.rename(sessionId, "Renamed after closing", entry!.revision)).toMatchObject({
+			name: "Renamed after closing",
+			current: false,
+		});
+		const released = tryAcquireSessionLease(sessionId);
+		try {
+			expect(released).not.toBeNull();
+		} finally {
+			released?.release();
+		}
+	});
+
 	test("rename of the hosted session routes through the live session", async () => {
 		const fx = await setup();
 		const sessionFile = await writeSession(fx.sessionDir, "s-live", fx.cwd, "Old");
@@ -148,23 +178,29 @@ describe("RpcSessionDirectoryService", () => {
 			sessionDir: fx.sessionDir,
 			getSession: () => liveSession as never,
 		});
-		const [entry] = await service.list();
-		const renamed = await service.rename("s-live", "Renamed live", entry!.revision);
-		expect(names).toEqual(["Renamed live"]);
-		// The listing reflects the header re-read after the live rename attempt.
-		expect(renamed.sessionId).toBe("s-live");
-		await expect(service.rename("s-live", "Stale live", entry!.revision)).rejects.toMatchObject({
-			code: "revision_conflict",
-		});
-		expect(names).toEqual(["Renamed live"]);
-		// A streaming session refuses the rename instead of interleaving writes.
-		const streaming = { ...liveSession, isStreaming: true };
-		const streamingService = new RpcSessionDirectoryService({
-			cwd: fx.cwd,
-			sessionDir: fx.sessionDir,
-			getSession: () => streaming as never,
-		});
-		await expect(streamingService.rename("s-live", "Nope")).rejects.toMatchObject({ code: "execution_failed" });
+		const lease = tryAcquireSessionLease("s-live");
+		expect(lease).not.toBeNull();
+		try {
+			const [entry] = await service.list();
+			const renamed = await service.rename("s-live", "Renamed live", entry!.revision);
+			expect(names).toEqual(["Renamed live"]);
+			// The listing reflects the header re-read after the live rename attempt.
+			expect(renamed.sessionId).toBe("s-live");
+			await expect(service.rename("s-live", "Stale live", entry!.revision)).rejects.toMatchObject({
+				code: "revision_conflict",
+			});
+			expect(names).toEqual(["Renamed live"]);
+			// A streaming session refuses the rename instead of interleaving writes.
+			const streaming = { ...liveSession, isStreaming: true };
+			const streamingService = new RpcSessionDirectoryService({
+				cwd: fx.cwd,
+				sessionDir: fx.sessionDir,
+				getSession: () => streaming as never,
+			});
+			await expect(streamingService.rename("s-live", "Nope")).rejects.toMatchObject({ code: "execution_failed" });
+		} finally {
+			lease!.release();
+		}
 	});
 
 	test("delete refuses the hosted session and guards revisions", async () => {

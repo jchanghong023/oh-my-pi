@@ -1398,8 +1398,14 @@ export class Editor implements Component, Focusable {
 					? visibleWidth(this.cursorOverride)
 					: this.#getStyledInputCursor().width;
 			placeholderIndent = cursorWidth + PLACEHOLDER_MIN_GAP;
-			const placeholderWidth = contentAreaWidth - placeholderIndent;
-			if (placeholderWidth > 0) placeholderLines = wrapTextWithAnsi(replaceTabs(placeholder), placeholderWidth);
+			const placeholderWidth = Math.max(1, contentAreaWidth - placeholderIndent);
+			if (contentAreaWidth > 0) {
+				placeholderLines = wrapTextWithAnsi(replaceTabs(placeholder), placeholderWidth);
+				if (visibleWidth(placeholderLines[0] ?? "") > contentAreaWidth - placeholderIndent) {
+					// Keep the cursor gap intact; an oversized first grapheme starts on the next row.
+					placeholderLines.unshift("");
+				}
+			}
 		}
 		const paintedContentLines = Math.max(layoutLines.length, placeholderLines?.length ?? 0);
 		const visibleContentHeight = this.#getVisibleContentHeight(paintedContentLines + this.contentPaddingBottom);
@@ -1676,13 +1682,20 @@ export class Editor implements Component, Focusable {
 			);
 		}
 		for (let index = visibleLayoutLines.length; index < contentRows; index++) {
-			const placeholderLine = index < visibleTextHeight ? placeholderLines?.[index] : undefined;
-			const text = placeholderLine ? padding(placeholderIndent) + placeholderLine : "";
+			let placeholderLine = index < visibleTextHeight ? placeholderLines?.[index] : undefined;
+			let placeholderLineWidth = placeholderLine ? visibleWidth(placeholderLine) : 0;
+			if (placeholderLineWidth > lineContentWidth) {
+				placeholderLine = sliceByColumn(placeholderLine!, 0, lineContentWidth, true);
+				placeholderLineWidth = visibleWidth(placeholderLine);
+			}
+			// Wrapping can retain a wide grapheme even with a one-cell budget.
+			const indent = Math.min(placeholderIndent, Math.max(0, lineContentWidth - placeholderLineWidth));
+			const text = placeholderLine ? padding(indent) + placeholderLine : "";
 			result.push(
 				...style.renderRow({
 					...chromeCtx,
 					text,
-					pad: padding(Math.max(0, lineContentWidth - (placeholderLine ? visibleWidth(text) : 0))),
+					pad: padding(Math.max(0, lineContentWidth - (placeholderLine ? indent + placeholderLineWidth : 0))),
 					gutter: promptGutter?.continuation ?? "",
 					isLastRow: index === contentRows - 1,
 					cursorOverflow: 0,

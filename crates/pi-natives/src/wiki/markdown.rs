@@ -82,6 +82,11 @@ pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token
 		reconstructed.push('\n');
 	}
 	if context.continues_line {
+		if let Some(prefix) = context.fence_prefix.as_ref()
+			&& let Some(marker) = prefix.find(['`', '~'])
+		{
+			reconstructed.push_str(&prefix[..marker]);
+		}
 		reconstructed.push_str("    ");
 	}
 	reconstructed.push_str(source);
@@ -255,8 +260,9 @@ pub(crate) struct ContextSection {
 
 #[derive(Clone, Copy)]
 struct Fence {
-	marker: char,
-	length: usize,
+	marker:      char,
+	length:      usize,
+	quote_depth: usize,
 }
 
 #[derive(Default)]
@@ -264,6 +270,8 @@ struct MarkdownFenceScanner {
 	fence:           Option<Fence>,
 	continues_line:  bool,
 	spaces:          usize,
+	quote_depth:     usize,
+	after_quote:     bool,
 	matched:         Option<Fence>,
 	trailing:        u8,
 	in_info:         bool,
@@ -273,16 +281,47 @@ struct MarkdownFenceScanner {
 
 impl MarkdownFenceScanner {
 	fn append(&mut self, source: &str) {
-		for character in source.chars() {
+		let mut line_start = (!self.continues_line).then_some(0);
+		for (position, character) in source.char_indices() {
 			if character == '\n' {
+				if self
+					.fence
+					.is_some_and(|fence| self.quote_depth < fence.quote_depth)
+				{
+					let blank = !self.invalid && self.matched.is_none();
+					// Missing quote markers may be lazy paragraph continuation.
+					// Use the shared lexer for actual block interruptions instead of
+					// treating every unquoted line as an end to the container.
+					let interrupted = self.invalid
+						&& line_start.is_some_and(|start| {
+							let tokens = block::lex(&source[start..=position]);
+							let mut children = tokens.as_slice();
+							for _ in 0..self.quote_depth {
+								children = children
+									.first()
+									.and_then(|token| token.children.as_deref())
+									.unwrap_or(&[]);
+							}
+							children.first().is_some_and(|token| {
+								!matches!(token.kind, TokenKind::Paragraph | TokenKind::Text)
+							})
+						});
+					if blank || interrupted {
+						self.fence = None;
+					}
+				}
 				if !self.invalid
 					&& let Some(matched) = self.matched.filter(|matched| matched.length >= 3)
 				{
 					self.fence = match self.fence {
 						None if matched.marker != '`' || self.trailing != 2 => Some(matched),
+						Some(fence) if matched.quote_depth < fence.quote_depth => {
+							(matched.marker != '`' || self.trailing != 2).then_some(matched)
+						},
 						Some(fence)
 							if fence.marker == matched.marker
 								&& matched.length >= fence.length
+								&& matched.quote_depth == fence.quote_depth
 								&& self.trailing == 0 =>
 						{
 							None
@@ -292,11 +331,14 @@ impl MarkdownFenceScanner {
 				}
 				self.continues_line = false;
 				self.spaces = 0;
+				self.quote_depth = 0;
+				self.after_quote = false;
 				self.matched = None;
 				self.trailing = 0;
 				self.in_info = false;
 				self.invalid = false;
 				self.carriage_return = false;
+				line_start = Some(position + 1);
 				continue;
 			}
 			self.continues_line = true;
@@ -320,10 +362,32 @@ impl MarkdownFenceScanner {
 						self.trailing = 1;
 					}
 				}
+			} else if self.after_quote && character == ' ' {
+				self.after_quote = false;
+			} else if self.after_quote && character == '\t' {
+				// The shared lexer expands tabs to four spaces before stripping
+				// the one optional space following a quote marker.
+				self.after_quote = false;
+				self.spaces = 3;
 			} else if character == ' ' && self.spaces < 3 {
+				self.after_quote = false;
 				self.spaces += 1;
+			} else if character == '>'
+				&& self
+					.fence
+					.is_none_or(|fence| self.quote_depth < fence.quote_depth)
+			{
+				// Match the shared lexer's recursively stripped blockquote markers,
+				// but never interpret a marker inside an already-open code block.
+				self.quote_depth += 1;
+				self.spaces = 0;
+				self.after_quote = true;
 			} else if character == '`' || character == '~' {
-				self.matched = Some(Fence { marker: character, length: 1 });
+				self.matched = Some(Fence {
+					marker:      character,
+					length:      1,
+					quote_depth: self.quote_depth,
+				});
 			} else {
 				self.invalid = true;
 			}
@@ -408,10 +472,11 @@ impl SectionContextScanner {
 		}
 		SectionContext {
 			shape:          Shape::Content,
-			fence_prefix:   self
-				.scanner
-				.fence
-				.map(|fence| std::iter::repeat_n(fence.marker, fence.length).collect()),
+			fence_prefix:   self.scanner.fence.map(|fence| {
+				let mut prefix = "> ".repeat(fence.quote_depth);
+				prefix.extend(std::iter::repeat_n(fence.marker, fence.length));
+				prefix
+			}),
 			continues_line: self.scanner.continues_line,
 			before:         String::new(),
 			after:          String::new(),
@@ -581,7 +646,7 @@ mod tests {
 				let trailing = matched.get(2).unwrap().as_str();
 				fence = match fence {
 					None if marker != '`' || !trailing.contains('`') => {
-						Some(Fence { marker, length: run.len() })
+						Some(Fence { marker, length: run.len(), quote_depth: 0 })
 					},
 					Some(active)
 						if active.marker == marker

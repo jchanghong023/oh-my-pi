@@ -12,6 +12,7 @@ interface CargoMetadataPackageForRustScope {
 	source: string | null;
 	manifest_path: string;
 	dependencies: { name: string }[];
+	targets: { kind: string[]; doctest: boolean }[];
 }
 
 export interface CargoLockPackageForRustScope {
@@ -53,6 +54,61 @@ export function parseFulltestChangedPaths(value: string | undefined): string[] {
 		throw new Error("OMP_FULLTEST_CHANGED_PATHS must be a JSON string array.");
 	}
 	return [...new Set(parsed)];
+}
+
+export function affectedRustTestCommands(
+	crates: readonly string[],
+	metadata: CargoMetadataForRustScope,
+): readonly (readonly string[])[] {
+	const doctestCrates = crates.filter(crate => {
+		const pkg = metadata.packages.find(pkg => pkg.name === crate && metadata.workspace_members.includes(pkg.id));
+		if (
+			pkg === undefined ||
+			!Array.isArray(pkg.targets) ||
+			pkg.targets.some(
+				target =>
+					!Array.isArray(target.kind) ||
+					target.kind.some(kind => typeof kind !== "string") ||
+					typeof target.doctest !== "boolean",
+			)
+		) {
+			throw new Error(`cargo metadata returned invalid targets for ${crate}.`);
+		}
+		return pkg.targets.some(
+			target =>
+				target.doctest && target.kind.some(kind => kind === "lib" || kind === "rlib" || kind === "proc-macro"),
+		);
+	});
+	const commands: string[][] = [
+		[
+			"cargo",
+			"nextest",
+			"run",
+			"--max-fail=1:immediate",
+			"--message-format=libtest-json-plus",
+			"--message-format-version=0.1",
+			...crates.flatMap(crate => ["-p", crate]),
+			...(process.platform === "win32"
+				? ["-E", "not(test(=sed::fast_io::tests::test_file_truncated_after_open))"]
+				: []),
+			"--status-level=fail",
+			"--final-status-level=fail",
+		],
+	];
+	if (doctestCrates.length > 0) {
+		commands.push([
+			"cargo",
+			"test",
+			"--doc",
+			...doctestCrates.flatMap(crate => ["-p", crate]),
+			"--",
+			"-Zunstable-options",
+			"--fail-fast",
+			"--format=json",
+			"--report-time",
+		]);
+	}
+	return commands;
 }
 
 export function selectRustTestScope(

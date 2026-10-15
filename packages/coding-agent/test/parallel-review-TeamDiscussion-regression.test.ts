@@ -110,11 +110,11 @@ function blockedRecord(): TeamProposalRecord {
 	};
 }
 
-function reportWithBody(reportMarkdown: string) {
+function reportWithBody(reportMarkdown: string, recommendation: Partial<TeamSynthesisOutput> = {}) {
 	return assembleTeamReport({
 		alignment,
-		synthesis: { ...synthesis, recommendedProposal: "", reportMarkdown },
-		proposals: [blockedRecord()],
+		synthesis: { ...synthesis, recommendedProposal: "", reportMarkdown, ...recommendation },
+		proposals: [blockedRecord(), { ...blockedRecord(), label: "B", unresolvedBlocking: [] }],
 		participationNotes: [],
 	});
 }
@@ -186,6 +186,53 @@ describe("team consumer regressions", () => {
 			if (result.ok) expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
 		},
 	);
+
+	it.each(["方案 A 不能作为首选。方案 B 满足验收标准。", "不应推荐方案 A。方案 B 满足验收标准。"])(
+		"keeps a valid recommendation alongside an ordinary negative statement: %s",
+		body => {
+			const result = reportWithBody(body, { recommendedProposal: "B" });
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.markdown).toContain(body);
+				expect(result.markdown).toContain("【推荐】方案 B");
+				expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+				expect(result.droppedRecommendation).toBe(false);
+			}
+		},
+	);
+
+	it.each(["reportMarkdown", "recommendationReason", "recommendationPreconditions"] as const)(
+		"rejects a blocked endorsement in emitted %s despite a valid structured recommendation",
+		field => {
+			const result = reportWithBody("方案 B 满足验收标准。", {
+				recommendedProposal: "B",
+				[field]: "方案 A 可以采用，但方案 B 的维护成本更低",
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain("尚不可采用");
+		},
+	);
+
+	it("does not let a negative claim mask a later affirmative claim in the same clause", () => {
+		const result = reportWithBody("方案 A 不能作为首选，仍可以采用。", { recommendedProposal: "B" });
+		expect(result.ok).toBe(false);
+	});
+
+	it("preserves negative and conditional adoption language in recommendation prose", () => {
+		const recommendationReason = "方案 A 不能作为首选，方案 B 的维护成本更低";
+		const recommendationPreconditions = "方案 A 若阻断问题解决后才可采用";
+		const result = reportWithBody("方案 B 满足验收标准。", {
+			recommendedProposal: "B",
+			recommendationReason,
+			recommendationPreconditions,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain(recommendationReason);
+			expect(result.markdown).toContain(recommendationPreconditions);
+		}
+	});
 
 	it("rejects a model-authored recommendation marker whose letters are emphasized", () => {
 		expect(reportWithBody("【**推荐**】方案 A").ok).toBe(false);

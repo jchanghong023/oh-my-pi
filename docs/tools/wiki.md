@@ -14,7 +14,7 @@
 
 The behavior authority is [Markdown document indexing](../../docs-zh-CN/requirements/fork.md#markdown-文档索引); this page describes its tool surface.
 
-Markdown ingestion and legacy searchable-text recovery use a faithful Rust port of the existing shared parser semantics, not a second parsing contract. The migration preserves algorithms, database format, default search result order, stored text/provenance and valid old search cursor identity without requiring an index rebuild. Explicit grep also works with existing schema-10 databases without a rebuild or schema change. DB-only queries, the ≥500ms successful outward duration and error behavior remain unchanged.
+Markdown ingestion and legacy searchable-text recovery use a faithful Rust port of the existing shared parser semantics, not a second parsing contract. Schema 11 repairs quoted-fence search projections from stored Markdown, including existing schema-10 indexes, without source files or a manual rebuild. Stored text, provenance, section identities and table layout are preserved; snapshot-bound ranking and cursor validation still apply. DB-only queries, the ≥500ms successful outward duration and error behavior remain unchanged.
 
 ## Inputs
 

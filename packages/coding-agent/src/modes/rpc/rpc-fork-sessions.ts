@@ -4,9 +4,9 @@
  * `delete_session` over the same per-cwd session directory the TUI picker
  * reads. Each OMP process hosts exactly one live session; the session it
  * hosts renames through the live session API, every other saved session
- * through guarded file surgery on its storage. Deletion of the hosted
- * session itself is refused — the client closes that session's process
- * first.
+ * through guarded file surgery while holding its ownership lease. Sessions
+ * hosted by another process cannot be renamed or deleted; deletion of this
+ * process's hosted session is also refused until its process closes.
  */
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import type { FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
@@ -124,8 +124,9 @@ export class RpcSessionDirectoryService {
 	/**
 	 * Rename one saved session. The hosted session renames through its live
 	 * session API (persisted by the session itself); every other entry through
-	 * a guarded title-slot rewrite that refuses when the file changed since
-	 * the client read it (`expectedRevision`).
+	 * a guarded title-slot rewrite that refuses while another process holds
+	 * the ownership lease or the file changed since the client read it
+	 * (`expectedRevision`).
 	 */
 	async rename(sessionId: string, name: string, expectedRevision?: RpcRevision): Promise<RpcSessionSummary> {
 		return this.#diagnose("rename", sessionId, async diagnostic => {
@@ -221,45 +222,80 @@ export class RpcSessionDirectoryService {
 			) {
 				throw new RpcSessionDirectoryError("scope_not_allowed", "Session identity/project changed during rename");
 			}
+			let lease: FileLockHandle | null;
+			const leaseStarted = performance.now();
+			diagnostic.progress("lease", "started");
+			try {
+				lease = tryAcquireSessionLease(sessionId);
+			} catch (error) {
+				// As for deletion, an unprobeable ownership lease is treated as held.
+				logger.warn("RPC session lease probe failed", {
+					component: "rpc_sessions",
+					event: "session_rename_stage",
+					stage: "lease",
+					result: "unprobeable",
+					committed: false,
+					persisted: false,
+					commit_status: "not_committed",
+					elapsed_ms: performance.now() - leaseStarted,
+					...logger.diagnosticError(error),
+				});
+				lease = null;
+			}
+			if (!lease) {
+				throw new RpcSessionDirectoryError(
+					"execution_failed",
+					"Session is open in another process; close it there before renaming",
+				);
+			}
 			let committed = true;
-			// Files written before the title-slot format keep their session header in
-			// the first 256 bytes; an in-place slot overlay would destroy it. Mirror
-			// SessionManager's own guard (`#hasTitleSlot`): only slot-bearing files
-			// take the same-size overlay, legacy bodies are rewritten with the slot
-			// prepended so the file only grows and every original byte survives.
-			const hasTitleSlot = parseTitleSlotFromContent(content) !== undefined;
-			const titleUpdate = {
-				title: trimmed,
-				source: "user" as const,
-				updatedAt: new Date().toISOString(),
-			};
-			const updatedContent = hasTitleSlot
-				? overlayTitleSlotContent(content, titleUpdate)
-				: serializeTitleSlot(titleUpdate) + content;
-			// Storage does not expose a commit receipt when its promise rejects.
-			diagnostic.committed = undefined;
-			diagnostic.persisted = undefined;
-			diagnostic.progress("atomic_write", "started", { title_slot: hasTitleSlot });
-			await this.#storage.writeTextAtomic(entry.path, updatedContent, {
-				// The legacy rewrite grows the file by one slot; its safety rests on
-				// the revision + full-content guard alone (expectedSize would have to
-				// match the post-write size, which the backend cannot pre-state).
-				expectedSize: hasTitleSlot ? Buffer.byteLength(content, "utf-8") : undefined,
-				commitGuard: () => {
-					diagnostic.progress("commit_guard", "started");
-					committed =
-						revisionFor(this.#storage, sessionId, entry.path) === observedRevision &&
-						this.#storage.readTextSync !== undefined &&
-						this.#storage.readTextSync(entry.path) === content;
-					if (!committed) {
-						diagnostic.committed = false;
-						diagnostic.persisted = false;
-					}
-					diagnostic.progress("commit_guard", "completed", { accepted: committed });
-					diagnostic.stage = "atomic_write";
-					return committed;
-				},
-			});
+			try {
+				diagnostic.progress("lease", "completed", { acquired: true });
+				// Files written before the title-slot format keep their session header in
+				// the first 256 bytes; an in-place slot overlay would destroy it. Mirror
+				// SessionManager's own guard (`#hasTitleSlot`): only slot-bearing files
+				// take the same-size overlay, legacy bodies are rewritten with the slot
+				// prepended so the file only grows and every original byte survives.
+				const hasTitleSlot = parseTitleSlotFromContent(content) !== undefined;
+				const titleUpdate = {
+					title: trimmed,
+					source: "user" as const,
+					updatedAt: new Date().toISOString(),
+				};
+				const updatedContent = hasTitleSlot
+					? overlayTitleSlotContent(content, titleUpdate)
+					: serializeTitleSlot(titleUpdate) + content;
+				// Storage does not expose a commit receipt when its promise rejects.
+				diagnostic.committed = undefined;
+				diagnostic.persisted = undefined;
+				diagnostic.progress("atomic_write", "started", { title_slot: hasTitleSlot });
+				await this.#storage.writeTextAtomic(entry.path, updatedContent, {
+					// The legacy rewrite grows the file by one slot; its safety rests on
+					// the revision + full-content guard alone (expectedSize would have to
+					// match the post-write size, which the backend cannot pre-state).
+					expectedSize: hasTitleSlot ? Buffer.byteLength(content, "utf-8") : undefined,
+					commitGuard: () => {
+						diagnostic.progress("commit_guard", "started");
+						committed =
+							revisionFor(this.#storage, sessionId, entry.path) === observedRevision &&
+							this.#storage.readTextSync !== undefined &&
+							this.#storage.readTextSync(entry.path) === content;
+						if (!committed) {
+							diagnostic.committed = false;
+							diagnostic.persisted = false;
+						}
+						diagnostic.progress("commit_guard", "completed", { accepted: committed });
+						diagnostic.stage = "atomic_write";
+						return committed;
+					},
+				});
+			} finally {
+				const previousStage = diagnostic.stage;
+				diagnostic.progress("lease_release", "started");
+				lease.release();
+				diagnostic.progress("lease_release", "completed");
+				diagnostic.stage = previousStage;
+			}
 			if (!committed) {
 				diagnostic.stage = "commit_guard";
 				throw new RpcSessionDirectoryError("revision_conflict", `Session ${sessionId} changed during rename`);

@@ -53,14 +53,29 @@ function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
 }
 
-function queryPath(value: string | undefined): string | undefined {
+function queryPath(value: string | undefined, db?: Database, generation?: string | null): string | undefined {
 	if (!value) return undefined;
-	const relative = value.replaceAll("\\", "/");
-	if (path.posix.isAbsolute(relative) || /^[a-z]:/i.test(relative) || relative.includes("\0"))
+	const relative = process.platform === "win32" ? value.replaceAll("\\", "/") : value;
+	if (
+		path.posix.isAbsolute(relative) ||
+		path.win32.isAbsolute(value) ||
+		/^[a-z]:/i.test(relative) ||
+		relative.includes("\0")
+	)
 		throw new Error("Repository path must be relative to the index root; absolute paths are not supported");
 	const normalized = path.posix.normalize(relative);
 	if (normalized === ".." || normalized.startsWith("../"))
 		throw new Error("Repository path must stay within the index root");
+	// On POSIX, an indexed literal backslash path wins over its Windows-style alias.
+	if (
+		db &&
+		process.platform !== "win32" &&
+		value.includes("\\") &&
+		!db
+			.query("SELECT 1 FROM files WHERE generation=? AND (path=? OR instr(path, ?) = 1) LIMIT 1")
+			.get(generation ?? null, normalized.replace(/\/$/, ""), `${normalized.replace(/\/$/, "")}/`)
+	)
+		return queryPath(value.replaceAll("\\", "/"));
 	return normalized === "." ? undefined : normalized.replace(/\/$/, "");
 }
 /** A .py file whose syntax tree carries errors is indexed without symbols and reported as a parse failure. */
@@ -1075,13 +1090,14 @@ export class RepoService {
 			"search",
 			async stage => {
 				this.#ensureOpen();
-				options = { ...options, path: queryPath(options.path) };
+				queryPath(options.path);
 				stage("flush");
 				await this.#flush(options.signal);
 				check(options.signal);
 				stage("snapshot");
 				return this.#query(async (db, signal) => {
 					const status = this.#statusSnapshot(db);
+					options = { ...options, path: queryPath(options.path, db, status.generation) };
 					if (!status.exists) return this.#page<RepoTextHit>("search", query, options, status, []);
 					const needle = query.slice(0, MAX_QUERY_LENGTH).trim();
 					if (!needle) return this.#page<RepoTextHit>("search", query, options, status, []);
@@ -1191,13 +1207,14 @@ export class RepoService {
 			"symbol",
 			async stage => {
 				this.#ensureOpen();
-				options = { ...options, path: queryPath(options.path) };
+				queryPath(options.path);
 				stage("flush");
 				await this.#flush(options.signal);
 				check(options.signal);
 				stage("snapshot");
 				return this.#query(async (db, signal) => {
 					const status = this.#statusSnapshot(db);
+					options = { ...options, path: queryPath(options.path, db, status.generation) };
 					if (!status.exists || !name.trim())
 						return this.#page<RepoSymbolHit>("symbol", name, options, status, []);
 					let sql =

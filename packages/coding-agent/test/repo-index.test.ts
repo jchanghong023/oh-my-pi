@@ -197,6 +197,13 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			expect((await service.symbol("literal_before")).hits.map(hit => hit.path)).toEqual([literal]);
 			expect((await service.search("directorybeacon")).hits.map(hit => hit.path)).toEqual([nested]);
 			expect((await service.status()).failures).toEqual([]);
+			const literalPath = (await service.search("backslashbeforebeacon")).hits[0]!.path;
+			expect((await service.search("return", { path: literalPath })).hits.map(hit => hit.path)).toEqual([literal]);
+			expect((await service.symbol("literal_before", { path: literalPath })).hits.map(hit => hit.path)).toEqual([
+				literal,
+			]);
+			expect((await service.symbol("nested_file", { path: literalPath })).hits).toEqual([]);
+			expect((await service.search("return", { path: "src/" })).hits.map(hit => hit.path)).toEqual([nested]);
 
 			await put(root, literal, "def literal_after(): return 'backslashafterbeacon'\n");
 			service.markChanged([path.join(root, literal)]);
@@ -209,6 +216,12 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			service.markChanged([path.join(root, literal)]);
 			expect((await service.search("backslashafterbeacon")).hits).toEqual([]);
 			expect((await service.search("directorybeacon")).hits.map(hit => hit.path)).toEqual([nested]);
+			expect((await service.search("directorybeacon", { path: literalPath })).hits.map(hit => hit.path)).toEqual([
+				nested,
+			]);
+			expect((await service.symbol("nested_file", { path: literalPath })).hits.map(hit => hit.path)).toEqual([
+				nested,
+			]);
 		},
 	);
 

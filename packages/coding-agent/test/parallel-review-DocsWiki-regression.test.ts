@@ -111,3 +111,37 @@ describe("Document fence indexing regressions", () => {
 		}
 	});
 });
+
+describe("Document literal boundary regressions", () => {
+	it("normalizes across chunk edges without inventing exact names or discarding combining marks", async () => {
+		const root = await tempDir("docs-literal-edge-root-");
+		const agentDir = await tempDir("docs-literal-edge-agent-");
+		const sources = {
+			"boundary.md": `${"x".repeat(17_995)} cafe\u0301.log\n`,
+			"composed.md": "café.log\n",
+			"decomposed.md": "cafe\u0301.log\n",
+			"version.md": `${"x".repeat(17_996)} C++17\n`,
+			"noncomposing.md": `${"x".repeat(17_995)} scan\u034f\n`,
+		};
+		for (const [name, source] of Object.entries(sources)) {
+			await Bun.write(path.join(root, name), source);
+		}
+		const engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			expect(engine.search("cafe").exactNameMatches).toBe(0);
+			for (const query of ["café.log", "cafe\u0301.log"]) {
+				const result = engine.search(query);
+				expect(
+					[...new Set(result.sections.filter(hit => hit.matchKind === "exact-name").map(hit => hit.path))].sort(),
+				).toEqual(["boundary.md", "composed.md", "decomposed.md"]);
+			}
+			expect(engine.search("C++").exactNameMatches).toBe(0);
+			expect(engine.search("C++17").sections.some(hit => hit.matchKind === "exact-name")).toBe(true);
+			expect(engine.search("scan").sections.some(hit => hit.matchKind === "exact-name")).toBe(true);
+		} finally {
+			engine.close();
+		}
+	});
+});

@@ -8,6 +8,7 @@ import { GateCommandError, reportGateFailure, withRustCompilerEvents } from "./t
 import { forwardNextestOutput } from "./test-gate-native-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import {
+	affectedRustTestCommands,
 	parseFulltestChangedPaths,
 	selectRustTestScope,
 	type CargoLockPackageForRustScope,
@@ -161,14 +162,11 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 	);
 	const lockPackages = needsVendorGraph ? await loadCargoLockPackages() : undefined;
 	let scope: RustTestScope;
+	let commands: readonly (readonly string[])[];
 	try {
-		scope = selectRustTestScope(
-			changedPaths,
-			await loadCargoWorkspaceMetadata(),
-			repoRoot,
-			VENDORED_FORK_EXCLUDED_PACKAGE_NAMES,
-			lockPackages,
-		);
+		const metadata = await loadCargoWorkspaceMetadata();
+		scope = selectRustTestScope(changedPaths, metadata, repoRoot, VENDORED_FORK_EXCLUDED_PACKAGE_NAMES, lockPackages);
+		commands = affectedRustTestCommands(scope.crates, metadata);
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
 		console.warn(`Warning: unable to resolve affected Rust crates: ${detail}. Selecting the full Rust workspace.`);
@@ -189,7 +187,6 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 		return;
 	}
 
-	const commands = affectedTestCommands(scope.crates);
 	if (dryRun) {
 		printTestPlan(scope, commands, scope.kind === "all" ? "all affected workspace crates" : "affected crates");
 		return;
@@ -218,37 +215,6 @@ function parseTaskOptions(name: RustTaskName, args: readonly string[]): { affect
 		return null;
 	}
 	return { affected, dryRun };
-}
-
-function affectedTestCommands(crates: readonly string[]): readonly (readonly string[])[] {
-	const packageArgs = crates.flatMap(crate => ["-p", crate]);
-	return [
-		[
-			"cargo",
-			"nextest",
-			"run",
-			"--max-fail=1:immediate",
-			"--message-format=libtest-json-plus",
-			"--message-format-version=0.1",
-			...packageArgs,
-			...(process.platform === "win32"
-				? ["-E", "not(test(=sed::fast_io::tests::test_file_truncated_after_open))"]
-				: []),
-			"--status-level=fail",
-			"--final-status-level=fail",
-		],
-		[
-			"cargo",
-			"test",
-			"--doc",
-			...packageArgs,
-			"--",
-			"-Zunstable-options",
-			"--fail-fast",
-			"--format=json",
-			"--report-time",
-		],
-	];
 }
 
 function printTestPlan(

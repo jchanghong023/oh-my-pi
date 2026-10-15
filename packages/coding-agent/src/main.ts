@@ -1546,7 +1546,7 @@ export async function buildSessionOptions(
 			);
 			process.exit(1);
 		}
-		const matchedAfterMissingRolePattern = (resolved.configuredPatternIndex ?? 0) > 0;
+		const matchedAfterMissingRolePattern = (resolved.expandedPatternIndex ?? 0) > 0;
 		if (matchedAfterMissingRolePattern) {
 			// Extensions may register an earlier configured role candidate.
 			options.modelPattern = parsed.model;

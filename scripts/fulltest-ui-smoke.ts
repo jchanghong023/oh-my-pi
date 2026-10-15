@@ -241,6 +241,21 @@ function normalizePtyOutput(text: string): string {
 }
 
 const timingRun = await beginTestRun("dev TUI PTY smoke scenarios");
+// Fatal paths already await postmortem cleanup. Settle only our own report
+// there; an inherited run belongs to the wrapper/gate, not this PTY child.
+const cancelFailureReport = postmortem.register("ui-smoke-report", async () => {
+	if (!timingRun.owner) return;
+	const exitCode = Number(process.exitCode) || 1;
+	process.exitCode = exitCode;
+	try {
+		await endTestRun(timingRun, exitCode);
+	} catch (error) {
+		// Match the reporting lifecycle: never retain running/0 metadata when
+		// finalization itself failed.
+		await fs.rm(path.join(timingRun.dir, "run.json"), { force: true });
+		throw error;
+	}
+});
 let caseStartedAt = new Date().toISOString();
 let caseStarted = performance.now();
 async function recordUiCase(name: string): Promise<void> {
@@ -266,6 +281,7 @@ if (process.argv.includes("--repo-only")) {
 	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
 	await recordUiCase("repo-only");
 	await endTestRun(timingRun, 0);
+	cancelFailureReport();
 	process.exit(0);
 }
 
@@ -921,5 +937,6 @@ await recordUiCase("team-cancel-propagation");
 await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
 await recordUiCase("repo-index-e2e");
 
-console.log("ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end");
 await endTestRun(timingRun, 0);
+cancelFailureReport();
+console.log("ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end");

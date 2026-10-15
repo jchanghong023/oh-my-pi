@@ -608,6 +608,57 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
+	it("preserves quoted fences across sections and repairs stored version-ten FTS without source files", async () => {
+		const root = await tempDir("docs-quoted-code-root-");
+		const agentDir = await tempDir("docs-quoted-code-agent-");
+		for (const [file, quote, fence, newline] of [
+			["quote.md", "> ", "```", "\n"],
+			["nested.md", "> > ", "````", "\r\n"],
+		]) {
+			await Bun.write(
+				path.join(root, file),
+				`${quote}${fence}${newline}` +
+					`${quote}filler${newline}`.repeat(2200) +
+					`${quote}> \`\`\`${newline}${quote}counter*factor*next${newline}${quote}${fence}${newline}`,
+			);
+		}
+		const writer = new DocsSearchEngine({ agentDir });
+		await writer.init(root, "quoted");
+		const indexId = writer.list()[0].id;
+		const fresh = writer.search("counter factor next").sections;
+		expect(fresh.map(hit => hit.path).sort()).toEqual(["nested.md", "quote.md"]);
+		expect(
+			writer
+				.search("counter*factor*next")
+				.sections.map(hit => hit.sectionId)
+				.sort(),
+		).toEqual(fresh.map(hit => hit.sectionId).sort());
+		expect(writer.search("counterfactornext").sections).toEqual([]);
+		withSqliteDatabase(writer.databasePath, db => {
+			for (const hit of fresh) {
+				db.query(
+					"UPDATE sections_fts SET section_id=?,index_id=?,relative_path=?,heading_path=?,body=? WHERE rowid=?",
+				).run(hit.sectionId, indexId, hit.path, "", "counterfactornext", hit.sectionId);
+			}
+			db.run("PRAGMA user_version=10");
+		});
+		writer.close();
+		await fs.rm(root, { recursive: true });
+		const reader = new DocsSearchEngine({ agentDir });
+		try {
+			expect(reader.search("counter factor next").sections).toEqual(fresh);
+			expect(
+				reader
+					.search("counter*factor*next")
+					.sections.map(hit => hit.sectionId)
+					.sort(),
+			).toEqual(fresh.map(hit => hit.sectionId).sort());
+			expect(reader.search("counterfactornext").sections).toEqual([]);
+		} finally {
+			reader.close();
+		}
+	});
+
 	it("retains one-word technical checklist headings while discarding converter labels", async () => {
 		const root = await tempDir("docs-checklist-root-");
 		const agentDir = await tempDir("docs-checklist-agent-");

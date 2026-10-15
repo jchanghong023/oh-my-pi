@@ -167,6 +167,14 @@ export async function executeBuiltinSlashCommand(
 			runtime.ctx.showStatus("This collab link is read-only — prompting is disabled");
 			return true;
 		}
+		if (runtime.ctx.collabGuest) {
+			// This allowlisted remote command is already authorized. Forward it
+			// here so the residual-slash gate still rejects unknown guest commands.
+			const images = runtime.input?.images;
+			if (!runtime.draftDetached) runtime.ctx.editor.clearDraft();
+			runtime.ctx.collabGuest.sendPrompt(text, images?.length ? [...images] : undefined);
+			return true;
+		}
 		clearSubmittedText(runtime);
 		return text;
 	}

@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Kept wiki import recovery and hidden-build creation bound to the database protected by the import lease.
+- Preserved quoted code fences and Unicode name boundaries across wiki sections, repairing existing searchable text from stored Markdown without reimporting sources.
 - Bound wiki import commits, publication and rollback to the original database and hidden build identity, preventing reused row IDs from modifying replacement indexes.
 - Wiki grep continues across intentionally omitted converter headings without inventing missing content or requiring an index rebuild.
 - Windows `rmdir` rejects normalized dot, parent and trailing-dot/space operands that could remove a different directory, preserving explicit verbatim names.

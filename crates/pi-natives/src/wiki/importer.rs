@@ -296,12 +296,13 @@ impl Build<'_> {
 		root: &Path,
 		files: Vec<String>,
 		name: &str,
+		database: &str,
 	) -> std::result::Result<WikiBuildResult, ImportError> {
 		self.check()?;
 		self.stage = "validate";
 		if self
 			.owner
-			.with_storage(self.cancel, |storage| storage.get(name))?
+			.with_import_storage(self.cancel, database, |storage| storage.get(name))?
 			.is_some()
 		{
 			self.reason = Some("duplicate_name");
@@ -310,13 +311,13 @@ impl Build<'_> {
 		self.stage = "recovery";
 		self
 			.owner
-			.with_storage(self.cancel, |storage| storage.remove_abandoned())?;
+			.with_import_storage(self.cancel, database, |storage| storage.remove_abandoned())?;
 		self.stage = "create";
 		let hidden = format!("{BUILDING_INDEX_PREFIX}{}", build_uuid()?);
 		let root = root.to_string_lossy();
 		let temp = self
 			.owner
-			.with_storage(self.cancel, |storage| storage.create(&hidden, &root))?;
+			.with_import_storage(self.cancel, database, |storage| storage.create(&hidden, &root))?;
 		match self.ingest(&temp, Path::new(root.as_ref()), files, name) {
 			Ok(result) => Ok(result),
 			Err(error) => self.rollback(&temp, error),
@@ -363,7 +364,7 @@ impl Build<'_> {
 		let mut event = self.event("docs.init.lock.started", self.stage, "started");
 		event.retry_limit = Some(3);
 		self.emit(event)?;
-		let mut lease = match acquire(self.owner, self.cancel) {
+		let (mut lease, database) = match acquire(self.owner, self.cancel) {
 			Ok(lease) => lease,
 			Err(error) => {
 				let mut event = self.event(
@@ -398,7 +399,7 @@ impl Build<'_> {
 			let mut event = self.event("docs.init.lock.completed", self.stage, "completed");
 			event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
 			self.emit(event)?;
-			self.locked(&root, files, name)
+			self.locked(&root, files, name, &database)
 		})();
 		let operation_stage = self.stage;
 		let release_log = self.log("docs.init.lock.release.started", "lock_release", "started");
@@ -504,14 +505,18 @@ fn validate_name(name: &str) -> std::result::Result<&str, WikiError> {
 	}
 	Ok(name)
 }
-fn acquire(owner: &Owner, cancel: &CancelToken) -> std::result::Result<FileLock, WikiError> {
+fn acquire(
+	owner: &Owner,
+	cancel: &CancelToken,
+) -> std::result::Result<(FileLock, String), WikiError> {
 	let path = import::resolve_root(Path::new(&owner.database_path))?;
+	let identity = super::database::file_identity(&path)?;
 	let lock_path = format!("{}.lock", path.display());
 	for attempt in 0..3 {
 		owner.check_import(cancel)?;
 		let lease = FileLock::try_acquire_path(Path::new(&lock_path))?;
 		if lease.is_acquired() {
-			return Ok(lease);
+			return Ok((lease, identity));
 		}
 		if attempt < 2 {
 			for _ in 0..10 {

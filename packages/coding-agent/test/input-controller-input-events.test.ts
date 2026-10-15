@@ -138,6 +138,67 @@ async function createHarness(factory: ExtensionFactory) {
 afterEach(() => vi.restoreAllMocks());
 
 describe("interactive native input ingress", () => {
+	it("Enter forwards an allowed remote guest command once without expanding it locally", async () => {
+		const h = await createHarness(() => {});
+		const sendPrompt = vi.fn();
+		Object.defineProperty(h.session, "model", { value: { api: "jchtools-agent" } });
+		Object.defineProperty(h.ctx, "collabGuest", { value: { readOnly: false, sendPrompt } });
+		h.ctx.skillCommands.set("fullsend", {
+			name: "fullsend",
+			description: "",
+			filePath: "unread-local-fullsend-skill",
+			baseDir: process.cwd(),
+			source: "test",
+		});
+		const command = "/fullsend  inspect this [Image #1]";
+		h.draftWithImage(command);
+		const clearDraft = vi.spyOn(h.editor, "clearDraft");
+		const addToHistory = vi.spyOn(h.editor, "addToHistory");
+
+		await h.pressSubmit(ENTER);
+
+		expect(sendPrompt.mock.calls).toEqual([[command, [originalImage]]]);
+		expect(h.ctx.showStatus).not.toHaveBeenCalled();
+		expect(h.prompt).not.toHaveBeenCalled();
+		expect(h.editor.getText()).toBe("");
+		expect(h.editor.pendingImages).toEqual([]);
+		expect(h.editor.pendingImageLinks).toEqual([]);
+		expect(clearDraft).toHaveBeenCalledTimes(1);
+		expect(addToHistory.mock.calls).toEqual([[command]]);
+	});
+
+	it("Enter cannot prompt a remote Agent through a read-only guest command", async () => {
+		const h = await createHarness(() => {});
+		const sendPrompt = vi.fn();
+		Object.defineProperty(h.session, "model", { value: { api: "jchtools-agent" } });
+		Object.defineProperty(h.ctx, "collabGuest", { value: { readOnly: true, sendPrompt } });
+		h.editor.setText("/fullsend inspect this");
+
+		await h.pressSubmit(ENTER);
+
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(h.prompt).not.toHaveBeenCalled();
+		expect(h.ctx.showStatus).toHaveBeenCalledWith("This collab link is read-only — prompting is disabled");
+	});
+
+	it("Enter still rejects unknown and host-only commands for a writable remote guest", async () => {
+		const h = await createHarness(() => {});
+		const sendPrompt = vi.fn();
+		Object.defineProperty(h.session, "model", { value: { api: "jchtools-agent" } });
+		Object.defineProperty(h.ctx, "collabGuest", { value: { readOnly: false, sendPrompt } });
+
+		for (const command of ["/unknown inspect this", "/goal inspect this", "/skill:review inspect this"]) {
+			h.editor.setText(command);
+			await h.pressSubmit(ENTER);
+			expect(h.ctx.showStatus).toHaveBeenLastCalledWith(
+				`${command.split(" ", 1)[0]} is host-only during a collab session`,
+			);
+		}
+
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(h.prompt).not.toHaveBeenCalled();
+	});
+
 	it("Ctrl+Enter chains partial text/image transforms and restores materialized images after rejection", async () => {
 		const seen: InputEvent[] = [];
 		const h = await createHarness(pi => {

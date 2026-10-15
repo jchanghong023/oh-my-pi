@@ -8,6 +8,7 @@ import {
 	acquireModelRoleMutation,
 	applyModelPreset,
 	deleteModelPreset,
+	findActiveModelPreset,
 	getModelPreset,
 	getModelPresetNames,
 	formatModelPresetSwitch,
@@ -239,6 +240,19 @@ describe("model presets", () => {
 		expect(deleteModelPreset(settings, "team")).toBe("project");
 		expect(deleteModelPreset(settings, "mine")).toBe("deleted");
 		expect(getModelPresetNames(settings)).toEqual(["team"]);
+	});
+
+	it("matches the configured role keys rather than equal-size process-default role sets", () => {
+		const settings = Settings.isolated();
+		const company = "company/Qwen3.6-35B-A3B";
+		settings.setModelRoleDefaults({ smol: company });
+		settings.setModelRole("default", SONNET);
+		cfgModelPresets.setEntry(settings, "company", { modelRoles: { smol: company } });
+
+		expect(findActiveModelPreset(settings)).toBeUndefined();
+		const saved = saveModelPreset(settings, "explicit");
+		expect(saved.modelRoles).toEqual({ default: SONNET });
+		expect(findActiveModelPreset(settings)).toBe("explicit");
 	});
 
 	it("persists explicit selections but not offline process defaults in a saved preset", () => {

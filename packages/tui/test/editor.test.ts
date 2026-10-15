@@ -44,19 +44,37 @@ describe("Editor component", () => {
 			expect(editor.render(40)[1]).toContain("帮助");
 		});
 
-		it("wraps a wide-character hint instead of hiding it when only part fits beside the cursor", () => {
-			const editor = new Editor(defaultEditorTheme);
-			editor.focused = true;
-			editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
+		for (const terminalCursor of [false, true]) {
+			it(`wraps a wide-character hint through narrow resizes with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {
+				const editor = new Editor(defaultEditorTheme);
+				editor.focused = true;
+				editor.setUseTerminalCursor(terminalCursor);
+				editor.placeholder = () => "\x1b[2m帮助\x1b[0m";
 
-			const fits = editor.render(13)[1]!;
-			expect(fits).toContain("帮助");
-			expect(visibleWidth(fits)).toBe(13);
-			const wrapped = editor.render(12);
-			expect(wrapped.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe("帮助");
-			for (const row of wrapped) expect(visibleWidth(row)).toBe(12);
-			expect(wrapped.join("").split(CURSOR_MARKER)).toHaveLength(2);
-		});
+				const fits = editor.render(13)[1]!;
+				expect(fits).toContain("帮助");
+				expect(visibleWidth(fits)).toBe(13);
+				for (const width of [80, 12, 10, 9, 8, 80]) {
+					const wrapped = editor.render(width);
+					expect(wrapped.join("").replace(/[^\u3400-\u9fff]/g, "")).toBe("帮助");
+					for (const row of wrapped) expect(visibleWidth(row)).toBe(width);
+					expect(wrapped.join("").split(CURSOR_MARKER)).toHaveLength(2);
+					expect(editor.getText()).toBe("");
+					expect(editor.getCursor()).toEqual({ line: 0, col: 0 });
+				}
+				editor.setText("draft");
+				for (const width of [80, 12, 10, 9, 8, 80]) {
+					const draft = editor.render(width);
+					expect(draft.join("")).not.toContain("帮助");
+					for (const row of draft) expect(visibleWidth(row)).toBe(width);
+					expect(draft.join("").split(CURSOR_MARKER)).toHaveLength(2);
+					expect(editor.getText()).toBe("draft");
+					expect(editor.getCursor()).toEqual({ line: 0, col: 5 });
+				}
+				editor.setText("");
+				expect(editor.render(80)[1]).toContain("帮助");
+			});
+		}
 
 		for (const terminalCursor of [false, true]) {
 			it(`reflows long styled help on resize and bounds its height with a ${terminalCursor ? "terminal" : "painted"} cursor`, () => {

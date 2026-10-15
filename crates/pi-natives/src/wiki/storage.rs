@@ -1,4 +1,4 @@
-//! Schema-10 wiki persistence, including source-only legacy migrations.
+//! Wiki persistence, including source-only legacy migrations.
 
 use std::{fs, path::Path, sync::Arc, time::Instant};
 
@@ -15,7 +15,7 @@ use super::{
 };
 
 pub(super) type CoreResult<T> = Result<T, WikiError>;
-pub(super) const SCHEMA_VERSION: i64 = 10;
+pub(super) const SCHEMA_VERSION: i64 = 11;
 pub(super) const BUILDING_INDEX_PREFIX: &str = "__building__";
 const BUILDING_GLOB: &str = "__building__*";
 const CONTENTLESS_FTS_SQL: &str = "CREATE VIRTUAL TABLE sections_fts USING fts5(section_id \
@@ -310,7 +310,7 @@ impl Storage {
 				stage = "migration";
 				storage.migrate(version, &mut stage)?;
 			} else if version == 0 {
-				storage.connection.execute_batch("PRAGMA user_version=10")?;
+				storage.connection.execute_batch("PRAGMA user_version=11")?;
 			}
 			check_file_identity(Path::new(&storage.path), &storage.identity)?;
 			Ok(())
@@ -449,7 +449,7 @@ impl Storage {
 				])?;
 				storage.drop_columns("documents", &["status", "last_error"])?;
 			}
-			storage.connection.execute_batch("PRAGMA user_version=10")?;
+			storage.connection.execute_batch("PRAGMA user_version=11")?;
 			Ok(())
 		});
 		let mut event = StorageDiagnostic::new(
@@ -705,7 +705,17 @@ impl Storage {
 			)?;
 			let mut section_insert: Option<rusqlite::CachedStatement<'_>> = None;
 			let mut fts_insert: Option<rusqlite::CachedStatement<'_>> = None;
+			let mut scanner = SectionContextScanner::default();
+			let mut previous = None;
 			for section in &document.sections {
+				let current = ContextSectionRef {
+					document_id,
+					byte_start: section.byte_start,
+					byte_end: section.byte_end,
+					raw_markdown: &section.raw_markdown,
+				};
+				let context = scanner.lex_context(previous, current);
+				previous = Some(current);
 				stage = "section_insert";
 				if section_insert.is_none() {
 					section_insert = Some(storage.connection.prepare_cached(
@@ -743,6 +753,16 @@ impl Storage {
 				} else {
 					String::new()
 				};
+				// The document parser already projects ordinary/root-fenced
+				// sections. Only continued container fences need their
+				// stored-source context.
+				let quoted_body = context
+					.fence_prefix
+					.as_ref()
+					.filter(|prefix| prefix.starts_with('>'))
+					.map(|_| {
+						markdown::plain_text(&markdown::lex_section(&section.raw_markdown, &context))
+					});
 				fts_insert
 					.as_mut()
 					.expect("prepared FTS insert")
@@ -752,7 +772,7 @@ impl Storage {
 						index_id,
 						path,
 						normalize_fts(&heading),
-						normalize_fts(&section.plain_text)
+						normalize_fts(quoted_body.as_deref().unwrap_or(&section.plain_text))
 					])?;
 			}
 			Ok(())

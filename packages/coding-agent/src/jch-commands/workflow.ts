@@ -48,15 +48,17 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		remoteTask: true,
 		inlineHint: "<任务块软目标> <并发上限> <任务正文>",
 		handle(command, runtime) {
-			const match = /^([1-9]\d*)\s+([1-9]\d*)\s+([\s\S]+)$/.exec(command.args.trim());
+			// The shared parser trims args; use the original suffix to retain task whitespace.
+			const args = command.text.slice(command.name.length + 2).trimStart();
+			const match = /^([1-9]\d*)\s+([1-9]\d*)(?:\r\n|\s)([\s\S]*)$/.exec(args);
 			if (!match) return usage(JCH_WORKFLOWZ_BATCH_USAGE, runtime);
 			const targetItems = Number(match[1]);
 			const maxConcurrency = Number(match[2]);
-			const task = match[3]!.trim();
-			if (!Number.isSafeInteger(targetItems) || !Number.isSafeInteger(maxConcurrency) || !task) {
+			const task = match[3]!;
+			if (!Number.isSafeInteger(targetItems) || !Number.isSafeInteger(maxConcurrency) || !task.trim()) {
 				return usage(JCH_WORKFLOWZ_BATCH_USAGE, runtime);
 			}
-			return { prompt: prompt.compile(workflowzBatchPrompt)({ targetItems, maxConcurrency, task }).trim() };
+			return { prompt: prompt.compile(workflowzBatchPrompt.trimEnd())({ targetItems, maxConcurrency, task }) };
 		},
 	},
 	defineJchPromptCommand({

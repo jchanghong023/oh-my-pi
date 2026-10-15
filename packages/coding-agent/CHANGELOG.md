@@ -8,6 +8,14 @@
 
 ### Fixed
 
+- Preserved extension-model priority when configured role chains fall back to retained automatic aliases.
+- Matched active model presets against configured roles only, without mistaking implicit offline defaults for saved assignments.
+- Kept POSIX literal backslash paths distinct from directory separators in repository text and symbol filters.
+- Refused saved-session renames while another process owns the live transcript, preventing later rewrites from undoing a successful rename.
+- Forwarded allowed collab-guest commands to remote Agents without a second host-only rejection.
+- Preserved leading indentation and trailing whitespace in `/jch-workflowzbatch` task bodies.
+- Accepted negated team recommendations and rejected contradictory adoption claims in displayed recommendation reasons and preconditions.
+- Skipped unsupported affected Rust doctests, finalized standalone UI smoke failure reports, and preserved missing-tool status from nested compiler wrappers.
 - Kept wiki grep usable across omitted converter headings and prevented `/wiki` searches without a selected index.
 - Served the published repository generation during concurrent maintenance, kept unopened indexes absent, and normalized or rejected path filters explicitly.
 - Resumed active goals when interval loops finish and rearmed loops after rejected RPC plan reviews without restarting cancelled work.

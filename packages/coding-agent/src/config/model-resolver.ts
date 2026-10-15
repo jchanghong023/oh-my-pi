@@ -2100,6 +2100,8 @@ export interface ResolveCliModelResult {
 	configuredRole?: string;
 	/** configuredPatternIndex identifies the configured role pattern that matched an available model. */
 	configuredPatternIndex?: number;
+	/** Index in the fully expanded role chain, including candidates hidden by a retained automatic alias. */
+	expandedPatternIndex?: number;
 	selector?: string;
 	thinkingLevel?: ConfiguredThinkingLevel;
 	warning: string | undefined;
@@ -2297,6 +2299,7 @@ function resolveCliModelInScope(
 						configuredPatterns.length === 1 && configuredPatterns[0] === roleSelector
 							? 0
 							: resolved.matchedPatternIndex,
+					expandedPatternIndex: resolved.matchedPatternIndex,
 					thinkingLevel: resolved.thinkingLevel,
 					warning: resolved.warning,
 					error: undefined,

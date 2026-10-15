@@ -12,7 +12,10 @@ use napi::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use unicode_normalization::UnicodeNormalization;
+use unicode_normalization::{
+	UnicodeNormalization,
+	char::{canonical_combining_class, compose, decompose_compatible},
+};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -533,6 +536,73 @@ pub(crate) fn analyze_query(query: &str) -> QueryPlan {
 	QueryPlan { terms, technical_name: technical_query_name(query), fts }
 }
 
+// Normalize only the interacting edge sequences, carrying source membership
+// through canonical ordering and composition. A character composed from context
+// and body is not wholly contained in the stored section.
+fn append_literal_edge(
+	fragments: &[(&str, bool)],
+	output: &mut String,
+	outside: &mut Vec<std::ops::Range<usize>>,
+) {
+	if fragments.iter().all(|(text, _)| text.is_ascii()) {
+		for &(text, body) in fragments {
+			let start = output.len();
+			output.push_str(text);
+			if !body && !text.is_empty() {
+				outside.push(start..output.len());
+			}
+		}
+		return;
+	}
+	let mut decomposed = Vec::new();
+	for &(text, body) in fragments {
+		for character in text.chars() {
+			decompose_compatible(character, |character| decomposed.push((character, body)));
+		}
+	}
+	let mut marks = 0;
+	for index in 0..=decomposed.len() {
+		if index == decomposed.len() || canonical_combining_class(decomposed[index].0) == 0 {
+			decomposed[marks..index]
+				.sort_by_key(|&(character, _)| canonical_combining_class(character));
+			marks = index + 1;
+		}
+	}
+	let mut written = 0;
+	let mut starter: Option<usize> = None;
+	let mut last_class = 0;
+	for read in 0..decomposed.len() {
+		let (character, body) = decomposed[read];
+		let class = canonical_combining_class(character);
+		if let Some(index) = starter
+			&& (last_class == 0 || last_class < class)
+			&& let Some(combination) = compose(decomposed[index].0, character)
+		{
+			decomposed[index] = (combination, decomposed[index].1 && body);
+			continue;
+		}
+		if class == 0 {
+			starter = Some(written);
+		}
+		last_class = class;
+		decomposed[written] = (character, body);
+		written += 1;
+	}
+	for &(character, body) in &decomposed[..written] {
+		let start = output.len();
+		output.push(character);
+		if !body {
+			outside.push(start..output.len());
+		}
+	}
+}
+
+fn literal_edge_starter(character: char) -> bool {
+	canonical_combining_class(character) == 0
+		// Hangul V/T jamo can compose with the preceding class-zero starter.
+		&& !matches!(character, '\u{1161}'..='\u{1175}' | '\u{11a8}'..='\u{11c2}')
+}
+
 /// A compiled literal and its Unicode edge rules, reusable across every row.
 #[derive(Debug)]
 pub(crate) struct LiteralMatcher {
@@ -630,10 +700,35 @@ impl LiteralMatcher {
 			normalize_unicode(&context.after, Some(false))
 		};
 		let mut contextual = String::with_capacity(before.len() + text.len() + after.len());
-		contextual.push_str(&before);
-		contextual.push_str(text);
-		contextual.push_str(&after);
-		let body_end = before.len() + text.len();
+		let mut outside = Vec::new();
+		let prefix_end = text
+			.char_indices()
+			.skip(1)
+			.find(|&(_, character)| literal_edge_starter(character))
+			.map_or(text.len(), |(offset, _)| offset);
+		let suffix_start = text
+			.char_indices()
+			.rfind(|&(_, character)| literal_edge_starter(character))
+			.map_or(0, |(offset, _)| offset);
+		if prefix_end > suffix_start {
+			append_literal_edge(
+				&[(&before, false), (text, true), (&after, false)],
+				&mut contextual,
+				&mut outside,
+			);
+		} else {
+			append_literal_edge(
+				&[(&before, false), (&text[..prefix_end], true)],
+				&mut contextual,
+				&mut outside,
+			);
+			contextual.push_str(&text[prefix_end..suffix_start]);
+			append_literal_edge(
+				&[(&text[suffix_start..], true), (&after, false)],
+				&mut contextual,
+				&mut outside,
+			);
+		}
 		let mut offset = 0;
 		if self.text.is_empty() {
 			return false;
@@ -642,7 +737,10 @@ impl LiteralMatcher {
 			let start = offset + found;
 			let end = start + self.text.len();
 			if self.boundaries(&contextual, start, end) {
-				if start >= before.len() && end <= body_end {
+				if !outside
+					.iter()
+					.any(|range| start < range.end && end > range.start)
+				{
 					return true;
 				}
 				// The original /gu matcher consumes even out-of-body matches.
