@@ -382,6 +382,9 @@ export interface ExtensionUIContext {
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void;
 
+	/** Get the current custom editor factory, if one has been installed. */
+	getEditorComponent(): ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined;
+
 	/** Get the current theme for styling. */
 	readonly theme: Theme;
 

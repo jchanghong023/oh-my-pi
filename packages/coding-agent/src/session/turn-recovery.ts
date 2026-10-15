@@ -15,7 +15,6 @@ import type {
 	Model,
 	ModelUsageHealth,
 	TextContent,
-	ThinkingContent,
 	AnthropicFallbackCreditHandle,
 } from "@oh-my-pi/pi-ai";
 import { calculateRateLimitBackoffMs, parseRateLimitReason } from "@oh-my-pi/pi-ai";
@@ -1133,28 +1132,21 @@ export class TurnRecovery {
 			return false;
 		}
 
-		let text = assistantMessage.content
+		const text = assistantMessage.content
 			.filter((content): content is TextContent => content.type === "text")
 			.map(content => content.text)
 			.join("\n");
-		const hasTextContent = hasNonWhitespace(text);
 
 		// A thinking-only terminal turn has no visible assistant message, so both
-		// mechanical and smart modes retry it directly. Tool-call turns never reach
-		// this path: isUnexpectedStopCandidate excludes them, including forced tools.
-		if (!hasTextContent) {
-			text = assistantMessage.content
-				.filter((content): content is ThinkingContent => content.type === "thinking")
-				.map(content => content.thinking)
-				.join("\n");
-			if (!hasNonWhitespace(text)) {
+		// mechanical and smart modes retry it directly, whether or not the provider
+		// exposed its reasoning text. Only a turn with visible text is gated on the
+		// mode and the judge. Tool-call turns never reach this path:
+		// isUnexpectedStopCandidate excludes them, including forced tools.
+		if (hasNonWhitespace(text)) {
+			if (mode === "mechanical") {
 				this.#unexpectedStopRetryCount = 0;
 				return false;
 			}
-		} else if (mode === "mechanical") {
-			this.#unexpectedStopRetryCount = 0;
-			return false;
-		} else {
 			const controller = new AbortController();
 			const timeout = setTimeout(() => controller.abort(), this.#unexpectedStopJudgeTimeoutMs);
 			// Esc/session teardown must interrupt the extended judge wait: link the

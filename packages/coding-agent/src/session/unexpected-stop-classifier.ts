@@ -43,17 +43,19 @@ export function isUnexpectedStopCandidate(message: AssistantMessage): boolean {
 	if (message.stopReason !== "stop") return false;
 	let hasContent = false;
 	for (const content of message.content) {
-		if (content.type === "toolCall") return false;
+		// A tool call or image is deliverable output; retrying would repeat it.
+		if (content.type === "toolCall" || content.type === "image") return false;
 		if (content.type === "text" && /\S/.test(content.text)) {
 			hasContent = true;
 		}
 		// A signed thinking-only stop is still a candidate: reasoning models can
 		// trap the intended response (or a truncated fragment) in a thinking block
-		// with no text. #isEmptyAssistantStop treats a non-whitespace signature as
+		// with no text, or end on a signature-only block whose reasoning text was
+		// withheld. #isEmptyAssistantStop treats a non-whitespace signature as
 		// terminal (not empty), so such stops bypass the empty-stop path entirely.
 		// Match that predicate here — unsigned thinking-only stops stay with the
 		// empty-stop retry path (and its cap) rather than being re-handled here.
-		if (content.type === "thinking" && /\S/.test(content.thinking) && /\S/.test(content.thinkingSignature ?? "")) {
+		if (content.type === "thinking" && /\S/.test(content.thinkingSignature ?? "")) {
 			hasContent = true;
 		}
 	}

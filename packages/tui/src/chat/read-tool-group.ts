@@ -831,6 +831,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 									lang: getLanguageFromPath(split.path),
 									start: entry.codeStartLine,
 									numbers: true,
+									wrap: true,
 								}),
 					],
 					`p${entry.toolCallId}`,

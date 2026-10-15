@@ -2248,6 +2248,12 @@ describe("CursorExecHandlers Pi frame translation", () => {
 			toolCallId: "pi-image-range",
 			args: { path: "shot.png", offset: 1, limit: 20 },
 		} as never);
+		// A `;` list splits into nested reads; the image part must keep the flag.
+		await Bun.write(path.join(cwd, "notes.txt"), "notes\n");
+		const split = await handlers.piRead({
+			toolCallId: "pi-image-split",
+			args: { path: "notes.txt;shot.png" },
+		} as never);
 		const piFrame = buildPiReadResult(modern);
 		if (piFrame.result.case !== "success") throw new Error("expected pi_read success");
 
@@ -2255,10 +2261,12 @@ describe("CursorExecHandlers Pi frame translation", () => {
 			expect(output).not.toContain("IHDR");
 			expect(output).toMatch(/\[image\/\w+ image\]/);
 		}
-		for (const result of [results[0], modern, ranged]) {
+		for (const result of [results[0], modern, ranged, split]) {
 			expect(result?.isError).toBe(false);
 			expect(result?.content.some(part => part.type === "image")).toBe(true);
 		}
+		const splitText = split.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
+		expect(splitText).not.toContain("IHDR");
 	});
 
 	it("routes internal artifact reads through both Cursor frames", async () => {

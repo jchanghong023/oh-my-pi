@@ -467,6 +467,8 @@ interface QueryCandidate {
 	x: number;
 	y: number;
 	onScreen: boolean;
+	/** Shown only as a strip at an edge; see {@link MeasuredBox.edgeOnly}. */
+	edgeOnly: boolean;
 	owned: boolean;
 }
 
@@ -481,6 +483,8 @@ interface MeasuredBox {
 	y: number;
 	sized: boolean;
 	onScreen: boolean;
+	/** Missed by every interior probe but hit half a pixel inside an edge, as a strip a scroll container leaves in view is. */
+	edgeOnly: boolean;
 }
 
 /**
@@ -520,18 +524,27 @@ function measureBoxInPage(el: unknown): MeasuredBox {
 		return false;
 	};
 	// The resolver still falls back to a match that is not shown, so the click's actionability check says why.
-	const onScreen =
-		hitTestable &&
-		shown.some(r => {
-			const xs = [0.5, 0.15, 0.85].map(f => r.left + (r.right - r.left) * f);
-			const ys = [0.5, 0.15, 0.85].map(f => r.top + (r.bottom - r.top) * f);
-			return xs.some(x => ys.some(y => hitsElement(x, y)));
+	const hitAny = (points: (r: { left: number; right: number; top: number; bottom: number }) => number[][]) =>
+		hitTestable && shown.some(r => points(r).some(([x, y]) => hitsElement(x, y)));
+	const grid = (xs: number[], ys: number[]) => xs.flatMap(x => ys.map(y => [x, y]));
+	const interior = (start: number, end: number) => [0.5, 0.15, 0.85].map(f => start + (end - start) * f);
+	const onScreen = hitAny(r => grid(interior(r.left, r.right), interior(r.top, r.bottom)));
+	// Every shown rect is at least 1px on each axis, so half a pixel in stays inside it.
+	const edgeOnly =
+		!onScreen &&
+		hitAny(r => {
+			const xs = interior(r.left, r.right);
+			const ys = interior(r.top, r.bottom);
+			const edgeXs = [r.left + 0.5, r.right - 0.5];
+			const edgeYs = [r.top + 0.5, r.bottom - 0.5];
+			return [...grid(edgeXs, [...ys, ...edgeYs]), ...grid(xs, edgeYs)];
 		});
 	return {
 		x: rect.left + page.scrollX,
 		y: rect.top + page.scrollY,
 		sized: rect.width >= 1 && rect.height >= 1,
 		onScreen,
+		edgeOnly,
 	};
 }
 
@@ -555,7 +568,9 @@ async function measureQueryCandidate(handle: ElementHandle, signal?: AbortSignal
 			owned = candidate !== handle;
 		} else await proxy.dispose();
 		const box = await untilAborted(signal, () => candidate.evaluate(measureBoxInPage));
-		if (box.sized) return { handle: candidate, x: box.x, y: box.y, onScreen: box.onScreen, owned };
+		if (box.sized) {
+			return { handle: candidate, x: box.x, y: box.y, onScreen: box.onScreen, edgeOnly: box.edgeOnly, owned };
+		}
 	} catch (error) {
 		if (owned) await candidate.dispose().catch(() => undefined);
 		if (signal?.aborted) throw error;
@@ -593,8 +608,10 @@ async function probeOffScreen(
 }
 
 /**
- * Resolve text-query matches to the first match the browser shows on screen, in document order. When none
- * is on screen, off-screen matches are scrolled into view in document order and the first one shown wins;
+ * Resolve text-query matches to the first match the browser shows on screen, in document order. A match
+ * shown only as a strip at an edge counts once scrolling it into view lets the browser hit its interior,
+ * as with a strip a scroll container leaves; one an overlay covers stays covered there. When none is on
+ * screen, off-screen matches are scrolled into view in document order and the first one shown wins;
  * failing that, the first one a click could be aimed at, then the first match, so the click itself reports
  * what stops it.
  */
@@ -610,7 +627,12 @@ export async function resolveActionableQueryHandlerClickTarget(
 			if (candidate) candidates.push(candidate);
 		}
 		candidates.sort((a, b) => a.y - b.y || a.x - b.x);
-		winner = candidates.find(candidate => candidate.onScreen);
+		for (const candidate of candidates) {
+			if (candidate.onScreen || (candidate.edgeOnly && (await probeOffScreen(candidate.handle, signal)).shown)) {
+				winner = candidate;
+				break;
+			}
+		}
 		if (!winner) {
 			let reachable: QueryCandidate | undefined;
 			for (const candidate of candidates) {

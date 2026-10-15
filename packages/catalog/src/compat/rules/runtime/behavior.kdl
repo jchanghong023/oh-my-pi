@@ -173,6 +173,10 @@ behavior {
 	// serve; the dedicated tool surfaces route them instead.
 	exclude-models provider="xai-oauth" exact="grok-imagine-image-quality" exact="grok-imagine-image-2.0" \
 		prefix="grok-imagine-video" prefix="grok-stt-" prefix="grok-voice-"
+	// Antigravity still advertises the Gemini 3.5 Flash wire ids, but every
+	// request to them answers with a retirement notice instead of a reply.
+	// `gemini-3-flash` is the family's recycled alias and routes to the same ids.
+	exclude-models provider="google-antigravity" exact="gemini-3.5-flash" exact="gemini-3-flash"
 	// Meta's /v1/models lists image generation and transcription SKUs beside
 	// the Muse Spark chat models, and SAM segmentation beside them.
 	exclude-models provider="meta" prefix="muse-image-" prefix="muse-voice-" prefix="sam-"
@@ -349,7 +353,6 @@ behavior {
 	// Google); price rows at their first-party equivalents, Vertex before
 	// Anthropic for Claude ids. Aliases map ids whose peer ships differently.
 	pricing-peer provider="google-antigravity" peers="google" "google-vertex" "anthropic" {
-		alias "gemini-3-flash" peer-id="gemini-3-flash-preview"
 		alias "gemini-3-pro" peer-id="gemini-3-pro-preview"
 		alias "gemini-3.1-pro" peer-id="gemini-3.1-pro-preview"
 		alias "claude-opus-4-5" peer-id="claude-opus-4-5@20251101"

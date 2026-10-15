@@ -1516,6 +1516,8 @@ export interface Model<TApi extends Api = Api> {
 	requiresGlyphTokenization?: boolean;
 	/** Whether this model requires Cursor's tool-schema combiner projection. */
 	requiresCursorToolSchemaProjection?: boolean;
+	/** Whether advertised tool schemas occupy every model request's context (false for deferred catalogs). */
+	toolSchemasInContext?: boolean;
 	/** Whether this model requires tool-result images hoisted into sibling user content blocks. */
 	requiresToolResultImageHoisting?: boolean;
 	/**
@@ -1787,6 +1789,7 @@ export interface ModelSpec<TApi extends Api = Api> extends Omit<
 	| "compatConfig"
 	| "requiresGlyphTokenization"
 	| "requiresCursorToolSchemaProjection"
+	| "toolSchemasInContext"
 	| "requiresToolResultImageHoisting"
 	| "supportsAssistantPrefill"
 	| "supportsComputerUseConfig"

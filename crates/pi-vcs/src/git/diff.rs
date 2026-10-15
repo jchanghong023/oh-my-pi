@@ -310,6 +310,7 @@ fn tree_changes(
 			out.push(item);
 		}
 	}
+	pair_gitlink_renames(&mut out);
 	sort_changes(&mut out);
 	Ok(out)
 }
@@ -341,8 +342,46 @@ fn index_changes(
 			},
 		)
 		.map_err(|err| Error::backend("git diff --cached", err))?;
+	pair_gitlink_renames(&mut out);
 	sort_changes(&mut out);
 	Ok(out)
+}
+
+/// gix's rename tracker only considers blobs, but git pairs a deleted and an
+/// added gitlink with the same commit id as a 100% rename. Changed-id gitlinks
+/// have no content to score, so git (and this) leaves them as delete + add.
+fn pair_gitlink_renames(changes: &mut Vec<FileChange>) {
+	let is_gitlink = |mode: Option<gix::objs::tree::EntryMode>| {
+		mode.is_some_and(|mode| mode.kind() == gix::objs::tree::EntryKind::Commit)
+	};
+	let mut index = 0;
+	while index < changes.len() {
+		let deletion = &changes[index];
+		if !(deletion.new_mode.is_none() && is_gitlink(deletion.old_mode)) {
+			index += 1;
+			continue;
+		}
+		let old_id = deletion.old_id;
+		let Some(addition) = changes.iter().position(|change| {
+			change.old_mode.is_none() && is_gitlink(change.new_mode) && change.new_id == old_id
+		}) else {
+			index += 1;
+			continue;
+		};
+		let added = changes.swap_remove(addition);
+		// `swap_remove` may have moved the deletion into `addition`'s slot.
+		let index_now = if index == changes.len() {
+			addition
+		} else {
+			index
+		};
+		let deletion = &mut changes[index_now];
+		deletion.new_path = added.new_path;
+		deletion.new_id = added.new_id;
+		deletion.new_mode = added.new_mode;
+		deletion.similarity = Some(100);
+		index = 0;
+	}
 }
 
 fn base_worktree_changes(
@@ -764,7 +803,17 @@ fn render_change(
 
 fn render_gitlink(change: &FileChange) -> Rendered {
 	let mut text = format!("diff --git a/{} b/{}\n", change.old_path, change.new_path);
-	append_metadata(&mut text, change, None, false);
+	// Gitlinks have no content to score, so only an exact-id rename carries a
+	// meaningful similarity; the "compute later" sentinel has nothing to
+	// compute.
+	let similarity = change
+		.similarity
+		.filter(|&similarity| similarity != u8::MAX);
+	append_metadata(&mut text, change, similarity, false);
+	if change.old_id == change.new_id {
+		// Pure rename: git emits only the rename header and counts 0/0.
+		return Rendered { text, added: Some(0), removed: Some(0) };
+	}
 	text.push_str("--- ");
 	push_old_path(&mut text, change);
 	text.push_str("\n+++ ");
@@ -1548,6 +1597,7 @@ mod tests {
 		assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
 		String::from_utf8(output.stdout).expect("git output is UTF-8")
 	}
+	#[cfg(unix)]
 	fn git_diff(dir: &Path, args: &[&str]) -> String {
 		let output = Command::new("git")
 			.args(args)
@@ -1723,6 +1773,29 @@ mod tests {
 				.expect("committed gitlink"),
 			git(dir.path(), &["diff-tree", "-r", "-p", "HEAD^", "HEAD"])
 		);
+	}
+
+	#[test]
+	fn gitlink_pure_rename_matches_git_without_synthetic_hunk() {
+		let dir = fixture();
+		let head = git(dir.path(), &["rev-parse", "HEAD"]).trim().to_owned();
+		git(dir.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{head},module")]);
+		git(dir.path(), &["commit", "-qm", "add gitlink"]);
+		git(dir.path(), &["update-index", "--force-remove", "module"]);
+		git(dir.path(), &["update-index", "--add", "--cacheinfo", &format!("160000,{head},moved")]);
+		let repo = GitRepo::discover(dir.path())
+			.expect("discover")
+			.expect("repository");
+		let options = DiffOptions { cached: true, ..DiffOptions::default() };
+		assert_eq!(
+			repo.diff_text(&options).expect("renamed gitlink"),
+			git(dir.path(), &["diff", "--no-ext-diff", "--cached", "-M"])
+		);
+		assert_eq!(repo.numstat(&options).expect("numstat"), vec![NumstatEntry {
+			path:    "moved".to_owned(),
+			added:   Some(0),
+			removed: Some(0),
+		}]);
 	}
 
 	#[test]

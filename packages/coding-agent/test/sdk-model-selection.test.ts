@@ -1293,6 +1293,50 @@ describe("createAgentSession deferred model pattern resolution", () => {
 		}
 	});
 
+	test("uses the configured default fallback before an arbitrary authenticated model", async () => {
+		const settings = Settings.isolated({
+			"retry.modelFallback": true,
+			"retry.fallbackChains": {
+				default: ["runtime-provider/runtime-fallback-model"],
+			},
+		});
+		settings.setModelRole("default", "missing-provider/missing-model:low");
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("runtime-provider", "test-key");
+		authStoragesToClose.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "default-fallback-models.yml"));
+
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			authStorage,
+			modelRegistry,
+			settings,
+			sessionManager: SessionManager.inMemory(),
+			disableExtensionDiscovery: true,
+			extensions: [providerExtension],
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			rules: [],
+			preloadedCustomToolPaths: [],
+			toolNames: ["read"],
+		});
+
+		try {
+			expect(session.model?.provider).toBe("runtime-provider");
+			expect(session.model?.id).toBe("runtime-fallback-model");
+			expect(session.thinkingLevel).toBe(Effort.Low);
+			expect(modelFallbackMessage).toBeUndefined();
+		} finally {
+			await session.dispose();
+		}
+	});
+
 	test("preserves deferred bare role fallback chains", async () => {
 		const settings = Settings.isolated();
 		settings.setModelRole("task", "runtime-provider/runtime-model,runtime-provider/runtime-fallback-model");

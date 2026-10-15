@@ -369,19 +369,33 @@ export interface DeltaPatchResult {
 	nestedPatches: NestedRepoPatch[];
 }
 
+async function hasGitEntry(dir: string): Promise<boolean> {
+	try {
+		await fs.lstat(path.join(dir, ".git"));
+		return true;
+	} catch (error) {
+		if (isEnoent(error)) return false;
+		throw error;
+	}
+}
+
 export async function captureDeltaPatch(isolationDir: string, baseline: WorktreeBaseline): Promise<DeltaPatchResult> {
 	// Synthetic tree construction may read a new gitlink commit before the
 	// root patch exists. Keep isolation-local objects in the source ODB first;
-	// this does not change its refs, HEAD, or index.
-	for (const relativePath of await vcs.requireGit(baseline.root.repoRoot).submodulePaths()) {
+	// this does not change its refs, HEAD, or index. Submodules added inside
+	// the isolation have no source checkout or `modules/<name>` admin dir (a
+	// patch apply never creates one), so their objects go to the source root
+	// ODB — the only store that survives isolation cleanup.
+	const sourceRoot = baseline.root.repoRoot;
+	const relativePaths = new Set([
+		...(await vcs.requireGit(sourceRoot).submodulePaths()),
+		...(await vcs.requireGit(isolationDir).submodulePaths()),
+	]);
+	for (const relativePath of relativePaths) {
 		const isolatedDir = path.join(isolationDir, relativePath);
-		try {
-			await fs.lstat(path.join(isolatedDir, ".git"));
-		} catch (error) {
-			if (isEnoent(error)) continue;
-			throw error;
-		}
-		await vcs.copyGitObjects(isolatedDir, path.join(baseline.root.repoRoot, relativePath));
+		const sourceDir = path.join(sourceRoot, relativePath);
+		if (!(await hasGitEntry(isolatedDir))) continue;
+		await vcs.copyGitObjects(isolatedDir, (await hasGitEntry(sourceDir)) ? sourceDir : sourceRoot);
 	}
 	const rootPatch = await captureRepoDeltaPatch(isolationDir, baseline.root, baseline.root.repoRoot);
 	const nestedPatches: NestedRepoPatch[] = [];

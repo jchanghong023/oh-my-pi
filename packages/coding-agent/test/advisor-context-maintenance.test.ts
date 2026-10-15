@@ -312,6 +312,36 @@ describe("AgentSession advisor context maintenance", () => {
 		expect(JSON.stringify(advisor.state.messages)).not.toContain("small stored advisor message");
 	});
 
+	it("re-evaluates maintenance after promoting to a model that defers tool schemas", async () => {
+		const promotion = {
+			...createMockModel({
+				id: "deferred-schema-promotion",
+				provider: "anthropic",
+				contextWindow: CONTEXT_WINDOW + 1,
+			}),
+			toolSchemasInContext: false,
+		};
+		const { advisor, advisorMock, modelRegistry, settings } = createHarness(
+			`${promotion.provider}/${promotion.id}`,
+			true,
+		);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisor.state.model, promotion]);
+		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
+		const seed: AgentMessage = { role: "user", content: "stored advisor message", timestamp: 1 };
+		advisor.state.messages.push(seed);
+		const storedTokens = advisor.tokenizer.countMessage(seed, { excludeEncryptedReasoning: true });
+		const schemaTokens = estimateToolSchemaTokens(advisor.state.tools, advisor.tokenizer);
+		const threshold =
+			storedTokens + advisor.tokenizer.countTokens(advisor.state.systemPrompt) + Math.floor(schemaTokens / 2);
+		cfgCompactionThresholdTokens.set(settings, threshold);
+
+		await session.prompt("update after promotion");
+
+		expect(advisor.state.model.id).toBe(promotion.id);
+		expect(advisorMock.calls).toHaveLength(1);
+		expect(JSON.stringify(advisorMock.calls[0].context.messages)).toContain("stored advisor message");
+	});
+
 	it("ignores retained provider usage that predates the latest advisor compaction", async () => {
 		const { advisor, advisorMock } = createHarness();
 		const compactedAt = Date.now();
@@ -460,35 +490,6 @@ describe("AgentSession advisor context maintenance", () => {
 			if (typeof userId !== "string") throw new Error("Expected advisor metadata.user_id");
 			expect((JSON.parse(userId) as { session_id?: string }).session_id).toBe(advisor.sessionId);
 		}
-	});
-
-	it("retains the advisor tail when native compaction covers only the summarized prefix", async () => {
-		const { advisor, advisorMock, settings } = createAdvisorFallbackHarness();
-		cfgCompactionKeepRecentTokens.set(settings, 1);
-		const retained = advisor.state.messages.at(-1);
-		if (retained?.role !== "assistant") throw new Error("Expected retained advisor output");
-		retained.content = [{ type: "text", text: "retained-prefix-advisor-tail" }];
-		vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
-			summary: "prefix summary",
-			firstKeptEntryId: preparation.firstKeptEntryId,
-			tokensBefore: preparation.tokensBefore,
-			preserveData: nativeSummary(advisor.state.model.provider).preserveData,
-			providerReplayThroughEntryId: preparation.lastSummarizedEntryId,
-		}));
-
-		await session.prompt("review after prefix-only advisor compaction");
-
-		const wire = JSON.stringify(
-			buildParams(
-				advisor.state.model as Model<"openai-responses">,
-				advisorMock.calls[0].context,
-				undefined,
-				undefined,
-			).params.input,
-		);
-		expect(wire.match(/retained-prefix-advisor-tail/g)).toHaveLength(1);
-		expect(wire.match(/advisor-native-state/g)).toHaveLength(1);
-		expect(wire.indexOf("advisor-native-state")).toBeLessThan(wire.indexOf("retained-prefix-advisor-tail"));
 	});
 
 	it.each([true, false])(
@@ -875,6 +876,35 @@ describe("AgentSession advisor context maintenance", () => {
 			expect(call[5]?.remoteSystemPrompt).toEqual(advisor.state.systemPrompt);
 		}
 		expect(JSON.stringify(advisor.state.messages)).toContain("same-provider native summary");
+	});
+
+	it("replays the kept tail after a native compaction that stopped before it", async () => {
+		const { advisor, nativeModel } = createAdvisorFallbackHarness();
+		const compactionItem = { type: "compaction", encrypted_content: "prefix-only-state" };
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: "prefix-only native summary",
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: 42,
+			preserveData: {
+				openaiRemoteCompaction: {
+					provider: nativeModel.provider,
+					replacementHistory: [compactionItem],
+					compactionItem,
+				},
+			},
+			// The kept tail did not fit the window, so the native payload covers
+			// history only through the entry before it.
+			providerReplayThroughEntryId: preparation.lastSummarizedEntryId,
+		}));
+
+		await session.prompt("small current update");
+
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		const preparation = compactSpy.mock.calls[0]![0];
+		expect(preparation.recentMessages.length).toBeGreaterThan(0);
+		const [summary, ...rest] = advisor.state.messages;
+		expect(summary?.role).toBe("compactionSummary");
+		expect(rest.slice(0, preparation.recentMessages.length)).toEqual(preparation.recentMessages);
 	});
 
 	it("skips unauthenticated advisor candidates before enforcing the native boundary", async () => {

@@ -18,6 +18,27 @@ const COLUMNS = 100;
 const TRANSCRIPT_ROWS = 60;
 const TRANSCRIPT_PREFIX = "Settled transcript row ";
 
+/** A settled assistant turn carrying one text block, typed so schema drift fails at compile time. */
+function reply(text: string): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "openai-codex-responses",
+		provider: "openai-codex",
+		model: "gpt-5.6-sol",
+		stopReason: "stop",
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		timestamp: 1,
+	};
+}
+
 /** Below-transcript chrome that inflates on demand, mimicking a confirmation dialog or a tall multi-line editor swapped in above the input. */
 class InlineWidget implements Component {
 	rows = 0;
@@ -387,23 +408,6 @@ describe("composer inline shrink (#11007)", () => {
 		const message = new AssistantMessageComponent();
 		h.transcript.addChild(message);
 		h.hud.rows = 2; // the working loader, up for the whole turn
-		const reply = (text: string): AssistantMessage => ({
-			role: "assistant",
-			content: [{ type: "text", text }],
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			model: "gpt-5.6-sol",
-			stopReason: "stop",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: 1,
-		});
 		let text = "";
 		for (let p = 0; p < 12; p++) {
 			const words = Array.from({ length: 25 + (p % 4) * 10 }, (_, w) => `p${p}w${w}`).join(" ");
@@ -448,6 +452,50 @@ describe("composer inline shrink (#11007)", () => {
 		const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
 		expect(view.findIndex(row => row.includes("EDITOR"))).toBe(ROWS - 1);
 		expect(view.filter(row => row.startsWith("Tool row "))).toHaveLength(4);
+		h.composer.stop();
+	});
+
+	it("parks a collapsing block's slack below the reply instead of banding its history", async () => {
+		const rows = 50;
+		const h = makeHarness(107, rows, 10);
+		const card = new InlineWidget();
+		card.rows = 25;
+		h.transcript.addChild(card);
+		const message = new AssistantMessageComponent();
+		h.transcript.addChild(message);
+		h.hud.rows = 2;
+		await h.scheduler.settle(h.terminal);
+		const table = [
+			"| When | Where / unit | What he reports |",
+			"|---|---|---|",
+			`| 2024-08→ | **Kursk** | ${"Joined the Kursk counterattack after Ukraine's incursion; the unit retook territory; in Feb 2025 awarded a medal. ".repeat(3)} |`,
+		].join("\n");
+		const text = `**What the sources describe** — his own account, as printed in the interviews.\n\n${table}\n\n**Motivation.** Another paragraph of the reply, long enough to wrap at this width.\n`;
+		for (let i = 1; i <= text.length; i += 24) {
+			if (i / text.length > 0.7) card.rows = 1;
+			message.updateContent(reply(text.slice(0, i)), { transient: true });
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+		}
+		message.updateContent(reply(text));
+		message.markTranscriptBlockFinalized();
+		h.hud.rows = 0;
+		h.composer.ui.requestRender();
+		await h.scheduler.settle(h.terminal);
+		const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+		const bottom = view.findIndex(row => row.includes("└"));
+		let run = 0;
+		let longest = 0;
+		for (const row of view.slice(0, bottom + 1)) {
+			run = row === "" ? run + 1 : 0;
+			longest = Math.max(longest, run);
+		}
+		// The reply rides directly under the retired history: the slack the collapse
+		// opened must not sit above the live rows, where it reads as a hole punched
+		// into the answer (and, carrying no cells, cannot be covered by any repaint).
+		expect(view[0]).not.toBe("");
+		expect(longest).toBeLessThanOrEqual(1);
+		expect(view.findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
 		h.composer.stop();
 	});
 });

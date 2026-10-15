@@ -29,6 +29,7 @@ interface HarnessOptions {
 	/** Null leaves compaction.methodOrder at its schema default. */
 	methodOrder?: readonly CompactionMethod[] | null;
 	retryMaxDelayMs?: number;
+	waitForUsageReset?: boolean;
 }
 
 async function createHarness(modelRegistry: ModelRegistry, options: HarnessOptions): Promise<Harness> {
@@ -46,6 +47,7 @@ async function createHarness(modelRegistry: ModelRegistry, options: HarnessOptio
 	const methodOrder = options.methodOrder ?? ["snapcompact", "soft"];
 	const settings = Settings.isolated({
 		...(options.retryMaxDelayMs === undefined ? {} : { "retry.maxDelayMs": options.retryMaxDelayMs }),
+		...(options.waitForUsageReset === undefined ? {} : { "retry.waitForUsageReset": options.waitForUsageReset }),
 		// Assert the blocking threshold pass itself; keep the speculation grace
 		// band from deferring it.
 		"compaction.asyncEnabled": false,
@@ -277,6 +279,34 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 		expect(result.errorMessage).toBeUndefined();
 		expect(compactSpy).toHaveBeenCalledTimes(2);
 		expect(waitSpy).toHaveBeenCalledWith(45_000, expect.anything());
+	});
+
+	it("waits through a provider-stated usage reset past retry.maxDelayMs when retry.waitForUsageReset is on", async () => {
+		const harness = await createHarness(modelRegistry, {
+			activeModel: { provider: "anthropic", id: "claude-sonnet-4-6" },
+			methodOrder: ["remote"],
+			waitForUsageReset: true,
+		});
+		session = harness.session;
+		const waitSpy = mockSchedulerWaitWithClock();
+		let attempts = 0;
+		const compactSpy = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => {
+			if (++attempts === 1) {
+				throw new compactionModule.NativeCompactionError(
+					new Error("429 usage limit reached; quota exceeded retry-after-ms=7200000"),
+				);
+			}
+			return {
+				summary: "after reset",
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+			};
+		});
+		harness.triggerThreshold();
+		const result = await harness.awaitCompactionEnd();
+		expect(result.errorMessage).toBeUndefined();
+		expect(compactSpy).toHaveBeenCalledTimes(2);
+		expect(waitSpy).toHaveBeenCalledWith(7_200_000, expect.anything());
 	});
 
 	it("downgrades to context-full when unsupported glyphs make snapcompact unsafe", async () => {

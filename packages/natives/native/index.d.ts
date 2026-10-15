@@ -2073,7 +2073,10 @@ export interface GrepOptions {
   pattern: string
   /** Directory or file to search: a host path or an absolute `scheme://` URL. */
   path: string
-  /** Glob filter for filenames (e.g., "*.ts"). */
+  /**
+   * Glob filter for file paths (e.g., "*.ts"); a matched directory selects
+   * every file under it.
+   */
   glob?: string
   /**
    * Match simple glob patterns at any depth (default: true; `*.ts` ->
@@ -2474,6 +2477,13 @@ export interface ListWorkspaceOptions {
    * to find them. Default: false.
    */
   collectAgentsMd?: boolean
+  /**
+   * Report unreadable directories instead of silently skipping them: an
+   * unreadable root fails the scan, and unreadable subdirectories are
+   * returned in `unreadableDirectories` while the walk continues. Default:
+   * false (startup discovery stays best-effort).
+   */
+  reportDirectoryErrors?: boolean
   /** Timeout in milliseconds for the operation. */
   timeoutMs?: number
   /** Abort signal for cancelling the operation. */
@@ -2491,6 +2501,11 @@ export interface ListWorkspaceResult {
   agentsMdFiles: Array<string>
   /** True when any output cap was hit. */
   truncated: boolean
+  /**
+   * Subdirectories whose contents could not be listed. Always empty unless
+   * `reportDirectoryErrors` is set.
+   */
+  unreadableDirectories: Array<WorkspaceDirectoryError>
 }
 
 /**
@@ -4137,6 +4152,14 @@ export interface WorkProfile {
   totalMs: number
   /** Number of samples collected. */
   sampleCount: number
+}
+
+/** A subdirectory the scan could not list. */
+export interface WorkspaceDirectoryError {
+  /** Forward-slash path relative to the scan root. */
+  path: string
+  /** Platform error, e.g. `Permission denied (os error 13)`. */
+  message: string
 }
 
 /**

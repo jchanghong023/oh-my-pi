@@ -162,6 +162,17 @@ class SocketDaemonClient implements DaemonBrokerClient {
 				if (!this.#pending.delete(id)) return;
 				clearTimeout(timer);
 				reject(new Error("Daemon broker request aborted"));
+				// Dropping the local entry alone leaves the broker polling a wait or
+				// follow until its own timeout; ask it to stop. The answer is unread.
+				if ((operation.op === "wait" || operation.op === "logs") && !socket.closed) {
+					socket.send(
+						JSON.stringify({
+							id: crypto.randomUUID(),
+							token: this.#token,
+							operation: { op: "cancel", requestId: id } satisfies DaemonOperation,
+						}),
+					);
+				}
 			};
 			signal.addEventListener("abort", abort, { once: true });
 			pending.removeAbort = () => signal.removeEventListener("abort", abort);

@@ -151,6 +151,8 @@ export interface InteractiveModeContext {
 	readonly viewSession: AgentSession;
 	/** Id of the focused agent, undefined when the main session is attached. */
 	readonly focusedAgentId: string | undefined;
+	/** Set while a tool-approval dialog owns the composer: its drafts steer the main session awaiting that approval, even from a focused agent's view. */
+	approvalOwnsComposer?: boolean;
 	/** Focus the main view on an agent's live session (delegates to SessionFocusController.focusAgent). */
 	focusAgentSession(id: string): Promise<void>;
 	/** Focus the focused agent's parent session, falling back to main (delegates to focusParent). */
@@ -299,6 +301,7 @@ export interface InteractiveModeContext {
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void;
+	getEditorComponent(): ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined;
 
 	// UI helpers
 	/**

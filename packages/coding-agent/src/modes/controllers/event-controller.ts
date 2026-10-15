@@ -2513,14 +2513,14 @@ export class EventController {
 				if (!event.skipped) {
 					this.ctx.rebuildChatFromMessages();
 					this.ctx.statusLine.invalidate();
-					this.ctx.ui.requestRender();
+					this.ctx.ui.requestRender(true, { clearScrollback: true });
 				}
 				this.ctx.showWarning(event.errorMessage);
 			} else if (!event.skipped) {
 				this.ctx.lastAssistantUsage = undefined;
 				this.ctx.rebuildChatFromMessages();
 				this.ctx.statusLine.invalidate();
-				this.ctx.ui.requestRender();
+				this.ctx.ui.requestRender(true, { clearScrollback: true });
 				this.ctx.showStatus("Auto-shake completed");
 			}
 		} else if (event.result) {

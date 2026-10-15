@@ -1141,6 +1141,8 @@ export type AnthropicClientOptionsArgs = {
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
 	hasTools?: boolean;
+	/** Whether a tool in ANTHROPIC_BUFFERED_INPUT_TOOLS is present; suppresses the request-wide fine-grained streaming beta. */
+	hasBufferedInputTools?: boolean;
 	thinkingEnabled?: boolean;
 	thinkingDisplay?: AnthropicThinkingDisplay;
 	disableStrictTools?: boolean;
@@ -2452,12 +2454,14 @@ const streamAnthropicOnce = (
 				// `dropCacheControlOptions` short-circuits it because the breakpoint
 				// it does carry has no `ttl` left to authorize. Both this gate and
 				// buildParams resolve the breakpoint behind the same flags so the
-				// header and the body can never disagree.
+				// header and the body can never disagree. Vertex rawPredict honors
+				// `ttl: "1h"` without the beta and rejects it in either channel.
 				const isOAuth = options?.isOAuth ?? isAnthropicOAuthToken(apiKey);
 				if (
 					!isOAuth &&
 					!dropCacheControl &&
 					!dropCacheControlOptions &&
+					!isVertexRawPredictUrl(baseUrl) &&
 					getCacheControl(model, options?.cacheRetention, isOAuth).cacheControl?.ttl === "1h" &&
 					!extraBetas.includes(extendedCacheTtlBeta)
 				) {
@@ -2514,6 +2518,8 @@ const streamAnthropicOnce = (
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
 					hasTools: !!context.tools?.length,
+					hasBufferedInputTools:
+						context.tools?.some(tool => ANTHROPIC_BUFFERED_INPUT_TOOLS.has(tool.name)) ?? false,
 					thinkingEnabled: options?.thinkingEnabled,
 					thinkingDisplay: options?.thinkingDisplay,
 					fetch: options?.fetch,
@@ -4319,6 +4325,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		headers,
 		dynamicHeaders,
 		hasTools = false,
+		hasBufferedInputTools = false,
 		thinkingEnabled = false,
 		isOAuth,
 		maxRetryDelayMs,
@@ -4357,8 +4364,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 				!hostMatchesUrl(baseUrl, "githubCopilot")));
 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
 	const supportsEagerToolInputStreaming = resolveEagerToolInputStreamingSupport(model, baseUrl);
+	// The beta streams every tool eagerly, so it is skipped when a tool needs buffered input.
 	const needsFineGrainedToolStreamingBeta =
-		hasTools && isOfficialAnthropicApiUrl(baseUrl) && !supportsEagerToolInputStreaming;
+		hasTools && !hasBufferedInputTools && isOfficialAnthropicApiUrl(baseUrl) && !supportsEagerToolInputStreaming;
 	const foundryCustomHeaders = resolveAnthropicCustomHeaders(model, baseUrl);
 	const tlsFetchOptions = buildClaudeCodeTlsFetchOptions(model, baseUrl);
 	// Disable Bun's native ~300s pre-response fetch timeout (issue #2422).
@@ -6532,10 +6540,20 @@ const ANTHROPIC_TOOL_SCHEMA_STRING_FORMATS = new Set([
 // Not `bash`: strict decoding fixes property order, so an optional key declared
 // before one the model has already written can no longer be emitted, and bash's
 // `timeout` vanished from every `async`-first call.
-const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["python", "edit", "find"]);
+// `yield` carries a subagent's whole structured result. Its properties (`type`,
+// `data`, `error`) are declared in the order callers write them; schema-less and
+// workpool yields report `strict: false`. Strict only holds together with buffered
+// input streaming (see ANTHROPIC_BUFFERED_INPUT_TOOLS).
+const ANTHROPIC_STRICT_TOOL_ALLOWLIST = new Set(["python", "edit", "find", "yield"]);
 const MAX_ANTHROPIC_STRICT_TOOLS = 20;
 const MAX_ANTHROPIC_STRICT_OPTIONAL_PARAMETERS = 24;
 const MAX_ANTHROPIC_STRICT_UNION_PARAMETERS = 16;
+// Tools sent with `eager_input_streaming: false`, so the API buffers and validates
+// their input. Eagerly streamed `yield` input from Claude Haiku arrived as invalid
+// JSON (a large nested result closed with one brace too many) even with `strict`
+// set; buffered, it did not. Where the per-tool flag is unsupported, their presence
+// drops the request-wide fine-grained streaming beta instead.
+const ANTHROPIC_BUFFERED_INPUT_TOOLS = new Set(["yield"]);
 
 /** `minItems` / `maxItems` apply to arrays; Anthropic rejects them on `type: "object"` (including `minItems: 0`/`1`). */
 function isJsonSchemaArrayNode(schema: Record<string, unknown>): boolean {
@@ -6999,7 +7017,9 @@ function convertTools(
 		};
 		return {
 			...baseTool,
-			...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
+			...(supportsEagerToolInputStreaming
+				? { eager_input_streaming: !ANTHROPIC_BUFFERED_INPUT_TOOLS.has(tool.name) }
+				: {}),
 			...(plan.strict ? { strict: true } : {}),
 			...(tool.deferLoading ? { defer_loading: true } : {}),
 		};

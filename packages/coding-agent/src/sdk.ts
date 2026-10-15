@@ -3332,27 +3332,71 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return true;
 			};
 
+			const tryResolveDefaultRoleFallback = (fallbackCandidates: Model[]): boolean => {
+				const originalSelector = settings.getModelRole("default");
+				if (hasExplicitModel || !originalSelector || !cfgRetryModelFallback.get(settings)) return false;
+				const fallbackContext: RetryFallbackResolutionContext = {
+					chains: expandDefaultRetryFallbackChains(cfgRetryFallbackChains.get(settings), [
+						...Object.keys(settings.getModelRoles()),
+						"default",
+					]),
+					getModelRole: role => settings.getModelRole(role),
+					modelLookup: modelRegistry,
+				};
+				const allModels = modelRegistry.getAll();
+				const originalModel = parseModelPattern(originalSelector, allModels, modelMatchPreferences).model;
+				const chainKey = resolveRetryFallbackChainKey(fallbackContext, originalSelector, originalModel, "default");
+				if (!chainKey) return false;
+				const parsedOriginal = parseModelString(originalSelector, {
+					allowMaxSuffix: true,
+					allowAutoAlias: true,
+					isLiteralModelId: (provider, id) => modelRegistry.find(provider, id) !== undefined,
+				});
+				const retryFallback: InitialRetryFallbackState = {
+					role: chainKey,
+					originalSelector,
+					originalThinkingLevel: parsedOriginal?.thinkingLevel,
+				};
+				for (const candidate of findRetryFallbackCandidates(
+					fallbackContext,
+					chainKey,
+					originalSelector,
+					originalModel,
+					{ allowMissingPrimary: true },
+				)) {
+					const resolved = parseModelPattern(candidate.raw, fallbackCandidates, modelMatchPreferences);
+					if (!resolved.model || !hasModelAuth(resolved.model)) continue;
+					model = resolved.model;
+					initialRetryFallback = retryFallback;
+					modelFallbackMessage = undefined;
+					if (resolved.explicitThinkingLevel) {
+						restoredSessionThinkingLevel = resolved.thinkingLevel;
+					} else if (retryFallback.originalThinkingLevel !== undefined) {
+						restoredSessionThinkingLevel = retryFallback.originalThinkingLevel;
+					}
+					adoptThinkingForModel(resolved.model);
+					preconnectModelHost(resolved.model.baseUrl);
+					return true;
+				}
+				return false;
+			};
+
 			await tryResolveDefaultRole();
 
 			if (!model) {
-				const fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
+				let fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
 				let pick = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth), provider =>
 					modelRegistry.hasConcreteAuth(provider),
 				);
 
 				// Cold-cache discovery race (issues #6114, #6162): a discovery
-				// provider (models.yml `openai-models-list`, LM Studio/Ollama/
+				// provider (models.yml openai-models-list, LM Studio/Ollama/
 				// llama.cpp, or an openai-compat proxy) ships no static models, so
 				// the static+cached catalog resolved nothing above. Background
 				// discovery in main.ts fires only AFTER createAgentSession returns,
-				// so on a cache-cold boot the configured default stays unresolved
-				// and `pick` silently degrades to an unrelated authed provider's
-				// default (#6162) or "No models available" (#6114) — even though
-				// `omp models` (which awaits discovery) lists the model. Await one
-				// cache-aware discovery pass and retry when a default role is
-				// configured (must win over `pick`) or nothing resolved at all.
-				// The common path — role already resolved, or a `pick` with no
-				// configured default — never pays for it.
+				// so on a cache-cold boot the configured default stays unresolved.
+				// Await one cache-aware discovery pass before choosing either its
+				// configured retry fallback or an unrelated provider default.
 				const defaultRoleConfigured = Boolean(settings.getModelRole("default"));
 				if (
 					!hasExplicitModel &&
@@ -3365,18 +3409,14 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						modelRegistry.refresh(options.offline ? "offline" : "online-if-uncached"),
 					);
 					if (!(await tryResolveDefaultRole()) && !model) {
-						const refreshedCandidates = await resolveAllowedModels(
-							modelRegistry,
-							settings,
-							modelMatchPreferences,
-						);
-						pick = pickDefaultAvailableModel(refreshedCandidates.filter(hasModelAuth), provider =>
+						fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
+						pick = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth), provider =>
 							modelRegistry.hasConcreteAuth(provider),
 						);
 					}
 				}
 
-				if (!model && pick) {
+				if (!model && !tryResolveDefaultRoleFallback(fallbackCandidates) && pick) {
 					model = pick;
 					adoptThinkingForModel(pick);
 				}

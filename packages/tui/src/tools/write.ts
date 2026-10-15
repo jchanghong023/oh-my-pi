@@ -166,7 +166,7 @@ function describeFigure(figure: ToolFigure | undefined): NativeNode | undefined 
 /** The written content as numbered code, keyed so it keeps its node as the figure above it comes and goes. */
 function describeSource(rawPath: string, content: string): NativeNode {
 	const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-	return { ...code(content, { lang, numbers: true }), key: "source" };
+	return { ...code(content, { lang, numbers: true, wrap: true }), key: "source" };
 }
 
 function countLines(text: string): number {

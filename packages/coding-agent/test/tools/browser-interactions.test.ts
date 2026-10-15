@@ -875,6 +875,47 @@ return { picks: await tab.evaluate(() => window.picks), panelScroll: await tab.e
 		}
 	}, 30_000);
 
+	test("clicks the first text match a scroll container shows a strip of, not one an overlay leaves an edge of", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-text-click-strip" };
+		const tabName = `text-click-strip-${crypto.randomUUID()}`;
+		// Each first button shows only its edge: 1px of 120px at a scroll panel's edge, 2px beside a fixed overlay,
+		// or 2px beside its wrapper's ::after, which hit testing reports as the wrapper, an ancestor.
+		const fixtures = {
+			strip: `<div style="width: 100px; overflow: auto; white-space: nowrap"><span style="display: inline-block; width: 99px"></span><button style="width: 120px" onclick="window.picks.push('strip')">Pick</button></div>
+<button onclick="window.picks.push('later')">Pick</button>`,
+			covered: `<button style="position: absolute; left: 10px; top: 10px; width: 120px" onclick="window.picks.push('covered')">Pick</button>
+<div style="position: fixed; left: 0; top: 0; width: 128px; height: 200px; background: white"><button style="margin-top: 100px" onclick="window.picks.push('overlay')">Pick</button></div>`,
+			pseudo: `<style>#wrap { position: relative; display: inline-block } #wrap::after { content: ""; position: absolute; inset: 0 2px 0 0; background: white }</style>
+<div id="wrap"><button style="width: 120px" onclick="window.picks.push('pseudo')">Pick</button></div>
+<button onclick="window.picks.push('later')">Pick</button>`,
+		};
+		await prelude.invoke({ action: "open", name: tabName, url: "about:blank" }, context);
+		try {
+			const result = await prelude.invoke(
+				{
+					action: "run",
+					name: tabName,
+					code: `const picks = {};
+for (const [name, html] of Object.entries(${JSON.stringify(fixtures)})) {
+	await tab.evaluate(html => {
+		document.body.innerHTML = html;
+		window.picks = [];
+	}, html);
+	picks[name] = await tab.click("text/Pick").then(() => tab.evaluate(() => window.picks), error => String(error));
+}
+return picks;`,
+					timeout: 20,
+				},
+				context,
+			);
+			expect(valueFrom<unknown>(result)).toEqual({ strip: ["strip"], covered: ["overlay"], pseudo: ["later"] });
+		} finally {
+			await prelude.invoke({ action: "close", name: tabName, kill: true }, context).catch(() => undefined);
+		}
+	}, 30_000);
+
 	test("fails a click the browser does not deliver and completes the rest", async () => {
 		const browserHandle = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
 		if (!("browser" in browserHandle)) throw new Error("Expected a Puppeteer browser");

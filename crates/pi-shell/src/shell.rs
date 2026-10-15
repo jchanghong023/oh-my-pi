@@ -6215,10 +6215,21 @@ mod tests {
 	/// a builtin blocks the runtime's only worker.
 	#[cfg(unix)]
 	fn capture_on_single_worker(command: &'static str) -> (ShellExecuteResult, String) {
+		capture_on_runtime(command, 512)
+	}
+
+	/// [`capture_on_single_worker`] with the blocking pool capped at
+	/// `max_blocking_threads`.
+	#[cfg(unix)]
+	fn capture_on_runtime(
+		command: &'static str,
+		max_blocking_threads: usize,
+	) -> (ShellExecuteResult, String) {
 		let (tx, rx) = std::sync::mpsc::channel();
 		std::thread::spawn(move || {
 			let runtime = tokio::runtime::Builder::new_multi_thread()
 				.worker_threads(1)
+				.max_blocking_threads(max_blocking_threads)
 				.enable_all()
 				.build()
 				.expect("single-worker runtime");
@@ -6230,7 +6241,20 @@ mod tests {
 			)));
 		});
 		rx.recv_timeout(Duration::from_secs(5))
-			.expect("read must not block its process-substitution producer")
+			.expect("read must not wait on a blocking worker it cannot get")
+	}
+
+	/// Owned-shell pipeline stages already hold a blocking worker. Two `read`
+	/// stages fill a two-thread pool; offloading each read again would queue it
+	/// behind the workers its own stages hold, forever.
+	#[cfg(unix)]
+	#[test]
+	fn pipeline_reads_do_not_nest_on_a_full_blocking_pool() {
+		let (result, output) =
+			capture_on_runtime("printf 'a\\n' | read -r x | read -r y; printf 'done\\n'", 2);
+
+		assert_eq!(result.exit_code, Some(0), "output: {output:?}");
+		assert_eq!(output, "done\n");
 	}
 
 	#[cfg(unix)]

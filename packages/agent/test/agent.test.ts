@@ -994,6 +994,48 @@ describe("Agent", () => {
 		expect(toolResults[0]).toMatchObject({ toolCallId: toolCall.id, toolName: toolCall.name });
 	});
 
+	it("keeps only the re-run result when Cursor re-dispatches a buffered call", async () => {
+		// Issue #15749: Cursor re-sent an exec frame for a call it had already
+		// run. The provider keeps one block for the call; persisting both results
+		// paired two answers with one id, which Cursor rejects on every rebuild.
+		const mock = createMockModel({ responses: [] });
+		const toolCall = {
+			type: "toolCall" as const,
+			id: "cursor-read-race",
+			name: "read",
+			arguments: { path: "/tmp/race.txt" },
+			[kCursorExecResolved]: true,
+		};
+		const started = createAssistantMessage([toolCall]);
+		const readResult = (text: string, isError: boolean): ToolResultMessage => ({
+			role: "toolResult",
+			toolCallId: toolCall.id,
+			toolName: toolCall.name,
+			content: [{ type: "text", text }],
+			isError,
+			timestamp: Date.now(),
+		});
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: (_model, _context, options) => {
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(async () => {
+					await options?.cursorOnToolResult?.(readResult("not found", true));
+					await options?.cursorOnToolResult?.(readResult("hello", false));
+					stream.push({ type: "start", partial: started });
+					stream.push({ type: "done", reason: "stop", message: started });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("trigger");
+
+		const toolResults = agent.state.messages.filter(message => message.role === "toolResult");
+		expect(toolResults).toHaveLength(1);
+		expect(toolResults[0]).toMatchObject({ isError: false, content: [{ type: "text", text: "hello" }] });
+	});
+
 	it("injects Cursor-carried passive context after the buffered results on success and provider error", async () => {
 		for (const outcome of ["done", "fail"] as const) {
 			const mock = createMockModel({ responses: [] });

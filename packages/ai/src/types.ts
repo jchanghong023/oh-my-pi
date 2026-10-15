@@ -1229,6 +1229,12 @@ export type AssistantRetryRecovery =
 export interface ContextSnapshot {
 	promptTokens: number; // authoritative provider prompt/input tokens
 	nonMessageTokens: number; // estimated non-message total at send time
+	/**
+	 * Estimated tool-schema tokens included in `nonMessageTokens` (0 when the
+	 * model defers schemas server-side). Lets a later model whose schema policy
+	 * differs rebase the provider anchor instead of inheriting its schemas.
+	 */
+	toolSchemaTokens?: number;
 	/** Estimated prompt tokens removed by local history rewrites after this provider snapshot was recorded. */
 	historyRewriteTokensRemoved?: number;
 	/**

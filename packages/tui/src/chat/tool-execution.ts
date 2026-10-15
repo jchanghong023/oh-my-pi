@@ -33,6 +33,7 @@ import { plainText } from "../native/spans";
 import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
+import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
 import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
 import { taskCardAgentIds } from "../tools/task";
@@ -1255,7 +1256,7 @@ export class ToolExecutionComponent extends Container {
 		const images: NativeNode[] = [];
 		this.#getAllImageBlocks().forEach((image, index) => {
 			if (!image.data || !image.mimeType) return;
-			const described = this.#nativeImages.get(`img${index}`, image.data, image.mimeType);
+			const described = this.#nativeImages.get(`img${index}`, image.data, image.mimeType, mediaPath);
 			if (!shown.blobs.has((described.p as { blob?: string } | undefined)?.blob ?? "")) images.push(described);
 		});
 		return images;
@@ -1287,7 +1288,7 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}`;
+		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
 
@@ -1694,6 +1695,7 @@ export class ToolExecutionComponent extends Container {
 
 		if (this.#result) {
 			const imageBlocks = this.#getAllImageBlocks();
+			const sourcePath = readMediaPath(this.#result.details);
 
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
@@ -1721,6 +1723,7 @@ export class ToolExecutionComponent extends Container {
 						{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
 						{
 							...resolveImageOptions(),
+							sourcePath,
 							budget: this.#ui.imageBudget,
 							imageKey: `te${this.#instanceId}:${i}`,
 							requestRender: () => this.#ui.requestRender(),
@@ -1859,7 +1862,8 @@ export class ToolExecutionComponent extends Container {
 
 	#getTextOutput(): string {
 		if (!this.#result) return "";
-		const key = `${this.#resultVersion}|${this.#showImages}|${TERMINAL.imageProtocol ?? "-"}`;
+		// Image placeholders embed a link only under an enabled hyperlink policy.
+		const key = `${this.#resultVersion}|${this.#showImages}|${TERMINAL.imageProtocol ?? "-"}|${imageLinksEnabled()}`;
 		if (key === this.#textOutputKey) return this.#textOutput;
 
 		const textBlocks = this.#result.content.filter(c => c.type === "text");
@@ -1876,7 +1880,10 @@ export class ToolExecutionComponent extends Container {
 				.map(img => {
 					const mimeType = String(img.mimeType);
 					const dims = img.data ? (getImageDimensions(img.data, mimeType) ?? undefined) : undefined;
-					return imageFallback(mimeType, dims);
+					const placeholder = imageFallback(mimeType, dims);
+					return img.data
+						? linkedImageText(placeholder, { data: img.data, mimeType }, readMediaPath(this.#result?.details))
+						: placeholder;
 				})
 				.join("\n");
 			output = output ? `${output}\n${imageIndicators}` : imageIndicators;

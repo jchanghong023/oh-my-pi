@@ -737,7 +737,12 @@ describe("MarketplaceManager", () => {
 			await manager.addMarketplace(FIXTURE_DIR);
 			await manager.installPlugin("hello-plugin", "test-marketplace");
 
-			const roots = await listOmpExtensionRoots({ cwd: tmpHome, home: tmpHome, repoRoot: null });
+			const roots = await listOmpExtensionRoots({
+				cwd: tmpHome,
+				home: tmpHome,
+				repoRoot: null,
+				extensionRoots: { explicit: [], configured: [], configuredLevel: "user", mode: "merge" },
+			});
 			expect(roots.map(root => root.name)).toEqual([]);
 		} finally {
 			fs.rmSync(tmpHome, { recursive: true, force: true });

@@ -22,9 +22,9 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.11.0`
-- **Upstream commit**：`c2cb79e4c227aa4b22c4ccb933ff72fd88bceba4`
-- **同步日期**：2026-10-14
+* **版本**：`v18.11.1`
+- **Upstream commit**：`7cc912940b107eb2d771b0d106c640a8eddc9edf`
+- **同步日期**：2026-10-15
 
 ## 当前功能差异
 
@@ -202,7 +202,7 @@
 - `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、stdout 惰性暴露与完成后收口），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。截止时取消管道读取并保留部分输出已由上游（2026-10-07 `#cutoff` + `#pipeReaders`）等价提供，不再由 fork 承担。
 - `packages/utils/src/marked/core.ts`：共享 Markdown lexer 与文档章节解析使用一致的围栏合法性：反引号围栏的 info string 含反引号时按普通段落处理，不中断已有段落或丢弃其中的检索词；波浪线围栏的 info string 及有效代码正文不受影响。文档索引迁移从存储原文恢复受影响的全文检索，不要求源目录存在。
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁（e0fc1cf 基线即与其自身 `rpc-user-input-order` 测试矛盾）；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
-- `packages/coding-agent/src/session/session-advisors.ts`：原生压缩仅覆盖较早历史前缀时，保留并回放未压缩的近期消息；完整 replacement history 已包含近期消息时不重复追加，避免 advisor 丢失当前决策或重复工具调用。
+- Advisor 原生压缩仅覆盖较早历史前缀时，须保留并回放未压缩的近期消息；完整 replacement history 已包含近期消息时不重复追加，避免丢失当前决策或重复工具调用。该目标由上游等价满足，不再保留 fork 实现补丁及重复回归。
 - `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：Windows EPERM 时降级为 junction 或文件复制、跳过 dangling link 已由上游提供；fork 仅保留文件复制时的独占目标语义，不能覆盖现有文件或跟随已有 symlink。

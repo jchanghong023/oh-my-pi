@@ -887,6 +887,10 @@ Current no-op methods in this controller:
 
 `ctx.ui.setEditorComponent(factory)` is wired to the live editor; the factory
 must return a `CustomEditor` subclass, not a plain `Editor`/`EditorComponent`.
+`ctx.ui.getEditorComponent()` returns the factory currently installed (or
+`undefined` for the built-in editor), so an extension can wrap another
+extension's editor instead of replacing it; inside a factory it still returns
+the previous one.
 `setWidget` renders widget components above or below the editor via
 `setHookWidget(...)` (`placement: "aboveEditor" | "belowEditor"`; string arrays show
 up to 10 content lines plus a truncation notice). Pass `undefined` to remove a
@@ -1046,7 +1050,7 @@ Unsupported/no-op in RPC implementation:
 
 - `onTerminalInput`
 - `custom`; optional `askDialog` is absent
-- `getEditorText` returns `""`
+- `getEditorText` returns `""`; `getEditorComponent` returns `undefined`
 - `setFooter`, `setHeader`, `setEditorComponent`, `addAutocompleteProvider`
 - `setWorkingMessage`
 - theme switching/loading (`setTheme` returns failure)

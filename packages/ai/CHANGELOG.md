@@ -19,6 +19,26 @@
 - Respected explicitly set TLS environment values, including empty strings, instead of replacing them with fork defaults.
 - Started a new Codex turn when a context extension rewrites a historical user message, while keeping synthesized per-call context out of conversational turn boundaries.
 
+## [18.11.1] - 2026-10-15
+
+### Added
+
+- Added image support for native OpenAI Decisions and Workers AI judgments, prompted vision chat, and auth-gateway System One requests; images exceeding a judgment API's documented caps (e.g. Clef's 4 images, 4 MiB each) are rejected locally ([#15471](https://github.com/can1357/oh-my-pi/pull/15471) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- `isSurvivingAssistant` in `providers/transform-messages`: whether an assistant turn reaches a replay, malformed tool calls dropped first, so callers outside `transformMessages` pick the same latest turn ([#15791](https://github.com/can1357/oh-my-pi/pull/15791) by [@will-bogusz](https://github.com/will-bogusz))
+
+### Fixed
+
+- Fixed Codex-hosted image generation ignoring the requested `aspect_ratio`/`image_size`, and `3:2`/`2:3` requests sending no size to OpenAI image models ([#15601](https://github.com/can1357/oh-my-pi/pull/15601) by [@chulmin-dev](https://github.com/chulmin-dev))
+- Fixed Claude subagents failing to return structured results when `yield` arguments arrived as invalid JSON ([#15605](https://github.com/can1357/oh-my-pi/pull/15605) by [@farnoy](https://github.com/farnoy))
+- Fixed turns stopping instead of retrying when a gateway reports its upstream WebSocket closed before `response.completed` ([#15628](https://github.com/can1357/oh-my-pi/pull/15628) by [@nqrwhal](https://github.com/nqrwhal)).
+- Fixed Claude on Google Vertex ignoring `cacheRetention: "long"`: prompt caches now get the 1h TTL instead of expiring after 5 minutes, and the `extended-cache-ttl` beta (which Vertex rejects) is never sent there ([#15505](https://github.com/can1357/oh-my-pi/pull/15505) by [@hpost](https://github.com/hpost))
+- Fixed Gemini tool continuations failing on OpenAI-compatible gateways that return `reasoning_signature`, including restored sessions ([#15678](https://github.com/can1357/oh-my-pi/pull/15678) by [@Zzz141592653](https://github.com/Zzz141592653))
+- Fixed Cursor sessions failing every rebuilt request with `PROVIDER_ERROR` after the server re-sent a tool call: the call is recorded once, and histories that already repeat it replay it once with its latest result ([#15749](https://github.com/can1357/oh-my-pi/issues/15749))
+- Fixed Cursor turns cut off mid-stream failing every retry with `PROVIDER_ERROR` until you sent a new message; the retry now starts a fresh Cursor conversation ([#15830](https://github.com/can1357/oh-my-pi/issues/15830))
+- Fixed malformed image-generation inputs being forwarded to providers or reported as credential/upstream errors ([#15765](https://github.com/can1357/oh-my-pi/pull/15765) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).
+- Fixed broker-backed auth-gateway processes retaining a cache entry for every distinct client session indefinitely under sustained traffic ([#15841](https://github.com/can1357/oh-my-pi/issues/15841)).
+- Fixed turns ending on a pinned error when a provider reports "temporarily unavailable" or finishes with an `unknown`, `other` or `unspecified` finish reason: these now retry automatically ([#15424](https://github.com/can1357/oh-my-pi/pull/15424) by [@lockwo](https://github.com/lockwo))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

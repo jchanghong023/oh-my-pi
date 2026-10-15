@@ -853,6 +853,22 @@ describe("ProcessTerminal DECRQM + in-band resize (DEC 2026/2048)", () => {
 		terminal.stop();
 	});
 
+	it("rearms once per paste, not once per read, when a paste spans many reads (#15757)", () => {
+		const { terminal, writes, received } = setup();
+		process.stdin.emit("data", "\x1b[?2004;1$y");
+		writes.length = 0;
+		const body = "log line\n".repeat(200);
+		process.stdin.emit("data", "\x1b[200~");
+		for (const char of body) process.stdin.emit("data", char);
+		process.stdin.emit("data", "\x1b[201~");
+		expect(writes).toEqual(["\x1b[?2004h"]);
+		expect(received).toEqual([`\x1b[200~${body}\x1b[201~`]);
+		// The next read after the paste reasserts the mode again.
+		process.stdin.emit("data", "x");
+		expect(writes).toEqual(["\x1b[?2004h", "\x1b[?2004h"]);
+		terminal.stop();
+	});
+
 	it("rearms confirmed bracketed paste in the same write as a render, only while active", () => {
 		const { terminal, writes } = setup();
 		terminal.write("before confirmation");

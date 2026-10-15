@@ -258,7 +258,14 @@ export function describeCodeCell(options: Omit<CodeCellOptions, "width">, theme:
 	const sections: NativeOutputBlockSection[] = [
 		{
 			key: "code",
-			body: [code(options.code ?? "", { lang: options.language, start, numbers: start !== undefined || undefined })],
+			body: [
+				code(options.code ?? "", {
+					lang: options.language,
+					start,
+					numbers: start !== undefined || undefined,
+					wrap: true,
+				}),
+			],
 		},
 	];
 	const output = describeCellOutput(options.output, expanded, outputMaxLines);

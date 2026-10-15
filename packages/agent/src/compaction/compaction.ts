@@ -34,6 +34,7 @@ import {
 import type { InputItem as CodexInputItem } from "@oh-my-pi/pi-ai/providers/openai-codex/request-transformer";
 import { convertTools } from "@oh-my-pi/pi-ai/providers/openai-responses";
 import { buildResponsesInput, resolveOpenAICompatPolicy } from "@oh-my-pi/pi-ai/providers/openai-shared";
+import { isSurvivingAssistant } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { stripOpenAIResponsesOutputOnlyStatusesForReplay } from "@oh-my-pi/pi-ai/utils";
 import { preferredDialect } from "@oh-my-pi/pi-catalog/identity";
 import { clampThinkingLevelForModel } from "@oh-my-pi/pi-catalog/model-thinking";
@@ -375,9 +376,11 @@ export function compactionContextTokens(providerContextTokens: number, storedCon
 /**
  * The prompt budget below `contextWindow`: the window less
  * {@link resolveBudgetReserveTokens}, capped at `contextWindow - 1` so it never
- * reaches the whole window even when the reserve resolves to 0.
+ * reaches the whole window even when the reserve resolves to 0. Independent of
+ * any configured trigger; the default {@link resolveThresholdTokens} and
+ * length-stop recovery's "did the window run out" check both use it.
  */
-function promptBudgetTokens(contextWindow: number, settings: CompactionSettings): number {
+export function promptBudgetTokens(contextWindow: number, settings: CompactionSettings): number {
 	return Math.max(0, Math.min(contextWindow - 1, contextWindow - resolveBudgetReserveTokens(contextWindow, settings)));
 }
 
@@ -535,13 +538,23 @@ export function findCutPoint(
 	// belonging to an assistant. Checking individual messages can either retain
 	// the oversized older assistant or miss its boundary and retain all history.
 	let accumulatedTokens = 0;
+	// The latest surviving assistant turn replays byte-for-byte, signatures of
+	// abandoned tool calls included, so it is counted as the latest.
+	let latestTurnIndex = -1;
+	for (let i = entries.length - 1; i >= 0 && latestTurnIndex < 0; i--) {
+		const message = getMessageFromEntry(entries[i]);
+		if (message?.role === "assistant" && isSurvivingAssistant(message)) latestTurnIndex = i;
+	}
 	let cutPointIndex = cutPoints.length - 1;
 	let cutIndex = cutPoints[cutPointIndex];
 
 	for (let i = endIndex - 1; i >= startIndex; i--) {
 		const entry = entries[i];
 		const message = getMessageFromEntry(entry);
-		if (message) accumulatedTokens += tokenizer.countMessage(message);
+		if (message) {
+			accumulatedTokens +=
+				i === latestTurnIndex ? tokenizer.countLatestTurn(message) : tokenizer.countMessage(message);
+		}
 		if (i !== cutPoints[cutPointIndex]) continue;
 		if (accumulatedTokens > keepRecentTokens) break;
 		cutIndex = i;

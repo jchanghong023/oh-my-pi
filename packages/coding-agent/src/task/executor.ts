@@ -3069,10 +3069,12 @@ function wakeTurnFailed(outcome: { error: string | undefined; aborted: boolean; 
  * would otherwise see as the same generic "stopped without replying" note:
  * a real answer (yield summary or turn text), a provider failure carrying the
  * attributed `[provider/model] <error>`, a cancellation with its reason, a
- * finalization throw, or a turn that ran and produced nothing. A turn that
- * yielded an artifact before failing is reported via that artifact's summary
- * rather than contradicted with a "no output" claim; a partial-answer waker
- * (`alreadyMessaged`) is told the earlier message was not the answer. Every
+ * finalization throw, a completed turn whose only output was an IRC message
+ * (`alreadyMessaged`, reached from the parent-owned wake job), or a turn that
+ * ran and produced nothing. A turn that yielded an artifact before failing is
+ * reported via that artifact's summary rather than contradicted with a "no
+ * output" claim; on a failed turn, an `alreadyMessaged` waker is told the
+ * earlier message was not the answer. Every
  * non-answer notice carries a `history://<id>` pointer so the peer can inspect
  * the transcript. Exported for a focused contract test of the yielded-failure
  * branch, which the observer seam cannot drive.
@@ -3111,13 +3113,16 @@ export function buildWakeRelayBody(args: {
 		return `${headline} ${context} ${transcript}`;
 	}
 
-	// Completed lane. `alreadyMessaged` completed turns were filtered upstream
-	// (their answer would duplicate what the agent already sent).
+	// Peer relays filter already-messaged completed turns upstream; parent-owned
+	// wake jobs still need an accurate completion when IRC was the only output.
 	const answer = summary ?? args.turnText.trim();
 	if (answer) return answer;
 	if (args.finalizeError) {
 		const message = args.finalizeError instanceof Error ? args.finalizeError.message : String(args.finalizeError);
 		return `Wake turn failed to finalize: ${message}. No answer was produced. ${transcript}`;
+	}
+	if (args.alreadyMessaged) {
+		return `Wake turn completed; ${args.id} sent a message during this turn. ${transcript}`;
 	}
 	return `Wake turn produced no output. ${transcript}`;
 }

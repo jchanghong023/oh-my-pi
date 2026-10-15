@@ -141,7 +141,7 @@ type OpenAICompletionsDeltaWithReasoningDetails = ChatCompletionChunk.Choice["de
 	reasoning_details?: unknown;
 };
 
-type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature";
+type GeminiMessageThoughtSignatureField = "thinking_signature" | "thought_signature" | "reasoning_signature";
 
 type GeminiMessageThoughtSignature = {
 	field: GeminiMessageThoughtSignatureField;
@@ -163,6 +163,7 @@ const GEMINI_THOUGHT_SIGNATURE_NAMESPACES: readonly GeminiThoughtSignatureNamesp
 const GEMINI_MESSAGE_THOUGHT_SIGNATURE_FIELDS: readonly GeminiMessageThoughtSignatureField[] = [
 	"thinking_signature",
 	"thought_signature",
+	"reasoning_signature",
 ];
 
 function getGeminiThoughtSignatureExtraContent(value: unknown): GeminiThoughtSignatureExtraContent | undefined {
@@ -199,9 +200,10 @@ function parseStoredThoughtSignature(thoughtSignature: string | undefined): unkn
 
 // A single tool-call turn on an OpenAI-compatible Gemini wire can carry two
 // independent signatures: a per-call one (`extra_content.google|vertex` or an
-// encrypted `reasoning_details` entry) and a message-level `thinking_signature`
-// / `thought_signature`. Both are stashed together on the originating tool
-// call's `thoughtSignature` so persistence and replay preserve each field.
+// encrypted `reasoning_details` entry) and a message-level signature
+// (`thinking_signature`, `thought_signature`, or `reasoning_signature`).
+// Both are stashed together on the originating tool call's `thoughtSignature`
+// so persistence and replay preserve each field.
 // `perCall` holds the raw extra_content object or reasoning detail; `message`
 // holds the message-level signature in its wire shape.
 type StoredGeminiSignature = {
@@ -2962,6 +2964,19 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return {
 				stopReason: "error",
 				errorMessage: "Provider returned error finish_reason: insufficient_system_resource",
+			};
+		case "unknown":
+		case "other":
+		case "unspecified":
+		case "finish_reason_unspecified":
+			// The provider ended the stream without saying why (a dropped
+			// connection behind a gateway, a backend that lost the stop code).
+			// Pinning it as a terminal error strands a turn that a resample
+			// fixes. Word the message to match the transient-transport retry
+			// pattern; the retry budget bounds the replay.
+			return {
+				stopReason: "error",
+				errorMessage: `Provider returned error finish_reason: ${normalized}`,
 			};
 		default:
 			return {

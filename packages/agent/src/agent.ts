@@ -1393,6 +1393,20 @@ export class Agent {
 	}
 
 	/**
+	 * Move the given pending steering messages (by identity) ahead of the rest,
+	 * keeping both groups' relative order, so one-at-a-time delivery takes them
+	 * first. Messages no longer pending, including a claimed batch already
+	 * being delivered, are ignored.
+	 */
+	prioritizeSteering(messages: readonly AgentMessage[]): void {
+		const wanted = new Set(messages);
+		const front = this.#steeringQueue.filter(message => wanted.has(message));
+		if (front.every((message, index) => this.#steeringQueue[index] === message)) return;
+		this.#steeringQueue = [...front, ...this.#steeringQueue.filter(message => !wanted.has(message))];
+		this.#emitQueueChanged();
+	}
+
+	/**
 	 * Queue a follow-up message to be processed after the agent finishes.
 	 * Delivered only when agent has no more tool calls or steering messages.
 	 */
@@ -1810,10 +1824,19 @@ export class Agent {
 			// that, a transformer resolving after the swap would patch a detached
 			// object while the persisted result kept the original payload — the
 			// rewrite silently lost.
+			//
+			// A result for a call already buffered is the server re-dispatching
+			// that call; the provider keeps one block for it, so the re-run's
+			// result replaces the first rather than pairing a second result with
+			// the same id (issue #15749).
 			const entry: CursorToolResultEntry = {
 				toolResult: message,
 				additionalContext: (message as ToolResultWithAdditionalContext)[TOOL_RESULT_ADDITIONAL_CONTEXT],
 			};
+			const superseded = this.#cursorToolResultBuffer.findIndex(
+				({ toolResult }) => toolResult.toolCallId === message.toolCallId,
+			);
+			if (superseded >= 0) this.#cursorToolResultBuffer.splice(superseded, 1);
 			this.#cursorToolResultBuffer.push(entry);
 			const transform = this.#cursorOnToolResult;
 			if (transform) {

@@ -124,6 +124,11 @@ describe("buildWorkspaceTree", () => {
 		expect(tree.rendered).toContain("ln elided…]");
 	});
 
+	it("rejects native scan failures instead of returning an empty listing", async () => {
+		const missing = path.join(await makeTempDir(), "missing");
+		await expect(buildDirectoryTree(missing)).rejects.toThrow(/missing|not found/i);
+	});
+
 	it("can keep root entries uncapped while truncating child directories", async () => {
 		const cwd = await makeTempDir();
 		const childDir = path.join(cwd, "child");

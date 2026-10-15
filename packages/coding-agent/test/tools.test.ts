@@ -990,12 +990,12 @@ describe("Coding Agent Tools", () => {
 			expect(output).not.toContain("Showing line 1");
 		});
 
-		it("tail selector is verbatim under :raw and clamps to the whole file when N exceeds it", async () => {
+		it("raw tail selects the last two addressable lines, not the terminal newline", async () => {
 			const testFile = path.join(testDir, "tail-raw.txt");
 			fs.writeFileSync(testFile, "alpha\nbeta\ngamma\n");
 
 			const raw = getTextOutput(await readTool.execute("test-tail-raw", { path: `${testFile}:raw:-2` }));
-			expect(raw).toBe("gamma\n");
+			expect(raw).toBe("beta\ngamma");
 
 			const clamped = getTextOutput(await readTool.execute("test-tail-clamp", { path: `${testFile}:-50` }));
 			expect(clamped).toContain("alpha");

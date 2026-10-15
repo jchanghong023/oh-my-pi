@@ -985,9 +985,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			if (!this.#launchEnabled) throw new ToolError("Service launch is disabled in this session.");
 			if (asyncRequested || rawTimeout !== undefined)
 				throw new ToolError("Service mode does not accept async or timeout; use ready.timeout for readiness.");
-		} else if (ready !== undefined) {
-			// Nothing can honour ready without a service to attach it to;
-			// running the command the caller did ask for beats failing the call.
+		} else if (ready !== undefined && (ready.log !== undefined || (ready.port !== undefined && ready.port !== 0))) {
+			// Host/timeout only configure a readiness condition; neither requests one,
+			// and tool-call layers may materialize an unset port as zero. Keep service
+			// validation unchanged, but only warn when a condition was actually ignored.
 			pendingNotices.push("Ignored ready: service-only, and no service name was given.");
 		}
 		if (asyncRequested && !cfgAsyncEnabled.get(this.session.settings)) {

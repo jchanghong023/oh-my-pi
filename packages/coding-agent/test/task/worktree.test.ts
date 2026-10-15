@@ -873,11 +873,13 @@ describe("detachGitDir", () => {
 				const module = path.join(root, "packages/module");
 				const nested = path.join(module, "nested");
 				const baseline = await captureIsolationBaseline(root, wt);
+				// git realpaths the admin dir; a symlinked tmpdir (macOS /var -> /private/var) must match.
+				const rootReal = await fs.realpath(root);
 				for (const dir of [module, nested]) {
 					expect(await runGit(dir, ["status", "--porcelain=v1"])).toBe("");
 					// git prints forward slashes on Windows; resolve to the platform form.
 					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
-					expect(admin.startsWith(root + path.sep)).toBe(true);
+					expect(admin.startsWith(rootReal + path.sep)).toBe(true);
 				}
 				// Submodule clones don't inherit the superproject's identity; CI has no global one.
 				for (const dir of [module, nested]) {
@@ -917,6 +919,51 @@ describe("detachGitDir", () => {
 			]);
 			expect(merged.merged).toContain(lastBranchName);
 			expect(await runGit(wt, ["ls-tree", "HEAD", "packages/module"])).toContain(lastModuleCommit);
+		} finally {
+			setWorktreesDir(undefined);
+			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+		}
+	}, 30_000);
+
+	it("preserves commits in a submodule added inside the isolation", async () => {
+		const leaf = await createGitRepo();
+		await runGit(leaf, ["config", "user.email", "src@example.com"]);
+		await runGit(leaf, ["config", "user.name", "Source User"]);
+		await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
+		await runGit(leaf, ["add", "."]);
+		await runGit(leaf, ["commit", "-q", "-m", "leaf"]);
+
+		const { wt } = await makeLinkedWorktree();
+		vi.spyOn(natives, "isoResolve").mockResolvedValue({
+			kind: natives.IsoBackendKind.Rcopy,
+			candidates: [natives.IsoBackendKind.Rcopy],
+			fellBack: false,
+			reason: undefined,
+		});
+		const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-added-submodule-base-"));
+		tempDirs.push(worktreeBase);
+		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		delete process.env.OMP_WORKTREE_DIR;
+		setWorktreesDir(worktreeBase);
+		try {
+			const handle = await ensureIsolation(wt, "added-submodule");
+			const root = handle.mergedDir;
+			const baseline = await captureIsolationBaseline(root, wt);
+			await runGit(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "packages/added"]);
+			const added = path.join(root, "packages/added");
+			// Submodule clones don't inherit the superproject's identity; CI has no global one.
+			await runGit(added, ["config", "user.email", "src@example.com"]);
+			await runGit(added, ["config", "user.name", "Source User"]);
+			await fs.writeFile(path.join(added, "leaf.txt"), "isolated\n");
+			await runGit(added, ["commit", "-q", "-am", "isolated leaf"]);
+			const addedCommit = await runGit(added, ["rev-parse", "HEAD"]);
+			await runGit(root, ["add", "packages/added"]);
+			const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
+			expect(rootPatch).toContain(addedCommit);
+			await cleanupIsolation(handle);
+			// No source submodule checkout exists; the commit must survive in the parent ODB.
+			expect(await runGit(wt, ["cat-file", "-t", addedCommit])).toBe("commit");
 		} finally {
 			setWorktreesDir(undefined);
 			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;

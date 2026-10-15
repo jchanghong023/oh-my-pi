@@ -35,6 +35,7 @@ import {
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
 	prepareCompaction,
+	promptBudgetTokens,
 	RESCUE_SHAKE_CONFIG,
 	remotePreserveReusable,
 	resolveBudgetReserveTokens,
@@ -279,19 +280,6 @@ const PAYLOAD_MEDIA_LIMIT_EVIDENCE_PATTERN =
 	/\btoo many (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\s*(?:count|limit)\b|\blimit of \d+\s*(?:images?|frames?|pixels?)\b|\bmaximum(?: of \d+)? (?:images?|frames?|pixels?)\b|\b(?:number|count) of (?:images?|frames?|pixels?)\b|\b(?:images?|frames?|pixels?)\b.{0,20}\bexceeds?\b.{0,20}\bmaximum\b|\b(?:images?|frames?) (?:is |are )?too large\b|\b(?:images?|frames?) dimensions?\b.{0,30}\bexceeds?\b.{0,30}\b(?:pixels?|\d+)\b/i;
 function hasExplicitMediaRejectionEvidence(errorMessage: string | undefined): boolean {
 	return errorMessage !== undefined && PAYLOAD_MEDIA_LIMIT_EVIDENCE_PATTERN.test(errorMessage);
-}
-
-/**
- * User-facing notice for a compaction dead end: maintenance freed too little
- * to retry safely. `remedies` names the recovery actions left on the emitting
- * path — by the time the post-pass dead end fires, the tiered rescue has
- * already attempted both elide and image-drop automatically.
- */
-function compactionDeadEndWarning(remedies: string): string {
-	return (
-		"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. " +
-		`The most recent turn alone is too large to reduce further; ${remedies} or switch to a larger-context model.`
-	);
 }
 
 /** A terminal payload rejection may be byte-sized history or irreducible media, not necessarily token overflow. */
@@ -1934,7 +1922,7 @@ export class SessionMaintenance {
 				detachPostCommit,
 			);
 			if (!safeToContinue) {
-				const warning = compactionDeadEndWarning("clear large tool output");
+				const warning = this.#compactionDeadEndWarning("clear large tool output");
 				const entry = getLatestCompactionEntry(this.#host.sessionManager.getBranch());
 				if (entry) {
 					entry.warning = warning;
@@ -3263,17 +3251,27 @@ export class SessionMaintenance {
 		if (sameModel && !errorIsFromBeforeCompaction && assistantMessage.stopReason === "length") {
 			const incompleteCompactionSettings = this.#compactionSettings;
 			const incompleteContextTokens = calculateContextTokens(assistantMessage.usage);
+			// The cut output is dropped before the next request, so only the prompt
+			// counts against the configured trigger (#15870). Subtract the output from
+			// occupancy rather than reading prompt buckets: an authoritative
+			// `usage.contextTokens` (Cursor checkpoints) already includes this turn's
+			// output. Prompt + output still marks the window itself as what ran out
+			// (e.g. Anthropic `model_context_window_exceeded`), measured against the
+			// window's own prompt budget rather than a trigger the user may have set
+			// far lower.
+			const incompletePromptTokens = Math.max(0, incompleteContextTokens - assistantMessage.usage.output);
 			// Unknown windows keep compacting: there is no evidence the window had room.
 			const windowExhausted =
 				contextWindow <= 0 ||
-				incompleteContextTokens > resolveThresholdTokens(contextWindow, incompleteCompactionSettings);
+				incompletePromptTokens > resolveThresholdTokens(contextWindow, incompleteCompactionSettings) ||
+				incompleteContextTokens > promptBudgetTokens(contextWindow, incompleteCompactionSettings);
 			if (noRecoveryReplay || (!windowExhausted && assistantTurnDelivered(assistantMessage))) {
 				// Below threshold, compaction cannot raise the output cap. CodeAgent
 				// also keeps incomplete output when the window is exhausted: maintenance
 				// may shrink history, but must not regenerate the delivered turn.
 				logger.warn("response.incomplete: keeping truncated turn without replay", {
 					model: `${assistantMessage.provider}/${assistantMessage.model}`,
-					contextTokens: incompleteContextTokens,
+					promptTokens: incompletePromptTokens,
 					outputTokens: assistantMessage.usage.output,
 				});
 				if (!noRecoveryReplay) {
@@ -3376,7 +3374,7 @@ export class SessionMaintenance {
 					}
 					logger.debug("Retrying response.incomplete without compaction (below threshold)", {
 						model: `${assistantMessage.provider}/${assistantMessage.model}`,
-						contextTokens: incompleteContextTokens,
+						promptTokens: incompletePromptTokens,
 						attempt: this.#incompleteRecoveryAttempts,
 					});
 					this.#host.scheduleAgentContinue({ source: "incomplete-retry", delayMs: 100, generation });
@@ -4332,6 +4330,31 @@ export class SessionMaintenance {
 		});
 	}
 
+	#compactionDeadEndWarning(remedies: string): string {
+		const contextWindow = this.#model?.contextWindow ?? 0;
+		if (contextWindow > 0) {
+			const recoveryBand = Math.floor(
+				resolveThresholdTokens(contextWindow, this.#compactionSettings) * COMPACTION_RECOVERY_BAND,
+			);
+			const overhead = computeNonMessageTokens(
+				this.#host.nonMessageTokenSource(),
+				this.#tokenizer,
+				this.#host.settings.revision,
+			);
+			if (overhead > recoveryBand) {
+				return (
+					"Compaction cannot create headroom — pausing automatic maintenance. " +
+					"The system prompt and always-sent tool schemas alone exceed the recovery band; " +
+					"reduce fixed context or adjust compaction.modelThresholds."
+				);
+			}
+		}
+		return (
+			"Compaction freed too little context to make progress — pausing automatic maintenance to avoid a compaction loop. " +
+			`The most recent turn alone is too large to reduce further; ${remedies} or switch to a larger-context model.`
+		);
+	}
+
 	/**
 	 * Post-maintenance progress check for the context-full / snapcompact tail.
 	 *
@@ -5251,7 +5274,7 @@ export class SessionMaintenance {
 											? (snapcompact.getPreservedArchive(frameRescueResult.preserveData)?.frames.length ?? 0)
 											: 0;
 									const deadEndWarning = noProgressDeadEnd
-										? compactionDeadEndWarning(
+										? this.#compactionDeadEndWarning(
 												this.#deadEndRemedies("shrink it (e.g. clear large tool output)", implicatedFrames),
 											)
 										: undefined;
@@ -5832,9 +5855,19 @@ export class SessionMaintenance {
 											// last candidate waits within the user's provider-wait cap
 											// (`retry.maxDelayMs`, 0 = uncapped); past it, the outer method
 											// cascade can still recover or report the failure (#15311).
+											// `retry.waitForUsageReset` opts into sleeping through a provider-
+											// stated usage-limit reset, as turn recovery does: only on the last
+											// candidate, only with the provider's own retry hint, and never
+											// longer than that hint.
+											const waitForUsageReset =
+												!hasMoreCandidates &&
+												retrySettings.waitForUsageReset === true &&
+												AIError.is(id, AIError.Flag.UsageLimit) &&
+												retryAfterMs !== undefined &&
+												delayMs <= retryAfterMs;
 											const maxAcceptableDelayMs = hasMoreCandidates
 												? 30_000
-												: retrySettings.maxDelayMs > 0
+												: retrySettings.maxDelayMs > 0 && !waitForUsageReset
 													? retrySettings.maxDelayMs
 													: Number.POSITIVE_INFINITY;
 											if (delayMs > maxAcceptableDelayMs) {
@@ -6159,7 +6192,7 @@ export class SessionMaintenance {
 			}
 		}
 
-		const deadEndWarning = noProgressDeadEnd ? compactionDeadEndWarning("clear large tool output") : undefined;
+		const deadEndWarning = noProgressDeadEnd ? this.#compactionDeadEndWarning("clear large tool output") : undefined;
 		if (deadEndWarning) {
 			// Stamp the divider: the compaction bar badges the dead-end and
 			// carries the full warning in its ctrl+o detail, so the pause

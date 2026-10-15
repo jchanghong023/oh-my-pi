@@ -528,6 +528,19 @@ async function leaseArtifacts(
 	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
 }
 
+/**
+ * Agents are rediscovered on every spawn, but the session's skill list is
+ * fixed at startup. Rediscover skills once when an agent autoloads a skill the
+ * session has not seen, so a skill added after startup is not silently dropped.
+ */
+async function refreshSkillsForAutoload(session: ToolSession, agent: AgentDefinition): Promise<void> {
+	const names = agent.autoloadSkills;
+	if (!names?.length || !session.refreshSkills) return;
+	const known = new Set((session.skills ?? []).map(skill => skill.name));
+	if (names.every(name => known.has(name))) return;
+	await session.refreshSkills();
+}
+
 function resolveAutoloadSkills(session: ToolSession, agent: AgentDefinition) {
 	const skills = [...(session.skills ?? [])];
 	const autoloadSkills = agent.autoloadSkills?.length
@@ -793,6 +806,7 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			...request.identity,
 			label: request.identity?.label ?? (request.invocationKind === "eval" ? "EvalAgent" : undefined),
 		});
+		await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;

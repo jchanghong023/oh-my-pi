@@ -12,6 +12,12 @@
 - Restored the exact `www.openrouter.ai` embedding alias without treating arbitrary subdomains as official endpoints.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 
+## [18.11.1] - 2026-10-15
+
+### Fixed
+
+- Fixed a failing `mnemopi` CLI command or MCP memory call dropping the embeddings of memories it had just stored ([#15804](https://github.com/can1357/oh-my-pi/pull/15804) by [@yuzu-octopus](https://github.com/yuzu-octopus))
+
 ## [18.11.0] - 2026-10-14
 
 ### Fixed

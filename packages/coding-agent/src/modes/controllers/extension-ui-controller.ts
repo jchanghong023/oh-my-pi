@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Component, OverlayHandle, TUI } from "@oh-my-pi/pi-tui";
 import { Container, Spacer, Text } from "@oh-my-pi/pi-tui";
 import type { CollabUiRequestDraft, CollabUiSelectItem } from "@oh-my-pi/pi-wire";
@@ -116,11 +117,13 @@ export class ExtensionUiController {
 	#dialogActive = false;
 	#dialogQueue: Array<() => void> = [];
 	/**
-	 * The queued steering (chip texts) when a steer last denied an approval. Steering waits for
-	 * the tool batch to end, so while the queue still starts with it, later approvals of that
-	 * batch (an exclusive call asks only after the denied one settles) are denied by it as well.
+	 * The steering messages that last denied an approval. Steering waits for the tool batch to
+	 * end, so while any of them is still pending, later approvals of that batch (an exclusive call
+	 * asks only after the denied one settles) are denied by it as well. Tracked by identity: once
+	 * they are delivered, an equal-looking newer steer (another `[Image]` chip) predates its prompt
+	 * and does not answer it.
 	 */
-	#denyingSteering: readonly string[] | undefined;
+	#denyingSteering: readonly AgentMessage[] | undefined;
 	/**
 	 * Built once in `initHooksAndCustomTools()`. Reused directly by `/tree`
 	 * `ask` re-answer (issue #5642) to drive a standalone `AskTool.execute()`
@@ -174,6 +177,7 @@ export class ExtensionUiController {
 			editor: (title, prefill, dialogOptions, editorOptions) =>
 				this.showCollabAwareEditor(title, prefill, dialogOptions, editorOptions),
 			addAutocompleteProvider: factory => this.ctx.addAutocompleteProvider(factory),
+			getEditorComponent: () => this.ctx.getEditorComponent(),
 			get theme() {
 				return theme;
 			},
@@ -677,18 +681,27 @@ export class ExtensionUiController {
 			options: [APPROVE_OPTION, DENY_OPTION],
 		};
 		const session = this.ctx.session;
-		const queued = session.getQueuedMessages().steering;
-		const denying = this.#denyingSteering;
-		if (denying && denying.length <= queued.length && denying.every((text, i) => text === queued[i])) return false;
+		const agent = session.agent;
+		const pendingSteering = agent.peekSteeringQueue();
+		if (this.#denyingSteering?.some(message => pendingSteering.includes(message))) return false;
 		this.#denyingSteering = undefined;
 		const steered = new AbortController();
-		let steeringBaseline = queued.length;
+		let steeringBaseline = session.getQueuedMessages().steering.length;
+		let knownSteering = new Set(pendingSteering);
 		const unsubscribe = session.subscribe(event => {
-			if (event.type !== "queue_update") return;
+			if (event.type !== "queue_update" || steered.signal.aborted) return;
+			const current = agent.peekSteeringQueue();
 			if (event.steering.length > steeringBaseline) {
-				this.#denyingSteering = event.steering;
+				const added = current.filter(message => !knownSteering.has(message));
+				this.#denyingSteering = added;
+				// One-at-a-time delivery takes the oldest steer at the batch boundary; the
+				// message that denied this call must be the one that lands after the denial.
+				agent.prioritizeSteering(added);
 				steered.abort();
-			} else steeringBaseline = event.steering.length;
+			} else {
+				steeringBaseline = event.steering.length;
+				knownSteering = new Set(current);
+			}
 		});
 		const signal = dialogOptions?.signal ? AbortSignal.any([dialogOptions.signal, steered.signal]) : steered.signal;
 		try {
@@ -718,8 +731,11 @@ export class ExtensionUiController {
 					this.ctx.ui.setFocus(dialog);
 					// The dialog owns focus but forwards typing: keep the composer's cursor visible.
 					editor.focused = true;
+					// Its submissions steer this (main) session, even from a focused agent's view.
+					this.ctx.approvalOwnsComposer = true;
 					this.ctx.ui.requestRender();
 					return () => {
+						this.ctx.approvalOwnsComposer = false;
 						dialog.dispose();
 						this.ctx.editorContainer.clear();
 						this.ctx.editorContainer.addChild(editor);

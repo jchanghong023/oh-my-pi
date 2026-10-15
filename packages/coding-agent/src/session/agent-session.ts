@@ -278,6 +278,8 @@ import type {
 	AgentSessionDisposeOptions,
 	AsyncJobInspection,
 	AsyncJobSnapshot,
+	AsyncJobSnapshotItem,
+	AsyncJobTree,
 	CommandMetadataChangedListener,
 	ContextUsageBreakdown,
 	DroppedPrompt,
@@ -469,6 +471,21 @@ const DEFERRED_TITLE_MIN_WORDS = 40;
 /** Cap on the forked title request itself (measured p90 2.3s). */
 const TITLE_FORK_TIMEOUT_MS = 15_000;
 
+/** The public summary of `job` (see {@link AsyncJobSnapshotItem}). */
+function jobSnapshotItem(job: AsyncJob): AsyncJobSnapshotItem {
+	return {
+		id: job.id,
+		type: job.type,
+		status: job.status,
+		label: job.label,
+		command: job.process?.command,
+		startTime: job.startTime,
+		endTime: job.endTime,
+		agentId: job.agentId,
+		ownerId: job.ownerId,
+	};
+}
+
 import { LoopGuards, type StreamGuardsHost, StreamingEditGuard } from "./stream-guards";
 import { TodoTracker, type TodoTrackerHost } from "./todo-tracker";
 import { TtsrCoordinator, type TtsrCoordinatorHost } from "./ttsr-coordinator";
@@ -629,6 +646,7 @@ const noOpUIContext: ExtensionUIContext = {
 	setFooter: () => {},
 	setHeader: () => {},
 	setEditorComponent: () => {},
+	getEditorComponent: () => undefined,
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
 };
@@ -1032,6 +1050,8 @@ export class AgentSession implements SettingsScope {
 	readonly #allowSessionModelFallback: boolean;
 	/** Creation-time: false when the extension UI context cannot reach a human (ACP without form elicitation). */
 	readonly #interactivePrompts: boolean;
+	/** Newest usage reports, cached by fetchUsageReports. */
+	#usageReports: UsageReport[] | undefined;
 	#usageFallbackConfirmer: UsageFallbackConfirmer | undefined;
 	#usagePreflightAbortControllers = new Set<AbortController>();
 	/** In-flight vision descriptions that gate prompt admission; abort() cancels them. */
@@ -2921,37 +2941,51 @@ export class AgentSession implements SettingsScope {
 		const manager = this.#asyncJobManager;
 		if (!manager) return null;
 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
-		const running = manager.getRunningJobs(ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			command: job.process?.command,
-			startTime: job.startTime,
-			agentId: job.agentId,
-		}));
-		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
-			id: job.id,
-			type: job.type,
-			status: job.status,
-			label: job.label,
-			command: job.process?.command,
-			startTime: job.startTime,
-			endTime: job.endTime,
-			agentId: job.agentId,
-		}));
+		const running = manager.getRunningJobs(ownerFilter).map(jobSnapshotItem);
+		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(jobSnapshotItem);
 		const delivery = manager.getDeliveryState(ownerFilter);
 		return { running, recent, delivery };
 	}
 
 	/**
-	 * Inspect one async job this session owns: its command, live pids, exit
-	 * status and output. Undefined when the job is unknown, owned by another
-	 * agent, or evicted.
+	 * Async jobs of this agent and every subagent below it: the running ones and
+	 * the `recentLimit` (default 10) newest settled ones across the tree, with the subagents
+	 * that own them and the ancestors linking those to this agent. Lineage comes
+	 * from the agent registry, falling back to the task job that runs a subagent
+	 * once its registry entry is gone.
+	 */
+	getAsyncJobTree(options?: { recentLimit?: number }): AsyncJobTree | null {
+		const manager = this.#asyncJobManager;
+		if (!manager) return null;
+		const rootId = this.#agentId;
+		const parents = this.#jobTreeParents();
+		const running = manager.getRunningJobs().filter(job => this.#inJobTree(job, parents));
+		const recent = manager
+			.getRecentJobs(Number.POSITIVE_INFINITY)
+			.filter(job => this.#inJobTree(job, parents))
+			.slice(0, options?.recentLimit ?? 10);
+		const agents = new Map<string, { id: string; parentId?: string }>();
+		for (const job of [...running, ...recent]) {
+			for (let id = job.ownerId; id !== undefined && id !== rootId && !agents.has(id); id = parents.get(id)) {
+				agents.set(id, { id, parentId: parents.get(id) });
+			}
+		}
+		return {
+			running: running.map(jobSnapshotItem),
+			recent: recent.map(jobSnapshotItem),
+			rootId,
+			agents: [...agents.values()],
+		};
+	}
+
+	/**
+	 * Inspect one async job in this agent's tree (see {@link getAsyncJobTree}):
+	 * its command, live pids, exit status and output. Undefined when the job is
+	 * unknown, owned outside the tree, or evicted.
 	 */
 	inspectAsyncJob(id: string): AsyncJobInspection | undefined {
-		const job = this.#ownedAsyncJob(id);
-		if (!job) return undefined;
+		const job = this.#asyncJobManager?.getJob(id);
+		if (!job || job.foreground || !this.#inJobTree(job, this.#jobTreeParents())) return undefined;
 		const details = job.latestDetails;
 		const reported = typeof details?.exitCode === "number" ? details.exitCode : undefined;
 		// Bash reports only non-zero exits; a completed command exited 0.
@@ -2972,6 +3006,33 @@ export class AgentSession implements SettingsScope {
 	cancelAsyncJob(id: string): boolean {
 		const job = this.#ownedAsyncJob(id);
 		return job !== undefined && this.#asyncJobManager?.cancel(id, { ownerId: job.ownerId }) === true;
+	}
+
+	/** Each agent's parent: the registry's link, else the owner of the task job that runs it. */
+	#jobTreeParents(): Map<string, string> {
+		const parents = new Map<string, string>();
+		const manager = this.#asyncJobManager;
+		if (manager) {
+			for (const job of [...manager.getRunningJobs(), ...manager.getRecentJobs(Number.POSITIVE_INFINITY)]) {
+				if (job.agentId !== undefined && job.ownerId !== undefined) parents.set(job.agentId, job.ownerId);
+			}
+		}
+		for (const ref of AgentRegistry.global().list()) {
+			if (ref.parentId !== undefined) parents.set(ref.id, ref.parentId);
+		}
+		return parents;
+	}
+
+	/** Whether `job`'s owner is this agent or descends from it; every job when this session has no agent id. */
+	#inJobTree(job: AsyncJob, parents: ReadonlyMap<string, string>): boolean {
+		const rootId = this.#agentId;
+		if (!rootId) return true;
+		const seen = new Set<string>();
+		for (let id = job.ownerId; id !== undefined && !seen.has(id); id = parents.get(id)) {
+			if (id === rootId) return true;
+			seen.add(id);
+		}
+		return false;
 	}
 
 	/** A listed job by id, under the same owner scope as {@link getAsyncJobSnapshot}. */
@@ -3675,9 +3736,7 @@ export class AgentSession implements SettingsScope {
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
-					nonMessageTokens:
-						this.#stats.pendingNonMessageTokens ??
-						computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision),
+					...this.#stats.nonMessageSnapshot(),
 					compactionEpoch: this.#stats.compactionEpoch,
 				};
 			}
@@ -10701,6 +10760,11 @@ export class AgentSession implements SettingsScope {
 		return this.#models.isFastModeActive();
 	}
 
+	/** Reports whether a fresh session on `model` realizes a fast tier from configured `tier.*` settings. */
+	isFastModeConfiguredFor(model: Model): boolean {
+		return this.#models.isFastModeConfiguredFor(model);
+	}
+
 	/** Effective wire service tier for a request to `model` under the live per-family tiers. */
 	effectiveServiceTier(model: Model): ServiceTier | undefined {
 		return this.#models.effectiveServiceTier(model);
@@ -13201,8 +13265,16 @@ export class AgentSession implements SettingsScope {
 		});
 		// Every fresh usage snapshot doubles as the salvage-sweep heartbeat: the
 		// status line calls this every 5 minutes while the TUI is open.
-		if (reports) this.#maybeScheduleResetSweep(reports);
+		if (reports) {
+			this.#usageReports = reports;
+			this.#maybeScheduleResetSweep(reports);
+		}
 		return reports;
+	}
+
+	/** The newest usage snapshot, available without a network call. */
+	get cachedUsageReports(): UsageReport[] | undefined {
+		return this.#usageReports;
 	}
 
 	/** Models whose live `/usage` reports map to a quantitative provider scope. */

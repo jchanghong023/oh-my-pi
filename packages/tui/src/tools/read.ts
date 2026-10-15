@@ -396,10 +396,11 @@ function readRangeStart(rawPath: string, args: ReadRenderArgs | undefined): numb
 }
 
 /**
- * Read content as numbered `code` (no path header: the head names the file).
- * Numbers come from `lineNumbers` (`displayContent`'s per-line numbers,
- * `null` for an elided block; runs split with `…` between) when they cover
- * every line, else count up from `start`.
+ * Read content as numbered, wrapped `code` (no path header: the head names
+ * the file), matching the ANSI preview's hanging wrap. Numbers come from
+ * `lineNumbers` (`displayContent`'s per-line numbers, `null` for an elided
+ * block; runs split with `…` between) when they cover every line, else count
+ * up from `start`.
  */
 export function readContentCode(
 	content: string,
@@ -410,7 +411,7 @@ export function readContentCode(
 	const lines = content.split("\n");
 	return numberedCode(
 		lines.map((text, i) => ({ n: numbers && numbers.length === lines.length ? numbers[i]! : start + i, text })),
-		{ lang },
+		{ lang, wrap: true },
 	);
 }
 

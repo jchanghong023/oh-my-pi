@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { Agent } from "@oh-my-pi/pi-agent-core";
 import { stripVTControlCharacters } from "node:util";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -42,8 +43,10 @@ function makeHarness() {
 	};
 	const showOverlay = vi.fn(() => fakeHandle);
 	let uiContext: ExtensionUIContext | undefined;
-	const steering: string[] = [];
-	const sessionListeners = new Set<(event: { type: string; steering?: string[] }) => void>();
+	// A real agent-core queue: approvals track and reorder its steering messages.
+	const agent = new Agent();
+	const steeringChips = () =>
+		agent.peekSteeringQueue().map(message => (message.role === "user" ? String(message.content) : ""));
 	const ctx = {
 		editor,
 		ui: {
@@ -55,12 +58,12 @@ function makeHarness() {
 		},
 		editorContainer,
 		session: {
+			agent,
 			extensionRunner: undefined,
 			setUsageFallbackConfirmer: vi.fn(),
-			getQueuedMessages: () => ({ steering: [...steering], followUp: [], liveSteered: 0 }),
+			getQueuedMessages: () => ({ steering: steeringChips(), followUp: [], liveSteered: 0 }),
 			subscribe(listener: (event: { type: string; steering?: string[] }) => void) {
-				sessionListeners.add(listener);
-				return () => sessionListeners.delete(listener);
+				return agent.onQueueChange(() => listener({ type: "queue_update", steering: steeringChips() }));
 			},
 		},
 		setToolUIContext(context: ExtensionUIContext, hasUI: boolean): void {
@@ -86,15 +89,14 @@ function makeHarness() {
 		controller,
 		inputController: (readText: () => Promise<string>) =>
 			new InputController(ctx, { readImage: async () => null, readText }),
-		/** Queue a user steer the way the session does: append, then emit `queue_update`. */
+		agent,
+		/** Queue a user steer the way the session does: the agent queue grows and notifies. */
 		queueSteer(text: string): void {
-			steering.push(text);
-			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [...steering] });
+			agent.steer({ role: "user", content: text, timestamp: Date.now() });
 		},
 		/** Deliver the queued steering at the batch boundary: the queue empties. */
 		deliverSteering(): void {
-			steering.length = 0;
-			for (const listener of sessionListeners) listener({ type: "queue_update", steering: [] });
+			agent.clearSteeringQueue();
 		},
 		handleInput(data: string): void {
 			if (!focused?.handleInput) throw new Error("Expected a focused input component");
@@ -574,6 +576,35 @@ describe("ExtensionUiController tool approval", () => {
 		expect(await harness.controller.showCollabAwareApproval(prompt)).toBe(false);
 		// Delivered at the batch boundary: the next turn's approvals ask again.
 		harness.deliverSteering();
+		void harness.controller.showCollabAwareApproval(prompt);
+		expect(harness.editorContainer.children).toHaveLength(2);
+	});
+
+	it("delivers the steer that denied the call ahead of an older queued one", async () => {
+		const harness = makeHarness();
+		harness.queueSteer("earlier message");
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const pending = harness.controller.showCollabAwareApproval(prompt);
+		for (const key of "keep the build dir") harness.handleInput(key);
+		harness.handleInput("\r");
+		expect(await pending).toBe(false);
+		// One-at-a-time delivery takes the head at the batch boundary.
+		expect(harness.agent.peekSteeringQueue().map(message => message.role === "user" && message.content)).toEqual([
+			"keep the build dir",
+			"earlier message",
+		]);
+	});
+
+	it("an equal-looking steer queued after the denying one was delivered does not answer a new prompt", async () => {
+		const harness = makeHarness();
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const first = harness.controller.showCollabAwareApproval(prompt);
+		for (const key of "[Image]") harness.handleInput(key);
+		harness.handleInput("\r");
+		expect(await first).toBe(false);
+		harness.deliverSteering();
+		// A later turn's steer with the same chip text predates the next prompt.
+		harness.queueSteer("[Image]");
 		void harness.controller.showCollabAwareApproval(prompt);
 		expect(harness.editorContainer.children).toHaveLength(2);
 	});

@@ -115,6 +115,11 @@ function applyCatalogAssignments<TApi extends Api>(model: Model<TApi>, catalog: 
 	} else {
 		delete model.requiresCursorToolSchemaProjection;
 	}
+	if (catalog.toolSchemasInContext === false) {
+		model.toolSchemasInContext = false;
+	} else {
+		delete model.toolSchemasInContext;
+	}
 	const requiresToolResultImageHoisting = catalog.requiresToolResultImageHoisting;
 	if (requiresToolResultImageHoisting === true) {
 		model.requiresToolResultImageHoisting = true;

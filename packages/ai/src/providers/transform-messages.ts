@@ -452,10 +452,25 @@ export function shouldDropTruncatedThinkingOnlyAssistant(msg: AssistantMessage):
 	return isTruncatedStop && !msg.content.some(block => block.type === "toolCall" || block.type === "text");
 }
 
+/**
+ * Whether `msg` reaches a replay as an assistant turn, so it can be the latest
+ * surviving one: {@link sanitizeMalformedToolCalls} drops its malformed tool
+ * calls, then {@link shouldDropTruncatedThinkingOnlyAssistant} a truncated
+ * turn left with no text and no tool call. On an already sanitized list this
+ * is `!shouldDropTruncatedThinkingOnlyAssistant(msg)`.
+ */
+export function isSurvivingAssistant(msg: AssistantMessage): boolean {
+	const isTruncatedStop = msg.stopReason === "length" || msg.stopReason === "error" || msg.stopReason === "aborted";
+	if (msg.content.length === 0) return !isTruncatedStop;
+	return msg.content.some(block =>
+		block.type === "toolCall" ? !isMalformedToolCall(block) : !isTruncatedStop || block.type === "text",
+	);
+}
+
 function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number {
 	for (let index = messages.length - 1; index >= 0; index -= 1) {
 		const msg = messages[index]!;
-		if (msg.role === "assistant" && !shouldDropTruncatedThinkingOnlyAssistant(msg)) {
+		if (msg.role === "assistant" && isSurvivingAssistant(msg)) {
 			return index;
 		}
 	}

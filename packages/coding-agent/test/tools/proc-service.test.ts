@@ -19,7 +19,6 @@ import {
 	type DaemonOperation,
 	type DaemonRpcResult,
 } from "../../src/launch/protocol";
-import * as bashExecutor from "../../src/exec/bash-executor";
 import { BashTool } from "../../src/tools/bash";
 import { WriteTool } from "../../src/tools/write";
 import { sharedBrowserDaemonName } from "../../src/tools/browser/shared-daemon";
@@ -689,53 +688,33 @@ describe("bash services via proc://", () => {
 		}
 	});
 
-	it("keeps empty or default optional fields out of service-mode selection", async () => {
+	it.each([
+		{
+			label: "materialized placeholders",
+			name: "",
+			ready: { log: "", port: 0, host: "", timeout: 30 },
+			ignored: false,
+		},
+		{ label: "blank fields", name: "   ", ready: { log: "", host: "" }, ignored: false },
+		{ label: "timeout only", ready: { timeout: 30 }, ignored: false },
+		{ label: "host only", ready: { host: "127.0.0.1" }, ignored: false },
+		{ label: "log condition", ready: { log: "READY", port: 0, timeout: 30 }, ignored: true },
+		{ label: "port condition", name: "", ready: { log: "", port: 1, host: "", timeout: 1 }, ignored: true },
+	])("runs plain commands with $label and only warns for readiness conditions", async ({ name, ready, ignored }) => {
 		const bash = new BashTool(toolSession(process.cwd()));
-		const textOf = (result: { content: Array<{ type: string; text?: string }> }): string =>
-			result.content.map(part => (part.type === "text" ? (part.text ?? "") : "")).join("");
-		const commands: string[] = [];
-		const spy = vi.spyOn(bashExecutor, "executeBash").mockImplementation(async command => {
-			commands.push(command);
-			return {
-				output: "PLAIN",
-				exitCode: 0,
-				cancelled: false,
-				timedOut: false,
-				truncated: false,
-				totalBytes: 5,
-				totalLines: 1,
-				outputBytes: 5,
-				outputLines: 1,
-			};
+		const result = await bash.execute("plain", {
+			command: "printf 'PLAIN\\n'",
+			timeout: 10,
+			cwd: process.cwd(),
+			pty: false,
+			async: false,
+			name,
+			ready,
 		});
-		try {
-			// Argument shape produced by tool-call layers that materialize every
-			// optional field: a plain command, not a service start.
-			const materialized = await bash.execute("materialized", {
-				command: "printf 'PLAIN\\n'",
-				timeout: 120,
-				cwd: process.cwd(),
-				pty: false,
-				async: false,
-				name: "",
-				ready: { log: "", port: 1, host: "", timeout: 1 },
-			});
-			expect(materialized.details?.service).toBeUndefined();
-			expect(textOf(materialized)).toContain("PLAIN");
-			expect(textOf(materialized)).toContain("Ignored ready");
-
-			const blank = await bash.execute("blank", {
-				command: "printf 'BLANK\\n'",
-				name: "   ",
-				ready: { log: "", host: "" },
-			});
-			expect(blank.details?.service).toBeUndefined();
-			expect(textOf(blank)).not.toContain("Ignored");
-
-			expect(commands).toEqual(["printf 'PLAIN\\n'", "printf 'BLANK\\n'"]);
-		} finally {
-			spy.mockRestore();
-		}
+		const text = result.content.map(part => (part.type === "text" ? part.text : "")).join("");
+		expect(result.details?.service).toBeUndefined();
+		expect(text).toContain("PLAIN\n");
+		expect(text.includes("Ignored ready:")).toBe(ignored);
 	});
 
 	it("refuses to detach the project-shared browser, which the broker would relaunch on an unprepared profile", async () => {

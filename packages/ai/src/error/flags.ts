@@ -224,7 +224,7 @@ export function isCodexSteerRejection(message: { api?: Api; errorMessage?: strin
  * network connection", #15385).
  */
 export const TRANSIENT_TRANSPORT_PATTERN =
-	/\b(?:no[_ -]?capacity|(?:high|peak)[ _-]?demand|(?:at|over|insufficient)[ _-]?capacity|capacity[ _-]?(?:exceeded|exhausted)|peak[ _-]?load)\b|overloaded|provider.?returned.?error|rate.?limit|too many requests|auth-gateway\s+5\d{2}(?=[:\s]|$)|\b(?:429|500|502|503|504)\b|service.?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|unable.?to.?connect\.\s*is the computer able to access the url\?|other side closed|use of closed network connection|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)|nghttp2_(?:internal_error|refused_stream)|stream closed with error code nghttp2_(?:internal_error|refused_stream)|malformed.?function.?call/i;
+	/\b(?:no[_ -]?capacity|(?:high|peak)[ _-]?demand|(?:at|over|insufficient)[ _-]?capacity|capacity[ _-]?(?:exceeded|exhausted)|peak[ _-]?load)\b|overloaded|provider.?returned.?error|rate.?limit|too many requests|auth-gateway\s+5\d{2}(?=[:\s]|$)|\b(?:429|500|502|503|504)\b|service.?unavailable|temporar(?:y|ily)[ _-]?unavailable|server.?error|internal.?error|retry your request|network.?error|connection.?error|connection.?refused|unable.?to.?connect\.\s*is the computer able to access the url\?|other side closed|use of closed network connection|fetch failed|upstream.?connect|upstream.?request.?failed|reset before headers|socket hang up|timed? out|timeout|terminated|retry delay|stream stall|no error details in response|HTTP2(?:StreamReset|RefusedStream|EnhanceYourCalm)|nghttp2_(?:internal_error|refused_stream)|stream closed with error code nghttp2_(?:internal_error|refused_stream)|malformed.?function.?call/i;
 const AUTH_FAILURE_PATTERN =
 	/\b(?:401|403|unauthorized|forbidden|authentication|auth[_ ]?unavailable|no auth available|(?:invalid|no)[_ ]?api[_ ]?key)\b/i;
 const MALFORMED_FUNCTION_CALL_PATTERN = /\bmalformed.?function.?call\b/i;
@@ -1100,7 +1100,7 @@ export function isTransientStreamParseError(error: unknown): boolean {
  * non-terminal status treat it as transient (#11805).
  */
 const STREAM_DROP_PATTERN =
-	/stream disconnected before completion|stream closed before response\.completed|stream was interrupted|stream ended before terminal (?:chunk|completion event)|socket disconnected before secure tls connection/i;
+	/stream disconnected before completion|(?:stream|websocket) closed before response\.completed|stream was interrupted|stream ended before terminal (?:chunk|completion event)|socket disconnected before secure tls connection/i;
 
 /**
  * Transport stream-drop diagnostic (see {@link STREAM_DROP_PATTERN}). Unlike
