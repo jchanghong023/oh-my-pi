@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Reported wiki import lease filesystem and operating-system failures distinctly from competing imports, preserving the original error.
 - Isolated embedded native addons by content so successive fork builds cannot reuse an older addon's cache, including while older sessions remain open.
 - Preserved complete Unicode normalization sequences at wiki section boundaries, avoiding false complete-name matches.
 - Made wiki imports respond to cancellation between section writes and roll back the current document.

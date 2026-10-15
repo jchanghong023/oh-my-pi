@@ -754,16 +754,27 @@ export class RepoService {
 							failure_count: failures,
 							...logger.diagnosticError(error),
 						});
-						this.storage.markUncertain(
-							`${mode} failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200),
-						);
-						logger.info("Repository failed maintenance marked unchecked", {
-							component: "repo",
-							event: "repo_unchecked",
-							stage: step,
-							result: "completed",
-							source: mode,
-						});
+						try {
+							this.storage.markUncertain(
+								`${mode} failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200),
+							);
+							logger.info("Repository failed maintenance marked unchecked", {
+								component: "repo",
+								event: "repo_unchecked",
+								stage: step,
+								result: "completed",
+								source: mode,
+							});
+						} catch (uncertaintyError) {
+							logger.warn("Repository index could not record uncertainty", {
+								component: "repo",
+								event: "repo_unchecked",
+								stage: "uncertainty",
+								result: "failed",
+								source: mode,
+								...logger.diagnosticError(uncertaintyError),
+							});
+						}
 						throw error;
 					} finally {
 						if (!published) this.storage.transaction(() => this.storage.removeGeneration(generation));

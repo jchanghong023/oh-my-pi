@@ -251,6 +251,157 @@ async function waitForFiles(files: string[], signal: AbortSignal): Promise<void>
 	}
 	throw signal.reason;
 }
+
+async function windowsLauncherFixture() {
+	const root = await fs.mkdtemp(path.join(directory, "rust-launcher-"));
+	const scripts = path.join(root, "scripts");
+	await fs.mkdir(scripts);
+	await fs.mkdir(path.join(root, "node_modules"));
+	// Resolve workspace imports without sharing the fixture's writable .cache.
+	await fs.symlink(
+		path.resolve(import.meta.dir, "../node_modules/@oh-my-pi"),
+		path.join(root, "node_modules", "@oh-my-pi"),
+		"junction",
+	);
+	await fs.mkdir(path.join(root, "packages/utils/src"), { recursive: true });
+	await fs.copyFile(
+		path.resolve(import.meta.dir, "../packages/utils/src/subprocess.ts"),
+		path.join(root, "packages/utils/src/subprocess.ts"),
+	);
+	for (const name of [
+		"runtime.ts",
+		"events.ts",
+		"clock.ts",
+		"process.ts",
+		"compiler.ts",
+		"rustdoc.ts",
+		"compiler-launcher.rs",
+	])
+		await fs.copyFile(path.join(import.meta.dir, `test-gate-${name}`), path.join(scripts, `test-gate-${name}`));
+	const compiler = Bun.which(process.env.RUSTC || "rustc");
+	if (!compiler) throw new Error("Rust launcher integration requires the installed rustc");
+	const proxy = path.join(root, "compiler-proxy.exe");
+	const source = path.join(root, "compiler-proxy.rs");
+	await fs.writeFile(
+		source,
+		String.raw`
+use std::{env, fs, path::Path, process::{self, Command}, thread, time::{Duration, Instant}};
+fn wait(path: &Path) {
+    let started = Instant::now();
+    while !path.exists() {
+        assert!(started.elapsed() < Duration::from_secs(25), "barrier timed out: {}", path.display());
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+fn main() {
+    let args: Vec<_> = env::args_os().skip(1).collect();
+    let root = env::var_os("LAUNCHER_FIXTURE_ROOT").unwrap();
+    let root = Path::new(&root);
+    if args.first().is_some_and(|arg| arg == "--consumer") {
+        let id = args[1].to_str().unwrap();
+        fs::write(root.join(format!("ready-{id}")), b"running native consumer").unwrap();
+        if id != "warm" { wait(&root.join("consumers-release")); }
+        fs::write(root.join(format!("completed-{id}")), b"native consumer completed").unwrap();
+        return;
+    }
+    let id = env::var("LAUNCHER_FIXTURE_ID").unwrap();
+    let version = args.first().is_some_and(|arg| arg == "--version");
+    if !version {
+        fs::write(root.join(format!("compile-{id}")), b"real rustc invocation").unwrap();
+        if id == "a" { wait(&root.join("compile-release")); }
+    }
+    let status = Command::new(env::var_os("LAUNCHER_FIXTURE_RUSTC").unwrap()).args(&args).status().unwrap();
+    if version && id != "warm" {
+        fs::write(root.join(format!("version-{id}")), b"compiler discovered").unwrap();
+        wait(&root.join(format!("version-release-{id}")));
+        fs::write(root.join(format!("version-done-{id}")), b"compiler discovery released").unwrap();
+    }
+    // The old publisher must attempt replacement while the first launcher is running.
+    if !version && id == "b" { wait(&root.join("ready-a")); }
+    process::exit(status.code().unwrap_or(1));
+}
+`,
+	);
+	const compiled = Bun.spawn([compiler, "--edition=2021", "-o", proxy, source], {
+		env: { ...process.env, RUSTUP_AUTO_INSTALL: "0" },
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [compiledExit, diagnostics] = await Promise.all([compiled.exited, new Response(compiled.stderr).text()]);
+	if (compiledExit !== 0) throw new Error(`Cannot compile real launcher fixture: ${diagnostics}`);
+	const harness = path.join(scripts, "launcher-harness.ts");
+	await fs.writeFile(
+		harness,
+		`
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import {GateCommandError,runGate,withRustCompilerEvents} from "./test-gate-runtime";
+const result = await runGate("fulltest", async gate => {
+  await gate.charged(() => withRustCompilerEvents({...process.env}, async env => {
+    const child = Bun.spawn([env.OMP_GATE_DOCTEST_RUNNER, process.env.RUSTC, "--consumer", process.env.LAUNCHER_FIXTURE_ID], {env,stdout:"inherit",stderr:"inherit"});
+    const code = await child.exited;
+    if (code) throw new GateCommandError("native launcher consumer failed",code);
+  }));
+}, {print:()=>{}});
+await fs.writeFile(path.join(process.env.LAUNCHER_FIXTURE_ROOT,"result-"+process.env.LAUNCHER_FIXTURE_ID),JSON.stringify(result));
+process.exit(result.exitCode);
+`,
+	);
+	const children: Bun.Subprocess<"ignore", "pipe", "pipe">[] = [];
+	const start = (id: string) => {
+		const child = Bun.spawn([process.execPath, harness], {
+			env: {
+				...process.env,
+				OMP_GATE_EVENT_TOKEN: "isolated-rust-launchers",
+				OMP_GATE_EVENT_FILE: "",
+				RUSTC: proxy,
+				LAUNCHER_FIXTURE_RUSTC: compiler,
+				LAUNCHER_FIXTURE_ROOT: root,
+				LAUNCHER_FIXTURE_ID: id,
+			},
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		children.push(child);
+		const output = Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		return {
+			child,
+			output,
+			async ready(filename: string) {
+				const controller = new AbortController();
+				try {
+					await Promise.race([
+						// Real child-process barriers cannot be advanced by fake timers.
+						waitForFiles(
+							[path.join(root, filename)],
+							AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
+						),
+						output.then(([code, stdout, stderr]) => {
+							throw new Error(`Launcher gate exited before ${filename}: ${code}\n${stdout}\n${stderr}`);
+						}),
+					]);
+				} finally {
+					controller.abort(new Error("Launcher barrier settled"));
+				}
+			},
+		};
+	};
+	return {
+		root,
+		start,
+		cache: path.join(root, "node_modules/.cache/omp-gate-wrappers", `${process.platform}-${process.arch}`),
+		launcherSource: path.join(scripts, "test-gate-compiler-launcher.rs"),
+		async close() {
+			await Promise.all(
+				["consumers-release", "compile-release", "version-release-a", "version-release-b"].map(name =>
+					fs.writeFile(path.join(root, name), "released"),
+				),
+			);
+			await Promise.all(children.map(child => child.exited));
+		},
+	};
+}
 async function parallelPhases(gate: GateRun, prefix: string, ms: number, compiler = false) {
 	const ready = ["a", "b"].map(id => path.join(directory, `${prefix}-${id}.ready`));
 	const release = path.join(directory, `${prefix}.release`);
@@ -1131,6 +1282,112 @@ it("keeps stable compiler wrapper paths, flags and the original cache wrapper", 
 			expect(compilerEnv.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
 		});
 });
+it.skipIf(process.platform !== "win32").each(["cold", "invalid-signature"])(
+	"serializes real Windows launcher publication across independent gates with %s cache",
+	async state => {
+		const fixture = await windowsLauncherFixture();
+		try {
+			if (state === "invalid-signature") {
+				const [code, stdout, stderr] = await fixture.start("warm").output;
+				expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+				await fs.writeFile(path.join(fixture.cache, "launcher.sha256"), "invalid-signature");
+			}
+			const a = fixture.start("a");
+			const b = fixture.start("b");
+			await Promise.all([a.ready("version-a"), b.ready("version-b")]);
+			await fs.writeFile(path.join(fixture.root, "version-release-a"), "released");
+			await a.ready("compile-a");
+			await fs.writeFile(path.join(fixture.root, "version-release-b"), "released");
+			await b.ready("version-done-b");
+			await fs.writeFile(path.join(fixture.root, "compile-release"), "released");
+			await a.ready("ready-a");
+			const runningImage = await fs.stat(path.join(fixture.cache, "test-gate-launcher.exe"));
+			await b.ready("ready-b");
+			const sharedImage = await fs.stat(path.join(fixture.cache, "test-gate-launcher.exe"));
+			expect(sharedImage.ino).toBe(runningImage.ino);
+			expect(sharedImage.mtimeMs).toBe(runningImage.mtimeMs);
+			await expect(fs.access(path.join(fixture.root, "compile-b"))).rejects.toMatchObject({ code: "ENOENT" });
+			for (const name of ["rustc", "rustdoc", "doctest-compile", "doctest-run"])
+				expect((await fs.stat(path.join(fixture.cache, `test-gate-${name}.exe`))).ino).toBe(sharedImage.ino);
+			expect(await fs.readFile(path.join(fixture.cache, "launcher.sha256"), "utf8")).toMatch(/^[a-f0-9]{64}$/);
+			await fs.writeFile(path.join(fixture.root, "consumers-release"), "released");
+			for (const process of [a, b]) {
+				const [code, stdout, stderr] = await process.output;
+				expect({ code, stdout, stderr }).toMatchObject({ code: 0 });
+			}
+			for (const id of ["a", "b"]) {
+				expect(await fs.readFile(path.join(fixture.root, `completed-${id}`), "utf8")).toBe("native consumer completed");
+				expect(JSON.parse(await fs.readFile(path.join(fixture.root, `result-${id}`), "utf8"))).toMatchObject({
+					status: "PASS",
+					exitCode: 0,
+				});
+			}
+		} finally {
+			await fixture.close();
+		}
+	},
+	60_000,
+);
+it.skipIf(process.platform !== "win32")(
+	"fails real Windows launcher compilation errors and releases the publication lease for retry",
+	async () => {
+		const fixture = await windowsLauncherFixture();
+		try {
+			const source = await fs.readFile(fixture.launcherSource);
+			await fs.writeFile(fixture.launcherSource, "fn main() { this is not valid Rust; }");
+			const [code, , stderr] = await fixture.start("warm").output;
+			expect(code).not.toBe(0);
+			expect(stderr).toContain("error:");
+			expect(JSON.parse(await fs.readFile(path.join(fixture.root, "result-warm"), "utf8"))).toMatchObject({
+				status: "FAIL",
+			});
+			await expect(fs.access(path.join(fixture.cache, "launcher.sha256"))).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(fs.access(path.join(fixture.cache, "test-gate-launcher.exe"))).rejects.toMatchObject({ code: "ENOENT" });
+			await fs.writeFile(fixture.launcherSource, source);
+			const [retryCode, stdout, retryStderr] = await fixture.start("warm").output;
+			expect({ code: retryCode, stdout, stderr: retryStderr }).toMatchObject({ code: 0 });
+			expect(await fs.readFile(path.join(fixture.root, "completed-warm"), "utf8")).toBe("native consumer completed");
+		} finally {
+			await fixture.close();
+		}
+	},
+	60_000,
+);
+it.skipIf(process.platform !== "win32")(
+	"preserves a real in-use Windows launcher replacement failure without clearing the cached executable",
+	async () => {
+		const fixture = await windowsLauncherFixture();
+		try {
+			expect((await fixture.start("warm").output)[0]).toBe(0);
+			const a = fixture.start("a");
+			await a.ready("version-a");
+			await fs.writeFile(path.join(fixture.root, "version-release-a"), "released");
+			await a.ready("ready-a");
+			const image = path.join(fixture.cache, "test-gate-launcher.exe");
+			const runningLauncher = path.join(fixture.cache, "test-gate-doctest-run.exe");
+			const runningImage = await fs.stat(runningLauncher);
+			const stamp = path.join(fixture.cache, "launcher.sha256");
+			await fs.writeFile(stamp, "invalid-signature");
+			expect((await fixture.start("warm").output)[0]).not.toBe(0);
+			expect(JSON.parse(await fs.readFile(path.join(fixture.root, "result-warm"), "utf8"))).toMatchObject({
+				status: "FAIL",
+			});
+			// Windows may replace the canonical image before rejecting the running
+			// entry-point hardlink. Only the consumer's mapped entry must survive.
+			expect((await fs.stat(runningLauncher)).ino).toBe(runningImage.ino);
+			expect((await fs.stat(image)).size).toBeGreaterThan(0);
+			expect(await fs.readFile(stamp, "utf8")).toBe("invalid-signature");
+			await fs.writeFile(path.join(fixture.root, "consumers-release"), "released");
+			expect((await a.output)[0]).toBe(0);
+			expect(await fs.readFile(path.join(fixture.root, "completed-a"), "utf8")).toBe("native consumer completed");
+			expect((await fixture.start("warm").output)[0]).toBe(0);
+			expect(await fs.readFile(stamp, "utf8")).toMatch(/^[a-f0-9]{64}$/);
+		} finally {
+			await fixture.close();
+		}
+	},
+	60_000,
+);
 it("charges unwrapped Cargo build-script work overlapping observed compiler events", async () => {
 	const result = await runGate(
 		"fastcheck",

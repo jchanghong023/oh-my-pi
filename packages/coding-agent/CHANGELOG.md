@@ -10,6 +10,10 @@
 
 ### Fixed
 
+- Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.
+- Kept successful repository recovery successful when backup cleanup fails, and preserved the original maintenance error when uncertainty recording also fails.
+- Serialized Windows Rust launcher publication across gate processes without changing the stable compiler cache.
+- Preserved PowerShell release-query transport and API errors instead of reporting every failure as a missing tag.
 - Delivered explicitly queued remote-Agent tasks that arrive as a turn settles, without automatically replaying failed backend work.
 - Restored compacted conversation context when switching back from a remote Agent to an ordinary model.
 - Discarded JchTools backend-session associations when discovery reports a new service instance at the same address.

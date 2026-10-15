@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
-import type { GateRun } from "./test-gate-runtime";
 
 /** Match Go's cmd/internal/quoted.Split: quotes only at the field start, no unescaping. */
 export function splitGoCommand(value: string): string[] {
@@ -22,25 +21,6 @@ export function splitGoCommand(value: string): string[] {
 		}
 	}
 	return fields;
-}
-/** Resolve normal user caches before a test gate replaces HOME/USERPROFILE. */
-export async function resolveGoCacheEnvironment(
-	gate: GateRun,
-	env: Record<string, string | undefined> = process.env,
-): Promise<Record<string, string>> {
-	const captured = await gate.capture({
-		label: "normal Go tool cache environment",
-		argv: ["go", "env", "-json", "GOENV", "GOPATH", "GOCACHE", "GOMODCACHE"],
-		env: { ...env, GOTOOLCHAIN: "local" },
-	});
-	const values: unknown = JSON.parse(captured.stdout);
-	if (!values || typeof values !== "object") throw new Error("Go did not report its normal cache environment");
-	const result: Record<string, string> = {};
-	for (const key of ["GOENV", "GOPATH", "GOCACHE", "GOMODCACHE"] as const) {
-		if (!(key in values) || typeof values[key] !== "string") throw new Error(`Go did not report ${key}`);
-		result[key] = values[key];
-	}
-	return result;
 }
 
 if (import.meta.main) {

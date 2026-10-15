@@ -424,8 +424,12 @@ function Install-Binary {
         try {
             $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$Ref" -TimeoutSec 60 @script:WebSkipCertCheck
         } catch {
-            Write-InstallLog ERROR http_request_failed (Get-InstallFailureFields $_)
-            throw "Release tag not found: $Ref`nOnly published release tags are supported."
+            $failureFields = Get-InstallFailureFields $_
+            Write-InstallLog ERROR http_request_failed $failureFields
+            if ($failureFields.http_status -eq 404) {
+                throw "Release tag not found: $Ref`nOnly published release tags are supported."
+            }
+            throw
         }
     } else {
         Write-Host "Fetching latest release..."

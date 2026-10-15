@@ -22,7 +22,9 @@ if (incoming.includes("--test")) {
 	const compiler = process.env.OMP_GATE_DOCTEST_COMPILER;
 	const runner = process.env.OMP_GATE_DOCTEST_RUNNER;
 	if (process.platform === "win32" && (!compiler || !runner)) {
-		console.error("Windows doctests require the native launchers prepared by test-gate-cargo.ts");
+		console.error(
+			"Windows doctests require the native launchers prepared by test-gate-runtime.ts (withRustCompilerEvents)",
+		);
 		process.exit(1);
 	}
 	args.push(

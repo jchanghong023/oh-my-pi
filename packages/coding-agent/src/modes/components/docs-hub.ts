@@ -289,10 +289,7 @@ export class DocsHubComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-		if (
-			this.#mode === "detail" &&
-			!(this.#showingHit && (data === "/" || data === "g" || data === "d" || data === "c"))
-		) {
+		if (this.#mode === "detail" && !(data === "/" || data === "g" || data === "d" || data === "c")) {
 			if (data === "n") {
 				if (this.#nextCursor) this.#runSearch(this.#nextCursor);
 			} else if (this.#showingHit && data === "b") {

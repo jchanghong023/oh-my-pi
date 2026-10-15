@@ -1,3 +1,4 @@
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { appendFileSync } from "node:fs";
@@ -237,6 +238,45 @@ const rustLauncherDirectory = path.resolve(
 	`${process.platform}-${process.arch}`,
 );
 
+/** Bootstrap-safe version of pi-natives' Windows file-lock object-lifetime lease. */
+async function acquireWindowsRustLauncherLease(directory: string): Promise<() => void> {
+	// Resolve junctions and case before naming the lease for this actual cache.
+	const identity = (await fs.realpath(directory)).toLowerCase();
+	const name = `Global\\omp-gate-launchers-${createHash("sha256").update(identity).digest("hex")}`;
+	const wideName = Buffer.from(`${name}\0`, "utf16le");
+	const kernel = dlopen("kernel32.dll", {
+		CreateMutexExW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.u32], returns: FFIType.u64 },
+		SetLastError: { args: [FFIType.u32], returns: FFIType.void },
+		GetLastError: { args: [], returns: FFIType.u32 },
+		CloseHandle: { args: [FFIType.u64], returns: FFIType.i32 },
+	});
+	try {
+		for (;;) {
+			kernel.symbols.SetLastError(0);
+			// SYNCHRONIZE only; ownership is the object's existence, not a thread-affine mutex wait.
+			const handle = kernel.symbols.CreateMutexExW(null, ptr(wideName), 0, 0x00100000);
+			const error = kernel.symbols.GetLastError();
+			if (!handle) throw new Error(`Cannot acquire Rust gate launcher lease (Windows error ${error})`);
+			if (error !== 183) {
+				return () => {
+					try {
+						if (!kernel.symbols.CloseHandle(handle))
+							throw new Error(`Cannot release Rust gate launcher lease (Windows error ${kernel.symbols.GetLastError()})`);
+					} finally {
+						kernel.close();
+					}
+				};
+			}
+			if (!kernel.symbols.CloseHandle(handle))
+				throw new Error(`Cannot close Rust gate launcher contender (Windows error ${kernel.symbols.GetLastError()})`);
+			await Bun.sleep(50);
+		}
+	} catch (error) {
+		kernel.close();
+		throw error;
+	}
+}
+
 /** Compile once with the installed host rustc, without Cargo or its cache/profile flags. */
 function prepareWindowsRustLaunchers(env: Record<string, string>): Promise<string> {
 	windowsRustLaunchers ??= (async () => {
@@ -260,79 +300,85 @@ function prepareWindowsRustLaunchers(env: Record<string, string>): Promise<strin
 		// Compiler/source updates must not change Cargo's wrapper cache identity.
 		const directory = rustLauncherDirectory;
 		await fs.mkdir(directory, { recursive: true });
-		const image = path.join(directory, "test-gate-launcher.exe");
-		const stamp = path.join(directory, "launcher.sha256");
-		let current: string | undefined;
+		const release = await acquireWindowsRustLauncherLease(directory);
 		try {
-			current = await fs.readFile(stamp, "utf8");
-			await fs.access(image);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			current = undefined;
-		}
-		const rebuild = current !== signature;
-		if (rebuild) {
-			const temporary = path.join(directory, `launcher-${randomUUID()}.exe`);
+			const image = path.join(directory, "test-gate-launcher.exe");
+			const stamp = path.join(directory, "launcher.sha256");
+			let current: string | undefined;
 			try {
-				const exitCode = await withCompilerActivity(async () => {
-					const child = Bun.spawn(
-						[
-							compiler,
-							"--edition=2021",
-							"--crate-name",
-							"omp_gate_launcher",
-							"-C",
-							"debuginfo=0",
-							"-C",
-							"opt-level=s",
-							"-o",
-							temporary,
-							source,
-						],
-						{ env: compilerEnv, stdin: "inherit", stdout: "inherit", stderr: "inherit", windowsHide: true },
-					);
-					return await child.exited;
-				});
-				if (exitCode !== 0) throw new GateCommandError("Native Rust gate launcher compilation failed", exitCode);
-				// Each fixed path is replaced only by a completely linked executable.
-				// An in-use image that Windows refuses to replace is a real failure.
-				await fs.rename(temporary, image);
-			} finally {
-				await fs.rm(temporary, { force: true });
+				current = await fs.readFile(stamp, "utf8");
+				await fs.access(image);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				current = undefined;
 			}
-		}
-		await Promise.all(
-			["test-gate-rustc", "test-gate-rustdoc", "test-gate-doctest-compile", "test-gate-doctest-run"].map(
-				async name => {
-					const destination = path.join(directory, `${name}.exe`);
-					if (!rebuild) {
-						try {
-							await fs.link(image, destination);
-						} catch (error) {
-							if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			// Recheck under the cross-process lease, then hold it through the final stamp.
+			// A stamp reread before rename alone still permits two publishers to race.
+			const rebuild = current !== signature;
+			if (rebuild) {
+				const temporary = path.join(directory, `launcher-${randomUUID()}.exe`);
+				try {
+					const exitCode = await withCompilerActivity(async () => {
+						const child = Bun.spawn(
+							[
+								compiler,
+								"--edition=2021",
+								"--crate-name",
+								"omp_gate_launcher",
+								"-C",
+								"debuginfo=0",
+								"-C",
+								"opt-level=s",
+								"-o",
+								temporary,
+								source,
+							],
+							{ env: compilerEnv, stdin: "inherit", stdout: "inherit", stderr: "inherit", windowsHide: true },
+						);
+						return await child.exited;
+					});
+					if (exitCode !== 0) throw new GateCommandError("Native Rust gate launcher compilation failed", exitCode);
+					// Real replacement failures (including an older in-use image) still fail.
+					await fs.rename(temporary, image);
+				} finally {
+					await fs.rm(temporary, { force: true });
+				}
+			}
+			await Promise.all(
+				["test-gate-rustc", "test-gate-rustdoc", "test-gate-doctest-compile", "test-gate-doctest-run"].map(
+					async name => {
+						const destination = path.join(directory, `${name}.exe`);
+						if (!rebuild) {
+							try {
+								await fs.link(image, destination);
+							} catch (error) {
+								if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+							}
+							return;
 						}
-						return;
-					}
-					const temporary = `${destination}.${randomUUID()}.tmp`;
-					try {
-						await fs.link(image, temporary);
-						await fs.rename(temporary, destination);
-					} finally {
-						await fs.rm(temporary, { force: true });
-					}
-				},
-			),
-		);
-		if (rebuild) {
-			const temporary = `${stamp}.${randomUUID()}.tmp`;
-			try {
-				await fs.writeFile(temporary, signature);
-				await fs.rename(temporary, stamp);
-			} finally {
-				await fs.rm(temporary, { force: true });
+						const temporary = `${destination}.${randomUUID()}.tmp`;
+						try {
+							await fs.link(image, temporary);
+							await fs.rename(temporary, destination);
+						} finally {
+							await fs.rm(temporary, { force: true });
+						}
+					},
+				),
+			);
+			if (rebuild) {
+				const temporary = `${stamp}.${randomUUID()}.tmp`;
+				try {
+					await fs.writeFile(temporary, signature);
+					await fs.rename(temporary, stamp);
+				} finally {
+					await fs.rm(temporary, { force: true });
+				}
 			}
+			return directory;
+		} finally {
+			release();
 		}
-		return directory;
 	})().catch(error => {
 		windowsRustLaunchers = undefined;
 		throw error;

@@ -356,6 +356,143 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 });
 
 const windowsPowerShell = process.platform === "win32" ? Bun.which("powershell.exe") : null;
+const metadataPowerShellHosts = [
+	windowsPowerShell,
+	process.platform === "win32" ? Bun.which("pwsh.exe") : null,
+].filter((host): host is string => host !== null);
+
+for (const powerShell of metadataPowerShellHosts) {
+	describe(`Windows installer metadata failures (${path.basename(powerShell)})`, () => {
+		test.each([
+			["missing tag", 404],
+			["rate limited", 403],
+			["connection refused", 0],
+		] as const)(
+			"reports %s without downloading or changing PATH",
+			async (_name, status) => {
+				const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-metadata-"));
+				tempDirs.push(dir);
+				const installDir = path.join(dir, "install");
+				const target = path.join(installDir, "omp.exe");
+				const configRoot = path.join(dir, "config");
+				await fs.mkdir(installDir);
+				const oldBinary = "existing installation must remain untouched";
+				await Bun.write(target, oldBinary);
+				const requests: string[] = [];
+				const server = Bun.serve({
+					hostname: "127.0.0.1",
+					port: 0,
+					fetch(request) {
+						requests.push(new URL(request.url).pathname);
+						return new Response(JSON.stringify({ message: status === 403 ? "API rate limit exceeded" : "Not Found" }), {
+							status: status || 500,
+							headers: { "Content-Type": "application/json" },
+						});
+					},
+				});
+				const metadataUrl = `http://127.0.0.1:${server.port}/releases/tags/v18.0.9+fork.125`;
+				if (status === 0) server.stop(true);
+				try {
+					const harness = path.join(dir, "metadata.ps1");
+					await Bun.write(
+						harness,
+						`$ErrorActionPreference = "Stop"
+$env:HTTP_PROXY = $null
+$env:HTTPS_PROXY = $null
+$env:ALL_PROXY = $null
+$env:NO_PROXY = $null
+[Net.WebRequest]::DefaultWebProxy = $null
+$tokens = $null
+$parseErrors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count) { throw $parseErrors[0] }
+$source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
+. ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary -Ref "v18.0.9+fork.125"
+$script:originalFailure = $null
+$script:downloads = 0
+$script:pathChecks = 0
+# Redirect only the endpoint; use the host's real HTTP cmdlet and exception type.
+function Invoke-RestMethod([string]$Uri, [int]$TimeoutSec, [switch]$SkipCertificateCheck) {
+    try {
+        Microsoft.PowerShell.Utility\\Invoke-RestMethod -Uri $env:TEST_METADATA_URL -TimeoutSec $TimeoutSec @script:WebSkipCertCheck
+    } catch {
+        $script:originalFailure = $_
+        throw
+    }
+}
+function Save-InstallBinary { $script:downloads++; throw "Unexpected binary download" }
+function Set-InstallEnvironment { $script:pathChecks++; throw "Unexpected PATH change" }
+$result = @{ failed = $false }
+try { Install-Binary } catch {
+    $result.failed = $true
+    $result.message = $_.Exception.Message
+    $result.sameException = [object]::ReferenceEquals($_.Exception, $script:originalFailure.Exception)
+}
+$result.originalMessage = $script:originalFailure.Exception.Message
+$result.downloads = $script:downloads
+$result.pathChecks = $script:pathChecks
+Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
+`,
+					);
+					const child = Bun.spawn(
+						[powerShell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
+						{
+							cwd: repoRoot,
+							env: {
+								...process.env,
+								OMP_CONFIG_ROOT: configRoot,
+								OMP_PROFILE: "default",
+								PI_PROFILE: "default",
+								PI_INSTALL_DIR: installDir,
+								TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+								TEST_METADATA_URL: metadataUrl,
+								PROCESSOR_ARCHITECTURE: "AMD64",
+							},
+							stdout: "pipe",
+							stderr: "pipe",
+						},
+					);
+					const [exitCode, stdout, stderr] = await Promise.all([
+						child.exited,
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+					]);
+					expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+					const result = JSON.parse(stdout.split(/\r?\n/).find(line => line.startsWith("RESULT "))!.slice(7));
+					expect(result).toMatchObject({ failed: true, downloads: 0, pathChecks: 0 });
+					if (status === 404) {
+						expect(result.message).toContain("Release tag not found: v18.0.9+fork.125");
+						expect(result.message).toContain("Only published release tags are supported.");
+					} else {
+						expect(result.sameException).toBe(true);
+						expect(result.originalMessage.length).toBeGreaterThan(0);
+						expect(result.message).toBe(result.originalMessage);
+						expect(result.message).not.toContain("Release tag not found");
+					}
+					expect(requests).toEqual(status === 0 ? [] : ["/releases/tags/v18.0.9+fork.125"]);
+					expect(await Bun.file(target).text()).toBe(oldBinary);
+					expect(await fs.readdir(installDir)).toEqual(["omp.exe"]);
+					const logsDir = path.join(configRoot, "logs");
+					const logs = (await fs.readdir(logsDir)).filter(name => name.endsWith(`.${child.pid}.log`));
+					const raw = (await Promise.all(logs.map(name => Bun.file(path.join(logsDir, name)).text()))).join("");
+					const records = raw.split("\n").filter(Boolean).map(line => JSON.parse(line));
+					const failures = records.filter(record => record.event === "http_request_failed");
+					expect(failures).toHaveLength(1);
+					expect(failures[0]).toMatchObject({
+						stage: "release_metadata",
+						result: "failed",
+						http_status: status || "unavailable",
+					});
+					expect(records.filter(record => record.event === "install_failed")).toHaveLength(1);
+					expect(records.some(record => record.event === "http_request_completed")).toBe(false);
+				} finally {
+					server.stop(true);
+				}
+			},
+			30_000,
+		);
+	});
+}
 
 // Execute the installer functions in an isolated PowerShell process. Only HTTP
 // and user-PATH persistence are replaced; binary probes, live-image rename and
