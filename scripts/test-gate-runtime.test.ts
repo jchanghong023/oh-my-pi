@@ -286,6 +286,7 @@ async function windowsLauncherFixture() {
 		source,
 		String.raw`
 use std::{env, fs, path::Path, process::{self, Command}, thread, time::{Duration, Instant}};
+use std::os::windows::fs::OpenOptionsExt;
 fn wait(path: &Path) {
     let started = Instant::now();
     while !path.exists() {
@@ -299,6 +300,11 @@ fn main() {
     let root = Path::new(&root);
     if args.first().is_some_and(|arg| arg == "--consumer") {
         let id = args[1].to_str().unwrap();
+        // Loader sharing varies; explicitly hold the real image without delete sharing.
+        let _image = if env::var("LAUNCHER_FIXTURE_LOCK_IMAGE").unwrap_or_default() == "1" {
+            Some(fs::OpenOptions::new().read(true).share_mode(1)
+                .open(env::var_os("OMP_GATE_DOCTEST_RUNNER").unwrap()).unwrap())
+        } else { None };
         fs::write(root.join(format!("ready-{id}")), b"running native consumer").unwrap();
         if id != "warm" { wait(&root.join("consumers-release")); }
         fs::write(root.join(format!("completed-{id}")), b"native consumer completed").unwrap();
@@ -348,7 +354,7 @@ process.exit(result.exitCode);
 `,
 	);
 	const children: Bun.Subprocess<"ignore", "pipe", "pipe">[] = [];
-	const start = (id: string) => {
+	const start = (id: string, lockImage = false) => {
 		const child = Bun.spawn([process.execPath, harness], {
 			env: {
 				...process.env,
@@ -358,6 +364,7 @@ process.exit(result.exitCode);
 				LAUNCHER_FIXTURE_RUSTC: compiler,
 				LAUNCHER_FIXTURE_ROOT: root,
 				LAUNCHER_FIXTURE_ID: id,
+				LAUNCHER_FIXTURE_LOCK_IMAGE: lockImage ? "1" : "",
 			},
 			stdin: "ignore",
 			stdout: "pipe",
@@ -1363,7 +1370,7 @@ it.skipIf(process.platform !== "win32")(
 		const fixture = await windowsLauncherFixture();
 		try {
 			expect((await fixture.start("warm").output)[0]).toBe(0);
-			const a = fixture.start("a");
+			const a = fixture.start("a", true);
 			await a.ready("version-a");
 			await fs.writeFile(path.join(fixture.root, "version-release-a"), "released");
 			await a.ready("ready-a");
