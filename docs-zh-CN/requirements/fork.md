@@ -38,6 +38,7 @@
 
 ### Markdown 文档索引
 
+- **Wiki 目录环境变量**：设置非空 `OMP_WIKI_DIR` 后，数据库固定使用该目录下的 `docs.db`；CLI、TUI、RPC 和 `wiki` 工具的创建、读取、导入、迁移及删除均使用同一数据库，不额外维护 profile 内的副本，也不将共享库限制为只读。未设置或为空时保留原 profile 数据库路径；目录按既有建库流程创建。该变量独立于 `OMP_OFFLINE`，不要求修改配置文件，不自动迁移旧数据。它只改变数据库位置，不新增分布式锁或改变 SQLite 日志模式，不能据此承诺网络文件系统上的多机并发安全。
 - **Rust 文档索引内核**：`crates/pi-natives/src/wiki/` 负责 Markdown 文件发现、忠实移植既有共享解析器语义的词法解析／章节切分、文档哈希、数据库 schema／旧库迁移、索引生命周期与导入／发布／回滚，以及查询分析、技术名称边界与切分上下文恢复、SQLite FTS5／BM25、全量排名、完整排名缓存、快照版本、游标、正文／来源读取、页预算、同页去重、证据渲染、展示控制字符过滤和可取消的成功时长下限等待；异步操作复用 `grep` 的 native/N-API blocking-task 机制，不保留 TypeScript 实现或回退。保留的 TypeScript engine／service／tool 仅适配宿主路径、参数 schema、会话、IPC／服务子进程、UI、logger 与取消／释放边界。算法、数据库格式、结果顺序、正文／引用及有效旧游标身份不得因语言迁移变化，现有索引无需重建；DB-only、成功时长 ≥500ms 与错误契约保持不变。
 - **共享数据库页读取**：wiki 查询连接默认请求最多 500 MiB 的 SQLite 内存映射读取；多个进程访问同一实际数据库文件时，由操作系统复用文件页面、按需加载并回收。保留原有 SQLite 私有页缓存与进程内排名缓存规则，不为每个进程新增大额堆缓存，不改变导入／删除、读快照、完整结果或游标。映射范围受 SQLite／平台支持限制，不是单进程或整机内存硬上限；正常关闭服务须释放映射与数据库句柄。
 - **数据库与构建身份**：打开连接前后须确认同一实际数据库文件；导入租约、隐藏构建回收与创建、提交、发布与回滚须绑定原数据库身份，不能仅凭可复用的行 ID 操作其他构建或已发布索引。取得租约后替换数据库必须在回收或创建前拒绝；回调期间替换数据库、取消或关闭服务不得修改替换库中的既有证据。
@@ -120,9 +121,16 @@
 
 ### Codex 用户技能
 
-- 默认启用 `skills.enableCodexUser`，`~/.codex/skills/*/SKILL.md` 与上游默认来源一并参与发现；来源优先级不变，同名技能仍优先取 `.agents/skills` 等上游默认开启来源中的版本。
+- 默认启用 `skills.enableCodexUser`，`~/.codex/skills/*/SKILL.md` 与上游默认来源一并参与发现；未设置下述共享目录时来源优先级不变，同名技能仍优先取 `.agents/skills` 等上游默认开启来源中的版本。
 - 仅适用于技能：`~/.codex` 下的 MCP、hooks、commands、AGENTS.md 等其它能力仍按上游规则保持 opt-in。
 - 技能是否进入系统提示词列表仍由自身 `disable-model-invocation` / `hide` 决定；不可由模型调用的技能只通过 `/skill:<name>` 与 `skill://<name>` 使用。
+
+### 团队共享技能目录
+
+- 设置非空 `OMP_SKILLS_DIR` 后，将该目录作为附加技能根目录，沿用现有单层 `<目录>/<技能名>/SKILL.md` 扫描、校验、过滤、命名空间与去重机制；不要求配置文件，不下载、复制或同步技能。
+- 共享目录优先于用户、项目及 `skills.customDirectories` 中的同名技能；共享版本取得原技能名，内容不同的低优先级版本沿用现有命名空间规则保留。未设置、为空或目录不存在时保留原有技能发现行为。
+- 该变量独立于 `OMP_OFFLINE`，在技能发现及刷新时生效；默认技能禁用、包含与排除规则继续有效。
+
 
 ### Codex 压缩默认模型
 
@@ -264,7 +272,7 @@
 
 ### 安装与运行
 
-- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE` 与 `OMP_CONFIG_ROOT`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
+- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT`、`OMP_SKILLS_DIR` 与 `OMP_WIKI_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
 - 日志框架、默认目录与启动参数跟随上游；fork 功能的诊断覆盖遵循上文「运行诊断日志」。
 - `-P <name>` 是上游 `--profile <name>` 的内置短参数，无需配置 shell alias；启动前选择 profile，认证、会话、设置与缓存隔离及环境变量优先级沿用上游。`-p` 仍为非交互 print 模式，不新增会话共享行为。
 - 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。

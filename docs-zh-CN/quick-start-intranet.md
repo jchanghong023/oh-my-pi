@@ -7,12 +7,18 @@
 ```tcsh
 setenv OMP_OFFLINE 1
 setenv OMP_CONFIG_ROOT "$HOME/omp-data"
+
+# 使用团队共享资源时，替换为实际网络文件系统路径：
+setenv OMP_SKILLS_DIR "/path/to/shared/skills"
+setenv OMP_WIKI_DIR "/path/to/shared/wiki"
 ```
 
 - `OMP_OFFLINE`：启用公司内网模式。
 - `OMP_CONFIG_ROOT`：数据目录，可换成有写权限的绝对路径；旧数据不会自动搬过来。
+- `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本优先，其他用户技能仍保留。目录不存在时不影响原有技能加载，不下载或同步文件。
+- `OMP_WIKI_DIR`：可选的 Wiki 数据库目录；设置后，数据库的读取、写入和创建全部使用该目录下的 `docs.db`，包括 `/wiki`、AI 的 `wiki` 工具和 `omp docs init/remove`。不同用户或 profile 指向同一目录即可使用同一库；新建和删除会影响该共享库，不会自动迁移原数据库。
 
-这两行可放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。
+上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。两个共享变量不依赖 `OMP_OFFLINE`，也不需要配置文件；不设置或留空时保留原有路径和加载行为。路径示例需替换为实际可访问目录。`OMP_WIKI_DIR` 只改变数据库位置，不提供网络文件系统上的多机并发安全保证。
 
 ## 2. 启动
 
@@ -80,7 +86,7 @@ omp
 
 ## 4. 企业核心功能（本 fork）
 
-### 4.1 `/wiki`：把公司资料变成可查询的本地知识库
+### 4.1 `/wiki`：把公司资料变成可查询的知识库
 
 用来查内部规范、接口约定、历史方案和业务术语。**先导入资料，再查询**。它不做联网搜索，也不会自动抓取公司知识库。
 
@@ -88,7 +94,7 @@ omp
 
 1. 准备已导出的 Markdown 目录。导入会递归读取 `.md` 文件，跳过符号链接。PDF、Word 等需先转成 Markdown；图片、附件和链接目标不会随正文入库。
 2. 在 OMP 输入框输入 `/wiki`，按 `n` 新建，填写索引名和目录，确认后等待导入完成。面板会列出索引名、文档数、章节数和源目录。
-3. 也可在**系统终端**执行以下命令，替换目录和索引名。终端与 OMP 会话须使用一致的 `OMP_CONFIG_ROOT`、profile 等配置环境：
+3. 也可在**系统终端**执行以下命令，替换目录和索引名。终端与 OMP 会话须使用一致的 `OMP_WIKI_DIR`；未设置时，须使用一致的 `OMP_CONFIG_ROOT`、profile 等配置环境：
 
 ```tcsh
 omp docs init "/path/to/company-markdown" --name "company-docs"
@@ -113,7 +119,7 @@ omp docs init "/path/to/company-markdown" --name "company-docs"
 用 wiki 查询 MBIST 仿真日志的检查项和判据，按索引名、文件路径和行号标注依据；区分资料明确规定与推断，缺少依据时说明。
 ```
 
-AI 的 `wiki` 工具搜索全部已导入索引，返回完整章节正文和来源。它只读，不代为新建或删除索引；查询、续页和引用都来自本地数据库，源目录移走后仍能使用。
+AI 的 `wiki` 工具搜索全部已导入索引，返回完整章节正文和来源。工具本身只读，不代为新建或删除索引；查询、续页和引用都来自当前 Wiki 数据库，源目录移走后仍能使用。
 
 可以输入关键词或整句，中文不用分词。查询没有布尔、引号或通配符语法，`AND`、`OR`、`*` 都按普通字符处理。技术主题、词组和本节标题优先；查询 `mbist_check.rpt`、`std::vector` 等名称时保留原有标点，大小写不影响完整名称匹配。`match=exact-name` 表示完整名称证据，`match=related` 只表示相关；`未找到完整名称命中` 不能解释成已找到该名称。
 
@@ -128,7 +134,7 @@ omp docs remove "company-docs" --force
 omp docs init "/path/to/company-markdown" --name "company-docs"
 ```
 
-删除只移除本地索引，不删除源资料。也可在面板按 `d`，再按 `y` 确认删除。
+删除只移除当前数据库中的索引，不删除源资料；设置 `OMP_WIKI_DIR` 时删除的是共享库中的索引。也可在面板按 `d`，再按 `y` 确认删除。
 
 刷新前先确认新导出目录可读。删除后若重新导入失败，旧索引不会自动恢复。没有 `omp docs update`、`list` 或 `status` 命令；查看已有索引用 `/wiki`。
 

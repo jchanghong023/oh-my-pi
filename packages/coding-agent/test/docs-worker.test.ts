@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { DOCS_WORKER_ARG } from "../src/cli/worker-selectors";
 import { DocsService, smokeTestDocsWorker } from "../src/docs/service";
 import type { DocsWorkerInbound } from "../src/docs/worker-protocol";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -130,6 +131,38 @@ describe("DocsService real owned worker", () => {
 		expect(await fs.readdir(directory)).toEqual([]);
 		expect(await service.list()).toEqual([]);
 		expect(await Bun.file(service.databasePath).exists()).toBe(true);
+	});
+
+	it("creates, reads and removes the same OMP_WIKI_DIR database across profiles", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-wiki-"));
+		cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+		const documents = path.join(directory, "documents");
+		await fs.mkdir(documents);
+		await Bun.write(path.join(documents, "guide.md"), "# Shared\nsharedwikibeacon stored evidence\n");
+		const previous = process.env.OMP_WIKI_DIR;
+		let writer: DocsService;
+		let reader: DocsService;
+		try {
+			restoreEnvValue("OMP_WIKI_DIR", path.join("team", "wiki"));
+			writer = new DocsService({ agentDir: path.join(directory, "profile-a"), cwd: directory });
+			reader = new DocsService({ agentDir: path.join(directory, "profile-b"), cwd: directory });
+		} finally {
+			restoreEnvValue("OMP_WIKI_DIR", previous);
+		}
+		cleanups.push(
+			() => writer.close(),
+			() => reader.close(),
+		);
+		await writer.init(documents, "shared");
+		await fs.rm(documents, { recursive: true });
+		expect((await reader.search("sharedwikibeacon")).sections.some(hit => hit.text.includes("stored evidence"))).toBe(
+			true,
+		);
+		expect(await Bun.file(path.join(directory, "team", "wiki", "docs.db")).exists()).toBe(true);
+		expect(await Bun.file(path.join(directory, "profile-a", "docs.db")).exists()).toBe(false);
+		expect(await Bun.file(path.join(directory, "profile-b", "docs.db")).exists()).toBe(false);
+		await reader.remove("shared");
+		expect(await writer.list()).toEqual([]);
 	});
 
 	it("keeps timer heartbeats and another independent service usable during real DB work", async () => {

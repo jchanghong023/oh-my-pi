@@ -60,6 +60,7 @@ const isolatedEnvKeys = [
 	"PI_CODING_AGENT_DIR",
 	"OMP_PROFILE",
 	"PI_PROFILE",
+	"OMP_SKILLS_DIR",
 ] as const;
 const originalEnv: Record<string, string | undefined> = Object.fromEntries(
 	isolatedEnvKeys.map(key => [key, process.env[key]]),
@@ -78,6 +79,7 @@ beforeAll(async () => {
 	}
 	delete process.env.CLAUDE_CONFIG_DIR;
 	delete Bun.env.CLAUDE_CONFIG_DIR;
+	restoreEnvValue("OMP_SKILLS_DIR", undefined);
 	setAgentDir(path.join(isolatedHome, ".omp", "agent"));
 });
 
@@ -157,6 +159,51 @@ describe("skills", () => {
 			const { skills } = customDirectorySkills;
 
 			expect(skills.map(s => s.name)).toEqual(expectedFixtureSkillOrder);
+		});
+
+		it("loads OMP_SKILLS_DIR in addition to user skills and gives shared skills the bare name", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skills-"));
+			const sharedDir = path.join(root, "shared");
+			const customDir = path.join(root, "custom");
+			const userDir = path.join(isolatedHome, ".agents", "skills", "shared-priority");
+			const previous = process.env.OMP_SKILLS_DIR;
+			const writeSkill = async (directory: string, name: string, description: string) => {
+				const skillDir = path.join(directory, name);
+				await fs.mkdir(skillDir, { recursive: true });
+				await Bun.write(
+					path.join(skillDir, "SKILL.md"),
+					`---\nname: ${name}\ndescription: ${description}\n---\n${description}\n`,
+				);
+			};
+			try {
+				await writeSkill(path.dirname(userDir), "shared-priority", "User version");
+				await writeSkill(customDir, "shared-priority", "Configured version");
+				await writeSkill(sharedDir, "shared-priority", "Shared version");
+				await writeSkill(sharedDir, "shared-only", "Only in shared directory");
+				restoreEnvValue("OMP_SKILLS_DIR", sharedDir);
+				const options = {
+					...DISABLE_ALL_BUILTIN_SKILLS,
+					enableAgentsUser: true,
+					cwd: root,
+					customDirectories: [customDir],
+				};
+				const loaded = await loadSkills(options);
+				expect(loaded.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
+					path.join(sharedDir, "shared-priority", "SKILL.md"),
+				);
+				expect(loaded.skills.find(skill => skill.name === "shared-only")?.description).toBe(
+					"Only in shared directory",
+				);
+				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
+				const fallback = await loadSkills({ ...options, customDirectories: [] });
+				expect(fallback.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
+					path.join(userDir, "SKILL.md"),
+				);
+			} finally {
+				restoreEnvValue("OMP_SKILLS_DIR", previous);
+				await removeWithRetries(userDir);
+				await removeWithRetries(root);
+			}
 		});
 
 		it("should keep user Claude skills when project .claude/skills is missing", async () => {

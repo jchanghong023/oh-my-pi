@@ -4,6 +4,8 @@
 
 ### Added
 
+- Load additional shared skills from `OMP_SKILLS_DIR`, preferring shared versions on name collisions without changing user configuration.
+- Store all Wiki database operations in `OMP_WIKI_DIR/docs.db` when set, sharing the selected database across users and profiles while retaining the existing default when unset.
 - Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
 
 ### Fixed

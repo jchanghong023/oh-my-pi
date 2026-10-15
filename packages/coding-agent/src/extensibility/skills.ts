@@ -467,8 +467,12 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			realPathSet.add(resolvedPath);
 	}
 
+	// Shared skills use the existing custom-directory override and take precedence within it.
+	const sharedSkillsDir = process.env.OMP_SKILLS_DIR?.trim();
+	const directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
+
 	const customDirectoryResults = await Promise.all(
-		customDirectories.map(async dir => {
+		directories.map(async dir => {
 			const expandedDir = expandTilde(dir);
 			const scanResult = await scanSkillsFromDir(
 				{ cwd, home: os.homedir(), repoRoot: null },

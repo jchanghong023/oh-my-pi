@@ -20,6 +20,8 @@
 
 各功能域的验证状态以本表为准；不得将静态检查、文档更新或先前工作树测试视为当前功能验收。只有相应验证实际通过，才可标记验收通过。
 
+团队共享目录变量已实现：Windows `fastcheck` 通过（33.8 秒，exit=0；未完整观测的编译保守计费）。隔离当前源码 CLI 与真实文档 Worker 的六项冒烟通过，覆盖 `OMP_SKILLS_DIR` 附加加载／共享同名优先／原有用户技能保留、`skill://` 读取、缺失或空目录回退，以及 `OMP_WIKI_DIR` 建库、删源后跨用户数据根／profile 查询、删除共享索引、相对目录和未设置／空值的默认路径。两个变量均不依赖 `OMP_OFFLINE`，新增回归用例尚未执行；本次未运行 fulltest／slowtest、真实模型、Linux／WSL 或公司网络文件系统，不能据此承诺 NFS 多机并发安全。GUI 对齐由 forkZcode 独立验收，不将 CLI 冒烟视为 GUI 通过。
+
 当前上游基线 `c2cb79e4c227` 的 Windows fork-affected fulltest 已通过：验收源码为 `57b4fffb5720` 加本轮审查修复工作树（不含随后更新的需求与 changelog），280 个 TS 测试文件、Rust nextest 3200 通过／6 跳过、脚本 288 通过／33 跳过，全部静态／类型检查、当前源码 native 构建及真实 dev-TUI 基础、team 运行／取消和 repo 链路通过。总时长及计费时长均为 542.1 秒，纯编译区间未完整观测，保守全部计费，exit=0；报告 `runs/test-timing/2026-10-15T04-19-29.794Z-70844-ee343a41/run.json` 为 complete，结构化报告核对 9475 项执行、0 失败。另以真实 PTY 启动失败验证独立 UI smoke 报告为 partial／exit 1，并验证缺失 rustdoc 的包装器返回 MISSING_TOOL／127。未运行 Linux／WSL、slowtest、完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 或共享桌面输入；下文专项证据仍限于各自记录的源码与边界。
 
 当前审查修复的专项验证还包括：真实 CLI 导入后删源的 wiki DB-only grep、Stub 空洞／锚点／分页与重开，以及真实 native `rmdir`；跨进程维护锁持有超过 6.2 秒时的公开 repo 查询、pending 保留与释放后刷新；真实 `rpc-ui` 的 loop 耗尽后 Goal 续跑、计划拒绝后 loop 重臂、实际 read／propose 往返及坏 CodeAgent 保留段不阻断本地 Provider；公开命令 API 的 preset 写盘重载和无选择 UI 的 logout 持久状态。Windows Git Bash 下 POSIX 安装器 11 个隔离场景通过，不代表真实 Linux／musl 主机或 Homebrew 验收。证据保留在忽略目录 `node_modules/.cache/audit-*-acceptance*.json`；保留失败尝试，须按最终 `passed`／`pass` 状态区分。
