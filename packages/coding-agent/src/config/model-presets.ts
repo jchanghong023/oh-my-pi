@@ -72,14 +72,16 @@ export function getModelPresetNames(settings: Settings): string[] {
 }
 
 /**
- * First saved preset (by name) the current setup matches: identical effective
- * role assignments and, when the preset records one, the same default thinking
- * level. Undefined when the roles were edited past every preset.
+ * First saved preset (by name) the current setup matches: identical configured
+ * role assignments (excluding process defaults) and, when the preset records one,
+ * the same default thinking level. Undefined when the roles were edited past every preset.
  */
 export function findActiveModelPreset(settings: Settings): string | undefined {
 	const roles = settings.getModelRoles();
 	// Same filter as `saveModelPreset`: empty selectors are never stored.
-	const roleIds = Object.keys(roles).filter(role => roles[role]);
+	const roleIds = Object.keys(roles).filter(
+		role => roles[role] && settings.getModelRoleProvenance(role) !== "default",
+	);
 	const thinking = cfgDefaultThinkingLevel.get(settings);
 	return getModelPresetNames(settings).find(name => {
 		const lookup = getModelPreset(settings, name);
@@ -95,9 +97,9 @@ export function findActiveModelPreset(settings: Settings): string | undefined {
 }
 
 /**
- * Save the effective role assignments and `defaultThinkingLevel` as `name` in the
- * global config, overwriting a preset of the same name. Only this entry is
- * written, so presets defined by a project config are never copied globally.
+ * Save the configured role assignments and `defaultThinkingLevel` as `name` in the
+ * global config, overwriting a preset of the same name. Process defaults are not
+ * persisted; only this entry is written, so project presets are never copied globally.
  *
  * @throws Error when `name` is not a valid preset name.
  */
@@ -107,7 +109,7 @@ export function saveModelPreset(settings: Settings, name: string): ModelPreset {
 	}
 	const modelRoles: Record<string, string> = {};
 	for (const [role, selector] of Object.entries(settings.getModelRoles())) {
-		if (selector) modelRoles[role] = selector;
+		if (selector && settings.getModelRoleProvenance(role) !== "default") modelRoles[role] = selector;
 	}
 	const preset: ModelPreset = { modelRoles, defaultThinkingLevel: cfgDefaultThinkingLevel.get(settings) };
 	cfgModelPresets.setEntry(settings, name, preset);

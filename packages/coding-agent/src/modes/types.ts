@@ -367,7 +367,7 @@ export interface InteractiveModeContext {
 	): SubmittedUserInput;
 	cancelPendingSubmission(): boolean;
 	markPendingSubmissionStarted(input: SubmittedUserInput): boolean;
-	finishPendingSubmission(input: SubmittedUserInput): void;
+	finishPendingSubmission(input: SubmittedUserInput, dispatched?: boolean): void;
 	/**
 	 * Marks a locally-initiated user submission so the eventual `message_start`
 	 * event for that user message does not clobber the editor draft (see #783).

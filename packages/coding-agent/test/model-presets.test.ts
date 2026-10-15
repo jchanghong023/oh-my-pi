@@ -241,6 +241,73 @@ describe("model presets", () => {
 		expect(getModelPresetNames(settings)).toEqual(["team"]);
 	});
 
+	it("persists explicit selections but not offline process defaults in a saved preset", () => {
+		const dir = TempDir.createSync("@pi-model-presets-offline-");
+		tempDirs.push(dir);
+		// AgentStorage only exposes process-wide close; keep this disk fixture's
+		// handles in a child so cleanup cannot close another test's shared storage.
+		const child = Bun.spawnSync(
+			[
+				process.execPath,
+				"--eval",
+				`
+			import assert from "node:assert/strict";
+			import { Settings } from ${JSON.stringify(new URL("../src/config/settings.ts", import.meta.url).href)};
+			import { AgentStorage } from ${JSON.stringify(new URL("../src/session/agent-storage.ts", import.meta.url).href)};
+			import { saveModelPreset, getModelPreset, findActiveModelPreset } from ${JSON.stringify(new URL("../src/config/model-presets.ts", import.meta.url).href)};
+			const instances = [];
+			try {
+				const options = ${JSON.stringify({ cwd: dir.path(), agentDir: dir.path() })};
+				const settings = await Settings.loadIsolated(options);
+				instances.push(settings);
+				const company = "company/Qwen3.8-27B";
+				const sonnet = ${JSON.stringify(SONNET)};
+				settings.setModelRoleDefaults({ default: company, task: company, plan: company, smol: company });
+				settings.setModelRole("default", sonnet);
+				settings.setModelRole("plan", company);
+				settings.overrideModelRoles({ smol: company });
+				saveModelPreset(settings, "offline");
+				await settings.flush();
+
+				const reloaded = await Settings.loadIsolated(options);
+				instances.push(reloaded);
+				const lookup = getModelPreset(reloaded, "offline");
+				assert.equal(lookup.kind, "found");
+				assert.deepEqual(lookup.preset.modelRoles, { default: sonnet, plan: company, smol: company });
+				assert.equal(reloaded.getModelRole("task"), undefined);
+				assert.equal(settings.getModelRole("task"), company);
+				assert.equal(findActiveModelPreset(settings), "offline");
+			} finally {
+				try {
+					await Promise.all(instances.map(async settings => {
+						try { await settings.flush(); }
+						finally { settings.cancelPendingSaves(); }
+					}));
+				} finally {
+					AgentStorage.close();
+				}
+			}
+				`,
+			],
+			{
+				env: {
+					...process.env,
+					HOME: dir.path(),
+					USERPROFILE: dir.path(),
+					OMP_CONFIG_ROOT: dir.path(),
+					PI_CODING_AGENT_DIR: dir.path(),
+					PI_CONFIG_FILES: "",
+					CLAUDE_CONFIG_DIR: path.join(dir.path(), ".claude"),
+					OMP_OFFLINE: "0",
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		if (child.exitCode !== 0) throw new Error(child.stderr.toString() || child.stdout.toString());
+		expect(child.exitCode).toBe(0);
+	});
+
 	it("resolves an alias default against the preset's own roles, not the current ones", async () => {
 		// Current `slow` is broken but the preset redefines it: the switch must pass pre-validation.
 		const settings = Settings.isolated();

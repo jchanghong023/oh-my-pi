@@ -149,11 +149,13 @@ const getReservedModelsConfigSchema = once(() => {
 		const hasCompany = Object.hasOwn(originalProviders, "company");
 		const hasZcode = Object.hasOwn(originalProviders, "zcode-api");
 		const hasJchTools = Object.hasOwn(originalProviders, "jchtools");
-		if (!hasCompany && !hasZcode && !hasJchTools) return schema(input);
+		const hasCodeAgent = Object.hasOwn(originalProviders, "codeagent");
+		if (!hasCompany && !hasZcode && !hasJchTools && !hasCodeAgent) return schema(input);
 
 		const providers = { ...originalProviders };
 		if (hasCompany) providers.company = {};
 		if (hasJchTools) providers.jchtools = {};
+		if (hasCodeAgent) providers.codeagent = {};
 		const zcode = originalProviders["zcode-api"];
 		const ignoredZcodePolicy = hasZcode && (!isRecord(zcode) || Object.keys(zcode).some(key => key !== "apiKey"));
 		if (hasZcode) {
@@ -241,7 +243,13 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 }).withValidation("models", config => {
 	const providers = config.providers ?? {};
 	for (const providerName in providers) {
-		if (providerName === "company" || providerName === "zcode-api" || providerName === "jchtools") continue;
+		if (
+			providerName === "company" ||
+			providerName === "zcode-api" ||
+			providerName === "jchtools" ||
+			providerName === "codeagent"
+		)
+			continue;
 		const providerConfig = providers[providerName];
 		validateProviderConfiguration(
 			providerName,

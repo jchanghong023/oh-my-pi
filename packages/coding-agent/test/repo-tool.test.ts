@@ -1,14 +1,21 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
+import type { TUI } from "@oh-my-pi/pi-tui";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Settings } from "../src/config/settings";
+import { RepoHubComponent } from "../src/modes/components/repo-hub";
 import { RepoService } from "../src/repo/service";
 import { createTools, type ToolSession } from "../src/tools";
 import { RepoTool } from "../src/tools/repo";
 
 const temporary: string[] = [];
+beforeAll(async () => {
+	await initTheme();
+});
+
 afterEach(async () => {
 	await Promise.all(temporary.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -58,6 +65,30 @@ async function build(cwd: string, agentDir: string): Promise<void> {
 }
 
 describe("repository tool with a real SQLite index and native Python parser", () => {
+	it("opens and dismisses an unbuilt panel without creating an index database", async () => {
+		const { cwd, agentDir, session, tool } = await fixture({ "source.py": "def untouched(): pass\n" });
+		const hub = await RepoHubComponent.create({ requestRender() {} } as unknown as TUI, cwd, session.settings, {
+			onCancel() {},
+		});
+		try {
+			expect(hub.render(160).join("\n")).toContain("No repository index");
+			expect(await fs.readdir(agentDir)).toEqual([]);
+			hub.handleInput("b");
+			expect(hub.render(160).join("\n")).toContain("Build repository index");
+			hub.handleInput("n");
+			hub.handleInput("r");
+			hub.handleInput("n");
+			expect(await fs.readdir(agentDir)).toEqual([]);
+			expect((await execute(tool, { query: "untouched" })).details).toMatchObject({
+				queryStatus: "missing",
+				hits: [],
+			});
+		} finally {
+			hub.dispose();
+		}
+		expect(await fs.readdir(agentDir)).toEqual([]);
+	});
+
 	it("separates absent, no-hit, indexed content, definitions, and invalid input", async () => {
 		const { cwd, agentDir, tool } = await fixture({
 			"src/engine.py": "# café\r\ndef engine_timeout():\r\n    return 'ERR_TIMEOUT'\r\n",
@@ -121,6 +152,31 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		expect(resultText(status)).toContain("last full check");
 	});
 
+	it("normalizes relative path filters and rejects absolute or escaping paths instead of returning no hits", async () => {
+		const { cwd, agentDir, tool } = await fixture({
+			"src/engine.py": "def path_target(): return 'PATH_BOUNDARY'\n",
+			"src2/engine.py": "def path_target(): return 'PATH_BOUNDARY'\n",
+		});
+		await build(cwd, agentDir);
+		for (const action of ["search", "symbol"] as const) {
+			const query = action === "search" ? "PATH_BOUNDARY" : "path_target";
+			for (const filter of ["src", "./src//", "src\\engine.py", "src/../src/engine.py"]) {
+				const result = await execute(tool, { action, query, path: filter });
+				expect(result.details).toMatchObject({ hits: [{ path: "src/engine.py" }] });
+			}
+			for (const filter of [
+				path.join(cwd, "src"),
+				"/src",
+				"C:\\src",
+				"C:src",
+				"\\\\server\\share",
+				"../src",
+				"src/../../src",
+			])
+				await expect(execute(tool, { action, query, path: filter })).rejects.toThrow(/Repository path must/);
+		}
+	});
+
 	it("surfaces a damaged index as an error instead of reporting no matches", async () => {
 		const { cwd, agentDir, tool } = await fixture({ "source.py": "def intact(): return 'STILL_HERE'\n" });
 		const service = new RepoService({ cwd, agentDir });
@@ -128,7 +184,7 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		const databasePath = service.storage.path;
 		service.close();
 		await fs.writeFile(databasePath, "not a SQLite database");
-		await expect(execute(tool, { action: "search", query: "STILL_HERE" })).rejects.toThrow(/recover/i);
+		await expect(execute(tool, { action: "search", query: "STILL_HERE" })).rejects.toThrow(/Open \/repo/);
 		expect(await fs.readFile(path.join(cwd, "source.py"), "utf8")).toContain("STILL_HERE");
 	});
 

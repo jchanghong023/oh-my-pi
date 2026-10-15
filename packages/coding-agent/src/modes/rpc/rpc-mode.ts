@@ -2069,6 +2069,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		task => {
 			if (!clientDisconnected) shutdownCoordinator.track(task());
 		},
+		() => loopController.refresh(),
 	);
 	const cancelCommandOperations = (preserve?: AbortController) => {
 		for (const controller of commandOperations) {

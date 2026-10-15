@@ -24,6 +24,9 @@ interface ProbeResult {
 	genericEnvUrl: unknown;
 	genericEnvKey: unknown;
 	genericKeysWithoutApiRoute: unknown;
+	wwwGenericModel: unknown;
+	wwwGenericUrl: unknown;
+	wwwGenericToken: unknown;
 	forcedApiRouting: unknown;
 	envModelForeign: unknown;
 	configuredVariant: unknown;
@@ -142,6 +145,8 @@ function runEmbeddingProbe(): ProbeResult {
 				process.env.OPENROUTER_API_KEY = "shared-openrouter-key";
 				process.env.OPENAI_API_KEY = "shared-openai-key";
 				const genericKeysWithoutApiRoute = getCompanyEmbeddingDefaults(Settings.isolated({}));
+				process.env.OPENROUTER_BASE_URL = "https://www.openrouter.ai/api/v1";
+				const wwwGenericDefaults = getCompanyEmbeddingDefaults(Settings.isolated({}));
 				delete process.env.OPENROUTER_BASE_URL;
 				delete process.env.OPENROUTER_API_KEY;
 				delete process.env.OPENAI_API_KEY;
@@ -230,6 +235,9 @@ function runEmbeddingProbe(): ProbeResult {
 					envApiUrl,
 					genericKeysWithoutApiRoute,
 					forcedApiRouting,
+					wwwGenericModel: wwwGenericDefaults?.embeddingModel,
+					wwwGenericUrl: wwwGenericDefaults?.embeddingApiUrl,
+					wwwGenericToken: await tokenOf(wwwGenericDefaults),
 					genericEnvDefaults,
 					genericEnvModel: genericEnv.providerOptions.embeddingModel,
 					genericEnvUrl: genericEnv.providerOptions.embeddingApiUrl,
@@ -300,6 +308,10 @@ describe("company embedding defaults priority", () => {
 		expect(result.envApiKey).toBeUndefined();
 		expect(result.genericKeysWithoutApiRoute).not.toBeUndefined();
 		expect(result.forcedApiRouting).toBeUndefined();
+		// The existing www alias is not a custom gateway and must not displace the company lane.
+		expect(result.wwwGenericModel).toBe("Qwen3-VL-Embedding-2B");
+		expect(result.wwwGenericUrl).toBe(`${result.endpoint}/gateway/v1`);
+		expect(result.wwwGenericToken).toBe("fixture-secret");
 		expect(result.genericEnvDefaults).toBeUndefined();
 		expect(result.genericEnvModel).toBe("intfloat/multilingual-e5-large");
 		expect(result.genericEnvUrl).toBe(`${result.endpoint}/generic/v1`);

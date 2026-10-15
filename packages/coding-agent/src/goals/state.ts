@@ -128,17 +128,22 @@ export class GoalContinuationGuard {
 		this.#pendingActivity = "";
 		const previous = this.#previousActivity;
 		this.#previousActivity = activity;
+		const wasRecovery = this.#recoveryPending;
 		this.#recoveryPending = false;
 		this.#stoppedWithoutTools = false;
 		if (activity.length > 0) return activity === previous ? "stop" : "continue";
 		const assistant = messages.findLast(message => message.role === "assistant");
 		if (assistant?.role === "assistant" && assistant.stopReason === "aborted") return "stop";
-		if (this.#recoveryUsed) {
+		if (wasRecovery) {
 			this.#stoppedWithoutTools = true;
 			return "stop";
 		}
 		if (assistant?.role !== "assistant" || assistant.stopReason !== "stop") return "stop";
 		if (!assistant.content.some(block => block.type === "text" && block.text.trim().length > 0)) return "stop";
+		if (this.#recoveryUsed) {
+			this.#stoppedWithoutTools = true;
+			return "stop";
+		}
 		this.#recoveryUsed = true;
 		this.#recoveryPending = true;
 		return "recover";

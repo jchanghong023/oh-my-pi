@@ -130,6 +130,91 @@ function executionFixture(override?: (command: GateCommand) => Promise<string | 
 	return { ...f, options };
 }
 
+async function localCloneFixture(outcome: string) {
+	const f = executionFixture(async command =>
+		command.label === "wsl/native-repository-discovery" ? "[]" : undefined,
+	);
+	await runWslStage(f.gate, f.options);
+	const command = f.commands.find(c => c.label === "wsl/network-clone")!;
+	const directory = await fs.mkdtemp(path.join(temporary, "clone-fixture-"));
+	const bin = path.join(directory, "bin");
+	const staging = path.join(directory, "staging");
+	const control = path.join(directory, "control");
+	const writerPid = path.join(directory, "writer-pid");
+	await fs.mkdir(bin);
+	await fs.writeFile(
+		path.join(bin, "git"),
+		`#!/bin/bash
+set -eu
+if [ "$1" = clone ]; then
+ destination="\${@: -1}"
+ mkdir "$destination"
+ printf 'fixed source\\n' > "$destination/fixed-source"
+ case "$CLONE_FIXTURE_OUTCOME" in
+ failure) exit 17;;
+ timeout|hang*)
+  (while :; do printf 'writing\\n' >> "$destination/writes"; sleep 0.01; done) &
+  printf '%s\\n' "$!" > "$CLONE_FIXTURE_WRITER_PID"
+  printf 'CLONE_WRITER_READY\\n'
+  wait
+  ;;
+ esac
+fi
+`,
+		{ mode: 0o755 },
+	);
+	await fs.writeFile(
+		path.join(bin, "rm"),
+		`#!/bin/bash
+case "$CLONE_FIXTURE_OUTCOME" in
+ *cleanup-failure*) [ "\${@: -1}" != "$CLONE_FIXTURE_STAGING" ] || exit 19;;
+esac
+exec /usr/bin/rm "$@"
+`,
+		{ mode: 0o755 },
+	);
+	const emitted = String(command.stdin);
+	const remoteControl = emitted.match(/\/tmp\/omp-slowtest-clone-[0-9a-f-]+/)![0];
+	const remoteStaging = emitted.match(/\/root\/\.omp-slowtest-clone-[0-9a-f-]+/)![0];
+	// Exercise GNU timeout's real child-process signaling; JS fake timers cannot
+	// drive the separate shell's platform clock.
+	const script = emitted
+		.replaceAll(remoteControl, control)
+		.replaceAll(remoteStaging, staging)
+		.replaceAll("/root/owner-oh-my-pi", path.join(directory, "owner-oh-my-pi"))
+		.replaceAll("/root/oh-my-pi", path.join(directory, "oh-my-pi"))
+		.replace("timeout -k 5 120", outcome === "timeout" ? "timeout -k 1 0.2" : "timeout -k 5 120");
+	const start = (result = outcome) =>
+		Bun.spawn(["bash", "-s"], {
+			stdin: new Blob([script]),
+			stdout: "pipe",
+			stderr: "pipe",
+			env: {
+				...process.env,
+				PATH: `${bin}:${process.env.PATH}`,
+				CLONE_FIXTURE_OUTCOME: result,
+				CLONE_FIXTURE_WRITER_PID: writerPid,
+				CLONE_FIXTURE_STAGING: staging,
+			},
+		});
+	return {
+		directory,
+		staging,
+		control,
+		writerPid,
+		start,
+		run: async (result = outcome) => {
+			const child = start(result);
+			const [exitCode, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			return { exitCode, stdout, stderr };
+		},
+	};
+}
+
 describe("optional WSL selection", () => {
 	test("decodes UTF-8 and UTF-16LE management output", () => {
 		expect(decodeWslOutput(new TextEncoder().encode("Ubuntu-24.04"))).toBe("Ubuntu-24.04");
@@ -487,19 +572,107 @@ describe("streamed deployed fixed-commit execution", () => {
 			dispose();
 		}
 	});
-	test("clones only absent network repository and freezes a fresh clone before helper execution", async () => {
-		const f = executionFixture(async command =>
-			command.label === "wsl/native-repository-discovery" ? "[]" : undefined,
-		);
-		expect((await runWslStage(f.gate, f.options)).status).toBe("PASS");
-		const clone = String(f.commands.find(c => c.label === "wsl/network-clone")!.stdin);
-		expect(clone).toContain("git clone --no-checkout --branch 'tested-feature'");
-		expect(clone).toContain("merge-base --is-ancestor");
-		expect(clone).toContain(`update-ref 'refs/heads/tested-feature' '${source().head}'`);
-		expect(clone).toContain("destination='/root/oh-my-pi'");
-		expect(clone).toContain("destination='/root/owner-oh-my-pi'");
-		expect(clone).toContain('[ ! -e "$destination" ]');
+	test.skipIf(process.platform !== "linux").each([
+		{ outcome: "failure", previous: "none", expected: 17 },
+		{ outcome: "timeout", previous: "preferred", expected: 124 },
+		{ outcome: "success", previous: "both", expected: 1 },
+		{ outcome: "success", previous: "symlink", expected: 0 },
+		{ outcome: "cleanup-failure", previous: "none", expected: 1 },
+	])("fresh clone $outcome preserves $previous destinations and permits retry", async row => {
+		const fixture = await localCloneFixture(row.outcome);
+		const preferred = path.join(fixture.directory, "oh-my-pi");
+		const alternate = path.join(fixture.directory, "owner-oh-my-pi");
+		if (row.previous === "preferred" || row.previous === "both") {
+			await fs.mkdir(preferred);
+			await fs.writeFile(path.join(preferred, "user-source"), "uncommitted source");
+		}
+		if (row.previous === "both") {
+			await fs.mkdir(alternate);
+			await fs.writeFile(path.join(alternate, "cache"), "existing cache");
+		}
+		if (row.previous === "symlink") await fs.symlink("missing-user-target", preferred);
+		const result = await fixture.run();
+		expect(result.exitCode).toBe(row.expected);
+		if (row.previous === "preferred" || row.previous === "both")
+			expect(await fs.readFile(path.join(preferred, "user-source"), "utf8")).toBe("uncommitted source");
+		if (row.previous === "both")
+			expect(await fs.readFile(path.join(alternate, "cache"), "utf8")).toBe("existing cache");
+		if (row.previous === "symlink") expect(await fs.readlink(preferred)).toBe("missing-user-target");
+		if (row.outcome === "cleanup-failure") {
+			expect(result.stderr).toContain("clone staging cleanup failed");
+			expect((await fs.stat(fixture.staging)).isDirectory()).toBe(true);
+		} else {
+			expect(existsSync(fixture.staging)).toBe(false);
+		}
+		if (row.outcome === "failure" || row.outcome === "timeout") {
+			expect(existsSync(row.previous === "preferred" ? alternate : preferred)).toBe(false);
+			const retry = await fixture.run("success");
+			expect(retry.exitCode).toBe(0);
+			const destination = row.previous === "preferred" ? alternate : preferred;
+			expect(await fs.readFile(path.join(destination, "fixed-source"), "utf8")).toBe("fixed source\n");
+			expect(retry.stdout).toContain(`CLONED_REPOSITORY=${destination}`);
+		}
 	});
+	test.skipIf(process.platform !== "linux").each(["hang", "hang-cleanup-failure"])(
+		"cancel stops clone writers before cleanup and reports %s accurately",
+		async outcome => {
+			const fixture = await localCloneFixture(outcome);
+			const running = fixture.start();
+			const [monitor, captured] = running.stdout.tee();
+			const output = new Response(captured).text();
+			const errors = new Response(running.stderr).text();
+			try {
+				const reader = monitor.getReader();
+				let startup = "";
+				while (!startup.includes("CLONE_WRITER_READY")) {
+					const chunk = await reader.read();
+					if (chunk.done) throw new Error("Clone fixture exited before its writer started");
+					startup += new TextDecoder().decode(chunk.value);
+				}
+				// Do not await tee cancellation: its promise waits for the other
+				// branch's EOF, which the cancellation below is about to produce.
+				void reader.cancel();
+				const cancelled = Bun.spawn(["bash", "-c", wslCancelCommand(fixture.control)], {
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [code, stderr] = await Promise.all([
+					cancelled.exited,
+					new Response(cancelled.stderr).text(),
+					new Response(cancelled.stdout).text(),
+				]);
+				if (outcome === "hang-cleanup-failure") {
+					expect(code).not.toBe(0);
+					expect(stderr).toContain("cleanup UNVERIFIED");
+					expect(existsSync(fixture.staging)).toBe(true);
+				} else {
+					expect(stderr).toBe("");
+					expect(code).toBe(0);
+					expect(existsSync(fixture.staging)).toBe(false);
+				}
+				expect(await running.exited).not.toBe(0);
+				expect(existsSync(path.join(fixture.directory, "oh-my-pi"))).toBe(false);
+				const pid = (await fs.readFile(fixture.writerPid, "utf8")).trim();
+				const state = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+				expect(state === "" || state.split(") ")[1]?.startsWith("Z ")).toBe(true);
+				if (outcome === "hang") {
+					// The real host consumes state after checking the cleanup receipt.
+					await fs.rm(fixture.control, { recursive: true });
+					expect((await fixture.run("success")).exitCode).toBe(0);
+				}
+			} finally {
+				if (running.exitCode === null) {
+					const cleanup = Bun.spawn(["bash", "-c", wslCancelCommand(fixture.control)], {
+						stdout: "ignore",
+						stderr: "ignore",
+					});
+					await cleanup.exited;
+				}
+				running.kill();
+				await Promise.all([running.exited, output, errors]);
+			}
+		},
+	);
 	test("absent repository clone reports nonconflicting owner destination exactly", async () => {
 		const f = executionFixture(async command => {
 			if (command.label === "wsl/native-repository-discovery") return "[]";

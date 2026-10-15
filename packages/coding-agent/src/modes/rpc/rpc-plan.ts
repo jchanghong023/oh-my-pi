@@ -72,6 +72,7 @@ export class RpcPlanController {
 	readonly #ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">;
 	readonly #output: (text: string) => void;
 	readonly #runInBackground: (task: () => Promise<void>) => void;
+	readonly #onReviewRejected: (() => void) | undefined;
 	#previousTools: ToolPresentation | undefined;
 	#previousModel: ModelSnapshot | undefined;
 	#pendingModel: ModelSnapshot | undefined;
@@ -106,11 +107,13 @@ export class RpcPlanController {
 		ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">,
 		output: (text: string) => void,
 		runInBackground: (task: () => Promise<void>) => void,
+		onReviewRejected?: () => void,
 	) {
 		this.#session = session;
 		this.#ui = ui;
 		this.#output = output;
 		this.#runInBackground = runInBackground;
+		this.#onReviewRejected = onReviewRejected;
 	}
 
 	get reviewPending(): boolean {
@@ -702,7 +705,10 @@ export class RpcPlanController {
 			throw error;
 		} finally {
 			this.#log("plan_review_terminal", stage, result, { elapsed_ms: performance.now() - started });
-			if (signal === this.#operation.signal) this.#reviewing = false;
+			if (signal === this.#operation.signal) {
+				this.#reviewing = false;
+				if (result === "rejected" && current()) this.#onReviewRejected?.();
+			}
 		}
 	}
 }

@@ -3480,10 +3480,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		return true;
 	}
 
-	finishPendingSubmission(input: SubmittedUserInput): void {
+	finishPendingSubmission(input: SubmittedUserInput, dispatched = true): void {
 		const wasPendingSubmission = this.#pendingSubmittedInput === input;
 		const pendingSubmissionDispose = this.#pendingSubmissionDispose;
 		if (wasPendingSubmission) {
+			// A refused continuation has no agent_end. Only release the current
+			// submission's claim, never one belonging to a later lifecycle.
+			if (!dispatched && (input.customType === "goal-continuation" || input.customType === "goal-tool-recovery")) {
+				this.#pendingGoalContinuationTurns = Math.max(0, this.#pendingGoalContinuationTurns - 1);
+			}
 			this.#pendingSubmittedInput = undefined;
 			this.#pendingSubmissionDispose = undefined;
 			this.#pendingSubmissionPreservesDraft = false;

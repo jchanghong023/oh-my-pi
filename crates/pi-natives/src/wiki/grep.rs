@@ -204,11 +204,15 @@ pub(super) fn scan(
 			byte_end:     row.get(3)?,
 			raw_markdown: row.get(4)?,
 		};
-		let same_document = previous
-			.as_ref()
-			.is_some_and(|previous| previous.document_id == section.document_id);
-		lines.flush(section.byte_start, !same_document, matcher, check)?;
-		if !same_document {
+		// Converter-only headings are intentionally absent from both new and
+		// existing indexes. Finish each stored run independently: omitted bytes
+		// are neither evidence nor a bridge between original lines.
+		let same_run = previous.as_ref().is_some_and(|previous| {
+			let overlaps_stored_bytes = section.byte_start <= previous.byte_end;
+			previous.document_id == section.document_id && overlaps_stored_bytes
+		});
+		lines.flush(section.byte_start, !same_run, matcher, check)?;
+		if !same_run {
 			previous = None;
 		}
 		let context = scanner.lex_context(

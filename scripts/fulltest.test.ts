@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth, runGateCommands } from "./fastcheck";
-import { parseFulltestArgs, removeFulltestHome } from "./fulltest";
+import { fulltestCommands, parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
 describe("shared per-test budget", () => {
@@ -16,6 +16,53 @@ describe("shared per-test budget", () => {
 	test("invalid overrides preserve the upstream hang ceiling", () => {
 		expect(testTimeoutMs("0.5")).toBe(30_000);
 		expect(testTimeoutMs("invalid")).toBe(30_000);
+	});
+});
+
+describe("complete fork-delta TS selection", () => {
+	test("selects existing changed tests anywhere in a package, with package-local execution", () => {
+		const changedTests = [
+			"packages/metaharness/adapters/edit/runner.test.ts",
+			"packages/coding-agent/src/edit/auto-repair.test.ts",
+			"packages/collab-web/test/markdown.test.tsx",
+		];
+		const desktop = "packages/natives/test/desktop.test.ts";
+		const log = spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const commands = fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), [
+				...changedTests,
+				"packages/metaharness/adapters/edit/runner.ts",
+				"packages/metaharness/adapters/edit/removed-runner.test.ts",
+				desktop,
+			]);
+			const tests = commands.filter(command => command.label.startsWith("test/fork "));
+			expect(tests.map(command => command.label)).toEqual(changedTests.map(file => `test/fork ${file}`));
+			for (const [index, file] of changedTests.entries()) {
+				const separator = file.indexOf("/", "packages/".length);
+				expect(tests[index].cwd).toBe(path.resolve(import.meta.dir, "..", file.slice(0, separator)));
+				expect(tests[index].argv).toEqual([
+					"bun",
+					"../../scripts/test-report-bun.ts",
+					"--bail=1",
+					`--timeout=${testTimeoutMs()}`,
+					file.slice(separator + 1),
+				]);
+			}
+			expect(log.mock.calls).toContainEqual([`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${desktop}`]);
+		} finally {
+			log.mockRestore();
+		}
+	});
+
+	test("does not discover unchanged workspace tests when the delta has no package tests", () => {
+		const commands = fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), [
+			"packages/metaharness/adapters/edit/runner.ts",
+			"scripts/fulltest.test.ts",
+		]);
+		expect(commands.map(command => command.label)).toEqual([
+			"test/Rust affected crates",
+			"smoke/isolated dev TUI PTY",
+		]);
 	});
 });
 

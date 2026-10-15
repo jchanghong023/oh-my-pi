@@ -140,6 +140,7 @@ export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "jchcatchup",
 		description: "JCH：快速摘要工作现场；full 深度恢复",
 		allowArgs: true,
+		subcommandOptional: true,
 		subcommands: [{ name: "full", description: "通过代理深度恢复工作现场", usage: "[路径、提交范围或关注点]" }],
 		async handle(command, runtime) {
 			const { verb, rest } = parseSubcommand(command.args);

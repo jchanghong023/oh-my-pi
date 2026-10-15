@@ -125,6 +125,12 @@ export class RpcLoopController {
 		if (event.type === "agent_end" && event.isTerminal !== false) this.#schedule();
 	}
 
+	/** Re-arm a held turn after the host releases a continuation gate. */
+	refresh(): void {
+		this.cancel();
+		this.#schedule();
+	}
+
 	/** Cancel pending work while preserving the captured prompt and mode. */
 	cancel(): void {
 		if (this.#scheduled)
@@ -253,7 +259,10 @@ export class RpcLoopController {
 	}
 
 	#disable(message: string): void {
+		const pending = this.#scheduled;
 		this.clear();
+		// A terminal yield can exhaust an interval loop before any timer was armed.
+		if (!pending) this.#options.onContinuationDropped();
 		this.#options.output(message);
 	}
 

@@ -14,6 +14,8 @@
 ### Fixed
 
 - Bound wiki import commits, publication and rollback to the original database and hidden build identity, preventing reused row IDs from modifying replacement indexes.
+- Wiki grep continues across intentionally omitted converter headings without inventing missing content or requiring an index rebuild.
+- Windows `rmdir` rejects normalized dot, parent and trailing-dot/space operands that could remove a different directory, preserving explicit verbatim names.
 - Verified database identity around connection opens and generated a valid literal return type for `wikiSectionShape`.
 
 ### Fixed

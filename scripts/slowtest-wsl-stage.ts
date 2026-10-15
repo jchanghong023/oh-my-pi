@@ -287,33 +287,55 @@ export async function resolveWslRemoteSource(
 }
 const CANCEL_OWNED_TREE = `import os,pathlib,signal,sys,time
 control=pathlib.Path(sys.argv[1]); (control/'canceled').touch()
+def verify_cleanup():
+ if (control/'cleanup-required').exists() and ((control/'cleanup-failed').exists() or not (control/'settled').exists()):
+  raise SystemExit('WSL owner cleanup did not complete; cleanup UNVERIFIED')
 try: root,born=map(int,(control/'pid').read_text().split())
-except (FileNotFoundError,ValueError): raise SystemExit(0)
+except (FileNotFoundError,ValueError):
+ verify_cleanup(); raise SystemExit(0)
 def identity(pid):
  try:
   fields=pathlib.Path('/proc/'+str(pid)+'/stat').read_text().rsplit(') ',1)[1].split()
   return int(fields[1]),int(fields[19]),fields[0]
  except (FileNotFoundError,ProcessLookupError,ValueError,IndexError): return None
 current=identity(root)
-if current is None or current[1]!=born: raise SystemExit(0)
-processes={}
-for entry in pathlib.Path('/proc').iterdir():
- if entry.name.isdigit():
-  pid=int(entry.name); value=identity(pid)
-  if value is not None: processes[pid]=value
-owned={root:born}
-while True:
- added={pid:value[1] for pid,value in processes.items() if value[0] in owned and pid not in owned}
- if not added: break
- owned.update(added)
-def send(pid,stamp,sig):
+if current is None or current[1]!=born:
+ verify_cleanup(); raise SystemExit(0)
+def alive(pid,stamp):
  value=identity(pid)
- if value is not None and value[1]==stamp and value[2]!='Z':
+ return value is not None and value[1]==stamp and value[2]!='Z'
+def send(pid,stamp,sig):
+ if alive(pid,stamp):
   try: os.kill(pid,sig)
   except ProcessLookupError: pass
-for pid,stamp in reversed(list(owned.items())): send(pid,stamp,signal.SIGTERM)
-time.sleep(0.2)
-for pid,stamp in reversed(list(owned.items())): send(pid,stamp,signal.SIGKILL)
+# Freeze parents before enumerating descendants so they cannot spawn new work
+# while cancellation is taking its ownership snapshot.
+owned={root:born}
+send(root,born,signal.SIGSTOP)
+while True:
+ added={}
+ for entry in pathlib.Path('/proc').iterdir():
+  if entry.name.isdigit():
+   pid=int(entry.name); value=identity(pid)
+   if value is not None and value[0] in owned and pid not in owned:
+    added[pid]=value[1]; send(pid,value[1],signal.SIGSTOP)
+ if not added: break
+ owned.update(added)
+# Stop writers before allowing the owner to run its EXIT cleanup. Killing the
+# owner alongside its children can interrupt that cleanup or race a live writer.
+for pid,stamp in reversed(list(owned.items())):
+ if pid!=root: send(pid,stamp,signal.SIGKILL)
+send(root,born,signal.SIGTERM)
+send(root,born,signal.SIGCONT)
+deadline=time.monotonic()+5
+while alive(root,born) and time.monotonic()<deadline: time.sleep(0.02)
+send(root,born,signal.SIGKILL)
+deadline=time.monotonic()+1
+while any(alive(pid,stamp) for pid,stamp in owned.items()) and time.monotonic()<deadline: time.sleep(0.02)
+if any(alive(pid,stamp) for pid,stamp in owned.items()):
+ raise SystemExit('WSL owned processes did not stop; cleanup UNVERIFIED')
+# A failed or forcibly interrupted owner cleanup must not be reported as clean.
+verify_cleanup()
 `;
 export function wslCancelCommand(controlDir: string): string {
 	return `if [ -d ${quote(controlDir)} ]; then python3 -c ${quote(CANCEL_OWNED_TREE)} ${quote(controlDir)}; fi`;
@@ -329,7 +351,9 @@ async function cancelOwnedWsl(distro: string, control: string): Promise<void> {
 	});
 	try {
 		const child = Bun.spawn(wslArgv(distro, 25), {
-			stdin: new Blob([`mkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\n`]),
+			stdin: new Blob([
+				`set -eu\nmkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\nrm -rf -- ${quote(control)}\n`,
+			]),
 			stdout: "inherit",
 			stderr: "inherit",
 			windowsHide: true,
@@ -377,6 +401,10 @@ async function cancelOwnedWsl(distro: string, control: string): Promise<void> {
 		});
 		throw error;
 	}
+}
+function ownedCloneScript(program: string, control: string): string {
+	const inner = `set -eu\nread -r -a stat < /proc/$$/stat\nprintf '%s %s\\n' "$$" "\${stat[21]}" > ${quote(`${control}/pid`)}\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\n${program}`;
+	return `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(`status=$?; if [ ! -f ${quote(`${control}/canceled`)} ]; then rm -rf -- ${quote(control)} || exit 1; fi; exit "$status"`)} EXIT\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)}\n`;
 }
 const REPOSITORIES = `import json,os,pathlib,subprocess,sys,urllib.parse
 expected=sys.argv[1]; matches=[]
@@ -638,13 +666,59 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			);
 		const preferred = `/root/${name}`;
 		const alternate = `/root/${owner}-${name}`;
+		const cloneControl = `/tmp/omp-slowtest-clone-${randomUUID()}`;
+		const staging = `/root/.omp-slowtest-clone-${randomUUID()}`;
+		const checkout = `set -eu
+git clone --no-checkout --branch ${quote(remote.branch)} -- ${quote(remote.fetchUrl)} "$1"
+git -C "$1" merge-base --is-ancestor ${quote(source.head)} ${quote(`refs/remotes/origin/${remote.branch}`)}
+# Only this freshly created clone is positioned at the frozen SHA.
+git -C "$1" update-ref ${quote(`refs/heads/${remote.branch}`)} ${quote(source.head)}
+git -C "$1" checkout ${quote(remote.branch)}
+`;
+		const cloneProgram = `staging=${quote(staging)}
+owned=
+cleanup() {
+ status=$?
+ trap - EXIT INT TERM
+ if [ -n "$owned" ]; then
+  if [ "$(stat -c '%d:%i' -- "$staging")" != "$owned" ] || [ -L "$staging" ]; then
+   echo 'UNVERIFIED: clone staging identity changed; not removed' >&2
+   touch ${quote(`${cloneControl}/cleanup-failed`)}
+   exit 1
+  fi
+  if ! rm -rf -- "$staging"; then
+   echo 'UNVERIFIED: clone staging cleanup failed' >&2
+   touch ${quote(`${cloneControl}/cleanup-failed`)}
+   exit 1
+  fi
+ fi
+ touch ${quote(`${cloneControl}/settled`)} || exit 1
+ exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+touch ${quote(`${cloneControl}/cleanup-required`)}
+destination=${quote(preferred)}
+if [ -e "$destination" ] || [ -L "$destination" ]; then destination=${quote(alternate)}; fi
+[ ! -e "$destination" ] && [ ! -L "$destination" ] || { echo 'BLOCKED: native destinations already exist' >&2; exit 1; }
+# Atomically claim a private directory, never an existing destination. Only this
+# unpublished, same-inode staging directory belongs to this invocation.
+mkdir -m 700 -- "$staging"
+owned=$(stat -c '%d:%i' -- "$staging")
+timeout -k 5 120 bash -c ${quote(checkout)} clone "$staging/repository"
+# --no-clobber also protects a destination created while Git was running.
+mv -T -n -- "$staging/repository" "$destination"
+[ ! -e "$staging/repository" ] || { echo 'BLOCKED: clone destination appeared during synchronization' >&2; exit 1; }
+printf 'CLONED_REPOSITORY=%s\\n' "$destination"
+`;
 		const clone = await gate.capture({
 			label: "wsl/network-clone",
-			argv: wslArgv(selection.distro, 120),
+			argv: wslArgv(selection.distro, 180),
 			cwd: root,
-			stdin: `set -eu\ndestination=${quote(preferred)}\nif [ -e "$destination" ]; then destination=${quote(alternate)}; fi\n[ ! -e "$destination" ] || { echo 'BLOCKED: native destinations already exist' >&2; exit 1; }\ngit clone --no-checkout --branch ${quote(remote.branch)} -- ${quote(remote.fetchUrl)} "$destination"\ngit -C "$destination" merge-base --is-ancestor ${quote(source.head)} ${quote(`refs/remotes/origin/${remote.branch}`)}\n# Only this freshly created clone is positioned at the frozen SHA.\ngit -C "$destination" update-ref ${quote(`refs/heads/${remote.branch}`)} ${quote(source.head)}\ngit -C "$destination" checkout ${quote(remote.branch)}\nprintf 'CLONED_REPOSITORY=%s\\n' "$destination"\n`,
+			stdin: ownedCloneScript(cloneProgram, cloneControl),
 			allowFailure: true,
 			wallTimeoutSeconds: 150,
+			onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, cloneControl)),
 		});
 		if (clone.stdout) console.log(clone.stdout);
 		if (clone.stderr) console.error(clone.stderr);

@@ -781,7 +781,11 @@ describe("team orchestrator", () => {
 	});
 
 	it("keeps an eligible sibling's recommendation separate from a blocked proposal in comparisons", async () => {
-		for (const body of ["方案 A（尚不可采用）劣于可作为选项的方案 B。", "推荐方案 B 而不是尚不可采用的方案 A。"]) {
+		for (const body of [
+			"方案 A（尚不可采用）劣于可作为选项的方案 B。",
+			"推荐方案 B 而不是尚不可采用的方案 A。",
+			"本次推荐，方案 A 的阻断问题源于旧接口缺少迁移。",
+		]) {
 			const { result } = await run({
 				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
 				revision: () => revisionData(),
@@ -794,7 +798,12 @@ describe("team orchestrator", () => {
 	});
 
 	it("still rejects adoption of a blocked proposal next to an eligible sibling", async () => {
-		for (const body of ["方案 A 和方案 B 可以作为选项。", "推荐方案 B 和方案 A。", "方案 A 可作为选项优于方案 B。"]) {
+		for (const body of [
+			"方案 A 和方案 B 可以作为选项。",
+			"推荐方案 B 和方案 A。",
+			"方案 A 可作为选项优于方案 B。",
+			"方案 A 当前仍有未解决阻断问题，推荐。",
+		]) {
 			const { result } = await run({
 				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
 				revision: () => revisionData(),

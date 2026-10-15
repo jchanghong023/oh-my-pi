@@ -57,6 +57,26 @@ describe("bounded goal tool-call recovery", () => {
 		expect(guard.observe([textTurn()])).toBe("stop");
 	});
 
+	it("preserves ordinary error and empty-output stops after a recovery made tool progress", () => {
+		const stops: AgentMessage[][] = [
+			...(["error", "aborted", "length"] as const).map(reason => [textTurn(reason)]),
+			[],
+			[{ ...textTurn(), content: [] }],
+			[{ ...textTurn(), content: [{ type: "text", text: " \n" }] }],
+		];
+		for (const messages of stops) {
+			const guard = new GoalContinuationGuard();
+			expect(guard.observe([textTurn()])).toBe("recover");
+			expect(guard.observe(toolTurn)).toBe("continue");
+			expect(guard.observe(messages)).toBe("stop");
+			expect(guard.stopNotice).toBeUndefined();
+			expect(guard.recoveryPending).toBe(false);
+			// Neither real work nor an ordinary stop replenishes the stretch's quota.
+			expect(guard.observe([textTurn()])).toBe("stop");
+			expect(guard.recoveryPending).toBe(false);
+		}
+	});
+
 	it("retains tool evidence across maintenance runs without spending the recovery opportunity", () => {
 		const guard = new GoalContinuationGuard();
 		guard.recordActivity(toolTurn.slice(0, 1));

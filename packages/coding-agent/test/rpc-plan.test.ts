@@ -3,6 +3,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
 import { RpcPlanController, type RpcPlanSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { dispatchApprovedPlan } from "@oh-my-pi/pi-coding-agent/plan-mode/session-approval";
@@ -17,7 +18,18 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true });
 });
 
-afterEach(() => vi.restoreAllMocks());
+const loops: RpcLoopController[] = [];
+afterEach(() => {
+	for (const loop of loops) loop.clear();
+	loops.length = 0;
+	vi.restoreAllMocks();
+	vi.useRealTimers();
+});
+
+async function advance(ms: number): Promise<void> {
+	vi.advanceTimersByTime(ms);
+	for (let i = 0; i < 16; i++) await Promise.resolve();
+}
 
 function createHost(cwd: string) {
 	const original = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -35,6 +47,7 @@ function createHost(cwd: string) {
 	const output: string[] = [];
 	const background: Promise<void>[] = [];
 	const submitted: Array<{ text: string; synthetic?: boolean }> = [];
+	const repeated: string[] = [];
 	const ui: Pick<ExtensionUIContext, "select" | "input" | "confirm"> = {
 		select: async () => undefined,
 		input: async () => undefined,
@@ -107,6 +120,7 @@ function createHost(cwd: string) {
 		runModeExitTeardown: async task => task(),
 		abort: async () => {
 			streaming = false;
+			observe({ type: "agent_end", messages: [], isTerminal: true });
 		},
 		markPlanInternalAbortPending: () => {},
 		clearPlanInternalAbortPending: () => {},
@@ -120,6 +134,22 @@ function createHost(cwd: string) {
 			submitted.push({ text, synthetic: options?.synthetic });
 		},
 	};
+	const loopSession = Object.assign(session, {
+		isCompacting: false,
+		hasPostPromptWork: false,
+		hasAdmittedSubmission: false,
+		queuedMessageCount: 0,
+	});
+	const loop = new RpcLoopController(loopSession as AgentSession, {
+		output: text => output.push(text),
+		submit: async (text, current) => {
+			if (current()) repeated.push(text);
+		},
+		reset: async () => false,
+		onContinuationDropped: () => {},
+		continuationAllowed: () => !controller.reviewPending,
+	});
+	loops.push(loop);
 	const controller = new RpcPlanController(
 		session,
 		ui,
@@ -127,7 +157,13 @@ function createHost(cwd: string) {
 		task => {
 			background.push(task());
 		},
+		() => loop.refresh(),
 	);
+	const observe = (event: AgentSessionEvent) => {
+		// Match rpc-mode's loop/plan ordering; the abort above emits the real review yield.
+		loop.observe(event);
+		controller.observe(event);
+	};
 	const drain = async () => {
 		for (let index = 0; index < background.length; index++) await background[index];
 	};
@@ -156,6 +192,9 @@ function createHost(cwd: string) {
 	};
 	return {
 		controller,
+		loop,
+		repeated,
+		observe,
 		session,
 		ui,
 		output,
@@ -245,6 +284,100 @@ describe("RPC plan mode host", () => {
 		expect(host.submitted[0]?.text).toContain(content);
 		expect(host.submitted[0]?.synthetic).toBe(true);
 		expect(host.controller.reviewPending).toBe(false);
+	});
+
+	test("rejecting approval re-arms the loop after the proposal abort without another agent_end", async () => {
+		await using root = await TempDir.create("rpc-plan-loop-reject-");
+		const host = createHost(root.absolute());
+		await Bun.write(host.planPath, "# Draft plan");
+		await host.controller.handle("");
+		await host.loop.handle("2 1s improve the draft");
+		host.loop.capturePrompt("improve the draft");
+		const reply = Promise.withResolvers<boolean>();
+		const shown = Promise.withResolvers<void>();
+		vi.spyOn(host.ui, "confirm").mockImplementation(async () => {
+			shown.resolve();
+			return reply.promise;
+		});
+		host.observe(await host.propose());
+		await shown.promise;
+		vi.useFakeTimers();
+		await advance(1000);
+		expect(host.repeated).toEqual([]);
+		expect(host.loop.continuationPending).toBe(false);
+		reply.resolve(false);
+		await host.drain();
+		expect(host.session.getPlanModeState()?.enabled).toBe(true);
+		expect(host.loop.continuationPending).toBe(true);
+		await advance(1000);
+		expect(host.repeated).toEqual(["improve the draft"]);
+		expect(host.submitted).toEqual([]);
+	});
+
+	for (const action of ["abort", "new_session"] as const) {
+		test(`${action} during approval never revives a loop on a late rejected response`, async () => {
+			await using root = await TempDir.create(`rpc-plan-loop-${action}-`);
+			const host = createHost(root.absolute());
+			await Bun.write(host.planPath, "# Draft plan");
+			await host.controller.handle("");
+			await host.loop.handle("2 1s improve the draft");
+			host.loop.capturePrompt("improve the draft");
+			const reply = Promise.withResolvers<boolean>();
+			const shown = Promise.withResolvers<void>();
+			vi.spyOn(host.ui, "confirm").mockImplementation(async () => {
+				shown.resolve();
+				return reply.promise;
+			});
+			host.observe(await host.propose());
+			await shown.promise;
+			host.controller.cancel();
+			if (action === "abort") {
+				host.loop.pause();
+				await host.session.abort();
+			} else {
+				host.loop.clear();
+				await host.controller.beginSessionChange();
+				host.changeSession();
+				await host.controller.endSessionChange();
+			}
+			vi.useFakeTimers();
+			reply.resolve(false);
+			await host.drain();
+			await advance(1000);
+			expect(host.repeated).toEqual([]);
+			expect(host.submitted).toEqual([]);
+			expect(host.loop.continuationPending).toBe(false);
+			expect(host.loop.enabled).toBe(action === "abort");
+		});
+	}
+
+	test("approval dispatch does not independently re-arm the loop before execution yields", async () => {
+		await using root = await TempDir.create("rpc-plan-loop-approve-");
+		const host = createHost(root.absolute());
+		await Bun.write(host.planPath, "# Approved plan");
+		await host.controller.handle("");
+		await host.loop.handle("2 1s improve the draft");
+		host.loop.capturePrompt("improve the draft");
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		vi.spyOn(host.session, "prompt").mockImplementation(async () => {
+			started.resolve();
+			await release.promise;
+			host.observe({ type: "agent_end", messages: [], isTerminal: true });
+			return true;
+		});
+		host.observe(await host.propose());
+		await started.promise;
+		expect(host.controller.reviewPending).toBe(false);
+		expect(host.loop.continuationPending).toBe(false);
+		vi.useFakeTimers();
+		await advance(1000);
+		expect(host.repeated).toEqual([]);
+		release.resolve();
+		await host.drain();
+		expect(host.loop.continuationPending).toBe(true);
+		await advance(1000);
+		expect(host.repeated).toEqual(["improve the draft"]);
 	});
 
 	test("operator cancellation releases review without executing a late affirmative reply", async () => {

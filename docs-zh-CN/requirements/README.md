@@ -20,7 +20,11 @@
 
 各功能域的验证状态以本表为准；不得将静态检查、文档更新或先前工作树测试视为当前功能验收。只有相应验证实际通过，才可标记验收通过。
 
-当前上游基线 `c2cb79e4c227` 的 Windows fork-affected fulltest 已通过：验收源码为 `9106a6f39a` 合并 dev `4aa3fdd6f8` 后的工作树（不含随后更新的本文验证状态），277 个 TS 测试文件、Rust nextest 3197 通过／6 跳过、脚本 285 通过／15 跳过，全部静态／类型检查、native 构建及真实 dev-TUI 基础、team 运行／取消和 repo 链路通过。总时长及计费时长均为 461.5 秒，纯编译区间未完整观测，保守全部计费，exit=0；报告 `runs/test-timing/2026-10-14T23-06-09.002Z-58084-dab723ad/run.json` 为 complete，结构化报告核对 9406 项执行、0 失败。未运行 Linux／WSL、slowtest、完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 或共享桌面输入；下文专项证据仍限于各自记录的源码与边界。
+当前上游基线 `c2cb79e4c227` 的 Windows fork-affected fulltest 已通过：验收源码为 `003c7bcd802e` 加本轮审查修复工作树（不含随后更新的本文验证状态），280 个 TS 测试文件、Rust nextest 3200 通过／6 跳过、脚本 286 通过／33 跳过，全部静态／类型检查、native 构建及真实 dev-TUI 基础、team 运行／取消和 repo 链路通过。总时长及计费时长均为 253.3 秒，纯编译区间未完整观测，保守全部计费，exit=0；报告 `runs/test-timing/2026-10-15T00-54-08.650Z-72204-0826a8ed/run.json` 为 complete，结构化报告核对 9452 项执行、0 失败。未运行 Linux／WSL、slowtest、完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 或共享桌面输入；下文专项证据仍限于各自记录的源码与边界。
+
+当前审查修复的专项验证还包括：真实 CLI 导入后删源的 wiki DB-only grep、Stub 空洞／锚点／分页与重开，以及真实 native `rmdir`；跨进程维护锁持有超过 6.2 秒时的公开 repo 查询、pending 保留与释放后刷新；真实 `rpc-ui` 的 loop 耗尽后 Goal 续跑、计划拒绝后 loop 重臂、实际 read／propose 往返及坏 CodeAgent 保留段不阻断本地 Provider；公开命令 API 的 preset 写盘重载和无选择 UI 的 logout 持久状态。Windows Git Bash 下 POSIX 安装器 11 个隔离场景通过，不代表真实 Linux／musl 主机或 Homebrew 验收。证据保留在忽略目录 `node_modules/.cache/audit-*-acceptance*.json`；保留失败尝试，须按最终 `passed`／`pass` 状态区分。
+
+WSL clone 的生成脚本主体在 Windows Git Bash 下有 7 个通过场景，覆盖发布、失败清理与重试、既存目录／缓存和并发目标保护；这不是 WSL 验收。该本地 fixture 明确适配了 NTFS 不支持的 `mkdir -m 700`，Linux supervisor／信号取消、POSIX 权限及本机无法创建的原生符号链接仍未验证，不能用脚本自测的合成 WSL PASS 或该局部结果替代真实 slowtest。
 
 上表既有跨平台验证覆盖的上游基线为 `f979f4639777`，实际验收源码为集成提交 `31fe1f9d6e`，不能视为当前基线的跨平台验收。Windows／Ubuntu-24.04 的 slowtest 固定 SHA、源状态、退出码及活动事件均通过；宿主报告为 `runs/test-timing/2026-10-14T16-17-54.387Z-66080-845b17dc/run.json`，Linux 报告为 `/root/oh-my-pi/runs/test-timing/2026-10-14T16-18-28.171Z-317-44a35756/run.json`。Linux JUnit 未复制到宿主，宿主报告保持 partial，不把脚本中的合成 WSL PASS 当作 Linux 验收。JchTools 并发刷新使用认证初始化后的可控时钟，欢迎提示使用确定性的实际宽度／占位符展开回归；产品行为与门禁预算不变。完整上游 TS 套件、Python／独立 SDK、真实模型、ZCode GUI 和共享桌面输入不属于本次通过结论。
 

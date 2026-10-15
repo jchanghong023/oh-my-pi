@@ -1,8 +1,10 @@
+import { statSync } from "node:fs";
 import { type Component, matchesKey, type TUI, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { isEnoent, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
-import { RepoService } from "../../repo/service";
+import { resolveRepoRoot, RepoService } from "../../repo/service";
+import { repoIndexPath } from "../../repo/storage";
 import type { RepoProgress, RepoStatus } from "../../repo/types";
 
 export interface RepoHubCallbacks {
@@ -33,10 +35,12 @@ export class RepoHubComponent implements Component {
 	#work?: Promise<void>;
 	#disposed = false;
 	#refreshVersion = 0;
+	#service?: RepoService;
 
 	private constructor(
 		private readonly tui: TUI,
-		private readonly service: RepoService,
+		private readonly root: string,
+		private readonly agentDir: string,
 		private readonly callbacks: RepoHubCallbacks,
 	) {}
 
@@ -46,11 +50,23 @@ export class RepoHubComponent implements Component {
 		settings: Settings,
 		callbacks: RepoHubCallbacks,
 	): Promise<RepoHubComponent> {
-		const hub = new RepoHubComponent(tui, new RepoService({ agentDir: settings.getAgentDir(), cwd }), callbacks);
+		const root = resolveRepoRoot(cwd);
+		const agentDir = settings.getAgentDir();
+		const hub = new RepoHubComponent(tui, root, agentDir, callbacks);
+		try {
+			statSync(repoIndexPath(agentDir, root));
+			hub.#open();
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
 		// A damaged index can throw on status, but the panel must remain open so
 		// the user can explicitly recover it with rebuild or remove it.
 		await hub.#refresh();
 		return hub;
+	}
+
+	#open(): RepoService {
+		return (this.#service ??= new RepoService({ agentDir: this.agentDir, cwd: this.root, root: this.root }));
 	}
 
 	invalidate(): void {}
@@ -59,14 +75,14 @@ export class RepoHubComponent implements Component {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		this.#abort?.abort();
-		if (this.#work) void this.#work.finally(() => this.service.close());
-		else this.service.close();
+		if (this.#work) void this.#work.finally(() => this.#service?.close());
+		else this.#service?.close();
 	}
 
 	async #refresh(): Promise<void> {
 		const version = ++this.#refreshVersion;
 		try {
-			const status = await this.service.status();
+			const status = this.#service ? await this.#service.status() : undefined;
 			if (!this.#disposed && version === this.#refreshVersion) {
 				this.#status = status;
 				this.#statusError = undefined;
@@ -94,14 +110,15 @@ export class RepoHubComponent implements Component {
 				this.tui.requestRender();
 			},
 		};
+		const service = this.#open();
 		const work =
 			operation === "build"
-				? this.service.build(options)
+				? service.build(options)
 				: operation === "update"
-					? this.service.reconcile(options)
-					: this.service.storage.recoveryError
-						? this.service.recover(options)
-						: this.service.rebuild(options);
+					? service.reconcile(options)
+					: service.storage.recoveryError
+						? service.recover(options)
+						: service.rebuild(options);
 		const pending = work
 			.catch(error => {
 				if (this.#operation === operation && !(error instanceof Error && error.name === "AbortError"))
@@ -133,7 +150,7 @@ export class RepoHubComponent implements Component {
 		const pending = (async () => {
 			try {
 				await previous;
-				await this.service.remove();
+				await this.#open().remove();
 			} catch (error) {
 				this.#error = line(errorText(error));
 			} finally {
@@ -170,11 +187,11 @@ export class RepoHubComponent implements Component {
 		else if (
 			data === "d" &&
 			this.#operation !== "delete" &&
-			(this.#status?.exists || this.service.storage.recoveryError || this.#statusError)
+			(this.#status?.exists || this.#service?.storage.recoveryError || this.#statusError)
 		)
 			this.#confirmation = "delete";
 		else if (this.#operation) return;
-		else if (data === "b" && !this.#status?.exists && !this.service.storage.recoveryError)
+		else if (data === "b" && !this.#status?.exists && !this.#service?.storage.recoveryError)
 			this.#confirmation = "build";
 		else if (data === "u" && this.#status?.exists) this.#start("update");
 		else if (data === "r") this.#confirmation = "rebuild";
@@ -182,7 +199,7 @@ export class RepoHubComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		const root = line(this.service.root);
+		const root = line(this.root);
 		const lines = [
 			theme.bold(theme.fg("accent", "Repository index")),
 			`Root: ${root}`,
@@ -207,7 +224,9 @@ export class RepoHubComponent implements Component {
 			if (status.failureCount > 3) lines.push(`  … ${status.failureCount - 3} more failures`);
 			for (const reason of status.uncertainReasons.slice(0, 2)) lines.push(`  unchecked: ${line(reason)}`);
 			if (status.uncertainCount > 2) lines.push(`  … ${status.uncertainCount - 2} more unchecked reasons`);
-		} else if (this.service.storage.recoveryError) {
+		} else if (!this.#service) {
+			lines.push("No repository index. Press b to build.");
+		} else if (this.#service.storage.recoveryError) {
 			lines.push(theme.fg("warning", "Index schema unreadable. Press r to rebuild and recover, or d to delete."));
 		} else lines.push("Status unavailable. Press r to rebuild or d to delete.");
 		if (this.#confirmation === "build") lines.push(theme.fg("warning", `Build repository index for ${root}? y/N`));

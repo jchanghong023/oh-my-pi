@@ -10,4 +10,11 @@ describe("declarative subcommand completion", () => {
 		expect(inlineHint).toBeTruthy();
 		expect(items?.map(item => item.hint)).toEqual([inlineHint]);
 	});
+
+	it("keeps catchup's local summary callable without completing a deep recovery", async () => {
+		const catchup = BUILTIN_SLASH_COMMANDS.find(command => command.name === "jchcatchup");
+		expect(await catchup?.getArgumentCompletions?.("")).toBeNull();
+		const items = await catchup?.getArgumentCompletions?.("f");
+		expect(items?.map(item => item.value)).toEqual(["full "]);
+	});
 });

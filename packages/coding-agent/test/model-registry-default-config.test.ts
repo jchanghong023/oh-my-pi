@@ -52,6 +52,28 @@ describe("ModelRegistry default custom models config", () => {
 		expect(model?.baseUrl).toBe("https://yaml-default.example.com/v1");
 	});
 
+	test.each(["null", "{apiKey: 7}", "{models: [{id: forbidden-model}]}"])(
+		"ignores reserved codeagent input %s without dropping unrelated models",
+		codeagent => {
+			writeModelsYaml("models.yml", {
+				provider: "unrelated",
+				modelId: "kept-model",
+				modelName: "Kept model",
+				baseUrl: "https://unrelated.invalid/v1",
+			});
+			fs.appendFileSync(path.join(tempDir.path(), "models.yml"), `  codeagent: ${codeagent}\n`);
+
+			const registry = new ModelRegistry(authStorage);
+
+			expect(registry.getError()).toBeUndefined();
+			expect(registry.find("unrelated", "kept-model")?.baseUrl).toBe("https://unrelated.invalid/v1");
+			expect(registry.find("codeagent", "forbidden-model")).toBeUndefined();
+			expect(registry.getReservedProviderWarnings().some(warning => warning.includes("providers.codeagent"))).toBe(
+				true,
+			);
+		},
+	);
+
 	test("retains STB decoder metadata on a renamed custom provider", () => {
 		writeModelsYaml("models.yml", {
 			provider: "managed-primary",

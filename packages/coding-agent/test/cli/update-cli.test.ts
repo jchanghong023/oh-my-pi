@@ -117,6 +117,79 @@ describe("runUpdateCommand version source", () => {
 	);
 });
 
+describe("Homebrew update ownership", () => {
+	it.skipIf(process.platform === "win32")(
+		"keeps fork binaries intact while retaining official Homebrew upgrades",
+		async () => {
+			const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-update-brew-")));
+			try {
+				for (const fork of [true, false]) {
+					const prefix = path.join(root, fork ? "fork" : "official");
+					const bin = path.join(prefix, "bin");
+					const commandLog = path.join(prefix, "brew-commands");
+					const ompPath = path.join(bin, "omp");
+					await fs.mkdir(bin, { recursive: true });
+					const original = "#!/bin/sh\necho omp/1.0.0\n";
+					await Bun.write(ompPath, original);
+					await fs.chmod(ompPath, 0o755);
+					const brewPath = path.join(bin, "brew");
+					await Bun.write(
+						brewPath,
+						"#!/bin/sh\n" +
+							'printf \'%s\\n\' "$*" >> "$OMP_TEST_BREW_LOG"\n' +
+							'if [ "$1" = --prefix ]; then printf \'%s\\n\' "$OMP_TEST_BREW_PREFIX"; exit 0; fi\n' +
+							'if [ "$1" = upgrade ] || [ "$1" = reinstall ]; then\n' +
+							"  printf '#!/bin/sh\\necho omp/999.0.0\\n' > \"$OMP_TEST_BREW_PREFIX/bin/omp\"\n" +
+							"fi\n",
+					);
+					await fs.chmod(brewPath, 0o755);
+					const version = fork ? "999.0.0+fork.1" : "999.0.0";
+					const env: Record<string, string | undefined> = {
+						...process.env,
+						PATH: bin,
+						OMP_CONFIG_ROOT: path.join(prefix, "config"),
+						HOME: prefix,
+						npm_config_userconfig: path.join(prefix, ".npmrc"),
+						npm_config_registry: "https://registry.npmjs.org",
+						OMP_TEST_BREW_PREFIX: prefix,
+						OMP_TEST_BREW_LOG: commandLog,
+					};
+					delete env.PI_UPDATE_REPOSITORY;
+					if (fork) env.PI_UPDATE_REPOSITORY = "jchanghong023/oh-my-pi";
+					const script = `
+						import { runUpdateCommand } from ${JSON.stringify(new URL("../../src/cli/update-cli.ts", import.meta.url).href)};
+						globalThis.fetch = Object.assign(async input => {
+							const url = String(input);
+							if (url.includes("/releases/latest")) return Response.json({ tag_name: ${JSON.stringify(`v${version}`)} });
+							if (url.includes("registry.npmjs.org")) return Response.json({ version: ${JSON.stringify(version)} });
+							throw new Error("Unexpected update request: " + url);
+						}, { preconnect: globalThis.fetch.preconnect });
+						await runUpdateCommand({ force: false, check: false, channel: "stable" });
+					`;
+					const child = Bun.spawn([process.execPath, "-e", script], { env, stdout: "pipe", stderr: "pipe" });
+					const [stdout, stderr, exitCode] = await Promise.all([
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+						child.exited,
+					]);
+					expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
+					const commands = (await Bun.file(commandLog).text()).trim().split("\n");
+					if (fork) {
+						expect(commands).toEqual(["--prefix can1357/tap/omp"]);
+						expect(await Bun.file(ompPath).text()).toBe(original);
+						expect(stdout).toContain("https://github.com/jchanghong023/oh-my-pi/blob/main/scripts/install.sh");
+					} else {
+						expect(commands).toEqual(["--prefix can1357/tap/omp", "update", "upgrade can1357/tap/omp"]);
+						expect(await Bun.file(ompPath).text()).toContain("omp/999.0.0");
+					}
+				}
+			} finally {
+				await removeWithRetries(root);
+			}
+		},
+	);
+});
+
 describe("compareUpdateVersions", () => {
 	it("orders fork builds whose SemVer precedence ignores build metadata", () => {
 		expect(compareUpdateVersions("18.0.6+fork.124", "18.0.6+fork.123")).toBeGreaterThan(0);

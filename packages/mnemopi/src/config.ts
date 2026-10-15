@@ -118,11 +118,12 @@ export function embeddingMaxInputChars(env: Env = process.env): number {
 	return Math.max(0, envInt("MNEMOPI_EMBEDDING_MAX_INPUT_CHARS", 8192, env));
 }
 
-/** Only the official host uses OpenRouter's credential and availability rules. */
+/** Only the official host and its existing www alias use OpenRouter's credential and availability rules. */
 export function isOpenRouterEmbeddingUrl(baseUrl: string | undefined): boolean {
 	if (!baseUrl) return false;
 	try {
-		return new URL(baseUrl).hostname === "openrouter.ai";
+		const hostname = new URL(baseUrl).hostname;
+		return hostname === "openrouter.ai" || hostname === "www.openrouter.ai";
 	} catch {
 		return false;
 	}

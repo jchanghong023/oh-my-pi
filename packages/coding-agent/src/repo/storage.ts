@@ -109,7 +109,7 @@ export class RepoStorage {
 			this.#db?.close();
 			this.#db = undefined;
 			this.#recoveryError = new Error(
-				`Repository index recovery required: ${error instanceof Error ? error.message : String(error)}. Use recover() to replace it after a successful rebuild.`,
+				`Repository index recovery required: ${error instanceof Error ? error.message : String(error)}. Open /repo and choose rebuild to recover it.`,
 				{ cause: error },
 			);
 		}

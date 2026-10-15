@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadMnemopiConfig, type MnemopiBackendConfig } from "@oh-my-pi/pi-coding-agent/mnemopi/config";
 import { getMemoriesDir } from "@oh-my-pi/pi-utils";
+import { apiEmbeddingsAvailable, isApiEmbeddingModel } from "@oh-my-pi/pi-mnemopi/config";
 
 // `mnemopi.embeddingVariant` selects the concrete local embedding model, while an
 // explicit `mnemopi.embeddingModel` is an advanced override that wins. Scoping is
@@ -90,5 +91,30 @@ describe("loadMnemopiConfig database path resolution", () => {
 
 		expect(mnemopiConfigFor({ "mnemopi.dbPath": "" }, agentDir).dbPath).toBe(defaultPath);
 		expect(mnemopiConfigFor({ "mnemopi.dbPath": " \t " }, agentDir).dbPath).toBe(defaultPath);
+	});
+});
+
+describe("OpenRouter embedding endpoint credentials", () => {
+	it("keeps the existing www alias on the official credential-required route", () => {
+		const env = { OPENROUTER_BASE_URL: "https://www.openrouter.ai/api/v1" };
+		expect(isApiEmbeddingModel("intfloat/multilingual-e5-large", env)).toBe(false);
+		expect(apiEmbeddingsAvailable({ ...env, MNEMOPI_EMBEDDING_MODEL: "openai/text-embedding-3-small" })).toBe(false);
+		expect(
+			apiEmbeddingsAvailable({
+				...env,
+				MNEMOPI_EMBEDDING_MODEL: "openai/text-embedding-3-small",
+				OPENROUTER_API_KEY: "explicit-key",
+			}),
+		).toBe(true);
+	});
+
+	it.each([
+		"https://openrouter.ai.gateway.invalid/api/v1",
+		"https://gateway.invalid/openrouter.ai/api/v1",
+		"https://custom.openrouter.ai/api/v1",
+	])("keeps custom gateways outside the official host credential gate: %s", baseUrl => {
+		const env = { OPENROUTER_BASE_URL: baseUrl };
+		expect(isApiEmbeddingModel("intfloat/multilingual-e5-large", env)).toBe(true);
+		expect(apiEmbeddingsAvailable(env)).toBe(true);
 	});
 });

@@ -162,7 +162,7 @@ install_curl_failed() {
         35|60) kind=tls ;;
         *) kind=network ;;
     esac
-    install_log ERROR http_request_failed "result=failed curl_exit=$1 error_type=$kind http_status=unavailable endpoint=$2"
+    install_log ERROR http_request_failed "result=failed curl_exit=$1 error_type=$kind http_status=${3:-unavailable} endpoint=$2"
 }
 
 # Parse arguments
@@ -357,31 +357,52 @@ install_binary() {
         echo "Refusing to replace a directory at ${INSTALL_DIR}/omp" >&2
         exit 1
     fi
-    # Get release tag
+    # Probe once for both metadata and asset requests. --ssl-no-revoke was
+    # introduced in curl 7.44 and only applies to the Schannel TLS backend.
+    CURL_INFO="$(curl --version 2>/dev/null)" || CURL_INFO=""
+    CURL_VERSION="$(printf '%s\n' "$CURL_INFO" | awk 'NR==1 {print $2}')"
+    CURL_VERSION="${CURL_VERSION%%-*}"
+    CURL_SSL_NO_REVOKE=""
+    case "$CURL_INFO" in
+        *Schannel*)
+            if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.44.0"; then
+                CURL_SSL_NO_REVOKE="--ssl-no-revoke"
+            fi
+            ;;
+    esac
+
+    # Get release tag, retaining curl's original stderr and HTTP/exit status.
     if [ -n "$REF" ]; then
         echo "Fetching release $REF..."
-        install_log INFO http_request_started 'method=GET host=api.github.com endpoint=release_tag timeout_ms=60000 attempt=1'
-        if RELEASE_JSON=$(curl -fsSL --insecure --ssl-no-revoke --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/tags/${REF}"); then
-            install_log INFO http_request_completed 'result=success host=api.github.com endpoint=release_tag http_status=success'
-            LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
-        else
-            install_curl_failed "$?" release_tag
-            echo "Release tag not found: $REF"
-            echo "Only published release tags are supported."
-            exit 1
-        fi
+        RELEASE_ENDPOINT=release_tag
+        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/tags/${REF}"
     else
         echo "Fetching latest release..."
-        install_log INFO http_request_started 'method=GET host=api.github.com endpoint=release_latest timeout_ms=60000 attempt=1'
-        if RELEASE_JSON=$(curl -fsSL --insecure --ssl-no-revoke --connect-timeout 10 --max-time 60 "https://api.github.com/repos/${REPO}/releases/latest"); then
-            install_log INFO http_request_completed 'result=success host=api.github.com endpoint=release_latest http_status=success'
-        else
-            release_exit="$?"
-            install_curl_failed "$release_exit" release_latest
-            exit "$release_exit"
-        fi
-        LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
+        RELEASE_ENDPOINT=release_latest
+        RELEASE_URL="https://api.github.com/repos/${REPO}/releases/latest"
     fi
+    install_log INFO http_request_started "method=GET host=api.github.com endpoint=$RELEASE_ENDPOINT timeout_ms=60000 attempt=1"
+    # The optional flag is a fixed, probed token; an empty value adds no argument.
+    if RELEASE_RESPONSE=$(curl -fsSL --insecure $CURL_SSL_NO_REVOKE --connect-timeout 10 --max-time 60 --write-out '\n%{http_code}' "$RELEASE_URL"); then
+        RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
+}"
+        install_log INFO http_request_completed "result=success host=api.github.com endpoint=$RELEASE_ENDPOINT http_status=$RELEASE_HTTP_STATUS"
+    else
+        release_exit="$?"
+        RELEASE_HTTP_STATUS="${RELEASE_RESPONSE##*
+}"
+        install_curl_failed "$release_exit" "$RELEASE_ENDPOINT" "$RELEASE_HTTP_STATUS"
+        if [ -n "$REF" ] && [ "$release_exit" -eq 22 ] && [ "$RELEASE_HTTP_STATUS" = 404 ]; then
+            echo "Release tag not found: $REF" >&2
+            echo "Only published release tags are supported." >&2
+        else
+            echo "Failed to fetch release metadata (curl exit $release_exit, HTTP $RELEASE_HTTP_STATUS)." >&2
+        fi
+        exit "$release_exit"
+    fi
+    RELEASE_JSON="${RELEASE_RESPONSE%
+*}"
+    LATEST=$(echo "$RELEASE_JSON" | grep '"tag_name"' | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')
 
     if [ -z "$LATEST" ]; then
         install_log ERROR release_metadata_invalid 'result=missing_tag'
@@ -422,8 +443,7 @@ install_binary() {
     # Prefer --fail-with-body (curl >= 7.76) so an HTTP error keeps the server's
     # response body; --fail discards it. Fall back to --fail when the version
     # cannot be probed.
-    CURL_VERSION="$(curl --version 2>/dev/null | awk 'NR==1 {print $2}')"
-    CURL_VERSION="${CURL_VERSION%%-*}"
+    # Reuse the metadata request's version probe.
     if [ -n "$CURL_VERSION" ] && version_ge "$CURL_VERSION" "7.76.0"; then
         CURL_FAIL_FLAG="--fail-with-body"
     else
@@ -434,7 +454,7 @@ install_binary() {
     INSTALL_STAGE=download
     INSTALL_STAGE_MS="$(install_now_ms)"
     install_log INFO http_request_started 'method=GET host=github.com endpoint=release_asset connect_timeout_ms=10000 low_speed_timeout_ms=30000 attempt=1'
-    if curl "$CURL_FAIL_FLAG" -L --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
+    if curl "$CURL_FAIL_FLAG" -L --insecure $CURL_SSL_NO_REVOKE --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar "$BINARY_URL" -o "$TMP_BINARY"; then
         install_log INFO http_request_completed 'result=success host=github.com endpoint=release_asset http_status=success'
     else
         install_curl_failed "$?" release_asset

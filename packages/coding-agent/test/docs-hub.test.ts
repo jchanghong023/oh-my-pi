@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,7 +8,7 @@ import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../src/config/settings";
 import { DocsSearchEngine } from "../src/docs/engine";
 import { DocsService } from "../src/docs/service";
-import type { DocsSearchResult } from "../src/docs/types";
+import type { DocsIndexSummary, DocsSearchResult } from "../src/docs/types";
 import { DocsHubComponent } from "../src/modes/components/docs-hub";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -53,7 +53,7 @@ async function fixture() {
 	return openHub(root, agentDir);
 }
 
-async function openHub(root: string, agentDir: string) {
+async function openHub(root: string, agentDir: string, waitForIndexes = true) {
 	const state: { hub?: DocsHubComponent } = {};
 	const renderedFrames: string[] = [];
 	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
@@ -83,7 +83,7 @@ async function openHub(root: string, agentDir: string) {
 		waiters.add({ matches: ready, resolve });
 		return promise;
 	};
-	await waitFor(rendered => rendered.includes("docs="));
+	if (waitForIndexes) await waitFor(rendered => rendered.includes("docs="));
 	return { hub: component, waitFor, renderedFrames };
 }
 
@@ -134,6 +134,39 @@ async function grepFixture(count = 25) {
 	await fs.rm(otherDir, { recursive: true });
 	return { ...(await openHub(root, agentDir)), root, agentDir, docsDir, expected };
 }
+
+describe("DocsHub selected-index boundary", () => {
+	it.each(["/", "g"])("%s cannot cancel index loading or search without a selected index", async key => {
+		const root = await tempDir("docs-hub-empty-");
+		const agentDir = await tempDir("docs-hub-empty-agent-");
+		const loading = Promise.withResolvers<DocsIndexSummary[]>();
+		let listSignal: AbortSignal | undefined;
+		const list = spyOn(DocsService.prototype, "list").mockImplementationOnce(options => {
+			listSignal = options?.signal;
+			return loading.promise;
+		});
+		const search = spyOn(DocsService.prototype, "search");
+		let hub: DocsHubComponent | undefined;
+		try {
+			const opened = await openHub(root, agentDir, false);
+			hub = opened.hub;
+			for (const input of [key, "needle", "\r"]) hub.handleInput(input);
+			expect(listSignal?.aborted).toBe(false);
+			expect(search).not.toHaveBeenCalled();
+			expect(hub.render(200).join("\n")).toContain("Loading document indexes");
+			loading.resolve([]);
+			await opened.waitFor(rendered => rendered.includes("No document indexes"));
+			for (const input of [key, "needle", "\r"]) hub.handleInput(input);
+			expect(search).not.toHaveBeenCalled();
+			expect(hub.render(200).join("\n")).toContain("No document indexes");
+		} finally {
+			loading.resolve([]);
+			await hub?.dispose();
+			list.mockRestore();
+			search.mockRestore();
+		}
+	});
+});
 
 describe("DocsHub explicit grep with real native snapshots", () => {
 	it("g preserves regex spaces, selected-index scope and mode across DB-only pages", async () => {

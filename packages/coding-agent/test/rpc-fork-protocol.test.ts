@@ -52,7 +52,7 @@ async function withForkRpcServer<T>(
 				PI_NO_TITLE: "1",
 				PI_CODING_AGENT_DIR: dirs.agentDir,
 				// Keep model resolution configured for the restore check and role validation.
-				// A persisted test credential below drives the host-owned logout dialog.
+				// Multiple persisted test credentials require a host-owned logout dialog.
 				ANTHROPIC_API_KEY: "test-key",
 			} as unknown as Record<string, string | undefined>,
 			stdin: "pipe",
@@ -123,7 +123,10 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 		await fs.writeFile(path.join(agentDir, "config.yml"), "modelRoles: {}\n");
 		const authStorage = await AuthStorage.create(getAgentDbPath(agentDir));
 		try {
-			await authStorage.credentials.set("anthropic", { type: "api_key", key: "stored-for-rpc-dialog-test" });
+			await authStorage.credentials.set("anthropic", [
+				{ type: "api_key", key: "stored-for-rpc-dialog-test-first" },
+				{ type: "api_key", key: "stored-for-rpc-dialog-test-second" },
+			]);
 		} finally {
 			authStorage.close();
 		}
@@ -217,7 +220,7 @@ describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", (
 				method: "select",
 				title: expect.stringContaining("Anthropic"),
 			});
-			expect(logoutDialog.options).toEqual([expect.stringContaining("API key")]);
+			expect(logoutDialog.options).toEqual([expect.stringContaining("API key"), expect.stringContaining("API key")]);
 			controls.send({ type: "extension_ui_response", id: logoutDialog.id as string, cancelled: true });
 			const logout = await next(frame => frame.type === "response" && frame.id === "logout");
 			expect(logout).toMatchObject({ command: "prompt", success: true });

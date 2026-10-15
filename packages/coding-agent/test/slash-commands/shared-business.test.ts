@@ -119,7 +119,7 @@ describe("shared logout business", () => {
 		expect(refreshProvider).not.toHaveBeenCalled();
 	});
 
-	test("ACP logout uses real provider/account dialogs and consumes only the chosen credential", async () => {
+	test("ACP logout selects among stored accounts and consumes only the chosen credential", async () => {
 		const { storage, session, refreshProvider } = await logoutFixture();
 		const originalRows = storage.credentials.list("anthropic");
 		const output: string[] = [];
@@ -141,7 +141,6 @@ describe("shared logout business", () => {
 			reloadPlugins: async () => {},
 		} as unknown as SlashCommandRuntime;
 		expect(await executeAcpBuiltinSlashCommand("/logout", runtime)).toEqual({ consumed: true });
-		expect(select).toHaveBeenCalledTimes(2);
 		expect(storage.credentials.list("anthropic").map(row => row.id)).toEqual([originalRows[0]!.id]);
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
 		expect(output.join("\n")).toContain("b@example.com");

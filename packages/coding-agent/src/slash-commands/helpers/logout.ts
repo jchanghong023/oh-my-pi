@@ -145,7 +145,8 @@ export async function logoutProviderForCommand(
 				message: "No stored provider credentials to log out. Remove env or config auth at its source.",
 			};
 		}
-		const selectedProviderId = await ui.selectProvider(storedProviders);
+		const selectedProviderId =
+			storedProviders.length === 1 ? storedProviders[0]!.id : await ui.selectProvider(storedProviders);
 		if (selectedProviderId === undefined) return { status: "cancelled" };
 		provider = storedProviders.find(candidate => candidate.id === selectedProviderId);
 		if (!provider) {
@@ -167,7 +168,8 @@ export async function logoutProviderForCommand(
 			message: `Logout skipped: no stored credentials for ${provider.id}.${suffix}`,
 		};
 	}
-	const selectedCredentialId = await ui.selectAccount(provider, accounts);
+	const selectedCredentialId =
+		accounts.length === 1 ? accounts[0]!.credentialId : await ui.selectAccount(provider, accounts);
 	if (selectedCredentialId === undefined) return { status: "cancelled" };
 	const account = accounts.find(candidate => candidate.credentialId === selectedCredentialId);
 	if (!account) {

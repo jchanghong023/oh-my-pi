@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { pythonSymbols } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { acquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
+import { acquireFileLock, tryAcquireFileLock, type FileLockHandle } from "@oh-my-pi/pi-utils/file-lock";
 import { countNewlines, logger, sanitizeText, truncate } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import {
@@ -51,6 +51,17 @@ const searchPages = new LRUCache<string, TextCandidate[]>({
 
 function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
+}
+
+function queryPath(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	const relative = value.replaceAll("\\", "/");
+	if (path.posix.isAbsolute(relative) || /^[a-z]:/i.test(relative) || relative.includes("\0"))
+		throw new Error("Repository path must be relative to the index root; absolute paths are not supported");
+	const normalized = path.posix.normalize(relative);
+	if (normalized === ".." || normalized.startsWith("../"))
+		throw new Error("Repository path must stay within the index root");
+	return normalized === "." ? undefined : normalized.replace(/\/$/, "");
 }
 /** A .py file whose syntax tree carries errors is indexed without symbols and reported as a parse failure. */
 function pythonParseFailure(path: string): RepoFailure {
@@ -428,11 +439,23 @@ export class RepoService {
 		});
 	}
 
+	#exclusive<T>(
+		work: (signal: AbortSignal, epoch: number) => Promise<T>,
+		options?: RepoMaintenanceOptions,
+		allowAfterRemoval?: boolean,
+	): Promise<T>;
+	#exclusive<T>(
+		work: (signal: AbortSignal, epoch: number) => Promise<T>,
+		options: RepoMaintenanceOptions,
+		allowAfterRemoval: boolean,
+		tryOnly: true,
+	): Promise<T | undefined>;
 	async #exclusive<T>(
 		work: (signal: AbortSignal, epoch: number) => Promise<T>,
 		options: RepoMaintenanceOptions = {},
 		allowAfterRemoval = false,
-	): Promise<T> {
+		tryOnly = false,
+	): Promise<T | undefined> {
 		return this.#diagnose(
 			"exclusive",
 			async stage => {
@@ -444,19 +467,25 @@ export class RepoService {
 					: this.#closing.signal;
 				const previous = this.#gate;
 				const { promise, resolve: release } = Promise.withResolvers<void>();
-				this.#gate = promise;
+				if (!tryOnly) this.#gate = promise;
 				const task = (async () => {
 					stage("queue_wait", {
 						queued_operation_count: this.#active.size,
 						queue_generation: initialState ? diagnosticGeneration(initialState.generation) : null,
 						recovery_required: Boolean(this.storage.recoveryError),
 					});
-					await previous;
+					if (!tryOnly) await previous;
 					let lease: FileLockHandle | undefined;
 					try {
 						check(signal);
 						stage("lock_wait");
-						lease = await acquireFileLock(this.storage.path, { signal });
+						lease = tryOnly
+							? (tryAcquireFileLock(this.storage.path) ?? undefined)
+							: await acquireFileLock(this.storage.path, { signal });
+						if (!lease) {
+							stage("maintenance_busy");
+							return;
+						}
 						stage("abandoned_cleanup");
 						if (!allowAfterRemoval && this.storage.state().epoch !== epoch)
 							throw new Error("Repository index was removed while this operation waited; retry explicitly");
@@ -922,6 +951,8 @@ export class RepoService {
 						}
 					},
 					{ signal },
+					false,
+					true,
 				);
 			},
 			signal,
@@ -1044,6 +1075,7 @@ export class RepoService {
 			"search",
 			async stage => {
 				this.#ensureOpen();
+				options = { ...options, path: queryPath(options.path) };
 				stage("flush");
 				await this.#flush(options.signal);
 				check(options.signal);
@@ -1159,6 +1191,7 @@ export class RepoService {
 			"symbol",
 			async stage => {
 				this.#ensureOpen();
+				options = { ...options, path: queryPath(options.path) };
 				stage("flush");
 				await this.#flush(options.signal);
 				check(options.signal);

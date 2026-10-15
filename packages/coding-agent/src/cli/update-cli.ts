@@ -3607,7 +3607,15 @@ export async function runUpdateCommand(opts: {
 					console.log(chalk.dim("Update the flake input or profile that provides omp, then rebuild."));
 					return;
 				} else if (target.method === "brew") {
-					await updateViaHomebrew(release.version, opts.force);
+					fields.outcome = "skipped";
+					fields.reason = "fork_homebrew_unavailable";
+					console.log(chalk.yellow("This fork does not publish a Homebrew formula; Homebrew cannot update it."));
+					console.log(
+						chalk.dim(
+							`Reinstall using this fork's binary installer: https://github.com/${REPO}/blob/main/scripts/install.${process.platform === "win32" ? "ps1" : "sh"}`,
+						),
+					);
+					return;
 				} else if (target.method === "mise") {
 					await updateViaMise(release.version, opts.force);
 				} else if (target.method === "bun" || target.method === "npm") {

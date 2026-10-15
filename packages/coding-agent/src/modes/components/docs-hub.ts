@@ -182,6 +182,7 @@ export class DocsHubComponent implements Component {
 				: this.#search.getValue().trim();
 		if (mode === "search" && !query) return;
 		const index = cursor ? this.#searchIndex : this.#selectedIndex()?.name;
+		if (!index) return;
 		const pageStart = cursor ? this.#pageStart + this.#hits.length : 0;
 		this.#start("Searching document indexes…", async (signal, current) => {
 			const result = await this.service.search(query, {
@@ -316,7 +317,7 @@ export class DocsHubComponent implements Component {
 						this.#wizard = undefined;
 					},
 				);
-		} else if (data === "/" || data === "g") {
+		} else if ((data === "/" || data === "g") && this.#selectedIndex()) {
 			// A continuation belongs to the old view, not the newly opened input.
 			this.#cancel();
 			this.#searchOrigin = this.#mode === "detail" ? "detail" : "list";

@@ -8,6 +8,15 @@
 
 ### Fixed
 
+- Kept wiki grep usable across omitted converter headings and prevented `/wiki` searches without a selected index.
+- Served the published repository generation during concurrent maintenance, kept unopened indexes absent, and normalized or rejected path filters explicitly.
+- Resumed active goals when interval loops finish and rearmed loops after rejected RPC plan reviews without restarting cancelled work.
+- Reported goal recovery failures only for the recovery turn and released continuation claims when TUI submission is refused.
+- Ignored invalid reserved CodeAgent configuration without losing other providers, and kept implicit offline roles out of saved model presets.
+- Allowed ACP logout without selection UI when only one account is available, and kept fork updates away from the upstream Homebrew formula.
+- Avoided binding a team recommendation to a blocked proposal mentioned in a later explanatory clause, and preserved bare `/jchcatchup` completion.
+- Preserved POSIX installer compatibility with older curl versions and distinguished transport/API failures from missing release tags.
+
 - Rejected malformed saved-session revisions before mutation and preserved active plans, loops and dialogs when reopening the current RPC session.
 - Forwarded remote Agent task slash commands without local expansion and explicitly rejected media in projected skill history instead of silently discarding it.
 - Kept automatic offline subagent model discovery cache-only during creation and cold restoration.

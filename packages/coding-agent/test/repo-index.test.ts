@@ -1094,6 +1094,99 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect(await Bun.file(path.join(root, "a.py")).text()).toContain("sourceintact");
 	});
 
+	it.each(["reconcile", "rebuild"] as const)(
+		"reads the published generation with pending hints during %s without waiting for its lease",
+		async mode => {
+			const { root, agentDir, service } = await fixture({
+				"a.py": "def stable_v0(): return 'oldbeacon'\n",
+				"b.py": "def stable_v0(): return 'oldbeacon'\n",
+			});
+			await service.build();
+			const prior = (await service.status()).generation;
+			const observer = new RepoService({ cwd: root, agentDir });
+			services.push(observer);
+			await put(root, "a.py", "def stable_v1(): return 'middlebeacon'\n");
+			await put(root, "b.py", "def stable_v1(): return 'middlebeacon'\n");
+			let changed: string | undefined;
+			let reads: Promise<unknown> | undefined;
+			await service[mode]({
+				onProgress(progress) {
+					if (progress.phase !== "reading" || progress.processed !== 1) return;
+					const changedPath = progress.path;
+					if (!changedPath) throw new Error("maintenance reading progress must identify a path");
+					changed = changedPath;
+					fsSync.writeFileSync(path.join(root, changedPath), "def stable_v2(): return 'freshbeacon'\n");
+					observer.markChanged([changedPath]);
+					observer.markUncertain("a newer change arrived during maintenance");
+					reads = Promise.all(
+						[service, observer].map(async reader => {
+							const text = await reader.search("oldbeacon");
+							const symbols = await reader.symbol("stable_v0");
+							const staged = await reader.search("middlebeacon");
+							for (const page of [text, symbols, staged]) {
+								expect(page.generation).toBe(prior);
+								expect(page.coverage.generation).toBe(prior);
+								expect(page.coverage.pendingPaths).toContain(changedPath);
+								expect(page.coverage.unchecked).toBe(true);
+								expect(page.warnings).toContain("1 known paths pending update");
+							}
+							expect(text.hits.map(hit => hit.path)).toEqual(["a.py", "b.py"]);
+							expect(symbols.hits.map(hit => hit.path)).toEqual(["a.py", "b.py"]);
+							expect(staged.hits).toEqual([]);
+						}),
+					);
+				},
+			});
+			expect(reads).toBeDefined();
+			await reads;
+			expect((await observer.status()).pendingPaths).toEqual([changed!]);
+			expect((await observer.search("freshbeacon")).hits.map(hit => hit.path)).toEqual([changed!]);
+			expect((await observer.symbol("stable_v2")).hits.map(hit => hit.path)).toEqual([changed!]);
+			expect((await observer.status()).pendingCount).toBe(0);
+			expect((await observer.status()).unchecked).toBe(true);
+			await service.reconcile();
+			expect((await observer.status()).unchecked).toBe(false);
+		},
+	);
+
+	it("keeps cancellation and database faults visible when a query skips busy pending maintenance", async () => {
+		const { root, agentDir, service } = await fixture({ "a.py": "def old_target(): pass\n" });
+		await service.build();
+		const observer = new RepoService({ cwd: root, agentDir });
+		services.push(observer);
+		const prior = (await service.status()).generation;
+		const controller = new AbortController();
+		let reading: Promise<unknown> | undefined;
+		await expect(
+			service.rebuild({
+				signal: controller.signal,
+				onProgress(progress) {
+					if (progress.phase !== "reading") return;
+					fsSync.writeFileSync(path.join(root, "a.py"), "def new_target(): pass\n");
+					observer.markChanged(["a.py"]);
+					reading = (async () => {
+						const cancelled = new AbortController();
+						cancelled.abort();
+						await expect(observer.search("old_target", { signal: cancelled.signal })).rejects.toMatchObject({
+							name: "AbortError",
+						});
+						const old = await observer.symbol("old_target");
+						expect(old.generation).toBe(prior);
+						expect(old.hits.map(hit => hit.path)).toEqual(["a.py"]);
+						controller.abort();
+					})();
+				},
+			}),
+		).rejects.toMatchObject({ name: "AbortError" });
+		await reading;
+		expect((await observer.status()).generation).toBe(prior);
+		expect((await observer.status()).unchecked).toBe(true);
+		expect((await observer.status()).pendingPaths).toEqual(["a.py"]);
+		// A real database fault must not become stale successful evidence.
+		observer.storage.db.exec("DROP TABLE symbols");
+		await expect(observer.symbol("old_target")).rejects.toThrow();
+	});
+
 	it("serves consistent generation metadata and complete hits during concurrent full reconciliation", async () => {
 		const { root, agentDir, service } = await fixture({
 			"a.py": "priorwasm\n",

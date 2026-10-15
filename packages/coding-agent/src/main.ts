@@ -435,6 +435,8 @@ export async function submitInteractiveInput(
 	if (input.cancelled) {
 		return;
 	}
+	let customDispatched = true;
+	let customSubmissionFinished = false;
 
 	try {
 		using _keepalive = new EventLoopKeepalive();
@@ -473,7 +475,8 @@ export async function submitInteractiveInput(
 				display: input.display ?? false,
 				attribution: "agent" as const,
 			};
-			await session.promptCustomMessage(message, { streamingBehavior });
+			customDispatched = false;
+			customDispatched = await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
 			// Synthetic continue shortcuts are hidden developer prompts. The streaming
 			// queue (#queueUserMessage) only carries user-attributed messages, so we do
@@ -520,9 +523,18 @@ export async function submitInteractiveInput(
 		}
 	} catch (error: unknown) {
 		const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
+		// showError clears the pending-input identity needed to release a refused
+		// continuation. Finish that claim first, without touching newer submissions.
+		if (!customDispatched) {
+			mode.finishPendingSubmission(input, false);
+			customSubmissionFinished = true;
+		}
 		mode.showError(errorMessage);
 	} finally {
-		mode.finishPendingSubmission(input);
+		if (!customSubmissionFinished) {
+			if (customDispatched) mode.finishPendingSubmission(input);
+			else mode.finishPendingSubmission(input, false);
+		}
 		await mode.checkShutdownRequested();
 	}
 }

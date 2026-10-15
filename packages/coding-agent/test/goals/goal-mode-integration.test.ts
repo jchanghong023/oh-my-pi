@@ -1135,6 +1135,94 @@ describe("InteractiveMode goal mode integration", () => {
 		}
 	});
 
+	it.each(["refused", "failed"] as const)(
+		"does not attribute a background turn to a recovery whose admission was %s",
+		async result => {
+			vi.spyOn(vcs, "repo").mockReturnValue(null);
+			vi.spyOn(vcs, "git").mockReturnValue(null);
+			await harness.mode.init({ suppressWelcomeIntro: true });
+			await harness.mode.handleGoalModeCommand("Inspect the current task.");
+			harness.session.agent.streamFn = createMockModel({
+				handler: () => ({ content: ["I will call read now."] }),
+			}).stream;
+			const nextContinuation = async (): Promise<SubmittedUserInput> => {
+				vi.useFakeTimers();
+				const waiter = await armInputWaiter(harness.mode);
+				vi.advanceTimersByTime(800);
+				await waitForMicrotasks();
+				vi.useRealTimers();
+				const input = waiter.getResolvedInput();
+				if (!input) throw new Error("Expected a goal continuation");
+				await waiter.inputPromise;
+				return input;
+			};
+			await submitInteractiveInput(harness.mode, harness.session, await nextContinuation());
+			const recovery = await nextContinuation();
+			expect(recovery.customType).toBe("goal-tool-recovery");
+			const tools = harness.session.getActiveToolNames();
+			if (result === "refused") {
+				// The real admission gate cannot force a tool when no tools are active.
+				await harness.session.setActiveToolsByName([]);
+			} else {
+				vi.spyOn(harness.session, "promptCustomMessage").mockRejectedValueOnce(new Error("Admission failed"));
+			}
+			await submitInteractiveInput(harness.mode, harness.session, recovery);
+			await harness.session.setActiveToolsByName(tools);
+			const notices: string[] = [];
+			const unsubscribe = harness.session.subscribe(event => {
+				if (event.type === "notice" && event.source === "goal") notices.push(event.message);
+			});
+			try {
+				await harness.session.promptCustomMessage({
+					customType: "job-wake",
+					content: "Background work ended.",
+					display: false,
+				});
+				expect(notices).toEqual([]);
+				const resumed = await nextContinuation();
+				expect(resumed.customType).toBe("goal-continuation");
+			} finally {
+				unsubscribe();
+			}
+		},
+	);
+
+	it("does not release a newer continuation when an older admission returns false late", async () => {
+		vi.spyOn(vcs, "repo").mockReturnValue(null);
+		vi.spyOn(vcs, "git").mockReturnValue(null);
+		await harness.mode.init({ suppressWelcomeIntro: true });
+		await harness.mode.handleGoalModeCommand("Inspect the current task.");
+		harness.session.agent.streamFn = createMockModel({
+			handler: () => ({ content: ["I will call read now."] }),
+		}).stream;
+		const nextContinuation = async (): Promise<SubmittedUserInput> => {
+			vi.useFakeTimers();
+			const waiter = await armInputWaiter(harness.mode);
+			vi.advanceTimersByTime(800);
+			await waitForMicrotasks();
+			vi.useRealTimers();
+			const input = waiter.getResolvedInput();
+			if (!input) throw new Error("Expected a goal continuation");
+			await waiter.inputPromise;
+			return input;
+		};
+		const oldInput = await nextContinuation();
+		const admission = Promise.withResolvers<boolean>();
+		vi.spyOn(harness.session, "promptCustomMessage").mockImplementationOnce(() => admission.promise);
+		const oldSubmission = submitInteractiveInput(harness.mode, harness.session, oldInput);
+		await waitForMicrotasks();
+		const userInput = harness.mode.startPendingSubmission({ text: "Continue with the updated task." });
+		await submitInteractiveInput(harness.mode, harness.session, userInput);
+		const currentInput = await nextContinuation();
+		expect(currentInput.customType).toBe("goal-continuation");
+
+		admission.resolve(false);
+		await oldSubmission;
+		await submitInteractiveInput(harness.mode, harness.session, currentInput);
+		// This current turn must still be observed as a continuation, not host input.
+		expect((await nextContinuation()).customType).toBe("goal-tool-recovery");
+	});
+
 	it("does not leak a forced-tool recovery into the next prompt when admission fails", async () => {
 		await harness.mode.handleGoalModeCommand("Inspect the current task.");
 		const model = createMockModel({

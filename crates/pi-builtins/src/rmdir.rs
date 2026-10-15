@@ -140,15 +140,27 @@ fn verbose(host: &mut Host, dir: &OsStr) {
 fn rmdir(host: &Host, dir: &OsStr) -> io::Result<()> {
 	#[cfg(windows)]
 	{
-		// Win32 normalizes a final "." away; rmdir must reject it before removal.
-		let last = dir
-			.as_encoded_bytes()
+		// POSIX forbids final "." and ".."; Windows can resolve them away
+		// before remove_dir sees the operand, even when joining a verbatim cwd.
+		let bytes = dir.as_encoded_bytes();
+		let last = bytes
 			.rsplit(|&byte| byte == b'/' || byte == b'\\')
 			.find(|part| !part.is_empty());
-		if last == Some(b".".as_slice()) {
+		if matches!(last, Some(b"." | b"..")) {
 			if !host.fs().metadata(host.resolve(dir))?.is_dir() {
 				return Err(pi_vfs::not_a_directory());
 			}
+			return Err(pi_vfs::invalid_argument());
+		}
+		// Ordinary Win32 paths trim dots/spaces, potentially removing a
+		// different directory. Explicit verbatim paths keep these names literal.
+		if !bytes.starts_with(br"\\?\")
+			&& !bytes.starts_with(br"\??\")
+			&& !pi_vfs::is_virtual_path(Path::new(dir))
+			&& bytes.split(|&byte| byte == b'/' || byte == b'\\').any(|part| {
+				part != b"." && part != b".." && matches!(part.last(), Some(b'.' | b' '))
+			})
+		{
 			return Err(pi_vfs::invalid_argument());
 		}
 	}
@@ -373,5 +385,50 @@ mod tests {
 			(1, String::new(), "rmdir: failed to remove 'e/.': Invalid argument\n".into())
 		);
 		assert!(root.join("e").is_dir());
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn normalized_operands_are_rejected_without_removing_directories() {
+		for operand in ["e/..", "e/missing/..", "e/...", "e.", "e ", "e./child"] {
+			let (_d, root) = tempdir();
+			fs::create_dir(root.join("e")).unwrap();
+			if operand == "e./child" {
+				fs::create_dir(root.join("e/child")).unwrap();
+			}
+			// Exercise Win32 normalization rather than only a verbatim temp cwd.
+			for cwd in [root.as_path(), _d.path()] {
+				assert_eq!(run(cwd, &["-p", operand]).0, 1, "{operand}");
+				assert!(root.is_dir(), "{operand}");
+				assert!(root.join("e").is_dir(), "{operand}");
+				if operand == "e./child" {
+					assert!(root.join("e/child").is_dir(), "{operand}");
+				}
+			}
+		}
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn explicit_verbatim_operands_remove_literal_dot_and_space_names() {
+		let (_d, root) = tempdir();
+		for name in ["literal.", "literal "] {
+			let path = root.join(name);
+			fs::create_dir(&path).unwrap();
+			assert_eq!(run(&root, &[path.to_str().unwrap()]).0, 0);
+			assert!(!path.exists());
+			assert!(root.is_dir());
+		}
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn dot_and_space_names_are_removed_literally() {
+		let (_d, root) = tempdir();
+		for name in ["...", "literal.", "literal "] {
+			fs::create_dir(root.join(name)).unwrap();
+			assert_eq!(run(&root, &[name]).0, 0);
+			assert!(!root.join(name).exists());
+		}
 	}
 }

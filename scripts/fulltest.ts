@@ -119,8 +119,7 @@ export function fulltestCommands(
 	const root = gateRepoRoot;
 	const commands: GateCommand[] = [];
 	for (const file of changedPaths) {
-		if (!/^packages\/[^/]+\/(test|src)\/.+\.test\.(ts|tsx)$/.test(file) || !existsSync(path.join(root, file)))
-			continue;
+		if (!/^packages\/[^/]+\/.+\.test\.(ts|tsx)$/.test(file) || !existsSync(path.join(root, file))) continue;
 		if (file === "packages/natives/test/desktop.test.ts") {
 			console.log(`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${file}`);
 			continue;

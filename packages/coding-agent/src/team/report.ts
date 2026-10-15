@@ -134,11 +134,17 @@ function synthesisBodyConflict(
 		}
 		mentions.sort((left, right) => left.index - right.index);
 		for (const claim of positiveClaims.matchAll(/(?:可(?:以)?(?:采用|作为(?:最终)?选项)|建议采用|推荐|首选)/gu)) {
-			// A comparison can mention a blocked proposal and recommend its sibling.
-			// Bind each claim to its nearest named proposal, in either word order.
+			// A standalone adoption claim does not name a proposal in the next
+			// comma clause. Keep label-before-predicate claims across commas
+			// ("方案 A，可以采用") and comparisons within a clause.
 			let nearestIndex = -1;
 			let nearestDistance = Infinity;
 			for (const [index, mention] of mentions.entries()) {
+				if (
+					mention.index >= claim.index + claim[0].length &&
+					/[，,]/u.test(positiveClaims.slice(claim.index + claim[0].length, mention.index))
+				)
+					continue;
 				const distance = Math.max(mention.index - (claim.index + claim[0].length), claim.index - mention.end, 0);
 				if (distance < nearestDistance) {
 					nearestIndex = index;

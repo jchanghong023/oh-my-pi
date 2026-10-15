@@ -574,12 +574,66 @@ describe("overflow: automatic row wrapping", () => {
 		expect(narrowPlain).toContain("model-marker");
 		expect(narrowPlain).toContain("0%");
 		expect(narrowPlain).toContain("session-marker");
+		for (const marker of ["model-marker", "session-marker", "0%"]) {
+			expect(narrowPlain.split(marker)).toHaveLength(2);
+		}
 
 		const boxPreview = renderComposerShapePreview("box", 24, component);
 		const boxPreviewPlain = stripAnsi(boxPreview.join("\n"));
 		expect(boxPreviewPlain).toContain("model-marker");
 		expect(boxPreviewPlain).toContain("session-marker");
 		expect(boxPreview.every(line => visibleWidth(line) <= 24)).toBe(true);
+		for (const marker of ["model-marker", "session-marker"]) {
+			expect(boxPreviewPlain.split(marker)).toHaveLength(2);
+		}
+
+		const restored = component.render(240);
+		expect(restored).toHaveLength(1);
+		for (const marker of ["model-marker", "session-marker", "0%"]) {
+			expect(stripAnsi(restored.join("\n")).split(marker)).toHaveLength(2);
+		}
+	});
+
+	it("moves a Unicode model between the rule chip and bottom overflow exactly at the two-cell rule budget", () => {
+		const modelName = "模型🙂e\u0301";
+		const component = statusLines.track(
+			new StatusLineComponent(createStatusLineSession("LEFT", modelName), statusLineHost),
+		);
+		component.updateSettings({
+			preset: "custom",
+			leftSegments: ["session_name"],
+			rightSegments: ["model"],
+			separator: "none",
+			transparent: true,
+			sessionAccent: false,
+			segmentOptions: { model: { showThinkingLevel: false } },
+		});
+		const style = getComposerStyle("claude");
+		component.setComposerStyle(style);
+		const fittingWidth = component.getStandaloneTopBorder(80).width + 2;
+
+		for (const width of [fittingWidth, fittingWidth - 1, fittingWidth]) {
+			const chip = component.getStandaloneTopBorder(width);
+			const bottom = component.render(width);
+			const preview = component.getPreviewLines(width, style);
+			const chipPlain = stripAnsi(chip.content);
+			const bottomPlain = stripAnsi(bottom.join("\n"));
+			const previewPlain = stripAnsi(preview.join("\n"));
+
+			expect(visibleWidth(chip.content)).toBeLessThanOrEqual(width - 2);
+			for (const row of [...bottom, ...preview]) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+			for (const marker of [modelName, "LEFT"]) {
+				expect(stripAnsi([chip.content, ...bottom].join("\n")).split(marker)).toHaveLength(2);
+				expect(previewPlain.split(marker)).toHaveLength(2);
+			}
+			if (width === fittingWidth) {
+				expect(chipPlain).toContain(modelName);
+				expect(bottomPlain).not.toContain(modelName);
+			} else {
+				expect(chipPlain).not.toContain(modelName);
+				expect(bottomPlain).toContain(modelName);
+			}
+		}
 	});
 });
 

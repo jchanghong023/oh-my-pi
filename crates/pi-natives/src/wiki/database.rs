@@ -1714,6 +1714,40 @@ mod tests {
 	}
 
 	#[test]
+	fn grep_existing_converter_gaps_preserve_original_lines_and_stored_evidence() {
+		let source = "# Title\n\nbody\n\n#### Cell\n\n# Next\n\nbody2\n";
+		// Persist the old layout directly; the omitted heading is not available
+		// to search and must not be reconstructed or require a reimport.
+		let fixture = grep_slice_fixture(source, &[
+			(0, source.find("#### Cell").unwrap()),
+			(source.find("# Next").unwrap(), source.len()),
+		]);
+		let mut engine = fixture.engine();
+		let first = search(&mut engine, "^body$", grep_options());
+		let next = search(&mut engine, "^body2$", grep_options());
+		assert_eq!(first["result"]["total"], 1);
+		assert_eq!(next["result"]["total"], 1);
+		assert_eq!(first["result"]["sections"][0]["text"], "# Title\n\nbody\n\n");
+		assert_eq!(first["result"]["sections"][0]["lineStart"], 1);
+		assert_eq!(first["result"]["sections"][0]["lineEnd"], 4);
+		assert_eq!(next["result"]["sections"][0]["text"], "# Next\n\nbody2\n");
+		assert_eq!(next["result"]["sections"][0]["lineStart"], 7);
+		assert_eq!(next["result"]["sections"][0]["lineEnd"], 9);
+		assert_eq!(
+			search(&mut engine, "^# Next$", grep_options())["result"]["sections"],
+			next["result"]["sections"]
+		);
+		for expression in ["Cell", "^bodybody2$", "body\\nbody2"] {
+			assert_eq!(search(&mut engine, expression, grep_options())["result"]["total"], 0);
+		}
+		engine.close();
+		assert_eq!(
+			search(&mut engine, "^body2$", grep_options())["result"]["sections"],
+			next["result"]["sections"]
+		);
+	}
+
+	#[test]
 	fn grep_adjacent_and_overlapping_slices_preserve_crlf_blank_and_utf8_positions() {
 		let source = "αLONG\r\n\nlast";
 		let fixture = grep_slice_fixture(source, &[(0, 3), (3, 7), (6, source.len())]);
@@ -1952,7 +1986,8 @@ mod tests {
 
 	#[test]
 	fn grep_snapshot_changes_expire_cursor_and_cancelled_scan_never_publishes_partial_rank() {
-		let fixture = grep_fixture(&["# One\nALPHA\n# Two\nALPHA\n# Three\nALPHA\n"]);
+		let fixture =
+			grep_fixture(&["# One\nALPHA\n#### Cell\n# Two\nALPHA\n##### Row\n# Three\nALPHA\n"]);
 		let mut engine = fixture.engine();
 		let first = search(&mut engine, "ALPHA", grep_options());
 		engine

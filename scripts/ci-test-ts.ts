@@ -384,21 +384,6 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 	}
 }
 
-/** Standard local gates must not invoke a real host-desktop input backend. */
-async function localGateTestCommands(): Promise<TestCommand[]> {
-	const commands = await commandsForMode("local-ts");
-	const nativeDir = path.join(repoRoot, "packages/natives");
-	const nativeFiles = await collectTestsUnder(path.join(nativeDir, "test"), nativeDir);
-	const safeNativeFiles = nativeFiles.filter(file => file !== "test/desktop.test.ts");
-	if (safeNativeFiles.length === 0) throw new Error("No isolated native test files found");
-	console.log(
-		"NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: packages/natives/test/desktop.test.ts (real host-desktop input)",
-	);
-	return commands.map(command =>
-		command.cwd === "packages/natives" ? { ...command, command: [...command.command, ...safeNativeFiles] } : command,
-	);
-}
-
 // The omp-kata runner pods may inject cloud credentials (`AWS_*`) pod-wide via
 // `envFrom`, GitHub Actions injects `GITHUB_TOKEN`,
 // and a host may carry provider API keys. Any of these make env-sensitive code
@@ -427,7 +412,7 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-const reportScope = `ci-test-ts:${requestedMode}${args.includes("--local-gate") ? ":local-gate" : ""}${Bun.env.OMP_TEST_SHARD?.trim() ? `:shard-${Bun.env.OMP_TEST_SHARD.trim()}` : ""}`;
+const reportScope = `ci-test-ts:${requestedMode}${Bun.env.OMP_TEST_SHARD?.trim() ? `:shard-${Bun.env.OMP_TEST_SHARD.trim()}` : ""}`;
 
 const reportRunnerId = randomUUID().slice(0, 8);
 // Bun's JUnit reporter writes a separate file without replacing console output.
@@ -1153,12 +1138,7 @@ if (import.meta.main) {
 			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
 		);
 	}
-	if (args.includes("--local-gate") && requestedMode !== "local-ts") {
-		throw new Error("--local-gate applies only to the complete local-ts plan");
-	}
-	const commands = args.includes("--local-gate")
-		? await localGateTestCommands()
-		: await commandsForMode(requestedMode as Mode);
+	const commands = await commandsForMode(requestedMode as Mode);
 	const requestedCommands = selectShard(commands, Bun.env.OMP_TEST_SHARD);
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets

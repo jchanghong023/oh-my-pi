@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, spyOn, test, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import * as conditions from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
+import { RpcGoalController, type RpcGoalSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
 import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
@@ -15,7 +17,7 @@ describe("RPC loop continuation", () => {
 		vi.useRealTimers();
 	});
 
-	function fixture(mode: "prompt" | "compact" | "reset" = "prompt") {
+	function fixture(mode: "prompt" | "compact" | "reset" = "prompt", onDropped?: () => void) {
 		const actions: string[] = [];
 		const output: string[] = [];
 		const transcript = { id: "session-a" };
@@ -47,7 +49,10 @@ describe("RPC loop continuation", () => {
 				transcript.id = "session-b";
 				return true;
 			},
-			onContinuationDropped: () => dropped++,
+			onContinuationDropped: () => {
+				dropped++;
+				onDropped?.();
+			},
 			continuationAllowed: () => continuationAllowed,
 		});
 		controllers.push(controller);
@@ -108,6 +113,51 @@ describe("RPC loop continuation", () => {
 		expect(f.controller.continuationPending).toBe(false);
 		expect(f.actions).toEqual([]);
 		expect(condition).not.toHaveBeenCalled();
+	});
+
+	test("exhausting an interval loop releases the goal at the same production terminal yield", async () => {
+		const f = fixture("prompt", () => goal?.refresh());
+		const state: GoalModeState = {
+			enabled: true,
+			mode: "active",
+			goal: {
+				id: "goal-a",
+				objective: "finish the remaining work",
+				status: "active",
+				tokensUsed: 0,
+				timeUsedSeconds: 0,
+				createdAt: 0,
+				updatedAt: 0,
+			},
+		};
+		const admitted = Promise.withResolvers<void>();
+		const submissions: string[] = [];
+		const session = {
+			...f.session,
+			settings: Settings.isolated({ "goal.continuationModes": ["rpc"] }),
+			getPlanModeState: () => undefined,
+			getGoalModeState: () => state,
+			getTodoPhases: () => [],
+			goalRuntime: { buildContinuationPrompt: () => "continue the remaining goal" },
+			promptCustomMessage: async (message: { customType: string }) => {
+				submissions.push(message.customType);
+				admitted.resolve();
+				return true;
+			},
+		};
+		const goal = new RpcGoalController(session as unknown as RpcGoalSession, undefined, () => !f.controller.enabled);
+		await f.controller.handle("1 1s work");
+		f.controller.capturePrompt("work");
+		// rpc-mode observes Goal before loop: Goal first encounters the loop host gate.
+		goal.observe(agentEnd);
+		expect(goal.continuationPending).toBe(false);
+		f.controller.observe(agentEnd);
+		expect(f.controller.enabled).toBe(false);
+		expect(goal.continuationPending).toBe(true);
+		await admitted.promise;
+		expect(submissions).toEqual(["goal-continuation"]);
+		expect(f.actions).toEqual([]);
+		goal.stopForHostAbort();
 	});
 
 	test("duration deadlines wake before a longer interval without evaluating a condition", async () => {
@@ -346,7 +396,7 @@ describe("RPC loop continuation", () => {
 		expect(f.controller.continuationPending).toBe(false);
 		expect(f.actions).toEqual([]);
 		f.setContinuationAllowed(true);
-		f.controller.observe(agentEnd);
+		f.controller.refresh();
 		await Bun.sleep(850);
 		expect(f.actions).toEqual(["submit:session-a:work"]);
 	});

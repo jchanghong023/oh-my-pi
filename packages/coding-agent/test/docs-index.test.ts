@@ -314,34 +314,52 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
-	it("searches original lines on both sides of omitted converter headings without concatenating gaps", async () => {
+	it("keeps omitted converter bytes out of DB-only grep while later sections and documents stay reachable", async () => {
 		const root = await tempDir("docs-regex-gap-root-");
 		const agentDir = await tempDir("docs-regex-gap-agent-");
-		const source = "# Start\nfirstbeacon\n# Cell\n# Final\nlastbeacon\n";
+		const source = "# Title\n\nbody\n\n#### Cell\n\n# Next\n\nbody2\n";
 		await Bun.write(path.join(root, "guide.md"), source);
-		const engine = new DocsSearchEngine({ agentDir });
+		await Bun.write(path.join(root, "later.md"), "# Later\nbody3\n");
+		let engine = new DocsSearchEngine({ agentDir });
 		try {
 			await engine.init(root, "manual");
 			await fs.rm(root, { recursive: true });
-			const first = engine.search("^firstbeacon$", { mode: "grep" });
-			const last = engine.search("^lastbeacon$", { mode: "grep" });
+			const first = engine.search("^body$", { mode: "grep" });
+			const last = engine.search("^body2$", { mode: "grep" });
 			expect(first.total).toBe(1);
 			expect(last.total).toBe(1);
 			expect(first.sections[0]).toMatchObject({
-				text: "# Start\nfirstbeacon\n",
+				text: "# Title\n\nbody\n\n",
+				lineStart: 1,
+				lineEnd: 4,
+				matchKind: "regex",
+			});
+			expect(last.sections[0]).toMatchObject({
+				text: "# Next\n\nbody2\n",
+				lineStart: 7,
+				lineEnd: 9,
+				matchKind: "regex",
+			});
+			expect(last.sections[0]?.documentHash).toBe(new Bun.CryptoHasher("sha256").update(source).digest("hex"));
+			expect(engine.search("^# Next$", { mode: "grep" }).sections).toEqual(last.sections);
+			expect(engine.search("^#### Cell$", { mode: "grep" }).total).toBe(0);
+			expect(engine.search("^bodybody2$", { mode: "grep" }).total).toBe(0);
+			expect(engine.search("body\\nbody2", { mode: "grep" }).total).toBe(0);
+			const page = engine.search("^body[23]?$", { mode: "grep", limit: 1 });
+			expect(page.total).toBe(3);
+			expect(page.sections).toEqual(first.sections);
+			engine.close();
+			engine = new DocsSearchEngine({ agentDir });
+			const rest = engine.search("^body[23]?$", { mode: "grep", cursor: page.cursor });
+			expect(rest.sections[0]).toEqual(last.sections[0]);
+			expect(rest.sections[1]).toMatchObject({
+				path: "later.md",
+				text: "# Later\nbody3\n",
 				lineStart: 1,
 				lineEnd: 2,
 				matchKind: "regex",
 			});
-			expect(last.sections[0]).toMatchObject({
-				text: "# Final\nlastbeacon\n",
-				lineStart: 4,
-				lineEnd: 5,
-				matchKind: "regex",
-			});
-			expect(engine.search("^# Cell$", { mode: "grep" }).total).toBe(0);
-			expect(engine.search("^firstbeaconlastbeacon$", { mode: "grep" }).total).toBe(0);
-			expect(engine.search("firstbeacon\\nlastbeacon", { mode: "grep" }).total).toBe(0);
+			expect(rest.hasMore).toBe(false);
 		} finally {
 			engine.close();
 		}
