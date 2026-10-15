@@ -472,8 +472,10 @@ If every metadata route is unavailable, discovery falls back to the OpenAI-compa
 are positive safe integers and the sum is safe. A valid `limits.max_output_tokens` independently sets the
 chat output cap, clamped to the resolved context; an incomplete or invalid context pair does not
 discard a valid output limit. Without it, a valid top-level `max_output_tokens`, then
-`max_completion_tokens`, sets the cap, ahead of any bundled-reference limit. Otherwise, context and
-output follow the existing native/reference/default fallback.
+`max_completion_tokens`, then `top_provider.max_completion_tokens`, then the generic `max_tokens`
+sets the cap, ahead of any bundled-reference limit. Each spelling is validated on its own, so an
+unusable value on one never suppresses a usable sibling. Otherwise, context and output follow the
+existing native/reference/default fallback.
 Silent endpoints can inherit bundled-reference limits, reasoning, and input modalities; unknown models
 use 128,000 context and 32,768 output as generic chat defaults. Output caps are bounded by the resolved context;
 Anthropic-routed models use an 8,192-token fallback output cap.

@@ -703,7 +703,17 @@ export function agentLoopContinue(
 			const newMessages: AgentMessage[] = [];
 			const currentContext: AgentContext = { ...context, messages: [...context.messages] };
 
-			stream.push({ type: "agent_start" });
+			const resumeTail = unpairedToolCallTail(currentContext.messages);
+			stream.push(
+				resumeTail
+					? {
+							type: "agent_start",
+							resumedToolCallIds: resumeTail.content.flatMap(block =>
+								block.type === "toolCall" ? [block.id] : [],
+							),
+						}
+					: { type: "agent_start" },
+			);
 
 			await runLoop(currentContext, newMessages, config, signal, stream, streamFn);
 		} catch (err) {

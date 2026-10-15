@@ -14,7 +14,7 @@
  * raw candidates being reverts — hence the explicit revert rejection.
  */
 import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
-import { diffLineRuns, editDiffString, summarizeCode } from "@oh-my-pi/pi-natives";
+import { diffLineRuns, editDiffString, parseCodeStatus } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { resolveRoleSelection } from "../config/model-resolver";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
@@ -46,7 +46,7 @@ interface EditHunk {
 }
 
 function parsesSource(code: string, path: string): boolean {
-	return summarizeCode({ code: code.length === 0 ? "\n" : code, path }).parsed;
+	return parseCodeStatus({ code: code.length === 0 ? "\n" : code, path }).parsed;
 }
 
 /** The localized broken region plus its parseable pre-image reference. */
@@ -198,7 +198,7 @@ function computeRegion(snapshot: AppliedEditSnapshot): ComputedRegion | undefine
 	}
 	pushRange(ref, b, bi, bEnd);
 
-	const language = summarizeCode({ code: prev.length === 0 ? "\n" : prev, path }).language ?? "source";
+	const language = parseCodeStatus({ code: prev.length === 0 ? "\n" : prev, path }).language ?? "source";
 	return {
 		region: {
 			bStart,

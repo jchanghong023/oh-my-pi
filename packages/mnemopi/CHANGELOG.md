@@ -12,6 +12,10 @@
 - Restored the exact `www.openrouter.ai` embedding alias without treating arbitrary subdomains as official endpoints.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 
+### Fixed
+
+- Fixed `MNEMOPI_<LABEL>_WEIGHT` and `MNEMOPI_TIER<N>_WEIGHT` having no effect on recall ranking ([#13824](https://github.com/can1357/oh-my-pi/pull/13824) by [@sjawhar](https://github.com/sjawhar))
+
 ## [18.11.1] - 2026-10-15
 
 ### Fixed

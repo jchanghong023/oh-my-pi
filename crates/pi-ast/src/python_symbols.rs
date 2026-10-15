@@ -31,7 +31,7 @@ pub fn extract_python_symbols(
 	mut heartbeat: impl FnMut() -> Result<()>,
 ) -> Result<PythonSymbolsResult> {
 	heartbeat()?;
-	let tree = parse_cached(code, SupportLang::Python)?;
+	let tree = parse_cached(code, SupportLang::Python, None)?;
 	heartbeat()?;
 	let Some(tree) = tree else {
 		return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });

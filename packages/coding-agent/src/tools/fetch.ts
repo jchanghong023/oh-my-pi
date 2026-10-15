@@ -618,13 +618,14 @@ export async function renderHtmlToText(
 		// even after remote/subprocess attempts are aborted by the budget.
 		native: () => htmlToMarkdown(html, { cleanContent: true }),
 		trafilatura: async () => {
+			if (overallSignal?.aborted) return null;
 			const trafilatura = await ensureTool("trafilatura", { signal: overallSignal, silent: true });
-			if (!trafilatura) return null;
+			if (!trafilatura || overallSignal?.aborted) return null;
 			const result = await ptree.exec([trafilatura, "-u", url, "--output-format", "markdown"], execOptions);
 			return result.ok ? result.stdout : null;
 		},
 		lynx: async () => {
-			if (!hasCommand("lynx")) return null;
+			if (!hasCommand("lynx") || overallSignal?.aborted) return null;
 			const result = await ptree.exec(["lynx", "-dump", "-nolist", "-width", "250", url], execOptions);
 			return result.ok ? result.stdout : null;
 		},

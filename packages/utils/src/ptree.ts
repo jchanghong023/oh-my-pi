@@ -690,6 +690,7 @@ export class ChildProcess<In extends InMask = InMask> {
 	// ── Signal / timeout ─────────────────────────────────────────────────
 
 	attachSignal(signal: AbortSignal): void {
+		const cleanup = this.#exited.catch(() => {});
 		const onAbort = () => this.kill(new AbortError(signal.reason, "<cancelled>"));
 		const stdoutTracked = this.#trackStdout();
 		if (signal.aborted) return void onAbort();
@@ -698,7 +699,7 @@ export class ChildProcess<In extends InMask = InMask> {
 			this.#stdoutDone || !stdoutTracked
 				? undefined
 				: (this.#stdoutSettled ??= Promise.withResolvers<void>()).promise;
-		void Promise.allSettled([this.#exited, this.#stderrDone, stdoutDone]).then(() =>
+		void Promise.allSettled([cleanup, this.#stderrDone, stdoutDone]).then(() =>
 			signal.removeEventListener("abort", onAbort),
 		);
 	}

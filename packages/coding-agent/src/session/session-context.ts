@@ -171,15 +171,6 @@ export interface BuildSessionContextOptions {
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
 	/**
-	 * Transcript mode only: keep `toolCall` blocks that have no matching
-	 * `toolResult` on the path instead of stripping them. Pass this when the
-	 * session is mid-turn (a tool is still executing, its result not yet
-	 * persisted) so the rebuilt transcript renders the in-flight call as
-	 * pending; without it a focus/unfocus or overlay-close rebuild silently
-	 * hides the call the agent is still waiting on.
-	 */
-	keepDanglingToolCalls?: boolean;
-	/**
 	 * Tool calls the live agent loop is still executing. They count as paired, so a
 	 * mid-turn rebuild keeps the in-flight assistant turn; the loop appends their results.
 	 */
@@ -189,6 +180,16 @@ export interface BuildSessionContextOptions {
 	/** Archive frame bytes the LLM context attaches: the active model's {@link snapcompact.frameDataBytesBudget}
 	 *  (unset: {@link snapcompact.DEFAULT_FRAME_DATA_BYTES_BUDGET}). */
 	maxFrameDataBytes?: number;
+}
+
+/** Options for `AgentSession.buildTranscriptSessionContext` (via `SessionProviderBoundary`). */
+export interface TranscriptSessionContextOptions extends Pick<BuildSessionContextOptions, "collapseCompactedHistory"> {
+	/**
+	 * Keep the unpaired tool calls of the turn the agent loop is still executing,
+	 * so a mid-turn rebuild keeps them routable. Calls left unpaired by earlier
+	 * turns are stripped either way. Pass while the viewed session streams.
+	 */
+	keepInFlightToolCalls?: boolean;
 }
 
 /**
@@ -702,11 +703,10 @@ export function buildSessionContext(
 	// visible reasoning while removing the immutability/invalid-signature hazard. Drop a
 	// turn left with no content. (Live turns only qualify mid-turn: a transcript rebuild
 	// while the tool still executes sees the persisted assistant turn without its result.
-	// Those callers pass `keepDanglingToolCalls` so the in-flight call stays visible as
-	// a pending block instead of vanishing from the chat.)
-	const keepDangling =
-		options?.preserveFailedTurns === true || (options?.transcript === true && options.keepDanglingToolCalls === true);
-	if (!keepDangling) {
+	// Those callers pass `inFlightToolCallIds` so the in-flight call stays visible as
+	// a pending block instead of vanishing from the chat, while older abandoned calls
+	// are still stripped.)
+	if (!options?.preserveFailedTurns) {
 		const pairedToolResultIds = new Set<string>(options?.inFlightToolCallIds);
 		for (const message of messages) {
 			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);

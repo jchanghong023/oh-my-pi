@@ -6057,7 +6057,7 @@ export function convertAnthropicMessages(
 	const transformedMessages = transformMessages(
 		messages,
 		model,
-		normalizeToolCallId,
+		id => normalizeToolCallId(id),
 		undefined,
 		undefined,
 		undefined,

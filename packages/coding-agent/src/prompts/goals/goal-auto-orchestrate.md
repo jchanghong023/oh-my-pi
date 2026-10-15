@@ -4,7 +4,6 @@ Objective:
 {{objective}}
 
 {{#if orchestrateRules}}{{orchestrateRules}}
-
 {{/if}}MUST 全自动无人值守完成完整目标。本次用户已对完成目标全过程及所需全部操作作出明确授权；MUST 自主调查、规划、编排、执行、验证和修复，直接推进至完成。
 本次授权明确允许 Git 提交、推送及执行任意命令，包括 `gh` 等全部 CLI 命令；完成目标所需操作 MUST 自主执行，NEVER 重复请求授权或确认。
 本次授权允许修改本仓库任意文件，无需另行请求授权或确认。

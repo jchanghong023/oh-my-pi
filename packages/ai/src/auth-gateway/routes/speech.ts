@@ -1,5 +1,6 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { classifyGatewayError } from "../../error/gateway";
+import { ValidationError } from "../../error/validation";
 import * as speechWire from "../../providers/speech-server";
 import { isSpeechApi, synthesizeSpeech } from "../../speech";
 import { deterministicUuid } from "../../utils/deterministic-id";
@@ -94,6 +95,11 @@ export async function handleSpeech(bootOpts: AuthGatewayRouteOptions, req: Reque
 		return response;
 	} catch (error) {
 		if (controller.signal.aborted) return aborted();
+		// Adapter validation is a client error: the wire schema admits values the
+		// adapter cannot serve, and the classifier would bill them as a 502.
+		if (error instanceof ValidationError) {
+			return speechWire.formatError(400, "invalid_request_error", error.message);
+		}
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway speech failed", { format: "speech", error: classified.message, peer });
 		return speechWire.formatError(classified.status, classified.type, classified.message);

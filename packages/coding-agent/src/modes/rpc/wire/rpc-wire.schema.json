@@ -3514,6 +3514,13 @@
 			"properties": {
 				"type": {
 					"const": "agent_start"
+				},
+				"resumedToolCallIds": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Calls of an unpaired assistant tail a continued run executes before its first model request."
 				}
 			},
 			"required": [

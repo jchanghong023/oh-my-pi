@@ -407,9 +407,14 @@ export class PrewalkCoordinator {
 		// plan mode before applying the tool set so SessionTools keeps an existing
 		// device-only write restricted.
 		this.#host.setPlanModeState(planModeState);
-		const augmentations = this.#host.hasBuiltInTool("write") ? ["write"] : [];
+		// Only the built-in write carries the xd:// propose transport. A shadowing
+		// extension `write` would answer every proposal as a file write and the plan
+		// phase would never end (#14030), so it is left out of the plan tool set.
+		const planTools = this.#host.hasBuiltInTool("write")
+			? [...previousEnabledTools, "write"]
+			: previousEnabledTools.filter(name => name !== "write");
 		try {
-			await this.#host.setActiveToolsByName([...new Set([...previousEnabledTools, ...augmentations])]);
+			await this.#host.setActiveToolsByName([...new Set(planTools)]);
 		} catch (error) {
 			this.#host.setPlanModeState(previousPlanModeState);
 			this.#planYoloArmed = false;
