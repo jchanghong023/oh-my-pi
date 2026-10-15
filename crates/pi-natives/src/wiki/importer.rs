@@ -118,18 +118,19 @@ impl ToNapiValue for WikiImportOutput {
 	}
 }
 struct Build<'a> {
-	owner:      &'a Owner,
-	cancel:     &'a CancelToken,
-	diagnostic: Option<&'a DiagnosticCallback>,
-	progress:   Option<&'a ProgressCallback>,
-	started:    Instant,
-	stage:      &'static str,
-	documents:  i64,
-	sections:   i64,
-	files:      i64,
-	cleanup:    &'static str,
-	reason:     Option<&'static str>,
-	published:  bool,
+	owner:          &'a Owner,
+	cancel:         &'a CancelToken,
+	diagnostic:     Option<&'a DiagnosticCallback>,
+	progress:       Option<&'a ProgressCallback>,
+	started:        Instant,
+	stage:          &'static str,
+	documents:      i64,
+	sections:       i64,
+	files:          i64,
+	cleanup:        &'static str,
+	reason:         Option<&'static str>,
+	published:      bool,
+	lock_contended: bool,
 }
 impl Build<'_> {
 	fn event(&self, message: &str, stage: &str, result: &str) -> WikiDiagnosticEvent {
@@ -324,6 +325,44 @@ impl Build<'_> {
 		}
 	}
 
+	fn acquire_lease(
+		&mut self,
+		started: Instant,
+	) -> std::result::Result<(FileLock, String), ImportError> {
+		let mut event = self.event("docs.init.lock.started", self.stage, "started");
+		event.retry_limit = Some(3);
+		self.emit(event)?;
+		let (error, result, level) = match acquire(self.owner, self.cancel) {
+			Ok(Some(lease)) => return Ok(lease),
+			Ok(None) => {
+				self.lock_contended = true;
+				(
+					WikiError::message(format!(
+						"Another document index build is already running for this profile: {}",
+						self.owner.database_path
+					)),
+					"contended",
+					"warn",
+				)
+			},
+			Err(error) => {
+				let cancelled = error.diagnostic_error_type() == "AbortError";
+				(
+					error,
+					if cancelled { "cancelled" } else { "failed" },
+					if cancelled { "info" } else { "error" },
+				)
+			},
+		};
+		let mut event = self.event("docs.init.lock.failed", self.stage, result);
+		event.level = level.into();
+		event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+		event.error(&error);
+		self.emit(event)?;
+		self.check()?;
+		Err(error.into())
+	}
+
 	fn build(
 		&mut self,
 		root: &str,
@@ -361,40 +400,7 @@ impl Build<'_> {
 		}
 		self.stage = "lock";
 		let started = Instant::now();
-		let mut event = self.event("docs.init.lock.started", self.stage, "started");
-		event.retry_limit = Some(3);
-		self.emit(event)?;
-		let (mut lease, database) = match acquire(self.owner, self.cancel) {
-			Ok(lease) => lease,
-			Err(error) => {
-				let mut event = self.event(
-					"docs.init.lock.failed",
-					self.stage,
-					if error.diagnostic_error_type() == "AbortError" {
-						"cancelled"
-					} else {
-						"contended"
-					},
-				);
-				event.level = if error.diagnostic_error_type() == "AbortError" {
-					"info"
-				} else {
-					"warn"
-				}
-				.into();
-				event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-				event.error(&error);
-				self.emit(event)?;
-				self.check()?;
-				return Err(
-					WikiError::message(format!(
-						"Another document index build is already running for this profile: {}",
-						self.owner.database_path
-					))
-					.into(),
-				);
-			},
-		};
+		let (mut lease, database) = self.acquire_lease(started)?;
 		let result = (|| {
 			let mut event = self.event("docs.init.lock.completed", self.stage, "completed");
 			event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
@@ -443,6 +449,7 @@ pub(super) fn run(
 		cleanup: "not_needed",
 		reason: None,
 		published: false,
+		lock_contended: false,
 	};
 	let result = build.build(root, name);
 	if let Err(error) = &result {
@@ -466,7 +473,7 @@ pub(super) fn run(
 		);
 		event.level = if cancelled || rejected {
 			"info"
-		} else if build.stage == "lock" {
+		} else if build.lock_contended {
 			"warn"
 		} else {
 			"error"
@@ -508,7 +515,8 @@ fn validate_name(name: &str) -> std::result::Result<&str, WikiError> {
 fn acquire(
 	owner: &Owner,
 	cancel: &CancelToken,
-) -> std::result::Result<(FileLock, String), WikiError> {
+) -> std::result::Result<Option<(FileLock, String)>, WikiError> {
+	owner.check_import(cancel)?;
 	let path = import::resolve_root(Path::new(&owner.database_path))?;
 	let identity = super::database::file_identity(&path)?;
 	let lock_path = format!("{}.lock", path.display());
@@ -516,7 +524,7 @@ fn acquire(
 		owner.check_import(cancel)?;
 		let lease = FileLock::try_acquire_path(Path::new(&lock_path))?;
 		if lease.is_acquired() {
-			return Ok((lease, identity));
+			return Ok(Some((lease, identity)));
 		}
 		if attempt < 2 {
 			for _ in 0..10 {
@@ -525,10 +533,7 @@ fn acquire(
 			}
 		}
 	}
-	Err(WikiError::message(format!(
-		"Failed to acquire lock for {} after 3 attempts",
-		owner.database_path
-	)))
+	Ok(None)
 }
 fn build_uuid() -> std::result::Result<String, WikiError> {
 	let mut bytes = [0_u8; 16];
@@ -581,4 +586,138 @@ fn build_uuid() -> std::result::Result<String, WikiError> {
 		bytes[14],
 		bytes[15]
 	))
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{
+		fs,
+		path::PathBuf,
+		sync::atomic::{AtomicBool, AtomicUsize},
+	};
+
+	use parking_lot::Mutex;
+
+	use super::*;
+	use crate::{
+		task::AbortReason,
+		wiki::{StorageState, database::DatabaseEngine},
+	};
+
+	struct Fixture {
+		directory: PathBuf,
+		owner:     Owner,
+	}
+
+	impl Fixture {
+		fn new() -> Self {
+			let directory = std::env::temp_dir().join(format!(
+				"omp-wiki-import-lock-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			));
+			fs::create_dir_all(&directory).unwrap();
+			let path = directory.join("docs.db").to_string_lossy().into_owned();
+			fs::write(&path, []).unwrap();
+			Self {
+				directory,
+				owner: Owner {
+					closed:        Arc::new(AtomicBool::new(false)),
+					imports:       AtomicUsize::new(1),
+					engine:        Mutex::new(DatabaseEngine::new(path.clone(), path.clone())),
+					storage:       Mutex::new(StorageState { storage: None, identity: String::new() }),
+					database_path: path,
+					diagnostics:   Arc::new(Mutex::new(Vec::new())),
+				},
+			}
+		}
+
+		fn build<'a>(&'a self, cancel: &'a CancelToken) -> Build<'a> {
+			Build {
+				owner: &self.owner,
+				cancel,
+				diagnostic: None,
+				progress: None,
+				started: Instant::now(),
+				stage: "lock",
+				documents: 0,
+				sections: 0,
+				files: 1,
+				cleanup: "not_needed",
+				reason: None,
+				published: false,
+				lock_contended: false,
+			}
+		}
+	}
+
+	impl Drop for Fixture {
+		fn drop(&mut self) {
+			let _ = fs::remove_dir_all(&self.directory);
+		}
+	}
+
+	fn core_error(result: std::result::Result<(FileLock, String), ImportError>) -> WikiError {
+		match result {
+			Err(ImportError::Core(error)) => error,
+			Err(ImportError::Callback(..)) => panic!("unexpected callback failure"),
+			Ok(_) => panic!("lock acquisition unexpectedly succeeded"),
+		}
+	}
+
+	#[test]
+	fn missing_database_identity_preserves_original_lock_failure() {
+		let fixture = Fixture::new();
+		fs::remove_file(&fixture.owner.database_path).unwrap();
+		let original = super::super::database::file_identity(Path::new(&fixture.owner.database_path))
+			.unwrap_err();
+		let cancel = CancelToken::default();
+		let mut build = fixture.build(&cancel);
+		let error = core_error(build.acquire_lease(Instant::now()));
+		assert_eq!(error.error_message(), original.error_message());
+		assert_eq!(error.diagnostic_error_type(), original.diagnostic_error_type());
+		assert_eq!(error.diagnostic_code(), original.diagnostic_code());
+		assert!(!build.lock_contended);
+	}
+
+	#[test]
+	fn held_import_lease_reports_contention_and_allows_successor_after_release() {
+		let fixture = Fixture::new();
+		let path = import::resolve_root(Path::new(&fixture.owner.database_path)).unwrap();
+		let identity = super::super::database::file_identity(&path).unwrap();
+		let lock_path = format!("{}.lock", path.display());
+		let mut holder = FileLock::try_acquire_path(Path::new(&lock_path)).unwrap();
+		assert!(holder.is_acquired());
+		let cancel = CancelToken::default();
+		let mut build = fixture.build(&cancel);
+		let error = core_error(build.acquire_lease(Instant::now()));
+		assert_eq!(
+			error.error_message(),
+			format!(
+				"Another document index build is already running for this profile: {}",
+				fixture.owner.database_path
+			)
+		);
+		assert!(build.lock_contended);
+		holder.release_native().unwrap();
+		let (mut successor, database) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		assert!(successor.is_acquired());
+		assert_eq!(database, identity);
+		successor.release_native().unwrap();
+	}
+
+	#[test]
+	fn cancellation_takes_priority_over_database_identity_failure() {
+		let fixture = Fixture::new();
+		fs::remove_file(&fixture.owner.database_path).unwrap();
+		let mut cancel = CancelToken::default();
+		cancel.emplace_abort_token().abort(AbortReason::Signal);
+		let mut build = fixture.build(&cancel);
+		let error = core_error(build.acquire_lease(Instant::now()));
+		assert_eq!(error.diagnostic_error_type(), "AbortError");
+		assert!(!build.lock_contended);
+	}
 }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { FileRead } from "./files";
 import type { RepoFailure, RepoSymbolHit } from "./types";
 
@@ -144,7 +145,21 @@ export class RepoStorage {
 		}
 		this.#db = restored;
 		this.#recoveryError = undefined;
-		for (const suffix of moved) unlinkSync(`${backup}${suffix}`);
+		// Promotion is committed; a leftover backup must not turn recovery into a failure.
+		for (const suffix of moved) {
+			try {
+				unlinkSync(`${backup}${suffix}`);
+			} catch (error) {
+				logger.warn("Repository recovery backup cleanup failed", {
+					component: "repo",
+					event: "repo_recovery",
+					stage: "backup_cleanup",
+					result: "failed",
+					committed: true,
+					...logger.diagnosticError(error),
+				});
+			}
+		}
 	}
 
 	transaction<T>(fn: () => T): T {

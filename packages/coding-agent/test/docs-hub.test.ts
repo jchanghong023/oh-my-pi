@@ -255,6 +255,70 @@ describe("DocsHub explicit grep with real native snapshots", () => {
 		15_000,
 	);
 
+	it.each([
+		{ key: "/", query: "left", paths: ["tab.md", "spaces.md"] },
+		{ key: "g", query: "^left\\tright$", paths: ["tab.md"] },
+	])(
+		"$key starts a fresh query after returning from a hit to the result list",
+		async ({ key, query, paths }) => {
+			const { hub, waitFor, expected } = await grepFixture(2);
+			try {
+				for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+				await waitFor(rendered => rendered.includes("Section hits: 2"));
+				hub.handleInput("\x1b[B");
+				hub.handleInput("\r");
+				expect(hub.render(200).join("\n")).toContain(expected.sections[1]!.text.trimEnd());
+				hub.handleInput("b");
+				hub.handleInput("\x1b[A");
+				hub.handleInput("\r");
+				expect(hub.render(200).join("\n")).toContain(expected.sections[0]!.text.trimEnd());
+				hub.handleInput("b");
+				for (const input of [key, query, "\r"]) hub.handleInput(input);
+				await waitFor(rendered => paths.every(file => rendered.includes(`${file}:`)));
+				const results = hub.render(200).join("\n");
+				expect(results).toContain(`Section hits: ${paths.length}`);
+				expect(results).not.toContain("p00.md:");
+				if (key === "g") expect(results).not.toContain("spaces.md:");
+				hub.handleInput("\r");
+				expect(hub.render(200).join("\n")).toContain("left");
+			} finally {
+				await hub.dispose();
+			}
+		},
+		15_000,
+	);
+
+	it.each(["hit", "results"])(
+		"d confirms deletion from the %s view",
+		async view => {
+			const { hub, waitFor, root, agentDir } = await grepFixture(2);
+			const service = new DocsService({ agentDir, cwd: root });
+			try {
+				for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+				await waitFor(rendered => rendered.includes("Section hits: 2"));
+				hub.handleInput("\r");
+				if (view === "results") hub.handleInput("b");
+				hub.handleInput("d");
+				expect((await service.list()).map(index => index.name)).toEqual(["a-manual", "z-other"]);
+				hub.handleInput("n");
+				expect(hub.render(200).join("\n")).toContain("a-manual  docs=");
+				expect((await service.list()).map(index => index.name)).toEqual(["a-manual", "z-other"]);
+				for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+				await waitFor(rendered => rendered.includes("Section hits: 2"));
+				hub.handleInput("\r");
+				if (view === "results") hub.handleInput("b");
+				hub.handleInput("d");
+				hub.handleInput("y");
+				await waitFor(rendered => rendered.includes("z-other  docs="));
+				expect((await service.list()).map(index => index.name)).toEqual(["z-other"]);
+			} finally {
+				await hub.dispose();
+				await service.close();
+			}
+		},
+		15_000,
+	);
+
 	it.each(["g", "/"])(
 		"keeps a fresh %s input editable after an older stale continuation",
 		async key => {

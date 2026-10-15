@@ -38,7 +38,7 @@ jobs:
            run: |
               echo "::error::Fork releases must be published from refs/heads/main, got $RELEASE_REF"
               exit 1
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
          - name: Derive version from fork upstream baseline
            id: detect
            shell: bash
@@ -88,7 +88,7 @@ jobs:
                - { target_id: linux-x64-modern, target: natives-linux-x64-modern }
                - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline }
       steps:
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
          - id: cache
            uses: ./.github/actions/bazel-cache

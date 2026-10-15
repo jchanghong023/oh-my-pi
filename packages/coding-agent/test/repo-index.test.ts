@@ -872,6 +872,52 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect((await service.search("newmeteor")).hits.map(hit => hit.path)).toEqual(["a.py"]);
 	});
 
+	it.each(["error", "cancel"] as const)(
+		"preserves the original %s when SQLite rejects the failed-maintenance uncertainty hint",
+		async failure => {
+			const { root, service } = await fixture({
+				"a.py": "def stable(): return 'oldnimbus'\n",
+				"b.py": "def second(): pass\n",
+			});
+			await service.build();
+			const generation = (await service.status()).generation;
+			await put(root, "a.py", "def changed(): return 'newmeteor'\n");
+			service.storage.db.exec(`
+				CREATE TRIGGER reject_uncertainty BEFORE INSERT ON uncertainty
+				BEGIN SELECT RAISE(ABORT, 'uncertainty write denied'); END;
+			`);
+			const controller = new AbortController();
+			const original =
+				failure === "cancel" ? new DOMException("cancel rebuild", "AbortError") : new Error("read interrupted");
+			try {
+				await expect(
+					service.rebuild({
+						signal: controller.signal,
+						onProgress(progress) {
+							if (progress.phase !== "reading" || progress.processed !== 1) return;
+							// A real staged row exists before either failure is delivered.
+							expect(
+								service.storage.db.query("SELECT count(*) n FROM files WHERE generation<>?").get(generation),
+							).toEqual({ n: 1 });
+							if (failure === "cancel") controller.abort(original);
+							else throw original;
+						},
+					}),
+				).rejects.toBe(original);
+				expect((await service.status()).generation).toBe(generation);
+				expect(
+					service.storage.db.query("SELECT count(*) n FROM files WHERE generation<>?").get(generation),
+				).toEqual({ n: 0 });
+				expect((await service.search("oldnimbus")).hits.map(hit => hit.path)).toEqual(["a.py"]);
+				expect((await service.search("newmeteor")).hits).toEqual([]);
+			} finally {
+				service.storage.db.exec("DROP TRIGGER reject_uncertainty");
+			}
+			await service.rebuild();
+			expect((await service.search("newmeteor")).hits.map(hit => hit.path)).toEqual(["a.py"]);
+		},
+	);
+
 	it("rolls back a real file-read failure without publishing a partial initial or updated generation", async () => {
 		const failingPath = "b-private-path-canary.py";
 		const stableSource = "def second(): return 'safeisland_PRIVATE_SOURCE_CANARY'\n";
@@ -1004,6 +1050,18 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		} finally {
 			deniedBackup.mockRestore();
 		}
+		const deniedPromotion = vi.spyOn(fsSync, "renameSync").mockImplementation((from, to) => {
+			if (String(to) === databasePath && String(from).includes(".recovery-"))
+				throw new Error("recovery promotion denied");
+			return rename(from, to);
+		});
+		try {
+			await expect(reopened.recover()).rejects.toThrow("recovery promotion denied");
+			expect(await Bun.file(databasePath).text()).toBe("not a SQLite database");
+			await expect(reopened.status()).rejects.toThrow(/recover/i);
+		} finally {
+			deniedPromotion.mockRestore();
+		}
 		const recovered = await reopened.recover();
 		expect(recovered.exists).toBe(true);
 		expect(recovered.fileCount).toBe(2);
@@ -1021,6 +1079,43 @@ describe("repository index with real SQLite and native Python parsing", () => {
 				.query("SELECT COUNT(*) AS n FROM symbols WHERE file_id NOT IN (SELECT id FROM files)")
 				.get(),
 		).toEqual({ n: 0 });
+	});
+
+	it("keeps committed recovery successful and queryable when backup deletion fails", async () => {
+		const { root, agentDir, service } = await fixture({
+			"repair.py": "def repaired(): return 'committedrecoverybeacon'\n",
+		});
+		await service.build();
+		const databasePath = service.storage.path;
+		service.close();
+		await Bun.write(databasePath, "not a SQLite database");
+		const reopened = new RepoService({ cwd: root, agentDir });
+		services.push(reopened);
+		const unlink = fsSync.unlinkSync;
+		const deniedPaths: string[] = [];
+		const deniedCleanup = vi.spyOn(fsSync, "unlinkSync").mockImplementation(filename => {
+			if (String(filename).startsWith(`${databasePath}.backup-`)) {
+				deniedPaths.push(String(filename));
+				throw new Error("recovery backup deletion denied");
+			}
+			return unlink(filename);
+		});
+		try {
+			const recovered = await reopened.recover();
+			expect(recovered.exists).toBe(true);
+			expect(recovered.fileCount).toBe(1);
+			expect(deniedPaths.length).toBeGreaterThan(0);
+			expect(await Bun.file(deniedPaths[0]!).text()).toBe("not a SQLite database");
+			expect(reopened.storage.recoveryError).toBeUndefined();
+			expect((await reopened.search("committedrecoverybeacon")).hits.map(hit => hit.path)).toEqual(["repair.py"]);
+			expect((await reopened.symbol("repaired")).hits.map(hit => hit.path)).toEqual(["repair.py"]);
+		} finally {
+			deniedCleanup.mockRestore();
+		}
+		reopened.close();
+		const persisted = new RepoService({ cwd: root, agentDir });
+		services.push(persisted);
+		expect((await persisted.search("committedrecoverybeacon")).hits.map(hit => hit.path)).toEqual(["repair.py"]);
 	});
 
 	it("removes a corrupt index without changing sources or rebuilding implicitly", async () => {
