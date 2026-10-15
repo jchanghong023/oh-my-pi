@@ -16,7 +16,7 @@
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
 * `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：仅含 fork 自有内容（需求目录、公司内网新手指南与 `README.upstream.md` 对照快照），不维护翻译，不维护文档站点（见「中文文档」一节）。
-* `.omp/skills/upstream-release-sync/SKILL.md`：上游同步流程。
+* `upstream-release-sync`：由 JCH 仓库 `skills/upstream-release-sync/` 统一维护和分发的通用上游同步 Skill；仓库专属参数见「上游与分支」，本仓库不再维护技能副本。
 
 子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
 
@@ -61,15 +61,15 @@
 本仓库是持续同步上游的 Fork（同步来源与分支约定见「上游与分支」），文档职责如下：
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
-* `.omp/skills/upstream-release-sync/SKILL.md`：每日定时同步或手动同步上游的操作流程。
+* JCH 的 `upstream-release-sync` Skill：每日定时同步或手动同步上游的通用操作流程；名称保持不变以兼容既有按名称调用，本仓库的来源、镜像、基线与验证限制由本文件维护。
 * `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
 
-同步 MUST 保留 `AGENTS.md`、同步 Skill、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。
+同步 MUST 保留 `AGENTS.md`、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。共享 Skill 不随本仓库同步改写。
 
 ## README 与上游同步
 
 * 仓库根 `README.md` 是上游 README 的**中文版**，内容跟随上游：上游改了正文，同步时把对应段落重译进 `README.md`。
-* `docs-zh-CN/README.upstream.md` 是最近一次合入的上游 README 英文快照，只作对照稿源，不对外；同步时先更新快照，再据差异改中文正文（上游 README 未变则不动）。
+* `docs-zh-CN/README.upstream.md` 是最近一次合入的上游 README 英文快照，只作对照稿源，不对外；同步时用本次 fetch 的上游 README 与快照比较，先更新快照，再据差异改中文正文（上游 README 未变则不动）。merge 或恢复过程改动了根 `README.md` 时，提交前按快照复核正文。
 * `README.md` 的 Install / 下载段是 fork 专有内容（fork release 链接、`install.sh --binary`、`install.ps1 -Binary`、`+fork.N` 版本说明、平台支持声明），NEVER 采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法；中文翻译照此段本身翻译。
 * 除下载段与「提示词控制」中 fork 新增的 `fullsend` 条目外，`README.md` 不保留 fork 专有内容：其余正文以当前上游快照为准。
 
@@ -89,8 +89,12 @@
 ## 上游与分支
 
 * 唯一同步来源：`https://github.com/can1357/oh-my-pi.git` 的 `refs/heads/main` HEAD；NEVER 使用 Release、tag、其他分支、`origin/main` 或配置型 `upstream/main` 代替。
+* fork 身份固定为 `jchanghong023/oh-my-pi`；同步使用 `origin`，其有效 fetch/push URL 必须均匹配该身份，不满足则停止。
 * `main`：上游代码与个人改动的集成分支。
 * `upstream`：最近成功合入的上游 `main` 的精确镜像，不含 fork commit；GitHub 上用于 PR/差异比较（base 为 `upstream`，compare 为 `main`）。
+* 基线权威为本地 `main:docs-zh-CN/requirements/fork.md`：`Upstream commit` 必须唯一、有效且属于本地 `main` 历史。成功集成时在同一提交更新完整 SHA、UTC 同步日期和当前功能差异，保留 `can1357/oh-my-pi@main`；版本取本次上游目标的 `packages/coding-agent/package.json`，保持现有机器可读格式，不追加历史、Integration 字段或第二份清单。
+* 本仓库明确授权同步流程只推送 fork 的 `refs/heads/upstream` 镜像，使用实际远端 SHA 的精确 lease；本地 `upstream` 跟踪 `origin/upstream`，三者须指向同一已成功集成的上游 SHA，不指向 fork 集成提交。镜像失败保留已验证的本地集成，下次仅修复镜像。
+* 同步请求包含完成该次集成所需的本地提交授权；提交采用 `sync(upstream): merge main@<目标前12位>`，以命令级设置禁用 hooks/签名，避免隐式重型任务，不改用户全局 Git 配置。
 * 同步 MUST 遵循 Skill 的门禁、集成、验证、镜像与中止流程；NEVER 接受上游历史改写。
 * 同步只完成本地 `main` 集成与 `upstream` 镜像，不自动推送 `main`；本地完成不代表 GitHub 已可比较最新 fork 差异，后者取决于远端 `main` 是否另行更新。
 
@@ -131,7 +135,8 @@
 * 标准门禁按维护者要求沿用既有 fork 范围，以需求记录的上游基线纳入**完整已提交与未提交 fork 差异**，包括未跟踪的新测试；不以最新提交或本轮文件代替完整差异。TS 测试沿用差异测试集合，Rust 测试复用现有 `test:rs --affected` 及 vendor 消费者选择，保留脚本测试和 native/TUI 集成边界。三层继承同一范围，报告 `scope=fork-affected`、基线、选择依据和未跑全项目覆盖；预算仍为 90/900/1500 秒，不通过排除失败项、放宽预算或改写测试标准求绿。全项目原有独立入口保留。
 * 检查、测试与构建工具不可用时说明所缺环境及未验证部分，不自动安装工具或将缺失记为通过。完整本地门禁不等同公司模型、真实模型任务质量、独立发布 CI 或共享鼠标测试验收；上游原样检查失败仍遵循「测试与验证要求」的报告边界。
 * fulltest 内的 UI 冒烟 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
-* 上游同步的检查范围、次数和失败处理统一遵循 Skill，不运行全 workspace 检查、完整测试、Rust/native 检查或构建、打包、发布；冲突场景同样不运行编译、类型检查或测试（含 Skill 中列出的 `check:types` 与精确测试），只做源码语义审查，除非用户明确要求。
+* 上游同步仅做 staged Git 检查与必要的源码语义审查；无冲突时只在 TS 或工具链变化确有必要时运行一次 `bun run check:tools`，有冲突时同样最多一次，不运行编译、类型检查或测试（含 `check:types` 与精确测试）。缺依赖时仅允许 `bun install --frozen-lockfile --ignore-scripts`；首次检查失败只可修复本次相关问题并对首轮失败项额外复验一轮，不重跑已通过项、不追加范围，仍失败或无法确认时中止、不提交、不更新镜像。
+* 上游同步 NEVER 运行全 workspace 检查、根级 `bun run check`、`bun run fastcheck`、`bun run fulltest`、`bun run slowtest`、完整测试、UI/browser/heavy、Docker、benchmark、打包、发布或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。冲突重建需要 UT 与真实入口 E2E 而本次未获明确验证授权时，按共享 Skill 中止并报告未验证；额外验证必须由用户明确要求。
 
 ## 中文文档
 
