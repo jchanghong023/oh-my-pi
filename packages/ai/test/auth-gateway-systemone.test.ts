@@ -366,7 +366,7 @@ describe("auth-gateway POST /v1/systemone", () => {
 		const model = getBundledModel("typesafe", "jev-latest");
 		if (!model) throw new Error("expected bundled typesafe/jev-latest");
 		const resolve = buildGatewayApiKeyResolver(
-			storage,
+			{ storage },
 			model,
 			"session",
 			{ apiKey: "key-a" },

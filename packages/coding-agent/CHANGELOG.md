@@ -59,6 +59,10 @@
 - Successful wiki searches now honor an asynchronous, cancellable 500ms minimum duration, with separate database-work and minimum-wait timing. Awaitable shutdown releases the owned worker before database cleanup; buffered diagnostics are persisted before worker replies.
 - Reduced wiki search memory use and repeated Markdown parsing without changing complete matching, ranking, pagination or citations.
 
+### Added
+
+- Added `omp auth-gateway serve --clients=<file>`: per-client bearer tokens, each limited to listed models and broker OAuth accounts with no fallback to other accounts or API keys, re-read while serving ([#5098](https://github.com/can1357/oh-my-pi/issues/5098), [#15900](https://github.com/can1357/oh-my-pi/pull/15900) by [@alphastorm](https://github.com/alphastorm))
+
 ### Changed
 
 - Reduced CPU overhead during syntax checks and automatic edit repairs ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
