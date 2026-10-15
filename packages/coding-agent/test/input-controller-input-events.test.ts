@@ -430,7 +430,7 @@ describe("interactive native input ingress", () => {
 		expect(h.editor.getText()).toBe("same text");
 	});
 
-	for (const command of ["/goal", "/goal-auto-orchestrate"]) {
+	for (const command of ["/goal", "/goal-autopilot"]) {
 		it(`Enter ${command} preserves the next text/image draft typed during a blocked input hook`, async () => {
 			const entered = Promise.withResolvers<void>();
 			const release = Promise.withResolvers<void>();

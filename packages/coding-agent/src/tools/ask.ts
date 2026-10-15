@@ -13,7 +13,7 @@ import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask"
  *   - Users will always be able to select "Other" to provide custom text input
  *   - Use multi: true to allow multiple answers to be selected for a question
  *   - Use recommended: <index> to mark the default option; "(Recommended)" suffix is added automatically
- *   - Questions may time out and auto-select the recommended option, else one clear affirmative option (disabled in plan mode)
+ *   - Unanswered questions may time out and return an automatic continuation reply (disabled in plan mode)
  */
 
 import { type as arkType } from "@oh-my-pi/omptype";
@@ -27,6 +27,7 @@ import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings"
 import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
+import askTimeoutReply from "../prompts/tools/ask-timeout.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
 
 import type { ToolSession } from ".";
@@ -131,10 +132,7 @@ function toSelectOption(option: AskOption, label = option.label): ExtensionUISel
 // =============================================================================
 
 const RECOMMENDED_SUFFIX = " (Recommended)";
-const AFFIRMATIVE_ANSWER =
-	/^(?:是(?=$|[\s，,。.!！？？])|同意|允许|授权|批准|确认|继续|执行|提交|推送|可以|肯定|好的|yes\b|approve\b|allow\b|authorize\b|confirm\b|proceed\b|continue\b|accept\b|go ahead\b)/iu;
-const NEGATIVE_ANSWER =
-	/(?:不|否|勿|别|拒绝|取消|停止|撤销|暂停|稍后|暂缓)|\b(?:no|not|never|without|don't|do not|stop|cancel|deny|decline|reject)\b/iu;
+const ASK_TIMEOUT_REPLY = askTimeoutReply.trim();
 // Window after the timeout deadline within which an `undefined` selection is
 // attributed to a UI-enforced timeout (for surfaces that close the dialog at
 // the deadline but never invoke `onTimeout`). Cancels beyond it are user Esc.
@@ -156,26 +154,6 @@ function addRecommendedSuffix(options: AskOption[], recommendedIndex?: number): 
 				: option.label;
 		return toSelectOption(option, label);
 	});
-}
-
-function getAskTimeoutRecommendation(options: AskOption[], recommended?: number): number | undefined {
-	if (recommended != null) return recommended;
-	let affirmative: number | undefined;
-	for (let index = 0; index < options.length; index++) {
-		const label = options[index]!.label.trim();
-		if (!AFFIRMATIVE_ANSWER.test(label) || NEGATIVE_ANSWER.test(label)) continue;
-		if (affirmative !== undefined) return undefined;
-		affirmative = index;
-	}
-	return affirmative;
-}
-
-function getAutoSelectionOnTimeout(options: AskOption[], recommended?: number): string[] {
-	if (options.length === 0) return [];
-	if (typeof recommended === "number" && recommended >= 0 && recommended < options.length) {
-		return [options[recommended]!.label];
-	}
-	return [options[0]!.label];
 }
 
 /** Strip "(Recommended)" suffix from a label */
@@ -205,7 +183,7 @@ interface AskSingleQuestionOptions {
 	recommended?: number;
 	timeout?: number;
 	signal?: AbortSignal;
-	initialSelection?: Pick<SelectionResult, "selectedOptions" | "customInput" | "note">;
+	initialSelection?: Pick<QuestionResult, "selectedOptions" | "customInput" | "note" | "timedOut">;
 	navigation?: NavigationControls;
 }
 
@@ -250,7 +228,7 @@ async function askSingleQuestion(
 	let selectedOptions = [...(initialSelection?.selectedOptions ?? [])];
 	let customInput = initialSelection?.customInput;
 	const note = initialSelection?.note;
-	let timedOut = false;
+	let timedOut = initialSelection?.timedOut ?? false;
 
 	const selectOption = async (
 		prompt: string,
@@ -313,6 +291,7 @@ async function askSingleQuestion(
 				return selection;
 			};
 			const choice = dialogSignal ? await untilAborted(dialogSignal, runSelect) : await runSelect();
+			signal?.throwIfAborted();
 			if (!timeoutTriggered && choice === undefined && typeof timeout === "number") {
 				// Fallback for UI surfaces that enforce `timeout` without invoking
 				// `onTimeout`: their auto-cancel resolves right at the deadline. A
@@ -372,28 +351,35 @@ async function askSingleQuestion(
 				markableCount: questionOptions.length,
 			});
 
+			if (selectTimedOut) {
+				selectedOptions = Array.from(selected);
+				if (selectedOptions.length === 0 && customInput === undefined) {
+					customInput = ASK_TIMEOUT_REPLY;
+					timedOut = true;
+				}
+				return {
+					selectedOptions,
+					customInput,
+					note,
+					timedOut,
+					navigation: navigation?.allowForward ? "forward" : undefined,
+				};
+			}
 			if (arrowNavigation) {
 				return { selectedOptions: Array.from(selected), customInput, note, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
-				if (selectTimedOut) {
-					timedOut = true;
-					break;
-				}
-				return { selectedOptions: Array.from(selected), customInput, note, timedOut, cancelled: true };
+				return { selectedOptions: Array.from(selected), customInput, note, timedOut: false, cancelled: true };
 			}
 			if (choice === doneLabel) break;
 
 			if (choice === OTHER_OPTION) {
-				if (selectTimedOut) {
-					timedOut = true;
-					break;
-				}
 				const customResult = await promptForCustomInput(`${prefix}${promptWithProgress}`);
 				if (customResult.input === undefined) {
 					continue;
 				}
 				customInput = customResult.input;
+				timedOut = false;
 				break;
 			}
 
@@ -401,16 +387,13 @@ async function askSingleQuestion(
 			if (selectedIdx >= 0) {
 				cursorIndex = selectedIdx;
 			}
+			if (timedOut) customInput = undefined;
+			timedOut = false;
 
 			if (selected.has(choice)) {
 				selected.delete(choice);
 			} else {
 				selected.add(choice);
-			}
-
-			if (selectTimedOut) {
-				timedOut = true;
-				break;
 			}
 		}
 		selectedOptions = Array.from(selected);
@@ -447,26 +430,27 @@ async function askSingleQuestion(
 				selectionMarker: "radio",
 				markableCount: displayOptions.length,
 			});
-			timedOut = selectTimedOut;
+			if (selectTimedOut) {
+				if (selectedOptions.length === 0 && customInput === undefined) {
+					customInput = ASK_TIMEOUT_REPLY;
+					timedOut = true;
+				}
+				break;
+			}
 
 			if (arrowNavigation) {
 				return { selectedOptions, customInput, note, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
-				if (!timedOut) {
-					return { selectedOptions, customInput, note, timedOut, cancelled: true };
-				}
-				break;
+				return { selectedOptions, customInput, note, timedOut: false, cancelled: true };
 			}
 			if (choice === OTHER_OPTION) {
-				if (selectTimedOut) {
-					break;
-				}
 				const customResult = await promptForCustomInput(promptWithProgress);
 				if (customResult.input === undefined) {
 					continue;
 				}
 				customInput = customResult.input;
+				timedOut = false;
 				selectedOptions = [];
 				break;
 			}
@@ -477,18 +461,12 @@ async function askSingleQuestion(
 			const pickedIndex = displayOptions.findIndex(option => getSelectOptionLabel(option) === choice);
 			selectedOptions = [pickedIndex >= 0 ? questionOptions[pickedIndex]!.label : stripRecommendedSuffix(choice)];
 			customInput = undefined;
+			timedOut = false;
 			break;
-		}
-		if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
-			selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 		}
 		if (navigation?.allowForward) {
 			return { selectedOptions, customInput, note, timedOut, navigation: "forward" };
 		}
-	}
-
-	if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
-		selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 	}
 
 	return { selectedOptions, customInput, note, timedOut };
@@ -497,13 +475,13 @@ async function askSingleQuestion(
 function formatQuestionResult(result: QuestionResult): string {
 	const noteSuffix = result.note ? ` (note: ${result.note})` : "";
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
+	const timeoutSuffix = result.timedOut ? " (automatic reply after timeout)" : "";
 	if (result.selectedOptions.length === 0) {
-		if (custom !== undefined) return `${result.id}: ${custom}${noteSuffix}`;
+		if (custom !== undefined) return `${result.id}: ${custom}${timeoutSuffix}${noteSuffix}`;
 		return result.multi ? `${result.id}: []${noteSuffix}` : `${result.id}: (cancelled)${noteSuffix}`;
 	}
 	const picked = result.multi ? `[${result.selectedOptions.join(", ")}]` : result.selectedOptions[0];
 	const answer = custom === undefined ? picked : `${picked} + ${custom}`;
-	const timeoutSuffix = result.timedOut ? " (auto-selected after timeout)" : "";
 	return `${result.id}: ${answer}${timeoutSuffix}${noteSuffix}`;
 }
 
@@ -519,16 +497,17 @@ function formatSingleQuestionResponse(result: {
 		const selectedText = result.multi
 			? `User selected: ${result.selectedOptions.join(", ")}`
 			: `User selected: ${result.selectedOptions[0]}`;
-		responseParts.push(result.timedOut ? `${selectedText} (auto-selected after timeout)` : selectedText);
+		responseParts.push(selectedText);
 	}
 	if (result.customInput !== undefined) {
+		const label = result.timedOut ? "Automatic reply after timeout" : "User provided custom input";
 		responseParts.push(
 			result.customInput.includes("\n")
-				? `User provided custom input:\n${result.customInput
+				? `${label}:\n${result.customInput
 						.split("\n")
 						.map(line => `  ${line}`)
 						.join("\n")}`
-				: `User provided custom input: ${result.customInput}`,
+				: `${label}: ${result.customInput}`,
 		);
 	}
 	if (result.note) {
@@ -783,8 +762,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 				const showRichDialog = () =>
 					richAskDialog(
 						params.questions.map(q => {
-							const recommended =
-								timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended);
+							const recommended = q.recommended ?? undefined;
 							return {
 								id: q.id,
 								question: q.question,
@@ -801,6 +779,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						{ timeout: timeout ?? undefined, signal, acceptImages: true },
 					);
 				const richResult = signal ? await untilAborted(signal, showRichDialog) : await showRichDialog();
+				signal?.throwIfAborted();
 				if (!richResult) {
 					context.abort();
 					throw new ToolAbortError("Ask tool was cancelled by the user");
@@ -838,9 +817,10 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						question: question.question,
 						options: question.options.map(option => option.label),
 						multi: question.multi ?? false,
-						selectedOptions: result.selectedOptions,
-						customInput:
-							result.customInput === undefined
+						selectedOptions: result.timedOut ? [] : result.selectedOptions,
+						customInput: result.timedOut
+							? ASK_TIMEOUT_REPLY
+							: result.customInput === undefined
 								? undefined
 								: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
 						note:
@@ -879,7 +859,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					return { content: [{ type: "text" as const, text: responseText }, ...imageBlocks], details };
 				}
 				const details: AskToolDetails = { results };
-				const responseText = `User answers:\n${results.map(formatQuestionResult).join("\n")}`;
+				const responseText = `${results.some(result => result.timedOut) ? "Answers" : "User answers"}:\n${results.map(formatQuestionResult).join("\n")}`;
 				const imageBlocks = await this.#answerImageBlocks(answerImages, signal);
 				return { content: [{ type: "text" as const, text: responseText }, ...imageBlocks], details };
 			} catch (error) {
@@ -906,7 +886,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					questionOptions,
 					q.multi ?? false,
 					{
-						recommended: timeout === null ? q.recommended : getAskTimeoutRecommendation(q.options, q.recommended),
+						recommended: q.recommended ?? undefined,
 						timeout: timeout ?? undefined,
 						signal,
 						initialSelection: options?.previous,
@@ -1010,7 +990,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 
 		const details: AskToolDetails = { results };
 		const responseLines = results.map(formatQuestionResult);
-		const responseText = `User answers:\n${responseLines.join("\n")}`;
+		const responseText = `${results.some(result => result.timedOut) ? "Answers" : "User answers"}:\n${responseLines.join("\n")}`;
 
 		return { content: [{ type: "text" as const, text: responseText }], details };
 	}

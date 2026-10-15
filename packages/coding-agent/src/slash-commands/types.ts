@@ -133,10 +133,7 @@ export interface SlashCommandRuntime {
 export interface RpcSlashCommandRuntime extends SlashCommandRuntime {
 	ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">;
 	runCommandInBackground: (task: () => Promise<void>) => void;
-	runModeCommand: (
-		mode: "plan" | "loop" | "goal" | "goal-auto-orchestrate",
-		args: string,
-	) => Promise<SlashCommandResult>;
+	runModeCommand: (mode: "plan" | "loop" | "goal" | "goal-autopilot", args: string) => Promise<SlashCommandResult>;
 }
 
 /**

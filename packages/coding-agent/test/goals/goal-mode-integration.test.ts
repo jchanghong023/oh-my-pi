@@ -275,7 +275,7 @@ describe("InteractiveMode goal mode integration", () => {
 		await harness.session.setActiveToolsByName(["read", "task"]);
 		const { requests, responses } = recordProvider(harness.session);
 		const objective = `Inspect all requirements literally <b> & {{objective}}\n${"保留完整目标和空白。  \t".repeat(300)}\nPERSISTED_OBJECTIVE_END`;
-		await submitGoalCommand(harness, `/goal-auto-orchestrate ${objective}`);
+		await submitGoalCommand(harness, `/goal-autopilot ${objective}`);
 
 		expect(goalNotices(harness.session)).toHaveLength(1);
 		const notice = goalNotices(harness.session)[0]!;
@@ -333,7 +333,7 @@ describe("InteractiveMode goal mode integration", () => {
 			for (const tool of await createTools(harness.toolSession, ["task"])) harness.toolRegistry.set(tool.name, tool);
 			await harness.session.setActiveToolsByName(["read", "task"]);
 			const { requests, responses } = recordProvider(harness.session);
-			await submitGoalCommand(harness, "/goal-auto-orchestrate /skill:recap orchestrate the selected work");
+			await submitGoalCommand(harness, "/goal-autopilot /skill:recap orchestrate the selected work");
 			expect(goalNotices(harness.session)).toHaveLength(1);
 			const notice = goalNotices(harness.session)[0]!;
 			const savedBytes = JSON.stringify(notice);
@@ -413,8 +413,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("dispatches auto orchestration through the goal registry and preserves it through management", async () => {
-		const dispatch = (args: string) =>
-			executeBuiltinSlashCommand(`/goal-auto-orchestrate ${args}`, { ctx: harness.mode });
+		const dispatch = (args: string) => executeBuiltinSlashCommand(`/goal-autopilot ${args}`, { ctx: harness.mode });
 		await dispatch("Ship the release");
 		const created = harness.session.getGoalModeState();
 		expect(created?.autoOrchestrate).toBe(true);
@@ -449,10 +448,10 @@ describe("InteractiveMode goal mode integration", () => {
 	it("does not convert an ordinary goal when the new command manages or resumes it", async () => {
 		await executeBuiltinSlashCommand("/goal Ordinary objective", { ctx: harness.mode });
 		const goalId = harness.session.getGoalModeState()?.goal.id;
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate show", { ctx: harness.mode });
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate budget 75", { ctx: harness.mode });
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate pause", { ctx: harness.mode });
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate resume", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot show", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot budget 75", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot pause", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot resume", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()?.goal.id).toBe(goalId);
 		expect(harness.session.getGoalModeState()?.goal.tokenBudget).toBe(75);
 		expect(harness.session.getGoalModeState()?.autoOrchestrate).not.toBe(true);
@@ -461,61 +460,62 @@ describe("InteractiveMode goal mode integration", () => {
 
 	it("keeps objective and drop dialogs cancellable through the auto command", async () => {
 		const editor = vi.spyOn(harness.mode, "showHookEditor").mockResolvedValueOnce(undefined);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toBeUndefined();
 		editor.mockResolvedValueOnce("  Objective from dialog  ");
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate set", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot set", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()?.goal.objective).toBe("Objective from dialog");
 		expect(harness.session.getGoalModeState()?.autoOrchestrate).toBe(true);
 		const originalState = harness.session.getGoalModeState();
 		editor.mockResolvedValueOnce(undefined);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate set", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot set", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toEqual(originalState);
 		const selector = vi.spyOn(harness.mode, "showHookSelector").mockResolvedValueOnce(undefined);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toEqual(originalState);
 		selector.mockResolvedValueOnce("Pause");
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot", { ctx: harness.mode });
 		expect(harness.mode.goalModePaused).toBe(true);
 		expect(harness.session.getGoalModeState()?.autoOrchestrate).toBe(true);
 		const confirm = vi.spyOn(harness.mode, "showHookConfirm").mockResolvedValueOnce(false);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate drop", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot drop", { ctx: harness.mode });
 		expect(confirm).toHaveBeenCalled();
 		expect(harness.session.getGoalModeState()?.autoOrchestrate).toBe(true);
 		confirm.mockResolvedValueOnce(true);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate drop", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot drop", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toBeUndefined();
 		expect(harness.mode.goalModePaused).toBe(false);
 	});
 
 	it("keeps existing goal guards and failed creation from enabling auto orchestration", async () => {
 		harness.mode.planModePaused = true;
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Blocked objective", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Blocked objective", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toBeUndefined();
 		harness.mode.planModePaused = false;
 		vi.spyOn(harness.session.goalRuntime, "createGoal").mockRejectedValueOnce(new Error("goal setup failed"));
 		const showError = vi.spyOn(harness.mode, "showError");
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Failed objective", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Failed objective", { ctx: harness.mode });
 		expect(showError).toHaveBeenCalledWith("goal setup failed");
 		expect(harness.session.getGoalModeState()).toBeUndefined();
 		expect(harness.mode.goalModeEnabled).toBe(false);
 	});
 
 	it("offers the same goal subcommand completions and live status for the new command", async () => {
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Ship the release", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Ship the release", { ctx: harness.mode });
 		const commands = buildTuiBuiltinSlashCommands({ ctx: harness.mode });
 		const goal = commands.find(command => command.name === "goal");
-		const auto = commands.find(command => command.name === "goal-auto-orchestrate");
+		const auto = commands.find(command => command.name === "goal-autopilot");
+		expect(commands.some(command => command.name === "goal-auto-orchestrate")).toBe(false);
 		if (!goal || !auto) throw new Error("expected both goal commands");
 		expect(await auto.getArgumentCompletions?.("b")).toEqual(await goal.getArgumentCompletions?.("b"));
 		expect(auto.getInlineHint?.("set ")).toEqual(goal.getInlineHint?.("set "));
 		expect(auto.getAutocompleteDescription?.()).toContain("Ship the release");
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate pause", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot pause", { ctx: harness.mode });
 		expect(auto.getAutocompleteDescription?.()).toContain("paused");
 	});
 
 	it("keeps a reopened automatic goal paused until the user explicitly resumes it", async () => {
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Reopened objective", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Reopened objective", { ctx: harness.mode });
 		await harness.session.sessionManager.ensureOnDisk();
 		await harness.session.sessionManager.flush();
 		const file = harness.session.sessionFile;
@@ -535,7 +535,7 @@ describe("InteractiveMode goal mode integration", () => {
 	it("carries initial goal provenance with the original objective through idle and streaming submissions", async () => {
 		const waiter = await armInputWaiter(harness.mode);
 		const objective = "orchestrate Ship the release";
-		await executeBuiltinSlashCommand(`/goal-auto-orchestrate ${objective}`, { ctx: harness.mode });
+		await executeBuiltinSlashCommand(`/goal-autopilot ${objective}`, { ctx: harness.mode });
 		await waiter.inputPromise;
 		expect(waiter.getResolvedInput()?.text).toBe(objective);
 		expect(waiter.getResolvedInput()?.goalAutoOrchestrateInitialId).toBe(harness.session.getGoalModeState()?.goal.id);
@@ -544,7 +544,7 @@ describe("InteractiveMode goal mode integration", () => {
 		vi.spyOn(harness.session, "sendGoalModeContext").mockResolvedValue();
 		const prompt = vi.spyOn(harness.session, "prompt").mockResolvedValue(true);
 		const images: ImageContent[] = [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }];
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate set orchestrate Replace the objective", {
+		await executeBuiltinSlashCommand("/goal-autopilot set orchestrate Replace the objective", {
 			ctx: harness.mode,
 			input: { images, imageLinks: ["file:///shot.png"] },
 		});
@@ -563,7 +563,7 @@ describe("InteractiveMode goal mode integration", () => {
 	it("restores only each saved session's strict auto marker when reopening and switching", async () => {
 		vi.spyOn(harness.mode.statusLine, "watchBranch").mockImplementation(() => {});
 		await harness.mode.init({ suppressWelcomeIntro: true });
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Saved automatic objective", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Saved automatic objective", { ctx: harness.mode });
 		await harness.session.sessionManager.ensureOnDisk();
 		await harness.session.sessionManager.flush();
 		const sourceFile = harness.session.sessionFile;
@@ -586,7 +586,7 @@ describe("InteractiveMode goal mode integration", () => {
 			expect(harness.session.getGoalModeState()?.autoOrchestrate).not.toBe(true);
 			expect(harness.session.getGoalModeState()?.goal.objective).toBe("Legacy ordinary objective");
 			expect(harness.mode.goalModePaused).toBe(true);
-			await executeBuiltinSlashCommand("/goal-auto-orchestrate resume", { ctx: harness.mode });
+			await executeBuiltinSlashCommand("/goal-autopilot resume", { ctx: harness.mode });
 			expect(harness.session.getGoalModeState()?.autoOrchestrate).not.toBe(true);
 			expect(await harness.session.switchSession(sourceFile)).toBe(true);
 			expect(harness.session.getGoalModeState()?.autoOrchestrate).toBe(true);
@@ -603,7 +603,7 @@ describe("InteractiveMode goal mode integration", () => {
 			content: "Ordinary branch draft",
 			timestamp: Date.now(),
 		});
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate set Automatic branch objective", {
+		await executeBuiltinSlashCommand("/goal-autopilot set Automatic branch objective", {
 			ctx: harness.mode,
 		});
 		const autoEntry = harness.session.sessionManager.appendMessage({
@@ -630,7 +630,7 @@ describe("InteractiveMode goal mode integration", () => {
 		const emptyNode = harness.session.sessionManager.appendModeChange("none");
 		await executeBuiltinSlashCommand("/goal Ordinary tree objective", { ctx: harness.mode });
 		const ordinaryNode = harness.session.sessionManager.getLeafId();
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate set Automatic tree objective", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot set Automatic tree objective", { ctx: harness.mode });
 		const autoNode = harness.session.sessionManager.getLeafId();
 		if (!ordinaryNode || !autoNode) throw new Error("expected saved goal nodes");
 		expect((await harness.session.navigateTree(ordinaryNode)).cancelled).toBe(false);
@@ -646,7 +646,7 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("uses ordinary objective-bearing continuations without changing cancellation or paused-goal scheduling", async () => {
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate Ship the release", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot Ship the release", { ctx: harness.mode });
 		vi.useFakeTimers();
 		const waiter = await armInputWaiter(harness.mode);
 		vi.advanceTimersByTime(800);
@@ -654,7 +654,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(waiter.getResolvedInput()?.customType).toBe("goal-continuation");
 		expect(waiter.getResolvedInput()?.text).toContain("Ship the release");
 		expect(harness.mode.cancelPendingSubmission()).toBe(true);
-		await executeBuiltinSlashCommand("/goal-auto-orchestrate pause", { ctx: harness.mode });
+		await executeBuiltinSlashCommand("/goal-autopilot pause", { ctx: harness.mode });
 		const pausedWaiter = await armInputWaiter(harness.mode);
 		vi.advanceTimersByTime(800);
 		await waitForMicrotasks();
@@ -739,7 +739,7 @@ describe("InteractiveMode goal mode integration", () => {
 				mode.handleGoalModeCommand("set [Image #1, 10x10] replace this", input),
 		},
 		{
-			name: "/goal-auto-orchestrate",
+			name: "/goal-autopilot",
 			text: "[Image #1, 10x10] orchestrate this",
 			submit: (mode, input) =>
 				mode.handleGoalModeCommand("[Image #1, 10x10] orchestrate this", input, { autoOrchestrate: true }),

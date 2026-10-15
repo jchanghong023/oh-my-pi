@@ -2457,7 +2457,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 							return result;
 						}
 						return goalController.handleSlash(args, runtime, {
-							autoOrchestrate: mode === "goal-auto-orchestrate",
+							autoOrchestrate: mode === "goal-autopilot",
 						});
 					},
 					notifyTitleChanged: async () => {

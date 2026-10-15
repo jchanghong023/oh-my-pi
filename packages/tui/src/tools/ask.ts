@@ -37,7 +37,7 @@ export interface QuestionResult {
 	customInput?: string;
 	/** Optional note attached to the selected answer in the rich ask dialog. */
 	note?: string;
-	/** True when the answer was auto-selected because the dialog timed out. */
+	/** True when the answer was generated automatically because the dialog timed out. */
 	timedOut?: boolean;
 }
 
@@ -50,7 +50,7 @@ export interface AskToolDetails {
 	customInput?: string;
 	/** Optional note attached to the selected answer in the rich ask dialog. */
 	note?: string;
-	/** True when the answer was auto-selected because the dialog timed out. */
+	/** True when the answer was generated automatically because the dialog timed out. */
 	timedOut?: boolean;
 	/** Multi-part question mode */
 	results?: QuestionResult[];
@@ -59,6 +59,8 @@ export interface AskToolDetails {
 	/** Questions surfaced when chatRedirect is true. */
 	questions?: string[];
 }
+
+const TIMEOUT_NOTICE = "automatic response after timeout — not a user choice";
 
 // =============================================================================
 // TUI Renderer
@@ -324,6 +326,7 @@ function describeAnswers(
 	customInput: string | undefined,
 	note: string | undefined,
 	selectedIndices: ReadonlySet<number> | undefined,
+	timedOut?: boolean,
 ): NativeChild[] {
 	const selected = new Set(selectedOptions ?? []);
 	if (selected.size === 0 && customInput === undefined && note === undefined) {
@@ -342,6 +345,7 @@ function describeAnswers(
 		note !== undefined
 			? text([span(plainText(note), "muted")], { wrap: "word", role: "omp.tool.context" })
 			: undefined,
+		timedOut ? text([span(TIMEOUT_NOTICE, "muted")], { wrap: "word", role: "omp.tool.notice" }) : undefined,
 	]);
 }
 
@@ -397,6 +401,7 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 						r.customInput,
 						r.note,
 						selectedIndicesFor(rawResults[index]?.options, rawResults[index]?.selectedOptions),
+						r.timedOut,
 					),
 				),
 			),
@@ -422,13 +427,8 @@ function describeAskResult(result: ToolRenderResult<AskToolDetails>, args: AskRe
 				details.customInput,
 				details.note,
 				selectedIndicesFor(rawDetails.options, rawDetails.selectedOptions),
+				details.timedOut,
 			),
-			details.timedOut
-				? text([span("auto-selected after timeout — not a user choice", "muted")], {
-						wrap: "word",
-						role: "omp.tool.notice",
-					})
-				: undefined,
 		]),
 	};
 }
@@ -582,6 +582,7 @@ export const askToolRenderer = {
 							selectedIndicesFor(raw?.options, raw?.selectedOptions),
 						),
 					];
+					if (r.timedOut) lines.push(uiTheme.fg("dim", TIMEOUT_NOTICE));
 					return { label: uiTheme.fg("dim", `[${r.id}]`), content: lines };
 				});
 				return {
@@ -635,8 +636,8 @@ export const askToolRenderer = {
 				),
 			];
 			if (dTimedOut) {
-				// Distinguish auto-selection from a real user choice in the transcript.
-				bodyLines.push(uiTheme.fg("dim", "auto-selected after timeout — not a user choice"));
+				// Distinguish automatic replies from real user answers in the transcript.
+				bodyLines.push(uiTheme.fg("dim", TIMEOUT_NOTICE));
 			}
 			return {
 				header,

@@ -1020,7 +1020,7 @@ export class InputController {
 				submittedMode === "plan" ||
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
-				submittedMode === "goal-auto-orchestrate" ||
+				submittedMode === "goal-autopilot" ||
 				submittedMode === "guided-goal";
 			if (
 				draftDetached &&
@@ -1067,7 +1067,7 @@ export class InputController {
 				try {
 					slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
 				} catch (error) {
-					// Detached mode commands (plan/vibe/goal/goal-auto-orchestrate/
+					// Detached mode commands (plan/vibe/goal/goal-autopilot/
 					// guided-goal) rethrow so the caller that detached their images
 					// restores the submission and reports the error, mirroring
 					// `handleFollowUp`'s Ctrl+Enter path.

@@ -8,6 +8,12 @@
 - Store all Wiki database operations in `OMP_WIKI_DIR/docs.db` when set, sharing the selected database across users and profiles while retaining the existing default when unset.
 - Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
 
+### Changed
+
+- Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
+- Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
+- Unanswered ask dialogs now return an explicitly marked reply authorizing continued work on the original objective after the existing timeout, instead of selecting a default option.
+
 ### Fixed
 
 - Delivered explicitly queued remote-Agent tasks that arrive as a turn settles, without automatically replaying failed backend work.

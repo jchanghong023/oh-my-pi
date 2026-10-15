@@ -62,7 +62,7 @@ omp
 | `/wiki`                        | 查询已导入的公司资料                                 |
 | `/repo`                        | 建立、更新代码定位索引                               |
 | `/team 需求`                   | 多模型独立调查、交叉审查并汇总方案，只读             |
-| `/goal-auto-orchestrate 目标`   | 持久目标、自动编排与无人值守要求，见第 4.7 节         |
+| `/goal-autopilot 目标`          | 持久目标、自动编排与无人值守要求，见第 4.7 节         |
 | `/advisor on` / `/advisor off` | 开启 / 关闭第二模型复审，默认逐轮，频率可配置        |
 | `/skill:技能名 任务`           | 调用本地技能，从补全中选择技能名                     |
 | `/todo` / `/hub`               | 查看待办进度 / 子代理活动                            |
@@ -314,7 +314,7 @@ OMP 终端与 `rpc-ui` 后端支持同一命令。RPC 接入方从命令目录�
 
 完整行为与优先级见[需求：JCH 命令](requirements/fork.md#jch-命令)，RPC 接入见[ZCode 接入需求](requirements/rpc-ui-protocol.md#必须接入的命令)。
 
-### 4.7 `/goal-auto-orchestrate`：持续自动编排目标
+### 4.7 `/goal-autopilot`：无人值守目标
 
 适合需要持续调查、规划、实施和验证的长任务，例如夜间处理项目中的功能问题。按需求契约，它复用上游 `/goal` 的正常目标管理与历史消息链，附加完整目标、共享 Orchestrate 编排规则和既有无人值守要求，不再采用每次模型请求临时注入完整自定义提示词的策略；普通 Goal 的提示、状态管理与续跑规则继续沿用上游。
 
@@ -327,28 +327,28 @@ OMP 终端与 `rpc-ui` 后端支持同一命令。RPC 接入方从命令目录�
 先退出计划模式，再在 **OMP 输入框**输入：
 
 ```text
-/goal-auto-orchestrate 修复当前项目中有证据的功能问题，保留无关已有改动；按项目规则完成必要验证，汇总结果与受阻项。
+/goal-autopilot 修复当前项目中有证据的功能问题，保留无关已有改动；按项目规则完成必要验证，汇总结果与受阻项。
 ```
 
 这些附加提示词要求模型自主调查、拆分与委派、实施和验证，避免反复要求用户选择普通方案；确实无法自主解决或需要额外授权的工作应标为受阻，继续其他可执行工作，最后如实汇总。
 
 | 命令 | 用途 |
 | --- | --- |
-| `/goal-auto-orchestrate set 新目标` | 创建或替换目标，启用本模式 |
-| `/goal-auto-orchestrate show` | 查看当前目标、状态与预算 |
-| `/goal-auto-orchestrate pause` | 暂停目标，停止新增提示词构造与目标工作，不删除或移动已进入历史的提示词 |
-| `/goal-auto-orchestrate resume` | 恢复目标原有模式 |
-| `/goal-auto-orchestrate budget N` | 设置 token 预算；把 `N` 换成具体数值 |
-| `/goal-auto-orchestrate budget off` | 关闭目标的 token 预算限制，不解除其他权限或停止条件 |
-| `/goal-auto-orchestrate drop` | 删除目标，按原 Goal 流程确认；保留已经修改的代码 |
+| `/goal-autopilot set 新目标` | 创建或替换目标，启用本模式 |
+| `/goal-autopilot show` | 查看当前目标、状态与预算 |
+| `/goal-autopilot pause` | 暂停目标，停止新增提示词构造与目标工作，不删除或移动已进入历史的提示词 |
+| `/goal-autopilot resume` | 恢复目标原有模式 |
+| `/goal-autopilot budget N` | 设置 token 预算；把 `N` 换成具体数值 |
+| `/goal-autopilot budget off` | 关闭目标的 token 预算限制，不解除其他权限或停止条件 |
+| `/goal-autopilot drop` | 删除目标，按原 Goal 流程确认；保留已经修改的代码 |
 
-**与普通 `/goal` 的区别：**只有用新命令创建或替换目标才启用自动编排标记；对普通目标执行 `/goal-auto-orchestrate resume` 不会将它转换为本模式。模式标记随目标保存，重新打开会话后的暂停与继续行为沿用原 Goal 规则。
+**与普通 `/goal` 的区别：**只有用新命令创建或替换目标才启用自动编排标记；对普通目标执行 `/goal-autopilot resume` 不会将它转换为本模式。模式标记随目标保存，重新打开会话后的暂停与继续行为沿用原 Goal 规则。
 
 **不是无限续跑或自动授权：**是否自动续跑仍取决于原有 Goal 设置和触发条件；预算、停止、取消、权限审批及用户后续指令继续有效。无人值守要求不保证模型绝不提问，也不保证所有任务必然完成；需要额外授权时不能代替用户批准。
 
 它不同于第 4.6 节的独立批处理命令，**不会自动附带“禁止测试、禁止全仓检查”的限制**；检查和测试按本次目标及项目规则执行。用 `/todo`、`/hub` 查看任务与子代理进度，是否完成以实际结果为准。
 
-OMP 终端、`rpc` 与 `rpc-ui` 后端均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-auto-orchestrate.md)，实现与验收边界见[需求目录](requirements/README.md)。
+OMP 终端、`rpc` 与 `rpc-ui` 后端均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
 
 ## 5. 直接复制的例子
 

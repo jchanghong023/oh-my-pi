@@ -160,7 +160,7 @@ describe("AskTool cancellation", () => {
 		).rejects.toBeInstanceOf(ToolAbortError);
 		expect(abort).toHaveBeenCalledTimes(1);
 	});
-	it("auto-selects the recommended option on ask timeout", async () => {
+	it("does not choose the recommended answer when the selector times out", async () => {
 		const tool = new AskTool(
 			createSession({
 				settings: Settings.isolated({ "ask.timeout": 0.001 }),
@@ -200,56 +200,10 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.details?.selectedOptions).toEqual(["no"]);
+		expect(result.details?.selectedOptions).toEqual([]);
 		expect(result.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
-		expect(select).toHaveBeenCalledTimes(1);
-		expect(select.mock.calls[0]?.[2]?.initialIndex).toBe(1);
-		expect(select.mock.calls[0]?.[2]?.timeout).toBeGreaterThan(0);
 	}, 30_000);
-
-	it.each([
-		["中文", "是否授权提交并推送？", "停止，不推送", "授权提交推送"],
-		["English", "Commit and push?", "Stop, do not push", "Yes, commit and push"],
-	])(
-		"auto-selects the affirmative %s answer after timeout",
-		async (_language, question, negative, affirmative) => {
-			const tool = new AskTool(
-				createSession({
-					settings: Settings.isolated({ "ask.timeout": 0.001 }),
-				}),
-			);
-			const abort = vi.fn();
-			const context = createContext({
-				select: async (_prompt, _options, dialogOptions) => {
-					dialogOptions?.onTimeout?.();
-					return undefined;
-				},
-				abort,
-			});
-
-			const result = await tool.execute(
-				"call-timeout-none",
-				{
-					questions: [
-						{
-							id: "confirm",
-							question,
-							options: [{ label: negative }, { label: affirmative }],
-						},
-					],
-				},
-				undefined,
-				undefined,
-				context,
-			);
-
-			expect(result.details?.selectedOptions).toEqual([affirmative]);
-			expect(result.details?.timedOut).toBe(true);
-			expect(abort).not.toHaveBeenCalled();
-		},
-		30_000,
-	);
 
 	it("routes custom input through editor with promptStyle after choosing Other", async () => {
 		const tool = new AskTool(
@@ -341,12 +295,41 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.details?.selectedOptions).toEqual(["yes"]);
-		expect(result.details?.customInput).toBeUndefined();
+		expect(result.details?.selectedOptions).toEqual([]);
 		expect(result.details?.timedOut).toBe(true);
 		expect(editor).not.toHaveBeenCalled();
 		expect(abort).not.toHaveBeenCalled();
 	}, 30_000);
+
+	it("preserves manually checked answers when a multi-select later times out", async () => {
+		const tool = new AskTool(createSession({ settings: Settings.isolated({ "ask.timeout": 30 }) }));
+		let calls = 0;
+		const context = createContext({
+			select: async (_prompt, _options, dialogOptions) => {
+				if (++calls === 1) return "Continue";
+				dialogOptions?.onTimeout?.();
+				return "Stop";
+			},
+		});
+		const result = await tool.execute(
+			"partial-timeout",
+			{
+				questions: [
+					{
+						id: "next",
+						question: "What remains?",
+						options: [{ label: "Stop" }, { label: "Continue" }],
+						multi: true,
+					},
+				],
+			},
+			undefined,
+			undefined,
+			context,
+		);
+		expect(result.details?.selectedOptions).toEqual(["Continue"]);
+		expect(result.details?.timedOut).not.toBe(true);
+	});
 
 	it("aborts multi-question ask when any question is explicitly cancelled", async () => {
 		const tool = new AskTool(createSession());
@@ -1414,7 +1397,7 @@ describe("askToolRenderer malformed call args", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
-	it("auto-selects 提交 in the real ask dialog when recommended is null", async () => {
+	it("does not infer consent from affirmative labels when the real rich dialog times out", async () => {
 		const tool = new AskTool(createSession({ settings: Settings.isolated({ "ask.timeout": 0.001 }) }));
 		const result = await tool.execute(
 			"call-null-recommendation",
@@ -1452,8 +1435,51 @@ describe("AskTool rich ask dialog", () => {
 				},
 			}),
 		);
-		expect(result.details?.selectedOptions).toEqual(["提交"]);
+		expect(result.details?.selectedOptions).toEqual([]);
 		expect(result.details?.timedOut).toBe(true);
+	});
+
+	it("preserves answered questions and notes when another rich-dialog answer times out", async () => {
+		const tool = new AskTool(createSession());
+		const result = await tool.execute(
+			"mixed-timeout",
+			{
+				questions: [
+					{ id: "pending", question: "What next?", options: [{ label: "Stop" }, { label: "Continue" }] },
+					{ id: "answered", question: "Keep changes?", options: [{ label: "Keep" }, { label: "Discard" }] },
+				],
+			},
+			undefined,
+			undefined,
+			createContext({
+				askDialog: async () => ({
+					kind: "submit",
+					results: [
+						{
+							id: "pending",
+							question: "What next?",
+							options: ["Stop", "Continue"],
+							multi: false,
+							selectedOptions: ["Stop"],
+							timedOut: true,
+						},
+						{
+							id: "answered",
+							question: "Keep changes?",
+							options: ["Keep", "Discard"],
+							multi: false,
+							selectedOptions: ["Keep"],
+							note: "Preserve existing work",
+						},
+					],
+				}),
+			}),
+		);
+		expect(result.details?.results).toMatchObject([
+			{ id: "pending", selectedOptions: [], timedOut: true },
+			{ id: "answered", selectedOptions: ["Keep"], note: "Preserve existing work" },
+		]);
+		expect(result.details?.results?.[1]?.timedOut).not.toBe(true);
 	});
 
 	it("accepts new schema fields (header, preview, note) and maps them into AskToolDetails", async () => {

@@ -1,29 +1,30 @@
-# `/goal-auto-orchestrate` 需求
+# `/goal-autopilot` 需求
 
 本文是本模式的唯一权威需求，定义当前有效目标、行为和验收条件，不表示实现或验收已完成。实现与验证状态统一见[需求目录](README.md)；RPC 接入范围见 [ZCode 接入需求](rpc-ui-protocol.md)。
 
 ## 1. 目标与命令
 
-新增 `/goal-auto-orchestrate`，用于创建或替换一个持续采用 Orchestrate 策略与无人值守指令的 Goal，支持夜间任务。功能及生命周期与原 `/goal` 一致；完整目标、展开后的编排规则和固定全自动指令首次进入正常聊天／会话历史，真正成功提交压缩后再从保存的完整目标重新构造并持久化。撤掉自定义的每次模型请求临时注入机制，不依赖压缩摘要保留目标或规则，也不以重复提醒替代上游 Goal 的正常历史消息链。普通 OMP 模型继续使用该完整历史；JchTools 远端请求的来源投影边界按第 6 节及 [fork 远端 Agent 契约](fork.md#jchtools-零配置发现与远端-agent)执行，本地持久通知不等于允许传给 ACP Agent。
+新增 `/goal-autopilot`，用于创建或替换一个持续采用 Orchestrate 策略与无人值守指令的 Goal，支持夜间任务。功能及生命周期与原 `/goal` 一致；完整目标、展开后的编排规则和固定全自动指令首次进入正常聊天／会话历史，真正成功提交压缩后再从保存的完整目标重新构造并持久化。撤掉自定义的每次模型请求临时注入机制，不依赖压缩摘要保留目标或规则，也不以重复提醒替代上游 Goal 的正常历史消息链。普通 OMP 模型继续使用该完整历史；JchTools 远端请求的来源投影边界按第 6 节及 [fork 远端 Agent 契约](fork.md#jchtools-零配置发现与远端-agent)执行，本地持久通知不等于允许传给 ACP Agent。
 
 ```text
-/goal-auto-orchestrate <目标正文>
-/goal-auto-orchestrate set <目标正文>
-/goal-auto-orchestrate show
-/goal-auto-orchestrate pause
-/goal-auto-orchestrate resume
-/goal-auto-orchestrate drop
-/goal-auto-orchestrate budget <N|off>
+/goal-autopilot <目标正文>
+/goal-autopilot set <目标正文>
+/goal-autopilot show
+/goal-autopilot pause
+/goal-autopilot resume
+/goal-autopilot drop
+/goal-autopilot budget <N|off>
 ```
 
 示例：
 
 ```text
-/goal-auto-orchestrate 修复当前项目的 RPC 问题，补充必要测试，按项目规则验证全部改动。
+/goal-autopilot 修复当前项目的 RPC 问题，补充必要测试，按项目规则验证全部改动。
 ```
 
 - 完全复用 `/goal` 的参数解析、子命令、空参数行为、错误处理、目标管理及执行流程。
 - TUI、`--mode rpc`、`--mode rpc-ui` 均支持；注册、命令目录和补全沿用现有机制。
+- 命令统一使用 `/goal-autopilot`，不保留改名前的命令别名；本次命名调整不改变自动回答、授权、续跑、持久化状态字段或历史通知标识。
 - 普通 `/goal` 不默认开启本模式。
 - 新命令不强制开启自动续跑；续跑设置及触发条件与 `/goal` 相同。
 
@@ -41,7 +42,7 @@
 | 操作失败或用户取消宿主对话 | 不产生额外模式变更 |
 | 恢复缺少标记的旧会话 | 按普通 Goal 处理 |
 
-因此，`/goal-auto-orchestrate resume` **不会把普通目标转换为本模式**；它只恢复目标原有模式。
+因此，`/goal-autopilot resume` **不会把普通目标转换为本模式**；它只恢复目标原有模式。
 
 暂停时保留标记，但停止新建本模式通知及受暂停约束的工作；恢复后按原 Goal 生命周期继续，不因 `resume` 重建通知。完成、删除或进入退出流程后停止新建通知，不追溯删除或改写已进入历史的通知。会话恢复是否暂停目标、是否继续执行，完全沿用原有 Goal 生命周期，不因标记自动启动。
 

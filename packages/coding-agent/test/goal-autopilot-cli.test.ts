@@ -867,7 +867,7 @@ async function local(client: Client, message: string): Promise<void> {
 	expect(client.seen.filter(frame => frame.type === "agent_start")).toHaveLength(starts);
 }
 
-describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
+describe("goal-autopilot public CLI Provider acceptance", () => {
 	for (const mode of ["rpc", "rpc-ui"] as const) {
 		test(`${mode} catalogs/completes the command and reuses management/errors without forced continuation`, async () => {
 			await withFixture(
@@ -877,29 +877,32 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					if (!isRecord(catalog.data) || !Array.isArray(catalog.data.commands))
 						throw new Error("Missing command catalog");
 					const entry = catalog.data.commands.find(
-						command => isRecord(command) && command.name === "goal-auto-orchestrate",
+						command => isRecord(command) && command.name === "goal-autopilot",
 					);
-					expect(entry).toMatchObject({ name: "goal-auto-orchestrate" });
+					expect(entry).toMatchObject({ name: "goal-autopilot" });
+					expect(
+						catalog.data.commands.some(command => isRecord(command) && command.name === "goal-auto-orchestrate"),
+					).toBe(false);
 					if (!isRecord(entry) || !Array.isArray(entry.subcommands)) throw new Error("Missing goal subcommands");
 					expect(entry.subcommands.map(sub => (isRecord(sub) ? sub.name : undefined))).toEqual(
 						expect.arrayContaining(["set", "show", "pause", "resume", "drop", "budget"]),
 					);
-					for (const text of ["/goal-auto-orchestrate", "/goal-auto-orchestrate pa"]) {
+					for (const text of ["/goal-autopilot", "/goal-autopilot pa"]) {
 						const completion = await client.request({ type: "complete_command", text, cursor: text.length });
 						expect(completion.success).toBe(true);
 						if (!isRecord(completion.data) || !Array.isArray(completion.data.items))
 							throw new Error("Missing completion");
 						expect(completion.data.items).toContainEqual(
-							expect.objectContaining({ label: text.endsWith(" pa") ? "pause" : "goal-auto-orchestrate" }),
+							expect.objectContaining({ label: text.endsWith(" pa") ? "pause" : "goal-autopilot" }),
 						);
 					}
-					await local(client, "/goal-auto-orchestrate show");
+					await local(client, "/goal-autopilot show");
 					expect(fixture.mainSince(0)).toHaveLength(0);
 					fixture.requests.forEach(body => assertStopped(body));
 					expect(
-						await client.request({ type: "prompt", message: "/goal-auto-orchestrate budget invalid" }),
+						await client.request({ type: "prompt", message: "/goal-autopilot budget invalid" }),
 					).toMatchObject({ success: false });
-					await client.prompt(`/goal-auto-orchestrate ${objective}`);
+					await client.prompt(`/goal-autopilot ${objective}`);
 					expect(fixture.mainSince(0)).toHaveLength(1);
 					assertActive(fixture.mainSince(0)[0]!);
 					expect(goal(await client.state())).toMatchObject({
@@ -908,17 +911,17 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					});
 					for (const command of [
 						"/goal budget 100000",
-						"/goal-auto-orchestrate budget off",
+						"/goal-autopilot budget off",
 						"/goal show",
-						"/goal-auto-orchestrate show",
+						"/goal-autopilot show",
 					]) {
 						await local(client, command);
 						expect(goal(await client.state())?.autoOrchestrate).toBe(true);
 					}
 					const before = await client.state();
-					expect(
-						await client.request({ type: "prompt", message: "/goal-auto-orchestrate budget 0" }),
-					).toMatchObject({ success: false });
+					expect(await client.request({ type: "prompt", message: "/goal-autopilot budget 0" })).toMatchObject({
+						success: false,
+					});
 					expect(goal(await client.state())).toEqual(goal(before));
 					await local(client, "/goal pause");
 					expect(goal(await client.state())).toMatchObject({
@@ -929,7 +932,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					let start = fixture.requests.length;
 					await client.prompt("Later user says: inspect only; do not edit anything.");
 					fixture.mainSince(start).forEach(body => assertStopped(body, fixture.mainSince(0)[0]!));
-					await local(client, "/goal-auto-orchestrate resume");
+					await local(client, "/goal-autopilot resume");
 					start = fixture.requests.length;
 					await client.prompt("Continue with read-only scope from my last instruction.");
 					fixture.mainSince(start).forEach(body => assertActive(body));
@@ -941,10 +944,10 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					await client.prompt("/goal set Ordinary replacement");
 					expect(goal(await client.state())?.autoOrchestrate).not.toBe(true);
 					assertStopped(fixture.mainSince(0).at(-1)!, fixture.mainSince(0)[0]!);
-					await local(client, "/goal-auto-orchestrate pause");
-					await local(client, "/goal-auto-orchestrate resume");
+					await local(client, "/goal-autopilot pause");
+					await local(client, "/goal-autopilot resume");
 					expect(goal(await client.state())?.autoOrchestrate).not.toBe(true);
-					await client.prompt(`/goal-auto-orchestrate set ${objective}`);
+					await client.prompt(`/goal-autopilot set ${objective}`);
 					expect(goal(await client.state())?.autoOrchestrate).toBe(true);
 					assertActive(fixture.mainSince(0).at(-1)!, objective, 2);
 					await assertPersisted(client, 2);
@@ -958,7 +961,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 		await withFixture(
 			async fixture => {
 				const client = await fixture.start();
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				await client.prompt(`/goal-autopilot ${objective}`);
 				expect(fixture.mainSince(0)).toHaveLength(1);
 				const body = fixture.mainSince(0)[0]!;
 				expect(toolNames(body)).not.toContain("task");
@@ -999,7 +1002,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					},
 					{ text: "CAPABILITY_ROUNDTRIPS_COMPLETE" },
 				);
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				await client.prompt(`/goal-autopilot ${objective}`);
 				const first = fixture.mainSince(0);
 				expect(first).toHaveLength(3);
 				first.forEach(body => assertCodexActive(body));
@@ -1148,7 +1151,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				fixture.steps.push(...calls.map(args => ({ tool: { name: "read", args } })), {
 					text: "TEN_READ_ROUNDS_COMPLETE",
 				});
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				await client.prompt(`/goal-autopilot ${objective}`);
 				const bodies = fixture.mainSince(0);
 				expect(bodies).toHaveLength(11);
 				for (const body of bodies) {
@@ -1223,7 +1226,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 						})),
 						{ text: "TEN_XD_READ_ROUNDS_COMPLETE" },
 					);
-					await client.prompt(`/${auto ? "goal-auto-orchestrate" : "goal"} ${objective}`);
+					await client.prompt(`/${auto ? "goal-autopilot" : "goal"} ${objective}`);
 					expect(fixture.wsErrors).toEqual([]);
 					expect(fixture.httpFallbacks).toEqual([]);
 					expect(fixture.wsFrames).toHaveLength(11);
@@ -1300,7 +1303,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 						).toBe(true);
 						await local(client, "/goal pause");
 						expect(goal(await client.state())).toMatchObject({ enabled: false, goal: { status: "paused" } });
-						await local(client, "/goal-auto-orchestrate resume");
+						await local(client, "/goal-autopilot resume");
 						expect(goal(await client.state())).toMatchObject({ enabled: true, goal: { status: "active" } });
 						expect(persistedNotices(await history(client))).toEqual([]);
 					}
@@ -1330,7 +1333,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					{ text: "CONTINUATION_IDLE" },
 					{ text: "CONTINUATION_IDLE" },
 				);
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				await client.prompt(`/goal-autopilot ${objective}`);
 				await client.next(frame => frame.type === "session_settled");
 				const bodies = fixture.mainSince(0);
 				expect(bodies.length).toBeGreaterThanOrEqual(5);
@@ -1371,7 +1374,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				{ tool: { name: "read", args: { path: path.join(fixture.cwd, "evidence.txt") } }, tokens: 27_000 },
 				{ text: "GOAL_BUDGET_TOOL_LOOP_FINISHED", tokens: 27_050 },
 			);
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			const bodies = fixture.mainSince(0);
 			expect(bodies).toHaveLength(2);
 			bodies.forEach(body => {
@@ -1389,7 +1392,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 	test("two real compactions persist exactly one restored full notice before resumed requests with goal-free summaries", async () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			await assertPersisted(client, 1);
 			for (let round = 0; round < 2; round++) {
 				await client.prompt(`Produce ordinary progress ${round}: ${"progress record ".repeat(300)}`);
@@ -1435,7 +1438,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 	test("enabled tool changes preserve historical rules until public compact and genuine keyword input is never deleted", async () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
-			await client.prompt(`/goal-auto-orchestrate orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot orchestrate ${objective}`);
 			assertActive(fixture.mainSince(0)[0]!, `orchestrate ${objective}`);
 			let constructionCount = 1;
 			let previous = fixture.mainSince(0)[0]!;
@@ -1484,7 +1487,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 	test("host input/select/drop confirmations can be refused or cancelled; mode never supplies consent", async () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
-			client.send({ id: "blank", type: "prompt", message: "/goal-auto-orchestrate" });
+			client.send({ id: "blank", type: "prompt", message: "/goal-autopilot" });
 			const input = await client.next(frame => frame.type === "extension_ui_request" && frame.method === "input");
 			client.send({ type: "extension_ui_response", id: input.id, cancelled: true });
 			expect(await client.next(frame => frame.type === "response" && frame.id === "blank")).toMatchObject({
@@ -1493,14 +1496,14 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 			expect(goal(await client.state())).toBeNull();
 			expect(fixture.mainSince(0)).toHaveLength(0);
 			fixture.requests.forEach(body => assertStopped(body));
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			const saved = goal(await client.state());
-			client.send({ id: "menu", type: "prompt", message: "/goal-auto-orchestrate" });
+			client.send({ id: "menu", type: "prompt", message: "/goal-autopilot" });
 			const menu = await client.next(frame => frame.type === "extension_ui_request" && frame.method === "select");
 			client.send({ type: "extension_ui_response", id: menu.id, cancelled: true });
 			await client.next(frame => frame.type === "response" && frame.id === "menu");
 			expect(goal(await client.state())).toEqual(saved);
-			for (const command of ["/goal drop", "/goal-auto-orchestrate drop"]) {
+			for (const command of ["/goal drop", "/goal-autopilot drop"]) {
 				client.send({ id: "drop-refuse", type: "prompt", message: command });
 				const confirm = await client.next(
 					frame => frame.type === "extension_ui_request" && frame.method === "confirm",
@@ -1509,7 +1512,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				await client.next(frame => frame.type === "response" && frame.id === "drop-refuse");
 				expect(goal(await client.state())).toEqual(saved);
 			}
-			client.send({ id: "drop-cancel", type: "prompt", message: "/goal-auto-orchestrate drop" });
+			client.send({ id: "drop-cancel", type: "prompt", message: "/goal-autopilot drop" });
 			const pending = await client.next(
 				frame => frame.type === "extension_ui_request" && frame.method === "confirm",
 			);
@@ -1520,7 +1523,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 			);
 			client.send({ type: "extension_ui_response", id: pending.id, confirmed: true });
 			expect(goal(await client.state())?.autoOrchestrate).toBe(true);
-			client.send({ id: "drop-confirm", type: "prompt", message: "/goal-auto-orchestrate drop" });
+			client.send({ id: "drop-confirm", type: "prompt", message: "/goal-autopilot drop" });
 			const confirm = await client.next(
 				frame => frame.type === "extension_ui_request" && frame.method === "confirm",
 			);
@@ -1537,7 +1540,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 	test("persisted reopen, switch, fork and new session retain only their own marker; ordinary/legacy state remains ordinary", async () => {
 		await withFixture(async fixture => {
 			let client = await fixture.start("rpc");
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			await local(client, "/goal pause");
 			const saved = await client.state();
 			if (typeof saved.sessionFile !== "string") throw new Error("No persisted session file");
@@ -1591,7 +1594,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				success: true,
 			});
 			expect(goal(await client.state())?.autoOrchestrate).not.toBe(true);
-			await local(client, "/goal-auto-orchestrate resume");
+			await local(client, "/goal-autopilot resume");
 			start = fixture.requests.length;
 			await client.prompt("Ordinary saved goal resumed through new command");
 			fixture.mainSince(start).forEach(body => assertStopped(body));
@@ -1602,7 +1605,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
 			fixture.steps.push({ tool: { name: "goal", args: { op: "complete" } } }, { text: "COMPLETION_REPORT" });
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			const bodies = fixture.mainSince(0);
 			expect(bodies).toHaveLength(2);
 			assertActive(bodies[0]!);
@@ -1619,8 +1622,8 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 		await withFixture(
 			async fixture => {
 				const client = await fixture.start();
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
-				await local(client, "/goal-auto-orchestrate budget 100");
+				await client.prompt(`/goal-autopilot ${objective}`);
+				await local(client, "/goal-autopilot budget 100");
 				fixture.steps.push({ tokens: 200, text: "BUDGET_REACHED" }, { text: "BUDGET_WRAP_UP" });
 				const start = fixture.requests.length;
 				await client.prompt("Use the existing authorized budget only");
@@ -1653,7 +1656,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 			async fixture => {
 				const client = await fixture.start();
 				fixture.steps.push({ hold: true });
-				client.send({ id: "running", type: "prompt", message: `/goal-auto-orchestrate ${objective}` });
+				client.send({ id: "running", type: "prompt", message: `/goal-autopilot ${objective}` });
 				await fixture.waitForMain(1);
 				assertActive(fixture.mainSince(0)[0]!);
 				expect(await client.request({ type: "abort" })).toMatchObject({ success: true });
@@ -1684,7 +1687,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
 			const savedObjective = "/skill:goal-auto-fixture orchestrate a separately scoped user task";
-			await client.prompt(`/goal-auto-orchestrate ${savedObjective}`);
+			await client.prompt(`/goal-autopilot ${savedObjective}`);
 			assertActive(fixture.mainSince(0)[0]!, savedObjective);
 			expect(
 				messages(fixture.mainSince(0)[0]!).some(message =>
@@ -1721,7 +1724,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 				{ tool: { name: "read", args: { path: path.join(fixture.cwd, "evidence.txt") } } },
 				{ text: "AUTHORIZED_WORK_FINISHED_WITH_PERMISSION_BLOCKER" },
 			);
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			expect(await Bun.file(forbidden).exists()).toBe(false);
 			const bodies = fixture.mainSince(0);
 			expect(bodies).toHaveLength(3);
@@ -1752,7 +1755,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 	test("title-fork auxiliary request using the real public side-turn API excludes prepared main context expansion", async () => {
 		await withFixture(async fixture => {
 			const client = await fixture.start();
-			await client.prompt(`/goal-auto-orchestrate ${objective}`);
+			await client.prompt(`/goal-autopilot ${objective}`);
 			assertActive(fixture.mainSince(0)[0]!);
 			const start = fixture.requests.length;
 			// Automatic naming belongs to TUI only; this public extension command
@@ -1800,7 +1803,7 @@ describe("goal-auto-orchestrate public CLI Provider acceptance", () => {
 					},
 					{ text: "MAIN_AFTER_SUBAGENT" },
 				);
-				await client.prompt(`/goal-auto-orchestrate ${objective}`);
+				await client.prompt(`/goal-autopilot ${objective}`);
 				const auxiliary = fixture.requests.filter(body => body.model === "aux");
 				expect(auxiliary.length).toBeGreaterThanOrEqual(2);
 				const inheritedHistory = await history(client);

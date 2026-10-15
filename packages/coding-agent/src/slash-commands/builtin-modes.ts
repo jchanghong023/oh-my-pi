@@ -404,10 +404,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	GOAL_MODE_SLASH_COMMAND,
 	{
 		...GOAL_MODE_SLASH_COMMAND,
-		name: "goal-auto-orchestrate",
+		name: "goal-autopilot",
 		description:
 			"Manage a persistent goal with unattended orchestration saved in history and restored after compaction",
-		handleRpc: (command, runtime) => runtime.runModeCommand("goal-auto-orchestrate", command.args),
+		handleRpc: (command, runtime) => runtime.runModeCommand("goal-autopilot", command.args),
 		handleTui: async (command, runtime) => {
 			await runWithDetachedModeDraft(command, runtime, () =>
 				runtime.ctx.handleGoalModeCommand(command.args || undefined, runtime.input, { autoOrchestrate: true }),
