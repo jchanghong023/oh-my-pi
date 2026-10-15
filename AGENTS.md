@@ -16,7 +16,7 @@
 * `crates/`：Rust native 与系统能力（`pi-natives`、`pi-shell`、`pi-vcs`、`pi-edit`、`pi-builtins`、`pi-ast`、`pi-walker` 等）。
 * `scripts/`：仓库脚本与 fork 工具（`fastcheck` / `fulltest` / `slowtest` 验证入口、`install.sh` / `install.ps1`、`ci-test-ts.ts`、`run-rs-task.ts`）。
 * `docs/`：上游英文文档（fork 不维护英文站点，也不为其提供构建或 `/en/` 子路径合并）；`docs-zh-CN/`：仅含 fork 自有内容（需求目录、公司内网新手指南与 `README.upstream.md` 对照快照），不维护翻译，不维护文档站点（见「中文文档」一节）。
-* `upstream-release-sync`：由 JCH 仓库 `skills/upstream-release-sync/` 统一维护和分发的通用上游同步 Skill；仓库专属参数见「上游与分支」，本仓库不再维护技能副本。
+* `jch-upstream-sync`：由 JCH 仓库 `skills/jch-upstream-sync/` 统一维护和分发的通用混合型上游同步 Skill；Agent 负责需求与冲突判断，部署脚本统一承载 Git 写操作。本仓库专属参数见「上游与分支」，不维护技能副本。
 
 子目录 `AGENTS.md` 注册表（全仓库仅此一个，上限 8 个）：
 
@@ -61,7 +61,7 @@
 本仓库是持续同步上游的 Fork（同步来源与分支约定见「上游与分支」），文档职责如下：
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
-* JCH 的 `upstream-release-sync` Skill：每日定时同步或手动同步上游的通用操作流程；名称保持不变以兼容既有按名称调用，本仓库的来源、镜像、基线与验证限制由本文件维护。
+* JCH 的 `jch-upstream-sync` Skill：每日定时同步或手动同步上游的通用流程及 Git 执行脚本；本仓库的来源、镜像、基线记录与验证限制由本文件维护。调用入口统一使用新名称，不保留旧名称别名或平行实现。
 * `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
 
 同步 MUST 保留 `AGENTS.md`、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。共享 Skill 不随本仓库同步改写。
@@ -92,10 +92,10 @@
 * fork 身份固定为 `jchanghong023/oh-my-pi`；同步使用 `origin`，其有效 fetch/push URL 必须均匹配该身份，不满足则停止。
 * `main`：上游代码与个人改动的集成分支。
 * `upstream`：最近成功合入的上游 `main` 的精确镜像，不含 fork commit；GitHub 上用于 PR/差异比较（base 为 `upstream`，compare 为 `main`）。
-* 基线权威为本地 `main:docs-zh-CN/requirements/fork.md`：`Upstream commit` 必须唯一、有效且属于本地 `main` 历史。成功集成时在同一提交更新完整 SHA、UTC 同步日期和当前功能差异，保留 `can1357/oh-my-pi@main`；版本取本次上游目标的 `packages/coding-agent/package.json`，保持现有机器可读格式，不追加历史、Integration 字段或第二份清单。
+* 已集成基线以本仓库自有的本地 `upstream` 和远端 `origin/upstream` 分支为准；本地 `main:docs-zh-CN/requirements/fork.md` 是本仓库已有的基线文档，`Upstream commit` 必须唯一、有效并与已集成状态一致，分支或文档矛盾时先查明，不盲目推进。成功集成时在同一提交更新完整 SHA、UTC 同步日期和当前功能差异，保留 `can1357/oh-my-pi@main`；版本取本次上游目标的 `packages/coding-agent/package.json`，保持现有机器可读格式，不追加历史、Integration 字段或第二份清单。
 * 本仓库明确授权同步流程只推送 fork 的 `refs/heads/upstream` 镜像，使用实际远端 SHA 的精确 lease；本地 `upstream` 跟踪 `origin/upstream`，三者须指向同一已成功集成的上游 SHA，不指向 fork 集成提交。镜像失败保留已验证的本地集成，下次仅修复镜像。
 * 同步请求包含完成该次集成所需的本地提交授权；提交采用 `sync(upstream): merge main@<目标前12位>`，以命令级设置禁用 hooks/签名，避免隐式重型任务，不改用户全局 Git 配置。
-* 同步 MUST 遵循 Skill 的门禁、集成、验证、镜像与中止流程；NEVER 接受上游历史改写。
+* 同步 MUST 遵循 Skill 的门禁、集成、验证、镜像与中止流程；Git 写操作统一通过已部署技能的受限脚本会话执行，不在 Agent 外部命令中绕过检查。NEVER 接受上游历史改写。
 * 同步只完成本地 `main` 集成与 `upstream` 镜像，不自动推送 `main`；本地完成不代表 GitHub 已可比较最新 fork 差异，后者取决于远端 `main` 是否另行更新。
 
 ## 测试与验证要求

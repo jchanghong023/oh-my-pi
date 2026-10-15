@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Restored Windows native quality checks while keeping shell termination immediate and preserving Unix TERM cleanup grace.
 - Kept Python code indexing compatible with the shared parse-cache update.
 - Reported wiki import lease filesystem and operating-system failures distinctly from competing imports, preserving the original error.
 - Isolated embedded native addons by content so successive fork builds cannot reuse an older addon's cache, including while older sessions remain open.

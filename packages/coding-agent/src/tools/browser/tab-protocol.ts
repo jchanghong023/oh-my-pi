@@ -47,6 +47,8 @@ export type WorkerInitPayload =
 			mode: "headless";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			/** Keep the page tied to an OMP-owned worker without pinning a visible window's layout viewport. */
 			emulateViewport?: boolean;
 			viewport?: { width: number; height: number; deviceScaleFactor?: number };
@@ -66,6 +68,8 @@ export type WorkerInitPayload =
 			mode: "attach";
 			browserWSEndpoint: string;
 			safeDir: string;
+			/** The tab's upload staging folder, which outlives a recycled worker; see `UploadStaging`. */
+			uploadDir: string;
 			targetId: string;
 			dialogs?: "accept" | "dismiss";
 			/** Hostname patterns allowed for every page request. */

@@ -607,7 +607,7 @@ describe("pickElectronTarget", () => {
 				await invoke({ action: "close", name }).catch(() => {});
 				child.kill();
 				await child.exited;
-				await fs.rm(root, { recursive: true, force: true });
+				await removeWithRetries(root);
 			}
 		},
 		30_000,

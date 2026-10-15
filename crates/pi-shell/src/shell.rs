@@ -1751,21 +1751,22 @@ async fn terminate_run(registry: &process::SpawnRegistry) {
 	}
 }
 
+#[cfg(unix)]
 async fn wait_for_term_grace(registry: &process::SpawnRegistry) {
-	// Windows TERM is already hard termination; there is no trap to wait for.
-	#[cfg(unix)]
-	{
-		let deadline = time::Instant::now() + TERM_GRACE;
-		while !registry.build_targets().is_empty() {
-			let now = time::Instant::now();
-			if now >= deadline {
-				break;
-			}
-			time::sleep_until((now + Duration::from_millis(25)).min(deadline)).await;
+	let deadline = time::Instant::now() + TERM_GRACE;
+	while !registry.build_targets().is_empty() {
+		let now = time::Instant::now();
+		if now >= deadline {
+			break;
 		}
+		time::sleep_until((now + Duration::from_millis(25)).min(deadline)).await;
 	}
-	#[cfg(not(unix))]
-	let _ = registry;
+}
+
+#[cfg(not(unix))]
+fn wait_for_term_grace(_registry: &process::SpawnRegistry) -> std::future::Ready<()> {
+	// Windows TERM is already hard termination; there is no trap to wait for.
+	std::future::ready(())
 }
 
 fn register_background_jobs(shell: &BrushShell, registry: &process::SpawnRegistry) {
