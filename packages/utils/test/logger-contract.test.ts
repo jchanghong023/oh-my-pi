@@ -390,7 +390,7 @@ describe("DailyRotateFile option and retention contract", () => {
 /** Isolated consumers exercise real filesystem and async boundaries, never source text. */
 async function runDiagnosticConsumer(
 	source: string,
-	options: { setup?: (root: string) => Promise<void>; exitCode?: number } = {},
+	options: { setup?: (root: string) => Promise<void>; configRoot?: (root: string) => string; exitCode?: number } = {},
 ): Promise<{ root: string; stdout: string; stderr: string; pid: number }> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-diagnostic-contract-"));
 	roots.push(root);
@@ -416,8 +416,11 @@ async function runDiagnosticConsumer(
 				HOME: path.join(root, "home"),
 				USERPROFILE: path.join(root, "home"),
 				LOCALAPPDATA: path.join(root, "local"),
+				XDG_DATA_HOME: path.join(root, "data"),
 				XDG_STATE_HOME: path.join(root, "state"),
-				OMP_CONFIG_ROOT: path.join(root, "primary"),
+				XDG_CACHE_HOME: path.join(root, "cache"),
+				PI_CONFIG_DIR: ".omp",
+				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
 				OMP_LOG_LEVEL: "",
@@ -714,6 +717,56 @@ describe("diagnostic consumer contracts", () => {
 		expect(
 			(await readLogEntries(path.join(result.root, "home", ".omp", "fallback-logs"))).map(entry => entry.message),
 		).toEqual(["log_directory_fallback", "already_standard_record"]);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
+	test.skipIf(process.platform !== "win32")(
+		"preserves critical records in an independent fallback when configured logs aliases Windows Logs",
+		async () => {
+			const result = await runDiagnosticConsumer(
+				`
+				logger.info("before_alias_failure", { index: 1 });
+				logger.error("critical_alias_record", { index: 2 });
+				logger.info("exit_alias_record", { index: 3 });
+			`,
+				{
+					configRoot: root => path.join(root, "local", "omp"),
+					setup: async root => {
+						const configRoot = path.join(root, "local", "omp");
+						await fs.mkdir(configRoot, { recursive: true });
+						await fs.writeFile(path.join(configRoot, "logs"), "not a directory");
+					},
+				},
+			);
+			expect(
+				(await readLogEntries(path.join(result.root, "home", ".omp", "fallback-logs"))).map(entry => entry.message),
+			).toEqual(["log_directory_fallback", "before_alias_failure", "critical_alias_record", "exit_alias_record"]);
+			expect(await fs.readFile(path.join(result.root, "local", "omp", "logs"), "utf8")).toBe("not a directory");
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toBe("");
+		},
+	);
+
+	test.skipIf(process.platform !== "linux")("keeps case-distinct sink fallback destinations independent", async () => {
+		const sinkUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger/rotating-file.ts")).href;
+		const result = await runDiagnosticConsumer(`
+			import { RotatingFileSink } from ${JSON.stringify(sinkUrl)};
+			const primary = path.join(root, "logs");
+			const fallback = path.join(root, "Logs");
+			fs.writeFileSync(primary, "not a directory");
+			const sink = new RotatingFileSink({
+				directory: primary, fallbackDirectory: fallback,
+				filenamePrefix: "omp", filenameSuffix: String(process.pid),
+				maxBytes: 1024, maxFiles: 5,
+			});
+			sink.write(JSON.stringify({ level: "error", message: "case_distinct_record" }), true);
+			sink.close();
+		`);
+		expect((await readLogEntries(path.join(result.root, "Logs"))).map(entry => entry.message)).toEqual([
+			"case_distinct_record",
+		]);
+		expect(await fs.readFile(path.join(result.root, "logs"), "utf8")).toBe("not a directory");
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
 	});

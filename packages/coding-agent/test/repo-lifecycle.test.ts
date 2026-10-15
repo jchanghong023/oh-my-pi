@@ -1,3 +1,4 @@
+import { $ } from "bun";
 import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -370,6 +371,57 @@ describe("repository lifecycle coverage across session and background execution 
 			lifecycle.dispose();
 			serviceB?.close();
 			serviceA.close();
+		}
+	});
+
+	it("rebinds filesystem hints when Git initialization changes the root without a cwd change", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-root-change-"));
+		temporary.push(temp);
+		const outer = path.join(temp, "outer");
+		const cwd = path.join(outer, "inner");
+		const agentDir = path.join(temp, "agent");
+		await fs.mkdir(cwd, { recursive: true });
+		const file = path.join(cwd, "a.py");
+		const before = "def before_git(): return 'OLDROOTBEACON'\n";
+		await fs.writeFile(file, before);
+		const oldScope = new RepoService({ cwd, agentDir });
+		const lifecycle = new RepoLifecycle({ agentDir, getCwd: () => cwd });
+		let currentScope: RepoService | undefined;
+		try {
+			await oldScope.build();
+			lifecycle.start();
+			await oldScope.reconcile();
+			const generation = (await oldScope.status()).generation;
+
+			await $`git init -q`.cwd(outer).quiet();
+			await fs.writeFile(file, before);
+			invalidateFsScanAfterWrite(file);
+			expect(
+				await fs.access(repoIndexPath(agentDir, await fs.realpath(outer))).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+
+			currentScope = new RepoService({ cwd, agentDir });
+			await currentScope.build();
+			await fs.writeFile(file, "def after_git(): return 'NEWROOTBEACON'\n");
+			invalidateFsScanAfterWrite(file);
+			expect((await currentScope.status()).pendingPaths).toEqual(["inner/a.py"]);
+			expect((await currentScope.search("NEWROOTBEACON")).hits.map(hit => hit.path)).toEqual(["inner/a.py"]);
+			expect((await currentScope.search("OLDROOTBEACON")).hits).toEqual([]);
+			expect((await currentScope.symbol("after_git")).hits.map(hit => hit.path)).toEqual(["inner/a.py"]);
+			expect((await currentScope.symbol("before_git")).hits).toEqual([]);
+			expect(await oldScope.status()).toMatchObject({
+				generation,
+				pendingCount: 0,
+				uncertainReasons: [],
+				unchecked: false,
+			});
+		} finally {
+			lifecycle.dispose();
+			currentScope?.close();
+			oldScope.close();
 		}
 	});
 

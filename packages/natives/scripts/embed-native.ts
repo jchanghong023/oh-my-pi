@@ -93,10 +93,13 @@ export async function embeddedAddonFiles({
 		({ filename }, index) =>
 			`import zstdPath${index} from ${JSON.stringify(`./${filename}.zst`)} with { type: "file" };`,
 	);
-	const files = available.map(
-		({ variant, filename, bytes }, index) =>
-			`{ variant: ${JSON.stringify(variant)}, filename: ${JSON.stringify(filename)}, size: ${bytes.length}, zstdPath: zstdPath${index} }`,
-	);
+	const files = available.map(({ variant, filename, bytes }, index) => {
+		// Fork releases can share the package version. Distinct bytes need
+		// distinct paths so Windows can keep an older addon loaded safely.
+		const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+		const cacheFilename = filename.replace(/\.node$/, `.${hash}.node`);
+		return `{ variant: ${JSON.stringify(variant)}, filename: ${JSON.stringify(cacheFilename)}, size: ${bytes.length}, zstdPath: zstdPath${index} }`;
+	});
 	const manifest = `${imports.join("\n")}
 
 export const embeddedAddon = {

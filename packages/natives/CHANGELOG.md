@@ -13,6 +13,9 @@
 
 ### Fixed
 
+- Isolated embedded native addons by content so successive fork builds cannot reuse an older addon's cache, including while older sessions remain open.
+- Preserved complete Unicode normalization sequences at wiki section boundaries, avoiding false complete-name matches.
+- Made wiki imports respond to cancellation between section writes and roll back the current document.
 - Kept wiki import recovery and hidden-build creation bound to the database protected by the import lease.
 - Preserved quoted code fences and Unicode name boundaries across wiki sections, repairing existing searchable text from stored Markdown without reimporting sources.
 - Bound wiki import commits, publication and rollback to the original database and hidden build identity, preventing reused row IDs from modifying replacement indexes.

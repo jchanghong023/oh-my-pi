@@ -178,6 +178,32 @@ describe("team consumer regressions", () => {
 		},
 	);
 
+	it.each([
+		"方案 A 比方案 B 更值得推荐。",
+		"方案 A 比方案 B 更可以采用。",
+		"**A**方案 比方案 [B](#b) 更可以作为最终选项。",
+	])("rejects an endorsement of the blocked comparison subject, not the nearer object: %s", body => {
+		const result = reportWithBody(body);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it.each([
+		"方案 B 比方案 A 更值得推荐。",
+		"方案 `B` 比 **A**方案 更可以采用。",
+		"方案 A 比方案 B 更不值得推荐。",
+		"方案 **A** 不可以采用；方案 B 比方案 A 更值得推荐。",
+		"方案 **A** 若阻断问题解决后才可采用；方案 B 比方案 A 更值得推荐。",
+	])("keeps a valid comparison subject despite a blocked object or qualified alternative: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+			expect(result.droppedRecommendation).toBe(false);
+		}
+	});
+
 	it.each(["方案 **A** 不可以采用。", "方案 **A** 若阻断问题解决后才可采用。"])(
 		"keeps a formatted negation or explicitly conditional adoption distinct from current approval: %s",
 		body => {

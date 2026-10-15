@@ -3,7 +3,12 @@
 //! These are the query-time algorithms from docs/engine.ts. In particular, FTS
 //! supplies recall and its final tie-breaker, not the primary relevance order.
 
-use std::{cmp::Ordering, collections::HashSet, sync::LazyLock};
+use std::{
+	cmp::Ordering,
+	collections::HashSet,
+	ops::{Deref, Range},
+	sync::{Arc, LazyLock},
+};
 
 use napi::{
 	Result as NapiResult, ValueType,
@@ -121,13 +126,56 @@ impl FromNapiValue for MatchKind {
 
 impl ValidateNapiValue for MatchKind {}
 
+/// Edge slices share stored source even when one combining sequence spans many
+/// sections. Empty lexer-only contexts do not allocate.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum ContextEdge {
+	#[default]
+	Empty,
+	Shared {
+		source: Arc<str>,
+		range:  Range<usize>,
+	},
+}
+
+impl ContextEdge {
+	pub(crate) fn shared(source: &Arc<str>, range: Range<usize>) -> Self {
+		if range.is_empty() {
+			Self::Empty
+		} else {
+			Self::Shared { source: Arc::clone(source), range }
+		}
+	}
+}
+
+impl From<String> for ContextEdge {
+	fn from(source: String) -> Self {
+		if source.is_empty() {
+			return Self::Empty;
+		}
+		let length = source.len();
+		Self::shared(&Arc::from(source), 0..length)
+	}
+}
+
+impl Deref for ContextEdge {
+	type Target = str;
+
+	fn deref(&self) -> &str {
+		match self {
+			Self::Empty => "",
+			Self::Shared { source, range } => &source[range.clone()],
+		}
+	}
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct SectionContext {
 	pub shape:          Shape,
 	pub fence_prefix:   Option<String>,
 	pub continues_line: bool,
-	pub before:         String,
-	pub after:          String,
+	pub before:         ContextEdge,
+	pub after:          ContextEdge,
 }
 
 #[derive(Debug)]
@@ -597,10 +645,19 @@ fn append_literal_edge(
 	}
 }
 
-fn literal_edge_starter(character: char) -> bool {
-	canonical_combining_class(character) == 0
-		// Hangul V/T jamo can compose with the preceding class-zero starter.
-		&& !matches!(character, '\u{1161}'..='\u{1175}' | '\u{11a8}'..='\u{11c2}')
+pub(super) fn literal_edge_starter(character: char) -> bool {
+	if character.is_ascii() {
+		return true;
+	}
+	let mut first = None;
+	decompose_compatible(character, |decomposed| {
+		first.get_or_insert(decomposed);
+	});
+	let first = first.expect("nonempty Unicode decomposition");
+	canonical_combining_class(first) == 0
+		// Hangul V/T jamo can compose with the preceding class-zero starter,
+		// including when they come from a compatibility decomposition.
+		&& !matches!(first, '\u{1161}'..='\u{1175}' | '\u{11a8}'..='\u{11c2}')
 }
 
 /// A compiled literal and its Unicode edge rules, reusable across every row.
@@ -681,6 +738,12 @@ impl LiteralMatcher {
 		markdown: &str,
 		context: &SectionContext,
 	) -> bool {
+		// An ASCII literal cannot be created by canonical reordering/composition
+		// at a seam. Skip mark-only intermediate sections without expanding their
+		// potentially document-sized shared edges; retain the full Unicode path.
+		if self.text.is_ascii() && !text.contains(&self.text) {
+			return false;
+		}
 		let before = if markdown
 			.chars()
 			.next()
@@ -930,8 +993,8 @@ mod tests {
 			shape:          Shape::Content,
 			fence_prefix:   None,
 			continues_line: false,
-			before:         before.to_owned(),
-			after:          after.to_owned(),
+			before:         before.to_owned().into(),
+			after:          after.to_owned().into(),
 		}
 	}
 

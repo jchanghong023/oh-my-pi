@@ -86,6 +86,42 @@ describe("bounded goal tool-call recovery", () => {
 		expect(guard.observe([textTurn()])).toBe("recover");
 	});
 
+	it("stops tool-free errors, truncation and aborts after maintenance instead of continuing on cached evidence", () => {
+		for (const reason of ["error", "length", "aborted"] as const) {
+			for (const recovering of [false, true]) {
+				const guard = new GoalContinuationGuard();
+				if (recovering) expect(guard.observe([textTurn()])).toBe("recover");
+				guard.recordActivity(toolTurn.slice(1));
+				expect(guard.observe([textTurn(reason)])).toBe("stop");
+				expect(guard.recoveryPending).toBe(false);
+				expect(guard.stopNotice).toBeUndefined();
+				// A terminal failure neither spends nor replenishes the recovery quota.
+				expect(guard.observe([textTurn()])).toBe(recovering ? "stop" : "recover");
+			}
+		}
+	});
+
+	it("continues successful recovery work across maintenance without replenishing the recovery quota", () => {
+		const guard = new GoalContinuationGuard();
+		expect(guard.observe([textTurn()])).toBe("recover");
+		guard.recordActivity(toolTurn);
+		expect(guard.observe([textTurn()])).toBe("continue");
+		expect(guard.recoveryPending).toBe(false);
+		expect(guard.observe([textTurn()])).toBe("stop");
+		expect(guard.stopNotice).toContain("unfinished");
+	});
+
+	it("preserves current-segment tool progress and repeated-evidence stops even with an unsuccessful final message", () => {
+		for (const reason of ["error", "length", "aborted"] as const) {
+			const guard = new GoalContinuationGuard();
+			expect(guard.observe([...toolTurn, textTurn(reason)])).toBe("continue");
+			guard.recordActivity(toolTurn.slice(0, 1));
+			expect(guard.observe([...toolTurn.slice(1), textTurn(reason)])).toBe("stop");
+			expect(guard.recoveryPending).toBe(false);
+			expect(guard.stopNotice).toBeUndefined();
+		}
+	});
+
 	it("clears another submission's buffered tool evidence when the host resets the continuation stretch", () => {
 		const guard = new GoalContinuationGuard();
 		guard.recordActivity(toolTurn);

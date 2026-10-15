@@ -242,8 +242,8 @@ fn normalization(markdown: &str, fence: Option<Fence>, continues_line: bool) -> 
 		shape: Shape::Content,
 		fence_prefix: fence.map(|fence| (fence.marker as char).to_string().repeat(fence.length)),
 		continues_line,
-		before: String::new(),
-		after: String::new(),
+		before: Default::default(),
+		after: Default::default(),
 	};
 	plain_text(&lex_section(markdown, &context))
 }
@@ -1121,8 +1121,8 @@ pub fn wiki_normalize_plain_text(
 		shape: Shape::Content,
 		fence_prefix,
 		continues_line: continues_line.unwrap_or(false),
-		before: String::new(),
-		after: String::new(),
+		before: Default::default(),
+		after: Default::default(),
 	};
 	plain_text(&lex_section(&markdown, &context))
 }

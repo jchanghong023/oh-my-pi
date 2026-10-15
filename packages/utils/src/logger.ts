@@ -290,9 +290,7 @@ function fallbackLogsDir(primaryDirectory: string): string {
 		directory = path.join(process.env.XDG_STATE_HOME || path.join(home, ".local", "state"), APP_NAME, "logs");
 	}
 	// An already-standard default must still get a distinct user-owned attempt.
-	return path.resolve(directory) === path.resolve(primaryDirectory)
-		? path.join(home, ".omp", "fallback-logs")
-		: directory;
+	return path.relative(directory, primaryDirectory) === "" ? path.join(home, ".omp", "fallback-logs") : directory;
 }
 
 let logFailureReported = false;

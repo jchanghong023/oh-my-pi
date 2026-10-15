@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import { createServer, type Socket } from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import type {
 	Api,
@@ -12,6 +15,9 @@ import type {
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { JCHTOOLS_API, projectJchToolsContext, streamJchToolsAgent } from "../src/config/jchtools-provider";
+import { ModelRegistry } from "../src/config/model-registry";
+import { Settings } from "../src/config/settings";
+import { AuthStorage } from "../src/session/auth-storage";
 
 const encoder = new TextEncoder();
 
@@ -68,6 +74,136 @@ async function consume(
 }
 
 describe("JchTools remote Agent transport", () => {
+	test("drops a restarted instance's session ID even on an already selected model at the same address", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "omp-jchtools-instance-"));
+		const modelsPath = path.join(root, "models.yml");
+		const pipePath =
+			process.platform === "win32"
+				? `\\\\.\\pipe\\omp-jchtools-instance-${crypto.randomUUID()}`
+				: path.join(root, "discovery.sock");
+		const auth = await AuthStorage.create(":memory:");
+		let instanceId = crypto.randomUUID();
+		const firstSessionId = `session-${instanceId}`;
+		const headers: Array<string | null> = [];
+		const bodies: unknown[] = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname === "/v1/models") {
+					return Response.json({ data: [{ id: "backend/actual-agent" }] });
+				}
+				const sessionId = request.headers.get("X-JchTools-Session-ID");
+				headers.push(sessionId);
+				bodies.push(await request.json());
+				if (sessionId !== null && sessionId !== `session-${instanceId}`) {
+					return Response.json(
+						{ error: { code: "session_unavailable", message: "session belongs to the previous instance" } },
+						{ status: 409 },
+					);
+				}
+				return new Response(`${frame("backend answer")}${frame(null, "stop")}data: [DONE]\n\n`, {
+					headers: {
+						"Content-Type": "text/event-stream",
+						"X-JchTools-Session-ID": `session-${instanceId}`,
+					},
+				});
+			},
+		});
+		const sockets = new Set<Socket>();
+		const pipe = createServer(socket => {
+			sockets.add(socket);
+			socket.on("close", () => sockets.delete(socket));
+			socket.on("error", () => {});
+			let received = Buffer.alloc(0);
+			let handled = false;
+			socket.on("data", chunk => {
+				if (handled) return;
+				received = Buffer.concat([received, typeof chunk === "string" ? Buffer.from(chunk) : chunk]);
+				if (received.length < 4 || received.length < 4 + received.readUInt32LE()) return;
+				handled = true;
+				const payload = Buffer.from(
+					JSON.stringify({
+						protocol: 1,
+						pid: 42,
+						result: {
+							Ok: {
+								protocol_version: 1,
+								service_id: "jchtools-acp-http",
+								instance_id: instanceId,
+								phase: "ready",
+								base_url: server.url.origin,
+								execution_mode: "server_agent",
+								capabilities: { text: true, streaming: true, client_tools: false, server_tools: true },
+							},
+						},
+					}),
+				);
+				const length = Buffer.alloc(4);
+				length.writeUInt32LE(payload.length);
+				socket.end(Buffer.concat([length, payload]));
+			});
+		});
+		try {
+			const ready = Promise.withResolvers<void>();
+			pipe.once("error", ready.reject);
+			pipe.listen(pipePath, () => ready.resolve());
+			await ready.promise;
+			const registry = new ModelRegistry(auth, modelsPath, {
+				settings: Settings.isolated(),
+				jchToolsDiscovery: { pipePath, env: {}, timeoutMs: 1500, fetch },
+			});
+			expect(await registry.refreshLocalProviders()).toBe(true);
+			const remote = registry.find("jchtools", "backend/actual-agent");
+			if (!remote) throw new Error("Expected discovered remote Agent model");
+			// A live consumer may retain a model or a spread clone through registry refresh.
+			const selected = { ...remote };
+			const providerSessionState = new Map<string, ProviderSessionState>();
+			const messages: Message[] = [user];
+			const request = async (chosen: Model<Api>) => {
+				const stream = streamJchToolsAgent(
+					chosen,
+					{ messages },
+					{ cwd: root, sessionId: "same-chat", providerSessionState },
+				);
+				for await (const _event of stream) {
+				}
+				const result = await stream.result();
+				expect(result.stopReason).toBe("stop");
+				expect(result.content).toEqual([{ type: "text", text: "backend answer" }]);
+				expect(bodies.at(-1)).toEqual({
+					model: "backend/actual-agent",
+					messages: messages.map(message => ({
+						role: message.role,
+						content: typeof message.content === "string" ? message.content : "backend answer",
+					})),
+					stream: true,
+					cwd: root,
+				});
+				messages.push(result, { role: "user", content: "next task", timestamp: messages.length + 1 });
+			};
+			await request(selected);
+			expect(await registry.refreshLocalProviders()).toBe(false);
+			await request(selected);
+			instanceId = crypto.randomUUID();
+			expect(await registry.refreshLocalProviders()).toBe(true);
+			await request(selected);
+			const refreshed = registry.find("jchtools", "backend/actual-agent");
+			if (!refreshed) throw new Error("Expected model after same-address restart");
+			await request(refreshed);
+			expect(headers).toEqual([null, firstSessionId, null, `session-${instanceId}`]);
+			expect(fs.existsSync(modelsPath)).toBe(false);
+		} finally {
+			auth.close();
+			await server.stop(true);
+			for (const socket of sockets) socket.destroy();
+			const closed = Promise.withResolvers<void>();
+			pipe.close(() => closed.resolve());
+			await closed.promise;
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	test("clears legacy associations at filtering cutover and reuses only the new response binding", async () => {
 		let legacyClosed = false;
 		const providerSessionState = new Map<string, ProviderSessionState>([

@@ -1,10 +1,13 @@
 //! Query-time projections of the shared default Markdown lexer.
 
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+	collections::{HashMap, VecDeque},
+	sync::{Arc, LazyLock},
+};
 
 use regex::Regex;
 
-use super::query::{SectionContext, Shape};
+use super::query::{ContextEdge, SectionContext, Shape, literal_edge_starter};
 
 mod block;
 mod closers;
@@ -432,16 +435,6 @@ impl<'a> From<&'a ContextSection> for ContextSectionRef<'a> {
 	}
 }
 
-// Equality at the opposite boundary is intentional; neighbors need bytes on
-// the requested side of the edge, not the entire current section.
-const fn contains_bytes_before_edge(neighbor: ContextSectionRef<'_>, edge: i64) -> bool {
-	neighbor.byte_start < edge && neighbor.byte_end >= edge
-}
-
-const fn contains_bytes_after_edge(neighbor: ContextSectionRef<'_>, edge: i64) -> bool {
-	neighbor.byte_start <= edge && neighbor.byte_end > edge
-}
-
 #[derive(Default)]
 pub(crate) struct SectionContextScanner {
 	scanner: MarkdownFenceScanner,
@@ -478,76 +471,99 @@ impl SectionContextScanner {
 				prefix
 			}),
 			continues_line: self.scanner.continues_line,
-			before:         String::new(),
-			after:          String::new(),
+			before:         ContextEdge::default(),
+			after:          ContextEdge::default(),
 		}
 	}
+}
 
-	pub(crate) fn context(
-		&mut self,
-		previous: Option<ContextSectionRef<'_>>,
-		section: ContextSectionRef<'_>,
-		next: Option<ContextSectionRef<'_>>,
-	) -> SectionContext {
-		let mut context = self.lex_context(previous, section);
-		let before = if let Some(previous) =
-			previous.filter(|previous| contains_bytes_before_edge(*previous, section.byte_start))
+/// Assign complete normalization edges in two linear passes, retaining only
+/// two preceding and three following starter positions rather than a per-scalar
+/// index. The document source is shared, never copied once per section.
+fn attach_edges(source: String, start: i64, contexts: &mut [(i64, i64, i64, SectionContext)]) {
+	if contexts.is_empty() {
+		return;
+	}
+	let source: Arc<str> = Arc::from(source);
+	let mut preceding = source
+		.char_indices()
+		.filter(|&(_, ch)| literal_edge_starter(ch))
+		.peekable();
+	let mut following = source
+		.char_indices()
+		.filter(|&(_, ch)| literal_edge_starter(ch));
+	let mut previous = [0; 2];
+	let mut upcoming = VecDeque::with_capacity(3);
+	for (_, byte_start, byte_end, context) in contexts {
+		let left = (*byte_start - start).clamp(0, source.len() as i64) as usize;
+		let right = (*byte_end - start).clamp(left as i64, source.len() as i64) as usize;
+		while let Some(&(position, _)) = preceding.peek()
+			&& position < left
 		{
-			let offset = section.byte_start - previous.byte_start;
-			let slice = buffer_slice(previous.raw_markdown, (offset - 8).max(0), offset);
-			let mut characters = slice.chars().rev();
-			let last = characters.next();
-			let penultimate = characters.next();
-			let mut before = String::with_capacity(8);
-			if let Some(character) = penultimate {
-				before.push(character);
-			}
-			if let Some(character) = last {
-				before.push(character);
-			}
-			before
-		} else {
-			String::new()
-		};
-		let after = if let Some(next) =
-			next.filter(|next| contains_bytes_after_edge(*next, section.byte_end))
-		{
-			let offset = section.byte_end - next.byte_start;
-			buffer_slice(next.raw_markdown, offset, offset + 8)
-				.chars()
-				.take(2)
-				.collect()
-		} else {
-			String::new()
-		};
-		if context.fence_prefix.is_none() && !context.continues_line {
-			context.shape = section_shape(section.raw_markdown);
+			previous = [previous[1], position];
+			preceding.next();
 		}
-		context.before = before;
-		context.after = after;
-		context
+		context.before = ContextEdge::shared(&source, previous[0]..left);
+		loop {
+			while upcoming.len() < 3 {
+				let Some((position, _)) = following.next() else {
+					break;
+				};
+				upcoming.push_back(position);
+			}
+			if upcoming.front().is_some_and(|&position| position < right) {
+				upcoming.pop_front();
+			} else {
+				break;
+			}
+		}
+		let end = upcoming.get(2).copied().unwrap_or(source.len());
+		context.after = ContextEdge::shared(&source, right..end);
 	}
 }
 
 pub(crate) fn contexts(
 	sections: impl IntoIterator<Item = ContextSection>,
 ) -> Vec<(i64, SectionContext)> {
-	let mut rows = sections.into_iter();
 	let mut previous: Option<ContextSection> = None;
-	let mut current = rows.next();
 	let mut scanner = SectionContextScanner::default();
 	let mut output = Vec::new();
-	while let Some(section) = current {
-		let next = rows.next();
-		let context = scanner.context(
+	let mut edges = Vec::new();
+	let mut source = String::new();
+	let mut source_start = 0;
+	for section in sections {
+		// Gaps and document boundaries must not invent source adjacency.
+		if previous.as_ref().is_none_or(|previous| {
+			previous.document_id != section.document_id
+				|| section.byte_start < source_start
+				|| section.byte_start > source_start + source.len() as i64
+		}) {
+			attach_edges(std::mem::take(&mut source), source_start, &mut edges);
+			output.extend(
+				std::mem::take(&mut edges)
+					.into_iter()
+					.map(|(id, _, _, context)| (id, context)),
+			);
+			source_start = section.byte_start;
+		}
+		let mut context = scanner.lex_context(
 			previous.as_ref().map(ContextSectionRef::from),
 			ContextSectionRef::from(&section),
-			next.as_ref().map(ContextSectionRef::from),
 		);
-		output.push((section.section_id, context));
+		if context.fence_prefix.is_none() && !context.continues_line {
+			context.shape = section_shape(&section.raw_markdown);
+		}
+		let overlap = (source_start + source.len() as i64 - section.byte_start).max(0);
+		source.push_str(&buffer_slice(
+			&section.raw_markdown,
+			overlap,
+			section.raw_markdown.len() as i64,
+		));
+		edges.push((section.section_id, section.byte_start, section.byte_end, context));
 		previous = Some(section);
-		current = next;
 	}
+	attach_edges(source, source_start, &mut edges);
+	output.extend(edges.into_iter().map(|(id, _, _, context)| (id, context)));
 	output
 }
 
@@ -560,8 +576,8 @@ mod tests {
 			shape:          Shape::Content,
 			fence_prefix:   None,
 			continues_line: false,
-			before:         String::new(),
-			after:          String::new(),
+			before:         ContextEdge::default(),
+			after:          ContextEdge::default(),
 		}
 	}
 
@@ -674,7 +690,7 @@ mod tests {
 		let mut scanner = SectionContextScanner::default();
 		let mut previous = None;
 		while let Some(section) = sections.next() {
-			let context = scanner.context(previous, section, sections.peek().copied());
+			let context = scanner.lex_context(previous, section);
 			let prefix = source[..section.byte_start as usize]
 				.strip_prefix('\u{feff}')
 				.unwrap_or(&source[..section.byte_start as usize]);
@@ -723,7 +739,7 @@ mod tests {
 		let mut headings = Vec::new();
 		let mut count = 0;
 		while let Some(section) = sections.next() {
-			let context = scanner.context(previous, section, sections.peek().copied());
+			let context = scanner.lex_context(previous, section);
 			count += 1;
 			if section.raw_markdown.starts_with('#') {
 				headings.push((section.raw_markdown, context.fence_prefix, context.continues_line));
@@ -739,10 +755,65 @@ mod tests {
 	}
 
 	#[test]
-	fn adjacent_context_uses_two_scalars_and_utf8_replacement() {
+	fn adjacent_context_preserves_utf8_and_complete_normalization_sequences() {
 		let contexts = contexts([section(1, 0, 8, "a😀中"), section(2, 5, 10, "中bc")]);
-		assert_eq!(contexts[1].1.before, "a😀");
-		assert_eq!(contexts[0].1.after, "bc");
+		assert_eq!(&*contexts[1].1.before, "a😀");
+		assert_eq!(&*contexts[0].1.after, "bc");
 		assert_eq!(buffer_slice("😀x", 1, 5), "\u{fffd}\u{fffd}\u{fffd}x");
+	}
+
+	#[test]
+	fn complete_edge_sequences_prevent_exact_names_created_by_chunking() {
+		use super::super::query::{LiteralMatcher, normalize_search_text};
+
+		let marks = "\u{0334}".repeat(128);
+		let right = format!("scan{marks}\u{0303}");
+		let left = format!("a{marks}\u{0303}scan");
+		for (source, edge, query) in [
+			(right.as_str(), 4, "scan"),
+			(left.as_str(), 1 + marks.len(), "\u{0303}scan"),
+			("\u{1100}\u{1161}\u{11a8}", 3, "\u{1100}"),
+			("\u{1100}\u{1161}\u{11a8}", 6, "\u{11a8}"),
+			("\u{3131}\u{314f}", 3, "\u{1100}"),
+		] {
+			let rows = [
+				section(1, 0, edge as i64, &source[..edge]),
+				section(2, edge as i64, source.len() as i64, &source[edge..]),
+			];
+			let recovered =
+				contexts(rows.iter().map(|row| {
+					section(row.section_id, row.byte_start, row.byte_end, &row.raw_markdown)
+				}));
+			let matcher = LiteralMatcher::new(query, true);
+			for (row, (_, context)) in rows.iter().zip(recovered) {
+				assert!(
+					!matcher.matches_section(
+						&normalize_search_text(&name_text(&lex_section(&row.raw_markdown, &context))),
+						&row.raw_markdown,
+						&context,
+					),
+					"{source:?} at {edge}: {query:?}",
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn left_edge_normalization_reaches_a_starter_more_than_one_section_away() {
+		use super::super::query::{LiteralMatcher, normalize_search_text};
+
+		let source = format!("a{}\u{0303}scan", "\u{0334}".repeat(36_000));
+		let edges = [0, 24_001, 48_001, source.len()];
+		let rows = edges.windows(2).enumerate().map(|(index, edge)| {
+			section(index as i64, edge[0] as i64, edge[1] as i64, &source[edge[0]..edge[1]])
+		});
+		let recovered = contexts(rows);
+		let body = &source[edges[2]..];
+		let context = &recovered[2].1;
+		assert!(!LiteralMatcher::new("\u{0303}scan", true).matches_section(
+			&normalize_search_text(&name_text(&lex_section(body, context))),
+			body,
+			context,
+		));
 	}
 }

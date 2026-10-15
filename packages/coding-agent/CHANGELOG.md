@@ -8,6 +8,12 @@
 
 ### Fixed
 
+- Delivered explicitly queued remote-Agent tasks that arrive as a turn settles, without automatically replaying failed backend work.
+- Restored compacted conversation context when switching back from a remote Agent to an ordinary model.
+- Discarded JchTools backend-session associations when discovery reports a new service instance at the same address.
+- Stopped Goal continuation on terminal errors or truncation after maintenance instead of treating earlier cached tool activity as new progress.
+- Kept repository edit notifications attached to the current Git root when the working directory stays unchanged.
+- Rejected team comparison recommendations that endorse a proposal with unresolved blocking issues.
 - Preserved extension-model priority when configured role chains fall back to retained automatic aliases.
 - Matched active model presets against configured roles only, without mistaking implicit offline defaults for saved assignments.
 - Kept POSIX literal backslash paths distinct from directory separators in repository text and symbol filters.

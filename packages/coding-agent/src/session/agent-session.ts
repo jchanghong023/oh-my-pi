@@ -3888,6 +3888,14 @@ export class AgentSession implements SettingsScope {
 		// toolUse) assistant message and skipping settle-only work.
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			this.#lastAssistantMessage = event.message;
+			if (
+				isJchToolsAgentModel(event.message) &&
+				(event.message.stopReason === "error" || event.message.stopReason === "aborted")
+			) {
+				// A failed/cancelled request can restore an undelivered queue claim.
+				// Only a later explicit submission may re-arm its idle drain.
+				this.#queuedMessageDrainBlocked = true;
+			}
 			this.#cacheWarmer?.onResponse(event.message);
 			const deferred = this.#deferredTitle;
 			if (deferred && !deferred.replied) {
@@ -4691,9 +4699,17 @@ export class AgentSession implements SettingsScope {
 		request: ScheduledAgentContinueRequest,
 		coalescedSources: Set<string>,
 	): Promise<AgentContinueOutcome> {
-		if (isJchToolsAgentModel(this.model)) return { status: "skipped", reason: "session-unavailable" };
+		const remote = isJchToolsAgentModel(this.model);
+		if (
+			remote &&
+			(request.options.source !== "queued-message-drain" ||
+				this.#queuedMessageDrainBlocked ||
+				!this.#hasOnlyExplicitUserQueuedMessages())
+		) {
+			return { status: "skipped", reason: "session-unavailable" };
+		}
 		try {
-			const reverted = await this.#recovery.maybeRestoreRetryFallbackPrimary();
+			const reverted = !remote && (await this.#recovery.maybeRestoreRetryFallbackPrimary());
 			if (signal.aborted || this.#isDisposed || this.#abortInProgress) {
 				return { status: "skipped", reason: "post-restore-unavailable" };
 			}
@@ -4708,7 +4724,7 @@ export class AgentSession implements SettingsScope {
 					return { status: "skipped", reason: "post-restore-unavailable" };
 				}
 			}
-			if (cfgRetryUsageAwareFallback.get(this.settings)) {
+			if (!remote && cfgRetryUsageAwareFallback.get(this.settings)) {
 				if (!(await this.#runQueuedUsageAwarePreflight(signal))) {
 					return { status: "skipped", reason: "session-unavailable" };
 				}
@@ -4762,7 +4778,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#scheduleAgentContinue(options: ScheduledAgentContinueOptions): void {
-		if (isJchToolsAgentModel(this.model)) return;
+		if (isJchToolsAgentModel(this.model) && options.source !== "queued-message-drain") return;
 		const request: ScheduledAgentContinueRequest = {
 			schedulerToken: ++this.#agentContinueSchedulerToken,
 			options,
@@ -8911,11 +8927,27 @@ export class AgentSession implements SettingsScope {
 		});
 	}
 
+	#hasOnlyExplicitUserQueuedMessages(): boolean {
+		const steering = this.agent.peekSteeringQueue();
+		const followUp = this.agent.peekFollowUpQueue();
+		return (
+			steering.length + followUp.length > 0 &&
+			steering.every(
+				message => isUserAuthoredQueuedMessage(message) && (message.role !== "user" || !message.synthetic),
+			) &&
+			followUp.every(
+				message => isUserAuthoredQueuedMessage(message) && (message.role !== "user" || !message.synthetic),
+			)
+		);
+	}
+
 	/**
 	 * Gate for idle-path queued-message auto-continue (see `#scheduleQueuedMessageDrain`).
 	 */
 	#canAutoContinueForFollowUp(): boolean {
-		if (isJchToolsAgentModel(this.model)) return false;
+		// Queue ownership, not a continuation label alone, authorizes a remote task.
+		// Internal notifications and synthetic prompts must never wake the backend.
+		if (isJchToolsAgentModel(this.model) && !this.#hasOnlyExplicitUserQueuedMessages()) return false;
 		if (this.isStreaming) return false;
 		if (this.isRetrying) return false;
 		// A queued steer resumes from ANY tail: Agent.continue() runs #runLoop(undefined),
@@ -11232,12 +11264,12 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		this.agent.setModel(model);
+		if (isJchToolsAgentModel(currentModel) !== isJchToolsAgentModel(model)) {
+			this.agent.replaceMessages(this.buildDisplaySessionContext(model).messages);
+		}
 		if (isJchToolsAgentModel(model)) {
 			this.#prewalk.disarm();
 			this.#cacheWarmer?.cancel();
-			if (!isJchToolsAgentModel(currentModel)) {
-				this.agent.replaceMessages(this.buildDisplaySessionContext().messages);
-			}
 			this.#abortAutolearnCapture();
 		}
 		// Model mutations driven through ModelControls (explicit /model, prewalk

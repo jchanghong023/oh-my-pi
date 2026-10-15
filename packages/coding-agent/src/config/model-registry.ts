@@ -63,7 +63,13 @@ import {
 	isJchToolsDiscoveryEnabled,
 	type JchToolsDiscoveryOptions,
 } from "./jchtools-discovery";
-import { JCHTOOLS_API, JCHTOOLS_PROVIDER_ID, streamJchToolsAgent } from "./jchtools-provider";
+import {
+	JCHTOOLS_API,
+	JCHTOOLS_INSTANCE,
+	JCHTOOLS_PROVIDER_ID,
+	type JchToolsModel,
+	streamJchToolsAgent,
+} from "./jchtools-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -409,7 +415,9 @@ export class ModelRegistry {
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
 	#jchToolsDiscovery: JchToolsDiscoveryOptions;
-	#jchToolsModels: Model<Api>[] = [];
+	#jchToolsModels: JchToolsModel[] = [];
+	// Existing selected model objects must see discoveries without being reselected.
+	#jchToolsInstance: { id: string | undefined } = { id: undefined };
 	#jchToolsRefresh?: Promise<boolean>;
 	#jchToolsDiscoveryAbort?: AbortController;
 	#jchToolsAutomaticDiscoveryAllowed = true;
@@ -795,12 +803,17 @@ export class ModelRegistry {
 				this.#canDiscoverJchTools()
 					? models
 					: [];
+			const instanceId = this.#jchToolsModels[0]?.[JCHTOOLS_INSTANCE]?.id;
+			const instanceChanged = this.#jchToolsInstance.id !== instanceId;
+			this.#jchToolsInstance.id = instanceId;
+			for (const model of this.#jchToolsModels) model[JCHTOOLS_INSTANCE] = this.#jchToolsInstance;
 			if (this.#jchToolsModels.length > 0) registerCustomApi(JCHTOOLS_API, streamJchToolsAgent, "builtin:jchtools");
 			if (this.#jchToolsModels.length > 0) this.#keylessProviders.add(JCHTOOLS_PROVIDER_ID);
 			this.#invalidateProviderModelCache(JCHTOOLS_PROVIDER_ID);
 			if (this.#hasFullSnapshot)
 				this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
 			const changed =
+				instanceChanged ||
 				previous.length !== this.#jchToolsModels.length ||
 				previous.some(
 					(model, index) =>

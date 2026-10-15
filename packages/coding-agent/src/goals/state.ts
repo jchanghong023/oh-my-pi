@@ -123,16 +123,31 @@ export class GoalContinuationGuard {
 	}
 
 	observe(messages: readonly AgentMessage[]): "continue" | "recover" | "stop" {
-		this.recordActivity(messages);
-		const activity = this.#pendingActivity;
+		const currentActivity = goalContinuationActivity(messages);
+		const activity =
+			this.#pendingActivity && currentActivity
+				? `${this.#pendingActivity}:${currentActivity}`
+				: this.#pendingActivity || currentActivity;
 		this.#pendingActivity = "";
 		const previous = this.#previousActivity;
 		this.#previousActivity = activity;
 		const wasRecovery = this.#recoveryPending;
 		this.#recoveryPending = false;
 		this.#stoppedWithoutTools = false;
-		if (activity.length > 0) return activity === previous ? "stop" : "continue";
 		const assistant = messages.findLast(message => message.role === "assistant");
+		if (activity.length > 0) {
+			// Cached maintenance evidence must not override a later tool-free failure.
+			if (
+				currentActivity.length === 0 &&
+				assistant?.role === "assistant" &&
+				(assistant.stopReason === "error" ||
+					assistant.stopReason === "length" ||
+					assistant.stopReason === "aborted")
+			) {
+				return "stop";
+			}
+			return activity === previous ? "stop" : "continue";
+		}
 		if (assistant?.role === "assistant" && assistant.stopReason === "aborted") return "stop";
 		if (wasRecovery) {
 			this.#stoppedWithoutTools = true;

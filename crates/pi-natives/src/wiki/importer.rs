@@ -218,9 +218,9 @@ impl Build<'_> {
 				self.log("docs.init.fts.started", self.stage, "started")?;
 			}
 			let started = Instant::now();
-			self
-				.owner
-				.with_storage(self.cancel, |storage| storage.commit_document(build, &document))?;
+			self.owner.with_storage(self.cancel, |storage| {
+				storage.commit_document(build, &document, &|| self.owner.check_import(self.cancel))
+			})?;
 			fts_ms += started.elapsed().as_secs_f64() * 1000.0;
 			self.documents += 1;
 			self.sections += document.sections.len() as i64;

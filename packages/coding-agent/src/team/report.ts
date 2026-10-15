@@ -128,7 +128,7 @@ function synthesisProseConflict(
 			// Remove only the negated predicate, not its clause: a later
 			// affirmative endorsement must still be checked.
 			.replace(
-				/(?:不(?:能|应(?:当)?|宜|该|可(?:以)?)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)/gu,
+				/(?:不(?:能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)/gu,
 				"",
 			);
 		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];
@@ -171,6 +171,19 @@ function synthesisProseConflict(
 				conjunction.test(positiveClaims.slice(mentions[last].end, mentions[last + 1].index))
 			)
 				last++;
+			// In "方案 A 比方案 B 更值得推荐", B is the comparison
+			// object, not the endorsed subject. Resolve an object (including a
+			// coordinated group) back to its subject before checking status.
+			if (
+				first > 0 &&
+				mentions[last].end <= claim.index &&
+				/^(?:比|相比|比起)$/u.test(positiveClaims.slice(mentions[first - 1].end, mentions[first].index))
+			) {
+				last = first - 1;
+				first = last;
+				while (first > 0 && conjunction.test(positiveClaims.slice(mentions[first - 1].end, mentions[first].index)))
+					first--;
+			}
 			for (let index = first; index <= last; index++) {
 				const { record } = mentions[index];
 				if (!isAdoptable(record)) {

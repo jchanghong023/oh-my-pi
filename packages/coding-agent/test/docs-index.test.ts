@@ -1185,6 +1185,32 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
+	it.each([2, 36_000])(
+		"normalizes all %i combining marks across stored chunks before classifying exact names",
+		async marks => {
+			const root = await tempDir("docs-combining-boundary-root-");
+			const agentDir = await tempDir("docs-combining-boundary-agent-");
+			const source = `${"x ".repeat(8998)}scan${"\u0334".repeat(marks)}\u0303`;
+			await fs.writeFile(path.join(root, "continued.md"), source);
+			const service = new DocsSearchEngine({ agentDir });
+			try {
+				await service.init(root, "manual");
+				await fs.rm(root, { recursive: true });
+				const partial = service.search("scan", { index: "manual", limit: 500 });
+				expect(partial.exactNameMatches).toBe(0);
+				expect(partial.sections.every(hit => hit.matchKind === "related")).toBe(true);
+				if (marks === 2) {
+					const complete = service.search("scañ", { index: "manual", limit: 500 });
+					expect(complete.exactNameMatches).toBe(1);
+					expect(complete.sections[0]).toMatchObject({ path: "continued.md", matchKind: "exact-name" });
+					expect(complete.sections[0].text.normalize("NFKC")).toContain("scañ");
+				}
+			} finally {
+				service.close();
+			}
+		},
+	);
+
 	it.each([
 		{ padding: `${"x ".repeat(8749)} p`, whole: "pC++" },
 		{ padding: `${"x ".repeat(8748)}x 𐐀`, whole: "𐐀C++" },

@@ -933,6 +933,34 @@ describe("JchTools SDK remote Agent session", () => {
 			]);
 			expect(f.toolExecutions()).toBe(0);
 
+			const entriesBeforeSwitch = f.manager.getEntries();
+			const journalBeforeSwitch = JSON.stringify(entriesBeforeSwitch);
+			await session.setModelTemporary(f.ordinary);
+			expect(session.messages[0]).toMatchObject({
+				role: "compactionSummary",
+				summary: "PRIVATE_GENERATED_SUMMARY",
+			});
+			expect(session.messages).not.toContainEqual(sourceTask);
+			expect(transcriptContent(session).map(message => message.role)).toEqual(
+				compactionKind === "openai-native" ? ["user", "assistant"] : ["user", "assistant", "user", "assistant"],
+			);
+			expect(transcriptContent(session).at(-2)?.content).toEqual([
+				{ type: "text", text: "remote task after compaction" },
+			]);
+			expect(transcriptContent(session).at(-1)?.content).toEqual([{ type: "text", text: "remote answer" }]);
+			expect(JSON.stringify(f.manager.getEntries().slice(0, entriesBeforeSwitch.length))).toBe(journalBeforeSwitch);
+			await session.prompt("ordinary task after round trip");
+			const ordinaryWire = JSON.stringify(f.requests.at(-1)?.messages);
+			expect(ordinaryWire).toContain("PRIVATE_GENERATED_SUMMARY");
+			expect(ordinaryWire).not.toContain("original source task");
+			expect(ordinaryWire).toContain("remote task after compaction");
+			await session.setModelTemporary(f.remote);
+			await session.prompt("remote task after round trip");
+			const remoteWire = f.requests.at(-1)?.messages;
+			expect(remoteWire).toContainEqual({ role: "user", content: "original source task" });
+			expect(remoteWire).toContainEqual({ role: "user", content: "ordinary task after round trip" });
+			expect(JSON.stringify(remoteWire)).not.toContain("PRIVATE_GENERATED_SUMMARY");
+
 			await session.resetSessionContext();
 			await session.prompt("first source task after clear");
 			expect(f.requests.at(-1)?.messages).toEqual([{ role: "user", content: "first source task after clear" }]);
@@ -1231,6 +1259,111 @@ describe("JchTools SDK remote Agent session", () => {
 		expect(f.toolExecutions()).toBe(0);
 	});
 
+	it("delivers explicit follow-up and steer tasks submitted in raw terminal windows exactly once", async () => {
+		const f = await fixture();
+		const session = await f.create(f.remote);
+		const admitted: Promise<boolean>[] = [];
+		const streamingWindows: boolean[] = [];
+		let ends = 0;
+		session.agent.subscribe(event => {
+			if (event.type !== "agent_end") return;
+			ends++;
+			if (ends > 2) return;
+			streamingWindows.push(session.isStreaming);
+			admitted.push(
+				session.prompt(ends === 1 ? "SECOND" : "THIRD", {
+					streamingBehavior: ends === 1 ? "followUp" : "steer",
+				}),
+			);
+		});
+		await session.prompt("FIRST");
+		await session.waitForIdle();
+		expect(await Promise.all(admitted)).toEqual([true, true]);
+		expect(streamingWindows).toEqual([true, true]);
+		expect(f.requests.map(request => request.messages.at(-1)?.content)).toEqual(["FIRST", "SECOND", "THIRD"]);
+		expect(f.requests[1].messages).toEqual([
+			{ role: "user", content: "FIRST" },
+			{ role: "assistant", content: "backend reply" },
+			{ role: "user", content: "SECOND" },
+		]);
+		expect(f.requests[2].messages).toEqual([
+			...f.requests[1].messages,
+			{ role: "assistant", content: "backend reply" },
+			{ role: "user", content: "THIRD" },
+		]);
+		expect(session.queuedMessageCount).toBe(0);
+		expect(f.toolExecutions()).toBe(0);
+		expect(f.events.some(event => event.type === "auto_retry_start" || event.type === "tool_execution_start")).toBe(
+			false,
+		);
+	});
+
+	it("does not wake the backend for agent-attributed user-role queue entries", async () => {
+		const f = await fixture();
+		const session = await f.create(f.remote);
+		let queued: Promise<void> | undefined;
+		session.agent.subscribe(event => {
+			if (event.type === "agent_end" && !queued) {
+				queued = session.followUp("INTERNAL_REMINDER", undefined, { attribution: "agent" });
+			}
+		});
+		await session.prompt("explicit backend task");
+		await queued;
+		await session.waitForIdle();
+		expect(f.requests).toHaveLength(1);
+		expect(f.requests[0].messages).toEqual([{ role: "user", content: "explicit backend task" }]);
+		expect(session.agent.peekFollowUpQueue()).toMatchObject([
+			{ role: "user", attribution: "agent", content: [{ type: "text", text: "INTERNAL_REMINDER" }] },
+		]);
+	});
+
+	it("keeps a queued task parked after remote failure until another explicit user submission", async () => {
+		const release = Promise.withResolvers<void>();
+		let calls = 0;
+		const f = await fixture(() => {
+			if (calls++ > 0) return completed("successor reply");
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode(sse({ content: "before failure" })));
+						void release.promise.then(() => {
+							controller.enqueue(
+								new TextEncoder().encode('event: error\ndata: {"error":{"message":"backend failed"}}\n\n'),
+							);
+							controller.close();
+						});
+					},
+				}),
+				{ headers: { "Content-Type": "text/event-stream" } },
+			);
+		});
+		const session = await f.create(f.remote);
+		const textArrived = Promise.withResolvers<void>();
+		session.subscribe(event => {
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta")
+				textArrived.resolve();
+		});
+		const running = session.prompt("FIRST");
+		try {
+			await textArrived.promise;
+			expect(await session.prompt("SECOND", { streamingBehavior: "followUp" })).toBe(true);
+		} finally {
+			release.resolve();
+			await running;
+		}
+		await session.waitForIdle();
+		expect(f.requests).toHaveLength(1);
+		expect(session.getLastAssistantMessage()?.stopReason).toBe("error");
+		expect(session.getQueuedMessages().followUp).toEqual(["SECOND"]);
+		await session.followUp("THIRD");
+		await session.waitForIdle();
+		expect(f.requests.map(request => request.messages.at(-1)?.content)).toEqual(["FIRST", "SECOND", "THIRD"]);
+		expect(session.queuedMessageCount).toBe(0);
+		expect(f.events.some(event => event.type === "auto_retry_start" || event.type === "retry_fallback_applied")).toBe(
+			false,
+		);
+	});
+
 	it("preserves backend partial failure across SDK resume without replaying until an explicit new task", async () => {
 		let calls = 0;
 		const f = await fixture(
@@ -1448,13 +1581,16 @@ describe("JchTools SDK remote Agent session", () => {
 		});
 		const running = session.prompt("cancel side-effecting task");
 		await textArrived.promise;
+		await session.prompt("queued successor", { streamingBehavior: "followUp" });
 		await session.abort();
 		await running;
 		await cancelled.promise;
+		await session.waitForIdle();
 		expect(f.requests).toHaveLength(1);
 		expect(session.getLastAssistantMessage()?.stopReason).toBe("aborted");
 		expect(session.getLastAssistantMessage()?.content).toEqual([{ type: "text", text: "before cancellation" }]);
 		expect(f.toolExecutions()).toBe(0);
+		expect(session.getQueuedMessages().followUp).toEqual(["queued successor"]);
 	});
 
 	it("forgets a published cancellation before response headers without accepting late backend bindings", async () => {

@@ -15,6 +15,7 @@ use super::{
 };
 
 pub(super) type CoreResult<T> = Result<T, WikiError>;
+type Check<'a> = &'a dyn Fn() -> CoreResult<()>;
 pub(super) const SCHEMA_VERSION: i64 = 11;
 pub(super) const BUILDING_INDEX_PREFIX: &str = "__building__";
 const BUILDING_GLOB: &str = "__building__*";
@@ -682,11 +683,13 @@ impl Storage {
 		&self,
 		build: &BuildIdentity,
 		document: &WikiMarkdownDocument,
+		check: Check<'_>,
 	) -> CoreResult<()> {
 		let started = Instant::now();
 		let mut stage = "document_insert";
 		let result = self.transaction(|storage| {
 			storage.check_build(build)?;
+			check()?;
 			let index_id = build.id;
 			let document_id: i64 = storage.connection.query_row(
 				"INSERT INTO \
@@ -708,6 +711,7 @@ impl Storage {
 			let mut scanner = SectionContextScanner::default();
 			let mut previous = None;
 			for section in &document.sections {
+				check()?;
 				let current = ContextSectionRef {
 					document_id,
 					byte_start: section.byte_start,
@@ -726,6 +730,7 @@ impl Storage {
 					)?);
 				}
 				let heading = section.heading_path.join(" > ");
+				check()?;
 				let section_id: i64 = section_insert
 					.as_mut()
 					.expect("prepared section insert")
@@ -763,18 +768,15 @@ impl Storage {
 					.map(|_| {
 						markdown::plain_text(&markdown::lex_section(&section.raw_markdown, &context))
 					});
+				let heading = normalize_fts(&heading);
+				let body = normalize_fts(quoted_body.as_deref().unwrap_or(&section.plain_text));
+				check()?;
 				fts_insert
 					.as_mut()
 					.expect("prepared FTS insert")
-					.execute(params![
-						section_id,
-						section_id,
-						index_id,
-						path,
-						normalize_fts(&heading),
-						normalize_fts(quoted_body.as_deref().unwrap_or(&section.plain_text))
-					])?;
+					.execute(params![section_id, section_id, index_id, path, heading, body])?;
 			}
+			check()?;
 			Ok(())
 		});
 		if let Err(error) = &result {
@@ -1016,6 +1018,77 @@ mod tests {
 	}
 
 	#[test]
+	fn cancelled_document_stops_section_writes_and_rolls_back_all_projections() {
+		let source: String = (0..64)
+			.map(|ordinal| format!("# Section {ordinal}\nneedle evidence {ordinal}\n\n"))
+			.collect();
+		let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+		let document = WikiMarkdownDocument {
+			size_bytes: source.len() as i64,
+			sections: parsed.sections,
+			..document()
+		};
+		assert_eq!(document.sections.len(), 64);
+		// Cover an interrupted section and cancellation after the final FTS
+		// write, before the transaction can become an accepted document.
+		for (stop_at, after_fts) in [(3_i64, false), (64, true)] {
+			let fixture = Fixture::new();
+			let storage = fixture.open();
+			let build = storage.create("__building__cancelled", "/source").unwrap();
+			let interrupted = std::cell::Cell::new(None);
+			let error = storage
+				.commit_document(&build, &document, &|| {
+					let sections: i64 = storage.connection.query_row(
+						"SELECT count(*) FROM sections WHERE index_id=?",
+						[build.id],
+						|row| row.get(0),
+					)?;
+					let fts: i64 =
+						storage
+							.connection
+							.query_row("SELECT count(*) FROM sections_fts", [], |row| row.get(0))?;
+					if sections >= stop_at && (!after_fts || fts >= stop_at) {
+						interrupted.set(Some((sections, fts)));
+						return Err(WikiError::named("Document indexing cancelled", "AbortError", None));
+					}
+					Ok(())
+				})
+				.unwrap_err();
+			assert_eq!(error.diagnostic_error_type(), "AbortError");
+			assert_eq!(
+				interrupted.get(),
+				Some((stop_at, if after_fts { stop_at } else { stop_at - 1 }))
+			);
+			assert!(storage.connection.is_autocommit());
+			for table in ["documents", "sections", "sections_fts"] {
+				let remaining: i64 = storage
+					.connection
+					.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+					.unwrap();
+				assert_eq!(remaining, 0, "cancelled document left rows in {table}");
+			}
+			assert!(storage.list().unwrap().is_empty());
+			// The rolled-back document must not leave a unique-key conflict
+			// or FTS residue when the still-hidden build accepts it later.
+			storage
+				.commit_document(&build, &document, &|| Ok(()))
+				.unwrap();
+			let published = storage.promote(&build, "completed").unwrap();
+			assert_eq!(published.document_count, 1);
+			assert_eq!(published.section_count, 64);
+			let matches: i64 = storage
+				.connection
+				.query_row(
+					"SELECT count(*) FROM sections_fts WHERE sections_fts MATCH 'needle'",
+					[],
+					|row| row.get(0),
+				)
+				.unwrap();
+			assert_eq!(matches, 64);
+		}
+	}
+
+	#[test]
 	fn build_guard_preserves_colliding_ids_in_another_database() {
 		let original = Fixture::new();
 		let replacement = Fixture::new();
@@ -1027,15 +1100,22 @@ mod tests {
 			.unwrap();
 		assert_eq!(build.id, 1);
 		assert_eq!(build.id, other.id);
-		new.commit_document(&other, &document()).unwrap();
-		assert!(new.commit_document(&build, &document()).is_err());
+		new.commit_document(&other, &document(), &|| Ok(()))
+			.unwrap();
+		assert!(
+			new.commit_document(&build, &document(), &|| Ok(()))
+				.is_err()
+		);
 		assert!(new.promote(&build, "hijacked").is_err());
 		new.rollback_build(&build).unwrap();
 		assert!(new.list().unwrap().is_empty());
 		let published = new.promote(&other, "replacement").unwrap();
 		assert_eq!(published.id, build.id);
 		assert_eq!(published.document_count, 1);
-		assert!(new.commit_document(&build, &document()).is_err());
+		assert!(
+			new.commit_document(&build, &document(), &|| Ok(()))
+				.is_err()
+		);
 		assert!(new.promote(&build, "hijacked").is_err());
 		new.rollback_build(&build).unwrap();
 		assert_eq!(new.list().unwrap()[0].name, "replacement");
@@ -1050,10 +1130,16 @@ mod tests {
 		storage.remove_by_id(removed.id).unwrap();
 		let current = storage.create("__building__current", "/source").unwrap();
 		assert_eq!(removed.id, current.id);
-		assert!(storage.commit_document(&removed, &document()).is_err());
+		assert!(
+			storage
+				.commit_document(&removed, &document(), &|| Ok(()))
+				.is_err()
+		);
 		assert!(storage.promote(&removed, "hijacked").is_err());
 		storage.rollback_build(&removed).unwrap();
-		storage.commit_document(&current, &document()).unwrap();
+		storage
+			.commit_document(&current, &document(), &|| Ok(()))
+			.unwrap();
 		let published = storage.promote(&current, "current").unwrap();
 		assert_eq!(published.document_count, 1);
 		storage.rollback_build(&current).unwrap();
@@ -1065,10 +1151,14 @@ mod tests {
 		let fixture = Fixture::new();
 		let storage = fixture.open();
 		let published = storage.create("__building__published", "/source").unwrap();
-		storage.commit_document(&published, &document()).unwrap();
+		storage
+			.commit_document(&published, &document(), &|| Ok(()))
+			.unwrap();
 		let retained = storage.promote(&published, "retained").unwrap();
 		let cancelled = storage.create("__building__cancelled", "/source").unwrap();
-		storage.commit_document(&cancelled, &document()).unwrap();
+		storage
+			.commit_document(&cancelled, &document(), &|| Ok(()))
+			.unwrap();
 		storage.rollback_build(&cancelled).unwrap();
 		assert!(storage.get_by_id(cancelled.id).unwrap().is_none());
 		assert_eq!(storage.list().unwrap().len(), 1);
@@ -1096,7 +1186,8 @@ mod tests {
 				.create("__building__replacement", "/replacement")
 				.unwrap();
 			assert_eq!(build.id, other.id);
-			new.commit_document(&other, &document()).unwrap();
+			new.commit_document(&other, &document(), &|| Ok(()))
+				.unwrap();
 			new.promote(&other, "replacement").unwrap();
 			new.connection
 				.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -1110,11 +1201,18 @@ mod tests {
 			}
 		}
 		fs::rename(&replacement.path, &original.path).unwrap();
-		assert!(old.commit_document(&build, &document()).is_err());
+		assert!(
+			old.commit_document(&build, &document(), &|| Ok(()))
+				.is_err()
+		);
 		assert!(old.promote(&build, "hijacked").is_err());
 		old.rollback_build(&build).unwrap();
 		let reopened = original.open();
-		assert!(reopened.commit_document(&build, &document()).is_err());
+		assert!(
+			reopened
+				.commit_document(&build, &document(), &|| Ok(()))
+				.is_err()
+		);
 		assert!(reopened.promote(&build, "hijacked").is_err());
 		reopened.rollback_build(&build).unwrap();
 		let indexes = reopened.list().unwrap();
@@ -1166,7 +1264,9 @@ mod owner_cleanup_tests {
 				.unwrap();
 			let document = super::tests::document();
 			owner
-				.with_storage(&cancel, |storage| storage.commit_document(&build, &document))
+				.with_storage(&cancel, |storage| {
+					storage.commit_document(&build, &document, &|| owner.check_import(&cancel))
+				})
 				.unwrap();
 			cancel.emplace_abort_token().abort(AbortReason::Signal);
 			let engine = WikiSearchEngine { owner: Arc::clone(&owner) };

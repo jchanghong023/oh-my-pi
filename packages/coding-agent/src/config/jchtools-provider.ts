@@ -22,6 +22,12 @@ export const JCHTOOLS_PROVIDER_ID = "jchtools";
 export const JCHTOOLS_API = "jchtools-agent";
 export const JCHTOOLS_SESSION_STATE_KEY = `${JCHTOOLS_API}:caller-text-v1`;
 
+// Symbol metadata survives in-process model spreads, never JSON/config or the model wire.
+export const JCHTOOLS_INSTANCE = Symbol("jchtools-instance");
+export type JchToolsModel = Model<Api> & {
+	[JCHTOOLS_INSTANCE]?: { id: string | undefined };
+};
+
 export function isJchToolsAgentModel(model: Pick<Model<Api>, "api"> | undefined): boolean {
 	return model?.api === JCHTOOLS_API;
 }
@@ -156,7 +162,7 @@ function errorDetail(value: unknown): string {
 
 /** A single backend Agent request, never a client tool loop or retrying model transport. */
 export function streamJchToolsAgent(
-	model: Model<Api>,
+	model: JchToolsModel,
 	context: Context,
 	options?: SimpleStreamOptions & { cwd?: string },
 ): AssistantMessageEventStream {
@@ -249,7 +255,7 @@ export function streamJchToolsAgent(
 				throw inputError("baseUrl must be the discovered bare local HTTP service root");
 			}
 			const scope = options?.sessionId
-				? `${options.sessionId}\0${path.resolve(options.cwd)}\0${base.origin}`
+				? `${options.sessionId}\0${path.resolve(options.cwd)}\0${base.origin}\0${model[JCHTOOLS_INSTANCE]?.id ?? ""}`
 				: undefined;
 			options?.signal?.throwIfAborted();
 			if (scope && options?.providerSessionState) {

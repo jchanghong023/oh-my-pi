@@ -151,7 +151,7 @@ export class RotatingFileSink {
 			return;
 		} catch (error) {
 			const fallback = this.#fallbackDirectory;
-			if (!this.#fallbackAttempted && fallback && path.resolve(fallback) !== path.resolve(this.#directory)) {
+			if (!this.#fallbackAttempted && fallback && path.relative(fallback, this.#directory) !== "") {
 				this.#fallbackAttempted = true;
 				this.#closeFd();
 				this.#directory = fallback;

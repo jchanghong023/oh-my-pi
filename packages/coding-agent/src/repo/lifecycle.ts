@@ -42,11 +42,16 @@ export class RepoLifecycle {
 			this.#indexPath = undefined;
 			// Invalidate the old cwd before resolution so a missing new directory
 			// retries on the next hint, even if the session returns to the old cwd.
-			const root = resolveRepoRoot(cwd);
-			this.#cwd = cwd;
+		}
+		// Git initialization or removal can change the scope without changing cwd.
+		const root = resolveRepoRoot(cwd);
+		if (root !== this.#root) {
+			this.#service?.close();
+			this.#service = undefined;
 			this.#root = root;
 			this.#indexPath = repoIndexPath(this.#agentDir, root);
 		}
+		this.#cwd = cwd;
 		if (this.#service?.storage.recoveryError) {
 			// An independently recovered index replaces its database file; reopen this
 			// cached broken handle so subsequent edit hints reach the new generation.

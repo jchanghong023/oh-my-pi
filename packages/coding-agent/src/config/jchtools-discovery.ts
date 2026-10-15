@@ -1,9 +1,9 @@
 import { CString, dlopen, FFIType, type Pointer, ptr, read } from "bun:ffi";
 import { createConnection, type Socket } from "node:net";
-import type { Api, FetchImpl, Model } from "@oh-my-pi/pi-ai";
+import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
-import { JCHTOOLS_API, JCHTOOLS_PROVIDER_ID } from "./jchtools-provider";
+import { JCHTOOLS_API, JCHTOOLS_INSTANCE, JCHTOOLS_PROVIDER_ID, type JchToolsModel } from "./jchtools-provider";
 
 const MAX_FRAME_BYTES = 1024 * 1024;
 const DISCOVERY_TIMEOUT_MS = 1500;
@@ -433,7 +433,7 @@ export async function discoverJchTools(
 	);
 }
 
-export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions = {}): Promise<Model<Api>[]> {
+export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions = {}): Promise<JchToolsModel[]> {
 	return logger.withLogContext(
 		{
 			operation_id: logger.getLogContext().operation_id ?? `jchtools-${crypto.randomUUID()}`,
@@ -562,7 +562,13 @@ export async function discoverJchToolsModels(options: JchToolsDiscoveryOptions =
 					contextWindow: null,
 					maxTokens: null,
 				});
-				const models = [...ids].map(id => ({ ...template, id, name: `${id} · 后端 Agent 执行 · 容量未知` }));
+				const instance = { id: descriptor.instance_id };
+				const models = [...ids].map(id => ({
+					...template,
+					id,
+					name: `${id} · 后端 Agent 执行 · 容量未知`,
+					[JCHTOOLS_INSTANCE]: instance,
+				}));
 				modelCount = models.length;
 				result = "success";
 				return models;
