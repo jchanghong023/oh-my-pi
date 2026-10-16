@@ -17,7 +17,7 @@ import {
 import { PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
 import { wrapTreeLine } from "../render/hanging-wrap";
-import { wrapTextWithAnsi } from "../utils";
+import { truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
@@ -36,6 +36,7 @@ import {
 import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -131,6 +132,8 @@ type ReadEntry = {
 	conflictCount?: number;
 	codeStartLine?: number;
 	codeLineNumbers?: Array<number | null>;
+	executionStartedAtNow?: number;
+	executionEndedAtNow?: number;
 };
 
 /**
@@ -380,6 +383,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	// width-epoch resolution and committed-render bypass must observe it.
 	#blockVersion = 0;
 	#displayVersion = 0;
+	#displayCompact = false;
 	readonly #native = new Memo();
 	/** Content previews toggled in the terminal, by tool call id. */
 	#previewCollapsed = new Map<string, boolean>();
@@ -394,7 +398,17 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	override render(width: number): readonly string[] {
 		if (!this.#toolActivityVisible) return [];
+		if (displayPreferences.compactToolActivity) {
+			this.#displayCompact = true;
+			return [...this.#entries.values()].map(entry => this.#renderCompactEntry(entry, width));
+		}
+		if (this.#displayCompact) this.#updateDisplay();
 		return super.render(width);
+	}
+
+	override invalidate(): void {
+		super.invalidate();
+		this.#updateDisplay();
 	}
 	isTranscriptBlockFinalized(): boolean {
 		if (this.#sealed) return true;
@@ -424,13 +438,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	seal(): void {
 		if (!this.#sealed) this.#blockVersion++;
 		this.#sealed = true;
+		for (const entry of this.#entries.values()) entry.executionEndedAtNow ??= performance.now();
+		this.#updateDisplay();
 	}
 
 	/** Reads never park as background tasks; the handle method is a no-op. */
 	parkAsBackground(): void {}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion;
+		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
@@ -484,6 +500,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (!entry) return;
 		if (isPartial) return;
 		this.#blockVersion++;
+		entry.executionEndedAtNow ??= performance.now();
 		const details = result.details as ReadToolDetails | undefined;
 		const suffixResolution = getSuffixResolution(details);
 		const displayPaths = getDisplayReadTargets(details);
@@ -552,7 +569,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#updateDisplay();
 	}
 
-	setExecutionStarted(_toolCallId?: string): void {
+	setExecutionStarted(toolCallId?: string): void {
+		const entry = toolCallId ? this.#entries.get(toolCallId) : undefined;
+		if (entry && entry.executionStartedAtNow === undefined) entry.executionStartedAtNow = performance.now();
 		this.#updateDisplay();
 	}
 
@@ -599,10 +618,103 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
-		const key = [dataFirst, this.#displayVersion, this.#toolActivityVisible, this.#sealed];
+		const key = [
+			dataFirst,
+			this.#displayVersion,
+			this.#toolActivityVisible,
+			this.#sealed,
+			displayPreferences.compactToolActivity,
+			cx?.cols,
+		];
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool() : this.#describeGroup(), !this.#toolActivityVisible),
+			withHidden(
+				displayPreferences.compactToolActivity
+					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
+					: dataFirst
+						? this.#describeTool()
+						: this.#describeGroup(),
+				!this.#toolActivityVisible,
+			),
 		);
+	}
+
+	#compactStatus(entry: ReadEntry): TspCardStatus {
+		if (entry.status === "error") return "error";
+		if (entry.status !== "pending") return "done";
+		if (this.#sealed) return "cancelled";
+		return entry.executionStartedAtNow === undefined ? "pending" : "running";
+	}
+
+	#compactSummary(entry: ReadEntry): string {
+		let summary = plainText(entry.path).replace(/\s+/g, " ").trim() || "…";
+		if (entry.correctedFrom) summary += ` · corrected from ${plainText(entry.correctedFrom).replace(/\s+/g, " ")}`;
+		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflicts`;
+		if (entry.status === "error") {
+			const failure = plainText((entry.contentText ?? "").split(/\r?\n/, 1)[0])
+				.replace(/^Error:\s*/, "")
+				.replace(/\s+/g, " ")
+				.trim();
+			summary = `${failure || "Read failed"} · ${summary}`;
+		}
+		return summary;
+	}
+
+	#compactElapsed(entry: ReadEntry): number | undefined {
+		if (entry.executionStartedAtNow === undefined) return undefined;
+		return Math.max(0, Math.round((entry.executionEndedAtNow ?? performance.now()) - entry.executionStartedAtNow));
+	}
+
+	#renderCompactEntry(entry: ReadEntry, width: number): string {
+		const status = this.#compactStatus(entry);
+		const ms = this.#compactElapsed(entry);
+		const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
+		const state = theme.fg(status === "error" ? "error" : "dim", `${status} · `);
+		const line = truncateToWidth(
+			`${state}${theme.fg("toolTitle", theme.bold("Read"))} ${this.#compactSummary(entry)}`,
+			Math.max(1, width - Bun.stringWidth(elapsed)),
+		);
+		return truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width);
+	}
+
+	#describeCompact(dataFirst: boolean, width: number): NativeNode {
+		const calls: NativeChild[] = [];
+		for (const entry of this.#entries.values()) {
+			const status = this.#compactStatus(entry);
+			const ms = this.#compactElapsed(entry);
+			const live = status === "running" || status === "pending";
+			const summary = this.#compactSummary(entry);
+			calls.push(
+				dataFirst
+					? node(
+							"tool",
+							{
+								role: "omp.tool.read",
+								name: "read",
+								title: "Read",
+								target: truncateToWidth(summary, Math.max(1, width - 16)),
+								targetKind: "text",
+								status,
+								tone: READ_STATUS_TONE[entry.status],
+								age: live ? ms : undefined,
+								took: live ? undefined : ms,
+								frame: "inline",
+								collapsible: false,
+							},
+							undefined,
+							entry.toolCallId,
+						)
+					: node(
+							"row",
+							{ role: "omp.tool.read", gap: "sm", align: "baseline" },
+							[
+								text(`${status} · Read ${summary}`, { lines: 1, wrap: "none", truncate: "end", grow: 1 }),
+								...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
+							],
+							entry.toolCallId,
+						),
+			);
+		}
+		return node("col", { gap: "none" }, calls);
 	}
 
 	/**
@@ -888,6 +1000,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#updateDisplay(): void {
 		this.#displayVersion++;
+		this.#displayCompact = displayPreferences.compactToolActivity;
+		if (this.#displayCompact) return;
 		const entries = [...this.#entries.values()];
 		const displayTargets = this.#displayTargetsForEntries(entries);
 		const displayRows = this.#buildSummaryRows(displayTargets);

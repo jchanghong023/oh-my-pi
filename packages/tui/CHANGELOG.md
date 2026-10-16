@@ -4,6 +4,7 @@
 
 ### Added
 
+- Compact transcript activity shows each tool invocation on one line, including failures, and keeps hidden thinking and tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.
 - Kept wide-character composer help within the terminal width when continuation rows have very little space.
 - Preserved the draft and cursor row when full or custom status lines overflow short terminals, restoring the configured layout after expansion.
 - Long composer help wraps instead of disappearing, with one empty row kept below help and drafts.

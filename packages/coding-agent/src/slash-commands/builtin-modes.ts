@@ -39,7 +39,8 @@ import {
 	cfgComputerMaxWidth,
 	cfgRatchetEnabled,
 } from "../tools/settings";
-import { cfgSkillful } from "../session/settings";
+import { cfgHideThinkingBlock, cfgSkillful } from "../session/settings";
+import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "../modes/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -329,6 +330,67 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open settings menu",
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showSettingsSelector();
+			clearSubmittedText(runtime);
+		},
+	},
+	{
+		name: "display",
+		icon: "settings",
+		description: "切换界面显示模式：干净、紧凑或详细",
+		allowArgs: true,
+		subcommandOptional: true,
+		subcommands: [
+			{ name: "clean", description: "隐藏思考正文和工具活动" },
+			{ name: "compact", description: "隐藏思考正文，每次工具调用显示一行" },
+			{ name: "detailed", description: "显示思考正文和工具详情" },
+		],
+		handleTui: async (command, runtime) => {
+			const { settings } = runtime.ctx;
+			const current = cfgDisplayHideToolActivity.get(settings)
+				? "clean"
+				: cfgDisplayCompactToolActivity.get(settings)
+					? "compact"
+					: "detailed";
+			const mode = command.args.trim() || { clean: "compact", compact: "detailed", detailed: "clean" }[current];
+			if (mode !== "clean" && mode !== "compact" && mode !== "detailed") {
+				runtime.ctx.showWarning("用法：/display [clean|compact|detailed]");
+				clearSubmittedText(runtime);
+				return;
+			}
+			const preferences = [
+				[cfgHideThinkingBlock, mode !== "detailed"],
+				[cfgDisplayHideToolActivity, mode === "clean"],
+				[cfgDisplayCompactToolActivity, mode !== "detailed"],
+			] as const;
+			for (const [setting, value] of preferences) setting.set(settings, value);
+			// Settings listeners rebuild the transcript in a coalesced microtask.
+			await Promise.resolve();
+			const label = { clean: "干净", compact: "紧凑", detailed: "详细" }[mode];
+			const shadowed = preferences.filter(([setting, value]) => setting.get(settings) !== value);
+			if (shadowed.length > 0) {
+				const sources = {
+					env: "环境变量",
+					runtime: "运行时",
+					overlay: "启动配置",
+					project: "项目配置",
+					global: "全局配置",
+					default: "默认值",
+				};
+				const overrides = shadowed
+					.map(([setting]) => `${setting.id}（${sources[setting.provenance(settings)]}）`)
+					.join("、");
+				const thinking = cfgHideThinkingBlock.get(settings) ? "隐藏" : "显示";
+				const tools = cfgDisplayHideToolActivity.get(settings)
+					? "隐藏"
+					: cfgDisplayCompactToolActivity.get(settings)
+						? "单行"
+						: "详细";
+				runtime.ctx.showWarning(
+					`显示偏好：${label}（${mode}）；当前：思考${thinking}、工具${tools}；覆盖：${overrides}`,
+				);
+			} else {
+				runtime.ctx.showStatus(`显示模式：${label}（${mode}）`);
+			}
 			clearSubmittedText(runtime);
 		},
 	},

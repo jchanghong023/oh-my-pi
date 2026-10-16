@@ -5,6 +5,8 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Text } from "@oh-my-pi/pi-tui";
+import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
+import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 type Harness = {
@@ -41,6 +43,7 @@ async function createHarness(): Promise<Harness> {
 		state: { model: undefined },
 		model: undefined,
 		thinkingLevel: undefined,
+		buildTranscriptSessionContext: () => ({ messages: [] }),
 		get isStreaming() {
 			return streaming;
 		},
@@ -162,6 +165,33 @@ describe("InteractiveMode deferred command preview", () => {
 
 		expect(noticeText(mode)).toBe("");
 		expect(transcriptText(mode)).toContain("usage panel");
+	});
+
+	it("keeps user shell and Python output mounted when rebuilding outside a model turn", async () => {
+		const { mode } = await createHarness();
+		const shell = new BashExecutionComponent("echo output", mode.ui);
+		const python = new EvalExecutionComponent("print('output')", mode.ui);
+		mode.bashComponent = shell;
+		mode.pythonComponent = python;
+		python.appendOutput("PYTHON_BEFORE\n");
+		shell.appendOutput("SHELL_BEFORE\n");
+		mode.chatContainer.addChild(python);
+		mode.chatContainer.addChild(shell);
+		try {
+			mode.rebuildChatFromMessages();
+			expect(mode.chatContainer.children).toEqual([python, shell]);
+			expect(transcriptText(mode)).toContain("PYTHON_BEFORE");
+			expect(transcriptText(mode)).toContain("SHELL_BEFORE");
+			shell.setComplete(0, false, { output: "SHELL_BEFORE\nSHELL_AFTER\n" });
+			python.setComplete(0, false, { output: "PYTHON_BEFORE\nPYTHON_AFTER\n" });
+			expect(transcriptText(mode)).toContain("SHELL_AFTER");
+			expect(transcriptText(mode)).toContain("PYTHON_AFTER");
+		} finally {
+			shell.setComplete(0, false);
+			python.setComplete(0, false);
+			mode.bashComponent = undefined;
+			mode.pythonComponent = undefined;
+		}
 	});
 
 	it("drops a stale preview when the session is reset while output is queued", async () => {

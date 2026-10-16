@@ -39,6 +39,8 @@ import { formatTurnUsage, type TurnUsageSummary } from "../overlays/usage-row";
 import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
+import { truncateToWidth } from "../utils";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
 
 /**
@@ -284,6 +286,7 @@ export class AssistantMessageComponent extends Container {
 	#kittyPreviouslyDisplayed: Map<string, ImageContent> | undefined;
 	#showImages = true;
 	#showToolResultImages = true;
+	#displayCompactToolActivity = displayPreferences.compactToolActivity;
 	/** Charts under numeric tables; off for subagent transcripts. */
 	#showTableCharts = true;
 	#transcriptBlockFinalized: boolean;
@@ -694,7 +697,10 @@ export class AssistantMessageComponent extends Container {
 	#thinkingDotsLabel(): string {
 		const glyph = THINKING_DOTS_FRAMES[this.#thinkingDotsFrame % THINKING_DOTS_FRAMES.length] ?? "…";
 		const coloredGlyph = theme.fg("thinkingText", glyph);
-		const thinkingLabel = theme.fg("muted", " Thinking");
+		const tail = this.#displayedMessage ? this.#thinkingTailIndex(this.#displayedMessage) : undefined;
+		const clock = tail === undefined ? undefined : this.#thinkingClock.get(tail);
+		const seconds = clock ? Math.max(0, Math.floor((performance.now() - clock.start) / 1000)) : 0;
+		const thinkingLabel = theme.fg("muted", ` Thinking ${seconds}s`);
 		const rate = Math.min(SPEED_MAX, sharedSpeedTracker.getSpeed());
 		// The numeric badge ("<total> · <rate> toks/s") only renders while this block
 		// is genuinely streaming provider tokens. A block that has observed no token
@@ -798,6 +804,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
+		if (this.#displayCompactToolActivity !== displayPreferences.compactToolActivity) this.invalidate();
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
 		return rows;
@@ -825,6 +832,7 @@ export class AssistantMessageComponent extends Container {
 			this.#hideThinkingBlock,
 			this.#showImages,
 			this.#showToolResultImages,
+			displayPreferences.compactToolActivity,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
@@ -933,8 +941,10 @@ export class AssistantMessageComponent extends Container {
 						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
-					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
-					if (!display.visible) continue;
+					const display = this.#hideThinkingBlock
+						? undefined
+						: resolveThinkingDisplay(content, this.#proseOnlyThinking);
+					if (!this.#hideThinkingBlock && !display?.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;
 					const clock = this.#thinkingClock.get(index);
 					if (thinkingLive) {
@@ -945,6 +955,21 @@ export class AssistantMessageComponent extends Container {
 					}
 					// Hidden (Ctrl+T): only the live "Thinking…" head shows; a finished thought leaves nothing.
 					if (this.#hideThinkingBlock && !thinkingLive) continue;
+					if (this.#hideThinkingBlock) {
+						children.push(
+							node(
+								"row",
+								{ role: "omp.thinking.live", gap: "sm", align: "baseline" },
+								[
+									node("spinner", { style: "starburst" }),
+									text("Thinking…", { lines: 1, truncate: "end" }),
+									elapsed(performance.now() - (this.#thinkingClock.get(index)?.start ?? performance.now())),
+								],
+								`k${index}`,
+							),
+						);
+						continue;
+					}
 					const tokens = thinkingLive ? this.#thinkingTokens : (clock?.tokens ?? 0);
 					const title = tokens > 0 ? `${formatNumber(tokens)} tokens` : undefined;
 					// Live: starburst · "Thinking…" · ticking timer · tok/s. Done: "Thought for 12s".
@@ -961,7 +986,7 @@ export class AssistantMessageComponent extends Container {
 								"head",
 							)
 						: node("text", { spans: [span(thoughtLabel(clock), "muted")], title }, undefined, "head");
-					const body = markdown(`k${index}`, "body", display.text, streaming);
+					const body = markdown(`k${index}`, "body", display?.text ?? "", streaming);
 					children.push(
 						node(
 							"section",
@@ -985,7 +1010,7 @@ export class AssistantMessageComponent extends Container {
 					children.push(this.#nativeImages.get(`i${index}`, content.data, content.mimeType));
 				}
 			}
-			if (this.#showImages && this.#showToolResultImages) {
+			if (this.#showImages && this.#showToolResultImages && !displayPreferences.compactToolActivity) {
 				// Reads of files Tern's media viewer shows: the host loads each file once by path, no bytes uploaded.
 				const shownPaths = new Set<string>();
 				if (media) {
@@ -1481,7 +1506,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion;
+		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -1656,7 +1681,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#renderToolImages(): void {
-		if (!this.#showToolResultImages) return;
+		if (!this.#showToolResultImages || displayPreferences.compactToolActivity) return;
 		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) => {
 			const sourcePath = this.#toolMediaPathByCallId.get(toolCallId);
 			return images.map((image, index) => ({ image, key: `${toolCallId}:${index}`, sourcePath }));
@@ -1798,6 +1823,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
+		this.#displayCompactToolActivity = displayPreferences.compactToolActivity;
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
@@ -1805,6 +1831,13 @@ export class AssistantMessageComponent extends Container {
 		// verbatim message so re-renders re-derive the reaction deterministically.
 		message = this.#displayMessage(message, this.#lastUpdateTransient);
 		this.#displayedMessage = message;
+		const thinkingTail = this.#thinkingTailIndex(message);
+		if (thinkingTail !== undefined && !this.#thinkingClock.has(thinkingTail)) {
+			this.#thinkingClock.set(thinkingTail, { start: performance.now(), tokens: this.#thinkingTokens });
+		}
+		for (const [index, clock] of this.#thinkingClock) {
+			if (index !== thinkingTail) clock.end ??= performance.now();
+		}
 
 		// Streaming-speed gauge: only a live, in-flight render of the single
 		// animating hidden-thinking block feeds the shared session tracker. The
@@ -1926,7 +1959,9 @@ export class AssistantMessageComponent extends Container {
 
 		if (this.#shouldAnimateThinking(message)) {
 			if (hasVisibleContent) this.#contentContainer.addChild(new Spacer(1));
-			this.#thinkingDots = new Text(this.#thinkingDotsLabel(), 1, 0);
+			this.#thinkingDots = new Text(this.#thinkingDotsLabel(), 1, 0).setWrapLine((line, width) => [
+				truncateToWidth(line, width),
+			]);
 			this.#contentContainer.addChild(this.#thinkingDots);
 			this.#startThinkingAnimation();
 		} else {

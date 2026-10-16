@@ -346,6 +346,7 @@ import {
 	cfgComposerTokenRate,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
+	cfgDisplayCompactToolActivity,
 	cfgDisplayHideToolActivity,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
@@ -439,6 +440,7 @@ const cfgLiveUiSettings = combine({
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
 	"display.hideToolActivity": cfgDisplayHideToolActivity,
+	"display.compactToolActivity": cfgDisplayCompactToolActivity,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -3631,7 +3633,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Field comparisons skip effects the keybinding toggles already applied.
 		const hideToolActivity = cfgDisplayHideToolActivity.get(this.settings);
-		if (any("display.hideToolActivity") && hideToolActivity !== this.hideToolActivity) {
+		const compactToolActivity = cfgDisplayCompactToolActivity.get(this.settings);
+		if (
+			(any("display.hideToolActivity") && hideToolActivity !== this.hideToolActivity) ||
+			any("display.compactToolActivity")
+		) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
 			for (const child of this.chatContainer.children) {
@@ -3641,13 +3647,13 @@ export class InteractiveMode implements InteractiveModeContext {
 				) {
 					child.setExpanded(false);
 				} else if (child instanceof AssistantMessageComponent) {
-					child.setToolResultImagesVisible(!hideToolActivity);
+					child.setToolResultImagesVisible(!hideToolActivity && !compactToolActivity);
 				}
 			}
 			this.chatContainer.setToolActivityVisible(!hideToolActivity);
-			if (hideToolActivity) this.ui.clearInlineImages();
-			// Visibility changes must rebuild retired terminal history.
-			resetDisplay = true;
+			if (hideToolActivity || compactToolActivity) this.ui.clearInlineImages();
+			// Recreate settled blocks and replace retired rows using the new presentation.
+			rebuildChat = true;
 		}
 		if (any("terminal.showImages")) {
 			const visible = cfgTerminalShowImages.get(this.settings);
@@ -3667,7 +3673,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			for (const child of this.chatContainer.children) {
 				if (child instanceof AssistantMessageComponent) child.setHideThinkingBlock(this.effectiveHideThinkingBlock);
 			}
-			this.ui.requestRender(true);
+			if (this.streamingComponent && this.streamingMessage) {
+				this.streamingComponent.setHideThinkingBlock(this.effectiveHideThinkingBlock);
+				this.streamingComponent.updateContent(this.streamingMessage);
+			}
+			rebuildChat = true;
 		}
 		const proseOnlyThinking = cfgProseOnlyThinking.get(this.settings);
 		if (any("proseOnlyThinking") && proseOnlyThinking !== this.proseOnlyThinking) {
@@ -3996,17 +4006,20 @@ export class InteractiveMode implements InteractiveModeContext {
 		// and restore the `pendingTools` map so streaming routes back into them.
 		const liveComponents: Component[] = [];
 		const livePendingTools = new Map<string, ToolExecutionHandle>();
+		const liveSet = new Set<Component>();
 		if (this.viewSession?.isStreaming) {
-			const liveSet = new Set<Component>();
 			if (this.streamingComponent) liveSet.add(this.streamingComponent);
 			for (const [id, component] of this.pendingTools) {
 				livePendingTools.set(id, component);
 				liveSet.add(component as unknown as Component);
 			}
-			if (liveSet.size > 0) {
-				for (const child of this.chatContainer.children) {
-					if (liveSet.has(child)) liveComponents.push(child);
-				}
+		}
+		// User-started executions can be live while no model turn is streaming.
+		if (this.bashComponent) liveSet.add(this.bashComponent);
+		if (this.pythonComponent) liveSet.add(this.pythonComponent);
+		if (liveSet.size > 0) {
+			for (const child of this.chatContainer.children) {
+				if (liveSet.has(child)) liveComponents.push(child);
 			}
 		}
 		this.chatContainer.clear();

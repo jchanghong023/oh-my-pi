@@ -52,6 +52,7 @@ import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from ".
 import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
@@ -390,6 +391,7 @@ export class ToolExecutionComponent extends Container {
 	// committed-render bypass must observe those mutations.
 	#blockVersion = 0;
 	#lastDisplayKey: string | undefined;
+	#displayCompactToolActivity = false;
 	// Bumped whenever a render input that #rebuildDisplay consumes but the memo
 	// key cannot cheaply hash changes: streamed call args, native edit-diff
 	// previews, and Kitty PNG conversions. Folded into the dirty key so those
@@ -850,7 +852,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion;
+		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
 	}
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
 	parkAsBackground(): void {
@@ -990,11 +992,20 @@ export class ToolExecutionComponent extends Container {
 			this.#showImages,
 			this.#displayInputVersion,
 			this.#toolActivityVisible,
+			displayPreferences.compactToolActivity,
+			cx?.cols,
 			media,
 			getThemeEpoch(),
 		];
 		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool(media) : this.#describeCard(media), !this.#toolActivityVisible),
+			withHidden(
+				displayPreferences.compactToolActivity
+					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
+					: dataFirst
+						? this.#describeTool(media)
+						: this.#describeCard(media),
+				!this.#toolActivityVisible,
+			),
 		);
 	}
 
@@ -1004,6 +1015,52 @@ export class ToolExecutionComponent extends Container {
 		if (started === undefined) return undefined;
 		const ended = status === "running" ? undefined : this.#executionEndedAtNow;
 		return Math.max(0, Math.round((ended ?? performance.now()) - started));
+	}
+
+	/** Compact mode never constructs a renderer body, so terminal-local expansion cannot reveal it. */
+	#describeCompact(dataFirst: boolean, width: number): NativeNode {
+		const summary = this.#compactActivity();
+		const status = this.#nativeStatus();
+		const ms = this.#elapsedMs(status);
+		const live = status === "running" || status === "pending";
+		if (dataFirst) {
+			return node("tool", {
+				role: `omp.tool.${this.#toolName}`,
+				key: this.#toolCallId,
+				name: this.#toolName,
+				title: truncateToWidth(summary.label, Math.max(1, width - 16)),
+				target: summary.detail
+					? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(summary.label) - 16))
+					: undefined,
+				targetKind: "text",
+				status,
+				age: live ? ms : undefined,
+				took: live ? undefined : ms,
+				frame: "inline",
+				collapsible: false,
+			});
+		}
+		return node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
+			text(`${status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
+				lines: 1,
+				wrap: "none",
+				truncate: "end",
+				grow: 1,
+			}),
+			...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
+		]);
+	}
+
+	#compactActivity(): ToolActivitySummary {
+		const summary = this.#activitySummary();
+		const label = plainText(summary.label).replace(/\s+/g, " ").trim();
+		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
+		if (this.#result?.isError) {
+			const failure = this.#result.content.find(block => block.type === "text" && block.text)?.text;
+			const firstLine = failure ? plainText(failure.split(/\r?\n/, 1)[0]).replace(/\s+/g, " ").trim() : "";
+			detail = `${firstLine || "Tool failed"}${detail ? ` · ${detail}` : ""}`;
+		}
+		return { label, detail };
 	}
 
 	/**
@@ -1288,12 +1345,13 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
+		const key = `${displayPreferences.compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
 
 		this.#rebuildDisplay();
 		this.#displayBuilt = true;
+		this.#displayCompactToolActivity = displayPreferences.compactToolActivity;
 	}
 
 	#rendererFlag(name: "forceResultViewportRepaintOnSettle"): boolean {
@@ -1334,6 +1392,8 @@ export class ToolExecutionComponent extends Container {
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
+		if (displayPreferences.compactToolActivity) return this.#renderCompact(width, true);
+		if (this.#displayCompactToolActivity) this.#updateDisplay();
 		let lines = super.render(width);
 		if (this.#allocation < 3) {
 			// A squeezed allocation degrades only blocks that genuinely overflow it.
@@ -1350,7 +1410,20 @@ export class ToolExecutionComponent extends Container {
 		return lines;
 	}
 
-	#renderCompact(width: number): readonly string[] {
+	#renderCompact(width: number, singleLine = false): readonly string[] {
+		if (singleLine) {
+			const summary = this.#compactActivity();
+			const status = this.#nativeStatus();
+			const ms = this.#elapsedMs(status);
+			const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
+			const state = theme.fg(status === "error" ? "error" : "dim", `${status} · `);
+			const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail}`) : "";
+			const line = truncateToWidth(
+				`${state}${theme.fg("toolTitle", theme.bold(summary.label))}${detail}`,
+				Math.max(1, width - Bun.stringWidth(elapsed)),
+			);
+			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
+		}
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";
 		// Elapsed ticks only while the call is genuinely running; a settled
@@ -1415,6 +1488,10 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#rebuildDisplay(): void {
+		if (displayPreferences.compactToolActivity) {
+			this.#renderState.renderContext = this.#buildRenderContext();
+			return;
+		}
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
@@ -1805,7 +1882,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.#toolName === "bash") {
 			// Bash needs render context even before a result exists. The renderer uses the pending-call args
 			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
-			if (this.#result) {
+			if (this.#result && !displayPreferences.compactToolActivity) {
 				// Pass raw output and expanded state - renderer handles width-aware truncation
 				const output = this.#getTextOutput().trimEnd();
 				context.output = output;
@@ -1813,7 +1890,7 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(isRecord(this.#args) ? this.#args.timeout : undefined, 3600);
-		} else if (this.#toolName === "eval" && this.#result) {
+		} else if (this.#toolName === "eval" && this.#result && !displayPreferences.compactToolActivity) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
@@ -1839,7 +1916,7 @@ export class ToolExecutionComponent extends Container {
 					context.perFileDiffPreview = previews;
 				}
 			}
-			if (!previews?.some(preview => preview.diff)) {
+			if (!displayPreferences.compactToolActivity && !previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const fallback = editMode ? renderStreamingFallback(editMode, this.#args, theme) : "";
 				if (fallback) context.editStreamingFallback = fallback;

@@ -170,7 +170,7 @@ export const cfgDefaultThinkingLevel = register({
 export const cfgHideThinkingBlock = register({
 	id: "hideThinkingBlock",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "model",
 		group: "Thinking",

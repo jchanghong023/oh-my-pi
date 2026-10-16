@@ -4,6 +4,7 @@
 
 ### Added
 
+- Switch between clean, compact and detailed terminal views with `/display`; compact is the default, and choices persist per profile without changing model or tool execution.
 - Load additional shared skills from `OMP_SKILLS_DIR`, preferring shared versions on name collisions without changing user configuration.
 - Store all Wiki database operations in `OMP_WIKI_DIR/docs.db` when set, sharing the selected database across users and profiles while retaining the existing default when unset.
 - Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.
 - Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.
 - Kept successful repository recovery successful when backup cleanup fails, and preserved the original maintenance error when uncertainty recording also fails.
 - Serialized Windows Rust launcher publication across gate processes without changing the stable compiler cache.

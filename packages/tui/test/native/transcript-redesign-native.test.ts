@@ -155,9 +155,10 @@ describe("native transcript redesign", () => {
 		});
 		component.updateContent(message({ type: "thinking", thinking: "Weighing it" }), { transient: true });
 		await harness.render();
-		expect(harness.find(node => node.k === "section" && node.p?.role === "omp.thinking.live")?.p).toMatchObject({
-			collapsed: true,
-		});
+		const live = harness.find(node => node.k === "row" && node.p?.role === "omp.thinking.live");
+		expect(live).toBeDefined();
+		expect(live?.p).not.toHaveProperty("collapsible", true);
+		expect(JSON.stringify(live)).not.toContain("Weighing it");
 
 		component.updateContent(
 			message({ type: "thinking", thinking: "Weighing it carefully" }, { type: "text", text: "Done." }),

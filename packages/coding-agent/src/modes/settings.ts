@@ -661,6 +661,18 @@ export const cfgDisplayHideToolActivity = register({
 	},
 });
 
+export const cfgDisplayCompactToolActivity = register({
+	id: "display.compactToolActivity",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Compact Tool Activity",
+		description: "Show each model-initiated tool call as one status line without arguments, output, or images",
+	},
+});
+
 export const cfgDisplayShowTokenUsage = register({
 	id: "display.showTokenUsage",
 	type: "boolean",
@@ -699,6 +711,7 @@ export const cfgDisplayCacheMissMarker = register({
 effect(
 	combine({
 		hideToolActivity: cfgDisplayHideToolActivity,
+		compactToolActivity: cfgDisplayCompactToolActivity,
 		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,
 		cacheMissMarker: cfgDisplayCacheMissMarker,
