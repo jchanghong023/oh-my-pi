@@ -1230,7 +1230,7 @@ export const cfgErrorNotify = register({
 export const cfgAskTimeout = register({
 	id: "ask.timeout",
 	type: "number",
-	default: 30,
+	default: 60,
 	ui: {
 		tab: "interaction",
 		group: "Notifications",

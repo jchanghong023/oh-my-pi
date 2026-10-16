@@ -12,7 +12,7 @@
 
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
-- Unanswered ask dialogs now return an explicitly marked reply authorizing continued work on the original objective after the existing timeout, instead of selecting a default option.
+- Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.
 
 ### Fixed
 

@@ -13,7 +13,8 @@ import type { AskToolDetails, QuestionResult } from "@oh-my-pi/pi-tui/tools/ask"
  *   - Users will always be able to select "Other" to provide custom text input
  *   - Use multi: true to allow multiple answers to be selected for a question
  *   - Use recommended: <index> to mark the default option; "(Recommended)" suffix is added automatically
- *   - Unanswered questions may time out and return an automatic continuation reply (disabled in plan mode)
+ *   - Questions may time out and auto-select an option; active goal-autopilot uses a continuation reply instead
+ *     (timeout is disabled in plan mode)
  */
 
 import { type as arkType } from "@oh-my-pi/omptype";
@@ -156,6 +157,14 @@ function addRecommendedSuffix(options: AskOption[], recommendedIndex?: number): 
 	});
 }
 
+function getAutoSelectionOnTimeout(options: AskOption[], recommended?: number): string[] {
+	if (options.length === 0) return [];
+	if (typeof recommended === "number" && recommended >= 0 && recommended < options.length) {
+		return [options[recommended]!.label];
+	}
+	return [options[0]!.label];
+}
+
 /** Strip "(Recommended)" suffix from a label */
 function stripRecommendedSuffix(label: string): string {
 	return label.endsWith(RECOMMENDED_SUFFIX) ? label.slice(0, -RECOMMENDED_SUFFIX.length) : label;
@@ -182,6 +191,7 @@ interface NavigationControls {
 interface AskSingleQuestionOptions {
 	recommended?: number;
 	timeout?: number;
+	autoReplyOnTimeout?: boolean;
 	signal?: AbortSignal;
 	initialSelection?: Pick<QuestionResult, "selectedOptions" | "customInput" | "note" | "timedOut">;
 	navigation?: NavigationControls;
@@ -223,12 +233,12 @@ async function askSingleQuestion(
 	multi: boolean,
 	options: AskSingleQuestionOptions = {},
 ): Promise<SelectionResult> {
-	const { recommended, timeout, signal, initialSelection, navigation } = options;
+	const { recommended, timeout, autoReplyOnTimeout, signal, initialSelection, navigation } = options;
 	const doneLabel = getDoneOptionLabel();
 	let selectedOptions = [...(initialSelection?.selectedOptions ?? [])];
 	let customInput = initialSelection?.customInput;
 	const note = initialSelection?.note;
-	let timedOut = initialSelection?.timedOut ?? false;
+	let timedOut = autoReplyOnTimeout ? (initialSelection?.timedOut ?? false) : false;
 
 	const selectOption = async (
 		prompt: string,
@@ -351,7 +361,7 @@ async function askSingleQuestion(
 				markableCount: questionOptions.length,
 			});
 
-			if (selectTimedOut) {
+			if (selectTimedOut && autoReplyOnTimeout) {
 				selectedOptions = Array.from(selected);
 				if (selectedOptions.length === 0 && customInput === undefined) {
 					customInput = ASK_TIMEOUT_REPLY;
@@ -369,11 +379,19 @@ async function askSingleQuestion(
 				return { selectedOptions: Array.from(selected), customInput, note, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
+				if (selectTimedOut) {
+					timedOut = true;
+					break;
+				}
 				return { selectedOptions: Array.from(selected), customInput, note, timedOut: false, cancelled: true };
 			}
 			if (choice === doneLabel) break;
 
 			if (choice === OTHER_OPTION) {
+				if (selectTimedOut) {
+					timedOut = true;
+					break;
+				}
 				const customResult = await promptForCustomInput(`${prefix}${promptWithProgress}`);
 				if (customResult.input === undefined) {
 					continue;
@@ -394,6 +412,11 @@ async function askSingleQuestion(
 				selected.delete(choice);
 			} else {
 				selected.add(choice);
+			}
+
+			if (selectTimedOut) {
+				timedOut = true;
+				break;
 			}
 		}
 		selectedOptions = Array.from(selected);
@@ -430,27 +453,29 @@ async function askSingleQuestion(
 				selectionMarker: "radio",
 				markableCount: displayOptions.length,
 			});
-			if (selectTimedOut) {
+			if (selectTimedOut && autoReplyOnTimeout) {
 				if (selectedOptions.length === 0 && customInput === undefined) {
 					customInput = ASK_TIMEOUT_REPLY;
 					timedOut = true;
 				}
 				break;
 			}
+			timedOut = selectTimedOut;
 
 			if (arrowNavigation) {
 				return { selectedOptions, customInput, note, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
+				if (timedOut) break;
 				return { selectedOptions, customInput, note, timedOut: false, cancelled: true };
 			}
 			if (choice === OTHER_OPTION) {
+				if (selectTimedOut) break;
 				const customResult = await promptForCustomInput(promptWithProgress);
 				if (customResult.input === undefined) {
 					continue;
 				}
 				customInput = customResult.input;
-				timedOut = false;
 				selectedOptions = [];
 				break;
 			}
@@ -461,12 +486,18 @@ async function askSingleQuestion(
 			const pickedIndex = displayOptions.findIndex(option => getSelectOptionLabel(option) === choice);
 			selectedOptions = [pickedIndex >= 0 ? questionOptions[pickedIndex]!.label : stripRecommendedSuffix(choice)];
 			customInput = undefined;
-			timedOut = false;
 			break;
+		}
+		if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
+			selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 		}
 		if (navigation?.allowForward) {
 			return { selectedOptions, customInput, note, timedOut, navigation: "forward" };
 		}
+	}
+
+	if (timedOut && selectedOptions.length === 0 && customInput === undefined) {
+		selectedOptions = getAutoSelectionOnTimeout(questionOptions, recommended);
 	}
 
 	return { selectedOptions, customInput, note, timedOut };
@@ -482,7 +513,8 @@ function formatQuestionResult(result: QuestionResult): string {
 	}
 	const picked = result.multi ? `[${result.selectedOptions.join(", ")}]` : result.selectedOptions[0];
 	const answer = custom === undefined ? picked : `${picked} + ${custom}`;
-	return `${result.id}: ${answer}${timeoutSuffix}${noteSuffix}`;
+	const selectionTimeoutSuffix = result.timedOut ? " (auto-selected after timeout)" : "";
+	return `${result.id}: ${answer}${selectionTimeoutSuffix}${noteSuffix}`;
 }
 
 function formatSingleQuestionResponse(result: {
@@ -497,10 +529,13 @@ function formatSingleQuestionResponse(result: {
 		const selectedText = result.multi
 			? `User selected: ${result.selectedOptions.join(", ")}`
 			: `User selected: ${result.selectedOptions[0]}`;
-		responseParts.push(selectedText);
+		responseParts.push(result.timedOut ? `${selectedText} (auto-selected after timeout)` : selectedText);
 	}
 	if (result.customInput !== undefined) {
-		const label = result.timedOut ? "Automatic reply after timeout" : "User provided custom input";
+		const label =
+			result.timedOut && result.selectedOptions.length === 0
+				? "Automatic reply after timeout"
+				: "User provided custom input";
 		responseParts.push(
 			result.customInput.includes("\n")
 				? `${label}:\n${result.customInput
@@ -738,6 +773,12 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
 		const settingsTimeout = askTimeoutMs(this.session.settings) ?? null;
 		const timeout = planModeEnabled ? null : settingsTimeout;
+		const goalState = this.session.getGoalModeState?.();
+		const autoReplyOnTimeout =
+			goalState?.enabled === true &&
+			goalState.mode === "active" &&
+			goalState.goal.status === "active" &&
+			goalState.autoOrchestrate === true;
 
 		// Send notification if waiting and not suppressed
 		this.#sendAskNotification();
@@ -817,12 +858,13 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						question: question.question,
 						options: question.options.map(option => option.label),
 						multi: question.multi ?? false,
-						selectedOptions: result.timedOut ? [] : result.selectedOptions,
-						customInput: result.timedOut
-							? ASK_TIMEOUT_REPLY
-							: result.customInput === undefined
-								? undefined
-								: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
+						selectedOptions: autoReplyOnTimeout && result.timedOut ? [] : result.selectedOptions,
+						customInput:
+							autoReplyOnTimeout && result.timedOut
+								? ASK_TIMEOUT_REPLY
+								: result.customInput === undefined
+									? undefined
+									: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
 						note:
 							result.note === undefined
 								? undefined
@@ -888,6 +930,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					{
 						recommended: q.recommended ?? undefined,
 						timeout: timeout ?? undefined,
+						autoReplyOnTimeout,
 						signal,
 						initialSelection: options?.previous,
 						navigation: options?.navigation,

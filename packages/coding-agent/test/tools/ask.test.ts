@@ -20,6 +20,22 @@ import * as ai from "@oh-my-pi/pi-ai";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { GoalModeState } from "../../src/goals/state";
+
+const autopilotState: GoalModeState = {
+	enabled: true,
+	mode: "active",
+	autoOrchestrate: true,
+	goal: {
+		id: "ask-autopilot",
+		objective: "Finish the current task",
+		status: "active",
+		tokensUsed: 0,
+		timeUsedSeconds: 0,
+		createdAt: 0,
+		updatedAt: 0,
+	},
+};
 
 // 1x1 transparent PNG.
 const TINY_PNG_BASE64 =
@@ -160,10 +176,11 @@ describe("AskTool cancellation", () => {
 		).rejects.toBeInstanceOf(ToolAbortError);
 		expect(abort).toHaveBeenCalledTimes(1);
 	});
-	it("does not choose the recommended answer when the selector times out", async () => {
+	it("does not choose the recommended answer when an active autopilot selector times out", async () => {
 		const tool = new AskTool(
 			createSession({
 				settings: Settings.isolated({ "ask.timeout": 0.001 }),
+				getGoalModeState: () => autopilotState,
 			}),
 		);
 		const abort = vi.fn();
@@ -295,14 +312,19 @@ describe("AskTool cancellation", () => {
 			context,
 		);
 
-		expect(result.details?.selectedOptions).toEqual([]);
+		expect(result.details?.selectedOptions).toEqual(["yes"]);
 		expect(result.details?.timedOut).toBe(true);
 		expect(editor).not.toHaveBeenCalled();
 		expect(abort).not.toHaveBeenCalled();
 	}, 30_000);
 
 	it("preserves manually checked answers when a multi-select later times out", async () => {
-		const tool = new AskTool(createSession({ settings: Settings.isolated({ "ask.timeout": 30 }) }));
+		const tool = new AskTool(
+			createSession({
+				settings: Settings.isolated({ "ask.timeout": 30 }),
+				getGoalModeState: () => autopilotState,
+			}),
+		);
 		let calls = 0;
 		const context = createContext({
 			select: async (_prompt, _options, dialogOptions) => {
@@ -1397,8 +1419,24 @@ describe("askToolRenderer malformed call args", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
-	it("does not infer consent from affirmative labels when the real rich dialog times out", async () => {
-		const tool = new AskTool(createSession({ settings: Settings.isolated({ "ask.timeout": 0.001 }) }));
+	it.each<{ name: string; state: GoalModeState | undefined; selectedOptions: string[] }>([
+		{ name: "ordinary chat", state: undefined, selectedOptions: ["不提交"] },
+		{ name: "ordinary Goal", state: { ...autopilotState, autoOrchestrate: undefined }, selectedOptions: ["不提交"] },
+		{ name: "active autopilot", state: autopilotState, selectedOptions: [] },
+		{ name: "paused autopilot", state: { ...autopilotState, enabled: false }, selectedOptions: ["不提交"] },
+		{ name: "exiting autopilot", state: { ...autopilotState, mode: "exiting" }, selectedOptions: ["不提交"] },
+		{
+			name: "budget-limited autopilot",
+			state: { ...autopilotState, goal: { ...autopilotState.goal, status: "budget-limited" } },
+			selectedOptions: ["不提交"],
+		},
+	])("uses the correct timeout answer for $name in the real rich dialog", async ({ state, selectedOptions }) => {
+		const tool = new AskTool(
+			createSession({
+				settings: Settings.isolated({ "ask.timeout": 0.001 }),
+				getGoalModeState: () => state,
+			}),
+		);
 		const result = await tool.execute(
 			"call-null-recommendation",
 			{
@@ -1435,12 +1473,12 @@ describe("AskTool rich ask dialog", () => {
 				},
 			}),
 		);
-		expect(result.details?.selectedOptions).toEqual([]);
+		expect(result.details?.selectedOptions).toEqual(selectedOptions);
 		expect(result.details?.timedOut).toBe(true);
 	});
 
 	it("preserves answered questions and notes when another rich-dialog answer times out", async () => {
-		const tool = new AskTool(createSession());
+		const tool = new AskTool(createSession({ getGoalModeState: () => autopilotState }));
 		const result = await tool.execute(
 			"mixed-timeout",
 			{

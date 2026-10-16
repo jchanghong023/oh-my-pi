@@ -41,7 +41,7 @@ describe("AskTool timeout", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("returns an automatic reply without selecting an option when the selector does not settle", async () => {
+	it("selects the recommended answer when the selector does not settle", async () => {
 		vi.useFakeTimers();
 		const select = vi.fn<AskSelect>(() => Promise.withResolvers<string | undefined>().promise);
 		const abort = vi.fn();
@@ -87,7 +87,7 @@ describe("AskTool timeout", () => {
 		await drainMicrotasks();
 
 		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual([]);
+		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
 		expect(result?.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	});
@@ -152,7 +152,7 @@ describe("AskTool timeout", () => {
 		await drainMicrotasks();
 
 		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual([]);
+		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
 		expect(result?.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	});
@@ -216,12 +216,12 @@ describe("AskTool timeout", () => {
 		await drainMicrotasks();
 
 		expect(rejection).toBeUndefined();
-		expect(result?.details?.selectedOptions).toEqual([]);
+		expect(result?.details?.selectedOptions).toEqual(["Postgres"]);
 		expect(result?.details?.timedOut).toBe(true);
 		expect(abort).not.toHaveBeenCalled();
 	});
 
-	it("automatically replies to timed-out questions while preserving later manual answers", async () => {
+	it("auto-selects timed-out questions while preserving later manual answers", async () => {
 		vi.useFakeTimers();
 		let callCount = 0;
 		const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
@@ -283,7 +283,7 @@ describe("AskTool timeout", () => {
 
 		expect(rejection).toBeUndefined();
 		expect(select).toHaveBeenCalledTimes(2);
-		expect(result?.details?.results?.[0]?.selectedOptions).toEqual([]);
+		expect(result?.details?.results?.[0]?.selectedOptions).toEqual(["Postgres"]);
 		expect(result?.details?.results?.[0]?.timedOut).toBe(true);
 		expect(result?.details?.results?.[1]?.selectedOptions).toEqual(["OAuth"]);
 		expect(result?.details?.results?.[1]?.timedOut).toBeUndefined();
