@@ -3441,7 +3441,9 @@ describe("agentLoop with AgentMessage", () => {
 			parameters: toolSchema,
 			async execute(_toolCallId, _params, signal) {
 				await peeked.promise;
-				await new Promise<void>(resolve => setImmediate(resolve));
+				const tick = Promise.withResolvers<void>();
+				setImmediate(tick.resolve);
+				await tick.promise;
 				abortedBeforeCancel = signal?.aborted === true;
 				controller.abort();
 				throw new Error("Ask tool was cancelled by the user");

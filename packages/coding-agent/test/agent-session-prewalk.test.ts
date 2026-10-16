@@ -8,6 +8,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { CustomToolAdapter } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/wrapper";
 import { DeferredMCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
+import { dispatchXdevTool, type XdevDispatch, type XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -935,24 +936,32 @@ describe("AgentSession prewalk", () => {
 					throw new Error("MCP connection is not used by this write fixture");
 				},
 			);
-			const mounted = new CustomToolAdapter(mcp, () => {
-				throw new Error("MCP context is not used");
-			});
+			const xdevState: XdevState = {
+				tools: new Map([
+					[
+						mcp.name,
+						new CustomToolAdapter(mcp, () => {
+							throw new Error("MCP context is not used");
+						}),
+					],
+				]),
+				mountedNames: new Set([mcp.name]),
+				builtInNames: new Set(),
+				isActive: () => false,
+			};
 			let writes = 0;
-			const dispatchedWrite: AgentTool<
-				typeof writeToolSchema,
-				{ xdev: { tool: string; mode: "execute"; tier: "write" } } | undefined
-			> = {
+			const dispatchedWrite: AgentTool<typeof writeToolSchema, { xdev: XdevDispatch } | undefined> = {
 				name: "write",
 				label: "Write",
 				description: "MCP lookup then workspace write",
 				parameters: writeToolSchema,
-				async execute() {
+				async execute(toolCallId) {
 					if (writes++ === 0) {
-						return {
-							content: [{ type: "text", text: "projects" }],
-							details: { xdev: { tool: mcp.name, mode: "execute", tier: mcp.approval } },
-						};
+						const { result, xdev } = await dispatchXdevTool(xdevState, mcp.name, "{}", toolCallId);
+						// A tools/list_changed refresh drops the definition before the turn ends; the
+						// gate must classify the tool that ran.
+						xdevState.tools.delete(mcp.name);
+						return { content: result.content, details: { xdev } };
 					}
 					return { content: [{ type: "text", text: "implementation written" }], details: undefined };
 				},
@@ -969,7 +978,6 @@ describe("AgentSession prewalk", () => {
 					registry: new Map<string, AgentTool>([
 						[todoTool.name, todoTool],
 						[dispatchedWrite.name, dispatchedWrite],
-						[mcp.name, mounted],
 					]),
 				},
 			);

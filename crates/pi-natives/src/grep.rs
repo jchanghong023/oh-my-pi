@@ -890,8 +890,15 @@ fn build_searcher(
 		.multi_line(multiline)
 		.before_context(context_before as usize)
 		.after_context(context_after as usize)
+		// A streamed file's buffer grows to hold its longest line; a minified
+		// file can be one line, so bound it rather than load the whole file.
+		.heap_limit(Some(STREAM_LINE_LIMIT_BYTES))
 		.build()
 }
+
+/// Longest line a streamed search buffers before it fails instead of growing
+/// further; slices already in memory are unaffected.
+const STREAM_LINE_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 const FILE_CLASSIFICATION_READ_BYTES: u64 = MAX_FILE_BYTES + 1;
 
@@ -2390,15 +2397,32 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 				});
 			},
 		};
+		// A streamed search fails once a line outgrows its buffer limit; say so,
+		// since the searcher's own message names only the allocation.
+		let streamed = matches!(haystack, Haystack::Reader(_));
+		let search_failed = |err: io::Error| {
+			let hint = if streamed {
+				format!(
+					" (a line longer than {} MiB cannot be searched; use read for this file)",
+					STREAM_LINE_LIMIT_BYTES / (1024 * 1024)
+				)
+			} else {
+				String::new()
+			};
+			Error::from_reason(format!("Search failed: {err}{hint}"))
+		};
 
-		if let Haystack::Slice(bytes) = &haystack
-			&& output_mode == OutputMode::FilesWithMatches
-			&& max_count.is_none()
-			&& offset == 0
-		{
-			let matched = matcher
-				.is_match(bytes)
-				.map_err(|err| Error::from_reason(format!("Search failed: {err}")))?;
+		if output_mode == OutputMode::FilesWithMatches && max_count.is_none() && offset == 0 {
+			// One file either matches or not: report it once, as a directory walk
+			// does, whether its bytes are in memory or streamed.
+			let matched = match haystack {
+				Haystack::Slice(bytes) => matcher
+					.is_match(bytes)
+					.map_err(|err| io::Error::other(err.to_string())),
+				reader => run_search(matcher, reader, single_file_params(params))
+					.map(|search| search.match_count > 0),
+			}
+			.map_err(search_failed)?;
 			if !matched {
 				return Ok(GrepResult {
 					matches:            Vec::new(),
@@ -2445,7 +2469,7 @@ fn grep_sync_with_matcher<M: Matcher + Sync>(
 			)?,
 			_ => run_search(matcher, haystack, params),
 		}
-		.map_err(|err| Error::from_reason(format!("Search failed: {err}")))?;
+		.map_err(search_failed)?;
 
 		if search.match_count == 0 {
 			return Ok(GrepResult {
@@ -3703,6 +3727,27 @@ mod tests {
 			result.total_matches, 3,
 			"the per-file cap stops the scan at the match after the last collected one",
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn files_with_matches_reports_a_streamed_file_once() {
+		// A file past the in-memory window is streamed; file mode must still
+		// count it as one matching file, as it does a smaller one.
+		let root = TempDirGuard::new();
+		let big = root.path().join("big.txt");
+		write_oversized_file(&big, "needle 1\nneedle 2\n");
+
+		let mut config = base_grep_config(&big);
+		config.mode = Some(GrepOutputMode::FilesWithMatches);
+
+		let result = grep_sync(config, None, task::CancelToken::default())
+			.expect("single-file grep should succeed");
+
+		assert_eq!(result.matches.len(), 1);
+		assert_eq!(result.total_matches, 1);
+		assert_eq!(result.files_with_matches, 1);
+		assert_eq!(result.limit_reached, None);
 	}
 
 	#[cfg(unix)]

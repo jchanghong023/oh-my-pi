@@ -1,7 +1,16 @@
 import type { Protocol } from "devtools-protocol";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type { ElementHandle, JSHandle, KeyInput, KeyPressOptions, MouseButton, Page, Realm } from "puppeteer-core";
+import type {
+	ElementHandle,
+	Frame,
+	JSHandle,
+	KeyInput,
+	KeyPressOptions,
+	MouseButton,
+	Page,
+	Realm,
+} from "puppeteer-core";
 import { ToolAbortError, throwIfAborted } from "../tool-errors";
 import { splitKeyCombo, ternKey } from "./tern/keys";
 import { devtoolsFrameId } from "./frames";
@@ -1038,12 +1047,20 @@ function cancelChooser(el: unknown): void {
  * A user's drop runs the page's microtasks after each listener, so a drop handler may read the files after an `await`.
  * A script's `dispatchEvent` runs them only once the script yields, so each event is followed by a yield to a task
  * (a message, which background tabs do not throttle as they do timers) that lets everything the event queued settle.
+ * A user's drag events go to whatever is under the pointer, so when a settled event replaced the element (a framework
+ * rerendering the zone on `dragenter`), the next one goes to its replacement at the same point.
  */
 async function dropUploadFiles(el: unknown, files: unknown[], watch: string): Promise<void> {
 	const element = el as PageElement;
 	const page = globalThis as unknown as PageGlobals;
 	const transfer = new page.DataTransfer();
 	for (const file of files) transfer.items.add(file);
+	const rect = element.getBoundingClientRect();
+	const x = rect.left + rect.width / 2;
+	const y = rect.top + rect.height / 2;
+	// The element's document or shadow root, both of which resolve a point; taken now, before a rerender detaches it.
+	const root = element.getRootNode() as unknown as PageShadowRoot;
+	const target = (): PageElement => (element.isConnected ? element : (root.elementFromPoint(x, y) ?? element));
 	const settle = async (): Promise<void> => {
 		const channel = new page.MessageChannel();
 		const { promise, resolve } = Promise.withResolvers<void>();
@@ -1056,19 +1073,20 @@ async function dropUploadFiles(el: unknown, files: unknown[], watch: string): Pr
 			channel.port2.close();
 		}
 	};
-	const fire = (type: string) =>
-		element.dispatchEvent(new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
-	fire("dragenter");
+	const fire = (on: PageElement, type: string) =>
+		on.dispatchEvent(new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+	fire(target(), "dragenter");
 	await settle();
-	fire("dragover");
+	fire(target(), "dragover");
 	await settle();
 	// `watch`, private to this drop, opens the count of reads for {@link watchDropRead} right before `drop` and closes it
 	// once what `drop` queued has settled, so reads made in `drop` or in the microtasks it queued count, and reads
-	// deferred from dragenter or dragover do not.
-	fire(watch);
-	fire("drop");
+	// deferred from dragenter or dragover do not. Its listener sits on the original element, so the watch events go
+	// there even after a rerender: they only wrap and unwrap the shared `DataTransfer`.
+	fire(element, watch);
+	fire(target(), "drop");
 	await settle();
-	fire(watch);
+	fire(element, watch);
 }
 
 /** A watch for a page reading a drop's files; see {@link watchDropRead}. */
@@ -1155,16 +1173,24 @@ async function untilAbortedOrReleased<T>(
  * Canceling proves nothing: pages cancel dragover and drop document-wide only to stop the browser navigating to a
  * dropped file. A read is the strongest signal there is, not proof of acceptance: a document guard that checks
  * `files.length` counts too, and counting element-level reads only would fail delegated drop zones, which read at the
- * document (React 16 and older, jQuery `.on("drop", selector)`).
+ * document (React 16 and older, jQuery `.on("drop", selector)`). A drop that navigates the zone's frame destroys the
+ * worlds holding the drop and its watch before either answers; the page took the drop, so that counts as taken.
  */
-export async function dropRead(
+async function dropRead(
 	zone: ElementHandle,
 	drop: (watch: string) => Promise<void>,
 	signal: AbortSignal | undefined,
 ): Promise<boolean> {
 	const type = `omp-upload-drop-${crypto.randomUUID()}`;
-	const realm = zone.frame.mainRealm();
+	const frame = zone.frame;
+	const realm = frame.mainRealm();
 	const target = await untilAbortedOrReleased(signal, realm.adoptHandle(zone), late => late.dispose());
+	let navigated = false;
+	const onNavigated = (navigatedFrame: Frame) => {
+		if (navigatedFrame === frame) navigated = true;
+	};
+	const page = frame.page();
+	page.on("framenavigated", onNavigated);
 	try {
 		const watch = await untilAbortedOrReleased(
 			signal,
@@ -1175,14 +1201,20 @@ export async function dropRead(
 			try {
 				await drop(type);
 			} catch (error) {
-				await watch.evaluate(endDropReadWatch).catch(() => undefined);
+				const read = await watch.evaluate(endDropReadWatch).catch(() => false);
+				if (navigated && !signal?.aborted) return true;
+				if (read && !signal?.aborted) return true;
 				throw error;
 			}
-			return await untilAborted(signal, () => watch.evaluate(endDropReadWatch));
+			return await untilAborted(signal, () => watch.evaluate(endDropReadWatch)).catch(error => {
+				if (navigated && !signal?.aborted) return true;
+				throw error;
+			});
 		} finally {
 			await watch.dispose().catch(() => undefined);
 		}
 	} finally {
+		page.off("framenavigated", onNavigated);
 		await target.dispose().catch(() => undefined);
 	}
 }

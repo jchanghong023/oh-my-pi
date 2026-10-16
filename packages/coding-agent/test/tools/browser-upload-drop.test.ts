@@ -5,27 +5,26 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { disposeAllVmContexts } from "@oh-my-pi/pi-coding-agent/eval/js/context-manager";
 import { createBrowserPrelude } from "@oh-my-pi/pi-coding-agent/tools/browser";
-import { dropRead } from "@oh-my-pi/pi-coding-agent/tools/browser/interactions";
 import { releaseAllTabs } from "@oh-my-pi/pi-coding-agent/tools/browser/tab-supervisor";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
-import type { ElementHandle } from "puppeteer-core";
-import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
 
 const CHROMIUM_AVAILABLE = await chromiumAvailable();
 
 // Drop zones that read `files`, read only `items`, read them after awaiting in an async drop handler, are delegated
-// from one document listener (React 16 and older, jQuery `.on("drop", selector)`), or are taken by a document capture
-// listener the page registered before the upload ran, which stops the drop there; and a plain element that neither
-// opens a chooser nor takes a drop, though it reads `items` on dragenter, and again deferred to a microtask on
-// dragover, as zones do to style themselves. Like react-dropzone, the page cancels dragover and drop everywhere so a
-// file dropped outside a zone does not navigate away.
+// from one document listener (React 16 and older, jQuery `.on("drop", selector)`), are rerendered by the framework on
+// `dragenter` (the element under the pointer is replaced before `drop`), or are taken by a document capture listener
+// the page registered before the upload ran, which stops the drop there; and a plain element that neither opens a
+// chooser nor takes a drop, though it reads `items` on dragenter, and again deferred to a microtask on dragover, as
+// zones do to style themselves. Like react-dropzone, the page cancels dragover and drop everywhere so a file dropped
+// outside a zone does not navigate away.
 const html = `<!doctype html>
 <style>div { display: block; margin: 8px; padding: 8px; }</style>
 <div id="drop">Drop files here</div>
 <div id="items">Drop files here too</div>
 <div id="awaited">Async drop zone</div>
 <div id="delegated"><span>Delegated drop zone</span></div>
+<div id="rerendered">Rerendered drop zone</div>
 <div id="captured">Captured drop zone</div>
 <div id="inert">Not a drop zone</div>
 <script>
@@ -62,8 +61,30 @@ document.addEventListener("drop", event => {
   if (!event.target.closest("#delegated")) return;
   log.push({ id: "delegated", names: [...event.dataTransfer.files].map(file => file.name) });
 });
+document.addEventListener("dragenter", event => {
+  const zone = event.target.closest?.("#rerendered");
+  if (zone) queueMicrotask(() => zone.replaceWith(zone.cloneNode(true)));
+});
+document.addEventListener("drop", event => {
+  if (!event.target.closest("#rerendered")) return;
+  log.push({ id: "rerendered", names: [...event.dataTransfer.files].map(file => file.name) });
+});
 document.addEventListener("dragover", event => event.preventDefault());
 document.addEventListener("drop", event => event.preventDefault());
+</script>`;
+
+// A zone that reads the dropped file and leaves the page from a microtask, before omp's drop settles. An about:blank
+// navigation needs no network, so it can commit and destroy the page's worlds before the drop's own task runs.
+const navigatingHtml = `<!doctype html>
+<div id="zone" style="padding:16px">Drop to upload</div>
+<script>
+const zone = document.getElementById("zone");
+zone.addEventListener("dragover", event => event.preventDefault());
+zone.addEventListener("drop", event => {
+  event.preventDefault();
+  sessionStorage.setItem("dropped", event.dataTransfer.files[0].name);
+  queueMicrotask(() => location.replace("about:blank"));
+});
 </script>`;
 
 let tempDir = "";
@@ -92,7 +113,10 @@ beforeAll(async () => {
 	site = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
-		fetch: () => new Response(html, { headers: { "content-type": "text/html" } }),
+		fetch: request =>
+			new Response(new URL(request.url).pathname === "/navigating" ? navigatingHtml : html, {
+				headers: { "content-type": "text/html" },
+			}),
 	});
 	url = `http://127.0.0.1:${site.port}/`;
 });
@@ -118,7 +142,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile", () => {
 					name,
 					timeout: 15,
 					code: `const errors = [];
-for (const selector of ["#drop", "#items", "#awaited", "#delegated", "#captured", "#inert"]) {
+for (const selector of ["#drop", "#items", "#awaited", "#delegated", "#rerendered", "#captured", "#inert"]) {
 	try { await tab.uploadFile(selector, "alpha.txt"); errors.push(null); }
 	catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
 }
@@ -136,6 +160,7 @@ return { errors, log: await tab.evaluate(() => window.log) };`,
 				null,
 				null,
 				null,
+				null,
 				expect.stringContaining("nothing on the page took the dropped files"),
 			]);
 			// The inert element and the document saw the drag events but did not take the drop's files; the inert
@@ -145,6 +170,7 @@ return { errors, log: await tab.evaluate(() => window.log) };`,
 				{ id: "items", names: ["alpha.txt"] },
 				{ id: "awaited", names: ["alpha.txt"] },
 				{ id: "delegated", names: ["alpha.txt"] },
+				{ id: "rerendered", names: ["alpha.txt"] },
 				{ id: "captured", names: ["alpha.txt"] },
 				{ id: "inert-dragenter", items: 1 },
 				{ id: "inert-dragover", items: 1 },
@@ -154,49 +180,31 @@ return { errors, log: await tab.evaluate(() => window.log) };`,
 			await prelude.invoke({ action: "close", name, kill: true }, context).catch(() => undefined);
 		}
 	}, 60_000);
-});
 
-test.each(["adoptHandle", "evaluateHandle"] as const)(
-	"releases what %s returns after the upload was cancelled",
-	async step => {
-		const { promise: late, resolve: land } = Promise.withResolvers<unknown>();
-		const controller = new AbortController();
-		const released: string[] = [];
-		// Only what the watch touches before the drop: adopting the zone into the main world and installing the
-		// watch; the cancel interrupts `step`.
-		const steps = {
-			adoptHandle: async () => ({ dispose: async () => {} }) as unknown,
-			evaluateHandle: async () => ({}) as unknown,
-		};
-		const realm = {
-			...steps,
-			[step]: () => {
-				controller.abort();
-				return late;
-			},
-		};
-		const zone = { frame: { mainRealm: () => realm } } as unknown as ElementHandle;
-		let dropped = false;
-		await rejectionOf(
-			dropRead(
-				zone,
-				async () => {
-					dropped = true;
+	test("succeeds when the drop zone reads the files and navigates before the drop settles", async () => {
+		const session = makeSession();
+		const prelude = createBrowserPrelude(session);
+		const context = { session, toolCallId: "browser-upload-navigating" };
+		const name = `upload-${crypto.randomUUID()}`;
+		await prelude.invoke({ action: "open", name, url: `${url}navigating` }, context);
+		try {
+			const result = await prelude.invoke(
+				{
+					action: "run",
+					name,
+					timeout: 15,
+					code: `let error = null;
+try { await tab.uploadFile("#zone", "alpha.txt"); } catch (caught) { error = caught instanceof Error ? caught.message : String(caught); }
+await tab.page.waitForFunction(() => location.href === "about:blank", { timeout: 5000 });
+return { error };`,
 				},
-				controller.signal,
-			),
-		);
-		land({
-			evaluate: async () => {
-				released.push("ended");
-			},
-			dispose: async () => {
-				released.push("disposed");
-			},
-		});
-		for (let turn = 0; turn < 5; turn++) await Promise.resolve();
-		expect(dropped).toBe(false);
-		// A late watch is ended before its handle goes; a late adoption only has a handle to release.
-		expect(released).toEqual(step === "evaluateHandle" ? ["ended", "disposed"] : ["disposed"]);
-	},
-);
+				context,
+			);
+			const details = result.details;
+			if (!details || typeof details !== "object" || !("value" in details)) throw new Error("run returned no value");
+			expect(details.value).toEqual({ error: null });
+		} finally {
+			await prelude.invoke({ action: "close", name, kill: true }, context).catch(() => undefined);
+		}
+	}, 60_000);
+});
