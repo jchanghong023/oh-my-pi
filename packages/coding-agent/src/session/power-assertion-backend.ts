@@ -18,7 +18,7 @@ let powerBackendUnavailable = false;
  */
 export function startPowerAssertion(
 	options: PowerAssertionOptions,
-	start: (options: PowerAssertionOptions) => PowerAssertion = PowerAssertion.start,
+	start: (options: PowerAssertionOptions) => PowerAssertion = options => PowerAssertion.start(options),
 ): PowerAssertion | undefined {
 	if (powerBackendUnavailable) return undefined;
 	try {

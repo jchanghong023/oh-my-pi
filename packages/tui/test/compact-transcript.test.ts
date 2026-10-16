@@ -197,13 +197,11 @@ describe("compact transcript activity", () => {
 
 	it("preserves completed edit diffs on ANSI and native surfaces when switching compact mode", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent(
-			"edit",
-			{ path: "/tmp/preview.ts" },
-			{},
-			undefined,
-			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
-		);
+		const component = new ToolExecutionComponent("edit", { path: "/tmp/preview.ts" }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
 		components.push(component);
 		component.updateResult({
 			content: [{ type: "text", text: "Edited /tmp/preview.ts" }],

@@ -1,4 +1,4 @@
-import type { Agent, AgentMessage, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
+import type { Agent, AgentMessage, AgentTool, AgentToolResult, AgentTurnEndContext } from "@oh-my-pi/pi-agent-core";
 import { invalidateMessageCache } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
@@ -40,25 +40,25 @@ const PREWALK_ACTION_TOOLS: Record<string, true> = {
 const PLAN_YOLO_HANDOFF_MESSAGE_TYPE = "plan-yolo-handoff";
 
 /**
- * Whether a completed tool result is the first workspace-mutating action that
- * arms the prewalk hand-off. A direct `edit`/`write` call always counts; a
- * `write` that dispatched an `xd://` device (e.g. `lsp`, `ast_edit`, `debug`)
- * counts only when the wrapped tool resolved to a `write`/`exec` approval tier.
- * Read-only device calls — LSP navigation, `debug` inspection, `ast_edit` on
- * internal URLs, help lookups — leave the tier `read` (or absent) and must not
- * switch the model mid-investigation (issue #7312).
+ * Whether a completed tool result begins implementation. Device approval is
+ * conservative; an MCP server can explicitly mark a tool read-only without
+ * weakening the permission gate.
  */
-function isPrewalkImplementationAction(result: ToolResultMessage): boolean {
+function isPrewalkImplementationAction(
+	result: ToolResultMessage,
+	getToolByName: (name: string) => AgentTool | undefined,
+): boolean {
 	if (!PREWALK_ACTION_TOOLS[result.toolName]) return false;
 	const details = result.details;
-	// A direct filesystem edit/write carries no `xd://` dispatch metadata.
 	if (!details || typeof details !== "object" || !("xdev" in details) || !details.xdev) return true;
 	const xdev = details.xdev;
-	// Device dispatch: switch only on a genuine mutation tier. An absent tier
-	// (help lookup, unresolved approval) declines the switch, matching the
-	// reporter's "stay on the large model a couple turns longer" preference.
 	if (typeof xdev !== "object" || !("tier" in xdev)) return false;
-	return xdev.tier === "write" || xdev.tier === "exec";
+	if (xdev.tier !== "write" && xdev.tier !== "exec") return false;
+	if ("tool" in xdev && typeof xdev.tool === "string" && isMCPToolName(xdev.tool)) {
+		const tool = getToolByName(xdev.tool);
+		if (tool && "mcpReadOnlyHint" in tool && tool.mcpReadOnlyHint === true) return false;
+	}
+	return true;
 }
 
 /** Capabilities the prewalk coordinator borrows from its owning session. */
@@ -80,6 +80,7 @@ export interface PrewalkCoordinatorHost {
 	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void>;
 	getActiveToolNames(): string[];
 	getEnabledToolNames(): string[];
+	getToolByName(name: string): AgentTool | undefined;
 	getMountedXdevToolNames(): string[];
 	hasBuiltInTool(name: string): boolean;
 	getPlanModeState(): PlanModeState | undefined;
@@ -232,7 +233,7 @@ export class PrewalkCoordinator {
 
 		const todoGateOpen = this.#todoSeen || !this.#host.getActiveToolNames().includes("todo");
 		const action = todoGateOpen
-			? context.toolResults.find(result => isPrewalkImplementationAction(result))
+			? context.toolResults.find(result => isPrewalkImplementationAction(result, this.#host.getToolByName))
 			: undefined;
 		if (!action) {
 			if (!this.#planInjected) {

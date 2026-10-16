@@ -1841,8 +1841,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#toolUiContextSetter = setToolUIContext;
 		this.lspServers = lspServers;
 		this.mcpManager = mcpManager;
+		// An MCP sign-in can wait for the user mid-turn; like the auto-QA and cfg:// prompts below, it runs as a wait for
+		// the user (AgentSession.waitForUser).
 		this.mcpManager?.setAuthHandler((serverName, challenge) =>
-			new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge),
+			this.session.waitForUser(() => new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge)),
 		);
 		this.#eventBus = eventBus;
 		this.#subagentEventBus = subagentEventBus;
@@ -2167,14 +2169,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `Settings.instance` is the disk-backed singleton; passing it explicitly
 		// guarantees the decision persists even when the prompt is triggered
 		// from a subagent whose own `Settings` is an in-memory snapshot.
-		setAutoQaConsentHandler(() => this.#promptAutoQaConsent(), Settings.instance);
+		setAutoQaConsentHandler(() => this.session.waitForUser(() => this.#promptAutoQaConsent()), Settings.instance);
 		// Same wiring for cfg:// writes: every settings change the agent makes is
 		// confirmed here, and `/save` persists to disk. Subagents and headless
 		// sessions are refused by the handler before reaching this host. Changes
 		// to this session's settings get the settings panel's in-process side
 		// effects (a `defaultThinkingLevel` change also switches the live session).
 		setCfgApprovalHost({
-			approve: (request, options) => this.#promptCfgChange(request, options?.signal),
+			// With `ask.timeout` set the prompt settles on its own and the turn goes on, so it stays agent time,
+			// like a timed `ask`.
+			approve: (request, options) =>
+				askTimeoutMs(this.session.settings) === undefined
+					? this.session.waitForUser(() => this.#promptCfgChange(request, options?.signal))
+					: this.#promptCfgChange(request, options?.signal),
 			applied: change => {
 				if (change.settings !== this.session.settings) return;
 				this.#selectorController.handleSettingChange(change.path, change.value);

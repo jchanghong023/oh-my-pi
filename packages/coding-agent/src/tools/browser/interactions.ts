@@ -1,16 +1,7 @@
 import type { Protocol } from "devtools-protocol";
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import type {
-	ElementHandle,
-	FileChooser,
-	JSHandle,
-	KeyInput,
-	KeyPressOptions,
-	MouseButton,
-	Page,
-	Realm,
-} from "puppeteer-core";
+import type { ElementHandle, JSHandle, KeyInput, KeyPressOptions, MouseButton, Page, Realm } from "puppeteer-core";
 import { ToolAbortError, throwIfAborted } from "../tool-errors";
 import { splitKeyCombo, ternKey } from "./tern/keys";
 import { devtoolsFrameId } from "./frames";
@@ -137,6 +128,10 @@ interface PageGlobals {
 	File: new (parts: Uint8Array[], name: string, options: { type: string; lastModified?: number }) => unknown;
 	DataTransfer: new () => { items: { add(file: unknown): void }; files: unknown };
 	DragEvent: new (type: string, options: { bubbles: boolean; cancelable: boolean; dataTransfer: unknown }) => unknown;
+	MessageChannel: new () => {
+		port1: { onmessage: (() => void) | null; close(): void };
+		port2: { postMessage(message: null): void; close(): void };
+	};
 }
 
 /** A click aborted while its element was still refused; `refusal` names the last failed check. */
@@ -428,7 +423,24 @@ export async function focusTextEntryTarget(
 }
 
 /**
- * Focus a field that can take text, clear any existing value, then retype.
+ * Input types set through a picker or slider, with an example of the value each takes. Typing into
+ * one fills its segments by keystroke rules (`2026-10-12` became `61012-02-02`) or nothing at all
+ * (a colour stayed `#000000`, a range at its midpoint), so fill sets their value instead.
+ */
+const PICKER_VALUE_EXAMPLES: Record<string, string> = {
+	color: '"#ff8800"',
+	date: '"2026-10-12"',
+	"datetime-local": '"2026-10-12T14:30"',
+	month: '"2026-10"',
+	time: '"14:30"',
+	week: '"2026-W41"',
+	range: "a number within its min, max and step",
+};
+const PICKER_INPUT_TYPES = Object.keys(PICKER_VALUE_EXAMPLES);
+
+/**
+ * Focus a field that can take text, clear any existing value, then retype. A colour, date, time or
+ * range input gets its value set the way its picker would, and refuses one it rejects.
  *
  * Every step is a DOM evaluation or an input dispatch, so this works on tabs
  * that produce no animation frames — unlike Puppeteer's `Locator.fill`, whose
@@ -446,33 +458,128 @@ export async function fillViaHandle(
 	type: (text: string) => Promise<unknown> = text => handle.type(text, { delay: 0 }),
 ): Promise<void> {
 	await focusTextEntryTarget(handle, "fill", signal);
-	await untilAborted(signal, () =>
-		handle.evaluate((el, clearing) => {
-			const node = el as unknown as {
-				value?: string;
-				focus?: () => void;
-				isContentEditable?: boolean;
-				innerText?: string;
-				dispatchEvent(event: unknown): boolean;
-			};
-			node.focus?.();
-			const before = node.isContentEditable ? node.innerText : node.value;
-			if (node.isContentEditable) node.innerText = "";
-			else if ("value" in node) {
-				// The prototype setter bypasses value trackers that frameworks (React) install on the
-				// element, so they see the cleared value as a change instead of their own write.
-				const setValue = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(node), "value")?.set;
-				if (setValue) setValue.call(node, "");
-				else node.value = "";
-			}
-			// Typing a value fires its own input events; an empty value types nothing,
-			// so report the clear itself when there was something to clear.
-			if (!clearing || !before) return;
-			const { Event } = globalThis as unknown as PageGlobals;
-			node.dispatchEvent(new Event("input", { bubbles: true }));
-			node.dispatchEvent(new Event("change", { bubbles: true }));
-		}, value === ""),
+	const picker = await untilAborted(signal, () =>
+		handle.evaluate(
+			(el, wanted, pickerTypes) => {
+				const node = el as unknown as {
+					localName?: string;
+					type?: string;
+					value?: string;
+					focus?: () => void;
+					isContentEditable?: boolean;
+					innerText?: string;
+					getAttribute(name: string): string | null;
+					namespaceURI: string | null;
+					ownerDocument: {
+						createElementNS(
+							namespace: string | null,
+							tag: "input",
+						): { value: string; setAttribute(name: string, value: string): void };
+					};
+					dispatchEvent(event: unknown): boolean;
+				};
+				node.focus?.();
+				// The native setter bypasses value trackers that frameworks (React) install on the element, so
+				// they see the new value as a change instead of their own write. It is looked up past the
+				// prototypes of a customized built-in (`<input is=…>`), which do not own `value`. A page class
+				// that defines its own `value` accessor is not on the chain this function sees, so that accessor
+				// never runs here.
+				let proto = Object.getPrototypeOf(node);
+				let descriptor: PropertyDescriptor | undefined;
+				while (proto && !(descriptor = Object.getOwnPropertyDescriptor(proto, "value"))) {
+					proto = Object.getPrototypeOf(proto);
+				}
+				const setValue = descriptor?.set;
+				const write = (next: string) => (setValue ? setValue.call(node, next) : (node.value = next));
+				// Like the browser's own, input leaves a shadow root and change stays inside it.
+				const report = () => {
+					const { Event } = globalThis as unknown as PageGlobals;
+					node.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+					node.dispatchEvent(new Event("change", { bubbles: true }));
+				};
+				const kind = node.type?.toLowerCase() ?? "";
+				// localName, not tagName: an XHTML page keeps the tag's lower case.
+				if (node.localName === "input" && pickerTypes.includes(kind)) {
+					const before = node.value ?? "";
+					// Tried on a plain input with the same type, min, max and step: a value written to the live
+					// control and then put back would still cut it off from its value attribute, and a copy of a
+					// customized built-in would run the page's constructor. It takes the target's namespace, which
+					// an XML document's createElement would drop for a generic element that keeps any value.
+					const probe = node.ownerDocument.createElementNS(node.namespaceURI, "input");
+					for (const name of ["type", "min", "max", "step"]) {
+						const attribute = node.getAttribute(name);
+						if (attribute !== null) probe.setAttribute(name, attribute);
+					}
+					probe.value = wanted;
+					// The browser normalises what it accepts (a colour to #rrggbb, a time's seconds), turns what
+					// it rejects into "" (a colour into #000000, a range into its midpoint) and clamps a range. A
+					// colour stored as #000000 is accepted only if it draws black, so the browser resolves it rather
+					// than a parser saying it is well-formed (`var(--missing)` is, and is still refused). A
+					// rejected range number can land on the midpoint it coerces to (`0x5`), so its spelling is
+					// checked against the decimal form the browser parses. Only the date and time types can be
+					// cleared.
+					const actual = probe.value;
+					let refused: boolean;
+					if (kind === "color") {
+						const { OffscreenCanvas } = globalThis as unknown as {
+							OffscreenCanvas: new (
+								width: number,
+								height: number,
+							) => {
+								getContext(type: "2d"): {
+									fillStyle: string;
+									fillRect(x: number, y: number, width: number, height: number): void;
+									getImageData(
+										x: number,
+										y: number,
+										width: number,
+										height: number,
+									): { data: ArrayLike<number> };
+								} | null;
+							};
+						};
+						// A colour the canvas cannot parse keeps the white set first, so it draws white.
+						const paint = new OffscreenCanvas(1, 1).getContext("2d");
+						let drawsBlack = false;
+						if (paint) {
+							paint.fillStyle = "#ffffff";
+							paint.fillStyle = wanted;
+							paint.fillRect(0, 0, 1, 1);
+							const [red, green, blue] = Array.from(paint.getImageData(0, 0, 1, 1).data);
+							drawsBlack = red === 0 && green === 0 && blue === 0;
+						}
+						refused = actual === "#000000" && !drawsBlack;
+					} else if (kind === "range") {
+						refused =
+							!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i.test(wanted) || Number(actual) !== Number(wanted);
+					} else {
+						refused = wanted !== "" && actual === "";
+					}
+					// A picker reports a pick that changes the value, not one that keeps it.
+					if (!refused && actual !== before) {
+						write(wanted);
+						report();
+					}
+					return { kind, refused };
+				}
+				const before = node.isContentEditable ? node.innerText : node.value;
+				if (node.isContentEditable) node.innerText = "";
+				else if ("value" in node) write("");
+				// Typing a value fires its own input events; an empty value types nothing,
+				// so report the clear itself when there was something to clear.
+				if (wanted === "" && before) report();
+				return null;
+			},
+			value,
+			PICKER_INPUT_TYPES,
+		),
 	);
+	if (picker?.refused) {
+		throw new ToolError(
+			`<input type=${picker.kind}> does not accept ${JSON.stringify(value)}; give its value format, e.g. ${PICKER_VALUE_EXAMPLES[picker.kind]}`,
+		);
+	}
+	if (picker) return;
 	await untilAborted(signal, () => type(value));
 }
 
@@ -919,14 +1026,164 @@ function assignInputFiles(el: unknown, files: unknown[]): string | null {
 	return null;
 }
 
-/** Drop `files` on an element through the drag events a user's drop fires. Runs in the isolated world. */
-function dropUploadFiles(el: unknown, files: unknown[]): void {
+/** Tell a page its chooser closed without a pick, as the browser does. Runs in the isolated world. */
+function cancelChooser(el: unknown): void {
+	const page = globalThis as unknown as PageGlobals;
+	(el as PageElement).dispatchEvent(new page.Event("cancel", { bubbles: true }));
+}
+
+/**
+ * Drop `files` on an element through the drag events a user's drop fires. Runs in the isolated world.
+ *
+ * A user's drop runs the page's microtasks after each listener, so a drop handler may read the files after an `await`.
+ * A script's `dispatchEvent` runs them only once the script yields, so each event is followed by a yield to a task
+ * (a message, which background tabs do not throttle as they do timers) that lets everything the event queued settle.
+ */
+async function dropUploadFiles(el: unknown, files: unknown[], watch: string): Promise<void> {
 	const element = el as PageElement;
 	const page = globalThis as unknown as PageGlobals;
 	const transfer = new page.DataTransfer();
 	for (const file of files) transfer.items.add(file);
-	for (const type of ["dragenter", "dragover", "drop"]) {
+	const settle = async (): Promise<void> => {
+		const channel = new page.MessageChannel();
+		const { promise, resolve } = Promise.withResolvers<void>();
+		channel.port1.onmessage = () => resolve();
+		channel.port2.postMessage(null);
+		try {
+			await promise;
+		} finally {
+			channel.port1.close();
+			channel.port2.close();
+		}
+	};
+	const fire = (type: string) =>
 		element.dispatchEvent(new page.DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+	fire("dragenter");
+	await settle();
+	fire("dragover");
+	await settle();
+	// `watch`, private to this drop, opens the count of reads for {@link watchDropRead} right before `drop` and closes it
+	// once what `drop` queued has settled, so reads made in `drop` or in the microtasks it queued count, and reads
+	// deferred from dragenter or dragover do not.
+	fire(watch);
+	fire("drop");
+	await settle();
+	fire(watch);
+}
+
+/** A watch for a page reading a drop's files; see {@link watchDropRead}. */
+interface DropReadWatch {
+	counting: boolean;
+	read: boolean;
+	end(): void;
+}
+
+/**
+ * Watch for the page reading the files of the drop on an element: getting the drop's `files` or `items` while `drop` is
+ * dispatched or in what it queued before the next task. {@link dropUploadFiles} fires the private `type` event right
+ * before `drop`, which wraps the getters and opens the count, and again once `drop` has settled, which closes it. No
+ * page listener can run before the first, as one registered for `drop` itself could; reads during dragenter and
+ * dragover, or deferred from them, stay uncounted. Runs in the main world, where the page's listeners get the wrapper
+ * whose reads it watches.
+ */
+function watchDropRead(el: unknown, type: string): DropReadWatch {
+	interface DropEvent {
+		dataTransfer: object | null;
+	}
+	interface WatchTarget {
+		addEventListener(type: string, listener: (event: DropEvent) => void): void;
+		removeEventListener(type: string, listener: (event: DropEvent) => void): void;
+	}
+	const element = el as unknown as WatchTarget;
+	const instrument = (event: DropEvent): void => {
+		const transfer = event.dataTransfer;
+		if (!transfer) return;
+		if (watch.counting) {
+			watch.counting = false;
+			return;
+		}
+		for (const key of ["files", "items"]) {
+			// The wrapper's own prototype, not the `DataTransfer` global a page may replace.
+			const get = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(transfer), key)?.get;
+			Object.defineProperty(transfer, key, {
+				configurable: true,
+				get() {
+					if (watch.counting) watch.read = true;
+					return get?.call(transfer);
+				},
+			});
+		}
+		watch.counting = true;
+	};
+	const watch = { counting: false, read: false, end: () => element.removeEventListener(type, instrument) };
+	element.addEventListener(type, instrument);
+	return watch;
+}
+
+/** Stop a drop watch; whether the page read the files. Runs in the main world. */
+function endDropReadWatch(watch: DropReadWatch): boolean {
+	watch.end();
+	return watch.read;
+}
+
+/** End a drop watch and release its handle. */
+async function releaseDropReadWatch(watch: JSHandle<DropReadWatch>): Promise<void> {
+	try {
+		await watch.evaluate(endDropReadWatch);
+	} finally {
+		await watch.dispose();
+	}
+}
+
+/**
+ * Wait for `pending` under `signal`. An abort does not stop the call behind it, so a result that arrives after the
+ * abort is handed to `release`.
+ */
+async function untilAbortedOrReleased<T>(
+	signal: AbortSignal | undefined,
+	pending: Promise<T>,
+	release: (late: T) => Promise<unknown>,
+): Promise<T> {
+	return await untilAborted(signal, () => pending).catch(error => {
+		void pending.then(release).catch(() => undefined);
+		throw error;
+	});
+}
+
+/**
+ * Run `drop` on `zone` with a fresh private watch event type and report whether the page read the dropped files.
+ * Canceling proves nothing: pages cancel dragover and drop document-wide only to stop the browser navigating to a
+ * dropped file. A read is the strongest signal there is, not proof of acceptance: a document guard that checks
+ * `files.length` counts too, and counting element-level reads only would fail delegated drop zones, which read at the
+ * document (React 16 and older, jQuery `.on("drop", selector)`).
+ */
+export async function dropRead(
+	zone: ElementHandle,
+	drop: (watch: string) => Promise<void>,
+	signal: AbortSignal | undefined,
+): Promise<boolean> {
+	const type = `omp-upload-drop-${crypto.randomUUID()}`;
+	const realm = zone.frame.mainRealm();
+	const target = await untilAbortedOrReleased(signal, realm.adoptHandle(zone), late => late.dispose());
+	try {
+		const watch = await untilAbortedOrReleased(
+			signal,
+			realm.evaluateHandle(watchDropRead, target, type),
+			releaseDropReadWatch,
+		);
+		try {
+			try {
+				await drop(type);
+			} catch (error) {
+				await watch.evaluate(endDropReadWatch).catch(() => undefined);
+				throw error;
+			}
+			return await untilAborted(signal, () => watch.evaluate(endDropReadWatch));
+		} finally {
+			await watch.dispose().catch(() => undefined);
+		}
+	} finally {
+		await target.dispose().catch(() => undefined);
 	}
 }
 
@@ -988,17 +1245,24 @@ async function pickFiles(realm: Realm, paths: string[], signal: AbortSignal | un
 	}
 }
 
-/** Hand a file input the files: staged copies' paths, or contents streamed into the isolated world. */
+/**
+ * Hand a file input the files: staged copies' paths, or contents streamed into the isolated world. `filling` runs once
+ * the files are being set, after staging or streaming has succeeded.
+ */
 async function deliverToInput(
 	input: ElementHandle,
 	sources: UploadSource[],
 	route: UploadRoute,
 	staging: UploadStaging,
 	signal: AbortSignal | undefined,
+	filling?: () => void,
 ): Promise<void> {
 	if (route === "paths") {
 		const staged = await staging.stage(sources, signal);
-		await untilAborted(signal, () => setFileInputPaths(input, staged));
+		await untilAborted(signal, () => {
+			filling?.();
+			return setFileInputPaths(input, staged);
+		});
 		return;
 	}
 	const realm = input.frame.isolatedRealm();
@@ -1006,7 +1270,10 @@ async function deliverToInput(
 	try {
 		const files = await streamUploadFiles(realm, sources, signal);
 		try {
-			const refusal = await untilAborted(signal, () => realm.evaluate(assignInputFiles, target, files));
+			const refusal = await untilAborted(signal, () => {
+				filling?.();
+				return realm.evaluate(assignInputFiles, target, files);
+			});
 			if (refusal) throw new ToolError(refusal);
 		} finally {
 			await files.dispose().catch(() => undefined);
@@ -1016,12 +1283,16 @@ async function deliverToInput(
 	}
 }
 
-/** Drop the files on an element, built from staged copies by a detached picker or from streamed contents. */
+/**
+ * Drop the files on an element, built from staged copies by a detached picker or from streamed contents; fails when
+ * nothing on the page read them.
+ */
 async function deliverToDropZone(
 	zone: ElementHandle,
 	sources: UploadSource[],
 	route: UploadRoute,
 	staging: UploadStaging,
+	label: string,
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const realm = zone.frame.isolatedRealm();
@@ -1032,7 +1303,16 @@ async function deliverToDropZone(
 				? await pickFiles(realm, await staging.stage(sources, signal), signal)
 				: await streamUploadFiles(realm, sources, signal);
 		try {
-			await untilAborted(signal, () => realm.evaluate(dropUploadFiles, target, files));
+			const read = await dropRead(
+				zone,
+				watch => untilAborted(signal, () => realm.evaluate(dropUploadFiles, target, files, watch)),
+				signal,
+			);
+			if (!read) {
+				throw new ToolError(
+					`${label} opened no file chooser and nothing on the page took the dropped files; target the page's <input type=file>, the control that opens the chooser, or its drop zone`,
+				);
+			}
 		} finally {
 			await files.dispose().catch(() => undefined);
 		}
@@ -1049,7 +1329,7 @@ export interface PreparedUpload {
 	/** Bytes `deliver` hands over. */
 	readonly bytes: number;
 	deliver(signal: AbortSignal): Promise<void>;
-	/** Release what finding the target held: an unfilled chooser is cancelled. */
+	/** Release what finding the target held: a caught chooser's input, cancelled when it was never filled. */
 	dispose(): Promise<void>;
 }
 
@@ -1081,8 +1361,9 @@ const pagesAwaitingChooser = new WeakSet<Page>();
 
 /**
  * Click `handle` and return the file input of the chooser it opens, adopted into the isolated world; null when no
- * chooser opened. Puppeteer's FileChooser accepts only paths and hides its input, so the chooser is caught on a CDP
- * session of our own, which lets go of the interception as soon as the input is adopted.
+ * chooser opened. The chooser is caught on a CDP session of our own, which lets go of the interception as soon as the
+ * input is adopted: Puppeteer's `waitForFileChooser` leaves it on, which swallows every later chooser on the page, and
+ * its listener throws on a File System Access picker's event.
  */
 async function catchChooserInput(
 	page: Page,
@@ -1130,18 +1411,6 @@ async function catchChooserInput(
 	}
 }
 
-/** Click `handle` and return the chooser it opens through Puppeteer, which fills it with paths; null when none opened. */
-async function catchChooser(
-	page: Page,
-	handle: ElementHandle,
-	label: string,
-	signal: AbortSignal | undefined,
-): Promise<FileChooser | null> {
-	const chooserPromise = page.waitForFileChooser({ timeout: FILE_CHOOSER_WAIT_MS }).catch(() => null);
-	await clickElement(handle, label, signal);
-	return await untilAborted(signal, () => chooserPromise);
-}
-
 /**
  * Find what takes an upload through `handle`: the file input itself, the chooser its click opens, or else the element
  * as a drop zone. `route` is how the browser gets the files; see {@link UploadStaging.route}.
@@ -1172,46 +1441,35 @@ export async function prepareElementUpload(
 	}
 	pagesAwaitingChooser.add(page);
 	try {
-		if (route === "paths") {
-			const chooser = await catchChooser(page, handle, label, signal);
-			if (chooser) {
-				let handled = false;
-				return preparedUpload(
-					sources,
-					async sig => {
-						const staged = await staging.stage(sources, sig);
-						// Handled only once accept starts: a cancel during staging leaves the chooser to `dispose`.
-						await untilAborted(sig, () => {
-							handled = true;
-							return chooser.accept(staged);
-						});
-					},
-					async () => {
-						if (!handled) await chooser.cancel().catch(() => undefined);
-					},
-				);
+		const input = await catchChooserInput(page, handle, label, signal);
+		if (input) {
+			// A page learns a chooser closed from `change` or `cancel`; one that got neither would wait on a pick
+			// forever, so a refused or failed upload cancels the chooser as the browser would.
+			let filled = false;
+			const release = async (): Promise<void> => {
+				if (!filled) await input.evaluate(cancelChooser).catch(() => undefined);
+				await input.dispose().catch(() => undefined);
+			};
+			try {
+				const refusal = await untilAborted(signal, () => input.evaluate(fileInputRefusal, sources.length));
+				if (refusal) throw new ToolError(refusal);
+			} catch (error) {
+				await release();
+				throw error;
 			}
-		} else {
-			const input = await catchChooserInput(page, handle, label, signal);
-			if (input) {
-				try {
-					const refusal = await untilAborted(signal, () => input.evaluate(fileInputRefusal, sources.length));
-					if (refusal) throw new ToolError(refusal);
-				} catch (error) {
-					await input.dispose().catch(() => undefined);
-					throw error;
-				}
-				return preparedUpload(
-					sources,
-					sig => deliverToInput(input, sources, route, staging, sig),
-					() => input.dispose().catch(() => undefined),
-				);
-			}
+			return preparedUpload(
+				sources,
+				sig =>
+					deliverToInput(input, sources, route, staging, sig, () => {
+						filled = true;
+					}),
+				release,
+			);
 		}
 	} finally {
 		pagesAwaitingChooser.delete(page);
 	}
-	return preparedUpload(sources, sig => deliverToDropZone(handle, sources, route, staging, sig));
+	return preparedUpload(sources, sig => deliverToDropZone(handle, sources, route, staging, label, sig));
 }
 
 /** Press a keyboard key without releasing it. */

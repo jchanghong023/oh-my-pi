@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { PowerAssertion } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 import { powerAssertionOptions } from "../src/session/agent-session";
 import { resetPowerBackendUnavailableForTests, startPowerAssertion } from "../src/session/power-assertion-backend";
@@ -60,5 +61,18 @@ describe("startPowerAssertion", () => {
 		expect(startPowerAssertion(options, failing)).toBeUndefined();
 		expect(warn).toHaveBeenCalledTimes(1);
 		expect(debug).toHaveBeenCalledTimes(0);
+	});
+
+	it("calls the native PowerAssertion.start with its class as the receiver by default", () => {
+		// napi class statics read their class from `this`; an unbound call throws
+		// "Failed to create instance of class `start`" and no assertion is held.
+		vi.spyOn(logger, "warn").mockImplementation(() => {});
+		let receiver: unknown;
+		vi.spyOn(PowerAssertion, "start").mockImplementation(function (this: unknown) {
+			receiver = this;
+			throw new Error("stub");
+		});
+		startPowerAssertion(options);
+		expect(receiver).toBe(PowerAssertion);
 	});
 });

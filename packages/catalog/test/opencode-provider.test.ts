@@ -774,6 +774,25 @@ describe("OpenCode provider discovery", () => {
 		expect(options.dropCachedModelIdsOnStaticMismatch).toContain(id);
 	});
 
+	test("routes live Zen Argon to the native Google endpoint (#15977)", async () => {
+		const id = "gemini-4-argon";
+		const baseUrl = "https://opencode.ai/inference/google/v1beta";
+		const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(item => item.providerId === "opencode-zen");
+		expect(descriptor?.resolveApi?.(id, { tool_call: true, provider: { npm: "@ai-sdk/google" } })).toEqual({
+			api: "google-generative-ai",
+			baseUrl,
+		});
+
+		const options = opencodeZenModelManagerOptions({
+			apiKey: "test-key",
+			fetch: async () => modelListResponse([id]),
+		});
+		const spec = (await options.fetchDynamicModels?.())?.find(model => model.id === id);
+		if (!spec) throw new Error("Zen did not discover Argon");
+		expect(spec).toMatchObject({ api: "google-generative-ai", baseUrl });
+		expect(options.dropCachedModelIdsOnStaticMismatch).toContain(id);
+	});
+
 	test("routes opencode-go muse-spark-1.2 to the responses API (#8957)", () => {
 		const descriptor = MODELS_DEV_PROVIDER_DESCRIPTORS.find(item => item.providerId === "opencode-go");
 		// Go's live model list omits transport metadata for these ids; the

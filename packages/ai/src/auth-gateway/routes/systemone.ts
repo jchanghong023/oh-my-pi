@@ -70,7 +70,7 @@ export async function handleSystemOne(
 	}
 	// Model capability and dialect caps are known locally: reject before credential lookup or refresh.
 	try {
-		checkNativeJudgmentImages(model, parsed.request.images ?? []);
+		checkNativeJudgmentImages(model, parsed.request, parsed.imageAssets);
 	} catch (error) {
 		return systemOne.formatError(
 			422,
@@ -107,6 +107,7 @@ export async function handleSystemOne(
 	try {
 		const result = await judge.judge(parsed.request, {
 			signal: controller.signal,
+			imageAssets: parsed.imageAssets,
 			// A split judgment that fails still billed the chunks that succeeded.
 			onPartialUsage: usage => {
 				if (usage.cost.total === 0) calculateCost(model, usage);
