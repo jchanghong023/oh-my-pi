@@ -175,6 +175,51 @@ describe("compact transcript activity", () => {
 		expect(JSON.stringify(component.describe(toolCx))).toContain("PRIVATE_OUTPUT");
 	});
 
+	it("keeps LSP device writes on one line while streaming and settled, restoring references in detailed mode", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const args = { action: "references", file: "target.ts", line: 1, symbol: "targetSymbol" };
+		const component = new ToolExecutionComponent("write", {}, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(component);
+		component.updateArgs({ path: "xd://lsp", content: JSON.stringify(args) });
+		expect(component.render(80)).toHaveLength(1);
+		expect(Bun.stripANSI(component.render(80)[0])).toContain("references targetSymbol");
+		component.setExecutionStarted();
+		component.updateResult({ content: [{ type: "text", text: "PRIVATE_PROGRESS" }] }, true);
+		expect(component.render(80)).toHaveLength(1);
+		expect(Bun.stripANSI(component.render(80)[0])).toContain("running");
+		component.updateResult({
+			content: [{ type: "text", text: "2 reference(s)\nPRIVATE_REFERENCE.ts:10:2\nPRIVATE_REFERENCE.ts:20:4" }],
+			details: { xdev: { tool: "lsp", mode: "execute", args, inner: { action: "references", success: true } } },
+		});
+		component.setExpanded(true);
+		component.handleNativeEvent({ type: "toggle", key: "", collapsed: false });
+		for (const width of [12, 80]) {
+			const rows = component.render(width);
+			expect(rows).toHaveLength(1);
+			expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
+			expect(rows[0]).not.toContain("PRIVATE_");
+		}
+		expect(Bun.stripANSI(component.render(80)[0])).toContain("done");
+		for (const cx of [toolCx, undefined]) {
+			const described = component.describe(cx);
+			expect(JSON.stringify(described)).not.toContain("PRIVATE_");
+			if (described.k === "tool") {
+				expect(described.p?.collapsible).toBe(false);
+				expect(described.c ?? []).toHaveLength(0);
+			}
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("PRIVATE_REFERENCE.ts");
+		expect(JSON.stringify(component.describe(toolCx))).toContain("PRIVATE_REFERENCE.ts");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		expect(component.render(80)).toHaveLength(1);
+		expect(JSON.stringify(component.describe(toolCx))).not.toContain("PRIVATE_REFERENCE.ts");
+	});
+
 	it("preserves write previews and expansion in compact mode while clean mode still hides them", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const component = new ToolExecutionComponent(

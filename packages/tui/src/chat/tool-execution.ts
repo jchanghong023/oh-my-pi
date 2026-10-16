@@ -47,6 +47,7 @@ import {
 	resolveImageOptions,
 } from "../render/render-utils";
 import type { XdevMountedState } from "../tools/xdev";
+import { parseXdUrl } from "../tools/xd-url";
 import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../render/index";
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { FenceFigure } from "./fence-figure";
@@ -852,7 +853,12 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity && !streamsBody(this.#toolName);
+		if (!displayPreferences.compactToolActivity) return false;
+		if (this.#toolName === "write" && isRecord(this.#args)) {
+			const path = typeof this.#args.file_path === "string" ? this.#args.file_path : this.#args.path;
+			if (typeof path === "string" && parseXdUrl(path)) return true;
+		}
+		return !streamsBody(this.#toolName);
 	}
 
 	getTranscriptBlockVersion(): number {
