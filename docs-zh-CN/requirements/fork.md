@@ -210,6 +210,7 @@
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
 - `crates/pi-builtins/src/rmdir.rs`：Windows 普通路径不得经末尾 `.`／`..` 或分量尾点／空格归一化删除另一目录；显式 verbatim 路径继续按字面处理合法尾点／空格目录，Unix 字面路径语义不变。
 - `crates/pi-shell/src/shell.rs`：TERM 宽限等待按平台编译：Unix 继续异步等待清理，Windows 的 TERM 本已强制结束进程，返回立即就绪的 Future；不增加延迟，也不屏蔽 `clippy::unused_async`。
+- `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
 - `crates/pi-builtins/src/uptime.rs`、`du.rs`：Windows 的未用导入／可变声明静态问题已由上游等价修复；采用上游实现，不再保留 fork 业务补丁，命令行为不变。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。独立 Python 回归不因此纳入 fork 本地门禁。

@@ -867,7 +867,9 @@ async fn wait_for_pipeline_processes_and_update_status(
 	shell: &mut Shell<impl extensions::ShellExtensions>,
 	params: &ExecutionParameters,
 ) -> Result<ExecutionResult, error::Error> {
-	ensure_not_cancelled(params)?;
+	// These processes are already running: even if cancellation arrived after
+	// spawning, wait_with_cancel must give them their TERM cleanup grace.
+	// Returning early here would drop ChildProcess and immediately hard-kill it.
 	let mut result = ExecutionResult::success();
 	let mut stopped_children = vec![];
 	let mut last_failure_exit_code: Option<ExecutionExitCode> = None;
@@ -894,7 +896,6 @@ async fn wait_for_pipeline_processes_and_update_status(
 	}
 
 	while let Some(child) = process_spawn_results.pop_front() {
-		ensure_not_cancelled(params)?;
 		let wait_result = if !stopped_children.is_empty() {
 			child.poll().await?
 		} else {
