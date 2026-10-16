@@ -290,7 +290,7 @@ describe("pickElectronTarget", () => {
 				if (attached) await releaseBrowser(attached, { kill: false });
 				child.kill();
 				await child.exited;
-				await fs.rm(root, { recursive: true, force: true });
+				await removeWithRetries(root);
 			}
 		},
 		30_000,
