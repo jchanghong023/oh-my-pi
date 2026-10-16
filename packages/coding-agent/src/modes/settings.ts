@@ -585,7 +585,7 @@ export const cfgDisplayShimmer = register({
 	id: "display.shimmer",
 	type: "enum",
 	values: ["classic", "kitt", "disabled"] as const,
-	default: "classic",
+	default: "disabled",
 	ui: {
 		tab: "appearance",
 		group: "显示",
@@ -633,7 +633,7 @@ export const cfgDisplaySubagentLivePreview = register({
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "appearance",
 		group: "显示",
