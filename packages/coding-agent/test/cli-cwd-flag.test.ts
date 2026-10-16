@@ -7,11 +7,9 @@ import { applyStartupCwd } from "@oh-my-pi/pi-coding-agent/cli/startup-cwd";
 import * as utils from "@oh-my-pi/pi-utils";
 
 const originalProjectDir = utils.getProjectDir();
-const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 	utils.setProjectDir(originalProjectDir);
 });
 describe("parseArgs — --cwd flag", () => {
@@ -106,22 +104,13 @@ describe("parseArgs — --cwd flag", () => {
 		}
 	});
 
-	it("uses the system temporary directory for Windows home launches", async () => {
-		const home = String.raw`C:\Users\reporter`;
-		const fallback = String.raw`C:\Users\reporter\AppData\Local\Temp`;
-		if (!platformDescriptor) throw new Error("process.platform descriptor is unavailable");
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
-		vi.spyOn(os, "homedir").mockReturnValue(home);
-		vi.spyOn(os, "tmpdir").mockReturnValue(fallback);
-		vi.spyOn(utils, "getProjectDir").mockReturnValue(home);
-		vi.spyOn(utils, "directoryExists").mockImplementation(async candidate => {
-			return candidate === "/tmp" || candidate === fallback;
-		});
-		const setProjectDir = vi.spyOn(utils, "setProjectDir").mockImplementation(() => {});
+	it("keeps home launches in the home directory without requiring --allow-home", async () => {
+		const home = os.homedir();
+		utils.setProjectDir(home);
 
 		await applyStartupCwd(parseArgs([]));
 
-		expect(setProjectDir).toHaveBeenCalledTimes(1);
-		expect(setProjectDir).toHaveBeenCalledWith(fallback);
+		expect(utils.getProjectDir()).toBe(home);
+		expect(utils.normalizePathForComparison(process.cwd())).toBe(utils.normalizePathForComparison(home));
 	});
 });

@@ -8,7 +8,7 @@ import { register } from "./config/registry";
 export const cfgTelemetryOtlpExportEnabled = register({
 	id: "telemetry.otlpExportEnabled",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "providers",
 		group: "隐私",

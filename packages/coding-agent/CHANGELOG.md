@@ -16,6 +16,7 @@
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
 - Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.
 - Enable LSP access for subagents and terminal error notifications by default, while preserving explicit settings.
+- Allow sessions in the home directory by default and disable OTLP telemetry export by default, while preserving explicit telemetry settings.
 
 ### Fixed
 

@@ -254,6 +254,7 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 	const args = [...inputArgs];
 	const parseDeps = PARSE_DEPS;
 	const result: Args = {
+		allowHome: true,
 		messages: [],
 		fileArgs: [],
 		unknownFlags: new Map(),
