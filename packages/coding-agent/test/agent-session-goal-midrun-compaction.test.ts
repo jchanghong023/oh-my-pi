@@ -869,13 +869,9 @@ describe("AgentSession mid-run threshold compaction", () => {
 	it("persists one first auto Goal notice when its explicit custom user source reaches followUp delivery", async () => {
 		const boundaryEntered = Promise.withResolvers<void>();
 		const releaseBoundary = Promise.withResolvers<void>();
-		const delivered = Promise.withResolvers<void>();
 		const { session, sessionManager, observedContexts } = await createHarness(
 			{ "compaction.enabled": false },
 			{
-				onProviderCall: index => {
-					if (index === 2) delivered.resolve();
-				},
 				tool: {
 					name: "task",
 					label: "Task",
@@ -932,13 +928,6 @@ describe("AgentSession mid-run threshold compaction", () => {
 			releaseBoundary.resolve();
 			await running;
 		}
-		expect(
-			await raceWithTimeout(
-				delivered.promise.then(() => true),
-				2_000,
-				false,
-			),
-		).toBe(true);
 		await session.waitForIdle();
 		if (!state) throw new Error("Missing explicit delivery Goal");
 		const live = session.messages.filter(

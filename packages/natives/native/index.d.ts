@@ -1804,8 +1804,10 @@ export interface EnclosingBoundaryOptions {
  * the calling thread.
  *
  * The input image is decoded and resized to the requested pixel dimensions
- * before encoding. Prefer [`encode_sixel_async`] unless the caller cannot
- * wait: the decode, resize and dither block the JS thread.
+ * (not resampled when it already has them), then encoded in whole 6-pixel
+ * bands: a partial last band is dropped, see [`band_rows`]. Prefer
+ * [`encode_sixel_async`] unless the caller cannot wait: the decode, resize
+ * and dither block the JS thread.
  *
  * # Errors
  * Returns an error if decoding, resizing, or SIXEL encoding fails.

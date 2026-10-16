@@ -14,6 +14,7 @@ import {
 	Snowflake,
 	setAgentDir,
 } from "@oh-my-pi/pi-utils";
+import { canCreateSymlinks } from "../helpers/symlink-privilege";
 
 const OLDER_MTIME = new Date("2000-01-01T00:00:00.000Z");
 const NEWER_MTIME = new Date("2000-01-01T00:00:01.000Z");
@@ -159,7 +160,7 @@ describe("resolveResumableSession", () => {
 		expect(match?.session.path).toBe(path.join(sessionDir, "2025-01-01_moved.jsonl"));
 	});
 
-	it("matches sessions staged into the dir as symlinks", async () => {
+	it.skipIf(!canCreateSymlinks())("matches sessions staged into the dir as symlinks", async () => {
 		const id = "sym1234";
 		const stagedDir = path.join(tempDir, "staged");
 		fs.mkdirSync(stagedDir);
