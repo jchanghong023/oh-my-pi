@@ -512,6 +512,8 @@ export class ExtensionRunner {
 	#uiContext: ExtensionUIContext;
 	#mode: ExtensionMode = "print";
 	#toolApprovalPreviewWaiter?: (toolCallId: string) => Promise<void>;
+	/** Grant keys (see `sessionApprovalScope`) approved "for this session", each prefixed by the session it covers. */
+	#sessionApprovals = new Set<string>();
 	#trackUserWait?: UserWaitTracker;
 	#errorListeners: Set<ExtensionErrorListener> = new Set();
 	#getModel: () => Model | undefined = () => undefined;
@@ -1065,6 +1067,15 @@ export class ExtensionRunner {
 	/** Waits until the interactive transcript can show the tool call being approved. */
 	async waitForToolApprovalPreview(toolCallId: string): Promise<void> {
 		await this.#toolApprovalPreviewWaiter?.(toolCallId);
+	}
+
+	/** Whether the user approved `key` for the current session; a new or switched session starts with none. */
+	hasSessionApproval(key: string): boolean {
+		return this.#sessionApprovals.has(`${this.sessionId}\0${key}`);
+	}
+
+	grantSessionApproval(key: string): void {
+		this.#sessionApprovals.add(`${this.sessionId}\0${key}`);
 	}
 
 	getUIContext(): ExtensionUIContext {

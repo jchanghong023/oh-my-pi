@@ -260,11 +260,14 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	const staticModels = options.staticModels
 		? materializeStaticModels<TApi>(options.staticModels)
 		: (getBundledModels(options.providerId as GeneratedProvider) as Model<TApi>[]);
-	const additiveStaticModelIds =
+	const modelsDevAdditiveStaticModelIds =
 		options.modelsDev?.additiveOnly && staticModels.length > 0
 			? new Set(staticModels.map(model => model.id))
 			: undefined;
 	const cache = readModelCache<TApi>(cacheProviderId, ttlMs, now, dbPath);
+	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
+	const isAuthoritativeDynamicCache = dynamicModelsAuthoritative && (cache?.authoritative ?? false);
+	const cacheAdditiveStaticModelIds = isAuthoritativeDynamicCache ? undefined : modelsDevAdditiveStaticModelIds;
 	const restoredCache = restoreCachedModelHeaders(
 		cache?.models ?? [],
 		staticModels,
@@ -276,7 +279,6 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 	);
 	const usableCachedModels = restoredCache.models.filter(model => !restoredCache.unresolvedModelIds.has(model.id));
 	const cacheHasUnresolvedHeaders = restoredCache.unresolvedModelIds.size > 0;
-	const dynamicModelsAuthoritative = options.dynamicModelsAuthoritative ?? false;
 	const mergeAuthority: DynamicMergeAuthority = {
 		input: options.dynamicInputAuthoritative ?? false,
 		reasoning: options.dynamicReasoningAuthoritative ?? false,
@@ -322,10 +324,10 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		cacheFingerprintMatches &&
 		!cacheHasUnresolvedHeaders
 	) {
-		const cacheContribution = additiveStaticModelIds
-			? restoredCache.models.filter(model => !additiveStaticModelIds.has(model.id))
+		const cacheContribution = cacheAdditiveStaticModelIds
+			? restoredCache.models.filter(model => !cacheAdditiveStaticModelIds.has(model.id))
 			: restoredCache.models;
-		const cachedModels = additiveStaticModelIds
+		const cachedModels = cacheAdditiveStaticModelIds
 			? mergeCatalogMetrics(
 					mergeDynamicModels(staticModels, cacheContribution, mergeAuthority),
 					restoredCache.models,
@@ -345,8 +347,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		: [null, null];
 	const modelsDevFetchSucceeded = fetchedModelsDevModels !== null;
 	const normalizedModelsDevModels = fetchedModelsDevModels?.models ?? [];
-	const modelsDevModels = additiveStaticModelIds
-		? normalizedModelsDevModels.filter(model => !additiveStaticModelIds.has(model.id))
+	const modelsDevModels = modelsDevAdditiveStaticModelIds
+		? normalizedModelsDevModels.filter(model => !modelsDevAdditiveStaticModelIds.has(model.id))
 		: normalizedModelsDevModels;
 	const shouldUseFreshCacheAsAuthoritative =
 		strategy === "online-if-uncached" && hasUsableFreshCache && hasAuthoritativeCache;
@@ -366,10 +368,8 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
-	// Additive shared-catalog rows may only introduce IDs. Apply that boundary
-	// to cache fallback too, including snapshots written by an older binary.
-	const cacheModels = additiveStaticModelIds
-		? preparedCacheModels.filter(model => !additiveStaticModelIds.has(model.id))
+	const cacheModels = cacheAdditiveStaticModelIds
+		? preparedCacheModels.filter(model => !cacheAdditiveStaticModelIds.has(model.id))
 		: preparedCacheModels;
 	const dynamicModels = fetchedDynamicModels?.models ?? [];
 	// A successful empty endpoint result stays authoritative for THIS cycle (so an
@@ -390,7 +390,9 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		fetchedModelsDevModels?.explicitKindModels,
 	);
 	const catalogMetricsSource = modelsDevFetchSucceeded ? normalizedModelsDevModels : preparedCacheModels;
-	const mergedWithCatalogMetrics = additiveStaticModelIds
+	const mergedWithCatalogMetrics = (
+		modelsDevFetchSucceeded ? modelsDevAdditiveStaticModelIds : cacheAdditiveStaticModelIds
+	)
 		? mergeCatalogMetrics(mergedWithModelsDev, catalogMetricsSource)
 		: mergedWithModelsDev;
 	const mergedModels = mergeDynamicModels(
@@ -400,7 +402,11 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		fetchedDynamicModels?.explicitKindModels,
 	);
 	const models = collapseBuiltVariants(
-		authoritativeDynamicFetchSucceeded ? retainModelIds(mergedModels, dynamicModels) : mergedModels,
+		authoritativeDynamicFetchSucceeded
+			? retainModelIds(mergedModels, dynamicModels)
+			: !dynamicFetchSucceeded && isAuthoritativeDynamicCache && usableCachedModels.length > 0
+				? retainModelIds(mergedModels, usableCachedModels)
+				: mergedModels,
 	);
 	const resolutionAuthoritative = !hasRemoteFetcher || remoteResolutionComplete || shouldUseFreshCacheAsAuthoritative;
 	const remoteUpdatedAt = anyRemoteFetchSucceeded ? now() : undefined;
@@ -445,15 +451,18 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 				cacheFingerprintMatches,
 				options.dropCachedModelIdsOnStaticMismatch,
 			);
-			const latestCacheModels = additiveStaticModelIds
-				? preparedLatestCacheModels.filter(model => !additiveStaticModelIds.has(model.id))
+			const latestCacheModels = cacheAdditiveStaticModelIds
+				? preparedLatestCacheModels.filter(model => !cacheAdditiveStaticModelIds.has(model.id))
 				: preparedLatestCacheModels;
+			const mergedFallbackModels = mergeDynamicModels(
+				mergeDynamicModels(staticModels, latestCacheModels, mergeAuthority),
+				modelsDevModels,
+				mergeAuthority,
+			);
 			const fallbackSnapshotModels = collapseBuiltVariants(
-				mergeDynamicModels(
-					mergeDynamicModels(staticModels, latestCacheModels, mergeAuthority),
-					modelsDevModels,
-					mergeAuthority,
-				),
+				isAuthoritativeDynamicCache && latestUsableCacheModels.length > 0
+					? retainModelIds(mergedFallbackModels, latestUsableCacheModels)
+					: mergedFallbackModels,
 			);
 			if (fallbackSnapshotModels.length > 0 || latestCache !== null || cache !== null) {
 				writeModelCache(

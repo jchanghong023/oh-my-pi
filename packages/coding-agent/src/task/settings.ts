@@ -31,8 +31,8 @@ export const cfgTaskIsolationEnabled = register({
 	ui: {
 		tab: "tasks",
 		group: "隔离",
-		label: "隔离 Subagent",
-		description: "在检出目录的隔离副本中运行 Subagent，随后集成其更改",
+		label: "允许隔离 Subagent",
+		description: "允许通过 `isolated: true` 为单个任务启用隔离；未指定的任务在共享检出目录中运行",
 	},
 });
 

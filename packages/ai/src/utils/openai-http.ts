@@ -68,7 +68,7 @@ export interface OpenAIStreamRequestInit {
 	body: unknown;
 	signal: AbortSignal;
 	fetch?: FetchImpl;
-	/** Total HTTP attempts; credential-refresh lanes own their retry policy. */
+	/** Override the default transport attempt budget for this request. */
 	maxAttempts?: number;
 	/** Optional caller-specific gate composed with shared transport retry exclusions. */
 	shouldRetryResponse?: (response: Response, bodyText: string) => boolean | Promise<boolean>;

@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [18.11.3] - 2026-10-16
+
+### Changed
+
+- Renamed the built-in `google-antigravity` login option to "Google Antigravity (Gemini, Claude, GPT-OSS)" so it is distinguishable from similarly named third-party plugins and no longer implies support stops at Gemini 3 ([#15998](https://github.com/can1357/oh-my-pi/pull/15998) by [@savanne-kham](https://github.com/savanne-kham)).
+
+### Fixed
+
+- Fixed Command Code's `z-ai/glm-5.3-flash` failing every request with "not available on this endpoint": the catalog routes it to chat completions, the only endpoint Command Code lists for it ([#15922](https://github.com/can1357/oh-my-pi/pull/15922) by [@jasonharrison](https://github.com/jasonharrison))
+- Fixed `/handoff` failing with `400 Provider returned error` on OpenRouter's hosted Muse Spark 1.x and Muse Wonder models: requests no longer send a `tool_choice` the upstream Meta backend rejects ([#15910](https://github.com/can1357/oh-my-pi/issues/15910))
+- Fixed OpenCode Zen bringing back retired bundled models from an authoritative model cache, and dropping drop-listed models such as `gemini-3.7-flash` when a refresh fails after an upgrade ([#15770](https://github.com/can1357/oh-my-pi/pull/15770) by [@adi-IL](https://github.com/adi-IL))
+
+## [18.11.2] - 2026-10-16
+
 ### Added
 
 - Added `keep-bundled-names` catalog attribute to preserve static model display names during discovery

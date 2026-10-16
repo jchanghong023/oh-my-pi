@@ -11,8 +11,7 @@
  */
 import { isJsonObject, type JsonObject } from "./types";
 
-// Match the schema-valued keyword categories used by the normalization walkers.
-// All other values (including const/enum/default/examples) are opaque JSON data.
+// Only schema-valued keywords may contain references; literal JSON is opaque.
 const SCHEMA_MAP_KEYS: Record<string, true> = {
 	properties: true,
 	patternProperties: true,
@@ -39,7 +38,6 @@ const SCHEMA_VALUE_KEYS: Record<string, true> = {
 function dereferenceKeyword(key: string, value: unknown, root: JsonObject, visiting: Set<string>): unknown {
 	if (Object.hasOwn(SCHEMA_MAP_KEYS, key) && isJsonObject(value)) {
 		const result: JsonObject = {};
-		// Map keys are arbitrary names, even when named $ref/$defs/definitions.
 		for (const name in value) result[name] = dereferenceNode(value[name], root, visiting);
 		return result;
 	}

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [18.11.3] - 2026-10-16
+
+### Changed
+
+- Changed `encodeSixel` and `encodeSixelAsync` to drop a partial last 6-pixel band, so an image never extends below the requested height and the caller no longer has to shrink it to a multiple of 6 ([#16007](https://github.com/can1357/oh-my-pi/issues/16007))
+
+## [18.11.2] - 2026-10-16
+
 ### Added
 
 - Added strict Rust/PCRE2 wiki regex search over database-stored original Markdown lines, preserving overlapping slice boundaries, cancellable scans, snapshot-bound caching and existing relevance-search cursors without schema changes.

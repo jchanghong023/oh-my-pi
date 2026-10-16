@@ -1579,6 +1579,12 @@ export interface Model<TApi extends Api = Api> {
 	 */
 	imageInputDecoder?: "stb";
 	/**
+	 * Most images one request may carry, from user configuration. Replaces the
+	 * catalog's `image-count-budget` for hosts no rule names, such as a custom
+	 * gateway in front of a vendor with a higher limit.
+	 */
+	imageCountBudget?: number;
+	/**
 	 * Native provider tool-call support. `false` is the only unsupported signal:
 	 * `true` and `undefined` both mean callers may use native tools. Catalog and
 	 * discovery sources should set this sparsely when an upstream explicitly

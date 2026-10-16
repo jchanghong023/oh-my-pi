@@ -1829,6 +1829,7 @@ function mapOptionsForApi<TApi extends Api>(
 		repetitionPenalty: options?.repetitionPenalty,
 		maxTokens: options?.maxTokens ?? model.maxTokens ?? undefined,
 		signal: options?.signal,
+		maxHttpAttempts: options?.maxHttpAttempts,
 		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
 		credentialId: options?.credentialId,
 		oauthIdentity: options?.oauthIdentity,

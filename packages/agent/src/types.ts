@@ -39,10 +39,14 @@ export interface QueuedMessagePreparation {
 	commit(): readonly AgentMessage[] | undefined;
 }
 
+/** Which agent queue a batch came from: steering amends the running task, follow-ups start the next one. */
+export type QueuedMessageQueue = "steering" | "followUp";
+
 /** Prepare an exclusively claimed batch. Undefined delivers unchanged; the signal also aborts when the claim is cancelled. */
 export type PrepareQueuedMessages = (
 	messages: readonly AgentMessage[],
 	signal: AbortSignal,
+	queue: QueuedMessageQueue,
 ) => QueuedMessagePreparation | undefined | Promise<QueuedMessagePreparation | undefined>;
 
 /** Called once an aside has been inserted into the agent's live context. */

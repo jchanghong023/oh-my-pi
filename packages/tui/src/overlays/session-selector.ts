@@ -1333,8 +1333,10 @@ export interface SessionSelectorOptions<T extends SessionSelectorEntry = Session
 	loadAllSessions?: () => Promise<T[]>;
 	/** Preloaded all-projects list; cached so the first Tab toggle is instant. */
 	allSessions?: T[];
-	/** Picker heading; defaults to "Resume Session". */
+	/** Picker heading; defaults to "恢复会话". */
 	title?: string;
+	/** Primary action label; defaults to "恢复" (ANSI footer defaults to "选择"). */
+	actionLabel?: string;
 	/** Fixed scope label, or false to omit the scope suffix. */
 	scopeLabel?: string | false;
 	/**
@@ -1402,6 +1404,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 	readonly #getTerminalRows: () => number;
 	readonly #fillHeight: boolean;
 	readonly #title: string;
+	readonly #actionLabel: string;
 	readonly #scopeLabel: string | false | undefined;
 	/** What `#messageContainer` shows, for the native description. */
 	#message: SessionPickerMessage | undefined;
@@ -1459,6 +1462,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
 		this.#title = options.title ?? "恢复会话";
+		this.#actionLabel = options.actionLabel ?? "恢复";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
 		this.#scopeLabel = options.scopeLabel;
@@ -1493,9 +1497,11 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			onExit();
 		};
 		this.#sessionList.onRequestRender = () => this.#onRequestRender?.();
-		this.#sessionList.onDeleteRequest = (session: T) => {
-			this.#showDeleteConfirmation(session);
-		};
+		if (this.#onDelete) {
+			this.#sessionList.onDeleteRequest = (session: T) => {
+				this.#showDeleteConfirmation(session);
+			};
+		}
 		if (this.#loadAllSessions || this.#globalSessions) {
 			this.#sessionList.onToggleScope = () => {
 				void this.#toggleScope();
@@ -1673,7 +1679,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		const cancel = interruptKey();
 		const hint = theme.fg(
 			"muted",
-			`[${formatKeyHints(["delete", "backspace"])} 删除 · ${formatKeyHint("enter")} 选择 · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} 取消]`,
+			`[${this.#onDelete ? `${formatKeyHints(["delete", "backspace"])} 删除 · ` : ""}${formatKeyHint("enter")} 选择 · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} 取消]`,
 		);
 		return [row("", width), row(hint, width), row("", width), bottomBorder(width)];
 	}
@@ -1721,10 +1727,9 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		} else {
 			children.push(this.#sessionList.searchInput, list);
 		}
-		const hints: (NativeHint | undefined)[] = [
-			{ keys: ["delete", "backspace"], label: "删除" },
-			{ keys: ["enter"], label: "选择" },
-		];
+		const hints: (NativeHint | undefined)[] = [];
+		if (this.#onDelete) hints.push({ keys: ["delete", "backspace"], label: "删除" });
+		hints.push({ keys: ["enter"], label: "选择" });
 		if (this.#sessionList.onToggleScope) {
 			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "当前文件夹" : "所有项目" });
 		}
@@ -1771,7 +1776,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", "恢复", "enter", { primary: true })];
+		const actions = [pickerAction("resume", this.#actionLabel, "enter", { primary: true })];
 		if (this.#onDelete) actions.push(pickerAction("delete", "删除", "backspace"));
 		if (toggle) {
 			actions.push(pickerAction("scope", this.#scope === "all" ? "当前文件夹" : "所有项目", "tab"));

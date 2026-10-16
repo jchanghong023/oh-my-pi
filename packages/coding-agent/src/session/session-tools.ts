@@ -34,7 +34,14 @@ import { isFilesystemSourcePath } from "../tools/path-utils";
 import { supportsExternalThinking } from "../tools/think";
 import { ToolAbortError } from "../tools/tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
-import { isMountableUnderXdev, listXdevTools, type XdevState, xdevDocsFor, xdevEntries } from "../tools/xdev";
+import {
+	isMountableUnderXdev,
+	listXdevTools,
+	planXdevPromptDocs,
+	type XdevState,
+	xdevDocsFor,
+	xdevEntries,
+} from "../tools/xdev";
 import { type EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import { resolveEditMode } from "../utils/edit-mode";
 import {
@@ -1751,8 +1758,32 @@ export class SessionTools {
 		// {@link #notifyXdevMountDelta} cancel a mount followed by an unmount before
 		// any request is sent (issue #7139 reviews).
 		if (baseCatalogDelivered) {
+			// Route guidance ships in the same request's append prompt: a pending
+			// add whose route line already carries its catalog summary needs no
+			// notice line — the route renders the same name and summary. Deferred
+			// MCP discovery is the common path — the post-connect mount lands
+			// before the next user turn while the base catalog (which the check
+			// above consults) never lists routed tools — so without this check
+			// the notice would duplicate every route line verbatim. Two devices
+			// keep their notice lines: ones the bounded route projection omits
+			// (no shipped route line to lean on), and ones whose docs the prompt
+			// inlines (their route line has no summary; the notice is what
+			// delivers their docs).
+			let routedSummaryNames: Set<string> | undefined;
+			if (this.#xdev) {
+				const docsPlan = planXdevPromptDocs(
+					this.#xdev,
+					cfgToolsXdevDocs.get(this.#host.settings),
+					cfgToolsXdevInlineDevices.get(this.#host.settings),
+				);
+				routedSummaryNames = new Set(
+					projectMountedMCPXdevGuidance(collectMountedMCPToolRoutes(listXdevTools(this.#xdev)))
+						.mappings.filter(mapping => docsPlan.catalog.has(mapping.name))
+						.map(mapping => mapping.name),
+				);
+			}
 			for (const name of pending.added) {
-				if (this.#basePromptXdevNames.has(name)) announcedMounts.add(name);
+				if (this.#basePromptXdevNames.has(name) || routedSummaryNames?.has(name)) announcedMounts.add(name);
 			}
 		}
 		// Only announce a net change relative to what the model already knows (from

@@ -936,6 +936,7 @@ export const streamOpenAICompletionsOnce = (
 						headers: headersWithTimeout,
 						body: params,
 						signal: requestSignal,
+						maxAttempts: model.provider === "codeagent" ? 1 : options?.maxHttpAttempts,
 						fetch: wrapFetchForCopilotFallback(
 							options?.fetch,
 							model.provider === "github-copilot",
@@ -943,7 +944,6 @@ export const streamOpenAICompletionsOnce = (
 							copilotCacheKey,
 							copilotCacheSnapshot,
 						),
-						maxAttempts: model.provider === "codeagent" ? 1 : undefined,
 						// Transient 408/429/5xx get Retry-After-aware transport retries.
 						// The first-event watchdog above aborts `requestSignal`, which
 						// bounds every attempt and backoff sleep — retries cannot
@@ -1895,7 +1895,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions"> = (mo
 	}
 	return withReplaySafeStreamRetry(resolvedModel, context, options, streamOpenAICompletionsOnce, {
 		retryEmptyCompletion: true,
-		retryProviderErrors: true,
+		retryProviderErrors: options?.maxHttpAttempts === undefined,
 		maxProviderErrorRetries: 1,
 	});
 };

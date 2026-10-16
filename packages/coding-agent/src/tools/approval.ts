@@ -8,7 +8,7 @@
  */
 import type { AgentTool, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-agent-core";
 import type { Settings } from "../config/settings";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
+import type { ExtensionApprovalAnswer, ExtensionUIContext } from "../extensibility/extensions/types";
 
 import { cfgToolsApproval, cfgToolsApprovalMode } from "./settings";
 
@@ -89,7 +89,10 @@ export interface ResolvedApproval {
 	reason?: string;
 	override: boolean;
 	source?: "tool" | "user" | "mode";
-	/** User-policy key that produced `source: "user"` (defaults to the tool name). */
+	/**
+	 * User-policy key that produced `source: "user"` (defaults to the tool name), or the keyed
+	 * sub-tool (an `xd://` device) a tool-owned or mode decision is about.
+	 */
 	policyKey?: string;
 }
 
@@ -319,6 +322,7 @@ export function resolveApproval(
 		tier: decision.tier,
 		override: false,
 		source: "mode",
+		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 		...(decision.reason ? { reason: decision.reason } : {}),
 	};
 }
@@ -411,25 +415,45 @@ function approvalSummary(details: readonly string[]): string | undefined {
 }
 
 /**
+ * What an "approve for this session" answer may cover for a `resolved` prompt: the subject the
+ * prompt names (the tool, or its `xd://` device) and a grant key that also pins the tier, so
+ * approving a write never covers an exec call of the same tool. Undefined when the prompt must
+ * stay per-call: only a prompt the approval mode raised is grantable, never a critical override
+ * or an explicit `prompt` policy (the user's or the tool's own).
+ */
+export function sessionApprovalScope(
+	resolved: ResolvedApproval,
+	toolName: string,
+): { subject: string; key: string } | undefined {
+	if (resolved.policy !== "prompt" || resolved.source !== "mode") return undefined;
+	const subject = resolved.policyKey ?? toolName;
+	return { subject, key: `${subject}\0${resolved.tier}` };
+}
+
+/**
  * Ask the user to approve a call: the host's approval dialog when it has one (it gets the full
  * prompt and a compact one with the details summarized to a row, so the composer beneath it
- * keeps its room), else an Approve/Deny select with the full prompt (RPC, ACP, extension hosts).
- * `appendix` lines follow the prompt on both. True only for an explicit approval.
+ * keeps its room), else a select with the full prompt (RPC, ACP, extension hosts). `appendix`
+ * lines follow the prompt on both. With a `sessionSubject`, both also offer to approve that
+ * subject for the rest of the session. Anything but an explicit approval is `deny`.
  */
 export async function requestApproval(
 	ui: Pick<ExtensionUIContext, "select" | "approve">,
 	tool: ApprovalSubject,
 	args: unknown,
-	reason?: string,
-	appendix: readonly string[] = [],
-): Promise<boolean> {
+	options: { reason?: string; appendix?: readonly string[]; sessionSubject?: string } = {},
+): Promise<ExtensionApprovalAnswer> {
+	const { reason, appendix = [], sessionSubject } = options;
 	const header = approvalHeader(tool, reason);
 	const details = approvalDetails(tool, args);
 	const full = [...header, ...details, ...appendix].join("\n");
+	const session = sessionSubject === undefined ? undefined : `本会话内允许 ${sessionSubject}`;
 	if (ui.approve) {
 		const summary = approvalSummary(details);
 		const compact = [...header, ...(summary === undefined ? [] : [summary]), ...appendix].join("\n");
-		return (await ui.approve({ full, compact })) === true;
+		const answer = await ui.approve({ full, compact, ...(session ? { session } : {}) });
+		return answer === "once" || (answer === "session" && session) ? answer : "deny";
 	}
-	return (await ui.select(full, ["Approve", "Deny"])) === "Approve";
+	const choice = await ui.select(full, session ? ["Approve", session, "Deny"] : ["Approve", "Deny"]);
+	return choice === "Approve" ? "once" : session && choice === session ? "session" : "deny";
 }

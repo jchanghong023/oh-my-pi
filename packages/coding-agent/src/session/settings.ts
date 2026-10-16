@@ -80,6 +80,45 @@ export const cfgPrewalkEnabled = register({
 	},
 });
 
+export const cfgPrewalkAuto = register({
+	id: "prewalk.auto",
+	type: "enum",
+	values: ["off", "suggest", "on"] as const,
+	default: "off",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "自动 Prewalk",
+		description:
+			"通过 'judge' 角色的原生评判器判断每个新的顶层用户任务是否把主要推理集中在前期。需要原生评判器；没有时不进行分类。与“开启 Prewalk”相互独立。",
+		options: [
+			{ value: "off", label: "关闭", description: "不对任务进行 Prewalk 分类" },
+			{
+				value: "suggest",
+				label: "仅建议",
+				description: "对每个任务进行分类并报告决定，但不启用 Prewalk",
+			},
+			{
+				value: "on",
+				label: "开启",
+				description: "确信任务的主要推理集中在前期时，从当前模型交接至自动目标模型；下一个任务回到规划模型",
+			},
+		],
+	},
+});
+
+export const cfgPrewalkAutoTarget = register({
+	id: "prewalk.autoTarget",
+	type: "string",
+	default: "@smol",
+	ui: {
+		tab: "model",
+		group: "Prewalk",
+		label: "自动 Prewalk 目标",
+		description: "自动 Prewalk 首次 edit/write 时交接到的模型或角色（默认为 '@smol'）。",
+	},
+});
+
 function isLimitRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -43,7 +43,7 @@ import {
 	readQueueChipText,
 	resolveAbortLabel,
 } from "../../session/messages";
-import { formatApprovalPrompt, resolveApproval } from "../../tools/approval";
+import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
@@ -2021,12 +2021,16 @@ export class EventController {
 			const questions = recoverAskQuestions(args)?.map(question => question.question);
 			return { state: "blocked", kind: "question", msg: questions?.join(" ") };
 		}
-		const tool = this.ctx.viewSession.getToolByName(toolName);
+		const session = this.ctx.viewSession;
+		const tool = session.getToolByName(toolName);
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
 		const approval = resolveApproval(tool, args, mode, userPolicies);
 		if (approval.policy !== "prompt") return undefined;
+		// Approved for this session: the wrapper runs it without asking.
+		const scope = sessionApprovalScope(approval, tool.name);
+		if (scope && session.extensionRunner?.hasSessionApproval(scope.key)) return undefined;
 		return { state: "blocked", kind: "permission", msg: formatApprovalPrompt(tool, args, approval.reason) };
 	}
 

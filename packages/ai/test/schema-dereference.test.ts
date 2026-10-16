@@ -2,6 +2,78 @@ import { describe, expect, it } from "bun:test";
 import { dereferenceJsonSchema } from "@oh-my-pi/pi-ai/utils/schema";
 
 describe("dereferenceJsonSchema", () => {
+	for (const referenced of [false, true]) {
+		it(`preserves literal JSON in ${referenced ? "reference siblings" : "ordinary schemas"}`, () => {
+			const literal = {
+				$ref: "#/$defs/Text",
+				$defs: { keep: "literal" },
+				definitions: { keep: "literal" },
+				properties: { nested: { $ref: "#/$defs/Text" } },
+			};
+			const annotations = {
+				const: literal,
+				enum: [literal],
+				default: literal,
+				examples: [literal],
+				"x-payload": literal,
+			};
+			const schema = {
+				$defs: { Text: { type: "string" }, Value: { type: "object" } },
+				properties: { value: { ...(referenced ? { $ref: "#/$defs/Value" } : { type: "object" }), ...annotations } },
+			};
+			expect(dereferenceJsonSchema(schema)).toEqual({
+				properties: { value: { type: "object", ...annotations } },
+			});
+		});
+
+		it(`dereferences schema-valued keywords in ${referenced ? "reference siblings" : "ordinary schemas"}`, () => {
+			const ref = { $ref: "#/$defs/Text" };
+			const text = { type: "string" };
+			const schema = {
+				$defs: { Text: text, Value: { type: "object" } },
+				...(referenced ? { $ref: "#/$defs/Value" } : { type: "object" }),
+			};
+			const namedRefs = { $ref: ref, $defs: ref, definitions: ref, const: ref };
+			const namedSchemas = { $ref: text, $defs: text, definitions: text, const: text };
+
+			for (const keyword of ["properties", "patternProperties", "dependencies", "dependentSchemas"]) {
+				expect(dereferenceJsonSchema({ ...schema, [keyword]: namedRefs })).toEqual({
+					type: "object",
+					[keyword]: namedSchemas,
+				});
+			}
+			for (const keyword of ["anyOf", "oneOf", "allOf", "prefixItems", "items"]) {
+				expect(dereferenceJsonSchema({ ...schema, [keyword]: [ref, false] })).toEqual({
+					type: "object",
+					[keyword]: [text, false],
+				});
+			}
+			for (const keyword of [
+				"items",
+				"additionalItems",
+				"contains",
+				"contentSchema",
+				"propertyNames",
+				"if",
+				"then",
+				"else",
+				"not",
+				"additionalProperties",
+				"unevaluatedItems",
+				"unevaluatedProperties",
+			]) {
+				expect(dereferenceJsonSchema({ ...schema, [keyword]: ref })).toEqual({
+					type: "object",
+					[keyword]: text,
+				});
+			}
+			expect(dereferenceJsonSchema({ ...schema, dependencies: { field: ["$ref", "$defs"] } })).toEqual({
+				type: "object",
+				dependencies: { field: ["$ref", "$defs"] },
+			});
+		});
+	}
+
 	it("returns schema without $defs unchanged", () => {
 		const schema = {
 			type: "object",
@@ -300,7 +372,7 @@ describe("dereferenceJsonSchema", () => {
 		}
 	});
 
-	it("dereferences schema-valued keywords and preserves boolean and dependency-array values", () => {
+	it("preserves boolean schemas in schema-valued keywords", () => {
 		const definitions = { Text: { type: "string", minLength: 2 } };
 		for (const keyword of [
 			"items",
@@ -316,23 +388,12 @@ describe("dereferenceJsonSchema", () => {
 			"unevaluatedItems",
 			"unevaluatedProperties",
 		]) {
-			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: { $ref: "#/$defs/Text" } })).toEqual({
-				[keyword]: { type: "string", minLength: 2 },
-			});
 			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: false })).toEqual({ [keyword]: false });
 		}
 		for (const keyword of ["items", "prefixItems", "anyOf", "oneOf", "allOf"]) {
-			expect(
-				dereferenceJsonSchema({ $defs: definitions, [keyword]: [{ $ref: "#/$defs/Text" }, true, false] }),
-			).toEqual({
-				[keyword]: [{ type: "string", minLength: 2 }, true, false],
+			expect(dereferenceJsonSchema({ $defs: definitions, [keyword]: [{ $ref: "#/$defs/Text" }, true] })).toEqual({
+				[keyword]: [{ type: "string", minLength: 2 }, true],
 			});
 		}
-		expect(
-			dereferenceJsonSchema({
-				$defs: definitions,
-				dependencies: { names: ["$ref", "$defs", "definitions"] },
-			}),
-		).toEqual({ dependencies: { names: ["$ref", "$defs", "definitions"] } });
 	});
 });

@@ -24,6 +24,8 @@ const MUTATING_TOOLS: Record<string, true> = {
 	ast_edit: true,
 };
 const MID_RUN_NUDGE_MESSAGE_TYPE = "mid-run-todo-nudge";
+/** Message type of the hidden first-turn reminder {@link TodoTracker.createEagerTodoPrelude} builds. */
+export const EAGER_TODO_PRELUDE_MESSAGE_TYPE = "eager-todo-prelude";
 const MARKDOWN_PROMPT_PREFIX_RE = /^(?:>\s*)?(?:(?:[-*+]|\d+[.)])\s+)*/;
 const PROMPT_LABEL_RE = /^(?:q(?:uestion)?|ask)\s*\d*\s*[:.)-]\s*/i;
 const INLINE_EMPHASIS_RE = /(\*\*|__)(.*?)\1/g;
@@ -166,7 +168,7 @@ export class TodoTracker {
 		}
 		const message: AgentMessage = {
 			role: "custom",
-			customType: "eager-todo-prelude",
+			customType: EAGER_TODO_PRELUDE_MESSAGE_TYPE,
 			content: prompt.render(eagerTodoPrompt, { ...this.#buildEagerPreludeContext(), forced: mode === "always" }),
 			display: false,
 			attribution: "agent",
