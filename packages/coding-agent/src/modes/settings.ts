@@ -662,7 +662,7 @@ export const cfgDisplayCompactToolActivity = register({
 		tab: "appearance",
 		group: "显示",
 		label: "紧凑显示工具调用",
-		description: "将模型发起的每次工具调用显示为一行状态，不显示参数、输出或图片",
+		description: "工具调用显示为一行状态；编辑、写入保留默认预览、diff 和展开能力",
 	},
 });
 

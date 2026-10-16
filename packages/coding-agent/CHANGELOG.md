@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Compact display keeps upstream write and edit previews, diffs, and expansion controls; other tools remain single-line.
 - Keep live thinking in one editor-anchored window showing only the latest five screen rows; hide it when thinking ends without replaying reasoning in the main transcript.
 - Display the main TUI settings and common interaction dialogs in Simplified Chinese while preserving familiar technical English, command syntax and configuration values.
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.

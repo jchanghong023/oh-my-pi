@@ -851,8 +851,12 @@ export class ToolExecutionComponent extends Container {
 		return taskCardAgentIds(this.#result?.details);
 	}
 
+	get #compactToolActivity(): boolean {
+		return displayPreferences.compactToolActivity && !streamsBody(this.#toolName);
+	}
+
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
+		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
 	}
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
 	parkAsBackground(): void {
@@ -992,14 +996,14 @@ export class ToolExecutionComponent extends Container {
 			this.#showImages,
 			this.#displayInputVersion,
 			this.#toolActivityVisible,
-			displayPreferences.compactToolActivity,
+			this.#compactToolActivity,
 			cx?.cols,
 			media,
 			getThemeEpoch(),
 		];
 		return this.#native.get(key, () =>
 			withHidden(
-				displayPreferences.compactToolActivity
+				this.#compactToolActivity
 					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
 					: dataFirst
 						? this.#describeTool(media)
@@ -1345,13 +1349,13 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${displayPreferences.compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
+		const key = `${this.#compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
 
 		this.#rebuildDisplay();
 		this.#displayBuilt = true;
-		this.#displayCompactToolActivity = displayPreferences.compactToolActivity;
+		this.#displayCompactToolActivity = this.#compactToolActivity;
 	}
 
 	#rendererFlag(name: "forceResultViewportRepaintOnSettle"): boolean {
@@ -1392,7 +1396,7 @@ export class ToolExecutionComponent extends Container {
 		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
 			return [];
 		}
-		if (displayPreferences.compactToolActivity) return this.#renderCompact(width, true);
+		if (this.#compactToolActivity) return this.#renderCompact(width, true);
 		if (this.#displayCompactToolActivity) this.#updateDisplay();
 		let lines = super.render(width);
 		if (this.#allocation < 3) {
@@ -1488,7 +1492,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#rebuildDisplay(): void {
-		if (displayPreferences.compactToolActivity) {
+		if (this.#compactToolActivity) {
 			this.#renderState.renderContext = this.#buildRenderContext();
 			return;
 		}
@@ -1882,7 +1886,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.#toolName === "bash") {
 			// Bash needs render context even before a result exists. The renderer uses the pending-call args
 			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
-			if (this.#result && !displayPreferences.compactToolActivity) {
+			if (this.#result && !this.#compactToolActivity) {
 				// Pass raw output and expanded state - renderer handles width-aware truncation
 				const output = this.#getTextOutput().trimEnd();
 				context.output = output;
@@ -1890,7 +1894,7 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(isRecord(this.#args) ? this.#args.timeout : undefined, 3600);
-		} else if (this.#toolName === "eval" && this.#result && !displayPreferences.compactToolActivity) {
+		} else if (this.#toolName === "eval" && this.#result && !this.#compactToolActivity) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
@@ -1916,7 +1920,7 @@ export class ToolExecutionComponent extends Container {
 					context.perFileDiffPreview = previews;
 				}
 			}
-			if (!displayPreferences.compactToolActivity && !previews?.some(preview => preview.diff)) {
+			if (!this.#compactToolActivity && !previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const fallback = editMode ? renderStreamingFallback(editMode, this.#args, theme) : "";
 				if (fallback) context.editStreamingFallback = fallback;
