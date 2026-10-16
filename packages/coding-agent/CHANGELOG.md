@@ -26,6 +26,7 @@
 
 ### Fixed
 
+- Persist `/team` reports when a discussion is the first interaction in a new session, so results survive exit and resume without an ordinary assistant turn.
 - Allowed repository incremental queries to replace a tracked file with discovered child files when its path becomes a directory.
 - Rejected empty or comment-only Python suites during repository definition extraction, preserving searchable text while removing invalid definitions.
 - Kept Unicode combining marks inside repository word boundaries so substring matches cannot outrank or hide later complete matches.

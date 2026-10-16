@@ -1,6 +1,6 @@
 # `/team` 多代理方案规划命令
 
-> **状态：逐条阻断闭环、约束优先级与判别性验证要求已实现；Windows 改动相关回归与真实 dev-TUI 桩模型验证通过，真实公司模型遵从与方案质量未验收。** 本文档是 `/team` 的唯一权威需求与设计契约：第 2 节为行为需求，第 5 节为实现与集成约束，第 6 节为验证要求，三者对实现同等强制。`fork.md` 仅提供链接；局部通过不代表已通过完整验收。
+> **状态：逐条阻断闭环、约束优先级与判别性验证要求已实现；Windows GPT-6 Luna 真实 RPC／dev-TUI 两个受控场景及首次报告持久化回归通过，真实公司模型遵从与任意实际项目的方案质量未整体验收。** 本文档是 `/team` 的唯一权威需求与设计契约：第 2 节为行为需求，第 5 节为实现与集成约束，第 6 节为验证要求，三者对实现同等强制。`fork.md` 仅提供链接；局部通过不代表已通过完整验收。
 
 ## 1. 背景与用户目标
 
@@ -400,7 +400,9 @@
 
 ## 8. 验证状态
 
+* **真实 GPT-6 Luna 专项：** Windows 使用实际 `openai-codex/gpt-6-luna`，无模型 stub，分别从 `cli.ts --mode rpc-ui` 和 `bun run dev` 原生 ConPTY 的 `/team` 入口完成缓存修复规划与生产证据不足诊断。每场三个独立提案使用相同原始输入并分别检索 wiki，随后实际执行对齐、三个初审、按需修订／复核与综合，共 10／12 个真实模型子调用；子会话记录的模型均为 Luna，实际调用仅含只读工具及 yield，两个测试项目内容和文件清单未变。缓存场景识别在途合并与成功 `undefined` 缓存两项问题，并给出同键、跨键和失败后重试的判别性验收建议；诊断场景明确生产根因未确认、wiki 无索引及请求级证据缺口，未把摘录当作生产因果证明。两个全新会话均直接以 `/team` 开始，报告已实际落盘且退出后仍保留，CLI／TUI 均正常退出 0；真实终端已观察到报告、理解差异与只读收尾契约。证据及范围：`node_modules/.cache/team-luna-verification.json`，其中链接完整报告、子会话和终端记录；仅证明这两个受控场景，不代替公司真实项目验收。
+* **首次报告持久化回归与静态门禁：** `parallel-review-SessionRuntimeCompact-regression.test.ts` 与 `team/controller.test.ts` 共 34 项通过、0 失败；新增回归覆盖没有普通 assistant 轮次时首次自定义报告的持久追加、退出和重开恢复，已观察修复前失败／修复后通过。报告：`runs/test-timing/2026-10-16T20-19-59.649Z-61496-56a555fb/run.json`。Windows fastcheck 通过，27.0 秒，compile_excluded=0.0 秒、exit=0；混合 Cargo 编译未完整观测，保守全部计费，沿用既有 lint 警告，不将其记作无警告。
 * **当前定向回归：** Windows 的 `test/team/schemas.test.ts`、`orchestrator.test.ts`、`integration.test.ts`、`prompts.test.ts` 与 `test/parallel-review-TeamDiscussion-regression.test.ts` 共 120 项通过、0 失败，覆盖逐 ID 部分关闭、非法裁决与回应、无效复核恢复、两轮上限、同文不同 ID、新阻断、累计证据传递、综合约束与推荐门禁。12 个改动 TypeScript 文件经 oxfmt、oxlint 与 LSP 类型诊断检查，无错误；未改动输入复用已通过结果。报告：`runs/test-timing/2026-10-16T12-40-37.391Z-87680-20460d3e/run.json`。
 * **真实公开入口：** 隔离 `bun run dev` ConPTY + localhost Anthropic stub 覆盖三个同模型调查代理、每方案两个阻断、两轮修订及逐项复核。两轮分别关闭 F1／F2 后正常推荐的路径，以及仅关闭 F1 后保留 F2、未知／重复 ID 裁决不能关闭任何旧阻断的路径，见 `node_modules/.cache/team-finding-evidence/1792154293774/report.json`；最终报告的部分关闭／无效复核路径及 ID、问题和依据展示另经 `node_modules/.cache/team-finding-evidence/1792154437975/report.json` 核验。结果均真实可见且持久保存，所有 TUI 正常退出为 0；临时冒烟脚本已移除。
 * **未改动名单规则的既有证据：** `members.ts`、`controller.ts` 的成员选择规则本次未改；未配置／A／AB／ABC／ABCD 的真实 TUI 五场景证据继续限于 `node_modules/.cache/team-roster-evidence/1792152393470/report.json` 所记录源码，不扩展为当前全功能验收。
-* 本次按用户要求仅运行改动相关测试与定向静态检查，未运行 fastcheck／fulltest／slowtest、Linux／WSL、真实公司网关或真实 TUI 取消场景；相关程序化取消回归通过。约束解释边界与判别性验证规则已进入实际子调用提示词，但 localhost stub 不证明真实模型遵从、公司服务可用性或方案质量，第 6 节真实公司模型验收仍未完成。
+* **未验证范围：** 本次未运行 fulltest／slowtest、Linux／WSL、真实公司网关或真实模型的 TUI 取消场景；既有程序化取消回归和上列 stub 边界证据仍限其原记录范围。GPT-6 Luna 的两个真实受控场景不证明公司服务可用性或任意实际项目的方案质量，第 6 节真实公司模型验收仍未完成。

@@ -90,6 +90,45 @@ describe("session runtime boundary regressions", () => {
 		expect(modelRegistry.find("offline-unrelated-runtime", "unrelated-model")).toBeUndefined();
 	});
 
+	it("persists a first custom report before returning and restores it without an assistant turn", async () => {
+		const mock = createMockModel({ provider: "openai", id: "gpt-test" });
+		const manager = SessionManager.create(tempDir.path(), tempDir.path());
+		session = new AgentSession({
+			agent: new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			}),
+			sessionManager: manager,
+			settings: Settings.isolated({ "compaction.enabled": false, "prewalk.enabled": false, "todo.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			toolRegistry: new Map(),
+		});
+		const sessionFile = manager.getSessionFile()!;
+		const report = {
+			customType: "team-result",
+			content: "A reviewed plan with its evidence and adoption conditions.",
+			display: true,
+			attribution: "agent" as const,
+		};
+		await session.appendCustomMessage(report);
+		expect(await Bun.file(sessionFile).exists()).toBe(true);
+		await session.dispose();
+		session = undefined;
+		const restored = await SessionManager.open(sessionFile, tempDir.path(), undefined, { throwIfMissing: true });
+		try {
+			expect(restored.buildSessionContext().messages).toEqual([
+				expect.objectContaining({ role: "custom", ...report }),
+			]);
+			expect(
+				restored.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant"),
+			).toBe(false);
+		} finally {
+			await restored.close();
+		}
+	});
+
 	it("rejects a report append while newSession has reset live context but has not committed its transcript", async () => {
 		const mock = createMockModel({ provider: "openai", id: "gpt-test" });
 		const manager = SessionManager.inMemory(tempDir.path());

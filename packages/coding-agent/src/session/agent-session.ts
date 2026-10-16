@@ -9390,6 +9390,8 @@ export class AgentSession implements SettingsScope {
 				normalized.attribution,
 			);
 			this.agent.appendMessage(normalized);
+			// A first /team result has no assistant turn to open the lazy transcript gate.
+			await manager.ensureOnDisk();
 			await manager.flush();
 			assertCurrent();
 			if (normalized.display === true) {
