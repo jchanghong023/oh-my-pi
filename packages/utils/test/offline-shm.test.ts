@@ -53,6 +53,41 @@ const ENV_KEYS = [
 	"TEMP",
 ] as const;
 
+describe("persistent root lexical identity", () => {
+	it("canonicalizes redundant separators without changing the original environment", () => {
+		const root = path.resolve("fixture", "data-root");
+		for (const override of [
+			root,
+			`${root}${path.sep}`,
+			`${root}${path.sep.repeat(3)}`,
+			`${root}${path.sep}nested${path.sep}..${path.sep}`,
+		]) {
+			const env = { OMP_CONFIG_ROOT: override };
+			expect(resolvePersistentRoot(env)).toBe(root);
+			expect(env.OMP_CONFIG_ROOT).toBe(override);
+		}
+	});
+
+	it("preserves filesystem roots, including Windows drive and UNC roots", () => {
+		const roots = [path.parse(process.cwd()).root];
+		if (process.platform === "win32") roots.push("C:\\", "\\\\server\\share\\");
+		for (const root of roots) {
+			expect(resolvePersistentRoot({ OMP_CONFIG_ROOT: `${root}${path.sep.repeat(3)}` })).toBe(root);
+		}
+	});
+
+	it("canonicalizes the default-root result and tilde-expanded overrides", () => {
+		const home = path.resolve("fixture", "home");
+		const homeEnv = process.platform === "win32" ? { USERPROFILE: home } : { HOME: home };
+		expect(resolvePersistentRoot({ ...homeEnv, PI_CONFIG_DIR: `data-root${path.sep.repeat(3)}` })).toBe(
+			path.join(home, "data-root"),
+		);
+		expect(resolvePersistentRoot({ ...homeEnv, OMP_CONFIG_ROOT: "~/data-root///" })).toBe(
+			path.join(home, "data-root"),
+		);
+	});
+});
+
 // Fixtures never prepare the persistent root. An empty runtime domain must stay empty.
 describe.skipIf(process.platform !== "linux")("offline shm directory routing", () => {
 	let originalEnv: Record<string, string | undefined>;
@@ -179,6 +214,17 @@ describe.skipIf(process.platform !== "linux")("offline shm directory routing", (
 		// An unowned existing root is rejected below; uid participates in the same identity digest.
 	});
 
+	it("shares one runtime domain across equivalent persistent-root spellings", () => {
+		const first = getOfflineShmState()!;
+		for (const override of [`${persistentRoot}/`, `${persistentRoot}///`, `${persistentRoot}/nested/../`]) {
+			process.env.OMP_CONFIG_ROOT = override;
+			const state = getOfflineShmState()!;
+			domains.add(path.dirname(state.runtimeRoot));
+			expect(state).toEqual(first);
+			expect(process.env.OMP_CONFIG_ROOT).toBe(override);
+		}
+	});
+
 	it("keeps profile layout and ignores self-data overrides without touching original env", () => {
 		for (const key of [
 			"XDG_DATA_HOME",
@@ -223,12 +269,34 @@ describe.skipIf(process.platform !== "linux")("offline shm directory routing", (
 		expect(getAgentDir()).toBe(path.join(state.runtimeRoot, "agent"));
 	});
 
-	it("treats an explicitly empty OMP_PROFILE as default despite legacy inherited profile", () => {
-		process.env.OMP_PROFILE = "";
-		process.env.PI_PROFILE = "legacy";
-		__resetDirsFromEnvForTests();
-		expect(getConfigRootDir()).toBe(getOfflineShmState()!.runtimeRoot);
-	});
+	for (const legacyState of ["absent", "symlink", "non-private"] as const) {
+		for (const inheritedAgent of [false, true]) {
+			it(`leaves an unselected legacy profile untouched (${legacyState}, inherited=${inheritedAgent})`, () => {
+				const root = getOfflineShmState()!.runtimeRoot;
+				const legacy = path.join(root, "profiles", "legacy");
+				ensureOfflineShmDirectory("profiles");
+				if (legacyState === "symlink") fs.symlinkSync(os.tmpdir(), legacy);
+				else if (legacyState === "non-private") {
+					fs.mkdirSync(legacy, { mode: 0o700 });
+					fs.chmodSync(legacy, 0o755);
+				}
+				process.env.OMP_PROFILE = "";
+				process.env.PI_PROFILE = "legacy";
+				if (inheritedAgent) process.env.PI_CODING_AGENT_DIR = path.join(legacy, "agent");
+				const lstat = spyOn(fs, "lstatSync");
+				const mkdir = spyOn(fs, "mkdirSync");
+				__resetDirsFromEnvForTests();
+				expect(getConfigRootDir()).toBe(root);
+				expect(getAgentDir()).toBe(path.join(root, "agent"));
+				for (const calls of [lstat.mock.calls, mkdir.mock.calls]) {
+					for (const [target] of calls) {
+						expect(String(target) === legacy || String(target).startsWith(`${legacy}${path.sep}`)).toBe(false);
+					}
+				}
+				expect(fs.existsSync(legacy)).toBe(legacyState !== "absent");
+			});
+		}
+	}
 
 	it("preserves project paths and explicit managed-worktree placement", () => {
 		process.env.OMP_WORKTREE_DIR = "/nfs/project-worktrees";
@@ -435,6 +503,11 @@ describe.skipIf(process.platform !== "linux")("offline shm directory routing", (
 		const profile = path.join(getOfflineShmState()!.runtimeRoot, "profiles", "unsafe");
 		fs.symlinkSync(os.tmpdir(), profile);
 		expect(() => setProfile("unsafe")).toThrow("Unsafe offline shm directory");
+		const nonPrivate = path.join(getOfflineShmState()!.runtimeRoot, "profiles", "non-private");
+		fs.mkdirSync(nonPrivate, { mode: 0o700 });
+		fs.chmodSync(nonPrivate, 0o755);
+		expect(() => setProfile("non-private")).toThrow("private directory");
+		expect(fs.statSync(nonPrivate).mode & 0o777).toBe(0o755);
 		expect(() => ensureOfflineShmDirectory("../outside")).toThrow("inside the runtime root");
 	});
 

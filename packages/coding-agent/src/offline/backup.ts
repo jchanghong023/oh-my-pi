@@ -95,12 +95,24 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 function ephemeral(name: string, relative: string): boolean {
-	const processRuntime = /^(?:profiles[\\/][^\\/]+[\\/])?run(?:[\\/]|$)/.test(relative);
+	const scoped = relative.replace(/^profiles[\\/][^\\/]+[\\/]/, "").replace(/^agent(?:[\\/]|$)/, "");
+	const processRuntime = /^run(?:[\\/]|$)/.test(scoped);
+	// Dependency locks are durable data, regardless of their package manager.
+	// Match process-lock conventions and their owning namespaces, not all *.lock files.
+	const processLock =
+		/\.(?:install|bind)\.lock$|\.lock\.lock$|\.(?:jsonl?|ya?ml|db|sqlite3?|i64|idb)\.lock$/i.test(name) ||
+		(processRuntime && /\.lock(?:\.\d+)?$/i.test(name)) ||
+		(scoped === "" && name === "gc.lock") ||
+		(/^memories[\\/]sharpshooter[\\/][^\\/]+$/.test(scoped) && name === "consolidate.lock") ||
+		(/^idbs[\\/][^\\/]+$/.test(scoped) && name === "db.lock") ||
+		(/^cache[\\/]eval-js[\\/]project-locks$/.test(scoped) && name.endsWith(".lock")) ||
+		(/^cache[\\/][^\\/]+-runtime$/.test(scoped) && name.endsWith(".lock"));
 	return (
 		name === WORK_DIRECTORY ||
 		name === BACKUP_DIRECTORY ||
 		name.startsWith(".offline-shm-") ||
-		/(?:\.lock$|\.lock\.\d+$|\.pid$|\.sock$|\.socket$|\.tmp(?:$|[-.])|\.temp$|\.swp$|~$)/i.test(name) ||
+		processLock ||
+		/(?:\.pid$|\.sock$|\.socket$|\.tmp(?:$|[-.])|\.temp$|\.swp$|~$)/i.test(name) ||
 		(processRuntime && /^(?:clients|provider-inflight|broker\.token|meta\.json|spec\.json|scope\.json)$/.test(name))
 	);
 }
@@ -119,6 +131,32 @@ async function privateDirectory(directory: string, create = true): Promise<void>
 		(process.platform !== "win32" && (stat.mode & 0o077) !== 0)
 	) {
 		throw failure("UNSAFE_BACKUP_DIRECTORY");
+	}
+}
+
+async function sharedBackupDirectory(directory: string): Promise<void> {
+	await fs.mkdir(directory, { mode: 0o1777 }).catch(error => {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+	});
+	const stat = await fs.lstat(directory);
+	if (!stat.isDirectory() || stat.isSymbolicLink()) throw failure("UNSAFE_BACKUP_DIRECTORY");
+	if (process.platform === "win32") return;
+	const handle = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+	try {
+		const opened = await handle.stat();
+		if (opened.dev !== stat.dev || opened.ino !== stat.ino) throw failure("UNSAFE_BACKUP_DIRECTORY");
+		if (process.getuid && opened.uid === process.getuid() && (opened.mode & 0o1777) !== 0o1777) {
+			// mkdir is subject to umask. Initialize only our own shared container,
+			// including the private container created by older versions; never a foreign directory.
+			await handle.chmod((opened.mode & 0o2000) | 0o1777);
+		}
+		const shared = await handle.stat();
+		// Sticky ownership protects private sibling domains from other writers.
+		// Administratively provisioned group-shared containers are also supported.
+		if ((shared.mode & 0o1000) === 0) throw failure("UNSAFE_BACKUP_DIRECTORY");
+		await fs.access(directory, constants.W_OK | constants.X_OK);
+	} finally {
+		await handle.close();
 	}
 }
 
@@ -266,7 +304,7 @@ export async function runOfflineShmBackup(
 		const persistent = await fs.realpath(state.persistentRoot);
 		if (isInside(runtime, persistent) || isInside(persistent, runtime)) throw failure("OVERLAPPING_BACKUP_ROOTS");
 		const backupRoot = path.join(persistent, BACKUP_DIRECTORY);
-		await privateDirectory(backupRoot);
+		await sharedBackupDirectory(backupRoot);
 		const domain = path.join(backupRoot, domainHash);
 		await privateDirectory(domain);
 		await privateDirectory(path.join(domain, "generations"));
@@ -293,6 +331,43 @@ export async function runOfflineShmBackup(
 		const excluded: SnapshotManifest["excluded"] = [];
 		const validators: Array<() => Promise<void>> = [];
 		const buffer = Buffer.allocUnsafe(1024 * 1024);
+
+		async function resolveInternalLink(source: string): Promise<string | undefined> {
+			let resolved = runtime;
+			let pending = path.relative(runtime, source).split(path.sep);
+			let links = 0;
+			while (pending.length > 0) {
+				const component = pending.shift()!;
+				if (!component || component === ".") continue;
+				if (component === "..") {
+					resolved = path.dirname(resolved);
+					if (!isInside(runtime, resolved)) return undefined;
+					continue;
+				}
+				const candidate = path.join(resolved, component);
+				let stat;
+				try {
+					stat = await fs.lstat(candidate);
+				} catch {
+					throw failure("UNRESOLVED_SOURCE_LINK");
+				}
+				if (stat.isSymbolicLink()) {
+					if (++links > 40) throw failure("UNRESOLVED_SOURCE_LINK");
+					const target = await fs.readlink(candidate);
+					if (path.isAbsolute(target)) {
+						// Check before any target IO, including intermediate links which
+						// leave the runtime and might eventually point back into it.
+						if (target !== runtime && !target.startsWith(`${runtime}${path.sep}`)) return undefined;
+						resolved = runtime;
+						pending = target.slice(runtime.length).split(path.sep).concat(pending);
+					} else pending = target.split(path.sep).concat(pending);
+				} else {
+					if (pending.length > 0 && !stat.isDirectory()) throw failure("UNRESOLVED_SOURCE_LINK");
+					resolved = candidate;
+				}
+			}
+			return resolved;
+		}
 
 		async function copyStable(
 			source: string,
@@ -465,23 +540,21 @@ export async function runOfflineShmBackup(
 				const entry: SnapshotEntry = { path: child, kind: "file", mode: Number(before.mode & 0o777n) };
 				if (before.isSymbolicLink()) {
 					const target = await fs.readlink(source);
-					let resolved: string;
-					try {
-						resolved = await fs.realpath(source);
-					} catch {
-						throw failure("UNRESOLVED_SOURCE_LINK");
-					}
-					if (!isInside(runtime, resolved) || !isInside(runtime, path.resolve(path.dirname(source), target))) {
+					const resolved = await resolveInternalLink(source);
+					if (resolved === undefined) {
 						excluded.push({ path: child, reason: "external-symlink" });
 						continue;
 					}
 					entry.kind = "symlink";
-					entry.target = path.relative(path.dirname(source), path.resolve(path.dirname(source), target));
+					// Relative targets must retain symlink/.. and "." semantics. Absolute
+					// internal targets become portable links into this recoverable tree.
+					entry.target = path.isAbsolute(target) ? path.relative(path.dirname(source), resolved) || "." : target;
 					await fs.symlink(entry.target, destination);
 					validators.push(async () => {
 						if (
 							!equalStamp(stamp(before), stamp(await fs.lstat(source, { bigint: true }))) ||
-							(await fs.readlink(source)) !== target
+							(await fs.readlink(source)) !== target ||
+							(await resolveInternalLink(source)) !== resolved
 						)
 							throw failure("SOURCE_CHANGED");
 					});

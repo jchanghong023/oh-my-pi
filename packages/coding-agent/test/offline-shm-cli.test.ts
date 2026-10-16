@@ -113,7 +113,7 @@ async function fixture(offline = true, withModel = true) {
 		);
 	}
 	const children = new Set<Subprocess<"pipe", "pipe", "pipe">>();
-	function spawn(args: string[], preload?: string) {
+	function spawn(args: readonly string[], preload?: string) {
 		const child = Bun.spawn([process.execPath, ...(preload ? ["--preload", preload] : []), cli, ...args], {
 			cwd,
 			env,
@@ -271,6 +271,7 @@ async function fixture(offline = true, withModel = true) {
 		env,
 		requests,
 		config,
+		spawn,
 		run,
 		rpc,
 		async [Symbol.asyncDispose]() {
@@ -400,6 +401,90 @@ globalThis.Worker = class extends NativeWorker {
 
 const linux = process.platform === "linux";
 describe.skipIf(!linux)("Linux offline shm through the public CLI", () => {
+	test.each([
+		{ name: "acp", args: ["acp"] },
+		{ name: "--mode acp", args: ["--mode", "acp"] },
+		{ name: "launch --mode acp", args: ["launch", "--mode", "acp"] },
+	])(
+		"$name backs up only after a period, reports real failures off stdout and exits during a blocked round",
+		async ({ args }) => {
+			await using box = await fixture(true, false);
+			await Bun.write(path.join(box.agent, "config.yml"), box.config);
+			const timing = await backupTiming(box.directory);
+			const child = box.spawn(args, timing.preload);
+			const stderr = new Response(child.stderr).text();
+			const frames = readJsonl<Frame>(child.stdout as ReadableStream<Uint8Array>)[Symbol.asyncIterator]();
+			let serial = 0;
+			async function initialize() {
+				const id = ++serial;
+				child.stdin.write(
+					`${JSON.stringify({
+						jsonrpc: "2.0",
+						id,
+						method: "initialize",
+						params: { protocolVersion: 1, clientCapabilities: {} },
+					})}\n`,
+				);
+				await child.stdin.flush();
+				const frame = await withTimeout(frames.next(), 10_000, "ACP blocked behind offline backup");
+				expect(frame.done).toBe(false);
+				expect(frame.value).toMatchObject({ jsonrpc: "2.0", id, result: { protocolVersion: 1 } });
+				expect(frame.value?.error).toBeUndefined();
+			}
+
+			// A live reader is ready even before its first client request. Arming
+			// must not depend on the generic command's first-stdout-write hook.
+			await until(
+				async () => (await timing.events()).find(event => event.event === "armed"),
+				"ACP transport did not arm its backup interval",
+			);
+			await initialize();
+			expect((await timing.events()).filter(event => event.event === "armed")).toHaveLength(1);
+			expect((await timing.events()).some(event => event.event === "worker-created")).toBe(false);
+			expect(await Bun.file(box.persistentRoot).exists()).toBe(false);
+
+			// Fail the real engine deterministically, including when run as root.
+			// The preload controls time and the worker gate, not its result or notice.
+			await fs.writeFile(box.persistentRoot, "not a backup directory", { mode: 0o600 });
+			await timing.tick(1);
+			await timing.started(1);
+			expect((await timing.events()).find(event => event.event === "period")).toMatchObject({ elapsed: 600_000 });
+			await initialize();
+			await timing.release(1);
+			await timing.closed(1);
+			expect(
+				(await timing.events()).filter(event => event.event === "worker-result" && event.status === "failed"),
+			).toHaveLength(1);
+			await initialize();
+
+			// A second real round stays blocked at the worker gate. EOF must stop
+			// its owner without waiting for NFS, releasing the gate or a final copy.
+			await timing.tick(2);
+			await timing.started(2);
+			await initialize();
+			expect((await timing.events()).filter(event => event.event === "armed")).toHaveLength(1);
+			expect((await timing.events()).filter(event => event.event === "worker-created")).toHaveLength(2);
+			child.stdin.end();
+			expect(await withTimeout(child.exited, 10_000, "ACP EOF waited for offline backup")).toBe(0);
+			expect(await withTimeout(frames.next(), 5_000, "ACP stdout did not close")).toMatchObject({ done: true });
+			const stderrText = await stderr;
+			expect(stderrText).toContain("Offline shm backup failed");
+			expect(stderrText).toContain("Frontend continues using shm");
+			expect(stderrText.split("Offline shm backup failed").length - 1).toBe(1);
+			for (const line of stderrText.split("\n")) {
+				if (!line.trimStart().startsWith("{")) continue;
+				let frame: unknown;
+				try {
+					frame = JSON.parse(line);
+				} catch {
+					continue;
+				}
+				if (isRecord(frame)) expect(frame.jsonrpc).toBeUndefined();
+			}
+		},
+		120_000,
+	);
+
 	test("rejects a manually restored Wiki database symlink before opening external data", async () => {
 		// Docs uses its public CLI directly, without a model server or network.
 		await using box = await fixture(true, false);

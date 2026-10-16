@@ -12,7 +12,7 @@ interface Manifest {
 	completedAt: string;
 	runtimeIdentity: string;
 	deletedSincePrevious: string[];
-	entries: Array<{ path: string; kind: string; sha256?: string; prefixBytes?: number; mode: number }>;
+	entries: Array<{ path: string; kind: string; sha256?: string; prefixBytes?: number; mode: number; target?: string }>;
 	excluded: Array<{ path: string; reason: string }>;
 }
 
@@ -107,7 +107,7 @@ describe("offline shm complete runtime snapshots", () => {
 		const sessionless = path.join("tmp", "omp-local", "report.txt");
 		await fs.mkdir(path.dirname(path.join(state.runtimeRoot, sessionless)), { recursive: true });
 		await fs.writeFile(path.join(state.runtimeRoot, sessionless), "recoverable sessionless report");
-		for (const name of ["worker.pid", "writer.lock", "partial.tmp", ".offline-shm-scheduler.lock"])
+		for (const name of ["worker.pid", "gc.lock", "partial.tmp", ".offline-shm-scheduler.lock"])
 			await fs.writeFile(path.join(state.runtimeRoot, name), "ephemeral");
 		await fs.writeFile(path.join(state.runtimeRoot, "auth-broker.token"), "persistent auth token");
 		await fs.mkdir(path.join(state.runtimeRoot, "run", "daemons", "host", "clients"), { recursive: true });
@@ -151,6 +151,44 @@ describe("offline shm complete runtime snapshots", () => {
 		expect(await fs.readFile(original, "utf8")).toBe("old-unrestored-secret");
 		expect(await fs.readFile(path.join(first.root, "data", "attachment.bin"))).toHaveLength(4096);
 		expect(syncFs.existsSync(path.join(second.root, "data", "attachment.bin"))).toBe(false);
+	});
+
+	it("preserves dependency lockfiles without a package-manager allowlist and excludes process-lock namespaces", async () => {
+		const state = fixture();
+		const durable = [
+			"plugins/bun.lock",
+			"plugins/node_modules/tool/Cargo.lock",
+			"agent/cache/eval-js/environments/example/uv.lock",
+			"plugins/custom-resolver.lock",
+			"profiles/work/plugins/bun.lock",
+		];
+		const transient = [
+			"agent/gc.lock",
+			"agent/settings.yml.lock",
+			"agent/sessions/.session.jsonl.lock.lock",
+			"agent/memories/sharpshooter/project/consolidate.lock",
+			"agent/idbs/example/db.lock",
+			"agent/cache/eval-js/project-locks/example.lock",
+			"agent/cache/eval-js/environments/example.install.lock",
+			"agent/cache/stt-runtime/transformers-version.lock",
+			"run/daemons/host/writer.lock",
+			"profiles/work/agent/gc.lock",
+			"profiles/work/run/daemons/host/writer.lock",
+		];
+		for (const filename of [...durable, ...transient]) {
+			const source = path.join(state.runtimeRoot, filename);
+			await fs.mkdir(path.dirname(source), { recursive: true });
+			await fs.writeFile(source, filename);
+		}
+		const result = await snapshot(state);
+		for (const filename of durable) {
+			expect(await fs.readFile(path.join(result.root, "data", filename), "utf8")).toBe(filename);
+			expect(result.manifest.entries.some(entry => entry.path === path.normalize(filename))).toBe(true);
+		}
+		for (const filename of transient) {
+			expect(syncFs.existsSync(path.join(result.root, "data", filename))).toBe(false);
+			expect(result.manifest.excluded).toContainEqual({ path: path.normalize(filename), reason: "ephemeral" });
+		}
 	});
 
 	it("keeps an empty initial runtime snapshot separate from untouched unrestored original files", async () => {
@@ -533,6 +571,58 @@ describe("offline shm complete runtime snapshots", () => {
 		expect(await fs.readFile(path.join(second.root, "data", "auth.json"), "utf8")).toBe("host two");
 	});
 
+	it.skipIf(process.platform === "win32")(
+		"shares only the sticky backup container while leaving domain credentials and unrelated siblings private",
+		async () => {
+			const state = fixture();
+			const shared = path.join(state.persistentRoot, ".offline-shm-backups");
+			// An older owner-private container is initialized by its owner, not taken over by another user.
+			await fs.mkdir(shared, { mode: 0o700 });
+			const sibling = path.join(shared, "unrelated-domain");
+			await fs.mkdir(sibling, { mode: 0o700 });
+			await fs.writeFile(path.join(sibling, "secret"), "untouched", { mode: 0o600 });
+			await fs.writeFile(path.join(state.runtimeRoot, "auth.json"), "credential");
+			const first = await snapshot(state);
+			const other = fixture();
+			other.persistentRoot = state.persistentRoot;
+			await fs.writeFile(path.join(other.runtimeRoot, "auth.json"), "other credential");
+			const second = await snapshot(other);
+			await snapshot(state);
+			expect((await fs.stat(shared)).mode & 0o1777).toBe(0o1777);
+			for (const privateRoot of [
+				domainDirectory(state),
+				domainDirectory(other),
+				path.join(domainDirectory(state), "generations"),
+				first.root,
+				second.root,
+				path.join(first.root, "data"),
+				path.join(second.root, "data"),
+				sibling,
+			])
+				expect((await fs.stat(privateRoot)).mode & 0o777).toBe(0o700);
+			expect((await fs.stat(path.join(first.root, "data", "auth.json"))).mode & 0o777).toBe(0o600);
+			expect((await fs.stat(path.join(second.root, "data", "auth.json"))).mode & 0o777).toBe(0o600);
+			expect(await fs.readFile(path.join(sibling, "secret"), "utf8")).toBe("untouched");
+			expect(await fs.readFile(path.join(second.root, "data", "auth.json"), "utf8")).toBe("other credential");
+		},
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"refuses permissive private domains without changing permissions or the completed pointer",
+		async () => {
+			const state = fixture();
+			await fs.writeFile(path.join(state.runtimeRoot, "auth.json"), "last complete");
+			const first = await snapshot(state);
+			const domain = domainDirectory(state);
+			const pointer = await fs.readFile(path.join(domain, "current.json"), "utf8");
+			await fs.chmod(domain, 0o777);
+			await expect(runOfflineShmBackup(state)).rejects.toThrow("UNSAFE_BACKUP_DIRECTORY");
+			expect((await fs.stat(domain)).mode & 0o777).toBe(0o777);
+			expect(await fs.readFile(path.join(domain, "current.json"), "utf8")).toBe(pointer);
+			expect(await fs.readFile(path.join(first.root, "data", "auth.json"), "utf8")).toBe("last complete");
+		},
+	);
+
 	it("does not claim unrestored files as deletions after runtime root recreation", async () => {
 		const state = fixture();
 		await fs.writeFile(path.join(state.runtimeRoot, "old-session"), "old session");
@@ -619,7 +709,7 @@ describe("offline shm complete runtime snapshots", () => {
 	}, 15_000);
 
 	it.skipIf(process.platform === "win32")(
-		"does not follow external links and preserves safe internal relative links",
+		"preserves relative symlink semantics and relocates absolute internal links through ordinary recovery",
 		async () => {
 			const state = fixture();
 			const external = path.join(state.persistentRoot, "external-secret");
@@ -627,11 +717,50 @@ describe("offline shm complete runtime snapshots", () => {
 			await fs.writeFile(path.join(state.runtimeRoot, "auth.json"), "owned secret");
 			await fs.symlink(external, path.join(state.runtimeRoot, "external"));
 			await fs.symlink("auth.json", path.join(state.runtimeRoot, "internal"));
+			await fs.mkdir(path.join(state.runtimeRoot, "nested", "deeper"), { recursive: true });
+			await fs.writeFile(path.join(state.runtimeRoot, "file"), "wrong lexical target");
+			await fs.writeFile(path.join(state.runtimeRoot, "nested", "file"), "correct symlink target");
+			await fs.symlink(".", path.join(state.runtimeRoot, "alias"));
+			await fs.symlink("nested/deeper", path.join(state.runtimeRoot, "jump"));
+			await fs.symlink("jump/../file", path.join(state.runtimeRoot, "ref"));
+			await fs.symlink(path.join(state.runtimeRoot, "auth.json"), path.join(state.runtimeRoot, "absolute"));
+			await fs.symlink(`${state.runtimeRoot}/jump/../file`, path.join(state.runtimeRoot, "nested", "absolute-ref"));
+			const externalDirectory = path.join(state.persistentRoot, "external-directory");
+			await fs.mkdir(externalDirectory);
+			await fs.symlink(state.runtimeRoot, path.join(externalDirectory, "back"));
+			await fs.symlink(
+				path.join(externalDirectory, "back", "auth.json"),
+				path.join(state.runtimeRoot, "external-hop"),
+			);
 			const result = await snapshot(state);
 			expect(result.manifest.excluded).toContainEqual({ path: "external", reason: "external-symlink" });
 			expect(syncFs.existsSync(path.join(result.root, "data", "external"))).toBe(false);
 			expect(await fs.readlink(path.join(result.root, "data", "internal"))).toBe("auth.json");
 			expect(await fs.readFile(path.join(result.root, "data", "internal"), "utf8")).toBe("owned secret");
+			expect(result.manifest.excluded).toContainEqual({ path: "external-hop", reason: "external-symlink" });
+			expect(await fs.readlink(path.join(result.root, "data", "alias"))).toBe(".");
+			expect(await fs.readlink(path.join(result.root, "data", "ref"))).toBe("jump/../file");
+			expect(result.manifest.entries.find(entry => entry.path === "ref")?.target).toBe("jump/../file");
+			expect(await fs.readFile(path.join(result.root, "data", "ref"), "utf8")).toBe("correct symlink target");
+			const restored = fixture();
+			await fs.cp(path.join(result.root, "data"), restored.runtimeRoot, {
+				recursive: true,
+				verbatimSymlinks: true,
+			});
+			await fs.writeFile(path.join(state.runtimeRoot, "auth.json"), "changed active credential");
+			await fs.writeFile(path.join(state.runtimeRoot, "nested", "file"), "changed active file");
+			expect(await fs.realpath(path.join(restored.runtimeRoot, "alias"))).toBe(restored.runtimeRoot);
+			expect(await fs.readFile(path.join(restored.runtimeRoot, "ref"), "utf8")).toBe("correct symlink target");
+			expect(await fs.readFile(path.join(restored.runtimeRoot, "absolute"), "utf8")).toBe("owned secret");
+			expect(await fs.readFile(path.join(restored.runtimeRoot, "nested", "absolute-ref"), "utf8")).toBe(
+				"correct symlink target",
+			);
+			// Unresolved internal links fail the new round, never replace the complete recovery point.
+			const pointer = await fs.readFile(path.join(domainDirectory(state), "current.json"), "utf8");
+			await fs.symlink("missing", path.join(state.runtimeRoot, "unresolved"));
+			await expect(runOfflineShmBackup(state)).rejects.toThrow("UNRESOLVED_SOURCE_LINK");
+			expect(await fs.readFile(path.join(domainDirectory(state), "current.json"), "utf8")).toBe(pointer);
+			expect(await fs.readFile(path.join(result.root, "data", "absolute"), "utf8")).toBe("owned secret");
 		},
 	);
 

@@ -15,6 +15,7 @@
 - Fixed custom embedding gateways containing `openrouter.ai` in their path or hostname being mistaken for the official OpenRouter endpoint.
 - Restored the exact `www.openrouter.ai` embedding alias without treating arbitrary subdomains as official endpoints.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
+- Report rejected offline diagnostic database and data paths as structured failures without opening unsafe paths or closing caller-owned databases.
 
 ### Fixed
 

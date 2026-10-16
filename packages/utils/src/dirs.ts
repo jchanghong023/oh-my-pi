@@ -156,7 +156,8 @@ function readPiProfileFromEnvSafe(): string | undefined {
 }
 
 function getProfileAgentDir(profile: string): string {
-	return path.join(getProfileConfigRoot(profile), "agent");
+	// Inherited-agent identity checks must not initialize or validate an unselected profile.
+	return path.join(getBaseConfigRoot(), "profiles", profile, "agent");
 }
 
 function isProfileDerivedAgentDir(profile: string | undefined, agentDirEnv: string | undefined): boolean {

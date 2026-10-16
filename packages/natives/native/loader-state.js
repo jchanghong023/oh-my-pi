@@ -1,11 +1,17 @@
 import * as childProcess from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
-import { ensureOfflineShmDirectory, getOfflineShmState, initializeOfflineShmEnvironment } from "./offline-root.js";
+import {
+	assertOfflineShmPath,
+	ensureOfflineShmDirectory,
+	getOfflineShmState,
+	initializeOfflineShmEnvironment,
+} from "./offline-root.js";
 import { bindingsHaveReleaseIdentity, bindingsReleaseVersion, containsVersionStamp } from "./version-sentinel.js";
 
 /**
@@ -234,7 +240,11 @@ const NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60_000;
  * @param {string} versionedDir
  */
 export function prepareNativeVersionDir(versionedDir) {
-	fs.mkdirSync(versionedDir, { recursive: true });
+	assertOfflineShmPath(versionedDir);
+	const state = getOfflineShmState();
+	if (state) ensureOfflineShmDirectory(path.relative(state.runtimeRoot, versionedDir));
+	else fs.mkdirSync(versionedDir, { recursive: true });
+	assertOfflineShmPath(versionedDir);
 	const now = new Date();
 	fs.utimesSync(versionedDir, now, now);
 }
@@ -251,6 +261,7 @@ export function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
 	const removed = [];
 	let entries;
 	try {
+		assertOfflineShmPath(nativesDir);
 		entries = fs.readdirSync(nativesDir, { withFileTypes: true });
 	} catch {
 		return removed;
@@ -260,6 +271,7 @@ export function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
 		if (!entry.isDirectory() || !isOlderReleaseVersion(entry.name, currentVersion)) continue;
 		const targetPath = path.join(nativesDir, entry.name);
 		try {
+			assertOfflineShmPath(targetPath);
 			const stat = fs.statSync(targetPath);
 			if (Date.now() - stat.mtimeMs < NATIVE_CACHE_CLEANUP_GRACE_MS) continue;
 			fs.rmSync(targetPath, { recursive: true, force: true });
@@ -464,6 +476,7 @@ function isSafeEmbeddedAddonFilename(filename) {
 
 function isEmbeddedAddonFileCurrent(targetPath, file) {
 	try {
+		assertOfflineShmPath(targetPath);
 		const stat = fs.statSync(targetPath);
 		if (!stat.isFile()) return false;
 		return stat.size === file.size;
@@ -474,9 +487,12 @@ function isEmbeddedAddonFileCurrent(targetPath, file) {
 }
 
 function writeEmbeddedAddonFile(targetPath, content) {
-	const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+	const offline = !!getOfflineShmState();
+	const tempPath = `${targetPath}.tmp.${process.pid}.${offline ? randomUUID() : Date.now()}`;
 	try {
-		fs.writeFileSync(tempPath, content, { mode: 0o755 });
+		assertOfflineShmPath(tempPath);
+		fs.writeFileSync(tempPath, content, { mode: offline ? 0o700 : 0o755, flag: offline ? "wx" : "w" });
+		assertOfflineShmPath(targetPath);
 		fs.renameSync(tempPath, targetPath);
 	} catch (err) {
 		try {
@@ -489,6 +505,7 @@ function writeEmbeddedAddonFile(targetPath, content) {
 }
 
 export function extractEmbeddedAddons({ files, targetDir }) {
+	assertOfflineShmPath(targetDir);
 	for (const file of files) {
 		if (!isSafeEmbeddedAddonFilename(file.filename)) {
 			throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
@@ -497,6 +514,7 @@ export function extractEmbeddedAddons({ files, targetDir }) {
 	const writtenPaths = [];
 	for (const file of files) {
 		const targetPath = path.join(targetDir, file.filename);
+		assertOfflineShmPath(targetPath);
 		if (isEmbeddedAddonFileCurrent(targetPath, file)) continue;
 		const content = Bun.zstdDecompressSync(fs.readFileSync(file.zstdPath));
 		if (content.length !== file.size) {
@@ -573,6 +591,152 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 		}
 	}
 	return stagedPath;
+}
+
+// ld.so caches /proc/self/fd/N by pathname, so a successful image must keep its
+// descriptor until process exit. Sealed, content-addressed memfds are shared
+// across worker realms via procfs, not a realm-local map or inherited env fd.
+// CLOEXEC makes subprocesses establish their own images. The map only caches
+// this realm's N-API exports; the kernel owns the process-lifetime descriptors.
+const memoryAddons = new Map();
+const MEMFD_SEALS = 0x01 | 0x02 | 0x04 | 0x08;
+
+function openMemfdLibc() {
+	const { dlopen, FFIType } = createRequire(import.meta.url)("bun:ffi");
+	return dlopen("libc.so.6", {
+		// syscall exists on old glibc too; memfd_create's wrapper needs 2.27.
+		syscall: { args: [FFIType.i64_fast, FFIType.ptr, FFIType.u32], returns: FFIType.i64_fast },
+		__errno_location: { args: [], returns: FFIType.ptr },
+		flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+		fcntl: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+	});
+}
+
+function createExecutableMemfd(libc, name) {
+	const syscallNumber = { x64: 319, arm64: 279 }[process.arch];
+	if (!syscallNumber || typeof Bun === "undefined") {
+		throw new Error("Offline native memory loading requires Bun on Linux x64 or arm64");
+	}
+	const { ptr, read } = createRequire(import.meta.url)("bun:ffi");
+	const cName = Buffer.from(`${name}\0`);
+	// MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_EXEC. Linux before 6.3 rejects
+	// MFD_EXEC; retry only EINVAL with the original executable-memfd API.
+	let fd = Number(libc.symbols.syscall(syscallNumber, ptr(cName), 0x01 | 0x02 | 0x10));
+	if (fd < 0 && read.i32(libc.symbols.__errno_location()) === 22) {
+		fd = Number(libc.symbols.syscall(syscallNumber, ptr(cName), 0x01 | 0x02));
+	}
+	if (fd < 0) {
+		const errno = read.i32(libc.symbols.__errno_location());
+		throw new Error(
+			`memfd_create failed (errno ${errno}); offline native loading requires Linux 3.17+ ` +
+				"(or a compatible backport), procfs, and permission to create executable memfds",
+		);
+	}
+	return fd;
+}
+
+function findExecutableMemfd(libc, name, size) {
+	for (const entry of fs.readdirSync("/proc/self/fd")) {
+		if (!/^\d+$/.test(entry)) continue;
+		const fd = Number(entry);
+		try {
+			if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== `/memfd:${name} (deleted)`) continue;
+			const stat = fs.fstatSync(fd);
+			const seals = libc.symbols.fcntl(fd, 1034, 0);
+			if (
+				stat.isFile() &&
+				stat.uid === process.getuid() &&
+				stat.size === size &&
+				seals >= 0 &&
+				(seals & MEMFD_SEALS) === MEMFD_SEALS
+			) return fd;
+		} catch (error) {
+			if (error?.code !== "ENOENT" && error?.code !== "EBADF") throw error;
+		}
+	}
+	return undefined;
+}
+
+// Executable shm needs no memfd/FFI support. Only a rejected ordinary load
+// enters the executable-memory path; guards and content identity fail closed.
+function loadOfflineAddon(candidate, require_) {
+	assertOfflineShmPath(candidate);
+	const source = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+	try {
+		if (!fs.fstatSync(source).isFile()) throw new Error(`Not a native addon file: ${candidate}`);
+		const expectedHash = /\.([a-f0-9]{64})\.node$/.exec(path.basename(candidate))?.[1];
+		if (expectedHash && createHash("sha256").update(fs.readFileSync(source)).digest("hex") !== expectedHash) {
+			throw new Error(`Embedded addon content identity mismatch: ${candidate}`);
+		}
+	} finally {
+		fs.closeSync(source);
+	}
+	try {
+		return require_(candidate);
+	} catch (fileError) {
+		try {
+			return loadOfflineAddonFromMemory(candidate);
+		} catch (memoryError) {
+			const fileMessage = fileError instanceof Error ? fileError.message : String(fileError);
+			const memoryMessage = memoryError instanceof Error ? memoryError.message : String(memoryError);
+			throw new AggregateError(
+				[fileError, memoryError],
+				`File-backed offline native load failed: ${fileMessage}\n` +
+					`Executable-memory fallback failed: ${memoryMessage}\n` +
+					"The fallback requires Bun on Linux x64 or arm64, Linux 3.17+ (or a compatible backport), " +
+					"glibc libc.so.6, procfs, and permission to create, seal and load executable memfds.",
+			);
+		}
+	}
+}
+
+function loadOfflineAddonFromMemory(candidate) {
+	assertOfflineShmPath(candidate);
+	const cached = memoryAddons.get(candidate);
+	if (cached) return cached;
+	const libc = openMemfdLibc();
+	let lock;
+	let source;
+	let ownedFd;
+	try {
+		// Independent open descriptions serialize all worker realms before the
+		// process-wide scan/create step. This lock is entirely on private shm.
+		const directory = path.dirname(candidate);
+		assertOfflineShmPath(directory);
+		lock = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
+		if (libc.symbols.flock(lock, 2) !== 0) throw new Error("Cannot lock offline native image creation");
+		assertOfflineShmPath(candidate);
+		source = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+		const stat = fs.fstatSync(source);
+		if (!stat.isFile()) throw new Error(`Not a native addon file: ${candidate}`);
+		const expectedHash = /\.([a-f0-9]{64})\.node$/.exec(path.basename(candidate))?.[1];
+		let content;
+		const hash = expectedHash ?? createHash("sha256").update((content = fs.readFileSync(source))).digest("hex");
+		const name = `omp-native-${hash}`;
+		let fd = findExecutableMemfd(libc, name, stat.size);
+		if (fd === undefined) {
+			content ??= fs.readFileSync(source);
+			if (expectedHash && createHash("sha256").update(content).digest("hex") !== expectedHash) {
+				throw new Error(`Embedded addon content identity mismatch: ${candidate}`);
+			}
+			fd = ownedFd = createExecutableMemfd(libc, name);
+			fs.fchmodSync(fd, 0o700);
+			fs.writeFileSync(fd, content);
+			if (libc.symbols.fcntl(fd, 1033, MEMFD_SEALS) !== 0) {
+				throw new Error("Cannot seal offline native image");
+			}
+		}
+		const module = { exports: {} };
+		process.dlopen(module, `/proc/self/fd/${fd}`);
+		ownedFd = undefined; // A successful image belongs to the process, not this worker.
+		memoryAddons.set(candidate, module.exports);
+		return module.exports;
+	} finally {
+		if (ownedFd !== undefined) fs.closeSync(ownedFd);
+		if (source !== undefined) fs.closeSync(source);
+		if (lock !== undefined) fs.closeSync(lock);
+		libc.close();
+	}
 }
 
 /**
@@ -805,8 +969,10 @@ export function initLoaderContext(overrides = {}) {
 	const execDir = path.dirname(process.execPath);
 	const nativesDir = getNativesDir();
 	const versionedDir = path.join(nativesDir, packageVersion);
-	const userDataDir =
-		platform === "win32"
+	const offlineState = getOfflineShmState();
+	const userDataDir = offlineState
+		? nativesDir
+		: platform === "win32"
 			? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp")
 			: path.join(os.homedir(), ".local", "bin");
 
@@ -902,7 +1068,14 @@ export function loadNative() {
 		if (embeddedFiles && !maybeExtractEmbeddedAddon(ctx, errors, embeddedFiles[index])) continue;
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);
-			const bindings = require_(candidate);
+			const withinNatives = path.relative(ctx.nativesDir, candidate);
+			const isRuntimeAddon =
+				getOfflineShmState() &&
+				withinNatives !== ".." &&
+				!withinNatives.startsWith(`..${path.sep}`) &&
+				!path.isAbsolute(withinNatives);
+			if (isRuntimeAddon) assertOfflineShmPath(candidate);
+			const bindings = isRuntimeAddon ? loadOfflineAddon(candidate, require_) : require_(candidate);
 			validateLoadedBindings(ctx, bindings, candidate);
 			installNativeTokioRuntime(bindings);
 			configureGrammarDir(bindings, ctx.nativesDir);

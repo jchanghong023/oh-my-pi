@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Canonicalized redundant trailing separators in persistent data roots without filesystem probes, keeping equivalent spellings in the same offline runtime domain.
+- Kept inherited agent-directory comparisons lexical so explicitly selecting the default profile never initializes or validates an unselected legacy profile.
 - Recovered Windows diagnostic logging to a distinct user directory when the primary and standard fallback paths differ only in letter case.
 - Exposed the active log file and directory after fallback or rotation without changing the profile's data root.
 - Fixed HTTP diagnostics reporting disabled timeouts when native defaults were active and downgrading terminal request failures to warnings.

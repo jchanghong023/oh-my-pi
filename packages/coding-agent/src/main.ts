@@ -2600,6 +2600,7 @@ export async function runRootCommand(
 			// Startup is over: stop recording spans, or every later session and subagent
 			// appends to the timing tree for the life of the server.
 			logger.endTiming();
+			// The shared ACP runner owns backup readiness and disconnect teardown.
 			await runAcpMode(createAcpSession);
 		} else {
 			// Resolve extension-registered CLI flags before creating the session so a

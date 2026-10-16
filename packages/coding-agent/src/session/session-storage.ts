@@ -37,21 +37,38 @@ export function assertOfflineSessionPath(filePath: string, storage?: SessionStor
 	if (storage && !(storage instanceof FileSessionStorage)) return;
 	const state = getOfflineShmState();
 	if (!state) return;
-	const relative = path.relative(state.runtimeRoot, path.resolve(filePath));
-	if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+	const rejectOutsideRoot = (): never => {
 		throw new OfflineSessionPathError(
 			`Cannot use session path "${filePath}" outside the offline shm runtime root. ` +
 				`Manually restore the session and its attachments into "${state.runtimeRoot}", then resume that runtime path. ` +
 				`External session files are not automatically imported or restored.`,
 		);
+	};
+	const relative = path.relative(state.runtimeRoot, path.resolve(filePath));
+	// Keep the original traversal: resolving "link/.." first would erase a
+	// symlink the kernel follows before handling "..".
+	const absolutePath = path.isAbsolute(filePath) ? filePath : `${process.cwd()}${path.sep}${filePath}`;
+	const components = absolutePath.split(path.sep).filter(component => component && component !== ".");
+	const rootComponents = state.runtimeRoot.split(path.sep).filter(Boolean);
+	if (
+		relative === ".." ||
+		relative.startsWith(`..${path.sep}`) ||
+		path.isAbsolute(relative) ||
+		rootComponents.some((component, index) => components[index] !== component)
+	) {
+		rejectOutsideRoot();
 	}
-	// Inspect only shm components, never follow a restored link back to disk.
+	// Inspect only runtime components, never follow a restored link back to disk.
 	let current = state.runtimeRoot;
-	for (const component of relative.split(path.sep)) {
-		if (!component) continue;
+	for (const component of components.slice(rootComponents.length)) {
+		if (component === "..") {
+			if (current === state.runtimeRoot) rejectOutsideRoot();
+			current = path.dirname(current);
+			continue;
+		}
 		current = path.join(current, component);
 		const stat = fs.lstatSync(current, { throwIfNoEntry: false });
-		if (!stat) break;
+		if (!stat) continue;
 		if (stat.isSymbolicLink()) {
 			throw new OfflineSessionPathError(
 				`Cannot use symlinked session path "${filePath}" in offline shm mode. Restore real files into the runtime root.`,
@@ -723,7 +740,9 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	#publishLockPath(fpath: string): string {
-		return path.join(path.dirname(fpath), `.${path.basename(fpath)}.lock`);
+		const lockPath = path.join(path.dirname(fpath), `.${path.basename(fpath)}.lock`);
+		assertOfflineSessionPath(lockPath);
+		return lockPath;
 	}
 
 	/**
@@ -753,6 +772,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	#releasePublishLock(fpath: string, lockPath: string): void {
+		assertOfflineSessionPath(lockPath);
 		try {
 			fs.unlinkSync(lockPath);
 		} catch (err) {
@@ -782,6 +802,7 @@ export class FileSessionStorage implements SessionStorage {
 	 * only when acquiring the gate fails (the `flock` sidecar needs it).
 	 */
 	#withAppendLock(fpath: string, lockPath: string, gatePath: string, append: () => void, landed: () => boolean): void {
+		assertOfflineSessionPath(lockPath);
 		let osGate: NativeFileLock;
 		try {
 			osGate = this.#acquireOsPublishLock(fpath, gatePath);
@@ -799,6 +820,7 @@ export class FileSessionStorage implements SessionStorage {
 				// freshness check preceded our write holds the lockfile through its
 				// rename, so it is either still visible here or has already moved
 				// the path off our descriptor.
+				assertOfflineSessionPath(lockPath);
 				if (!fs.existsSync(lockPath) && landed()) return;
 			}
 			this.#acquirePublishLock(fpath, lockPath);
@@ -846,6 +868,7 @@ export class FileSessionStorage implements SessionStorage {
 	#acquirePublishLock(fpath: string, lockPath: string): void {
 		const deadline = Date.now() + SESSION_PUBLISH_LOCK_WAIT_MS;
 		for (;;) {
+			assertOfflineSessionPath(lockPath);
 			if (this.#createPublishLock(lockPath)) return;
 			if (Date.now() >= deadline) {
 				throw new SessionLockError(fpath, "another writer holds the publish lock");
@@ -1011,6 +1034,7 @@ export class FileSessionStorage implements SessionStorage {
 		stage: (tempPath: string) => void,
 		options: SessionStorageWriteOptions | undefined,
 	): void {
+		assertOfflineSessionPath(fpath);
 		const dir = path.dirname(fpath);
 		this.ensureDirSync(dir);
 		const tempPath = sessionStagingPath(fpath);

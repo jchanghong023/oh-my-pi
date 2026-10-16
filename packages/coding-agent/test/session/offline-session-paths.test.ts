@@ -35,7 +35,7 @@ function probe(body: string, offline = "1"): void {
 			import * as os from "node:os";
 			import * as path from "node:path";
 			import { SessionManager } from ${JSON.stringify(managerUrl)};
-			import { FileSessionStorage, MemorySessionStorage } from ${JSON.stringify(storageUrl)};
+			import { FileSessionStorage, MemorySessionStorage, OfflineSessionPathError, SessionLockError } from ${JSON.stringify(storageUrl)};
 			import { resolveSessionDirectory, sessionDirForCwd, readTerminalBreadcrumbEntry } from ${JSON.stringify(pathsUrl)};
 			import { listSessions, listSessionsReadOnly, listRecentSessions, resolveResumableSession } from ${JSON.stringify(listingUrl)};
 			import { getOfflineShmState, getSessionsDir, getTerminalSessionsDir, setProfile } from ${JSON.stringify(dirsUrl)};
@@ -217,6 +217,138 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			assert.equal(resumed.getEntries().length, 1);
 			await resumed.close();
 			await manager.close();
+		`);
+	});
+
+	it("checks raw symlink traversal before dot-dot normalization or filesystem access", () => {
+		probe(`
+			const externalRoot = path.join(fixture, "external-data");
+			fs.mkdirSync(path.join(externalRoot, "subdir"), { recursive: true });
+			const externalFile = path.join(externalRoot, "secret.jsonl");
+			fs.writeFileSync(externalFile, "external secret\\n");
+			fs.mkdirSync(state.runtimeRoot, { recursive: true });
+			const link = path.join(state.runtimeRoot, "link");
+			fs.symlinkSync(path.join(externalRoot, "subdir"), link);
+			const raw = link + "/../secret.jsonl";
+			const probes = ["readFileSync", "openSync", "writeFileSync", "statSync", "lstatSync",
+				"existsSync", "renameSync", "mkdirSync"].map(method => ({ method, spy: spyOn(fs, method) }));
+			try {
+				assert.throws(() => storage.readTextSync(raw), OfflineSessionPathError);
+				await assert.rejects(async () => storage.readText(raw), OfflineSessionPathError);
+				await assert.rejects(storage.readTextSlices(raw, 32, 32), OfflineSessionPathError);
+				assert.throws(() => storage.writeTextSync(raw, "replaced\\n"), OfflineSessionPathError);
+				assert.throws(() => storage.writeLinesSync(raw, ["replaced\\n"]), OfflineSessionPathError);
+				await assert.rejects(storage.writeText(raw, "replaced\\n"), OfflineSessionPathError);
+				await assert.rejects(storage.writeTextAtomic(raw, "replaced\\n"), OfflineSessionPathError);
+				await assert.rejects(storage.writeLinesAtomic(raw, ["replaced\\n"]), OfflineSessionPathError);
+				for (const flags of ["a", "w"]) {
+					assert.throws(() => storage.openWriter(raw, { flags }), OfflineSessionPathError);
+				}
+				for (const { method, spy } of probes) {
+					for (const [target] of spy.mock.calls) {
+						if (typeof target !== "string") continue;
+						assert.ok(target !== externalRoot && !target.startsWith(externalRoot + path.sep), method + ": " + target);
+						if (method === "lstatSync" && target === link) continue;
+						assert.ok(target !== link && !target.startsWith(link + path.sep), method + ": " + target);
+					}
+				}
+			} finally {
+				for (const { spy } of probes) spy.mockRestore();
+			}
+			assert.equal(fs.readFileSync(externalFile, "utf8"), "external secret\\n");
+			assert.equal(fs.existsSync(path.join(state.runtimeRoot, "secret.jsonl")), false);
+			const nested = path.join(state.runtimeRoot, "nested");
+			fs.mkdirSync(nested);
+			const safe = nested + "/../safe.jsonl";
+			storage.writeTextSync(safe, "first\\n");
+			assert.equal(storage.readTextSync(safe), "first\\n");
+			await storage.writeTextAtomic(safe, "second\\n");
+			const writer = storage.openWriter(safe);
+			await writer.append("third\\n");
+			await writer.close();
+			process.chdir(state.runtimeRoot);
+			try {
+				assert.throws(() => storage.readTextSync("link/../secret.jsonl"), OfflineSessionPathError);
+				assert.equal(storage.readTextSync("nested/../safe.jsonl"), "second\\nthird\\n");
+			} finally {
+				process.chdir(fixture);
+			}
+		`);
+	});
+
+	for (const lockKind of ["live", "orphan", "dangling"]) {
+		it(`rejects a restored ${lockKind} publish-lock symlink before append or rewrite accesses it`, () => {
+			probe(`
+				const lockKind = ${JSON.stringify(lockKind)};
+				const dir = path.join(state.runtimeRoot, "lock-boundaries");
+				fs.mkdirSync(dir, { recursive: true });
+				const external = path.join(fixture, "external-lock");
+				const lockContent = lockKind === "live" ? process.pid + ":1\\n" : "orphan";
+				if (lockKind !== "dangling") {
+					fs.writeFileSync(external, lockContent);
+					if (lockKind === "orphan") fs.utimesSync(external, new Date(0), new Date(0));
+				}
+				const flows = ["sync", "lines-sync", "atomic", "lines-atomic", "append"];
+				for (const flow of flows) {
+					const file = path.join(dir, flow + ".jsonl");
+					fs.writeFileSync(file, "original\\n");
+					const writer = flow === "append" ? storage.openWriter(file) : undefined;
+					const lockPath = path.join(dir, "." + path.basename(file) + ".lock");
+					fs.symlinkSync(external, lockPath);
+					const probes = ["openSync", "readFileSync", "statSync", "unlinkSync", "existsSync"]
+						.map(method => spyOn(fs, method));
+					try {
+						assert.throws(() => storage.openWriter(file), OfflineSessionPathError);
+						if (flow === "sync") {
+							assert.throws(() => storage.writeTextSync(file, "replacement\\n"), OfflineSessionPathError);
+						} else if (flow === "lines-sync") {
+							assert.throws(() => storage.writeLinesSync(file, ["replacement\\n"]), OfflineSessionPathError);
+						} else if (flow === "atomic") {
+							await assert.rejects(storage.writeTextAtomic(file, "replacement\\n"), OfflineSessionPathError);
+						} else if (flow === "lines-atomic") {
+							await assert.rejects(storage.writeLinesAtomic(file, ["replacement\\n"]), OfflineSessionPathError);
+						} else {
+							assert.throws(() => writer.appendSync("append\\n"), OfflineSessionPathError);
+							await assert.rejects(writer.close(), OfflineSessionPathError);
+						}
+						for (const probe of probes) {
+							for (const [target] of probe.mock.calls) {
+								assert.notEqual(target, lockPath);
+								assert.notEqual(target, external);
+							}
+						}
+					} finally {
+						for (const probe of probes) probe.mockRestore();
+					}
+					assert.ok(fs.lstatSync(lockPath).isSymbolicLink());
+					assert.equal(fs.readlinkSync(lockPath), external);
+					assert.equal(fs.readFileSync(file, "utf8"), "original\\n");
+				}
+				if (lockKind === "dangling") assert.equal(fs.existsSync(external), false);
+				else assert.equal(fs.readFileSync(external, "utf8"), lockContent);
+				assert.deepEqual(fs.readdirSync(dir).sort(), flows.flatMap(flow => [flow + ".jsonl", "." + flow + ".jsonl.lock"]).sort());
+			`);
+		});
+	}
+
+	it("retains regular publish-lock ownership, stale recovery and appends after replacement", () => {
+		probe(`
+			const file = path.join(state.runtimeRoot, "normal-locks", "session.jsonl");
+			storage.writeTextSync(file, "initial\\n");
+			const lockPath = path.join(path.dirname(file), "." + path.basename(file) + ".lock");
+			fs.writeFileSync(lockPath, process.pid + ":1\\n");
+			assert.throws(() => storage.writeTextSync(file, "blocked\\n"), SessionLockError);
+			assert.equal(fs.readFileSync(file, "utf8"), "initial\\n");
+			assert.equal(fs.readFileSync(lockPath, "utf8"), process.pid + ":1\\n");
+			fs.writeFileSync(lockPath, "orphan");
+			fs.utimesSync(lockPath, new Date(0), new Date(0));
+			const writer = storage.openWriter(file);
+			await storage.writeTextAtomic(file, "replacement\\n");
+			await writer.append("append\\n");
+			await writer.close();
+			assert.equal(storage.readTextSync(file), "replacement\\nappend\\n");
+			assert.equal(fs.existsSync(lockPath), false);
+			assert.deepEqual(fs.readdirSync(path.dirname(file)), ["session.jsonl"]);
 		`);
 	});
 

@@ -187,6 +187,7 @@ describe("isolated memory storage routing", () => {
 				const { openDatabase } = await import(modules.db);
 				const { BeamMemory } = await import(modules.beam);
 				const { Mnemopi } = await import(modules.memory);
+				const { runDiagnostics } = await import(modules.diagnose);
 				const memoryRoot = config.dataDir();
 				for (const scope of ["default", "host"]) {
 					for (const kind of ["directory", "leaf"]) {
@@ -214,6 +215,11 @@ describe("isolated memory storage routing", () => {
 									assert.throws(() => new BeamMemory({ dbPath }), /symbolic links are not allowed/);
 									assert.throws(() => new Mnemopi({ dbPath, noEmbeddings: true, llmEnabled: false, reconcile: false }),
 										/symbolic links are not allowed/);
+									const diagnostic = runDiagnostics({ dbPath });
+									assert.equal(diagnostic.database, dbPath);
+									assert.ok(diagnostic.checks_failed > 0);
+									assert.equal(diagnostic.entries.find(entry => entry.check === "open_or_inspect").status, "ERROR");
+									assert.equal(diagnostic.entries.some(entry => entry.check === "integrity_check"), false);
 									if (scope === "default") {
 										assert.throws(() => config.dbPath(), /symbolic links are not allowed/);
 										assert.throws(() => openDatabase(), /symbolic links are not allowed/);
@@ -253,6 +259,68 @@ describe("isolated memory storage routing", () => {
 				try { assert.equal(inMemory.query("PRAGMA database_list").get().file, ""); }
 				finally { inMemory.close(); }
 			} finally {
+				fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+			}`,
+			);
+		},
+	);
+
+	it.skipIf(process.platform !== "linux")(
+		"reports rejected diagnostic paths as JSON without opening or owning a database",
+		() => {
+			runIsolated(
+				"true",
+				`import { Database } from "bun:sqlite";
+			import { fileURLToPath } from "node:url";
+			const config = await import(modules.config);
+			const { runDiagnostics } = await import(modules.diagnose);
+			const { getOfflineShmState } = await import(modules.offline);
+			const state = getOfflineShmState();
+			assert.ok(state);
+			const db = new Database(":memory:");
+			try {
+				const memoryRoot = config.dataDir();
+				const external = path.join(root, "diagnostic-external");
+				fs.mkdirSync(external);
+				const sentinel = path.join(external, "mnemopi.db");
+				fs.writeFileSync(sentinel, "diagnostics must not open external data");
+				const linkedData = path.join(state.runtimeRoot, "host", "linked-data");
+				fs.mkdirSync(path.dirname(linkedData), { recursive: true });
+				fs.symlinkSync(external, linkedData);
+				const unopenedDb = path.join(state.runtimeRoot, "host", "unopened.db");
+				const assertFailure = (summary, database) => {
+					assert.equal(summary.database, database);
+					assert.ok(summary.checks_failed > 0);
+					assert.equal(summary.entries.find(entry => entry.check === "open_or_inspect").status, "ERROR");
+					assert.equal(summary.entries.some(entry => entry.check === "integrity_check"), false);
+				};
+				assertFailure(runDiagnostics({ dbPath: unopenedDb, dataDir: linkedData }), unopenedDb);
+				assert.equal(fs.existsSync(unopenedDb), false);
+				assertFailure(runDiagnostics({ db, dbPath: ":memory:", dataDir: linkedData }), ":memory:");
+				assert.equal(db.query("SELECT COUNT(*) AS count FROM sqlite_master").get().count, 0);
+				const healthy = runDiagnostics({ db, dbPath: ":memory:", dataDir: memoryRoot });
+				assert.equal(healthy.checks_failed, 0);
+				assert.equal(healthy.entries.find(entry => entry.check === "integrity_check").status, "OK");
+				assert.equal(db.query("SELECT 1 AS value").get().value, 1);
+
+				fs.mkdirSync(memoryRoot, { recursive: true });
+				const defaultDb = path.join(memoryRoot, config.DEFAULT_DB_FILENAME);
+				fs.symlinkSync(sentinel, defaultDb);
+				assertFailure(runDiagnostics(), defaultDb);
+				const cli = Bun.spawnSync({
+					cmd: [process.execPath, fileURLToPath(modules.diagnose)],
+					env: process.env,
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				assert.equal(cli.exitCode, 1);
+				assert.equal(cli.stderr.toString(), "");
+				assertFailure(JSON.parse(cli.stdout.toString()), defaultDb);
+				assert.deepEqual(fs.readdirSync(external), ["mnemopi.db"]);
+				assert.equal(fs.readFileSync(sentinel, "utf8"), "diagnostics must not open external data");
+				assert.equal(fs.existsSync(process.env.OMP_CONFIG_ROOT), false);
+			} finally {
+				db.close();
 				fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
 			}`,
 			);

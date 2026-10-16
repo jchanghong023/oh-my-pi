@@ -23,6 +23,12 @@
 
 ### Fixed
 
+- Kept offline session paths and lock sidecars inside shm before reads or mutations, including raw symlink/`..` traversal attempts.
+- Preserved dependency lockfiles and internal symlink meaning in offline snapshots, with private backup domains inside a shared sticky container.
+- Loaded Linux-offline native-cache addons through anonymous memfd on compatible systems, without persistent executable fallback or mount changes.
+- Started ACP backup scheduling at protocol-reader readiness and stopped it on disconnect without exit waits or non-protocol stdout.
+- Unified equivalent trailing-separator data roots without probing unselected inherited profiles.
+- Reported rejected offline memory database paths as diagnostic failures rather than aborting the diagnostic report.
 - Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.
 - Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.
 - Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.

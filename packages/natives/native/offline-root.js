@@ -5,6 +5,13 @@ import * as path from "node:path";
 
 export const DEFAULT_CONFIG_DIR_NAME = ".omp";
 
+function normalizePersistentRoot(root) {
+	const normalized = path.normalize(root);
+	return normalized.length > path.parse(normalized).root.length && normalized.endsWith(path.sep)
+		? normalized.slice(0, -1)
+		: normalized;
+}
+
 /** Resolve the original data root lexically: never stat or realpath a persistent path. */
 export function resolvePersistentRoot(env = process.env) {
 	const homeKey = process.platform === "win32" ? "USERPROFILE" : "HOME";
@@ -12,8 +19,8 @@ export function resolvePersistentRoot(env = process.env) {
 	let override = env.OMP_CONFIG_ROOT?.trim();
 	if (override === "~") override = home;
 	else if (override?.startsWith("~/") || override?.startsWith("~\\")) override = home + override.slice(1);
-	if (override && path.isAbsolute(override)) return path.normalize(override);
-	return path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME);
+	if (override && path.isAbsolute(override)) return normalizePersistentRoot(override);
+	return normalizePersistentRoot(path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
 }
 /** No initialization, backup discovery, or persistent-root IO occurs at module load. */
 export function getOfflineShmState(env = process.env) {
