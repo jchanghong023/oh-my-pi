@@ -34,8 +34,9 @@ function wrapTail(source: string, width: number, continuedLine: boolean): TailRo
 		const lineEnd = newline < 0 ? source.length : newline;
 		const line = source.slice(lineStart, lineEnd);
 		const continued = lineStart === 0 && continuedLine;
-		let rows = wrapTextWithAnsi(line, width);
-		if (continued && rows.length === 1) {
+		const blank = !/\S/.test(line);
+		let rows = blank ? [line] : wrapTextWithAnsi(line, width);
+		if (continued && !blank && rows.length === 1) {
 			// The original long line took the wrapper's slow path, which trims
 			// soft-row trailing spaces. A short suffix must not regain the
 			// fits-without-wrapping fast path. A full row plus a discarded soft
@@ -131,7 +132,12 @@ export class ThinkingPreviewComponent implements Component {
 			this.#widthEpoch = widthEpoch;
 		}
 		if (this.#dirty) {
-			const source = this.#tail ?? replaceTabs(sanitizeText(sanitizeCarriageReturns(this.#text)));
+			// Compact completed blank lines only; retain the final partial line's
+			// whitespace so later text keeps its original indentation.
+			const source = (this.#tail ?? replaceTabs(sanitizeText(sanitizeCarriageReturns(this.#text)))).replace(
+				/(^|\n)(?:[^\S\n]*\n)+/g,
+				"$1\n",
+			);
 			const wrapped = wrapTail(source, cols, this.#continuedLine);
 			let boundary = Math.max(0, wrapped.length - MUTABLE_ROWS);
 			while (boundary > 0 && wrapped[boundary]?.text === "" && !wrapped[boundary]?.startsLine) boundary--;
@@ -139,17 +145,19 @@ export class ThinkingPreviewComponent implements Component {
 			const resume = wrapped[boundary];
 			this.#tail = source.slice(resume?.start ?? source.length);
 			this.#continuedLine = resume !== undefined && !resume.startsLine;
-			const rows = [...this.#settled, ...wrapped.slice(boundary).map(row => row.text)].slice(-MAX_ROWS);
+			const rows = [...this.#settled, ...wrapped.slice(boundary).map(row => row.text)];
+			while (rows.length > 0 && !/\S/.test(rows[rows.length - 1]!)) rows.pop();
 			// The shared wrapper preserves an indivisible wide grapheme even at
 			// width 1. Omit that unfit grapheme instead of letting a terminal wrap
 			// it into an unaccounted sixth physical row.
-			this.#rows = rows.some(row => /\S/.test(row)) ? rows.map(row => truncateToWidth(row, cols, "")) : EMPTY_ROWS;
+			this.#rows = rows.length > 0 ? rows.slice(-MAX_ROWS).map(row => truncateToWidth(row, cols, "")) : EMPTY_ROWS;
 			this.#dirty = false;
 			this.invalidate();
 		}
 		const themeEpoch = getThemeEpoch();
 		if (this.#painted === undefined || themeEpoch !== this.#themeEpoch) {
-			this.#painted = this.#rows.map(row => theme.fg("thinkingText", row));
+			const latest = this.#rows.findLastIndex(row => /\S/.test(row));
+			this.#painted = this.#rows.map((row, index) => theme.fg(index === latest ? "text" : "thinkingText", row));
 			this.#themeEpoch = themeEpoch;
 			this.#native = undefined;
 		}

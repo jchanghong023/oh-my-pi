@@ -25,8 +25,15 @@ afterEach(() => {
 function expectedTail(source: string, width: number): string[] {
 	const clean = replaceTabs(sanitizeText(sanitizeCarriageReturns(source)));
 	if (!clean || width < 1) return [];
-	const rows = wrapTextWithAnsi(clean, width).slice(-5);
-	return rows.some(row => /\S/.test(row)) ? rows.map(row => truncateToWidth(row, width, "")) : [];
+	const compact: string[] = [];
+	for (const line of clean.split("\n")) {
+		if (/\S/.test(line)) compact.push(line);
+		else if (compact.length === 0 || compact[compact.length - 1] !== "") compact.push("");
+	}
+	while (compact[compact.length - 1] === "") compact.pop();
+	const rows = wrapTextWithAnsi(compact.join("\n"), width);
+	while (rows.length > 0 && !/\S/.test(rows[rows.length - 1]!)) rows.pop();
+	return rows.slice(-5).map(row => truncateToWidth(row, width, ""));
 }
 
 function context(cols: number): DescribeContext {
@@ -54,6 +61,61 @@ describe("ThinkingPreviewComponent", () => {
 		expect(preview.clear()).toBe(false);
 		preview.setText("new owner");
 		expect(preview.render(40).map(row => Bun.stripANSI(row))).toEqual(["new owner"]);
+	});
+
+	it("keeps content visible through trailing blank runs and preserves indentation when prose resumes", () => {
+		const preview = new ThinkingPreviewComponent();
+		let source = "older\nfirst\nsecond\nthird\nlatest";
+		preview.setText(source);
+		const initial = preview.render(80);
+		for (const delta of ["\n", "\n  \n\t\n", "\n".repeat(1000), "    "]) {
+			source += delta;
+			preview.setText(source);
+			expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual(initial.map(row => Bun.stripANSI(row)));
+		}
+		source += "next";
+		preview.setText(source);
+		expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual([
+			"second",
+			"third",
+			"latest",
+			"",
+			"    next",
+		]);
+		source += "\n\n \n\nlast\n\n";
+		preview.setText(source);
+		expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual(["latest", "", "    next", "", "last"]);
+		expect(preview.render(9).map(row => Bun.stripANSI(row))).toEqual(expectedTail(source, 9));
+		preview.setText(" \n\t\n\n  ");
+		expect(preview.render(80)).toEqual([]);
+	});
+
+	it("moves the newest-line emphasis with streamed content on both surfaces and theme changes", async () => {
+		const dark = await getThemeByName("dark");
+		const light = await getThemeByName("light");
+		if (!dark || !light) throw new Error("built-in themes must be available");
+		const original = theme;
+		const preview = new ThinkingPreviewComponent();
+		try {
+			for (const selected of [dark, light]) {
+				setThemeInstance(selected);
+				preview.setText("first\nlatest\n\n\n");
+				const before = [theme.fg("thinkingText", "first"), theme.fg("text", "latest")];
+				expect(preview.render(80)).toEqual(before);
+				expect(preview.describe(context(80))).toMatchObject({ k: "rows", p: { lines: before } });
+				preview.setText("first\nlatest\n\n\nnext");
+				const after = [
+					theme.fg("thinkingText", "first"),
+					theme.fg("thinkingText", "latest"),
+					theme.fg("thinkingText", ""),
+					theme.fg("text", "next"),
+				];
+				expect(preview.render(80)).toEqual(after);
+				expect(preview.describe(context(80))).toMatchObject({ k: "rows", p: { lines: after } });
+			}
+		} finally {
+			setThemeInstance(original);
+		}
 	});
 
 	it("matches full shared wrapping through growing words, blank lines, tabs and graphemes", () => {
@@ -244,7 +306,10 @@ describe("ThinkingPreviewComponent", () => {
 			setThemeInstance(light);
 			const after = preview.render(8);
 			expect(after).not.toBe(before);
-			expect(after).toEqual(expectedTail(source, 8).map(row => theme.fg("thinkingText", row)));
+			const rows = expectedTail(source, 8);
+			expect(after).toEqual(
+				rows.map((row, index) => theme.fg(index === rows.length - 1 ? "text" : "thinkingText", row)),
+			);
 			preview.invalidate();
 			expect(preview.render(8)).toEqual(after);
 		} finally {
