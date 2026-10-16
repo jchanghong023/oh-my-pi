@@ -2067,6 +2067,25 @@ export class AgentSession implements SettingsScope {
 			if (context?.willContinue) this.#steerAnthropicWrapUp();
 			await this.#advisors.onPrimaryTurnEnd(messages, context?.willContinue, signal);
 			await this.#maintenance.maintainContextMidRun(messages, signal, context);
+			const goalState = this.#goalModeState;
+			if (
+				context?.willContinue &&
+				!signal?.aborted &&
+				goalState?.enabled &&
+				goalState.mode === "active" &&
+				goalState.goal.status === "active"
+			) {
+				// Goals may never yield between tool batches. Deliver user feedback
+				// at this completed-batch boundary, not during a running tool.
+				const followUp = this.agent.peekFollowUpQueue();
+				const index = followUp.findIndex(isUserAuthoredQueuedMessage);
+				if (index >= 0) {
+					this.agent.moveFollowUpsToSteering(
+						this.#withoutQueuedUserMessage(followUp, index),
+						followUp.slice(this.#queuedUserGroupStart(followUp, index), index + 1),
+					);
+				}
+			}
 		});
 		this.yieldQueue = new YieldQueue({
 			isStreaming: () => this.isStreaming,

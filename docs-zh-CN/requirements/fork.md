@@ -38,7 +38,7 @@
 
 ### Markdown 文档索引
 
-- **Wiki 目录环境变量**：设置非空 `OMP_WIKI_DIR` 后，数据库固定使用该目录下的 `docs.db`；CLI、TUI、RPC 和 `wiki` 工具的创建、读取、导入、迁移及删除均使用同一数据库，不额外维护 profile 内的副本，也不将共享库限制为只读。未设置或为空时保留原 profile 数据库路径；目录按既有建库流程创建。该变量独立于 `OMP_OFFLINE`，不要求修改配置文件，不自动迁移旧数据。它只改变数据库位置，不新增分布式锁或改变 SQLite 日志模式，不能据此承诺网络文件系统上的多机并发安全。
+- **Wiki 数据目录**：CLI、TUI、RPC 和 `wiki` 工具的创建、读取、导入、迁移及删除统一使用当前 profile 数据目录下的 `docs.db`，不设置独立 Wiki 数据根或平行副本。数据根调整遵循[安装与运行](#安装与运行)的统一目录契约；目录按既有建库流程创建，不自动迁移旧数据，不据此承诺 NFS 多机并发安全。验证状态见[需求目录](README.md)。
 - **Rust 文档索引内核**：`crates/pi-natives/src/wiki/` 负责 Markdown 文件发现、忠实移植既有共享解析器语义的词法解析／章节切分、文档哈希、数据库 schema／旧库迁移、索引生命周期与导入／发布／回滚，以及查询分析、技术名称边界与切分上下文恢复、SQLite FTS5／BM25、全量排名、完整排名缓存、快照版本、游标、正文／来源读取、页预算、同页去重、证据渲染、展示控制字符过滤和可取消的成功时长下限等待；异步操作复用 `grep` 的 native/N-API blocking-task 机制，不保留 TypeScript 实现或回退。保留的 TypeScript engine／service／tool 仅适配宿主路径、参数 schema、会话、IPC／服务子进程、UI、logger 与取消／释放边界。算法、数据库格式、结果顺序、正文／引用及有效旧游标身份不得因语言迁移变化，现有索引无需重建；DB-only、成功时长 ≥500ms 与错误契约保持不变。
 - **共享数据库页读取**：wiki 查询连接默认请求最多 500 MiB 的 SQLite 内存映射读取；多个进程访问同一实际数据库文件时，由操作系统复用文件页面、按需加载并回收。保留原有 SQLite 私有页缓存与进程内排名缓存规则，不为每个进程新增大额堆缓存，不改变导入／删除、读快照、完整结果或游标。映射范围受 SQLite／平台支持限制，不是单进程或整机内存硬上限；正常关闭服务须释放映射与数据库句柄。
 - **数据库与构建身份**：打开连接前后须确认同一实际数据库文件；导入租约、隐藏构建回收与创建、提交、发布与回滚须绑定原数据库身份，不能仅凭可复用的行 ID 操作其他构建或已发布索引。取得租约后替换数据库必须在回收或创建前拒绝；回调期间替换数据库、取消或关闭服务不得修改替换库中的既有证据。
@@ -216,6 +216,7 @@
 - `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
 - `crates/pi-builtins/src/uptime.rs`、`du.rs`：Windows 的未用导入／可变声明静态问题已由上游等价修复；采用上游实现，不再保留 fork 业务补丁，命令行为不变。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
+- `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。独立 Python 回归不因此纳入 fork 本地门禁。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
@@ -315,17 +316,19 @@
 - 会话删除须区分主文件删除、备份清理和附件清理，明确已提交、部分清理及未知状态；team 通知发送与后续 UI 更新分别定位，内部终止仅记录安全原因分类；repo 整代读取失败使用文件指纹定位，不记录原路径或源码。
 - 离线 models/bench 的 cache-only 日志仅描述目录发现/刷新，不代表模型请求离线；初始化及后续 selector-miss 刷新保留起止关联。WSL helper 预检拒绝记录有界原因码，不复制 helper 输出正文。
 - 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
-- 日志目录不可写时 MUST 尝试合理的用户级目录回退，仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
+- 日志目录不可写时 MUST 尝试合理的用户级目录回退；适用的 Linux offline shm 模式下，回退仍须限定在运行根内，不得转写原始持久根或其他磁盘目录。仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
 - 本契约覆盖已保留的 fork 功能及其公共边界：JchTools、team、Goal、RPC、docs/wiki、repo/AST 通知、company/zcode 与向量请求、Codex 压缩、JCH Git、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
 
 ### 安装与运行
 
-- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT`、`OMP_SKILLS_DIR` 与 `OMP_WIKI_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
+- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
 - 日志框架、默认目录与启动参数跟随上游；fork 功能的诊断覆盖遵循上文「运行诊断日志」。
 - `-P <name>` 是上游 `--profile <name>` 的内置短参数，无需配置 shell alias；启动前选择 profile，认证、会话、设置与缓存隔离及环境变量优先级沿用上游。`-p` 仍为非交互 print 模式，不新增会话共享行为。
 - 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）把整个数据根从 `~/.omp` 迁移到指定目录：agent 数据、缓存、运行状态、profiles 等全部派生目录随之迁移，浏览器工具的 storage-state 等跟随；项目级 `.omp/` 不受影响。与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 原始数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。非 offline 时直接使用该根；适用的 offline shm 模式按下述契约区分运行根与原始持久根。
+- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。
+- **Linux offline shm**：已实现将 OMP 自有运行数据统一放在 `/dev/shm`，前台就绪满 10 分钟后首次异步备份回原始数据根，之后按周期备份；原始根优先采用有效 `OMP_CONFIG_ROOT`，未设置时沿用上游默认解析，目录名不写死。启动不复制、不恢复，不改变工具读写 NFS 项目文件的能力。完整行为与验收条件以[离线 shm 运行与异步备份](offline-shm.md)为准；非 offline 和非 Linux 不启用该运行根映射或备份。实现不等于 Linux 验收通过，当前验证结果及未验收边界统一见[需求目录](README.md)。
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`plan`、`slow` → `company/GLM-5.2-public`。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存模型 preset 不复制这些隐式默认角色；用户显式配置或 CLI 选择的角色仍按原规则保存，包括显式选择的 company 模型。普通启动不受影响。

@@ -4,11 +4,14 @@
 
 ### Added
 
+- Resolve Linux offline configuration, profile data, caches and temporary files into private shm domains while preserving the original persistent-root environment.
 - Added async diagnostic context, safe exception and endpoint summaries (including hashed URL paths), CLI lifecycle flushing, and a user-cache fallback for unwritable log directories.
 - Added correlated HTTP attempt, retry, cancellation, and terminal-result logs without recording request bodies, credentials, or response content.
 
 ### Fixed
 
+- Canonicalized redundant trailing separators in persistent data roots without filesystem probes, keeping equivalent spellings in the same offline runtime domain.
+- Kept inherited agent-directory comparisons lexical so explicitly selecting the default profile never initializes or validates an unselected legacy profile.
 - Recovered Windows diagnostic logging to a distinct user directory when the primary and standard fallback paths differ only in letter case.
 - Exposed the active log file and directory after fallback or rotation without changing the profile's data root.
 - Fixed HTTP diagnostics reporting disabled timeouts when native defaults were active and downgrading terminal request failures to warnings.

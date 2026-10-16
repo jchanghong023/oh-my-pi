@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 
 // Real cli.ts --mode rpc-ui coverage for the command catalog, local command
@@ -31,10 +32,18 @@ async function withCommandServer(
 	await using root = await TempDir.create("@rpc-ui-command-entry-");
 	const cwd = path.resolve(root.join("project"));
 	const sessionDir = path.resolve(root.join("sessions"));
-	const agentDir = path.resolve(root.join("agent"));
 	const home = path.resolve(root.join("home"));
 	const configRoot = path.resolve(root.join("config"));
-	for (const dir of [cwd, sessionDir, agentDir, home, configRoot]) await fs.mkdir(dir, { recursive: true });
+	const offlineState = getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" });
+	// Explicit test preparation, not production restoration from the persistent root.
+	const agentDir = path.join(offlineState?.runtimeRoot ?? configRoot, "agent");
+	await using _runtimeCleanup = {
+		[Symbol.asyncDispose]: async () => {
+			if (offlineState) await fs.rm(path.dirname(offlineState.runtimeRoot), { recursive: true, force: true });
+		},
+	};
+	for (const dir of [cwd, sessionDir, agentDir, home, configRoot])
+		await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
 		[
@@ -149,11 +158,19 @@ async function withCommandServer(
 			success: true,
 			data: { protocolVersion: 3 },
 		});
+		if (offlineState) {
+			const current = await server.request({ id: "fixture-path", type: "get_state" });
+			if (!isRecord(current.data) || typeof current.data.sessionFile !== "string")
+				throw new Error("Missing effective RPC session file");
+			const relative = path.relative(offlineState.runtimeRoot, current.data.sessionFile);
+			expect(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)).toBe(false);
+		}
 		await run(server, cwd);
 	} finally {
 		server.closeStdin();
 		await Promise.race([child.exited, Bun.sleep(30_000)]);
 		if (child.exitCode === null) child.kill();
+		await child.exited;
 		await pump.catch(() => {});
 	}
 }

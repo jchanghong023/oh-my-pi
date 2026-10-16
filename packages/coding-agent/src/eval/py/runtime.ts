@@ -36,6 +36,11 @@ const DEFAULT_ENV_ALLOWLIST = new Set([
 	"VIRTUAL_ENV",
 	"PYTHONPATH",
 	"LD_LIBRARY_PATH",
+	// Exact OMP identity/input keys only: never pass arbitrary OMP_* credentials.
+	"OMP_OFFLINE",
+	"OMP_CONFIG_ROOT",
+	"OMP_PROFILE",
+	"OMP_SKILLS_DIR",
 ]);
 
 const WINDOWS_ENV_ALLOWLIST = new Set([

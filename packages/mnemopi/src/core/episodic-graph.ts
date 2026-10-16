@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { resolveMemoryDbPath } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase, transaction } from "../db";
 
 export interface Gist {
@@ -262,7 +263,7 @@ export class EpisodicGraph {
 	readonly ownsConnection: boolean;
 
 	constructor(options: EpisodicGraphOptions = {}) {
-		this.dbPath = options.dbPath ?? ":memory:";
+		this.dbPath = resolveMemoryDbPath(options.dbPath ?? ":memory:");
 		this.db = options.db ?? openDatabase(this.dbPath);
 		this.ownsConnection = options.db === undefined;
 		this.initTables();

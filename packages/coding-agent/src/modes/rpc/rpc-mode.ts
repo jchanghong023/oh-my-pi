@@ -25,6 +25,7 @@ import { $env, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
 import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import type { MCPManager } from "../../mcp";
+import { startOfflineShmBackup } from "../../offline/backup-lifecycle";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -1637,6 +1638,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		createLiveSession,
 		mcpManager,
 	} = options;
+	let stopOfflineBackup = (): void => {};
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -2203,6 +2205,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 * rejection with no latched store failure still surfaces to the caller.
 	 */
 	const disposeAndExit = async (): Promise<never> => {
+		stopOfflineBackup();
 		try {
 			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
 			await btw.close().catch(btwError => {
@@ -3566,7 +3569,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// line-by-line by readRpcInputFrames so a single malformed line is reported
 	// as an error frame and the loop keeps running instead of throwing out of
 	// the reader and killing the whole process (issue #5194).
-	await readRpcInputFrames(
+	const inputRead = readRpcInputFrames(
 		input ?? Bun.stdin.stream(),
 		parsed =>
 			logger.withLogContext(
@@ -3588,6 +3591,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			output(error(undefined, "parse", message));
 		},
 	);
+	// The reader is now accepting requests; start the first full backup period.
+	stopOfflineBackup = startOfflineShmBackup(message => {
+		if (!clientDisconnected) output({ type: "notice", level: "warning", source: "offline-shm-backup", message });
+	});
+	await inputRead.finally(() => stopOfflineBackup());
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.

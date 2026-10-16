@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-import { dbPath } from "../config";
+import { dbPath, resolveMemoryDbPath } from "../config";
 import { closeQuietly, openDatabase, transaction } from "../db";
 
 const ENTITY_STOP_WORD_VALUES = [
@@ -231,12 +231,12 @@ export class AnnotationStore {
 
 	constructor(options: AnnotationStoreOptions | string = {}) {
 		if (typeof options === "string") {
-			this.dbPath = options;
-			this.db = openDatabase(options);
+			this.dbPath = resolveMemoryDbPath(options);
+			this.db = openDatabase(this.dbPath);
 			this.ownsConnection = true;
 		} else {
 			const shared = options.conn ?? options.db;
-			this.dbPath = options.dbPath ?? options.db_path ?? dbPath();
+			this.dbPath = resolveMemoryDbPath(options.dbPath ?? options.db_path ?? dbPath());
 			this.db = shared ?? openDatabase(this.dbPath);
 			this.ownsConnection = shared === undefined;
 		}

@@ -19,7 +19,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isPromise } from "node:util/types";
-import { APP_NAME, getLogPath, getLogsDir, localDay, VERSION } from "./dirs";
+import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
+import { APP_NAME, getConfigRootDir, getLogPath, getLogsDir, getOfflineShmState, localDay, VERSION } from "./dirs";
 import { RotatingFileSink } from "./logger/rotating-file";
 import { setStderrRedirectTarget } from "./stderr-guard";
 import { drainModuleLoadEvents } from "./timing-buffer";
@@ -280,6 +281,12 @@ function schedulePruneStaleProcessLogs(dir: string): void {
 
 /** Platform-standard user state directory, independent of relocated application data. */
 function fallbackLogsDir(primaryDirectory: string): string {
+	const offline = getOfflineShmState();
+	if (offline) {
+		return ensureOfflineShmDirectory(
+			path.relative(offline.runtimeRoot, path.join(getConfigRootDir(), "fallback-logs")),
+		)!;
+	}
 	const home = os.homedir();
 	let directory: string;
 	if (process.platform === "win32") {
@@ -402,7 +409,7 @@ function flushOnExit(code: number): void {
 
 /** Build a rotating file sink with process-local rotation and shared retention. */
 function makeFileTransport(dir?: string): RotatingFileSink {
-	const logsDir = dir ?? getLogsDir();
+	const logsDir = getOfflineShmState() ? getLogsDir() : (dir ?? getLogsDir());
 	schedulePruneStaleProcessLogs(logsDir);
 	if (!exitFlushInstalled) {
 		exitFlushInstalled = true;

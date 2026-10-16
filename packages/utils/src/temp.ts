@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
+import { getConfigRootDir, getOfflineShmState } from "./dirs";
 
 /**
  * Owned temporary directory, removed via `remove()` or `using`/`await using`.
@@ -76,6 +78,13 @@ export class TempDir {
 const kTempDir = os.tmpdir();
 
 function normalizePrefix(prefix?: string): string {
+	const offline = getOfflineShmState();
+	if (offline) {
+		const relativeRoot = path.relative(offline.runtimeRoot, getConfigRootDir());
+		const directory = ensureOfflineShmDirectory(path.join(relativeRoot, "tmp"))!;
+		const name = prefix ? path.basename(prefix.startsWith("@") ? prefix.slice(1) : prefix) : "pi-temp-";
+		return path.join(directory, name);
+	}
 	if (!prefix) {
 		return `${kTempDir}${path.sep}pi-temp-`;
 	} else if (prefix.startsWith("@")) {

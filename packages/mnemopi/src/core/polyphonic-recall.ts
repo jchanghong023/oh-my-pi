@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { logger, withLoopPhase } from "@oh-my-pi/pi-utils";
-import { type Env, polyphonicRecallEnabled } from "../config";
+import { type Env, polyphonicRecallEnabled, resolveMemoryDbPath } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 import { backfillConsolidatedFacts, ensureVeracityConsolidator } from "./beam/consolidate";
 import type { BeamMemoryState, JsonValue, Metadata, RecallResult, RecallTierLabel } from "./beam/types";
@@ -292,7 +292,7 @@ export class PolyphonicRecallEngine {
 	});
 
 	constructor(options: PolyphonicEngineOptions = {}) {
-		this.dbPath = options.dbPath ?? ":memory:";
+		this.dbPath = resolveMemoryDbPath(options.dbPath ?? ":memory:");
 		this.db = options.db ?? openDatabase(this.dbPath);
 		this.ownsConnection = options.db === undefined;
 		this.graph = options.graph ?? new EpisodicGraph({ db: this.db, dbPath: this.dbPath });

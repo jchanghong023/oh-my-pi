@@ -236,7 +236,6 @@ describe("native transcript redesign", () => {
 			harness = undefined;
 		}
 	});
-
 	it("shows a status notice as a toast that re-shows when its text changes", async () => {
 		const notice = new StatusNotice("Thinking blocks: hidden");
 		harness = await TspHarness.start();

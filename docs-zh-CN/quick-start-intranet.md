@@ -10,15 +10,24 @@ setenv OMP_CONFIG_ROOT "$HOME/omp-data"
 
 # 使用团队共享资源时，替换为实际网络文件系统路径：
 setenv OMP_SKILLS_DIR "/path/to/shared/skills"
-setenv OMP_WIKI_DIR "/path/to/shared/wiki"
 ```
 
-- `OMP_OFFLINE`：启用公司内网模式。
-- `OMP_CONFIG_ROOT`：数据目录，可换成有写权限的绝对路径；旧数据不会自动搬过来。
+- `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
+- `OMP_CONFIG_ROOT`：统一的原始数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Wiki／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。Linux 内网模式实际使用下述 shm 运行根，原始根用于后台备份。
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本优先，其他用户技能仍保留。目录不存在时不影响原有技能加载，不下载或同步文件。
-- `OMP_WIKI_DIR`：可选的 Wiki 数据库目录；设置后，数据库的读取、写入和创建全部使用该目录下的 `docs.db`，包括 `/wiki`、AI 的 `wiki` 工具和 `omp docs init/remove`。不同用户或 profile 指向同一目录即可使用同一库；新建和删除会影响该共享库，不会自动迁移原数据库。
 
-上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。两个共享变量不依赖 `OMP_OFFLINE`，也不需要配置文件；不设置或留空时保留原有路径和加载行为。路径示例需替换为实际可访问目录。`OMP_WIKI_DIR` 只改变数据库位置，不提供网络文件系统上的多机并发安全保证。
+上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI、RPC 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
+
+### Linux 内网模式的数据与备份
+
+- **运行在 shm**：仅在 Linux 且启用 `OMP_OFFLINE` 时，将 OMP 自有数据统一读写 `/dev/shm` 下的运行根；路径由原始数据根确定性派生，保留目录名及 profile 布局，并区分用户、主机和不同原始根。`OMP_CONFIG_ROOT` 仍保留原始值，不应手动改成 shm 路径。非 Linux 或非 offline 模式直接使用原始数据根，不启用此映射和备份。
+- **启动不恢复**：启动直接使用已有 shm 数据，不访问原始数据根检查备份，不搬运旧配置、会话或索引。shm 为空时就是全新环境，不表示原 NFS 旧文件已删除，也不会清空它们。显式自定义会话目录映射进运行域，不读取原目录；外部 `--resume`／`--session` 文件会报错并提示人工恢复会话及附件，再使用恢复后的运行路径，不自动导入。
+- **每 10 分钟后台备份**：前台就绪满一个周期后才首次触发，之后异步备份到原始数据根；设置有效 `OMP_CONFIG_ROOT` 时使用该目录，否则使用上游默认目录。同一数据域的进程协调备份，不在启动或退出时同步复制，也不等待 NFS；短命命令未到周期就退出时，新增数据不保证已备份。备份失败会记录日志并提示，前台仍使用 shm，不回退到 NFS。
+- **人工恢复**：在原始根的 `.offline-shm-backups/<domain hash>/current.json` 找到 `current`（最新）或 `previous`（如有）的完整版本；内容位于 `generations/<id>/data/`，旁有 `manifest.json`。先停止对应运行域的所有 OMP 进程及后台任务，再将选中完整版本的 `data/` 内容复制到未使用且为空的 `manifest.runtimeRoot`，保留私有权限、所有者可执行位及符号链接本身，不解引用链接；不要覆盖原始旧 NFS 树、合并到活动目录或复制活动 WAL。没有恢复命令或向导，详细步骤见下方契约。
+- **可能丢失的数据**：退出不做最终同步备份；重启、断电、卸载或外部清理可能使 shm 数据丢失。可丢失范围从最近一次成功备份起算，备份持续失败时可能超过 10 分钟；尚无成功备份时不能保证任何新增数据已持久化。tmpfs 也可能使用 Swap，并非保证数据绝不落盘。
+- **外部文件与平台前提**：项目源码、项目级 `.omp/`、EDA 文件、Claude Code 配置和共享技能仍在原位置访问，可能继续产生 NFS I/O。`/dev/shm` 不存在、不可写或空间不足时会报告操作失败，不静默换回 NFS 或其他磁盘目录。native 缓存优先普通 shm 映像加载；仅该路径无法执行（如 `noexec`）时，才使用可执行内存后备并要求相应内核／backport、glibc、procfs、运行时及安全策略支持，不为所有 Linux offline 运行统一提高内核／glibc 前提。后备不可用时明确失败，不通过修改挂载、安装依赖或写持久可执行副本绕过，具体前提见下方契约。
+
+路径、逐库而非全局事务的一致性及人工恢复边界以[离线 shm 运行与异步备份契约](requirements/offline-shm.md)为准；实际验证状态见[需求目录](requirements/README.md)，不代表公司 CentOS 7 或实际 shm／NFS 已验收。
 
 ## 2. 启动
 
@@ -38,7 +47,7 @@ omp
 
 用 `omp -c` 继续当前项目的最近会话；没有可恢复会话时会新建。
 
-用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录仍隔离，无需配置 shell alias。
+用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录、设置及 Wiki／Repo 数据库隔离，无需配置 shell alias。
 
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
 
@@ -107,7 +116,7 @@ omp
 
 1. 准备已导出的 Markdown 目录。导入会递归读取 `.md` 文件，跳过符号链接。PDF、Word 等需先转成 Markdown；图片、附件和链接目标不会随正文入库。
 2. 在 OMP 输入框输入 `/wiki`，按 `n` 新建，填写索引名和目录，确认后等待导入完成。面板会列出索引名、文档数、章节数和源目录。
-3. 也可在**系统终端**执行以下命令，替换目录和索引名。终端与 OMP 会话须使用一致的 `OMP_WIKI_DIR`；未设置时，须使用一致的 `OMP_CONFIG_ROOT`、profile 等配置环境：
+3. 也可在**系统终端**执行以下命令，替换目录和索引名。终端与 OMP 会话须使用一致的 `OMP_CONFIG_ROOT`、profile 和 `OMP_OFFLINE` 环境；会话使用 `-P work` 时，导入与删除命令也须加上 `-P work`：
 
 ```tcsh
 omp docs init "/path/to/company-markdown" --name "company-docs"
@@ -147,7 +156,7 @@ omp docs remove "company-docs" --force
 omp docs init "/path/to/company-markdown" --name "company-docs"
 ```
 
-删除只移除当前数据库中的索引，不删除源资料；设置 `OMP_WIKI_DIR` 时删除的是共享库中的索引。也可在面板按 `d`，再按 `y` 确认删除。
+删除只移除当前 profile 数据库中的索引，不删除源资料，也不影响其他 profile。也可在面板按 `d`，再按 `y` 确认删除。
 
 刷新前先确认新导出目录可读。删除后若重新导入失败，旧索引不会自动恢复。没有 `omp docs update`、`list` 或 `status` 命令；查看已有索引用 `/wiki`。
 

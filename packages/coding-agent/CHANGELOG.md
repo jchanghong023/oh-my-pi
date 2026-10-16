@@ -5,8 +5,8 @@
 ### Added
 
 - Switch between clean, compact and detailed terminal views with `/display`; compact is the default, and choices persist per profile without changing model or tool execution.
+- Run Linux offline data in private shm domains and asynchronously save complete, recoverable backups every ten minutes after frontend readiness, without startup restoration or exit waits.
 - Load additional shared skills from `OMP_SKILLS_DIR`, preferring shared versions on name collisions without changing user configuration.
-- Store all Wiki database operations in `OMP_WIKI_DIR/docs.db` when set, sharing the selected database across users and profiles while retaining the existing default when unset.
 - Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
 
 ### Changed
@@ -14,6 +14,7 @@
 - Present Wiki and Repo as on-demand `xd://` devices by default, preserving independent approval policies and concurrent queries while retaining native top-level tools for explicit tool lists and configurations with `tools.xdev` disabled.
 - Disable Debug, IDA and Archive by default while preserving explicit settings; offline launches also disable AST Edit alongside Browser and Web Search without changing saved configuration.
 - Disable terminal-title run-state indicators by default and batch streamed message updates in 50ms windows, preserving explicit title settings and final content.
+- Keep Wiki databases inside the active profile's unified data root; obsolete standalone Wiki-directory environment settings no longer redirect storage.
 - Compact display keeps upstream write and edit previews, diffs, and expansion controls; other tools remain single-line.
 - Keep live thinking in one editor-anchored window showing only the latest five screen rows; hide it when thinking ends without replaying reasoning in the main transcript.
 - Display the main TUI settings and common interaction dialogs in Simplified Chinese while preserving familiar technical English, command syntax and configuration values.
@@ -34,6 +35,13 @@
 - Kept Unicode-equivalent Wiki queries consistent across ranking-cache reuse, eviction and reopening, preventing continuation pages from repeating or omitting evidence.
 - Restored browser relay-tab recovery after Chrome detaches the debugger while retaining cancellation of supervisor-side tool calls.
 - Tracked `/team` blockers individually with stable IDs and explicit recheck decisions, so partial fixes and invalid reviews cannot clear unrelated blockers.
+- Deliver queued user feedback between completed tool batches in active goals, including unattended goals, without interrupting running tools or waiting for the whole goal to finish.
+- Kept offline session paths and lock sidecars inside shm before reads or mutations, including raw symlink/`..` traversal attempts.
+- Preserved dependency lockfiles and internal symlink meaning in offline snapshots, with private backup domains inside a shared sticky container.
+- Loaded Linux-offline native-cache addons through anonymous memfd on compatible systems, without persistent executable fallback or mount changes.
+- Started ACP backup scheduling at protocol-reader readiness and stopped it on disconnect without exit waits or non-protocol stdout.
+- Unified equivalent trailing-separator data roots without probing unselected inherited profiles.
+- Reported rejected offline memory database paths as diagnostic failures rather than aborting the diagnostic report.
 - Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.
 - Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.
 - Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.

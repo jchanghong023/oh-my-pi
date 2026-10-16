@@ -44,7 +44,6 @@ pub fn native_work() -> NativeWork {
 pub const fn native_work() -> NativeWork {
 	NativeWork(())
 }
-
 impl Drop for NativeWork {
 	#[inline]
 	fn drop(&mut self) {
@@ -65,7 +64,6 @@ pub fn released() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 #[inline]
 pub const fn released() {}
-
 /// Owns a job result until it leaves Rust, then reports it [`released`].
 ///
 /// Whichever way the result goes — converted for JavaScript, unwrapped for a

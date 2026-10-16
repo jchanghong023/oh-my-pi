@@ -376,7 +376,6 @@ describe("libkitty end-to-end", () => {
 		session.sessionManager.appendMessage({ role: "user", content: "Show the answer", timestamp: 0 });
 		session.sessionManager.appendMessage(message);
 		await mode.init({ suppressWelcomeIntro: true });
-		mode.noteDisplayableThinkingContent(message);
 		mode.setTodos([{ content: "Review answer", status: "in_progress" }]);
 		await mode.renderInitialMessages({ clearTerminalHistory: true });
 		await term.waitForRender(() => plainRows(term.getScrollBuffer()).some(row => row.includes("Answer marker 35")));

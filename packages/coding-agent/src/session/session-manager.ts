@@ -104,12 +104,14 @@ import {
 	hasPositiveMovedProjectEvidence,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
+	resolveSessionDirectory,
 	worktreeSessionDirs,
 	writeTerminalBreadcrumb,
 } from "./session-paths";
 import { forgetExternalizedImages, prepareEntryForPersistence } from "./session-persistence";
 import { loadPinnedSessionIds, sortPinnedFirst } from "./session-pins";
 import {
+	assertOfflineSessionPath,
 	FileSessionStorage,
 	MemorySessionStorage,
 	type SessionStorage,
@@ -1016,12 +1018,12 @@ export class SessionManager {
 
 	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
 		this.#cwd = cwd;
-		this.#sessionDir = sessionDir;
+		this.#sessionDir = persist ? resolveSessionDirectory(sessionDir, storage) : sessionDir;
 		this.#persist = persist;
 		this.#storage = storage;
 		this.#blobs = new BlobStore(getBlobsDir());
 
-		if (persist && sessionDir) this.#storage.ensureDirSync(sessionDir);
+		if (persist && this.#sessionDir) this.#storage.ensureDirSync(this.#sessionDir);
 	}
 
 	#rememberBreadcrumb(cwd: string, sessionFile: string, fresh = false): void {
@@ -1988,12 +1990,13 @@ export class SessionManager {
 	}
 
 	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
+		if (forcedSessionFile) assertOfflineSessionPath(forcedSessionFile, this.#storage);
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 		this.#expectedDiskSize = null;
 		this.#reconcileSessionDirForFallback();
 		if (options?.sessionDir && this.#persist) {
-			this.#sessionDir = path.resolve(options.sessionDir);
+			this.#sessionDir = resolveSessionDirectory(path.resolve(options.sessionDir), this.#storage);
 			this.#storage.ensureDirSync(this.#sessionDir);
 		}
 		this.#sessionId = mintSessionId();
@@ -2251,12 +2254,13 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
+		if (snapshot.sessionFile) assertOfflineSessionPath(snapshot.sessionFile, this.#storage);
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 
 		this.#cwd = snapshot.cwd;
-		this.#sessionDir = snapshot.sessionDir;
+		this.#sessionDir = resolveSessionDirectory(snapshot.sessionDir, this.#storage);
 		this.#sessionFile = snapshot.sessionFile;
 		this.#expectedDiskSize = snapshot.expectedDiskSize;
 		this.#fileIsCurrent = snapshot.onDisk;
@@ -2325,6 +2329,7 @@ export class SessionManager {
 		loadedSession?: SessionLoadResult,
 		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions },
 	): Promise<void> {
+		assertOfflineSessionPath(sessionFile, this.#storage);
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
@@ -2482,7 +2487,9 @@ export class SessionManager {
 	/** Move the session to a new working directory. */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
 		const resolvedCwd = path.resolve(newCwd);
-		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
+		const resolvedTargetDir = targetSessionDir
+			? resolveSessionDirectory(path.resolve(targetSessionDir), this.#storage)
+			: undefined;
 		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);
 		const nextSessionDir =
 			resolvedTargetDir ??
@@ -3181,6 +3188,7 @@ export class SessionManager {
 	}
 
 	adoptArtifactManager(manager: ArtifactManager): void {
+		assertOfflineSessionPath(manager.dir, this.#storage);
 		this.#adoptedArtifactManager = manager;
 	}
 
@@ -4039,6 +4047,8 @@ export class SessionManager {
 			repairInterruptedTail?: boolean;
 		},
 	): Promise<SessionManager> {
+		assertOfflineSessionPath(sourcePath, storage);
+		if (options?.sessionFile) assertOfflineSessionPath(options.sessionFile, storage);
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
@@ -4161,6 +4171,7 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		options?: { initialCwd?: string; parentSession?: string; suppressBreadcrumb?: boolean; throwIfMissing?: boolean },
 	): Promise<SessionManager> {
+		assertOfflineSessionPath(filePath, storage);
 		const probed = await loadSessionFile(filePath, storage, { throwIfMissing: options?.throwIfMissing });
 		const header = probed.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when it is verifiably
@@ -4252,6 +4263,7 @@ export class SessionManager {
 		cwd: string;
 		init: PersistedSessionInit | null;
 	} | null> {
+		assertOfflineSessionPath(filePath, storage);
 		let header: SessionHeader | undefined;
 		const initEntries: FileEntry[] = [];
 		const visit = (entry: FileEntry): void => {
@@ -4277,9 +4289,12 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionManager> {
-		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
+		const dir = resolveSessionDirectory(
+			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
+			storage,
+		);
 		const resolvedCwd = path.resolve(cwd);
-		const breadcrumb = await readTerminalBreadcrumbEntry();
+		const breadcrumb = await readTerminalBreadcrumbEntry(storage);
 		let chosenSession: string | null | undefined;
 
 		if (breadcrumb) {
@@ -4403,7 +4418,10 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
-		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
+		const dir = resolveSessionDirectory(
+			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
+			storage,
+		);
 		const sessions = await listSessions(dir, storage);
 		return sortPinnedFirst(sessions, await loadPinnedSessionIds());
 	}
@@ -4425,7 +4443,10 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
-		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
+		const dir = resolveSessionDirectory(
+			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
+			storage,
+		);
 		const [pinned, siblingDirs] = await Promise.all([loadPinnedSessionIds(), worktreeSessionDirs(cwd, dir)]);
 		return sortPinnedFirst(filterSessionsForPicker(await listSessions(dir, storage, siblingDirs), pinned), pinned);
 	}

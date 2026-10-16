@@ -36,6 +36,78 @@ import {
 
 const addonUrl = new URL("../native/index.js", import.meta.url).href;
 
+describe("offline native cache confinement", () => {
+	it.skipIf(process.platform !== "linux")(
+		"rejects version and addon symlinks before touching their targets",
+		async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "native-offline-links-"));
+			const loaderPath = path.resolve(import.meta.dir, "../native/loader-state.js");
+			const outside = path.join(root, "outside");
+			const outsideAddon = path.join(root, "outside.node");
+			try {
+				await fs.mkdir(outside);
+				await fs.utimes(outside, 1, 1);
+				const originalMtime = (await fs.stat(outside)).mtimeMs;
+				await fs.writeFile(outsideAddon, "external addon must not be read or replaced");
+				await fs.utimes(outsideAddon, 1, 1);
+				const originalAddonMtime = (await fs.stat(outsideAddon)).mtimeMs;
+				const script = `
+				import * as fs from "node:fs";
+				import * as path from "node:path";
+				import { extractEmbeddedAddons, initLoaderContext, prepareNativeVersionDir } from ${JSON.stringify(loaderPath)};
+				const ctx = initLoaderContext();
+				const outside = ${JSON.stringify(outside)};
+				const outsideAddon = ${JSON.stringify(outsideAddon)};
+				let versionError, addonError;
+				try {
+					fs.symlinkSync(outside, ctx.versionedDir);
+					try { prepareNativeVersionDir(ctx.versionedDir); } catch (error) { versionError = error.message; }
+					fs.unlinkSync(ctx.versionedDir);
+					prepareNativeVersionDir(ctx.versionedDir);
+					const addon = path.join(ctx.versionedDir, "test.node");
+					fs.symlinkSync(outsideAddon, addon);
+					try {
+						extractEmbeddedAddons({
+							files: [{ filename: "test.node", size: 0, zstdPath: "/must-not-read-this-frame" }],
+							targetDir: ctx.versionedDir,
+						});
+					} catch (error) { addonError = error.message; }
+					console.log(JSON.stringify({ versionError, addonError }));
+				} finally {
+					fs.rmSync(path.dirname(path.dirname(ctx.nativesDir)), { recursive: true, force: true });
+				}
+			`;
+				const child = Bun.spawn([process.execPath, "--eval", script], {
+					env: {
+						...process.env,
+						OMP_OFFLINE: "1",
+						OMP_CONFIG_ROOT: path.join(root, "persistent"),
+						OMP_PROFILE: "default",
+						PI_PROFILE: "default",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+				const result = JSON.parse(stdout);
+				expect(result.versionError).toContain("symbolic links are not allowed");
+				expect(result.addonError).toContain("symbolic links are not allowed");
+				expect((await fs.stat(outside)).mtimeMs).toBe(originalMtime);
+				expect((await fs.stat(outsideAddon)).mtimeMs).toBe(originalAddonMtime);
+				expect(await fs.readFile(outsideAddon, "utf8")).toBe("external addon must not be read or replaced");
+				expect(await fs.readdir(outside)).toEqual([]);
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+});
+
 describe("macOS spelling", () => {
 	it("reports platform capability and uses UTF-16 ranges", async () => {
 		const nonsense = "qzxvplmokn";

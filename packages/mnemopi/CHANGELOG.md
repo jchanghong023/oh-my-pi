@@ -6,11 +6,16 @@
 
 - Added correlated embedding API configuration, authentication, HTTP, response-validation, and degradation diagnostics.
 
+### Changed
+
+- Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
+
 ### Fixed
 
 - Fixed custom embedding gateways containing `openrouter.ai` in their path or hostname being mistaken for the official OpenRouter endpoint.
 - Restored the exact `www.openrouter.ai` embedding alias without treating arbitrary subdomains as official endpoints.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
+- Report rejected offline diagnostic database and data paths as structured failures without opening unsafe paths or closing caller-owned databases.
 
 ### Fixed
 

@@ -123,6 +123,155 @@ describe("native addon embedding", () => {
 		}
 	});
 
+	it.skipIf(process.platform !== "linux")(
+		"loads embedded addons from shm or executable memory and reuses images across workers",
+		async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-memfd-"));
+			const manifestDir = path.resolve(import.meta.dir, "../native");
+			const entry = path.join(root, "entry.ts");
+			const worker = path.join(root, "worker.ts");
+			const loaderImport = JSON.stringify(path.join(manifestDir, "loader-state.js"));
+			const offlineImport = JSON.stringify(path.join(manifestDir, "offline-root.js"));
+			const persistentRoot = path.join(root, "persistent");
+			try {
+				const files = await embeddedAddonFiles({ platform: process.platform, arch: process.arch });
+				await Bun.write(
+					worker,
+					`import { loadNative, nativeAddonStatus } from ${loaderImport};
+const bindings = loadNative();
+postMessage({ width: bindings.visibleWidth("abc"), status: nativeAddonStatus() });
+`,
+				);
+				await Bun.write(
+					entry,
+					`import * as fs from "node:fs";
+import * as path from "node:path";
+import { createRequire } from "node:module";
+import { loadNative, nativeAddonStatus } from ${loaderImport};
+import { getOfflineShmState } from ${offlineImport};
+function images() {
+	return fs.readdirSync("/proc/self/fd").flatMap(fd => {
+		try {
+			const name = fs.readlinkSync("/proc/self/fd/" + fd);
+			return name.startsWith("/memfd:omp-native-") ? [name] : [];
+		} catch (error) {
+			if (error.code === "ENOENT") return [];
+			throw error;
+		}
+	}).sort();
+}
+const before = images();
+const bindings = loadNative();
+const status = nativeAddonStatus();
+let fileBacked;
+try {
+	const ordinaryBindings = createRequire(import.meta.url)(status.path);
+	fileBacked = { ok: true, width: ordinaryBindings.visibleWidth("abc") };
+} catch (error) {
+	fileBacked = { ok: false, error: error.message };
+}
+const mappings = fs.readFileSync("/proc/self/maps", "utf8").split("\\n");
+const executableMemory = mappings.some(line => line.includes("memfd:omp-native-") && /^\\S+\\s+\\S*x/.test(line));
+const executableFile = mappings.some(line => line.includes(status.path) && /^\\S+\\s+\\S*x/.test(line));
+const shmMount = fs.readFileSync("/proc/self/mountinfo", "utf8").split("\\n")
+	.map(line => line.split(" ")).find(fields => fields[4] === "/dev/shm");
+const shmNoexec = shmMount?.[5].split(",").includes("noexec") ?? false;
+const own = {
+	before, images: images(), status, width: bindings.visibleWidth("abc"),
+	fileBacked, executableMemory, executableFile, shmNoexec,
+};
+if (process.argv.includes("--child")) {
+	console.log(JSON.stringify(own));
+} else {
+	try {
+		const workers = [];
+		for (let index = 0; index < 3; index++) {
+			const worker = new Worker(new URL("./worker.ts", import.meta.url));
+			try {
+				const { promise, resolve, reject } = Promise.withResolvers();
+				worker.onmessage = event => resolve(event.data);
+				worker.onerror = reject;
+				workers.push({ result: await promise, images: images() });
+			} finally {
+				await worker.terminate();
+			}
+		}
+		const child = Bun.spawn([process.execPath, "--child"], { stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+		]);
+		if (exitCode !== 0) throw new Error(stderr);
+		console.log(JSON.stringify({ own, workers, child: JSON.parse(stdout) }));
+	} finally {
+		const state = getOfflineShmState();
+		fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+	}
+}
+`,
+				);
+				const binary = path.join(root, "probe");
+				const build = await Bun.build({
+					entrypoints: [entry, worker],
+					root: path.resolve(import.meta.dir, "../../.."),
+					target: "bun",
+					format: "esm",
+					files,
+					compile: { outfile: binary, autoloadBunfig: false, autoloadDotenv: false },
+				});
+				expect(build.success).toBe(true);
+				const child = Bun.spawn([binary], {
+					env: {
+						...process.env,
+						OMP_OFFLINE: "1",
+						OMP_CONFIG_ROOT: persistentRoot,
+						OMP_PROFILE: "default",
+						PI_PROFILE: "default",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+				const result = JSON.parse(stdout);
+				expect(result.own.before).toEqual([]);
+				if (result.own.shmNoexec) expect(result.own.fileBacked.ok).toBe(false);
+				if (result.own.fileBacked.ok) {
+					expect(result.own.fileBacked.width).toBe(3);
+					expect(result.own.images).toEqual([]);
+					expect(result.own.executableFile).toBe(true);
+					expect(result.own.executableMemory).toBe(false);
+				} else {
+					expect(result.own.fileBacked.error).toBeString();
+					expect(result.own.images).toHaveLength(1);
+					expect(result.own.executableMemory).toBe(true);
+					expect(result.own.executableFile).toBe(false);
+				}
+				expect(result.own.width).toBe(3);
+				expect(result.own.status.stale).toBe(false);
+				expect(result.own.status.path).toStartWith("/dev/shm/");
+				expect(result.own.status.path).toMatch(/\.[a-f0-9]{64}\.node$/);
+				for (const workerResult of result.workers) {
+					expect(workerResult.images).toEqual(result.own.images);
+					expect(workerResult.result).toEqual({ width: 3, status: result.own.status });
+				}
+				expect(result.child.before).toEqual([]);
+				expect(result.child.images).toEqual(result.own.images);
+				expect(result.child.status).toEqual(result.own.status);
+				expect(result.child.width).toBe(3);
+				expect(result.child.fileBacked.ok).toBe(result.own.fileBacked.ok);
+				expect(result.child.executableMemory).toBe(result.own.executableMemory);
+				expect(result.child.executableFile).toBe(result.own.executableFile);
+				await expect(fs.stat(persistentRoot)).rejects.toMatchObject({ code: "ENOENT" });
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it.skipIf(process.arch !== "x64")("extracts only the selected addon until the loader tries a fallback", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-first-run-"));
 		const nativeDir = path.join(root, "native");
@@ -147,7 +296,31 @@ describe("native addon embedding", () => {
 			const entry = path.join(root, "entry.ts");
 			await Bun.write(
 				entry,
-				`import { loadNative } from ${JSON.stringify(path.join(manifestDir, "loader-state.js"))};\ntry { loadNative(); } catch (error) { process.stdout.write(JSON.stringify({ error: error.message })); }\n`,
+				`import * as fs from "node:fs";
+import * as path from "node:path";
+import { loadNative, initLoaderContext, prepareNativeVersionDir, extractEmbeddedAddons } from ${JSON.stringify(path.join(manifestDir, "loader-state.js"))};
+import { embeddedAddon } from ${JSON.stringify(path.join(manifestDir, "embedded-addon.js"))};
+import { getOfflineShmState } from ${JSON.stringify(path.join(manifestDir, "offline-root.js"))};
+try {
+	if (process.argv.includes("--tamper")) {
+		const ctx = initLoaderContext();
+		prepareNativeVersionDir(ctx.versionedDir);
+		extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: ctx.versionedDir });
+		for (const file of embeddedAddon.files) {
+			const target = path.join(ctx.versionedDir, file.filename);
+			const content = fs.readFileSync(target);
+			content[0] ^= 1;
+			fs.writeFileSync(target, content);
+		}
+	}
+	loadNative();
+} catch (error) {
+	process.stdout.write(JSON.stringify({ error: error.message }));
+} finally {
+	const state = getOfflineShmState();
+	if (state) fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+}
+`,
 			);
 			const binary = path.join(root, process.platform === "win32" ? "probe.exe" : "probe");
 			const build = await Bun.build({
@@ -217,6 +390,39 @@ describe("native addon embedding", () => {
 					expect(await Bun.file(oldCachePath).text()).toBe(
 						`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
 					);
+				}
+			}
+			if (process.platform === "linux") {
+				for (const tamper of [false, true]) {
+					const child = Bun.spawn([binary, ...(tamper ? ["--tamper"] : [])], {
+						env: {
+							...process.env,
+							OMP_OFFLINE: "1",
+							OMP_CONFIG_ROOT: path.join(root, tamper ? "offline-tampered" : "offline-invalid"),
+							OMP_PROFILE: "default",
+							PI_PROFILE: "default",
+							PI_NATIVE_VARIANT: "baseline",
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					const [stdout, stderr, exitCode] = await Promise.all([
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+						child.exited,
+					]);
+					expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+					const { error }: { error: string } = JSON.parse(stdout);
+					if (tamper) {
+						expect(error).toContain("Embedded addon content identity mismatch:");
+						expect(error).not.toContain("File-backed offline native load failed:");
+						expect(error).not.toContain("Executable-memory fallback failed:");
+					} else {
+						expect(error).toContain("File-backed offline native load failed:");
+						expect(error).toContain("Executable-memory fallback failed:");
+						expect(error).toContain("Linux 3.17+ (or a compatible backport)");
+						expect(error).toContain("glibc libc.so.6, procfs");
+					}
 				}
 			}
 		} finally {

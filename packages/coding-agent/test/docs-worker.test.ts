@@ -133,37 +133,53 @@ describe("DocsService real owned worker", () => {
 		expect(await Bun.file(service.databasePath).exists()).toBe(true);
 	});
 
-	it("creates, reads and removes the same OMP_WIKI_DIR database across profiles", async () => {
-		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-wiki-"));
+	it("ignores leftover OMP_WIKI_DIR and keeps public operations scoped to the caller profile", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-wiki-"));
 		cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
 		const documents = path.join(directory, "documents");
+		const profileA = path.join(directory, "profile-a");
+		const profileB = path.join(directory, "profile-b");
 		await fs.mkdir(documents);
-		await Bun.write(path.join(documents, "guide.md"), "# Shared\nsharedwikibeacon stored evidence\n");
 		const previous = process.env.OMP_WIKI_DIR;
-		let writer: DocsService;
-		let reader: DocsService;
 		try {
 			restoreEnvValue("OMP_WIKI_DIR", path.join("team", "wiki"));
-			writer = new DocsService({ agentDir: path.join(directory, "profile-a"), cwd: directory });
-			reader = new DocsService({ agentDir: path.join(directory, "profile-b"), cwd: directory });
+			const writer = new DocsService({ agentDir: profileA, cwd: directory });
+			const reader = new DocsService({ agentDir: profileA, cwd: directory });
+			const other = new DocsService({ agentDir: profileB, cwd: directory });
+			cleanups.push(
+				() => writer.close(),
+				() => reader.close(),
+				() => other.close(),
+			);
+			expect(writer.databasePath).toBe(path.join(profileA, "docs.db"));
+			expect(reader.databasePath).toBe(writer.databasePath);
+			expect(other.databasePath).toBe(path.join(profileB, "docs.db"));
+			await Bun.write(path.join(documents, "guide.md"), "# Profile A\nprofileabeacon stored evidence\n");
+			await writer.init(documents, "manual");
+			expect((await reader.list()).map(index => index.name)).toEqual(["manual"]);
+			expect(await other.list()).toEqual([]);
+			await Bun.write(path.join(documents, "guide.md"), "# Profile B\nprofilebbeacon isolated evidence\n");
+			await other.init(documents, "manual");
+			await fs.rm(documents, { recursive: true });
+			expect(
+				(await reader.search("profileabeacon")).sections.some(hit => hit.text.includes("stored evidence")),
+			).toBe(true);
+			expect((await reader.searchWiki("profileabeacon")).result.total).toBeGreaterThan(0);
+			expect((await reader.search("profilebbeacon")).total).toBe(0);
+			expect((await other.search("profileabeacon")).total).toBe(0);
+			expect((await other.searchWiki("profilebbeacon")).result.total).toBeGreaterThan(0);
+			expect(await Bun.file(path.join(profileA, "docs.db")).exists()).toBe(true);
+			expect(await Bun.file(path.join(profileB, "docs.db")).exists()).toBe(true);
+			expect(await Bun.file(path.join(directory, "team", "wiki", "docs.db")).exists()).toBe(false);
+			await reader.remove("manual");
+			expect(await writer.list()).toEqual([]);
+			expect((await other.list()).map(index => index.name)).toEqual(["manual"]);
+			await other.remove("manual");
+			expect(await other.list()).toEqual([]);
 		} finally {
 			restoreEnvValue("OMP_WIKI_DIR", previous);
 		}
-		cleanups.push(
-			() => writer.close(),
-			() => reader.close(),
-		);
-		await writer.init(documents, "shared");
-		await fs.rm(documents, { recursive: true });
-		expect((await reader.search("sharedwikibeacon")).sections.some(hit => hit.text.includes("stored evidence"))).toBe(
-			true,
-		);
-		expect(await Bun.file(path.join(directory, "team", "wiki", "docs.db")).exists()).toBe(true);
-		expect(await Bun.file(path.join(directory, "profile-a", "docs.db")).exists()).toBe(false);
-		expect(await Bun.file(path.join(directory, "profile-b", "docs.db")).exists()).toBe(false);
-		await reader.remove("shared");
-		expect(await writer.list()).toEqual([]);
-	});
+	}, 30_000);
 
 	it("keeps timer heartbeats and another independent service usable during real DB work", async () => {
 		const f = await fixture();

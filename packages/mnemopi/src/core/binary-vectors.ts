@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 
-import { embeddingDim, type VecType } from "../config";
+import { embeddingDim, resolveMemoryDbPath, type VecType } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 
 export { cosineSimilarity } from "./vector-math";
@@ -182,7 +182,7 @@ export class BinaryVectorStore {
 	private readonly ownsConnection: boolean;
 
 	constructor(options: BinaryVectorStoreOptions = {}) {
-		this.dbPath = options.dbPath ?? ":memory:";
+		this.dbPath = resolveMemoryDbPath(options.dbPath ?? ":memory:");
 		this.tableName = assertSqlIdentifier(options.tableName ?? "binary_vectors");
 		this.conn = options.conn ?? openDatabase(this.dbPath, { create: true, readwrite: true });
 		this.ownsConnection = options.conn === undefined;

@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveMemoryPath } from "../config";
 
-export const DEFAULT_PLUGIN_DIR = join(homedir(), ".hermes", "mnemopi", "plugins");
+const LEGACY_PLUGIN_DIR = join(homedir(), ".hermes", "mnemopi", "plugins");
+export const DEFAULT_PLUGIN_DIR = resolveMemoryPath(LEGACY_PLUGIN_DIR, "plugins");
 
 export type PluginConfig = Record<string, unknown>;
 export type MemoryDict = Record<string, unknown>;
@@ -262,7 +264,9 @@ export type PluginConstructor<T extends MnemopiPlugin = MnemopiPlugin> = new (co
 export class PluginManager {
 	private readonly registry = new Map<string, PluginConstructor>();
 	private readonly instances = new Map<string, MnemopiPlugin>();
-	constructor(private readonly pluginDir = DEFAULT_PLUGIN_DIR) {
+	private readonly pluginDir: string;
+	constructor(pluginDir = LEGACY_PLUGIN_DIR) {
+		this.pluginDir = resolveMemoryPath(pluginDir, "plugins");
 		this.registerPlugin("logging", LoggingPlugin);
 		this.registerPlugin("metrics", MetricsPlugin);
 		this.registerPlugin("filter", FilterPlugin);

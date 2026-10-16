@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveMemoryPath } from "../config";
 
 export const ALLOWED_DELTA_TABLES = new Set(["working_memory", "episodic_memory"] as const);
 export type DeltaTable = "working_memory" | "episodic_memory";
@@ -302,7 +303,7 @@ export class DeltaSync {
 		checkpointDir?: string,
 	) {
 		this.db = databaseOf(mnemopi);
-		this.checkpointDir = checkpointDir ?? checkpointRoot(mnemopi);
+		this.checkpointDir = resolveMemoryPath(checkpointDir ?? checkpointRoot(mnemopi), "sync_checkpoints");
 		mkdirSync(this.checkpointDir, { recursive: true });
 	}
 	private checkpointPath(peerId: string, table: DeltaTable): string {

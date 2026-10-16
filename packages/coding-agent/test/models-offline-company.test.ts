@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 /**
  * `OMP_OFFLINE=1 omp models` in the company environment must list the internal
@@ -50,8 +51,23 @@ async function runModels(
 			options.malformedCompanyConfig ? "{ invalid fixture JSON" : COMPANY_SETTINGS,
 		);
 	}
-	const agentDir = path.join(home, "agent");
-	await fs.mkdir(agentDir);
+	const env: Record<string, string> = {
+		PATH: process.env.PATH ?? "",
+		SystemRoot: process.env.SystemRoot ?? "",
+		HOME: home,
+		USERPROFILE: home,
+		OMP_CONFIG_ROOT: path.join(home, ".omp"),
+		CLAUDE_CONFIG_DIR: claudeDir,
+		PI_CODING_AGENT_DIR: path.join(home, "agent"),
+		PI_CONFIG_DIR: ".omp",
+		NO_COLOR: "1",
+	};
+	if (options.offline) env.OMP_OFFLINE = "1";
+	const shm = getOfflineShmState(env);
+	// A unique persistent fixture root owns exactly this mapped shm domain.
+	if (shm) tempDirs.push(path.dirname(shm.runtimeRoot));
+	const agentDir = shm ? path.join(shm.runtimeRoot, "agent") : env.PI_CODING_AGENT_DIR!;
+	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	if (options.modelsConfig !== undefined) {
 		await fs.writeFile(path.join(agentDir, "models.yml"), JSON.stringify(options.modelsConfig));
 	}
@@ -63,17 +79,6 @@ async function runModels(
 			throw new Error("model CLI fixture forbids network");
 		};`,
 	);
-	const env: Record<string, string> = {
-		PATH: process.env.PATH ?? "",
-		SystemRoot: process.env.SystemRoot ?? "",
-		HOME: home,
-		USERPROFILE: home,
-		CLAUDE_CONFIG_DIR: claudeDir,
-		PI_CODING_AGENT_DIR: agentDir,
-		PI_CONFIG_DIR: ".omp",
-		NO_COLOR: "1",
-	};
-	if (options.offline) env.OMP_OFFLINE = "1";
 	const extensionArgs: string[] = [];
 	if (options.extensionCache) {
 		const extensionFile = path.join(home, "offline-extension.ts");

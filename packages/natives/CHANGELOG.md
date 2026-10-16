@@ -9,11 +9,15 @@
 
 ### Changed
 
+- Keep Linux offline native caches and shortened IPC endpoints in private shm locations.
 - Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.
 
 ### Fixed
 
 - Restored Windows native quality checks without changing GNU/Linux idle heap trimming.
+- Load Linux offline native cache images normally when shm is executable, falling back to sealed executable memfds only when the file-backed load fails (including `noexec` mounts); reuse process-owned memory images across recreated workers without persistent-disk fallback.
+- Reject offline native version-directory and addon symlinks before probing, touching, extracting or loading their external targets.
+- Preserve glibc heap trimming while making inactive-platform memory bookkeeping `const`-correct for strict Windows checks.
 - Preserved TERM cleanup and output when shell cancellation arrives just after a foreground process starts.
 - Restored Windows native quality checks while keeping shell termination immediate and preserving Unix TERM cleanup grace.
 - Kept Python code indexing compatible with the shared parse-cache update.
