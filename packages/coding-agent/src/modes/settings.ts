@@ -1218,7 +1218,7 @@ export const cfgErrorNotify = register({
 	id: "error.notify",
 	type: "enum",
 	values: ["on", "off"] as const,
-	default: "off",
+	default: "on",
 	ui: {
 		tab: "interaction",
 		group: "Notifications",

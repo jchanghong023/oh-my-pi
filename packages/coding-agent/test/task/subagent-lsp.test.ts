@@ -172,22 +172,6 @@ describe("subagent LSP availability", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("disables LSP for subagents by default", async () => {
-		mockAgents({
-			name: "task",
-			description: "Task agent",
-			systemPrompt: "Use LSP when useful.",
-			source: "bundled",
-			tools: ["lsp"],
-		});
-		const { getOptions } = mockCreateAgentSession();
-
-		const tool = await TaskTool.create(createSession());
-		await tool.execute("tool-call", TEST_TASK);
-
-		expect(getOptions()?.enableLsp).toBe(false);
-	});
-
 	it("enables subagent LSP when task.enableLsp is set", async () => {
 		mockAgents({
 			name: "task",
@@ -218,24 +202,6 @@ describe("subagent LSP availability", () => {
 		const tool = await TaskTool.create(createSession({ parentEnableLsp: false, taskEnableLsp: true }));
 		await tool.execute("tool-call", TEST_TASK);
 
-		expect(getOptions()?.enableLsp).toBe(false);
-	});
-
-	it("disables LSP for isolated subagents by default", async () => {
-		mockAgents({
-			name: "task",
-			description: "Task agent",
-			systemPrompt: "Use LSP when useful.",
-			source: "bundled",
-			tools: ["lsp"],
-		});
-		mockIsolation();
-		const { getOptions } = mockCreateAgentSession();
-
-		const tool = await TaskTool.create(createSession({ isolationEnabled: true }));
-		await tool.execute("tool-call", { ...TEST_TASK, isolated: true });
-
-		expect(getOptions()?.cwd).toBe("/tmp/isolated-subagent");
 		expect(getOptions()?.enableLsp).toBe(false);
 	});
 

@@ -241,6 +241,8 @@
 - `composer.shape=box`（Rounded Box）
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 - `display.showTurnTime=true`
+- `task.enableLsp=true`（默认允许子代理使用 LSP；仍遵循父会话禁用与计划模式限制）
+- `error.notify=on`（默认在 Agent 因错误停止时发送终端通知；实际呈现取决于终端支持）
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`（本地 Whisper 与云端转录的区域标签均归一化为基语言，如 `zh-CN`→`zh`；默认 tier parakeet/sherpa 不使用语言参数）
 

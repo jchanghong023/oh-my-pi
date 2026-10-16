@@ -303,13 +303,12 @@ export const cfgTaskMaxConcurrency = register({
 export const cfgTaskEnableLsp = register({
 	id: "task.enableLsp",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "tasks",
 		group: "Subagents",
 		label: "LSP in Subagents",
-		description:
-			"Allow subagents spawned via the task tool to use the lsp tool. Off by default to keep subagents cheap; enable when LSP-aware delegation is worth the extra tokens.",
+		description: "Allow subagents spawned via the task tool to use the lsp tool",
 	},
 });
 

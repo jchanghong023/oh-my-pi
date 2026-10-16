@@ -13,6 +13,7 @@
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
 - Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.
+- Enable LSP access for subagents and terminal error notifications by default, while preserving explicit settings.
 
 ### Fixed
 
