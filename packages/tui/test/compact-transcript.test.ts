@@ -175,6 +175,52 @@ describe("compact transcript activity", () => {
 		expect(JSON.stringify(component.describe(toolCx))).toContain("PRIVATE_OUTPUT");
 	});
 
+	it("preserves write previews and expansion in compact mode while clean mode still hides them", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent(
+			"write",
+			{ path: "/tmp/preview.ts", content: Array.from({ length: 40 }, (_, i) => `WRITE_LINE_${i + 1};`).join("\n") },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(component);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("WRITE_LINE_40;");
+		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("WRITE_LINE_1;");
+		component.setExpanded(true);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("WRITE_LINE_1;");
+		expect(JSON.stringify(component.describe(toolCx))).toContain("WRITE_LINE_40;");
+		component.setToolActivityVisible(false);
+		expect(component.render(80)).toEqual([]);
+		expect(component.describe(toolCx).p?.hidden).toBe(true);
+	});
+
+	it("preserves completed edit diffs on ANSI and native surfaces when switching compact mode", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent(
+			"edit",
+			{ path: "/tmp/preview.ts" },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(component);
+		component.updateResult({
+			content: [{ type: "text", text: "Edited /tmp/preview.ts" }],
+			details: { diff: "-1|const BEFORE_EDIT = 1;\n+1|const AFTER_EDIT = 2;", firstChangedLine: 1 },
+		});
+		for (const compactToolActivity of [true, false, true]) {
+			setChatTranscriptDisplayPreferences({ compactToolActivity });
+			component.invalidate();
+			const rendered = Bun.stripANSI(component.render(80).join("\n"));
+			expect(rendered).toContain("BEFORE_EDIT");
+			expect(rendered).toContain("AFTER_EDIT");
+			const described = JSON.stringify(component.describe(toolCx));
+			expect(described).toContain("BEFORE_EDIT");
+			expect(described).toContain("AFTER_EDIT");
+		}
+	});
+
 	it("retains a single row for long built-in calls, successful output and sealed calls", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const component = new ToolExecutionComponent(

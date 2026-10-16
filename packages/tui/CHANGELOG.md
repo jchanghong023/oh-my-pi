@@ -5,11 +5,12 @@
 ### Added
 
 - Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
-- Compact transcript activity shows each tool invocation on one line, including failures, and keeps hidden thinking and tool output out of expandable native content.
+- Compact transcript activity shows each non-editing tool invocation on one line, including failures, and keeps hidden thinking and compact tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
 
+- Compact display preserves the upstream previews, diffs, and expand/collapse behavior for write, edit, and apply_patch tools.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
