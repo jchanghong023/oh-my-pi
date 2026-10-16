@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Deliver queued user feedback between completed tool batches in active goals, including unattended goals, without interrupting running tools or waiting for the whole goal to finish.
 - Kept offline session paths and lock sidecars inside shm before reads or mutations, including raw symlink/`..` traversal attempts.
 - Preserved dependency lockfiles and internal symlink meaning in offline snapshots, with private backup domains inside a shared sticky container.
 - Loaded Linux-offline native-cache addons through anonymous memfd on compatible systems, without persistent executable fallback or mount changes.

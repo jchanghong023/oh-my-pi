@@ -168,6 +168,77 @@ describe("AgentSession queued steer delivery", () => {
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 
+	for (const goalState of ["active", "paused", "none"] as const) {
+		it(`delivers ${goalState} Goal feedback at the allowed boundary without interrupting a tool batch`, async () => {
+			const { session, mock } = await createSession([
+				{
+					content: [
+						{ type: "toolCall", id: "first", name: "accumulate", arguments: { value: 1 } },
+						{ type: "toolCall", id: "second", name: "accumulate", arguments: { value: 2 } },
+					],
+				},
+				{ content: [{ type: "toolCall", id: "third", name: "accumulate", arguments: { value: 3 } }] },
+				{ content: ["Work finished."] },
+				{ content: ["Feedback received after yield."] },
+			]);
+			if (goalState !== "none") {
+				await session.goalRuntime.createGoal({ objective: "Accumulate the complete batch", autoOrchestrate: true });
+				if (goalState === "paused") await session.goalRuntime.pauseGoal();
+			}
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const totals: number[] = [];
+			let total = 0;
+			let interrupted = false;
+			const schema = type({ value: "number" });
+			const tool: AgentTool<typeof schema> = {
+				name: "accumulate",
+				label: "Accumulate",
+				description: "Accumulate a complete exclusive batch",
+				parameters: schema,
+				concurrency: "exclusive",
+				interruptible: true,
+				async execute(_id, params, signal) {
+					if (params.value === 1) {
+						started.resolve();
+						await release.promise;
+					}
+					interrupted ||= signal?.aborted === true;
+					total += params.value;
+					totals.push(total);
+					return { content: [{ type: "text", text: `total=${total}` }], details: { total } };
+				},
+			};
+			session.agent.setTools([tool]);
+			session.setInterruptMode("immediate");
+			const prompt = session.prompt("start the batch");
+			try {
+				await withTimeout(started.promise, 2_000, "The first tool did not start");
+				await session.prompt("change direction after this batch", { streamingBehavior: "followUp" });
+				expect(session.getQueuedMessages().followUp).toEqual(["change direction after this batch"]);
+			} finally {
+				release.resolve();
+				await prompt;
+			}
+			await session.waitForIdle();
+
+			const nextRequest = JSON.stringify(mock.calls[1].context.messages);
+			expect(nextRequest.includes("change direction after this batch")).toBe(goalState === "active");
+			expect(nextRequest).toContain("total=3");
+			expect(totals).toEqual([1, 3, 6]);
+			expect(interrupted).toBe(false);
+			expect(
+				session.messages.filter(
+					message =>
+						message.role === "user" &&
+						JSON.stringify(message.content).includes("change direction after this batch"),
+				),
+			).toHaveLength(1);
+			expect(mock.calls).toHaveLength(goalState === "active" ? 3 : 4);
+			expect(session.agent.hasQueuedMessages()).toBe(false);
+		});
+	}
+
 	it("rejects a synthetic continue while streaming without queuing a user message", async () => {
 		const { session } = await createSession([{ content: ["host answer"] }]);
 		let checked = false;
