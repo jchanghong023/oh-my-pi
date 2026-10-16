@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Restored Windows native quality checks without changing GNU/Linux idle heap trimming.
 - Preserved TERM cleanup and output when shell cancellation arrives just after a foreground process starts.
 - Restored Windows native quality checks while keeping shell termination immediate and preserving Unix TERM cleanup grace.
 - Kept Python code indexing compatible with the shared parse-cache update.

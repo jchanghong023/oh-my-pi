@@ -223,14 +223,15 @@ describe("native transcript redesign", () => {
 		const at = new Date(2026, 0, 1, 18, 5).getTime();
 		for (const [hour12, shown] of [
 			[false, /^18:05$/],
-			[true, /^0?6:05\s?pm$/i],
+			[true, /^0?6:05$/],
 		] as const) {
 			harness = await TspHarness.start(undefined, { hour12 });
 			harness.tui.addChild(new UserMessageComponent("Fix the build", { timestamp: at }));
 			await harness.render();
 			const time = harness.find(node => node.p?.role === "omp.user.time");
-			expect(texts(time)).toMatch(shown);
-			expect(String(prop(time, "title"))).toMatch(hour12 ? /pm/i : /18:05/);
+			// Day-period words and their position follow the host locale.
+			expect(texts(time).match(/\d{1,2}:\d{2}/)?.[0]).toMatch(shown);
+			expect(String(prop(time, "title")).match(/\d{1,2}:\d{2}/)?.[0]).toMatch(shown);
 			harness.stop();
 			harness = undefined;
 		}

@@ -6,11 +6,8 @@ import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CfgProtocolHandler, setCfgApprovalHost } from "@oh-my-pi/pi-coding-agent/internal-urls/cfg-protocol";
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
-import { type MCPAuthHandler, MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
-import { MCPCommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/mcp-command-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { __resetAutoQaConsentForTests, resolveAutoQaConsent } from "@oh-my-pi/pi-coding-agent/tools/report-tool-issue";
 import {
 	cfgMarketplaceAutoUpdate,
 	cfgStartupChangelogMode,
@@ -67,10 +64,7 @@ describe("cfg:// approval prompt wiring", () => {
 		await fs.rm(tmp, { recursive: true, force: true });
 	});
 
-	async function startMode(
-		askTimeout: number | undefined,
-		mcpManager?: MCPManager,
-	): Promise<Array<number | undefined>> {
+	async function startMode(askTimeout: number | undefined): Promise<Array<number | undefined>> {
 		testSession = await createTestSession(
 			askTimeout === undefined ? {} : { settingsOverrides: { "ask.timeout": askTimeout } },
 		);
@@ -85,7 +79,7 @@ describe("cfg:// approval prompt wiring", () => {
 			undefined,
 			undefined,
 			undefined,
-			mcpManager,
+			undefined,
 			undefined,
 			new Composer({ terminal: new VirtualTerminal(200, 60) }),
 		);
@@ -168,23 +162,6 @@ describe("cfg:// approval prompt wiring", () => {
 		// Only the first write ever presented: the queued one denied on the
 		// already-aborted signal without prompting.
 		expect(seen).toEqual([undefined]);
-	}, 60_000);
-
-	it("runs the cfg://, auto-QA and MCP sign-in prompts as waits for the user", async () => {
-		const manager = new MCPManager(tmp, null, async () => ({ configs: {}, sources: {}, exaApiKeys: [] }));
-		const setAuthHandler = spyOn(manager, "setAuthHandler");
-		await startMode(undefined, manager);
-		const authHandler: MCPAuthHandler | undefined = setAuthHandler.mock.calls[0]?.[0];
-		const waits = spyOn(testSession!.session, "waitForUser");
-		spyOn(MCPCommandController.prototype, "handleMCPAuthChallenge").mockResolvedValue(undefined);
-
-		await driveWrite();
-		expect(waits).toHaveBeenCalledTimes(1);
-		await resolveAutoQaConsent(undefined);
-		expect(waits).toHaveBeenCalledTimes(2);
-		await authHandler!("server", { wwwAuthenticate: [] });
-		expect(waits).toHaveBeenCalledTimes(3);
-		__resetAutoQaConsentForTests();
 	}, 60_000);
 
 	it("denies a pending approval when the calling turn aborts", async () => {

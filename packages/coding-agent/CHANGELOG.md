@@ -23,6 +23,7 @@
 
 ### Fixed
 
+- Restored browser relay-tab recovery after Chrome detaches the debugger while retaining cancellation of supervisor-side tool calls.
 - Tracked `/team` blockers individually with stable IDs and explicit recheck decisions, so partial fixes and invalid reviews cannot clear unrelated blockers.
 - Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.
 - Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.

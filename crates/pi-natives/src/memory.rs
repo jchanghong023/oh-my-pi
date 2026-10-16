@@ -31,10 +31,17 @@
 pub struct NativeWork(());
 
 /// Count a blocking native job as running until the guard drops.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[inline]
 pub fn native_work() -> NativeWork {
-	#[cfg(all(target_os = "linux", target_env = "gnu"))]
 	allocator::begin();
+	NativeWork(())
+}
+
+/// No idle trimmer runs on platforms without glibc.
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[inline]
+pub const fn native_work() -> NativeWork {
 	NativeWork(())
 }
 
@@ -48,11 +55,16 @@ impl Drop for NativeWork {
 
 /// Report memory freed outside a running job, so the trimmer returns its pages
 /// after the next quiet period.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
 #[inline]
 pub fn released() {
-	#[cfg(all(target_os = "linux", target_env = "gnu"))]
 	allocator::settled();
 }
+
+/// No idle trimmer runs on platforms without glibc.
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[inline]
+pub const fn released() {}
 
 /// Owns a job result until it leaves Rust, then reports it [`released`].
 ///

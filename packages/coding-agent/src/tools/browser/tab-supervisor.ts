@@ -1039,7 +1039,7 @@ async function runInTabWithSnapshot(
 				// tab itself closes, so only a re-adoption that worked names another extension's frame as the cause.
 				const detached = `${error.message}. ${DEBUGGER_DETACH_CAUSE}${landed}`;
 				const lost = `${error.message}${landed}. omp could not reattach to the tab, so it was released: either the tab was closed, or ${DEBUGGER_DETACH_REFUSAL}. If the tab is still open, open it again once that frame is gone; if Chrome refused the attach, the relay hides the tab until its URL changes, so navigate it in Chrome first`;
-				const reattached = await recoverWorkerTab(tab, name, opts.timeoutMs, lost, {
+				const reattached = await recoverWorkerTab(tab, name, pending, opts.timeoutMs, lost, {
 					recover: false,
 					failedReason: lost,
 				});

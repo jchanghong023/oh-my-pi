@@ -182,7 +182,7 @@ describe("libkitty end-to-end", () => {
 		}
 	});
 
-	it("hides thinking already retired to native scrollback when Alt+P toggles", async () => {
+	it("keeps completed thinking out of native scrollback across Alt+P toggles", async () => {
 		const usage: Usage = {
 			input: 0,
 			output: 0,
@@ -216,9 +216,8 @@ describe("libkitty end-to-end", () => {
 			timestamp: 1,
 		};
 
-		// A short viewport forces the oldest finalized blocks into immutable
-		// terminal history, which is where the regression hid (a plain viewport
-		// repaint leaves retired rows untouched).
+		// Force finalized answers into immutable terminal history; completed
+		// reasoning must never accompany them, even when visibility is toggled.
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });
 		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
@@ -226,37 +225,37 @@ describe("libkitty end-to-end", () => {
 		void mode.getUserInput();
 		await term.waitForRender();
 
-		// Observed reasoning content unlocks Alt+P and renders the block visible.
+		// Observed reasoning unlocks Alt+P but completed turns stay history-hidden.
 		mode.noteDisplayableThinkingContent(thinkingMessage);
 		mode.addMessageToChat(thinkingMessage);
 		for (let i = 0; i < 12; i++) {
 			mode.addMessageToChat(assistantText(`Filler answer number ${i} occupying a transcript row.`));
 		}
 
-		// Retirement offers one finalized batch per frame under capacity pressure;
-		// drive frames until the thinking turn commits to native scrollback.
+		// Drive retirement until the first visible answer reaches native scrollback.
 		const committedRows = () => {
 			const { baseY } = term.getBufferPosition();
 			return plainRows(term.getScrollBuffer()).slice(0, baseY);
 		};
-		for (let i = 0; i < 20 && !committedRows().some(row => row.includes(THINK)); i++) {
+		for (let i = 0; i < 20 && !committedRows().some(row => row.includes("First visible answer.")); i++) {
 			mode.ui.requestRender(true);
 			await term.waitForRender();
 		}
-		expect(committedRows().some(row => row.includes(THINK))).toBe(true);
+		expect(committedRows().some(row => row.includes("First visible answer."))).toBe(true);
+		expect(plainRows(term.getScrollBuffer()).some(row => row.includes(THINK))).toBe(false);
 
-		// A live editor draft must survive the toggle's history rebuild.
+		// A live editor draft must survive visibility changes.
 		term.sendInput("LIVE_EDITOR_DRAFT");
 		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT")));
 
-		// Alt+P (ESC p): the real keybinding path toggles thinking hidden.
-		term.sendInput("\x1bp");
-		await term.waitForRender(() => !plainRows(term.getScrollBuffer()).some(row => row.includes(THINK)));
-
-		// The retired history was cleared and replayed hidden — the marker is gone
-		// from scrollback and viewport alike — while the live editor stays mounted.
-		expect(plainRows(term.getScrollBuffer()).some(row => row.includes(THINK))).toBe(false);
-		expect(plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
+		// Neither hiding nor showing current thinking may replay completed reasoning.
+		for (let i = 0; i < 2; i++) {
+			term.sendInput("\x1bp");
+			await term.waitForRender();
+			expect(plainRows(term.getScrollBuffer()).some(row => row.includes(THINK))).toBe(false);
+			expect(plainRows(term.getScrollBuffer()).some(row => row.includes("First visible answer."))).toBe(true);
+			expect(plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
+		}
 	});
 	it("hides tool activity already retired to native scrollback when the real shortcut toggles", async () => {
 		const usage: Usage = {
@@ -340,7 +339,7 @@ describe("libkitty end-to-end", () => {
 		expect(plainRows(term.getScrollBuffer()).some(row => row.includes(TOOL_MARKER))).toBe(false);
 		expect(plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);
 	});
-	it("replaces retired history after /shake without obscuring a long reply beside the Todo HUD", async () => {
+	it("preserves a retired long reply and Todo HUD when shaking hidden thinking", async () => {
 		const usage: Usage = {
 			input: 0,
 			output: 0,
@@ -380,12 +379,10 @@ describe("libkitty end-to-end", () => {
 		mode.noteDisplayableThinkingContent(message);
 		mode.setTodos([{ content: "Review answer", status: "in_progress" }]);
 		await mode.renderInitialMessages({ clearTerminalHistory: true });
-		await term.waitForRender(() =>
-			plainRows(term.getScrollBuffer()).some(row => row.includes("SHAKE_RETIRED_REASONING")),
-		);
+		await term.waitForRender(() => plainRows(term.getScrollBuffer()).some(row => row.includes("Answer marker 35")));
 
 		const buffer = () => plainRows(term.getScrollBuffer());
-		expect(buffer().some(row => row.includes("SHAKE_RETIRED_REASONING"))).toBe(true);
+		expect(buffer().some(row => row.includes("SHAKE_RETIRED_REASONING"))).toBe(false);
 		await mode.handleShakeCommand("thinking");
 		await term.waitForRender();
 
