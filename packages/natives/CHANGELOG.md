@@ -9,10 +9,12 @@
 
 ### Changed
 
+- Keep Linux offline native caches and shortened IPC endpoints in private shm locations.
 - Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.
 
 ### Fixed
 
+- Preserve glibc heap trimming while making inactive-platform memory bookkeeping `const`-correct for strict Windows checks.
 - Preserved TERM cleanup and output when shell cancellation arrives just after a foreground process starts.
 - Restored Windows native quality checks while keeping shell termination immediate and preserving Unix TERM cleanup grace.
 - Kept Python code indexing compatible with the shared parse-cache update.

@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { popLoopPhase, pushLoopPhase, withLoopPhase } from "@oh-my-pi/pi-utils";
 
-import { dbPath as configuredDbPath } from "../config";
+import { dbPath as configuredDbPath, resolveMemoryDbPath } from "../config";
 import { closeQuietly } from "../db";
 import type { MemoryInput, Metadata } from "../types";
 import { AnnotationStore } from "./annotations";
@@ -281,7 +281,7 @@ function normalizeDate(value: string | Date | null | undefined): string | null |
 
 function resolveDbPath(options: MnemopiOptions, bank: string): string | undefined {
 	const explicit = options.dbPath ?? options.db_path;
-	if (explicit !== undefined) return explicit;
+	if (explicit !== undefined) return resolveMemoryDbPath(explicit);
 	if (options.db !== undefined) return undefined;
 	if (bank !== "default") return new BankManager().getBankDbPath(bank);
 	return configuredDbPath();

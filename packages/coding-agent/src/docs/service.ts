@@ -6,6 +6,7 @@ import {
 	type WikiToolPage,
 	wikiWaitMinimum,
 } from "@oh-my-pi/pi-natives";
+import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
 import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { DOCS_WORKER_ARG } from "../cli/worker-selectors";
@@ -126,11 +127,11 @@ export class DocsService {
 
 	constructor(options: DocsServiceOptions) {
 		this.cwd = path.resolve(options.cwd ?? process.cwd());
-		const wikiDir = process.env.OMP_WIKI_DIR?.trim();
-		const agentDir = wikiDir ? path.resolve(this.cwd, wikiDir) : options.agentDir;
-		this.databasePath = path.join(agentDir, "docs.db");
 		// The helper's SDK/test fallback has its own cwd; resolve the DB in the caller's cwd.
-		this.#options = { agentDir: path.resolve(agentDir), cwd: this.cwd };
+		const agentDir = path.resolve(options.agentDir);
+		this.databasePath = path.join(agentDir, "docs.db");
+		assertOfflineShmPath(this.databasePath);
+		this.#options = { agentDir, cwd: this.cwd };
 	}
 
 	async list(options: { signal?: AbortSignal } = {}): Promise<DocsIndexSummary[]> {
@@ -324,6 +325,7 @@ export class DocsService {
 		try {
 			let worker = this.#worker;
 			if (!worker) {
+				assertOfflineShmPath(this.databasePath);
 				const { spawned, handle } = spawnDocsWorker(error => {
 					if (this.#worker === owned) this.#failAll(error);
 				});

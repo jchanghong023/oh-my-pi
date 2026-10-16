@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +9,7 @@ import {
 	resolveExplicitPythonRuntime,
 	resolvePythonRuntime,
 } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import * as piUtils from "@oh-my-pi/pi-utils";
 
 describe("Python gateway environment filtering", () => {
@@ -21,6 +23,11 @@ describe("Python gateway environment filtering", () => {
 			PI_CUSTOM: "1",
 			LC_ALL: "en_US.UTF-8",
 			LD_LIBRARY_PATH: "/opt/conda/lib",
+			OMP_OFFLINE: " TrUe ",
+			OMP_CONFIG_ROOT: "/nfs/custom-omp-root",
+			OMP_PROFILE: "chip",
+			OMP_SKILLS_DIR: "/nfs/shared-skills",
+			OMP_API_TOKEN: "never-inherit",
 		};
 
 		const filtered = filterEnv(env);
@@ -30,6 +37,11 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.PI_CUSTOM).toBe("1");
 		expect(filtered.LC_ALL).toBe("en_US.UTF-8");
 		expect(filtered.LD_LIBRARY_PATH).toBe("/opt/conda/lib");
+		expect(filtered.OMP_OFFLINE).toBe(env.OMP_OFFLINE);
+		expect(filtered.OMP_CONFIG_ROOT).toBe(env.OMP_CONFIG_ROOT);
+		expect(filtered.OMP_PROFILE).toBe(env.OMP_PROFILE);
+		expect(filtered.OMP_SKILLS_DIR).toBe(env.OMP_SKILLS_DIR);
+		expect(filtered.OMP_API_TOKEN).toBeUndefined();
 		expect(filtered.OPENAI_API_KEY).toBeUndefined();
 		expect(filtered.ANTHROPIC_API_KEY).toBeUndefined();
 		expect(filtered.UNSAFE_TOKEN).toBeUndefined();
@@ -50,6 +62,67 @@ describe("Python gateway environment filtering", () => {
 		expect(filtered.LC_CTYPE).toBe("UTF-8");
 		expect(filtered.LC_MESSAGES).toBe("en_US.UTF-8");
 	});
+
+	const python = piUtils.$which("python3") ?? piUtils.$which("python");
+	it.skipIf(process.platform !== "linux" || !python)(
+		"preserves original root and profile through Python into a nested OMP process",
+		async () => {
+			const originalRoot = `/nfs/omp-python-${randomUUID()}`;
+			const env = filterEnv({
+				...process.env,
+				OMP_OFFLINE: " YeS ",
+				OMP_CONFIG_ROOT: originalRoot,
+				OMP_PROFILE: "python-nested",
+				OMP_SKILLS_DIR: "/nfs/shared-omp-skills",
+				OMP_API_TOKEN: "private",
+				OPENAI_API_KEY: "private",
+			});
+			const expected = getOfflineShmState(env)!;
+			try {
+				const script = `
+					import { getConfigRootDir, getOfflineShmState } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-utils"))};
+					console.log(JSON.stringify({
+						state: getOfflineShmState(),
+						configRoot: getConfigRootDir(),
+						offline: process.env.OMP_OFFLINE,
+						originalRoot: process.env.OMP_CONFIG_ROOT,
+						profile: process.env.OMP_PROFILE,
+						skills: process.env.OMP_SKILLS_DIR,
+						leaked: !!(process.env.OMP_API_TOKEN || process.env.OPENAI_API_KEY),
+					}));
+				`;
+				const child = Bun.spawn(
+					[
+						python!,
+						"-c",
+						"import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:]).returncode)",
+						process.execPath,
+						"--eval",
+						script,
+					],
+					{ env, stdout: "pipe", stderr: "pipe" },
+				);
+				const [stdout, stderr, code] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+				expect(JSON.parse(stdout)).toEqual({
+					state: expected,
+					configRoot: path.join(expected.runtimeRoot, "profiles", "python-nested"),
+					offline: " YeS ",
+					originalRoot,
+					profile: "python-nested",
+					skills: "/nfs/shared-omp-skills",
+					leaked: false,
+				});
+			} finally {
+				fs.rmSync(path.dirname(expected.runtimeRoot), { recursive: true, force: true });
+			}
+		},
+		10_000,
+	);
 });
 
 describe("enumeratePythonRuntimes", () => {

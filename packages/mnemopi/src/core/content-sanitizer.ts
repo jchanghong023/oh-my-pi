@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveMemoryPath } from "../config";
 
 export const SIZE_HARD_CAP = 1_000_000;
 export const SIZE_BASE64_CHECK = 100_000;
@@ -18,9 +19,11 @@ export interface BlobMetadata {
 }
 
 export function blobRoot(env: NodeJS.ProcessEnv = process.env): string {
-	return env.MNEMOPI_BLOB_DIR && env.MNEMOPI_BLOB_DIR.length > 0
-		? env.MNEMOPI_BLOB_DIR
-		: join(homedir(), ".hermes", "mnemopi", "blobs");
+	const configured =
+		env.MNEMOPI_BLOB_DIR && env.MNEMOPI_BLOB_DIR.length > 0
+			? env.MNEMOPI_BLOB_DIR
+			: join(homedir(), ".hermes", "mnemopi", "blobs");
+	return resolveMemoryPath(configured, "blobs", env);
 }
 
 export function computeSha256(data: Uint8Array | string): string {

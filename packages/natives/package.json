@@ -77,6 +77,11 @@
       "import": "./native/path.js",
       "default": "./native/path.js"
     },
+    "./offline-root": {
+      "types": "./native/offline-root.d.ts",
+      "import": "./native/offline-root.js",
+      "default": "./native/offline-root.js"
+    },
     "./desktop": {
       "types": "./native/desktop.d.ts",
       "import": "./native/desktop.js",

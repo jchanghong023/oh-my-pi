@@ -25,6 +25,7 @@ import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@o
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
+import { armOfflineShmBackupOnOutput, startOfflineShmBackup } from "./offline/backup-lifecycle";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import {
@@ -824,6 +825,9 @@ async function runInteractiveMode(
 		}
 		throw error;
 	}
+
+	// Setup dialogs and transcript replay are finished; the composer accepts input.
+	using _backupLifecycle = { [Symbol.dispose]: startOfflineShmBackup(message => mode.showWarning(message)) };
 
 	if (startupGoal !== undefined) {
 		try {
@@ -2938,6 +2942,7 @@ export async function runRootCommand(
 				// long `-p` run's subagents do not keep growing it.
 				if (!$env.PI_TIMING) logger.endTiming();
 				const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
+				const stopBackup = armOfflineShmBackupOnOutput(message => process.stderr.write(`${message}\n`));
 				const exitCode = await runPrintMode(session, {
 					mode,
 					messages: initialArgs.messages,
@@ -2946,7 +2951,7 @@ export async function runRootCommand(
 					printThoughts: initialArgs.printThoughts,
 					planYolo: parsedArgs.planYolo,
 					mcpManager,
-				});
+				}).finally(stopBackup);
 				if ($env.PI_TIMING) {
 					logger.printTimings();
 				}

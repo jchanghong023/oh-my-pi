@@ -93,6 +93,7 @@ async function createHarness(factory: ExtensionFactory) {
 		updateEditorBorderColor: vi.fn(),
 		updatePendingMessagesDisplay: vi.fn(),
 		flushPendingBashComponents: vi.fn(),
+		clearThinkingPreview: vi.fn(),
 		showStatus: vi.fn(),
 		showError: vi.fn(),
 		handleClearCommand: vi.fn(),

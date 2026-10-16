@@ -1,5 +1,8 @@
 import * as fs from "node:fs/promises";
-import { isEnoent, logger, ptree } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
+import { ipcEndpoint } from "@oh-my-pi/pi-natives";
+import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
+import { getConfigRootDir, getOfflineShmState, isEnoent, logger, ptree } from "@oh-my-pi/pi-utils";
 import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import { encodeMessageFrame, MessageFramer, MessageFramingError } from "../jsonrpc/message-framing";
 import { ToolAbortError } from "../tools/tool-errors";
@@ -247,7 +250,30 @@ export class DapClient {
 		env: Record<string, string | undefined>;
 		timeoutMs: number;
 	}): Promise<DapClient> {
-		const socketPath = `/tmp/dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}.sock`;
+		const socketName = `dap-${adapter.name}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const offline = getOfflineShmState();
+		let socketPath = `/tmp/${socketName}.sock`;
+		if (offline) {
+			const tempDir = ensureOfflineShmDirectory(
+				path.relative(offline.runtimeRoot, path.join(getConfigRootDir(), "tmp")),
+			)!;
+			// ipcEndpoint also shortens long runtime/profile paths to fit sun_path.
+			socketPath = ipcEndpoint(tempDir, socketName);
+			const socketDir = path.dirname(socketPath);
+			if (socketDir !== tempDir) {
+				// External adapters bind their own sockets, so native listen() cannot
+				// initialize/validate its private relocation directory for them.
+				try {
+					await fs.mkdir(socketDir, { mode: 0o700 });
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+				}
+				const stat = await fs.lstat(socketDir);
+				if (!stat.isDirectory() || stat.uid !== process.geteuid!() || (stat.mode & 0o077) !== 0) {
+					throw new Error(`Unsafe offline DAP socket directory: ${socketDir}`);
+				}
+			}
+		}
 		const proc = ptree.spawn([adapter.resolvedCommand, ...adapter.args, `--listen=unix:${socketPath}`], {
 			cwd,
 			stdin: "pipe",

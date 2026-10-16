@@ -3,7 +3,8 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FileLock as NativeFileLock } from "@oh-my-pi/pi-natives";
-import { getSessionOwnersDir } from "@oh-my-pi/pi-utils/dirs";
+import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
+import { getOfflineShmState, getSessionOwnersDir } from "@oh-my-pi/pi-utils/dirs";
 import { isBunTestRuntime } from "@oh-my-pi/pi-utils/env";
 import { type FileLockHandle, tryAcquireFileLock, withFileLockSync } from "@oh-my-pi/pi-utils/file-lock";
 import { type FsError, hasFsCode, isEnoent } from "@oh-my-pi/pi-utils/fs-error";
@@ -23,6 +24,41 @@ import {
 /** Shared base flags for the held transcript descriptor; callers add `O_APPEND` or `O_TRUNC`. */
 const SESSION_WRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT;
 const utf8Decoder = new TextDecoder("utf-8");
+
+/** A rejected offline path must not be swallowed by best-effort migrations. */
+export class OfflineSessionPathError extends Error {}
+
+/**
+ * A session file is active self-data, never an implicit restore source. Check
+ * lexically before any filesystem access; callers must restore old sessions
+ * (and their attachments) into the runtime root themselves.
+ */
+export function assertOfflineSessionPath(filePath: string, storage?: SessionStorage): void {
+	if (storage && !(storage instanceof FileSessionStorage)) return;
+	const state = getOfflineShmState();
+	if (!state) return;
+	const relative = path.relative(state.runtimeRoot, path.resolve(filePath));
+	if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+		throw new OfflineSessionPathError(
+			`Cannot use session path "${filePath}" outside the offline shm runtime root. ` +
+				`Manually restore the session and its attachments into "${state.runtimeRoot}", then resume that runtime path. ` +
+				`External session files are not automatically imported or restored.`,
+		);
+	}
+	// Inspect only shm components, never follow a restored link back to disk.
+	let current = state.runtimeRoot;
+	for (const component of relative.split(path.sep)) {
+		if (!component) continue;
+		current = path.join(current, component);
+		const stat = fs.lstatSync(current, { throwIfNoEntry: false });
+		if (!stat) break;
+		if (stat.isSymbolicLink()) {
+			throw new OfflineSessionPathError(
+				`Cannot use symlinked session path "${filePath}" in offline shm mode. Restore real files into the runtime root.`,
+			);
+		}
+	}
+}
 
 /**
  * Basename of a rewrite staged by {@link sessionStagingPath}; group 1 is the
@@ -936,12 +972,19 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	ensureDirSync(dir: string): void {
+		assertOfflineSessionPath(dir);
+		const state = getOfflineShmState();
+		if (state) {
+			ensureOfflineShmDirectory(path.relative(state.runtimeRoot, path.resolve(dir)));
+			return;
+		}
 		if (!fs.existsSync(dir)) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
 	}
 
 	existsSync(path: string): boolean {
+		assertOfflineSessionPath(path);
 		return fs.existsSync(path);
 	}
 
@@ -997,6 +1040,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async updateSessionTitle(fpath: string, update: SessionTitleUpdate): Promise<void> {
+		assertOfflineSessionPath(fpath);
 		const fd = fs.openSync(fpath, "r+");
 		try {
 			const buf = Buffer.from(serializeTitleSlot(update), "utf-8");
@@ -1016,11 +1060,13 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	statSync(path: string): SessionStorageStat {
+		assertOfflineSessionPath(path);
 		const stats = fs.statSync(path);
 		return { size: stats.size, mtimeMs: stats.mtimeMs, mtime: stats.mtime, ctimeMs: stats.ctimeMs };
 	}
 
 	listFilesSync(dir: string, pattern: string): string[] {
+		assertOfflineSessionPath(dir);
 		try {
 			return Array.from(new Bun.Glob(pattern).scanSync(dir)).map(name => path.join(dir, name));
 		} catch {
@@ -1029,6 +1075,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async exists(path: string): Promise<boolean> {
+		assertOfflineSessionPath(path);
 		try {
 			await fs.promises.access(path);
 			return true;
@@ -1039,14 +1086,17 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	readText(path: string): Promise<string> {
+		assertOfflineSessionPath(path);
 		return Bun.file(path).text();
 	}
 
 	readTextSync(path: string): string {
+		assertOfflineSessionPath(path);
 		return fs.readFileSync(path, "utf8");
 	}
 
 	async readTextSlices(path: string, prefixBytes: number, suffixBytes: number): Promise<[string, string]> {
+		assertOfflineSessionPath(path);
 		return peekFileEnds(path, prefixBytes, suffixBytes, (head, tail) => [
 			utf8Decoder.decode(head),
 			utf8Decoder.decode(tail),
@@ -1054,6 +1104,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async hasAssistantTurn(path: string): Promise<boolean> {
+		assertOfflineSessionPath(path);
 		const fileHandle = await fsp.open(path, "r");
 		try {
 			for await (const line of fileHandle.readLines()) {
@@ -1065,8 +1116,10 @@ export class FileSessionStorage implements SessionStorage {
 		}
 	}
 
-	async writeText(path: string, content: string): Promise<void> {
-		await Bun.write(path, content, { createPath: true });
+	async writeText(fpath: string, content: string): Promise<void> {
+		assertOfflineSessionPath(fpath);
+		if (getOfflineShmState()) this.ensureDirSync(path.dirname(fpath));
+		await Bun.write(fpath, content, { createPath: true });
 	}
 
 	async writeTextAtomic(fpath: string, content: string, options?: WriteTextAtomicOptions): Promise<void> {
@@ -1091,9 +1144,11 @@ export class FileSessionStorage implements SessionStorage {
 		stage: (tempPath: string) => Promise<void>,
 		options: WriteTextAtomicOptions | undefined,
 	): Promise<void> {
+		assertOfflineSessionPath(fpath);
 		const dir = path.resolve(fpath, "..");
 		const tempPath = sessionStagingPath(fpath);
-		await fs.promises.mkdir(dir, { recursive: true });
+		if (getOfflineShmState()) this.ensureDirSync(dir);
+		else await fs.promises.mkdir(dir, { recursive: true });
 		try {
 			await stage(tempPath);
 		} catch (err) {
@@ -1133,6 +1188,8 @@ export class FileSessionStorage implements SessionStorage {
 	 * Windows-style EPERM at the sync layer used by the atomic path.
 	 */
 	renameSync(source: string, target: string): void {
+		assertOfflineSessionPath(source);
+		assertOfflineSessionPath(target);
 		fs.renameSync(source, target);
 	}
 
@@ -1203,6 +1260,8 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	async rename(path: string, nextPath: string): Promise<void> {
+		assertOfflineSessionPath(path);
+		assertOfflineSessionPath(nextPath);
 		try {
 			await fs.promises.rename(path, nextPath);
 		} catch (err) {
@@ -1211,6 +1270,7 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	unlink(path: string): Promise<void> {
+		assertOfflineSessionPath(path);
 		return fs.promises.unlink(path);
 	}
 
@@ -1221,6 +1281,8 @@ export class FileSessionStorage implements SessionStorage {
 	}
 
 	openWriter(fpath: string, options?: { flags?: "a" | "w"; onError?: (err: Error) => void }): SessionStorageWriter {
+		assertOfflineSessionPath(fpath);
+		if (getOfflineShmState()) this.ensureDirSync(path.dirname(fpath));
 		const lockPath = this.#publishLockPath(fpath);
 		const gatePath = this.#osGatePath(lockPath);
 		return new FileSessionStorageWriter(fpath, {
@@ -1231,6 +1293,7 @@ export class FileSessionStorage implements SessionStorage {
 
 	/** Run a synchronous session mutation under its cross-process lock. */
 	withSessionFileLockSync<T>(sessionPath: string, operation: () => T): T {
+		assertOfflineSessionPath(sessionPath);
 		return withFileLockSync(sessionPath, operation);
 	}
 
@@ -1241,6 +1304,8 @@ export class FileSessionStorage implements SessionStorage {
 	 * Throws {@link SessionLockError} while another writer holds the lock.
 	 */
 	replaceSessionFileSync(fpath: string, replacement: string, unchanged: () => boolean): boolean {
+		assertOfflineSessionPath(fpath);
+		assertOfflineSessionPath(replacement);
 		let replaced = false;
 		this.#withPublishLock(fpath, () => {
 			if (!unchanged()) return;
@@ -1257,6 +1322,7 @@ export class FileSessionStorage implements SessionStorage {
 	 * owned, so it never moves a session off its file.
 	 */
 	claimSession(sessionId: string, sessionPath: string): (() => void) | null {
+		assertOfflineSessionPath(sessionPath);
 		const onDisk = readSessionHeaderIdSync(sessionPath);
 		if (onDisk !== undefined && onDisk !== sessionId) return null;
 		let held = sessionLeases.get(sessionId);
@@ -1293,6 +1359,7 @@ export class FileSessionStorage implements SessionStorage {
 		shouldDelete: (content: string) => boolean,
 		diagnostic?: SessionDeletionDiagnostic,
 	): Promise<boolean> {
+		assertOfflineSessionPath(sessionPath);
 		return logger.withLogContext(
 			{
 				operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,

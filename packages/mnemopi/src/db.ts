@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { dbPath } from "./config";
+import { dbPath, resolveMemoryDbPath } from "./config";
 
 export type SqlitePageSize = number | "os";
 
@@ -77,6 +77,7 @@ type TxDatabase = Database & { [TX_STATE]?: TxState };
 type ExtensionDatabase = Database & { loadExtension(path: string): void };
 
 export function openDatabase(path: DatabasePath = dbPath(), options: OpenDatabaseOptions = {}): Database {
+	path = resolveMemoryDbPath(path);
 	if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
 	const db = new Database(path, {
 		create: options.create ?? true,

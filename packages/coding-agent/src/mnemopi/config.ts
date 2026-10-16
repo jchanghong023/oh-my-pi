@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
+import { resolveMemoryDbPath } from "@oh-my-pi/pi-mnemopi/config";
 import { getMemoriesDir, logger, withLoopPhase } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { getCompanyEmbeddingDefaults } from "./company-embeddings";
@@ -71,9 +72,9 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const configuredDbPath = cfgMnemopiDbPath.get(settings);
 	const cwd = settings.getCwd();
 	const scoping = cfgMnemopiScoping.get(settings);
-	const dbPath = configuredDbPath?.trim()
-		? configuredDbPath
-		: path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db");
+	const dbPath = resolveMemoryDbPath(
+		configuredDbPath?.trim() ? configuredDbPath : path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db"),
+	);
 	const scope = computeMnemopiBankScope(cfgMnemopiBank.get(settings), cwd, scoping);
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);

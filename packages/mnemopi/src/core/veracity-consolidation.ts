@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { resolveMemoryDbPath } from "../config";
 import { type DatabasePath, openDatabase } from "../db";
 
 export const VERACITY_WEIGHTS = Object.freeze({
@@ -195,8 +196,8 @@ export class VeracityConsolidator {
 	readonly ownsConnection: boolean;
 
 	constructor(dbPath: DatabasePath = ":memory:", conn?: Database) {
-		this.dbPath = dbPath;
-		this.conn = conn ?? openDatabase(dbPath, { create: true, readwrite: true, strict: true, pragmas: true });
+		this.dbPath = resolveMemoryDbPath(dbPath);
+		this.conn = conn ?? openDatabase(this.dbPath, { create: true, readwrite: true, strict: true, pragmas: true });
 		this.ownsConnection = conn === undefined;
 		this.initTables();
 	}

@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
+import { ensureOfflineShmDirectory, getOfflineShmState, initializeOfflineShmEnvironment } from "./offline-root.js";
 import { bindingsHaveReleaseIdentity, bindingsReleaseVersion, containsVersionStamp } from "./version-sentinel.js";
 
 /**
@@ -56,6 +57,12 @@ function startupMarker(text) {
 }
 
 function getNativesDir() {
+	if (getOfflineShmState()) {
+		const profile = (process.env.OMP_PROFILE ?? process.env.PI_PROFILE)?.trim();
+		const relativeRoot = profile && profile !== "default" ? path.join("profiles", profile) : "";
+		initializeOfflineShmEnvironment(relativeRoot);
+		return ensureOfflineShmDirectory(path.join(relativeRoot, "natives"));
+	}
 	// Match pi-utils directory overrides without depending on pi-utils.
 	for (const name of ["PI_NATIVES_DIR", "OMP_CONFIG_ROOT"]) {
 		let dir = process.env[name]?.trim();

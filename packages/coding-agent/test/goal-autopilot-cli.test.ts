@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { escapeXmlText, isRecord, prompt, readJsonl, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { denyError, resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
@@ -333,11 +334,20 @@ async function withFixture(
 ): Promise<void> {
 	await using root = await TempDir.create("@goal-auto-cli-");
 	const cwd = path.resolve(root.join("project"));
-	const agentDir = path.resolve(root.join("agent"));
 	const sessionDir = path.resolve(root.join("sessions"));
 	const home = path.resolve(root.join("home"));
 	const configRoot = path.resolve(root.join("config"));
-	await Promise.all([cwd, agentDir, sessionDir, home, configRoot].map(dir => fs.mkdir(dir, { recursive: true })));
+	const offlineState = getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" });
+	// Seed the effective runtime explicitly; startup must never restore the disk fixture.
+	const agentDir = path.join(offlineState?.runtimeRoot ?? configRoot, "agent");
+	await using _runtimeCleanup = {
+		[Symbol.asyncDispose]: async () => {
+			if (offlineState) await fs.rm(path.dirname(offlineState.runtimeRoot), { recursive: true, force: true });
+		},
+	};
+	await Promise.all(
+		[cwd, agentDir, sessionDir, home, configRoot].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })),
+	);
 	await Bun.write(path.join(cwd, "evidence.txt"), "TOOL_ROUNDTRIP_EVIDENCE\n");
 	const evidencePaths = Array.from({ length: 10 }, (_, round) => path.join(cwd, `evidence-round-${round + 1}.txt`));
 	await Promise.all(
@@ -807,6 +817,12 @@ async function withFixture(
 					const response = await client.request({ type: "get_state" });
 					expect(response.success).toBe(true);
 					if (!isRecord(response.data)) throw new Error("Missing session state");
+					if (offlineState && typeof response.data.sessionFile === "string") {
+						const relative = path.relative(offlineState.runtimeRoot, response.data.sessionFile);
+						expect(relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)).toBe(
+							false,
+						);
+					}
 					return response.data;
 				},
 				async close() {

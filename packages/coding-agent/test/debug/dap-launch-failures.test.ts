@@ -410,6 +410,87 @@ describe("DAP launch failure handling", () => {
 		}
 	});
 
+	it.skipIf(process.platform !== "linux")(
+		"binds offline Unix adapter sockets in shm without relocating the adapter or project",
+		async () => {
+			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-debug-offline-socket-"));
+			const adapterPath = path.join(cwd, "external-adapter.mjs");
+			const recordPath = path.join(cwd, "socket-record.json");
+			const originalRoot = `/nfs/${path.basename(cwd)}`;
+			const adapter = {
+				...TEST_ADAPTER,
+				name: `dlv-${"long-adapter-".repeat(12)}`,
+				command: process.execPath,
+				resolvedCommand: process.execPath,
+				args: [adapterPath],
+				connectMode: "socket",
+			};
+			try {
+				await fs.writeFile(
+					adapterPath,
+					DELAYED_UNIX_SOCKET_ADAPTER.replace(
+						"let server;",
+						`await Bun.write(${JSON.stringify(recordPath)}, JSON.stringify({ socketPath, cwd: process.cwd() })); let server;`,
+					),
+				);
+				const script = `
+					import * as fs from "node:fs/promises";
+					import * as path from "node:path";
+					import { DapClient } from ${JSON.stringify(new URL("../../src/dap/client.ts", import.meta.url).href)};
+					import { getConfigRootDir, getOfflineShmState } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-utils"))};
+					const state = getOfflineShmState();
+					let client;
+					let socketPath;
+					try {
+						client = await DapClient.spawn({ adapter: ${JSON.stringify(adapter)}, cwd: ${JSON.stringify(cwd)} });
+						const record = JSON.parse(await fs.readFile(${JSON.stringify(recordPath)}, "utf8"));
+						socketPath = record.socketPath;
+						const stat = await fs.lstat(socketPath);
+						const directory = await fs.lstat(path.dirname(socketPath));
+						console.log(JSON.stringify({
+							...record, socket: stat.isSocket(), mode: directory.mode & 0o777,
+							uid: directory.uid, alive: client.isAlive(),
+							configRoot: getConfigRootDir(), state,
+							originalRoot: process.env.OMP_CONFIG_ROOT,
+						}));
+					} finally {
+						await client?.dispose();
+						if (socketPath) await fs.rm(socketPath, { force: true });
+						await fs.rm(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+					}
+				`;
+				const child = Bun.spawn([process.execPath, "--eval", script], {
+					env: { ...process.env, OMP_OFFLINE: " ON ", OMP_CONFIG_ROOT: originalRoot, OMP_PROFILE: "debug" },
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, code] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+				const result = JSON.parse(stdout);
+				expect(result.socketPath).toMatch(/^\/dev\/shm\//);
+				expect(Buffer.byteLength(result.socketPath)).toBeLessThan(108);
+				expect(result).toMatchObject({
+					cwd,
+					socket: true,
+					mode: 0o700,
+					uid: process.geteuid!(),
+					alive: true,
+					originalRoot,
+					state: { persistentRoot: originalRoot },
+				});
+				expect(result.configRoot).toBe(path.join(result.state.runtimeRoot, "profiles", "debug"));
+				expect(await fs.readFile(adapterPath, "utf8")).toContain("Bun.listen");
+			} finally {
+				await removeWithRetries(cwd);
+			}
+		},
+		10_000,
+	);
+
 	it("times out promptly and does not emit an unhandled rejection when the stdin flush is wedged", async () => {
 		const procExited = Promise.withResolvers<number>();
 		const proc = {

@@ -2,7 +2,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { dataDir as configuredDataDir, dbPath as configuredDbPath } from "./config";
+import {
+	dataDir as configuredDataDir,
+	dbPath as configuredDbPath,
+	resolveMemoryDbPath,
+	resolveMemoryPath,
+} from "./config";
 import { BankManager, ValueError } from "./core/banks";
 import { BeamMemory } from "./core/beam";
 import type { ImportStats, RecallResult } from "./core/beam/types";
@@ -64,11 +69,13 @@ function parseIntArg(value: string, name: string): number {
 }
 
 function resolveDataDir(context?: CliContext): string {
-	return context?.dataDir ?? configuredDataDir();
+	return resolveMemoryPath(context?.dataDir ?? configuredDataDir());
 }
 
 function resolveDbPath(context?: CliContext): string {
-	return context?.dbPath ?? (context?.dataDir ? join(context.dataDir, "mnemopi.db") : configuredDbPath());
+	return resolveMemoryDbPath(
+		context?.dbPath ?? (context?.dataDir ? join(context.dataDir, "mnemopi.db") : configuredDbPath()),
+	);
 }
 
 function getMemory(context?: CliContext): { memory: BeamMemory; owned: boolean } {

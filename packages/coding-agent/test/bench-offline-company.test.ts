@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import type { BenchSummary } from "../src/cli/bench-cli";
 
 /**
@@ -27,7 +28,7 @@ afterEach(async () => {
 	await Promise.all(tempDirs.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
 });
 
-async function isolatedEnv(companyConfig: boolean): Promise<Record<string, string>> {
+async function isolatedEnv(companyConfig: boolean, offline = false): Promise<Record<string, string>> {
 	const home = await tempDir("omp-bench-home-");
 	const claudeDir = await tempDir("omp-bench-claude-");
 	if (companyConfig) await fs.writeFile(path.join(claudeDir, "settings.json"), COMPANY_SETTINGS);
@@ -36,11 +37,17 @@ async function isolatedEnv(companyConfig: boolean): Promise<Record<string, strin
 		SystemRoot: process.env.SystemRoot ?? "",
 		HOME: home,
 		USERPROFILE: home,
+		OMP_CONFIG_ROOT: path.join(home, ".omp"),
 		CLAUDE_CONFIG_DIR: claudeDir,
 		PI_CODING_AGENT_DIR: path.join(home, "agent"),
 		PI_CONFIG_DIR: ".omp",
 		NO_COLOR: "1",
 	};
+	if (offline) env.OMP_OFFLINE = "1";
+	const shm = getOfflineShmState(env);
+	if (shm) tempDirs.push(path.dirname(shm.runtimeRoot));
+	const agentDir = shm ? path.join(shm.runtimeRoot, "agent") : env.PI_CODING_AGENT_DIR!;
+	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	return env;
 }
 
@@ -123,7 +130,7 @@ async function probeBenchRuntime(env: Record<string, string>, offline: boolean):
 
 describe("OMP_OFFLINE=1 omp bench company environment", () => {
 	it("resolves company selectors and hides zcode-api", async () => {
-		const env = await isolatedEnv(true);
+		const env = await isolatedEnv(true, true);
 		const probe = await probeBenchRuntime(env, true);
 
 		expect(probe.providers).toContain("company");
@@ -142,7 +149,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 	}, 30_000);
 
 	it("hides zcode-api selectors without a company config under OMP_OFFLINE", async () => {
-		const env = await isolatedEnv(false);
+		const env = await isolatedEnv(false, true);
 		const probe = await probeBenchRuntime(env, true);
 
 		expect(probe.providers).not.toContain("company");
@@ -205,10 +212,9 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 				},
 			});
 			try {
-				const env = await isolatedEnv(lane === "company");
+				const env = await isolatedEnv(lane === "company", lane === "company");
 				// Only the company lane runs offline: an offline process hides the
 				// public zcode-api lane entirely, so the proxy lanes bench online.
-				if (lane === "company") env.OMP_OFFLINE = "1";
 				if (lane === "company") {
 					await fs.writeFile(
 						path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),

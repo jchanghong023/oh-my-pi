@@ -4,6 +4,7 @@
 
 ### Added
 
+- Resolve Linux offline configuration, profile data, caches and temporary files into private shm domains while preserving the original persistent-root environment.
 - Added async diagnostic context, safe exception and endpoint summaries (including hashed URL paths), CLI lifecycle flushing, and a user-cache fallback for unwritable log directories.
 - Added correlated HTTP attempt, retry, cancellation, and terminal-result logs without recording request bodies, credentials, or response content.
 

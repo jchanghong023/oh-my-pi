@@ -18,6 +18,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IpcConnection, Process, PtySession } from "@oh-my-pi/pi-natives";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { isEnoent, postmortem } from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { daemonBrokerEndpoint } from "../packages/coding-agent/src/launch/paths";
@@ -153,6 +154,24 @@ interface TuiHandle {
 	exitPromise: Promise<Outcome>;
 }
 
+function tuiEnvironment(env: Record<string, string | undefined>): Record<string, string> {
+	// N-API accepts string values only; empty overrides also suppress
+	// inherited flags in the PTY's environment overlay.
+	return Object.fromEntries(
+		Object.entries({
+			...process.env,
+			TERM: "xterm-256color",
+			// Fixture roots must win over a user's whole-root override.
+			OMP_CONFIG_ROOT: env.PI_CONFIG_DIR ? path.join(os.homedir(), env.PI_CONFIG_DIR) : "",
+			// Loopback-model cases are online unless the fixture opts in.
+			OMP_OFFLINE: "",
+			...env,
+			// This child is the real interactive CLI, not a headless test child.
+			PI_TEST_RUNTIME: "",
+		}).map(([key, value]) => [key, value ?? ""]),
+	);
+}
+
 function startTui(argv: string[], env: Record<string, string | undefined>, projectCwd?: string): TuiHandle {
 	const session = new PtySession();
 	const handle: TuiHandle = {
@@ -174,22 +193,7 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 			cwd: repoRoot,
 			cols: 120,
 			rows: 30,
-			// N-API accepts string values only; empty overrides also suppress
-			// inherited flags in the PTY's environment overlay.
-			env: Object.fromEntries(
-				Object.entries({
-					...process.env,
-					TERM: "xterm-256color",
-					// Fixture roots must win over a user's whole-root override.
-					OMP_CONFIG_ROOT: env.PI_CONFIG_DIR ? path.join(os.homedir(), env.PI_CONFIG_DIR) : "",
-					// Loopback-model cases are online unless the fixture opts in.
-					OMP_OFFLINE: "",
-					...env,
-					// The gate marks unit-test children headless. This child is the
-					// real interactive CLI: keep its terminal writes and stdin alive.
-					PI_TEST_RUNTIME: "",
-				}).map(([key, value]) => [key, value ?? ""]),
-			),
+			env: tuiEnvironment(env),
 		},
 		(error, chunk) => {
 			if (error) return;
@@ -288,11 +292,34 @@ if (process.argv.includes("--repo-only")) {
 // ── 1. Startup render ────────────────────────────────────────────────────────
 console.log("ui-smoke: waiting for the full-screen interface to render…");
 const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
-stubServerCleanup.run = () => removeFixture(baseConfigRoot);
-const main = startTui(["--profile", "localci-ui"], {
+let baseRuntimeRoot = baseConfigRoot;
+let baseShmDomain: string | undefined;
+stubServerCleanup.run = async () => {
+	await removeFixture(baseRuntimeRoot);
+	if (baseShmDomain) {
+		await removeWithRetries(baseShmDomain);
+		await removeFixture(baseConfigRoot);
+	}
+};
+const baseEnv = tuiEnvironment({
 	PI_CONFIG_DIR: path.basename(baseConfigRoot),
+	OMP_CONFIG_ROOT: baseConfigRoot,
+	OMP_PROFILE: "localci-ui",
+	PI_PROFILE: "",
 	OMP_OFFLINE: "1",
 });
+const baseShm = getOfflineShmState(baseEnv);
+if (baseShm) {
+	baseRuntimeRoot = baseShm.runtimeRoot;
+	baseShmDomain = path.dirname(baseShm.runtimeRoot);
+}
+const baseAgentDir = path.join(baseRuntimeRoot, "profiles", "localci-ui", "agent");
+await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
+await fs.writeFile(
+	path.join(baseAgentDir, "config.yml"),
+	"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
+);
+const main = startTui(["--profile", "localci-ui"], baseEnv);
 const rendered = await waitFor(() => {
 	// The TUI repaints in place: hides the cursor, positions it absolutely,
 	// and paints the status line (whose "π" brand segment is present under
@@ -337,6 +364,16 @@ main.session.write("\x04");
 	}
 	if (outcome.exitCode !== 0) {
 		fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
+	}
+}
+// Read the actual runtime artifact, not the original persistent fixture root.
+await fs.access(path.join(baseAgentDir, "agent.db"));
+if (baseShm) {
+	try {
+		await fs.access(path.join(baseConfigRoot, "profiles", "localci-ui", "agent", "agent.db"));
+		fail("offline TUI wrote its active settings database under the persistent fixture root");
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
 	}
 }
 console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");

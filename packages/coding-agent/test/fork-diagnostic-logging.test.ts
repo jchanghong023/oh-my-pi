@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 type RecordLine = {
 	timestamp: string;
@@ -27,9 +28,10 @@ async function sandbox(level = "debug") {
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
 	const configRoot = path.join(directory, "config");
-	const profileRoot = path.join(configRoot, "profiles", profile);
+	const offlineState = getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" });
+	const profileRoot = path.join(offlineState?.runtimeRoot ?? configRoot, "profiles", profile);
 	const agent = path.join(profileRoot, "agent");
-	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true })));
+	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
 	await fs.writeFile(
 		path.join(agent, "config.yml"),
 		"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
@@ -126,7 +128,10 @@ async function sandbox(level = "debug") {
 			expect(path.resolve(value.logsDir)).toBe(path.resolve(logsDir));
 			return value;
 		},
-		cleanup: () => fs.rm(directory, { recursive: true, force: true }),
+		async cleanup() {
+			if (offlineState) await fs.rm(path.dirname(offlineState.runtimeRoot), { recursive: true, force: true });
+			await fs.rm(directory, { recursive: true, force: true });
+		},
 	};
 }
 

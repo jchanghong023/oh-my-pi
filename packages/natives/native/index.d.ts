@@ -2307,10 +2307,12 @@ export interface IpcConnectOptions {
  * Platform endpoint for `name` scoped to directory `dir`.
  *
  * Unix: `<dir>/<stem>.sock`; when that path does not fit `sun_path` (104 bytes
- * on macOS/BSD, 108 on Linux, including NUL), `/tmp/omp-<euid>/<hash16>.sock`.
+ * on macOS/BSD, 108 on Linux, including NUL), `/tmp/omp-<euid>/<hash16>.sock`
+ * (under `/dev/shm/omp-<euid>` on Linux with truthy `OMP_OFFLINE`).
  * Windows: `\\.\pipe\omp-<stem>-<hash16(lowercase(resolve(dir)))>`.
  * `stem` is `name` with every char outside `[A-Za-z0-9._-]` replaced by "_".
- * Pure and deterministic: every process computes the same endpoint.
+ * No filesystem IO; deterministic for processes sharing the offline
+ * environment.
  */
 export declare function ipcEndpoint(dir: string, name: string): string
 

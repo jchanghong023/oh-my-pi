@@ -8,7 +8,7 @@ import * as logger from "@oh-my-pi/pi-utils/logger";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils/stream";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
-import { computeDefaultSessionDir } from "./session-paths";
+import { computeDefaultSessionDir, resolveSessionDirectory } from "./session-paths";
 import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 
@@ -563,6 +563,7 @@ async function collectSessionsFromFiles(
  * Exported for testing.
  */
 export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
+	sessionDir = resolveSessionDirectory(sessionDir, storage);
 	let backups: string[];
 	try {
 		backups = storage.listFilesSync(sessionDir, "*.bak");
@@ -619,6 +620,8 @@ async function scanSessionDir(
 	withStatus: boolean,
 	siblingDirs: readonly string[] = [],
 ): Promise<SessionInfo[]> {
+	sessionDir = resolveSessionDirectory(sessionDir, storage);
+	siblingDirs = siblingDirs.map(dir => resolveSessionDirectory(dir, storage));
 	try {
 		await recoverOrphanedBackups(sessionDir, storage);
 		const files = [sessionDir, ...siblingDirs].flatMap(dir => storage.listFilesSync(dir, "*.jsonl"));
@@ -633,6 +636,7 @@ async function scanSessionDirReadOnly(
 	storage: SessionStorage,
 	withStatus: boolean,
 ): Promise<SessionInfo[]> {
+	sessionDir = resolveSessionDirectory(sessionDir, storage);
 	try {
 		const files = storage.listFilesSync(sessionDir, "*.jsonl");
 		return await collectSessionsFromFiles(files, storage, withStatus);
@@ -680,6 +684,7 @@ export async function listAllSessions(
 	storage: SessionStorage = new FileSessionStorage(),
 	sessionsRoot: string = getSessionsDir(),
 ): Promise<SessionInfo[]> {
+	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
 		const files = await Array.fromAsync(new Bun.Glob("*/*.jsonl").scan(sessionsRoot), name =>
 			path.join(sessionsRoot, name),
@@ -760,6 +765,7 @@ async function newestSessionFiles(
 	pattern: string,
 	storage: SessionStorage,
 ): Promise<StatedSessionFile[]> {
+	root = resolveSessionDirectory(root, storage);
 	let files: string[];
 	try {
 		files =
@@ -883,6 +889,7 @@ export async function listRecentProjects(
  */
 export async function findSessionFiles(idPrefix: string, sessionsRoot: string = getSessionsDir()): Promise<string[]> {
 	if (!/^[\w-]+$/.test(idPrefix)) return [];
+	sessionsRoot = resolveSessionDirectory(sessionsRoot, new FileSessionStorage());
 	try {
 		const files = await Array.fromAsync(new Bun.Glob(`*/*_${idPrefix}*.jsonl`).scan(sessionsRoot), name =>
 			path.join(sessionsRoot, name),

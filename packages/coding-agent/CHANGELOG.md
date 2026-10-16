@@ -5,12 +5,13 @@
 ### Added
 
 - Switch between clean, compact and detailed terminal views with `/display`; compact is the default, and choices persist per profile without changing model or tool execution.
+- Run Linux offline data in private shm domains and asynchronously save complete, recoverable backups every ten minutes after frontend readiness, without startup restoration or exit waits.
 - Load additional shared skills from `OMP_SKILLS_DIR`, preferring shared versions on name collisions without changing user configuration.
-- Store all Wiki database operations in `OMP_WIKI_DIR/docs.db` when set, sharing the selected database across users and profiles while retaining the existing default when unset.
 - Wiki supports explicit `mode: "grep"` regex filtering of stored Markdown, with case control, stable resumable pages and original line boundaries; `/wiki` exposes `g` and RPC offers a separate grep action, without rebuilding indexes.
 
 ### Changed
 
+- Keep Wiki databases inside the active profile's unified data root; obsolete standalone Wiki-directory environment settings no longer redirect storage.
 - Compact display keeps upstream write and edit previews, diffs, and expansion controls; other tools remain single-line.
 - Keep live thinking in one editor-anchored window showing only the latest five screen rows; hide it when thinking ends without replaying reasoning in the main transcript.
 - Display the main TUI settings and common interaction dialogs in Simplified Chinese while preserving familiar technical English, command syntax and configuration values.

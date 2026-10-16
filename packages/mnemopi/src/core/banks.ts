@@ -1,10 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { dataDir as configuredDataDir } from "../config";
+import { dataDir as configuredDataDir, DEFAULT_DATA_DIR, resolveMemoryPath } from "../config";
 import { closeQuietly, openDatabase } from "../db";
 
-export const DEFAULT_DATA_DIR = join(homedir(), ".hermes", "mnemopi", "data");
+export { DEFAULT_DATA_DIR };
 export const BANKS_DIR = join(DEFAULT_DATA_DIR, "banks");
 const DB_FILENAME = "mnemopi.db";
 
@@ -25,7 +24,7 @@ export class BankManager {
 	readonly banksDir: string;
 
 	constructor(dataDir?: string) {
-		this.dataDir = dataDir ?? configuredDataDir();
+		this.dataDir = resolveMemoryPath(dataDir ?? configuredDataDir());
 		this.banksDir = join(this.dataDir, "banks");
 		mkdirSync(this.banksDir, { recursive: true });
 	}

@@ -223,7 +223,10 @@ describe("native IPC", () => {
 		const dir = path.join(await tempDir(), "d".repeat(120));
 		const name = `long-${process.pid}`;
 		const endpoint = ipcEndpoint(dir, name);
-		expect(endpoint).toMatch(new RegExp(`^/tmp/omp-${process.getuid!()}/[0-9a-f]{16}\\.sock$`));
+		const offline =
+			process.platform === "linux" && /^(?:1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+		const relocationRoot = offline ? "/dev/shm" : "/tmp";
+		expect(endpoint).toMatch(new RegExp(`^${relocationRoot}/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
 		expect(ipcEndpoint(dir, name)).toBe(endpoint);
 		expect(Buffer.byteLength(endpoint)).toBeLessThan(104);
 		await listen(endpoint, { framing: "lines" }, connection => {
@@ -238,6 +241,84 @@ describe("native IPC", () => {
 		await seen.until(1);
 		expect(seen.events).toEqual(["RELOCATED"]);
 	});
+
+	test.skipIf(process.platform !== "linux")(
+		"relocated endpoints honor exact offline values and agree across independent processes",
+		async () => {
+			const nativeUrl = new URL("../native/index.js", import.meta.url).href;
+			const values = ["1", " TrUe ", "YES", "oN", "", "0", "false", "enabled"];
+			for (const value of values) {
+				const dir = `/dev/shm/omp-ipc-domain-${process.pid}-${"long-domain-".repeat(15)}`;
+				const name = `cross-process-${process.pid}-${values.indexOf(value)}`;
+				const clientScript = `
+					import { IpcConnection, ipcEndpoint } from ${JSON.stringify(nativeUrl)};
+					const endpoint = ipcEndpoint(${JSON.stringify(dir)}, ${JSON.stringify(name)});
+					const client = await IpcConnection.connect(endpoint, { framing: "lines" });
+					try {
+						const reply = Promise.withResolvers();
+						client.start(line => reply.resolve(line), reason => reply.reject(new Error(String(reason))));
+						client.send("shm-round-trip");
+						console.log(JSON.stringify({ endpoint, reply: await reply.promise }));
+					} finally {
+						client.destroy();
+					}
+				`;
+				const serverScript = `
+					import * as fs from "node:fs/promises";
+					import * as path from "node:path";
+					import { IpcServer, ipcEndpoint } from ${JSON.stringify(nativeUrl)};
+					const endpoint = ipcEndpoint(${JSON.stringify(dir)}, ${JSON.stringify(name)});
+					if (endpoint === ipcEndpoint(${JSON.stringify(`${dir}-other`)}, ${JSON.stringify(name)})) {
+						throw new Error("different runtime domains share an endpoint");
+					}
+					const server = await IpcServer.listen(endpoint, { framing: "lines" }, connection => {
+						connection.start(line => connection.send(line), () => {});
+					});
+					try {
+						const stat = await fs.lstat(path.dirname(endpoint));
+						const child = Bun.spawn([process.execPath, "--eval", ${JSON.stringify(clientScript)}], {
+							env: process.env, stdout: "pipe", stderr: "pipe",
+						});
+						const [stdout, stderr, code] = await Promise.all([
+							new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+						]);
+						if (code !== 0) throw new Error(stderr);
+						const result = JSON.parse(stdout);
+						if (result.endpoint !== endpoint) throw new Error("client/server endpoints differ");
+						console.log(JSON.stringify({
+							...result, uid: stat.uid, mode: stat.mode & 0o777,
+							directory: stat.isDirectory() && !stat.isSymbolicLink(),
+						}));
+					} finally {
+						await server.close();
+						await fs.rm(endpoint + ".bind.lock", { force: true });
+					}
+				`;
+				const child = Bun.spawn([process.execPath, "--eval", serverScript], {
+					env: { ...process.env, OMP_OFFLINE: value },
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, code] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ value, code, stderr }).toEqual({ value, code: 0, stderr: "" });
+				const result = JSON.parse(stdout);
+				const root = /^(?:1|true|yes|on)$/i.test(value.trim()) ? "/dev/shm" : "/tmp";
+				expect(result.endpoint).toMatch(new RegExp(`^${root}/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
+				expect(Buffer.byteLength(result.endpoint)).toBeLessThan(104);
+				expect(result).toMatchObject({
+					reply: "shm-round-trip",
+					uid: process.geteuid!(),
+					mode: 0o700,
+					directory: true,
+				});
+			}
+		},
+		30_000,
+	);
 
 	test("small and large frames arrive in send order, within and across tasks", async () => {
 		// Small frames coalesce until the end of the task while large ones may

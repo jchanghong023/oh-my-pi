@@ -1,6 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { ftsWeight, importanceWeight, maxEpisodeChars, proactiveLinkingEnabled, vectorWeight } from "../../config";
+import {
+	ftsWeight,
+	importanceWeight,
+	maxEpisodeChars,
+	proactiveLinkingEnabled,
+	resolveMemoryDbPath,
+	vectorWeight,
+} from "../../config";
 import { closeQuietly, openDatabase } from "../../db";
 import { AnnotationStore } from "../annotations";
 import { EpisodicGraph } from "../episodic-graph";
@@ -167,7 +174,7 @@ export class BeamMemory implements BeamMemoryState {
 		this.authorId = options.authorId ?? null;
 		this.authorType = options.authorType ?? null;
 		this.channelId = options.channelId ?? this.sessionId;
-		this.dbPath = options.dbPath;
+		this.dbPath = options.dbPath === undefined ? undefined : resolveMemoryDbPath(options.dbPath);
 		this.config = normalizeConfig(options);
 		this.useCloud = this.config.useCloud;
 		this.eventEmitter = options.eventEmitter;
