@@ -314,7 +314,7 @@ function jobsRenderResult(
 			const spinnerFrame = options.spinnerFrame ?? 0;
 			// Running-job labels shimmer while the wait block is live; the band
 			// phase is Date.now()-sampled at render time, so serving cached bytes
-			// would pin it to the ~12.5fps spinner-glyph cadence instead of the
+			// would pin it to the spinner-glyph cadence instead of the
 			// 30fps redraw. Bypass the cache while any row animates, and key on
 			// the animation state so a sealed block never hits stale shimmered
 			// bytes (spinnerFrame falls back to 0 on both sides of the seal).

@@ -88,7 +88,7 @@ describe("EventController message_update coalescing", () => {
 		emit(messageUpdate("tok1 tok2 tok3 tok4"));
 		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5"));
 
-		vi.advanceTimersByTime(32);
+		vi.advanceTimersByTime(49);
 		expect(ui.requestRender).not.toHaveBeenCalled();
 		vi.advanceTimersByTime(1);
 		await flushMicrotasks();
@@ -100,7 +100,7 @@ describe("EventController message_update coalescing", () => {
 
 		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
 		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
-		vi.advanceTimersByTime(33);
+		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
 
 		expect(ui.requestRender).toHaveBeenCalledTimes(2);
@@ -134,7 +134,7 @@ describe("EventController message_update coalescing", () => {
 		emit(messageUpdate("one two "));
 		emit(messageUpdate("one two three "));
 
-		vi.advanceTimersByTime(33);
+		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
 
 		expect(pushDelta).toHaveBeenCalledTimes(3);
@@ -144,7 +144,7 @@ describe("EventController message_update coalescing", () => {
 	});
 
 	it("serializes a tail event behind an in-flight window flush", async () => {
-		// The coalesced flush fires from a 33ms timer, NOT from the listener
+		// The coalesced flush fires from a timer, NOT from the listener
 		// path, so AgentSession's fire-and-forget dispatch cannot serialize it:
 		// a message_end landing mid-flush used to run its handler concurrently,
 		// both calling init while the flush was suspended. The dispatch chain
@@ -159,7 +159,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1 tok2"));
-		vi.advanceTimersByTime(33); // window fires; flush suspends on init (call 1)
+		vi.advanceTimersByTime(50); // window fires; flush suspends on init (call 1)
 
 		emit({ type: "message_end", message: assistantMessage("tok1 tok2") } as Extract<
 			AgentSessionEvent,
@@ -194,7 +194,7 @@ describe("EventController message_update coalescing", () => {
 		});
 
 		emit(messageUpdate("tok1"));
-		vi.advanceTimersByTime(33); // window fires; flush run 1 suspends on gate 1
+		vi.advanceTimersByTime(50); // window fires; flush run 1 suspends on gate 1
 
 		// Two non-update events land while the flush is still suspended.
 		emit({ type: "message_end", message: assistantMessage("tok1") } as Extract<

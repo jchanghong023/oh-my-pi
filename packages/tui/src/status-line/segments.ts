@@ -233,7 +233,7 @@ const piSegment: StatusLineSegment = {
 		return segView([], "omp", "muted");
 	},
 };
-/** Current braille-spinner glyph on the shared clock, at the Loader's 80ms cadence. */
+/** Current braille-spinner glyph on the shared Loader clock. */
 function brandSpinnerFrame(nowMs = Date.now()): string {
 	const frames = theme.getSpinnerFrames("activity");
 	return frames[Math.floor(nowMs / SPINNER_ADVANCE_MS) % frames.length] ?? "";

@@ -148,7 +148,7 @@ describe("thinking preview event ordering", () => {
 		await h.live.emit(update(message, "start"));
 		expect(h.rendered()).toBe("");
 
-		vi.advanceTimersByTime(33);
+		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
 		expect(h.rendered()).toBe("");
 	});
@@ -163,7 +163,7 @@ describe("thinking preview event ordering", () => {
 		};
 		await h.live.emit(update(message, "thinking_delta"));
 		expect(h.rendered()).toContain("SUSPENDED_THINKING");
-		vi.advanceTimersByTime(33);
+		vi.advanceTimersByTime(50);
 
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
@@ -212,7 +212,7 @@ describe("thinking preview event ordering", () => {
 
 		await h.live.emit(update(previous, "thinking_delta"));
 		expect(h.rendered()).toBe("");
-		vi.advanceTimersByTime(33);
+		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
 		expect(h.rendered()).toBe("");
 	});

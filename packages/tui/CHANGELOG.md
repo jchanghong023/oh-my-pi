@@ -10,6 +10,8 @@
 
 ### Changed
 
+- The five-row thinking tail ignores trailing blank lines, collapses repeated paragraph blanks, and emphasizes the newest visible line with the current theme's text color.
+- Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Compact display preserves the upstream previews, diffs, and expand/collapse behavior for write, edit, and apply_patch tools.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
