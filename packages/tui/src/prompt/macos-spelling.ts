@@ -119,7 +119,8 @@ export class MacOSSpellingProvider implements EditorTextAssistProvider {
 
 	/**
 	 * Misspelled prose ranges in `text` (offsets into it), in order and
-	 * non-overlapping. Schedules the verification check for uncached text; its
+	 * non-overlapping, except ones touching `context.typing` (the word still
+	 * being typed). Schedules the verification check for uncached text; its
 	 * result arrives through {@link onUpdate}.
 	 */
 	typoRanges(text: string, context: SpellingDecorationContext): readonly native.SpellingRange[] {
@@ -137,9 +138,13 @@ export class MacOSSpellingProvider implements EditorTextAssistProvider {
 		const ranges = cached ?? this.#projectTypoRanges(text);
 		if (!ranges || ranges.length === 0) return [];
 		const kept: native.SpellingRange[] = [];
+		const typing = context.typing?.line === context.line ? context.typing : undefined;
 		let cursor = 0;
 		for (const range of ranges) {
 			const end = range.start + range.length;
+			if (typing && context.startCol + range.start <= typing.end && typing.start <= context.startCol + end) {
+				continue;
+			}
 			// Overlapping or out-of-bounds ranges (stale native data, edit projection)
 			// must never re-emit already-rendered text: that doubles it on screen and
 			// desyncs the rendered width from the measured width (cursor drift).

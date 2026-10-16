@@ -154,7 +154,12 @@ describe("extendRecallWithLegacyBanks edge cases", () => {
 		const cwd = path.join(rootDir.path(), "projects", "fd-leak");
 		createBankFixture("fd-leak-A", [{ cwd }]);
 		createBankFixture("fd-leak-B", [{ cwd }]);
-		expect(extendRecallWithLegacyBanks(["active"], mainDbPath, cwd)).toEqual(["active", "fd-leak-A", "fd-leak-B"]);
+		// Legacy banks follow readdir order, which is filesystem-dependent.
+		expect([...extendRecallWithLegacyBanks(["active"], mainDbPath, cwd)].sort()).toEqual([
+			"active",
+			"fd-leak-A",
+			"fd-leak-B",
+		]);
 		const probed = ["fd-leak-A", "fd-leak-B"].map(bank => path.join(banksDir, bank, "mnemopi.db"));
 		if (process.platform === "win32") {
 			// Windows refuses to delete a file another handle still holds open.

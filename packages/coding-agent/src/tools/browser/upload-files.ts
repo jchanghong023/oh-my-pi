@@ -34,6 +34,11 @@ export interface UploadSource {
 	size: number;
 	/** A folder, which only a browser reading its path can expand (for a `webkitdirectory` input). */
 	directory: boolean;
+	/**
+	 * The file's identity and last change (inode, size, mtime, ctime). A rewrite that keeps size and mtime (a coarse
+	 * clock, a build step restoring timestamps) still moves ctime, and a replace by rename changes the inode.
+	 */
+	revision: string;
 	info: UploadFileInfo;
 }
 
@@ -64,6 +69,7 @@ export async function openUploadSource(absolute: string): Promise<UploadSource> 
 		file,
 		size: stats.size,
 		directory: stats.isDirectory(),
+		revision: `${stats.ino}\0${stats.size}\0${stats.mtimeMs}\0${stats.ctimeMs}`,
 		info: { name: path.basename(absolute), type: unknown ? "" : bunType, lastModified: file.lastModified },
 	};
 }
@@ -92,9 +98,9 @@ export async function readFilePayloads(absolutePaths: string[], signal?: AbortSi
 	const sources = await openUploadSources(absolutePaths, signal);
 	refuseFolders(sources);
 	const payloads: FilePayload[] = [];
-	for (const { file, info } of sources) {
+	for (const { path: source, info } of sources) {
 		throwIfAborted(signal);
-		payloads.push({ ...info, data: Buffer.from(await file.arrayBuffer()).toString("base64") });
+		payloads.push({ ...info, data: (await fs.readFile(source)).toString("base64") });
 	}
 	return payloads;
 }
@@ -190,6 +196,35 @@ export async function sweepUploadStaging(live: ReadonlySet<string>, now = Date.n
 }
 
 /**
+ * Copy a file, or a folder whole, following links so no copy points back at an original. A link to a folder already
+ * being copied above it would repeat forever, so it is left out, as a folder that holds itself cannot be expanded.
+ */
+async function copyFollowingLinks(
+	source: string,
+	target: string,
+	ancestors: ReadonlySet<string>,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	throwIfAborted(signal);
+	const stats = await fs.stat(source);
+	if (!stats.isDirectory()) {
+		// A clone where the filesystem supports one (APFS, btrfs, XFS), a plain copy elsewhere.
+		await fs.copyFile(source, target, fs.constants.COPYFILE_FICLONE);
+		await fs.utimes(target, stats.atime, stats.mtime);
+		return;
+	}
+	const real = await fs.realpath(source);
+	if (ancestors.has(real)) return;
+	await fs.mkdir(target);
+	const inside = new Set(ancestors).add(real);
+	for (const entry of await fs.readdir(source)) {
+		await copyFollowingLinks(path.join(source, entry), path.join(target, entry), inside, signal);
+	}
+	// Last, since adding its entries moved it.
+	await fs.utimes(target, stats.atime, stats.mtime);
+}
+
+/**
  * One tab worker's uploads: the route a one-time check picked for its browser connection, and the tab's staging
  * folder, which outlives the worker (a recycle or a relay release starts a new one on the same page) and is removed by
  * the supervisor, since Chrome reads a picked file lazily.
@@ -200,7 +235,7 @@ export class UploadStaging {
 	/** The route a check decided; unset until one does. */
 	#route: UploadRoute | undefined;
 	#checking: Promise<UploadRoute> | undefined;
-	/** Staged copies of unchanged files, by source path, size and mtime, so a repeated upload copies nothing. */
+	/** Staged copies of unchanged files, by source path and revision, so a repeated upload copies nothing. */
 	readonly #copies = new Map<string, string>();
 
 	constructor(directory: string) {
@@ -237,27 +272,28 @@ export class UploadStaging {
 	async stage(sources: UploadSource[], signal?: AbortSignal): Promise<string[]> {
 		const directory = await this.#ensureDirectory();
 		const staged: string[] = [];
+		let reusedAny = false;
 		for (const source of sources) {
 			throwIfAborted(signal);
-			// A folder's own size and mtime miss changes deeper in it, so only files are reused.
-			const key = source.directory ? undefined : `${source.path}\0${source.size}\0${source.info.lastModified}`;
+			// A folder's own revision misses changes deeper in it, so only files are reused.
+			const key = source.directory ? undefined : `${source.path}\0${source.revision}`;
 			const reused = key === undefined ? undefined : this.#copies.get(key);
 			if (reused) {
+				reusedAny = true;
 				staged.push(reused);
 				continue;
 			}
 			const folder = await fs.mkdtemp(path.join(directory, "f-"));
 			const copy = path.join(folder, source.info.name);
-			// A clone where the filesystem supports one (APFS, btrfs, XFS), a plain copy elsewhere. A folder, which
-			// Chrome expands for a `webkitdirectory` input, is copied whole.
-			await fs.cp(source.path, copy, {
-				recursive: true,
-				dereference: true,
-				preserveTimestamps: true,
-				mode: fs.constants.COPYFILE_FICLONE,
-			});
+			// A folder, which Chrome expands for a `webkitdirectory` input, is copied whole.
+			await copyFollowingLinks(source.path, copy, new Set(), signal);
 			if (key !== undefined) this.#copies.set(key, copy);
 			staged.push(copy);
+		}
+		// The sweep keeps a folder a day past its mtime; a reuse writes nothing, so it marks the folder used itself.
+		if (reusedAny) {
+			const now = new Date();
+			await fs.utimes(directory, now, now);
 		}
 		return staged;
 	}

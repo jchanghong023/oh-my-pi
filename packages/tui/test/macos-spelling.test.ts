@@ -99,6 +99,28 @@ describe("macOS spelling feature gates", () => {
 		expect(rendered.replace(/\x1b\[[0-9;:]*m/g, "")).toBe(text);
 	});
 
+	it("holds off the typo mark of the word being typed, keeping the others", async () => {
+		const text = "wrld helo";
+		const checkSpelling = mock(async () => [
+			{ start: 0, length: 4 },
+			{ start: 5, length: 4 },
+		]);
+		const provider = new MacOSSpellingProvider(backend({ checkSpelling }));
+		provider.setFeatures({ typoDetection: true, autocorrect: false });
+		const updated = Promise.withResolvers<void>();
+		provider.onUpdate = updated.resolve;
+		provider.typoRanges(text, decorationContext(text));
+		await updated.promise;
+
+		const typing = { line: 0, start: 5, end: 9 };
+		expect(provider.typoRanges(text, { ...decorationContext(text), typing })).toEqual([{ start: 0, length: 4 }]);
+		// Segments are offset into the line: "helo" alone, starting at column 5.
+		expect(provider.typoRanges("helo", { ...decorationContext(text, 0, 5), typing })).toEqual([]);
+		// The word on another line, or no word being typed, holds nothing back.
+		expect(provider.typoRanges(text, { ...decorationContext(text), typing: { ...typing, line: 1 } })).toHaveLength(2);
+		expect(provider.typoRanges(text, decorationContext(text))).toHaveLength(2);
+	});
+
 	it("enables typo detection without enabling autocorrect", async () => {
 		const checkSpelling = mock(async () => [{ start: 0, length: 8 }]);
 		const autocorrectWord = mock(async () => "received");

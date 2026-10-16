@@ -696,6 +696,7 @@ lsp:
 | `lsp.diagnosticsOnEdit`           | boolean | `false`   | Run diagnostics after an edit.                                                                                                                              |
 | `lsp.formatOnWrite`               | boolean | `false`   | Format files on write.                                                                                                                                      |
 | `lsp.diagnosticsDeduplicate`      | boolean | `true`    | Collapse duplicate diagnostics.                                                                                                                             |
+| `lsp.requestTimeout`              | number  | `10`      | Seconds to wait for a language server's diagnostics, hover and other answers when the agent passes no `timeout` (the call deadline is at least 20 s); late post-edit diagnostics wait at least this long. The `lsp` tool's `timeout` raises or lowers it per call, within 5–300 s and `tools.maxTimeout`. |
 | `shellPath`                       | string  | _(unset)_ | External shell for services, terminals, and `!`; plain bash tool calls use embedded brush.                                                                  |
 
 ### Files: editing and reading

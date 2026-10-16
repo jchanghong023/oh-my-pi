@@ -74,6 +74,12 @@ export interface ModelManagerOptions<TApi extends Api = Api, TModelsDevPayload =
 	 */
 	dynamicCostAuthoritative?: boolean;
 	/**
+	 * When true, a static row's display name wins over the cached or live row
+	 * for the same id, so a model keeps one name before and after discovery.
+	 * Set from the provider's `keep-bundled-names` catalog entry.
+	 */
+	keepStaticNames?: boolean;
+	/**
 	 * When true, a fresh cache never satisfies an online-eligible refresh: the
 	 * dynamic fetch always runs (an explicit `"offline"` strategy is still
 	 * honored), and the cache serves only as the fetch-failure fallback. For
@@ -275,6 +281,7 @@ export async function resolveProviderModels<TApi extends Api = Api, TModelsDevPa
 		input: options.dynamicInputAuthoritative ?? false,
 		reasoning: options.dynamicReasoningAuthoritative ?? false,
 		cost: options.dynamicCostAuthoritative ?? false,
+		staticNames: options.keepStaticNames ? new Map(staticModels.map(model => [model.id, model.name])) : undefined,
 	};
 	const cacheDropIds = options.dropCachedModelIdsOnStaticMismatch;
 	const staticCatalogFingerprint = fingerprintStaticModels(staticModels, dynamicModelsAuthoritative);
@@ -582,6 +589,8 @@ interface DynamicMergeAuthority {
 	readonly input: boolean;
 	readonly reasoning: boolean;
 	readonly cost: boolean;
+	/** Static display names by id that override dynamic rows (`keepStaticNames`). */
+	readonly staticNames: ReadonlyMap<string, string> | undefined;
 }
 
 function mergeDynamicModels<TApi extends Api>(
@@ -694,7 +703,9 @@ function mergeDynamicModel<TApi extends Api>(
 	return buildModel({
 		...existingModel,
 		...dynamicModel,
-		name: preferDiscoveryName(dynamicModel.name, existingModel.name, dynamicModel.id),
+		name:
+			authority.staticNames?.get(dynamicModel.id) ??
+			preferDiscoveryName(dynamicModel.name, existingModel.name, dynamicModel.id),
 		reasoning,
 		...(trustsOwnThinking ? { thinking: dynamicModel.thinking } : {}),
 		input: supportsImage ? ["text", "image"] : ["text"],

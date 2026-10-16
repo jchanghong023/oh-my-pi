@@ -638,3 +638,46 @@ test("stages a symlinked file's contents, once while the file is unchanged", asy
 	expect(changed).not.toBe(first);
 	expect(await Bun.file(changed!).text()).toBe("changed");
 });
+
+test("stages a file again when it changes without moving its size or mtime", async () => {
+	const file = path.join(tempDir, "same-stamp.txt");
+	const stamp = new Date(1_900_000_000_000);
+	await Bun.write(file, "before");
+	await fs.utimes(file, stamp, stamp);
+	const staging = new UploadStaging(path.join(tempDir, "same-stamp-staging"));
+	await staging.stage([await openUploadSource(file)]);
+	// ctime cannot be set and Linux stamps it from a coarse clock; a real tick apart keeps the rewrite distinguishable.
+	await Bun.sleep(20);
+	await Bun.write(file, "after!");
+	await fs.utimes(file, stamp, stamp);
+	const [second] = await staging.stage([await openUploadSource(file)]);
+	expect(await Bun.file(second!).text()).toBe("after!");
+});
+
+test("marks the staging folder used when an upload reuses a copy, so the sweep keeps it", async () => {
+	const file = path.join(tempDir, "reused.txt");
+	await Bun.write(file, "reused");
+	const directory = path.join(os.tmpdir(), `omp-uploads-${process.pid}-reuse-${crypto.randomUUID().slice(0, 8)}`);
+	const staging = new UploadStaging(directory);
+	try {
+		await staging.stage([await openUploadSource(file)]);
+		const dayAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+		await fs.utimes(directory, dayAgo, dayAgo);
+		await staging.stage([await openUploadSource(file)]);
+		// The tab was released after that upload; its page may still read the copy.
+		await sweepUploadStaging(new Set());
+		expect((await stagingFolders()).has(path.basename(directory))).toBe(true);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("stages a folder holding a link back to itself, leaving the loop out", async () => {
+	const album = path.join(tempDir, "looped-album");
+	await Bun.write(path.join(album, "nested", "one.txt"), "one");
+	await fs.symlink(album, path.join(album, "nested", "loop"), "junction");
+	const staging = new UploadStaging(path.join(tempDir, "loop-staging"));
+	const [copy] = await staging.stage([await openUploadSource(album)]);
+	expect(await Bun.file(path.join(copy!, "nested", "one.txt")).text()).toBe("one");
+	expect(await fs.readdir(path.join(copy!, "nested"))).toEqual(["one.txt"]);
+});
