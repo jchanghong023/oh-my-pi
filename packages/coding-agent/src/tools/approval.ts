@@ -137,7 +137,12 @@ function isToolTier(value: unknown): value is ToolTier {
 	return typeof value === "string" && TIER_VALUES.has(value as ToolTier);
 }
 
-function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> & { policy?: ApprovalPolicy } {
+type NormalizedApprovalDecision = Omit<ResolvedApproval, "policy"> & {
+	policy?: ApprovalPolicy;
+	fallbackToToolPolicy?: false;
+};
+
+function normalizeDecision(value: unknown): NormalizedApprovalDecision {
 	if (isToolTier(value)) {
 		return { tier: value, override: false };
 	}
@@ -155,16 +160,14 @@ function normalizeDecision(value: unknown): Omit<ResolvedApproval, "policy"> & {
 			...(policy ? { policy } : {}),
 			...(reason ? { reason } : {}),
 			...(policyKey ? { policyKey } : {}),
+			...(record.fallbackToToolPolicy === false ? { fallbackToToolPolicy: false as const } : {}),
 		};
 	}
 
 	return { tier: "exec", override: false };
 }
 
-function getToolDecision(
-	tool: ApprovalSubject,
-	args: unknown,
-): Omit<ResolvedApproval, "policy"> & { policy?: ApprovalPolicy } {
+function getToolDecision(tool: ApprovalSubject, args: unknown): NormalizedApprovalDecision {
 	const approval = tool.approval;
 	const decision: ToolApprovalDecision | undefined = typeof approval === "function" ? approval(args) : approval;
 	return normalizeDecision(decision);
@@ -193,8 +196,7 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  *     A decision may carry a `policyKey` — `tools.approval.<policyKey>` is then
  *     the user override consulted instead of `tools.approval.<tool.name>`, with
  *     the invoking tool's own policy as the fallback when the user set none for
- *     the keyed sub-tool (e.g. an `xd://` device dispatch without a device
- *     policy still honors `tools.approval.write`).
+ *     the keyed sub-tool, unless `fallbackToToolPolicy` is false.
  *  2. User per-tool override, if set and valid.
  *  3. Active mode tier comparison.
  *
@@ -211,7 +213,10 @@ export function resolveApproval(
 	const policyKey = decision.policyKey ?? tool.name;
 	const userPolicy = Object.hasOwn(userConfig, policyKey) ? normalizePolicy(userConfig[policyKey]) : undefined;
 	const fallbackPolicy =
-		policyKey !== tool.name && userPolicy === undefined && Object.hasOwn(userConfig, tool.name)
+		decision.fallbackToToolPolicy !== false &&
+		policyKey !== tool.name &&
+		userPolicy === undefined &&
+		Object.hasOwn(userConfig, tool.name)
 			? normalizePolicy(userConfig[tool.name])
 			: undefined;
 	const effectiveUserPolicy = userPolicy ?? fallbackPolicy;

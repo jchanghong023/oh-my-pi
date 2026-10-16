@@ -11,6 +11,8 @@
 
 ### Changed
 
+- Present Wiki and Repo as on-demand `xd://` devices by default, preserving independent approval policies and concurrent queries while retaining native top-level tools for explicit tool lists and configurations with `tools.xdev` disabled.
+- Disable Debug, IDA and Archive by default while preserving explicit settings; offline launches also disable AST Edit alongside Browser and Web Search without changing saved configuration.
 - Disable terminal-title run-state indicators by default and batch streamed message updates in 50ms windows, preserving explicit title settings and final content.
 - Compact display keeps upstream write and edit previews, diffs, and expansion controls; other tools remain single-line.
 - Keep live thinking in one editor-anchored window showing only the latest five screen rows; hide it when thinking ends without replaying reasoning in the main transcript.
@@ -24,6 +26,11 @@
 
 ### Fixed
 
+- Allowed repository incremental queries to replace a tracked file with discovered child files when its path becomes a directory.
+- Rejected empty or comment-only Python suites during repository definition extraction, preserving searchable text while removing invalid definitions.
+- Kept Unicode combining marks inside repository word boundaries so substring matches cannot outrank or hide later complete matches.
+- Preserved Wiki list-contained code fences across section splits and overlapping long lines without treating code headings as document sections or swallowing following root headings.
+- Kept Unicode-equivalent Wiki queries consistent across ranking-cache reuse, eviction and reopening, preventing continuation pages from repeating or omitting evidence.
 - Restored browser relay-tab recovery after Chrome detaches the debugger while retaining cancellation of supervisor-side tool calls.
 - Tracked `/team` blockers individually with stable IDs and explicit recheck decisions, so partial fixes and invalid reviews cannot clear unrelated blockers.
 - Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.

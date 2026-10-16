@@ -258,6 +258,15 @@ export function resolveXdevTool(state: XdevState, name: string): Tool | undefine
 	return state.tools.get(name);
 }
 
+/** Index queries retain native read-only policy and scheduling through the write transport. */
+export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string): boolean {
+	return (
+		(name === "wiki" || name === "repo") &&
+		state?.builtInNames.has(name) === true &&
+		resolveXdevTool(state, name)?.approval === "read"
+	);
+}
+
 /**
  * Resolve a mounted tool by name. Presentation-only: `xd://` docs and renderer
  * lookup ask for names they already hold in canonical form.

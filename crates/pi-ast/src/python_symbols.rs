@@ -41,7 +41,9 @@ pub fn extract_python_symbols(
 	}
 	let mut symbols = Vec::new();
 	let mut qualification = String::new();
-	visit(tree.root_node(), code, &mut qualification, &mut symbols, &mut heartbeat)?;
+	if !visit(tree.root_node(), code, &mut qualification, &mut symbols, &mut heartbeat)? {
+		return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
+	}
 	heartbeat()?;
 	Ok(PythonSymbolsResult { symbols, parse_error: false })
 }
@@ -52,7 +54,7 @@ fn visit(
 	qualification: &mut String,
 	symbols: &mut Vec<PythonSymbol>,
 	heartbeat: &mut impl FnMut() -> Result<()>,
-) -> Result<()> {
+) -> Result<bool> {
 	// Expression trees can be arbitrarily deep (for example a long addition
 	// chain). Keep traversal state on Tree-sitter's cursor, not the native
 	// stack.
@@ -62,6 +64,17 @@ fn visit(
 	'walk: loop {
 		heartbeat()?;
 		let node = cursor.node();
+		// Tree-sitter accepts empty suites without marking the tree as erroneous.
+		// Python requires a statement even when the suite contains comments.
+		if node.kind() == "block" {
+			let mut children = node.walk();
+			if !node
+				.named_children(&mut children)
+				.any(|child| !child.is_extra())
+			{
+				return Ok(false);
+			}
+		}
 		if let Some(original_len) =
 			collect_definition(node, code, qualification, class_owner, symbols)
 		{
@@ -94,7 +107,7 @@ fn visit(
 				}
 			}
 			if !cursor.goto_parent() {
-				return Ok(());
+				return Ok(true);
 			}
 		}
 	}
@@ -158,4 +171,37 @@ fn collect_definition(
 		return Some(original_len);
 	}
 	None
+}
+
+#[cfg(test)]
+mod tests {
+	use super::extract_python_symbols;
+
+	#[test]
+	fn empty_suites_discard_all_definitions() {
+		for tail in [
+			"def broken():\n",
+			"def broken():\n    # comment\n",
+			"class Broken:\n",
+			"if True:\n",
+			"def broken():\n    if True:\n",
+			"try:\nfinally:\n",
+		] {
+			let code = format!("def previous(): return 1\n{tail}");
+			let result = extract_python_symbols(&code, || Ok(())).unwrap();
+			assert!(result.parse_error, "empty suite accepted: {tail:?}");
+			assert!(result.symbols.is_empty(), "definitions leaked: {tail:?}");
+		}
+	}
+
+	#[test]
+	fn comments_before_a_statement_do_not_make_a_suite_empty() {
+		let code = "def valid():\n    # comment\n    pass\n";
+		let result = extract_python_symbols(code, || Ok(())).unwrap();
+		assert!(!result.parse_error);
+		assert_eq!(result.symbols.len(), 1);
+		assert_eq!(result.symbols[0].name, "valid");
+		assert_eq!(result.symbols[0].start_line, 1);
+		assert_eq!(result.symbols[0].end_line, 3);
+	}
 }

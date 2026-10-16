@@ -19,7 +19,7 @@
   - `packages/coding-agent/src/tools/tool-timeouts.ts` — `ida` exec timeout clamp
 
 ## Availability
-- Exposed only when `ida.enabled` (default on) is set **and** a local IDA install shipping idalib is found; otherwise the tool, the `read` executable/IDB views, and the `read` prompt bullet are all absent. Gate: `cfgIdaAvailable` in `IdaTool.createIf` and `isToolAllowed` (`packages/coding-agent/src/tools/index.ts`), reconciled live via `cfgBuiltinToolGates`.
+- Exposed only when `ida.enabled` (default off) is set **and** a local IDA install shipping idalib is found; otherwise the tool, the `read` executable/IDB views, and the `read` prompt bullet are all absent. Gate: `cfgIdaAvailable` in `IdaTool.createIf` and `isToolAllowed` (`packages/coding-agent/src/tools/index.ts`), reconciled live via `cfgBuiltinToolGates`.
 - Install lookup: `ida.installDir` when set (authoritative; no fallback), else `$IDADIR`, `Paths.ida-install-dir` in `ida-config.json` (each path-delimited `$IDAUSR` entry, then `~/.idapro` or `%APPDATA%\Hex-Rays\IDA Pro`), else platform-specific standard locations. macOS checks `/Applications/IDA*/Contents/MacOS` and `~/Applications/IDA*/Contents/MacOS`; Linux checks `~/ida*` and `/opt/ida*`; Windows checks `%ProgramFiles%\IDA*`. The found directory is exported to workers as `IDADIR`.
 - `loadMode: "discoverable"` — mounted as `xd://ida` when xdev is on.
 - Approval tiers: `list` → read, `exec` → exec, every other action → write.

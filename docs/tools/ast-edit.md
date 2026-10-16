@@ -32,7 +32,7 @@ Shared AST pattern grammar and language catalog: see [`ast_grep`](./ast-grep.md#
   - captures from `pat` are substituted into `out`,
   - each rewrite is a 1:1 structural substitution; one capture cannot expand into multiple sibling nodes unless the grammar itself permits that expansion at that position.
 
-`ast_edit` is enabled by default by `astEdit.enabled`. It is discoverable rather than part of the essential tool set.
+`ast_edit` is enabled by default by `astEdit.enabled`; `OMP_OFFLINE` launches override it to `false` for the current process without changing saved configuration. It is discoverable rather than part of the essential tool set.
 
 ## Outputs
 - Single-shot preview result from `ast_edit` itself. A non-empty proposal begins with `Staged as a proposal — files NOT modified yet...` and names the resolve/reject device paths.

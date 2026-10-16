@@ -209,6 +209,7 @@ pub(crate) struct QueryPlan {
 struct CharacterProperties {
 	letter:         Regex,
 	number:         Regex,
+	mark:           Regex,
 	han:            Regex,
 	cased:          Regex,
 	case_ignorable: Regex,
@@ -217,6 +218,7 @@ struct CharacterProperties {
 static PROPERTIES: LazyLock<CharacterProperties> = LazyLock::new(|| CharacterProperties {
 	letter:         Regex::new(r"\A\p{L}\z").expect("Unicode letter property"),
 	number:         Regex::new(r"\A\p{N}\z").expect("Unicode number property"),
+	mark:           Regex::new(r"\A\p{M}\z").expect("Unicode mark property"),
 	han:            Regex::new(r"\A\p{Script=Han}\z").expect("Unicode Han script property"),
 	cased:          Regex::new(r"\A\p{Cased}\z").expect("Unicode cased property"),
 	case_ignorable: Regex::new(r"\A\p{Case_Ignorable}\z").expect("Unicode case-ignorable property"),
@@ -525,7 +527,9 @@ fn technical_query_name(query: &str) -> Option<String> {
 	if characters
 		.next()
 		.is_some_and(|first| is_letter(first) || first == '_')
-		&& characters.all(|character| is_letter_number(character) || character == '_')
+		&& characters.all(|character| {
+			is_letter_number(character) || character == '_' || property(&PROPERTIES.mark, character)
+		})
 		&& !spelling.chars().any(is_han)
 	{
 		return Some(spelling.to_owned());

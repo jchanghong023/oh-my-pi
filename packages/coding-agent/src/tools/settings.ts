@@ -541,7 +541,7 @@ export const cfgFindEnabled = register({
 export const cfgDebugEnabled = register({
 	id: "debug.enabled",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tools",
 		group: "可用工具",
@@ -613,7 +613,7 @@ export const cfgRatchetEnabled = register({
 export const cfgArchiveEnabled = register({
 	id: "archive.enabled",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tools",
 		group: "可用工具",

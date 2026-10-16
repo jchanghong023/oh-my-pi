@@ -240,7 +240,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 	readonly name = "repo";
 	readonly approval = "read" as const;
 	readonly label = "Repo";
-	readonly loadMode = "essential" as const;
+	readonly loadMode = "discoverable" as const;
 	readonly summary = "Inspect repository index coverage or search indexed text and Python symbols";
 	readonly description = prompt.render(repoDescription);
 	readonly parameters = repoSchema;

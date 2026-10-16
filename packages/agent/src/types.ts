@@ -1079,6 +1079,9 @@ export type ToolApprovalDecision =
 			 *  tool (e.g. `write` for an `xd://` device call) scope user allow/deny/
 			 *  prompt policies to the tool it dispatches into. */
 			policyKey?: string;
+			/** Whether a dispatcher may inherit its own user policy when policyKey is unset by the user.
+			 *  Defaults to true; false preserves an independently authorized device's native policy. */
+			fallbackToToolPolicy?: boolean;
 	  };
 export type ToolApproval = ToolApprovalDecision | ((args: unknown) => ToolApprovalDecision);
 

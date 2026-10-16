@@ -54,6 +54,7 @@ import {
 import { decodeUtf8Text } from "./read-format";
 import { routeReadThroughBridge } from "./read-summary";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+import { parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 
 import {
 	deleteRowByKey,
@@ -68,6 +69,7 @@ import {
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
 import { maybeWriteSnapshotHeader, stripWriteContent } from "./write-content";
+import { isReadOnlyIndexDevice } from "./xdev";
 
 import {
 	cfgLspDiagnosticsDeduplicate,
@@ -488,7 +490,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 	}
 	readonly parameters = writeSchema;
 	readonly strict = true;
-	readonly concurrency = "exclusive";
+	readonly concurrency = (args: Partial<WriteParams>): "shared" | "exclusive" => {
+		const target = typeof args.path === "string" ? parseXdUrl(unwrapHashlineHeaderPath(args.path)) : null;
+		return target?.name && isReadOnlyIndexDevice(this.session.xdev, target.name) ? "shared" : "exclusive";
+	};
 	readonly loadMode = "essential";
 
 	/** Stream matchers should see the real file content, not its JSON-escaped argument encoding. */

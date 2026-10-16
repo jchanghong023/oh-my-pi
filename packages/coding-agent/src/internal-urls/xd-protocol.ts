@@ -8,7 +8,7 @@ import type { ToolSession } from "../tools";
 import { resolveToolTier } from "../tools/approval";
 import { dispatchReportIssueDevice, reportIssueDeviceUsage } from "../tools/report-tool-issue";
 import { dispatchResolutionDevice, resolutionDeviceUsage } from "../tools/resolve";
-import { dispatchXdevTool, resolveXdevTool, xdevDocs, xdevListing } from "../tools/xdev";
+import { dispatchXdevTool, isReadOnlyIndexDevice, resolveXdevTool, xdevDocs, xdevListing } from "../tools/xdev";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -43,10 +43,14 @@ function deviceWriteTier(
 		if (typeof content !== "string") return "exec";
 		const parsed: unknown = JSON.parse(content);
 		if (!isRecord(parsed)) return "exec";
-		// The policyKey makes the outer gate consult `tools.approval.<device>` for
-		// this dispatch before falling back to `tools.approval.write`, so users can
-		// scope allow/deny/prompt to a single device (issue #7923).
-		return { tier: resolveToolTier(inst, parsed), policyKey: name };
+		// Device policy takes precedence over the transport's policy (#7923).
+		// Built-in index queries keep native policy isolation; other devices
+		// retain the existing fallback to `tools.approval.write`.
+		return {
+			tier: resolveToolTier(inst, parsed),
+			policyKey: name,
+			...(isReadOnlyIndexDevice(session?.xdev, name) ? { fallbackToToolPolicy: false } : {}),
+		};
 	} catch {
 		return "exec";
 	}

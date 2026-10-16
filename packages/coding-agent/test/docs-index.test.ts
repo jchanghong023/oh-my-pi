@@ -1926,6 +1926,37 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
+	it.each([
+		["i\u0307", "İ"],
+		["İ", "i\u0307"],
+	])("keeps equivalent Unicode queries stable across cache rebuilds (warm=%s, query=%s)", async (warm, query) => {
+		const root = await tempDir("docs-equivalent-query-root-");
+		const agentDir = await tempDir("docs-equivalent-query-agent-");
+		await fs.writeFile(path.join(root, "a.md"), `# Long\n/İ ${"background ".repeat(600)}\n`);
+		await fs.writeFile(path.join(root, "b.md"), "# Short\ni related evidence\n");
+		let engine = new DocsSearchEngine({ agentDir });
+		try {
+			await engine.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			engine.search(warm, { index: "manual" });
+			const first = engine.search(query, { index: "manual", limit: 1 });
+			expect(first).toMatchObject({ technicalName: query, exactNameMatches: 1, total: 2 });
+			expect(first.sections.map(hit => [hit.path, hit.matchKind])).toEqual([["a.md", "exact-name"]]);
+			expect(first.cursor).toBeDefined();
+			const cached = engine.search(query, { index: "manual", cursor: first.cursor });
+			expect(cached.sections.map(hit => [hit.path, hit.matchKind])).toEqual([["b.md", "related"]]);
+			for (let index = 0; index < 8; index++) engine.search(`other topic${index}`, { index: "manual" });
+			expect(engine.search(query, { index: "manual", cursor: first.cursor })).toEqual(cached);
+			engine.close();
+			engine = new DocsSearchEngine({ agentDir });
+			const reopened = engine.search(query, { index: "manual", cursor: first.cursor });
+			expect(reopened).toEqual(cached);
+			expect([...first.sections, ...reopened.sections].map(hit => hit.path)).toEqual(["a.md", "b.md"]);
+		} finally {
+			engine.close();
+		}
+	});
+
 	it.each([false, true])("invalidates external SQL continuations (FTS-only=%s)", async ftsOnly => {
 		const root = await tempDir("docs-cache-mutation-root-");
 		const agentDir = await tempDir("docs-cache-mutation-agent-");

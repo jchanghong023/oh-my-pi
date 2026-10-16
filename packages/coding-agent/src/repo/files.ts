@@ -136,7 +136,9 @@ export async function readRepoFile(root: string, rel: string, signal?: AbortSign
 			let component = root;
 			for (const part of rel.split("/")) {
 				component = path.join(component, part);
-				if ((await lstat(component)).isSymbolicLink())
+				const metadata = await lstat(component);
+				if (component === absolute && metadata.isDirectory()) return { missing: true };
+				if (metadata.isSymbolicLink())
 					return { failure: { path: rel, kind: "symlink", message: "Symbolic links are excluded" } };
 			}
 			if (relativePath(root, await realpathTolerant(root, absolute)) !== rel)

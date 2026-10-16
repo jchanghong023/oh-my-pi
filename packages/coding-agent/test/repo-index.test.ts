@@ -519,6 +519,26 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect((await gitService.status()).pendingCount).toBe(0);
 	});
 
+	it("updates a tracked file replaced by a directory without blocking subsequent queries", async () => {
+		const { root, service } = await fixture({ "entry.py": "def former_file(): return 'formerfilebeacon'\n" });
+		await $`git init -q`.cwd(root).quiet();
+		await $`git add entry.py`.cwd(root).quiet();
+		await $`git -c user.name=IndexTest -c user.email=index@example.test commit -qm initial`.cwd(root).quiet();
+		await service.build();
+		await fs.unlink(path.join(root, "entry.py"));
+		await put(root, "entry.py/new.py", "def nested_replacement(): return 'nestedreplacementbeacon'\n");
+		await service.discoverChanges();
+		expect((await service.status()).pendingPaths).toEqual(["entry.py", "entry.py/new.py"]);
+		expect((await service.search("nestedreplacementbeacon")).hits.map(hit => hit.path)).toEqual(["entry.py/new.py"]);
+		expect((await service.symbol("nested_replacement")).hits.map(hit => hit.path)).toEqual(["entry.py/new.py"]);
+		expect((await service.search("formerfilebeacon")).hits).toEqual([]);
+		expect((await service.symbol("former_file")).hits).toEqual([]);
+		const status = await service.status();
+		expect(status.pendingCount).toBe(0);
+		expect(status.failureCount).toBe(0);
+		expect(status.fileCount).toBe(1);
+	});
+
 	it("does not import a known changed path beneath an ignored ancestor during incremental or full reconciliation", async () => {
 		const { root, service } = await fixture({
 			".gitignore": "generated/\n",

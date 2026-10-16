@@ -1160,7 +1160,7 @@ export class RepoService {
 						const foldedNeedle = needle.toLowerCase();
 						const foldedTokens = tokens.slice(1).map(token => token.toLowerCase());
 						const boundary = new RegExp(
-							`(?<![\\p{L}\\p{N}_])${RegExp.escape(foldedNeedle)}(?![\\p{L}\\p{N}_])`,
+							`(?<![\\p{L}\\p{M}\\p{N}_])${RegExp.escape(foldedNeedle)}(?![\\p{L}\\p{M}\\p{N}_])`,
 							"u",
 						);
 						hits = [];

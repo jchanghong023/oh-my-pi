@@ -18,7 +18,10 @@ use sha2::{Digest, Sha256};
 
 use super::{
 	database::WikiError,
-	markdown::{is_js_whitespace, lex_section, plain_text, section_shape, trim_js},
+	markdown::{
+		ContextSectionRef, SectionContextScanner, is_js_whitespace, lex_section, list_end,
+		plain_text, section_shape, trim_js,
+	},
 	query::{SectionContext, Shape},
 };
 use crate::task;
@@ -83,7 +86,6 @@ struct Draft {
 	start:         usize,
 	end:           usize,
 }
-
 #[derive(Clone, Copy)]
 struct Fence {
 	marker: u8,
@@ -237,25 +239,12 @@ fn utf16_prefix_bytes(text: &str, units: usize) -> usize {
 	text.len()
 }
 
-fn normalization(markdown: &str, fence: Option<Fence>, continues_line: bool) -> String {
-	let context = SectionContext {
-		shape: Shape::Content,
-		fence_prefix: fence.map(|fence| (fence.marker as char).to_string().repeat(fence.length)),
-		continues_line,
-		before: Default::default(),
-		after: Default::default(),
-	};
-	plain_text(&lex_section(markdown, &context))
-}
-
 fn emit_section(
 	sections: &mut Vec<WikiMarkdownSection>,
 	draft: &Draft,
 	first: SourceLine<'_>,
 	last: SourceLine<'_>,
 	source: &str,
-	fence: Option<Fence>,
-	continues_line: bool,
 ) {
 	let raw = &source[first.byte_start..last.byte_end()];
 	sections.push(WikiMarkdownSection {
@@ -267,7 +256,7 @@ fn emit_section(
 		byte_start:    first.byte_start as i64,
 		byte_end:      last.byte_end() as i64,
 		raw_markdown:  raw.to_owned(),
-		plain_text:    normalization(raw, fence, continues_line),
+		plain_text:    String::new(),
 	});
 }
 
@@ -279,26 +268,12 @@ fn chunk_draft(
 ) {
 	let lines = &lines[draft.start..draft.end];
 	if lines.iter().map(|line| line.utf16_len).sum::<usize>() <= MAX_SECTION_CHARS {
-		emit_section(sections, draft, lines[0], lines[lines.len() - 1], source, None, false);
+		emit_section(sections, draft, lines[0], lines[lines.len() - 1], source);
 		return;
 	}
-	let mut fence = None;
-	let fences: Vec<_> = lines
-		.iter()
-		.map(|line| {
-			let before = fence;
-			let text = if line.byte_start == 0 {
-				line.text.strip_prefix('\u{feff}').unwrap_or(line.text)
-			} else {
-				line.text
-			};
-			fence = next_fence(fence, parse_fence(text));
-			before
-		})
-		.collect();
 	let flush = |start: usize, end: usize, sections: &mut Vec<WikiMarkdownSection>| {
 		if start < end {
-			emit_section(sections, draft, lines[start], lines[end - 1], source, fences[start], false);
+			emit_section(sections, draft, lines[start], lines[end - 1], source);
 		}
 	};
 	let mut start = 0;
@@ -317,7 +292,7 @@ fn chunk_draft(
 					byte_start: line.byte_start + consumed_bytes,
 					utf16_len: 0,
 				};
-				emit_section(sections, draft, part, part, source, fences[index], consumed_bytes > 0);
+				emit_section(sections, draft, part, part, source);
 				if length == rest.len() {
 					break;
 				}
@@ -388,6 +363,23 @@ pub(super) fn parse_markdown(bytes: &[u8]) -> CoreResult<WikiParsedMarkdown> {
 		} else {
 			line.text
 		};
+		if fence.is_none()
+			&& let Some(end) = list_end(
+				|position| {
+					let text = lines[position].text;
+					if position == 0 {
+						text.strip_prefix('\u{feff}').unwrap_or(text)
+					} else {
+						text
+					}
+				},
+				lines.len(),
+				index,
+			) {
+			current.end = end;
+			index = end;
+			continue;
+		}
 		let found = parse_fence(source_line);
 		let heading = parse_heading(
 			source_line,
@@ -423,6 +415,27 @@ pub(super) fn parse_markdown(bytes: &[u8]) -> CoreResult<WikiParsedMarkdown> {
 	let mut sections = Vec::new();
 	for draft in drafts {
 		chunk_draft(&draft, &lines, source, &mut sections);
+	}
+	let mut scanner = SectionContextScanner::default();
+	let mut previous = None;
+	for index in 0..sections.len() {
+		let context = scanner.lex_context(
+			previous.map(|position: usize| ContextSectionRef {
+				document_id:  0,
+				byte_start:   sections[position].byte_start,
+				byte_end:     sections[position].byte_end,
+				raw_markdown: &sections[position].raw_markdown,
+			}),
+			ContextSectionRef {
+				document_id:  0,
+				byte_start:   sections[index].byte_start,
+				byte_end:     sections[index].byte_end,
+				raw_markdown: &sections[index].raw_markdown,
+			},
+		);
+		sections[index].plain_text =
+			plain_text(&lex_section(&sections[index].raw_markdown, &context));
+		previous = Some(index);
 	}
 	Ok(WikiParsedMarkdown { title, sections })
 }

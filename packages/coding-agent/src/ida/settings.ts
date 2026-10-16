@@ -8,7 +8,7 @@ import { register } from "../config/registry";
 export const cfgIdaEnabled = register({
 	id: "ida.enabled",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tools",
 		group: "可用工具",

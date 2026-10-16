@@ -26,7 +26,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 	readonly name = "wiki";
 	readonly approval = "read" as const;
 	readonly label = "Wiki";
-	readonly loadMode = "essential" as const;
+	readonly loadMode = "discoverable" as const;
 	readonly summary = "Search the indexed Markdown corpus and return the matching text";
 	readonly description = prompt.render(wikiDescription);
 	readonly parameters = wikiSchema;

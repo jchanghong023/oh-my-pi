@@ -128,13 +128,15 @@ describe("IDA availability", () => {
 	});
 
 	it("exposes IDA when the configured install ships idalib", () => {
-		const settings = Settings.isolated({ "ida.installDir": withIdalib });
+		const settings = Settings.isolated({ "ida.enabled": true, "ida.installDir": withIdalib });
 		expect(cfgIdaInstall.get(settings)).toBe(withIdalib);
 		expect(cfgIdaAvailable.get(settings)).toBe(true);
 	});
 
 	it("hides IDA when the configured install lacks idalib, without falling back", () => {
-		expect(cfgIdaAvailable.get(Settings.isolated({ "ida.installDir": withoutIdalib }))).toBe(false);
+		expect(cfgIdaAvailable.get(Settings.isolated({ "ida.enabled": true, "ida.installDir": withoutIdalib }))).toBe(
+			false,
+		);
 	});
 
 	it("hides IDA when disabled even with a valid install", () => {

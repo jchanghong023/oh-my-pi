@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
@@ -198,6 +200,86 @@ describe("read and write route xd:// device URLs", () => {
 		expect(resolveApproval(write, args, "always-ask", { other_device: "deny" }).policy).toBe("prompt");
 	});
 
+	it("keeps index query policies independent of the write transport", async () => {
+		const session = xdevSession(process.cwd(), { skipPythonPreflight: true });
+		const tools = await createTools(session);
+		const write = tools.find(tool => tool.name === "write")!;
+		for (const name of ["wiki", "repo"]) {
+			const args = { path: `xd://${name}`, content: JSON.stringify({ query: "probe" }) };
+			expect(requiresApproval(write, args, "always-ask", { write: "deny" }).required).toBe(false);
+			expect(requiresApproval(write, args, "always-ask", { write: "prompt" }).required).toBe(false);
+			expect(() => requiresApproval(write, args, "yolo", { write: "allow", [name]: "deny" })).toThrow(
+				`tools.approval.${name}: deny`,
+			);
+			expect(requiresApproval(write, args, "always-ask", { write: "deny", [name]: "prompt" }).required).toBe(true);
+		}
+		expect(() => requiresApproval(write, { path: "target.txt", content: "text" }, "yolo", { write: "deny" })).toThrow(
+			"tools.approval.write: deny",
+		);
+	});
+
+	it("runs index device queries concurrently while keeping file writes exclusive", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-index-scheduling-"));
+		try {
+			const settings = Object.assign(Settings.isolated({}), { getAgentDir: () => path.join(tempDir, "agent") });
+			const session = xdevSession(tempDir, { settings, skipPythonPreflight: true, enableLsp: false });
+			const tools = await createTools(session);
+			const write = tools.find(tool => tool.name === "write")!;
+			const runBatch = async (args: Array<{ path: string; content: string }>) => {
+				const provider = createMockModel({
+					responses: [
+						{
+							content: args.map((arguments_, index) => ({
+								type: "toolCall" as const,
+								id: `call-${index}`,
+								name: "write",
+								arguments: arguments_,
+							})),
+						},
+						{ content: ["done"] },
+					],
+				});
+				const stream = agentLoop(
+					[{ role: "user", content: "Run both operations.", timestamp: Date.now() }],
+					{ systemPrompt: [""], messages: [], tools: [write] },
+					{
+						model: provider.model,
+						convertToLlm: messages =>
+							messages.filter(
+								message =>
+									message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+							),
+					},
+					undefined,
+					provider.stream,
+				);
+				let active = 0;
+				let maximum = 0;
+				for await (const event of stream) {
+					if (event.type === "tool_execution_start") maximum = Math.max(maximum, ++active);
+					if (event.type === "tool_execution_end") {
+						active--;
+						expect(event.isError).not.toBe(true);
+					}
+				}
+				await stream.result();
+				return maximum;
+			};
+			const query = { path: "xd://repo", content: JSON.stringify({ action: "status" }) };
+			expect(await runBatch([query, query])).toBe(2);
+			const target = path.join(tempDir, "target.txt");
+			expect(
+				await runBatch([
+					{ path: target, content: "first" },
+					{ path: target, content: "second" },
+				]),
+			).toBe(1);
+			expect(await Bun.file(target).text()).toBe("second");
+		} finally {
+			await removeWithRetries(tempDir);
+		}
+	});
+
 	it("records the effective tier reported after an execution decorator rewrites device args", async () => {
 		let executedQuery: string | undefined;
 		const device: AgentTool = {
@@ -273,7 +355,9 @@ describe("read and write route xd:// device URLs", () => {
 		try {
 			const filePath = path.join(tempDir, "target.ts");
 			await Bun.write(filePath, "legacyWrap(x, value)\n");
-			const tools = await createTools(xdevSession(tempDir));
+			const tools = await createTools(
+				xdevSession(tempDir, { settings: Settings.isolated({ "debug.enabled": true }) }),
+			);
 			const write = tools.find(entry => entry.name === "write");
 			expect(write).toBeDefined();
 			const approval = write!.approval;

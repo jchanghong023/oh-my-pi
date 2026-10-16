@@ -36,7 +36,6 @@ static HTML: LazyLock<Regex> = LazyLock::new(|| {
 static HTML_TAG: LazyLock<Regex> = LazyLock::new(|| js_regex(r"^ {0,3}<([A-Za-z][A-Za-z0-9_-]*)"));
 static TASK: LazyLock<Regex> = LazyLock::new(|| js_regex(r"^\[([ xX])\][ \t]+"));
 static LOOSE: LazyLock<Regex> = LazyLock::new(|| js_regex(r"\n\s*\n"));
-static LOOSE_END: LazyLock<Regex> = LazyLock::new(|| js_regex(r"\n\s*\n\z"));
 
 fn strip_newline(source: &str) -> &str {
 	source.strip_suffix('\n').unwrap_or(source)
@@ -96,11 +95,13 @@ struct ListMatch<'a> {
 	marker:      &'a str,
 	text:        &'a str,
 }
+fn list_source_line(line: &str) -> &str {
+	let line = line.strip_suffix('\n').unwrap_or(line);
+	line.strip_suffix('\r').unwrap_or(line)
+}
+
 fn list_match(line: &str) -> Option<ListMatch<'_>> {
-	let captures = LIST.captures(line)?;
-	// The JS lookahead leaves an empty marker's newline unconsumed. Our
-	// assertion emulation consumes it, but the text remains the same empty
-	// value.
+	let captures = LIST.captures(list_source_line(line))?;
 	Some(ListMatch {
 		indentation: captures.get(1)?.as_str().len(),
 		marker:      captures.get(2)?.as_str(),
@@ -128,8 +129,7 @@ fn split_table_row(line: &str) -> Vec<String> {
 	cells.push(trim_js(&value[start..]).replace("\\|", "|"));
 	cells
 }
-fn block_start(lines: &[&str], index: usize) -> bool {
-	let line = lines[index];
+fn block_start_line(line: &str, next: Option<&str>) -> bool {
 	if !line.is_empty() && line.bytes().all(|byte| byte == b'\n') {
 		return true;
 	}
@@ -148,7 +148,7 @@ fn block_start(lines: &[&str], index: usize) -> bool {
 	{
 		return true;
 	}
-	if let Some(next) = lines.get(index + 1) {
+	if let Some(next) = next {
 		if SETEXT.is_match(next) {
 			return true;
 		}
@@ -161,6 +161,90 @@ fn block_start(lines: &[&str], index: usize) -> bool {
 		}
 	}
 	false
+}
+fn block_start(lines: &[&str], index: usize) -> bool {
+	block_start_line(lines[index], lines.get(index + 1).copied())
+}
+
+pub(super) fn quote_prefix(line: &str) -> Option<usize> {
+	QUOTE.find(line).map(|matched| matched.end())
+}
+
+pub(super) fn list_prefix(line: &str) -> Option<(usize, usize, usize)> {
+	if HR.is_match(list_source_line(line)) {
+		return None;
+	}
+	let captures = LIST.captures(list_source_line(line))?;
+	let indentation = captures.get(1)?.len();
+	Some((indentation, indentation + captures.get(2)?.len() + 1, captures.get(4)?.start()))
+}
+
+pub(super) fn list_line_continues(line: &str, next: Option<&str>, indentation: usize) -> bool {
+	!(!blankish(line) && indent(line) <= indentation && block_start_line(line, next))
+		&& (starts_whitespace(line) || line == "\n")
+}
+
+fn list_item_end<'a>(
+	line: &impl Fn(usize) -> &'a str,
+	length: usize,
+	start: usize,
+	indentation: usize,
+	compatible: &impl Fn(&ListMatch<'_>) -> bool,
+) -> usize {
+	let mut cursor = start + 1;
+	while cursor < length {
+		let next = line(cursor);
+		if !list_line_continues(next, (cursor + 1 < length).then(|| line(cursor + 1)), indentation) {
+			break;
+		}
+		if blank_line(next) {
+			let mut lookahead = cursor + 1;
+			while lookahead < length && blank_line(line(lookahead)) {
+				lookahead += 1;
+			}
+			if lookahead >= length
+				|| indent(line(lookahead)) <= indentation
+					&& !list_match(line(lookahead)).is_some_and(|matched| compatible(&matched))
+			{
+				break;
+			}
+		}
+		cursor += 1;
+		// Every preceding source line already ended in LF. Thus the old
+		// /\n\s*\n$/ check on the accumulated item text is exactly this
+		// blank-line check, without constructing the text just to find its end.
+		if blank_line(next) && cursor < length && !starts_whitespace(line(cursor)) {
+			break;
+		}
+	}
+	cursor
+}
+
+fn compatible_list(first: &ListMatch<'_>, matched: &ListMatch<'_>) -> bool {
+	let ordered = first.marker.as_bytes()[0].is_ascii_digit();
+	matched.marker.as_bytes()[0].is_ascii_digit() == ordered
+		&& if ordered {
+			first.marker.as_bytes().last() == matched.marker.as_bytes().last()
+		} else {
+			first.marker == matched.marker
+		}
+}
+
+pub(super) fn list_end<'a>(
+	line: impl Fn(usize) -> &'a str,
+	length: usize,
+	index: usize,
+) -> Option<usize> {
+	if HR.is_match(list_source_line(line(index))) {
+		return None;
+	}
+	let first = list_match(line(index))?;
+	let compatible = |matched: &ListMatch<'_>| compatible_list(&first, matched);
+	let mut cursor = index;
+	while cursor < length && list_match(line(cursor)).is_some_and(|matched| compatible(&matched)) {
+		cursor = list_item_end(&line, length, cursor, first.indentation, &compatible);
+	}
+	Some(cursor)
 }
 fn token(kind: TokenKind, raw: String, text: String) -> Token {
 	Token { kind, raw, text, ..Token::default() }
@@ -203,20 +287,7 @@ fn make_table(lines: &[&str], index: usize) -> Option<(Token, usize)> {
 }
 fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token, usize)> {
 	let first = list_match(lines[index])?;
-	let ordered = first.marker.as_bytes()[0].is_ascii_digit();
-	let delimiter = if ordered {
-		&first.marker[first.marker.len() - 1..]
-	} else {
-		first.marker
-	};
-	let compatible = |matched: &ListMatch<'_>| {
-		matched.marker.as_bytes()[0].is_ascii_digit() == ordered
-			&& (if ordered {
-				&matched.marker[matched.marker.len() - 1..]
-			} else {
-				matched.marker
-			}) == delimiter
-	};
+	let compatible = |matched: &ListMatch<'_>| compatible_list(&first, matched);
 	let mut raw_items = Vec::new();
 	let mut cursor = index;
 	while cursor < lines.len() {
@@ -229,37 +300,13 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 		if lines[cursor].ends_with('\n') {
 			text.push('\n');
 		}
-		cursor += 1;
-		while cursor < lines.len() {
-			let next = lines[cursor];
-			let indentation = indent(next);
-			if !blankish(next) && indentation <= first.indentation && block_start(lines, cursor) {
-				break;
-			}
-			if !starts_whitespace(next) && next != "\n" {
-				break;
-			}
+		cursor =
+			list_item_end(&|index| lines[index], lines.len(), start, first.indentation, &compatible);
+		for next in &lines[start + 1..cursor] {
 			if blank_line(next) {
-				let mut lookahead = cursor + 1;
-				while lookahead < lines.len() && blank_line(lines[lookahead]) {
-					lookahead += 1;
-				}
-				if lookahead >= lines.len() {
-					break;
-				}
-				let following = lines[lookahead];
-				if indent(following) <= first.indentation
-					&& !list_match(following).is_some_and(|matched| compatible(&matched))
-				{
-					break;
-				}
 				text.push_str(next);
 			} else {
-				text.push_str(&next[indentation.min(width)..]);
-			}
-			cursor += 1;
-			if LOOSE_END.is_match(&text) && cursor < lines.len() && !starts_whitespace(lines[cursor]) {
-				break;
+				text.push_str(&next[indent(next).min(width)..]);
 			}
 		}
 		let mut raw = lines[start..cursor].concat();

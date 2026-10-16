@@ -136,6 +136,25 @@ describe("native Python definitions", () => {
 		expect(await pythonSymbols({ code: "" })).toEqual({ symbols: [], parseError: false });
 	});
 
+	test("empty suites discard earlier definitions even without a tree-sitter error node", async () => {
+		const valid = "def previously_valid(): return 1\n";
+		for (const tail of [
+			"def broken():\n",
+			"def broken():\n    # comment\n",
+			"class Broken:\n",
+			"if True:\n",
+			"def broken():\n    if True:\n",
+			"try:\nfinally:\n",
+		]) {
+			expect(await pythonSymbols({ code: `${valid}${tail}` })).toEqual({ symbols: [], parseError: true });
+		}
+		const result = await pythonSymbols({ code: "def valid():\n    # comment\n    pass\n" });
+		expect(result.parseError).toBe(false);
+		expect(result.symbols.map(({ name, startLine, endLine }) => ({ name, startLine, endLine }))).toEqual([
+			{ name: "valid", startLine: 1, endLine: 3 },
+		]);
+	});
+
 	test("an already-aborted task rejects rather than exposing partial symbols", async () => {
 		const controller = new AbortController();
 		controller.abort();

@@ -71,6 +71,13 @@ pub(super) fn js_regex(pattern: &str) -> Regex {
 	)
 	.expect("shared Markdown regular expression")
 }
+pub(super) fn list_end<'a>(
+	line: impl Fn(usize) -> &'a str,
+	length: usize,
+	index: usize,
+) -> Option<usize> {
+	block::list_end(line, length, index)
+}
 
 pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token> {
 	let source = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
@@ -88,7 +95,13 @@ pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token
 		if let Some(prefix) = context.fence_prefix.as_ref()
 			&& let Some(marker) = prefix.find(['`', '~'])
 		{
-			reconstructed.push_str(&prefix[..marker]);
+			reconstructed.extend(prefix[..marker].chars().map(|character| {
+				if matches!(character, '>' | ' ' | '\t') {
+					character
+				} else {
+					' '
+				}
+			}));
 		}
 		reconstructed.push_str("    ");
 	}
@@ -266,11 +279,21 @@ struct Fence {
 	marker:      char,
 	length:      usize,
 	quote_depth: usize,
+	list_depth:  usize,
+}
+
+struct ListContext {
+	quote_depth: usize,
+	indentation: usize,
+	width:       usize,
+	prefix:      String,
 }
 
 #[derive(Default)]
 struct MarkdownFenceScanner {
 	fence:           Option<Fence>,
+	lists:           Vec<ListContext>,
+	line_buffer:     String,
 	continues_line:  bool,
 	spaces:          usize,
 	quote_depth:     usize,
@@ -282,8 +305,130 @@ struct MarkdownFenceScanner {
 	carriage_return: bool,
 }
 
+// Match the shared lexer's tab expansion only when needed. Reuse one buffer
+// across source slices; ordinary lines remain borrowed.
+fn scanner_line<'a>(source: &'a str, buffer: &'a mut String) -> &'a str {
+	if !source.contains('\t') {
+		return source;
+	}
+	buffer.clear();
+	for character in source.chars() {
+		if character == '\t' {
+			buffer.push_str("    ");
+		} else {
+			buffer.push(character);
+		}
+	}
+	buffer
+}
+
 impl MarkdownFenceScanner {
+	fn end_lists_before(&mut self, source: &str) {
+		if self.continues_line || self.lists.is_empty() {
+			return;
+		}
+		let mut lines = source.split_inclusive('\n');
+		let mut buffer = std::mem::take(&mut self.line_buffer);
+		let mut line = scanner_line(lines.next().unwrap_or(""), &mut buffer);
+		let next = lines.next();
+		let mut quote_depth = 0;
+		let mut list_depth = 0;
+		while let Some(list) = self.lists.get(list_depth) {
+			if list.quote_depth == quote_depth {
+				if !block::list_line_continues(line, next, list.indentation) {
+					break;
+				}
+				let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+				line = &line[indentation.min(list.width)..];
+				list_depth += 1;
+			} else if let Some(length) = block::quote_prefix(line) {
+				line = &line[length..];
+				quote_depth += 1;
+			} else {
+				break;
+			}
+		}
+		self.lists.truncate(list_depth);
+		if self
+			.fence
+			.is_some_and(|fence| fence.list_depth > list_depth)
+		{
+			self.fence = None;
+		}
+		self.line_buffer = buffer;
+	}
+
 	fn append(&mut self, source: &str) {
+		let mut buffer = std::mem::take(&mut self.line_buffer);
+		let mut lines = source.split_inclusive('\n').peekable();
+		while let Some(source_line) = lines.next() {
+			let mut line = if self.continues_line {
+				source_line
+			} else {
+				scanner_line(source_line, &mut buffer)
+			};
+			if !self.continues_line {
+				let mut quote_depth = 0;
+				let mut list_depth = 0;
+				loop {
+					if let Some(list) = self.lists.get(list_depth)
+						&& list.quote_depth == quote_depth
+					{
+						if block::list_line_continues(line, lines.peek().copied(), list.indentation) {
+							let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+							line = &line[indentation.min(list.width)..];
+							list_depth += 1;
+							continue;
+						}
+						self.lists.truncate(list_depth);
+					}
+					if self
+						.fence
+						.is_some_and(|fence| fence.list_depth > self.lists.len())
+					{
+						self.fence = None;
+					}
+					if self
+						.fence
+						.is_none_or(|fence| quote_depth < fence.quote_depth)
+						&& let Some(length) = block::quote_prefix(line)
+					{
+						self.append_raw(&line[..length]);
+						line = &line[length..];
+						quote_depth += 1;
+						continue;
+					}
+					if self.lists.len() > list_depth {
+						self.lists.truncate(list_depth);
+						if self
+							.fence
+							.is_some_and(|fence| fence.list_depth > list_depth)
+						{
+							self.fence = None;
+						}
+					}
+					if self.fence.is_none()
+						&& let Some((indentation, width, end)) = block::list_prefix(line)
+					{
+						let mut prefix = String::with_capacity(width);
+						prefix.push_str(&line[..width - 1]);
+						prefix.push(' ');
+						self
+							.lists
+							.push(ListContext { quote_depth, indentation, width, prefix });
+						line = &line[end..];
+						list_depth += 1;
+						continue;
+					}
+					break;
+				}
+			}
+			self.append_raw(line);
+		}
+		self.line_buffer = buffer;
+	}
+
+	fn append_raw(&mut self, source: &str) {
 		let mut line_start = (!self.continues_line).then_some(0);
 		for (position, character) in source.char_indices() {
 			if character == '\n' {
@@ -390,6 +535,7 @@ impl MarkdownFenceScanner {
 					marker:      character,
 					length:      1,
 					quote_depth: self.quote_depth,
+					list_depth:  self.lists.len(),
 				});
 			} else {
 				self.invalid = true;
@@ -463,10 +609,18 @@ impl SectionContextScanner {
 		} else {
 			self.scanner = MarkdownFenceScanner::default();
 		}
+		self.scanner.end_lists_before(section.raw_markdown);
 		SectionContext {
 			shape:          Shape::Content,
 			fence_prefix:   self.scanner.fence.map(|fence| {
-				let mut prefix = "> ".repeat(fence.quote_depth);
+				let mut prefix = String::new();
+				let mut quote_depth = 0;
+				for list in self.scanner.lists.iter().take(fence.list_depth) {
+					prefix.push_str(&"> ".repeat(list.quote_depth - quote_depth));
+					prefix.push_str(&list.prefix);
+					quote_depth = list.quote_depth;
+				}
+				prefix.push_str(&"> ".repeat(fence.quote_depth - quote_depth));
 				prefix.extend(std::iter::repeat_n(fence.marker, fence.length));
 				prefix
 			}),
@@ -662,7 +816,7 @@ mod tests {
 				let trailing = matched.get(2).unwrap().as_str();
 				fence = match fence {
 					None if marker != '`' || !trailing.contains('`') => {
-						Some(Fence { marker, length: run.len(), quote_depth: 0 })
+						Some(Fence { marker, length: run.len(), quote_depth: 0, list_depth: 0 })
 					},
 					Some(active)
 						if active.marker == marker
@@ -815,5 +969,95 @@ mod tests {
 			body,
 			context,
 		));
+	}
+
+	#[test]
+	fn list_fences_do_not_split_code_headings_or_swallow_following_root_sections() {
+		for newline in ["\n", "\r\n"] {
+			let source = "# Guide\n\n- ```cpp\n  # not_a_heading\n  operator<< C++\n  ```\n\n# \
+			              Real\nbody\n"
+				.replace('\n', newline);
+			let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+			assert_eq!(parsed.sections.len(), 2);
+			assert_eq!(parsed.sections[0].heading_path, ["Guide"]);
+			assert_eq!((parsed.sections[0].line_start, parsed.sections[0].line_end), (1, 7));
+			assert_eq!(parsed.sections[1].heading_path, ["Real"]);
+			assert_eq!((parsed.sections[1].line_start, parsed.sections[1].line_end), (8, 9));
+			assert!(parsed.sections[0].plain_text.contains("operator<< C++"));
+			assert_eq!(parsed.sections[1].raw_markdown, format!("# Real{newline}body{newline}"));
+			for row in &parsed.sections {
+				assert_eq!(row.raw_markdown, source[row.byte_start as usize..row.byte_end as usize],);
+			}
+		}
+	}
+
+	#[test]
+	fn list_fence_context_survives_long_sections_and_long_line_overlaps() {
+		for (opener, prefix) in [
+			("- ```cpp", "  "),
+			("1. ```cpp", "   "),
+			("- ```cpp", "\t"),
+			("1. ```cpp", "\t"),
+			("> - ```cpp", ">   "),
+			("> - ```cpp", ">\t"),
+			("- > ```cpp", "  > "),
+			("- - ```cpp", "    "),
+		] {
+			for long_line in [false, true] {
+				let body = if long_line {
+					format!(
+						"{prefix}{} operator<< C++ [literal] {}\n",
+						"x".repeat(17_970),
+						"z".repeat(19_000)
+					)
+				} else {
+					format!("{prefix}operator<< C++ [literal]\n").repeat(900)
+				};
+				let source = format!(
+					"# Guide\n\n{opener}\n{body}{prefix}# not_a_heading\n{prefix}```\n\n# Real\nbody\n",
+				);
+				let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+				assert!(parsed.sections.len() > 2, "{opener}");
+				let recovered = contexts(parsed.sections.iter().enumerate().map(|(index, row)| {
+					section(index as i64, row.byte_start, row.byte_end, &row.raw_markdown)
+				}));
+				for (row, (_, context)) in parsed.sections.iter().zip(&recovered) {
+					assert!(row.raw_markdown.encode_utf16().count() <= 18_000);
+					assert_eq!(row.raw_markdown, source[row.byte_start as usize..row.byte_end as usize]);
+					assert_eq!(row.plain_text, plain_text(&lex_section(&row.raw_markdown, context)));
+					if row.raw_markdown.contains("# not_a_heading") {
+						assert_eq!(context.shape, Shape::Content);
+					}
+					assert!(
+						!row
+							.heading_path
+							.iter()
+							.any(|heading| heading == "not_a_heading")
+					);
+				}
+				assert!(
+					parsed
+						.sections
+						.iter()
+						.any(|row| row.plain_text.contains("operator<< C++ [literal]"))
+				);
+				let last = parsed.sections.last().unwrap();
+				assert_eq!(last.heading_path, ["Real"]);
+				assert_eq!(last.raw_markdown, "# Real\nbody\n");
+				assert!(recovered.iter().skip(1).any(|(_, context)| {
+					context.fence_prefix.as_deref() == Some(opener.trim_end_matches("cpp"))
+				}));
+			}
+		}
+	}
+
+	#[test]
+	fn unfinished_list_fences_end_with_their_container() {
+		let source = "# Guide\n\n- ```cpp\n  operator<< C++\n\n# Real\nbody\n";
+		let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+		assert_eq!(parsed.sections.len(), 2);
+		assert_eq!(parsed.sections[1].heading_path, ["Real"]);
+		assert_eq!(parsed.sections[1].raw_markdown, "# Real\nbody\n");
+		assert_eq!(parsed.sections[1].plain_text, plain_text(&block::lex("# Real\nbody\n")));
 	}
 }

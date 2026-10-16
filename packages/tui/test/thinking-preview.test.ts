@@ -75,13 +75,7 @@ describe("ThinkingPreviewComponent", () => {
 		}
 		source += "next";
 		preview.setText(source);
-		expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual([
-			"second",
-			"third",
-			"latest",
-			"",
-			"    next",
-		]);
+		expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual(["second", "third", "latest", "", "    next"]);
 		source += "\n\n \n\nlast\n\n";
 		preview.setText(source);
 		expect(preview.render(80).map(row => Bun.stripANSI(row))).toEqual(["latest", "", "    next", "", "last"]);

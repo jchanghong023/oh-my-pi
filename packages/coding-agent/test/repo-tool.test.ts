@@ -131,6 +131,29 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		await expect(execute(tool, {})).rejects.toThrow(/requires query/);
 	});
 
+	it("keeps combining marks inside word boundaries when ranking and locating text", async () => {
+		const { cwd, agentDir, tool } = await fixture({
+			"a.txt": "a\u0301target substring\n",
+			"b.txt": "target\u0301suffix substring\n",
+			"c.txt": "a\u0301target earlier substring\n target exact later\n",
+			"z.txt": "target exact\n",
+		});
+		await build(cwd, agentDir);
+		const result = await execute(tool, { query: "target" });
+		if (result.details?.action !== "search") throw new Error("Expected search results");
+		expect(result.details.hits.map(hit => hit.path)).toEqual(["c.txt", "z.txt", "a.txt", "b.txt"]);
+		expect(result.details.hits[0]).toMatchObject({
+			startLine: 2,
+			endLine: 2,
+			snippet: " target exact later",
+		});
+		expect(resultText(result)).toContain("c.txt:2-2");
+		const marked = await execute(tool, { query: "a\u0301target", path: "c.txt" });
+		expect(marked.details).toMatchObject({
+			hits: [{ path: "c.txt", startLine: 1, snippet: "a\u0301target earlier substring" }],
+		});
+	});
+
 	it("narrows default searches by directory and retains coverage warnings outside status", async () => {
 		const { cwd, agentDir, tool } = await fixture({
 			"src/engine.py": "def engine(): return 'PATH_MARKER'\n",
@@ -323,14 +346,28 @@ describe("repository tool with a real SQLite index and native Python parser", ()
 		expect(ordinary.details.fieldTruncations["hits.path"]).toBeUndefined();
 	});
 
-	it("grants read-only repo in unrestricted sessions without widening restricted permissions", async () => {
-		const { session } = await fixture();
+	it("queries repo through a read-only device without widening restricted permissions", async () => {
+		const { cwd, agentDir, session } = await fixture({ "probe.py": "def dispatch_probe(): pass\n" });
+		await build(cwd, agentDir);
 		const defaultTools = await createTools(session);
+		expect(defaultTools.map(tool => tool.name)).not.toContain("repo");
+		const write = defaultTools.find(tool => tool.name === "write");
+		if (!write) throw new Error("Expected the device write transport");
+		const result = await write.execute("repo-device-query", {
+			path: "xd://repo",
+			content: JSON.stringify({ action: "symbol", query: "dispatch_probe" }),
+		});
+		expect(result.details).toMatchObject({
+			xdev: {
+				tool: "repo",
+				tier: "read",
+				inner: { action: "symbol", hits: [{ path: "probe.py", startLine: 1 }] },
+			},
+		});
 		const readTools = await createTools(session, ["read"]);
 		const restricted = { ...session, restrictToolNames: true } as ToolSession;
 		const restrictedRead = await createTools(restricted, ["read"]);
 		const explicit = await createTools(restricted, ["repo"]);
-		expect(defaultTools.find(tool => tool.name === "repo")?.loadMode).toBe("essential");
 		expect(readTools.map(tool => tool.name)).toContain("repo");
 		expect(restrictedRead.map(tool => tool.name)).not.toContain("repo");
 		expect(explicit.map(tool => tool.name)).toContain("repo");

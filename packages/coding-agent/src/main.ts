@@ -165,7 +165,7 @@ import { cfgGoalEnabled } from "./goals/settings";
 import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "./plan-mode/settings";
 
 import { cfgAdvisorEnabled } from "./advisor/settings";
-import { cfgFetchEnabled, cfgToolsApprovalMode, cfgWebSearchEnabled } from "./tools/settings";
+import { cfgAstEditEnabled, cfgFetchEnabled, cfgToolsApprovalMode, cfgWebSearchEnabled } from "./tools/settings";
 import { cfgBrowserEnabled } from "./tools/browser/settings";
 import {
 	cfgAutocompleteMaxVisible,
@@ -2049,6 +2049,7 @@ export async function runRootCommand(
 		if (parsedArgs.offline) {
 			cfgWebSearchEnabled.override(settingsInstance, false);
 			cfgBrowserEnabled.override(settingsInstance, false);
+			cfgAstEditEnabled.override(settingsInstance, false);
 			cfgFetchEnabled.override(settingsInstance, false);
 			cfgStartupSetupWizard.override(settingsInstance, false);
 			cfgStartupCheckUpdate.override(settingsInstance, false);
