@@ -3,8 +3,11 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { trimBlankEdges } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { ImageBudget } from "@oh-my-pi/pi-tui/components/image";
+import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type Component, Container, Markdown } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui/components/text";
 
 const W = 100;
 
@@ -55,6 +58,157 @@ afterEach(() => {
 // the same message — at every step. If they ever diverge, the optimization
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
+	it("constructs main-chat history with external thinking before any renderer mounts", () => {
+		let rendererCalls = 0;
+		const message = msg([
+			{ type: "thinking", thinking: "PRIVATE HISTORICAL REASONING" },
+			{ type: "text", text: "Public answer" },
+		]);
+		const component = createAssistantMessageComponent(
+			{
+				viewSession: {
+					extensionRunner: {
+						getAssistantThinkingRenderers: () => [
+							() => {
+								rendererCalls++;
+								return new Text("PRIVATE EXTENSION REASONING");
+							},
+						],
+					},
+				},
+				effectiveHideThinkingBlock: false,
+				proseOnlyThinking: false,
+				expandThinkingBlocks: true,
+				assistantImagesVisible: true,
+				tableChartsVisible: true,
+				hideToolActivity: false,
+				toolOutputExpanded: false,
+				ui: { requestRender() {}, imageBudget: new ImageBudget() },
+				resolveAssistantMessageLinkHrefs: async () => new Map<string, string>(),
+			},
+			message,
+		);
+		try {
+			const rendered = Bun.stripANSI(component.render(W).join("\n"));
+			expect(rendered).toContain("Public answer");
+			expect(rendered).not.toContain("PRIVATE");
+			expect(rendererCalls).toBe(0);
+			const native = JSON.stringify(component.describe());
+			expect(native).toContain("Public answer");
+			expect(native).not.toContain("PRIVATE");
+			expect(native).not.toContain("omp.thinking");
+			expect(native).not.toContain("Thought");
+			// Explicit viewers keep their original detail capability.
+			const viewer = new AssistantMessageComponent(message);
+			try {
+				expect(Bun.stripANSI(viewer.render(W).join("\n"))).toContain("PRIVATE HISTORICAL REASONING");
+			} finally {
+				viewer.dispose();
+			}
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("never emits inline thinking, live pulses or retired reasoning after display toggles", () => {
+		const component = new AssistantMessageComponent(
+			undefined,
+			false,
+			undefined,
+			[],
+			undefined,
+			true,
+			undefined,
+			false,
+			true,
+		);
+		try {
+			for (const thinking of ["", "PRIVATE first paragraph.\n\nPRIVATE second.\n\nPending", "PRIVATE newer tail"]) {
+				const message = msg([{ type: "thinking", thinking }]);
+				for (const hidden of [false, true, false]) {
+					component.setHideThinkingBlock(hidden);
+					component.setProseOnlyThinking(!hidden);
+					component.setExpandThinkingBlocks(!hidden);
+					component.updateContent(message, { transient: true });
+					const rendered = Bun.stripANSI(component.render(W).join("\n"));
+					expect(rendered.trim()).toBe("");
+					expect(component.getTranscriptStableRows()).toEqual([]);
+					expect(component.renderTranscriptStableRows(10, W)).toEqual([]);
+					const native = JSON.stringify(component.describe());
+					expect(native).not.toContain("PRIVATE");
+					expect(native).not.toContain("omp.thinking");
+					expect(native).not.toContain("spinner");
+				}
+			}
+			component.updateContent(
+				msg([
+					{ type: "thinking", thinking: "PRIVATE old reasoning" },
+					{ type: "text", text: "Visible tool preamble" },
+					{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "file.txt" } },
+					{ type: "thinking", thinking: "PRIVATE next reasoning" },
+					{ type: "text", text: "Visible final answer" },
+				]),
+				{ transient: true },
+			);
+			const rendered = Bun.stripANSI(component.render(W).join("\n"));
+			expect(rendered).toContain("Visible tool preamble");
+			expect(rendered).toContain("Visible final answer");
+			expect(rendered).not.toContain("PRIVATE");
+			expect(rendered).not.toContain("Thinking");
+			component.markTranscriptBlockFinalized();
+			expect(JSON.stringify(component.describe())).not.toContain("Thought");
+		} finally {
+			component.dispose();
+		}
+	});
+
+	it("still publishes safe ordinary answer rows while excluding every earlier thinking row", () => {
+		const component = new AssistantMessageComponent(
+			undefined,
+			false,
+			undefined,
+			[],
+			undefined,
+			true,
+			undefined,
+			false,
+			true,
+		);
+		try {
+			const thinking = "PRIVATE old paragraph.\n\nPRIVATE old second paragraph.\n\nPRIVATE tail";
+			component.updateContent(msg([{ type: "thinking", thinking }]), { transient: true });
+			component.render(W);
+			expect(component.getTranscriptStableRows()).toEqual([]);
+			const text = "Public first paragraph.\n\nPublic second paragraph.\n\nPublic pending paragraph";
+			component.updateContent(
+				msg([
+					{ type: "thinking", thinking },
+					{ type: "text", text },
+				]),
+				{ transient: true },
+			);
+			const rows = trimBlankEdges(component.render(W));
+			const count = component.getTranscriptStableRows().length;
+			expect(count).toBeGreaterThan(0);
+			const stable = [...component.renderTranscriptStableRows(count, W)];
+			expect(rows.slice(0, stable.length)).toEqual(stable);
+			expect(Bun.stripANSI(stable.join("\n"))).toContain("Public");
+			expect(Bun.stripANSI(stable.join("\n"))).not.toContain("PRIVATE");
+			component.updateContent(
+				msg([
+					{ type: "thinking", thinking: `${thinking}\n\nPRIVATE later` },
+					{ type: "text", text: `${text} finishes.` },
+				]),
+				{ transient: true },
+			);
+			component.render(W);
+			expect(component.renderTranscriptStableRows(count, W)).toEqual(stable);
+			expect(Bun.stripANSI(component.render(20).join("\n"))).not.toContain("PRIVATE");
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("replays retired thinking prefixes after cache eviction, reflow, and finalization", () => {
 		const component = new AssistantMessageComponent();
 		const widths = [36, W];

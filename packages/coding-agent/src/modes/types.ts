@@ -171,6 +171,10 @@ export interface InteractiveModeContext {
 	setClickHoverId(id: string | undefined): void;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
+	/** Synchronize the editor-anchored preview from a real streaming snapshot and active thinking block. */
+	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void;
+	/** Clear both the preview and its retained live snapshot. */
+	clearThinkingPreview(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

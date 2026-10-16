@@ -289,7 +289,6 @@ export class EventController {
 	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
 	#toolArgsReveal: ToolArgsRevealController;
-	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
 	/**
@@ -326,6 +325,10 @@ export class EventController {
 	// keeps working — the WeakSet makes the coalesced path speak each delta exactly
 	// once instead of twice.
 	#vocalizedMessageUpdates = new WeakSet<object>();
+	/** Arrival-time preview updates must not be replayed by a delayed cumulative snapshot. */
+	#thinkingPreviewEvents = new WeakSet<object>();
+	/** Invalidates queued handlers when a focus/rebuild replaces their UI owner. */
+	#dispatchGeneration = 0;
 	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
 
 	constructor(private ctx: InteractiveModeContext) {
@@ -350,7 +353,8 @@ export class EventController {
 		);
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => cfgDisplaySmoothStreaming.get(this.ctx.settings),
-			getHideThinkingBlock: () => this.ctx.effectiveHideThinkingBlock,
+			// Reasoning has its own real-phase preview, never a smooth transcript reveal queue.
+			getHideThinkingBlock: () => true,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: component => this.ctx.ui.requestComponentRender(component),
 		});
@@ -411,27 +415,12 @@ export class EventController {
 			thinking_level_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
-				const hideThinking = this.ctx.effectiveHideThinkingBlock;
-				// Only do the expensive full resetDisplay when the effective
-				// visibility actually changed. Auto-classification (e.g. high→medium)
-				// emits thinking_level_changed without changing visibility — a full
-				// terminal replay for those would be disruptive.
-				if (hideThinking === this.#prevHideThinking) {
-					this.ctx.ui.requestRender();
-					return;
-				}
-				this.#prevHideThinking = hideThinking;
-				// Propagate visibility to existing rendered messages.
-				for (const child of this.ctx.chatContainer.children) {
-					if (child instanceof AssistantMessageComponent) {
-						child.setHideThinkingBlock(hideThinking);
-					}
-				}
-				if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
-					this.ctx.streamingComponent.setHideThinkingBlock(hideThinking);
-					this.#streamingReveal.resyncVisibility();
-				}
-				this.ctx.ui.requestRender(true);
+				const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
+				this.ctx.syncThinkingPreview(
+					streamMessage?.role === "assistant" ? streamMessage : undefined,
+					activeThinkingIndex,
+				);
+				this.ctx.ui.requestRender();
 			},
 			goal_updated: async () => {},
 			// The TUI already refreshes the pending-messages bar at every queue
@@ -458,6 +447,8 @@ export class EventController {
 	}
 
 	dispose(): void {
+		++this.#dispatchGeneration;
+		this.ctx.clearThinkingPreview();
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
 		this.#clearApprovalPreviewGates();
@@ -784,7 +775,11 @@ export class EventController {
 		// the listener's first await, preserving the timing the coalescing
 		// tests assert on. `message_update` enqueue is itself synchronous and
 		// needs no serialization.
-		this.ctx.unsubscribe = this.ctx.session.subscribe(event => this.dispatchSessionEvent(event));
+		const owner = this.ctx.session;
+		this.ctx.unsubscribe = owner.subscribe(event => {
+			if (this.ctx.viewSession !== owner) return;
+			return this.dispatchSessionEvent(event);
+		});
 	}
 
 	/**
@@ -802,12 +797,16 @@ export class EventController {
 	 * snapshot first so ordering is preserved.
 	 */
 	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
+		const generation = this.#dispatchGeneration;
+		this.#syncThinkingPreviewEvent(event);
 		if (event.type === "message_update") {
 			this.#enqueueMessageUpdate(event);
 			return;
 		}
 		await this.#runSerialized(async () => {
+			if (generation !== this.#dispatchGeneration) return;
 			await this.#flushPendingMessageUpdate();
+			if (generation !== this.#dispatchGeneration) return;
 			await this.handleEvent(event);
 		});
 	}
@@ -876,6 +875,7 @@ export class EventController {
 		this.#vocalizedMessageUpdates.add(event);
 		this.#pendingMessageUpdate = event;
 		if (this.#messageUpdateTimer) return;
+		const generation = this.#dispatchGeneration;
 		this.#messageUpdateTimer = setTimeout(() => {
 			this.#messageUpdateTimer = undefined;
 			// Mirror AgentSession.#emit: attach a catch so a streaming rebuild
@@ -885,6 +885,7 @@ export class EventController {
 			// agent_end landing mid-window cannot overtake this flush (issue
 			// #7443 follow-up).
 			void this.#runSerialized(async () => {
+				if (generation !== this.#dispatchGeneration) return;
 				await this.#flushPendingMessageUpdate();
 			}).catch(err => {
 				logger.warn("Message update flush rejected", {
@@ -933,6 +934,9 @@ export class EventController {
 	 * session's transcript and must not bleed into the new one.
 	 */
 	resetTranscriptAnchors(): void {
+		++this.#dispatchGeneration;
+		++this.#runEpoch;
+		this.ctx.clearThinkingPreview();
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
@@ -1002,10 +1006,47 @@ export class EventController {
 		}
 	}
 
+	/** Focus attach consumes arrival phases before awaiting synthetic transcript restoration. */
+	observeThinkingPreviewEvent(event: AgentSessionEvent): void {
+		this.#syncThinkingPreviewEvent(event);
+	}
+
+	/** Consume real phases before a coalescer or an awaited handler can supersede them. */
+	#syncThinkingPreviewEvent(event: AgentSessionEvent): void {
+		if (this.#thinkingPreviewEvents.has(event)) return;
+		this.#thinkingPreviewEvents.add(event);
+		if (
+			(event.type === "message_update" &&
+				event.message.role === "assistant" &&
+				event.assistantMessageEvent.type !== "start") ||
+			(event.type === "message_end" && event.message.role === "assistant") ||
+			event.type === "agent_end"
+		) {
+			// Notifications may lag a new stream or a synchronous abort. Only the
+			// runtime's current snapshot/phase owns the window, never event content
+			// or a timestamp shared by two messages.
+			const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
+			this.ctx.syncThinkingPreview(
+				streamMessage?.role === "assistant" ? streamMessage : undefined,
+				activeThinkingIndex,
+			);
+		} else if (
+			event.type === "agent_start" ||
+			event.type === "auto_retry_start" ||
+			event.type === "tool_execution_start" ||
+			(event.type === "message_start" && event.message.role === "assistant")
+		) {
+			if (this.ctx.viewSession.agent.state.activeThinkingIndex === undefined) this.ctx.clearThinkingPreview();
+		}
+	}
+
 	async handleEvent(event: AgentSessionEvent): Promise<void> {
+		const generation = this.#dispatchGeneration;
+		this.#syncThinkingPreviewEvent(event);
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
+		if (generation !== this.#dispatchGeneration) return;
 
 		// Each handler explicitly requests a render (or leaves it out, when it
 		// changed nothing visible). A blanket pre-render fired on every event —

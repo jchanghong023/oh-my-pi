@@ -34,8 +34,10 @@ import { vi } from "bun:test";
 import { isSettingsInitialized, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConnection } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import { projectThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ServedModelTracker } from "@oh-my-pi/pi-tui/chat/served-model-marker";
+import { ThinkingPreviewComponent } from "@oh-my-pi/pi-tui/chat/thinking-preview";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { OAuthManualInputManager } from "@oh-my-pi/pi-coding-agent/modes/oauth-manual-input";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -118,7 +120,7 @@ export function createSessionStub(
 		hasBuiltInTool: () => true,
 		getLastAssistantMessage: () => undefined,
 		agent: {
-			state: { streamMessage: null },
+			state: { streamMessage: null, activeThinkingIndex: undefined },
 			getPendingToolResults: () => [],
 			metadataForProvider: () => undefined,
 		},
@@ -194,7 +196,9 @@ function resolveSettings(override: ContextOverrides["settings"]): Settings {
 const RESOLVED_AHEAD: Record<string, true> = { session: true, viewSession: true, sessionManager: true, settings: true };
 
 /** Build a controller-ready context; see the module doc for override semantics. */
-export function createInteractiveModeContext(overrides: ContextOverrides = {}): InteractiveModeContext {
+export function createInteractiveModeContext(
+	overrides: ContextOverrides = {},
+): InteractiveModeContext & { readonly thinkingPreview: ThinkingPreviewComponent } {
 	// Resolved ahead of layering; read individually so a rest-destructure does
 	// not evaluate and freeze accessor overrides on the remaining keys.
 	const sessionManager = resolveSessionManager(overrides.sessionManager);
@@ -205,6 +209,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 			? undefined
 			: createSessionStub(sessionManager, contextSettings, overrides.viewSession);
 	const chatContainer = new TranscriptContainer();
+	const thinkingPreview = new ThinkingPreviewComponent();
 	const ui = {
 		requestRender: vi.fn(),
 		requestComponentRender: vi.fn(),
@@ -297,6 +302,22 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		ensureLoadingAnimation: vi.fn(),
 		setWorkingMessage: vi.fn(),
 		syncRetryHintRow: vi.fn(),
+		syncThinkingPreview(this: InteractiveModeContext, message, activeThinkingIndex) {
+			if (
+				projectThinkingPreview(
+					thinkingPreview,
+					message,
+					activeThinkingIndex,
+					this.effectiveHideThinkingBlock,
+					this.proseOnlyThinking,
+				)
+			) {
+				this.ui.requestRender();
+			}
+		},
+		clearThinkingPreview(this: InteractiveModeContext) {
+			if (thinkingPreview.clear()) this.ui.requestRender();
+		},
 		clearTransientSessionUi: vi.fn(),
 		prepareSessionSwitch: vi.fn(async () => {}),
 		clearOptimisticUserMessage: vi.fn(),
@@ -308,5 +329,7 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		setTodos: vi.fn(),
 	} satisfies ContextOverrides;
 	layer(ctx, overrides, RESOLVED_AHEAD);
-	return ctx as unknown as InteractiveModeContext;
+	return Object.assign(ctx, { thinkingPreview }) as unknown as InteractiveModeContext & {
+		readonly thinkingPreview: ThinkingPreviewComponent;
+	};
 }

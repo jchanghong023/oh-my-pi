@@ -322,6 +322,7 @@ export class InputController {
 	};
 
 	#abortStreamingTurn(): void {
+		if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 	}
 
@@ -973,6 +974,7 @@ export class InputController {
 			// agent-core queue.
 			if (!text && !hasPendingImages && this.ctx.session.isStreaming) {
 				if (this.ctx.session.hasInterruptibleInput) {
+					if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 					const aborting = this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 					await aborting;
 					this.ctx.updatePendingMessagesDisplay();
@@ -1431,6 +1433,7 @@ export class InputController {
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) {
 			if (target.isStreaming && target.hasInterruptibleInput) {
+				this.ctx.clearThinkingPreview();
 				const aborting = target.abort({ reason: USER_INTERRUPT_LABEL });
 				await aborting;
 				this.ctx.updatePendingMessagesDisplay();
@@ -1990,6 +1993,7 @@ export class InputController {
 		];
 		const restored = this.#restoreEntriesToEditor(allQueued, options?.currentText);
 		if (options?.abort) {
+			if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 			void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 		}
 		return restored;
@@ -2783,25 +2787,11 @@ export class InputController {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		cfgHideThinkingBlock.set(this.ctx.settings, this.ctx.hideThinkingBlock);
 
-		for (const child of this.ctx.chatContainer.children) {
-			if (child instanceof AssistantMessageComponent) {
-				child.setHideThinkingBlock(this.ctx.hideThinkingBlock);
-			}
-		}
-
-		if (this.ctx.streamingComponent && this.ctx.streamingMessage) {
-			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.hideThinkingBlock);
-			this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
-		}
-
-		// This is an explicit user display gesture: rebuild native history so the
-		// visibility change also applies to rows already retired from the viewport.
-		// Append-only thinking heads emitted their stable rows to scrollback while
-		// streaming (visible); forget that emission ledger so the paired scrollback
-		// clear re-renders them under the new visibility instead of replaying the
-		// captured reasoning (#10177).
-		this.ctx.chatContainer.resetStableEmission();
-		this.ctx.ui.resetDisplay();
+		const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
+		this.ctx.syncThinkingPreview(
+			streamMessage?.role === "assistant" ? streamMessage : undefined,
+			activeThinkingIndex,
+		);
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}

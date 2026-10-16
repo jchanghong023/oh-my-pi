@@ -1010,6 +1010,8 @@ export interface AgentState {
 	messages: AgentMessage[]; // Can include attachments + custom message types
 	isStreaming: boolean;
 	streamMessage: AgentMessage | null;
+	/** Runtime-only index of the active thinking block in streamMessage; never part of stored messages. */
+	activeThinkingIndex?: number;
 	pendingToolCalls: Set<string>;
 	error?: string;
 }

@@ -249,11 +249,10 @@ function lerpHex(from: string, to: string, t: number): string {
 /**
  * Renders an assistant message; streaming content remains mutable until the
  * provider finalizes it because later deltas can revise earlier Markdown.
- * The exception is the leading run of visible thinking blocks: raw thinking
- * only ever appends, so its frozen Markdown prefix publishes as append-only
- * stable rows ({@link AppendOnlyTranscriptBlock}) and can retire into native
- * scrollback while the block still streams — a long reasoning trace is no
- * longer clipped to the mutable viewport.
+ * Safe frozen prose prefixes publish as append-only stable rows and can retire
+ * into native scrollback while the block streams. Main-chat callers select
+ * external thinking at construction, so only answer prose can enter that
+ * ledger; direct callers retain the independent viewer's thinking details.
  */
 export class AssistantMessageComponent extends Container {
 	readonly transcriptBlockMode = "appendOnly" as const;
@@ -526,6 +525,8 @@ export class AssistantMessageComponent extends Container {
 		return { ...message, content };
 	}
 	#hideThinkingBlock: boolean;
+	/** Main-chat reasoning lives in its ephemeral dock, never this transcript block. */
+	readonly #externalThinking: boolean;
 	readonly #onImageUpdate?: () => void;
 	readonly #thinkingRenderers: readonly AssistantThinkingRenderer[];
 	readonly #imageBudget?: ImageBudget;
@@ -541,9 +542,12 @@ export class AssistantMessageComponent extends Container {
 		proseOnlyThinking = true,
 		linkTargets?: ReadonlyMap<string, string>,
 		expandThinkingBlocks = false,
+		// Resolve before the initial message is rendered; settings cannot undo it.
+		externalThinking = false,
 	) {
 		super();
 		this.#hideThinkingBlock = hideThinkingBlock;
+		this.#externalThinking = externalThinking;
 		this.#onImageUpdate = onImageUpdate;
 		this.#thinkingRenderers = thinkingRenderers;
 		this.#imageBudget = imageBudget;
@@ -677,7 +681,7 @@ export class AssistantMessageComponent extends Container {
 	 * and the tail visible block is thinking. Undefined otherwise.
 	 */
 	#thinkingTailIndex(message: AssistantMessage): number | undefined {
-		if (this.#transcriptBlockFinalized) return undefined;
+		if (this.#externalThinking || this.#transcriptBlockFinalized) return undefined;
 		let tail: "text" | "thinking" | undefined;
 		let tailIndex = -1;
 		for (let index = 0; index < message.content.length; index++) {
@@ -941,6 +945,7 @@ export class AssistantMessageComponent extends Container {
 						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
+					if (this.#externalThinking) continue;
 					const display = this.#hideThinkingBlock
 						? undefined
 						: resolveThinkingDisplay(content, this.#proseOnlyThinking);
@@ -1723,7 +1728,9 @@ export class AssistantMessageComponent extends Container {
 					!canonicalizeMessage(content.text) ? "T0" : this.#liftsFigures(content.text.trim()) ? "TF" : "T1",
 				);
 			} else if (content.type === "thinking") {
-				if (this.#hideThinkingBlock) {
+				if (this.#externalThinking) {
+					parts.push("KE");
+				} else if (this.#hideThinkingBlock) {
 					// Match the pulse's empty/nonempty transition without formatting hidden text.
 					parts.push(canonicalizeMessage(content.thinking) ? "KH" : "K0");
 				} else {
@@ -1900,7 +1907,8 @@ export class AssistantMessageComponent extends Container {
 			c =>
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
 				(c.type === "image" && c.data && c.mimeType) ||
-				(!this.#hideThinkingBlock &&
+				(!this.#externalThinking &&
+					!this.#hideThinkingBlock &&
 					c.type === "thinking" &&
 					resolveThinkingDisplay(c, this.#proseOnlyThinking).visible),
 		);
@@ -1919,7 +1927,7 @@ export class AssistantMessageComponent extends Container {
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
 				hasRenderedContent = true;
 			} else if (content.type === "thinking") {
-				if (this.#hideThinkingBlock) {
+				if (this.#externalThinking || this.#hideThinkingBlock) {
 					thinkingIndex += 1;
 					continue;
 				}

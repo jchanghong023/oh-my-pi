@@ -340,9 +340,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: [
-			{ name: "clean", description: "隐藏思考正文和工具活动" },
-			{ name: "compact", description: "隐藏思考正文，每次工具调用显示一行" },
-			{ name: "detailed", description: "显示思考正文和工具详情" },
+			{ name: "clean", description: "隐藏实时思考窗口和工具活动" },
+			{ name: "compact", description: "显示实时思考窗口，每次工具调用显示一行" },
+			{ name: "detailed", description: "显示实时思考窗口和工具详情" },
 		],
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
@@ -358,12 +358,12 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			const preferences = [
-				[cfgHideThinkingBlock, mode !== "detailed"],
+				[cfgHideThinkingBlock, mode === "clean"],
 				[cfgDisplayHideToolActivity, mode === "clean"],
 				[cfgDisplayCompactToolActivity, mode !== "detailed"],
 			] as const;
 			for (const [setting, value] of preferences) setting.set(settings, value);
-			// Settings listeners rebuild the transcript in a coalesced microtask.
+			// Settings listeners apply display preferences in a coalesced microtask.
 			await Promise.resolve();
 			const label = { clean: "干净", compact: "紧凑", detailed: "详细" }[mode];
 			const shadowed = preferences.filter(([setting, value]) => setting.get(settings) !== value);
@@ -386,7 +386,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 						? "单行"
 						: "详细";
 				runtime.ctx.showWarning(
-					`显示偏好：${label}（${mode}）；当前：思考${thinking}、工具${tools}；覆盖：${overrides}`,
+					`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides}`,
 				);
 			} else {
 				runtime.ctx.showStatus(`显示模式：${label}（${mode}）`);

@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Keep live thinking in one editor-anchored window showing only the latest five screen rows; hide it when thinking ends without replaying reasoning in the main transcript.
 - Display the main TUI settings and common interaction dialogs in Simplified Chinese while preserving familiar technical English, command syntax and configuration values.
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
@@ -20,6 +21,7 @@
 
 ### Fixed
 
+- Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.
 - Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.
 - Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.
 - Kept successful repository recovery successful when backup cleanup fails, and preserved the original maintenance error when uncertainty recording also fails.

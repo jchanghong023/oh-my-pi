@@ -411,6 +411,7 @@ export class Agent {
 		messages: [],
 		isStreaming: false,
 		streamMessage: null,
+		activeThinkingIndex: undefined,
 		pendingToolCalls: new Set<string>(),
 		error: undefined,
 	};
@@ -1211,14 +1212,45 @@ export class Agent {
 		this.#asideMessageProvider = fn;
 	}
 
+	#updateActiveThinkingIndex(event: AssistantMessageEvent, aborted = this.#abortController?.signal.aborted === true) {
+		if (aborted) {
+			this.#state.activeThinkingIndex = undefined;
+			return;
+		}
+		switch (event.type) {
+			case "thinking_start":
+			case "thinking_delta":
+				this.#state.activeThinkingIndex = event.contentIndex;
+				break;
+			case "thinking_end":
+				if (this.#state.activeThinkingIndex === event.contentIndex) {
+					this.#state.activeThinkingIndex = undefined;
+				}
+				break;
+			case "start":
+			case "text_start":
+			case "toolcall_start":
+			case "image_end":
+			case "done":
+			case "error":
+				this.#state.activeThinkingIndex = undefined;
+				break;
+		}
+	}
+
 	emitExternalEvent(event: AgentEvent) {
 		switch (event.type) {
 			case "message_start":
+				this.#state.activeThinkingIndex = undefined;
+				this.#state.streamMessage = event.message;
+				break;
 			case "message_update":
 				this.#state.streamMessage = event.message;
+				this.#updateActiveThinkingIndex(event.assistantMessageEvent);
 				break;
 			case "message_end":
 				this.#state.streamMessage = null;
+				this.#state.activeThinkingIndex = undefined;
 				this.appendMessage(event.message);
 				break;
 			case "tool_execution_start":
@@ -1226,6 +1258,10 @@ export class Agent {
 				break;
 			case "tool_execution_end":
 				this.#state.pendingToolCalls.delete(event.toolCallId);
+				break;
+			case "agent_start":
+			case "agent_end":
+				this.#state.activeThinkingIndex = undefined;
 				break;
 		}
 
@@ -1378,6 +1414,7 @@ export class Agent {
 		const removed = this.#state.messages.pop();
 		if (removed && this.#state.streamMessage === removed) {
 			this.#state.streamMessage = null;
+			this.#state.activeThinkingIndex = undefined;
 		}
 		return removed;
 	}
@@ -1554,6 +1591,7 @@ export class Agent {
 	}
 
 	abort(reason?: unknown) {
+		this.#state.activeThinkingIndex = undefined;
 		this.#abortController?.abort(reason);
 	}
 
@@ -1585,7 +1623,7 @@ export class Agent {
 	}
 
 	reset() {
-		if (this.#queuedMessageClaims.steering || this.#queuedMessageClaims.followUp) {
+		if (this.#abortController) {
 			this.#abortController?.abort();
 			this.#abortController = undefined;
 			this.#resolveRunningPrompt?.();
@@ -1595,6 +1633,7 @@ export class Agent {
 		this.#state.messages.length = 0;
 		this.#state.isStreaming = false;
 		this.#state.streamMessage = null;
+		this.#state.activeThinkingIndex = undefined;
 		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
 		this.clearAllQueues();
@@ -1682,6 +1721,7 @@ export class Agent {
 		this.#abortController = continuationAbortController;
 		this.#state.isStreaming = true;
 		this.#state.streamMessage = null;
+		this.#state.activeThinkingIndex = undefined;
 		this.#state.error = undefined;
 
 		try {
@@ -1742,6 +1782,7 @@ export class Agent {
 			if (this.#abortController === continuationAbortController) {
 				this.#state.isStreaming = false;
 				this.#state.streamMessage = null;
+				this.#state.activeThinkingIndex = undefined;
 				this.#state.pendingToolCalls.clear();
 				this.#abortController = undefined;
 				if (this.#runningPrompt === promise) {
@@ -1780,8 +1821,13 @@ export class Agent {
 		const loopSignal = continuationSignal
 			? AbortSignal.any([loopAbortController.signal, continuationSignal])
 			: loopAbortController.signal;
+		const clearAbortedThinking = () => {
+			if (this.#abortController === loopAbortController) this.#state.activeThinkingIndex = undefined;
+		};
+		loopSignal.addEventListener("abort", clearAbortedThinking, { once: true });
 		this.#state.isStreaming = true;
 		this.#state.streamMessage = null;
+		this.#state.activeThinkingIndex = undefined;
 		this.#state.error = undefined;
 
 		// Clear Cursor tool result buffer at start of each run
@@ -2029,11 +2075,13 @@ export class Agent {
 					case "message_start":
 						partial = event.message;
 						this.#state.streamMessage = event.message;
+						this.#state.activeThinkingIndex = undefined;
 						break;
 
 					case "message_update":
 						partial = event.message;
 						this.#state.streamMessage = event.message;
+						this.#updateActiveThinkingIndex(event.assistantMessageEvent, loopSignal.aborted);
 						if (event.assistantMessageEvent.type === "toolcall_end") {
 							completedToolCallIds.add(event.assistantMessageEvent.toolCall.id);
 						}
@@ -2041,6 +2089,7 @@ export class Agent {
 
 					case "message_end":
 						partial = null;
+						this.#state.activeThinkingIndex = undefined;
 						// Check if this is an assistant message with buffered Cursor tool results.
 						// If so, split the message to emit tool results at the correct position.
 						if (event.message.role === "assistant" && this.#cursorToolResultBuffer.length > 0) {
@@ -2068,6 +2117,7 @@ export class Agent {
 					case "agent_end":
 						this.#state.isStreaming = false;
 						this.#state.streamMessage = null;
+						this.#state.activeThinkingIndex = undefined;
 						break;
 				}
 
@@ -2093,6 +2143,7 @@ export class Agent {
 			}
 		} catch (err) {
 			if (this.#abortController !== loopAbortController) return;
+			this.#state.activeThinkingIndex = undefined;
 			const stoppedForAbort = loopSignal.aborted;
 			const errorMessage = stoppedForAbort
 				? abortReasonText(loopSignal)
@@ -2215,11 +2266,13 @@ export class Agent {
 				this.#emit({ type: "agent_end", messages: [errorMsg] });
 			}
 		} finally {
+			loopSignal.removeEventListener("abort", clearAbortedThinking);
 			this.#restoreUndeliveredQueuedMessages(loopAbortController);
 			resolveRun?.();
 			if (this.#abortController === loopAbortController) {
 				this.#state.isStreaming = false;
 				this.#state.streamMessage = null;
+				this.#state.activeThinkingIndex = undefined;
 				this.#state.pendingToolCalls.clear();
 				this.#abortController = undefined;
 				this.#runningPrompt = undefined;

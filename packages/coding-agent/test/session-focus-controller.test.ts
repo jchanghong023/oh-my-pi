@@ -27,7 +27,7 @@ function makeSessionStub(opts: { isStreaming?: boolean } = {}): SessionStub {
 	let queue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
 	const stub = {
 		isStreaming: opts.isStreaming ?? false,
-		agent: { state: { streamMessage: null } },
+		agent: { state: { streamMessage: null, activeThinkingIndex: undefined } },
 		subscribe(fn: (event: AgentSessionEvent) => Promise<void> | void) {
 			listener = fn;
 			return () => {
@@ -103,6 +103,7 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 			},
 			restorePendingToolResults() {},
 			markViewIdle() {},
+			observeThinkingPreviewEvent() {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {
@@ -124,6 +125,8 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		},
 		updatePendingMessagesDisplay: () => uiHelpers.updatePendingMessagesDisplay(),
 		updateEditorBorderColor() {},
+		syncThinkingPreview() {},
+		clearThinkingPreview() {},
 		ui: { requestRender() {}, requestComponentRender() {} },
 		showStatus() {},
 		collabGuest: undefined,

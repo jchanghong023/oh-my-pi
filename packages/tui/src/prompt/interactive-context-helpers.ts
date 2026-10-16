@@ -107,9 +107,9 @@ export function assistantMessageLinkTargets(
 }
 
 /**
- * Construct an {@link AssistantMessageComponent} wired to the live context's
- * thinking/image settings. `message` is omitted for the streaming placeholder
- * component and supplied when rendering a persisted turn.
+ * Construct an {@link AssistantMessageComponent} with main-chat external
+ * thinking presentation and the live context's image settings. `message` is
+ * omitted for streaming placeholders and supplied for persisted turns.
  */
 export function createAssistantMessageComponent(
 	ctx: AssistantMessageHost,
@@ -125,6 +125,7 @@ export function createAssistantMessageComponent(
 		ctx.proseOnlyThinking,
 		linkTargets,
 		ctx.expandThinkingBlocks,
+		true,
 	);
 	component.setImagesVisible(ctx.assistantImagesVisible);
 	component.setTableChartsVisible(ctx.tableChartsVisible);

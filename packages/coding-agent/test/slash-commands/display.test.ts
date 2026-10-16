@@ -22,7 +22,7 @@ function displayPreferences(settings: Settings) {
 
 const presets = {
 	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: true },
-	compact: { hideThinkingBlock: true, hideToolActivity: false, compactToolActivity: true },
+	compact: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: true },
 	detailed: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: false },
 };
 
@@ -82,10 +82,9 @@ describe("/display slash command", () => {
 		}
 	});
 
-	it("cycles clean to compact to detailed to clean", async () => {
+	it("cycles a fresh compact profile through detailed, clean and compact", async () => {
 		const h = createRuntime();
-		await executeBuiltinSlashCommand("/display clean", h.runtime);
-		for (const mode of ["compact", "detailed", "clean"] as const) {
+		for (const mode of ["detailed", "clean", "compact"] as const) {
 			expect(await executeBuiltinSlashCommand("/display", h.runtime)).toBe(true);
 			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
 		}
@@ -98,7 +97,7 @@ describe("/display slash command", () => {
 		cfgDisplayCompactToolActivity.set(h.settings, false);
 		await executeBuiltinSlashCommand("/display", h.runtime);
 		expect(displayPreferences(h.settings)).toEqual(presets.compact);
-		cfgHideThinkingBlock.set(h.settings, false);
+		cfgHideThinkingBlock.set(h.settings, true);
 		await executeBuiltinSlashCommand("/display", h.runtime);
 		expect(displayPreferences(h.settings)).toEqual(presets.detailed);
 	});
@@ -125,22 +124,24 @@ describe("/display slash command", () => {
 		const h = createRuntime();
 		cfgHideThinkingBlock.override(h.settings, true);
 		cfgDisplayHideToolActivity.override(h.settings, true);
-		await executeBuiltinSlashCommand("/display detailed", h.runtime);
-		expect(displayPreferences(h.settings)).toEqual({
-			hideThinkingBlock: true,
-			hideToolActivity: true,
-			compactToolActivity: false,
-		});
-		expect(h.settings.getGlobalSettings()).toMatchObject({
-			hideThinkingBlock: false,
-			display: { hideToolActivity: false, compactToolActivity: false },
-		});
-		expect(h.showStatus).not.toHaveBeenCalled();
-		const warning = h.showWarning.mock.calls[0]?.[0];
-		expect(warning).toContain("hideThinkingBlock");
-		expect(warning).toContain("display.hideToolActivity");
-		expect(warning).toContain("运行时");
-		expect(warning).toMatch(/思考隐藏.*工具隐藏/);
+		for (const mode of ["compact", "detailed"] as const) {
+			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
+			expect(displayPreferences(h.settings)).toEqual({
+				hideThinkingBlock: true,
+				hideToolActivity: true,
+				compactToolActivity: mode === "compact",
+			});
+			expect(h.settings.getGlobalSettings()).toMatchObject({
+				hideThinkingBlock: false,
+				display: { hideToolActivity: false, compactToolActivity: mode === "compact" },
+			});
+			expect(h.showStatus).not.toHaveBeenCalled();
+			const warning = h.showWarning.mock.calls.at(-1)?.[0];
+			expect(warning).toContain("hideThinkingBlock");
+			expect(warning).toContain("display.hideToolActivity");
+			expect(warning).toContain("运行时");
+			expect(warning).toMatch(/实时思考窗口隐藏.*工具隐藏/);
+		}
 	});
 
 	it("reports a partially applied preset when project settings keep thinking hidden", async () => {
@@ -152,17 +153,21 @@ describe("/display slash command", () => {
 		await Bun.write(tempDir.join("project", ".omp", "config.yml"), "hideThinkingBlock: true\n");
 		const settings = await Settings.loadIsolated({ agentDir, cwd });
 		const h = createRuntime(settings);
-		await executeBuiltinSlashCommand("/display detailed", h.runtime);
+		await executeBuiltinSlashCommand("/display compact", h.runtime);
 		expect(displayPreferences(settings)).toEqual({
 			hideThinkingBlock: true,
 			hideToolActivity: false,
-			compactToolActivity: false,
+			compactToolActivity: true,
+		});
+		expect(settings.getGlobalSettings()).toMatchObject({
+			hideThinkingBlock: false,
+			display: { hideToolActivity: false, compactToolActivity: true },
 		});
 		expect(h.showStatus).not.toHaveBeenCalled();
 		const warning = h.showWarning.mock.calls[0]?.[0];
 		expect(warning).toContain("hideThinkingBlock");
 		expect(warning).toContain("项目配置");
-		expect(warning).toMatch(/思考隐藏.*工具详细/);
+		expect(warning).toMatch(/实时思考窗口隐藏.*工具单行/);
 		await settings.flush();
 	});
 
@@ -193,6 +198,8 @@ describe("/display slash command", () => {
 		for (const mode of ["clean", "compact", "detailed"]) {
 			const matches = await command?.getArgumentCompletions?.(mode);
 			expect(matches?.map(match => match.value)).toEqual([`${mode} `]);
+			expect(matches?.[0]?.description).toContain("实时思考窗口");
+			expect(matches?.[0]?.description).toContain(mode === "clean" ? "隐藏" : "显示");
 		}
 	});
 });

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Expose the current live thinking block through runtime-only `activeThinkingIndex`, clearing it at phase changes, cancellation and stream termination.
 - `agent_start` carries `resumedToolCallIds` when a continued run first executes the calls of an unpaired assistant tail
 
 ## [18.11.1] - 2026-10-15

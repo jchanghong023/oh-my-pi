@@ -210,7 +210,8 @@ import { getEditorCommand, openInEditor } from "../utils/external-editor";
 import { openPath } from "../utils/open";
 import { resumeCommand } from "../utils/resume-command";
 import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-pi/pi-tui/theme/session-color";
-import { messageHasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
+import { formatThinkingForDisplay, messageHasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
+import { ThinkingPreviewComponent } from "@oh-my-pi/pi-tui/chat/thinking-preview";
 import type { TokenRateMeter } from "../utils/token-rate";
 import { disposeProgramStatus, initProgramStatus, setProgramStatusEnabled } from "../utils/run-status";
 import {
@@ -1165,6 +1166,21 @@ const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 /** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
 const JOBS_SHEET_REFRESH_MS = 250;
 
+/** Project only the active real thinking block; history and synthetic starts have no index. */
+export function projectThinkingPreview(
+	preview: ThinkingPreviewComponent,
+	message: AssistantMessage | undefined,
+	activeThinkingIndex: number | undefined,
+	hidden: boolean,
+	proseOnlyThinking: boolean,
+): boolean {
+	const content = activeThinkingIndex === undefined ? undefined : message?.content[activeThinkingIndex];
+	if (hidden || !Number.isInteger(activeThinkingIndex) || content?.type !== "thinking" || !content.thinking.trim()) {
+		return preview.clear();
+	}
+	return preview.setText(formatThinkingForDisplay(content.thinking, proseOnlyThinking));
+}
+
 export class InteractiveMode implements InteractiveModeContext {
 	#ownsStartedUi: boolean;
 	session: AgentSession;
@@ -1251,6 +1267,40 @@ export class InteractiveMode implements InteractiveModeContext {
 	#todoPhasesOwner?: AgentSession;
 	#todoHudHidden = false;
 	hideThinkingBlock = false;
+	readonly #thinkingPreview = new ThinkingPreviewComponent();
+	#thinkingPreviewMessage: AssistantMessage | undefined;
+	#thinkingPreviewIndex: number | undefined;
+	#thinkingPreviewOwner: AgentSession | undefined;
+
+	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void {
+		this.#thinkingPreviewOwner = message ? this.viewSession : undefined;
+		this.#thinkingPreviewMessage = message;
+		this.#thinkingPreviewIndex = activeThinkingIndex;
+		if (message) this.noteDisplayableThinkingContent(message);
+		const changed = projectThinkingPreview(
+			this.#thinkingPreview,
+			message,
+			activeThinkingIndex,
+			this.effectiveHideThinkingBlock,
+			this.proseOnlyThinking,
+		);
+		if (changed) this.ui.requestRender();
+	}
+
+	clearThinkingPreview(): void {
+		this.#thinkingPreviewOwner = undefined;
+		this.#thinkingPreviewMessage = undefined;
+		this.#thinkingPreviewIndex = undefined;
+		if (this.#thinkingPreview.clear()) this.ui.requestRender();
+	}
+
+	#refreshThinkingPreview(): void {
+		if (this.#thinkingPreviewOwner !== this.viewSession) {
+			this.clearThinkingPreview();
+			return;
+		}
+		this.syncThinkingPreview(this.#thinkingPreviewMessage, this.#thinkingPreviewIndex);
+	}
 	#sessionsWithDisplayableThinkingContent = new WeakSet<AgentSession>();
 	/** Whether the visible session has produced thinking content the user can reveal. */
 	get hasDisplayableThinkingContent(): boolean {
@@ -1672,6 +1722,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	clearTransientSessionUi(): void {
+		this.clearThinkingPreview();
 		this.#hideSessionInfo();
 		if (this.loadingAnimation) {
 			this.loadingAnimation.stop();
@@ -2185,6 +2236,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// HUDs, just above the editor's hook-widget top margin — so it reads next to
 				// the prompt while keeping the one-line gap above the editor (the band
 				// composer collapses that gap so its status band sits flush).
+				this.#thinkingPreview,
 				this.statusContainer,
 				this.attachmentChipsContainer,
 				this.hookWidgetContainerAbove,
@@ -2217,6 +2269,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.subagentContainer,
 					this.modelCycleContainer,
 					this.progressHudContainer,
+					this.#thinkingPreview,
 				],
 				// Natively the HUD pills lead the dock, queued messages sit between
 				// the working row and the composer, and the attachment chips live
@@ -2230,6 +2283,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.modelCycleContainer,
 					this.deferredCommandContainer,
 					this.progressHudContainer,
+					this.#thinkingPreview,
 					this.statusContainer,
 					this.pendingMessagesContainer,
 					this.hookWidgetContainerAbove,
@@ -3668,32 +3722,19 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender(true);
 		}
 		const hideThinkingBlock = cfgHideThinkingBlock.get(this.settings);
-		if (any("hideThinkingBlock") && hideThinkingBlock !== this.hideThinkingBlock) {
+		if (any("hideThinkingBlock")) {
 			this.hideThinkingBlock = hideThinkingBlock;
-			for (const child of this.chatContainer.children) {
-				if (child instanceof AssistantMessageComponent) child.setHideThinkingBlock(this.effectiveHideThinkingBlock);
-			}
-			if (this.streamingComponent && this.streamingMessage) {
-				this.streamingComponent.setHideThinkingBlock(this.effectiveHideThinkingBlock);
-				this.streamingComponent.updateContent(this.streamingMessage);
-			}
-			rebuildChat = true;
+			this.#refreshThinkingPreview();
 		}
 		const proseOnlyThinking = cfgProseOnlyThinking.get(this.settings);
 		if (any("proseOnlyThinking") && proseOnlyThinking !== this.proseOnlyThinking) {
 			this.proseOnlyThinking = proseOnlyThinking;
-			for (const child of this.chatContainer.children) {
-				if (child instanceof AssistantMessageComponent) child.setProseOnlyThinking(proseOnlyThinking);
-			}
-			this.ui.requestRender(true);
+			this.#refreshThinkingPreview();
 		}
 		const expandThinkingBlocks = cfgExpandThinkingBlocks.get(this.settings);
 		if (any("expandThinkingBlocks") && expandThinkingBlocks !== this.expandThinkingBlocks) {
 			this.expandThinkingBlocks = expandThinkingBlocks;
-			for (const child of this.chatContainer.children) {
-				if (child instanceof AssistantMessageComponent) child.setExpandThinkingBlocks(expandThinkingBlocks);
-			}
-			this.ui.requestRender(true);
+			this.#refreshThinkingPreview();
 		}
 
 		// Usage-row detection, compacted-history collapse, and markdown render
@@ -3761,7 +3802,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.requestRender();
 		}
 
-		if (rebuildChat) this.rebuildChatFromMessages();
+		if (rebuildChat) {
+			this.rebuildChatFromMessages();
+			const { streamMessage, activeThinkingIndex } = this.viewSession.agent.state;
+			this.syncThinkingPreview(streamMessage?.role === "assistant" ? streamMessage : undefined, activeThinkingIndex);
+		}
 		if (rebuildChat || resetDisplay) this.ui.resetDisplay();
 	}
 
@@ -5274,6 +5319,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// `runModeExitTeardown` to avoid restarting on the stale toolset.
 		if (options?.interruptActiveTurn && this.session.isStreaming) {
 			await this.session.runModeExitTeardown(async () => {
+				if (this.viewSession === this.session) this.clearThinkingPreview();
 				await this.session.abort({ reason: USER_INTERRUPT_LABEL });
 				await this.#tearDownPlanMode(options);
 			});
@@ -6094,6 +6140,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	async #abortPlanApprovalTurnSilently(): Promise<void> {
 		this.session.markPlanInternalAbortPending();
 		try {
+			if (this.viewSession === this.session) this.clearThinkingPreview();
 			await this.session.abort();
 		} finally {
 			this.session.clearPlanInternalAbortPending();
@@ -6368,6 +6415,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		let killed = 0;
 		await this.session.runModeExitTeardown(async () => {
 			if (this.session.isStreaming) {
+				if (this.viewSession === this.session) this.clearThinkingPreview();
 				await this.session.abort();
 			}
 			killed = await VibeSessionRegistry.global().killAll(this.#vibeParentSession(), this.#vibeModeOwnerScope);
@@ -7243,6 +7291,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// mutex deny on arrival instead of prompting a torn-down UI. `init`
 		// installs a fresh one.
 		this.#dialogLifetime.abort();
+		this.clearThinkingPreview();
 		this.#streamPublisher?.dispose();
 		this.#streamPublisher = undefined;
 		void this.#recorder?.stop();
@@ -7377,6 +7426,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#abortLoopCondition();
 		this.#cancelLoopAutoSubmit();
 		try {
+			if (this.viewSession === this.session) this.clearThinkingPreview();
 			await this.session.abort();
 			await this.#liveCommandController.stop();
 		} catch (err) {
@@ -8069,7 +8119,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveExistingChat?: boolean;
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
+		const owner = this.viewSession;
 		await this.#uiHelpers.renderInitialMessages(options);
+		if (this.viewSession !== owner) return;
+		const { streamMessage, activeThinkingIndex } = owner.agent.state;
+		this.syncThinkingPreview(streamMessage?.role === "assistant" ? streamMessage : undefined, activeThinkingIndex);
 		this.syncRetryHintRow();
 	}
 	/**

@@ -9,7 +9,7 @@ import {
 	TOOL_RESULT_ADDITIONAL_CONTEXT,
 	type ToolResultWithAdditionalContext,
 } from "@oh-my-pi/pi-agent-core";
-import type { Context, SimpleStreamOptions, ToolResultMessage } from "@oh-my-pi/pi-ai";
+import type { AssistantMessageEvent, Context, SimpleStreamOptions, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
@@ -1817,6 +1817,282 @@ describe("Agent", () => {
 
 		agent.setMetadataResolver(undefined);
 		expect(agent.metadataForProvider("any")).toEqual({ user_id: "static" });
+	});
+});
+
+describe("Agent active thinking phase", () => {
+	function dispatchUpdate(agent: Agent, stream: AssistantMessageEventStream, update: AssistantMessageEvent) {
+		const observed = Promise.withResolvers<{
+			index: number | undefined;
+			synchronized: boolean;
+		}>();
+		const unsubscribe = agent.subscribe(event => {
+			if (event.type !== "message_update" || event.assistantMessageEvent.type !== update.type) return;
+			unsubscribe();
+			observed.resolve({
+				index: agent.state.activeThinkingIndex,
+				synchronized: agent.state.streamMessage === event.message,
+			});
+		});
+		stream.push(update);
+		return observed.promise;
+	}
+
+	it("publishes the exact thinking phase and clears thinking_end while the provider remains idle", async () => {
+		const stream = new AssistantMessageEventStream();
+		const agent = new Agent({ streamFn: () => stream });
+		const running = agent.prompt("think");
+		const empty = createAssistantMessage([{ type: "thinking", thinking: "" }]);
+		const first = createAssistantMessage([{ type: "thinking", thinking: "first" }]);
+		stream.push({ type: "start", partial: empty });
+		expect(await dispatchUpdate(agent, stream, { type: "thinking_start", contentIndex: 0, partial: empty })).toEqual({
+			index: 0,
+			synchronized: true,
+		});
+		expect(
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "first",
+				partial: first,
+			}),
+		).toEqual({ index: 0, synchronized: true });
+		expect(
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_end",
+				contentIndex: 0,
+				content: "first",
+				partial: first,
+			}),
+		).toEqual({ index: undefined, synchronized: true });
+		expect(agent.state.isStreaming).toBe(true);
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
+		expect(agent.state.messages.some(message => message.role === "assistant")).toBe(false);
+
+		const second = createAssistantMessage([
+			...first.content,
+			{ type: "text", text: "preamble" },
+			{ type: "thinking", thinking: "second" },
+		]);
+		expect(await dispatchUpdate(agent, stream, { type: "thinking_start", contentIndex: 2, partial: second })).toEqual(
+			{ index: 2, synchronized: true },
+		);
+		expect(
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_end",
+				contentIndex: 0,
+				content: "first",
+				partial: second,
+			}),
+		).toEqual({ index: 2, synchronized: true });
+		expect(await dispatchUpdate(agent, stream, { type: "text_start", contentIndex: 1, partial: second })).toEqual({
+			index: undefined,
+			synchronized: true,
+		});
+		await dispatchUpdate(agent, stream, { type: "thinking_start", contentIndex: 2, partial: second });
+		const withTool = createAssistantMessage([
+			...second.content,
+			{ type: "toolCall", id: "incomplete", name: "probe", arguments: {} },
+		]);
+		expect(
+			await dispatchUpdate(agent, stream, { type: "toolcall_start", contentIndex: 3, partial: withTool }),
+		).toEqual({
+			index: undefined,
+			synchronized: true,
+		});
+		expect(
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_delta",
+				contentIndex: 2,
+				delta: "second",
+				partial: withTool,
+			}),
+		).toEqual({ index: 2, synchronized: true });
+		// A failed incomplete tool call is not executed; finalized thinking remains untouched in history.
+		stream.fail(new Error("connection closed"));
+		await running;
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
+		const stored = agent.state.messages.find(message => message.role === "assistant");
+		expect(stored?.content).toEqual(second.content);
+		expect(stored).not.toHaveProperty("activeThinkingIndex");
+	});
+
+	it("starts a fresh thinking phase after a real tool turn without carrying the old content index", async () => {
+		const firstStream = new AssistantMessageEventStream();
+		const secondStream = new AssistantMessageEventStream();
+		const schema = type({});
+		let executions = 0;
+		let phaseDuringTool: number | undefined;
+		const tool: AgentTool<typeof schema> = {
+			name: "probe",
+			label: "Probe",
+			description: "Return a probe result",
+			parameters: schema,
+			async execute() {
+				executions++;
+				phaseDuringTool = agent.state.activeThinkingIndex;
+				return { content: [{ type: "text", text: "ok" }] };
+			},
+		};
+		let calls = 0;
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => (calls++ === 0 ? firstStream : secondStream),
+		});
+		const running = agent.prompt("use the probe");
+		const first = createAssistantMessage([{ type: "thinking", thinking: "before tool" }]);
+		firstStream.push({ type: "start", partial: first });
+		await dispatchUpdate(agent, firstStream, {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "before tool",
+			partial: first,
+		});
+		const toolCall = { type: "toolCall" as const, id: "probe-1", name: "probe", arguments: {} };
+		const toolTurn = createAssistantMessage([...first.content, toolCall], "toolUse");
+		expect(
+			await dispatchUpdate(agent, firstStream, { type: "toolcall_start", contentIndex: 1, partial: toolTurn }),
+		).toEqual({ index: undefined, synchronized: true });
+		firstStream.push({ type: "toolcall_end", contentIndex: 1, toolCall, partial: toolTurn });
+		firstStream.push({ type: "done", reason: "toolUse", message: toolTurn });
+		const second = createAssistantMessage([
+			{ type: "text", text: "after tool" },
+			{ type: "thinking", thinking: "follow-up" },
+		]);
+		secondStream.push({ type: "start", partial: second });
+		expect(
+			await dispatchUpdate(agent, secondStream, {
+				type: "thinking_delta",
+				contentIndex: 1,
+				delta: "follow-up",
+				partial: second,
+			}),
+		).toEqual({ index: 1, synchronized: true });
+		expect(executions).toBe(1);
+		expect(phaseDuringTool).toBeUndefined();
+		secondStream.push({ type: "done", reason: "stop", message: second });
+		await running;
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
+	});
+
+	it("clears a restarted provider message before accepting its new thinking index", async () => {
+		const stream = new AssistantMessageEventStream();
+		const agent = new Agent({ streamFn: () => stream });
+		const running = agent.prompt("restart");
+		const first = createAssistantMessage([{ type: "thinking", thinking: "abandoned" }]);
+		stream.push({ type: "start", partial: first });
+		await dispatchUpdate(agent, stream, {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "abandoned",
+			partial: first,
+		});
+		const restarted = createAssistantMessage([
+			{ type: "text", text: "new preamble" },
+			{ type: "thinking", thinking: "new thought" },
+		]);
+		expect(await dispatchUpdate(agent, stream, { type: "start", partial: restarted })).toEqual({
+			index: undefined,
+			synchronized: true,
+		});
+		expect(
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_delta",
+				contentIndex: 1,
+				delta: "new thought",
+				partial: restarted,
+			}),
+		).toEqual({ index: 1, synchronized: true });
+		stream.push({ type: "done", reason: "stop", message: restarted });
+		await running;
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
+		expect(agent.state.messages.filter(message => message.role === "assistant")).toEqual([restarted]);
+	});
+
+	for (const terminal of ["done", "error", "failure", "abort"] as const) {
+		it(`clears an unterminated thinking block on ${terminal} before terminal consumers run`, async () => {
+			const stream = new AssistantMessageEventStream();
+			const agent = new Agent({ streamFn: () => stream });
+			const terminalPhases: Array<number | undefined> = [];
+			agent.subscribe(event => {
+				if (event.type === "message_end" || event.type === "agent_end") {
+					terminalPhases.push(agent.state.activeThinkingIndex);
+				}
+			});
+			const running = agent.prompt("think until stopped");
+			const partial = createAssistantMessage([{ type: "thinking", thinking: "unfinished" }]);
+			stream.push({ type: "start", partial });
+			await dispatchUpdate(agent, stream, {
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "unfinished",
+				partial,
+			});
+			expect(agent.state.activeThinkingIndex).toBe(0);
+			if (terminal === "failure") {
+				stream.fail(new Error("connection lost"));
+			} else if (terminal === "error") {
+				stream.push({
+					type: "error",
+					reason: "error",
+					error: { ...partial, stopReason: "error", errorMessage: "provider failed" },
+				});
+			} else {
+				if (terminal === "abort") {
+					agent.abort("cancelled");
+					expect(agent.state.activeThinkingIndex).toBeUndefined();
+					// Already buffered provider output must not reactivate the aborted phase.
+					stream.push({ type: "thinking_delta", contentIndex: 0, delta: "late", partial });
+				}
+				stream.push({ type: "done", reason: "stop", message: partial });
+			}
+			await running;
+			expect(terminalPhases.length).toBeGreaterThan(0);
+			expect(terminalPhases.every(index => index === undefined)).toBe(true);
+			expect(agent.state.activeThinkingIndex).toBeUndefined();
+			expect(agent.state.streamMessage).toBeNull();
+		});
+	}
+
+	it("does not let a reset predecessor's late events clear a successor's thinking phase", async () => {
+		const oldStream = new AssistantMessageEventStream();
+		const newStream = new AssistantMessageEventStream();
+		let calls = 0;
+		const agent = new Agent({ streamFn: () => (calls++ === 0 ? oldStream : newStream) });
+		const oldRun = agent.prompt("old owner");
+		const oldPartial = createAssistantMessage([{ type: "thinking", thinking: "old" }]);
+		oldStream.push({ type: "start", partial: oldPartial });
+		await dispatchUpdate(agent, oldStream, {
+			type: "thinking_delta",
+			contentIndex: 0,
+			delta: "old",
+			partial: oldPartial,
+		});
+		agent.reset();
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
+
+		const newRun = agent.prompt("new owner");
+		const newPartial = createAssistantMessage([
+			{ type: "text", text: "new" },
+			{ type: "thinking", thinking: "current" },
+		]);
+		newStream.push({ type: "start", partial: newPartial });
+		await dispatchUpdate(agent, newStream, {
+			type: "thinking_delta",
+			contentIndex: 1,
+			delta: "current",
+			partial: newPartial,
+		});
+		oldStream.push({ type: "thinking_end", contentIndex: 0, content: "old", partial: oldPartial });
+		oldStream.push({ type: "done", reason: "stop", message: oldPartial });
+		await oldRun;
+		expect(agent.state.activeThinkingIndex).toBe(1);
+		const current = agent.state.streamMessage;
+		if (current?.role !== "assistant") throw new Error("Expected the successor's active assistant message");
+		expect(current.content).toEqual(newPartial.content);
+		newStream.push({ type: "done", reason: "stop", message: newPartial });
+		await newRun;
+		expect(agent.state.activeThinkingIndex).toBeUndefined();
 	});
 });
 

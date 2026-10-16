@@ -168,12 +168,12 @@ export const cfgDefaultThinkingLevel = register({
 export const cfgHideThinkingBlock = register({
 	id: "hideThinkingBlock",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "model",
 		group: "思考",
-		label: "隐藏思考块",
-		description: "隐藏助手回复中的思考块",
+		label: "隐藏实时思考窗口",
+		description: "隐藏主界面正在生成的思考尾窗；显示时仅保留最新五个屏幕行",
 	},
 });
 
@@ -184,8 +184,8 @@ export const cfgExpandThinkingBlocks = register({
 	ui: {
 		tab: "model",
 		group: "思考",
-		label: "展开思考块",
-		description: "保持已完成的思考块展开，而不是在轮次结束时折叠",
+		label: "展开历史思考块",
+		description: "仅在显式历史查看器中展开已完成的思考块，不影响主界面实时思考窗口",
 		condition: "nativeRendering",
 	},
 });

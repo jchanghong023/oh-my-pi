@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
 - Compact transcript activity shows each tool invocation on one line, including failures, and keeps hidden thinking and tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
@@ -19,6 +20,7 @@
 
 ### Fixed
 
+- Resume incremental thinking-tail updates after completed control sequences while safely handling split ANSI and CRLF boundaries.
 - Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.
 - Kept wide-character composer help within the terminal width when continuation rows have very little space.
 - Preserved the draft and cursor row when full or custom status lines overflow short terminals, restoring the configured layout after expansion.
