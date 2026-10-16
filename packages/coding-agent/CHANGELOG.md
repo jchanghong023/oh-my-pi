@@ -18,9 +18,11 @@
 - Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.
 - Enable LSP access for subagents and terminal error notifications by default, while preserving explicit settings.
 - Allow sessions in the home directory by default and disable OTLP telemetry export by default, while preserving explicit telemetry settings.
+- `/team` now preserves ordered model rosters and duplicates, cycles them across at least three independent agents, and defaults to the session model in both offline and normal modes without adding it to explicit rosters.
 
 ### Fixed
 
+- Tracked `/team` blockers individually with stable IDs and explicit recheck decisions, so partial fixes and invalid reviews cannot clear unrelated blockers.
 - Honor prose-only thinking in the live five-row preview, including immediate setting changes, without altering stored reasoning.
 - Preserved running user shell and Python output across display-mode changes, and reported effective display preferences when higher-priority settings block a requested mode.
 - Restored search, grep and deletion shortcuts after returning from wiki evidence to the results list.

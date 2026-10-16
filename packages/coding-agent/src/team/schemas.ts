@@ -10,7 +10,9 @@
  * text over budget is rejected before any stage consumes it.
  *
  * Proposal and review-summary fields have schema `maxLength` caps. The parser
- * also enforces the 1500-character total across a review summary and findings.
+ * also enforces the 1500-character total across review summary, findings and
+ * blocking-resolution bases after summary truncation; findings and decisions
+ * are never silently truncated.
  */
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import type {
@@ -18,6 +20,7 @@ import type {
 	TeamAssumption,
 	TeamAmbiguityInterpretation,
 	TeamDisposition,
+	TeamBlockingResolution,
 	TeamEvidenceItem,
 	TeamFactDifference,
 	TeamFinding,
@@ -150,33 +153,52 @@ const findingSchema = obj(
 	["severity", "issue", "impact", "evidence", "targetAspect"],
 );
 
+const blockingResolutionSchema = obj(
+	{
+		findingId: str(32, "程序提供的未解决阻断问题 ID，必须原样引用", 1),
+		status: enumOf(["resolved", "unresolved"] as const, "该 ID 对应的问题是否已完全解决"),
+		basis: str(TEAM_REVIEW_BUDGET, "逐项判定依据；部分解决仍填 unresolved 并说明残留问题", 1),
+	},
+	["findingId", "status", "basis"],
+);
+
 export const TEAM_REVIEW_SCHEMA = obj(
 	{
-		noSubstantiveIssues: bool("未发现实质问题时为 true；不必凑问题数量"),
-		reviewSummary: str(TEAM_REVIEW_BUDGET, "审查摘要；与全部 findings 文字合计 ≤ 1500 字"),
-		findings: { type: "array", maxItems: 10, description: "发现的问题；无实质问题时为空数组", items: findingSchema },
-		priorBlockingStatus: enumOf(
-			["resolved", "partially-resolved", "unresolved", "not-applicable"] as const,
-			"仅复核轮使用：上一轮阻断问题是否已解决；初次审查固定填 not-applicable",
+		noSubstantiveIssues: bool("未发现新的实质问题时为 true；不代表历史阻断问题已解决"),
+		reviewSummary: str(
+			TEAM_REVIEW_BUDGET,
+			"审查摘要；与全部 findings 文字及 blockingResolutions.basis 合计 ≤ 1500 字",
 		),
+		findings: { type: "array", maxItems: 10, description: "发现的问题；无实质问题时为空数组", items: findingSchema },
+		blockingResolutions: {
+			type: "array",
+			maxItems: 30,
+			description: "逐一判定程序提供的所有未解决阻断 ID，不得遗漏、重复或新增；初次审查为空数组",
+			items: blockingResolutionSchema,
+		},
 	},
-	["noSubstantiveIssues", "reviewSummary", "findings", "priorBlockingStatus"],
+	["noSubstantiveIssues", "reviewSummary", "findings", "blockingResolutions"],
 );
 
 const revisionResponseSchema = obj(
 	{
-		finding: str(400, "对应的审查意见（摘要）"),
+		findingId: str(32, "程序提供的审查意见 ID，必须原样引用", 1),
 		disposition: enumOf(DISPOSITIONS, "处理方式：接受并修订 / 举证不接受 / 保留为真实取舍 / 说明仍无法解决"),
-		explanation: str(600, "说明：改了什么、为什么，或不接受的证据"),
+		explanation: str(600, "说明：改了什么、为什么，或不接受的证据", 1),
 	},
-	["finding", "disposition", "explanation"],
+	["findingId", "disposition", "explanation"],
 );
 
 export const TEAM_REVISION_SCHEMA = obj(
 	{
 		revisedProposal: str(TEAM_REVISION_BUDGET, "修订后的方案全文（无改动时原样给出），≤ 4000 字"),
 		revisionSummary: str(TEAM_REVIEW_BUDGET, "修改内容与理由摘要"),
-		responses: { type: "array", maxItems: 10, description: "逐项回应审查意见", items: revisionResponseSchema },
+		responses: {
+			type: "array",
+			maxItems: 30,
+			description: "逐项回应最新审查意见和仍未解决的阻断 ID，不得遗漏或重复",
+			items: revisionResponseSchema,
+		},
 		reviewFlags: obj(
 			{
 				changedCoreDesign: bool("是否修改了核心设计、接口、数据变化或兼容策略"),
@@ -358,10 +380,25 @@ export function parseTeamProposal(value: unknown): TeamProposalOutput | undefine
 	};
 }
 
-export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
+function hasExactFindingReferences(
+	entries: readonly { findingId: string }[],
+	expectedFindingIds: readonly string[],
+): boolean {
+	const remaining = new Set(expectedFindingIds);
+	if (remaining.size !== expectedFindingIds.length || entries.length !== remaining.size) return false;
+	for (const entry of entries) {
+		if (!remaining.delete(entry.findingId)) return false;
+	}
+	return remaining.size === 0;
+}
+
+export function parseTeamReview(
+	value: unknown,
+	expectedBlockingIds: readonly string[] = [],
+): TeamReviewOutput | undefined {
 	const data = validateTeamPayload(value, TEAM_REVIEW_SCHEMA, REVIEW_TEXT_BUDGETS);
 	if (!data) return undefined;
-	const findingValues = asObjectArray(data.findings, 10);
+	const findingValues = data.findings as Record<string, unknown>[];
 	// §2.4: a finding without issue/impact/evidence/target is unusable shape.
 	if (
 		findingValues.some(
@@ -383,7 +420,19 @@ export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
 			targetAspect: asString(value.targetAspect),
 		};
 	});
-	const summary = enforceTextBudget(asString(data.reviewSummary).trim(), TEAM_REVIEW_BUDGET);
+	const blockingResolutions = (data.blockingResolutions as Record<string, unknown>[]).map(
+		(value): TeamBlockingResolution => ({
+			findingId: asString(value.findingId),
+			status: value.status === "resolved" ? "resolved" : "unresolved",
+			basis: asString(value.basis),
+		}),
+	);
+	if (
+		!hasExactFindingReferences(blockingResolutions, expectedBlockingIds) ||
+		blockingResolutions.some(resolution => !resolution.basis.trim())
+	)
+		return undefined;
+	const summary = asString(data.reviewSummary).trim();
 	const reviewTextLength =
 		summary.length +
 		findings.reduce(
@@ -394,41 +443,39 @@ export function parseTeamReview(value: unknown): TeamReviewOutput | undefined {
 				finding.evidence.length +
 				finding.targetAspect.length,
 			0,
-		);
+		) +
+		blockingResolutions.reduce((total, resolution) => total + resolution.basis.length, 0);
 	if (reviewTextLength > TEAM_REVIEW_BUDGET) return undefined;
 	const noSubstantiveIssues = asBoolean(data.noSubstantiveIssues) && findings.length === 0;
 	// A narrative alone cannot stand in for structured findings or an explicit
 	// no-issues verdict: otherwise an incomplete review can pass the adoption gate.
 	if (findings.length === 0 && !noSubstantiveIssues) return undefined;
-	const status = asString(data.priorBlockingStatus);
 	return {
 		noSubstantiveIssues,
 		reviewSummary: summary,
 		findings,
-		priorBlockingStatus:
-			status === "resolved" || status === "partially-resolved" || status === "unresolved"
-				? status
-				: "not-applicable",
+		blockingResolutions,
 	};
 }
 
-export function parseTeamRevision(value: unknown): TeamRevisionOutput | undefined {
+export function parseTeamRevision(
+	value: unknown,
+	expectedFindingIds: readonly string[] = [],
+): TeamRevisionOutput | undefined {
 	const data = validateTeamPayload(value, TEAM_REVISION_SCHEMA, REVISION_TEXT_BUDGETS);
 	if (!data || !asString(data.revisedProposal).trim()) return undefined;
 	const flags = isRecord(data.reviewFlags) ? data.reviewFlags : {};
 	const parseFlag = (value: unknown) => asBoolean(value, false);
-	const responses = asObjectArray(data.responses, 10)
-		.map((value): TeamRevisionResponse => {
-			const disposition = asString(value.disposition);
-			return {
-				finding: asString(value.finding),
-				disposition: (DISPOSITIONS as readonly string[]).includes(disposition)
-					? (disposition as TeamDisposition)
-					: "unresolved",
-				explanation: asString(value.explanation),
-			};
-		})
-		.filter(response => response.finding.trim().length > 0);
+	const responses = (data.responses as Record<string, unknown>[]).map((value): TeamRevisionResponse => ({
+		findingId: asString(value.findingId),
+		disposition: asString(value.disposition) as TeamDisposition,
+		explanation: asString(value.explanation),
+	}));
+	if (
+		!hasExactFindingReferences(responses, expectedFindingIds) ||
+		responses.some(response => !response.explanation.trim())
+	)
+		return undefined;
 	return {
 		revisedProposal: enforceTextBudget(asString(data.revisedProposal).trim(), TEAM_REVISION_BUDGET),
 		revisionSummary: enforceTextBudget(asString(data.revisionSummary).trim(), TEAM_REVIEW_BUDGET),

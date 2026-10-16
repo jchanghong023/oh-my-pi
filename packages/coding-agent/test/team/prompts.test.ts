@@ -16,6 +16,8 @@ import {
 	type TeamAlignmentOutput,
 	type TeamProposalOutput,
 	type TeamProposalRecord,
+	type TeamReviewRecord,
+	type TeamTrackedFinding,
 } from "@oh-my-pi/pi-coding-agent/team";
 
 const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
@@ -56,6 +58,7 @@ function markerRecord(): TeamProposalRecord {
 		revisionHistory: [],
 		roundsUsed: 0,
 		unresolvedBlocking: [],
+		nextFindingNumber: 1,
 		proposerFailed: false,
 		reviewFailed: false,
 		recheckFailed: false,
@@ -73,65 +76,191 @@ const alignment: TeamAlignmentOutput = {
 	interpretationDifferences: [],
 };
 
-describe("team prompt handoff", () => {
-	it("passes risks, unknowns, assumption impact and evidence into the alignment prompt", () => {
-		const task = buildAlignmentTask({ question: "如何实现 X？", cwd: "/tmp/repo", proposals: [markerRecord()] });
-		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
-	});
+function finding(
+	id: string,
+	evidence: string,
+	severity: TeamTrackedFinding["severity"] = "blocking",
+): TeamTrackedFinding {
+	return {
+		id,
+		severity,
+		issue: "A reader may observe the wrong generation",
+		impact: `Unsafe reader path ${id}`,
+		evidence,
+		targetAspect: `Reader ${id}`,
+	};
+}
 
-	it("passes them into the anonymous review prompt without author identity", () => {
-		const latest = markerRecord().latestProposal!;
-		const task = buildReviewTask({
-			question: "如何实现 X？",
-			cwd: "/tmp/repo",
-			alignment,
-			targetLabel: "A",
-			proposalText: latest.proposal,
-			keyAssumptions: latest.keyAssumptions,
-			risks: latest.risks,
-			unknowns: latest.unknowns,
-			evidence: latest.evidence,
-			ambiguityInterpretations: latest.ambiguityInterpretations,
-			round: 1,
-			recheck: false,
-		});
-		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
-		// Structured fields must not smuggle author identity into the review.
-		expect(task).not.toContain("provider/model-x");
-	});
+function structuredBlocks(task: string): unknown[] {
+	return Array.from(task.matchAll(/```json\n([\s\S]*?)\n```/g), match => JSON.parse(match[1]!));
+}
 
-	it("gives a recheck all unverified revision responses since the successfully reviewed baseline", () => {
-		const record = markerRecord();
-		const baseline = { ...record.latestProposal!, proposal: "Audited baseline: use transaction snapshots" };
-		const revisions: TeamProposalRecord["revisionHistory"] = [1, 2].map(round => ({
-			round,
-			revision: {
-				revisedProposal: round === 1 ? "Use incremental snapshots" : "Add snapshot expiry",
-				revisionSummary: round === 1 ? "Change the snapshot boundary" : "Bound retained history",
-				responses: [
-					{
-						finding: round === 1 ? "Readers may observe a partial transaction" : "Old snapshots may accumulate",
-						disposition: "accepted-and-revised",
-						explanation:
-							round === 1
-								? "src/snapshots.ts:63 pins the transaction generation"
-								: "Expire after readers release the generation",
-					},
-				],
-				reviewFlags: {
-					changedCoreDesign: true,
-					claimsResolvedBlocking: true,
-					newEvidenceChangesAssumptions: false,
-					disputesBlockingFinding: false,
-				},
+function round(
+	number: number,
+	ids: readonly string[],
+	recheck?: TeamReviewRecord,
+): TeamProposalRecord["revisionHistory"][number] {
+	return {
+		round: number,
+		revision: {
+			revisedProposal: `V${number}: reader generation strategy`,
+			revisionSummary: `Revision ${number}: pin generation before reading`,
+			responses: ids.map(findingId => ({
+				findingId,
+				disposition: "accepted-and-revised",
+				explanation: `src/reader.ts:${number * 10} addresses ${findingId}`,
+			})),
+			reviewFlags: {
+				changedCoreDesign: true,
+				claimsResolvedBlocking: true,
+				newEvidenceChangesAssumptions: false,
+				disputesBlockingFinding: false,
 			},
-			recheckFailed: round === 1,
-		}));
-		const task = buildReviewTask({
-			question: "How can snapshot storage be bounded?",
+		},
+		recheck,
+		recheckFailed: false,
+	};
+}
+
+function reviewedRecord(): TeamProposalRecord {
+	const record = markerRecord();
+	const first = finding("A-F1", "src/reader-a.ts:11 proves the stale-reader path");
+	const second = finding("A-F2", "src/reader-b.ts:22 proves a distinct stale-reader path");
+	const introduced = finding("A-F3", "src/generation.ts:33 exposes a new lifetime gap");
+	const important = finding("A-F4", "src/generation.ts:44 leaves an expensive scan", "important");
+	const initial: TeamReviewRecord = {
+		noSubstantiveIssues: false,
+		reviewSummary: "Two independent reader paths are unsafe",
+		findings: [first, second],
+		blockingResolutions: [],
+	};
+	const partial: TeamReviewRecord = {
+		noSubstantiveIssues: false,
+		reviewSummary: "The first reader is safe; the second remains unsafe and new work needs review",
+		findings: [introduced, important],
+		blockingResolutions: [
+			{ findingId: first.id, status: "resolved", basis: "src/reader-a.ts:61 pins the first generation" },
+			{ findingId: second.id, status: "unresolved", basis: "src/reader-b.ts:62 still releases before reading" },
+		],
+	};
+	const final: TeamReviewRecord = {
+		noSubstantiveIssues: true,
+		reviewSummary: "The new gap is closed, but the second reader still needs a fix",
+		findings: [],
+		blockingResolutions: [
+			{ findingId: second.id, status: "unresolved", basis: "src/reader-b.ts:82 still reads after release" },
+			{ findingId: introduced.id, status: "resolved", basis: "src/generation.ts:83 retains the lifetime guard" },
+		],
+	};
+	record.reviews = [initial, partial, final];
+	record.revisionHistory = [
+		round(1, [first.id, second.id], partial),
+		round(2, [introduced.id, important.id, second.id], final),
+	];
+	record.latestProposal = { ...record.latestProposal!, proposal: record.revisionHistory[1]!.revision.revisedProposal };
+	record.unresolvedBlocking = [second];
+	record.nextFindingNumber = 5;
+	record.roundsUsed = 2;
+	record.excludedFromOptions = true;
+	record.blockedAfterRoundCap = true;
+	record.exclusionReason = "An independent reader path remains unsafe";
+	return record;
+}
+
+describe("team prompt handoff", () => {
+	it("preserves proposal evidence and constraints through isolated anonymous stage boundaries", () => {
+		const record = markerRecord();
+		const proposal = record.latestProposal!;
+		const review: TeamReviewRecord = {
+			noSubstantiveIssues: true,
+			reviewSummary: "No new issue",
+			findings: [],
+			blockingResolutions: [],
+		};
+		const question = "Keep the existing reader interface while bounding snapshot storage";
+		const tasks = [
+			buildAlignmentTask({ question, cwd: "/tmp/repo", proposals: [record] }),
+			buildReviewTask({
+				question,
+				cwd: "/tmp/repo",
+				alignment,
+				targetLabel: record.label,
+				proposalText: proposal.proposal,
+				keyAssumptions: proposal.keyAssumptions,
+				risks: proposal.risks,
+				unknowns: proposal.unknowns,
+				evidence: proposal.evidence,
+				ambiguityInterpretations: proposal.ambiguityInterpretations,
+				round: 1,
+				recheck: false,
+			}),
+			buildRevisionTask({
+				question,
+				cwd: "/tmp/repo",
+				alignment,
+				targetLabel: record.label,
+				round: 1,
+				proposal,
+				review,
+				unresolvedBlocking: [],
+			}),
+			buildSynthesisTask({ question, cwd: "/tmp/repo", alignment, proposals: [record] }),
+		];
+		for (const task of tasks) {
+			expect(task).toContain(question);
+			for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
+			expect(task).not.toContain(record.participant.modelPattern);
+			expect(task).not.toContain(MODEL.id);
+		}
+	});
+
+	it("gives the reviser exactly the latest findings plus older pending IDs with their original evidence", () => {
+		const record = reviewedRecord();
+		const review = record.reviews[1]!;
+		const olderPending = record.reviews[0]!.findings[1]!;
+		const newPending = review.findings[0]!;
+		const task = buildRevisionTask({
+			question: "Make both reader paths safe",
 			cwd: "/tmp/repo",
 			alignment,
-			targetLabel: "A",
+			targetLabel: record.label,
+			round: 2,
+			proposal: record.latestProposal!,
+			review,
+			unresolvedBlocking: [olderPending, newPending],
+		});
+		const arrays = structuredBlocks(task).filter(Array.isArray) as TeamTrackedFinding[][];
+		const complete = arrays.find(items => items.length === 3)!;
+		expect(complete.map(item => item.id)).toEqual(["A-F3", "A-F4", "A-F2"]);
+		expect(new Set(complete.map(item => item.id)).size).toBe(complete.length);
+		expect(complete.find(item => item.id === "A-F2")?.evidence).toBe(olderPending.evidence);
+		expect(complete.find(item => item.id === "A-F3")?.evidence).toBe(newPending.evidence);
+		expect(complete.some(item => item.id === "A-F1")).toBe(false);
+		expect(arrays.find(items => items.length === 2)?.map(item => item.id)).toEqual(["A-F2", "A-F3"]);
+		const handedReview = structuredBlocks(task).find(
+			value =>
+				!Array.isArray(value) && typeof value === "object" && value !== null && "blockingResolutions" in value,
+		) as TeamReviewRecord;
+		expect(handedReview.blockingResolutions.map(item => [item.findingId, item.status])).toEqual([
+			["A-F1", "resolved"],
+			["A-F2", "unresolved"],
+		]);
+	});
+
+	it("keeps failed-recheck cumulative changes joined to exact blocker evidence for a fresh reviewer", () => {
+		const record = reviewedRecord();
+		const baseline = record.originalProposal!;
+		const initial = record.reviews[0]!;
+		const revisions = [round(1, ["A-F1", "A-F2"]), round(2, ["A-F1", "A-F2"])];
+		revisions[0]!.recheckFailed = true;
+		revisions[0]!.revision.responses[0]!.disposition = "rejected-with-evidence";
+		revisions[0]!.revision.responses[0]!.explanation = "src/reader-a.ts:50 preserves A-F1's original snapshot";
+		revisions[0]!.revision.reviewFlags.disputesBlockingFinding = true;
+		const task = buildReviewTask({
+			question: "Make both reader paths safe",
+			cwd: "/tmp/repo",
+			alignment,
+			targetLabel: record.label,
 			proposalText: revisions[1]!.revision.revisedProposal,
 			keyAssumptions: baseline.keyAssumptions,
 			risks: baseline.risks,
@@ -140,119 +269,74 @@ describe("team prompt handoff", () => {
 			ambiguityInterpretations: baseline.ambiguityInterpretations,
 			round: 2,
 			recheck: true,
-			recheckContext: { previousProposal: baseline, revisions, reviews: [] },
+			unresolvedBlocking: initial.findings,
+			recheckContext: { previousProposal: baseline, revisions, reviews: [initial] },
 		});
-		expect(task).toContain(baseline.proposal);
-		for (const entry of revisions) {
-			expect(task).toContain(entry.revision.revisedProposal);
-			expect(task).toContain(entry.revision.revisionSummary);
-			expect(task).toContain(entry.revision.responses[0]!.finding);
-			expect(task).toContain(entry.revision.responses[0]!.explanation);
+		const arrays = structuredBlocks(task).filter(Array.isArray);
+		const history = arrays.find(items => items[0]?.revision) as TeamProposalRecord["revisionHistory"];
+		const reviews = arrays.find(items => items[0]?.blockingResolutions) as TeamReviewRecord[];
+		const pending = arrays.find(items => items[0]?.id) as TeamTrackedFinding[];
+		expect(history.map(entry => [entry.round, entry.recheckFailed])).toEqual([
+			[1, true],
+			[2, false],
+		]);
+		const byId = new Map(reviews.flatMap(review => review.findings).map(item => [item.id, item]));
+		for (const entry of history) {
+			for (const response of entry.revision.responses) {
+				const original = byId.get(response.findingId)!;
+				expect(pending.find(item => item.id === response.findingId)?.evidence).toBe(original.evidence);
+				expect(response.explanation).toContain(response.findingId);
+			}
 		}
+		expect(pending[0]!.issue).toBe(pending[1]!.issue);
+		expect(pending[0]!.evidence).not.toBe(pending[1]!.evidence);
+		expect(task).toContain(baseline.proposal);
+		expect(task).toContain(revisions[0]!.revision.revisedProposal);
 		expect(task).not.toContain(record.participant.modelPattern);
 	});
 
-	it("gives the isolated reviser the common acceptance criteria and complete proposal evidence", () => {
-		const task = buildRevisionTask({
-			question: "如何实现 X？",
-			cwd: "/tmp/repo",
-			alignment,
-			targetLabel: "A",
-			round: 1,
-			proposal: markerRecord().latestProposal!,
-			review: {
-				noSubstantiveIssues: false,
-				reviewSummary: "审查",
-				findings: [],
-				priorBlockingStatus: "not-applicable",
-			},
-			unresolvedBlocking: [],
-		});
-		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
-		for (const criterion of alignment.acceptanceCriteria) expect(task).toContain(criterion);
-	});
-
-	it("passes them into the synthesis prompt", () => {
+	it("preserves each round's decisions and evidence without confusing closed and still-pending blockers in synthesis", () => {
+		const record = reviewedRecord();
 		const task = buildSynthesisTask({
-			question: "如何实现 X？",
-			cwd: "/tmp/repo",
-			alignment,
-			proposals: [markerRecord()],
-		});
-		for (const marker of Object.values(MARKERS)) expect(task).toContain(marker);
-	});
-
-	it("passes every revision/recheck pair, including first-round-only rebuttal evidence, into synthesis", () => {
-		const record = markerRecord();
-		record.roundsUsed = 2;
-		record.revisionHistory = [
-			{
-				round: 1,
-				revision: {
-					revisedProposal: "V1: introduce a versioned storage reader",
-					revisionSummary: "Keep the rollback path pending review",
-					responses: [
-						{
-							finding: "Rollback may lose previous records",
-							disposition: "rejected-with-evidence",
-							explanation: "src/storage/reader.ts:87 retains the original records during rollback",
-						},
-					],
-					reviewFlags: {
-						changedCoreDesign: true,
-						claimsResolvedBlocking: false,
-						newEvidenceChangesAssumptions: false,
-						disputesBlockingFinding: true,
-					},
-				},
-				recheckFailed: true,
-			},
-			{
-				round: 2,
-				revision: {
-					revisedProposal: "V2: add reader version negotiation",
-					revisionSummary: "Negotiate the storage version before switching readers",
-					responses: [
-						{
-							finding: "Version mismatch",
-							disposition: "accepted-and-revised",
-							explanation: "Read the stored version before selecting the reader",
-						},
-					],
-					reviewFlags: {
-						changedCoreDesign: true,
-						claimsResolvedBlocking: true,
-						newEvidenceChangesAssumptions: false,
-						disputesBlockingFinding: false,
-					},
-				},
-				recheck: {
-					noSubstantiveIssues: true,
-					reviewSummary: "src/storage/version.ts:24 confirms both reader versions are supported",
-					findings: [],
-					priorBlockingStatus: "resolved",
-				},
-				recheckFailed: false,
-			},
-		];
-		const task = buildSynthesisTask({
-			question: "How can storage readers be upgraded safely?",
+			question: "Make both reader paths safe",
 			cwd: "/tmp/repo",
 			alignment,
 			proposals: [record],
 		});
-		for (const entry of record.revisionHistory) {
-			expect(task).toContain(entry.revision.revisedProposal);
-			expect(task).toContain(entry.revision.revisionSummary);
-			for (const response of entry.revision.responses) {
-				expect(task).toContain(response.finding);
-				expect(task).toContain(response.explanation);
+		const arrays = structuredBlocks(task).filter(Array.isArray);
+		const reviews = arrays.find(items => items[0]?.blockingResolutions) as TeamReviewRecord[];
+		const history = arrays.find(items => items[0]?.revision) as TeamProposalRecord["revisionHistory"];
+		const pending = arrays.find(items => items[0]?.id) as TeamTrackedFinding[];
+		expect(reviews).toHaveLength(3);
+		expect(history.map(entry => entry.round)).toEqual([1, 2]);
+		expect(pending.map(item => item.id)).toEqual(["A-F2"]);
+		const evidenceById = new Map(reviews.flatMap(review => review.findings).map(item => [item.id, item.evidence]));
+		expect(evidenceById.size).toBe(4);
+		const pendingEvidence = evidenceById.get("A-F2");
+		if (pendingEvidence === undefined) throw new Error("Missing fixture evidence for A-F2");
+		expect(pending[0]!.evidence).toBe(pendingEvidence);
+		expect(evidenceById.get("A-F1")).not.toBe(evidenceById.get("A-F2"));
+		expect(
+			reviews.slice(1).map(review => review.blockingResolutions.map(item => [item.findingId, item.status])),
+		).toEqual([
+			[
+				["A-F1", "resolved"],
+				["A-F2", "unresolved"],
+			],
+			[
+				["A-F2", "unresolved"],
+				["A-F3", "resolved"],
+			],
+		]);
+		for (const entry of history) {
+			for (const response of entry.revision.responses) expect(evidenceById.has(response.findingId)).toBe(true);
+			const acceptedReview = reviews.find(review => review.reviewSummary === entry.recheck?.reviewSummary)!;
+			expect(entry.recheck?.blockingResolutions).toEqual(acceptedReview.blockingResolutions);
+			for (const decision of acceptedReview.blockingResolutions) {
+				expect(evidenceById.has(decision.findingId)).toBe(true);
+				expect(decision.basis).toContain("src/");
 			}
-			if (entry.recheck) expect(task).toContain(entry.recheck.reviewSummary);
 		}
-		expect(task).toMatch(/"round":\s*1/);
-		expect(task).toMatch(/"round":\s*2/);
-		expect(task).toMatch(/"recheckFailed":\s*true/);
-		expect(task).toMatch(/"recheckFailed":\s*false/);
+		expect(task).not.toContain(record.participant.modelPattern);
 	});
 });

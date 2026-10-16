@@ -38,15 +38,18 @@ import {
 } from "./prompts";
 import { assembleTeamReport } from "./report";
 import type {
+	TeamFinding,
 	TeamParticipant,
 	TeamProgressUpdate,
 	TeamProposalRecord,
 	TeamRevisionFlags,
 	TeamReviewOutput,
+	TeamReviewRecord,
 	TeamRunResult,
 	TeamSubagentCall,
 	TeamSubagentOutcome,
 	TeamSubagentRunner,
+	TeamTrackedFinding,
 } from "./types";
 
 /** Hard cap: at most two revision(+recheck) rounds per proposal; the third is refused. */
@@ -97,33 +100,50 @@ export function needsRecheck(flags: TeamRevisionFlags): boolean {
 }
 
 /**
- * Mechanically recompute the unresolved blocking list from the review chain.
- * Folds every recheck in order: start from the initial review's blocking
- * findings; each recheck with `priorBlockingStatus === "resolved"` clears the
- * accumulated list (then re-appends its own blocking findings), while
- * `unresolved` / `partially-resolved` / `not-applicable` keep the prior state
- * and union in that recheck's own blocking findings. Reviews that never
- * happened (skipped recheck) leave the prior state untouched.
+ * Mechanically fold accepted reviews by stable finding ID. Only a complete,
+ * well-founded set of reviewer decisions can close earlier blockers; author
+ * responses and repeated issue text never affect their identity or status.
  */
-export function computeUnresolvedBlocking(reviews: readonly TeamReviewOutput[]): string[] {
-	const initial = reviews[0];
-	if (!initial) return [];
-	let unresolved = initial.findings.filter(finding => finding.severity === "blocking").map(finding => finding.issue);
-	for (const recheck of reviews.slice(1)) {
-		const newBlocking = recheck.findings
-			.filter(finding => finding.severity === "blocking")
-			.map(finding => finding.issue);
-		if (recheck.priorBlockingStatus === "resolved") {
-			unresolved = [...new Set(newBlocking)];
-		} else {
-			unresolved = [...new Set([...unresolved, ...newBlocking])];
+export function computeUnresolvedBlocking(reviews: readonly TeamReviewRecord[]): TeamTrackedFinding[] {
+	const unresolved = new Map<string, TeamTrackedFinding>();
+	for (const review of reviews) {
+		const decided = new Set<string>();
+		const validDecisions =
+			review.blockingResolutions.length === unresolved.size &&
+			review.blockingResolutions.every(resolution => {
+				if (
+					!unresolved.has(resolution.findingId) ||
+					decided.has(resolution.findingId) ||
+					!resolution.basis.trim() ||
+					(resolution.status !== "resolved" && resolution.status !== "unresolved")
+				)
+					return false;
+				decided.add(resolution.findingId);
+				return true;
+			});
+		if (validDecisions) {
+			for (const resolution of review.blockingResolutions) {
+				if (resolution.status === "resolved") unresolved.delete(resolution.findingId);
+			}
+		}
+		for (const finding of review.findings) {
+			if (finding.severity === "blocking") unresolved.set(finding.id, finding);
 		}
 	}
-	return unresolved;
+	return [...unresolved.values()];
 }
 
 function proposalLabel(index: number): string {
 	return String.fromCodePoint("A".codePointAt(0)! + index);
+}
+
+function trackFinding(record: TeamProposalRecord, finding: TeamFinding): TeamTrackedFinding {
+	return { ...finding, id: `${record.label}-F${record.nextFindingNumber++}` };
+}
+
+/** Called only after the complete raw review has passed parsing. */
+function trackReview(record: TeamProposalRecord, review: TeamReviewOutput): TeamReviewRecord {
+	return { ...review, findings: review.findings.map(finding => trackFinding(record, finding)) };
 }
 
 interface TeamCallDiagnosticsOutcome {
@@ -332,6 +352,7 @@ async function runTeamDiscussionImpl(
 		reviews: [],
 		revisionHistory: [],
 		roundsUsed: 0,
+		nextFindingNumber: 1,
 		unresolvedBlocking: [],
 		proposerFailed: false,
 		reviewFailed: false,
@@ -480,7 +501,7 @@ async function runTeamDiscussionImpl(
 					emitProgress("review", `阶段三：交叉审查（${record.label} 失败）`);
 					return;
 				}
-				record.reviews.push(review);
+				record.reviews.push(trackReview(record, review));
 				record.unresolvedBlocking = computeUnresolvedBlocking(record.reviews);
 				logger.info("Team review blocking state", {
 					component: "team.orchestrator",
@@ -530,6 +551,12 @@ async function runTeamDiscussionImpl(
 				record.roundsUsed = round;
 				trackParticipant(`revision-${record.label}`, "reviser", "running");
 				emitProgress("revision", `阶段四：修订与复核（${record.label} 第 ${round} 轮）`);
+				const expectedFindingIds = [
+					...new Set([
+						...record.reviews.at(-1)!.findings.map(finding => finding.id),
+						...record.unresolvedBlocking.map(finding => finding.id),
+					]),
+				];
 				const revisionOutcome = await runCall(
 					{
 						role: "reviser",
@@ -557,7 +584,9 @@ async function runTeamDiscussionImpl(
 				);
 				if (signal.aborted) return;
 				const parseStarted = performance.now();
-				const revision = revisionOutcome.ok ? parseTeamRevision(revisionOutcome.data) : undefined;
+				const revision = revisionOutcome.ok
+					? parseTeamRevision(revisionOutcome.data, expectedFindingIds)
+					: undefined;
 				logSchema(revisionOutcome, Boolean(revision), performance.now() - parseStarted);
 				if (!revision) {
 					record.revisionFailed = true;
@@ -616,7 +645,12 @@ async function runTeamDiscussionImpl(
 					);
 					if (signal.aborted) return;
 					const parseStarted = performance.now();
-					const recheck = recheckOutcome.ok ? parseTeamReview(recheckOutcome.data) : undefined;
+					const recheck = recheckOutcome.ok
+						? parseTeamReview(
+								recheckOutcome.data,
+								record.unresolvedBlocking.map(finding => finding.id),
+							)
+						: undefined;
 					logSchema(recheckOutcome, Boolean(recheck), performance.now() - parseStarted);
 					if (!recheck) {
 						// Recheck failure cannot confirm resolution; the blocking state
@@ -629,10 +663,11 @@ async function runTeamDiscussionImpl(
 						trackParticipant(`recheck-${record.label}`, "reviewer", "failed");
 						emitProgress("revision", `阶段四：修订与复核（${record.label} 复核失败）`);
 					} else {
-						revisionRecord.recheck = recheck;
+						const trackedRecheck = trackReview(record, recheck);
+						revisionRecord.recheck = trackedRecheck;
 						previousProposal = record.latestProposal!;
 						pendingRevisions = [];
-						record.reviews.push(recheck);
+						record.reviews.push(trackedRecheck);
 						record.pendingRecheck = false;
 						// Recovery clears the current eligibility failure, not the paired
 						// historical failure retained in revisionHistory.
@@ -670,7 +705,7 @@ async function runTeamDiscussionImpl(
 			// review is not a review of this version, so it cannot stay adoptable.
 			if (record.pendingRecheck && !record.excludedFromOptions) {
 				record.excludedFromOptions = true;
-				record.exclusionReason = "修订后必需复核未完成（复核子代理失败），当前版本未经复核确认";
+				record.exclusionReason = "修订后必需复核未完成（子代理失败或输出无效），当前版本未经复核确认";
 			}
 		}),
 	);
@@ -736,7 +771,15 @@ async function runTeamDiscussionImpl(
 				failureReason: `综合结果无效（硬约束违例指向不存在的方案 ${violation.proposalLabel}），流程未完成`,
 			};
 		}
-		record.unresolvedBlocking.push(`综合确认硬约束违例：${violation.issue}（依据：${violation.evidence}）`);
+		record.unresolvedBlocking.push(
+			trackFinding(record, {
+				severity: "blocking",
+				issue: violation.issue,
+				impact: "违反已确认的适用硬约束，修复前不可采用该方案",
+				evidence: violation.evidence,
+				targetAspect: "原始需求与已确认的适用硬约束",
+			}),
+		);
 		logger.info("Team synthesis tightened eligibility", {
 			component: "team.orchestrator",
 			event: "team_eligibility_tightened",

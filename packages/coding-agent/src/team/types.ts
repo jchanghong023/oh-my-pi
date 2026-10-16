@@ -9,13 +9,13 @@
  */
 import type { Model } from "@oh-my-pi/pi-ai";
 
-/** One participating model. Proposers are labelled A, B, ... in this order. */
+/** One independent proposer slot, labelled A, B, ... in order; models may repeat. */
 export interface TeamParticipant {
 	index: number;
 	/** Exact `provider/id` pattern pinned for this participant's subagents. */
 	modelPattern: string;
 	model: Model;
-	/** True for the participant whose model is the session model, however it joined. */
+	/** Whether this slot uses the session model; may be true for all or no slots. */
 	isSessionModel: boolean;
 }
 
@@ -60,23 +60,35 @@ export interface TeamFinding {
 	targetAspect: string;
 }
 
-/**
- * Structured output of a review subagent (stage 3, and stage-4 rechecks).
- * `priorBlockingStatus` adjudicates the previous round's blocking findings and
- * is only meaningful on rechecks (`not-applicable` on the initial review).
- */
+/** A finding accepted by the program, with a stable per-proposal ID. */
+export interface TeamTrackedFinding extends TeamFinding {
+	id: string;
+}
+
+export interface TeamBlockingResolution {
+	findingId: string;
+	status: "resolved" | "unresolved";
+	basis: string;
+}
+
+/** Structured model output of an initial review or revision recheck. */
 export interface TeamReviewOutput {
 	noSubstantiveIssues: boolean;
-	/** Review narrative; budget ≤ 1500 chars, mechanically enforced. */
+	/** Summary + finding prose + resolution bases must fit within 1500 chars. */
 	reviewSummary: string;
 	findings: TeamFinding[];
-	priorBlockingStatus: "resolved" | "partially-resolved" | "unresolved" | "not-applicable";
+	blockingResolutions: TeamBlockingResolution[];
+}
+
+/** An accepted review whose new findings have program-assigned IDs. */
+export interface TeamReviewRecord extends TeamReviewOutput {
+	findings: TeamTrackedFinding[];
 }
 
 export type TeamDisposition = "accepted-and-revised" | "rejected-with-evidence" | "genuine-tradeoff" | "unresolved";
 
 export interface TeamRevisionResponse {
-	finding: string;
+	findingId: string;
 	disposition: TeamDisposition;
 	explanation: string;
 }
@@ -196,22 +208,24 @@ export interface TeamProposalRecord {
 	revisionHistory: Array<{
 		round: number;
 		revision: TeamRevisionOutput;
-		recheck?: TeamReviewOutput;
+		recheck?: TeamReviewRecord;
 		/** Historical failure; a later successful recheck does not erase it. */
 		recheckFailed: boolean;
 	}>;
-	reviews: TeamReviewOutput[];
+	reviews: TeamReviewRecord[];
 	/** Reviewer participant (rotation-resolved); audit only, never enters prompts. */
 	reviewer?: TeamParticipant;
 	roundsUsed: number;
-	/** Mechanically tracked unresolved blocking finding descriptions. */
-	unresolvedBlocking: string[];
+	/** Next program-assigned finding number; never recycled after acceptance. */
+	nextFindingNumber: number;
+	/** Mechanically tracked unresolved blocking findings, keyed by stable ID. */
+	unresolvedBlocking: TeamTrackedFinding[];
 	proposerFailed: boolean;
 	reviewFailed: boolean;
 	recheckFailed: boolean;
 	/**
 	 * True when the current `latestProposal` is a revision whose required
-	 * recheck did not complete (subagent failure): that version was never
+	 * recheck did not complete successfully: that version was never
 	 * reviewed, so it must not be offered as an adoptable option until a
 	 * later round's recheck succeeds.
 	 */

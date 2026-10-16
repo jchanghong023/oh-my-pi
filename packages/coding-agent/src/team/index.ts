@@ -43,6 +43,7 @@ export {
 export type {
 	TeamAlignmentOutput,
 	TeamAssumption,
+	TeamBlockingResolution,
 	TeamDisposition,
 	TeamEvidenceItem,
 	TeamFactDifference,
@@ -57,6 +58,7 @@ export type {
 	TeamRevisionOutput,
 	TeamRevisionResponse,
 	TeamReviewOutput,
+	TeamReviewRecord,
 	TeamRole,
 	TeamRunResult,
 	TeamSeverity,
@@ -65,4 +67,5 @@ export type {
 	TeamSubagentOutcome,
 	TeamSubagentRunner,
 	TeamSynthesisOutput,
+	TeamTrackedFinding,
 } from "./types";

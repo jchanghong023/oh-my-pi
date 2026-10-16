@@ -22,6 +22,7 @@ import {
 	type TeamProposalOutput,
 	type TeamProposalRecord,
 	type TeamReviewOutput,
+	type TeamReviewRecord,
 	type TeamRevisionOutput,
 	type TeamSubagentCall,
 	type TeamSubagentRunner,
@@ -63,14 +64,14 @@ const blockingReview: TeamReviewOutput = {
 			targetAspect: "Public interface",
 		},
 	],
-	priorBlockingStatus: "not-applicable",
+	blockingResolutions: [],
 };
 const revision: TeamRevisionOutput = {
 	revisedProposal: "Use the existing interface with a documented adapter.",
 	revisionSummary: "revision-change-marker: document the existing adapter",
 	responses: [
 		{
-			finding: "The compatibility premise is wrong",
+			findingId: "A-F1",
 			disposition: "rejected-with-evidence",
 			explanation: "response-evidence-marker: src/adapter.ts:42 already supports old callers",
 		},
@@ -90,16 +91,21 @@ const synthesis: TeamSynthesisOutput = {
 	hardConstraintViolations: [],
 };
 
-function blockedRecord(): TeamProposalRecord {
+function blockedRecord(label = "A"): TeamProposalRecord {
+	const review: TeamReviewRecord = {
+		...blockingReview,
+		findings: blockingReview.findings.map((finding, index) => ({ ...finding, id: `${label}-F${index + 1}` })),
+	};
 	return {
-		label: "A",
+		label,
 		participant,
 		originalProposal: proposal,
 		latestProposal: proposal,
-		reviews: [blockingReview],
+		reviews: [review],
 		revisionHistory: [],
 		roundsUsed: 0,
-		unresolvedBlocking: [blockingReview.findings[0]!.issue],
+		unresolvedBlocking: review.findings,
+		nextFindingNumber: review.findings.length + 1,
 		proposerFailed: false,
 		reviewFailed: false,
 		recheckFailed: false,
@@ -114,7 +120,7 @@ function reportWithBody(reportMarkdown: string, recommendation: Partial<TeamSynt
 	return assembleTeamReport({
 		alignment,
 		synthesis: { ...synthesis, recommendedProposal: "", reportMarkdown, ...recommendation },
-		proposals: [blockedRecord(), { ...blockedRecord(), label: "B", unresolvedBlocking: [] }],
+		proposals: [blockedRecord(), { ...blockedRecord("B"), unresolvedBlocking: [] }],
 		participationNotes: [],
 	});
 }
@@ -147,7 +153,15 @@ describe("team consumer regressions", () => {
 							noSubstantiveIssues: true,
 							reviewSummary: "Checked the cited compatibility evidence.",
 							findings: [],
-							priorBlockingStatus: canAdjudicate ? "resolved" : "unresolved",
+							blockingResolutions: [
+								{
+									findingId: "A-F1",
+									status: canAdjudicate ? "resolved" : "unresolved",
+									basis: canAdjudicate
+										? "The response cites the existing adapter preserving old callers."
+										: "The prior design and cited compatibility evidence are not available.",
+								},
+							],
 						},
 					};
 				}
@@ -167,6 +181,18 @@ describe("team consumer regressions", () => {
 		expect(result.reportMarkdown).not.toContain("尚不可采用");
 		expect(rechecks).toHaveLength(1);
 		expect(rechecks[0]!.task).not.toContain(participant.modelPattern);
+	});
+
+	it("renders each tracked blocker ID and issue without leaking finding objects", () => {
+		const result = reportWithBody("方案 B 满足验收标准。", { recommendedProposal: "B" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain("A-F1");
+			expect(result.markdown).toContain(blockingReview.findings[0]!.issue);
+			expect(result.markdown).not.toContain("[object Object]");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+			expect(result.markdown).toContain("【推荐】方案 B");
+		}
 	});
 
 	it.each(["方案 **A** 可以采用。", "方案 `A` 可以作为最终选项。", "方案 [A](#a) 可采用。"])(

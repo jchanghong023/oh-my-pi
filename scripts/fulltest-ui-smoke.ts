@@ -359,6 +359,8 @@ interface StubRequestLog {
 	model: string;
 	stage: string;
 	recheck?: boolean;
+	target?: string;
+	round?: number;
 }
 
 /** Plain-text SSE frames for main-session turns (no stage marker). */
@@ -406,8 +408,107 @@ function stubPlainTextBody(requestModel: string, text: string): string {
 }
 
 const STUB_BLOCKING_ISSUE = "新增必填 options 参数会破坏不传该参数的旧调用。";
+const STUB_DEFAULT_BLOCKING_ISSUE = "提案未定义 options 缺省时的行为，无法保证旧调用语义不变。";
 
-function stagePayload(stage: string, recheck: boolean): Record<string, unknown> {
+function reviewPayload(target: string, round: number, recheck: boolean): Record<string, unknown> {
+	if (!recheck) {
+		return {
+			noSubstantiveIssues: false,
+			reviewSummary: "新增必填参数和缺省行为缺失分别阻断旧调用兼容性。",
+			findings: [
+				{
+					severity: "blocking",
+					issue: STUB_BLOCKING_ISSUE,
+					impact: "既有调用缺少新参数，无法保持原接口行为。",
+					evidence: "原始提案要求 options 必填；验收要求旧调用无需补传参数。",
+					targetAspect: "接口兼容性",
+				},
+				{
+					severity: "blocking",
+					issue: STUB_DEFAULT_BLOCKING_ISSUE,
+					impact: "即使参数可选，旧调用仍可能启用不同逻辑。",
+					evidence: "原始提案未描述缺省分支；验收要求旧接口行为不变。",
+					targetAspect: "缺省行为",
+				},
+			],
+			blockingResolutions: [],
+		};
+	}
+	return {
+		noSubstantiveIssues: true,
+		reviewSummary:
+			round === 1
+				? "参数已改为可选；只关闭参数必填阻断，缺省行为仍未明确。"
+				: "缺省分支已明确保留原有逻辑，剩余阻断已解决。",
+		findings: [],
+		blockingResolutions:
+			round === 1
+				? [
+						{
+							findingId: `${target}-F1`,
+							status: "resolved",
+							basis: "第一轮修订明确将 options 改为可选，旧调用无需补传参数。",
+						},
+						{
+							findingId: `${target}-F2`,
+							status: "unresolved",
+							basis: "第一轮只改变可选性，尚未定义未传 options 时的执行分支。",
+						},
+					]
+				: [
+						{
+							findingId: `${target}-F2`,
+							status: "resolved",
+							basis: "第二轮修订明确未传 options 时完整执行原有逻辑。",
+						},
+					],
+	};
+}
+
+function revisionPayload(target: string, round: number): Record<string, unknown> {
+	return {
+		revisedProposal:
+			round === 1
+				? "将 options 改为可选参数；缺省分支的行为仍待明确。"
+				: "options 为可选参数；未传时完整执行原有逻辑，显式传入时启用新功能。",
+		revisionSummary:
+			round === 1 ? "取消必填要求，保留缺省行为待解决项。" : "明确缺省分支保留原有行为，关闭剩余兼容问题。",
+		responses:
+			round === 1
+				? [
+						{
+							findingId: `${target}-F1`,
+							disposition: "accepted-and-revised",
+							explanation: "移除新增参数的必填要求，旧调用无需补传参数。",
+						},
+						{
+							findingId: `${target}-F2`,
+							disposition: "unresolved",
+							explanation: "缺省分支尚未明确，不能宣称旧调用行为已保留。",
+						},
+					]
+				: [
+						{
+							findingId: `${target}-F2`,
+							disposition: "accepted-and-revised",
+							explanation: "明确未传 options 时完整执行原有逻辑，仅显式传入才启用新功能。",
+						},
+					],
+		reviewFlags: {
+			changedCoreDesign: true,
+			claimsResolvedBlocking: true,
+			newEvidenceChangesAssumptions: false,
+			disputesBlockingFinding: false,
+		},
+	};
+}
+
+function stagePayload(
+	stage: string,
+	recheck: boolean,
+	target: string | undefined,
+	round: number | undefined,
+): Record<string, unknown> {
 	switch (stage) {
 		case "proposal":
 			return {
@@ -441,45 +542,11 @@ function stagePayload(stage: string, recheck: boolean): Record<string, unknown> 
 				],
 			};
 		case "review":
-			return recheck
-				? {
-						noSubstantiveIssues: true,
-						reviewSummary: "修订将 options 改为可选，未传时保留旧行为；此前阻断已解决，未发现新问题。",
-						findings: [],
-						priorBlockingStatus: "resolved",
-					}
-				: {
-						noSubstantiveIssues: false,
-						reviewSummary: "必填新增参数违反旧调用无需修改的验收要求。",
-						findings: [
-							{
-								severity: "blocking",
-								issue: STUB_BLOCKING_ISSUE,
-								impact: "既有调用缺少新参数，无法保持原接口行为。",
-								evidence: "原始提案要求 options 必填；验收要求旧调用无需补传参数。",
-								targetAspect: "接口兼容性",
-							},
-						],
-						priorBlockingStatus: "not-applicable",
-					};
+			if (!target || !round) throw new Error("stub: review marker requires target and round");
+			return { ...reviewPayload(target, round, recheck) };
 		case "revision":
-			return {
-				revisedProposal: "options 改为可选；未传时执行原有逻辑，显式传入时启用新功能。",
-				revisionSummary: "保持旧调用兼容，通过可选参数开放新功能。",
-				responses: [
-					{
-						finding: STUB_BLOCKING_ISSUE,
-						disposition: "accepted-and-revised",
-						explanation: "移除新增参数的必填要求，缺省分支完整保留原有行为。",
-					},
-				],
-				reviewFlags: {
-					changedCoreDesign: true,
-					claimsResolvedBlocking: true,
-					newEvidenceChangesAssumptions: false,
-					disputesBlockingFinding: false,
-				},
-			};
+			if (!target || !round) throw new Error("stub: revision marker requires target and round");
+			return { ...revisionPayload(target, round) };
 		case "synthesis":
 			return {
 				reportMarkdown:
@@ -601,12 +668,17 @@ const stubServer = Bun.serve({
 		let stage: string | undefined;
 		let dispatchJobId: string | undefined;
 		let recheck = false;
+		let target: string | undefined;
+		let round: number | undefined;
 		for (const message of messages) {
 			for (const text of messageTexts(message).texts) {
 				const match = /\[team-stage:([a-z]+)([^\]]*)\]/.exec(text);
 				if (match) {
 					stage = match[1]!;
 					recheck = /\brecheck\b/.test(match[2]!);
+					target = /\btarget=([A-Z]+)\b/.exec(match[2]!)?.[1];
+					const roundMatch = /\bround=(\d+)\b/.exec(match[2]!);
+					round = roundMatch ? Number(roundMatch[1]) : undefined;
 				}
 				const dispatchMatch = /\[team-dispatch (bg_\w+)\]/.exec(text);
 				if (dispatchMatch) dispatchJobId = dispatchMatch[1];
@@ -650,13 +722,16 @@ const stubServer = Bun.serve({
 				},
 			);
 		}
-		stubRequests.push({ model: requestModel, stage, recheck });
+		stubRequests.push({ model: requestModel, stage, recheck, target, round });
 		if (slowTeamStagesMs > 0) await sleep(slowTeamStagesMs);
 		const withThinking = Boolean(body.thinking);
-		return new Response(stubSseBody(requestModel, { data: stagePayload(stage, recheck) }, withThinking), {
-			status: 200,
-			headers: { "content-type": "text/event-stream", "request-id": `req_stub_${stubRequests.length}` },
-		});
+		return new Response(
+			stubSseBody(requestModel, { data: stagePayload(stage, recheck, target, round) }, withThinking),
+			{
+				status: 200,
+				headers: { "content-type": "text/event-stream", "request-id": `req_stub_${stubRequests.length}` },
+			},
+		);
 	},
 });
 console.log(`ui-smoke: /team stub Anthropic server on 127.0.0.1:${stubServer.port}`);
@@ -793,6 +868,23 @@ try {
 		(stageCounts.get("synthesis") ?? 0) < 1
 	) {
 		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session);
+	}
+	const reviewedTargets = new Set(
+		stubRequests.filter(request => request.stage === "review" && !request.recheck).map(request => request.target),
+	);
+	for (const target of reviewedTargets) {
+		for (const round of [1, 2]) {
+			const revised = stubRequests.some(
+				request => request.stage === "revision" && request.target === target && request.round === round,
+			);
+			const rechecked = stubRequests.some(
+				request =>
+					request.stage === "review" && request.recheck && request.target === target && request.round === round,
+			);
+			if (!target || !revised || !rechecked) {
+				fail(`/team did not exercise partial closure for ${target}, round ${round}`, team.session);
+			}
+		}
 	}
 
 	team.session.write("\x04");

@@ -2,15 +2,11 @@
  * `/team` participant resolution.
  *
  * Rules (docs-zh-CN/requirements/team.md §2.2):
- * - `team.members` holds full model IDs; unset or empty array = "not configured".
- * - Not configured + offline process: default to the company lane's current
- *   available chat models (runtime snapshot).
- * - Not configured + normal start: error with a configuration example; never
- *   silently degrade to a single-model flow.
- * - Explicit configuration wins in both environments; unavailable entries are
- *   reported by name, never silently dropped.
- * - Proposer set = dedup(resolved members ∪ session model), deduped by the
- *   resolved concrete model instance.
+ * - Ordered configured full model IDs resolve strictly, preserving duplicates.
+ * - Unset or empty configuration uses the current session model.
+ * - N = max(3, M) independent slots cycle through the M resolved members.
+ * - The session model anchors alignment/synthesis, but is never appended to an
+ *   explicit roster and must remain available even when absent from it.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
 import { resolveModelFromString, resolveProviderModelReference } from "../config/model-resolver";
@@ -18,31 +14,14 @@ import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
 	configuredMembers: readonly string[];
-	/** Whether the company lane is active in this process (OMP_OFFLINE). */
-	offlineLaneActive: boolean;
-	/** Full patterns of the company lane's current chat models, e.g. `company/GLM-5.2-public`. */
-	companyModelPatterns: readonly string[];
+	/** Current model anchoring alignment/synthesis, independent of the roster. */
 	sessionModel: Model | undefined;
 	availableModels: readonly Model[];
 }
 
 export type TeamMembersResult =
-	| { ok: true; participants: TeamParticipant[]; source: "configured" | "company-default" }
+	| { ok: true; participants: TeamParticipant[]; source: "configured" | "session-default" }
 	| { ok: false; error: string };
-
-const CONFIG_EXAMPLE = [
-	"team.members 未配置，且当前进程没有可用的 company 模型 lane（OMP_OFFLINE 下默认 company 名单也可能被 enabledModels 过滤为空），无法组建多模型团队。",
-	"",
-	"在 settings（config.yml）中配置参与模型（完整 ID；可用 ID 以 `omp models` 输出为准），格式例如：",
-	"",
-	"  team.members:",
-	"    - <provider>/<model-id>",
-	"    - <provider>/<model-id>",
-	"",
-	"注：`company/GLM-5.2-public` 等 company 模型仅存在于 `OMP_OFFLINE=1` 进程；普通启动请从 `omp models` 列出的可用模型中选择。",
-	"OMP_OFFLINE 进程中未配置时默认使用 company lane 全部可用聊天模型；普通启动必须显式配置。",
-	"/team 不会静默降级为单模型流程。",
-].join("\n");
 
 function modelKey(model: Model): string {
 	return `${model.provider}/${model.id}`;
@@ -66,7 +45,7 @@ function describeConfiguredEntry(entry: unknown): string {
 	return json === undefined ? typeof entry : `${typeof entry} ${json}`;
 }
 
-/** Resolve the proposer set. Pure: no I/O, all inputs injected for testability. */
+/** Resolve ordered independent proposer slots. Pure: no I/O, all inputs injected. */
 export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersResult {
 	const sessionModel = input.sessionModel;
 	if (!sessionModel) {
@@ -84,66 +63,34 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 			};
 		}
 	}
-	let entries = input.configuredMembers.map(entry => entry.trim());
+	const entries = input.configuredMembers.map(entry => entry.trim());
 	const emptyIndex = entries.findIndex(entry => entry.length === 0);
 	if (emptyIndex !== -1) {
 		return { ok: false, error: `team.members[${emptyIndex}] 为空；显式配置的参与模型不能为空。` };
 	}
-	let source: "configured" | "company-default" = "configured";
-	if (entries.length === 0) {
-		if (!input.offlineLaneActive || input.companyModelPatterns.length === 0) {
-			return { ok: false, error: CONFIG_EXAMPLE };
-		}
-		const availablePatterns = new Set<string>();
-		for (const model of input.availableModels) availablePatterns.add(modelKey(model));
-		entries = input.companyModelPatterns.filter(pattern => availablePatterns.has(pattern));
-		if (entries.length === 0) return { ok: false, error: CONFIG_EXAMPLE };
-		source = "company-default";
-	}
-
 	const availableModels = [...input.availableModels];
-	const seen = new Set<string>();
-	const participants: TeamParticipant[] = [];
-	const resolveEntry = (entry: string, isSessionModel: boolean): string | undefined => {
+	const resolvedMembers: Model[] = [];
+	for (const entry of entries) {
 		const separator = entry.indexOf("/");
 		const model =
 			separator > 0
 				? resolveProviderModelReference(entry.slice(0, separator), entry.slice(separator + 1), availableModels)
 				: undefined;
-		if (!model) return entry;
-		const key = modelKey(model);
-		if (seen.has(key)) return undefined;
-		seen.add(key);
-		participants.push({
-			index: participants.length,
-			modelPattern: key,
-			model,
-			isSessionModel,
-		});
-		return undefined;
-	};
-
-	for (const entry of entries) {
-		const missing = resolveEntry(entry, false);
-		if (missing) {
+		if (!model) {
 			return {
 				ok: false,
 				error: [
-					`team.members 中的模型不可用：${missing}`,
+					`team.members 中的模型不可用：${entry}`,
 					"",
 					"请修正或移除该项后重试。/team 不会静默剔除不可用模型后继续。",
 					"可运行的模型可用 `omp models` 查看。",
 				].join("\n"),
 			};
 		}
+		resolvedMembers.push(model);
 	}
-	// The session model joins as an extra proposer when not already a member,
-	// so the strongest model also investigates independently through a subagent.
-	// It must join as itself: the orchestrator pins alignment/synthesis to its
-	// exact pattern, and §2.2 requires a named error when the session model is
-	// unavailable or disabled — a fuzzy sibling (renamed id, prefix variant,
-	// near-match among the available models) is a different concrete
-	// model and must not silently stand in for it.
+	// Alignment/synthesis pin the exact session identity even when it is not a
+	// proposer. A fuzzy sibling cannot silently replace an unavailable session.
 	const sessionKey = modelKey(sessionModel);
 	if (!availableModels.some(model => modelKey(model) === sessionKey)) {
 		const resolved = resolveModelFromString(sessionKey, availableModels);
@@ -165,35 +112,17 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 			};
 		}
 	}
-	const sessionMissing = resolveEntry(sessionKey, true);
-	if (sessionMissing) {
-		// Unreachable while the exact-presence check above holds (resolveEntry
-		// then resolves through the exact branch); kept as a named-error guard.
+	const roster = resolvedMembers.length > 0 ? resolvedMembers : [sessionModel];
+	const participants = Array.from({ length: Math.max(3, roster.length) }, (_, index): TeamParticipant => {
+		const model = roster[index % roster.length]!;
+		const modelPattern = modelKey(model);
 		return {
-			ok: false,
-			error: [
-				`当前会话模型 ${sessionMissing} 不在可用模型列表中，无法作为 /team 的主代理（对齐与综合子调用依赖它）。`,
-				"",
-				"请先切换到可用模型（`omp models` 查看可运行模型）后重试；/team 不会静默跳过会话模型。",
-			].join("\n"),
+			index,
+			modelPattern,
+			model,
+			isSessionModel: modelPattern === sessionKey,
 		};
-	}
-	// Whether the session model came from the configured list or joined as the
-	// extra proposer, the matching participant is flagged: the session agent
-	// itself never reviews — §2.5 rotation prefers a different model, and when
-	// none participates a fresh same-model subagent reviews instead — and the
-	// report labels it 会话模型.
-	const sessionParticipant = participants.find(participant => participant.modelPattern === sessionKey);
-	if (!sessionParticipant) {
-		return {
-			ok: false,
-			error: `当前会话模型 ${sessionKey} 解析成功但未出现在参与者集合中，无法作为 /team 的主代理；这是 /team 的内部错误，请报告。`,
-		};
-	}
-	sessionParticipant.isSessionModel = true;
-
-	if (participants.length === 0) {
-		return { ok: false, error: CONFIG_EXAMPLE };
-	}
+	});
+	const source = entries.length > 0 ? "configured" : "session-default";
 	return { ok: true, participants, source };
 }

@@ -12,8 +12,6 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { AsyncJobError, type AsyncJobRunResult } from "../async";
 import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
-import { getCompanyChatModels } from "../config/company-models";
-import { isCompanyLaneActive } from "../config/company-provider";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { Settings } from "../config/settings";
 import { cfgTaskMaxConcurrency } from "../task/settings";
@@ -182,37 +180,28 @@ function previewQuestion(question: string): string {
 	return `${singleLine.slice(0, QUESTION_PREVIEW_LENGTH - 1)}…`;
 }
 
-/** Resolve the participant set from settings + process state. Exported for the command layer and tests. */
+/** Resolve independent slots from settings and the effective available models. */
 export function resolveTeamParticipantsForSession(session: AgentSession, settings: Settings) {
 	const sessionModel = session.model;
-	const offlineLaneActive = isCompanyLaneActive();
 	const configuredMembers = cfgTeamMembers.get(settings);
 	const availableModels = filterAvailableModelsByEnabledPatterns(
 		session.modelRegistry.getAvailable(),
 		cfgEnabledModels.get(settings),
 		settings,
 	);
-	const companyModelPatterns: string[] = [];
-	if (offlineLaneActive && configuredMembers.length === 0) {
-		const effectiveKeys = new Set(availableModels.map(model => `${model.provider}/${model.id}`));
-		for (const model of getCompanyChatModels()) {
-			const pattern = `${model.provider}/${model.id}`;
-			if (effectiveKeys.has(pattern)) companyModelPatterns.push(pattern);
-		}
-	}
 	const members = resolveTeamParticipants({
 		configuredMembers,
-		offlineLaneActive,
-		companyModelPatterns,
 		sessionModel,
 		availableModels,
 	});
 	if (members.ok) {
-		const remoteParticipant = members.participants.find(participant => isJchToolsAgentModel(participant.model));
-		if (remoteParticipant) {
+		const remoteModel = isJchToolsAgentModel(sessionModel)
+			? sessionModel
+			: members.participants.find(participant => isJchToolsAgentModel(participant.model))?.model;
+		if (remoteModel) {
 			return {
 				ok: false as const,
-				error: `/team 不支持远端 Agent 模型 ${remoteParticipant.modelPattern}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。请切换会话模型或修正 team.members 后重试。`,
+				error: `/team 不支持远端 Agent 模型 ${remoteModel.provider}/${remoteModel.id}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。请切换会话模型或修正 team.members 后重试。`,
 			};
 		}
 	}
@@ -511,8 +500,9 @@ async function startTeamDiscussionImpl(
 		job_id: jobId,
 		participant_count: participants.length,
 	});
+	const distinctModelCount = new Set(participants.map(participant => participant.modelPattern)).size;
 	const dispatchNotice = [
-		`/team 多模型讨论已启动（任务 ${jobId}，${participants.length} 个参与模型）。`,
+		`/team 多代理讨论已启动（任务 ${jobId}，${participants.length} 个独立代理，${distinctModelCount} 个不同模型）。`,
 		"阶段进度见状态提示，子代理明细可在 Agent Hub 查看；取消经后台任务取消入口（hub cancel）执行。",
 		`原始问题：${previewQuestion(question)}`,
 		`[team-dispatch ${jobId}]`,

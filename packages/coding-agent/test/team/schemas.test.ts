@@ -6,7 +6,6 @@ import {
 	parseTeamReview,
 	parseTeamRevision,
 	parseTeamSynthesis,
-	TEAM_REVIEW_SCHEMA,
 } from "@oh-my-pi/pi-coding-agent/team";
 
 const proposal = () => ({
@@ -35,12 +34,12 @@ const review = () => ({
 			targetAspect: "Storage",
 		},
 	],
-	priorBlockingStatus: "not-applicable" as const,
+	blockingResolutions: [],
 });
 const revision = () => ({
 	revisedProposal: "Preserve data in the existing path.",
 	revisionSummary: "Addressed data loss.",
-	responses: [{ finding: "Data loss", disposition: "accepted-and-revised" as const, explanation: "Preserve records" }],
+	responses: [{ findingId: "A-F1", disposition: "accepted-and-revised" as const, explanation: "Preserve records" }],
 	reviewFlags: {
 		changedCoreDesign: true,
 		claimsResolvedBlocking: false,
@@ -83,7 +82,7 @@ describe("team yield payload validation", () => {
 				?.reviewSummary.length,
 		).toBeLessThan(2000);
 		expect(
-			parseTeamRevision({ ...revision(), revisedProposal: "v".repeat(5000) })?.revisedProposal.length,
+			parseTeamRevision({ ...revision(), revisedProposal: "v".repeat(5000) }, ["A-F1"])?.revisedProposal.length,
 		).toBeLessThan(5000);
 		expect(
 			parseTeamSynthesis({
@@ -113,17 +112,8 @@ describe("team yield payload validation", () => {
 		expect(parseTeamProposal({ ...proposal(), proposal: "" })).toBeUndefined();
 	});
 
-	it("requires non-empty finding fields in both the yield schema and the parser (§2.4)", () => {
-		const fields = (
-			TEAM_REVIEW_SCHEMA.properties as Record<
-				string,
-				{ items: { properties: Record<string, { minLength?: number }> } }
-			>
-		).findings!.items!.properties;
+	it("rejects a finding with any empty required field (§2.4)", () => {
 		for (const field of ["issue", "impact", "evidence", "targetAspect"]) {
-			expect(fields[field]!.minLength).toBe(1);
-		}
-		for (const field of ["impact", "evidence", "targetAspect"]) {
 			const data = { ...review(), findings: [{ ...review().findings[0]!, [field]: " " }] };
 			expect(parseTeamReview(data)).toBeUndefined();
 		}
@@ -132,7 +122,9 @@ describe("team yield payload validation", () => {
 	it.each([
 		{ ...review(), findings: [{ ...review().findings[0], severity: "catastrophic" }] },
 		{ ...review(), findings: [{ severity: "blocking", issue: "Source omitted" }] },
-		{ ...review(), priorBlockingStatus: "probably-fixed" },
+		{ ...review(), blockingResolutions: "resolved" },
+		{ ...review(), priorBlockingStatus: "resolved" },
+		{ ...review(), findings: [{ ...review().findings[0], id: "A-F999" }] },
 		{ ...review(), noSubstantiveIssues: "yes" },
 		{ ...review(), findings: [], noSubstantiveIssues: false },
 		{ reviewSummary: "Everything looks fine" },
@@ -153,11 +145,92 @@ describe("team yield payload validation", () => {
 		{ ...revision(), responses: ["No structured basis"] },
 		{ ...revision(), revisedProposal: "" },
 	])("rejects incomplete revision gates: %j", data => {
-		expect(parseTeamRevision(data)).toBeUndefined();
+		expect(parseTeamRevision(data, ["A-F1"])).toBeUndefined();
 	});
 
 	it("preserves valid revision flags so new claims require recheck", () => {
-		expect(parseTeamRevision(revision())).toEqual(revision());
+		expect(parseTeamRevision(revision(), ["A-F1"])).toEqual(revision());
+	});
+
+	it("requires one evidenced decision for each exact pending blocker ID", () => {
+		const decisions = [
+			{ findingId: "A-F1", status: "resolved" as const, basis: "src/store.ts:42 now preserves records" },
+			{ findingId: "A-F2", status: "unresolved" as const, basis: "src/store.ts:90 still drops rollback data" },
+		];
+		const data = { ...review(), findings: [], noSubstantiveIssues: true, blockingResolutions: decisions };
+		expect(parseTeamReview(data, ["A-F1", "A-F2"])).toEqual(data);
+		for (const blockingResolutions of [
+			[],
+			decisions.slice(0, 1),
+			[decisions[0], decisions[0]],
+			[decisions[0], { ...decisions[1], findingId: "A-F3" }],
+			[decisions[0], { ...decisions[1], findingId: "a-f2" }],
+			[decisions[0], { ...decisions[1], basis: " " }],
+			[decisions[0], { ...decisions[1], status: "partially-resolved" }],
+			[decisions[0], "resolved"],
+		]) {
+			expect(parseTeamReview({ ...data, blockingResolutions }, ["A-F1", "A-F2"])).toBeUndefined();
+		}
+		expect(parseTeamReview(data)).toBeUndefined();
+	});
+
+	it("counts all decision bases toward the review budget without discarding decisions", () => {
+		const blockingResolutions = Array.from({ length: 30 }, (_, index) => ({
+			findingId: `A-F${index + 1}`,
+			status: "unresolved" as const,
+			basis: "e".repeat(40),
+		}));
+		const ids = blockingResolutions.map(decision => decision.findingId);
+		const data = {
+			...review(),
+			reviewSummary: "r".repeat(300),
+			findings: [],
+			noSubstantiveIssues: true,
+			blockingResolutions,
+		};
+		expect(parseTeamReview(data, ids)).toEqual(data);
+		expect(parseTeamReview({ ...data, reviewSummary: "r".repeat(301) }, ids)).toBeUndefined();
+		expect(
+			parseTeamReview({ ...data, findings: Array.from({ length: 11 }, () => review().findings[0]) }, ids),
+		).toBeUndefined();
+	});
+
+	it("requires revision responses to exactly reference latest findings and pending blockers", () => {
+		const responses = [
+			...revision().responses,
+			{ findingId: "A-F2", disposition: "unresolved" as const, explanation: "Rollback still lacks durable storage" },
+		];
+		const data = { ...revision(), responses };
+		expect(parseTeamRevision(data, ["A-F1", "A-F2"])).toEqual(data);
+		for (const invalidResponses of [
+			[],
+			responses.slice(0, 1),
+			[responses[0], responses[0]],
+			[responses[0], { ...responses[1], findingId: "B-F2" }],
+			[responses[0], { ...responses[1], findingId: "a-f2" }],
+			[responses[0], { ...responses[1], explanation: " " }],
+			[{ finding: "Data loss", disposition: "accepted-and-revised", explanation: "Fixed" }, responses[1]],
+		]) {
+			expect(parseTeamRevision({ ...data, responses: invalidResponses }, ["A-F1", "A-F2"])).toBeUndefined();
+		}
+		expect(parseTeamRevision(data)).toBeUndefined();
+	});
+
+	it("accepts cumulative revision references without silently slicing responses", () => {
+		const responses = Array.from({ length: 30 }, (_, index) => ({
+			findingId: `A-F${index + 1}`,
+			disposition: "unresolved" as const,
+			explanation: "Still pending source confirmation",
+		}));
+		const ids = responses.map(response => response.findingId);
+		const data = { ...revision(), responses };
+		expect(parseTeamRevision(data, ids)).toEqual(data);
+		expect(
+			parseTeamRevision(
+				{ ...data, responses: responses.map(response => ({ ...response, explanation: "e".repeat(601) })) },
+				ids,
+			),
+		).toBeUndefined();
 	});
 
 	it("fails closed on incomplete alignment and synthesis output", () => {

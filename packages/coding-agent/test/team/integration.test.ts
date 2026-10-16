@@ -23,22 +23,31 @@ import {
 	TEAM_READ_ONLY_TOOLS,
 	createTeamSubagentRunner,
 	runTeamDiscussion,
+	resolveTeamParticipants,
 	TEAM_PROPOSAL_SCHEMA,
 } from "@oh-my-pi/pi-coding-agent/team";
-import type { TeamParticipant } from "@oh-my-pi/pi-coding-agent/team";
+import type { TeamSubagentCall } from "@oh-my-pi/pi-coding-agent/team";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
 const MODEL_SESSION = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 const MODEL_OTHER = getBundledModel("anthropic", "claude-opus-4-6")!;
+const MODEL_THIRD = getBundledModel("openai", "gpt-5")!;
 const PATTERN_SESSION = `${MODEL_SESSION.provider}/${MODEL_SESSION.id}`;
 const PATTERN_OTHER = `${MODEL_OTHER.provider}/${MODEL_OTHER.id}`;
+const PATTERN_THIRD = `${MODEL_THIRD.provider}/${MODEL_THIRD.id}`;
 
 interface RecordedCall {
 	modelPattern: string | undefined;
 	agentId: string;
 	stage: string;
+	target: string | undefined;
+	recheck: boolean;
+	findingIds: string[];
+	sessionId: string | undefined;
+	sessionManager: CreateAgentSessionOptions["sessionManager"];
+	initialMessages: readonly unknown[];
 	toolNames: readonly string[] | undefined;
 	outputSchemaMode: unknown;
 }
@@ -47,6 +56,15 @@ function stageOf(text: string): string {
 	const match = /\[team-stage:([a-z]+)/.exec(text);
 	if (!match) throw new Error(`no stage marker in prompt: ${text.slice(0, 120)}`);
 	return match[1];
+}
+
+// Interpret only the explicit current obligation block supplied by the real handoff.
+function inputFindingIds(text: string, heading: string): string[] {
+	const section = text.indexOf(heading);
+	if (section < 0) throw new Error(`Missing finding input: ${heading}`);
+	const match = /```json\s*([\s\S]*?)```/.exec(text.slice(section));
+	if (!match) throw new Error(`Missing finding JSON: ${heading}`);
+	return (JSON.parse(match[1]!) as { id: string }[]).map(finding => finding.id);
 }
 
 function scriptedData(stage: string, text?: string): Record<string, unknown> {
@@ -78,41 +96,45 @@ function scriptedData(stage: string, text?: string): Record<string, unknown> {
 				],
 			};
 		case "review":
-			// Initial reviews report a blocking finding so revision runs; rechecks
-			// clear it so the run can complete as adoptable options.
+			// Two independent blockers require two rechecks; a clean new-findings
+			// verdict does not close the second pending blocker.
 			if (!text?.includes(" recheck]")) {
 				return {
 					noSubstantiveIssues: false,
 					reviewSummary: "发现阻断问题：缺少迁移步骤。",
-					findings: [
-						{
-							severity: "blocking",
-							issue: "缺少迁移步骤",
-							impact: "升级时数据不一致",
-							evidence: "src/module.ts",
-							targetAspect: "迁移",
-						},
-					],
-					priorBlockingStatus: "not-applicable",
+					findings: ["缺少迁移步骤", "缺少回滚验证"].map(issue => ({
+						severity: "blocking",
+						issue,
+						impact: "升级时数据不一致",
+						evidence: "src/module.ts",
+						targetAspect: "迁移",
+					})),
+					blockingResolutions: [],
 				};
 			}
 			return {
 				noSubstantiveIssues: true,
-				reviewSummary: "阻断问题已解决。",
+				reviewSummary: "逐项复核迁移与回滚依据。",
 				findings: [],
-				priorBlockingStatus: "resolved",
+				blockingResolutions: inputFindingIds(text!, "## 此前未解决的阻断问题").map((findingId, index) => ({
+					findingId,
+					status: text!.includes("round=1 ") && index === 1 ? "unresolved" : "resolved",
+					basis:
+						text!.includes("round=1 ") && index === 1 ? "回滚反例仍成立" : "src/module.ts confirms this repair",
+				})),
 			};
 		case "revision":
 			return {
 				revisedProposal: "方案（修订）：补充迁移步骤后同前。",
 				revisionSummary: "补充迁移步骤",
-				responses: [
-					{
-						finding: "缺少迁移步骤",
-						disposition: "accepted-and-revised",
-						explanation: "已补充迁移步骤与回滚说明",
-					},
-				],
+				responses: inputFindingIds(
+					text!,
+					"## 本轮必须回应的完整问题集（最新审查问题与所有未解决阻断按 ID 合并）",
+				).map(findingId => ({
+					findingId,
+					disposition: "accepted-and-revised",
+					explanation: "已补充迁移步骤与回滚说明",
+				})),
 				reviewFlags: {
 					changedCoreDesign: false,
 					claimsResolvedBlocking: true,
@@ -140,10 +162,12 @@ describe("team in-process integration", () => {
 	let settings: Settings;
 	const recorded: RecordedCall[] = [];
 
+	let script = scriptedData;
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-team-integration-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
+		authStorage.keys.setRuntime("openai", "openai-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		settings = Settings.isolated({ "task.maxConcurrency": 4 });
 
@@ -154,6 +178,8 @@ describe("team in-process integration", () => {
 			const modelPattern = model ? `${model.provider}/${model.id}` : undefined;
 			const toolNames = options.toolNames as readonly string[] | undefined;
 			const outputSchemaMode = options.outputSchemaMode;
+			const sessionManager = inputOptions?.sessionManager;
+			const initialMessages = sessionManager?.buildSessionContext().messages ?? [];
 			const listeners: Array<(event: AgentSessionEvent) => void> = [];
 			const session = {
 				...createSessionDefaults(),
@@ -170,13 +196,30 @@ describe("team in-process integration", () => {
 				},
 				prompt: async (text: string) => {
 					const stage = stageOf(text);
-					recorded.push({ modelPattern, agentId: options.agentId as string, stage, toolNames, outputSchemaMode });
+					recorded.push({
+						modelPattern,
+						agentId: options.agentId as string,
+						stage,
+						target: /\btarget=([A-Z])/.exec(text)?.[1],
+						recheck: text.includes(" recheck]"),
+						findingIds:
+							stage === "revision"
+								? inputFindingIds(text, "## 本轮必须回应的完整问题集（最新审查问题与所有未解决阻断按 ID 合并）")
+								: stage === "review" && text.includes(" recheck]")
+									? inputFindingIds(text, "## 此前未解决的阻断问题")
+									: [],
+						sessionId: sessionManager?.getSessionId(),
+						sessionManager,
+						initialMessages,
+						toolNames,
+						outputSchemaMode,
+					});
 					for (const listener of listeners) {
 						listener({
 							type: "tool_execution_end",
 							toolCallId: `yield-${recorded.length}`,
 							toolName: "yield",
-							result: { content: [], details: { status: "success", data: scriptedData(stage, text) } },
+							result: { content: [], details: { status: "success", data: script(stage, text) } },
 							isError: false,
 						} as AgentSessionEvent);
 					}
@@ -198,105 +241,187 @@ describe("team in-process integration", () => {
 		tempDir.removeSync();
 	});
 
-	it("runs all five stages through the real executor and produces the final report", async () => {
-		const participants: TeamParticipant[] = [
-			{ index: 0, modelPattern: PATTERN_SESSION, model: MODEL_SESSION, isSessionModel: true },
-			{ index: 1, modelPattern: PATTERN_OTHER, model: MODEL_OTHER, isSessionModel: false },
-		];
-		const runnerDeps = {
-			cwd: tempDir.path(),
-			settings,
-			modelRegistry,
-			authStorage,
-			getApiKey: (model: Model) => `${model.provider}-test-key`,
-			sessionFile: null,
-			artifactsDir: tempDir.path(),
-			parentAgentId: "Main",
-		};
-		const runner = createTeamSubagentRunner(runnerDeps);
+	const runnerDeps = () => ({
+		cwd: tempDir.path(),
+		settings,
+		modelRegistry,
+		authStorage,
+		getApiKey: (model: Model) => `${model.provider}-test-key`,
+		sessionFile: null,
+		artifactsDir: tempDir.path(),
+		parentAgentId: "Main",
+	});
 
-		const result = await runTeamDiscussion({
-			question: "如何在不破坏旧接口的前提下扩展模块？",
-			cwd: tempDir.path(),
-			participants,
-			sessionModelPattern: PATTERN_SESSION,
-			runner,
-			signal: new AbortController().signal,
-			maxConcurrency: 4,
+	for (const scenario of [
+		{
+			name: "runs three independent same-model slots through every executor stage",
+			configuredMembers: [PATTERN_OTHER],
+			expectedModels: [PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER],
+			reviewerModels: [PATTERN_OTHER, PATTERN_OTHER, PATTERN_OTHER],
+			blockedLabel: undefined,
+			residualLabel: undefined,
+		},
+		{
+			name: "runs AB as ABA without adding the session model to the proposer roster",
+			configuredMembers: [PATTERN_OTHER, PATTERN_THIRD],
+			expectedModels: [PATTERN_OTHER, PATTERN_THIRD, PATTERN_OTHER],
+			reviewerModels: [PATTERN_THIRD, PATTERN_OTHER, PATTERN_THIRD],
+			blockedLabel: "C",
+			residualLabel: "A",
+		},
+	]) {
+		it(scenario.name, async () => {
+			recorded.length = 0;
+			script = (stage, text) => {
+				const data = scriptedData(stage, text);
+				if (stage === "review" && text?.includes(`target=${scenario.residualLabel} round=2 recheck]`)) {
+					data.blockingResolutions = (data.blockingResolutions as Record<string, unknown>[]).map(decision => ({
+						...decision,
+						status: "unresolved",
+						basis: "Rollback counterexample is still reachable",
+					}));
+				}
+				if (stage === "synthesis" && scenario.blockedLabel) {
+					data.hardConstraintViolations = [
+						{
+							proposalLabel: scenario.blockedLabel,
+							issue: "破坏旧接口兼容",
+							evidence: "src/api.ts 与共同验收标准冲突",
+						},
+					];
+				}
+				return data;
+			};
+			const roster = resolveTeamParticipants({
+				configuredMembers: scenario.configuredMembers,
+				sessionModel: MODEL_SESSION,
+				availableModels: [MODEL_SESSION, MODEL_OTHER, MODEL_THIRD],
+			});
+			expect(roster.ok).toBe(true);
+			if (!roster.ok) throw new Error(roster.error);
+			expect(roster.participants.map(participant => participant.modelPattern)).toEqual(scenario.expectedModels);
+			expect(roster.participants.every(participant => !participant.isSessionModel)).toBe(true);
+
+			const result = await runTeamDiscussion({
+				question: "如何在不破坏旧接口的前提下扩展模块？",
+				cwd: tempDir.path(),
+				participants: roster.participants,
+				sessionModelPattern: PATTERN_SESSION,
+				runner: createTeamSubagentRunner(runnerDeps()),
+				signal: new AbortController().signal,
+				maxConcurrency: 2,
+			});
+
+			expect(result.status).toBe("completed");
+			const markdown = result.reportMarkdown!;
+			expect(markdown).toContain("### 核心方案");
+			expect(markdown).toContain("方案状态（结构化追踪，机械生效）");
+			if (scenario.residualLabel) {
+				expect(result.droppedRecommendation).toBe(true);
+				expect(markdown).not.toContain("【推荐】");
+				expect(markdown).toContain(`${scenario.residualLabel}-F2`);
+			} else {
+				expect(markdown).toContain("【推荐】方案 A");
+			}
+			expect(markdown).toContain(TEAM_CLOSING_CONTRACT.split("\n")[0]!.slice(2));
+			expect(markdown).not.toContain("[object Object]");
+			for (const label of ["A", "B", "C"]) {
+				expect(markdown).toContain(
+					`| 方案 ${label} | ${label === scenario.blockedLabel || label === scenario.residualLabel ? "⛔ 尚不可采用" : "✅ 可作为选项"}`,
+				);
+			}
+			if (scenario.blockedLabel) {
+				expect(markdown).toContain("破坏旧接口兼容");
+				expect(markdown).toContain("src/api.ts");
+				expect(markdown).toContain(`${scenario.blockedLabel}-F3`);
+			}
+			// Choice-affecting interpretation differences remain top-noticed.
+			const noticeIndex = markdown.indexOf("请先回答差异、带答案重跑");
+			expect(noticeIndex).toBeGreaterThan(-1);
+			expect(noticeIndex).toBeLessThan(markdown.indexOf("### 核心方案"));
+
+			const stages = recorded.map(call => call.stage);
+			expect(stages.filter(stage => stage === "proposal")).toHaveLength(3);
+			expect(stages.filter(stage => stage === "alignment")).toHaveLength(1);
+			expect(stages.filter(stage => stage === "review")).toHaveLength(9);
+			expect(stages.filter(stage => stage === "revision")).toHaveLength(6);
+			expect(stages.filter(stage => stage === "synthesis")).toHaveLength(1);
+			const stageIndex = (stage: string) => stages.indexOf(stage);
+			const stageLastIndex = (stage: string) => stages.lastIndexOf(stage);
+			expect(stageIndex("proposal")).toBe(0);
+			expect(stageIndex("alignment")).toBeGreaterThan(stageLastIndex("proposal"));
+			expect(stageIndex("review")).toBeGreaterThan(stageIndex("alignment"));
+			expect(stageIndex("revision")).toBeGreaterThan(stageIndex("review"));
+			expect(stageIndex("synthesis")).toBeGreaterThan(stageLastIndex("revision"));
+			expect(stageIndex("synthesis")).toBeGreaterThan(stageLastIndex("review"));
+
+			// Every logical slot survives through revision under its own label.
+			for (const [index, label] of ["A", "B", "C"].entries()) {
+				for (const callLabel of [`team-proposal-${label}`, `team-revision-${label}-1`]) {
+					const outcome = result.subagentResults!.find(entry => entry.label === callLabel)!;
+					expect(outcome.modelPattern).toBe(scenario.expectedModels[index]);
+					expect(outcome.outcome.ok).toBe(true);
+				}
+				const revision = recorded.filter(call => call.stage === "revision" && call.target === label);
+				expect(revision.map(call => call.modelPattern)).toEqual([
+					scenario.expectedModels[index],
+					scenario.expectedModels[index],
+				]);
+				expect(revision.map(call => call.findingIds)).toEqual([[`${label}-F1`, `${label}-F2`], [`${label}-F2`]]);
+				const rechecks = recorded.filter(call => call.stage === "review" && call.target === label && call.recheck);
+				expect(rechecks.map(call => call.findingIds)).toEqual([[`${label}-F1`, `${label}-F2`], [`${label}-F2`]]);
+				for (const recheck of [false, true]) {
+					const review = recorded.filter(
+						call => call.stage === "review" && call.target === label && call.recheck === recheck,
+					);
+					expect(review.map(call => call.modelPattern)).toEqual(
+						Array(recheck ? 2 : 1).fill(scenario.reviewerModels[index]),
+					);
+				}
+			}
+			const byStage = (stage: string) =>
+				recorded.filter(call => call.stage === stage).map(call => call.modelPattern);
+			expect(byStage("proposal").sort()).toEqual([...scenario.expectedModels].sort());
+			expect(byStage("alignment")).toEqual([PATTERN_SESSION]);
+			expect(byStage("synthesis")).toEqual([PATTERN_SESSION]);
+			expect(recorded.filter(call => call.modelPattern === PATTERN_SESSION).map(call => call.stage)).toEqual([
+				"alignment",
+				"synthesis",
+			]);
+
+			// Even repeated models get distinct empty child contexts, not a shared session.
+			expect(new Set(recorded.map(call => call.agentId)).size).toBe(recorded.length);
+			expect(new Set(recorded.map(call => call.sessionId)).size).toBe(recorded.length);
+			expect(new Set(recorded.map(call => call.sessionManager)).size).toBe(recorded.length);
+			for (const call of recorded) {
+				expect(call.sessionId).toBeDefined();
+				expect(call.sessionManager).toBeDefined();
+				expect(call.initialMessages).toHaveLength(0);
+				expect(call.outputSchemaMode).toBe("strict");
+				// The executor appends required yield separately; no writable tools leak in.
+				expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
+			}
 		});
+	}
 
-		expect(result.status).toBe("completed");
-		const markdown = result.reportMarkdown!;
-		expect(markdown).toContain("### 核心方案");
-		expect(markdown).toContain("方案状态（结构化追踪，机械生效）");
-		expect(markdown).toContain("【推荐】方案 A");
-		expect(markdown).toContain(TEAM_CLOSING_CONTRACT.split("\n")[0]!.slice(2));
-		expect(markdown).toContain("✅ 可作为选项");
-		// §6 structure: choice-affecting interpretation difference is top-noticed.
-		const noticeIndex = markdown.indexOf("请先回答差异、带答案重跑");
-		expect(noticeIndex).toBeGreaterThan(-1);
-		expect(noticeIndex).toBeLessThan(markdown.indexOf("### 核心方案"));
-
-		// Stage coverage: two proposals, one alignment, reviews (+rechecks),
-		// revisions, one synthesis — all five stages.
-		const stages = recorded.map(call => call.stage);
-		expect(stages.filter(stage => stage === "proposal")).toHaveLength(2);
-		expect(stages.filter(stage => stage === "alignment")).toHaveLength(1);
-		expect(stages.filter(stage => stage === "review")).toHaveLength(4); // 2 initial + 2 recheck
-		expect(stages.filter(stage => stage === "revision")).toHaveLength(2);
-		expect(stages.filter(stage => stage === "synthesis")).toHaveLength(1);
-		const stageIndex = (stage: string) => stages.indexOf(stage);
-		const stageLastIndex = (stage: string) => stages.lastIndexOf(stage);
-		expect(stageIndex("proposal")).toBe(0);
-		expect(stageIndex("alignment")).toBeGreaterThan(stageLastIndex("proposal"));
-		expect(stageIndex("review")).toBeGreaterThan(stageIndex("alignment"));
-		expect(stageIndex("revision")).toBeGreaterThan(stageIndex("review"));
-		expect(stageIndex("synthesis")).toBeGreaterThan(stageLastIndex("revision"));
-
-		// Model pinning: each child session ran on its configured model.
-		const byStage = (stage: string) =>
-			recorded
-				.filter(call => call.stage === stage)
-				.map(call => call.modelPattern)
-				.sort();
-		expect(byStage("proposal")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
-		expect(byStage("alignment")).toEqual([PATTERN_SESSION]);
-		expect(byStage("synthesis")).toEqual([PATTERN_SESSION]);
-		// Rotation: each proposal is reviewed by the next different model in
-		// proposer order — proposal A (session model) by the other model, and
-		// proposal B wraps around to the session-model participant, which
-		// reviews through a fresh reviewer subprocess. Rechecks reuse the same
-		// rotation.
-		expect(byStage("review")).toEqual([PATTERN_OTHER, PATTERN_OTHER, PATTERN_SESSION, PATTERN_SESSION]);
-		// Reviser is the proposal's own model: B (other), A (session).
-		expect(byStage("revision")).toEqual([PATTERN_OTHER, PATTERN_SESSION]);
-
-		// Read-only tool contract and strict schema mode ride through the executor
-		// into every child session, mechanically.
-		for (const call of recorded) {
-			expect(call.outputSchemaMode).toBe("strict");
-			// Exact set: the session receives precisely the read-only tools —
-			// nothing else (no bash/eval/write/edit/task/hub/MCP) may leak in.
-			// `yield` is appended by the executor's required-yield path after
-			// these options, so it never appears in `toolNames` here.
-			expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
-		}
-
-		// Concurrent discussions use the same stage labels in the same session.
-		// Their child identities must remain distinct for Hub and artifact lookup.
-		const call = {
-			role: "proposer" as const,
+	it("keeps concurrent discussions with identical stage labels in separate child namespaces", async () => {
+		recorded.length = 0;
+		script = scriptedData;
+		const call: TeamSubagentCall = {
+			role: "proposer",
 			modelPattern: PATTERN_SESSION,
 			label: "team-proposal-A",
 			task: "[team-stage:proposal]",
 			schema: TEAM_PROPOSAL_SCHEMA,
 		};
 		const parallelResults = await Promise.all(
-			[createTeamSubagentRunner(runnerDeps), createTeamSubagentRunner(runnerDeps)].map(nextRunner =>
+			[createTeamSubagentRunner(runnerDeps()), createTeamSubagentRunner(runnerDeps())].map(nextRunner =>
 				nextRunner(call, new AbortController().signal),
 			),
 		);
 		expect(parallelResults.every(outcome => outcome.ok)).toBe(true);
+		expect(recorded).toHaveLength(2);
 		expect(new Set(recorded.map(entry => entry.agentId)).size).toBe(recorded.length);
+		expect(new Set(recorded.map(entry => entry.sessionId)).size).toBe(recorded.length);
 	});
 });

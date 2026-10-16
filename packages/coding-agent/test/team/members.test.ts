@@ -1,7 +1,6 @@
 /**
- * `/team` participant-resolution tests (docs-zh-CN/requirements/team.md §2.2): unconfigured
- * behavior under offline/normal start, explicit configuration precedence,
- * unavailable-member errors, and the dedup(∪ session model) rule.
+ * `/team` participant-resolution tests: ordered independent slots, session
+ * fallback, strict configured selectors, and exact session-anchor availability.
  */
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
@@ -30,115 +29,127 @@ const AVAILABLE = [
 	fakeModel("company", "Qwen3.6-27B-public"),
 	fakeModel("openai", "gpt-5"),
 ];
-const COMPANY_PATTERNS = ["company/GLM-5.2-public", "company/Qwen3.6-27B-public"];
+const PATTERNS = AVAILABLE.map(model => `${model.provider}/${model.id}`);
 
 describe("team member resolution", () => {
-	it("errors with a configuration example when unconfigured without a company lane", () => {
+	it.each([
+		{ members: [0], slots: [0, 0, 0] },
+		{ members: [0, 1], slots: [0, 1, 0] },
+		{ members: [0, 1, 2], slots: [0, 1, 2] },
+		{ members: [0, 1, 2, 3], slots: [0, 1, 2, 3] },
+	])("cycles the ordered roster into at least three independent slots: %j", ({ members, slots }) => {
 		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			offlineLaneActive: false,
-			companyModelPatterns: [],
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.error).toContain("team.members");
-		}
-	});
-
-	it("errors when offline but the company lane has no available models", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			offlineLaneActive: true,
-			companyModelPatterns: [],
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(false);
-	});
-
-	it("defaults to the company lane snapshot when unconfigured offline", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.source).toBe("company-default");
-			expect(result.participants.map(p => p.modelPattern)).toEqual([
-				"company/GLM-5.2-public",
-				"company/Qwen3.6-27B-public",
-				"anthropic/claude-sonnet-4-5",
-			]);
-			expect(result.participants.at(-1)!.isSessionModel).toBe(true);
-		}
-	});
-
-	it("limits only the implicit company roster to currently eligible models", () => {
-		const excluded = COMPANY_PATTERNS[0]!;
-		const eligible = COMPANY_PATTERNS[1]!;
-		const availableModels = AVAILABLE.filter(model => `${model.provider}/${model.id}` !== excluded);
-		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: SESSION,
-			availableModels,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.source).toBe("company-default");
-			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
-				eligible,
-				`${SESSION.provider}/${SESSION.id}`,
-			]);
-		}
-		const explicit = resolveTeamParticipants({
-			configuredMembers: [excluded],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: SESSION,
-			availableModels,
-		});
-		expect(explicit.ok).toBe(false);
-		if (!explicit.ok) expect(explicit.error).toContain(excluded);
-	});
-
-	it("does not fall back to only the session model when no company defaults are eligible", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: [],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: SESSION,
-			availableModels: [SESSION],
-		});
-		expect(result.ok).toBe(false);
-	});
-
-	it("explicit configuration overrides the environment default list", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: ["openai/gpt-5"],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
+			configuredMembers: members.map(index => PATTERNS[index]!),
 			sessionModel: SESSION,
 			availableModels: AVAILABLE,
 		});
 		expect(result.ok).toBe(true);
 		if (result.ok) {
 			expect(result.source).toBe("configured");
-			expect(result.participants.map(p => p.modelPattern)).toEqual(["openai/gpt-5", "anthropic/claude-sonnet-4-5"]);
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual(
+				slots.map(index => PATTERNS[index]!),
+			);
+			expect(result.participants.map(participant => participant.index)).toEqual(slots.map((_, index) => index));
+			expect(result.participants.map(participant => participant.isSessionModel)).toEqual(
+				slots.map(index => index === 0),
+			);
+			expect(new Set(result.participants).size).toBe(slots.length);
 		}
 	});
 
-	it("errors naming the unavailable entry instead of silently dropping it", () => {
+	it("defaults an empty roster to three independent slots using the current session model", () => {
 		const result = resolveTeamParticipants({
-			configuredMembers: ["openai/gpt-5", "company/NoSuchModel"],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
+			configuredMembers: [],
+			sessionModel: SESSION,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.source).toBe("session-default");
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				PATTERNS[0]!,
+				PATTERNS[0]!,
+				PATTERNS[0]!,
+			]);
+			expect(result.participants.map(participant => participant.index)).toEqual([0, 1, 2]);
+			expect(
+				result.participants.every(participant => participant.model === SESSION && participant.isSessionModel),
+			).toBe(true);
+			expect(new Set(result.participants).size).toBe(3);
+		}
+	});
+
+	it("preserves explicit duplicate entries and their order without appending the session model", () => {
+		const configuredMembers = [PATTERNS[1]!, PATTERNS[3]!, PATTERNS[3]!, PATTERNS[1]!];
+		const result = resolveTeamParticipants({
+			configuredMembers,
+			sessionModel: SESSION,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual(configuredMembers);
+			expect(result.participants.map(participant => participant.index)).toEqual([0, 1, 2, 3]);
+			expect(result.participants.every(participant => !participant.isSessionModel)).toBe(true);
+		}
+	});
+
+	it("does not add the session model to a short explicit roster", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: ["openai/gpt-5"],
+			sessionModel: SESSION,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				"openai/gpt-5",
+				"openai/gpt-5",
+				"openai/gpt-5",
+			]);
+			expect(result.participants.every(participant => !participant.isSessionModel)).toBe(true);
+		}
+	});
+
+	it("canonicalizes case aliases without deduplicating their slots", () => {
+		const session = AVAILABLE[1]!;
+		const result = resolveTeamParticipants({
+			configuredMembers: [" company/glm-5.2-public ", "COMPANY/GLM-5.2-public", "openai/gpt-5"],
+			sessionModel: session,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				"company/GLM-5.2-public",
+				"company/GLM-5.2-public",
+				"openai/gpt-5",
+			]);
+			expect(result.participants.map(participant => participant.isSessionModel)).toEqual([true, true, false]);
+			expect(result.participants.map(participant => participant.model)).toEqual([session, session, AVAILABLE[3]!]);
+		}
+	});
+
+	it("canonicalizes full revision-spelling aliases before cycling the roster", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: ["anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-4-5"],
+			sessionModel: SESSION,
+			availableModels: AVAILABLE,
+		});
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+				PATTERNS[0]!,
+				PATTERNS[0]!,
+				PATTERNS[0]!,
+			]);
+			expect(result.participants.every(participant => participant.isSessionModel)).toBe(true);
+		}
+	});
+
+	it("validates every configured entry before expansion rather than omitting an unavailable member", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: [PATTERNS[1]!, PATTERNS[1]!, "company/NoSuchModel"],
 			sessionModel: SESSION,
 			availableModels: AVAILABLE,
 		});
@@ -150,17 +161,15 @@ describe("team member resolution", () => {
 	});
 
 	it.each(["company/GLM-5.2", "GLM-5.2-public"])(
-		"rejects configured entries that are not full provider/model IDs (%s)",
+		"rejects configured entries that are not strict full model references (%s)",
 		entry => {
 			const result = resolveTeamParticipants({
 				configuredMembers: [entry],
-				offlineLaneActive: true,
-				companyModelPatterns: COMPANY_PATTERNS,
 				sessionModel: SESSION,
 				availableModels: AVAILABLE,
 			});
 			expect(result.ok).toBe(false);
-			if (!result.ok) expect(result.error).toContain(`team.members 中的模型不可用：${entry}`);
+			if (!result.ok) expect(result.error).toContain(entry);
 		},
 	);
 
@@ -169,8 +178,6 @@ describe("team member resolution", () => {
 		({ configuredMembers }) => {
 			const result = resolveTeamParticipants({
 				configuredMembers,
-				offlineLaneActive: true,
-				companyModelPatterns: COMPANY_PATTERNS,
 				sessionModel: SESSION,
 				availableModels: AVAILABLE,
 			});
@@ -184,13 +191,8 @@ describe("team member resolution", () => {
 		{ entry: true, described: "boolean true" },
 		{ entry: null, described: "null" },
 	])("rejects non-string configured entries with the index and actual type: %j", ({ entry, described }) => {
-		// Settings array validation only checks Array.isArray, so config.yml
-		// numbers/booleans/null reach the resolver; it must report the offending
-		// item (§2.2/§2.8), not throw `entry.trim is not a function`.
 		const result = resolveTeamParticipants({
 			configuredMembers: ["openai/gpt-5", entry] as unknown as readonly string[],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
 			sessionModel: SESSION,
 			availableModels: AVAILABLE,
 		});
@@ -198,74 +200,43 @@ describe("team member resolution", () => {
 		if (!result.ok) {
 			expect(result.error).toContain("team.members[1]");
 			expect(result.error).toContain(described);
-			expect(result.error).toContain("config.yml");
 		}
 	});
 
-	it("dedups the session model against configured members by resolved instance", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: ["anthropic/claude-sonnet-4-5", "company/GLM-5.2-public", "company/GLM-5.2-public"],
-			offlineLaneActive: false,
-			companyModelPatterns: [],
-			sessionModel: SESSION,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.participants.map(p => p.modelPattern)).toEqual([
-				"anthropic/claude-sonnet-4-5",
-				"company/GLM-5.2-public",
-			]);
-			// The session-model participant is flagged however it joined: the
-			// session agent itself does not review, though a fresh same-model
-			// subagent may (§2.5).
-			expect(result.participants[0]!.isSessionModel).toBe(true);
-			expect(result.participants[1]!.isSessionModel).toBe(false);
-		}
-	});
+	it.each([{ configuredMembers: [] }, { configuredMembers: ["company/GLM-5.2-public"] }])(
+		"requires a session anchor for roster %j",
+		({ configuredMembers }) => {
+			const result = resolveTeamParticipants({
+				configuredMembers,
+				sessionModel: undefined,
+				availableModels: AVAILABLE,
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain("主代理");
+		},
+	);
 
-	it("requires a session model to anchor the main agent", () => {
-		const result = resolveTeamParticipants({
-			configuredMembers: ["company/GLM-5.2-public"],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: undefined,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) expect(result.error).toContain("主代理");
-	});
+	it.each([{ configuredMembers: [] }, { configuredMembers: ["company/GLM-5.2-public"] }])(
+		"errors naming an unavailable session model even when absent from roster %j",
+		({ configuredMembers }) => {
+			const result = resolveTeamParticipants({
+				configuredMembers,
+				sessionModel: fakeModel("ghost", "m1"),
+				availableModels: AVAILABLE,
+			});
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain("ghost/m1");
+				expect(result.error).toContain("主代理");
+				expect(result.error).toContain("不会静默跳过");
+			}
+		},
+	);
 
-	it("errors naming the session model when it is not in the available list", () => {
-		const ghost = fakeModel("ghost", "m1");
-		const result = resolveTeamParticipants({
-			configuredMembers: ["company/GLM-5.2-public"],
-			offlineLaneActive: true,
-			companyModelPatterns: COMPANY_PATTERNS,
-			sessionModel: ghost,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.error).toContain("ghost/m1");
-			expect(result.error).toContain("主代理");
-			expect(result.error).toContain("不会静默跳过");
-		}
-	});
-
-	it("errors cleanly instead of throwing when the session model only fuzzy-matches a different model", () => {
-		// Renamed/retired id or prefix sibling: the session model itself is not
-		// available, but the selector
-		// engine binds its key to a near model (§2.2: a different concrete
-		// model, not "同一模型的不同名称"). /team must error naming the session
-		// model — never a fuzzy stand-in, and never a TypeError from the
-		// un-guarded session-participant lookup.
-		const session = fakeModel("company", "GLM-5.2");
+	it("rejects a fuzzy sibling instead of replacing an unavailable session anchor", () => {
 		const result = resolveTeamParticipants({
 			configuredMembers: ["openai/gpt-5"],
-			offlineLaneActive: false,
-			companyModelPatterns: [],
-			sessionModel: session,
+			sessionModel: fakeModel("company", "GLM-5.2"),
 			availableModels: AVAILABLE,
 		});
 		expect(result.ok).toBe(false);
@@ -277,45 +248,28 @@ describe("team member resolution", () => {
 		}
 	});
 
-	it("keeps flagging the session model when an exact match joins via a differently-spelled member", () => {
-		// Same concrete model under a different selector spelling dedups onto
-		// one participant (§2.2), and the exact session-model path still lands
-		// its isSessionModel flag on that participant.
-		const session = fakeModel("company", "GLM-5.2-public");
-		const result = resolveTeamParticipants({
-			configuredMembers: ["company/glm-5.2-public", "openai/gpt-5"],
-			offlineLaneActive: false,
-			companyModelPatterns: [],
-			sessionModel: session,
-			availableModels: AVAILABLE,
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			expect(result.participants.map(p => p.modelPattern)).toEqual(["company/GLM-5.2-public", "openai/gpt-5"]);
-			expect(result.participants[0]!.isSessionModel).toBe(true);
-			expect(result.participants[1]!.isSessionModel).toBe(false);
-		}
-	});
-
-	it("accepts a session model that resolves to a synthetic clone of a catalog row", () => {
-		// Bedrock inference-profile ARNs are synthesized on demand from their
-		// donor catalog row and resolve to their own key (§2.2: the session
-		// model exists and is running on it) — the literal entry missing from
-		// getAvailable() is not an availability problem, unlike a fuzzy sibling.
-		const session = fakeModel("amazon-bedrock", "arn:aws:bedrock:us-east-1:123:application-inference-profile/abc");
-		const result = resolveTeamParticipants({
-			configuredMembers: ["openai/gpt-5"],
-			offlineLaneActive: false,
-			companyModelPatterns: [],
-			sessionModel: session,
-			availableModels: [fakeModel("amazon-bedrock", "anthropic.claude-opus-4-8"), ...AVAILABLE],
-		});
-		expect(result.ok).toBe(true);
-		if (result.ok) {
-			const sessionParticipant = result.participants.find(p => p.isSessionModel);
-			expect(sessionParticipant?.modelPattern).toBe(
-				"amazon-bedrock/arn:aws:bedrock:us-east-1:123:application-inference-profile/abc",
-			);
-		}
-	});
+	it.each([{ configuredMembers: [] }, { configuredMembers: ["openai/gpt-5"] }])(
+		"accepts a synthetic Bedrock session anchor without adding it to explicit roster %j",
+		({ configuredMembers }) => {
+			const session = fakeModel("amazon-bedrock", "arn:aws:bedrock:us-east-1:123:application-inference-profile/abc");
+			const sessionPattern = `${session.provider}/${session.id}`;
+			const result = resolveTeamParticipants({
+				configuredMembers,
+				sessionModel: session,
+				availableModels: [fakeModel("amazon-bedrock", "anthropic.claude-opus-4-8"), ...AVAILABLE],
+			});
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				const expectedPattern = configuredMembers.length ? "openai/gpt-5" : sessionPattern;
+				expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+					expectedPattern,
+					expectedPattern,
+					expectedPattern,
+				]);
+				expect(result.participants.every(participant => participant.isSessionModel)).toBe(
+					configuredMembers.length === 0,
+				);
+			}
+		},
+	);
 });

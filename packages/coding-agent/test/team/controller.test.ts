@@ -7,8 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import * as companyModels from "@oh-my-pi/pi-coding-agent/config/company-models";
-import * as companyProvider from "@oh-my-pi/pi-coding-agent/config/company-provider";
+import { JCHTOOLS_API } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
@@ -130,43 +129,96 @@ function companyModel(id: string): Model {
 	return { ...MODEL, provider: "company", id, name: id };
 }
 
-describe("effective team defaults", () => {
-	it("filters offline defaults and rejects configured members outside enabledModels", () => {
+describe("effective team rosters", () => {
+	it.each([{ members: undefined }, { members: [] }])(
+		"defaults unset or empty settings to three session-model slots: %j",
+		({ members }) => {
+			const session = {
+				model: MODEL,
+				modelRegistry: { getAvailable: () => [MODEL, companyModel("GLM-5.2-public")] },
+			} as unknown as AgentSession;
+			const result = resolveTeamParticipantsForSession(
+				session,
+				Settings.isolated(members ? { "team.members": members } : {}),
+			);
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.source).toBe("session-default");
+				expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+					MODEL_PATTERN,
+					MODEL_PATTERN,
+					MODEL_PATTERN,
+				]);
+			}
+		},
+	);
+
+	it("rejects a configured member filtered out by enabledModels instead of omitting it", () => {
 		const allowed = companyModel("GLM-5.2-public");
 		const outOfScope = companyModel("Qwen3.6-27B-public");
-		vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(true);
-		vi.spyOn(companyModels, "getCompanyChatModels").mockReturnValue([allowed, outOfScope] as never);
 		const session = {
 			model: MODEL,
-			modelRegistry: {
-				getAvailable: () => [MODEL, allowed, outOfScope],
-			},
+			modelRegistry: { getAvailable: () => [MODEL, allowed, outOfScope] },
 		} as unknown as AgentSession;
-		const enabledPattern = `${allowed.provider}/${allowed.id}`;
+		const allowedPattern = `${allowed.provider}/${allowed.id}`;
 		const outOfScopePattern = `${outOfScope.provider}/${outOfScope.id}`;
-		const implicit = resolveTeamParticipantsForSession(
+		const result = resolveTeamParticipantsForSession(
 			session,
 			Settings.isolated({
-				"team.members": [],
-				enabledModels: [enabledPattern, MODEL_PATTERN],
+				"team.members": [allowedPattern, outOfScopePattern],
+				enabledModels: [allowedPattern, MODEL_PATTERN],
 			}),
 		);
-		expect(implicit.ok).toBe(true);
-		if (implicit.ok) {
-			expect(implicit.source).toBe("company-default");
-			expect(implicit.participants.map(participant => participant.modelPattern)).toEqual([
-				enabledPattern,
-				MODEL_PATTERN,
-			]);
-		}
-
-		const explicit = resolveTeamParticipantsForSession(
-			session,
-			Settings.isolated({ "team.members": [outOfScopePattern], enabledModels: [enabledPattern, MODEL_PATTERN] }),
-		);
-		expect(explicit.ok).toBe(false);
-		if (!explicit.ok) expect(explicit.error).toContain(outOfScopePattern);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain(outOfScopePattern);
 	});
+
+	it.each([{ members: [] }, { members: ["company/GLM-5.2-public"] }])(
+		"rejects a filtered session anchor even when absent from the roster: %j",
+		({ members }) => {
+			const allowed = companyModel("GLM-5.2-public");
+			const session = {
+				model: MODEL,
+				modelRegistry: { getAvailable: () => [MODEL, allowed] },
+			} as unknown as AgentSession;
+			const result = resolveTeamParticipantsForSession(
+				session,
+				Settings.isolated({ "team.members": members, enabledModels: ["company/GLM-5.2-public"] }),
+			);
+			expect(result.ok).toBe(false);
+			if (!result.ok) {
+				expect(result.error).toContain(MODEL_PATTERN);
+				expect(result.error).toContain("主代理");
+			}
+		},
+	);
+
+	it.each([{ remoteSession: true }, { remoteSession: false }])(
+		"rejects remote Agent execution before dispatch whether the remote model is the anchor or a member: %j",
+		async ({ remoteSession }) => {
+			const remote: Model = { ...MODEL, provider: "jchtools", id: "remote-agent", api: JCHTOOLS_API };
+			const remotePattern = `${remote.provider}/${remote.id}`;
+			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+			const sent: { customType: string; content: string }[] = [];
+			const session = {
+				...stubSession(jobManager, sent),
+				model: remoteSession ? remote : MODEL,
+				modelRegistry: { getAvailable: () => [MODEL, remote] },
+			} as unknown as AgentSession;
+			const result = await startTeamDiscussion("分析 X", {
+				session,
+				settings: Settings.isolated({ "team.members": [remoteSession ? MODEL_PATTERN : remotePattern] }),
+				cwd: "/tmp/repo",
+				hooks: {},
+			});
+			expect(result.started).toBe(false);
+			expect(result.message).toContain(remotePattern);
+			expect(result.message).toContain("只读");
+			expect(result.message).toContain("yield");
+			expect(jobManager.registerCalls).toBe(0);
+			expect(sent).toEqual([]);
+		},
+	);
 });
 
 describe("team controller dispatch", () => {
@@ -216,6 +268,41 @@ describe("team controller dispatch", () => {
 		expect(sent[0]!.customType).toBe("team-dispatch");
 		expect(sent[0]!.content).toContain("[team-dispatch bg_stub_1]");
 	});
+
+	it.each([
+		{ members: [], agents: 3, distinctModels: 1 },
+		{ members: [0], agents: 3, distinctModels: 1 },
+		{ members: [0, 1], agents: 3, distinctModels: 2 },
+		{ members: [0, 1, 2], agents: 3, distinctModels: 3 },
+		{ members: [0, 1, 2, 3], agents: 4, distinctModels: 4 },
+		{ members: [1, 1, 0, 1], agents: 4, distinctModels: 2 },
+	])(
+		"reports independent agent and distinct-model counts in the dispatch notice: %j",
+		async ({ members, agents, distinctModels }) => {
+			const models = [
+				MODEL,
+				companyModel("GLM-5.2-public"),
+				companyModel("Qwen3.6-27B-public"),
+				companyModel("other"),
+			];
+			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+			const sent: { customType: string; content: string }[] = [];
+			const session = stubSession(jobManager, sent);
+			vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue(models);
+			const result = await startTeamDiscussion("分析 X", {
+				session,
+				settings: Settings.isolated({
+					"team.members": members.map(index => `${models[index]!.provider}/${models[index]!.id}`),
+				}),
+				cwd: "/tmp/repo",
+				hooks: {},
+			});
+			expect(result.started).toBe(true);
+			expect(sent).toHaveLength(1);
+			expect(sent[0]!.content).toContain(`${agents} 个独立代理`);
+			expect(sent[0]!.content).toContain(`${distinctModels} 个不同模型`);
+		},
+	);
 
 	it("keeps a rejecting output hook from turning into an unhandled rejection", async () => {
 		const jobManager: JobManagerStub = {

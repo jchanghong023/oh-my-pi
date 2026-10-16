@@ -4,10 +4,8 @@
  */
 import { register } from "../config/registry";
 
-// Fork: /team multi-model discussion participants (full model IDs, e.g.
-// "company/GLM-5.2-public"). Unset or empty means "not configured": /team
-// then falls back to the company lane snapshot under OMP_OFFLINE and errors
-// with a configuration example otherwise.
+// Fork: ordered /team model slots (full provider/model IDs). Unset or empty
+// uses the session model; cycle the list until at least three agents exist.
 export const cfgTeamMembers = register({
 	id: "team.members",
 	type: "array",

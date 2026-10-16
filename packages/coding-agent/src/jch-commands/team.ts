@@ -1,5 +1,5 @@
 /**
- * `/team` — multi-model planning discussion (fork feature).
+ * `/team` — multi-agent planning discussion (fork feature).
  *
  * The command name is deliberately NOT `jch*`-prefixed (docs-zh-CN/requirements/team.md
  * §5.1): an upstream command of the same name is an accepted collision risk
@@ -9,7 +9,7 @@
  * Entry gates enforced here, before any stage runs:
  * - bare `/team` without a task asks for the question; never guesses;
  * - everything else (config errors, missing session model) is reported by the
- *   controller without running stages or degrading to a single-model flow.
+ *   controller without running stages.
  */
 import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "../slash-commands/types";
 import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/helpers/draft";
@@ -39,7 +39,7 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "team",
 		icon: "agents",
-		description: "Team：多模型独立调查、交叉审查与方案汇总（只读规划）",
+		description: "Team：至少三个代理独立调查、交叉审查与方案汇总（只读规划）",
 		allowArgs: true,
 		inlineHint: "<问题或需求>",
 		acpInputHint: "<问题或需求>",

@@ -53,12 +53,15 @@ function quoteLine(text: string): string {
 }
 
 function statusLine(record: TeamProposalRecord): string {
+	const blockers = record.unresolvedBlocking
+		.map(finding => `${finding.id}：${finding.issue}；依据：${finding.evidence}`)
+		.join("；");
 	if (record.excludedFromOptions) {
-		return `⛔ 尚不可采用 — ${record.exclusionReason ?? "不可作为最终选项"}`;
+		return `⛔ 尚不可采用 — ${record.exclusionReason ?? "不可作为最终选项"}${blockers ? `；未解决阻断问题：${blockers}` : ""}`;
 	}
 	if (record.unresolvedBlocking.length > 0) {
 		const cap = record.blockedAfterRoundCap ? "（两轮修订后仍未解决）" : "";
-		return `⛔ 尚不可采用 — 未解决阻断问题${cap}：${record.unresolvedBlocking.join("；")}`;
+		return `⛔ 尚不可采用 — 未解决阻断问题${cap}：${blockers}`;
 	}
 	if (record.blockedAfterRoundCap) {
 		return "⛔ 尚不可采用 — 两轮修订后仍有阻断问题";
@@ -256,7 +259,7 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 
 	return {
 		ok: true,
-		markdown: [`## /team 多模型讨论结果（team-result）`, "", sections.join("\n\n")].join("\n"),
+		markdown: [`## /team 多代理讨论结果（team-result）`, "", sections.join("\n\n")].join("\n"),
 		droppedRecommendation,
 	};
 }
@@ -264,7 +267,7 @@ export function assembleTeamReport(args: AssembleReportArgs): AssembleReportResu
 /** Failure message for runs that must not produce a half-finished conclusion. */
 export function assembleTeamFailure(question: string, reason: string): string {
 	return [
-		"## /team 多模型讨论未完成（team-incomplete）",
+		"## /team 多代理讨论未完成（team-incomplete）",
 		"",
 		`本次流程未完成：${reason}`,
 		"",

@@ -10,8 +10,9 @@ import type {
 	TeamEvidenceItem,
 	TeamProposalRecord,
 	TeamProposalOutput,
-	TeamReviewOutput,
+	TeamReviewRecord,
 	TeamRole,
+	TeamTrackedFinding,
 } from "./types";
 
 const TASK_TEMPLATE_MARKER = "<!-- TEAM TASK TEMPLATE -->";
@@ -74,18 +75,19 @@ export function buildReviewTask(args: {
 	ambiguityInterpretations: readonly TeamAmbiguityInterpretation[];
 	round: number;
 	recheck: boolean;
-	unresolvedBlocking?: readonly string[];
+	unresolvedBlocking?: readonly TeamTrackedFinding[];
 	recheckContext?: {
 		previousProposal: TeamProposalOutput;
 		/** All revisions since the last successfully reviewed proposal. */
 		revisions: readonly TeamProposalRecord["revisionHistory"][number][];
-		reviews: readonly TeamReviewOutput[];
+		reviews: readonly TeamReviewRecord[];
 	};
 }): string {
 	return renderTask(promptTemplates.reviewer.task, {
 		...args,
 		question: args.question.trim(),
 		cwd: args.cwd.trim(),
+		unresolvedBlocking: args.unresolvedBlocking ?? [],
 	});
 }
 
@@ -96,13 +98,18 @@ export function buildRevisionTask(args: {
 	round: number;
 	alignment: TeamAlignmentOutput;
 	proposal: TeamProposalOutput;
-	review: TeamReviewOutput;
-	unresolvedBlocking: readonly string[];
+	review: TeamReviewRecord;
+	unresolvedBlocking: readonly TeamTrackedFinding[];
 }): string {
+	const responseFindings = new Map(args.review.findings.map(finding => [finding.id, finding]));
+	for (const finding of args.unresolvedBlocking) {
+		if (!responseFindings.has(finding.id)) responseFindings.set(finding.id, finding);
+	}
 	return renderTask(promptTemplates.reviser.task, {
 		...args,
 		question: args.question.trim(),
 		cwd: args.cwd.trim(),
+		responseFindings: [...responseFindings.values()],
 		proposalStructured: {
 			keyAssumptions: args.proposal.keyAssumptions,
 			risks: args.proposal.risks,

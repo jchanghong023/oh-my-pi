@@ -13,7 +13,6 @@ import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-c
 
 const command = TEAM_SLASH_COMMANDS[0]!;
 const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
 
 function stubSession(overrides: Partial<Record<string, unknown>> = {}): AgentSession {
 	return {
@@ -113,7 +112,7 @@ describe("/team command gates", () => {
 		expect(restored).toEqual(["/team 分析 X"]);
 	});
 
-	it("clears the TUI editor only after a successful dispatch", async () => {
+	it("clears the TUI editor after dispatching with the unconfigured session-default roster", async () => {
 		const session = stubSession({
 			model: MODEL,
 			modelRegistry: { getAvailable: () => [MODEL], authStorage: undefined },
@@ -123,8 +122,7 @@ describe("/team command gates", () => {
 			},
 			sendCustomMessage: async () => false,
 		});
-		const settings = Settings.isolated({ "team.members": [MODEL_PATTERN] });
-		const { runtime, editorClears, restored } = tuiRuntime(session, settings);
+		const { runtime, editorClears, restored } = tuiRuntime(session);
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(editorClears.count).toBe(1);
 		expect(restored).toHaveLength(0);
