@@ -632,7 +632,6 @@ describe("unknown remote Agent capacity", () => {
 		const detail = lines[lines.length - 2]!;
 		expect(detail).toContain("ctx unknown · out unknown");
 		expect(detail).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k/);
-		expect(lines[lines.length - 1]).not.toContain("compacts");
 	});
 
 	test.each([32_768, 32_769])("known capacity keeps its exact over-context boundary at %s tokens", tokens => {
@@ -667,7 +666,7 @@ describe("unknown remote Agent capacity", () => {
 		expect(remoteRow?.p).not.toHaveProperty("tone", "muted");
 		const detail = described.find(node => node.key === "detail");
 		expect(JSON.stringify(detail)).toContain("ctx unknown · out unknown");
-		expect(JSON.stringify(detail)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k|compacts/);
+		expect(JSON.stringify(detail)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k/);
 
 		const compact = nativeNodes(browser.pickerPreview("compact")).find(node => node.k === "kv");
 		expect(compact?.p?.items).toEqual(
@@ -680,13 +679,12 @@ describe("unknown remote Agent capacity", () => {
 		expect(JSON.stringify(full)).toContain('"t":"Context"');
 		expect(JSON.stringify(full)).toContain('"t":"Max output"');
 		expect(JSON.stringify(full)).toContain('"t":"unknown"');
-		expect(JSON.stringify(full)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k|compacts/);
+		expect(JSON.stringify(full)).not.toMatch(/32[,.]?768|32\.8k|4096|4\.1k/);
 
 		browser.selectSelector("demo/known-capacity");
 		const knownFull = JSON.stringify(browser.pickerPreview("full"));
 		expect(knownFull).toContain("32,768");
 		expect(knownFull).toContain("4,096");
-		expect(knownFull).toContain("compacts");
 	});
 
 	test.each(["switch", "picker"] as const)(

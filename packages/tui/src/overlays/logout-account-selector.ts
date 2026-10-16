@@ -43,7 +43,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		onSelect: (account: LogoutAccount) => void,
 		onCancel: () => void,
 	) {
-		super(`Select ${providerName} account to log out`, "omp.overlay.logout");
+		super(`选择要退出登录的 ${providerName} 账户`, "omp.overlay.logout");
 		this.#onSelectCallback = onSelect;
 		this.#onCancelCallback = onCancel;
 		this.#providerName = providerName;
@@ -77,7 +77,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		for (let i = startIndex; i < endIndex; i++) {
 			const account = items[i];
 			if (!account) continue;
-			const activeTag = account.active ? theme.fg("muted", " (active)") : "";
+			const activeTag = account.active ? theme.fg("muted", "（当前使用）") : "";
 			const detail = account.detail ? theme.fg("dim", `  ${account.detail}`) : "";
 			if (i === this.#menu.selectedIndex) {
 				rows.push(`${theme.fg("accent", `${theme.nav.cursor} ${account.label}`)}${activeTag}${detail}`);
@@ -98,14 +98,14 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 		}
 
 		if (total === 0) {
-			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "No stored accounts to log out"), 0, 0));
+			this.#listContainer.addChild(new TruncatedText(theme.fg("muted", "没有可退出登录的已存账户"), 0, 0));
 		}
 
 		this.#listContainer.addChild(
 			new TruncatedText(
 				theme.fg(
 					"muted",
-					`${editorKeys("tui.select.up", "tui.select.down")} select · ${formatKeyHint("enter")} log out account · ${editorKey("tui.select.cancel")} cancel`,
+					`${editorKeys("tui.select.up", "tui.select.down")} 选择 · ${formatKeyHint("enter")} 退出账户登录 · ${editorKey("tui.select.cancel")} 取消`,
 				),
 				0,
 				0,
@@ -145,10 +145,10 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 	override describe(cx: DescribeContext): NativeNode {
 		if (cx.supports("picker")) {
 			this.#pickerRoot ??= dockedPicker({
-				title: `${this.#providerName} accounts`,
-				subtitle: "Pick the account to sign out",
+				title: `${this.#providerName} 账户`,
+				subtitle: "选择要退出登录的账户",
 				icon: "key-round",
-				noun: "accounts",
+				noun: "账户",
 				size: "md",
 				layout: "cards",
 				preview: "none",
@@ -157,12 +157,12 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 					id: String(account.credentialId),
 					label: account.label,
 					...(account.detail ? { detail: account.detail } : {}),
-					badges: [{ text: account.type === "oauth" ? "login" : "api key" }],
+					badges: [{ text: account.type === "oauth" ? "登录" : "API 密钥" }],
 				}))),
 				current: this.#accounts.filter(account => account.active).map(account => String(account.credentialId)),
 				selected: this.#menu.selectedKey ?? null,
-				empty: "No stored accounts to log out",
-				actions: [pickerAction("confirm", "Sign out", "enter", { primary: true, danger: true }), CLOSE_ACTION],
+				empty: "没有可退出登录的已存账户",
+				actions: [pickerAction("confirm", "退出登录", "enter", { primary: true, danger: true }), CLOSE_ACTION],
 			});
 			return this.#pickerRoot;
 		}
@@ -173,7 +173,7 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				{
 					label: account.label,
 					detail: account.detail || undefined,
-					value: account.active ? [span("active", "muted")] : undefined,
+					value: account.active ? [span("当前使用", "muted")] : undefined,
 				},
 				undefined,
 				String(account.credentialId),
@@ -184,16 +184,16 @@ export class LogoutAccountSelectorComponent extends OverlayPanel {
 				"list",
 				{
 					selected: this.#menu.selectedKey ?? null,
-					empty: "No stored accounts to log out",
+					empty: "没有可退出登录的已存账户",
 					max: { lines: LOGOUT_SELECTOR_MAX_VISIBLE },
 				},
 				this.#nativeItems,
 				"list",
 			),
 			(this.#nativeHints ??= hintsRow([
-				actionHint(["tui.select.up", "tui.select.down"], "select"),
-				{ keys: ["enter"], label: "log out account" },
-				actionHint("tui.select.cancel", "cancel"),
+				actionHint(["tui.select.up", "tui.select.down"], "选择"),
+				{ keys: ["enter"], label: "退出账户登录" },
+				actionHint("tui.select.cancel", "取消"),
 			])),
 		]);
 		return this.#nativeRoot;

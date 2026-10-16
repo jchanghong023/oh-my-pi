@@ -51,7 +51,7 @@ import { fgOrPlain, theme } from "../theme/theme";
 const SHELL_SIGIL_RE = /^\s*(?:!!?|\$\$?)[ \t]?/;
 
 /** The untitled session's TSP placeholder; the rotating ANSI hints (thinking effort, …) move into control tooltips. */
-const NATIVE_COMPOSER_PLACEHOLDER = "What are we cooking?";
+const NATIVE_COMPOSER_PLACEHOLDER = "想做点什么？";
 
 /** Live composer state the TSP layout shows; the interactive host wires {@link CustomEditor.composerState}. */
 export interface ComposerNativeState {
@@ -906,7 +906,7 @@ export class CustomEditor extends Editor {
 					);
 					if (this.#queueShorthandActive && (value.startsWith("->") || value.startsWith("=>"))) {
 						const icon = typeof theme === "undefined" ? "➤" : theme.nav.selected;
-						return `${fgOrPlain("dim", `Queueing ${icon}`)}${highlighted.slice(2)}`;
+						return `${fgOrPlain("dim", `排队中 ${icon}`)}${highlighted.slice(2)}`;
 					}
 					if (this.#queueListActive) {
 						const markerMatch = QUEUE_LIST_MARKER_RE.exec(value);
@@ -1078,7 +1078,7 @@ export class CustomEditor extends Editor {
 	override describePlaceholder = (): TspText => {
 		const { viewing, title } = this.composerState();
 		const agent = viewing?.at(-1);
-		if (agent !== undefined) return `Message ${agent}`;
+		if (agent !== undefined) return `向 ${agent} 发消息`;
 		if (!title) return NATIVE_COMPOSER_PLACEHOLDER;
 		if (this.#titlePlaceholder?.title !== title) {
 			this.#titlePlaceholder = { title, text: [{ t: `“${title}”`, s: "em" }] };
@@ -1166,7 +1166,7 @@ export class CustomEditor extends Editor {
 								rate !== undefined &&
 									node(
 										"rate",
-										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: "Generation rate" },
+										{ value: rate, unit: "tok/s", role: "omp.composer.rate", title: "生成速率" },
 										undefined,
 										"rate",
 									),
@@ -1211,7 +1211,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.crumb",
 					text: id,
 					wrap: "none",
-					title: `View ${id}`,
+					title: `查看 ${id}`,
 					actions: { click: `${FOCUS_ACTION}${id}` },
 				},
 				undefined,
@@ -1222,7 +1222,7 @@ export class CustomEditor extends Editor {
 			row(
 				[
 					node("icon", { name: "eye" }, undefined, "icon"),
-					node("text", { text: "Viewing", wrap: "none" }, undefined, "label"),
+					node("text", { text: "正在查看", wrap: "none" }, undefined, "label"),
 					...crumbs,
 					node("text", { role: "omp.composer.agent", text: agent, wrap: "none" }, undefined, "agent"),
 					node(
@@ -1231,12 +1231,12 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.exit",
 							gap: "xs",
 							align: "center",
-							title: `Back to the main session  ${back}`,
+							title: `返回主会话  ${back}`,
 							actions: { click: `${FOCUS_ACTION}${MAIN_AGENT_ID}` },
 						},
 						[
 							node("kbd", { keys: [interruptKey] }, undefined, "key"),
-							node("text", { text: "main", wrap: "none" }, undefined, "label"),
+							node("text", { text: "主会话", wrap: "none" }, undefined, "label"),
 						],
 						"exit",
 					),
@@ -1245,7 +1245,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.focus",
 					gap: "xs",
 					align: "center",
-					title: `Viewing subagent ${agent}: what you send goes to it`,
+					title: `正在查看 Subagent ${agent}：发送的消息将交给它`,
 				},
 			),
 			"focus",
@@ -1273,7 +1273,7 @@ export class CustomEditor extends Editor {
 						{
 							level: thinking,
 							role: "omp.composer.model.effort",
-							title: `Thinking effort: ${thinking}${thinkingHint}`,
+							title: `思考强度：${thinking}${thinkingHint}`,
 							actions: { click: "thinking.cycle" },
 						},
 						undefined,
@@ -1289,7 +1289,7 @@ export class CustomEditor extends Editor {
 					gap: "xs",
 					align: "center",
 					tone: facts.model.tone,
-					title: modelKey ? `Switch model  ${formatTooltipKey(modelKey)}` : "Switch model",
+					title: modelKey ? `切换模型  ${formatTooltipKey(modelKey)}` : "切换模型",
 					actions: { click: "status.model" },
 				},
 				[
@@ -1308,7 +1308,7 @@ export class CustomEditor extends Editor {
 							role: "omp.composer.effort",
 							gap: "xs",
 							align: "center",
-							title: `Thinking effort${thinkingHint}`,
+							title: `思考强度${thinkingHint}`,
 							actions: { click: "thinking.cycle" },
 						},
 						[
@@ -1339,20 +1339,20 @@ export class CustomEditor extends Editor {
 							align: "center",
 							tone: recording ? "error" : starting || transcribing ? "pending" : undefined,
 							title: recording
-								? "Stop recording and transcribe"
+								? "停止录音并转写"
 								: starting
-									? "Cancel dictation"
+									? "取消听写"
 									: transcribing
-										? "Transcribing dictation"
-										: "Start dictation",
+										? "正在转写听写内容"
+										: "开始听写",
 							// The model can take a while to load on first use, so a start stays cancellable.
 							actions: transcribing ? undefined : { click: "dictation.toggle" },
 						},
 						starting || transcribing
-							? [node("spinner", { label: starting ? "Starting…" : "Transcribing…" }, undefined, "pending")]
+							? [node("spinner", { label: starting ? "正在启动…" : "正在转写…" }, undefined, "pending")]
 							: compact([
 									node("icon", { name: recording ? "stop" : "mic" }, undefined, "icon"),
-									recording && node("text", { text: "Recording · Stop", wrap: "none" }, undefined, "label"),
+									recording && node("text", { text: "录音中 · 停止", wrap: "none" }, undefined, "label"),
 								]),
 						"dictation",
 					);
@@ -1362,9 +1362,9 @@ export class CustomEditor extends Editor {
 					"text",
 					{
 						role: "omp.composer.stop",
-						text: "Stop",
+						text: "停止",
 						tone: "error",
-						title: `Stop  ${formatTooltipKey(interruptKey)}`,
+						title: `停止  ${formatTooltipKey(interruptKey)}`,
 						actions: { click: "interrupt" },
 					},
 					undefined,
@@ -1375,7 +1375,7 @@ export class CustomEditor extends Editor {
 					{
 						role: "omp.composer.send",
 						keys: ["enter"],
-						title: dictating ? "Finish dictation before sending" : `Send  ${formatTooltipKey("enter")}`,
+						title: dictating ? "请先完成听写再发送" : `发送  ${formatTooltipKey("enter")}`,
 						tone: dictating ? "muted" : undefined,
 						actions: dictating ? undefined : { click: "submit" },
 					},
@@ -1383,12 +1383,11 @@ export class CustomEditor extends Editor {
 					"send",
 				);
 		if (!shell) return { focus, mode: undefined, model, effort, dictation, submit };
-		const runs = shell.kind === "bash" ? "Runs in your shell" : "Runs in Python";
+		const runs = shell.kind === "bash" ? "在 Shell 中运行" : "在 Python 中运行";
 		const mode = keyed(
 			row(
 				compact([
-					shell.excluded &&
-						node("icon", { name: "eye-off", title: "Not sent to the model" }, undefined, "excluded"),
+					shell.excluded && node("icon", { name: "eye-off", title: "不发送给模型" }, undefined, "excluded"),
 					node(
 						"text",
 						{ spans: [span(shell.kind, shell.kind === "bash" ? "bashMode" : "pythonMode")], wrap: "none" },
@@ -1400,7 +1399,7 @@ export class CustomEditor extends Editor {
 					role: "omp.composer.mode",
 					gap: "xs",
 					align: "center",
-					title: shell.excluded ? `${runs} · not sent to the model` : runs,
+					title: shell.excluded ? `${runs} · 不发送给模型` : runs,
 				},
 			),
 			"mode",

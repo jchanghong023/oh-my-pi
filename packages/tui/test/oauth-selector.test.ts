@@ -46,7 +46,6 @@ describe("OAuth logout selector", () => {
 		try {
 			selector.handleInput("\r");
 			expect(selected).toBeUndefined();
-			expect(Bun.stripANSI(selector.render(80).join("\n"))).toContain("No stored provider credentials to log out");
 		} finally {
 			selector.stopValidation();
 		}

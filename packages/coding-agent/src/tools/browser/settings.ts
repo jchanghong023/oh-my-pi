@@ -10,9 +10,9 @@ export const cfgBrowserEnabled = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Available Tools",
-		label: "Browser",
-		description: "Enable the browser eval prelude for scripted Chromium automation (Puppeteer)",
+		group: "可用工具",
+		label: "浏览器",
+		description: "启用 browser eval 预置环境，通过脚本自动操控 Chromium（Puppeteer）",
 	},
 });
 
@@ -22,10 +22,10 @@ export const cfgBrowserCdpUrl = register({
 	default: undefined,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Browser CDP URL",
+		group: "Grep 与浏览器",
+		label: "浏览器 CDP URL",
 		description:
-			"Default HTTP CDP discovery endpoint (for example http://127.0.0.1:9222) to attach to instead of launching a browser. Explicit app.cdp_url or app.path on the tool call take precedence.",
+			"默认连接的 HTTP CDP 发现端点（例如 http://127.0.0.1:9222），用于连接现有浏览器而非启动新浏览器。工具调用中显式指定的 app.cdp_url 或 app.path 优先。",
 	},
 });
 
@@ -35,10 +35,10 @@ export const cfgBrowserRelay = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Browser Relay",
+		group: "Grep 与浏览器",
+		label: "浏览器中继",
 		description:
-			"Drive your own Chrome tabs through the omp browser relay. Install the extension once (`omp browser-relay install`); the relay server auto-starts when the browser prelude needs it. Takes precedence over Browser CDP URL; set PI_BROWSER_RELAY=0 or PI_BROWSER_RELAY=1 to override.",
+			"通过 omp 浏览器中继操控你自己的 Chrome 标签页。只需安装一次扩展（`omp browser-relay install`）；browser 预置环境需要时会自动启动中继服务器。优先于浏览器 CDP URL；设置 PI_BROWSER_RELAY=0 或 PI_BROWSER_RELAY=1 可覆盖此设置。",
 	},
 });
 
@@ -48,9 +48,9 @@ export const cfgBrowserRelayUrl = register({
 	default: undefined,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Browser Relay URL",
-		description: "omp browser relay endpoint (default http://127.0.0.1:9224).",
+		group: "Grep 与浏览器",
+		label: "浏览器中继 URL",
+		description: "omp 浏览器中继端点（默认 http://127.0.0.1:9224）。",
 	},
 });
 
@@ -60,9 +60,9 @@ export const cfgBrowserHeadless = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Headless Browser",
-		description: "Launch browser in headless mode (disable to show browser UI)",
+		group: "Grep 与浏览器",
+		label: "无头浏览器",
+		description: "以无头模式启动浏览器（关闭后显示浏览器界面）",
 	},
 });
 
@@ -72,10 +72,10 @@ export const cfgBrowserCmux = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "cmux Browser",
+		group: "Grep 与浏览器",
+		label: "cmux 浏览器",
 		description:
-			"Use cmux WKWebView surfaces for browser automation when a cmux socket is available. Set PI_BROWSER_CMUX=0 or PI_BROWSER_CMUX=1 to override.",
+			"有可用的 cmux socket 时，使用 cmux WKWebView 界面进行浏览器自动化。设置 PI_BROWSER_CMUX=0 或 PI_BROWSER_CMUX=1 可覆盖此设置。",
 	},
 });
 
@@ -85,10 +85,10 @@ export const cfgBrowserTern = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Tern Browser",
+		group: "Grep 与浏览器",
+		label: "Tern 浏览器",
 		description:
-			"Inside a Tern pane, open browser tabs as picture-in-pictures over omp's pane (native web view) instead of headless Chromium; falls back to Chromium when no Tern window can host them. Explicit app options, the relay and Browser CDP URL take precedence; app.tern:false opts one open out. Set PI_BROWSER_TERN=0 or PI_BROWSER_TERN=1 to override.",
+			"在 Tern 窗格中，将浏览器标签页以画中画形式打开在 omp 窗格上方（原生网页视图），而非使用无头 Chromium；没有可承载它们的 Tern 窗口时回退到 Chromium。显式 app 选项、中继和浏览器 CDP URL 优先；app.tern:false 可在单次打开时禁用此行为。设置 PI_BROWSER_TERN=0 或 PI_BROWSER_TERN=1 可覆盖此设置。",
 	},
 });
 
@@ -98,10 +98,10 @@ export const cfgBrowserFreezeOnTurnEnd = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Freeze Browser Tabs On Turn End",
+		group: "Grep 与浏览器",
+		label: "回合结束时冻结浏览器标签页",
 		description:
-			"Freeze OMP-owned headless browser tabs when a turn settles so animated pages stop burning CPU/GPU while idle. Tabs unfreeze automatically on next use; pass persist:true on open to opt a tab out.",
+			"回合结束后冻结 OMP 管理的无头浏览器标签页，避免动画页面在空闲时持续消耗 CPU/GPU。下次使用时自动解冻；打开时传入 persist:true 可排除此标签页。",
 	},
 });
 
@@ -111,15 +111,15 @@ export const cfgBrowserIdleCloseSec = register({
 	default: 1800,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Browser Idle Close Timeout",
+		group: "Grep 与浏览器",
+		label: "浏览器空闲关闭超时",
 		description:
-			"Close OMP-owned headless browser tabs and Tern browser picture-in-pictures idle longer than this many seconds (0 = never; session dispose still reaps). Never touches relay/CDP/spawned browsers or other sessions' tabs.",
+			"关闭空闲时间超过此秒数的 OMP 管理的无头浏览器标签页和 Tern 浏览器画中画（0 = 永不关闭；会话释放时仍会回收）。不会影响中继/CDP/独立启动的浏览器或其他会话的标签页。",
 		options: [
-			{ value: "0", label: "Never" },
-			{ value: "900", label: "15 minutes" },
-			{ value: "1800", label: "30 minutes" },
-			{ value: "3600", label: "1 hour" },
+			{ value: "0", label: "永不" },
+			{ value: "900", label: "15 分钟" },
+			{ value: "1800", label: "30 分钟" },
+			{ value: "3600", label: "1 小时" },
 		],
 	},
 });
@@ -130,9 +130,9 @@ export const cfgBrowserScreenshotDir = register({
 	default: undefined,
 	ui: {
 		tab: "tools",
-		group: "Grep & Browser",
-		label: "Screenshot Directory",
+		group: "Grep 与浏览器",
+		label: "截图目录",
 		description:
-			"Directory to save screenshots. If unset, screenshots go to a temp file. Supports ~. Examples: ~/Downloads, ~/Desktop, /sdcard/Download (Android)",
+			"保存截图的目录。未设置时，截图保存到临时文件。支持 ~。示例：~/Downloads、~/Desktop、/sdcard/Download（Android）",
 	},
 });

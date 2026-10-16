@@ -217,7 +217,7 @@ export class FooterComponent implements Component {
 		const tone = getContextUsageTone(level);
 		if (tone) contextProps.tone = tone;
 		seg("context", contextProps);
-		let model = state.model?.id || "no-model";
+		let model = state.model?.id || "未选择模型";
 		if (state.model?.thinking) {
 			const level = this.session.isAutoThinking
 				? (this.session.autoResolvedThinkingLevel() ?? `${theme.thinking.autoPending} auto`)
@@ -325,7 +325,7 @@ export class FooterComponent implements Component {
 		let statsLeft = statsParts.join(" ");
 
 		// Add model name on the right side, plus thinking level if model supports it
-		const modelName = state.model?.id || "no-model";
+		const modelName = state.model?.id || "未选择模型";
 
 		// Add thinking level hint when the current model advertises supported efforts
 		let rightSide = modelName;

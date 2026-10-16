@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
 - Embedded context labels stay together at the right end of the composer border, with a muted window capacity and no compaction boundary ticks.

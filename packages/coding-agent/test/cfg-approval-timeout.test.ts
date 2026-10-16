@@ -87,7 +87,7 @@ describe("cfg:// approval prompt wiring", () => {
 		spyOn(mode, "showHookConfirm").mockResolvedValue(true);
 		const seen: Array<number | undefined> = [];
 		spyOn(ExtensionUiController.prototype, "showCollabAwareSelector").mockImplementation(
-			async (_title: string, _options: unknown, dialogOptions?: { timeout?: number; signal?: AbortSignal }) => {
+			async (_title, options, dialogOptions) => {
 				seen.push(dialogOptions?.timeout);
 				// Mirror the real dialog: a pre-aborted signal settles dismissed
 				// without presenting; otherwise wait for the abort like a user
@@ -99,7 +99,7 @@ describe("cfg:// approval prompt wiring", () => {
 					await promise;
 					return undefined;
 				}
-				return "Allow once";
+				return options[1] as string;
 			},
 		);
 		await mode.init({ suppressWelcomeIntro: true });

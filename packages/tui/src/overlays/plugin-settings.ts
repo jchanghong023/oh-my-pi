@@ -31,7 +31,7 @@ import { actionHint, hintsRow, overlayCard } from "../native/overlay";
 
 const PLUGIN_SETTINGS_ROLE = "omp.overlay.plugin-settings";
 /** A plugin row's control on the native settings page: open the plugin's settings. */
-const PLUGIN_CONFIGURE: TspPrefsControl = { k: "action", label: "Configure", act: "open" };
+const PLUGIN_CONFIGURE: TspPrefsControl = { k: "action", label: "配置", act: "open" };
 
 /** The plugins tab as a native settings page draws it (the settings selector puts it in its `prefs` node). */
 export interface PluginPrefsPage {
@@ -55,7 +55,7 @@ function prefsDetailPage(title: string, lead: string, list: SettingsList | undef
 		(item): TspPrefsControl =>
 			item.values?.length === 2 && item.values.includes("true") && item.values.includes("false")
 				? { k: "switch", on: item.currentValue === "true" }
-				: { k: "action", label: item.currentValue.trim() || "Edit…", act: "edit" },
+				: { k: "action", label: item.currentValue.trim() || "编辑…", act: "edit" },
 	);
 	const open = list.openSubmenu;
 	return {
@@ -223,7 +223,7 @@ async function buildPluginConfigItems(
 			items.push({
 				id: `config:${key}`,
 				label: `  ${key}`,
-				description: schema.description || `Configure ${key}`,
+				description: schema.description || `配置 ${key}`,
 				currentValue: currentValue ? "true" : "false",
 				values: ["true", "false"],
 			});
@@ -231,12 +231,12 @@ async function buildPluginConfigItems(
 			items.push({
 				id: `config:${key}`,
 				label: `  ${key}`,
-				description: schema.description || `Configure ${key}`,
+				description: schema.description || `配置 ${key}`,
 				currentValue: String(currentValue ?? schema.default ?? ""),
 				submenu: (cv, done) =>
 					createConfigEnumPanel(
 						key,
-						schema.description || `Select value for ${key}`,
+						schema.description || `选择 ${key} 的值`,
 						schema.values,
 						cv,
 						value => {
@@ -252,7 +252,7 @@ async function buildPluginConfigItems(
 			items.push({
 				id: `config:${key}`,
 				label: `  ${key}`,
-				description: schema.description || `Configure ${key}`,
+				description: schema.description || `配置 ${key}`,
 				currentValue: displayValue,
 				submenu: (cv, done) =>
 					createConfigInputPanel(
@@ -301,16 +301,14 @@ export class PluginListComponent extends OverlayPanel {
 		private readonly entries: ReadonlyArray<PluginListEntry>,
 		callbacks: PluginListCallbacks,
 	) {
-		super("Plugins", PLUGIN_SETTINGS_ROLE);
+		super("插件", PLUGIN_SETTINGS_ROLE);
 		this.addChild(new Spacer(1));
 
 		if (entries.length === 0) {
-			this.addChild(new Text(theme.fg("muted", "No plugins installed"), 0, 0));
+			this.addChild(new Text(theme.fg("muted", "尚未安装插件"), 0, 0));
 			this.addChild(new Spacer(1));
-			this.addChild(new Text(theme.fg("dim", "Install npm plugins:        omp plugin install <package>"), 0, 0));
-			this.addChild(
-				new Text(theme.fg("dim", "Install marketplace plugins: omp plugin install <name>@<marketplace>"), 0, 0),
-			);
+			this.addChild(new Text(theme.fg("dim", "安装 npm 插件：        omp plugin install <package>"), 0, 0));
+			this.addChild(new Text(theme.fg("dim", "安装市场插件：omp plugin install <name>@<marketplace>"), 0, 0));
 			this.addChild(new Spacer(1));
 
 			// Empty list still handles Escape so the user can leave the panel.
@@ -342,10 +340,7 @@ export class PluginListComponent extends OverlayPanel {
 		this.addChild(new Spacer(1));
 		this.addChild(
 			new Text(
-				theme.fg(
-					"dim",
-					`${editorKey("tui.select.confirm")} to configure · ${editorKey("tui.select.cancel")} to go back`,
-				),
+				theme.fg("dim", `${editorKey("tui.select.confirm")} 配置 · ${editorKey("tui.select.cancel")} 返回`),
 				0,
 				0,
 			),
@@ -359,27 +354,27 @@ export class PluginListComponent extends OverlayPanel {
 			if (entry.kind === "npm") {
 				const p = entry.plugin;
 				const features = p.manifest.features ? Object.keys(p.manifest.features).length : 0;
-				const parts = [p.enabled ? "Enabled" : "Disabled", "npm", `v${p.version}`];
-				if (features > 0) parts.push(`${p.enabledFeatures?.length ?? features}/${features} features`);
+				const parts = [p.enabled ? "开启" : "关闭", "npm", `v${p.version}`];
+				if (features > 0) parts.push(`${p.enabledFeatures?.length ?? features}/${features} 项功能`);
 				return { id, label: p.name, hint: parts.join(" · "), control: PLUGIN_CONFIGURE };
 			}
 			const s = entry.plugin;
-			const parts = [marketplaceEnabled(s) ? "Enabled" : "Disabled", "marketplace", s.scope];
+			const parts = [marketplaceEnabled(s) ? "开启" : "关闭", "插件市场", s.scope];
 			parts.push(`v${s.entries[0]?.version ?? "?"}`);
 			return {
 				id,
 				label: s.id,
 				hint: parts.join(" · "),
-				warning: s.shadowedBy ? `Shadowed by the ${s.shadowedBy} install` : undefined,
+				warning: s.shadowedBy ? `已被 ${s.shadowedBy} 安装项覆盖` : undefined,
 				control: PLUGIN_CONFIGURE,
 			};
 		});
 		return {
 			lead:
 				rows.length > 0
-					? "Plugins installed for you and this project. Configure one to turn it or its features on and off."
-					: "No plugins installed. Install one with omp plugin install <package>, or <name>@<marketplace>.",
-			sections: rows.length > 0 ? [{ id: "installed", title: "Installed", rows }] : [],
+					? "为当前用户和此项目安装的插件。选择插件以配置其开关和功能。"
+					: "尚未安装插件。使用 omp plugin install <package> 或 <name>@<marketplace> 安装。",
+			sections: rows.length > 0 ? [{ id: "installed", title: "已安装", rows }] : [],
 			focus: this.#selectList.getSelectedItem()?.value ?? null,
 			editing: null,
 		};
@@ -400,28 +395,28 @@ export class PluginListComponent extends OverlayPanel {
 		const body =
 			this.entries.length === 0
 				? [
-						text([span("No plugins installed", "muted")]),
+						text([span("尚未安装插件", "muted")]),
 						node("kv", {
 							items: [
-								{ k: "Install npm plugins", v: [span("omp plugin install <package>", "code")] },
+								{ k: "安装 npm 插件", v: [span("omp plugin install <package>", "code")] },
 								{
-									k: "Install marketplace plugins",
+									k: "安装市场插件",
 									v: [span("omp plugin install <name>@<marketplace>", "code")],
 								},
 							],
 						}),
-						hintsRow([actionHint("tui.select.cancel", "go back")]),
+						hintsRow([actionHint("tui.select.cancel", "返回")]),
 					]
 				: [
 						this.#selectList,
-						hintsRow([actionHint("tui.select.confirm", "configure"), actionHint("tui.select.cancel", "go back")]),
+						hintsRow([actionHint("tui.select.confirm", "配置"), actionHint("tui.select.cancel", "返回")]),
 					];
 		this.#native = overlayCard(PLUGIN_SETTINGS_ROLE, this.title, body);
 		return this.#native;
 	}
 
 	#renderItem(entry: PluginListEntry): SelectItem {
-		const kindBadge = theme.fg("dim", entry.kind === "npm" ? "[npm]" : "[marketplace]");
+		const kindBadge = theme.fg("dim", entry.kind === "npm" ? "[npm]" : "[插件市场]");
 
 		if (entry.kind === "npm") {
 			const p = entry.plugin;
@@ -433,7 +428,7 @@ export class PluginListComponent extends OverlayPanel {
 
 			let details = `${kindBadge} ${theme.sep.dot} v${p.version}`;
 			if (featureCount > 0) {
-				details += ` ${theme.sep.dot} ${enabledCount}/${featureCount} features`;
+				details += ` ${theme.sep.dot} ${enabledCount}/${featureCount} 项功能`;
 			}
 
 			return {
@@ -452,7 +447,7 @@ export class PluginListComponent extends OverlayPanel {
 
 		let details = `${kindBadge} ${scopeTag} ${theme.sep.dot} v${version}`;
 		if (summary.shadowedBy) {
-			details += ` ${theme.sep.dot} shadowed by ${summary.shadowedBy}`;
+			details += ` ${theme.sep.dot} 已被 ${summary.shadowedBy} 覆盖`;
 		}
 
 		return {
@@ -512,8 +507,8 @@ export class PluginDetailComponent extends OverlayPanel {
 		// Enable/disable toggle
 		items.push({
 			id: "__enabled__",
-			label: "Enabled",
-			description: "Enable or disable this plugin",
+			label: "开启",
+			description: "开启或关闭此插件",
 			currentValue: plugin.enabled ? "true" : "false",
 			values: ["true", "false"],
 		});
@@ -533,7 +528,7 @@ export class PluginDetailComponent extends OverlayPanel {
 				items.push({
 					id: `feature:${featName}`,
 					label: `  ${featName}`,
-					description: feat.description || `Enable ${featName} feature`,
+					description: feat.description || `开启 ${featName} 功能`,
 					currentValue: isEnabled ? "true" : "false",
 					values: ["true", "false"],
 				});
@@ -555,7 +550,7 @@ export class PluginDetailComponent extends OverlayPanel {
 			items,
 			maxVisible: Math.min(items.length, 10),
 			settingsTheme: getSettingsListTheme(),
-			hint: `${editorKey("tui.select.confirm")} to edit · ${editorKey("tui.select.cancel")} to go back`,
+			hint: `${editorKey("tui.select.confirm")} 编辑 · ${editorKey("tui.select.cancel")} 返回`,
 			onChange: (id, newValue) => {
 				if (id === "__enabled__") {
 					this.callbacks.onEnabledChange(newValue === "true");
@@ -594,7 +589,7 @@ export class PluginDetailComponent extends OverlayPanel {
 	prefsPage(): PluginPrefsPage {
 		return prefsDetailPage(
 			this.plugin.name,
-			this.plugin.manifest.description || "Turn the plugin and its features on and off, and change its settings.",
+			this.plugin.manifest.description || "开启或关闭插件及其功能，并修改设置。",
 			this.#settingsList?.settingsList,
 		);
 	}
@@ -667,31 +662,31 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 		const entry = plugin.entries[0];
 		this.title = plugin.id;
 		const subtitleParts = [`[${plugin.scope}]`];
-		if (plugin.shadowedBy) subtitleParts.push(`${theme.status.shadowed} shadowed by ${plugin.shadowedBy}`);
+		if (plugin.shadowedBy) subtitleParts.push(`${theme.status.shadowed} 已被 ${plugin.shadowedBy} 覆盖`);
 
 		const items: SettingItem[] = [
 			{
 				id: "__enabled__",
-				label: "Enabled",
-				description: "Enable or disable this marketplace plugin",
+				label: "开启",
+				description: "开启或关闭此市场插件",
 				currentValue: marketplaceEnabled(plugin) ? "true" : "false",
 				values: ["true", "false"],
 			},
 			...configItems,
 		];
 		const summary: Component[] = [
-			new Text(theme.fg("dim", `version       ${entry?.version ?? "(unknown)"}`), 0, 0),
-			new Text(theme.fg("dim", `scope         ${plugin.scope}`), 0, 0),
+			new Text(theme.fg("dim", `版本          ${entry?.version ?? "（未知）"}`), 0, 0),
+			new Text(theme.fg("dim", `范围          ${plugin.scope}`), 0, 0),
 			new Text(
-				theme.fg("dim", `install path  ${entry?.installPath ? shortenPath(entry.installPath) : "(unknown)"}`),
+				theme.fg("dim", `安装路径      ${entry?.installPath ? shortenPath(entry.installPath) : "（未知）"}`),
 				0,
 				0,
 			),
-			new Text(theme.fg("dim", `installed at  ${entry?.installedAt ?? "(unknown)"}`), 0, 0),
-			new Text(theme.fg("dim", `last updated  ${entry?.lastUpdated ?? "(unknown)"}`), 0, 0),
+			new Text(theme.fg("dim", `安装时间      ${entry?.installedAt ?? "（未知）"}`), 0, 0),
+			new Text(theme.fg("dim", `上次更新      ${entry?.lastUpdated ?? "（未知）"}`), 0, 0),
 		];
 		if (entry?.gitCommitSha) {
-			summary.push(new Text(theme.fg("dim", `git sha       ${entry.gitCommitSha}`), 0, 0));
+			summary.push(new Text(theme.fg("dim", `Git SHA       ${entry.gitCommitSha}`), 0, 0));
 		}
 		summary.push(new Spacer(1));
 		this.#settingsList = new SettingsFormField({
@@ -701,7 +696,7 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 			maxVisible: Math.min(items.length, 10),
 			settingsTheme: getSettingsListTheme(),
 			summary,
-			hint: `${editorKey("tui.select.confirm")} to edit · ${editorKey("tui.select.cancel")} to go back`,
+			hint: `${editorKey("tui.select.confirm")} 编辑 · ${editorKey("tui.select.cancel")} 返回`,
 			onChange: (id, newValue) => {
 				if (id === "__enabled__") {
 					const next = newValue === "true";
@@ -730,9 +725,9 @@ export class MarketplacePluginDetailComponent extends OverlayPanel {
 	/** This plugin's settings as a native page section, with its install facts as the lead. */
 	prefsPage(): PluginPrefsPage {
 		const entry = this.plugin.entries[0];
-		const facts = [`${this.plugin.scope} install`, `v${entry?.version ?? "?"}`];
+		const facts = [`${this.plugin.scope} 安装项`, `v${entry?.version ?? "?"}`];
 		if (entry?.installPath) facts.push(shortenPath(entry.installPath));
-		if (this.plugin.shadowedBy) facts.push(`shadowed by the ${this.plugin.shadowedBy} install`);
+		if (this.plugin.shadowedBy) facts.push(`已被 ${this.plugin.shadowedBy} 安装项覆盖`);
 		return prefsDetailPage(this.plugin.id, facts.join(" · "), this.#settingsList?.settingsList);
 	}
 
@@ -803,7 +798,7 @@ function createConfigEnumPanel(
 		currentValue,
 		maxVisible: 8,
 		selectTheme: getSelectListTheme(),
-		hint: `${editorKey("tui.select.confirm")} to select · ${editorKey("tui.select.cancel")} to cancel`,
+		hint: `${editorKey("tui.select.confirm")} 选择 · ${editorKey("tui.select.cancel")} 取消`,
 		onSubmit: onSelect,
 		onCancel,
 		requestRender,
@@ -820,7 +815,7 @@ function createConfigInputPanel(
 	onCancel: () => void,
 	requestRender?: () => void,
 ): Component {
-	let typeHint = `Type: ${schema.type}`;
+	let typeHint = `类型：${schema.type}`;
 	if (schema.type === "number" && (schema.min !== undefined || schema.max !== undefined)) {
 		typeHint += ` (${schema.min ?? ""}..${schema.max ?? ""})`;
 	}
@@ -832,7 +827,7 @@ function createConfigInputPanel(
 		secret: schema.secret,
 		initialValue: !schema.secret ? currentValue : undefined,
 		empty: "cancel",
-		hint: `${editorKey("tui.input.submit")} to save · ${editorKey("tui.select.cancel")} to cancel`,
+		hint: `${editorKey("tui.input.submit")} 保存 · ${editorKey("tui.select.cancel")} 取消`,
 		onSubmit,
 		onCancel,
 		requestRender,
@@ -940,7 +935,7 @@ export class PluginSettingsComponent extends Container {
 		) {
 			return view.prefsPage();
 		}
-		return { lead: "Loading installed plugins…", sections: [], focus: null, editing: null };
+		return { lead: "正在加载已安装插件…", sections: [], focus: null, editing: null };
 	}
 
 	/** Routes a native page event to the current view. */

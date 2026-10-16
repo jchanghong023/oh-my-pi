@@ -11,6 +11,7 @@
 
 ### Changed
 
+- Display the main TUI settings and common interaction dialogs in Simplified Chinese while preserving familiar technical English, command syntax and configuration values.
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
 - Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.

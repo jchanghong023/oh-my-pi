@@ -19,9 +19,8 @@ export const cfgSkillsRegistryUrl = register({
 	ui: {
 		tab: "interaction",
 		group: "Skills",
-		label: "Skill Registry",
-		description:
-			"Skillshare registry used by `omp skill` to install, search, and publish skills (https://host[:port])",
+		label: "Skill 注册中心",
+		description: "`omp skill` 安装、搜索和发布 Skills 时使用的 Skillshare 注册中心（https://host[:port]）",
 	},
 });
 
@@ -34,9 +33,9 @@ export const cfgSkillsEnableSkillCommands = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "Commands & Skills",
-		label: "Skill Commands",
-		description: "Register skills as /skill:name commands",
+		group: "命令与 Skills",
+		label: "Skill 命令",
+		description: "将 Skills 注册为 /skill:name 命令",
 	},
 });
 
@@ -106,9 +105,9 @@ export const cfgCommandsEnableClaudeUser = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "Commands & Skills",
-		label: "Claude User Commands",
-		description: "Load commands from ~/.claude/commands/",
+		group: "命令与 Skills",
+		label: "Claude 用户命令",
+		description: "从 ~/.claude/commands/ 加载命令",
 	},
 });
 
@@ -118,9 +117,9 @@ export const cfgCommandsEnableClaudeProject = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "Commands & Skills",
-		label: "Claude Project Commands",
-		description: "Load commands from .claude/commands/",
+		group: "命令与 Skills",
+		label: "Claude 项目命令",
+		description: "从 .claude/commands/ 加载命令",
 	},
 });
 
@@ -130,9 +129,9 @@ export const cfgCommandsEnableOpencodeUser = register({
 	default: false,
 	ui: {
 		tab: "tasks",
-		group: "Commands & Skills",
-		label: "OpenCode User Commands",
-		description: "Load commands from ~/.config/opencode/commands/",
+		group: "命令与 Skills",
+		label: "OpenCode 用户命令",
+		description: "从 ~/.config/opencode/commands/ 加载命令",
 	},
 });
 
@@ -142,9 +141,9 @@ export const cfgCommandsEnableOpencodeProject = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "Commands & Skills",
-		label: "OpenCode Project Commands",
-		description: "Load commands from .opencode/commands/",
+		group: "命令与 Skills",
+		label: "OpenCode 项目命令",
+		description: "从 .opencode/commands/ 加载命令",
 	},
 });
 
@@ -154,9 +153,9 @@ export const cfgExtensionHandlersToolCallTimeoutMs = register({
 	default: 30_000,
 	ui: {
 		tab: "tools",
-		group: "Extensions",
-		label: "Tool Call Handler Timeout (ms)",
+		group: "扩展",
+		label: "工具调用处理器超时（毫秒）",
 		description:
-			"Positive finite active-work timeout for extension tool_call handlers; invalid values use 30000ms, and time awaiting OMP-owned dialogs does not count",
+			"扩展 tool_call 处理器的有效工作超时，须为正有限值；无效值使用 30000 毫秒，等待 OMP 对话框的时间不计入",
 	},
 });

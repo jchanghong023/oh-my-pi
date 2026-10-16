@@ -14,10 +14,10 @@ export function themePickerOptions(title: string, current: string): SelectPicker
 	return {
 		title,
 		icon: "ink",
-		noun: "themes",
+		noun: "主题",
 		searchable: true,
 		current: [current],
-		confirm: "Apply",
+		confirm: "应用",
 		decorate: item => ({ mark: { text: item.value.slice(0, 2), seed: item.value } }),
 	};
 }
@@ -38,14 +38,14 @@ export class ThemeSelectorComponent extends OverlayPanel {
 		onCancel: () => void,
 		onPreview: (themeName: string) => void,
 	) {
-		super("Theme", "omp.overlay.theme");
+		super("主题", "omp.overlay.theme");
 		this.#onPreview = onPreview;
 
 		// Create select items from provided themes
 		const themeItems: SelectItem[] = themes.map(name => ({
 			value: name,
 			label: name,
-			description: name === currentTheme ? "(current)" : undefined,
+			description: name === currentTheme ? "（当前）" : undefined,
 		}));
 
 		// Create selector
@@ -71,7 +71,7 @@ export class ThemeSelectorComponent extends OverlayPanel {
 
 		this.addChild(this.#selectList);
 		// The picker checks the current theme, so its "(current)" text stays in the terminal list.
-		const options = themePickerOptions("Theme", currentTheme);
+		const options = themePickerOptions("主题", currentTheme);
 		this.#sheet = new SelectListSheet(this.#selectList, {
 			...options,
 			decorate: item => ({ ...options.decorate?.(item), detail: "" }),

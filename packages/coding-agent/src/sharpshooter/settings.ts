@@ -11,8 +11,8 @@ export const cfgSharpshooterModel = register({
 	ui: {
 		tab: "memory",
 		group: "Sharpshooter",
-		label: "Sharpshooter Model",
-		description: "Model selector for extraction/consolidation, empty = smol role",
+		label: "Sharpshooter 模型",
+		description: "用于提取和整合的模型选择器，留空 = smol 角色",
 	},
 });
 

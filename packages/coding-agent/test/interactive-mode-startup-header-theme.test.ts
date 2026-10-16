@@ -107,15 +107,17 @@ describe("InteractiveMode startup header after the terminal reports a light back
 	}
 
 	it("recolors the What's New heading", async () => {
+		const headers = vi.spyOn(mode.composer, "setHeaderExtras");
 		await mode.init();
 		const darkAccent = fgPrefix("accent");
-		expect(renderedLine("What's New")).toContain(darkAccent);
+		const headingText = Bun.stripANSI(headers.mock.calls[0]![1]![1]!.render(120).join("\n")).trim();
+		expect(renderedLine(headingText)).toContain(darkAccent);
 
 		await switchTerminalToLight();
 		const lightAccent = fgPrefix("accent");
 		expect(lightAccent).not.toBe(darkAccent);
 
-		const heading = renderedLine("What's New");
+		const heading = renderedLine(headingText);
 		expect(heading).toContain(lightAccent);
 		expect(heading).not.toContain(darkAccent);
 	});

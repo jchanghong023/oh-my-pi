@@ -77,9 +77,59 @@ export interface PrefsSectionRef {
 	page?: string;
 }
 
+/** Native section IDs stay stable when the built-in section titles are localized. */
+const PREFS_SECTION_IDS: Readonly<Record<string, string>> = {
+	主题: "theme",
+	输入区: "composer",
+	状态栏: "status-line",
+	显示: "display",
+	图片: "images",
+	思考: "thinking",
+	采样: "sampling",
+	重试与回退: "retry-fallback",
+	顾问: "advisor",
+	视觉: "vision",
+	输入: "input",
+	授权确认: "approvals",
+	通知: "notifications",
+	语音: "speech",
+	协作: "collab",
+	直播: "stream",
+	魔法关键词: "magic-keywords",
+	启动与更新: "startup-updates",
+	电源: "power",
+	常规: "general",
+	上下文压缩: "compaction",
+	"规则 (TTSR)": "rules-ttsr",
+	实验功能: "experimental",
+	自动学习: "auto-learn",
+	编辑: "editing",
+	读取: "reading",
+	读取摘要: "read-summaries",
+	"Eval 与运行时": "eval-runtimes",
+	可用工具: "available-tools",
+	待办: "todos",
+	"Grep 与浏览器": "grep-browser",
+	计算机: "computer",
+	输出限制: "output-limits",
+	执行: "execution",
+	"发现与 MCP": "discovery-mcp",
+	扩展: "extensions",
+	开发者: "developer",
+	模式: "modes",
+	隔离: "isolation",
+	"命令与 Skills": "commands-skills",
+	服务: "services",
+	微型模型: "tiny-model",
+	协议: "protocol",
+	超时: "timeouts",
+	隐私: "privacy",
+};
+
 /** The section id for a section title (`"Status Line"` → `"status-line"`). */
 export function prefsSectionId(title: string): string {
-	return slugify(title);
+	const id = Object.hasOwn(PREFS_SECTION_IDS, title) ? PREFS_SECTION_IDS[title] : undefined;
+	return id ?? slugify(title);
 }
 
 /** A setting as a native settings row, given its typed control; `undefined` for headings. */
@@ -571,7 +621,7 @@ export class SettingsList implements Component {
 
 	#renderSearchStatus(width: number): string {
 		const query = sanitizeSingleLine(this.#filterQuery);
-		const statusText = query ? `  Search: ${query}` : "  Type to search";
+		const statusText = query ? `  搜索：${query}` : "  输入以搜索";
 		return this.#theme.hint(truncateToWidth(statusText, width, Ellipsis.Omit));
 	}
 
@@ -682,8 +732,7 @@ export class SettingsList implements Component {
 		const props: TspProps<"list"> = {
 			selected: this.getSelectedItem()?.id ?? null,
 			filter: this.#filterQuery.trim() || undefined,
-			empty:
-				this.#items.length === 0 ? (this.#options.emptyText ?? "No settings available") : "No matching settings",
+			empty: this.#items.length === 0 ? (this.#options.emptyText ?? "暂无可用设置") : "没有匹配的设置",
 			max:
 				typeof cachedMax === "object" && cachedMax.lines === this.#maxVisible
 					? cachedMax
@@ -737,12 +786,10 @@ export class SettingsList implements Component {
 
 	#hintText(): string {
 		const jumpHint =
-			this.#sections().length >= 2
-				? `${editorKeys("tui.select.pageUp", "tui.select.pageDown")} to jump sections · `
-				: "";
+			this.#sections().length >= 2 ? `${editorKeys("tui.select.pageUp", "tui.select.pageDown")} 跳转分组 · ` : "";
 		return (
 			this.#options.hint ??
-			`${editorKey("tui.select.confirm")}/${formatKeyHint("space")} to change · ${jumpHint}Type to search · ${editorKey("tui.select.cancel")} to cancel`
+			`${editorKey("tui.select.confirm")}/${formatKeyHint("space")} 更改 · ${jumpHint}输入以搜索 · ${editorKey("tui.select.cancel")} 取消`
 		);
 	}
 
@@ -801,7 +848,7 @@ export class SettingsList implements Component {
 		const lines: string[] = [];
 
 		if (this.#items.length === 0) {
-			lines.push(this.#theme.hint(`  ${this.#options.emptyText ?? "No settings available"}`));
+			lines.push(this.#theme.hint(`  ${this.#options.emptyText ?? "暂无可用设置"}`));
 			return lines;
 		}
 
@@ -809,11 +856,11 @@ export class SettingsList implements Component {
 			if (this.#shouldRenderSearchStatus()) {
 				lines.push(this.#renderSearchStatus(width));
 			}
-			lines.push(this.#theme.hint("  No matching settings"));
+			lines.push(this.#theme.hint("  没有匹配的设置"));
 			lines.push("");
 			const editKey = editorKey("tui.editor.deleteCharBackward");
 			const cancelKey = editorKey("tui.select.cancel");
-			lines.push(truncateToWidth(this.#theme.hint(`  ${editKey} to edit search · ${cancelKey} to cancel`), width));
+			lines.push(truncateToWidth(this.#theme.hint(`  ${editKey} 编辑搜索 · ${cancelKey} 取消`), width));
 			return lines;
 		}
 
@@ -918,7 +965,7 @@ export class SettingsList implements Component {
 	 * both panes, falling back to the flat single-column layout.
 	 */
 	#renderSplitList(width: number, sections: SettingSection[]): string[] | null {
-		const sectionNames = sections.map(section => section.name || "Other");
+		const sectionNames = sections.map(section => section.name || "其他");
 		let nameWidth = 0;
 		for (const name of sectionNames) nameWidth = Math.max(nameWidth, visibleWidth(name));
 		const sidebarWidth = this.#options.sidebarWidth ?? Math.min(22, nameWidth) + 4; // 2-space indent + 2-space gap

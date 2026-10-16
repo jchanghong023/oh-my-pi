@@ -66,15 +66,15 @@ import { boundKeys, interruptKey } from "../chrome/keybinding-hints";
 function formatSessionStatus(status: SessionSelectorStatus | undefined): string | undefined {
 	switch (status) {
 		case "complete":
-			return theme.fg("success", `${theme.status.success} done`);
+			return theme.fg("success", `${theme.status.success} 已完成`);
 		case "interrupted":
-			return theme.fg("warning", `${theme.status.warning} interrupted`);
+			return theme.fg("warning", `${theme.status.warning} 已中断`);
 		case "aborted":
-			return theme.fg("muted", `${theme.status.aborted} aborted`);
+			return theme.fg("muted", `${theme.status.aborted} 已终止`);
 		case "error":
-			return theme.fg("error", `${theme.status.error} error`);
+			return theme.fg("error", `${theme.status.error} 错误`);
 		case "pending":
-			return theme.fg("accent", `${theme.status.pending} pending`);
+			return theme.fg("accent", `${theme.status.pending} 待处理`);
 		default:
 			return undefined;
 	}
@@ -84,15 +84,15 @@ function formatSessionStatus(status: SessionSelectorStatus | undefined): string 
 function sessionStatusSpan(status: SessionSelectorStatus | undefined): TspSpan | undefined {
 	switch (status) {
 		case "complete":
-			return span("done", "success");
+			return span("已完成", "success");
 		case "interrupted":
-			return span("interrupted", "warning");
+			return span("已中断", "warning");
 		case "aborted":
-			return span("aborted", "muted");
+			return span("已终止", "muted");
 		case "error":
-			return span("error", "error");
+			return span("错误", "error");
 		case "pending":
-			return span("pending", "accent");
+			return span("待处理", "accent");
 		default:
 			return undefined;
 	}
@@ -126,15 +126,15 @@ const PREVIEW_EXCERPT_CHARS = 1200;
 /** The preview follows the selection once it rests this long (holding ↓ doesn't flood the wire). */
 const PREVIEW_SETTLE_MS = 60;
 const DAY_MS = 86_400_000;
-const PINNED_GROUP = { id: "pinned", label: "Pinned" };
+const PINNED_GROUP = { id: "pinned", label: "已置顶" };
 
 /** Day group of a session's last modification, relative to local midnight today. */
 function sessionDayGroup(modified: Date, startOfToday: number): { id: string; label: string } {
 	const at = modified.getTime();
-	if (at >= startOfToday) return { id: "today", label: "Today" };
-	if (at >= startOfToday - DAY_MS) return { id: "yesterday", label: "Yesterday" };
-	if (at >= startOfToday - 6 * DAY_MS) return { id: "week", label: "This week" };
-	return { id: "earlier", label: "Earlier" };
+	if (at >= startOfToday) return { id: "today", label: "今天" };
+	if (at >= startOfToday - DAY_MS) return { id: "yesterday", label: "昨天" };
+	if (at >= startOfToday - 6 * DAY_MS) return { id: "week", label: "本周" };
+	return { id: "earlier", label: "更早" };
 }
 
 /** A cwd as dim-prefix / strong-tail path spans. */
@@ -168,14 +168,14 @@ function sessionPreview(session: SessionSelectorEntry, forkedFrom: string | unde
 	return compact([
 		node("text", { text: sessionLabel(session), role: "omp.picker.title" }),
 		kv([
-			["Folder", session.cwd ? cwdSpans(session.cwd) : undefined],
-			["Created", created && pickerDate(created)],
-			["Modified", pickerDate(session.modified)],
-			["Size", formatBytes(session.size)],
-			["Status", status && [status]],
-			["Forked from", forkedFrom],
+			["文件夹", session.cwd ? cwdSpans(session.cwd) : undefined],
+			["创建时间", created && pickerDate(created)],
+			["修改时间", pickerDate(session.modified)],
+			["大小", formatBytes(session.size)],
+			["状态", status && [status]],
+			["分叉来源", forkedFrom],
 		]),
-		conversation.length > 0 && node("section", { head: "Conversation" }, conversation),
+		conversation.length > 0 && node("section", { head: "对话" }, conversation),
 	]);
 }
 
@@ -190,11 +190,11 @@ function formatSessionDate(date: Date): string {
 	const diffHours = Math.floor(diffMs / 3600000);
 	const diffDays = Math.floor(diffMs / 86400000);
 
-	if (diffMins < 1) return "just now";
-	if (diffMins < 60) return `${diffMins} minute${diffMins !== 1 ? "s" : ""} ago`;
-	if (diffHours < 24) return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
-	if (diffDays === 1) return "1 day ago";
-	if (diffDays < 7) return `${diffDays} days ago`;
+	if (diffMins < 1) return "刚刚";
+	if (diffMins < 60) return `${diffMins} 分钟前`;
+	if (diffHours < 24) return `${diffHours} 小时前`;
+	if (diffDays === 1) return "1 天前";
+	if (diffDays < 7) return `${diffDays} 天前`;
 
 	const cached = localeDateCache.get(date);
 	if (cached?.time === time) return cached.text;
@@ -259,8 +259,8 @@ interface SessionPickerMessage {
 }
 
 const SCOPE_TABS: readonly { id: "folder" | "all"; label: string }[] = [
-	{ id: "folder", label: "Current folder" },
-	{ id: "all", label: "All projects" },
+	{ id: "folder", label: "当前文件夹" },
+	{ id: "all", label: "所有项目" },
 ];
 
 /** Returns the IDs of sessions whose recorded prompts match a query, best first. */
@@ -979,9 +979,9 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const title = session.title ? plainText(session.title).trim() : "";
 		const badges: { text: string; tone?: TspTone; title?: string }[] = [];
 		if (session.parentSessionPath) {
-			badges.push({ text: "fork", title: `Forked from “${this.parentLabel(session.parentSessionPath)}”` });
+			badges.push({ text: "分叉", title: `分叉自“${this.parentLabel(session.parentSessionPath)}”` });
 		}
-		if (session.path === currentPath) badges.push({ text: "current", tone: "accent" });
+		if (session.path === currentPath) badges.push({ text: "当前", tone: "accent" });
 		const when = pickerDate(session.modified);
 		const detail = this.#showCwd ? (session.cwd ? cwdSpans(session.cwd) : undefined) : title ? message : undefined;
 		const dot = sessionStatusTone(session.status);
@@ -1026,7 +1026,7 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			if (!base) continue;
 			add.push(
 				now.has(key)
-					? { ...base, badges: [...(base.badges ?? []), { text: "history", title: "Matched in prompt history" }] }
+					? { ...base, badges: [...(base.badges ?? []), { text: "历史", title: "在 Prompt 历史中匹配" }] }
 					: base,
 			);
 		}
@@ -1064,8 +1064,8 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 		const memo = this.#listNative;
 		if (memo?.items === items.items && memo.selected === selected && memo.query === query) return memo.node;
 		const empty: TspText = this.#showCwd
-			? [span("No sessions found", "muted")]
-			: [span("No sessions in current folder. Press ", "muted"), span("tab", "key"), span(" to view all.", "muted")];
+			? [span("未找到会话", "muted")]
+			: [span("当前文件夹中没有会话。按 ", "muted"), span("tab", "key"), span(" 查看全部。", "muted")];
 		const list = node(
 			"list",
 			{ selected: selected ?? null, filter: query.trim() || undefined, empty, virtual: true },
@@ -1097,10 +1097,10 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			detail.push(part);
 		};
 		if (session.title && message) push(span(message, "dim"));
-		if (current) push(span("current", "accent"));
+		if (current) push(span("当前", "accent"));
 		const status = sessionStatusSpan(session.status);
 		if (status) push(status);
-		if (session.parentSessionPath) push(span("fork", "dim"));
+		if (session.parentSessionPath) push(span("分叉", "dim"));
 		if (this.#showCwd && session.cwd) push(span(shortenPath(session.cwd), "path"));
 		const item = node(
 			"item",
@@ -1131,14 +1131,11 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 
 		if (this.#menu.visibleItems.length === 0) {
 			if (this.#showCwd) {
-				lines.push(truncateToWidth(theme.fg("muted", "No sessions found"), width));
+				lines.push(truncateToWidth(theme.fg("muted", "未找到会话"), width));
 			} else {
 				// "Current folder" scope - hint to try "all"
 				lines.push(
-					truncateToWidth(
-						theme.fg("muted", `No sessions in current folder. Press ${formatKeyHint("tab")} to view all.`),
-						width,
-					),
+					truncateToWidth(theme.fg("muted", `当前文件夹中没有会话。按 ${formatKeyHint("tab")} 查看全部。`), width),
 				);
 			}
 			return lines;
@@ -1209,14 +1206,14 @@ class SessionList<T extends SessionSelectorEntry> implements Component {
 			const modified = formatSessionDate(session.modified);
 			let metadata = `  ${dim(modified)} ${dot} ${dim(formatBytes(session.size))}`;
 			if (currentPath !== undefined && session.path === currentPath) {
-				metadata += ` ${dot} ${theme.fg("accent", "current")}`;
+				metadata += ` ${dot} ${theme.fg("accent", "当前")}`;
 			}
 			const status = formatSessionStatus(session.status);
 			if (status) {
 				metadata += ` ${dot} ${status}`;
 			}
 			if (session.parentSessionPath) {
-				metadata += ` ${dot} ${dim(`${theme.icon.branch} fork`)}`;
+				metadata += ` ${dot} ${dim(`${theme.icon.branch} 分叉`)}`;
 			}
 			if (this.#showCwd && session.cwd) {
 				metadata += ` ${dot} ${dim(shortenPath(session.cwd))}`;
@@ -1449,7 +1446,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		onExit: () => void,
 		options: SessionSelectorOptions<T> = {},
 	) {
-		super(options.title ?? "Resume Session");
+		super(options.title ?? "恢复会话");
 
 		this.#messageContainer = new Container();
 		this.#onDelete = options.onDelete;
@@ -1461,7 +1458,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		this.#globalSessions = options.allSessions ?? null;
 		this.#getTerminalRows = options.getTerminalRows ?? (() => 24);
 		this.#fillHeight = options.fillHeight ?? false;
-		this.#title = options.title ?? "Resume Session";
+		this.#title = options.title ?? "恢复会话";
 		this.#pickerTitle = options.title;
 		this.#standalone = options.standalone ?? false;
 		this.#scopeLabel = options.scopeLabel;
@@ -1511,7 +1508,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	#headerLabel(): string {
 		if (this.#scopeLabel === false) return this.#title;
-		const scopeLabel = this.#scopeLabel ?? (this.#scope === "all" ? "all projects" : "current folder");
+		const scopeLabel = this.#scopeLabel ?? (this.#scope === "all" ? "所有项目" : "当前文件夹");
 		return `${this.#title} (${scopeLabel})`;
 	}
 
@@ -1528,8 +1525,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				if (!this.#loadAllSessions) return;
 				this.#toggling = true;
 				this.#messageContainer.clear();
-				this.#messageContainer.addChild(new Text(theme.fg("muted", "Loading all projects…"), 0, 0));
-				this.#message = { kind: "loading", text: "Loading all projects…" };
+				this.#messageContainer.addChild(new Text(theme.fg("muted", "正在加载所有项目…"), 0, 0));
+				this.#message = { kind: "loading", text: "正在加载所有项目…" };
 				this.#onRequestRender?.();
 				try {
 					global = await this.#loadAllSessions();
@@ -1584,9 +1581,9 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	#showError(message: string): void {
 		this.#messageContainer.clear();
-		this.#message = { kind: "error", text: `Error: ${plainText(message)}` };
+		this.#message = { kind: "error", text: `错误：${plainText(message)}` };
 		this.#pickerErrorOpen = true;
-		this.#messageContainer.addChild(new Text(theme.fg("error", `Error: ${replaceTabs(message)}`), 0, 0));
+		this.#messageContainer.addChild(new Text(theme.fg("error", `错误：${replaceTabs(message)}`), 0, 0));
 		this.#messageContainer.addChild(new Spacer(1));
 	}
 
@@ -1603,7 +1600,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			this.#onRequestRender?.();
 		};
 		const answer = async (option: string) => {
-			if (option === "Yes" && this.#onDelete) {
+			if (option === "是" && this.#onDelete) {
 				this.#clearError();
 				try {
 					const deleted = await this.#onDelete(session);
@@ -1621,8 +1618,8 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			closeDialog();
 		};
 		this.#confirmationDialog = new HookSelectorComponent(
-			`Delete session?\n${displayName}`,
-			["Yes", "No"],
+			`删除会话？\n${displayName}`,
+			["是", "否"],
 			answer,
 			closeDialog,
 		);
@@ -1631,7 +1628,7 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			confirm: () => {
 				// The strip goes at once; the dialog stays until the delete settles, as after Enter on "Yes".
 				this.#deleteChoice = null;
-				void answer("Yes");
+				void answer("是");
 			},
 			cancel: closeDialog,
 		};
@@ -1671,12 +1668,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 
 	/** Blank · keybinding hint · bottom border. Rendered by {@link render}. */
 	#footerLines(width: number): string[] {
-		const scopeHint = this.#scope === "all" ? "current folder" : "all projects";
+		const scopeHint = this.#scope === "all" ? "当前文件夹" : "所有项目";
 		// Keys mirror SessionList#handleInput; cancel is `app.interrupt` (raw Escape when unbound).
 		const cancel = interruptKey();
 		const hint = theme.fg(
 			"muted",
-			`[${formatKeyHints(["delete", "backspace"])} delete · ${formatKeyHint("enter")} select · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} cancel]`,
+			`[${formatKeyHints(["delete", "backspace"])} 删除 · ${formatKeyHint("enter")} 选择 · ${formatKeyHint("tab")} ${scopeHint} · ${cancel} 取消]`,
 		);
 		return [row("", width), row(hint, width), row("", width), bottomBorder(width)];
 	}
@@ -1725,13 +1722,13 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 			children.push(this.#sessionList.searchInput, list);
 		}
 		const hints: (NativeHint | undefined)[] = [
-			{ keys: ["delete", "backspace"], label: "delete" },
-			{ keys: ["enter"], label: "select" },
+			{ keys: ["delete", "backspace"], label: "删除" },
+			{ keys: ["enter"], label: "选择" },
 		];
 		if (this.#sessionList.onToggleScope) {
-			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "current folder" : "all projects" });
+			hints.push({ keys: ["tab"], label: this.#scope === "all" ? "当前文件夹" : "所有项目" });
 		}
-		hints.push({ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "cancel" });
+		hints.push({ keys: [boundKeys("app.interrupt", ["escape"])[0] ?? "escape"], label: "取消" });
 		const result = overlayCard("omp.overlay.sessions", tabs ? this.#title : this.title, [
 			...children,
 			hintsRow(hints),
@@ -1774,27 +1771,25 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 		}
 		const loading = message?.kind === "loading";
 		const toggle = list.onToggleScope !== undefined;
-		const actions = [pickerAction("resume", "Resume", "enter", { primary: true })];
-		if (this.#onDelete) actions.push(pickerAction("delete", "Delete", "backspace"));
+		const actions = [pickerAction("resume", "恢复", "enter", { primary: true })];
+		if (this.#onDelete) actions.push(pickerAction("delete", "删除", "backspace"));
 		if (toggle) {
-			actions.push(pickerAction("scope", this.#scope === "all" ? "This folder" : "All projects", "tab"));
+			actions.push(pickerAction("scope", this.#scope === "all" ? "当前文件夹" : "所有项目", "tab"));
 		}
-		actions.push(
-			pickerAction("close", "Close", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }),
-		);
+		actions.push(pickerAction("close", "关闭", boundKeys("app.interrupt", ["escape"])[0] ?? "escape", { end: true }));
 		const folder = this.#scopeLabel === false ? undefined : (this.#scopeLabel ?? path.basename(getProjectDir()));
 		const title = this.#pickerTitle;
 		const placeholder =
 			loading || this.#scope === "all"
-				? "Search all sessions…"
+				? "搜索所有会话…"
 				: folder && !title
-					? `Search sessions in ${folder}…`
-					: "Search sessions…";
+					? `搜索 ${folder} 中的会话…`
+					: "搜索会话…";
 		const result = picker(
 			{
 				...(title ? { title, ...(folder ? { subtitle: folder } : {}) } : {}),
 				icon: "history",
-				noun: "sessions",
+				noun: "会话",
 				size: this.#standalone ? "screen" : "lg",
 				layout: "cards",
 				preview: "side",
@@ -1815,12 +1810,12 @@ export class SessionSelectorComponent<T extends SessionSelectorEntry = SessionSe
 				actions,
 				state: loading ? "loading" : errorOpen ? "error" : "ready",
 				...(loading || errorOpen ? { message: message!.text } : {}),
-				empty: this.#scope === "all" || !toggle ? "No sessions yet" : "No sessions in this folder yet",
+				empty: this.#scope === "all" || !toggle ? "暂无会话" : "此文件夹中暂无会话",
 				confirm: choice
 					? {
-							text: `Delete “${sessionLabel(choice.session)}”? This removes the session file.`,
+							text: `删除“${sessionLabel(choice.session)}”？这会移除会话文件。`,
 							act: "delete-confirm",
-							label: "Delete",
+							label: "删除",
 						}
 					: null,
 			},

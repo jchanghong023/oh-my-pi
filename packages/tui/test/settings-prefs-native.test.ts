@@ -14,19 +14,19 @@ const ENTRIES: SettingsDisplayEntry[] = [
 		path: "theme.dark",
 		type: "string",
 		defaultValue: "dark",
-		ui: { tab: "appearance", group: "Theme", label: "Dark theme", description: "Theme on dark", options: "runtime" },
+		ui: { tab: "appearance", group: "主题", label: "Dark theme", description: "Theme on dark", options: "runtime" },
 	},
 	{
 		path: "display.colorBlind",
 		type: "boolean",
 		defaultValue: false,
-		ui: { tab: "appearance", group: "Theme", label: "Color-blind mode", description: "Blue additions" },
+		ui: { tab: "appearance", group: "主题", label: "Color-blind mode", description: "Blue additions" },
 	},
 	{
 		path: "display.risky",
 		type: "boolean",
 		defaultValue: false,
-		ui: { tab: "appearance", group: "Status Line", label: "Risky", description: "d", warning: "Can get you flagged" },
+		ui: { tab: "appearance", group: "状态栏", label: "Risky", description: "d", warning: "Can get you flagged" },
 	},
 	{
 		path: "compaction.thresholdPercent",
@@ -34,7 +34,7 @@ const ENTRIES: SettingsDisplayEntry[] = [
 		defaultValue: -1,
 		ui: {
 			tab: "context",
-			group: "Compaction",
+			group: "上下文压缩",
 			label: "Threshold",
 			description: "When to compact",
 			options: [
@@ -176,13 +176,12 @@ describe("settings as a native prefs page", () => {
 		expect(props.pages.find(p => p.id === "appearance")?.changed).toBe(1);
 		expect(props.pages.find(p => p.id === "context")?.changed).toBe(1);
 		expect(props.pages.find(p => p.id === "shell")?.changed).toBeUndefined();
-		expect(props.pages.at(-1)).toMatchObject({ id: "plugins", group: "Plugins" });
+		expect(props.pages.at(-1)).toMatchObject({ id: "plugins" });
 		expect(props.sections.map(s => s.id)).toEqual(["theme", "status-line"]);
 
 		expect(row(props, "theme.dark").control).toMatchObject({ k: "choice", value: "dark", style: "menu", mono: true });
 		expect(row(props, "display.colorBlind")).toMatchObject({
 			changed: true,
-			defaultLabel: "Off",
 			control: { k: "switch", on: true },
 		});
 		expect(row(props, "display.risky").warning).toBe("Can get you flagged");

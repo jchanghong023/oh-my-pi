@@ -1635,7 +1635,7 @@ export class ModelBrowser implements Component {
 		const line1 = truncateToWidth(theme.fg("muted", `  ${facts.join(" · ")}`), width);
 
 		if (this.isOverContext(selected)) {
-			const warning = `  ${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
+			const warning = `  ${theme.status.disabled} 上下文 ${formatNumber(this.#currentContextTokens).toLowerCase()} 超过 ${formatNumber(model.contextWindow ?? 0).toLowerCase()} 上限 · 先用当前模型压缩上下文，再切换`;
 			return [line1, truncateToWidth(theme.fg("warning", warning), width)];
 		}
 
@@ -1676,8 +1676,7 @@ export class ModelBrowser implements Component {
 		this.#windowCount = Math.max(0, endIndex - startIndex);
 
 		if (total === 0) {
-			const message =
-				this.#emptyText?.() ?? (this.query.trim() ? "  No matching models" : "  No models available in this scope");
+			const message = this.#emptyText?.() ?? (this.query.trim() ? "  没有匹配的模型" : "  当前范围内没有可用模型");
 			lines.push(truncateToWidth(theme.fg("muted", message), width));
 			for (let i = 1; i < this.#maxVisible; i++) lines.push("");
 		} else {
@@ -1806,8 +1805,7 @@ export class ModelBrowser implements Component {
 		const empty =
 			items.length > 0
 				? ""
-				: plainText(this.#emptyText?.() ?? "").trim() ||
-					(filter ? "No matching models" : "No models available in this scope");
+				: plainText(this.#emptyText?.() ?? "").trim() || (filter ? "没有匹配的模型" : "当前范围内没有可用模型");
 		const prev = this.#nativeListNode;
 		if (
 			prev?.children === cached.children &&
@@ -1911,7 +1909,7 @@ export class ModelBrowser implements Component {
 			if (description) children.push(text([span(description, "dim")], { wrap: "word", lines: 2 }));
 
 			if (this.isOverContext(selected)) {
-				const warning = `${theme.status.disabled} context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds ${formatNumber(model.contextWindow ?? 0).toLowerCase()} limit · compacts with current model, then switches`;
+				const warning = `${theme.status.disabled} 上下文 ${formatNumber(this.#currentContextTokens).toLowerCase()} 超过 ${formatNumber(model.contextWindow ?? 0).toLowerCase()} 上限 · 先用当前模型压缩上下文，再切换`;
 				children.push(text([span(warning, "warning")], { wrap: "word" }));
 			} else {
 				const chips: TspSpan[] = [];
@@ -2026,7 +2024,7 @@ export class ModelBrowser implements Component {
 			badges.push({
 				text: `ctx>${formatNumber(model.contextWindow ?? 0).toLowerCase()}`,
 				tone: "warning",
-				title: `Context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds this model's limit; picking it compacts first`,
+				title: `上下文 ${formatNumber(this.#currentContextTokens).toLowerCase()} 超过此模型的上限；选择后将先压缩上下文`,
 			});
 		}
 		if (model.isNew) badges.push({ text: "new", tone: "accent" });
@@ -2188,7 +2186,7 @@ export class ModelBrowser implements Component {
 			? text(
 					[
 						span(
-							`Context ${formatNumber(this.#currentContextTokens).toLowerCase()} exceeds the ${formatNumber(ctx).toLowerCase()} limit · compacts with the current model, then switches`,
+							`上下文 ${formatNumber(this.#currentContextTokens).toLowerCase()} 超过 ${formatNumber(ctx).toLowerCase()} 上限 · 先用当前模型压缩上下文，再切换`,
 							"warning",
 						),
 					],
@@ -2230,7 +2228,7 @@ export class ModelBrowser implements Component {
 
 		const children: NativeChild[] = [
 			text(model.name, { role: "omp.picker.title" }),
-			text([span(selector, "mono")], { actions: { click: "copy" }, title: "Copy model id", truncate: "middle" }),
+			text([span(selector, "mono")], { actions: { click: "copy" }, title: "复制模型 ID", truncate: "middle" }),
 		];
 		const badges: NativeChild[] = [];
 		if (item.selector === current) badges.push(node("badge", { text: "current", tone: "success" }));

@@ -90,7 +90,7 @@ export function renderComposerShapePreview(
 
 	const gutter = style.defaultPromptGutter ?? "";
 	const contentWidth = Math.max(1, previewWidth - chromeWidth * 2 - visibleWidth(gutter));
-	const promptText = truncateToWidth("Ask anything, edit files, run tools", Math.max(1, contentWidth - 1));
+	const promptText = truncateToWidth("随时提问、编辑文件、运行工具", Math.max(1, contentWidth - 1));
 	// Mirror the live editor: filled shapes let `surfaceColor` paint their own
 	// foreground, while transparent shapes resolve `text` to a contrast-safe
 	// color so an empty token never falls back to the terminal default.
@@ -172,8 +172,8 @@ export class ComposerShapePreview implements Component {
 		if (option?.description) caption.push(span(` · ${option.description}`, "muted"));
 		const described = col(
 			[
-				text([span("Preview:", "muted")]),
-				node("editor", { placeholder: "Ask anything, edit files, run tools", readonly: true, maxLines: 1 }),
+				text([span("预览：", "muted")]),
+				node("editor", { placeholder: "随时提问、编辑文件、运行工具", readonly: true, maxLines: 1 }),
 				text(caption, { wrap: "word" }),
 			],
 			{ role: "omp.preview.composer-shape", gap: "xs" },

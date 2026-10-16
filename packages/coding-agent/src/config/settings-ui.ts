@@ -44,8 +44,8 @@ const CONDITIONS: Record<string, () => boolean> = {
 function envNote(setting: AnySetting): string {
 	if (!setting.envName || setting.envValue() === undefined) return "";
 	return setting.envFallback
-		? ` Unset, it falls back to $${setting.envName}.`
-		: ` $${setting.envName} overrides this setting while it is set.`;
+		? ` 未设置时回退到 $${setting.envName}。`
+		: ` $${setting.envName} 已设置，当前会覆盖此设置。`;
 }
 
 /**

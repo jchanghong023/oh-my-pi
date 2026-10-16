@@ -26,10 +26,10 @@ export class PlanSaveOverlay implements Component, Focusable {
 	constructor(suggestedPath: string, done: (result: PlanSaveOverlayResult | undefined) => void) {
 		this.#suggestedPath = suggestedPath;
 		this.#done = done;
-		this.#input.prompt = theme.fg("dim", "Path: ");
+		this.#input.prompt = theme.fg("dim", "路径: ");
 		this.#input.onSubmit = value => this.#done({ path: value.trim() || this.#suggestedPath });
 		this.#input.onEscape = () => this.#done(undefined);
-		this.#panel = new OverlayPanel("Save and quit");
+		this.#panel = new OverlayPanel("保存并退出");
 		this.#body = new PanelRows();
 		this.#body.setHeight(2);
 		this.#panel.addChild(this.#body);
@@ -65,13 +65,13 @@ export class PlanSaveOverlay implements Component, Focusable {
 	render(width: number): readonly string[] {
 		const innerWidth = Math.max(0, width - 4);
 		this.#input.focused = this.#focused;
-		const hint = `${editorKey("tui.input.submit")} save and quit · ${editorKey("tui.select.cancel")} cancel`;
+		const hint = `${editorKey("tui.input.submit")} 保存并退出 · ${editorKey("tui.select.cancel")} 取消`;
 		this.#body.setLines([this.#renderInput(innerWidth), theme.fg("dim", hint)]);
 		return this.#panel.render(width);
 	}
 
 	/** A small glass sheet titled "Save and quit". */
-	readonly nativeOverlay = { role: "omp.overlay.planSave", size: "sm", head: "Save and quit" } as const;
+	readonly nativeOverlay = { role: "omp.overlay.planSave", size: "sm", head: "保存并退出" } as const;
 
 	describe(): NativeNode {
 		this.#input.focused = this.#focused;
@@ -85,7 +85,7 @@ export class PlanSaveOverlay implements Component, Focusable {
 		if (showDefault) {
 			children.push(
 				keyed(
-					text([span("Empty saves to ", "dim"), span(this.#suggestedPath, "path")], { truncate: "middle" }),
+					text([span("留空则保存到 ", "dim"), span(this.#suggestedPath, "path")], { truncate: "middle" }),
 					"default",
 				),
 			);
@@ -93,8 +93,8 @@ export class PlanSaveOverlay implements Component, Focusable {
 		children.push(
 			actionBar([
 				null,
-				actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {}),
-				actionButton("Save and quit", "save", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
+				actionButton("取消", "cancel", cancelKey ? { keys: cancelKey } : {}),
+				actionButton("保存并退出", "save", { tone: "accent", ...(submitKey ? { keys: submitKey } : {}) }),
 			]),
 		);
 		this.#nativeSig = sig;

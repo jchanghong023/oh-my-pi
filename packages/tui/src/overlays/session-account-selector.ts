@@ -40,7 +40,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		onSelect: (account: SessionPinAccount) => void,
 		onCancel: () => void,
 	) {
-		super(`Select a ${providerName} account for this session`, "omp.overlay.session-account");
+		super(`为此会话选择 ${providerName} 账户`, "omp.overlay.session-account");
 		const accountsByValue = new Map<string, SessionPinAccount>();
 		const items: SelectItem[] = accounts.map(account => {
 			const value = String(account.credentialId);
@@ -48,7 +48,7 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 			return {
 				value,
 				label: account.label,
-				description: account.active ? "active for this session" : undefined,
+				description: account.active ? "此会话当前使用的账户" : undefined,
 			};
 		});
 
@@ -68,12 +68,12 @@ export class SessionAccountSelectorComponent extends OverlayPanel {
 		// Natively the active account carries the picker's current check, so the
 		// row's detail is what tells accounts apart instead of "active for this session".
 		this.#sheet = new SelectListSheet(this.#selectList, {
-			title: `${providerName} account`,
-			subtitle: "Pin the account this session sends its requests with",
+			title: `${providerName} 账户`,
+			subtitle: "固定此会话发送请求时使用的账户",
 			icon: "key-round",
-			noun: "accounts",
+			noun: "账户",
 			current: accounts.filter(account => account.active).map(account => String(account.credentialId)),
-			confirm: "Pin",
+			confirm: "固定",
 			decorate: item => {
 				const account = accountsByValue.get(item.value);
 				if (!account) return undefined;

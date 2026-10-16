@@ -13,7 +13,7 @@ export const cfgLspEnabled = register({
 		tab: "files",
 		group: "LSP",
 		label: "LSP",
-		description: "Enable the lsp tool for code intelligence (definitions, references, diagnostics, rename)",
+		description: "启用 lsp 工具以提供代码智能能力（定义、引用、诊断、重命名）",
 	},
 });
 
@@ -24,9 +24,8 @@ export const cfgLspLazy = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Lazy LSP Startup",
-		description:
-			"Start language servers on first use (lsp tool or editing a matching file type) instead of at session startup",
+		label: "延迟启动 LSP",
+		description: "首次使用时（调用 lsp 工具或编辑匹配类型的文件）启动语言服务器，而非在会话启动时启动",
 	},
 });
 
@@ -37,9 +36,9 @@ export const cfgLspShared = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Shared Language Servers",
+		label: "共享语言服务器",
 		description:
-			"Start language servers through the per-project daemon broker. Each connection gets its own server. While another omp instance in the project is running, a released server stays warm and the next connection reuses it instead of cold-starting (falls back to private servers when unavailable)",
+			"通过项目级守护进程代理启动语言服务器。每个连接使用独立服务器。项目中有其它 omp 实例运行时，释放的服务器会保持预热，供下个连接复用，避免冷启动（不可用时回退到私有服务器）",
 	},
 });
 
@@ -50,8 +49,8 @@ export const cfgLspFormatOnWrite = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Format on Write",
-		description: "Automatically format code files using LSP after writing",
+		label: "写入后格式化",
+		description: "写入代码文件后自动使用 LSP 格式化",
 	},
 });
 
@@ -62,8 +61,8 @@ export const cfgLspDiagnosticsOnWrite = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Diagnostics on Write",
-		description: "Return LSP diagnostics after writing code files",
+		label: "写入后诊断",
+		description: "写入代码文件后返回 LSP 诊断",
 	},
 });
 
@@ -74,8 +73,8 @@ export const cfgLspDiagnosticsOnEdit = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Diagnostics on Edit",
-		description: "Return LSP diagnostics after editing code files",
+		label: "编辑后诊断",
+		description: "编辑代码文件后返回 LSP 诊断",
 	},
 });
 
@@ -86,8 +85,8 @@ export const cfgLspDiagnosticsDeduplicate = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Deduplicate Diagnostics",
-		description: "Suppress post-edit LSP diagnostics already shown for a file; only surface new or changed ones",
+		label: "诊断去重",
+		description: "不再显示编辑后已展示过的文件 LSP 诊断，仅显示新增或变化的诊断",
 	},
 });
 
@@ -98,16 +97,16 @@ export const cfgLspRequestTimeout = register({
 	ui: {
 		tab: "files",
 		group: "LSP",
-		label: "Request Timeout",
+		label: "请求超时",
 		description:
-			"Seconds to wait for a language server's diagnostics, hover and other answers when the agent sets no timeout; late post-edit diagnostics wait at least this long. Raise it for servers that are slow on a cold start. The lsp tool's timeout argument can still raise or lower it per call",
+			"Agent 未指定超时时，等待语言服务器诊断、悬停信息等响应的秒数；延迟到达的编辑后诊断至少等待此时长。冷启动较慢的服务器可增大此值。每次调用仍可通过 lsp 工具的 timeout 参数调整",
 		options: [
-			{ value: "10", label: "10 seconds", description: "Default" },
-			{ value: "20", label: "20 seconds" },
-			{ value: "30", label: "30 seconds" },
-			{ value: "60", label: "1 minute" },
-			{ value: "120", label: "2 minutes" },
-			{ value: "300", label: "5 minutes" },
+			{ value: "10", label: "10 秒", description: "默认" },
+			{ value: "20", label: "20 秒" },
+			{ value: "30", label: "30 秒" },
+			{ value: "60", label: "1 分钟" },
+			{ value: "120", label: "2 分钟" },
+			{ value: "300", label: "5 分钟" },
 		],
 	},
 });

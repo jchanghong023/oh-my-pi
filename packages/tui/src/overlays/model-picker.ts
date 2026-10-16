@@ -90,22 +90,22 @@ const MIN_VISIBLE = 5;
 /** Fraction of the terminal height the floating overlay occupies. */
 const HEIGHT_FRACTION = 0.4;
 
-const STATUS_HINT = "Session-only switch — role models stay unchanged";
-const QUICK_ROLE_STATUS_HINT = "Quick role switch — applies its model and thinking for this session";
-const TASK_STATUS_HINT = "Task subagent switch — spawned task agents use this model (session-only)";
+const STATUS_HINT = "仅切换当前会话 — 角色模型保持不变";
+const QUICK_ROLE_STATUS_HINT = "快捷角色切换 — 将其模型和思考级别应用于当前会话";
+const TASK_STATUS_HINT = "任务 Subagent 切换 — 新建的任务 Agent 使用此模型（仅当前会话）";
 
 /** Footer hint for the active mode; keys resolve at render time so theme/keybinding changes apply. */
 function footerHint(mode: "session" | "role" | "task"): string {
 	const upDown = editorKeys("tui.select.up", "tui.select.down");
 	const enter = formatKeyHint("enter");
-	const close = `${editorKey("tui.select.cancel")} close`;
+	const close = `${editorKey("tui.select.cancel")} 关闭`;
 	switch (mode) {
 		case "role":
-			return `${upDown} roles · ${enter} apply role model · type to search · ${close}`;
+			return `${upDown} 角色 · ${enter} 应用角色模型 · 输入以搜索 · ${close}`;
 		case "task":
-			return `${upDown} models · ${enter} use for Task subagents · type to search · ${close}`;
+			return `${upDown} 模型 · ${enter} 用于任务 Subagent · 输入以搜索 · ${close}`;
 		default:
-			return `${upDown} models · ${enter} use for this session · type to search · @ quick roles · ${close}`;
+			return `${upDown} 模型 · ${enter} 用于当前会话 · 输入以搜索 · @ 快捷角色 · ${close}`;
 	}
 }
 
@@ -172,7 +172,7 @@ export class ModelPickerComponent implements Component {
 			markOverContext: true,
 			emptyText: () =>
 				this.#roleMode
-					? `  No quick roles in the ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} cycle`
+					? `  ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} 轮换中没有快捷角色`
 					: undefined,
 		});
 		this.#browser.onActivate = item => {
@@ -325,11 +325,11 @@ export class ModelPickerComponent implements Component {
 		const borderColor: ThemeColor | undefined = this.#taskMode ? "error" : undefined;
 		let footer = footerHint(this.#taskMode ? "task" : this.#roleMode ? "role" : "session");
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
-			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "session model" : "task model"}`;
+			footer += ` · ${formatKeyHint(this.#taskModeKey)} ${this.#taskMode ? "会话模型" : "任务模型"}`;
 		}
 
 		const out: string[] = [];
-		out.push(topBorder(width, this.#taskMode ? "Switch Task Model" : "Switch Model", borderColor));
+		out.push(topBorder(width, this.#taskMode ? "切换任务模型" : "切换模型", borderColor));
 		out.push(row(status, width, borderColor));
 		for (const line of this.#browser.render(inner)) {
 			out.push(row(line, width, borderColor));
@@ -380,7 +380,7 @@ export class ModelPickerComponent implements Component {
 		const query = this.#browser.query;
 		const view = this.#browser.pickerOrder({
 			providers: false,
-			rest: mode === "role" ? null : query.trim() ? "Matches" : "All",
+			rest: mode === "role" ? null : query.trim() ? "匹配结果" : "全部",
 		});
 		const catalogue = this.#browser.pickerItems(this.#roleMode ? this.#quickRoleItems : this.#modelItems);
 		const current =
@@ -413,16 +413,16 @@ export class ModelPickerComponent implements Component {
 		const cycleKey = editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p");
 		const node = picker(
 			{
-				title: mode === "task" ? "Switch task model" : "Switch model",
+				title: mode === "task" ? "切换任务模型" : "切换模型",
 				subtitle,
 				icon: "cpu",
-				noun: mode === "role" ? "roles" : "models",
+				noun: mode === "role" ? "角色" : "模型",
 				size: "md",
 				layout: "rows",
 				preview: "below",
 				query,
 				cursor,
-				placeholder: mode === "task" ? "Search models…" : "Search models, @ for quick roles…",
+				placeholder: mode === "task" ? "搜索模型…" : "搜索模型，输入 @ 查找快捷角色…",
 				columns: MODEL_PICKER_COLUMNS,
 				...catalogue,
 				order: view.order,
@@ -430,18 +430,18 @@ export class ModelPickerComponent implements Component {
 				selected,
 				...(current ? { current: [current] } : {}),
 				total: this.#browser.baseCount,
-				empty: mode === "role" ? `No quick roles in the ${cycleKey} cycle` : "No models available",
+				empty: mode === "role" ? `${cycleKey} 轮换中没有快捷角色` : "没有可用模型",
 				actions: compact([
 					pickerAction(
 						"use",
-						mode === "role" ? "Apply role" : mode === "task" ? "Use for Task subagents" : "Use for session",
+						mode === "role" ? "应用角色" : mode === "task" ? "用于任务 Subagent" : "用于当前会话",
 						"enter",
 						{ primary: true },
 					),
 					this.#taskModeKey !== undefined && mode !== "role"
-						? pickerAction("task", "Task model", this.#taskModeKey, { on: mode === "task" })
+						? pickerAction("task", "任务模型", this.#taskModeKey, { on: mode === "task" })
 						: undefined,
-					query.length > 0 ? { ...CLOSE_ACTION, label: "Clear search" } : CLOSE_ACTION,
+					query.length > 0 ? { ...CLOSE_ACTION, label: "清空搜索" } : CLOSE_ACTION,
 				]),
 			},
 			preview,
@@ -462,28 +462,23 @@ export class ModelPickerComponent implements Component {
 				? span(TASK_STATUS_HINT, "error")
 				: span(this.#roleMode ? QUICK_ROLE_STATUS_HINT : STATUS_HINT, "muted");
 		const hints: (NativeHint | undefined)[] = [
-			actionHint(["tui.select.up", "tui.select.down"], mode === "role" ? "roles" : "models"),
+			actionHint(["tui.select.up", "tui.select.down"], mode === "role" ? "角色" : "模型"),
 			{
 				keys: ["enter"],
-				label:
-					mode === "role"
-						? "apply role model"
-						: mode === "task"
-							? "use for Task subagents"
-							: "use for this session",
+				label: mode === "role" ? "应用角色模型" : mode === "task" ? "用于任务 Subagent" : "用于当前会话",
 			},
-			{ keys: [], label: "type to search" },
+			{ keys: [], label: "输入以搜索" },
 		];
-		if (mode === "session") hints.push({ keys: ["@"], label: "quick roles" });
-		hints.push(actionHint("tui.select.cancel", "close"));
+		if (mode === "session") hints.push({ keys: ["@"], label: "快捷角色" });
+		hints.push(actionHint("tui.select.cancel", "关闭"));
 		if (this.#taskModeKey !== undefined && !this.#roleMode) {
-			hints.push({ keys: [this.#taskModeKey], label: this.#taskMode ? "session model" : "task model" });
+			hints.push({ keys: [this.#taskModeKey], label: this.#taskMode ? "会话模型" : "任务模型" });
 		}
 		// `card` directly: the task-mode tone is a common prop `overlayCard` doesn't take.
 		const node = card(
 			{
 				role: "omp.overlay.model-picker",
-				head: this.#taskMode ? "Switch Task Model" : "Switch Model",
+				head: this.#taskMode ? "切换任务模型" : "切换模型",
 				tone: this.#taskMode ? "error" : undefined,
 			},
 			[text([status], { wrap: "word" }), this.#browser, hintsRow(hints)],

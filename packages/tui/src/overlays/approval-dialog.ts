@@ -239,22 +239,22 @@ export class ApprovalDialogComponent implements Component {
 		if (this.#native) return this.#native;
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
 		const approveKey = appApproveKeys()[0];
-		const deny = actionButton("Deny", "deny", {
+		const deny = actionButton("拒绝", "deny", {
 			...(cancelKey ? { keys: cancelKey } : {}),
 			tone: "error",
-			title: `Deny this call${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
+			title: `拒绝此次调用${cancelKey ? `  ${formatTooltipKey(cancelKey)}` : ""}`,
 		});
-		const approve = actionButton("Approve", "approve", {
+		const approve = actionButton("允许", "approve", {
 			...(approveKey ? { keys: approveKey } : {}),
 			tone: "accent",
-			title: `Approve this call${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
+			title: `允许此次调用${approveKey ? `  ${formatTooltipKey(approveKey)}` : ""}`,
 		});
 		const expandKey = appToolsExpandKey();
 		const expand = this.#full
 			? [
-					actionButton(this.#expanded ? "Less" : "Details", "expand", {
+					actionButton(this.#expanded ? "收起" : "详情", "expand", {
 						keys: expandKey,
-						title: `${this.#expanded ? "Summarize" : "Show every detail of"} this call  ${formatTooltipKey(expandKey)}`,
+						title: `${this.#expanded ? "查看调用摘要" : "查看此次调用的完整详情"}  ${formatTooltipKey(expandKey)}`,
 					}),
 				]
 			: [];
@@ -297,13 +297,13 @@ export class ApprovalDialogComponent implements Component {
 	#footerHint(overflows: boolean): string {
 		const approve = formatKeyHints(appApproveKeys());
 		const expand = this.#full
-			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "less" : "details"}`
+			? ` · ${formatKeyHints([appToolsExpandKey()])} ${this.#expanded ? "收起" : "详情"}`
 			: "";
-		const hint = `${approve} approve · ${editorKey("tui.select.cancel")} deny${expand}`;
+		const hint = `${approve} 允许 · ${editorKey("tui.select.cancel")} 拒绝${expand}`;
 		const draft = this.options.draft;
-		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} deny and send`;
-		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} scroll` : "";
-		return `${hint}${scroll}${draft ? " · type to steer instead" : ""}`;
+		if (draft?.hasDraft()) return `${hint} · ${editorKey("tui.input.submit")} 拒绝并发送`;
+		const scroll = overflows ? ` · ${editorKeys("tui.select.up", "tui.select.down")} 滚动` : "";
+		return `${hint}${scroll}${draft ? " · 也可输入消息调整方向" : ""}`;
 	}
 
 	#scroll(delta: number): void {

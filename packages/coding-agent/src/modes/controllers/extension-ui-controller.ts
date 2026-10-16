@@ -48,20 +48,20 @@ import { launchTerminal } from "../../subprocess/terminal-launch";
 
 const MAX_WIDGET_LINES = 10;
 /** Approval answers, as a collab guest's select shows them. */
-const APPROVE_OPTION = "Approve";
-const DENY_OPTION = "Deny";
+const APPROVE_OPTION = "批准";
+const DENY_OPTION = "拒绝";
 
 /**
  * Footer hint for a guest-rendered ask selector. The guest's selector handles
  * the keys, so the host can't know its bindings: advertise the defaults.
  */
 function guestAskHelpText(enterAction: string, extra = ""): string {
-	return `${formatKeyHints(["up", "down"])} navigate  ${formatKeyHint("enter")} ${enterAction}  ${extra}${formatKeyHint("escape")} cancel`;
+	return `${formatKeyHints(["up", "down"])} 导航  ${formatKeyHint("enter")} ${enterAction}  ${extra}${formatKeyHint("escape")} 取消`;
 }
 
-const ASK_OTHER_OPTION = "Other (type your own)";
-const ASK_CHAT_OPTION = "Chat about this";
-const ASK_NEXT_OPTION = "Next →";
+const ASK_OTHER_OPTION = "其他（自行输入）";
+const ASK_CHAT_OPTION = "讨论此问题";
+const ASK_NEXT_OPTION = "下一步 →";
 
 function withTerminalLauncher(uiContext: ExtensionUIContext, hasUI: boolean): ExtensionUIContext {
 	if (!hasUI || uiContext.openTerminal) return uiContext;
@@ -792,7 +792,7 @@ export class ExtensionUiController {
 					? {
 							isBlocked: () => draftEditor.getText().length > 0,
 							handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
-							hint: "Finish or clear the current prompt to answer",
+							hint: "完成或清空当前 Prompt 后即可回答",
 							// Show the draft's insertion cursor while it owns input; drop it
 							// once the draft clears and the ask controls take over.
 							syncPresentation: () => {
@@ -1008,7 +1008,7 @@ export class ExtensionUiController {
 						selectionMarker: "checkbox",
 						checkedIndices,
 						markableCount: question.options.length,
-						helpText: guestAskHelpText("toggle", hasAnswer ? "Next → continue  " : ""),
+						helpText: guestAskHelpText("切换", hasAnswer ? "下一步 → 继续  " : ""),
 					},
 					signal,
 				);
@@ -1019,7 +1019,7 @@ export class ExtensionUiController {
 				if (choice.value === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
 						host,
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", displayQuestion) },
+						{ kind: "editor", title: boundPromptTitle("自定义回答：", displayQuestion) },
 						signal,
 					);
 					if (input.kind === "unavailable") return "unavailable";
@@ -1049,7 +1049,7 @@ export class ExtensionUiController {
 						initialIndex,
 						selectionMarker: "radio",
 						markableCount: question.options.length,
-						helpText: guestAskHelpText("select"),
+						helpText: guestAskHelpText("选择"),
 					},
 					signal,
 				);
@@ -1059,7 +1059,7 @@ export class ExtensionUiController {
 				if (choice.value === ASK_OTHER_OPTION) {
 					const input = await this.#requestGuestUiString(
 						host,
-						{ kind: "editor", title: boundPromptTitle("Custom answer: ", displayQuestion) },
+						{ kind: "editor", title: boundPromptTitle("自定义回答：", displayQuestion) },
 						signal,
 					);
 					if (input.kind === "unavailable") return "unavailable";
@@ -1169,8 +1169,8 @@ export class ExtensionUiController {
 		message: string,
 		dialogOptions?: InteractiveSelectorDialogOptions,
 	): Promise<boolean> {
-		const result = await this.showHookSelector(`${title}\n${message}`, ["Yes", "No"], dialogOptions);
-		return result === "Yes";
+		const result = await this.showHookSelector(`${title}\n${message}`, ["是", "否"], dialogOptions);
+		return result === "是";
 	}
 
 	/**

@@ -23,10 +23,10 @@ const PRESS_KEY_SUFFIX = /,?\s*then press\s+\S+\s*:?\s*$/i;
 const PROGRESS_PROBLEM = /\b(?:fail(?:ed|ure)?|error|unavailable|in use|could ?n[o']t|unable)\b/i;
 
 /** Shown on the field when the flow asks for the manual code again: the last paste had no usable code. */
-const RETRY_MESSAGE = "Couldn't read a code from that. Paste the authorization code or the full redirect URL.";
+const RETRY_MESSAGE = "未能从中读取授权码。请粘贴授权码或完整的重定向 URL。";
 
 /** Shown while the browser half of the flow runs and the provider reports nothing. */
-const BROWSER_WAIT = "Waiting for you to finish in the browser…";
+const BROWSER_WAIT = "正在等待你在浏览器中完成操作…";
 
 /** The sign-in link from `showAuth`: the provider's instructions, or the device code split out of them. */
 interface LoginAuth {
@@ -85,7 +85,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	) {
 		const providerInfo = getOAuthProviders().find(p => p.id === providerId);
 		const providerName = providerInfo?.name || providerId;
-		super(`Login to ${providerName}`, "omp.overlay.login");
+		super(`登录 ${providerName}`, "omp.overlay.login");
 		this.#providerName = providerName;
 		this.#tui = tui;
 		this.#onComplete = onComplete;
@@ -127,7 +127,7 @@ export class LoginDialogComponent extends OverlayPanel {
 		const reject = this.#inputRejecter;
 		this.#clearInputHandlers();
 		reject?.(new Error("Login cancelled"));
-		this.#onComplete(false, "Login cancelled");
+		this.#onComplete(false, "已取消登录");
 	}
 
 	/**
@@ -155,14 +155,12 @@ export class LoginDialogComponent extends OverlayPanel {
 			),
 		);
 
-		const clickHint = `${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")}+click to open`;
+		const clickHint = `${formatKeyHint(keyHintPlatform() === "darwin" ? "super" : "ctrl")}+点击打开`;
 		const hyperlink = `\x1b]8;;${url}\x07${clickHint}\x1b]8;;\x07`;
 		this.#contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 0, 0));
 
 		if (launchUrl && launchUrl !== url) {
-			this.#contentContainer.addChild(
-				new Text(theme.fg("dim", `Local shortcut (this machine only): ${launchUrl}`), 0, 0),
-			);
+			this.#contentContainer.addChild(new Text(theme.fg("dim", `本地快捷链接（仅限本机）：${launchUrl}`), 0, 0));
 		}
 
 		if (instructions) {
@@ -206,9 +204,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			this.#contentContainer.addChild(new Spacer(1));
 			this.#contentContainer.addChild(new Text(theme.fg("dim", prompt), 0, 0));
 			this.#contentContainer.addChild(this.#input);
-			this.#contentContainer.addChild(
-				new Text(theme.fg("dim", `(${editorKey("tui.select.cancel")} to cancel)`), 0, 0),
-			);
+			this.#contentContainer.addChild(new Text(theme.fg("dim", `（${editorKey("tui.select.cancel")} 取消）`), 0, 0));
 		}
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -252,15 +248,12 @@ export class LoginDialogComponent extends OverlayPanel {
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("text", prompt.message), 0, 0));
 		if (prompt.placeholder) {
-			this.#contentContainer.addChild(new Text(theme.fg("dim", `e.g., ${prompt.placeholder}`), 0, 0));
+			this.#contentContainer.addChild(new Text(theme.fg("dim", `例如：${prompt.placeholder}`), 0, 0));
 		}
 		this.#contentContainer.addChild(this.#input);
 		this.#contentContainer.addChild(
 			new Text(
-				theme.fg(
-					"dim",
-					`(${editorKey("tui.select.cancel")} to cancel, ${editorKey("tui.input.submit")} to submit)`,
-				),
+				theme.fg("dim", `（${editorKey("tui.select.cancel")} 取消，${editorKey("tui.input.submit")} 提交）`),
 				0,
 				0,
 			),
@@ -291,7 +284,7 @@ export class LoginDialogComponent extends OverlayPanel {
 	showWaiting(message: string): void {
 		this.#contentContainer.addChild(new Spacer(1));
 		this.#contentContainer.addChild(new Text(theme.fg("dim", message), 0, 0));
-		this.#contentContainer.addChild(new Text(theme.fg("dim", `(${editorKey("tui.select.cancel")} to cancel)`), 0, 0));
+		this.#contentContainer.addChild(new Text(theme.fg("dim", `（${editorKey("tui.select.cancel")} 取消）`), 0, 0));
 		this.#nativeSteps.push({ kind: "progress", message: plainText(message) });
 		this.#nativeRoot = undefined;
 		this.#tui.requestRender();
@@ -330,7 +323,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			if (auth.launchUrl) {
 				body.push(
 					keyed(
-						text([span("On this machine  ", "dim"), span(auth.launchUrl, "mono", { href: auth.launchUrl })], {
+						text([span("仅限本机  ", "dim"), span(auth.launchUrl, "mono", { href: auth.launchUrl })], {
 							role: "omp.login.shortcut",
 							truncate: "middle",
 							lines: 1,
@@ -382,12 +375,12 @@ export class LoginDialogComponent extends OverlayPanel {
 		if (status.length > 0) body.push(node("col", { role: "omp.login.status", gap: "xs" }, status, "status"));
 
 		const cancelKey = getKeybindings().getKeys("tui.select.cancel")[0];
-		const cancel = actionButton("Cancel", "cancel", cancelKey ? { keys: cancelKey } : {});
+		const cancel = actionButton("取消", "cancel", cancelKey ? { keys: cancelKey } : {});
 		const open = auth ? this.#describeOpen(auth.url, !field) : null;
 		let buttons: (NativeNode | null)[];
 		if (field) {
 			const submitKey = getKeybindings().getKeys("tui.input.submit")[0];
-			const submit = actionButton("Continue", "submit", {
+			const submit = actionButton("继续", "submit", {
 				tone: "accent",
 				...(submitKey ? { keys: submitKey } : {}),
 			});
@@ -399,7 +392,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			"overlay",
 			{
 				role: this.nativeRole,
-				head: `Sign in to ${this.#providerName}`,
+				head: `登录 ${this.#providerName}`,
 				anchor: "center",
 				size: "md",
 				modal: true,
@@ -413,16 +406,16 @@ export class LoginDialogComponent extends OverlayPanel {
 
 	/** What to do, in one sentence: enter the code, follow the provider's instructions, or finish in the browser. */
 	#lead(auth: LoginAuth): string {
-		if (auth.device) return "Enter this code on the sign-in page to connect your account.";
+		if (auth.device) return "在登录页面输入此代码以连接你的账户。";
 		if (auth.instructions) return sheetText(auth.instructions);
-		return "Continue in your browser. If it didn't open, open or copy the link below.";
+		return "请在浏览器中继续。如果未自动打开，请打开或复制下方链接。";
 	}
 
 	/** The device code, large in a well; a click copies it. */
 	#describeCode(code: string): NativeNode {
 		return node(
 			"row",
-			{ role: "omp.login.code", align: "center", actions: { click: "copy" }, href: code, title: "Copy code" },
+			{ role: "omp.login.code", align: "center", actions: { click: "copy" }, href: code, title: "复制代码" },
 			[keyed(text([span(code, "mono")]), "value"), node("icon", { name: "copy" }, undefined, "icon")],
 			"code",
 		);
@@ -449,9 +442,9 @@ export class LoginDialogComponent extends OverlayPanel {
 						align: "center",
 						actions: { click: "copy" },
 						href: url,
-						title: "Copy the sign-in link",
+						title: "复制登录链接",
 					},
-					[text("Copy")],
+					[text("复制")],
 					"copyLink",
 				),
 			],
@@ -469,10 +462,10 @@ export class LoginDialogComponent extends OverlayPanel {
 				align: "center",
 				actions: { click: "open" },
 				href: url,
-				title: `Open ${urlPlace(url)} in your browser`,
+				title: `在浏览器中打开 ${urlPlace(url)}`,
 				...(primary ? { tone: "accent" as const } : {}),
 			},
-			[text("Open sign-in page"), node("icon", { name: "open" }, undefined, "icon")],
+			[text("打开登录页面"), node("icon", { name: "open" }, undefined, "icon")],
 			"openLink",
 		);
 	}

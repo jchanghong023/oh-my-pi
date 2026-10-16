@@ -13,8 +13,8 @@ export const cfgMnemopiDbPath = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi DB Path",
-		description: "Optional SQLite DB path. Defaults to the agent memories directory.",
+		label: "Mnemopi 数据库路径",
+		description: "可选的 SQLite 数据库路径。默认为 Agent 记忆目录。",
 		condition: "mnemopiActive",
 	},
 });
@@ -26,8 +26,8 @@ export const cfgMnemopiBank = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Bank",
-		description: "Optional shared bank base name. Per-project modes derive project-local banks from it.",
+		label: "Mnemopi 记忆库",
+		description: "可选的共享记忆库基础名称。按项目划分的模式据此派生项目本地记忆库。",
 		condition: "mnemopiActive",
 	},
 });
@@ -40,24 +40,24 @@ export const cfgMnemopiScoping = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Scoping",
+		label: "Mnemopi 作用域",
 		description:
-			"global = one shared bank; per-project = isolated bank per cwd; per-project-tagged = project-local writes plus global recall visibility",
+			"global = 一个共享记忆库；per-project = 每个 cwd 使用独立记忆库；per-project-tagged = 写入项目本地记忆库，同时可召回全局记忆",
 		options: [
 			{
 				value: "global",
-				label: "Global",
-				description: "One shared Mnemopi bank for every project",
+				label: "全局",
+				description: "所有项目共享一个 Mnemopi 记忆库",
 			},
 			{
 				value: "per-project",
-				label: "Per project",
-				description: "Project-local Mnemopi bank per cwd basename",
+				label: "按项目",
+				description: "按 cwd 目录名划分项目本地 Mnemopi 记忆库",
 			},
 			{
 				value: "per-project-tagged",
-				label: "Per project (tagged)",
-				description: "Write to a project-local bank but merge project + shared recall results",
+				label: "按项目（带标签）",
+				description: "写入项目本地记忆库，但合并项目和共享记忆的召回结果",
 			},
 		],
 		condition: "mnemopiActive",
@@ -80,19 +80,19 @@ export const cfgMnemopiEmbeddingVariant = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Embedding variant",
+		label: "嵌入模型变体",
 		description:
-			"Local embedding model family. en = stronger English model; multilingual = cross-language model. Changing this rebuilds existing memory embeddings on next start.",
+			"本地嵌入模型系列。en = 更强的英语模型；multilingual = 跨语言模型。修改后，下次启动时重建已有记忆的嵌入。",
 		options: [
 			{
 				value: "en",
-				label: "English (bge-base-en-v1.5)",
-				description: "BAAI/bge-base-en-v1.5 (768d), English-only",
+				label: "英语（bge-base-en-v1.5）",
+				description: "BAAI/bge-base-en-v1.5（768 维），仅限英语",
 			},
 			{
 				value: "multilingual",
-				label: "Multilingual (multilingual-e5-large)",
-				description: "intfloat/multilingual-e5-large (1024d), cross-language recall",
+				label: "多语言（multilingual-e5-large）",
+				description: "intfloat/multilingual-e5-large（1024 维），支持跨语言召回",
 			},
 		],
 		condition: "mnemopiActive",
@@ -106,8 +106,8 @@ export const cfgMnemopiAutoRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Auto Recall",
-		description: "Recall local memories into the first turn of each session",
+		label: "Mnemopi 自动召回",
+		description: "在每个会话的第一轮召回本地记忆",
 		condition: "mnemopiActive",
 	},
 });
@@ -119,8 +119,8 @@ export const cfgMnemopiAutoRetain = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Auto Retain",
-		description: "Retain completed conversation turns into local Mnemopi memory",
+		label: "Mnemopi 自动保存",
+		description: "将已完成的对话轮次保存到本地 Mnemopi 记忆",
 		condition: "mnemopiActive",
 	},
 });
@@ -132,9 +132,8 @@ export const cfgMnemopiPolyphonicRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Polyphonic Recall",
-		description:
-			"Fuse recall with graph, fact, vector and temporal voices so linked memories surface without a keyword match",
+		label: "Mnemopi 多路召回",
+		description: "融合图谱、事实、向量和时间等召回通道，无需关键词匹配也能发现关联记忆",
 		condition: "mnemopiActive",
 	},
 });
@@ -146,9 +145,8 @@ export const cfgMnemopiEnhancedRecall = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Enhanced Recall",
-		description:
-			"Cache recall results for repeated and similar queries with identical options; any memory write clears it",
+		label: "Mnemopi 增强召回",
+		description: "为选项相同的重复及相似查询缓存召回结果；任何记忆写入都会清空缓存",
 		condition: "mnemopiActive",
 	},
 });
@@ -160,9 +158,8 @@ export const cfgMnemopiProactiveLinking = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Proactive Linking",
-		description:
-			"Ingest new memories into the episodic graph as they are stored, linking them to related entities and memories",
+		label: "Mnemopi 主动关联",
+		description: "存储新记忆时将其纳入情景图谱，关联到相关实体和记忆",
 		condition: "mnemopiActive",
 	},
 });
@@ -174,8 +171,8 @@ export const cfgMnemopiNoEmbeddings = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Disable Embeddings",
-		description: "Force deterministic FTS-only recall instead of vector embeddings",
+		label: "Mnemopi 禁用嵌入",
+		description: "强制仅使用确定性的 FTS 召回，不使用向量嵌入",
 		condition: "mnemopiActive",
 	},
 });
@@ -189,9 +186,8 @@ export const cfgMnemopiEmbeddingModel = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Embedding Model",
-		description:
-			"Advanced: explicit embedding model id that overrides the variant. Leave empty to use mnemopi.embeddingVariant.",
+		label: "Mnemopi 嵌入模型",
+		description: "高级：指定嵌入模型 ID，覆盖模型变体。留空则使用 mnemopi.embeddingVariant。",
 		condition: "mnemopiActive",
 	},
 });
@@ -203,8 +199,8 @@ export const cfgMnemopiEmbeddingApiUrl = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Embedding API URL",
-		description: "Optional OpenAI-compatible embedding endpoint passed to Mnemopi",
+		label: "Mnemopi 嵌入 API URL",
+		description: "传递给 Mnemopi 的可选 OpenAI 兼容嵌入端点",
 		condition: "mnemopiActive",
 	},
 });
@@ -217,8 +213,8 @@ export const cfgMnemopiEmbeddingApiKey = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi Embedding API Key",
-		description: "Optional embedding API key passed to Mnemopi",
+		label: "Mnemopi 嵌入 API 密钥",
+		description: "传递给 Mnemopi 的可选嵌入 API 密钥",
 		condition: "mnemopiActive",
 	},
 });
@@ -231,18 +227,17 @@ export const cfgMnemopiLlmMode = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi LLM Mode",
-		description:
-			"Use no LLM, the online tiny model (the TINY role from /models, else @smol), or a remote OpenAI-compatible endpoint",
+		label: "Mnemopi LLM 模式",
+		description: "不使用 LLM、使用在线微型模型（/models 中的 TINY 角色，否则为 @smol），或使用远程 OpenAI 兼容端点",
 		condition: "mnemopiActive",
 		options: [
-			{ value: "none", label: "None", description: "Disable Mnemopi LLM-backed extraction" },
+			{ value: "none", label: "不使用", description: "禁用 Mnemopi 基于 LLM 的提取" },
 			{
 				value: "smol",
-				label: "Online (tiny)",
-				description: "Use the online tiny model (the TINY role from /models, else @smol)",
+				label: "在线（微型模型）",
+				description: "使用在线微型模型（/models 中的 TINY 角色，否则为 @smol）",
 			},
-			{ value: "remote", label: "Remote", description: "Use the Mnemopi remote LLM settings below" },
+			{ value: "remote", label: "远程", description: "使用下方 Mnemopi 远程 LLM 设置" },
 		],
 	},
 });
@@ -254,8 +249,8 @@ export const cfgMnemopiLlmBaseUrl = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi LLM Base URL",
-		description: "Optional OpenAI-compatible LLM endpoint for Mnemopi remote mode",
+		label: "Mnemopi LLM 基础 URL",
+		description: "Mnemopi 远程模式使用的可选 OpenAI 兼容 LLM 端点",
 		condition: "mnemopiActive",
 	},
 });
@@ -268,8 +263,8 @@ export const cfgMnemopiLlmApiKey = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi LLM API Key",
-		description: "Optional LLM API key for Mnemopi remote mode",
+		label: "Mnemopi LLM API 密钥",
+		description: "Mnemopi 远程模式使用的可选 LLM API 密钥",
 		condition: "mnemopiActive",
 	},
 });
@@ -281,8 +276,8 @@ export const cfgMnemopiLlmModel = register({
 	ui: {
 		tab: "memory",
 		group: "Mnemopi",
-		label: "Mnemopi LLM Model",
-		description: "Optional LLM model name for Mnemopi remote mode",
+		label: "Mnemopi LLM 模型",
+		description: "Mnemopi 远程模式使用的可选 LLM 模型名称",
 		condition: "mnemopiActive",
 	},
 });

@@ -14,10 +14,9 @@ export const cfgStreamServerUrl = register({
 	default: DEFAULT_STREAM_URL,
 	ui: {
 		tab: "interaction",
-		group: "Stream",
-		label: "Stream Server",
-		description:
-			"Live stream server used by `omp stream` (https://host[:port]); viewers watch at <base>/<your Stencil username>",
+		group: "直播",
+		label: "直播服务器",
+		description: "`omp stream` 使用的直播服务器（https://host[:port]）；观众通过 <base>/<your Stencil username> 观看",
 	},
 });
 
@@ -27,9 +26,8 @@ export const cfgStreamRedactPatterns = register({
 	default: EMPTY_STRING_ARRAY,
 	ui: {
 		tab: "interaction",
-		group: "Stream",
-		label: "Extra Redaction Patterns",
-		description:
-			"Additional regular expressions redacted from every streamed row, on top of env/secrets.yml values and built-in credential shapes",
+		group: "直播",
+		label: "额外脱敏规则",
+		description: "在 env/secrets.yml 值和内置凭据模式之外，用于对每一行直播内容脱敏的额外正则表达式",
 	},
 });

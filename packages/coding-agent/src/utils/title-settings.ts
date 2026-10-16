@@ -16,17 +16,17 @@ export const cfgTitleIcons = register({
 	default: "nf+emoji",
 	ui: {
 		tab: "appearance",
-		group: "Display",
-		label: "Title Icons",
-		description: "Icon and short code that head new generated or /rename session titles",
+		group: "显示",
+		label: "标题图标",
+		description: "新生成或通过 /rename 修改的会话标题前的图标和短码",
 		options: [
 			{
 				value: "nf+emoji",
 				label: "Nerd Font + Emoji",
-				description: "Nerd Font glyph where the Nerd Font symbol preset renders it, else the emoji (default)",
+				description: "使用 Nerd Font 符号预设时显示 Nerd Font 字形，否则显示 Emoji（默认）",
 			},
-			{ value: "emoji", label: "Emoji", description: "Always the emoji" },
-			{ value: "boring", label: "Boring", description: "Plain title: no icon or code" },
+			{ value: "emoji", label: "Emoji", description: "始终显示 Emoji" },
+			{ value: "boring", label: "纯文本", description: "纯文本标题：无图标或短码" },
 		],
 	},
 });
@@ -38,17 +38,16 @@ export const cfgTitleGenerator = register({
 	default: "fork",
 	ui: {
 		tab: "tasks",
-		group: "Modes",
-		label: "Title Generator",
-		description: "What names an untitled session from the user's messages",
+		group: "模式",
+		label: "标题生成器",
+		description: "根据用户消息为无标题会话命名的方式",
 		options: [
 			{
 				value: "fork",
-				label: "Fork",
-				description:
-					"A side turn of the reply on the session's model: reads its prompt cache, adds the card icon (default)",
+				label: "分叉",
+				description: "使用会话模型进行旁路回复：读取其 Prompt 缓存并添加卡片图标（默认）",
 			},
-			{ value: "tiny", label: "Tiny", description: "The title model role only; plain titles without a card" },
+			{ value: "tiny", label: "微型模型", description: "仅使用 title 模型角色；生成不带卡片的纯文本标题" },
 		],
 	},
 });
@@ -59,8 +58,8 @@ export const cfgTitleRefreshOnReplan = register({
 	default: true,
 	ui: {
 		tab: "tasks",
-		group: "Modes",
-		label: "Refresh Title on Replan",
-		description: "Refresh generated session titles after todo init replans unless the title was set by the user",
+		group: "模式",
+		label: "重新规划时刷新标题",
+		description: "todo init 重新规划后刷新自动生成的会话标题，用户手动设置的标题除外",
 	},
 });

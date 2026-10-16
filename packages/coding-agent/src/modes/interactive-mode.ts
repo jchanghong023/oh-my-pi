@@ -479,7 +479,7 @@ const STILL_CLOSING_DELAY_MS = 3_000;
 const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 /** Startup emits several status-bar changes within a second; persist only the settled one. */
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
-const DEFAULT_WORKING_MESSAGE = "Working…";
+const DEFAULT_WORKING_MESSAGE = "处理中…";
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
 const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
 
@@ -561,12 +561,12 @@ function formatHudNoteMarker(count: number): string {
 
 const PLAN_KEEP_CONTEXT_OPTION_INDEX = 2;
 const PLAN_KEEP_CONTEXT_DISABLE_THRESHOLD_PERCENT = 95;
-const PLAN_SAVE_AND_QUIT_OPTION = "Save and quit";
+const PLAN_SAVE_AND_QUIT_OPTION = "保存并退出";
 const PLAN_SAVE_TITLE_LINE_LIMIT = 6;
 
-const CFG_APPROVE_SESSION = "Always for this session";
-const CFG_APPROVE_ONCE = "Allow once";
-const CFG_DENY = "Deny";
+const CFG_APPROVE_SESSION = "本会话始终允许";
+const CFG_APPROVE_ONCE = "允许一次";
+const CFG_DENY = "拒绝";
 
 const PLAN_FILENAME_SYSTEM_PROMPT = prompt.render(planFilenamePrompt);
 
@@ -2146,7 +2146,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (!startupQuiet && this.#startupChangelog && cfgStartupChangelogMode.get(settings) !== "hidden") {
 			headerAfter.push(
 				new DynamicBorder(),
-				new Text("What's New", 1, 0).setStyleFn(t => theme.bold(theme.fg("accent", t))),
+				new Text("更新内容", 1, 0).setStyleFn(t => theme.bold(theme.fg("accent", t))),
 				new Spacer(1),
 			);
 			if (cfgStartupChangelogMode.get(settings) === "summary") {
@@ -5646,11 +5646,11 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#formatKeepContextLabel(contextUsage: ContextUsage | undefined): string {
 		if (!contextUsage) {
-			return "Approve and keep context";
+			return "批准并保留上下文";
 		}
 		const tokens = formatContextTokenCount(contextUsage.tokens);
 		const contextWindow = formatContextTokenCount(contextUsage.contextWindow);
-		return `Approve and keep context (~${tokens} / ${contextWindow})`;
+		return `批准并保留上下文（约 ${tokens} / ${contextWindow}）`;
 	}
 
 	#isKeepContextDisabled(contextUsage: ContextUsage | undefined): boolean {
@@ -6880,10 +6880,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		const keepContextLabel = this.#formatKeepContextLabel(contextUsage);
 		const keepContextDisabled = this.#isKeepContextDisabled(contextUsage);
 		const reviewOptions: PlanReviewOption[] = [
-			{ id: "execute", label: "Approve and execute", disabled: false },
-			{ id: "compact", label: "Approve and compact context", disabled: false },
+			{ id: "execute", label: "批准并执行", disabled: false },
+			{ id: "compact", label: "批准并压缩上下文", disabled: false },
 			{ id: "keep", label: keepContextLabel, disabled: keepContextDisabled },
-			{ id: "refine", label: "Refine plan", disabled: false },
+			{ id: "refine", label: "完善计划", disabled: false },
 			{ id: "save", label: PLAN_SAVE_AND_QUIT_OPTION, disabled: false },
 		];
 
@@ -6900,7 +6900,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const slider: HookSelectorSlider | undefined =
 			cycle && cycle.models.length > 1
 				? {
-						caption: "continue with",
+						caption: "继续使用",
 						index: startTierIndex,
 						segments: cycle.models.map(entry => ({
 							label: entry.role,
@@ -6913,7 +6913,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				: undefined;
 		// The overlay now owns the dynamic, focus-aware help line; the caller only
 		// supplies the trailing cancel hint.
-		const helpText = `${editorKey("tui.select.cancel")} cancel`;
+		const helpText = `${editorKey("tui.select.cancel")} 取消`;
 		// In-overlay edits (section deletes/undo) and section annotations. Deletes
 		// update `editedContent` (and mirror to disk); annotations build `feedback`
 		// that the Refine branch re-prompts the model with.
@@ -6963,7 +6963,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		const requestDelivered = Promise.withResolvers<void>();
 		const choicePromise = this.showPlanReview(
 			planContent,
-			"Plan mode - next step",
+			"计划模式 - 下一步",
 			reviewOptions.map(option => option.label),
 			{
 				helpText,
@@ -7034,7 +7034,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		if (choice === "Approve and execute" || choice === "Approve and compact context" || choice === keepContextLabel) {
+		if (choice === "批准并执行" || choice === "批准并压缩上下文" || choice === keepContextLabel) {
 			try {
 				// Prefer in-overlay edits (already in memory) over a disk re-read. The
 				// overlay mirrors edits as they happen, and approval awaits one final
@@ -7086,8 +7086,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					executionDispatched = await this.#approvePlan(latestPlanContent, {
 						planFilePath,
 						title: details.title,
-						preserveContext: choice !== "Approve and execute",
-						compactBeforeExecute: choice === "Approve and compact context",
+						preserveContext: choice !== "批准并执行",
+						compactBeforeExecute: choice === "批准并压缩上下文",
 						executionModel,
 						reviewOwner: pending,
 						signal: controller.signal,
@@ -7108,7 +7108,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
-		if (choice === "Refine plan") {
+		if (choice === "完善计划") {
 			const refinement = remote?.choice === "refine" ? (remote.feedback ?? "") : feedback;
 			try {
 				if (refinement.trim()) {
@@ -7121,7 +7121,7 @@ export class InteractiveMode implements InteractiveModeContext {
 						this.#planReviewAnnotationState.delete(annotationStateKey);
 					}
 				} else {
-					this.showStatus("Refine plan: enter a follow-up prompt.");
+					this.showStatus("完善计划：请输入后续 Prompt。");
 				}
 			} catch (error) {
 				this.showError(`Failed to refine plan: ${error instanceof Error ? error.message : String(error)}`);
@@ -7203,11 +7203,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	async #promptCfgChange(request: CfgChangeRequest, callerSignal?: AbortSignal): Promise<CfgApproval> {
 		const headline = request.save
-			? `💾 Your agent wants to save \`${request.path}\` to your config.`
-			: `⚙️ Your agent wants to change \`${request.path}\` for this session.`;
-		const warning = request.shadowedBy
-			? `\n⚠️ Overridden by your ${request.shadowedBy}: the saved value won't take effect here.`
-			: "";
+			? `💾 你的 Agent 希望将 \`${request.path}\` 保存到配置。`
+			: `⚙️ 你的 Agent 希望在本会话中修改 \`${request.path}\`。`;
+		const warning = request.shadowedBy ? `\n⚠️ 已被 ${request.shadowedBy} 覆盖：保存的值不会在此处生效。` : "";
 		let timedOut = false;
 		const timeout = askTimeoutMs(this.session.settings);
 		// Settle dismissed when the caller's turn aborts (a collab guest
@@ -8097,10 +8095,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		// key in the column where the working row's interrupt key stood.
 		const hint = new Container();
 		hint.addChild(new Spacer(1));
-		hint.addChild(new Text(` ${rawKeyHint(retryKey, "to retry")}`, 1, 0));
+		hint.addChild(new Text(` ${rawKeyHint(retryKey, "重试")}`, 1, 0));
 		this.#retryHintRow = new DescribedComponent(
 			hint,
-			row([node("icon", { name: "loop", tone: "muted" }), kbd(retryKey, "key"), text([span("to retry", "muted")])], {
+			row([node("icon", { name: "loop", tone: "muted" }), kbd(retryKey, "key"), text([span("重试", "muted")])], {
 				gap: "sm",
 				align: "center",
 				role: "omp.hint.retry",

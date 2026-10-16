@@ -64,9 +64,9 @@ import { isNativeRendering } from "../native/state";
 import { getKeybindings } from "../keybindings";
 
 /** Title shown in the overlay's top border. */
-const OVERLAY_TITLE = "Plan Review";
+const OVERLAY_TITLE = "计划审阅";
 /** Native sheet title when the plan has no title heading of its own. */
-const NATIVE_TITLE = "Plan review";
+const NATIVE_TITLE = "计划审阅";
 /** Minimum plan-body rows kept visible even on short terminals. */
 const MIN_BODY_ROWS = 3;
 /** Visible rows for the in-overlay annotation editor before it scrolls. */
@@ -1240,35 +1240,35 @@ export class PlanReviewOverlay implements Component {
 		const enter = formatKeyHint("enter");
 		switch (this.#focus) {
 			case "actions":
-				parts.push(`${upDown} select`, `${enter} confirm`);
-				if (this.#slider) parts.push(`${formatKeyHints(["left", "right"])} model`);
+				parts.push(`${upDown} 选择`, `${enter} 确认`);
+				if (this.#slider) parts.push(`${formatKeyHints(["left", "right"])} 模型`);
 				break;
 			case "toc":
 				parts.push(
-					`${upDown} section`,
-					`${enter} open`,
-					`${formatKeyHint("a")} annotate`,
-					`${formatKeyHint("e")} edit`,
-					`${formatKeyHint("d")} delete`,
-					`${formatKeyHint("u")} undo`,
+					`${upDown} 章节`,
+					`${enter} 打开`,
+					`${formatKeyHint("a")} 批注`,
+					`${formatKeyHint("e")} 编辑`,
+					`${formatKeyHint("d")} 删除`,
+					`${formatKeyHint("u")} 撤销`,
 				);
 				break;
 			case "body":
 				parts.push(
-					`${upDown} scroll`,
-					`${formatKeyHint("shift")} faster`,
+					`${upDown} 滚动`,
+					`${formatKeyHint("shift")} 加速`,
 					formatKeyHints(["pageUp", "pageDown"]),
-					`${formatKeyHints(["g", "shift+g"])} ends`,
-					`${formatKeyHint("a")} annotate`,
-					`${formatKeyHint("e")} edit`,
-					`${formatKeyHint("u")} undo`,
+					`${formatKeyHints(["g", "shift+g"])} 首尾`,
+					`${formatKeyHint("a")} 批注`,
+					`${formatKeyHint("e")} 编辑`,
+					`${formatKeyHint("u")} 撤销`,
 				);
 				break;
 		}
-		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} copy`);
-		parts.push(`${formatKeyHint("tab")} regions`);
-		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} editor`);
-		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} cancel`);
+		if (this.callbacks.onCopyPlan) parts.push(`${formatKeyHint("c")} 复制`);
+		parts.push(`${formatKeyHint("tab")} 切换区域`);
+		if (this.#externalEditorLabel && this.#focus !== "toc") parts.push(`${this.#externalEditorLabel} 编辑器`);
+		parts.push(this.#helpSuffix ?? `${editorKey("tui.select.cancel")} 取消`);
 		return parts.join(sep);
 	}
 
@@ -1382,7 +1382,7 @@ export class PlanReviewOverlay implements Component {
 		for (let i = 0; i < noteLines.length; i++) {
 			const prefix =
 				i === 0
-					? `${theme.fg("warning", "▎ ")}${theme.fg("dim", "note: ")}`
+					? `${theme.fg("warning", "▎ ")}${theme.fg("dim", "批注: ")}`
 					: `${theme.fg("warning", "▎ ")}${theme.fg("dim", "      ")}`;
 			const available = Math.max(0, bodyContentWidth - visibleWidth(prefix));
 			const displayLine = truncateToWidth(
@@ -1439,7 +1439,7 @@ export class PlanReviewOverlay implements Component {
 		const indent = " ".repeat(Math.max(0, section.level - this.#tocBaseLevel));
 		const ann = section.annotations.length > 0 ? " ✎" : "";
 		const avail = Math.max(0, width - 1 - indent.length - visibleWidth(ann));
-		const title = truncateToWidth(section.title || "(untitled)", avail, Ellipsis.Unicode);
+		const title = truncateToWidth(section.title || "（无标题）", avail, Ellipsis.Unicode);
 		const body = indent + title + ann;
 		// Single-column gutter glyph: a cursor `›` on the focused selection, an
 		// accent bar `▎` on the current scrolled section, otherwise blank. The
@@ -1462,7 +1462,7 @@ export class PlanReviewOverlay implements Component {
 						0,
 						Math.min(chooser.selected - Math.floor(optionLimit / 2), chooser.entries.length - optionLimit),
 					);
-		const lines = [theme.bold(theme.fg("accent", "Edit annotation"))];
+		const lines = [theme.bold(theme.fg("accent", "编辑批注"))];
 		for (let windowIndex = 0; windowIndex < optionLimit; windowIndex++) {
 			const optionIndex = start + windowIndex;
 			const selection = chooser.entries[optionIndex];
@@ -1470,19 +1470,16 @@ export class PlanReviewOverlay implements Component {
 			const section = this.#sections[selection.sectionIndex];
 			const annotation = section?.annotations[selection.annotationIndex];
 			if (!section || !annotation) continue;
-			const target = annotation.target.kind === "section" ? "section" : `line ${annotation.target.context}`;
+			const target = annotation.target.kind === "section" ? "章节" : `行 ${annotation.target.context}`;
 			const note = sanitizeStatusText(annotation.note);
 			const marker = optionIndex === chooser.selected ? theme.fg("accent", "› ") : "  ";
-			const label = `${marker}${sanitizeStatusText(section.title || "Plan preamble")} · ${target} · ${note}`;
+			const label = `${marker}${sanitizeStatusText(section.title || "计划前言")} · ${target} · ${note}`;
 			lines.push(truncateToWidth(label, innerWidth, Ellipsis.Unicode));
 		}
 		if (!Number.isFinite(maxRows) || maxRows >= 2) {
 			const upDown = editorKeys("tui.select.up", "tui.select.down");
 			lines.push(
-				theme.fg(
-					"dim",
-					`${upDown} choose · ${formatKeyHint("enter")} edit · ${editorKey("tui.select.cancel")} cancel`,
-				),
+				theme.fg("dim", `${upDown} 选择 · ${formatKeyHint("enter")} 编辑 · ${editorKey("tui.select.cancel")} 取消`),
 			);
 		}
 		return lines.slice(0, Math.max(0, Math.floor(maxRows)));
@@ -1493,23 +1490,23 @@ export class PlanReviewOverlay implements Component {
 		if (this.#annotating) {
 			const target = this.#annotationTarget;
 			const section = target ? this.#sections[target.sectionIndex] : undefined;
-			const title = sanitizeStatusText(section?.title || "Plan preamble");
+			const title = sanitizeStatusText(section?.title || "计划前言");
 			const location =
 				target?.row === null
 					? `‹${title}›`
 					: `‹${title}› · ${truncateToWidth(target?.context ?? "", Math.max(1, innerWidth - 16), Ellipsis.Unicode)}`;
 			const caption = truncateToWidth(
-				`${theme.fg("dim", "Annotate")} ${theme.fg("accent", location)}`,
+				`${theme.fg("dim", "批注")} ${theme.fg("accent", location)}`,
 				innerWidth,
 				Ellipsis.Unicode,
 			);
 			const hintParts = [
-				`${editorKey("tui.input.submit")} save`,
-				`${editorKey("tui.input.newLine")} newline`,
-				`${editorKey("tui.select.cancel")} cancel`,
+				`${editorKey("tui.input.submit")} 保存`,
+				`${editorKey("tui.input.newLine")} 换行`,
+				`${editorKey("tui.select.cancel")} 取消`,
 			];
-			if (this.#editingAnnotation) hintParts.push("empty deletes");
-			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} editor`);
+			if (this.#editingAnnotation) hintParts.push("留空则删除");
+			if (this.#externalEditorLabel) hintParts.push(`${this.#externalEditorLabel} 编辑器`);
 			this.#editor.setMaxHeight(Math.max(1, Math.min(MAX_ANNOTATION_EDITOR_ROWS, (process.stdout.rows || 40) - 12)));
 			this.#editor.focused = true;
 			return [caption, ...this.#editor.render(innerWidth), theme.fg("dim", hintParts.join(" · "))];
@@ -1586,11 +1583,11 @@ export class PlanReviewOverlay implements Component {
 			children.push(keyed(text([span(this.#promptTitle, "muted")], { role: "omp.plan.prompt" }), "prompt"));
 		}
 		if (this.#committed) {
-			const label = this.#committedLabel ? `${this.#committedLabel} — submitting…` : "Submitting…";
+			const label = this.#committedLabel ? `${this.#committedLabel} — 正在提交…` : "正在提交…";
 			children.push(node("spinner", { label: [span(label, "accent strong")] }, undefined, "options"));
 			children.push(
 				keyed(
-					text([span("Applying your selection — this can take a moment while context is prepared.", "dim")], {
+					text([span("正在应用你的选择 — 准备上下文可能需要片刻。", "dim")], {
 						wrap: "word",
 					}),
 					"footer",
@@ -1628,17 +1625,17 @@ export class PlanReviewOverlay implements Component {
 		if (this.#committed) return undefined;
 		const buttons: NativeNode[] = [];
 		if (this.callbacks.onCopyPlan)
-			buttons.push(actionButton("Copy", "copyPlan", { keys: "c", title: "Copy plan  c" }));
+			buttons.push(actionButton("复制", "copyPlan", { keys: "c", title: "复制计划  c" }));
 		// Unbound: the button still mirrors the callback, without a keycap.
 		const editorKeyId = getKeybindings().getKeys("app.editor.external")[0];
 		if (this.callbacks.onExternalEditor) {
-			buttons.push(actionButton("Edit in $EDITOR", "externalEditor", editorKeyId ? { keys: editorKeyId } : {}));
+			buttons.push(actionButton("在 $EDITOR 中编辑", "externalEditor", editorKeyId ? { keys: editorKeyId } : {}));
 		}
 		// Cancel the review the way the cancel key does; while annotating that key
 		// only leaves the draft/chooser, so the button is hidden there.
 		if (!this.#annotating && !this.#annotationChooser) {
 			const cancelKeyId = getKeybindings().getKeys("tui.select.cancel")[0];
-			buttons.push(actionButton("Cancel", "cancel", cancelKeyId ? { keys: cancelKeyId } : {}));
+			buttons.push(actionButton("取消", "cancel", cancelKeyId ? { keys: cancelKeyId } : {}));
 		}
 		if (buttons.length === 0) return undefined;
 		return node("row", { role: "omp.plan.tools", gap: "sm", align: "center", justify: "end" }, buttons, "tools");
@@ -1730,7 +1727,7 @@ export class PlanReviewOverlay implements Component {
 			const section = this.#sections[sectionIndex]!;
 			const count = section.annotations.length;
 			return item(`h${sectionIndex}`, {
-				label: section.title || "(untitled)",
+				label: section.title || "（无标题）",
 				value: count > 0 ? [span(`✎${count}`, "warning")] : undefined,
 				role: `omp.plan.toc.depth${section.level - this.#tocBaseLevel}`,
 			});
@@ -1766,20 +1763,20 @@ export class PlanReviewOverlay implements Component {
 			const entries = chooser.entries.map((selection, i) => {
 				const section = this.#sections[selection.sectionIndex];
 				const annotation = section?.annotations[selection.annotationIndex];
-				const where = annotation?.target.kind === "line" ? `line ${annotation.target.context}` : "section";
+				const where = annotation?.target.kind === "line" ? `行 ${annotation.target.context}` : "章节";
 				return item(`c${i}`, {
 					label: sanitizeStatusText(annotation?.note ?? ""),
-					detail: `${sanitizeStatusText(section?.title || "Plan preamble")} · ${where}`,
+					detail: `${sanitizeStatusText(section?.title || "计划前言")} · ${where}`,
 				});
 			});
 			return [
-				keyed(text([span("Edit annotation", "accent strong")]), "chooserHead"),
+				keyed(text([span("编辑批注", "accent strong")]), "chooserHead"),
 				selectList("chooser", entries, { selected: `c${chooser.selected}` }),
 				hintsRow(
 					[
-						actionHint(["tui.select.up", "tui.select.down"], "choose"),
-						{ keys: ["enter"], label: "edit" },
-						actionHint("tui.select.cancel", "cancel"),
+						actionHint(["tui.select.up", "tui.select.down"], "选择"),
+						{ keys: ["enter"], label: "编辑" },
+						actionHint("tui.select.cancel", "取消"),
 					],
 					"chooserHints",
 				),
@@ -1787,15 +1784,15 @@ export class PlanReviewOverlay implements Component {
 		}
 		if (this.#annotating) {
 			const target = this.#annotationTarget;
-			const title = sanitizeStatusText(this.#sections[target?.sectionIndex ?? -1]?.title || "Plan preamble");
+			const title = sanitizeStatusText(this.#sections[target?.sectionIndex ?? -1]?.title || "计划前言");
 			const location = target?.row === null ? `‹${title}›` : `‹${title}› · ${target?.context ?? ""}`;
 			const hints: (NativeHint | undefined)[] = [
-				actionHint("tui.input.submit", "save"),
-				actionHint("tui.input.newLine", "newline"),
-				actionHint("tui.select.cancel", "cancel"),
+				actionHint("tui.input.submit", "保存"),
+				actionHint("tui.input.newLine", "换行"),
+				actionHint("tui.select.cancel", "取消"),
 			];
-			if (this.#editingAnnotation) hints.push({ keys: [], label: "empty deletes" });
-			if (this.#externalEditorLabel) hints.push({ keys: [], label: `${this.#externalEditorLabel} editor` });
+			if (this.#editingAnnotation) hints.push({ keys: [], label: "留空则删除" });
+			if (this.#externalEditorLabel) hints.push({ keys: [], label: `${this.#externalEditorLabel} 编辑器` });
 			// The feedback field, inline under the plan: its caption names the anchor, omp's editor holds the text.
 			return [
 				node(
@@ -1803,7 +1800,7 @@ export class PlanReviewOverlay implements Component {
 					{ role: "omp.plan.feedback", gap: "xs" },
 					[
 						keyed(
-							text([span("Note on ", "muted"), span(location, "accent")], { truncate: "end" }),
+							text([span("批注位置 ", "muted"), span(location, "accent")], { truncate: "end" }),
 							"annotateHead",
 						),
 						this.#editor,
@@ -1826,34 +1823,34 @@ export class PlanReviewOverlay implements Component {
 		const hints: (NativeHint | undefined)[] = [];
 		switch (this.#focus) {
 			case "actions":
-				hints.push(key(["left", "right"], "select"), key("enter", "confirm"));
-				if (this.#slider) hints.push(key(["shift+left", "shift+right"], "model"));
+				hints.push(key(["left", "right"], "选择"), key("enter", "确认"));
+				if (this.#slider) hints.push(key(["shift+left", "shift+right"], "模型"));
 				break;
 			case "toc":
 				hints.push(
-					upDown("section"),
-					key("enter", "open"),
-					key("a", "annotate"),
-					key("e", "edit"),
-					key("d", "delete"),
-					key("u", "undo"),
+					upDown("章节"),
+					key("enter", "打开"),
+					key("a", "批注"),
+					key("e", "编辑"),
+					key("d", "删除"),
+					key("u", "撤销"),
 				);
 				break;
 			case "body":
 				hints.push(
-					upDown("scroll"),
-					key("shift", "faster"),
-					key(["pageUp", "pageDown"], "page"),
-					key(["g", "shift+g"], "ends"),
-					key("a", "annotate"),
-					key("e", "edit"),
-					key("u", "undo"),
+					upDown("滚动"),
+					key("shift", "加速"),
+					key(["pageUp", "pageDown"], "翻页"),
+					key(["g", "shift+g"], "首尾"),
+					key("a", "批注"),
+					key("e", "编辑"),
+					key("u", "撤销"),
 				);
 				break;
 		}
 		// Copy and the external editor are head buttons with their keycaps; the hints skip them.
-		hints.push(key("tab", "regions"));
-		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "cancel"));
+		hints.push(key("tab", "切换区域"));
+		hints.push(this.#helpSuffix ? { keys: [], label: this.#helpSuffix } : actionHint("tui.select.cancel", "取消"));
 		return hints;
 	}
 
@@ -1867,7 +1864,7 @@ export class PlanReviewOverlay implements Component {
 
 		const committed = this.#committed;
 		const sliderLines = committed ? [] : this.#renderSliderLines();
-		const submittingLabel = this.#committedLabel ? `${this.#committedLabel} — submitting…` : "Submitting…";
+		const submittingLabel = this.#committedLabel ? `${this.#committedLabel} — 正在提交…` : "正在提交…";
 		const optionLines = committed ? [theme.bold(theme.fg("accent", submittingLabel))] : this.#renderOptionLines();
 		const promptLines = this.#promptTitle ? [theme.bold(theme.fg("accent", this.#promptTitle))] : [];
 		const baseChrome = 4 + promptLines.length + sliderLines.length + optionLines.length;
@@ -1875,7 +1872,7 @@ export class PlanReviewOverlay implements Component {
 			? Math.max(0, termHeight - baseChrome - MIN_BODY_ROWS)
 			: Number.POSITIVE_INFINITY;
 		const footerLines = committed
-			? [theme.fg("dim", "Applying your selection — this can take a moment while context is prepared.")]
+			? [theme.fg("dim", "正在应用你的选择 — 准备上下文可能需要片刻。")]
 			: this.#renderFooterLines(innerWidth, chooserFooterRows);
 
 		// Chrome rows: top border, two dividers, bottom border, plus the
