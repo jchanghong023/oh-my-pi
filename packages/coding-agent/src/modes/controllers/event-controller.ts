@@ -329,7 +329,7 @@ export class EventController {
 	#thinkingPreviewEvents = new WeakSet<object>();
 	/** Invalidates queued handlers when a focus/rebuild replaces their UI owner. */
 	#dispatchGeneration = 0;
-	static readonly #MESSAGE_UPDATE_COALESCE_MS = 33;
+	static readonly #MESSAGE_UPDATE_COALESCE_MS = 50;
 
 	constructor(private ctx: InteractiveModeContext) {
 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the

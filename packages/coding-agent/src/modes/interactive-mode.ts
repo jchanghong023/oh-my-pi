@@ -7313,7 +7313,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#micCursor?.dispose();
 		this.#micCursor = undefined;
 		// Stop the shared tool-spinner ticker: a live block missed by per-component
-		// stopAnimation would otherwise keep an 80ms interval pinning the process.
+		// stopAnimation would otherwise keep the shared interval pinning the process.
 		stopSharedSpinnerTicker();
 		this.#liveCommandController.dispose();
 		this.#clearJudgmentBatchProgress();
@@ -7988,7 +7988,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 			// Shimmer drives the 30fps redraw; when it is disabled the working
 			// message is static, so leave `animated` unset and let the loader use
-			// the spinner-only ~12.5fps cadence instead of repainting a frozen line.
+			// spinner-only cadence instead of repainting a frozen line.
 			if (shimmerEnabled()) messageColorFn.animated = true;
 			this.loadingAnimation = new Loader(
 				this.ui,

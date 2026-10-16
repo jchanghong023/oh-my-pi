@@ -302,7 +302,7 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
 
 /** Live tool blocks currently driving a spinner. A single shared ticker (below)
  * advances and repaints every registered block per glyph step, so N concurrent
- * live/streaming blocks — e.g. parallel `task` subagents — cost one 80ms timer
+ * live/streaming blocks — e.g. parallel `task` subagents — cost one shared timer
  * and one coalesced render frame per tick instead of N unsynchronized timers
  * each independently waking the render scheduler (issue #8731). */
 const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
@@ -341,7 +341,7 @@ function unregisterSpinnerBlock(block: ToolExecutionComponent): void {
 
 /** Stop the shared spinner ticker and drop every registered live block.
  *  Called on interactive-mode teardown so a stray live block cannot keep the
- *  process-wide 80ms interval alive past shutdown (lingering event-loop
+ *  process-wide spinner interval alive past shutdown (lingering event-loop
  *  handles pin the process; cf. `postmortem.quit`). Test files that assert on
  *  ticker arming also use this to start from a clean slate. */
 export function stopSharedSpinnerTicker(): void {
@@ -898,7 +898,7 @@ export class ToolExecutionComponent extends Container {
 	/**
 	 * A live block torn down through the generic Container path (transcript
 	 * clear, session switch mid-run) must not leak its shared-ticker
-	 * registration: the dead component would keep the process-wide 80ms
+	 * registration: the dead component would keep the process-wide spinner
 	 * interval alive and keep being repainted.
 	 */
 	override dispose(): void {

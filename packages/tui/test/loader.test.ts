@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, setSystemTime, spyOn, vi } from "bun:test";
 import { Container, TUI } from "@oh-my-pi/pi-tui";
-import { Loader, type LoaderMessageColorFn } from "@oh-my-pi/pi-tui/components/loader";
+import { Loader, type LoaderMessageColorFn, SPINNER_ADVANCE_MS } from "@oh-my-pi/pi-tui/components/loader";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { VirtualTerminal } from "./virtual-terminal";
 
@@ -41,7 +41,7 @@ describe("Loader component", () => {
 		colorMessage.animated = true;
 		const loader = new Loader(ui as unknown as TUI, text => text, colorMessage, "Checking", ["0", "1", "2", "3"]);
 
-		vi.advanceTimersByTime(170);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS * 2 + 34);
 
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(3);
 		expect(loader.render(20).join("\n")).toContain("2 Checking");
@@ -60,7 +60,7 @@ describe("Loader component", () => {
 		vi.advanceTimersByTime(34);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
-		vi.advanceTimersByTime(67);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(20).join("\n")).toContain("1 Checking");
 
@@ -153,7 +153,7 @@ describe("Loader component", () => {
 
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 		lastFrameCostMs = 40;
-		vi.advanceTimersByTime(80);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 
 		vi.advanceTimersByTime(359);
@@ -180,7 +180,7 @@ describe("Loader component", () => {
 		);
 
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
-		vi.advanceTimersByTime(80);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 
 		vi.advanceTimersByTime(1_799);
@@ -228,7 +228,7 @@ describe("Loader component", () => {
 
 		const initial = loader.render(40);
 		stringWidth.mockClear();
-		vi.advanceTimersByTime(80);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		const advanced = loader.render(40);
 
 		// Advancing the spinner glyph must not re-run the wrap/width pipeline:
@@ -252,7 +252,7 @@ describe("Loader component", () => {
 		);
 
 		loader.render(8);
-		vi.advanceTimersByTime(80);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		const widerFrame = loader.render(8);
 
 		expect(widerFrame.join("\n")).toContain(">>>>");
@@ -288,7 +288,7 @@ describe("Loader component", () => {
 		expect(Bun.stripANSI(recolored[1])).toBe(` ⠋>> 界 e\u0301${" ".repeat(12)}界!`);
 		expect(recolored[2]).toContain("\x1b[32mnext\x1b[0m");
 
-		vi.advanceTimersByTime(80);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		expect(Bun.stripANSI(loader.render(24)[1])).toBe(` 界>> 界 e\u0301${" ".repeat(11)}界!`);
 
 		trailer = "a trailer that does not fit";
@@ -328,14 +328,15 @@ describe("Loader component", () => {
 		vi.advanceTimersByTime(34);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(1);
 
-		vi.advanceTimersByTime(67);
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 		expect(ui.requestComponentRender).toHaveBeenCalledTimes(2);
 		expect(loader.render(40).join("\n")).toContain("1 Checking-");
 
 		loader.stop();
 	});
 
-	it("dispose() stops the animation so no further renders are scheduled", async () => {
+	it("dispose() stops the animation so no further renders are scheduled", () => {
+		vi.useFakeTimers();
 		const term = new VirtualTerminal(20, 4);
 		const tui = new TUI(term);
 		const loader = new Loader(
@@ -348,9 +349,9 @@ describe("Loader component", () => {
 		const spy = spyOn(tui, "requestComponentRender");
 		loader.dispose();
 		const after = spy.mock.calls.length;
-		await Bun.sleep(40); // longer than the spinner interval
+		loader.dispose();
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS * 2);
 		expect(spy.mock.calls.length).toBe(after);
-		expect(() => loader.dispose()).not.toThrow(); // idempotent
 		tui.stop();
 	});
 
@@ -397,7 +398,7 @@ describe("Loader component", () => {
 		step = 1;
 		expect(loader.render(20).join("\n")).toContain("step 0");
 
-		vi.advanceTimersByTime(80); // first spinner advance re-evaluates the fn
+		vi.advanceTimersByTime(SPINNER_ADVANCE_MS); // first spinner advance re-evaluates the fn
 		expect(loader.render(20).join("\n")).toContain("step 1");
 		expect(loader.render(20).join("\n")).not.toContain("step 0");
 

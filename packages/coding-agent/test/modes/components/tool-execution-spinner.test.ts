@@ -72,7 +72,7 @@ describe("ToolExecutionComponent live preview spinners", () => {
 
 		try {
 			const firstFrame = stripVTControlCharacters(component.render(80).join("\n"));
-			vi.advanceTimersByTime(120);
+			vi.advanceTimersByTime(SPINNER_ADVANCE_MS);
 			const secondFrame = stripVTControlCharacters(component.render(80).join("\n"));
 
 			expect(requestComponentRender).toHaveBeenCalledWith(component);
