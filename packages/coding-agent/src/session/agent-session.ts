@@ -257,7 +257,8 @@ import {
 } from "../tools/resolve";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
-import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
+import { isClosedTodo, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { AgentDefinition } from "../task/types";
@@ -6294,6 +6295,14 @@ export class AgentSession implements SettingsScope {
 		// on-disk record and the plain `transcript:true` export path keep the full
 		// pre-reset history.
 		this.sessionManager.appendResetBoundary();
+
+		const todoPhases = this.getTodoPhases();
+		if (todoPhases.length > 0 && todoPhases.every(phase => phase.tasks.every(isClosedTodo))) {
+			// An empty canonical snapshot keeps settled plans cleared on resume
+			// without deleting their pre-reset history or touching unfinished work.
+			this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
+			this.setTodoPhases([]);
+		}
 
 		resetCapabilities();
 		await this.refreshBaseSystemPrompt();

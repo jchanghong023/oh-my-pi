@@ -219,6 +219,13 @@
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。独立 Python 回归不因此纳入 fork 本地门禁。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
+### `/clear` 已结束待办清理
+
+- `/clear` 原地清空对话上下文时，若当前 TODO 的所有任务均为 `completed`（已完成）或 `abandoned`（已放弃），同时清空当前生效的清单并立即移除 TODO 显示，不等待自动隐藏延迟；手动展开或禁用自动隐藏不阻止此次清理。
+- 只要仍有 `pending`、`in_progress` 或 `blocked` 任务，就保留整份清单，包括已完成／已放弃任务、阶段与阻塞说明，不部分删除。
+- 清理通过既有会话记录持久化空清单，不删除此前任务历史，不改变会话 ID、标题、目录、模型与设置；刷新、重新展开或重启恢复会话后，不得重新出现已清理的清单。
+- 复用共享会话重置链路与已有 `isClosedTodo` 状态定义，不新增配置或第二套终态判定；TUI 重置后同步刷新当前 TODO 面板。
+
 ### `/wt` 会话工作树
 
 - 保留 `/wt [分支名]` 与别名 `/worktree`，切换的是当前会话的工作目录，不新建聊天会话；未指定分支名时沿用上游自动命名。以下规则仅约束该命令，不改变 task 隔离、PR checkout 或其他 worktree 入口。
@@ -323,7 +330,7 @@
 - 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
 - 日志框架、默认目录与启动参数跟随上游；fork 功能的诊断覆盖遵循上文「运行诊断日志」。
 - `-P <name>` 是上游 `--profile <name>` 的内置短参数，无需配置 shell alias；启动前选择 profile，认证、会话、设置与缓存隔离及环境变量优先级沿用上游。`-p` 仍为非交互 print 模式，不新增会话共享行为。
-- 默认启动、`omp launch`、`omp acp`、`omp join`、`omp setup` 这些经过会话启动路径的进程，若未设置 `PI_WALK_WORKERS` 且本机逻辑核数 > 8，会在进程内把文件遍历线程数设为 `min(核数/2, 16)`（32 逻辑核 → 16）；逻辑核数 ≤ 8 时保留 native 默认值 4。只改当前进程环境，不写配置文件，用户显式设置的值（含 `0`）永远优先；其他子命令（`omp grep`、`omp models` 等）不受影响。
+- 文件遍历线程数沿用上游 native 默认值：未设置 `PI_WALK_WORKERS` 时默认使用 4 个 worker，不再按本机核数注入覆盖值。用户显式设置的值仍由上游处理（`0` 表示自动检测，`1` 表示串行）；普通与 offline 启动遵循同一规则，不写配置文件。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
 - `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 原始数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。非 offline 时直接使用该根；适用的 offline shm 模式按下述契约区分运行根与原始持久根。
 - **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。

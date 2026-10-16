@@ -1826,11 +1826,6 @@ export async function disposeSessionQuietly(session: AgentSession): Promise<void
 	await session.dispose().catch(() => undefined);
 }
 
-/** Walker thread count: `cores/2` (capped at 16) when cores > 8, else undefined to keep the native default of 4. */
-export function walkerWorkersForCores(cores: number): number | undefined {
-	return cores > 8 ? Math.min(Math.floor(cores / 2), 16) : undefined;
-}
-
 /** Scan-cache TTL injected into OMP_OFFLINE processes; only affects the rescan interval behind `@` completion. */
 const OFFLINE_SCAN_CACHE_TTL_MS = "30000";
 
@@ -1840,13 +1835,8 @@ export async function runRootCommand(
 	deps: RunRootCommandDependencies = DEFAULT_RUN_ROOT_DEPENDENCIES,
 ): Promise<void> {
 	logger.startTiming();
-	// Native filesystem tuning has to land before this process traverses anything:
-	// the walker reads both variables exactly once, on first use. Explicitly set
-	// values win, including "0".
-	const walkWorkers = walkerWorkersForCores(os.availableParallelism());
-	if (walkWorkers !== undefined && (process.env.PI_WALK_WORKERS ?? "") === "") {
-		process.env.PI_WALK_WORKERS = String(walkWorkers);
-	}
+	// Set the offline scan-cache TTL before the native walker reads it on first use.
+	// Explicitly configured values, including "0", take precedence.
 	if (parsed.offline === true && (process.env.FS_SCAN_CACHE_TTL_MS ?? "") === "") {
 		process.env.FS_SCAN_CACHE_TTL_MS = OFFLINE_SCAN_CACHE_TTL_MS;
 	}

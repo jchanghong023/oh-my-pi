@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Restore upstream filesystem walker concurrency (four workers by default) instead of scaling it with CPU core count, preserving explicit `PI_WALK_WORKERS` settings.
+
+### Fixed
+
+- `/clear` now clears fully completed or abandoned todo plans immediately and keeps them cleared on resume, while preserving unfinished plans and task history.
+
 ## [18.11.3] - 2026-10-16
 
 ### Breaking Changes

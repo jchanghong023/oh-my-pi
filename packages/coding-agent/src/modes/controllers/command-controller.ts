@@ -1381,6 +1381,7 @@ export class CommandController {
 		// the session id, title, and transcript file all survive).
 		this.ctx.clearTransientSessionUi();
 		this.ctx.resetTranscript();
+		await this.ctx.reloadTodos();
 		this.ctx.statusLine.invalidate();
 		this.ctx.updateEditorBorderColor();
 		this.ctx.session.emitNotice("info", formatResetContextResult(result));

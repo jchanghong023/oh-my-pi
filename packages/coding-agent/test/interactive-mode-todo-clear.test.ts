@@ -15,6 +15,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { assistantMsg } from "./utilities";
 
 function renderTodos(mode: InteractiveMode): string {
 	return Bun.stripANSI(mode.todoContainer.render(120).join("\n"));
@@ -79,6 +80,80 @@ describe("InteractiveMode todo HUD persistence", () => {
 
 	function setTodoClearDelay(todoClearDelay: number): void {
 		cfgTasksTodoClearDelay.override(session.settings, todoClearDelay);
+	}
+
+	it("/clear removes a settled plan from the HUD and resumed state while retaining its history", async () => {
+		await replaceMode();
+		setTodoClearDelay(-1);
+		const phases: TodoPhase[] = [
+			{ name: "Prepare", tasks: [{ content: "verify upstream", status: "completed" }] },
+			{ name: "Merge", tasks: [{ content: "merge unnecessary changes", status: "abandoned" }] },
+		];
+		session.sessionManager.appendMessage(assistantMsg("No merge is needed."));
+		const sourceId = session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
+		session.setTodoPhases(phases);
+		mode.setTodos(phases);
+		mode.setTodoExpanded(true);
+		const sessionId = session.sessionManager.getSessionId();
+		const file = session.sessionManager.getSessionFile()!;
+		expect(renderTodos(mode)).toContain("verify upstream");
+		expect(renderTodos(mode)).toContain("merge unnecessary changes");
+
+		await mode.handleResetContextCommand();
+
+		expect(session.getTodoPhases()).toEqual([]);
+		expect(renderTodos(mode)).toBe("");
+		expect(session.sessionManager.getSessionId()).toBe(sessionId);
+		expect(session.sessionManager.getBranch().find(entry => entry.id === sourceId)).toMatchObject({
+			type: "custom",
+			data: { phases },
+		});
+		await session.sessionManager.flush();
+		await replaceMode(await SessionManager.open(file));
+		await mode.reloadTodos();
+		mode.setTodoExpanded(true);
+		expect(session.getTodoPhases()).toEqual([]);
+		expect(renderTodos(mode)).toBe("");
+	});
+
+	for (const status of ["pending", "in_progress", "blocked"] as const) {
+		it(`/clear retains the entire plan when a task is ${status}, including after resume`, async () => {
+			await replaceMode();
+			setTodoClearDelay(-1);
+			const phases: TodoPhase[] = [
+				{
+					name: "Previous work",
+					tasks: [
+						{ content: "finished task", status: "completed" },
+						{ content: "cancelled task", status: "abandoned" },
+					],
+				},
+				{
+					name: "Remaining work",
+					tasks: [
+						{ content: "remaining task", status, blocker: status === "blocked" ? "external input" : undefined },
+					],
+				},
+			];
+			session.sessionManager.appendMessage(assistantMsg("Work remains."));
+			session.sessionManager.appendCustomEntry("user_todo_edit", { phases });
+			session.setTodoPhases(phases);
+			mode.setTodos(phases);
+			mode.setTodoExpanded(true);
+			const file = session.sessionManager.getSessionFile()!;
+
+			await mode.handleResetContextCommand();
+
+			expect(session.getTodoPhases()).toEqual(phases);
+			expect(renderTodos(mode)).toContain("remaining task");
+			expect(renderTodos(mode)).toContain("finished task");
+			expect(renderTodos(mode)).toContain("cancelled task");
+			await session.sessionManager.flush();
+			await replaceMode(await SessionManager.open(file));
+			await mode.reloadTodos();
+			expect(session.getTodoPhases()).toEqual(phases);
+			expect(renderTodos(mode)).toContain("remaining task");
+		});
 	}
 
 	it("clears closed todos from the panel instantly without mutating session history", async () => {

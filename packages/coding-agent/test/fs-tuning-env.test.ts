@@ -1,8 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import * as os from "node:os";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { runRootCommand, walkerWorkersForCores } from "@oh-my-pi/pi-coding-agent/main";
+import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -12,7 +11,6 @@ const STOP = new Error("stop after session options");
 const CHILD_FLAG = "--fs-tuning-child";
 
 interface FsTuningEnv {
-	walkWorkers?: string;
 	scanTtl?: string;
 }
 
@@ -23,7 +21,6 @@ async function startWith(argv: string[], overrides: Record<string, string> = {})
 		env: {
 			...process.env,
 			PI_CODING_AGENT_DIR: tempDir.path(),
-			PI_WALK_WORKERS: undefined,
 			FS_SCAN_CACHE_TTL_MS: undefined,
 			OMP_OFFLINE: undefined,
 			...overrides,
@@ -68,7 +65,7 @@ async function startInProcess(argv: string[]): Promise<FsTuningEnv> {
 	} finally {
 		authStorage.close();
 	}
-	return { walkWorkers: process.env.PI_WALK_WORKERS, scanTtl: process.env.FS_SCAN_CACHE_TTL_MS };
+	return { scanTtl: process.env.FS_SCAN_CACHE_TTL_MS };
 }
 
 if (process.argv.includes(CHILD_FLAG)) {
@@ -77,17 +74,6 @@ if (process.argv.includes(CHILD_FLAG)) {
 	process.exit(0);
 }
 describe("runRootCommand — fork filesystem tuning", () => {
-	it("sets PI_WALK_WORKERS from the logical core count when the variable is unset", async () => {
-		const snapshot = await startWith(["--print", "hi"]);
-
-		const expected = walkerWorkersForCores(os.availableParallelism());
-		if (expected === undefined) {
-			expect(snapshot.walkWorkers).toBeUndefined();
-		} else {
-			expect(snapshot.walkWorkers).toBe(String(expected));
-		}
-	});
-
 	it("sets FS_SCAN_CACHE_TTL_MS for an offline (OMP_OFFLINE=1) process", async () => {
 		const snapshot = await startWith(["--print", "hi"], { OMP_OFFLINE: "1" });
 
@@ -100,26 +86,12 @@ describe("runRootCommand — fork filesystem tuning", () => {
 		expect(snapshot.scanTtl).toBeUndefined();
 	});
 
-	it('keeps explicitly configured values, including the "0" opt-outs', async () => {
+	it("keeps an explicitly configured scan-cache TTL", async () => {
 		const snapshot = await startWith(["--print", "hi"], {
 			OMP_OFFLINE: "1",
-			PI_WALK_WORKERS: "0",
 			FS_SCAN_CACHE_TTL_MS: "7",
 		});
 
-		expect(snapshot.walkWorkers).toBe("0");
 		expect(snapshot.scanTtl).toBe("7");
-	});
-});
-
-describe("walkerWorkersForCores", () => {
-	it("halves hosts above 8 logical cores and caps the result at 16", () => {
-		expect(walkerWorkersForCores(1)).toBeUndefined();
-		expect(walkerWorkersForCores(8)).toBeUndefined();
-		expect(walkerWorkersForCores(9)).toBe(4);
-		expect(walkerWorkersForCores(12)).toBe(6);
-		expect(walkerWorkersForCores(16)).toBe(8);
-		expect(walkerWorkersForCores(32)).toBe(16);
-		expect(walkerWorkersForCores(64)).toBe(16);
 	});
 });
