@@ -30,7 +30,7 @@ afterEach(async () => {
 });
 
 function fixture(): OfflineShmState {
-	const directory = TempDir.createSync("omp-shm-backup-");
+	const directory = TempDir.createSync("@omp-shm-backup-");
 	temporary.push(directory);
 	const root = syncFs.realpathSync(directory.path());
 	const runtimeRoot = path.join(root, "runtime");
