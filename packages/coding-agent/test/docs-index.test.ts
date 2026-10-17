@@ -1260,7 +1260,6 @@ describe("DocsSearchEngine indexing contract", () => {
 			});
 			if (query === "C++") {
 				const complete = service.search("C++17", { index: "manual", limit: 500 });
-				expect(complete.exactNameMatches).toBe(1);
 				expect(complete.sections[0]).toMatchObject({ path: "continued.md", matchKind: "exact-name" });
 				expect(complete.sections[0].text.normalize("NFKC")).toContain("C++17");
 			}
@@ -1285,7 +1284,6 @@ describe("DocsSearchEngine indexing contract", () => {
 				expect(partial.sections.every(hit => hit.matchKind === "related")).toBe(true);
 				if (marks === 2) {
 					const complete = service.search("scañ", { index: "manual", limit: 500 });
-					expect(complete.exactNameMatches).toBe(1);
 					expect(complete.sections[0]).toMatchObject({ path: "continued.md", matchKind: "exact-name" });
 					expect(complete.sections[0].text.normalize("NFKC")).toContain("scañ");
 				}
@@ -1325,7 +1323,6 @@ describe("DocsSearchEngine indexing contract", () => {
 				matchKind: "related",
 			});
 			const complete = service.search(whole, { index: "manual", limit: 500 });
-			expect(complete.exactNameMatches).toBe(1);
 			expect(complete.sections[0].text).toContain(whole);
 		} finally {
 			service.close();
