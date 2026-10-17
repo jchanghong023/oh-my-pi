@@ -35,9 +35,6 @@ export type {
 	KernelShutdownResult,
 } from "../kernel-base";
 
-export type { KernelDisplayOutput, PythonStatusEvent } from "./display";
-export { renderKernelDisplay } from "./display";
-
 const TRACE_IPC = $flag("PI_PYTHON_IPC_TRACE");
 
 const SHUTDOWN_GRACE_MS = 1_000;
@@ -61,7 +58,6 @@ const PYTHON_RESERVED_PRELUDE_EXPORTS: Record<string, true> = {
 	agent: true,
 	budget: true,
 	completion: true,
-	display: true,
 	env: true,
 	judge: true,
 	judge_batch: true,

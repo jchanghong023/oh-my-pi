@@ -1222,7 +1222,7 @@ export const editToolRenderer = {
 				diffText = args.previewDiff ?? args.diff ?? "";
 				body.push(editDiff(diffText, rawPath));
 			} else if (args.diff || args.newText || args.patch) {
-				body.push(code(args.diff ?? args.newText ?? args.patch ?? "", { lang: getLanguageFromPath(rawPath) }));
+				body.push(code(args.diff ?? args.newText ?? args.patch ?? "", { path: rawPath || undefined }));
 			} else if (renderContext?.editDiffPreview) {
 				const preview = renderContext.editDiffPreview;
 				if ("error" in preview && preview.error) body.push(errorText(preview.error));
@@ -1362,9 +1362,9 @@ function editToolHead(facts: EditHeadFacts): NativeToolHead {
 	};
 }
 
-/** A file's diff: hunks highlighted by the path's language, no path header (the head or section names the file). */
+/** A file's diff: Tern highlights the hunks by the file's grammar and draws no path header (the head or section names the file). */
 function editDiff(diffText: string, filePath: string): NativeNode {
-	return nativeDiff(diffText, { lang: filePath ? getLanguageFromPath(filePath) : undefined });
+	return nativeDiff(diffText, { path: filePath || undefined });
 }
 
 /** One file's edit result for native views: head facts plus its body (diff or error, then diagnostics). */

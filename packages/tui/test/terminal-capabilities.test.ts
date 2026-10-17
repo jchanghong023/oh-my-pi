@@ -161,10 +161,13 @@ describe("detectTerminalId", () => {
 
 describe("tmux client terminal resolution", () => {
 	const CLIENT_QUERY = "display-message -p #{client_termtype}\t#{client_termname}";
+	// Kitty graphics inside tmux also require pane passthrough; these tests
+	// exercise identity resolution, so the fake tmux forwards it.
+	const PASSTHROUGH_QUERY = "show-options -Apqv allow-passthrough";
 
 	async function resolveInsideFakeTmux(clientReport: string, replyDelayMs?: number): Promise<string> {
 		return withFakeTmux(
-			{ [CLIENT_QUERY]: clientReport },
+			{ [CLIENT_QUERY]: clientReport, [PASSTHROUGH_QUERY]: "on" },
 			async binDir => {
 				const proc = Bun.spawn({
 					cmd: [
@@ -182,6 +185,7 @@ console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyPro
 						TERM_PROGRAM_VERSION: "3.6b",
 						COLORTERM: "truecolor",
 						TMUX: "/tmp/tmux-1000/default,4242,0",
+						TMUX_PANE: undefined,
 						SSH_CONNECTION: "client 1 server 22",
 						PATH: `${binDir}${path.delimiter}${Bun.env.PATH ?? ""}`,
 					}),
@@ -536,10 +540,28 @@ describe("tmux image protocol selection", () => {
 		expect(resolveImageProtocol("base", { TERM: "tmux-256color" }, true)).toBeNull();
 	});
 
-	it("keeps a known Kitty client inside tmux and the GNU screen fallback", () => {
-		expect(resolveImageProtocol("ghostty", { TMUX: "/tmp/tmux/default,1,0", TERM: "tmux-256color" }, true)).toBe(
-			ImageProtocol.Kitty,
-		);
+	// tmux 3.3+ drops `\x1bPtmux;` envelopes unless `allow-passthrough` is on,
+	// so a Kitty client identity alone must not select Kitty graphics.
+	for (const [name, socket, passthrough, expected] of [
+		["keeps a known Kitty client when tmux forwards passthrough", "5101", "on", ImageProtocol.Kitty],
+		["drops a known Kitty client when tmux blocks passthrough", "5102", "off", null],
+		["keeps a known Kitty client on tmux without the passthrough option", "5103", "", ImageProtocol.Kitty],
+	] as const) {
+		it.skipIf(process.platform === "win32")(name, async () => {
+			const replies = { "show-options -Apqv -t %7 allow-passthrough": passthrough };
+			await withFakeTmux(replies, async binDir => {
+				const env = {
+					PATH: `${binDir}:${Bun.env.PATH ?? ""}`,
+					TMUX: `/tmp/tmux-1000/default,${socket},0`,
+					TMUX_PANE: "%7",
+					TERM: "tmux-256color",
+				};
+				expect(resolveImageProtocol("ghostty", env, true)).toBe(expected);
+			});
+		});
+	}
+
+	it("keeps the GNU screen Kitty fallback", () => {
 		expect(resolveImageProtocol("base", { TERM: "screen-256color" }, true)).toBe(ImageProtocol.Kitty);
 	});
 });

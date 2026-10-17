@@ -17,7 +17,7 @@ import {
 	terminalMultiplexerForTerm,
 	terminalMultiplexerSessions,
 } from "./terminal-multiplexer";
-import { resolveTmuxClientTerminalNames, wrapTmuxPassthroughIfNeeded } from "./tmux";
+import { resolveTmuxClientTerminalNames, tmuxPaneAllowsPassthrough, wrapTmuxPassthroughIfNeeded } from "./tmux";
 import { detectTerminalBackground } from "./theme/theme";
 import type { HangulCompatibilityJamoWidth } from "./utils";
 
@@ -558,6 +558,12 @@ export function resolveImageProtocol(
 		imageProtocol !== null &&
 		terminalMultiplexerSessions(env).some(multiplexer => multiplexer.imagesRequireOverride)
 	) {
+		return null;
+	}
+	// Kitty graphics reach a tmux client only through the DCS passthrough
+	// envelope, which tmux drops unless `allow-passthrough` is enabled. A Kitty
+	// client identity alone would otherwise send images into the void.
+	if (imageProtocol === ImageProtocol.Kitty && env.TMUX && !tmuxPaneAllowsPassthrough(env)) {
 		return null;
 	}
 	return imageProtocol;

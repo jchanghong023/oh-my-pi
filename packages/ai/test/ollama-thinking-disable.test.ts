@@ -44,13 +44,15 @@ const emptyUsage: Usage = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-function createReasoningOllamaModel(input: Array<"text" | "image"> = ["text"]) {
+function createReasoningOllamaModel(
+	input: Array<"text" | "image"> = ["text"],
+	host: { provider: string; baseUrl: string } = { provider: "ollama-cloud", baseUrl: "https://ollama.com" },
+) {
 	return buildModel({
 		id: "deepseek-v4-flash",
 		name: "DeepSeek V4 Flash",
 		api: "ollama-chat",
-		provider: "ollama-cloud",
-		baseUrl: "https://ollama.com",
+		...host,
 		reasoning: true,
 		input,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -419,7 +421,12 @@ describe("Ollama chat sampling options", () => {
 			messages: [{ role: "user", content: "title this", timestamp: 0 }],
 		};
 
-		await streamOllama(createReasoningOllamaModel(), context, {
+		// Self-hosted Ollama: Ollama Cloud omits `num_predict` (`omit-max-output-tokens`).
+		const selfHosted = createReasoningOllamaModel(["text"], {
+			provider: "ollama",
+			baseUrl: "http://127.0.0.1:11434",
+		});
+		await streamOllama(selfHosted, context, {
 			apiKey: "test-key",
 			temperature: 0,
 			topP: 0.9,

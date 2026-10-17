@@ -1894,6 +1894,9 @@ export class ModelRegistry {
 				)
 			: withDecoderMetadata;
 
+		// User config plumbing, not catalog policy: an ollama provider configured
+		// for Responses moves its completions-discovered rows onto that API.
+		// KDL `api-routes` key on model ids and cannot see the provider config.
 		if (providerConfig.provider !== "ollama" || providerConfig.api !== "openai-responses") {
 			return withRemoteCompaction;
 		}
@@ -3184,9 +3187,6 @@ export class ModelRegistry {
 			if (!model.contextWindowAuthoritative) {
 				({ model, tiers } = this.#applyContextWindowPolicies(model, extendedContext, compactionPoints));
 			}
-			if (model.provider === "ollama-cloud" && model.omitMaxOutputTokens !== true) {
-				model = applyModelOverride(model, { omitMaxOutputTokens: true });
-			}
 			if (tiers) this.#policyWindowTiers.set(model, tiers);
 			return model;
 		});
@@ -3241,29 +3241,18 @@ export class ModelRegistry {
 		// Extended context off: cap models with a premium long-context price
 		// tier (e.g. GPT-5.6 bills 2x input above 272K) at the standard-pricing
 		// threshold so compaction fires before a request crosses into the tier.
-		// xai-oauth carries public xAI prices only for API-equivalent stats;
-		// SuperGrok requests remain subscription-backed, so its estimated tier
-		// must not constrain the runtime context window. Explicit per-model
+		// Rows flagged `longContextWindowUncapped` (catalog
+		// `long-context-window-uncapped`, e.g. subscription-backed hosts whose
+		// tier prices are estimates) keep their full window. Explicit per-model
 		// `contextWindow` overrides reapply later in composition and win over
 		// this cap.
-		if (!extendedContext && model.provider !== "xai-oauth") {
+		if (!extendedContext && model.longContextWindowUncapped !== true) {
 			const threshold = model.cost.longContext?.inputThreshold;
 			if (threshold !== undefined && model.contextWindow !== null && model.contextWindow > threshold) {
 				model = applyModelOverride(model, { contextWindow: threshold });
 			}
 		}
-		if (model.id !== "gpt-5.4" || model.provider === "github-copilot") {
-			return model;
-		}
-		const overrides = this.#modelOverrides.get(model.provider)?.get(model.id);
-		if (!overrides) {
-			return applyModelOverride(model, { contextWindow: 1_000_000 });
-		}
-		this.#warnUnservedOverrideKind(model, overrides);
-		return applyModelOverride(model, {
-			contextWindow: overrides.contextWindow ?? 1_000_000,
-			...overrides,
-		});
+		return model;
 	}
 
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {

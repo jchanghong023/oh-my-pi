@@ -37,7 +37,6 @@ import type {
 import type { TspTone } from "@oh-my-pi/pi-wire";
 import { code, col, compact, keyed, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
-import { getLanguageFromPath } from "../lang-from-path";
 import { fileHref, fileRow, inlineErrorView } from "./native-view";
 import { splitUrlScheme } from "./url-scheme-host";
 
@@ -214,10 +213,14 @@ function describeHit(hit: FindHit, rangeLimit: number, cwd: string | undefined, 
 		href: isUrlHit || cwd === undefined ? undefined : fileHref(path.join(cwd, rawRel)),
 		key: "hit",
 	});
-	const lang = getLanguageFromPath(hit.rel);
 	const snippets = ranges.map(range =>
 		keyed(
-			code(range.snippet.trimEnd(), { lang, start: range.start, numbers: true, title: range.p.toFixed(2) }),
+			code(range.snippet.trimEnd(), {
+				path: hit.rel,
+				start: range.start,
+				numbers: true,
+				title: range.p.toFixed(2),
+			}),
 			`${range.start}-${range.end}`,
 		),
 	);

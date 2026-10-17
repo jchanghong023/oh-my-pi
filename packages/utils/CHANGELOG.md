@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.0] - 2026-10-17
+
 ### Added
 
 - Added `sanitizeTextDeep()`, which applies `sanitizeText()` to every string in a JSON-shaped value without mutating it ([#15963](https://github.com/can1357/oh-my-pi/issues/15963))

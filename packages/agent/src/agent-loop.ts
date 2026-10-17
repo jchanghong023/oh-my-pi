@@ -906,7 +906,11 @@ export function normalizeMessagesForProvider(
 	messages: Context["messages"],
 	model: AgentLoopConfig["model"],
 ): Context["messages"] {
-	if (model.provider !== "cerebras") {
+	// The anthropic and ollama transports apply `stripThinkingHistory` with their
+	// own turn-shape rules; chat completions has no wire-level handling, so the
+	// history is stripped here.
+	const compat = model.api === "openai-completions" ? model.compat : undefined;
+	if (!compat || !("stripThinkingHistory" in compat) || compat.stripThinkingHistory !== true) {
 		return messages;
 	}
 

@@ -571,6 +571,8 @@ export interface OpenAICompat {
 	reasoningDeltasMayBeCumulative?: boolean;
 	/** Strip leaked DeepSeek chat-template special tokens from visible content deltas. Default: auto-detected. */
 	stripDeepseekSpecialTokens?: boolean;
+	/** Drop assistant thinking blocks from replayed chat-completions history. Default: false. */
+	stripThinkingHistory?: boolean;
 	/** Heal leaked chat-template/tool-call/thinking markup from visible content deltas. Default: auto-detected. */
 	streamMarkupHealingPattern?: OpenAIStreamMarkupHealingPattern;
 	/** Whether this wire may revise already-streamed text (`stream-revision` axis). Unassigned: append-only. */
@@ -1042,6 +1044,7 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 			| "requiresAssistantAfterToolResult"
 			| "requiresAssistantContentForToolCalls"
 			| "stripDeepseekSpecialTokens"
+			| "stripThinkingHistory"
 			| "streamMarkupHealingPattern"
 			| "reasoningDeltasMayBeCumulative"
 			| "emptyLengthFinishIsContextError"
@@ -1080,6 +1083,9 @@ export type ResolvedOpenAICompat = ResolvedOpenAISharedCompat &
 		cacheControlFormat?: OpenAICompat["cacheControlFormat"];
 		thinkingKeep?: OpenAICompat["thinkingKeep"];
 		streamIdleTimeoutMs?: number;
+		stripThinkingHistory?: boolean;
+		/** The configured `baseUrl` is the official OpenAI API (provider `openai`); unset otherwise. */
+		officialEndpoint?: boolean;
 		toolStrictMode: ResolvedToolStrictMode;
 		/** The model sits behind Vercel AI Gateway. */
 		isVercelGatewayHost: boolean;
@@ -1666,6 +1672,8 @@ export interface Model<TApi extends Api = Api> {
 	contextWindow: number | null;
 	/** Preserve the host's supplied window instead of applying inferred expansion or reference-price caps. */
 	contextWindowAuthoritative?: boolean;
+	/** The long-context price tier does not cap the runtime context window when extended context is off. */
+	longContextWindowUncapped?: boolean;
 	/** Optional larger prompt window available when extended context is enabled. */
 	maxContextWindow?: number;
 	maxTokens: number | null;

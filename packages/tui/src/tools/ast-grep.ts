@@ -14,7 +14,6 @@ import {
 	toPathList,
 } from "../render/render-utils";
 import { classifyGroupedLines, describeGroupedOutput, groupLineIndicesByBlank } from "./grouped-file-output";
-import { getLanguageFromPath } from "../lang-from-path";
 import { code, compact, node, span } from "../native/describe";
 import type { NativeChild } from "../native/node";
 import { errorText, noteText, resultText, toolHead } from "./native-view";
@@ -279,7 +278,7 @@ export const astGrepToolRenderer = {
 		return {
 			head,
 			body: compact<NativeChild>([
-				...describeGroupedOutput(kept, { lang: getLanguageFromPath }),
+				...describeGroupedOutput(kept),
 				limitReached && noteText("limit reached; narrow path or use skip", "warning"),
 				parseNote,
 			]),

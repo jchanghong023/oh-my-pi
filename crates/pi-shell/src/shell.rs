@@ -2520,6 +2520,7 @@ mod tests {
 		(master, slave)
 	}
 
+	#[cfg(unix)]
 	async fn interactive_kill_test_context(
 		terminal_stdin: &fs::File,
 	) -> (ShellSessionCore, ExecutionParameters) {

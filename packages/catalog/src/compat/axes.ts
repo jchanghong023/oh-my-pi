@@ -259,7 +259,7 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	"requires-thinking-enabled": wire("requiresThinkingEnabled", ["anthropic"]),
 	"requires-tool-result-id": wire("requiresToolResultId", ["anthropic"]),
 	"signing-endpoint": wire("signingEndpoint", ["anthropic"]),
-	"strip-thinking-history": wire("stripThinkingHistory", ["anthropic", "ollama"]),
+	"strip-thinking-history": wire("stripThinkingHistory", ["openai", "anthropic", "ollama"]),
 	"supports-context-management": wire("supportsContextManagement", ["anthropic"]),
 	"supports-output-effort": wire("supportsOutputEffort", ["anthropic"]),
 	"supports-eager-tool-input-streaming": wire("supportsEagerToolInputStreaming", ["anthropic"]),
@@ -409,6 +409,19 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/**
+	 * The model's long-context price tier does not bound its runtime context
+	 * window: with extended context off, the window is not capped at the
+	 * tier's input threshold (subscription hosts carrying API-equivalent tier
+	 * prices, or a model served at its full window). Explicit user context
+	 * overrides still apply.
+	 */
+	"long-context-window-uncapped": {
+		key: "longContextWindowUncapped",
+		set: "catalog",
+		shape: "scalar",
+		values: [true, false],
+	},
 	"cost-patch": { key: "costPatch", set: "catalog", shape: "object" },
 	"cost-fallback": { key: "costFallback", set: "catalog", shape: "object" },
 	/**
@@ -486,11 +499,37 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	 */
 	"judgment-image-input": { key: "judgmentImageInput", set: "catalog", shape: "object" },
 	/**
+	 * `Content-Encoding`s the host decodes on request bodies, most preferred
+	 * first. Applied only while the request reaches the provider's own endpoint
+	 * (see `endpoint-hosts`), so a proxy or rerouted endpoint never receives
+	 * bytes it cannot read. Unassigned: bodies are sent uncompressed.
+	 */
+	"request-encodings": { key: "requestEncodings", set: "catalog", shape: "array", values: ["zstd", "gzip"] },
+	/**
+	 * HTTPS hostnames the provider itself serves besides its bundled base URL's
+	 * host — per-account endpoints such as Copilot's plan hosts. Together with
+	 * that host they define the provider's own endpoint, which tells first-party
+	 * traffic from a custom gateway that reuses the provider id.
+	 */
+	"endpoint-hosts": { key: "endpointHosts", set: "catalog", shape: "array" },
+	/**
+	 * Pattern of the JSON 400/415 error body the host returns when it cannot
+	 * decode a compressed request body. Unassigned: every JSON 400/415 is a
+	 * possible rejection and is re-checked with an uncompressed resend. Either
+	 * way, a 400/403/415 whose body is not JSON (presumed a proxy's answer, not
+	 * the host's) is re-checked too.
+	 */
+	"request-encoding-rejection": { key: "requestEncodingRejection", set: "catalog", shape: "scalar" },
+	/**
 	 * Most questions one System One judgment request may carry; the judge
 	 * splits larger requests. Unassigned: the endpoint takes any batch size.
 	 */
 	"judgment-questions-max": { key: "judgmentQuestionsMax", set: "catalog", shape: "scalar" },
 	"limits-patch": { key: "limitsPatch", set: "catalog", shape: "object" },
+	/** Seeds `maxTokens` only when the row reports none; applied after `limits-patch`. */
+	"max-tokens-fallback": { key: "maxTokensFallback", set: "catalog", shape: "scalar" },
+	/** Most output tokens the host serves: a larger reported `maxTokens` is lowered to it; an unknown one stays unknown. */
+	"max-tokens-ceiling": { key: "maxTokensCeiling", set: "catalog", shape: "scalar" },
 	"long-context-cost": { key: "longContext", set: "catalog", shape: "object" },
 	"prompt-cache": { key: "promptCache", set: "catalog", shape: "object" },
 	"task-sibling-prompt-cache": {

@@ -936,7 +936,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			lines.slice(0, shown).join("\n"),
 			entry.codeStartLine ?? firstSelectorLine(split.sel) ?? 1,
 			entry.codeLineNumbers?.slice(0, shown),
-			getLanguageFromPath(split.path),
+			split.path,
 		);
 		const hidden = lines.length - shown;
 		if (hidden > 0) {
@@ -1011,7 +1011,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 						previewsMarkdown(entry)
 							? md(entry.contentText ?? "")
 							: code(entry.contentText ?? "", {
-									lang: getLanguageFromPath(split.path),
+									path: split.path,
 									start: entry.codeStartLine,
 									numbers: true,
 									wrap: true,

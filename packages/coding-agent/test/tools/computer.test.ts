@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "bun:test";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { inspect } from "node:util";
 import { createContext, runInContext } from "node:vm";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { EvalPreludeDefinition } from "@oh-my-pi/pi-coding-agent/eval/preludes";
@@ -602,7 +603,7 @@ describe("computer prelude", () => {
 			"clipboard.read": "copied",
 		};
 		const realm = createContext({
-			__omp_display__: (value: unknown) => displays.push(value),
+			__omp_log__: (_level: string, value: unknown) => displays.push(value),
 			__omp_prelude__: async (name: unknown, parameters: unknown) => {
 				expect(name).toBe("computer");
 				calls.push(parameters);
@@ -853,7 +854,7 @@ describe("computer prelude", () => {
 		const emitted: unknown[] = [];
 		const context = { session, toolCallId: "zoom-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				emitted.push(...result.content);
@@ -1002,7 +1003,7 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "ref-chain-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -1087,7 +1088,7 @@ describe("computer prelude", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "element-shape-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -2193,7 +2194,7 @@ describe("expanded computer APIs", () => {
 		const context = { session, toolCallId: "expanded-js" };
 		const images: unknown[] = [];
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				images.push(...result.content.filter(block => block.type === "image"));
@@ -2301,7 +2302,7 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "menu-path-js" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -2422,7 +2423,7 @@ describe("expanded computer APIs", () => {
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "argument-facade" };
 		const realm = createContext({
-			__omp_display__: () => {},
+			__omp_log__: () => {},
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				return { text: "", details: result.details };
@@ -2442,14 +2443,14 @@ describe("expanded computer APIs", () => {
 		expect(native.calls).toEqual([]);
 	});
 
-	it("leaves a printed observe() tree out of the JavaScript value's display, but keeps ax readable", async () => {
+	it("leaves a printed observe() tree out of the JavaScript value's echo, but keeps ax readable", async () => {
 		const session = toolSession();
 		const native = new ZoomNativeSession();
 		const prelude = workerPrelude(session, native);
 		const context = { session, toolCallId: "observe-once-js" };
 		const printed: string[] = [];
 		const realm = createContext({
-			__omp_display__: (text: string) => printed.push(text),
+			__omp_log__: (_level: string, text: string) => printed.push(text),
 			__omp_prelude__: async (_name: string, parameters: unknown) => {
 				const result = await prelude.invoke(parameters, context);
 				const text = result.content.flatMap(block => (block.type === "text" ? [block.text] : [])).join("\n");
@@ -2471,8 +2472,8 @@ describe("expanded computer APIs", () => {
 			);
 			expect(printed.join("\n").split("- button [ref=e1]")).toHaveLength(2);
 			expect(observation.ax).toBe("- button [ref=e1]");
-			// Eval displays a trailing value as its structured clone.
-			expect(structuredClone(observation)).not.toHaveProperty("ax");
+			// Eval echoes a trailing value the way console.log prints it.
+			expect(inspect(observation)).not.toContain("- button [ref=e1]");
 			expect(structuredClone(observation)).toMatchObject({ nodeCount: 1, truncated: false });
 			expect({ ...observation }).not.toHaveProperty("ax");
 			expect(JSON.parse(JSON.stringify(observation))).not.toHaveProperty("ax");
@@ -2497,16 +2498,17 @@ describe("expanded computer APIs", () => {
 				toolSession: session,
 				kernelMode: "per-call",
 			});
-		// Everything the model reads from a cell: printed text and structured displays.
+		// Everything the model reads from a cell: printed text and non-view outputs (views are user-only).
 		const trees = async (call: string) => {
 			const result = await run(`win = await computer.window(42)\n${call}`);
 			expect(result.exitCode).toBe(0);
-			return `${result.output}${JSON.stringify(result.displayOutputs)}`.split("- button [ref=e1]").length - 1;
+			const modelOutputs = result.displayOutputs.filter(output => output.type !== "view");
+			return `${result.output}${JSON.stringify(modelOutputs)}`.split("- button [ref=e1]").length - 1;
 		};
 		try {
 			for (const call of [
 				"await win.observe()",
-				"display(await win.observe())",
+				"print(await win.observe())",
 				"await win.observe(silent=True)",
 				"await win.observe({'silent': True})",
 				"await win.observe({'silent': True}, silent=None)",

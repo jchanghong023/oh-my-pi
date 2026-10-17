@@ -62,7 +62,7 @@ await win.click(120, 48, button="right")
 
 `await computer.window(idOrFilter)` returns a `ComputerWindow` handle carrying `id`, `app`, `title`, `pid`, `bounds`, and `focused` as captured at resolution; `await win.ref("e5")`, `win.find(...)`, `computer.elementAt(x, y)`, `computer.focusedElement()`, and `computer.ref("e5")` return `ComputerElement` handles carrying `ref`, `role`, `nativeRole`, `title`, `description`, `enabled`, `focused`, and `childCount`. Every method on a handle re-resolves it by id or ref, so a closed window or expired ref fails on the call, not on the handle.
 
-For multi-step sequences, `computer.run(fnOrCode, { args?, read_only?, timeout? })` runs a function or JavaScript string inside the same session. The function receives `{ desktop, wait, assert }`, where `desktop` has the same helpers as `computer`; it is serialized, so it cannot capture Eval-cell closures. Pass plain data, functions, or `RegExp` values through `{ args: [...] }`. Python `computer.run(code, read_only=..., timeout=...)` accepts a JavaScript string only. The run returns the code's real structured value; nonempty text emitted by inner `display(...)` calls prints in the outer Eval cell, while screenshots surface as Eval images. Code runs with top-level `await` in a persistent, full-host-access Bun session. Window handles, screenshot frames, and recent AX references survive between calls. Ordinary Eval helpers such as `display`, `print`, `read`, `write`, and `tool.*` remain available.
+For multi-step sequences, `computer.run(fnOrCode, { args?, read_only?, timeout? })` runs a function or JavaScript string inside the same session. The function receives `{ desktop, wait, assert }`, where `desktop` has the same helpers as `computer`; it is serialized, so it cannot capture Eval-cell closures. Pass plain data, functions, or `RegExp` values through `{ args: [...] }`. Python `computer.run(code, read_only=..., timeout=...)` accepts a JavaScript string only. The run returns the code's real structured value; nonempty text printed inside the run prints in the outer Eval cell, while screenshots surface as Eval images. Code runs with top-level `await` in a persistent, full-host-access Bun session. Window handles, screenshot frames, and recent AX references survive between calls. Ordinary Eval helpers such as `print`, `read`, `write`, and `tool.*` remain available.
 
 Direct inspection helpers run read-only automatically. In `computer.run`, use `read_only: true` to declare an inspection-only call for approval and to block mutation through the `desktop` facade: screenshots and AX reads work, while facade input and clipboard-write methods reject the call. This is **not a sandbox**. The evaluated code still has full Bun/Node host access, including `process`, `require`, and `fs`, so `read_only` does not prevent mutation through arbitrary host APIs.
 
@@ -72,8 +72,8 @@ One lazy worker accepts one active run; overlapping runs fail with `Computer wor
 
 ```js
 const matches = await computer.windows({ app: "Code" });
-display(await computer.displays());
-display(await computer.capabilities());
+console.log(await computer.displays());
+console.log(await computer.capabilities());
 ```
 
 `computer.windows({ app?, title? })` returns window IDs, app/title, PID, logical bounds, and focus state for up to 48 matching windows. Select exactly one target with `computer.window(idOrFilter)`; an ambiguous filter throws and lists candidates. `computer.focusedWindow()` returns the current target or `null`.

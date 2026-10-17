@@ -65,11 +65,14 @@ describe("edit native views", () => {
 		expect(collect(view.body, "card")).toHaveLength(0);
 		const sections = (view.body ?? []).filter(isNode).filter(child => child.k === "section");
 		expect(sections).toHaveLength(2);
-		for (const section of sections) {
+		// Each diff names its own file, which Tern picks the grammar from.
+		const files = sections.map(section => {
 			const diffs = collect(section.c, "diff");
 			expect(diffs).toHaveLength(1);
-			expect(prop(diffs[0]!, "path")).toBeUndefined();
-		}
+			expect(prop(diffs[0]!, "lang")).toBeUndefined();
+			return prop(diffs[0]!, "path");
+		});
+		expect(files).toEqual(["/tmp/a.ts", "/tmp/b.py"]);
 		const heads = sections.map(section => spanText(section, "head"));
 		expect(heads[0]).toContain("a.ts");
 		expect(heads[0]).toContain("+2");

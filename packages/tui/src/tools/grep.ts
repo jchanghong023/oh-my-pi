@@ -9,7 +9,6 @@ import type {
 	RenderResultOptions,
 	ToolRenderer,
 } from "./renderer";
-import { getLanguageFromPath } from "../lang-from-path";
 import { compact } from "../native/describe";
 import type { NativeChild } from "../native/node";
 import { footnoteText, inlineErrorView, resultText } from "./native-view";
@@ -557,7 +556,6 @@ export const grepToolRenderer = {
 			inline: true,
 			body: compact<NativeChild>([
 				...describeGroupedOutput(textContent.split("\n"), {
-					lang: getLanguageFromPath,
 					maxFiles: options.expanded ? undefined : NATIVE_COLLAPSED_FILES,
 					file: details?.files?.length === 1 ? details.files[0] : undefined,
 				}),

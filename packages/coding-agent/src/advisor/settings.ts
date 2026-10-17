@@ -2,6 +2,7 @@
  * Settings declared by this domain (see `config/registry.ts`). Declaration order is the
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
+import { ADVISOR_SEVERITIES } from "@oh-my-pi/pi-tui/chat/messages";
 import { ADVISOR_REVIEW_MODES, ADVISOR_SYNC_BACKLOG_MODES } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { register } from "../config/registry";
 import { ADVISOR_DEFAULT_BUDGET_PER_UPDATE } from "./emission-guard";
@@ -55,6 +56,27 @@ export const cfgAdvisorImmuneTurns = register({
 			{ value: "3", label: "3 轮", description: "默认。" },
 			{ value: "4", label: "4 轮" },
 			{ value: "5", label: "5 轮" },
+		],
+		condition: "advisorEnabled",
+	},
+});
+
+export const cfgAdvisorContinueSeverity = register({
+	id: "advisor.continueSeverity",
+	protocolDefault: ["rpc", "acp"],
+	type: "enum",
+	values: ADVISOR_SEVERITIES,
+	default: "concern",
+	ui: {
+		tab: "model",
+		group: "顾问",
+		label: "顾问续跑阈值",
+		description:
+			"主 Agent 给出最终答复后，触发续跑的顾问建议最低严重程度。低于阈值的建议仅在对话末尾显示为卡片，并随你的下一条消息送达 Agent。",
+		options: [
+			{ value: "nit", label: "小问题", description: "每条建议都触发续跑。" },
+			{ value: "concern", label: "疑虑", description: "疑虑和阻塞问题触发续跑。默认。" },
+			{ value: "blocker", label: "阻塞问题", description: "仅阻塞问题触发续跑。" },
 		],
 		condition: "advisorEnabled",
 	},

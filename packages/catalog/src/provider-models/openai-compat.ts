@@ -2420,74 +2420,6 @@ export function zhipuCodingPlanModelManagerOptions(
 // ---------------------------------------------------------------------------
 
 /**
- * Fireworks-published cap for the Kimi K2 family. Fireworks' `/v1/models`
- * envelope generically reports `max_completion_tokens: 65536` for every Kimi
- * deployment, but Kimi K2 (instruct / thinking / turbo) on Fireworks is
- * documented to ship long reasoning traces that should be bounded — capping
- * at 32,768 prevents handing callers a budget the router cannot honor.
- * See https://github.com/can1357/oh-my-pi/issues/1849.
- */
-export const FIREWORKS_KIMI_MAX_TOKENS = 32_768;
-
-/**
- * Fireworks' output ceiling for Kimi K2.7-Code specifically. Its `/v1/models`
- * generic `max_completion_tokens` is 65,536 and Fireworks serves it in full —
- * verified with a single completion emitting 58,971 output tokens and
- * `max_tokens: 200000` accepted without error. Unlike the older K2.5/K2.6
- * family (see {@link FIREWORKS_KIMI_MAX_TOKENS}), K2.7-Code is not clamped to
- * 32,768; that ceiling only truncated it.
- */
-export const FIREWORKS_KIMI_K27_CODE_MAX_TOKENS = 65_536;
-
-/**
- * Returns true for the Kimi K2.5 / K2.6 family served by Fireworks-backed
- * providers (`fireworks` direct, `firepass` router) that share the 32,768
- * `maxTokens` ceiling. Matches both the public catalog id (`kimi-k2.5`,
- * `kimi-k2.6`, `kimi-k2.6-turbo`) and the canonical Fireworks wire id
- * (`accounts/fireworks/{models,routers}/kimi-k2…`).
- *
- * K2.7-Code (incl. `-fast` / `-highspeed`) is deliberately excluded: unlike the
- * earlier K2 family it serves its full context on Fireworks — verified with a
- * single completion emitting 58,971 output tokens and `max_tokens: 200000`
- * accepted without error — so the 32,768 cap would only truncate it. It inherits
- * Fireworks' reported `max_completion_tokens` (65,536) instead.
- */
-export function isFireworksKimiK2ModelId(modelId: string): boolean {
-	const identity = classifyModel("fireworks", modelId, { lenient: true });
-	if (identity.class !== "kimi" || identity.family === "k2.7-code") return false;
-	return identity.family?.startsWith("k2") === true;
-}
-
-/**
- * Clamp the Kimi K2 family's `maxTokens` to {@link FIREWORKS_KIMI_MAX_TOKENS}
- * on Fireworks-backed providers, leaving every other model untouched.
- */
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number): number;
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null;
-export function clampFireworksKimiMaxTokens(modelId: string, candidate: number | null): number | null {
-	if (candidate === null) return null;
-	return isFireworksKimiK2ModelId(modelId) ? Math.min(candidate, FIREWORKS_KIMI_MAX_TOKENS) : candidate;
-}
-
-/**
- * Kimi K2.7 Code's documented recommended output budget. Some provider
- * discovery rows report the context-sized `max_completion_tokens` instead.
- */
-export const KIMI_K27_CODE_RECOMMENDED_MAX_TOKENS = 32_768;
-
-export function isKimiK27CodeModelId(modelId: string): boolean {
-	const identity = classifyModel("fireworks", modelId, { lenient: true });
-	return identity.class === "kimi" && identity.family === "k2.7-code";
-}
-
-export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number): number;
-export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number | null): number | null;
-export function clampKimiK27CodeMaxTokens(modelId: string, candidate: number | null): number | null {
-	if (candidate === null) return null;
-	return isKimiK27CodeModelId(modelId) ? Math.min(candidate, KIMI_K27_CODE_RECOMMENDED_MAX_TOKENS) : candidate;
-}
-
-/**
  * Fireworks Fast variants we surface: the Fast table on
  * https://docs.fireworks.ai/serverless/serverless-modes, minus the US-only
  * router (it needs the `us.api.fireworks.ai` host). That table, not a request
@@ -2616,15 +2548,9 @@ function mapFireworksControlPlaneModel(
 	const supportsImage = toBoolean(record.supportsImageInput) === true;
 	const supportsTools = toBoolean(record.supportsTools);
 	const contextWindow = toPositiveNumber(record.contextLength, reference?.contextWindow ?? null);
-	// The control plane reports no max-output budget. Default K2.7-Code to its
-	// verified 65,536 ceiling, the older K2.5/K2.6 family to the clamped 32,768,
-	// everyone else to the discovery fallback, then clamp.
-	const fallbackMaxTokens = isKimiK27CodeModelId(publicModelId)
-		? FIREWORKS_KIMI_K27_CODE_MAX_TOKENS
-		: isFireworksKimiK2ModelId(publicModelId)
-			? FIREWORKS_KIMI_MAX_TOKENS
-			: null;
-	const maxTokens = clampFireworksKimiMaxTokens(publicModelId, reference?.maxTokens ?? fallbackMaxTokens);
+	// The control plane reports no max-output budget; Fireworks' per-model
+	// output caps and fallbacks are rule-owned (providers/fireworks.kdl).
+	const maxTokens = reference?.maxTokens ?? null;
 	const base: ModelSpec<"openai-completions"> = reference ?? {
 		id: publicModelId,
 		name,
@@ -3064,8 +2990,9 @@ function buildClinePassFreeModel(id: string, liveCatalog?: ClinePassLiveCatalog)
 		input: upstream?.input ?? live?.input ?? fallback.input,
 		contextWindow: upstream?.contextWindow ?? live?.contextWindow ?? fallback.contextWindow,
 		maxTokens: upstream?.maxTokens ?? live?.maxTokens ?? fallback.maxTokens,
-		// A non-reasoning reference must not carry the Cline effort ladder.
-		...(reasoning ? {} : { thinking: undefined }),
+		// No reasoning-effort control means no effort ladder: the cline-pass
+		// rules trust only explicit thinking, so a copied ladder would surface.
+		thinking: undefined,
 		compat: { supportsReasoningEffort: false, wireModelIdMode: "raw" },
 	};
 }
@@ -4708,11 +4635,7 @@ export function veniceModelManagerOptions(
 		config,
 		mapModel: (entry, defaults, reference) => {
 			const model = mapWithBundledReference(entry, defaults, reference);
-			return {
-				...model,
-				maxTokens: clampKimiK27CodeMaxTokens(defaults.id, model.maxTokens),
-				compat: { ...model.compat, supportsUsageInStreaming: false },
-			};
+			return { ...model, compat: { ...model.compat, supportsUsageInStreaming: false } };
 		},
 	});
 }
@@ -7645,12 +7568,7 @@ const MODELS_DEV_PROVIDER_DESCRIPTORS_SPECIALIZED: readonly ModelsDevProviderDes
 	// --- Synthetic ---
 	openAiCompletionsDescriptor("synthetic", "synthetic", "https://api.synthetic.new/openai/v1"),
 	// --- Venice AI ---
-	openAiCompletionsDescriptor("venice", "venice", "https://api.venice.ai/api/v1", {
-		transformModel: model => {
-			const maxTokens = clampKimiK27CodeMaxTokens(model.id, model.maxTokens);
-			return maxTokens === model.maxTokens ? model : { ...model, maxTokens };
-		},
-	}),
+	openAiCompletionsDescriptor("venice", "venice", "https://api.venice.ai/api/v1"),
 	// --- Ollama Cloud ---
 	simpleModelsDevDescriptor("ollama-cloud", "ollama-cloud", "ollama-chat", "https://ollama.com"),
 	// --- Xiaomi Token Plan ---

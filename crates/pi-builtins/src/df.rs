@@ -1758,8 +1758,11 @@ mod tests {
 		format!("df: {message}\nTry 'df --help' for more information.\n")
 	}
 
-	fn native_root() -> &'static Path {
-		Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().last().unwrap()
+	/// Mount point printed for the `/` operand: the root, or on Windows the
+	/// drive root holding the crate directory.
+	fn root_target() -> String {
+		let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+		crate_dir.ancestors().last().unwrap_or(crate_dir).to_string_lossy().into_owned()
 	}
 
 	#[test]
@@ -1854,7 +1857,7 @@ mod tests {
 		let (code, out, err) = run(&[], &["--output=target", "/nonexistent-df-operand", "/"]);
 		assert_eq!(code, 1);
 		assert_eq!(err, "df: /nonexistent-df-operand: No such file or directory\n");
-		assert_eq!(out, format!("Mounted on\n{}\n", native_root().display()));
+		assert_eq!(out, format!("Mounted on\n{}\n", root_target()));
 	}
 
 	#[test]
@@ -1882,8 +1885,9 @@ mod tests {
 		assert!(lines[0].starts_with("File Mounted on"), "{out}");
 		// Relative operands resolve against the shell's directory and print
 		// as given.
-		assert!(lines[1].starts_with(&format!("src  {}", native_root().display())), "{out}");
-		assert_eq!(lines[2], format!("/    {}", native_root().display()));
+		let root = root_target();
+		assert!(lines[1].starts_with(&format!("src  {root}")), "{out}");
+		assert_eq!(lines[2], format!("/    {root}"));
 	}
 
 	#[test]
@@ -1948,9 +1952,11 @@ mod tests {
 	fn total_row_names_target_dash_when_source_is_shown() {
 		let (code, out, _) = run(&[], &["--total", "--output=source,target", "/"]);
 		assert_eq!(code, 0);
-		assert_eq!(out.lines().last().unwrap().split_whitespace().collect::<Vec<_>>(), ["total", "-"]);
+		// The dash sits in the target column, after the source padding.
+		let target_column = out.lines().next().and_then(|header| header.find("Mounted on")).unwrap();
+		assert_eq!(out.lines().last(), Some(format!("{:<target_column$}-", "total").as_str()), "{out}");
 		let (_, out, _) = run(&[], &["--total", "--output=target", "/"]);
-		assert_eq!(out, format!("Mounted on\n{}\ntotal\n", native_root().display()));
+		assert_eq!(out, format!("Mounted on\n{}\ntotal\n", root_target()));
 	}
 
 	#[test]

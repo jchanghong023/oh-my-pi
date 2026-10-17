@@ -675,7 +675,13 @@ fn entry_time(meta: &Metadata, cfg: &Config) -> Option<(i64, i64)> {
 	match kind {
 		TimeKind::Modification => Some((meta.mtime()?, meta.mtime_nsec()?)),
 		TimeKind::Access => Some((meta.atime()?, meta.atime_nsec()?)),
-		TimeKind::Change => Some((meta.ctime()?, meta.ctime_nsec()?)),
+		// Windows has no POSIX status-change time; like `stat`, fall back to
+		// the last write time, as Cygwin does.
+		TimeKind::Change => match (meta.ctime(), meta.ctime_nsec()) {
+			(Some(secs), Some(nsec)) => Some((secs, nsec)),
+			_ if cfg!(windows) => Some((meta.mtime()?, meta.mtime_nsec()?)),
+			_ => None,
+		},
 	}
 }
 
@@ -1055,8 +1061,8 @@ mod tests {
 		(code, String::from_utf8_lossy(&out).into_owned(), err)
 	}
 
-	/// The portable fixture tree: nested dirs, a 300 KiB file, a 50 MiB sparse
-	/// file, a hard link across directories, and small ordinary files.
+	/// The fixture tree: nested dirs, a 300 KiB file, a 50 MiB sparse file,
+	/// a hard link across directories, symlinks (to a dir, dangling, to a file).
 	fn tree() -> (tempfile::TempDir, PathBuf) {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let root = dir.path().canonicalize().expect("canonical");
@@ -1064,14 +1070,21 @@ mod tests {
 		fs::create_dir_all(root.join("d")).unwrap();
 		fs::create_dir_all(root.join("e")).unwrap();
 		fs::write(root.join("a/f1.txt"), "hello").unwrap();
-		// Match the six-byte target text used by the Unix symlink test without
-		// making common size and inode assertions depend on symlink support.
-		fs::write(root.join("a/flink"), "f1.txt").unwrap();
 		fs::write(root.join("a/b/big"), vec![1_u8; 300 * 1024]).unwrap();
 		fs::File::create(root.join("a/sparse")).unwrap().set_len(50 << 20).unwrap();
 		fs::write(root.join("a/b/x.log"), "log\n").unwrap();
 		fs::write(root.join("d/y.log"), "log2\n").unwrap();
 		fs::hard_link(root.join("a/f1.txt"), root.join("d/hard")).unwrap();
+		#[cfg(unix)]
+		{
+			std::os::unix::fs::symlink("../a", root.join("e/linkdir")).unwrap();
+			std::os::unix::fs::symlink("nowhere", root.join("e/dangling")).unwrap();
+			std::os::unix::fs::symlink("f1.txt", root.join("a/flink")).unwrap();
+		}
+		// Creating symlinks needs a privilege on Windows; a 6-byte file keeps
+		// the inode and apparent-size totals the tests expect from `a/flink`.
+		#[cfg(not(unix))]
+		fs::write(root.join("a/flink"), "f1.txt").unwrap();
 		(dir, root)
 	}
 
@@ -1136,7 +1149,7 @@ mod tests {
 	#[test]
 	fn apparent_sizes_use_st_size_and_ignore_directories() {
 		let (_dir, root) = tree();
-		// 5 + 6 + 50 MiB sparse + 300 KiB + 4; directories contribute no bytes.
+		// 5 + 6 (symlink text) + 50 MiB sparse + 300 KiB + 4.
 		let (_, out, _) = du(&root, &["-sb", "a"]);
 		assert_eq!(out, "52736015\ta\n");
 		let (_, out, _) = du(&root, &["-A", "-a", "-BK", "a/b"]);
@@ -1288,8 +1301,7 @@ mod tests {
 		// --max-depth is base 0; --time words and styles may be abbreviated.
 		let (_, out, _) = du(&root, &["--inodes", "-d", "0x0", "a"]);
 		assert_eq!(out, "8\ta\n");
-		// Access time is available on every supported native platform.
-		let (code, out, _) = du_env(&root, &["--inodes", "--time=at", "--time-style=f", "-s", "d"], &[("TZ", "UTC")], "");
+		let (code, out, _) = du_env(&root, &["--inodes", "--time=s", "--time-style=f", "-s", "d"], &[("TZ", "UTC")], "");
 		assert_eq!(code, 0);
 		assert!(String::from_utf8(out).unwrap().ends_with(" +0000\td\n"));
 		// The last of -k/-m/-b/-h/--si/-B wins.
@@ -1328,14 +1340,6 @@ mod tests {
 	#[test]
 	fn symlinks_are_followed_only_as_asked() {
 		let (_dir, root) = tree();
-		fs::remove_file(root.join("a/flink")).unwrap();
-		std::os::unix::fs::symlink("f1.txt", root.join("a/flink")).unwrap();
-		std::os::unix::fs::symlink("../a", root.join("e/linkdir")).unwrap();
-		std::os::unix::fs::symlink("nowhere", root.join("e/dangling")).unwrap();
-		// Physical traversal counts the six-byte link text, not its five-byte target.
-		let (_, out, _) = du(&root, &["-b", "-a", "a"]);
-		assert_eq!(value_of(&out, "a/flink"), "6");
-		assert_eq!(value_of(&out, "a"), "52736015");
 		let (_, out, _) = du(&root, &["--inodes", "-s", "e/linkdir"]);
 		assert_eq!(out, "1\te/linkdir\n");
 		let (_, out, _) = du(&root, &["--inodes", "-s", "-D", "e/linkdir"]);
@@ -1374,11 +1378,21 @@ mod tests {
 	#[test]
 	fn time_shows_the_newest_timestamp_below_each_directory() {
 		let (_dir, root) = tree();
-		let filesystem = pi_vfs::BlockingFs::native();
 		let at = |secs: u64| std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
 		let set = |path: &str, secs: u64| {
-			filesystem
-				.set_times(root.join(path), pi_vfs::FileTime::Omit, at(secs), true)
+			let mut options = fs::File::options();
+			options.write(true);
+			// Windows opens a directory handle only with backup semantics.
+			#[cfg(windows)]
+			std::os::windows::fs::OpenOptionsExt::custom_flags(
+				&mut options,
+				windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
+			);
+			options
+				.open(root.join(path))
+				.or_else(|_| fs::File::open(root.join(path)))
+				.unwrap()
+				.set_modified(at(secs))
 				.unwrap();
 		};
 		set("d/y.log", 1_000_000_000);

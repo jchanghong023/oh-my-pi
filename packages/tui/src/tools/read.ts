@@ -431,12 +431,12 @@ export function readContentCode(
 	content: string,
 	start: number,
 	numbers: readonly (number | null)[] | undefined,
-	lang: string | undefined,
+	path: string | undefined,
 ): NativeNode[] {
 	const lines = content.split("\n");
 	return numberedCode(
 		lines.map((text, i) => ({ n: numbers && numbers.length === lines.length ? numbers[i]! : start + i, text })),
-		{ lang, wrap: true },
+		{ path, wrap: true },
 	);
 }
 
@@ -766,7 +766,7 @@ export const readToolRenderer = {
 					contentText,
 					details?.displayContent?.startLine ?? readRangeStart(rawPath, args),
 					details?.displayContent?.lineNumbers,
-					getLanguageFromPath(renderPath.path),
+					renderPath.path,
 				);
 		return { tool: head, inline: true, body: compact<NativeChild>([media, ...content, foot]) };
 	},

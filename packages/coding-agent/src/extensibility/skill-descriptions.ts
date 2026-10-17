@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { type AgentTelemetry, instrumentedCompleteSimple } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import {
 	getAgentDir,
 	getSkillDescriptionsDbPath,
@@ -15,9 +17,7 @@ import {
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, parseModelPattern, resolveRoleSelection } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import compressDescriptionPrompt from "../prompts/skills/compress-description.md" with { type: "text" };
-import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { Semaphore } from "../task/parallel";
 import type { Skill } from "./skills";
 
@@ -58,7 +58,7 @@ export function createSkillDescriptionCompressor(
 		if (configured) return configured.model;
 		const preferences = getModelMatchPreferences(settings);
 		const automaticModels = available.filter(model => providerEntry(model.provider)?.automaticDefault !== false);
-		for (const pattern of MODEL_PRIO.smol) {
+		for (const pattern of roleDefaultModels().smol) {
 			const preferred = parseModelPattern(pattern, automaticModels, preferences).model;
 			if (preferred) return preferred;
 		}

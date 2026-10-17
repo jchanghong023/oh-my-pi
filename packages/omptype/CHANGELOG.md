@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.0] - 2026-10-17
+
 ### Fixed
 
 - Fixed JSON Schema imports failing to resolve escaped, percent-encoded, or empty definition names.
