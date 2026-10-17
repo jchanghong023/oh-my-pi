@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Compact Wait rows show the background job's type, ID, and command instead of a generic waiting message.
+- Compact display no longer inserts blank rows between consecutive tool calls, including after scrolling and terminal resizing.
 - Compact display keeps LSP and other `xd://` device calls on one line instead of showing file-write previews.
 - Resume incremental thinking-tail updates after completed control sequences while safely handling split ANSI and CRLF boundaries.
 - Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.

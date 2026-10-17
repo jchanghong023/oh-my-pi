@@ -1,6 +1,7 @@
 import { type Component, Container, type HistoryBatch } from "../tui";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
 import { renderForScrollback } from "../components/image";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
@@ -207,6 +208,14 @@ export function trimBlankEdges(rows: readonly string[]): readonly string[] {
 	while (start < end && isPlainBlank(rows[start]!)) start++;
 	while (end > start && isPlainBlank(rows[end - 1]!)) end--;
 	return start === 0 && end === rows.length ? rows : rows.slice(start, end);
+}
+
+/** Consecutive tool blocks share a tight stack only in compact display mode. */
+function blockGap(previous: Component | undefined, next: Component | undefined): number {
+	if (!previous || !next) return 0;
+	return displayPreferences.compactToolActivity && isToolActivityComponent(previous) && isToolActivityComponent(next)
+		? 0
+		: 1;
 }
 
 /** One live block's row span in the last `renderViewport` output (half-open `[start, end)`). */
@@ -474,9 +483,13 @@ export class TranscriptContainer extends Container {
 		this.#syncEntries();
 		this.#settleFinalized();
 		let total = 0;
+		let previous: Component | undefined;
 		for (const { entry, index } of this.#liveEntries()) {
 			const block = this.#liveBlockRows(entry, index, width);
-			if (block.length > 0) total += block.length + (total > 0 ? 1 : 0);
+			if (block.length > 0) {
+				total += block.length + blockGap(previous, entry.component);
+				previous = entry.component;
+			}
 			if (total > limit) break;
 		}
 		return total;
@@ -586,7 +599,9 @@ export class TranscriptContainer extends Container {
 		shown.reverse();
 		blocks.reverse();
 		let total = 0;
-		for (const block of blocks) total += block.length + (total > 0 ? 1 : 0);
+		for (let index = 0; index < blocks.length; index++) {
+			total += blocks[index]!.length + blockGap(shown[index - 1]?.entry.component, shown[index]!.entry.component);
+		}
 		if (shown.length === 0) {
 			this.#lastViewportSpans = [];
 			return EMPTY_ROWS;
@@ -600,7 +615,7 @@ export class TranscriptContainer extends Container {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-				if (output.length > 0) {
+				if (blockGap(shown[blockIndex - 1]?.entry.component, shown[blockIndex]!.entry.component)) {
 					output.push("");
 					owners.push(undefined);
 				}
@@ -765,19 +780,24 @@ export class TranscriptContainer extends Container {
 		let liveRows = 0;
 		let keep = 0;
 		let fits = true;
+		let nextComponent: Component | undefined;
+		let boundaryGap = 0;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			const candidate = live[cursor]!;
 			const height = this.#liveBlockRows(candidate.entry, candidate.index, width).length;
-			if (height > 0) liveRows += height + (liveRows > 0 ? 1 : 0);
+			const gap = height > 0 ? blockGap(candidate.entry.component, nextComponent) : 0;
+			if (height > 0) liveRows += height + gap;
 			if (fits) {
-				const next = height > 0 ? tailRows + height + (tailRows > 0 ? 1 : 0) : tailRows;
+				const next = height > 0 ? tailRows + height + gap : tailRows;
 				if (next > room) {
 					fits = false;
 					keep = cursor + 1;
+					boundaryGap = gap;
 				} else {
 					tailRows = next;
 				}
 			}
+			if (height > 0) nextComponent = candidate.entry.component;
 			if (!fits && appendHead === undefined) break;
 		}
 		const overflowing = keep > 0 || this.#liveCount() >= MAX_LIVE_BLOCKS;
@@ -822,7 +842,7 @@ export class TranscriptContainer extends Container {
 		let split: { index: number; rows: readonly string[]; split: RowSplit } | undefined;
 		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
 			const boundary = live[keep - 1]!;
-			const visible = room - tailRows - (tailRows > 0 ? 1 : 0);
+			const visible = room - tailRows - boundaryGap;
 			if (boundary.entry.state === "settled" && visible > 0) {
 				const offer = this.#splitOffer(boundary.entry, width, visible);
 				if (offer !== undefined) {
@@ -918,14 +938,16 @@ export class TranscriptContainer extends Container {
 		const cap = Math.max(0, Math.trunc(maxRows));
 		if (cap === 0) return EMPTY_ROWS;
 		const rows: string[] = [];
+		let next: Component | undefined;
 		for (let index = this.#entries.length - 1; index >= 0; index--) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			const block = trimBlankEdges(entry.component.render(width));
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (rows.length > 0) rows.unshift("");
+			if (blockGap(entry.component, next)) rows.unshift("");
 			rows.unshift(...block);
+			next = entry.component;
 			if (rows.length >= cap) break;
 		}
 		return rows.length > cap ? rows.slice(rows.length - cap) : rows;
@@ -967,14 +989,16 @@ export class TranscriptContainer extends Container {
 		this.#syncEntries();
 		this.#childStartRows.clear();
 		const rows: string[] = [];
+		let previous: Component | undefined;
 		for (const entry of this.#entries) {
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			const block = this.#renderEntry(entry, width);
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (rows.length > 0) rows.push("");
+			if (blockGap(previous, entry.component)) rows.push("");
 			this.#childStartRows.set(entry.component, rows.length);
 			rows.push(...block);
+			previous = entry.component;
 		}
 		return rows;
 	}
@@ -1216,6 +1240,7 @@ export class TranscriptContainer extends Container {
 		const rows: string[] = [];
 		const startedAt = budgetMs === undefined ? 0 : performance.now();
 		let reached = start;
+		let previous: Component | undefined;
 		for (let index = start; index < end; index++) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
@@ -1231,12 +1256,24 @@ export class TranscriptContainer extends Container {
 			const block = rendered.slice(emittedRows);
 			reached = index + 1;
 			if (block.length > 0) {
-				if (rows.length > 0) rows.push("");
+				if (blockGap(previous, entry.component)) rows.push("");
 				rows.push(...block);
+				previous = entry.component;
 			}
 			if (budgetMs !== undefined && performance.now() - startedAt >= budgetMs) break;
 		}
-		if (trailingBlank && rows.length > 0) rows.push("");
+		if (trailingBlank && previous) {
+			let next: Component | undefined;
+			if (displayPreferences.compactToolActivity && isToolActivityComponent(previous)) {
+				for (let index = reached; index < this.#entries.length; index++) {
+					const entry = this.#entries[index]!;
+					if (this.#measuredRows(entry, width).length === 0) continue;
+					next = entry.component;
+					break;
+				}
+			}
+			if (!next || blockGap(previous, next)) rows.push("");
+		}
 		return { rows, end: reached };
 	}
 
