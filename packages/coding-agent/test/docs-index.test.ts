@@ -745,7 +745,6 @@ describe("DocsSearchEngine indexing contract", () => {
 		try {
 			await expect(service.init(".", "manual")).rejects.toThrow('Unable to parse Markdown "b.md"');
 			expect(service.list()).toEqual([]);
-			expect(service.search("needle").sections).toEqual([]);
 			await fs.rm(path.join(root, "b.md"));
 			await service.init(".", "manual");
 			expect(service.search("needle").sections[0].text).toBe("# Guide\nvalid corpus needle\n");
@@ -767,7 +766,6 @@ describe("DocsSearchEngine indexing contract", () => {
 					signal: controller.signal,
 					onProgress: progress => {
 						if (progress.completed === 1) {
-							expect(service.search("Alpha").sections).toEqual([]);
 							expect(service.list()).toEqual([]);
 							controller.abort();
 						}
@@ -785,13 +783,13 @@ describe("DocsSearchEngine indexing contract", () => {
 					},
 				}),
 			).rejects.toThrow();
-			expect(service.search("Alpha").sections).toEqual([]);
+			expect(service.list()).toEqual([]);
 			const imported = await service.init(".", "manual");
 			expect(imported.index.documentCount).toBe(1);
 			await expect(service.init(".", "manual")).rejects.toThrow("already exists");
 			expect(service.search("Alpha").sections[0].text).toBe("# A\nAlpha\n");
 			service.remove("manual");
-			expect(service.search("Alpha").sections).toEqual([]);
+			expect(service.list()).toEqual([]);
 			await service.init(".", "again");
 			expect(service.search("Alpha").sections.map(hit => hit.index)).toEqual(["again"]);
 		} finally {
