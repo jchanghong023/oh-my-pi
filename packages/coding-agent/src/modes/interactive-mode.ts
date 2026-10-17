@@ -1282,7 +1282,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void {
 		if (message) this.noteDisplayableThinkingContent(message);
-		const retainStub = this.#retainThinkingStub();
+		const hidden = this.#isThinkingPreviewHidden();
+		const retainStub = !hidden && this.viewSession.isStreaming;
 		if (message) this.#thinkingPreviewOwner = this.viewSession;
 		else if (!retainStub) this.#thinkingPreviewOwner = undefined;
 		this.#thinkingPreviewMessage = message;
@@ -1291,16 +1292,18 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#thinkingPreview,
 			message,
 			activeThinkingIndex,
-			this.effectiveHideThinkingBlock,
+			hidden,
 			this.proseOnlyThinking,
 			retainStub,
 		);
 		if (changed) this.ui.requestRender();
 	}
 
-	/** A finished thought keeps a stub only while the turn is still running. */
-	#retainThinkingStub(): boolean {
-		return !this.effectiveHideThinkingBlock && this.viewSession.isStreaming;
+	/** The live preview follows the actual tool tier, independently of the stored thinking preference. */
+	#isThinkingPreviewHidden(): boolean {
+		return (
+			this.hideToolActivity || !cfgDisplayCompactToolActivity.get(this.settings) || this.effectiveHideThinkingBlock
+		);
 	}
 
 	clearThinkingPreview(): void {
@@ -1311,6 +1314,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	collapseThinkingPreview(): void {
+		if (this.#isThinkingPreviewHidden()) {
+			this.clearThinkingPreview();
+			return;
+		}
 		this.#thinkingPreviewMessage = undefined;
 		this.#thinkingPreviewIndex = undefined;
 		if (this.#thinkingPreview.collapse()) this.ui.requestRender();

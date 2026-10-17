@@ -16,6 +16,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { type Component, type TUI } from "../tui";
 import type { AdvisorMessageDetails } from "./messages";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "./messages";
+import type { ChatTranscriptDisplayPreferences } from "./display-preferences";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import type { MessageRenderer } from "./extension-types";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "./messages";
@@ -85,6 +86,11 @@ export interface ChatTranscriptBuilderDeps {
 	linkTargets?: ReadonlyMap<string, string>;
 	/** Draw charts under numeric tables; false for transcripts that are not the main session's. Default: true. */
 	tableCharts?: boolean;
+	/** Explicit history can expose tool details without changing the main transcript. */
+	toolActivityDisplay?: Pick<
+		ChatTranscriptDisplayPreferences,
+		"hideToolActivity" | "compactToolActivity" | "readToolResultPreview"
+	>;
 	requestRender: () => void;
 }
 
@@ -113,7 +119,11 @@ export class ChatTranscriptBuilder {
 
 	constructor(deps: ChatTranscriptBuilderDeps) {
 		this.#deps = deps;
-		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
+		this.container.setToolActivityVisible(!this.#toolActivityDisplay.hideToolActivity);
+	}
+
+	get #toolActivityDisplay() {
+		return this.#deps.toolActivityDisplay ?? displayPreferences;
 	}
 
 	/** Whether the transcript currently holds any rendered rows. */
@@ -235,7 +245,8 @@ export class ChatTranscriptBuilder {
 	#ensureReadGroup(): ReadToolGroupComponent {
 		if (!this.#readGroup) {
 			this.#readGroup = new ReadToolGroupComponent({
-				showContentPreview: displayPreferences.readToolResultPreview,
+				showContentPreview: this.#toolActivityDisplay.readToolResultPreview,
+				compactToolActivity: this.#deps.toolActivityDisplay?.compactToolActivity,
 			});
 			this.#trackExpandable(this.#readGroup);
 			this.container.addChild(this.#readGroup);
@@ -416,9 +427,11 @@ export class ChatTranscriptBuilder {
 			proseOnlyThinking,
 			this.#deps.linkTargets,
 			expandThinkingBlocks,
+			false,
+			this.#deps.toolActivityDisplay?.compactToolActivity,
 		);
 		assistantComponent.setImagesVisible(displayPreferences.showImages);
-		assistantComponent.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+		assistantComponent.setToolResultImagesVisible(!this.#toolActivityDisplay.hideToolActivity);
 		assistantComponent.setTableChartsVisible(this.#deps.tableCharts !== false);
 		this.#trackExpandable(assistantComponent);
 		assistantComponent.pickReactionTarget(this.container.children);
@@ -455,9 +468,11 @@ export class ChatTranscriptBuilder {
 				proseOnlyThinking,
 				this.#deps.linkTargets,
 				expandThinkingBlocks,
+				false,
+				this.#deps.toolActivityDisplay?.compactToolActivity,
 			);
 			component.setImagesVisible(displayPreferences.showImages);
-			component.setToolResultImagesVisible(!displayPreferences.hideToolActivity);
+			component.setToolResultImagesVisible(!this.#toolActivityDisplay.hideToolActivity);
 			component.setTableChartsVisible(this.#deps.tableCharts !== false);
 			this.#trackExpandable(component);
 			this.container.addChild(component);
@@ -500,6 +515,7 @@ export class ChatTranscriptBuilder {
 					// Stable ids and Kitty placeholder cells keep images anchored
 					// while the transcript viewport scrolls and reflows.
 					showImages: displayPreferences.showImages,
+					compactToolActivity: this.#deps.toolActivityDisplay?.compactToolActivity,
 				},
 				this.#deps.getTool?.(content.name),
 				this.#deps.ui,

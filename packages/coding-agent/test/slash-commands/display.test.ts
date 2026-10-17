@@ -90,6 +90,29 @@ describe("/display slash command", () => {
 		}
 	});
 
+	it("lets collaboration guests change local display preferences without forwarding or unlocking host commands", async () => {
+		const h = createRuntime();
+		const sendPrompt = vi.fn();
+		// The display route only consumes this replica boundary, not a relay connection.
+		Object.defineProperty(h.runtime.ctx, "collabGuest", { value: { readOnly: true, sendPrompt } });
+		for (const mode of ["clean", "compact", "detailed"] as const) {
+			expect(await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime)).toBe(true);
+			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
+		}
+		await executeBuiltinSlashCommand("/display", h.runtime);
+		expect(displayPreferences(h.settings)).toEqual(presets.clean);
+		const before = h.settings.getGlobalSettings();
+		await executeBuiltinSlashCommand("/display invalid", h.runtime);
+		expect(h.settings.getGlobalSettings()).toEqual(before);
+		expect(h.showWarning).toHaveBeenCalledTimes(1);
+		h.showStatus.mockClear();
+		expect(await executeBuiltinSlashCommand("/clear", h.runtime)).toBe(true);
+		expect(h.showStatus).toHaveBeenCalledTimes(1);
+		expect(h.settings.getGlobalSettings()).toEqual(before);
+		expect(sendPrompt).not.toHaveBeenCalled();
+		expect(h.prompt).not.toHaveBeenCalled();
+	});
+
 	it("derives the cycle from independent tool preferences rather than thinking visibility", async () => {
 		const h = createRuntime();
 		cfgHideThinkingBlock.set(h.settings, false);

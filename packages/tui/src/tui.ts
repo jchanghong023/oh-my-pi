@@ -2605,7 +2605,7 @@ export class TUI extends Container {
 				plan = provider.renderFrame({ columns: width, rows: height });
 				viewport = Array.from(plan.viewport);
 				if (viewport.length > height) viewport = viewport.slice(0, height);
-			} while (this.#imageBudget.endPass());
+			} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
 			if (plan.history === undefined) return;
 			const acceptedBefore = this.#acceptedHistoryBatchId;
 			this.#emitPlanFrame(width, height, viewport, plan.history, provider);
@@ -3368,7 +3368,7 @@ export class TUI extends Container {
 				viewport = viewport.slice(0, height);
 			}
 			viewport = this.#compositeVisibleOverlays(viewport, width, height);
-		} while (this.#imageBudget.endPass());
+		} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
 		this.#emitPlanFrame(width, height, viewport, plan.history, provider);
 	}
@@ -3895,14 +3895,28 @@ export class TUI extends Container {
 	 * buffer carries them off without the repaint that restores them. A latch that
 	 * never reaches a repaint — `stop()` drops it — then deletes nothing.
 	 *
-	 * Must run after everything that can latch the reset for this frame and before
-	 * anything composes it — one call on the normal-screen dispatch path, ahead of
-	 * the arm split, so a new arm cannot be added without it.
+	 * Must run before composing a latched reset. A reset first discovered in a
+	 * provider's composed history batch uses #prepareHistoryReset to invalidate
+	 * the transmit cache and retry before emitting or acknowledging that frame.
 	 */
 	#forgetTransmittedForPendingReset(): void {
 		if (!this.#clearScrollbackOnNextRender) return;
 		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
 		this.#imageBudget.forgetTransmitted();
+	}
+
+	/** Recompose a newly offered destructive history batch before any bytes leave. */
+	#prepareHistoryReset(history: HistoryBatch | undefined): boolean {
+		if (
+			history?.clearScrollback !== true ||
+			history.id <= this.#acceptedHistoryBatchId ||
+			this.#clearScrollbackOnNextRender
+		) {
+			return false;
+		}
+		this.#clearScrollbackOnNextRender = true;
+		this.#forgetTransmittedForPendingReset();
+		return TERMINAL.imageProtocol === ImageProtocol.Kitty;
 	}
 
 	/**

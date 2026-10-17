@@ -1,4 +1,4 @@
-import { readShellWord } from "../tools/shell-tokenize";
+import { readShellWord } from "@oh-my-pi/pi-utils/shell";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 
 export type LoopLimitConfig =

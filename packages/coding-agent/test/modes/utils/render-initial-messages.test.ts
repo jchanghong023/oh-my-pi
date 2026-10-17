@@ -16,7 +16,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -42,6 +45,7 @@ const originalImageProtocol = TERMINAL.imageProtocol;
 afterEach(() => {
 	resetSettingsForTest();
 	setTerminalImageProtocol(originalImageProtocol);
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	vi.restoreAllMocks();
 });
 
@@ -150,7 +154,10 @@ function makeRenderCtx(
 	transcript: SessionContext,
 	showImages = true,
 	hideToolActivity = false,
+	compactToolActivity = false,
 ): { ctx: InteractiveModeContext; chatContainer: TranscriptContainer } {
+	cfgDisplayCompactToolActivity.override(Settings.instance, compactToolActivity);
+	setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity });
 	const chatContainer = new TranscriptContainer();
 	chatContainer.setToolActivityVisible(!hideToolActivity);
 	const ctx = {
@@ -180,6 +187,7 @@ function makeRenderCtx(
 		settings: Settings.isolated({
 			"terminal.showImages": showImages,
 			"display.hideToolActivity": hideToolActivity,
+			"display.compactToolActivity": compactToolActivity,
 			"composer.recallClearedDrafts": false,
 		}),
 		toolOutputExpanded: false,
@@ -425,6 +433,57 @@ describe("UiHelpers.renderInitialMessages — responsiveness", () => {
 });
 
 describe("UiHelpers.renderInitialMessages — image replay", () => {
+	it("replays image-only reads as counted compact calls without changing their stored content", async () => {
+		setTerminalImageProtocol(ImageProtocol.Sixel);
+		const transcript = transcriptWith([
+			assistantToolCall("legacy-image", "read", { path: "legacy.png" }),
+			{
+				role: "toolResult",
+				toolCallId: "legacy-image",
+				toolName: "read",
+				content: [pngImage],
+				isError: false,
+				timestamp: 2,
+			},
+		]);
+		const original = structuredClone(transcript.messages);
+		for (const display of ["compact", "detailed", "clean"] as const) {
+			const hidden = display === "clean";
+			const { ctx, chatContainer } = makeRenderCtx(transcript, true, hidden, display !== "detailed");
+			await new UiHelpers(ctx).renderInitialMessages();
+			const ansi = Bun.stripANSI(chatContainer.render(100).join("\n"));
+			const native = chatContainer
+				.nativeBlocks()
+				.map(block =>
+					JSON.stringify(
+						block.describe?.({
+							cols: 100,
+							reduceMotion: true,
+							dark: true,
+							supports: () => true,
+							feature: () => false,
+						}),
+					),
+				)
+				.join("\n");
+			if (display === "compact") {
+				expect(ansi).toContain("legacy.png");
+				expect(native).toContain("legacy.png");
+				const group = chatContainer.children.find(child => child instanceof ReadToolGroupComponent);
+				expect(group?.getCompactToolCount()).toBe(1);
+				expect(hasImageComponent(chatContainer)).toBe(false);
+				expect(native).not.toContain('"k":"image"');
+			} else if (hidden) {
+				expect(ansi).not.toContain("legacy.png");
+				expect(hasImageComponent(chatContainer)).toBe(false);
+			} else {
+				expect(hasImageComponent(chatContainer)).toBe(true);
+			}
+			expect(transcript.messages).toEqual(original);
+			chatContainer.disposeChildren();
+		}
+	});
+
 	it("restores eval image blocks onto rebuilt tool output", async () => {
 		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": true } });
 		setTerminalImageProtocol(ImageProtocol.Sixel);

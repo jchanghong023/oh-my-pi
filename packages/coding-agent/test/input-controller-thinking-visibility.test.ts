@@ -7,6 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -125,6 +126,29 @@ describe("InputController thinking visibility", () => {
 		expect(session.agent.state.messages).toEqual([history]);
 		expect(session.agent.state.streamMessage).toBe(live);
 	});
+
+	it.each(["clean", "detailed"] as const)(
+		"does not reveal active reasoning or its finished stub through Alt+P in %s mode",
+		async display => {
+			cfgDisplayHideToolActivity.set(session.settings, display === "clean");
+			cfgDisplayCompactToolActivity.set(session.settings, display !== "detailed");
+			cfgHideThinkingBlock.set(session.settings, true);
+			await Promise.resolve();
+			session.agent.state.isStreaming = true;
+			const message = assistant([{ type: "thinking", thinking: "mode-private-reasoning" }]);
+			stream(message, 0);
+			controller.toggleThinkingBlockVisibility();
+			expect(cfgHideThinkingBlock.get(session.settings)).toBe(false);
+			expect(render()).not.toContain("mode-private-reasoning");
+			stream(assistant([{ type: "thinking", thinking: "mode-private-delta" }]), 0);
+			expect(render()).not.toContain("mode-private-delta");
+			session.agent.state.activeThinkingIndex = undefined;
+			mode.collapseThinkingPreview();
+			mode.syncThinkingPreview();
+			expect(render()).not.toContain("mode-private");
+			session.agent.state.isStreaming = false;
+		},
+	);
 
 	it("applies live prose settings to the raw snapshot before taking five preview rows", async () => {
 		const history = assistant([

@@ -9,6 +9,7 @@ import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../t
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
 import { compactToolFailure, compactToolPath, compactToolSummary } from "../chrome/tool-activity";
+import { compactBashFailure } from "../tools/bash";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -56,6 +57,7 @@ import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { splitUrlScheme } from "../tools/url-scheme-host";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
+import { parseXdUrl } from "../tools/xd-url";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -218,6 +220,8 @@ export interface ToolExecutionUi {
 
 export interface ToolExecutionOptions {
 	showImages?: boolean; // default: true (only used if terminal supports images)
+	/** Instance-local presentation override for explicit transcript details. */
+	compactToolActivity?: boolean;
 	/** Allow the name-keyed renderer registry only when the active tool is the built-in implementation. */
 	useBuiltInRenderer?: boolean;
 }
@@ -385,6 +389,7 @@ export class ToolExecutionComponent extends Container {
 	#compactFailures = 0;
 	#compactIntent: string | undefined;
 	#showImages: boolean;
+	readonly #compactToolActivityOverride: boolean | undefined;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
@@ -505,6 +510,7 @@ export class ToolExecutionComponent extends Container {
 		this.#toolLabel = tool?.label ?? toolName;
 		this.#renderer = options.useBuiltInRenderer === false ? undefined : toolRenderers[toolName];
 		this.#showImages = options.showImages ?? true;
+		this.#compactToolActivityOverride = options.compactToolActivity;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#args = args;
@@ -859,6 +865,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isCompactToolActivity(): boolean {
+		if (this.#compactToolActivityOverride === false) return false;
 		if (isEditLikeToolName(this.#toolName)) return false;
 		if (this.#toolName !== "write" || !isRecord(this.#args)) return true;
 		const path = this.#args.file_path ?? this.#args.path;
@@ -869,7 +876,10 @@ export class ToolExecutionComponent extends Container {
 
 	getCompactToolCount(): number {
 		return Number(
-			this.isCompactToolActivity() && this.#nativeStatus() === "done" && this.#compactOutcome() !== "待确认",
+			this.isCompactToolActivity() &&
+				this.#nativeStatus() === "done" &&
+				this.#compactOutcome() !== "待确认" &&
+				!this.#hasCompactReadWarning(),
 		);
 	}
 
@@ -899,7 +909,9 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity && this.isCompactToolActivity();
+		return (
+			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) && this.isCompactToolActivity()
+		);
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -1098,6 +1110,7 @@ export class ToolExecutionComponent extends Container {
 						: undefined,
 					targetKind: "text",
 					status,
+					tone: status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : undefined,
 					age: live ? ms : undefined,
 					took: live ? undefined : ms,
 					frame: "inline",
@@ -1121,21 +1134,61 @@ export class ToolExecutionComponent extends Container {
 		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
 		if (isRecord(this.#args)) {
 			const intent = this.#compactIntent;
-			if (this.#toolName !== "wait" && typeof intent === "string" && intent.trim()) {
+			let activityTool = this.#toolName;
+			if (activityTool === "write") {
+				const details = this.#result?.details;
+				const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
+				const path = this.#args.file_path ?? this.#args.path;
+				activityTool =
+					typeof dispatch?.tool === "string"
+						? dispatch.tool
+						: typeof path === "string"
+							? (parseXdUrl(path)?.name ?? activityTool)
+							: activityTool;
+			}
+			if (activityTool !== "wait" && typeof intent === "string" && intent.trim()) {
 				detail = plainText(intent).replace(/\s+/g, " ").trim();
 			} else if (["read", "write", "glob"].includes(this.#toolName)) {
 				const path = this.#args.path ?? this.#args.file_path;
 				if (typeof path === "string" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) detail = compactToolPath(path);
-			} else if (this.#toolName === "bash" && typeof this.#args.command === "string") {
-				// Without a supplied intent, show the executable rather than filling the row with script source.
-				detail = this.#args.command.trim().match(/^(?:"[^"]+"|'[^']+'|\S+)/)?.[0] ?? detail;
+			}
+		}
+		const details = this.#result?.details;
+		if (this.#toolName === "read" && isRecord(details)) {
+			const suffix = details.suffixResolution;
+			if (isRecord(suffix) && typeof suffix.from === "string" && typeof suffix.to === "string") {
+				detail += ` · corrected from ${plainText(suffix.from).replace(/\s+/g, " ")}`;
+			}
+			if (typeof details.conflictCount === "number" && details.conflictCount > 0) {
+				detail += ` · ${details.conflictCount} conflict${details.conflictCount === 1 ? "" : "s"}`;
 			}
 		}
 		if (this.#result?.isError) {
-			const failure = this.#result.content.find(block => block.type === "text" && block.text)?.text;
-			detail = `${compactToolFailure(plainText(failure ?? ""))}${detail ? ` · ${detail}` : ""}`;
+			let toolName = this.#toolName;
+			let details = this.#result.details;
+			if (isRecord(details) && isRecord(details.xdev)) {
+				toolName = typeof details.xdev.tool === "string" ? details.xdev.tool : toolName;
+				details = details.xdev.inner;
+			}
+			const failure =
+				toolName === "bash"
+					? compactBashFailure(details)
+					: compactToolFailure(
+							plainText(this.#result.content.find(block => block.type === "text" && block.text)?.text ?? ""),
+						);
+			detail = `${failure}${detail ? ` · ${detail}` : ""}`;
 		}
 		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
+	}
+
+	#hasCompactReadWarning(): boolean {
+		const details = this.#result?.details;
+		if (this.#toolName !== "read" || !isRecord(details)) return false;
+		const suffix = details.suffixResolution;
+		return (
+			(typeof details.conflictCount === "number" && details.conflictCount > 0) ||
+			(isRecord(suffix) && typeof suffix.from === "string" && typeof suffix.to === "string")
+		);
 	}
 
 	/** The proposal and its later resolution are separate receipts, not successful writes. */
@@ -1518,7 +1571,10 @@ export class ToolExecutionComponent extends Container {
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);
 			const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
-			const state = theme.fg(status === "error" ? "error" : "dim", `${this.#compactOutcome() ?? status} · `);
+			const state = theme.fg(
+				status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : "dim",
+				`${this.#compactOutcome() ?? status} · `,
+			);
 			const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail}`) : "";
 			const line = truncateToWidth(
 				`${state}${theme.fg("toolTitle", theme.bold(summary.label))}${detail}`,

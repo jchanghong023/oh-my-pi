@@ -2770,6 +2770,12 @@ export class InputController {
 		}
 		this.ctx.chatContainer.setToolActivityVisible(!this.ctx.hideToolActivity);
 
+		const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
+		this.ctx.syncThinkingPreview(
+			streamMessage?.role === "assistant" ? streamMessage : undefined,
+			activeThinkingIndex,
+		);
+
 		if (this.ctx.hideToolActivity) this.ctx.ui.clearInlineImages();
 		// A viewport-only repaint leaves tool rows already retired to terminal history unchanged.
 		this.ctx.ui.resetDisplay();

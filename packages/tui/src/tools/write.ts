@@ -588,7 +588,7 @@ function writeToolHead(
 /** Render file writes and delegated tool-device calls. */
 export const writeToolRenderer = {
 	/** Compact one-line activity: device writes read as the mounted tool (`LSP · references foo`), file writes as `Write · <path>`. */
-	activitySummary(args: unknown, context: ToolActivityContext): ToolActivitySummary {
+	activitySummary(args: unknown, context: ToolActivityContext<WriteToolDetails>): ToolActivitySummary {
 		const writeArgs = (args ?? {}) as WriteRenderArgs;
 		const rawPath =
 			typeof writeArgs.file_path === "string"
@@ -602,7 +602,7 @@ export const writeToolRenderer = {
 		const xdev = parseXdUrl(rawPath);
 		if (xdev?.name) {
 			const resolveMounted = (context.renderContext as WriteRenderContext | undefined)?.resolveXdevMounted;
-			return xdevActivitySummary(xdev.name, writeArgs.content, resolveMounted);
+			return xdevActivitySummary(xdev.name, writeArgs.content, context, resolveMounted);
 		}
 		return { label: "Write", detail: shortenPath(rawPath) };
 	},

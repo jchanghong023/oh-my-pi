@@ -61,6 +61,7 @@ export const COLLAB_GUEST_ALLOWED_COMMANDS: Record<string, true> = {
 	hotkeys: true,
 	theme: true,
 	settings: true,
+	display: true,
 	leave: true,
 	collab: true,
 	exit: true,

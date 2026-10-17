@@ -3,7 +3,7 @@ import { parseStreamingJson } from "@oh-my-pi/pi-utils";
 import { type Component, Container, Text } from "../index";
 import type { Theme } from "../theme/theme";
 import { replaceTabs } from "../render/render-utils";
-import type { RenderResultOptions, ToolActivitySummary, ToolRenderer } from "./renderer";
+import type { RenderResultOptions, ToolActivityContext, ToolActivitySummary, ToolRenderer } from "./renderer";
 import { describeDefaultToolExecution, renderDefaultToolExecution } from "./default-renderer";
 import type { NativeToolView } from "./renderer";
 import { text } from "../native/describe";
@@ -12,6 +12,7 @@ import { parseMCPToolName } from "./mcp";
 /** Mounted device display callbacks, independent of tool execution state. */
 export interface XdevMountedRenderer {
 	label?: string;
+	activitySummary?: ToolRenderer["activitySummary"];
 	describeCall?: ToolRenderer["describeCall"];
 	describeResult?: ToolRenderer["describeResult"];
 	renderCall?(...args: Parameters<ToolRenderer["renderCall"]>): unknown;
@@ -95,10 +96,25 @@ const ACTIVITY_OBJECT_KEYS = ["query", "symbol", "path", "file", "pattern", "url
 export function xdevActivitySummary(
 	name: string,
 	content: unknown,
+	context: ToolActivityContext<{ xdev?: XdevRenderDispatch }>,
 	resolveMounted?: (name: string) => XdevMountedRenderer | undefined,
 ): ToolActivitySummary {
-	const mounted = resolveMounted?.(name);
+	const dispatch = context.result?.details?.xdev;
+	const deviceName = dispatch?.tool ?? name;
+	const mounted = resolveMounted?.(deviceName);
 	const args = decodeInnerArgs(content);
+	if (dispatch?.args) Object.assign(args, dispatch.args);
+	if (dispatch?.mode !== "help") {
+		const renderer = mounted?.activitySummary ? mounted : rendererLookup?.(deviceName);
+		const summary = renderer?.activitySummary?.(args, {
+			...context,
+			result:
+				context.result && dispatch
+					? { content: context.result.content, details: dispatch.inner, isError: context.result.isError }
+					: undefined,
+		});
+		if (summary) return summary;
+	}
 	const pick = (keys: readonly string[]): string | undefined => {
 		for (const key of keys) {
 			const value = args[key];
@@ -110,7 +126,7 @@ export function xdevActivitySummary(
 	if (!detail && typeof content === "string" && !content.trimStart().startsWith("{")) {
 		detail = content.trim().split("\n", 1)[0];
 	}
-	return { label: displayDeviceLabel(name, mounted), detail: detail || undefined };
+	return { label: displayDeviceLabel(deviceName, mounted), detail: detail || undefined };
 }
 
 /** Drop the streaming-decode bookkeeping key before showing inner args. */

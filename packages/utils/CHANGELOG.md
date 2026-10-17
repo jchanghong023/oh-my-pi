@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added shared shell-word decoding for quoted and escaped command summaries and loop-limit parsing.
+
 ## [18.12.0] - 2026-10-17
 
 ### Added

@@ -1528,7 +1528,7 @@ export class TranscriptContainer extends Container {
 		const flush = (end: number) => {
 			if (start < 0) return;
 			if (end > this.#frontier) this.#compactRunStart = Math.min(this.#compactRunStart, start);
-			let remaining = 3;
+			let remaining = 2;
 			const summary = Math.max(0, completed - remaining);
 			for (let index = end - 1; index >= start; index--) {
 				const component = this.children[index]!;

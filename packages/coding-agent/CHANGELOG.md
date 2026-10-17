@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep active thinking hidden in clean and detailed display modes when toggling reasoning visibility.
+- Allow collaboration guests to apply `/display` locally without forwarding the command or unlocking host-only commands.
+- Preserve image-only read calls during compact session replay while keeping their image content available in detailed mode.
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

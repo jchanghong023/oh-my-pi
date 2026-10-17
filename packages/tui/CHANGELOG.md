@@ -10,7 +10,7 @@
 
 ### Changed
 
-- Compact tool runs keep the latest three successful calls and fold older successes into one count, preserving running calls, failures, prose boundaries, and full detailed history.
+- Compact tool runs keep the latest two successful calls and fold older successes into one count, preserving running calls, failures, prose boundaries, and full detailed history.
 - The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
 - The five-row thinking tail has a static heading and left guide with a two-column left margin, ignores trailing blank lines, collapses repeated paragraph blanks, and emphasizes the newest visible line with the current theme's text color.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
@@ -26,13 +26,16 @@
 
 - Compact mode preserves upstream file-write previews and edit diffs instead of reducing file changes to single-line or counted summaries.
 - Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
-- Preserve compact read warnings, background-task identities and folded-success summaries without losing failures from terminal history.
+- Preserve compact read warnings outside success folding, including virtual reads, without losing failures from terminal history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
-- Compact Eval rows show the supplied intent or title instead of a bare tool name and redundant running hint.
+- Compact Eval rows, including `xd://eval`, show the supplied intent or title instead of a bare tool name and redundant running hint.
 - Compact search rows show the search pattern or query before the search directory.
-- Compact Wait rows show the background job's type, ID, and command instead of a generic waiting message.
+- Compact Wait rows, including device dispatches, show the background job's type, ID, and command instead of a generic waiting message.
 - Compact display no longer inserts blank rows between consecutive tool calls, including after scrolling and terminal resizing.
 - Compact display keeps LSP and other `xd://` device calls on one line instead of showing file-write previews.
+- Compact shell failures show structured execution status instead of captured output, and executable summaries skip leading environment assignments.
+- Explicit agent transcript viewers retain tool details independently of the main chat's hidden or compact display mode.
+- Retransmit retained Kitty images in the same destructive history-replay frame without repeating image data on ordinary paints.
 - Resume incremental thinking-tail updates after completed control sequences while safely handling split ANSI and CRLF boundaries.
 - Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.
 - Kept wide-character composer help within the terminal width when continuation rows have very little space.

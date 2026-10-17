@@ -28,6 +28,7 @@ import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 withoutTerminalMultiplexer();
 
 import { VirtualTerminal } from "./virtual-terminal";
+import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 
 type MutableTerminalInfo = { id: string; imageProtocol: ImageProtocol | null };
 const terminal = TERMINAL as unknown as MutableTerminalInfo;
@@ -1905,6 +1906,63 @@ describe("TUI inline-image budget", () => {
 			setKittyGraphics(originalGraphics);
 		}
 	});
+
+	it.each([false, true])(
+		"retransmits Kitty image data when provider history clears placements (placeholders=%s)",
+		async unicodePlaceholders => {
+			const originalGraphics = { ...getKittyGraphics() };
+			setKittyGraphics({ unicodePlaceholders });
+			const scheduler = new VirtualRenderScheduler();
+			const term = new VirtualTerminal(40, 12);
+			const writes: string[] = [];
+			const realWrite = term.write.bind(term);
+			vi.spyOn(term, "write").mockImplementation(data => {
+				writes.push(data);
+				realWrite(data);
+			});
+			const tui = new TUI(term, undefined, { renderScheduler: scheduler });
+			const image = makeImage(tui.imageBudget, "history-clear");
+			let replay = false;
+			let acknowledgements = 0;
+			tui.setFrameProvider({
+				renderFrame: size => ({
+					viewport: image.render(size.columns),
+					...(replay && acknowledgements === 0
+						? { history: { id: 1, kind: "replay" as const, rows: [], clearScrollback: true } }
+						: {}),
+				}),
+				acknowledgeHistory: () => {
+					acknowledgements++;
+				},
+			});
+			try {
+				tui.start();
+				await scheduler.settle(term);
+				expect(writes.join("")).toContain("\x1b_Ga=t");
+				writes.length = 0;
+				replay = true;
+				tui.requestRender();
+				await scheduler.settle(term);
+				const output = writes.join("");
+				const deleted = output.indexOf("\x1b_Ga=d,d=A");
+				const transmitted = output.indexOf("\x1b_Ga=t", deleted);
+				const placed = output.indexOf("\x1b_Ga=p", transmitted);
+				expect(deleted).toBeGreaterThanOrEqual(0);
+				expect(transmitted).toBeGreaterThan(deleted);
+				expect(placed).toBeGreaterThan(transmitted);
+				expect(output).toContain(BASE64_ONE_PIXEL_PNG);
+				expect(acknowledgements).toBe(1);
+				writes.length = 0;
+				tui.requestRender();
+				await scheduler.settle(term);
+				expect(writes.join("")).not.toContain("\x1b_Ga=t");
+				expect(acknowledgements).toBe(1);
+			} finally {
+				tui.stop();
+				setKittyGraphics(originalGraphics);
+			}
+		},
+	);
 
 	it("holds the first Ghostty image paint until the startup settle window passes", () => {
 		const originalId = terminal.id;

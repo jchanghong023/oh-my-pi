@@ -287,6 +287,7 @@ export class AssistantMessageComponent extends Container {
 	#showImages = true;
 	#showToolResultImages = true;
 	#displayCompactToolActivity = displayPreferences.compactToolActivity;
+	readonly #compactToolActivityOverride: boolean | undefined;
 	/** Charts under numeric tables; off for subagent transcripts. */
 	#showTableCharts = true;
 	#transcriptBlockFinalized: boolean;
@@ -545,10 +546,12 @@ export class AssistantMessageComponent extends Container {
 		expandThinkingBlocks = false,
 		// Resolve before the initial message is rendered; settings cannot undo it.
 		externalThinking = false,
+		compactToolActivity?: boolean,
 	) {
 		super();
 		this.#hideThinkingBlock = hideThinkingBlock;
 		this.#externalThinking = externalThinking;
+		this.#compactToolActivityOverride = compactToolActivity;
 		this.#onImageUpdate = onImageUpdate;
 		this.#thinkingRenderers = thinkingRenderers;
 		this.#imageBudget = imageBudget;
@@ -809,7 +812,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (this.#displayCompactToolActivity !== displayPreferences.compactToolActivity) this.invalidate();
+		if (this.#displayCompactToolActivity !== this.#compactToolActivity) this.invalidate();
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
 		return rows;
@@ -837,7 +840,7 @@ export class AssistantMessageComponent extends Container {
 			this.#hideThinkingBlock,
 			this.#showImages,
 			this.#showToolResultImages,
-			displayPreferences.compactToolActivity,
+			this.#compactToolActivity,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
@@ -1016,7 +1019,7 @@ export class AssistantMessageComponent extends Container {
 					children.push(this.#nativeImages.get(`i${index}`, content.data, content.mimeType));
 				}
 			}
-			if (this.#showImages && this.#showToolResultImages && !displayPreferences.compactToolActivity) {
+			if (this.#showImages && this.#showToolResultImages && !this.#compactToolActivity) {
 				// Reads of files Tern's media viewer shows: the host loads each file once by path, no bytes uploaded.
 				const shownPaths = new Set<string>();
 				if (media) {
@@ -1511,8 +1514,12 @@ export class AssistantMessageComponent extends Container {
 		return this.#emergencyText?.render(width)[0];
 	}
 
+	get #compactToolActivity(): boolean {
+		return this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity;
+	}
+
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
+		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -1687,7 +1694,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	#renderToolImages(): void {
-		if (!this.#showToolResultImages || displayPreferences.compactToolActivity) return;
+		if (!this.#showToolResultImages || this.#compactToolActivity) return;
 		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) => {
 			const sourcePath = this.#toolMediaPathByCallId.get(toolCallId);
 			return images.map((image, index) => ({ image, key: `${toolCallId}:${index}`, sourcePath }));
@@ -1831,7 +1838,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
-		this.#displayCompactToolActivity = displayPreferences.compactToolActivity;
+		this.#displayCompactToolActivity = this.#compactToolActivity;
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;

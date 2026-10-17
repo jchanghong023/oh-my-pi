@@ -1,5 +1,6 @@
 import type { Component } from "../tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isRecord } from "@oh-my-pi/pi-utils";
+import { readShellWord } from "@oh-my-pi/pi-utils/shell";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
@@ -21,6 +22,7 @@ import {
 import type {
 	NativeToolHead,
 	NativeToolView,
+	ToolActivitySummary,
 	RenderResultContextOptions,
 	RenderResultOptions,
 	ToolRenderer,
@@ -222,6 +224,17 @@ export function formatWallTimeNotice(wallTimeMs: number): string {
 /** Formats the model-facing command exit status notice. */
 export function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
+}
+
+/** Compact shell failures use execution metadata, never the captured output body. */
+export function compactBashFailure(details: unknown): string {
+	if (!isRecord(details)) return "Command failed";
+	if (isRecord(details.async) && details.async.state === "cancelled") return "Command cancelled";
+	if (details.timedOut === true) return "Command timed out";
+	if (typeof details.exitCode === "number" && Number.isInteger(details.exitCode) && details.exitCode !== 0) {
+		return formatExitCodeNotice(details.exitCode);
+	}
+	return "Command failed";
 }
 
 /** Shell arguments used to build a command preview. */
@@ -717,11 +730,42 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	} satisfies ToolRenderer<TArgs, BashToolDetails>;
 }
 
+/** Show only a literal executable, never a leading environment assignment or script fragment. */
+function compactBashExecutable(command: string): string {
+	let remaining = command.trim();
+	while (remaining) {
+		const word = readShellWord(remaining);
+		if (!word || word === "unterminated") return "Shell command";
+		const source = remaining.slice(0, remaining.length - word.rest.length).trimEnd();
+		// The shared word reader resolves quotes, not shell grammar or expansion.
+		if (/[$`;&|()<>{}*?[\]~\r\n]/.test(source)) return "Shell command";
+		if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value)) {
+			remaining = word.rest;
+			continue;
+		}
+		if (word.value.startsWith("#")) return "Shell command";
+		return word.value || "Shell command";
+	}
+	return "Shell command";
+}
+
 /** Renders bash command previews and output. */
-export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
-	resolveTitle: args => (args?.name ? `Bash · ${String(args.name)}` : "Bash"),
-	resolveCommand: args => args?.command,
-	resolveCwd: args => args?.cwd,
-	resolveEnv: args => args?.env,
-	showHeader: false,
-});
+export const bashToolRenderer = {
+	...createShellRenderer<BashRenderArgs>({
+		resolveTitle: args => (args?.name ? `Bash · ${String(args.name)}` : "Bash"),
+		resolveCommand: args => args?.command,
+		resolveCwd: args => args?.cwd,
+		resolveEnv: args => args?.env,
+		showHeader: false,
+	}),
+	activitySummary(args: BashRenderArgs): ToolActivitySummary {
+		const intent = args?.[INTENT_FIELD];
+		return {
+			label: "Bash",
+			detail:
+				typeof intent === "string" && intent.trim()
+					? intent
+					: compactBashExecutable(typeof args?.command === "string" ? args.command : ""),
+		};
+	},
+} satisfies ToolRenderer<BashRenderArgs, BashToolDetails>;

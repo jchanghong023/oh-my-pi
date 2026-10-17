@@ -25,6 +25,7 @@ import {
 	createHandoffSummaryMessageComponent,
 } from "@oh-my-pi/pi-tui/chat/compaction-summary-message";
 import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import {
@@ -781,7 +782,12 @@ export class UiHelpers {
 					if (images.length > 0 && assistantComponent) {
 						assistantComponent.setToolResultImages(message.toolCallId, images, mediaPath);
 						const hasText = message.content.some(c => c.type === "text");
-						if (!hasText && cfgTerminalShowImages.get(settings)) {
+						// Compact mode hides assistant tool images, so keep its read row and call count.
+						if (
+							!hasText &&
+							cfgTerminalShowImages.get(settings) &&
+							!chatTranscriptDisplayPreferences.compactToolActivity
+						) {
 							if (pendingReadComponent) {
 								pendingReadComponent.updateResult(message, false, message.toolCallId);
 								this.ctx.pendingTools.delete(message.toolCallId);

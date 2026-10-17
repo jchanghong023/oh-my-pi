@@ -106,6 +106,7 @@ type ReadToolSuffixResolution = {
 
 type ReadToolGroupOptions = {
 	showContentPreview?: boolean;
+	compactToolActivity?: boolean;
 };
 
 function getSuffixResolution(details: ReadToolDetails | undefined): ReadToolSuffixResolution | undefined {
@@ -376,6 +377,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#compactHiddenSummary = 0;
 	#compactFailures = 0;
 	#showContentPreview: boolean;
+	readonly #compactToolActivityOverride: boolean | undefined;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
 	// header can change from `Read <path>` to `Read (N)` plus a tree. The
@@ -399,6 +401,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
 		this.#showContentPreview = options.showContentPreview ?? false;
+		this.#compactToolActivityOverride = options.compactToolActivity;
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
@@ -406,7 +409,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	override render(width: number): readonly string[] {
 		if (!this.#toolActivityVisible) return [];
-		if (displayPreferences.compactToolActivity) {
+		if (this.#compactToolActivity) {
 			this.#displayCompact = true;
 			const rows =
 				this.#compactHiddenSummary > 0
@@ -422,6 +425,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		if (this.#displayCompact) this.#updateDisplay();
 		return super.render(width);
+	}
+
+	isCompactToolActivity(): boolean {
+		return this.#compactToolActivityOverride !== false;
+	}
+
+	get #compactToolActivity(): boolean {
+		return this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity;
 	}
 
 	getCompactToolCount(): number {
@@ -499,7 +510,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	parkAsBackground(): void {}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(displayPreferences.compactToolActivity);
+		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
@@ -684,12 +695,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			this.#displayVersion,
 			this.#toolActivityVisible,
 			this.#sealed,
-			displayPreferences.compactToolActivity,
+			this.#compactToolActivity,
 			cx?.cols,
 		];
 		return this.#native.get(key, () =>
 			withHidden(
-				displayPreferences.compactToolActivity
+				this.#compactToolActivity
 					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
 					: dataFirst
 						? this.#describeTool()
@@ -1071,7 +1082,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#updateDisplay(): void {
 		this.#displayVersion++;
-		this.#displayCompact = displayPreferences.compactToolActivity;
+		this.#displayCompact = this.#compactToolActivity;
 		if (this.#displayCompact) return;
 		const entries = [...this.#entries.values()];
 		const displayTargets = this.#displayTargetsForEntries(entries);

@@ -2,7 +2,8 @@ import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "../src/chat/assistant-message";
-import { setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
+import { ChatTranscriptBuilder } from "../src/chat/chat-transcript-builder";
+import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
 import { Text } from "../src/components/text";
@@ -12,6 +13,7 @@ import type { DescribeContext, NativeNode } from "../src/native/node";
 import { COMPOSER_DEFAULTS, Composer } from "../src/prompt/composer";
 import { initTheme } from "../src/theme";
 import { Container } from "../src/tui";
+import type { TUI } from "../src/tui";
 import { setTerminalImageProtocol, TERMINAL } from "../src/terminal-capabilities";
 import type { CoordinationDetails } from "../src/tools/wait";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
@@ -70,7 +72,7 @@ beforeAll(async () => {
 afterEach(() => {
 	for (const component of components.splice(0)) component.dispose();
 	stopSharedSpinnerTicker();
-	setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	setTerminalImageProtocol(originalImageProtocol);
 });
 
@@ -125,6 +127,105 @@ describe("compact transcript activity", () => {
 		}
 	});
 
+	it("keeps shell assignment values out of executable summaries before and after execution", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		for (const [command, executable] of [
+			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun -e "PRIVATE_SCRIPT"', "bun"],
+			['CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py', "python.exe"],
+		]) {
+			const component = new ToolExecutionComponent("bash", { command }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			for (const complete of [false, true]) {
+				if (complete) component.updateResult({ content: [{ type: "text", text: "PRIVATE_OUTPUT" }] });
+				for (const view of [
+					Bun.stripANSI(component.render(100).join("\n")),
+					JSON.stringify(component.describe(toolCx)),
+					JSON.stringify(component.describe()),
+				]) {
+					expect(view).toContain(executable!);
+					expect(view).not.toContain("PRIVATE");
+					expect(view).not.toContain("CUDA_VISIBLE_DEVICES");
+					expect(view).not.toContain("ACCESS_TOKEN");
+				}
+			}
+		}
+	});
+
+	it("shows the failing shell exit code without exposing stdout in the compact failure summary", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent(
+			"bash",
+			{ command: "echo PRIVATE_STDOUT; exit 7", i: "检查退出状态" },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(component);
+		component.updateResult({
+			content: [{ type: "text", text: "PRIVATE_STDOUT\n\n[Process exited with code 7]" }],
+			details: { exitCode: 7 },
+			isError: true,
+		});
+		component.setExpanded(true);
+		for (const view of [
+			Bun.stripANSI(component.render(100).join("\n")),
+			JSON.stringify(component.describe(toolCx)),
+			JSON.stringify(component.describe()),
+		]) {
+			expect(view).toContain("7");
+			expect(view).toContain("检查退出状态");
+			expect(view).not.toContain("PRIVATE_STDOUT");
+		}
+		expect(nodes(component.describe(toolCx)).find(node => node.k === "tool")?.p?.status).toBe("error");
+	});
+
+	it("retains internal-URL read conflict warnings outside the folded-success budget", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const warning = new ToolExecutionComponent("read", { path: "local://conflicted.ts" }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(warning);
+		warning.updateResult({
+			content: [{ type: "text", text: "PRIVATE_CONFLICT_BODY" }],
+			details: { conflictCount: 2 },
+		});
+		transcript.addChild(warning);
+		for (let index = 0; index < 4; index++) {
+			const success = new ToolExecutionComponent("grep", { pattern: `success-${index}` }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(success);
+			success.updateResult({ content: [{ type: "text", text: "PRIVATE_SUCCESS_BODY" }] });
+			transcript.addChild(success);
+		}
+		const views = [
+			Bun.stripANSI(transcript.render(100).join("\n")),
+			...([toolCx, { ...toolCx, supports: () => false }] as const).map(cx =>
+				transcript
+					.nativeBlocks()
+					.map(block => JSON.stringify(block.describe?.(cx)))
+					.join("\n"),
+			),
+		];
+		for (const view of views) {
+			expect(view).toContain("conflicted.ts");
+			expect(view).toContain("2 conflicts");
+			expect(view).toContain("已收起 2 次成功调用");
+			for (let index = 0; index < 2; index++) expect(view).not.toContain(`success-${index}`);
+			for (let index = 2; index < 4; index++) expect(view).toContain(`success-${index}`);
+			expect(view).not.toContain("PRIVATE_");
+		}
+	});
+
 	it("retains each grouped read intent after execution args omit it", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const group = new ReadToolGroupComponent({ showContentPreview: true });
@@ -174,12 +275,12 @@ describe("compact transcript activity", () => {
 		for (const view of [ansi.join("\n"), native]) {
 			expect(view).toContain("conflicted.ts");
 			expect(view).toContain("2 conflicts");
-			expect(view).toContain("已收起 1 次成功调用");
-			expect(view).not.toContain("success-0.ts");
-			for (let index = 1; index < 4; index++) expect(view).toContain(`success-${index}.ts`);
+			expect(view).toContain("已收起 2 次成功调用");
+			for (let index = 0; index < 2; index++) expect(view).not.toContain(`success-${index}.ts`);
+			for (let index = 2; index < 4; index++) expect(view).toContain(`success-${index}.ts`);
 			expect(view).not.toContain("PRIVATE_");
 		}
-		expect(ansi).toHaveLength(5);
+		expect(ansi).toHaveLength(4);
 	});
 
 	it.each(["failure", "warning"] as const)(
@@ -329,8 +430,8 @@ describe("compact transcript activity", () => {
 			}
 			for (let index = 0; index < 6; index++) addSuccess(`saved-${index}.ts`);
 			for (const [last, folded] of [
-				[5, 4],
-				[6, 5],
+				[5, 5],
+				[6, 6],
 			] as const) {
 				if (last === 6) addSuccess("saved-6.ts");
 				const ansi = retire(4);
@@ -343,7 +444,7 @@ describe("compact transcript activity", () => {
 					if (!warning) expect(view).toContain("失败 8 次（保留）");
 					expect(view).not.toContain("success-prefix.ts");
 					for (let index = 0; index <= last; index++) {
-						if (index <= last - 3) expect(view).not.toContain(`saved-${index}.ts`);
+						if (index <= last - 2) expect(view).not.toContain(`saved-${index}.ts`);
 						else expect(view).toContain(`saved-${index}.ts`);
 					}
 					for (const target of targets) {
@@ -410,8 +511,8 @@ describe("compact transcript activity", () => {
 				if (mode === "reoffered with unmounted header") composer.setHeaderExtras([], []);
 				for (let index = 0; index < 6; index++) addTool(`saved-${index}.ts`);
 				for (const [last, folded] of [
-					[5, 4],
-					[6, 5],
+					[5, 5],
+					[6, 6],
 				] as const) {
 					if (last === 6) addTool("saved-6.ts");
 					if (mode !== "first offer") {
@@ -438,7 +539,7 @@ describe("compact transcript activity", () => {
 					}
 					for (let index = 0; index <= last; index++) {
 						const matching = visible.split("\n").filter(row => row.includes(`saved-${index}.ts`));
-						expect(matching).toHaveLength(index <= last - 3 ? 0 : 1);
+						expect(matching).toHaveLength(index <= last - 2 ? 0 : 1);
 					}
 					expect(visible).not.toContain("PRIVATE_");
 					expect(terminal.getViewport().join("\n")).toContain("EDITOR");
@@ -469,7 +570,7 @@ describe("compact transcript activity", () => {
 		for (let index = 0; index < 5; index++) add(`saved-${index}.ts`);
 		const history: string[] = [];
 		for (let index = 0; index < 8; index++) {
-			const batch = transcript.peekFinalizedBatch(100, 4);
+			const batch = transcript.peekFinalizedBatch(100, 3);
 			if (!batch) break;
 			history.push(...batch.rows);
 			transcript.acknowledgeFinalizedBatch(batch.id);
@@ -479,17 +580,17 @@ describe("compact transcript activity", () => {
 			expect(history.filter(row => row.includes(`failed-${index}.ts`))).toHaveLength(1);
 		}
 		add("saved-5.ts");
-		expect(transcript.peekFinalizedBatch(100, 4)).toBeUndefined();
-		const viewport = transcript.renderViewport(100, 4, { tick: 0, now: 0 });
+		expect(transcript.peekFinalizedBatch(100, 3)).toBeUndefined();
+		const viewport = transcript.renderViewport(100, 3, { tick: 0, now: 0 });
 		const ansi = Bun.stripANSI(viewport.join("\n"));
 		const native = transcript
 			.nativeBlocks()
 			.map(block => JSON.stringify(block.describe?.(toolCx)))
 			.join("\n");
 		for (const view of [ansi, native]) {
-			expect(view.match(/已收起 3 次成功调用/g)).toHaveLength(1);
-			for (let index = 3; index < 6; index++) expect(view).toContain(`saved-${index}.ts`);
-			for (let index = 0; index < 3; index++) expect(view).not.toContain(`saved-${index}.ts`);
+			expect(view.match(/已收起 4 次成功调用/g)).toHaveLength(1);
+			for (let index = 4; index < 6; index++) expect(view).toContain(`saved-${index}.ts`);
+			for (let index = 0; index < 4; index++) expect(view).not.toContain(`saved-${index}.ts`);
 			expect(view).not.toContain("PRIVATE_");
 		}
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
@@ -532,13 +633,13 @@ describe("compact transcript activity", () => {
 			.map(block => JSON.stringify(block.describe?.(toolCx)))
 			.join("\n");
 		for (const view of [ansi.join("\n"), native]) {
-			expect(view.match(/已收起 2 次成功调用/g)).toHaveLength(1);
-			for (let index = 2; index < 5; index++) expect(view).toContain(`written-${index}.ts`);
-			for (let index = 0; index < 2; index++) expect(view).not.toContain(`written-${index}.ts`);
+			expect(view.match(/已收起 3 次成功调用/g)).toHaveLength(1);
+			for (let index = 3; index < 5; index++) expect(view).toContain(`written-${index}.ts`);
+			for (let index = 0; index < 3; index++) expect(view).not.toContain(`written-${index}.ts`);
 			expect(view).not.toContain("Skipped due");
 			expect(view).not.toContain("PRIVATE_");
 		}
-		expect(ansi).toHaveLength(4);
+		expect(ansi).toHaveLength(3);
 	});
 
 	it("counts folded successes separately from visible failures and staged proposals", () => {
@@ -563,7 +664,7 @@ describe("compact transcript activity", () => {
 		const failure = make("read", {}, true);
 		for (let i = 0; i < 5; i++) make("write");
 		const rows = transcript.render(100).map(row => Bun.stripANSI(row));
-		expect(rows.join("\n")).toContain("已收起 2 次成功调用 · 失败 1 次（保留）");
+		expect(rows.join("\n")).toContain("已收起 3 次成功调用 · 失败 1 次（保留）");
 		expect(rows.some(row => row.includes("待确认") && !row.includes("done"))).toBe(true);
 		expect(rows.some(row => row.includes("Permission denied"))).toBe(true);
 		expect(failure.getCompactToolFailureCount()).toBe(1);
@@ -891,6 +992,167 @@ describe("compact transcript activity", () => {
 		expect(component.render(80).join("\n")).not.toContain("PRIVATE_THINKING");
 		expect(JSON.stringify(component.describe(toolCx))).not.toContain("PRIVATE_THINKING");
 	});
+
+	it("uses the latest wait snapshot through xd dispatch instead of the transport intent", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent(
+			"write",
+			{ path: "xd://wait", content: "{}", i: "观察后台任务" },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(component);
+		const first = {
+			id: "bg_11",
+			type: "bash",
+			status: "running",
+			label: "bun first\nPRIVATE_LABEL",
+			durationMs: 100,
+		};
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
+				details: { xdev: { tool: "wait", mode: "execute", args: {}, inner: { op: "wait", jobs: [first] } } },
+			},
+			true,
+		);
+		expect(Bun.stripANSI(component.render(100)[0])).toContain("[bash] bg_11 bun first");
+		component.updateResult({
+			content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
+			details: {
+				xdev: {
+					tool: "wait",
+					mode: "execute",
+					args: {},
+					inner: {
+						op: "wait",
+						jobs: [
+							{ ...first, status: "completed" },
+							{ ...first, id: "bg_12", label: "bun second" },
+						],
+					},
+				},
+			},
+		});
+		for (const view of [
+			Bun.stripANSI(component.render(100).join("\n")),
+			JSON.stringify(component.describe(toolCx)),
+			JSON.stringify(component.describe()),
+		]) {
+			expect(view).toContain("[bash] bg_12 bun second");
+			expect(view).toContain("+1");
+			expect(view).not.toContain("观察后台任务");
+			expect(view).not.toContain("PRIVATE_");
+		}
+	});
+
+	it("preserves eval intent precedence and executable-only Bash summaries through xd dispatch", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		for (const [inner, outerIntent, expected] of [
+			[{ title: "INNER_TITLE" }, undefined, "INNER_TITLE"],
+			[{ title: "INNER_TITLE", i: "INNER_INTENT" }, undefined, "INNER_INTENT"],
+			[{ title: "INNER_TITLE", i: "INNER_INTENT" }, "OUTER_INTENT", "OUTER_INTENT"],
+		] as const) {
+			const args = {
+				path: "xd://eval",
+				content: JSON.stringify({ ...inner, language: "js", code: "PRIVATE_CODE" }),
+			};
+			const component = new ToolExecutionComponent("write", { ...args, i: outerIntent }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateArgs(args);
+			for (const view of [
+				Bun.stripANSI(component.render(100).join("\n")),
+				JSON.stringify(component.describe(toolCx)),
+				JSON.stringify(component.describe()),
+			]) {
+				expect(view).toContain(expected);
+				expect(view).not.toContain("PRIVATE_CODE");
+			}
+		}
+		const shell = new ToolExecutionComponent(
+			"write",
+			{ path: "xd://bash", content: JSON.stringify({ command: 'TOKEN="PRIVATE value" bun -e "PRIVATE_SCRIPT"' }) },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(shell);
+		expect(Bun.stripANSI(shell.render(100)[0])).toContain("bun");
+		expect(JSON.stringify(shell.describe(toolCx))).not.toContain("PRIVATE");
+		expect(shell.render(100).join("\n")).not.toContain("TOKEN");
+	});
+
+	it.each([false, true])(
+		"keeps explicit history details independent of compact/clean main chat (hidden=%s)",
+		hideToolActivity => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity });
+			const before = { ...chatTranscriptDisplayPreferences };
+			const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
+			const builder = new ChatTranscriptBuilder({
+				// The builder only consumes these render callbacks from the host TUI.
+				ui: ui as unknown as TUI,
+				cwd: process.cwd(),
+				requestRender() {},
+				toolActivityDisplay: { hideToolActivity: false, compactToolActivity: false, readToolResultPreview: true },
+			});
+			try {
+				builder.rebuild([
+					{
+						type: "message",
+						id: "calls",
+						parentId: null,
+						timestamp: "2026-10-18T00:00:00.000Z",
+						message: assistant([
+							{ type: "toolCall", id: "shell", name: "bash", arguments: { command: "echo shell" } },
+							{ type: "toolCall", id: "read", name: "read", arguments: { path: "history.txt" } },
+							{ type: "toolCall", id: "mcp", name: "mcp__fixture_probe", arguments: { query: "history" } },
+						]),
+					},
+					...(["shell", "read", "mcp"] as const).map(id => ({
+						type: "message" as const,
+						id,
+						parentId: { shell: "calls", read: "shell", mcp: "read" }[id],
+						timestamp: "2026-10-18T00:00:00.000Z",
+						message: {
+							role: "toolResult" as const,
+							toolCallId: id,
+							toolName: { shell: "bash", read: "read", mcp: "mcp__fixture_probe" }[id],
+							content: [{ type: "text" as const, text: `HISTORY_${id}_BODY` }],
+							isError: false,
+							timestamp: 1,
+						},
+					})),
+				]);
+				builder.setExpanded(true);
+				const views = [
+					Bun.stripANSI(builder.container.render(120).join("\n")),
+					builder.container
+						.nativeBlocks()
+						.map(block => JSON.stringify(block.describe?.(toolCx)))
+						.join("\n"),
+				];
+				for (const view of views) {
+					for (const id of ["shell", "read", "mcp"]) expect(view).toContain(`HISTORY_${id}_BODY`);
+					expect(view).not.toContain("已收起");
+				}
+				const main = new ToolExecutionComponent("bash", { command: "echo main" }, {}, undefined, ui);
+				components.push(main);
+				main.updateResult({ content: [{ type: "text", text: "PRIVATE_MAIN_BODY" }] });
+				main.setExpanded(true);
+				main.setToolActivityVisible(!hideToolActivity);
+				expect(main.render(100).join("\n")).not.toContain("PRIVATE_MAIN_BODY");
+				expect(JSON.stringify(main.describe(toolCx))).not.toContain("PRIVATE_MAIN_BODY");
+				expect(chatTranscriptDisplayPreferences).toEqual(before);
+			} finally {
+				builder.dispose();
+			}
+		},
+	);
 
 	it("suppresses tool-result images without suppressing model-authored images, reversibly", () => {
 		setTerminalImageProtocol(null);
