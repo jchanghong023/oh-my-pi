@@ -108,7 +108,8 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			assert.equal(otherCwd.getCwd(), otherProject);
 			await first.ensureOnDisk();
 			await second.ensureOnDisk();
-			const artifact = await first.saveArtifact("runtime artifact", "test");
+			const artifactId = await first.saveArtifact("runtime artifact", "test");
+			const artifact = await first.getArtifactPath(artifactId);
 			withinRuntime(artifact);
 			assert.equal(fs.readFileSync(artifact, "utf8"), "runtime artifact");
 			for (const probe of probes) {
