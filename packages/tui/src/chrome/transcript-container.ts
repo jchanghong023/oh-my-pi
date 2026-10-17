@@ -237,7 +237,7 @@ export class TranscriptContainer extends Container {
 	#replayRequested = false;
 	#toolActivityVisible = true;
 	#lastFrame: AnimationFrame = { tick: 0, now: 0 };
-	/** Beginning of the current uninterrupted tool run, even after its head retires. */
+	/** Earliest tool run overlapping the live tail, or the trailing open run even after retirement. */
 	#compactRunStart = Number.POSITIVE_INFINITY;
 	#compactHistoryInvalidated = false;
 	// Start rows from the last full render(), keyed by child component (transcript deep-links).
@@ -1515,7 +1515,7 @@ export class TranscriptContainer extends Container {
 		(component as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(rows, frame);
 	}
 
-	/** Recompute the whole open tool run; retired compact projections are replaced through normal replay. */
+	/** Recompute whole tool runs touching the live tail; retired projections use normal replay. */
 	#updateCompactTools(startIndex = Math.min(this.#frontier, this.#compactRunStart)): void {
 		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
 		this.#compactRunStart = Number.POSITIVE_INFINITY;
@@ -1525,6 +1525,7 @@ export class TranscriptContainer extends Container {
 		let failures = 0;
 		const flush = (end: number) => {
 			if (start < 0) return;
+			if (end > this.#frontier) this.#compactRunStart = Math.min(this.#compactRunStart, start);
 			let remaining = 3;
 			const summary = Math.max(0, completed - remaining);
 			for (let index = end - 1; index >= start; index--) {
@@ -1572,7 +1573,7 @@ export class TranscriptContainer extends Container {
 				flush(index);
 			}
 		}
-		if (start >= 0) this.#compactRunStart = start;
+		if (start >= 0) this.#compactRunStart = Math.min(this.#compactRunStart, start);
 		flush(this.children.length);
 	}
 

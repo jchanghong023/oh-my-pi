@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
 - Preserve compact read warnings, background-task identities and folded-success summaries without losing failures from terminal history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
 - Compact Eval rows show the supplied intent or title instead of a bare tool name and redundant running hint.
