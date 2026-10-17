@@ -1037,6 +1037,11 @@ describe("goal-autopilot public CLI Provider acceptance", () => {
 							item.type === "function_call_output" &&
 							contentText(item.output).includes("AUXILIARY_SUMMARY_WITHOUT_OBJECTIVE"),
 					),
+					JSON.stringify(
+						responseItems(first[2]!)
+							.filter(item => item.type === "function_call_output")
+							.map(item => item.output),
+					),
 				).toBe(true);
 				for (const toolName of ["read", "write"]) {
 					const results = client.seen.filter(
