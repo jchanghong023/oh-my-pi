@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Compact mode reclaims collapsed rows instead of leaving a large blank band between tool activity and the thinking or TODO area.
 - Compact mode preserves upstream file-write previews and edit diffs instead of reducing file changes to single-line or counted summaries.
 - Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
 - Preserve compact read warnings outside success folding, including virtual reads, without losing failures from terminal history.

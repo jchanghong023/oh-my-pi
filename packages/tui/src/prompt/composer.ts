@@ -1,3 +1,4 @@
+import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
 import type { StatusLineComponent } from "../status-line/component";
@@ -487,8 +488,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// rows back out of native scrollback. Let the editor move up instead of
 		// inserting a seam band; subsequent frames retain that natural anchor
 		// until new output fills the screen again. Shell history stays untouched.
+		// Compact output reclaims collapsed rows instead of pinning the input below a blank band.
 		const slack =
-			filledHistoryRows === undefined || promotedChromeContracted
+			filledHistoryRows === undefined ||
+			promotedChromeContracted ||
+			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity)
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
 		// Park the slack below the live rows rather than above them. Above, it
