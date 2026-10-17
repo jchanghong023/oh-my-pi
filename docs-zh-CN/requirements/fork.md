@@ -215,6 +215,7 @@
 - `crates/pi-shell/src/shell.rs`：TERM 宽限等待按平台编译：Unix 继续异步等待清理，Windows 的 TERM 本已强制结束进程，返回立即就绪的 Future；不增加延迟，也不屏蔽 `clippy::unused_async`。
 - `crates/pi-natives/src/memory.rs`：非 Linux/glibc 平台的空操作入口使用 `const fn`，满足 Windows 静态门禁；Linux/glibc 继续执行原有工作计数、释放通知与空闲裁剪，不屏蔽 lint。
 - `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
+- `crates/pi-shell/src/process.rs`：取消时每一波信号在发送前冻结自有目标，同一进程／进程组不重复投递 TERM，避免重入清理 trap；跨组后代与 TERM 后新生进程仍由后续 KILL 波回收，保留既有进程身份保护和宽限时限。
 - `crates/pi-builtins/src/uptime.rs`、`du.rs`：Windows 的未用导入／可变声明静态问题已由上游等价修复；采用上游实现，不再保留 fork 业务补丁，命令行为不变。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。

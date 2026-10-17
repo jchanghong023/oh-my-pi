@@ -792,25 +792,7 @@ impl Process {
 	/// as a false descendant; `TerminateProcess`-ing it drops the whole session
 	/// with no cleanup and no `session_exit` record (#7452, related #4605).
 	fn signal_tree_excluding(&self, signal: i32, protected: &HashSet<i32>) -> u32 {
-		let descendants = self.signalable_descendants(protected);
-		let mut signaled = 0u32;
-		// If self leads its own process group, also signal the group — this
-		// catches grandchildren reparented to init when their immediate parent
-		// died inside the descendant walk.
-		if let Some(pgid) = self.group_id()
-			&& pgid == self.inner.pid()
-		{
-			let _ = kill_process_group(pgid, signal);
-		}
-		for child in &descendants {
-			if child.inner.kill(signal) {
-				signaled += 1;
-			}
-		}
-		if !protected.contains(&self.pid()) && self.inner.kill(signal) {
-			signaled += 1;
-		}
-		signaled
+		signal_trees(std::slice::from_ref(self), &[], signal, protected)
 	}
 
 	/// Live descendants with every protected subtree pruned, not just the exact
@@ -1124,13 +1106,49 @@ impl TerminationTargets {
 	/// targets routinely exit between collection and signalling, and
 	/// the caller's policy is "best effort".
 	pub fn signal(&self, signal: i32) {
-		for &pgid in &self.pgids {
-			let _ = kill_process_group(pgid, signal);
+		let _ = signal_trees(&self.processes, &self.pgids, signal, &host_protected_pids());
+	}
+}
+
+/// Snapshot a complete wave before delivering anything: a TERM handler may
+/// immediately spawn cleanup children, which must not receive that same TERM.
+fn signal_trees(roots: &[Process], pgids: &[i32], signal: i32, protected: &HashSet<i32>) -> u32 {
+	let mut groups: HashSet<i32> = pgids.iter().copied().collect();
+	let mut seen = HashSet::new();
+	let mut processes = Vec::new();
+	for root in roots {
+		if let Some(pgid) = root.group_id()
+			&& pgid == root.pid()
+			&& !protected.contains(&root.pid())
+		{
+			// Retain group coverage for descendants reparented after their
+			// immediate parent exited.
+			groups.insert(pgid);
 		}
-		for process in &self.processes {
-			let _ = process.signal_tree(signal);
+		for process in root
+			.signalable_descendants(protected)
+			.into_iter()
+			.chain(std::iter::once(root.clone()))
+		{
+			if !protected.contains(&process.pid()) && seen.insert(process.pid()) {
+				let pgid = process.group_id();
+				processes.push((process, pgid));
+			}
 		}
 	}
+
+	// A successful group signal already covered its snapshotted members.
+	// Sending to their pinned handles again can re-enter a TERM trap or kill
+	// the cleanup child it just spawned. Failed groups still need PID fallback;
+	// descendants in other groups/sessions always use their stable handles.
+	groups.retain(|&pgid| kill_process_group(pgid, signal));
+	let mut signaled = 0;
+	for (process, pgid) in processes {
+		if pgid.is_some_and(|pgid| groups.contains(&pgid)) || process.inner.kill(signal) {
+			signaled += 1;
+		}
+	}
+	signaled
 }
 
 /// A single external child reported by the shell's spawn-observer hook.
@@ -1648,6 +1666,205 @@ mod tests {
 		targets.add_process(pinned);
 		targets.add_pid(self_pid);
 		assert_eq!(targets.processes.len(), 1, "duplicate pids must be deduped");
+	}
+
+	/// Unlike TERM, queued realtime signals cannot coalesce and hide duplicate
+	/// group/PID delivery. Exercise the same wave with real kernel signals,
+	/// then use a higher-numbered realtime signal as an ordered end marker.
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn termination_wave_signals_each_process_once() {
+		use std::{
+			io::Read,
+			os::{fd::AsRawFd, unix::process::CommandExt},
+			process::{Child, Command, Stdio},
+		};
+
+		let signal = libc::SIGRTMIN();
+		// SAFETY: sigemptyset initializes the set before sigaddset uses it.
+		let mut blocked = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+		unsafe {
+			libc::sigemptyset(&raw mut blocked);
+			libc::sigaddset(&raw mut blocked, signal);
+			libc::sigaddset(&raw mut blocked, signal + 1);
+		}
+		const CHILD_MODE: &str = "PI_SHELL_TEST_SIGNAL_WAVE_CHILD";
+		if std::env::var_os(CHILD_MODE).is_some() {
+			// All threads inherited the blocked mask across exec. Only this
+			// receiver consumes signals, so the ordered marker cannot overtake
+			// a delivery handler running on another libtest thread.
+			// SAFETY: blocked is initialized; received and each byte remain
+			// live for their calls.
+			unsafe {
+				assert_eq!(libc::write(libc::STDOUT_FILENO, [1u8].as_ptr().cast(), 1), 1);
+				loop {
+					let mut received = 0;
+					assert_eq!(libc::sigwait(&raw const blocked, &raw mut received), 0);
+					let byte = if received == signal { 2u8 } else { 3u8 };
+					assert_eq!(libc::write(libc::STDOUT_FILENO, [byte].as_ptr().cast(), 1), 1);
+				}
+			}
+		}
+
+		struct Cleanup(Child);
+		impl Drop for Cleanup {
+			fn drop(&mut self) {
+				let _ = self.0.kill();
+				let _ = self.0.wait();
+			}
+		}
+
+		let test_module = module_path!()
+			.split_once("::")
+			.expect("crate-qualified module")
+			.1;
+		let mut command = Command::new(std::env::current_exe().expect("test executable"));
+		command
+			.args([
+				"--exact",
+				&format!("{test_module}::termination_wave_signals_each_process_once"),
+				"--nocapture",
+			])
+			.env(CHILD_MODE, "1")
+			.stdout(Stdio::piped())
+			.process_group(0);
+		// SAFETY: the child-only pre-exec hook only changes its signal mask
+		// using async-signal-safe sigprocmask; no parent state is modified.
+		unsafe {
+			command.pre_exec(move || {
+				if libc::sigprocmask(libc::SIG_BLOCK, &raw const blocked, std::ptr::null_mut()) != 0 {
+					return Err(std::io::Error::last_os_error());
+				}
+				Ok(())
+			});
+		}
+		let mut child = Cleanup(command.spawn().expect("spawn signal receiver"));
+		let pid = i32::try_from(child.0.id()).expect("child pid fits");
+		let process = Process::from_pid(pid).expect("pin signal receiver");
+		let mut stdout = child.0.stdout.take().expect("receiver output");
+		let mut read_marker = || {
+			loop {
+				let mut pollfd =
+					libc::pollfd { fd: stdout.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+				// SAFETY: pollfd points to one initialized entry and stdout
+				// owns its descriptor throughout this call.
+				assert_eq!(unsafe { libc::poll(&raw mut pollfd, 1, 5_000) }, 1, "signal marker");
+				let mut byte = [0];
+				stdout.read_exact(&mut byte).expect("read signal marker");
+				if (1..=3).contains(&byte[0]) {
+					return byte[0];
+				}
+			}
+		};
+		assert_eq!(read_marker(), 1, "receiver is ready to consume queued signals");
+		let mut targets = TerminationTargets::new();
+		targets.add_pgid(pid);
+		targets.add_process(process.clone());
+		targets.signal(signal);
+		assert!(process.signal(signal + 1), "send ordered end marker");
+		let mut deliveries = 0;
+		loop {
+			match read_marker() {
+				2 => deliveries += 1,
+				3 => break,
+				_ => panic!("unexpected readiness marker"),
+			}
+		}
+		assert_eq!(deliveries, 1, "one wave must not signal both a group and its member again");
+	}
+
+	/// Escaped descendants still receive TERM, and children born in its trap
+	/// receive the next KILL wave rather than the current TERM.
+	#[cfg(target_os = "linux")]
+	#[test]
+	fn termination_waves_reach_escaped_and_new_children() {
+		use std::{
+			fs,
+			os::unix::process::CommandExt,
+			process::{Child, Command},
+			thread,
+			time::Instant,
+		};
+
+		struct Cleanup {
+			child:   Child,
+			targets: TerminationTargets,
+		}
+
+		impl Drop for Cleanup {
+			fn drop(&mut self) {
+				self.targets.signal(KILL_SIGNAL);
+				let _ = self.child.wait();
+			}
+		}
+
+		let root = tempfile::tempdir().expect("cleanup directory");
+		let child = Command::new("sh")
+			.args([
+				"-c",
+				r#"trap 'setsid sleep 30 & echo $! > late; wait' TERM
+setsid sh -c 'trap "printf escaped > escaped_cleaned" TERM; echo $$ > escaped; : > escaped_ready; while :; do :; done' &
+while [ ! -f escaped_ready ]; do :; done
+: > ready
+while :; do :; done"#,
+			])
+			.current_dir(root.path())
+			.process_group(0)
+			.spawn()
+			.expect("spawn cleanup shell");
+		let pid = i32::try_from(child.id()).expect("child pid fits");
+		let mut targets = TerminationTargets::new();
+		targets.add_pgid(pid);
+		targets.add_process(Process::from_pid(pid).expect("pin cleanup shell"));
+		let cleanup = Cleanup { child, targets };
+		let wait_until = |timeout: Duration, condition: &dyn Fn() -> bool| {
+			let deadline = Instant::now() + timeout;
+			while !condition() {
+				if Instant::now() >= deadline {
+					return false;
+				}
+				thread::sleep(Duration::from_millis(5));
+			}
+			true
+		};
+		assert!(
+			wait_until(Duration::from_secs(5), &|| root.path().join("ready").exists()),
+			"both shell sessions must install their traps before TERM",
+		);
+		let read_process = |name: &str| {
+			let pid = fs::read_to_string(root.path().join(name))
+				.expect("child pid file")
+				.trim()
+				.parse()
+				.expect("child pid");
+			Process::from_pid(pid).expect("pin descendant")
+		};
+		let escaped = read_process("escaped");
+		assert_ne!(escaped.group_id(), Some(pid), "child must escape the root group");
+
+		cleanup.targets.signal(TERM_SIGNAL);
+		assert!(
+			wait_until(Duration::from_secs(1), &|| {
+				root.path().join("escaped_cleaned").exists()
+					&& fs::read_to_string(root.path().join("late"))
+						.is_ok_and(|pid| pid.trim().parse::<i32>().is_ok())
+			}),
+			"TERM must reach the escaped descendant and let the root spawn its new child",
+		);
+		let late = read_process("late");
+		assert_eq!(late.status(), ProcessStatus::Running, "cleanup's new child survives TERM");
+		assert!(
+			wait_until(Duration::from_secs(1), &|| late.group_id() == Some(late.pid())),
+			"cleanup's new child must enter its own session before KILL",
+		);
+
+		cleanup.targets.signal(KILL_SIGNAL);
+		assert!(
+			wait_until(Duration::from_secs(1), &|| {
+				escaped.status() == ProcessStatus::Exited && late.status() == ProcessStatus::Exited
+			}),
+			"KILL must rediscover cleanup's child and reap both escaped sessions",
+		);
 	}
 
 	/// Regression test for the review on PR #4606: a long-running shell
