@@ -1222,114 +1222,192 @@ describe("wave 3 commands", () => {
 		}
 	});
 
-	it("/wt: uses committed sibling trees, existing branch tips, dirty worktrees and the current directory", async () => {
+	const worktreeGit = (cwd: string, ...args: string[]) => {
+		const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+		return result.stdout.toString().trim();
+	};
+
+	async function prepareWorktreeRepo(repoDir: string) {
+		await fs.mkdir(repoDir);
+		worktreeGit(repoDir, "init", "-q", "-b", "main");
+		worktreeGit(repoDir, "config", "core.autocrlf", "false");
+		worktreeGit(repoDir, "config", "user.email", "t@example.com");
+		worktreeGit(repoDir, "config", "user.name", "t");
+		await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
+		await Bun.write(path.join(repoDir, "deleted.txt"), "committed\n");
+		await Bun.write(path.join(repoDir, "unstaged-deleted.txt"), "committed\n");
+		await Bun.write(path.join(repoDir, ".gitignore"), "build/\n");
+		worktreeGit(repoDir, "add", "-A");
+		worktreeGit(repoDir, "commit", "-qm", "init");
+	}
+
+	async function dirtyWorktreeSource(repoDir: string) {
+		await Bun.write(path.join(repoDir, "tracked.txt"), "staged\n");
+		worktreeGit(repoDir, "add", "tracked.txt");
+		await Bun.write(path.join(repoDir, "tracked.txt"), "unstaged\n");
+		worktreeGit(repoDir, "rm", "-q", "deleted.txt");
+		await fs.rm(path.join(repoDir, "unstaged-deleted.txt"));
+		await Bun.write(path.join(repoDir, "untracked.txt"), "source untracked\n");
+		await Bun.write(path.join(repoDir, "build/out.txt"), "ignored\n");
+		const sourceStatus = worktreeGit(repoDir, "status", "--porcelain");
+		const sourceIndex = worktreeGit(repoDir, "diff", "--cached");
+		const sourceDiff = worktreeGit(repoDir, "diff");
+		return async () => {
+			expect(worktreeGit(repoDir, "status", "--porcelain")).toBe(sourceStatus);
+			expect(worktreeGit(repoDir, "diff", "--cached")).toBe(sourceIndex);
+			expect(worktreeGit(repoDir, "diff")).toBe(sourceDiff);
+			expect(worktreeGit(repoDir, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
+			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("unstaged\n");
+			expect(await Bun.file(path.join(repoDir, "untracked.txt")).text()).toBe("source untracked\n");
+			expect(await Bun.file(path.join(repoDir, "build/out.txt")).text()).toBe("ignored\n");
+			expect(await Bun.file(path.join(repoDir, "deleted.txt")).exists()).toBe(false);
+			expect(await Bun.file(path.join(repoDir, "unstaged-deleted.txt")).exists()).toBe(false);
+		};
+	}
+
+	async function dirtyWorktreeTarget(existingDir: string) {
+		await Bun.write(path.join(existingDir, "tracked.txt"), "target staged\n");
+		worktreeGit(existingDir, "add", "tracked.txt");
+		await Bun.write(path.join(existingDir, "tracked.txt"), "target unstaged\n");
+		await Bun.write(path.join(existingDir, "target-only.txt"), "target untracked\n");
+		const targetStatus = worktreeGit(existingDir, "status", "--porcelain");
+		const targetIndex = worktreeGit(existingDir, "diff", "--cached");
+		const targetDiff = worktreeGit(existingDir, "diff");
+		return async () => {
+			expect(worktreeGit(existingDir, "status", "--porcelain")).toBe(targetStatus);
+			expect(worktreeGit(existingDir, "diff", "--cached")).toBe(targetIndex);
+			expect(worktreeGit(existingDir, "diff")).toBe(targetDiff);
+			expect(await Bun.file(path.join(existingDir, "tracked.txt")).text()).toBe("target unstaged\n");
+			expect(await Bun.file(path.join(existingDir, "target-only.txt")).text()).toBe("target untracked\n");
+		};
+	}
+
+	it("/wt: creates a clean sibling worktree from the source commit without changing source dirt", async () => {
 		const { output, runtime, fakeSessionManager } = createRuntime();
-		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-")));
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-new-")));
 		const repoDir = path.join(root, "repo");
-		const existingDir = path.join(root, "elsewhere", "existing");
 		const originalProjectDir = process.cwd();
 		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
 		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
-		const git = (cwd: string, ...args: string[]) => {
-			const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-			if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-			return result.stdout.toString().trim();
-		};
 		try {
-			await fs.mkdir(repoDir);
-			git(repoDir, "init", "-q", "-b", "main");
-			git(repoDir, "config", "core.autocrlf", "false");
-			git(repoDir, "config", "user.email", "t@example.com");
-			git(repoDir, "config", "user.name", "t");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "committed\n");
-			await Bun.write(path.join(repoDir, "deleted.txt"), "committed\n");
-			await Bun.write(path.join(repoDir, "unstaged-deleted.txt"), "committed\n");
-			await Bun.write(path.join(repoDir, ".gitignore"), "build/\n");
-			git(repoDir, "add", "-A");
-			git(repoDir, "commit", "-qm", "init");
-			const existingTip = git(repoDir, "rev-parse", "HEAD");
-			git(repoDir, "branch", "feature/existing");
-			await Bun.write(path.join(repoDir, "main-only.txt"), "main\n");
-			git(repoDir, "add", "-A");
-			git(repoDir, "commit", "-qm", "main tip");
-			const sourceTip = git(repoDir, "rev-parse", "HEAD");
-			await fs.mkdir(path.dirname(existingDir));
-			git(repoDir, "worktree", "add", "-q", "-b", "feature/dirty", existingDir);
-			await Bun.write(path.join(existingDir, "tracked.txt"), "target staged\n");
-			git(existingDir, "add", "tracked.txt");
-			await Bun.write(path.join(existingDir, "tracked.txt"), "target unstaged\n");
-			await Bun.write(path.join(existingDir, "target-only.txt"), "target untracked\n");
-			const targetStatus = git(existingDir, "status", "--porcelain");
-			const targetIndex = git(existingDir, "diff", "--cached");
-			const targetDiff = git(existingDir, "diff");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "staged\n");
-			git(repoDir, "add", "tracked.txt");
-			await Bun.write(path.join(repoDir, "tracked.txt"), "unstaged\n");
-			git(repoDir, "rm", "-q", "deleted.txt");
-			await fs.rm(path.join(repoDir, "unstaged-deleted.txt"));
-			await Bun.write(path.join(repoDir, "untracked.txt"), "source untracked\n");
-			await Bun.write(path.join(repoDir, "build/out.txt"), "ignored\n");
-			const sourceStatus = git(repoDir, "status", "--porcelain");
-			const sourceIndex = git(repoDir, "diff", "--cached");
-			const sourceDiff = git(repoDir, "diff");
+			await prepareWorktreeRepo(repoDir);
+			const sourceTip = worktreeGit(repoDir, "rev-parse", "HEAD");
+			const expectSourceUnchanged = await dirtyWorktreeSource(repoDir);
 			fakeSessionManager._cwd = repoDir;
 
 			expect(await executeAcpBuiltinSlashCommand("/wt feature/new", runtime)).toEqual({ consumed: true });
 			const newDir = fakeSessionManager.getCwd();
 			expect(path.dirname(newDir)).toBe(path.dirname(repoDir));
 			expect(output.at(-1)).toContain(`Moved to worktree ${newDir} on branch feature/new`);
-			expect(git(newDir, "rev-parse", "HEAD")).toBe(sourceTip);
-			expect(git(newDir, "status", "--porcelain")).toBe("");
+			expect(worktreeGit(newDir, "rev-parse", "HEAD")).toBe(sourceTip);
+			expect(worktreeGit(newDir, "status", "--porcelain")).toBe("");
 			expect(await Bun.file(path.join(newDir, "tracked.txt")).text()).toBe("committed\n");
 			expect(await Bun.file(path.join(newDir, "deleted.txt")).text()).toBe("committed\n");
 			expect(await Bun.file(path.join(newDir, "unstaged-deleted.txt")).text()).toBe("committed\n");
 			expect(await Bun.file(path.join(newDir, "untracked.txt")).exists()).toBe(false);
+			await expectSourceUnchanged();
+		} finally {
+			setProjectDir(originalProjectDir);
+			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 
-			await executeAcpBuiltinSlashCommand(`/move ${repoDir}`, runtime);
+	it("/worktree: uses an existing branch tip instead of source HEAD without changing source dirt", async () => {
+		const { runtime, fakeSessionManager } = createRuntime();
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-branch-")));
+		const repoDir = path.join(root, "repo");
+		const originalProjectDir = process.cwd();
+		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
+		try {
+			await prepareWorktreeRepo(repoDir);
+			const existingTip = worktreeGit(repoDir, "rev-parse", "HEAD");
+			worktreeGit(repoDir, "branch", "feature/existing");
+			await Bun.write(path.join(repoDir, "main-only.txt"), "main\n");
+			worktreeGit(repoDir, "add", "-A");
+			worktreeGit(repoDir, "commit", "-qm", "main tip");
+			const sourceTip = worktreeGit(repoDir, "rev-parse", "HEAD");
+			const expectSourceUnchanged = await dirtyWorktreeSource(repoDir);
+			fakeSessionManager._cwd = repoDir;
+
 			expect(await executeAcpBuiltinSlashCommand("/worktree feature/existing", runtime)).toEqual({ consumed: true });
 			const branchDir = fakeSessionManager.getCwd();
 			expect(path.dirname(branchDir)).toBe(path.dirname(repoDir));
-			expect(git(branchDir, "rev-parse", "HEAD")).toBe(existingTip);
-			expect(git(branchDir, "rev-parse", "HEAD")).not.toBe(sourceTip);
+			expect(worktreeGit(branchDir, "rev-parse", "HEAD")).toBe(existingTip);
+			expect(worktreeGit(branchDir, "rev-parse", "HEAD")).not.toBe(sourceTip);
 			expect(await Bun.file(path.join(branchDir, "main-only.txt")).exists()).toBe(false);
-			expect(git(branchDir, "status", "--porcelain")).toBe("");
+			expect(worktreeGit(branchDir, "status", "--porcelain")).toBe("");
+			await expectSourceUnchanged();
+		} finally {
+			setProjectDir(originalProjectDir);
+			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 
-			await executeAcpBuiltinSlashCommand(`/move ${repoDir}`, runtime);
-			const worktrees = git(repoDir, "worktree", "list", "--porcelain");
+	it("/wt: reuses an existing dirty worktree without changing either checkout", async () => {
+		const { runtime, fakeSessionManager } = createRuntime();
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-dirty-")));
+		const repoDir = path.join(root, "repo");
+		const existingDir = path.join(root, "elsewhere", "existing");
+		const originalProjectDir = process.cwd();
+		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
+		try {
+			await prepareWorktreeRepo(repoDir);
+			await fs.mkdir(path.dirname(existingDir));
+			worktreeGit(repoDir, "worktree", "add", "-q", "-b", "feature/dirty", existingDir);
+			const expectTargetUnchanged = await dirtyWorktreeTarget(existingDir);
+			const expectSourceUnchanged = await dirtyWorktreeSource(repoDir);
+			const worktrees = worktreeGit(repoDir, "worktree", "list", "--porcelain");
+			fakeSessionManager._cwd = repoDir;
+
 			expect(await executeAcpBuiltinSlashCommand("/wt feature/dirty", runtime)).toEqual({ consumed: true });
 			expect(fakeSessionManager.getCwd()).toBe(existingDir);
-			expect(git(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
-			expect(git(existingDir, "status", "--porcelain")).toBe(targetStatus);
-			expect(git(existingDir, "diff", "--cached")).toBe(targetIndex);
-			expect(git(existingDir, "diff")).toBe(targetDiff);
-			expect(await Bun.file(path.join(existingDir, "tracked.txt")).text()).toBe("target unstaged\n");
-			expect(await Bun.file(path.join(existingDir, "target-only.txt")).text()).toBe("target untracked\n");
+			expect(worktreeGit(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
+			await expectTargetUnchanged();
+			await expectSourceUnchanged();
+		} finally {
+			setProjectDir(originalProjectDir);
+			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+			await fs.rm(root, { recursive: true, force: true });
+		}
+	});
 
+	it("/wt: stays in a current worktree subdirectory without moving or adding a worktree", async () => {
+		const { runtime, fakeSessionManager } = createRuntime();
+		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-wt-current-")));
+		const repoDir = path.join(root, "repo");
+		const existingDir = path.join(root, "elsewhere", "existing");
+		const originalProjectDir = process.cwd();
+		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+		process.env.OMP_WORKTREE_DIR = path.join(root, "configured-wt");
+		const move = spyOn(runtime.session, "moveSession");
+		try {
+			await prepareWorktreeRepo(repoDir);
+			await fs.mkdir(path.dirname(existingDir));
+			worktreeGit(repoDir, "worktree", "add", "-q", "-b", "feature/dirty", existingDir);
+			const expectTargetUnchanged = await dirtyWorktreeTarget(existingDir);
+			const expectSourceUnchanged = await dirtyWorktreeSource(repoDir);
+			const worktrees = worktreeGit(repoDir, "worktree", "list", "--porcelain");
 			const subdirectory = path.join(existingDir, "subdirectory");
 			await fs.mkdir(subdirectory);
-			await executeAcpBuiltinSlashCommand(`/move ${subdirectory}`, runtime);
-			const move = spyOn(runtime.session, "moveSession");
-			try {
-				expect(await executeAcpBuiltinSlashCommand("/wt feature/dirty", runtime)).toEqual({ consumed: true });
-				expect(fakeSessionManager.getCwd()).toBe(subdirectory);
-				expect(move).not.toHaveBeenCalled();
-			} finally {
-				move.mockRestore();
-			}
-			expect(git(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
-			expect(git(existingDir, "status", "--porcelain")).toBe(targetStatus);
-			expect(git(existingDir, "diff", "--cached")).toBe(targetIndex);
-			expect(git(existingDir, "diff")).toBe(targetDiff);
-			expect(git(repoDir, "status", "--porcelain")).toBe(sourceStatus);
-			expect(git(repoDir, "diff", "--cached")).toBe(sourceIndex);
-			expect(git(repoDir, "diff")).toBe(sourceDiff);
-			expect(git(repoDir, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
-			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("unstaged\n");
-			expect(await Bun.file(path.join(repoDir, "untracked.txt")).text()).toBe("source untracked\n");
-			expect(await Bun.file(path.join(repoDir, "build/out.txt")).text()).toBe("ignored\n");
-			expect(await Bun.file(path.join(repoDir, "deleted.txt")).exists()).toBe(false);
-			expect(await Bun.file(path.join(repoDir, "unstaged-deleted.txt")).exists()).toBe(false);
+			fakeSessionManager._cwd = subdirectory;
+			setProjectDir(subdirectory);
+
+			expect(await executeAcpBuiltinSlashCommand("/wt feature/dirty", runtime)).toEqual({ consumed: true });
+			expect(fakeSessionManager.getCwd()).toBe(subdirectory);
+			expect(move).not.toHaveBeenCalled();
+			expect(worktreeGit(repoDir, "worktree", "list", "--porcelain")).toBe(worktrees);
+			await expectTargetUnchanged();
+			await expectSourceUnchanged();
 		} finally {
+			move.mockRestore();
 			setProjectDir(originalProjectDir);
 			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
 			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
