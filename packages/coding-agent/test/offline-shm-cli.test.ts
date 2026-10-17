@@ -359,6 +359,7 @@ globalThis.Worker = class extends NativeWorker {
    super(${JSON.stringify(wrapper)}, options);
    this.addEventListener('message', event => emit({event:'worker-result',round,...event.data}));
    this.addEventListener('close', () => queueMicrotask(() => emit({event:'worker-closed',round})));
+   this.addEventListener('error', event => emit({event:'worker-error',round,message:String(event.message)}));
   }
   else super(entry,options);
  }
@@ -390,11 +391,17 @@ globalThis.Worker = class extends NativeWorker {
 			);
 		},
 		async closed(round: number) {
-			await until(
-				async () =>
-					(await events()).find(event => event.event === "worker-closed" && event.round === String(round)),
-				`Backup worker did not close in period ${round}`,
-			);
+			try {
+				await until(
+					async () =>
+						(await events()).find(event => event.event === "worker-closed" && event.round === String(round)),
+					`Backup worker did not close in period ${round}`,
+				);
+			} catch (error) {
+				throw new Error(`Backup worker period ${round} did not close; events=${JSON.stringify(await events())}`, {
+					cause: error,
+				});
+			}
 		},
 	};
 }
