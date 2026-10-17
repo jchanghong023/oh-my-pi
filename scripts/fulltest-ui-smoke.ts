@@ -341,7 +341,7 @@ const rendered = await waitFor(() => {
 	// the fork-default `composer.shape=pi`). It does not use the alternate screen.
 	const cursorControl =
 		main.output.includes("\x1b[?25l") || main.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(main.output);
-	return cursorControl && main.output.includes("π") && main.totalBytes > 4_000;
+	return cursorControl && main.output.includes("π") && normalizePtyOutput(main.output).includes("Ctrl+T");
 }, 120_000);
 if (!rendered) {
 	fail(
@@ -854,7 +854,7 @@ try {
 	const teamRendered = await waitFor(() => {
 		const cursorControl =
 			team.output.includes("\x1b[?25l") || team.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(team.output);
-		return cursorControl && team.output.includes("π") && team.totalBytes > 4_000;
+		return cursorControl && team.output.includes("π") && normalizePtyOutput(team.output).includes("Ctrl+T");
 	}, 120_000);
 	if (!teamRendered) {
 		dumpTail(team);
@@ -1010,7 +1010,7 @@ try {
 			cancelTui.output.includes("\x1b[?25l") ||
 			cancelTui.output.includes("\x1b[H") ||
 			/\x1b\[\d+;\d+H/.test(cancelTui.output);
-		return cursorControl && cancelTui.output.includes("π") && cancelTui.totalBytes > 4_000;
+		return cursorControl && cancelTui.output.includes("π") && normalizePtyOutput(cancelTui.output).includes("Ctrl+T");
 	}, 120_000);
 	if (!cancelRendered) {
 		dumpTail(cancelTui);
