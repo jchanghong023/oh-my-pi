@@ -203,6 +203,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		session = undefined;
 		authStorage?.close();
 		authStorage = undefined;
+		vi.restoreAllMocks();
 	});
 
 	async function createTerminalSession(
@@ -287,11 +288,14 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			},
 			emitBeforeAgentStart: async () => undefined,
 		};
+		const modelRegistry = new ModelRegistry(authStorage);
+		// This synthetic provider is deliberately absent from the Linux catalog.
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([model]);
 		session = new AgentSession({
 			agent,
 			sessionManager: manager,
 			settings,
-			modelRegistry: new ModelRegistry(authStorage),
+			modelRegistry,
 			extensionRunner: extensionRunner as never,
 		});
 		const events: AgentSessionEvent[] = [];
