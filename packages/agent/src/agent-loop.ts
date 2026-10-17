@@ -3105,6 +3105,10 @@ async function prepareToolCallDispatch(
 				entry.args = parseFailed ? { __parseError: args.__parseError } : args;
 				entry.validationErrorMessage =
 					validationError instanceof Error ? validationError.message : String(validationError);
+				if (parseFailed) {
+					entry.validationErrorMessage +=
+						"\nThe tool was not run. Correct the arguments and call this tool again with valid JSON; do not just explain the error or repeat successful tool calls.";
+				}
 				return undefined;
 			}
 		};
