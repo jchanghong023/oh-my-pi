@@ -31,6 +31,14 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 	return limitSeconds === undefined ? { debug } : { debug, limitSeconds };
 }
 
+/** Pool sizing assumes its cores are truly available to this scheduler. WSL2
+ * vCPUs share the host's physical cores with the Windows side, so native pool
+ * widths starve latency-sensitive PTY/CLI tests there; halve the budget on
+ * WSL hosts and leave native Windows/Linux widths unchanged. */
+export function gateCpuBudget(cores: number = os.availableParallelism(), release: string = os.release()): number {
+	return release.toLowerCase().includes("microsoft") ? Math.max(4, Math.floor(cores / 2)) : cores;
+}
+
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
@@ -295,8 +303,9 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		// parallel: per-file tests spread wide, multithreaded static checks
 		// (tsgo/clippy) keep their narrower pool so they do not thrash.
 		// Leave headroom for each test's CLI/native children and the concurrent WSL leg.
-		const concurrency = gatePoolWidth(undefined, 4, 8);
-		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(undefined, 3, 12)));
+		const cpuBudget = gateCpuBudget();
+		const concurrency = gatePoolWidth(cpuBudget, 4, 8);
+		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(cpuBudget, 3, 12)));
 		const results = await Promise.allSettled([fastcheck, runGateCommands(gate, tests, concurrency, fastcheck)]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
 		// Runtime mechanism selftests use short injected charged budgets. Run

@@ -34,6 +34,8 @@ target/
 *.tmp
 # Bun compile temp artifacts, left in cwd if a `Bun.build({ compile })` run is killed mid-write
 *.bun-build
+# Bun runtime transpiler cache left by isolated test runs
+/packages/coding-agent/bun/
 .DS_Store
 
 # Logs & profiling

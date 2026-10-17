@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth, runGateCommands } from "./fastcheck";
-import { fulltestCommands, parseFulltestArgs, removeFulltestHome } from "./fulltest";
+import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
 describe("shared per-test budget", () => {
@@ -166,6 +166,12 @@ describe("standard gate charged-budget parameters", () => {
 		expect(gatePoolWidth(32, 3, 12)).toBe(10);
 		expect(gatePoolWidth(12, 3, 12)).toBe(4);
 		expect(gatePoolWidth(48, 3, 12)).toBe(12);
+	});
+	test("WSL hosts halve the pool-sizing core budget; native hosts stay unchanged", () => {
+		expect(gateCpuBudget(26, "6.18.54.1-microsoft-standard-WSL2")).toBe(13);
+		expect(gateCpuBudget(8, "5.15.153.1-microsoft-standard-WSL2")).toBe(4);
+		expect(gateCpuBudget(26, "6.8.0-48-generic")).toBe(26);
+		expect(gateCpuBudget(32, "10.0.26100")).toBe(32);
 	});
 
 	test("fastcheck accepts only a finite positive downward limit", () => {
