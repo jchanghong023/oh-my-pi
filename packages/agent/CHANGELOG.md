@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
 
 ## [18.11.3] - 2026-10-16

@@ -859,13 +859,15 @@ export class ToolExecutionComponent extends Container {
 		return Number(this.#nativeStatus() === "error");
 	}
 
-	setCompactToolLimit(keep: number, summary: number, failures = 0): void {
-		if (this.#compactKeep === keep && this.#compactSummary === summary && this.#compactFailures === failures) return;
+	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
+		if (this.#compactKeep === keep && this.#compactSummary === summary && this.#compactFailures === failures)
+			return false;
 		this.#compactKeep = keep;
 		this.#compactSummary = summary;
 		this.#compactFailures = failures;
 		this.#blockVersion++;
 		this.#native.clear();
+		return true;
 	}
 
 	/**
@@ -1101,7 +1103,7 @@ export class ToolExecutionComponent extends Container {
 		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
 		if (isRecord(this.#args)) {
 			const intent = this.#compactIntent;
-			if (typeof intent === "string" && intent.trim()) {
+			if (this.#toolName !== "wait" && typeof intent === "string" && intent.trim()) {
 				detail = plainText(intent).replace(/\s+/g, " ").trim();
 			} else if (["read", "write", "glob"].includes(this.#toolName)) {
 				const path = this.#args.path ?? this.#args.file_path;

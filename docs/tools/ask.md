@@ -80,7 +80,7 @@
 
 ## Limits & Caps
 - `questions` must contain at least 1 item. Unknown fields are rejected because `AskTool.strict=true`.
-- `ask.timeout` defaults to `30` seconds; `0` disables timeout and configured non-zero values are seconds. Plan mode always disables it.
+- `ask.timeout` defaults to `60` seconds; `0` disables timeout and configured non-zero values are seconds. Plan mode always disables it.
 - Prompt guidance says provide 2–5 options, but code only requires the `options` array field and does not enforce a minimum or maximum length.
 - Option labels must not equal the reserved runtime labels `Other (type your own)`, `Chat about this`, or `Next →`. Multi-select labels also cannot equal the theme-prefixed `Done selecting` control.
 - IDs must be unique across questions, and option labels unique within each question; these guards run after carriage-return normalization.

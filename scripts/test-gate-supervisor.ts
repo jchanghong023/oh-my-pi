@@ -47,7 +47,17 @@ let reapChildren: (() => Promise<boolean>) | undefined;
 // Mirrors the supported Linux subreaper primitive in utils/ptree, without
 // loading the native addon before the gate has had a chance to build it.
 if (process.platform === "linux") {
-	assertLinuxGateSignals();
+	try {
+		assertLinuxGateSignals();
+	} catch (error) {
+		const missing = (error as NodeJS.ErrnoException).code === "ENOENT";
+		sendReply({
+			exitCode: missing ? 127 : 1,
+			error: error instanceof Error ? error.message : String(error),
+			missing,
+		});
+		throw error;
+	}
 	let libc;
 	for (const name of ["libc.so.6", "libc.so"]) {
 		try {
@@ -151,7 +161,8 @@ function requestAbort() {
 	if (process.platform === "linux") {
 		void cleanupAndReap();
 	} else if (process.platform === "win32") {
-		// No Job may have been assigned if the parent died before launch.
+		// Before launch there may be no Job yet. Once launched, the parent
+		// runtime's onDisconnect terminates the owned Job even if it stays alive.
 		if (commandPid === undefined) process.exit(0);
 	} else {
 		// The supervisor leads the owned detached group.

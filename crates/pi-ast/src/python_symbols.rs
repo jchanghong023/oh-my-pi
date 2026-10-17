@@ -1,7 +1,7 @@
 //! Python definition extraction from the shared cached Tree-sitter parse.
 
 use anyhow::Result;
-use tree_sitter::Node;
+use tree_sitter::{Node, Tree};
 
 use crate::{SupportLang, parse_cache::parse_cached};
 
@@ -33,11 +33,15 @@ pub fn extract_python_symbols(
 	heartbeat()?;
 	let tree = parse_cached(code, SupportLang::Python, None)?;
 	heartbeat()?;
-	let Some(tree) = tree else {
+	let Some(mut tree) = tree else {
 		return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
 	};
 	if tree.root_node().has_error() {
-		return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
+		let Some(compatible_tree) = parse_python36_function_names(code, &tree, &mut heartbeat)?
+		else {
+			return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
+		};
+		tree = compatible_tree;
 	}
 	let mut symbols = Vec::new();
 	let mut qualification = String::new();
@@ -46,6 +50,93 @@ pub fn extract_python_symbols(
 	}
 	heartbeat()?;
 	Ok(PythonSymbolsResult { symbols, parse_error: false })
+}
+
+/// Only retry a failed modern parse when `async`/`await` occupies a function's
+/// name slot. Equal-width replacements preserve every original source
+/// coordinate.
+fn parse_python36_function_names(
+	code: &str,
+	tree: &Tree,
+	heartbeat: &mut impl FnMut() -> Result<()>,
+) -> Result<Option<Tree>> {
+	let mut rewritten: Option<String> = None;
+	let mut names = Vec::new();
+	let mut cursor = tree.walk();
+	'walk: loop {
+		heartbeat()?;
+		let node = cursor.node();
+		if node.kind() == "def" {
+			let start = skip_declaration_whitespace(code, node.end_byte());
+			let end = start.saturating_add(5);
+			if matches!(code.get(start..end), Some("async" | "await"))
+				&& code.as_bytes().get(skip_declaration_whitespace(code, end)) == Some(&b'(')
+			{
+				rewritten
+					.get_or_insert_with(|| code.to_owned())
+					.replace_range(end - 1..end, "_");
+				names.push(start);
+			}
+		}
+		if cursor.goto_first_child() {
+			continue;
+		}
+		while !cursor.goto_next_sibling() {
+			if !cursor.goto_parent() {
+				break 'walk;
+			}
+		}
+	}
+	let Some(rewritten) = rewritten else {
+		return Ok(None);
+	};
+	let Some(tree) = parse_cached(&rewritten, SupportLang::Python, None)? else {
+		return Ok(None);
+	};
+	heartbeat()?;
+	if tree.root_node().has_error() {
+		return Ok(None);
+	}
+	// Error recovery can place tokens in unexpected contexts. Accept
+	// replacements only after a complete parse proves they are synchronous
+	// function names outside any async function's scope.
+	for start in names {
+		let Some(name) = tree.root_node().descendant_for_byte_range(start, start + 5) else {
+			return Ok(None);
+		};
+		let Some(definition) = name.parent() else {
+			return Ok(None);
+		};
+		if name.byte_range() != (start..start + 5)
+			|| definition.kind() != "function_definition"
+			|| definition.child_by_field_name("name") != Some(name)
+		{
+			return Ok(None);
+		}
+		let mut ancestor = Some(definition);
+		while let Some(node) = ancestor {
+			heartbeat()?;
+			if node.kind() == "function_definition"
+				&& node.child(0).is_some_and(|child| child.kind() == "async")
+			{
+				return Ok(None);
+			}
+			ancestor = node.parent();
+		}
+	}
+	Ok(Some(tree))
+}
+
+fn skip_declaration_whitespace(code: &str, mut offset: usize) -> usize {
+	let bytes = code.as_bytes();
+	loop {
+		match bytes.get(offset) {
+			Some(b' ' | b'\t' | b'\x0c') => offset += 1,
+			Some(b'\\') if bytes.get(offset + 1) == Some(&b'\n') => offset += 2,
+			Some(b'\\') if bytes.get(offset + 1..offset + 3) == Some(b"\r\n") => offset += 3,
+			_ => return offset,
+		}
+	}
 }
 
 fn visit(
@@ -176,6 +267,102 @@ fn collect_definition(
 #[cfg(test)]
 mod tests {
 	use super::extract_python_symbols;
+
+	#[test]
+	fn python36_soft_keyword_function_names_preserve_symbols_and_coordinates() {
+		let lines = [
+			"# 値: preserve original UTF-8 offsets",
+			"def before(): return 1",
+			"",
+			"@decorate('await async')",
+			"def async(",
+			"    value='async await',",
+			"):",
+			"    return value",
+			"",
+			"def await(): return 'await async'",
+			"def after(): return 2",
+		];
+		for newline in ["\n", "\r\n"] {
+			let code = lines.join(newline);
+			let result = extract_python_symbols(&code, || Ok(())).unwrap();
+			assert!(!result.parse_error, "Python 3.6 names rejected: {newline:?}");
+			let async_signature = lines[3..7].join(newline);
+			assert_eq!(
+				result
+					.symbols
+					.iter()
+					.map(|symbol| (
+						symbol.name.as_str(),
+						symbol.qualname.as_str(),
+						symbol.kind,
+						symbol.start_line,
+						symbol.end_line,
+						symbol.signature.as_str(),
+					))
+					.collect::<Vec<_>>(),
+				vec![
+					("before", "before", "function", 2, 2, "def before():"),
+					("async", "async", "function", 4, 8, async_signature.as_str()),
+					("await", "await", "function", 10, 10, "def await():"),
+					("after", "after", "function", 11, 11, "def after():"),
+				],
+				"names, signatures and coordinates must come from the original source",
+			);
+		}
+	}
+
+	#[test]
+	fn python36_soft_keyword_names_coexist_with_async_await_syntax() {
+		let code = concat!(
+			"def async(): return 1\n",
+			"def await(): return 2\n",
+			"async def fetch(task):\n",
+			"    value = await task\n",
+			"    return value\n",
+			"def after(): return 3\n",
+		);
+		let result = extract_python_symbols(code, || Ok(())).unwrap();
+		assert!(!result.parse_error);
+		assert_eq!(
+			result
+				.symbols
+				.iter()
+				.map(|symbol| (
+					symbol.name.as_str(),
+					symbol.start_line,
+					symbol.end_line,
+					symbol.signature.as_str(),
+				))
+				.collect::<Vec<_>>(),
+			vec![
+				("async", 1, 1, "def async():"),
+				("await", 2, 2, "def await():"),
+				("fetch", 3, 5, "async def fetch(task):"),
+				("after", 6, 6, "def after():"),
+			],
+		);
+	}
+
+	#[test]
+	fn python36_soft_keyword_names_do_not_hide_syntax_errors() {
+		for tail in [
+			"def await(: pass\n",
+			"async def async(): pass\n",
+			"async def await(): pass\n",
+			"async def outer():\n    def async(): pass\n",
+			"async def outer():\n    def await(): pass\n",
+			"async def broken(:\n    await task\n",
+			"async def broken():\n    await (\n",
+			"async def broken():\n    async for item in :\n        pass\n",
+			"def broken():\n    # comment\n",
+		] {
+			let code = format!("def before(): return 1\ndef async(): pass\ndef await(): pass\n{tail}");
+			let result = extract_python_symbols(&code, || Ok(())).unwrap();
+			assert!(result.parse_error, "invalid syntax accepted: {tail:?}");
+			assert!(result.symbols.is_empty(), "definitions leaked: {tail:?}");
+		}
+	}
 
 	#[test]
 	fn empty_suites_discard_all_definitions() {

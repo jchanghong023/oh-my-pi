@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { subscribeFsMutation } from "../tools/fs-cache-invalidation";
+import { relativePath } from "./files";
 import { RepoService, resolveRepoRoot } from "./service";
 import { repoIndexPath } from "./storage";
 
@@ -13,6 +14,7 @@ export class RepoLifecycle {
 	#service?: RepoService;
 	#cwd?: string;
 	#root?: string;
+	#rootAlias?: string;
 	#indexPath?: string;
 	#unsubscribe?: () => void;
 	#disposed = false;
@@ -39,6 +41,7 @@ export class RepoLifecycle {
 			this.#service = undefined;
 			this.#cwd = undefined;
 			this.#root = undefined;
+			this.#rootAlias = undefined;
 			this.#indexPath = undefined;
 			// Invalidate the old cwd before resolution so a missing new directory
 			// retries on the next hint, even if the session returns to the old cwd.
@@ -50,6 +53,19 @@ export class RepoLifecycle {
 			this.#service = undefined;
 			this.#root = root;
 			this.#indexPath = repoIndexPath(this.#agentDir, root);
+			// Resolve only the session's root prefix, never notification leaves:
+			// deleted descendants must survive and subtree symlinks stay excluded.
+			this.#rootAlias = undefined;
+			let ancestor = path.resolve(cwd);
+			for (;;) {
+				if (realpathSync(ancestor) === root) {
+					this.#rootAlias = ancestor;
+					break;
+				}
+				const parent = path.dirname(ancestor);
+				if (parent === ancestor) break;
+				ancestor = parent;
+			}
 		}
 		this.#cwd = cwd;
 		if (this.#service?.storage.recoveryError) {
@@ -137,7 +153,12 @@ export class RepoLifecycle {
 				});
 				return;
 			}
-			service.markChanged(paths.filter(path.isAbsolute));
+			service.markChanged(
+				paths.filter(path.isAbsolute).map(pathname => {
+					const rel = this.#rootAlias && relativePath(this.#rootAlias, pathname);
+					return rel ? path.join(service.root, rel) : pathname;
+				}),
+			);
 			if (uncertaintyReason) service.markUncertain(uncertaintyReason);
 		});
 	}

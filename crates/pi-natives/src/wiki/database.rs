@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashMap, VecDeque},
+	collections::{HashMap, HashSet, VecDeque},
 	fs,
 	path::Path,
 	sync::Arc,
@@ -613,10 +613,16 @@ impl DatabaseEngine {
 					.connection
 					.as_ref()
 					.expect("connection")
-					.query_row("SELECT id FROM doc_indexes LIMIT 1", [], |_| Ok(()))
-					.or_else(|error| match error {
-						rusqlite::Error::QueryReturnedNoRows => Ok(()),
-						other => Err(other),
+					.query_row(
+						"SELECT id FROM doc_indexes WHERE name NOT GLOB '__building__*' LIMIT 1",
+						[],
+						|_| Ok(()),
+					)
+					.map_err(|error| match error {
+						rusqlite::Error::QueryReturnedNoRows => {
+							WikiError::message("No documentation indexes available")
+						},
+						other => other.into(),
 					})?;
 				#[cfg(test)]
 				if let Some(hook) = self.after_snapshot.as_mut() {
@@ -845,7 +851,7 @@ fn rank(
 			hash_row(&mut snapshot, row, &mut buffer)?;
 		}
 	}
-	let mut document_contexts: HashMap<i64, HashMap<i64, SectionContext>> = HashMap::new();
+	let mut document_contexts: HashMap<i64, DocumentContexts> = HashMap::new();
 	let mut candidates = Vec::new();
 	let mut statement = connection.prepare_cached(SECTION_ROWS)?;
 	let mut rows = statement.query([])?;
@@ -865,25 +871,29 @@ fn rank(
 		let document_id: i64 = row.get(1)?;
 		if let std::collections::hash_map::Entry::Vacant(entry) = document_contexts.entry(document_id)
 		{
-			entry.insert(load_contexts(connection, document_id, check)?);
+			entry.insert(load_contexts(connection, document_id, name.as_ref(), check)?);
 		}
-		let context = document_contexts
+		let contexts = document_contexts
 			.get(&document_id)
-			.and_then(|contexts| contexts.get(&id))
+			.expect("loaded document contexts");
+		let context = contexts
+			.sections
+			.get(&id)
 			.ok_or_else(|| WikiError::message("Documentation search snapshot is inconsistent"))?;
 		let markdown: String = row.get(13)?;
 		let raw = query::normalize_search_text(&markdown);
 		let tokens = markdown::lex_section(&markdown, context);
 		let plain = query::normalize_search_text(&markdown::plain_text(&tokens));
-		let exact = name.as_ref().is_some_and(|name| {
-			name.matches_section(&raw, &markdown, context)
-				|| (name.matches_section(&plain, &markdown, context)
-					&& name.matches_section(
-						&query::normalize_search_text(&markdown::name_text(&tokens)),
-						&markdown,
-						context,
-					))
-		});
+		let exact = contexts.exact_names.contains(&id)
+			|| name.as_ref().is_some_and(|name| {
+				name.matches_section(&raw, &markdown, context)
+					|| (name.matches_section(&plain, &markdown, context)
+						&& name.matches_section(
+							&query::normalize_search_text(&markdown::name_text(&tokens)),
+							&markdown,
+							context,
+						))
+			});
 		if bm25.is_none() && !exact {
 			continue;
 		}
@@ -926,30 +936,117 @@ fn rank(
 	Ok(Ranking { ranked, version: format!("{:x}", snapshot.finalize()), exact_name_matches })
 }
 
+struct DocumentContexts {
+	sections:    HashMap<i64, SectionContext>,
+	exact_names: HashSet<i64>,
+}
+
+/// Only contiguous, byte-consistent stored source participates in a name
+/// occurrence. Never fill a source gap or concatenate independent documents.
+#[derive(Default)]
+struct NameSource {
+	start:       i64,
+	source:      String,
+	sections:    Vec<(i64, std::ops::Range<usize>)>,
+	exact_names: HashSet<i64>,
+}
+
+impl NameSource {
+	fn finish(&mut self, name: &LiteralMatcher, check: Check<'_>) -> CoreResult<()> {
+		if self.sections.len() > 1 {
+			// Source ranges can overlap, so order by starts rather than assuming
+			// section ends are monotonic. Each section is consumed at most once:
+			// it either intersects this occurrence or ended before it.
+			self.sections.sort_unstable_by_key(|(_, range)| range.start);
+			let mut pending = self.sections.iter().peekable();
+			let exact_names = &mut self.exact_names;
+			name.source_matches(&self.source, check, |found| {
+				while let Some((id, range)) = pending.peek()
+					&& range.start < found.end
+				{
+					if range.end > found.start {
+						exact_names.insert(*id);
+					}
+					pending.next();
+				}
+				pending.peek().is_some()
+			})?;
+		}
+		self.source.clear();
+		self.sections.clear();
+		Ok(())
+	}
+
+	fn push(
+		&mut self,
+		section: &markdown::ContextSection,
+		name: &LiteralMatcher,
+		check: Check<'_>,
+	) -> CoreResult<()> {
+		// Legacy rows with non-source byte coordinates still use their
+		// existing local matcher, but cannot establish source adjacency.
+		if section.byte_end.checked_sub(section.byte_start) != Some(section.raw_markdown.len() as i64)
+		{
+			self.finish(name, check)?;
+			return Ok(());
+		}
+		let offset = section
+			.byte_start
+			.checked_sub(self.start)
+			.and_then(|offset| usize::try_from(offset).ok());
+		let contiguous = offset.is_some_and(|offset| {
+			if offset > self.source.len() {
+				return false;
+			}
+			let overlap = (self.source.len() - offset).min(section.raw_markdown.len());
+			self.source.get(offset..offset + overlap) == section.raw_markdown.get(..overlap)
+				&& self.source.is_char_boundary(offset)
+				&& section.raw_markdown.is_char_boundary(overlap)
+		});
+		if self.sections.is_empty() || !contiguous {
+			self.finish(name, check)?;
+			self.start = section.byte_start;
+		}
+		let offset = (section.byte_start - self.start) as usize;
+		let overlap = (self.source.len() - offset).min(section.raw_markdown.len());
+		self.source.push_str(&section.raw_markdown[overlap..]);
+		self
+			.sections
+			.push((section.section_id, offset..offset + section.raw_markdown.len()));
+		Ok(())
+	}
+}
+
 fn load_contexts(
 	connection: &Connection,
 	document_id: i64,
+	name: Option<&LiteralMatcher>,
 	check: Check<'_>,
-) -> CoreResult<HashMap<i64, SectionContext>> {
+) -> CoreResult<DocumentContexts> {
 	let mut statement = connection.prepare_cached(
 		"SELECT id,document_id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
 		 ORDER BY ordinal",
 	)?;
 	let mut rows = statement.query([document_id])?;
 	let mut error = None;
+	let mut source = NameSource::default();
 	let sections = std::iter::from_fn(|| {
 		let next = (|| -> CoreResult<Option<markdown::ContextSection>> {
 			check()?;
 			let Some(row) = rows.next()? else {
 				return Ok(None);
 			};
-			Ok(Some(markdown::ContextSection {
+			let section = markdown::ContextSection {
 				section_id:   row.get(0)?,
 				document_id:  row.get(1)?,
 				byte_start:   row.get(2)?,
 				byte_end:     row.get(3)?,
 				raw_markdown: row.get(4)?,
-			}))
+			};
+			if let Some(name) = name {
+				source.push(&section, name, check)?;
+			}
+			Ok(Some(section))
 		})();
 		match next {
 			Ok(row) => row,
@@ -963,7 +1060,10 @@ fn load_contexts(
 	if let Some(error) = error {
 		return Err(error);
 	}
-	Ok(result)
+	if let Some(name) = name {
+		source.finish(name, check)?;
+	}
+	Ok(DocumentContexts { sections: result, exact_names: source.exact_names })
 }
 
 fn push_number(output: &mut String, number: f64) {
@@ -1112,6 +1212,72 @@ mod tests {
 	};
 
 	use super::*;
+
+	#[test]
+	fn reconstructed_names_require_contiguous_consistent_source_ranges() {
+		let name = LiteralMatcher::new("foobar", true);
+		for (second_start, second_body, expected) in
+			[(3, "bar", true), (4, "bar", false), (2, "obar", true), (2, "xbar", false)]
+		{
+			let mut source = NameSource::default();
+			for (id, start, body) in [(1, 0, "foo"), (2, second_start, second_body)] {
+				source
+					.push(
+						&markdown::ContextSection {
+							section_id:   id,
+							document_id:  1,
+							byte_start:   start,
+							byte_end:     start + body.len() as i64,
+							raw_markdown: body.into(),
+						},
+						&name,
+						&|| Ok(()),
+					)
+					.unwrap();
+			}
+			source.finish(&name, &|| Ok(())).unwrap();
+			assert_eq!(source.exact_names.contains(&1), expected);
+			assert_eq!(source.exact_names.contains(&2), expected);
+		}
+	}
+
+	#[test]
+	fn repeated_source_names_cover_only_intersecting_sections() {
+		let name = LiteralMatcher::new("x", true);
+		let mut text = "x ".repeat(8192);
+		let repeated_end = text.len();
+		text.push_str("éx xé ");
+		let blocked_end = text.len();
+		text.push_str("中x x中 x\u{0301} ");
+		let matched_end = text.len();
+		text.push_str("éx xé");
+		let mut source = NameSource::default();
+		for (id, range) in [
+			(1, 0..repeated_end / 2),
+			(2, repeated_end / 2..repeated_end),
+			(3, repeated_end..blocked_end),
+			(4, blocked_end..matched_end),
+			(5, matched_end..text.len()),
+			// A later overlapping row must not assume monotonic section ends.
+			(6, repeated_end / 2..matched_end),
+		] {
+			source
+				.push(
+					&markdown::ContextSection {
+						section_id:   id,
+						document_id:  1,
+						byte_start:   range.start as i64,
+						byte_end:     range.end as i64,
+						raw_markdown: text[range].to_owned(),
+					},
+					&name,
+					&|| Ok(()),
+				)
+				.unwrap();
+		}
+		source.finish(&name, &|| Ok(())).unwrap();
+		assert_eq!(source.exact_names, HashSet::from([1, 2, 4, 6]));
+	}
 
 	static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 	struct Fixture {
@@ -1635,6 +1801,82 @@ mod tests {
 
 	fn grep_options() -> WikiSearchOptions {
 		WikiSearchOptions { mode: Some("grep".into()), limit: Some(500.0), ..Default::default() }
+	}
+
+	fn last_published_index_disappears_before_query_snapshot(
+		options: WikiSearchOptions,
+		hidden_build: bool,
+	) {
+		let fixture = grep_fixture(&["# Evidence\nneedle evidence\n"]);
+		let mut engine = fixture.engine();
+		// A real published index makes zero matches a successful query, and
+		// primes the empty ranking cache before another connection removes it.
+		let empty = engine
+			.search("absent_evidence", &options, &|| Ok(()))
+			.unwrap();
+		assert_eq!(empty.result.total, 0);
+		let writer = Connection::open(&fixture.path).unwrap();
+		let visible: i64 = writer
+			.query_row(
+				"SELECT count(*) FROM doc_indexes WHERE name NOT GLOB '__building__*'",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(visible, 1);
+		// This is the tool's list/search race: after the successful preflight,
+		// an external writer removes the last published corpus. A hidden build
+		// must not turn the now-unqueryable snapshot into successful 0 matches.
+		writer
+			.execute_batch(
+				"BEGIN IMMEDIATE; DELETE FROM sections_fts; DELETE FROM sections; DELETE FROM \
+				 documents; DELETE FROM doc_indexes; COMMIT;",
+			)
+			.unwrap();
+		if hidden_build {
+			writer
+				.execute("INSERT INTO doc_indexes VALUES(2,'__building__unfinished','/unread')", [])
+				.unwrap();
+		}
+		let result = engine.search("absent_evidence", &options, &|| Ok(()));
+		assert!(
+			result.is_err(),
+			"a snapshot with no published index must fail, not return {result:?}"
+		);
+		assert!(engine.connection.as_ref().unwrap().is_autocommit());
+		assert!(engine.cache.is_empty());
+		// Re-publication proves that rejecting this snapshot does not poison
+		// the connection or convert later legitimate zero matches into errors.
+		writer
+			.execute_batch(
+				"DELETE FROM doc_indexes; INSERT INTO doc_indexes VALUES(2,'published','/unread')",
+			)
+			.unwrap();
+		assert_eq!(
+			engine
+				.search("absent_evidence", &options, &|| Ok(()))
+				.unwrap()
+				.result
+				.total,
+			0
+		);
+	}
+
+	#[test]
+	fn search_rejects_snapshot_after_last_published_index_is_removed() {
+		for hidden_build in [false, true] {
+			last_published_index_disappears_before_query_snapshot(
+				WikiSearchOptions::default(),
+				hidden_build,
+			);
+		}
+	}
+
+	#[test]
+	fn grep_rejects_snapshot_after_last_published_index_is_removed() {
+		for hidden_build in [false, true] {
+			last_published_index_disappears_before_query_snapshot(grep_options(), hidden_build);
+		}
 	}
 
 	fn grep_fixture(documents: &[&str]) -> Fixture {

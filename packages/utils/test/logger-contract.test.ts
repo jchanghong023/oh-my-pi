@@ -423,6 +423,7 @@ async function runDiagnosticConsumer(
 				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
+				OMP_OFFLINE: "0",
 				OMP_LOG_LEVEL: "",
 				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
 			},
@@ -773,6 +774,72 @@ describe("diagnostic consumer contracts", () => {
 		},
 	);
 
+	test("P2-40 never initializes an unavailable fallback while primary logs are usable", async () => {
+		const sinkUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger/rotating-file.ts")).href;
+		const result = await runDiagnosticConsumer(`
+			import { RotatingFileSink } from ${JSON.stringify(sinkUrl)};
+			let fallbackCalls = 0;
+			const sink = new RotatingFileSink({
+				directory: path.join(root, "logs"),
+				fallbackDirectory: () => {
+					fallbackCalls++;
+					throw new Error("unavailable fallback initializer");
+				},
+				filenamePrefix: "omp", filenameSuffix: String(process.pid),
+				maxBytes: 1024, maxFiles: 5,
+			});
+			sink.prepare();
+			sink.write(JSON.stringify({ level: "info", message: "primary_remains_usable" }), true);
+			sink.close();
+			console.log(JSON.stringify({ fallbackCalls }));
+		`);
+		expect(JSON.parse(result.stdout)).toEqual({ fallbackCalls: 0 });
+		expect((await readLogEntries(path.join(result.root, "logs"))).map(entry => entry.message)).toEqual([
+			"primary_remains_usable",
+		]);
+		expect(result.stderr).toBe("");
+	});
+
+	test("P2-40 contains fallback initializer failure once without masking a business error", async () => {
+		const sinkUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger/rotating-file.ts")).href;
+		const result = await runDiagnosticConsumer(
+			`
+			import { RotatingFileSink } from ${JSON.stringify(sinkUrl)};
+			const primary = path.join(root, "logs");
+			fs.writeFileSync(primary, "not a directory");
+			let fallbackCalls = 0;
+			const fallbackError = new Error("fallback validation rejected");
+			const failures = [];
+			const sink = new RotatingFileSink({
+				directory: primary,
+				fallbackDirectory: () => {
+					fallbackCalls++;
+					throw fallbackError;
+				},
+				onFailure: (error, stage) => {
+					failures.push({ original: error === fallbackError, stage });
+				},
+				filenamePrefix: "omp", filenameSuffix: String(process.pid),
+				maxBytes: 1024, maxFiles: 5,
+			});
+			sink.prepare();
+			for (let index = 0; index < 10; index++) {
+				sink.write(JSON.stringify({ level: "error", message: "unwritable_record" }), true);
+			}
+			sink.close();
+			console.log(JSON.stringify({ fallbackCalls, failures }));
+			throw new Error("business failure remains visible");
+		`,
+			{ exitCode: 1 },
+		);
+		expect(JSON.parse(result.stdout)).toEqual({
+			fallbackCalls: 1,
+			failures: [{ original: true, stage: "open" }],
+		});
+		expect(await fs.readFile(path.join(result.root, "logs"), "utf8")).toBe("not a directory");
+		expect(result.stderr).toContain("business failure remains visible");
+	});
+
 	test.skipIf(process.platform !== "linux")("keeps case-distinct sink fallback destinations independent", async () => {
 		const sinkUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/logger/rotating-file.ts")).href;
 		const result = await runDiagnosticConsumer(`
@@ -781,7 +848,7 @@ describe("diagnostic consumer contracts", () => {
 			const fallback = path.join(root, "Logs");
 			fs.writeFileSync(primary, "not a directory");
 			const sink = new RotatingFileSink({
-				directory: primary, fallbackDirectory: fallback,
+				directory: primary, fallbackDirectory: () => fallback,
 				filenamePrefix: "omp", filenameSuffix: String(process.pid),
 				maxBytes: 1024, maxFiles: 5,
 			});
@@ -911,6 +978,32 @@ describe("diagnostic consumer contracts", () => {
 		]);
 		expect(result.stdout).toBe("");
 		expect(result.stderr).toBe("");
+	});
+
+	test("P2-41 records the final exit code after pending work fails on natural drain", async () => {
+		const postmortemUrl = pathToFileURL(path.resolve(import.meta.dir, "../src/postmortem.ts")).href;
+		const result = await runDiagnosticConsumer(
+			`
+			import { reportUnsettledEntry } from ${JSON.stringify(postmortemUrl)};
+			// Match CLI ordering: its pending-entry exit listener precedes the logger's.
+			reportUnsettledEntry(Promise.withResolvers().promise, () => "pending-drain-contract");
+			logger.initializeDiagnosticLogging("cli");
+		`,
+			{ exitCode: 1 },
+		);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toContain("ended before completing");
+		const entries = await readLogEntries(path.join(result.root, "primary", "logs"));
+		expect(entries.some(entry => entry.message === "application_started")).toBe(true);
+		const terminal = entries.filter(entry => ["application_stopping", "application_stopped"].includes(entry.message));
+		expect(terminal.map(entry => entry.message)).toEqual(["application_stopping", "application_stopped"]);
+		for (const entry of terminal) {
+			expect(entry).toMatchObject({
+				component: "application",
+				operation_id: `application-${result.pid}`,
+				exitCode: 1,
+			});
+		}
 	});
 
 	test("respects error-only lifecycle thresholds on natural and hard exits", async () => {

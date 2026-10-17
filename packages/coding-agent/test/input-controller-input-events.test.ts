@@ -113,8 +113,8 @@ async function createHarness(factory: ExtensionFactory) {
 	controller.setupEditorSubmitHandler();
 	const onSubmit = editor.onSubmit;
 	let enterCompletion: Promise<void> | undefined;
-	editor.onSubmit = text => {
-		enterCompletion = Promise.resolve(onSubmit?.(text));
+	editor.onSubmit = (...args: Parameters<NonNullable<typeof onSubmit>>) => {
+		enterCompletion = Promise.resolve(onSubmit?.(...args));
 		return enterCompletion;
 	};
 	const followUp = vi.spyOn(controller, "handleFollowUp");
@@ -682,6 +682,68 @@ describe("interactive native input ingress", () => {
 		["Enter", ENTER],
 		["Ctrl+Enter", FOLLOW_UP],
 	] as const) {
+		it.each([
+			[" ", false],
+			["\n", false],
+			[" ", true],
+			["\n", true],
+		] as const)(
+			`P2-14 ${label} preserves batch task bytes after delimiter %j with unchanged input hook %j`,
+			async (delimiter, withInputHook) => {
+				const onInput = vi.fn((event: InputEvent) => ({ text: event.text }));
+				const h = await createHarness(pi => {
+					if (withInputHook) pi.on("input", onInput);
+				});
+				const task = [
+					"    batch-task-marker()  ",
+					"\tsecond()  ",
+					"保留 <T>、{{targetItems}}、$& 和 :-) 字面量",
+					"",
+					"",
+					"| padded | cells |  ",
+					"  \t",
+					"",
+					"",
+				].join("\r\n");
+				h.editor.setText(`/jch-workflowzbatch 2 1${delimiter}`);
+				h.editor.insertPaste(task);
+				expect(h.editor.getExpandedText()).toBe(`/jch-workflowzbatch 2 1${delimiter}${task}`);
+
+				await h.pressSubmit(key);
+
+				expect(h.prompt).toHaveBeenCalledTimes(1);
+				const [modelText, options] = h.prompt.mock.calls[0]!;
+				expect(options).toEqual({
+					streamingBehavior: key === ENTER ? "steer" : "followUp",
+					images: undefined,
+				});
+				expect(modelText.startsWith("workflowz\n")).toBe(true);
+				expect(modelText.slice(-task.length)).toBe(task);
+				expect(h.ctx.showError).not.toHaveBeenCalled();
+				if (withInputHook) {
+					expect(onInput).toHaveBeenCalledTimes(1);
+					expect(onInput.mock.calls[0]![0].text).toBe(`/jch-workflowzbatch 2 1${delimiter}${task}`);
+				}
+			},
+		);
+
+		it(`P2-14 ${label} retains outer trimming for ordinary remote commands`, async () => {
+			const h = await createHarness(() => {});
+			Object.defineProperty(h.session, "model", { value: { api: "jchtools-agent" } });
+			h.editor.setText("  /fullsend  inspect ordinary");
+			h.editor.insertPaste("  \t\r\n\r\n");
+
+			await h.pressSubmit(key);
+
+			expect(h.prompt.mock.calls).toEqual([
+				[
+					"/fullsend  inspect ordinary",
+					{ streamingBehavior: key === ENTER ? "steer" : "followUp", images: undefined },
+				],
+			]);
+			expect(h.ctx.showError).not.toHaveBeenCalled();
+		});
+
 		it(`${label} stops handlers and built-in commands when native input is handled`, async () => {
 			const downstream = vi.fn();
 			const h = await createHarness(pi => {

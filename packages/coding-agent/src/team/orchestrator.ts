@@ -687,7 +687,13 @@ async function runTeamDiscussionImpl(
 					unresolved_blocking_count: record.unresolvedBlocking.length,
 					pending_recheck: record.pendingRecheck,
 				});
-				if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck) break;
+				// A successful recheck may close the last blocker while introducing
+				// nonblocking findings. Route those new IDs to the author too, without
+				// changing their severity or extending the two-round limit.
+				const hasUnansweredFindings = record.reviews
+					.at(-1)!
+					.findings.some(finding => !revision.responses.some(response => response.findingId === finding.id));
+				if (record.unresolvedBlocking.length === 0 && !record.pendingRecheck && !hasUnansweredFindings) break;
 				// Without a recheck the blocking state cannot change mechanically
 				// (§2.5: 全部为假时不复核，不强凑修订轮次); rerunning the identical
 				// revision prompt would only pad rounds. An incomplete recheck is the

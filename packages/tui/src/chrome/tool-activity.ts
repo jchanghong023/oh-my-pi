@@ -6,7 +6,8 @@ export interface ToolActivityComponent {
 	/** Successful calls eligible for compact transcript folding. */
 	getCompactToolCount?(): number;
 	getCompactToolFailureCount?(): number;
-	setCompactToolLimit?(keep: number, summary: number, failures?: number): void;
+	/** Whether the compact presentation changed, including a previously retired summary. */
+	setCompactToolLimit?(keep: number, summary: number, failures?: number): boolean;
 }
 
 export function isToolActivityComponent(component: Component): component is Component & ToolActivityComponent {

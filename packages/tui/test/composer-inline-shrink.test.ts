@@ -304,6 +304,10 @@ describe("composer inline shrink (#11007)", () => {
 			h.editor.addChild(dialog);
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
+			const expandedRows = dialog.render(COLUMNS).length;
+			const coveredRows = h.terminal
+				.getViewport()
+				.filter(row => Bun.stripANSI(row).startsWith(TRANSCRIPT_PREFIX)).length;
 			const reachable = (): number[] =>
 				h.terminal
 					.getScrollBuffer()
@@ -314,13 +318,18 @@ describe("composer inline shrink (#11007)", () => {
 			// still live, so they refill the screen instead of leaving a band.
 			dialog.handleInput("\x1bh");
 			await h.scheduler.settle(h.terminal);
-			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-			expect(view[ROWS - 1]).toContain("Ask hidden");
-			expect(blankBand(h.terminal, "Ask hidden")).toBeLessThanOrEqual(1);
+			expect(dialog.render(COLUMNS)).toHaveLength(1);
+			expect(
+				h.terminal.getViewport().filter(row => Bun.stripANSI(row).startsWith(TRANSCRIPT_PREFIX)).length,
+			).toBeGreaterThan(coveredRows);
 			expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
 			// Showing it again covers them without writing anything twice.
 			dialog.handleInput("\x1bh");
 			await h.scheduler.settle(h.terminal);
+			expect(dialog.render(COLUMNS)).toHaveLength(expandedRows);
+			expect(h.terminal.getViewport().filter(row => Bun.stripANSI(row).startsWith(TRANSCRIPT_PREFIX)).length).toBe(
+				coveredRows,
+			);
 			const shown = reachable();
 			expect(new Set(shown).size).toBe(shown.length);
 			dialog.dispose();
@@ -362,6 +371,28 @@ describe("composer inline shrink (#11007)", () => {
 		expect(indices).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
 
 		h.composer.stop();
+	});
+
+	it("preserves native shell history when a composer replay follows an append-mode resize", async () => {
+		const shell = ["SHELL_BEFORE_APPEND_RESIZE"];
+		const h = makeHarness(COLUMNS, ROWS, TRANSCRIPT_ROWS, shell);
+		h.composer.ui.setResizeScrollback("append");
+		h.composer.setHeaderExtras([new Text("APPEND_RESIZE_HEADER", 0, 0)], []);
+		try {
+			await h.scheduler.settle(h.terminal);
+			expect(h.terminal.getScrollBuffer().join("\n")).toContain(shell[0]!);
+			expect(h.terminal.getViewport().join("\n")).not.toContain("APPEND_RESIZE_HEADER");
+			h.terminal.resize(COLUMNS - 10, ROWS);
+			await h.scheduler.advance(h.terminal, 300);
+			await h.scheduler.settle(h.terminal);
+			const buffer = h.terminal.getScrollBuffer().join("\n");
+			expect(buffer.split("\n").filter(row => row.includes(shell[0]!))).toHaveLength(1);
+			expect(buffer).toContain("APPEND_RESIZE_HEADER");
+			expect(h.terminal.getViewport().join("\n")).toContain(`${TRANSCRIPT_PREFIX}${TRANSCRIPT_ROWS - 1}`);
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
+		} finally {
+			h.composer.stop();
+		}
 	});
 
 	it("keeps the below-chrome baseline across a height resize while inline chrome is expanded", async () => {

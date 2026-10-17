@@ -25,7 +25,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 		try {
 			if (message.type === "configure") {
 				if (engine) throw new Error("Document worker is already configured");
-				engine = new DocsSearchEngine({ ...message.options, cursorPath: message.databasePath });
+				engine = new DocsSearchEngine({ ...message.options, cursorPath: message.cursorPath });
 				send({
 					type: "result",
 					id: message.id,

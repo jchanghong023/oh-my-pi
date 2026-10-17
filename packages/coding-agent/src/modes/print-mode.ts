@@ -229,8 +229,17 @@ async function runPrintModeCore(
 		writeStderrLine(`Warning: ${formatPersistenceNotice(notice)}`);
 	});
 
+	let exportFailure = false;
+
 	// Always subscribe to enable session persistence via _handleAgentEvent
 	session.subscribe(event => {
+		if (event.type === "notice" && event.source === "custom-command:code-review-export") {
+			if (event.level === "error") exportFailure = true;
+			if (mode === "text") {
+				const prefix = event.level === "error" ? "Error: " : event.level === "warning" ? "Warning: " : "";
+				writeStderrLine(`${prefix}${sanitizeText(event.message)}`);
+			}
+		}
 		// In JSON mode, output all events
 		if (mode === "json") {
 			writeStdoutLine(`${JSON.stringify(printableEvent(event))}\n`);
@@ -382,5 +391,5 @@ async function runPrintModeCore(
 	}
 
 	await stderrTail;
-	return terminalFailure || durabilityFailure || strictMCPFailure ? 1 : 0;
+	return terminalFailure || durabilityFailure || strictMCPFailure || exportFailure ? 1 : 0;
 }

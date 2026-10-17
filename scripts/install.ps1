@@ -238,8 +238,13 @@ function Save-InstallBinary {
         }
         Set-InstallStage "download_curl"
         Write-InstallLog INFO http_request_started @{ method = "GET"; host = "github.com"; endpoint = "release_asset"; transport = "curl"; attempt = 1; connect_timeout_ms = 10000; low_speed_timeout_ms = 30000 }
-        Invoke-Native { & $curlExe.Source -fL --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
-        $curlExit = $LASTEXITCODE
+        try {
+            Invoke-Native { & $curlExe.Source -fL --insecure --ssl-no-revoke --connect-timeout 10 --speed-limit 1024 --speed-time 30 --progress-bar @proxyArguments $Uri.AbsoluteUri -o $OutFile }
+            $curlExit = $LASTEXITCODE
+        } catch [System.Management.Automation.ApplicationFailedException] {
+            # No process exited: do not reuse a previous native command's exit code.
+            $curlExit = -1
+        }
         if ($curlExit -ne 0) {
             $kind = switch ($curlExit) { 22 { "http" }; 28 { "timeout" }; 6 { "dns" }; 7 { "connect" }; 35 { "tls" }; 60 { "tls" }; default { "network" } }
             Write-InstallLog WARN http_request_failed @{ result = "failed"; curl_exit = $curlExit; error_type = $kind; http_status = "unavailable"; endpoint = "release_asset"; transport = "curl"; attempt = 1 }

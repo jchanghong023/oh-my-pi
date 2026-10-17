@@ -75,24 +75,31 @@ async function readPid(file: string): Promise<number> {
 		await Bun.sleep(5);
 	}
 }
-function supervisor(prefix: string) {
+function supervisor(prefix: string, preload?: string) {
 	const ready = Promise.withResolvers<void>();
 	const outcome = Promise.withResolvers<number>();
-	const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "test-gate-supervisor.ts")], {
-		env: {
-			...process.env,
-			OMP_GATE_SUPERVISED_COMMAND: JSON.stringify([process.execPath, fixture, "command", prefix]),
+	const child = Bun.spawn(
+		[
+			process.execPath,
+			...(preload ? ["--preload", preload] : []),
+			path.join(import.meta.dir, "test-gate-supervisor.ts"),
+		],
+		{
+			env: {
+				...process.env,
+				OMP_GATE_SUPERVISED_COMMAND: JSON.stringify([process.execPath, fixture, "command", prefix]),
+			},
+			detached: true,
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+			ipc(message: unknown) {
+				if (!message || typeof message !== "object") return;
+				if ("ready" in message && message.ready === true) ready.resolve();
+				if ("exitCode" in message && typeof message.exitCode === "number") outcome.resolve(message.exitCode);
+			},
 		},
-		detached: true,
-		stdin: "ignore",
-		stdout: "ignore",
-		stderr: "ignore",
-		ipc(message: unknown) {
-			if (!message || typeof message !== "object") return;
-			if ("ready" in message && message.ready === true) ready.resolve();
-			if ("exitCode" in message && typeof message.exitCode === "number") outcome.resolve(message.exitCode);
-		},
-	});
+	);
 	return { child, ready: ready.promise, outcome: outcome.promise };
 }
 async function emergencyCleanup(child: Bun.Subprocess, prefix: string) {
@@ -282,6 +289,101 @@ for (const mode of ["abort", "disconnect"]) {
 	);
 }
 
+it.skipIf(process.platform !== "linux")(
+	"reclaims its owned tree when an unrelated proc stat denies access",
+	async () => {
+		const prefix = path.join(directory, "foreign-proc-denied");
+		const unrelatedPrefix = `${prefix}-unrelated`;
+		const unrelated = Bun.spawn([process.execPath, fixture, "worker", unrelatedPrefix], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const preload = `${prefix}-preload.ts`;
+		await fs.writeFile(
+			preload,
+			`
+import { spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+const readFile = fs.readFile.bind(fs);
+spyOn(fs, "readFile").mockImplementation((file, ...args) => {
+  if (String(file) === ${JSON.stringify(`/proc/${unrelated.pid}/stat`)})
+    return Promise.reject(Object.assign(new Error("foreign proc stat denied"), {code:"EACCES"}));
+  return readFile(file, ...args);
+});
+`,
+		);
+		const { child, ready } = supervisor(prefix, preload);
+		const owner = await ownGateProcess(child, true);
+		try {
+			await within(readPid(`${unrelatedPrefix}.worker`));
+			await within(ready);
+			child.send("start");
+			const commandPid = await within(readPid(`${prefix}.command`));
+			const workerPid = await within(readPid(`${prefix}.worker`));
+			await within(owner.terminate());
+			expect(child.exitCode).toBe(0);
+			expect(() => process.kill(commandPid, 0)).toThrow();
+			expect(() => process.kill(workerPid, 0)).toThrow();
+			expect(unrelated.exitCode).toBeNull();
+			expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+		} finally {
+			owner.close();
+			await fs.writeFile(`${unrelatedPrefix}.worker-release`, "release");
+			await emergencyCleanup(child, prefix);
+			await terminateOwnedSubprocess(unrelated, { detached: false });
+		}
+	},
+	20_000,
+);
+
+it.skipIf(process.platform !== "linux").each(["identity", "children"])(
+	"does not acknowledge cleanup when an owned proc %s denies access",
+	async deniedEntry => {
+		const source = `
+import { spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import { terminateLinuxGateDescendants } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-process.ts")).href)};
+// IPC lifetime makes the child exit even if a broken cleanup forces the harness down.
+const child = Bun.spawn([process.execPath, "--eval", "process.on('disconnect', () => process.exit(0)); process.on('message', () => {});"], {
+  stdin:"ignore",stdout:"ignore",stderr:"ignore",ipc() {},
+});
+const readFile = fs.readFile.bind(fs);
+const denied = spyOn(fs, "readFile").mockImplementation((file, ...args) => {
+  if (${JSON.stringify(deniedEntry)} === "identity"
+    ? String(file) === "/proc/" + child.pid + "/stat"
+    : String(file).startsWith("/proc/" + process.pid + "/task/") && String(file).endsWith("/children"))
+    return Promise.reject(Object.assign(new Error("owned proc read denied"), {code:"EACCES"}));
+  return readFile(file, ...args);
+});
+try {
+  let code = null;
+  try { await terminateLinuxGateDescendants(); } catch (error) { code = error.code; }
+  let alive = true;
+  try { process.kill(child.pid, 0); } catch { alive = false; }
+  process.stdout.write(JSON.stringify({code,alive}));
+} finally {
+  denied.mockRestore();
+  child.kill("SIGKILL");
+  await child.exited;
+}
+`;
+		const child = Bun.spawn([process.execPath, "--eval", source], { stdout: "pipe", stderr: "pipe" });
+		const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		try {
+			expect(await within(child.exited)).toBe(0);
+			const [stdout, stderr] = await output;
+			expect(stderr).toBe("");
+			expect(JSON.parse(stdout)).toEqual({ code: "EACCES", alive: true });
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+			await child.exited;
+			await output;
+		}
+	},
+	10_000,
+);
+
 it.skipIf(process.platform !== "linux")("rejects a queued start after abort without a quiesce handshake", async () => {
 	const prefix = path.join(directory, "aborted-before-start");
 	const { child, ready } = supervisor(prefix);
@@ -354,6 +456,113 @@ await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gat
 			if (child.exitCode === null) child.kill();
 			await child.exited;
 			await output;
+		}
+	},
+);
+
+it.skipIf(process.platform !== "linux")(
+	"refuses readiness and reports a missing tool when proc task children is unavailable",
+	async () => {
+		const prefix = path.join(directory, "missing-proc-children");
+		const preload = `${prefix}-preload.ts`;
+		await fs.writeFile(
+			preload,
+			`
+import { spyOn } from "bun:test";
+import * as syncFs from "node:fs";
+import * as fs from "node:fs/promises";
+const readFileSync = syncFs.readFileSync.bind(syncFs);
+const readFile = fs.readFile.bind(fs);
+spyOn(syncFs, "readFileSync").mockImplementation((file, ...args) => {
+  if (/^\\/proc\\/(?:self|\\d+)\\/task\\/\\d+\\/children$/.test(String(file)))
+    throw Object.assign(new Error("proc task children unavailable"), {code:"ENOENT"});
+  return readFileSync(file, ...args);
+});
+spyOn(fs, "readFile").mockImplementation((file, ...args) => {
+  if (/^\\/proc\\/(?:self|\\d+)\\/task\\/\\d+\\/children$/.test(String(file)))
+    return Promise.reject(Object.assign(new Error("proc task children unavailable"), {code:"ENOENT"}));
+  return readFile(file, ...args);
+});
+`,
+		);
+		const messages: unknown[] = [];
+		const commandMarker = `${prefix}.started`;
+		const child = Bun.spawn(
+			[process.execPath, "--preload", preload, path.join(import.meta.dir, "test-gate-supervisor.ts")],
+			{
+				env: {
+					...process.env,
+					OMP_GATE_SUPERVISED_COMMAND: JSON.stringify([
+						process.execPath,
+						"--eval",
+						`await Bun.write(${JSON.stringify(commandMarker)}, "started");`,
+					]),
+				},
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				ipc(message: unknown) {
+					messages.push(message);
+					if (message && typeof message === "object" && "ready" in message && message.ready === true)
+						child.send("start");
+				},
+			},
+		);
+		const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		try {
+			expect(await within(child.exited)).not.toBe(0);
+			const [, stderr] = await output;
+			expect(stderr).toContain("CONFIG_PROC_CHILDREN");
+			expect(messages).toEqual([
+				{
+					exitCode: 127,
+					error: expect.stringContaining("MISSING_TOOL"),
+					missing: true,
+				},
+			]);
+			expect(await Bun.file(commandMarker).exists()).toBe(false);
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+			await child.exited;
+			await output;
+		}
+	},
+);
+
+it.skipIf(process.platform !== "linux")(
+	"reclaims owned descendants when a task exits after the proc task snapshot",
+	async () => {
+		const prefix = path.join(directory, "exited-proc-task");
+		const preload = `${prefix}-preload.ts`;
+		await fs.writeFile(
+			preload,
+			`
+import { spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+const readdir = fs.readdir.bind(fs);
+spyOn(fs, "readdir").mockImplementation(async (directory, ...args) => {
+  const entries = await readdir(directory, ...args);
+  // PID/TID zero cannot exist: its children read produces the same ENOENT as
+  // a real task that exits between enumeration and opening its children file.
+  if (/^\\/proc\\/(?:self|\\d+)\\/task$/.test(String(directory))) entries.push("0");
+  return entries;
+});
+`,
+		);
+		const { child, ready } = supervisor(prefix, preload);
+		const owner = await ownGateProcess(child, true);
+		try {
+			await within(ready);
+			child.send("start");
+			const commandPid = await within(readPid(`${prefix}.command`));
+			const workerPid = await within(readPid(`${prefix}.worker`));
+			await within(owner.terminate());
+			expect(child.exitCode).toBe(0);
+			expect(() => process.kill(commandPid, 0)).toThrow();
+			expect(() => process.kill(workerPid, 0)).toThrow();
+		} finally {
+			owner.close();
+			await emergencyCleanup(child, prefix);
 		}
 	},
 );

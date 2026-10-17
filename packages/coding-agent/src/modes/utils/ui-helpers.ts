@@ -1436,15 +1436,14 @@ export class UiHelpers {
 						restoreQueue(error);
 					});
 			}
+			// This dispatch leaves the original input waiter unresolved. Capture
+			// the loop generation now, before draining any more queued messages.
+			if (this.ctx.loopModeEnabled) this.ctx.armLoopAutoSubmit(promptPromise);
 
 			for (const message of rest) {
 				await this.#deliverQueuedMessage(message);
 			}
 			this.ctx.updatePendingMessagesDisplay();
-			// The dispatch above bypasses `getUserInput`, so nothing would schedule
-			// the next loop iteration for a prompt queued during compaction.
-			if (this.ctx.loopModeEnabled) this.ctx.armLoopAutoSubmit();
-			void promptPromise;
 		} catch (error) {
 			restoreQueue(error);
 		}

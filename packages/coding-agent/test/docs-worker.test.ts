@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DOCS_WORKER_ARG } from "../src/cli/worker-selectors";
+import { DocsSearchEngine } from "../src/docs/engine";
 import { DocsService, smokeTestDocsWorker } from "../src/docs/service";
 import type { DocsWorkerInbound } from "../src/docs/worker-protocol";
 import { restoreEnvValue } from "./helpers/settings-test-state";
@@ -132,6 +133,64 @@ describe("DocsService real owned worker", () => {
 		expect(await service.list()).toEqual([]);
 		expect(await Bun.file(service.databasePath).exists()).toBe(true);
 	});
+
+	it("continues relative-agentDir engine cursors through real workers and service reopen", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-relative-worker-"));
+		cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
+		const documents = path.join(directory, "documents");
+		await fs.mkdir(documents);
+		await Bun.write(
+			path.join(documents, "guide.md"),
+			"# One\nrelativecursorbeacon first evidence\n## Two\nrelativecursorbeacon second evidence\n## Three\nrelativecursorbeacon third evidence\n",
+		);
+		// Keep the profile on the caller's drive so this remains relative on Windows.
+		const cacheDir = path.join(process.cwd(), "node_modules", ".cache");
+		await fs.mkdir(cacheDir, { recursive: true });
+		const agentDir = await fs.mkdtemp(path.join(cacheDir, "docs-relative-worker-agent-"));
+		cleanups.push(() => fs.rm(agentDir, { recursive: true, force: true }));
+		const relativeAgentDir = path.relative(process.cwd(), agentDir);
+		expect(path.isAbsolute(relativeAgentDir)).toBe(false);
+		const query = "relativecursorbeacon";
+		const { complete, first, databasePath } = await (async () => {
+			const engine = new DocsSearchEngine({ agentDir: relativeAgentDir, cwd: directory });
+			try {
+				await engine.init(documents, "manual");
+				return {
+					complete: engine.search(query, { index: "manual" }),
+					first: engine.search(query, { index: "manual", limit: 1 }),
+					databasePath: engine.databasePath,
+				};
+			} finally {
+				engine.close();
+			}
+		})();
+		expect(complete.total).toBe(3);
+		expect(first).toMatchObject({ total: 3, hasMore: true });
+		expect(first.sections).toEqual(complete.sections.slice(0, 1));
+		expect(first.cursor).toBeDefined();
+		await fs.rm(documents, { recursive: true });
+
+		const service = new DocsService({ agentDir: relativeAgentDir, cwd: directory });
+		cleanups.push(() => service.close());
+		expect(service.databasePath).toBe(databasePath);
+		expect(path.isAbsolute(service.databasePath)).toBe(true);
+		const second = await service.search(query, { index: "manual", limit: 1, cursor: first.cursor });
+		expect(second).toMatchObject({ total: 3, hasMore: true });
+		expect(second.sections).toEqual(complete.sections.slice(1, 2));
+		expect(second.cursor).toBeDefined();
+		await service.close();
+
+		const reopened = new DocsService({ agentDir: relativeAgentDir, cwd: directory });
+		cleanups.push(() => reopened.close());
+		const repeated = await reopened.search(query, { index: "manual", limit: 1, cursor: first.cursor });
+		expect(repeated).toEqual(second);
+		const reopenedFirst = await reopened.search(query, { index: "manual", limit: 1 });
+		expect(reopenedFirst).toEqual(first);
+		const last = await reopened.search(query, { index: "manual", cursor: second.cursor });
+		expect(last).toMatchObject({ total: 3, hasMore: false });
+		expect(last.cursor).toBeUndefined();
+		expect([...first.sections, ...second.sections, ...last.sections]).toEqual(complete.sections);
+	}, 15_000);
 
 	it("ignores leftover OMP_WIKI_DIR and keeps public operations scoped to the caller profile", async () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-profile-wiki-"));

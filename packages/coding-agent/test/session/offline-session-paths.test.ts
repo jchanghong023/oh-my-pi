@@ -37,7 +37,7 @@ function probe(body: string, offline = "1"): void {
 			import { SessionManager } from ${JSON.stringify(managerUrl)};
 			import { FileSessionStorage, MemorySessionStorage, OfflineSessionPathError, SessionLockError } from ${JSON.stringify(storageUrl)};
 			import { resolveSessionDirectory, sessionDirForCwd, readTerminalBreadcrumbEntry } from ${JSON.stringify(pathsUrl)};
-			import { listSessions, listSessionsReadOnly, listRecentSessions, resolveResumableSession } from ${JSON.stringify(listingUrl)};
+			import { listSessions, listSessionsReadOnly, listAllSessions, listRecentSessions, listRecentProjects, findSessionFiles, getRecentSessions, resolveResumableSession } from ${JSON.stringify(listingUrl)};
 			import { getOfflineShmState, getSessionsDir, getTerminalSessionsDir, setProfile } from ${JSON.stringify(dirsUrl)};
 			import { getTerminalId } from ${JSON.stringify(ttyUrl)};
 			const fixture = ${JSON.stringify(fixture)};
@@ -219,6 +219,164 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			await resumed.close();
 			await manager.close();
 		`);
+	});
+
+	for (const consumer of ["all", "recent", "projects", "find"]) {
+		for (const linkedPart of ["bucket", "jsonl"]) {
+			it(`P2-30 ${consumer} global enumeration skips external ${linkedPart} links without probing their targets`, () => {
+				probe(`
+					const consumer = ${JSON.stringify(consumer)};
+					const linkedPart = ${JSON.stringify(linkedPart)};
+					const sessionsRoot = getSessionsDir();
+					const safeFile = path.join(sessionsRoot, "safe", "2026_boundary-local.jsonl");
+					writeOldSession(safeFile, "boundary-local");
+					const externalFile = path.join(custom, "2026_boundary-external.jsonl");
+					const externalBody = writeOldSession(externalFile, "boundary-external");
+					const linkedPath = linkedPart === "bucket"
+						? path.join(sessionsRoot, "linked-bucket")
+						: path.join(path.dirname(safeFile), path.basename(externalFile));
+					fs.symlinkSync(linkedPart === "bucket" ? custom : externalFile, linkedPath);
+					const discovered = [];
+					const scan = Bun.Glob.prototype.scan;
+					const scanProbe = spyOn(Bun.Glob.prototype, "scan").mockImplementation(function(options) {
+						const iterator = scan.call(this, options);
+						return (async function* () {
+							for await (const name of iterator) {
+								discovered.push(path.resolve(options.cwd, name));
+								yield name;
+							}
+						})();
+					});
+					const statProbe = spyOn(fs.promises, "stat");
+					const readProbes = ["openSync", "readFileSync"].map(method => spyOn(fs, method));
+					let paths;
+					try {
+						if (consumer === "all") paths = (await listAllSessions(storage, sessionsRoot)).map(info => info.path);
+						else if (consumer === "recent") paths = (await listRecentSessions({ sessionsRoot, limit: 10 })).map(info => info.path);
+						else if (consumer === "projects") paths = (await listRecentProjects(10, sessionsRoot)).map(info => info.latest.path);
+						else paths = await findSessionFiles("boundary", sessionsRoot);
+						// Observing the real iterator catches directory traversal even when
+						// the later storage read correctly refuses the resulting path.
+						if (linkedPart === "bucket") {
+							assert.deepEqual(discovered.filter(file => file.startsWith(linkedPath + path.sep)), []);
+						}
+						for (const probe of [statProbe, ...readProbes]) {
+							for (const [target] of probe.mock.calls) {
+								if (typeof target !== "string") continue;
+								assert.ok(target !== linkedPath && !target.startsWith(linkedPath + path.sep), target);
+								assert.ok(target !== custom && !target.startsWith(custom + path.sep), target);
+							}
+						}
+					} finally {
+						scanProbe.mockRestore();
+						statProbe.mockRestore();
+						for (const probe of readProbes) probe.mockRestore();
+					}
+					assert.deepEqual(paths, [safeFile]);
+					assert.equal(fs.readFileSync(externalFile, "utf8"), externalBody);
+				`);
+			});
+		}
+	}
+
+	it("P2-30 welcome enumeration does not stat an external JSONL link", () => {
+		probe(`
+			const sessionDir = path.join(getSessionsDir(), "welcome");
+			const safeFile = path.join(sessionDir, "2026_boundary-local.jsonl");
+			writeOldSession(safeFile, "boundary-local");
+			const externalFile = path.join(custom, "external.jsonl");
+			const externalBody = writeOldSession(externalFile);
+			const linkedFile = path.join(sessionDir, "2026_boundary-external.jsonl");
+			fs.symlinkSync(externalFile, linkedFile);
+			const statProbe = spyOn(fs.promises, "stat");
+			let recent;
+			try {
+				recent = await getRecentSessions(sessionDir, 10, storage);
+				assert.deepEqual(statProbe.mock.calls.filter(([file]) => file === linkedFile || file === externalFile), []);
+			} finally {
+				statProbe.mockRestore();
+			}
+			assert.deepEqual(recent.map(info => info.path), [safeFile]);
+			assert.equal(fs.readFileSync(externalFile, "utf8"), externalBody);
+		`);
+	});
+
+	for (const append of ["appendSync", "append"]) {
+		it(`P2-31 ${append} rejects an external symlink replacing an already-open transcript`, () => {
+			probe(`
+				const append = ${JSON.stringify(append)};
+				const file = path.join(state.runtimeRoot, "writer-boundary", "session.jsonl");
+				storage.writeTextSync(file, "runtime-before\\n");
+				const writer = storage.openWriter(file);
+				await writer.append("runtime-open\\n");
+				const heldFile = file + ".held";
+				fs.renameSync(file, heldFile);
+				const externalFile = path.join(fixture, "external-transcript.jsonl");
+				const externalBody = "external-before\\n";
+				fs.writeFileSync(externalFile, externalBody);
+				fs.symlinkSync(externalFile, file);
+				const openProbe = spyOn(fs, "openSync");
+				let appendError;
+				let openedPaths;
+				try {
+					try {
+						await writer[append]("must-not-escape\\n");
+					} catch (error) {
+						appendError = error;
+					}
+					openedPaths = openProbe.mock.calls.map(([target]) => target);
+				} finally {
+					openProbe.mockRestore();
+					// A rejected append is sticky, but close must still release its fd.
+					await writer.close().catch(() => {});
+				}
+				// Check preservation before the rejection so the old behavior's
+				// actual external write is visible in the failure.
+				assert.equal(fs.readFileSync(externalFile, "utf8"), externalBody);
+				assert.ok(appendError instanceof OfflineSessionPathError, "append must reject the replaced path");
+				assert.deepEqual(openedPaths.filter(target => target === file || target === externalFile), []);
+				assert.equal(fs.readFileSync(heldFile, "utf8"), "runtime-before\\nruntime-open\\n");
+				assert.ok(fs.lstatSync(file).isSymbolicLink());
+			`);
+		});
+	}
+
+	it("P2-30 P2-31 preserves non-offline linked enumeration and writer replacement behavior", () => {
+		probe(
+			`
+			assert.equal(state, undefined);
+			const sessionsRoot = getSessionsDir();
+			const externalFile = path.join(custom, "2026_boundary-external.jsonl");
+			writeOldSession(externalFile, "boundary-external");
+			fs.mkdirSync(sessionsRoot, { recursive: true });
+			const linkedBucket = path.join(sessionsRoot, "linked-bucket");
+			fs.symlinkSync(custom, linkedBucket);
+			const linkedFile = path.join(linkedBucket, path.basename(externalFile));
+			assert.deepEqual((await listAllSessions(storage, sessionsRoot)).map(info => info.path), [linkedFile]);
+			assert.deepEqual((await listRecentSessions({ sessionsRoot, limit: 10 })).map(info => info.path), [linkedFile]);
+			assert.deepEqual((await listRecentProjects(10, sessionsRoot)).map(info => info.latest.path), [linkedFile]);
+			assert.deepEqual(await findSessionFiles("boundary", sessionsRoot), [linkedFile]);
+			const directDir = path.join(sessionsRoot, "direct");
+			fs.mkdirSync(directDir);
+			const directLink = path.join(directDir, path.basename(externalFile));
+			fs.symlinkSync(externalFile, directLink);
+			assert.deepEqual((await getRecentSessions(directDir, 10, storage)).map(info => info.path), [directLink]);
+			const file = path.join(fixture, "open-writer.jsonl");
+			fs.writeFileSync(file, "held-before\\n");
+			const writer = storage.openWriter(file);
+			try {
+				fs.renameSync(file, file + ".held");
+				fs.symlinkSync(externalFile, file);
+				const before = fs.readFileSync(externalFile, "utf8");
+				await writer.append("non-offline-append\\n");
+				assert.equal(fs.readFileSync(externalFile, "utf8"), before + "non-offline-append\\n");
+				assert.equal(fs.readFileSync(file + ".held", "utf8"), "held-before\\n");
+			} finally {
+				await writer.close();
+			}
+			`,
+			"false",
+		);
 	});
 
 	it("rejects internal directory symlinks before resolving or probing an external transcript", () => {

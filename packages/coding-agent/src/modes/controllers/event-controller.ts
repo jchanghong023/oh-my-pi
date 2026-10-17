@@ -1055,9 +1055,11 @@ export class EventController {
 		}
 	}
 
-	async handleEvent(event: AgentSessionEvent): Promise<void> {
+	async handleEvent(event: AgentSessionEvent, options?: { replay?: boolean }): Promise<void> {
 		const generation = this.#dispatchGeneration;
-		this.#syncThinkingPreviewEvent(event);
+		// Focus restores run bookkeeping, not a new turn boundary. Live phases
+		// received during persistence settlement already own the preview.
+		if (!options?.replay || event.type !== "agent_start") this.#syncThinkingPreviewEvent(event);
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
@@ -1957,6 +1959,8 @@ export class EventController {
 				if (!this.#toolTimelineComponents.has(event.toolCallId)) {
 					const group = this.#getReadGroup();
 					group.updateArgs(event.args, event.toolCallId);
+					group.setExecutionStarted(event.toolCallId);
+					this.#executionStartedCallIds.add(event.toolCallId);
 					this.ctx.pendingTools.set(event.toolCallId, group);
 					this.#toolTimelineComponents.set(event.toolCallId, group);
 					this.#settleHeldCompletionIfPresent(event.toolCallId, group);

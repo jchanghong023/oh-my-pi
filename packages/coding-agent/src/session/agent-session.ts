@@ -8919,12 +8919,23 @@ export class AgentSession implements SettingsScope {
 
 		const controller = new AbortController();
 		this.#customCommandAbortControllers.add(controller);
+		let headlessExport = false;
 
 		try {
 			// Get command context from extension runner (includes session control methods)
 			const baseCtx = this.#createCommandContext();
+			headlessExport = commandName === "code-review-export" && !baseCtx.hasUI;
 			const ctx = {
 				...baseCtx,
+				// Keep hasUI false and the picker methods unchanged; export results are
+				// notices, never prompts or model messages.
+				ui: headlessExport
+					? {
+							...baseCtx.ui,
+							notify: (message: string, level: "info" | "warning" | "error" = "info") =>
+								this.emitNotice(level, message, `custom-command:${commandName}`),
+						}
+					: baseCtx.ui,
 				signal: controller.signal,
 				hasQueuedMessages: baseCtx.hasPendingMessages,
 			} as unknown as CustomCommandContext;
@@ -8938,8 +8949,13 @@ export class AgentSession implements SettingsScope {
 			return result ?? "";
 		} catch (err) {
 			if (controller.signal.aborted) return "";
-			// Emit error via extension runner
-			if (this.#extensionRunner) {
+			if (headlessExport) {
+				this.emitNotice(
+					"error",
+					`Code review export failed: ${err instanceof Error ? err.message : String(err)}`,
+					`custom-command:${commandName}`,
+				);
+			} else if (this.#extensionRunner) {
 				this.#extensionRunner.emitError({
 					extensionPath: `custom-command:${commandName}`,
 					event: "command",

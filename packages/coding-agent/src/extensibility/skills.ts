@@ -118,6 +118,7 @@ interface AdmittedBody {
 	frontmatter: SkillFrontmatter | undefined;
 	namespace: string;
 	filePath: string;
+	realPath: string;
 }
 
 interface CollisionResolution {
@@ -435,6 +436,7 @@ export async function loadSkillCatalog(
 		body: string,
 		frontmatter: SkillFrontmatter | undefined,
 		namespace: string,
+		realPath: string,
 	): string | undefined {
 		if (/[\\/]/.test(skill.name)) {
 			collisionWarnings.push({
@@ -442,6 +444,21 @@ export async function loadSkillCatalog(
 				message: `Skill name "${skill.name}" contains a path separator, skipping: ${skill.filePath}`,
 			});
 			return undefined;
+		}
+		if (realPathSet.has(realPath)) {
+			for (const [name, entry] of admitted) {
+				if (entry.realPath !== realPath) continue;
+				// A custom/Shared root may promote a provider's copy, even when a
+				// symlink directory supplied a different fallback name. Keep the
+				// original raw name so its disable still covers the same file.
+				if (
+					skill._source.provider !== CUSTOM_DIR_PROVIDER_ID ||
+					skillMap.get(name)!._source.provider === CUSTOM_DIR_PROVIDER_ID
+				)
+					return undefined;
+				skill.name = entry.rawName;
+				break;
+			}
 		}
 		const resolved = resolveCollision(skillMap, admitted, skill, body, frontmatter, namespace, !skill.disabledReason);
 		if (!resolved) return undefined;
@@ -468,7 +485,8 @@ export async function loadSkillCatalog(
 		const rawName = skill.name;
 		skill.name = name;
 		skillMap.set(name, skill);
-		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath });
+		admitted.set(name, { rawName, body, frontmatter, namespace, filePath: skill.filePath, realPath });
+		realPathSet.add(realPath);
 		return name;
 	}
 
@@ -488,14 +506,8 @@ export async function loadSkillCatalog(
 		const capSkill = filteredSkills[i];
 		const resolvedPath = realPaths[i];
 
-		// Skip silently if we've already loaded this exact file (via symlink)
-		if (realPathSet.has(resolvedPath)) {
-			continue;
-		}
-
 		const skill = toCatalogEntry(capSkill);
-		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined)
-			realPathSet.add(resolvedPath);
+		admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill), resolvedPath);
 	}
 
 	// Shared skills use the existing custom-directory override and take precedence within it.
@@ -556,8 +568,7 @@ export async function loadSkillCatalog(
 	for (let i = 0; i < allCustomSkills.length; i++) {
 		const { skill, body, frontmatter, namespace } = allCustomSkills[i];
 		const resolvedPath = customRealPaths[i];
-		if (realPathSet.has(resolvedPath)) continue;
-		if (admit(skill, body, frontmatter, namespace) !== undefined) realPathSet.add(resolvedPath);
+		admit(skill, body, frontmatter, namespace, resolvedPath);
 	}
 
 	// Managed (auto-learn) skills resolve dead-last with first-wins. Source from
@@ -592,7 +603,6 @@ export async function loadSkillCatalog(
 	for (let i = 0; i < managedCandidates.length; i++) {
 		const capSkill = managedCandidates[i];
 		const resolvedPath = managedRealPaths[i];
-		if (realPathSet.has(resolvedPath)) continue;
 		if (enabledAuthoredNames.has(capSkill.name)) continue; // an enabled authored skill owns this name
 		// Already claimed — e.g. by a custom-directory skill. LOAD-BEARING: custom
 		// dirs never enter `result.all`, so they are absent from `enabledAuthoredNames`
@@ -606,8 +616,7 @@ export async function loadSkillCatalog(
 			...toCatalogEntry(capSkill),
 			description: sanitizeManagedDescription(rawDescription),
 		};
-		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined)
-			realPathSet.add(resolvedPath);
+		admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill), resolvedPath);
 	}
 
 	// Keep inactive sources visible without letting their custom/installed
@@ -619,11 +628,7 @@ export async function loadSkillCatalog(
 		} catch {
 			resolvedPath = capSkill.path;
 		}
-		if (realPathSet.has(resolvedPath)) continue;
-		if (
-			admit(toCatalogEntry(capSkill), capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined
-		)
-			realPathSet.add(resolvedPath);
+		admit(toCatalogEntry(capSkill), capSkill.content, capSkill.frontmatter, skillNamespace(capSkill), resolvedPath);
 	}
 
 	const skills = Array.from(skillMap.values());

@@ -54,9 +54,10 @@ function decodeGitPath(token: string): string {
 	const bytes: number[] = [];
 	const encoder = new TextEncoder();
 	for (let index = 1; index < token.length - 1; index++) {
-		const character = token[index]!;
+		const character = String.fromCodePoint(token.codePointAt(index)!);
 		if (character !== "\\") {
 			bytes.push(...encoder.encode(character));
+			index += character.length - 1;
 			continue;
 		}
 		const escaped = token[++index];

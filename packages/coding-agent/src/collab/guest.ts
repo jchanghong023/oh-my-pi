@@ -669,6 +669,20 @@ export class CollabGuestLink {
 	}
 
 	#applyEvent(event: AgentSessionEvent): void {
+		// Wire entries, not lifecycle events, own the replica's message history.
+		// Apply the Agent's native phase transitions first so even arrival-time
+		// preview updates observe the authoritative runtime snapshot.
+		switch (event.type) {
+			case "agent_start":
+			case "agent_end":
+			case "message_start":
+			case "message_update":
+			case "message_end":
+			case "tool_execution_start":
+			case "tool_execution_end":
+				this.#ctx.session.agent.emitExternalEvent(event, { stateOnly: true });
+				break;
+		}
 		// Orphan-delta guard: when joining mid-turn the message_start for the
 		// in-flight assistant message predates the snapshot. message_update
 		// carries the full accumulating message, so synthesize the missing start
@@ -685,6 +699,7 @@ export class CollabGuestLink {
 			this.#dispatchEvent({ type: "message_start", message: event.message });
 		}
 		this.#dispatchEvent(event);
+		if (event.type === "message_end" && event.message.role === "assistant") this.#assistantStreamSynced = false;
 		// Lifecycle mirror: the guest's own agent loop never runs, so the session's
 		// extension-event path stays silent. Route the mirrored wire event through
 		// the same mapping the session uses so extension-installed lifecycle
@@ -743,6 +758,7 @@ export class CollabGuestLink {
 	 */
 	#applyHostState(state: CollabSessionState): void {
 		const session = this.#ctx.session;
+		session.agent.state.isStreaming = state.isStreaming;
 		if (
 			state.model &&
 			(session.agent.state.model?.id !== state.model.id ||
@@ -927,6 +943,15 @@ export class CollabGuestLink {
 	}
 
 	async #resumeLocalSession(): Promise<void> {
+		// Only an activated replica reaches this path, after queued snapshot
+		// work has drained. End its runtime mirror before switching back: abort()
+		// cannot settle a host run that never owned a local agent loop. Keep this
+		// state-only so entries retain history and lifecycle reconciliation above
+		// remains the sole extension notification.
+		this.#ctx.session.agent.emitExternalEvent(
+			{ type: "agent_end", messages: this.#ctx.session.messages },
+			{ stateOnly: true },
+		);
 		this.#ctx.statusLine.setCollabStatus(null);
 		this.#flushPendingTranscripts();
 		// A pending coalesced mirror message_update must not flush after leave.

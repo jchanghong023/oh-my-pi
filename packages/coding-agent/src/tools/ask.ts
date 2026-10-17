@@ -191,7 +191,7 @@ interface NavigationControls {
 interface AskSingleQuestionOptions {
 	recommended?: number;
 	timeout?: number;
-	autoReplyOnTimeout?: boolean;
+	shouldAutoReplyOnTimeout?: () => boolean;
 	signal?: AbortSignal;
 	initialSelection?: Pick<QuestionResult, "selectedOptions" | "customInput" | "note" | "timedOut">;
 	navigation?: NavigationControls;
@@ -233,12 +233,12 @@ async function askSingleQuestion(
 	multi: boolean,
 	options: AskSingleQuestionOptions = {},
 ): Promise<SelectionResult> {
-	const { recommended, timeout, autoReplyOnTimeout, signal, initialSelection, navigation } = options;
+	const { recommended, timeout, shouldAutoReplyOnTimeout, signal, initialSelection, navigation } = options;
 	const doneLabel = getDoneOptionLabel();
 	let selectedOptions = [...(initialSelection?.selectedOptions ?? [])];
 	let customInput = initialSelection?.customInput;
 	const note = initialSelection?.note;
-	let timedOut = autoReplyOnTimeout ? (initialSelection?.timedOut ?? false) : false;
+	let timedOut = shouldAutoReplyOnTimeout?.() ? (initialSelection?.timedOut ?? false) : false;
 
 	const selectOption = async (
 		prompt: string,
@@ -361,7 +361,7 @@ async function askSingleQuestion(
 				markableCount: questionOptions.length,
 			});
 
-			if (selectTimedOut && autoReplyOnTimeout) {
+			if (selectTimedOut && shouldAutoReplyOnTimeout?.()) {
 				selectedOptions = Array.from(selected);
 				if (selectedOptions.length === 0 && customInput === undefined) {
 					customInput = ASK_TIMEOUT_REPLY;
@@ -453,7 +453,7 @@ async function askSingleQuestion(
 				selectionMarker: "radio",
 				markableCount: displayOptions.length,
 			});
-			if (selectTimedOut && autoReplyOnTimeout) {
+			if (selectTimedOut && shouldAutoReplyOnTimeout?.()) {
 				if (selectedOptions.length === 0 && customInput === undefined) {
 					customInput = ASK_TIMEOUT_REPLY;
 					timedOut = true;
@@ -773,12 +773,15 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 		const planModeEnabled = this.session.getPlanModeState?.()?.enabled ?? false;
 		const settingsTimeout = askTimeoutMs(this.session.settings) ?? null;
 		const timeout = planModeEnabled ? null : settingsTimeout;
-		const goalState = this.session.getGoalModeState?.();
-		const autoReplyOnTimeout =
-			goalState?.enabled === true &&
-			goalState.mode === "active" &&
-			goalState.goal.status === "active" &&
-			goalState.autoOrchestrate === true;
+		const shouldAutoReplyOnTimeout = () => {
+			const goalState = this.session.getGoalModeState?.();
+			return (
+				goalState?.enabled === true &&
+				goalState.mode === "active" &&
+				goalState.goal.status === "active" &&
+				goalState.autoOrchestrate === true
+			);
+		};
 
 		// Send notification if waiting and not suppressed
 		this.#sendAskNotification();
@@ -853,18 +856,18 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					if (result.customInputImages) answerImages.push(...result.customInputImages);
 					const noteOffset = answerImages.length;
 					if (result.noteImages) answerImages.push(...result.noteImages);
+					const autoReplyOnTimeout = result.timedOut && shouldAutoReplyOnTimeout();
 					results.push({
 						id: question.id,
 						question: question.question,
 						options: question.options.map(option => option.label),
 						multi: question.multi ?? false,
-						selectedOptions: autoReplyOnTimeout && result.timedOut ? [] : result.selectedOptions,
-						customInput:
-							autoReplyOnTimeout && result.timedOut
-								? ASK_TIMEOUT_REPLY
-								: result.customInput === undefined
-									? undefined
-									: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
+						selectedOptions: autoReplyOnTimeout ? [] : result.selectedOptions,
+						customInput: autoReplyOnTimeout
+							? ASK_TIMEOUT_REPLY
+							: result.customInput === undefined
+								? undefined
+								: shiftImageMarkers(result.customInput, customOffset, result.customInputImages?.length ?? 0),
 						note:
 							result.note === undefined
 								? undefined
@@ -930,7 +933,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 					{
 						recommended: q.recommended ?? undefined,
 						timeout: timeout ?? undefined,
-						autoReplyOnTimeout,
+						shouldAutoReplyOnTimeout,
 						signal,
 						initialSelection: options?.previous,
 						navigation: options?.navigation,

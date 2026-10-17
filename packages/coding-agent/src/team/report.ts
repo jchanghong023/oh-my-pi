@@ -7,6 +7,7 @@
  * recommendation is dropped here with an explicit note.
  */
 import { stripInlineMarkdown } from "@oh-my-pi/pi-tui/overlays/plan-toc";
+import { Lexer } from "@oh-my-pi/pi-utils/marked";
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
 
 /** Fixed closing contract, verbatim from docs-zh-CN/requirements/team.md §2.7. */
@@ -116,17 +117,44 @@ function synthesisProseConflict(
 	const body = prose.join("\n\n");
 	if (stripInlineMarkdown(body).includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	// Keep commas and wrapped lines: a label and its predicate may straddle
-	// either, as may an explicit adoption condition. Paragraphs still isolate claims.
-	// Preserve dots between identifier/path characters (versions, filenames,
-	// dotted names); only other ASCII dots are conservative sentence boundaries.
-	const statements = body.split(
-		/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却|\r?\n\s*\r?\n)/u,
-	);
+	// either, as may an explicit adoption condition. Paragraphs isolate claims,
+	// but Markdown subsections inherit their enclosing proposal's ownership.
 	const labels = proposals.flatMap(record => [
 		{ record, text: `方案${record.label}` },
 		{ record, text: `${record.label}方案` },
 	]);
-	for (const statement of statements) {
+	const statements: { text: string; scope: readonly TeamProposalRecord[] }[] = [];
+	for (const field of prose) {
+		// Fields are independent: report headings must not scope recommendation
+		// reasons or preconditions. Use the renderer's lexer for heading levels.
+		const headings: { depth: number; scope: readonly TeamProposalRecord[] }[] = [];
+		let pending = "";
+		const flushStatements = () => {
+			// Lexer tokens are Markdown structure, not claim boundaries: a
+			// paragraph label can own an adjacent list or blockquote. Split
+			// only after rejoining raw text within the same heading scope.
+			for (const text of pending.split(
+				/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却|\r?\n\s*\r?\n)/u,
+			)) {
+				statements.push({ text, scope: headings.at(-1)?.scope ?? [] });
+			}
+			pending = "";
+		};
+		for (const token of Lexer.lex(field)) {
+			if (token.type === "heading") {
+				flushStatements();
+				while (headings.length > 0 && headings.at(-1)!.depth >= token.depth) headings.pop();
+				const heading = stripInlineMarkdown(token.text).replace(/\s+/gu, "");
+				const named = [...heading.matchAll(/方案([A-Z]+)|([A-Z]+)方案/gu)]
+					.map(match => proposals.find(record => record.label === (match[1] ?? match[2])))
+					.filter((record): record is TeamProposalRecord => record !== undefined);
+				headings.push({ depth: token.depth, scope: named.length > 0 ? named : (headings.at(-1)?.scope ?? []) });
+			}
+			pending += token.raw;
+		}
+		flushStatements();
+	}
+	for (const { text: statement, scope } of statements) {
 		// Compare visible prose, not Markdown delimiters: `方案 **A**` names
 		// the same proposal as `方案 A` in the delivered report.
 		const positiveClaims = stripInlineMarkdown(statement)
@@ -167,7 +195,11 @@ function synthesisProseConflict(
 					nearestDistance = distance;
 				}
 			}
-			if (nearestIndex < 0) continue;
+			if (nearestIndex < 0) {
+				const blocked = scope.find(record => !isAdoptable(record));
+				if (blocked) return `综合正文建议采用已标记为“尚不可采用”的方案 ${blocked.label}`;
+				continue;
+			}
 			let first = nearestIndex;
 			let last = nearestIndex;
 			const conjunction = /^(?:和|与|及|或|以及|、|\/|&|\+)+$/u;

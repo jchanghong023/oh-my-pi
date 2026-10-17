@@ -437,14 +437,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return count;
 	}
 
-	setCompactToolLimit(keep: number, summary: number, failures = 0): void {
+	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
 		if (this.#compactKeep === keep && this.#compactHiddenSummary === summary && this.#compactFailures === failures)
-			return;
+			return false;
 		this.#compactKeep = keep;
 		this.#compactHiddenSummary = summary;
 		this.#compactFailures = failures;
 		this.#blockVersion++;
 		this.#native.clear();
+		return true;
 	}
 
 	*#compactEntries(): IterableIterator<ReadEntry> {
@@ -568,7 +569,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const conflictCount =
 			typeof details?.conflictCount === "number" && details.conflictCount > 0 ? details.conflictCount : undefined;
 		entry.conflictCount = conflictCount;
-		entry.status = result.isError ? "error" : suffixResolution ? "warning" : "success";
+		entry.status = result.isError ? "error" : suffixResolution || conflictCount ? "warning" : "success";
 		entry.contentType = details?.contentType;
 		// Store clean display content for preview/expanded display when the read
 		// tool provides it; fall back to model-facing text for legacy results.

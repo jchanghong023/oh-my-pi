@@ -1,4 +1,5 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import { openGateLibc } from "./test-gate-libc";
@@ -28,6 +29,31 @@ async function linuxIdentity(pid: number): Promise<LinuxIdentity | undefined> {
 	}
 }
 
+async function linuxChildren(pid: number): Promise<number[]> {
+	let tasks: string[];
+	try {
+		tasks = await fs.readdir(`/proc/${pid}/task`);
+	} catch (error) {
+		if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) return [];
+		throw error;
+	}
+	const children = new Set<number>();
+	for (const task of tasks) {
+		let text: string;
+		try {
+			text = await fs.readFile(`/proc/${pid}/task/${task}/children`, "utf8");
+		} catch (error) {
+			if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
+			throw error;
+		}
+		for (const value of text.trim().split(/\s+/)) {
+			const child = Number(value);
+			if (child > 0) children.add(child);
+		}
+	}
+	return [...children];
+}
+
 interface LinuxSignalLibrary {
 	symbols: {
 		syscall(number: number, arg1: number, arg2: number, arg3: number, arg4: number): number | bigint;
@@ -45,7 +71,7 @@ function openLinuxSignals(): LinuxSignalLibrary {
 }
 let linuxSignals: LinuxSignalLibrary | undefined;
 
-/** Refuse work before readiness on kernels or sandboxes without safe pidfd ownership. */
+/** Refuse work before readiness without safe pidfd ownership and child enumeration. */
 export function assertLinuxGateSignals(): void {
 	const symbols = (linuxSignals ??= openLinuxSignals()).symbols;
 	const required =
@@ -57,6 +83,21 @@ export function assertLinuxGateSignals(): void {
 		if (Number(symbols.syscall(424, fd, 0, 0, 0)) !== 0) throw new Error(`${required}: pidfd_send_signal failed`);
 	} finally {
 		symbols.close(fd);
+	}
+	// The main task cannot exit while this synchronous probe runs. ENOENT here
+	// means the kernel lacks the interface, not the normal disappearing-task race
+	// that descendant traversal must tolerate after readiness.
+	try {
+		readFileSync(`/proc/self/task/${process.pid}/children`, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			throw Object.assign(
+				new Error("MISSING_TOOL: Safe Linux gate ownership requires proc task children (CONFIG_PROC_CHILDREN)", {
+					cause: error,
+				}),
+				{ code: "ENOENT" },
+			);
+		throw error;
 	}
 }
 async function signalLinuxIdentity(entry: LinuxIdentity, signal: number): Promise<boolean> {
@@ -92,17 +133,28 @@ export async function terminateLinuxGateDescendants(): Promise<void> {
 	const freezeDeadline = performance.now() + 1000;
 	try {
 		for (;;) {
-			const processes = (
-				await Promise.all(
-					(await fs.readdir("/proc")).filter(name => /^\d+$/.test(name)).map(name => linuxIdentity(Number(name))),
-				)
-			).filter((value): value is LinuxIdentity => value !== undefined);
+			// Traverse only children of this subreaper and stopped owned ancestors.
+			// Unrelated procfs entries may be unreadable under hidepid; an owned
+			// task/identity read failure must still reject cleanup.
 			const ordered = [root];
 			const owned = new Set(ordered);
 			let stopped = 0;
 			for (let index = 0; index < ordered.length; index++) {
-				for (const entry of processes) {
-					if (entry.parent !== ordered[index] || owned.has(entry.pid)) continue;
+				const parent = ordered[index];
+				const ancestor = registry.get(parent);
+				if (ancestor) {
+					const live = await linuxIdentity(parent);
+					if (live?.start !== ancestor.start || (live.state !== "T" && live.state !== "t")) continue;
+				}
+				for (const pid of await linuxChildren(parent)) {
+					const entry = await linuxIdentity(pid);
+					if (!entry || entry.parent !== ordered[index] || owned.has(entry.pid)) continue;
+					if (ancestor) {
+						// A stopped ancestor can still be killed externally. Do not
+						// trust numeric child edges after that ancestor was replaced.
+						const live = await linuxIdentity(parent);
+						if (live?.start !== ancestor.start || (live.state !== "T" && live.state !== "t")) break;
+					}
 					owned.add(entry.pid);
 					registry.set(entry.pid, entry);
 					let live = await linuxIdentity(entry.pid);

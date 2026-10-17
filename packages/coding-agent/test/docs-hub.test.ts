@@ -57,8 +57,9 @@ async function openHub(root: string, agentDir: string, waitForIndexes = true) {
 	const state: { hub?: DocsHubComponent } = {};
 	const renderedFrames: string[] = [];
 	const waiters = new Set<{ matches: (rendered: string) => boolean; resolve: () => void }>();
+	const terminal = { rows: 30 };
 	const tui = {
-		terminal: { rows: 30 },
+		terminal,
 		requestRender: () => {
 			const hub = state.hub;
 			if (!hub) return;
@@ -84,7 +85,7 @@ async function openHub(root: string, agentDir: string, waitForIndexes = true) {
 		return promise;
 	};
 	if (waitForIndexes) await waitFor(rendered => rendered.includes("docs="));
-	return { hub: component, waitFor, renderedFrames };
+	return { hub: component, waitFor, renderedFrames, terminal };
 }
 
 beforeAll(async () => {
@@ -166,6 +167,219 @@ describe("DocsHub selected-index boundary", () => {
 			search.mockRestore();
 		}
 	});
+});
+
+describe("DocsHub list viewport", () => {
+	async function indexFixture() {
+		const root = await tempDir("docs-hub-viewport-");
+		const agentDir = await tempDir("docs-hub-viewport-agent-");
+		await fs.writeFile(path.join(root, "guide.md"), "# Guide\nviewport evidence\n");
+		const service = new DocsService({ agentDir, cwd: root });
+		let names: string[];
+		try {
+			for (let index = 0; index < 13; index++) await service.init(root, `manual-${String(index).padStart(2, "0")}`);
+			names = (await service.list()).map(index => index.name);
+		} finally {
+			await service.close();
+		}
+		return { ...(await openHub(root, agentDir)), names };
+	}
+
+	it.each([24, 12, 3, 2, 1])(
+		"keeps all 13 indexes selectable and visible in a %i-row terminal",
+		async rows => {
+			const { hub, terminal, names } = await indexFixture();
+			terminal.rows = rows;
+			const expectSelected = (index: number) => {
+				const lines = hub.render(200).map(line => Bun.stripANSI(line));
+				const visible = lines.slice(-terminal.rows);
+				expect(visible.filter(line => line.startsWith("> "))).toEqual([
+					expect.stringContaining(`${names[index]} `),
+				]);
+				expect(lines.length).toBeLessThanOrEqual(terminal.rows);
+			};
+			try {
+				expectSelected(0);
+				for (let index = 1; index < names.length; index++) {
+					hub.handleInput("\x1b[B");
+					expectSelected(index);
+				}
+				for (let index = names.length - 2; index >= 0; index--) {
+					hub.handleInput("\x1b[A");
+					expectSelected(index);
+				}
+			} finally {
+				await hub.dispose();
+			}
+		},
+		15_000,
+	);
+
+	it("keeps the selected index visible when the terminal shrinks and grows", async () => {
+		const { hub, terminal, names } = await indexFixture();
+		const expectSelected = (index: number) => {
+			const lines = hub.render(200).map(line => Bun.stripANSI(line));
+			expect(lines.slice(-terminal.rows).filter(line => line.startsWith("> "))).toEqual([
+				expect.stringContaining(`${names[index]} `),
+			]);
+			expect(lines.length).toBeLessThanOrEqual(terminal.rows);
+		};
+		try {
+			terminal.rows = 40;
+			for (let index = 0; index < 6; index++) hub.handleInput("\x1b[B");
+			expectSelected(6);
+			for (const rows of [24, 10, 32, 8, 1, 2, 3]) {
+				terminal.rows = rows;
+				hub.invalidate();
+				expectSelected(6);
+				hub.handleInput("\x1b[A");
+				expectSelected(5);
+				hub.handleInput("\x1b[B");
+				expectSelected(6);
+			}
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
+
+	it.each([20, 12])(
+		"keeps all 20 search hits selectable and visible in a %i-row terminal",
+		async rows => {
+			const { hub, terminal, waitFor, expected } = await grepFixture(20);
+			const expectSelected = (index: number) => {
+				const lines = hub.render(200).map(line => Bun.stripANSI(line));
+				expect(lines.slice(-terminal.rows).filter(line => line.startsWith("> "))).toEqual([
+					expect.stringContaining(`${expected.sections[index]!.path}:`),
+				]);
+				expect(lines.length).toBeLessThanOrEqual(terminal.rows);
+			};
+			try {
+				for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+				await waitFor(rendered => rendered.includes(`${expected.sections[0]!.path}:`));
+				terminal.rows = rows;
+				expectSelected(0);
+				for (let index = 1; index < 20; index++) {
+					hub.handleInput("\x1b[B");
+					expectSelected(index);
+				}
+				hub.handleInput("\r");
+				expect(hub.render(200).join("\n")).toContain(expected.sections[19]!.text.trimEnd());
+				hub.handleInput("b");
+				for (let index = 18; index >= 0; index--) {
+					hub.handleInput("\x1b[A");
+					expectSelected(index);
+				}
+				hub.handleInput("\r");
+				expect(hub.render(200).join("\n")).toContain(expected.sections[0]!.text.trimEnd());
+			} finally {
+				await hub.dispose();
+			}
+		},
+		15_000,
+	);
+
+	it("keeps the selected search hit visible when the terminal shrinks and grows", async () => {
+		const { hub, terminal, waitFor, expected } = await grepFixture(20);
+		const expectSelected = (index: number) => {
+			const lines = hub.render(200).map(line => Bun.stripANSI(line));
+			expect(lines.slice(-terminal.rows).filter(line => line.startsWith("> "))).toEqual([
+				expect.stringContaining(`${expected.sections[index]!.path}:`),
+			]);
+			expect(lines.length).toBeLessThanOrEqual(terminal.rows);
+		};
+		try {
+			terminal.rows = 40;
+			for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+			await waitFor(rendered => rendered.includes(`${expected.sections[0]!.path}:`));
+			for (let index = 0; index < 9; index++) hub.handleInput("\x1b[B");
+			expectSelected(9);
+			for (const rows of [24, 12, 32, 8, 1, 2, 3]) {
+				terminal.rows = rows;
+				hub.invalidate();
+				expectSelected(9);
+				hub.handleInput("\x1b[A");
+				expectSelected(8);
+				hub.handleInput("\x1b[B");
+				expectSelected(9);
+			}
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
+
+	it("keeps search hits, opening, search input and deletion usable in a one-row terminal", async () => {
+		const { hub, terminal, waitFor, expected } = await grepFixture(2);
+		try {
+			for (const input of ["g", grepExpression, "\r"]) hub.handleInput(input);
+			await waitFor(rendered => rendered.includes(`${expected.sections[0]!.path}:`));
+			terminal.rows = 1;
+			hub.handleInput("\x1b[B");
+			const selected = hub.render(200).map(line => Bun.stripANSI(line));
+			expect(selected).toEqual([expect.stringContaining(`> [regex] [a-manual] ${expected.sections[1]!.path}:`)]);
+			hub.handleInput("\r");
+			expect(hub.render(200)).toHaveLength(1);
+			expect(hub.render(200).join("\n")).toContain(`${expected.sections[1]!.path}:`);
+			hub.handleInput("b");
+			expect(hub.render(200).map(line => Bun.stripANSI(line))).toEqual(selected);
+			hub.handleInput("g");
+			hub.handleInput("needle");
+			expect(hub.render(200)).toHaveLength(1);
+			expect(hub.render(200).join("\n")).toContain("needle");
+			hub.handleInput("\x1b");
+			hub.handleInput("d");
+			expect(hub.render(200)).toHaveLength(1);
+			expect(hub.render(200).join("\n")).toContain("Delete a-manual? y/N");
+			hub.handleInput("n");
+			expect(hub.render(200).map(line => Bun.stripANSI(line))).toEqual([expect.stringContaining("> a-manual ")]);
+		} finally {
+			await hub.dispose();
+		}
+	}, 15_000);
+
+	it("reserves busy, progress and error rows without hiding the selected index", async () => {
+		const { hub, terminal, waitFor, renderedFrames, names } = await indexFixture();
+		const removal = Promise.withResolvers<void>();
+		const remove = spyOn(DocsService.prototype, "remove").mockImplementationOnce(() => removal.promise);
+		try {
+			terminal.rows = 12;
+			hub.handleInput("n");
+			for (const input of ["new", "\r", ".", "\r"]) hub.handleInput(input);
+			const start = renderedFrames.length;
+			hub.handleInput("\r");
+			await waitFor(() => true);
+			const busyFrames = renderedFrames
+				.slice(start)
+				.filter(rendered => rendered.includes("Indexing document index"));
+			expect(busyFrames.some(rendered => /(?:section|fts|complete) \d+\/\d+/.test(rendered))).toBe(true);
+			for (const rendered of busyFrames) {
+				const lines = rendered.split("\n").map(line => Bun.stripANSI(line));
+				expect(lines.length).toBeLessThanOrEqual(terminal.rows);
+				expect(lines.filter(line => line.startsWith("> "))).toEqual([expect.stringContaining(`${names[0]} `)]);
+			}
+			hub.handleInput("d");
+			hub.handleInput("y");
+			for (let index = 1; index < names.length; index++) hub.handleInput("\x1b[B");
+			const busy = hub.render(200).map(line => Bun.stripANSI(line));
+			expect(busy.length).toBeLessThanOrEqual(terminal.rows);
+			expect(busy.join("\n")).toContain("Deleting document index");
+			expect(busy.filter(line => line.startsWith("> "))).toEqual([expect.stringContaining(`${names.at(-1)} `)]);
+			// Let the operation receive the deferred result before rejecting it.
+			await Promise.resolve();
+			removal.reject(new Error("viewport removal failure"));
+			await waitFor(rendered => rendered.includes("viewport removal failure"));
+			const failed = hub.render(200).map(line => Bun.stripANSI(line));
+			expect(failed.length).toBeLessThanOrEqual(terminal.rows);
+			expect(failed.filter(line => line.startsWith("> "))).toEqual([expect.stringContaining(`${names.at(-1)} `)]);
+			terminal.rows = 1;
+			expect(hub.render(200).map(line => Bun.stripANSI(line))).toEqual([
+				expect.stringContaining(`${names.at(-1)} `),
+			]);
+		} finally {
+			removal.resolve();
+			remove.mockRestore();
+			await hub.dispose();
+		}
+	}, 15_000);
 });
 
 describe("DocsHub explicit grep with real native snapshots", () => {

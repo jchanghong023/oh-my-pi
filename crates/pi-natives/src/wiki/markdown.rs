@@ -294,6 +294,7 @@ struct MarkdownFenceScanner {
 	fence:           Option<Fence>,
 	lists:           Vec<ListContext>,
 	line_buffer:     String,
+	partial_line:    String,
 	continues_line:  bool,
 	spaces:          usize,
 	quote_depth:     usize,
@@ -358,10 +359,46 @@ impl MarkdownFenceScanner {
 		self.line_buffer = buffer;
 	}
 
+	fn quote_interrupted(&self, source: &str) -> bool {
+		let mut buffer = String::new();
+		let mut line = scanner_line(source, &mut buffer);
+		let mut quote_depth = 0;
+		let mut lists = self.lists.iter().peekable();
+		loop {
+			if let Some(list) = lists.peek()
+				&& list.quote_depth == quote_depth
+			{
+				let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
+				line = &line[indentation.min(list.width)..];
+				lists.next();
+			} else if quote_depth < self.quote_depth
+				&& let Some(length) = block::quote_prefix(line)
+			{
+				line = &line[length..];
+				quote_depth += 1;
+			} else {
+				break;
+			}
+		}
+		block::lex(line)
+			.first()
+			.is_some_and(|token| !matches!(token.kind, TokenKind::Paragraph | TokenKind::Text))
+	}
+
 	fn append(&mut self, source: &str) {
 		let mut buffer = std::mem::take(&mut self.line_buffer);
+		let mut partial_line = std::mem::take(&mut self.partial_line);
 		let mut lines = source.split_inclusive('\n').peekable();
 		while let Some(source_line) = lines.next() {
+			// Keep the original line separate from container-prefix stripping.
+			// Complete lines stay borrowed; only a potentially interrupted quoted
+			// fence needs a line carried across storage slices.
+			let original_line = if partial_line.is_empty() {
+				source_line
+			} else {
+				partial_line.push_str(source_line);
+				partial_line.as_str()
+			};
 			let mut line = if self.continues_line {
 				source_line
 			} else {
@@ -393,7 +430,7 @@ impl MarkdownFenceScanner {
 						.is_none_or(|fence| quote_depth < fence.quote_depth)
 						&& let Some(length) = block::quote_prefix(line)
 					{
-						self.append_raw(&line[..length]);
+						self.append_raw(&line[..length], original_line);
 						line = &line[length..];
 						quote_depth += 1;
 						continue;
@@ -423,14 +460,26 @@ impl MarkdownFenceScanner {
 					break;
 				}
 			}
-			self.append_raw(line);
+			self.append_raw(line, original_line);
+			if self.continues_line
+				&& self
+					.fence
+					.is_some_and(|fence| self.quote_depth < fence.quote_depth)
+			{
+				if partial_line.is_empty() {
+					partial_line.push_str(source_line);
+				}
+			} else {
+				// Fully marked code lines never accumulate their literal body.
+				partial_line.clear();
+			}
 		}
 		self.line_buffer = buffer;
+		self.partial_line = partial_line;
 	}
 
-	fn append_raw(&mut self, source: &str) {
-		let mut line_start = (!self.continues_line).then_some(0);
-		for (position, character) in source.char_indices() {
+	fn append_raw(&mut self, source: &str, original_line: &str) {
+		for character in source.chars() {
 			if character == '\n' {
 				if self
 					.fence
@@ -440,20 +489,7 @@ impl MarkdownFenceScanner {
 					// Missing quote markers may be lazy paragraph continuation.
 					// Use the shared lexer for actual block interruptions instead of
 					// treating every unquoted line as an end to the container.
-					let interrupted = self.invalid
-						&& line_start.is_some_and(|start| {
-							let tokens = block::lex(&source[start..=position]);
-							let mut children = tokens.as_slice();
-							for _ in 0..self.quote_depth {
-								children = children
-									.first()
-									.and_then(|token| token.children.as_deref())
-									.unwrap_or(&[]);
-							}
-							children.first().is_some_and(|token| {
-								!matches!(token.kind, TokenKind::Paragraph | TokenKind::Text)
-							})
-						});
+					let interrupted = self.invalid && self.quote_interrupted(original_line);
 					if blank || interrupted {
 						self.fence = None;
 					}
@@ -486,7 +522,6 @@ impl MarkdownFenceScanner {
 				self.in_info = false;
 				self.invalid = false;
 				self.carriage_return = false;
-				line_start = Some(position + 1);
 				continue;
 			}
 			self.continues_line = true;
@@ -1048,6 +1083,57 @@ mod tests {
 					context.fence_prefix.as_deref() == Some(opener.trim_end_matches("cpp"))
 				}));
 			}
+		}
+	}
+
+	#[test]
+	fn ancestor_quote_heading_ends_inner_fence_across_sections() {
+		let prefix = "> > ```\n> > literal**code**\n> # Outer\n";
+		let source = format!("{prefix}> foo**bar**\n");
+		let whole = plain_text(&block::lex(&source));
+		assert!(whole.contains("literal**code**"));
+		assert_eq!(whole.lines().last(), Some("foobar"));
+
+		let heading_start = prefix.find("> # Outer").unwrap();
+		// Cover both complete ancestor lines and storage cuts inside the line,
+		// including the point between its quote marker and heading text.
+		for split in [heading_start, heading_start + 2, heading_start + 5, prefix.len()] {
+			let mut edges = vec![0, split, prefix.len(), source.len()];
+			edges.dedup();
+			let recovered = contexts(edges.windows(2).enumerate().map(|(index, edge)| {
+				section(index as i64, edge[0] as i64, edge[1] as i64, &source[edge[0]..edge[1]])
+			}));
+			let projected =
+				plain_text(&lex_section(&source[prefix.len()..], &recovered.last().unwrap().1));
+			assert_eq!(projected, "foobar", "ancestor heading split at byte {split}");
+		}
+	}
+
+	#[test]
+	fn imported_ancestor_quote_heading_restores_inline_projection_after_chunking() {
+		for newline in ["\n", "\r\n"] {
+			let source = format!(
+				"> > ```{newline}> > literal**code**{newline}> # Outer{newline}{}> foo**bar**{newline}",
+				format!("> filler{newline}").repeat(2000),
+			);
+			let whole = plain_text(&block::lex(&source));
+			assert!(whole.contains("literal**code**"));
+			assert_eq!(whole.lines().last(), Some("foobar"));
+
+			let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+			assert!(parsed.sections.len() > 1);
+			let last = parsed.sections.last().unwrap();
+			assert!(
+				last
+					.raw_markdown
+					.ends_with(&format!("> foo**bar**{newline}"))
+			);
+			assert_eq!(last.raw_markdown, source[last.byte_start as usize..last.byte_end as usize],);
+			assert_eq!(
+				last.plain_text.lines().last(),
+				Some("foobar"),
+				"imported projection with newline {newline:?}",
+			);
 		}
 	}
 

@@ -118,6 +118,7 @@ export class DocsService {
 	readonly cwd: string;
 	readonly databasePath: string;
 	readonly #options: DocsServiceOptions;
+	readonly #cursorPath: string;
 	#closed = false;
 	#worker?: OwnedWorker;
 	#retiring?: Promise<void>;
@@ -127,6 +128,8 @@ export class DocsService {
 
 	constructor(options: DocsServiceOptions) {
 		this.cwd = path.resolve(options.cwd ?? process.cwd());
+		// Cursor identity must match direct engine callers before resolving the worker's open path.
+		this.#cursorPath = path.join(options.agentDir, "docs.db");
 		// The helper's SDK/test fallback has its own cwd; resolve the DB in the caller's cwd.
 		const agentDir = path.resolve(options.agentDir);
 		this.databasePath = path.join(agentDir, "docs.db");
@@ -344,7 +347,7 @@ export class DocsService {
 					type: "configure",
 					id: worker.configureId,
 					options: this.#options,
-					databasePath: this.databasePath,
+					cursorPath: this.#cursorPath,
 					context: request.context,
 				});
 			} else {
@@ -512,7 +515,7 @@ export async function smokeTestDocsWorker(): Promise<void> {
 			id: configureId,
 			context,
 			options: { agentDir: directory.path() },
-			databasePath: directory.join("docs.db"),
+			cursorPath: directory.join("docs.db"),
 		});
 		await promise;
 	} finally {

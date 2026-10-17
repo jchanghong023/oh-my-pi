@@ -1250,6 +1250,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	#loopConditionAbort: AbortController | undefined;
 	#loopAutoSubmitTimer: NodeJS.Timeout | undefined;
+	#loopAutoSubmitGeneration = 0;
 	#loopIntervalMs: number | undefined;
 	#todoAutoClearTimer: NodeJS.Timeout | undefined;
 	#todoAutoClearGeneration = 0;
@@ -2984,6 +2985,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#cancelLoopAutoSubmit(): void {
+		this.#loopAutoSubmitGeneration++;
 		if (this.#loopAutoSubmitTimer) {
 			clearTimeout(this.#loopAutoSubmitTimer);
 			this.#loopAutoSubmitTimer = undefined;
@@ -3286,12 +3288,24 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/**
 	 * Schedule the next auto-resubmit for a submission that never reached
-	 * {@link getUserInput}. A `/skill:` command dispatches inline from the
-	 * submit handler, leaving `onInputCallback` unresolved, so the run loop
-	 * never re-enters `getUserInput` to arm the following iteration.
+	 * {@link getUserInput}. Positional intervals start after that turn settles;
+	 * legacy loops keep their original interrupt-window polling cadence.
 	 */
-	armLoopAutoSubmit(): void {
-		this.#scheduleLoopAutoSubmit();
+	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
+		this.#cancelLoopAutoSubmit();
+		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
+		if (this.#loopIntervalMs === undefined) {
+			this.#scheduleLoopAutoSubmit();
+			return;
+		}
+		const generation = this.#loopAutoSubmitGeneration;
+		void promptPromise.then(
+			() => {
+				if (generation !== this.#loopAutoSubmitGeneration) return;
+				this.#scheduleLoopAutoSubmit();
+			},
+			() => {},
+		);
 	}
 
 	/**

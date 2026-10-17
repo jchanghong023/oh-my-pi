@@ -174,6 +174,8 @@ export interface HistoryBatch {
 	 * one synchronous terminal write.
 	 */
 	readonly kind?: "append" | "replay";
+	/** Replace stale projected history, rather than retaining it as an append-mode resize does. */
+	readonly clearScrollback?: boolean;
 }
 
 /** One history append or complete replay plus the mutable viewport for a terminal frame. */
@@ -3537,7 +3539,7 @@ export class TUI extends Container {
 		// Destructive reset (session replace, /tree, explicit clear, or a settled
 		// resize in rebuild mode): erase native history and the viewport,
 		// then repaint from row zero.
-		const destructiveReset = this.#clearScrollbackOnNextRender;
+		const destructiveReset = this.#clearScrollbackOnNextRender || history?.clearScrollback === true;
 		const compactReplay = destructiveReset && classifyTerminalMultiplexerModule()?.expandsRepPadding === true;
 		if (destructiveReset) {
 			this.#providerViewportTop = 0;

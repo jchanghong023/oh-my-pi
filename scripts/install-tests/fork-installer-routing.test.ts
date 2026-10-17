@@ -834,6 +834,138 @@ try {
 	}, 30_000);
 });
 
+describe.skipIf(!windowsPowerShell)("Windows installer curl startup fallback", () => {
+	test.each(["invalid executable", "execution denied"] as const)(
+		"downloads and validates with Invoke-WebRequest when discovered curl has %s",
+		async mode => {
+			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-curl-startup-"));
+			tempDirs.push(dir);
+			const binDir = path.join(dir, "bin");
+			const payloadFile = path.join(dir, "payload.exe");
+			const outFile = path.join(dir, ".omp.tmp.download.exe");
+			const requests: string[] = [];
+			await fs.mkdir(binDir);
+			const server = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					requests.push(new URL(request.url).pathname);
+					return new Response(Bun.file(payloadFile));
+				},
+			});
+			try {
+				const harness = path.join(dir, "curl-startup.ps1");
+				await Bun.write(
+					harness,
+					`$ErrorActionPreference = "Stop"
+$env:HTTP_PROXY = $null
+$env:HTTPS_PROXY = $null
+$env:ALL_PROXY = $null
+$env:NO_PROXY = $null
+[Net.WebRequest]::DefaultWebProxy = $null
+$typeName = "DownloadFixture" + [Guid]::NewGuid().ToString("N")
+Add-Type -TypeDefinition "public class $typeName { public static void Main(string[] args) { if (args.Length == 1 && args[0] == ""--version"") System.Console.WriteLine(""omp/18.0.9+fork.125""); else System.Environment.Exit(42); } }" -OutputAssembly $env:TEST_PAYLOAD -OutputType ConsoleApplication
+$curlPath = [IO.Path]::GetFullPath((Join-Path $env:TEST_BIN "curl.exe"))
+$originalAcl = $null
+try {
+    if ($env:TEST_MODE -eq "execution denied") {
+        Copy-Item -LiteralPath $env:TEST_PAYLOAD -Destination $curlPath
+        $originalAcl = [IO.File]::GetAccessControl($curlPath)
+        $deniedAcl = [IO.File]::GetAccessControl($curlPath)
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($identity, [Security.AccessControl.FileSystemRights]::ExecuteFile, [Security.AccessControl.AccessControlType]::Deny)
+        $deniedAcl.AddAccessRule($rule)
+        [IO.File]::SetAccessControl($curlPath, $deniedAcl)
+    } else {
+        [IO.File]::WriteAllBytes($curlPath, [byte[]]@(0x4d, 0x5a, 0, 0))
+    }
+    # Keep discovery isolated too: Get-Command can return several applications
+    # for an executable name, and the production downloader consumes Source.
+    $env:PATH = $env:TEST_BIN
+    $curl = Get-Command curl.exe -CommandType Application -ErrorAction Stop
+    $sources = @($curl.Source)
+    $sourceDetails = @($sources | Select-Object -First 4 | ForEach-Object {
+        $value = [string]$_
+        @{ type = $_.GetType().FullName; value = $value.Substring(0, [Math]::Min(512, $value.Length)) }
+    })
+    Write-Output ("DISCOVERY " + (@{ commandType = $curl.GetType().FullName; sourceType = $curl.Source.GetType().FullName; commandCount = @($curl).Count; sources = $sourceDetails } | ConvertTo-Json -Depth 4 -Compress))
+    if (@($curl).Count -ne 1 -or $sources.Count -ne 1) { throw "Fixture curl discovery must yield exactly one application and Source." }
+    if ([IO.Path]::GetFullPath([string]$sources[0]) -ne $curlPath) { throw "Fixture curl was not selected by real command discovery: expected '$curlPath', found '$($sources[0])'." }
+    # Prove an actual native launch failure, not curl returning an error status.
+    $launchFailure = $null
+    try { & $curl.Source --version | Out-Null } catch { $launchFailure = $_.Exception.GetType().FullName }
+    if (-not $launchFailure) { throw "Fixture curl unexpectedly launched." }
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count) { throw $parseErrors[0] }
+    $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
+    . ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
+    # A failed launch must not mistake a previous successful native exit for
+    # this download succeeding. Use a real process to establish that state.
+    & $env:TEST_PAYLOAD --version | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Payload fixture did not launch successfully." }
+    $failureType = $null
+    $verified = $false
+    try {
+        Save-InstallBinary -Uri $env:TEST_URL -OutFile $env:TEST_OUTFILE
+        $verified = Test-InstalledBinaryVersion -TargetPath $env:TEST_OUTFILE -ReleaseTag "v18.0.9+fork.125"
+    } catch {
+        $failureType = $_.Exception.GetType().FullName
+    }
+    Write-Output ("RESULT " + (@{ failed = ($null -ne $failureType); failureType = $failureType; verified = $verified; launchFailure = $launchFailure } | ConvertTo-Json -Compress))
+} finally {
+    if ($originalAcl) { [IO.File]::SetAccessControl($curlPath, $originalAcl) }
+}
+`,
+				);
+				const child = Bun.spawn(
+					[windowsPowerShell!, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
+					{
+						cwd: repoRoot,
+						env: {
+							...process.env,
+							OMP_CONFIG_ROOT: path.join(dir, "config"),
+							OMP_PROFILE: "default",
+							PI_PROFILE: "default",
+							PI_INSTALL_DIR: path.join(dir, "install"),
+							TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+							TEST_BIN: binDir,
+							TEST_MODE: mode,
+							TEST_PAYLOAD: payloadFile,
+							TEST_URL: `http://127.0.0.1:${server.port}/omp.exe`,
+							TEST_OUTFILE: outFile,
+							PROCESSOR_ARCHITECTURE: "AMD64",
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+						timeout: 30_000,
+					},
+				);
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+				const result = JSON.parse(
+					stdout
+						.split(/\r?\n/)
+						.find(line => line.startsWith("RESULT "))!
+						.slice(7),
+				);
+				expect(result.launchFailure).toBe("System.Management.Automation.ApplicationFailedException");
+				expect(result, `${stdout}\n${stderr}`).toMatchObject({ failed: false, verified: true });
+				expect(requests).toEqual(["/omp.exe"]);
+				expect(new Uint8Array(await fs.readFile(outFile))).toEqual(new Uint8Array(await fs.readFile(payloadFile)));
+			} finally {
+				server.stop(true);
+			}
+		},
+		45_000,
+	);
+});
+
 describe.skipIf(!windowsPowerShell || !Bun.which("curl.exe"))("Windows installer proxy downloads", () => {
 	test.each(["system", "environment", "fallback"] as const)(
 		"downloads binary bytes through the %s proxy path without changing system settings",

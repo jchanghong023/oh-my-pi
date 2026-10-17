@@ -7,7 +7,7 @@ import { isEnoent, logger, prompt, sanitizeText, truncate } from "@oh-my-pi/pi-u
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { REPO_EXCLUSIONS } from "../repo/files";
-import { resolveRepoRoot, RepoService } from "../repo/service";
+import { normalizeRepoQueryPath, resolveRepoRoot, RepoService } from "../repo/service";
 import { repoIndexPath } from "../repo/storage";
 import type { RepoQueryResult, RepoStatus, RepoSymbolHit, RepoTextHit } from "../repo/types";
 import repoDescription from "../prompts/tools/repo.md" with { type: "text" };
@@ -312,6 +312,7 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 							};
 							if (!service) {
 								signal?.throwIfAborted();
+								normalizeRepoQueryPath(params.path, true);
 								validateMissingCursor(params.cursor);
 							}
 							if (action === "search") {

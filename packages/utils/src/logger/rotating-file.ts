@@ -35,8 +35,8 @@ export interface RotatingFileOptions {
 	 * staying pinned to a file the sink later prunes.
 	 */
 	readonly onRotate?: (filePath: string) => void;
-	/** User-level destination tried once if creation, opening, or writing fails. */
-	readonly fallbackDirectory?: string;
+	/** Lazily create/validate the destination, tried once after a primary failure. */
+	readonly fallbackDirectory?: () => string;
 	/** Return an optional already-formatted recovery record; never called recursively. */
 	readonly onFailure?: (error: unknown, stage: string, recoveredPath?: string) => string | undefined;
 }
@@ -63,7 +63,7 @@ export class RotatingFileSink {
 	readonly #maxFiles: number;
 	readonly #batch: RotatingFileBatchOptions | undefined;
 	readonly #onRotate: ((filePath: string) => void) | undefined;
-	readonly #fallbackDirectory: string | undefined;
+	readonly #fallbackDirectory: RotatingFileOptions["fallbackDirectory"];
 	readonly #onFailure: RotatingFileOptions["onFailure"];
 	#fallbackAttempted = false;
 	#failed = false;
@@ -165,16 +165,18 @@ export class RotatingFileSink {
 			action();
 			return;
 		} catch (error) {
-			const fallback = this.#fallbackDirectory;
-			if (!this.#fallbackAttempted && fallback && path.relative(fallback, this.#directory) !== "") {
+			if (!this.#fallbackAttempted && this.#fallbackDirectory) {
 				this.#fallbackAttempted = true;
-				this.#closeFd();
-				this.#directory = fallback;
-				const day = this.#activeDay ?? localDay(new Date());
-				this.#activeIndex = 0;
-				this.#setActivePath(day, 0);
-				this.#activeBytes += this.#pendingBytes;
 				try {
+					// Validation can throw; contain it in the same boundary as opening.
+					const fallback = this.#fallbackDirectory();
+					if (path.relative(fallback, this.#directory) === "") throw error;
+					this.#closeFd();
+					this.#directory = fallback;
+					const day = this.#activeDay ?? localDay(new Date());
+					this.#activeIndex = 0;
+					this.#setActivePath(day, 0);
+					this.#activeBytes += this.#pendingBytes;
 					this.#openFd(this.#activePath!);
 					const recovery = this.#notifyFailure(error, stage, this.#activePath);
 					if (recovery) {

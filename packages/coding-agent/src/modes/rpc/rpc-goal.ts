@@ -438,17 +438,21 @@ export class RpcGoalController {
 		this.#continuationScheduled = false;
 		generation = ++this.#continuationGeneration;
 		state = this.#session.getGoalModeState();
-		await this.#enter(
+		const entered = await this.#enter(
 			() =>
 				state?.enabled
 					? this.#session.goalRuntime.replaceGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate })
 					: this.#session.goalRuntime.createGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate }),
 			false,
+			current,
 		);
-		if (!current()) return;
+		if (!entered || !current()) return;
 		const goalAutoOrchestrateInitialId =
 			options?.autoOrchestrate === true ? this.#session.getGoalModeState()?.goal.id : undefined;
 		await output("Goal mode enabled.");
+		const active = this.#session.getGoalModeState();
+		if (!current() || !active?.enabled || active.goal.status !== "active" || active.goal.id !== entered.goal.id)
+			return;
 		return { prompt: rest, ...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}) };
 	}
 
@@ -488,13 +492,19 @@ export class RpcGoalController {
 		return this.#state;
 	}
 
-	async #enter(start: () => Promise<GoalModeState>, scheduleContinuation = true): Promise<void> {
+	async #enter(
+		start: () => Promise<GoalModeState>,
+		scheduleContinuation = true,
+		commandCurrent: () => boolean = () => true,
+	): Promise<GoalModeState | undefined> {
+		const generation = this.#continuationGeneration;
+		const transcript = this.#session.sessionManager.getSessionId();
 		const context = {
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `rpc-goal-${crypto.randomUUID()}`,
 		};
 		this.#logContext = context;
-		await logger.withLogContext(context, async () => {
+		return await logger.withLogContext(context, async () => {
 			const started = performance.now();
 			let stageStarted = started;
 			let stage = "capture_tools";
@@ -516,6 +526,18 @@ export class RpcGoalController {
 				context_sent: contextSent,
 			});
 			this.#log("goal_enter_started", "enter", "started", context);
+			const current = (state: GoalModeState): boolean => {
+				const active = this.#session.getGoalModeState();
+				return (
+					commandCurrent() &&
+					!this.#session.isDisposed &&
+					generation === this.#continuationGeneration &&
+					transcript === this.#session.sessionManager.getSessionId() &&
+					active?.enabled === true &&
+					active.goal.status === "active" &&
+					active.goal.id === state.goal.id
+				);
+			};
 			try {
 				// The pre-goal tool set is captured once, when this controller first adds `goal`
 				// (a reattached paused goal already holds it). A `goal` tool the host enabled
@@ -525,16 +547,23 @@ export class RpcGoalController {
 				stageStarted = performance.now();
 				const state = await start();
 				runtimeStarted = true;
+				stateCommitted = true;
+				if (!current(state)) {
+					this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: true });
+					return;
+				}
 				this.#previousTools = previousTools;
 				previousToolsCaptured = true;
 				stage = "activate_tools";
 				stageStarted = performance.now();
 				await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
 				toolsActivated = true;
-				stage = "set_state";
-				stageStarted = performance.now();
-				this.#session.setGoalModeState(state);
-				stateCommitted = true;
+				// GoalRuntime has already committed the state. Never restore its snapshot:
+				// activation may have yielded to a pause, abort, replacement, or session change.
+				if (!current(state)) {
+					this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: true });
+					return;
+				}
 				stage = "reset_continuation";
 				stageStarted = performance.now();
 				this.#resetContinuation();
@@ -544,7 +573,7 @@ export class RpcGoalController {
 					await this.#session.sendGoalModeContext({ deliverAs: "steer" });
 					contextSent = true;
 					this.#log("goal_enter_completed", "enter", "enabled", { ...fields(), partial: false });
-					return;
+					return state;
 				}
 				if (scheduleContinuation) {
 					stage = "schedule_continuation";
@@ -552,6 +581,7 @@ export class RpcGoalController {
 					this.#scheduleContinuation();
 				}
 				this.#log("goal_enter_completed", "enter", "enabled", { ...fields(), partial: false });
+				return state;
 			} catch (error) {
 				const diagnostic = fields();
 				this.#reportError(

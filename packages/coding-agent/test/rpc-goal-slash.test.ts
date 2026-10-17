@@ -130,6 +130,74 @@ describe("RPC goal slash adapter", () => {
 		expect(f.continuations).toEqual([]);
 	});
 
+	test.each([
+		["abort", false],
+		["abort", true],
+		["pause", false],
+		["pause", true],
+	] as const)(
+		"P2-12 preserves paused state when %s interrupts pending tool activation (autoOrchestrate=%s)",
+		async (stop, autoOrchestrate) => {
+			const f = fixture(true);
+			const cancellation = new AbortController();
+			f.runtime.signal = cancellation.signal;
+			const requested = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			const applyTools = f.session.setActiveToolsByName.bind(f.session);
+			const activate = spyOn(f.session, "setActiveToolsByName").mockImplementation(async names => {
+				await applyTools(names);
+				if (names.includes("goal")) {
+					requested.resolve();
+					await released.promise;
+				}
+			});
+			const entering = f.controller
+				.handleSlash("set interrupted objective", f.runtime, { autoOrchestrate })
+				.catch((error: unknown) => {
+					if (error instanceof Error && error.name === "AbortError") return;
+					throw error;
+				});
+			try {
+				await requested.promise;
+				const goalId = f.state()!.goal.id;
+				expect(f.state()).toMatchObject({ enabled: true, goal: { status: "active" } });
+				if (stop === "abort") {
+					// Match the RPC host: close continuation and command channels before runtime abort cleanup.
+					f.controller.stopForHostAbort();
+					cancellation.abort();
+					await f.session.goalRuntime.onTaskAborted({ reason: "interrupted" });
+				} else {
+					await f.controller.handle({ op: "pause" });
+				}
+				const paused = structuredClone(f.state());
+				const persisted = structuredClone(f.contexts.get(f.transcript.id));
+				expect(paused).toMatchObject({ enabled: false, goal: { id: goalId, status: "paused" } });
+				expect(persisted).toMatchObject({
+					mode: "goal_paused",
+					modeData: { goal: paused!.goal, ...(autoOrchestrate ? { autoOrchestrate: true } : {}) },
+				});
+				const outputBefore = [...f.output];
+
+				released.resolve();
+				const result = await entering;
+				expect(f.state()).toEqual(paused);
+				expect(f.contexts.get(f.transcript.id)).toEqual(persisted);
+				expect(f.state()?.autoOrchestrate === true).toBe(autoOrchestrate);
+				expect(result).toBeUndefined();
+				expect(f.output).toEqual(outputBefore);
+				f.controller.observe({ type: "agent_end", isTerminal: true, messages: [] });
+				f.controller.refresh();
+				await tick();
+				expect(f.continuations).toEqual([]);
+				expect(f.controller.continuationPending).toBe(false);
+			} finally {
+				released.resolve();
+				await entering.catch(() => {});
+				activate.mockRestore();
+			}
+		},
+	);
+
 	test("failed slash tool activation preserves the original exception and diagnoses the committed goal", async () => {
 		const f = fixture();
 		const objective = "PRIVATE_GOAL_ACTIVATION_OBJECTIVE";

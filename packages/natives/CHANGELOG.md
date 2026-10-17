@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Reject Wiki import commits and publication before opening a replacement database, preserving its existing evidence.
+- Reject searches with no published index and preserve quoted Markdown and normalized complete-name evidence across stored slices.
+- Stream Wiki complete-name source coverage through bounded search windows instead of retaining every repeated occurrence, preserving Unicode normalization and cross-slice boundaries.
+- Index Python 3.6 functions named `async` or `await` without changing source names, coordinates or syntax-error handling.
 - Fixed Windows file-lock contention returning permission errors when an existing lease allows synchronization but not full mutex access ([#15930](https://github.com/can1357/oh-my-pi/pull/15930) by [@jchanghong023](https://github.com/jchanghong023)).
 ## [18.11.3] - 2026-10-16
 ### Breaking Changes

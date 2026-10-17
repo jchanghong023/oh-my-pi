@@ -485,6 +485,109 @@ describe("team per-finding closure", () => {
 		},
 	);
 
+	it.each(["important", "minor"] as const)(
+		"routes a new %s finding after round one closes the last blocker",
+		async severity => {
+			const revisionInputs: string[][] = [];
+			const { result, calls } = await run(
+				{
+					review: ({ recheck, blockingIds }) => {
+						if (!recheck) return reviewData({ blocking: 1 });
+						return {
+							...reviewData({ resolutions: resolutions(blockingIds, "resolved") }),
+							noSubstantiveIssues: false,
+							findings: [
+								{
+									severity,
+									issue: "新增迁移说明问题",
+									impact: "需要作者说明迁移取舍",
+									evidence: "src/migration.ts",
+									targetAspect: "迁移说明",
+								},
+							],
+						};
+					},
+					revision: ({ round, findingIds }) => {
+						revisionInputs.push(findingIds);
+						return revisionData(round === 1 ? { claimsResolvedBlocking: true } : {}, findingIds);
+					},
+					synthesis: () => synthesisData("A"),
+				},
+				{ participants: [participantOf(MODEL_A, 0, true)] },
+			);
+			expect(revisionInputs).toEqual([["A-F1"], ["A-F2"]]);
+			expect(calls.filter(call => call.role === "reviser").map(call => parseMarker(call.task).round)).toEqual([
+				1, 2,
+			]);
+			expect(calls.filter(call => parseMarker(call.task).recheck)).toHaveLength(1);
+			const secondRevision = result.subagentResults!.find(entry => entry.label === "team-revision-A-2")!;
+			expect(secondRevision.outcome).toMatchObject({
+				ok: true,
+				data: {
+					responses: [{ findingId: "A-F2", disposition: "accepted-and-revised", explanation: "已补充" }],
+				},
+			});
+			const recheck = result.subagentResults!.find(entry => entry.label === "team-recheck-A-1")!;
+			expect(recheck.outcome).toMatchObject({
+				ok: true,
+				data: { findings: [{ severity, issue: "新增迁移说明问题" }] },
+			});
+			expect(result.status).toBe("completed");
+			expect(result.reportMarkdown).toContain("| 方案 A | ✅ 可作为选项");
+			expect(result.reportMarkdown).toContain("【推荐】方案 A");
+		},
+	);
+
+	it.each(["important", "minor"] as const)(
+		"does not buy a third round or block adoption for a new %s finding at the cap",
+		async severity => {
+			const revisionInputs: string[][] = [];
+			const { result, calls } = await run(
+				{
+					review: ({ recheck, round, blockingIds }) => {
+						if (!recheck) return reviewData({ blocking: 1 });
+						if (round === 1) return reviewData({ resolutions: resolutions(blockingIds, "unresolved") });
+						return {
+							...reviewData({ resolutions: resolutions(blockingIds, "resolved") }),
+							noSubstantiveIssues: false,
+							findings: [
+								{
+									severity,
+									issue: "第二轮新增说明问题",
+									impact: "保留给最终取舍",
+									evidence: "src/migration.ts",
+									targetAspect: "迁移说明",
+								},
+							],
+						};
+					},
+					revision: ({ findingIds }) => {
+						revisionInputs.push(findingIds);
+						return revisionData({ claimsResolvedBlocking: true }, findingIds);
+					},
+					synthesis: () => synthesisData("A"),
+				},
+				{ participants: [participantOf(MODEL_A, 0, true)] },
+			);
+			expect(revisionInputs).toEqual([["A-F1"], ["A-F1"]]);
+			expect(calls.filter(call => call.role === "reviser").map(call => parseMarker(call.task).round)).toEqual([
+				1, 2,
+			]);
+			const finalRecheck = result.subagentResults!.find(entry => entry.label === "team-recheck-A-2")!;
+			expect(finalRecheck.outcome).toMatchObject({
+				ok: true,
+				data: {
+					findings: [{ severity, issue: "第二轮新增说明问题" }],
+					blockingResolutions: [{ findingId: "A-F1", status: "resolved" }],
+				},
+			});
+			expect(result.subagentResults!.filter(entry => entry.role === "reviser")).toHaveLength(2);
+			expect(result.status).toBe("completed");
+			expect(result.reportMarkdown).toContain("| 方案 A | ✅ 可作为选项");
+			expect(result.reportMarkdown).toContain("【推荐】方案 A");
+		},
+	);
+
 	it.each(["unknown", "duplicate", "missing", "baseless"] as const)(
 		"does not let a %s decision unlock blockers or buy a third round",
 		async kind => {
@@ -979,6 +1082,62 @@ describe("team orchestrator", () => {
 			}
 		}
 	});
+
+	it.each([
+		["paragraph label and list", "方案 A：\n- 可以采用。", "failed"],
+		["CRLF label and list", "方案 A：\r\n- 可以采用。", "failed"],
+		["paragraph label and blockquote", "方案 A：\n> 可以采用。", "failed"],
+		["eligible label and list", "方案 B：\n- 可以采用。", "completed"],
+		["negated list adoption", "方案 A：\n- 不可以采用。", "completed"],
+		["guarded list adoption", "方案 A：\n- 阻断问题解决后，可以采用。", "completed"],
+		["conditional list adoption", "方案 A：\n- 如果阻断问题解决，可以采用。", "completed"],
+		["blank paragraph ends label ownership", "方案 A：\n\n- 可以采用。", "completed"],
+		["sentence ends label ownership", "方案 A 尚不可采用。\n- 可以采用。", "completed"],
+		["heading ends paragraph ownership", "方案 A：\n### 总结\n- 可以采用。", "completed"],
+		["separate labeled lists", "方案 A：\n- 不可采用。\n\n方案 B：\n- 可以采用。", "completed"],
+		["heading and adjacent list", "### 方案 A\n- 可以采用。", "failed"],
+		["setext heading and adjacent list", "方案 A\n------\n- 可以采用。", "failed"],
+		["nested heading and adjacent list", "### 方案 A\n#### 兼容性\n- 可以采用。", "failed"],
+		["eligible list under blocked heading", "### 方案 A\n\n方案 B：\n- 可以采用。", "completed"],
+		["blank paragraph", "### 方案 A\n\n可以采用。", "failed"],
+		["CRLF paragraph", "### 方案 A\r\n\r\n可以采用。", "failed"],
+		["nested subsection", "### 方案 A\n\n#### 兼容性\n\n可以采用。", "failed"],
+		["formatted heading", "### 方案 **A**\n\n可以采用。", "failed"],
+		["setext heading", "方案 A\n------\n\n可以采用。", "failed"],
+		["eligible sibling section", "### 方案 A\n\n不可采用。\n\n### 方案 B\n\n可以采用。", "completed"],
+		[
+			"nested sibling section",
+			"## 候选方案\n\n### 方案 A\n\n不可采用。\n\n### 方案 B\n\n#### 兼容性\n\n可以采用。",
+			"completed",
+		],
+		["same-level generic heading", "### 方案 A\n\n不可采用。\n\n### 总结\n\n可以采用。", "completed"],
+		["higher-level heading", "### 方案 A\n\n不可采用。\n\n## 总结\n\n可以采用。", "completed"],
+		["explicit eligible proposal", "### 方案 A\n\n方案 B 可以采用。", "completed"],
+		["nested proposal override", "### 方案 A\n\n#### 方案 B\n\n可以采用。", "completed"],
+		["return from nested proposal", "## 方案 A\n\n### 方案 B\n\n可以采用。\n\n### 兼容性\n\n可以采用。", "failed"],
+		["negated adoption", "### 方案 A\n\n不可采用。", "completed"],
+		["guarded adoption", "### 方案 A\n\n阻断问题解决后，可以采用。", "completed"],
+		["nested negated adoption", "### 方案 A\n\n#### 兼容性\n\n不建议采用。", "completed"],
+		["nested guarded adoption", "### 方案 A\n\n#### 兼容性\n\n若阻断问题解决后，可以采用。", "completed"],
+	] as const)(
+		"keeps adoption claims scoped across Markdown boundaries: %s",
+		async (_name, reportMarkdown, expectedStatus) => {
+			const { result } = await run({
+				review: ({ target }) => reviewData({ blocking: target === "A" ? 1 : 0 }),
+				revision: ({ findingIds }) => revisionData({}, findingIds),
+				synthesis: () => ({ ...synthesisData("B"), reportMarkdown }),
+			});
+			expect(result.status).toBe(expectedStatus);
+			if (expectedStatus === "failed") {
+				expect(result.failureReason).toContain("尚不可采用");
+				expect(result.reportMarkdown).toBeUndefined();
+			} else {
+				expect(result.reportMarkdown).toContain("| 方案 A | ⛔ 尚不可采用");
+				expect(result.reportMarkdown).toContain("| 方案 B | ✅ 可作为选项");
+				expect(result.reportMarkdown).toContain("【推荐】方案 B");
+			}
+		},
+	);
 
 	it("does not publish a synthesis body that recommends a blocked proposal", async () => {
 		const script = {

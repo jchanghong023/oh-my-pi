@@ -2810,7 +2810,13 @@ export async function runRootCommand(
 				notifs.push({ kind: "error", message: modelRegistryError.message });
 			}
 
-			if (!isInteractive && !session.model) {
+			// Let print-mode slash commands reach AgentSession's local dispatch before
+			// requiring a model. Commands that return a prompt (or are unknown) still
+			// hit the session's model/credential checks; ordinary prompts fail here.
+			const startsWithLocalCommand =
+				(mode === "text" || mode === "json") &&
+				(initialMessage ?? initialArgs.messages[0])?.startsWith("/") === true;
+			if (!isInteractive && !session.model && !startsWithLocalCommand) {
 				if (modelRegistryError) {
 					process.stderr.write(`${chalk.red(modelRegistryError.message)}\n\n`);
 				}

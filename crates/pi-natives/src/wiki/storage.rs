@@ -1018,6 +1018,104 @@ mod tests {
 	}
 
 	#[test]
+	fn normalized_expanding_name_recalls_intersecting_slices_without_false_boundaries() {
+		use super::super::{
+			database::{DatabaseEngine, WikiSearchOptions},
+			query::{self, MatchKind},
+		};
+
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage
+			.create("__building__expanded-name", "/missing-source")
+			.unwrap();
+		let query = "\u{fb03}".repeat(200);
+		let name = "ffi".repeat(200);
+		assert_eq!(query.encode_utf16().count(), 200);
+		assert_eq!(query::normalize_search_text(&query), name);
+		let prefix = format!("{} ", "x".repeat(17_498));
+		let exact = format!("{prefix}{name}\n");
+		let prefixed = format!("{prefix}x{name}\n");
+		let suffixed = format!("{prefix}{name}x\n");
+		let left_only = format!("{} \n", &name[..300]);
+		let right_only = format!("{} \n", &name[300..]);
+		let mut expected = Vec::new();
+		for (path, source) in [
+			("exact.md", exact.as_str()),
+			("prefixed.md", prefixed.as_str()),
+			("suffixed.md", suffixed.as_str()),
+			("left-only.md", left_only.as_str()),
+			("right-only.md", right_only.as_str()),
+		] {
+			let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+			if path == "exact.md" {
+				// The legal 200-unit query expands to a 600-character name
+				// straddling [0,18000) and [17500,18100). Neither stored body
+				// contains the whole name, so per-slice contains is insufficient.
+				assert_eq!(parsed.sections.len(), 2);
+				assert_eq!(parsed.sections[0].byte_end, 18_000);
+				assert_eq!(parsed.sections[1].byte_start, 17_500);
+				assert!(
+					parsed
+						.sections
+						.iter()
+						.all(|section| !section.raw_markdown.contains(&name))
+				);
+				expected = parsed
+					.sections
+					.iter()
+					.map(|section| section.raw_markdown.clone())
+					.collect();
+			}
+			let document = WikiMarkdownDocument {
+				relative_path: path.into(),
+				title:         "Expanded name".into(),
+				source_kind:   "markdown".into(),
+				sha256:        format!("{:x}", Sha256::digest(source.as_bytes())),
+				size_bytes:    source.len() as i64,
+				mtime_ms:      0.0,
+				sections:      parsed.sections,
+			};
+			storage
+				.commit_document(&build, &document, &|| Ok(()))
+				.unwrap();
+		}
+		storage.promote(&build, "expanded-name").unwrap();
+		let mut engine = DatabaseEngine::new(fixture.path.clone(), fixture.path.clone());
+		let found = engine
+			.search(&query, &WikiSearchOptions::default(), &|| Ok(()))
+			.unwrap();
+		assert_eq!(found.result.exact_name_matches, 2);
+		let exact_hits: Vec<_> = found
+			.result
+			.sections
+			.iter()
+			.filter(|hit| hit.match_kind == MatchKind::ExactName)
+			.collect();
+		assert_eq!(exact_hits.len(), 2);
+		let mut actual = Vec::new();
+		for hit in &exact_hits {
+			assert_eq!(hit.path, "exact.md");
+			assert_eq!(hit.index, "expanded-name");
+			assert_eq!(hit.match_kind, MatchKind::ExactName);
+			assert_eq!((hit.line_start, hit.line_end), (1, 1));
+			assert_eq!(hit.document_hash, format!("{:x}", Sha256::digest(exact.as_bytes())));
+			actual.push(hit.text.clone());
+		}
+		// A cross-slice occurrence makes every intersecting stored source
+		// reachable, once each, without synthesizing a new merged section.
+		actual.sort();
+		expected.sort();
+		assert_eq!(actual, expected);
+		assert_ne!(exact_hits[0].section_id, exact_hits[1].section_id);
+		// prefixed/suffixed names are not exact matches, and separate
+		// documents containing only halves must never be joined into evidence.
+		// FTS may still report a partial slice as related; only upgrading it
+		// to exact-name would invent a complete-name boundary.
+		assert!(exact_hits.iter().all(|hit| hit.path == "exact.md"));
+	}
+
+	#[test]
 	fn bom_source_bytes_match_stored_ranges_and_remain_greppable() {
 		let source = "\u{feff}# Lifetime\nneedle evidence\n\n# Next\nmore needle evidence\n";
 		let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();

@@ -403,7 +403,7 @@ let exiting = false;
 
 function flushOnExit(code: number): void {
 	exiting = true;
-	shutdownDiagnosticLogging(code);
+	shutdownDiagnosticLogging(process.exitCode ?? code);
 	flush();
 }
 
@@ -425,7 +425,7 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		batch: { intervalMs: FILE_FLUSH_INTERVAL_MS, maxBytes: FILE_FLUSH_BYTES },
 		// Keep the stderr guard's fd 2 on the file this sink is writing.
 		onRotate: setStderrRedirectTarget,
-		fallbackDirectory: fallbackLogsDir(logsDir),
+		fallbackDirectory: () => fallbackLogsDir(logsDir),
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
 				if (stage !== "retention") schedulePruneStaleProcessLogs(path.dirname(recoveredPath));

@@ -404,6 +404,118 @@ describe("team in-process integration", () => {
 		});
 	}
 
+	it.each([
+		["proposal heading", "### 方案 A\n\n可以采用。"],
+		["paragraph label and list", "方案 A：\n- 可以采用。"],
+		["paragraph label and blockquote", "方案 A：\n> 可以采用。"],
+	])("rejects blocked adoption through the executor: %s", async (_name, reportMarkdown) => {
+		recorded.length = 0;
+		script = (stage, text) => {
+			const data = scriptedData(stage, text);
+			if (stage === "review" && text?.includes(" recheck]")) {
+				data.blockingResolutions = (data.blockingResolutions as Record<string, unknown>[]).map(decision => ({
+					...decision,
+					status: "unresolved",
+					basis: "迁移与回滚反例仍成立",
+				}));
+			}
+			if (stage === "synthesis") {
+				data.reportMarkdown = reportMarkdown;
+				data.recommendedProposal = "";
+				data.recommendationReason = "";
+				data.recommendationPreconditions = "";
+			}
+			return data;
+		};
+		const roster = resolveTeamParticipants({
+			configuredMembers: [PATTERN_OTHER],
+			sessionModel: MODEL_SESSION,
+			availableModels: [MODEL_SESSION, MODEL_OTHER, MODEL_THIRD],
+		});
+		if (!roster.ok) throw new Error(roster.error);
+		const result = await runTeamDiscussion({
+			question: "如何在不破坏旧接口的前提下扩展模块？",
+			cwd: tempDir.path(),
+			participants: roster.participants,
+			sessionModelPattern: PATTERN_SESSION,
+			runner: createTeamSubagentRunner(runnerDeps()),
+			signal: new AbortController().signal,
+			maxConcurrency: 2,
+		});
+		expect(recorded.filter(call => call.stage === "synthesis")).toHaveLength(1);
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("尚不可采用");
+		expect(result.reportMarkdown).toBeUndefined();
+	});
+
+	it("routes new nonblocking finding IDs through the executor after closing all old blockers", async () => {
+		recorded.length = 0;
+		script = (stage, text) => {
+			const data = scriptedData(stage, text);
+			if (stage === "review" && text?.includes(" recheck]")) {
+				data.noSubstantiveIssues = false;
+				data.findings = ["important", "minor"].map(severity => ({
+					severity,
+					issue: `${severity} 迁移说明问题`,
+					impact: "作者需要说明迁移取舍",
+					evidence: "src/migration.ts",
+					targetAspect: "迁移说明",
+				}));
+				data.blockingResolutions = (data.blockingResolutions as Record<string, unknown>[]).map(decision => ({
+					...decision,
+					status: "resolved",
+					basis: "src/migration.ts 已覆盖原始反例",
+				}));
+			}
+			if (stage === "revision" && text?.includes("round=2]")) {
+				data.reviewFlags = {
+					changedCoreDesign: false,
+					claimsResolvedBlocking: false,
+					newEvidenceChangesAssumptions: false,
+					disputesBlockingFinding: false,
+				};
+			}
+			return data;
+		};
+		const roster = resolveTeamParticipants({
+			configuredMembers: [PATTERN_OTHER],
+			sessionModel: MODEL_SESSION,
+			availableModels: [MODEL_SESSION, MODEL_OTHER, MODEL_THIRD],
+		});
+		if (!roster.ok) throw new Error(roster.error);
+		const result = await runTeamDiscussion({
+			question: "如何在不破坏旧接口的前提下扩展模块？",
+			cwd: tempDir.path(),
+			participants: roster.participants,
+			sessionModelPattern: PATTERN_SESSION,
+			runner: createTeamSubagentRunner(runnerDeps()),
+			signal: new AbortController().signal,
+			maxConcurrency: 2,
+		});
+		for (const label of ["A", "B", "C"]) {
+			const revisions = recorded.filter(call => call.stage === "revision" && call.target === label);
+			expect(revisions.map(call => call.findingIds)).toEqual([
+				[`${label}-F1`, `${label}-F2`],
+				[`${label}-F3`, `${label}-F4`],
+			]);
+			expect(revisions.map(call => call.modelPattern)).toEqual([PATTERN_OTHER, PATTERN_OTHER]);
+			const secondRevision = result.subagentResults!.find(entry => entry.label === `team-revision-${label}-2`);
+			expect(secondRevision?.outcome).toMatchObject({
+				ok: true,
+				data: {
+					responses: [
+						{ findingId: `${label}-F3`, disposition: "accepted-and-revised" },
+						{ findingId: `${label}-F4`, disposition: "accepted-and-revised" },
+					],
+				},
+			});
+			expect(result.reportMarkdown).toContain(`| 方案 ${label} | ✅ 可作为选项`);
+		}
+		expect(recorded.filter(call => call.recheck)).toHaveLength(3);
+		expect(result.status).toBe("completed");
+		expect(result.reportMarkdown).toContain("【推荐】方案 A");
+	});
+
 	it("keeps concurrent discussions with identical stage labels in separate child namespaces", async () => {
 		recorded.length = 0;
 		script = scriptedData;

@@ -1577,6 +1577,123 @@ it("kills owned grandchildren on timeout without touching an unrelated process",
 		}
 	}
 });
+it.skipIf(process.platform !== "win32").each(["running", "initializing", "replied"])(
+	"stops an owned Windows Job on IPC disconnect while its parent stays alive (%s)",
+	async phase => {
+		const prefix = path.join(directory, `windows-ipc-disconnect-${phase}`);
+		const unrelatedPrefix = `${prefix}-unrelated`;
+		const harness = `${prefix}.ts`;
+		await fs.writeFile(
+			harness,
+			`
+import * as fs from "node:fs/promises";
+import { spyOn } from "bun:test";
+import { runGate } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href)};
+const [role, prefix] = process.argv.slice(2);
+const phase = ${JSON.stringify(phase)};
+// Cross-process file barriers observe real execution; a fake test clock cannot
+// advance the independently spawned command or the native Job's termination.
+const wait = async file => { while (!(await Bun.file(file).exists())) await Bun.sleep(5); };
+if (role === "worker") {
+  await fs.writeFile(prefix + ".worker", String(process.pid));
+  await wait(prefix + ".worker-release");
+  process.exit(0);
+}
+if (role === "command") {
+  Bun.spawn([process.execPath, import.meta.path, "worker", prefix], {stdin:"ignore",stdout:"ignore",stderr:"ignore"});
+  await wait(prefix + ".worker");
+  await fs.writeFile(prefix + ".command", String(process.pid));
+  if (phase !== "replied") await wait(prefix + ".command-release");
+  process.exit(0);
+}
+const spawn = Bun.spawn.bind(Bun);
+let supervisor;
+const spawned = Promise.withResolvers();
+const observedSpawn = spyOn(Bun, "spawn").mockImplementation((argv, options) => {
+  let child;
+  child = spawn(argv, options?.env?.OMP_GATE_SUPERVISED_COMMAND ? {
+    ...options,
+    ipc(message) {
+      options.ipc(message);
+      if (phase === "replied" && typeof message?.exitCode === "number") child.disconnect();
+    },
+  } : options);
+  if (options?.env?.OMP_GATE_SUPERVISED_COMMAND) {
+    supervisor = child;
+    // Disconnect before runGate has published its ownership promise.
+    if (phase === "initializing") child.disconnect();
+    spawned.resolve();
+  }
+  return child;
+});
+try {
+  const running = runGate("fulltest", gate => gate.run({
+    label:"disconnect command", argv:[process.execPath, import.meta.path, "command", prefix],
+  }), {limitSeconds:30, print:()=>{}});
+  if (phase === "initializing") {
+    await spawned.promise;
+  } else {
+    await wait(prefix + ".command");
+    if (phase === "running") supervisor.disconnect();
+  }
+  await fs.writeFile(prefix + ".disconnected", String(process.pid));
+  const result = await running;
+  await fs.writeFile(prefix + ".result", JSON.stringify(result));
+  // Keep both this parent and its Job handle owner alive until assertions finish.
+  await wait(prefix + ".parent-release");
+} finally {
+  observedSpawn.mockRestore();
+}
+`,
+		);
+		const unrelated = Bun.spawn([process.execPath, harness, "worker", unrelatedPrefix], {
+			stdin: "ignore",
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		const parent = Bun.spawn([process.execPath, harness, "parent", prefix], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const output = Promise.all([new Response(parent.stdout).text(), new Response(parent.stderr).text()]);
+		try {
+			await waitForFiles([`${prefix}.disconnected`, `${unrelatedPrefix}.worker`], AbortSignal.timeout(5000));
+			expect(parent.exitCode).toBeNull();
+			expect(Number(await fs.readFile(`${prefix}.disconnected`, "utf8"))).toBe(parent.pid);
+			// This bound is deliberately far below the 30-second gate budget.
+			// Await completion, not a guessed sleep before checking for survivors.
+			await waitForFiles([`${prefix}.result`], AbortSignal.timeout(5000));
+			const result = JSON.parse(await fs.readFile(`${prefix}.result`, "utf8"));
+			expect(result.status).toBe(phase === "replied" ? "PASS" : "FAIL");
+			if (phase === "replied") expect(result.exitCode).toBe(0);
+			else expect(result.exitCode).not.toBe(0);
+			expect(parent.exitCode).toBeNull();
+			for (const role of phase === "initializing" ? [] : ["command", "worker"]) {
+				const pid = Number(await fs.readFile(`${prefix}.${role}`, "utf8"));
+				expect(() => process.kill(pid, 0)).toThrow();
+			}
+			if (phase === "initializing") expect(await Bun.file(`${prefix}.command`).exists()).toBe(false);
+			expect(unrelated.exitCode).toBeNull();
+			expect(() => process.kill(unrelated.pid, 0)).not.toThrow();
+		} finally {
+			await Promise.all(
+				[
+					`${prefix}.command-release`,
+					`${prefix}.worker-release`,
+					`${prefix}.parent-release`,
+					`${unrelatedPrefix}.worker-release`,
+				].map(file => fs.writeFile(file, "release")),
+			);
+			// Closing this real parent's handles is the fallback even on the
+			// unfixed disconnect path; never kill a numeric descendant PID.
+			if (parent.exitCode === null) parent.kill("SIGKILL");
+			if (unrelated.exitCode === null) unrelated.kill("SIGKILL");
+			await Promise.all([parent.exited, unrelated.exited, output]);
+		}
+	},
+	20_000,
+);
 it("cleans descendants after their actual command leader already exited", async () => {
 	for (const detachedGrandchild of [false, true]) {
 		const grandchildFile = path.join(directory, `orphan-${detachedGrandchild}.pid`);

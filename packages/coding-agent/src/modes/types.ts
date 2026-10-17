@@ -625,7 +625,7 @@ export interface InteractiveModeContext {
 	isGuidedGoalInterviewActive(): boolean;
 	handleLoopCommand(args?: string): Promise<string | undefined>;
 	setLoopPrompt(prompt: string): void;
-	armLoopAutoSubmit(): void;
+	armLoopAutoSubmit(promptPromise: Promise<unknown>): void;
 	disableLoopMode(message?: string): void;
 	cancelGoalContinuation(): void;
 	disableGoalMode(message?: string): void;

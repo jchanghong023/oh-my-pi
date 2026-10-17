@@ -132,6 +132,8 @@ struct Build<'a> {
 	reason:         Option<&'static str>,
 	published:      bool,
 	lock_contended: bool,
+	#[cfg(test)]
+	at_callback:    Option<&'a dyn Fn(&str)>,
 }
 impl Build<'_> {
 	fn event(&self, message: &str, stage: &str, result: &str) -> WikiDiagnosticEvent {
@@ -148,6 +150,10 @@ impl Build<'_> {
 		// delivered only after it has been released. This also covers
 		// failed statements.
 		diagnostics::flush_async(&self.owner.diagnostics, self.diagnostic)?;
+		#[cfg(test)]
+		if let Some(hook) = self.at_callback {
+			hook(&event.message);
+		}
 		if let Some(callback) = self.diagnostic {
 			diagnostics::acknowledge(callback, event)?;
 		}
@@ -169,6 +175,10 @@ impl Build<'_> {
 				current_path: path,
 			})?;
 		}
+		#[cfg(test)]
+		if let Some(hook) = self.at_callback {
+			hook(phase);
+		}
 		Ok(())
 	}
 
@@ -184,6 +194,7 @@ impl Build<'_> {
 	fn ingest(
 		&mut self,
 		build: &BuildIdentity,
+		database: &str,
 		root: &Path,
 		files: Vec<String>,
 		name: &str,
@@ -220,9 +231,11 @@ impl Build<'_> {
 				self.log("docs.init.fts.started", self.stage, "started")?;
 			}
 			let started = Instant::now();
-			self.owner.with_storage(self.cancel, |storage| {
-				storage.commit_document(build, &document, &|| self.owner.check_import(self.cancel))
-			})?;
+			self
+				.owner
+				.with_import_storage(self.cancel, database, |storage| {
+					storage.commit_document(build, &document, &|| self.owner.check_import(self.cancel))
+				})?;
 			fts_ms += started.elapsed().as_secs_f64() * 1000.0;
 			self.documents += 1;
 			self.sections += document.sections.len() as i64;
@@ -242,7 +255,7 @@ impl Build<'_> {
 		self.stage = "publish";
 		let index = self
 			.owner
-			.with_storage(self.cancel, |storage| storage.promote(build, name))?;
+			.with_import_storage(self.cancel, database, |storage| storage.promote(build, name))?;
 		self.published = true;
 		Ok(WikiBuildResult { processed: self.documents, failed: 0, index })
 	}
@@ -320,7 +333,7 @@ impl Build<'_> {
 		let temp = self
 			.owner
 			.with_import_storage(self.cancel, database, |storage| storage.create(&hidden, &root))?;
-		match self.ingest(&temp, Path::new(root.as_ref()), files, name) {
+		match self.ingest(&temp, database, Path::new(root.as_ref()), files, name) {
 			Ok(result) => Ok(result),
 			Err(error) => self.rollback(&temp, error),
 		}
@@ -451,6 +464,8 @@ pub(super) fn run(
 		reason: None,
 		published: false,
 		lock_contended: false,
+		#[cfg(test)]
+		at_callback: None,
 	};
 	let result = build.build(root, name);
 	if let Err(error) = &result {
@@ -675,12 +690,15 @@ mod tests {
 				reason: None,
 				published: false,
 				lock_contended: false,
+				at_callback: None,
 			}
 		}
 	}
 
 	impl Drop for Fixture {
 		fn drop(&mut self) {
+			self.owner.storage.lock().storage = None;
+			self.owner.engine.lock().close();
 			let _ = fs::remove_dir_all(&self.directory);
 		}
 	}
@@ -691,6 +709,187 @@ mod tests {
 			Err(ImportError::Callback(..)) => panic!("unexpected callback failure"),
 			Ok(_) => panic!("lock acquisition unexpectedly succeeded"),
 		}
+	}
+
+	#[cfg(any(unix, windows))]
+	struct ProfileAlias(PathBuf);
+
+	#[cfg(any(unix, windows))]
+	impl ProfileAlias {
+		fn point_to(&self, target: &Path) {
+			if fs::symlink_metadata(&self.0).is_ok() {
+				self.remove();
+			}
+			#[cfg(unix)]
+			std::os::unix::fs::symlink(target, &self.0).unwrap();
+			#[cfg(windows)]
+			{
+				let output = std::process::Command::new("cmd.exe")
+					.args(["/D", "/C", "mklink", "/J"])
+					.arg(&self.0)
+					.arg(target)
+					.output()
+					.unwrap();
+				assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+			}
+		}
+
+		fn remove(&self) {
+			#[cfg(unix)]
+			fs::remove_file(&self.0).unwrap();
+			#[cfg(windows)]
+			fs::remove_dir(&self.0).unwrap();
+		}
+	}
+
+	#[cfg(any(unix, windows))]
+	impl Drop for ProfileAlias {
+		fn drop(&mut self) {
+			if fs::symlink_metadata(&self.0).is_ok() {
+				self.remove();
+			}
+		}
+	}
+
+	#[cfg(any(unix, windows))]
+	fn callback_replacement_preserves_legacy_evidence(boundary: &str) {
+		use rusqlite::{Connection, types::Value};
+
+		let mut fixture = Fixture::new();
+		let original = fixture.directory.join("original");
+		let replacement = fixture.directory.join("replacement");
+		let source = fixture.directory.join("source");
+		for directory in [&original, &replacement, &source] {
+			fs::create_dir(directory).unwrap();
+		}
+		fs::rename(&fixture.owner.database_path, original.join("docs.db")).unwrap();
+		// Two documents ensure fts progress is followed by another commit;
+		// the final diagnostic boundary instead precedes publication.
+		fs::write(source.join("first.md"), "# First\noriginal first evidence\n").unwrap();
+		fs::write(source.join("second.md"), "# Second\noriginal second evidence\n").unwrap();
+		let replacement_path = replacement.join("docs.db");
+		{
+			let db = Connection::open(&replacement_path).unwrap();
+			db.execute_batch(include_str!(
+				"../../../../packages/coding-agent/test/fixtures/docs-v3.sql"
+			))
+			.unwrap();
+			db.execute_batch(
+				"INSERT INTO \
+				 doc_indexes(id,name,root_path,schema_id,schema_version,schema_json,schema_hash,mode,\
+				 state,created_at,updated_at) \
+				 VALUES(1,'retained','/missing-source','dft',1,'{}','old','structured','ready','a','b'\
+				 ); INSERT INTO \
+				 documents(id,index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms,\
+				 status) VALUES(1,1,'retained.md','Retained','markdown','retained-hash',27,0,'ready'); \
+				 INSERT INTO sections VALUES(1,1,1,0,'Retained',1,1,2,0,27,'# Retained\nlegacy \
+				 evidence\n'); INSERT INTO entities VALUES(1,1,'item','legacy','Legacy'); INSERT INTO \
+				 evidence(index_id,section_id,entity_id,quote,line_start,line_end,byte_start,byte_end,\
+				 confidence) VALUES(1,1,1,'legacy evidence',2,2,11,26,1); INSERT INTO \
+				 sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) \
+				 VALUES(1,1,1,'retained.md','Retained','legacy stale projection'); PRAGMA \
+				 wal_checkpoint(TRUNCATE);",
+			)
+			.unwrap();
+		}
+		// Read with raw SQLite only: opening through Owner/Storage would itself
+		// migrate the old database and destroy the evidence under test.
+		let snapshot = || {
+			let db = Connection::open_with_flags(
+				&replacement_path,
+				rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+			)
+			.unwrap();
+			let version: i64 = db
+				.query_row("PRAGMA user_version", [], |row| row.get(0))
+				.unwrap();
+			let tables = [
+				"doc_indexes",
+				"documents",
+				"sections",
+				"entities",
+				"entity_aliases",
+				"assertions",
+				"relations",
+				"evidence",
+				"sections_fts",
+				"sections_fts_data",
+				"sections_fts_idx",
+				"sections_fts_docsize",
+				"sections_fts_config",
+			]
+			.map(|table| -> std::result::Result<Vec<Vec<Value>>, String> {
+				let sql = if matches!(table, "sections_fts_idx" | "sections_fts_config") {
+					format!("SELECT * FROM {table} ORDER BY 1,2")
+				} else {
+					format!("SELECT rowid,* FROM {table} ORDER BY rowid")
+				};
+				let mut statement = db.prepare(&sql).map_err(|error| error.to_string())?;
+				let columns = statement.column_count();
+				let rows = statement
+					.query_map([], |row| {
+						(0..columns)
+							.map(|column| row.get(column))
+							.collect::<rusqlite::Result<Vec<Value>>>()
+					})
+					.map_err(|error| error.to_string())?;
+				rows
+					.collect::<rusqlite::Result<Vec<_>>>()
+					.map_err(|error| error.to_string())
+			});
+			(version, tables)
+		};
+		let retained = snapshot();
+		assert_eq!(retained.0, 3);
+		assert!(retained.1.iter().all(std::result::Result::is_ok));
+		let alias = ProfileAlias(fixture.directory.join("profile"));
+		alias.point_to(&original);
+		fixture.owner.database_path = alias.0.join("docs.db").to_string_lossy().into_owned();
+		let swapped = AtomicBool::new(false);
+		let hook = |event: &str| {
+			if event == boundary && !swapped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+				// No list/search reentry: only the stale importer may touch the
+				// replacement, and it has no lease for that physical database.
+				alias.point_to(&replacement);
+			}
+		};
+		let cancel = CancelToken::default();
+		let mut build = fixture.build(&cancel);
+		build.at_callback = Some(&hook);
+		let result = build.build(source.to_str().unwrap(), "old-import");
+		assert!(swapped.load(std::sync::atomic::Ordering::SeqCst));
+		match result {
+			Err(ImportError::Core(error)) => assert_eq!(
+				error.error_message(),
+				"Documentation database changed during document indexing"
+			),
+			Err(ImportError::Callback(..)) => panic!("unexpected callback failure"),
+			Ok(_) => panic!("stale import unexpectedly published"),
+		}
+		assert!(!build.published);
+		assert_eq!(
+			snapshot(),
+			retained,
+			"rejecting the stale import must not migrate schema/FTS or delete structured evidence"
+		);
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn scan_callback_replacement_preserves_legacy_database_evidence() {
+		callback_replacement_preserves_legacy_evidence("scan");
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn fts_callback_replacement_preserves_legacy_database_evidence() {
+		callback_replacement_preserves_legacy_evidence("fts");
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn prepublish_callback_replacement_preserves_legacy_database_evidence() {
+		callback_replacement_preserves_legacy_evidence("docs.init.fts.completed");
 	}
 
 	#[test]

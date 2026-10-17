@@ -143,14 +143,20 @@ async function discoverWslObserved(gate: GateRun, options: WslOptions): Promise<
 		};
 	if ((options.which ?? Bun.which)("wsl.exe") === null)
 		return { status: "SKIPPED_WSL_UNAVAILABLE", reason: "wsl.exe is not installed" };
-	const result = await gate.capture({
+	const captured = await gate.capture({
 		label: "wsl/discovery",
 		argv: ["wsl.exe", "--list", "--verbose"],
 		cwd: options.root ?? repoRoot,
-		decodeOutput: decodeWslOutput,
+		// Preserve every byte across runtime chunks; decode each complete stream below.
+		decodeOutput: bytes => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("latin1"),
 		allowFailure: true,
 		wallTimeoutSeconds: 30,
 	});
+	const result = {
+		...captured,
+		stdout: decodeWslOutput(Buffer.from(captured.stdout, "latin1")),
+		stderr: decodeWslOutput(Buffer.from(captured.stderr, "latin1")),
+	};
 	if (result.exitCode !== 0) {
 		const diagnostic = `${result.stdout}\n${result.stderr}`.trim();
 		if (
@@ -411,7 +417,22 @@ async function cancelOwnedWsl(distro: string, control: string): Promise<void> {
 }
 function ownedCloneScript(program: string, control: string): string {
 	const inner = `set -eu\nread -r -a stat < /proc/$$/stat\nprintf '%s %s\\n' "$$" "\${stat[21]}" > ${quote(`${control}/pid`)}\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\n${program}`;
-	return `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(`status=$?; if [ ! -f ${quote(`${control}/canceled`)} ]; then rm -rf -- ${quote(control)} || exit 1; fi; exit "$status"`)} EXIT\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)}\n`;
+	const cleanup = `status=$?
+trap - EXIT INT TERM
+# Keep externally canceled receipts until the independent canceler has checked
+# owner cleanup. A native timeout must perform that same cleanup itself.
+canceling=0
+[ ! -f ${quote(`${control}/canceled`)} ] || canceling=1
+cleanup_status=0
+${wslCancelCommand(control)} || cleanup_status=$?
+if [ "$cleanup_status" -eq 0 ]; then
+ if [ "$canceling" -eq 0 ]; then rm -rf -- ${quote(control)} || cleanup_status=$?; fi
+fi
+[ "$status" -ne 0 ] || status=$cleanup_status
+exit "$status"`;
+	// Bash defers signal traps while waiting for a foreground command. Use its
+	// interruptible wait builtin so outer GNU timeout can cancel the setsid owner.
+	return `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(cleanup)} EXIT\ntrap 'exit 130' INT\ntrap 'exit 143' TERM\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)} &\nwait "$!"\n`;
 }
 const REPOSITORIES = `import json,os,pathlib,subprocess,sys,urllib.parse
 expected=sys.argv[1]; matches=[]
@@ -423,7 +444,7 @@ def identity(value):
  return host.lower()+'/'+(repo[:-4] if repo.endswith('.git') else repo)
 for directory,children,files in os.walk('/root'):
  repository=('.git' in children or '.git' in files)
- children[:]=[n for n in children if n not in ('node_modules','target','.cache','.git','.venv','venv')]
+ children[:]=[n for n in children if n!='.git']
  if not repository: continue
  root=pathlib.Path(directory).resolve()
  if not str(root).startswith('/root/'): continue
@@ -621,13 +642,25 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		head: remote.head,
 	});
 	stage = "native-repository";
+	const discoveryControl = `/tmp/omp-slowtest-discovery-${randomUUID()}`;
 	const probe = await gate.capture({
 		label: "wsl/native-repository-discovery",
 		argv: wslArgv(selection.distro, GATE_LIMIT_SECONDS.slowtest),
 		cwd: root,
-		stdin: `set -eu\n[ "$(id -u)" = 0 ] && [ "$HOME" = /root ]\nfor tool in git python3; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; done\npython3 -c ${quote(REPOSITORIES)} ${quote(remote.identity)}\n`,
+		stdin: ownedCloneScript(
+			`set -eu\n[ "$(id -u)" = 0 ] && [ "$HOME" = /root ]\nfor tool in git python3; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; done\npython3 -c ${quote(REPOSITORIES)} ${quote(remote.identity)}\n`,
+			discoveryControl,
+		),
 		allowFailure: true,
 		wallTimeoutSeconds: GATE_LIMIT_SECONDS.slowtest,
+		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, discoveryControl)),
+		abortCommand: {
+			argv: wslArgv(
+				selection.distro,
+				25,
+				`set -eu\nmkdir -p -m 700 -- ${quote(discoveryControl)}; ${wslCancelCommand(discoveryControl)}\nrm -rf -- ${quote(discoveryControl)}\n`,
+			),
+		},
 	});
 	if (probe.exitCode !== 0)
 		return stageFailure(
@@ -767,13 +800,25 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 		linux = { linux_repo: destination, remote: "origin", fetch_url: remote.fetchUrl };
 	}
 	stage = "native-environment";
+	const environmentControl = `/tmp/omp-slowtest-environment-${randomUUID()}`;
 	const environment = await gate.capture({
 		label: "wsl/native-environment",
 		argv: wslArgv(selection.distro, 25),
 		cwd: root,
 		allowFailure: true,
 		wallTimeoutSeconds: 30,
-		stdin: `set -eu\ncd ${quote(linux.linux_repo)}\n[ "$(pwd -P)" = ${quote(linux.linux_repo)} ]\nfor tool in git python3 bun cargo rustc cargo-nextest setsid flock timeout; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; printf '%s=%s\\n' "$tool" "$exe"; done\npython3 --version\nRUSTUP_AUTO_INSTALL=0 cargo --version\nRUSTUP_AUTO_INSTALL=0 rustc --version\n# Refuse active unrelated writers; no waiting or global process termination.\nfor proc in /proc/[0-9]*; do cwd=$(readlink "$proc/cwd" 2>/dev/null || true); case "$cwd" in ${quote(linux.linux_repo)}|${quote(`${linux.linux_repo}/`)}*) case "$(cat "$proc/comm" 2>/dev/null || true)" in git|cargo|rustc|bun|node|python*|go|ruff) echo 'BLOCKED: active workspace process' >&2; exit 1;; esac;; esac; done\n`,
+		stdin: ownedCloneScript(
+			`set -eu\ncd ${quote(linux.linux_repo)}\n[ "$(pwd -P)" = ${quote(linux.linux_repo)} ]\nfor tool in git python3 bun cargo rustc cargo-nextest setsid flock timeout; do exe=$(command -v "$tool") || exit 127; case "$exe" in /mnt/*|*.exe) exit 127;; esac; printf '%s=%s\\n' "$tool" "$exe"; done\npython3 --version\nRUSTUP_AUTO_INSTALL=0 cargo --version\nRUSTUP_AUTO_INSTALL=0 rustc --version\n# Refuse active unrelated writers; no waiting or global process termination.\nfor proc in /proc/[0-9]*; do cwd=$(readlink "$proc/cwd" 2>/dev/null || true); case "$cwd" in ${quote(linux.linux_repo)}|${quote(`${linux.linux_repo}/`)}*) case "$(cat "$proc/comm" 2>/dev/null || true)" in git|cargo|rustc|bun|node|python*|go|ruff) echo 'BLOCKED: active workspace process' >&2; exit 1;; esac;; esac; done\n`,
+			environmentControl,
+		),
+		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, environmentControl)),
+		abortCommand: {
+			argv: wslArgv(
+				selection.distro,
+				25,
+				`set -eu\nmkdir -p -m 700 -- ${quote(environmentControl)}; ${wslCancelCommand(environmentControl)}\nrm -rf -- ${quote(environmentControl)}\n`,
+			),
+		},
 	});
 	if (environment.exitCode !== 0)
 		return stageFailure(

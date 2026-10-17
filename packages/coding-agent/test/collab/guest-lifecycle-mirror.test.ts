@@ -13,21 +13,28 @@
  * they applied.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn, vi } from "bun:test";
-import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { generateRoomKey, importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
 import { CollabGuestLink } from "@oh-my-pi/pi-coding-agent/collab/guest";
 import { COLLAB_PROTO, type CollabFrame, formatCollabLink } from "@oh-my-pi/pi-coding-agent/collab/protocol";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { MappedExtensionEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/lifecycle-mirror";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import * as fsp from "node:fs/promises";
-import { installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
+import { FakeWebSocket, installInMemoryRelay, uninstallInMemoryRelay } from "./helpers/in-memory-relay";
 
 interface Harness {
 	guest: CollabGuestLink;
@@ -36,6 +43,7 @@ interface Harness {
 	runner: {
 		hasHandlers: () => boolean;
 		emit: (event: MappedExtensionEvent) => Promise<unknown>;
+		setToolApprovalPreviewWaiter: (waiter: (toolCallId: string) => Promise<void>) => () => void;
 	};
 	emitted: MappedExtensionEvent[];
 
@@ -56,7 +64,11 @@ function makeState(): Extract<CollabFrame, { t: "welcome" }>["state"] {
 
 async function makeHarness(
 	roomId: string,
-	options: { isStreaming?: boolean; eventController?: EventController } = {},
+	options: {
+		isStreaming?: boolean;
+		eventController?: EventController;
+		createContext?: (base: InteractiveModeContext) => InteractiveModeContext;
+	} = {},
 ): Promise<Harness> {
 	const roomKey = generateRoomKey();
 	const cryptoKey = await importRoomKey(roomKey);
@@ -65,6 +77,7 @@ async function makeHarness(
 	const emitted: MappedExtensionEvent[] = [];
 	const runner = {
 		hasHandlers: () => true,
+		setToolApprovalPreviewWaiter: (_waiter: (toolCallId: string) => Promise<void>) => () => {},
 		emit: (event: MappedExtensionEvent) => {
 			emitted.push(event);
 			return Promise.resolve();
@@ -100,7 +113,7 @@ async function makeHarness(
 	hostSocket.connect();
 	await hostOpen.promise;
 
-	const ctx = {
+	const baseCtx = {
 		collabGuest: undefined as CollabGuestLink | undefined,
 		settings: Settings.isolated(),
 		sessionManager: {
@@ -112,12 +125,7 @@ async function makeHarness(
 			messages: [],
 			switchSession: () => Promise.resolve(),
 			newSession: () => Promise.resolve(),
-			agent: {
-				state: { model: undefined },
-				setModel: () => {},
-				setThinkingLevel: () => {},
-				setDisableReasoning: () => {},
-			},
+			agent: new Agent(),
 			extensionRunner: runner,
 		},
 		statusContainer: { clear: () => {} },
@@ -165,6 +173,7 @@ async function makeHarness(
 		syncRunningSubagentBadge: () => {},
 		eventBus: new EventBus(),
 	} as unknown as InteractiveModeContext;
+	const ctx = options.createContext?.(baseCtx) ?? baseCtx;
 
 	const guest = new CollabGuestLink(ctx);
 	const harness: Harness = {
@@ -193,6 +202,153 @@ afterEach(() => {
 });
 
 describe("collab guest extension lifecycle mirror", () => {
+	it("renders mirrored thinking phases through the guest runtime snapshot (P2-27)", async () => {
+		await initTheme(false);
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
+		await using dir = await TempDir.create("@pi-guest-thinking-");
+		const previousRoot = process.env.OMP_CONFIG_ROOT;
+		process.env.OMP_CONFIG_ROOT = dir.absolute();
+		let ctx: ReturnType<typeof createInteractiveModeContext> | undefined;
+		let controller: EventController | undefined;
+		let harness: Harness | undefined;
+		try {
+			harness = await makeHarness("thinking-runtime-mirror", {
+				createContext(base) {
+					const agent = new Agent();
+					const fixture = createInteractiveModeContext({
+						session: {
+							switchSession: base.session.switchSession,
+							newSession: base.session.newSession,
+							get isStreaming() {
+								return agent.state.isStreaming;
+							},
+							get messages() {
+								return agent.state.messages;
+							},
+							agent,
+							extensionRunner: base.session.extensionRunner,
+						},
+						statusLine: base.statusLine,
+						showError: base.showError,
+						resetObserverRegistry: base.resetObserverRegistry,
+						syncRunningSubagentBadge: base.syncRunningSubagentBadge,
+					});
+					controller = new EventController(fixture);
+					fixture.eventController = controller;
+					ctx = fixture;
+					return fixture;
+				},
+			});
+			const message: Extract<AgentMessage, { role: "assistant" }> = {
+				role: "assistant",
+				content: [{ type: "thinking", thinking: "REMOTE_THINKING_BODY" }],
+				api: "anthropic-messages",
+				provider: "anthropic",
+				model: "claude-sonnet-4-5",
+				stopReason: "stop",
+				usage: {
+					input: 0,
+					output: 0,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: 1,
+			};
+			if (!ctx || !controller) throw new Error("Missing interactive guest context");
+			const send = async (event: AgentSessionEvent): Promise<void> => {
+				harness!.hostSocket.send({ t: "event", event });
+				await harness!.barrier();
+				// The frame barrier drains application; this drains the controller queue.
+				await controller!.dispatchSessionEvent({ type: "turn_start" });
+			};
+			const history: AgentMessage[] = [{ role: "user", content: "UNCHANGED_HISTORY", timestamp: 0 }];
+			ctx.session.agent.replaceMessages(history);
+			const agentEvents: unknown[] = [];
+			const unsubscribe = ctx.session.agent.subscribe(event => agentEvents.push(event));
+			await send({ type: "agent_start" });
+			// Joining mid-message omits message_start: exercise the guest's orphan guard too.
+			await send({
+				type: "message_update",
+				message,
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "REMOTE_THINKING_BODY",
+					partial: message,
+				},
+			});
+			expect(ctx.thinkingPreview.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
+			expect(ctx.session.agent.state).toMatchObject({
+				isStreaming: true,
+				streamMessage: message,
+				activeThinkingIndex: 0,
+			});
+
+			await send({
+				type: "message_update",
+				message,
+				assistantMessageEvent: {
+					type: "thinking_end",
+					contentIndex: 0,
+					content: "REMOTE_THINKING_BODY",
+					partial: message,
+				},
+			});
+			expect(Bun.stripANSI(ctx.thinkingPreview.render(60).join("\n"))).toBe("… REMOTE_THINKING_BODY");
+			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
+			await send({ type: "message_end", message });
+			expect(ctx.session.agent.state.streamMessage).toBeNull();
+			expect(Bun.stripANSI(ctx.thinkingPreview.render(60).join("\n"))).toBe("… REMOTE_THINKING_BODY");
+			expect(ctx.session.messages).toEqual(history);
+			expect(ctx.session.agent.state.messages).toHaveLength(1);
+			expect(agentEvents).toEqual([]);
+			unsubscribe();
+			await send({ type: "agent_end", messages: [message], isTerminal: true });
+			expect(ctx.thinkingPreview.render(60)).toEqual([]);
+			expect(ctx.session.isStreaming).toBe(false);
+
+			// A later real stream must discard the old stub, and prose closes
+			// the next thinking window even when its start arrived mid-message.
+			await send({ type: "agent_start" });
+			await send({ type: "message_start", message });
+			await send({
+				type: "message_update",
+				message,
+				assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+			});
+			expect(ctx.session.agent.state.activeThinkingIndex).toBe(0);
+			expect(ctx.thinkingPreview.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
+			const prose = {
+				...message,
+				content: [...message.content, { type: "text" as const, text: "REMOTE_ANSWER" }],
+			};
+			await send({
+				type: "message_update",
+				message: prose,
+				assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: prose },
+			});
+			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
+			expect(ctx.thinkingPreview.render(60)).toEqual([]);
+			await send({ type: "message_end", message: prose });
+			await send({ type: "agent_end", messages: [prose], isTerminal: true });
+			expect(ctx.session.agent.state.messages).toEqual(history);
+			expect(ctx.session.agent.state.messages).toHaveLength(1);
+		} finally {
+			try {
+				await harness?.cleanup();
+			} finally {
+				controller?.dispose();
+				ctx?.chatContainer.disposeChildren();
+				if (previousRoot === undefined) delete process.env.OMP_CONFIG_ROOT;
+				else process.env.OMP_CONFIG_ROOT = previousRoot;
+				resetSettingsForTest();
+			}
+		}
+	});
+
 	it("mirrors agent_start and a terminal agent_end to the extension runner", async () => {
 		const writeSpy = spyOn(Bun, "write").mockResolvedValue(0);
 		const renameSpy = spyOn(fsp, "rename").mockResolvedValue(undefined);
@@ -423,6 +579,191 @@ describe("collab guest extension lifecycle mirror", () => {
 		}
 	});
 
+	it.each(["leave", "terminal disconnect", "bye", "agent_end then leave"] as const)(
+		"restores saved history and admits a local prompt after %s",
+		async exit => {
+			await using dir = await TempDir.create("@pi-guest-local-restore-");
+			const previousRoot = process.env.OMP_CONFIG_ROOT;
+			process.env.OMP_CONFIG_ROOT = dir.absolute();
+			const sockets: FakeWebSocket[] = [];
+			globalThis.WebSocket = class extends FakeWebSocket {
+				constructor(url: string) {
+					super(url);
+					sockets.push(this);
+				}
+			} as unknown as typeof WebSocket;
+			const auth = createInMemoryAuthStorage();
+			const mock = createMockModel({ id: "mock", handler: () => ({ content: ["LOCAL_RESPONSE"] }) });
+			const modelRegistry = new ModelRegistry(auth);
+			// Saved assistant history restores mock/mock through the real registry.
+			// The bound stream remains local even after the registry rebuilds the model.
+			modelRegistry.registerProvider(mock.provider, {
+				api: mock.api,
+				baseUrl: mock.baseUrl,
+				apiKey: "test-key",
+				models: [mock.model],
+			});
+			const manager = SessionManager.create(dir.path(), dir.path());
+			const history = [
+				{ role: "user", content: "LOCAL_HISTORY", timestamp: 1 },
+				makeAssistant("LOCAL_HISTORY_ANSWER"),
+			] satisfies AgentMessage[];
+			for (const message of history) manager.appendMessage(message);
+			await manager.flush();
+			const originalFile = manager.getSessionFile();
+			if (!originalFile) throw new Error("Expected a saved local session");
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: history },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const session = new AgentSession({
+				agent,
+				sessionManager: manager,
+				settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+				modelRegistry,
+				toolRegistry: new Map(),
+			});
+			// Record the mirror's extension boundary without installing local
+			// extension hooks on the real session being resumed and prompted.
+			const runnerDescriptor = Object.getOwnPropertyDescriptor(session, "extensionRunner");
+			const restored = Promise.withResolvers<void>();
+			let harness: Harness | undefined;
+			try {
+				harness = await makeHarness(`saved-local-${exit.replaceAll(" ", "-")}`, {
+					isStreaming: true,
+					createContext(base) {
+						Object.defineProperty(session, "extensionRunner", {
+							configurable: true,
+							get: () => base.session.extensionRunner,
+						});
+						return {
+							...base,
+							session,
+							sessionManager: manager,
+							handleResumeSession: async file => {
+								try {
+									// Check the boundary before switchSession's own abort:
+									// the replica must already be idle and history-free.
+									expect(agent.state).toMatchObject({ isStreaming: false, streamMessage: null });
+									expect(agent.state.activeThinkingIndex).toBeUndefined();
+									expect(session.messages).toEqual([]);
+									await session.switchSession(file);
+								} finally {
+									restored.resolve();
+								}
+							},
+						};
+					},
+				});
+				const remote = makeAssistant("REMOTE_PARTIAL");
+				if (remote.role !== "assistant") throw new Error("Expected assistant fixture");
+				remote.content = [{ type: "thinking", thinking: "REMOTE_THINKING" }];
+				harness.hostSocket.send({
+					t: "event",
+					event: {
+						type: "message_update",
+						message: remote,
+						assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: remote },
+					},
+				});
+				await harness.barrier();
+				expect(agent.state.isStreaming).toBe(true);
+				expect(agent.state.activeThinkingIndex).toBe(0);
+				const mirroredHistory = [...session.messages];
+				const mirroredEvents: string[] = [];
+				const unsubscribe = agent.subscribe(event => mirroredEvents.push(event.type));
+				if (exit === "agent_end then leave") {
+					harness.hostSocket.send({ t: "event", event: { type: "message_end", message: remote } });
+					harness.hostSocket.send({
+						t: "event",
+						event: { type: "agent_end", messages: [remote], isTerminal: true },
+					});
+					await harness.barrier();
+					expect(session.isStreaming).toBe(false);
+				}
+				if (exit === "terminal disconnect") {
+					const socket = sockets.find(socket => socket.role === "guest");
+					if (!socket) throw new Error("Guest transport missing");
+					// Unlike room-closed (4001), 4029 is terminal for an established guest.
+					socket.onclose?.({ code: 4029, reason: "room is full" });
+					await restored.promise;
+				} else if (exit === "bye") {
+					harness.hostSocket.send({ t: "bye", reason: "host stopped" });
+					await restored.promise;
+				}
+				await harness.guest.leave("restore local");
+				unsubscribe();
+				expect(mirroredEvents).toEqual([]);
+				expect(mirroredHistory).toEqual([]);
+				expect(manager.getSessionFile()).toBe(originalFile);
+				expect(session.messages).toEqual(history);
+				expect(agent.state.model).toMatchObject({ provider: mock.provider, id: mock.id, api: mock.api });
+				expect(agent.state).toMatchObject({ isStreaming: false, streamMessage: null });
+				expect(agent.state.activeThinkingIndex).toBeUndefined();
+				expect(harness.emitted.filter(event => event.type === "agent_end")).toHaveLength(1);
+				expect(harness.emitted.filter(event => event.type === "message_end")).toHaveLength(
+					exit === "agent_end then leave" ? 1 : 0,
+				);
+				// Exercise the ordinary Enter consumer, not just the state flag:
+				// a stale mirror would enqueue forever without making a model call.
+				await session.prompt("AFTER_LEAVE", { streamingBehavior: "followUp" });
+				expect(mock.calls).toHaveLength(1);
+				expect(JSON.stringify(mock.calls[0].context.messages)).toContain("LOCAL_HISTORY");
+				expect(JSON.stringify(mock.calls[0].context.messages)).not.toContain("REMOTE_THINKING");
+				expect(session.messages.slice(0, history.length)).toEqual(history);
+				// Non-TUI submissions must not inherit AgentBusyError either.
+				await session.prompt("DIRECT_LOCAL_PROMPT");
+				expect(mock.calls).toHaveLength(2);
+			} finally {
+				try {
+					await harness?.cleanup();
+				} finally {
+					if (runnerDescriptor) Object.defineProperty(session, "extensionRunner", runnerDescriptor);
+					else Reflect.deleteProperty(session, "extensionRunner");
+					await session.dispose();
+					auth.close();
+					if (previousRoot === undefined) delete process.env.OMP_CONFIG_ROOT;
+					else process.env.OMP_CONFIG_ROOT = previousRoot;
+				}
+			}
+		},
+	);
+
+	it("does not settle or abort a local run when no replica was activated", async () => {
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const mock = createMockModel({
+			handler: async () => {
+				reached.resolve();
+				await release.promise;
+				return { content: ["LOCAL_COMPLETION"] };
+			},
+		});
+		const agent = new Agent({
+			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [] },
+			streamFn: mock.stream,
+		});
+		const ctx = {
+			session: { agent },
+			syncRunningSubagentBadge: () => {},
+		} as unknown as InteractiveModeContext;
+		const guest = new CollabGuestLink(ctx);
+		ctx.collabGuest = guest;
+		const prompt = agent.prompt("LOCAL_IN_FLIGHT");
+		try {
+			await reached.promise;
+			await guest.leave("cancel before replica activation");
+			expect(agent.state.isStreaming).toBe(true);
+			expect(agent.isAborting).toBe(false);
+		} finally {
+			release.resolve();
+			await prompt;
+		}
+		expect(agent.state.messages.some(message => messageText(message) === "LOCAL_COMPLETION")).toBe(true);
+	});
+
 	it("applies a mirrored stream tail in order through the event controller", async () => {
 		// The controller reads global settings (speech) when it enqueues a stream delta.
 		resetSettingsForTest();
@@ -553,7 +894,7 @@ describe("collab guest extension lifecycle mirror", () => {
 	});
 });
 
-function makeAssistant(text: string): AgentMessage {
+function makeAssistant(text: string): Extract<AgentMessage, { role: "assistant" }> {
 	return {
 		role: "assistant",
 		content: [{ type: "text", text }],

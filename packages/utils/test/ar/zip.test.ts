@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { deflateRawSync } from "node:zlib";
+import { crc32 } from "../../src/ar/checksums";
 import { ArchiveError } from "../../src/ar/error";
 import { DEFAULT_ARCHIVE_LIMITS } from "../../src/ar/limits";
 import { ArchiveReader } from "../../src/ar/reader";
 import { type ByteSource, memoryByteSource } from "../../src/ar/source";
 import type { ArchiveIndexEntry } from "../../src/ar/types";
+import { encodeArchive } from "../../src/ar/write";
 import { encodeZip, readZip, readZipEager, sniffZip } from "../../src/ar/zip";
 import { arFixture as fixture } from "./fixtures";
 
@@ -126,6 +129,92 @@ test("encodeZip round-trips lazily and through the eager document-converter API"
 	const eager = await readZipEager(encoded);
 	expect(DECODER.decode(eager.get("nested/repeated.txt"))).toBe("highly compressible ".repeat(30));
 	await expect(encodeZip([["../escape", new Uint8Array()]] as const)).rejects.toBeInstanceOf(ArchiveError);
+});
+
+test("large ZIP members stay responsive without changing stored or deflated payloads and checksums", async () => {
+	const stored = new Uint8Array(4 * 1024 * 1024);
+	let state = 0x12345678;
+	for (let index = 0; index < stored.length; index++) {
+		state ^= state << 13;
+		state ^= state >>> 17;
+		state ^= state << 5;
+		stored[index] = state & 0xff;
+	}
+	const compressed = new Uint8Array(stored.length).fill(0x78);
+	let turns = 0;
+	let settled = false;
+	let heartbeat: NodeJS.Immediate;
+	const tick = () => {
+		if (settled) return;
+		turns++;
+		heartbeat = setImmediate(tick);
+	};
+	heartbeat = setImmediate(tick);
+	let encoded: Uint8Array;
+	try {
+		encoded = await encodeZip([
+			["stored.bin", stored],
+			["compressed.bin", compressed],
+		]);
+		expect(turns).toBeGreaterThan(1);
+	} finally {
+		settled = true;
+		clearImmediate(heartbeat);
+	}
+	let offset = 0;
+	for (const [name, data, method] of [
+		["stored.bin", stored, 0],
+		["compressed.bin", compressed, 8],
+	] as const) {
+		expect(readUInt32(encoded, offset)).toBe(0x04034b50);
+		expect(readUInt16(encoded, offset + 8)).toBe(method);
+		expect(readUInt32(encoded, offset + 14)).toBe(crc32(data));
+		const payloadOffset = offset + 30 + readUInt16(encoded, offset + 26) + readUInt16(encoded, offset + 28);
+		const payloadLength = readUInt32(encoded, offset + 18);
+		expect(DECODER.decode(encoded.subarray(offset + 30, offset + 30 + readUInt16(encoded, offset + 26)))).toBe(name);
+		expect(encoded.subarray(payloadOffset, payloadOffset + payloadLength)).toEqual(
+			new Uint8Array(method === 8 ? deflateRawSync(data) : data),
+		);
+		offset = payloadOffset + payloadLength;
+	}
+	const eager = await readZipEager(encoded);
+	expect(eager.get("stored.bin")).toEqual(stored);
+	expect(eager.get("compressed.bin")).toEqual(compressed);
+}, 30_000);
+
+test("ZIP encoding preserves the abort reason after repeated event-loop turns", async () => {
+	const controller = new AbortController();
+	const reason = new DOMException("Cancel ZIP member", "AbortError");
+	let turns = 0;
+	let heartbeat: NodeJS.Immediate;
+	const tick = () => {
+		turns++;
+		if (turns === 2) controller.abort(reason);
+		else heartbeat = setImmediate(tick);
+	};
+	heartbeat = setImmediate(tick);
+	try {
+		await expect(
+			encodeZip([["large.bin", new Uint8Array(15 * 1024 * 1024).fill(0x78)]], { signal: controller.signal }),
+		).rejects.toBe(reason);
+		expect(turns).toBe(2);
+	} finally {
+		clearImmediate(heartbeat);
+	}
+}, 30_000);
+
+test("all writable archive formats reject an already-aborted signal without reading members", async () => {
+	const controller = new AbortController();
+	const reason = new DOMException("Cancel archive", "AbortError");
+	controller.abort(reason);
+	const entries = {
+		[Symbol.iterator](): Iterator<readonly [string, Uint8Array]> {
+			throw new Error("Cancelled encoding must not consume entries");
+		},
+	};
+	for (const format of ["zip", "asar", "tar", "tar.gz", "tar.zst"] as const) {
+		await expect(encodeArchive(format, entries, { signal: controller.signal })).rejects.toBe(reason);
+	}
 });
 
 test("encodeZip emits interoperable ZIP64 end records at the 16-bit entry-count boundary", async () => {

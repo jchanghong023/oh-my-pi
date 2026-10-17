@@ -3,13 +3,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getOfflineShmState, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils/stream";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
 import { computeDefaultSessionDir, resolveSessionDirectory } from "./session-paths";
-import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
+import {
+	assertOfflineSessionPath,
+	FileSessionStorage,
+	type SessionStorage,
+	type SessionStorageStat,
+} from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 
 /**
@@ -402,6 +407,16 @@ function sameFileSnapshot(
 	return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
+/** Drop disallowed offline candidates without hiding valid sessions in the same listing. */
+function isAllowedSessionPath(file: string, storage: SessionStorage): boolean {
+	try {
+		assertOfflineSessionPath(file, storage);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Scan a single session file into a {@link SessionInfo}. Always reads the 4 KB
  * header/first-message prefix; only reads the 32 KB tail window (and derives
@@ -417,6 +432,7 @@ async function scanSessionFile(
 ): Promise<SessionInfo | undefined> {
 	let stat: SessionStorageStat;
 	try {
+		assertOfflineSessionPath(file, storage);
 		stat = knownStat ?? storage.statSync(file);
 	} catch {
 		// Missing/unstatable file: no stat identity to cache under.
@@ -704,10 +720,14 @@ export async function listAllSessions(
 	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
 		const files = await Array.fromAsync(
-			new Bun.Glob("*/*.jsonl").scan({ cwd: sessionsRoot, followSymlinks: true }),
+			new Bun.Glob("*/*.jsonl").scan({ cwd: sessionsRoot, followSymlinks: !getOfflineShmState() }),
 			name => path.join(sessionsRoot, name),
 		);
-		return await collectSessionsFromFiles(files, storage, true);
+		return await collectSessionsFromFiles(
+			files.filter(file => isAllowedSessionPath(file, storage)),
+			storage,
+			true,
+		);
 	} catch {
 		return [];
 	}
@@ -788,8 +808,9 @@ async function newestSessionFiles(
 	try {
 		files =
 			storage instanceof FileSessionStorage
-				? await Array.fromAsync(new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: true }), name =>
-						path.join(root, name),
+				? await Array.fromAsync(
+						new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: !getOfflineShmState() }),
+						name => path.join(root, name),
 					)
 				: storage.listFilesSync(root, pattern);
 	} catch {
@@ -800,6 +821,7 @@ async function newestSessionFiles(
 		const stats = await Promise.all(
 			files.map(async file => {
 				try {
+					assertOfflineSessionPath(file, storage);
 					return { file, stat: await fs.promises.stat(file) };
 				} catch {
 					return undefined;
@@ -909,14 +931,17 @@ export async function listRecentProjects(
  */
 export async function findSessionFiles(idPrefix: string, sessionsRoot: string = getSessionsDir()): Promise<string[]> {
 	if (!/^[\w-]+$/.test(idPrefix)) return [];
-	sessionsRoot = resolveSessionDirectory(sessionsRoot, new FileSessionStorage());
+	const storage = new FileSessionStorage();
+	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
 		const files = await Array.fromAsync(
-			new Bun.Glob(`*/*_${idPrefix}*.jsonl`).scan({ cwd: sessionsRoot, followSymlinks: true }),
+			new Bun.Glob(`*/*_${idPrefix}*.jsonl`).scan({ cwd: sessionsRoot, followSymlinks: !getOfflineShmState() }),
 			name => path.join(sessionsRoot, name),
 		);
 		// `*_` can also match an underscore inside an id; keep true id-prefix matches only.
-		return files.filter(file => sessionIdFromSessionPath(file)?.startsWith(idPrefix));
+		return files.filter(
+			file => sessionIdFromSessionPath(file)?.startsWith(idPrefix) && isAllowedSessionPath(file, storage),
+		);
 	} catch {
 		return [];
 	}

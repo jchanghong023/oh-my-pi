@@ -10,7 +10,7 @@ import {
 	stripWhitespaceOnlyFiles,
 	truncateDiffByLines,
 } from "./diff";
-import type { CommitInference } from "./inference";
+import { type CommitInference, isTerminalCommitInferenceError } from "./inference";
 import { runMapReduce, shouldUseMapReduce } from "./map-reduce";
 import {
 	fallbackSummary,
@@ -92,7 +92,9 @@ async function generateFastWorkflow(input: ConventionalGenerationInput): Promise
 			input.context?.userContext,
 		);
 		if (validateCommitMessage(commit, input.config, { stat: input.stat }).ok) return commit;
-	} catch {}
+	} catch (error) {
+		if (isTerminalCommitInferenceError(error)) throw error;
+	}
 	const analysis = await generateAnalysisWithMapReduce(
 		input.inference,
 		input.config,

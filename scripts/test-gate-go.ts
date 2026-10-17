@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
+import { withChargedActivity } from "./test-gate-events";
 
 /** Match Go's cmd/internal/quoted.Split: quotes only at the field start, no unescaping. */
 export function splitGoCommand(value: string): string[] {
@@ -121,20 +122,31 @@ if (import.meta.main) {
 			})
 			.join(" ");
 		const { args: goArgs, originalWrapper } = extractGoToolExec(args, process.env.GOFLAGS ?? "");
-		const child = Bun.spawn(["go", command, `-toolexec=${wrapper}`, ...goArgs], {
-			cwd: process.cwd(),
-			env: {
-				...process.env,
-				GOTOOLCHAIN: "local",
-				OMP_GATE_BUN_BINARY: process.execPath,
-				OMP_GATE_COMPILER_SCRIPT: path.join(import.meta.dir, "test-gate-compiler.ts"),
-				OMP_GATE_ORIGINAL_GO_TOOLEXEC: JSON.stringify(originalWrapper),
-			},
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-		});
-		process.exit(await child.exited);
+		// Go accepts -C only as the first flag; keep its operand ahead of ours.
+		const chdir = goArgs.splice(
+			0,
+			goArgs[0] === "-C" || goArgs[0] === "--C" ? 2 : /^--?C=/.test(goArgs[0] ?? "") ? 1 : 0,
+		);
+		const invoke = () => {
+			const child = Bun.spawn(["go", command, ...chdir, `-toolexec=${wrapper}`, ...goArgs], {
+				cwd: process.cwd(),
+				env: {
+					...process.env,
+					GOTOOLCHAIN: "local",
+					OMP_GATE_BUN_BINARY: process.execPath,
+					OMP_GATE_COMPILER_SCRIPT: path.join(import.meta.dir, "test-gate-compiler.ts"),
+					OMP_GATE_ORIGINAL_GO_TOOLEXEC: JSON.stringify(originalWrapper),
+				},
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+			});
+			return child.exited;
+		};
+		// toolexec cannot observe test binaries, so a parallel package may be
+		// testing throughout another package's compilation. Conservatively charge
+		// the whole test command rather than exempting unproven pure compilation.
+		process.exit(await (command === "test" ? withChargedActivity(invoke) : invoke()));
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));
 		process.exit((error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1);

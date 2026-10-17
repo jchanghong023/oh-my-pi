@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Preserve compact read warnings, background-task identities and folded-success summaries without losing failures from terminal history.
+- Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
 - Compact Eval rows show the supplied intent or title instead of a bare tool name and redundant running hint.
 - Compact search rows show the search pattern or query before the search directory.
 - Compact Wait rows show the background job's type, ID, and command instead of a generic waiting message.

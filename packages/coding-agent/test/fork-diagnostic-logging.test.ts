@@ -189,6 +189,39 @@ function sameOperation(records: RecordLine[], record: RecordLine) {
 }
 
 describe("fork diagnostics on the real rotating disk transport", () => {
+	it.skipIf(process.platform !== "linux")(
+		"P2-40 starts the offline CLI with writable primary logs when fallback-logs is a regular file",
+		async () => {
+			const box = await sandbox("info");
+			const fallback = path.join(path.dirname(box.logsDir), "fallback-logs");
+			const documents = path.join(box.directory, "documents");
+			try {
+				await fs.mkdir(box.logsDir, { recursive: true, mode: 0o700 });
+				await fs.writeFile(fallback, "unavailable fallback");
+				await fs.mkdir(documents);
+				await fs.writeFile(path.join(documents, "guide.md"), "# Evidence\nPrimary logging remains usable.\n");
+				const imported = await box.cli(["docs", "init", documents, "--name", "primary-logs", "--json"]);
+				expect(imported.code, imported.stderr).toBe(0);
+				expect(JSON.parse(imported.stdout).index).toMatchObject({ name: "primary-logs", documentCount: 1 });
+				expect(await fs.readFile(fallback, "utf8")).toBe("unavailable fallback");
+				const { records } = await box.logs();
+				expect(event(records, "docs.init.completed")).toMatchObject({ result: "completed" });
+				const started = event(records, "application_started");
+				expect(path.dirname(started.path as string)).toBe(box.logsDir);
+				for (const message of ["application_stopping", "application_stopped"]) {
+					expect(event(records, message)).toMatchObject({
+						operation_id: started.operation_id,
+						exitCode: 0,
+					});
+				}
+				expect(records.some(record => record.event === "log_directory_fallback")).toBe(false);
+			} finally {
+				await box.cleanup();
+			}
+		},
+		35_000,
+	);
+
 	it("correlates dev CLI docs publication, stored wiki evidence, rejected builds, rollback and cancellation without content leaks", async () => {
 		const box = await sandbox();
 		const canary = "FORKDIAGNOSTICDOCSPRIVATE";

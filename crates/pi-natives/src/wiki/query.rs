@@ -5,7 +5,7 @@
 
 use std::{
 	cmp::Ordering,
-	collections::HashSet,
+	collections::{HashSet, VecDeque},
 	ops::{Deref, Range},
 	sync::{Arc, LazyLock},
 };
@@ -266,6 +266,17 @@ pub(crate) const fn is_ecmascript_whitespace(character: char) -> bool {
 		'\u{205f}' | '\u{3000}' | '\u{feff}')
 }
 
+fn lowercase_sigma(preceded_by_cased: bool, mut following: impl Iterator<Item = char>) -> char {
+	let followed_by_cased = following
+		.find(|&next| !property(&PROPERTIES.case_ignorable, next))
+		.is_some_and(|next| property(&PROPERTIES.cased, next));
+	if preceded_by_cased && !followed_by_cased {
+		'\u{03c2}'
+	} else {
+		'\u{03c3}'
+	}
+}
+
 /// Default Unicode lowercase, including ECMAScript's contextual `Final_Sigma`.
 fn lowercase(text: &str, trim: Option<bool>) -> String {
 	let mut result = String::with_capacity(text.len());
@@ -286,15 +297,10 @@ fn lowercase(text: &str, trim: Option<bool>) -> String {
 		};
 		for (offset, character) in text.char_indices() {
 			if character == '\u{03a3}' {
-				let followed_by_cased = text[offset + character.len_utf8()..]
-					.chars()
-					.find(|&next| !property(&PROPERTIES.case_ignorable, next))
-					.is_some_and(|next| property(&PROPERTIES.cased, next));
-				append(if preceded_by_cased && !followed_by_cased {
-					'\u{03c2}'
-				} else {
-					'\u{03c3}'
-				});
+				append(lowercase_sigma(
+					preceded_by_cased,
+					text[offset + character.len_utf8()..].chars(),
+				));
 			} else {
 				for lower in character.to_lowercase() {
 					append(lower);
@@ -664,6 +670,92 @@ pub(super) fn literal_edge_starter(character: char) -> bool {
 		&& !matches!(first, '\u{1161}'..='\u{1175}' | '\u{11a8}'..='\u{11c2}')
 }
 
+/// A bounded normalized search window. Provenance records normalization
+/// sequences, not occurrences; even a short name repeated throughout a document
+/// retains only one window's source ranges.
+#[derive(Default)]
+struct SourceMatchWindow {
+	text:         String,
+	provenance:   VecDeque<(usize, Range<usize>)>,
+	offset:       usize,
+	search_start: usize,
+}
+
+impl SourceMatchWindow {
+	fn push(&mut self, character: char, source: &Range<usize>) {
+		self.text.push(character);
+		let end = self.offset + self.text.len();
+		if let Some((previous_end, previous_source)) = self.provenance.back_mut()
+			&& previous_source == source
+		{
+			*previous_end = end;
+		} else {
+			self.provenance.push_back((end, source.clone()));
+		}
+	}
+
+	fn scan(
+		&mut self,
+		matcher: &LiteralMatcher,
+		final_window: bool,
+		matched: &mut impl FnMut(Range<usize>) -> bool,
+	) -> bool {
+		// Leave the literal's maximum byte width and two complete characters
+		// for the existing right-boundary rule (including "." / ":" lookahead).
+		let mut cutoff = if final_window {
+			self.text.len()
+		} else {
+			self.text.len().saturating_sub(matcher.text.len() + 8)
+		};
+		while !self.text.is_char_boundary(cutoff) {
+			cutoff -= 1;
+		}
+		let mut offset = self.search_start;
+		while let Some(found) = self.text[offset..].find(&matcher.text) {
+			let start = offset + found;
+			if start >= cutoff {
+				break;
+			}
+			let end = start + matcher.text.len();
+			if matcher.boundaries(&self.text, start, end) {
+				let normalized_start = self.offset + start;
+				let normalized_end = self.offset + end;
+				let first = self
+					.provenance
+					.partition_point(|(sequence_end, _)| *sequence_end <= normalized_start);
+				let last = self
+					.provenance
+					.partition_point(|(sequence_end, _)| *sequence_end < normalized_end);
+				if !matched(self.provenance[first].1.start..self.provenance[last].1.end) {
+					return false;
+				}
+			}
+			offset = start
+				+ self.text[start..]
+					.chars()
+					.next()
+					.expect("nonempty literal match")
+					.len_utf8();
+		}
+		// Keep one preceding character for the existing left-boundary rule.
+		let retained = self.text[..cutoff]
+			.char_indices()
+			.next_back()
+			.map_or(0, |(offset, _)| offset);
+		self.text.drain(..retained);
+		self.offset += retained;
+		self.search_start = cutoff - retained;
+		while self
+			.provenance
+			.front()
+			.is_some_and(|(end, _)| *end <= self.offset)
+		{
+			self.provenance.pop_front();
+		}
+		true
+	}
+}
+
 /// A compiled literal and its Unicode edge rules, reusable across every row.
 #[derive(Debug)]
 pub(crate) struct LiteralMatcher {
@@ -734,6 +826,90 @@ impl LiteralMatcher {
 					.len_utf8();
 		}
 		false
+	}
+
+	/// Stream complete source normalization sequences through the same literal
+	/// and boundary matcher used for individual sections. The callback consumes
+	/// each source range immediately and can stop once every section is decided.
+	pub(super) fn source_matches<E>(
+		&self,
+		source: &str,
+		check: &dyn Fn() -> Result<(), E>,
+		mut matched: impl FnMut(Range<usize>) -> bool,
+	) -> Result<(), E> {
+		self.source_matches_with_window(
+			source,
+			check,
+			&mut matched,
+			&mut SourceMatchWindow::default(),
+		)
+	}
+
+	fn source_matches_with_window<E>(
+		&self,
+		source: &str,
+		check: &dyn Fn() -> Result<(), E>,
+		matched: &mut impl FnMut(Range<usize>) -> bool,
+		window: &mut SourceMatchWindow,
+	) -> Result<(), E> {
+		check()?;
+		if self.text.is_empty() {
+			return Ok(());
+		}
+		// Match lowercase()'s fast path without materializing all of NFKC.
+		// Compatibility characters can introduce an uppercase Greek sigma.
+		let has_sigma = source
+			.chars()
+			.filter(|character| !character.is_ascii())
+			.any(|character| {
+				let mut sigma = false;
+				decompose_compatible(character, |decomposed| sigma |= decomposed == '\u{03a3}');
+				sigma
+			});
+		let edges = source
+			.char_indices()
+			.skip(1)
+			.filter(|&(_, character)| literal_edge_starter(character))
+			.map(|(offset, _)| offset)
+			.chain(std::iter::once(source.len()));
+		let mut source_start = 0;
+		let mut preceded_by_cased = false;
+		let limit = self.text.len() + 4096 + 12;
+		for source_end in edges {
+			check()?;
+			let range = source_start..source_end;
+			let mut normalized = source[range.clone()].nfkc();
+			while let Some(character) = normalized.next() {
+				let lower = if character == '\u{03a3}' {
+					lowercase_sigma(
+						preceded_by_cased,
+						normalized.clone().chain(source[source_end..].nfkc()),
+					)
+				} else {
+					character
+				};
+				for lower in lower.to_lowercase() {
+					window.push(lower, &range);
+					if window.text.len() >= limit {
+						check()?;
+						if !window.scan(self, false, matched) {
+							return Ok(());
+						}
+					}
+				}
+				if has_sigma {
+					if character.is_ascii_alphabetic() {
+						preceded_by_cased = true;
+					} else if !property(&PROPERTIES.case_ignorable, character) {
+						preceded_by_cased = property(&PROPERTIES.cased, character);
+					}
+				}
+			}
+			source_start = source_end;
+		}
+		check()?;
+		window.scan(self, true, matched);
+		Ok(())
 	}
 
 	pub(crate) fn matches_section(
@@ -991,6 +1167,90 @@ mod tests {
 	use std::convert::Infallible;
 
 	use super::*;
+
+	#[test]
+	fn reconstructed_names_map_normalization_sequences_to_source_bytes() {
+		for (source, name, expected) in [
+			("foobar", "foobar", vec![0..6]),
+			(" \u{fb03} ", "ffi", vec![1..4]),
+			(" a\u{0303}b ", "ãb", vec![1..5]),
+			("\u{1100}\u{1161}\u{11a8}", "각", vec![0..9]),
+			("ΟΣ", "ος", vec![0..4]),
+			("哈哈哈", "哈哈", vec![0..6, 3..9]),
+		] {
+			let mut found = Vec::new();
+			LiteralMatcher::new(name, true)
+				.source_matches(source, &|| Ok::<_, Infallible>(()), |range| {
+					found.push(range);
+					true
+				})
+				.unwrap();
+			assert_eq!(found, expected, "{source:?}");
+		}
+	}
+
+	#[test]
+	fn repeated_short_names_keep_bounded_source_match_storage() {
+		let matcher = LiteralMatcher::new("x", true);
+		for repeats in [8192, 262_144] {
+			let mut source = "x ".repeat(repeats);
+			let suffix_start = source.len();
+			source.push_str("éx xé x:x x.é 中x x中 x. x: x\u{0301} ｘ");
+			let mut window = SourceMatchWindow::default();
+			let mut count = 0;
+			let mut suffix_matches = Vec::new();
+			matcher
+				.source_matches_with_window(
+					&source,
+					&|| Ok::<_, Infallible>(()),
+					&mut |range: Range<usize>| {
+						count += 1;
+						if range.start >= suffix_start {
+							suffix_matches.push(source[range].to_owned());
+						}
+						true
+					},
+					&mut window,
+				)
+				.unwrap();
+			assert_eq!(count, repeats + 6);
+			assert_eq!(suffix_matches, ["x", "x", "x", "x", "x\u{0301}", "ｘ"]);
+			// Check actual retained allocation capacities against the search
+			// window, not elapsed time or machine-wide memory measurements.
+			let capacity_bound = 2 * (matcher.text.len() + 4096 + 16);
+			assert!(window.text.capacity() <= capacity_bound);
+			assert!(window.provenance.capacity() <= capacity_bound);
+		}
+	}
+
+	#[test]
+	fn source_match_windows_preserve_boundaries_and_sequence_ranges() {
+		for padding in 4080..4140 {
+			let prefix = " ".repeat(padding);
+			for (body, name, expected) in [
+				("x.", "x", vec![0..1]),
+				("foobar", "foobar", vec![0..6]),
+				("x.é", "x", vec![]),
+				("éx", "x", vec![]),
+				("中x", "x", vec![3..4]),
+				("\u{fb03}", "ffi", vec![0..3]),
+				("a\u{0303}b", "ãb", vec![0..4]),
+				("ΟΣ\u{0301}", "ος\u{0301}", vec![0..6]),
+				("\u{1100}\u{1161}\u{11a8}", "각", vec![0..9]),
+				("ΟΣ'Α", "οσ'α", vec![0..7]),
+			] {
+				let source = format!("{prefix}{body} {}", " ".repeat(64));
+				let mut found = Vec::new();
+				LiteralMatcher::new(name, true)
+					.source_matches(&source, &|| Ok::<_, Infallible>(()), |range| {
+						found.push(range.start - padding..range.end - padding);
+						true
+					})
+					.unwrap();
+				assert_eq!(found, expected, "padding={padding}, body={body:?}");
+			}
+		}
+	}
 
 	fn context(before: &str, after: &str) -> SectionContext {
 		SectionContext {

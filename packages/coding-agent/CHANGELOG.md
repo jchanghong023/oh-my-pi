@@ -16,6 +16,14 @@
 
 ### Fixed
 
+- Preserve paused Goals during asynchronous RPC activation and wait a complete loop interval after a compaction-queued first turn.
+- Reject contradictory Team adoption claims across Markdown sections and route newly discovered review findings through the remaining revision rounds.
+- Stop terminal remote commit-inference failures before the legacy analysis fallback can replay the task.
+- Preserve Shared skill priority and file identity, while keeping the fixed offline Python interpreter exclusive to Eval.
+- Keep offline session enumeration, reused writers and legacy memory-bank discovery inside the runtime root, preserving owner-only backup permissions.
+- Report headless review-export results and failures without a configured model or model calls, preserve Unicode source paths, and cancel archive encoding without replacing the previous ZIP.
+- Keep Wiki selections visible in short terminals, preserve relative-path cursors, and recover Repo indexing after creation failures or root-alias edits.
+- Preserve batch-command body bytes and live read, thinking and collaboration state across input, focus and session transitions.
 - Correct compact display completion and override warnings to describe single-line tool summaries without previews.
 - Record shared file-session deletion stages, failures and partial cleanup without changing deletion behavior.
 - Keep exported review instructions bound to the ZIP's frozen diff and before/after source instead of the current checkout.

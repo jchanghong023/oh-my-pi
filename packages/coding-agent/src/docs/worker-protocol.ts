@@ -15,7 +15,7 @@ export type DocsWorkerLogContext = {
 };
 
 export type DocsWorkerCommand =
-	| { type: "configure"; options: DocsServiceOptions; databasePath: string }
+	| { type: "configure"; options: DocsServiceOptions; cursorPath: string }
 	| { type: "list" }
 	| { type: "init"; directory: string; name: string }
 	| { type: "remove"; name: string }

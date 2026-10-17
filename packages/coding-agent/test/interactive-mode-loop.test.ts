@@ -324,7 +324,8 @@ describe("InteractiveMode loop auto-submit", () => {
 			await advance(10_000);
 			expect(next).toHaveLength(0);
 
-			mode.armLoopAutoSubmit();
+			mode.armLoopAutoSubmit(Promise.resolve());
+			await flushMicrotasks();
 			await advance(4_999);
 			expect(next).toHaveLength(0);
 			await advance(1);
@@ -396,6 +397,149 @@ describe("InteractiveMode loop auto-submit", () => {
 			expect(compact).toHaveBeenCalledTimes(1);
 			expect(next).toHaveLength(1);
 			expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+		});
+
+		describe("compaction-queued first turn", () => {
+			let finishFirstTurn: (() => void) | undefined;
+
+			beforeEach(() => {
+				vi.spyOn(mode, "updatePendingMessagesDisplay").mockImplementation(() => {});
+			});
+
+			afterEach(async () => {
+				mode.pauseLoop();
+				finishFirstTurn?.();
+				finishFirstTurn = undefined;
+				await flushMicrotasks();
+				mode.compactionQueuedMessages = [];
+				mode.locallySubmittedUserSignatures.delete("queued first turn\u00000");
+			});
+
+			async function queueFirstTurn(command = "/loop 3 5s queued first turn") {
+				let compacting = true;
+				let streaming = false;
+				const turn = Promise.withResolvers<boolean>();
+				Object.defineProperty(session, "isCompacting", { configurable: true, get: () => compacting });
+				Object.defineProperty(session, "isStreaming", { configurable: true, get: () => streaming });
+				const prompt = vi.spyOn(session, "prompt").mockImplementation(() => {
+					streaming = true;
+					return turn.promise;
+				});
+				finishFirstTurn = () => {
+					streaming = false;
+					turn.resolve(true);
+				};
+
+				new InputController(mode).setupEditorSubmitHandler();
+				const resolved = waitForNextInput();
+				await mode.editor.onSubmit?.(command);
+				await flushMicrotasks();
+				expect(mode.compactionQueuedMessages).toEqual([
+					{ text: "queued first turn", mode: "steer", images: undefined },
+				]);
+				expect(prompt).not.toHaveBeenCalled();
+				expect(resolved).toHaveLength(0);
+
+				compacting = false;
+				await mode.flushCompactionQueue({ willRetry: false });
+				await flushMicrotasks();
+				expect(prompt).toHaveBeenCalledTimes(1);
+				expect(prompt).toHaveBeenCalledWith("queued first turn", {
+					streamingBehavior: "steer",
+					images: undefined,
+				});
+				expect(mode.compactionQueuedMessages).toEqual([]);
+				expect(resolved).toHaveLength(0);
+
+				return {
+					prompt,
+					resolved,
+					finish: async () => {
+						finishFirstTurn?.();
+						await flushMicrotasks();
+					},
+				};
+			}
+
+			it.each([2_000, 20_000])(
+				"waits a complete positional interval after a queued first turn lasting %i ms",
+				async durationMs => {
+					const first = await queueFirstTurn();
+					await advance(durationMs);
+					expect(first.resolved).toHaveLength(0);
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+
+					await first.finish();
+					await advance(4_999);
+					expect(first.resolved).toHaveLength(0);
+					await advance(1);
+					expect(first.resolved).toHaveLength(1);
+					expect(first.resolved[0].text).toBe("queued first turn");
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+
+					// The original input waiter is consumed only once; no second
+					// submission or budget consumption may leak out of retry timers.
+					await advance(10_000);
+					expect(first.resolved).toHaveLength(1);
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 1 });
+				},
+			);
+
+			it.each([200, 2_000])(
+				"preserves the interrupt window without an interval after a queued first turn lasting %i ms",
+				async durationMs => {
+					const first = await queueFirstTurn("/loop 3 queued first turn");
+					await advance(durationMs);
+					expect(first.resolved).toHaveLength(0);
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 3 });
+					await first.finish();
+
+					// Legacy loops keep polling on the original interrupt cadence;
+					// finishing a queued turn does not start a fresh 800 ms wait.
+					const untilNextPoll = 800 - (durationMs % 800);
+					await advance(untilNextPoll - 1);
+					expect(first.resolved).toHaveLength(0);
+					await advance(1);
+					expect(first.resolved).toHaveLength(1);
+					expect(first.resolved[0].text).toBe("queued first turn");
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+				},
+			);
+
+			it.each(["pauseLoop", "disableLoopMode"] as const)(
+				"does not rearm after %s while the queued first turn is still running",
+				async cancel => {
+					const first = await queueFirstTurn();
+					await advance(1_000);
+					mode[cancel]();
+					await first.finish();
+					await advance(20_000);
+
+					expect(first.resolved).toHaveLength(0);
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopPrompt).toBeUndefined();
+					expect(mode.loopModeEnabled).toBe(cancel === "pauseLoop");
+				},
+			);
+
+			it.each(["queued first turn", "replacement"])(
+				"does not rearm a queued turn after its prompt is superseded by %s",
+				async replacement => {
+					const first = await queueFirstTurn();
+					await advance(1_000);
+					mode.setLoopPrompt(replacement);
+					await first.finish();
+					await advance(20_000);
+
+					expect(first.resolved).toHaveLength(0);
+					expect(first.prompt).toHaveBeenCalledTimes(1);
+					expect(mode.loopPrompt).toBe(replacement);
+					expect(mode.loopLimit).toEqual({ kind: "iterations", initial: 3, remaining: 2 });
+				},
+			);
 		});
 	});
 

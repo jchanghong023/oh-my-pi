@@ -281,7 +281,7 @@ ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- No
 	}
 	add("manifest.json", manifestBytes);
 	signal?.throwIfAborted();
-	const encoded = await encodeArchive("zip", members);
+	const encoded = await encodeArchive("zip", members, { signal });
 	signal?.throwIfAborted();
 	const tmpRoot = path.join(snapshot.root, ".tmp");
 	await fs.mkdir(tmpRoot, { recursive: true });

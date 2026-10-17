@@ -218,6 +218,75 @@ describe("optional WSL selection", () => {
 		expect(decodeWslOutput(new TextEncoder().encode("Ubuntu-24.04"))).toBe("Ubuntu-24.04");
 		expect(decodeWslOutput(new Uint8Array([0xff, 0xfe, 0x57, 0, 0x53, 0, 0x4c, 0]))).toBe("WSL");
 	});
+	test.each([
+		{ encoding: "utf-8", available: true },
+		{ encoding: "utf-16le", available: true },
+		{ encoding: "utf-16le-bom", available: true },
+		{ encoding: "utf-8", available: false },
+		{ encoding: "utf-16le", available: false },
+		{ encoding: "utf-16le-bom", available: false },
+	])(
+		"P2-37 distribution discovery preserves every $encoding byte boundary (available=$available)",
+		async ({ encoding, available }) => {
+			const name = available ? "Ubuntu-24.04" : "Other";
+			const text = `  NAME STATE VERSION\r\n* ${name} 运行中 2\r\n  测试😀发行版 已停止 2\r\n`;
+			const bytes =
+				encoding === "utf-8"
+					? Buffer.from(text, "utf8")
+					: Buffer.concat([
+							encoding === "utf-16le-bom" ? Buffer.from([0xff, 0xfe]) : Buffer.alloc(0),
+							Buffer.from(text, "utf16le"),
+						]);
+			const partitions = [
+				...Array.from({ length: bytes.length - 1 }, (_, index) => [
+					bytes.subarray(0, index + 1),
+					bytes.subarray(index + 1),
+				]),
+				Array.from(bytes, (_, index) => bytes.subarray(index, index + 1)),
+			];
+			for (const chunks of partitions) {
+				const f = fakeRuntime(async command => {
+					// Match GateRun.capture's per-chunk decoder calls, including
+					// its lack of an extra decoder-flush call at stream EOF.
+					return chunks.map(chunk => command.decodeOutput?.(chunk) ?? new TextDecoder().decode(chunk)).join("");
+				});
+				const selection = await discoverWsl(f.gate, {
+					debug: false,
+					platform: "win32",
+					which: () => "wsl.exe",
+				});
+				if (available) expect(selection).toEqual({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+				else {
+					expect(selection.status).toBe("SKIPPED_WSL_UNAVAILABLE");
+					if (selection.status === "AVAILABLE") throw new Error("Unexpected compatible distribution");
+					expect(selection.reason).toContain("Other/WSL2");
+					expect(selection.reason).toContain("测试😀发行版/WSL2");
+				}
+			}
+		},
+	);
+	test.each(["utf-8", "utf-16le", "utf-16le-bom"])(
+		"P2-37 decodes complete %s stderr before classifying discovery failure",
+		async encoding => {
+			const diagnostic = "测试😀发行版: WSL_E_DISTRO_NOT_FOUND";
+			const bytes =
+				encoding === "utf-8"
+					? Buffer.from(diagnostic, "utf8")
+					: Buffer.concat([
+							encoding === "utf-16le-bom" ? Buffer.from([0xff, 0xfe]) : Buffer.alloc(0),
+							Buffer.from(diagnostic, "utf16le"),
+						]);
+			const f = fakeRuntime(async command => ({
+				exitCode: 1,
+				stdout: "",
+				stderr: Array.from(bytes, (_, index) => command.decodeOutput!(bytes.subarray(index, index + 1))).join(""),
+			}));
+			expect(await discoverWsl(f.gate, { debug: false, platform: "win32", which: () => "wsl.exe" })).toEqual({
+				status: "SKIPPED_WSL_UNAVAILABLE",
+				reason: diagnostic,
+			});
+		},
+	);
 	test("parses default markers, localized state and spaced distro names", () => {
 		expect(
 			parseWslListVerbose(
@@ -516,6 +585,251 @@ describe("streamed deployed fixed-commit execution", () => {
 		);
 		expect((await runWslStage(f.gate, f.options)).status).toBe("BLOCKED");
 		expect(f.commands.some(c => c.label === "wsl/network-clone")).toBe(false);
+	});
+	test.skipIf(process.platform !== "linux").each([
+		{ nested: "target", ambiguous: false },
+		{ nested: ".cache", ambiguous: false },
+		{ nested: "venv", ambiguous: false },
+		{ nested: "node_modules", ambiguous: false },
+		{ nested: ".venv", ambiguous: false },
+		{ nested: "target/.cache/venv", ambiguous: false },
+		{ nested: "target", ambiguous: true },
+		{ nested: ".cache", ambiguous: true },
+		{ nested: "venv", ambiguous: true },
+		{ nested: "node_modules", ambiguous: true },
+		{ nested: ".venv", ambiguous: true },
+	])("P2-38 discovers $nested repositories (ambiguous=$ambiguous)", async row => {
+		const directory = await fs.mkdtemp(path.join(temporary, "native-discovery-"));
+		const nativeRoot = path.join(directory, "root");
+		const bin = path.join(directory, "bin");
+		await fs.mkdir(bin);
+		await fs.writeFile(path.join(bin, "id"), "#!/bin/sh\nprintf '0\\n'\n", { mode: 0o755 });
+		const roots = [`${row.nested}/oh-my-pi`, ...(row.ambiguous ? ["oh-my-pi"] : [])];
+		for (const relative of roots) {
+			const repository = path.join(nativeRoot, relative);
+			await fs.mkdir(repository, { recursive: true });
+			for (const args of [
+				["init", "--quiet", repository],
+				["-C", repository, "remote", "add", "fork", "https://github.com/owner/oh-my-pi.git"],
+			]) {
+				const child = Bun.spawn(["git", ...args], { stdout: "pipe", stderr: "pipe" });
+				const [code, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stderr).text(),
+					new Response(child.stdout).text(),
+				]);
+				expect(stderr).toBe("");
+				expect(code).toBe(0);
+			}
+		}
+		const f = executionFixture(async command => {
+			if (command.label !== "wsl/native-repository-discovery") return undefined;
+			// Execute the generated discovery, not a precomputed candidate list.
+			// Only relocate its /root filesystem boundary into this private fixture.
+			const child = Bun.spawn(["bash", "-s"], {
+				stdin: new Blob([String(command.stdin).replaceAll("/root", nativeRoot)]),
+				env: { ...process.env, HOME: nativeRoot, PATH: `${bin}:${process.env.PATH}` },
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [exitCode, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(stderr).toBe("");
+			expect(exitCode).toBe(0);
+			const candidates = JSON.parse(stdout) as Array<{ linux_repo: string }>;
+			expect(candidates.map(candidate => candidate.linux_repo).sort()).toEqual(
+				roots.map(relative => path.join(nativeRoot, relative)).sort(),
+			);
+			return { exitCode, stdout: stdout.replaceAll(nativeRoot, "/root"), stderr };
+		});
+		expect((await runWslStage(f.gate, f.options)).status).toBe(row.ambiguous ? "BLOCKED" : "PASS");
+		expect(f.commands.some(command => command.label === "wsl/network-clone")).toBe(false);
+		const planning = f.commands.find(command => command.label === "wsl/deployed-workflow-plan");
+		if (row.ambiguous) expect(planning).toBeUndefined();
+		else expect(JSON.parse(String(planning!.stdin)).linux_repo).toBe(`/root/${row.nested}/oh-my-pi`);
+	});
+	test.each(["wsl/native-repository-discovery", "wsl/native-environment"])(
+		"P2-39 registers independent cancellation for %s",
+		async label => {
+			const f = executionFixture();
+			await runWslStage(f.gate, f.options);
+			const command = f.commands.find(command => command.label === label)!;
+			expect(command.onAbort).toBeFunction();
+			expect(command.abortCommand).toBeDefined();
+			expect(command.abortCommand!.argv.slice(0, 8)).toEqual([
+				"wsl.exe",
+				"--distribution",
+				"Ubuntu-24.04",
+				"--user",
+				"root",
+				"--cd",
+				"/root",
+				"--",
+			]);
+		},
+	);
+	test.skipIf(process.platform !== "linux").each([
+		{ label: "wsl/native-repository-discovery", outcome: "cancel", cleanupFailure: false, expected: 143 },
+		{ label: "wsl/native-environment", outcome: "cancel", cleanupFailure: false, expected: 143 },
+		{ label: "wsl/native-environment", outcome: "timeout", cleanupFailure: false, expected: 124 },
+		{ label: "wsl/native-environment", outcome: "timeout", cleanupFailure: true, expected: 124 },
+		{ label: "wsl/native-environment", outcome: "success", cleanupFailure: false, expected: 0 },
+		{ label: "wsl/native-environment", outcome: "failure", cleanupFailure: true, expected: 17 },
+	])("P2-39 $label lifecycle $outcome preserves ownership (cleanup failure=$cleanupFailure)", async row => {
+		const f = executionFixture();
+		await runWslStage(f.gate, f.options);
+		const command = f.commands.find(command => command.label === row.label)!;
+		const directory = await fs.mkdtemp(path.join(temporary, "native-owner-"));
+		const nativeRoot = path.join(directory, "root");
+		const control = path.join(directory, "control");
+		const writerPid = path.join(directory, "writer-pid");
+		const ownerPid = path.join(directory, "owner-pid");
+		const descendantPid = path.join(directory, "descendant-pid");
+		const bin = path.join(directory, "bin");
+		await fs.mkdir(path.join(nativeRoot, "oh-my-pi", ".git"), { recursive: true });
+		await fs.mkdir(bin);
+		await fs.writeFile(path.join(bin, "id"), "#!/bin/sh\nprintf '0\\n'\n", { mode: 0o755 });
+		const probe = `#!/bin/bash
+set -eu
+read -r -a stat < /proc/$$/stat
+printf '%s %s\\n' "$$" "\${stat[21]}" > "$NATIVE_WRITER_PID"
+cat "$NATIVE_CONTROL/pid" > "$NATIVE_OWNER_PID"
+case "$NATIVE_OUTCOME" in
+ success|failure) ;;
+ *)
+  sleep 30 &
+  descendant=$!
+  read -r -a stat < /proc/$descendant/stat
+  printf '%s %s\\n' "$descendant" "\${stat[21]}" > "$NATIVE_DESCENDANT_PID"
+  ;;
+esac
+printf 'NATIVE_WRITER_READY\\n' >&2
+case "$NATIVE_OUTCOME" in
+ success) exit 0;;
+ failure) exit 17;;
+ *) wait;;
+esac
+`;
+		for (const tool of ["git", "bun", "cargo", "rustc", "cargo-nextest"]) {
+			await fs.writeFile(
+				path.join(bin, tool),
+				tool === (row.label === "wsl/native-environment" ? "cargo" : "git") ? probe : "#!/bin/sh\nexit 0\n",
+				{ mode: 0o755 },
+			);
+		}
+		if (row.cleanupFailure) {
+			const python = Bun.which("python3")!;
+			// Leave the real native owner alive on timeout, but fail only the
+			// wrapper's cleanup attempt. The later independent cancel uses PATH
+			// outside this fixture and must still find the retained birth receipt.
+			await fs.writeFile(
+				path.join(bin, "python3"),
+				`#!/bin/bash\nif [ "$1" = --version ]; then exec '${python.replaceAll("'", "'\\''")}' "$@"; fi\nexit 29\n`,
+				{ mode: 0o755 },
+			);
+		}
+		const argv = command.argv.slice(8);
+		// Preserve the production outer timeout/process-group boundary, only
+		// shortening its duration and avoiding a login shell resetting PATH.
+		if (row.outcome === "timeout") argv[3] = "0.5";
+		argv[5] = "-s";
+		const unrelated = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+		const running = Bun.spawn(argv, {
+			stdin: new Blob([
+				String(command.stdin)
+					.replaceAll("/root", nativeRoot)
+					.replace(/\/tmp\/omp-slowtest-[\w-]+/g, control),
+			]),
+			env: {
+				...process.env,
+				HOME: nativeRoot,
+				PATH: `${bin}:${process.env.PATH}`,
+				NATIVE_WRITER_PID: writerPid,
+				NATIVE_OWNER_PID: ownerPid,
+				NATIVE_DESCENDANT_PID: descendantPid,
+				NATIVE_CONTROL: control,
+				NATIVE_OUTCOME: row.outcome,
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const output = new Response(running.stdout).text();
+		const [monitor, captured] = running.stderr.tee();
+		const errors = new Response(captured).text();
+		const cancel = async () => {
+			const child = Bun.spawn(
+				[
+					"bash",
+					"-c",
+					command
+						.abortCommand!.argv.at(-1)!
+						.replaceAll("/root", nativeRoot)
+						.replace(/\/tmp\/omp-slowtest-[\w-]+/g, control),
+				],
+				{ stdout: "pipe", stderr: "pipe" },
+			);
+			const [code, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stderr).text(),
+				new Response(child.stdout).text(),
+			]);
+			expect(stderr).toBe("");
+			expect(code).toBe(0);
+		};
+		try {
+			const reader = monitor.getReader();
+			let startup = "";
+			while (!startup.includes("NATIVE_WRITER_READY")) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error(`Native fixture exited before startup: ${startup}`);
+				startup += new TextDecoder().decode(chunk.value);
+			}
+			void reader.cancel();
+			const receipt = (await fs.readFile(ownerPid, "utf8")).trim().split(/\s+/);
+			expect(Number(receipt[0])).toBeGreaterThan(0);
+			expect(receipt[1]).toMatch(/^\d+$/);
+			if (row.outcome === "cancel") await cancel();
+			expect(await running.exited).toBe(row.expected);
+			if (row.cleanupFailure) {
+				expect((await fs.readFile(path.join(control, "pid"), "utf8")).trim().split(/\s+/)).toEqual(receipt);
+				if (row.outcome === "timeout") {
+					const fields = (await fs.readFile(`/proc/${receipt[0]}/stat`, "utf8")).split(") ")[1]!.split(" ");
+					expect(fields[19]).toBe(receipt[1]);
+					expect(fields[0]).not.toBe("Z");
+				}
+				await cancel();
+			}
+			expect(existsSync(control)).toBe(false);
+			for (const file of [ownerPid, writerPid, descendantPid]) {
+				const [pid, born] = (await fs.readFile(file, "utf8").catch(() => "")).trim().split(/\s+/);
+				if (!pid) continue;
+				const fields = (await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "")).split(") ")[1]?.split(" ");
+				expect(!fields || fields[19] !== born || fields[0] === "Z").toBe(true);
+			}
+			expect(unrelated.exitCode).toBeNull();
+		} finally {
+			// Independently recorded birth identities survive even a regression
+			// that deletes control prematurely; never target recycled PIDs.
+			for (const file of [descendantPid, writerPid, ownerPid]) {
+				const [pidText, birth] = (await fs.readFile(file, "utf8").catch(() => "")).trim().split(/\s+/);
+				const pid = Number(pidText);
+				if (!pid || pid === process.pid || !birth) continue;
+				const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8").catch(() => "");
+				if (stat.split(") ")[1]?.split(" ")[19] === birth) {
+					try {
+						process.kill(pid, "SIGKILL");
+					} catch (error) {
+						if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+					}
+				}
+			}
+			running.kill();
+			unrelated.kill();
+			await Promise.all([running.exited, unrelated.exited, output, errors]);
+		}
 	});
 	test.each([
 		{

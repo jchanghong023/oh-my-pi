@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as bun from "bun";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -11,6 +12,10 @@ import {
 } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import * as piUtils from "@oh-my-pi/pi-utils";
+import { Settings } from "../../src/config/settings";
+import { cfgIdaInstall } from "../../src/ida/install";
+import { resolveIdaRuntime } from "../../src/ida/runtime";
+import type { ToolSession } from "../../src/tools";
 
 describe("Python gateway environment filtering", () => {
 	it("filters sensitive and unknown variables from shell env", () => {
@@ -138,7 +143,7 @@ describe("enumeratePythonRuntimes", () => {
 	const systemPy = path.join(path.sep, "usr", "bin", "python3");
 	const offlinePy = "/software/public/python/3.11.4/bin/python3.11";
 
-	it("prefers the fixed Linux offline interpreter over active and managed environments without leaking activation", () => {
+	it("keeps the Eval-only fixed interpreter out of shared discovery for active environments", () => {
 		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
 		const activeDir = path.join(path.sep, "business", ".venv");
 		const activePy = path.join(activeDir, "bin", "python");
@@ -162,15 +167,11 @@ describe("enumeratePythonRuntimes", () => {
 
 		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), baseEnv);
 
-		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([offlinePy, activePy, linuxManagedPy, systemPy]);
-		expect(runtimes[0].venvPath).toBeUndefined();
-		expect(runtimes[0].env).toEqual({
-			OMP_OFFLINE: "1",
-			PATH: baseEnv.PATH,
-			LD_LIBRARY_PATH: baseEnv.LD_LIBRARY_PATH,
-		});
-		expect(runtimes[1].env.VIRTUAL_ENV).toBe(activeDir);
-		expect(runtimes[1].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
+		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, linuxManagedPy, systemPy]);
+		expect(runtimes[0].venvPath).toBe(activeDir);
+		expect(runtimes[0].env.VIRTUAL_ENV).toBe(activeDir);
+		expect(runtimes[0].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
+		expect(runtimes[2].env).toEqual(baseEnv);
 		expect(baseEnv).toEqual(originalEnv);
 	});
 
@@ -233,7 +234,7 @@ describe("enumeratePythonRuntimes", () => {
 		expect(which).not.toHaveBeenCalled();
 	});
 
-	it("prefers the fixed Linux offline interpreter over a discovered project venv", () => {
+	it("keeps the Eval-only fixed interpreter out of shared discovery for project environments", () => {
 		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
 		const cwd = path.join(path.sep, "work");
 		const projectDir = path.join(cwd, ".venv");
@@ -251,8 +252,8 @@ describe("enumeratePythonRuntimes", () => {
 
 			const runtimes = enumeratePythonRuntimes(cwd, { OMP_OFFLINE: "1" });
 
-			expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([offlinePy, projectPython, systemPy]);
-			expect(runtimes[1].venvPath).toBe(projectDir);
+			expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([projectPython, systemPy]);
+			expect(runtimes[0].venvPath).toBe(projectDir);
 		} finally {
 			if (activeVenv === undefined) delete piUtils.$env.VIRTUAL_ENV;
 			else piUtils.$env.VIRTUAL_ENV = activeVenv;
@@ -260,6 +261,71 @@ describe("enumeratePythonRuntimes", () => {
 			else piUtils.$env.CONDA_PREFIX = activeConda;
 		}
 	});
+
+	it.each(["active", "project"] as const)(
+		"does not let Eval's fixed offline interpreter replace IDA's %s environment",
+		async source => {
+			Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+			const cwd = path.join(path.sep, "work", `ida-offline-${randomUUID()}`);
+			const venvDir = source === "active" ? path.join(cwd, "business-venv") : path.join(cwd, ".venv");
+			const venvBin = path.join(venvDir, "bin");
+			const venvPython = path.join(venvBin, "python");
+			const env: Record<string, string> = {
+				OMP_OFFLINE: "1",
+				PATH: "/usr/bin",
+				PYTHONPATH: "/business/python36/site-packages",
+			};
+			if (source === "active") env.VIRTUAL_ENV = venvDir;
+			const originalEnv = { ...env };
+			const settings = Settings.isolated();
+			const shellConfig = settings.getShellConfig();
+			vi.spyOn(Settings, "init").mockResolvedValue(settings);
+			vi.spyOn(settings, "getShellConfig").mockReturnValue({ ...shellConfig, env });
+			const installDir = path.join(cwd, "ida");
+			vi.spyOn(cfgIdaInstall, "get").mockReturnValue(installDir);
+			vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+			vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+			vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
+				[offlinePy, venvDir, venvPython].includes(String(candidate)),
+			);
+			// Native `$` imports retain their callable across namespace spies.
+			// Intercept the shared lazy ShellPromise instead, before any command
+			// can run: every candidate deterministically qualifies for IDA.
+			const shellPrototype = Object.getPrototypeOf(bun.$`exit 0`) as bun.$.ShellPromise;
+			const probeEnv = vi.spyOn(shellPrototype, "env");
+			const probe = vi
+				.spyOn(shellPrototype, "nothrow")
+				.mockReturnValue(Promise.resolve({ exitCode: 0 }) as unknown as bun.$.ShellPromise);
+			const activeVenv = piUtils.$env.VIRTUAL_ENV;
+			const activeConda = piUtils.$env.CONDA_PREFIX;
+			try {
+				delete piUtils.$env.VIRTUAL_ENV;
+				delete piUtils.$env.CONDA_PREFIX;
+
+				const runtime = await resolveIdaRuntime({ cwd, settings, hasUI: false } as ToolSession);
+
+				expect(probe).toHaveBeenCalledTimes(1);
+				expect(probeEnv).toHaveBeenCalledTimes(1);
+				expect(runtime.pythonPath).toBe(venvPython);
+				expect(probeEnv.mock.calls[0][0]).toMatchObject({
+					VIRTUAL_ENV: venvDir,
+					PYTHONPATH: env.PYTHONPATH,
+					PATH: `${venvBin}${path.delimiter}${env.PATH}`,
+				});
+				expect(runtime.env).toMatchObject({
+					VIRTUAL_ENV: venvDir,
+					PYTHONPATH: env.PYTHONPATH,
+					IDADIR: installDir,
+				});
+				expect(env).toEqual(originalEnv);
+			} finally {
+				if (activeVenv === undefined) delete piUtils.$env.VIRTUAL_ENV;
+				else piUtils.$env.VIRTUAL_ENV = activeVenv;
+				if (activeConda === undefined) delete piUtils.$env.CONDA_PREFIX;
+				else piUtils.$env.CONDA_PREFIX = activeConda;
+			}
+		},
+	);
 
 	it("enumerates the managed env AND the system interpreter so a broken managed env can fall through", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);

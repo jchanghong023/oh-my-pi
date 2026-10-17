@@ -103,6 +103,8 @@ interface TranscriptEntry {
 	 * committed row is ever still visible above the viewport.
 	 */
 	split: RowSplit | undefined;
+	/** A compact aggregate changed across this seam; replay retirement must first rebase its physical prefix. */
+	compactSplitReflow?: boolean;
 }
 
 /**
@@ -235,7 +237,9 @@ export class TranscriptContainer extends Container {
 	#replayRequested = false;
 	#toolActivityVisible = true;
 	#lastFrame: AnimationFrame = { tick: 0, now: 0 };
-	#compactOpenStart = Number.POSITIVE_INFINITY;
+	/** Beginning of the current uninterrupted tool run, even after its head retires. */
+	#compactRunStart = Number.POSITIVE_INFINITY;
+	#compactHistoryInvalidated = false;
 	// Start rows from the last full render(), keyed by child component (transcript deep-links).
 	#childStartRows = new Map<Component, number>();
 	// Watchdog for the wedge where an unfinalized frontier block pins pressure
@@ -328,6 +332,8 @@ export class TranscriptContainer extends Container {
 		this.#pinnedFrontier = undefined;
 		this.#replayPending = false;
 		this.#replayRequested = false;
+		this.#compactRunStart = Number.POSITIVE_INFINITY;
+		this.#compactHistoryInvalidated = false;
 		this.#lastViewportSpans = [];
 	}
 
@@ -683,7 +689,7 @@ export class TranscriptContainer extends Container {
 
 	#peekReplayBatch(width: number): HistoryBatch | undefined {
 		if (this.#offered !== undefined) {
-			return this.#offered.kind === "replay" ? this.#offered.batch : undefined;
+			return this.#offered.batch.kind === "replay" ? this.#offered.batch : undefined;
 		}
 		if (!this.#replayPending) return undefined;
 		// The one path that must compose the whole ledger in a single frame; the
@@ -696,11 +702,17 @@ export class TranscriptContainer extends Container {
 			popLoopPhase();
 		}
 		this.#replayPending = false;
-		if (rows.length === 0) {
+		if (rows.length === 0 && !this.#compactHistoryInvalidated) {
 			this.#releaseCommittedRenderCaches();
 			return undefined;
 		}
-		const batch: HistoryBatch = { id: this.#nextBatchId++, rows, kind: "replay" };
+		const batch: HistoryBatch = {
+			id: this.#nextBatchId++,
+			rows,
+			kind: "replay",
+			...(this.#compactHistoryInvalidated ? { clearScrollback: true } : {}),
+		};
+		this.#compactHistoryInvalidated = false;
 		this.#offered = { batch, kind: "replay" };
 		return batch;
 	}
@@ -740,7 +752,10 @@ export class TranscriptContainer extends Container {
 		} else {
 			rows = this.#renderReplay(width);
 		}
-		offered.batch = { id: offered.batch.id, rows, kind: offered.batch.kind };
+		if (offered.kind !== "replay" && offered.batch.kind === "replay") {
+			rows = [...this.#renderReplay(width), ...rows];
+		}
+		offered.batch = { ...offered.batch, rows };
 		return offered.batch;
 	}
 
@@ -748,13 +763,19 @@ export class TranscriptContainer extends Container {
 		this.#syncEntries();
 		this.#settleFinalized();
 		if (this.#offered !== undefined) return this.#offered.batch;
-		const replay = this.#peekReplayBatch(width);
-		if (replay !== undefined) return replay;
+		// A replacement must carry the finalized overflow in this same transaction:
+		// the bounded viewport cannot keep those rows visible until another paint.
+		const compactReplay = this.#replayPending && this.#compactHistoryInvalidated;
+		if (!compactReplay) {
+			const replay = this.#peekReplayBatch(width);
+			if (replay !== undefined) return replay;
+		}
 
+		if (compactReplay) this.#rebaseCompactSplit(width);
 		this.#completeFullyEmittedHeads(width);
 		const room = Math.max(0, Math.trunc(capacity));
 		const live = this.#liveEntries();
-		if (live.length === 0) return undefined;
+		if (live.length === 0) return this.#peekReplayBatch(width);
 
 		// Only a render publishes a block's stable rows, so the head renders
 		// before its progressive-append eligibility is read.
@@ -804,7 +825,7 @@ export class TranscriptContainer extends Container {
 		const overflowing = keep > 0 || this.#liveCount() >= MAX_LIVE_BLOCKS;
 		if (policy === "pressure" && !overflowing) {
 			this.#pinnedFrontier = undefined;
-			return undefined;
+			return this.#peekReplayBatch(width);
 		}
 
 		if (appendHead !== undefined && keep > 0) {
@@ -825,7 +846,7 @@ export class TranscriptContainer extends Container {
 				};
 				this.#offered = { batch, kind: "append", entry: this.#frontier, emittedEnd };
 				this.#pinnedFrontier = undefined;
-				return batch;
+				return this.#completeHistoryOffer(width);
 			}
 		}
 
@@ -836,7 +857,6 @@ export class TranscriptContainer extends Container {
 			limit = Math.max(limit, this.#frontier + (this.#liveCount() - (MAX_LIVE_BLOCKS - 1)));
 		}
 		if (policy === "flush") limit = this.#entries.length;
-		if (policy === "pressure") limit = Math.min(limit, this.#compactOpenStart);
 		// The block straddling the top edge commits only the rows that left the
 		// screen; the rest stays live, so a later shrink of the chrome or the
 		// tail refills the screen from live rows instead of opening a band no
@@ -845,7 +865,7 @@ export class TranscriptContainer extends Container {
 		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
 			const boundary = live[keep - 1]!;
 			const visible = room - tailRows - boundaryGap;
-			if (boundary.index < this.#compactOpenStart && boundary.entry.state === "settled" && visible > 0) {
+			if (boundary.entry.state === "settled" && visible > 0) {
 				const offer = this.#splitOffer(boundary.entry, width, visible);
 				if (offer !== undefined) {
 					split = { index: boundary.index, ...offer };
@@ -858,7 +878,7 @@ export class TranscriptContainer extends Container {
 		if (split !== undefined && end !== split.index) split = undefined;
 		if (end === this.#frontier && split === undefined) {
 			if (policy === "pressure") this.#notePinnedFrontier();
-			return undefined;
+			return this.#peekReplayBatch(width);
 		}
 		this.#pinnedFrontier = undefined;
 		pushLoopPhase("ui.transcript-retire");
@@ -871,7 +891,7 @@ export class TranscriptContainer extends Container {
 				end,
 				width,
 				true,
-				policy === "flush" ? undefined : RETIREMENT_BUDGET_MS,
+				policy === "flush" || compactReplay ? undefined : RETIREMENT_BUDGET_MS,
 			);
 		} finally {
 			popLoopPhase();
@@ -883,7 +903,23 @@ export class TranscriptContainer extends Container {
 			kind: "append",
 		};
 		this.#offered = { batch, end: retirement.end, kind: "commit", split: split?.split };
-		return batch;
+		return this.#completeHistoryOffer(width);
+	}
+
+	/** Coalesce changed compact history and newly retired rows into one accepted frame. */
+	#completeHistoryOffer(width: number): HistoryBatch {
+		const offered = this.#offered!;
+		if (this.#replayPending && this.#compactHistoryInvalidated) {
+			offered.batch = {
+				...offered.batch,
+				rows: [...this.#renderReplay(width), ...offered.batch.rows],
+				kind: "replay",
+				clearScrollback: true,
+			};
+			this.#replayPending = false;
+			this.#compactHistoryInvalidated = false;
+		}
+		return offered.batch;
 	}
 
 	/**
@@ -923,7 +959,8 @@ export class TranscriptContainer extends Container {
 			this.#frontier = offered.end;
 			const head = offered.split ? this.#entries[offered.end] : undefined;
 			if (head !== undefined) head.split = offered.split;
-		} else {
+		}
+		if (offered.batch.kind === "replay") {
 			this.#releaseCommittedRenderCaches();
 		}
 		this.#offered = undefined;
@@ -1279,7 +1316,18 @@ export class TranscriptContainer extends Container {
 		return { rows, end: reached };
 	}
 
+	/** Fix the replay seam before retirement measures or slices the changed compact block. */
+	#rebaseCompactSplit(width: number): void {
+		const head = this.#entries[this.#frontier];
+		if (head?.split === undefined || !head.compactSplitReflow) return;
+		this.#setAllocation(head.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
+		const scrollback = renderForScrollback(() => this.#renderEntry(head, width));
+		head.split = rowSplit(scrollback, Math.min(head.split.rows, scrollback.length), width);
+		head.compactSplitReflow = false;
+	}
+
 	#renderReplay(width: number): readonly string[] {
+		this.#rebaseCompactSplit(width);
 		const rows = Array.from(this.#renderRange(0, this.#frontier, width, true).rows);
 		const head = this.#entries[this.#frontier];
 		if (head?.split !== undefined) {
@@ -1467,11 +1515,12 @@ export class TranscriptContainer extends Container {
 		(component as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(rows, frame);
 	}
 
-	/** Keep open compact runs mutable: their summary must not enter immutable scrollback. */
-	#updateCompactTools(startIndex = this.#frontier): void {
-		this.#compactOpenStart = Number.POSITIVE_INFINITY;
+	/** Recompute the whole open tool run; retired compact projections are replaced through normal replay. */
+	#updateCompactTools(startIndex = Math.min(this.#frontier, this.#compactRunStart)): void {
 		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
+		this.#compactRunStart = Number.POSITIVE_INFINITY;
 		let start = -1;
+		let firstSuccess = -1;
 		let completed = 0;
 		let failures = 0;
 		const flush = (end: number) => {
@@ -1482,10 +1531,32 @@ export class TranscriptContainer extends Container {
 				const component = this.children[index]!;
 				if (!isToolActivityComponent(component) || !component.getCompactToolCount) continue;
 				const keep = Math.min(remaining, component.getCompactToolCount());
-				component.setCompactToolLimit?.(keep, index === start ? summary : 0, index === start ? failures : 0);
+				const changed = component.setCompactToolLimit?.(
+					keep,
+					index === firstSuccess ? summary : 0,
+					index === firstSuccess ? failures : 0,
+				);
+				if (changed) {
+					const entry = this.#entries[index];
+					if (entry !== undefined) this.#frameRows.delete(entry);
+					const offered = this.#offered;
+					const offeredCommit = offered?.kind === "commit" && index < offered.end + (offered.split ? 1 : 0);
+					if (entry?.state === "committed" || entry?.split !== undefined || offeredCommit) {
+						this.#compactHistoryInvalidated = true;
+						if (
+							entry?.split !== undefined ||
+							(offered?.kind === "commit" && index === offered.end && offered.split)
+						) {
+							if (entry !== undefined) entry.compactSplitReflow = true;
+						}
+						if (offered !== undefined) this.#replayRequested = true;
+						else this.#replayPending = true;
+					}
+				}
 				remaining -= keep;
 			}
 			start = -1;
+			firstSuccess = -1;
 			completed = 0;
 			failures = 0;
 		};
@@ -1493,13 +1564,15 @@ export class TranscriptContainer extends Container {
 			const component = this.children[index]!;
 			if (isToolActivityComponent(component) && component.getCompactToolCount) {
 				if (start < 0) start = index;
-				completed += component.getCompactToolCount();
+				const count = component.getCompactToolCount();
+				if (firstSuccess < 0 && count > 0) firstSuccess = index;
+				completed += count;
 				failures += component.getCompactToolFailureCount?.() ?? 0;
 			} else if (!isUsageRowBlock(component) && trimBlankEdges(component.render(80)).length > 0) {
 				flush(index);
 			}
 		}
-		if (start >= 0) this.#compactOpenStart = start;
+		if (start >= 0) this.#compactRunStart = start;
 		flush(this.children.length);
 	}
 

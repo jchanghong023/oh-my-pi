@@ -9,6 +9,13 @@ import { type CommitInferenceCache, computeCommitCacheKey } from "./cache";
 import type { ConventionalGenerationConfig } from "./config";
 import type { ConventionalPromptFamily } from "./prompts";
 
+const terminalCommitInferenceErrors = new WeakSet<Error>();
+
+/** Terminal provider failures must also bypass workflow-level fallbacks. */
+export function isTerminalCommitInferenceError(error: unknown): boolean {
+	return error instanceof Error && terminalCommitInferenceErrors.has(error);
+}
+
 /** Model roles preserved from llm-git's analysis/summary/map/fast pipeline. */
 export type CommitInferenceRole = "analysis" | "summary" | "map" | "fast";
 
@@ -176,7 +183,9 @@ export class OmpCommitInference implements CommitInference {
 				}
 			}
 		}
-		throw lastError ?? new Error(`Max retries exceeded for ${request.operation}`);
+		const error = lastError ?? new Error(`Max retries exceeded for ${request.operation}`);
+		if (terminalFailure) terminalCommitInferenceErrors.add(error);
+		throw error;
 	}
 
 	/** Release the cache and auth-storage handles after generation completes. */

@@ -760,7 +760,7 @@ export class Editor implements Component, Focusable {
 	#undoStack: EditorState[] = [];
 	#suspendUndo = false;
 
-	onSubmit?: (text: string) => void | Promise<void>;
+	onSubmit?: (text: string, rawText?: string) => void | Promise<void>;
 	onAltEnter?: (text: string) => void;
 	onChange?: (text: string) => void;
 	#textRevision = 0;
@@ -3616,7 +3616,8 @@ export class Editor implements Component, Focusable {
 	#submitValue(): void {
 		this.#resetKillSequence();
 
-		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
+		const rawText = this.#expandPasteMarkers(this.#state.lines.join("\n"));
+		const result = rawText.trim();
 
 		this.#state = { lines: [""], cursorLine: 0, cursorCol: 0 };
 		this.clearPasteState();
@@ -3625,7 +3626,7 @@ export class Editor implements Component, Focusable {
 		this.#undoStack.length = 0;
 
 		this.#notifyChange("");
-		if (this.onSubmit) this.onSubmit(result);
+		if (this.onSubmit) this.onSubmit(result, rawText);
 	}
 
 	/** Resolve the compiled, global copy of `atomicTokenPattern`, rebuilt only when the source changes. */

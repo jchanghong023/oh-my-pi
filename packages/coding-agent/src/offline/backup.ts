@@ -407,7 +407,7 @@ export async function runOfflineShmBackup(
 						end = start;
 					}
 				}
-				const backupMode = (before.mode & 0o111n) !== 0n ? 0o700 : 0o600;
+				const backupMode = (before.mode & 0o100n) !== 0n ? 0o700 : 0o600;
 				const output = destination ? await fs.open(destination, "wx", backupMode) : undefined;
 				try {
 					await output?.chmod(backupMode);

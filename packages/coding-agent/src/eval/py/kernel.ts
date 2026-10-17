@@ -7,6 +7,7 @@
  * code. Shutdown writes `{"type":"exit"}` and escalates to SIGTERM/SIGKILL on
  * timeout.
  */
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
@@ -22,13 +23,7 @@ import { stageRunnerScript } from "../runner-cache";
 import type { ShadowPlan } from "../speculation/types";
 import { PYTHON_PRELUDE } from "./prelude";
 import RUNNER_SCRIPT from "./runner.py" with { type: "text" };
-import {
-	enumeratePythonRuntimes,
-	filterEnv,
-	type PythonRuntime,
-	resolveExplicitPythonRuntime,
-	resolvePythonRuntime,
-} from "./runtime";
+import { enumeratePythonRuntimes, filterEnv, type PythonRuntime, resolveExplicitPythonRuntime } from "./runtime";
 import { hostHasInheritableConsole, shouldDetachKernel, shouldHideKernelWindow } from "./spawn-options";
 import type { PythonToolRequest } from "./executor";
 
@@ -115,6 +110,23 @@ interface PythonKernelExecuteOptions extends KernelExecuteOptions {
 // cached so installing a Python mid-session is picked up on the next attempt.
 const availabilityCache = new Map<string, Promise<PythonKernelAvailability>>();
 
+/** Eval alone prefers the fixed Linux offline interpreter over business Python. */
+function enumerateEvalPythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
+	const runtimes = enumeratePythonRuntimes(cwd, baseEnv);
+	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
+	if (process.platform !== "linux" || baseEnv.OMP_OFFLINE !== "1" || !fs.existsSync(offlinePython)) {
+		return runtimes;
+	}
+	// Isolate only the Eval child; preserve the caller and fallback candidates.
+	const env = { ...baseEnv };
+	delete env.VIRTUAL_ENV;
+	delete env.CONDA_PREFIX;
+	delete env.CONDA_DEFAULT_ENV;
+	delete env.PYTHONPATH;
+	delete env.PYTHONHOME;
+	return [{ pythonPath: offlinePython, env }, ...runtimes.filter(runtime => runtime.pythonPath !== offlinePython)];
+}
+
 export async function checkPythonKernelAvailability(
 	cwd: string,
 	interpreter?: string,
@@ -145,7 +157,7 @@ async function probePythonKernelAvailability(
 		const baseEnv = filterEnv(env);
 		const runtimes = interpreter
 			? [resolveExplicitPythonRuntime(interpreter, cwd, baseEnv)]
-			: enumeratePythonRuntimes(cwd, baseEnv);
+			: enumerateEvalPythonRuntimes(cwd, baseEnv);
 		if (runtimes.length === 0) {
 			return { ok: false, reason: "Python executable not found on PATH" };
 		}
@@ -294,7 +306,8 @@ export class PythonKernel extends BaseKernel<PythonKernelExecuteOptions> {
 			const { env: shellEnv } = (await Settings.init()).getShellConfig();
 			runtime = options.interpreter
 				? resolveExplicitPythonRuntime(options.interpreter, options.cwd, filterEnv(shellEnv))
-				: resolvePythonRuntime(options.cwd, filterEnv(shellEnv));
+				: enumerateEvalPythonRuntimes(options.cwd, filterEnv(shellEnv))[0];
+			if (!runtime) throw new Error("Python executable not found on PATH");
 		}
 		const spawnEnv: Record<string, string> = {};
 		for (const [key, value] of Object.entries(runtime.env)) {

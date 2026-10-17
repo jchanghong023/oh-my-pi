@@ -1146,6 +1146,7 @@ export class GateRun {
 			const ready = Promise.withResolvers<void>();
 			const outcome = Promise.withResolvers<{ exitCode: number; error?: string; missing?: boolean }>();
 			let replied = false;
+			let disconnected = false;
 			logger.info("Supervisor spawn started", {
 				...fields,
 				event: "gate_supervisor_spawn_started",
@@ -1214,6 +1215,18 @@ export class GateRun {
 								);
 						}
 					},
+					onDisconnect: () => {
+						if (disconnected) return;
+						disconnected = true;
+						ready.resolve();
+						// The final reply hands ownership back to the runtime, whose
+						// normal cleanup also closes IPC. Only an earlier disconnect
+						// is a failure; cancellation uses the same idempotent cleanup.
+						if (replied || owned?.cleanup || wallExpired) return;
+						const failure = new GateCommandError(`${command.label}: supervisor IPC disconnected`, 1);
+						outcome.resolve({ exitCode: failure.exitCode, error: failure.message });
+						failed(failure);
+					},
 				});
 				void child.exited.then(exitCode => {
 					logger.info("Supervisor closed", {
@@ -1262,10 +1275,12 @@ export class GateRun {
 				callId,
 				stage,
 			};
+			// Publish the ownership promise before any await or cancellation can
+			// start cleanup, including a disconnect during owner initialization.
+			owned.ownership = ownGateProcess(child, detached);
 			this.runtime.owned.add(owned);
 			if (command.abortCommand)
 				await ancestors(this.scope).at(-1)?.watchdog?.ownAbortCommand(callId, command.abortCommand);
-			owned.ownership = ownGateProcess(child, detached);
 			owned.owner = await owned.ownership;
 			this.throwIfAborted();
 			if (command.wallTimeoutSeconds !== undefined) {

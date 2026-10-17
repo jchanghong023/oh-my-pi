@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { scheduler } from "node:timers/promises";
 import * as zlib from "node:zlib";
 import { readUInt16LE, readUInt32LE, readUInt64LE, writeUInt16LE, writeUInt32LE, writeUInt64LE } from "./bytes";
 import { crc32 } from "./checksums";
@@ -606,8 +607,69 @@ export async function readZipEager(
 	}
 }
 
+// Bound checksum and copy work between event-loop turns, including stored members.
+const ENCODE_CHUNK_SIZE = 1024 * 1024;
+
+async function copyZipParts(
+	output: Uint8Array,
+	offset: number,
+	parts: Iterable<Uint8Array>,
+	signal?: AbortSignal,
+): Promise<number> {
+	let remaining = ENCODE_CHUNK_SIZE;
+	for (const part of parts) {
+		for (let start = 0; start < part.byteLength;) {
+			signal?.throwIfAborted();
+			const length = Math.min(remaining, part.byteLength - start);
+			output.set(part.subarray(start, start + length), offset);
+			offset += length;
+			start += length;
+			remaining -= length;
+			if (remaining === 0) {
+				await scheduler.yield();
+				signal?.throwIfAborted();
+				remaining = ENCODE_CHUNK_SIZE;
+			}
+		}
+	}
+	return offset;
+}
+
+async function deflateZipMember(data: Uint8Array, signal?: AbortSignal): Promise<Uint8Array | undefined> {
+	signal?.throwIfAborted();
+	const stream = zlib.createDeflateRaw();
+	const parts: Uint8Array[] = [];
+	let size = 0;
+	const onAbort = () => stream.destroy(new DOMException("ZIP encoding aborted", "AbortError"));
+	try {
+		await new Promise<void>((resolve, reject) => {
+			stream.on("data", (part: Buffer) => {
+				size += part.byteLength;
+				parts.push(part);
+			});
+			stream.once("error", reject);
+			stream.once("end", resolve);
+			signal?.addEventListener("abort", onAbort, { once: true });
+			stream.end(data);
+		});
+		signal?.throwIfAborted();
+		if (size >= data.byteLength) return undefined;
+		const output = new Uint8Array(size);
+		await copyZipParts(output, 0, parts, signal);
+		return output;
+	} finally {
+		signal?.removeEventListener("abort", onAbort);
+		stream.destroy();
+	}
+}
+
 /** Encode deterministic stored/deflated ZIP bytes, emitting ZIP64 end records when the entry count requires them. */
-export async function encodeZip(members: Iterable<readonly [string, Uint8Array]>): Promise<Uint8Array> {
+export async function encodeZip(
+	members: Iterable<readonly [string, Uint8Array]>,
+	options: { signal?: AbortSignal } = {},
+): Promise<Uint8Array> {
+	const { signal } = options;
+	signal?.throwIfAborted();
 	try {
 		const localParts: Uint8Array[] = [];
 		const centralParts: Uint8Array[] = [];
@@ -615,6 +677,11 @@ export async function encodeZip(members: Iterable<readonly [string, Uint8Array]>
 		let centralSize = 0;
 		let count = 0;
 		for (const [inputName, data] of members) {
+			signal?.throwIfAborted();
+			if (count > 0 && count % 256 === 0) {
+				await scheduler.yield();
+				signal?.throwIfAborted();
+			}
 			const portableName = inputName.replace(/\\/g, "/");
 			const normalizedName = normalizeArchiveEntryPath(portableName);
 			if (
@@ -630,13 +697,21 @@ export async function encodeZip(members: Iterable<readonly [string, Uint8Array]>
 			const nameBytes = TEXT_ENCODER.encode(name);
 			if (nameBytes.byteLength > U16_MAX) throw new ArchiveError(`ZIP member path '${name}' is too long to write`);
 			if (data.byteLength >= U32_MAX) throw new ArchiveError(`ZIP member '${name}' is too large to write`);
-			const deflated = data.byteLength === 0 ? undefined : zlib.deflateRawSync(data);
-			const payload = deflated && deflated.byteLength < data.byteLength ? deflated : data;
+			const deflated = data.byteLength === 0 ? undefined : await deflateZipMember(data, signal);
+			const payload = deflated ?? data;
 			const method = payload === data ? 0 : 8;
 			if (payload.byteLength >= U32_MAX || localSize >= U32_MAX) {
 				throw new ArchiveError("ZIP archive is too large to write member offsets safely");
 			}
-			const checksum = crc32(data);
+			let checksum = 0;
+			for (let offset = 0; offset < data.byteLength; offset += ENCODE_CHUNK_SIZE) {
+				signal?.throwIfAborted();
+				checksum = crc32(data.subarray(offset, offset + ENCODE_CHUNK_SIZE), checksum);
+				if (offset + ENCODE_CHUNK_SIZE <= data.byteLength) {
+					await scheduler.yield();
+					signal?.throwIfAborted();
+				}
+			}
 			const local = new Uint8Array(30 + nameBytes.byteLength);
 			writeUInt32LE(local, 0, LOCAL_HEADER_SIGNATURE);
 			writeUInt16LE(local, 4, 20);
@@ -682,15 +757,8 @@ export async function encodeZip(members: Iterable<readonly [string, Uint8Array]>
 		const totalSize = localSize + centralSize + trailerLength;
 		if (!Number.isSafeInteger(totalSize)) throw new ArchiveError("ZIP archive is too large to write");
 		const output = new Uint8Array(totalSize);
-		let outputOffset = 0;
-		for (const part of localParts) {
-			output.set(part, outputOffset);
-			outputOffset += part.byteLength;
-		}
-		for (const part of centralParts) {
-			output.set(part, outputOffset);
-			outputOffset += part.byteLength;
-		}
+		let outputOffset = await copyZipParts(output, 0, localParts, signal);
+		outputOffset = await copyZipParts(output, outputOffset, centralParts, signal);
 		if (zip64) {
 			const zip64EocdOffset = outputOffset;
 			writeUInt32LE(output, outputOffset, ZIP64_EOCD_SIGNATURE);
@@ -712,8 +780,11 @@ export async function encodeZip(members: Iterable<readonly [string, Uint8Array]>
 		writeUInt16LE(output, outputOffset + 10, zip64 ? U16_MAX : count);
 		writeUInt32LE(output, outputOffset + 12, centralSize);
 		writeUInt32LE(output, outputOffset + 16, localSize);
+		signal?.throwIfAborted();
 		return output;
 	} catch (error) {
+		signal?.throwIfAborted();
+		if (error instanceof Error && error.name === "AbortError") throw error;
 		throw archiveError(error, "Failed to encode ZIP archive");
 	}
 }

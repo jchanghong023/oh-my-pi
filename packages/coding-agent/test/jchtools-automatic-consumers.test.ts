@@ -4,6 +4,8 @@ import { createServer, type Socket } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Model } from "@oh-my-pi/pi-ai";
+import { runCommitCommand } from "@oh-my-pi/pi-coding-agent/commit";
+import { cfgCommitCacheEnabled, cfgCommitMapReduceThreshold } from "@oh-my-pi/pi-coding-agent/commit/settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
@@ -22,10 +24,13 @@ import {
 	cfgRetryMaxRetries,
 } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { createSkillDescriptionCompressor } from "@oh-my-pi/pi-coding-agent/extensibility/skill-descriptions";
+import * as sdk from "@oh-my-pi/pi-coding-agent/sdk";
 import { SpeechEnhancer } from "@oh-my-pi/pi-coding-agent/tts/speech-enhancer";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { generateCommitMessage } from "@oh-my-pi/pi-coding-agent/utils/commit-message-generator";
 import { generateSessionTitle } from "@oh-my-pi/pi-coding-agent/utils/title-generator";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import * as utils from "@oh-my-pi/pi-utils";
 
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => {
@@ -190,6 +195,53 @@ async function completion(session: ToolSession, schema?: Record<string, unknown>
 	await entry.promise;
 	if (entry.error) throw new Error(entry.error);
 	return entry.result;
+}
+
+async function legacyCommitFixture(
+	f: { root: string; settings: Settings; registry: ModelRegistry },
+	changedLines: number,
+) {
+	const git = async (...args: string[]) => {
+		const process = Bun.spawn(["git", ...args], { cwd: f.root, stdout: "pipe", stderr: "pipe" });
+		const stderr = await new Response(process.stderr).text();
+		if ((await process.exited) !== 0) throw new Error(`git ${args.join(" ")} failed: ${stderr}`);
+	};
+	await git("init", "--initial-branch=main");
+	fs.writeFileSync(
+		path.join(f.root, "parser.ts"),
+		Array.from({ length: changedLines }, (_, index) => `export const value${index} = ${index};`).join("\n") + "\n",
+	);
+	await git("add", "--", "parser.ts");
+	expect(await vcs.requireGit(f.root).numstat({ cached: true })).toEqual([
+		expect.objectContaining({ added: changedLines, removed: 0, path: "parser.ts" }),
+	]);
+	cfgCommitCacheEnabled.set(f.settings, false);
+	vi.spyOn(Settings, "init").mockResolvedValue(f.settings);
+	vi.spyOn(utils, "getProjectDir").mockReturnValue(f.root);
+	vi.spyOn(utils, "getAgentDir").mockReturnValue(f.root);
+	vi.spyOn(sdk, "discoverAuthStorage").mockImplementation(() => AuthStorage.create(":memory:"));
+	vi.spyOn(sdk, "loadCliExtensionProviders").mockResolvedValue(undefined);
+	// Keep the real legacy service, role resolution and OmpCommitInference. Only
+	// substitute discovery/auth inputs so no ambient provider or settings enter it.
+	const getApiKey = f.registry.getApiKey.bind(f.registry);
+	const resolver = f.registry.resolver.bind(f.registry);
+	vi.spyOn(ModelRegistry.prototype, "refresh").mockResolvedValue(undefined);
+	vi.spyOn(ModelRegistry.prototype, "getAvailable").mockImplementation(() => f.registry.getAvailable());
+	vi.spyOn(ModelRegistry.prototype, "getApiKey").mockImplementation(getApiKey);
+	vi.spyOn(ModelRegistry.prototype, "resolver").mockImplementation(resolver);
+	const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+	vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+	return {
+		run: (model: Model) =>
+			runCommitCommand({
+				legacy: true,
+				model: `${model.provider}/${model.id}:off`,
+				dryRun: true,
+				push: false,
+				noChangelog: true,
+			}),
+		output: () => stdout.mock.calls.map(([text]) => String(text)).join(""),
+	};
 }
 
 describe("automatic roles in text consumers", () => {
@@ -368,6 +420,68 @@ describe("automatic roles in text consumers", () => {
 		await expect(completion(f.toolSession)).rejects.toThrow("remote completion failed");
 		expect(f.requests).toEqual([{ path: "/v1/chat/completions", model: f.remote.id }]);
 	});
+
+	test.each([
+		{ failure: "http", changedLines: 1, fallback: "analysis" },
+		{ failure: "sse", changedLines: 1, fallback: "analysis" },
+		{ failure: "http", changedLines: 200, fallback: "map-reduce" },
+		{ failure: "sse", changedLines: 200, fallback: "map-reduce" },
+	])(
+		"legacy commit fast $failure failure for $changedLines lines never enters $fallback fallback",
+		async ({ failure, changedLines, fallback }) => {
+			const f = await fixture(true, {
+				respond: pathname => {
+					if (pathname !== "/v1/chat/completions") return undefined;
+					return failure === "http"
+						? Response.json({ error: { message: "remote legacy commit failed" } }, { status: 500 })
+						: new Response('data: {"error":{"message":"remote legacy commit failed"}}\n\n', {
+								headers: { "Content-Type": "text/event-stream" },
+							});
+				},
+			});
+			if (fallback === "map-reduce") cfgCommitMapReduceThreshold.set(f.settings, 1);
+			const legacy = await legacyCommitFixture(f, changedLines);
+
+			await expect(legacy.run(f.remote)).rejects.toThrow("remote legacy commit failed");
+			expect(f.requests).toEqual([{ path: "/v1/chat/completions", model: f.remote.id }]);
+			expect(legacy.output()).toContain("Generating commit message…");
+			expect(legacy.output()).not.toContain("Analyzing staged changes…");
+			expect(legacy.output()).not.toContain("Mapping batch");
+			expect(legacy.output()).not.toContain("Reducing file observations…");
+		},
+	);
+
+	test("legacy commit ordinary fast failures retain the analysis fallback", async () => {
+		let ordinaryRequests = 0;
+		const f = await fixture(true, {
+			respond: pathname => {
+				if (!pathname.startsWith("/ordinary/")) return undefined;
+				ordinaryRequests += 1;
+				if (ordinaryRequests <= 3) {
+					// Exhaust the ordinary inference budget, without transport-level
+					// transient retries, before exercising the outer workflow fallback.
+					return Response.json({ error: { message: "ordinary fast commit failed" } }, { status: 400 });
+				}
+				const chunk = (delta: object, finishReason: string | null = null) =>
+					`data: ${JSON.stringify({ id: "legacy-analysis", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`;
+				return new Response(
+					chunk({ role: "assistant", content: "# fix: corrected parser handling\n\n- Corrected parser values." }) +
+						chunk({}, "stop") +
+						"data: [DONE]\n\n",
+					{ headers: { "Content-Type": "text/event-stream" } },
+				);
+			},
+		});
+		if (!f.ordinary) throw new Error("expected ordinary legacy commit model");
+		const legacy = await legacyCommitFixture(f, 1);
+
+		await expect(legacy.run(f.ordinary)).resolves.toEqual({ usedFallback: false });
+		expect(f.requests).toEqual(
+			Array.from({ length: 4 }, () => ({ path: "/ordinary/chat/completions", model: f.ordinary!.id })),
+		);
+		expect(legacy.output()).toContain("Analyzing staged changes…");
+		expect(legacy.output()).toContain("fix: corrected parser handling");
+	}, 10_000);
 
 	test("a failed remote candidate reached after an ordinary failure stops the remaining chain", async () => {
 		const f = await fixture(true, {

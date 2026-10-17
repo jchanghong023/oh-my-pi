@@ -285,9 +285,13 @@ describe("offline shm complete runtime snapshots", () => {
 			const source = path.join(state.runtimeRoot, "managed-tool");
 			await fs.writeFile(source, "#!/bin/sh\nprintf restored");
 			await fs.chmod(source, 0o755);
+			const nonExecutable = path.join(state.runtimeRoot, "group-only-executable");
+			await fs.writeFile(nonExecutable, "not executable by its owner");
+			await fs.chmod(nonExecutable, 0o641);
 			const result = await snapshot(state);
 			const backedUpTool = path.join(result.root, "data", "managed-tool");
 			expect((await fs.stat(backedUpTool)).mode & 0o777).toBe(0o700);
+			expect((await fs.stat(path.join(result.root, "data", "group-only-executable"))).mode & 0o777).toBe(0o600);
 			const restored = fixture();
 			await fs.cp(path.join(result.root, "data"), restored.runtimeRoot, { recursive: true });
 			const process = Bun.spawn([path.join(restored.runtimeRoot, "managed-tool")], {

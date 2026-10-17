@@ -384,6 +384,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 	 * identity check and the append rollback point.
 	 */
 	#reopenIfReplaced(): number {
+		assertOfflineSessionPath(this.#fpath);
 		const held = this.#heldFile();
 		const live = statPathByHandle(this.#fpath);
 		if (!live) return fs.fstatSync(this.#fd).size;
@@ -409,6 +410,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 	 * and `#reopenIfReplaced` would append to the same descriptor again.
 	 */
 	#holdsLivePath(): boolean {
+		assertOfflineSessionPath(this.#fpath);
 		const held = this.#heldFile();
 		const live = statPathByHandle(this.#fpath);
 		if (!live) return true;
@@ -442,6 +444,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 				// O_APPEND and verify its identity before rolling back: the path may
 				// now name a different session file after an external replacement.
 				try {
+					assertOfflineSessionPath(this.#fpath);
 					const rollbackFd = fs.openSync(this.#fpath, "r+");
 					try {
 						const original = fs.fstatSync(this.#fd);
@@ -475,6 +478,7 @@ class FileSessionStorageWriter implements SessionStorageWriter {
 		// The publish lock serializes the append against a concurrent rewrite's
 		// check-then-rename, which would otherwise erase the appended turn.
 		try {
+			assertOfflineSessionPath(this.#fpath);
 			if (this.#publishLock) {
 				this.#publishLock(
 					() => this.#writeNow(line, this.#reopenIfReplaced()),

@@ -910,6 +910,12 @@ export class InputController {
 		this.ctx.ui.addStartListener(() => this.#enhancedPaste?.enable());
 	}
 
+	#trimSubmittedText(text: string): string {
+		const commandText = text.trimStart();
+		// Batch task whitespace is payload, unlike ordinary composer padding.
+		return parseSlashCommand(commandText)?.name === "jch-workflowzbatch" ? commandText : commandText.trimEnd();
+	}
+
 	/** Enforce the deleted-chip contract at submit time: images whose inline token was removed
 	 *  from the draft are dropped, and surviving markers are renumbered to the dense 1..K the
 	 *  positional `[Image #N] ↔ images[N-1]` mapping requires. Returns the rewritten text. */
@@ -920,7 +926,7 @@ export class InputController {
 		editor.pendingImages = compacted.keep.map(i => editor.pendingImages[i]);
 		editor.pendingImageLinks = compacted.keep.map(i => editor.pendingImageLinks[i]);
 		editor.imageLinks = editor.pendingImageLinks.length > 0 ? editor.pendingImageLinks : undefined;
-		return compacted.text.trim();
+		return this.#trimSubmittedText(compacted.text);
 	}
 
 	#dropSubmittedPending(images: ImageContent[] | undefined, links: (string | undefined)[] | undefined): void {
@@ -943,7 +949,7 @@ export class InputController {
 	): Promise<{ text: string; images?: ImageContent[]; imageLinks?: (string | undefined)[] } | undefined> {
 		const result = await this.ctx.session.extensionRunner?.emitInput(text, images, "interactive");
 		if (result?.handled) return undefined;
-		if (result?.text !== undefined) text = result.text.trim();
+		if (result?.text !== undefined) text = this.#trimSubmittedText(result.text);
 		if (result?.images !== undefined) {
 			images = result.images;
 			imageLinks = await materializeImageChipLinks(images, this.ctx.sessionManager);
@@ -953,15 +959,21 @@ export class InputController {
 	}
 
 	setupEditorSubmitHandler(): void {
-		this.ctx.editor.onSubmit = async (text: string) => {
+		this.ctx.editor.onSubmit = async (text: string, rawText?: string) => {
 			const submittedText = text;
 			const armed = this.#armedBareCommand;
 			this.#armedBareCommand = undefined;
 			const armedBareCommand =
 				armed && armed.sessionId === this.ctx.sessionManager.getSessionId() ? armed.text : undefined;
-			text = this.#compactDraftImages(text.trim());
+			text = this.#compactDraftImages(this.#trimSubmittedText(rawText ?? text));
 			const hasPendingImages = this.ctx.editor.pendingImages.length > 0;
-			if ((!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) && text) text = expandEmoticons(text);
+			if (
+				(!isSettingsInitialized() || cfgEmojiAutocomplete.get(settings)) &&
+				text &&
+				parseSlashCommand(text)?.name !== "jch-workflowzbatch"
+			) {
+				text = expandEmoticons(text);
+			}
 
 			// Focused subagent session: the editor is a plain chat box for it.
 			// Everything below (slash/bash/python, loop,
@@ -1148,7 +1160,7 @@ export class InputController {
 					// callback, so nothing re-enters `getUserInput` to arm the next
 					// iteration. Arm it here, now that the turn has settled.
 					if (this.ctx.loopModeEnabled) {
-						this.ctx.armLoopAutoSubmit();
+						this.ctx.armLoopAutoSubmit(Promise.resolve());
 					}
 					return;
 				}
@@ -1874,7 +1886,7 @@ export class InputController {
 
 	/** Send editor text as a follow-up message (queued behind current stream). */
 	async handleFollowUp(): Promise<void> {
-		let text = this.#compactDraftImages(this.ctx.editor.getExpandedText().trim());
+		let text = this.#compactDraftImages(this.#trimSubmittedText(this.ctx.editor.getExpandedText()));
 		let images = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 		let imageLinks =
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;

@@ -110,30 +110,30 @@ export class RepoHubComponent implements Component {
 				this.tui.requestRender();
 			},
 		};
-		const service = this.#open();
-		const work =
-			operation === "build"
-				? service.build(options)
-				: operation === "update"
-					? service.reconcile(options)
-					: service.storage.recoveryError
-						? service.recover(options)
-						: service.rebuild(options);
-		const pending = work
-			.catch(error => {
+		const pending = (async () => {
+			try {
+				const service = this.#open();
+				await (operation === "build"
+					? service.build(options)
+					: operation === "update"
+						? service.reconcile(options)
+						: service.storage.recoveryError
+							? service.recover(options)
+							: service.rebuild(options));
+			} catch (error) {
 				if (this.#operation === operation && !(error instanceof Error && error.name === "AbortError"))
 					this.#error = line(errorText(error));
-			})
-			.then(async () => {
-				if (this.#operation !== operation) return;
-				this.#abort = undefined;
-				this.#progress = undefined;
-				this.#operation = undefined;
-				if (!this.#disposed) await this.#refresh();
-			})
-			.finally(() => {
-				if (this.#work === pending) this.#work = undefined;
-			});
+			} finally {
+				if (this.#operation === operation) {
+					this.#abort = undefined;
+					this.#progress = undefined;
+					this.#operation = undefined;
+					if (!this.#disposed) await this.#refresh();
+				}
+			}
+		})().finally(() => {
+			if (this.#work === pending) this.#work = undefined;
+		});
 		this.#work = pending;
 		this.tui.requestRender();
 	}

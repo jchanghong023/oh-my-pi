@@ -9,10 +9,16 @@ import { Text } from "../src/components/text";
 import { TranscriptContainer } from "../src/chrome/transcript-container";
 import { md } from "../src/native/describe";
 import type { DescribeContext, NativeNode } from "../src/native/node";
+import { COMPOSER_DEFAULTS, Composer } from "../src/prompt/composer";
 import { initTheme } from "../src/theme";
 import { Container } from "../src/tui";
 import { setTerminalImageProtocol, TERMINAL } from "../src/terminal-capabilities";
 import type { CoordinationDetails } from "../src/tools/wait";
+import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
+import { VirtualRenderScheduler } from "./virtual-render-scheduler";
+import { VirtualTerminal } from "./virtual-terminal";
+
+withoutTerminalMultiplexer();
 
 const toolCx: DescribeContext = {
 	cols: 80,
@@ -156,6 +162,409 @@ describe("compact transcript activity", () => {
 		expect(Bun.stripANSI(component.render(70)[0])).toContain("old.ts → new.ts");
 		expect(JSON.stringify(component.describe(toolCx))).toContain("old.ts → new.ts");
 		expect(component.render(70)[0]).not.toContain("PRIVATE_EDIT_BODY");
+	});
+
+	it("P2-22 retains conflict read warnings without counting them as folded successes on both render paths", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const group = new ReadToolGroupComponent({ showContentPreview: true });
+		components.push(group);
+		transcript.addChild(group);
+		group.updateArgs({ path: "conflicted.ts" }, "conflict");
+		group.updateResult(
+			{
+				content: [{ type: "text", text: "PRIVATE_CONFLICT_BODY" }],
+				details: { conflictCount: 2 },
+			},
+			false,
+			"conflict",
+		);
+		for (let index = 0; index < 4; index++) {
+			const id = `success-${index}`;
+			group.updateArgs({ path: `${id}.ts` }, id);
+			group.updateResult({ content: [{ type: "text", text: "PRIVATE_READ_BODY" }] }, false, id);
+		}
+		group.finalize();
+
+		const ansi = transcript.render(100).map(row => Bun.stripANSI(row));
+		const native = transcript
+			.nativeBlocks()
+			.map(block => JSON.stringify(block.describe?.(toolCx)))
+			.join("\n");
+		for (const view of [ansi.join("\n"), native]) {
+			expect(view).toContain("conflicted.ts");
+			expect(view).toContain("2 conflicts");
+			expect(view).toContain("已收起 1 次成功调用");
+			expect(view).not.toContain("success-0.ts");
+			for (let index = 1; index < 4; index++) expect(view).toContain(`success-${index}.ts`);
+			expect(view).not.toContain("PRIVATE_");
+		}
+		expect(ansi).toHaveLength(5);
+	});
+
+	it.each(["failure", "warning"] as const)(
+		"P2-24 retires overflowing compact %s rows to scrollback without losing call identities",
+		kind => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const transcript = new TranscriptContainer();
+			const targets = Array.from({ length: 8 }, (_, index) => `${kind}-${index}.ts`);
+			for (const target of targets) {
+				if (kind === "failure") {
+					const component = new ToolExecutionComponent("read", { path: target }, {}, undefined, {
+						requestRender() {},
+						requestComponentRender() {},
+						resetDisplay() {},
+					});
+					components.push(component);
+					component.updateResult({
+						content: [{ type: "text", text: "Permission denied\nPRIVATE_FAILURE_BODY" }],
+						isError: true,
+					});
+					transcript.addChild(component);
+				} else {
+					const group = new ReadToolGroupComponent({ showContentPreview: true });
+					components.push(group);
+					group.updateArgs({ path: `${target}.missing` }, target);
+					group.updateResult(
+						{
+							content: [{ type: "text", text: "PRIVATE_WARNING_BODY" }],
+							details: { suffixResolution: { from: `${target}.missing`, to: target } },
+						},
+						false,
+						target,
+					);
+					group.finalize();
+					transcript.addChild(group);
+				}
+			}
+			const frame = { tick: 0, now: 0 };
+			transcript.renderViewport(100, 3, frame);
+			const history: string[] = [];
+			for (let index = 0; index <= targets.length; index++) {
+				const batch = transcript.peekFinalizedBatch(100, 3);
+				if (!batch) break;
+				history.push(...batch.rows);
+				transcript.acknowledgeFinalizedBatch(batch.id);
+			}
+			expect(Bun.stripANSI(history.join("\n"))).toContain(targets[0]!);
+			const viewport = transcript.renderViewport(100, 3, { tick: 1, now: 1 });
+			expect(viewport.length).toBeLessThanOrEqual(3);
+			const visibleHistory = [...history, ...viewport].map(row => Bun.stripANSI(row));
+			for (const target of targets) {
+				expect(visibleHistory.filter(row => row.includes(target))).toHaveLength(1);
+			}
+			expect(visibleHistory.join("\n")).not.toContain("PRIVATE_");
+		},
+	);
+
+	it.each(["failure", "warning", "grouped failure", "grouped warning"] as const)(
+		"P2-24 retains a success followed by overflowing %s rows and replays one whole-run success summary",
+		kind => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const transcript = new TranscriptContainer();
+			const grouped = kind.startsWith("grouped");
+			const warning = kind.endsWith("warning");
+			const group = grouped ? new ReadToolGroupComponent({ showContentPreview: true }) : undefined;
+			if (group) {
+				components.push(group);
+				transcript.addChild(group);
+				group.updateArgs({ path: "success-prefix.ts" }, "success-prefix");
+				group.updateResult(
+					{ content: [{ type: "text", text: "PRIVATE_PREFIX_SUCCESS" }] },
+					false,
+					"success-prefix",
+				);
+			}
+			const addSuccess = (path: string) => {
+				const component = new ToolExecutionComponent("write", { path }, {}, undefined, {
+					requestRender() {},
+					requestComponentRender() {},
+					resetDisplay() {},
+				});
+				components.push(component);
+				component.updateResult({ content: [{ type: "text", text: "PRIVATE_SUCCESS" }] });
+				transcript.addChild(component);
+			};
+			if (!group) addSuccess("success-prefix.ts");
+			const targets = Array.from({ length: 8 }, (_, index) => `failure-${index}.ts`);
+			for (const target of targets) {
+				if (group || warning) {
+					const reads = group ?? new ReadToolGroupComponent({ showContentPreview: true });
+					if (!group) {
+						components.push(reads);
+						transcript.addChild(reads);
+					}
+					reads.updateArgs({ path: target }, target);
+					reads.updateResult(
+						{
+							content: [{ type: "text", text: "Permission denied\nPRIVATE_RETAINED_BODY" }],
+							isError: !warning,
+							...(warning ? { details: { conflictCount: 2 } } : {}),
+						},
+						false,
+						target,
+					);
+					if (!group) reads.finalize();
+				} else {
+					const component = new ToolExecutionComponent("read", { path: target }, {}, undefined, {
+						requestRender() {},
+						requestComponentRender() {},
+						resetDisplay() {},
+					});
+					components.push(component);
+					component.updateResult({
+						content: [{ type: "text", text: "Permission denied\nPRIVATE_RETAINED_BODY" }],
+						isError: true,
+					});
+					transcript.addChild(component);
+				}
+			}
+			group?.finalize();
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			const originalDetailed = transcript.render(100).join("\n").trimEnd();
+			const originalNativeDetailed = transcript
+				.nativeBlocks()
+				.map(block => JSON.stringify(block.describe?.(toolCx)))
+				.join("\n");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const history: string[] = [];
+			const retire = (capacity: number) => {
+				for (let index = 0; index < 32; index++) {
+					const batch = transcript.peekFinalizedBatch(100, capacity);
+					if (!batch) break;
+					if (batch.kind === "replay") history.length = 0;
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+				}
+				return Bun.stripANSI(
+					[...history, ...transcript.renderViewport(100, capacity, { tick: 0, now: 0 })].join("\n"),
+				);
+			};
+			// The original failure: a single earlier success pinned all eight
+			// retained rows, leaving failure-0 through failure-4 unreachable.
+			const initial = retire(3);
+			expect(history.length).toBeGreaterThan(0);
+			for (const target of ["success-prefix.ts", ...targets]) {
+				expect(initial.split("\n").filter(row => row.includes(target))).toHaveLength(1);
+			}
+			for (let index = 0; index < 6; index++) addSuccess(`saved-${index}.ts`);
+			for (const [last, folded] of [
+				[5, 4],
+				[6, 5],
+			] as const) {
+				if (last === 6) addSuccess("saved-6.ts");
+				const ansi = retire(4);
+				const native = transcript
+					.nativeBlocks()
+					.map(block => JSON.stringify(block.describe?.(toolCx)))
+					.join("\n");
+				for (const view of [ansi, native]) {
+					expect(view.match(new RegExp(`已收起 ${folded} 次成功调用`, "g"))).toHaveLength(1);
+					if (!warning) expect(view).toContain("失败 8 次（保留）");
+					expect(view).not.toContain("success-prefix.ts");
+					for (let index = 0; index <= last; index++) {
+						if (index <= last - 3) expect(view).not.toContain(`saved-${index}.ts`);
+						else expect(view).toContain(`saved-${index}.ts`);
+					}
+					for (const target of targets) {
+						expect(view.split("\n").filter(row => row.includes(target))).toHaveLength(1);
+					}
+					expect(view).not.toContain("PRIVATE_");
+				}
+			}
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			const detailed = transcript.render(100).join("\n");
+			const nativeDetailed = transcript
+				.nativeBlocks()
+				.map(block => JSON.stringify(block.describe?.(toolCx)))
+				.join("\n");
+			for (const view of [detailed, nativeDetailed]) {
+				for (const target of ["success-prefix.ts", ...targets]) expect(view).toContain(target);
+				for (let index = 0; index < 7; index++) expect(view).toContain(`saved-${index}.ts`);
+			}
+			expect(detailed).toContain(originalDetailed);
+			expect(nativeDetailed).toContain(originalNativeDetailed);
+		},
+	);
+
+	it.each(["first offer", "reoffered", "reoffered without header", "reoffered with unmounted header"] as const)(
+		"replaces retired compact history through composer and TUI on %s",
+		async mode => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const terminal = new VirtualTerminal(100, 4);
+			terminal.write(`PREVIOUS_SHELL_HISTORY${"\r\n".repeat(6)}`);
+			const scheduler = new VirtualRenderScheduler();
+			const composer = new Composer({
+				terminal,
+				tuiOptions: { renderScheduler: scheduler },
+				preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+			});
+			const hasHeader = mode !== "reoffered without header";
+			if (hasHeader) composer.setHeaderExtras([new Text("RETIRED_COMPOSER_HEADER", 0, 0)], []);
+			const transcript = new TranscriptContainer();
+			const addTool = (path: string, isError = false) => {
+				const component = new ToolExecutionComponent(
+					isError ? "read" : "write",
+					{ path },
+					{},
+					undefined,
+					composer.ui,
+				);
+				components.push(component);
+				component.updateResult({
+					content: [{ type: "text", text: isError ? "Permission denied\nPRIVATE_FAILURE" : "PRIVATE_SUCCESS" }],
+					isError,
+				});
+				transcript.addChild(component);
+			};
+			addTool("success-prefix.ts");
+			const failures = Array.from({ length: 8 }, (_, index) => `failure-${index}.ts`);
+			for (const path of failures) addTool(path, true);
+			composer.setRuntimeChildren([transcript, new Text("EDITOR", 0, 0)]);
+			composer.start({ playWelcomeIntro: false });
+			try {
+				await scheduler.settle(terminal);
+				const initial = terminal.getScrollBuffer().join("\n");
+				expect(initial).toContain("PREVIOUS_SHELL_HISTORY");
+				for (const path of ["success-prefix.ts", ...failures]) {
+					expect(initial.split("\n").filter(row => row.includes(path))).toHaveLength(1);
+				}
+				if (hasHeader) {
+					expect(initial.split("\n").filter(row => row.includes("RETIRED_COMPOSER_HEADER"))).toHaveLength(1);
+					expect(terminal.getViewport().join("\n")).not.toContain("RETIRED_COMPOSER_HEADER");
+				}
+				if (mode === "reoffered with unmounted header") composer.setHeaderExtras([], []);
+				for (let index = 0; index < 6; index++) addTool(`saved-${index}.ts`);
+				for (const [last, folded] of [
+					[5, 4],
+					[6, 5],
+				] as const) {
+					if (last === 6) addTool("saved-6.ts");
+					if (mode !== "first offer") {
+						// Discard an actual composer frame and recompose its outstanding
+						// offer at another width before the TUI consumes it at 100 columns.
+						const discarded = composer.renderFrame({ columns: 100, rows: 4 });
+						expect(discarded.history?.kind).toBe("replay");
+						composer.renderFrame({ columns: 96, rows: 4 });
+					}
+					composer.ui.requestRender();
+					await scheduler.settle(terminal);
+					const visible = terminal.getScrollBuffer().join("\n");
+					// This shell row can only disappear if the real TUI consumes the
+					// destructive flag, rather than appending the replacement ledger.
+					expect(visible).not.toContain("PREVIOUS_SHELL_HISTORY");
+					if (hasHeader) {
+						expect(visible.split("\n").filter(row => row.includes("RETIRED_COMPOSER_HEADER"))).toHaveLength(1);
+					}
+					expect(visible.match(new RegExp(`已收起 ${folded} 次成功调用`, "g"))).toHaveLength(1);
+					expect(visible).toContain("失败 8 次（保留）");
+					expect(visible).not.toContain("success-prefix.ts");
+					for (const path of failures) {
+						expect(visible.split("\n").filter(row => row.includes(path))).toHaveLength(1);
+					}
+					for (let index = 0; index <= last; index++) {
+						const matching = visible.split("\n").filter(row => row.includes(`saved-${index}.ts`));
+						expect(matching).toHaveLength(index <= last - 3 ? 0 : 1);
+					}
+					expect(visible).not.toContain("PRIVATE_");
+					expect(terminal.getViewport().join("\n")).toContain("EDITOR");
+				}
+			} finally {
+				composer.stop();
+			}
+		},
+	);
+
+	it("keeps a growing success summary mutable after retiring a failed prefix", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const add = (path: string, isError = false) => {
+			const component = new ToolExecutionComponent("write", { path }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateResult({
+				content: [{ type: "text", text: isError ? "Permission denied\nPRIVATE_FAILURE" : "PRIVATE_SUCCESS" }],
+				isError,
+			});
+			transcript.addChild(component);
+		};
+		for (let index = 0; index < 5; index++) add(`failed-${index}.ts`, true);
+		for (let index = 0; index < 5; index++) add(`saved-${index}.ts`);
+		const history: string[] = [];
+		for (let index = 0; index < 8; index++) {
+			const batch = transcript.peekFinalizedBatch(100, 4);
+			if (!batch) break;
+			history.push(...batch.rows);
+			transcript.acknowledgeFinalizedBatch(batch.id);
+		}
+		expect(Bun.stripANSI(history.join("\n"))).not.toContain("已收起");
+		for (let index = 0; index < 5; index++) {
+			expect(history.filter(row => row.includes(`failed-${index}.ts`))).toHaveLength(1);
+		}
+		add("saved-5.ts");
+		expect(transcript.peekFinalizedBatch(100, 4)).toBeUndefined();
+		const viewport = transcript.renderViewport(100, 4, { tick: 0, now: 0 });
+		const ansi = Bun.stripANSI(viewport.join("\n"));
+		const native = transcript
+			.nativeBlocks()
+			.map(block => JSON.stringify(block.describe?.(toolCx)))
+			.join("\n");
+		for (const view of [ansi, native]) {
+			expect(view.match(/已收起 3 次成功调用/g)).toHaveLength(1);
+			for (let index = 3; index < 6; index++) expect(view).toContain(`saved-${index}.ts`);
+			for (let index = 0; index < 3; index++) expect(view).not.toContain(`saved-${index}.ts`);
+			expect(view).not.toContain("PRIVATE_");
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		const detailed = transcript.render(100).join("\n");
+		for (let index = 0; index < 6; index++) expect(detailed).toContain(`saved-${index}.ts`);
+		for (let index = 0; index < 5; index++) expect(detailed).toContain(`failed-${index}.ts`);
+		expect(detailed).toContain("PRIVATE_FAILURE");
+	});
+
+	it.each([
+		{ __synthetic: true, source: "interrupt_skipped", executed: false },
+		{ __interrupted: true, source: "interrupt_skipped", execution: "started" },
+	])("P2-26 keeps the folded success summary visible after a skipped leading wait: %j", details => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const skipped = new ToolExecutionComponent("wait", {}, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(skipped);
+		skipped.updateResult({
+			content: [{ type: "text", text: "Skipped due to pending system advisory." }],
+			details,
+		});
+		transcript.addChild(skipped);
+		for (let index = 0; index < 5; index++) {
+			const component = new ToolExecutionComponent("write", { path: `written-${index}.ts` }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateResult({ content: [{ type: "text", text: "PRIVATE_WRITE_BODY" }] });
+			transcript.addChild(component);
+		}
+		const ansi = transcript.render(100).map(row => Bun.stripANSI(row));
+		const native = transcript
+			.nativeBlocks()
+			.map(block => JSON.stringify(block.describe?.(toolCx)))
+			.join("\n");
+		for (const view of [ansi.join("\n"), native]) {
+			expect(view.match(/已收起 2 次成功调用/g)).toHaveLength(1);
+			for (let index = 2; index < 5; index++) expect(view).toContain(`written-${index}.ts`);
+			for (let index = 0; index < 2; index++) expect(view).not.toContain(`written-${index}.ts`);
+			expect(view).not.toContain("Skipped due");
+			expect(view).not.toContain("PRIVATE_");
+		}
+		expect(ansi).toHaveLength(4);
 	});
 
 	it("counts folded successes separately from visible failures and staged proposals", () => {
@@ -407,63 +816,70 @@ describe("compact transcript activity", () => {
 		}
 	});
 
-	it("shows waited job commands on compact ANSI and native rows as progress changes without exposing output", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent("wait", {}, {}, undefined, {
-			requestRender() {},
-			requestComponentRender() {},
-			resetDisplay() {},
-		});
-		components.push(component);
-		component.setExecutionStarted();
-		const job: NonNullable<CoordinationDetails["jobs"]>[number] = {
-			id: "bg_11",
-			type: "bash",
-			status: "running",
-			label: "bun run slowtest\nPRIVATE_ARGUMENTS",
-			durationMs: 27_200,
-			resultText: "PRIVATE_OUTPUT",
-		};
-		const progress = (jobs: CoordinationDetails["jobs"], isPartial = true) =>
-			component.updateResult(
-				{
-					content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
-					details: { op: "wait", jobs } satisfies CoordinationDetails,
-				},
-				isPartial,
-			);
-		progress([job]);
-		expect(Bun.stripANSI(component.render(100)[0])).toContain("[bash] bg_11 bun run slowtest");
-		for (const cx of [toolCx, undefined]) {
-			const view = JSON.stringify(component.describe(cx));
-			expect(view).toContain("[bash] bg_11 bun run slowtest");
-			expect(view).not.toContain("PRIVATE_");
-		}
-		component.setExpanded(true);
-		for (const width of [18, 100]) {
-			const rows = component.render(width);
-			expect(rows).toHaveLength(1);
-			expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
-			expect(rows[0]).not.toContain("PRIVATE_");
-		}
-		progress([
-			{ ...job, status: "completed" },
-			{ ...job, id: "bg_12", label: "bun run check:tools" },
-		]);
-		const updated = Bun.stripANSI(component.render(100)[0]);
-		expect(updated).toContain("[bash] bg_12 bun run check:tools");
-		expect(updated).toContain("+1");
-		expect(updated).not.toContain("slowtest");
-		expect(JSON.stringify(component.describe(toolCx))).toContain("bg_12 bun run check:tools");
-		progress([{ ...job, status: "completed" }], false);
-		expect(Bun.stripANSI(component.render(100)[0])).toContain("bg_11 bun run slowtest");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(Bun.stripANSI(component.render(100).join("\n"))).toContain("bg_11");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		progress([], false);
-		expect(component.render(100).join("\n")).not.toContain("bg_11");
-		expect(JSON.stringify(component.describe(toolCx))).not.toContain("bg_11");
-	});
+	it.each([undefined, "Observe background work"])(
+		"P2-25 retains latest wait task identities despite intent %j",
+		intent => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const component = new ToolExecutionComponent("wait", { i: intent }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateArgs({});
+			component.setExecutionStarted();
+			const job: NonNullable<CoordinationDetails["jobs"]>[number] = {
+				id: "bg_11",
+				type: "bash",
+				status: "running",
+				label: "bun run slowtest\nPRIVATE_ARGUMENTS",
+				durationMs: 27_200,
+				resultText: "PRIVATE_OUTPUT",
+			};
+			const progress = (jobs: CoordinationDetails["jobs"], isPartial = true) =>
+				component.updateResult(
+					{
+						content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
+						details: { op: "wait", jobs } satisfies CoordinationDetails,
+					},
+					isPartial,
+				);
+			progress([job]);
+			expect(Bun.stripANSI(component.render(100)[0])).toContain("[bash] bg_11 bun run slowtest");
+			for (const cx of [toolCx, undefined]) {
+				const view = JSON.stringify(component.describe(cx));
+				expect(view).toContain("[bash] bg_11 bun run slowtest");
+				expect(view).not.toContain("PRIVATE_");
+			}
+			component.setExpanded(true);
+			for (const width of [18, 100]) {
+				const rows = component.render(width);
+				expect(rows).toHaveLength(1);
+				expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
+				expect(rows[0]).not.toContain("PRIVATE_");
+			}
+			progress([
+				{ ...job, status: "completed" },
+				{ ...job, id: "bg_12", label: "bun run check:tools" },
+			]);
+			const updated = Bun.stripANSI(component.render(100)[0]);
+			expect(updated).toContain("[bash] bg_12 bun run check:tools");
+			expect(updated).toContain("+1");
+			expect(updated).not.toContain("slowtest");
+			expect(JSON.stringify(component.describe(toolCx))).toContain("bg_12 bun run check:tools");
+			expect(JSON.stringify(component.describe(toolCx))).toContain("+1");
+			progress([{ ...job, status: "completed" }], false);
+			expect(Bun.stripANSI(component.render(100)[0])).toContain("bg_11 bun run slowtest");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			expect(Bun.stripANSI(component.render(100).join("\n"))).toContain("bg_11");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			expect(Bun.stripANSI(component.render(100)[0])).toContain("bg_11 bun run slowtest");
+			expect(JSON.stringify(component.describe(toolCx))).toContain("bg_11 bun run slowtest");
+			progress([], false);
+			expect(component.render(100).join("\n")).not.toContain("bg_11");
+			expect(JSON.stringify(component.describe(toolCx))).not.toContain("bg_11");
+		},
+	);
 
 	it("retains a single row for long built-in calls, successful output and sealed calls", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });

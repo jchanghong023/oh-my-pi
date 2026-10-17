@@ -2,9 +2,16 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { Settings } from "../src/config/settings";
-import type { ExtensionUIDialogOptions, ExtensionUISelectItem } from "../src/extensibility/extensions";
+import type {
+	ExtensionAskDialogResult,
+	ExtensionUIContext,
+	ExtensionUIDialogOptions,
+	ExtensionUISelectItem,
+} from "../src/extensibility/extensions";
 import { HookSelectorComponent } from "@oh-my-pi/pi-tui/overlays/hook-selector";
+import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
+import type { GoalModeState } from "../src/goals/state";
 import type { ToolSession } from "../src/tools";
 import { AskTool } from "../src/tools/ask";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
@@ -21,12 +28,41 @@ async function drainMicrotasks(): Promise<void> {
 	await Promise.resolve();
 }
 
-function createAskTool(): AskTool {
+function createAskTool(overrides: Partial<ToolSession> = {}): AskTool {
 	return new AskTool({
 		hasUI: true,
 		settings: Settings.isolated({ "ask.timeout": 0.01, "ask.notify": "off", "speech.enabled": false }),
 		getPlanModeState: () => ({ enabled: false }),
+		...overrides,
 	} as unknown as ToolSession);
+}
+
+function createAutopilotGoal(): GoalModeState {
+	return {
+		enabled: true,
+		mode: "active",
+		autoOrchestrate: true,
+		goal: {
+			id: "ask-live-goal",
+			objective: "Finish the current task",
+			status: "active",
+			tokensUsed: 0,
+			timeUsedSeconds: 0,
+			createdAt: 0,
+			updatedAt: 0,
+		},
+	};
+}
+
+function endAutopilotGoal(state: GoalModeState, change: "pause" | "drop" | "complete"): GoalModeState | undefined {
+	if (change === "drop") return undefined;
+	return {
+		...state,
+		enabled: false,
+		mode: change === "complete" ? "exiting" : "active",
+		...(change === "complete" ? { reason: "completed" as const } : {}),
+		goal: { ...state.goal, status: change === "complete" ? "complete" : "paused" },
+	};
 }
 
 describe("AskTool timeout", () => {
@@ -288,6 +324,133 @@ describe("AskTool timeout", () => {
 		expect(result?.details?.results?.[1]?.selectedOptions).toEqual(["OAuth"]);
 		expect(result?.details?.results?.[1]?.timedOut).toBeUndefined();
 		expect(abort).not.toHaveBeenCalled();
+	});
+
+	describe("live Goal timeout eligibility", () => {
+		for (const change of ["pause", "drop", "complete"] as const) {
+			for (const multi of [false, true]) {
+				it(`P2-29: simplified ${multi ? "multi" : "single"}-select uses the upstream answer after Goal ${change}`, async () => {
+					vi.useFakeTimers();
+					let goalState: GoalModeState | undefined = createAutopilotGoal();
+					const select = vi.fn<AskSelect>(() => Promise.withResolvers<string | undefined>().promise);
+					const abort = vi.fn();
+					const context = {
+						hasUI: true,
+						ui: { select, editor: vi.fn() },
+						abort,
+					} as unknown as AgentToolContext;
+					const execution = createAskTool({ getGoalModeState: () => goalState }).execute(
+						"ask-live-goal",
+						{
+							questions: [
+								{
+									id: "db",
+									question: "Which database?",
+									options: [{ label: "SQLite" }, { label: "Postgres" }],
+									recommended: 1,
+									multi,
+								},
+							],
+						},
+						undefined,
+						undefined,
+						context,
+					);
+
+					await drainMicrotasks();
+					expect(select).toHaveBeenCalledTimes(1);
+					vi.advanceTimersByTime(9);
+					goalState = endAutopilotGoal(goalState!, change);
+					vi.advanceTimersByTime(1);
+					const result = await execution;
+
+					expect(result.details?.selectedOptions).toEqual(["Postgres"]);
+					expect(result.details?.customInput).toBeUndefined();
+					expect(result.details?.timedOut).toBe(true);
+					expect(abort).not.toHaveBeenCalled();
+				});
+			}
+
+			for (const fallback of ["recommended", "first", "noted"] as const) {
+				it(`P2-29: rich dialog preserves the ${fallback} timeout answer after Goal ${change}`, async () => {
+					vi.useFakeTimers();
+					let goalState: GoalModeState | undefined = createAutopilotGoal();
+					let dialog: AskDialogComponent | undefined;
+					const abort = vi.fn();
+					const askDialog: NonNullable<ExtensionUIContext["askDialog"]> = async (questions, options) => {
+						const answer = Promise.withResolvers<ExtensionAskDialogResult | undefined>();
+						dialog = new AskDialogComponent(
+							questions,
+							{
+								onSubmit: answer.resolve,
+								onCancel: () => answer.resolve(undefined),
+								onPrompt: async () => "Keep the existing local database",
+							},
+							{ timeout: options?.timeout },
+						);
+						return answer.promise;
+					};
+					const context = {
+						hasUI: true,
+						ui: { askDialog, select: vi.fn(), editor: vi.fn() },
+						abort,
+					} as unknown as AgentToolContext;
+					const execution = createAskTool({ getGoalModeState: () => goalState }).execute(
+						"ask-live-goal",
+						{
+							questions: [
+								{
+									id: "answered",
+									question: "Keep existing work?",
+									options: [{ label: "Keep" }, { label: "Discard" }],
+								},
+								{
+									id: "db",
+									question: "Which database?",
+									options: [{ label: "SQLite" }, { label: "Postgres" }],
+									...(fallback === "first" ? {} : { recommended: 1 }),
+								},
+							],
+						},
+						undefined,
+						undefined,
+						context,
+					);
+
+					try {
+						await drainMicrotasks();
+						expect(dialog).toBeDefined();
+						dialog!.handleInput("\n");
+						if (fallback === "noted") {
+							dialog!.handleInput("\x1b[A");
+							dialog!.handleInput("n");
+							await drainMicrotasks();
+						}
+						vi.advanceTimersByTime(9);
+						goalState = endAutopilotGoal(goalState!, change);
+						vi.advanceTimersByTime(1);
+						const result = await execution;
+
+						expect(result.details?.results?.[0]).toMatchObject({
+							id: "answered",
+							selectedOptions: ["Keep"],
+						});
+						expect(result.details?.results?.[0]?.timedOut).not.toBe(true);
+						expect(result.details?.results?.[1]?.selectedOptions).toEqual([
+							fallback === "recommended" ? "Postgres" : "SQLite",
+						]);
+						expect(result.details?.results?.[1]?.customInput).toBeUndefined();
+						expect(result.details?.results?.[1]?.timedOut).toBe(true);
+						expect(result.details?.results?.[1]?.note).toBe(
+							fallback === "noted" ? "Keep the existing local database" : undefined,
+						);
+						expect(abort).not.toHaveBeenCalled();
+					} finally {
+						dialog?.dispose();
+					}
+				});
+			}
+		}
 	});
 
 	it("notifies callers when the selector countdown starts and resets", () => {

@@ -232,11 +232,10 @@ export function resolveExplicitPythonRuntime(
 }
 
 /**
- * Enumerate candidate Python runtimes in priority order: on Linux offline, the
- * fixed shared interpreter first; then an active/project venv, the managed
- * `~/.omp/python-env`, and the system interpreter on PATH. Every candidate that
- * physically exists is returned so callers can probe each in turn rather than
- * committing to a stale or incompatible interpreter.
+ * Enumerate candidate Python runtimes in priority order: an active/project venv,
+ * the managed `~/.omp/python-env`, and the system interpreter on PATH. Every
+ * candidate that physically exists is returned so callers can probe each in turn
+ * rather than committing to a stale or incompatible interpreter.
  */
 export function enumeratePythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
 	const runtimes: PythonRuntime[] = [];
@@ -246,19 +245,6 @@ export function enumeratePythonRuntimes(cwd: string, baseEnv: Record<string, str
 		seen.add(runtime.pythonPath);
 		runtimes.push(runtime);
 	};
-
-	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
-	if (process.platform === "linux" && baseEnv.OMP_OFFLINE === "1" && fs.existsSync(offlinePython)) {
-		// This interpreter is independent of the project's Python environment.
-		// Isolate only its Eval subprocess; never mutate the caller's environment.
-		const env = { ...baseEnv };
-		delete env.VIRTUAL_ENV;
-		delete env.CONDA_PREFIX;
-		delete env.CONDA_DEFAULT_ENV;
-		delete env.PYTHONPATH;
-		delete env.PYTHONHOME;
-		push({ pythonPath: offlinePython, env });
-	}
 
 	const venvPath = baseEnv.VIRTUAL_ENV ?? resolveVenvPath(cwd);
 	if (venvPath) {

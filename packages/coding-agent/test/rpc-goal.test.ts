@@ -535,19 +535,41 @@ describe("RpcGoalController continuation gate", () => {
 					await resumed.promise;
 					return goalState;
 				},
-				createGoal: async ({ objective }: { objective: string }): Promise<GoalModeState> => ({
-					enabled: true,
-					mode: "active",
-					goal: {
-						id: "g2",
-						objective,
-						status: "active",
-						tokensUsed: 0,
-						timeUsedSeconds: 0,
-						createdAt: 0,
-						updatedAt: 0,
-					},
-				}),
+				createGoal: async ({ objective }: { objective: string }): Promise<GoalModeState> => {
+					goalState = {
+						enabled: true,
+						mode: "active",
+						goal: {
+							id: "g2",
+							objective,
+							status: "active",
+							tokensUsed: 0,
+							timeUsedSeconds: 0,
+							createdAt: 0,
+							updatedAt: 0,
+						},
+					};
+					return structuredClone(goalState);
+				},
+				replaceGoal: async ({ objective }: { objective: string }): Promise<GoalModeState> => {
+					if (!goalState?.enabled || goalState.goal.status !== "active") {
+						throw new Error("cannot replace goal because no goal is active");
+					}
+					goalState = {
+						enabled: true,
+						mode: "active",
+						goal: {
+							id: "g2",
+							objective,
+							status: "active",
+							tokensUsed: 0,
+							timeUsedSeconds: 0,
+							createdAt: 0,
+							updatedAt: 0,
+						},
+					};
+					return structuredClone(goalState);
+				},
 			},
 			promptCustomMessage: (message: { customType: string }) => admit(message.customType),
 			waitForIdle: () => idle.promise,
@@ -607,6 +629,59 @@ describe("RpcGoalController continuation gate", () => {
 		controller.observe(agentEnd);
 		await nextMacrotask();
 		expect(admitted).toEqual(["goal-continuation"]);
+	});
+
+	test("P2-12 late slash activation cannot clear a host abort continuation latch", async () => {
+		const admitted: string[] = [];
+		const { session, controller } = fakeSession(async customType => {
+			admitted.push(customType);
+			return true;
+		});
+		const requested = Promise.withResolvers<void>();
+		const released = Promise.withResolvers<void>();
+		const activate = session.setActiveToolsByName.bind(session);
+		session.setActiveToolsByName = async names => {
+			await activate(names);
+			requested.resolve();
+			await released.promise;
+		};
+		const cancellation = new AbortController();
+		const output: string[] = [];
+		const entering = controller
+			.handleSlash("set replacement", {
+				signal: cancellation.signal,
+				output: text => {
+					output.push(text);
+				},
+			})
+			.catch((error: unknown) => {
+				if (error instanceof Error && error.name === "AbortError") return;
+				throw error;
+			});
+		try {
+			await requested.promise;
+			controller.stopForHostAbort();
+			cancellation.abort();
+			released.resolve();
+			expect(await entering).toBeUndefined();
+			expect(output).toEqual([]);
+
+			// Isolate the controller latch: an active runtime state must not bypass a host stop.
+			controller.observe(agentEnd);
+			controller.refresh();
+			await nextMacrotask();
+			expect(controller.continuationPending).toBe(false);
+			expect(admitted).toEqual([]);
+
+			// A genuinely new host input may re-arm the existing active goal.
+			controller.observe(hostInput);
+			controller.observe(agentEnd);
+			await nextMacrotask();
+			expect(admitted).toEqual(["goal-continuation"]);
+		} finally {
+			released.resolve();
+			await entering.catch(() => {});
+		}
 	});
 
 	test("a host abort of a continuation turn that ran a tool admits no further continuation", async () => {

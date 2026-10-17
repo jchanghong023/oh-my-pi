@@ -104,8 +104,8 @@ impl Owner {
 		result
 	}
 
-	// Recovery runs before a BuildIdentity exists. It must use the connection
-	// covered by the physical import lease, never reopen a retargeted profile.
+	// Every leased import operation must use the original physical database.
+	// Reject a retargeted profile before reopening or migrating its replacement.
 	fn with_import_storage<T>(
 		&self,
 		cancel: &CancelToken,

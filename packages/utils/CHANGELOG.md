@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Encode ZIP archives asynchronously with cancellable compression, checksum and output assembly.
+- Initialize fallback log directories only when needed and record the final effective process exit code.
 - Preserve successful explicit exits after an early Windows event-loop drain while still reporting genuinely unfinished commands.
 - Keep each process invocation in a new log file, including when its PID is reused, without appending to earlier logs.
 

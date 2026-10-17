@@ -34,10 +34,17 @@ function errorLine(error: unknown): string {
 	return sanitizeTerminalLine(error instanceof Error ? error.message : String(error));
 }
 
+function selectionWindowStart(start: number, selected: number, count: number, capacity: number): number {
+	start = Math.max(0, Math.min(start, count - capacity));
+	if (selected < start) return selected;
+	return Math.max(start, selected - capacity + 1);
+}
+
 export class DocsHubComponent implements Component {
 	#indexes: DocsIndexSummary[] = [];
 	#listed = false;
 	#selected = 0;
+	#indexOffset = 0;
 	#mode: HubMode = "list";
 	#detail: string[] = [];
 	readonly #detailView = new ScrollView(
@@ -57,6 +64,7 @@ export class DocsHubComponent implements Component {
 	#searchOrigin: "list" | "detail" = "list";
 	#hits: SearchHit[] = [];
 	#hitIndex = 0;
+	#hitOffset = 0;
 	#searchQuery = "";
 	#queryMode: "search" | "grep" = "search";
 	#queryCase = true;
@@ -207,6 +215,7 @@ export class DocsHubComponent implements Component {
 				),
 			}));
 			this.#hitIndex = 0;
+			this.#hitOffset = 0;
 			this.#showingHit = false;
 			this.#mode = "detail";
 			this.#resultSummary = [
@@ -331,7 +340,8 @@ export class DocsHubComponent implements Component {
 
 	render(width: number): string[] {
 		if (this.#wizard) return this.#wizard.render(width);
-		const lines = [
+		const height = Math.max(1, this.tui.terminal.rows);
+		const header = [
 			theme.bold(theme.fg("accent", "Document indexes")),
 			theme.fg(
 				"dim",
@@ -340,48 +350,68 @@ export class DocsHubComponent implements Component {
 					: "n new  / search  g grep  d delete  c cancel  Esc close",
 			),
 		];
+		const body: string[] = [];
+		const status: string[] = [];
+		const indexList = this.#mode === "list" && this.#indexes.length > 0;
+		const hitList = this.#mode === "detail" && !this.#showingHit && this.#hits.length > 0;
+		const hitDetail = this.#mode === "detail" && this.#showingHit;
 		if (this.#mode === "confirm-remove")
-			lines.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
+			body.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
 		else if (this.#mode === "search") {
 			const label = this.#inputSearchMode === "grep" ? "Grep (regex, case-sensitive)" : "Search (relevance)";
-			lines.push(`${label}: ${this.#search.render(Math.max(10, width - label.length - 2))[0] ?? ""}`);
+			body.push(`${label}: ${this.#search.render(Math.max(10, width - label.length - 2))[0] ?? ""}`);
 		} else if (this.#mode === "detail") {
-			lines.push(
+			header.push(
 				this.#queryMode === "grep"
 					? "Search type: Grep (regex, case-sensitive)"
 					: "Search type: Search (relevance)",
 			);
-			if (!this.#showingHit) lines.push(...this.#detail);
-			if (!this.#showingHit)
-				for (let index = 0; index < this.#hits.length; index++)
-					lines.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
+			if (!this.#showingHit) header.push(...this.#detail);
 		} else if (!this.#listed) {
-			if (!this.#busy) lines.push("Document indexes have not been loaded.");
-		} else if (this.#indexes.length === 0) lines.push("No document indexes. Press n to add one.");
-		else
-			for (let index = 0; index < this.#indexes.length; index++) {
-				const item = this.#indexes[index];
-				lines.push(
-					sanitizeTerminalLine(
-						`${index === this.#selected ? ">" : " "} ${item.name}  docs=${item.documentCount} sections=${item.sectionCount}`,
-					),
-					sanitizeTerminalLine(`    ${item.rootPath}`),
-				);
-			}
-		if (this.#busy) lines.push(theme.fg("dim", `${this.#busy}  c cancel`));
+			if (!this.#busy) body.push("Document indexes have not been loaded.");
+		} else if (this.#indexes.length === 0) body.push("No document indexes. Press n to add one.");
+		if (this.#busy) status.push(theme.fg("dim", `${this.#busy}  c cancel`));
 		if (this.#progress)
-			lines.push(
+			status.push(
 				"",
 				sanitizeTerminalLine(
 					`${this.#progress.phase} ${this.#progress.completed}/${this.#progress.total} failed=${this.#progress.failed} ${this.#progress.currentPath ?? ""}`,
 				),
 				sanitizeTerminalLine(this.#progress.message ?? ""),
 			);
-		if (this.#latestError) lines.push(theme.fg("error", sanitizeTerminalLine(this.#latestError)));
-		if (this.#mode === "detail" && this.#showingHit) {
-			this.#detailView.setHeight(Math.max(1, this.tui.terminal.rows - lines.length));
-			lines.splice(3, 0, ...this.#detailView.render(width));
+		if (this.#latestError) status.push(theme.fg("error", sanitizeTerminalLine(this.#latestError)));
+
+		// Reserve an actionable row before fitting chrome, including on very short terminals.
+		const minimumBody = indexList || hitList || hitDetail || body.length > 0 ? 1 : 0;
+		while (header.length + status.length + minimumBody > height) {
+			if (header.length > 2) header.pop();
+			else if (header.length > 0) header.shift();
+			else status.pop();
 		}
-		return lines.flatMap(line => line.split("\n")).map(line => truncateToWidth(line, width));
+		const available = height - header.length - status.length;
+		if (indexList) {
+			const rowsPerIndex = available >= 2 ? 2 : 1;
+			const capacity = Math.max(1, Math.floor(available / rowsPerIndex));
+			this.#indexOffset = selectionWindowStart(this.#indexOffset, this.#selected, this.#indexes.length, capacity);
+			const end = Math.min(this.#indexes.length, this.#indexOffset + capacity);
+			for (let index = this.#indexOffset; index < end; index++) {
+				const item = this.#indexes[index];
+				body.push(
+					sanitizeTerminalLine(
+						`${index === this.#selected ? ">" : " "} ${item.name}  docs=${item.documentCount} sections=${item.sectionCount}`,
+					),
+				);
+				if (rowsPerIndex === 2) body.push(sanitizeTerminalLine(`    ${item.rootPath}`));
+			}
+		} else if (hitList) {
+			this.#hitOffset = selectionWindowStart(this.#hitOffset, this.#hitIndex, this.#hits.length, available);
+			const end = Math.min(this.#hits.length, this.#hitOffset + available);
+			for (let index = this.#hitOffset; index < end; index++)
+				body.push(`${index === this.#hitIndex ? ">" : " "} ${this.#hits[index].label}`);
+		} else if (hitDetail) {
+			this.#detailView.setHeight(available);
+			body.push(...this.#detailView.render(width));
+		}
+		return [...header, ...body, ...status].map(line => truncateToWidth(line, width));
 	}
 }

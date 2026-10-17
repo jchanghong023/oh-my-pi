@@ -53,9 +53,13 @@ function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
 }
 
-function queryPath(value: string | undefined, db?: Database, generation?: string | null): string | undefined {
+/** Normalize query scope without opening an index; missing indexes have no literal backslash identities. */
+export function normalizeRepoQueryPath(
+	value: string | undefined,
+	windowsSeparators = process.platform === "win32",
+): string | undefined {
 	if (!value) return undefined;
-	const relative = process.platform === "win32" ? value.replaceAll("\\", "/") : value;
+	const relative = windowsSeparators ? value.replaceAll("\\", "/") : value;
 	if (
 		path.posix.isAbsolute(relative) ||
 		path.win32.isAbsolute(value) ||
@@ -66,6 +70,12 @@ function queryPath(value: string | undefined, db?: Database, generation?: string
 	const normalized = path.posix.normalize(relative);
 	if (normalized === ".." || normalized.startsWith("../"))
 		throw new Error("Repository path must stay within the index root");
+	return normalized === "." ? undefined : normalized.replace(/\/$/, "");
+}
+
+function queryPath(value: string | undefined, db?: Database, generation?: string | null): string | undefined {
+	const normalized = normalizeRepoQueryPath(value);
+	if (!value || normalized === undefined) return undefined;
 	// On POSIX, an indexed literal backslash path wins over its Windows-style alias.
 	if (
 		db &&
@@ -76,7 +86,7 @@ function queryPath(value: string | undefined, db?: Database, generation?: string
 			.get(generation ?? null, normalized.replace(/\/$/, ""), `${normalized.replace(/\/$/, "")}/`)
 	)
 		return queryPath(value.replaceAll("\\", "/"));
-	return normalized === "." ? undefined : normalized.replace(/\/$/, "");
+	return normalized;
 }
 /** A .py file whose syntax tree carries errors is indexed without symbols and reported as a parse failure. */
 function pythonParseFailure(path: string): RepoFailure {

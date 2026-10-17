@@ -179,3 +179,181 @@ describe("extendRecallWithLegacyBanks edge cases", () => {
 		expect(open).toEqual([]);
 	});
 });
+
+// Use a real Linux child so neither offline environment nor filesystem/SQLite
+// instrumentation can leak into other test files.
+describe.skipIf(process.platform !== "linux")("offline legacy bank path confinement (P2-19)", () => {
+	for (const scoping of ["per-project", "per-project-tagged"] as const) {
+		for (const fixture of ["banks-link", "database-link", "local", "memory", "permission"] as const) {
+			const behavior =
+				fixture === "local"
+					? "recalls local banks"
+					: fixture === "memory"
+						? "keeps in-memory recall without probing cwd banks"
+						: fixture === "permission"
+							? "skips an inaccessible legacy bank and recalls healthy banks"
+							: `rejects ${fixture} before reading old memory`;
+			it(`${scoping}: ${behavior}`, async () => {
+				const isolated = await TempDir.create("@mnemopi-offline-bank-path-");
+				try {
+					const result = Bun.spawnSync({
+						cmd: [
+							process.execPath,
+							"--eval",
+							`
+							import assert from "node:assert/strict";
+							import { Database } from "bun:sqlite";
+							import { mock, spyOn } from "bun:test";
+							import * as fs from "node:fs";
+							import * as path from "node:path";
+							import { getOfflineShmState } from ${JSON.stringify(new URL("../../natives/native/offline-root.js", import.meta.url).href)};
+							import { Settings } from ${JSON.stringify(new URL("../src/config/settings.ts", import.meta.url).href)};
+							import { getMemoriesDir } from ${JSON.stringify(new URL("../../utils/src/dirs.ts", import.meta.url).href)};
+							const state = getOfflineShmState();
+							assert.ok(state);
+							try {
+								const agentDir = path.join(state.runtimeRoot, "agent");
+								const memoryDir = path.join(getMemoriesDir(agentDir), "mnemopi");
+								const banks = path.join(memoryDir, "banks");
+								const fixture = ${JSON.stringify(fixture)};
+								const scoping = ${JSON.stringify(scoping)};
+								const settings = Settings.isolated({
+									"mnemopi.scoping": scoping,
+									"mnemopi.llmMode": "none",
+									"mnemopi.noEmbeddings": true,
+									...(fixture === "memory" ? { "mnemopi.dbPath": ":memory:" } : {}),
+								});
+								const cwd = settings.getCwd();
+								const legacyBank = "legacy-offline-bank";
+								const externalBanks = path.join(process.env.OMP_CONFIG_ROOT, "agent", "memories", "mnemopi", "banks");
+								const externalDb = path.join(externalBanks, legacyBank, "mnemopi.db");
+								const candidate = path.join(banks, legacyBank, "mnemopi.db");
+								const fixtureDb = fixture === "local" || fixture === "permission" ? candidate : externalDb;
+								fs.mkdirSync(path.dirname(fixtureDb), { recursive: true });
+								const db = new Database(fixtureDb, { create: true });
+								try {
+									db.exec("CREATE TABLE working_memory (metadata_json TEXT)");
+									using insert = db.prepare("INSERT INTO working_memory VALUES (?)");
+									insert.run(JSON.stringify({ cwd }));
+								} finally {
+									db.close(true);
+								}
+								if (fixture === "banks-link") {
+									fs.mkdirSync(memoryDir, { recursive: true });
+									fs.symlinkSync(externalBanks, banks);
+								} else if (fixture === "database-link") {
+									fs.mkdirSync(path.dirname(candidate), { recursive: true });
+									fs.symlinkSync(externalDb, candidate);
+								} else if (fixture === "memory") {
+									fs.symlinkSync(externalBanks, path.join(cwd, "banks"));
+								}
+								const blockedDb = path.join(banks, "inaccessible-bank", "mnemopi.db");
+								if (fixture === "permission") {
+									fs.mkdirSync(path.dirname(blockedDb), { recursive: true });
+									fs.writeFileSync(blockedDb, "must not be opened");
+								}
+								const sqliteOpens = [];
+								const NativeDatabase = Database;
+								mock.module("bun:sqlite", () => ({
+									Database: class extends NativeDatabase {
+										constructor(filename, options) {
+											sqliteOpens.push(filename);
+											super(filename, options);
+										}
+									},
+								}));
+								// Load the consumer after replacing SQLite's constructor so every open is observable.
+								const { loadMnemopiConfig, computeMnemopiBankScope } = await import(${JSON.stringify(new URL("../src/mnemopi/config.ts", import.meta.url).href)});
+								const originalLstat = fs.lstatSync;
+								let permissionChecks = 0;
+								const lstat = spyOn(fs, "lstatSync").mockImplementation((target, ...args) => {
+									if (fixture === "permission" && target === blockedDb) {
+										permissionChecks++;
+										const error = new Error("legacy bank permission denied");
+										error.code = "EACCES";
+										throw error;
+									}
+									return originalLstat(target, ...args);
+								});
+								const readdir = spyOn(fs, "readdirSync");
+								const prepare = spyOn(NativeDatabase.prototype, "prepare");
+								let config;
+								let failure;
+								let directoryReads = 0;
+								let sqliteProbes = 0;
+								let cwdBankChecks = 0;
+								try {
+									config = loadMnemopiConfig(settings, agentDir);
+								} catch (error) {
+									failure = error;
+								} finally {
+									directoryReads = readdir.mock.calls.filter(([directory]) =>
+										directory === banks || directory === path.join(cwd, "banks")).length;
+									cwdBankChecks = lstat.mock.calls.filter(([target]) =>
+										target === path.join(cwd, "banks") ||
+										target.startsWith(path.join(cwd, "banks") + path.sep)).length;
+									sqliteProbes = prepare.mock.calls.length;
+									lstat.mockRestore();
+									readdir.mockRestore();
+									prepare.mockRestore();
+								}
+								assert.equal(sqliteOpens.includes(externalDb), false,
+									"must never open a legacy database outside the runtime root");
+								if (fixture === "local" || fixture === "permission") {
+									assert.equal(failure, undefined);
+									const scope = computeMnemopiBankScope(undefined, cwd, scoping);
+									assert.deepEqual(config.recallBanks, [...scope.recallBanks, legacyBank]);
+									if (fixture === "permission") {
+										assert.ok(permissionChecks > 0, "must exercise the candidate guard permission failure");
+										assert.equal(sqliteOpens.includes(blockedDb), false);
+									}
+								} else if (fixture === "memory") {
+									assert.equal(failure, undefined);
+									assert.equal(config.dbPath, ":memory:");
+									const scope = computeMnemopiBankScope(undefined, cwd, scoping);
+									assert.deepEqual(config.recallBanks, scope.recallBanks);
+									assert.equal(directoryReads, 0, "in-memory storage must not scan disk banks");
+									assert.equal(cwdBankChecks, 0, "in-memory storage must not inspect cwd banks");
+									assert.deepEqual(sqliteOpens, []);
+								} else {
+									if (fixture === "banks-link") {
+										assert.equal(directoryReads, 0,
+											"must reject the banks link before enumerating old memory");
+									}
+									assert.equal(sqliteProbes, 0,
+										"must reject the complete candidate path before probing old SQLite memory");
+									assert.deepEqual(sqliteOpens, [],
+										"must reject unsafe paths before opening SQLite");
+									assert.ok(failure instanceof Error, "unsafe legacy memory paths must be rejected");
+								}
+							} finally {
+								fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+							}
+							`,
+						],
+						cwd: isolated.path(),
+						env: {
+							...process.env,
+							HOME: isolated.join("home"),
+							USERPROFILE: isolated.join("home"),
+							OMP_CONFIG_ROOT: isolated.join("persistent"),
+							OMP_OFFLINE: "1",
+							OMP_PROFILE: "",
+							PI_PROFILE: "",
+							PI_CODING_AGENT_DIR: "",
+						},
+						timeout: 30_000,
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					expect({ exitCode: result.exitCode, stderr: result.stderr.toString() }).toEqual({
+						exitCode: 0,
+						stderr: "",
+					});
+				} finally {
+					await isolated.remove();
+				}
+			});
+		}
+	}
+});

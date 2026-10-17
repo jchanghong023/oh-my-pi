@@ -8,6 +8,9 @@ import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { createInteractiveModeContext, createSessionStub } from "./helpers/interactive-mode-context";
 
@@ -302,6 +305,41 @@ describe("thinking preview turn stub", () => {
 });
 
 describe("thinking preview focus restoration", () => {
+	it("preserves a thinking stub received while focus waits for persistence (P2-28)", async () => {
+		const h = focusFixture();
+		const message = thinkingMessage("FOCUS_PERSISTENCE_STUB");
+		const worker = liveSession(message, 0);
+		const entered = Promise.withResolvers<void>();
+		const persistence = Promise.withResolvers<void>();
+		worker.session.settleInFlightMessagePersistence = async () => {
+			entered.resolve();
+			await persistence.promise;
+		};
+		h.register("Worker", worker);
+		const attaching = h.focus.focusAgent("Worker");
+		try {
+			await entered.promise;
+			await worker.emit(update(message, "thinking_delta"));
+			expect(h.rendered()).toContain("FOCUS_PERSISTENCE_STUB");
+			worker.session.agent.state.activeThinkingIndex = undefined;
+			await worker.emit(update(message, "thinking_end"));
+			worker.session.agent.state.streamMessage = null;
+			await worker.emit({ type: "message_end", message });
+			expect(Bun.stripANSI(h.rendered())).toBe("… FOCUS_PERSISTENCE_STUB");
+
+			persistence.resolve();
+			await attaching;
+			expect(Bun.stripANSI(h.rendered())).toBe("… FOCUS_PERSISTENCE_STUB");
+
+			// A real next turn still clears the old stub; only focus replay is exempt.
+			await worker.emit({ type: "agent_start" });
+			expect(h.rendered()).toBe("");
+		} finally {
+			persistence.resolve();
+			await attaching;
+		}
+	});
+
 	it("restores the runtime phase rather than guessing from the last thinking block", async () => {
 		const h = focusFixture();
 		const ended = liveSession(thinkingMessage("ENDED_TAIL"));
@@ -340,5 +378,50 @@ describe("thinking preview focus restoration", () => {
 		await old.emit({ type: "message_end", message: oldMessage });
 		expect(h.rendered()).toContain("NEW_SESSION");
 		expect(h.rendered()).not.toContain("OLD_SESSION");
+	});
+});
+
+describe("execution-only read group activity", () => {
+	it("starts and times a read created by its first execution event (P2-23)", async () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		let now = 100;
+		vi.spyOn(performance, "now").mockImplementation(() => now);
+		const ctx = createInteractiveModeContext();
+		const controller = new EventController(ctx);
+		eventControllers.push(controller);
+		const toolCx: DescribeContext = {
+			cols: 80,
+			reduceMotion: false,
+			dark: true,
+			supports: kind => kind === "tool",
+			feature: () => true,
+		};
+		try {
+			// No message_update preview precedes this event (e.g. focus/join mid-tool).
+			await controller.handleEvent({
+				type: "tool_execution_start",
+				toolCallId: "execution-only-read",
+				toolName: "read",
+				args: { path: "src/execution-only.ts" },
+			});
+			const group = ctx.pendingTools.get("execution-only-read");
+			if (!(group instanceof ReadToolGroupComponent)) throw new Error("Expected a grouped read");
+			const live = group.describe(toolCx).c?.find(child => "k" in child && child.k === "tool");
+			expect(live && "p" in live ? live.p : undefined).toMatchObject({ status: "running", age: 0 });
+
+			now = 1350;
+			await controller.handleEvent({
+				type: "tool_execution_end",
+				toolCallId: "execution-only-read",
+				toolName: "read",
+				result: { content: [{ type: "text", text: "export const value = 1;" }] },
+				isError: false,
+			});
+			const done = group.describe(toolCx).c?.find(child => "k" in child && child.k === "tool");
+			expect(done && "p" in done ? done.p : undefined).toMatchObject({ status: "done", took: 1250 });
+		} finally {
+			ctx.chatContainer.disposeChildren();
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		}
 	});
 });

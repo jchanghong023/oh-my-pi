@@ -22,18 +22,22 @@ export function isWritableArchiveFormat(format: ArchiveFormat): format is Writab
 /**
  * Serialize `entries` into an archive of `format` in memory. String members
  * are encoded as UTF-8; member names are normalized to forward slashes.
+ * ZIP encoding supports in-flight cancellation; other formats reject an already-aborted signal.
  */
 export async function encodeArchive(
 	format: WritableArchiveFormat,
 	entries: Iterable<readonly [string, ArchiveMemberContent]>,
+	options: { signal?: AbortSignal } = {},
 ): Promise<Uint8Array> {
+	options.signal?.throwIfAborted();
 	const members: (readonly [string, Uint8Array])[] = [];
 	for (const [name, content] of entries) {
 		members.push([name.replace(/\\/g, "/"), await memberContentToBytes(content)] as const);
+		options.signal?.throwIfAborted();
 	}
 	switch (format) {
 		case "zip":
-			return encodeZip(members);
+			return encodeZip(members, options);
 		case "asar":
 			return encodeAsar(members);
 		case "tar":
