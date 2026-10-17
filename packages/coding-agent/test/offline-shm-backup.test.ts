@@ -17,13 +17,13 @@ interface Manifest {
 }
 
 const temporary: TempDir[] = [];
-const children: Array<{ kill(): void; exited: Promise<number> }> = [];
+const children: Array<{ kill(signal?: NodeJS.Signals): void; exited: Promise<number> }> = [];
 const disposers: Array<() => void> = [];
 
 afterEach(async () => {
 	for (const dispose of disposers.splice(0)) dispose();
 	for (const child of children.splice(0)) {
-		child.kill();
+		child.kill("SIGKILL");
 		await child.exited;
 	}
 	for (const directory of temporary.splice(0)) await directory.remove();
@@ -697,7 +697,8 @@ describe("offline shm complete runtime snapshots", () => {
 		);
 		children.push(interrupted);
 		await ready(interrupted.stdout);
-		interrupted.kill();
+		// The blocked JS thread cannot run the cleanup handler installed for SIGTERM.
+		interrupted.kill("SIGKILL");
 		await interrupted.exited;
 		expect((await fs.readdir(domainDirectory(state))).some(name => name.startsWith(".staging-"))).toBe(true);
 		expect(await fs.readFile(path.join(first.root, "data", "large.bin"), "utf8")).toBe("last complete");
