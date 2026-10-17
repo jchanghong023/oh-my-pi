@@ -794,7 +794,7 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 	if (plan.exitCode !== 0)
 		return stageFailure(
 			"BLOCKED",
-			`deployed helper preflight rejected source: ${plan.stderr.trim()}`,
+			`deployed helper preflight rejected source: ${plan.stderr.trim() || plan.stdout.trim()}`,
 			helperPreflightFailureCode(plan),
 			plan.exitCode,
 		);

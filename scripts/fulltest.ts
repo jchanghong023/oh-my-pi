@@ -294,7 +294,8 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		// fastcheck gate settles. Each side still runs independent work in
 		// parallel: per-file tests spread wide, multithreaded static checks
 		// (tsgo/clippy) keep their narrower pool so they do not thrash.
-		const concurrency = gatePoolWidth();
+		// Leave headroom for each test's CLI/native children and the concurrent WSL leg.
+		const concurrency = gatePoolWidth(undefined, 4, 8);
 		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(undefined, 3, 12)));
 		const results = await Promise.allSettled([fastcheck, runGateCommands(gate, tests, concurrency, fastcheck)]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
