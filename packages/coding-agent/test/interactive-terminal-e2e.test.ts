@@ -3,15 +3,21 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayCompactToolActivity, cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgDisplayCompactToolActivity,
+	cfgDisplayHideToolActivity,
+	cfgStartupQuiet,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 function plainRows(rows: readonly string[]): string[] {
@@ -29,6 +35,7 @@ describe("libkitty end-to-end", () => {
 	let session: AgentSession;
 	let mode: InteractiveMode;
 	let term: VirtualTerminal;
+	let releaseSessionEffects: (() => void) | undefined;
 
 	beforeAll(() => {
 		initTheme();
@@ -60,6 +67,8 @@ describe("libkitty end-to-end", () => {
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
+		releaseSessionEffects?.();
+		releaseSessionEffects = undefined;
 		resetSettingsForTest();
 	});
 
@@ -299,6 +308,11 @@ describe("libkitty end-to-end", () => {
 
 		// This shortcut test inspects detailed tool output, not compact summaries.
 		cfgDisplayCompactToolActivity.set(session.settings, false);
+		cfgDisplayHideToolActivity.set(session.settings, false);
+		// Direct AgentSession construction bypasses the SDK's process-wide settings binding.
+		releaseSessionEffects = bindEffects(session.settings);
+		expect(chatTranscriptDisplayPreferences.compactToolActivity).toBe(false);
+		expect(chatTranscriptDisplayPreferences.hideToolActivity).toBe(false);
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });
 		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
