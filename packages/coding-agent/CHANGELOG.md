@@ -42,6 +42,7 @@
 - Stop review exports when the host cancels them, preserving the previous ZIP, and only label files excluded when they are actually omitted.
 - Recover idle browser workers after unexpected exits without requiring an active run, while still aborting host tool calls owned by failed runs.
 - Ignore non-repository `.git` cache sentinel files during WSL repository discovery without pruning real repositories inside cache directories.
+- Verify the documentation worker smoke against an imported isolated corpus instead of treating a missing index as a successful empty search.
 
 - `/clear` now clears fully completed or abandoned todo plans immediately and keeps them cleared on resume, while preserving unfinished plans and task history.
 

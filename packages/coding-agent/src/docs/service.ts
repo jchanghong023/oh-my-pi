@@ -460,30 +460,41 @@ export async function smokeTestDocsWorker(): Promise<void> {
 	let offError: (() => void) | undefined;
 	let timer: NodeJS.Timeout | undefined;
 	try {
+		const sourceText = "# Smoke\ndocsworkersmokebeacon\n";
+		const sourceRoot = directory.join("documents");
+		await Bun.write(path.join(sourceRoot, "guide.md"), sourceText);
 		const { promise, resolve, reject } = Promise.withResolvers<void>();
 		child = spawnDocsWorker(reject);
 		const worker = child;
 		const context = logContext();
 		const configureId = crypto.randomUUID();
+		const initId = crypto.randomUUID();
 		const searchId = crypto.randomUUID();
 		const sendSearch = (): void =>
 			worker.handle.send({
 				type: "searchWindow",
 				id: searchId,
 				context,
-				query: "docs worker smoke",
+				query: "docsworkersmokebeacon",
 				options: { limit: 1 },
 			});
 		offMessage = worker.handle.onMessage(message => {
 			if (message.type === "progress") return;
-			if (message.id !== configureId && message.id !== searchId) return;
+			if (message.id !== configureId && message.id !== initId && message.id !== searchId) return;
 			if (message.type === "error") {
 				reject(new Error(`docs worker smoke: ${message.error.message}`));
 				return;
 			}
-			if (message.id === configureId && message.command === "configure") {
+			if (
+				(message.id === configureId && message.command === "configure") ||
+				(message.id === initId && message.command === "init")
+			) {
 				try {
-					sendSearch();
+					if (message.id === configureId) {
+						worker.handle.send({ type: "init", id: initId, context, directory: sourceRoot, name: "smoke" });
+					} else {
+						sendSearch();
+					}
 				} catch (error) {
 					reject(error);
 				}
@@ -495,12 +506,14 @@ export async function smokeTestDocsWorker(): Promise<void> {
 			}
 			const result = message.value;
 			if (
-				result.total !== 0 ||
-				result.sections.length !== 0 ||
-				result.exactNameMatches !== 0 ||
+				result.total !== 1 ||
+				result.sections.length !== 1 ||
+				result.sections[0]?.index !== "smoke" ||
+				result.sections[0]?.path !== "guide.md" ||
+				result.sections[0]?.text !== sourceText ||
 				result.cursorBase.p !== 0
 			) {
-				reject(new Error("docs worker smoke: expected successful empty database search"));
+				reject(new Error("docs worker smoke: indexed source evidence did not match"));
 				return;
 			}
 			resolve();
@@ -514,8 +527,8 @@ export async function smokeTestDocsWorker(): Promise<void> {
 			type: "configure",
 			id: configureId,
 			context,
-			options: { agentDir: directory.path() },
-			cursorPath: directory.join("docs.db"),
+			options: { agentDir: directory.join("agent") },
+			cursorPath: directory.join("agent", "docs.db"),
 		});
 		await promise;
 	} finally {
