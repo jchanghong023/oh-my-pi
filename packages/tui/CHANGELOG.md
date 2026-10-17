@@ -5,7 +5,7 @@
 ### Added
 
 - Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
-- Compact transcript activity shows each non-editing tool invocation on one line, including failures, and keeps hidden thinking and compact tool output out of expandable native content.
+- Compact transcript activity shows every tool invocation on one line, including writes, edits and failures, and keeps hidden thinking and compact tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
@@ -13,7 +13,6 @@
 - The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
 - The five-row thinking tail has a static heading and left guide with a two-column left margin, ignores trailing blank lines, collapses repeated paragraph blanks, and emphasizes the newest visible line with the current theme's text color.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
-- Compact display preserves the upstream previews, diffs, and expand/collapse behavior for write, edit, and apply_patch tools.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.
@@ -24,6 +23,7 @@
 
 ### Fixed
 
+- Compact search rows show the search pattern or query before the search directory.
 - Compact Wait rows show the background job's type, ID, and command instead of a generic waiting message.
 - Compact display no longer inserts blank rows between consecutive tool calls, including after scrolling and terminal resizing.
 - Compact display keeps LSP and other `xd://` device calls on one line instead of showing file-write previews.
