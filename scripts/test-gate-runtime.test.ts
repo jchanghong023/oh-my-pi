@@ -1787,89 +1787,109 @@ it("matches Go quoted flags without changing Windows paths or quoted arguments",
 	expect(splitGoCommand(`"${cachePath}" --cached`)).toEqual([cachePath, "--cached"]);
 	expect(() => splitGoCommand('"unterminated')).toThrow("Unterminated");
 });
-it("exempts Go compiler/link tools but charges vet and preserves actual tool failures", async () => {
-	const compiler = path.join(directory, process.platform === "win32" ? "compile.exe" : "compile");
-	try {
-		await fs.link(process.execPath, compiler);
-	} catch {
-		await fs.copyFile(process.execPath, compiler);
-	}
-	const vet = path.join(directory, process.platform === "win32" ? "vet.exe" : "vet");
-	await fs.link(compiler, vet);
+describe("Go tool accounting", () => {
+	let compiler: string;
+	let linker: string;
+	let vet: string;
 	const dispatcher = path.join(import.meta.dir, "test-gate-compiler.ts");
-	const compile = await runGate(
-		"fastcheck",
-		async gate => {
-			await gate.run({
-				label: "stub Go compiler",
-				argv: [process.execPath, dispatcher, "--go", compiler, stub, JSON.stringify({ ms: 900 })],
-				env: { BUN_BE_BUN: "1" },
-			});
-		},
-		{ print: quiet },
-	);
-	expect(compile.status).toBe("PASS");
-	expect(compile.compileExcludedSeconds).toBeGreaterThan(0.8);
-	const linker = path.join(directory, process.platform === "win32" ? "link.exe" : "link");
-	await fs.link(compiler, linker);
-	const linked = await runGate(
-		"fastcheck",
-		async gate => {
-			await gate.run({
-				label: "stub Go linker",
-				argv: [process.execPath, dispatcher, "--go", linker, stub, JSON.stringify({ ms: 50 })],
-				env: { BUN_BE_BUN: "1" },
-			});
-		},
-		{ print: quiet },
-	);
-	expect(linked.status).toBe("PASS");
-	expect(linked.compileExcludedSeconds).toBeGreaterThan(0.04);
-	const checked = await runGate(
-		"fastcheck",
-		async gate => {
-			await gate.run({
-				label: "stub Go vet",
-				argv: [process.execPath, dispatcher, "--go", vet, stub, JSON.stringify({ ms: 30000 })],
-				env: { BUN_BE_BUN: "1" },
-			});
-		},
-		{ limitSeconds: 0.8, print: quiet },
-	);
-	expect(checked.status).toBe("TIMEOUT");
-	expect(checked.compileExcludedSeconds).toBe(0);
-	const failedCaller = path.join(directory, "go-tool-caller.ts");
-	await fs.writeFile(
-		failedCaller,
-		`
+	beforeAll(async () => {
+		compiler = path.join(directory, process.platform === "win32" ? "compile.exe" : "compile");
+		try {
+			await fs.link(process.execPath, compiler);
+		} catch {
+			await fs.copyFile(process.execPath, compiler);
+		}
+		linker = path.join(directory, process.platform === "win32" ? "link.exe" : "link");
+		vet = path.join(directory, process.platform === "win32" ? "vet.exe" : "vet");
+		await fs.link(compiler, linker);
+		await fs.link(compiler, vet);
+	});
+	// Each invariant owns a complete real gate lifecycle and the default five-second
+	// test deadline; unrelated process startups must not share one cumulative timer.
+	it("exempts Go compiler tools", async () => {
+		const compile = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run({
+					label: "stub Go compiler",
+					argv: [process.execPath, dispatcher, "--go", compiler, stub, JSON.stringify({ ms: 900 })],
+					env: { BUN_BE_BUN: "1" },
+				});
+			},
+			{ print: quiet },
+		);
+		expect(compile.status).toBe("PASS");
+		expect(compile.compileExcludedSeconds).toBeGreaterThan(0.8);
+	});
+	it("exempts Go linker tools", async () => {
+		const linked = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run({
+					label: "stub Go linker",
+					argv: [process.execPath, dispatcher, "--go", linker, stub, JSON.stringify({ ms: 50 })],
+					env: { BUN_BE_BUN: "1" },
+				});
+			},
+			{ print: quiet },
+		);
+		expect(linked.status).toBe("PASS");
+		expect(linked.compileExcludedSeconds).toBeGreaterThan(0.04);
+	});
+	it("charges Go vet tools", async () => {
+		const checked = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run({
+					label: "stub Go vet",
+					argv: [process.execPath, dispatcher, "--go", vet, stub, JSON.stringify({ ms: 30000 })],
+					env: { BUN_BE_BUN: "1" },
+				});
+			},
+			{ limitSeconds: 0.8, print: quiet },
+		);
+		expect(checked.status).toBe("TIMEOUT");
+		expect(checked.compileExcludedSeconds).toBe(0);
+	});
+	it("preserves actual Go tool failures even when the caller ignores their exit", async () => {
+		const failedCaller = path.join(directory, "go-tool-caller.ts");
+		await fs.writeFile(
+			failedCaller,
+			`
 const tool = Bun.spawn([process.execPath, ${JSON.stringify(dispatcher)}, "--go", ${JSON.stringify(compiler)}, ${JSON.stringify(stub)}, JSON.stringify({ exit: 29 })], { env: process.env, stdout: "inherit", stderr: "inherit" });
 // Ignore the tool's exit so only its failure event can fail the outer gate.
 await tool.exited;
 `,
-	);
-	const failed = await runGate(
-		"fastcheck",
-		async gate => {
-			await gate.run({
-				label: "stub failed Go compiler",
-				argv: [process.execPath, failedCaller],
-				env: { BUN_BE_BUN: "1" },
-			});
-		},
-		{ print: quiet },
-	);
-	expect(failed.exitCode).toBe(29);
-	const overlapped = await runGate(
-		"fastcheck",
-		async gate => {
-			await gate.run(
-				command({ capturedCompiler: true, mixedTool: vet, goTool: true, dispatcher }, { env: { BUN_BE_BUN: "1" } }),
-			);
-		},
-		{ limitSeconds: 0.8, print: quiet },
-	);
-	expect(overlapped.status).toBe("TIMEOUT");
-	expect(overlapped.compileExcludedSeconds).toBeLessThan(0.2);
+		);
+		const failed = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run({
+					label: "stub failed Go compiler",
+					argv: [process.execPath, failedCaller],
+					env: { BUN_BE_BUN: "1" },
+				});
+			},
+			{ print: quiet },
+		);
+		expect(failed.exitCode).toBe(29);
+	});
+	it("charges Go vet execution overlapping a compiler", async () => {
+		const overlapped = await runGate(
+			"fastcheck",
+			async gate => {
+				await gate.run(
+					command(
+						{ capturedCompiler: true, mixedTool: vet, goTool: true, dispatcher },
+						{ env: { BUN_BE_BUN: "1" } },
+					),
+				);
+			},
+			{ limitSeconds: 0.8, print: quiet },
+		);
+		expect(overlapped.status).toBe("TIMEOUT");
+		expect(overlapped.compileExcludedSeconds).toBeLessThan(0.2);
+	});
 });
 it("keeps build-script probe answers from failing the gate while preserving real rustc failures", async () => {
 	const rustc = path.join(directory, process.platform === "win32" ? "rustc.exe" : "rustc");
