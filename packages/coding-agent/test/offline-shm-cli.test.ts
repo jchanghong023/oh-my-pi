@@ -324,6 +324,7 @@ async function backupTiming(directory: string) {
 	await Bun.write(
 		wrapper,
 		`import * as fs from 'node:fs';
+import { parentPort } from 'node:worker_threads';
 const control = ${JSON.stringify(control)};
 const round = fs.readFileSync(control + '/tick', 'utf8').trim();
 fs.appendFileSync(control + '/events.jsonl', JSON.stringify({event:'worker-started',pid:process.pid,round}) + '\\n');
@@ -331,6 +332,7 @@ fs.appendFileSync(control + '/events.jsonl', JSON.stringify({event:'worker-start
 // never assert an elapsed sleep. Static imports would bypass this loading gate.
 while (!fs.existsSync(control + '/release-' + round)) await Bun.sleep(10);
 await import(${JSON.stringify(cli)});
+parentPort.postMessage({fixtureReady:true});
 `,
 	);
 	await Bun.write(
@@ -357,7 +359,18 @@ globalThis.Worker = class extends NativeWorker {
    const round = fs.readFileSync(control + '/tick','utf8').trim();
    emit({event:'worker-created',ready,round});
    super(${JSON.stringify(wrapper)}, options);
-   this.addEventListener('message', event => emit({event:'worker-result',round,...event.data}));
+   const send = this.postMessage.bind(this);
+   let pending;
+   this.postMessage = value => { pending = value; };
+   this.addEventListener('message', event => {
+    if (event.data?.fixtureReady) {
+     event.stopImmediatePropagation();
+     this.postMessage = send;
+     if (pending !== undefined) send(pending);
+     return;
+    }
+    emit({event:'worker-result',round,...event.data});
+   });
    this.addEventListener('close', () => queueMicrotask(() => emit({event:'worker-closed',round})));
    this.addEventListener('error', event => emit({event:'worker-error',round,message:String(event.message)}));
   }
