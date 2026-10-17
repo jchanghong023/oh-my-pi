@@ -8,6 +8,7 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
+import { compactToolSummary } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -378,6 +379,8 @@ export class ToolExecutionComponent extends Container {
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
+	#compactKeep = 1;
+	#compactSummary = 0;
 	#showImages: boolean;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
@@ -841,6 +844,18 @@ export class ToolExecutionComponent extends Container {
 		return !this.#isPartial;
 	}
 
+	getCompactToolCount(): number {
+		return Number(this.#nativeStatus() === "done");
+	}
+
+	setCompactToolLimit(keep: number, summary: number): void {
+		if (this.#compactKeep === keep && this.#compactSummary === summary) return;
+		this.#compactKeep = keep;
+		this.#compactSummary = summary;
+		this.#blockVersion++;
+		this.#native.clear();
+	}
+
 	/**
 	 * Subagent ids visible on this card for click-to-focus hit-testing. Empty
 	 * unless this is a task card whose details already name spawned agents.
@@ -1023,36 +1038,41 @@ export class ToolExecutionComponent extends Container {
 
 	/** Compact mode never constructs a renderer body, so terminal-local expansion cannot reveal it. */
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
+		const collapsed =
+			this.#compactSummary > 0
+				? [text(compactToolSummary(this.#compactSummary), { lines: 1, wrap: "none", truncate: "end" })]
+				: [];
+		if (this.getCompactToolCount() > this.#compactKeep) return col(collapsed);
 		const summary = this.#compactActivity();
 		const status = this.#nativeStatus();
 		const ms = this.#elapsedMs(status);
 		const live = status === "running" || status === "pending";
-		if (dataFirst) {
-			return node("tool", {
-				role: `omp.tool.${this.#toolName}`,
-				key: this.#toolCallId,
-				name: this.#toolName,
-				title: truncateToWidth(summary.label, Math.max(1, width - 16)),
-				target: summary.detail
-					? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(summary.label) - 16))
-					: undefined,
-				targetKind: "text",
-				status,
-				age: live ? ms : undefined,
-				took: live ? undefined : ms,
-				frame: "inline",
-				collapsible: false,
-			});
-		}
-		return node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
-			text(`${status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
-				lines: 1,
-				wrap: "none",
-				truncate: "end",
-				grow: 1,
-			}),
-			...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
-		]);
+		const call = dataFirst
+			? node("tool", {
+					role: `omp.tool.${this.#toolName}`,
+					key: this.#toolCallId,
+					name: this.#toolName,
+					title: truncateToWidth(summary.label, Math.max(1, width - 16)),
+					target: summary.detail
+						? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(summary.label) - 16))
+						: undefined,
+					targetKind: "text",
+					status,
+					age: live ? ms : undefined,
+					took: live ? undefined : ms,
+					frame: "inline",
+					collapsible: false,
+				})
+			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
+					text(`${status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
+						lines: 1,
+						wrap: "none",
+						truncate: "end",
+						grow: 1,
+					}),
+					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
+				]);
+		return collapsed.length > 0 ? col([...collapsed, call]) : call;
 	}
 
 	#compactActivity(): ToolActivitySummary {
@@ -1416,6 +1436,11 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
+			const collapsed =
+				this.#compactSummary > 0
+					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactSummary)), width)]
+					: [];
+			if (this.getCompactToolCount() > this.#compactKeep) return collapsed;
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);
@@ -1426,7 +1451,7 @@ export class ToolExecutionComponent extends Container {
 				`${state}${theme.fg("toolTitle", theme.bold(summary.label))}${detail}`,
 				Math.max(1, width - Bun.stringWidth(elapsed)),
 			);
-			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
+			return [...collapsed, truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
 		}
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";

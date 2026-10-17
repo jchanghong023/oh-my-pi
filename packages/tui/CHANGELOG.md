@@ -5,11 +5,12 @@
 ### Added
 
 - Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
-- Compact transcript activity shows every tool invocation on one line, including writes, edits and failures, and keeps hidden thinking and compact tool output out of expandable native content.
+- Compact transcript activity keeps visible tool invocations on one line, including writes, edits and failures, and keeps hidden thinking and compact tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
 
+- Compact tool runs keep the latest three successful calls and fold older successes into one count, preserving running calls, failures, prose boundaries, and full detailed history.
 - The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
 - The five-row thinking tail has a static heading and left guide with a two-column left margin, ignores trailing blank lines, collapses repeated paragraph blanks, and emphasizes the newest visible line with the current theme's text color.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.

@@ -235,6 +235,7 @@ export class TranscriptContainer extends Container {
 	#replayRequested = false;
 	#toolActivityVisible = true;
 	#lastFrame: AnimationFrame = { tick: 0, now: 0 };
+	#compactOpenStart = Number.POSITIVE_INFINITY;
 	// Start rows from the last full render(), keyed by child component (transcript deep-links).
 	#childStartRows = new Map<Component, number>();
 	// Watchdog for the wedge where an unfinalized frontier block pins pressure
@@ -835,6 +836,7 @@ export class TranscriptContainer extends Container {
 			limit = Math.max(limit, this.#frontier + (this.#liveCount() - (MAX_LIVE_BLOCKS - 1)));
 		}
 		if (policy === "flush") limit = this.#entries.length;
+		if (policy === "pressure") limit = Math.min(limit, this.#compactOpenStart);
 		// The block straddling the top edge commits only the rows that left the
 		// screen; the rest stays live, so a later shrink of the chrome or the
 		// tail refills the screen from live rows instead of opening a band no
@@ -843,7 +845,7 @@ export class TranscriptContainer extends Container {
 		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
 			const boundary = live[keep - 1]!;
 			const visible = room - tailRows - boundaryGap;
-			if (boundary.entry.state === "settled" && visible > 0) {
+			if (boundary.index < this.#compactOpenStart && boundary.entry.state === "settled" && visible > 0) {
 				const offer = this.#splitOffer(boundary.entry, width, visible);
 				if (offer !== undefined) {
 					split = { index: boundary.index, ...offer };
@@ -1342,6 +1344,7 @@ export class TranscriptContainer extends Container {
 	}
 
 	#startReplay(): void {
+		this.#updateCompactTools(0);
 		const head = this.#entries[this.#frontier];
 		this.#replayPending =
 			this.#frontier > 0 || head?.split !== undefined || (head?.mode === "appendOnly" && head.emitted > 0);
@@ -1464,6 +1467,39 @@ export class TranscriptContainer extends Container {
 		(component as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(rows, frame);
 	}
 
+	/** Keep open compact runs mutable: their summary must not enter immutable scrollback. */
+	#updateCompactTools(startIndex = this.#frontier): void {
+		this.#compactOpenStart = Number.POSITIVE_INFINITY;
+		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
+		let start = -1;
+		let completed = 0;
+		const flush = (end: number) => {
+			if (start < 0) return;
+			let remaining = 3;
+			const summary = Math.max(0, completed - remaining);
+			for (let index = end - 1; index >= start; index--) {
+				const component = this.children[index]!;
+				if (!isToolActivityComponent(component) || !component.getCompactToolCount) continue;
+				const keep = Math.min(remaining, component.getCompactToolCount());
+				component.setCompactToolLimit?.(keep, index === start ? summary : 0);
+				remaining -= keep;
+			}
+			start = -1;
+			completed = 0;
+		};
+		for (let index = startIndex; index < this.children.length; index++) {
+			const component = this.children[index]!;
+			if (isToolActivityComponent(component) && component.getCompactToolCount) {
+				if (start < 0) start = index;
+				completed += component.getCompactToolCount();
+			} else if (!isUsageRowBlock(component) && trimBlankEdges(component.render(80)).length > 0) {
+				flush(index);
+			}
+		}
+		if (start >= 0) this.#compactOpenStart = start;
+		flush(this.children.length);
+	}
+
 	#settleFinalized(): void {
 		for (let index = this.#frontier; index < this.#entries.length; index++) {
 			const entry = this.#entries[index]!;
@@ -1492,6 +1528,7 @@ export class TranscriptContainer extends Container {
 	 * them keeps this proportional to the live tail rather than the session.
 	 */
 	#syncEntries(): void {
+		this.#updateCompactTools();
 		const children = this.children;
 		if (
 			!this.#entriesUnverified &&

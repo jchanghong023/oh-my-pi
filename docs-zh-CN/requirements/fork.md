@@ -133,7 +133,6 @@
 
 - 默认启用 `skills.enableCodexUser`，`~/.codex/skills/*/SKILL.md` 与上游默认来源一并参与发现；未设置下述共享目录时来源优先级不变，同名技能仍优先取 `.agents/skills` 等上游默认开启来源中的版本。
 - 仅适用于技能：`~/.codex` 下的 MCP、hooks、commands、AGENTS.md 等其它能力仍按上游规则保持 opt-in。
-- 技能是否进入系统提示词列表仍由自身 `disable-model-invocation` / `hide` 决定；不可由模型调用的技能只通过 `/skill:<name>` 与 `skill://<name>` 使用。
 
 ### 团队共享技能目录
 
@@ -182,7 +181,7 @@
   - 上述 lane、角色默认值与发现策略仅在当前 offline 进程生效，不持久化；非 offline 行为不变，不注册公司 provider，也不把 cache-only 扩展为所有网络请求的禁令。
 - 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
 - URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
-- 聊天使用 Anthropic Messages 协议和 Bearer 认证，不做公司模型发现、不请求对应厂商的公网 API。内置参数固定如下（token 数）：
+- 聊天使用 Anthropic Messages 协议和 Bearer 认证，仅请求上述 Claude Code 配置中的地址，不做公司模型发现，也不自动发现或回退到对应厂商的公网 API。内置参数固定如下（token 数）：
 
    | Model ID                   | 输入       |    上下文 | 最大输出 |
    | -------------------------- | ---------- | --------: | -------: |
@@ -204,19 +203,17 @@
 
 - `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
 - `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、stdout 惰性暴露与完成后收口），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。截止时取消管道读取并保留部分输出已由上游（2026-10-07 `#cutoff` + `#pipeReaders`）等价提供，不再由 fork 承担。
-- `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁（e0fc1cf 基线即与其自身 `rpc-user-input-order` 测试矛盾）；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
-- Advisor 原生压缩仅覆盖较早历史前缀时，须保留并回放未压缩的近期消息；完整 replacement history 已包含近期消息时不重复追加，避免丢失当前决策或重复工具调用。该目标由上游等价满足，不再保留 fork 实现补丁及重复回归。
+- `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
 - `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
 - `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
 - `packages/utils/src/ar/open.ts`：Windows EPERM 时降级为 junction 或文件复制、跳过 dangling link 已由上游提供；fork 仅保留文件复制时的独占目标语义，不能覆盖现有文件或跟随已有 symlink。
 - `packages/coding-agent/src/tools/read-archive.ts`：Windows 同尺寸快速重写归档并恢复 mtime 时，ctime 也可能不变；该平台不复用仅由文件元数据验证的归档目录缓存，避免返回旧成员名称或读取错误成员。其他平台保留既有有界缓存。
-- `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫（PR #14265 待上游合并）。
+- `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫。
 - `crates/pi-builtins/src/rmdir.rs`：Windows 普通路径不得经末尾 `.`／`..` 或分量尾点／空格归一化删除另一目录；显式 verbatim 路径继续按字面处理合法尾点／空格目录，Unix 字面路径语义不变。
 - `crates/pi-shell/src/shell.rs`：TERM 宽限等待按平台编译：Unix 继续异步等待清理，Windows 的 TERM 本已强制结束进程，返回立即就绪的 Future；不增加延迟，也不屏蔽 `clippy::unused_async`。
 - `crates/pi-natives/src/memory.rs`：非 Linux/glibc 平台的空操作入口使用 `const fn`，满足 Windows 静态门禁；Linux/glibc 继续执行原有工作计数、释放通知与空闲裁剪，不屏蔽 lint。
 - `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
 - `crates/pi-shell/src/process.rs`：取消时每一波信号在发送前冻结自有目标，同一进程／进程组不重复投递 TERM，避免重入清理 trap；跨组后代与 TERM 后新生进程仍由后续 KILL 波回收，保留既有进程身份保护和宽限时限。
-- `crates/pi-builtins/src/uptime.rs`、`du.rs`：Windows 的未用导入／可变声明静态问题已由上游等价修复；采用上游实现，不再保留 fork 业务补丁，命令行为不变。
 - `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。独立 Python 回归不因此纳入 fork 本地门禁。
@@ -247,7 +244,7 @@
 | 模式 | 思考内容 | 模型发起的工具调用与结果 |
 | --- | --- | --- |
 | `clean`（干净） | 不显示正文，仅保留忙碌状态 | 隐藏调用及结果 |
-| `compact`（紧凑） | 单一实时尾窗，仅显示当前思考最新五个屏幕行 | 所有工具每次调用最多占一行，显示运行／成功／失败状态、操作摘要与耗时，不显示完整参数、输出正文、文件预览、diff 或图片；连续工具块之间不额外插入空行，正文消息的分隔保持不变 |
+| `compact`（紧凑） | 单一实时尾窗，仅显示当前思考最新五个屏幕行 | 每条可见调用最多占一行，连续工具段保留最近三条成功调用，更早成功调用合成一行计数；运行中与失败调用保留；显示状态、操作摘要与耗时，不显示完整参数、输出正文、文件预览、diff 或图片；连续工具块之间不额外插入空行，正文消息的分隔保持不变 |
 | `detailed`（详细） | 不显示实时尾窗；完整思考原文保留在会话数据，经显式历史查看器查看 | 显示调用与结果，沿用现有详情展开／折叠能力，不强制展开全部内容 |
 
 - 正常主界面任何时刻最多只有一个思考块，仅紧凑模式显示，干净与详细模式不显示；只投影当前被查看会话的真实活动思考块，后台代理并发不抢占。窗口位于输入区上方、固定 TODO 面板之前，底部顺序为实时思考 → TODO → 状态行／输入区；不作为聊天记录或终端 scrollback 输出，不另留思考脉冲、已完成折叠块或历史正文。显式历史查看器保留原始详情能力，不改写会话数据。
@@ -257,6 +254,7 @@
 - 实时尾窗同样遵循 `proseOnlyThinking`（默认开启）：复用既有代码围栏省略规则，先过滤正文，再按上述空白规则取最新五个屏幕行；关闭时不省略代码围栏，空白处理与行数上限不变，活动流中切换须立即生效，不能修改原始消息或重开已结束／已隐藏的窗口。
 - 已完整处理的 CRLF／ANSI 不得让后续普通追加永久退回完整历史归一化与折行；未闭合控制序列、跨分片 CRLF 和代理对仍须安全处理。
 - 紧凑模式的失败调用须保留一行可识别的失败摘要；不能把失败显示为成功或完全隐藏。长摘要及多行输入按终端宽度截断为一行，不因换行、终端缩放或多个读取调用分组而丢失调用身份或泄露详情正文。参数流、运行中、成功与失败结果均须遵循单行限制；干净模式仍隐藏全部工具活动。
+- 连续工具段不跨助手普通正文或其他可见非工具消息合并；隐藏的思考／工具调用宿主块与独立用量行不切断工具段。较早成功调用显示为单行 `… 已收起 N 次工具调用`，读取分组按实际调用计数；运行中、失败及读取警告仍保留各自单行。仅折叠显示，不删除或改写会话数据，切回详细模式恢复全部工具详情，不新增配置、模式或快捷键。
 - 所有工具统一遵循单行限制，不保留预览例外，包括普通文件 `write`、`edit`、`apply_patch`、`write agent://…`、`write proc://…`、`write xd://<tool>`（包括 LSP）以及 MCP／扩展工具。展开快捷键不能泄露正文或 diff；切回详细模式仍可查看原始详情与展开／折叠。
 - 无专用摘要的工具按 `command → pattern → query → path → input` 选取首个非空字符串作为操作摘要，使检索词优先于搜索目录；继续复用单行清洗、截断和耗时呈现，不追加结果正文。
 - 紧凑模式的 `eval` 优先使用已有意图字段 `i`，其次使用本次调用的 `title` 作为操作摘要；不展示代码或输出，继续复用统一的状态、截断和耗时呈现。
@@ -288,10 +286,8 @@
   - 仅当前 Goal 处于已启用、执行中且带有 `/goal-autopilot` 模式标记时，内置 `ask` 对超时未回答的题目不代选推荐项、肯定选项或首项；返回明确标记的自动回复，正文为“按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总”，将决策交回已有完整上下文的当前主模型，直至完整目标完成，不在阶段边界收尾或再次询问是否继续。模式依据当前目标状态，不依据最近输入的命令名称；暂停、退出、完成或预算受限时不使用固定回复。
   - 其他场景（包括普通 `/goal`）超时后的处理完全沿用上游：保留已有回答，未回答时采用上游自动选择结果，包括推荐项、无推荐时的首项、富问答中已加备注的选项及简化选择器的既有选择行为；继续执行，不注入固定授权回复。
   - 保留已回答题目、手动选择、自定义输入和备注；用户取消及停止仍优先。TUI 与支持工具交互的 `rpc-ui` 宿主中，富问答与简化选择共用上述模式边界；普通 `rpc` 的工具可用性保持不变。不改变其他确认框、审批和 Goal 调度，不新增配置或额外的回答模型调用。固定自动回复不是用户亲自选择具体选项；其中全程授权针对原目标内的调查、实施、验证和修复，不扩大任务目标或改变既有审批边界。
-- `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - 欢迎界面的随机使用提示、字体提醒与提示／新功能标签遵循上文「简体中文用户界面」；命令、关键词、快捷键占位符、链接及原有随机选择和条件显示规则保持不变。
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
-- 终端标题运行状态沿用上游默认 `tui.titleState=true`：默认显示工作／等待／轮到用户标记，工作时显示旋转图标（WSL 下为静态 `:`）；已有显式配置继续优先，不改写配置文件。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
@@ -315,7 +311,6 @@
 - 配置中的 `subagents` 段按所属组与顺序显示，运行中的子代理徽章不得强制移到右组或重复显示；未配置该段时保留上游临时右侧徽章。后台作业徽章沿用上游显示机制，右组配置为空不关闭这些临时徽章。
 - 输入框顶边的 `statusLine.contextLine=embedded` 模式把上下文使用率与窗口容量合并为靠右的 `ctx 3% · 500K` 信息组，容量与说明文字弱化，组后留两个字符间距；使用率变化不让标签沿横线移动。保留用量横线，不显示预压缩与自动压缩的两根刻度，不改变压缩功能（显式选择 `annotated` 模式仍显示刻度）；未知用量只显示容量，超过 100% 的真实比例仍以错误色显示。路径先按配置的缩写上限显示，仅在状态段与上下文信息确实放不下时从左侧截断、保留末尾目录；状态段移入溢出行后，释放的宽度必须重新分配给路径（不超过配置上限），用量横线只填剩余空间；顶边放不下时沿用状态栏溢出显示。
 - 状态栏支持窄终端自动换行；`composer.shape=band` 除外——其状态行位于编辑器顶带，装不下的段按上游行为省略，不生成换行行。
-- `composer.shape=pi` 时状态栏独立位于输入框下方。
 - 设置向导的主题选项「Match terminal」保留已配置的深色主题，只把浅色主题映射为 `light`；选择该项不会把现有深色主题覆盖为 `titanium`。
 
 ### 运行诊断日志
@@ -336,9 +331,8 @@
 ### 安装与运行
 
 - 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
-- 日志框架、默认目录与启动参数跟随上游；fork 功能的诊断覆盖遵循上文「运行诊断日志」。
-- `-P <name>` 是上游 `--profile <name>` 的内置短参数，无需配置 shell alias；启动前选择 profile，认证、会话、设置与缓存隔离及环境变量优先级沿用上游。`-p` 仍为非交互 print 模式，不新增会话共享行为。
-- 文件遍历线程数沿用上游 native 默认值：未设置 `PI_WALK_WORKERS` 时默认使用 4 个 worker，不再按本机核数注入覆盖值。用户显式设置的值仍由上游处理（`0` 表示自动检测，`1` 表示串行）；普通与 offline 启动遵循同一规则，不写配置文件。
+- 日志框架复用上游，fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定；启动参数除下述 fork 扩展外沿用上游。
+- fork 新增 `-P <name>`，复用上游 `--profile <name>` 语义，无需配置 shell alias；启动前选择 profile，认证、会话、设置与缓存隔离及环境变量优先级沿用上游。`-p` 仍为非交互 print 模式，不新增会话共享行为。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
 - `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 原始数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。非 offline 时直接使用该根；适用的 offline shm 模式按下述契约区分运行根与原始持久根。
 - **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。
@@ -364,7 +358,7 @@
 - 安装器只安装 fork Release 的预编译二进制：Linux x64/arm64、Windows x64；`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
 - 两个平台的安装器都下载到安装目录中的唯一临时文件，先确认可启动且 `omp --version` 与所选 Release 完全一致，再替换现有安装；验证失败保留旧安装并清理临时文件。可执行目标是目录时联网前拒绝，不移动目录内容；已经是所选版本时跳过下载但仍提示 PATH。Windows 优先 `curl.exe`；未设置目标协议的代理环境变量及 `ALL_PROXY` 时，自动解析当前用户的 Windows 系统代理并传给 curl，不要求额外设置环境变量。显式代理环境变量优先，curl 遵循 `NO_PROXY`；curl 失败或不可用时仍回退兼容 PowerShell 5.1 的 `Invoke-WebRequest -UseBasicParsing`。安装器只维护 PATH，不写废弃的 settings.json 或擅自改用户 shell/config.yml。安装器自身的全部 Web 请求（Release 元数据与二进制下载）默认放宽 TLS 校验，与运行时零配置姿态一致：curl 追加 `--insecure`，Windows 安装器另加 `--ssl-no-revoke`；POSIX 安装器仅在 curl 使用 Schannel 且版本支持时追加 `--ssl-no-revoke`（Schannel 吊销检查在拦截代理后常失败），不向旧版或其他 TLS 后端传入该选项。PowerShell 5.1 启用 TLS 1.2 并挂接放行证书回调，PowerShell 7+ 对 `Invoke-RestMethod`/`Invoke-WebRequest` 传 `-SkipCertificateCheck`；下载完整性仍由装后 `omp --version` 与所选 Release 完全一致的校验兜底。
 - 运行时代理与安装器同序：Windows 主进程内所有经全局 `fetch` 的出网请求（含 LLM 流、OAuth/usage 探测、模型发现、更新检查与 web 请求）按「请求自带显式 `proxy`（`PI_PROXY_<PROVIDER>`/`PI_PROXY`）→ 标准代理环境变量（`HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`，Bun 原生应用）→ 当前用户 Windows 系统代理 → 直连」解析。系统代理仅取 HKCU Internet Settings 的静态 `ProxyEnable`/`ProxyServer`（含 `http=`/`https=` per-protocol 形式，`socks=` 条目与 PAC/WPAD 不支持），每进程读取一次并缓存；未启用或读取失败时行为与无此改动一致。`NO_PROXY` 与回环/内网硬 bypass 同样约束系统代理。仅 win32 生效；worker 子进程入口（本地服务）不经此链路。系统代理层另有 fork 内网绕行清单（`packages/ai` proxy.ts 的 `FORK_SYSTEM_PROXY_BYPASS`，抄自公司代理 override 清单）：公司域名后缀、点名内网主机、CGNAT/RFC1918 式 IP 前缀（`10.`、`100.64.`–`100.126.`、`172.16.`–`172.32.`、`7.` 等）与 `*` 通配条目命中的目标不走系统代理、直连；清单只约束系统代理层，不约束 `PI_PROXY` 与环境变量代理（它们的绕行机制仍是 `NO_PROXY`）。条目语义与来源格式对应：前导 `-` 剥离、数字开头为 IP 前缀、含 `*` 为整机名 glob、首尾皆点为点号标签包含、仅前导点为域名后缀、其余为精确或点后缀。
-- 零配置 TLS 默认：主进程网络引导时，未显式设置即默认 `NODE_TLS_REJECT_UNAUTHORIZED=0`（Bun fetch 认可，覆盖全部 fetch 请求的证书验证）与 `GIT_SSL_NO_VERIFY=true`（主进程拉起的 git 子进程继承），使拦截代理/私有网关的自有根证书场景免配置可用。显式设置任何值（如 `NODE_TLS_REJECT_UNAUTHORIZED=1`、`GIT_SSL_NO_VERIFY=false`）即恢复严格校验，agent 目录 `.env` 同样先于此默认生效；worker 子进程入口不经此默认。这是个人 fork 的安全姿态取舍：进程内所有 TLS 不再验证端点身份，凭据在可劫持网络下有被截获风险，仅在个人受控环境接受。
+- 零配置 TLS 默认：主进程网络引导时，未显式设置即默认 `NODE_TLS_REJECT_UNAUTHORIZED=0`（Bun fetch 认可，覆盖全部 fetch 请求的证书验证）与 `GIT_SSL_NO_VERIFY=true`（主进程拉起的 git 子进程继承），使拦截代理/私有网关的自有根证书场景免配置可用。显式设置的值均优先于此默认，不被改写；`NODE_TLS_REJECT_UNAUTHORIZED=1` 与 `GIT_SSL_NO_VERIFY=false` 分别恢复对应的严格校验，显式 `0`／`true` 则仍放宽对应校验。agent 目录 `.env` 同样先于此默认生效；worker 子进程入口不经此默认。这是个人 fork 的安全姿态取舍：采用该放宽默认时，TLS 不再验证端点身份，凭据在可劫持网络下有被截获风险，仅在个人受控环境接受。
 - 安装器替换目标二进制时不中断运行中的 omp：Linux 用同目录原子 `mv`；Windows 先把旧 `omp.exe` 重命名到唯一的 `.omp.old.*` 再换入（换入失败自动回滚），仅当重命名失败（如杀软锁定）才回退为按安装路径精确匹配强杀，`.omp.old.*` 残留由下次安装尽力清扫。Windows 的已验证下载在替换失败时保留为 `.omp.tmp.*`，包括旧安装已成功回滚的情况；回滚失败同时保留旧映像供恢复。
 - Windows 下载成功后，校验、旧映像重命名/强杀回退、换入、回滚或 PATH 设置失败，MUST 打印失败阶段、原始错误、错误类型/代码、安装目标及可用的诊断日志路径，并输出正确引用路径的可执行 PowerShell 命令：未通过验证的二进制不能引导运行；已验证的保留下载可直接启动；旧映像恢复只在目标不存在时执行；重试固定本次 Release 与安装目录，最后核对目标文件及 PATH 命中的版本。二进制已换入但 PATH 设置失败时明确标为部分完成，不能提前报告安装成功。非致命清理失败须说明具体错误和安全重试命令；仍被旧会话占用的映像可留待会话退出后清理，不影响新版安装结果。详细错误仅向终端展示，落盘日志继续遵循脱敏契约。
 

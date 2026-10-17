@@ -52,7 +52,7 @@ PR picker 保持现有行为：每次列表最多 100 项，支持服务端搜�
 
 | 选择 | 基线 | 目标 |
 | --- | --- | --- |
-| 未提交改动 | 固定的 `HEAD` | 捕获时最终工作树：同时包含 staged、unstaged 与未被 ignore 的 untracked 文件 |
+| 未提交改动 | 固定的 `HEAD` | 捕获时最终工作树：同时包含 staged、unstaged 与符合第 6 节纳入规则且未被 ignore 的 untracked 文件 |
 | 指定提交 | 所选提交的第一父提交；根提交使用空树 | 所选提交的固定 SHA |
 | 基线分支（PR Style） | 所选分支与当前分支的 merge-base | 当前分支固定 SHA；不包含当前工作树未提交内容 |
 | PR | 该 PR 比较所用、已固定身份的基线 | 该 PR 固定的目标 SHA，不是本地同名分支或 checkout |

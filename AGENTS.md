@@ -49,7 +49,7 @@
 | 本机 + 可用的项目所需 WSL 本地门禁（不推送、不触发 CI；非编译与总墙钟上限均为 1500 秒） | `bun run slowtest` |
 | 测试计时报告 | 已运行的测试在被忽略的 `runs/test-timing/<run-id>/` 中记录 JUnit XML、producer 元数据及 `run.json`；范围与时间口径见 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」 |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
-| 启动独立 profile（内置短参数，无需 shell alias） | `omp -P <name>`（等同 `omp --profile <name>`） |
+| 启动独立 profile（fork 新增 `-P`，无需 shell alias） | `omp -P <name>`（等同 `omp --profile <name>`） |
 | 导出代码审查材料（内置命令） | `/code-review-export`，参数与交互同 `/review`；固定导出到仓库根 `.tmp/review-bundle.zip`，契约见 [代码审查材料导出需求](docs-zh-CN/requirements/code-review-export.md) |
 
 ## 开发约束

@@ -3,10 +3,17 @@ import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
+	/** Successful calls eligible for compact transcript folding. */
+	getCompactToolCount?(): number;
+	setCompactToolLimit?(keep: number, summary: number): void;
 }
 
 export function isToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
 	return typeof (component as Partial<ToolActivityComponent>).setToolActivityVisible === "function";
+}
+
+export function compactToolSummary(count: number): string {
+	return `… 已收起 ${count} 次工具调用`;
 }
 
 export class ToolActivityContainer extends Container implements ToolActivityComponent {
