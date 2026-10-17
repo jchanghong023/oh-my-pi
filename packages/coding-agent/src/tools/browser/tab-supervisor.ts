@@ -1167,7 +1167,7 @@ async function runInTabWithSnapshot(
 async function recoverWorkerTab(
 	tab: WorkerTabSession,
 	name: string,
-	pending: PendingRun,
+	pending: PendingRun | undefined,
 	timeoutMs: number,
 	reason: string,
 	opts: {
@@ -1179,7 +1179,9 @@ async function recoverWorkerTab(
 ): Promise<boolean> {
 	// handleTabMessage removes the run before recovery, so retain its controllers
 	// explicitly; terminating the worker cannot stop supervisor-side tool calls.
-	for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
+	if (pending) {
+		for (const ctrl of pending.toolCalls.values()) ctrl.abort(new ToolError("Browser tab worker recycled"));
+	}
 	// The kills go by name: a tab closed meanwhile may have been reopened under it,
 	// and that replacement is not ours to kill.
 	const killTab = async (killReason: string): Promise<false> => {
@@ -1980,11 +1982,18 @@ function attachTabWorker(tab: WorkerTabSession, worker: WorkerHandle): void {
 			forceKillTab(tab.name, reason).catch(logCleanupFailure);
 			return;
 		}
-		const recovery = recoverWorkerTab(tab, tab.name, WORKER_EXIT_REATTACH_TIMEOUT_MS, `${exited}; tab closed`, {
-			// Keep the page as the worker left it: stopping its loading would cancel a navigation the agent started.
-			recover: false,
-			failedReason: `${exited}; it could not be reattached to a new worker, so the tab was closed`,
-		})
+		const recovery = recoverWorkerTab(
+			tab,
+			tab.name,
+			undefined,
+			WORKER_EXIT_REATTACH_TIMEOUT_MS,
+			`${exited}; tab closed`,
+			{
+				// Keep the page as the worker left it: stopping its loading would cancel a navigation the agent started.
+				recover: false,
+				failedReason: `${exited}; it could not be reattached to a new worker, so the tab was closed`,
+			},
+		)
 			.then(reattached => {
 				// No run was in flight to report the reset, so the next call on the tab does.
 				if (reattached && idle) {
