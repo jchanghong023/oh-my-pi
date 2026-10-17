@@ -12,7 +12,7 @@ import {
 	wikiSectionShape as sectionShape,
 } from "@oh-my-pi/pi-natives";
 import { DocsSearchEngine } from "../src/docs/engine";
-import { withSqliteDatabase } from "./helpers/sqlite-inspect";
+import { readSqliteTables, withSqliteDatabase } from "./helpers/sqlite-inspect";
 
 const tempDirs: string[] = [];
 async function tempDir(prefix: string): Promise<string> {
@@ -847,14 +847,7 @@ describe("DocsSearchEngine indexing contract", () => {
 				onProgress: progress => {
 					if (progress.phase !== "fts" || progress.completed !== 1 || attempted) return;
 					attempted = true;
-					const retained = withSqliteDatabase(
-						service.databasePath,
-						db =>
-							["doc_indexes", "documents", "sections"].map(table =>
-								db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all(),
-							),
-						{ readonly: true },
-					);
+					const retained = readSqliteTables(service.databasePath, ["doc_indexes", "documents", "sections"]);
 					// The native worker waits for this synchronous callback. The second
 					// process must reject before it can reclaim the live hidden build.
 					const child = Bun.spawnSync([process.execPath, "--eval", script], {
@@ -873,16 +866,9 @@ describe("DocsSearchEngine indexing contract", () => {
 						contended: true,
 						separate: { processed: 2, index: { name: "independent", documentCount: 2 } },
 					});
-					expect(
-						withSqliteDatabase(
-							service.databasePath,
-							db =>
-								["doc_indexes", "documents", "sections"].map(table =>
-									db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all(),
-								),
-							{ readonly: true },
-						),
-					).toEqual(retained);
+					expect(readSqliteTables(service.databasePath, ["doc_indexes", "documents", "sections"])).toEqual(
+						retained,
+					);
 				},
 			});
 			expect(attempted).toBe(true);
