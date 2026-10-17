@@ -6,6 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
 import { replaceFileAtomically } from "../utils/atomic-file";
 
 /**
@@ -106,7 +107,7 @@ export class ArtifactManager {
 	async #ensureDir(): Promise<void> {
 		await this.#ready;
 		if (!this.#dirCreated) {
-			await fs.mkdir(this.#dir, { recursive: true });
+			if (!ensureOfflineShmDirectory(this.#dir)) await fs.mkdir(this.#dir, { recursive: true });
 			this.#dirCreated = true;
 		}
 		// Memoize the first-use scan so it runs exactly once. Concurrent callers
