@@ -4,9 +4,10 @@
  * stages, and a failed dispatch puts the submission back into the TUI editor.
  */
 import { describe, expect, it } from "bun:test";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TEAM_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/team";
+import { compactImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
@@ -61,6 +62,7 @@ function tuiRuntime(
 				},
 				getExpandedText: () => "",
 				pendingImages: [],
+				pendingImageLinks: [],
 				setCollapsedText: (text: string) => {
 					restored.push(text);
 				},
@@ -110,6 +112,80 @@ describe("/team command gates", () => {
 		await command.handleTui!({ name: "team", args: "分析 X", text: "/team 分析 X" }, runtime);
 		expect(editorClears.count).toBe(0);
 		expect(restored).toEqual(["/team 分析 X"]);
+	});
+
+	it("detaches submitted images before awaiting the dispatch notice so new markers remain valid", async () => {
+		const noticeStarted = Promise.withResolvers<void>();
+		const noticePersisted = Promise.withResolvers<void>();
+		const session = stubSession({
+			model: MODEL,
+			modelRegistry: { getAvailable: () => [MODEL], authStorage: undefined },
+			asyncJobManager: { register: () => "bg_images" },
+			sendCustomMessage: async () => {
+				noticeStarted.resolve();
+				await noticePersisted.promise;
+				return false;
+			},
+		});
+		const { runtime } = tuiRuntime(session);
+		const submitted: ImageContent = { type: "image", data: "submitted", mimeType: "image/png" };
+		const newer: ImageContent = { type: "image", data: "newer", mimeType: "image/png" };
+		const editor = runtime.ctx.editor;
+		let text = "";
+		editor.getExpandedText = () => text;
+		editor.setCollapsedText = value => {
+			text = value;
+		};
+		editor.pendingImages.push(submitted);
+		editor.pendingImageLinks.push("submitted.png");
+		runtime.input = { images: [submitted], imageLinks: ["submitted.png"] };
+		const dispatch = command.handleTui!(
+			{ name: "team", args: "分析 X [Image #1]", text: "/team 分析 X [Image #1]" },
+			runtime,
+		);
+		try {
+			await noticeStarted.promise;
+			expect(editor.pendingImages).toEqual([]);
+			expect(editor.pendingImageLinks).toEqual([]);
+			editor.pendingImages.push(newer);
+			editor.pendingImageLinks.push("newer.png");
+			text = `next [Image #${editor.pendingImages.length}] attachment://${editor.pendingImages.length}`;
+		} finally {
+			noticePersisted.resolve();
+			await dispatch;
+		}
+		expect(editor.pendingImages).toEqual([newer]);
+		expect(editor.pendingImageLinks).toEqual(["newer.png"]);
+		expect(text).toBe("next [Image #1] attachment://1");
+		expect(compactImageMarkers(text, editor.pendingImages.length)).toBeNull();
+	});
+
+	it("restores detached Enter-path images after a newer draft when validation fails", async () => {
+		const { runtime } = tuiRuntime(stubSession());
+		const submitted: ImageContent = { type: "image", data: "submitted", mimeType: "image/png" };
+		const newer: ImageContent = { type: "image", data: "newer", mimeType: "image/png" };
+		const editor = runtime.ctx.editor;
+		let text = "";
+		editor.getExpandedText = () => text;
+		editor.setCollapsedText = value => {
+			text = value;
+		};
+		editor.pendingImages.push(submitted);
+		editor.pendingImageLinks.push("submitted.png");
+		runtime.input = { images: [submitted], imageLinks: ["submitted.png"] };
+		const dispatch = command.handleTui!(
+			{ name: "team", args: "分析 X [Image #1]", text: "/team 分析 X [Image #1] attachment://1" },
+			runtime,
+		);
+		// The handler detaches synchronously, before its lazy controller import.
+		editor.pendingImages.push(newer);
+		editor.pendingImageLinks.push("newer.png");
+		text = "next [Image #1] attachment://1";
+		await dispatch;
+		expect(editor.pendingImages).toEqual([newer, submitted]);
+		expect(editor.pendingImageLinks).toEqual(["newer.png", "submitted.png"]);
+		expect(text).toBe("/team 分析 X [Image #2] attachment://2\n\nnext [Image #1] attachment://1");
+		expect(compactImageMarkers(text, editor.pendingImages.length)).toBeNull();
 	});
 
 	it("clears the TUI editor after dispatching with the unconfigured session-default roster", async () => {

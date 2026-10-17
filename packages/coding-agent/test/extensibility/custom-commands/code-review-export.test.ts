@@ -18,7 +18,7 @@ const repositories: string[] = [];
 async function createRepository() {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-review-export-"));
 	repositories.push(root);
-	await fs.mkdir(path.join(root, ".git", "objects"), { recursive: true });
+	await fs.mkdir(path.join(root, ".git", "objects", "info"), { recursive: true });
 	await fs.mkdir(path.join(root, ".git", "refs", "heads"), { recursive: true });
 	await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
 	await fs.writeFile(
@@ -182,6 +182,82 @@ describe("code-review-export frozen bundles", () => {
 		expect(await fs.readFile(path.join(root, ".git", "index"))).toEqual(indexBefore);
 		expect(await fs.readFile(path.join(root, ".tmp", "keep.txt"), "utf8")).toBe("unrelated temp data");
 		expect((await fs.readdir(path.join(root, ".tmp"))).sort()).toEqual(["keep.txt", "review-bundle.zip"]);
+	});
+
+	test("excludes oversized tracked .tmp inputs before rendering every local scope", async () => {
+		const root = await createRepository();
+		await fs.mkdir(path.join(root, ".tmp"));
+		const capturePath = path.join(root, ".tmp", "capture.bin");
+		await fs.writeFile(capturePath, Buffer.alloc(64 * 1024 * 1024 + 1));
+		await fs.writeFile(path.join(root, "source.ts"), "export const value = 1;\n");
+		const initial = await commit(root, [".tmp/capture.bin", "source.ts"], "root with oversized temporary capture");
+		const assertExport = async (scope: Parameters<typeof captureReviewExportSnapshot>[1], value: number) => {
+			const snapshot = await captureReviewExportSnapshot(root, scope);
+			try {
+				expect(snapshot.changes.map(change => change.path)).toEqual(["source.ts"]);
+				expect(snapshot.diff).toContain(`+export const value = ${value};`);
+				expect(snapshot.diff).not.toContain(".tmp");
+				const result = await writeReviewBundle(snapshot, { args: [] });
+				const archive = await openArchive(result.path);
+				expect(await readMember(archive, "changed-files/after/source.ts")).toEqual(
+					Buffer.from(`export const value = ${value};\n`),
+				);
+				expect([...archive.indexEntries()].some(entry => entry.path.includes("/.tmp/"))).toBe(false);
+			} finally {
+				await snapshot.dispose();
+			}
+		};
+		await assertExport({ kind: "commit", ref: initial }, 1);
+		const handle = await fs.open(capturePath, "r+");
+		try {
+			await handle.write(Buffer.from([1]), 0, 1, 0);
+			await fs.writeFile(path.join(root, "source.ts"), "export const value = 2;\n");
+			const target = await commit(root, [".tmp/capture.bin", "source.ts"], "retained source and excluded capture");
+			await assertExport({ kind: "commit", ref: target }, 2);
+			await assertExport({ kind: "base-branch", baseRef: initial, targetRef: target }, 2);
+			await handle.write(Buffer.from([2]), 0, 1, 0);
+			await fs.writeFile(path.join(root, "source.ts"), "export const value = 3;\n");
+			await vcs.requireGit(root).stageFiles([".tmp/capture.bin", "source.ts"]);
+			await assertExport({ kind: "uncommitted" }, 3);
+		} finally {
+			await handle.close();
+		}
+	}, 60_000);
+
+	test("represents renames crossing root .tmp as retained additions and deletions", async () => {
+		const root = await createRepository();
+		await fs.mkdir(path.join(root, ".tmp"));
+		await fs.writeFile(path.join(root, "removed.ts"), "export const removed = 1;\n");
+		await fs.writeFile(path.join(root, ".tmp", "incoming.ts"), "export const incoming = 2;\n");
+		await commit(root, ["removed.ts", ".tmp/incoming.ts"], "before boundary renames");
+		await fs.rename(path.join(root, "removed.ts"), path.join(root, ".tmp", "removed.ts"));
+		await fs.rename(path.join(root, ".tmp", "incoming.ts"), path.join(root, "incoming.ts"));
+		const target = await commit(
+			root,
+			["removed.ts", ".tmp/removed.ts", ".tmp/incoming.ts", "incoming.ts"],
+			"rename across temporary boundary",
+		);
+		for (const scope of [{ kind: "commit", ref: target }, { kind: "uncommitted" }] as const) {
+			// Reverse the committed boundary moves to exercise the uncommitted comparison too.
+			if (scope.kind === "uncommitted") {
+				await fs.rename(path.join(root, ".tmp", "removed.ts"), path.join(root, "removed.ts"));
+				await fs.rename(path.join(root, "incoming.ts"), path.join(root, ".tmp", "incoming.ts"));
+				await vcs.requireGit(root).stageFiles(["removed.ts", ".tmp/removed.ts", ".tmp/incoming.ts", "incoming.ts"]);
+			}
+			const snapshot = await captureReviewExportSnapshot(root, scope);
+			try {
+				expect(snapshot.changes.map(change => ({ path: change.path, status: change.status }))).toEqual([
+					{ path: "incoming.ts", status: scope.kind === "commit" ? "A" : "D" },
+					{ path: "removed.ts", status: scope.kind === "commit" ? "D" : "A" },
+				]);
+				expect(snapshot.changes.every(change => change.previousPath === undefined)).toBe(true);
+				expect(snapshot.diff).not.toContain(".tmp");
+				expect(snapshot.diff).toContain("new file mode 100644");
+				expect(snapshot.diff).toContain("deleted file mode 100644");
+			} finally {
+				await snapshot.dispose();
+			}
+		}
 	});
 
 	test("preserves baseline private files removed from the index but excludes genuinely untracked private files", async () => {

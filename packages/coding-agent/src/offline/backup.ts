@@ -24,7 +24,8 @@ interface SnapshotEntry {
 	mode: number;
 	stamp?: FileStamp;
 	sha256?: string;
-	/** Complete newline-delimited prefix; append-only logs/sessions may grow during a round. */
+	size?: number;
+	/** Complete newline-delimited prefix; session and runtime log streams may grow during a round. */
 	prefixBytes?: number;
 	target?: string;
 }
@@ -94,8 +95,7 @@ function isInside(root: string, candidate: string): boolean {
 	return relative === "" || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
-function ephemeral(name: string, relative: string): boolean {
-	const scoped = relative.replace(/^profiles[\\/][^\\/]+[\\/]/, "").replace(/^agent(?:[\\/]|$)/, "");
+function ephemeral(name: string, scoped: string): boolean {
 	const processRuntime = /^run(?:[\\/]|$)/.test(scoped);
 	// Dependency locks are durable data, regardless of their package manager.
 	// Match process-lock conventions and their owning namespaces, not all *.lock files.
@@ -374,7 +374,7 @@ export async function runOfflineShmBackup(
 			destination: string | undefined,
 			before: BigIntStats,
 			appendOnly: boolean,
-		): Promise<{ sha256: string; prefixBytes?: number }> {
+		): Promise<{ sha256: string; size: number; prefixBytes?: number }> {
 			const input = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 			try {
 				const opened = await input.stat({ bigint: true });
@@ -390,7 +390,7 @@ export async function runOfflineShmBackup(
 				if (before.size > BigInt(Number.MAX_SAFE_INTEGER)) throw failure("SOURCE_TOO_LARGE");
 				let length = Number(before.size);
 				if (appendOnly) {
-					// Do not publish an in-flight final JSONL/log record. Find a completed line
+					// Do not publish an in-flight final session or log record. Find a completed line
 					// in the initially observed extent, never chase a continuously growing EOF.
 					let end = length;
 					length = 0;
@@ -443,7 +443,7 @@ export async function runOfflineShmBackup(
 						throw failure("SOURCE_CHANGED");
 					}
 					await output?.sync();
-					return { sha256: hash.digest("hex"), ...(appendOnly ? { prefixBytes: length } : {}) };
+					return { sha256: hash.digest("hex"), size: length, ...(appendOnly ? { prefixBytes: length } : {}) };
 				} finally {
 					await output?.close();
 				}
@@ -481,13 +481,48 @@ export async function runOfflineShmBackup(
 			}
 		}
 
-		async function linkPrevious(child: string, destination: string, generation: string): Promise<void> {
+		async function linkPrevious(
+			child: string,
+			destination: string,
+			generation: string,
+			entry: SnapshotEntry,
+		): Promise<boolean> {
+			if (entry.size === undefined || !entry.sha256) return false;
 			const oldFile = path.join(domain, "generations", generation, "data", child);
-			const oldStat = await fs.lstat(oldFile);
+			const oldStat = await fs.lstat(oldFile, { bigint: true });
 			if (!oldStat.isFile() || oldStat.isSymbolicLink() || (await fs.realpath(oldFile)) !== oldFile)
 				throw failure("UNSAFE_BACKUP_LINK");
-			// Only immutable completed backup files are linked, never the active runtime.
-			await fs.link(oldFile, destination);
+			if (oldStat.size !== BigInt(entry.size)) return false;
+			const input = await fs.open(oldFile, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+			try {
+				if (!equalStamp(stamp(oldStat), stamp(await input.stat({ bigint: true }))))
+					throw failure("UNSAFE_BACKUP_LINK");
+				const hash = createHash("sha256");
+				let position = 0;
+				while (position < entry.size) {
+					signal?.throwIfAborted();
+					const { bytesRead } = await input.read(
+						buffer,
+						0,
+						Math.min(buffer.length, entry.size - position),
+						position,
+					);
+					if (bytesRead === 0) return false;
+					hash.update(buffer.subarray(0, bytesRead));
+					position += bytesRead;
+				}
+				if (
+					hash.digest("hex") !== entry.sha256 ||
+					!equalStamp(stamp(oldStat), stamp(await input.stat({ bigint: true }))) ||
+					!equalStamp(stamp(oldStat), stamp(await fs.lstat(oldFile, { bigint: true })))
+				)
+					return false;
+				// Only verified immutable completed backup files are linked, never the active runtime.
+				await fs.link(oldFile, destination);
+				return true;
+			} finally {
+				await input.close();
+			}
 		}
 
 		async function visit(relative: string): Promise<void> {
@@ -495,17 +530,24 @@ export async function runOfflineShmBackup(
 			const sourceDirectory = path.join(runtime, relative);
 			if ((await fs.realpath(sourceDirectory)) !== sourceDirectory) throw failure("UNSAFE_SOURCE_LINK");
 			const directoryStat = await fs.lstat(sourceDirectory, { bigint: true });
+			const scoped = relative.replace(/^profiles[\\/][^\\/]+[\\/]/, "").replace(/^agent(?:[\\/]|$)/, "");
+			// Logger and worker namespaces own growing logs; session/tool artifact .log
+			// files elsewhere are immutable bytes, including any unterminated final line.
+			const runtimeLogs = /^(?:(?:fallback-)?logs$|run(?:[\\/]|$))/.test(scoped);
 			const children = (await fs.readdir(sourceDirectory)).sort();
 			const considered: string[] = [];
 			const databases = new Set<string>();
 			const inspected = new Map<string, BigIntStats>();
 			// Inspect content, not suffix: OMP/native stores need not use .db names.
 			for (const name of children) {
-				if (ephemeral(name, relative)) continue;
+				if (ephemeral(name, scoped)) continue;
 				const source = path.join(sourceDirectory, name);
 				const stat = await fs.lstat(source, { bigint: true });
 				if (!stat.isFile()) continue;
 				inspected.set(name, stat);
+				// Recovery evidence and its sidecars are opaque, not live SQLite stores.
+				if (/\.corrupt-\d+-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}(?:-(?:wal|shm|journal))?$/i.test(name))
+					continue;
 				const handle = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 				try {
 					if (
@@ -522,7 +564,7 @@ export async function runOfflineShmBackup(
 				}
 			}
 			const ignored = (name: string): boolean =>
-				ephemeral(name, relative) ||
+				ephemeral(name, scoped) ||
 				["-wal", "-shm", "-journal"].some(
 					suffix => name.endsWith(suffix) && databases.has(name.slice(0, -suffix.length)),
 				);
@@ -530,7 +572,7 @@ export async function runOfflineShmBackup(
 				signal?.throwIfAborted();
 				const child = path.join(relative, name);
 				if (ignored(name)) {
-					excluded.push({ path: child, reason: ephemeral(name, relative) ? "ephemeral" : "sqlite-sidecar" });
+					excluded.push({ path: child, reason: ephemeral(name, scoped) ? "ephemeral" : "sqlite-sidecar" });
 					continue;
 				}
 				considered.push(name);
@@ -564,7 +606,7 @@ export async function runOfflineShmBackup(
 					await visit(child);
 				} else if (before.isFile()) {
 					const initial = inspected.get(name);
-					const appendOnly = /\.(?:jsonl|log)$/i.test(name);
+					const appendOnly = /\.jsonl$/i.test(name) || (runtimeLogs && /\.log$/i.test(name));
 					if (
 						!initial ||
 						!sameFile(initial, before) ||
@@ -589,10 +631,14 @@ export async function runOfflineShmBackup(
 						const snapshotStat = await fs.lstat(snapshot, { bigint: true });
 						Object.assign(entry, await copyStable(snapshot, undefined, snapshotStat, false));
 						const old = previousEntries.get(child);
-						if (old?.kind === "sqlite" && old.sha256 === entry.sha256 && current) {
-							await linkPrevious(child, destination, current.current);
-						} else {
-							// The closed local snapshot has no live WAL dependency.
+						if (
+							!(
+								old?.kind === "sqlite" &&
+								old.sha256 === entry.sha256 &&
+								current &&
+								(await linkPrevious(child, destination, current.current, old))
+							)
+						) {
 							await fs.copyFile(snapshot, destination, constants.COPYFILE_EXCL);
 							await fs.chmod(destination, 0o600);
 							await syncFile(destination);
@@ -610,9 +656,16 @@ export async function runOfflineShmBackup(
 					} else {
 						entry.stamp = stamp(before);
 						const old = previousEntries.get(child);
-						if (old?.kind === "file" && equalStamp(old.stamp, entry.stamp) && old.sha256 && current) {
-							await linkPrevious(child, destination, current.current);
+						if (
+							old?.kind === "file" &&
+							equalStamp(old.stamp, entry.stamp) &&
+							old.sha256 &&
+							current &&
+							(old.prefixBytes !== undefined) === appendOnly &&
+							(await linkPrevious(child, destination, current.current, old))
+						) {
 							entry.sha256 = old.sha256;
+							entry.size = old.size;
 							entry.prefixBytes = old.prefixBytes;
 						} else Object.assign(entry, await copyStable(source, destination, before, appendOnly));
 						validators.push(async () => {

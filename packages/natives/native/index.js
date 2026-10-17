@@ -153,6 +153,7 @@ export const warmHighlighter = nativeBindings.warmHighlighter ?? missingNativeEx
 export const wasmGrammarFor = nativeBindings.wasmGrammarFor ?? missingNativeExport("wasmGrammarFor");
 export const wikiCheckIndexingCancellation = nativeBindings.wikiCheckIndexingCancellation ?? missingNativeExport("wikiCheckIndexingCancellation");
 export const wikiEnumerateMarkdownFiles = nativeBindings.wikiEnumerateMarkdownFiles ?? missingNativeExport("wikiEnumerateMarkdownFiles");
+export const wikiImportLeasePath = nativeBindings.wikiImportLeasePath ?? missingNativeExport("wikiImportLeasePath");
 export const wikiNormalizeFts = nativeBindings.wikiNormalizeFts ?? missingNativeExport("wikiNormalizeFts");
 export const wikiNormalizePlainText = nativeBindings.wikiNormalizePlainText ?? missingNativeExport("wikiNormalizePlainText");
 export const wikiNormalizeSearchOptions = nativeBindings.wikiNormalizeSearchOptions ?? missingNativeExport("wikiNormalizeSearchOptions");

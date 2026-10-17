@@ -117,7 +117,11 @@ function synthesisProseConflict(
 	if (stripInlineMarkdown(body).includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
 	// Keep commas and wrapped lines: a label and its predicate may straddle
 	// either, as may an explicit adoption condition. Paragraphs still isolate claims.
-	const statements = body.split(/(?:[。！？；;.!?]|但是|但|而|却|\r?\n\s*\r?\n)/u);
+	// Preserve dots between identifier/path characters (versions, filenames,
+	// dotted names); only other ASCII dots are conservative sentence boundaries.
+	const statements = body.split(
+		/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却|\r?\n\s*\r?\n)/u,
+	);
 	const labels = proposals.flatMap(record => [
 		{ record, text: `方案${record.label}` },
 		{ record, text: `${record.label}方案` },
@@ -131,7 +135,7 @@ function synthesisProseConflict(
 			// Remove only the negated predicate, not its clause: a later
 			// affirmative endorsement must still be checked.
 			.replace(
-				/(?:不(?:能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)/gu,
+				/(?:不(?:再|予|能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)/gu,
 				"",
 			);
 		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];

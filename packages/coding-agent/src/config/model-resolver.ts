@@ -326,13 +326,12 @@ function supportsUpstreamRouting(model: Model<Api>): boolean {
 
 /** Pin a resolved aggregator model to a single upstream provider via its compat routing block. */
 function applyUpstreamRouting(model: Model<Api>, upstream: string): Model<Api> {
-	const aggregatorModel = model as Model<"openai-completions">;
-	const routing = { only: [upstream] };
+	const compat = (model as Model<"openai-completions">).compatConfig;
 	return buildModel({
 		...model,
 		compat: modelMatchesHost(model, "vercelAIGateway")
-			? { ...aggregatorModel.compatConfig, vercelGatewayRouting: routing }
-			: { ...aggregatorModel.compatConfig, openRouterRouting: routing },
+			? { ...compat, vercelGatewayRouting: { ...compat?.vercelGatewayRouting, only: [upstream] } }
+			: { ...compat, openRouterRouting: { ...compat?.openRouterRouting, only: [upstream] } },
 	} as ModelSpec<Api>);
 }
 

@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { JCHTOOLS_API } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -17,6 +18,7 @@ import {
 	startTeamDiscussion,
 	waitForSessionIdle,
 } from "@oh-my-pi/pi-coding-agent/team/controller";
+import * as orchestratorModule from "@oh-my-pi/pi-coding-agent/team/orchestrator";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 
 afterEach(() => {
@@ -222,6 +224,94 @@ describe("effective team rosters", () => {
 });
 
 describe("team controller dispatch", () => {
+	it.each([
+		{ persistFails: true, discussionFails: false },
+		{ persistFails: false, discussionFails: false },
+		{ persistFails: false, discussionFails: true },
+	])("keeps team completion out of the model-facing job sink: %j", async ({ persistFails, discussionFails }) => {
+		const manager = new AsyncJobManager({});
+		const modelSink = vi.fn();
+		manager.registerDeliverySink("Main", modelSink);
+		const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
+		const aggregate = {
+			status: discussionFails ? ("failed" as const) : ("completed" as const),
+			reportMarkdown: discussionFails ? undefined : "durable team report",
+			failureReason: discussionFails ? "discussion rejected" : undefined,
+		};
+		const discussion = vi.spyOn(orchestratorModule, "runTeamDiscussion").mockResolvedValue(aggregate);
+		const base: Model = {
+			...MODEL,
+			provider: "openrouter",
+			id: "example/model",
+			baseUrl: "https://openrouter.ai/api/v1",
+		};
+		const pinned: Model = {
+			...base,
+			compat: { ...base.compat, openRouterRouting: { only: ["cerebras"] } } as Model["compat"],
+		};
+		const append = vi.fn(async () => {
+			if (persistFails) throw new Error("persist receipt rejected");
+		});
+		const errors: string[] = [];
+		const output: string[] = [];
+		const session = {
+			...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+			model: pinned,
+			modelRegistry: { getAvailable: () => [base] },
+			asyncJobManager: manager,
+			isStreaming: false,
+			appendCustomMessage: append,
+			sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
+		} as unknown as AgentSession;
+		try {
+			const dispatched = await startTeamDiscussion("分析 X", {
+				session,
+				settings: Settings.isolated(),
+				cwd: "/tmp/repo",
+				hooks: {
+					showError: text => {
+						errors.push(text);
+					},
+					output: text => {
+						output.push(text);
+					},
+				},
+			});
+			expect(dispatched.started).toBe(true);
+			const job = manager.getJob(dispatched.jobId!)!;
+			await job.promise;
+			expect(discussion).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sessionModelPattern: "openrouter/example/model@cerebras",
+					participants: expect.arrayContaining([
+						expect.objectContaining({ modelPattern: "openrouter/example/model@cerebras" }),
+					]),
+				}),
+			);
+			expect(append).toHaveBeenCalledTimes(1);
+			expect(modelSink).not.toHaveBeenCalled();
+			expect(manager.hasPendingDeliveries()).toBe(false);
+			expect(manager.getAllJobs()).toContain(job);
+			expect(job.structured?.data).toEqual(aggregate);
+			expect(manager.isJobResultConsumed(job.id)).toBe(false);
+			expect(job.status).toBe(persistFails || discussionFails ? "failed" : "completed");
+			if (persistFails) {
+				expect(acknowledge).not.toHaveBeenCalled();
+				expect(job.errorText).toContain("persist receipt rejected");
+				expect(job.errorText).toContain("durable team report");
+				expect(errors).toHaveLength(1);
+				expect(errors[0]).toContain(`proc://${job.id}`);
+				expect(output).toEqual(errors);
+			} else {
+				expect(acknowledge).toHaveBeenCalledWith([job.id]);
+				expect(errors).toEqual([]);
+			}
+		} finally {
+			discussion.mockRestore();
+			await manager.dispose();
+		}
+	});
+
 	it("turns a job-manager registration failure into an actionable message", async () => {
 		const jobManager: JobManagerStub = {
 			registerCalls: 0,

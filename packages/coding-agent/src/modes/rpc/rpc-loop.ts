@@ -44,6 +44,7 @@ export class RpcLoopController {
 	#deadlineTimer: Timer | undefined;
 	#conditionAbort: AbortController | undefined;
 	#scheduled = false;
+	#submitting: number | undefined;
 	#generation = 0;
 	#logContext: Record<string, unknown> = {};
 	#iteration = 0;
@@ -58,7 +59,7 @@ export class RpcLoopController {
 	}
 
 	get continuationPending(): boolean {
-		return this.#scheduled;
+		return this.#scheduled || this.#submitting !== undefined;
 	}
 
 	async handle(args = ""): Promise<SlashCommandResult> {
@@ -133,7 +134,7 @@ export class RpcLoopController {
 
 	/** Cancel pending work while preserving the captured prompt and mode. */
 	cancel(): void {
-		if (this.#scheduled)
+		if (this.continuationPending)
 			logger.info("RPC loop pending continuation cancelled", {
 				...this.#logContext,
 				component: "rpc-loop",
@@ -149,8 +150,9 @@ export class RpcLoopController {
 		this.#deadlineTimer = undefined;
 		this.#conditionAbort?.abort();
 		this.#conditionAbort = undefined;
-		const pending = this.#scheduled;
+		const pending = this.continuationPending;
 		this.#scheduled = false;
+		this.#submitting = undefined;
 		if (pending) this.#options.onContinuationDropped();
 	}
 
@@ -392,8 +394,9 @@ export class RpcLoopController {
 			}
 			clearTimeout(this.#deadlineTimer);
 			this.#deadlineTimer = undefined;
-			// The submission claims the session synchronously. A following agent_end can
-			// then schedule its own continuation, including skills submitted inline.
+			// Keep queued gate admission visible without blocking an admitted turn's
+			// agent_end from scheduling its successor before submit returns.
+			this.#submitting = generation;
 			this.#scheduled = false;
 			stage = "submit";
 			logger.info("RPC loop submission started", { ...fields(), event: "loop_stage_started", result: "started" });
@@ -421,6 +424,7 @@ export class RpcLoopController {
 				});
 			throw error;
 		} finally {
+			if (this.#submitting === generation) this.#submitting = undefined;
 			if (result !== "failed")
 				logger.info("RPC loop iteration ended", { ...fields(), event: "loop_iteration_terminal", result });
 			if (generation === this.#generation) {

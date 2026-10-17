@@ -252,6 +252,46 @@ async function waitForFiles(files: string[], signal: AbortSignal): Promise<void>
 	throw signal.reason;
 }
 
+it.each(["libc.so.6", "libc.so"])("resolves %s for both the gate clock and native watchdog exit", async soname => {
+	const source = `
+import { mock } from "bun:test";
+import * as ffi from "bun:ffi";
+Object.defineProperty(process, "platform", { value: "linux" });
+const names = [];
+mock.module("bun:ffi", () => ({
+  ...ffi,
+  ptr: value => value,
+  dlopen(name) {
+    names.push(name);
+    if (name !== ${JSON.stringify(soname)}) throw new Error("soname not installed");
+    return { symbols: {
+      clock_gettime(clock, sample) { sample[0] = 12n; sample[1] = 34n; return 0; },
+      _exit(code) { process.stdout.write(JSON.stringify({ names, code })); process.exit(code); },
+    }, close() {} };
+  },
+}));
+// These imports must follow mock installation to exercise the isolated native-loading boundary.
+const { gateClockNanoseconds } = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-clock.ts")).href)});
+process.stdout.write(gateClockNanoseconds().toString() + "\\n");
+const { exitGateProcess } = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-watchdog.ts")).href)});
+exitGateProcess(23);
+`;
+	const child = Bun.spawn([process.execPath, "--eval", source], { stdout: "pipe", stderr: "pipe" });
+	const [exitCode, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	expect(stderr).toBe("");
+	expect(exitCode).toBe(23);
+	const [clock, nativeExit] = stdout.split("\n");
+	expect(clock).toBe("12000000034");
+	expect(JSON.parse(nativeExit)).toEqual({
+		names: soname === "libc.so.6" ? ["libc.so.6", "libc.so.6"] : ["libc.so.6", "libc.so", "libc.so.6", "libc.so"],
+		code: 23,
+	});
+});
+
 async function windowsLauncherFixture() {
 	const root = await fs.mkdtemp(path.join(directory, "rust-launcher-"));
 	const scripts = path.join(root, "scripts");
@@ -273,6 +313,7 @@ async function windowsLauncherFixture() {
 		"watchdog.ts",
 		"events.ts",
 		"clock.ts",
+		"libc.ts",
 		"process.ts",
 		"compiler.ts",
 		"rustdoc.ts",

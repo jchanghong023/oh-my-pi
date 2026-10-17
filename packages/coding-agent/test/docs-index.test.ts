@@ -799,6 +799,106 @@ describe("DocsSearchEngine indexing contract", () => {
 		}
 	});
 
+	it("keeps a live import exclusive across process temp directories and physical database aliases", async () => {
+		const root = await tempDir("docs-process-lease-source-");
+		const agentDir = await tempDir("docs-process-lease-agent-");
+		const childTemp = await tempDir("docs-process-lease-temp-");
+		const independentDir = await tempDir("docs-process-lease-independent-");
+		await fs.writeFile(path.join(root, "a.md"), "# A\nfirstleasebeacon\n");
+		await fs.writeFile(path.join(root, "b.md"), "# B\nsecondleasebeacon\n");
+		const service = new DocsSearchEngine({ agentDir });
+		const hardlink = path.join(agentDir, "hardlink.db");
+		const directoryAlias = path.join(agentDir, "alias");
+		const removeAlias = () => {
+			if (process.platform === "win32") rmdirSync(directoryAlias);
+			else unlinkSync(directoryAlias);
+		};
+		let attempted = false;
+		try {
+			await fs.link(service.databasePath, hardlink);
+			symlinkSync(agentDir, directoryAlias, process.platform === "win32" ? "junction" : "dir");
+			const script = `
+				import { FileLock, WikiSearchEngine, wikiImportLeasePath } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives"))};
+				const database = ${JSON.stringify(service.databasePath)};
+				const root = ${JSON.stringify(root)};
+				const aliases = ${JSON.stringify([hardlink, path.join(directoryAlias, "docs.db")])};
+				const aliasAcquired = aliases.map(alias => {
+					const lease = FileLock.tryAcquire(wikiImportLeasePath(alias));
+					try { return lease.acquired; } finally { lease.release(); }
+				});
+				const shared = new WikiSearchEngine(database, database);
+				let contended = false;
+				try {
+					await shared.init(root, "second-importer");
+				} catch (error) {
+					if (!error.message.includes("Another document index build")) throw error;
+					contended = true;
+				} finally {
+					shared.close();
+				}
+				const independentPath = ${JSON.stringify(path.join(independentDir, "docs.db"))};
+				const independent = new WikiSearchEngine(independentPath, independentPath);
+				let separate;
+				try { separate = await independent.init(root, "independent"); }
+				finally { independent.close(); }
+				console.log(JSON.stringify({ aliasAcquired, contended, separate }));
+			`;
+			const result = await service.init(root, "first-importer", {
+				onProgress: progress => {
+					if (progress.phase !== "fts" || progress.completed !== 1 || attempted) return;
+					attempted = true;
+					const retained = withSqliteDatabase(
+						service.databasePath,
+						db =>
+							["doc_indexes", "documents", "sections"].map(table =>
+								db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all(),
+							),
+						{ readonly: true },
+					);
+					// The native worker waits for this synchronous callback. The second
+					// process must reject before it can reclaim the live hidden build.
+					const child = Bun.spawnSync([process.execPath, "--eval", script], {
+						cwd: childTemp,
+						env: { ...process.env, TMP: childTemp, TEMP: childTemp, TMPDIR: childTemp },
+						stdout: "pipe",
+						stderr: "pipe",
+						timeout: 10_000,
+					});
+					expect({ exitCode: child.exitCode, stderr: child.stderr.toString() }).toEqual({
+						exitCode: 0,
+						stderr: "",
+					});
+					expect(JSON.parse(child.stdout.toString())).toMatchObject({
+						aliasAcquired: [false, false],
+						contended: true,
+						separate: { processed: 2, index: { name: "independent", documentCount: 2 } },
+					});
+					expect(
+						withSqliteDatabase(
+							service.databasePath,
+							db =>
+								["doc_indexes", "documents", "sections"].map(table =>
+									db.query(`SELECT rowid,* FROM ${table} ORDER BY rowid`).all(),
+								),
+							{ readonly: true },
+						),
+					).toEqual(retained);
+				},
+			});
+			expect(attempted).toBe(true);
+			expect(result).toMatchObject({
+				processed: 2,
+				index: { name: "first-importer", documentCount: 2 },
+			});
+			expect(service.list().map(index => index.name)).toEqual(["first-importer"]);
+			expect(service.search("firstleasebeacon").sections).toHaveLength(1);
+			expect(service.search("secondleasebeacon").sections).toHaveLength(1);
+		} finally {
+			service.close();
+			if (existsSync(directoryAlias)) removeAlias();
+		}
+	}, 20_000);
+
 	it.each(["continue", "cancel"] as const)(
 		"preserves a colliding published index when a progress callback replaces the database (%s)",
 		async transition => {

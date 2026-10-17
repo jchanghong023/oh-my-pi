@@ -6,6 +6,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logger, type OfflineShmState, TempDir } from "@oh-my-pi/pi-utils";
 import { runOfflineShmBackup } from "../src/offline/backup";
+import { ArtifactManager } from "../src/session/artifacts";
 
 interface Manifest {
 	status: string;
@@ -225,6 +226,58 @@ describe("offline shm complete runtime snapshots", () => {
 		);
 	});
 
+	it("preserves immutable tool-output logs byte-for-byte without a trailing newline", async () => {
+		const state = fixture();
+		const relative = path.join("agent", "sessions", "custom-example", "session");
+		const artifacts = new ArtifactManager(path.join(state.runtimeRoot, relative));
+		const contents = ["tool output without a newline: 雪", "first line\nlast line without a newline"];
+		for (const content of contents) await artifacts.save(content, "bash");
+		for (let round = 0; round < 2; round++) {
+			const result = await snapshot(state);
+			for (const [index, content] of contents.entries()) {
+				const artifact = path.join(relative, `${index}.bash.log`);
+				expect(await fs.readFile(path.join(result.root, "data", artifact))).toEqual(Buffer.from(content));
+				expect(result.manifest.entries.find(entry => entry.path === artifact)?.prefixBytes).toBeUndefined();
+			}
+		}
+	});
+
+	for (const corruption of ["same-length", "truncated"]) {
+		it(`regenerates unchanged files and SQLite snapshots when previous backup bytes are ${corruption}`, async () => {
+			const state = fixture();
+			await fs.writeFile(path.join(state.runtimeRoot, "stable.bin"), "healthy immutable content");
+			const db = new Database(path.join(state.runtimeRoot, "state.sqlite"));
+			try {
+				db.exec("CREATE TABLE state(value TEXT)");
+				db.exec("INSERT INTO state VALUES ('healthy snapshot')");
+			} finally {
+				db.close();
+			}
+			const first = await snapshot(state);
+			const expected = new Map<string, Buffer<ArrayBufferLike>>();
+			const inodes = new Map<string, bigint>();
+			for (const filename of ["stable.bin", "state.sqlite"]) {
+				const file = path.join(first.root, "data", filename);
+				const bytes = await fs.readFile(file);
+				expected.set(filename, bytes);
+				inodes.set(filename, (await fs.stat(file, { bigint: true })).ino);
+				await fs.writeFile(
+					file,
+					Buffer.alloc(corruption === "same-length" ? bytes.length : bytes.length - 1, 0x78),
+				);
+			}
+			const second = await snapshot(state);
+			for (const [filename, bytes] of expected) {
+				const file = path.join(second.root, "data", filename);
+				expect((await fs.readFile(file)).equals(bytes)).toBe(true);
+				expect((await fs.stat(file, { bigint: true })).ino).not.toBe(inodes.get(filename)!);
+				expect(second.manifest.entries.find(entry => entry.path === filename)?.sha256).toBe(
+					createHash("sha256").update(bytes).digest("hex"),
+				);
+			}
+		});
+	}
+
 	it.skipIf(process.platform === "win32")(
 		"restores executable managed tools by ordinary permission-preserving copy",
 		async () => {
@@ -395,18 +448,16 @@ describe("offline shm complete runtime snapshots", () => {
 		await snapshot(state);
 	});
 
-	it("publishes complete prefixes while session JSONL and logs append throughout copying and validation", async () => {
+	it("publishes complete prefixes while session JSONL streams append throughout copying and validation", async () => {
 		const state = fixture();
 		const record = `${JSON.stringify({ message: "x".repeat(2048) })}\n`;
 		const original = record.repeat(1100);
-		for (const filename of ["session.jsonl", "active.log"])
-			await fs.writeFile(path.join(state.runtimeRoot, filename), `${original}unfinished-record`);
+		await fs.writeFile(path.join(state.runtimeRoot, "session.jsonl"), `${original}unfinished-record`);
 		let appends = 0;
 		const controller = checkpoint(() => {
-			if (!partialCopy(state, "session.jsonl") && !partialCopy(state, "active.log")) return;
+			if (!partialCopy(state, "session.jsonl")) return;
 			appends++;
-			for (const filename of ["session.jsonl", "active.log"])
-				syncFs.appendFileSync(path.join(state.runtimeRoot, filename), "tail-growing-without-newline");
+			syncFs.appendFileSync(path.join(state.runtimeRoot, "session.jsonl"), "tail-growing-without-newline");
 		});
 		const result = await runOfflineShmBackup(state, controller.signal);
 		expect(result.status).toBe("completed");
@@ -414,12 +465,69 @@ describe("offline shm complete runtime snapshots", () => {
 		const manifest = JSON.parse(
 			await fs.readFile(path.join(result.backupPath!, "manifest.json"), "utf8"),
 		) as Manifest;
-		for (const filename of ["session.jsonl", "active.log"]) {
+		expect(await fs.readFile(path.join(result.backupPath!, "data", "session.jsonl"), "utf8")).toBe(original);
+		expect(manifest.entries.find(entry => entry.path === "session.jsonl")?.prefixBytes).toBe(
+			Buffer.byteLength(original),
+		);
+		expect((await fs.stat(path.join(state.runtimeRoot, "session.jsonl"))).size).toBeGreaterThan(
+			Buffer.byteLength(original),
+		);
+	});
+
+	const activeLogs = [
+		path.join("logs", "omp.2026-10-17.1234.log"),
+		path.join("profiles", "work", "logs", "omp.2026-10-17.1234.1.log"),
+		path.join("fallback-logs", "omp.2026-10-17.1234.log"),
+		path.join("run", "tiny", "lfm2.5-230m-onnx.log"),
+		path.join("run", "mnemopi", "embed.log"),
+		path.join("profiles", "work", "run", "daemons", "host", "worker.log"),
+	];
+	for (const filename of activeLogs) {
+		it(`accepts complete records appended during copying of active log ${filename}`, async () => {
+			const state = fixture();
+			const source = path.join(state.runtimeRoot, filename);
+			const record = `${JSON.stringify({ message: "x".repeat(2048) })}\n`;
+			const original = record.repeat(1100);
+			await fs.mkdir(path.dirname(source), { recursive: true });
+			await fs.writeFile(source, original);
+			let appended = false;
+			const controller = checkpoint(() => {
+				if (appended || !partialCopy(state, filename)) return;
+				appended = true;
+				syncFs.appendFileSync(source, record);
+			});
+			const result = await runOfflineShmBackup(state, controller.signal);
+			expect(appended).toBe(true);
+			expect(result.status).toBe("completed");
+			const manifest = JSON.parse(
+				await fs.readFile(path.join(result.backupPath!, "manifest.json"), "utf8"),
+			) as Manifest;
 			expect(await fs.readFile(path.join(result.backupPath!, "data", filename), "utf8")).toBe(original);
 			expect(manifest.entries.find(entry => entry.path === filename)?.prefixBytes).toBe(Buffer.byteLength(original));
-			expect((await fs.stat(path.join(state.runtimeRoot, filename))).size).toBeGreaterThan(
-				Buffer.byteLength(original),
-			);
+			expect(await fs.readFile(source, "utf8")).toBe(original + record);
+		});
+	}
+
+	it("omits incomplete active log records in copied and reused generations", async () => {
+		const state = fixture();
+		const complete = "complete runtime record 雪\n";
+		const emptyLog = path.join("logs", "omp.2026-10-17.5678.log");
+		for (const filename of activeLogs) {
+			const source = path.join(state.runtimeRoot, filename);
+			await fs.mkdir(path.dirname(source), { recursive: true });
+			await fs.writeFile(source, `${complete}unfinished runtime record 雪`);
+		}
+		await fs.writeFile(path.join(state.runtimeRoot, emptyLog), "no complete records yet");
+		for (let round = 0; round < 2; round++) {
+			const result = await snapshot(state);
+			for (const filename of activeLogs) {
+				expect(await fs.readFile(path.join(result.root, "data", filename), "utf8")).toBe(complete);
+				expect(result.manifest.entries.find(entry => entry.path === filename)?.prefixBytes).toBe(
+					Buffer.byteLength(complete),
+				);
+			}
+			expect(await fs.readFile(path.join(result.root, "data", emptyLog))).toHaveLength(0);
+			expect(result.manifest.entries.find(entry => entry.path === emptyLog)?.prefixBytes).toBe(0);
 		}
 	});
 
@@ -504,6 +612,30 @@ describe("offline shm complete runtime snapshots", () => {
 		expect((await fs.readdir(domainDirectory(state))).some(name => name.startsWith(".staging-"))).toBe(false);
 		await fs.unlink(path.join(state.runtimeRoot, "extensionless-corrupt"));
 		await snapshot(state);
+	});
+
+	it("preserves quarantined corrupt SQLite evidence and sidecars as opaque files", async () => {
+		const state = fixture();
+		const db = new Database(path.join(state.runtimeRoot, "state.sqlite"));
+		try {
+			db.exec("CREATE TABLE state(value TEXT)");
+			db.exec("INSERT INTO state VALUES ('replacement database')");
+		} finally {
+			db.close();
+		}
+		const quarantine = "state.sqlite.corrupt-1760000000000-12345678-1234-1234-1234-123456789abc";
+		const evidence = Buffer.alloc(4096, 0x61);
+		Buffer.from("SQLite format 3\0").copy(evidence);
+		const filenames = ["", "-wal", "-shm", "-journal"].map(suffix => quarantine + suffix);
+		for (const filename of filenames) await fs.writeFile(path.join(state.runtimeRoot, filename), evidence);
+		for (let round = 0; round < 2; round++) {
+			const result = await snapshot(state);
+			expect(result.manifest.entries.find(entry => entry.path === "state.sqlite")?.kind).toBe("sqlite");
+			for (const filename of filenames) {
+				expect(await fs.readFile(path.join(result.root, "data", filename))).toEqual(evidence);
+				expect(result.manifest.entries.find(entry => entry.path === filename)?.kind).toBe("file");
+			}
+		}
 	});
 
 	it("returns a sanitized pre-cancellation without touching the persistent target", async () => {

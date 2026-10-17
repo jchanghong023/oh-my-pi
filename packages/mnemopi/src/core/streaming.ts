@@ -1,6 +1,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
 import { resolveMemoryPath } from "../config";
 
 export const ALLOWED_DELTA_TABLES = new Set(["working_memory", "episodic_memory"] as const);
@@ -307,10 +308,14 @@ export class DeltaSync {
 		mkdirSync(this.checkpointDir, { recursive: true });
 	}
 	private checkpointPath(peerId: string, table: DeltaTable): string {
-		return join(this.checkpointDir, `${peerId}.${table}.json`);
+		const path = join(this.checkpointDir, `${peerId}.${table}.json`);
+		assertOfflineShmPath(path);
+		return path;
 	}
 	private legacyCheckpointPath(peerId: string): string {
-		return join(this.checkpointDir, `${peerId}.json`);
+		const path = join(this.checkpointDir, `${peerId}.json`);
+		assertOfflineShmPath(path);
+		return path;
 	}
 	getCheckpoint(peerId: string, table: DeltaTable = "working_memory"): SyncCheckpoint | null {
 		assertDeltaTable(table);

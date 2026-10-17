@@ -99,6 +99,31 @@ describe("CodeAgent hot credential refresh", () => {
 		}
 	});
 
+	for (const status of [302, 307, 308]) {
+		test(`HTTP ${status} redirects fail without forwarding the registry token or body`, async () => {
+			const redirected: Request[] = [];
+			const destination = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				fetch(request) {
+					redirected.push(request);
+					return success();
+				},
+			});
+			try {
+				const probe = await httpProbe(
+					() => "synthetic-redirect-token",
+					() => new Response(null, { status, headers: { location: `${destination.url.origin}/redirected` } }),
+				);
+				expect(probe.results[0]!.stopReason).toBe("error");
+				expect(probe.headers.map(headers => headers.get("x-auth-token"))).toEqual(["synthetic-redirect-token"]);
+				expect(redirected).toHaveLength(0);
+			} finally {
+				destination.stop(true);
+			}
+		});
+	}
+
 	for (const status of [401, 503]) {
 		test(`changed token retries once after HTTP ${status}`, async () => {
 			let reads = 0;

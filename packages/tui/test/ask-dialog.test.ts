@@ -50,10 +50,10 @@ describe("AskDialogComponent", () => {
 			onCancel: vi.fn(),
 			onPrompt: vi.fn(),
 		});
-		const lines = component.render(80).map(line => stripVTControlCharacters(line));
-		const footer = lines.find(line => line.includes("select"));
-		expect(footer).toContain("⇥/←/→ question · ");
-		expect(footer).toContain("cancel");
+		const lines = component.render(120).map(line => stripVTControlCharacters(line));
+		const footer = lines.find(line => line.includes("切换问题"));
+		expect(footer).toContain("⇥/←/→ 切换问题 · ");
+		expect(footer).toContain("取消");
 	});
 
 	it("single-question, single-select: Enter on option submits immediately", () => {
@@ -397,7 +397,7 @@ describe("AskDialogComponent", () => {
 		component.handleInput(TAB);
 
 		const output = render(component);
-		expect(output.toLowerCase()).toContain("unanswered");
+		expect(output).toContain("2 题未回答");
 
 		// Enter on Submit
 		component.handleInput(ENTER);
@@ -452,7 +452,8 @@ describe("AskDialogComponent", () => {
 		await Promise.resolve();
 
 		expect(onPrompt).toHaveBeenCalledTimes(1);
-		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Option A", question: "Choose one?" });
+		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Option A 的备注", question: "Choose one?" });
+		expect(render(component)).toContain("✎ 备注");
 
 		// Verify note is saved by submitting
 		component.handleInput(ENTER);
@@ -568,7 +569,7 @@ describe("AskDialogComponent", () => {
 		await Promise.resolve();
 
 		expect(onPrompt).toHaveBeenCalledTimes(1);
-		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Note for Option A", question: "Choose one?" });
+		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Option A 的备注", question: "Choose one?" });
 		// No prior note → prefill is undefined.
 		expect(onPrompt.mock.calls[0][1]).toBeUndefined();
 
@@ -1071,7 +1072,7 @@ describe("AskDialogComponent", () => {
 
 		expect(onPrompt).toHaveBeenCalledTimes(1);
 		// Bounding to the terminal is the prompt's job (HookEditorOptions.question): native hosts show all of it.
-		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "Custom answer", question: longQuestion });
+		expect(onPrompt.mock.calls[0][0]).toEqual({ title: "自定义回答", question: longQuestion });
 	});
 
 	it("scrolls question rows when cursor moves below the viewport", () => {
@@ -1092,7 +1093,7 @@ describe("AskDialogComponent", () => {
 			const initial = renderAt(60);
 			expect(initial).toContain("Option 01");
 			expect(initial).not.toContain("Option 30");
-			expect(initial).toContain("↓ scroll");
+			expect(initial).toContain("↓ 滚动");
 
 			for (let i = 0; i < 28; i++) component.handleInput(DOWN);
 			const scrolled = renderAt(60);
@@ -1236,14 +1237,14 @@ describe("AskDialogComponent", () => {
 			expect(out).toContain("PREVIEW-FIRST");
 			expect(out).not.toContain("PREVIEW-MIDDLE");
 			expect(out).not.toContain("PREVIEW-LAST");
-			expect(out).toContain("↓ scroll");
+			expect(out).toContain("↓ 滚动");
 			component.handleInput(DOWN);
 			for (let page = 0; page < 4; page++) component.handleInput(PAGE_DOWN);
 			out = render(component);
 			expect(out).toContain("PREVIEW-MIDDLE");
 			component.handleInput(DOWN);
 			out = render(component);
-			expect(out).toContain("Other (type your own)");
+			expect(out).toContain("其他（自行输入）");
 			expect(out).not.toContain("PREVIEW-MIDDLE");
 			component.handleInput(UP);
 			out = render(component);
@@ -1253,10 +1254,10 @@ describe("AskDialogComponent", () => {
 				out = render(component);
 			}
 			expect(out).toContain("PREVIEW-LAST");
-			expect(out).not.toContain("Other (type your own)");
+			expect(out).not.toContain("其他（自行输入）");
 			component.handleInput(DOWN);
 			out = render(component);
-			expect(out).toContain("Other (type your own)");
+			expect(out).toContain("其他（自行输入）");
 			component.handleInput(UP);
 			out = render(component);
 			for (let page = 0; page < 10; page++) {
@@ -1289,12 +1290,12 @@ describe("AskDialogComponent", () => {
 			let out = render(component);
 			expect(out).toContain("PREVIEW-SHORT-FIRST");
 			expect(out).toContain("PREVIEW-SHORT-LAST");
-			expect(out).toMatch(/[↓↑↕] scroll/);
+			expect(out).toMatch(/[↓↑↕] 滚动/);
 			component.handleInput(PAGE_DOWN);
 			out = render(component);
 			expect(out).toContain("PREVIEW-SHORT-FIRST");
 			expect(out).toContain("PREVIEW-SHORT-LAST");
-			expect(out).toMatch(/[↓↑↕] scroll/);
+			expect(out).toMatch(/[↓↑↕] 滚动/);
 		} finally {
 			if (originalRows) Object.defineProperty(process.stdout, "rows", originalRows);
 			else Reflect.deleteProperty(process.stdout, "rows");
@@ -1812,7 +1813,7 @@ describe("AskDialogComponent", () => {
 				{
 					id: "q1",
 					question: "Pick?",
-					options: [{ label: "Retry\rnow" }, { label: "Retry now" }, { label: "Chat\rabout this" }],
+					options: [{ label: "Retry\rnow" }, { label: "Retry now" }, { label: "下一步\r→" }],
 				},
 			],
 			{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() },
@@ -1821,35 +1822,42 @@ describe("AskDialogComponent", () => {
 		const rendered = render(component);
 		expect(rendered).not.toContain("\r");
 		expect(rendered).toContain("Retry now (2)");
-		expect(rendered).toContain("Chat about this (2)");
+		expect(rendered).toContain("下一步 → (2)");
 
 		component.handleInput(ENTER);
 		expect(onSubmit).toHaveBeenCalledTimes(1);
 		const result = onSubmit.mock.calls[0][0].results[0];
-		expect(result.options).toEqual(["Retry\rnow", "Retry now", "Chat\rabout this"]);
+		expect(result.options).toEqual(["Retry\rnow", "Retry now", "下一步\r→"]);
 		expect(result.selectedOptions).toEqual(["Retry\rnow"]);
 	});
 
 	it("disambiguates rows the recommendation badge collides", () => {
 		// Badging happens before disambiguation: a recommended `Retry\rnow`
-		// and a literal `Retry now (Recommended)` would otherwise render two
+		// and a literal `Retry now （推荐）` would otherwise render two
 		// identical rows with different result values.
+		const onSubmit = vi.fn();
 		const component = new AskDialogComponent(
 			[
 				{
 					id: "q1",
 					question: "Pick?",
-					options: [{ label: "Retry\rnow" }, { label: "Retry now (Recommended)" }],
+					options: [{ label: "Retry\rnow" }, { label: "Retry now （推荐）" }],
 					recommended: 0,
 				},
 			],
-			{ onSubmit: vi.fn(), onCancel: vi.fn(), onPrompt: vi.fn() },
+			{ onSubmit, onCancel: vi.fn(), onPrompt: vi.fn() },
 		);
 
 		const rendered = render(component);
 		expect(rendered).not.toContain("\r");
-		const rows = rendered.split("\n").filter(line => line.includes("Retry now (Recommended)"));
+		const rows = rendered.split("\n").filter(line => line.includes("Retry now （推荐）"));
 		expect(rows).toHaveLength(2);
-		expect(rows[1]).toContain("Retry now (Recommended) (2)");
+		expect(rows[1]).toContain("Retry now （推荐） (2)");
+
+		component.handleInput(ENTER);
+		expect(onSubmit).toHaveBeenCalledTimes(1);
+		const result = onSubmit.mock.calls[0][0].results[0];
+		expect(result.options).toEqual(["Retry\rnow", "Retry now （推荐）"]);
+		expect(result.selectedOptions).toEqual(["Retry\rnow"]);
 	});
 });

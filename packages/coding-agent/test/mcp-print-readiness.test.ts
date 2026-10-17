@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -213,6 +214,8 @@ describe("headless MCP readiness", () => {
 
 	it("waits through a timed-out handshake's reconnect before reporting readiness", async () => {
 		using tempDir = TempDir.createSync("@omp-mcp-reconnect-readiness-");
+		const markerPath = tempDir.join("first-launch");
+		let reconnectStarted = false;
 		const manager = new MCPManager(tempDir.path());
 		managers.push(manager);
 		Bun.env.OMP_MCP_TIMEOUT_MS = "1000";
@@ -221,14 +224,24 @@ describe("headless MCP readiness", () => {
 				recover: {
 					type: "stdio",
 					command: process.execPath,
-					args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), tempDir.join("first-launch")],
+					args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), markerPath],
 				},
 			},
 			{},
+			event => {
+				if (event.type !== "reconnecting" || event.serverName !== "recover") return;
+				reconnectStarted = true;
+				// Only the first handshake must time out. Even if it was starved
+				// before writing its marker, the successor is now ready and may
+				// finish within this test's unchanged total deadline.
+				fs.writeFileSync(markerPath, "");
+				Bun.env.OMP_MCP_TIMEOUT_MS = "0";
+			},
 		);
 		try {
 			// Deadline behavior is covered above; wait for the reconnect itself here.
 			const status = await manager.waitForStartup(0);
+			expect(reconnectStarted).toBe(true);
 			expect(status).toEqual({ connected: ["recover"], pending: [], failed: [] });
 			expect(manager.getTools().map(tool => tool.name)).toContain("mcp__recover_late_tool");
 		} finally {

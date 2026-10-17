@@ -150,7 +150,11 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 				}
 				const cwd = getProjectDir();
 				stage = "settings_init";
-				const settings = await Settings.init({ cwd });
+				// Runtime defaults belong to this view, never the host singleton or later runtimes.
+				const settings = (await Settings.init({ cwd })).overlay();
+				if (offline && !companyError && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
+					settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
+				}
 				stage = "auth_discovery";
 				const authStorage = await discoverAuthStorage(undefined, { settings });
 				try {

@@ -2,6 +2,7 @@ import { expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { BunTestFailureObserver } from "./test-gate-failure-events";
 import type { GateCommandError } from "./test-gate-runtime";
 
@@ -96,6 +97,95 @@ it("visible first failure", () => expect(1).toBe(2));
 			child.stdin.end();
 			child.kill();
 		}
+		await child.exited;
+		await output;
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 15_000);
+
+it("the sequential TS runner reports a failing case before its afterAll barrier exits", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-sequential-first-failure-"));
+	const eventFile = path.join(directory, "events");
+	const release = path.join(directory, "release");
+	const fixture = path.join(directory, "sequential-failure.test.ts");
+	await fs.writeFile(
+		fixture,
+		`import { afterAll, expect, it } from "bun:test";
+import { existsSync, watch } from "node:fs";
+afterAll(async () => {
+	const released = Promise.withResolvers();
+	const watcher = watch(${JSON.stringify(directory)}, () => {
+		if (existsSync(${JSON.stringify(release)})) released.resolve();
+	});
+	// Windows directory watchers alone may not keep Bun's subprocess alive.
+	// This handle holds the barrier; its timer never determines test success.
+	const keepAlive = setInterval(() => {}, 60_000);
+	process.stderr.write("OMP_SEQUENTIAL_TEARDOWN_READY\\n");
+	try {
+		if (!existsSync(${JSON.stringify(release)})) await released.promise;
+	} finally {
+		clearInterval(keepAlive);
+		watcher.close();
+	}
+}, 60_000);
+it("sequential first_测试 failure", () => expect(1).toBe(2));
+`,
+	);
+	const source = `
+import { runTestCommand } from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "ci-test-ts.ts")).href)};
+try {
+  await runTestCommand({
+    label: "sequential fixture",
+    cwd: ${JSON.stringify(path.relative(path.join(import.meta.dir, ".."), directory))},
+    command: ${JSON.stringify([process.execPath, "test", fixture])},
+  });
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+}
+`;
+	const child = Bun.spawn([process.execPath, "--eval", source], {
+		env: {
+			...process.env,
+			OMP_GATE_EVENT_TOKEN: "sequential-first-failure",
+			OMP_GATE_EVENT_FILE: eventFile,
+			OMP_TEST_REPORT_DIR: path.join(directory, "reports"),
+			OMP_TEST_CHUNK_TIMEOUT: "60",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const teardown = Promise.withResolvers<void>();
+	const stderrOutput = (async () => {
+		const decoder = new TextDecoder();
+		let text = "";
+		for await (const bytes of child.stderr) {
+			text += decoder.decode(bytes, { stream: true });
+			if (text.includes("OMP_SEQUENTIAL_TEARDOWN_READY")) teardown.resolve();
+		}
+		return text + decoder.decode();
+	})();
+	const output = Promise.all([new Response(child.stdout).text(), stderrOutput]);
+	try {
+		await Promise.race([
+			teardown.promise,
+			child.exited.then(async code => {
+				const [, stderr] = await output;
+				throw new Error(`Sequential runner exited ${code} before its teardown barrier:\n${stderr}`);
+			}),
+		]);
+		const event = await fs.readFile(eventFile, "utf8");
+		expect(event).toContain("OMP_GATE_EVENT sequential-first-failure ");
+		expect(event).toContain('"kind":"failure"');
+		expect(event).toContain("sequential first_测试 failure");
+		expect(child.exitCode).toBeNull();
+		await fs.writeFile(release, "release");
+		expect(await child.exited).toBe(1);
+		const [, stderr] = await output;
+		expect(stderr).toContain("(fail) sequential first_测试 failure");
+	} finally {
+		await fs.writeFile(release, "release");
+		if (child.exitCode === null) child.kill();
 		await child.exited;
 		await output;
 		await fs.rm(directory, { recursive: true, force: true });

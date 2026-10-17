@@ -2499,6 +2499,7 @@ export class SessionManager {
 			(managedRoot
 				? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
 				: computeDefaultSessionDir(resolvedCwd, this.#storage));
+		assertOfflineSessionPath(nextSessionDir, this.#storage);
 		const expectedSessionFile = this.#sessionFile
 			? path.join(nextSessionDir, path.basename(this.#sessionFile))
 			: undefined;
@@ -2520,6 +2521,7 @@ export class SessionManager {
 		// settles, so its owner cannot start writing mid-move. Our own id is
 		// refcounted, never contended.
 		const claimDestination = async (file: string): Promise<void> => {
+			assertOfflineSessionPath(file, this.#storage);
 			const id = await readSessionHeaderId(file);
 			if (id === undefined || id === destination?.id) return;
 			const release = this.#storage.claimSession?.(id, file);

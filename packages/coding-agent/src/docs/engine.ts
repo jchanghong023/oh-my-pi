@@ -1,7 +1,9 @@
 import * as path from "node:path";
 import {
+	FileLock as NativeFileLock,
 	WikiSearchEngine,
 	wikiCheckIndexingCancellation,
+	wikiImportLeasePath,
 	wikiNormalizeSearchOptions,
 	wikiSelectPage,
 	type WikiDiagnosticEvent,

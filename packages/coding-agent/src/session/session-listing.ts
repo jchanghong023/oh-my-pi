@@ -43,6 +43,8 @@ export interface SessionInfo {
 	assistantTurns?: number;
 	/** File size in bytes on disk; used for compact list rendering. */
 	size: number;
+	/** File generation observed by the metadata scan; absent on synthesized entries. */
+	fileSnapshot?: Readonly<Pick<SessionStorageStat, "size" | "mtimeMs" | "ctimeMs">>;
 	firstMessage: string;
 	allMessagesText: string;
 	/**
@@ -393,6 +395,13 @@ function getSessionListWorkerCount(fileCount: number): number {
 	);
 }
 
+function sameFileSnapshot(
+	left: Pick<SessionStorageStat, "size" | "mtimeMs" | "ctimeMs">,
+	right: SessionStorageStat,
+): boolean {
+	return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+
 /**
  * Scan a single session file into a {@link SessionInfo}. Always reads the 4 KB
  * header/first-message prefix; only reads the 32 KB tail window (and derives
@@ -404,6 +413,7 @@ async function scanSessionFile(
 	storage: SessionStorage,
 	withStatus: boolean,
 	knownStat?: SessionStorageStat,
+	retries = 2,
 ): Promise<SessionInfo | undefined> {
 	let stat: SessionStorageStat;
 	try {
@@ -417,7 +427,7 @@ async function scanSessionFile(
 	// two variants are cached under distinct keys.
 	const cacheKey = withStatus ? `s\0${file}` : `h\0${file}`;
 	const cached = cache.get(cacheKey);
-	if (cached && cached.mtimeMs === stat.mtimeMs && cached.ctimeMs === stat.ctimeMs && cached.size === stat.size) {
+	if (cached && sameFileSnapshot(cached, stat)) {
 		return cached.info ? { ...cached.info } : undefined;
 	}
 	try {
@@ -426,6 +436,9 @@ async function scanSessionFile(
 			SESSION_LIST_PREFIX_BYTES,
 			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
 		);
+		if (!sameFileSnapshot(stat, storage.statSync(file))) {
+			return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
+		}
 		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
@@ -480,6 +493,9 @@ async function scanSessionFile(
 			} catch {
 				// Backend unreadable: keep the bounded-window evidence.
 			}
+			if (!sameFileSnapshot(stat, storage.statSync(file))) {
+				return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
+			}
 		}
 		const info: SessionInfo = {
 			path: file,
@@ -492,6 +508,7 @@ async function scanSessionFile(
 			messageCount,
 			assistantTurns,
 			size,
+			fileSnapshot: { size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs },
 			firstMessage: firstMessage || "(no messages)",
 			allMessagesText: allMessages.length > 0 ? allMessages.join(" ") : firstMessage,
 			status: withStatus ? deriveSessionStatus(suffix) : undefined,

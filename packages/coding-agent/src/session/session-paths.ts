@@ -36,7 +36,10 @@ export function resolveSessionDirectory(sessionDir: string, storage: SessionStor
 	if (!state) return sessionDir;
 	const resolved = path.resolve(sessionDir);
 	const relative = path.relative(state.runtimeRoot, resolved);
-	if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return resolved;
+	if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+		assertOfflineSessionPath(sessionDir, storage);
+		return resolved;
+	}
 	return path.join(getSessionsDir(), `custom-${Bun.SHA256.hash(resolved, "hex")}`);
 }
 

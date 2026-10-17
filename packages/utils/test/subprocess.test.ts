@@ -5,15 +5,29 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-function ownedChild(exitCode: number | null, exited: Promise<number> = Promise.resolve(137)) {
+function ownedChild(
+	exitCode: number | null,
+	exited: Promise<number> = Promise.resolve(137),
+	signalCode: Bun.Subprocess["signalCode"] = null,
+) {
 	const kill = vi.fn();
-	const child = { pid: 12345, exitCode, exited, kill } as unknown as Bun.Subprocess;
+	const child = { pid: 12345, exitCode, signalCode, exited, kill } as unknown as Bun.Subprocess;
 	return { child, kill };
 }
 
 describe("native-free owned subprocess termination", () => {
 	it("never targets a recycled PID or group after the child has exited", async () => {
 		const { child, kill } = ownedChild(0, Promise.resolve(0));
+		const spawn = vi.spyOn(Bun, "spawn");
+		const signal = vi.spyOn(process, "kill").mockReturnValue(true);
+		await terminateOwnedSubprocess(child, { detached: true });
+		expect(spawn).not.toHaveBeenCalled();
+		expect(signal).not.toHaveBeenCalled();
+		expect(kill).not.toHaveBeenCalled();
+	});
+
+	it("never signals a recycled group after the child exited by signal", async () => {
+		const { child, kill } = ownedChild(null, Promise.resolve(137), "SIGKILL");
 		const spawn = vi.spyOn(Bun, "spawn");
 		const signal = vi.spyOn(process, "kill").mockReturnValue(true);
 		await terminateOwnedSubprocess(child, { detached: true });

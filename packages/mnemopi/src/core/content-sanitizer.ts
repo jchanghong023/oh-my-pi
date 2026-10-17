@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
 import { resolveMemoryPath } from "../config";
 
 export const SIZE_HARD_CAP = 1_000_000;
@@ -67,8 +68,9 @@ export function looksLikeBase64Blob(content: string): boolean {
 export function storeBlob(rawBytes: Uint8Array): string {
 	const sha256 = computeSha256(rawBytes);
 	const blobDir = join(blobRoot(), sha256.slice(0, 2), sha256.slice(0, 4));
-	mkdirSync(blobDir, { recursive: true });
 	const blobPath = join(blobDir, sha256);
+	assertOfflineShmPath(blobPath);
+	mkdirSync(blobDir, { recursive: true });
 	if (!existsSync(blobPath)) writeFileSync(blobPath, rawBytes);
 	return sha256;
 }

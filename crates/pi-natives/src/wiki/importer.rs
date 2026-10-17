@@ -1,7 +1,7 @@
 //! The exclusive import lease owns hidden rows until full publication or
 //! rollback.
 use std::{
-	path::Path,
+	path::{Path, PathBuf},
 	sync::Arc,
 	time::{Duration, Instant},
 };
@@ -12,6 +12,7 @@ use napi::{
 	threadsafe_function::{ThreadsafeFunction, UnknownReturnValue},
 };
 use napi_derive::napi;
+use sha2::{Digest, Sha256};
 
 use super::{
 	Owner,
@@ -512,17 +513,41 @@ fn validate_name(name: &str) -> std::result::Result<&str, WikiError> {
 	}
 	Ok(name)
 }
+fn lease_path(identity: &str) -> PathBuf {
+	// Linux and Windows hash this key without opening a file: keep it
+	// independent of process-local temp directories and database path
+	// aliases.
+	let name = format!("omp-wiki-import-{:x}.lock", Sha256::digest(identity.as_bytes()));
+	#[cfg(any(target_os = "linux", windows))]
+	{
+		PathBuf::from(name)
+	}
+	// Other Unix platforms open a persistent flock sidecar. Use the shared,
+	// fixed namespace rather than TMPDIR, and never unlink a released sidecar.
+	#[cfg(all(unix, not(target_os = "linux")))]
+	{
+		Path::new("/tmp").join(name)
+	}
+}
+/// Resolve the exclusive import lease for `database_path`: the lock-file path
+/// and the physical identity its name is derived from. All path aliases of one
+/// physical database map to the same lease.
+pub(super) fn import_lease(
+	database_path: &str,
+) -> std::result::Result<(PathBuf, String), WikiError> {
+	let path = import::resolve_root(Path::new(database_path))?;
+	let identity = super::database::file_identity(&path)?;
+	Ok((lease_path(&identity), identity))
+}
 fn acquire(
 	owner: &Owner,
 	cancel: &CancelToken,
 ) -> std::result::Result<Option<(FileLock, String)>, WikiError> {
 	owner.check_import(cancel)?;
-	let path = import::resolve_root(Path::new(&owner.database_path))?;
-	let identity = super::database::file_identity(&path)?;
-	let lock_path = format!("{}.lock", path.display());
+	let (lock_path, identity) = import_lease(&owner.database_path)?;
 	for attempt in 0..3 {
 		owner.check_import(cancel)?;
-		let lease = FileLock::try_acquire_path(Path::new(&lock_path))?;
+		let lease = FileLock::try_acquire_path(&lock_path)?;
 		if lease.is_acquired() {
 			return Ok(Some((lease, identity)));
 		}
@@ -688,8 +713,7 @@ mod tests {
 		let fixture = Fixture::new();
 		let path = import::resolve_root(Path::new(&fixture.owner.database_path)).unwrap();
 		let identity = super::super::database::file_identity(&path).unwrap();
-		let lock_path = format!("{}.lock", path.display());
-		let mut holder = FileLock::try_acquire_path(Path::new(&lock_path)).unwrap();
+		let mut holder = FileLock::try_acquire_path(&lease_path(&identity)).unwrap();
 		assert!(holder.is_acquired());
 		let cancel = CancelToken::default();
 		let mut build = fixture.build(&cancel);
@@ -707,6 +731,62 @@ mod tests {
 		assert!(successor.is_acquired());
 		assert_eq!(database, identity);
 		successor.release_native().unwrap();
+	}
+
+	#[test]
+	fn physical_database_aliases_share_the_exclusive_lease() {
+		let mut fixture = Fixture::new();
+		let original = fixture.owner.database_path.clone();
+		let alias = fixture.directory.join("alias.db");
+		fs::hard_link(&original, &alias).unwrap();
+		let original_identity = super::super::database::file_identity(Path::new(&original)).unwrap();
+		let alias_identity = super::super::database::file_identity(&alias).unwrap();
+		assert_eq!(lease_path(&original_identity), lease_path(&alias_identity));
+		let cancel = CancelToken::default();
+		let (mut holder, _) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		fixture.owner.database_path = alias.to_string_lossy().into_owned();
+		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		holder.release_native().unwrap();
+		let (mut successor, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		assert_eq!(identity, original_identity);
+		successor.release_native().unwrap();
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn symlinked_directory_alias_shares_the_exclusive_lease() {
+		let mut fixture = Fixture::new();
+		let alias_directory = fixture.directory.join("alias");
+		std::os::unix::fs::symlink(&fixture.directory, &alias_directory).unwrap();
+		let cancel = CancelToken::default();
+		let (mut holder, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		fixture.owner.database_path = alias_directory
+			.join("docs.db")
+			.to_string_lossy()
+			.into_owned();
+		let alias_identity =
+			super::super::database::file_identity(Path::new(&fixture.owner.database_path)).unwrap();
+		assert_eq!(lease_path(&identity), lease_path(&alias_identity));
+		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		holder.release_native().unwrap();
+	}
+
+	#[cfg(windows)]
+	#[test]
+	fn differently_cased_database_alias_shares_the_exclusive_lease() {
+		let mut fixture = Fixture::new();
+		let cancel = CancelToken::default();
+		let (mut holder, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		fixture.owner.database_path = fixture
+			.directory
+			.join("DOCS.DB")
+			.to_string_lossy()
+			.into_owned();
+		let alias_identity =
+			super::super::database::file_identity(Path::new(&fixture.owner.database_path)).unwrap();
+		assert_eq!(lease_path(&identity), lease_path(&alias_identity));
+		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		holder.release_native().unwrap();
 	}
 
 	#[test]

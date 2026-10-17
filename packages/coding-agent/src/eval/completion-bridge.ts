@@ -16,15 +16,18 @@ import { type } from "@oh-my-pi/omptype";
 import { instrumentedCompleteSimple, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import { type Api, type AssistantMessage, Effort, type Model, type Tool } from "@oh-my-pi/pi-ai";
 import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
 import type { ModelRegistry } from "../config/model-registry";
 import {
+	extractExplicitThinkingSelector,
 	formatModelString,
 	formatModelStringWithRouting,
 	getModelMatchPreferences,
+	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 	resolveModelOverride,
 } from "../config/model-resolver";
@@ -244,12 +247,31 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 	const matchPreferences = getModelMatchPreferences(session.settings);
 	const resolve = (
 		pattern: string | undefined,
-	): { model: Model<Api>; selector: string; configuredEffort?: ConfiguredThinkingLevel } | undefined => {
+	):
+		| { model: Model<Api>; selector: string; chainSelector: string; configuredEffort?: ConfiguredThinkingLevel }
+		| undefined => {
 		if (!pattern) return undefined;
 		const resolved = resolveModelRoleValue(pattern, available, { settings: session.settings, matchPreferences });
 		if (!resolved.model) return undefined;
 		const configuredEffort = concreteThinkingLevel(resolved.thinkingLevel);
-		return { model: resolved.model, selector: pattern, configuredEffort };
+		const matchedPattern = resolveConfiguredModelPatterns(pattern, session.settings)[
+			resolved.matchedPatternIndex ?? 0
+		];
+		const requestedEffort = extractExplicitThinkingSelector(matchedPattern, session.settings, {
+			isLiteralModelId: (provider, id) =>
+				available.some(
+					model =>
+						(provider === undefined || model.provider.toLowerCase() === provider.toLowerCase()) &&
+						model.id.toLowerCase() === id.toLowerCase(),
+				),
+		});
+		// Match chains with the requested effort, before provider normalization.
+		// Keep routing pinned and the tier's provider-option semantics separate.
+		const chainSelector = formatModelSelectorValue(
+			formatModelStringWithRouting(resolved.model),
+			requestedEffort ?? configuredEffort,
+		);
+		return { model: resolved.model, selector: pattern, chainSelector, configuredEffort };
 	};
 	const primary =
 		tier === "default"
@@ -261,12 +283,13 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		{
 			selector: primary.selector,
 			model: primary.model,
-			...reasoningForCandidate(tier, primary.model, primary.configuredEffort),
+			...reasoningForCandidate(tier, primary.model, tier === "slow" ? primary.configuredEffort : undefined),
 		},
 	];
 	const retry = cfgRetry.get(session.settings);
 	if (!retry.enabled || !retry.modelFallback) return candidates;
-	const primaryLevel = primary.configuredEffort === AUTO_THINKING ? undefined : primary.configuredEffort;
+	const primaryLevel =
+		tier === "slow" && primary.configuredEffort !== AUTO_THINKING ? primary.configuredEffort : undefined;
 	const inheritPrimary = shouldDisableReasoning(primaryLevel) || toReasoningEffort(primaryLevel) !== undefined;
 
 	appendFallbackCandidates(
@@ -281,7 +304,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 			tier,
 			disabledProviders: new Set(cfgDisabledProviders.get(session.settings)),
 		},
-		primary.selector,
+		primary.chainSelector,
 		primary.model,
 		inheritPrimary ? candidates[0] : undefined,
 		tier,

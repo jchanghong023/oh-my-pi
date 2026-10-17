@@ -9,6 +9,7 @@ import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/ses
 import { resolveResumableSession } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { stripOuterDoubleQuotes } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
@@ -116,6 +117,73 @@ describe("SessionManager.moveTo", () => {
 		expect(header?.cwd).toBe(path.resolve(cwdB));
 		expect(header?.previousSessionFiles).toEqual([path.resolve(oldFile)]);
 		expect(hasAssistantEntry(entries)).toBe(true);
+	});
+
+	it.skipIf(process.platform !== "linux")("rejects a symlinked destination file before its header probe", () => {
+		const env = {
+			...process.env,
+			OMP_CONFIG_ROOT: path.join(testAgentDir, "persistent"),
+			OMP_OFFLINE: "1",
+			OMP_PROFILE: "move-order",
+			PI_PROFILE: "",
+			PI_CODING_AGENT_DIR: path.join(testAgentDir, "agent-override"),
+			TERM_SESSION_ID: `move-order-${crypto.randomUUID()}`,
+		};
+		const state = getOfflineShmState(env);
+		const managerUrl = new URL("../../src/session/session-manager.ts", import.meta.url).href;
+		const storageUrl = new URL("../../src/session/session-storage.ts", import.meta.url).href;
+		const dirsUrl = new URL("../../../utils/src/dirs.ts", import.meta.url).href;
+		try {
+			const result = Bun.spawnSync(
+				[
+					process.execPath,
+					"-e",
+					`
+					import assert from "node:assert/strict";
+					import { spyOn } from "bun:test";
+					import * as fs from "node:fs";
+					import * as path from "node:path";
+					import { SessionManager } from ${JSON.stringify(managerUrl)};
+					import { OfflineSessionPathError } from ${JSON.stringify(storageUrl)};
+					import { getOfflineShmState } from ${JSON.stringify(dirsUrl)};
+					const cwdA = ${JSON.stringify(cwdA)};
+					const cwdB = ${JSON.stringify(cwdB)};
+					const state = getOfflineShmState();
+					const session = SessionManager.create(cwdA);
+					await session.ensureOnDisk();
+					const source = session.getSessionFile();
+					const destinationDir = path.join(state.runtimeRoot, "move-destination");
+					fs.mkdirSync(destinationDir, { recursive: true });
+					const destination = path.join(destinationDir, path.basename(source));
+					const external = ${JSON.stringify(path.join(testAgentDir, "external-session.jsonl"))};
+					const body = JSON.stringify({ type: "session", version: 3, id: "external-session",
+						timestamp: new Date().toISOString(), cwd: cwdB }) + "\\n";
+					fs.writeFileSync(external, body);
+					fs.symlinkSync(external, destination);
+					const probe = spyOn(Bun, "file");
+					try {
+						await assert.rejects(session.moveTo(cwdB, destinationDir), OfflineSessionPathError);
+						for (const [target] of probe.mock.calls) {
+							assert.notEqual(target, destination);
+							assert.notEqual(target, external);
+						}
+					} finally {
+						probe.mockRestore();
+						await session.close();
+					}
+					assert.equal(session.getSessionFile(), source);
+					assert.equal(fs.existsSync(source), true);
+					assert.equal(fs.readFileSync(external, "utf8"), body);
+					console.log("move-order-ok");
+					`,
+				],
+				{ env, cwd: testAgentDir, stdin: "ignore", stdout: "pipe", stderr: "pipe" },
+			);
+			expect(result.exitCode, result.stderr.toString()).toBe(0);
+			expect(result.stdout.toString()).toContain("move-order-ok");
+		} finally {
+			if (state) fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+		}
 	});
 
 	it("moves a custom session and artifacts when rename crosses devices", async () => {

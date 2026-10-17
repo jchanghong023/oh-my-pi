@@ -440,6 +440,18 @@ impl Drop for WikiSearchEngine {
 	}
 }
 
+/// File-system path of the exclusive lease guarding document-index imports of
+/// `database_path`.
+///
+/// Holding this path (from this process or another) contends
+/// with any in-flight import of the same physical database.
+#[napi]
+pub fn wiki_import_lease_path(env: Env, database_path: String) -> Result<String> {
+	let (lease, _identity) =
+		importer::import_lease(&database_path).map_err(|error| error.into_napi(env))?;
+	Ok(lease.to_string_lossy().into_owned())
+}
+
 pub struct WikiOutput {
 	owner:  Arc<Owner>,
 	cancel: CancelToken,

@@ -501,6 +501,95 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		expect(remaining[0]?.snippet).toContain("replacement_marker");
 	});
 
+	it("resolves differently cased write and delete hints to the indexed filesystem identity", async () => {
+		const { root, service } = await fixture({
+			"src/engine.py": "def before_case_change(): return 'beforecasebeacon'\n",
+		});
+		await service.build();
+		const file = path.join(service.root, "src/engine.py");
+		const directory = path.dirname(file);
+		const realpath = fsSync.realpathSync;
+		for (const deleted of [false, true]) {
+			if (deleted) await fs.rm(file);
+			else await put(root, "src/engine.py", "def after_case_change(): return 'aftercasebeacon'\n");
+			// Resolve aliases explicitly so the regression also runs on case-sensitive hosts.
+			const identity = vi.spyOn(fsSync, "realpathSync").mockImplementation(((filename: fsSync.PathLike) => {
+				const key = String(filename).toLowerCase();
+				if (key === file.toLowerCase()) return realpath(file);
+				if (key === directory.toLowerCase()) return realpath(directory);
+				return realpath(filename);
+			}) as typeof fsSync.realpathSync);
+			try {
+				service.markChanged(["SRC/ENGINE.PY"]);
+			} finally {
+				identity.mockRestore();
+			}
+			expect((await service.status()).pendingPaths).toEqual(["src/engine.py"]);
+			expect((await service.search("beforecasebeacon")).hits).toEqual([]);
+			expect((await service.symbol("before_case_change")).hits).toEqual([]);
+			expect((await service.search("aftercasebeacon")).hits.map(hit => hit.path)).toEqual(
+				deleted ? [] : ["src/engine.py"],
+			);
+			expect((await service.symbol("after_case_change")).hits.map(hit => hit.path)).toEqual(
+				deleted ? [] : ["src/engine.py"],
+			);
+			expect((await service.status()).pendingCount).toBe(0);
+			expect((await service.status()).fileCount).toBe(deleted ? 0 : 1);
+		}
+	});
+
+	it.skipIf(process.platform !== "linux")("keeps case-distinct POSIX mutations independent", async () => {
+		const { root, service } = await fixture({
+			"src/engine.py": "def lower_engine(): return 'lowercasebeacon'\n",
+			"SRC/engine.py": "def upper_engine(): return 'uppercasebeacon'\n",
+		});
+		await service.build();
+		await put(root, "SRC/engine.py", "def upper_changed(): return 'changeduppercasebeacon'\n");
+		service.markChanged(["SRC/engine.py"]);
+		expect((await service.status()).pendingPaths).toEqual(["SRC/engine.py"]);
+		expect((await service.search("changeduppercasebeacon")).hits.map(hit => hit.path)).toEqual(["SRC/engine.py"]);
+		expect((await service.search("lowercasebeacon")).hits.map(hit => hit.path)).toEqual(["src/engine.py"]);
+		await fs.rm(path.join(root, "SRC/engine.py"));
+		service.markChanged(["SRC/engine.py"]);
+		expect((await service.search("changeduppercasebeacon")).hits).toEqual([]);
+		expect((await service.symbol("lower_engine")).hits.map(hit => hit.path)).toEqual(["src/engine.py"]);
+		expect((await service.status()).fileCount).toBe(1);
+	});
+
+	it.skipIf(process.platform !== "linux")(
+		"deletes the exact indexed leaf when a symlink ancestor also passes the case-folding probe",
+		async () => {
+			const { root, service } = await fixture({
+				"src/A.py": "def upper_leaf(): return 'upperleafbeacon'\n",
+				"src/a.py": "def lower_leaf(): return 'lowerleafbeacon'\n",
+			});
+			await fs.symlink("src", path.join(root, "Src"));
+			await service.build();
+			expect((await service.status()).fileCount).toBe(2);
+
+			// With two folded matches and no exact spelling, do not guess a sibling.
+			service.markChanged(["src/A.PY"]);
+			expect((await service.status()).pendingPaths).toEqual(["src/A.PY"]);
+			expect((await service.search("lowerleafbeacon")).hits.map(hit => hit.path)).toEqual(["src/a.py"]);
+
+			await fs.rm(path.join(root, "src/a.py"));
+			service.markChanged(["src/a.py"]);
+			expect((await service.status()).pendingPaths).toEqual(["src/a.py"]);
+			expect((await service.search("lowerleafbeacon")).hits).toEqual([]);
+			expect((await service.symbol("lower_leaf")).hits).toEqual([]);
+			expect((await service.search("upperleafbeacon")).hits.map(hit => hit.path)).toEqual(["src/A.py"]);
+			expect((await service.symbol("upper_leaf")).hits.map(hit => hit.path)).toEqual(["src/A.py"]);
+			expect((await service.status()).fileCount).toBe(1);
+
+			// A unique folded match is still not an alias if its real file exists.
+			service.markChanged(["src/A.PY"]);
+			expect((await service.status()).pendingPaths).toEqual(["src/A.PY"]);
+			expect((await service.search("upperleafbeacon")).hits.map(hit => hit.path)).toEqual(["src/A.py"]);
+			expect((await service.symbol("upper_leaf")).hits.map(hit => hit.path)).toEqual(["src/A.py"]);
+			expect((await service.status()).pendingCount).toBe(0);
+		},
+	);
+
 	it("discovers both rename paths without decoding a filename as a porcelain status prefix", async () => {
 		const oldPath = "ab old.py";
 		const newPath = "xy new.py";
@@ -1099,6 +1188,31 @@ describe("repository index with real SQLite and native Python parsing", () => {
 				.query("SELECT COUNT(*) AS n FROM symbols WHERE file_id NOT IN (SELECT id FROM files)")
 				.get(),
 		).toEqual({ n: 0 });
+	});
+
+	it("recovers a nested non-Git index without adopting a newly initialized parent Git root", async () => {
+		const { root, agentDir } = await fixture({
+			"outer.py": "def outside_scope(): return 'outsidebeacon'\n",
+			"inner/src/repair.py": "def nested_repair(): return 'nestedrecoverybeacon'\n",
+		});
+		const inner = path.join(root, "inner");
+		const nested = new RepoService({ cwd: inner, agentDir });
+		services.push(nested);
+		await nested.build();
+		const databasePath = nested.storage.path;
+		nested.close();
+		await Bun.write(databasePath, "not a SQLite database");
+		const reopened = new RepoService({ cwd: inner, agentDir });
+		services.push(reopened);
+		expect(reopened.root).toBe(nested.root);
+		expect(reopened.storage.recoveryError).toBeDefined();
+		await $`git init -q`.cwd(root).quiet();
+		const recovered = await reopened.recover();
+		expect(recovered.root).toBe(nested.root);
+		expect(recovered.fileCount).toBe(1);
+		expect((await reopened.search("nestedrecoverybeacon")).hits.map(hit => hit.path)).toEqual(["src/repair.py"]);
+		expect((await reopened.symbol("nested_repair")).hits.map(hit => hit.path)).toEqual(["src/repair.py"]);
+		expect((await reopened.search("outsidebeacon")).hits).toEqual([]);
 	});
 
 	it("keeps committed recovery successful and queryable when backup deletion fails", async () => {

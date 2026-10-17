@@ -2,7 +2,7 @@
 use std::{
 	sync::{Arc, mpsc},
 	thread::{self, ThreadId},
-	time::Instant,
+	time::{Duration, Instant},
 };
 
 use napi::{
@@ -179,9 +179,35 @@ pub(super) fn acknowledge_named<T: ToNapiValue + Send + 'static>(
 			"Documentation callback is no longer callable",
 		)));
 	}
-	receiver.recv().map_err(|_| {
-		CallbackFailure::new(Error::from_reason("Documentation callback acknowledgement was lost"))
-	})?
+	wait_for_acknowledgement(&receiver, || callback.aborted(), Duration::from_secs(1))
+}
+
+fn wait_for_acknowledgement(
+	receiver: &mpsc::Receiver<std::result::Result<(), CallbackFailure>>,
+	aborted: impl Fn() -> bool,
+	interval: Duration,
+) -> std::result::Result<(), CallbackFailure> {
+	loop {
+		match receiver.recv_timeout(interval) {
+			Ok(returned) => return returned,
+			Err(mpsc::RecvTimeoutError::Timeout) => {
+				// Teardown can strand the queued closure (and its sender).
+				// Poll the TSFN's finalized/aborted state, not callback latency:
+				// a live JS event loop may legitimately take arbitrarily long.
+				if aborted() {
+					return Err(CallbackFailure::new(Error::new(
+						Status::Closing,
+						"Documentation callback is no longer callable",
+					)));
+				}
+			},
+			Err(mpsc::RecvTimeoutError::Disconnected) => {
+				return Err(CallbackFailure::new(Error::from_reason(
+					"Documentation callback acknowledgement was lost",
+				)));
+			},
+		}
+	}
 }
 pub(super) fn acknowledge<T: ToNapiValue + Send + 'static>(
 	callback: &ThreadsafeFunction<T, UnknownReturnValue, T, Status, false, false>,
@@ -212,4 +238,45 @@ pub(super) fn flush_async(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use std::cell::Cell;
+
+	use super::*;
+
+	#[test]
+	fn aborted_callback_does_not_wait_for_retained_sender() {
+		let (_sender, receiver) = mpsc::sync_channel(1);
+		let failure = wait_for_acknowledgement(&receiver, || true, Duration::ZERO).unwrap_err();
+		assert_eq!(failure.error.status, Status::Closing);
+	}
+
+	#[test]
+	fn dropped_callback_reports_lost_acknowledgement() {
+		let (sender, receiver) = mpsc::sync_channel(1);
+		drop(sender);
+		let failure = wait_for_acknowledgement(&receiver, || false, Duration::ZERO).unwrap_err();
+		assert_eq!(failure.error.reason, "Documentation callback acknowledgement was lost");
+	}
+
+	#[test]
+	fn live_callback_can_acknowledge_after_multiple_timeouts() {
+		let (sender, receiver) = mpsc::sync_channel(1);
+		let polls = Cell::new(0);
+		let result = wait_for_acknowledgement(
+			&receiver,
+			|| {
+				polls.set(polls.get() + 1);
+				if polls.get() == 3 {
+					assert!(sender.send(Ok(())).is_ok());
+				}
+				false
+			},
+			Duration::ZERO,
+		);
+		assert!(result.is_ok());
+		assert_eq!(polls.get(), 3);
+	}
 }

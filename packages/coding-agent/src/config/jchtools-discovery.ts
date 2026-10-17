@@ -95,8 +95,10 @@ export function validateJchToolsDescriptor(value: unknown): JchToolsDescriptor |
 	return value as unknown as JchToolsDescriptor;
 }
 
-/** Uses the process token, not USERNAME, terminal variables or OMP's conversation ID. */
-function currentWindowsIdentity(): { sid: string; sessionId: number } | undefined {
+/** Uses process tokens, not USERNAME, terminal variables or the descriptor's self-reported PID. */
+function currentWindowsIdentity(
+	pid = process.pid,
+): { sid: string; sessionId: number; authenticationId: string } | undefined {
 	if (process.platform !== "win32") return undefined;
 	let stage = "load_libraries";
 	const unavailable = () => {
@@ -111,6 +113,7 @@ function currentWindowsIdentity(): { sid: string; sessionId: number } | undefine
 	try {
 		const kernel = dlopen("kernel32.dll", {
 			GetCurrentProcess: { args: [], returns: FFIType.ptr },
+			OpenProcess: { args: [FFIType.u32, FFIType.bool, FFIType.u32], returns: FFIType.ptr },
 			ProcessIdToSessionId: { args: [FFIType.u32, FFIType.ptr], returns: FFIType.bool },
 			CloseHandle: { args: [FFIType.ptr], returns: FFIType.bool },
 			LocalFree: { args: [FFIType.ptr], returns: FFIType.ptr },
@@ -125,42 +128,62 @@ function currentWindowsIdentity(): { sid: string; sessionId: number } | undefine
 				ConvertSidToStringSidA: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
 			});
 			try {
-				const tokenOut = Buffer.alloc(8);
-				stage = "open_process_token";
-				if (!advapi.symbols.OpenProcessToken(kernel.symbols.GetCurrentProcess(), 0x0008, ptr(tokenOut)))
-					return unavailable();
-				const token = read.ptr(ptr(tokenOut)) as Pointer;
+				stage = "open_process";
+				const processHandle =
+					pid === process.pid
+						? kernel.symbols.GetCurrentProcess()
+						: kernel.symbols.OpenProcess(0x1000, false, pid);
+				if (!processHandle) return unavailable();
 				try {
-					const length = new Uint32Array(1);
-					advapi.symbols.GetTokenInformation(token, 1, null, 0, ptr(length));
-					stage = "token_information_size";
-					if (length[0] < 8 || length[0] > MAX_FRAME_BYTES) return unavailable();
-					const info = Buffer.alloc(length[0]);
-					stage = "token_information";
-					if (!advapi.symbols.GetTokenInformation(token, 1, ptr(info), info.length, ptr(length)))
-						return unavailable();
-					const sidOut = Buffer.alloc(8);
-					const sid = read.ptr(ptr(info)) as Pointer;
-					stage = "convert_sid";
-					if (!advapi.symbols.ConvertSidToStringSidA(sid, ptr(sidOut))) return unavailable();
-					const sidPointer = read.ptr(ptr(sidOut)) as Pointer;
+					const tokenOut = Buffer.alloc(8);
+					stage = "open_process_token";
+					if (!advapi.symbols.OpenProcessToken(processHandle, 0x0008, ptr(tokenOut))) return unavailable();
+					const token = read.ptr(ptr(tokenOut)) as Pointer;
 					try {
-						const session = new Uint32Array(1);
-						stage = "process_session";
-						if (!kernel.symbols.ProcessIdToSessionId(process.pid, ptr(session))) return unavailable();
-						const identity = { sid: new CString(sidPointer).toString(), sessionId: session[0] };
-						logger.debug("JchTools identity resolved", {
-							component: "jchtools",
-							event: "jchtools_identity_resolved",
-							stage,
-							result: "success",
-						});
-						return identity;
+						const length = new Uint32Array(1);
+						advapi.symbols.GetTokenInformation(token, 1, null, 0, ptr(length));
+						stage = "token_information_size";
+						if (length[0] < 8 || length[0] > MAX_FRAME_BYTES) return unavailable();
+						const info = Buffer.alloc(length[0]);
+						stage = "token_information";
+						if (!advapi.symbols.GetTokenInformation(token, 1, ptr(info), info.length, ptr(length)))
+							return unavailable();
+						const sidOut = Buffer.alloc(8);
+						const sid = read.ptr(ptr(info)) as Pointer;
+						stage = "convert_sid";
+						if (!advapi.symbols.ConvertSidToStringSidA(sid, ptr(sidOut))) return unavailable();
+						const sidPointer = read.ptr(ptr(sidOut)) as Pointer;
+						try {
+							const session = new Uint32Array(1);
+							stage = "process_session";
+							if (!kernel.symbols.ProcessIdToSessionId(pid, ptr(session))) return unavailable();
+							// TOKEN_STATISTICS.AuthenticationId identifies the logon, not just a reusable desktop session ID.
+							const statistics = Buffer.alloc(56);
+							stage = "token_statistics";
+							if (
+								!advapi.symbols.GetTokenInformation(token, 10, ptr(statistics), statistics.length, ptr(length))
+							)
+								return unavailable();
+							const identity = {
+								sid: new CString(sidPointer).toString(),
+								sessionId: session[0],
+								authenticationId: statistics.readBigUInt64LE(8).toString(),
+							};
+							logger.debug("JchTools identity resolved", {
+								component: "jchtools",
+								event: "jchtools_identity_resolved",
+								stage,
+								result: "success",
+							});
+							return identity;
+						} finally {
+							kernel.symbols.LocalFree(sidPointer);
+						}
 					} finally {
-						kernel.symbols.LocalFree(sidPointer);
+						kernel.symbols.CloseHandle(token);
 					}
 				} finally {
-					kernel.symbols.CloseHandle(token);
+					if (pid !== process.pid) kernel.symbols.CloseHandle(processHandle);
 				}
 			} finally {
 				advapi.close();
@@ -177,6 +200,57 @@ function currentWindowsIdentity(): { sid: string; sessionId: number } | undefine
 			...logger.diagnosticError(error),
 		});
 		return undefined;
+	}
+}
+
+/**
+ * Prefer the connected socket's OS handle. Bun versions whose named-pipe `fd`
+ * getter returns -1 require a query-only second handle; this authenticates the
+ * named endpoint, but cannot bind that check to the original pipe instance.
+ * No descriptor field participates in this trust decision.
+ */
+function verifyWindowsPipeServer(socket: Socket, pipePath: string): boolean {
+	try {
+		const kernel = dlopen("kernel32.dll", {
+			GetNamedPipeServerProcessId: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.bool },
+			CreateFileW: {
+				args: [FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.u32, FFIType.u32, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			CloseHandle: { args: [FFIType.ptr], returns: FFIType.bool },
+		});
+		try {
+			const pid = new Uint32Array(1);
+			const fd = (socket as Socket & { _handle?: { fd?: number } })._handle?.fd;
+			if (typeof fd === "number" && Number.isSafeInteger(fd) && fd > 0) {
+				if (!kernel.symbols.GetNamedPipeServerProcessId(fd as Pointer, ptr(pid))) return false;
+			} else {
+				const name = Buffer.from(`${pipePath}\0`, "utf16le");
+				// FILE_READ_ATTRIBUTES, OPEN_EXISTING, SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION.
+				// Never grant the unverified server an impersonation-capable client token.
+				const handle = kernel.symbols.CreateFileW(ptr(name), 0x80, 3, null, 3, 0x00110000, null);
+				if (!handle || Number(handle) === -1 || Number(handle) === Number(0xffffffffffffffffn)) return false;
+				try {
+					if (!kernel.symbols.GetNamedPipeServerProcessId(handle, ptr(pid))) return false;
+				} finally {
+					kernel.symbols.CloseHandle(handle);
+				}
+			}
+			if (!pid[0]) return false;
+			const current = currentWindowsIdentity();
+			const server = currentWindowsIdentity(pid[0]);
+			return (
+				current !== undefined &&
+				server !== undefined &&
+				server.sid === current.sid &&
+				server.sessionId === current.sessionId &&
+				server.authenticationId === current.authenticationId
+			);
+		} finally {
+			kernel.close();
+		}
+	} catch {
+		return false;
 	}
 }
 
@@ -337,7 +411,15 @@ export async function discoverJchTools(
 			let headerRead = 0;
 			let body: Buffer | undefined;
 			let bodyRead = 0;
+			let peerVerified = false;
 			socket.once("connect", () => {
+				stage = "verify_peer";
+				// Unix discovery is opt-in on a user-owned socket path; Windows pipe names are system-wide.
+				if (process.platform === "win32" && !verifyWindowsPipeServer(socket, pipePath)) {
+					finish("peer-untrusted");
+					return;
+				}
+				peerVerified = true;
 				stage = "read_header";
 				logger.info("JchTools IPC connected", {
 					component: "jchtools",
@@ -353,6 +435,10 @@ export async function discoverJchTools(
 				socket.write(frame);
 			});
 			socket.on("data", (chunk: Buffer) => {
+				if (!peerVerified) {
+					finish("peer-untrusted");
+					return;
+				}
 				let offset = 0;
 				if (headerRead < 4) {
 					const count = Math.min(4 - headerRead, chunk.length);

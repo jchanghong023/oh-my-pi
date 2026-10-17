@@ -30,6 +30,7 @@ import {
 	tryAcquireSessionLease,
 	type SessionDeletionDiagnostic,
 	type SessionStorage,
+	type SessionStorageStat,
 } from "../../session/session-storage";
 import type { RpcForkErrorCode, RpcRevision, RpcSessionSummary } from "./rpc-fork-types";
 
@@ -50,10 +51,17 @@ function isoOrUndefined(value: Date | undefined): string | undefined {
 
 function revisionFor(storage: SessionStorage, sessionId: string, file: string | undefined): RpcRevision {
 	const stat = file && storage.existsSync(file) ? storage.statSync(file) : undefined;
+	return revisionFromSnapshot(sessionId, stat);
+}
+
+function revisionFromSnapshot(
+	sessionId: string,
+	stat: Pick<SessionStorageStat, "size" | "mtimeMs" | "ctimeMs"> | undefined,
+): RpcRevision {
 	return `session-${Bun.hash(JSON.stringify([sessionId, stat?.size, stat?.mtimeMs, stat?.ctimeMs])).toString(36)}`;
 }
 
-function summaryFromListed(entry: SessionInfo, revision: RpcRevision, current: boolean): RpcSessionSummary {
+function summaryFromListed(entry: SessionInfo, current: boolean): RpcSessionSummary {
 	return {
 		sessionId: entry.id,
 		...(entry.title ? { name: entry.title } : {}),
@@ -62,7 +70,10 @@ function summaryFromListed(entry: SessionInfo, revision: RpcRevision, current: b
 		createdAt: isoOrUndefined(entry.created),
 		modifiedAt: isoOrUndefined(entry.modified),
 		messageCount: entry.messageCount,
-		revision,
+		revision: revisionFromSnapshot(
+			entry.id,
+			entry.fileSnapshot ?? { size: entry.size, mtimeMs: entry.modified.getTime() },
+		),
 	};
 }
 
@@ -112,9 +123,7 @@ export class RpcSessionDirectoryService {
 			);
 			diagnostic.progress("read", "completed", { session_count: entries.length });
 			diagnostic.progress("revision", "started");
-			const summaries = entries.map(entry =>
-				summaryFromListed(entry, revisionFor(this.#storage, entry.id, entry.path), entry.id === currentId),
-			);
+			const summaries = entries.map(entry => summaryFromListed(entry, entry.id === currentId));
 			diagnostic.session_count = summaries.length;
 			diagnostic.progress("revision", "completed");
 			return summaries;
@@ -184,7 +193,7 @@ export class RpcSessionDirectoryService {
 					diagnostic.progress("reload", "completed", { listed: false });
 					return summary;
 				}
-				const summary = summaryFromListed(listed, revisionFor(this.#storage, sessionId, listed.path), true);
+				const summary = summaryFromListed(listed, true);
 				diagnostic.progress("reload", "completed", { listed: true });
 				return summary;
 			}
@@ -585,7 +594,7 @@ export class RpcSessionDirectoryService {
 
 	async #summaryFor(sessionId: string, current: boolean): Promise<RpcSessionSummary> {
 		const entry = await this.#locateListed(sessionId);
-		return summaryFromListed(entry, revisionFor(this.#storage, sessionId, entry.path), current);
+		return summaryFromListed(entry, current);
 	}
 
 	#assertRevision(sessionId: string, file: string | undefined, expected: RpcRevision | undefined): void {

@@ -14,10 +14,13 @@ import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { cfgCompactionThresholdTokens } from "@oh-my-pi/pi-coding-agent/session/context-settings";
 import { type CustomMessage, convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
+import { SessionMaintenance } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 function activeGoalState(): GoalModeState {
@@ -234,6 +237,89 @@ describe("AgentSession mid-run threshold compaction", () => {
 		expect(compactSpy).toHaveBeenCalledTimes(1);
 		expect(observedContexts.length).toBeGreaterThanOrEqual(2);
 		expect(observedContexts[1].join("\n")).toContain("ACTIVE-GOAL-MID-RUN-COMPACTED");
+	});
+
+	it("admits the initial auto Goal notice into pre-prompt sizing without persisting its preview", async () => {
+		const { session, sessionManager, observedContexts } = await createHarness({
+			"compaction.thresholdTokens": 100_000,
+			"compaction.midTurnEnabled": false,
+			"compaction.asyncEnabled": false,
+			"compaction.keepRecentTokens": 1,
+		});
+		await session.prompt("Older release history with substantial removable padding. ".repeat(400));
+		const state = { ...activeGoalState(), autoOrchestrate: true };
+		session.setGoalModeState(state);
+		const expected = buildGoalAutoOrchestrateMessage(state, session.getEnabledToolNames());
+		if (!expected) throw new Error("Expected initial auto Goal notice");
+		const compactSpy = mockCompaction("PRE-PROMPT-GOAL-COMPACTED");
+		const runMaintenance = SessionMaintenance.prototype.runPrePromptCompactionIfNeeded;
+		let baselineTokens = 0;
+		let admittedTokens = 0;
+		let threshold = 0;
+		let previewPersisted = false;
+		vi.spyOn(SessionMaintenance.prototype, "runPrePromptCompactionIfNeeded").mockImplementation(
+			async function (this: SessionMaintenance, messages) {
+				const withoutNotice = messages.filter(
+					message => message.role !== "custom" || message.customType !== "goal-auto-orchestrate-context",
+				);
+				const tokenizer = session.agent.tokenizer;
+				const overhead = computeNonMessageTokens(session, tokenizer, session.settings.revision);
+				const storedTokens = tokenizer.countMessages(session.messages, { excludeEncryptedReasoning: true });
+				const count = (pending: AgentMessage[]) =>
+					Math.max(
+						session.getContextBreakdown({
+							contextWindow: session.model!.contextWindow ?? undefined,
+							pendingMessages: pending,
+						})?.usedTokens ?? 0,
+						overhead + storedTokens + tokenizer.countMessages(pending, { excludeEncryptedReasoning: true }),
+					);
+				baselineTokens = count(withoutNotice);
+				admittedTokens = count(messages);
+				// Keep history plus the ordinary prompt just below admission; only
+				// the full initial orchestration notice should cross this threshold.
+				threshold = baselineTokens + 1;
+				// The harness config lives in the runtime-override layer; a global
+				// write would remain masked by its original 100,000-token threshold.
+				cfgCompactionThresholdTokens.override(session.settings, threshold);
+				expect(cfgCompactionThresholdTokens.get(session.settings)).toBe(threshold);
+				previewPersisted =
+					session.messages.some(
+						message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+					) ||
+					sessionManager
+						.getBranch()
+						.some(
+							entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+						);
+				await runMaintenance.call(this, messages);
+			},
+		);
+
+		await session.prompt("Continue release work", { goalAutoOrchestrateInitialId: state.goal.id });
+
+		expect(baselineTokens).toBeLessThan(threshold);
+		expect(admittedTokens).toBeGreaterThan(threshold);
+		expect(previewPersisted).toBe(false);
+		expect(compactSpy).toHaveBeenCalledTimes(1);
+		expect(observedContexts[2].join("\n")).toContain("PRE-PROMPT-GOAL-COMPACTED");
+		const branch = sessionManager.getBranch();
+		const committed = branch.find(entry => entry.type === "compaction");
+		expect(committed).toBeDefined();
+		expect(
+			branch.filter(
+				entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+			),
+		).toEqual([
+			expect.objectContaining({
+				content: expected.content,
+				details: { source: "goal-auto-orchestrate", goalId: state.goal.id, compactionEntryId: committed!.id },
+			}),
+		]);
+		expect(
+			session.messages.filter(
+				message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(1);
 	});
 
 	it("persists one full auto Goal recovery before the next mid-run provider call", async () => {

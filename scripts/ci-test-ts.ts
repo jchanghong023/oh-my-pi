@@ -471,8 +471,9 @@ async function recordAttempt(
 	return missing;
 }
 
-async function runTestCommand(testCommand: TestCommand): Promise<void> {
-	const cwd = path.join(repoRoot, testCommand.cwd);
+export async function runTestCommand(testCommand: TestCommand): Promise<void> {
+	// Windows cross-drive relatives are already absolute; joining would build an invalid cwd.
+	const cwd = path.isAbsolute(testCommand.cwd) ? testCommand.cwd : path.join(repoRoot, testCommand.cwd);
 	console.log(`\n==> ${testCommand.label}`);
 	if (isDryRun) {
 		console.log(`$ ${testCommand.command.map(shellQuote).join(" ")}`);
@@ -490,8 +491,25 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			cwd,
 			env,
 			stdout: "inherit",
-			stderr: "inherit",
+			stderr: "pipe",
 		});
+		const failureObserver = gateFailFast ? new BunTestFailureObserver(reportGateFailure) : undefined;
+		const stderrReader = proc.stderr.getReader();
+		const stderrDrain = (async () => {
+			try {
+				for (;;) {
+					const { done, value } = await stderrReader.read();
+					if (done) break;
+					failureObserver?.push(value);
+					process.stderr.write(value);
+				}
+			} catch {
+				// A cancelled or broken pipe must not hide the command's exit status.
+			} finally {
+				failureObserver?.end();
+				stderrReader.releaseLock();
+			}
+		})();
 		// Watchdog, mirroring the parallel path: record that *we* killed the child,
 		// otherwise the resulting 137 is indistinguishable from an OOM kill.
 		let timedOut = false;
@@ -509,6 +527,13 @@ async function runTestCommand(testCommand: TestCommand): Promise<void> {
 				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
 			);
 		clearTimeout(killTimer);
+		// Match the parallel path's bounded drain if a grandchild retains stderr.
+		const drainTimer = setTimeout(() => void stderrReader.cancel().catch(() => {}), 5000);
+		try {
+			await stderrDrain;
+		} finally {
+			clearTimeout(drainTimer);
+		}
 		const missing = await recordAttempt(
 			testCommand,
 			attempt,

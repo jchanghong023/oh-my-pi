@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -97,6 +98,7 @@ function makeSession(opts: SessionOptions = {}): ToolSession {
 	const modelRegistry = {
 		getAvailable: () => available,
 		find: (provider: string, id: string) => available.find(model => model.provider === provider && model.id === id),
+		hasProvider: (provider: string) => available.some(model => model.provider === provider),
 		getApiKey: async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
 		resolver: () => async () => (opts.apiKey === undefined ? "test-key" : opts.apiKey),
 	} as unknown as ModelRegistry;
@@ -287,6 +289,103 @@ describe("runEvalCompletion", () => {
 		expect(fallbackOpts.reasoning).toBe(Effort.Low);
 		expect(result.text).toBe("low-effort answer");
 	});
+
+	it.each(["slow", "smol", "default"] as const)(
+		"selects an effort-specific chain for the %s alias without changing its tier's provider options",
+		async tier => {
+			const fallback = makeReasoningModel("effort-fallback");
+			const roleFallback = makeModel("p", "role-fallback");
+			const session = makeSession({
+				available: [REASONING_SLOW, fallback, roleFallback],
+				roles: { [tier]: "p/slow:high" },
+				activeModel: tier === "default" ? "@default" : undefined,
+			});
+			cfgRetryFallbackChains.set(session.settings, {
+				[tier]: ["p/role-fallback"],
+				"p/slow:high": ["p/effort-fallback:low"],
+			});
+			const spy = vi
+				.spyOn(ai, "completeSimple")
+				.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "primary down" }))
+				.mockResolvedValueOnce(assistant({ text: "effort-specific answer" }));
+
+			const result = await runEvalCompletionAndWait({ prompt: "q", model: tier }, { session });
+
+			expect(spy.mock.calls.map(call => (call[0] as Model<Api>).id)).toEqual(["slow", "effort-fallback"]);
+			expect(spy.mock.calls.map(call => call[2]?.reasoning)).toEqual([
+				tier === "slow" ? Effort.High : undefined,
+				Effort.Low,
+			]);
+			expect(spy.mock.calls[0]?.[2]?.disableReasoning).toBe(false);
+			expect(result).toEqual({
+				text: "effort-specific answer",
+				details: { model: "p/effort-fallback", tier, structured: false },
+			});
+		},
+	);
+
+	it("dispatches a pinned OpenRouter primary and its direct-provider wildcard fallback", async () => {
+		const primary = makeModel("openrouter", "openai/gpt-4.1", {
+			api: "openai-completions",
+			baseUrl: "https://openrouter.ai/api/v1",
+		});
+		const fallback = makeModel("openai", "gpt-4.1");
+		const session = makeSession({
+			available: [primary, fallback],
+			roles: { smol: "openrouter/openai/gpt-4.1@openai" },
+		});
+		cfgRetryFallbackChains.set(session.settings, { "openrouter/*": ["openai/*"] });
+		const spy = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "upstream down" }))
+			.mockResolvedValueOnce(assistant({ text: "direct answer" }));
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "smol" }, { session });
+
+		expect(spy.mock.calls.map(call => `${call[0].provider}/${call[0].id}`)).toEqual([
+			"openrouter/openai/gpt-4.1",
+			"openai/gpt-4.1",
+		]);
+		const dispatchedPrimary = spy.mock.calls[0]?.[0];
+		if (!dispatchedPrimary) throw new Error("Expected primary completion dispatch");
+		expect((dispatchedPrimary as Model<"openai-completions">).compat.openRouterRouting?.only).toEqual(["openai"]);
+		expect(result).toEqual({
+			text: "direct answer",
+			details: { model: "openai/gpt-4.1", tier: "smol", structured: false },
+		});
+	});
+
+	it.each(["slow", "smol", "default"] as const)(
+		"prefers the requested max chain over normalized high for the %s tier",
+		async tier => {
+			const primary = getBundledModel("google", "gemini-3.5-flash");
+			if (!primary) throw new Error("Missing bundled Gemini model");
+			const exactFallback = makeReasoningModel("exact-fallback");
+			const normalizedFallback = makeReasoningModel("normalized-fallback");
+			const session = makeSession({
+				available: [primary, exactFallback, normalizedFallback],
+				roles: { [tier]: "missing/model:low,google/gemini-3.5-flash:max" },
+				activeModel: "google/gemini-3.5-flash:max",
+			});
+			cfgRetryFallbackChains.set(session.settings, {
+				"google/gemini-3.5-flash:high": ["p/normalized-fallback:low"],
+				"google/gemini-3.5-flash:max": ["p/exact-fallback:low"],
+			});
+			const spy = vi
+				.spyOn(ai, "completeSimple")
+				.mockResolvedValueOnce(assistant({ stopReason: "error", errorMessage: "primary down" }))
+				.mockResolvedValueOnce(assistant({ text: "exact answer" }));
+
+			const result = await runEvalCompletionAndWait({ prompt: "q", model: tier }, { session });
+
+			expect(spy.mock.calls.map(call => call[0].id)).toEqual(["gemini-3.5-flash", "exact-fallback"]);
+			expect(spy.mock.calls.map(call => call[2]?.reasoning)).toEqual([
+				tier === "slow" ? Effort.High : undefined,
+				Effort.Low,
+			]);
+			expect(result.text).toBe("exact answer");
+		},
+	);
 
 	it("applies the tier chain when the role assignment is too unqualified to parse", async () => {
 		const fallback = makeModel("p", "fallback");

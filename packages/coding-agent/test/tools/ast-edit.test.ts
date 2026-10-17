@@ -4,8 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { adaptSchemaForStrict, toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { RepoService } from "@oh-my-pi/pi-coding-agent/repo/service";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { subscribeFsMutation } from "@oh-my-pi/pi-coding-agent/tools/fs-cache-invalidation";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 type InvokedToolResult = {
@@ -92,13 +94,181 @@ describe("ast_edit tool schema", () => {
 		}
 	});
 
-	it("registers a pending action that apply writes changes", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-pending-"));
+	it.each(["single file", "directory", "multiple files"])(
+		"notifies committed AST edits for %s targets",
+		async scope => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-pending-"));
+			const notifications: string[] = [];
+			const unsubscribe = subscribeFsMutation(paths => {
+				notifications.push(
+					...paths
+						.map(filePath => path.resolve(filePath))
+						.filter(filePath => filePath.startsWith(`${path.resolve(tempDir)}${path.sep}`)),
+				);
+			});
+			try {
+				const filePath = path.join(tempDir, "legacy.ts");
+				await Bun.write(filePath, "legacyWrap(x, value)\n");
+				const filePaths = [filePath];
+				if (scope === "multiple files") {
+					const secondPath = path.join(tempDir, "other.ts");
+					await Bun.write(secondPath, "legacyWrap(other, value)\n");
+					filePaths.push(secondPath);
+				}
+				const queue = new ToolChoiceQueue();
+
+				const tools = await createTools(
+					createTestSession(tempDir, {
+						getToolChoiceQueue: () => queue,
+						buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
+						steer: () => {},
+					}),
+					["ast_edit"],
+				);
+				const tool = tools.find(entry => entry.name === "ast_edit");
+				expect(tool).toBeDefined();
+
+				const previewResult = await tool!.execute("ast-edit-preview", {
+					ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+					paths: scope === "directory" ? [tempDir] : filePaths,
+				});
+				expect(previewResult.details).toBeDefined();
+				expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
+				expect(notifications).toEqual([]);
+
+				expect(queue.hasPendingInvoker).toBe(true);
+				const invoker = queue.peekPendingInvoker()!;
+				const applyResult = (await invoker({
+					action: "apply",
+					reason: "apply previewed AST edit",
+				})) as InvokedToolResult;
+				const applyText = applyResult.content.find(content => content.type === "text")?.text ?? "";
+				expect(applyResult.isError).toBeUndefined();
+				expect(applyText).toContain(
+					filePaths.length === 1 ? "Applied 1 replacement in 1 file." : "Applied 2 replacements in 2 files.",
+				);
+				expect(
+					(applyResult.details as { sourceResultDetails?: { totalReplacements?: number } } | undefined)
+						?.sourceResultDetails?.totalReplacements,
+				).toBe(filePaths.length);
+				const updated = await Bun.file(filePath).text();
+				expect(updated).toContain("modernWrap(x, value)");
+				expect(notifications.sort()).toEqual(filePaths.sort());
+			} finally {
+				unsubscribe();
+				await removeWithRetries(tempDir);
+			}
+		},
+	);
+
+	it.each([
+		["file to directory", false],
+		["file to directory", true],
+		["directory to file", false],
+		["directory to file", true],
+	] as const)(
+		"refreshes rewritten paths and index content across %s with multiple targets=%s",
+		async (boundary, multipleTargets) => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-target-type-"));
+			const cwd = path.join(tempDir, "project");
+			await fs.mkdir(cwd);
+			const service = new RepoService({ cwd, agentDir: path.join(tempDir, "agent") });
+			const notifications: string[] = [];
+			const unsubscribe = subscribeFsMutation(paths => {
+				const projectPaths = paths
+					.map(filePath => path.resolve(filePath))
+					.filter(filePath => filePath.startsWith(`${cwd}${path.sep}`));
+				notifications.push(...projectPaths);
+				service.markChanged(projectPaths);
+			});
+			try {
+				const targetPath = path.join(cwd, "target.py");
+				const childPaths = [path.join(targetPath, "child.py"), path.join(targetPath, "nested", "other.py")];
+				const source = "def caller():\n    return legacy_call(value)\n";
+				const writeDirectory = async () => {
+					await fs.mkdir(path.dirname(childPaths[1]!), { recursive: true });
+					for (const childPath of childPaths) await Bun.write(childPath, source);
+				};
+				if (boundary === "file to directory") await Bun.write(targetPath, source);
+				else await writeDirectory();
+				const stablePath = path.join(cwd, "stable.py");
+				if (multipleTargets) await Bun.write(stablePath, source);
+				const queue = new ToolChoiceQueue();
+				const tools = await createTools(
+					createTestSession(cwd, {
+						getToolChoiceQueue: () => queue,
+						buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
+						steer: () => {},
+					}),
+					["ast_edit"],
+				);
+				const tool = tools.find(entry => entry.name === "ast_edit")!;
+				const preview = await tool.execute("ast-edit-target-type-preview", {
+					ops: [{ pat: "legacy_call($A)", out: "modern_call($A)" }],
+					paths: multipleTargets ? [targetPath, stablePath] : [targetPath],
+				});
+				expect(preview.details).toMatchObject({ applied: false });
+				expect(notifications).toEqual([]);
+				for (const candidate of boundary === "file to directory" ? [targetPath] : childPaths) {
+					expect(await Bun.file(candidate).text()).toBe(source);
+				}
+
+				await fs.rm(targetPath, { recursive: true });
+				if (boundary === "file to directory") await writeDirectory();
+				else await Bun.write(targetPath, source);
+				const rewrittenPaths = boundary === "file to directory" ? [...childPaths] : [targetPath];
+				if (multipleTargets) rewrittenPaths.push(stablePath);
+				const expectedFiles = rewrittenPaths
+					.map(filePath => path.relative(cwd, filePath).replaceAll("\\", "/"))
+					.sort();
+				// Index the replacement tree before apply: only the AST write notifications
+				// can now refresh these already-indexed legacy snippets.
+				await service.build();
+				expect((await service.search("legacy_call")).hits.map(hit => hit.path).sort()).toEqual(expectedFiles);
+
+				const applyResult = (await queue.peekPendingInvoker()!({
+					action: "apply",
+					reason: "apply after target type changed",
+				})) as InvokedToolResult;
+				expect(applyResult.isError).toBe(true);
+				expect(applyResult.details).toMatchObject({
+					sourceResultDetails: {
+						applied: true,
+						totalReplacements: rewrittenPaths.length,
+						files: expect.arrayContaining(expectedFiles),
+						fileReplacements: expect.arrayContaining(
+							expectedFiles.map(filePath => ({ path: filePath, count: 1 })),
+						),
+					},
+				});
+				expect(notifications.sort()).toEqual(rewrittenPaths.sort());
+				for (const filePath of rewrittenPaths) {
+					expect(await Bun.file(filePath).text()).toBe(source.replace("legacy_call", "modern_call"));
+				}
+				const refreshed = await service.search("modern_call");
+				expect(refreshed.hits.map(hit => hit.path).sort()).toEqual(expectedFiles);
+				for (const hit of refreshed.hits) expect(hit.snippet).toContain("modern_call(value)");
+				expect((await service.status()).pendingCount).toBe(0);
+			} finally {
+				unsubscribe();
+				service.close();
+				await removeWithRetries(tempDir);
+			}
+		},
+	);
+
+	it("marks the single-file candidate uncertain when deferred apply fails", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-failed-notify-"));
+		const notifications: Array<{ paths: readonly string[]; reason?: string }> = [];
+		const unsubscribe = subscribeFsMutation((paths, reason) => {
+			const normalizedPaths = paths.map(filePath => path.resolve(filePath));
+			if (normalizedPaths.some(filePath => filePath.startsWith(`${path.resolve(tempDir)}${path.sep}`)))
+				notifications.push({ paths: normalizedPaths, reason });
+		});
 		try {
 			const filePath = path.join(tempDir, "legacy.ts");
 			await Bun.write(filePath, "legacyWrap(x, value)\n");
 			const queue = new ToolChoiceQueue();
-
 			const tools = await createTools(
 				createTestSession(tempDir, {
 					getToolChoiceQueue: () => queue,
@@ -107,32 +277,26 @@ describe("ast_edit tool schema", () => {
 				}),
 				["ast_edit"],
 			);
-			const tool = tools.find(entry => entry.name === "ast_edit");
-			expect(tool).toBeDefined();
-
-			const previewResult = await tool!.execute("ast-edit-preview", {
+			const tool = tools.find(entry => entry.name === "ast_edit")!;
+			await tool.execute("ast-edit-preview-failure", {
 				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 				paths: [filePath],
 			});
-			expect(previewResult.details).toBeDefined();
-			expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
-
-			expect(queue.hasPendingInvoker).toBe(true);
+			await fs.rm(filePath);
 			const invoker = queue.peekPendingInvoker()!;
-			const applyResult = (await invoker({
-				action: "apply",
-				reason: "apply previewed AST edit",
-			})) as InvokedToolResult;
-			const applyText = applyResult.content.find(content => content.type === "text")?.text ?? "";
-			expect(applyResult.isError).toBeUndefined();
-			expect(applyText).toContain("Applied 1 replacement in 1 file.");
-			expect(
-				(applyResult.details as { sourceResultDetails?: { totalReplacements?: number } } | undefined)
-					?.sourceResultDetails?.totalReplacements,
-			).toBe(1);
-			const updated = await Bun.file(filePath).text();
-			expect(updated).toContain("modernWrap(x, value)");
+			try {
+				await invoker({ action: "apply", reason: "apply after target disappeared" });
+			} catch {
+				// The resolver may propagate the native failure or return an error result.
+			}
+			expect(notifications).toEqual([
+				{
+					paths: [filePath],
+					reason: "AST edit apply failed; files may have been partially written; reconcile to verify coverage",
+				},
+			]);
 		} finally {
+			unsubscribe();
 			await removeWithRetries(tempDir);
 		}
 	});

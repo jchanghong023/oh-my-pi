@@ -9,7 +9,11 @@
  *   explicit roster and must remain available even when absent from it.
  */
 import type { Model } from "@oh-my-pi/pi-ai";
-import { resolveModelFromString, resolveProviderModelReference } from "../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	resolveModelFromString,
+	resolveProviderModelReference,
+} from "../config/model-resolver";
 import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
@@ -115,12 +119,12 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 	const roster = resolvedMembers.length > 0 ? resolvedMembers : [sessionModel];
 	const participants = Array.from({ length: Math.max(3, roster.length) }, (_, index): TeamParticipant => {
 		const model = roster[index % roster.length]!;
-		const modelPattern = modelKey(model);
+		const modelPattern = formatModelStringWithRouting(model);
 		return {
 			index,
 			modelPattern,
 			model,
-			isSessionModel: modelPattern === sessionKey,
+			isSessionModel: modelKey(model) === sessionKey,
 		};
 	});
 	const source = entries.length > 0 ? "configured" : "session-default";

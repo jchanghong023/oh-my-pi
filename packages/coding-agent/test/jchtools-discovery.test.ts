@@ -151,6 +151,73 @@ describe("JchTools bounded same-session discovery", () => {
 		expect(fixture.requests).toEqual(["Discover"]);
 	});
 
+	test.skipIf(process.platform !== "win32")(
+		"authenticates the Windows server token independently of the envelope PID",
+		async () => {
+			const fixture = await pipeFixture(socket => {
+				socket.end(frame({ protocol: 1, pid: 0xffffffff, result: { Ok: descriptor("http://127.0.0.1:31415") } }));
+			});
+			const result = await discoverJchTools({ pipePath: fixture.pipePath, timeoutMs: 1000 });
+			expect(result?.base_url).toBe("http://127.0.0.1:31415");
+			// Any query-only verification connection must close without sending a control operation.
+			expect(fixture.requests).toEqual(["Discover"]);
+		},
+	);
+
+	test.skipIf(process.platform !== "win32")(
+		"rejects a server from another logon before sending Discover",
+		async () => {
+			const fixture = await pipeFixture(socket => {
+				socket.end(envelope(descriptor("http://127.0.0.1:31415")));
+			});
+			// Keep FFI fault injection in a subprocess so no other test observes the mocked token data.
+			const script = `
+				import * as ffi from "bun:ffi";
+				import { mock } from "bun:test";
+				const nativeDlopen = ffi.dlopen;
+				let statisticsQueries = 0;
+				mock.module("bun:ffi", () => ({
+					...ffi,
+					dlopen(name, definitions) {
+						const library = nativeDlopen(name, definitions);
+						if (name !== "advapi32.dll") return library;
+						const getTokenInformation = library.symbols.GetTokenInformation;
+						return {
+							...library,
+							symbols: {
+								...library.symbols,
+								GetTokenInformation(...args) {
+									const result = getTokenInformation(...args);
+									if (result && args[1] === 10 && ++statisticsQueries === 2) {
+										// The second token belongs to the OS-resolved server, not the current process.
+										new Uint8Array(ffi.toArrayBuffer(args[2], 0, 56))[8] ^= 1;
+									}
+									return result;
+								},
+							},
+						};
+					},
+				}));
+				// Static discovery import would capture dlopen before the FFI fault injection.
+				const { discoverJchTools } = await import(${JSON.stringify(path.join(import.meta.dir, "../src/config/jchtools-discovery.ts"))});
+				const result = await discoverJchTools({ pipePath: ${JSON.stringify(fixture.pipePath)}, timeoutMs: 1500 });
+				console.log(JSON.stringify({ accepted: result !== undefined, statisticsQueries }));
+			`;
+			const child = Bun.spawn([process.execPath, "--eval", script], {
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			if ((await child.exited) !== 0) throw new Error(`Windows pipe identity probe failed: ${stderr}`);
+			expect(JSON.parse(stdout)).toEqual({ accepted: false, statisticsQueries: 2 });
+			expect(fixture.requests).toEqual([]);
+		},
+	);
+
 	test("rejects an oversized frame before waiting for or allocating its advertised payload", async () => {
 		const fixture = await pipeFixture(socket => {
 			const length = Buffer.alloc(4);

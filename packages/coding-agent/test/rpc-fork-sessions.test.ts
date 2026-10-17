@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { FileSessionStorage, tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { invalidateSessionScan } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import {
 	RpcSessionDirectoryError,
 	RpcSessionDirectoryService,
@@ -89,6 +90,102 @@ describe("RpcSessionDirectoryService", () => {
 		expect(withoutDate.createdAt).toBeUndefined();
 		expect(sessions.find(session => session.sessionId === "s-valid")!.createdAt).toBeDefined();
 	});
+
+	test("listing retries metadata whose file changes during its asynchronous read", async () => {
+		const fx = await setup();
+		const file = await writeSession(fx.sessionDir, "s-read-race", fx.cwd, "Original");
+		const storage = new FileSessionStorage();
+		const service = new RpcSessionDirectoryService({ cwd: fx.cwd, sessionDir: fx.sessionDir, storage });
+		const original = await Bun.file(file).text();
+		const updated =
+			serializeTitleSlot({ title: "Concurrent", source: "user", updatedAt: new Date().toISOString() }) +
+			original.slice(original.indexOf("\n") + 1) +
+			"\n";
+		const read = storage.readTextSlices.bind(storage);
+		let changed = false;
+		const slices = spyOn(storage, "readTextSlices").mockImplementation(async (...args) => {
+			const result = await read(...args);
+			if (!changed && args[0] === file) {
+				changed = true;
+				storage.writeTextSync(file, updated);
+			}
+			return result;
+		});
+		try {
+			const [entry] = await service.list();
+			expect(changed).toBe(true);
+			expect(entry?.name).toBe("Concurrent");
+			expect(entry?.revision).toBe((await service.list())[0]?.revision);
+			await expect(service.rename("s-read-race", "Accepted", entry!.revision)).resolves.toMatchObject({
+				name: "Accepted",
+			});
+		} finally {
+			slices.mockRestore();
+		}
+	});
+
+	for (const operation of ["list", "rename"] as const) {
+		test(`${operation} summaries keep the revision of their metadata when a later scan updates the file`, async () => {
+			const fx = await setup();
+			const first = await writeSession(fx.sessionDir, "a-snapshot", fx.cwd, "Original");
+			const second = await writeSession(fx.sessionDir, "b-trigger", fx.cwd, "Trigger");
+			const assistant = `${JSON.stringify({
+				type: "message",
+				id: "assistant",
+				message: { role: "assistant", content: [{ type: "text", text: "Done" }], stopReason: "stop" },
+			})}\n`;
+			await fs.appendFile(first, assistant);
+			await fs.appendFile(second, assistant);
+			const storage = new FileSessionStorage();
+			const service = new RpcSessionDirectoryService({ cwd: fx.cwd, sessionDir: fx.sessionDir, storage });
+			const original = await Bun.file(first).text();
+			const concurrent =
+				serializeTitleSlot({ title: "Concurrent", source: "user", updatedAt: new Date().toISOString() }) +
+				original.slice(original.indexOf("\n") + 1) +
+				"\n";
+			let armed = operation === "list";
+			let changed = false;
+			const list = storage.listFilesSync.bind(storage);
+			const files = spyOn(storage, "listFilesSync").mockImplementation((...args) => list(...args).sort());
+			const read = storage.readTextSlices.bind(storage);
+			const slices = spyOn(storage, "readTextSlices").mockImplementation(async (...args) => {
+				const result = await read(...args);
+				if (armed && args[0] === second) {
+					armed = false;
+					changed = true;
+					storage.writeTextSync(first, concurrent);
+				}
+				return result;
+			});
+			const write = storage.writeTextAtomic.bind(storage);
+			const atomic = spyOn(storage, "writeTextAtomic").mockImplementation(async (...args) => {
+				await write(...args);
+				armed = true;
+				invalidateSessionScan(second, storage);
+			});
+			try {
+				const summary =
+					operation === "list"
+						? (await service.list()).find(entry => entry.sessionId === "a-snapshot")!
+						: await service.rename("a-snapshot", "Renamed");
+				expect(changed).toBe(true);
+				expect(summary.name).toBe(operation === "list" ? "Original" : "Renamed");
+				const latest = (await service.list()).find(entry => entry.sessionId === "a-snapshot")!;
+				expect(latest.name).toBe("Concurrent");
+				expect(summary.revision).not.toBe(latest.revision);
+				await expect(service.rename("a-snapshot", "Stale", summary.revision)).rejects.toMatchObject({
+					code: "revision_conflict",
+				});
+				await expect(service.delete("a-snapshot", summary.revision)).rejects.toMatchObject({
+					code: "revision_conflict",
+				});
+			} finally {
+				atomic.mockRestore();
+				slices.mockRestore();
+				files.mockRestore();
+			}
+		});
+	}
 
 	test("rename survives an EPERM replacement and guards stale revisions", async () => {
 		const fx = await setup();

@@ -46,4 +46,19 @@ describe("setYamlConfigValue scalar keys", () => {
 		expect(updated).toContain("smol: keep/new");
 		expect(updated).toContain("wide: keep/wide");
 	});
+
+	test.each(["modelRoles:\n", "modelRoles: null\n"])("writes a nested role into unset config %j", source => {
+		const updated = setYamlConfigValue(source, ["modelRoles", "smol"], "openai/new");
+		expect(YAML.parse(updated)).toEqual({ modelRoles: { smol: "openai/new" } });
+		const roundTripped = setYamlConfigValue(updated, ["modelRoles", "smol"], "openai/next");
+		expect(YAML.parse(roundTripped)).toEqual({ modelRoles: { smol: "openai/next" } });
+	});
+
+	test("preserves comments and aliases of a null parent while replacing it with a mapping", () => {
+		const source = "# role note\nmodelRoles: &roles null # unset note\nprevious: *roles\n";
+		const updated = setYamlConfigValue(source, ["modelRoles", "smol"], "openai/new");
+		expect(updated).toContain("# role note");
+		expect(updated).toContain("# unset note");
+		expect(YAML.parse(updated)).toEqual({ modelRoles: { smol: "openai/new" }, previous: null });
+	});
 });

@@ -230,6 +230,21 @@ describe("RPC plan mode host", () => {
 		expect(host.session.sessionManager.buildSessionContext().mode).toBe("none");
 	});
 
+	test("an enabled extension replacement of write is excluded and reported to the host", async () => {
+		await using root = await TempDir.create("rpc-plan-shadowed-write-");
+		const host = createHost(root.absolute());
+		await host.session.setActiveToolPresentation(["read", "write"], ["read"]);
+		vi.spyOn(host.session, "hasBuiltInTool").mockReturnValue(false);
+		await host.controller.handle("");
+		expect(host.session.getEnabledToolNames()).toEqual(["read"]);
+		expect(host.output).toContain(
+			"Plan mode: the `write` tool is provided by an extension and cannot submit plans. Disable it to use plan mode.",
+		);
+		await host.controller.handle("");
+		await host.drain();
+		expect(host.session.getEnabledToolNames()).toEqual(["read", "write"]);
+	});
+
 	test("rejecting an existing draft's exit confirmation preserves planning", async () => {
 		await using root = await TempDir.create("rpc-plan-draft-");
 		const host = createHost(root.absolute());
@@ -418,6 +433,161 @@ describe("RPC plan mode host", () => {
 		await host.drain();
 		expect(host.session.getPlanModeState()).toBeUndefined();
 		expect(host.submitted).toEqual([]);
+	});
+
+	for (const operation of ["branch", "fork"]) {
+		for (const mode of ["plan", "none"] as const) {
+			test(`${operation} into ${mode} history restores the original tools and model on exit`, async () => {
+				await using root = await TempDir.create(`rpc-plan-${operation}-${mode}-`);
+				const host = createHost(root.absolute());
+				await host.controller.handle("");
+				await host.controller.beginSessionChange({ detachesRun: false });
+				host.changeSession();
+				host.session.sessionManager.appendModeChange(
+					mode,
+					mode === "plan" ? { planFilePath: host.planPath } : undefined,
+				);
+				await host.controller.endSessionChange({ detachesRun: false });
+				if (mode === "plan") {
+					expect(host.session.getPlanModeState()?.enabled).toBe(true);
+					expect(host.session.getEnabledToolNames()).toContain("write");
+					expect(host.session.model).toEqual(host.planModel);
+					await host.controller.handle("");
+					await host.drain();
+				}
+				expect(host.session.getPlanModeState()).toBeUndefined();
+				expect(host.session.getEnabledToolNames()).toEqual(["read", "mcp__server_tool"]);
+				expect(host.session.model).toEqual(host.original);
+				expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.Low);
+			});
+		}
+	}
+
+	test("non-detaching branch restoration waits for a streaming turn's terminal boundary", async () => {
+		await using root = await TempDir.create("rpc-plan-branch-streaming-");
+		const host = createHost(root.absolute());
+		await host.controller.handle("");
+		host.setStreaming(true);
+		const restore = vi.spyOn(host.session, "setModelTemporary");
+		await host.controller.beginSessionChange({ detachesRun: false });
+		host.changeSession();
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.session.getEnabledToolNames()).toEqual(["read", "mcp__server_tool"]);
+		expect(host.session.model).toEqual(host.planModel);
+		expect(restore).not.toHaveBeenCalled();
+		// Another history move before the yield must retain the deferred restore.
+		await host.controller.beginSessionChange({ detachesRun: false });
+		host.session.sessionManager.appendModeChange("none");
+		await host.controller.endSessionChange({ detachesRun: false });
+		host.setStreaming(false);
+		host.observe({ type: "agent_end", messages: [], isTerminal: true });
+		await host.drain();
+		expect(host.session.model).toEqual(host.original);
+		expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.Low);
+	});
+
+	test("detaching after a streaming history move does not restore the source model in the destination", async () => {
+		await using root = await TempDir.create("rpc-plan-pending-switch-");
+		const host = createHost(root.absolute());
+		await host.controller.handle("");
+		host.setStreaming(true);
+		await host.controller.beginSessionChange({ detachesRun: false });
+		host.changeSession();
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.session.model).toEqual(host.planModel);
+
+		await host.controller.beginSessionChange();
+		host.changeSession();
+		const destinationModel = getBundledModel("anthropic", "claude-haiku-4-5");
+		await host.session.setModelTemporary(destinationModel, ThinkingLevel.Medium);
+		await host.controller.endSessionChange();
+		host.setStreaming(false);
+		host.observe({ type: "agent_end", messages: [], isTerminal: true });
+		await host.drain();
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.session.model).toEqual(destinationModel);
+		expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.Medium);
+	});
+
+	for (const detachesRun of [false, true]) {
+		test(`a no-op session change with detachesRun=${detachesRun} retains the same-run deferred restore`, async () => {
+			await using root = await TempDir.create("rpc-plan-pending-noop-");
+			const host = createHost(root.absolute());
+			await host.controller.handle("");
+			host.setStreaming(true);
+			await host.controller.beginSessionChange({ detachesRun: false });
+			host.changeSession();
+			await host.controller.endSessionChange({ detachesRun: false });
+			expect(host.session.getPlanModeState()).toBeUndefined();
+			expect(host.session.model).toEqual(host.planModel);
+
+			// A cancelled picker or no-op switch has not detached this streaming run.
+			await host.controller.beginSessionChange({ detachesRun });
+			await host.controller.endSessionChange({ detachesRun });
+			expect(host.session.model).toEqual(host.planModel);
+			host.setStreaming(false);
+			host.observe({ type: "agent_end", messages: [], isTerminal: true });
+			await host.drain();
+			expect(host.session.model).toEqual(host.original);
+			expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.Low);
+		});
+	}
+
+	test("a streaming branch into plan history retains the original restoration model", async () => {
+		await using root = await TempDir.create("rpc-plan-branch-plan-streaming-");
+		const host = createHost(root.absolute());
+		await host.controller.handle("");
+		host.setStreaming(true);
+		const restore = vi.spyOn(host.session, "setModelTemporary");
+		await host.controller.beginSessionChange({ detachesRun: false });
+		host.changeSession();
+		host.session.sessionManager.appendModeChange("plan", { planFilePath: host.planPath });
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(host.session.getPlanModeState()?.enabled).toBe(true);
+		expect(restore).not.toHaveBeenCalled();
+		host.setStreaming(false);
+		host.observe({ type: "agent_end", messages: [], isTerminal: true });
+		await host.drain();
+		await host.controller.handle("");
+		await host.drain();
+		expect(host.session.model).toEqual(host.original);
+		expect(host.session.configuredThinkingLevel()).toBe(ThinkingLevel.Low);
+		expect(host.session.getEnabledToolNames()).toEqual(["read", "mcp__server_tool"]);
+	});
+
+	test("same-session tree moves reconcile plan history while cancelled navigation keeps its snapshot", async () => {
+		await using root = await TempDir.create("rpc-plan-tree-");
+		const host = createHost(root.absolute());
+		const manager = host.session.sessionManager;
+		manager.appendModeChange("none");
+		const beforePlan = manager.getLeafId()!;
+		await host.controller.handle("");
+		const planLeaf = manager.getLeafId()!;
+		const activate = vi.spyOn(host.session, "setActiveToolsByName");
+		await host.controller.beginSessionChange({ detachesRun: false });
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(activate).not.toHaveBeenCalled();
+		expect(manager.getLeafId()).toBe(planLeaf);
+		await host.controller.beginSessionChange({ detachesRun: false });
+		manager.branch(beforePlan);
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.session.getEnabledToolNames()).toEqual(["read", "mcp__server_tool"]);
+		expect(host.session.model).toEqual(host.original);
+		await expect(host.propose()).rejects.toThrow("Plan proposal handler was not installed");
+		await host.controller.beginSessionChange({ detachesRun: false });
+		manager.branch(planLeaf);
+		await host.controller.endSessionChange({ detachesRun: false });
+		expect(host.session.getPlanModeState()?.enabled).toBe(true);
+		expect(host.session.getEnabledToolNames()).toContain("write");
+		expect(host.session.model).toEqual(host.planModel);
+		await expect(host.propose()).resolves.toMatchObject({ type: "tool_execution_end" });
+		await host.controller.handle("");
+		await host.drain();
+		expect(host.session.model).toEqual(host.original);
+		expect(host.session.getEnabledToolNames()).toEqual(["read", "mcp__server_tool"]);
 	});
 
 	test("failed tool activation rolls back mode and the original presentation", async () => {

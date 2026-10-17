@@ -2,6 +2,7 @@ import { dlopen, FFIType } from "bun:ffi";
 import { writeSync } from "node:fs";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { gateClockNanoseconds } from "./test-gate-clock";
+import { openGateLibc } from "./test-gate-libc";
 
 interface WatchdogData {
 	level: string;
@@ -33,7 +34,7 @@ export function exitGateProcess(exitCode: number): never {
 		});
 		kernel.symbols.ExitProcess(exitCode);
 	} else {
-		const libc = dlopen(process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6", {
+		const libc = openGateLibc({
 			_exit: { args: [FFIType.i32], returns: FFIType.void },
 		});
 		libc.symbols._exit(exitCode);

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { structuredPatchHunks } from "@oh-my-pi/pi-natives";
@@ -101,39 +100,6 @@ function renderPatch(
 		}
 	}
 	return result;
-}
-
-/** Native patch headers supply identities/modes only; no review path filters are used. */
-function patchChanges(patch: string): ReviewExportChange[] {
-	const starts = [...patch.matchAll(/^diff --git /gm)].map(match => match.index!);
-	return starts.map((start, index) => {
-		const section = patch.slice(start, starts[index + 1] ?? patch.length);
-		const header = section.slice("diff --git ".length, section.indexOf("\n"));
-		const lines = section.split("\n");
-		const field = (prefix: string) => lines.find(line => line.startsWith(prefix))?.slice(prefix.length);
-		const previousPath = field("rename from ");
-		let filePath = field("rename to ");
-		if (!filePath) {
-			// Native VCS renders raw paths, including spaces. Equal-path headers are unambiguous.
-			if (!header.startsWith("a/")) throw new Error("Unsupported native diff header; export aborted.");
-			const candidate = header.slice(2, (header.length - 1) / 2);
-			if (header !== `a/${candidate} b/${candidate}`)
-				throw new Error("Ambiguous native diff paths; export aborted.");
-			filePath = candidate;
-		}
-		if (!isTemporary(filePath)) relativePath(filePath);
-		if (previousPath && !isTemporary(previousPath)) relativePath(previousPath);
-		const added = field("new file mode ");
-		const deleted = field("deleted file mode ");
-		const unchangedMode = /^index [^\n]+ (\d{6})$/m.exec(section)?.[1];
-		return {
-			path: filePath,
-			...(previousPath ? { previousPath } : {}),
-			status: added ? "A" : deleted ? "D" : previousPath ? "R" : "M",
-			beforeMode: deleted ?? field("old mode ") ?? (added ? undefined : unchangedMode),
-			afterMode: added ?? field("new mode ") ?? (deleted ? undefined : unchangedMode),
-		};
-	});
 }
 
 function parseStatus(raw: string): Status[] {
@@ -384,9 +350,7 @@ export async function captureReviewExportSnapshot(
 			const untracked = [...included(await repository.lsFiles(true, true, signal))].sort();
 			const tracked = [...included(await repository.lsFiles(false, true, signal))].sort();
 			const files = [...new Set([...basePaths, ...tracked])];
-			const staged = files.length
-				? await repository.diffText({ cached: true, files, maxBytes: DIFF_LIMIT }, signal)
-				: "";
+			const staged = files.length ? await repository.diffChanges({ cached: true, files }, signal) : [];
 			return {
 				status,
 				untracked,
@@ -395,23 +359,29 @@ export async function captureReviewExportSnapshot(
 					status,
 					untracked,
 					tracked,
-					staged: createHash("sha256").update(staged).digest("hex"),
+					staged: staged.flatMap(change => {
+						const beforePath = change.previousPath ?? change.path;
+						const sides: string[][] = [];
+						if (!isTemporary(beforePath) && change.beforeMode)
+							sides.push(["base", beforePath, change.beforeMode, change.beforeId ?? ""]);
+						if (!isTemporary(change.path) && change.afterMode)
+							sides.push(["index", change.path, change.afterMode, change.afterId ?? ""]);
+						return sides;
+					}),
 				}),
 			};
 		};
 		const initial = scope.kind === "uncommitted" ? await state() : undefined;
-		let nativePatch: string;
-		if (baseCommit)
-			nativePatch = await repository.diffText(
-				{ base: baseCommit, ...(scope.kind === "uncommitted" ? {} : { head: targetCommit }), maxBytes: DIFF_LIMIT },
-				signal,
-			);
-		else {
-			const result = await repository.showCommit(targetCommit, DIFF_LIMIT, signal);
-			if (result.truncated) throw new Error("Commit patch exceeded the capture limit; split this review.");
-			nativePatch = result.data.toString("utf8");
-		}
-		changes = patchChanges(nativePatch).flatMap<ReviewExportChange>(change => {
+		const nativeChanges = await repository.diffChanges(
+			{
+				...(baseCommit ? { base: baseCommit } : {}),
+				...(scope.kind === "uncommitted" ? {} : { head: targetCommit }),
+			},
+			signal,
+		);
+		changes = nativeChanges.flatMap<ReviewExportChange>(change => {
+			if (!isTemporary(change.path)) relativePath(change.path);
+			if (change.previousPath && !isTemporary(change.previousPath)) relativePath(change.previousPath);
 			if (isTemporary(change.path)) {
 				return change.previousPath && !isTemporary(change.previousPath)
 					? [{ path: change.previousPath, status: "D", beforeMode: change.beforeMode }]
@@ -420,7 +390,15 @@ export async function captureReviewExportSnapshot(
 			if (change.previousPath && isTemporary(change.previousPath)) {
 				return [{ path: change.path, status: "A", afterMode: change.afterMode }];
 			}
-			return [change];
+			return [
+				{
+					path: change.path,
+					...(change.previousPath ? { previousPath: change.previousPath } : {}),
+					status: !change.beforeMode ? "A" : !change.afterMode ? "D" : change.previousPath ? "R" : "M",
+					beforeMode: change.beforeMode,
+					afterMode: change.afterMode,
+				},
+			];
 		});
 		const readBlob = async (filePath: string, version: Version) => {
 			const sha = version === "base" ? baseCommit : targetCommit;
@@ -430,9 +408,6 @@ export async function captureReviewExportSnapshot(
 			return result.data;
 		};
 		readVersion = readBlob;
-		limitations.push(
-			"Historical symlink blobs are never dereferenced; when native Git omits mode metadata, their stored link-target bytes are represented as plain file bytes.",
-		);
 		if (scope.kind === "uncommitted") {
 			if (!initial) throw new Error("Missing initial worktree observation.");
 			if ((await repository.headSha(signal)) !== targetCommit)

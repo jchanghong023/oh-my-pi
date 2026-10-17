@@ -2589,12 +2589,25 @@ describe("provider routing selector (@upstream)", () => {
 	const openRouterOnly = (model: Model<Api> | undefined): string[] | undefined =>
 		(model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)?.openRouterRouting?.only;
 
-	test("pins an OpenRouter model to one upstream via @slug", () => {
-		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", allModels);
+	test("pins an OpenRouter model without losing existing routing preferences or other compat", () => {
+		const model = buildModel({
+			...mockOpenRouterModels.find(model => model.id === "z-ai/glm-4.7")!,
+			compat: {
+				supportsDeveloperRole: false,
+				openRouterRouting: { only: ["anthropic"], order: ["anthropic", "cerebras"] },
+			},
+		});
+		const result = parseModelPattern("openrouter/z-ai/glm-4.7@cerebras", [model]);
 		expect(result.model?.id).toBe("z-ai/glm-4.7");
 		expect(result.model?.provider).toBe("openrouter");
 		expect(result.upstream).toBe("cerebras");
 		expect(openRouterOnly(result.model)).toEqual(["cerebras"]);
+		expect((result.model as Model<"openai-completions">).compat.openRouterRouting).toEqual({
+			only: ["cerebras"],
+			order: ["anthropic", "cerebras"],
+		});
+		expect((result.model as Model<"openai-completions">).compat.supportsDeveloperRole).toBe(false);
+		expect((model as Model<"openai-completions">).compat.openRouterRouting?.only).toEqual(["anthropic"]);
 	});
 
 	test("resolves @slug without an explicit provider prefix", () => {
@@ -2625,7 +2638,7 @@ describe("provider routing selector (@upstream)", () => {
 		expect(openRouterOnly(result.model)).toEqual(["deepseek"]);
 	});
 
-	test("routes Vercel AI Gateway models via vercelGatewayRouting", () => {
+	test("routes Vercel AI Gateway models without losing cache settings or other compat", () => {
 		const gatewayModel: Model<"openai-completions"> = buildModel({
 			id: "zai/glm-4.7",
 			name: "GLM 4.7 (Gateway)",
@@ -2637,13 +2650,28 @@ describe("provider routing selector (@upstream)", () => {
 			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
 			contextWindow: 128000,
 			maxTokens: 8192,
+			compat: {
+				supportsDeveloperRole: false,
+				vercelGatewayRouting: {
+					only: ["anthropic"],
+					order: ["anthropic", "cerebras"],
+					caching: "auto",
+					cacheAnchorItems: 1,
+					cacheTtl: "1h",
+				},
+			},
 		});
 		const result = parseModelPattern("vercel-ai-gateway/zai/glm-4.7@cerebras", [gatewayModel]);
 		expect(result.model?.id).toBe("zai/glm-4.7");
-		expect(
-			(result.model?.compat as { vercelGatewayRouting?: { only?: string[] } } | undefined)?.vercelGatewayRouting
-				?.only,
-		).toEqual(["cerebras"]);
+		expect((result.model as Model<"openai-completions">).compat.vercelGatewayRouting).toEqual({
+			only: ["cerebras"],
+			order: ["anthropic", "cerebras"],
+			caching: "auto",
+			cacheAnchorItems: 1,
+			cacheTtl: "1h",
+		});
+		expect((result.model as Model<"openai-completions">).compat.supportsDeveloperRole).toBe(false);
+		expect(gatewayModel.compat.vercelGatewayRouting?.only).toEqual(["anthropic"]);
 		expect(openRouterOnly(result.model)).toBeUndefined();
 	});
 

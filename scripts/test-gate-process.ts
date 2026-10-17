@@ -1,6 +1,7 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import * as fs from "node:fs/promises";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
+import { openGateLibc } from "./test-gate-libc";
 
 export interface GateProcessOwner {
 	terminate(): Promise<void>;
@@ -34,22 +35,30 @@ interface LinuxSignalLibrary {
 	};
 }
 function openLinuxSignals(): LinuxSignalLibrary {
-	for (const name of ["libc.so.6", "libc.so"]) {
-		try {
-			return dlopen(name, {
-				syscall: {
-					args: [FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64],
-					returns: FFIType.i64,
-				},
-				close: { args: [FFIType.i32], returns: FFIType.i32 },
-			});
-		} catch {
-			// Try the installed platform libc soname.
-		}
-	}
-	throw new Error("Cannot load owned Linux process signaling");
+	return openGateLibc({
+		syscall: {
+			args: [FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64],
+			returns: FFIType.i64,
+		},
+		close: { args: [FFIType.i32], returns: FFIType.i32 },
+	});
 }
 let linuxSignals: LinuxSignalLibrary | undefined;
+
+/** Refuse work before readiness on kernels or sandboxes without safe pidfd ownership. */
+export function assertLinuxGateSignals(): void {
+	const symbols = (linuxSignals ??= openLinuxSignals()).symbols;
+	const required =
+		"Safe Linux gate ownership requires pidfd_open and pidfd_send_signal (Linux 5.3+ with pidfd syscalls permitted)";
+	const fd = Number(symbols.syscall(434, process.pid, 0, 0, 0));
+	if (fd < 0) throw new Error(`${required}: pidfd_open failed`);
+	try {
+		// Signal 0 checks support and permission without changing process state.
+		if (Number(symbols.syscall(424, fd, 0, 0, 0)) !== 0) throw new Error(`${required}: pidfd_send_signal failed`);
+	} finally {
+		symbols.close(fd);
+	}
+}
 async function signalLinuxIdentity(entry: LinuxIdentity, signal: number): Promise<boolean> {
 	const symbols = (linuxSignals ??= openLinuxSignals()).symbols;
 	// pidfd_open/pidfd_send_signal use these syscall numbers on Linux's

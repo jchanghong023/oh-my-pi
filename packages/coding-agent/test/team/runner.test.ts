@@ -71,6 +71,15 @@ describe("team runner abort diagnostics", () => {
 			budget: undefined,
 			cancel: true,
 		},
+		{
+			name: "preserves an upstream-pinned executable selector at the subprocess boundary",
+			modelPattern: "openrouter/foo@cerebras",
+			abortReason: "Soft request budget exceeded (7 requests; budget 5)",
+			requests: 7,
+			abortCategory: "request_budget_stop",
+			budget: 5,
+			cancel: false,
+		},
 	];
 
 	for (const scenario of cases) {
@@ -85,6 +94,7 @@ describe("team runner abort diagnostics", () => {
 			const task = "private-task-canary";
 			const output = "private-body-canary";
 			const stderr = "private-stderr-canary";
+			const modelPattern = scenario.modelPattern ?? "openrouter/foo";
 			const executorError = "private-executor-error-canary";
 			let childId: string | undefined;
 			let leaseDir: string | undefined;
@@ -93,6 +103,7 @@ describe("team runner abort diagnostics", () => {
 				const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 				const settings = Settings.isolated();
 				const executor = spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+					expect(options.modelOverride).toBe(modelPattern);
 					childId = options.id;
 					leaseDir = options.artifactsDir;
 					expect(leaseDir).toBeDefined();
@@ -114,7 +125,7 @@ describe("team runner abort diagnostics", () => {
 						requests: scenario.requests,
 						aborted: true,
 						abortReason: scenario.abortReason,
-						resolvedModel: "openrouter/foo",
+						resolvedModel: modelPattern,
 					};
 				});
 				restoreExecutor = () => executor.mockRestore();
@@ -134,7 +145,7 @@ describe("team runner abort diagnostics", () => {
 					runner(
 						{
 							role: "proposer",
-							modelPattern: "openrouter/foo",
+							modelPattern,
 							label: "team-proposal-A",
 							task,
 							schema: TEAM_PROPOSAL_SCHEMA,

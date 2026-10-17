@@ -2,7 +2,7 @@
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { terminateLinuxGateDescendants } from "./test-gate-process";
+import { assertLinuxGateSignals, terminateLinuxGateDescendants } from "./test-gate-process";
 
 const launchedAt = performance.now();
 const correlation = Object.fromEntries(
@@ -47,6 +47,7 @@ let reapChildren: (() => Promise<boolean>) | undefined;
 // Mirrors the supported Linux subreaper primitive in utils/ptree, without
 // loading the native addon before the gate has had a chance to build it.
 if (process.platform === "linux") {
+	assertLinuxGateSignals();
 	let libc;
 	for (const name of ["libc.so.6", "libc.so"]) {
 		try {

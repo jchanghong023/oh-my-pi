@@ -1,4 +1,5 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
+import { openGateLibc } from "./test-gate-libc";
 
 // Bun's hrtime uses a process-relative epoch on Windows. Activity emitted by
 // separate compiler processes needs an OS-wide monotonic epoch, not wall time.
@@ -22,8 +23,7 @@ export function gateClockNanoseconds(): bigint {
 				return (sample[0] * 1_000_000_000n) / frequency;
 			};
 		} else {
-			const name = process.platform === "darwin" ? "/usr/lib/libSystem.B.dylib" : "libc.so.6";
-			const libc = dlopen(name, {
+			const libc = openGateLibc({
 				clock_gettime: { args: [FFIType.i32, FFIType.ptr], returns: FFIType.i32 },
 			});
 			const monotonic = process.platform === "darwin" ? 6 : 1;

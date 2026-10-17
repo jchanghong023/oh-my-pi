@@ -171,6 +171,19 @@ pub struct NumstatEntry {
 	pub removed: Option<u32>,
 }
 
+/// Changed file identities and modes, without rendering blob contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffChange {
+	/// Worktree-relative destination path (original path for deletions).
+	pub path:          String,
+	/// Original path for a rename.
+	pub previous_path: Option<String>,
+	pub before_mode:   Option<String>,
+	pub after_mode:    Option<String>,
+	pub before_id:     Option<String>,
+	pub after_id:      Option<String>,
+}
+
 /// Options for diff generation.
 ///
 /// The output contract is git patch format — the TS layer parses it with the

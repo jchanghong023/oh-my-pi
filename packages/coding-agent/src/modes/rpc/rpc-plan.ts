@@ -84,7 +84,7 @@ export class RpcPlanController {
 	#reviewing = false;
 	#tail: Promise<void> = Promise.resolve();
 	#sessionChanges = 0;
-	#sessionBeforeChange: { id: string; generation: number; detachesRun: boolean } | undefined;
+	#sessionBeforeChange: { id: string; generation: number; leafId: string | null; detachesRun: boolean } | undefined;
 	#proposal: { details: PlanApprovalDetails; current: () => boolean } | undefined;
 	#logContext: Record<string, unknown> = {};
 
@@ -147,6 +147,7 @@ export class RpcPlanController {
 		this.#sessionBeforeChange = {
 			id: this.#session.sessionManager.getSessionId(),
 			generation: this.#session.sessionGeneration,
+			leafId: this.#session.sessionManager.getLeafId(),
 			detachesRun: options?.detachesRun !== false,
 		};
 		this.cancel();
@@ -179,7 +180,13 @@ export class RpcPlanController {
 			!previous ||
 			previous.id !== this.#session.sessionManager.getSessionId() ||
 			previous.generation !== this.#session.sessionGeneration;
-		if (changed || previous?.detachesRun) {
+		const moved = previous?.leafId !== this.#session.sessionManager.getLeafId();
+		if (changed && previous?.detachesRun) {
+			// Deferred model changes belong to the detached run, not the destination session.
+			this.#pendingModel = undefined;
+			this.#modelRevision++;
+		}
+		if (changed || moved || previous?.detachesRun) {
 			await this.reconcile({ preserveRestoredModel: changed });
 		}
 	}
@@ -195,9 +202,10 @@ export class RpcPlanController {
 		try {
 			this.cancel();
 			await this.settled();
-			this.#previousTools = undefined;
-			this.#previousModel = undefined;
-			this.#pendingModel = undefined;
+			const previousModel =
+				this.#previousModel ?? (!this.#session.getPlanModeState()?.enabled ? this.#pendingModel : undefined);
+			const hadPresentation = !!this.#previousTools || !!this.#previousModel;
+			if (hadPresentation) await this.#exit(false, false);
 			this.#lastPlanFilePath = undefined;
 			this.#session.setPlanModeState(undefined);
 			this.#session.setPlanProposalHandler(null);
@@ -226,8 +234,9 @@ export class RpcPlanController {
 				const path = context.modeData?.planFilePath;
 				await this.#enter(
 					typeof path === "string" ? path : undefined,
-					options?.preserveRestoredModel !== false,
+					!hadPresentation && !previousModel && options?.preserveRestoredModel !== false,
 					current,
+					previousModel,
 				);
 			}
 			this.#log("plan_reconcile_completed", "reconcile", this.#entered ? "restored" : "inactive", {
@@ -318,14 +327,15 @@ export class RpcPlanController {
 		if (event.type === "agent_end" && event.isTerminal !== false && this.#pendingModel) {
 			const pending = this.#pendingModel;
 			const revision = this.#modelRevision;
-			this.#pendingModel = undefined;
 			// Cancelling a dialog must not discard the plan role at this yield.
 			const current = this.#guard();
 			this.#background(async () => {
 				await this.#session.waitForIdle();
 				await this.#enqueue(async () => {
-					if (current() && revision === this.#modelRevision && this.#session.getPlanModeState()?.enabled)
+					if (current() && revision === this.#modelRevision && this.#pendingModel === pending) {
+						this.#pendingModel = undefined;
 						await this.#restoreModel(pending);
+					}
 				});
 			});
 		}
@@ -490,7 +500,12 @@ export class RpcPlanController {
 		return undefined;
 	}
 
-	async #enter(path?: string, preserveModel = false, current: () => boolean = () => true): Promise<void> {
+	async #enter(
+		path?: string,
+		preserveModel = false,
+		current: () => boolean = () => true,
+		previousModel?: ModelSnapshot,
+	): Promise<void> {
 		const started = performance.now();
 		this.#log("plan_enter_started", "enter", "started");
 		const session = this.#session;
@@ -510,11 +525,18 @@ export class RpcPlanController {
 			enabled: tools.filter(name => !isMCPToolName(name)),
 			mounted: mounted.filter(name => !isMCPToolName(name)),
 		};
-		this.#previousModel = model ? { model, thinkingLevel: session.configuredThinkingLevel() } : undefined;
+		this.#previousModel =
+			previousModel ?? (model ? { model, thinkingLevel: session.configuredThinkingLevel() } : undefined);
 		session.setPlanModeState({ enabled: true, planFilePath, workflow: "parallel", reentry: this.#entered });
 		try {
+			const builtInWrite = session.hasBuiltInTool("write");
+			if (!builtInWrite && tools.includes("write")) {
+				this.#output(
+					"Plan mode: the `write` tool is provided by an extension and cannot submit plans. Disable it to use plan mode.",
+				);
+			}
 			await session.setActiveToolsByName([
-				...new Set([...tools, ...(session.hasBuiltInTool("write") ? ["write"] : [])]),
+				...new Set([...tools.filter(name => name !== "write"), ...(builtInWrite ? ["write"] : [])]),
 			]);
 			assertCurrent();
 			if (!preserveModel) await this.#applyPlanModel();
@@ -590,6 +612,7 @@ export class RpcPlanController {
 		const model = session.model;
 		const currentModel = model ? { model, thinkingLevel: session.configuredThinkingLevel() } : undefined;
 		session.setPlanModeState(undefined);
+		let pendingModel: ModelSnapshot | undefined;
 		try {
 			if (this.#previousTools) {
 				// Approved execution keeps the durable plan readable, as in the TUI approval flow.
@@ -597,7 +620,10 @@ export class RpcPlanController {
 				const executionTools = ensureRead && !enabled.includes("read") ? [...enabled, "read"] : enabled;
 				await session.restoreNonMCPToolPresentation(executionTools, this.#previousTools.mounted);
 			}
-			if (this.#previousModel) await this.#restoreModel(this.#previousModel);
+			if (this.#previousModel) {
+				if (session.isStreaming) pendingModel = this.#previousModel;
+				else await this.#restoreModel(this.#previousModel);
+			}
 		} catch (error) {
 			this.#log("plan_rollback_started", "exit_rollback", "started", { elapsed_ms: performance.now() - started });
 			session.setPlanModeState(state);
@@ -607,7 +633,7 @@ export class RpcPlanController {
 			this.#log("plan_exit_terminal", "exit", "failed", { elapsed_ms: performance.now() - started });
 			throw error;
 		}
-		this.#pendingModel = undefined;
+		this.#pendingModel = pendingModel;
 		this.#modelRevision++;
 		this.#previousTools = undefined;
 		this.#previousModel = undefined;

@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
 	error::{Error, Result},
-	types::{DiffOptions, NumstatEntry, ShowResult},
+	types::{DiffChange, DiffOptions, NumstatEntry, ShowResult},
 };
 
 #[derive(Clone)]
@@ -59,6 +59,34 @@ impl GitRepo {
 		Ok(collect_changes(&repo, options)?
 			.into_iter()
 			.map(|change| change.new_path)
+			.collect())
+	}
+
+	/// Return identities and modes without rendering patches.
+	/// A head without a base compares the empty tree with that revision.
+	pub fn diff_changes(&self, options: &DiffOptions) -> Result<Vec<DiffChange>> {
+		let repo = self.gix()?;
+		let changes = if options.base.is_none()
+			&& let Some(head) = options.head.as_deref()
+		{
+			let tree = revision_tree(&repo, head)?;
+			tree_changes(&repo, None, Some(&tree), &options.files)?
+		} else {
+			collect_changes(&repo, options)?
+		};
+		Ok(changes
+			.into_iter()
+			.map(|change| {
+				let previous_path = (change.old_path != change.new_path).then_some(change.old_path);
+				DiffChange {
+					path: change.new_path,
+					previous_path,
+					before_mode: change.old_mode.map(|mode| format!("{:06o}", mode.value())),
+					after_mode: change.new_mode.map(|mode| format!("{:06o}", mode.value())),
+					before_id: (!change.old_id.is_null()).then(|| change.old_id.to_string()),
+					after_id: (!change.new_id.is_null()).then(|| change.new_id.to_string()),
+				}
+			})
 			.collect())
 	}
 
@@ -1624,6 +1652,78 @@ mod tests {
 		git(dir.path(), &["add", "."]);
 		git(dir.path(), &["commit", "-qm", "initial"]);
 		dir
+	}
+
+	#[test]
+	fn diff_changes_reports_root_identities_without_rendering() {
+		let dir = fixture();
+		let repo = GitRepo::require(dir.path()).expect("repository");
+		let changes = repo
+			.diff_changes(&DiffOptions {
+				head: Some("HEAD".into()),
+				max_bytes: Some(1),
+				..DiffOptions::default()
+			})
+			.expect("identity discovery does not render a patch");
+		assert_eq!(changes.len(), 2);
+		let file = changes
+			.iter()
+			.find(|change| change.path == "file.txt")
+			.expect("root file");
+		assert_eq!(file.previous_path, None);
+		assert_eq!(file.before_mode, None);
+		assert_eq!(file.before_id, None);
+		assert_eq!(file.after_mode.as_deref(), Some("100644"));
+		assert_eq!(
+			file.after_id.as_deref(),
+			Some(git(dir.path(), &["rev-parse", "HEAD:file.txt"]).trim())
+		);
+	}
+
+	#[test]
+	fn diff_changes_preserves_rename_sides_modes_and_object_ids() {
+		let dir = fixture();
+		let base = git(dir.path(), &["rev-parse", "HEAD"]).trim().to_owned();
+		git(dir.path(), &["mv", "file.txt", "renamed.txt"]);
+		git(dir.path(), &["rm", "-q", "delete.txt"]);
+		fs::write(dir.path().join("added.txt"), "added\n").expect("write addition");
+		git(dir.path(), &["add", "added.txt"]);
+		git(dir.path(), &["update-index", "--chmod=+x", "added.txt"]);
+		let repo = GitRepo::require(dir.path()).expect("repository");
+		let options = DiffOptions { cached: true, max_bytes: Some(1), ..DiffOptions::default() };
+		let staged = repo.diff_changes(&options).expect("staged identities");
+		let renamed = staged
+			.iter()
+			.find(|change| change.path == "renamed.txt")
+			.expect("rename");
+		assert_eq!(renamed.previous_path.as_deref(), Some("file.txt"));
+		assert_eq!(renamed.before_mode.as_deref(), Some("100644"));
+		assert_eq!(renamed.after_mode.as_deref(), Some("100644"));
+		assert_eq!(renamed.before_id, renamed.after_id);
+		let added = staged
+			.iter()
+			.find(|change| change.path == "added.txt")
+			.expect("addition");
+		assert_eq!(added.before_mode, None);
+		assert_eq!(added.after_mode.as_deref(), Some("100755"));
+		assert!(added.after_id.is_some());
+		let deleted = staged
+			.iter()
+			.find(|change| change.path == "delete.txt")
+			.expect("deletion");
+		assert_eq!(deleted.before_mode.as_deref(), Some("100644"));
+		assert_eq!(deleted.after_mode, None);
+		assert_eq!(deleted.after_id, None);
+		git(dir.path(), &["commit", "-qm", "rename add delete"]);
+		let committed = repo
+			.diff_changes(&DiffOptions {
+				base: Some(base),
+				head: Some("HEAD".into()),
+				max_bytes: Some(1),
+				..DiffOptions::default()
+			})
+			.expect("historical identities");
+		assert_eq!(staged, committed);
 	}
 
 	#[test]

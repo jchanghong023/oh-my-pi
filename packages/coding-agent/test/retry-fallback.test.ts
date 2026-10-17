@@ -122,6 +122,35 @@ describe("retry fallback selector resolution", () => {
 		]);
 	});
 
+	it("drops upstream routing only when a wildcard crosses providers", () => {
+		const selector = "openrouter/google/gemini-3.5-flash@google-ai-studio/priority";
+		const context = createContext({
+			"openrouter/*": ["openrouter/*", "google-vertex/*", "openrouter/google/*"],
+		});
+		expect(findRetryFallbackCandidates(context, "openrouter/*", selector)).toEqual([
+			{
+				raw: "google-vertex/gemini-3.5-flash",
+				provider: "google-vertex",
+				id: "gemini-3.5-flash",
+				thinkingLevel: undefined,
+			},
+		]);
+	});
+
+	it("preserves route identity when selecting an exact model chain", () => {
+		const model = getBundledModel("openrouter", "google/gemini-3.5-flash");
+		const plain = "openrouter/google/gemini-3.5-flash:high";
+		const routed = "openrouter/google/gemini-3.5-flash@google-ai-studio/priority:high";
+		const context = createContext({
+			[routed]: ["google-vertex/*"],
+			[plain]: ["openai/gpt-4o-mini"],
+		});
+		expect(resolveRetryFallbackChainKey(context, routed, model)).toBe(routed);
+		expect(findRetryFallbackCandidates(context, routed, routed, model).map(candidate => candidate.raw)).toEqual([
+			"google-vertex/gemini-3.5-flash",
+		]);
+	});
+
 	it("carries per-entry thinking levels while bare entries inherit", () => {
 		const context = createContext({ default: ["openai/gpt-4o-mini:low", "google/gemini-3.5-flash"] });
 		const candidates = findRetryFallbackCandidates(context, "default", "openai/gpt-4o-mini");
@@ -217,6 +246,15 @@ describe("retry fallback selector resolution", () => {
 			[high]: ["openai/gpt-4o-mini:high"],
 		});
 		expect(resolveRetryFallbackChainKey(exactHigh, high, model)).toBe(high);
+
+		const exactMax = createContext({
+			[high]: ["openai/gpt-4o-mini:high"],
+			[max]: ["openai/gpt-4o-mini:max"],
+		});
+		expect(resolveRetryFallbackChainKey(exactMax, max, model)).toBe(max);
+		expect(findRetryFallbackCandidates(exactMax, max, max, model).map(candidate => candidate.raw)).toEqual([
+			"openai/gpt-4o-mini:max",
+		]);
 	});
 
 	it("uses the default chain when the live model matches no role primary (#12421)", () => {

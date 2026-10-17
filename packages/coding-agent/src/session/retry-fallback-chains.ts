@@ -2,7 +2,11 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { ModelRegistry } from "../config/model-registry";
 import { cfgModelRoles } from "../config/model-settings";
-import { formatModelSelectorValue, parseModelString } from "@oh-my-pi/pi-tui/overlays/model-selector";
+import {
+	formatModelSelectorValue,
+	parseModelString,
+	splitUpstreamRouting,
+} from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { formatModelString, formatModelStringWithRouting } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
 import {
@@ -543,21 +547,28 @@ function parseRetryFallbackChainEntry(
 	const { provider, idPrefix } = parseRetryFallbackWildcard(entry, candidate =>
 		context.modelLookup.hasProvider(candidate),
 	);
-	const bareId = current.id.slice(current.id.lastIndexOf("/") + 1);
+	// Routing belongs to the source provider, not the model ID copied to a
+	// different provider. Literal catalog IDs containing @ still take priority.
+	const routing = context.modelLookup.find(current.provider, current.id)
+		? undefined
+		: splitUpstreamRouting(current.id);
+	const currentId = routing?.base ?? current.id;
+	const bareId = currentId.slice(currentId.lastIndexOf("/") + 1);
 	let id: string;
 	if (idPrefix !== undefined) {
 		id = `${idPrefix}/${bareId}`;
 	} else if (
-		bareId !== current.id &&
-		!context.modelLookup.find(provider, current.id) &&
+		bareId !== currentId &&
+		!context.modelLookup.find(provider, currentId) &&
 		context.modelLookup.find(provider, bareId)
 	) {
 		// Aggregator → direct: the failing id carries a vendor prefix the
 		// target provider does not use (openrouter/google/x → google-vertex/x).
 		id = bareId;
 	} else {
-		id = current.id;
+		id = currentId;
 	}
+	if (routing && provider === current.provider) id = `${id}@${routing.upstream}`;
 	return { raw: `${provider}/${id}`, provider, id, thinkingLevel: undefined };
 }
 

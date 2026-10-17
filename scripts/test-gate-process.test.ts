@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import { ownGateProcess } from "./test-gate-process";
 
@@ -295,3 +296,64 @@ it.skipIf(process.platform !== "linux")("rejects a queued start after abort with
 		await emergencyCleanup(child, prefix);
 	}
 });
+
+it.each(["pidfd_open", "pidfd_send_signal"])(
+	"refuses supervisor readiness when %s is unavailable",
+	async unavailable => {
+		const trace = path.join(directory, `${unavailable}.jsonl`);
+		const source = `
+import { mock } from "bun:test";
+import * as ffi from "bun:ffi";
+import { appendFileSync } from "node:fs";
+Object.defineProperty(process, "platform", { value: "linux" });
+mock.module("bun:ffi", () => ({
+  ...ffi,
+  dlopen() {
+    return { symbols: {
+      syscall(number, first, signal) {
+        const target = number === 434 && first === process.pid ? "self" : first;
+        appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ number, target, signal }) + "\\n");
+        if (number === 434) return ${unavailable === "pidfd_open" ? -1 : 73};
+        if (number === 424) return -1;
+        throw new Error("Unexpected syscall " + number);
+      },
+      close(fd) { appendFileSync(${JSON.stringify(trace)}, JSON.stringify({ close: fd }) + "\\n"); return 0; },
+      prctl() { return 0; },
+      waitpid() { return 0; },
+    }, close() {} };
+  },
+}));
+// Install the unavailable-kernel FFI boundary before evaluating the real supervisor.
+await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-supervisor.ts")).href)});
+`;
+		let ready = false;
+		const child = Bun.spawn([process.execPath, "--eval", source], {
+			stdout: "pipe",
+			stderr: "pipe",
+			ipc(message: unknown) {
+				if (message && typeof message === "object" && "ready" in message && message.ready === true) ready = true;
+			},
+		});
+		const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		try {
+			expect(await within(child.exited)).not.toBe(0);
+			const [, stderr] = await output;
+			expect(stderr).toContain("Safe Linux gate ownership requires pidfd_open and pidfd_send_signal");
+			expect(stderr).toContain(`${unavailable} failed`);
+			expect(ready).toBe(false);
+			const calls = (await fs.readFile(trace, "utf8"))
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			expect(calls).toEqual(
+				unavailable === "pidfd_open"
+					? [{ number: 434, target: "self", signal: 0 }]
+					: [{ number: 434, target: "self", signal: 0 }, { number: 424, target: 73, signal: 0 }, { close: 73 }],
+			);
+		} finally {
+			if (child.exitCode === null) child.kill();
+			await child.exited;
+			await output;
+		}
+	},
+);

@@ -221,6 +221,46 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 		`);
 	});
 
+	it("rejects internal directory symlinks before resolving or probing an external transcript", () => {
+		probe(`
+			const manager = SessionManager.create(project, custom);
+			await manager.ensureOnDisk();
+			const original = manager.getSessionFile();
+			const externalFile = path.join(otherCustom, path.basename(original));
+			const externalBody = writeOldSession(externalFile);
+			const linked = path.join(state.runtimeRoot, "restored-session-dir");
+			fs.symlinkSync(otherCustom, linked);
+			const probes = ["readFileSync", "openSync", "statSync", "lstatSync",
+				"readdirSync", "existsSync", "realpathSync"]
+				.map(method => ({ method, spy: spyOn(fs, method) }));
+			const fileProbe = spyOn(Bun, "file");
+			try {
+				assert.throws(() => resolveSessionDirectory(linked, storage), OfflineSessionPathError);
+				assert.throws(() => SessionManager.create(project, linked), OfflineSessionPathError);
+				await assert.rejects(manager.moveTo(otherProject, linked), OfflineSessionPathError);
+				for (const { method, spy } of probes) {
+					for (const [target] of spy.mock.calls) {
+						if (typeof target !== "string") continue;
+						assert.ok(target !== otherCustom && !target.startsWith(otherCustom + path.sep), method + ": " + target);
+						if (method === "lstatSync" && target === linked) continue;
+						assert.ok(target !== linked && !target.startsWith(linked + path.sep), method + ": " + target);
+					}
+				}
+				for (const [target] of fileProbe.mock.calls) {
+					if (typeof target !== "string") continue;
+					assert.ok(target !== otherCustom && !target.startsWith(otherCustom + path.sep), target);
+					assert.ok(target !== linked && !target.startsWith(linked + path.sep), target);
+				}
+			} finally {
+				fileProbe.mockRestore();
+				for (const { spy } of probes) spy.mockRestore();
+			}
+			assert.equal(manager.getSessionFile(), original);
+			assert.equal(fs.readFileSync(externalFile, "utf8"), externalBody);
+			await manager.close();
+		`);
+	});
+
 	it("checks raw symlink traversal before dot-dot normalization or filesystem access", () => {
 		probe(`
 			const externalRoot = path.join(fixture, "external-data");

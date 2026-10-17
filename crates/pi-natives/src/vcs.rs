@@ -161,6 +161,16 @@ pub struct VcsNumstatEntry {
 	pub added:   Option<u32>,
 	pub removed: Option<u32>,
 }
+/// Changed identities and modes without rendered blob contents.
+#[napi(object)]
+pub struct VcsDiffChange {
+	pub path:          String,
+	pub previous_path: Option<String>,
+	pub before_mode:   Option<String>,
+	pub after_mode:    Option<String>,
+	pub before_id:     Option<String>,
+	pub after_id:      Option<String>,
+}
 /// Bounded object contents.
 #[napi(object)]
 pub struct VcsShowResult {
@@ -320,6 +330,18 @@ impl From<core::CommitDetails> for VcsCommitDetails {
 impl From<core::NumstatEntry> for VcsNumstatEntry {
 	fn from(v: core::NumstatEntry) -> Self {
 		Self { path: v.path, added: v.added, removed: v.removed }
+	}
+}
+impl From<core::DiffChange> for VcsDiffChange {
+	fn from(v: core::DiffChange) -> Self {
+		Self {
+			path:          v.path,
+			previous_path: v.previous_path,
+			before_mode:   v.before_mode,
+			after_mode:    v.after_mode,
+			before_id:     v.before_id,
+			after_id:      v.after_id,
+		}
 	}
 }
 impl From<core::ShowResult> for VcsShowResult {
@@ -1080,6 +1102,21 @@ impl VcsGitRepo {
 	) -> Promise<Vec<String>> {
 		let options = options.into();
 		blocking("vcs.changedFiles", self.inner.clone(), signal, move |r| r.changed_files(&options))
+	}
+
+	/// Changed identities and modes; a head without a base compares against the
+	/// empty tree.
+	#[napi]
+	pub fn diff_changes(
+		&self,
+		options: VcsDiffOptions,
+		signal: Option<Unknown>,
+	) -> Promise<Vec<VcsDiffChange>> {
+		let options = options.into();
+		blocking("vcs.diffChanges", self.inner.clone(), signal, move |r| {
+			r.diff_changes(&options)
+				.map(|v| v.into_iter().map(Into::into).collect())
+		})
 	}
 
 	/// Per-file line counts.

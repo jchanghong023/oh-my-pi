@@ -197,13 +197,22 @@ pub(super) fn scan(
 	let mut scanner = SectionContextScanner::default();
 	while let Some(row) = rows.next()? {
 		check()?;
-		let section = ContextSection {
+		let mut section = ContextSection {
 			section_id:   row.get(0)?,
 			document_id:  row.get(1)?,
 			byte_start:   row.get(2)?,
 			byte_end:     row.get(3)?,
 			raw_markdown: row.get(4)?,
 		};
+		// Legacy writers projected away the document-leading UTF-8 BOM but
+		// kept its byte range. Restore only that first-section three-byte
+		// deficit; all other range mismatches still fail in Lines::append.
+		if section.byte_start == 0
+			&& section.byte_end == section.raw_markdown.len() as i64 + 3
+			&& !section.raw_markdown.starts_with('\u{feff}')
+		{
+			section.raw_markdown.insert(0, '\u{feff}');
+		}
 		// Converter-only headings are intentionally absent from both new and
 		// existing indexes. Finish each stored run independently: omitted bytes
 		// are neither evidence nor a bridge between original lines.

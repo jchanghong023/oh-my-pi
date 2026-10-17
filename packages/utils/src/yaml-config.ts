@@ -77,6 +77,19 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 		}
 		doc.deleteIn(resolvedKeys);
 	} else {
+		// Null means unset: promote it to a mapping while retaining its comments.
+		// Aliases were detached above so they keep the previous null value, not the new map.
+		for (let length = 0; length < resolvedKeys.length; length++) {
+			const path = resolvedKeys.slice(0, length);
+			const ancestor = doc.getIn(path, true);
+			if (isScalar(ancestor) && ancestor.value === null) {
+				const mapping = doc.createNode({});
+				mapping.commentBefore = ancestor.commentBefore;
+				mapping.comment = ancestor.comment;
+				mapping.spaceBefore = ancestor.spaceBefore;
+				doc.setIn(path, mapping);
+			}
+		}
 		const replacement = doc.createNode(value);
 		if (comments.length > 0) replacement.commentBefore = comments.join("\n");
 		if (isNode(existing)) replacement.spaceBefore = existing.spaceBefore;

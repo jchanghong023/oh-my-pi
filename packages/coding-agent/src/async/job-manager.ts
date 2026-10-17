@@ -234,6 +234,8 @@ export interface AsyncJobRegisterOptions {
 	queued?: boolean;
 	/** Register the job as backing a foreground call; see {@link AsyncJob.foreground}. */
 	foreground?: boolean;
+	/** Suppress automatic delivery on success and failure without consuming the retained result. */
+	suppressDelivery?: boolean;
 	/** The process the job runs; see {@link AsyncJob.process}. */
 	process?: AsyncJobProcess;
 }
@@ -364,7 +366,7 @@ export class AsyncJobManager {
 		}
 
 		const id = this.#claimJobId(options?.id);
-		if (options?.foreground) this.#suppressedDeliveries.add(id);
+		if (options?.foreground || options?.suppressDelivery) this.#suppressedDeliveries.add(id);
 		const abortController = new AbortController();
 		const startTime = Date.now();
 

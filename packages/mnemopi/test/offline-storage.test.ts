@@ -327,6 +327,143 @@ describe("isolated memory storage routing", () => {
 		},
 	);
 
+	it.skipIf(process.platform !== "linux")(
+		"rejects linked bank roots and operation paths before filesystem access",
+		() => {
+			runIsolated(
+				"true",
+				`const { getOfflineShmState } = await import(modules.offline);
+			const state = getOfflineShmState();
+			assert.ok(state);
+			try {
+				const config = await import(modules.config);
+				const { BankManager } = await import(modules.banks);
+				for (const scope of ["default", "host"]) {
+					const dataDir = scope === "default" ? config.dataDir() : path.join(state.runtimeRoot, "host", "bank-data");
+					const manager = new BankManager(dataDir);
+					const external = path.join(root, "external-banks-" + scope);
+					const victim = path.join(external, "victim");
+					fs.mkdirSync(victim, { recursive: true });
+					const sentinel = path.join(victim, "sentinel");
+					fs.writeFileSync(sentinel, "untouched");
+					fs.rmdirSync(manager.banksDir);
+					fs.symlinkSync(external, manager.banksDir);
+					assert.throws(() => new BankManager(dataDir), /symbolic links are not allowed/);
+					assert.throws(() => manager.createBank("created"), /symbolic links are not allowed/);
+					assert.throws(() => manager.deleteBank("victim"), /symbolic links are not allowed/);
+					assert.throws(() => manager.renameBank("victim", "renamed"), /symbolic links are not allowed/);
+					assert.deepEqual(fs.readdirSync(external), ["victim"]);
+					assert.equal(fs.readFileSync(sentinel, "utf8"), "untouched");
+					fs.unlinkSync(manager.banksDir);
+					fs.mkdirSync(manager.banksDir);
+					fs.symlinkSync(victim, path.join(manager.banksDir, "victim"));
+					const source = manager.createBank("source");
+					assert.equal(source, path.join(dataDir, "banks", "source", "mnemopi.db"));
+					assert.throws(() => manager.createBank("victim"), /symbolic links are not allowed/);
+					assert.throws(() => manager.deleteBank("victim"), /symbolic links are not allowed/);
+					assert.throws(() => manager.renameBank("victim", "renamed"), /symbolic links are not allowed/);
+					assert.throws(() => manager.renameBank("source", "victim"), /symbolic links are not allowed/);
+					fs.symlinkSync(path.join(external, "missing"), path.join(manager.banksDir, "dangling"));
+					assert.throws(() => manager.createBank("dangling"), /symbolic links are not allowed/);
+					assert.throws(() => manager.renameBank("source", "dangling"), /symbolic links are not allowed/);
+					assert.equal(fs.existsSync(source), true);
+					assert.deepEqual(fs.readdirSync(external), ["victim"]);
+					assert.equal(fs.readFileSync(sentinel, "utf8"), "untouched");
+				}
+			} finally {
+				fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+			}`,
+			);
+		},
+	);
+
+	it.skipIf(process.platform !== "linux")("rejects linked blob shards and existing or dangling blob leaves", () => {
+		runIsolated(
+			"true",
+			`const { getOfflineShmState } = await import(modules.offline);
+			const state = getOfflineShmState();
+			assert.ok(state);
+			try {
+				const blobs = await import(modules.blobs);
+				const bytes = Buffer.from("blob symlink regression");
+				const hash = blobs.computeSha256(bytes);
+				const blobRoot = blobs.blobRoot();
+				for (const kind of ["shard", "leaf", "dangling"]) {
+					const external = path.join(root, "external-blob-" + kind);
+					fs.mkdirSync(external);
+					const sentinel = path.join(external, "sentinel");
+					fs.writeFileSync(sentinel, "untouched");
+					const blobPath = path.join(blobRoot, hash.slice(0, 2), hash.slice(0, 4), hash);
+					const link = kind === "shard" ? path.join(blobRoot, hash.slice(0, 2)) : blobPath;
+					fs.mkdirSync(path.dirname(link), { recursive: true });
+					fs.symlinkSync(kind === "shard" ? external : kind === "leaf" ? sentinel : path.join(external, "missing"), link);
+					assert.throws(() => blobs.storeBlob(bytes), /symbolic links are not allowed/);
+					assert.deepEqual(fs.readdirSync(external), ["sentinel"]);
+					assert.equal(fs.readFileSync(sentinel, "utf8"), "untouched");
+					fs.rmSync(blobRoot, { recursive: true, force: true });
+				}
+				assert.equal(blobs.storeBlob(bytes), hash);
+				assert.deepEqual(fs.readFileSync(path.join(blobRoot, hash.slice(0, 2), hash.slice(0, 4), hash)), bytes);
+			} finally {
+				fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+			}`,
+		);
+	});
+
+	it.skipIf(process.platform !== "linux")(
+		"rejects linked checkpoint files and peer paths escaping the runtime",
+		() => {
+			runIsolated(
+				"true",
+				`const { getOfflineShmState } = await import(modules.offline);
+			const state = getOfflineShmState();
+			assert.ok(state);
+			const { openDatabase } = await import(modules.db);
+			const { DeltaSync, SyncCheckpoint } = await import(modules.streaming);
+			const db = openDatabase(":memory:");
+			try {
+				const sync = new DeltaSync({ db });
+				const external = path.join(root, "external-checkpoint");
+				const original = new SyncCheckpoint({ peerId: "peer", lastRowid: 99 }).toJson();
+				fs.writeFileSync(external, original);
+				const checkpoint = new SyncCheckpoint({ peerId: "peer", lastRowid: 7 });
+				for (const suffix of [".working_memory.json", ".episodic_memory.json", ".json"]) {
+					for (const dangling of [false, true]) {
+						const target = dangling ? external + "-missing" : external;
+						const link = path.join(sync.checkpointDir, "peer" + suffix);
+						fs.symlinkSync(target, link);
+						const table = suffix === ".episodic_memory.json" ? "episodic_memory" : "working_memory";
+						assert.throws(() => sync.getCheckpoint("peer", table), /symbolic links are not allowed/);
+						if (suffix !== ".json") {
+							assert.throws(() => sync.saveCheckpoint(checkpoint, table), /symbolic links are not allowed/);
+						}
+						assert.equal(fs.readFileSync(external, "utf8"), original);
+						assert.equal(fs.existsSync(external + "-missing"), false);
+						fs.unlinkSync(link);
+					}
+				}
+				const externalDir = path.join(root, "external-checkpoints");
+				fs.mkdirSync(externalDir);
+				fs.symlinkSync(externalDir, path.join(sync.checkpointDir, "linked"));
+				assert.throws(() => sync.getCheckpoint("linked/peer"), /symbolic links are not allowed/);
+				assert.throws(() => sync.saveCheckpoint(new SyncCheckpoint({ peerId: "linked/peer" })),
+					/symbolic links are not allowed/);
+				assert.deepEqual(fs.readdirSync(externalDir), []);
+				const escapingPeer = path.relative(sync.checkpointDir, path.join(root, "escaped-peer"));
+				assert.throws(() => sync.getCheckpoint(escapingPeer), /must remain inside the runtime root/);
+				assert.throws(() => sync.saveCheckpoint(new SyncCheckpoint({ peerId: escapingPeer })),
+					/must remain inside the runtime root/);
+				assert.equal(fs.existsSync(path.join(root, "escaped-peer.working_memory.json")), false);
+				sync.saveCheckpoint(checkpoint);
+				assert.equal(sync.getCheckpoint("peer").lastRowid, 7);
+			} finally {
+				db.close();
+				fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+			}`,
+			);
+		},
+	);
+
 	it.skipIf(process.platform !== "linux")("validates the runtime selected by a supplied environment", () => {
 		runIsolated(
 			"true",

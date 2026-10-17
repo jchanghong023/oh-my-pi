@@ -5,7 +5,8 @@
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { resolveTeamParticipants } from "@oh-my-pi/pi-coding-agent/team";
+import { formatModelStringWithRouting, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { resolveTeamParticipants, runTeamDiscussion } from "@oh-my-pi/pi-coding-agent/team";
 
 function fakeModel(provider: string, id: string): Model<"anthropic-messages"> {
 	return buildModel({
@@ -77,6 +78,128 @@ describe("team member resolution", () => {
 			).toBe(true);
 			expect(new Set(result.participants).size).toBe(3);
 		}
+	});
+
+	it.each([{ configuredMembers: [] }, { configuredMembers: ["openrouter/example/model"] }])(
+		"preserves upstream pins in executable member selectors for roster %j",
+		({ configuredMembers }) => {
+			const base: Model = {
+				...fakeModel("openrouter", "example/model"),
+				baseUrl: "https://openrouter.ai/api/v1",
+			};
+			const pinned: Model = {
+				...base,
+				compat: { ...base.compat, openRouterRouting: { only: ["cerebras"] } } as Model["compat"],
+			};
+			const result = resolveTeamParticipants({
+				configuredMembers,
+				sessionModel: pinned,
+				availableModels: configuredMembers.length > 0 ? [pinned] : [base],
+			});
+			expect(result.ok).toBe(true);
+			if (result.ok) {
+				expect(result.participants.map(participant => participant.modelPattern)).toEqual([
+					"openrouter/example/model@cerebras",
+					"openrouter/example/model@cerebras",
+					"openrouter/example/model@cerebras",
+				]);
+				// Availability/session identity ignores routing; execution does not.
+				expect(result.participants.every(participant => participant.isSessionModel)).toBe(true);
+			}
+		},
+	);
+
+	it("round-trips gateway cache configuration through participant, alignment, and synthesis execution", async () => {
+		const routing = {
+			only: ["anthropic"],
+			order: ["anthropic", "bedrock"],
+			caching: "auto" as const,
+			cacheAnchorItems: 1,
+			cacheTtl: "1h" as const,
+		};
+		const sessionModel = buildModel({
+			id: "anthropic/claude-sonnet-4-5",
+			name: "Gateway Sonnet",
+			api: "openai-responses",
+			provider: "vercel-ai-gateway",
+			baseUrl: "https://ai-gateway.vercel.sh/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 100_000,
+			maxTokens: 8_192,
+			compat: { supportsDeveloperRole: false, vercelGatewayRouting: routing },
+		});
+		const availableModels = [sessionModel];
+		const members = resolveTeamParticipants({
+			configuredMembers: [],
+			sessionModel,
+			availableModels,
+		});
+		expect(members.ok).toBe(true);
+		if (!members.ok) throw new Error(members.error);
+		const registry = { getAvailable: () => availableModels } as Parameters<typeof resolveModelOverride>[1];
+		const roles: string[] = [];
+		const result = await runTeamDiscussion({
+			question: "依据现有资料判断是否能形成可行方案。",
+			cwd: ".",
+			participants: members.participants,
+			sessionModelPattern: formatModelStringWithRouting(sessionModel),
+			signal: new AbortController().signal,
+			maxConcurrency: 3,
+			runner: async call => {
+				const resolved = resolveModelOverride([call.modelPattern], registry);
+				expect(resolved.warning).toBeUndefined();
+				expect(resolved.model?.provider).toBe(sessionModel.provider);
+				expect(resolved.model?.id).toBe(sessionModel.id);
+				const executionModel = resolved.model as Model<"openai-responses">;
+				expect(executionModel.compat.vercelGatewayRouting).toEqual(routing);
+				expect(executionModel.compat.supportsDeveloperRole).toBe(false);
+				roles.push(call.role);
+				if (call.role === "proposer") {
+					return {
+						ok: true,
+						data: {
+							proposal: "缺少关键资料，无法形成可行方案。",
+							noViableProposal: true,
+							keyAssumptions: [],
+							risks: [],
+							unknowns: ["缺少接口规范"],
+							acceptanceCriteria: [],
+							ambiguityInterpretations: [],
+							evidence: [],
+						},
+					};
+				}
+				if (call.role === "aligner") {
+					return {
+						ok: true,
+						data: {
+							unifiedUnderstanding: "需先取得接口规范。",
+							acceptanceCriteria: [],
+							factDifferences: [],
+							interpretationDifferences: [],
+						},
+					};
+				}
+				if (call.role === "synthesizer") {
+					return {
+						ok: true,
+						data: {
+							reportMarkdown: "## 分析结论\n缺少接口规范，无法形成可行方案。",
+							recommendedProposal: "",
+							recommendationReason: "",
+							recommendationPreconditions: "",
+							hardConstraintViolations: [],
+						},
+					};
+				}
+				throw new Error(`Unexpected role: ${call.role}`);
+			},
+		});
+		expect(result.status).toBe("completed");
+		expect(roles).toEqual(["proposer", "proposer", "proposer", "aligner", "synthesizer"]);
+		expect(sessionModel.compat.vercelGatewayRouting).toEqual(routing);
 	});
 
 	it("preserves explicit duplicate entries and their order without appending the session model", () => {

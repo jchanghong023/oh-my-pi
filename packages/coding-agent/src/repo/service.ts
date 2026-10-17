@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { realpathSync, rmSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync } from "node:fs";
 import * as path from "node:path";
 import { setImmediate as yieldToLoop } from "node:timers/promises";
 import { pythonSymbols } from "@oh-my-pi/pi-natives";
@@ -332,12 +332,68 @@ export class RepoService {
 		};
 	}
 
+	/** Keep notifications on disk's spelling; deleted files retain their indexed identity. */
+	#mutationPath(rel: string): string {
+		// Bun's POSIX realpath aliases literal backslashes to separators.
+		if (process.platform !== "win32" && rel.includes("\\")) return rel;
+		const absolute = path.join(this.root, rel);
+		let ancestor = absolute;
+		for (;;) {
+			let canonical: string;
+			try {
+				canonical = realpathSync(ancestor);
+			} catch {
+				// Missing ancestors are common for directory deletions. Never
+				// broaden the search beyond the repository's existing root.
+				if (ancestor === this.root) return rel;
+				ancestor = path.dirname(ancestor);
+				continue;
+			}
+			if (ancestor === absolute) {
+				const resolved = relativePath(this.root, canonical);
+				// Do not turn a symlink notification into a notification for its target.
+				return resolved?.toLowerCase() === rel.toLowerCase() ? resolved : rel;
+			}
+			// A missing leaf cannot be realpathed. Verify case folding on its
+			// nearest surviving ancestor before consulting indexed spellings.
+			const name = path.basename(canonical);
+			const alternate = name.replace(/[a-zA-Z]/, char =>
+				char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
+			);
+			if (alternate === name) return rel;
+			try {
+				if (realpathSync(path.join(path.dirname(canonical), alternate)) !== canonical) return rel;
+			} catch {
+				return rel;
+			}
+			const generation = this.storage.state().generation;
+			if (!generation) return rel;
+			const indexed = this.storage.db
+				.query(
+					"SELECT path FROM files WHERE generation=? AND path=? COLLATE NOCASE ORDER BY path=? DESC,path LIMIT 2",
+				)
+				.all(generation, rel, rel) as Array<{ path: string }>;
+			// An ancestor symlink can pass the case-folding probe on POSIX.
+			// Never replace an exact indexed identity or guess between siblings.
+			if (indexed[0]?.path === rel || indexed.length !== 1) return rel;
+			const candidate = indexed[0]!.path;
+			try {
+				lstatSync(path.join(this.root, candidate));
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === "ENOENT" || code === "ENOTDIR") return candidate;
+			}
+			// Missing-leaf hints must not redirect to an existing distinct file.
+			return rel;
+		}
+	}
+
 	markChanged(paths: string[]): void {
 		this.#ensureOpen();
 		const accepted = new Set<string>();
 		for (const pathname of paths) {
 			const rel = relativePath(this.root, path.isAbsolute(pathname) ? pathname : path.join(this.root, pathname));
-			if (rel) accepted.add(rel);
+			if (rel) accepted.add(this.#mutationPath(rel));
 		}
 		this.storage.markChanged([...accepted]);
 		logger.info("Repository change hints recorded", {
@@ -828,6 +884,7 @@ export class RepoService {
 							staged = new RepoService({
 								agentDir: stageDir,
 								cwd: this.root,
+								root: this.root,
 								excludeIndexPath: this.storage.path,
 							});
 							if (staged.storage.recoveryError) throw staged.storage.recoveryError;

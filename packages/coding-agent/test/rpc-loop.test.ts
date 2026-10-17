@@ -4,6 +4,7 @@ import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import * as conditions from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
 import { RpcGoalController, type RpcGoalSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
 import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
+import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-settle";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 const agentEnd = { type: "agent_end", isTerminal: true, messages: [] } satisfies AgentSessionEvent;
@@ -17,7 +18,11 @@ describe("RPC loop continuation", () => {
 		vi.useRealTimers();
 	});
 
-	function fixture(mode: "prompt" | "compact" | "reset" = "prompt", onDropped?: () => void) {
+	function fixture(
+		mode: "prompt" | "compact" | "reset" = "prompt",
+		onDropped?: () => void,
+		submit?: (text: string, current: () => boolean) => Promise<void>,
+	) {
 		const actions: string[] = [];
 		const output: string[] = [];
 		const transcript = { id: "session-a" };
@@ -30,6 +35,7 @@ describe("RPC loop continuation", () => {
 			hasPostPromptWork: false,
 			hasAdmittedSubmission: false,
 			queuedMessageCount: 0,
+			hasPendingAsyncWork: () => false,
 			isSessionTransitioning: false,
 			waitForIdle: async () => {},
 			getVibeModeState: () => undefined,
@@ -41,9 +47,11 @@ describe("RPC loop continuation", () => {
 		let continuationAllowed = true;
 		const controller = new RpcLoopController(session as unknown as AgentSession, {
 			output: text => output.push(text),
-			submit: async text => {
-				actions.push(`submit:${transcript.id}:${text}`);
-			},
+			submit:
+				submit ??
+				(async text => {
+					actions.push(`submit:${transcript.id}:${text}`);
+				}),
 			reset: async () => {
 				actions.push("reset");
 				transcript.id = "session-b";
@@ -99,6 +107,60 @@ describe("RPC loop continuation", () => {
 		expect(f.controller.enabled).toBe(false);
 		expect(f.controller.continuationPending).toBe(false);
 		expect(f.output.at(-1)).toBe("Loop limit reached. Loop mode disabled.");
+	});
+
+	for (const cancel of [false, true]) {
+		test(`gate-queued loop input stays unsettled until ${cancel ? "cancellation" : "submission completes"}`, async () => {
+			vi.useFakeTimers();
+			const gate = Promise.withResolvers<void>();
+			const submissions: string[] = [];
+			const f = fixture("prompt", undefined, async (text, current) => {
+				await gate.promise;
+				if (current()) submissions.push(text);
+			});
+			await f.controller.handle("3 1s repeat");
+			f.controller.capturePrompt("repeat");
+			f.controller.observe(agentEnd);
+			await advance(1000);
+			expect(f.controller.continuationPending).toBe(true);
+			expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(false);
+			expect(submissions).toEqual([]);
+			if (cancel) {
+				f.controller.pause();
+				expect(f.controller.continuationPending).toBe(false);
+				expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
+			}
+			gate.resolve();
+			await advance(0);
+			expect(submissions).toEqual(cancel ? [] : ["repeat"]);
+			expect(f.controller.continuationPending).toBe(false);
+			expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
+		});
+	}
+
+	test("an inline admitted turn schedules its successor before its submit promise returns", async () => {
+		vi.useFakeTimers();
+		const release = Promise.withResolvers<void>();
+		const submissions: string[] = [];
+		const f = fixture("prompt", undefined, async text => {
+			submissions.push(text);
+			if (submissions.length === 1) {
+				f.controller.observe(agentEnd);
+				await release.promise;
+			}
+		});
+		await f.controller.handle("3 1s repeat");
+		f.controller.capturePrompt("repeat");
+		f.controller.observe(agentEnd);
+		await advance(1000);
+		expect(submissions).toEqual(["repeat"]);
+		expect(f.controller.continuationPending).toBe(true);
+		release.resolve();
+		await advance(0);
+		expect(f.controller.continuationPending).toBe(true);
+		await advance(1000);
+		expect(submissions).toEqual(["repeat", "repeat"]);
+		expect(f.controller.continuationPending).toBe(false);
 	});
 
 	test("a positional count of one includes the first manual prompt and never evaluates a repeat condition", async () => {

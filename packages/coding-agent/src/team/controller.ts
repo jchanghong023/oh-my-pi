@@ -10,7 +10,7 @@
  */
 import { logger } from "@oh-my-pi/pi-utils";
 import { AsyncJobError, type AsyncJobRunResult } from "../async";
-import { filterAvailableModelsByEnabledPatterns } from "../config/model-resolver";
+import { filterAvailableModelsByEnabledPatterns, formatModelStringWithRouting } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { Settings } from "../config/settings";
@@ -319,7 +319,7 @@ async function startTeamDiscussionImpl(
 	}
 
 	const cwd = args.cwd;
-	const sessionModelPattern = `${sessionModel.provider}/${sessionModel.id}`;
+	const sessionModelPattern = formatModelStringWithRouting(sessionModel);
 	const label = `/team ${previewQuestion(question)}`;
 
 	let jobId: string;
@@ -462,6 +462,20 @@ async function startTeamDiscussionImpl(
 							elapsed_ms: performance.now() - started,
 							...logger.diagnosticError(error),
 						});
+						if (!signal.aborted && !deliveryCompleted) {
+							const reason = error instanceof Error ? error.message : String(error);
+							const message = `/team 任务 ${owningJobId} 失败，结果仍可经 proc://${owningJobId} 恢复：${reason}`;
+							await emitOutput(message);
+							try {
+								hooks.showError?.(message);
+							} catch (uiError) {
+								logger.warn("Team error hook failed", {
+									component: "team.controller",
+									event: "team_error_hook_failed",
+									...logger.diagnosticError(uiError),
+								});
+							}
+						}
 						if (jobResult && !(error instanceof AsyncJobError)) {
 							throw new AsyncJobError(
 								`${error instanceof Error ? error.message : String(error)}\n${jobResult.text}`,
@@ -471,7 +485,7 @@ async function startTeamDiscussionImpl(
 						throw error;
 					}
 				}),
-			{ ownerId: MAIN_AGENT_ID },
+			{ ownerId: MAIN_AGENT_ID, suppressDelivery: true },
 		);
 	} catch (error) {
 		logger.warn("Team job registration failed", {

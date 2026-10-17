@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { acquireFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import { FileLock, wikiImportLeasePath } from "@oh-my-pi/pi-natives";
 import { runDocsCommand } from "../src/cli/docs-cli";
 import { DocsService } from "../src/docs/service";
 
@@ -172,10 +172,11 @@ describe("runDocsCommand", () => {
 			await seed.close();
 		}
 		await fs.writeFile(path.join(cwd, "guide.md"), "# Replacement\nUncommitted replacement evidence\n");
-		const lease = await acquireFileLock(path.join(agentDir, "docs.db"));
+		const lease = FileLock.tryAcquire(wikiImportLeasePath(path.join(agentDir, "docs.db")));
 		const blocked = new DocsService({ agentDir, cwd });
 		let timer: NodeJS.Timeout | undefined;
 		try {
+			expect(lease.acquired).toBe(true);
 			await blocked.list();
 			const controller = new AbortController();
 			// Exercise real subprocess cancellation while an OS-backed import lease is held.

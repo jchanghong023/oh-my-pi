@@ -74,6 +74,10 @@ interface AstEditAggregatedResult {
 	missingGrammars?: string[];
 }
 
+function resolveAstEditResultPath(basePath: string, isDirectory: boolean, resultPath: string): string {
+	return isDirectory ? resolveSearchResultPath(basePath, resultPath) : basePath;
+}
+
 async function runNativeAstEdit(
 	options: AstEditCallOptions & { path: string; glob?: string },
 	targetIndex?: number,
@@ -126,7 +130,7 @@ async function runNativeAstEdit(
 }
 
 async function runAstEditTargets(
-	targets: Array<{ basePath: string; glob?: string }>,
+	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }>,
 	commonBasePath: string,
 	options: AstEditCallOptions,
 ): Promise<AstEditAggregatedResult> {
@@ -155,7 +159,9 @@ async function runAstEditTargets(
 		);
 		if (targetResult.applied && targetResult.fileChanges.length) {
 			invalidateFsScanAfterWrites(
-				targetResult.fileChanges.map(change => resolveSearchResultPath(target.basePath, change.path)),
+				targetResult.fileChanges.map(change =>
+					resolveAstEditResultPath(target.basePath, target.isDirectory, change.path),
+				),
 			);
 		}
 		totalReplacements += targetResult.totalReplacements;
@@ -165,11 +171,11 @@ async function runAstEditTargets(
 		if (targetResult.parseErrors) parseErrors.push(...targetResult.parseErrors);
 		for (const language of targetResult.missingGrammars ?? []) missingGrammars.add(language);
 		for (const change of targetResult.changes) {
-			const absolute = resolveSearchResultPath(target.basePath, change.path);
+			const absolute = resolveAstEditResultPath(target.basePath, target.isDirectory, change.path);
 			aggregatedChanges.push({ ...change, path: relativeSearchResultPath(commonBasePath, absolute) });
 		}
 		for (const fileChange of targetResult.fileChanges) {
-			const absolute = resolveSearchResultPath(target.basePath, fileChange.path);
+			const absolute = resolveAstEditResultPath(target.basePath, target.isDirectory, fileChange.path);
 			const rebased = relativeSearchResultPath(commonBasePath, absolute);
 			fileCounts.set(rebased, (fileCounts.get(rebased) ?? 0) + fileChange.count);
 		}
@@ -192,8 +198,9 @@ async function runAstEditTargets(
 }
 
 function runAstEditOnce(
-	targets: Array<{ basePath: string; glob?: string }> | undefined,
+	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }> | undefined,
 	resolvedSearchPath: string,
+	isDirectory: boolean,
 	globFilter: string | undefined,
 	options: AstEditCallOptions,
 ): Promise<AstEditAggregatedResult> {
@@ -212,7 +219,7 @@ function runAstEditOnce(
 	}).then(result => {
 		if (result.applied && result.fileChanges.length) {
 			invalidateFsScanAfterWrites(
-				result.fileChanges.map(change => resolveSearchResultPath(resolvedSearchPath, change.path)),
+				result.fileChanges.map(change => resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path)),
 			);
 		}
 		return result;
@@ -370,11 +377,19 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					},
 				});
 				const { searchPath: resolvedSearchPath, scopePath, isDirectory, multiTargets, globFilter } = scope;
+				const targets = multiTargets
+					? await Promise.all(
+							multiTargets.map(async target => ({
+								...target,
+								isDirectory: (await urlFilesystem.stat(target.basePath)).type === "directory",
+							})),
+						)
+					: undefined;
 
 				previewStage = "native_preview";
 				// Dry run, so a re-run after installing missing grammars cannot double-apply.
 				const result = await rerunWithGrammars(() =>
-					runAstEditOnce(multiTargets, resolvedSearchPath, globFilter, {
+					runAstEditOnce(targets, resolvedSearchPath, isDirectory, globFilter, {
 						rewrites: normalizedRewrites,
 						dryRun: true,
 						maxFiles,
@@ -568,36 +583,45 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 									try {
 										// The apply outlives the preview call: its filesystem carries no signal.
 										const applyContext = sessionResolveContext(this.session);
-										const applyResult = await runAstEditOnce(multiTargets, resolvedSearchPath, globFilter, {
-											rewrites: normalizedRewrites,
-											dryRun: false,
-											maxFiles,
-											failOnParseError: false,
-											filesystem: new InternalUrlFilesystem({
-												context: applyContext,
-												tier,
-											}).shellFilesystem(),
-										}).catch(error => {
-											// Native apply commits files sequentially and can reject after a partial write.
-											// Preview paths are candidates, not proof of success or an exhaustive
-											// post-preview scope: keep the index uncertain until full reconciliation.
-											invalidateFsScanAfterUncertainWrites(
-												result.fileChanges.map(change =>
-													resolveSearchResultPath(resolvedSearchPath, change.path),
-												),
-												"AST edit apply failed; files may have been partially written; reconcile to verify coverage",
-											);
-											throw error;
-										});
+										const applyFilesystem = new InternalUrlFilesystem({ context: applyContext, tier });
+										// Native re-enumerates the current targets, which may have changed
+										// between file and directory since preview. Rebase its results using
+										// the apply-time types, not the preview's scope metadata.
+										const applyIsDirectory =
+											(await applyFilesystem.stat(resolvedSearchPath)).type === "directory";
+										const applyTargets = targets
+											? await Promise.all(
+													targets.map(async target => ({
+														...target,
+														isDirectory:
+															(await applyFilesystem.stat(target.basePath)).type === "directory",
+													})),
+												)
+											: undefined;
+										const applyResult = await runAstEditOnce(
+											applyTargets,
+											resolvedSearchPath,
+											applyIsDirectory,
+											globFilter,
+											{
+												rewrites: normalizedRewrites,
+												dryRun: false,
+												maxFiles,
+												failOnParseError: false,
+												filesystem: applyFilesystem.shellFilesystem(),
+											},
+										);
 										reportedWrittenCount = applyResult.applied ? applyResult.fileChanges.length : 0;
 										applyStage = "render_apply_result";
+										const formatAppliedPath = (filePath: string): string =>
+											formatResultPath(filePath, applyIsDirectory, resolvedSearchPath, this.session.cwd);
 										const { errors: cappedApplyParseErrors, total: applyParseErrorsTotal } = capParseErrors(
 											applyResult.parseErrors,
 										);
 										const { record: recordAppliedFile, list: appliedFileList } = createFileRecorder();
 										const appliedFileReplacementCounts = new Map<string, number>();
 										for (const fileChange of applyResult.fileChanges) {
-											const relativePath = formatPath(fileChange.path);
+											const relativePath = formatAppliedPath(fileChange.path);
 											recordAppliedFile(relativePath);
 											appliedFileReplacementCounts.set(
 												relativePath,
@@ -605,7 +629,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 											);
 										}
 										for (const change of applyResult.changes) {
-											recordAppliedFile(formatPath(change.path));
+											recordAppliedFile(formatAppliedPath(change.path));
 										}
 										// The preview minted tags from pre-apply content; the rewrite just
 										// invalidated them. Re-record post-apply snapshots (canonical keys)
@@ -704,6 +728,17 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 											freshTagLines.length > 0 ? `${appliedText}\n${freshTagLines.join("\n")}` : appliedText;
 										return toolResult(appliedDetails).text(text).done();
 									} catch (error) {
+										if (applyStage === "native_apply") {
+											// Native apply commits files sequentially and can reject after a partial write.
+											// Preview paths are candidates, not proof of success or an exhaustive
+											// post-preview scope: keep the index uncertain until full reconciliation.
+											invalidateFsScanAfterUncertainWrites(
+												result.fileChanges.map(change =>
+													resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path),
+												),
+												"AST edit apply failed; files may have been partially written; reconcile to verify coverage",
+											);
+										}
 										logger.error("Deferred AST edit apply failed", {
 											component: "ast_edit",
 											event: "ast_edit_deferred_apply_failed",

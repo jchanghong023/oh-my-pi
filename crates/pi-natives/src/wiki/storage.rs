@@ -745,7 +745,7 @@ impl Storage {
 							section.line_end,
 							section.byte_start,
 							section.byte_end,
-							sqlite_text(&section.raw_markdown)
+							&section.raw_markdown
 						],
 						|row| row.get(0),
 					)?;
@@ -1014,6 +1014,103 @@ mod tests {
 			size_bytes:    source.len() as i64,
 			mtime_ms:      0.0,
 			sections:      parsed.sections,
+		}
+	}
+
+	#[test]
+	fn bom_source_bytes_match_stored_ranges_and_remain_greppable() {
+		let source = "\u{feff}# Lifetime\nneedle evidence\n\n# Next\nmore needle evidence\n";
+		let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+		let document = WikiMarkdownDocument {
+			size_bytes: source.len() as i64,
+			sections: parsed.sections,
+			..document()
+		};
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage.create("__building__bom", "/source").unwrap();
+		storage
+			.commit_document(&build, &document, &|| Ok(()))
+			.unwrap();
+		storage.promote(&build, "bom").unwrap();
+		let mut statement = storage
+			.connection
+			.prepare("SELECT byte_start,byte_end,raw_markdown FROM sections ORDER BY ordinal")
+			.unwrap();
+		let stored: Vec<(i64, i64, String)> = statement
+			.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		assert_eq!(stored.len(), document.sections.len());
+		assert!(stored[0].2.starts_with('\u{feff}'));
+		for (start, end, raw) in stored {
+			assert_eq!(raw.len() as i64, end - start);
+			assert_eq!(raw, source[start as usize..end as usize]);
+		}
+		let matcher = crate::grep::build_strict_matcher("needle", false).unwrap();
+		let matches =
+			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+		assert_eq!(matches.len(), 2);
+	}
+
+	#[test]
+	fn legacy_bom_shortened_section_remains_greppable_without_reimport() {
+		let source = "\u{feff}# Lifetime\nneedle evidence\n\n# Next\nmore needle evidence\n";
+		let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+		let document = WikiMarkdownDocument {
+			size_bytes: source.len() as i64,
+			sections: parsed.sections,
+			..document()
+		};
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage.create("__building__legacy_bom", "/source").unwrap();
+		storage
+			.commit_document(&build, &document, &|| Ok(()))
+			.unwrap();
+		storage.promote(&build, "legacy-bom").unwrap();
+		assert!(document.sections[0].raw_markdown.starts_with('\u{feff}'));
+		// Reproduce the old persisted row, including its original byte range.
+		storage
+			.connection
+			.execute("UPDATE sections SET raw_markdown=? WHERE byte_start=0", [sqlite_text(
+				&document.sections[0].raw_markdown,
+			)])
+			.unwrap();
+		let matcher = crate::grep::build_strict_matcher("needle", false).unwrap();
+		let matches =
+			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+		assert_eq!(matches.len(), 2);
+		// Restoring the BOM also preserves original-line regex semantics,
+		// rather than just ignoring the declared/stored length mismatch.
+		let matcher = crate::grep::build_strict_matcher("^\u{feff}# Lifetime$", false).unwrap();
+		let matches =
+			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+		assert_eq!(matches.len(), 1);
+	}
+
+	#[test]
+	fn grep_rejects_non_bom_length_mismatches() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage.create("__building__corrupt", "/source").unwrap();
+		storage
+			.commit_document(&build, &document(), &|| Ok(()))
+			.unwrap();
+		storage.promote(&build, "corrupt").unwrap();
+		let matcher = crate::grep::build_strict_matcher("needle", false).unwrap();
+		for (start, deficit) in [(0, 1), (0, 2), (0, 4), (1, 3)] {
+			storage
+				.connection
+				.execute(
+					"UPDATE sections SET byte_start=?,byte_end=?+length(CAST(raw_markdown AS BLOB))+?",
+					params![start, start, deficit],
+				)
+				.unwrap();
+			let error =
+				super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap_err();
+			assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
 		}
 	}
 

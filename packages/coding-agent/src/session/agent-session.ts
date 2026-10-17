@@ -8653,19 +8653,22 @@ export class AgentSession implements SettingsScope {
 				}
 			}
 
-			// Only the xd:// mount notice can carry substantial inline docs (up to
-			// XDEV_DOCS_TOTAL_BUDGET), so preview it in a copy and let context
-			// maintenance see the request's true size without consuming a delta a
-			// rebuild may supersede. The tool-roster notice is a tiny name list with
-			// no budget impact, so it is not previewed here — it must always ship
-			// alongside the schema change it describes (see below).
+			// Preview substantial inline notices without persisting or consuming
+			// them, so maintenance sees the request's true size. The tool-roster
+			// notice is a tiny name list with no budget impact and must always
+			// ship alongside the schema change it describes (see below).
 			const previewXdevMountNotice = isUserQueuedMessage(message)
 				? this.#tools.peekPendingXdevMountNotice({ baseCatalogDelivered: baseXdevCatalogDelivered })
 				: undefined;
-			const maintenanceMessages = previewXdevMountNotice?.notice ? [...messages] : messages;
-			if (maintenanceMessages !== messages && previewXdevMountNotice?.notice) {
+			const previewGoalNotice = this.#buildGoalAutoOrchestrateContext(
+				undefined,
+				options?.goalAutoOrchestrateInitialId,
+			);
+			const maintenanceMessages = previewXdevMountNotice?.notice || previewGoalNotice ? [...messages] : messages;
+			if (previewXdevMountNotice?.notice) {
 				maintenanceMessages.splice(xdevMountNoticeIndex, 0, previewXdevMountNotice.notice);
 			}
+			if (previewGoalNotice) maintenanceMessages.unshift(previewGoalNotice);
 			await this.#maintenance.runPrePromptCompactionIfNeeded(maintenanceMessages);
 			if (this.#promptGeneration !== generation) {
 				return false;
@@ -8723,6 +8726,8 @@ export class AgentSession implements SettingsScope {
 					: options?.toolChoice
 						? { toolChoice: options.toolChoice }
 						: undefined;
+			// Recheck eligibility and deduplication: committed maintenance may
+			// already have restored the Goal context while its preview was pending.
 			this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
 			const nonMessageTokens = computeNonMessageTokens(this, this.agent.tokenizer, this.settings.revision);
 			const contextWindow = this.model?.contextWindow ?? 0;

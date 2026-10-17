@@ -116,7 +116,7 @@ export function streamCodeAgent(
 					headers.delete("api-key");
 					headers.delete("x-auth-token");
 					if (token) headers.set("x-auth-token", token);
-					return baseFetch(input, { ...init, headers });
+					return baseFetch(input, { ...init, headers, redirect: init?.redirect ?? "error" });
 				},
 			});
 			let replay = false;

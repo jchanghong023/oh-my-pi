@@ -5,7 +5,7 @@
  */
 export async function terminateOwnedSubprocess(child: Bun.Subprocess, options: { detached: boolean }): Promise<void> {
 	// An exited child's PID (and POSIX group ID) may already belong to someone else.
-	if (child.exitCode !== null) {
+	if (child.exitCode !== null || child.signalCode !== null) {
 		await child.exited;
 		return;
 	}
