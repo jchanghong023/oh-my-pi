@@ -6,13 +6,13 @@
  * provider-side tool schema and the post-mortem validator both enforce them.
  * The hand-rolled parsers double as the orchestrator's trust boundary — data
  * that bypassed the yield validation (schema override after retries) is still
- * shape-checked here; proposal text budgets are truncated and aggregate review
- * text over budget is rejected before any stage consumes it.
+ * shape-checked here; aggregate proposal and review text over budget is
+ * rejected before any stage consumes it.
  *
  * Proposal and review-summary fields have schema `maxLength` caps. The parser
- * also enforces the 1500-character total across review summary, findings and
- * blocking-resolution bases after summary truncation; findings and decisions
- * are never silently truncated.
+ * also enforces 4000 characters across all proposal prose, without truncation,
+ * and 1500 across review summary, findings and blocking-resolution bases after
+ * summary truncation; findings and decisions are never silently truncated.
  */
 import { validateJsonSchemaValue } from "@oh-my-pi/pi-ai/utils/schema";
 import type {
@@ -39,7 +39,6 @@ export const TEAM_REVIEW_BUDGET = 1500;
 export const TEAM_REVISION_BUDGET = 4000;
 export const TEAM_SYNTHESIS_BUDGET = 12000;
 
-const PROPOSAL_TEXT_BUDGETS = { proposal: TEAM_PROPOSAL_BUDGET } as const;
 const REVIEW_TEXT_BUDGETS = { reviewSummary: TEAM_REVIEW_BUDGET } as const;
 const REVISION_TEXT_BUDGETS = {
 	revisedProposal: TEAM_REVISION_BUDGET,
@@ -113,7 +112,7 @@ export const TEAM_PROPOSAL_SCHEMA = obj(
 	{
 		proposal: str(
 			TEAM_PROPOSAL_BUDGET,
-			"方案全文（markdown）：方向、主要实施步骤、影响范围、依据；不输出详细实现代码。全文 ≤ 4000 字",
+			"方案正文（markdown）：方向、主要实施步骤、影响范围、依据；不输出详细实现代码。所有文字字段（含证据来源）合计 MUST ≤ 4000 字，状态枚举不计入",
 		),
 		noViableProposal: bool("依据不足、未形成可行方案时为 true，并在 proposal 中说明缺口"),
 		keyAssumptions: { type: "array", maxItems: 12, description: "关键假设（含状态与影响）", items: assumptionSchema },
@@ -364,12 +363,12 @@ function parseEvidence(value: Record<string, unknown>): TeamEvidenceItem {
 
 /** Parse + shape-check + budget-enforce a proposal payload. Returns undefined when the shape is unusable. */
 export function parseTeamProposal(value: unknown): TeamProposalOutput | undefined {
-	const data = validateTeamPayload(value, TEAM_PROPOSAL_SCHEMA, PROPOSAL_TEXT_BUDGETS);
+	const data = validateTeamPayload(value, TEAM_PROPOSAL_SCHEMA, {});
 	if (!data) return undefined;
 	const proposal = asString(data.proposal).trim();
 	if (!proposal && !asBoolean(data.noViableProposal)) return undefined;
-	return {
-		proposal: enforceTextBudget(proposal, TEAM_PROPOSAL_BUDGET),
+	const parsed: TeamProposalOutput = {
+		proposal,
 		noViableProposal: asBoolean(data.noViableProposal),
 		keyAssumptions: asObjectArray(data.keyAssumptions, 12).map(parseAssumption),
 		risks: asStringArray(data.risks, 12),
@@ -378,6 +377,25 @@ export function parseTeamProposal(value: unknown): TeamProposalOutput | undefine
 		ambiguityInterpretations: asObjectArray(data.ambiguityInterpretations, 12).map(parseAmbiguity),
 		evidence: asObjectArray(data.evidence, 20).map(parseEvidence),
 	};
+	// Count original prose, including whitespace, so normalization cannot hide
+	// an oversized payload. Boolean and enum metadata do not consume the budget.
+	const proposalTextLength =
+		asString(data.proposal).length +
+		parsed.keyAssumptions.reduce(
+			(total, assumption) =>
+				total + assumption.content.length + assumption.basis.length + assumption.impactIfWrong.length,
+			0,
+		) +
+		parsed.risks.reduce((total, risk) => total + risk.length, 0) +
+		parsed.unknowns.reduce((total, unknown) => total + unknown.length, 0) +
+		parsed.acceptanceCriteria.reduce((total, criterion) => total + criterion.length, 0) +
+		parsed.ambiguityInterpretations.reduce(
+			(total, ambiguity) =>
+				total + ambiguity.ambiguity.length + ambiguity.interpretation.length + ambiguity.impact.length,
+			0,
+		) +
+		parsed.evidence.reduce((total, evidence) => total + evidence.claim.length + evidence.source.length, 0);
+	return proposalTextLength <= TEAM_PROPOSAL_BUDGET ? parsed : undefined;
 }
 
 function hasExactFindingReferences(
@@ -527,6 +545,9 @@ export function parseTeamSynthesis(value: unknown): TeamSynthesisOutput | undefi
 	if (!data) return undefined;
 	const reportMarkdown = asString(data.reportMarkdown).trim();
 	if (!reportMarkdown) return undefined;
+	const recommendedProposal = asString(data.recommendedProposal).trim();
+	const recommendationReason = asString(data.recommendationReason).trim();
+	if (recommendedProposal && !recommendationReason) return undefined;
 	const hardConstraintViolations = asObjectArray(data.hardConstraintViolations, 12).map(item => ({
 		proposalLabel: asString(item.proposalLabel).trim(),
 		issue: asString(item.issue).trim(),
@@ -535,8 +556,8 @@ export function parseTeamSynthesis(value: unknown): TeamSynthesisOutput | undefi
 	if (hardConstraintViolations.some(item => !item.proposalLabel || !item.issue || !item.evidence)) return undefined;
 	return {
 		reportMarkdown: enforceTextBudget(reportMarkdown, TEAM_SYNTHESIS_BUDGET),
-		recommendedProposal: asString(data.recommendedProposal).trim(),
-		recommendationReason: asString(data.recommendationReason).trim(),
+		recommendedProposal,
+		recommendationReason,
 		recommendationPreconditions: asString(data.recommendationPreconditions).trim(),
 		hardConstraintViolations,
 	};

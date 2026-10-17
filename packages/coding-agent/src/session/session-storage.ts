@@ -1517,42 +1517,126 @@ export class FileSessionStorage implements SessionStorage {
 	 * Artifacts are stored in a sibling directory with the same name minus .jsonl extension.
 	 */
 	async deleteSessionWithArtifacts(sessionPath: string): Promise<void> {
-		// Delete the session file itself
-		await this.unlink(sessionPath);
-
-		// Compute artifacts directory: /path/to/session.jsonl -> /path/to/session
-		const artifactsDir = sessionPath.slice(0, -6);
-
-		// Delete artifacts directory if it exists. Missing directories are fine, but
-		// surface real cleanup failures because the session file is already gone.
-		try {
-			await fsp.rm(artifactsDir, { recursive: true, force: true });
-		} catch (err) {
-			const error = toError(err);
-			throw new Error(
-				`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
-				{
-					cause: error,
-				},
-			);
-		}
-
-		// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`): the
-		// picker scan would otherwise resurrect the deleted session from the
-		// newest stale backup (#11499). Best-effort — a locked file warns
-		// instead of failing the delete the user asked for.
-		const base = path.basename(sessionPath);
-		for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
-			if (!path.basename(bak).startsWith(`${base}.`)) continue;
-			try {
-				await fsp.unlink(bak);
-			} catch (err) {
-				logger.warn("Failed to remove stale session backup during delete", {
-					path: bak,
-					error: toError(err).message,
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `session-delete-${crypto.randomUUID()}`,
+				call_id: `session-delete-${crypto.randomUUID()}`,
+				session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
+			},
+			async () => {
+				const started = performance.now();
+				let stage = "primary_delete";
+				let primaryDeleted = false;
+				let backupFailureCount = 0;
+				let artifactsRemoved = false;
+				const fields = () => ({
+					component: "session_storage",
+					stage,
+					primary_deleted: primaryDeleted,
+					// A rejected unlink does not establish whether its mutation committed.
+					primary_delete_state: primaryDeleted ? "committed" : "unknown",
+					backup_failure_count: backupFailureCount,
+					artifacts_removed: artifactsRemoved,
+					partial: primaryDeleted && (backupFailureCount > 0 || !artifactsRemoved),
+					elapsed_ms: performance.now() - started,
 				});
-			}
-		}
+				logger.info("Session deletion started", {
+					...fields(),
+					event: "session_storage_delete",
+					result: "started",
+				});
+				try {
+					// Delete the session file itself before any cleanup.
+					await this.unlink(sessionPath);
+					primaryDeleted = true;
+					logger.info("Session deletion stage completed", {
+						...fields(),
+						event: "session_storage_delete_stage",
+						result: "completed",
+					});
+
+					stage = "artifact_cleanup";
+					logger.info("Session deletion stage started", {
+						...fields(),
+						event: "session_storage_delete_stage",
+						result: "started",
+					});
+					// Compute artifacts directory: /path/to/session.jsonl -> /path/to/session
+					const artifactsDir = sessionPath.slice(0, -6);
+					// Missing directories are fine; real cleanup failures still propagate.
+					try {
+						await fsp.rm(artifactsDir, { recursive: true, force: true });
+					} catch (err) {
+						logger.error("Session deletion stage failed", {
+							...fields(),
+							event: "session_storage_delete_stage",
+							result: "failed",
+							...logger.diagnosticError(err),
+						});
+						const error = toError(err);
+						throw new Error(
+							`Session file deleted but failed to remove artifacts directory ${artifactsDir}: ${error.message}`,
+							{ cause: error },
+						);
+					}
+					artifactsRemoved = true;
+					logger.info("Session deletion stage completed", {
+						...fields(),
+						event: "session_storage_delete_stage",
+						result: "completed",
+					});
+
+					// Remove EPERM-rewrite leftovers (`<name>.jsonl.<snowflake>.bak`):
+					// the picker scan could otherwise resurrect a deleted session (#11499).
+					// Best-effort: a locked backup must not fail the requested deletion.
+					stage = "backup_cleanup";
+					logger.info("Session deletion stage started", {
+						...fields(),
+						event: "session_storage_delete_stage",
+						result: "started",
+					});
+					const base = path.basename(sessionPath);
+					for (const bak of this.listFilesSync(path.dirname(sessionPath), "*.bak")) {
+						if (!path.basename(bak).startsWith(`${base}.`)) continue;
+						try {
+							await fsp.unlink(bak);
+						} catch (err) {
+							backupFailureCount++;
+							logger.warn("Failed to remove stale session backup during delete", {
+								...fields(),
+								event: "session_storage_delete_stage",
+								result: "partial",
+								...logger.diagnosticError(err),
+							});
+						}
+					}
+					const backupFields = {
+						...fields(),
+						event: "session_storage_delete_stage",
+						result: backupFailureCount > 0 ? "partial" : "completed",
+					};
+					if (backupFailureCount > 0) logger.warn("Session backup cleanup partial", backupFields);
+					else logger.info("Session backup cleanup completed", backupFields);
+					stage = "completed";
+					const terminalFields = {
+						...fields(),
+						event: "session_storage_delete",
+						result: backupFailureCount > 0 ? "partial" : "completed",
+					};
+					if (backupFailureCount > 0) logger.warn("Session deletion partial", terminalFields);
+					else logger.info("Session deletion completed", terminalFields);
+				} catch (error) {
+					logger.error("Session deletion failed", {
+						...fields(),
+						event: "session_storage_delete",
+						result: primaryDeleted ? "partial" : "failed",
+						partial: primaryDeleted,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+			},
+		);
 	}
 }
 

@@ -122,6 +122,7 @@ metadata/<必要的版本、状态与限制资料>
 
 - `instructions/review.md` 保存原生 `/review` 针对**本次已选冻结范围**完整渲染的审查命令提示词，含生效的用户补充指令／自定义指令及相应分发规则；不能用一句“执行 /review”、未渲染模板或另一套简写规则替代。
 - `instructions/reviewer.md` 保存当前分发版本 `src/prompts/agents/reviewer.md` 的完整 reviewer Agent 提示词，不能摘录、总结或省略。
+- 导出的 `review.md` 必须在渲染指令本身明确冻结材料映射：完整 diff 来自 `diff.patch`，范围／身份／状态／路径／限制来自 `manifest.json`，变更前后源码按 manifest 的 `sources[].member` 对应 `changed-files/before/` 与 `changed-files/after/`；缺少上下文时向用户索取对应冻结版本，禁止查询 Git／PR 或用当前 checkout 补齐。这些规则必须传递给每个 reviewer 任务，仅替代原始 `reviewer.md` 的 patch／上下文获取步骤，其余完整审查与分发规则保留；普通 `/review` 的默认渲染不变。
 - README 链接这两份指令并说明用途：供接收者后续审查使用，导出命令本身不执行其中的审查、任务派发或工具调用。指令中的历史目标必须可对应本包冻结身份，不能把当前 checkout 冒充目标版本。
 - manifest 记录两份指令的来源、渲染范围／版本、成员路径、字节数及 SHA-256；不得给未实际收集的 Agent 提示或环境信息编造来源。
 - 两份指令来自**运行中的 OMP 内置版本**，不伪称来自被审仓库的历史提交。原生 `/review` prompt 可能按其既有规则概述大 diff；这不允许裁剪 `diff.patch` 或变更源码，接收者必须以 manifest 指向的冻结成员及完整 diff 为准。外部审查者不能假定原提示词中的 OMP 工具／任务分发约定在其环境可用。

@@ -701,8 +701,8 @@ export function buildOpenAiNativeHistory(
 						}
 					} catch {
 						logger.warn("Failed to parse assistant reasoning for remote compaction", {
-							model: assistant.model,
-							provider: assistant.provider,
+							model: /^[\w./:[\]-]{1,160}$/.test(assistant.model) ? assistant.model : "[custom]",
+							provider: /^[\w.-]{1,160}$/.test(assistant.provider) ? assistant.provider : "[custom]",
 						});
 					}
 					continue;
@@ -880,8 +880,8 @@ export async function requestOpenAiRemoteCompaction(
 	);
 	if (trimmed.rewrittenOutputs > 0) {
 		logger.info("Rewrote trailing tool outputs before OpenAI remote compaction", {
-			model: model.id,
-			provider: model.provider,
+			model: /^[\w./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",
+			provider: /^[\w.-]{1,160}$/.test(model.provider) ? model.provider : "[custom]",
 			rewrittenOutputs: trimmed.rewrittenOutputs,
 			estimatedTokensBefore: trimmed.estimatedTokensBefore,
 			estimatedTokensAfter: trimmed.estimatedTokensAfter,
@@ -965,10 +965,9 @@ export async function requestOpenAiRemoteCompaction(
 	if (!response.ok) {
 		const cause = await captureOpenAIHttpError(response);
 		logger.warn("OpenAI remote compaction failed", {
-			endpoint,
+			...logger.diagnosticUrl(endpoint),
+			...logger.diagnosticError(cause),
 			status: response.status,
-			statusText: response.statusText,
-			errorText: cause.captured.bodyText ?? "",
 		});
 		throw new ProviderHttpError(
 			`Remote compaction failed (${response.status} ${response.statusText})`,
@@ -992,15 +991,12 @@ export async function requestOpenAiRemoteCompaction(
 		return false;
 	});
 	if (!compactionItem) {
-		const outputTypes = rawOutput.map(item =>
-			typeof item === "object" && item !== null ? (item as Record<string, unknown>).type : typeof item,
-		);
+		// Provider-defined item types may contain response data; log counts only.
 		logger.warn("Remote compaction response missing compaction item", {
-			endpoint,
-			model: model.id,
-			provider: model.provider,
+			...logger.diagnosticUrl(endpoint),
+			model: /^[\w./:[\]-]{1,160}$/.test(model.id) ? model.id : "[custom]",
+			provider: /^[\w.-]{1,160}$/.test(model.provider) ? model.provider : "[custom]",
 			rawOutputLength: rawOutput.length,
-			outputTypes,
 			replacementHistoryLength: replacementHistory.length,
 		});
 		throw new Error("Remote compaction response missing compaction item");
@@ -1064,10 +1060,9 @@ export async function requestRemoteCompaction(
 	if (!response.ok) {
 		const errorText = await response.text().catch(() => "");
 		logger.warn("Remote compaction failed", {
-			endpoint,
+			...logger.diagnosticUrl(endpoint),
 			status: response.status,
-			statusText: response.statusText,
-			errorText,
+			bodyLength: errorText.length,
 		});
 		throw new ProviderHttpError(
 			`Remote compaction failed (${response.status} ${response.statusText})`,

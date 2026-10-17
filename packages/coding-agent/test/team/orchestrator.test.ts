@@ -1103,6 +1103,24 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).toContain("前提：接口 Y 稳定");
 	});
 
+	it.each(["", " \t\n"])(
+		"fails synthesis without publishing a recommendation when its reason is blank: %j",
+		async reason => {
+			const updates: TeamProgressUpdate[] = [];
+			const { result } = await run(
+				{ synthesis: () => ({ ...synthesisData("A"), recommendationReason: reason }) },
+				{ onProgress: update => updates.push(update) },
+			);
+			expect(result.status).toBe("failed");
+			expect(result.failureReason).toContain("综合子调用失败");
+			expect(result.reportMarkdown).toBeUndefined();
+			expect(updates.at(-1)?.participants.find(participant => participant.label === "synthesis")?.state).toBe(
+				"failed",
+			);
+			expect(updates.some(update => update.stage === "done")).toBe(false);
+		},
+	);
+
 	it("fails without half conclusions when the alignment sub-call fails", async () => {
 		const updates: TeamProgressUpdate[] = [];
 		const { result, calls } = await run(
@@ -1151,6 +1169,19 @@ describe("team orchestrator", () => {
 		expect(result.status).toBe("failed");
 		expect(result.failureReason).toContain("所有提案子代理均失败");
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
+	});
+
+	it("refuses oversized initial proposals before alignment or review", async () => {
+		const { result, calls } = await run({
+			proposal: () => ({
+				...proposalData("A"),
+				proposal: "p".repeat(3999),
+				evidence: [{ claim: "evidence", source: "source" }],
+			}),
+		});
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("所有提案子代理均失败");
+		expect(calls.every(call => call.role === "proposer")).toBe(true);
 	});
 
 	it("treats a throwing runner as a failed call instead of a rejected run", async () => {

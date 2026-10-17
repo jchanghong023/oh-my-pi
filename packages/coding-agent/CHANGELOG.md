@@ -16,6 +16,10 @@
 
 ### Fixed
 
+- Correct compact display completion and override warnings to describe single-line tool summaries without previews.
+- Record shared file-session deletion stages, failures and partial cleanup without changing deletion behavior.
+- Keep exported review instructions bound to the ZIP's frozen diff and before/after source instead of the current checkout.
+- Reject `/team` proposals whose combined text exceeds 4000 characters without truncating evidence, and reject recommendations without a reason.
 - Keep offline in-memory session resume, relocation and fallback resets independent of filesystem session-root validation.
 - Preserve immediate Go tool failure reporting in local gates while returning build-script feature-probe exit codes unchanged.
 - Preserve successful local-gate terminal and short-lived supervisor logs before forced process exit, and allow fulltest to build a missing native addon before loading it.

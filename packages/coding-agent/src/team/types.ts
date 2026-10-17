@@ -41,7 +41,7 @@ export interface TeamEvidenceItem {
 
 /** Structured output of a proposal subagent (stage 1). */
 export interface TeamProposalOutput {
-	/** The proposal document proper; budget ≤ 4000 chars, mechanically enforced. */
+	/** All proposal prose, including evidence sources, must total ≤ 4000 chars. */
 	proposal: string;
 	noViableProposal: boolean;
 	keyAssumptions: TeamAssumption[];

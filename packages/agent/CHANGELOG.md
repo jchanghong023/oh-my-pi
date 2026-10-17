@@ -6,6 +6,10 @@
 
 - Malformed tool-call JSON errors now tell the model to correct and retry the unexecuted call without repeating successful calls.
 
+### Fixed
+
+- Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
+
 ## [18.11.3] - 2026-10-16
 
 ### Added

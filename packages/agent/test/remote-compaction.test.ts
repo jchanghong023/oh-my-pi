@@ -2155,6 +2155,216 @@ test("uses Azure request shape for Azure Responses remote compaction", async () 
 	}
 });
 
+describe("remote compaction diagnostic safety", () => {
+	const endpoint =
+		"https://url-user-secret:url-password-secret@compaction.example.test/private-path-secret/responses/compact?token=query-secret#fragment-secret";
+	const endpointSecrets = [
+		"url-user-secret",
+		"url-password-secret",
+		"private-path-secret",
+		"query-secret",
+		"fragment-secret",
+	];
+	const input = [{ type: "message", role: "user", content: [{ type: "input_text", text: "prompt-secret" }] }];
+
+	test.each(["native", "generic"])("keeps %s HTTP errors intact without emitting response secrets", async kind => {
+		const entries: piUtils.logger.LogEvent[] = [];
+		const dispose = piUtils.logger.registerLogSink(entry => entries.push(entry));
+		const statusText = "status-text-secret";
+		const body = JSON.stringify({ error: { message: "response-body-secret", code: "invalid_api_key" } });
+		const response = new Response(body, {
+			status: 429,
+			statusText,
+			headers: { "retry-after": "7", "x-private-header": "response-header-secret" },
+		});
+		const readBody = vi.spyOn(response, "text");
+		const fetchMock = vi.fn<FetchImpl>(async url => {
+			expect(String(url)).toBe(endpoint);
+			return response;
+		});
+		try {
+			const error = await (
+				kind === "native"
+					? requestOpenAiRemoteCompaction(
+							makeOpenAiModel({ remoteCompaction: { endpoint } }),
+							"api-key-secret",
+							input,
+							"instructions-secret",
+							undefined,
+							{ fetch: fetchMock },
+						)
+					: requestRemoteCompaction(
+							endpoint,
+							{ systemPrompt: "instructions-secret", prompt: "prompt-secret", maxTokens: 100 },
+							undefined,
+							{ fetch: fetchMock, apiKey: "api-key-secret" },
+						)
+			).catch(cause => cause);
+
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(readBody).toHaveBeenCalledTimes(1);
+			expect(error).toBeInstanceOf(AIError.ProviderHttpError);
+			expect(error.message).toBe(`Remote compaction failed (429 ${statusText})`);
+			expect(error.status).toBe(429);
+			expect(error.headers).toBe(response.headers);
+			expect(error.headers.get("retry-after")).toBe("7");
+			expect(error.headers.get("x-private-header")).toBe("response-header-secret");
+			if (kind === "native") {
+				expect(error.cause).toBeInstanceOf(AIError.OpenAIHttpError);
+				expect(error.cause.message).toContain("response-body-secret");
+				expect(error.cause.captured).toMatchObject({
+					status: 429,
+					bodyText: body,
+					bodyJson: JSON.parse(body),
+				});
+				expect(error.cause.headers).toBe(response.headers);
+			} else {
+				expect(error.cause).toBeUndefined();
+			}
+
+			const diagnostic = entries.find(entry => entry.level === "warn" && entry.context?.status === 429);
+			expect(diagnostic).toBeDefined();
+			expect(diagnostic?.context).toMatchObject({
+				host: "compaction.example.test",
+				url_scheme: "https",
+				url_port: 443,
+				path_hash: expect.stringMatching(/^[a-f0-9]{16}$/),
+			});
+			const emitted = JSON.stringify(entries);
+			for (const secret of [
+				...endpointSecrets,
+				statusText,
+				"response-body-secret",
+				"response-header-secret",
+				"api-key-secret",
+				"prompt-secret",
+				"instructions-secret",
+			]) {
+				expect(emitted).not.toContain(secret);
+			}
+			expect(emitted.length).toBeLessThan(4096);
+		} finally {
+			dispose();
+		}
+	});
+
+	test("does not emit provider-defined item types or custom model metadata on missing compaction", async () => {
+		const entries: piUtils.logger.LogEvent[] = [];
+		const dispose = piUtils.logger.registerLogSink(entry => entries.push(entry));
+		const output = Array.from({ length: 100 }, () => ({
+			type: `response-type-secret ${"x".repeat(1000)}`,
+			content: "response-content-secret",
+		}));
+		try {
+			const error = await requestOpenAiRemoteCompaction(
+				makeOpenAiModel({
+					id: "private model-secret",
+					provider: "private provider-secret",
+					remoteCompaction: { endpoint },
+				}),
+				"api-key-secret",
+				input,
+				"instructions-secret",
+				undefined,
+				{ fetch: async () => Response.json({ output }) },
+			).catch(cause => cause);
+			expect(error).toBeInstanceOf(Error);
+			expect(error.message).toBe("Remote compaction response missing compaction item");
+			const diagnostic = entries.find(entry => entry.context?.rawOutputLength === output.length);
+			expect(diagnostic?.context).toMatchObject({
+				model: "[custom]",
+				provider: "[custom]",
+				rawOutputLength: 100,
+				replacementHistoryLength: 0,
+				host: "compaction.example.test",
+			});
+			const emitted = JSON.stringify(entries);
+			for (const secret of [
+				...endpointSecrets,
+				"response-type-secret",
+				"response-content-secret",
+				"model-secret",
+				"provider-secret",
+				"prompt-secret",
+				"instructions-secret",
+			]) {
+				expect(emitted).not.toContain(secret);
+			}
+			expect(emitted.length).toBeLessThan(4096);
+		} finally {
+			dispose();
+		}
+	});
+
+	test("emits only bounded metadata when rewriting tool outputs before successful compaction", async () => {
+		const entries: piUtils.logger.LogEvent[] = [];
+		const dispose = piUtils.logger.registerLogSink(entry => entries.push(entry));
+		const compactionItem = { type: "compaction", encrypted_content: "encrypted-response-secret" } as const;
+		try {
+			const result = await requestOpenAiRemoteCompaction(
+				makeOpenAiModel({
+					id: "private model-secret",
+					provider: "private provider-secret",
+					contextWindow: 1_000,
+					remoteCompaction: { endpoint },
+				}),
+				"api-key-secret",
+				[
+					{ type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
+					{ type: "function_call_output", call_id: "call_1", output: "tool-output-secret ".repeat(1000) },
+				],
+				"instructions-secret",
+				undefined,
+				{ fetch: async () => Response.json({ output: [compactionItem] }) },
+			);
+			expect(result.compactionItem).toEqual(compactionItem);
+			expect(result.replacementHistory).toEqual([compactionItem]);
+			const diagnostic = entries.find(entry => entry.context?.rewrittenOutputs === 1);
+			expect(diagnostic?.level).toBe("info");
+			expect(diagnostic?.context).toMatchObject({ model: "[custom]", provider: "[custom]", contextWindow: 1_000 });
+			const emitted = JSON.stringify(entries);
+			for (const secret of [
+				...endpointSecrets,
+				"model-secret",
+				"provider-secret",
+				"api-key-secret",
+				"tool-output-secret",
+				"instructions-secret",
+				"encrypted-response-secret",
+			]) {
+				expect(emitted).not.toContain(secret);
+			}
+			expect(emitted.length).toBeLessThan(4096);
+		} finally {
+			dispose();
+		}
+	});
+
+	test.each(["native", "generic"])("propagates the original %s fetch rejection", async kind => {
+		const original = new Error("fetch-error-secret", { cause: new Error("fetch-cause-secret") });
+		const fetchMock: FetchImpl = async () => {
+			throw original;
+		};
+		const request =
+			kind === "native"
+				? requestOpenAiRemoteCompaction(
+						makeOpenAiModel({ remoteCompaction: { endpoint } }),
+						"api-key-secret",
+						input,
+						"instructions-secret",
+						undefined,
+						{ fetch: fetchMock },
+					)
+				: requestRemoteCompaction(
+						endpoint,
+						{ systemPrompt: "instructions-secret", prompt: "prompt-secret", maxTokens: 100 },
+						undefined,
+						{ fetch: fetchMock },
+					);
+		await expect(request).rejects.toBe(original);
+	});
+});
+
 describe("requestOpenAiRemoteCompaction abort", () => {
 	test("rejects when the abort signal is aborted mid-fetch", async () => {
 		const controller = new AbortController();

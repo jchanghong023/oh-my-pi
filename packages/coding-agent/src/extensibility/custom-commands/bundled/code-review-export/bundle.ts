@@ -202,6 +202,7 @@ export async function writeReviewBundle(
 					"No changes in the selected scope",
 				),
 				options.instructions,
+				{ baseCommit: snapshot.baseCommit ?? undefined, targetCommit: snapshot.targetCommit },
 			),
 		),
 	);
@@ -225,7 +226,7 @@ Target: ${snapshot.targetCommit}
 
 Source payloads retain their original bytes, encodings and line endings. **No secrets were masked or redacted.** Inspect before sharing. Binary payloads are omitted by default; their exact size and hash are recorded. Changed textual files are complete. Before/after versions use repository-relative paths. Source-line counts include each exported version, not the diff or instruction files. Supplemental unchanged context is not collected or analyzed; the receiving reviewer investigates dependencies and requests additional source as needed.
 
-The included prompts come from the running OMP builtins, not from the reviewed repository version. Their task/yield/Git references are original OMP agent conventions: an external/web reviewer should use this frozen package instead of a local checkout or unavailable tools. The native /review prompt can summarize large diffs; **diff.patch and the manifest's frozen before/after members are authoritative and must be read in full as needed**. User instructions are included for that later review, not interpreted during export.
+The included prompts come from the running OMP builtins, not from the reviewed repository version. The /review instructions bind patch and source acquisition to this ZIP's frozen members, overriding only those acquisition steps in the otherwise complete reviewer definition. Their task/yield references remain native OMP agent conventions; an external/web reviewer must adapt unavailable tools without changing the frozen source boundary. The native /review prompt can summarize large diffs; **diff.patch and the manifest's frozen before/after members are authoritative and must be read in full as needed**. User instructions are included for that later review, not interpreted during export.
 
 The manifest inventories every other member; it cannot hash itself. ZIP compressed size is reported by the command after encoding (embedding it would be self-referential). No completeness claim overrides the following limitations:
 ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- None reported."}

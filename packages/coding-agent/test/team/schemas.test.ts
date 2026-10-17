@@ -74,8 +74,48 @@ describe("team yield payload validation", () => {
 		expect(parseTeamAlignment(alignment())).toEqual(alignment());
 	});
 
+	it("accepts exactly 4000 aggregate proposal characters and refuses 4001 without losing evidence", () => {
+		const data = {
+			proposal: "p".repeat(3890),
+			noViableProposal: false,
+			keyAssumptions: [
+				{
+					content: "c".repeat(10),
+					basis: "b".repeat(10),
+					status: "unverified" as const,
+					impactIfWrong: "i".repeat(10),
+				},
+			],
+			risks: ["r".repeat(10)],
+			unknowns: ["u".repeat(10)],
+			acceptanceCriteria: ["a".repeat(10)],
+			ambiguityInterpretations: [
+				{ ambiguity: "q".repeat(10), interpretation: "v".repeat(10), impact: "i".repeat(10) },
+			],
+			evidence: [{ claim: "e".repeat(10), source: "s".repeat(10) }],
+		};
+		const original = structuredClone(data);
+		expect(parseTeamProposal(data)).toEqual(data);
+		expect(parseTeamProposal({ ...data, proposal: `${data.proposal}p` })).toBeUndefined();
+		expect(parseTeamProposal({ ...data, proposal: `${data.proposal} ` })).toBeUndefined();
+		expect(data).toEqual(original);
+	});
+
+	it("rejects oversized proposal bodies instead of truncating them", () => {
+		const data = { ...proposal(), proposal: "p".repeat(4001) };
+		const original = structuredClone(data);
+		expect(parseTeamProposal(data)).toBeUndefined();
+		expect(data).toEqual(original);
+	});
+
+	it("normalizes accepted proposal prose without mutating the original input", () => {
+		const data = { ...proposal(), proposal: "  Keep the existing API.  " };
+		const original = structuredClone(data);
+		expect(parseTeamProposal(data)).toEqual({ ...data, proposal: data.proposal.trim() });
+		expect(data).toEqual(original);
+	});
+
 	it("caps model narratives without silently dropping structured findings", () => {
-		expect(parseTeamProposal({ ...proposal(), proposal: "p".repeat(5000) })?.proposal.length).toBeLessThan(5000);
 		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })).toBeUndefined();
 		expect(
 			parseTeamReview({ ...review(), findings: [], noSubstantiveIssues: true, reviewSummary: "r".repeat(2000) })
@@ -102,6 +142,7 @@ describe("team yield payload validation", () => {
 		{ ...proposal(), keyAssumptions: [{ ...proposal().keyAssumptions[0], status: "likely" }] },
 		{ ...proposal(), evidence: [{ claim: "Source omitted" }] },
 		{ ...proposal(), ambiguityInterpretations: [{ ambiguity: "X", interpretation: "Y" }] },
+		{ ...proposal(), evidence: [{ claim: "A claim", source: "s".repeat(401) }] },
 		{ proposal: "Narrative without structured output" },
 	])("rejects malformed proposal metadata instead of discarding it: %j", data => {
 		expect(parseTeamProposal(data)).toBeUndefined();
@@ -231,6 +272,25 @@ describe("team yield payload validation", () => {
 				ids,
 			),
 		).toBeUndefined();
+	});
+
+	it.each(["", " ", "\t\n"])("rejects a recommended proposal without a nonblank reason: %j", reason => {
+		const data = {
+			reportMarkdown: "Complete report",
+			recommendedProposal: " A ",
+			recommendationReason: reason,
+			recommendationPreconditions: "",
+			hardConstraintViolations: [],
+		};
+		expect(parseTeamSynthesis(data)).toBeUndefined();
+		expect(parseTeamSynthesis({ ...data, recommendedProposal: "" })).toEqual({
+			...data,
+			recommendedProposal: "",
+			recommendationReason: "",
+		});
+		expect(parseTeamSynthesis({ ...data, recommendationReason: " Evidence " })?.recommendationReason).toBe(
+			"Evidence",
+		);
 	});
 
 	it("fails closed on incomplete alignment and synthesis output", () => {

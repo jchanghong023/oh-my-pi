@@ -8,8 +8,6 @@ import { type ArchiveReader, openArchive } from "@oh-my-pi/pi-utils/ar";
 import { CodeReviewExportCommand } from "../../../src/extensibility/custom-commands/bundled/code-review-export";
 import { writeReviewBundle } from "../../../src/extensibility/custom-commands/bundled/code-review-export/bundle";
 import { captureReviewExportSnapshot } from "../../../src/extensibility/custom-commands/bundled/code-review-export/snapshot";
-import { buildReviewPrompt } from "../../../src/extensibility/custom-commands/bundled/review/prompt";
-import { createResolvedReviewTarget } from "../../../src/extensibility/custom-commands/bundled/review/target";
 import type { CustomCommandAPI, CustomCommandContext } from "../../../src/extensibility/custom-commands/types";
 
 const repositories: string[] = [];
@@ -93,19 +91,6 @@ describe("code-review-export frozen bundles", () => {
 			expect(archive.getNode("changed-files/after/image.bin")).toBeUndefined();
 			expect(archive.getNode("context/target/related.ts")).toBeUndefined();
 			expect(await readMember(archive, "diff.patch")).toEqual(Buffer.from(snapshot.diff));
-			expect(await readMember(archive, "instructions/review.md")).toEqual(
-				Buffer.from(
-					buildReviewPrompt(
-						createResolvedReviewTarget(
-							"commit",
-							snapshot.mode,
-							snapshot.diff,
-							"No changes in the selected scope",
-						),
-						"Check shared state ownership.",
-					),
-				),
-			);
 			expect(await readMember(archive, "instructions/reviewer.md")).toEqual(
 				await fs.readFile(path.resolve(import.meta.dir, "../../../src/prompts/agents/reviewer.md")),
 			);

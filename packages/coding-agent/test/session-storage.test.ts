@@ -16,7 +16,7 @@ import {
 	type WriteTextAtomicOptions,
 } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { type SessionTitleUpdate, serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
-import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
+import { type LogEvent, registerLogSink, withLogContext } from "@oh-my-pi/pi-utils/logger";
 
 class ControlledTitleUpdateBackend implements SessionStorageBackend {
 	readonly #sessionPath: string;
@@ -323,26 +323,204 @@ describe("FileSessionStorage.deleteSessionWithArtifacts", () => {
 		expect(fs.existsSync(sessionPath)).toBe(true);
 		expect(fs.existsSync(artifactsDir)).toBe(false);
 
-		await expect(storage.deleteSessionWithArtifacts(sessionPath)).resolves.toBeUndefined();
-		expect(fs.existsSync(sessionPath)).toBe(false);
-		expect(fs.existsSync(artifactsDir)).toBe(false);
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			await expect(
+				withLogContext({ operation_id: "delete-operation", call_id: "caller" }, () =>
+					storage.deleteSessionWithArtifacts(sessionPath),
+				),
+			).resolves.toBeUndefined();
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(artifactsDir)).toBe(false);
+			const deletionEvents = events.filter(event => event.context?.component === "session_storage");
+			expect(deletionEvents[0]?.context).toMatchObject({
+				event: "session_storage_delete",
+				result: "started",
+			});
+			expect(deletionEvents.at(-1)?.context).toMatchObject({
+				event: "session_storage_delete",
+				result: "completed",
+				primary_delete_state: "committed",
+				primary_deleted: true,
+				artifacts_removed: true,
+				partial: false,
+			});
+			const callId = deletionEvents[0]?.context?.call_id;
+			expect(callId).toEqual(expect.any(String));
+			expect(callId).not.toBe("caller");
+			for (const event of deletionEvents) {
+				expect(event.context).toMatchObject({
+					operation_id: "delete-operation",
+					call_id: callId,
+					session_path_hash: `hash-${Bun.hash(sessionPath).toString(36)}`,
+					elapsed_ms: expect.any(Number),
+				});
+			}
+			expect(
+				deletionEvents
+					.filter(event => event.context?.event === "session_storage_delete_stage")
+					.map(event => [event.context?.stage, event.context?.result]),
+			).toEqual([
+				["primary_delete", "completed"],
+				["artifact_cleanup", "started"],
+				["artifact_cleanup", "completed"],
+				["backup_cleanup", "started"],
+				["backup_cleanup", "completed"],
+			]);
+			expect(JSON.stringify(deletionEvents)).not.toContain(sessionPath);
+		} finally {
+			dispose();
+		}
 	});
 
-	it("throws when artifact cleanup fails after the session file is deleted", async () => {
-		const sessionPath = await createSessionFile("cleanup-failure");
+	it.each([false, true])("reports an unknown primary commit when unlink rejects (removed=%s)", async removed => {
+		const sessionPath = await createSessionFile("PRIVATE_PRIMARY_SESSION");
+		const artifactsDir = sessionPath.slice(0, -6);
+		await fsp.mkdir(artifactsDir);
+		const bakPath = `${sessionPath}.4815162342.bak`;
+		await Bun.write(bakPath, "stale backup\n");
+		const failure = Object.assign(new Error(`PRIVATE_PRIMARY_ERROR ${sessionPath}`), { code: "EACCES" });
+		const unlinkSpy = vi.spyOn(storage, "unlink").mockImplementation(async () => {
+			if (removed) await fsp.unlink(sessionPath);
+			throw failure;
+		});
+		const rmSpy = vi.spyOn(fsp, "rm");
+		const listSpy = vi.spyOn(storage, "listFilesSync");
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			await expect(storage.deleteSessionWithArtifacts(sessionPath)).rejects.toBe(failure);
+			expect(unlinkSpy).toHaveBeenCalledWith(sessionPath);
+			expect(rmSpy).not.toHaveBeenCalled();
+			expect(listSpy).not.toHaveBeenCalled();
+			expect(fs.existsSync(sessionPath)).toBe(!removed);
+			expect(fs.existsSync(artifactsDir)).toBe(true);
+			expect(fs.existsSync(bakPath)).toBe(true);
+			expect(events.at(-1)).toMatchObject({
+				level: "error",
+				context: {
+					event: "session_storage_delete",
+					result: "failed",
+					stage: "primary_delete",
+					primary_delete_state: "unknown",
+					primary_deleted: false,
+					backup_failure_count: 0,
+					artifacts_removed: false,
+					partial: false,
+					error_type: "Error",
+					error_code: "EACCES",
+				},
+			});
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_PRIMARY");
+		} finally {
+			dispose();
+		}
+	});
+
+	it("retains committed primary deletion and stops backup cleanup after artifact failure", async () => {
+		const sessionPath = await createSessionFile("PRIVATE_ARTIFACT_SESSION");
 		const artifactsDir = sessionPath.slice(0, -6);
 		await fsp.mkdir(artifactsDir, { recursive: true });
 		await Bun.write(path.join(artifactsDir, "artifact.txt"), "artifact payload");
+		const bakPath = `${sessionPath}.4815162342.bak`;
+		await Bun.write(bakPath, "stale backup\n");
+		const rmError = Object.assign(new Error(`PRIVATE_ARTIFACT_ERROR ${artifactsDir}`), { code: "EACCES" });
+		const rmSpy = vi.spyOn(fsp, "rm").mockImplementationOnce(async () => {
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			throw rmError;
+		});
+		const listSpy = vi.spyOn(storage, "listFilesSync");
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			await expect(storage.deleteSessionWithArtifacts(sessionPath)).rejects.toMatchObject({
+				name: "Error",
+				cause: rmError,
+			});
+			expect(rmSpy).toHaveBeenCalledWith(artifactsDir, { recursive: true, force: true });
+			expect(listSpy).not.toHaveBeenCalled();
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(artifactsDir)).toBe(true);
+			expect(fs.existsSync(bakPath)).toBe(true);
+			expect(events.at(-1)).toMatchObject({
+				level: "error",
+				context: {
+					event: "session_storage_delete",
+					result: "partial",
+					stage: "artifact_cleanup",
+					primary_delete_state: "committed",
+					primary_deleted: true,
+					backup_failure_count: 0,
+					artifacts_removed: false,
+					partial: true,
+				},
+			});
+			expect(
+				events.find(
+					event => event.context?.event === "session_storage_delete_stage" && event.context.result === "failed",
+				)?.context,
+			).toMatchObject({ stage: "artifact_cleanup", error_type: "Error", error_code: "EACCES" });
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_ARTIFACT");
+		} finally {
+			dispose();
+		}
+	});
 
-		const rmError = new Error("permission denied");
-		const rmSpy = vi.spyOn(fsp, "rm").mockRejectedValueOnce(rmError);
-
-		await expect(storage.deleteSessionWithArtifacts(sessionPath)).rejects.toThrow(
-			`Session file deleted but failed to remove artifacts directory ${artifactsDir}: permission denied`,
-		);
-		expect(rmSpy).toHaveBeenCalledWith(artifactsDir, { recursive: true, force: true });
-		expect(fs.existsSync(sessionPath)).toBe(false);
-		expect(fs.existsSync(artifactsDir)).toBe(true);
+	it("reports backup residue as partial while continuing best-effort cleanup", async () => {
+		const sessionPath = await createSessionFile("PRIVATE_BACKUP_SESSION");
+		const artifactsDir = sessionPath.slice(0, -6);
+		await fsp.mkdir(artifactsDir);
+		const lockedBak = `${sessionPath}.4815162342.bak`;
+		const removableBak = `${sessionPath}.4815162343.bak`;
+		const unrelatedBak = path.join(tempDir, "other-session.jsonl.4815162342.bak");
+		for (const bak of [lockedBak, removableBak, unrelatedBak]) await Bun.write(bak, "stale backup\n");
+		const failure = Object.assign(new Error(`PRIVATE_BACKUP_ERROR ${lockedBak}`), { code: "EACCES" });
+		const unlink = fsp.unlink;
+		vi.spyOn(fsp, "unlink").mockImplementation(async file => {
+			if (file === lockedBak) throw failure;
+			await unlink(file);
+		});
+		const listSpy = vi.spyOn(storage, "listFilesSync").mockImplementation(() => {
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(artifactsDir)).toBe(false);
+			return [lockedBak, removableBak, unrelatedBak];
+		});
+		const events: LogEvent[] = [];
+		const dispose = registerLogSink(event => events.push(event));
+		try {
+			await expect(storage.deleteSessionWithArtifacts(sessionPath)).resolves.toBeUndefined();
+			expect(listSpy).toHaveBeenCalledWith(tempDir, "*.bak");
+			expect(fs.existsSync(sessionPath)).toBe(false);
+			expect(fs.existsSync(artifactsDir)).toBe(false);
+			expect(fs.existsSync(lockedBak)).toBe(true);
+			expect(fs.existsSync(removableBak)).toBe(false);
+			expect(fs.existsSync(unrelatedBak)).toBe(true);
+			expect(events.at(-1)).toMatchObject({
+				level: "warn",
+				context: {
+					event: "session_storage_delete",
+					result: "partial",
+					stage: "completed",
+					primary_delete_state: "committed",
+					primary_deleted: true,
+					backup_failure_count: 1,
+					artifacts_removed: true,
+					partial: true,
+				},
+			});
+			expect(
+				events.find(event => event.context?.stage === "backup_cleanup" && event.context.error_code === "EACCES")
+					?.context,
+			).toMatchObject({
+				event: "session_storage_delete_stage",
+				result: "partial",
+				error_type: "Error",
+			});
+			expect(JSON.stringify(events)).not.toContain("PRIVATE_BACKUP");
+		} finally {
+			dispose();
+		}
 	});
 });
 

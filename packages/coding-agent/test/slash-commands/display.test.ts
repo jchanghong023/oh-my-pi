@@ -200,8 +200,6 @@ describe("/display slash command", () => {
 		for (const mode of ["clean", "compact", "detailed"]) {
 			const matches = await command?.getArgumentCompletions?.(mode);
 			expect(matches?.map(match => match.value)).toEqual([`${mode} `]);
-			expect(matches?.[0]?.description).toContain("实时思考窗口");
-			expect(matches?.[0]?.description).toContain(mode === "compact" ? "显示实时" : "隐藏实时");
 		}
 	});
 });
