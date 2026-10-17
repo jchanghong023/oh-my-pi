@@ -2,7 +2,7 @@
 
 本目录是本项目唯一固定的本地需求目录；外部集成依赖按本目录中的明确引用约束。开发规则见仓库根 `AGENTS.md`。
 
-本轮 45 项审查发现及后续 reviewer 修复已实施，需求目标保持不变。当前上游基线为 `e34a37389c82`；11 个冲突保留普通会话链接、offline 访问前隔离、净化显示与真实路径、共享 schema 引用解析及 fork Provider 规则，本次同步静态检查 `bun run check:tools` 通过，保留 11 项已有警告。修复提交 `47d276f0278a` 的 Windows native 构建、Rust nextest（3293 通过／6 跳过）与 doctest 通过；合并前 `fastcheck` 为 PASS（total=86.4s、compile_excluded=0.0s、budgeted=86.4s、limit=90.0s、exit=0，混合编译保守计费）。真实 native 的 10 个边界场景、真实 CLI 根别名刷新与零模型请求导出，以及 Composer→TUI 失败历史重播已有通过证据；合并后的同提交 slowtest 尚未运行。`tui-test` 未安装，指定扩展 TUI 验收受阻，未自动安装或自写 PTY 替代。下表及后续较早记录仍限于各自源码与范围，不代表当前完整跨平台验收或发布完成。
+本轮 45 项审查发现及后续 reviewer 修复已实施，需求目标保持不变；当前上游基线为 `e34a37389c82`。验收源码 `fb166dd89e82` 在 Windows 与 Ubuntu-24.04 WSL2 以同一固定提交完成 `scope=fork-affected` slowtest：PASS，total=640.1s、compile_excluded=0.0s、budgeted=640.1s、limit=1500.0s、exit=0；混合 Cargo 工作保守计费。两端 fulltest 分别为 586.2s／534.7s，均包含全部 fastcheck、320 个 fork TS 测试文件、受影响 Rust nextest（Windows 3293 通过／6 跳过，Linux 3642 通过／6 跳过）、doctest、脚本、当前源码 native 构建，以及真实 `bun run dev` PTY 启动、输入、Team 报告持久化／取消和 Repo 生命周期。Windows 报告 `runs/test-timing/2026-10-17T17-25-35.077Z-56552-f10823a1/run.json` 按跨平台报告契约保持 partial，原因仅为不归并 WSL XML，已核对其 producer 均为零退出且本机 XML reconciliation 无失败；Linux 原生工作区报告 `2026-10-17T17-27-19.076Z-614617-7e963649/run.json` 为 complete，测试后 SHA 与工作区状态认证通过。实际 slowtest 日志终态 PASS／exit=0，未发现 error、失败阶段或未脱敏凭据字段。发布独立使用 fork 的手动 Release 工作流，不计入本地门禁。另行指定的扩展 `tui-test` 验收仍因工具未安装受阻，未自动安装或自写 PTY 替代；真实模型、公司实网、ZCode GUI、共享桌面、完整上游套件和其他未声明平台仍未验收。下表较早专项记录限于各自源码与范围，当前两端标准门禁以上述固定提交证据为准。
 
 | 文档 | 权威范围 | 状态 |
 | --- | --- | --- |
