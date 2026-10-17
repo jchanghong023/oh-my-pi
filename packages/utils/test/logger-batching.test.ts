@@ -160,4 +160,29 @@ describe("RotatingFileSink batching", () => {
 		// One write per rotated file instead of one per record.
 		expect(writeSpy).toHaveBeenCalledTimes(names.length);
 	});
+
+	test("size rotation and retention leave earlier invocations' files untouched", () => {
+		const day = "2026-10-17";
+		const previous = [`omp.${day}.1234.log`, `omp.${day}.1234.log.2`];
+		for (const name of previous) fs.writeFileSync(path.join(dir, name), "earlier invocation\n");
+		const sink = makeSink(dir, { intervalMs: 60_000, maxBytes: FLUSH_BYTES });
+		const records = Array.from({ length: 7 }, (_, index) => `${index}`.padEnd(1_001, "x"));
+		try {
+			for (const record of records) sink.write(record, false, day);
+		} finally {
+			sink.close();
+		}
+
+		for (const name of previous) {
+			expect(fs.readFileSync(path.join(dir, name), "utf8")).toBe("earlier invocation\n");
+		}
+		const retained = fs
+			.readdirSync(dir)
+			.filter(name => !previous.includes(name))
+			.sort();
+		expect(retained).toHaveLength(5);
+		expect(retained.map(name => fs.readFileSync(path.join(dir, name), "utf8"))).toEqual(
+			records.slice(-5).map(record => record + os.EOL),
+		);
+	});
 });

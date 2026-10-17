@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { localDay } from "../dirs";
+import { isEexist } from "../fs-error";
 import { openCloexecSync } from "../fs-open";
 
 /** Write batching for {@link RotatingFileSink}. */
@@ -45,9 +46,9 @@ export interface RotatingFileOptions {
  *
  * Construction performs no filesystem I/O: the first file is created when the
  * first record is written out, so a process that never logs leaves nothing on
- * disk. Every file name embeds the owning process's suffix (its PID), so the
- * set of files this sink created is tracked in memory; files left by earlier
- * processes are pruned by name pattern in the logger, not by this sink.
+ * disk. Every file name embeds the owning process's suffix (its PID). Existing
+ * files are never reopened, even after PID reuse; collisions advance the size
+ * index. Only files exclusively created by this sink enter its retention set.
  *
  * With {@link RotatingFileOptions.batch}, records are buffered and written in
  * one `write` per batch. Buffered bytes already count toward the active file's
@@ -98,7 +99,22 @@ export class RotatingFileSink {
 	#openFd(filePath: string): void {
 		this.#closeFd();
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
-		this.#fd = openCloexecSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND);
+		for (;;) {
+			try {
+				this.#fd = openCloexecSync(
+					filePath,
+					fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_APPEND,
+				);
+				break;
+			} catch (error) {
+				if (!isEexist(error) || !fs.lstatSync(filePath).isFile()) throw error;
+				const activeBytes = this.#activeBytes;
+				this.#setActivePath(this.#activeDay!, ++this.#activeIndex);
+				this.#activeBytes = activeBytes;
+				filePath = this.#activePath!;
+			}
+		}
+		this.#registerFile(filePath);
 		try {
 			this.#onRotate?.(filePath);
 		} catch {
@@ -122,7 +138,6 @@ export class RotatingFileSink {
 		this.#recover(() => {
 			this.#selectFile(day);
 			if (this.#activePath && this.#fd === undefined) {
-				this.#registerFile(this.#activePath);
 				this.#openFd(this.#activePath);
 			}
 		}, "open");
@@ -160,7 +175,6 @@ export class RotatingFileSink {
 				this.#setActivePath(day, 0);
 				this.#activeBytes += this.#pendingBytes;
 				try {
-					this.#registerFile(this.#activePath!);
 					this.#openFd(this.#activePath!);
 					const recovery = this.#notifyFailure(error, stage, this.#activePath);
 					if (recovery) {
@@ -221,7 +235,6 @@ export class RotatingFileSink {
 		const activePath = this.#activePath;
 		if (this.#pendingBytes === 0 || !activePath) return;
 		if (this.#fd === undefined) {
-			this.#registerFile(activePath);
 			this.#openFd(activePath);
 		}
 		const buf = Buffer.from(this.#pending, "utf8");
@@ -275,11 +288,7 @@ export class RotatingFileSink {
 			this.#directory,
 			`${this.#filenamePrefix}.${day}.${this.#filenameSuffix}.log${suffix}`,
 		);
-		try {
-			this.#activeBytes = fs.statSync(this.#activePath).size;
-		} catch {
-			this.#activeBytes = 0;
-		}
+		this.#activeBytes = 0;
 	}
 
 	#registerFile(filePath: string): void {

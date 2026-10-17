@@ -5,6 +5,7 @@
 ### Fixed
 
 - Preserve successful explicit exits after an early Windows event-loop drain while still reporting genuinely unfinished commands.
+- Keep each process invocation in a new log file, including when its PID is reused, without appending to earlier logs.
 
 ## [18.11.3] - 2026-10-16
 

@@ -561,6 +561,31 @@ describe("diagnostic consumer contracts", () => {
 		expect(result.stderr).toBe("");
 	});
 
+	test("does not append to earlier invocations' logs when a PID is reused", async () => {
+		const previousRecord = `${JSON.stringify({ message: "earlier_invocation" })}\n`;
+		const result = await runDiagnosticConsumer(`
+			const previous = getLogPath();
+			fs.mkdirSync(path.dirname(previous), { recursive: true });
+			fs.writeFileSync(previous, ${JSON.stringify(previousRecord)});
+			fs.writeFileSync(previous + ".1", ${JSON.stringify(previousRecord)});
+			logger.info("current_invocation");
+			logger.flush();
+			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({
+				previous, current: logger.getCurrentLogPath()
+			}));
+		`);
+		const { previous, current } = await Bun.file(path.join(result.root, "result.json")).json();
+		expect(await Bun.file(previous).text()).toBe(previousRecord);
+		expect(await Bun.file(previous + ".1").text()).toBe(previousRecord);
+		expect(current).not.toBe(previous);
+		expect(current).not.toBe(previous + ".1");
+		const entry = JSON.parse((await Bun.file(current).text()).trim());
+		expect(entry.message).toBe("current_invocation");
+		expect(entry.pid).toBe(result.pid);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+	});
+
 	test("recovers when mkdir works but the actual log cannot be opened", async () => {
 		const result = await runDiagnosticConsumer(`
 			fs.mkdirSync(getLogPath(), { recursive: true });
