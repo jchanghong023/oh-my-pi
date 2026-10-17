@@ -950,7 +950,7 @@ try {
 			);
 
 			expect(callbackError).toBeNull();
-			expect(result.exitCode).toBe(0);
+			expect(result.exitCode, JSON.stringify({ result, output })).toBe(0);
 			expect(result.timedOut).toBeFalse();
 			// ConPTY interleaves terminal negotiation with the child's own bytes
 			// (`ESC[6n`, SGR reset, an OSC 0 title set, cursor show), so strip the

@@ -111,7 +111,7 @@ async function withForkRpcServer<T>(
 
 describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", () => {
 	test("v3 negotiation gates the fork commands on the real rpc-ui entry", async () => {
-		await using root = await TempDir.create("rpc-fork-e2e-");
+		await using root = await TempDir.create("@rpc-fork-e2e-");
 		const cwd = path.resolve(root.join("project"));
 		const sessionDir = path.resolve(root.join("sessions"));
 		const agentDir = path.resolve(root.join("agent"));
