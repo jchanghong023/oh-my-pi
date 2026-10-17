@@ -21,7 +21,7 @@ function displayPreferences(settings: Settings) {
 }
 
 const presets = {
-	clean: { hideThinkingBlock: false, hideToolActivity: true, compactToolActivity: true },
+	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: true },
 	compact: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: true },
 	detailed: { hideThinkingBlock: true, hideToolActivity: false, compactToolActivity: false },
 };
@@ -201,7 +201,7 @@ describe("/display slash command", () => {
 			const matches = await command?.getArgumentCompletions?.(mode);
 			expect(matches?.map(match => match.value)).toEqual([`${mode} `]);
 			expect(matches?.[0]?.description).toContain("实时思考窗口");
-			expect(matches?.[0]?.description).toContain(mode === "detailed" ? "隐藏实时" : "显示实时");
+			expect(matches?.[0]?.description).toContain(mode === "compact" ? "显示实时" : "隐藏实时");
 		}
 	});
 });

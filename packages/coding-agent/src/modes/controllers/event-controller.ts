@@ -1022,6 +1022,16 @@ export class EventController {
 			(event.type === "message_end" && event.message.role === "assistant") ||
 			event.type === "agent_end"
 		) {
+			// Answer prose supersedes the stub: its bridging job between tool
+			// runs is done and the answer itself is now streaming above.
+			if (
+				event.type === "message_update" &&
+				event.assistantMessageEvent.type === "text_start" &&
+				this.ctx.viewSession.agent.state.activeThinkingIndex === undefined
+			) {
+				this.ctx.clearThinkingPreview();
+				return;
+			}
 			// Notifications may lag a new stream or a synchronous abort. Only the
 			// runtime's current snapshot/phase owns the window, never event content
 			// or a timestamp shared by two messages.
@@ -1036,7 +1046,12 @@ export class EventController {
 			event.type === "tool_execution_start" ||
 			(event.type === "message_start" && event.message.role === "assistant")
 		) {
-			if (this.ctx.viewSession.agent.state.activeThinkingIndex === undefined) this.ctx.clearThinkingPreview();
+			if (this.ctx.viewSession.agent.state.activeThinkingIndex === undefined) {
+				// A new turn must not inherit the previous turn's stub; tool runs
+				// and retry backoff bridge on it until thinking resumes.
+				if (event.type === "agent_start") this.ctx.clearThinkingPreview();
+				else this.ctx.collapseThinkingPreview();
+			}
 		}
 	}
 

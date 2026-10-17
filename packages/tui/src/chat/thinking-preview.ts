@@ -4,9 +4,12 @@ import type { DescribeContext, NativeNode } from "../native/node";
 import { sanitizeCarriageReturns } from "../render/render-utils";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme";
 import type { Component } from "../tui";
-import { getWidthConfigEpoch, replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
+import { getWidthConfigEpoch, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 
 const MAX_ROWS = 5;
+/** Short terminals clamp the live tail so it cannot dominate the viewport. */
+const SHORT_TERMINAL_ROW_LIMIT = 20;
+const SHORT_TERMINAL_MAX_ROWS = 3;
 // A growing final word can move off the previous row when it becomes too long.
 // Keep both rows mutable, including their original whitespace and graphemes.
 const MUTABLE_ROWS = 2;
@@ -26,7 +29,7 @@ interface TailRow {
 }
 
 /** Wrap with the shared engine; retain only a bounded row/offset index. */
-function wrapTail(source: string, width: number, continuedLine: boolean): TailRow[] {
+function wrapTail(source: string, width: number, continuedLine: boolean, maxRows: number): TailRow[] {
 	const tail: TailRow[] = [];
 	let lineStart = 0;
 	while (lineStart <= source.length) {
@@ -55,7 +58,7 @@ function wrapTail(source: string, width: number, continuedLine: boolean): TailRo
 			// rows have no unique source offset and cannot be resume boundaries.
 			const start = startsLine || row.length === 0 ? cursor : line.indexOf(row, cursor);
 			tail.push({ text: row, start: lineStart + start, startsLine });
-			if (tail.length > MAX_ROWS + MUTABLE_ROWS) tail.shift();
+			if (tail.length > maxRows + MUTABLE_ROWS) tail.shift();
 			cursor = start + row.length;
 		}
 		if (newline < 0) break;
@@ -74,14 +77,39 @@ export class ThinkingPreviewComponent implements Component {
 	#rows: readonly string[] = EMPTY_ROWS;
 	#width: number | undefined;
 	#widthEpoch = -1;
+	#maxRows = MAX_ROWS;
+	#heightSource: (() => number) | undefined;
 	#dirty = false;
 	#normalizationStart: number | undefined;
 	#painted: readonly string[] | undefined;
 	#themeEpoch = -1;
 	#native: NativeNode | undefined;
+	/** Last non-blank line of a finished tail, shown as a single dim stub row. */
+	#stubLine: string | undefined;
+
+	/** Feed the terminal height so short terminals clamp the live tail to three rows. */
+	setHeightSource(source: (() => number) | undefined): void {
+		this.#heightSource = source;
+	}
+
+	#liveMaxRows(): number {
+		const height = this.#heightSource?.();
+		return height !== undefined && Number.isFinite(height) && height > 0 && height < SHORT_TERMINAL_ROW_LIMIT
+			? SHORT_TERMINAL_MAX_ROWS
+			: MAX_ROWS;
+	}
 
 	setText(text: string): boolean {
-		if (text === this.#text) return false;
+		if (text === this.#text) {
+			// Re-attaching the same live content retires a stub from an
+			// earlier collapse; unchanged live text stays cached.
+			if (this.#stubLine === undefined) return false;
+			this.#stubLine = undefined;
+			this.#dirty = true;
+			this.invalidate();
+			return true;
+		}
+		this.#stubLine = undefined;
 		const previous = this.#text;
 		const append = text.startsWith(previous);
 		const delta = append ? text.slice(previous.length) : text;
@@ -113,6 +141,23 @@ export class ThinkingPreviewComponent implements Component {
 		return this.setText("");
 	}
 
+	/**
+	 * Collapse the finished tail to one dim stub row bridging tool runs within
+	 * the turn. The next {@link setText} goes live again; `clear` wipes fully.
+	 */
+	collapse(): boolean {
+		if (this.#text.length === 0 || this.#stubLine !== undefined) return false;
+		const normalized = replaceTabs(sanitizeText(sanitizeCarriageReturns(this.#text)));
+		let stubLine: string | undefined;
+		for (const line of normalized.split("\n")) {
+			if (/\S/.test(line)) stubLine = line;
+		}
+		if (stubLine === undefined) return false;
+		this.#stubLine = stubLine;
+		this.invalidate();
+		return true;
+	}
+
 	invalidate(): void {
 		this.#painted = undefined;
 		this.#native = undefined;
@@ -120,16 +165,43 @@ export class ThinkingPreviewComponent implements Component {
 
 	render(width: number): readonly string[] {
 		const cols = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
-		if (this.#text.length === 0 || cols === 0) return EMPTY_ROWS;
+		if (cols === 0) return EMPTY_ROWS;
 		ensureThemeSync();
 		const widthEpoch = getWidthConfigEpoch();
-		if (cols !== this.#width || widthEpoch !== this.#widthEpoch) {
+		if (this.#stubLine !== undefined) {
+			if (cols !== this.#width || widthEpoch !== this.#widthEpoch) {
+				// Rows folded at the old width are stale once the stub retires.
+				this.#tail = undefined;
+				this.#continuedLine = false;
+				this.#settled = EMPTY_ROWS;
+				this.#dirty = true;
+				this.#width = cols;
+				this.#widthEpoch = widthEpoch;
+				this.invalidate();
+			}
+			const stubEpoch = getThemeEpoch();
+			if (this.#painted === undefined || stubEpoch !== this.#themeEpoch) {
+				// The stub is settled history, not the live line: thinkingText
+				// only, never the newest-line text emphasis.
+				this.#painted = [theme.fg("thinkingText", truncateToWidth(`… ${this.#stubLine}`, cols, ""))];
+				this.#themeEpoch = stubEpoch;
+				this.#native = undefined;
+			}
+			return this.#painted;
+		}
+		if (this.#text.length === 0) return EMPTY_ROWS;
+		const prefixWidth = visibleWidth("│ ");
+		const prefix = cols > prefixWidth ? "│ " : "";
+		const contentWidth = cols - (prefix ? prefixWidth : 0);
+		const maxRows = this.#liveMaxRows();
+		if (cols !== this.#width || widthEpoch !== this.#widthEpoch || maxRows !== this.#maxRows) {
 			this.#tail = undefined;
 			this.#continuedLine = false;
 			this.#settled = EMPTY_ROWS;
 			this.#dirty = true;
 			this.#width = cols;
 			this.#widthEpoch = widthEpoch;
+			this.#maxRows = maxRows;
 		}
 		if (this.#dirty) {
 			// Compact completed blank lines only; retain the final partial line's
@@ -138,10 +210,10 @@ export class ThinkingPreviewComponent implements Component {
 				/(^|\n)(?:[^\S\n]*\n)+/g,
 				"$1\n",
 			);
-			const wrapped = wrapTail(source, cols, this.#continuedLine);
+			const wrapped = wrapTail(source, contentWidth, this.#continuedLine, maxRows);
 			let boundary = Math.max(0, wrapped.length - MUTABLE_ROWS);
 			while (boundary > 0 && wrapped[boundary]?.text === "" && !wrapped[boundary]?.startsLine) boundary--;
-			this.#settled = [...this.#settled, ...wrapped.slice(0, boundary).map(row => row.text)].slice(-MAX_ROWS);
+			this.#settled = [...this.#settled, ...wrapped.slice(0, boundary).map(row => row.text)].slice(-maxRows);
 			const resume = wrapped[boundary];
 			this.#tail = source.slice(resume?.start ?? source.length);
 			this.#continuedLine = resume !== undefined && !resume.startsLine;
@@ -149,15 +221,21 @@ export class ThinkingPreviewComponent implements Component {
 			while (rows.length > 0 && !/\S/.test(rows[rows.length - 1]!)) rows.pop();
 			// The shared wrapper preserves an indivisible wide grapheme even at
 			// width 1. Omit that unfit grapheme instead of letting a terminal wrap
-			// it into an unaccounted sixth physical row.
-			this.#rows = rows.length > 0 ? rows.slice(-MAX_ROWS).map(row => truncateToWidth(row, cols, "")) : EMPTY_ROWS;
+			// it into a row beyond the body limit.
+			this.#rows =
+				rows.length > 0 ? rows.slice(-maxRows).map(row => truncateToWidth(row, contentWidth, "")) : EMPTY_ROWS;
 			this.#dirty = false;
 			this.invalidate();
 		}
 		const themeEpoch = getThemeEpoch();
 		if (this.#painted === undefined || themeEpoch !== this.#themeEpoch) {
 			const latest = this.#rows.findLastIndex(row => /\S/.test(row));
-			this.#painted = this.#rows.map((row, index) => theme.fg(index === latest ? "text" : "thinkingText", row));
+			const guide = prefix ? theme.fg("border", prefix) : "";
+			const painted = this.#rows.map(
+				(row, index) => guide + theme.fg(index === latest ? "text" : "thinkingText", row),
+			);
+			if (prefix && painted.length > 0) painted.unshift(theme.fg("accent", truncateToWidth("思考", cols, "")));
+			this.#painted = painted;
 			this.#themeEpoch = themeEpoch;
 			this.#native = undefined;
 		}
@@ -168,8 +246,8 @@ export class ThinkingPreviewComponent implements Component {
 		const cols = cx?.cols ?? this.#width ?? 0;
 		const lines = this.render(cols);
 		if (lines.length === 0) return EMPTY_NODE;
-		// Already folded at the surface width: do not hand native Text the
-		// complete reasoning body and let it wrap into more than five rows.
+		// Already folded and decorated at the surface width; native must not
+		// wrap the full reasoning body or count the header against its row limit.
 		this.#native ??= node("rows", { cols: this.#width ?? 0, lines });
 		return this.#native;
 	}

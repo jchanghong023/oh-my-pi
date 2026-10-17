@@ -310,6 +310,7 @@ export function createInteractiveModeContext(
 					activeThinkingIndex,
 					this.effectiveHideThinkingBlock,
 					this.proseOnlyThinking,
+					!this.effectiveHideThinkingBlock && this.viewSession.isStreaming,
 				)
 			) {
 				this.ui.requestRender();
@@ -317,6 +318,9 @@ export function createInteractiveModeContext(
 		},
 		clearThinkingPreview(this: InteractiveModeContext) {
 			if (thinkingPreview.clear()) this.ui.requestRender();
+		},
+		collapseThinkingPreview(this: InteractiveModeContext) {
+			if (thinkingPreview.collapse()) this.ui.requestRender();
 		},
 		clearTransientSessionUi: vi.fn(),
 		prepareSessionSwitch: vi.fn(async () => {}),

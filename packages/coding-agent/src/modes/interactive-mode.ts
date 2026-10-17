@@ -1168,17 +1168,22 @@ const CTRL_L_APPEARANCE_RESPONSE_DEADLINE_MS = 2000;
 /** Repaint cadence of the open jobs sheet: output tails, pids and list ages are polled, not pushed. */
 const JOBS_SHEET_REFRESH_MS = 250;
 
-/** Project only the active real thinking block; history and synthetic starts have no index. */
+/**
+ * Project only the active real thinking block; history and synthetic starts have no index.
+ * When the live phase ends and `retainStub` is set, collapse to the single-row
+ * stub instead of clearing, bridging tool runs within the running turn.
+ */
 export function projectThinkingPreview(
 	preview: ThinkingPreviewComponent,
 	message: AssistantMessage | undefined,
 	activeThinkingIndex: number | undefined,
 	hidden: boolean,
 	proseOnlyThinking: boolean,
+	retainStub = false,
 ): boolean {
 	const content = activeThinkingIndex === undefined ? undefined : message?.content[activeThinkingIndex];
 	if (hidden || !Number.isInteger(activeThinkingIndex) || content?.type !== "thinking" || !content.thinking.trim()) {
-		return preview.clear();
+		return retainStub && !hidden ? preview.collapse() : preview.clear();
 	}
 	return preview.setText(formatThinkingForDisplay(content.thinking, proseOnlyThinking));
 }
@@ -1275,18 +1280,26 @@ export class InteractiveMode implements InteractiveModeContext {
 	#thinkingPreviewOwner: AgentSession | undefined;
 
 	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void {
-		this.#thinkingPreviewOwner = message ? this.viewSession : undefined;
+		if (message) this.noteDisplayableThinkingContent(message);
+		const retainStub = this.#retainThinkingStub();
+		if (message) this.#thinkingPreviewOwner = this.viewSession;
+		else if (!retainStub) this.#thinkingPreviewOwner = undefined;
 		this.#thinkingPreviewMessage = message;
 		this.#thinkingPreviewIndex = activeThinkingIndex;
-		if (message) this.noteDisplayableThinkingContent(message);
 		const changed = projectThinkingPreview(
 			this.#thinkingPreview,
 			message,
 			activeThinkingIndex,
 			this.effectiveHideThinkingBlock,
 			this.proseOnlyThinking,
+			retainStub,
 		);
 		if (changed) this.ui.requestRender();
+	}
+
+	/** A finished thought keeps a stub only while the turn is still running. */
+	#retainThinkingStub(): boolean {
+		return !this.effectiveHideThinkingBlock && this.viewSession.isStreaming;
 	}
 
 	clearThinkingPreview(): void {
@@ -1294,6 +1307,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#thinkingPreviewMessage = undefined;
 		this.#thinkingPreviewIndex = undefined;
 		if (this.#thinkingPreview.clear()) this.ui.requestRender();
+	}
+
+	collapseThinkingPreview(): void {
+		this.#thinkingPreviewMessage = undefined;
+		this.#thinkingPreviewIndex = undefined;
+		if (this.#thinkingPreview.collapse()) this.ui.requestRender();
 	}
 
 	#refreshThinkingPreview(): void {
@@ -1821,6 +1840,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			});
 		this.composer.setPreferences(preferences);
 		this.ui = this.composer.ui;
+		this.#thinkingPreview.setHeightSource(() => this.ui.terminal.rows);
 		this.editor = this.composer.editor;
 		this.editor.magicKeywordsEnabled = () => cfgMagicKeywordsEnabled.get(this.settings);
 		this.editor.placeholder = () => this.#composerHint();

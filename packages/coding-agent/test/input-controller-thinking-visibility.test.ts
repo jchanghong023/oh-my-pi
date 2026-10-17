@@ -11,7 +11,11 @@ import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/typ
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { cfgHideThinkingBlock, cfgProseOnlyThinking } from "@oh-my-pi/pi-coding-agent/session/settings";
+import {
+	cfgExpandThinkingBlocks,
+	cfgHideThinkingBlock,
+	cfgProseOnlyThinking,
+} from "@oh-my-pi/pi-coding-agent/session/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -200,6 +204,35 @@ describe("InputController thinking visibility", () => {
 		}
 		expect(session.agent.state.streamMessage).toBeNull();
 		expect(message.content).toEqual([{ type: "thinking", thinking: "active-prose\n```ts\nactive-code\n```" }]);
+	});
+
+	it("keeps the finished thinking stub through settings refreshes during a running turn", async () => {
+		const message = assistant([{ type: "thinking", thinking: "earlier thought\nretained-tool-bridge" }]);
+		session.agent.state.isStreaming = true;
+		try {
+			stream(message, 0);
+			session.agent.state.activeThinkingIndex = undefined;
+			mode.collapseThinkingPreview();
+			cfgProseOnlyThinking.set(session.settings, false);
+			await Promise.resolve();
+			expect(render()).toContain("… retained-tool-bridge");
+			expect(render()).not.toContain("earlier thought");
+
+			stream(message, 0);
+			session.agent.state.streamMessage = null;
+			session.agent.state.activeThinkingIndex = undefined;
+			mode.syncThinkingPreview();
+			cfgExpandThinkingBlocks.set(session.settings, true);
+			await Promise.resolve();
+			expect(render()).toContain("… retained-tool-bridge");
+			expect(render()).not.toContain("earlier thought");
+
+			session.agent.state.isStreaming = false;
+			mode.syncThinkingPreview();
+			expect(render()).not.toContain("retained-tool-bridge");
+		} finally {
+			session.agent.state.isStreaming = false;
+		}
 	});
 
 	it("restores the latest active snapshot after hidden streaming, not the previously visible block", () => {

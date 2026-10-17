@@ -185,6 +185,8 @@ export interface InteractiveModeContext {
 	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void;
 	/** Clear both the preview and its retained live snapshot. */
 	clearThinkingPreview(): void;
+	/** Collapse the finished preview to its single-row stub, keeping the component content. */
+	collapseThinkingPreview(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];

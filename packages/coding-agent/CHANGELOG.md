@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Keep the live thinking preview in compact mode only: clean and detailed hide it, and a finished thought collapses to a one-row stub that clears when answer prose starts or the turn ends.
 - Show the live five-line thinking preview above the TODO panel, keeping task progress closer to the input.
 - `/team` now allows read-only repository-index queries and instructs every discussion stage to prioritize internal Wiki and code-index searches instead of guessing unknown facts.
 - Restore upstream filesystem walker concurrency (four workers by default) instead of scaling it with CPU core count, preserving explicit `PI_WALK_WORKERS` settings.
@@ -15,6 +16,7 @@
 
 ### Fixed
 
+- Preserve the finished thinking stub during tool execution when prose or thinking-expansion preferences change, without reopening the completed thought.
 - Avoid false WSL cleanup failures when slowtest cancels a stage whose control directory has already been removed.
 - Keep task and truncated-output artifacts in private offline shm directories so Linux child sessions can open them safely.
 - Bound local gate test pools to leave room for CLI/native child processes and concurrent WSL validation without relaxing test deadlines.

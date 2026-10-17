@@ -33,15 +33,20 @@ function thinkingMessage(text: string, timestamp = 1): AssistantMessage {
 	};
 }
 
-function update(message: AssistantMessage, phase: "thinking_delta" | "thinking_end" | "start"): MessageUpdate {
+function update(
+	message: AssistantMessage,
+	phase: "thinking_delta" | "thinking_end" | "start" | "text_start",
+): MessageUpdate {
 	const text = message.content[0];
 	if (text?.type !== "thinking") throw new Error("Expected a thinking fixture");
 	const assistantMessageEvent: MessageUpdate["assistantMessageEvent"] =
 		phase === "start"
 			? { type: "start", partial: message }
-			: phase === "thinking_end"
-				? { type: "thinking_end", contentIndex: 0, content: text.thinking, partial: message }
-				: { type: "thinking_delta", contentIndex: 0, delta: text.thinking, partial: message };
+			: phase === "text_start"
+				? { type: "text_start", contentIndex: 0, partial: message }
+				: phase === "thinking_end"
+					? { type: "thinking_end", contentIndex: 0, content: text.thinking, partial: message }
+					: { type: "thinking_delta", contentIndex: 0, delta: text.thinking, partial: message };
 	return { type: "message_update", message, assistantMessageEvent };
 }
 
@@ -146,11 +151,11 @@ describe("thinking preview event ordering", () => {
 		await h.live.emit(update(message, "thinking_end"));
 		// A focus/replay start carries the same trailing block but is not a live phase.
 		await h.live.emit(update(message, "start"));
-		expect(h.rendered()).toBe("");
+		expect(Bun.stripANSI(h.rendered())).toBe("… VISIBLE_BEFORE_END");
 
 		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
-		expect(h.rendered()).toBe("");
+		expect(Bun.stripANSI(h.rendered())).toBe("… VISIBLE_BEFORE_END");
 	});
 
 	it("does not reopen thinking when an older queued rebuild resumes after end", async () => {
@@ -167,12 +172,12 @@ describe("thinking preview event ordering", () => {
 
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(h.rendered()).toBe("");
+		expect(Bun.stripANSI(h.rendered())).toBe("… SUSPENDED_THINKING");
 		gate.resolve();
 		await flushMicrotasks();
 		vi.advanceTimersByTime(66);
 		await flushMicrotasks();
-		expect(h.rendered()).toBe("");
+		expect(Bun.stripANSI(h.rendered())).toBe("… SUSPENDED_THINKING");
 	});
 
 	it("keeps the current stream visible when an older stream shares its timestamp and thinking index", async () => {
@@ -207,6 +212,8 @@ describe("thinking preview event ordering", () => {
 
 		h.ctx.viewSession.agent.state.streamMessage = null;
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		// The turn already ended: an empty runtime state keeps nothing, not even a stub.
+		(h.ctx.viewSession as unknown as { isStreaming: boolean }).isStreaming = false;
 		await h.live.emit(update(previous, "thinking_end"));
 		expect(h.rendered()).toBe("");
 
@@ -214,6 +221,82 @@ describe("thinking preview event ordering", () => {
 		expect(h.rendered()).toBe("");
 		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
+		expect(h.rendered()).toBe("");
+	});
+});
+
+describe("thinking preview turn stub", () => {
+	it("bridges tool interludes on one stub row and clears it when the turn ends", async () => {
+		const message = thinkingMessage("BRIDGE_TOOL_RUN");
+		const h = streamingFixture(message);
+		await h.live.emit(update(message, "thinking_delta"));
+		expect(h.rendered()).toContain("BRIDGE_TOOL_RUN");
+
+		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		await h.live.emit(update(message, "thinking_end"));
+		expect(Bun.stripANSI(h.rendered())).toBe("… BRIDGE_TOOL_RUN");
+
+		// The turn continues into a tool interlude with no live thinking phase.
+		h.ctx.viewSession.agent.state.streamMessage = null;
+		await h.live.emit({ type: "message_end", message });
+		expect(Bun.stripANSI(h.rendered())).toBe("… BRIDGE_TOOL_RUN");
+
+		(h.ctx.viewSession as unknown as { isStreaming: boolean }).isStreaming = false;
+		await h.live.emit({ type: "agent_end", messages: [] });
+		expect(h.rendered()).toBe("");
+	});
+
+	it("clears the stub when answer prose starts instead of bridging the reply", async () => {
+		const message = thinkingMessage("THEN_ANSWER");
+		const h = streamingFixture(message);
+		await h.live.emit(update(message, "thinking_delta"));
+		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		await h.live.emit(update(message, "thinking_end"));
+		expect(Bun.stripANSI(h.rendered())).toBe("… THEN_ANSWER");
+
+		await h.live.emit(update(message, "text_start"));
+		expect(h.rendered()).toBe("");
+		vi.advanceTimersByTime(50);
+		await flushMicrotasks();
+		expect(h.rendered()).toBe("");
+	});
+
+	it("returns to the live window when thinking resumes with the same text", async () => {
+		const message = thinkingMessage("RESUME_SAME_TEXT");
+		const h = streamingFixture(message);
+		await h.live.emit(update(message, "thinking_delta"));
+		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		await h.live.emit(update(message, "thinking_end"));
+		expect(Bun.stripANSI(h.rendered())).toBe("… RESUME_SAME_TEXT");
+
+		h.ctx.viewSession.agent.state.activeThinkingIndex = 0;
+		await h.live.emit(update(message, "thinking_delta"));
+		expect(h.rendered()).toContain("RESUME_SAME_TEXT");
+		expect(h.rendered()).not.toContain("… RESUME_SAME_TEXT");
+	});
+
+	it("does not retain a stub when the thinking window is hidden", async () => {
+		const message = thinkingMessage("HIDDEN_STUB");
+		const h = streamingFixture(message);
+		await h.live.emit(update(message, "thinking_delta"));
+		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		await h.live.emit(update(message, "thinking_end"));
+		expect(Bun.stripANSI(h.rendered())).toBe("… HIDDEN_STUB");
+
+		h.ctx.hideThinkingBlock = true;
+		await h.live.emit({ type: "message_end", message });
+		expect(h.rendered()).toBe("");
+	});
+
+	it("clears the stub when a new turn starts", async () => {
+		const message = thinkingMessage("NEW_TURN_STUB");
+		const h = streamingFixture(message);
+		await h.live.emit(update(message, "thinking_delta"));
+		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
+		await h.live.emit(update(message, "thinking_end"));
+		expect(Bun.stripANSI(h.rendered())).toBe("… NEW_TURN_STUB");
+
+		await h.live.emit({ type: "agent_start" });
 		expect(h.rendered()).toBe("");
 	});
 });
