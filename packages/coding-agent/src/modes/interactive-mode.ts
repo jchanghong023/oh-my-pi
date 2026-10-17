@@ -2229,6 +2229,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			[
 				this.chatContainer,
 				this.pendingMessagesContainer,
+				this.#thinkingPreview,
 				this.todoContainer,
 				this.subagentContainer,
 				this.btwContainer,
@@ -2245,7 +2246,6 @@ export class InteractiveMode implements InteractiveModeContext {
 				// HUDs, just above the editor's hook-widget top margin — so it reads next to
 				// the prompt while keeping the one-line gap above the editor (the band
 				// composer collapses that gap so its status band sits flush).
-				this.#thinkingPreview,
 				this.statusContainer,
 				this.attachmentChipsContainer,
 				this.hookWidgetContainerAbove,

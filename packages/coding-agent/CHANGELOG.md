@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Show the live five-line thinking preview above the TODO panel, keeping task progress closer to the input.
 - `/team` now allows read-only repository-index queries and instructs every discussion stage to prioritize internal Wiki and code-index searches instead of guessing unknown facts.
 - Restore upstream filesystem walker concurrency (four workers by default) instead of scaling it with CPU core count, preserving explicit `PI_WALK_WORKERS` settings.
 - Restore upstream terminal-title run-state indicators by default, preserving explicit user settings.
