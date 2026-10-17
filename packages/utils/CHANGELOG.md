@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve successful explicit exits after an early Windows event-loop drain while still reporting genuinely unfinished commands.
+
 ## [18.11.3] - 2026-10-16
 
 ### Fixed

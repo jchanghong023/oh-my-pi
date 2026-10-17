@@ -126,14 +126,140 @@ describe("Python gateway environment filtering", () => {
 });
 
 describe("enumeratePythonRuntimes", () => {
+	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 	afterEach(() => {
 		vi.restoreAllMocks();
+		Object.defineProperty(process, "platform", platformDescriptor);
 	});
 
 	const managedDir = path.join(path.sep, "fake", ".omp", "python-env");
 	const managedBin = path.join(managedDir, process.platform === "win32" ? "Scripts" : "bin");
 	const managedPy = path.join(managedBin, process.platform === "win32" ? "python.exe" : "python");
 	const systemPy = path.join(path.sep, "usr", "bin", "python3");
+	const offlinePy = "/software/public/python/3.11.4/bin/python3.11";
+
+	it("prefers the fixed Linux offline interpreter over active and managed environments without leaking activation", () => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+		const activeDir = path.join(path.sep, "business", ".venv");
+		const activePy = path.join(activeDir, "bin", "python");
+		const linuxManagedPy = path.join(managedDir, "bin", "python");
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
+			[offlinePy, activePy, linuxManagedPy].includes(String(candidate)),
+		);
+		const baseEnv = {
+			OMP_OFFLINE: "1",
+			PATH: "/business/.venv/bin:/usr/bin",
+			VIRTUAL_ENV: activeDir,
+			CONDA_PREFIX: "/business/conda",
+			CONDA_DEFAULT_ENV: "business",
+			PYTHONPATH: "/business/python36/site-packages",
+			PYTHONHOME: "/business/python36",
+			LD_LIBRARY_PATH: "/software/lib",
+		};
+		const originalEnv = { ...baseEnv };
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), baseEnv);
+
+		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([offlinePy, activePy, linuxManagedPy, systemPy]);
+		expect(runtimes[0].venvPath).toBeUndefined();
+		expect(runtimes[0].env).toEqual({
+			OMP_OFFLINE: "1",
+			PATH: baseEnv.PATH,
+			LD_LIBRARY_PATH: baseEnv.LD_LIBRARY_PATH,
+		});
+		expect(runtimes[1].env.VIRTUAL_ENV).toBe(activeDir);
+		expect(runtimes[1].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
+		expect(baseEnv).toEqual(originalEnv);
+	});
+
+	it("keeps active, managed, and system fallback order when the fixed offline interpreter is absent", () => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+		const activeDir = path.join(path.sep, "business", ".venv");
+		const activePy = path.join(activeDir, "bin", "python");
+		const linuxManagedPy = path.join(managedDir, "bin", "python");
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
+			[activePy, linuxManagedPy].includes(String(candidate)),
+		);
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {
+			OMP_OFFLINE: "1",
+			VIRTUAL_ENV: activeDir,
+		});
+
+		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, linuxManagedPy, systemPy]);
+	});
+
+	it.each([
+		["linux", undefined],
+		["linux", "0"],
+		["linux", "true"],
+		["darwin", "1"],
+		["win32", "1"],
+	] as const)("preserves existing runtime order on %s with OMP_OFFLINE=%s", (platform, offline) => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+		const activeDir = path.join(path.sep, "business", ".venv");
+		const binDir = platform === "win32" ? "Scripts" : "bin";
+		const executable = platform === "win32" ? "python.exe" : "python";
+		const activePy = path.join(activeDir, binDir, executable);
+		const candidateManagedPy = path.join(managedDir, binDir, executable);
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(fs, "existsSync").mockReturnValue(true);
+		const baseEnv = { OMP_OFFLINE: offline, VIRTUAL_ENV: activeDir, PYTHONPATH: "/business/modules" };
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), baseEnv);
+
+		expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([activePy, candidateManagedPy, systemPy]);
+		expect(runtimes[0].env.PYTHONPATH).toBe(baseEnv.PYTHONPATH);
+		expect(runtimes[2].env).toEqual(baseEnv);
+	});
+
+	it("keeps an explicit interpreter ahead of offline discovery without changing its environment", () => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+		const which = vi.spyOn(piUtils, "$which");
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+		const explicitPy = path.join(path.sep, "business", "python3.11");
+		const baseEnv = { OMP_OFFLINE: "1", VIRTUAL_ENV: "/business/venv", PYTHONPATH: "/business/modules" };
+
+		const runtime = resolveExplicitPythonRuntime(explicitPy, path.join(path.sep, "work"), baseEnv);
+
+		expect(runtime.pythonPath).toBe(explicitPy);
+		expect(runtime.env).toEqual(baseEnv);
+		expect(runtime.env).not.toBe(baseEnv);
+		expect(which).not.toHaveBeenCalled();
+	});
+
+	it("prefers the fixed Linux offline interpreter over a discovered project venv", () => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+		const cwd = path.join(path.sep, "work");
+		const projectDir = path.join(cwd, ".venv");
+		const projectPython = path.join(projectDir, "bin", "python");
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
+			[offlinePy, projectDir, projectPython].includes(String(candidate)),
+		);
+		const activeVenv = piUtils.$env.VIRTUAL_ENV;
+		const activeConda = piUtils.$env.CONDA_PREFIX;
+		try {
+			delete piUtils.$env.VIRTUAL_ENV;
+			delete piUtils.$env.CONDA_PREFIX;
+
+			const runtimes = enumeratePythonRuntimes(cwd, { OMP_OFFLINE: "1" });
+
+			expect(runtimes.map(runtime => runtime.pythonPath)).toEqual([offlinePy, projectPython, systemPy]);
+			expect(runtimes[1].venvPath).toBe(projectDir);
+		} finally {
+			if (activeVenv === undefined) delete piUtils.$env.VIRTUAL_ENV;
+			else piUtils.$env.VIRTUAL_ENV = activeVenv;
+			if (activeConda === undefined) delete piUtils.$env.CONDA_PREFIX;
+			else piUtils.$env.CONDA_PREFIX = activeConda;
+		}
+	});
 
 	it("enumerates the managed env AND the system interpreter so a broken managed env can fall through", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);

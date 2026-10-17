@@ -14,6 +14,9 @@
 
 ### Fixed
 
+- Prefer the fixed Python 3.11.4 installation for Linux offline Eval, isolate its environment from activated business environments, and reject explicitly configured unsupported Python versions.
+- Keep shared skills visible and manageable in Extensions using the host session's skill settings, with consistent collision precedence and enable/disable behavior; retain disabled sources and diagnostics in the management catalog, but scan only enabled sources for execution without disabled-source warnings.
+- Apply offline company-model handling consistently across model-aware subcommands: keep configuration errors visible without blocking explicitly configured, resolved non-company vision/default roles, and fail required default or explicit company paths without implicit provider fallback; keep plain reads and transcript rendering independent of company credentials and preserve successful exits for pure rendering.
 - Stop review exports when the host cancels them, preserving the previous ZIP, and only label files excluded when they are actually omitted.
 
 - `/clear` now clears fully completed or abandoned todo plans immediately and keeps them cleared on resume, while preserving unfinished plans and task history.

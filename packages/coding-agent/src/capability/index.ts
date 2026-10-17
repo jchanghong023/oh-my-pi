@@ -194,7 +194,8 @@ async function loadImpl<T>(
 			}
 
 			const extensionId = capability.toExtensionId?.(itemWithSource);
-			const isDisabled = extensionId !== undefined && disabledExtensionIds.has(extensionId);
+			const isDisabled =
+				!isProviderEnabled(provider.id) || (extensionId !== undefined && disabledExtensionIds.has(extensionId));
 			if (isDisabled && !options.includeDisabled) {
 				continue;
 			}
@@ -305,7 +306,7 @@ async function loadImpl<T>(
  */
 function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>): Provider<T>[] {
 	const disabled = disabledProviders();
-	let providers = (capability.providers as Provider<T>[]).filter(p => !disabled.has(p.id));
+	let providers = (capability.providers as Provider<T>[]).filter(p => options.includeDisabled || !disabled.has(p.id));
 
 	if (options.providers) {
 		const allowed = new Set(options.providers);
@@ -339,6 +340,7 @@ export async function loadCapability<T>(
 	if (options.providers) ctx.explicitProviders = new Set(options.providers);
 	if (options.includeDisabled) ctx.includeOptOutUserSources = true;
 	if (options.extensionRoots !== undefined) ctx.extensionRoots = options.extensionRoots;
+	if (options.skillSourceFilter !== undefined) ctx.skillSourceFilter = options.skillSourceFilter;
 	const providers = filterProviders(capability, options);
 
 	return await loadImpl(capability, providers, ctx, options);
@@ -362,7 +364,8 @@ export function isForeignUserProvider(providerId: string): boolean {
  */
 export function isUserSourceEnabled(source: string, ctx?: LoadContext): boolean {
 	const id = source.replace(/^\./, "");
-	if (disabledProviders().has(id)) return false;
+	if (disabledProviders().has(id) && !ctx?.includeOptOutUserSources) return false;
+	if (ctx?.skillSourceFilter) return ctx.skillSourceFilter({ provider: id, level: "user" });
 	if (FOREIGN_USER_PROVIDERS[id] !== true) return true;
 	if (ctx?.explicitProviders?.has(id) || ctx?.includeOptOutUserSources) return true;
 	const enabled = enabledProviders();

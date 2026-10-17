@@ -4,7 +4,8 @@
  * Gated by `PI_PYTHON_INTEGRATION=1` so CI without a real Python interpreter
  * (or sandboxes where subprocess spawning is restricted) does not fail.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -13,9 +14,10 @@ import {
 	executePython,
 	executePythonWithKernel,
 } from "@oh-my-pi/pi-coding-agent/eval/py/executor";
-import { PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
+import { checkPythonKernelAvailability, PythonKernel } from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { filterEnv, resolvePythonRuntime } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import * as piUtils from "@oh-my-pi/pi-utils";
 
 const SHOULD_RUN = Bun.env.PI_PYTHON_INTEGRATION === "1";
 const MATPLOTLIB_TEST_CWD = process.cwd();
@@ -582,5 +584,141 @@ describe.skipIf(!SHOULD_RUN)("python runner subprocess", () => {
 		} finally {
 			await kernel.shutdown();
 		}
+	});
+});
+
+describe.skipIf(!SHOULD_RUN || process.platform !== "linux")("Linux offline Python selection", () => {
+	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
+	const realPython = piUtils.$which("python3") ?? piUtils.$which("python");
+
+	afterEach(async () => {
+		await disposeAllKernelSessions();
+		vi.restoreAllMocks();
+	});
+
+	// Route only the fixed path into a private fixture: no writes under /software
+	// and no dependency on the company's Python installation for this regression.
+	async function prepareInterpreters(temp: TempDir, fixed: "working" | "broken" | "old", polluted = false) {
+		if (!realPython) throw new Error("PI_PYTHON_INTEGRATION requires a real Python 3.8+ interpreter");
+		const quotedPython = `'${realPython.replaceAll("'", "'\\''")}'`;
+		const activeDir = temp.join(".venv");
+		const activePython = path.join(activeDir, "bin", "python");
+		const fixedPython = temp.join("fixed-python");
+		const oldPython = temp.join("old-python");
+		const workingScript = `#!/bin/sh\nexec ${quotedPython} "$@"\n`;
+		const oldScript = `#!/bin/sh\nexec ${quotedPython} -c 'import sys; sys.version_info=(3, 6, 0); exec(sys.argv[1])' "$2"\n`;
+		await fs.mkdir(path.dirname(activePython), { recursive: true });
+		await Bun.write(activePython, workingScript);
+		await Bun.write(oldPython, oldScript);
+		if (fixed !== "broken") {
+			await Bun.write(fixedPython, fixed === "working" ? workingScript : oldScript);
+			await fs.chmod(fixedPython, 0o755);
+		}
+		await Promise.all([activePython, oldPython].map(file => fs.chmod(file, 0o755)));
+		const pollutionDir = temp.join("business-pythonpath");
+		await fs.mkdir(pollutionDir);
+		await Bun.write(path.join(pollutionDir, "sitecustomize.py"), "import os\nos._exit(77)\n");
+		const settings = Settings.isolated();
+		const shellConfig = settings.getShellConfig();
+		const env = {
+			...shellConfig.env,
+			OMP_OFFLINE: "1",
+			VIRTUAL_ENV: activeDir,
+			PYTHONPATH: polluted ? pollutionDir : "",
+		};
+		vi.spyOn(Settings, "init").mockResolvedValue(settings);
+		vi.spyOn(settings, "getShellConfig").mockReturnValue({ ...shellConfig, env });
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(temp.join("missing-managed-env"));
+		vi.spyOn(piUtils, "isBunTestRuntime").mockReturnValue(false);
+		vi.spyOn(piUtils, "$which").mockReturnValue(realPython);
+		const exists = nodeFs.existsSync;
+		vi.spyOn(nodeFs, "existsSync").mockImplementation(candidate =>
+			candidate === offlinePython ? true : exists(candidate),
+		);
+		const nativeSpawn = Bun.spawn;
+		const launched: string[] = [];
+		vi.spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+			const [command, ...rest] = args;
+			if (Array.isArray(command)) {
+				launched.push(String(command[0]));
+				if (command[0] === offlinePython) {
+					return Reflect.apply(nativeSpawn, Bun, [[fixedPython, ...command.slice(1)], ...rest]);
+				}
+			}
+			return Reflect.apply(nativeSpawn, Bun, args);
+		}) as typeof Bun.spawn);
+		return { activePython, oldPython, launched, env };
+	}
+
+	it("starts Eval with the fixed interpreter before an active project venv and isolates business PYTHONPATH", async () => {
+		using temp = TempDir.createSync("@python-offline-priority-");
+		const { launched, env } = await prepareInterpreters(temp, "working", true);
+		const originalEnv = { ...env };
+		const availability = await checkPythonKernelAvailability(temp.path(), undefined, { forceProbe: true });
+		expect(availability.ok).toBe(true);
+		expect(availability.pythonPath).toBe(offlinePython);
+		expect(launched).toEqual([offlinePython]);
+		const kernel = await PythonKernel.start({ cwd: temp.path() });
+		try {
+			const result = await executePythonWithKernel(
+				kernel,
+				"import os, sys; print(sys.version_info >= (3, 8)); print(repr(os.environ.get('VIRTUAL_ENV'))); print(repr(os.environ.get('PYTHONPATH')))",
+			);
+			expect(result.exitCode).toBe(0);
+			expect(result.output.trim()).toBe("True\nNone\nNone");
+			expect(env).toEqual(originalEnv);
+		} finally {
+			await kernel.shutdown();
+		}
+	});
+
+	it.each(["broken", "old"] as const)(
+		"falls back to the active venv when the fixed interpreter is %s",
+		async fixed => {
+			using temp = TempDir.createSync("@python-offline-fallback-");
+			const { activePython, launched } = await prepareInterpreters(temp, fixed);
+
+			const availability = await checkPythonKernelAvailability(temp.path(), undefined, { forceProbe: true });
+
+			expect(availability.ok).toBe(true);
+			expect(availability.pythonPath).toBe(activePython);
+			expect(launched).toEqual([offlinePython, activePython]);
+			const kernel = await PythonKernel.start({ cwd: temp.path() });
+			try {
+				const result = await executePythonWithKernel(kernel, "print(21 * 2)");
+				expect(result.exitCode).toBe(0);
+				expect(result.output.trim()).toBe("42");
+			} finally {
+				await kernel.shutdown();
+			}
+		},
+	);
+
+	it("uses a compatible explicit interpreter without probing offline or automatic candidates", async () => {
+		using temp = TempDir.createSync("@python-offline-explicit-");
+		const { activePython, launched } = await prepareInterpreters(temp, "working");
+
+		const availability = await checkPythonKernelAvailability(temp.path(), activePython, { forceProbe: true });
+
+		expect(availability.ok).toBe(true);
+		expect(availability.pythonPath).toBe(activePython);
+		expect(launched).toEqual([activePython]);
+	});
+
+	it("rejects an explicit Python 3.6 without falling back to the working offline interpreter", async () => {
+		using temp = TempDir.createSync("@python-offline-explicit-old-");
+		const { oldPython, launched } = await prepareInterpreters(temp, "working");
+
+		const availability = await checkPythonKernelAvailability(temp.path(), oldPython, { forceProbe: true });
+
+		expect(availability.ok).toBe(false);
+		expect(availability.pythonPath).toBe(oldPython);
+		expect(availability.reason).toContain("Configured Python interpreter");
+		expect(availability.reason).toContain("Python 3.8+ required");
+		expect(launched).toEqual([oldPython]);
+		await expect(PythonKernel.start({ cwd: temp.path(), interpreter: oldPython })).rejects.toThrow(
+			"Python 3.8+ required",
+		);
+		expect(launched).toEqual([oldPython, oldPython]);
 	});
 });

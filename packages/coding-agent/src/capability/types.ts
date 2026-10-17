@@ -58,6 +58,8 @@ export interface LoadContext {
 	 * and can be switched on.
 	 */
 	includeOptOutUserSources?: boolean;
+	/** Active skill roots to admit before any directory scan (unset for inventory loads). */
+	skillSourceFilter?: (source: Pick<SourceMeta, "provider" | "level" | "origin">) => boolean;
 }
 
 /**
@@ -123,6 +125,8 @@ export interface LoadOptions<T = unknown> {
 	 * extensions all survive outside the construction-time invocation scope.
 	 */
 	extensionRoots?: EffectiveExtensionRoots;
+	/** Skill-only source scope, checked before opening skill roots or opting user sources in. */
+	skillSourceFilter?: LoadContext["skillSourceFilter"];
 	/**
 	 * Drop items before deduplication as if they never existed (e.g. scope
 	 * exclusions). A dropped item neither survives nor claims its dedupe key,

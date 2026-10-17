@@ -461,12 +461,15 @@ export function compareSkillOrder(aName: string, aPath: string, bName: string, b
 }
 
 export async function scanSkillsFromDir(
-	_ctx: LoadContext,
+	ctx: LoadContext,
 	options: ScanSkillsFromDirOptions,
 ): Promise<LoadResult<Skill>> {
 	const items: Skill[] = [];
 	const warnings: string[] = [];
 	const { dir, level, providerId, requireDescription = false } = options;
+	if (ctx.skillSourceFilter && !ctx.skillSourceFilter({ provider: providerId, level, origin: options.origin })) {
+		return { items, warnings };
+	}
 
 	let entries: fs.Dirent[];
 	try {

@@ -12,7 +12,7 @@ import { toolFileHeaderDescription } from "./inspector-runtime";
 import { applyMcpToggleRuntime } from "./mcp-runtime";
 import { loadAllExtensions, toggleProvider, toggleUserSource } from "./state-manager";
 
-import { cfgDisabledExtensions } from "../../../extensibility/settings";
+import { cfgDisabledExtensions, cfgSkills } from "../../../extensibility/settings";
 import { cfgMcpEnableProjectConfig } from "../../../mcp/settings";
 
 /** Bind the dashboard's display-only contract to the live application. */
@@ -34,7 +34,7 @@ export function createExtensionDashboardRuntime(options: {
 				userSourceEnabled: isUserSourceEnabled(provider.id),
 				foreignUserSource: isForeignUserProvider(provider.id),
 			})),
-		loadExtensions: disabledIds => loadAllExtensions(cwd, disabledIds),
+		loadExtensions: disabledIds => loadAllExtensions(cwd, disabledIds, cfgSkills.get(settings)),
 		toggleProvider,
 		toggleUserSource,
 		async persistMcpToggle(name, enabled, sourcePath) {

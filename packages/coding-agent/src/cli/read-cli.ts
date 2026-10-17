@@ -7,7 +7,9 @@
  */
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
+import { expandRoleAlias } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { initializeWithSettings } from "../discovery";
 import { releaseIdaDatabases } from "../ida";
@@ -22,7 +24,9 @@ import { parseReadUrlTarget } from "../tools/fetch";
 import { wrapToolWithMetaNotice } from "../tools/output-meta";
 import { ReadTool, splitImageQuestionTarget } from "../tools/read";
 import { renderError } from "../tools/tool-errors";
+import { type ResolvedImageQuestionModel, resolveImageQuestionModel } from "../utils/image-question";
 import { parseXUrl } from "../web/x";
+import { initializeOfflineModelCommand } from "./bench-runtime";
 
 import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "../extensibility/settings";
 import { cfgMcpEnableProjectConfig } from "../mcp/settings";
@@ -101,12 +105,37 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		// resolving anything (issue #11338), and X reads report missing xAI
 		// credentials.
 		const urlTarget = parseReadUrlTarget(cmd.path);
-		if (splitImageQuestionTarget(cmd.path).question || (urlTarget && parseXUrl(urlTarget.path))) {
+		const imageQuestion = splitImageQuestionTarget(cmd.path).question;
+		if (imageQuestion || (urlTarget && parseXUrl(urlTarget.path))) {
+			const offline = initializeOfflineModelCommand(settings);
 			authStorage ??= await discoverAuthStorage(undefined, { settings });
-			const modelRegistry = new ModelRegistry(authStorage);
+			const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+			for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 			await modelRegistry.hydrateCredentialScopedModelCaches();
-			await loadCliExtensionProviders(modelRegistry, settings, cwd);
+			await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 			session.modelRegistry = modelRegistry;
+			const companyError = offline && imageQuestion ? getCompanyConfigError() : undefined;
+			if (companyError) {
+				// A configured non-company route is an explicit choice, not a fallback.
+				// Keep a broken company selection from falling through to @default.
+				if (expandRoleAlias("@vision", settings).toLowerCase().startsWith(`${COMPANY_PROVIDER_ID}/`)) {
+					throw new Error(companyError);
+				}
+				let resolved: ResolvedImageQuestionModel;
+				try {
+					resolved = resolveImageQuestionModel(session);
+				} catch {
+					throw new Error(companyError);
+				}
+				const role = resolved.selectedPattern === "@vision" ? "vision" : "default";
+				if (
+					!resolved.selectedPattern ||
+					!settings.getModelRole(role) ||
+					resolved.model.provider === COMPANY_PROVIDER_ID
+				) {
+					throw new Error(companyError);
+				}
+			}
 		}
 
 		const tool = wrapToolWithMetaNotice(new ReadTool(session));

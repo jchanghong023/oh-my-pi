@@ -20,14 +20,13 @@ import { formatNumber, getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { offlineFromEnv } from "./args";
 import type { ConfigError } from "../config/config-file";
-import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
-import { getCompanyConfigError, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAndLoadExtensions, ExtensionRunner, emitSessionShutdownEvent } from "../extensibility/extensions";
 import { discoverAuthStorage } from "../sdk";
 import { SessionManager } from "../session/session-manager";
 import { EventBus } from "../utils/event-bus";
+import { initializeCompanyModelLane } from "./bench-runtime";
 
 import { cfgDisabledExtensions, cfgExtensions } from "../extensibility/settings";
 
@@ -459,13 +458,9 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					result: "started",
 					offline,
 				});
-				setCompanyOfflineEnabled(offline);
+				const companyError = initializeCompanyModelLane(offline);
 				let companyConfigError = false;
 				if (offline) {
-					// Company environment: flip the lane before the registry captures company
-					// state, and surface a broken config instead of silently listing nothing.
-					setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-					const companyError = getCompanyConfigError();
 					companyConfigError = Boolean(companyError);
 					if (companyError) process.stderr.write(`${companyError}\n`);
 				}
