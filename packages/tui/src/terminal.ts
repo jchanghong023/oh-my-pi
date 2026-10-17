@@ -25,6 +25,7 @@ import {
 	NotifyProtocol,
 	setCellDimensions,
 	setOsc99Supported,
+	setTerminalBackgroundColor,
 	setTerminalGlyphProtocol,
 	TERMINAL,
 } from "./terminal-capabilities";
@@ -1125,6 +1126,8 @@ export class ProcessTerminal implements Terminal {
 		// Own stdout: out-of-band writers route through this terminal, and the
 		// emergency restore finds it on crash.
 		setActiveTerminal(this);
+		// RGB belongs to this ownership session, including deferred-input prepaint.
+		setTerminalBackgroundColor(undefined);
 		terminalEverStarted = true;
 		// Own the blocking write(2) on a pump thread (unix TTYs only). A stale
 		// prebuilt natives module without the export falls back to direct writes.
@@ -2041,7 +2044,11 @@ export class ProcessTerminal implements Terminal {
 			const max = 16 ** hex.length - 1;
 			return max > 0 ? value / max : 0;
 		};
-		const luminance = 0.299 * normalize(rHex) + 0.587 * normalize(gHex) + 0.114 * normalize(bHex);
+		const r = normalize(rHex);
+		const g = normalize(gHex);
+		const b = normalize(bHex);
+		setTerminalBackgroundColor((Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255));
+		const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
 		const mode: TerminalAppearance = luminance < 0.5 ? "dark" : "light";
 		const changed = mode !== this.#appearance;
 		this.#appearance = mode;
@@ -2313,11 +2320,13 @@ export class ProcessTerminal implements Terminal {
 		// Suppress observer/timer callbacks before any teardown can yield or throw.
 		this.#active = false;
 		this.#inputDeferred = false;
-		if (this.#headless) return;
 		// Release stdout ownership (out-of-band writers and emergency cleanup)
+		// before headless/teardown exits, without disturbing another owner's RGB.
 		if (getActiveTerminal() === this) {
 			setActiveTerminal(null);
+			setTerminalBackgroundColor(undefined);
 		}
+		if (this.#headless) return;
 
 		// Release terminal ownership of fd 2 first so external programs,
 		// suspend, and shutdown see the real stderr even if a later teardown
