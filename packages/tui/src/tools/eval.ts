@@ -6,9 +6,10 @@ import type {
 	NativeToolView,
 	RenderResultContextOptions,
 	RenderResultOptions,
+	ToolActivitySummary,
 	ToolRenderer,
 } from "./renderer";
-import type { TspSpan } from "@oh-my-pi/pi-wire";
+import { INTENT_FIELD, type TspSpan } from "@oh-my-pi/pi-wire";
 import { code, compact, keyed, md, node, span, text } from "../native/describe";
 import type { NativeChild, NativeNode } from "../native/node";
 import { plainText } from "../native/spans";
@@ -125,6 +126,7 @@ interface EvalRenderCellArg {
 }
 
 interface EvalRenderArgs extends EvalRenderCellArg {
+	[INTENT_FIELD]?: string;
 	cells?: EvalRenderCellArg[];
 	__partialJson?: string;
 }
@@ -875,6 +877,10 @@ function evalCellBox(cell: EvalCellRun, index: number, total: number): NativeNod
 
 /** Render eval code cells, structured display output, and progress events. */
 export const evalToolRenderer = {
+	activitySummary(args: EvalRenderArgs): ToolActivitySummary {
+		const intent = args?.[INTENT_FIELD];
+		return { label: "Eval", detail: typeof intent === "string" && intent.trim() ? intent : args?.title };
+	},
 	animatedPendingPreview: true,
 	animatedPartialResult: true,
 	renderCall(args: EvalRenderArgs, options: RenderResultOptions, uiTheme: Theme): Component {
