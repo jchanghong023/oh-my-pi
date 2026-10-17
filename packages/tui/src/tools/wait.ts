@@ -24,7 +24,7 @@ import {
 	type ConfiguredThinkingLevel,
 } from "../render/render-utils";
 import type { StructuredSubagentOutput } from "./task";
-import type { RenderResultOptions, ToolRenderer, ToolActivitySummary } from "./renderer";
+import type { RenderResultOptions, ToolRenderer, ToolActivityContext, ToolActivitySummary } from "./renderer";
 import type { IrcDeliveryReceipt, IrcMessage } from "./irc";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { card as cardNode, compact, elapsed, md, node, row, span, text } from "../native/describe";
@@ -718,8 +718,13 @@ const waitResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const waitToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
-	activitySummary(): ToolActivitySummary {
-		return { label: "Wait", detail: "Background work or peer message" };
+	activitySummary(_args: object, context: ToolActivityContext<CoordinationDetails>): ToolActivitySummary {
+		const jobs = context.result?.details?.jobs;
+		if (!jobs?.length) return { label: "Wait", detail: "Background work or peer message" };
+		const job = jobs.find(job => job.status === "running") ?? jobs[0]!;
+		const label = job.label.split(/\r?\n/, 1)[0].trim();
+		const target = `[${job.type}] ${job.id}${label && label !== job.id ? ` ${label}` : ""}`;
+		return { label: "Wait", detail: `${target}${jobs.length > 1 ? ` · +${jobs.length - 1} jobs` : ""}` };
 	},
 	renderCall: waitRenderCall,
 	describeCall(): NativeToolView {

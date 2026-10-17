@@ -1463,6 +1463,7 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			spinnerFrame: this.#spinnerFrame,
+			result: this.#result,
 			renderContext: this.#renderState.renderContext,
 		});
 		if (summary !== undefined) {

@@ -78,11 +78,13 @@ export interface ToolActivitySummary {
 	detail?: string;
 }
 
-/** Live execution fields that are safe for compact transcript presentation. */
-export interface ToolActivityContext {
+/** Live execution state available to compact activity summaries. */
+export interface ToolActivityContext<TDetails = unknown> {
 	readonly expanded: boolean;
 	readonly isPartial: boolean;
 	readonly spinnerFrame?: number;
+	/** Latest progress or settled snapshot; summaries select identity fields, not output bodies. */
+	readonly result?: ToolRenderResult<TDetails>;
 	/** Tool-specific render context (same shape `renderCall` receives), when available. */
 	readonly renderContext?: Record<string, unknown>;
 }
@@ -181,7 +183,7 @@ export interface ToolRenderer<TArgs = unknown, TDetails = unknown> {
 		options: RenderResultOptions,
 	): ToolFigure | undefined;
 	/** Describes current activity without coupling a renderer to terminal layout. */
-	activitySummary?(args: TArgs, context: ToolActivityContext): ToolActivitySummary;
+	activitySummary?(args: TArgs, context: ToolActivityContext<TDetails>): ToolActivitySummary;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
 	/**

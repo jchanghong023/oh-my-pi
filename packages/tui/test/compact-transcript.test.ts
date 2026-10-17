@@ -11,6 +11,7 @@ import type { DescribeContext, NativeNode } from "../src/native/node";
 import { initTheme } from "../src/theme";
 import { Container } from "../src/tui";
 import { setTerminalImageProtocol, TERMINAL } from "../src/terminal-capabilities";
+import type { CoordinationDetails } from "../src/tools/wait";
 
 const toolCx: DescribeContext = {
 	cols: 80,
@@ -262,6 +263,64 @@ describe("compact transcript activity", () => {
 			expect(described).toContain("BEFORE_EDIT");
 			expect(described).toContain("AFTER_EDIT");
 		}
+	});
+
+	it("shows waited job commands on compact ANSI and native rows as progress changes without exposing output", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent("wait", {}, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(component);
+		component.setExecutionStarted();
+		const job: NonNullable<CoordinationDetails["jobs"]>[number] = {
+			id: "bg_11",
+			type: "bash",
+			status: "running",
+			label: "bun run slowtest\nPRIVATE_ARGUMENTS",
+			durationMs: 27_200,
+			resultText: "PRIVATE_OUTPUT",
+		};
+		const progress = (jobs: CoordinationDetails["jobs"], isPartial = true) =>
+			component.updateResult(
+				{
+					content: [{ type: "text", text: "PRIVATE_OUTPUT" }],
+					details: { op: "wait", jobs } satisfies CoordinationDetails,
+				},
+				isPartial,
+			);
+		progress([job]);
+		expect(Bun.stripANSI(component.render(100)[0])).toContain("[bash] bg_11 bun run slowtest");
+		for (const cx of [toolCx, undefined]) {
+			const view = JSON.stringify(component.describe(cx));
+			expect(view).toContain("[bash] bg_11 bun run slowtest");
+			expect(view).not.toContain("PRIVATE_");
+		}
+		component.setExpanded(true);
+		for (const width of [18, 100]) {
+			const rows = component.render(width);
+			expect(rows).toHaveLength(1);
+			expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
+			expect(rows[0]).not.toContain("PRIVATE_");
+		}
+		progress([
+			{ ...job, status: "completed" },
+			{ ...job, id: "bg_12", label: "bun run check:tools" },
+		]);
+		const updated = Bun.stripANSI(component.render(100)[0]);
+		expect(updated).toContain("[bash] bg_12 bun run check:tools");
+		expect(updated).toContain("+1");
+		expect(updated).not.toContain("slowtest");
+		expect(JSON.stringify(component.describe(toolCx))).toContain("bg_12 bun run check:tools");
+		progress([{ ...job, status: "completed" }], false);
+		expect(Bun.stripANSI(component.render(100)[0])).toContain("bg_11 bun run slowtest");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(Bun.stripANSI(component.render(100).join("\n"))).toContain("bg_11");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		progress([], false);
+		expect(component.render(100).join("\n")).not.toContain("bg_11");
+		expect(JSON.stringify(component.describe(toolCx))).not.toContain("bg_11");
 	});
 
 	it("retains a single row for long built-in calls, successful output and sealed calls", () => {
