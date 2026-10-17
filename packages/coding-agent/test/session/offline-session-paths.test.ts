@@ -8,6 +8,7 @@ const managerUrl = new URL("../../src/session/session-manager.ts", import.meta.u
 const storageUrl = new URL("../../src/session/session-storage.ts", import.meta.url).href;
 const pathsUrl = new URL("../../src/session/session-paths.ts", import.meta.url).href;
 const listingUrl = new URL("../../src/session/session-listing.ts", import.meta.url).href;
+const transferUrl = new URL("../../src/session/session-transfer.ts", import.meta.url).href;
 const dirsUrl = new URL("../../../utils/src/dirs.ts", import.meta.url).href;
 const ttyUrl = new URL("../../../tui/src/ttyid.ts", import.meta.url).href;
 
@@ -38,6 +39,7 @@ function probe(body: string, offline = "1"): void {
 			import { FileSessionStorage, MemorySessionStorage, OfflineSessionPathError, SessionLockError } from ${JSON.stringify(storageUrl)};
 			import { resolveSessionDirectory, sessionDirForCwd, readTerminalBreadcrumbEntry } from ${JSON.stringify(pathsUrl)};
 			import { listSessions, listSessionsReadOnly, listAllSessions, listRecentSessions, listRecentProjects, findSessionFiles, getRecentSessions, resolveResumableSession } from ${JSON.stringify(listingUrl)};
+			import { packSession, unpackSession, markSessionMoved } from ${JSON.stringify(transferUrl)};
 			import { getOfflineShmState, getSessionsDir, getTerminalSessionsDir, setProfile } from ${JSON.stringify(dirsUrl)};
 			import { getTerminalId } from ${JSON.stringify(ttyUrl)};
 			const fixture = ${JSON.stringify(fixture)};
@@ -248,6 +250,7 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 						})();
 					});
 					const statProbe = spyOn(fs.promises, "stat");
+					const realpathProbe = spyOn(fs.promises, "realpath");
 					const readProbes = ["openSync", "readFileSync"].map(method => spyOn(fs, method));
 					let paths;
 					try {
@@ -260,7 +263,7 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 						if (linkedPart === "bucket") {
 							assert.deepEqual(discovered.filter(file => file.startsWith(linkedPath + path.sep)), []);
 						}
-						for (const probe of [statProbe, ...readProbes]) {
+						for (const probe of [statProbe, realpathProbe, ...readProbes]) {
 							for (const [target] of probe.mock.calls) {
 								if (typeof target !== "string") continue;
 								assert.ok(target !== linkedPath && !target.startsWith(linkedPath + path.sep), target);
@@ -270,6 +273,7 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 					} finally {
 						scanProbe.mockRestore();
 						statProbe.mockRestore();
+						realpathProbe.mockRestore();
 						for (const probe of readProbes) probe.mockRestore();
 					}
 					assert.deepEqual(paths, [safeFile]);
@@ -341,7 +345,7 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 		});
 	}
 
-	it("P2-30 P2-31 preserves non-offline linked enumeration and writer replacement behavior", () => {
+	it("P2-30 P2-31 keeps ordinary-mode bucket boundaries, linked leaves and writer replacement behavior", () => {
 		probe(
 			`
 			assert.equal(state, undefined);
@@ -351,15 +355,18 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			fs.mkdirSync(sessionsRoot, { recursive: true });
 			const linkedBucket = path.join(sessionsRoot, "linked-bucket");
 			fs.symlinkSync(custom, linkedBucket);
-			const linkedFile = path.join(linkedBucket, path.basename(externalFile));
-			assert.deepEqual((await listAllSessions(storage, sessionsRoot)).map(info => info.path), [linkedFile]);
-			assert.deepEqual((await listRecentSessions({ sessionsRoot, limit: 10 })).map(info => info.path), [linkedFile]);
-			assert.deepEqual((await listRecentProjects(10, sessionsRoot)).map(info => info.latest.path), [linkedFile]);
-			assert.deepEqual(await findSessionFiles("boundary", sessionsRoot), [linkedFile]);
+			assert.deepEqual(await listAllSessions(storage, sessionsRoot), []);
+			assert.deepEqual(await listRecentSessions({ sessionsRoot, limit: 10 }), []);
+			assert.deepEqual(await listRecentProjects(10, sessionsRoot), []);
+			assert.deepEqual(await findSessionFiles("boundary", sessionsRoot), []);
 			const directDir = path.join(sessionsRoot, "direct");
 			fs.mkdirSync(directDir);
 			const directLink = path.join(directDir, path.basename(externalFile));
 			fs.symlinkSync(externalFile, directLink);
+			assert.deepEqual((await listAllSessions(storage, sessionsRoot)).map(info => info.path), [directLink]);
+			assert.deepEqual((await listRecentSessions({ sessionsRoot, limit: 10 })).map(info => info.path), [directLink]);
+			assert.deepEqual((await listRecentProjects(10, sessionsRoot)).map(info => info.latest.path), [directLink]);
+			assert.deepEqual(await findSessionFiles("boundary", sessionsRoot), [directLink]);
 			assert.deepEqual((await getRecentSessions(directDir, 10, storage)).map(info => info.path), [directLink]);
 			const file = path.join(fixture, "open-writer.jsonl");
 			fs.writeFileSync(file, "held-before\\n");
@@ -377,6 +384,53 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			`,
 			"false",
 		);
+	});
+
+	it("guards transfer sources and local-copy discovery before following external session links", () => {
+		probe(`
+			const source = path.join(state.runtimeRoot, "transfer-source", "2026_transfer-boundary.jsonl");
+			writeOldSession(source, "transfer-boundary");
+			const archive = path.join(state.runtimeRoot, "transfer.tar");
+			await packSession(source, archive);
+			const targetDir = path.join(state.runtimeRoot, "transfer-target");
+			storage.ensureDirSync(targetDir);
+			const externalFile = path.join(custom, "linked_transfer-boundary.jsonl");
+			const externalBody = writeOldSession(externalFile, "transfer-boundary");
+			const linkedFile = path.join(targetDir, path.basename(externalFile));
+			fs.symlinkSync(externalFile, linkedFile);
+			const linkedDir = path.join(state.runtimeRoot, "transfer-alias");
+			fs.symlinkSync(custom, linkedDir);
+			const raw = linkedDir + "/../source.jsonl";
+			const asyncProbes = ["stat", "realpath", "readFile"].map(method => spyOn(fs.promises, method));
+			const openProbe = spyOn(fs, "openSync");
+			const fileProbe = spyOn(Bun, "file");
+			const scanProbe = spyOn(Bun.Glob.prototype, "scan");
+			let unpacked;
+			try {
+				for (const file of [externalFile, linkedFile, raw]) {
+					await assert.rejects(packSession(file, archive), OfflineSessionPathError);
+					await assert.rejects(markSessionMoved(file, "elsewhere"), OfflineSessionPathError);
+				}
+				unpacked = await unpackSession(archive, { cwd: project, sessionDir: targetDir });
+				assert.equal(unpacked.mode, "created");
+				for (const probe of [...asyncProbes, openProbe, fileProbe]) {
+					for (const [target] of probe.mock.calls) {
+						if (typeof target !== "string") continue;
+						assert.ok(target !== custom && !target.startsWith(custom + path.sep), target);
+						assert.ok(target !== linkedDir && !target.startsWith(linkedDir + path.sep), target);
+						assert.notEqual(target, linkedFile);
+					}
+				}
+				for (const [options] of scanProbe.mock.calls) {
+					if (options.cwd === targetDir) assert.equal(options.followSymlinks, false);
+				}
+			} finally {
+				for (const probe of [...asyncProbes, openProbe, fileProbe, scanProbe]) probe.mockRestore();
+			}
+			assert.equal(fs.readFileSync(externalFile, "utf8"), externalBody);
+			assert.ok(fs.lstatSync(linkedFile).isSymbolicLink());
+			assert.equal(fs.existsSync(unpacked.sessionFile), true);
+		`);
 	});
 
 	it("rejects internal directory symlinks before resolving or probing an external transcript", () => {

@@ -12,6 +12,7 @@
  */
 
 import { type Type, type } from "@oh-my-pi/omptype";
+import { parseLocalRefPointer } from "@oh-my-pi/omptype";
 import { structuredCloneJSON } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import type { Tool, ToolCall } from "../types";
@@ -900,16 +901,11 @@ function normalizeOptionalNullsForSchema(
 	return { value: changed ? nextValue : value, changed };
 }
 
-function decodeJsonPointerToken(token: string): string {
-	return token.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
 function resolveLocalJsonSchemaRef(root: unknown, ref: string): unknown | undefined {
-	if (ref === "#") return root;
-	if (!ref.startsWith("#/")) return undefined;
+	const pointer = parseLocalRefPointer(ref);
+	if (pointer === undefined) return undefined;
 	let current: unknown = root;
-	for (const rawToken of ref.slice(2).split("/")) {
-		const token = decodeJsonPointerToken(rawToken);
+	for (const token of pointer) {
 		if (current === null || typeof current !== "object") return undefined;
 		current = (current as Record<string, unknown>)[token];
 	}

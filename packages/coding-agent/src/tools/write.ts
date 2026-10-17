@@ -23,7 +23,7 @@ import {
 } from "@oh-my-pi/pi-utils/ar";
 import { normalizeToLF } from "../edit/normalize";
 
-import { InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
+import { extractUriScheme, InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
 import { createLspWritethrough, type WritethroughCallback, writethroughNoop } from "../lsp";
 
 import { DeferredDiagnostics } from "../lsp/deferred-diagnostics";
@@ -35,7 +35,7 @@ import writeDeviceOnlyDescription from "../prompts/tools/write-device-only.md" w
 import type { ToolSession } from "../sdk";
 
 import { routeWriteThroughBridge, shouldRouteWriteThroughBridge } from "./acp-bridge";
-import { truncateForPrompt } from "./approval";
+import { formatApprovalArguments, truncateForPrompt } from "./approval";
 import { assertEditableFile } from "./auto-generated-guard";
 
 import { isReadTruncationNotice } from "@oh-my-pi/pi-tui/tools/hashline-format";
@@ -481,6 +481,15 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const params = args as Partial<WriteParams>;
 		const targetPath = typeof params.path === "string" ? params.path : "(missing)";
 		const content = typeof params.content === "string" ? params.content : "";
+		const unwrapped = unwrapHashlineHeaderPath(targetPath);
+		if (extractUriScheme(unwrapped) === "xd") {
+			try {
+				const parsed: unknown = JSON.parse(content);
+				return [`Path: ${truncateForPrompt(targetPath)}`, ...formatApprovalArguments(parsed, { showEmpty: true })];
+			} catch {
+				// Non-JSON payload falls back to raw content
+			}
+		}
 		return [`Path: ${truncateForPrompt(targetPath)}`, `Content:\n${truncateForPrompt(content)}`];
 	};
 	readonly label = "Write";

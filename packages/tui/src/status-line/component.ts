@@ -1996,6 +1996,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * cadence while a late successful fetch can still refresh the cached segment.
 	 */
 	refreshUsageInBackground(): void {
+		if (this.#disposed) return;
 		const now = Date.now();
 		const session = this.session;
 		const usageContextKey = this.#getUsageContextKey(session);

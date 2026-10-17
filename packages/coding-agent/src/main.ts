@@ -2732,9 +2732,12 @@ export async function runRootCommand(
 				eventBus,
 				subagentEventBus,
 				preloadedExtensions: extensionsResult,
-				// runInteractiveMode validates once init has painted the first frame.
-				deferRetryFallbackValidation: isInteractive,
+				// Validated once the background refresh is in flight, so selectors it
+				// may still supply defer instead of warning; interactive mode also
+				// waits for the first frame (`startDeferredStartupWork`).
+				deferRetryFallbackValidation: true,
 			});
+			if (!isInteractive) session.validateRetryFallbackChains();
 
 			const sessionToolNames = session.getAllToolNames();
 			try {
@@ -2785,8 +2788,8 @@ export async function runRootCommand(
 			// prompt: fallback-chain validation only produces header warnings, and the
 			// background refresh already raced the first prompt when it ran earlier.
 			const startDeferredStartupWork = (): void => {
-				session.validateRetryFallbackChains();
 				if (!parsedArgs.offline) modelRegistry.refreshInBackground();
+				session.validateRetryFallbackChains();
 				if (configuredScope.length > 0) {
 					// Follow online refresh when enabled; offline only rebuilds from the hydrated catalog.
 					void rebuildScopedModelsAfterDiscovery(session, parsedArgs, modelRegistry, settingsInstance).catch(

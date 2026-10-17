@@ -33,6 +33,7 @@ import {
 	readArchiveEntries,
 	writeArchive,
 } from "@oh-my-pi/pi-utils/ar";
+import { getOfflineShmState } from "@oh-my-pi/pi-utils/dirs";
 import transferArrivedTemplate from "../prompts/session/transfer-arrived.md" with { type: "text" };
 import transferDepartedTemplate from "../prompts/session/transfer-departed.md" with { type: "text" };
 import transferStaleForkTemplate from "../prompts/session/transfer-stale-fork.md" with { type: "text" };
@@ -42,7 +43,8 @@ import type { FileEntry, SessionEntry, SessionHeader } from "./session-entries";
 import { findSessionFiles } from "./session-listing";
 import { loadEntriesFromFile, parseSessionContent, readSessionHeaderId } from "./session-loader";
 import { SessionManager } from "./session-manager";
-import { FileSessionStorage } from "./session-storage";
+import { resolveSessionDirectory } from "./session-paths";
+import { assertOfflineSessionPath, FileSessionStorage, OfflineSessionPathError } from "./session-storage";
 
 /** Archive format version written by {@link packSession} and the only one {@link unpackSession} reads. */
 export const SESSION_ARCHIVE_VERSION = 1;
@@ -202,6 +204,7 @@ async function requireDirectory(dir: string): Promise<void> {
 
 /** The session id in `file`'s header; refuses anything that is not a session journal. */
 async function requireSessionId(file: string): Promise<string> {
+	assertOfflineSessionPath(file);
 	await requireFile(file, "Session file");
 	const id = await readSessionHeaderId(file);
 	if (id === undefined) throw new SessionTransferError(`Not an omp session file (no session header): ${file}`);
@@ -233,6 +236,7 @@ async function listFilesRecursive(dir: string): Promise<string[]> {
 	const walk = async (relative: string): Promise<void> => {
 		let entries: fs.Dirent[];
 		try {
+			assertOfflineSessionPath(relative ? path.join(dir, relative) : dir);
 			entries = await fs.promises.readdir(relative ? path.join(dir, relative) : dir, { withFileTypes: true });
 		} catch (error) {
 			if (relative === "" && (isEnoent(error) || isEnotdir(error))) return;
@@ -270,6 +274,7 @@ async function writeArchiveAtomically(
  * is writing; the ownership lease is held while the files are read.
  */
 export async function packSession(sessionFile: string, outPath: string): Promise<PackSessionResult> {
+	assertOfflineSessionPath(sessionFile);
 	const source = path.resolve(sessionFile);
 	const archivePath = path.resolve(outPath);
 	const id = await requireSessionId(source);
@@ -283,6 +288,7 @@ export async function packSession(sessionFile: string, outPath: string): Promise
 
 	const release = claimSessionOrRefuse(id, source, "pack");
 	try {
+		assertOfflineSessionPath(source);
 		const journal = await fs.promises.readFile(source);
 		const journalText = journal.toString("utf8");
 		const header = parseSessionContent(journalText).entries[0];
@@ -304,13 +310,16 @@ export async function packSession(sessionFile: string, outPath: string): Promise
 
 		// Artifacts sit beside the journal's real name (see copySessionArtifacts).
 		let realSource = source;
+		assertOfflineSessionPath(source);
 		try {
 			realSource = await fs.promises.realpath(source);
 		} catch {}
 		const artifactsDir = realSource.slice(0, -".jsonl".length);
 		if (realSource.endsWith(".jsonl")) {
 			for (const relative of await listFilesRecursive(artifactsDir)) {
-				const bytes = await fs.promises.readFile(path.join(artifactsDir, ...relative.split("/")));
+				const artifact = path.join(artifactsDir, ...relative.split("/"));
+				assertOfflineSessionPath(artifact);
+				const bytes = await fs.promises.readFile(artifact);
 				members.push([`${ARTIFACTS_PREFIX}${relative}`, bytes]);
 				if (relative.endsWith(".jsonl")) collectBlobHashes(bytes.toString("utf8"), hashes);
 			}
@@ -461,17 +470,40 @@ function isTranscriptPrefix(local: readonly SessionEntry[], incoming: readonly S
 
 /** Top-level session files holding session `id`: every project bucket, plus `sessionDir` when it lies elsewhere. */
 async function findLocalCopies(id: string, sessionDir: string): Promise<string[]> {
+	assertOfflineSessionPath(sessionDir);
 	const candidates = new Set((await findSessionFiles(id)).map(file => path.resolve(file)));
 	try {
-		for await (const name of new Bun.Glob(`*_${id}.jsonl`).scan(sessionDir)) {
-			candidates.add(path.resolve(sessionDir, name));
+		for await (const name of new Bun.Glob(`*_${id}.jsonl`).scan({
+			cwd: sessionDir,
+			followSymlinks: !getOfflineShmState(),
+		})) {
+			candidates.add(path.join(sessionDir, name));
 		}
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
 	}
+	// One transcript reached by two names — a bucket symlinked to another
+	// lists it under both (#5385) — is one copy, or `setAside` would try to
+	// move the same file aside twice. `path.resolve` leaves the symlink in
+	// place, so the identity has to come from `realpath`.
+	const seen = new Set<string>();
 	const copies: string[] = [];
 	for (const file of candidates) {
 		if (!path.basename(file).endsWith(`_${id}.jsonl`)) continue;
+		try {
+			assertOfflineSessionPath(file);
+		} catch (error) {
+			if (error instanceof OfflineSessionPathError) continue;
+			throw error;
+		}
+		let key: string;
+		try {
+			key = await fs.promises.realpath(file);
+		} catch {
+			key = file;
+		}
+		if (seen.has(key)) continue;
+		seen.add(key);
 		if ((await readSessionHeaderId(file)) === id) copies.push(file);
 	}
 	return copies.sort();
@@ -568,7 +600,12 @@ export async function unpackSession(archivePath: string, options: UnpackSessionO
 	const { header } = contents;
 	const id = header.id;
 	const recordedCwd = header.cwd || contents.manifest.cwd;
-	const sessionDir = options.sessionDir ? path.resolve(options.sessionDir) : SessionManager.getDefaultSessionDir(cwd);
+	// Custom directories keep the manager's offline namespace mapping. Check
+	// the caller's raw runtime path before normalization can erase traversal.
+	const sessionDir = options.sessionDir
+		? path.resolve(resolveSessionDirectory(options.sessionDir, new FileSessionStorage()))
+		: SessionManager.getDefaultSessionDir(cwd);
+	assertOfflineSessionPath(sessionDir);
 	const arrival: SessionTransferDetails = { kind: "arrived", fromCwd: recordedCwd, cwd };
 
 	// Blobs first: the loader hydrates image refs while the journal is opened.
@@ -636,6 +673,7 @@ export async function unpackSession(archivePath: string, options: UnpackSessionO
  * and this copy is stale. Refuses a session another live omp process writes.
  */
 export async function markSessionMoved(sessionFile: string, label: string): Promise<void> {
+	assertOfflineSessionPath(sessionFile);
 	const target = path.resolve(sessionFile);
 	const to = label.trim();
 	if (!to) throw new SessionTransferError("The move label must not be empty.");

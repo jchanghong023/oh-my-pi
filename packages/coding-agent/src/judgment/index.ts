@@ -529,7 +529,17 @@ function nativeJudge(
 			options?: JudgeOptions,
 		): Promise<JudgmentResult<Q>> {
 			const startedAt = Date.now();
-			const cached = cache?.lookup(cacheModel, request);
+			const cacheRequest =
+				request.images === undefined
+					? request
+					: {
+							...request,
+							images: request.images.map(image => ({
+								...image,
+								detail: judge.effectiveImageDetail(image.detail),
+							})),
+						};
+			const cached = cache?.lookup(cacheModel, cacheRequest);
 			const known = cached?.answers ?? {};
 			const pending: Questions = {};
 			let questions = 0;

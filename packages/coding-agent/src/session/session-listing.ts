@@ -719,15 +719,11 @@ export async function listAllSessions(
 ): Promise<SessionInfo[]> {
 	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
-		const files = await Array.fromAsync(
-			new Bun.Glob("*/*.jsonl").scan({ cwd: sessionsRoot, followSymlinks: !getOfflineShmState() }),
-			name => path.join(sessionsRoot, name),
-		);
-		return await collectSessionsFromFiles(
-			files.filter(file => isAllowedSessionPath(file, storage)),
-			storage,
-			true,
-		);
+		const files =
+			storage instanceof FileSessionStorage
+				? await dedupeRealPaths(await scanBucketFiles(sessionsRoot, "*.jsonl", storage), storage)
+				: storage.listFilesSync(sessionsRoot, "*/*.jsonl");
+		return await collectSessionsFromFiles(files, storage, true);
 	} catch {
 		return [];
 	}
@@ -787,6 +783,69 @@ function sessionIdFromSessionPath(file: string): string | undefined {
 	return base.slice(sep + 1, -".jsonl".length) || undefined;
 }
 
+/**
+ * The files with each physical file kept once, in first-seen order.
+ *
+ * A scan that follows symlinks reaches one transcript by more than one name
+ * when a symlink and the file it points at both sit inside the sessions root,
+ * under one bucket or two: each name is a match, so the session would be
+ * counted twice and an id-prefix lookup would report an ambiguous match.
+ * `realpath` collapses the aliases onto the transcript, while a second,
+ * genuinely distinct copy keeps its own entry. A name that cannot be resolved
+ * (removed between the scan and this call) is kept as it is: it was listed a
+ * moment ago.
+ */
+async function dedupeRealPaths(files: readonly string[], storage: SessionStorage): Promise<string[]> {
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const file of files) {
+		if (!isAllowedSessionPath(file, storage)) continue;
+		let key: string;
+		try {
+			key = await fs.promises.realpath(file);
+		} catch {
+			key = path.resolve(file);
+		}
+		if (seen.has(key)) continue;
+		seen.add(key);
+		out.push(file);
+	}
+	return out;
+}
+
+/**
+ * Session files matching `pattern` (a leaf pattern such as `*.jsonl`) under
+ * every project bucket of `root`.
+ *
+ * A bucket that is itself a symlink is skipped rather than followed. Following
+ * it does two things the fix must not: it lets a scan leave the sessions root
+ * through a directory alias (`sessionsRoot/alias -> ../outside` would list
+ * `outside/escaped.jsonl`), and it lists every session inside the real bucket
+ * twice when one bucket aliases another (#5385). The leaf scan inside a real
+ * bucket does follow symlinks, which is what #15878 asks for: a transcript
+ * staged in as a symlink is a transcript.
+ */
+async function scanBucketFiles(root: string, pattern: string, storage: SessionStorage): Promise<string[]> {
+	let entries: fs.Dirent[];
+	try {
+		assertOfflineSessionPath(root, storage);
+		entries = await fs.promises.readdir(root, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	const out: string[] = [];
+	for (const entry of entries) {
+		if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+		const dir = path.join(root, entry.name);
+		if (!isAllowedSessionPath(dir, storage)) continue;
+		for await (const name of new Bun.Glob(pattern).scan({ cwd: dir, followSymlinks: !getOfflineShmState() })) {
+			const file = path.join(dir, name);
+			if (isAllowedSessionPath(file, storage)) out.push(file);
+		}
+	}
+	return out;
+}
+
 /** A session file with its stat identity, before any content scan. */
 interface StatedSessionFile {
 	file: string;
@@ -806,13 +865,21 @@ async function newestSessionFiles(
 	root = resolveSessionDirectory(root, storage);
 	let files: string[];
 	try {
-		files =
-			storage instanceof FileSessionStorage
-				? await Array.fromAsync(
-						new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: !getOfflineShmState() }),
-						name => path.join(root, name),
-					)
-				: storage.listFilesSync(root, pattern);
+		if (storage instanceof FileSessionStorage) {
+			assertOfflineSessionPath(root, storage);
+			// Crossing buckets must skip directory aliases; ordinary-mode leaf
+			// symlinks still participate and are deduplicated by referent.
+			const slash = pattern.lastIndexOf("/");
+			files =
+				slash >= 0
+					? await dedupeRealPaths(await scanBucketFiles(root, pattern.slice(slash + 1), storage), storage)
+					: await Array.fromAsync(
+							new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: !getOfflineShmState() }),
+							name => path.join(root, name),
+						);
+		} else {
+			files = storage.listFilesSync(root, pattern);
+		}
 	} catch {
 		return [];
 	}
@@ -934,9 +1001,9 @@ export async function findSessionFiles(idPrefix: string, sessionsRoot: string = 
 	const storage = new FileSessionStorage();
 	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
-		const files = await Array.fromAsync(
-			new Bun.Glob(`*/*_${idPrefix}*.jsonl`).scan({ cwd: sessionsRoot, followSymlinks: !getOfflineShmState() }),
-			name => path.join(sessionsRoot, name),
+		const files = await dedupeRealPaths(
+			await scanBucketFiles(sessionsRoot, `*_${idPrefix}*.jsonl`, storage),
+			storage,
 		);
 		// `*_` can also match an underscore inside an id; keep true id-prefix matches only.
 		return files.filter(

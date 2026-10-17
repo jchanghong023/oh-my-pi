@@ -6,6 +6,7 @@
  * exposes one option-driven core plus thin dispatchers that pin the option set
  * for each target.
  */
+import { parseLocalRefPointer } from "@oh-my-pi/omptype";
 import { logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../../error";
 import { dereferenceJsonSchema } from "./dereference";
@@ -2499,20 +2500,11 @@ export function tryEnforceStrictSchema(schema: Record<string, unknown>): {
  * Percent decoding precedes JSON Pointer token unescaping (RFC 6901 §6).
  */
 function resolveStrictRef(root: Record<string, unknown>, ref: string): Record<string, unknown> | undefined {
-	if (!ref.startsWith("#")) return undefined;
-	let pointer: string;
-	try {
-		pointer = decodeURIComponent(ref.slice(1));
-	} catch {
-		return undefined;
-	}
-	if (!pointer.startsWith("/")) return undefined;
-	const segments = pointer.slice(1).split("/");
+	const pointer = parseLocalRefPointer(ref);
+	if (pointer === undefined || pointer.length === 0) return undefined;
 	let cursor: unknown = root;
-	for (const raw of segments) {
+	for (const segment of pointer) {
 		if (!isJsonObject(cursor)) return undefined;
-		// JSON Pointer unescape: ~1 → "/", ~0 → "~" (must run in that order).
-		const segment = raw.replace(/~1/g, "/").replace(/~0/g, "~");
 		cursor = cursor[segment];
 	}
 	return isJsonObject(cursor) ? cursor : undefined;

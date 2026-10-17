@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { ApiKeyResolver, FetchImpl, ResolvedApiKey, UsageProvider } from "@oh-my-pi/pi-ai";
-import { type AuthApiKeyOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
+import { type AuthApiKeyOptions, type AuthPeekOptions, oauthAccountKey } from "@oh-my-pi/pi-ai/auth-storage";
 import { registerCustomApi, unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import { registerOAuthProvider, unregisterOAuthProvider, unregisterOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
@@ -674,7 +674,11 @@ export class ModelRegistry {
 		if (this.#backgroundRefresh) {
 			return;
 		}
-		const refreshPromise = this.refresh(strategy)
+		// `refresh()` synchronously reloads static config, which can reset startup
+		// discovery states. Start it on a microtask so a caller can validate
+		// against the hydrated startup catalog right after kicking the refresh off.
+		const refreshPromise = Promise.resolve()
+			.then(() => this.refresh(strategy))
 			.catch(error => {
 				logger.warn("background model refresh failed", {
 					error: error instanceof Error ? error.message : String(error),
@@ -1619,6 +1623,11 @@ export class ModelRegistry {
 		);
 	}
 
+	/**
+	 * Credential-less cache namespace. Wrong for credential-scoped providers
+	 * (`isCredentialScopedModelCacheProvider`), whose discovery writes hash the
+	 * credential in; those load only through their model manager.
+	 */
 	#resolveStartupModelCacheProviderId(providerId: string): string {
 		const baseUrl =
 			this.#runtimeProviderOverrides.get(providerId)?.baseUrl ??
@@ -2534,15 +2543,28 @@ export class ModelRegistry {
 		return { models, authoritativeProviders, replaceRuntimeProviders };
 	}
 
+	/**
+	 * Resolve the key built-in discovery uses for `providerId`. `cacheProviderId`
+	 * is the namespace probed to skip an OAuth refresh while its cache is fresh;
+	 * `undefined` for a credential-scoped catalog, whose namespace only the
+	 * account's credential determines (the write side hashes it in).
+	 */
 	async #resolveBuiltInDiscoveryApiKey(
 		providerId: string,
 		strategy: ModelRefreshStrategy,
-		cacheProviderId: string,
+		cacheProviderId: string | undefined,
 		authoritative: boolean,
 	): Promise<string | undefined> {
 		const peekedKey = await this.#peekApiKeyForProvider(providerId);
-		if (isAuthenticated(peekedKey) || strategy === "offline") {
+		if (isAuthenticated(peekedKey)) {
 			return peekedKey;
+		}
+		if (strategy === "offline") {
+			// Offline discovery only reads the cache. An expired access token still
+			// names its account (Cursor scopes rows on the JWT subject), so it keys
+			// the same row the last online pass wrote with the then-live token.
+			if (cacheProviderId !== undefined) return peekedKey;
+			return (await this.#peekApiKeyForProvider(providerId, { includeExpired: true })) ?? peekedKey;
 		}
 		const oauthCredentials = getOAuthCredentialsForProvider(this.authStorage, providerId);
 		if (oauthCredentials.length === 0) {
@@ -2554,7 +2576,9 @@ export class ModelRegistry {
 		// undefined, the manager is never added, and stale bundled models survive the
 		// full cache TTL. So only take the no-refresh shortcut for non-authoritative
 		// providers, whose bundled models stay visible regardless.
-		if (strategy === "online-if-uncached" && !authoritative) {
+		// A credential-scoped catalog has no credential-less namespace to probe,
+		// and only its manager can load the account's rows, so it always refreshes.
+		if (strategy === "online-if-uncached" && !authoritative && cacheProviderId !== undefined) {
 			// Mirror shouldFetchRemoteSources: built-in managers use the catalog's
 			// default TTL, so only refresh when the manager will actually fetch.
 			const cache = readModelCache<Api>(
@@ -2682,7 +2706,9 @@ export class ModelRegistry {
 		});
 		const standardProviderKeys = await Promise.all(
 			standardProviderDescriptors.map(descriptor => {
-				const cacheProviderId = this.#resolveStartupModelCacheProviderId(descriptor.providerId);
+				const cacheProviderId = isCredentialScopedModelCacheProvider(descriptor.providerId)
+					? undefined
+					: this.#resolveStartupModelCacheProviderId(descriptor.providerId);
 				return this.#resolveBuiltInDiscoveryApiKey(
 					descriptor.providerId,
 					strategy,
@@ -3490,14 +3516,22 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Whether a config-declared discovery provider has not yet produced a
-	 * catalog in this process. A cold discovery cache (e.g. after `omp update`
-	 * bumps the cache namespace) leaves the provider in its initial `idle`
-	 * state with no models, so a selector the provider will supply looks
-	 * unknown until background discovery lands (#10048).
+	 * Whether an unresolved selector on `provider` may still be supplied by
+	 * discovery this process has not finished. Two states qualify:
+	 * - `idle`: a config-declared provider with a cold cache has no catalog yet
+	 *   (e.g. after `omp update` bumps the cache namespace, #10048).
+	 * - `cached`/`unavailable` while the initial background refresh is in
+	 *   flight: startup replayed a cache row or fell back to the bundled
+	 *   catalog, and that refresh may still add ids (a cold namespace after an
+	 *   upgrade, or a cache row keyed to another credential). With no refresh
+	 *   running (an embedder that manages discovery itself) these states are
+	 *   final, so unresolved selectors warn immediately.
 	 */
 	isProviderDiscoveryPending(provider: string): boolean {
-		return this.#providerDiscoveryStates.get(provider)?.status === "idle";
+		const status = this.#providerDiscoveryStates.get(provider)?.status;
+		if (status === "idle") return true;
+		if (status !== "cached" && status !== "unavailable") return false;
+		return this.#backgroundRefresh !== undefined && !this.#initialRefreshSettled;
 	}
 
 	/**
@@ -3695,11 +3729,11 @@ export class ModelRegistry {
 		});
 	}
 
-	async #peekApiKeyForProvider(provider: string): Promise<string | undefined> {
+	async #peekApiKeyForProvider(provider: string, options?: AuthPeekOptions): Promise<string | undefined> {
 		if (this.#keylessProviders.has(provider) && this.authStorage.keys.source(provider) === undefined) {
 			return kNoAuth;
 		}
-		return this.authStorage.keys.peek(provider);
+		return this.authStorage.keys.peek(provider, options);
 	}
 
 	/**

@@ -865,6 +865,57 @@ describe("ChainJudge", () => {
 		expect(db.query<{ n: number }, []>("SELECT count(*) AS n FROM states").get()?.n).toBe(1);
 	});
 
+	it("shares TypeSafe Jev image cache entries across ignored detail values", async () => {
+		using tempDir = TempDir.createSync("@omp-judgment-typesafe-image-cache-");
+		const cache = JudgmentCache.open(path.join(tempDir.path(), "judgment-cache.db"));
+		try {
+			const model = {
+				...JEV_PREVIEW,
+				input: ["text", "image"],
+				cost: { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0 },
+			} as Model<Api>;
+			const settings = Settings.isolated({ modelRoles: { judge: "typesafe/jev-preview" } });
+			const registry = makeRegistry([model], { typesafe: "ts-key" });
+			let calls = 0;
+			vi.spyOn(globalThis, "fetch").mockImplementation(
+				asGlobalFetch(async () => {
+					calls++;
+					return Response.json({
+						model: "jev-1.13.0",
+						answers: { visible: { type: "noul", noul: 0.75 } },
+						usage: { input_tokens: 10, output_tokens: 0 },
+					});
+				}),
+			);
+			const onUsage = vi.fn();
+			const judge = new ChainJudge({ settings, registry, purpose: "test", onUsage, cache });
+			const request = {
+				state: { file: "a.ts", body: "x" },
+				questions: { visible: { type: "noul" as const, instructions: "Is an object visible?" } },
+				images: [{ ...JEV_IMAGE, detail: "low" as const }],
+			};
+
+			const low = await judge.judge(request);
+			const high = await judge.judge({ ...request, images: [{ ...JEV_IMAGE, detail: "high" }] });
+
+			expect(low.answers.visible).toEqual({ type: "noul", noul: 0.75 });
+			expect(high.answers.visible).toEqual(low.answers.visible);
+			expect(low.usage.cost.total).toBe(0.01);
+			expect(high.usage).toEqual({
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			});
+			expect(calls).toBe(1);
+			expect(onUsage).toHaveBeenCalledTimes(1);
+		} finally {
+			cache.close();
+		}
+	});
+
 	it("keys native answer caching by ordered image digests and detail without persisting payloads", async () => {
 		using tempDir = TempDir.createSync("@omp-judgment-image-cache-");
 		const dbPath = path.join(tempDir.path(), "judgment-cache.db");

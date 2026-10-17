@@ -355,6 +355,14 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 		shape: "scalar",
 		values: [true, false],
 	},
+	/** Replayed tool calls must satisfy the target wire's declaration charset and length. */
+	"tool-call-name-charset": {
+		key: "toolCallNameCharset",
+		set: "catalog",
+		shape: "scalar",
+		values: ["ascii", "google"],
+	},
+	"tool-call-name-max-length": { key: "toolCallNameMaxLength", set: "catalog", shape: "scalar" },
 	"preserves-max-output-tokens": {
 		key: "preservesMaxOutputTokens",
 		set: "catalog",
@@ -472,6 +480,11 @@ export const AXES: Readonly<Record<string, AxisDef>> = {
 	/** Longest image edge the host passes to the model: it downscales larger images to fit first. */
 	"image-max-edge": { key: "imageMaxEdge", set: "catalog", shape: "scalar" },
 	"inline-image-byte-budget": { key: "inlineImageByteBudget", set: "catalog", shape: "scalar" },
+	/**
+	 * Supported formats and size bounds for judgment-request images; `mime-types`
+	 * is comma-separated because object payloads have no array shape.
+	 */
+	"judgment-image-input": { key: "judgmentImageInput", set: "catalog", shape: "object" },
 	/**
 	 * Most questions one System One judgment request may carry; the judge
 	 * splits larger requests. Unassigned: the endpoint takes any batch size.
