@@ -83,6 +83,7 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { type Effort, serviceTierFamily, streamSimple } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { prewarmAnthropicConnection } from "@oh-my-pi/pi-ai/providers/anthropic";
 import { resetOpenAICodexHistoryAfterCompaction } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { withCredentialRedaction } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
@@ -6480,6 +6481,17 @@ export class AgentSession implements SettingsScope {
 	/** Whether agent is currently streaming a response */
 	get isStreaming(): boolean {
 		return this.agent.state.isStreaming || this.#promptInFlightCount > 0;
+	}
+
+	/**
+	 * Warms the active model's API connection while idle, so the next turn
+	 * skips connection setup. Throttled and best effort; no-op mid-turn, where
+	 * the pooled socket is busy and a warm-up would open a redundant one.
+	 */
+	prewarmModelConnection(): void {
+		const model = this.model;
+		if (!model || this.#isDisposed || this.isStreaming) return;
+		void prewarmAnthropicConnection(model);
 	}
 
 	get isAborting(): boolean {

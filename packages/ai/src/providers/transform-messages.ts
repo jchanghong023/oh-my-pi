@@ -489,7 +489,7 @@ function getLatestSurvivingAssistantIndex(messages: readonly Message[]): number 
 	return -1;
 }
 
-function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
+export function isAnthropicMessagesModel(model: Model): model is Model<"anthropic-messages"> {
 	return model.api === "anthropic-messages";
 }
 

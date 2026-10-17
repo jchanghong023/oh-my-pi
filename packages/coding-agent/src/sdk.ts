@@ -2221,10 +2221,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Fire-and-forget TLS+H2 handshake to the model's host so it overlaps
 		// with the rest of session setup (extension/skill load, tool registry,
 		// system prompt build). Without this, the first `fetch(...)` pays the
-		// full handshake serially — 100–300 ms transcontinental for
-		// api.anthropic.com from a residential IP. Every mode benefits
-		// (interactive, print, rpc, acp).
-		preconnectModelHost(model.baseUrl);
+		// full handshake serially. Every mode benefits (interactive, print, rpc,
+		// acp).
+		preconnectModelHost(model);
 	}
 
 	// Re-derives the thinking level whenever startup settles on a different
@@ -2954,7 +2953,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						// model: any value derived from the earlier fallback model's
 						// `thinking.defaultLevel` must not become sticky.
 						adoptThinkingForModel(restoredModel);
-						preconnectModelHost(restoredModel.baseUrl);
+						preconnectModelHost(restoredModel);
 						return true;
 					}
 				}
@@ -3310,7 +3309,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					);
 					modelFallbackMessage = `Fallback: ${usageFallbackReason.from} -> ${target}\n${usageFallbackReason.reason}`;
 				}
-				preconnectModelHost(selectedModel.baseUrl);
+				preconnectModelHost(selectedModel);
 				break;
 			}
 			if (!model) {
@@ -3355,7 +3354,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				// `pickInitialThinkingLevel` closes over `defaultRoleSpec`,
 				// so the role's explicit selector (e.g. `:max`) now applies.
 				adoptThinkingForModel(resolvedDefaultModel);
-				preconnectModelHost(resolvedDefaultModel.baseUrl);
+				preconnectModelHost(resolvedDefaultModel);
 				return true;
 			};
 
@@ -3429,7 +3428,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						restoredSessionThinkingLevel = retryFallback.originalThinkingLevel;
 					}
 					adoptThinkingForModel(resolved.model);
-					preconnectModelHost(resolved.model.baseUrl);
+					preconnectModelHost(resolved.model);
 					return true;
 				}
 				return false;
@@ -5762,13 +5761,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
  * primes DNS + TCP + TLS + H2 so the first real request reuses the warm
  * connection. Errors are swallowed: preconnect is an optimization, never a
  * hard dependency.
+ *
+ * Skips provider `anthropic`: its requests use the Cowork transport with
+ * custom TLS options and never reuse a `fetch.preconnect` socket. The
+ * interactive UI warms that connection via `prewarmModelConnection` instead.
  */
-function preconnectModelHost(baseUrl: string | undefined): void {
-	if (!baseUrl) return;
+function preconnectModelHost(model: Model): void {
+	if (!model.baseUrl || model.provider === "anthropic") return;
 	const preconnect = (globalThis.fetch as typeof fetch & { preconnect?: (url: string) => void }).preconnect;
 	if (typeof preconnect !== "function") return;
 	try {
-		preconnect(baseUrl);
+		preconnect(model.baseUrl);
 	} catch {
 		// Best effort.
 	}

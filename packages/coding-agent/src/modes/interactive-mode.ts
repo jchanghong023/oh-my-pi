@@ -2465,6 +2465,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			// so that paint does not build it on the JS thread. Fresh sessions skip it
 			// and pay the cost lazily on the first highlight, if any.
 			if (this.session.messages.length > 0) void warmHighlighter();
+			// Open the model API connection while the user reads the first frame.
+			this.session.prewarmModelConnection();
 			if (!$env.PI_NO_TITLE && !this.sessionManager.getSessionName()) {
 				this.#inputController.prewarmTinyTitleModel();
 			}
@@ -2524,6 +2526,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.session.subscribe(event => {
 				if (event.type === "model_changed") {
 					this.#scheduleComposerStatusPersist();
+					this.session.prewarmModelConnection();
 				}
 				if (event.type === "config_warnings_changed") {
 					this.#syncConfigWarningHeader();

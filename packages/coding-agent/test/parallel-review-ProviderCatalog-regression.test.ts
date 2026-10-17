@@ -96,9 +96,7 @@ describe("reserved provider lanes after extension catalog projections", () => {
 				expect(registry.find(PROVIDER_ID, "projected")?.baseUrl).toBe("http://extension.invalid");
 				expect(registry.find("company", "resurrected")).toBeUndefined();
 				expect(registry.getAll().some(model => model.provider === "company")).toBe(offline);
-				expect(registry.find("company", companyModel.id)?.baseUrl).toBe(
-					offline ? companyModel.baseUrl : undefined,
-				);
+				expect(registry.find("company", companyModel.id)?.baseUrl).toBe(offline ? companyModel.baseUrl : undefined);
 			};
 			assertLaneRouting();
 			await registry.refresh("offline");

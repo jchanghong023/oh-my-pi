@@ -150,73 +150,70 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 		expect(probe.inheritedRequests).toBe(0);
 	}, 30_000);
 
-	it(
-		"runs a public company benchmark over the Anthropic route without discovery",
-		async () => {
-			const provider = "company";
-			const modelId = "GLM-5.2-public";
-			const selector = `${provider}/${modelId}`;
-			const requests: Array<{ url: string; authorization: string | null; apiKey: string | null; model: string }> =
-				[];
-			const server = Bun.serve({
-				hostname: "127.0.0.1",
-				port: 0,
-				async fetch(request) {
-					const body = (await request.json()) as { model: string };
-					requests.push({
-						url: request.url,
-						authorization: request.headers.get("authorization"),
-						apiKey: request.headers.get("x-api-key"),
-						model: body.model,
-					});
-					const events = [
-						{
-							type: "message_start",
-							message: {
-								id: "bench-fixture",
-								type: "message",
-								role: "assistant",
-								model: modelId,
-								content: [],
-								stop_reason: null,
-								stop_sequence: null,
-								usage: { input_tokens: 5, output_tokens: 0 },
-							},
+	it("runs a public company benchmark over the Anthropic route without discovery", async () => {
+		const provider = "company";
+		const modelId = "GLM-5.2-public";
+		const selector = `${provider}/${modelId}`;
+		const requests: Array<{ url: string; authorization: string | null; apiKey: string | null; model: string }> = [];
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				const body = (await request.json()) as { model: string };
+				requests.push({
+					url: request.url,
+					authorization: request.headers.get("authorization"),
+					apiKey: request.headers.get("x-api-key"),
+					model: body.model,
+				});
+				const events = [
+					{
+						type: "message_start",
+						message: {
+							id: "bench-fixture",
+							type: "message",
+							role: "assistant",
+							model: modelId,
+							content: [],
+							stop_reason: null,
+							stop_sequence: null,
+							usage: { input_tokens: 5, output_tokens: 0 },
 						},
-						{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-						{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
-						{ type: "content_block_stop", index: 0 },
-						{
-							type: "message_delta",
-							delta: { stop_reason: "end_turn", stop_sequence: null },
-							usage: { output_tokens: 1 },
-						},
-						{ type: "message_stop" },
-					];
-					return new Response(
-						events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
-						{
-							headers: { "Content-Type": "text/event-stream" },
-						},
-					);
-				},
-			});
-			try {
-				const env = await isolatedEnv(true, true);
-				await fs.writeFile(
-					path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
-					JSON.stringify({
-						env: {
-							ANTHROPIC_BASE_URL: `${server.url.origin}/prefix/v1/`,
-							ANTHROPIC_AUTH_TOKEN: "fixture-token",
-						},
-					}),
+					},
+					{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+					{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+					{ type: "content_block_stop", index: 0 },
+					{
+						type: "message_delta",
+						delta: { stop_reason: "end_turn", stop_sequence: null },
+						usage: { output_tokens: 1 },
+					},
+					{ type: "message_stop" },
+				];
+				return new Response(
+					events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+					{
+						headers: { "Content-Type": "text/event-stream" },
+					},
 				);
-				const guard = path.join(env.HOME!, "network-guard.ts");
-				const endpoint = `${server.url.origin}/prefix/v1/messages`;
-				await fs.writeFile(
-					guard,
-					`
+			},
+		});
+		try {
+			const env = await isolatedEnv(true, true);
+			await fs.writeFile(
+				path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
+				JSON.stringify({
+					env: {
+						ANTHROPIC_BASE_URL: `${server.url.origin}/prefix/v1/`,
+						ANTHROPIC_AUTH_TOKEN: "fixture-token",
+					},
+				}),
+			);
+			const guard = path.join(env.HOME!, "network-guard.ts");
+			const endpoint = `${server.url.origin}/prefix/v1/messages`;
+			await fs.writeFile(
+				guard,
+				`
 				const original = globalThis.fetch.bind(globalThis);
 				globalThis.fetch = async (input, init) => {
 					const url = input instanceof Request ? input.url : String(input);
@@ -227,39 +224,37 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 					return original(input, init);
 				};
 			`,
-				);
-				const child = Bun.spawn(
-					[process.execPath, "--preload", guard, CLI, "bench", selector, "--runs", "1", "--par", "1", "--json"],
-					{
-						cwd: env.HOME,
-						env,
-						stdin: "ignore",
-						stdout: "pipe",
-						stderr: "pipe",
-					},
-				);
-				const [stdout, stderr] = await Promise.all([
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-				]);
-				expect(await child.exited).toBe(0);
-				expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
-				const summary = JSON.parse(stdout) as BenchSummary;
-				expect(summary.failures).toBe(0);
-				expect(summary.models[0]?.model).toBe(selector);
-				expect(summary.models[0]?.results).toHaveLength(1);
-				expect(requests).toEqual([
-					{
-						url: endpoint,
-						authorization: "Bearer fixture-token",
-						apiKey: null,
-						model: modelId,
-					},
-				]);
-			} finally {
-				server.stop(true);
-			}
-		},
-		30_000,
-	);
+			);
+			const child = Bun.spawn(
+				[process.execPath, "--preload", guard, CLI, "bench", selector, "--runs", "1", "--par", "1", "--json"],
+				{
+					cwd: env.HOME,
+					env,
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [stdout, stderr] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(await child.exited).toBe(0);
+			expect(stderr).not.toContain("UNEXPECTED_NETWORK_FETCH");
+			const summary = JSON.parse(stdout) as BenchSummary;
+			expect(summary.failures).toBe(0);
+			expect(summary.models[0]?.model).toBe(selector);
+			expect(summary.models[0]?.results).toHaveLength(1);
+			expect(requests).toEqual([
+				{
+					url: endpoint,
+					authorization: "Bearer fixture-token",
+					apiKey: null,
+					model: modelId,
+				},
+			]);
+		} finally {
+			server.stop(true);
+		}
+	}, 30_000);
 });

@@ -218,12 +218,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 }).withValidation("models", config => {
 	const providers = config.providers ?? {};
 	for (const providerName in providers) {
-		if (
-			providerName === "company" ||
-			providerName === "jchtools" ||
-			providerName === "codeagent"
-		)
-			continue;
+		if (providerName === "company" || providerName === "jchtools" || providerName === "codeagent") continue;
 		const providerConfig = providers[providerName];
 		validateProviderConfiguration(
 			providerName,

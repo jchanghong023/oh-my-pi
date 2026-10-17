@@ -23,6 +23,7 @@ import { parseToolCallArguments } from "../utils/tool-call-arguments";
 import { waitForRetry } from "../utils/retry-wait";
 import { getEnvApiKey } from "../env-api-key";
 import { OUTPUT_FALLBACK_BUFFER } from "../stream";
+import { wrapFetchForAnthropicGzip } from "./anthropic-gzip";
 import type {
 	AnthropicCompactionFiles,
 	AnthropicCompactionPayload,
@@ -97,6 +98,7 @@ import { spillToDescription } from "../utils/schema/spill";
 import { createSdkStreamRequestOptions } from "../utils/sdk-stream-timeout";
 import { notifyRawSseEvent } from "../utils/sse-debug";
 import { isForcedToolChoice } from "../utils/tool-choice";
+import { transportFetch } from "../utils/transport-fetch";
 import {
 	AnthropicConnectionTimeoutError,
 	type AnthropicFetchOptions,
@@ -146,7 +148,7 @@ import { prepareAnthropicImageContext } from "./anthropic-images";
 import { servedModelFromAnthropicSignature } from "./anthropic-signature";
 import { getOpenAIPromptCacheKey } from "./openai-shared";
 import { applyInferenceHeaders } from "./inference-headers";
-import { redactSensitiveCredentials, transformMessages } from "./transform-messages";
+import { isAnthropicMessagesModel, redactSensitiveCredentials, transformMessages } from "./transform-messages";
 import { NON_VISION_IMAGE_PLACEHOLDER } from "./vision-guard";
 import {
 	injectedClientBaseUrl,
@@ -4374,7 +4376,9 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	// per request, so the native ceiling can only short-circuit slow-prefill
 	// streams before the configured watchdog gets to govern them.
 	const fetchOptions: AnthropicFetchOptions = { ...tlsFetchOptions, timeout: false };
-	const baseFetch = args.fetch ?? fetch;
+	// Gzip sits beneath the cch rewriter, which must hash the uncompressed body.
+	// It self-scopes to the official API URL, so proxies and Copilot pass through.
+	const baseFetch = wrapFetchForAnthropicGzip(args.fetch ?? fetch);
 	// Only OAuth requests inject the CC billing header; no API-key request can ever
 	// contain it, so there is no need to install the rewriter for those.
 	const cchFetch = oauthToken ? wrapFetchForCch(baseFetch) : baseFetch;
@@ -4538,6 +4542,52 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		fetch: cchFetch,
 		fetchOptions,
 	};
+}
+
+/**
+ * Minimum gap between warm-ups. Pooled sockets outlive it by minutes, so a
+ * tighter cadence would only add requests.
+ */
+const ANTHROPIC_PREWARM_INTERVAL_MS = 30_000;
+const ANTHROPIC_PREWARM_TIMEOUT_MS = 10_000;
+let anthropicPrewarmedAt: number | undefined;
+
+/**
+ * Opens, or keeps alive, a pooled connection to the official Anthropic API so
+ * the next turn skips DNS + TCP + TLS. Sends a credential-less `HEAD` through
+ * the same transport (proxy, CA, Cowork profile) and TLS options as real
+ * requests: sockets pool per TLS configuration, so a warm-up made any other
+ * way (e.g. `fetch.preconnect`) is never reused.
+ *
+ * Only first-party `anthropic` models whose requests resolve to the official
+ * API are warmed: third-party gateways and custom endpoints never receive
+ * unsolicited probes. Throttled; best effort, never throws.
+ */
+export async function prewarmAnthropicConnection(model: Model<Api>, options?: { fetch?: FetchImpl }): Promise<void> {
+	if (model.provider !== "anthropic" || !isAnthropicMessagesModel(model)) return;
+	const baseUrl = resolveAnthropicBaseUrl(model) ?? "https://api.anthropic.com";
+	if (!isOfficialAnthropicApiUrl(baseUrl)) return;
+	const now = Date.now();
+	if (anthropicPrewarmedAt !== undefined && now - anthropicPrewarmedAt < ANTHROPIC_PREWARM_INTERVAL_MS) return;
+	anthropicPrewarmedAt = now;
+	try {
+		const response = await transportFetch(model, options?.fetch)(baseUrl, {
+			...buildClaudeCodeTlsFetchOptions(model, baseUrl),
+			method: "HEAD",
+			headers: {},
+			signal: AbortSignal.timeout(ANTHROPIC_PREWARM_TIMEOUT_MS),
+		});
+		await response.body?.cancel();
+	} catch (error) {
+		logger.debug("anthropic: connection prewarm failed", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+}
+
+/** Test hook: forgets the last warm-up so the next call is not throttled. */
+export function resetAnthropicPrewarmForTesting(): void {
+	anthropicPrewarmedAt = undefined;
 }
 
 function createClient(
