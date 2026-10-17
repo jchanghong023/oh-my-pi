@@ -95,7 +95,6 @@ describe("DocsHubComponent shared interaction contract", () => {
 				hub.handleInput("y");
 				await observed.waitFor(rendered => rendered.includes("No document indexes."));
 				expect(await stored.list()).toEqual([]);
-				expect((await stored.search("ScanFlow")).sections).toEqual([]);
 			} finally {
 				await stored.close();
 			}

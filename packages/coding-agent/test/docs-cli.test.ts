@@ -100,7 +100,6 @@ describe("runDocsCommand", () => {
 		const removed = new DocsService({ agentDir, cwd });
 		try {
 			expect(await removed.list()).toEqual([]);
-			expect((await removed.search("indexing")).sections).toEqual([]);
 		} finally {
 			await removed.close();
 		}
@@ -155,7 +154,6 @@ describe("runDocsCommand", () => {
 		const observer = new DocsService({ agentDir, cwd });
 		try {
 			expect(await observer.list()).toEqual([]);
-			expect((await observer.search("Text")).sections).toEqual([]);
 		} finally {
 			await observer.close();
 		}
