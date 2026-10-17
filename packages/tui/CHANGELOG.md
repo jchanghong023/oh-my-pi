@@ -38,6 +38,11 @@
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.
 - Kept the Rounded Box default consistent during uncached startup, shape previews, and setup selection.
 
+### Fixed
+
+- Fixed sessions run inside tmux silently falling back to the terminal's true-color profile when the client terminal-type probe answered slowly on a loaded machine ([#16020](https://github.com/can1357/oh-my-pi/pull/16020) by [@CharleoYang](https://github.com/CharleoYang))
+- Fixed the `read` result notice printing the absolute resolved path, so a file under the home directory reads `Resolved path: ~/notes.txt` instead of `/home/you/notes.txt` ([#16055](https://github.com/can1357/oh-my-pi/pull/16055) by [@adi-IL](https://github.com/adi-IL)).
+
 ## [18.11.3] - 2026-10-16
 
 ### Added

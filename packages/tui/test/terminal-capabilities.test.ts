@@ -162,44 +162,57 @@ describe("detectTerminalId", () => {
 describe("tmux client terminal resolution", () => {
 	const CLIENT_QUERY = "display-message -p #{client_termtype}\t#{client_termname}";
 
-	async function resolveInsideFakeTmux(clientReport: string): Promise<string> {
-		return withFakeTmux({ [CLIENT_QUERY]: clientReport }, async binDir => {
-			const proc = Bun.spawn({
-				cmd: [
-					process.execPath,
-					"--eval",
-					`import { TERMINAL, TERMINAL_ID } from "@oh-my-pi/pi-tui/terminal-capabilities";
+	async function resolveInsideFakeTmux(clientReport: string, replyDelayMs?: number): Promise<string> {
+		return withFakeTmux(
+			{ [CLIENT_QUERY]: clientReport },
+			async binDir => {
+				const proc = Bun.spawn({
+					cmd: [
+						process.execPath,
+						"--eval",
+						`import { TERMINAL, TERMINAL_ID } from "@oh-my-pi/pi-tui/terminal-capabilities";
 console.log(JSON.stringify({ id: TERMINAL_ID, notifyProtocol: TERMINAL.notifyProtocol, imageProtocol: TERMINAL.imageProtocol }));`,
-				],
-				env: subprocessEnv({
-					PI_TEST_RUNTIME: undefined,
-					BUN_ENV: undefined,
-					NODE_ENV: undefined,
-					TERM: "tmux-256color",
-					TERM_PROGRAM: "tmux",
-					TERM_PROGRAM_VERSION: "3.6b",
-					COLORTERM: "truecolor",
-					TMUX: "/tmp/tmux-1000/default,4242,0",
-					SSH_CONNECTION: "client 1 server 22",
-					PATH: `${binDir}${path.delimiter}${Bun.env.PATH ?? ""}`,
-				}),
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
+					],
+					env: subprocessEnv({
+						PI_TEST_RUNTIME: undefined,
+						BUN_ENV: undefined,
+						NODE_ENV: undefined,
+						TERM: "tmux-256color",
+						TERM_PROGRAM: "tmux",
+						TERM_PROGRAM_VERSION: "3.6b",
+						COLORTERM: "truecolor",
+						TMUX: "/tmp/tmux-1000/default,4242,0",
+						SSH_CONNECTION: "client 1 server 22",
+						PATH: `${binDir}${path.delimiter}${Bun.env.PATH ?? ""}`,
+					}),
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(proc.stdout).text(),
+					new Response(proc.stderr).text(),
+					proc.exited,
+				]);
 
-			expect(stderr).toBe("");
-			expect(exitCode).toBe(0);
-			return stdout;
-		});
+				expect(stderr).toBe("");
+				expect(exitCode).toBe(0);
+				return stdout;
+			},
+			{ replyDelayMs },
+		);
 	}
 
 	it.skipIf(process.platform === "win32")("uses the attached client's terminal profile", async () => {
 		const stdout = await resolveInsideFakeTmux("WezTerm 20260905-175422-0f4b5596\ttmux-256color");
+		expect(JSON.parse(stdout)).toMatchObject({ id: "wezterm", notifyProtocol: "\u001b]9;" });
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the client profile when the probe is slower than 500ms", async () => {
+		// A loaded machine can push one `tmux display-message` round trip past
+		// 500ms (fork/exec of the tmux client alone can exceed it on a saturated
+		// box), and a lost race is indistinguishable from "not tmux": the session
+		// then silently falls back to the true-color profile for its whole life.
+		const stdout = await resolveInsideFakeTmux("WezTerm 20260905-175422-0f4b5596\ttmux-256color", 600);
 		expect(JSON.parse(stdout)).toMatchObject({ id: "wezterm", notifyProtocol: "\u001b]9;" });
 	});
 

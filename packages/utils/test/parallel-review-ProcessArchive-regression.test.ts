@@ -1,12 +1,7 @@
 import { expect, test, vi } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
 import { Process } from "@oh-my-pi/pi-natives";
-import { TempDir } from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
-import { extractArchive } from "../src/ar/open";
 import { AbortError, ChildProcess } from "../src/ptree";
-import { arFixture } from "./ar/fixtures";
 
 test("aborting after root exit closes inherited stdout without rediscovering the dead PID", async () => {
 	vi.useFakeTimers();
@@ -51,22 +46,3 @@ test("aborting after root exit closes inherited stdout without rediscovering the
 		vi.useRealTimers();
 	}
 });
-
-test.skipIf(process.platform !== "win32")(
-	"Windows symlink-copy fallback rejects an occupied destination without overwriting its bytes",
-	async () => {
-		using root = TempDir.createSync("@pi-archive-copy-collision-");
-		const bytes = await arFixture("zip-symlink-mode.zip");
-		const occupied = path.join(root.path(), "current");
-		await Bun.write(occupied, "existing user content");
-		const symlink = vi
-			.spyOn(fs, "symlink")
-			.mockRejectedValue(Object.assign(new Error("Symlink privilege denied"), { code: "EPERM" }));
-		try {
-			await expect(extractArchive({ bytes, format: "zip" }, root.path())).rejects.toMatchObject({ code: "EEXIST" });
-			expect(await Bun.file(occupied).text()).toBe("existing user content");
-		} finally {
-			symlink.mockRestore();
-		}
-	},
-);

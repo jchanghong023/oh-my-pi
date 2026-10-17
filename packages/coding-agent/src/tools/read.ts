@@ -1231,8 +1231,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	/**
 	 * Reinterpret a read target pointing at a video file. Timestamp selectors
 	 * (`clip.mp4:1h5m42s`, `clip.mp4:0:05`) never survive line-selector parsing,
-	 * so peel one off the raw path whenever the base names an existing video
-	 * file; a literal file named by the full path (colon included) still wins.
+	 * so peel one off the raw path whenever it parses as a video frame or
+	 * timestamp selector; a literal file named by the peeled path wins, and
+	 * `splitPathAndSelPreferringLiteral` already reports the full entry as the
+	 * peeled path whenever that entry exists. The base does not have to sit in
+	 * the session cwd: unique workspace suffixes still resolve it, and a genuinely
+	 * missing file then reports its path instead of a colon-mangled one.
 	 */
 	async #applyVideoSelectorFallback(
 		literalSplit: { path: string; sel?: string },
@@ -1240,8 +1244,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	): Promise<{ path: string; sel?: string }> {
 		const videoSplit = splitVideoReadTarget(readPath);
 		if (!videoSplit) return literalSplit;
-		if ((await probeLiteralPathExists(videoSplit.path, this.session.cwd)) === "missing") return literalSplit;
-		if ((await probeLiteralPathExists(readPath, this.session.cwd)) === "exists") return literalSplit;
+		if ((await probeLiteralPathExists(literalSplit.path, this.session.cwd)) === "exists") return literalSplit;
 		return videoSplit;
 	}
 

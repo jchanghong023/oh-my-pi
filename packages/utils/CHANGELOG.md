@@ -7,6 +7,9 @@
 - Preserve successful explicit exits after an early Windows event-loop drain while still reporting genuinely unfinished commands.
 - Keep each process invocation in a new log file, including when its PID is reused, without appending to earlier logs.
 
+### Fixed
+
+- Fixed Windows archive extraction overwriting existing files or following existing symlinks when copying a symlink entry without symlink privileges ([#15931](https://github.com/can1357/oh-my-pi/pull/15931) by [@jchanghong023](https://github.com/jchanghong023)).
 ## [18.11.3] - 2026-10-16
 
 ### Fixed

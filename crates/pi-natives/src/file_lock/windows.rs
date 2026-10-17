@@ -134,9 +134,8 @@ mod tests {
 	fn denied_access_is_not_treated_as_contention() {
 		let path = format!("oauth-lock-denied-{}", std::process::id());
 		let _owner = restricted_mutex(&path, 0);
-		let error = match try_acquire(&path) {
-			Err(error) => error,
-			Ok(_) => panic!("denied access must remain an error"),
+		let Err(error) = try_acquire(&path) else {
+			panic!("denied access must remain an error");
 		};
 		assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
 	}

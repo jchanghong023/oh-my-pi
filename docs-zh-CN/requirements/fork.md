@@ -23,7 +23,7 @@
 
 - **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.11.3`
-- **Upstream commit**：`38056011aaa8f855346f20ae0ed252dce2ba702b`
+- **Upstream commit**：`58195a453b8627421f1119a60586e3c17d76a27e`
 - **同步日期**：2026-10-17
 
 ## 当前功能差异
@@ -201,12 +201,11 @@
 
 基础设施修复只在已确认使用场景确实依赖时保留；不因历史上修复过就形成独立维护义务。以下剩余补丁是待核对必要性的现状线索，不代表已确认必须保留，也不能在未核实依赖前直接认定可删除。上游已包含等价修复后，移除重复实现及 fork 额外保留的回归测试，fork 测试聚焦仍有效的本地差异。
 
+Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 覆盖 home 时旧 hashed 会话迁移，以及指数数值边界校验与 JSON Schema 输出，分别由上游 PR #15930、#15931、#15929、#15925 满足，不再保留重复 fork 补丁或回归；这些行为目标仍有效。
+
 - `packages/coding-agent/src/lsp/clients/biome-client.ts`：Windows 上 abort 与 stdout 管道读取 race，脚本包装的孙子进程不再持有管道造成永久等待。
 - `packages/utils/src/ptree.ts`：stdout 经包装流跟踪 EOF（attachSignal 等待 stdout/stderr 收尾、stdout 惰性暴露与完成后收口），孙子进程在截止/中止后持有管道不再永久挂起读取；`packages/utils/test/ptree-timeout.test.ts` 覆盖。截止时取消管道读取并保留部分输出已由上游（2026-10-07 `#cutoff` + `#pipeReaders`）等价提供，不再由 fork 承担。
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`：上游 `RpcUserInputGate.enqueue` 无重入通道，从运行中 section 自身异步子树内再次 enqueue 会等待自己而死锁；fork 以 AsyncLocalStorage section 作用域让该重入内联执行，其余仍按到达顺序排队。
-- `packages/coding-agent/src/session/session-paths.ts`：temp 根嵌套在 home 内（Windows `%TEMP%`）且 cwd 两者皆属时，除既有 `shadowedHomeDirName` 外同时前移 home 范围的旧 hashed 命名目录（`shadowedHomeHashedDirName`），旧会话目录不因命名切换而失联。
-- `packages/omptype/src/typebox.ts`：指数形式数值（如 `1e21`）超出 DSL 边界可表达范围时回退运行时 narrow，并补齐 JSON Schema minimum/maximum 输出。
-- `packages/utils/src/ar/open.ts`：Windows EPERM 时降级为 junction 或文件复制、跳过 dangling link 已由上游提供；fork 仅保留文件复制时的独占目标语义，不能覆盖现有文件或跟随已有 symlink。
 - `packages/coding-agent/src/tools/read-archive.ts`：Windows 同尺寸快速重写归档并恢复 mtime 时，ctime 也可能不变；该平台不复用仅由文件元数据验证的归档目录缓存，避免返回旧成员名称或读取错误成员。其他平台保留既有有界缓存。
 - `crates/pi-builtins/src/cksum.rs`：行解析中 `(` 位于行首时的 `par_idx` 越界守卫。
 - `crates/pi-builtins/src/rmdir.rs`：Windows 普通路径不得经末尾 `.`／`..` 或分量尾点／空格归一化删除另一目录；显式 verbatim 路径继续按字面处理合法尾点／空格目录，Unix 字面路径语义不变。
@@ -214,7 +213,6 @@
 - `crates/pi-natives/src/memory.rs`：非 Linux/glibc 平台的空操作入口使用 `const fn`，满足 Windows 静态门禁；Linux/glibc 继续执行原有工作计数、释放通知与空闲裁剪，不屏蔽 lint。
 - `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
 - `crates/pi-shell/src/process.rs`：取消时每一波信号在发送前冻结自有目标，同一进程／进程组不重复投递 TERM，避免重入清理 trap；跨组后代与 TERM 后新生进程仍由后续 KILL 波回收，保留既有进程身份保护和宽限时限。
-- `crates/pi-natives/src/file_lock/windows.rs`：Windows 进程间租约仅申请 `SYNCHRONIZE` 权限；已有同名互斥锁允许同步但不允许全部访问时，按正常锁竞争返回未获取租约，不能导致 broker 启动失败与文字补全暂停。真实拒绝访问仍保留为错误；持有者退出或释放后，后继进程可获取租约。
 - `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
 - `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。独立 Python 回归不因此纳入 fork 本地门禁。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。

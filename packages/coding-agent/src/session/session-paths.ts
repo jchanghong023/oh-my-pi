@@ -109,7 +109,7 @@ function getDefaultSessionDirName(cwd: string): {
 	hashedDirName: string;
 	/** Home-relative name a temp-root cwd got while home was checked first; migrated forward. */
 	shadowedHomeDirName?: string;
-	/** Home-scoped hashed name the same cwd had before the temp scope won; migrated forward. */
+	/** Hashed home-scoped name from before temp-root precedence. */
 	shadowedHomeHashedDirName?: string;
 	resolvedCwd: string;
 } {

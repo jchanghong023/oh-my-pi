@@ -19,6 +19,7 @@ import {
 	hashPath,
 	setAgentDir,
 } from "@oh-my-pi/pi-utils";
+import { resolveEquivalentPath } from "@oh-my-pi/pi-utils/dirs";
 
 const cleanup: string[] = [];
 
@@ -41,25 +42,72 @@ afterEach(() => {
 });
 
 describe("legacy session directory migration", () => {
-	test("follows the temp root when TMPDIR nests inside home", () => {
-		const homeProbe = fs.mkdtempSync(path.join(os.homedir(), ".omp-session-home-"));
-		cleanup.push(homeProbe);
-		const cwd = path.join(homeProbe, "nested", "project");
-		fs.mkdirSync(cwd, { recursive: true });
-		const sessionsRoot = makeTempDir("omp-session-root-");
-		const storage = new FileSessionStorage();
-		const tmpdir = vi.spyOn(os, "tmpdir").mockReturnValue(homeProbe);
+	test.each([false, true])(
+		"recovers hashed home-scoped sessions when the temp root is inside home (collision: %s)",
+		withCollision => {
+			const root = makeTempDir("omp-shadowed-home-");
+			const home = path.join(root, "home");
+			const tempRoot = path.join(home, "tmp");
+			const cwd = path.join(tempRoot, "project");
+			const sessionsRoot = path.join(root, "sessions");
+			fs.mkdirSync(cwd, { recursive: true });
+			const canonical = resolveEquivalentPath(path.resolve(cwd));
+			const digest = Bun.SHA256.hash(canonical.replaceAll("\\", "/"), "hex");
+			const oldDir = path.join(sessionsRoot, `home-project-${digest}`);
+			const canonicalDir = path.join(sessionsRoot, "-tmp-project");
+			const transcript = Buffer.from('{"type":"session","id":"saved","note":"你好"}\r\n');
+			fs.mkdirSync(oldDir, { recursive: true });
+			fs.writeFileSync(path.join(oldDir, "saved.jsonl"), transcript);
+			if (withCollision) {
+				fs.mkdirSync(canonicalDir);
+				fs.writeFileSync(path.join(oldDir, "active.jsonl"), "legacy\n");
+				fs.writeFileSync(path.join(canonicalDir, "active.jsonl"), "canonical\n");
+			}
+			const homeMock = vi.spyOn(os, "homedir").mockReturnValue(home);
+			try {
+				const tempMock = vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+				try {
+					const destination = computeDefaultSessionDir(cwd, new FileSessionStorage(), sessionsRoot);
+					expect(destination).toBe(canonicalDir);
+					expect(fs.readFileSync(path.join(destination, "saved.jsonl"))).toEqual(transcript);
+					if (withCollision) {
+						expect(fs.readFileSync(path.join(oldDir, "active.jsonl"), "utf8")).toBe("legacy\n");
+						expect(fs.readFileSync(path.join(destination, "active.jsonl"), "utf8")).toBe("canonical\n");
+					} else {
+						expect(fs.existsSync(oldDir)).toBe(false);
+					}
+				} finally {
+					tempMock.mockRestore();
+				}
+			} finally {
+				homeMock.mockRestore();
+			}
+		},
+	);
+
+	test("keeps normal home and temp session directory names", () => {
+		const root = makeTempDir("omp-session-scopes-");
+		const home = path.join(root, "home");
+		const tempRoot = path.join(root, "tmp");
+		const sessionsRoot = path.join(root, "sessions");
+		const homeCwd = path.join(home, "project");
+		const tempCwd = path.join(tempRoot, "project");
+		fs.mkdirSync(homeCwd, { recursive: true });
+		fs.mkdirSync(tempCwd, { recursive: true });
+		const homeMock = vi.spyOn(os, "homedir").mockReturnValue(home);
 		try {
-			// Upstream classifies by the temp root first wherever it nests
-			// inside home (Windows' %TEMP% layout), so the encoded name
-			// tracks TMPDIR rather than staying home-relative.
-			const first = computeDefaultSessionDir(cwd, storage, sessionsRoot);
-			expect(path.basename(first)).toBe("-tmp-nested-project");
-			tmpdir.mockReturnValue(path.join(homeProbe, "nested"));
-			const second = computeDefaultSessionDir(cwd, storage, sessionsRoot);
-			expect(path.basename(second)).toBe("-tmp-project");
+			const tempMock = vi.spyOn(os, "tmpdir").mockReturnValue(tempRoot);
+			try {
+				const storage = new FileSessionStorage();
+				expect(computeDefaultSessionDir(homeCwd, storage, sessionsRoot)).toBe(path.join(sessionsRoot, "-project"));
+				expect(computeDefaultSessionDir(tempCwd, storage, sessionsRoot)).toBe(
+					path.join(sessionsRoot, "-tmp-project"),
+				);
+			} finally {
+				tempMock.mockRestore();
+			}
 		} finally {
-			tmpdir.mockRestore();
+			homeMock.mockRestore();
 		}
 	});
 
