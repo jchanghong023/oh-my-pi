@@ -622,6 +622,9 @@ describe("streamed deployed fixed-commit execution", () => {
 				expect(code).toBe(0);
 			}
 		}
+		const uvCache = path.join(nativeRoot, ".cache", "uv", "sdists-v9");
+		await fs.mkdir(uvCache, { recursive: true });
+		await fs.writeFile(path.join(uvCache, ".git"), "");
 		const f = executionFixture(async command => {
 			if (command.label !== "wsl/native-repository-discovery") return undefined;
 			// Execute the generated discovery, not a precomputed candidate list.

@@ -448,6 +448,10 @@ for directory,children,files in os.walk('/root'):
  if not repository: continue
  root=pathlib.Path(directory).resolve()
  if not str(root).startswith('/root/'): continue
+ marker=root/'.git'
+ if marker.is_file():
+  with marker.open('rb') as gitfile:
+   if gitfile.read(8)!=b'gitdir: ': continue
  for remote in subprocess.check_output(['git','-C',str(root),'remote'],text=True,timeout=5).splitlines():
   urls=subprocess.check_output(['git','-C',str(root),'remote','get-url','--all',remote],text=True,timeout=5).splitlines()
   for url in urls:
