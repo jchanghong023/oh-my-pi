@@ -26,6 +26,7 @@ import { InteractiveMode } from "../modes/interactive-mode";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "../session/agent-session";
 import { AuthStorage, SqliteAuthCredentialStore } from "../session/auth-storage";
+import { offlineFromEnv } from "./args";
 import { resolveSessionFileArg } from "./session-arg";
 import { SessionManager } from "../session/session-manager";
 
@@ -165,7 +166,11 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 		const openMs = performance.now() - openStart;
 
 		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
-		const modelRegistry = new ModelRegistry(authStorage);
+		// Offline rendering needs only bundled UI models, not the user's model
+		// configuration or company credentials. Keep normal render semantics intact.
+		const modelRegistry = offlineFromEnv()
+			? new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"), { settings })
+			: new ModelRegistry(authStorage);
 		const model = modelRegistry.getAll()[0];
 		if (!model) throw new Error("No models available in the bundled catalog");
 

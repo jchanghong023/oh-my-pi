@@ -134,8 +134,8 @@
 ### 团队共享技能目录
 
 - 设置非空 `OMP_SKILLS_DIR` 后，将该目录作为附加技能根目录，沿用现有单层 `<目录>/<技能名>/SKILL.md` 扫描、校验、过滤、命名空间与去重机制；不要求配置文件，不下载、复制或同步技能。
-- 共享目录优先于用户、项目及 `skills.customDirectories` 中的同名技能；共享版本取得原技能名，内容不同的低优先级版本沿用现有命名空间规则保留。未设置、为空或目录不存在时保留原有技能发现行为。
-- 该变量独立于 `OMP_OFFLINE`，在技能发现及刷新时生效；默认技能禁用、包含与排除规则继续有效。
+- 共享目录优先于用户、项目及 `skills.customDirectories` 中的同名技能；共享版本取得原技能名，内容不同的低优先级版本沿用现有命名空间规则保留。执行发现与管理界面沿用同一 catalog 的命名与优先级规则；管理界面标明 `Shared` 来源，展示实际生效的裸名及保留的 namespace 版本，不另行产生一套名称或优先级。面板使用当前宿主会话的 `skills` 配置，不取其他会话最新绑定的全局配置。未设置、为空或目录不存在时保留原有技能发现行为。
+- 该变量独立于 `OMP_OFFLINE`，在技能发现及刷新时生效；默认技能禁用、包含与排除规则继续有效。管理 catalog 保留禁用项、关闭来源及其诊断；执行侧在扫描前按启用来源过滤，不扫描关闭来源，也不向执行返回关闭来源的警告。通过现有 `/extensions` 启停并异步刷新执行侧技能列表、补全与可读内容；禁用项不可执行，但仍可在管理界面重新启用。启停沿用现有配置机制，不修改共享目录中的 `SKILL.md` 或其他 NFS 源文件，不新增共享写入或同步机制。
 
 
 ### Codex 压缩默认模型
@@ -171,7 +171,11 @@
 ### 公司内网模型（仅 `OMP_OFFLINE`）
 
 - `company` lane 只在 offline（`OMP_OFFLINE=1`）进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `OMP_OFFLINE=1`。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 offline 进程。
-- `OMP_OFFLINE=1` 下的 `omp models` 与 `omp bench <selector…>` 采用与进程级 offline 同一套 company 语义：先翻转 lane 再构建 registry，因此 `omp models` 列出公司聊天模型、`omp bench` 能解析并压测 `company/<模型>` 选择器；刷新与 selector-miss 的发现回退都用 cache-only 策略、不发公网请求；公司配置缺失或无效时把公司 provider 的错误原因写到 stderr，不静默。未设 `OMP_OFFLINE` 时两者都不注册公司 provider。其余需要解析模型的子命令（`omp dry-balance`、`omp render`、`omp read`、`omp usage` 等）尚未接入该开关：改动这些命令时 MUST 按同一语义补齐，不得让其继续静默走公网路径。
+- `OMP_OFFLINE=1` 下的 `omp models` 与 `omp bench <selector…>` 采用与进程级 offline 同一套 company 语义：先翻转 lane 再构建 registry，因此 `omp models` 列出公司聊天模型、`omp bench` 能解析并压测 `company/<模型>` 选择器；刷新与 selector-miss 的发现回退都用 cache-only 策略、不发公网模型发现请求；公司配置缺失或无效时把公司 provider 的错误原因写到 stderr，不静默。`omp dry-balance`、`omp read`、`omp render`、`omp usage` 按实际需要复用既有初始化与 cache-only 策略，不新增平行注册流程：
+  - `dry-balance` 在解析模型前初始化 company lane；`read "<图片路径>?q=<问题>"` 按需初始化 company 与 vision 角色，再向选中的模型发出真实请求。显式配置且解析成功的非 `company` vision／default 角色仍按用户选择执行，公司配置错误须可见但不阻断该显式路径；需要默认或显式选择的 `company` 模型时，配置缺失或无效须明确失败，不允许隐式回退到其他 Provider。
+  - 普通 `read` 本地文件与 `render` 渲染已有会话不需要公司配置，不为此触发 auth discovery 或在线模型发现；实际需要 MCP、远端服务或模型的读取仍沿用相应能力的认证与请求流程。
+  - `usage` 复用现有账号与 usage provider 流程，只将模型目录发现限制为 cache-only；不禁用真实 usage／公司模型 API 请求，不虚构 company usage 接口或额度数据。实际需要初始化 company 的路径须让配置错误可见且不泄露凭据。
+  - 上述 lane、角色默认值与发现策略仅在当前 offline 进程生效，不持久化；非 offline 行为不变，不注册公司 provider，也不把 cache-only 扩展为所有网络请求的禁令。
 - 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
 - URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
 - 聊天使用 Anthropic Messages 协议和 Bearer 认证，不做公司模型发现、不请求对应厂商的公网 API。内置参数固定如下（token 数）：
@@ -331,7 +335,7 @@
 - **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。
 - **Linux offline shm**：已实现将 OMP 自有运行数据统一放在 `/dev/shm`，前台就绪满 10 分钟后首次异步备份回原始数据根，之后按周期备份；原始根优先采用有效 `OMP_CONFIG_ROOT`，未设置时沿用上游默认解析，目录名不写死。启动不复制、不恢复，不改变工具读写 NFS 项目文件的能力。完整行为与验收条件以[离线 shm 运行与异步备份](offline-shm.md)为准；非 offline 和非 Linux 不启用该运行根映射或备份。实现不等于 Linux 验收通过，当前验证结果及未验收边界统一见[需求目录](README.md)。
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
-- `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 沿用原有解释器配置与自动发现机制。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
+- `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → 仅在 Linux 且 `OMP_OFFLINE` 值为字面量 `"1"` 时优先尝试 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选；其他平台或其他 offline 真值不插入固定候选。Eval 要求 Python 3.8+；显式解释器不可用或不兼容时明确报错，不 fallback，固定候选缺失或不适合时才继续原有自动候选。固定解释器只用于 OMP Eval 子进程，不修改主进程 PATH、项目虚拟环境或业务 Python 3.6，不扫描软件目录找版本、不安装包。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`plan`、`slow` → `company/GLM-5.2-public`。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存模型 preset 不复制这些隐式默认角色；用户显式配置或 CLI 选择的角色仍按原规则保存，包括显式选择的 company 模型。普通启动不受影响。
 - offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
 - offline 启动不检查 OMP 新版本、不自动检查或更新插件市场、不读取或展示启动更新日志，也不自动触发在线模型发现——含交互界面就绪后的后台发现，以及会话恢复、默认角色解析、prewalk 目标解析和 `enabledModels`/`--models` scope 预解析里的 discovery fallback（这些自动路径只用本地缓存，缓存缺失时按既有链路降级，不发任何请求）。同进程 task 子代理的新建与恢复也继承该限制。已安装插件、内置和缓存模型照常加载；显式 `--model` 解析、手动模型刷新、更新命令及 `/changelog` 保持原有行为。上述覆盖只在当前进程生效，不写配置文件，非 offline 启动不受影响。

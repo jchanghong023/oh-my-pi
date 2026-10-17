@@ -14,7 +14,7 @@ setenv OMP_SKILLS_DIR "/path/to/shared/skills"
 
 - `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
 - `OMP_CONFIG_ROOT`：统一的原始数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Wiki／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。Linux 内网模式实际使用下述 shm 运行根，原始根用于后台备份。
-- `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本优先，其他用户技能仍保留。目录不存在时不影响原有技能加载，不下载或同步文件。
+- `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
 
 上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI、RPC 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 
@@ -50,6 +50,22 @@ omp
 用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录、设置及 Wiki／Repo 数据库隔离，无需配置 shell alias。
 
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
+
+### 内网子命令与 Python 分工
+
+以下命令在**系统终端**运行，沿用上面的环境变量和当前 profile：
+
+```tcsh
+omp read "./README.md"
+omp read "./image.png?q=说明图中的模块关系"
+omp render --plain
+omp dry-balance --model company/Qwen3.8-27B
+omp usage
+```
+
+将文件名替换为实际路径。普通本地 `read` 与已有会话的 `render` 不要求公司配置，也不为此做 auth discovery 或在线模型发现。图片问答会按需初始化 company／vision 并调用真实模型；显式配置且解析成功的非 company vision／default 角色仍按用户选择执行，公司配置错误可见但不阻断该显式路径。需要默认或显式选择的 company 模型时，缺失或无效的公司配置必须明确失败，不隐式回退到其他 Provider；`dry-balance` 解析公司模型时复用同一初始化。上述模型目录发现使用 cache-only，不表示禁止公司模型 API 或现有 usage provider 的真实请求；`usage` 仅报告现有接口取得的数据，不提供虚构的 company 额度接口。offline 覆盖仅对当前进程有效，不保存；普通启动行为不变。
+
+OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpreter` 优先；未显式设置时，只有 Linux 且 `OMP_OFFLINE` 恰为字面量 `1` 才优先尝试 `/software/public/python/3.11.4/bin/python3.11`，缺失或不适合则继续旧自动候选。Eval 最低要求 Python 3.8+；显式解释器不满足要求时会报错，不会自动换解释器。`true`／`yes`／`on` 虽可启用内网模式，但不触发此固定候选。OMP 不修改当前终端／主进程 PATH、项目虚拟环境或业务 Python 3.6，也不扫描软件目录或安装包；用 bash 执行业务脚本仍应使用项目自己的解释器。
 
 ## 3. 常用操作
 

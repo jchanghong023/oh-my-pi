@@ -20,13 +20,52 @@ import { buildModelProviderPriorityRank } from "@oh-my-pi/pi-catalog/identity";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import type { ApiKeyResolverModel } from "../config/api-key-resolver";
-import { COMPANY_OFFLINE_CONTEXT_WINDOW, setCompanyChatContextWindow } from "../config/company-models";
-import { getCompanyConfigError, isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
+import {
+	COMPANY_OFFLINE_CONTEXT_WINDOW,
+	COMPANY_OFFLINE_ROLE_DEFAULTS,
+	setCompanyChatContextWindow,
+} from "../config/company-models";
+import {
+	COMPANY_PROVIDER_ID,
+	getCompanyConfigError,
+	isCompanyLaneActive,
+	setCompanyOfflineEnabled,
+} from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
-import { formatModelString, getModelMatchPreferences, resolveCliModel } from "../config/model-resolver";
+import {
+	disabledProviderIds,
+	formatModelString,
+	getModelMatchPreferences,
+	resolveCliModel,
+} from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
 import { concreteThinkingLevel, resolveThinkingLevelForModel } from "@oh-my-pi/pi-tui/thinking";
+import { offlineFromEnv } from "./args";
+
+/** Flip the company lane before registry construction; return its credential-free diagnostic. */
+export function initializeCompanyModelLane(offline: boolean): string | undefined {
+	setCompanyOfflineEnabled(offline);
+	if (!offline) return undefined;
+	setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
+	return getCompanyConfigError();
+}
+
+/**
+ * Initialize model-dependent subcommands only when they need a registry.
+ * These defaults live in memory; offline catalog refreshes remain the caller's responsibility.
+ */
+export function initializeOfflineModelCommand(settings: Settings): boolean {
+	const offline = offlineFromEnv();
+	const companyError = initializeCompanyModelLane(offline);
+	if (!offline) return false;
+	if (companyError) {
+		process.stderr.write(`${companyError}\n`);
+	} else if (!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
+		settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
+	}
+	return true;
+}
 
 /** Injection point for the provider call; tests pass a synthetic event stream. */
 export type StreamSimpleFn = (
@@ -96,12 +135,8 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 				});
 			}
 			try {
-				setCompanyOfflineEnabled(offline);
+				const companyError = initializeCompanyModelLane(offline);
 				if (offline) {
-					// Company environment: flip the lane before the registry captures company
-					// state, so `company/<model>` selectors resolve.
-					setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
-					const companyError = getCompanyConfigError();
 					if (companyError) {
 						logger.warn("offline_model_refresh.degraded", {
 							...fields,

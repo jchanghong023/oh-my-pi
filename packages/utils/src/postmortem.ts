@@ -43,6 +43,9 @@ let activeCleanupKeepAlive = false;
 // the active pass before it settles so `cleanup()`/signal exits await them.
 let activeLatePromises: Promise<void>[] | undefined;
 const CLEANUP_DEADLINE_MS = 10_000;
+// An explicit host exit can follow a premature Windows beforeExit on the same
+// loop turn, before reportUnsettledEntry's clearing timer has had a chance to run.
+let explicitExitInProgress = false;
 /**
  * Symbol stamped by the extension-load guard onto the throwing replacement it
  * installs over `process.exit` / `process.reallyExit`, carrying the native
@@ -109,6 +112,8 @@ export function exitProcess(code: number): never {
 	const exit = nativeHardExit(process.exit as HardExitFn);
 	if (reallyExit) process.reallyExit = reallyExit as typeof process.reallyExit;
 	if (exit) process.exit = exit as typeof process.exit;
+	const previousExplicitExit = explicitExitInProgress;
+	explicitExitInProgress = true;
 	try {
 		reallyExit?.call(process, code);
 	} catch {}
@@ -118,6 +123,7 @@ export function exitProcess(code: number): never {
 	try {
 		process.kill(process.pid, "SIGKILL");
 	} catch {}
+	explicitExitInProgress = previousExplicitExit;
 	throw new Error(`exitProcess(${code}) failed to terminate the process`);
 }
 let cleanupPromise: Promise<void> | undefined;
@@ -390,9 +396,10 @@ export function registerStdioDisconnectHandling(): () => void {
  * to complete must keep its own exit code (#13470). The verdict is taken at
  * `exit` instead, and only when the last `beforeExit` was final: an unref'd
  * timer armed there runs only if the loop turns again, clearing the mark
- * before a later explicit exit. Any later drain emits `beforeExit` again and
- * re-arms it, so other `beforeExit` listeners (LSP shutdown) still run before
- * the process exits 1.
+ * before a later explicit exit. Host exit primitives also mark the actual exit
+ * call, since cleanup can finish and quit on the same turn before that timer
+ * runs. Any later natural drain re-arms the mark, so other `beforeExit` listeners
+ * (LSP shutdown) still run before the process exits 1.
  *
  * `describe` names what was running (e.g. the resolved subcommand) at report
  * time; it must return only a command name, never user arguments.
@@ -413,7 +420,7 @@ export function reportUnsettledEntry(work: Promise<unknown>, describe?: () => st
 		}, 0).unref();
 	});
 	process.once("exit", code => {
-		if (!pending || !drained) return;
+		if (!pending || !drained || explicitExitInProgress) return;
 		// A non-zero code is already a failure verdict — an explicit
 		// `process.exit(n)` (possibly on the same loop turn as a Windows
 		// mid-I/O `beforeExit`, before the clearing timer runs) or an
@@ -782,11 +789,19 @@ async function runQuit(code: number, exitMode: "guarded" | "native", options: Qu
 		await drainStdout();
 	}
 
-	switch (exitMode) {
-		case "guarded":
-			return process.exit(code);
-		case "native":
-			return exitProcess(code);
+	const previousExplicitExit = explicitExitInProgress;
+	explicitExitInProgress = true;
+	try {
+		switch (exitMode) {
+			case "guarded":
+				return process.exit(code);
+			case "native":
+				return exitProcess(code);
+		}
+	} finally {
+		// A guarded exit may throw instead of terminating; it must not exempt
+		// genuinely pending work from a subsequent natural-drain diagnostic.
+		explicitExitInProgress = previousExplicitExit;
 	}
 }
 

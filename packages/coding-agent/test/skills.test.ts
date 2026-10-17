@@ -1,14 +1,22 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { promises as fsPromises } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { disableUserSource, enableUserSource } from "@oh-my-pi/pi-coding-agent/capability";
+import {
+	disableProvider,
+	disableUserSource,
+	enableProvider,
+	enableUserSource,
+	initializeWithSettings,
+} from "@oh-my-pi/pi-coding-agent/capability";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 import { getWslWindowsHomeCandidate, runHostProbe } from "@oh-my-pi/pi-coding-agent/discovery/agents";
 import {
 	type LoadSkillsResult,
 	loadSkills,
+	loadSkillCatalog,
 	loadSkillsFromDir,
 	parseSkillInvocation,
 } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
@@ -194,6 +202,27 @@ describe("skills", () => {
 				expect(loaded.skills.find(skill => skill.name === "shared-only")?.description).toBe(
 					"Only in shared directory",
 				);
+				expect(loaded.skills.find(skill => skill.name === "shared-priority")?._source?.providerName).toBe("Shared");
+				expect(loaded.skills.find(skill => skill.name === "agents/shared-priority")?.filePath).toBe(
+					path.join(userDir, "SKILL.md"),
+				);
+				expect(loaded.skills.find(skill => skill.name === "custom/shared-priority")?.filePath).toBe(
+					path.join(customDir, "shared-priority", "SKILL.md"),
+				);
+				const disabledOptions = {
+					...options,
+					disabledExtensions: ["skill:custom/shared-priority"],
+				};
+				const catalog = await loadSkillCatalog(disabledOptions);
+				expect(catalog.skills.find(skill => skill.name === "custom/shared-priority")?.disabledReason).toBe(
+					"item-disabled",
+				);
+				expect((await loadSkills(disabledOptions)).skills.map(skill => skill.name)).toEqual(
+					loaded.skills.map(skill => skill.name).filter(name => name !== "custom/shared-priority"),
+				);
+				expect(
+					(await loadSkillCatalog({ ...options, enabled: false })).skills.every(skill => skill.disabledReason),
+				).toBe(true);
 				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
 				const fallback = await loadSkills({ ...options, customDirectories: [] });
 				expect(fallback.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
@@ -202,6 +231,137 @@ describe("skills", () => {
 			} finally {
 				restoreEnvValue("OMP_SKILLS_DIR", previous);
 				await removeWithRetries(userDir);
+				await removeWithRetries(root);
+			}
+		});
+
+		for (const disabledReason of ["user-opt-in", "provider-disabled"] as const) {
+			it(`does not scan inactive Claude roots during execution (${disabledReason}), but retains their inventory`, async () => {
+				const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-active-scope-"));
+				const cwd = path.join(root, "project");
+				const userRoot = path.join(root, ".claude", "skills");
+				const projectRoot = path.join(cwd, ".claude", "skills");
+				await fs.mkdir(cwd, { recursive: true });
+				for (const directory of [userRoot, projectRoot]) {
+					for (const [folder, name] of [
+						["bad", "bad/name"],
+						["valid", "scope-valid"],
+					] as const) {
+						const skillDir = path.join(directory, folder);
+						await fs.mkdir(skillDir, { recursive: true });
+						await fs.writeFile(
+							path.join(skillDir, "SKILL.md"),
+							`---\nname: ${name}\ndescription: Skill source scope\n---\n${directory}\n`,
+						);
+					}
+				}
+				const homedirSpy = spyOn(os, "homedir").mockReturnValue(root);
+				const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+				restoreEnvValue("CLAUDE_CONFIG_DIR", undefined);
+				resetSettingsForTest();
+				const settings = await Settings.init({ inMemory: true, cwd });
+				const releaseSettings = initializeWithSettings(settings);
+				const readdirSpy = spyOn(fsPromises, "readdir");
+				try {
+					if (disabledReason === "provider-disabled") disableProvider("claude");
+					const options = {
+						...DISABLE_ALL_BUILTIN_SKILLS,
+						cwd,
+						enableClaudeUser: disabledReason === "provider-disabled",
+						enableClaudeProject: disabledReason === "provider-disabled",
+					};
+					const execution = await loadSkills(options);
+					expect(execution.skills).toEqual([]);
+					expect(execution.warnings).toEqual([]);
+					const scanned = readdirSpy.mock.calls.map(([directory]) => String(directory));
+					expect(scanned).not.toContain(userRoot);
+					expect(scanned).not.toContain(projectRoot);
+
+					readdirSpy.mockClear();
+					const inventory = await loadSkillCatalog(options);
+					const claudeRows = inventory.skills.filter(skill => skill._source.provider === "claude");
+					expect(claudeRows).toHaveLength(2);
+					expect(claudeRows.every(skill => skill.disabledReason === disabledReason)).toBe(true);
+					for (const directory of [userRoot, projectRoot]) {
+						expect(readdirSpy.mock.calls.map(([scannedDirectory]) => String(scannedDirectory))).toContain(
+							directory,
+						);
+						expect(
+							inventory.warnings.some(warning =>
+								warning.message.includes(path.join(directory, "bad", "SKILL.md")),
+							),
+						).toBe(true);
+					}
+
+					if (disabledReason === "provider-disabled") enableProvider("claude");
+					readdirSpy.mockClear();
+					const enabled = await loadSkills({ ...options, enableClaudeUser: true, enableClaudeProject: true });
+					expect(enabled.skills.filter(skill => skill._source?.provider === "claude")).toHaveLength(2);
+					for (const directory of [userRoot, projectRoot]) {
+						expect(readdirSpy.mock.calls.map(([scannedDirectory]) => String(scannedDirectory))).toContain(
+							directory,
+						);
+						expect(
+							enabled.warnings.some(warning =>
+								warning.message.includes(path.join(directory, "bad", "SKILL.md")),
+							),
+						).toBe(true);
+					}
+					const optedIn = await loadSkills({ ...options, enableClaudeUser: true, enableClaudeProject: false });
+					expect(optedIn.skills.find(skill => skill.name === "scope-valid")?.filePath).toBe(
+						path.join(userRoot, "valid", "SKILL.md"),
+					);
+					enableUserSource("claude");
+					const providerOptIn = await loadSkills({
+						...options,
+						enableClaudeUser: false,
+						enableClaudeProject: false,
+					});
+					expect(providerOptIn.skills.find(skill => skill.name === "scope-valid")?.filePath).toBe(
+						path.join(userRoot, "valid", "SKILL.md"),
+					);
+				} finally {
+					readdirSpy.mockRestore();
+					releaseSettings();
+					resetSettingsForTest();
+					restoreEnvValue("CLAUDE_CONFIG_DIR", previousClaudeConfigDir);
+					homedirSpy.mockRestore();
+					await removeWithRetries(root);
+				}
+			});
+		}
+
+		it("keeps the default Codex user scope even when the legacy global skills toggle is off", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-codex-session-scope-"));
+			const cwd = path.join(root, "project");
+			const skillDirectory = path.join(root, ".codex", "skills", "codex-session-default");
+			await fs.mkdir(cwd, { recursive: true });
+			await fs.mkdir(skillDirectory, { recursive: true });
+			const filePath = path.join(skillDirectory, "SKILL.md");
+			await fs.writeFile(
+				filePath,
+				"---\nname: codex-session-default\ndescription: Default Codex scope\n---\nCodex\n",
+			);
+			const homedirSpy = spyOn(os, "homedir").mockReturnValue(root);
+			resetSettingsForTest();
+			const settings = await Settings.init({
+				inMemory: true,
+				cwd,
+				overrides: { "skills.enableCodexUser": false },
+			});
+			const releaseSettings = initializeWithSettings(settings);
+			try {
+				const loaded = await loadSkills({ cwd });
+				expect(loaded.skills.find(skill => skill.name === "codex-session-default")?.filePath).toBe(filePath);
+				expect(
+					(await loadSkills({ cwd, enableCodexUser: false })).skills.some(
+						skill => skill.name === "codex-session-default",
+					),
+				).toBe(false);
+			} finally {
+				releaseSettings();
+				resetSettingsForTest();
+				homedirSpy.mockRestore();
 				await removeWithRetries(root);
 			}
 		});

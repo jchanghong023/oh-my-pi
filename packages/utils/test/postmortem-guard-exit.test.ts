@@ -12,6 +12,9 @@ import { postmortem } from "@oh-my-pi/pi-utils";
 const NATIVE = postmortem.NATIVE_PROCESS_EXIT;
 const directFlag = "--guard-exit-direct-child";
 const fatalFlag = "--guard-exit-fatal-child";
+const quitAfterDrainFlag = "--quit-after-drain-child";
+const nativeExitAfterDrainFlag = "--native-exit-after-drain-child";
+const pendingDrainFlag = "--pending-drain-child";
 
 /**
  * Install a two-level poisoned exit chain: each global becomes
@@ -53,9 +56,26 @@ if (process.argv.includes(directFlag)) {
 	err.name = "ExtensionExitError";
 	void Promise.reject(err);
 	await Promise.withResolvers<never>().promise;
+} else if (
+	process.argv.includes(quitAfterDrainFlag) ||
+	process.argv.includes(nativeExitAfterDrainFlag) ||
+	process.argv.includes(pendingDrainFlag)
+) {
+	postmortem.reportUnsettledEntry(Promise.withResolvers<never>().promise, () => "guard-exit-fixture");
+	if (process.argv.includes(quitAfterDrainFlag)) {
+		// Cleanup settles in microtasks after beforeExit, before the guard's
+		// clearing timer runs: the exact same-turn race seen by render on Windows.
+		process.once("beforeExit", () => void postmortem.quit(0));
+	} else if (process.argv.includes(nativeExitAfterDrainFlag)) {
+		process.once("beforeExit", () => postmortem.exitProcess(0));
+	}
 }
 
-if (!process.argv.includes(directFlag) && !process.argv.includes(fatalFlag)) {
+if (
+	![directFlag, fatalFlag, quitAfterDrainFlag, nativeExitAfterDrainFlag, pendingDrainFlag].some(flag =>
+		process.argv.includes(flag),
+	)
+) {
 	describe("postmortem guard-window exit (#11789)", () => {
 		it("exits with the requested code through a poisoned guard chain", async () => {
 			const child = Bun.spawn([process.execPath, "run", import.meta.path, directFlag], {
@@ -94,5 +114,32 @@ if (!process.argv.includes(directFlag) && !process.argv.includes(fatalFlag)) {
 				await child.exited;
 			}
 		});
+
+		for (const [flag, label, expectedCode] of [
+			[quitAfterDrainFlag, "keeps quit(0) after a same-turn beforeExit", 0],
+			[nativeExitAfterDrainFlag, "keeps exitProcess(0) after a same-turn beforeExit", 0],
+			[pendingDrainFlag, "still rejects genuinely pending work on a natural drain", 1],
+		] as const) {
+			it(label, async () => {
+				const child = Bun.spawn([process.execPath, "run", import.meta.path, flag], {
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				});
+				const [exitCode, stdout, stderr] = await Promise.all([
+					child.exited,
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+				]);
+				expect(exitCode, stderr).toBe(expectedCode);
+				expect(stdout).toBe("");
+				if (expectedCode === 1) {
+					expect(stderr).toContain("guard-exit-fixture");
+					expect(stderr).toContain("ended before completing");
+				} else {
+					expect(stderr).not.toContain("ended before completing");
+				}
+			});
+		}
 	});
 }

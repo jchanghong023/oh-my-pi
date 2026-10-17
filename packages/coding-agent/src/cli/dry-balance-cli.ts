@@ -27,6 +27,7 @@ import {
 import { Settings } from "../config/settings";
 import dryBalanceBenchPrompt from "../prompts/dry-balance-bench.md" with { type: "text" };
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { initializeOfflineModelCommand } from "./bench-runtime";
 
 const DEFAULT_SAMPLE_COUNT = 100;
 const DEFAULT_CONCURRENCY = 32;
@@ -530,11 +531,13 @@ async function runBenchTargets(
 async function createDefaultRuntime(configFiles: string[] | undefined): Promise<DryBalanceRuntime> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd, configFiles });
+	const offline = initializeOfflineModelCommand(settings);
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+		for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 		await modelRegistry.hydrateCredentialScopedModelCaches();
-		await loadCliExtensionProviders(modelRegistry, settings, cwd);
+		await loadCliExtensionProviders(modelRegistry, settings, cwd, { offline });
 		return {
 			modelRegistry,
 			settings,

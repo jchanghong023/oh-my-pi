@@ -10,7 +10,6 @@ import type { Hook } from "../../../capability/hook";
 import type { MCPServer } from "../../../capability/mcp";
 import type { Prompt } from "../../../capability/prompt";
 import type { Rule } from "../../../capability/rule";
-import type { Skill } from "../../../capability/skill";
 import type { SlashCommand } from "../../../capability/slash-command";
 import type { CustomTool } from "../../../capability/tool";
 import type { SourceMeta } from "../../../capability/types";
@@ -23,6 +22,8 @@ import {
 	isUserSourceEnabled,
 	loadCapability,
 } from "../../../discovery";
+import type { SkillsSettings } from "../../../extensibility/settings";
+import { loadSkillCatalog } from "../../../extensibility/skills";
 import { readDisabledServers, readEnabledServers } from "../../../mcp/config-writer";
 import { commandPreview } from "@oh-my-pi/pi-tui/overlays/extensions/inspector-model";
 import { inferMcpTransport } from "@oh-my-pi/pi-tui/overlays/extensions/mcp-runtime";
@@ -66,7 +67,11 @@ function resolveState(
 /**
  * Load all extensions from all capabilities.
  */
-export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): Promise<Extension[]> {
+export async function loadAllExtensions(
+	cwd?: string,
+	disabledIds?: string[],
+	skillsSettings: SkillsSettings = {},
+): Promise<Extension[]> {
 	const extensions: Extension[] = [];
 	const effectiveDisabledIds = disabledIds ?? [];
 	const disabledExtensions = new Set<string>(effectiveDisabledIds);
@@ -112,11 +117,28 @@ export async function loadAllExtensions(cwd?: string, disabledIds?: string[]): P
 
 	// Load skills
 	try {
-		const skills = await loadCapability<Skill>("skills", loadOpts);
-		addItems(skills.all, "skill", {
-			getDescription: s => s.frontmatter?.description,
-			getTrigger: s => s.frontmatter?.globs?.join(", "),
+		const skills = await loadSkillCatalog({
+			...skillsSettings,
+			cwd,
+			disabledExtensions: effectiveDisabledIds,
 		});
+		for (const skill of skills.skills) {
+			extensions.push({
+				id: makeExtensionId("skill", skill.name),
+				kind: "skill",
+				name: skill.name,
+				displayName: skill.name,
+				description: skill.description,
+				trigger: skill.frontmatter?.globs?.join(", "),
+				path: skill.filePath,
+				source: sourceFromMeta(skill._source),
+				state: skill.disabledReason ? "disabled" : "active",
+				disabledReason: skill.disabledReason,
+				// Inspector keeps the capability shape, without its pre-resolution
+				// shadow marker: namespaced versions are independently invocable.
+				raw: { ...skill, path: skill.filePath },
+			});
+		}
 	} catch (error) {
 		logger.warn("Failed to load skills capability", { error: String(error) });
 	}

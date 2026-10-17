@@ -12,6 +12,7 @@ import type { SkillsSettings } from "./settings";
 import {
 	type Skill as CapabilitySkill,
 	isUserSourceEnabled,
+	isProviderEnabled,
 	loadCapability,
 	type SkillFrontmatter,
 } from "../discovery";
@@ -56,6 +57,19 @@ export interface SkillWarning {
 
 export interface LoadSkillsResult {
 	skills: Skill[];
+	warnings: SkillWarning[];
+}
+
+/** Resolved skill inventory shared by execution and the extension dashboard. */
+export interface SkillCatalogEntry extends Skill {
+	_source: SourceMeta;
+	frontmatter?: SkillFrontmatter;
+	content: string;
+	disabledReason?: "item-disabled" | "provider-disabled" | "user-opt-in";
+}
+
+export interface LoadSkillCatalogResult {
+	skills: SkillCatalogEntry[];
 	warnings: SkillWarning[];
 }
 
@@ -138,12 +152,13 @@ interface CollisionResolution {
  *   (`undefined`); a differing one is namespaced.
  */
 function resolveCollision(
-	skillMap: Map<string, Skill>,
+	skillMap: Map<string, SkillCatalogEntry>,
 	admitted: Map<string, AdmittedBody>,
-	candidate: Skill,
+	candidate: SkillCatalogEntry,
 	candidateBody: string,
 	candidateFrontmatter: SkillFrontmatter | undefined,
 	namespace: string,
+	allowOverride = true,
 ): CollisionResolution | undefined {
 	const existingEntries = [...admitted.entries()].filter(([_, e]) => e.rawName === candidate.name);
 	if (existingEntries.length === 0) {
@@ -155,11 +170,19 @@ function resolveCollision(
 	const bareInstalled = bareSkill?._source?.provider === SKILLSHARE_PROVIDER_ID;
 	const candidateCustom = candidate._source?.provider === CUSTOM_DIR_PROVIDER_ID;
 	const bareCustom = bareSkill?._source?.provider === CUSTOM_DIR_PROVIDER_ID;
+	// Inactive sources stay independently addressable in the management list,
+	// even when their content matches the active fallback.
 	const identical = existingEntries
-		.filter(([_, e]) => e.body === candidateBody && Bun.deepEquals(e.frontmatter, candidateFrontmatter))
+		.filter(
+			([name, e]) =>
+				!candidate.disabledReason &&
+				!skillMap.get(name)?.disabledReason &&
+				e.body === candidateBody &&
+				Bun.deepEquals(e.frontmatter, candidateFrontmatter),
+		)
 		.map(([name]) => name);
 
-	if (bareSkill && ((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))) {
+	if (allowOverride && bareSkill && ((bareInstalled && !candidateInstalled) || (candidateCustom && !bareCustom))) {
 		if (identical.includes(candidate.name)) return { name: candidate.name, dropped: identical };
 		const bareEntry = admitted.get(candidate.name)!;
 		let namespacedBare = `${bareEntry.namespace}/${bareEntry.rawName}`;
@@ -287,6 +310,16 @@ export interface LoadSkillsOptions extends SkillsSettings {
  * Returns skills and any validation warnings.
  */
 export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadSkillsResult> {
+	if (options.enabled === false) return { skills: [], warnings: [] };
+	const result = await loadSkillCatalog(options, "active");
+	return { skills: result.skills.filter(skill => !skill.disabledReason), warnings: result.warnings };
+}
+
+/** Resolve names before item filtering; inventory also scans inactive sources for management. */
+export async function loadSkillCatalog(
+	options: LoadSkillsOptions = {},
+	scope: "inventory" | "active" = "inventory",
+): Promise<LoadSkillCatalogResult> {
 	const {
 		cwd = getProjectDir(),
 		enabled = true,
@@ -304,12 +337,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		extensionRoots,
 	} = options;
 
-	// Early return if skills are disabled
-	if (!enabled) {
-		return { skills: [], warnings: [] };
-	}
-	function isSourceEnabled(source: SourceMeta): boolean {
+	function isSourceEnabled(source: Pick<SourceMeta, "provider" | "level" | "origin">): boolean {
 		const { provider, level } = source;
+		if (!isProviderEnabled(provider)) return false;
 		// Managed skills (auto-learn) are OMP-native and discovered unconditionally
 		// — third-party CLI toggles must never silently hide them (cf. #2401). The
 		// master `enabled` flag above still gates them.
@@ -335,11 +365,14 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// Use capability API to load all skills
 	const result = await loadCapability<CapabilitySkill>(skillCapability.id, {
 		cwd,
-		disabledExtensions,
+		// Item disables are applied after catalog name resolution, not by capability dedup.
+		disabledExtensions: scope === "active" ? [] : disabledExtensions,
 		extensionRoots,
+		includeDisabled: scope === "inventory",
+		skillSourceFilter: scope === "active" ? isSourceEnabled : undefined,
 	});
 
-	const skillMap = new Map<string, Skill>();
+	const skillMap = new Map<string, SkillCatalogEntry>();
 	const realPathSet = new Set<string>();
 	/** Admission per registered skill name; identical raw name + body collapses silently. */
 	const admitted = new Map<string, AdmittedBody>();
@@ -360,26 +393,36 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	const disabledSkillNames = new Set(
 		(disabledExtensions ?? []).filter(id => id.startsWith("skill:")).map(id => id.slice(6)),
 	);
-	// Select authored skills from the pre-dedup superset. `loadCapability`
-	// dedupes before source toggles, so a disabled high-priority provider must
-	// not hide an enabled lower-priority provider with the same skill name.
-	// Same-name candidates survive here; `admit` below resolves them by content
-	// (identical → dropped) or namespace (different → `<ns>/<name>`). Exclusions
-	// apply to the raw name so a namespaced alias cannot bypass them; include
-	// patterns are matched against the final name the user actually sees.
-	const filteredSkills = result.all.filter(capSkill => {
-		if (capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID) return false;
-		if (disabledSkillNames.has(capSkill.name)) return false;
-		if (!isSourceEnabled(capSkill._source)) return false;
-		return !matchesIgnorePatterns(capSkill.name);
-	});
+	// Active sources resolve first. Opted-out/provider-disabled sources are
+	// retained for management, but cannot claim a name ahead of active skills.
+	const authoredSkills = result.all.filter(capSkill => capSkill._source.provider !== MANAGED_SKILLS_PROVIDER_ID);
+	const filteredSkills = authoredSkills.filter(capSkill => isSourceEnabled(capSkill._source));
+	const inactiveSkills = authoredSkills.filter(capSkill => !isSourceEnabled(capSkill._source));
+
+	function sourceDisabledReason(source: SourceMeta): SkillCatalogEntry["disabledReason"] {
+		if (!isProviderEnabled(source.provider)) return "provider-disabled";
+		return isSourceEnabled(source) ? undefined : "user-opt-in";
+	}
+
+	function toCatalogEntry(capSkill: CapabilitySkill): SkillCatalogEntry {
+		return {
+			name: capSkill.name,
+			description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
+			filePath: capSkill.path,
+			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
+			source: `${capSkill._source.provider}:${capSkill.level}`,
+			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
+			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
+			_source: capSkill._source,
+			frontmatter: capSkill.frontmatter,
+			content: capSkill.content,
+			disabledReason: sourceDisabledReason(capSkill._source),
+		};
+	}
 
 	/**
-	 * Resolve the skill's final name, apply the exclusion filters to it, and
-	 * store it. Returns the stored name, or undefined when the skill was a
-	 * duplicate, excluded, or rejected. Include patterns run once every name is
-	 * final (see the end of this function): filtering here would drop the bare
-	 * skill and leave a namespaced candidate with nothing to collide against.
+	 * Resolve and store a final invocation name before applying item filters.
+	 * Disabled rows retain the same bare/namespaced addresses as enabled rows.
 	 *
 	 * Every authored skill — any provider, any custom directory — is admitted
 	 * here, which makes this the one place to reserve `/` and `\`: they belong
@@ -388,7 +431,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	 * claim a namespaced address.
 	 */
 	function admit(
-		skill: Skill,
+		skill: SkillCatalogEntry,
 		body: string,
 		frontmatter: SkillFrontmatter | undefined,
 		namespace: string,
@@ -400,10 +443,9 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			});
 			return undefined;
 		}
-		const resolved = resolveCollision(skillMap, admitted, skill, body, frontmatter, namespace);
+		const resolved = resolveCollision(skillMap, admitted, skill, body, frontmatter, namespace, !skill.disabledReason);
 		if (!resolved) return undefined;
 		const { name, warning, dropped, displaced } = resolved;
-		if (disabledSkillNames.has(name) || matchesIgnorePatterns(name)) return undefined;
 
 		for (const droppedName of dropped) {
 			skillMap.delete(droppedName);
@@ -417,10 +459,8 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			const displacedSkill = skillMap.get(name)!;
 			const displacedEntry = admitted.get(name)!;
 			displacedSkill.name = displaced.newName;
-			if (!disabledSkillNames.has(displaced.newName) && !matchesIgnorePatterns(displaced.newName)) {
-				skillMap.set(displaced.newName, displacedSkill);
-				admitted.set(displaced.newName, displacedEntry);
-			}
+			skillMap.set(displaced.newName, displacedSkill);
+			admitted.set(displaced.newName, displacedEntry);
 			collisionWarnings.push({ skillPath: displacedSkill.filePath, message: displaced.warning });
 		}
 
@@ -453,16 +493,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 			continue;
 		}
 
-		const skill: Skill = {
-			name: capSkill.name,
-			description: typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
-			filePath: capSkill.path,
-			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-			source: `${capSkill._source.provider}:${capSkill.level}`,
-			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-			_source: capSkill._source,
-		};
+		const skill = toCatalogEntry(capSkill);
 		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined)
 			realPathSet.add(resolvedPath);
 	}
@@ -483,32 +514,25 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					requireDescription: true,
 				},
 			);
-			return { expandedDir, scanResult };
+			return { expandedDir, scanResult, shared: dir === sharedSkillsDir };
 		}),
 	);
 
 	const allCustomSkills: Array<{
-		skill: Skill;
+		skill: SkillCatalogEntry;
 		path: string;
 		body: string;
 		frontmatter: SkillFrontmatter | undefined;
 		namespace: string;
 	}> = [];
-	for (const { expandedDir, scanResult } of customDirectoryResults) {
+	for (const { expandedDir, scanResult, shared } of customDirectoryResults) {
 		for (const capSkill of scanResult.items) {
-			if (disabledSkillNames.has(capSkill.name)) continue;
-			if (matchesIgnorePatterns(capSkill.name)) continue;
 			allCustomSkills.push({
 				skill: {
-					name: capSkill.name,
-					description:
-						typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "",
-					filePath: capSkill.path,
-					baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-					source: "custom:user",
-					...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-					hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-					_source: { ...capSkill._source, providerName: "Custom" },
+					...toCatalogEntry(capSkill),
+					// Synthetic custom roots are not governed by foreign-provider toggles.
+					disabledReason: undefined,
+					_source: { ...capSkill._source, providerName: shared ? "Shared" : "Custom" },
 				},
 				path: capSkill.path,
 				body: capSkill.content,
@@ -544,12 +568,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 	// frontmatter name) and re-sanitize the description on read. Descriptions and
 	// names both render unescaped into the system prompt.
 	const managedCandidates = result.all.filter(
-		capSkill =>
-			capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID &&
-			isValidManagedSkillName(capSkill.name) &&
-			!disabledSkillNames.has(capSkill.name) &&
-			!matchesIgnorePatterns(capSkill.name) &&
-			matchesIncludePatterns(capSkill.name),
+		capSkill => capSkill._source.provider === MANAGED_SKILLS_PROVIDER_ID && isValidManagedSkillName(capSkill.name),
 	);
 	// Names claimed by any ENABLED authored skill (from the pre-dedup superset).
 	// Managed defers to these even when capability dedup hid an enabled authored
@@ -583,20 +602,44 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 		if (skillMap.has(capSkill.name)) continue;
 		const rawDescription =
 			typeof capSkill.frontmatter?.description === "string" ? capSkill.frontmatter.description : "";
-		skillMap.set(capSkill.name, {
-			name: capSkill.name,
+		const skill = {
+			...toCatalogEntry(capSkill),
 			description: sanitizeManagedDescription(rawDescription),
-			filePath: capSkill.path,
-			baseDir: capSkill.path.replace(/[\\/]SKILL\.md$/, ""),
-			source: `${capSkill._source.provider}:${capSkill.level}`,
-			...(capSkill.containRoot !== undefined && { containRoot: capSkill.containRoot }),
-			hide: capSkill.frontmatter?.hide === true || capSkill.frontmatter?.disableModelInvocation === true,
-			_source: capSkill._source,
-		});
-		realPathSet.add(resolvedPath);
+		};
+		if (admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined)
+			realPathSet.add(resolvedPath);
 	}
 
-	const skills = Array.from(skillMap.values()).filter(skill => matchesIncludePatterns(skill.name));
+	// Keep inactive sources visible without letting their custom/installed
+	// precedence displace an enabled version.
+	for (const capSkill of inactiveSkills) {
+		let resolvedPath: string;
+		try {
+			resolvedPath = await fs.realpath(capSkill.path);
+		} catch {
+			resolvedPath = capSkill.path;
+		}
+		if (realPathSet.has(resolvedPath)) continue;
+		if (
+			admit(toCatalogEntry(capSkill), capSkill.content, capSkill.frontmatter, skillNamespace(capSkill)) !== undefined
+		)
+			realPathSet.add(resolvedPath);
+	}
+
+	const skills = Array.from(skillMap.values());
+	for (const skill of skills) {
+		const rawName = admitted.get(skill.name)?.rawName ?? skill.name;
+		if (
+			!enabled ||
+			disabledSkillNames.has(rawName) ||
+			disabledSkillNames.has(skill.name) ||
+			matchesIgnorePatterns(rawName) ||
+			matchesIgnorePatterns(skill.name) ||
+			!matchesIncludePatterns(skill.name)
+		) {
+			skill.disabledReason = "item-disabled";
+		}
+	}
 	// Deterministic ordering for prompt stability (case-insensitive, then exact name, then path).
 	skills.sort((a, b) => compareSkillOrder(a.name, a.filePath, b.name, b.filePath));
 	return {

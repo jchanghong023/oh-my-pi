@@ -151,7 +151,7 @@ async function probePythonKernelAvailability(
 		}
 		const result = await probeCandidates(
 			runtimes.map(runtime => ({
-				command: [runtime.pythonPath, "-c", "import sys;sys.exit(0)"],
+				command: [runtime.pythonPath, "-c", "import sys;sys.exit(0 if sys.version_info >= (3, 8) else 1)"],
 				env: runtime.env,
 				label: runtime.pythonPath,
 			})),
@@ -167,7 +167,11 @@ async function probePythonKernelAvailability(
 		return {
 			ok: false,
 			pythonPath: runtimes[0].pythonPath,
-			reason: `No working Python interpreter found. Tried: ${result.failures.join("; ")}`,
+			reason: `${
+				interpreter
+					? "Configured Python interpreter is unavailable or incompatible with Eval (Python 3.8+ required)"
+					: "No working Python 3.8+ interpreter found"
+			}. Tried: ${result.failures.join("; ")}`,
 		};
 	} catch (err) {
 		return { ok: false, reason: err instanceof Error ? err.message : String(err) };

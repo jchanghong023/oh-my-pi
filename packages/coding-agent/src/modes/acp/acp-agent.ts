@@ -95,7 +95,7 @@ import {
 } from "./acp-event-mapper";
 import { ACP_TERMINAL_AUTH_FLAG } from "./terminal-auth";
 
-import { cfgDisabledExtensions } from "../../extensibility/settings";
+import { cfgDisabledExtensions, cfgSkills } from "../../extensibility/settings";
 import { cfgPlanEnabled } from "../../plan-mode/settings";
 
 const ACP_DEFAULT_MODE_ID = "default";
@@ -1200,10 +1200,22 @@ export class AcpAgent implements Agent {
 				return { reports: reports ?? [] };
 			}
 			case "_omp/extensions": {
-				const cwd = typeof params.cwd === "string" ? (params.cwd as string) : undefined;
-				const sm = await Settings.init();
+				const requestedCwd = typeof params.cwd === "string" ? path.resolve(params.cwd) : undefined;
+				const session =
+					typeof params.sessionId === "string"
+						? this.#getSessionRecord(params.sessionId).session
+						: ([...this.#sessions.values()].find(
+								record =>
+									!requestedCwd || path.resolve(record.session.sessionManager.getCwd()) === requestedCwd,
+							)?.session ??
+							(this.#initialSession &&
+							(!requestedCwd || path.resolve(this.#initialSession.sessionManager.getCwd()) === requestedCwd)
+								? this.#initialSession
+								: undefined));
+				const cwd = session?.sessionManager.getCwd() ?? requestedCwd;
+				const sm = session?.settings ?? (await Settings.init({ cwd }));
 				const disabledIds = cfgDisabledExtensions.get(sm);
-				const extensions = await loadAllExtensions(cwd, disabledIds);
+				const extensions = await loadAllExtensions(cwd, disabledIds, cfgSkills.get(sm));
 				return { extensions: extensions as unknown as Array<{ [key: string]: unknown }> };
 			}
 			case "_omp/extensions/toggle": {

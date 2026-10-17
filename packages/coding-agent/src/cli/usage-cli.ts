@@ -61,6 +61,7 @@ import {
 	selectReportableAccounts,
 	type UsageAccountIdentity,
 } from "../slash-commands/helpers/usage-accounts";
+import { initializeOfflineModelCommand } from "./bench-runtime";
 
 import { cfgRetryUsageReservePct } from "../session/settings";
 
@@ -1062,7 +1063,9 @@ async function loadUsageSources(
 	settings: Settings,
 	authStorage: AuthStorage,
 ): Promise<ModelRegistry> {
-	const modelRegistry = new ModelRegistry(authStorage);
+	const offline = initializeOfflineModelCommand(settings);
+	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
+	for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 	// Extensions contribute usage providers via `registerProvider(name, { usage })`;
 	// without loading them their accounts land in `accountsWithoutUsage`.
 	await loadCliExtensionProviders(modelRegistry, settings, getProjectDir(), {
@@ -1070,6 +1073,7 @@ async function loadUsageSources(
 		disableExtensionDiscovery: cmd.noExtensions,
 		includeAmbientHooks: false,
 		discoverModels: false,
+		offline,
 	});
 	// The broker may serve reports for credentials newer than the local
 	// snapshot. Refresh before probing extension providers with local keys
