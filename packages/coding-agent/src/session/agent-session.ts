@@ -1245,10 +1245,11 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#endInFlight(epoch: number, onSettled?: () => void | Promise<void>): void {
-		// Abort has already released this bracket; its late finalizer cannot settle a newer turn.
-		if (epoch !== this.#inFlightEpoch) return;
 		if (onSettled) this.#inFlightSettledCallbacks.push(onSettled);
-		this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
+		// Abort has already taken an earlier epoch's bracket out of the count, so its late finalizer leaves the
+		// count to a newer turn; with none in flight it still settles, since a turn begun while abort() was
+		// finishing has its bracket reset by it and ends here.
+		if (epoch === this.#inFlightEpoch) this.#promptInFlightCount = Math.max(0, this.#promptInFlightCount - 1);
 		if (this.#promptInFlightCount !== 0) return;
 		const settled = this.#promptInFlightSettled;
 		this.#promptInFlightSettled = undefined;

@@ -68,6 +68,7 @@ type OllamaMessage = {
 };
 
 type OllamaChatChunk = {
+	error?: string;
 	message?: {
 		role?: string;
 		content?: string;
@@ -621,6 +622,13 @@ const streamOllamaOnce = (
 			}
 			stream.push({ type: "start", partial: output });
 			for await (const chunk of readJsonl<OllamaChatChunk>(response.body)) {
+				// Once HTTP 200 has started, Ollama reports failures as NDJSON error records.
+				if (chunk.error) {
+					throw new AIError.ProviderResponseError(`Ollama stream error: ${chunk.error}`, {
+						provider: model.provider,
+						kind: "runtime",
+					});
+				}
 				if (chunk.message?.thinking) {
 					suppressHealedThinking = true;
 					endActiveTextBlock();
