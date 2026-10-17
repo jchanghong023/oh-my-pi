@@ -6,6 +6,7 @@ import { setChatTranscriptDisplayPreferences } from "../src/chat/display-prefere
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
 import { Text } from "../src/components/text";
+import { TranscriptContainer } from "../src/chrome/transcript-container";
 import { md } from "../src/native/describe";
 import type { DescribeContext, NativeNode } from "../src/native/node";
 import { initTheme } from "../src/theme";
@@ -68,6 +69,131 @@ afterEach(() => {
 });
 
 describe("compact transcript activity", () => {
+	it("keeps failure causes and file identities visible in narrow rows on both render paths", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const path = `F:/projects/${"deep/".repeat(30)}missing.ts:2-4`;
+		const result = {
+			content: [{ type: "text" as const, text: `Path '${path}' not found\nPRIVATE_BODY` }],
+			isError: true,
+		};
+		const component = new ToolExecutionComponent("read", { path }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(component);
+		component.updateResult(result);
+		const group = new ReadToolGroupComponent({ showContentPreview: true });
+		components.push(group);
+		group.updateArgs({ path }, "missing");
+		group.updateResult(result, false, "missing");
+		for (const block of [component, group]) {
+			const row = Bun.stripANSI(block.render(70)[0]);
+			expect(row).toContain("文件或路径不存在");
+			expect(row).toContain("missing.ts:2-4");
+			expect(row).not.toContain("deep/");
+			const native = JSON.stringify(block.describe(toolCx));
+			expect(native).toContain("文件或路径不存在");
+			expect(native).toContain("missing.ts:2-4");
+			expect(native).not.toContain("PRIVATE_BODY");
+		}
+	});
+
+	it("uses intent or executable for shell summaries without exposing the script", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		for (const [args, expected] of [
+			[{ command: 'bun -e "PRIVATE_SCRIPT"', i: "检查本地输出" }, "检查本地输出"],
+			[{ command: 'bun -e "PRIVATE_SCRIPT"' }, "bun"],
+		] as const) {
+			const component = new ToolExecutionComponent("bash", args, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateArgs({ command: args.command });
+			expect(Bun.stripANSI(component.render(70)[0])).toContain(expected);
+			expect(component.render(70)[0]).not.toContain("PRIVATE_SCRIPT");
+			expect(JSON.stringify(component.describe(toolCx))).toContain(expected);
+			expect(JSON.stringify(component.describe(toolCx))).not.toContain("PRIVATE_SCRIPT");
+		}
+	});
+
+	it("retains each grouped read intent after execution args omit it", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const group = new ReadToolGroupComponent({ showContentPreview: true });
+		components.push(group);
+		const streamed = { path: "src/settings.ts", i: "检查用户配置" };
+		group.updateArgs(streamed, "settings");
+		group.updateArgs({ path: "src/settings.ts" }, "settings");
+		group.updateArgs({ path: "src/fallback.ts" }, "fallback");
+		group.updateResult({ content: [{ type: "text", text: "PRIVATE_READ_BODY" }] }, false, "settings");
+		const rows = group.render(70).map(row => Bun.stripANSI(row));
+		expect(rows[0]).toContain("检查用户配置");
+		expect(rows[1]).toContain("fallback.ts");
+		expect(rows[1]).not.toContain("检查用户配置");
+		const native = JSON.stringify(group.describe(toolCx));
+		expect(native).toContain("检查用户配置");
+		expect(native).toContain("fallback.ts");
+		expect(native).not.toContain("PRIVATE_READ_BODY");
+	});
+
+	it("keeps source and destination names in compact edit rename summaries", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent(
+			"edit",
+			{ path: "src/old.ts", rename: "other/new.ts" },
+			{},
+			undefined,
+			{
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			},
+		);
+		components.push(component);
+		component.updateResult({ content: [{ type: "text", text: "PRIVATE_EDIT_BODY" }] });
+		expect(Bun.stripANSI(component.render(70)[0])).toContain("old.ts → new.ts");
+		expect(JSON.stringify(component.describe(toolCx))).toContain("old.ts → new.ts");
+		expect(component.render(70)[0]).not.toContain("PRIVATE_EDIT_BODY");
+	});
+
+	it("counts folded successes separately from visible failures and staged proposals", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const make = (name: string, details = {}, isError = false) => {
+			const component = new ToolExecutionComponent(name, {}, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			component.updateResult({
+				content: [{ type: "text", text: isError ? "Permission denied" : "receipt" }],
+				details,
+				isError,
+			});
+			transcript.addChild(component);
+			return component;
+		};
+		const proposal = make("ast_edit", { applied: false, totalReplacements: 1 });
+		const failure = make("read", {}, true);
+		for (let i = 0; i < 5; i++) make("write");
+		const rows = transcript.render(100).map(row => Bun.stripANSI(row));
+		expect(rows.join("\n")).toContain("已收起 2 次成功调用 · 失败 1 次（保留）");
+		expect(rows.some(row => row.includes("待确认") && !row.includes("done"))).toBe(true);
+		expect(rows.some(row => row.includes("Permission denied"))).toBe(true);
+		expect(failure.getCompactToolFailureCount()).toBe(1);
+		const pending = proposal.describe(toolCx);
+		expect(JSON.stringify(pending)).toContain("待确认");
+		expect(nodes(pending).find(node => node.k === "tool")?.p?.status).toBe("pending");
+		const applied = make("write", {
+			xdev: { tool: "resolve", inner: { action: "apply", sourceToolName: "ast_edit" } },
+		});
+		expect(Bun.stripANSI(applied.render(70)[0])).toContain("已应用");
+		expect(JSON.stringify(applied.describe(toolCx))).toContain("已应用");
+	});
+
 	it("repaints detailed spinner frames without reshaping the body, including after a compact result update", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		let shapes = 0;

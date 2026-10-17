@@ -22,8 +22,8 @@ import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
-import { formatCount } from "@oh-my-pi/pi-utils";
-import type { TspCardStatus, TspSpan, TspText } from "@oh-my-pi/pi-wire";
+import { formatCount, isRecord } from "@oh-my-pi/pi-utils";
+import { INTENT_FIELD, type TspCardStatus, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead } from "../tools/renderer";
 import { card, code, keyed, md, node, span, text, withHidden } from "../native/describe";
 import {
@@ -37,7 +37,7 @@ import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { compactToolSummary } from "../chrome/tool-activity";
+import { compactToolFailure, compactToolPath, compactToolSummary } from "../chrome/tool-activity";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -121,6 +121,7 @@ type ReadDisplayPathSpec = { path: string; linkPath?: string };
 type ReadEntry = {
 	toolCallId: string;
 	path: string;
+	intent?: string;
 	displayPaths?: ReadDisplayPathSpec[];
 	linkPath?: string;
 	status: "pending" | "success" | "warning" | "error";
@@ -370,6 +371,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#toolActivityVisible = true;
 	#compactKeep = Number.POSITIVE_INFINITY;
 	#compactHiddenSummary = 0;
+	#compactFailures = 0;
 	#showContentPreview: boolean;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
@@ -405,7 +407,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			this.#displayCompact = true;
 			const rows =
 				this.#compactHiddenSummary > 0
-					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactHiddenSummary)), width)]
+					? [
+							truncateToWidth(
+								theme.fg("dim", compactToolSummary(this.#compactHiddenSummary, this.#compactFailures)),
+								width,
+							),
+						]
 					: [];
 			for (const entry of this.#compactEntries()) rows.push(this.#renderCompactEntry(entry, width));
 			return rows;
@@ -422,10 +429,20 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return count;
 	}
 
-	setCompactToolLimit(keep: number, summary: number): void {
-		if (this.#compactKeep === keep && this.#compactHiddenSummary === summary) return;
+	getCompactToolFailureCount(): number {
+		let count = 0;
+		for (const entry of this.#entries.values()) {
+			if (entry.status === "error") count++;
+		}
+		return count;
+	}
+
+	setCompactToolLimit(keep: number, summary: number, failures = 0): void {
+		if (this.#compactKeep === keep && this.#compactHiddenSummary === summary && this.#compactFailures === failures)
+			return;
 		this.#compactKeep = keep;
 		this.#compactHiddenSummary = summary;
+		this.#compactFailures = failures;
 		this.#blockVersion++;
 		this.#native.clear();
 	}
@@ -491,6 +508,9 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			status: "pending",
 		};
 		entry.path = rawPath;
+		// Validated execution args omit intent metadata; keep the streamed intent for this call.
+		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
+		if (typeof intent === "string") entry.intent = intent;
 		entry.raw = args.raw === true;
 		this.#entries.set(toolCallId, entry);
 		this.#updateDisplay();
@@ -678,15 +698,16 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	#compactSummary(entry: ReadEntry): string {
-		let summary = plainText(entry.path).replace(/\s+/g, " ").trim() || "…";
+		let summary =
+			plainText(entry.intent ?? "")
+				.replace(/\s+/g, " ")
+				.trim() ||
+			compactToolPath(plainText(entry.path).replace(/\s+/g, " ").trim()) ||
+			"…";
 		if (entry.correctedFrom) summary += ` · corrected from ${plainText(entry.correctedFrom).replace(/\s+/g, " ")}`;
 		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflicts`;
 		if (entry.status === "error") {
-			const failure = plainText((entry.contentText ?? "").split(/\r?\n/, 1)[0])
-				.replace(/^Error:\s*/, "")
-				.replace(/\s+/g, " ")
-				.trim();
-			summary = `${failure || "Read failed"} · ${summary}`;
+			summary = `${compactToolFailure(plainText(entry.contentText ?? ""))} · ${summary}`;
 		}
 		return summary;
 	}
@@ -711,7 +732,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const calls: NativeChild[] = [];
 		if (this.#compactHiddenSummary > 0) {
-			calls.push(text(compactToolSummary(this.#compactHiddenSummary), { lines: 1, wrap: "none", truncate: "end" }));
+			calls.push(
+				text(compactToolSummary(this.#compactHiddenSummary, this.#compactFailures), {
+					lines: 1,
+					wrap: "none",
+					truncate: "end",
+				}),
+			);
 		}
 		for (const entry of this.#compactEntries()) {
 			const status = this.#compactStatus(entry);

@@ -1473,6 +1473,7 @@ export class TranscriptContainer extends Container {
 		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
 		let start = -1;
 		let completed = 0;
+		let failures = 0;
 		const flush = (end: number) => {
 			if (start < 0) return;
 			let remaining = 3;
@@ -1481,17 +1482,19 @@ export class TranscriptContainer extends Container {
 				const component = this.children[index]!;
 				if (!isToolActivityComponent(component) || !component.getCompactToolCount) continue;
 				const keep = Math.min(remaining, component.getCompactToolCount());
-				component.setCompactToolLimit?.(keep, index === start ? summary : 0);
+				component.setCompactToolLimit?.(keep, index === start ? summary : 0, index === start ? failures : 0);
 				remaining -= keep;
 			}
 			start = -1;
 			completed = 0;
+			failures = 0;
 		};
 		for (let index = startIndex; index < this.children.length; index++) {
 			const component = this.children[index]!;
 			if (isToolActivityComponent(component) && component.getCompactToolCount) {
 				if (start < 0) start = index;
 				completed += component.getCompactToolCount();
+				failures += component.getCompactToolFailureCount?.() ?? 0;
 			} else if (!isUsageRowBlock(component) && trimBlankEdges(component.render(80)).length > 0) {
 				flush(index);
 			}

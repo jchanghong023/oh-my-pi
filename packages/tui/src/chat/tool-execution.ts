@@ -8,7 +8,7 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
-import { compactToolSummary } from "../chrome/tool-activity";
+import { compactToolFailure, compactToolPath, compactToolSummary } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -381,6 +381,8 @@ export class ToolExecutionComponent extends Container {
 	#toolActivityVisible = true;
 	#compactKeep = 1;
 	#compactSummary = 0;
+	#compactFailures = 0;
+	#compactIntent: string | undefined;
 	#showImages: boolean;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
@@ -503,6 +505,8 @@ export class ToolExecutionComponent extends Container {
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#args = args;
+		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
+		if (typeof intent === "string") this.#compactIntent = intent;
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 		if (this.#editMode) this.#previewReady = Promise.withResolvers<void>();
 
@@ -537,6 +541,9 @@ export class ToolExecutionComponent extends Container {
 		// signals "nothing meaningful changed" and the renderer can skip.
 		if (args === this.#args) return;
 		this.#args = args;
+		// Execution events carry validated tool arguments, which omit the model's intent metadata.
+		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
+		if (typeof intent === "string") this.#compactIntent = intent;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
@@ -845,13 +852,18 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	getCompactToolCount(): number {
-		return Number(this.#nativeStatus() === "done");
+		return Number(this.#nativeStatus() === "done" && this.#compactOutcome() !== "待确认");
 	}
 
-	setCompactToolLimit(keep: number, summary: number): void {
-		if (this.#compactKeep === keep && this.#compactSummary === summary) return;
+	getCompactToolFailureCount(): number {
+		return Number(this.#nativeStatus() === "error");
+	}
+
+	setCompactToolLimit(keep: number, summary: number, failures = 0): void {
+		if (this.#compactKeep === keep && this.#compactSummary === summary && this.#compactFailures === failures) return;
 		this.#compactKeep = keep;
 		this.#compactSummary = summary;
+		this.#compactFailures = failures;
 		this.#blockVersion++;
 		this.#native.clear();
 	}
@@ -1040,21 +1052,29 @@ export class ToolExecutionComponent extends Container {
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const collapsed =
 			this.#compactSummary > 0
-				? [text(compactToolSummary(this.#compactSummary), { lines: 1, wrap: "none", truncate: "end" })]
+				? [
+						text(compactToolSummary(this.#compactSummary, this.#compactFailures), {
+							lines: 1,
+							wrap: "none",
+							truncate: "end",
+						}),
+					]
 				: [];
 		if (this.getCompactToolCount() > this.#compactKeep) return col(collapsed);
 		const summary = this.#compactActivity();
-		const status = this.#nativeStatus();
-		const ms = this.#elapsedMs(status);
-		const live = status === "running" || status === "pending";
+		const outcome = this.#compactOutcome();
+		const title = `${summary.label}${outcome ? ` · ${outcome}` : ""}`;
+		const status = outcome === "待确认" ? "pending" : this.#nativeStatus();
+		const ms = this.#elapsedMs(this.#nativeStatus());
+		const live = this.#isRunning();
 		const call = dataFirst
 			? node("tool", {
 					role: `omp.tool.${this.#toolName}`,
 					key: this.#toolCallId,
 					name: this.#toolName,
-					title: truncateToWidth(summary.label, Math.max(1, width - 16)),
+					title: truncateToWidth(title, Math.max(1, width - 16)),
 					target: summary.detail
-						? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(summary.label) - 16))
+						? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16))
 						: undefined,
 					targetKind: "text",
 					status,
@@ -1064,7 +1084,7 @@ export class ToolExecutionComponent extends Container {
 					collapsible: false,
 				})
 			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
-					text(`${status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
+					text(`${outcome ?? status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
 						lines: 1,
 						wrap: "none",
 						truncate: "end",
@@ -1079,12 +1099,42 @@ export class ToolExecutionComponent extends Container {
 		const summary = this.#activitySummary();
 		const label = plainText(summary.label).replace(/\s+/g, " ").trim();
 		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
+		if (isRecord(this.#args)) {
+			const intent = this.#compactIntent;
+			if (typeof intent === "string" && intent.trim()) {
+				detail = plainText(intent).replace(/\s+/g, " ").trim();
+			} else if (["read", "write", "glob"].includes(this.#toolName)) {
+				const path = this.#args.path ?? this.#args.file_path;
+				if (typeof path === "string" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) detail = compactToolPath(path);
+			} else if (this.#toolName === "edit") {
+				detail = detail.split(" → ").map(compactToolPath).join(" → ");
+			} else if (this.#toolName === "bash" && typeof this.#args.command === "string") {
+				// Without a supplied intent, show the executable rather than filling the row with script source.
+				detail = this.#args.command.trim().match(/^(?:"[^"]+"|'[^']+'|\S+)/)?.[0] ?? detail;
+			}
+		}
 		if (this.#result?.isError) {
 			const failure = this.#result.content.find(block => block.type === "text" && block.text)?.text;
-			const firstLine = failure ? plainText(failure.split(/\r?\n/, 1)[0]).replace(/\s+/g, " ").trim() : "";
-			detail = `${firstLine || "Tool failed"}${detail ? ` · ${detail}` : ""}`;
+			detail = `${compactToolFailure(plainText(failure ?? ""))}${detail ? ` · ${detail}` : ""}`;
 		}
-		return { label, detail };
+		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
+	}
+
+	/** The proposal and its later resolution are separate receipts, not successful writes. */
+	#compactOutcome(): "待确认" | "已应用" | undefined {
+		if (!this.#result || this.#result.isError || this.#isPartial) return undefined;
+		let details = this.#result.details;
+		let toolName = this.#toolName;
+		if (isRecord(details) && isRecord(details.xdev)) {
+			toolName = typeof details.xdev.tool === "string" ? details.xdev.tool : toolName;
+			details = details.xdev.inner;
+		}
+		if (!isRecord(details)) return undefined;
+		if (toolName === "ast_edit" && details.applied === false && Number(details.totalReplacements) > 0)
+			return "待确认";
+		if (details.applied === true || (details.action === "apply" && details.sourceToolName === "ast_edit"))
+			return "已应用";
+		return undefined;
 	}
 
 	/**
@@ -1438,14 +1488,19 @@ export class ToolExecutionComponent extends Container {
 		if (singleLine) {
 			const collapsed =
 				this.#compactSummary > 0
-					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactSummary)), width)]
+					? [
+							truncateToWidth(
+								theme.fg("dim", compactToolSummary(this.#compactSummary, this.#compactFailures)),
+								width,
+							),
+						]
 					: [];
 			if (this.getCompactToolCount() > this.#compactKeep) return collapsed;
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);
 			const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
-			const state = theme.fg(status === "error" ? "error" : "dim", `${status} · `);
+			const state = theme.fg(status === "error" ? "error" : "dim", `${this.#compactOutcome() ?? status} · `);
 			const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail}`) : "";
 			const line = truncateToWidth(
 				`${state}${theme.fg("toolTitle", theme.bold(summary.label))}${detail}`,
