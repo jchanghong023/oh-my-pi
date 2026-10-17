@@ -5,7 +5,7 @@ import { encodeArchive, openArchive } from "@oh-my-pi/pi-utils/ar";
 import reviewerPrompt from "../../../../prompts/agents/reviewer.md" with { type: "text" };
 import { buildReviewPrompt } from "../review/prompt";
 import { createResolvedReviewTarget } from "../review/target";
-import type { ReviewContextFile, ReviewContextSelection, ReviewExportResult, ReviewExportSnapshot } from "./types";
+import type { ReviewExportResult, ReviewExportSnapshot } from "./types";
 
 const MAX_MEMBER_BYTES = 16 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
@@ -14,7 +14,7 @@ type Version = "target" | "base";
 interface SourceRecord {
 	path: string;
 	version: Version;
-	kind: "changed" | "context";
+	kind: "changed";
 	reason: string;
 	status?: string;
 	mode?: string;
@@ -25,8 +25,6 @@ interface SourceRecord {
 	bytes: number;
 	sha256?: string;
 	lines: number;
-	cropped: boolean;
-	ranges?: Array<{ start: number; end: number; startByte: number; endByte: number }>;
 	omission?: string;
 }
 
@@ -50,7 +48,7 @@ function safePath(value: string): string {
 
 function splitRequired(detail: string): never {
 	throw new Error(
-		`${detail}. Review export cannot omit necessary code; split the review into smaller commit/base ranges or request narrower context blocks.`,
+		`${detail}. Review export cannot omit necessary code; split the review into smaller commit/base ranges.`,
 	);
 }
 
@@ -91,56 +89,21 @@ function isBinary(bytes: Uint8Array): boolean {
 	return bytes.includes(0);
 }
 
-function cropSource(bytes: Uint8Array, requested: NonNullable<ReviewContextFile["ranges"]>) {
-	const offsets = lineOffsets(bytes);
-	const lineCount = offsets.length - 1;
-	const sorted = requested.map(range => ({ ...range })).sort((a, b) => a.start - b.start || a.end - b.end);
-	const merged: Array<{ start: number; end: number }> = [];
-	for (const range of sorted) {
-		if (
-			!Number.isSafeInteger(range.start) ||
-			!Number.isSafeInteger(range.end) ||
-			range.start < 1 ||
-			range.end < range.start ||
-			range.end > lineCount
-		) {
-			throw new Error(
-				`Invalid context line range ${range.start}-${range.end}; frozen source has ${lineCount} lines`,
-			);
-		}
-		const previous = merged[merged.length - 1];
-		if (previous && range.start <= previous.end + 1) previous.end = Math.max(previous.end, range.end);
-		else merged.push(range);
-	}
-	const ranges = merged.map(range => ({
-		...range,
-		startByte: offsets[range.start - 1]!,
-		endByte: offsets[range.end]!,
-	}));
-	const cropped = new Uint8Array(ranges.reduce((sum, range) => sum + range.endByte - range.startByte, 0));
-	let position = 0;
-	for (const range of ranges) {
-		cropped.set(bytes.subarray(range.startByte, range.endByte), position);
-		position += range.endByte - range.startByte;
-	}
-	return { bytes: cropped, ranges, lines: merged.reduce((sum, range) => sum + range.end - range.start + 1, 0) };
-}
-
 /** Build and byte-validate in owned staging; the previous ZIP is touched only by the final rename. */
 export async function writeReviewBundle(
 	snapshot: ReviewExportSnapshot,
-	context: ReviewContextSelection,
 	options: { args: string[]; instructions?: string },
 	signal?: AbortSignal,
 ): Promise<ReviewExportResult> {
 	signal?.throwIfAborted();
 	const members = new Map<string, Uint8Array>();
 	const sources: SourceRecord[] = [];
-	const limitations = [...new Set([...snapshot.limitations, ...context.limitations])];
+	const limitations = [...new Set(snapshot.limitations)];
+	if (snapshot.changes.length === 0)
+		limitations.push("No changes in the selected scope; only review instructions and metadata were exported.");
 	const omissions: Array<{ path: string; version: Version; reason: string; kind: string }> = [];
 	let totalBytes = 0;
 	let sourceLines = 0;
-	let contextFileCount = 0;
 	const add = (name: string, bytes: Uint8Array) => {
 		if (members.has(name)) throw new Error(`Duplicate review-export archive member: ${name}`);
 		if (bytes.length > MAX_MEMBER_BYTES) splitRequired(`${name} exceeds the ${MAX_MEMBER_BYTES}-byte member limit`);
@@ -153,38 +116,28 @@ export async function writeReviewBundle(
 	const addSource = async (request: {
 		path: string;
 		version: Version;
-		kind: "changed" | "context";
 		reason: string;
 		member: string;
 		status?: string;
 		mode?: string;
-		ranges?: ReviewContextFile["ranges"];
 	}) => {
 		signal?.throwIfAborted();
 		safePath(request.path);
 		if (request.mode && !["100644", "100755"].includes(request.mode)) {
 			throw new Error(`Unsupported ${request.version} mode ${request.mode} for ${request.path}`);
 		}
-		const existing = sources.find(
-			source => source.path === request.path && source.version === request.version && source.kind === request.kind,
-		);
+		const existing = sources.find(source => source.path === request.path && source.version === request.version);
 		if (existing) {
 			existing.reason += `; ${request.reason}`;
 			return;
 		}
 		const original = await snapshot.readFile(request.path, request.version);
-		if (original === undefined) {
-			const reason = `Missing ${request.version} ${request.kind} content: ${request.path}`;
-			if (request.kind === "changed") throw new Error(reason);
-			omissions.push({ path: request.path, version: request.version, reason, kind: request.kind });
-			limitations.push(reason);
-			return;
-		}
+		if (original === undefined) throw new Error(`Missing ${request.version} changed content: ${request.path}`);
 		const binary = isBinary(original);
 		const record: SourceRecord = {
 			path: request.path,
 			version: request.version,
-			kind: request.kind,
+			kind: "changed",
 			reason: request.reason,
 			status: request.status,
 			mode: request.mode,
@@ -193,27 +146,17 @@ export async function writeReviewBundle(
 			originalSha256: sha256(original),
 			bytes: 0,
 			lines: 0,
-			cropped: false,
 		};
 		if (binary) {
 			record.omission = "Binary payload omitted by default; size and SHA-256 describe the exact frozen bytes.";
-			omissions.push({ path: request.path, version: request.version, reason: record.omission, kind: request.kind });
+			omissions.push({ path: request.path, version: request.version, reason: record.omission, kind: "changed" });
 		} else {
-			const cropped = request.ranges?.length ? cropSource(original, request.ranges) : undefined;
-			const bytes = cropped?.bytes ?? original;
-			add(request.member, bytes);
+			add(request.member, original);
 			record.member = request.member;
-			record.bytes = bytes.length;
-			record.sha256 = sha256(bytes);
-			record.lines = cropped?.lines ?? lineOffsets(bytes).length - 1;
-			record.cropped =
-				cropped !== undefined &&
-				(cropped.ranges.length !== 1 ||
-					cropped.ranges[0]!.startByte !== 0 ||
-					cropped.ranges[0]!.endByte !== original.length);
-			record.ranges = cropped?.ranges;
+			record.bytes = original.length;
+			record.sha256 = record.originalSha256;
+			record.lines = lineOffsets(original).length - 1;
 			sourceLines += record.lines;
-			if (request.kind === "context") contextFileCount++;
 		}
 		sources.push(record);
 	};
@@ -229,7 +172,6 @@ export async function writeReviewBundle(
 			await addSource({
 				path: beforePath,
 				version: "base",
-				kind: "changed",
 				reason: "Original version of changed file",
 				member: `changed-files/before/${beforePath}`,
 				status: change.status,
@@ -240,46 +182,12 @@ export async function writeReviewBundle(
 			await addSource({
 				path: change.path,
 				version: "target",
-				kind: "changed",
 				reason: "Final version of changed file",
 				member: `changed-files/after/${change.path}`,
 				status: change.status,
 				mode: change.afterMode,
 			});
 		}
-	}
-
-	const selections = new Map<string, ReviewContextFile>();
-	for (const file of context.files) {
-		safePath(file.path);
-		if (!file.reason.trim()) throw new Error(`Context requires an inclusion reason: ${file.path}`);
-		const version = file.version ?? "target";
-		const key = `${version}\0${file.path}`;
-		const previous = selections.get(key);
-		if (!previous) selections.set(key, { ...file, version, ranges: file.ranges?.map(range => ({ ...range })) });
-		else {
-			previous.reason += `; ${file.reason}`;
-			previous.ranges =
-				previous.ranges?.length && file.ranges?.length ? [...previous.ranges, ...file.ranges] : undefined;
-		}
-	}
-	for (const file of selections.values()) {
-		const version = file.version ?? "target";
-		const alreadyIncluded = sources.find(
-			source => source.path === file.path && source.version === version && source.member && !source.cropped,
-		);
-		if (alreadyIncluded) {
-			alreadyIncluded.reason += `; Context: ${file.reason}`;
-			continue;
-		}
-		await addSource({
-			path: file.path,
-			version,
-			kind: "context",
-			reason: file.reason,
-			ranges: file.ranges,
-			member: `context/${version}/${file.path}`,
-		});
 	}
 
 	add("diff.patch", encoder.encode(snapshot.diff));
@@ -302,7 +210,7 @@ export async function writeReviewBundle(
 	add("metadata/omissions.json", json(omissions));
 	const readme = `# Code review export
 
-This ZIP is a local, manual hand-off. Nothing was uploaded and no review was run.
+This ZIP is a local, manual hand-off for the user to give to another agent or reviewer. No model was called, nothing was uploaded and no review was run.
 
 - [Built-in /review instructions for this scope](instructions/review.md)
 - [Complete built-in reviewer agent definition](instructions/reviewer.md)
@@ -315,9 +223,9 @@ Mode: ${snapshot.mode}
 Base: ${snapshot.baseCommit ?? "empty tree"}
 Target: ${snapshot.targetCommit}
 
-Source payloads retain their original bytes, encodings and line endings. **No secrets were masked or redacted.** Inspect before sharing. Binary payloads are omitted by default; their exact size and hash are recorded. Changed textual files are complete. Before/after versions use repository-relative paths. Context uses context/{target,base}/<repository-path>; selected blocks are concatenated without markers or rewriting, with original inclusive line numbers and half-open byte offsets in the manifest. Source-line counts include each exported version, not the diff or instruction files.
+Source payloads retain their original bytes, encodings and line endings. **No secrets were masked or redacted.** Inspect before sharing. Binary payloads are omitted by default; their exact size and hash are recorded. Changed textual files are complete. Before/after versions use repository-relative paths. Source-line counts include each exported version, not the diff or instruction files. Supplemental unchanged context is not collected or analyzed; the receiving reviewer investigates dependencies and requests additional source as needed.
 
-The included prompts come from the running OMP builtins, not from the reviewed repository version. Their task/yield/Git references are original OMP agent conventions: an external/web reviewer should use this frozen package instead of a local checkout or unavailable tools. The native /review prompt can summarize large diffs; **diff.patch and the manifest's frozen before/after/context members are authoritative and must be read in full as needed**.
+The included prompts come from the running OMP builtins, not from the reviewed repository version. Their task/yield/Git references are original OMP agent conventions: an external/web reviewer should use this frozen package instead of a local checkout or unavailable tools. The native /review prompt can summarize large diffs; **diff.patch and the manifest's frozen before/after members are authoritative and must be read in full as needed**. User instructions are included for that later review, not interpreted during export.
 
 The manifest inventories every other member; it cannot hash itself. ZIP compressed size is reported by the command after encoding (embedding it would be self-referential). No completeness claim overrides the following limitations:
 ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- None reported."}
@@ -325,7 +233,7 @@ ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- No
 	add("README.md", encoder.encode(readme));
 	const inventory = [...members].map(([member, bytes]) => ({ member, bytes: bytes.length, sha256: sha256(bytes) }));
 	const manifest = {
-		formatVersion: 1,
+		formatVersion: 2,
 		createdAt: new Date().toISOString(),
 		scope: snapshot.scope,
 		mode: snapshot.mode,
@@ -356,7 +264,6 @@ ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- No
 		statistics: {
 			fileCount: members.size + 1,
 			sourceFileCount: sources.filter(source => source.member).length,
-			contextFileCount,
 			sourceLines,
 			uncompressedBytes: 0,
 			compressedBytes: null,
@@ -408,7 +315,6 @@ ${limitations.length ? limitations.map(value => `- ${value}`).join("\n") : "- No
 			mode: snapshot.mode,
 			baseCommit: snapshot.baseCommit,
 			targetCommit: snapshot.targetCommit,
-			contextFileCount,
 			limitations,
 		};
 	} finally {

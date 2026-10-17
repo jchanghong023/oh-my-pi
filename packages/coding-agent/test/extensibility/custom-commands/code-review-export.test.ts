@@ -5,10 +5,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { type ArchiveReader, openArchive } from "@oh-my-pi/pi-utils/ar";
+import { CodeReviewExportCommand } from "../../../src/extensibility/custom-commands/bundled/code-review-export";
 import { writeReviewBundle } from "../../../src/extensibility/custom-commands/bundled/code-review-export/bundle";
 import { captureReviewExportSnapshot } from "../../../src/extensibility/custom-commands/bundled/code-review-export/snapshot";
 import { buildReviewPrompt } from "../../../src/extensibility/custom-commands/bundled/review/prompt";
 import { createResolvedReviewTarget } from "../../../src/extensibility/custom-commands/bundled/review/target";
+import type { CustomCommandAPI, CustomCommandContext } from "../../../src/extensibility/custom-commands/types";
 
 const repositories: string[] = [];
 
@@ -56,7 +58,7 @@ afterEach(async () => {
 });
 
 describe("code-review-export frozen bundles", () => {
-	test("exports exact historical versions, full diff, context blocks, binary metadata and real builtin prompts", async () => {
+	test("exports exact historical versions, full diff, binary metadata and real builtin prompts", async () => {
 		const root = await createRepository();
 		const before = Buffer.from('const token = "literal-secret-before";\r\nconst value = 1;');
 		const after = Buffer.concat([
@@ -74,32 +76,22 @@ describe("code-review-export frozen bundles", () => {
 		const binary = Buffer.from([0, 1, 255, 10]);
 		await fs.writeFile(path.join(root, "image.bin"), binary);
 		const target = await commit(root, ["changed.ts", "deleted.ts", "image.bin"], "selected change");
-		// Historical export must ignore the checkout's newer contents, including context.
+		// Historical export must ignore the checkout's newer contents.
 		await fs.writeFile(path.join(root, "changed.ts"), "not the selected commit\n");
 		await fs.writeFile(path.join(root, "related.ts"), "not selected context\n");
 		const snapshot = await captureReviewExportSnapshot(root, { kind: "commit", ref: target });
 		try {
-			const result = await writeReviewBundle(
-				snapshot,
-				{
-					files: [
-						{
-							path: "related.ts",
-							reason: "Shared state used by the changed implementation",
-							ranges: [{ start: 2, end: 3 }],
-						},
-					],
-					limitations: [],
-				},
-				{ args: [], instructions: "Check shared state ownership." },
-			);
+			const result = await writeReviewBundle(snapshot, {
+				args: [],
+				instructions: "Check shared state ownership.",
+			});
 			const archive = await openArchive(result.path);
 			expect(await readMember(archive, "changed-files/before/changed.ts")).toEqual(before);
 			expect(await readMember(archive, "changed-files/after/changed.ts")).toEqual(after);
 			expect(await readMember(archive, "changed-files/before/deleted.ts")).toEqual(deleted);
 			expect(archive.getNode("changed-files/after/deleted.ts")).toBeUndefined();
 			expect(archive.getNode("changed-files/after/image.bin")).toBeUndefined();
-			expect(await readMember(archive, "context/target/related.ts")).toEqual(Buffer.from("second\r\nthird\r\n"));
+			expect(archive.getNode("context/target/related.ts")).toBeUndefined();
 			expect(await readMember(archive, "diff.patch")).toEqual(Buffer.from(snapshot.diff));
 			expect(await readMember(archive, "instructions/review.md")).toEqual(
 				Buffer.from(
@@ -128,18 +120,12 @@ describe("code-review-export frozen bundles", () => {
 					originalSha256: hash(binary),
 				}),
 			);
-			expect(manifest.sources).toContainEqual(
-				expect.objectContaining({
-					path: "related.ts",
-					cropped: true,
-					ranges: [{ start: 2, end: 3, startByte: 7, endByte: 22 }],
-				}),
-			);
+			expect(manifest.sources).not.toContainEqual(expect.objectContaining({ path: "related.ts" }));
 			let uncompressed = 0;
 			const files = [...archive.indexEntries()].filter(entry => !entry.isDirectory);
 			for (const entry of files) uncompressed += (await readMember(archive, entry.path)).length;
 			expect(result.fileCount).toBe(files.length);
-			expect(result.sourceLines).toBe(7);
+			expect(result.sourceLines).toBe(5);
 			expect(result.uncompressedBytes).toBe(uncompressed);
 			expect(result.compressedBytes).toBe((await fs.stat(result.path)).size);
 			expect(manifest.statistics.uncompressedBytes).toBe(uncompressed);
@@ -177,7 +163,7 @@ describe("code-review-export frozen bundles", () => {
 				);
 			const snapshot = await captureReviewExportSnapshot(root, { kind: "uncommitted" });
 			try {
-				const result = await writeReviewBundle(snapshot, { files: [], limitations: [] }, { args: [] });
+				const result = await writeReviewBundle(snapshot, { args: [] });
 				expect(result.path).toBe(path.join(root, ".tmp", "review-bundle.zip"));
 				const archive = await openArchive(result.path);
 				expect(await readMember(archive, "changed-files/after/tracked.ts")).toEqual(final);
@@ -211,7 +197,7 @@ describe("code-review-export frozen bundles", () => {
 		await fs.writeFile(path.join(root, ".npmrc"), "registry=https://registry.example.invalid/\n");
 		const snapshot = await captureReviewExportSnapshot(root, { kind: "uncommitted" });
 		try {
-			const result = await writeReviewBundle(snapshot, { files: [], limitations: [] }, { args: [] });
+			const result = await writeReviewBundle(snapshot, { args: [] });
 			const archive = await openArchive(result.path);
 			const manifest = JSON.parse((await readMember(archive, "manifest.json")).toString("utf8"));
 			for (const [version, member, expected] of [
@@ -234,7 +220,6 @@ describe("code-review-export frozen bundles", () => {
 						originalSha256: hash(expected),
 						bytes: expected.length,
 						sha256: hash(expected),
-						cropped: false,
 					}),
 				);
 			}
@@ -265,7 +250,7 @@ describe("code-review-export frozen bundles", () => {
 		const first = await captureReviewExportSnapshot(root, { kind: "uncommitted" });
 		let finalPath: string;
 		try {
-			finalPath = (await writeReviewBundle(first, { files: [], limitations: [] }, { args: [] })).path;
+			finalPath = (await writeReviewBundle(first, { args: [] })).path;
 		} finally {
 			await first.dispose();
 		}
@@ -278,7 +263,7 @@ describe("code-review-export frozen bundles", () => {
 			// Prime the real snapshot read, then alter bytes without relying on mocked callbacks.
 			await frozen.readFile("source.ts");
 			await fs.writeFile(path.join(root, "source.ts"), "a concurrent edit after capture\n");
-			await expect(writeReviewBundle(frozen, { files: [], limitations: [] }, { args: [] })).rejects.toThrow();
+			await expect(writeReviewBundle(frozen, { args: [] })).rejects.toThrow();
 			expect(await fs.readFile(finalPath)).toEqual(previous);
 			expect(await fs.readFile(path.join(unrelated, "keep"), "utf8")).toBe("owned by someone else");
 			expect((await fs.readdir(path.join(root, ".tmp"))).sort()).toEqual([
@@ -288,5 +273,41 @@ describe("code-review-export frozen bundles", () => {
 		} finally {
 			await frozen.dispose();
 		}
+	});
+
+	test("exports through the command with no model or credentials, preserving code and review focus", async () => {
+		const root = await createRepository();
+		const before = Buffer.from("export const value = 1;\r\n");
+		const after = Buffer.from('export const value = 2;\r\nconst token = "keep-literal";\r\n');
+		await fs.writeFile(path.join(root, "source.ts"), before);
+		await commit(root, ["source.ts"], "baseline");
+		await fs.writeFile(path.join(root, "source.ts"), after);
+		const errors: string[] = [];
+		const context = {
+			hasUI: false,
+			get model() {
+				throw new Error("Pure export must not access the session model");
+			},
+			get modelRegistry() {
+				throw new Error("Pure export must not access model credentials");
+			},
+			ui: {
+				setStatus() {},
+				notify(message: string, level?: string) {
+					if (level === "error") errors.push(message);
+				},
+			},
+		} as unknown as CustomCommandContext;
+		const command = new CodeReviewExportCommand({ cwd: root } as CustomCommandAPI);
+		await command.execute(["Check", "ownership."], context);
+		expect(errors).toEqual([]);
+		const archive = await openArchive(path.join(root, ".tmp", "review-bundle.zip"));
+		expect(await readMember(archive, "changed-files/before/source.ts")).toEqual(before);
+		expect(await readMember(archive, "changed-files/after/source.ts")).toEqual(after);
+		const diff = (await readMember(archive, "diff.patch")).toString("utf8");
+		expect(diff).toContain("-export const value = 1;");
+		expect(diff).toContain("+export const value = 2;");
+		const manifest = JSON.parse((await readMember(archive, "manifest.json")).toString("utf8"));
+		expect(manifest.instructions).toBe("Check ownership.");
 	});
 });

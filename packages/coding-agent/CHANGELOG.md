@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add builtin `/code-review-export` with `/review` inputs and choices, exporting frozen source bytes, progressive context and native review instructions to `.tmp/review-bundle.zip` without redaction, upload or automatic review.
+- Add builtin `/code-review-export` with `/review` inputs and choices, packaging frozen changes and native review instructions into `.tmp/review-bundle.zip` for manual hand-off without model calls, redaction, upload or automatic review.
 
 ### Changed
 

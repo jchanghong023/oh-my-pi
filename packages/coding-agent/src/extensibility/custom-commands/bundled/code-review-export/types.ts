@@ -21,23 +21,10 @@ export interface ReviewExportSnapshot {
 	targetCommit: string;
 	diff: string;
 	changes: ReviewExportChange[];
-	paths: string[];
 	limitations: string[];
 	readFile(path: string, version?: "target" | "base"): Promise<Uint8Array | undefined>;
 	assertUnchanged(): Promise<void>;
 	dispose(): Promise<void>;
-}
-
-export interface ReviewContextFile {
-	path: string;
-	reason: string;
-	ranges?: Array<{ start: number; end: number }>;
-	version?: "target" | "base";
-}
-
-export interface ReviewContextSelection {
-	files: ReviewContextFile[];
-	limitations: string[];
 }
 
 export interface ReviewExportResult {
@@ -49,6 +36,5 @@ export interface ReviewExportResult {
 	mode: string;
 	baseCommit: string | null;
 	targetCommit: string;
-	contextFileCount: number;
 	limitations: string[];
 }

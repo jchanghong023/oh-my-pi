@@ -246,7 +246,7 @@ export async function captureReviewExportSnapshot(
 	}
 	const root = await fs.realpath(repository.info().repoRoot);
 	const limitations = [
-		"Repository-root .tmp is excluded from diff, changed files, and context.",
+		"Repository-root .tmp is excluded from the exported diff and changed files.",
 		"NUL-containing or non-UTF-8 files are binary: changed identities and byte metadata are retained, without embedding binary payloads in the text diff.",
 	];
 	const cache = new Map<string, Buffer | undefined>();
@@ -344,7 +344,7 @@ export async function captureReviewExportSnapshot(
 			if (entry.mode !== "100644" && entry.mode !== "100755") {
 				targetPaths.delete(filePath);
 				limitations.push(
-					`Context excludes ${filePath}: ${entry.mode === "120000" ? "symlink" : "submodule or unsupported entry"}.`,
+					`Target file inventory excludes ${filePath}: ${entry.mode === "120000" ? "symlink" : "submodule or unsupported entry"}.`,
 				);
 			}
 		}
@@ -570,7 +570,6 @@ export async function captureReviewExportSnapshot(
 		targetCommit,
 		diff: patches.join(""),
 		changes,
-		paths: [...targetPaths].sort(),
 		limitations,
 		readFile,
 		async assertUnchanged() {

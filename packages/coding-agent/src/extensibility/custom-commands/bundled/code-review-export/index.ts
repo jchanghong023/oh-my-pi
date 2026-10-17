@@ -3,13 +3,12 @@ import type { CustomCommand, CustomCommandAPI, CustomCommandContext } from "../.
 import { extractReviewPrRefFromArgs, liveCommandCwd, selectReviewChoice } from "../review";
 import { resolveLocalReviewTarget } from "../review/target";
 import { writeReviewBundle } from "./bundle";
-import { collectReviewContext } from "./context";
 import { captureReviewExportSnapshot } from "./snapshot";
 import type { ReviewExportResult, ReviewExportScope } from "./types";
 
 export class CodeReviewExportCommand implements CustomCommand {
 	name = "code-review-export";
-	description = "Export changes and agent-selected review context to .tmp/review-bundle.zip";
+	description = "Export frozen changes and review instructions to .tmp/review-bundle.zip without calling a model";
 
 	constructor(private readonly api: CustomCommandAPI) {}
 
@@ -62,11 +61,8 @@ export class CodeReviewExportCommand implements CustomCommand {
 			ctx.ui.setStatus("code-review-export", "Capturing frozen review scope…");
 			const snapshot = await captureReviewExportSnapshot(cwd, scope, signal);
 			try {
-				ctx.ui.setStatus("code-review-export", "Selecting necessary review context…");
-				const context = await collectReviewContext(snapshot, ctx, instructions, signal);
-				signal?.throwIfAborted();
 				ctx.ui.setStatus("code-review-export", "Writing and validating review bundle…");
-				return await writeReviewBundle(snapshot, context, { args, instructions }, signal);
+				return await writeReviewBundle(snapshot, { args, instructions }, signal);
 			} finally {
 				await snapshot.dispose();
 			}
@@ -78,7 +74,7 @@ export class CodeReviewExportCommand implements CustomCommand {
 				const outcome = await ctx.ui.custom<{ result?: ReviewExportResult; error?: unknown }>(
 					(tui, theme, _keys, done) => {
 						started = true;
-						const loader = new BorderedLoader(tui, theme, "Exporting code review context…");
+						const loader = new BorderedLoader(tui, theme, "Exporting code review bundle…");
 						run(loader.signal).then(
 							value => done({ result: value }),
 							error => done({ error }),
@@ -98,7 +94,7 @@ export class CodeReviewExportCommand implements CustomCommand {
 				? `\nLimitations:\n${result.limitations.map(item => `- ${item}`).join("\n")}`
 				: "\nLimitations: none reported.";
 			ctx.ui.notify(
-				`Exported ${result.path}\nScope: ${result.mode}\nCommits: ${result.baseCommit ?? "empty tree"} → ${result.targetCommit}\n${result.fileCount} files (${result.contextFileCount} context), ${result.sourceLines} source lines; ${result.uncompressedBytes} bytes uncompressed, ${result.compressedBytes} bytes ZIP.${limitations}\nNo review or upload was performed.`,
+				`Exported ${result.path}\nScope: ${result.mode}\nCommits: ${result.baseCommit ?? "empty tree"} → ${result.targetCommit}\n${result.fileCount} files, ${result.sourceLines} source lines; ${result.uncompressedBytes} bytes uncompressed, ${result.compressedBytes} bytes ZIP.${limitations}\nNo model was called. No review or upload was performed.`,
 				result.limitations.length ? "warning" : "info",
 			);
 		} catch (error) {
