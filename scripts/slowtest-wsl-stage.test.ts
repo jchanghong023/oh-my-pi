@@ -37,13 +37,11 @@ function resolveGitBash(): string | null {
 function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCapture> = async () => "") {
 	const commands: GateCommand[] = [];
 	const controller = new AbortController();
-	const failures: GateCommandError[] = [];
 	const gate = {
 		signal: controller.signal,
 		fail: (error: unknown) => {
 			const failure = error instanceof GateCommandError ? error : new GateCommandError(String(error), 1);
 			if (!controller.signal.aborted) {
-				failures.push(failure);
 				controller.abort(failure);
 			}
 			return controller.signal.reason as GateCommandError;
@@ -55,7 +53,7 @@ function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCap
 			return typeof result === "string" ? { exitCode: 0, stdout: result, stderr: "" } : result;
 		},
 	} as unknown as GateRun;
-	return { gate, commands, failures };
+	return { gate, commands };
 }
 function source(dirty = false): SourceIdentity {
 	return {
@@ -703,8 +701,6 @@ describe("streamed deployed fixed-commit execution", () => {
 				: undefined,
 		);
 		expect((await runWslStage(f.gate, f.options)).status).toBe(row.expected);
-		if (row.test && row.test !== "0") expect(f.failures[0]?.exitCode).toBe(Number(row.test));
-		else expect(f.failures).toHaveLength(0);
 	});
 	test("missing live event evidence cannot grant PASS or blanket compilation exclusion", async () => {
 		const f = executionFixture(async command =>

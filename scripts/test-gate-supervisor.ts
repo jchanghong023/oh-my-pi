@@ -2,6 +2,7 @@
 import { dlopen, FFIType } from "bun:ffi";
 import * as fs from "node:fs/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
+import { terminateLinuxGateDescendants } from "./test-gate-process";
 
 const launchedAt = performance.now();
 const correlation = Object.fromEntries(
@@ -37,7 +38,7 @@ process.on("exit", exitCode => {
 	});
 });
 
-let quiescing = false;
+let aborting = false;
 let cleanupRequested = false;
 let commandSettled = true;
 let commandPid: number | undefined;
@@ -114,10 +115,11 @@ let started = false;
 // Stay alive after the real leader exits, so the parent's ownership reference
 // remains valid until descendants are gone and command output reaches EOF.
 let reaping = false;
-setInterval(async () => {
+async function cleanupAndReap() {
 	if ((!started && !cleanupRequested) || reaping || !reapChildren) return;
 	reaping = true;
 	try {
+		if (aborting) await terminateLinuxGateDescendants();
 		const present = await reapChildren();
 		if (cleanupRequested && commandSettled && !present) {
 			// Exiting is the ownership acknowledgment: the parent may release
@@ -133,19 +135,41 @@ setInterval(async () => {
 			peer_pid: commandPid,
 			...logger.diagnosticError(error),
 		});
-		throw error;
+		// Once orphaned, this supervisor is the only remaining owner. Retry
+		// cleanup rather than abandoning escaped descendants on an I/O race.
+		if (!aborting) throw error;
 	} finally {
 		reaping = false;
 	}
-}, 5);
+}
+setInterval(cleanupAndReap, 5);
+function requestAbort() {
+	if (aborting) return;
+	aborting = true;
+	cleanupRequested = true;
+	if (process.platform === "linux") {
+		void cleanupAndReap();
+	} else if (process.platform === "win32") {
+		// No Job may have been assigned if the parent died before launch.
+		if (commandPid === undefined) process.exit(0);
+	} else {
+		// The supervisor leads the owned detached group.
+		process.kill(-process.pid, "SIGKILL");
+	}
+}
+process.on("disconnect", requestAbort);
+if (!process.connected) requestAbort();
+function sendReply(message: object) {
+	if (!process.connected) return;
+	try {
+		process.send?.(message);
+	} catch (error) {
+		if (!aborting) throw error;
+	}
+}
 process.on("message", async (message: unknown) => {
-	if (message === "quiesce" && process.platform === "linux") {
-		if (quiescing) return;
-		quiescing = true;
-		// A queued start must either finish spawning before this acknowledgment
-		// or be rejected afterward. The parent's snapshot then cannot miss a
-		// command launched only after the supervisor is resumed for reaping.
-		process.kill(process.pid, "SIGSTOP");
+	if (message === "abort") {
+		requestAbort();
 		return;
 	}
 	if (message === "cleanup") {
@@ -160,7 +184,7 @@ process.on("message", async (message: unknown) => {
 		cleanupRequested = true;
 		return;
 	}
-	if (started || quiescing || cleanupRequested || message !== "start") return;
+	if (started || aborting || cleanupRequested || message !== "start") return;
 	started = true;
 	commandSettled = false;
 	logger.info("Supervisor start received", {
@@ -209,7 +233,7 @@ process.on("message", async (message: unknown) => {
 			peer_pid: child.pid,
 			elapsed_ms: performance.now() - startedAt,
 		});
-		process.send?.({ exitCode });
+		sendReply({ exitCode });
 		logger.info("Supervisor IPC reply sent", {
 			...fields,
 			event: "gate_supervisor_ipc_sent",
@@ -232,7 +256,7 @@ process.on("message", async (message: unknown) => {
 			elapsed_ms: performance.now() - startedAt,
 			...logger.diagnosticError(error),
 		});
-		process.send?.({
+		sendReply({
 			exitCode: (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
 			error: error instanceof Error ? error.message : String(error),
 			missing: (error as NodeJS.ErrnoException).code === "ENOENT",
@@ -247,7 +271,7 @@ process.on("message", async (message: unknown) => {
 		});
 	}
 });
-process.send?.({ ready: true });
+sendReply({ ready: true });
 logger.info("Supervisor ready IPC sent", {
 	...fields,
 	event: "gate_supervisor_ipc_sent",

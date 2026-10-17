@@ -5,6 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
+import { BunTestFailureObserver } from "./test-gate-failure-events";
 import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
@@ -949,6 +950,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	function drainInto(
 		stream: ReadableStream<Uint8Array>,
 		sink: { text: string },
+		failureObserver?: BunTestFailureObserver,
 	): { done: Promise<void>; cancel: () => void } {
 		const decoder = new TextDecoder();
 		const reader = stream.getReader();
@@ -957,6 +959,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 				for (;;) {
 					const { done: ended, value } = await reader.read();
 					if (ended) break;
+					failureObserver?.push(value);
 					const text = decoder.decode(value, { stream: true });
 					sink.text += text;
 					if (gateFailFast) process.stdout.write(text);
@@ -964,6 +967,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			} catch {
 				// cancelled or broken pipe — keep what was captured
 			}
+			failureObserver?.end();
 			const final = decoder.decode();
 			sink.text += final;
 			if (gateFailFast && final) process.stdout.write(final);
@@ -1006,7 +1010,11 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		const stdout = { text: "" };
 		const stderr = { text: "" };
 		const stdoutDrain = drainInto(proc.stdout as ReadableStream<Uint8Array>, stdout);
-		const stderrDrain = drainInto(proc.stderr as ReadableStream<Uint8Array>, stderr);
+		const stderrDrain = drainInto(
+			proc.stderr as ReadableStream<Uint8Array>,
+			stderr,
+			gateFailFast ? new BunTestFailureObserver(failFast) : undefined,
+		);
 		const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
 		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
 		// after a GC crash) would otherwise hang this worker forever.

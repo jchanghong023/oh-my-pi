@@ -1,6 +1,10 @@
 #!/usr/bin/env bun
 // A single pre-existing smoke probe, not a replacement for a test framework.
+import { observeGateUnhandledFailures } from "./test-gate-failure-events";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
+
+observeGateUnhandledFailures();
 
 const separator = process.argv.indexOf("--");
 if (separator !== 3 || separator + 1 >= process.argv.length)
@@ -17,8 +21,12 @@ try {
 	try {
 		const child = Bun.spawn(command, { env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
 		exitCode = await child.exited;
-		if (exitCode !== 0) status = "failed";
+		if (exitCode !== 0) {
+			reportGateFailure(new GateCommandError(`Smoke probe ${name} failed`, exitCode));
+			status = "failed";
+		}
 	} catch (error) {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 		status = "error";
 		console.error(`Smoke probe ${name} could not start: ${String(error)}`);
 	}
@@ -37,7 +45,15 @@ try {
 		status,
 		timingBasis: "atomic command wall time (seconds), includes its own setup/worker calls",
 	});
+} catch (error) {
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
+	throw error;
 } finally {
-	await endTestRun(run, exitCode);
+	try {
+		await endTestRun(run, exitCode);
+	} catch (error) {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
+		throw error;
+	}
 }
 process.exitCode = exitCode;

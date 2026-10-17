@@ -28,9 +28,12 @@ import {
 	type DaemonWireRequest,
 } from "../packages/coding-agent/src/launch/protocol";
 import { runRepoSmoke } from "./repo-ui-smoke";
+import { observeGateUnhandledFailures } from "./test-gate-failure-events";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
+observeGateUnhandledFailures();
 
 interface Outcome {
 	exitCode?: number;
@@ -196,18 +199,28 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 			env: tuiEnvironment(env),
 		},
 		(error, chunk) => {
-			if (error) return;
+			if (error) {
+				reportGateFailure(new GateCommandError(`PTY output failed: ${error.message}`, 1));
+				return;
+			}
 			handle.output += chunk;
 			handle.totalBytes += chunk.length;
 			if (debugDump) process.stdout.write(chunk);
 		},
 		(error, pid) => {
-			if (error) console.error(`ui-smoke: failed to start PTY child: ${error.message}`);
-			else console.log(`ui-smoke: child pid ${pid}`);
+			if (error) {
+				reportGateFailure(new GateCommandError(`PTY child could not start: ${error.message}`, 1));
+				console.error(`ui-smoke: failed to start PTY child: ${error.message}`);
+			} else console.log(`ui-smoke: child pid ${pid}`);
 		},
 	);
 	result.then(
 		outcome => {
+			if (outcome.exitCode !== 0 || outcome.cancelled || outcome.timedOut) {
+				reportGateFailure(
+					new GateCommandError(`PTY child failed: ${JSON.stringify(outcome)}`, outcome.exitCode || 1),
+				);
+			}
 			activeTuis.delete(handle);
 			exited?.(outcome as Outcome);
 		},
@@ -221,6 +234,7 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 }
 
 function fail(message: string, ...sessions: PtySession[]): never {
+	reportGateFailure(new GateCommandError(message, 1));
 	console.error(`ui-smoke: FAIL — ${message}`);
 	// The ConPTY/openpty handle dying with this process does not guarantee the
 	// child dies with it; kill the dev TUI so failed runs leave no orphan. The
@@ -254,6 +268,7 @@ const cancelFailureReport = postmortem.register("ui-smoke-report", async () => {
 	try {
 		await endTestRun(timingRun, exitCode);
 	} catch (error) {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 		// Match the reporting lifecycle: never retain running/0 metadata when
 		// finalization itself failed.
 		await fs.rm(path.join(timingRun.dir, "run.json"), { force: true });
@@ -359,8 +374,7 @@ main.session.write("\x04");
 {
 	const outcome = await Promise.race([main.exitPromise, sleep(20_000).then(() => undefined)]);
 	if (!outcome) {
-		main.session.kill();
-		fail("TUI did not exit within 20 s after Ctrl+D");
+		fail("TUI did not exit within 20 s after Ctrl+D", main.session);
 	}
 	if (outcome.exitCode !== 0) {
 		fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
@@ -955,8 +969,7 @@ try {
 	team.session.write("\x04");
 	const teamOutcome = await Promise.race([team.exitPromise, sleep(20_000).then(() => undefined)]);
 	if (!teamOutcome) {
-		team.session.kill();
-		fail("/team TUI did not exit within 20 s after Ctrl+D");
+		fail("/team TUI did not exit within 20 s after Ctrl+D", team.session);
 	}
 	if (teamOutcome.exitCode !== 0) {
 		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`);
@@ -1076,18 +1089,19 @@ try {
 	cancelTui.session.write("\x04");
 	const cancelOutcome = await Promise.race([cancelTui.exitPromise, sleep(20_000).then(() => undefined)]);
 	if (!cancelOutcome) {
-		cancelTui.session.kill();
-		fail("/team cancel TUI did not exit within 20 s after Ctrl+D");
+		fail("/team cancel TUI did not exit within 20 s after Ctrl+D", cancelTui.session);
 	}
 	if (cancelOutcome.exitCode !== 0) {
 		fail(`/team cancel TUI exited with code ${cancelOutcome.exitCode} (expected 0)`);
 	}
 	console.log("ui-smoke: /team cancellation case PASS — cancel reached the orchestrator before any later stage");
 } catch (error) {
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 	teamFailed = true;
 	throw error;
 } finally {
 	await cleanupSmokeFixture().catch(error => {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 		console.error(`ui-smoke: team fixture cleanup failed: ${String(error)}`);
 		if (!teamFailed) throw error;
 	});

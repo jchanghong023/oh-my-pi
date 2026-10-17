@@ -2072,3 +2072,67 @@ it("summarizes an expired gate without waiting forever for untracked blocked wor
 	expect(result.exitCode).toBe(124);
 	expect(lines.at(-1)).toContain("TIMEOUT total=");
 });
+
+// The native watchdog runs on another thread against the OS clock; fake timers
+// cannot terminate an independently spawned, synchronously blocked scheduler.
+it.each([
+	{
+		name: "first failure does not wait for report finalizers",
+		work: `gate.onFinalize(() => Promise.withResolvers().promise); throw new GateCommandError("original failure", 23);`,
+		exitCode: 23,
+		status: "FAIL",
+	},
+	{
+		name: "a blocked report finalizer cannot hold a timed-out gate open",
+		work: `gate.onFinalize(() => Promise.withResolvers().promise);`,
+		exitCode: 124,
+		status: "TIMEOUT",
+	},
+	{
+		name: "the total deadline terminates a synchronously blocked scheduler",
+		work: `Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);`,
+		exitCode: 124,
+		status: "TIMEOUT",
+	},
+	{
+		name: "compiler-only work cannot extend the total deadline",
+		work: `await gate.run({label:"fixture compiler", argv:[process.execPath,"-e","setInterval(() => {}, 1000)"], kind:"compile"});`,
+		exitCode: 124,
+		status: "TIMEOUT",
+	},
+	{
+		name: "an unhandled background failure terminates blocked gate work",
+		work: `setImmediate(() => { throw new Error("background failure"); }); await gate.charged(() => Promise.withResolvers().promise);`,
+		exitCode: 1,
+		status: "FAIL",
+	},
+])(
+	"$name",
+	async ({ work, exitCode, status }) => {
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const script = `import {runGate,GateCommandError} from ${JSON.stringify(runtime)};
+await runGate("fulltest", async gate => { ${work} }, {limitSeconds:0.4,exitOnFailure:true});
+process.exit(99);`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stdout: "pipe",
+			stderr: "pipe",
+			// Expected failures belong to this subprocess, not to the enclosing real gate.
+			env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
+		});
+		try {
+			const [code, stdout] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(code).toBe(exitCode);
+			const summary = stdout.match(/fulltest: (\w+) total=([\d.]+)s .* exit=(\d+)/);
+			expect(summary?.[1]).toBe(status);
+			expect(Number(summary?.[2])).toBeLessThan(2);
+			expect(Number(summary?.[3])).toBe(exitCode);
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	},
+	5000,
+);

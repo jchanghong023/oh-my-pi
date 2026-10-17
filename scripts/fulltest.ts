@@ -12,6 +12,7 @@ import { gateRepoRoot, gatePoolWidth, runFastcheck, runGateCommands } from "./fa
 import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { captureSourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
+import { exitGateProcess } from "./test-gate-watchdog";
 
 export interface FulltestOptions {
 	debug: boolean;
@@ -381,7 +382,7 @@ if (import.meta.main) {
 			finalizeTestRun(gate, run);
 			await runFulltest(gate, options);
 		},
-		{ limitSeconds: options?.limitSeconds, reportFailure: true },
+		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true },
 	);
-	process.exitCode = result.exitCode;
+	exitGateProcess(result.exitCode);
 }

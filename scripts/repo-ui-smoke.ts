@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { $ } from "bun";
 import type { PtySession } from "@oh-my-pi/pi-natives";
 import { RepoService } from "../packages/coding-agent/src/repo/service";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 
 interface Tui {
 	session: PtySession;
@@ -462,6 +463,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		if (!outcome || outcome.exitCode !== 0)
 			throw new Error(`repo TUI did not exit cleanly: ${JSON.stringify(outcome)}`);
 	} catch (error) {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 		failed = true;
 		throw error;
 	} finally {
