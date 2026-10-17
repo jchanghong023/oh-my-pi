@@ -2082,9 +2082,8 @@ export async function runRootCommand(
 				() => new ModelRegistry(authStorage, undefined, { settings: settingsInstance }),
 			),
 		);
-		// models.yml sections under fork-reserved provider ids (company,
-		// zcode-api) are ignored by design; say so instead of dropping them
-		// silently — the same channel the company config error uses.
+		// Report ignored models.yml sections under fork-reserved provider ids
+		// through the same channel as company configuration errors.
 		for (const warning of modelRegistry.getReservedProviderWarnings()) {
 			if (isInteractive) notifs.push({ kind: "warn", message: warning });
 			else process.stderr.write(`${warning}\n`);
@@ -2530,13 +2529,11 @@ export async function runRootCommand(
 				lane:
 					effectiveModel?.provider === COMPANY_PROVIDER_ID
 						? "company"
-						: effectiveModel?.provider === "zcode-api"
-							? "zcode-api"
-							: effectiveModel?.provider === "jchtools"
-								? "jchtools"
-								: effectiveModel
-									? "other"
-									: "none",
+						: effectiveModel?.provider === "jchtools"
+							? "jchtools"
+							: effectiveModel
+								? "other"
+								: "none",
 				company_default_model:
 					effectiveModel?.provider === COMPANY_PROVIDER_ID
 						? Object.values(COMPANY_OFFLINE_ROLE_DEFAULTS).find(

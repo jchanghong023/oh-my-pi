@@ -255,11 +255,40 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 				});
 			},
 		});
+		await fs.writeFile(
+			path.join(agentDir, "models.yml"),
+			Bun.YAML.stringify({
+				providers: {
+					smoke: {
+						api: "anthropic-messages",
+						baseUrl: `http://127.0.0.1:${server.port}`,
+						apiKey: "smoke-fixture-key",
+						auth: "apiKey",
+						compat: { requiresToolResultId: true },
+						models: [
+							{
+								id: "glm-5.2",
+								reasoning: true,
+								thinking: { mode: "anthropic-budget-effort", efforts: ["high", "max"] },
+								input: ["text"],
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+								contextWindow: 200000,
+								maxTokens: 32768,
+							},
+						],
+					},
+				},
+			}),
+			"utf8",
+		);
 		tui = startTui(
-			["--profile", "localci-ui-repo", "--model", "zcode-api/glm-5.2"],
+			["--profile", "localci-ui-repo", "--model", "smoke/glm-5.2"],
 			{
-				ZCODE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
 				PI_CONFIG_DIR: configName,
+				OMP_OFFLINE: "",
+				OMP_PROFILE: "localci-ui-repo",
+				PI_PROFILE: "",
+				PI_CODING_AGENT_DIR: "",
 			},
 			project,
 		);

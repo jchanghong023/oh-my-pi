@@ -2,7 +2,7 @@
  * Custom model/provider config file handle and validation.
  */
 
-import { type FluentType, OmpErrors, type } from "@oh-my-pi/omptype";
+import { type FluentType, type } from "@oh-my-pi/omptype";
 import type { Api, ModelSpec } from "@oh-my-pi/pi-ai/types";
 import { AXES } from "@oh-my-pi/pi-catalog/compat/axes";
 import { type ModelKind, servedKinds } from "@oh-my-pi/pi-catalog/types";
@@ -133,46 +133,21 @@ export function validateProviderConfiguration(
 	}
 }
 
-// Ignored policy never enters the checked config, but the registry still needs
-// to report that a reserved section contained fields it did not apply.
-const ignoredProviderPolicies = new WeakSet<object>();
-
-export function hasIgnoredModelProviderPolicy(providerConfig: object): boolean {
-	return ignoredProviderPolicies.has(providerConfig);
-}
-
 const getReservedModelsConfigSchema = once(() => {
 	const schema = getModelsConfigSchema();
 	return type("unknown").pipe(input => {
 		if (!isRecord(input) || !isRecord(input.providers)) return schema(input);
 		const originalProviders = input.providers;
 		const hasCompany = Object.hasOwn(originalProviders, "company");
-		const hasZcode = Object.hasOwn(originalProviders, "zcode-api");
 		const hasJchTools = Object.hasOwn(originalProviders, "jchtools");
 		const hasCodeAgent = Object.hasOwn(originalProviders, "codeagent");
-		if (!hasCompany && !hasZcode && !hasJchTools && !hasCodeAgent) return schema(input);
+		if (!hasCompany && !hasJchTools && !hasCodeAgent) return schema(input);
 
 		const providers = { ...originalProviders };
 		if (hasCompany) providers.company = {};
 		if (hasJchTools) providers.jchtools = {};
 		if (hasCodeAgent) providers.codeagent = {};
-		const zcode = originalProviders["zcode-api"];
-		const ignoredZcodePolicy = hasZcode && (!isRecord(zcode) || Object.keys(zcode).some(key => key !== "apiKey"));
-		if (hasZcode) {
-			// The credential is real input: keep it in the original provider schema
-			// so invalid types and empty keys still fail instead of becoming keyless.
-			providers["zcode-api"] = isRecord(zcode)
-				? Object.hasOwn(zcode, "apiKey")
-					? { apiKey: zcode.apiKey }
-					: {}
-				: zcode;
-		}
-		const checked = schema({ ...input, providers });
-		if (!(checked instanceof OmpErrors) && ignoredZcodePolicy) {
-			const providerConfig = checked.providers?.["zcode-api"];
-			if (providerConfig) ignoredProviderPolicies.add(providerConfig);
-		}
-		return checked;
+		return schema({ ...input, providers });
 	});
 });
 
@@ -245,7 +220,6 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 	for (const providerName in providers) {
 		if (
 			providerName === "company" ||
-			providerName === "zcode-api" ||
 			providerName === "jchtools" ||
 			providerName === "codeagent"
 		)

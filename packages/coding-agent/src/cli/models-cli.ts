@@ -390,17 +390,14 @@ function modelsDiagnosticSummary(modelRegistry: ModelRegistry, kind: ModelKind |
 	try {
 		const models = modelRegistry.getAll(kind);
 		let companyModelCount = 0;
-		let zcodeModelCount = 0;
 		for (const model of models) {
 			if (model.provider === "company") companyModelCount++;
-			if (model.provider === "zcode-api") zcodeModelCount++;
 		}
 		return {
 			catalog_kind: kind,
 			model_count: models.length,
 			available_model_count: modelRegistry.getAvailable(kind).length,
 			company_model_count: companyModelCount,
-			zcode_model_count: zcodeModelCount,
 		};
 	} catch (error) {
 		// A diagnostic-only read must not change the command's result.

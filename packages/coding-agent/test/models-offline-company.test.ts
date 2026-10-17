@@ -6,10 +6,9 @@ import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 /**
  * `OMP_OFFLINE=1 omp models` in the company environment must list the internal
- * company lane and hide the local zcode-api lane; an OMP_OFFLINE=1 run without
- * a usable company config (home usage) and a plain `omp models` keep zcode-api
- * visible. Covered as subprocesses because the company lane snapshot is
- * process-global and read once, so one process cannot serve both fixtures.
+ * company lane and report unavailable company configuration. Covered as
+ * subprocesses because the company lane snapshot is process-global and read
+ * once, so one process cannot serve both fixtures.
  */
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
 const COMPANY_SETTINGS = JSON.stringify({
@@ -149,25 +148,23 @@ async function runModels(
 }
 
 describe("OMP_OFFLINE=1 omp models company environment", () => {
-	it("lists the company lane and hides zcode-api", async () => {
+	it("lists the company lane with offline context limits", async () => {
 		const { providers, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--json"], {
 			companyConfig: true,
 			offline: true,
 		});
 
 		expect(providers.has("company")).toBe(true);
-		expect(providers.has("zcode-api")).toBe(false);
 		expect(companyContextWindows).toHaveLength(6);
 		expect(companyContextWindows.every(window => window === 200_000)).toBe(true);
 		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
 
-	it("hides zcode-api without a company config and reports the reason", async () => {
+	it("reports the reason when company configuration is missing", async () => {
 		const { providers, stderr } = await runModels(["--json"], { companyConfig: false, offline: true });
 
 		expect(providers.has("company")).toBe(false);
-		expect(providers.has("zcode-api")).toBe(false);
 		expect(stderr).toContain("Company provider unavailable");
 	}, 30_000);
 
@@ -175,7 +172,6 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 		const { providers } = await runModels(["--json"], { companyConfig: true });
 
 		expect(providers.has("company")).toBe(false);
-		expect(providers.has("zcode-api")).toBe(true);
 	}, 30_000);
 
 	for (const action of ["ls", "list", "refresh", "company"]) {
@@ -185,27 +181,25 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 				offline: true,
 			});
 			expect(providers.has("company")).toBe(true);
-			expect(providers.has("zcode-api")).toBe(false);
 			expect(companyContextWindows).toHaveLength(6);
 		}, 30_000);
 	}
 
-	it("filters explicit find selectors without fetching a hidden or missing provider", async () => {
-		const { providers } = await runModels(["find", "zcode-api/*", "--json"], {
+	it("filters explicit find selectors without fetching a missing provider", async () => {
+		const { providers } = await runModels(["find", "missing-provider/*", "--json"], {
 			companyConfig: true,
 			offline: true,
 		});
 		expect([...providers]).toEqual([]);
 	}, 30_000);
 
-	it("reports malformed company configuration without falling back to zcode-api", async () => {
+	it("reports malformed company configuration", async () => {
 		const { providers, stderr } = await runModels(["refresh", "--json"], {
 			companyConfig: true,
 			malformedCompanyConfig: true,
 			offline: true,
 		});
 		expect(providers.has("company")).toBe(false);
-		expect(providers.has("zcode-api")).toBe(false);
 		expect(stderr).toContain("not valid JSON");
 	}, 30_000);
 
@@ -216,15 +210,12 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 			modelsConfig: {
 				providers: {
 					company: { models: false, apiKey: "ignored-company-key" },
-					"zcode-api": { apiKey: "proxy-fixture-key", discovery: false, models: false },
 				},
 			},
 		});
 		expect(providers.has("company")).toBe(true);
 		expect(stderr).toContain("whole section is ignored");
-		expect(stderr).toContain("only apiKey");
 		expect(stderr).not.toContain("ignored-company-key");
-		expect(stderr).not.toContain("proxy-fixture-key");
 	}, 30_000);
 
 	for (const extensionCache of ["cold", "warm"] as const) {

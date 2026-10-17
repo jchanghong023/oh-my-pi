@@ -99,7 +99,7 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 				setCompanyOfflineEnabled(offline);
 				if (offline) {
 					// Company environment: flip the lane before the registry captures company
-					// state, so `company/<model>` selectors resolve (and zcode-api is hidden).
+					// state, so `company/<model>` selectors resolve.
 					setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 					const companyError = getCompanyConfigError();
 					if (companyError) {
@@ -168,17 +168,14 @@ function offlineBenchModelSummary(registry: ModelRegistry): Record<string, unkno
 	try {
 		const models = registry.getAll();
 		let companyModelCount = 0;
-		let zcodeModelCount = 0;
 		for (const model of models) {
 			if (model.provider === "company") companyModelCount++;
-			else if (model.provider === "zcode-api") zcodeModelCount++;
 		}
 		return {
 			model_summary_available: true,
 			model_count: models.length,
 			available_model_count: registry.getAvailable().length,
 			company_model_count: companyModelCount,
-			zcode_model_count: zcodeModelCount,
 		};
 	} catch {
 		// A diagnostic snapshot must not change the runtime or refresh outcome.

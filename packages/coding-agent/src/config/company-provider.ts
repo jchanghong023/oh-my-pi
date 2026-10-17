@@ -232,7 +232,6 @@ export function setCompanyOfflineEnabled(enabled: boolean): void {
 		stage: "policy",
 		result: "completed",
 		company_enabled: enabled,
-		zcode_hidden: enabled,
 		snapshot_read_allowed: enabled,
 		operation_id: operationId,
 	});

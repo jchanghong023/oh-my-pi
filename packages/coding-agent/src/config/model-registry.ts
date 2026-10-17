@@ -136,7 +136,6 @@ import {
 	STARTUP_MODEL_CACHE_PROVIDER_IDS,
 	withModelDiscoveryTimeout,
 } from "./model-provider-discovery";
-import { getZcodeApiModels, ZCODE_API_PROVIDER_ID } from "./zcode-api-models";
 
 export { mergeDiscoveredModel } from "./model-patch";
 export {
@@ -148,7 +147,6 @@ export {
 
 import {
 	getUnknownCompatKeys,
-	hasIgnoredModelProviderPolicy,
 	ModelsConfigFile,
 	type ProviderValidationModel,
 	validateProviderConfiguration,
@@ -423,7 +421,7 @@ export class ModelRegistry {
 	#jchToolsAutomaticDiscoveryAllowed = true;
 	#jchToolsDiscoveryGeneration = 0;
 	#diagnosticOperationId = logger.getLogContext().operation_id ?? `model-registry-${randomUUID()}`;
-	#syntheticLaneSummaries: Record<string, string | undefined> = {};
+	#companyLaneModelCount?: number;
 
 	#captureCatalogMetrics(models: readonly Model<Api>[], replace: boolean): void {
 		if (replace) {
@@ -1252,7 +1250,6 @@ export class ModelRegistry {
 			local_config_ignored: this.#ignoreLocalModelConfig,
 			company_enabled: !this.#ignoreLocalModelConfig && isCompanyLaneActive(),
 			company_available: !this.#ignoreLocalModelConfig && isCompanyLaneActive() && !companyError,
-			zcode_hidden: this.#ignoreLocalModelConfig || isCompanyLaneActive(),
 			restart_required: companyError !== undefined,
 		});
 	}
@@ -1276,12 +1273,7 @@ export class ModelRegistry {
 		const providers = new Set<string>(getBundledProviders());
 		if (!this.#ignoreLocalModelConfig) {
 			if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
-			// The local proxy lane disappears from every offline process, with or
-			// without usable company config.
-			else {
-				providers.add(ZCODE_API_PROVIDER_ID);
-				providers.add(CODEAGENT_PROVIDER_ID);
-			}
+			else providers.add(CODEAGENT_PROVIDER_ID);
 		}
 		if (this.#jchToolsModels.length > 0 && this.#canDiscoverJchTools()) providers.add(JCHTOOLS_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
@@ -1402,31 +1394,24 @@ export class ModelRegistry {
 	}
 
 	/** Startup-visible notices for models.yml sections this fork ignores because
-	 * the provider id is reserved (company, zcode-api); empty unless models.yml
-	 * defines such sections. */
+	 * the provider id is reserved (company, codeagent, jchtools); empty unless
+	 * models.yml defines such sections. */
 	getReservedProviderWarnings(): string[] {
 		return [...this.#reservedProviderWarnings.values()];
 	}
 
 	/**
-	 * Runtime-synthesized provider rows (company, zcode-api) must never carry
-	 * user `models:` overlays or provider model overrides: strip any rows the
-	 * composition passes touched and re-push the pristine memoized rows. In
-	 * offline processes the zcode-api rows stay stripped (fork contract).
+	 * Runtime-synthesized company and CodeAgent rows must never carry user
+	 * `models:` overlays or provider model overrides: strip any rows the
+	 * composition passes touched and re-push the pristine memoized rows.
 	 */
 	#withRuntimeSyntheticModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
 		if (this.#ignoreLocalModelConfig) return models;
 		const stripped = models.filter(
-			model =>
-				model.provider !== COMPANY_PROVIDER_ID &&
-				model.provider !== ZCODE_API_PROVIDER_ID &&
-				model.provider !== CODEAGENT_PROVIDER_ID,
+			model => model.provider !== COMPANY_PROVIDER_ID && model.provider !== CODEAGENT_PROVIDER_ID,
 		);
 		if (isCompanyLaneActive() && (!providerFilter || providerFilter.has(COMPANY_PROVIDER_ID))) {
 			stripped.push(...getCompanyChatModels());
-		}
-		if (!isCompanyLaneActive() && (!providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID))) {
-			stripped.push(...getZcodeApiModels());
 		}
 		if (
 			process.platform === "win32" &&
@@ -1437,18 +1422,13 @@ export class ModelRegistry {
 			stripped.push(...getCodeAgentModels());
 		}
 		const companyIncluded = !providerFilter || providerFilter.has(COMPANY_PROVIDER_ID);
-		const zcodeIncluded = !providerFilter || providerFilter.has(ZCODE_API_PROVIDER_ID);
-		if (companyIncluded || zcodeIncluded) {
+		if (companyIncluded) {
 			let companyCount = 0;
-			let zcodeCount = 0;
 			for (const model of stripped) {
 				if (model.provider === COMPANY_PROVIDER_ID) companyCount++;
-				else if (model.provider === ZCODE_API_PROVIDER_ID) zcodeCount++;
 			}
-			const scope = `${companyIncluded}:${zcodeIncluded}`;
-			const summary = `${companyCount}:${zcodeCount}`;
-			if (summary !== this.#syntheticLaneSummaries[scope]) {
-				this.#syntheticLaneSummaries[scope] = summary;
+			if (companyCount !== this.#companyLaneModelCount) {
+				this.#companyLaneModelCount = companyCount;
 				logger.info("Runtime provider model rows selected", {
 					component: "model-registry",
 					event: "runtime_lane_rows_selected",
@@ -1457,9 +1437,7 @@ export class ModelRegistry {
 					operation_id: logger.getLogContext().operation_id ?? this.#diagnosticOperationId,
 					registry_id: this.#diagnosticOperationId,
 					company_included: companyIncluded,
-					zcode_included: zcodeIncluded,
 					company_model_count: companyCount,
-					zcode_model_count: zcodeCount,
 				});
 			}
 		}
@@ -1999,10 +1977,6 @@ export class ModelRegistry {
 			this.#implicitLocalProviders.add("lm-studio");
 			if (Bun.env.LM_STUDIO_BASE_URL) this.#implicitProviderEndpointEnv.set("lm-studio", "LM_STUDIO_BASE_URL");
 		}
-		// Built-in `zcode-api` (local ZCode Proxy) is credential-free by design:
-		// request auth resolves to the no-auth sentinel and the model rows are
-		// static, so it needs neither discovery nor a stored key.
-		if (!this.#ignoreLocalModelConfig) this.#keylessProviders.add(ZCODE_API_PROVIDER_ID);
 		if (!this.#ignoreLocalModelConfig && !isCompanyLaneActive()) this.#keylessProviders.add(CODEAGENT_PROVIDER_ID);
 	}
 
@@ -2085,21 +2059,6 @@ export class ModelRegistry {
 					providerName,
 					"this provider id belongs to the offline company lane; the whole section is ignored",
 				);
-				continue;
-			}
-			if (providerName === ZCODE_API_PROVIDER_ID) {
-				if (hasIgnoredModelProviderPolicy(providerConfig)) {
-					this.#warnReservedProviderConfig(
-						providerName,
-						"only apiKey (and ZCODE_API_BASE_URL) is honored; all other fields are ignored",
-					);
-				}
-				if (providerConfig.apiKey) {
-					this.#installProviderApiKey(providerName, providerConfig.apiKey);
-					if (isCommandConfigValue(providerConfig.apiKey)) {
-						this.#commandConfigsByProvider.set(providerName, new Set([providerConfig.apiKey]));
-					}
-				}
 				continue;
 			}
 			const commandConfigs = new Set<string>();
@@ -3286,7 +3245,6 @@ export class ModelRegistry {
 		for (const [providerName, providerConfig] of Object.entries(config.providers ?? {})) {
 			if (
 				providerName === COMPANY_PROVIDER_ID ||
-				providerName === ZCODE_API_PROVIDER_ID ||
 				providerName === CODEAGENT_PROVIDER_ID ||
 				providerName === JCHTOOLS_PROVIDER_ID
 			)
