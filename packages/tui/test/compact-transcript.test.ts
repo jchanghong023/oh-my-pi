@@ -144,26 +144,6 @@ describe("compact transcript activity", () => {
 		expect(native).not.toContain("PRIVATE_READ_BODY");
 	});
 
-	it("keeps source and destination names in compact edit rename summaries", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent(
-			"edit",
-			{ path: "src/old.ts", rename: "other/new.ts" },
-			{},
-			undefined,
-			{
-				requestRender() {},
-				requestComponentRender() {},
-				resetDisplay() {},
-			},
-		);
-		components.push(component);
-		component.updateResult({ content: [{ type: "text", text: "PRIVATE_EDIT_BODY" }] });
-		expect(Bun.stripANSI(component.render(70)[0])).toContain("old.ts → new.ts");
-		expect(JSON.stringify(component.describe(toolCx))).toContain("old.ts → new.ts");
-		expect(component.render(70)[0]).not.toContain("PRIVATE_EDIT_BODY");
-	});
-
 	it("P2-22 retains conflict read warnings without counting them as folded successes on both render paths", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();
@@ -276,7 +256,7 @@ describe("compact transcript activity", () => {
 				);
 			}
 			const addSuccess = (path: string) => {
-				const component = new ToolExecutionComponent("write", { path }, {}, undefined, {
+				const component = new ToolExecutionComponent("read", { path }, {}, undefined, {
 					requestRender() {},
 					requestComponentRender() {},
 					resetDisplay() {},
@@ -403,13 +383,7 @@ describe("compact transcript activity", () => {
 			if (hasHeader) composer.setHeaderExtras([new Text("RETIRED_COMPOSER_HEADER", 0, 0)], []);
 			const transcript = new TranscriptContainer();
 			const addTool = (path: string, isError = false) => {
-				const component = new ToolExecutionComponent(
-					isError ? "read" : "write",
-					{ path },
-					{},
-					undefined,
-					composer.ui,
-				);
+				const component = new ToolExecutionComponent("read", { path }, {}, undefined, composer.ui);
 				components.push(component);
 				component.updateResult({
 					content: [{ type: "text", text: isError ? "Permission denied\nPRIVATE_FAILURE" : "PRIVATE_SUCCESS" }],
@@ -479,7 +453,7 @@ describe("compact transcript activity", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();
 		const add = (path: string, isError = false) => {
-			const component = new ToolExecutionComponent("write", { path }, {}, undefined, {
+			const component = new ToolExecutionComponent("read", { path }, {}, undefined, {
 				requestRender() {},
 				requestComponentRender() {},
 				resetDisplay() {},
@@ -543,7 +517,7 @@ describe("compact transcript activity", () => {
 		});
 		transcript.addChild(skipped);
 		for (let index = 0; index < 5; index++) {
-			const component = new ToolExecutionComponent("write", { path: `written-${index}.ts` }, {}, undefined, {
+			const component = new ToolExecutionComponent("read", { path: `written-${index}.ts` }, {}, undefined, {
 				requestRender() {},
 				requestComponentRender() {},
 				resetDisplay() {},
@@ -754,66 +728,6 @@ describe("compact transcript activity", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		expect(component.render(80)).toHaveLength(1);
 		expect(JSON.stringify(component.describe(toolCx))).not.toContain("PRIVATE_REFERENCE.ts");
-	});
-
-	it("keeps file writes on one line despite expansion and restores detailed previews", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent(
-			"write",
-			{ path: "/tmp/preview.ts", content: Array.from({ length: 40 }, (_, i) => `WRITE_LINE_${i + 1};`).join("\n") },
-			{},
-			undefined,
-			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
-		);
-		components.push(component);
-		expect(component.render(80)).toHaveLength(1);
-		expect(Bun.stripANSI(component.render(80)[0])).toContain("preview.ts");
-		expect(component.render(80).join("\n")).not.toContain("WRITE_LINE_");
-		component.setExpanded(true);
-		expect(component.render(80)).toHaveLength(1);
-		expect(component.render(80).join("\n")).not.toContain("WRITE_LINE_");
-		expect(JSON.stringify(component.describe(toolCx))).not.toContain("WRITE_LINE_");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("WRITE_LINE_1;");
-		expect(JSON.stringify(component.describe(toolCx))).toContain("WRITE_LINE_40;");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		component.setToolActivityVisible(false);
-		expect(component.render(80)).toEqual([]);
-		expect(component.describe(toolCx).p?.hidden).toBe(true);
-	});
-
-	it("hides completed edit diffs on compact ANSI and native surfaces while restoring detailed content", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent("edit", { path: "/tmp/preview.ts" }, {}, undefined, {
-			requestRender() {},
-			requestComponentRender() {},
-			resetDisplay() {},
-		});
-		components.push(component);
-		component.updateResult({
-			content: [{ type: "text", text: "Edited /tmp/preview.ts" }],
-			details: { diff: "-1|const BEFORE_EDIT = 1;\n+1|const AFTER_EDIT = 2;", firstChangedLine: 1 },
-		});
-		for (const compactToolActivity of [true, false, true]) {
-			setChatTranscriptDisplayPreferences({ compactToolActivity });
-			component.invalidate();
-			const rows = component.render(80);
-			const rendered = Bun.stripANSI(rows.join("\n"));
-			const described = JSON.stringify(component.describe(toolCx));
-			if (compactToolActivity) {
-				expect(rows).toHaveLength(1);
-				expect(rendered).toContain("preview.ts");
-				expect(rendered).not.toContain("BEFORE_EDIT");
-				expect(rendered).not.toContain("AFTER_EDIT");
-				expect(described).not.toContain("BEFORE_EDIT");
-				expect(described).not.toContain("AFTER_EDIT");
-			} else {
-				expect(rendered).toContain("BEFORE_EDIT");
-				expect(rendered).toContain("AFTER_EDIT");
-				expect(described).toContain("BEFORE_EDIT");
-				expect(described).toContain("AFTER_EDIT");
-			}
-		}
 	});
 
 	it.each([undefined, "Observe background work"])(

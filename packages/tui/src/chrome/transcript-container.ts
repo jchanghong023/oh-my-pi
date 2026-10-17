@@ -7,7 +7,7 @@ import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isUsageRowBlock } from "../overlays/usage-row";
-import { isToolActivityComponent } from "./tool-activity";
+import { isCompactToolActivityComponent, isToolActivityComponent } from "./tool-activity";
 
 /** Shared animation time supplied by the constrained transcript root. */
 export interface AnimationFrame {
@@ -215,7 +215,9 @@ export function trimBlankEdges(rows: readonly string[]): readonly string[] {
 /** Consecutive tool blocks share a tight stack only in compact display mode. */
 function blockGap(previous: Component | undefined, next: Component | undefined): number {
 	if (!previous || !next) return 0;
-	return displayPreferences.compactToolActivity && isToolActivityComponent(previous) && isToolActivityComponent(next)
+	return displayPreferences.compactToolActivity &&
+		isCompactToolActivityComponent(previous) &&
+		isCompactToolActivityComponent(next)
 		? 0
 		: 1;
 }
@@ -1530,7 +1532,7 @@ export class TranscriptContainer extends Container {
 			const summary = Math.max(0, completed - remaining);
 			for (let index = end - 1; index >= start; index--) {
 				const component = this.children[index]!;
-				if (!isToolActivityComponent(component) || !component.getCompactToolCount) continue;
+				if (!isCompactToolActivityComponent(component) || !component.getCompactToolCount) continue;
 				const keep = Math.min(remaining, component.getCompactToolCount());
 				const changed = component.setCompactToolLimit?.(
 					keep,
@@ -1563,7 +1565,7 @@ export class TranscriptContainer extends Container {
 		};
 		for (let index = startIndex; index < this.children.length; index++) {
 			const component = this.children[index]!;
-			if (isToolActivityComponent(component) && component.getCompactToolCount) {
+			if (isCompactToolActivityComponent(component) && component.getCompactToolCount) {
 				if (start < 0) start = index;
 				const count = component.getCompactToolCount();
 				if (firstSuccess < 0 && count > 0) firstSuccess = index;

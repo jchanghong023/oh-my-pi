@@ -5,7 +5,7 @@
 ### Added
 
 - Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
-- Compact transcript activity keeps visible tool invocations on one line, including writes, edits and failures, and keeps hidden thinking and compact tool output out of expandable native content.
+- Compact transcript activity keeps non-file tool invocations on one line, including failures, and keeps hidden thinking and compact tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Compact mode preserves upstream file-write previews and edit diffs instead of reducing file changes to single-line or counted summaries.
 - Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
 - Preserve compact read warnings, background-task identities and folded-success summaries without losing failures from terminal history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.

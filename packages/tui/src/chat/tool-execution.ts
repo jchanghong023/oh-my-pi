@@ -54,6 +54,7 @@ import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
+import { splitUrlScheme } from "../tools/url-scheme-host";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
@@ -857,12 +858,23 @@ export class ToolExecutionComponent extends Container {
 		return !this.#isPartial;
 	}
 
+	isCompactToolActivity(): boolean {
+		if (isEditLikeToolName(this.#toolName)) return false;
+		if (this.#toolName !== "write" || !isRecord(this.#args)) return true;
+		const path = this.#args.file_path ?? this.#args.path;
+		if (typeof path !== "string" || !path) return true;
+		const scheme = splitUrlScheme(path)?.scheme;
+		return scheme === "agent" || scheme === "proc" || scheme === "cfg" || scheme === "xd";
+	}
+
 	getCompactToolCount(): number {
-		return Number(this.#nativeStatus() === "done" && this.#compactOutcome() !== "待确认");
+		return Number(
+			this.isCompactToolActivity() && this.#nativeStatus() === "done" && this.#compactOutcome() !== "待确认",
+		);
 	}
 
 	getCompactToolFailureCount(): number {
-		return Number(this.#nativeStatus() === "error");
+		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
 	}
 
 	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
@@ -887,7 +899,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity;
+		return displayPreferences.compactToolActivity && this.isCompactToolActivity();
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -1114,8 +1126,6 @@ export class ToolExecutionComponent extends Container {
 			} else if (["read", "write", "glob"].includes(this.#toolName)) {
 				const path = this.#args.path ?? this.#args.file_path;
 				if (typeof path === "string" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) detail = compactToolPath(path);
-			} else if (this.#toolName === "edit") {
-				detail = detail.split(" → ").map(compactToolPath).join(" → ");
 			} else if (this.#toolName === "bash" && typeof this.#args.command === "string") {
 				// Without a supplied intent, show the executable rather than filling the row with script source.
 				detail = this.#args.command.trim().match(/^(?:"[^"]+"|'[^']+'|\S+)/)?.[0] ?? detail;

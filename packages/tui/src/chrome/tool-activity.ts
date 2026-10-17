@@ -3,6 +3,8 @@ import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
+	/** Whether this activity uses compact rows rather than the upstream detail renderer. */
+	isCompactToolActivity?(): boolean;
 	/** Successful calls eligible for compact transcript folding. */
 	getCompactToolCount?(): number;
 	getCompactToolFailureCount?(): number;
@@ -12,6 +14,10 @@ export interface ToolActivityComponent {
 
 export function isToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
 	return typeof (component as Partial<ToolActivityComponent>).setToolActivityVisible === "function";
+}
+
+export function isCompactToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
+	return isToolActivityComponent(component) && component.isCompactToolActivity?.() !== false;
 }
 
 export function compactToolSummary(count: number, failures = 0): string {
