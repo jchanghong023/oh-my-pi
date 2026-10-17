@@ -159,7 +159,9 @@ test.skipIf(process.platform === "win32")(
 			concurrent.run("PRAGMA busy_timeout = 5000");
 			concurrent.run("PRAGMA journal_mode=WAL");
 			const insert = concurrent.prepare("INSERT OR REPLACE INTO extension_parse_cache VALUES (?, 'module', ?, 0)");
-			for (let i = 0; i < 500; i++) insert.run(`live-${i}`, "y".repeat(4096));
+			concurrent.transaction(() => {
+				for (let i = 0; i < 500; i++) insert.run(`live-${i}`, "y".repeat(4096));
+			})();
 
 			// The probe opens the cache, sees the oversized main file, and evicts.
 			// Removing only the main db would leave the held `-wal`/`-shm`, and the
