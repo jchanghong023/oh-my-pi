@@ -190,8 +190,8 @@ export class ThinkingPreviewComponent implements Component {
 			return this.#painted;
 		}
 		if (this.#text.length === 0) return EMPTY_ROWS;
-		const prefixWidth = visibleWidth("│ ");
-		const prefix = cols > prefixWidth ? "│ " : "";
+		const prefixWidth = visibleWidth("  │ ");
+		const prefix = cols > prefixWidth ? "  │ " : "";
 		const contentWidth = cols - (prefix ? prefixWidth : 0);
 		const maxRows = this.#liveMaxRows();
 		if (cols !== this.#width || widthEpoch !== this.#widthEpoch || maxRows !== this.#maxRows) {
@@ -234,7 +234,7 @@ export class ThinkingPreviewComponent implements Component {
 			const painted = this.#rows.map(
 				(row, index) => guide + theme.fg(index === latest ? "text" : "thinkingText", row),
 			);
-			if (prefix && painted.length > 0) painted.unshift(theme.fg("accent", truncateToWidth("思考", cols, "")));
+			if (prefix && painted.length > 0) painted.unshift(theme.fg("accent", truncateToWidth("  思考", cols, "")));
 			this.#painted = painted;
 			this.#themeEpoch = themeEpoch;
 			this.#native = undefined;
