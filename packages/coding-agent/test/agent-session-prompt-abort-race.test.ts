@@ -1,9 +1,8 @@
 /**
- * abort() can land while prompt() is still normalizing images or building the
- * vision-model description for a text-only model — both run before
- * PromptOptions.onPromptAdmitted fires. The prompt must be dropped (handed to
- * setPromptDropped) instead of starting a turn or entering a queue afterward,
- * and abort() must cancel an in-flight vision description rather than wait on it.
+ * abort() can land while prompt() is awaiting a custom command, normalizing
+ * images, or building a vision-model description before model admission.
+ * Interrupted image prompts must be dropped instead of starting or queueing a
+ * turn, and custom commands must cancel nested work and discard late prompts.
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
@@ -12,6 +11,7 @@ import { createMockModel, type MockResponse } from "@oh-my-pi/pi-ai/providers/mo
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { CustomCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -37,7 +37,11 @@ describe("AgentSession prompt admission racing abort", () => {
 		authStorage?.close();
 	});
 
-	async function createSession(responses: Array<() => MockResponse | Promise<MockResponse>>, textOnly = false) {
+	async function createSession(
+		responses: Array<() => MockResponse | Promise<MockResponse>>,
+		textOnly = false,
+		customCommands: CustomCommand[] = [],
+	) {
 		authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "test-key");
 		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
@@ -55,6 +59,12 @@ describe("AgentSession prompt admission racing abort", () => {
 			sessionManager: SessionManager.inMemory(),
 			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
 			modelRegistry,
+			customCommands: customCommands.map(command => ({
+				path: "test-command.ts",
+				resolvedPath: "test-command.ts",
+				source: "project",
+				command,
+			})),
 		});
 		const dropped: string[] = [];
 		session.setPromptDropped(prompt => dropped.push(prompt.text));
@@ -213,5 +223,101 @@ describe("AgentSession prompt admission racing abort", () => {
 		expect(await withTimeout(promptPromise, 2_000, "Abort did not release the vision description")).toBe(true);
 		expect(dropped).toEqual(["describe this"]);
 		expect(streamCalls).toEqual([]);
+	});
+
+	it("cancels waiting custom-command work instead of letting it publish or call the model", async () => {
+		const started = Promise.withResolvers<AbortSignal>();
+		let published = false;
+		let stopped = false;
+		let modelCalls = 0;
+		const { session } = await createSession(
+			[
+				() => {
+					modelCalls++;
+					return { content: ["should not run"] };
+				},
+			],
+			false,
+			[
+				{
+					name: "waiting-command",
+					description: "Wait for cancellable nested work",
+					async execute(_args, ctx) {
+						const signal = ctx.signal;
+						if (!signal) throw new Error("Missing command cancellation signal");
+						try {
+							await new Promise<void>((_resolve, reject) => {
+								signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+								started.resolve(signal);
+							});
+							published = true;
+							return "should not reach the model";
+						} finally {
+							stopped = true;
+						}
+					},
+				},
+			],
+		);
+
+		const pending = session.prompt("/waiting-command");
+		const signal = await withTimeout(started.promise, 2_000, "Custom command never started");
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+
+		expect(await withTimeout(pending, 2_000, "Abort did not release custom-command work")).toBe(false);
+		expect(signal.aborted).toBe(true);
+		expect(signal.reason).toBeInstanceOf(DOMException);
+		expect(signal.reason.name).toBe("AbortError");
+		expect(stopped).toBe(true);
+		expect(published).toBe(false);
+		expect(modelCalls).toBe(0);
+	});
+
+	it("discards a custom command's late prompt after abort and gives its next invocation a fresh signal", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const signals: AbortSignal[] = [];
+		let modelCalls = 0;
+		const { session } = await createSession(
+			[
+				() => {
+					modelCalls++;
+					return { content: ["next invocation completed"] };
+				},
+			],
+			false,
+			[
+				{
+					name: "late-command",
+					description: "Return a prompt after delayed cleanup",
+					async execute(_args, ctx) {
+						if (!ctx.signal) throw new Error("Missing command cancellation signal");
+						signals.push(ctx.signal);
+						if (signals.length === 1) {
+							started.resolve();
+							// Non-cooperative work can finish late, but must not start a new model turn.
+							await release.promise;
+							return "aborted command's stale prompt";
+						}
+						return "next invocation's prompt";
+					},
+				},
+			],
+		);
+
+		const pending = session.prompt("/late-command");
+		await withTimeout(started.promise, 2_000, "Custom command never started");
+		await session.abort({ reason: USER_INTERRUPT_LABEL });
+		release.resolve();
+
+		expect(await withTimeout(pending, 2_000, "Late custom command did not finish")).toBe(false);
+		expect(signals[0].aborted).toBe(true);
+		expect(modelCalls).toBe(0);
+
+		expect(await session.prompt("/late-command")).toBe(true);
+		expect(signals).toHaveLength(2);
+		expect(signals[1]).not.toBe(signals[0]);
+		expect(signals[1].aborted).toBe(false);
+		expect(modelCalls).toBe(1);
 	});
 });

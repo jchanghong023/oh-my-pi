@@ -1067,6 +1067,8 @@ export class AgentSession implements SettingsScope {
 	#usagePreflightAbortControllers = new Set<AbortController>();
 	/** In-flight vision descriptions that gate prompt admission; abort() cancels them. */
 	#imageDescriptionAbortControllers = new Set<AbortController>();
+	/** Awaited custom commands own nested work outside the primary agent loop. */
+	#customCommandAbortControllers = new Set<AbortController>();
 	#queuedMessageDrainBlocked = false;
 	#modeExitDrainSuppressionDepth = 0;
 	#usagePreflightReadyForNextModelCall = false;
@@ -5747,6 +5749,7 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#notifySessionChangeCallbacks(): void {
+		this.#abortCustomCommands("Session changed");
 		for (const callback of Array.from(this.#sessionChangeCallbacks)) {
 			try {
 				callback();
@@ -5823,6 +5826,7 @@ export class AgentSession implements SettingsScope {
 	 */
 	beginDispose(): void {
 		this.#isDisposed = true;
+		this.#abortCustomCommands("Session disposed");
 		for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
@@ -7773,15 +7777,21 @@ export class AgentSession implements SettingsScope {
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {
 			if (options?.runCommands !== false) {
+				const commandGeneration = this.#promptGeneration;
 				const handled = await this.#tryExecuteExtensionCommand(text, options?.onPromptAdmitted);
 				if (handled) {
 					return false;
 				}
 
 				// Try custom commands (TypeScript slash commands)
-				const customResult = await this.#tryExecuteCustomCommand(text);
+				const customResult = await this.#tryExecuteCustomCommand(text, commandGeneration);
 				if (customResult !== null) {
-					if (customResult === "") {
+					if (
+						customResult === "" ||
+						this.#isDisposed ||
+						this.#abortInProgress ||
+						commandGeneration !== this.#promptGeneration
+					) {
 						return false;
 					}
 					text = customResult;
@@ -8864,11 +8874,17 @@ export class AgentSession implements SettingsScope {
 		return this.#fallbackExtensionTimers;
 	}
 
+	#abortCustomCommands(reason = "Custom command cancelled"): void {
+		for (const controller of this.#customCommandAbortControllers) {
+			controller.abort(new DOMException(reason, "AbortError"));
+		}
+	}
+
 	/**
 	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
 	 * If the command returns void, returns empty string to indicate it was handled.
 	 */
-	async #tryExecuteCustomCommand(text: string): Promise<string | null> {
+	async #tryExecuteCustomCommand(text: string, generation: number): Promise<string | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		// Parse command name and args
@@ -8881,21 +8897,29 @@ export class AgentSession implements SettingsScope {
 			this.#customCommands.find(c => c.command.name === commandName) ??
 			this.#mcpPromptCommands.find(c => c.command.name === commandName);
 		if (!loaded) return null;
+		if (this.#isDisposed || this.#abortInProgress || generation !== this.#promptGeneration) return "";
 
-		// Get command context from extension runner (includes session control methods)
-		const baseCtx = this.#createCommandContext();
-		const ctx = {
-			...baseCtx,
-			hasQueuedMessages: baseCtx.hasPendingMessages,
-		} as unknown as CustomCommandContext;
+		const controller = new AbortController();
+		this.#customCommandAbortControllers.add(controller);
 
 		try {
+			// Get command context from extension runner (includes session control methods)
+			const baseCtx = this.#createCommandContext();
+			const ctx = {
+				...baseCtx,
+				signal: controller.signal,
+				hasQueuedMessages: baseCtx.hasPendingMessages,
+			} as unknown as CustomCommandContext;
+
 			const args = parseCommandArgs(argsString);
+			controller.signal.throwIfAborted();
 			const result = await loaded.command.execute(args, ctx, argsString);
+			controller.signal.throwIfAborted();
 			// If result is a string, it's a prompt to send to LLM
 			// If void/undefined, command handled everything
 			return result ?? "";
 		} catch (err) {
+			if (controller.signal.aborted) return "";
 			// Emit error via extension runner
 			if (this.#extensionRunner) {
 				this.#extensionRunner.emitError({
@@ -8908,6 +8932,8 @@ export class AgentSession implements SettingsScope {
 				logger.error("Custom command failed", { commandName, error: message });
 			}
 			return ""; // Command was handled (with error)
+		} finally {
+			this.#customCommandAbortControllers.delete(controller);
 		}
 	}
 
@@ -10496,6 +10522,7 @@ export class AgentSession implements SettingsScope {
 			this.#abortAutolearnCapture();
 			for (const controller of this.#usagePreflightAbortControllers) controller.abort();
 			for (const controller of this.#imageDescriptionAbortControllers) controller.abort(options?.reason);
+			this.#abortCustomCommands(options?.reason);
 			this.abortRetry();
 			this.#promptGeneration++;
 			// Cancel any awaited pre-dispatch setup (e.g. Hindsight auto-recall) so the

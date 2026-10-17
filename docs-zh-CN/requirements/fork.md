@@ -73,6 +73,10 @@
 
 完整行为、验收条件与验证边界统一维护在[代码定位索引需求](repo-index.md)。
 
+### `/code-review-export` 代码审查材料导出
+
+内置命令的完整行为、原字节无脱敏、冻结版本与渐进上下文、原生审查指令、本地 ZIP 发布及验收条件统一维护在[代码审查材料导出需求](code-review-export.md)，不作为 Skill 分发；此处不重复条款。实施与实际验证状态见[目录索引](README.md)。
+
 ### 魔法关键词的内置命令与 fullsend
 
 - 上游已有 `ultrathink`、`orchestrate`、`workflowz`、`jevify` 魔法关键词，可在任务正文中以独立小写词触发，无需整条消息只有关键词；代码块、行内代码和 XML/HTML 区域不触发。fork 新增的关键词只有 `fullsend`，在与上游同一份关键词表（`modes/magic-keywords.ts`）中注册，匹配、注入与高亮规则一致，设置项与内置命令同样按该表生成。
@@ -275,7 +279,7 @@
 - `startup.quiet=false`（保留上游默认的欢迎界面、Logo、版本号、Tip 与启动状态消息；用户显式改为 `true` 可隐藏，不影响设置向导开关）
 - 欢迎界面的随机使用提示、字体提醒与提示／新功能标签遵循上文「简体中文用户界面」；命令、关键词、快捷键占位符、链接及原有随机选择和条件显示规则保持不变。
 - `startup.setupWizard=false`（任何机器上 setupVersion 落后于当前版本也不自动运行设置向导；`--setup` 显式入口与 force 分支不受影响）
-- `tui.titleState=false`（默认不显示终端标题运行状态，不启动工作态标题动画；保留普通会话标题及用户显式开启后的工作／等待／轮到用户标记，不改写已有配置）
+- 终端标题运行状态沿用上游默认 `tui.titleState=true`：默认显示工作／等待／轮到用户标记，工作时显示旋转图标（WSL 下为静态 `:`）；已有显式配置继续优先，不改写配置文件。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）

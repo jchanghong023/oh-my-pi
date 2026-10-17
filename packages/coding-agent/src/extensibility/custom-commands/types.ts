@@ -19,6 +19,8 @@ export type { ExecOptions, ExecResult, HookCommandContext };
 /** Interactive capabilities available to user-invoked commands, not hooks. */
 export interface CustomCommandContext extends HookCommandContext {
 	ui: ExtensionUIContext;
+	/** Cancelled when the host aborts the command or releases its session. */
+	signal?: AbortSignal;
 }
 
 /**

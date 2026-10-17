@@ -508,7 +508,7 @@ export const cfgTuiCodexResetFireworks = register({
 export const cfgTuiTitleState = register({
 	id: "tui.titleState",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "显示",

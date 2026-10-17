@@ -2,11 +2,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add builtin `/code-review-export` with `/review` inputs and choices, exporting frozen source bytes, progressive context and native review instructions to `.tmp/review-bundle.zip` without redaction, upload or automatic review.
+
 ### Changed
 
 - Restore upstream filesystem walker concurrency (four workers by default) instead of scaling it with CPU core count, preserving explicit `PI_WALK_WORKERS` settings.
+- Restore upstream terminal-title run-state indicators by default, preserving explicit user settings.
 
 ### Fixed
+
+- Stop review exports when the host cancels them, preserving the previous ZIP, and only label files excluded when they are actually omitted.
 
 - `/clear` now clears fully completed or abandoned todo plans immediately and keeps them cleared on resume, while preserving unfinished plans and task history.
 
