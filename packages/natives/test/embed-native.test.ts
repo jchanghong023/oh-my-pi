@@ -139,7 +139,7 @@ describe("native addon embedding", () => {
 					worker,
 					`import { loadNative, nativeAddonStatus } from ${loaderImport};
 const bindings = loadNative();
-postMessage({ width: bindings.visibleWidth("abc"), status: nativeAddonStatus() });
+postMessage({ width: bindings.visibleWidth("abc", 3), status: nativeAddonStatus() });
 `,
 				);
 				await Bun.write(
@@ -166,7 +166,7 @@ const status = nativeAddonStatus();
 let fileBacked;
 try {
 	const ordinaryBindings = createRequire(import.meta.url)(status.path);
-	fileBacked = { ok: true, width: ordinaryBindings.visibleWidth("abc") };
+	fileBacked = { ok: true, width: ordinaryBindings.visibleWidth("abc", 3) };
 } catch (error) {
 	fileBacked = { ok: false, error: error.message };
 }
@@ -177,7 +177,7 @@ const shmMount = fs.readFileSync("/proc/self/mountinfo", "utf8").split("\\n")
 	.map(line => line.split(" ")).find(fields => fields[4] === "/dev/shm");
 const shmNoexec = shmMount?.[5].split(",").includes("noexec") ?? false;
 const own = {
-	before, images: images(), status, width: bindings.visibleWidth("abc"),
+	before, images: images(), status, width: bindings.visibleWidth("abc", 3),
 	fileBacked, executableMemory, executableFile, shmNoexec,
 };
 if (process.argv.includes("--child")) {
@@ -186,7 +186,7 @@ if (process.argv.includes("--child")) {
 	try {
 		const workers = [];
 		for (let index = 0; index < 3; index++) {
-			const worker = new Worker(new URL("./worker.ts", import.meta.url));
+			const worker = new Worker("./worker.ts");
 			try {
 				const { promise, resolve, reject } = Promise.withResolvers();
 				worker.onmessage = event => resolve(event.data);
@@ -212,7 +212,7 @@ if (process.argv.includes("--child")) {
 				const binary = path.join(root, "probe");
 				const build = await Bun.build({
 					entrypoints: [entry, worker],
-					root: path.resolve(import.meta.dir, "../../.."),
+					root: path.dirname(entry),
 					target: "bun",
 					format: "esm",
 					files,
@@ -270,6 +270,7 @@ if (process.argv.includes("--child")) {
 				await fs.rm(root, { recursive: true, force: true });
 			}
 		},
+		180_000,
 	);
 
 	it.skipIf(process.arch !== "x64")("extracts only the selected addon until the loader tries a fallback", async () => {

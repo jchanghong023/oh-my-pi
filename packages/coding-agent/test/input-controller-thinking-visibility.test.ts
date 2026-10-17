@@ -140,7 +140,7 @@ describe("InputController thinking visibility", () => {
 		const previewRows = () =>
 			render()
 				.split("\n")
-				.map(line => line.trim())
+				.map(line => line.trim().replace(/^│\s*/, ""))
 				.filter(line => line.startsWith("preview-") || line === "```");
 		stream(message, 0);
 

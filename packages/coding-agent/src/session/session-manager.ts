@@ -12,8 +12,10 @@ import {
 	directoryIsEnterable,
 	directoryIsMissing,
 	getBlobsDir,
+	getOfflineShmState,
 	getProjectDir,
 	getSessionsDir,
+	getSessionsDirPath,
 	isEexist,
 	isEnoent,
 	isEnotdir,
@@ -3994,7 +3996,13 @@ export class SessionManager {
 		agentDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): string {
-		return computeDefaultSessionDir(cwd, storage, getSessionsDir(agentDir));
+		// Non-filesystem offline backends keep opaque keys and must not probe
+		// disk, so resolve the sessions root without owned-path validation.
+		const sessionsRoot =
+			storage instanceof FileSessionStorage || !getOfflineShmState()
+				? getSessionsDir(agentDir)
+				: getSessionsDirPath(agentDir);
+		return computeDefaultSessionDir(cwd, storage, sessionsRoot);
 	}
 
 	/**

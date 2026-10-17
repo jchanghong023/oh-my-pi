@@ -22,13 +22,13 @@ afterEach(() => {
 	resetHangulCompatibilityJamoWidthForTests();
 });
 function bodyRows(rows: readonly string[], width: number): readonly string[] {
-	if (width <= visibleWidth("│ ")) return rows;
-	const guide = theme.fg("border", "│ ");
+	if (width <= visibleWidth("  │ ")) return rows;
+	const guide = theme.fg("border", "  │ ");
 	return rows.slice(1).map(row => row.slice(guide.length));
 }
 
 function expectedTail(source: string, width: number): string[] {
-	const prefixWidth = visibleWidth("│ ");
+	const prefixWidth = visibleWidth("  │ ");
 	if (width > prefixWidth) width -= prefixWidth;
 	const clean = replaceTabs(sanitizeText(sanitizeCarriageReturns(source)));
 	if (!clean || width < 1) return [];

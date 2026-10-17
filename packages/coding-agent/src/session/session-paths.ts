@@ -7,6 +7,7 @@ import {
 	getCustomSessionFilesDir,
 	getOfflineShmState,
 	getSessionsDir,
+	getSessionsDirPath,
 	getTerminalSessionsDir,
 	hashPath,
 	pathIsWithin,
@@ -335,11 +336,14 @@ function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, session
  * Compute the default session directory for a cwd.
  * Classifies cwd by canonical location so symlink/alias paths resolve to the
  * same home-relative or temp-root directory names as their real targets.
+ * Non-filesystem offline backends resolve the default root without inspecting disk.
  */
 export function computeDefaultSessionDir(
 	cwd: string,
 	storage: SessionStorage,
-	sessionsRoot: string = getSessionsDir(),
+	sessionsRoot: string = storage instanceof FileSessionStorage || !getOfflineShmState()
+		? getSessionsDir()
+		: getSessionsDirPath(),
 ): string {
 	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	assertOfflineSessionPath(sessionsRoot, storage);

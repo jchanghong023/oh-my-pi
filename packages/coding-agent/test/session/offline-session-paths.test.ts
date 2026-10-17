@@ -54,7 +54,7 @@ function probe(body: string, offline = "1"): void {
 				assert.ok(target.startsWith(state.runtimeRoot + path.sep), target);
 			};
 			const writeOldSession = (file, id = "old-disk-session") => {
-				fs.mkdirSync(path.dirname(file), { recursive: true });
+				fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
 				const timestamp = new Date().toISOString();
 				const header = { type: "session", version: 3, id, timestamp, cwd: project };
 				const message = { type: "message", id: "old-user", parentId: null, timestamp,
@@ -282,7 +282,7 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			probe(`
 				const lockKind = ${JSON.stringify(lockKind)};
 				const dir = path.join(state.runtimeRoot, "lock-boundaries");
-				fs.mkdirSync(dir, { recursive: true });
+				fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 				const external = path.join(fixture, "external-lock");
 				const lockContent = lockKind === "live" ? process.pid + ":1\\n" : "orphan";
 				if (lockKind !== "dangling") {
@@ -353,42 +353,48 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 		`);
 	});
 
-	for (const linkedPart of ["root", "legacy", "home", "hashed", "destination", "source-entry", "destination-entry"]) {
+	// The default destination dir shares the legacy exact-slug name, so the
+	// distinct linked targets are: the sessions root, the legacy/home/hashed
+	// source dirs the migration scan adopts, and entries those scans merge.
+	for (const linkedPart of ["root", "legacy", "home", "hashed", "source-entry", "destination-entry"]) {
 		it(`rejects a manually restored linked ${linkedPart} before migration can touch external sessions`, () => {
 			probe(`
 				const linkedPart = ${JSON.stringify(linkedPart)};
 				const sessionsRoot = getSessionsDir();
-				let legacyName = "--" + path.resolve(project).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-") + "--";
+				// Hashed names are scoped by the child's canonical temp root, which
+				// offline shm remaps; keep hashed-variant projects inside it.
+				const hashProject = path.join(os.tmpdir(), "hashed-boundary-project");
+				fs.mkdirSync(hashProject, { recursive: true });
+				const target = linkedPart === "hashed" || linkedPart.endsWith("-entry") ? hashProject : project;
+				const hashedName = "tmp-hashed-boundary-project-" + Bun.SHA256.hash(hashProject, "hex");
+				let legacyName = "--" + path.resolve(target).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-") + "--";
 				if (linkedPart === "home") {
 					legacyName = "--" + os.homedir().replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-") + "-restored--";
-				} else if (linkedPart === "hashed") {
-					legacyName = "tmp-project-" + Bun.SHA256.hash(project, "hex");
+				} else if (linkedPart === "hashed" || linkedPart === "source-entry" || linkedPart === "destination-entry") {
+					legacyName = hashedName;
 				}
 				const legacyDir = path.join(sessionsRoot, legacyName);
-				const destinationDir = sessionDirForCwd(project);
+				const destinationDir = sessionDirForCwd(target);
 				const externalRoot = path.join(fixture, "persistent", "nfs-sessions");
 				const externalBucket = path.join(externalRoot, legacyName);
 				const externalFile = path.join(externalBucket, "sentinel.jsonl");
 				const sentinel = writeOldSession(externalFile);
 				const source = path.join(state.runtimeRoot, "restored-source", "source.jsonl");
 				writeOldSession(source, "runtime-source");
-				fs.mkdirSync(path.dirname(sessionsRoot), { recursive: true });
+				fs.mkdirSync(path.dirname(sessionsRoot), { recursive: true, mode: 0o700 });
 				let linkedPath;
 				if (linkedPart === "root") {
 					linkedPath = sessionsRoot;
+					fs.rmSync(sessionsRoot, { recursive: true, force: true });
 					fs.symlinkSync(externalRoot, linkedPath);
 				} else {
-					fs.mkdirSync(sessionsRoot, { recursive: true });
+					fs.mkdirSync(sessionsRoot, { recursive: true, mode: 0o700 });
 					if (linkedPart === "legacy" || linkedPart === "home" || linkedPart === "hashed") {
 						linkedPath = legacyDir;
 						fs.symlinkSync(externalBucket, linkedPath);
-					} else if (linkedPart === "destination") {
-						writeOldSession(path.join(legacyDir, "restored.jsonl"));
-						linkedPath = destinationDir;
-						fs.symlinkSync(externalBucket, linkedPath);
 					} else {
-						fs.mkdirSync(legacyDir, { recursive: true });
-						fs.mkdirSync(destinationDir, { recursive: true });
+						fs.mkdirSync(legacyDir, { recursive: true, mode: 0o700 });
+						fs.mkdirSync(destinationDir, { recursive: true, mode: 0o700 });
 						linkedPath = path.join(
 							linkedPart === "source-entry" ? legacyDir : destinationDir, "sentinel.jsonl");
 						fs.symlinkSync(externalFile, linkedPath);
@@ -401,11 +407,11 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 					"renameSync", "rmSync", "rmdirSync", "writeFileSync", "mkdirSync", "openSync",
 					"copyFileSync", "lstatSync"].map(method => ({ method, spy: spyOn(fs, method) }));
 				try {
-					const expected = /symlinked session path/;
-					assert.throws(() => SessionManager.create(project), expected);
-					assert.throws(() => SessionManager.createEmptySessionFile(project), expected);
-					await assert.rejects(SessionManager.list(project), expected);
-					await assert.rejects(SessionManager.forkFrom(source, project), expected);
+					const expected = /symlinked session path|Unsafe offline shm/;
+					assert.throws(() => SessionManager.create(target), expected);
+					assert.throws(() => SessionManager.createEmptySessionFile(target), expected);
+					await assert.rejects(SessionManager.list(target), expected);
+					await assert.rejects(SessionManager.forkFrom(source, target), expected);
 					for (const { method, spy } of probes) {
 						for (const args of spy.mock.calls) {
 							for (const target of args) {
@@ -433,14 +439,18 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			probe(
 				`
 				const sessionsRoot = getSessionsDir();
-				const legacyName = "--" + path.resolve(project).replace(/^[/\\\\]/, "").replace(/[/\\\\:]/g, "-") + "--";
+				// Hashed legacy names are scoped by the child's canonical temp
+				// root; keep the project inside it so the name matches.
+				const hashProject = path.join(os.tmpdir(), "hashed-migration-project");
+				fs.mkdirSync(hashProject, { recursive: true });
+				const legacyName = "tmp-hashed-migration-project-" + Bun.SHA256.hash(hashProject, "hex");
 				const legacyDir = path.join(sessionsRoot, legacyName);
-				const destinationDir = sessionDirForCwd(project);
+				const destinationDir = sessionDirForCwd(hashProject);
 				const legacyFile = path.join(legacyDir, "restored.jsonl");
 				const body = writeOldSession(legacyFile, "manually-restored");
 				const existingFile = path.join(destinationDir, "existing.jsonl");
 				const existingBody = writeOldSession(existingFile, "existing-runtime");
-				const manager = SessionManager.create(project);
+				const manager = SessionManager.create(hashProject);
 				assert.equal(manager.getSessionDir(), destinationDir);
 				assert.equal(fs.existsSync(legacyDir), false);
 				const restored = path.join(destinationDir, "restored.jsonl");
@@ -501,16 +511,31 @@ describe.skipIf(process.platform !== "linux")("offline session path boundaries",
 			assert.equal(manager.getSessionDir(), otherCustom);
 			await manager.close();
 			// Default in-memory buckets must not inspect a restored filesystem link.
+			const movedDir = SessionManager.getDefaultSessionDir(otherProject, undefined, memory);
 			const sessionsRoot = getSessionsDir();
-			fs.mkdirSync(path.dirname(sessionsRoot), { recursive: true });
+			fs.mkdirSync(path.dirname(sessionsRoot), { recursive: true, mode: 0o700 });
+			fs.rmSync(sessionsRoot, { recursive: true, force: true });
 			fs.symlinkSync(custom, sessionsRoot);
 			const diskProbes = ["readdirSync", "existsSync", "statSync", "lstatSync"]
 				.map(method => spyOn(fs, method));
 			try {
 				const defaultManager = SessionManager.create(project, undefined, memory);
-				assert.equal(defaultManager.getSessionDir(), sessionDirForCwd(project));
+				withinRuntime(defaultManager.getSessionFile());
+				defaultManager.appendMessage({ role: "user", content: "opaque memory history", timestamp: Date.now() });
 				await defaultManager.ensureOnDisk();
+				const match = await resolveResumableSession(defaultManager.getSessionId(), project, undefined, memory);
+				assert.equal(match.scope, "local");
+				assert.equal(match.session.path, defaultManager.getSessionFile());
+				defaultManager.setCwdWithoutRelocation(otherProject);
+				const fresh = await defaultManager.newSession();
+				assert.equal(path.dirname(fresh), movedDir);
+				assert.equal(defaultManager.getCwd(), otherProject);
 				await defaultManager.close();
+				const relocating = SessionManager.create(project, otherCustom, memory);
+				await relocating.moveTo(otherProject);
+				assert.equal(relocating.getSessionDir(), movedDir);
+				assert.equal(relocating.getCwd(), otherProject);
+				await relocating.close();
 				for (const probe of diskProbes) {
 					for (const [target] of probe.mock.calls) {
 						if (typeof target !== "string") continue;

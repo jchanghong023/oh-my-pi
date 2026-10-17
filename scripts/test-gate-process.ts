@@ -187,7 +187,19 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 							// command's status and every adopted child has been reaped.
 							// Do not race that acknowledgment with a one-second poll or
 							// kill the subreaper while it still owns exited descendants.
-							const exitCode = await child.exited;
+							// If the freeze sweep missed a stopped descendant (observed
+							// wedging cancellation on a group-stopped cargo whose SIGKILL
+							// was never delivered), bound the wait and kill the whole
+							// owned group so cancellation always settles.
+							let exitCode = await Promise.race([child.exited, Bun.sleep(10_000).then(() => undefined)]);
+							if (exitCode === undefined) {
+								try {
+									process.kill(-identity.pid, "SIGKILL");
+								} catch (error) {
+									if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+								}
+								exitCode = await child.exited;
+							}
 							const present = (
 								await Promise.all(
 									[...registry.values()].map(async entry => {

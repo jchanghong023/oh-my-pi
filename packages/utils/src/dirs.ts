@@ -494,6 +494,25 @@ class DirResolver {
 		if (offline) ensureOfflineShmDirectory(path.relative(offline.runtimeRoot, path.resolve(userAgentDir)));
 		return checkedOwnedPath(path.join(userAgentDir, subdir));
 	}
+
+	/**
+	 * Agent subdirectory path without offline directory creation, owned-path
+	 * validation, or caching. Reserved for callers that keep opaque keys and
+	 * must not probe disk (non-filesystem offline backends); everything else
+	 * uses {@link DirResolver.agentSubdir}.
+	 */
+	agentSubdirPath(userAgentDir: string | undefined, subdir: string, xdg?: XdgCategory): string {
+		const offline = getOfflineShmState();
+		if (offline && userAgentDir) {
+			const relative = path.relative(offline.runtimeRoot, path.resolve(userAgentDir));
+			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+				userAgentDir = undefined;
+			}
+		}
+		const base =
+			!userAgentDir || userAgentDir === this.agentDir ? (xdg ? this.#agentDirs[xdg] : this.agentDir) : userAgentDir;
+		return path.join(base, subdir);
+	}
 }
 
 /**
@@ -1015,6 +1034,15 @@ export function getPredictStateDir(agentDir: string | undefined, method: string)
 /** Get the sessions directory (~/.omp/agent/sessions). */
 export function getSessionsDir(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "sessions", "data");
+}
+
+/**
+ * Get the sessions directory path (~/.omp/agent/sessions) without offline
+ * directory creation or owned-path validation; for non-filesystem offline
+ * backends that keep opaque keys and must not probe disk.
+ */
+export function getSessionsDirPath(agentDir?: string): string {
+	return dirs.agentSubdirPath(agentDir, "sessions", "data");
 }
 
 /** Get the content-addressed blob store directory (~/.omp/agent/blobs). */

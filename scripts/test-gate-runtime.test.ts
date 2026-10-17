@@ -1569,6 +1569,43 @@ it("cleans descendants after their actual command leader already exited", async 
 		}
 	}
 });
+it("settles cross-stage cancellation bounded even when a spawn-churn stage resists the freeze sweep", async () => {
+	const churn = path.join(directory, "churn-stage.ts");
+	const churnLeaf = path.join(directory, "churn-leaf.ts");
+	await fs.writeFile(
+		churnLeaf,
+		`
+const leaf = Bun.spawn(["sleep", "2"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+await leaf.exited;
+`,
+	);
+	await fs.writeFile(
+		churn,
+		`
+const deadline = Date.now() + 30_000;
+while (Date.now() < deadline) {
+	const child = Bun.spawn([process.execPath, ${JSON.stringify(churnLeaf)}], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+	await child.exited;
+}
+`,
+	);
+	const started = Date.now();
+	const result = await runGate(
+		"fulltest",
+		async gate => {
+			await Promise.all([
+				gate.run({ label: "churn stage", argv: [process.execPath, churn] }),
+				gate.run(command({ ms: 250, exit: 1 })),
+			]);
+		},
+		{ print: quiet },
+	);
+	const elapsed = Date.now() - started;
+	expect(result.status).toBe("FAIL");
+	// The supervisor's exit wait is bounded by a group kill: a churn stage
+	// cancelled mid-spawn must never wedge the gate past that bound.
+	expect(elapsed).toBeLessThan(25_000);
+});
 it("only allows explicit read-only discovery failures without hiding check failures", async () => {
 	const result = await runGate(
 		"slowtest",
@@ -1642,12 +1679,21 @@ it("exempts Go compiler/link tools but charges vet and preserves actual tool fai
 	);
 	expect(checked.status).toBe("TIMEOUT");
 	expect(checked.compileExcludedSeconds).toBe(0);
+	const failedCaller = path.join(directory, "go-tool-caller.ts");
+	await fs.writeFile(
+		failedCaller,
+		`
+const tool = Bun.spawn([process.execPath, ${JSON.stringify(dispatcher)}, "--go", ${JSON.stringify(compiler)}, ${JSON.stringify(stub)}, JSON.stringify({ exit: 29 })], { env: process.env, stdout: "inherit", stderr: "inherit" });
+// Ignore the tool's exit so only its failure event can fail the outer gate.
+await tool.exited;
+`,
+	);
 	const failed = await runGate(
 		"fastcheck",
 		async gate => {
 			await gate.run({
 				label: "stub failed Go compiler",
-				argv: [process.execPath, dispatcher, "--go", compiler, stub, JSON.stringify({ exit: 29 })],
+				argv: [process.execPath, failedCaller],
 				env: { BUN_BE_BUN: "1" },
 			});
 		},
@@ -1665,6 +1711,57 @@ it("exempts Go compiler/link tools but charges vet and preserves actual tool fai
 	);
 	expect(overlapped.status).toBe("TIMEOUT");
 	expect(overlapped.compileExcludedSeconds).toBeLessThan(0.2);
+});
+it("keeps build-script probe answers from failing the gate while preserving real rustc failures", async () => {
+	const rustc = path.join(directory, process.platform === "win32" ? "rustc.exe" : "rustc");
+	try {
+		await fs.link(process.execPath, rustc);
+	} catch {
+		await fs.copyFile(process.execPath, rustc);
+	}
+	const caller = path.join(directory, "build-script-probe-caller.ts");
+	await fs.writeFile(
+		caller,
+		`
+const [crateName, shaped] = process.argv.slice(2);
+const marker = ${JSON.stringify(directory)} + "/" + crateName;
+const argv = [${JSON.stringify(path.join(import.meta.dir, "test-gate-compiler.ts"))}, ${JSON.stringify(rustc)}, ${JSON.stringify(stub)}, JSON.stringify({ exit: 23, cacheFile: marker + ".ran" }), "--crate-name", crateName, "--emit=llvm-ir"];
+if (shaped === "cargo") argv.push("--error-format=json");
+const probe = Bun.spawn([process.execPath, ...argv], { env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+// Build scripts read the probe's answer and continue; its non-zero exit is expected.
+await Bun.write(marker + ".exit", String(await probe.exited));
+`,
+	);
+	// autocfg probes: `autocfg_<16-hex uuid>_<probe id>` with --emit=llvm-ir.
+	const autocfg = await runGate(
+		"fastcheck",
+		async gate => {
+			await gate.run({
+				label: "stub autocfg probe",
+				argv: [process.execPath, caller, "autocfg_0123456789abcdef_0"],
+				env: { BUN_BE_BUN: "1" },
+			});
+		},
+		{ print: quiet },
+	);
+	expect(autocfg.status).toBe("PASS");
+	expect(await fs.readFile(path.join(directory, "autocfg_0123456789abcdef_0.ran"), "utf8")).toBe("warm\n");
+	expect(await fs.readFile(path.join(directory, "autocfg_0123456789abcdef_0.exit"), "utf8")).toBe("23");
+	// A cargo-shaped compilation unit failing still fails the gate early.
+	const failed = await runGate(
+		"fastcheck",
+		async gate => {
+			await gate.run({
+				label: "stub failing rustc",
+				argv: [process.execPath, caller, "probe_target_crate", "cargo"],
+				env: { BUN_BE_BUN: "1" },
+			});
+		},
+		{ print: quiet },
+	);
+	expect(failed.status).toBe("FAIL");
+	expect(failed.exitCode).toBe(23);
+	expect(await fs.readFile(path.join(directory, "probe_target_crate.ran"), "utf8")).toBe("warm\n");
 });
 it("observes compiler intervals even when a doctest harness captures stderr", async () => {
 	const compilerOutput = path.join(directory, "captured-compiler-stderr");

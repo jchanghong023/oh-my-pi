@@ -29,6 +29,12 @@ const compileOnly =
 			!/^clippy-driver(?:\.exe)?$/i.test(path.basename(originalWrapper ?? "")) &&
 			args.includes("--crate-name") &&
 			!args.some(arg => arg === "--print" || arg.startsWith("--print=") || arg === "-V" || arg === "--version"));
+// Cargo always drives real compilation units with machine-readable diagnostics
+// (--error-format=json). Build-script feature probes (autocfg, heapless, ...)
+// also honor RUSTC_WRAPPER but treat a non-zero rustc exit as the probe's
+// answer, so only cargo-shaped Rust invocations may report a gate failure;
+// Go tools still report failures, and all exit codes reach callers unchanged.
+const cargoUnit = args.includes("--error-format=json");
 const invoke = async () => {
 	try {
 		const child = Bun.spawn(argv, {
@@ -43,7 +49,7 @@ const invoke = async () => {
 		const exitCode = await child.exited;
 		// Rustdoc owns compile_fail/should_panic expectations; only its aggregate
 		// result can classify a doctest compiler or executable exit as a failure.
-		if (exitCode !== 0 && !doctestCompile && !doctestRun)
+		if (exitCode !== 0 && (go || cargoUnit) && !doctestCompile && !doctestRun)
 			reportGateFailure(new GateCommandError(`${path.basename(compiler)} failed`, exitCode));
 		return exitCode;
 	} catch (error) {
