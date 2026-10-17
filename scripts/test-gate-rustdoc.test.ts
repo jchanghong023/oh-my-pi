@@ -92,6 +92,7 @@ it.skipIf(!windows)(
 
 it.skipIf(!windows)("preserves long compiler/doctest argv, exit codes and activity boundaries", async () => {
 	const eventFile = path.join(directory, "compiler-events");
+	const compilerArgs = [...argumentsToPreserve, "--error-format=json"];
 	await withRustCompilerEvents(
 		{
 			...(process.env as Record<string, string>),
@@ -106,13 +107,13 @@ it.skipIf(!windows)("preserves long compiler/doctest argv, exit codes and activi
 				[env.OMP_GATE_DOCTEST_RUNNER, "charged"],
 			]) {
 				await fs.writeFile(eventFile, "");
-				const result = await invoke(executable, [process.execPath, capture, ...argumentsToPreserve], {
+				const result = await invoke(executable, [process.execPath, capture, ...compilerArgs], {
 					...env,
 					OMP_ARGV_EXIT: "29",
 				});
 				expect(result.stderr).toBe("");
 				expect(result.exitCode).toBe(29);
-				expect(JSON.parse(result.stdout).args).toEqual(argumentsToPreserve);
+				expect(JSON.parse(result.stdout).args).toEqual(compilerArgs);
 				const events = (await fs.readFile(eventFile, "utf8"))
 					.trim()
 					.split("\n")

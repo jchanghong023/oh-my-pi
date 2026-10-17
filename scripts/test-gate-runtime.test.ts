@@ -270,6 +270,7 @@ async function windowsLauncherFixture() {
 	);
 	for (const name of [
 		"runtime.ts",
+		"watchdog.ts",
 		"events.ts",
 		"clock.ts",
 		"process.ts",
