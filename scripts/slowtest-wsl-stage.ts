@@ -286,7 +286,10 @@ export async function resolveWslRemoteSource(
 	return { head: source.head, branch: ref.slice("refs/heads/".length), fetchUrl, identity };
 }
 const CANCEL_OWNED_TREE = `import os,pathlib,signal,sys,time
-control=pathlib.Path(sys.argv[1]); (control/'canceled').touch()
+control=pathlib.Path(sys.argv[1])
+# The owner can remove its control directory after the shell's existence check.
+try: (control/'canceled').touch()
+except FileNotFoundError: raise SystemExit(0)
 def verify_cleanup():
  if (control/'cleanup-required').exists() and ((control/'cleanup-failed').exists() or not (control/'settled').exists()):
   raise SystemExit('WSL owner cleanup did not complete; cleanup UNVERIFIED')

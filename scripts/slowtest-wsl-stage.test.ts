@@ -739,7 +739,7 @@ describe("streamed deployed fixed-commit execution", () => {
 			expect(f.commands.some(c => c.label === "wsl/Ubuntu-24.04/fulltest")).toBe(false);
 		}
 	});
-	test("cancellation records a stopped run even when its process never started", async () => {
+	test.each([false, true])("cancellation handles a stopped owner (already cleaned=%s)", async alreadyCleaned => {
 		const directory = await fs.mkdtemp(path.join(temporary, "cancel-"));
 		const control = path.join(directory, "owned ' control").replaceAll("\\", "/");
 		await fs.mkdir(control);
@@ -749,9 +749,11 @@ describe("streamed deployed fixed-commit execution", () => {
 		if (!bash) throw new Error("Cancellation selftest requires the existing shell");
 		const bin = path.join(directory, "bin");
 		await fs.mkdir(bin);
-		await fs.writeFile(path.join(bin, "python3"), `#!/bin/sh\nexec "${python.replaceAll("\\", "/")}" "$@"\n`, {
-			mode: 0o755,
-		});
+		await fs.writeFile(
+			path.join(bin, "python3"),
+			`#!/bin/sh\n${alreadyCleaned ? 'rmdir -- "$3"\n' : ""}exec "${python.replaceAll("\\", "/")}" "$@"\n`,
+			{ mode: 0o755 },
+		);
 		const shellBin = bin
 			.replaceAll("\\", "/")
 			.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
@@ -770,7 +772,11 @@ describe("streamed deployed fixed-commit execution", () => {
 		]);
 		expect(stderr).toBe("");
 		expect(exitCode).toBe(0);
-		expect((await fs.stat(path.join(control, "canceled"))).isFile()).toBe(true);
+		if (alreadyCleaned) {
+			await expect(fs.stat(control)).rejects.toMatchObject({ code: "ENOENT" });
+		} else {
+			expect((await fs.stat(path.join(control, "canceled"))).isFile()).toBe(true);
+		}
 		await expect(fs.stat(path.join(control, "pid"))).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });
