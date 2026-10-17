@@ -27,7 +27,7 @@
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
 * fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
 * RPC 命令接入复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划与循环宿主生命周期在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标复用 `rpc-goal.ts`；界面通过现有 `prompt` 与 RPC UI 对话调用，不另建命令表。
-* TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；正常主界面使用输入区上方的单一实时五行思考尾窗，非思考阶段隐藏且不进入聊天历史。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
+* TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；干净与紧凑模式在输入区上方使用单一实时五行思考尾窗（非思考阶段隐藏且不进入聊天历史），详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
 
 常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 

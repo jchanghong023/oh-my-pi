@@ -340,9 +340,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: [
-			{ name: "clean", description: "隐藏实时思考窗口和工具活动" },
+			{ name: "clean", description: "显示实时思考窗口，隐藏工具活动" },
 			{ name: "compact", description: "显示实时思考窗口，工具单行显示；编辑、写入沿用默认预览" },
-			{ name: "detailed", description: "显示实时思考窗口和工具详情" },
+			{ name: "detailed", description: "隐藏实时思考窗口，显示工具详情" },
 		],
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
@@ -358,7 +358,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				return;
 			}
 			const preferences = [
-				[cfgHideThinkingBlock, mode === "clean"],
+				// The tail is the main chat's only live thinking display; detailed
+				// mode trades it for the history viewer's full reasoning.
+				[cfgHideThinkingBlock, mode === "detailed"],
 				[cfgDisplayHideToolActivity, mode === "clean"],
 				[cfgDisplayCompactToolActivity, mode !== "detailed"],
 			] as const;
