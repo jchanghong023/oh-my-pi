@@ -8,7 +8,7 @@
 // final phase of `bun run fulltest`.
 //
 // A second PTY case exercises `/team` end to end: the TUI starts against the
-// fork's `zcode-api` lane pointed at a local stub Anthropic Messages server
+// fixture's `smoke` provider configured with a local Anthropic Messages server
 // that answers every stage marker with a schema-valid `yield` tool call, and
 // the run must reach the observable final report in the transcript.
 // A separate PTY case runs /repo against a temporary Python project and a
@@ -381,9 +381,9 @@ await cleanupSmokeFixture();
 await recordUiCase("startup-render-liveness-and-exit");
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
-// The `/team` case runs a real TUI (no OMP_OFFLINE) whose session model and
-// team.members point at the fork's zcode-api lane; ZCODE_API_BASE_URL routes
-// every model call to the stub below. Each child subagent asks exactly one
+// The `/team` case runs a real TUI whose session model and team.members use a
+// fixture-only provider registered through the profile's models.yml. Every
+// model call reaches the stub below. Each child subagent asks exactly one
 // question; the stub answers with a `yield` tool_use carrying schema-valid
 // stage data, so the full five-stage orchestrator runs for real and the final
 // report must land in the transcript.
@@ -786,8 +786,8 @@ try {
 		[
 			"team:",
 			"  members:",
-			"    - zcode-api/glm-5.2",
-			"    - zcode-api/glm-4.6",
+			"    - smoke/glm-5.2",
+			"    - smoke/glm-4.6",
 			"tools:",
 			"  approval:",
 			"    write: allow",
@@ -800,14 +800,42 @@ try {
 		].join("\n"),
 		"utf8",
 	);
+	await fs.writeFile(
+		path.join(profileAgentDir, "models.yml"),
+		Bun.YAML.stringify({
+			providers: {
+				smoke: {
+					api: "anthropic-messages",
+					baseUrl: `http://127.0.0.1:${stubServer.port}`,
+					apiKey: "smoke-fixture-key",
+					auth: "apiKey",
+					compat: { requiresToolResultId: true },
+					models: ["glm-5.2", "glm-4.6"].map(id => ({
+						id,
+						reasoning: true,
+						thinking: {
+							mode: id === "glm-5.2" ? "anthropic-budget-effort" : "budget",
+							efforts: id === "glm-5.2" ? ["high", "max"] : ["minimal", "low", "medium", "high"],
+						},
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 200000,
+						maxTokens: 32768,
+					})),
+				},
+			},
+		}),
+		"utf8",
+	);
 
 	console.log("ui-smoke: starting /team TUI case…");
-	const team = startTui(["--profile", TEAM_PROFILE, "--model", "zcode-api/glm-5.2"], {
-		ZCODE_API_BASE_URL: `http://127.0.0.1:${stubServer.port}`,
+	const team = startTui(["--profile", TEAM_PROFILE, "--model", "smoke/glm-5.2"], {
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
-		// The /team case must run online: a machine-level OMP_OFFLINE export hides
-		// the zcode-api lane this session model and team roster resolve through.
-		OMP_OFFLINE: undefined,
+		// Keep host offline defaults and Linux shm remapping out of this fixture.
+		OMP_OFFLINE: "",
+		OMP_PROFILE: TEAM_PROFILE,
+		PI_PROFILE: "",
+		PI_CODING_AGENT_DIR: "",
 	});
 	const teamRendered = await waitFor(() => {
 		const cursorControl =
@@ -957,9 +985,12 @@ try {
 	console.log("ui-smoke: starting /team cancellation case…");
 	slowTeamStagesMs = 6_000;
 	const requestsBeforeCancel = stubRequests.length;
-	const cancelTui = startTui(["--profile", TEAM_PROFILE, "--model", "zcode-api/glm-5.2"], {
-		ZCODE_API_BASE_URL: `http://127.0.0.1:${stubServer.port}`,
+	const cancelTui = startTui(["--profile", TEAM_PROFILE, "--model", "smoke/glm-5.2"], {
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
+		OMP_OFFLINE: "",
+		OMP_PROFILE: TEAM_PROFILE,
+		PI_PROFILE: "",
+		PI_CODING_AGENT_DIR: "",
 	});
 	const cancelRendered = await waitFor(() => {
 		const cursorControl =

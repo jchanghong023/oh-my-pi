@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the fork's built-in `zcode-api` local proxy provider and its reserved configuration handling.
+
 ## [18.11.3] - 2026-10-16
 
 ### Breaking Changes

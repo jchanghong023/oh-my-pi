@@ -26,9 +26,6 @@ const RUNTIME_ONLY_PROVIDERS = new Set([
 	// `bundle="never"` KDL seed; factoryDroidModelManagerOptions serves it
 	// offline and narrows it by account flags/org policy live.
 	"factory-droid",
-	// Built-in ZCode Proxy relay: rows are built at runtime in
-	// packages/coding-agent/src/config/zcode-api-models.ts.
-	"zcode-api",
 	// Offline company gateway: runtime-only seeds get their URL from the startup snapshot.
 	"company",
 	// Windows-only runtime seeds are registered by

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the fork's `zcode-api` local proxy authentication and compatibility rules.
+
 ## [18.11.3] - 2026-10-16
 
 ### Changed

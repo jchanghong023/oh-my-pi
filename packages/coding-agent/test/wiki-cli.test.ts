@@ -123,13 +123,38 @@ it("dispatches complete search and explicit grep pages, errors and zero matches 
 			);
 		},
 	});
+	await Bun.write(
+		path.join(agentDir, "models.yml"),
+		Bun.YAML.stringify({
+			providers: {
+				smoke: {
+					api: "anthropic-messages",
+					baseUrl: `http://127.0.0.1:${server.port}`,
+					apiKey: "smoke-fixture-key",
+					auth: "apiKey",
+					compat: { requiresToolResultId: true },
+					models: [
+						{
+							id: "glm-5.2",
+							reasoning: true,
+							thinking: { mode: "anthropic-budget-effort", efforts: ["high", "max"] },
+							input: ["text"],
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+							contextWindow: 200000,
+							maxTokens: 32768,
+						},
+					],
+				},
+			},
+		}),
+	);
 	const env = {
 		...process.env,
 		OMP_CONFIG_ROOT: configRoot,
+		OMP_PROFILE: profile,
 		PI_PROFILE: "",
 		PI_CODING_AGENT_DIR: "",
 		OMP_OFFLINE: "",
-		ZCODE_API_BASE_URL: `http://127.0.0.1:${server.port}`,
 	};
 	async function cli(args: string[]): Promise<string> {
 		const child = Bun.spawn([process.execPath, "run", "dev", "--profile", profile, "--cwd", root, ...args], {
@@ -165,7 +190,7 @@ it("dispatches complete search and explicit grep pages, errors and zero matches 
 			"--print",
 			"--no-session",
 			"--model",
-			"zcode-api/glm-5.2",
+			"smoke/glm-5.2",
 			"--tools",
 			"wiki",
 			"Retrieve all matching evidence from wiki, continuing until exhausted.",

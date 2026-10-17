@@ -9,7 +9,6 @@ import * as companyModels from "../src/config/company-models";
 import * as companyProvider from "../src/config/company-provider";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
-import { getZcodeApiModels } from "../src/config/zcode-api-models";
 import { AuthStorage } from "../src/session/auth-storage";
 
 const SOURCE_ID = "ext://parallel-review-provider-catalog";
@@ -32,7 +31,7 @@ describe("reserved provider lanes after extension catalog projections", () => {
 	});
 
 	test.each([false, true])(
-		"cannot resurrect an inactive lane or reroute its active sibling (offline: %s)",
+		"cannot resurrect an inactive company lane or reroute its active catalog (offline: %s)",
 		async offline => {
 			vi.spyOn(companyProvider, "isCompanyLaneActive").mockReturnValue(offline);
 			vi.spyOn(companyProvider, "getCompanyConfigError").mockReturnValue(undefined);
@@ -41,9 +40,7 @@ describe("reserved provider lanes after extension catalog projections", () => {
 			);
 			vi.spyOn(companyModels, "getCompanyChatModels").mockReturnValue(company);
 			vi.spyOn(companyModels, "getCompanyChatModelIds").mockReturnValue(company.map(model => model.id));
-			const proxy = getZcodeApiModels();
-			const active = offline ? company[0]! : proxy[0]!;
-			const inactive = offline ? proxy[0]! : company[0]!;
+			const companyModel = company[0]!;
 			await authStorage.credentials.set(PROVIDER_ID, {
 				type: "oauth",
 				access: "fixture-access",
@@ -80,13 +77,13 @@ describe("reserved provider lanes after extension catalog projections", () => {
 						getApiKey: credentials => credentials.access,
 						modifyModels: models => [
 							...models.map(model =>
-								model.provider === active.provider
+								model.provider === "company"
 									? { ...model, baseUrl: "https://replacement.invalid" }
 									: model.provider === PROVIDER_ID
 										? { ...model, id: "projected" }
 										: model,
 							),
-							{ ...inactive, id: "resurrected" },
+							{ ...companyModel, id: "resurrected" },
 						],
 					},
 				},
@@ -97,9 +94,11 @@ describe("reserved provider lanes after extension catalog projections", () => {
 				// The extension's own projection must still work; only reserved rows
 				// are restored or removed, including provider-scoped selector lookups.
 				expect(registry.find(PROVIDER_ID, "projected")?.baseUrl).toBe("http://extension.invalid");
-				expect(registry.find(inactive.provider, "resurrected")).toBeUndefined();
-				expect(registry.getAll().some(model => model.provider === inactive.provider)).toBe(false);
-				expect(registry.find(active.provider, active.id)?.baseUrl).toBe(active.baseUrl);
+				expect(registry.find("company", "resurrected")).toBeUndefined();
+				expect(registry.getAll().some(model => model.provider === "company")).toBe(offline);
+				expect(registry.find("company", companyModel.id)?.baseUrl).toBe(
+					offline ? companyModel.baseUrl : undefined,
+				);
 			};
 			assertLaneRouting();
 			await registry.refresh("offline");

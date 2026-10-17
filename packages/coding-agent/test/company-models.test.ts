@@ -15,7 +15,6 @@ interface CompanyProbe {
 	ignoredCompanyKeySource: boolean;
 	warnings: string[];
 	warningsAfterRemoval: string[];
-	zcodeVisible: boolean;
 	retrievalVisible: boolean;
 	serializedSecret: boolean;
 	disabledAvailable: boolean;
@@ -30,10 +29,8 @@ interface CompanyProbe {
 	gatewayProviderKey: string;
 	ignoredPolicyError: unknown;
 	ignoredPolicyWarnings: string[];
-	ignoredProxyKey: string;
-	invalidProxyKeyError: unknown;
 	gatewayResolverKey: string;
-	gatewayProxyId: string;
+	gatewayCustomId: string;
 	requests: number;
 }
 
@@ -65,7 +62,6 @@ function runCompanyProbe(): CompanyProbe {
 						compat: { supportsOutputEffort: true },
 						models: [{ id: "ignored-company-model", contextWindow: 100, maxTokens: 10 }],
 					},
-					"zcode-api": { apiKey: "proxy-fixture-key", baseUrl: "https://ignored.invalid" },
 				},
 			}),
 		);
@@ -108,8 +104,6 @@ function runCompanyProbe(): CompanyProbe {
 					headers: buildAnthropicClientOptions({ model, apiKey: companyKey }).defaultHeaders,
 					ignoredCompanyKeySource: authStorage.keys.source("company") !== undefined,
 					warnings: registry.getReservedProviderWarnings(),
-					zcodeVisible: registry.getAll().some(row => row.provider === "zcode-api") ||
-						registry.find("zcode-api", "glm-5.2") !== undefined,
 					retrievalVisible: registry.find("company", "Qwen3-VL-Embedding-2B") !== undefined ||
 						registry.find("company", "Qwen3-VL-Reranker-2B") !== undefined,
 					serializedSecret: JSON.stringify(registry.getAll()).includes("company-fixture-token"),
@@ -130,34 +124,27 @@ function runCompanyProbe(): CompanyProbe {
 					ignoreLocalModelConfig: true, settings: Settings.isolated({}),
 				});
 				result.gatewayLocalProviders = gateway.getAll().filter(row =>
-					row.provider === "company" || row.provider === "zcode-api").map(row => row.provider);
+					row.provider === "company").map(row => row.provider);
 				authStorage.keys.setRuntime("company", "broker-fixture-token");
 				result.gatewayModelKey = await gateway.getApiKey(model);
 				result.gatewayProviderKey = await gateway.getApiKeyForProvider("company");
 				result.gatewayResolverKey = await resolveApiKeyOnce(gateway.resolver(model));
-				gateway.registerProvider("zcode-api", {
-					api: "anthropic-messages", baseUrl: "https://broker.invalid", apiKey: "broker-proxy-token",
-					models: [{ id: "broker-proxy-model", name: "Broker model", reasoning: false,
+				gateway.registerProvider("custom-gateway", {
+					api: "anthropic-messages", baseUrl: "https://broker.invalid", apiKey: "broker-custom-token",
+					models: [{ id: "broker-custom-model", name: "Broker model", reasoning: false,
 						input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow: 1000, maxTokens: 100 }],
 				}, "broker://fixture");
-				result.gatewayProxyId = gateway.find("zcode-api", "broker-proxy-model")?.id;
+				result.gatewayCustomId = gateway.find("custom-gateway", "broker-custom-model")?.id;
 				const { rmSync, writeFileSync } = await import("node:fs");
 				const ignoredFile = ${JSON.stringify(path.join(home, "ignored-models.json"))};
 				writeFileSync(ignoredFile, JSON.stringify({ providers: {
 					company: { apiKey: 42, models: true, compat: "ignored" },
-					"zcode-api": { apiKey: "retained-proxy-key", baseUrl: 42, models: false,
-						headers: 7, discovery: "ignored", compat: "ignored" },
 				}}));
 				const ignoredAuth = createInMemoryAuthStorage();
 				const ignored = new ModelRegistry(ignoredAuth, ignoredFile, { settings: Settings.isolated({}) });
 				result.ignoredPolicyError = ignored.getError();
 				result.ignoredPolicyWarnings = ignored.getReservedProviderWarnings();
-				result.ignoredProxyKey = await ignored.getApiKeyForProvider("zcode-api");
-				const invalidFile = ${JSON.stringify(path.join(home, "invalid-models.json"))};
-				writeFileSync(invalidFile, JSON.stringify({ providers: { "zcode-api": { apiKey: 42 } } }));
-				const invalid = new ModelRegistry(ignoredAuth, invalidFile, { settings: Settings.isolated({}) });
-				result.invalidProxyKeyError = invalid.getError();
 				ignoredAuth.close();
 				rmSync(${JSON.stringify(modelsFile)});
 				await registry.refresh("offline");
@@ -185,7 +172,6 @@ describe("company runtime catalog and request auth", () => {
 	test("resolves the fixed chat lane and roles without discovery or YAML routing overrides", () => {
 		const result = runCompanyProbe();
 		expect(result.capped).toHaveLength(6);
-		expect(result.zcodeVisible).toBe(false);
 		expect(result.retrievalVisible).toBe(false);
 		expect(result.requests).toBe(0);
 		expect(result.roles).toEqual({
@@ -222,7 +208,7 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.headers["X-Api-Key"]).toBeUndefined();
 		expect(result.ignoredCompanyKeySource).toBe(false);
 		expect(result.serializedSecret).toBe(false);
-		expect(result.warnings).toHaveLength(2);
+		expect(result.warnings).toHaveLength(1);
 		expect(result.warningsAfterRemoval).toEqual([]);
 		expect(result.disabledAvailable).toBe(false);
 		for (const key of [
@@ -238,10 +224,8 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.gatewayModelKey).toBe("broker-fixture-token");
 		expect(result.gatewayProviderKey).toBe(result.gatewayModelKey);
 		expect(result.gatewayResolverKey).toBe(result.gatewayModelKey);
-		expect(result.gatewayProxyId).toBe("broker-proxy-model");
+		expect(result.gatewayCustomId).toBe("broker-custom-model");
 		expect(result.ignoredPolicyError).toBeUndefined();
-		expect(result.ignoredPolicyWarnings).toHaveLength(2);
-		expect(result.ignoredProxyKey).toBe("retained-proxy-key");
-		expect(JSON.stringify(result.invalidProxyKeyError)).toContain("apiKey");
+		expect(result.ignoredPolicyWarnings).toHaveLength(1);
 	}, 30_000);
 });

@@ -7,9 +7,8 @@ import type { BenchSummary } from "../src/cli/bench-cli";
 
 /**
  * Company environment (OMP_OFFLINE=1 with a usable company config): the bench
- * runtime must expose the internal company lane to selectors and hide the local
- * zcode-api lane. Probed in subprocesses because the company lane snapshot is
- * process-global and read once.
+ * runtime must expose the internal company lane to selectors. Probed in
+ * subprocesses because the company lane snapshot is process-global and read once.
  */
 const RUNTIME_MODULE = path.join(import.meta.dir, "../src/cli/bench-runtime.ts");
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
@@ -55,7 +54,6 @@ interface ProbeResult {
 	providers: string[];
 	companySelector: string | null;
 	companyContextWindow: number | null;
-	zcodeSelector: string | null;
 	offlineRequests: number;
 	subsequentProviders: string[];
 	inheritedProviders: string[];
@@ -85,7 +83,6 @@ async function probeBenchRuntime(env: Record<string, string>, offline: boolean):
 				providers,
 				companySelector: await resolve("GLM-5.2-public"),
 				companyContextWindow: runtime.modelRegistry.getAll().find(model => model.provider === "company" && model.id === "GLM-5.2-public")?.contextWindow ?? null,
-				zcodeSelector: await resolve("zcode-api/glm-5.2"),
 				offlineRequests: requests,
 				subsequentProviders: [],
 				inheritedProviders: [],
@@ -129,42 +126,35 @@ async function probeBenchRuntime(env: Record<string, string>, offline: boolean):
 }
 
 describe("OMP_OFFLINE=1 omp bench company environment", () => {
-	it("resolves company selectors and hides zcode-api", async () => {
+	it("resolves company selectors and inherits the offline lane", async () => {
 		const env = await isolatedEnv(true, true);
 		const probe = await probeBenchRuntime(env, true);
 
 		expect(probe.providers).toContain("company");
-		expect(probe.providers).not.toContain("zcode-api");
 		expect(probe.companySelector).toBe("company/GLM-5.2-public");
 		expect(probe.companyContextWindow).toBe(200_000);
-		expect(probe.zcodeSelector).toBeNull();
 		expect(probe.offlineRequests).toBe(0);
 		expect(probe.subsequentProviders).not.toContain("company");
-		expect(probe.subsequentProviders).toContain("zcode-api");
 		expect(probe.inheritedProviders).toContain("company");
-		expect(probe.inheritedProviders).not.toContain("zcode-api");
 		expect(probe.inheritedRequests).toBe(0);
 		expect(probe.ordinaryInheritedProviders).not.toContain("company");
-		expect(probe.ordinaryInheritedProviders).toContain("zcode-api");
 	}, 30_000);
 
-	it("hides zcode-api selectors without a company config under OMP_OFFLINE", async () => {
+	it("keeps company selectors unavailable without a company config under OMP_OFFLINE", async () => {
 		const env = await isolatedEnv(false, true);
 		const probe = await probeBenchRuntime(env, true);
 
 		expect(probe.providers).not.toContain("company");
-		expect(probe.providers).not.toContain("zcode-api");
 		expect(probe.companySelector).toBeNull();
-		expect(probe.zcodeSelector).toBeNull();
 		expect(probe.offlineRequests).toBe(0);
 		expect(probe.inheritedRequests).toBe(0);
 	}, 30_000);
 
-	it.each(["company", "keyless-proxy", "keyed-proxy"])(
-		"runs a public %s benchmark over the Anthropic route without discovery",
-		async lane => {
-			const provider = lane === "company" ? "company" : "zcode-api";
-			const modelId = lane === "company" ? "GLM-5.2-public" : "glm-5.2";
+	it(
+		"runs a public company benchmark over the Anthropic route without discovery",
+		async () => {
+			const provider = "company";
+			const modelId = "GLM-5.2-public";
 			const selector = `${provider}/${modelId}`;
 			const requests: Array<{ url: string; authorization: string | null; apiKey: string | null; model: string }> =
 				[];
@@ -212,34 +202,16 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 				},
 			});
 			try {
-				const env = await isolatedEnv(lane === "company", lane === "company");
-				// Only the company lane runs offline: an offline process hides the
-				// public zcode-api lane entirely, so the proxy lanes bench online.
-				if (lane === "company") {
-					await fs.writeFile(
-						path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
-						JSON.stringify({
-							env: {
-								ANTHROPIC_BASE_URL: `${server.url.origin}/prefix/v1/`,
-								ANTHROPIC_AUTH_TOKEN: "fixture-token",
-							},
-						}),
-					);
-				} else {
-					env.ZCODE_API_BASE_URL = `${server.url.origin}/prefix/v1/`;
-					if (lane === "keyed-proxy") {
-						env.ZCODE_PROXY_API_KEY = "lower-priority-env-key";
-						await fs.mkdir(env.PI_CODING_AGENT_DIR!, { recursive: true });
-						await fs.writeFile(
-							path.join(env.PI_CODING_AGENT_DIR!, "models.yml"),
-							JSON.stringify({
-								providers: {
-									"zcode-api": { apiKey: "proxy-yaml-key", headers: { Authorization: "Bearer ignored" } },
-								},
-							}),
-						);
-					}
-				}
+				const env = await isolatedEnv(true, true);
+				await fs.writeFile(
+					path.join(env.CLAUDE_CONFIG_DIR!, "settings.json"),
+					JSON.stringify({
+						env: {
+							ANTHROPIC_BASE_URL: `${server.url.origin}/prefix/v1/`,
+							ANTHROPIC_AUTH_TOKEN: "fixture-token",
+						},
+					}),
+				);
 				const guard = path.join(env.HOME!, "network-guard.ts");
 				const endpoint = `${server.url.origin}/prefix/v1/messages`;
 				await fs.writeFile(
@@ -279,12 +251,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 				expect(requests).toEqual([
 					{
 						url: endpoint,
-						authorization:
-							lane === "company"
-								? "Bearer fixture-token"
-								: lane === "keyed-proxy"
-									? "Bearer proxy-yaml-key"
-									: null,
+						authorization: "Bearer fixture-token",
 						apiKey: null,
 						model: modelId,
 					},
