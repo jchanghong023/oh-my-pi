@@ -26,6 +26,104 @@ async function linuxIdentity(pid: number): Promise<LinuxIdentity | undefined> {
 		throw error;
 	}
 }
+
+interface LinuxSignalLibrary {
+	symbols: {
+		syscall(number: number, arg1: number, arg2: number, arg3: number, arg4: number): number | bigint;
+		close(fd: number): number;
+	};
+}
+function openLinuxSignals(): LinuxSignalLibrary {
+	for (const name of ["libc.so.6", "libc.so"]) {
+		try {
+			return dlopen(name, {
+				syscall: {
+					args: [FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64, FFIType.i64],
+					returns: FFIType.i64,
+				},
+				close: { args: [FFIType.i32], returns: FFIType.i32 },
+			});
+		} catch {
+			// Try the installed platform libc soname.
+		}
+	}
+	throw new Error("Cannot load owned Linux process signaling");
+}
+let linuxSignals: LinuxSignalLibrary | undefined;
+async function signalLinuxIdentity(entry: LinuxIdentity, signal: number): Promise<boolean> {
+	const symbols = (linuxSignals ??= openLinuxSignals()).symbols;
+	// pidfd_open/pidfd_send_signal use these syscall numbers on Linux's
+	// supported x64/arm64 architectures. Pin before checking start time so
+	// reuse between the identity check and signal cannot target a stranger.
+	const fd = Number(symbols.syscall(434, entry.pid, 0, 0, 0));
+	if (fd < 0) {
+		const live = await linuxIdentity(entry.pid);
+		if (live?.start !== entry.start || live.state === "Z") return false;
+		throw new Error(`Cannot pin owned Linux process ${entry.pid}`);
+	}
+	try {
+		const live = await linuxIdentity(entry.pid);
+		if (live?.start !== entry.start || live.state === "Z") return false;
+		if (Number(symbols.syscall(424, fd, signal, 0, 0)) !== 0) {
+			const remaining = await linuxIdentity(entry.pid);
+			if (remaining?.start === entry.start && remaining.state !== "Z")
+				throw new Error(`Cannot signal owned Linux process ${entry.pid}`);
+		}
+		return true;
+	} finally {
+		symbols.close(fd);
+	}
+}
+
+// The live subreaper is the ownership anchor. Never stop it: after its parent
+// exits it must still receive disconnect, kill escaped sessions, and reap them.
+export async function terminateLinuxGateDescendants(): Promise<void> {
+	const root = process.pid;
+	const registry = new Map<number, LinuxIdentity>();
+	const freezeDeadline = performance.now() + 1000;
+	try {
+		for (;;) {
+			const processes = (
+				await Promise.all(
+					(await fs.readdir("/proc")).filter(name => /^\d+$/.test(name)).map(name => linuxIdentity(Number(name))),
+				)
+			).filter((value): value is LinuxIdentity => value !== undefined);
+			const ordered = [root];
+			const owned = new Set(ordered);
+			let stopped = 0;
+			for (let index = 0; index < ordered.length; index++) {
+				for (const entry of processes) {
+					if (entry.parent !== ordered[index] || owned.has(entry.pid)) continue;
+					owned.add(entry.pid);
+					registry.set(entry.pid, entry);
+					let live = await linuxIdentity(entry.pid);
+					if (live?.start !== entry.start || live.state === "Z") continue;
+					if (live.state !== "T" && live.state !== "t") {
+						if (!(await signalLinuxIdentity(entry, 19))) continue;
+						stopped++;
+					}
+					// Only use a stopped, identity-checked ancestor to establish
+					// ownership of the next generation. It cannot reap a child
+					// whose reused PID would otherwise make a stale /proc edge lie.
+					while (live?.start === entry.start && live.state !== "Z" && live.state !== "T" && live.state !== "t") {
+						if (performance.now() >= freezeDeadline) throw new Error("Owned Linux descendants did not quiesce");
+						await Bun.sleep(1);
+						live = await linuxIdentity(entry.pid);
+					}
+					if (live?.start === entry.start && (live.state === "T" || live.state === "t")) ordered.push(entry.pid);
+				}
+			}
+			if (stopped === 0) break;
+			if (performance.now() >= freezeDeadline) throw new Error("Owned Linux descendants did not quiesce");
+		}
+	} finally {
+		for (const entry of [...registry.values()].reverse()) {
+			const live = await linuxIdentity(entry.pid);
+			if (live?.start !== entry.start || live.state === "Z") continue;
+			await signalLinuxIdentity(entry, 9);
+		}
+	}
+}
 export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): Promise<GateProcessOwner> {
 	if (process.platform === "win32") {
 		// Windows HANDLEs are opaque integer values, not FFI pointers.
@@ -102,122 +200,25 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 			if (identity) {
 				const root = await linuxIdentity(identity.pid);
 				if (root?.start === identity.start) {
-					// Let the supervisor close its launch boundary before freezing
-					// the group: an already-queued start must not spawn a new command
-					// after the descendant snapshot. SIGSTOP is its acknowledgment.
-					child.send("quiesce");
-					for (;;) {
-						const live = await linuxIdentity(identity.pid);
-						if (live?.start !== identity.start) {
-							const exitCode = await child.exited;
-							throw new Error(`Owned Linux supervisor exited before quiescing (exit ${exitCode})`);
-						}
-						if (live.state === "T" || live.state === "t") break;
-						const waiting = Promise.withResolvers<void>();
-						setTimeout(waiting.resolve, 5);
-						await waiting.promise;
-					}
-					// Freeze the owned group before walking the live subreaper's
-					// adopted children; escaped sessions are frozen by stable identity.
+					// Cleanup runs in the subreaper itself, so parent process.exit()
+					// cannot strand a SIGSTOPped supervisor waiting for quiescence.
 					try {
-						process.kill(-identity.pid, "SIGSTOP");
+						child.send("abort");
 					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+						const live = await linuxIdentity(identity.pid);
+						if (live?.start === identity.start) throw error;
 					}
-					const registry = new Map<number, LinuxIdentity>();
-					const freezeDeadline = performance.now() + 1000;
-					try {
-						for (;;) {
-							const processes = (
-								await Promise.all(
-									(await fs.readdir("/proc"))
-										.filter(name => /^\d+$/.test(name))
-										.map(name => linuxIdentity(Number(name))),
-								)
-							).filter((value): value is LinuxIdentity => value !== undefined);
-							const ordered = [identity];
-							const owned = new Set([identity.pid]);
-							for (let index = 0; index < ordered.length; index++) {
-								for (const entry of processes) {
-									if (entry.parent !== ordered[index].pid || owned.has(entry.pid)) continue;
-									owned.add(entry.pid);
-									ordered.push(entry);
-								}
-							}
-							let stopped = 0;
-							for (const entry of ordered.slice(1)) {
-								registry.set(entry.pid, entry);
-								const live = await linuxIdentity(entry.pid);
-								if (
-									live?.start !== entry.start ||
-									live.state === "Z" ||
-									live.state === "T" ||
-									live.state === "t"
-								)
-									continue;
-								try {
-									process.kill(entry.pid, "SIGSTOP");
-									stopped++;
-								} catch (error) {
-									if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-								}
-							}
-							if (stopped === 0) break;
-							if (performance.now() >= freezeDeadline)
-								throw new Error("Owned Linux descendants did not quiesce");
-						}
-					} finally {
-						try {
-							for (const entry of [...registry.values()].reverse()) {
-								const live = await linuxIdentity(entry.pid);
-								if (live?.start !== entry.start || live.state === "Z") continue;
-								try {
-									process.kill(entry.pid, "SIGKILL");
-								} catch (error) {
-									if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-								}
-							}
-							child.send("cleanup");
-							try {
-								process.kill(identity.pid, "SIGCONT");
-							} catch (error) {
-								if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-							}
-							// The supervisor exits only after Bun has consumed the real
-							// command's status and every adopted child has been reaped.
-							// Do not race that acknowledgment with a one-second poll or
-							// kill the subreaper while it still owns exited descendants.
-							// If the freeze sweep missed a stopped descendant (observed
-							// wedging cancellation on a group-stopped cargo whose SIGKILL
-							// was never delivered), bound the wait and kill the whole
-							// owned group so cancellation always settles.
-							let exitCode = await Promise.race([child.exited, Bun.sleep(10_000).then(() => undefined)]);
-							if (exitCode === undefined) {
-								try {
-									process.kill(-identity.pid, "SIGKILL");
-								} catch (error) {
-									if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-								}
-								exitCode = await child.exited;
-							}
-							const present = (
-								await Promise.all(
-									[...registry.values()].map(async entry => {
-										const live = await linuxIdentity(entry.pid);
-										return live?.start === entry.start;
-									}),
-								)
-							).some(Boolean);
-							if (present) throw new Error("Owned Linux descendants survived termination or reaping");
-							if (exitCode !== 0)
-								throw new Error(
-									`Owned Linux supervisor exited before acknowledging cleanup (exit ${exitCode})`,
-								);
-						} finally {
-							await terminateOwnedSubprocess(child, { detached });
-						}
-					}
+					const exitCode = await child.exited;
+					if (exitCode !== 0)
+						throw new Error(`Owned Linux supervisor exited before acknowledging cleanup (exit ${exitCode})`);
+					return;
 				}
+			}
+			if (process.platform === "linux") {
+				// No live ownership anchor remains. Never signal a numeric PID or
+				// group that may already have been reused while Bun consumes exit.
+				await child.exited;
+				return;
 			}
 			await terminateOwnedSubprocess(child, { detached });
 		},

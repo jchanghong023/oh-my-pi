@@ -117,6 +117,7 @@ export async function discoverWsl(gate: GateRun, options: WslOptions): Promise<W
 		});
 		return result;
 	} catch (error) {
+		gate.fail(error);
 		const cancelled =
 			gate.signal.aborted &&
 			gate.signal.reason instanceof GateCommandError &&
@@ -177,7 +178,7 @@ async function discoverWslObserved(gate: GateRun, options: WslOptions): Promise<
 function quote(value: string): string {
 	return `'${value.replaceAll("'", `'\\''`)}'`;
 }
-function wslArgv(distro: string, timeout: number): string[] {
+function wslArgv(distro: string, timeout: number, program?: string): string[] {
 	return [
 		"wsl.exe",
 		"--distribution",
@@ -192,7 +193,7 @@ function wslArgv(distro: string, timeout: number): string[] {
 		"5",
 		String(timeout),
 		"bash",
-		"-ls",
+		...(program === undefined ? ["-ls"] : ["-lc", program]),
 	];
 }
 /** Network identities only: local paths, file URLs, and credential URLs block. */
@@ -226,11 +227,14 @@ export async function resolveWslRemoteSource(
 		);
 	const git = async (label: string, args: string[]) => {
 		const result = await gate.capture({ label, argv: ["git", ...args], cwd: root, allowFailure: true });
-		if (result.exitCode !== 0) throw new Error(`BLOCKED: ${label} could not resolve the existing pushed source`);
+		if (result.exitCode !== 0)
+			throw new GateCommandError(
+				`BLOCKED: ${label} could not resolve the existing pushed source`,
+				result.exitCode || 1,
+			);
 		return result.stdout.trim();
 	};
 	const admin = await git("wsl/source-admin", ["rev-parse", "--absolute-git-dir"]);
-	// Preflight rejection must not cancel the reachable current-platform leg.
 	const operationFailure = await gate.charged(async () => {
 		for (const marker of [
 			"MERGE_HEAD",
@@ -461,6 +465,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 			});
 			return result;
 		} catch (error) {
+			gate.fail(error);
 			const cancelled =
 				gate.signal.aborted &&
 				gate.signal.reason instanceof GateCommandError &&
@@ -508,6 +513,13 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		failureCode: WslFailureCode,
 		exitCode = 1,
 	): WslStageResult => {
+		gate.fail(
+			new GateCommandError(
+				`${status}: ${reason}`,
+				exitCode || 1,
+				status === "TIMEOUT" ? "TIMEOUT" : status === "CANCELLED" ? "INTERRUPTED" : "FAIL",
+			),
+		);
 		(status === "CANCELLED" ? logger.info : logger.error)("WSL result rejected", {
 			component: "test-gate-wsl",
 			event: "wsl_result_rejected",
@@ -586,6 +598,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	try {
 		remote = await resolveWslRemoteSource(gate, root, source);
 	} catch (error) {
+		gate.fail(error);
 		logger.error("WSL remote source blocked", {
 			component: "test-gate-wsl",
 			event: "wsl_remote_source_settled",
@@ -593,7 +606,12 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 			result: "BLOCKED",
 			...logger.diagnosticError(error),
 		});
-		return stageFailure("BLOCKED", error instanceof Error ? error.message : String(error), "remote_source_rejected");
+		return stageFailure(
+			"BLOCKED",
+			error instanceof Error ? error.message : String(error),
+			"remote_source_rejected",
+			error instanceof GateCommandError ? error.exitCode : 1,
+		);
 	}
 	logger.info("WSL remote source resolved", {
 		component: "test-gate-wsl",
@@ -722,6 +740,13 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 			allowFailure: true,
 			wallTimeoutSeconds: 150,
 			onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, cloneControl)),
+			abortCommand: {
+				argv: wslArgv(
+					selection.distro,
+					25,
+					`set -eu\nmkdir -p -m 700 -- ${quote(cloneControl)}; ${wslCancelCommand(cloneControl)}\nrm -rf -- ${quote(cloneControl)}\n`,
+				),
+			},
 		});
 		if (clone.stdout) console.log(clone.stdout);
 		if (clone.stderr) console.error(clone.stderr);
@@ -780,7 +805,12 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 		argv: [
 			"bash",
 			"-c",
-			`set -eu; bun install --frozen-lockfile; bun scripts/fulltest.ts${options.debug ? " --debug" : ""}; source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none); test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fixed commit during preparation or tests' >&2; exit 1; }`,
+			`set -eu
+trap 'code=$?; trap - EXIT; if [ "$code" -ne 0 ]; then status=FAIL; case "$code" in 124|137) status=TIMEOUT;; 130) status=INTERRUPTED;; esac; printf "OMP_GATE_EVENT %s {\\"id\\":\\"wsl-command\\",\\"kind\\":\\"failure\\",\\"exitCode\\":%s,\\"status\\":\\"%s\\",\\"message\\":\\"Linux preparation, fulltest or source certification failed\\"}\\n" "${token}" "$code" "$status" >&2; fi; exit "$code"' EXIT
+bun install --frozen-lockfile
+bun scripts/fulltest.ts${options.debug ? " --debug" : ""}
+source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
+test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fixed commit during preparation or tests' >&2; exit 1; }`,
 		],
 	};
 	const plan = await gate.capture({
@@ -834,6 +864,13 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 		allowFailure: true,
 		streamOutput: true,
 		onAbort: () => gate.charged(() => cancelOwnedWsl(selection.distro, control)),
+		abortCommand: {
+			argv: wslArgv(
+				selection.distro,
+				25,
+				`set -eu\nmkdir -p -m 700 -- ${quote(control)}; ${wslCancelCommand(control)}\nrm -rf -- ${quote(control)}\n`,
+			),
+		},
 	};
 	stage = "sync-and-fulltest";
 	logger.info("WSL fixed SHA execution started", {
@@ -859,6 +896,7 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 			elapsed_ms: performance.now() - executionStarted,
 		});
 	} catch (error) {
+		gate.fail(error);
 		const cancelled =
 			gate.signal.aborted &&
 			gate.signal.reason instanceof GateCommandError &&

@@ -3,7 +3,11 @@
 // TUI scenario; this wrapper retains a failed stage if it cannot finish one.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { observeGateUnhandledFailures } from "./test-gate-failure-events";
+import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 import { beginTestRun, endTestRun, recordTestProducer } from "./test-reporting";
+
+observeGateUnhandledFailures();
 
 const command = ["bun", "scripts/fulltest-ui-smoke.ts", ...process.argv.slice(2)];
 const run = await beginTestRun(`dev TUI PTY smoke: ${process.argv.slice(2).join(" ") || "all scenarios"}`);
@@ -13,6 +17,7 @@ let exitCode = 1;
 try {
 	const child = Bun.spawn(command, { env: process.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
 	exitCode = await child.exited;
+	if (exitCode !== 0) reportGateFailure(new GateCommandError("UI smoke runner failed", exitCode));
 	await recordTestProducer({
 		producer: "ui-smoke/runner-stage",
 		command,
@@ -25,12 +30,14 @@ try {
 		timingBasis: "stage wall time; completed child scenarios have separate JUnit cases",
 	});
 } catch (error) {
+	reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
 	console.error(`UI smoke reporter could not launch runner: ${String(error)}`);
 	if (exitCode === 0) exitCode = 1;
 } finally {
 	try {
 		await endTestRun(run, exitCode);
 	} catch (error) {
+		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), exitCode || 1));
 		console.error(`Could not finalize UI timing metadata: ${String(error)}`);
 		if (exitCode === 0) exitCode = 1;
 		if (run.owner) {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseSlowtestArgs, runSlowtest, type SlowtestDependencies } from "./slowtest";
 import type { WslSelection, WslStageResult } from "./slowtest-wsl-stage";
-import { runGate } from "./test-gate-runtime";
+import { GateCommandError, runGate } from "./test-gate-runtime";
 
 let temporary: string;
 let stub: string;
@@ -84,6 +84,24 @@ async function fixture(selection: WslSelection, dirty = false) {
 	return { root, deps, execute, records, localRecord, linuxRecord };
 }
 
+function holdCurrentValidation(f: { deps: SlowtestDependencies }) {
+	const started = Promise.withResolvers<void>();
+	const state = { started: started.promise, cancelled: false };
+	f.deps.fulltest = async gate => {
+		started.resolve();
+		await new Promise<void>(resolve => {
+			const abort = () => {
+				state.cancelled = true;
+				resolve();
+			};
+			if (gate.signal.aborted) abort();
+			else gate.signal.addEventListener("abort", abort, { once: true });
+		});
+		throw new GateCommandError("local work cancelled after original failure", 23, "INTERRUPTED");
+	};
+	return state;
+}
+
 describe("slowtest isolated mechanism", () => {
 	test.each([
 		{ status: "SKIPPED_WSL_UNAVAILABLE", reason: "no compatible WSL" },
@@ -99,14 +117,24 @@ describe("slowtest isolated mechanism", () => {
 		20000,
 	);
 
-	test("dirty source blocks WSL without transferring it and still runs fulltest once", async () => {
-		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" }, true);
+	test("dirty available source cancels local validation without transferring it", async () => {
+		const selection = { status: "AVAILABLE", distro: "Ubuntu-24.04" } as const;
+		const f = await fixture(selection, true);
+		const local = holdCurrentValidation(f);
+		f.deps.discover = async () => {
+			await local.started;
+			return selection;
+		};
+		let wslStarted = false;
 		f.deps.wsl = async () => {
+			wslStarted = true;
 			throw new Error("dirty source must never enter WSL stage");
 		};
-		expect((await f.execute()).status).toBe("FAIL");
-		expect(await f.records(f.localRecord)).toHaveLength(1);
-		await expect(fs.stat(f.linuxRecord)).rejects.toMatchObject({ code: "ENOENT" });
+		const result = await f.execute();
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(1);
+		expect(local.cancelled).toBe(true);
+		expect(wslStarted).toBe(false);
 	}, 20000);
 
 	test("clean fixed-commit independent platform processes overlap", async () => {
@@ -127,24 +155,7 @@ describe("slowtest isolated mechanism", () => {
 		expect(await f.records(f.linuxRecord)).toEqual([{ role: "linux" }]);
 	}, 20000);
 
-	test.each(["BLOCKED", "UNVERIFIED"] as const)(
-		"available WSL $0 is nonpassing and retains local fulltest",
-		async status => {
-			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
-			f.deps.wsl = async () => ({
-				status,
-				reason: "inert failure",
-				exitCode: status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17,
-			});
-			const result = await f.execute();
-			expect(result.status).not.toBe("PASS");
-			expect(result.exitCode).toBe(status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17);
-			expect(await f.records(f.localRecord)).toHaveLength(1);
-		},
-		20000,
-	);
-
-	test.each(["FAIL", "TIMEOUT", "CANCELLED"] as const)(
+	test.each(["BLOCKED", "UNVERIFIED", "FAIL", "TIMEOUT", "CANCELLED"] as const)(
 		"executed WSL $0 aborts a live local fulltest and preserves the triggering exit",
 		async status => {
 			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
@@ -165,7 +176,7 @@ describe("slowtest isolated mechanism", () => {
 				return { status, reason: "original executed failure", exitCode };
 			};
 			const result = await f.execute();
-			expect(result.status).toBe(status === "CANCELLED" ? "INTERRUPTED" : status);
+			expect(result.status).toBe(status === "CANCELLED" ? "INTERRUPTED" : status === "TIMEOUT" ? "TIMEOUT" : "FAIL");
 			expect(result.exitCode).toBe(exitCode);
 			expect(await f.records(f.linuxRecord)).toEqual([{ role: "linux" }]);
 			expect(await Bun.file(`${f.localRecord}.completed`).exists()).toBe(false);
@@ -173,14 +184,78 @@ describe("slowtest isolated mechanism", () => {
 		20000,
 	);
 
-	test("unexpected discovery failure does not omit reachable fulltest", async () => {
+	test.each([new Error("WSL service probe blocked"), new GateCommandError("WSL discovery exited", 19)])(
+		"discovery exception cancels current validation and preserves its exit: %s",
+		async error => {
+			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+			const local = holdCurrentValidation(f);
+			let wslStarted = false;
+			f.deps.discover = async () => {
+				await local.started;
+				throw error;
+			};
+			f.deps.wsl = async () => {
+				wslStarted = true;
+				throw new Error("discovery failure must not start WSL execution");
+			};
+			const result = await f.execute();
+			expect(result.status).toBe("FAIL");
+			expect(result.exitCode).toBe(error instanceof GateCommandError ? error.exitCode : 1);
+			expect(local.cancelled).toBe(true);
+			expect(wslStarted).toBe(false);
+		},
+		20000,
+	);
+
+	test.each([new Error("WSL evidence inspection failed"), new GateCommandError("WSL execution exited", 29)])(
+		"WSL exception cancels current validation and preserves its exit: %s",
+		async error => {
+			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
+			const local = holdCurrentValidation(f);
+			f.deps.wsl = async () => {
+				await local.started;
+				throw error;
+			};
+			const result = await f.execute();
+			expect(result.status).toBe("FAIL");
+			expect(result.exitCode).toBe(error instanceof GateCommandError ? error.exitCode : 1);
+			expect(local.cancelled).toBe(true);
+		},
+		20000,
+	);
+
+	test("zero-code failure status becomes exit one and cancels local validation", async () => {
 		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
-		f.deps.discover = async () => {
-			throw new Error("WSL service probe blocked");
+		const local = holdCurrentValidation(f);
+		f.deps.wsl = async () => {
+			await local.started;
+			return { status: "UNVERIFIED", reason: "missing evidence", exitCode: 0 };
 		};
-		expect((await f.execute()).status).toBe("FAIL");
-		expect(await f.records(f.localRecord)).toHaveLength(1);
+		const result = await f.execute();
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(1);
+		expect(local.cancelled).toBe(true);
 	}, 20000);
+
+	test.each(["before", "after"] as const)("source identity exception %s validation fails the gate", async phase => {
+		const f = await fixture({ status: "SKIPPED_NOT_APPLICABLE", reason: "fixture" });
+		const identity = f.deps.identity;
+		let observations = 0;
+		let currentStarted = false;
+		f.deps.identity = async (gate, root) => {
+			observations++;
+			if (observations === (phase === "before" ? 1 : 2))
+				throw new GateCommandError("source evidence unavailable", 31);
+			return identity(gate, root);
+		};
+		f.deps.fulltest = async () => {
+			currentStarted = true;
+		};
+		const result = await f.execute();
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(31);
+		expect(currentStarted).toBe(phase === "after");
+	});
 
 	test("source changes during current validation cannot verify one identity", async () => {
 		const f = await fixture({ status: "SKIPPED_NOT_APPLICABLE", reason: "fixture" });
@@ -192,14 +267,17 @@ describe("slowtest isolated mechanism", () => {
 		expect((await f.execute()).status).toBe("FAIL");
 	}, 20000);
 
-	test("mismatching Linux fixed commit fails despite successful extension", async () => {
+	test("mismatching Linux fixed commit immediately cancels current validation", async () => {
 		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
-		f.deps.wsl = async (): Promise<WslStageResult> => ({
-			status: "PASS",
-			distro: "Ubuntu-24.04",
-			head: "b".repeat(40),
-		});
-		expect((await f.execute()).status).toBe("FAIL");
+		const local = holdCurrentValidation(f);
+		f.deps.wsl = async (): Promise<WslStageResult> => {
+			await local.started;
+			return { status: "PASS", distro: "Ubuntu-24.04", head: "b".repeat(40) };
+		};
+		const result = await f.execute();
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(1);
+		expect(local.cancelled).toBe(true);
 	}, 20000);
 });
 
