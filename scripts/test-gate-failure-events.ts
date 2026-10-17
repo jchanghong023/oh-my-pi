@@ -1,4 +1,4 @@
-import { postmortem } from "@oh-my-pi/pi-utils";
+import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
 
 /** Observe Bun's per-case failure marker, not diagnostic text or suite totals. */

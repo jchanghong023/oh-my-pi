@@ -234,16 +234,21 @@ process.on("message", async (message: unknown) => {
 			peer_pid: child.pid,
 			elapsed_ms: performance.now() - startedAt,
 		});
-		sendReply({ exitCode });
-		logger.info("Supervisor IPC reply sent", {
+		logger.info("Supervisor IPC reply sending", {
 			...fields,
-			event: "gate_supervisor_ipc_sent",
+			event: "gate_supervisor_ipc_sending",
 			stage: "reply",
 			result: "reply",
 			exit_code: exitCode,
 			peer_pid: child.pid,
 			elapsed_ms: performance.now() - startedAt,
 		});
+		// The parent may immediately terminate this supervisor's Windows Job
+		// after the reply. Flush successful command/IPC diagnostics before handing
+		// ownership back, while the parent's gate deadline is still enforced.
+		// Never add a log-I/O wait to a failure or cancellation reply.
+		if (exitCode === 0 && !aborting) logger.flush();
+		sendReply({ exitCode });
 	} catch (error) {
 		commandSettled = true;
 		logger.error("Supervised command failed", {

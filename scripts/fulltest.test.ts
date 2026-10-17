@@ -7,6 +7,78 @@ import { parseFastcheckArgs, gatePoolWidth, runGateCommands } from "./fastcheck"
 import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
+test("fulltest reaches its CLI error boundary without loading the native addon", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-bootstrap-"));
+	const tsconfig = path.join(directory, "tsconfig.json");
+	try {
+		// Copy only the real JS loader and its pure dependencies, never an addon.
+		// Route the root native import here without changing the working tree.
+		await fs.mkdir(path.join(directory, "native"));
+		for (const file of [
+			"package.json",
+			"native/index.js",
+			"native/loader-state.js",
+			"native/desktop-adapter.js",
+			"native/embedded-addon.js",
+			"native/offline-root.js",
+			"native/version-sentinel.js",
+		]) {
+			await fs.copyFile(path.join(import.meta.dir, "..", "packages", "natives", file), path.join(directory, file));
+		}
+		await fs.writeFile(
+			tsconfig,
+			JSON.stringify({
+				compilerOptions: {
+					baseUrl: directory,
+					paths: { "@oh-my-pi/pi-natives": ["./native/index.js"] },
+				},
+			}),
+		);
+		const env = {
+			...process.env,
+			OMP_CONFIG_ROOT: path.join(directory, "config"),
+			PI_NATIVES_DIR: path.join(directory, "addon-cache"),
+			OMP_OFFLINE: "",
+			NODE_PATH: "",
+			// This deliberately invalid invocation must not fail the enclosing gate.
+			OMP_GATE_EVENT_TOKEN: "",
+			OMP_GATE_EVENT_FILE: "",
+			OMP_GATE_CLOCK_TOKEN: "",
+		};
+		const options = { cwd: path.join(import.meta.dir, ".."), env, stdout: "pipe", stderr: "pipe" } as const;
+		// The same resolver must make a direct import fail in the actual loader.
+		const control = Bun.spawn(
+			[process.execPath, "--tsconfig-override", tsconfig, "-e", 'import "@oh-my-pi/pi-natives";'],
+			options,
+		);
+		const [controlExit, , controlError] = await Promise.all([
+			control.exited,
+			new Response(control.stdout).text(),
+			new Response(control.stderr).text(),
+		]);
+		expect(controlExit).not.toBe(0);
+		expect(controlError).toContain("Failed to load pi_natives native addon");
+		expect(controlError).toContain(directory);
+		const child = Bun.spawn(
+			[process.execPath, "--tsconfig-override", tsconfig, path.join(import.meta.dir, "fulltest.ts"), "--unknown"],
+			options,
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode).toBe(2);
+		expect(stdout).toContain("Usage: bun run fulltest");
+		expect(stdout).toMatch(
+			/fulltest: FAIL total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=900\.0s exit=2/,
+		);
+		expect(stderr).not.toContain("Failed to load pi_natives native addon");
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 20_000);
+
 describe("shared per-test budget", () => {
 	test("converts valid second overrides to Bun's millisecond budget", () => {
 		expect(testTimeoutMs(" 2.5 ")).toBe(2500);

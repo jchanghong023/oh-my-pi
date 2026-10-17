@@ -2115,6 +2115,107 @@ it("summarizes an expired gate without waiting forever for untracked blocked wor
 	expect(lines.at(-1)).toContain("TIMEOUT total=");
 });
 
+it.each(["fulltest", "slowtest"] satisfies GateLevel[])(
+	"persists successful %s cleanup and supervisor terminal logs before immediate native exit",
+	async level => {
+		const configRoot = await fs.mkdtemp(path.join(directory, `native-success-${level}-`));
+		const exitMarker = path.join(configRoot, "exit-hook");
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const watchdog = pathToFileURL(path.join(import.meta.dir, "test-gate-watchdog.ts")).href;
+		const logger = pathToFileURL(path.join(import.meta.dir, "../packages/utils/src/logger.ts")).href;
+		const script = `import {writeFileSync,writeSync} from "node:fs";
+import * as logger from ${JSON.stringify(logger)};
+import {runGate} from ${JSON.stringify(runtime)};
+import {exitGateProcess} from ${JSON.stringify(watchdog)};
+logger.setTransports({file:${JSON.stringify(path.join(configRoot, "logs"))}});
+process.on("exit", () => {
+  writeFileSync(${JSON.stringify(exitMarker)}, "exit hook ran");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+});
+const result = await runGate(${JSON.stringify(level)}, async gate => {
+  gate.onFinalize(async () => {
+    logger.info("Fixture cleanup completed", {event:"fixture_cleanup_settled",result:"completed"});
+  });
+  await gate.run({label:"short successful command",argv:[process.execPath,"-e","void 0;"]});
+}, {limitSeconds:3,exitOnFailure:true,print:()=>{}});
+writeSync(1, logger.getCurrentLogPath());
+exitGateProcess(result.exitCode);`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 5000,
+			env: {
+				...process.env,
+				OMP_CONFIG_ROOT: configRoot,
+				OMP_OFFLINE: "",
+				OMP_LOG_LEVEL: "info",
+				OMP_GATE_EVENT_TOKEN: "",
+				OMP_GATE_EVENT_FILE: "",
+				OMP_GATE_CLOCK_TOKEN: "",
+			},
+		});
+		try {
+			const [code, logPath, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(code).toBe(0);
+			expect(stderr).toBe("");
+			expect(await Bun.file(exitMarker).exists()).toBe(false);
+			const text = await fs.readFile(logPath, "utf8");
+			const records = text
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			const events = records.map(record => record.event);
+			for (const event of [
+				"gate_stage_started",
+				"gate_stage_settled",
+				"gate_cleanup_started",
+				"gate_cleanup_settled",
+				"fixture_cleanup_settled",
+				"gate_settled",
+			])
+				expect(events).toContain(event);
+			expect(events.indexOf("gate_cleanup_settled")).toBeLessThan(events.indexOf("gate_settled"));
+			expect(events.indexOf("fixture_cleanup_settled")).toBeLessThan(events.indexOf("gate_settled"));
+			expect(records.at(-1)).toMatchObject({ event: "gate_settled", status: "PASS", exit_code: 0 });
+			expect(records.every(record => record.level === "info")).toBe(true);
+			const supervisorPid = records.find(record => record.event === "gate_supervisor_spawn_settled")?.peer_pid;
+			expect(supervisorPid).toBeNumber();
+			const logsDir = path.dirname(logPath);
+			const supervisorFiles = (await fs.readdir(logsDir)).filter(file => file.includes(`.${supervisorPid}.log`));
+			expect(supervisorFiles.length).toBeGreaterThan(0);
+			const supervisorText = (
+				await Promise.all(supervisorFiles.map(file => fs.readFile(path.join(logsDir, file), "utf8")))
+			).join("\n");
+			const supervisorRecords = supervisorText
+				.split("\n")
+				.filter(Boolean)
+				.map(line => JSON.parse(line));
+			expect(supervisorRecords).toContainEqual(
+				expect.objectContaining({
+					event: "gate_command_settled",
+					result: "completed",
+					exit_code: 0,
+				}),
+			);
+			expect(supervisorRecords).toContainEqual(
+				expect.objectContaining({
+					event: "gate_supervisor_ipc_sending",
+					stage: "reply",
+					exit_code: 0,
+				}),
+			);
+			expect(supervisorRecords.every(record => record.level === "info")).toBe(true);
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	},
+	10_000,
+);
+
 // The native watchdog runs on another thread against the OS clock; fake timers
 // cannot terminate an independently spawned, synchronously blocked scheduler.
 it.each([

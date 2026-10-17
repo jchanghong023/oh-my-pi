@@ -897,6 +897,7 @@ class Runtime {
 								: new GateCommandError(error instanceof Error ? error.message : String(error), 1),
 						);
 					});
+		let result!: GateResult;
 		try {
 			await Promise.race([task, aborted.promise]);
 		} finally {
@@ -956,11 +957,29 @@ class Runtime {
 					}
 				}
 				accrue(scope);
+				result = {
+					level: scope.level,
+					status: scope.failure?.status ?? "PASS",
+					exitCode: scope.failure?.exitCode ?? 0,
+					totalSeconds: (scope.last - scope.started) / 1000,
+					compileExcludedSeconds: scope.compile / 1000,
+					budgetedSeconds: scope.charged / 1000,
+					limitSeconds: scope.limit / 1000,
+				};
+				logGateResult(result);
+				// Native success exits skip the logger's exit hook. Persist the terminal
+				// record and preceding cleanup while the charged clock/watchdog still run.
+				// Failure paths must never wait for this normal-success flush.
+				if (!scope.failure) await gate.charged(async () => logger.flush());
+				accrue(scope);
 				// Final output uses the live clock; include the last write before
 				// deciding whether reports need the failed outcome published again.
 				if (!scope.failure && scope.charged >= scope.limit)
 					this.cancel(scope, new GateCommandError("Charged budget exhausted", 124, "TIMEOUT"));
 			} while (finalizedExitCode === 0 && scope.failure);
+			result.totalSeconds = (scope.last - scope.started) / 1000;
+			result.compileExcludedSeconds = scope.compile / 1000;
+			result.budgetedSeconds = scope.charged / 1000;
 			scope.closed = true;
 			this.#updateWallDeadline(scope);
 			clearInterval(timer);
@@ -975,16 +994,6 @@ class Runtime {
 				emitEvent(this.outerToken, this.eventId, "idle");
 			}
 		}
-		const result: GateResult = {
-			level: scope.level,
-			status: scope.failure?.status ?? "PASS",
-			exitCode: scope.failure?.exitCode ?? 0,
-			totalSeconds: (scope.last - scope.started) / 1000,
-			compileExcludedSeconds: scope.compile / 1000,
-			budgetedSeconds: scope.charged / 1000,
-			limitSeconds: scope.limit / 1000,
-		};
-		logGateResult(result);
 		if (scope.failure) print(`${scope.level}: ${scope.failure.message}`);
 		print(
 			`${scope.level}: ${result.status} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,

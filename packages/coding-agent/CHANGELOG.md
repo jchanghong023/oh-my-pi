@@ -18,6 +18,7 @@
 
 - Keep offline in-memory session resume, relocation and fallback resets independent of filesystem session-root validation.
 - Preserve immediate Go tool failure reporting in local gates while returning build-script feature-probe exit codes unchanged.
+- Preserve successful local-gate terminal and short-lived supervisor logs before forced process exit, and allow fulltest to build a missing native addon before loading it.
 - Preserve the finished thinking stub during tool execution when prose or thinking-expansion preferences change, without reopening the completed thought.
 - Avoid false WSL cleanup failures when slowtest cancels a stage whose control directory has already been removed.
 - Keep task and truncated-output artifacts in private offline shm directories so Linux child sessions can open them safely.
