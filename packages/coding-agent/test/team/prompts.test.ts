@@ -230,14 +230,14 @@ describe("team prompt handoff", () => {
 			review,
 			unresolvedBlocking: [olderPending, newPending],
 		});
-		const arrays = structuredBlocks(task).filter(Array.isArray) as TeamTrackedFinding[][];
-		const complete = arrays.find(items => items.length === 3)!;
+		const arrays = structuredBlocks(task).filter((value): value is unknown[] => Array.isArray(value));
+		const complete = arrays.find(items => items.length === 3)! as TeamTrackedFinding[];
 		expect(complete.map(item => item.id)).toEqual(["A-F3", "A-F4", "A-F2"]);
 		expect(new Set(complete.map(item => item.id)).size).toBe(complete.length);
 		expect(complete.find(item => item.id === "A-F2")?.evidence).toBe(olderPending.evidence);
 		expect(complete.find(item => item.id === "A-F3")?.evidence).toBe(newPending.evidence);
 		expect(complete.some(item => item.id === "A-F1")).toBe(false);
-		expect(arrays.find(items => items.length === 2)?.map(item => item.id)).toEqual(["A-F2", "A-F3"]);
+		expect(arrays.find(items => items.length === 2 && typeof items[0] === "string")).toEqual(["A-F2", "A-F3"]);
 		const handedReview = structuredBlocks(task).find(
 			value =>
 				!Array.isArray(value) && typeof value === "object" && value !== null && "blockingResolutions" in value,
@@ -281,6 +281,10 @@ describe("team prompt handoff", () => {
 			[1, true],
 			[2, false],
 		]);
+		expect(history[0]!.revision.revisedProposal).toBe(revisions[0]!.revision.revisedProposal);
+		expect(history[1]!.revision).toMatchObject({ revisedProposalReference: "current" });
+		expect(history[1]!.revision).not.toHaveProperty("revisedProposal");
+		expect(task.split(revisions[1]!.revision.revisedProposal)).toHaveLength(2);
 		const byId = new Map(reviews.flatMap(review => review.findings).map(item => [item.id, item]));
 		for (const entry of history) {
 			for (const response of entry.revision.responses) {
@@ -294,6 +298,42 @@ describe("team prompt handoff", () => {
 		expect(task).toContain(baseline.proposal);
 		expect(task).toContain(revisions[0]!.revision.revisedProposal);
 		expect(task).not.toContain(record.participant.modelPattern);
+	});
+
+	it.each([false, true])("resolves baseline-body references when current equals baseline: %s", same => {
+		const record = reviewedRecord();
+		const baseline = record.originalProposal!;
+		const current = same ? baseline.proposal : "Changed reader lifetime strategy";
+		const revisions = [round(1, ["A-F1", "A-F2"]), round(2, ["A-F1", "A-F2"])];
+		revisions[0]!.revision.revisedProposal = baseline.proposal;
+		revisions[0]!.recheckFailed = true;
+		revisions[1]!.revision.revisedProposal = current;
+		const originalHistory = JSON.stringify(revisions);
+		const task = buildReviewTask({
+			question: "Make both reader paths safe",
+			cwd: "/tmp/repo",
+			alignment,
+			targetLabel: record.label,
+			proposalText: current,
+			keyAssumptions: baseline.keyAssumptions,
+			risks: baseline.risks,
+			unknowns: baseline.unknowns,
+			evidence: baseline.evidence,
+			ambiguityInterpretations: baseline.ambiguityInterpretations,
+			round: 2,
+			recheck: true,
+			unresolvedBlocking: record.reviews[0]!.findings,
+			recheckContext: { previousProposal: baseline, revisions, reviews: [record.reviews[0]!] },
+		});
+		const history = structuredBlocks(task).find(
+			value => Array.isArray(value) && value[0]?.revision,
+		) as TeamProposalRecord["revisionHistory"];
+		expect(history[0]!.revision).toMatchObject({ revisedProposalReference: same ? "current" : "previous" });
+		expect(history[0]!.revision).not.toHaveProperty("revisedProposal");
+		expect(history[1]!.revision).toMatchObject({ revisedProposalReference: "current" });
+		expect(history[1]!.revision).not.toHaveProperty("revisedProposal");
+		for (const body of new Set([baseline.proposal, current])) expect(task.split(body)).toHaveLength(2);
+		expect(JSON.stringify(revisions)).toBe(originalHistory);
 	});
 
 	it("preserves each round's decisions and evidence without confusing closed and still-pending blockers in synthesis", () => {
@@ -310,6 +350,10 @@ describe("team prompt handoff", () => {
 		const pending = arrays.find(items => items[0]?.id) as TeamTrackedFinding[];
 		expect(reviews).toHaveLength(3);
 		expect(history.map(entry => entry.round)).toEqual([1, 2]);
+		expect(history[0]!.revision.revisedProposal).toBe(record.revisionHistory[0]!.revision.revisedProposal);
+		expect(history[1]!.revision).toMatchObject({ revisedProposalReference: "current" });
+		expect(history[1]!.revision).not.toHaveProperty("revisedProposal");
+		expect(task.split(record.latestProposal!.proposal)).toHaveLength(2);
 		expect(pending.map(item => item.id)).toEqual(["A-F2"]);
 		const evidenceById = new Map(reviews.flatMap(review => review.findings).map(item => [item.id, item.evidence]));
 		expect(evidenceById.size).toBe(4);

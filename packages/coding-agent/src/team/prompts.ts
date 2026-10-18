@@ -62,6 +62,28 @@ export function buildAlignmentTask(args: {
 	});
 }
 
+/** Keep full history; replace only bodies already present in this prompt. */
+function revisionHistoryForPrompt(
+	history: readonly TeamProposalRecord["revisionHistory"][number][],
+	currentProposal: string,
+	previousProposal?: string,
+) {
+	return history.map(entry => {
+		const reference =
+			entry.revision.revisedProposal === currentProposal
+				? "current"
+				: entry.revision.revisedProposal === previousProposal
+					? "previous"
+					: undefined;
+		return reference
+			? {
+					...entry,
+					revision: { ...entry.revision, revisedProposal: undefined, revisedProposalReference: reference },
+				}
+			: entry;
+	});
+}
+
 export function buildReviewTask(args: {
 	question: string;
 	cwd: string;
@@ -88,6 +110,17 @@ export function buildReviewTask(args: {
 		question: args.question.trim(),
 		cwd: args.cwd.trim(),
 		unresolvedBlocking: args.unresolvedBlocking ?? [],
+		recheckContext: args.recheckContext
+			? {
+					...args.recheckContext,
+					revisions: revisionHistoryForPrompt(
+						args.recheckContext.revisions,
+						args.proposalText,
+						args.recheckContext.previousProposal.proposal,
+					),
+				}
+			: undefined,
+		sameReviewedProposal: args.recheckContext?.previousProposal.proposal === args.proposalText,
 	});
 }
 
@@ -110,6 +143,12 @@ export function buildRevisionTask(args: {
 		question: args.question.trim(),
 		cwd: args.cwd.trim(),
 		responseFindings: [...responseFindings.values()],
+		review: {
+			noSubstantiveIssues: args.review.noSubstantiveIssues,
+			reviewSummary: args.review.reviewSummary,
+			blockingResolutions: args.review.blockingResolutions,
+		},
+		unresolvedBlockingIds: args.unresolvedBlocking.map(finding => finding.id),
 		proposalStructured: {
 			keyAssumptions: args.proposal.keyAssumptions,
 			risks: args.proposal.risks,
@@ -133,7 +172,7 @@ export function buildSynthesisTask(args: {
 		alignment: args.alignment,
 		proposals: args.proposals.map(record => ({
 			...record,
-			initialReview: record.reviews[0],
+			revisionHistory: revisionHistoryForPrompt(record.revisionHistory, record.latestProposal?.proposal ?? ""),
 		})),
 	});
 }

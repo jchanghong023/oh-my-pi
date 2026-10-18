@@ -42,6 +42,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - `repo`：代码仓索引，定位实现与 Python 定义；命中后 MUST 用 `read` 核实当前源码，NEVER 由索引推断调用关系或代码不存在。
 - `read` / `grep` / `glob` / `ast_grep`：核实当前文件、接口与实际调用；穷尽结论 MUST 用当前源码及 `grep` 验证。
 - 工具禁用、缺索引或查询失败 MUST 如实记录，NEVER 当作零命中；只读流程不建库、不更新索引，必要时改用可用的只读工具。
+- 本子调用确认缺索引后 NEVER 重复探测；命中明显偏题时定向调整，仍无相关证据则转源码。无新线索 NEVER 重复等价查询；不能据此断言规范不存在。
 - 未检索到资料不代表公司没有相关规定或仓库没有代码；历史文档不自动代表当前有效规范。
 
 ## 对齐阶段的需求解释与验收建议（不替代原始需求及已确认约束）
@@ -119,9 +120,15 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 {{#if recheckContext}}
 ## 最后成功审查的方案（用于比较累计未复核变更）
 
+{{#if sameReviewedProposal}}
+正文与上方当前方案相同。
+{{else}}
 {{{recheckContext.previousProposal.proposal}}}
+{{/if}}
 
 ## 自该版本以来的全部修订、逐项回应与复核状态
+
+`revisedProposalReference` 为 `current` 时正文见上方当前方案，为 `previous` 时见最后成功审查的方案；其他修订仍附完整正文。
 
 ```json
 {{{jsonStringify recheckContext.revisions}}}
