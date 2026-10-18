@@ -15,6 +15,7 @@
 
 - Compact mode shows each Todo failure once with its cause and stale-progress hint, preserving independent warnings, detailed history, and existing Todo states.
 - Preserve compact-only failure-warning reconciliation without replaying stale Todo warnings below final answers in detailed mode.
+- Show exact `/team` proposal text-budget failures even when all proposals fail, and tighten alignment anonymity, meaningful-difference checks, and concise result grouping.
 - Retain the original session's ownership until a history switch commits or rolls back.
 - Refresh Repo evidence after writable restricted SDK sessions while leaving read-only child sessions untouched.
 - Ignore late Team child events after session changes and accept conditional adoption prose using Chinese consequence connectors.

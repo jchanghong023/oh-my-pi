@@ -369,7 +369,7 @@ function parseEvidence(value: Record<string, unknown>): TeamEvidenceItem {
 }
 
 /** Parse + shape-check + budget-enforce a proposal payload. Returns undefined when the shape is unusable. */
-export function parseTeamProposal(value: unknown): TeamProposalOutput | undefined {
+export function parseTeamProposal(value: unknown, onError?: (reason: string) => void): TeamProposalOutput | undefined {
 	const data = validateTeamPayload(value, TEAM_PROPOSAL_SCHEMA, {});
 	if (!data) return undefined;
 	const proposal = asString(data.proposal).trim();
@@ -410,7 +410,11 @@ export function parseTeamProposal(value: unknown): TeamProposalOutput | undefine
 			0,
 		) +
 		parsed.evidence.reduce((total, evidence) => total + evidence.claim.length + evidence.source.length, 0);
-	return proposalTextLength <= TEAM_PROPOSAL_BUDGET ? parsed : undefined;
+	if (proposalTextLength > TEAM_PROPOSAL_BUDGET) {
+		onError?.(`提案全部文字合计 ${proposalTextLength} 字，超过 ${TEAM_PROPOSAL_BUDGET} 字上限`);
+		return undefined;
+	}
+	return parsed;
 }
 
 function hasExactFindingReferences(
