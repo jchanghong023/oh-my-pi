@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { type Api, type Model, type ModelSpec, clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import { Settings } from "../src/config/settings";
 import { RepoLifecycle } from "../src/repo/lifecycle";
@@ -20,7 +21,7 @@ import { createAssistantMessage } from "./helpers/agent-session-setup";
 const temporary: string[] = [];
 afterEach(async () => {
 	clearCustomApis();
-	await Promise.all(temporary.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
+	await Promise.all(temporary.splice(0).map(removeWithRetries));
 });
 
 describe("repository lifecycle via the real SDK agent and filesystem tools", () => {
@@ -45,6 +46,46 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			{ name: "edit", arguments: { path: file, old_string: "DOES_NOT_EXIST", new_string: "MUST_NOT_APPEAR" } },
 			{ name: "repo", arguments: { action: "search", query: "EDITED_NEEDLE" } },
 			{ name: "bash", arguments: { command: "printf 'SHELLNEEDLE\\n' > shell.py" } },
+			{ name: "write", arguments: { path: "xd://eval", content: "{" } },
+			{
+				name: "write",
+				arguments: { path: "xd://eval", content: JSON.stringify({ language: "js" }) },
+			},
+			{ name: "write", arguments: { path: "xd://eval", content: "help" } },
+			{ name: "write", arguments: { path: "xd://repo", content: JSON.stringify({ action: "status" }) } },
+			{
+				name: "write",
+				arguments: {
+					path: "xd://eval",
+					content: JSON.stringify({
+						language: "js",
+						code: 'await Bun.write("engine.py", "def after_eval(): return \'EVAL_NEEDLE\'\\n")',
+					}),
+				},
+			},
+			{
+				name: "write",
+				arguments: {
+					path: "xd://eval",
+					content: JSON.stringify({
+						language: "js",
+						code: 'await Bun.write("engine.py", "def after_failed_eval(): pass\\n"); throw new Error("failed after write")',
+					}),
+				},
+			},
+			{
+				name: "write",
+				arguments: {
+					path: "xd://eval",
+					content: JSON.stringify({
+						language: "js",
+						// Exercise the real executor watchdog; fake timers cannot
+						// advance the separate retained kernel's clock.
+						code: 'await Bun.write("engine.py", "def after_timed_out_eval(): pass\\n"); await Promise.withResolvers().promise',
+						timeout: 1,
+					}),
+				},
+			},
 		];
 		let requests = 0;
 		registerCustomApi("repo-lifecycle-local", () => {
@@ -93,6 +134,8 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 				"edit.mode": "replace",
 				"edit.enforceSeenLines": false,
 				"bash.autoBackground.enabled": false,
+				"eval.autoBackground.enabled": false,
+				"tools.xdev": true,
 			},
 		});
 		const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
@@ -114,7 +157,7 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			enableMCP: false,
 			enableLsp: false,
 			skipPythonPreflight: true,
-			toolNames: ["write", "edit", "repo", "bash"],
+			toolNames: ["write", "edit", "repo", "bash", "eval"],
 		});
 		try {
 			await session.sendUserMessage("write the file");
@@ -179,6 +222,78 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 				expect((await afterShell.status()).needsReconcile).toBe(false);
 			} finally {
 				afterShell.close();
+			}
+			const evalPanel = new RepoService({ cwd, agentDir });
+			try {
+				const checked = await evalPanel.status();
+				expect(checked).toMatchObject({ unchecked: false, needsReconcile: false });
+				for (const [request, isError] of [
+					["reject malformed device JSON", true],
+					["reject invalid eval arguments", true],
+					["show eval help without running it", false],
+					["query another device without running eval", false],
+				] as const) {
+					await session.sendUserMessage(request);
+					const result = session.agent.state.messages.filter(message => message.role === "toolResult").at(-1);
+					expect(result?.isError, JSON.stringify(result)).toBe(isError);
+					expect(await evalPanel.status()).toMatchObject({
+						generation: checked.generation,
+						unchecked: false,
+						needsReconcile: false,
+					});
+				}
+				for (const [request, symbol, isError] of [
+					["run an eval device write", "after_eval", false],
+					["write then fail inside the eval device", "after_failed_eval", true],
+					["write then time out inside the eval device", "after_timed_out_eval", true],
+				] as const) {
+					await session.sendUserMessage(request);
+					const result = session.agent.state.messages.filter(message => message.role === "toolResult").at(-1);
+					expect(result?.isError, JSON.stringify(result)).toBe(isError);
+					expect(result?.details).toMatchObject({
+						xdev: {
+							tool: "eval",
+							mode: "execute",
+							inner: { cells: [expect.objectContaining({ status: isError ? "error" : "complete" })] },
+						},
+					});
+					expect(await Bun.file(file).text()).toContain(`def ${symbol}()`);
+					expect(await evalPanel.status()).toMatchObject({
+						unchecked: true,
+						needsReconcile: true,
+						uncertainReasons: ["eval execution may have modified repository files; reconcile to verify coverage"],
+					});
+					await evalPanel.reconcile();
+					expect((await evalPanel.symbol(symbol)).hits.map(hit => hit.path)).toEqual(["engine.py"]);
+					expect((await evalPanel.status()).unchecked).toBe(false);
+				}
+				// A transport-level interrupt loses the final xdev envelope. The
+				// live execution details still identify the eval that actually ran.
+				session.agent.emitExternalEvent({
+					type: "tool_execution_update",
+					toolCallId: "interrupted-eval-device",
+					toolName: "write",
+					args: { path: "xd://eval" },
+					partialResult: {
+						content: [],
+						details: { xdev: { tool: "eval", mode: "execute", inner: { cells: [{ status: "running" }] } } },
+					},
+				});
+				session.agent.emitExternalEvent({
+					type: "tool_execution_end",
+					toolCallId: "interrupted-eval-device",
+					toolName: "write",
+					isError: true,
+					result: {
+						content: [],
+						details: { __interrupted: true, source: "interrupt_skipped", execution: "started" },
+					},
+				});
+				await session.waitForIdle();
+				expect(await evalPanel.status()).toMatchObject({ unchecked: true, needsReconcile: true });
+				await evalPanel.reconcile();
+			} finally {
+				evalPanel.close();
 			}
 			session.agent.emitExternalEvent({
 				type: "tool_execution_end",
@@ -560,7 +675,7 @@ describe("repository lifecycle coverage across session and background execution 
 		}
 	});
 
-	it("invalidates a panel reconcile when an async bash job writes after the panel checked the tree", async () => {
+	it.each(["bash", "eval"] as const)("invalidates a reconciled tree after async %s settlement", async kind => {
 		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-async-"));
 		temporary.push(temp);
 		const cwd = path.join(temp, "project");
@@ -578,6 +693,15 @@ describe("repository lifecycle coverage across session and background execution 
 		// Keep the write gated until reconciliation completes on Windows too;
 		// a regular file needs neither POSIX FIFOs nor an external mkfifo binary.
 		const command = `while [ ! -f release.ready ]; do sleep 0.01; done; printf 'def after_background(): return "ASYNC_NEEDLE"\\n' > engine.py`;
+		const evalCode = [
+			'import { watch } from "node:fs"',
+			"const release = Promise.withResolvers()",
+			'const watcher = watch(".", (_event, name) => { if (name === "release.ready") release.resolve() })',
+			'if (await Bun.file("release.ready").exists()) release.resolve()',
+			"await release.promise",
+			"watcher.close()",
+			'await Bun.write("engine.py", \'def after_background(): return "ASYNC_NEEDLE"\\n\')',
+		].join("\n");
 		let requested = false;
 		registerCustomApi("repo-async-local", () => {
 			const stream = new AssistantMessageEventStream();
@@ -587,9 +711,16 @@ describe("repository lifecycle coverage across session and background execution 
 					requested = true;
 					const toolCall = {
 						type: "toolCall" as const,
-						id: "background-bash-call",
-						name: "bash",
-						arguments: { command, async: true },
+						id: `background-${kind}-call`,
+						...(kind === "bash"
+							? { name: "bash", arguments: { command, async: true } }
+							: {
+									name: "write",
+									arguments: {
+										path: "xd://eval",
+										content: JSON.stringify({ language: "js", code: evalCode }),
+									},
+								}),
 					};
 					message.content = [toolCall];
 					message.stopReason = "toolUse";
@@ -616,7 +747,14 @@ describe("repository lifecycle coverage across session and background execution 
 			cwd,
 			agentDir,
 			inMemory: true,
-			overrides: { "compaction.enabled": false, "bashInterceptor.enabled": false, "async.enabled": true },
+			overrides: {
+				"compaction.enabled": false,
+				"bashInterceptor.enabled": false,
+				"async.enabled": true,
+				"eval.autoBackground.enabled": true,
+				"eval.autoBackground.thresholdMs": 0,
+				"tools.xdev": true,
+			},
 		});
 		const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
 		const registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"));
@@ -637,15 +775,15 @@ describe("repository lifecycle coverage across session and background execution 
 			enableMCP: false,
 			enableLsp: false,
 			skipPythonPreflight: true,
-			toolNames: ["bash", "repo"],
+			toolNames: ["bash", "repo", "write", "eval"],
 		});
 		try {
 			const panel = new RepoService({ cwd, agentDir });
 			try {
 				await panel.reconcile();
-				await session.sendUserMessage("start the delayed bash write");
+				await session.sendUserMessage(`start the delayed ${kind} write`);
 				const jobs = session.asyncJobManager?.getRunningJobs({ ownerId: session.getAgentId() });
-				expect(jobs?.map(job => job.type)).toEqual(["bash"]);
+				expect(jobs?.map(job => job.type)).toEqual([kind]);
 				const job = jobs![0];
 				expect((await panel.status()).needsReconcile).toBe(true);
 				await panel.reconcile();

@@ -509,6 +509,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		const file = path.join(service.root, "src/engine.py");
 		const directory = path.dirname(file);
 		const realpath = fsSync.realpathSync;
+		const lstat = fsSync.lstatSync;
 		for (const deleted of [false, true]) {
 			if (deleted) await fs.rm(file);
 			else await put(root, "src/engine.py", "def after_case_change(): return 'aftercasebeacon'\n");
@@ -519,10 +520,21 @@ describe("repository index with real SQLite and native Python parsing", () => {
 				if (key === directory.toLowerCase()) return realpath(directory);
 				return realpath(filename);
 			}) as typeof fsSync.realpathSync);
+			const metadata = vi.spyOn(fsSync, "lstatSync").mockImplementation(((
+				filename: fsSync.PathLike,
+				options?: fsSync.StatOptions,
+			) => {
+				const key = String(filename).toLowerCase();
+				return lstat(
+					key === directory.toLowerCase() ? directory : key === file.toLowerCase() ? file : filename,
+					options,
+				);
+			}) as typeof fsSync.lstatSync);
 			try {
 				service.markChanged(["SRC/ENGINE.PY"]);
 			} finally {
 				identity.mockRestore();
+				metadata.mockRestore();
 			}
 			expect((await service.status()).pendingPaths).toEqual(["src/engine.py"]);
 			expect((await service.search("beforecasebeacon")).hits).toEqual([]);
@@ -537,6 +549,60 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			expect((await service.status()).fileCount).toBe(deleted ? 0 : 1);
 		}
 	});
+
+	for (const [directory, removeDirectory] of [
+		["src", false],
+		["123", false],
+		["src/removed", true],
+		["123/456", true],
+	] as const) {
+		it.skipIf(process.platform !== "win32")(
+			`removes deleted Windows case aliases from SQLite under ${directory}`,
+			async () => {
+				const indexed = `${directory}/Engine.py`;
+				const { root, service } = await fixture({
+					[indexed]: "def deleted_windows_engine(): return 'deletedwindowsbeacon'\n",
+				});
+				await service.build();
+				expect((await service.search("deletedwindowsbeacon")).hits.map(hit => hit.path)).toEqual([indexed]);
+				expect((await service.symbol("deleted_windows_engine")).hits.map(hit => hit.path)).toEqual([indexed]);
+
+				await fs.rm(path.join(root, removeDirectory ? directory : indexed), { recursive: removeDirectory });
+				service.markChanged([`${directory}/ENGINE.PY`]);
+				expect((await service.status()).pendingPaths).toEqual([indexed]);
+				expect((await service.search("deletedwindowsbeacon")).hits).toEqual([]);
+				expect((await service.symbol("deleted_windows_engine")).hits).toEqual([]);
+				expect(await service.status()).toMatchObject({ pendingCount: 0, fileCount: 0, symbolCount: 0 });
+				for (const table of ["files", "files_fts", "symbols"]) {
+					expect(service.storage.db.query(`SELECT count(*) n FROM ${table}`).get()).toEqual({ n: 0 });
+				}
+			},
+		);
+	}
+
+	it.skipIf(process.platform !== "linux")(
+		"does not infer missing POSIX case aliases from a symlink spelling of the parent",
+		async () => {
+			const { root, service } = await fixture({
+				"src/Engine.py": "def missing_posix_engine(): return 'missingposixbeacon'\n",
+			});
+			await fs.symlink("src", path.join(root, "Src"));
+			await service.build();
+			await fs.rm(path.join(root, "src/Engine.py"));
+
+			service.markChanged(["src/ENGINE.PY"]);
+			expect((await service.status()).pendingPaths).toEqual(["src/ENGINE.PY"]);
+			expect((await service.search("missingposixbeacon")).hits.map(hit => hit.path)).toEqual(["src/Engine.py"]);
+			expect((await service.symbol("missing_posix_engine")).hits.map(hit => hit.path)).toEqual(["src/Engine.py"]);
+			expect((await service.status()).pendingCount).toBe(0);
+
+			// Only the exact deleted identity is evidence for removing this POSIX row.
+			service.markChanged(["src/Engine.py"]);
+			expect((await service.search("missingposixbeacon")).hits).toEqual([]);
+			expect((await service.symbol("missing_posix_engine")).hits).toEqual([]);
+			expect(await service.status()).toMatchObject({ pendingCount: 0, fileCount: 0, symbolCount: 0 });
+		},
+	);
 
 	it.skipIf(process.platform !== "linux")("keeps case-distinct POSIX mutations independent", async () => {
 		const { root, service } = await fixture({
@@ -557,7 +623,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 	});
 
 	it.skipIf(process.platform !== "linux")(
-		"deletes the exact indexed leaf when a symlink ancestor also passes the case-folding probe",
+		"deletes only the exact indexed leaf when a symlink mimics case-insensitive parent lookup",
 		async () => {
 			const { root, service } = await fixture({
 				"src/A.py": "def upper_leaf(): return 'upperleafbeacon'\n",

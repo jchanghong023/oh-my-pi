@@ -37,8 +37,7 @@ pub fn extract_python_symbols(
 		return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
 	};
 	if tree.root_node().has_error() {
-		let Some(compatible_tree) = parse_python36_function_names(code, &tree, &mut heartbeat)?
-		else {
+		let Some(compatible_tree) = parse_python36_identifiers(code, &tree, &mut heartbeat)? else {
 			return Ok(PythonSymbolsResult { parse_error: true, ..Default::default() });
 		};
 		tree = compatible_tree;
@@ -52,36 +51,64 @@ pub fn extract_python_symbols(
 	Ok(PythonSymbolsResult { symbols, parse_error: false })
 }
 
-/// Only retry a failed modern parse when `async`/`await` occupies a function's
-/// name slot. Equal-width replacements preserve every original source
-/// coordinate.
-fn parse_python36_function_names(
+/// Retry failed modern parses with Python 3.6's soft keywords as identifiers.
+/// Rewrite only syntax-tree tokens, never string/comment contents, and retain
+/// real async/await operators. Equal byte widths preserve original coordinates.
+fn parse_python36_identifiers(
 	code: &str,
 	tree: &Tree,
 	heartbeat: &mut impl FnMut() -> Result<()>,
 ) -> Result<Option<Tree>> {
 	let mut rewritten: Option<String> = None;
-	let mut names = Vec::new();
+	let mut identifiers = Vec::new();
+	let mut async_functions = Vec::new();
 	let mut cursor = tree.walk();
 	'walk: loop {
 		heartbeat()?;
 		let node = cursor.node();
-		if node.kind() == "def" {
-			let start = skip_declaration_whitespace(code, node.end_byte());
-			let end = start.saturating_add(5);
-			if matches!(code.get(start..end), Some("async" | "await"))
-				&& code.as_bytes().get(skip_declaration_whitespace(code, end)) == Some(&b'(')
-			{
+		if is_async_function(node) {
+			async_functions.push(node.id());
+		}
+		// The grammar aliases keyword_identifier tokens to identifier even in
+		// recovery trees. Those aliases must also be rewritten: a recovered
+		// expression is not necessarily legal in its enclosing parameter/name
+		// position, which is what the complete retry needs to repair.
+		if node.child_count() == 0
+			&& matches!(node.kind(), "identifier" | "async" | "await" | "ERROR")
+			&& matches!(code.get(node.byte_range()), Some("async" | "await"))
+		{
+			let keyword = match node.kind() {
+				"async" => node.parent().is_some_and(|parent| {
+					parent.child(0) == Some(node)
+						&& matches!(
+							parent.kind(),
+							"function_definition" | "for_statement" | "with_statement" | "for_in_clause"
+						)
+				}),
+				"await" => {
+					!async_functions.is_empty()
+						&& node.parent().is_some_and(|parent| parent.kind() == "await")
+				},
+				_ => false,
+			};
+			if !keyword {
+				let end = node.end_byte();
 				rewritten
 					.get_or_insert_with(|| code.to_owned())
 					.replace_range(end - 1..end, "_");
-				names.push(start);
+				identifiers.push(node.start_byte());
 			}
 		}
 		if cursor.goto_first_child() {
 			continue;
 		}
-		while !cursor.goto_next_sibling() {
+		loop {
+			if async_functions.last() == Some(&cursor.node().id()) {
+				async_functions.pop();
+			}
+			if cursor.goto_next_sibling() {
+				break;
+			}
 			if !cursor.goto_parent() {
 				break 'walk;
 			}
@@ -97,46 +124,24 @@ fn parse_python36_function_names(
 	if tree.root_node().has_error() {
 		return Ok(None);
 	}
-	// Error recovery can place tokens in unexpected contexts. Accept
-	// replacements only after a complete parse proves they are synchronous
-	// function names outside any async function's scope.
-	for start in names {
+	// Recovery can put tokens in unexpected contexts. A complete retry must
+	// prove every rewritten token is an identifier, not a newly formed keyword.
+	// The normal symbol walk also rejects reserved identifiers in async scopes.
+	for start in identifiers {
+		heartbeat()?;
 		let Some(name) = tree.root_node().descendant_for_byte_range(start, start + 5) else {
 			return Ok(None);
 		};
-		let Some(definition) = name.parent() else {
+		if name.byte_range() != (start..start + 5) || name.kind() != "identifier" {
 			return Ok(None);
-		};
-		if name.byte_range() != (start..start + 5)
-			|| definition.kind() != "function_definition"
-			|| definition.child_by_field_name("name") != Some(name)
-		{
-			return Ok(None);
-		}
-		let mut ancestor = Some(definition);
-		while let Some(node) = ancestor {
-			heartbeat()?;
-			if node.kind() == "function_definition"
-				&& node.child(0).is_some_and(|child| child.kind() == "async")
-			{
-				return Ok(None);
-			}
-			ancestor = node.parent();
 		}
 	}
 	Ok(Some(tree))
 }
 
-fn skip_declaration_whitespace(code: &str, mut offset: usize) -> usize {
-	let bytes = code.as_bytes();
-	loop {
-		match bytes.get(offset) {
-			Some(b' ' | b'\t' | b'\x0c') => offset += 1,
-			Some(b'\\') if bytes.get(offset + 1) == Some(&b'\n') => offset += 2,
-			Some(b'\\') if bytes.get(offset + 1..offset + 3) == Some(b"\r\n") => offset += 3,
-			_ => return offset,
-		}
-	}
+fn is_async_function(node: Node<'_>) -> bool {
+	node.kind() == "function_definition"
+		&& node.child(0).is_some_and(|child| child.kind() == "async")
 }
 
 fn visit(
@@ -152,9 +157,19 @@ fn visit(
 	let mut cursor = node.walk();
 	let mut scopes = Vec::new();
 	let mut class_owner = false;
+	let mut async_owner = false;
 	'walk: loop {
 		heartbeat()?;
 		let node = cursor.node();
+		// The grammar permits legacy keyword identifiers in some expression
+		// positions even in a successful parse. Python 3.6 reserves both words
+		// throughout an async function, including nested synchronous definitions.
+		if async_owner
+			&& node.kind() == "identifier"
+			&& matches!(code.get(node.byte_range()), Some("async" | "await"))
+		{
+			return Ok(false);
+		}
 		// Tree-sitter accepts empty suites without marking the tree as erroneous.
 		// Python requires a statement even when the suite contains comments.
 		if node.kind() == "block" {
@@ -169,8 +184,9 @@ fn visit(
 		if let Some(original_len) =
 			collect_definition(node, code, qualification, class_owner, symbols)
 		{
-			scopes.push((node.id(), original_len, class_owner));
+			scopes.push((node.id(), original_len, class_owner, async_owner));
 			class_owner = node.kind() == "class_definition";
+			async_owner |= is_async_function(node);
 		}
 		if cursor.goto_first_child() {
 			loop {
@@ -188,9 +204,10 @@ fn visit(
 				.last()
 				.is_some_and(|&(id, ..)| id == cursor.node().id())
 			{
-				let (_, original_len, previous_owner) = scopes.pop().unwrap();
+				let (_, original_len, previous_owner, previous_async_owner) = scopes.pop().unwrap();
 				qualification.truncate(original_len);
 				class_owner = previous_owner;
+				async_owner = previous_async_owner;
 			}
 			while cursor.goto_next_sibling() {
 				if cursor.node().is_named() {
@@ -267,6 +284,20 @@ fn collect_definition(
 #[cfg(test)]
 mod tests {
 	use super::extract_python_symbols;
+
+	#[test]
+	fn python36_compatibility_scan_honors_heartbeat_cancellation() {
+		let mut calls = 0;
+		let error =
+			extract_python_symbols("def send(async=False): pass\ndef visible(): pass\n", || {
+				calls += 1;
+				anyhow::ensure!(calls < 3, "cancelled compatibility scan");
+				Ok(())
+			})
+			.unwrap_err();
+		assert_eq!(error.to_string(), "cancelled compatibility scan");
+		assert_eq!(calls, 3);
+	}
 
 	#[test]
 	fn python36_soft_keyword_function_names_preserve_symbols_and_coordinates() {
@@ -352,15 +383,24 @@ mod tests {
 			"async def await(): pass\n",
 			"async def outer():\n    def async(): pass\n",
 			"async def outer():\n    def await(): pass\n",
+			"async def outer(async=False): pass\n",
+			"async def outer(await=False): pass\n",
+			"async def outer():\n    async = 1\n",
+			"async def outer():\n    await = 1\n",
+			"async def outer():\n    class async: pass\n",
+			"async def outer():\n    def inner(await=False): pass\n",
+			"async def outer():\n    return value.async\n",
 			"async def broken(:\n    await task\n",
 			"async def broken():\n    await (\n",
 			"async def broken():\n    async for item in :\n        pass\n",
 			"def broken():\n    # comment\n",
 		] {
-			let code = format!("def before(): return 1\ndef async(): pass\ndef await(): pass\n{tail}");
-			let result = extract_python_symbols(&code, || Ok(())).unwrap();
-			assert!(result.parse_error, "invalid syntax accepted: {tail:?}");
-			assert!(result.symbols.is_empty(), "definitions leaked: {tail:?}");
+			for prefix in ["", "def before(): return 1\ndef async(): pass\ndef await(): pass\n"] {
+				let code = format!("{prefix}{tail}");
+				let result = extract_python_symbols(&code, || Ok(())).unwrap();
+				assert!(result.parse_error, "invalid syntax accepted: {tail:?}");
+				assert!(result.symbols.is_empty(), "definitions leaked: {tail:?}");
+			}
 		}
 	}
 

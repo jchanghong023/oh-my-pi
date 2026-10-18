@@ -7,6 +7,7 @@
 - Bind Wiki imports before their first callback so database replacement cannot migrate or overwrite another database's evidence.
 - Preserve Markdown list, quote and Setext boundaries and distinguish formatting from complete-name evidence across stored slices.
 - Reject conflicting overlapping Wiki source slices and preserve control characters in escaped grep continuation parameters.
+- Preserve Python definitions in Python 3.6 files using `async` or `await` as legal parameters, class names and other identifiers.
 
 ## [18.12.1] - 2026-10-17
 

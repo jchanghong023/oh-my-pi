@@ -364,15 +364,30 @@ export class RepoService {
 				// Do not turn a symlink notification into a notification for its target.
 				return resolved?.toLowerCase() === rel.toLowerCase() ? resolved : rel;
 			}
-			// A missing leaf cannot be realpathed. Verify case folding on its
-			// nearest surviving ancestor before consulting indexed spellings.
-			const name = path.basename(canonical);
-			const alternate = name.replace(/[a-zA-Z]/, char =>
-				char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
-			);
-			if (alternate === name) return rel;
+			// Missing leaves have no realpath. Probe a surviving directory's
+			// identity, not realpath's spelling (which Windows may preserve).
+			let probe = canonical;
 			try {
-				if (realpathSync(path.join(path.dirname(canonical), alternate)) !== canonical) return rel;
+				// A symlink/junction is not evidence of case-insensitive lookup.
+				for (let component = ancestor; component !== this.root; component = path.dirname(component)) {
+					if (lstatSync(component).isSymbolicLink()) return rel;
+				}
+				for (;;) {
+					const name = path.basename(probe);
+					const alternate = name.replace(/[a-zA-Z]/, char =>
+						char === char.toLowerCase() ? char.toUpperCase() : char.toLowerCase(),
+					);
+					if (alternate !== name) {
+						const original = lstatSync(probe, { bigint: true });
+						const alias = lstatSync(path.join(path.dirname(probe), alternate), { bigint: true });
+						if (alias.isSymbolicLink() || original.dev !== alias.dev || original.ino !== alias.ino) return rel;
+						break;
+					}
+					// Numeric directory names provide no case probe; keep looking
+					// within the repository instead of rejecting a valid alias.
+					if (probe === this.root) return rel;
+					probe = path.dirname(probe);
+				}
 			} catch {
 				return rel;
 			}
@@ -383,8 +398,7 @@ export class RepoService {
 					"SELECT path FROM files WHERE generation=? AND path=? COLLATE NOCASE ORDER BY path=? DESC,path LIMIT 2",
 				)
 				.all(generation, rel, rel) as Array<{ path: string }>;
-			// An ancestor symlink can pass the case-folding probe on POSIX.
-			// Never replace an exact indexed identity or guess between siblings.
+			// Never replace an exact indexed identity or guess between case-distinct siblings.
 			if (indexed[0]?.path === rel || indexed.length !== 1) return rel;
 			const candidate = indexed[0]!.path;
 			try {

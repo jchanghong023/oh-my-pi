@@ -17,6 +17,9 @@
 
 - Preserve complete Wiki evidence pages through top-level tools and `xd://wiki`, including oversized multilingual sections.
 - Keep Wiki search expressions and editing cursors visible in narrow terminals and across resizing.
+- Mark repository coverage unchecked after Eval device execution and refresh indexed text and definitions after LSP edits.
+- Remove deleted repository entries when Windows change notifications use a different filename case.
+- Show complete repository targets and separate confirmation controls in narrow terminals.
 
 ### Fixed
 
