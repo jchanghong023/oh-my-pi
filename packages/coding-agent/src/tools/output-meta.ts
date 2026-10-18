@@ -422,6 +422,12 @@ export class OutputMetaBuilder {
 		return this;
 	}
 
+	/** Preserve a complete page whose size is bounded by the tool's own pagination budget. */
+	completePage(): this {
+		this.#meta.completePage = true;
+		return this;
+	}
+
 	/** Add LSP diagnostics. No-op if no messages. */
 	diagnostics(summary: string, messages: string[]): this {
 		if (messages.length === 0) return this;
@@ -559,6 +565,10 @@ async function spillLargeResultToArtifact(
 	// recoverable. Spilling it would only create a redundant artifact holding another
 	// artifact's page (and can repeat indefinitely on subsequent artifact reads).
 	if (existingMeta?.pagedSource) return result;
+
+	// Tool-owned pagination has already bounded this complete evidence page. A second
+	// byte-based window would drop evidence while leaving its page footer/cursor intact.
+	if (existingMeta?.completePage) return result;
 
 	// Measure total text content. `totalLength` is the UTF-16 length of the "\n"-joined text.
 	const textParts: string[] = [];

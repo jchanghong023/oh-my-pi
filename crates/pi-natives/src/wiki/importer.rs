@@ -342,11 +342,12 @@ impl Build<'_> {
 	fn acquire_lease(
 		&mut self,
 		started: Instant,
-	) -> std::result::Result<(FileLock, String), ImportError> {
+		database: &str,
+	) -> std::result::Result<FileLock, ImportError> {
 		let mut event = self.event("docs.init.lock.started", self.stage, "started");
 		event.retry_limit = Some(3);
 		self.emit(event)?;
-		let (error, result, level) = match acquire(self.owner, self.cancel) {
+		let (error, result, level) = match acquire(self.owner, self.cancel, database) {
 			Ok(Some(lease)) => return Ok(lease),
 			Ok(None) => {
 				self.lock_contended = true;
@@ -382,6 +383,12 @@ impl Build<'_> {
 		root: &str,
 		name: &str,
 	) -> std::result::Result<WikiBuildResult, ImportError> {
+		// Reopen a legitimately replaced profile before this operation starts,
+		// then bind every import access before any external callback can retarget
+		// it.
+		let database = self
+			.owner
+			.with_storage(self.cancel, |storage| Ok(storage.identity().to_owned()))?;
 		self.log("docs.init.started", self.stage, "started")?;
 		self.check()?;
 		self.stage = "name_validation";
@@ -389,7 +396,7 @@ impl Build<'_> {
 		self.stage = "validate";
 		if self
 			.owner
-			.with_storage(self.cancel, |storage| storage.get(name))?
+			.with_import_storage(self.cancel, &database, |storage| storage.get(name))?
 			.is_some()
 		{
 			self.reason = Some("duplicate_name");
@@ -414,7 +421,7 @@ impl Build<'_> {
 		}
 		self.stage = "lock";
 		let started = Instant::now();
-		let (mut lease, database) = self.acquire_lease(started)?;
+		let mut lease = self.acquire_lease(started, &database)?;
 		let result = (|| {
 			let mut event = self.event("docs.init.lock.completed", self.stage, "completed");
 			event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
@@ -557,14 +564,18 @@ pub(super) fn import_lease(
 fn acquire(
 	owner: &Owner,
 	cancel: &CancelToken,
-) -> std::result::Result<Option<(FileLock, String)>, WikiError> {
+	database: &str,
+) -> std::result::Result<Option<FileLock>, WikiError> {
 	owner.check_import(cancel)?;
-	let (lock_path, identity) = import_lease(&owner.database_path)?;
+	let lock_path = lease_path(database);
 	for attempt in 0..3 {
 		owner.check_import(cancel)?;
+		if super::database::file_identity(Path::new(&owner.database_path))? != database {
+			return Err(WikiError::message("Documentation database changed during document indexing"));
+		}
 		let lease = FileLock::try_acquire_path(&lock_path)?;
 		if lease.is_acquired() {
-			return Ok(Some((lease, identity)));
+			return Ok(Some(lease));
 		}
 		if attempt < 2 {
 			for _ in 0..10 {
@@ -703,7 +714,7 @@ mod tests {
 		}
 	}
 
-	fn core_error(result: std::result::Result<(FileLock, String), ImportError>) -> WikiError {
+	fn core_error(result: std::result::Result<FileLock, ImportError>) -> WikiError {
 		match result {
 			Err(ImportError::Core(error)) => error,
 			Err(ImportError::Callback(..)) => panic!("unexpected callback failure"),
@@ -804,6 +815,7 @@ mod tests {
 				.query_row("PRAGMA user_version", [], |row| row.get(0))
 				.unwrap();
 			let tables = [
+				"sqlite_master",
 				"doc_indexes",
 				"documents",
 				"sections",
@@ -876,6 +888,76 @@ mod tests {
 
 	#[cfg(any(unix, windows))]
 	#[test]
+	fn first_callback_replacement_preserves_legacy_database_evidence() {
+		callback_replacement_preserves_legacy_evidence("docs.init.started");
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn prescan_callback_replacement_preserves_legacy_database_evidence() {
+		callback_replacement_preserves_legacy_evidence("docs.init.scan.started");
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
+	fn separate_imports_reopen_a_legitimately_replaced_profile() {
+		let mut fixture = Fixture::new();
+		let original = fixture.directory.join("original");
+		let replacement = fixture.directory.join("replacement");
+		let source = fixture.directory.join("source");
+		for directory in [&original, &replacement, &source] {
+			fs::create_dir(directory).unwrap();
+		}
+		fs::rename(&fixture.owner.database_path, original.join("docs.db")).unwrap();
+		fs::write(replacement.join("docs.db"), []).unwrap();
+		fs::write(source.join("document.md"), "# Document\nsearchable evidence\n").unwrap();
+		let alias = ProfileAlias(fixture.directory.join("profile"));
+		alias.point_to(&original);
+		fixture.owner.database_path = alias.0.join("docs.db").to_string_lossy().into_owned();
+		let cancel = CancelToken::default();
+		let first = match fixture
+			.build(&cancel)
+			.build(source.to_str().unwrap(), "first")
+		{
+			Ok(result) => result,
+			Err(_) => panic!("first import failed"),
+		};
+		assert_eq!(first.processed, 1);
+		assert_eq!(first.index.name, "first");
+
+		alias.point_to(&replacement);
+		let second = match fixture
+			.build(&cancel)
+			.build(source.to_str().unwrap(), "second")
+		{
+			Ok(result) => result,
+			Err(_) => panic!("import after profile replacement failed"),
+		};
+		assert_eq!(second.processed, 1);
+		assert_eq!(second.index.name, "second");
+		let indexes = fixture
+			.owner
+			.with_storage(&cancel, |storage| storage.list())
+			.unwrap();
+		assert_eq!(indexes.len(), 1);
+		assert_eq!(indexes[0].name, "second");
+		let original_db = rusqlite::Connection::open_with_flags(
+			original.join("docs.db"),
+			rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+		)
+		.unwrap();
+		let original_names = original_db
+			.prepare("SELECT name FROM doc_indexes ORDER BY id")
+			.unwrap()
+			.query_map([], |row| row.get::<_, String>(0))
+			.unwrap()
+			.collect::<rusqlite::Result<Vec<_>>>()
+			.unwrap();
+		assert_eq!(original_names, ["first"]);
+	}
+
+	#[cfg(any(unix, windows))]
+	#[test]
 	fn scan_callback_replacement_preserves_legacy_database_evidence() {
 		callback_replacement_preserves_legacy_evidence("scan");
 	}
@@ -900,7 +982,7 @@ mod tests {
 			.unwrap_err();
 		let cancel = CancelToken::default();
 		let mut build = fixture.build(&cancel);
-		let error = core_error(build.acquire_lease(Instant::now()));
+		let error = core_error(build.acquire_lease(Instant::now(), "missing"));
 		assert_eq!(error.error_message(), original.error_message());
 		assert_eq!(error.diagnostic_error_type(), original.diagnostic_error_type());
 		assert_eq!(error.diagnostic_code(), original.diagnostic_code());
@@ -916,7 +998,7 @@ mod tests {
 		assert!(holder.is_acquired());
 		let cancel = CancelToken::default();
 		let mut build = fixture.build(&cancel);
-		let error = core_error(build.acquire_lease(Instant::now()));
+		let error = core_error(build.acquire_lease(Instant::now(), &identity));
 		assert_eq!(
 			error.error_message(),
 			format!(
@@ -926,9 +1008,10 @@ mod tests {
 		);
 		assert!(build.lock_contended);
 		holder.release_native().unwrap();
-		let (mut successor, database) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		let mut successor = acquire(&fixture.owner, &cancel, &identity)
+			.unwrap()
+			.unwrap();
 		assert!(successor.is_acquired());
-		assert_eq!(database, identity);
 		successor.release_native().unwrap();
 	}
 
@@ -942,12 +1025,19 @@ mod tests {
 		let alias_identity = super::super::database::file_identity(&alias).unwrap();
 		assert_eq!(lease_path(&original_identity), lease_path(&alias_identity));
 		let cancel = CancelToken::default();
-		let (mut holder, _) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		let mut holder = acquire(&fixture.owner, &cancel, &original_identity)
+			.unwrap()
+			.unwrap();
 		fixture.owner.database_path = alias.to_string_lossy().into_owned();
-		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		assert!(
+			acquire(&fixture.owner, &cancel, &alias_identity)
+				.unwrap()
+				.is_none()
+		);
 		holder.release_native().unwrap();
-		let (mut successor, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
-		assert_eq!(identity, original_identity);
+		let mut successor = acquire(&fixture.owner, &cancel, &alias_identity)
+			.unwrap()
+			.unwrap();
 		successor.release_native().unwrap();
 	}
 
@@ -958,7 +1048,10 @@ mod tests {
 		let alias_directory = fixture.directory.join("alias");
 		std::os::unix::fs::symlink(&fixture.directory, &alias_directory).unwrap();
 		let cancel = CancelToken::default();
-		let (mut holder, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		let (_, identity) = import_lease(&fixture.owner.database_path).unwrap();
+		let mut holder = acquire(&fixture.owner, &cancel, &identity)
+			.unwrap()
+			.unwrap();
 		fixture.owner.database_path = alias_directory
 			.join("docs.db")
 			.to_string_lossy()
@@ -966,7 +1059,11 @@ mod tests {
 		let alias_identity =
 			super::super::database::file_identity(Path::new(&fixture.owner.database_path)).unwrap();
 		assert_eq!(lease_path(&identity), lease_path(&alias_identity));
-		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		assert!(
+			acquire(&fixture.owner, &cancel, &alias_identity)
+				.unwrap()
+				.is_none()
+		);
 		holder.release_native().unwrap();
 	}
 
@@ -975,7 +1072,10 @@ mod tests {
 	fn differently_cased_database_alias_shares_the_exclusive_lease() {
 		let mut fixture = Fixture::new();
 		let cancel = CancelToken::default();
-		let (mut holder, identity) = acquire(&fixture.owner, &cancel).unwrap().unwrap();
+		let (_, identity) = import_lease(&fixture.owner.database_path).unwrap();
+		let mut holder = acquire(&fixture.owner, &cancel, &identity)
+			.unwrap()
+			.unwrap();
 		fixture.owner.database_path = fixture
 			.directory
 			.join("DOCS.DB")
@@ -984,7 +1084,11 @@ mod tests {
 		let alias_identity =
 			super::super::database::file_identity(Path::new(&fixture.owner.database_path)).unwrap();
 		assert_eq!(lease_path(&identity), lease_path(&alias_identity));
-		assert!(acquire(&fixture.owner, &cancel).unwrap().is_none());
+		assert!(
+			acquire(&fixture.owner, &cancel, &alias_identity)
+				.unwrap()
+				.is_none()
+		);
 		holder.release_native().unwrap();
 	}
 
@@ -995,7 +1099,7 @@ mod tests {
 		let mut cancel = CancelToken::default();
 		cancel.emplace_abort_token().abort(AbortReason::Signal);
 		let mut build = fixture.build(&cancel);
-		let error = core_error(build.acquire_lease(Instant::now()));
+		let error = core_error(build.acquire_lease(Instant::now(), "missing"));
 		assert_eq!(error.diagnostic_error_type(), "AbortError");
 		assert!(!build.lock_contended);
 	}

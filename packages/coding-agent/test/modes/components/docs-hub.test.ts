@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { CURSOR_MARKER, type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { Settings } from "../../../src/config/settings";
 import { DocsService } from "../../../src/docs/service";
 import { DocsHubComponent } from "../../../src/modes/components/docs-hub";
@@ -11,7 +11,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 function text(component: { render(width: number): string[] }, width = 120): string {
 	return component
 		.render(width)
-		.map(line => Bun.stripANSI(line))
+		.map(line => Bun.stripANSI(line.replaceAll(CURSOR_MARKER, "")))
 		.join("\n");
 }
 
@@ -133,6 +133,90 @@ describe("DocsHubComponent shared interaction contract", () => {
 			expect(text(hub)).toContain("old.md:1-2");
 			expect(text(hub)).toContain("original snapshot needle");
 			expect(text(hub)).not.toContain("unrelated replacement policy");
+		} finally {
+			await hub?.dispose();
+			await writer.close();
+			await Promise.all([
+				fs.rm(profileDir, { recursive: true, force: true }),
+				fs.rm(sourceDir, { recursive: true, force: true }),
+			]);
+		}
+	});
+
+	it.each([
+		["g", "^#"],
+		["/", "needle"],
+	])("keeps the %s input and caret editable through narrow layouts and resizing", async (key, query) => {
+		await initTheme();
+		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-input-profile-"));
+		const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-docs-input-source-"));
+		const writer = new DocsService({ agentDir: profileDir, cwd: sourceDir });
+		const onCancel = vi.fn();
+		let hub: DocsHubComponent | undefined;
+		try {
+			await fs.writeFile(path.join(sourceDir, "input.md"), "# Evidence\nneedle visible evidence\n");
+			await writer.init(".", "handbook");
+			const observed = await observedHub(sourceDir, profileDir, onCancel);
+			hub = observed.hub;
+			observed.terminal.columns = 24;
+			observed.terminal.rows = 20;
+			const inputFrame = () => {
+				const lines = hub!.render(observed.terminal.columns);
+				expect(lines.length).toBeLessThanOrEqual(observed.terminal.rows);
+				expect(
+					lines.every(line => visibleWidth(line.replaceAll(CURSOR_MARKER, "")) <= observed.terminal.columns),
+				).toBe(true);
+				const inputs = lines.filter(line => line.includes(CURSOR_MARKER));
+				expect(inputs).toHaveLength(1);
+				const input = inputs[0]!;
+				const cursor = input.indexOf(CURSOR_MARKER);
+				expect(visibleWidth(input.slice(0, cursor))).toBeLessThan(observed.terminal.columns);
+				// The actual rendered cursor cell, not just its zero-width marker,
+				// must survive the hub's final row-width clamp.
+				expect(input.slice(cursor + CURSOR_MARKER.length)).toStartWith("\x1b[7m");
+				return Bun.stripANSI(input.replaceAll(CURSOR_MARKER, ""));
+			};
+			hub.handleInput(key);
+			typeText(hub, query);
+			expect(inputFrame()).toContain(query);
+			hub.handleInput("\x7f");
+			expect(inputFrame()).toContain(query.slice(0, -1));
+			typeText(hub, query.slice(-1));
+			expect(inputFrame()).toContain(query);
+
+			const suffix = `${"x".repeat(32)}TAIL`;
+			typeText(hub, suffix);
+			expect(inputFrame()).toContain("TAIL");
+			for (const width of [80, 24, 12, 24, 80]) {
+				observed.terminal.columns = width;
+				expect(inputFrame()).toContain("TAIL");
+				if (width === 80) expect(inputFrame()).toContain(query + suffix);
+			}
+			observed.terminal.columns = 24;
+			for (const height of [2, 1, 20]) {
+				observed.terminal.rows = height;
+				expect(inputFrame()).toContain("TAIL");
+			}
+			hub.handleInput("\x01");
+			expect(inputFrame()).toContain(query);
+			hub.handleInput("\x05");
+			expect(inputFrame()).toContain("TAIL");
+			for (let index = 0; index < suffix.length; index++) hub.handleInput("\x7f");
+			expect(inputFrame()).toContain(query);
+
+			observed.terminal.columns = 80;
+			hub.handleInput("\n");
+			await observed.waitFor(rendered => rendered.includes("input.md:1-2"));
+			hub.handleInput("\n");
+			expect(text(hub, 80)).toContain("needle visible evidence");
+			hub.handleInput("\x1b");
+			hub.handleInput(key);
+			typeText(hub, "cancelled edit");
+			hub.handleInput("\x1b");
+			expect(text(hub, 24)).toContain("handbook");
+			expect(onCancel).not.toHaveBeenCalled();
+			hub.handleInput("\x1b");
+			expect(onCancel).toHaveBeenCalledTimes(1);
 		} finally {
 			await hub?.dispose();
 			await writer.close();

@@ -104,8 +104,9 @@ impl Owner {
 		result
 	}
 
-	// Every leased import operation must use the original physical database.
-	// Reject a retargeted profile before reopening or migrating its replacement.
+	// Every import operation must use its captured physical database, even
+	// before acquiring the lease. Never reopen or migrate a callback's
+	// replacement.
 	fn with_import_storage<T>(
 		&self,
 		cancel: &CancelToken,

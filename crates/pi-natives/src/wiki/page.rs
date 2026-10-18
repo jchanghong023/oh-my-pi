@@ -379,7 +379,8 @@ fn append(output: &mut Vec<u16>, text: &str) {
 }
 
 /// JSON.stringify's string quoting, including its well-formed escaping of
-/// lone surrogates. The query is deliberately not sanitized or trimmed again.
+/// lone surrogates. Escape DEL/C1 too so outward text sanitization cannot
+/// change the query's meaning or its continuation cursor identity.
 fn json_string(output: &mut Vec<u16>, units: &[u16]) {
 	output.push(b'"' as u16);
 	let mut index = 0;
@@ -393,7 +394,7 @@ fn json_string(output: &mut Vec<u16>, units: &[u16]) {
 			0x0a => append(output, "\\n"),
 			0x0d => append(output, "\\r"),
 			0x09 => append(output, "\\t"),
-			0x00..=0x1f => append(output, &format!("\\u{unit:04x}")),
+			0x00..=0x1f | 0x7f..=0x9f => json_unicode_escape(output, unit),
 			0xd800..=0xdbff
 				if units
 					.get(index + 1)
@@ -402,12 +403,24 @@ fn json_string(output: &mut Vec<u16>, units: &[u16]) {
 				output.extend_from_slice(&units[index..index + 2]);
 				index += 1;
 			},
-			0xd800..=0xdfff => append(output, &format!("\\u{unit:04x}")),
+			0xd800..=0xdfff => json_unicode_escape(output, unit),
 			_ => output.push(unit),
 		}
 		index += 1;
 	}
 	output.push(b'"' as u16);
+}
+
+fn json_unicode_escape(output: &mut Vec<u16>, unit: u16) {
+	const HEX: &[u8; 16] = b"0123456789abcdef";
+	output.extend_from_slice(&[
+		b'\\' as u16,
+		b'u' as u16,
+		u16::from(HEX[(unit >> 12) as usize]),
+		u16::from(HEX[((unit >> 8) & 0xf) as usize]),
+		u16::from(HEX[((unit >> 4) & 0xf) as usize]),
+		u16::from(HEX[(unit & 0xf) as usize]),
+	]);
 }
 
 fn continuation_json(query: &[u16], cursor: &str, grep: bool, case_sensitive: bool) -> Vec<u16> {

@@ -845,9 +845,41 @@ impl LiteralMatcher {
 		)
 	}
 
+	/// Remove only syntax identified by the existing lexer. The normalized
+	/// window still carries original byte ranges, including across formatting.
+	pub(super) fn source_name_matches<E>(
+		&self,
+		source: &str,
+		check: &dyn Fn() -> Result<(), E>,
+		mut matched: impl FnMut(Range<usize>) -> bool,
+	) -> Result<(), E> {
+		if !source.contains(['*', '_', '~', '\\']) {
+			return self.source_matches(source, check, matched);
+		}
+		let delimiters = super::markdown::name_delimiters(source);
+		self.source_matches_ignoring_with_window(
+			source,
+			&delimiters,
+			check,
+			&mut matched,
+			&mut SourceMatchWindow::default(),
+		)
+	}
+
 	fn source_matches_with_window<E>(
 		&self,
 		source: &str,
+		check: &dyn Fn() -> Result<(), E>,
+		matched: &mut impl FnMut(Range<usize>) -> bool,
+		window: &mut SourceMatchWindow,
+	) -> Result<(), E> {
+		self.source_matches_ignoring_with_window(source, &[], check, matched, window)
+	}
+
+	fn source_matches_ignoring_with_window<E>(
+		&self,
+		source: &str,
+		ignored: &[Range<usize>],
 		check: &dyn Fn() -> Result<(), E>,
 		matched: &mut impl FnMut(Range<usize>) -> bool,
 		window: &mut SourceMatchWindow,
@@ -866,24 +898,46 @@ impl LiteralMatcher {
 				decompose_compatible(character, |decomposed| sigma |= decomposed == '\u{03a3}');
 				sigma
 			});
-		let edges = source
+		let mut skipped = 0;
+		let mut characters = source
 			.char_indices()
-			.skip(1)
-			.filter(|&(_, character)| literal_edge_starter(character))
-			.map(|(offset, _)| offset)
-			.chain(std::iter::once(source.len()));
-		let mut source_start = 0;
+			.filter(move |&(offset, _)| {
+				while ignored
+					.get(skipped)
+					.is_some_and(|range| range.end <= offset)
+				{
+					skipped += 1;
+				}
+				!ignored
+					.get(skipped)
+					.is_some_and(|range| range.start <= offset)
+			})
+			.peekable();
 		let mut preceded_by_cased = false;
 		let limit = self.text.len() + 4096 + 12;
-		for source_end in edges {
+		while characters.peek().is_some() {
 			check()?;
+			let sequence = characters.clone();
+			let (source_start, first) = characters.next().expect("peeked source character");
+			let mut source_end = source_start + first.len_utf8();
+			let mut count = 1;
+			while characters
+				.peek()
+				.is_some_and(|&(_, character)| !literal_edge_starter(character))
+			{
+				let (offset, character) = characters.next().expect("peeked continuation");
+				source_end = offset + character.len_utf8();
+				count += 1;
+			}
 			let range = source_start..source_end;
-			let mut normalized = source[range.clone()].nfkc();
+			let mut normalized = sequence.take(count).map(|(_, character)| character).nfkc();
 			while let Some(character) = normalized.next() {
 				let lower = if character == '\u{03a3}' {
 					lowercase_sigma(
 						preceded_by_cased,
-						normalized.clone().chain(source[source_end..].nfkc()),
+						normalized
+							.clone()
+							.chain(characters.clone().map(|(_, character)| character).nfkc()),
 					)
 				} else {
 					character
@@ -905,11 +959,37 @@ impl LiteralMatcher {
 					}
 				}
 			}
-			source_start = source_end;
 		}
 		check()?;
 		window.scan(self, true, matched);
 		Ok(())
+	}
+
+	/// Legacy non-source-coordinate sections cannot join document
+	/// reconstruction. Keep their existing contextual matcher, removing only
+	/// lexer-owned syntax.
+	pub(crate) fn matches_name_section(
+		&self,
+		raw: &str,
+		markdown: &str,
+		context: &SectionContext,
+	) -> bool {
+		if !markdown.contains(['*', '_', '~', '\\']) {
+			return self.matches_section(raw, markdown, context);
+		}
+		let delimiters = super::markdown::section_name_delimiters(markdown, context);
+		if delimiters.is_empty() {
+			return self.matches_section(raw, markdown, context);
+		}
+		let removed: usize = delimiters.iter().map(|range| range.len()).sum();
+		let mut projected = String::with_capacity(markdown.len() - removed);
+		let mut start = 0;
+		for range in delimiters {
+			projected.push_str(&markdown[start..range.start]);
+			start = range.end;
+		}
+		projected.push_str(&markdown[start..]);
+		self.matches_section(&normalize_search_text(&projected), markdown, context)
 	}
 
 	pub(crate) fn matches_section(
@@ -1186,6 +1266,51 @@ mod tests {
 				})
 				.unwrap();
 			assert_eq!(found, expected, "{source:?}");
+		}
+	}
+
+	#[test]
+	fn lexical_name_boundaries_validate_each_original_occurrence() {
+		for (source, name, expected) in [
+			("**scan**ner scan", "scan", vec![12..16]),
+			("**scan**ner `scan`ner", "scan", vec![13..17]),
+			("**mbist_check.rpt**.bak", "mbist_check.rpt", vec![]),
+			("**scan**ner", "scanner", vec![2..11]),
+			("s**ca**n\u{0303}", "scañ", vec![0..10]),
+			("`counter_value*factor*next`", "counter_value*factor*next", vec![1..26]),
+			("[scan](scan)", "scan", vec![1..5, 7..11]),
+			("mbist\\_check.rpt", "mbist_check.rpt", vec![0..16]),
+		] {
+			let mut found = Vec::new();
+			LiteralMatcher::new(name, true)
+				.source_name_matches(source, &|| Ok::<_, Infallible>(()), |range| {
+					found.push(range);
+					true
+				})
+				.unwrap();
+			assert_eq!(found, expected, "{source:?}");
+		}
+	}
+
+	#[test]
+	fn legacy_name_context_keeps_code_and_rejects_emphasis_boundaries() {
+		for (source, name, expected) in [
+			("**scan**ner", "scan", false),
+			("**mbist_check.rpt**.bak", "mbist_check.rpt", false),
+			("`scan`ner", "scan", true),
+			("`counter_value*factor*next`", "counter_value*factor*next", true),
+			("[scan](scan)", "scan", true),
+			("mbist\\_check.rpt", "mbist_check.rpt", true),
+		] {
+			assert_eq!(
+				LiteralMatcher::new(name, true).matches_name_section(
+					&normalize_search_text(source),
+					source,
+					&context("", ""),
+				),
+				expected,
+				"{source:?}",
+			);
 		}
 	}
 

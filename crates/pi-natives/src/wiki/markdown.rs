@@ -2,6 +2,7 @@
 
 use std::{
 	collections::{HashMap, VecDeque},
+	ops::Range,
 	sync::{Arc, LazyLock},
 };
 
@@ -79,10 +80,13 @@ pub(super) fn list_end<'a>(
 	block::list_end(line, length, index)
 }
 
-pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token> {
+fn section_source<'a>(
+	markdown: &'a str,
+	context: &SectionContext,
+) -> (std::borrow::Cow<'a, str>, usize) {
 	let source = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
 	if context.fence_prefix.is_none() && !context.continues_line {
-		return block::lex(source);
+		return (std::borrow::Cow::Borrowed(source), 0);
 	}
 	let mut reconstructed = String::with_capacity(
 		source.len() + context.fence_prefix.as_ref().map_or(0, |p| p.len() + 1) + 4,
@@ -105,11 +109,43 @@ pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token
 		}
 		reconstructed.push_str("    ");
 	}
+	let prefix_length = reconstructed.len();
 	reconstructed.push_str(source);
-	block::lex(&reconstructed)
+	(std::borrow::Cow::Owned(reconstructed), prefix_length)
 }
 
-fn render(tokens: &[Token], names: bool, output: &mut String) {
+pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token> {
+	block::lex(&section_source(markdown, context).0)
+}
+
+/// Original UTF-8 syntax ranges removed by the existing inline name lexer.
+/// Literal code, HTML, link destinations and unrecognized operators remain raw.
+pub(crate) fn name_delimiters(source: &str) -> Vec<Range<usize>> {
+	let stripped = source.strip_prefix('\u{feff}').unwrap_or(source);
+	let offset = source.len() - stripped.len();
+	let mut ranges = block::name_delimiters(stripped);
+	for range in &mut ranges {
+		range.start += offset;
+		range.end += offset;
+	}
+	ranges
+}
+
+pub(crate) fn section_name_delimiters(source: &str, context: &SectionContext) -> Vec<Range<usize>> {
+	let (reconstructed, prefix_length) = section_source(source, context);
+	let offset = source.len() - source.strip_prefix('\u{feff}').unwrap_or(source).len();
+	block::name_delimiters(&reconstructed)
+		.into_iter()
+		.filter_map(|range| {
+			(range.end > prefix_length).then(|| {
+				range.start.max(prefix_length) - prefix_length + offset
+					..range.end - prefix_length + offset
+			})
+		})
+		.collect()
+}
+
+fn render(tokens: &[Token], output: &mut String) {
 	for token in tokens {
 		match token.kind {
 			TokenKind::Table => {
@@ -121,7 +157,7 @@ fn render(tokens: &[Token], names: bool, output: &mut String) {
 						if cell_index != 0 {
 							output.push(' ');
 						}
-						render(cell, names, output);
+						render(cell, output);
 					}
 				}
 			},
@@ -130,7 +166,7 @@ fn render(tokens: &[Token], names: bool, output: &mut String) {
 					if index != 0 {
 						output.push('\n');
 					}
-					render(item, names, output);
+					render(item, output);
 				}
 			},
 			TokenKind::Space | TokenKind::Hr | TokenKind::Br => output.push('\n'),
@@ -140,16 +176,12 @@ fn render(tokens: &[Token], names: bool, output: &mut String) {
 					token.kind,
 					TokenKind::Heading | TokenKind::Paragraph | TokenKind::Blockquote | TokenKind::Code
 				);
-				let name_boundary = names && (block_boundary || token.kind == TokenKind::Codespan);
-				if name_boundary {
-					output.push('\n');
-				}
 				if let Some(children) = &token.children {
-					render(children, names, output);
+					render(children, output);
 				} else {
 					output.push_str(&token.text);
 				}
-				if block_boundary || name_boundary {
+				if block_boundary {
 					output.push('\n');
 				}
 			},
@@ -159,7 +191,7 @@ fn render(tokens: &[Token], names: bool, output: &mut String) {
 
 pub(crate) fn plain_text(tokens: &[Token]) -> String {
 	let mut rendered = String::new();
-	render(tokens, false, &mut rendered);
+	render(tokens, &mut rendered);
 	let mut output = String::with_capacity(rendered.len());
 	let mut in_space = false;
 	for character in trim_js(&rendered).chars() {
@@ -176,43 +208,37 @@ pub(crate) fn plain_text(tokens: &[Token]) -> String {
 	output
 }
 
-/// The caller applies search normalization after preserving literal-code
-/// boundaries.
-pub(crate) fn name_text(tokens: &[Token]) -> String {
-	let mut output = String::new();
-	render(tokens, true, &mut output);
-	output
+/// Ask the same ordered block lexer used for section projection, rather than
+/// allowing an underline to turn a quote, rule, definition or HTML into a
+/// title.
+pub(super) fn is_setext_heading(line: &str, next: &str) -> bool {
+	let mut source = String::with_capacity(line.len() + next.len() + 1);
+	source.push_str(line);
+	if !line.ends_with('\n') {
+		source.push('\n');
+	}
+	source.push_str(next);
+	block::lex(&source)
+		.first()
+		.is_some_and(|token| token.kind == TokenKind::Heading)
 }
 
 pub(crate) fn local_title(markdown: &str, context: &SectionContext) -> String {
 	if context.fence_prefix.is_some() || context.continues_line {
 		return String::new();
 	}
-	static ATX: LazyLock<Regex> =
-		LazyLock::new(|| js_regex(r"^ {0,3}#{1,6}\s+([^\r\n\u{2028}\u{2029}]+)"));
-	static TEXT: LazyLock<Regex> = LazyLock::new(|| js_regex(r"^ {0,3}\S"));
-	static SETEXT: LazyLock<Regex> = LazyLock::new(|| js_regex(r"^ {0,3}(?:=+|-+)\s*\z"));
 	let source = markdown.strip_prefix('\u{feff}').unwrap_or(markdown);
-	let mut lines = source.splitn(3, '\n');
-	let first = lines.next().unwrap_or("");
-	let second = lines.next().unwrap_or("");
-	let heading = ATX
-		.captures(first)
-		.and_then(|captures| captures.get(1))
-		.map_or_else(
-			|| {
-				if TEXT.is_match(first) && SETEXT.is_match(second) {
-					first
-				} else {
-					""
-				}
-			},
-			|matched| matched.as_str(),
-		);
-	if heading.is_empty() {
-		String::new()
+	// Only the opening two lines can supply a local title. Lexing that prefix
+	// preserves the block precedence of both ATX and Setext headings.
+	let length = source.split_inclusive('\n').take(2).map(str::len).sum();
+	let tokens = block::lex(&source[..length]);
+	if let Some(token) = tokens
+		.first()
+		.filter(|token| token.kind == TokenKind::Heading)
+	{
+		plain_text(std::slice::from_ref(token))
 	} else {
-		plain_text(&block::lex(heading))
+		String::new()
 	}
 }
 
@@ -359,9 +385,7 @@ impl MarkdownFenceScanner {
 		self.line_buffer = buffer;
 	}
 
-	fn quote_interrupted(&self, source: &str) -> bool {
-		let mut buffer = String::new();
-		let mut line = scanner_line(source, &mut buffer);
+	fn quote_content<'a>(&self, mut line: &'a str, maximum: usize) -> (&'a str, usize) {
 		let mut quote_depth = 0;
 		let mut lists = self.lists.iter().peekable();
 		loop {
@@ -371,7 +395,7 @@ impl MarkdownFenceScanner {
 				let indentation = line.bytes().take_while(|byte| *byte == b' ').count();
 				line = &line[indentation.min(list.width)..];
 				lists.next();
-			} else if quote_depth < self.quote_depth
+			} else if quote_depth < maximum
 				&& let Some(length) = block::quote_prefix(line)
 			{
 				line = &line[length..];
@@ -380,9 +404,43 @@ impl MarkdownFenceScanner {
 				break;
 			}
 		}
-		block::lex(line)
+		(line, quote_depth)
+	}
+
+	fn quote_interrupted(&self, source: &str) -> bool {
+		let Some(fence) = self.fence.filter(|fence| fence.quote_depth > 0) else {
+			return false;
+		};
+		let length = source.split_inclusive('\n').take(2).map(str::len).sum();
+		let mut buffer = String::new();
+		let source = scanner_line(&source[..length], &mut buffer);
+		let mut lines = source.split_inclusive('\n');
+		let first = lines.next().unwrap_or("");
+		let (line, quote_depth) = self.quote_content(first, fence.quote_depth);
+		if quote_depth >= fence.quote_depth {
+			return false;
+		}
+		let next = lines.next().unwrap_or("");
+		// An ancestor Setext heading needs the same container prefixes removed
+		// from its underline, but deeper quotes remain real child blocks.
+		let (next_line, _) = self.quote_content(next, quote_depth);
+		let projected = if line.len() == first.len() && next_line.len() == next.len() {
+			std::borrow::Cow::Borrowed(source)
+		} else {
+			let mut projected = String::with_capacity(line.len() + next_line.len());
+			projected.push_str(line);
+			projected.push_str(next_line);
+			std::borrow::Cow::Owned(projected)
+		};
+		block::lex(&projected)
 			.first()
 			.is_some_and(|token| !matches!(token.kind, TokenKind::Paragraph | TokenKind::Text))
+	}
+
+	fn end_quotes_before(&mut self, source: &str) {
+		if !self.continues_line && self.quote_interrupted(source) {
+			self.fence = None;
+		}
 	}
 
 	fn append(&mut self, source: &str) {
@@ -645,6 +703,7 @@ impl SectionContextScanner {
 			self.scanner = MarkdownFenceScanner::default();
 		}
 		self.scanner.end_lists_before(section.raw_markdown);
+		self.scanner.end_quotes_before(section.raw_markdown);
 		SectionContext {
 			shape:          Shape::Content,
 			fence_prefix:   self.scanner.fence.map(|fence| {
@@ -806,11 +865,9 @@ mod tests {
 	}
 
 	#[test]
-	fn literal_code_preserves_punctuation_and_name_boundaries() {
+	fn literal_code_preserves_punctuation() {
 		let tokens = lex_section("a`C++`17\n\n```cpp\nx->y::z()\n```\n", &context());
 		assert_eq!(plain_text(&tokens), "aC++17\n\nx->y::z()");
-		assert!(name_text(&tokens).contains("a\nC++\n17"));
-		assert!(name_text(&tokens).contains("x->y::z()"));
 	}
 
 	#[test]
@@ -976,8 +1033,8 @@ mod tests {
 			let matcher = LiteralMatcher::new(query, true);
 			for (row, (_, context)) in rows.iter().zip(recovered) {
 				assert!(
-					!matcher.matches_section(
-						&normalize_search_text(&name_text(&lex_section(&row.raw_markdown, &context))),
+					!matcher.matches_name_section(
+						&normalize_search_text(&row.raw_markdown),
 						&row.raw_markdown,
 						&context,
 					),
@@ -999,8 +1056,8 @@ mod tests {
 		let recovered = contexts(rows);
 		let body = &source[edges[2]..];
 		let context = &recovered[2].1;
-		assert!(!LiteralMatcher::new("\u{0303}scan", true).matches_section(
-			&normalize_search_text(&name_text(&lex_section(body, context))),
+		assert!(!LiteralMatcher::new("\u{0303}scan", true).matches_name_section(
+			&normalize_search_text(body),
 			body,
 			context,
 		));
@@ -1145,5 +1202,163 @@ mod tests {
 		assert_eq!(parsed.sections[1].heading_path, ["Real"]);
 		assert_eq!(parsed.sections[1].raw_markdown, "# Real\nbody\n");
 		assert_eq!(parsed.sections[1].plain_text, plain_text(&block::lex("# Real\nbody\n")));
+	}
+
+	#[test]
+	fn tab_indented_list_fence_keeps_raw_coordinates_after_blank_lines() {
+		for newline in ["\n", "\r\n"] {
+			let source =
+				"# Guide\n\n- ```\n\n\tx\n  # bogus\n  ```\n\n# Real\nbody\n".replace('\n', newline);
+			let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+			assert_eq!(parsed.sections.len(), 2);
+			assert_eq!(parsed.sections[0].heading_path, ["Guide"]);
+			assert_eq!((parsed.sections[0].line_start, parsed.sections[0].line_end), (1, 8));
+			assert_eq!(parsed.sections[1].heading_path, ["Real"]);
+			assert_eq!((parsed.sections[1].line_start, parsed.sections[1].line_end), (9, 10));
+			assert!(parsed.sections[0].raw_markdown.contains("\tx"));
+			assert!(parsed.sections[0].plain_text.contains("# bogus"));
+			for row in &parsed.sections {
+				assert_eq!(row.raw_markdown, source[row.byte_start as usize..row.byte_end as usize]);
+			}
+		}
+	}
+
+	#[test]
+	fn setext_titles_do_not_override_earlier_block_rules() {
+		for newline in ["\n", "\r\n"] {
+			for first in ["> note", "***", "- item", "[label]: /target", "<div>", "    literal"] {
+				let body = format!("{first}\n---\nbody\n").replace('\n', newline);
+				assert_eq!(local_title(&body, &context()), "", "{first:?}");
+				let source = format!("# Guide{newline}{newline}{body}");
+				let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+				assert_eq!(parsed.sections.len(), 1, "{first:?}");
+				assert_eq!(parsed.sections[0].heading_path, ["Guide"]);
+				assert_eq!(parsed.sections[0].raw_markdown, source);
+				assert_eq!(parsed.sections[0].byte_start, 0);
+				assert_eq!(parsed.sections[0].byte_end, source.len() as i64);
+			}
+			for first in ["Actual title", "**Actual** `C++`"] {
+				let source = format!("{first}{newline}---{newline}body{newline}");
+				let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+				assert_eq!(parsed.sections.len(), 1);
+				assert_eq!(parsed.sections[0].heading_path, [first]);
+				assert_eq!(
+					local_title(&source, &context()),
+					if first == "Actual title" {
+						"Actual title"
+					} else {
+						"Actual C++"
+					}
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn root_titles_end_quoted_fences_before_context_is_published() {
+		for newline in ["\n", "\r\n"] {
+			for opener in ["> ```", "> > ```", "- > ```", "> - > ```"] {
+				let prefix = match opener {
+					"> ```" => "> ",
+					"> > ```" => "> > ",
+					"- > ```" => "  > ",
+					_ => ">   > ",
+				};
+				for heading in ["# Target\n", "Target\n---\n"] {
+					let preceding = format!("{opener}\n{prefix}literal\n").replace('\n', newline);
+					let heading = heading.replace('\n', newline);
+					let source = format!("{preceding}{heading}");
+					let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+					let last = parsed.sections.last().unwrap();
+					assert_eq!(last.heading_path, ["Target"]);
+					assert_eq!(last.line_start, 3);
+					assert_eq!(last.byte_start, preceding.len() as i64);
+					assert_eq!(last.raw_markdown, heading);
+					let recovered = contexts(parsed.sections.iter().enumerate().map(|(index, row)| {
+						section(index as i64, row.byte_start, row.byte_end, &row.raw_markdown)
+					}));
+					let context = &recovered.last().unwrap().1;
+					assert_eq!(context.fence_prefix, None, "{opener:?}");
+					assert_eq!(context.shape, Shape::HeadingOnly);
+					assert_eq!(local_title(&heading, context), "Target");
+					assert_eq!(last.plain_text, "Target");
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn quoted_fence_context_keeps_marked_code_and_lazy_continuations() {
+		for (preceding, current, prefix) in [
+			("> ```\n> literal\n", "> # Still code\n", "> ```"),
+			("> ```\n> literal\n", "lazy**literal**\n", "> ```"),
+			("> > ```\n> > literal\n", "> lazy**literal**\n", "> > ```"),
+			("- > ```\n  > literal\n", "  > # Still code\n", "- > ```"),
+		] {
+			let recovered = contexts([
+				section(1, 0, preceding.len() as i64, preceding),
+				section(2, preceding.len() as i64, (preceding.len() + current.len()) as i64, current),
+			]);
+			let context = &recovered[1].1;
+			assert_eq!(context.fence_prefix.as_deref(), Some(prefix));
+			assert_eq!(context.shape, Shape::Content);
+			assert_eq!(local_title(current, context), "");
+			assert!(plain_text(&lex_section(current, context)).contains(
+				if current.contains("lazy") {
+					"lazy**literal**"
+				} else {
+					"# Still code"
+				}
+			));
+		}
+	}
+
+	#[test]
+	fn root_heading_context_recovers_after_long_quoted_source_slices() {
+		for newline in ["\n", "\r\n"] {
+			for body in [
+				format!("> {}{newline}", "x".repeat(38_000)),
+				format!("> literal{newline}").repeat(2000),
+			] {
+				let preceding = format!("> ```{newline}{body}");
+				let heading = format!("Target{newline}---{newline}");
+				let source = format!("{preceding}{heading}");
+				let parsed = super::super::import::parse_markdown(source.as_bytes()).unwrap();
+				assert!(parsed.sections.len() > 2);
+				let recovered = contexts(parsed.sections.iter().enumerate().map(|(index, row)| {
+					assert_eq!(row.raw_markdown, source[row.byte_start as usize..row.byte_end as usize]);
+					section(index as i64, row.byte_start, row.byte_end, &row.raw_markdown)
+				}));
+				let last = parsed.sections.last().unwrap();
+				let context = &recovered.last().unwrap().1;
+				assert_eq!(last.byte_start, preceding.len() as i64);
+				assert_eq!(
+					last.line_start as usize,
+					preceding.bytes().filter(|byte| *byte == b'\n').count() + 1
+				);
+				assert_eq!(context.fence_prefix, None);
+				assert_eq!(context.shape, Shape::HeadingOnly);
+				assert_eq!(local_title(&last.raw_markdown, context), "Target");
+			}
+		}
+	}
+
+	#[test]
+	fn section_name_delimiters_share_reconstructed_lexer_context_and_raw_coordinates() {
+		let source = "\u{feff}> a**scan**ner\r\n";
+		assert_eq!(name_delimiters(source), [6..8, 12..14]);
+		assert_eq!(section_name_delimiters(source, &context()), name_delimiters(source));
+		let mut continued = context();
+		continued.fence_prefix = Some("> ```".to_owned());
+		assert!(section_name_delimiters(source, &continued).is_empty());
+		let source = "> **literal**\r\n> ```\r\na**scan**ner\r\n";
+		let start = source.find("a**").unwrap() + 1;
+		assert_eq!(section_name_delimiters(source, &continued), [
+			start..start + 2,
+			start + 6..start + 8
+		]);
+		continued.fence_prefix = None;
+		continued.continues_line = true;
+		assert!(section_name_delimiters("**literal**\n", &continued).is_empty());
 	}
 }

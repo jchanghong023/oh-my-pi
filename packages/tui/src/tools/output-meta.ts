@@ -89,6 +89,8 @@ export interface OutputMeta {
 	source?: SourceMeta;
 	/** The output is a bounded page of session artifact storage its `source` re-reads with line selectors; spill-to-artifact skips it. */
 	pagedSource?: true;
+	/** A complete page bounded by the tool's own pagination budget; generic wrappers must not spill or elide it again. */
+	completePage?: true;
 	diagnostics?: DiagnosticMeta;
 	limits?: LimitsMeta;
 }

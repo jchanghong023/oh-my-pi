@@ -6,6 +6,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { DocsService } from "../docs/service";
 import wikiDescription from "../prompts/tools/wiki.md" with { type: "text" };
 import type { ToolSession } from ".";
+import { outputMeta } from "./output-meta";
 import { toolResult } from "./tool-result";
 
 const wikiSchema = type({
@@ -193,7 +194,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 							duplicate_count: page.duplicateCount,
 							oversize_count: page.oversizeCount,
 						};
-						return toolResult().text(page.text).done();
+						return toolResult({ meta: outputMeta().completePage().get() }).text(page.text).done();
 					} finally {
 						if (completion)
 							logger.info("wiki.query.completed", {

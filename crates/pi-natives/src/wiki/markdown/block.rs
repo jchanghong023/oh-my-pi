@@ -1,5 +1,5 @@
 //! Direct port of marked/core.ts's default block rule order and inline queue.
-use std::{borrow::Cow, sync::LazyLock};
+use std::{borrow::Cow, collections::VecDeque, ops::Range, sync::LazyLock};
 
 use regex::Regex;
 
@@ -108,7 +108,7 @@ fn list_match(line: &str) -> Option<ListMatch<'_>> {
 		text:        captures.get(4)?.as_str(),
 	})
 }
-fn split_table_row(line: &str) -> Vec<String> {
+fn for_table_cell(line: &str, mut visit: impl FnMut(&str)) {
 	let mut value = trim_js(line);
 	if let Some(rest) = value.strip_prefix('|') {
 		value = rest;
@@ -116,17 +116,198 @@ fn split_table_row(line: &str) -> Vec<String> {
 	if value.ends_with('|') && !value.ends_with("\\|") {
 		value = &value[..value.len() - 1];
 	}
-	let mut cells = Vec::new();
 	let mut start = 0;
 	let mut previous = None;
 	for (position, character) in value.char_indices() {
 		if character == '|' && previous != Some('\\') {
-			cells.push(trim_js(&value[start..position]).replace("\\|", "|"));
+			visit(trim_js(&value[start..position]));
 			start = position + 1;
 		}
 		previous = Some(character);
 	}
-	cells.push(trim_js(&value[start..]).replace("\\|", "|"));
+	visit(trim_js(&value[start..]));
+}
+
+fn split_table_row(line: &str) -> Vec<String> {
+	let mut cells = Vec::new();
+	for_table_cell(line, |cell| cells.push(cell.replace("\\|", "|")));
+	cells
+}
+
+// Only the name-delimiter projection supplies provenance. Normal lexing keeps
+// this queue empty and performs no source-map allocation.
+#[derive(Default)]
+struct DelimiterQueue {
+	sources: VecDeque<NameOrigins>,
+	ranges:  Vec<Range<usize>>,
+}
+
+struct OriginRun {
+	projected: Range<usize>,
+	original:  Range<usize>,
+}
+
+impl OriginRun {
+	fn original_range(&self, start: usize, end: usize) -> Range<usize> {
+		if self.projected.len() == self.original.len() {
+			self.original.start + start - self.projected.start
+				..self.original.start + end - self.projected.start
+		} else {
+			// A normalized CRLF or expanded tab is one original source unit.
+			self.original.clone()
+		}
+	}
+}
+
+/// Piecewise provenance exists only during delimiter collection. Ordinary
+/// unchanged text, including multibyte UTF-8, occupies one offset run.
+#[derive(Default)]
+struct NameOrigins {
+	runs: Vec<OriginRun>,
+	len:  usize,
+}
+
+#[derive(Clone, Copy)]
+struct OriginSlice<'a> {
+	origins: &'a NameOrigins,
+	start:   usize,
+	end:     usize,
+}
+
+impl NameOrigins {
+	fn view(&self) -> OriginSlice<'_> {
+		OriginSlice { origins: self, start: 0, end: self.len }
+	}
+
+	fn push(&mut self, original: Range<usize>, length: usize) {
+		if length == 0 {
+			return;
+		}
+		if let Some(previous) = self.runs.last_mut()
+			&& previous.projected.len() == previous.original.len()
+			&& length == original.len()
+			&& previous.original.end == original.start
+		{
+			previous.projected.end += length;
+			previous.original.end = original.end;
+		} else {
+			self
+				.runs
+				.push(OriginRun { projected: self.len..self.len + length, original });
+		}
+		self.len += length;
+	}
+
+	fn append(&mut self, source: OriginSlice<'_>) {
+		source.visit(|original, length| self.push(original, length));
+	}
+
+	fn truncate(&mut self, length: usize) {
+		debug_assert!(length <= self.len);
+		let retained = self
+			.runs
+			.partition_point(|run| run.projected.start < length);
+		self.runs.truncate(retained);
+		if let Some(last) = self.runs.last_mut() {
+			last.original = last.original_range(last.projected.start, length);
+			last.projected.end = length;
+		}
+		self.len = length;
+	}
+
+	fn discard_prefix(&mut self, length: usize) {
+		debug_assert!(length <= self.len);
+		let discarded = self.runs.partition_point(|run| run.projected.end <= length);
+		self.runs.drain(..discarded);
+		if let Some(first) = self.runs.first_mut() {
+			first.original = first.original_range(length, first.projected.end);
+			first.projected.start = length;
+		}
+		for run in &mut self.runs {
+			run.projected.start -= length;
+			run.projected.end -= length;
+		}
+		self.len -= length;
+	}
+}
+
+impl OriginSlice<'_> {
+	fn slice(self, range: Range<usize>) -> Self {
+		debug_assert!(range.start <= range.end && range.end <= self.end - self.start);
+		Self { start: self.start + range.start, end: self.start + range.end, ..self }
+	}
+
+	fn visit(self, mut visit: impl FnMut(Range<usize>, usize)) {
+		let first = self
+			.origins
+			.runs
+			.partition_point(|run| run.projected.end <= self.start);
+		for run in &self.origins.runs[first..] {
+			if run.projected.start >= self.end {
+				break;
+			}
+			let start = run.projected.start.max(self.start);
+			let end = run.projected.end.min(self.end);
+			visit(run.original_range(start, end), end - start);
+		}
+	}
+
+	fn owned(self) -> NameOrigins {
+		let mut origins = NameOrigins::default();
+		origins.append(self);
+		origins
+	}
+}
+
+fn source_origins<'a>(
+	origins: Option<OriginSlice<'a>>,
+	source: &str,
+	part: &str,
+) -> Option<OriginSlice<'a>> {
+	origins.map(|origins| {
+		let start = part.as_ptr() as usize - source.as_ptr() as usize;
+		origins.slice(start..start + part.len())
+	})
+}
+
+fn queue_origins(origins: Option<OriginSlice<'_>>, pending: &mut DelimiterQueue) {
+	if let Some(origins) = origins {
+		pending.sources.push_back(origins.owned());
+	}
+}
+
+fn table_row(
+	line: &str,
+	origins: Option<OriginSlice<'_>>,
+	columns: usize,
+	queue: &mut DelimiterQueue,
+) -> Vec<Vec<Token>> {
+	let mut cells = Vec::with_capacity(columns);
+	for_table_cell(line, |cell| {
+		if cells.len() == columns {
+			return;
+		}
+		if let Some(origins) = source_origins(origins, line, cell) {
+			let mut mapped = NameOrigins::default();
+			let mut start = 0;
+			for (index, _) in cell.match_indices("\\|") {
+				mapped.append(origins.slice(start..index));
+				origins
+					.slice(index..index + 1)
+					.visit(|range, _| queue.ranges.push(range));
+				start = index + 1;
+			}
+			mapped.append(origins.slice(start..cell.len()));
+			queue.sources.push_back(mapped);
+		}
+		cells.push(vec![pending(TokenKind::Text, String::new(), cell.replace("\\|", "|"))]);
+	});
+	while cells.len() < columns {
+		if origins.is_some() {
+			queue.sources.push_back(NameOrigins::default());
+		}
+		cells.push(vec![pending(TokenKind::Text, String::new(), String::new())]);
+	}
 	cells
 }
 fn block_start_line(line: &str, next: Option<&str>) -> bool {
@@ -252,7 +433,12 @@ fn token(kind: TokenKind, raw: String, text: String) -> Token {
 fn pending(kind: TokenKind, raw: String, text: String) -> Token {
 	Token { kind, raw, text, children: Some(Vec::new()), ..Token::default() }
 }
-fn make_table(lines: &[&str], index: usize) -> Option<(Token, usize)> {
+fn make_table(
+	lines: &[&str],
+	index: usize,
+	links_origins: Option<OriginSlice<'_>>,
+	queue: &mut DelimiterQueue,
+) -> Option<(Token, usize)> {
 	let next = lines.get(index + 1)?;
 	let header = split_table_row(strip_newline(lines[index]));
 	let delimiter = split_table_row(strip_newline(next));
@@ -264,15 +450,28 @@ fn make_table(lines: &[&str], index: usize) -> Option<(Token, usize)> {
 	}
 	let columns = header.len();
 	let cell = |text: String| vec![pending(TokenKind::Text, String::new(), text)];
-	let mut rows = vec![header.into_iter().map(cell).collect()];
+	let mut rows = vec![if links_origins.is_some() {
+		table_row(lines[index], source_origins(links_origins, lines[0], lines[index]), columns, queue)
+	} else {
+		header.into_iter().map(cell).collect()
+	}];
 	let mut count = 2;
 	while index + count < lines.len() && !blankish(lines[index + count]) {
 		let mut cells = split_table_row(strip_newline(lines[index + count]));
 		if cells.len() == 1 && !lines[index + count].contains('|') {
 			break;
 		}
-		cells.resize(columns, String::new());
-		rows.push(cells.into_iter().map(cell).collect());
+		rows.push(if links_origins.is_some() {
+			table_row(
+				lines[index + count],
+				source_origins(links_origins, lines[0], lines[index + count]),
+				columns,
+				queue,
+			)
+		} else {
+			cells.resize(columns, String::new());
+			cells.into_iter().map(cell).collect()
+		});
 		count += 1;
 	}
 	Some((
@@ -285,7 +484,13 @@ fn make_table(lines: &[&str], index: usize) -> Option<(Token, usize)> {
 		count,
 	))
 }
-fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token, usize)> {
+fn parse_list(
+	lines: &[&str],
+	index: usize,
+	links: &mut Links,
+	origins: Option<OriginSlice<'_>>,
+	queue: &mut DelimiterQueue,
+) -> Option<(Token, usize)> {
 	let first = list_match(lines[index])?;
 	let compatible = |matched: &ListMatch<'_>| compatible_list(&first, matched);
 	let mut raw_items = Vec::new();
@@ -297,8 +502,14 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 		let start = cursor;
 		let width = matched.indentation + matched.marker.len() + 1;
 		let mut text = matched.text.to_owned();
+		let mut text_origins =
+			source_origins(origins, lines[0], matched.text).map(OriginSlice::owned);
 		if lines[cursor].ends_with('\n') {
 			text.push('\n');
+			if let Some(mapped) = &mut text_origins {
+				let newline = &lines[cursor][lines[cursor].len() - 1..];
+				mapped.append(source_origins(origins, lines[0], newline).unwrap());
+			}
 		}
 		cursor =
 			list_item_end(&|index| lines[index], lines.len(), start, first.indentation, &compatible);
@@ -308,6 +519,14 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 			} else {
 				text.push_str(&next[indent(next).min(width)..]);
 			}
+			if let Some(mapped) = &mut text_origins {
+				let part = if blank_line(next) {
+					*next
+				} else {
+					&next[indent(next).min(width)..]
+				};
+				mapped.append(source_origins(origins, lines[0], part).unwrap());
+			}
 		}
 		let mut raw = lines[start..cursor].concat();
 		if (cursor == lines.len() || blank_line(lines[cursor])) && raw.ends_with('\n') {
@@ -316,11 +535,17 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 		let task = TASK.find(&text).map(|matched| matched.as_str().to_owned());
 		if let Some(task) = &task {
 			text.drain(..task.len());
+			if let Some(mapped) = &mut text_origins {
+				mapped.discard_prefix(task.len());
+			}
 		}
 		if text.ends_with('\n') {
 			text.pop();
+			if let Some(mapped) = &mut text_origins {
+				mapped.truncate(mapped.len - 1);
+			}
 		}
-		raw_items.push((raw, text, task));
+		raw_items.push((raw, text, task, text_origins));
 	}
 	if raw_items.is_empty() {
 		return None;
@@ -329,8 +554,9 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 	let loose = raw_items.iter().any(|(raw, ..)| LOOSE.is_match(raw)) || LOOSE.is_match(&raw);
 	let items = raw_items
 		.into_iter()
-		.map(|(_, text, task)| {
-			let mut tokens = block_tokens(&text, links);
+		.map(|(_, text, task, text_origins)| {
+			let mut tokens =
+				block_tokens(&text, links, text_origins.as_ref().map(NameOrigins::view), queue);
 			if !loose {
 				for token in &mut tokens {
 					if token.kind == TokenKind::Paragraph {
@@ -347,7 +573,12 @@ fn parse_list(lines: &[&str], index: usize, links: &mut Links) -> Option<(Token,
 	Some((Token { kind: TokenKind::List, raw, items, ..Token::default() }, cursor - index))
 }
 
-fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
+fn block_tokens(
+	source: &str,
+	links: &mut Links,
+	origins: Option<OriginSlice<'_>>,
+	queue: &mut DelimiterQueue,
+) -> Vec<Token> {
 	let lines = source.split_inclusive('\n').collect::<Vec<_>>();
 	let mut output: Vec<Token> = Vec::new();
 	let mut i = 0;
@@ -423,6 +654,16 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 			let text =
 				trim_js(&HEADING_TAIL.replace(heading.get(2).expect("heading text").as_str(), ""))
 					.to_owned();
+			if origins.is_some() {
+				let raw_text = heading.get(2).expect("heading text");
+				let start = raw_text.start() + raw_text.as_str().len()
+					- raw_text.as_str().trim_start_matches(is_js_whitespace).len();
+				let line_origins = source_origins(origins, source, line);
+				queue_origins(
+					line_origins.map(|mapped| mapped.slice(start..start + text.len())),
+					queue,
+				);
+			}
 			let raw = if i + 1 < lines.len() && blank_line(lines[i + 1]) {
 				strip_newline(line)
 			} else {
@@ -440,17 +681,24 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 		if QUOTE.is_match(line) {
 			let mut raw = String::new();
 			let mut text = String::new();
+			let mut text_origins = origins.map(|_| NameOrigins::default());
 			while i < lines.len() {
 				let next = lines[i];
 				if let Some(marker) = QUOTE.find(next) {
 					raw.push_str(next);
 					text.push_str(&next[marker.end()..]);
+					if let Some(mapped) = &mut text_origins {
+						mapped.append(source_origins(origins, source, &next[marker.end()..]).unwrap());
+					}
 					i += 1;
 					continue;
 				}
 				if !blank_line(next) && !block_start(&lines, i) {
 					raw.push_str(next);
 					text.push_str(next);
+					if let Some(mapped) = &mut text_origins {
+						mapped.append(source_origins(origins, source, next).unwrap());
+					}
 					i += 1;
 					continue;
 				}
@@ -458,8 +706,12 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 			}
 			if text.ends_with('\n') {
 				text.pop();
+				if let Some(mapped) = &mut text_origins {
+					mapped.truncate(mapped.len - 1);
+				}
 			}
-			let children = block_tokens(&text, links);
+			let children =
+				block_tokens(&text, links, text_origins.as_ref().map(NameOrigins::view), queue);
 			output.push(Token {
 				kind: TokenKind::Blockquote,
 				raw,
@@ -469,7 +721,7 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 			});
 			continue;
 		}
-		if let Some((list, count)) = parse_list(&lines, i, links) {
+		if let Some((list, count)) = parse_list(&lines, i, links, origins, queue) {
 			output.push(list);
 			i += count;
 			continue;
@@ -529,12 +781,13 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 			i += 1;
 			continue;
 		}
-		if let Some((table, count)) = make_table(&lines, i) {
+		if let Some((table, count)) = make_table(&lines, i, origins, queue) {
 			output.push(table);
 			i += count;
 			continue;
 		}
 		if i + 1 < lines.len() && SETEXT.is_match(lines[i + 1]) {
+			queue_origins(source_origins(origins, source, strip_newline(line)), queue);
 			output.push(pending(
 				TokenKind::Heading,
 				lines[i..i + 2].concat(),
@@ -561,6 +814,10 @@ fn block_tokens(source: &str, links: &mut Links) -> Vec<Token> {
 		}
 		let raw = lines[start..i].concat();
 		let text = strip_newline(&raw).to_owned();
+		if let Some(origins) = origins {
+			let start = lines[start].as_ptr() as usize - source.as_ptr() as usize;
+			queue_origins(Some(origins.slice(start..start + text.len())), queue);
+		}
 		output.push(pending(TokenKind::Paragraph, raw, text));
 	}
 	output
@@ -587,32 +844,132 @@ fn resolve(tokens: &mut [Token], links: &Links) {
 	}
 }
 
-pub(super) fn lex(source: &str) -> Vec<Token> {
-	let normalized = if source.contains(['\r', '\t']) {
-		let mut output = String::with_capacity(source.len());
-		let mut characters = source.chars().peekable();
-		while let Some(character) = characters.next() {
-			match character {
-				'\r' => {
-					if characters.peek() == Some(&'\n') {
-						characters.next();
-					}
-					output.push('\n');
-				},
-				'\t' => output.push_str("    "),
-				_ => output.push(character),
-			}
+fn normalized_source<'a>(source: &'a str, mut origins: Option<&mut NameOrigins>) -> Cow<'a, str> {
+	if !source.contains(['\r', '\t']) {
+		if let Some(origins) = origins {
+			origins.push(0..source.len(), source.len());
 		}
-		Cow::Owned(output)
-	} else {
-		Cow::Borrowed(source)
-	};
+		return Cow::Borrowed(source);
+	}
+	let mut output = String::with_capacity(source.len());
+	let mut unchanged = 0;
+	let mut characters = source.char_indices().peekable();
+	while let Some((position, character)) = characters.next() {
+		match character {
+			'\r' => {
+				let mut end = position + 1;
+				if characters
+					.peek()
+					.is_some_and(|(_, character)| *character == '\n')
+				{
+					characters.next();
+					end += 1;
+				}
+				output.push('\n');
+				if let Some(origins) = &mut origins {
+					origins.push(unchanged..position, position - unchanged);
+					origins.push(position..end, 1);
+				}
+				unchanged = end;
+			},
+			'\t' => {
+				output.push_str("    ");
+				if let Some(origins) = &mut origins {
+					origins.push(unchanged..position, position - unchanged);
+					origins.push(position..position + 1, 4);
+				}
+				unchanged = position + 1;
+			},
+			_ => {
+				output.push(character);
+			},
+		}
+	}
+	if let Some(origins) = &mut origins {
+		origins.push(unchanged..source.len(), source.len() - unchanged);
+	}
+	Cow::Owned(output)
+}
+
+pub(super) fn lex(source: &str) -> Vec<Token> {
+	let normalized = normalized_source(source, None);
 	let mut links = Links::new();
-	let mut tokens = block_tokens(&normalized, &mut links);
+	let mut tokens = block_tokens(&normalized, &mut links, None, &mut DelimiterQueue::default());
 	// Every nested definition is collected before any queued inline source is
 	// resolved, including definitions in lists and blockquotes.
 	resolve(&mut tokens, &links);
 	tokens
+}
+
+fn inline_delimiters(
+	source: &str,
+	links: &Links,
+	queue: &mut DelimiterQueue,
+	ranges: &mut Vec<Range<usize>>,
+) {
+	let origins = queue
+		.sources
+		.pop_front()
+		.expect("pending inline source provenance");
+	debug_assert_eq!(origins.len, source.len());
+	let (_, delimiters) = inline::lex_with_delimiters(source, links);
+	for delimiter in delimiters {
+		origins
+			.view()
+			.slice(delimiter)
+			.visit(|range, _| ranges.push(range));
+	}
+}
+
+fn collect_delimiters(
+	tokens: &[Token],
+	links: &Links,
+	queue: &mut DelimiterQueue,
+	ranges: &mut Vec<Range<usize>>,
+) {
+	for token in tokens {
+		if matches!(token.kind, TokenKind::Heading | TokenKind::Paragraph | TokenKind::Text)
+			&& token.children.is_some()
+		{
+			inline_delimiters(&token.text, links, queue, ranges);
+		} else if let Some(children) = &token.children {
+			collect_delimiters(children, links, queue, ranges);
+		}
+		for item in &token.items {
+			collect_delimiters(item, links, queue, ranges);
+		}
+		for row in &token.rows {
+			for cell in row {
+				inline_delimiters(&cell[0].text, links, queue, ranges);
+			}
+		}
+	}
+}
+
+pub(super) fn name_delimiters(source: &str) -> Vec<Range<usize>> {
+	if !source.contains(['*', '_', '~', '\\']) {
+		return Vec::new();
+	}
+	let mut origins = NameOrigins::default();
+	let normalized = normalized_source(source, Some(&mut origins));
+	let mut links = Links::new();
+	let mut queue = DelimiterQueue::default();
+	let tokens = block_tokens(&normalized, &mut links, Some(origins.view()), &mut queue);
+	let mut ranges = std::mem::take(&mut queue.ranges);
+	collect_delimiters(&tokens, &links, &mut queue, &mut ranges);
+	debug_assert!(queue.sources.is_empty());
+	ranges.sort_unstable_by_key(|range| range.start);
+	let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+	for range in ranges {
+		if let Some(previous) = merged.last_mut()
+			&& range.start <= previous.end
+		{
+			previous.end = previous.end.max(range.end);
+		} else {
+			merged.push(range);
+		}
+	}
+	merged
 }
 
 #[cfg(test)]
@@ -657,5 +1014,75 @@ mod tests {
 		let tokens = lex("#\n\nbody");
 		assert_eq!(tokens[0].kind, TokenKind::Paragraph);
 		assert_eq!(tokens[0].text, "#");
+	}
+
+	#[test]
+	fn name_delimiters_preserve_exact_original_positions_through_block_transforms() {
+		for (source, expected) in [
+			("a**scan**ner\n", "ascanner\n"),
+			("# **scan**ner ##\r\n", "# scanner ##\r\n"),
+			("> **scan\n> ner**\r\n", "> scan\n> ner\r\n"),
+			("- [x] **scan**ner\r\n", "- [x] scanner\r\n"),
+			("> - **scan**ner\r\n", "> - scanner\r\n"),
+			("- item\n\t**scan**ner\r\n", "- item\n\tscanner\r\n"),
+			("Title **scan**ner\r\n---\r\n", "Title scanner\r\n---\r\n"),
+			("| a\\|**scan**ner |\r\n| --- |\r\n", "| a|scanner |\r\n| --- |\r\n"),
+			(
+				"| **scan**ner | **other** |\n| --- | --- |\n| ~~scan~~ner |\n",
+				"| scanner | other |\n| --- | --- |\n| scanner |\n",
+			),
+			("[**scan**ner][ref]\n\n> [ref]: /target\n", "[scanner][ref]\n\n> [ref]: /target\n"),
+			("中😀**scan**ner\r\n", "中😀scanner\r\n"),
+			("\\*scan\\*ner\n", "*scan*ner\n"),
+		] {
+			let ranges = name_delimiters(source);
+			let mut projected = String::new();
+			let mut start = 0;
+			for range in ranges {
+				assert!(start <= range.start && range.start < range.end && range.end <= source.len());
+				assert!(source.is_char_boundary(range.start) && source.is_char_boundary(range.end));
+				projected.push_str(&source[start..range.start]);
+				start = range.end;
+			}
+			projected.push_str(&source[start..]);
+			assert_eq!(projected, expected, "{source:?}");
+		}
+	}
+
+	#[test]
+	fn name_delimiters_do_not_borrow_same_text_from_code_or_other_occurrences() {
+		let source = "`**scan**ner` a**scan**ner `x*scan*` [raw](/a**scan**) <i data-x='**scan**'>\n";
+		let ranges = name_delimiters(source);
+		let first = source.find(" a**").unwrap() + 2;
+		assert_eq!(ranges, [first..first + 2, first + 6..first + 8]);
+		assert!(name_delimiters("```cpp\n**scan**ner\n```\n\n    **scan**ner\n").is_empty());
+	}
+
+	#[test]
+	fn name_provenance_storage_tracks_conversion_runs_not_source_bytes() {
+		let source = format!("{}a**scan**ner\r\n\tend", "中😀".repeat(100_000));
+		let mut origins = NameOrigins::default();
+		let normalized = normalized_source(&source, Some(&mut origins));
+		assert_eq!(origins.len, normalized.len());
+		assert_eq!(origins.runs.len(), 4);
+		let start = normalized.find("scan").unwrap();
+		let mut ranges = Vec::new();
+		origins
+			.view()
+			.slice(start..start + 4)
+			.visit(|range, _| ranges.push(range));
+		let original = source.find("scan").unwrap();
+		assert_eq!(ranges, [original..original + 4]);
+		let delimiter = source.find("**").unwrap();
+		assert_eq!(name_delimiters(&source), [
+			delimiter..delimiter + 2,
+			delimiter + 6..delimiter + 8
+		]);
+		let plain = "中😀".repeat(100_000);
+		let mut origins = NameOrigins::default();
+		let normalized = normalized_source(&plain, Some(&mut origins));
+		assert!(matches!(normalized, Cow::Borrowed(_)));
+		assert_eq!(origins.runs.len(), 1);
+		assert_eq!(origins.runs[0].original, 0..plain.len());
 	}
 }

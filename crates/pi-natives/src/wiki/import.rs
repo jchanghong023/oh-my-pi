@@ -19,8 +19,8 @@ use sha2::{Digest, Sha256};
 use super::{
 	database::WikiError,
 	markdown::{
-		ContextSectionRef, SectionContextScanner, is_js_whitespace, lex_section, list_end,
-		plain_text, section_shape, trim_js,
+		ContextSectionRef, SectionContextScanner, is_js_whitespace, is_setext_heading, lex_section,
+		list_end, plain_text, section_shape, trim_js,
 	},
 	query::{SectionContext, Shape},
 };
@@ -203,6 +203,9 @@ fn parse_heading<'a>(line: &'a str, next: Option<&str>, in_fence: bool) -> Optio
 	{
 		return None;
 	}
+	if !is_setext_heading(line, next) {
+		return None;
+	}
 	Some(Heading { level: if marker == b'=' { 1 } else { 2 }, text: trim_js(line), setext: true })
 }
 
@@ -338,6 +341,12 @@ pub(super) fn parse_markdown(bytes: &[u8]) -> CoreResult<WikiParsedMarkdown> {
 			line
 		})
 		.collect();
+	// Structural list rules see the lexer's fixed-width tab expansion, while
+	// every stored byte and line coordinate continues to use the raw source.
+	let list_source = source.contains('\t').then(|| source.replace('\t', "    "));
+	let list_lines = list_source
+		.as_deref()
+		.map(|source| source.split_inclusive('\n').collect::<Vec<_>>());
 	let mut drafts = Vec::new();
 	let mut current =
 		Draft { heading_path: Vec::new(), heading_level: 0, start: 0, end: 0 };
@@ -366,7 +375,9 @@ pub(super) fn parse_markdown(bytes: &[u8]) -> CoreResult<WikiParsedMarkdown> {
 		if fence.is_none()
 			&& let Some(end) = list_end(
 				|position| {
-					let text = lines[position].text;
+					let text = list_lines
+						.as_ref()
+						.map_or(lines[position].text, |lines| lines[position]);
 					if position == 0 {
 						text.strip_prefix('\u{feff}').unwrap_or(text)
 					} else {

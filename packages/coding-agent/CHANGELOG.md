@@ -12,6 +12,11 @@
 - Allow collaboration guests to apply `/display` locally without forwarding the command or unlocking host-only commands.
 - Preserve image-only read calls during compact session replay while keeping their image content available in detailed mode.
 
+### Fixed
+
+- Preserve complete Wiki evidence pages through top-level tools and `xd://wiki`, including oversized multilingual sections.
+- Keep Wiki search expressions and editing cursors visible in narrow terminals and across resizing.
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

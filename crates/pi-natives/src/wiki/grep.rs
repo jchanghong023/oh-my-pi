@@ -44,6 +44,20 @@ impl Lines {
 		if section.byte_start > self.end {
 			return Err(WikiError::message("Documentation search snapshot has a missing line slice"));
 		}
+		// Compare every shared byte before discarding the repeated prefix,
+		// including slices that add no suffix at all. Neither stored copy is
+		// authoritative when overlapping rows disagree.
+		let overlap_end = section.byte_end.min(self.end);
+		if section.byte_start < self.start {
+			return Err(WikiError::message("Documentation search snapshot is inconsistent"));
+		}
+		let offset = (section.byte_start - self.start) as usize;
+		let overlap = (overlap_end - section.byte_start) as usize;
+		if self.text.as_bytes().get(offset..offset + overlap)
+			!= section.raw_markdown.as_bytes().get(..overlap)
+		{
+			return Err(WikiError::message("Documentation search snapshot is inconsistent"));
+		}
 		self.sections.push_back(PendingSection {
 			start:   section.byte_start,
 			end:     section.byte_end,
@@ -239,4 +253,99 @@ pub(super) fn scan(
 	lines.flush(i64::MAX, true, matcher, check)?;
 	check()?;
 	Ok(lines.ranked)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn slice_connection(source: &str, slices: &[(usize, usize)]) -> Connection {
+		let connection = Connection::open_in_memory().unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+				 CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER NOT NULL,
+				 document_id INTEGER NOT NULL,ordinal INTEGER NOT NULL,byte_start INTEGER NOT NULL,
+				 byte_end INTEGER NOT NULL,raw_markdown TEXT NOT NULL);
+				 INSERT INTO doc_indexes VALUES(1,'manual');",
+			)
+			.unwrap();
+		for (ordinal, &(start, end)) in slices.iter().enumerate() {
+			connection
+				.execute("INSERT INTO sections VALUES(?,1,1,?,?,?,?)", rusqlite::params![
+					(slices.len() - ordinal) as i64,
+					ordinal as i64,
+					start as i64,
+					end as i64,
+					&source[start..end]
+				])
+				.unwrap();
+		}
+		connection
+	}
+
+	fn matched_ids(connection: &Connection, expression: &str) -> CoreResult<Vec<i64>> {
+		let matcher = crate::grep::build_strict_matcher(expression, false).unwrap();
+		Ok(scan(connection, &matcher, None, &|| Ok(()))?
+			.into_iter()
+			.map(|section| section.section_id)
+			.collect())
+	}
+
+	#[test]
+	fn sqlite_scan_preserves_long_unicode_crlf_lines_with_500_byte_overlap() {
+		let source = format!("α{}needle{}界\r\n\r\nlast\r\n", "a".repeat(600), "b".repeat(600));
+		let connection = slice_connection(&source, &[(0, 1000), (500, source.len())]);
+		assert_eq!(matched_ids(&connection, "^αa+needleb+界\\r$").unwrap(), [2, 1]);
+		assert_eq!(matched_ids(&connection, "^last\\r$").unwrap(), [1]);
+		assert_eq!(matched_ids(&connection, "^\\r$").unwrap(), [1]);
+		assert!(
+			matched_ids(&connection, "^αa+needleb+界$")
+				.unwrap()
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn sqlite_scan_rejects_same_length_conflicting_overlap_in_either_copy() {
+		let source = format!("α{}needle{}界\r\nlast\r\n", "a".repeat(600), "b".repeat(600));
+		for ordinal in [0, 1] {
+			let connection = slice_connection(&source, &[(0, 1000), (500, source.len())]);
+			assert_eq!(matched_ids(&connection, "needle").unwrap(), [2, 1]);
+			connection
+				.execute(
+					"UPDATE sections SET raw_markdown=replace(raw_markdown,'needle','xxxxxx') WHERE \
+					 ordinal=?",
+					[ordinal],
+				)
+				.unwrap();
+			for expression in ["needle", "xxxxxx", "not_present"] {
+				let error = matched_ids(&connection, expression).unwrap_err();
+				assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
+			}
+		}
+	}
+
+	#[test]
+	fn sqlite_scan_validates_contained_and_duplicate_slices_without_a_new_suffix() {
+		let source = format!("α{}needle{}界", "a".repeat(600), "b".repeat(600));
+		for slices in [[(0, source.len()), (500, 1000)], [(0, source.len()), (0, source.len())], [
+			(0, 1000),
+			(0, source.len()),
+		]] {
+			let connection = slice_connection(&source, &slices);
+			assert_eq!(matched_ids(&connection, "needle").unwrap(), [2, 1]);
+			connection
+				.execute(
+					"UPDATE sections SET raw_markdown=replace(raw_markdown,'needle','xxxxxx') WHERE \
+					 ordinal=1",
+					[],
+				)
+				.unwrap();
+			for expression in ["needle", "xxxxxx"] {
+				let error = matched_ids(&connection, expression).unwrap_err();
+				assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
+			}
+		}
+	}
 }
