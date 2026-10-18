@@ -68,7 +68,10 @@ async function within<T>(pending: Promise<T>): Promise<T> {
 async function readPid(file: string): Promise<number> {
 	for (;;) {
 		try {
-			return Number(await fs.readFile(file, "utf8"));
+			const pid = Number(await fs.readFile(file, "utf8"));
+			// The writer creates the pid file before its content lands; an empty or
+			// partial read yields 0 and must keep polling instead of returning it.
+			if (Number.isInteger(pid) && pid > 0) return pid;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
