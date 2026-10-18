@@ -12,7 +12,9 @@ import type {
 	HoldOptions as NativeHoldOptions,
 	AxNode,
 	AxQuery,
+	AxSelectTextOptions,
 	AxSnapshotOptions,
+	AxTextSelection,
 	CaptureRegion,
 	DesktopCapabilities,
 	DesktopCapture,
@@ -99,6 +101,7 @@ export interface NativeDesktopSession {
 	axParent(ref: string): Promise<AxNode | null | undefined>;
 	axPerform(ref: string, action: string): Promise<void>;
 	axSetValue(ref: string, value: string): Promise<void>;
+	axSelectText(ref: string, text: string, opts?: AxSelectTextOptions | null): Promise<AxTextSelection>;
 	axFocus(ref: string): Promise<void>;
 	axClick(ref: string, opts?: PointerOptions | null): Promise<void>;
 	close(): Promise<void>;
@@ -392,6 +395,13 @@ class El {
 		await nativeCall(context.signal, () => this.#session.axSetValue(this.ref, value));
 	}
 
+	async selectText(text: string, options?: AxSelectTextOptions): Promise<AxTextSelection> {
+		const context = this.#getContext();
+		guardRun(context, "selectText");
+		validateString(text, "selectText(text)");
+		return await nativeCall(context.signal, () => this.#session.axSelectText(this.ref, text, options));
+	}
+
 	async bounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
 		const { signal } = this.#getContext();
 		const node = await nativeCall(signal, () => this.#session.axNode(this.ref));
@@ -526,6 +536,12 @@ class ElRef implements PromiseLike<El> {
 		await (await this.#resolve()).setValue(value);
 	}
 
+	async selectText(text: string, options?: AxSelectTextOptions): Promise<AxTextSelection> {
+		guardRun(this.#getContext(), "selectText");
+		validateString(text, "selectText(text)");
+		return (await this.#resolve()).selectText(text, options);
+	}
+
 	async bounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
 		return (await this.#resolve()).bounds();
 	}
@@ -615,10 +631,10 @@ class Win {
 		);
 	}
 
-	async move(x: number, y: number): Promise<void> {
+	async move(x: number, y: number, options?: InputOptions): Promise<void> {
 		const context = this.#getContext();
 		guardRun(context, "move");
-		await nativeCall(context.signal, () => this.#session.moveMouse(this.id, x, y, pointerOptions()));
+		await nativeCall(context.signal, () => this.#session.moveMouse(this.id, x, y, pointerOptions(options)));
 	}
 
 	async drag(points: Array<[number, number]>, options?: DragOptions): Promise<void> {

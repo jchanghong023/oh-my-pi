@@ -26,7 +26,9 @@ import { ComputerWorkerCore, type NativeDesktopSession } from "@oh-my-pi/pi-codi
 import type {
 	AxNode,
 	AxQuery,
+	AxSelectTextOptions,
 	AxSnapshotOptions,
+	AxTextSelection,
 	CaptureRegion,
 	DesktopCapabilities,
 	DesktopCapture,
@@ -126,7 +128,7 @@ class FakeNativeSession implements NativeDesktopSession {
 	controlActive = false;
 	acquireCount = 0;
 	readonly operations: string[] = [];
-	readonly inputModes: boolean[] = [];
+	readonly takeovers: (boolean | undefined)[] = [];
 	sourceWidth = 64;
 	sourceHeight = 32;
 
@@ -210,9 +212,11 @@ class FakeNativeSession implements NativeDesktopSession {
 	}
 	async click(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {
 		this.clickCount += 1;
-		this.inputModes.push(_opts?.takeover ?? this.controlActive);
+		this.takeovers.push(_opts?.takeover);
 	}
-	async moveMouse(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {}
+	async moveMouse(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {
+		this.takeovers.push(_opts?.takeover);
+	}
 	async drag(_target: string, _points: DesktopPoint[], _opts?: PointerOptions | null): Promise<void> {}
 	async scroll(
 		_target: string,
@@ -251,6 +255,11 @@ class FakeNativeSession implements NativeDesktopSession {
 	}
 	async axPerform(_ref: string, _action: string): Promise<void> {}
 	async axSetValue(_ref: string, _value: string): Promise<void> {}
+	readonly selections: string[] = [];
+	async axSelectText(_ref: string, text: string, _opts?: AxSelectTextOptions | null): Promise<AxTextSelection> {
+		this.selections.push(text);
+		return { start: 0, length: text.length, text, focused: true };
+	}
 	async axFocus(_ref: string): Promise<void> {}
 	async axClick(_ref: string, _opts?: PointerOptions | null): Promise<void> {}
 	async close(): Promise<void> {
@@ -760,6 +769,7 @@ describe("computer prelude", () => {
 			ax: "- button [ref=e1]",
 			ref: { ref: "e1", role: "button", nativeRole: "AXButton", enabled: true, focused: false, childCount: 0 },
 			press: undefined,
+			selectText: { start: 7, length: 0, text: "", focused: true },
 			raise: undefined,
 			click: undefined,
 		};
@@ -792,6 +802,7 @@ describe("computer prelude", () => {
 				'el = await win.ref("e1")',
 				"print(repr(el))",
 				"await el.press()",
+				'print((await el.selectText("cat", prefix="red ", select="end"))["start"])',
 				"await win.raise_()",
 				"await win.click(10, 20, button='right', takeover=None)",
 			].join("\n"),
@@ -811,6 +822,7 @@ describe("computer prelude", () => {
 			"<computer.Window id='42' app='Code'> {'x': 1, 'y': 2, 'width': 3, 'height': 4}",
 			"- button [ref=e1]",
 			"<computer.Element ref='e1' role='button'>",
+			"7",
 		]);
 		expect(calls).toEqual([
 			{ action: "run", code: "return 6 * 7;", read_only: true, timeout: 3 },
@@ -828,6 +840,13 @@ describe("computer prelude", () => {
 				chain: [
 					{ method: "ref", args: ["e1"] },
 					{ method: "press", args: [] },
+				],
+			},
+			{
+				action: "call",
+				chain: [
+					{ method: "ref", args: ["e1"] },
+					{ method: "selectText", args: ["cat", { prefix: "red ", select: "end" }] },
 				],
 			},
 			{
@@ -1744,6 +1763,37 @@ describe("computer worker round trips", () => {
 		if (result.ok) expect(result.payload.returnValue).toEqual({ role: "button", count: 1 });
 	});
 
+	it("blocks read-only selectText before invoking the native session", async () => {
+		const transport = new MemoryTransport();
+		const native = new FakeNativeSession();
+		new ComputerWorkerCore(transport, () => native);
+		const result = await runWorker(
+			transport,
+			"select-text-read-only",
+			'await (await desktop.window("42")).ref("e1").selectText("cat")',
+			true,
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error.message).toContain("read-only run: 'selectText'");
+		expect(native.selections).toEqual([]);
+	});
+
+	it("names selectText's text argument on a resolved element before the native call", async () => {
+		const transport = new MemoryTransport();
+		const native = new FakeNativeSession();
+		new ComputerWorkerCore(transport, () => native);
+		const result = await runWorker(
+			transport,
+			"select-text-resolved-argument",
+			'const el = await (await desktop.window("42")).ref("e1"); await el.selectText(7)',
+		);
+		expect(result.ok ? undefined : result.error).toMatchObject({
+			isToolError: true,
+			message: "selectText(text) requires a string, got number",
+		});
+		expect(native.selections).toEqual([]);
+	});
+
 	describe("numeric window ids", () => {
 		class TwoWindowSession extends FakeNativeSession {
 			override async listWindows(): Promise<DesktopWindow[]> {
@@ -2113,11 +2163,12 @@ describe("expanded computer APIs", () => {
 				).toEqual({ active: approved });
 				expect(native.acquireCount).toBe(approved ? 1 : 0);
 				await supervisor.run(
-					"const win = await desktop.window(42); await win.click(1, 2); await win.click(1, 2, { takeover: false });",
+					"const win = await desktop.window(42); await win.click(1, 2); await win.click(1, 2, { takeover: false }); await win.click(1, 2, { takeover: true }); await win.move(1, 2); await win.move(1, 2, { takeover: true });",
 					2000,
 					snapshot(),
 				);
-				expect(native.inputModes).toEqual([approved, false]);
+				// The grant never fills in an omitted takeover; only the call decides.
+				expect(native.takeovers).toEqual([undefined, false, true, undefined, true]);
 				await supervisor.revokeControl();
 				expect(native.controlActive).toBe(false);
 				expect(
@@ -2373,6 +2424,14 @@ describe("expanded computer APIs", () => {
 			override async axSetValue(ref: string, _value: string): Promise<void> {
 				this.calls.push(`axSetValue:${ref}`);
 			}
+			override async axSelectText(
+				ref: string,
+				text: string,
+				opts?: AxSelectTextOptions | null,
+			): Promise<AxTextSelection> {
+				this.calls.push(`axSelectText:${ref}`);
+				return super.axSelectText(ref, text, opts);
+			}
 			override async axPerform(ref: string, _action: string): Promise<void> {
 				this.calls.push(`axPerform:${ref}`);
 			}
@@ -2393,6 +2452,8 @@ describe("expanded computer APIs", () => {
 		for (const [code, message] of [
 			['await desktop.ref("e1").setValue()', "setValue(value) requires a string, got undefined"],
 			['await desktop.ref("e1").setValue(42)', "setValue(value) requires a string, got number"],
+			['await desktop.ref("e1").selectText()', "selectText(text) requires a string, got undefined"],
+			['await desktop.ref("e1").selectText(["cat"])', "selectText(text) requires a string, got an array"],
 			['await desktop.ref("e1").perform("")', 'perform(action) requires a non-empty string, got ""'],
 			["desktop.ref()", "ref(ref) requires a non-empty string, got undefined"],
 			["(await desktop.window(42)).ref(null)", "ref(ref) requires a non-empty string, got null"],
@@ -2436,6 +2497,9 @@ describe("expanded computer APIs", () => {
 			);
 			await expect(runInContext('computer.ref("e1").perform()', realm)).rejects.toThrow(
 				"perform(action) requires a non-empty string, got undefined",
+			);
+			await expect(runInContext('computer.ref("e1").selectText()', realm)).rejects.toThrow(
+				"selectText(text) requires a string, got undefined",
 			);
 		} finally {
 			await prelude.invoke({ action: "close" }, context);

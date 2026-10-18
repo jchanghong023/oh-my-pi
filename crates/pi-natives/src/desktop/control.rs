@@ -113,10 +113,6 @@ pub(crate) struct OperationToken {
 }
 
 impl OperationToken {
-	pub(crate) fn control_active(&self) -> bool {
-		self.source.control_active()
-	}
-
 	pub(crate) fn enter(&self) -> OperationScope {
 		let previous = CURRENT.with_borrow_mut(|current| current.replace(self.clone()));
 		OperationScope { previous, _thread: PhantomData }

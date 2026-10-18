@@ -100,7 +100,7 @@ Window methods include:
 - `screenshot({ silent? })`
 - `zoom({ x, y, width, height }, { silent? })`
 - `click(x, y, { button?, count?, modifiers?, takeover? })` and `doubleClick(x, y)`
-- `move(x, y)`, `drag([[x, y], ...], options?)`, and `scroll(x, y, { dx?, dy?, takeover? })`
+- `move(x, y, { takeover? })`, `drag([[x, y], ...], options?)`, and `scroll(x, y, { dx?, dy?, takeover? })`
 - `type(text, { takeover? })` and `press(chord, { takeover? })`
 - `raise()`
 
@@ -132,7 +132,7 @@ await buttons[0].press();
 - `win.ax({ all?, maxDepth? })` returns a textual tree with `[ref=eN]` references; default depth is 24 and native snapshots visit at most 800 nodes.
 - `win.find({ role?, title?, value?, limit? })` matches case-insensitive substrings and returns an array of up to `limit` elements (default 100, maximum 5000), from a walk bounded to 5000 nodes and depth 24. Element methods and fields used on the array itself throw an error saying to pick one first: `const [el] = await win.find(...)`, or `el = (await win.find(...))[0]` in Python.
 - `await win.ref("e5")`, `computer.elementAt(x, y)`, `computer.focusedElement()`, and `computer.ref("e5")` return live elements. The handle `ref()` returns also takes element methods directly: `await win.ref("e5").click({ count: 2 })`.
-- Elements expose `value`, `setValue`, `bounds`, `attributes`, `actions`, `perform`, `press`, `click({ button?, count?, modifiers? })`, `doubleClick({ button?, modifiers? })`, `focus`, `parent`, and `children` operations.
+- Elements expose `value`, `setValue`, `selectText`, `bounds`, `attributes`, `actions`, `perform`, `press`, `click({ button?, count?, modifiers? })`, `doubleClick({ button?, modifiers? })`, `focus`, `parent`, and `children` operations. On macOS, `selectText(text, { prefix?, suffix?, select? })` selects text inside a background app's text element (or places a caret before or after it) without focus change or keystrokes, so a following `type` into that focused editable field replaces it; see [the computer tool reference](tools/computer.md#accessibility).
 
 AX element actions need no screenshot. AX bounds and `computer.elementAt` use platform-native global desktop coordinates, not screenshot pixels: Windows uses physical desktop pixels; macOS uses logical points. Element clicks resolve the live element's owning window and refuse missing or ambiguous ownership rather than clicking an overlapping window. An element keeps the same reference across its window's AX snapshots and `find()` (desktop lookups such as `computer.focusedElement()` keep their own); a reference expires once its element is missing from the window's current and previous AX snapshots. An element whose role or label changes gets a new reference, and the old reference keeps naming the element it was read from until it expires the same way. On Windows, an element that takes over the UI Automation `RuntimeId` of one that is gone also gets a new reference, and an element whose `RuntimeId` cannot be read gets a new one on every read. The registry also caps references at 5000 and can evict a target's oldest generation earlier. Recover from `StaleRef` by taking a new AX snapshot and reacquiring the element.
 
@@ -150,7 +150,7 @@ Use `win.menu.items()` for top-level menus, `win.menu.items("File")` for a subme
 
 `holdKeys(keys, { duration, takeover? })` and `holdMouse(x, y, { button?, duration, keys?, takeover? })` hold input for 0–100 seconds. `drag(points, { keys?, modifiers?, takeover? })` supports gestures such as Space-drag. Every call releases attempted keys/buttons on success, error, and cancellation; no pressed state survives into another call.
 
-For deliberate foreground work, `await computer.control.acquire({ reason })` requests live human confirmation. Headless execution, refusal, or cancellation never grants control. While acquired, an omitted `takeover` option uses foreground delivery; explicit `takeover: false` still requests background delivery. Use `control.release()` in `finally`. User interruption, task completion, and session disposal also revoke the grant and native ownership. `control.state()` reports the current native state. The grant does not authorize unrelated consequential actions.
+For deliberate foreground work, `await computer.control.acquire({ reason })` requests live human confirmation. Headless execution, refusal, or cancellation never grants control. The grant does not change delivery: an omitted `takeover` option stays background, and only an explicit `takeover: true` uses foreground delivery. Use `control.release()` in `finally`. User interruption, task completion, and session disposal also revoke the grant and native ownership. `control.state()` reports the current native state. The grant does not authorize unrelated consequential actions.
 
 On macOS, `win.bringToCurrentSpace()` requests an actual move of that window without activating its app or switching the user's Space. The result is checked against WindowServer membership; missing APIs or OS refusal produce `SpaceUnsupported` or `SpaceMoveDenied`. No security settings are changed. Capture a new full screenshot afterward.
 

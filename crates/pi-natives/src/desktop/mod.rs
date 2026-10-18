@@ -12,6 +12,7 @@ mod macos;
 mod menus;
 #[cfg(target_os = "macos")]
 mod native_helper;
+mod text_range;
 mod types;
 #[cfg(any(target_os = "windows", test))]
 mod win32;
@@ -159,6 +160,7 @@ enum Response {
 	Nodes(Vec<AxNode>),
 	Node(Option<AxNode>),
 	Attributes(Vec<(String, String)>),
+	TextSelection(AxTextSelection),
 }
 
 type Reply = flume::Sender<CoreResult<Response>>;
@@ -325,6 +327,11 @@ enum Request {
 		value:     String,
 		reply:     Reply,
 	},
+	AxSelectText {
+		reference: String,
+		request:   text_range::TextSelectRequest,
+		reply:     Reply,
+	},
 	AxFocus {
 		reference: String,
 		reply:     Reply,
@@ -372,6 +379,7 @@ impl Request {
 			| Self::AxParent { reply, .. }
 			| Self::AxPerform { reply, .. }
 			| Self::AxSetValue { reply, .. }
+			| Self::AxSelectText { reply, .. }
 			| Self::AxFocus { reply, .. }
 			| Self::AxClick { reply, .. }
 			| Self::Close { reply } => reply,
@@ -391,6 +399,7 @@ impl Request {
 				| Self::RaiseWindow { .. }
 				| Self::AxPerform { .. }
 				| Self::AxSetValue { .. }
+				| Self::AxSelectText { .. }
 				| Self::AxFocus { .. }
 				| Self::AxClick { .. }
 				| Self::OpenApplication { .. }
@@ -441,6 +450,7 @@ impl Request {
 			| Self::AxParent { reference, .. }
 			| Self::AxPerform { reference, .. }
 			| Self::AxSetValue { reference, .. }
+			| Self::AxSelectText { reference, .. }
 			| Self::AxFocus { reference, .. }
 			| Self::AxClick { reference, .. } => Some(reference),
 			_ => None,
@@ -478,13 +488,9 @@ impl ParsedPointerOptions {
 		})
 	}
 
-	fn mode(&self, token: &OperationToken) -> DeliveryMode {
-		delivery_mode(self.takeover, token)
+	const fn mode(&self) -> DeliveryMode {
+		DeliveryMode::from_takeover(self.takeover)
 	}
-}
-
-fn delivery_mode(takeover: Option<bool>, token: &OperationToken) -> DeliveryMode {
-	DeliveryMode::from_takeover(Some(takeover.unwrap_or_else(|| token.control_active())))
 }
 
 fn hold_duration(seconds: f64) -> CoreResult<Duration> {
@@ -935,7 +941,7 @@ impl Worker {
 					target,
 					keys,
 					*duration,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -955,7 +961,7 @@ impl Worker {
 						duration: *duration,
 					},
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1019,7 +1025,7 @@ impl Worker {
 						modifiers: options.modifiers,
 					},
 					&frame,
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1030,7 +1036,7 @@ impl Worker {
 					target,
 					PointerEvent::Move { x, y },
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1053,7 +1059,7 @@ impl Worker {
 						keys:      options.keys.clone(),
 					},
 					&frame,
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1064,23 +1070,29 @@ impl Worker {
 					target,
 					PointerEvent::Scroll { x, y, dx: *dx, dy: *dy },
 					&frame,
-					delivery_mode(*takeover, token),
+					DeliveryMode::from_takeover(*takeover),
 					token,
 				)?;
 				Ok(Response::Unit)
 			},
 			Request::TypeText { target, text, takeover, .. } => {
 				self.validate_keyboard_target(target)?;
-				self
-					.backend()?
-					.type_text(target, text, delivery_mode(*takeover, token), token)?;
+				self.backend()?.type_text(
+					target,
+					text,
+					DeliveryMode::from_takeover(*takeover),
+					token,
+				)?;
 				Ok(Response::Unit)
 			},
 			Request::KeyChord { target, keys, takeover, .. } => {
 				self.validate_keyboard_target(target)?;
-				self
-					.backend()?
-					.key_chord(target, keys, delivery_mode(*takeover, token), token)?;
+				self.backend()?.key_chord(
+					target,
+					keys,
+					DeliveryMode::from_takeover(*takeover),
+					token,
+				)?;
 				Ok(Response::Unit)
 			},
 			Request::RaiseWindow { id, .. } => {
@@ -1192,6 +1204,10 @@ impl Worker {
 				self.ax()?.set_value(&h, value)?;
 				Ok(Response::Unit)
 			},
+			Request::AxSelectText { reference, request, .. } => {
+				let h = self.registry.resolve(reference)?;
+				Ok(Response::TextSelection(self.ax()?.select_text(&h, request)?))
+			},
 			Request::AxFocus { reference, .. } => {
 				let h = self.registry.resolve(reference)?;
 				self.ax()?.focus(&h)?;
@@ -1219,7 +1235,7 @@ impl Worker {
 						modifiers: options.modifiers,
 					},
 					&FrameGeometry::identity_global(),
-					options.mode(token),
+					options.mode(),
 					token,
 				)?;
 				Ok(Response::Unit)
@@ -1955,6 +1971,33 @@ impl DesktopSession {
 		}))
 	}
 
+	/// Selects `text` in the element's value by accessibility, or places a
+	/// caret at its start or end, without focus change or keystrokes.
+	#[napi]
+	pub fn ax_select_text(
+		&self,
+		reference: String,
+		text: String,
+		opts: Option<AxSelectTextOptions>,
+	) -> Result<task::Promise<AxTextSelection>> {
+		let opts = opts.unwrap_or_default();
+		let request = text_range::TextSelectRequest {
+			text,
+			prefix: opts.prefix.unwrap_or_default(),
+			suffix: opts.suffix.unwrap_or_default(),
+			part: text_range::SelectPart::parse(opts.select.as_deref()).map_err(napi::Error::from)?,
+		};
+		let c = Arc::clone(&self.core);
+		let token = c.cancellation.token();
+		Ok(task::blocking("desktop.axSelectText", (), move |_| {
+			match c.call(token, |reply| Request::AxSelectText { reference, request, reply })? {
+				Response::TextSelection(v) => Ok(v),
+				_ => Err(DesktopError::internal("unexpected response")),
+			}
+			.map_err(Into::into)
+		}))
+	}
+
 	#[napi]
 	pub fn ax_focus(&self, reference: String) -> Result<task::Promise<()>> {
 		Ok(self.unit("desktop.axFocus", move |reply| Request::AxFocus { reference, reply }))
@@ -2103,6 +2146,7 @@ mod capture_tests {
 		/// button.
 		tree:                   Option<Arc<Mutex<FakeTree>>>,
 		clicks:                 Arc<Mutex<Vec<String>>>,
+		modes:                  Arc<Mutex<Vec<DeliveryMode>>>,
 		layout:                 Arc<Mutex<Vec<DesktopDisplay>>>,
 		active_display:         Arc<Mutex<String>>,
 		captures:               Arc<Mutex<u8>>,
@@ -2140,6 +2184,7 @@ mod capture_tests {
 				window_present:         true,
 				tree:                   None,
 				clicks:                 Arc::new(Mutex::new(Vec::new())),
+				modes:                  Arc::new(Mutex::new(Vec::new())),
 				layout:                 Arc::new(Mutex::new(vec![DesktopDisplay {
 					id:           "screen-1".to_string(),
 					name:         "Test screen".to_string(),
@@ -2267,6 +2312,17 @@ mod capture_tests {
 				}
 			}
 			Err(DesktopError::stale_ref("the element no longer exists"))
+		}
+
+		fn select_text(
+			&mut self,
+			h: &AxHandle,
+			_: &text_range::TextSelectRequest,
+		) -> CoreResult<AxTextSelection> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
+			unreachable!("text selection not exercised")
 		}
 
 		fn set_value(&mut self, h: &AxHandle, _: &str) -> CoreResult<()> {
@@ -2406,10 +2462,11 @@ mod capture_tests {
 			target: &Target,
 			_: PointerEvent,
 			_: &FrameGeometry,
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
 			self.clicks.lock().push(target.key().to_string());
+			self.modes.lock().push(mode);
 			Ok(())
 		}
 
@@ -2417,20 +2474,22 @@ mod capture_tests {
 			&mut self,
 			_: &Target,
 			_: &str,
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
-			unreachable!("type_text not exercised")
+			self.modes.lock().push(mode);
+			Ok(())
 		}
 
 		fn key_chord(
 			&mut self,
 			_: &Target,
 			_: &[KeyName],
-			_: DeliveryMode,
+			mode: DeliveryMode,
 			_: &OperationToken,
 		) -> CoreResult<()> {
-			unreachable!("key_chord not exercised")
+			self.modes.lock().push(mode);
+			Ok(())
 		}
 
 		fn hold_keys(
@@ -3079,13 +3138,18 @@ mod capture_tests {
 		}
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
-		let requests: [fn(Reply) -> Request; 8] = [
+		let requests: [fn(Reply) -> Request; 9] = [
 			|reply| Request::AxNode { reference: e2(), reply },
 			|reply| Request::AxAttributes { reference: e2(), reply },
 			|reply| Request::AxChildren { reference: e2(), reply },
 			|reply| Request::AxParent { reference: e2(), reply },
 			|reply| Request::AxPerform { reference: e2(), action: "press".to_string(), reply },
 			|reply| Request::AxSetValue { reference: e2(), value: "Stop".to_string(), reply },
+			|reply| Request::AxSelectText {
+				reference: e2(),
+				request: text_range::TextSelectRequest { text: "Go".to_string(), ..Default::default() },
+				reply,
+			},
 			|reply| Request::AxFocus { reference: e2(), reply },
 			|reply| Request::AxClick {
 				reference: e2(),
@@ -3577,10 +3641,9 @@ mod capture_tests {
 		}
 		assert_eq!(hold_duration(0.0).unwrap(), Duration::ZERO);
 		assert_eq!(hold_duration(100.0).unwrap(), Duration::from_secs(100));
-		let token = CancellationSource::default().token();
 		let default = ParsedPointerOptions::parse(None).unwrap();
 		assert_eq!(default.takeover, None);
-		assert_eq!(default.mode(&token), DeliveryMode::Background);
+		assert_eq!(default.mode(), DeliveryMode::Background);
 		for (takeover, expected) in
 			[(false, DeliveryMode::Background), (true, DeliveryMode::Foreground)]
 		{
@@ -3590,8 +3653,68 @@ mod capture_tests {
 			}))
 			.unwrap();
 			assert_eq!(options.takeover, Some(takeover));
-			assert_eq!(options.mode(&token), expected);
+			assert_eq!(options.mode(), expected);
 		}
+	}
+
+	#[test]
+	fn held_control_leaves_omitted_takeover_in_the_background() {
+		// Holding control takes this process's one input ownership, which the
+		// other worker tests here take to send input, so the test runs alone in
+		// a child test process.
+		const ALONE: &str = "PI_DESKTOP_TEST_ALONE";
+		if std::env::var_os(ALONE).is_none() {
+			let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+				.args([
+					"--exact",
+					"desktop::capture_tests::held_control_leaves_omitted_takeover_in_the_background",
+				])
+				.env(ALONE, "1")
+				.output()
+				.expect("child test");
+			let stdout = String::from_utf8_lossy(&output.stdout);
+			assert!(output.status.success() && stdout.contains(" 1 passed;"), "{stdout}");
+			return;
+		}
+		let backend = FakeWaylandBackend::new();
+		let modes = Arc::clone(&backend.modes);
+		let mut worker = worker_with(backend);
+		let source = CancellationSource::default();
+		control::grant_for_test(&source);
+		assert!(source.control_active());
+		let token = source.token();
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker
+			.process(&capture_request(target.clone()), &token)
+			.unwrap();
+		for takeover in [None, Some(true)] {
+			let options = ParsedPointerOptions::parse(Some(PointerOptions {
+				takeover,
+				..PointerOptions::default()
+			}))
+			.unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let click = Request::Click { target: target.clone(), x: 10.0, y: 10.0, options, reply };
+			worker.process(&click, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let text = "a".to_string();
+			let typed = Request::TypeText { target: target.clone(), text, takeover, reply };
+			worker.process(&typed, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let keys = parse_keys(&["a".to_string()]).unwrap();
+			let chord = Request::KeyChord { target: target.clone(), keys, takeover, reply };
+			worker.process(&chord, &token).unwrap();
+			let (reply, _rx) = flume::bounded(1);
+			let hover =
+				Request::MoveMouse { target: target.clone(), x: 10.0, y: 10.0, takeover, reply };
+			worker.process(&hover, &token).unwrap();
+		}
+		source.release_control();
+		let (background, foreground) = (DeliveryMode::Background, DeliveryMode::Foreground);
+		assert_eq!(*modes.lock(), [
+			background, background, background, background, foreground, foreground, foreground,
+			foreground
+		]);
 	}
 
 	#[test]

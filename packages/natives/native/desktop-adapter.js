@@ -15,6 +15,7 @@ const REQUIRED_METHODS = [
 	"releaseControl",
 	"controlState",
 	"bringToCurrentSpace",
+	"axSelectText",
 	"holdDisplayUntilReleased",
 	"releaseDisplayAwake",
 ];
