@@ -38,6 +38,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - `repo`：代码仓索引，定位实现与 Python 定义；命中后 MUST 用 `read` 核实当前源码，NEVER 由索引推断调用关系或代码不存在。
 - `read` / `grep` / `glob` / `ast_grep`：核实当前文件、接口与实际调用；穷尽结论 MUST 用当前源码及 `grep` 验证。
 - 工具禁用、缺索引或查询失败 MUST 如实记录，NEVER 当作零命中；只读流程不建库、不更新索引，必要时改用可用的只读工具。
+- 本子调用确认缺索引后 NEVER 重复探测；命中明显偏题时定向调整，仍无相关证据则转源码。无新线索 NEVER 重复等价查询；不能据此断言规范不存在。
 - 未检索到资料不代表公司没有相关规定或仓库没有代码；历史文档不自动代表当前有效规范。
 
 ## 对齐阶段的需求解释与验收建议（不替代原始需求及已确认约束）
@@ -114,18 +115,6 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 {{#if latestProposal.noViableProposal}}
 提案者声明：必要调查已完成，未形成可行方案（见正文中的依据与不可行原因）。
 {{/if}}
-{{#if initialReview}}
-审查意见与处理结果：
-{{#if initialReview.reviewSummary}}
-初次审查依据与结论：{{{initialReview.reviewSummary}}}
-{{/if}}
-{{#if initialReview.findings.length}}
-初次审查意见：
-{{#each initialReview.findings}}
-{{add @index 1}}. [{{{id}}}] [{{{severity}}}] {{{issue}}}（影响：{{{impact}}}；依据：{{{evidence}}}；针对部分：{{{targetAspect}}}）
-{{/each}}
-{{else}}初次审查：未发现实质问题。{{/if}}
-{{/if}}
 {{#if reviews.length}}
 全部成功审查记录（稳定 ID、原始证据、逐项复核状态及依据）：
 ```json
@@ -134,6 +123,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 {{/if}}
 {{#if revisionHistory.length}}
 各轮修订与对应复核（完整结构化材料；历史失败不代表当前资格）：
+`revisedProposalReference` 为 `current` 时正文见本方案上方的当前正文；其他修订仍附完整正文。
 ```json
 {{{jsonStringify revisionHistory}}}
 ```
@@ -159,6 +149,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - 通过硬约束后，再比较风险、复杂度、修改范围、兼容性、维护负担和可验证性；比较必须说明理由，不采用多数票，不能用低工作量抵消正确性缺陷。
 - 只能汇总经过审查的方案；NEVER 拼接多个候选生成未经审查的新设计再称其已通过。
 - MUST 先直接回答用户问题；共同结论、依据与验收只写一次。同方向方案可归类展示，保留标签、适用条件和重要差异；仅侧重点不同不构成独立备选，NEVER 拼成未经审查的新设计。
+- 正文 SHOULD ≤ 2000 字，仅展开影响选择的差异；必要的阻断、歧义、依据及采用条件 MUST 保留，不能为篇幅省略。现有 12000 字硬上限不变。
 - 最终方案数量不固定：仅当存在实质不同且有选择价值的方案时分别展开；没有可采用方案时明确说明原因。
 - 有明确优势时填 recommendedProposal（标签）+ 理由与前提；没有明确优选时留空，直接说明取舍条件。
 - 报告正文不要包含“【推荐】”标记——推荐行由代码生成；理解差异中实质影响选择的会在结果置顶提示。
