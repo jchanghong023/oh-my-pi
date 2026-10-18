@@ -8,6 +8,7 @@ import type { TspProps } from "@oh-my-pi/pi-wire";
 import type { NativeChild, NativeNode } from "../src/native/node";
 import { setNativeRendering } from "../src/native/state";
 import type { StatusLineComponent } from "../src/status-line/component";
+import { parseGitStatus } from "../src/status-line/git-utils";
 import { describeSegment, renderSegment, type SegmentContext } from "../src/status-line/segments";
 import { createStartupStatusLine } from "../src/status-line/startup";
 import type { StatusLineSettings } from "../src/status-line/types";
@@ -132,7 +133,7 @@ describe("native composer facts", () => {
 	});
 
 	// Two staged and three unstaged files share one path, plus one untracked file.
-	const overlappingStatus = { staged: 2, unstaged: 3, untracked: 1, changed: 5 };
+	const overlappingStatus = parseGitStatus("M  staged\0MM shared\0 M unstaged-a\0 M unstaged-b\0?? untracked\0");
 
 	it.each([
 		{ options: {}, expected: "git main · 改动5" },
@@ -148,7 +149,7 @@ describe("native composer facts", () => {
 	});
 
 	it("shows untracked-only changes and honors their visibility option", () => {
-		const status = { staged: 0, unstaged: 0, untracked: 2, changed: 2 };
+		const status = parseGitStatus("?? one\0?? two\0");
 		expectGitDisplay("main", status, {}, "git main · 改动2");
 		expectGitDisplay("main", status, { showUntracked: false }, "git main");
 		expectGitDisplay("main", status, { showBranch: false }, "git 改动2");
@@ -166,7 +167,7 @@ describe("native composer facts", () => {
 	});
 
 	it("omits zero counts and uses clean styling in both renderers", () => {
-		const cleanStatus = { staged: 0, unstaged: 0, untracked: 0, changed: 0 };
+		const cleanStatus = parseGitStatus("");
 		expectGitDisplay("main", cleanStatus, {}, "git main", false);
 		expectGitDisplay("main", null, {}, "git main", false);
 		expectGitDisplay("main", cleanStatus, { showBranch: false }, "", false);

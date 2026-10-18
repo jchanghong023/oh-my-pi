@@ -1,21 +1,22 @@
 import type { GitStatus } from "./types";
 
-/** Count porcelain v1 -z entries; rename/copy source paths are not separate changes. */
+/** Count distinct porcelain v1 -z paths; rename/copy sources are not separate changes. */
 export function parseGitStatus(porcelain: string): GitStatus {
-	const status: GitStatus = { staged: 0, unstaged: 0, untracked: 0, changed: 0 };
+	const staged = new Set<string>();
+	const unstaged = new Set<string>();
+	const untracked = new Set<string>();
 	let offset = 0;
 	while (offset < porcelain.length) {
 		const end = porcelain.indexOf("\0", offset);
 		if (end < 0) break;
 		const index = porcelain[offset];
 		const worktree = porcelain[offset + 1];
+		const path = porcelain.slice(offset + 3, end);
 		if (index === "?" && worktree === "?") {
-			status.untracked++;
-			status.changed++;
+			untracked.add(path);
 		} else if (index !== "!" && (index !== " " || worktree !== " ")) {
-			if (index !== " ") status.staged++;
-			if (worktree !== " ") status.unstaged++;
-			status.changed++;
+			if (index !== " ") staged.add(path);
+			if (worktree !== " ") unstaged.add(path);
 		}
 		offset = end + 1;
 		if (index === "R" || index === "C" || worktree === "R" || worktree === "C") {
@@ -24,7 +25,16 @@ export function parseGitStatus(porcelain: string): GitStatus {
 			offset = sourceEnd + 1;
 		}
 	}
-	return status;
+	const changed = new Set(staged);
+	for (const path of unstaged) changed.add(path);
+	for (const path of untracked) changed.add(path);
+	return {
+		staged: staged.size,
+		unstaged: unstaged.size,
+		untracked: untracked.size,
+		changed: changed.size,
+		paths: { staged: [...staged], unstaged: [...unstaged], untracked: [...untracked] },
+	};
 }
 
 /**

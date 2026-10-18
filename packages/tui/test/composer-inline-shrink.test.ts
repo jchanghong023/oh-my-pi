@@ -4,8 +4,17 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import { createStartupStatusLine } from "@oh-my-pi/pi-tui/status-line/startup";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { type Component, Container, getKeybindings, setKeybindings, Text } from "@oh-my-pi/pi-tui";
+import {
+	type Component,
+	Container,
+	CURSOR_MARKER,
+	getKeybindings,
+	setKeybindings,
+	Text,
+	visibleWidth,
+} from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
@@ -156,6 +165,88 @@ beforeAll(async () => {
 });
 
 describe("composer inline shrink (#11007)", () => {
+	it("keeps input and cursor inside the shared below-editor and status height budget after resizing", async () => {
+		const terminal = new VirtualTerminal(24, 6);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const status = createStartupStatusLine({
+			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		for (let i = 0; i < 3; i++) status.setHookStatus(`status-${i}`, `STATUS ${i}`);
+		composer.setStatusComponent(status);
+		composer.editor.setText("INPUT");
+		const editorRoot = new Container();
+		editorRoot.addChild(composer.editor);
+		let widgetRows = 3;
+		let widgetRenders = 0;
+		const belowEditor = new Container();
+		belowEditor.addChild({
+			render: () => {
+				widgetRenders++;
+				return Array.from({ length: widgetRows }, (_, i) => `WIDGET ${i}`);
+			},
+		});
+		composer.setRuntimeChildren([new TranscriptContainer(), editorRoot, belowEditor], {
+			transientChrome: [editorRoot],
+		});
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		try {
+			for (const geometry of [
+				{ rows: 6, widget: 3 },
+				{ rows: 12, widget: 3 },
+				{ rows: 6, widget: 9 },
+				{ rows: 12, widget: 3 },
+			]) {
+				widgetRows = geometry.widget;
+				terminal.resize(24, geometry.rows);
+				composer.ui.requestRender();
+				await scheduler.advance(terminal, 300);
+				for (const resize of [false, true]) {
+					const rendersBefore = widgetRenders;
+					const size = { columns: 24, rows: geometry.rows };
+					const viewport = resize ? composer.renderResizeFrame(size) : composer.renderFrame(size).viewport;
+					expect(widgetRenders - rendersBefore).toBe(1);
+					const cursorRow = viewport.findIndex(row => row.includes(CURSOR_MARKER));
+					expect(cursorRow).toBeGreaterThanOrEqual(0);
+					expect(cursorRow).toBeLessThan(geometry.rows);
+					const input = viewport[cursorRow]!;
+					expect(input).toContain("INPUT");
+					expect(visibleWidth(input.slice(0, input.indexOf(CURSOR_MARKER)))).toBeLessThan(24);
+					const widgets = Math.min(widgetRows, geometry.rows - composer.editor.renderedRows);
+					const statuses = Math.min(3, geometry.rows - composer.editor.renderedRows - widgets);
+					expect(viewport.filter(row => row.includes("WIDGET "))).toHaveLength(widgets);
+					expect(viewport.filter(row => row.includes("STATUS "))).toHaveLength(statuses);
+					// Status overflow and layout spacing may use spare rows; assert the budget, not a packed viewport.
+					expect(viewport.length).toBeGreaterThanOrEqual(composer.editor.renderedRows + widgets + statuses);
+					expect(viewport.length).toBeLessThanOrEqual(geometry.rows);
+				}
+				const visible = terminal.getViewport();
+				const cursor = terminal.getCursor();
+				expect(visible.some(row => row.includes("INPUT"))).toBe(true);
+				expect(visible[cursor.row]).toContain("INPUT");
+				expect(cursor.col).toBeLessThan(24);
+				if (geometry.rows === 12) {
+					expect(visible.filter(row => row.includes("WIDGET "))).toHaveLength(3);
+					expect(visible.filter(row => row.includes("STATUS "))).toHaveLength(3);
+				}
+			}
+		} finally {
+			composer.stop();
+			status.dispose();
+		}
+	});
+
 	it("answers an ask at the reported 54x112 geometry without losing, duplicating or stranding rows", async () => {
 		const h = makeHarness(112, 54);
 		await h.scheduler.settle(h.terminal);

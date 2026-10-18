@@ -162,16 +162,18 @@ describe("P2-21 Python Eval runtime scope", () => {
 	let activeDir: string;
 	let activePython: string;
 	let env: Record<string, string>;
+	let originalOffline: string | undefined;
 
 	beforeEach(() => {
 		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
+		originalOffline = process.env.OMP_OFFLINE;
+		process.env.OMP_OFFLINE = "1";
 		// Successful availability checks are memoized by cwd, so each case owns
 		// a distinct cache key without mutating production cache state.
 		cwd = path.join(tmpdir(), `omp-eval-scope-${randomUUID()}`);
 		activeDir = path.join(cwd, ".venv");
 		activePython = path.join(activeDir, "bin", "python");
 		env = {
-			OMP_OFFLINE: "1",
 			PATH: "/business/.venv/bin:/usr/bin",
 			VIRTUAL_ENV: activeDir,
 			CONDA_PREFIX: "/business/conda",
@@ -193,9 +195,11 @@ describe("P2-21 Python Eval runtime scope", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
 		Object.defineProperty(process, "platform", platformDescriptor);
+		if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
+		else process.env.OMP_OFFLINE = originalOffline;
 	});
 
-	test("probes the fixed interpreter first only for Eval and isolates its child environment", async () => {
+	test("prefers process-level offline Python without OMP_OFFLINE in the shell environment and isolates its child", async () => {
 		const originalEnv = { ...env };
 		const probe = vi.spyOn(runtimeProbe, "probeCandidates").mockResolvedValue({ ok: true, index: 0 });
 
@@ -206,7 +210,6 @@ describe("P2-21 Python Eval runtime scope", () => {
 		const candidates = probe.mock.calls[0][0];
 		expect(candidates.map(candidate => candidate.command[0])).toEqual([offlinePython, activePython, systemPython]);
 		expect(candidates[0].env).toEqual({
-			OMP_OFFLINE: "1",
 			PATH: env.PATH,
 			LD_LIBRARY_PATH: env.LD_LIBRARY_PATH,
 		});
@@ -240,9 +243,7 @@ describe("P2-21 Python Eval runtime scope", () => {
 				[interpreter ?? offlinePython, "-u", scriptPath],
 				expect.objectContaining({
 					env: {
-						...(selection === "explicit"
-							? env
-							: { OMP_OFFLINE: "1", PATH: env.PATH, LD_LIBRARY_PATH: env.LD_LIBRARY_PATH }),
+						...(selection === "explicit" ? env : { PATH: env.PATH, LD_LIBRARY_PATH: env.LD_LIBRARY_PATH }),
 						PYTHONUNBUFFERED: "1",
 						PYTHONIOENCODING: "utf-8",
 					},
@@ -304,8 +305,8 @@ describe("P2-21 Python Eval runtime scope", () => {
 		["win32", "1"],
 	] as const)("does not add the Eval fixed candidate on %s with OMP_OFFLINE=%s", async (platform, offline) => {
 		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-		if (offline === undefined) delete env.OMP_OFFLINE;
-		else env.OMP_OFFLINE = offline;
+		if (offline === undefined) delete process.env.OMP_OFFLINE;
+		else process.env.OMP_OFFLINE = offline;
 		const probe = vi.spyOn(runtimeProbe, "probeCandidates").mockResolvedValue({ ok: true, index: 0 });
 
 		const result = await checkPythonKernelAvailability(cwd, undefined, { forceProbe: true });

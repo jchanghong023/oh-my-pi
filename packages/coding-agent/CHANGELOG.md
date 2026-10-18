@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Keep timed-out automatic answers identified as automatic when revisiting questions without replacing their answers.
+- Honor process-level offline mode when selecting Eval's fixed Linux Python interpreter, even when the shell environment filters out the mode flag.
 - Apply offline company-model initialization and cache-only catalog discovery to compression, commit generation and other standalone model consumers.
 - Start print-mode periodic backups while work is running, preserve complete rotated-log records, and flush backup-worker logs before collecting the snapshot.
 - Exclude implicit company role defaults from model-preset conflict warnings.

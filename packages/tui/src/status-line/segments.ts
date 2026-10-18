@@ -642,15 +642,23 @@ function gitText(ctx: SegmentContext): string {
 	const opts = ctx.options.git ?? {};
 	const showStaged = opts.showStaged !== false;
 	const showUnstaged = opts.showUnstaged !== false;
+	const showUntracked = opts.showUntracked !== false;
 	let changed = 0;
 	if (status) {
-		changed =
-			(showStaged ? status.staged : 0) +
-			(showUnstaged ? status.unstaged : 0) +
-			(opts.showUntracked !== false ? status.untracked : 0);
-		if (showStaged && showUnstaged) {
-			// A file changed in both the index and worktree contributes only once.
-			changed -= status.staged + status.unstaged + status.untracked - status.changed;
+		if (showStaged && showUnstaged && showUntracked) {
+			changed = status.changed;
+		} else if (status.paths) {
+			const paths = new Set<string>();
+			if (showStaged) for (const path of status.paths.staged) paths.add(path);
+			if (showUnstaged) for (const path of status.paths.unstaged) paths.add(path);
+			if (showUntracked) for (const path of status.paths.untracked) paths.add(path);
+			changed = paths.size;
+		} else {
+			// JJ has no index and its added/modified path categories are disjoint.
+			changed =
+				(showStaged ? status.staged : 0) +
+				(showUnstaged ? status.unstaged : 0) +
+				(showUntracked ? status.untracked : 0);
 		}
 	}
 	const branchText = opts.showBranch !== false && branch ? branch : "";

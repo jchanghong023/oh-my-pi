@@ -217,9 +217,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	readonly #header = new Container();
 	readonly #bootstrapInputGap = new Spacer(1);
 	readonly #statusHost = new StatusHost(() =>
-		Math.max(0, (this.#frameRows ?? this.ui.terminal.rows) - this.editor.renderedRows),
+		Math.max(0, (this.#frameRows ?? this.ui.terminal.rows) - (this.#inputTailRows ?? this.editor.renderedRows)),
 	);
 	#frameRows: number | undefined;
+	#inputTailRows: number | undefined;
 	readonly #exit: (code: number) => void;
 	readonly #now: () => number;
 	#preferences: ComposerPreferences;
@@ -401,6 +402,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
 		this.#frameRows = rows;
+		this.#inputTailRows = undefined;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
 			this.#resizeRetiredHeaderStart = undefined;
@@ -412,12 +414,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
 		if (transcriptIndex < 0) {
 			this.#lastClickSpans = [];
-			const viewport: string[] = [];
-			for (const root of roots) {
-				const rendered = root.render(width);
-				if (!this.#runtimeMounted && root === this.editor) this.#recordBootstrapEditorRows(rendered.length);
-				viewport.push(...rendered);
-			}
+			const viewport = this.#renderRoots(roots, width);
 			return { viewport: viewport.slice(-rows) };
 		}
 		const transcript = roots[transcriptIndex] as TranscriptContainer;
@@ -587,7 +584,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		if (plainContainer) {
 			let offset = start;
 			for (let index = 0; index < targets.length; index++) {
-				const childLines = targets[index]!.render(width);
+				const childLines = this.#renderInputRoot(targets[index]!, width);
 				after.push(...childLines);
 				if (index > lastTarget) continue;
 				const resolve = resolves[index];
@@ -598,7 +595,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			}
 			return;
 		}
-		after.push(...root.render(width));
+		after.push(...this.#renderInputRoot(root, width));
 		if (lastTarget === -1) return;
 		let offset = start;
 		for (let index = 0; index <= lastTarget; index++) {
@@ -683,6 +680,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const width = Math.max(1, viewport.columns);
 		const rows = Math.max(0, viewport.rows);
 		this.#frameRows = rows;
+		this.#inputTailRows = undefined;
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -913,9 +911,27 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		offered.rows = [...headerRows, ...(transcript?.rows ?? [])];
 	}
 
+	/** Budget mounted rows after the input from the same render used for composition. */
+	#renderInputRoot(root: Component, width: number): readonly string[] {
+		if (root instanceof Container && root.render === Container.prototype.render) {
+			return this.#renderRoots(root.children, width);
+		}
+		const rendered = root.render(width);
+		if (root === this.editor || (root instanceof Container && root.children.includes(this.editor))) {
+			this.#inputTailRows = rendered.length;
+			if (!this.#runtimeMounted) this.#recordBootstrapEditorRows(this.editor.renderedRows);
+			return rendered;
+		}
+		if (this.#inputTailRows === undefined) return rendered;
+		const remaining = Math.max(0, (this.#frameRows ?? this.ui.terminal.rows) - this.#inputTailRows);
+		const bounded = rendered.length <= remaining ? rendered : rendered.slice(0, remaining);
+		this.#inputTailRows += bounded.length;
+		return bounded;
+	}
+
 	#renderRoots(roots: readonly Component[], width: number): string[] {
 		const rows: string[] = [];
-		for (const root of roots) rows.push(...root.render(width));
+		for (const root of roots) rows.push(...this.#renderInputRoot(root, width));
 		return rows;
 	}
 	/**

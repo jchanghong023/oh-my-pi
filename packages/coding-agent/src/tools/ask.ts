@@ -460,23 +460,28 @@ async function askSingleQuestion(
 				}
 				break;
 			}
-			timedOut = selectTimedOut;
-
 			if (arrowNavigation) {
 				return { selectedOptions, customInput, note, timedOut, navigation: arrowNavigation };
 			}
 			if (choice === undefined) {
-				if (timedOut) break;
+				if (selectTimedOut) {
+					timedOut = true;
+					break;
+				}
 				return { selectedOptions, customInput, note, timedOut: false, cancelled: true };
 			}
 			if (choice === OTHER_OPTION) {
-				if (selectTimedOut) break;
+				if (selectTimedOut) {
+					timedOut = true;
+					break;
+				}
 				const customResult = await promptForCustomInput(promptWithProgress);
 				if (customResult.input === undefined) {
 					continue;
 				}
 				customInput = customResult.input;
 				selectedOptions = [];
+				timedOut = false;
 				break;
 			}
 			// Map the displayed choice back to the offered option by identity:
@@ -486,6 +491,7 @@ async function askSingleQuestion(
 			const pickedIndex = displayOptions.findIndex(option => getSelectOptionLabel(option) === choice);
 			selectedOptions = [pickedIndex >= 0 ? questionOptions[pickedIndex]!.label : stripRecommendedSuffix(choice)];
 			customInput = undefined;
+			timedOut = selectTimedOut;
 			break;
 		}
 		if (timedOut && selectedOptions.length === 0 && customInput === undefined) {

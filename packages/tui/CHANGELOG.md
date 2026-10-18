@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.
+- Preserve IME-safe cursor tails in boxed prompts while retaining the empty row below input.
+- Count each Git path once across the selected change categories, including staged deletions that remain as untracked files.
 - Compact mode reclaims collapsed rows instead of leaving a large blank band between tool activity and the thinking or TODO area.
 - Compact mode preserves upstream file-write previews and edit diffs instead of reducing file changes to single-line or counted summaries.
 - Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
