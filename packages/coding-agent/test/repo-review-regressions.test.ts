@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
-import type { TUI } from "@oh-my-pi/pi-tui";
+import { type TUI, visibleWidth } from "@oh-my-pi/pi-tui";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { Settings } from "../src/config/settings";
 import { RepoHubComponent } from "../src/modes/components/repo-hub";
@@ -56,6 +56,54 @@ async function execute(tool: RepoTool, params: Record<string, unknown>) {
 }
 
 describe("repository review regressions", () => {
+	for (const [action, key] of [
+		["build", "b"],
+		["rebuild", "r"],
+		["delete", "d"],
+	] as const) {
+		it(`preserves long repository targets and a separate ${action} confirmation across resize`, async () => {
+			const { cwd, agentDir, settings } = await fixture();
+			const parent = await fs.realpath(cwd);
+			const finalSegment = "operation-scope-tail";
+			const padding = "r".repeat(Math.max(1, 151 - path.join(parent, finalSegment).length - 1));
+			const target = path.join(parent, padding, finalSegment);
+			await fs.mkdir(target, { recursive: true });
+			const root = await fs.realpath(target);
+			expect(root.length).toBeGreaterThanOrEqual(151);
+			if (action === "delete") {
+				const service = new RepoService({ cwd: root, agentDir });
+				try {
+					await service.build();
+				} finally {
+					service.close();
+				}
+			}
+			const tui = { requestRender() {} } as unknown as TUI;
+			const hub = await RepoHubComponent.create(tui, root, settings, { onCancel() {} });
+			try {
+				const baseline = new Map<number, number>();
+				for (const width of [80, 48, 120]) {
+					const rows = hub.render(width);
+					baseline.set(width, rows.length);
+					expect(Bun.stripANSI(rows.join(""))).toContain(root);
+					for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+				}
+				hub.handleInput(key);
+				for (const width of [80, 48, 120, 80]) {
+					const rows = hub.render(width);
+					const confirmation = rows.slice(baseline.get(width)!);
+					expect(Bun.stripANSI(confirmation.join(""))).toContain(root);
+					expect(confirmation.some(row => Bun.stripANSI(row).trim() === "? y/N")).toBe(true);
+					for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+				}
+				hub.handleInput("n");
+				expect(hub.render(80)).toHaveLength(baseline.get(80)!);
+			} finally {
+				hub.dispose();
+			}
+		});
+	}
+
 	it("P2-6 displays an index-parent creation failure and allows retry in the same panel", async () => {
 		const { cwd, agentDir, settings, tool } = await fixture({ "engine.py": "def retry_target(): pass\n" });
 		const failed = Promise.withResolvers<void>();

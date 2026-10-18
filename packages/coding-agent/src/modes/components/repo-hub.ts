@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { type Component, matchesKey, type TUI, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { type Component, matchesKey, type TUI, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { isEnoent, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
@@ -202,7 +202,7 @@ export class RepoHubComponent implements Component {
 		const root = line(this.root);
 		const lines = [
 			theme.bold(theme.fg("accent", "Repository index")),
-			`Root: ${root}`,
+			...wrapTextWithAnsi(`Root: ${root}`, Math.max(1, width)),
 			"b build  u update (full reconcile)  r rebuild  d delete  c cancel  Esc close",
 		];
 		const status = this.#status;
@@ -229,12 +229,13 @@ export class RepoHubComponent implements Component {
 		} else if (this.#service.storage.recoveryError) {
 			lines.push(theme.fg("warning", "Index schema unreadable. Press r to rebuild and recover, or d to delete."));
 		} else lines.push("Status unavailable. Press r to rebuild or d to delete.");
-		if (this.#confirmation === "build") lines.push(theme.fg("warning", `Build repository index for ${root}? y/N`));
-		else if (this.#confirmation === "rebuild")
-			lines.push(theme.fg("warning", `Rebuild repository index for ${root}? y/N`));
-		else if (this.#confirmation === "delete")
-			lines.push(theme.fg("warning", `Delete repository index for ${root}? y/N`));
-		else if (this.#confirmation === "cancel-close")
+		if (this.#confirmation && this.#confirmation !== "cancel-close") {
+			const action = { build: "Build", rebuild: "Rebuild", delete: "Delete" }[this.#confirmation];
+			lines.push(
+				...wrapTextWithAnsi(theme.fg("warning", `${action} repository index for ${root}`), Math.max(1, width)),
+				...wrapTextWithAnsi(theme.fg("warning", "? y/N"), Math.max(1, width)),
+			);
+		} else if (this.#confirmation === "cancel-close")
 			lines.push(
 				theme.fg(
 					"warning",

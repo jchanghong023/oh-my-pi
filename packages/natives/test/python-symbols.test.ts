@@ -128,6 +128,154 @@ describe("native Python definitions", () => {
 		]);
 	});
 
+	test("Python 3.6 soft-keyword parameters keep later definitions visible", async () => {
+		for (const parameter of ["async", "await"]) {
+			const result = await pythonSymbols({
+				code: `def send(${parameter}=False): return ${parameter}\ndef visible(): pass\n`,
+			});
+			expect(result).toEqual({
+				parseError: false,
+				symbols: [
+					{
+						name: "send",
+						qualname: "send",
+						kind: "function",
+						startLine: 1,
+						endLine: 1,
+						signature: `def send(${parameter}=False):`,
+					},
+					{
+						name: "visible",
+						qualname: "visible",
+						kind: "function",
+						startLine: 2,
+						endLine: 2,
+						signature: "def visible():",
+					},
+				],
+			});
+		}
+	});
+
+	test("isolated recovered soft-keyword identifiers retain declaration and reference positions", async () => {
+		for (const keyword of ["async", "await"]) {
+			const declarations = [
+				{ signature: `class ${keyword}:`, body: " pass", name: keyword, kind: "class" },
+				{ signature: `def ${keyword}():`, body: ` return ${keyword}`, name: keyword, kind: "function" },
+				...[keyword, `${keyword}: bool`, `${keyword}: bool=False`, `*${keyword}`, `**${keyword}`].map(
+					parameters => ({
+						signature: `def send(${parameters}):`,
+						body: ` return ${keyword}`,
+						name: "send",
+						kind: "function",
+					}),
+				),
+			];
+			for (const { signature, body, name, kind } of declarations) {
+				expect(await pythonSymbols({ code: `${signature}${body}\ndef visible(): pass\n` })).toEqual({
+					parseError: false,
+					symbols: [
+						{ name, qualname: name, kind, startLine: 1, endLine: 1, signature },
+						{
+							name: "visible",
+							qualname: "visible",
+							kind: "function",
+							startLine: 2,
+							endLine: 2,
+							signature: "def visible():",
+						},
+					],
+				});
+			}
+		}
+	});
+
+	test("Python 3.6 class names and other soft-keyword uses retain UTF-8 signatures and coordinates", async () => {
+		const lines = [
+			"# 値: async await",
+			"async = False",
+			"await = async",
+			"text = 'async def await'",
+			"class async:",
+			"    @decorate('await async 値')",
+			"    def send(self, async=False, await=None):",
+			"        return [async, await, f'{async!r} {await}']",
+			"class await(async):",
+			"    def await(self, async=False): return async",
+			"def visible(): return await",
+			"async def fetch(task):",
+			"    async with task:",
+			"        async for value in task:",
+			"            await value",
+		];
+		for (const newline of ["\n", "\r\n"]) {
+			expect(await pythonSymbols({ code: lines.join(newline) })).toEqual({
+				parseError: false,
+				symbols: [
+					{ name: "async", qualname: "async", kind: "class", startLine: 5, endLine: 8, signature: "class async:" },
+					{
+						name: "send",
+						qualname: "async.send",
+						kind: "method",
+						startLine: 6,
+						endLine: 8,
+						signature: lines.slice(5, 7).join(newline).trimStart(),
+					},
+					{
+						name: "await",
+						qualname: "await",
+						kind: "class",
+						startLine: 9,
+						endLine: 10,
+						signature: "class await(async):",
+					},
+					{
+						name: "await",
+						qualname: "await.await",
+						kind: "method",
+						startLine: 10,
+						endLine: 10,
+						signature: "def await(self, async=False):",
+					},
+					{
+						name: "visible",
+						qualname: "visible",
+						kind: "function",
+						startLine: 11,
+						endLine: 11,
+						signature: "def visible():",
+					},
+					{
+						name: "fetch",
+						qualname: "fetch",
+						kind: "function",
+						startLine: 12,
+						endLine: 15,
+						signature: "async def fetch(task):",
+					},
+				],
+			});
+		}
+	});
+
+	test("Python 3.6 compatibility does not accept reserved identifiers in async functions or mask syntax errors", async () => {
+		for (const tail of [
+			"async def outer(async=False): pass\n",
+			"async def outer(await=False): pass\n",
+			"async def outer():\n    async = 1\n",
+			"async def outer():\n    await = 1\n",
+			"async def outer():\n    class async: pass\n",
+			"async def outer():\n    def inner(await=False): pass\n",
+			"async def outer():\n    return value.async\n",
+			"async def broken():\n    await (\n",
+			"def broken(: pass\n",
+		]) {
+			for (const prefix of ["def visible(): pass\n", "def send(async=False): pass\n"]) {
+				expect(await pythonSymbols({ code: `${prefix}${tail}` })).toEqual({ symbols: [], parseError: true });
+			}
+		}
+	});
+
 	test("syntax errors discard all symbols rather than returning earlier definitions", async () => {
 		const valid = "def previously_valid(): return 1\n";
 		expect((await pythonSymbols({ code: valid })).symbols[0]?.name).toBe("previously_valid");

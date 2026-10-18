@@ -1,8 +1,15 @@
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEexist, isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { formatPathRelativeToCwd } from "../tools/path-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import {
+	invalidateFsScanAfterRename,
+	invalidateFsScanAfterUncertainWrites,
+	invalidateFsScanAfterWrite,
+	invalidateFsScanAfterWrites,
+} from "../tools/fs-cache-invalidation";
 import type {
 	CreateFile,
 	CreateFileOptions,
@@ -156,6 +163,53 @@ export function flattenWorkspaceTextEdits(edit: WorkspaceEdit): Map<string, Text
 	return out;
 }
 
+/** Notify at the write boundary, including a failed write that may have truncated its target. */
+async function writeTextAndInvalidate(filePath: string, content: string): Promise<void> {
+	try {
+		await Bun.write(filePath, content);
+	} catch (error) {
+		invalidateFsScanAfterUncertainWrites([filePath], "LSP text write failed; target may have been partially written");
+		throw error;
+	}
+	invalidateFsScanAfterWrite(filePath);
+}
+
+/**
+ * Snapshot only the resource subtree before it moves or disappears. Index
+ * consumers refresh exact paths, so a directory notification alone is not enough.
+ * Symlinks are leaves: never enumerate their targets.
+ */
+async function resourceMutationPaths(filePath: string, stat?: Stats): Promise<string[]> {
+	const paths = [filePath];
+	const rootStat =
+		stat ??
+		(await fs.lstat(filePath).catch(error => {
+			if (isEnoent(error)) return undefined;
+			throw error;
+		}));
+	if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) return paths;
+	const visit = async (directory: string): Promise<void> => {
+		for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+			const child = path.join(directory, entry.name);
+			if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(child);
+			else paths.push(child);
+		}
+	};
+	await visit(filePath);
+	return paths;
+}
+
+function invalidateResourceRename(oldPath: string, newPath: string, oldPaths: string[]): void {
+	if (oldPaths.length === 1) {
+		invalidateFsScanAfterRename(oldPath, newPath);
+		return;
+	}
+	invalidateFsScanAfterWrites([
+		...oldPaths,
+		...oldPaths.map(filePath => path.join(newPath, path.relative(oldPath, filePath))),
+	]);
+}
+
 /**
  * Apply text edits to a file.
  * Edits are applied in reverse order (bottom-to-top) to preserve line/character indices.
@@ -163,7 +217,7 @@ export function flattenWorkspaceTextEdits(edit: WorkspaceEdit): Map<string, Text
 export async function applyTextEdits(filePath: string, edits: TextEdit[]): Promise<void> {
 	const content = await readTextFromDisk(filePath);
 	const result = applyTextEditsToString(content, edits);
-	await Bun.write(filePath, result);
+	await writeTextAndInvalidate(filePath, result);
 }
 
 /** A reference file and the text edits a rename computed for it. */
@@ -196,9 +250,11 @@ export async function applyEditsThenRename(
 	}
 	try {
 		await fs.mkdir(path.dirname(dest), { recursive: true });
+		const sourcePaths = await resourceMutationPaths(source);
 		await fs.rename(source, dest);
+		invalidateResourceRename(source, dest, sourcePaths);
 	} catch (err) {
-		await Promise.all(backups.map(({ filePath, original }) => Bun.write(filePath, original)));
+		await Promise.all(backups.map(({ filePath, original }) => writeTextAndInvalidate(filePath, original)));
 		throw err;
 	}
 }
@@ -341,9 +397,10 @@ export async function applyWorkspaceEdit(
 				await fs.mkdir(path.dirname(filePath), { recursive: true });
 				try {
 					if (op.options?.overwrite) {
-						await Bun.write(filePath, "");
+						await writeTextAndInvalidate(filePath, "");
 					} else {
 						const handle = await fs.open(filePath, "wx");
+						invalidateFsScanAfterWrite(filePath);
 						await handle.close();
 					}
 				} catch (error) {
@@ -363,7 +420,8 @@ export async function applyWorkspaceEdit(
 					// temp dir (same filesystem, so the moves stay atomic) instead of
 					// deleting it, so a failed rename (EXDEV, permissions) can restore
 					// it and leave the workspace exactly as it was.
-					let displaced: { dir: string; file: string } | undefined;
+					let displaced: { dir: string; file: string; paths: string[] } | undefined;
+					let sourceStat: Stats | undefined;
 					try {
 						const targetStat = await fs.lstat(newPath);
 						if (!op.options?.overwrite) {
@@ -374,27 +432,32 @@ export async function applyWorkspaceEdit(
 						// case-insensitive filesystem a case-only rename resolves both
 						// paths to the same inode; moving newPath aside would move the
 						// source, so let fs.rename change the case in place instead.
-						const sourceStat = await fs.lstat(oldPath);
+						sourceStat = await fs.lstat(oldPath);
 						if (sourceStat.dev !== targetStat.dev || sourceStat.ino !== targetStat.ino) {
+							const targetPaths = await resourceMutationPaths(newPath, targetStat);
 							const holdDir = await fs.mkdtemp(path.join(path.dirname(newPath), ".omp-displaced-"));
 							const holdFile = path.join(holdDir, path.basename(newPath));
 							try {
 								await fs.rename(newPath, holdFile);
+								invalidateFsScanAfterWrites(targetPaths);
 							} catch (error) {
 								await fs.rm(holdDir, { recursive: true, force: true }).catch(() => {});
 								throw error;
 							}
-							displaced = { dir: holdDir, file: holdFile };
+							displaced = { dir: holdDir, file: holdFile, paths: targetPaths };
 						}
 					} catch (error) {
 						if (!isEnoent(error)) throw error;
 					}
 					try {
+						const sourcePaths = await resourceMutationPaths(oldPath, sourceStat);
 						await fs.rename(oldPath, newPath);
+						invalidateResourceRename(oldPath, newPath, sourcePaths);
 					} catch (error) {
 						if (displaced) {
 							try {
 								await fs.rename(displaced.file, newPath);
+								invalidateFsScanAfterWrites(displaced.paths);
 							} catch {
 								// Restoration failed: the destination really is gone, so
 								// report it to reconciliation as an executed delete.
@@ -419,11 +482,26 @@ export async function applyWorkspaceEdit(
 				const filePath = uriToFile(op.uri);
 				try {
 					const stat = await fs.lstat(filePath);
+					const affectedPaths =
+						stat.isDirectory() && op.options?.recursive
+							? await resourceMutationPaths(filePath, stat)
+							: [filePath];
 					if (stat.isDirectory() && !stat.isSymbolicLink() && !op.options?.recursive) {
 						await fs.rmdir(filePath);
 					} else {
-						await fs.rm(filePath, { recursive: op.options?.recursive ?? false });
+						try {
+							await fs.rm(filePath, { recursive: op.options?.recursive ?? false });
+						} catch (error) {
+							if (stat.isDirectory() && op.options?.recursive) {
+								invalidateFsScanAfterUncertainWrites(
+									affectedPaths,
+									"LSP delete failed; target may have been partially removed",
+								);
+							}
+							throw error;
+						}
 					}
+					invalidateFsScanAfterWrites(affectedPaths);
 				} catch (error) {
 					if (!(op.options?.ignoreIfNotExists && isEnoent(error))) throw error;
 					continue;

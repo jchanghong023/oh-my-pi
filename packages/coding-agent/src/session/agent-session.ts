@@ -259,6 +259,7 @@ import {
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
+import type { XdevDispatch } from "../tools/xdev";
 import { isClosedTodo, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
@@ -5683,21 +5684,38 @@ export class AgentSession implements SettingsScope {
 		this.#repoLifecycle = lifecycle;
 		lifecycle.start();
 		const unregisterSessionChange = this.registerSessionChangeCallback(() => lifecycle.onSessionChange());
+		const dispatchedCommands = new Map<string, XdevDispatch>();
 		const unsubscribeToolEvents = this.subscribe(event => {
-			if (event.type !== "tool_execution_end" || (event.toolName !== "bash" && event.toolName !== "eval")) return;
-			const details = event.result?.details;
+			// The write transport preserves the canonical tool and its execution
+			// details in xdev. Retain live metadata when an interrupt replaces the
+			// final result with the agent loop's transport-level interruption marker.
+			if (event.type === "tool_execution_update" && event.toolName === "write") {
+				const dispatch = event.partialResult?.details?.xdev;
+				if (dispatch?.mode === "execute" && (dispatch.tool === "eval" || dispatch.tool === "bash")) {
+					dispatchedCommands.set(event.toolCallId, dispatch);
+				}
+				return;
+			}
+			if (event.type !== "tool_execution_end") return;
+			const previousDispatch = dispatchedCommands.get(event.toolCallId);
+			dispatchedCommands.delete(event.toolCallId);
+			const outerDetails = event.result?.details;
+			const dispatch = event.toolName === "write" ? (outerDetails?.xdev ?? previousDispatch) : undefined;
+			if (dispatch && dispatch.mode !== "execute") return;
+			const kind = event.toolName === "write" ? dispatch?.tool : event.toolName;
+			if (kind !== "bash" && kind !== "eval") return;
+			const details = dispatch ? (dispatch.inner ?? previousDispatch?.inner) : outerDetails;
 			// Refused and validation-error calls did not execute. A non-zero exit,
 			// timeout, or interrupt after tool execution started may have mutated files.
-			const interruptedAfterStart = details?.__interrupted === true && details?.execution === "started";
+			const interruptedAfterStart = outerDetails?.__interrupted === true && outerDetails?.execution === "started";
 			if (
 				event.isError &&
 				!details?.exitCode &&
 				!details?.timedOut &&
-				!(event.toolName === "eval" && Array.isArray(details?.cells)) &&
+				!(kind === "eval" && Array.isArray(details?.cells)) &&
 				!interruptedAfterStart
 			)
 				return;
-			const kind = event.toolName;
 			lifecycle.commandExecuted(kind);
 			// A background result only schedules the command. A panel reconcile can
 			// finish before the job actually mutates the tree, so invalidate again
@@ -5705,13 +5723,14 @@ export class AgentSession implements SettingsScope {
 			const asyncJob = details?.async;
 			if (asyncJob?.state !== "running" || typeof asyncJob.jobId !== "string") return;
 			const job = this.#asyncJobManager?.getJob(asyncJob.jobId);
-			if (job?.type !== kind || (this.#agentId && job.ownerId !== this.#agentId)) return;
+			if (!job || job.type !== kind || (this.#agentId && job.ownerId !== this.#agentId)) return;
 			void job.promise.then(() => {
 				if (this.#repoLifecycle === lifecycle) lifecycle.commandExecuted(kind);
 			});
 		});
 		this.addDisposer(() => {
 			unsubscribeToolEvents();
+			dispatchedCommands.clear();
 			unregisterSessionChange();
 			this.#repoLifecycle = undefined;
 			lifecycle.dispose();
