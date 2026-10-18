@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import artifactDoc from "../prompts/internal-urls/artifact.md" with { type: "text" };
+import { assertOfflineSessionPath } from "../session/session-storage";
 import { artifactsDirsFromRegistry } from "./registry-helpers";
 import type {
 	InternalResource,
@@ -36,8 +37,11 @@ const completionIds = new LRUCache<string, Promise<string[]>>({ max: 8, ttl: 200
 async function scanArtifactIds(dirs: string[]): Promise<string[]> {
 	const listings = await Promise.all(
 		dirs.map(async dir => {
+			assertOfflineSessionPath(dir);
 			try {
-				return await fs.readdir(dir);
+				const files = await fs.readdir(dir);
+				for (const file of files) assertOfflineSessionPath(path.join(dir, file));
+				return files;
 			} catch (err) {
 				if (isEnoent(err)) return [];
 				throw err;
@@ -56,6 +60,7 @@ async function scanArtifactIds(dirs: string[]): Promise<string[]> {
 
 function artifactIdsForCompletion(): Promise<string[]> {
 	const dirs = artifactsDirsFromRegistry();
+	for (const dir of dirs) assertOfflineSessionPath(dir);
 	const key = dirs.join("\0");
 	const cached = completionIds.get(key);
 	if (cached) return cached;
@@ -114,6 +119,9 @@ async function resolveArtifactFile(url: InternalUrl, context?: ResolveContext): 
 	const availableIds = new Set<string>();
 
 	for (const dir of dirs) {
+		// Check the unnormalized directory before path.join can erase link/..
+		// components inherited from a restored session or seance source.
+		assertOfflineSessionPath(dir);
 		let files: string[];
 		try {
 			files = await fs.readdir(dir);
@@ -143,6 +151,7 @@ async function resolveArtifactFile(url: InternalUrl, context?: ResolveContext): 
 		throw new MissingArtifactError(`Artifact ${id} not found. Available: ${availableStr}`);
 	}
 
+	assertOfflineSessionPath(foundPath);
 	const stat = await Bun.file(foundPath).stat();
 	if (stat.isDirectory()) {
 		throw new Error(`Artifact ${id} resolved to a directory, not a file`);
@@ -185,6 +194,7 @@ export class ArtifactProtocolHandler implements ProtocolHandler {
 			);
 		}
 
+		assertOfflineSessionPath(artifact.path);
 		const content = await Bun.file(artifact.path).text();
 		return {
 			url: url.href,

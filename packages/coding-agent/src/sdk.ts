@@ -63,9 +63,20 @@ import {
 } from "./capability/rule";
 import { bucketRules } from "./capability/rule-buckets";
 import type { EffectiveExtensionRoots } from "./capability/types";
+import { offlineFromEnv } from "./cli/args";
 import { type OAuthAccountPools, SessionAccountPoolScope } from "./config/account-pools";
 import { shouldEnableAppendOnlyContext } from "./config/append-only-context-mode";
-import { isCompanyLaneActive } from "./config/company-provider";
+import {
+	COMPANY_OFFLINE_CONTEXT_WINDOW,
+	COMPANY_OFFLINE_ROLE_DEFAULTS,
+	setCompanyChatContextWindow,
+} from "./config/company-models";
+import {
+	COMPANY_PROVIDER_ID,
+	getCompanyConfigError,
+	isCompanyLaneActive,
+	setCompanyOfflineEnabled,
+} from "./config/company-provider";
 import { shouldInlineToolDescriptors } from "./config/inline-tool-descriptors-mode";
 import { isAuthenticated, kNoAuth, ModelRegistry } from "./config/model-registry";
 import {
@@ -626,8 +637,8 @@ export interface CreateAgentSessionOptions {
 	 * (session-restore retry, default-role resolution) use the cache-only
 	 * `"offline"` refresh strategy instead of `online-if-uncached`, so a cold
 	 * catalog degrades to the default role instead of reaching the network.
-	 * Explicit top-level `modelPattern` resolution keeps its normal cache-aware strategy;
-	 * CLI scopes and automatic subagent patterns remain cache-only.
+	 * In OMP_OFFLINE processes, explicit selectors also use cache-only catalog discovery;
+	 * selecting a model does not suppress its actual inference requests.
 	 */
 	offline?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
@@ -1030,6 +1041,29 @@ export {
 
 // Discovery Functions
 
+/** Flip the company lane before registry construction; return its credential-free diagnostic. */
+export function initializeCompanyModelLane(offline: boolean): string | undefined {
+	if (isCompanyLaneActive() !== offline) setCompanyOfflineEnabled(offline);
+	if (!offline) return undefined;
+	setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
+	return getCompanyConfigError();
+}
+
+/** Apply command-local company defaults; omitted offline context follows the process environment/lane. */
+export function initializeOfflineModelCommand(
+	settings?: Settings,
+	offline: boolean = offlineFromEnv() || isCompanyLaneActive(),
+): boolean {
+	const companyError = initializeCompanyModelLane(offline);
+	if (!offline) return false;
+	if (companyError) {
+		process.stderr.write(`${companyError}\n`);
+	} else if (settings && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
+		settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
+	}
+	return true;
+}
+
 /**
  * Create an AuthStorage instance.
  *
@@ -1044,16 +1078,18 @@ export {
  * Account routing (`auth.accountPolicies`, `retry.usageReservePct`) comes from
  * effective settings: `options.settings` when given, else the matching global
  * instance, else a read-only load for `options.cwd`; explicit option values win.
- *
+ * Company role defaults are applied only to an explicitly supplied settings view.
+ * `options.offline` overrides company-lane inheritance, not the process catalog-discovery policy.
  * Delegates to {@link ./session/auth-broker-config} so the TUI and the catalog
  * generator share the same credential-discovery logic.
  */
 export async function discoverAuthStorage(
 	agentDir: string = getAgentDir(),
 	options: Omit<DiscoverAuthStorageOptions, "agentDir" | "configValueResolver"> &
-		Omit<EffectiveSettingsScope, "agentDir"> = {},
+		Omit<EffectiveSettingsScope, "agentDir"> & { offline?: boolean } = {},
 ): Promise<AuthStorage> {
-	const { settings, cwd, ...discoveryOptions } = options;
+	const { settings, cwd, offline, ...discoveryOptions } = options;
+	initializeOfflineModelCommand(settings, offline);
 	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
 	return discoverAuthStorageFromConfig(agentDir, {
 		...discoveryOptions,
@@ -1082,7 +1118,7 @@ type ExtensionDiscoveryOptions = Pick<
 type CliExtensionProviderOptions = ExtensionDiscoveryOptions & {
 	/** Discover extension model catalogs after registration (default true); usage-only commands skip it. */
 	discoverModels?: boolean;
-	/** Process runs in offline mode (OMP_OFFLINE): the post-registration refresh stays cache-only. */
+	/** Override the inherited company lane; offline model discovery remains cache-only. */
 	offline?: boolean;
 };
 
@@ -1152,6 +1188,13 @@ export async function loadCliExtensionProviders(
 	cwd: string,
 	options: CliExtensionProviderOptions = {},
 ): Promise<void> {
+	initializeOfflineModelCommand(settings, options.offline);
+	// A prebuilt registry may still project the lane that preceded this command.
+	const companyEnabled =
+		isCompanyLaneActive() && !getCompanyConfigError() && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID);
+	if (modelRegistry.hasProvider(COMPANY_PROVIDER_ID) !== companyEnabled) {
+		await modelRegistry.reapplyModelPolicies();
+	}
 	const eventBus = new EventBus();
 	const extensionsResult = await loadSessionExtensions(options, cwd, settings, eventBus);
 	const activeSources = extensionsResult.extensions.map(extension => extension.path);
@@ -1166,7 +1209,9 @@ export async function loadCliExtensionProviders(
 	if (options.discoverModels !== false) {
 		// `offline` CLI runs (omp bench) must stay cache-only here too, matching the
 		// `omp models` path: no automatic online discovery, regardless of TTL.
-		await modelRegistry.refreshRuntimeProviders(options.offline === true ? "offline" : undefined);
+		await modelRegistry.refreshRuntimeProviders(
+			(options.offline ?? (offlineFromEnv() || isCompanyLaneActive())) ? "offline" : undefined,
+		);
 	}
 }
 
@@ -1810,7 +1855,10 @@ async function resolveSessionSettings(cwd: string, agentDir: string): Promise<Se
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	// CLI offline mode applies to every session constructed in this process,
 	// including task spawns and revived sessions that omit the SDK option.
-	if (isCompanyLaneActive()) options = { ...options, offline: true };
+	if (offlineFromEnv() || isCompanyLaneActive()) {
+		initializeCompanyModelLane(true);
+		options = { ...options, offline: true };
+	}
 	registerLocalInferenceApi();
 	await loadRuntimeIdentity();
 	const extensionRoots = options.extensionRoots?.();
@@ -1834,6 +1882,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const settings = await (options.settings ??
 		options.settingsManager ??
 		logger.time("settings", resolveSessionSettings, cwd, agentDir));
+	initializeOfflineModelCommand(settings);
 	// Discovery provider toggles and process-wide setting effects (theme, request limits, …)
 	// follow the newest holder: each top-level session holds both on its settings until disposed,
 	// then hands them back to the previous holder. Subagents and helper sessions never take them,
@@ -1888,6 +1937,15 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		throw new Error(
 			"options.authStorage and options.modelRegistry.authStorage must be the same instance when both are provided",
 		);
+	}
+	if (
+		options.modelRegistry &&
+		isCompanyLaneActive() &&
+		!getCompanyConfigError() &&
+		!disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) &&
+		!modelRegistry.hasProvider(COMPANY_PROVIDER_ID)
+	) {
+		await modelRegistry.reapplyModelPolicies();
 	}
 	// Subscribe before any getApiKey() call so startup model probes can't fire a
 	// credential_disabled event past us. An embedder's constructor handler makes the
@@ -3438,6 +3496,20 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			await tryResolveDefaultRole();
 
 			if (!model) {
+				const companyError =
+					!hasExplicitModel && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)
+						? getCompanyConfigError()
+						: undefined;
+				const defaultSelector = settings.getModelRole("default");
+				if (
+					companyError &&
+					(!defaultSelector ||
+						resolveConfiguredModelPatterns(defaultSelector, settings).some(pattern =>
+							pattern.startsWith("company/"),
+						))
+				) {
+					throw new Error(companyError);
+				}
 				let fallbackCandidates = await resolveAllowedModels(modelRegistry, settings, modelMatchPreferences);
 				let pick = pickDefaultAvailableModel(fallbackCandidates.filter(hasModelAuth), provider =>
 					modelRegistry.hasConcreteAuth(provider),

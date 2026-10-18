@@ -10,6 +10,7 @@ import * as readline from "node:readline";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
 import { APP_NAME, getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
+import { isCompanyLaneActive } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
@@ -28,7 +29,7 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 	try {
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 		// Extensions may register OAuth providers; load them so they are listed.
 		await loadCliExtensionProviders(modelRegistry, settings, cwd);
 
@@ -44,10 +45,12 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 			process.stdout.write(chalk.yellow(`No credentials were stored for ${info.name}.\n`));
 			return;
 		}
-		// A provider-scoped online refresh re-runs discovery with the new
-		// credential; a fresh cache row fetched before login would otherwise hide
-		// the unlocked models until its TTL expires (#5780).
-		await modelRegistry.refreshProvider(info.storeCredentialsAs ?? info.id, "online");
+		// Reconcile the new credential's catalog immediately, but offline processes
+		// must not turn an explicit OAuth login into unrelated directory discovery.
+		await modelRegistry.refreshProvider(
+			info.storeCredentialsAs ?? info.id,
+			isCompanyLaneActive() ? "offline" : "online",
+		);
 
 		const who = formatLoginIdentity(identity);
 		process.stdout.write(chalk.green(`\nLogged in to ${info.name}${who ? ` as ${who}` : ""}\n`));

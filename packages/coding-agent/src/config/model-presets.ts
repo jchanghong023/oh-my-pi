@@ -71,17 +71,23 @@ export function getModelPresetNames(settings: Settings): string[] {
 		.sort((a, b) => a.localeCompare(b));
 }
 
+/** Explicit, nonempty role selections shared by preset saving and comparisons. */
+function configuredModelRoles(settings: Settings): Record<string, string> {
+	const modelRoles: Record<string, string> = {};
+	for (const [role, selector] of Object.entries(settings.getModelRoles())) {
+		if (selector && settings.getModelRoleProvenance(role) !== "default") modelRoles[role] = selector;
+	}
+	return modelRoles;
+}
+
 /**
  * First saved preset (by name) the current setup matches: identical configured
  * role assignments (excluding process defaults) and, when the preset records one,
  * the same default thinking level. Undefined when the roles were edited past every preset.
  */
 export function findActiveModelPreset(settings: Settings): string | undefined {
-	const roles = settings.getModelRoles();
-	// Same filter as `saveModelPreset`: empty selectors are never stored.
-	const roleIds = Object.keys(roles).filter(
-		role => roles[role] && settings.getModelRoleProvenance(role) !== "default",
-	);
+	const roles = configuredModelRoles(settings);
+	const roleIds = Object.keys(roles);
 	const thinking = cfgDefaultThinkingLevel.get(settings);
 	return getModelPresetNames(settings).find(name => {
 		const lookup = getModelPreset(settings, name);
@@ -107,11 +113,10 @@ export function saveModelPreset(settings: Settings, name: string): ModelPreset {
 	if (!isValidModelPresetName(name)) {
 		throw new Error(`Invalid preset name "${name}": use a letter, then letters, digits, - or _`);
 	}
-	const modelRoles: Record<string, string> = {};
-	for (const [role, selector] of Object.entries(settings.getModelRoles())) {
-		if (selector && settings.getModelRoleProvenance(role) !== "default") modelRoles[role] = selector;
-	}
-	const preset: ModelPreset = { modelRoles, defaultThinkingLevel: cfgDefaultThinkingLevel.get(settings) };
+	const preset: ModelPreset = {
+		modelRoles: configuredModelRoles(settings),
+		defaultThinkingLevel: cfgDefaultThinkingLevel.get(settings),
+	};
 	cfgModelPresets.setEntry(settings, name, preset);
 	return preset;
 }
@@ -291,7 +296,7 @@ function writePresetRoles(settings: Settings, preset: ModelPreset): void {
 }
 
 function shadowedRoles(settings: Settings, preset: ModelPreset): ModelPresetShadowedRole[] {
-	const effective = settings.getModelRoles();
+	const effective = configuredModelRoles(settings);
 	const roles = new Set([...Object.keys(effective), ...Object.keys(preset.modelRoles)]);
 	const shadowed: ModelPresetShadowedRole[] = [];
 	for (const role of [...roles].sort((a, b) => a.localeCompare(b))) {

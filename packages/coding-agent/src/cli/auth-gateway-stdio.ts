@@ -59,7 +59,7 @@ export async function runAuthGatewayStdio(): Promise<void> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
 	const storage = await discoverAuthStorage(undefined, { settings });
-	const registry = new ModelRegistry(storage);
+	const registry = new ModelRegistry(storage, undefined, { settings });
 	await registry.refresh();
 	await loadCliExtensionProviders(registry, settings, cwd);
 

@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Apply offline company-model initialization and cache-only catalog discovery to compression, commit generation and other standalone model consumers.
+- Start print-mode periodic backups while work is running, preserve complete rotated-log records, and flush backup-worker logs before collecting the snapshot.
+- Exclude implicit company role defaults from model-preset conflict warnings.
+- Reject offline session-artifact links outside the runtime root without hiding healthy sessions when another session's backup recovery is refused.
 - Keep active thinking hidden in clean and detailed display modes when toggling reasoning visibility.
 - Allow collaboration guests to apply `/display` locally without forwarding the command or unlocking host-only commands.
 - Preserve image-only read calls during compact session replay while keeping their image content available in detailed mode.

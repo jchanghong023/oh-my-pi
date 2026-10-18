@@ -8,6 +8,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
 import { replaceFileAtomically } from "../utils/atomic-file";
+import { assertOfflineSessionPath } from "./session-storage";
 
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact
@@ -43,6 +44,7 @@ function sanitizeToolType(toolType: string): string {
  * Returns the verified UTF-8 byte count.
  */
 export async function writeArtifact(path: string, content: string): Promise<number> {
+	assertOfflineSessionPath(path);
 	const expectedBytes = Buffer.byteLength(content);
 	const tempPath = `${path}.tmp-${crypto.randomUUID()}`;
 	try {
@@ -106,6 +108,7 @@ export class ArtifactManager {
 
 	async #ensureDir(): Promise<void> {
 		await this.#ready;
+		assertOfflineSessionPath(this.#dir);
 		if (!this.#dirCreated) {
 			if (!ensureOfflineShmDirectory(this.#dir)) await fs.mkdir(this.#dir, { recursive: true });
 			this.#dirCreated = true;
@@ -124,11 +127,7 @@ export class ArtifactManager {
 	async #scanExistingIds(): Promise<void> {
 		const files = await this.listFiles();
 		if (this.#reservedIdsDir) {
-			try {
-				files.push(...(await fs.readdir(this.#reservedIdsDir)));
-			} catch {
-				// A missing source artifacts dir reserves nothing.
-			}
+			files.push(...(await this.#listFiles(this.#reservedIdsDir)));
 		}
 		let maxId = -1;
 		for (const file of files) {
@@ -159,7 +158,9 @@ export class ArtifactManager {
 		await this.#ensureDir();
 		const id = String(this.allocateId());
 		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
-		return { id, path: path.join(this.#dir, filename) };
+		const artifactPath = path.join(this.#dir, filename);
+		assertOfflineSessionPath(artifactPath);
+		return { id, path: artifactPath };
 	}
 
 	/**
@@ -190,11 +191,21 @@ export class ArtifactManager {
 	 */
 	async listFiles(): Promise<string[]> {
 		await this.#ready;
+		return this.#listFiles(this.#dir);
+	}
+
+	async #listFiles(dir: string): Promise<string[]> {
+		// Validate the original directory before joining paths can erase link/..
+		// components, and keep boundary failures outside the missing-dir fallback.
+		assertOfflineSessionPath(dir);
+		let files: string[];
 		try {
-			return await fs.readdir(this.#dir);
+			files = await fs.readdir(dir);
 		} catch {
 			return [];
 		}
+		for (const file of files) assertOfflineSessionPath(path.join(dir, file));
+		return files;
 	}
 
 	/**
@@ -206,6 +217,9 @@ export class ArtifactManager {
 	async getPath(id: string): Promise<string | null> {
 		const files = await this.listFiles();
 		const match = files.find(f => f.startsWith(`${id}.`));
-		return match ? path.join(this.#dir, match) : null;
+		if (!match) return null;
+		const artifactPath = path.join(this.#dir, match);
+		assertOfflineSessionPath(artifactPath);
+		return artifactPath;
 	}
 }

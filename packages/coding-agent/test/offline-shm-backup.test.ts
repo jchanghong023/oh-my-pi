@@ -452,6 +452,99 @@ describe("offline shm complete runtime snapshots", () => {
 		await snapshot(state);
 	});
 
+	it("rejects a new foreign log after directory collection and preserves the last generation", async () => {
+		const state = fixture();
+		const logs = path.join(state.runtimeRoot, "logs");
+		await fs.mkdir(logs);
+		await fs.writeFile(path.join(logs, "existing.log"), "last complete log\n");
+		const first = await snapshot(state);
+		const pointerFile = path.join(domainDirectory(state), "current.json");
+		const pointer = await fs.readFile(pointerFile, "utf8");
+		await fs.writeFile(path.join(state.runtimeRoot, "zz-after-logs.bin"), Buffer.alloc(3 * 1024 * 1024, 0x51));
+		let created = false;
+		const controller = checkpoint(() => {
+			if (created || !partialCopy(state, "zz-after-logs.bin")) return;
+			created = true;
+			syncFs.writeFileSync(path.join(logs, "foreign.log.1"), "new foreign log\n");
+		});
+		await expect(runOfflineShmBackup(state, controller.signal)).rejects.toThrow("SOURCE_TREE_CHANGED");
+		expect(created).toBe(true);
+		expect(await fs.readFile(pointerFile, "utf8")).toBe(pointer);
+		expect(await fs.readFile(path.join(first.root, "data", "logs", "existing.log"), "utf8")).toBe(
+			"last complete log\n",
+		);
+		expect((await fs.readdir(domainDirectory(state))).some(name => name.startsWith(".staging-"))).toBe(false);
+	});
+
+	for (const existingLogs of [false, true]) {
+		it(`flushes a real lazy worker logger before collecting ${existingLogs ? "existing" : "missing"} logs`, async () => {
+			const state = fixture();
+			const logs = path.join(state.runtimeRoot, "logs");
+			if (existingLogs) await fs.mkdir(logs);
+			await fs.writeFile(path.join(state.runtimeRoot, "zz-after-logs.bin"), Buffer.alloc(3 * 1024 * 1024, 0x51));
+			const engine = new URL("../src/offline/backup.ts", import.meta.url).href;
+			const logging = new URL("../../utils/src/logger.ts", import.meta.url).href;
+			const env: NodeJS.ProcessEnv = {
+				...process.env,
+				OMP_CONFIG_ROOT: state.runtimeRoot,
+				OMP_LOG_LEVEL: "debug",
+			};
+			delete env.OMP_OFFLINE;
+			const worker = Bun.spawn(
+				[
+					process.execPath,
+					"--no-install",
+					"--eval",
+					`
+				import * as fs from "node:fs";
+				import * as path from "node:path";
+				import * as logger from ${JSON.stringify(logging)};
+				import { runOfflineShmBackup } from ${JSON.stringify(engine)};
+				logger.setTransports({ file: ${JSON.stringify(logs)} });
+				const domain = ${JSON.stringify(domainDirectory(state))};
+				let readyAtScan;
+				let flushedAfterLogs = false;
+				const controller = new AbortController();
+				Object.defineProperty(controller.signal, "throwIfAborted", { value() {
+					if (readyAtScan === undefined) readyAtScan = fs.existsSync(logger.getCurrentLogPath());
+					if (flushedAfterLogs) return;
+					for (const name of fs.readdirSync(domain)) {
+						if (!name.startsWith(".staging-")) continue;
+						const copied = path.join(domain, name, "data", "zz-after-logs.bin");
+						if (!fs.existsSync(copied) || fs.statSync(copied).size === 0) continue;
+						flushedAfterLogs = true;
+						logger.flush();
+					}
+				} });
+				const result = await runOfflineShmBackup(${JSON.stringify(state)}, controller.signal);
+				const logPath = logger.getCurrentLogPath();
+				logger.setTransports({ file: false });
+				console.log(JSON.stringify({ result, logPath, readyAtScan, flushedAfterLogs }));
+			`,
+				],
+				{ env, stdout: "pipe", stderr: "pipe" },
+			);
+			children.push(worker);
+			const output = await new Response(worker.stdout).text();
+			expect(await worker.exited).toBe(0);
+			const report = JSON.parse(output) as {
+				result: { status: string; backupPath: string };
+				logPath: string;
+				readyAtScan: boolean;
+				flushedAfterLogs: boolean;
+			};
+			expect(report.readyAtScan).toBe(true);
+			expect(report.flushedAfterLogs).toBe(true);
+			expect(report.result.status).toBe("completed");
+			const log = await fs.readFile(
+				path.join(report.result.backupPath, "data", path.relative(state.runtimeRoot, report.logPath)),
+				"utf8",
+			);
+			expect(log).toContain("offline_shm_backup.started");
+			expect(log.endsWith("\n")).toBe(true);
+		}, 15_000);
+	}
+
 	it("publishes complete prefixes while session JSONL streams append throughout copying and validation", async () => {
 		const state = fixture();
 		const record = `${JSON.stringify({ message: "x".repeat(2048) })}\n`;
@@ -480,11 +573,15 @@ describe("offline shm complete runtime snapshots", () => {
 
 	const activeLogs = [
 		path.join("logs", "omp.2026-10-17.1234.log"),
-		path.join("profiles", "work", "logs", "omp.2026-10-17.1234.1.log"),
+		path.join("logs", "omp.2026-10-17.1234.log.1"),
+		path.join("profiles", "work", "logs", "omp.2026-10-17.1234.log.2"),
 		path.join("fallback-logs", "omp.2026-10-17.1234.log"),
+		path.join("fallback-logs", "omp.2026-10-17.1234.log.1"),
+		path.join("profiles", "work", "agent", "logs", "omp.2026-10-17.1234.log.1"),
 		path.join("run", "tiny", "lfm2.5-230m-onnx.log"),
 		path.join("run", "mnemopi", "embed.log"),
 		path.join("profiles", "work", "run", "daemons", "host", "worker.log"),
+		path.join("run", "daemons", "host", "worker.log.2"),
 	];
 	for (const filename of activeLogs) {
 		it(`accepts complete records appended during copying of active log ${filename}`, async () => {
@@ -492,8 +589,9 @@ describe("offline shm complete runtime snapshots", () => {
 			const source = path.join(state.runtimeRoot, filename);
 			const record = `${JSON.stringify({ message: "x".repeat(2048) })}\n`;
 			const original = record.repeat(1100);
+			const incomplete = "unfinished runtime record 雪";
 			await fs.mkdir(path.dirname(source), { recursive: true });
-			await fs.writeFile(source, original);
+			await fs.writeFile(source, original + incomplete);
 			let appended = false;
 			const controller = checkpoint(() => {
 				if (appended || !partialCopy(state, filename)) return;
@@ -508,7 +606,7 @@ describe("offline shm complete runtime snapshots", () => {
 			) as Manifest;
 			expect(await fs.readFile(path.join(result.backupPath!, "data", filename), "utf8")).toBe(original);
 			expect(manifest.entries.find(entry => entry.path === filename)?.prefixBytes).toBe(Buffer.byteLength(original));
-			expect(await fs.readFile(source, "utf8")).toBe(original + record);
+			expect(await fs.readFile(source, "utf8")).toBe(original + incomplete + record);
 		});
 	}
 
@@ -535,31 +633,56 @@ describe("offline shm complete runtime snapshots", () => {
 		}
 	});
 
-	it("rejects append-only prefix rewrites even when the file keeps growing", async () => {
+	it("preserves numbered tool-output logs and non-stream log suffixes as ordinary bytes", async () => {
 		const state = fixture();
-		const source = path.join(state.runtimeRoot, "session.jsonl");
-		const record = `${JSON.stringify({ text: "a".repeat(2048) })}\n`;
-		await fs.writeFile(source, record.repeat(1100));
-		const first = await snapshot(state);
-		await fs.appendFile(source, record);
-		let rewrote = false;
-		const controller = checkpoint(() => {
-			if (rewrote || !partialCopy(state, "session.jsonl")) return;
-			rewrote = true;
-			const handle = syncFs.openSync(source, "r+");
-			try {
-				syncFs.writeSync(handle, Buffer.from("b"), 0, 1, 10);
-			} finally {
-				syncFs.closeSync(handle);
+		const filenames = [
+			path.join("agent", "sessions", "custom-example", "session", "output.log.1"),
+			path.join("logs", "omp.2026-10-17.1234.log.gz"),
+			path.join("logs", "omp.2026-10-17.1234.log.notes"),
+		];
+		const content = "complete output\nunterminated output 雪";
+		for (const filename of filenames) {
+			const source = path.join(state.runtimeRoot, filename);
+			await fs.mkdir(path.dirname(source), { recursive: true });
+			await fs.writeFile(source, content);
+		}
+		for (let round = 0; round < 2; round++) {
+			const result = await snapshot(state);
+			for (const filename of filenames) {
+				expect(await fs.readFile(path.join(result.root, "data", filename), "utf8")).toBe(content);
+				expect(result.manifest.entries.find(entry => entry.path === filename)?.prefixBytes).toBeUndefined();
 			}
-			syncFs.appendFileSync(source, record);
-		});
-		await expect(runOfflineShmBackup(state, controller.signal)).rejects.toThrow("SOURCE_CHANGED");
-		expect(rewrote).toBe(true);
-		expect(JSON.parse(await fs.readFile(path.join(domainDirectory(state), "current.json"), "utf8")).current).toBe(
-			path.basename(first.root),
-		);
+		}
 	});
+
+	for (const filename of ["session.jsonl", path.join("logs", "omp.2026-10-17.1234.log.2")]) {
+		it(`rejects append-only prefix rewrites even while ${filename} keeps growing`, async () => {
+			const state = fixture();
+			const source = path.join(state.runtimeRoot, filename);
+			await fs.mkdir(path.dirname(source), { recursive: true });
+			const record = `${JSON.stringify({ text: "a".repeat(2048) })}\n`;
+			await fs.writeFile(source, record.repeat(1100));
+			const first = await snapshot(state);
+			await fs.appendFile(source, record);
+			let rewrote = false;
+			const controller = checkpoint(() => {
+				if (rewrote || !partialCopy(state, filename)) return;
+				rewrote = true;
+				const handle = syncFs.openSync(source, "r+");
+				try {
+					syncFs.writeSync(handle, Buffer.from("b"), 0, 1, 10);
+				} finally {
+					syncFs.closeSync(handle);
+				}
+				syncFs.appendFileSync(source, record);
+			});
+			await expect(runOfflineShmBackup(state, controller.signal)).rejects.toThrow("SOURCE_CHANGED");
+			expect(rewrote).toBe(true);
+			expect(JSON.parse(await fs.readFile(path.join(domainDirectory(state), "current.json"), "utf8")).current).toBe(
+				path.basename(first.root),
+			);
+		});
+	}
 
 	it("cancels after a partial copy, preserves the pointer and active data, and retries only on the next explicit round", async () => {
 		const state = fixture();

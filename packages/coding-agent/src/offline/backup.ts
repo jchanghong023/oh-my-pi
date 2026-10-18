@@ -606,7 +606,7 @@ export async function runOfflineShmBackup(
 					await visit(child);
 				} else if (before.isFile()) {
 					const initial = inspected.get(name);
-					const appendOnly = /\.jsonl$/i.test(name) || (runtimeLogs && /\.log$/i.test(name));
+					const appendOnly = /\.jsonl$/i.test(name) || (runtimeLogs && /\.log(?:\.\d+)?$/i.test(name));
 					if (
 						!initial ||
 						!sameFile(initial, before) ||
@@ -696,6 +696,9 @@ export async function runOfflineShmBackup(
 			await syncDirectory(path.join(data, relative));
 		}
 
+		// The worker's first INFO record is buffered: open its real log destination,
+		// including a lazy logs/fallback directory, before collecting directory children.
+		logger.flush();
 		await visit("");
 		for (const validate of validators) {
 			signal?.throwIfAborted();

@@ -255,6 +255,82 @@ describe("model presets", () => {
 		expect(findActiveModelPreset(settings)).toBe("explicit");
 	});
 
+	it("reapplies a saved empty preset without reporting or persisting process defaults", async () => {
+		const settings = Settings.isolated();
+		const defaults = {
+			default: OPUS,
+			smol: OPUS,
+			slow: OPUS,
+			plan: OPUS,
+			commit: OPUS,
+			task: OPUS,
+			task_fallback: OPUS,
+			web: OPUS,
+			search: OPUS,
+		};
+		settings.setModelRoleDefaults(defaults);
+		expect(saveModelPreset(settings, "company").modelRoles).toEqual({});
+		expect(findActiveModelPreset(settings)).toBe("company");
+		settings.setModelRole("plan", SONNET);
+		settings.overrideModelRoles({ smol: SONNET });
+		const session = createSession(settings);
+
+		const result = await applyModelPreset(settings, session, "company");
+
+		expect(result).toMatchObject({ kind: "switched", shadowed: [] });
+		expect({ ...settings.getModelRoles() }).toEqual(defaults);
+		expect(session.model?.id).toBe("claude-opus-4-5");
+		expect(findActiveModelPreset(settings)).toBe("company");
+		expect(settings.getGlobalSettings().modelRoles ?? {}).toEqual({});
+		expect(getModelPreset(settings, "company")).toMatchObject({ kind: "found", preset: { modelRoles: {} } });
+		for (const role of Object.keys(defaults)) {
+			expect(settings.getModelRoleProvenance(role)).toBe("default");
+		}
+	});
+
+	it("retains explicit project, global and runtime roles even when they equal process defaults", async () => {
+		const settings = await projectSettings({ project: `modelRoles:\n  plan: ${OPUS}\n` });
+		settings.setModelRoleDefaults({ default: OPUS, plan: OPUS, smol: OPUS, task: OPUS });
+		settings.setModelRole("default", OPUS);
+		settings.overrideModelRoles({ smol: OPUS });
+		const explicit = { default: OPUS, plan: OPUS, smol: OPUS };
+		expect(saveModelPreset(settings, "explicit").modelRoles).toEqual(explicit);
+		expect(findActiveModelPreset(settings)).toBe("explicit");
+		const session = createSession(settings);
+
+		const result = await applyModelPreset(settings, session, "explicit");
+
+		expect(result).toMatchObject({ kind: "switched", shadowed: [] });
+		expect(findActiveModelPreset(settings)).toBe("explicit");
+		expect(settings.getGlobalSettings().modelRoles).toEqual(explicit);
+		expect(settings.getModelRole("task")).toBe(OPUS);
+		expect(settings.getModelRoleProvenance("task")).toBe("default");
+		expect(settings.getModelRoleProvenance("plan")).toBe("project");
+		expect(settings.getModelRoleProvenance("smol")).toBe("runtime");
+	});
+
+	it("still reports explicit project roles that shadow a preset alongside process defaults", async () => {
+		const settings = await projectSettings({
+			project: `modelRoles:\n  plan: ${SONNET}\n  slow: ${OPUS}\n`,
+		});
+		settings.setModelRoleDefaults({ default: OPUS, plan: OPUS, slow: OPUS, smol: OPUS, task: OPUS });
+		cfgModelPresets.setEntry(settings, "focus", { modelRoles: { plan: OPUS } });
+		const session = createSession(settings);
+
+		const result = await applyModelPreset(settings, session, "focus");
+
+		expect(result).toMatchObject({
+			kind: "switched",
+			shadowed: [
+				{ role: "plan", expected: OPUS, actual: SONNET, source: "project" },
+				{ role: "slow", expected: undefined, actual: OPUS, source: "project" },
+			],
+		});
+		expect(findActiveModelPreset(settings)).toBeUndefined();
+		expect(settings.getGlobalModelRole("plan")).toBe(OPUS);
+		expect(session.model?.id).toBe("claude-opus-4-5");
+	});
+
 	it("persists explicit selections but not offline process defaults in a saved preset", () => {
 		const dir = TempDir.createSync("@pi-model-presets-offline-");
 		tempDirs.push(dir);

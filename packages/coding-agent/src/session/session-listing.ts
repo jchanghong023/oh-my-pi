@@ -630,8 +630,8 @@ export async function recoverOrphanedBackups(sessionDir: string, storage: Sessio
 		}
 	}
 	for (const [primaryPath, { backup }] of candidates) {
-		if (storage.existsSync(primaryPath)) continue;
 		try {
+			if (storage.existsSync(primaryPath)) continue;
 			await storage.rename(backup, primaryPath);
 			logger.warn("Recovered orphaned session backup", {
 				sessionFile: primaryPath,

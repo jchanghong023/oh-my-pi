@@ -2,10 +2,13 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, Model } from "@oh-my-pi/pi-ai";
 import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import type { ApiKeyResolverRegistry } from "../config/api-key-resolver";
+import { COMPANY_PROVIDER_ID, getCompanyConfigError } from "../config/company-provider";
 import {
+	disabledProviderIds,
 	getModelMatchPreferences,
 	type ModelLookupRegistry,
 	parseModelPattern,
+	resolveConfiguredModelPatterns,
 	resolveModelRoleValue,
 	resolveRoleSelection,
 } from "../config/model-resolver";
@@ -41,9 +44,29 @@ export async function resolvePrimaryModel(
 ): Promise<ResolvedCommitModel> {
 	const available = modelRegistry.getAvailable();
 	const matchPreferences = getModelMatchPreferences(settings);
+	const roles = ["commit", "smol", ...CHAT_MODEL_ROLE_IDS];
 	const resolved = override
 		? resolveModelRoleValue(override, available, { settings, matchPreferences })
-		: resolveRoleSelection(["commit", "smol", ...CHAT_MODEL_ROLE_IDS], settings, available);
+		: resolveRoleSelection(roles, settings, available);
+	const companyError = !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID) ? getCompanyConfigError() : undefined;
+	if (companyError) {
+		const selectedRole = resolved && "role" in resolved ? roles.indexOf(resolved.role) : -1;
+		const selectors = override
+			? resolved?.model
+				? []
+				: [override]
+			: (selectedRole < 0 ? roles : roles.slice(0, selectedRole))
+					.map(role => settings.getModelRole(role))
+					.filter((selector): selector is string => Boolean(selector));
+		if (
+			(!resolved?.model && selectors.length === 0) ||
+			selectors.some(selector =>
+				resolveConfiguredModelPatterns(selector, settings).some(pattern => pattern.startsWith("company/")),
+			)
+		) {
+			throw new Error(companyError);
+		}
+	}
 	const model = resolved?.model;
 	if (!model) {
 		throw new Error("No model available for commit generation");

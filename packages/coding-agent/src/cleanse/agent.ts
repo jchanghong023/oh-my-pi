@@ -84,7 +84,7 @@ export async function createCleanseAgentRuntime(options: {
 	// sets the process-wide shared-LSP flag, so the runtime sets it for them.
 	setSharedLspEnabled(cfgLspShared.get(settings));
 	const authStorage = await discoverAuthStorage(undefined, { settings });
-	const modelRegistry = new ModelRegistry(authStorage);
+	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 	await modelRegistry.refresh();
 	const resolved = resolveCliModel({ cliModel: options.model, modelRegistry, settings });
 	if (resolved.error || !resolved.model) {

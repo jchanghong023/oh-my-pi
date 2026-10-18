@@ -31,7 +31,7 @@ export async function createCompressSession(options: {
 	const cwd = options.cwd ?? getProjectDir();
 	const settings = await Settings.init({ cwd });
 	const authStorage = await discoverAuthStorage(undefined, { settings });
-	const modelRegistry = new ModelRegistry(authStorage);
+	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 	await modelRegistry.refresh();
 	// An absent selector means "whatever the session is configured to use", which
 	// resolveCliModel reports as a model-less, error-less result.

@@ -17,7 +17,7 @@ import { loadSkills } from "../extensibility/skills";
 import { closeDaemonClients } from "../launch/client";
 import { discoverAndLoadMCPTools } from "../mcp/loader";
 import { MCPManager } from "../mcp/manager";
-import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
+import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 import type { AuthStorage } from "../session/auth-storage";
 import type { ToolSession } from "../tools";
 import { parseReadUrlTarget } from "../tools/fetch";
@@ -26,7 +26,6 @@ import { ReadTool, splitImageQuestionTarget } from "../tools/read";
 import { renderError } from "../tools/tool-errors";
 import { type ResolvedImageQuestionModel, resolveImageQuestionModel } from "../utils/image-question";
 import { parseXUrl } from "../web/x";
-import { initializeOfflineModelCommand } from "./bench-runtime";
 
 import { cfgDisabledExtensions, cfgExtensions, cfgSkills } from "../extensibility/settings";
 import { cfgMcpEnableProjectConfig } from "../mcp/settings";

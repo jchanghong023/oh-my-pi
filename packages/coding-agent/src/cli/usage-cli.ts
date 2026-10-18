@@ -61,7 +61,7 @@ import {
 	selectReportableAccounts,
 	type UsageAccountIdentity,
 } from "../slash-commands/helpers/usage-accounts";
-import { initializeOfflineModelCommand } from "./bench-runtime";
+import { initializeOfflineModelCommand } from "../sdk";
 
 import { cfgRetryUsageReservePct } from "../session/settings";
 

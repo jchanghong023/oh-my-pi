@@ -26,8 +26,7 @@ import {
 } from "../config/model-resolver";
 import { Settings } from "../config/settings";
 import dryBalanceBenchPrompt from "../prompts/dry-balance-bench.md" with { type: "text" };
-import { discoverAuthStorage, loadCliExtensionProviders } from "../sdk";
-import { initializeOfflineModelCommand } from "./bench-runtime";
+import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 
 const DEFAULT_SAMPLE_COUNT = 100;
 const DEFAULT_CONCURRENCY = 32;

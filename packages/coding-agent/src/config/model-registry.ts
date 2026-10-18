@@ -51,6 +51,7 @@ import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/t
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
+import { offlineFromEnv } from "../cli/args";
 import { generateCodexAttestation } from "../live/attestation";
 import { redactUrlForLog } from "../mcp/json-rpc";
 import type { AuthStorage } from "../session/auth-storage";
@@ -601,7 +602,7 @@ export class ModelRegistry {
 	 * Reload models from disk (built-in + custom config).
 	 */
 	async refresh(
-		strategy: ModelRefreshStrategy = "online-if-uncached",
+		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
@@ -670,7 +671,9 @@ export class ModelRegistry {
 		}
 	}
 
-	refreshInBackground(strategy: ModelRefreshStrategy = "online-if-uncached"): void {
+	refreshInBackground(
+		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
+	): void {
 		if (this.#backgroundRefresh) {
 			return;
 		}
@@ -904,7 +907,7 @@ export class ModelRegistry {
 
 	async refreshProvider(
 		providerId: string,
-		strategy: ModelRefreshStrategy = "online",
+		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
 		if (providerId === JCHTOOLS_PROVIDER_ID) this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
@@ -928,7 +931,10 @@ export class ModelRegistry {
 			[...this.#runtimeModelManagers.keys()].filter(runtimeId => runtimeId !== providerId),
 		);
 		if (otherRuntimeProviderIds.size > 0) {
-			await this.#refreshRuntimeDiscoveries("online-if-uncached", otherRuntimeProviderIds);
+			await this.#refreshRuntimeDiscoveries(
+				strategy === "offline" ? "offline" : "online-if-uncached",
+				otherRuntimeProviderIds,
+			);
 		}
 	}
 
@@ -940,7 +946,7 @@ export class ModelRegistry {
 	 */
 	async refreshDiscoverableProviders(
 		providerIds: Iterable<string>,
-		strategy: ModelRefreshStrategy = "online-if-uncached",
+		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
 	): Promise<void> {
 		const filter = new Set(providerIds);
 		if (filter.size === 0) return;
@@ -1076,7 +1082,9 @@ export class ModelRegistry {
 	 * Drives the same SQLite model cache as built-in providers, so the default
 	 * `online-if-uncached` strategy fetches at most once per cache TTL (24 h).
 	 */
-	async refreshRuntimeProviders(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
+	async refreshRuntimeProviders(
+		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
+	): Promise<void> {
 		if (this.#runtimeModelManagers.size === 0) {
 			return;
 		}
@@ -2185,6 +2193,9 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy,
 		providerFilter?: ReadonlySet<string>,
 	): Promise<void> {
+		// Offline is a process policy, not an opt-in at each CLI/SDK callsite.
+		// Explicit inference and OAuth requests remain available; catalog discovery does not.
+		if (offlineFromEnv() || isCompanyLaneActive()) strategy = "offline";
 		if ((!providerFilter || providerFilter.has(JCHTOOLS_PROVIDER_ID)) && strategy !== "offline") {
 			await this.refreshLocalProviders();
 		}

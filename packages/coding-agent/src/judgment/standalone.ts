@@ -23,7 +23,7 @@ export async function openStandaloneJudge(cwd: string, purpose: string): Promise
 	const settings = await Settings.init({ cwd });
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
-		const registry = new ModelRegistry(authStorage);
+		const registry = new ModelRegistry(authStorage, undefined, { settings });
 		await registry.refresh();
 		await loadCliExtensionProviders(registry, settings, cwd);
 		return {
