@@ -45,6 +45,7 @@ const alignment: TeamAlignmentOutput = {
 const proposal: TeamProposalOutput = {
 	proposal: "original-plan-marker: keep the existing interface",
 	noViableProposal: false,
+	investigationBlockedReason: "",
 	keyAssumptions: [],
 	risks: [],
 	unknowns: [],
@@ -116,11 +117,15 @@ function blockedRecord(label = "A"): TeamProposalRecord {
 	};
 }
 
-function reportWithBody(reportMarkdown: string, recommendation: Partial<TeamSynthesisOutput> = {}) {
+function reportWithBody(
+	reportMarkdown: string,
+	recommendation: Partial<TeamSynthesisOutput> = {},
+	proposals: readonly TeamProposalRecord[] = [blockedRecord(), { ...blockedRecord("B"), unresolvedBlocking: [] }],
+) {
 	return assembleTeamReport({
 		alignment,
 		synthesis: { ...synthesis, recommendedProposal: "", reportMarkdown, ...recommendation },
-		proposals: [blockedRecord(), { ...blockedRecord("B"), unresolvedBlocking: [] }],
+		proposals,
 		participationNotes: [],
 	});
 }
@@ -284,6 +289,162 @@ describe("team consumer regressions", () => {
 			expect(result.markdown).toContain(recommendationReason);
 			expect(result.markdown).toContain(recommendationPreconditions);
 		}
+	});
+
+	it.each([
+		"方案 A 没有推荐价值，仍有未解决阻断。",
+		"方案 A 仅在全部阻断问题经复核通过后才可采用。",
+		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 A 才可以采用。",
+		"## 方案 B 与方案 A 的比较\n推荐前者，因为保留旧调用；后者有未解决阻断。",
+		"## 方案 B 与方案 A 的比较\n前者值得推荐；后者尚不可采用。",
+	])("delivers explicit negations, resolution conditions and the unblocked former alternative: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain(body);
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+		}
+	});
+
+	it.each([
+		"方案 A 没有推荐价值，仍然推荐方案 A。",
+		"方案 A 没有推荐价值，仍可以采用。",
+		"方案 A 仅在全部阻断问题经复核通过后才可采用，同时仍推荐方案 A。",
+		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 A 才可以采用，同时仍可采用。",
+		"## 方案 B 与方案 A 的比较\n推荐后者。",
+		"## 方案 A 与方案 B 的比较\n推荐前者。",
+	])("rejects a real blocked endorsement after a qualification or comparison heading: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "B" });
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it("does not let a resolution condition in one emitted field guard another field", () => {
+		const result = reportWithBody("方案 B 满足验收标准。", {
+			recommendedProposal: "B",
+			recommendationReason: "方案 A 仅在全部阻断问题经复核通过后才可采用。",
+			recommendationPreconditions: "方案 A 可以采用。",
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it.each(["reportMarkdown", "recommendationReason", "recommendationPreconditions"] as const)(
+		"rejects literal and entity-encoded recommendation markers in emitted %s",
+		field => {
+			for (const marker of ["【推荐】", "&#12304;&#25512;&#33616;&#12305;", "&#x3010;**推荐**&#x3011;"]) {
+				const result = reportWithBody("方案 B 满足验收标准。", {
+					recommendedProposal: "B",
+					[field]: `${marker}方案 B`,
+				});
+				expect(result.ok).toBe(false);
+				if (!result.ok) expect(result.error).toContain("自行写入了【推荐】");
+			}
+		},
+	);
+
+	it.each([
+		"方案 &#65; 可采用。",
+		"&#x41;方案 可以采用。",
+		"方案&nbsp;**&#65;**&nbsp;可以作为最终选项。",
+		"## 方案 &#65;\n推荐。",
+		"方案 &#65; 没有推荐价值&#xff0c;仍可以采用。",
+	])("rejects a blocked label decoded before sentence segmentation: %s", body => {
+		const result = reportWithBody(body);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it.each([
+		"方案 AA 可以采用。",
+		"AA方案 值得推荐。",
+		"## 方案 AA\n推荐。",
+		"## AA方案\n可以采用。",
+		"方案 AA 比方案 A 更值得推荐。",
+	])("matches the complete AA label rather than the blocked A prefix: %s", body => {
+		const result = reportWithBody(body, { recommendedProposal: "AA" }, [
+			blockedRecord("A"),
+			{ ...blockedRecord("AA"), unresolvedBlocking: [] },
+		]);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.markdown).toContain("【推荐】方案 AA");
+	});
+
+	it.each(["方案 AA 可以采用。", "## 方案 AA\n推荐。", "## &#65;&#65;方案\n可采用。"])(
+		"does not mistake a blocked AA label for an unblocked A: %s",
+		body => {
+			const result = reportWithBody(body, { recommendedProposal: "A" }, [
+				{ ...blockedRecord("A"), unresolvedBlocking: [] },
+				blockedRecord("AA"),
+			]);
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(result.error).toContain("尚不可采用”的方案 AA");
+		},
+	);
+
+	it.each([
+		"方案 B 没有推荐价值，仍有未解决阻断。",
+		"方案 B 仅在全部阻断问题经复核通过后才可采用。",
+		"如果移除新增必填参数并恢复全部缺省兼容路径，再经过一次复核并确认阻断完全解除，方案 B 才可以采用。",
+		"## 方案 A 与方案 B 的比较\n推荐前者，因为保留旧调用；后者有未解决阻断。",
+	])("completes orchestration with valid synthesis prose and retains the blocked alternative: %s", async body => {
+		const runner: TeamSubagentRunner = async call => {
+			switch (call.role) {
+				case "proposer":
+					return { ok: true, data: { ...proposal } };
+				case "aligner":
+					return { ok: true, data: { ...alignment } };
+				case "reviewer":
+					return {
+						ok: true,
+						data:
+							call.label === "team-review-B"
+								? { ...blockingReview }
+								: {
+										noSubstantiveIssues: true,
+										reviewSummary: "Compatible.",
+										findings: [],
+										blockingResolutions: [],
+									},
+					};
+				case "reviser":
+					return {
+						ok: true,
+						data: {
+							...revision,
+							responses: [
+								{
+									findingId: "B-F1",
+									disposition: "unresolved",
+									explanation: "Compatibility is not yet restored.",
+								},
+							],
+							reviewFlags: {
+								changedCoreDesign: false,
+								claimsResolvedBlocking: false,
+								newEvidenceChangesAssumptions: false,
+								disputesBlockingFinding: false,
+							},
+						},
+					};
+				case "synthesizer":
+					return { ok: true, data: { ...synthesis, reportMarkdown: body } };
+			}
+		};
+		const result = await runTeamDiscussion({
+			question: "Preserve compatibility while extending the API.",
+			cwd: "/tmp/repo",
+			participants: [participant, { ...participant, index: 1 }],
+			sessionModelPattern: participant.modelPattern,
+			runner,
+			signal: new AbortController().signal,
+			maxConcurrency: 1,
+		});
+		expect(result.status).toBe("completed");
+		expect(result.reportMarkdown).toContain(body);
+		expect(result.reportMarkdown).toContain("【推荐】方案 A");
+		expect(result.reportMarkdown).toContain("| 方案 B | ⛔ 尚不可采用");
 	});
 
 	it("rejects a model-authored recommendation marker whose letters are emphasized", () => {

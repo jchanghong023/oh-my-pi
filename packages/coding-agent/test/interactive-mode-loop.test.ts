@@ -435,7 +435,7 @@ describe("InteractiveMode loop auto-submit", () => {
 				await mode.editor.onSubmit?.(command);
 				await flushMicrotasks();
 				expect(mode.compactionQueuedMessages).toEqual([
-					{ text: "queued first turn", mode: "steer", images: undefined },
+					{ text: "queued first turn", mode: "steer", images: undefined, draftDetached: true },
 				]);
 				expect(prompt).not.toHaveBeenCalled();
 				expect(resolved).toHaveLength(0);

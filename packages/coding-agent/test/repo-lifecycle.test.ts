@@ -11,7 +11,7 @@ import { Settings } from "../src/config/settings";
 import { RepoLifecycle } from "../src/repo/lifecycle";
 import { RepoService } from "../src/repo/service";
 import { repoIndexPath } from "../src/repo/storage";
-import { createAgentSession } from "../src/sdk";
+import { type CreateAgentSessionOptions, createAgentSession } from "../src/sdk";
 import { AuthStorage } from "../src/session/auth-storage";
 import { SessionManager } from "../src/session/session-manager";
 import { invalidateFsScanAfterWrite } from "../src/tools/fs-cache-invalidation";
@@ -240,6 +240,110 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 });
 
 describe("repository lifecycle coverage across session and background execution boundaries", () => {
+	it("keeps a reconciled index untouched in restricted SDK sessions while retaining read queries", async () => {
+		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-restricted-session-"));
+		temporary.push(temp);
+		const cwd = path.join(temp, "project");
+		const agentDir = path.join(temp, "agent");
+		await fs.mkdir(cwd);
+		await fs.mkdir(agentDir);
+		const file = path.join(cwd, "engine.py");
+		await fs.writeFile(file, "def readonly_probe(): return 'READONLY_BEACON'\n");
+		const service = new RepoService({ cwd, agentDir });
+		const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
+		try {
+			await service.build();
+			await service.reconcile();
+			expect((await service.status()).generation).not.toBeNull();
+			expect((await service.status()).needsReconcile).toBe(false);
+			const before = service.storage.state();
+			const pending = service.storage.pending();
+			const uncertainty = service.storage.uncertainty();
+			const settings = await Settings.loadIsolated({
+				cwd,
+				agentDir,
+				inMemory: true,
+				overrides: { "compaction.enabled": false },
+			});
+			const model = buildModel({
+				id: "repo-readonly",
+				name: "Local Readonly Lifecycle",
+				api: "openai-completions",
+				provider: "ollama",
+				baseUrl: "http://127.0.0.1:1",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 4096,
+				maxTokens: 1024,
+			} as ModelSpec<Api>) as Model<Api>;
+			const options: CreateAgentSessionOptions = {
+				cwd,
+				agentDir,
+				settings,
+				authStorage: auth,
+				modelRegistry: new ModelRegistry(auth, path.join(agentDir, "models.yml")),
+				model,
+				disableExtensionDiscovery: true,
+				extensions: [],
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				enableMCP: false,
+				enableLsp: false,
+				skipPythonPreflight: true,
+				toolNames: ["read", "repo", "wiki"],
+			};
+			const { session: restricted } = await createAgentSession({
+				...options,
+				sessionManager: SessionManager.inMemory(cwd),
+				restrictToolNames: true,
+			});
+			try {
+				expect(service.storage.state()).toEqual(before);
+				expect(service.storage.pending()).toEqual(pending);
+				expect(service.storage.uncertainty()).toEqual(uncertainty);
+				const repo = restricted.getToolByName("repo");
+				const wiki = restricted.getToolByName("wiki");
+				if (!repo || !wiki) throw new Error("Restricted session lost its read-only query tools");
+				expect(repo.approval).toBe("read");
+				expect(wiki.approval).toBe("read");
+				const result = await repo.execute("query-restricted-index", { query: "READONLY_BEACON" });
+				expect(result.content).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ type: "text", text: expect.stringContaining("READONLY_BEACON") }),
+					]),
+				);
+				expect(await restricted.newSession()).toBe(true);
+				// A restricted session must not subscribe to write-oriented index hints either.
+				invalidateFsScanAfterWrite(file);
+				expect(service.storage.state()).toEqual(before);
+				expect(service.storage.pending()).toEqual(pending);
+				expect(service.storage.uncertainty()).toEqual(uncertainty);
+			} finally {
+				await restricted.dispose();
+			}
+			const { session: ordinary } = await createAgentSession({
+				...options,
+				sessionManager: SessionManager.inMemory(cwd),
+			});
+			try {
+				expect(service.storage.state().change_seq).toBeGreaterThan(before.change_seq);
+				expect(service.storage.uncertainty()).toContain(
+					"Session transition may have missed external repository changes; reconcile to verify coverage",
+				);
+				invalidateFsScanAfterWrite(file);
+				expect(service.storage.pending().map(entry => entry.path)).toEqual(["engine.py"]);
+			} finally {
+				await ordinary.dispose();
+			}
+		} finally {
+			service.close();
+			auth.close();
+		}
+	});
+
 	it("marks a previously fully checked non-Git index unchecked when a session starts or changes", async () => {
 		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-session-"));
 		temporary.push(temp);

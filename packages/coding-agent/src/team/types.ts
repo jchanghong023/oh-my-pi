@@ -44,6 +44,8 @@ export interface TeamProposalOutput {
 	/** All proposal prose, including evidence sources, must total ≤ 4000 chars. */
 	proposal: string;
 	noViableProposal: boolean;
+	/** Empty when necessary investigation completed; otherwise the concrete missing input/access reason. */
+	investigationBlockedReason: string;
 	keyAssumptions: TeamAssumption[];
 	risks: string[];
 	unknowns: string[];

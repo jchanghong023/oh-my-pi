@@ -17,6 +17,13 @@
 - Preserve complete Wiki evidence pages through top-level tools and `xd://wiki`, including oversized multilingual sections.
 - Keep Wiki search expressions and editing cursors visible in narrow terminals and across resizing.
 
+### Fixed
+
+- Bind `/team` runs and report delivery to the originating session, propagate root subagent observability, and cancel stale work after session switches.
+- Isolate Team drafts and transcripts across file reads and searches, reject disabled MCP resource fallbacks, and keep read-only child startup from invalidating Repo indexes.
+- Accept negated and conditional Team adoption prose while checking HTML entities consistently with Markdown rendering; retain unique proposal labels beyond 26 slots.
+- Distinguish blocked Team investigations from completed infeasibility conclusions, and preserve image draft ownership across asynchronous input hooks and compaction replay.
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

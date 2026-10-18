@@ -116,6 +116,89 @@ describe("McpProtocolHandler", () => {
 		expect(resource.notes).toEqual(["MCP server: my-server"]);
 	});
 
+	it("revokes wrapped, native, and unknown-skill resource reads for disabled or restricted callers", async () => {
+		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
+		resources.set("parent", {
+			resources: [
+				{ uri: "boundary://doc", name: "doc" },
+				{ uri: "skill://boundary/remote.md", name: "remote-skill" },
+			],
+			templates: [],
+		});
+		const parent = createMockManager({
+			servers: ["parent"],
+			resources,
+			readResult: { contents: [{ uri: "boundary://doc", text: "parent resource" }] },
+		});
+		MCPManager.setInstance(parent);
+		const servers = vi.spyOn(parent, "getConnectedServers");
+		const readResource = vi.spyOn(parent, "readServerResource");
+		const load = vi.spyOn(MCPManager, "load");
+		try {
+			const callers: ToolSession[] = [
+				{ ...createToolSession(), enableMCP: false, skills: [] },
+				{ ...createToolSession(), enableMCP: false, mcpManager: parent, skills: [] },
+				{ ...createToolSession(), enableMCP: true, restrictToolNames: true, mcpManager: parent, skills: [] },
+			];
+			for (const session of callers) {
+				const reader = new ReadTool(session);
+				for (const uri of ["mcp://boundary://doc", "boundary://doc", "skill://boundary/remote.md"]) {
+					// ReadTool exercises locate/target as well as resolve; direct routing also
+					// covers callers that do not first request a local filesystem target.
+					await expect(reader.execute("read-revoked-resource", { path: uri })).rejects.toThrow(
+						uri.startsWith("skill:") ? "Unknown skill" : "No MCP manager",
+					);
+					await expect(InternalUrlRouter.instance().resolve(uri, { session, skills: [] })).rejects.toThrow(
+						uri.startsWith("skill:") ? "Unknown skill" : "No MCP manager",
+					);
+				}
+			}
+			expect(load).not.toHaveBeenCalled();
+			expect(servers).not.toHaveBeenCalled();
+			expect(readResource).not.toHaveBeenCalled();
+		} finally {
+			load.mockRestore();
+			readResource.mockRestore();
+			servers.mockRestore();
+		}
+	});
+
+	it("uses the enabled caller's resource manager instead of the ambient parent manager", async () => {
+		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
+		resources.set("caller", {
+			resources: [
+				{ uri: "boundary://doc", name: "doc" },
+				{ uri: "skill://boundary/remote.md", name: "remote-skill" },
+			],
+			templates: [],
+		});
+		const caller = createMockManager({
+			servers: ["caller"],
+			resources,
+			readResult: { contents: [{ uri: "boundary://doc", text: "caller resource" }] },
+		});
+		const parent = createMockManager({ readError: new Error("ambient parent must not be used") });
+		MCPManager.setInstance(parent);
+		const readResource = vi.spyOn(caller, "readServerResource");
+		const parentServers = vi.spyOn(parent, "getConnectedServers");
+		try {
+			const reader = new ReadTool({ ...createToolSession(), enableMCP: true, mcpManager: caller, skills: [] });
+			for (const uri of ["mcp://boundary://doc", "boundary://doc", "skill://boundary/remote.md"]) {
+				const result = await reader.execute("read-caller-resource", { path: uri });
+				expect(result.content).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ type: "text", text: expect.stringContaining("caller resource") }),
+					]),
+				);
+			}
+			expect(readResource).toHaveBeenCalledTimes(3);
+			expect(parentServers).not.toHaveBeenCalled();
+		} finally {
+			parentServers.mockRestore();
+			readResource.mockRestore();
+		}
+	});
+
 	it("cancels a resource read the server never answers", async () => {
 		const resources = new Map<string, { resources: MCPResource[]; templates: MCPResourceTemplate[] }>();
 		resources.set("slow", { resources: [{ uri: "test://slow", name: "slow" }], templates: [] });
@@ -660,12 +743,18 @@ describe("skill:// falls back to an MCP resource with the same URI", () => {
 		const { skills } = await loadSkillsFromDir({ dir: tmp, source: "test" });
 		expect(skills.some(s => s.name === "figma")).toBe(true);
 
-		MCPManager.setInstance(figmaManager("mcp copy"));
-		const router = InternalUrlRouter.instance();
-
-		const resource = await router.resolve(skillUri, { skills });
-		expect(resource.content).toBe("local copy");
-		expect(resource.notes ?? []).not.toContain("MCP server: figma");
+		const manager = figmaManager("mcp copy");
+		MCPManager.setInstance(manager);
+		const readResource = vi.spyOn(manager, "readServerResource");
+		try {
+			const reader = new ReadTool({ ...createToolSession(), enableMCP: true, mcpManager: manager, skills });
+			const result = await reader.execute("read-local-skill", { path: skillUri });
+			expect(textOf(result)).toContain("local copy");
+			expect(textOf(result)).not.toContain("mcp copy");
+			expect(readResource).not.toHaveBeenCalled();
+		} finally {
+			readResource.mockRestore();
+		}
 	});
 
 	it("reports Unknown skill to local-file actions without contacting MCP", async () => {

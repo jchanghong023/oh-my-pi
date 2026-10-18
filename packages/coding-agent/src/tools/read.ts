@@ -96,6 +96,7 @@ import {
 } from "./path-utils";
 import { type LineRange } from "@oh-my-pi/pi-tui/tools/line-ranges";
 import { splitPathAndSel } from "@oh-my-pi/pi-tui/tools/read";
+import { assertTeamReadTarget } from "./team-read-isolation";
 import { readArchive, resolveArchiveReadPath } from "./read-archive";
 import {
 	BRACKET_CONTEXT_ELLIPSIS,
@@ -1851,6 +1852,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (!rawPathIsLiteral) {
 			const archivePath = await resolveArchiveReadPath(this.session, readPath, suffixCache, signal);
 			if (archivePath) {
+				await assertTeamReadTarget(this.session, archivePath.absolutePath);
 				if (question !== undefined) throw new ToolError(IMAGE_QUESTION_SELECTOR_ERROR);
 				const archiveSubPath = located
 					? { path: archivePath.archiveSubPath, sel: located.sel }
@@ -1867,6 +1869,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 
 			const sqlitePath = await resolveSqliteReadPath(this.session, readPath, suffixCache, signal);
 			if (sqlitePath) {
+				await assertTeamReadTarget(this.session, sqlitePath.absolutePath);
 				return readSqlite(sqlitePath, signal);
 			}
 			// local:// and artifact:// locate backing files without their URL query;
@@ -1879,6 +1882,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 					: literalSplit.path;
 			const jsonPath = await resolveJsonReadPath(this.session, jsonReadPath, suffixCache, signal);
 			if (jsonPath) {
+				await assertTeamReadTarget(this.session, jsonPath.absolutePath);
 				return readJson(this.session, jsonPath, literalSplit.sel, signal);
 			}
 
@@ -1982,6 +1986,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 				throw error;
 			}
 		}
+		await assertTeamReadTarget(this.session, absolutePath);
 		if (specialKind) {
 			throw new ToolError(
 				`Cannot read '${localReadPath}': it is a ${specialKind}, not a regular file or directory.`,
@@ -2803,6 +2808,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		question: string | undefined,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult<ReadToolDetails>> {
+		if (this.session.localProtocolOptions?.allowCrossAgentReads === false) {
+			const backing = await InternalUrlRouter.instance().locate(
+				url,
+				sessionResolveContext(this.session, { signal }),
+				{ localOnly: true },
+			);
+			if (backing) await assertTeamReadTarget(this.session, backing);
+		}
 		if (parsedSel.kind === "image") {
 			// A file-backed URL that locate deferred to a remote resolve (an unknown skill:// while
 			// MCP is available) reports its local miss (`Unknown skill`), not the selector refusal.

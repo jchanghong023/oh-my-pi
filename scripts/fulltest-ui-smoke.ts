@@ -565,6 +565,7 @@ function stagePayload(
 			return {
 				proposal: "在现有模块的导出接口上新增必填 options 参数，以配置新功能。",
 				noViableProposal: false,
+				investigationBlockedReason: "",
 				keyAssumptions: [
 					{
 						content: "旧调用不传 options",

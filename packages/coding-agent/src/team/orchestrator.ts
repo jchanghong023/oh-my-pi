@@ -134,7 +134,12 @@ export function computeUnresolvedBlocking(reviews: readonly TeamReviewRecord[]):
 }
 
 function proposalLabel(index: number): string {
-	return String.fromCodePoint("A".codePointAt(0)! + index);
+	let label = "";
+	do {
+		label = String.fromCharCode(65 + (index % 26)) + label;
+		index = Math.floor(index / 26) - 1;
+	} while (index >= 0);
+	return label;
 }
 
 function trackFinding(record: TeamProposalRecord, finding: TeamFinding): TeamTrackedFinding {
@@ -394,18 +399,35 @@ async function runTeamDiscussionImpl(
 			}
 			record.originalProposal = proposal;
 			record.latestProposal = proposal;
+			if (proposal.investigationBlockedReason) {
+				record.excludedFromOptions = true;
+				record.exclusionReason = proposal.investigationBlockedReason;
+				trackParticipant(record.label, "proposer", "failed");
+				emitProgress("investigation", `阶段一：独立调查（${record.label} 必要调查受阻）`);
+				return;
+			}
 			if (proposal.noViableProposal) {
 				// The proposer itself reported no viable plan (§2.5): the record
 				// stays visible to alignment/synthesis as information, but is
 				// never a final-option candidate and needs no review rounds.
 				record.excludedFromOptions = true;
-				record.exclusionReason = "提案者报告未形成可行方案（依据不足）";
+				record.exclusionReason = "必要调查已完成，提案者报告未形成可行方案";
 			}
 			trackParticipant(record.label, "proposer", "completed");
 			emitProgress("investigation", `阶段一：独立调查（${record.label} 完成）`);
 		}),
 	);
 	if (signal.aborted) return { status: "cancelled" };
+	const blocked = records.filter(record => record.latestProposal?.investigationBlockedReason);
+	if (blocked.length > 0) {
+		diagnostics.reason = "investigation_blocked";
+		return {
+			status: "failed",
+			failureReason: `必要调查未完成：${blocked
+				.map(record => `${record.label}：${record.latestProposal!.investigationBlockedReason}`)
+				.join("；")}。请补齐资料或访问条件后重跑 /team；不输出半成品结论`,
+		};
+	}
 
 	const viable = records.filter(record => !record.proposerFailed);
 	if (viable.length === 0) {

@@ -33,6 +33,7 @@ import {
 import { throwIfAborted } from "./tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
+import { assertTeamReadTarget } from "./team-read-isolation";
 
 interface ResolvedSqliteReadPath {
 	absolutePath: string;
@@ -50,6 +51,7 @@ export async function resolveSqliteReadPath(
 	for (const candidate of candidates) {
 		let absolutePath = resolveReadPath(candidate.sqlitePath, session.cwd);
 		let suffixResolution: { from: string; to: string } | undefined;
+		await assertTeamReadTarget(session, absolutePath);
 
 		try {
 			const stat = await Bun.file(absolutePath).stat();
@@ -72,6 +74,7 @@ export async function resolveSqliteReadPath(
 			try {
 				const retryStat = await Bun.file(suffixMatch.absolutePath).stat();
 				if (!retryStat.isFile()) continue;
+				await assertTeamReadTarget(session, suffixMatch.absolutePath);
 				if (!(await isSqliteFile(suffixMatch.absolutePath))) continue;
 
 				absolutePath = suffixMatch.absolutePath;

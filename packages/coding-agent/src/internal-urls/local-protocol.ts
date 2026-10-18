@@ -28,8 +28,10 @@ import { formatByteSize } from "../utils/video";
 export interface LocalProtocolOptions {
 	getArtifactsDir?: () => string | null;
 	getSessionId?: () => string | null;
-	/** False isolates cross-agent agent:// and history:// lookups; caller-bound current/full remains readable. */
+	/** False isolates peer agent/history URLs and filesystem read/search scopes. */
 	allowCrossAgentReads?: boolean;
+	/** Artifact trees belonging to isolated peer calls, including temporary leases. */
+	getReadIsolationRoots?: () => readonly string[];
 }
 
 const WINDOWS_LOCAL_ROOT_MAX_CHARS = 180;

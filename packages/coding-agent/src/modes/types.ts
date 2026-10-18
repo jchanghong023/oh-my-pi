@@ -60,6 +60,9 @@ export type CompactionQueuedMessage = {
 	text: string;
 	mode: "steer" | "followUp";
 	images?: ImageContent[];
+	imageLinks?: (string | undefined)[];
+	/** Whether the queued submission has already left the composer. */
+	draftDetached?: boolean;
 };
 
 export type SubmittedUserInput = {
@@ -360,7 +363,7 @@ export interface InteractiveModeContext {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean },
+		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
 	): void;
 	flushCompactionQueue(options?: { willRetry?: boolean }): Promise<void>;
 	flushPendingBashComponents(): void;

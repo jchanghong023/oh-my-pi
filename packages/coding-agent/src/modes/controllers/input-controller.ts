@@ -1025,22 +1025,32 @@ export class InputController {
 				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
+			// Team owns this submission before hooks can await: a new paste must
+			// start at #1, not inherit the submitted image prefix.
+			const teamDraftDetached = parseSlashCommand(text)?.name === "team";
+			if (teamDraftDetached) this.#dropSubmittedPending(inputImages, inputImageLinks);
 
 			if (runner?.hasHandlers("input")) {
-				const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
-				if (!input) {
-					// The handler consumed the submission. The editor text was reset
-					// before this callback ran, so anything in it now is a newer draft;
-					// only the submitted attachments are dropped, and only while they
-					// are still the live prefix.
-					this.#dropSubmittedPending(inputImages, inputImageLinks);
+				try {
+					const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
+					if (!input) {
+						// Only non-detached submissions still own a live image prefix.
+						if (!teamDraftDetached) this.#dropSubmittedPending(inputImages, inputImageLinks);
+						return;
+					}
+					({ text, images: inputImages, imageLinks: inputImageLinks } = input);
+					hasInputImages = (inputImages?.length ?? 0) > 0;
+				} catch (error) {
+					if (!teamDraftDetached) throw error;
+					restoreDetachedDraft(this.ctx.editor, text, inputImages, inputImageLinks);
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
 					return;
 				}
-				({ text, images: inputImages, imageLinks: inputImageLinks } = input);
-				hasInputImages = (inputImages?.length ?? 0) > 0;
 			}
 			const submittedMode = parseSlashCommand(text)?.name;
 			const draftDetached =
+				teamDraftDetached ||
+				submittedMode === "team" ||
 				submittedMode === "plan" ||
 				submittedMode === "vibe" ||
 				submittedMode === "goal" ||
@@ -1048,6 +1058,7 @@ export class InputController {
 				submittedMode === "guided-goal";
 			if (
 				draftDetached &&
+				!teamDraftDetached &&
 				submittedImages?.length &&
 				submittedImages.every((image, index) => this.ctx.editor.pendingImages[index] === image)
 			) {
@@ -1091,10 +1102,8 @@ export class InputController {
 				try {
 					slashResult = await executeBuiltinSlashCommand(text, { ctx: this.ctx, input, draftDetached });
 				} catch (error) {
-					// Detached mode commands (plan/vibe/goal/goal-autopilot/
-					// guided-goal) rethrow so the caller that detached their images
-					// restores the submission and reports the error, mirroring
-					// `handleFollowUp`'s Ctrl+Enter path.
+					// Detached commands hand failures back beside any newer draft,
+					// mirroring `handleFollowUp`'s Ctrl+Enter path.
 					if (!draftDetached) throw error;
 					restoreDetachedDraft(this.ctx.editor, text, inputImages, inputImageLinks);
 					this.ctx.showError(error instanceof Error ? error.message : String(error));
@@ -1920,7 +1929,11 @@ export class InputController {
 		// `promptCustomMessage`. The compaction-resume path re-parses the
 		// queued text into a user-attributed skill invocation before delivery.
 		if (this.ctx.session.isCompacting) {
-			this.ctx.queueCompactionMessage(text, "followUp", images, { preserveDraft: true });
+			this.ctx.queueCompactionMessage(text, "followUp", images, {
+				preserveDraft: true,
+				imageLinks,
+				draftDetached: true,
+			});
 			return;
 		}
 

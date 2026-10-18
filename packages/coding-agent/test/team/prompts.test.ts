@@ -38,6 +38,7 @@ function markerRecord(): TeamProposalRecord {
 	const latest: TeamProposalOutput = {
 		proposal: "方案正文：扩展现有模块。",
 		noViableProposal: false,
+		investigationBlockedReason: "",
 		keyAssumptions: [
 			{ content: "假设甲", basis: MARKERS.basis, status: "unverified", impactIfWrong: MARKERS.impact },
 		],

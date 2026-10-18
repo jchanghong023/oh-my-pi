@@ -112,7 +112,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 {{/each}}
 {{else}}（无）{{/if}}
 {{#if latestProposal.noViableProposal}}
-提案者声明：依据不足，未形成可行方案（见正文中的缺口说明）。
+提案者声明：必要调查已完成，未形成可行方案（见正文中的依据与不可行原因）。
 {{/if}}
 {{#if initialReview}}
 审查意见与处理结果：

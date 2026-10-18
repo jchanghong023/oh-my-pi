@@ -9,6 +9,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TEAM_SLASH_COMMANDS } from "@oh-my-pi/pi-coding-agent/jch-commands/team";
 import { compactImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
@@ -18,6 +19,8 @@ const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 function stubSession(overrides: Partial<Record<string, unknown>> = {}): AgentSession {
 	return {
 		model: undefined,
+		sessionManager: SessionManager.inMemory(process.cwd()),
+		registerSessionChangeCallback: () => () => {},
 		...overrides,
 	} as unknown as AgentSession;
 }

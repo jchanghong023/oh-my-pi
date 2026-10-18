@@ -79,6 +79,7 @@ import {
 } from "../../session/messages";
 import type { SessionContext, StrippedToolCallsMarker } from "../../session/session-context";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { buildSkillCommandPrompt, invokeSkillCommandFromText, isKnownSkillCommand } from "../skill-command";
 import {
@@ -1273,10 +1274,16 @@ export class UiHelpers {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean },
+		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
 	): void {
 		const queuedImages = images && images.length > 0 ? images : undefined;
-		this.ctx.compactionQueuedMessages.push({ text, mode, images: queuedImages } as CompactionQueuedMessage);
+		this.ctx.compactionQueuedMessages.push({
+			text,
+			mode,
+			images: queuedImages,
+			...(options?.imageLinks ? { imageLinks: options.imageLinks } : {}),
+			draftDetached: options?.draftDetached ?? !options?.preserveDraft,
+		});
 		if (options?.preserveDraft) this.ctx.editor.addToHistory(text);
 		else this.ctx.editor.clearDraft(text);
 		this.ctx.updatePendingMessagesDisplay();
@@ -1295,10 +1302,22 @@ export class UiHelpers {
 	}
 
 	async #deliverQueuedMessage(message: CompactionQueuedMessage): Promise<void> {
-		const builtin = await executeBuiltinSlashCommand(message.text, {
-			ctx: this.ctx,
-			input: message.images ? { images: message.images } : undefined,
-		});
+		let builtin: string | boolean;
+		try {
+			builtin = await executeBuiltinSlashCommand(message.text, {
+				ctx: this.ctx,
+				input:
+					message.images || message.imageLinks
+						? { images: message.images, imageLinks: message.imageLinks }
+						: undefined,
+				draftDetached: message.draftDetached,
+			});
+		} catch (error) {
+			if (!message.draftDetached || parseSlashCommand(message.text)?.name !== "team") throw error;
+			restoreDetachedDraft(this.ctx.editor, message.text, message.images, message.imageLinks);
+			this.ctx.showError(error instanceof Error ? error.message : String(error));
+			return;
+		}
 		if (builtin === true) {
 			this.#parkLoopOnLocalConsume(message.text, false);
 			return;

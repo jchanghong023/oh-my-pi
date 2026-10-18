@@ -160,11 +160,12 @@ describe("team member resolution", () => {
 					return {
 						ok: true,
 						data: {
-							proposal: "缺少关键资料，无法形成可行方案。",
+							proposal: "已核实接口与兼容性要求，所有候选均违反强制约束，没有可行方案。",
 							noViableProposal: true,
+							investigationBlockedReason: "",
 							keyAssumptions: [],
 							risks: [],
-							unknowns: ["缺少接口规范"],
+							unknowns: [],
 							acceptanceCriteria: [],
 							ambiguityInterpretations: [],
 							evidence: [],
@@ -175,7 +176,7 @@ describe("team member resolution", () => {
 					return {
 						ok: true,
 						data: {
-							unifiedUnderstanding: "需先取得接口规范。",
+							unifiedUnderstanding: "已核实强制兼容约束，候选均不满足。",
 							acceptanceCriteria: [],
 							factDifferences: [],
 							interpretationDifferences: [],
@@ -186,7 +187,7 @@ describe("team member resolution", () => {
 					return {
 						ok: true,
 						data: {
-							reportMarkdown: "## 分析结论\n缺少接口规范，无法形成可行方案。",
+							reportMarkdown: "## 分析结论\n现有接口和强制兼容约束下没有可行方案。",
 							recommendedProposal: "",
 							recommendationReason: "",
 							recommendationPreconditions: "",
