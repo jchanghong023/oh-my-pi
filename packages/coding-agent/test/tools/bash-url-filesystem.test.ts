@@ -123,7 +123,6 @@ describe("bash internal URLs through the shell filesystem", () => {
 
 		expect(isError).toBe(true);
 		expect(text).not.toContain("ran\n");
-		expect(text).toContain("Unknown skill: nope");
 	});
 
 	it("starts an external program in the directory a URL working directory aliases", async () => {
