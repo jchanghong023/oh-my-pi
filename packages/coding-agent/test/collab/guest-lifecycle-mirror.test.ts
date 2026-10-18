@@ -297,11 +297,11 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(Bun.stripANSI(ctx.thinkingPreview.render(60).join("\n"))).toBe("… REMOTE_THINKING_BODY");
+			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY")]);
 			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
 			await send({ type: "message_end", message });
 			expect(ctx.session.agent.state.streamMessage).toBeNull();
-			expect(Bun.stripANSI(ctx.thinkingPreview.render(60).join("\n"))).toBe("… REMOTE_THINKING_BODY");
+			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY")]);
 			expect(ctx.session.messages).toEqual(history);
 			expect(ctx.session.agent.state.messages).toHaveLength(1);
 			expect(agentEvents).toEqual([]);

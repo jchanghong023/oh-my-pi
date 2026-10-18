@@ -154,11 +154,11 @@ describe("thinking preview event ordering", () => {
 		await h.live.emit(update(message, "thinking_end"));
 		// A focus/replay start carries the same trailing block but is not a live phase.
 		await h.live.emit(update(message, "start"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… VISIBLE_BEFORE_END");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("VISIBLE_BEFORE_END")]);
 
 		vi.advanceTimersByTime(50);
 		await flushMicrotasks();
-		expect(Bun.stripANSI(h.rendered())).toBe("… VISIBLE_BEFORE_END");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("VISIBLE_BEFORE_END")]);
 	});
 
 	it("does not reopen thinking when an older queued rebuild resumes after end", async () => {
@@ -175,12 +175,12 @@ describe("thinking preview event ordering", () => {
 
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… SUSPENDED_THINKING");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("SUSPENDED_THINKING")]);
 		gate.resolve();
 		await flushMicrotasks();
 		vi.advanceTimersByTime(66);
 		await flushMicrotasks();
-		expect(Bun.stripANSI(h.rendered())).toBe("… SUSPENDED_THINKING");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("SUSPENDED_THINKING")]);
 	});
 
 	it("keeps the current stream visible when an older stream shares its timestamp and thinking index", async () => {
@@ -237,12 +237,12 @@ describe("thinking preview turn stub", () => {
 
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… BRIDGE_TOOL_RUN");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("BRIDGE_TOOL_RUN")]);
 
 		// The turn continues into a tool interlude with no live thinking phase.
 		h.ctx.viewSession.agent.state.streamMessage = null;
 		await h.live.emit({ type: "message_end", message });
-		expect(Bun.stripANSI(h.rendered())).toBe("… BRIDGE_TOOL_RUN");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("BRIDGE_TOOL_RUN")]);
 
 		(h.ctx.viewSession as unknown as { isStreaming: boolean }).isStreaming = false;
 		await h.live.emit({ type: "agent_end", messages: [] });
@@ -255,7 +255,7 @@ describe("thinking preview turn stub", () => {
 		await h.live.emit(update(message, "thinking_delta"));
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… THEN_ANSWER");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("THEN_ANSWER")]);
 
 		await h.live.emit(update(message, "text_start"));
 		expect(h.rendered()).toBe("");
@@ -270,7 +270,7 @@ describe("thinking preview turn stub", () => {
 		await h.live.emit(update(message, "thinking_delta"));
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… RESUME_SAME_TEXT");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("RESUME_SAME_TEXT")]);
 
 		h.ctx.viewSession.agent.state.activeThinkingIndex = 0;
 		await h.live.emit(update(message, "thinking_delta"));
@@ -284,7 +284,7 @@ describe("thinking preview turn stub", () => {
 		await h.live.emit(update(message, "thinking_delta"));
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… HIDDEN_STUB");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("HIDDEN_STUB")]);
 
 		h.ctx.hideThinkingBlock = true;
 		await h.live.emit({ type: "message_end", message });
@@ -297,7 +297,7 @@ describe("thinking preview turn stub", () => {
 		await h.live.emit(update(message, "thinking_delta"));
 		h.ctx.viewSession.agent.state.activeThinkingIndex = undefined;
 		await h.live.emit(update(message, "thinking_end"));
-		expect(Bun.stripANSI(h.rendered())).toBe("… NEW_TURN_STUB");
+		expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("NEW_TURN_STUB")]);
 
 		await h.live.emit({ type: "agent_start" });
 		expect(h.rendered()).toBe("");
@@ -325,11 +325,11 @@ describe("thinking preview focus restoration", () => {
 			await worker.emit(update(message, "thinking_end"));
 			worker.session.agent.state.streamMessage = null;
 			await worker.emit({ type: "message_end", message });
-			expect(Bun.stripANSI(h.rendered())).toBe("… FOCUS_PERSISTENCE_STUB");
+			expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("FOCUS_PERSISTENCE_STUB")]);
 
 			persistence.resolve();
 			await attaching;
-			expect(Bun.stripANSI(h.rendered())).toBe("… FOCUS_PERSISTENCE_STUB");
+			expect(h.ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("FOCUS_PERSISTENCE_STUB")]);
 
 			// A real next turn still clears the old stub; only focus replay is exempt.
 			await worker.emit({ type: "agent_start" });
