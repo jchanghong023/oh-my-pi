@@ -56,7 +56,7 @@ if (mode === DAEMON_BROKER_WORKER_ARG) {
 	process.stdout.write("loaded\\n");
 	await input.read();
 } else {
-	const client = await createDaemonBrokerClient(${JSON.stringify(path.join(root, "project"))}, { runtimeDir: ${JSON.stringify(path.join(root, "runtime"))}, idleGraceMs: 25 });
+	const client = await createDaemonBrokerClient(${JSON.stringify(path.join(root, "project"))}, { runtimeDir: ${JSON.stringify(path.join(root, "runtime"))} });
 	await client.request({ op: "list" });
 	process.stdout.write("connected\\n");
 	await input.read();
@@ -67,8 +67,13 @@ if (mode === DAEMON_BROKER_WORKER_ARG) {
 	return host;
 }
 
-function startHost(host: string, mode: string, nativeRoot: string) {
-	return Bun.spawn([process.execPath, host, mode], {
+interface NativeHost {
+	proc: Subprocess<"pipe", "pipe", "pipe">;
+	stderr: Promise<string>;
+}
+
+function startHost(host: string, mode: string, nativeRoot: string): NativeHost {
+	const proc = Bun.spawn([process.execPath, host, mode], {
 		cwd: packageRoot,
 		env: {
 			...process.env,
@@ -80,15 +85,24 @@ function startHost(host: string, mode: string, nativeRoot: string) {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	return { proc, stderr: new Response(proc.stderr).text() };
 }
 
-async function expectLine(reader: ReadableStreamDefaultReader<Uint8Array>, expected: string): Promise<void> {
+async function expectLine(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	expected: string,
+	host: NativeHost,
+): Promise<void> {
 	const result = await reader.read();
+	if (result.done) {
+		const [code, stderr] = await Promise.all([host.proc.exited, host.stderr]);
+		throw new Error(`Native host exited before "${expected}" (exit ${code}):\n${stderr}`);
+	}
 	expect(new TextDecoder().decode(result.value)).toBe(`${expected}\n`);
 }
 
-async function expectExit(proc: Subprocess<"pipe", "pipe", "pipe">): Promise<void> {
-	const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+async function expectExit(host: NativeHost): Promise<void> {
+	const [code, stderr] = await Promise.all([host.proc.exited, host.stderr]);
 	expect(stderr).toBe("");
 	expect(code).toBe(0);
 }
@@ -101,11 +115,11 @@ describe("broker native cache ownership", () => {
 		const creatorLeaf = path.join(root, "creator-natives");
 		const runtime = path.join(root, "runtime");
 		const creator = startHost(host, "creator", creatorLeaf);
-		const stdout = creator.stdout.getReader();
+		const stdout = creator.proc.stdout.getReader();
 		let observer: DaemonBrokerClient | undefined;
 		let brokerExit: Promise<boolean> | undefined;
 		try {
-			await expectLine(stdout, "connected");
+			await expectLine(stdout, "connected", creator);
 			const brokerPid = Number(await fs.readFile(path.join(root, "broker-pid"), "utf8"));
 			expect(Number.isSafeInteger(brokerPid) && brokerPid > 0).toBe(true);
 			const broker = Process.fromPid(brokerPid);
@@ -115,18 +129,17 @@ describe("broker native cache ownership", () => {
 			brokerExit = broker.waitForExit({ timeoutMs: 10_000 });
 			observer = await createDaemonBrokerClient(path.join(root, "project"), {
 				runtimeDir: runtime,
-				idleGraceMs: 25,
 			});
 			expect((await observer.request({ op: "list" })).op).toBe("list");
-			creator.stdin.end();
+			creator.proc.stdin.end();
 			await expectExit(creator);
 			// On Windows a live broker loading the creator's DLL makes this fail with EPERM.
 			await fs.rm(creatorLeaf, { recursive: true });
 			expect((await observer.request({ op: "list" })).op).toBe("list");
 		} finally {
-			creator.stdin.end();
+			creator.proc.stdin.end();
 			observer?.close();
-			await creator.exited;
+			await creator.proc.exited;
 			if (brokerExit) expect(await brokerExit).toBe(true);
 		}
 		// Returning from broker.run() does not unmap its DLL: only OS exit does.
@@ -139,18 +152,18 @@ describe("broker native cache ownership", () => {
 		const host = await createHost(root);
 		const cache = path.join(root, "shared-natives");
 		const workers = [startHost(host, "cold", cache), startHost(host, "cold", cache)];
-		const readers = workers.map(worker => worker.stdout.getReader());
+		const readers = workers.map(worker => worker.proc.stdout.getReader());
 		try {
-			await Promise.all(readers.map(reader => expectLine(reader, "ready")));
-			for (const worker of workers) worker.stdin.write("go\n");
-			await Promise.all(readers.map(reader => expectLine(reader, "loaded")));
+			await Promise.all(readers.map((reader, index) => expectLine(reader, "ready", workers[index]!)));
+			for (const worker of workers) worker.proc.stdin.write("go\n");
+			await Promise.all(readers.map((reader, index) => expectLine(reader, "loaded", workers[index]!)));
 			const [filename] = (await fs.readdir(cache)).filter(name => name.endsWith(".node"));
 			expect(await fs.readFile(path.join(cache, filename!))).toEqual(
 				await fs.readFile(path.join(nativeDir, filename!)),
 			);
 			expect((await fs.readdir(cache)).filter(name => name.includes(".tmp."))).toEqual([]);
 		} finally {
-			for (const worker of workers) worker.stdin.end();
+			for (const worker of workers) worker.proc.stdin.end();
 			await Promise.all(workers.map(expectExit));
 		}
 		await fs.rm(cache, { recursive: true });
