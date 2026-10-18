@@ -8,6 +8,8 @@ export interface ToolActivityComponent {
 	/** Successful calls eligible for compact transcript folding. */
 	getCompactToolCount?(): number;
 	getCompactToolFailureCount?(): number;
+	/** Notify the owning transcript when a terminal tool result arrives. */
+	setCompactToolResultListener?(listener: (() => void) | undefined): void;
 	/** Whether the compact presentation changed, including a previously retired summary. */
 	setCompactToolLimit?(keep: number, summary: number, failures?: number): boolean;
 }
@@ -21,32 +23,14 @@ export function isCompactToolActivityComponent(component: Component): component 
 }
 
 export function compactToolSummary(count: number, failures = 0): string {
-	return `… 已收起 ${count} 次成功调用${failures > 0 ? ` · 失败 ${failures} 次（保留）` : ""}`;
+	if (count === 0) return `… 失败 ${failures} 次（已收起）`;
+	return `… 已收起 ${count} 次成功调用${failures > 0 ? ` · 失败 ${failures} 次（已收起）` : ""}`;
 }
 
 /** Keep the file identity visible before narrow rows truncate their right edge. */
 export function compactToolPath(value: string): string {
 	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
 	return value.replace(/\\/g, "/").replace(/\/$/, "").split("/").pop() || value;
-}
-
-/** Error text often leads with a long quoted path; put its actual cause first. */
-export function compactToolFailure(value: string): string {
-	const line = value
-		.split(/\r?\n/, 1)[0]
-		.replace(/^Error:\s*/, "")
-		.replace(/\s+/g, " ")
-		.trim();
-	if (/\bENOENT\b|\b(?:path|file)\b.*\bnot found\b|\bno such file\b/i.test(line)) return "文件或路径不存在";
-	if (/\bEACCES\b|\bEPERM\b|permission denied|access denied/i.test(line)) return "Permission denied";
-	if (/No document indexes/i.test(line)) return "尚未建立文档索引";
-	if (/Nothing to wait for/i.test(line)) return "没有可等待的后台任务";
-	return (
-		line.replace(
-			/(['"])([^'"\r\n]*[\\/][^'"\r\n]*)\1/g,
-			(_match, quote: string, path: string) => `${quote}${compactToolPath(path)}${quote}`,
-		) || "Tool failed"
-	);
 }
 
 export class ToolActivityContainer extends Container implements ToolActivityComponent {

@@ -1,5 +1,5 @@
 import type { Component } from "../tui";
-import { getProjectDir, isRecord } from "@oh-my-pi/pi-utils";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { readShellWord } from "@oh-my-pi/pi-utils/shell";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
@@ -225,27 +225,6 @@ export function formatWallTimeNotice(wallTimeMs: number): string {
 /** Formats the model-facing command exit status notice. */
 export function formatExitCodeNotice(exitCode: number): string {
 	return `Command exited with code ${exitCode}`;
-}
-
-/** Compact shell failures prefer execution metadata; preflight text only selects fixed safe reasons. */
-export function compactBashFailure(details: unknown, errorText: string): string {
-	if (isRecord(details)) {
-		if (isRecord(details.async) && details.async.state === "cancelled") return "Command cancelled";
-		if (details.timedOut === true) return "Command timed out";
-		if (typeof details.exitCode === "number" && Number.isInteger(details.exitCode) && details.exitCode !== 0) {
-			return formatExitCodeNotice(details.exitCode);
-		}
-	}
-	// 执行前失败没有 exitCode；只识别首行的已知原因，不把 stdout、脚本或路径正文当作摘要。
-	const line = errorText
-		.split(/[\r\n]/, 1)[0]!
-		.replace(/^Error:\s*/, "")
-		.trim();
-	if (line.startsWith("Working directory does not exist:")) return "Working directory does not exist";
-	if (/^Working directory is not a directory:|\bENOTDIR\b/i.test(line)) return "Working directory is not a directory";
-	if (/\bEACCES\b|\bEPERM\b|permission denied|access denied/i.test(line)) return "Permission denied";
-	if (/\bENOENT\b|\bno such file or directory\b/i.test(line)) return "File or directory does not exist";
-	return "Command failed";
 }
 
 /** Shell arguments used to build a command preview. */

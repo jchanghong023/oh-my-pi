@@ -232,7 +232,7 @@ function imageLinksForMessage(
 
 const HIDDEN_WARNING_ROWS: readonly string[] = [];
 
-/** The warning stays independent until its exact failed execution has a compact row. */
+/** The warning stays independent until its exact failed execution is represented in compact activity. */
 class ToolFailureWarning extends ToolActivityContainer {
 	readonly session: InteractiveModeContext["viewSession"];
 	#merged = false;

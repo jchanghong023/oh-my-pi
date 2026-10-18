@@ -19,7 +19,11 @@ import { formatArtifactErrorNotice, type OutputMeta } from "../tools/output-meta
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
-import { type TranscriptBlock } from "../chrome/transcript-container";
+import {
+	type CompactBackgroundCounts,
+	type CompactBackgroundJob,
+	type TranscriptBlock,
+} from "../chrome/transcript-container";
 import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
 import { theme } from "../theme";
 
@@ -29,37 +33,38 @@ type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 /** Background completion rows retain their originals while compact mode projects a segment-local count. */
 class AsyncResultBlock extends ToolActivityContainer {
 	readonly #compactRows: readonly TranscriptStatusRow[];
-	readonly #jobIds: readonly (string | undefined)[];
+	readonly #jobs: readonly (CompactBackgroundJob | undefined)[];
 	readonly #compactOverride: boolean | undefined;
-	#counts: readonly number[];
+	#counts: readonly CompactBackgroundCounts[];
 	#compactBlock: TranscriptStatusBlock;
 	#visible = true;
 
 	constructor(
 		original: TranscriptStatusBlock,
 		rows: readonly TranscriptStatusRow[],
-		jobIds: readonly (string | undefined)[],
+		jobs: readonly (CompactBackgroundJob | undefined)[],
 		compactOverride?: boolean,
 	) {
 		super(original);
 		this.#compactRows = rows;
-		this.#jobIds = jobIds;
+		this.#jobs = jobs;
 		this.#compactOverride = compactOverride;
 		this.#counts = [];
 		this.#compactBlock = new TranscriptStatusBlock([]);
-		const counts = jobIds.map(() => 0);
+		const counts = jobs.map(() => ({ completed: 0, failed: 0 }));
 		const identities = new Set<string>();
 		let anchor = -1;
-		for (let index = 0; index < jobIds.length; index++) {
-			const id = jobIds[index];
-			if (id === undefined) {
+		for (let index = 0; index < jobs.length; index++) {
+			const job = jobs[index];
+			if (job === undefined) {
 				anchor = -1;
 				identities.clear();
 			} else {
 				if (anchor < 0) anchor = index;
-				if (!identities.has(id)) {
-					identities.add(id);
-					counts[anchor]!++;
+				if (!identities.has(job.id)) {
+					identities.add(job.id);
+					if (job.failed) counts[anchor]!.failed++;
+					else counts[anchor]!.completed++;
 				}
 			}
 		}
@@ -70,21 +75,39 @@ class AsyncResultBlock extends ToolActivityContainer {
 		return this.#compactOverride ?? displayPreferences.compactToolActivity;
 	}
 
-	/** Undefined slots are independent visible boundaries, never successful completions. */
-	getCompactBackgroundJobIds(): readonly (string | undefined)[] {
-		return this.#jobIds;
+	/** Undefined slots are independent visible boundaries, not ordinary terminal notifications. */
+	getCompactBackgroundJobs(): readonly (CompactBackgroundJob | undefined)[] {
+		return this.#jobs;
 	}
 
-	setCompactBackgroundCounts(counts: readonly number[]): boolean {
-		if (counts.every((count, index) => count === this.#counts[index])) return false;
+	setCompactBackgroundCounts(counts: readonly CompactBackgroundCounts[]): boolean {
+		if (
+			counts.every(
+				(count, index) =>
+					count.completed === this.#counts[index]?.completed && count.failed === this.#counts[index]?.failed,
+			)
+		) {
+			return false;
+		}
 		this.#counts = counts;
 		const rows: TranscriptStatusRow[] = [];
 		for (let index = 0; index < this.#compactRows.length; index++) {
-			if (this.#jobIds[index] === undefined) {
+			const count = counts[index]!;
+			if (this.#jobs[index] === undefined) {
 				rows.push(this.#compactRows[index]!);
-			} else if (counts[index]! > 0) {
+			} else if (count.completed > 0 || count.failed > 0) {
 				rows.push({
-					parts: [{ text: `${theme.status.done} 后台任务已完成 ${counts[index]} 项`, color: "success" }],
+					parts: [
+						count.completed > 0
+							? { text: `${theme.status.done} 后台任务已完成 ${count.completed} 项`, color: "success" }
+							: undefined,
+						count.failed > 0
+							? {
+									text: `${count.completed > 0 ? "· " : "… 后台任务"}失败 ${count.failed} 项`,
+									color: "dim",
+								}
+							: undefined,
+					],
 				});
 			}
 		}
@@ -133,11 +156,11 @@ export function buildAsyncResultBlock(
 	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
 	const compactRows: TranscriptStatusRow[] = [];
-	const jobIds: (string | undefined)[] = [];
+	const jobSlots: (CompactBackgroundJob | undefined)[] = [];
 	const addWarning = (row: TranscriptStatusRow, original = true) => {
 		if (original) rows.push(row);
 		compactRows.push(row);
-		jobIds.push(undefined);
+		jobSlots.push(undefined);
 	};
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
@@ -165,7 +188,13 @@ export function buildAsyncResultBlock(
 					? { text: `${theme.status.warning} Background job cancelled`, color: "warning" as const }
 					: { text: "Background job status unknown", color: "warning" as const };
 		compactRows.push({ parts: [status, ...original.parts.slice(1)] });
-		jobIds.push(completed && (job.type === "task" || job.type === "bash") ? job.jobId : undefined);
+		jobSlots.push(
+			identified &&
+				(job.type === "task" || job.type === "bash") &&
+				(job.status === "completed" || job.status === "failed")
+				? { id: jobId, failed: job.status === "failed" }
+				: undefined,
+		);
 		if (job.meta?.artifactError) {
 			addWarning({ parts: [{ text: formatArtifactErrorNotice(job.meta.artifactError), color: "warning" }] });
 		}
@@ -186,7 +215,7 @@ export function buildAsyncResultBlock(
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
 		addWarning({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, jobIds, compactToolActivity);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, jobSlots, compactToolActivity);
 }
 
 /**

@@ -8,8 +8,7 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
-import { compactToolFailure, compactToolPath, compactToolSummary } from "../chrome/tool-activity";
-import { compactBashFailure } from "../tools/bash";
+import { compactToolPath, compactToolSummary } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -387,7 +386,8 @@ export class ToolExecutionComponent extends Container {
 	#toolActivityVisible = true;
 	#compactKeep = 1;
 	#compactSummary = 0;
-	#compactFailures = 0;
+	#compactFailures: number | undefined;
+	#compactToolResultListener: (() => void) | undefined;
 	#compactIntent: string | undefined;
 	#showImages: boolean;
 	readonly #compactToolActivityOverride: boolean | undefined;
@@ -673,6 +673,7 @@ export class ToolExecutionComponent extends Container {
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
+		if (!isPartial) this.#compactToolResultListener?.();
 		this.#resetDisplayForResultTopologyChange(
 			hadNoResult && firstResultRepaintShapePainted,
 			wasPartialResult && partialResultPainted,
@@ -890,12 +891,16 @@ export class ToolExecutionComponent extends Container {
 		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
 	}
 
+	setCompactToolResultListener(listener: (() => void) | undefined): void {
+		this.#compactToolResultListener = listener;
+	}
+
 	/** Presentation identity remains available while a streamed call is still pending. */
 	get toolCallId(): string | undefined {
 		return this.#toolCallId;
 	}
 
-	/** Exact identity of a failed execution whose compact row is actually present. */
+	/** Exact identity of a failed execution represented by the compact failure count. */
 	getCompactToolFailureId(): string | undefined {
 		return this.#toolActivityVisible && this.#compactToolActivity && this.#result?.isError && !this.#isPartial
 			? this.#toolCallId
@@ -1097,17 +1102,19 @@ export class ToolExecutionComponent extends Container {
 
 	/** Compact mode never constructs a renderer body, so terminal-local expansion cannot reveal it. */
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
+		const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 		const collapsed =
-			this.#compactSummary > 0
+			this.#compactSummary > 0 || failures > 0
 				? [
-						text(compactToolSummary(this.#compactSummary, this.#compactFailures), {
+						text(compactToolSummary(this.#compactSummary, failures), {
 							lines: 1,
 							wrap: "none",
 							truncate: "end",
 						}),
 					]
 				: [];
-		if (this.getCompactToolCount() > this.#compactKeep) return col(collapsed);
+		if (this.getCompactToolFailureCount() > 0 || this.getCompactToolCount() > this.#compactKeep)
+			return col(collapsed);
 		const summary = this.#compactActivity();
 		const outcome = this.#compactOutcome();
 		const title = `${summary.label}${outcome ? ` · ${outcome}` : ""}`;
@@ -1186,20 +1193,6 @@ export class ToolExecutionComponent extends Container {
 			if (typeof details.conflictCount === "number" && details.conflictCount > 0) {
 				detail += ` · ${details.conflictCount} conflict${details.conflictCount === 1 ? "" : "s"}`;
 			}
-		}
-		if (this.#result?.isError) {
-			let toolName = this.#toolName;
-			let details = this.#result.details;
-			if (isRecord(details) && isRecord(details.xdev)) {
-				toolName = typeof details.xdev.tool === "string" ? details.xdev.tool : toolName;
-				details = details.xdev.inner;
-			}
-			const errorText = plainText(
-				this.#result.content.find(block => block.type === "text" && block.text)?.text ?? "",
-			);
-			const failure = toolName === "bash" ? compactBashFailure(details, errorText) : compactToolFailure(errorText);
-			const stale = this.#toolName === "todo" ? " · Progress may be stale" : "";
-			detail = `${failure}${stale}${detail ? ` · ${detail}` : ""}`;
 		}
 		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
 	}
@@ -1581,16 +1574,12 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
+			const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 			const collapsed =
-				this.#compactSummary > 0
-					? [
-							truncateToWidth(
-								theme.fg("dim", compactToolSummary(this.#compactSummary, this.#compactFailures)),
-								width,
-							),
-						]
+				this.#compactSummary > 0 || failures > 0
+					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactSummary, failures)), width)]
 					: [];
-			if (this.getCompactToolCount() > this.#compactKeep) return collapsed;
+			if (this.getCompactToolFailureCount() > 0 || this.getCompactToolCount() > this.#compactKeep) return collapsed;
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);

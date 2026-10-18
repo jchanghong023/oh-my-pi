@@ -37,7 +37,7 @@ import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { compactToolFailure, compactToolPath, compactToolSummary } from "../chrome/tool-activity";
+import { compactToolPath, compactToolSummary } from "../chrome/tool-activity";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -375,7 +375,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#toolActivityVisible = true;
 	#compactKeep = Number.POSITIVE_INFINITY;
 	#compactHiddenSummary = 0;
-	#compactFailures = 0;
+	#compactFailures: number | undefined;
+	#compactToolResultListener: (() => void) | undefined;
 	#showContentPreview: boolean;
 	readonly #compactToolActivityOverride: boolean | undefined;
 	// A read group accretes entries across multiple assistant completions for as
@@ -411,14 +412,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		if (!this.#toolActivityVisible) return [];
 		if (this.#compactToolActivity) {
 			this.#displayCompact = true;
+			const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 			const rows =
-				this.#compactHiddenSummary > 0
-					? [
-							truncateToWidth(
-								theme.fg("dim", compactToolSummary(this.#compactHiddenSummary, this.#compactFailures)),
-								width,
-							),
-						]
+				this.#compactHiddenSummary > 0 || failures > 0
+					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactHiddenSummary, failures)), width)]
 					: [];
 			for (const entry of this.#compactEntries()) rows.push(this.#renderCompactEntry(entry, width));
 			return rows;
@@ -451,6 +448,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return count;
 	}
 
+	setCompactToolResultListener(listener: (() => void) | undefined): void {
+		this.#compactToolResultListener = listener;
+	}
+
 	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
 		if (this.#compactKeep === keep && this.#compactHiddenSummary === summary && this.#compactFailures === failures)
 			return false;
@@ -465,6 +466,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	*#compactEntries(): IterableIterator<ReadEntry> {
 		let skip = Math.max(0, this.getCompactToolCount() - this.#compactKeep);
 		for (const entry of this.#entries.values()) {
+			if (entry.status === "error") continue;
 			if (entry.status === "success" && skip-- > 0) continue;
 			yield entry;
 		}
@@ -600,6 +602,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			entry.codeLineNumbers = displayContent?.lineNumbers;
 		}
 		this.#updateDisplay();
+		this.#compactToolResultListener?.();
 	}
 
 	/**
@@ -726,9 +729,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			"…";
 		if (entry.correctedFrom) summary += ` · corrected from ${plainText(entry.correctedFrom).replace(/\s+/g, " ")}`;
 		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflicts`;
-		if (entry.status === "error") {
-			summary = `${compactToolFailure(plainText(entry.contentText ?? ""))} · ${summary}`;
-		}
 		return summary;
 	}
 
@@ -751,9 +751,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const calls: NativeChild[] = [];
-		if (this.#compactHiddenSummary > 0) {
+		const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
+		if (this.#compactHiddenSummary > 0 || failures > 0) {
 			calls.push(
-				text(compactToolSummary(this.#compactHiddenSummary, this.#compactFailures), {
+				text(compactToolSummary(this.#compactHiddenSummary, failures), {
 					lines: 1,
 					wrap: "none",
 					truncate: "end",

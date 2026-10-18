@@ -222,16 +222,26 @@ function blockGap(previous: Component | undefined, next: Component | undefined):
 		: 1;
 }
 
+export interface CompactBackgroundJob {
+	readonly id: string;
+	readonly failed: boolean;
+}
+
+export interface CompactBackgroundCounts {
+	completed: number;
+	failed: number;
+}
+
 /** Projection protocol implemented by async-result rows, shared by live and persisted transcripts. */
 interface CompactBackgroundActivity {
-	getCompactBackgroundJobIds(): readonly (string | undefined)[];
-	setCompactBackgroundCounts(counts: readonly number[]): boolean;
+	getCompactBackgroundJobs(): readonly (CompactBackgroundJob | undefined)[];
+	setCompactBackgroundCounts(counts: readonly CompactBackgroundCounts[]): boolean;
 }
 
 function isCompactBackgroundActivity(component: Component): component is Component & CompactBackgroundActivity {
 	return (
 		isCompactToolActivityComponent(component) &&
-		typeof (component as Partial<CompactBackgroundActivity>).getCompactBackgroundJobIds === "function"
+		typeof (component as Partial<CompactBackgroundActivity>).getCompactBackgroundJobs === "function"
 	);
 }
 
@@ -298,7 +308,7 @@ export class TranscriptContainer extends Container {
 		if (typeof (component as Partial<CompactFailureProjection>).reconcileCompactToolFailure === "function") {
 			this.#compactFailureProjections.set(component, this.children.length - 1);
 		}
-		this.#entries.push({
+		const entry: TranscriptEntry = {
 			component,
 			state: "active",
 			mode: blockMode(component),
@@ -308,7 +318,9 @@ export class TranscriptContainer extends Container {
 			emitted: 0,
 			stableFrozen: false,
 			split: undefined,
-		});
+		};
+		this.#entries.push(entry);
+		this.#trackCompactToolResults(entry);
 		// `children` is public and may be edited externally; re-check the whole
 		// list once instead of trusting positions. Insert-after-anchor callers
 		// use insertChildAt, which keeps both arrays in lockstep.
@@ -349,6 +361,7 @@ export class TranscriptContainer extends Container {
 		this.#entries.splice(index, 1);
 		this.#frontier = Math.min(this.#frontier, this.#entries.length);
 		this.#childStartRows.delete(component);
+		if (isToolActivityComponent(component)) component.setCompactToolResultListener?.(undefined);
 		this.#compactFailureProjections.delete(component);
 		for (const [projection, position] of this.#compactFailureProjections) {
 			if (position > index) this.#compactFailureProjections.set(projection, position - 1);
@@ -356,6 +369,9 @@ export class TranscriptContainer extends Container {
 	}
 
 	override clear(): void {
+		for (const component of this.children) {
+			if (isToolActivityComponent(component)) component.setCompactToolResultListener?.(undefined);
+		}
 		super.clear();
 		this.#entries = [];
 		this.#frontier = 0;
@@ -1564,6 +1580,16 @@ export class TranscriptContainer extends Container {
 		}
 	}
 
+	#trackCompactToolResults(entry: TranscriptEntry): void {
+		const component = entry.component;
+		if (!isToolActivityComponent(component)) return;
+		component.setCompactToolResultListener?.(() => {
+			// Closed retired segments are outside the normal live-tail scan.
+			// Recount once on a late result; unchanged historical frames stay bounded.
+			if (entry.state === "committed" || entry.split !== undefined) this.#compactRunStart = 0;
+		});
+	}
+
 	/** Recompute activity segments touching the live tail; retired projections use normal replay. */
 	#updateCompactTools(startIndex = Math.min(this.#frontier, this.#compactRunStart)): void {
 		for (const [component, index] of this.#compactFailureProjections) {
@@ -1575,7 +1601,7 @@ export class TranscriptContainer extends Container {
 		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
 		this.#compactRunStart = Number.POSITIVE_INFINITY;
 		let start = -1;
-		let firstSuccess = -1;
+		let firstSummary = -1;
 		let completed = 0;
 		let failures = 0;
 		const flush = (end: number) => {
@@ -1590,22 +1616,25 @@ export class TranscriptContainer extends Container {
 				if (
 					component.setCompactToolLimit?.(
 						keep,
-						index === firstSuccess ? summary : 0,
-						index === firstSuccess ? failures : 0,
+						index === firstSummary ? summary : 0,
+						index === firstSummary ? failures : 0,
 					)
 				)
 					this.#compactProjectionChanged(index);
 				remaining -= keep;
 			}
 			start = -1;
-			firstSuccess = -1;
+			firstSummary = -1;
 			completed = 0;
 			failures = 0;
 		};
-		const background = new Map<Component & CompactBackgroundActivity, { index: number; counts: number[] }>();
+		const background = new Map<
+			Component & CompactBackgroundActivity,
+			{ index: number; counts: CompactBackgroundCounts[] }
+		>();
 		const identities = new Set<string>();
 		let backgroundStart = -1;
-		let anchor: { counts: number[]; slot: number } | undefined;
+		let anchor: { counts: CompactBackgroundCounts[]; slot: number } | undefined;
 		const flushBackground = (end: number) => {
 			if (backgroundStart >= 0 && end > this.#frontier) {
 				this.#compactRunStart = Math.min(this.#compactRunStart, backgroundStart);
@@ -1617,30 +1646,32 @@ export class TranscriptContainer extends Container {
 		for (let index = startIndex; index < this.children.length; index++) {
 			const component = this.children[index]!;
 			if (isCompactBackgroundActivity(component)) {
-				const ids = component.getCompactBackgroundJobIds();
-				const counts = Array.from({ length: ids.length }, () => 0);
+				const jobs = component.getCompactBackgroundJobs();
+				const counts = jobs.map(() => ({ completed: 0, failed: 0 }));
 				background.set(component, { index, counts });
-				for (let slot = 0; slot < ids.length; slot++) {
-					const id = ids[slot];
-					if (id === undefined) {
-						// A failure, unknown source/state or independent warning is a real boundary.
+				for (let slot = 0; slot < jobs.length; slot++) {
+					const job = jobs[slot];
+					if (job === undefined) {
+						// Cancellation, unknown source/state and independent warnings remain boundaries.
 						flush(index);
 						flushBackground(index + 1);
 						continue;
 					}
 					if (backgroundStart < 0) backgroundStart = index;
 					anchor ??= { counts, slot };
-					if (!identities.has(id)) {
-						identities.add(id);
-						anchor.counts[anchor.slot]!++;
+					if (!identities.has(job.id)) {
+						identities.add(job.id);
+						if (job.failed) anchor.counts[anchor.slot]!.failed++;
+						else anchor.counts[anchor.slot]!.completed++;
 					}
 				}
 			} else if (isCompactToolActivityComponent(component) && component.getCompactToolCount) {
 				if (start < 0) start = index;
 				const count = component.getCompactToolCount();
-				if (firstSuccess < 0 && count > 0) firstSuccess = index;
+				const failed = component.getCompactToolFailureCount?.() ?? 0;
+				if (firstSummary < 0 && (count > 0 || failed > 0)) firstSummary = index;
 				completed += count;
-				failures += component.getCompactToolFailureCount?.() ?? 0;
+				failures += failed;
 			} else if (!isUsageRowBlock(component) && trimBlankEdges(component.render(80)).length > 0) {
 				flush(index);
 				flushBackground(index);
@@ -1705,6 +1736,9 @@ export class TranscriptContainer extends Container {
 			}
 		}
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
+		for (const entry of this.#entries) {
+			if (isToolActivityComponent(entry.component)) entry.component.setCompactToolResultListener?.(undefined);
+		}
 		this.#entries = this.children.map(
 			component =>
 				existing.get(component) ?? {
@@ -1719,6 +1753,7 @@ export class TranscriptContainer extends Container {
 					split: undefined,
 				},
 		);
+		for (const entry of this.#entries) this.#trackCompactToolResults(entry);
 		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
 		if (this.#frontier < 0) this.#frontier = this.#entries.length;
 	}
