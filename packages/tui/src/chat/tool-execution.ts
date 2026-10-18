@@ -1140,7 +1140,7 @@ export class ToolExecutionComponent extends Container {
 				if (normalized !== path) args = { ...args, [key]: normalized };
 			}
 		}
-		const summary = this.#activitySummary(args);
+		const summary = this.#activitySummary(args, true);
 		const label = plainText(summary.label).replace(/\s+/g, " ").trim();
 		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
 		if (isRecord(args)) {
@@ -1614,11 +1614,12 @@ export class ToolExecutionComponent extends Container {
 		return [truncateToWidth(`${theme.fg("dim", "╭─")} ${text}`, width), theme.fg("dim", "╰")];
 	}
 
-	#activitySummary(args = this.#args): ToolActivitySummary {
+	#activitySummary(args = this.#args, compactToolActivity = false): ToolActivitySummary {
 		this.#renderState.renderContext ??= this.#buildRenderContext();
 		const summary = this.#renderer?.activitySummary?.(args, {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
+			compactToolActivity,
 			spinnerFrame: this.#spinnerFrame,
 			result: this.#result,
 			renderContext: this.#renderState.renderContext,

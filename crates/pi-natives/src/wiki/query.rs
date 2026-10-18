@@ -983,16 +983,16 @@ impl LiteralMatcher {
 				{
 					skipped += 1;
 				}
-				!ignored
+				ignored
 					.get(skipped)
-					.is_some_and(|range| range.start <= offset)
+					.is_none_or(|range| range.start > offset)
 			})
 			.peekable();
 		let mut preceded_by_cased = false;
 		let limit = self.text.len() + 4096 + 12;
 		while characters.peek().is_some() {
 			check()?;
-			let sequence = characters.clone();
+			let sequence = characters.clone().map(|(_, character)| character);
 			let (source_start, first) = characters.next().expect("peeked source character");
 			let mut source_end = source_start + first.len_utf8();
 			let mut count = 1;
@@ -1005,7 +1005,7 @@ impl LiteralMatcher {
 				count += 1;
 			}
 			let range = source_start..source_end;
-			let mut normalized = sequence.take(count).map(|(_, character)| character).nfkc();
+			let mut normalized = sequence.take(count).nfkc();
 			while let Some(character) = normalized.next() {
 				let lower = if character == '\u{03a3}' {
 					lowercase_sigma(

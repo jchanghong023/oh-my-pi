@@ -316,12 +316,21 @@ stubServerCleanup.run = async () => {
 		await removeFixture(baseConfigRoot);
 	}
 };
+// Startup/input/exit never submits a model request; keep any accidental target on loopback.
+const baseClaudeDir = path.join(baseConfigRoot, "claude");
+await Bun.write(
+	path.join(baseClaudeDir, "settings.json"),
+	JSON.stringify({
+		env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1", ANTHROPIC_AUTH_TOKEN: "ui-smoke-fixture" },
+	}),
+);
 const baseEnv = tuiEnvironment({
 	PI_CONFIG_DIR: path.basename(baseConfigRoot),
 	OMP_CONFIG_ROOT: baseConfigRoot,
 	OMP_PROFILE: "localci-ui",
 	PI_PROFILE: "",
 	OMP_OFFLINE: "1",
+	CLAUDE_CONFIG_DIR: baseClaudeDir,
 });
 const baseShm = getOfflineShmState(baseEnv);
 if (baseShm) {

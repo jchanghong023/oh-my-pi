@@ -348,7 +348,9 @@ const SALVAGE_MAX_DAMAGED_REGIONS = 1000;
 
 /** Interior table keys bound individual subtrees even when readable and damaged leaves alternate. */
 function readSalvageRowidStarts(db: Database, table: string): number[] {
-	const root = db.query<{ rootpage: number }, [string]>("SELECT rootpage FROM sqlite_schema WHERE name = ?").get(table);
+	const root = db
+		.query<{ rootpage: number }, [string]>("SELECT rootpage FROM sqlite_schema WHERE name = ?")
+		.get(table);
 	if (!root) return [];
 	// Serialize through SQLite so committed WAL pages are included, without modifying the damaged store.
 	const image = db.serialize();

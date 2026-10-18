@@ -82,6 +82,8 @@ export interface ToolActivitySummary {
 export interface ToolActivityContext<TDetails = unknown> {
 	readonly expanded: boolean;
 	readonly isPartial: boolean;
+	/** True for the explicit single-line display mode, not viewport-squeezed detailed cards. */
+	readonly compactToolActivity?: boolean;
 	readonly spinnerFrame?: number;
 	/** Latest progress or settled snapshot; summaries select identity fields, not output bodies. */
 	readonly result?: ToolRenderResult<TDetails>;
@@ -183,7 +185,7 @@ export interface ToolRenderer<TArgs = unknown, TDetails = unknown> {
 		options: RenderResultOptions,
 	): ToolFigure | undefined;
 	/** Describes current activity without coupling a renderer to terminal layout. */
-	activitySummary?(args: TArgs, context: ToolActivityContext<TDetails>): ToolActivitySummary;
+	activitySummary?(args: TArgs, context: ToolActivityContext<TDetails>): ToolActivitySummary | undefined;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
 	/**

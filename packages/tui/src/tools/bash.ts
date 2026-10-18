@@ -22,6 +22,7 @@ import {
 import type {
 	NativeToolHead,
 	NativeToolView,
+	ToolActivityContext,
 	ToolActivitySummary,
 	RenderResultContextOptions,
 	RenderResultOptions,
@@ -768,7 +769,8 @@ export const bashToolRenderer = {
 		resolveEnv: args => args?.env,
 		showHeader: false,
 	}),
-	activitySummary(args: BashRenderArgs): ToolActivitySummary {
+	activitySummary(args: BashRenderArgs, context: ToolActivityContext): ToolActivitySummary | undefined {
+		if (!context.compactToolActivity) return undefined;
 		const intent = args?.[INTENT_FIELD];
 		return {
 			label: "Bash",

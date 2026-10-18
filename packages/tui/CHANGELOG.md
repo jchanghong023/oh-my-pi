@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
 - Keep hashline-wrapped internal device calls compact without hiding real file-write previews.
 - Show safe reasons for shell failures before execution without exposing captured output or scripts.
 - Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.

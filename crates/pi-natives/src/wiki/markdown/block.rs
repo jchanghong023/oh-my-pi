@@ -175,7 +175,7 @@ struct OriginSlice<'a> {
 }
 
 impl NameOrigins {
-	fn view(&self) -> OriginSlice<'_> {
+	const fn view(&self) -> OriginSlice<'_> {
 		OriginSlice { origins: self, start: 0, end: self.len }
 	}
 
@@ -264,10 +264,9 @@ fn source_origins<'a>(
 	source: &str,
 	part: &str,
 ) -> Option<OriginSlice<'a>> {
-	origins.map(|origins| {
-		let start = part.as_ptr() as usize - source.as_ptr() as usize;
-		origins.slice(start..start + part.len())
-	})
+	let origins = origins?;
+	let start = part.as_ptr() as usize - source.as_ptr() as usize;
+	Some(origins.slice(start..start + part.len()))
 }
 
 fn queue_origins(origins: Option<OriginSlice<'_>>, pending: &mut DelimiterQueue) {
