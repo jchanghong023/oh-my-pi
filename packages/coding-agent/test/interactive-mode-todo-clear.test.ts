@@ -1,10 +1,14 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -15,6 +19,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { assistantMsg } from "./utilities";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -28,6 +33,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 	let mode: InteractiveMode;
 	let eventBus: EventBus;
 	let modelRegistry: ModelRegistry;
+	let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 
 	async function replaceMode(sessionManager?: SessionManager): Promise<void> {
 		if (mode) {
@@ -63,11 +69,16 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await replaceMode();
 	});
 
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	});
+
 	afterEach(() => {
 		session.setTodoPhases([]);
 		mode.setTodos([]);
 		vi.useRealTimers();
 		vi.restoreAllMocks();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	});
 
 	afterAll(async () => {
@@ -81,6 +92,148 @@ describe("InteractiveMode todo HUD persistence", () => {
 	function setTodoClearDelay(todoClearDelay: number): void {
 		cfgTasksTodoClearDelay.override(session.settings, todoClearDelay);
 	}
+
+	it("switches TODO hierarchy live for ANSI and native without changing statuses or closed counts", async () => {
+		await replaceMode();
+		setTodoClearDelay(-1);
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		cfgDisplayCompactToolActivity.override(session.settings, false);
+		cfgDisplayHideToolActivity.override(session.settings, false);
+		await mode.init();
+		const phases: TodoPhase[] = [
+			{
+				name: "Work",
+				tasks: [
+					{ content: "queued work", status: "pending" },
+					{ content: "running work", status: "in_progress" },
+					{ content: "waiting work", status: "blocked" },
+					{ content: "finished work", status: "completed" },
+					{ content: "cancelled work", status: "abandoned" },
+				],
+			},
+		];
+		session.setTodoPhases(phases);
+		mode.setTodos(phases);
+		mode.setTodoExpanded(true);
+		const detailed = mode.todoContainer.render(160).join("\n");
+		const context = {
+			cols: 160,
+			reduceMotion: true,
+			dark: true,
+			supports: () => true,
+			feature: () => false,
+		};
+		const detailedNative = mode.describeStatusHud([], context);
+		cfgDisplayCompactToolActivity.override(session.settings, true);
+		await Promise.resolve();
+		const compact = mode.todoContainer.render(160).join("\n");
+		const plain = Bun.stripANSI(compact);
+		expect(plain).toContain("[active] running work");
+		expect(plain).toContain("[blocked] waiting work");
+		expect(plain).toContain("[abandoned] cancelled work");
+		expect(plain).toContain(`${theme.checkbox.checked} finished work`);
+		expect(plain).toContain("2/5");
+		expect(compact).toContain(theme.fg("text", `${theme.checkbox.unchecked} queued work`));
+		const checklist = JSON.stringify(mode.describeStatusHud([], context));
+		const tree = JSON.stringify(mode.describeStatusHud([], { ...context, supports: () => false }));
+		for (const native of [checklist, tree]) {
+			expect(native).toContain("[active] running work");
+			expect(native).toContain("[blocked] waiting work");
+			expect(native).toContain("[abandoned] cancelled work");
+		}
+		expect(checklist).toContain('"status":"blocked"');
+		expect(checklist).toContain('"status":"dropped"');
+		expect(session.getTodoPhases()).toEqual(phases);
+		expect(mode.todoPhases).toEqual(phases);
+		cfgDisplayCompactToolActivity.override(session.settings, false);
+		await Promise.resolve();
+		expect(mode.todoContainer.render(160).join("\n")).toBe(detailed);
+		expect(mode.describeStatusHud([], context)).toEqual(detailedNative);
+		cfgDisplayCompactToolActivity.override(session.settings, true);
+		cfgDisplayHideToolActivity.override(session.settings, true);
+		await Promise.resolve();
+		expect(mode.todoContainer.render(160).join("\n")).toBe(detailed);
+		expect(mode.describeStatusHud([], context)).toEqual(detailedNative);
+	});
+
+	it.each(["detailed", "clean"] as const)("drops stale warnings on %s chat rebuild", async presentation => {
+		await replaceMode();
+		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
+		vi.spyOn(session, "hasBuiltInTool").mockImplementation(name => name === "todo");
+		cfgDisplayCompactToolActivity.override(session.settings, true);
+		cfgDisplayHideToolActivity.override(session.settings, false);
+		await mode.init();
+		// Isolated settings do not own the host's process-wide display effect.
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const toolCallId = "todo-rebuild-failure";
+		const toolCall = {
+			...assistantMsg(""),
+			content: [{ type: "toolCall" as const, id: toolCallId, name: "todo", arguments: { todos: [] } }],
+			stopReason: "toolUse" as const,
+		};
+		const result = {
+			role: "toolResult" as const,
+			toolCallId,
+			toolName: "todo",
+			content: [{ type: "text" as const, text: "REBUILD_FAILURE_CAUSE\nFULL_REBUILD_FAILURE_DETAIL" }],
+			isError: true,
+			timestamp: Date.now(),
+		};
+		const final = assistantMsg("FINAL_ANSWER_AFTER_FAILED_TODO");
+		for (const message of [toolCall, result, final]) session.sessionManager.appendMessage(message);
+		const storedMessages = JSON.stringify(session.sessionManager.buildSessionContext().messages);
+		await mode.eventController.handleEvent({
+			type: "tool_execution_start",
+			toolCallId,
+			toolName: "todo",
+			args: { todos: [] },
+		});
+		await mode.eventController.handleEvent({
+			type: "tool_execution_end",
+			toolCallId,
+			toolName: "todo",
+			result: { content: result.content },
+			isError: true,
+		});
+		mode.addMessageToChat(final);
+		const compact = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
+		expect(compact.match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
+		expect(compact.indexOf("REBUILD_FAILURE_CAUSE")).toBeLessThan(compact.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"));
+		mode.rebuildChatFromMessages();
+		expect(Bun.stripANSI(mode.chatContainer.render(180).join("\n")).match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
+
+		cfgDisplayCompactToolActivity.override(session.settings, presentation === "clean");
+		cfgDisplayHideToolActivity.override(session.settings, presentation === "clean");
+		await Promise.resolve();
+		setChatTranscriptDisplayPreferences({
+			compactToolActivity: presentation === "clean",
+			hideToolActivity: presentation === "clean",
+		});
+		mode.hideToolActivity = presentation === "clean";
+		mode.chatContainer.setToolActivityVisible(!mode.hideToolActivity);
+		mode.rebuildChatFromMessages();
+		const rebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
+		expect(rebuilt).toContain("FINAL_ANSWER_AFTER_FAILED_TODO");
+		expect(rebuilt).not.toContain("Warning:");
+		if (presentation === "clean") expect(rebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
+		// Revealing clean history must not resurrect a warning retained while hidden.
+		cfgDisplayCompactToolActivity.override(session.settings, false);
+		cfgDisplayHideToolActivity.override(session.settings, false);
+		await Promise.resolve();
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		mode.hideToolActivity = false;
+		mode.chatContainer.setToolActivityVisible(true);
+		const detailed = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
+		expect(detailed.match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
+		expect(detailed).toContain("FULL_REBUILD_FAILURE_DETAIL");
+		expect(detailed.indexOf("FULL_REBUILD_FAILURE_DETAIL")).toBeLessThan(
+			detailed.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"),
+		);
+		expect(detailed).not.toContain("Warning:");
+		mode.rebuildChatFromMessages();
+		expect(Bun.stripANSI(mode.chatContainer.render(180).join("\n"))).not.toContain("Warning:");
+		expect(JSON.stringify(session.sessionManager.buildSessionContext().messages)).toBe(storedMessages);
+	});
 
 	it("/clear removes a settled plan from the HUD and resumed state while retaining its history", async () => {
 		await replaceMode();
@@ -830,6 +983,30 @@ describe("InteractiveMode todo HUD anchor", () => {
 			setTerminalRows(24);
 			mode.loadingAnimation = undefined;
 			mode.statusContainer.disposeChildren();
+		});
+
+		it("never labels blocked-only or abandoned work successful in compact display", () => {
+			const previousCompact = cfgDisplayCompactToolActivity.get(session.settings);
+			const previousHidden = cfgDisplayHideToolActivity.get(session.settings);
+			try {
+				cfgDisplayCompactToolActivity.override(session.settings, true);
+				cfgDisplayHideToolActivity.override(session.settings, false);
+				setTerminalRows(15);
+				mode.setTodos([{ name: "Work", tasks: [{ content: "waiting work", status: "blocked" }] }]);
+				const blocked = Bun.stripANSI(mode.statusContainer.render(120).join("\n"));
+				expect(blocked).toContain("TODO 0/1");
+				expect(blocked).toContain("[blocked] waiting work");
+				expect(blocked).not.toContain("done");
+				mode.setTodos([{ name: "Work", tasks: [{ content: "cancelled work", status: "abandoned" }] }]);
+				const abandoned = Bun.stripANSI(mode.statusContainer.render(120).join("\n"));
+				expect(abandoned).toContain("TODO 1/1");
+				expect(abandoned).toContain("abandoned");
+				expect(abandoned).not.toContain(theme.checkbox.checked);
+				expect(abandoned).not.toMatch(/\bdone\b/i);
+			} finally {
+				cfgDisplayCompactToolActivity.override(session.settings, previousCompact);
+				cfgDisplayHideToolActivity.override(session.settings, previousHidden);
+			}
 		});
 
 		it("renders todo as a single line item aligned to the right when terminal height < 18", () => {

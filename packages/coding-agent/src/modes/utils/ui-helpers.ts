@@ -14,6 +14,8 @@ import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
+import { withHidden } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -228,6 +230,56 @@ function imageLinksForMessage(
 	});
 }
 
+const HIDDEN_WARNING_ROWS: readonly string[] = [];
+
+/** The warning stays independent until its exact failed execution has a compact row. */
+class ToolFailureWarning extends ToolActivityContainer {
+	readonly session: InteractiveModeContext["viewSession"];
+	#merged = false;
+	#failureRowIndex = -1;
+	#nativeProjection: { source: NativeNode; merged: boolean; result: NativeNode } | undefined;
+
+	constructor(
+		content: Component[],
+		private ctx: InteractiveModeContext,
+		readonly toolCallId: string,
+	) {
+		super(content);
+		this.session = ctx.viewSession;
+	}
+
+	/** TranscriptContainer applies the usual committed-projection replay when this changes. */
+	reconcileCompactToolFailure(children: readonly Component[]): boolean {
+		let merged = false;
+		if (chatTranscriptDisplayPreferences.compactToolActivity && this.session === this.ctx.viewSession) {
+			const matches = (child: Component | undefined) =>
+				child instanceof ToolExecutionComponent && child.toolCallId === this.toolCallId;
+			if (!matches(children[this.#failureRowIndex])) {
+				this.#failureRowIndex = children.findIndex(matches);
+			}
+			const row = children[this.#failureRowIndex];
+			merged = row instanceof ToolExecutionComponent && row.getCompactToolFailureId() === this.toolCallId;
+		}
+		if (merged === this.#merged) return false;
+		this.#merged = merged;
+		this.invalidate();
+		return true;
+	}
+
+	override render(width: number): readonly string[] {
+		return this.#merged ? HIDDEN_WARNING_ROWS : super.render(width);
+	}
+
+	override describe(): NativeNode {
+		const source = super.describe();
+		const cached = this.#nativeProjection;
+		if (cached?.source === source && cached.merged === this.#merged) return cached.result;
+		const result = withHidden(source, this.#merged);
+		this.#nativeProjection = { source, merged: this.#merged, result };
+		return result;
+	}
+}
+
 export class UiHelpers {
 	/**
 	 * Tail of the transcript-replay chain. Replays swap `ctx.chatContainer` and the
@@ -243,6 +295,25 @@ export class UiHelpers {
 	#chatRenderedBeforeReplay = false;
 
 	constructor(private ctx: InteractiveModeContext) {}
+
+	/** Compact replay alone retains same-session failures still in history or waiting for their late card. */
+	collectToolFailureWarnings(sessionContext: SessionContext): Component[] {
+		if (!chatTranscriptDisplayPreferences.compactToolActivity || chatTranscriptDisplayPreferences.hideToolActivity) {
+			return [];
+		}
+		const warnings = this.ctx.chatContainer.children.filter(
+			(child): child is ToolFailureWarning =>
+				child instanceof ToolFailureWarning && child.session === this.ctx.viewSession,
+		);
+		if (warnings.length === 0) return warnings;
+		const failedIds = new Set<string>();
+		for (const message of sessionContext.messages) {
+			if (message.role === "toolResult" && message.isError) failedIds.add(message.toolCallId);
+		}
+		return warnings.filter(
+			child => failedIds.has(child.toolCallId) || this.ctx.eventController?.hasHeldToolFailure(child.toolCallId),
+		);
+	}
 
 	/**
 	 * Show a status message in the chat.
@@ -1162,14 +1233,19 @@ export class UiHelpers {
 			const replayedChatChildren = [...stagedChatContainer.children];
 			stagedChatContainer.clear();
 			this.ctx.chatContainer = visibleChatContainer;
+			const failureWarnings = preservedChatChildren ? [] : this.collectToolFailureWarnings(context);
 			if (preservedChatChildren) {
 				visibleChatContainer.clear();
 			} else {
-				visibleChatContainer.disposeChildren();
+				for (const child of visibleChatContainer.children) {
+					if (!failureWarnings.includes(child)) child.dispose?.();
+				}
+				visibleChatContainer.clear();
 			}
 			for (const child of replayedChatChildren) {
 				visibleChatContainer.addChild(child);
 			}
+			for (const warning of failureWarnings) visibleChatContainer.addChild(warning);
 			if (preservedChatChildren) {
 				for (const child of preservedChatChildren) {
 					visibleChatContainer.addChild(child);
@@ -1222,10 +1298,17 @@ export class UiHelpers {
 		this.ctx.present([new Spacer(1), text]);
 	}
 
-	showWarning(warningMessage: string, options?: { hideWithToolActivity?: boolean }): void {
+	showWarning(warningMessage: string, options?: Parameters<InteractiveModeContext["showWarning"]>[1]): void {
 		const text = new Text(`Warning: ${warningMessage}`, 1, 0).setStyleFn(t => theme.fg("warning", t));
 		const content = [new Spacer(1), text];
-		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(content) : content);
+		const toolCallId = options?.toolFailure?.toolCallId;
+		this.ctx.present(
+			toolCallId
+				? new ToolFailureWarning(content, this.ctx, toolCallId)
+				: options?.hideWithToolActivity
+					? new ToolActivityContainer(content)
+					: content,
+		);
 	}
 
 	showNewVersionNotification(newVersion: string): void {

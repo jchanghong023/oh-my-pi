@@ -355,7 +355,14 @@ export interface InteractiveModeContext {
 	showError(message: string): void;
 	showPinnedError(message: string): void;
 	clearPinnedError(): void;
-	showWarning(message: string, options?: { hideWithToolActivity?: boolean }): void;
+	showWarning(
+		message: string,
+		options?: {
+			hideWithToolActivity?: boolean;
+			/** Presentation-only identity of the failed execution, never a text/name heuristic. */
+			toolFailure?: { toolCallId: string };
+		},
+	): void;
 	showNewVersionNotification(newVersion: string): void;
 	clearEditor(): void;
 	updatePendingMessagesDisplay(): void;

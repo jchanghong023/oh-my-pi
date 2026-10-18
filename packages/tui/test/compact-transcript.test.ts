@@ -4,11 +4,15 @@ import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "../src/chat/assistant-message";
 import { ChatTranscriptBuilder } from "../src/chat/chat-transcript-builder";
 import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
+import type { CustomMessage } from "../src/chat/messages";
+import { buildAsyncResultBlock } from "../src/chat/transcript-render-helpers";
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
 import { Text } from "../src/components/text";
 import { TranscriptContainer } from "../src/chrome/transcript-container";
 import { md } from "../src/native/describe";
+import { TspDocument } from "../src/native/apply";
+import { Reconciler } from "../src/native/reconcile";
 import type { DescribeContext, NativeNode } from "../src/native/node";
 import { COMPOSER_DEFAULTS, Composer } from "../src/prompt/composer";
 import { initTheme } from "../src/theme";
@@ -16,6 +20,7 @@ import { Container } from "../src/tui";
 import type { TUI } from "../src/tui";
 import { setTerminalImageProtocol, TERMINAL } from "../src/terminal-capabilities";
 import type { CoordinationDetails } from "../src/tools/wait";
+import type { TodoPhase } from "../src/tools/todo";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
@@ -65,6 +70,26 @@ function nodes(root: NativeNode): NativeNode[] {
 	return result;
 }
 
+/** Materialize component boundaries exactly as the native terminal receives them. */
+function nativeTranscriptView(transcript: TranscriptContainer): string {
+	const surface = "s:compact-transcript";
+	const document = new TspDocument(surface);
+	const ops = new Reconciler(surface).reconcile({ main: transcript.nativeBlocks(), dock: [], layer: [] }, toolCx);
+	expect(document.applyFrame({ sf: surface, s: 1, ops })).toEqual([]);
+	return JSON.stringify(document.snapshot());
+}
+
+function asyncMessage(jobs: Record<string, unknown>[]): CustomMessage<{ jobs: Record<string, unknown>[] }> {
+	return {
+		role: "custom",
+		customType: "async-result",
+		content: "ORIGINAL_DELIVERY",
+		display: true,
+		details: { jobs },
+		timestamp: 1,
+	};
+}
+
 beforeAll(async () => {
 	await initTheme();
 });
@@ -77,6 +102,242 @@ afterEach(() => {
 });
 
 describe("compact transcript activity", () => {
+	it("aggregates standalone deliveries by trusted execution state and retains warning boundaries natively", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const message = asyncMessage([
+			{ jobId: "standalone-a", type: "task", status: "completed" },
+			{ jobId: "standalone-b", type: "bash", status: "completed" },
+			{ jobId: "standalone-a", type: "task", status: "completed" },
+			{ jobId: "untrusted-state", type: "task", label: "completed" },
+			{ jobId: "standalone-a", type: "task", status: "completed", meta: { artifactError: "write" } },
+			{ jobId: "standalone-b", type: "bash", status: "completed" },
+		]);
+		const original = JSON.stringify(message);
+		const block = buildAsyncResultBlock(message);
+		const surface = "s:standalone-delivery";
+		const document = new TspDocument(surface);
+		const reconciler = new Reconciler(surface);
+		let sequence = 0;
+		const nativeView = () => {
+			const ops = reconciler.reconcile({ main: [block], dock: [], layer: [] }, toolCx);
+			expect(document.applyFrame({ sf: surface, s: ++sequence, ops })).toEqual([]);
+			expect(reconciler.fallbackCount).toBe(0);
+			return JSON.stringify(document.snapshot());
+		};
+		for (const view of [Bun.stripANSI(block.render(160).join("\n")), nativeView()]) {
+			expect(view.match(/后台任务已完成 2 项/g)).toHaveLength(1);
+			expect(view.match(/后台任务已完成 1 项/g)).toHaveLength(2);
+			expect(view).toContain("Background job status unknown");
+			expect(view).toContain("untrusted-state");
+			expect(view).not.toContain("standalone-a");
+			expect(view).not.toContain("standalone-b");
+			expect(view.match(/artifact write failed/g)).toHaveLength(1);
+			expect(view.indexOf("后台任务已完成 2 项")).toBeLessThan(view.indexOf("untrusted-state"));
+			expect(view.indexOf("untrusted-state")).toBeLessThan(view.indexOf("后台任务已完成 1 项"));
+			expect(view.indexOf("后台任务已完成 1 项")).toBeLessThan(view.indexOf("artifact write failed"));
+			expect(view.lastIndexOf("后台任务已完成 1 项")).toBeGreaterThan(view.indexOf("artifact write failed"));
+		}
+		expect(nativeView()).toContain("omp.status-block");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		for (const view of [Bun.stripANSI(block.render(160).join("\n")), nativeView()]) {
+			expect(view.match(/Background job completed/g)).toHaveLength(6);
+			expect(view.match(/standalone-a/g)).toHaveLength(3);
+			expect(view.match(/standalone-b/g)).toHaveLength(2);
+			expect(view).toMatch(/untrusted-state[^]*standalone-a[^]*artifact write failed[^]*standalone-b/);
+			expect(view).not.toContain("后台任务已完成");
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		expect(nativeView().match(/后台任务已完成 2 项/g)).toHaveLength(1);
+		expect(JSON.stringify(message)).toBe(original);
+	});
+
+	it("updates one background count by execution ID without splitting a continuous tool fold", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const messages: CustomMessage<{ jobs: Record<string, unknown>[] }>[] = [];
+		for (let index = 0; index < 5; index++) {
+			const tool = new ToolExecutionComponent("read", { path: `continuous-${index}.ts` }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(tool);
+			tool.updateResult({ content: [{ type: "text", text: "PRIVATE_SUCCESS" }] });
+			transcript.addChild(tool);
+			const message = asyncMessage([
+				{
+					jobId: index === 1 ? "execution-0" : `execution-${index}`,
+					type: index % 2 ? "bash" : "task",
+					status: "completed",
+					label: "same name",
+				},
+			]);
+			messages.push(message);
+			transcript.addChild(buildAsyncResultBlock(message));
+			if (index === 0) transcript.render(120);
+		}
+		const originals = JSON.stringify(messages);
+		for (const view of [Bun.stripANSI(transcript.render(120).join("\n")), nativeTranscriptView(transcript)]) {
+			expect(view.match(/后台任务已完成 4 项/g)).toHaveLength(1);
+			expect(view.match(/已收起 3 次成功调用/g)).toHaveLength(1);
+			expect(view).toContain("continuous-3.ts");
+			expect(view).toContain("continuous-4.ts");
+			expect(view).not.toContain("continuous-0.ts");
+			expect(view).not.toContain("execution-");
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		for (const view of [transcript.render(120).join("\n"), nativeTranscriptView(transcript)]) {
+			expect(view.match(/Background job completed/g)).toHaveLength(5);
+			expect(view).toContain("execution-0");
+			expect(view).toContain("continuous-0.ts");
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		expect(Bun.stripANSI(transcript.render(120).join("\n")).match(/后台任务已完成 4 项/g)).toHaveLength(1);
+		expect(JSON.stringify(messages)).toBe(originals);
+	});
+
+	it("keeps mixed delivery states and independent warnings as visible chronological boundaries", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		const first = asyncMessage([
+			{ jobId: "before-a", type: "task", status: "completed" },
+			{ jobId: "before-b", type: "bash", status: "completed" },
+			{ jobId: "failed-id", type: "task", status: "failed" },
+			{ jobId: "cancelled-id", type: "bash", status: "cancelled" },
+			{ jobId: "unknown-status", type: "task" },
+			{ type: "task", status: "completed" },
+			{ jobId: "unknown-type", status: "completed" },
+			{ jobId: "running-id", type: "task", status: "running" },
+			{ jobId: "artifact-id", type: "bash", status: "completed", meta: { artifactError: "write" } },
+			{
+				jobId: "schema-id",
+				type: "task",
+				status: "completed",
+				schema: { source: "caller", mode: "permissive", status: "invalid", error: "SCHEMA_DIAGNOSTIC" },
+			},
+			{ jobId: "after-a", type: "task", status: "completed" },
+		]);
+		transcript.addChild(buildAsyncResultBlock(first));
+		transcript.addChild(
+			buildAsyncResultBlock(asyncMessage([{ jobId: "after-b", type: "bash", status: "completed" }])),
+		);
+		transcript.addChild(new Text("ASSISTANT_BOUNDARY", 0, 0));
+		transcript.addChild(
+			buildAsyncResultBlock(asyncMessage([{ jobId: "after-prose", type: "task", status: "completed" }])),
+		);
+		for (const view of [Bun.stripANSI(transcript.render(180).join("\n")), nativeTranscriptView(transcript)]) {
+			expect(view.match(/后台任务已完成 2 项/g)).toHaveLength(2);
+			expect(view.match(/后台任务已完成 1 项/g)).toHaveLength(3);
+			for (const id of ["failed-id", "cancelled-id", "unknown-status", "unknown-type", "running-id"]) {
+				expect(view).toContain(id);
+			}
+			expect(view).toContain("Background job failed");
+			expect(view).toContain("Background job cancelled");
+			expect(view.match(/Background job status unknown/g)).toHaveLength(4);
+			expect(view).toContain("artifact write failed");
+			expect(view).toContain("SCHEMA_DIAGNOSTIC");
+			expect(view.indexOf("artifact write failed")).toBeLessThan(view.indexOf("SCHEMA_DIAGNOSTIC"));
+			expect(view.lastIndexOf("后台任务已完成 2 项")).toBeLessThan(view.indexOf("ASSISTANT_BOUNDARY"));
+			expect(view.lastIndexOf("后台任务已完成 1 项")).toBeGreaterThan(view.indexOf("ASSISTANT_BOUNDARY"));
+		}
+	});
+
+	it("replays a retired background summary when another execution finishes", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		transcript.addChild(
+			buildAsyncResultBlock(asyncMessage([{ jobId: "retired-a", type: "task", status: "completed" }])),
+		);
+		transcript.addChild(
+			buildAsyncResultBlock(asyncMessage([{ jobId: "retired-b", type: "bash", status: "completed" }])),
+		);
+		const history: string[] = [];
+		for (let attempt = 0; attempt < 8; attempt++) {
+			const batch = transcript.peekFlushBatch(120);
+			if (!batch) break;
+			history.push(...batch.rows);
+			transcript.acknowledgeFinalizedBatch(batch.id);
+		}
+		expect(Bun.stripANSI(history.join("\n")).match(/后台任务已完成 2 项/g)).toHaveLength(1);
+		transcript.addChild(
+			buildAsyncResultBlock(asyncMessage([{ jobId: "retired-c", type: "task", status: "completed" }])),
+		);
+		const replacement = transcript.peekFlushBatch(120);
+		expect(replacement?.clearScrollback).toBe(true);
+		expect(Bun.stripANSI(replacement!.rows.join("\n")).match(/后台任务已完成 3 项/g)).toHaveLength(1);
+	});
+
+	it.each(["prose", "file preview", "failed delivery", "artifact warning"] as const)(
+		"does not fold tools or background completions across a %s boundary",
+		boundary => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const transcript = new TranscriptContainer();
+			for (let side = 0; side < 2; side++) {
+				if (side === 1) {
+					if (boundary === "prose") {
+						transcript.addChild(new Text("VISIBLE_BOUNDARY", 0, 0));
+					} else if (boundary === "file preview") {
+						const preview = new ToolExecutionComponent(
+							"write",
+							{ path: "boundary.ts", content: "VISIBLE_BOUNDARY" },
+							{},
+							undefined,
+							{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+						);
+						components.push(preview);
+						preview.updateResult({ content: [{ type: "text", text: "File updated" }] });
+						preview.setExpanded(true);
+						transcript.addChild(preview);
+					} else {
+						transcript.addChild(
+							buildAsyncResultBlock(
+								asyncMessage([
+									{
+										jobId: "VISIBLE_BOUNDARY",
+										type: boundary === "failed delivery" ? "task" : "eval",
+										status: boundary === "failed delivery" ? "failed" : "completed",
+										...(boundary === "artifact warning" ? { meta: { artifactError: "open" } } : {}),
+									},
+								]),
+							),
+						);
+					}
+				}
+				for (let index = 0; index < 3; index++) {
+					const tool = new ToolExecutionComponent("read", { path: `segment-${side}-${index}.ts` }, {}, undefined, {
+						requestRender() {},
+						requestComponentRender() {},
+						resetDisplay() {},
+					});
+					components.push(tool);
+					tool.updateResult({ content: [{ type: "text", text: "PRIVATE_SUCCESS" }] });
+					transcript.addChild(tool);
+					transcript.addChild(
+						buildAsyncResultBlock(
+							asyncMessage([
+								{
+									jobId: `segment-job-${side}-${index}`,
+									type: "task",
+									status: "completed",
+								},
+							]),
+						),
+					);
+				}
+			}
+			for (const view of [Bun.stripANSI(transcript.render(160).join("\n")), nativeTranscriptView(transcript)]) {
+				expect(view.match(/后台任务已完成 3 项/g)).toHaveLength(2);
+				expect(view.match(/已收起 1 次成功调用/g)).toHaveLength(2);
+				expect(view).toContain("VISIBLE_BOUNDARY");
+				for (let side = 0; side < 2; side++) {
+					expect(view).not.toContain(`segment-${side}-0.ts`);
+					expect(view).toContain(`segment-${side}-1.ts`);
+					expect(view).toContain(`segment-${side}-2.ts`);
+				}
+			}
+		},
+	);
+
 	it("keeps failure causes and file identities visible in narrow rows on both render paths", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const path = `F:/projects/${"deep/".repeat(30)}missing.ts:2-4`;
@@ -1165,6 +1426,19 @@ describe("compact transcript activity", () => {
 		hideToolActivity => {
 			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity });
 			const before = { ...chatTranscriptDisplayPreferences };
+			const todoPhases: TodoPhase[] = [
+				{
+					name: "History",
+					tasks: [
+						{ content: "history queued", status: "pending" },
+						{ content: "history running", status: "in_progress" },
+						{ content: "history waiting", status: "blocked", blocker: "external input" },
+						{ content: "history finished", status: "completed" },
+						{ content: "history cancelled", status: "abandoned" },
+					],
+				},
+			];
+			const originalTodos = structuredClone(todoPhases);
 			const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
 			const builder = new ChatTranscriptBuilder({
 				// The builder only consumes these render callbacks from the host TUI.
@@ -1184,33 +1458,49 @@ describe("compact transcript activity", () => {
 							{ type: "toolCall", id: "shell", name: "bash", arguments: { command: "echo shell" } },
 							{ type: "toolCall", id: "read", name: "read", arguments: { path: "history.txt" } },
 							{ type: "toolCall", id: "mcp", name: "mcp__fixture_probe", arguments: { query: "history" } },
+							{ type: "toolCall", id: "todo", name: "todo", arguments: { op: "view" } },
 						]),
 					},
-					...(["shell", "read", "mcp"] as const).map(id => ({
+					...(["shell", "read", "mcp", "todo"] as const).map(id => ({
 						type: "message" as const,
 						id,
-						parentId: { shell: "calls", read: "shell", mcp: "read" }[id],
+						parentId: { shell: "calls", read: "shell", mcp: "read", todo: "mcp" }[id],
 						timestamp: "2026-10-18T00:00:00.000Z",
 						message: {
 							role: "toolResult" as const,
 							toolCallId: id,
-							toolName: { shell: "bash", read: "read", mcp: "mcp__fixture_probe" }[id],
+							toolName: { shell: "bash", read: "read", mcp: "mcp__fixture_probe", todo: "todo" }[id],
 							content: [{ type: "text" as const, text: `HISTORY_${id}_BODY` }],
+							...(id === "todo" ? { details: { phases: todoPhases, storage: "session" } } : {}),
 							isError: false,
 							timestamp: 1,
 						},
 					})),
 				]);
+				builder.append(
+					["history-job-a", "history-job-b"].map((id, index) => ({
+						type: "message" as const,
+						id,
+						parentId: index === 0 ? "todo" : "history-job-a",
+						timestamp: "2026-10-18T00:00:00.000Z",
+						message: asyncMessage([{ jobId: id, type: "task", status: "completed" }]),
+					})),
+				);
 				builder.setExpanded(true);
 				const views = [
 					Bun.stripANSI(builder.container.render(120).join("\n")),
-					builder.container
-						.nativeBlocks()
-						.map(block => JSON.stringify(block.describe?.(toolCx)))
-						.join("\n"),
+					nativeTranscriptView(builder.container),
 				];
 				for (const view of views) {
 					for (const id of ["shell", "read", "mcp"]) expect(view).toContain(`HISTORY_${id}_BODY`);
+					for (const task of todoPhases[0].tasks) expect(view).toContain(task.content);
+					for (const token of ["[active]", "[blocked]", "[abandoned]", "muted del"]) {
+						expect(view).not.toContain(token);
+					}
+					expect(view.match(/Background job completed/g)).toHaveLength(2);
+					expect(view).toContain("history-job-a");
+					expect(view).toContain("history-job-b");
+					expect(view).not.toContain("后台任务已完成");
 					expect(view).not.toContain("已收起");
 				}
 				const main = new ToolExecutionComponent("bash", { command: "echo main" }, {}, undefined, ui);
@@ -1221,6 +1511,7 @@ describe("compact transcript activity", () => {
 				expect(main.render(100).join("\n")).not.toContain("PRIVATE_MAIN_BODY");
 				expect(JSON.stringify(main.describe(toolCx))).not.toContain("PRIVATE_MAIN_BODY");
 				expect(chatTranscriptDisplayPreferences).toEqual(before);
+				expect(todoPhases).toEqual(originalTodos);
 			} finally {
 				builder.dispose();
 			}

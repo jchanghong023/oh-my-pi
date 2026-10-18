@@ -585,7 +585,7 @@ export class ChatTranscriptBuilder {
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): void {
 		if (!message.display) return;
 		if (message.customType === "async-result") {
-			const component = buildAsyncResultBlock(message);
+			const component = buildAsyncResultBlock(message, this.#deps.toolActivityDisplay?.compactToolActivity);
 			this.container.addChild(component);
 			return;
 		}

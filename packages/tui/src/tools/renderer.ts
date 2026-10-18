@@ -14,6 +14,8 @@ export interface RenderResultOptions {
 	expanded: boolean;
 	/** Whether this is a partial/streaming result */
 	isPartial: boolean;
+	/** Effective per-component compact preference; absent values use the renderer's display default. */
+	compactToolActivity?: boolean;
 	/** Current spinner frame index for animated elements (0-9, only provided during partial results) */
 	spinnerFrame?: number;
 	/**

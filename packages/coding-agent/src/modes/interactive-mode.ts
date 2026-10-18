@@ -3761,6 +3761,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				}
 			}
 			this.chatContainer.setToolActivityVisible(!hideToolActivity);
+			this.#renderTodoList();
 			if (hideToolActivity || compactToolActivity) this.ui.clearInlineImages();
 			// Recreate settled blocks and replace retired rows using the new presentation.
 			rebuildChat = true;
@@ -4123,13 +4124,14 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (liveSet.has(child)) liveComponents.push(child);
 			}
 		}
-		this.chatContainer.clear();
 		// Live display collapses to the compacted transcript tail unless the
 		// user opted into the full inline history; export/resume callers choose
 		// their own mode.
 		const context = this.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 		});
+		const failureWarnings = this.#uiHelpers.collectToolFailureWarnings(context);
+		this.chatContainer.clear();
 		const preservedLiveToolCallIds = new Set<string>();
 		// A preserved pending-tool component whose result has already landed in
 		// the replayed transcript is re-rendered by `renderSessionContext` itself
@@ -4202,6 +4204,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		for (const child of liveComponents) {
 			this.chatContainer.addChild(child);
 		}
+		for (const warning of failureWarnings) this.chatContainer.addChild(warning);
 		// `renderSessionContext` clears `pendingTools` at start AND end so the
 		// reconstructed historical tool components don't leak into live tracking.
 		// Restore the in-flight entries afterwards so the next streamed tool-call
@@ -4238,21 +4241,46 @@ export class InteractiveMode implements InteractiveModeContext {
 		});
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, matched: boolean, compact: boolean): string {
 		const checkbox = theme.checkbox;
 		const marker = formatHudNoteMarker(todo.notes?.length ?? 0);
 		switch (todo.status) {
 			case "completed":
-				return theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`) + marker;
+				return (
+					theme.fg(
+						compact ? "muted" : "success",
+						`${prefix}${checkbox.checked} ${chalk.strikethrough(todo.content)}`,
+					) + marker
+				);
 			case "in_progress":
-				return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
+				return (
+					theme.fg("accent", `${prefix}${checkbox.unchecked} ${compact ? "[active] " : ""}${todo.content}`) +
+					marker
+				);
 			case "abandoned":
-				return theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(todo.content)}`) + marker;
+				return (
+					theme.fg(
+						compact ? "muted" : "error",
+						`${prefix}${checkbox.unchecked} ${compact ? "[abandoned] " : ""}${chalk.strikethrough(todo.content)}`,
+					) + marker
+				);
 			case "blocked":
-				return theme.fg("warning", `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`) + marker;
+				return (
+					theme.fg(
+						"warning",
+						compact
+							? `${prefix}${checkbox.unchecked} [blocked] ${todo.content}`
+							: `${prefix}${checkbox.unchecked} ${todo.content} (blocked)`,
+					) + marker
+				);
 			default:
-				if (matched) return theme.fg("accent", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
-				return theme.fg("dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
+				if (matched) {
+					return (
+						theme.fg("accent", `${prefix}${checkbox.unchecked} ${compact ? "[active] " : ""}${todo.content}`) +
+						marker
+					);
+				}
+				return theme.fg(compact ? "text" : "dim", `${prefix}${checkbox.unchecked} ${todo.content}`) + marker;
 		}
 	}
 
@@ -4469,6 +4497,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const phases = this.todoPhases.filter(phase => phase.tasks.length > 0);
 		if (phases.length === 0) return;
 		const expanded = this.todoExpanded;
+		const compact =
+			cfgDisplayCompactToolActivity.get(this.settings) && !cfgDisplayHideToolActivity.get(this.settings);
 		const multiPhase = phases.length > 1;
 		const activeIdx = phases.indexOf(this.#getActivePhase(phases) ?? phases[0]);
 		// Fixed budgets keep the HUD bounded regardless of plan size / progress.
@@ -4490,7 +4520,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					{
 						items: phase.tasks,
 						expanded: true,
-						renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
+						renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo), compact),
 					},
 					theme,
 				);
@@ -4501,7 +4531,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					items: selection.items,
 					itemType: "task",
 					trailingSummary: selection.summary,
-					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo)),
+					renderItem: todo => this.#formatTodoLine(todo, "", isMatched(todo), compact),
 				},
 				theme,
 			);
@@ -4579,19 +4609,37 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.todoContainer.addChild(new Text(lines.join("\n"), 1, 0));
 
 		// Native: the same stage window as a tree, overall progress as a bar.
+		const describeTaskLabel = (todo: TodoItem): TspSpan[] => {
+			const active = todo.status === "in_progress" || (todo.status === "pending" && isMatched(todo));
+			const token = isClosedTodo(todo)
+				? compact
+					? "muted del"
+					: todo.status === "completed"
+						? "success del"
+						: "error del"
+				: todo.status === "blocked"
+					? "warning"
+					: active
+						? "accent"
+						: compact
+							? "text"
+							: "dim";
+			const content = compact
+				? active
+					? `[active] ${todo.content}`
+					: todo.status === "blocked"
+						? `[blocked] ${todo.content}`
+						: todo.status === "abandoned"
+							? `[abandoned] ${todo.content}`
+							: todo.content
+				: todo.status === "blocked"
+					? `${todo.content} (blocked)`
+					: todo.content;
+			return [span(content, token)];
+		};
 		const describeTask = (todo: TodoItem, id: string): TspTreeNode => {
 			const done = todo.status === "completed";
-			const token =
-				todo.status === "completed"
-					? "success del"
-					: todo.status === "abandoned"
-						? "error del"
-						: todo.status === "blocked"
-							? "warning"
-							: todo.status === "in_progress" || isMatched(todo)
-								? "accent"
-								: "dim";
-			const label: TspSpan[] = [span(todo.status === "blocked" ? `${todo.content} (blocked)` : todo.content, token)];
+			const label = describeTaskLabel(todo);
 			const notes = todo.notes?.length ?? 0;
 			if (notes > 0) label.push(span(` +${notes}`, "dim em"));
 			return { id, label, icon: done ? "check" : "circle" };
@@ -4644,7 +4692,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const note = todo.blocker ?? todo.notes?.at(-1);
 				return {
 					id: `${phaseIndex}.${taskIndex}`,
-					text: todo.content,
+					text: compact ? describeTaskLabel(todo) : todo.content,
 					status:
 						todo.status === "completed"
 							? "done"
@@ -4685,12 +4733,20 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		const totalTasks = phases.reduce((sum, phase) => sum + phase.tasks.length, 0);
 		const closedTasks = phases.reduce((sum, phase) => sum + phase.tasks.filter(isClosedTodo).length, 0);
-		const activeTask = nextActionableTask(phases);
+		const compact =
+			cfgDisplayCompactToolActivity.get(this.settings) && !cfgDisplayHideToolActivity.get(this.settings);
+		const activeTask =
+			nextActionableTask(phases) ??
+			(compact ? phases.flatMap(phase => phase.tasks).find(todo => !isClosedTodo(todo)) : undefined);
 
 		const header = `${theme.bold(theme.fg("accent", "TODO"))} ${theme.fg("dim", `${closedTasks}/${totalTasks}`)}`;
 		const taskStr = activeTask
-			? this.#formatTodoLine(activeTask, "", isMatched(activeTask))
-			: theme.fg("success", `${theme.checkbox.checked} done`);
+			? this.#formatTodoLine(activeTask, "", isMatched(activeTask), compact)
+			: compact
+				? phases.some(phase => phase.tasks.some(todo => todo.status === "abandoned"))
+					? theme.fg("muted", "closed · includes abandoned")
+					: theme.fg("muted", `${theme.checkbox.checked} done`)
+				: theme.fg("success", `${theme.checkbox.checked} done`);
 		const rightLine = `${header} ${theme.fg("dim", "·")} ${taskStr}`;
 
 		const rightPad = " ";
@@ -7938,7 +7994,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 
-	showWarning(message: string, options?: { hideWithToolActivity?: boolean }): void {
+	showWarning(message: string, options?: Parameters<InteractiveModeContext["showWarning"]>[1]): void {
 		this.#uiHelpers.showWarning(message, options);
 	}
 

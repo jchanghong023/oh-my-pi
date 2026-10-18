@@ -8,6 +8,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { type Component } from "../tui";
 import { formatBytes, formatDuration } from "@oh-my-pi/pi-utils";
 import type { JobSnapshot } from "../tools/wait";
+import type { StructuredSubagentOutput } from "../tools/task";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
+import { col } from "../native/describe";
+import type { NativeNode } from "../native/node";
 import type { DaemonSnapshot } from "../tools/daemon";
 import { type CustomMessage, type FileMentionMessage, resolveAbortLabel, shouldRenderAbortReason } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
@@ -22,60 +26,167 @@ import { theme } from "../theme";
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
+/** Background completion rows retain their originals while compact mode projects a segment-local count. */
+class AsyncResultBlock extends ToolActivityContainer {
+	readonly #compactRows: readonly TranscriptStatusRow[];
+	readonly #jobIds: readonly (string | undefined)[];
+	readonly #compactOverride: boolean | undefined;
+	#counts: readonly number[];
+	#compactBlock: TranscriptStatusBlock;
+	#visible = true;
+
+	constructor(
+		original: TranscriptStatusBlock,
+		rows: readonly TranscriptStatusRow[],
+		jobIds: readonly (string | undefined)[],
+		compactOverride?: boolean,
+	) {
+		super(original);
+		this.#compactRows = rows;
+		this.#jobIds = jobIds;
+		this.#compactOverride = compactOverride;
+		this.#counts = [];
+		this.#compactBlock = new TranscriptStatusBlock([]);
+		const counts = jobIds.map(() => 0);
+		const identities = new Set<string>();
+		let anchor = -1;
+		for (let index = 0; index < jobIds.length; index++) {
+			const id = jobIds[index];
+			if (id === undefined) {
+				anchor = -1;
+				identities.clear();
+			} else {
+				if (anchor < 0) anchor = index;
+				if (!identities.has(id)) {
+					identities.add(id);
+					counts[anchor]!++;
+				}
+			}
+		}
+		this.setCompactBackgroundCounts(counts);
+	}
+
+	isCompactToolActivity(): boolean {
+		return this.#compactOverride ?? displayPreferences.compactToolActivity;
+	}
+
+	/** Undefined slots are independent visible boundaries, never successful completions. */
+	getCompactBackgroundJobIds(): readonly (string | undefined)[] {
+		return this.#jobIds;
+	}
+
+	setCompactBackgroundCounts(counts: readonly number[]): boolean {
+		if (counts.every((count, index) => count === this.#counts[index])) return false;
+		this.#counts = counts;
+		const rows: TranscriptStatusRow[] = [];
+		for (let index = 0; index < this.#compactRows.length; index++) {
+			if (this.#jobIds[index] === undefined) {
+				rows.push(this.#compactRows[index]!);
+			} else if (counts[index]! > 0) {
+				rows.push({
+					parts: [{ text: `${theme.status.done} 后台任务已完成 ${counts[index]} 项`, color: "success" }],
+				});
+			}
+		}
+		this.#compactBlock = new TranscriptStatusBlock(rows);
+		this.invalidate();
+		return true;
+	}
+
+	override setToolActivityVisible(visible: boolean): void {
+		this.#visible = visible;
+		super.setToolActivityVisible(visible);
+	}
+
+	override render(width: number): readonly string[] {
+		if (!this.isCompactToolActivity()) return super.render(width);
+		return this.#visible ? this.#compactBlock.render(width) : [];
+	}
+
+	override describe(): NativeNode {
+		if (!this.isCompactToolActivity()) return super.describe();
+		return col(
+			[this.#compactBlock],
+			this.#visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true },
+		);
+	}
+}
+
 /**
- * Render an `async-result` custom message (a completed background bash/task job,
- * or a batch of them) as a transcript block of one "Background job completed"
- * row per job.
+ * Project actual async delivery identities/states, without changing the persisted
+ * message or the original clean/detailed presentation.
  */
-export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
-	const details = (
-		message as CustomMessage<{
-			jobId?: string;
-			type?: JobSnapshot["type"];
-			label?: string;
-			durationMs?: number;
-			jobs?: Array<{
-				jobId?: string;
-				type?: JobSnapshot["type"];
-				label?: string;
-				durationMs?: number;
-				meta?: OutputMeta;
-			}>;
-			meta?: OutputMeta;
-		}>
-	).details;
-	const jobs =
-		details?.jobs && details.jobs.length > 0
-			? details.jobs
-			: [
-					{
-						jobId: details?.jobId,
-						type: details?.type,
-						label: details?.label,
-						durationMs: details?.durationMs,
-					},
-				];
+export function buildAsyncResultBlock(
+	message: CustomOrHookMessage,
+	compactToolActivity?: boolean,
+): ToolActivityContainer {
+	type JobDetails = {
+		jobId?: string;
+		type?: JobSnapshot["type"];
+		status?: JobSnapshot["status"];
+		label?: string;
+		durationMs?: number;
+		meta?: OutputMeta;
+		schema?: StructuredSubagentOutput;
+	};
+	const details = (message as CustomMessage<JobDetails & { jobs?: JobDetails[] }>).details;
+	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
+	const compactRows: TranscriptStatusRow[] = [];
+	const jobIds: (string | undefined)[] = [];
+	const addWarning = (row: TranscriptStatusRow, original = true) => {
+		if (original) rows.push(row);
+		compactRows.push(row);
+		jobIds.push(undefined);
+	};
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
 		const typeLabel = job.type ? `[${job.type}]` : "[job]";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		rows.push({
+		const original: TranscriptStatusRow = {
 			parts: [
 				{ text: `${theme.status.done} Background job completed`, color: "success" },
 				{ text: typeLabel, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
-		});
+		};
+		rows.push(original);
+		const identified =
+			typeof job.jobId === "string" &&
+			job.jobId.trim().length > 0 &&
+			(job.type === "task" || job.type === "bash" || job.type === "eval");
+		const completed = identified && job.status === "completed";
+		const status = completed
+			? { text: `${theme.status.done} Background job completed`, color: "success" as const }
+			: job.status === "failed"
+				? { text: `${theme.status.error} Background job failed`, color: "error" as const }
+				: job.status === "cancelled"
+					? { text: `${theme.status.warning} Background job cancelled`, color: "warning" as const }
+					: { text: "Background job status unknown", color: "warning" as const };
+		compactRows.push({ parts: [status, ...original.parts.slice(1)] });
+		jobIds.push(completed && (job.type === "task" || job.type === "bash") ? job.jobId : undefined);
 		if (job.meta?.artifactError) {
-			rows.push({ parts: [{ text: formatArtifactErrorNotice(job.meta.artifactError), color: "warning" }] });
+			addWarning({ parts: [{ text: formatArtifactErrorNotice(job.meta.artifactError), color: "warning" }] });
+		}
+		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
+			addWarning(
+				{
+					parts: [
+						{
+							text: `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`,
+							color: "warning",
+						},
+					],
+				},
+				false,
+			);
 		}
 	}
-	if (details?.meta?.artifactError) {
-		rows.push({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
+	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
+		addWarning({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
 	}
-	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, jobIds, compactToolActivity);
 }
 
 /**

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Compact mode groups successful background task/shell notifications by execution identity without fragmenting tool folds, preserves exceptional notifications, and makes active/blocked todos distinct while keeping closed items readable.
 - Compact tool runs keep the latest two successful calls and fold older successes into one count, preserving running calls, failures, prose boundaries, and full detailed history.
 - The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
 - The compact thinking tail uses a bold accented heading, muted context and guides, a highlighted latest-line guide, and an aligned dim summary between tool runs.
@@ -24,6 +25,7 @@
 
 ### Fixed
 
+- Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.
 - Compact thinking summaries drop their left margin when it would hide all text on very narrow terminals, preserving whole Chinese characters and emoji.
 - Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
 - Keep hashline-wrapped internal device calls compact without hiding real file-write previews.

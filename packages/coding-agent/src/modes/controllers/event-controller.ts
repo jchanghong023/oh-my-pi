@@ -1496,6 +1496,11 @@ export class EventController {
 		}
 	}
 
+	/** A completion that outran its card must retain its only visible failure during rebuild. */
+	hasHeldToolFailure(toolCallId: string): boolean {
+		return this.#orphanedToolCompletions.get(toolCallId)?.isError === true;
+	}
+
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
@@ -2272,7 +2277,7 @@ export class EventController {
 			const detail = textContent ? previewLine(sanitizeText(textContent), TRUNCATE_LENGTHS.LINE) : "";
 			this.ctx.showWarning(
 				`Todo update failed${detail ? `: ${detail}` : ". Progress may be stale until todo succeeds."}`,
-				{ hideWithToolActivity: true },
+				{ hideWithToolActivity: true, toolFailure: { toolCallId: event.toolCallId } },
 			);
 		}
 		// Plan approval rides a `write` to xd://propose: the dispatch metadata on

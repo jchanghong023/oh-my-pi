@@ -485,6 +485,7 @@ export class ToolExecutionComponent extends Container {
 		spinnerFrame?: number;
 		expanded: boolean;
 		isPartial: boolean;
+		compactToolActivity?: boolean;
 		argsComplete?: boolean;
 		executionStarted?: boolean;
 		renderContext?: Record<string, unknown>;
@@ -889,6 +890,18 @@ export class ToolExecutionComponent extends Container {
 		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
 	}
 
+	/** Presentation identity remains available while a streamed call is still pending. */
+	get toolCallId(): string | undefined {
+		return this.#toolCallId;
+	}
+
+	/** Exact identity of a failed execution whose compact row is actually present. */
+	getCompactToolFailureId(): string | undefined {
+		return this.#toolActivityVisible && this.#compactToolActivity && this.#result?.isError && !this.#isPartial
+			? this.#toolCallId
+			: undefined;
+	}
+
 	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
 		if (this.#compactKeep === keep && this.#compactSummary === summary && this.#compactFailures === failures)
 			return false;
@@ -1185,7 +1198,8 @@ export class ToolExecutionComponent extends Container {
 				this.#result.content.find(block => block.type === "text" && block.text)?.text ?? "",
 			);
 			const failure = toolName === "bash" ? compactBashFailure(details, errorText) : compactToolFailure(errorText);
-			detail = `${failure}${detail ? ` · ${detail}` : ""}`;
+			const stale = this.#toolName === "todo" ? " · Progress may be stale" : "";
+			detail = `${failure}${stale}${detail ? ` · ${detail}` : ""}`;
 		}
 		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
 	}
@@ -1382,6 +1396,7 @@ export class ToolExecutionComponent extends Container {
 			media,
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
+			compactToolActivity: this.#compactToolActivity,
 			argsComplete: this.#argsComplete,
 			executionStarted: this.#executionStarted,
 			elapsedMs: this.#elapsedMs(status),
@@ -1664,6 +1679,7 @@ export class ToolExecutionComponent extends Container {
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
+		this.#renderState.compactToolActivity = this.#compactToolActivity;
 		this.#renderState.argsComplete = this.#argsComplete;
 		this.#renderState.executionStarted = this.#executionStarted;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;

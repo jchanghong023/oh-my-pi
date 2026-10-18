@@ -429,7 +429,8 @@ describe("AgentSession owner-routed async delivery", () => {
 		await initTheme(false, undefined, undefined, "dark", "light");
 		const persisted = JSON.parse(JSON.stringify(batch)) as typeof batch;
 		for (const message of [batch, persisted]) {
-			const rendered = buildAsyncResultBlock(message)
+			// This contract checks each original job identity and its warning, not the compact projection.
+			const rendered = buildAsyncResultBlock(message, false)
 				.render(160)
 				.map(line => Bun.stripANSI(line))
 				.join("\n");
