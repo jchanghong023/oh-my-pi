@@ -62,14 +62,16 @@ struct ProcRegionWithPathInfo {
 	path:       [libc::c_char; 1024],
 }
 
-/// Whether `pid` maps the Tk toolkit.
+/// Whether `pid` maps a Tk toolkit that places presses at the hardware
+/// pointer: Tk 8.6 and later, or a Tk whose version cannot be read.
 ///
-/// Tk's macOS backend translates every mouse event through the global
+/// Tk 9's macOS backend translates every mouse event through the global
 /// hardware pointer position rather than the event's own location, so a
-/// pid-routed background click lands wherever the user's pointer happens to
-/// be. Detection walks the target's file-backed regions (same-user, no task
-/// port); a Tk image loaded only from the dyld shared cache is invisible here
-/// and falls through to ordinary delivery.
+/// pid-routed background press lands wherever the user's pointer happens to
+/// be, or nowhere; macOS's own Tk 8.5 places it at the event location.
+/// Detection walks the target's file-backed regions (same-user, no task
+/// port); a Tk image loaded only from the dyld shared cache, as macOS's Tk 8.5
+/// is, is invisible here, so Python's `_tkinter` is judged by the Tk it links.
 pub(super) fn reads_hardware_pointer(pid: libc::pid_t) -> bool {
 	walk_regions(pid, PROC_PIDREGIONPATHINFO2)
 		.or_else(|| walk_regions(pid, PROC_PIDREGIONPATHINFO))
@@ -83,6 +85,8 @@ fn walk_regions(pid: libc::pid_t, flavor: libc::c_int) -> Option<bool> {
 	let size_arg = libc::c_int::try_from(size).ok()?;
 	let mut address = 0u64;
 	let mut read_any = false;
+	// An image maps several segments; its verdict is read once.
+	let mut cleared = String::new();
 	for _ in 0..MAX_REGIONS {
 		// SAFETY: An all-zero bit pattern is valid for this plain C struct.
 		let mut info: ProcRegionWithPathInfo = unsafe { mem::zeroed() };
@@ -95,9 +99,14 @@ fn walk_regions(pid: libc::pid_t, flavor: libc::c_int) -> Option<bool> {
 		}
 		read_any = true;
 		// SAFETY: The kernel NUL-terminates `path` within its MAXPATHLEN buffer.
-		let path = unsafe { CStr::from_ptr(info.path.as_ptr()) };
-		if is_tk_image(&path.to_string_lossy()) {
-			return Some(true);
+		let path = unsafe { CStr::from_ptr(info.path.as_ptr()) }.to_string_lossy();
+		if path != cleared
+			&& let Some(image) = tk_image(&path)
+		{
+			if reads_pointer(image, || linked_tk(&mut File::open(&*path).ok()?)) {
+				return Some(true);
+			}
+			cleared = path.into_owned();
 		}
 		let next = info.region.address.saturating_add(info.region.size);
 		if next <= address {
@@ -108,40 +117,86 @@ fn walk_regions(pid: libc::pid_t, flavor: libc::c_int) -> Option<bool> {
 	read_any.then_some(false)
 }
 
-/// Matches `Tk.framework` bundles, Tk shared libraries (`libtk8.6.dylib`, Tk
-/// 9's `libtcl9tk9.0.dylib`), and Python's `_tkinter` extension, which links
-/// or embeds Tk.
-fn is_tk_image(path: &str) -> bool {
-	if path.contains("/Tk.framework/") {
-		return true;
+/// A mapped image that is, or carries, the Tk toolkit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TkImage {
+	/// A Tk library or framework of this (major, minor) version.
+	Version(u32, u32),
+	/// A Tk library or framework whose path names no version.
+	Unversioned,
+	/// Python's `_tkinter` extension, which links or embeds Tk.
+	Tkinter,
+}
+
+/// Classifies `Tk.framework` bundles, Tk shared libraries (`libtk8.6.dylib`,
+/// Tk 9's `libtcl9tk9.0.dylib`), and Python's `_tkinter` extension.
+fn tk_image(path: &str) -> Option<TkImage> {
+	if let Some((_, inside)) = path.split_once("/Tk.framework/") {
+		return Some(
+			inside
+				.strip_prefix("Versions/")
+				.and_then(|rest| rest.split('/').next())
+				.and_then(tk_version)
+				.unwrap_or(TkImage::Unversioned),
+		);
 	}
 	let file = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
 	if file
 		.strip_suffix(".so")
 		.is_some_and(|stem| stem.starts_with("_tkinter"))
 	{
-		return true;
+		return Some(TkImage::Tkinter);
 	}
-	let Some(stem) = file
-		.strip_suffix(".dylib")
-		.and_then(|file| file.strip_prefix("lib"))
-	else {
-		return false;
-	};
+	let stem = file.strip_suffix(".dylib")?.strip_prefix("lib")?;
 	let stem = match stem.strip_prefix("tcl") {
 		Some(after_tcl) => {
 			let digits = after_tcl.bytes().take_while(u8::is_ascii_digit).count();
 			if digits == 0 {
-				return false;
+				return None;
 			}
 			&after_tcl[digits..]
 		},
 		None => stem,
 	};
-	stem
-		.strip_prefix("tk")
-		.and_then(|version| version.bytes().next())
+	let version = stem.strip_prefix("tk")?;
+	if !version
+		.bytes()
+		.next()
 		.is_some_and(|byte| byte.is_ascii_digit())
+	{
+		return None;
+	}
+	Some(tk_version(version).unwrap_or(TkImage::Unversioned))
+}
+
+/// Parses `major.minor` with an optional patch level.
+fn tk_version(version: &str) -> Option<TkImage> {
+	let mut parts = version.split('.');
+	let major = parts.next()?.parse().ok()?;
+	let minor = parts.next()?.parse().ok()?;
+	Some(TkImage::Version(major, minor))
+}
+
+/// Whether a mapped Tk `image` places presses at the hardware pointer. A
+/// `_tkinter` extension is judged by the Tk `linked` reads from its load
+/// commands; one that links no Tk embeds a Tk of unknown version.
+fn reads_pointer(image: TkImage, linked: impl FnOnce() -> Option<TkImage>) -> bool {
+	let image = match image {
+		TkImage::Tkinter => linked().unwrap_or(TkImage::Unversioned),
+		image => image,
+	};
+	match image {
+		TkImage::Version(major, minor) => (major, minor) > (8, 5),
+		TkImage::Unversioned | TkImage::Tkinter => true,
+	}
+}
+
+/// The Tk a Mach-O image links, from its dylib load commands
+/// ([`linked_dylibs`]); `None` when it links none or cannot be read.
+fn linked_tk(image: &mut (impl Read + Seek)) -> Option<TkImage> {
+	linked_dylibs(image)?
+		.iter()
+		.find_map(|name| tk_image(&String::from_utf8_lossy(name)))
 }
 
 /// Whether `pid` runs inside an Electron app bundle, whose renderer drops
@@ -417,19 +472,35 @@ pub(in crate::desktop) fn started(pid: libc::pid_t) -> Option<u64> {
 	})
 }
 
+/// `pid`'s application name as the Dock shows it.
+pub(super) fn application_name(pid: libc::pid_t) -> Option<String> {
+	NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?
+		.localizedName()
+		.map(|name| name.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+	use std::{
+		io::{BufRead, BufReader},
+		path::Path,
+		process::{Command, Stdio},
+	};
+
 	use super::*;
 
 	#[test]
-	fn tk_images_match_and_neighbours_do_not() {
-		for path in [
-			"/Library/Frameworks/Tk.framework/Versions/8.6/Tk",
-			"/opt/homebrew/Cellar/tcl-tk/9.0.2/lib/libtcl9tk9.0.dylib",
-			"/opt/homebrew/opt/tcl-tk@8/lib/libtk8.6.dylib",
-			"/usr/local/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so",
+	fn tk_images_match_with_their_versions_and_neighbours_do_not() {
+		for (path, image) in [
+			("/Library/Frameworks/Tk.framework/Versions/8.6/Tk", TkImage::Version(8, 6)),
+			("/System/Library/Frameworks/Tk.framework/Versions/8.5/Tk", TkImage::Version(8, 5)),
+			("/opt/homebrew/Cellar/tcl-tk/9.0.2/lib/libtcl9tk9.0.dylib", TkImage::Version(9, 0)),
+			("/opt/homebrew/opt/tcl-tk@8/lib/libtk8.6.dylib", TkImage::Version(8, 6)),
+			("/Applications/Foo.app/Contents/Frameworks/Tk.framework/Tk", TkImage::Unversioned),
+			("/usr/local/lib/libtk86.dylib", TkImage::Unversioned),
+			("/usr/local/lib/python3.12/lib-dynload/_tkinter.cpython-312-darwin.so", TkImage::Tkinter),
 		] {
-			assert!(is_tk_image(path), "{path}");
+			assert_eq!(tk_image(path), Some(image), "{path}");
 		}
 		for path in [
 			"",
@@ -439,7 +510,7 @@ mod tests {
 			"/usr/lib/python3/_tkinter_helper.py",
 			"/Applications/Foo.app/Contents/MacOS/tk8.6",
 		] {
-			assert!(!is_tk_image(path), "{path}");
+			assert_eq!(tk_image(path), None, "{path}");
 		}
 	}
 
@@ -450,6 +521,101 @@ mod tests {
 		assert!(is_chromium_bundle("com.google.chrome.for.testing"));
 		assert!(!is_chromium_bundle("com.apple.archiveutility"));
 		assert!(!is_chromium_bundle("com.google.ChromeNotABrowser"));
+	}
+
+	#[test]
+	fn only_tk_newer_than_8_5_or_of_unknown_version_reads_the_hardware_pointer() {
+		let unread = || -> Option<TkImage> { panic!("only _tkinter reads its linked Tk") };
+		assert!(!reads_pointer(TkImage::Version(8, 5), unread));
+		assert!(!reads_pointer(TkImage::Version(8, 4), unread));
+		assert!(reads_pointer(TkImage::Version(8, 6), unread));
+		assert!(reads_pointer(TkImage::Version(9, 1), unread));
+		assert!(reads_pointer(TkImage::Unversioned, unread));
+		// macOS's /usr/bin/python3 links the system Tk 8.5, which lives only in
+		// the dyld shared cache, so its _tkinter is the one image the walk sees.
+		assert!(!reads_pointer(TkImage::Tkinter, || Some(TkImage::Version(8, 5))));
+		assert!(reads_pointer(TkImage::Tkinter, || Some(TkImage::Version(9, 0))));
+		assert!(reads_pointer(TkImage::Tkinter, || Some(TkImage::Unversioned)));
+		// A _tkinter that links no Tk embeds one of unknown version.
+		assert!(reads_pointer(TkImage::Tkinter, || None));
+	}
+
+	#[test]
+	fn tkinter_is_judged_by_the_tk_its_load_commands_link() {
+		const SYSTEM_TK: &str = "/System/Library/Frameworks/Tk.framework/Versions/8.5/Tk";
+		const SYSTEM_TCL: &str = "/System/Library/Frameworks/Tcl.framework/Versions/8.5/Tcl";
+		const BREW_TK: &str = "/opt/homebrew/opt/tcl-tk/lib/libtcl9tk9.1.dylib";
+		let linked = |file: Vec<u8>| linked_tk(&mut std::io::Cursor::new(file));
+		let native = NATIVE_CPU_TYPE;
+		let system = macho(native, &[SYSTEM_TCL, SYSTEM_TK, "/usr/lib/libSystem.B.dylib"]);
+		assert_eq!(linked(system.clone()), Some(TkImage::Version(8, 5)));
+		assert_eq!(linked(macho(native, &[BREW_TK])), Some(TkImage::Version(9, 1)));
+		assert_eq!(linked(macho(native, &["/usr/lib/libSystem.B.dylib"])), None);
+		// An image whose load commands cannot be read counts as a Tk of
+		// unknown version, which reads the pointer.
+		let mut truncated = system;
+		truncated.truncate(truncated.len() - 16);
+		assert!(reads_pointer(TkImage::Tkinter, || linked(truncated)));
+	}
+
+	/// A Python whose `_tkinter` links macOS's own Tk 8.5: the developer tools'
+	/// Python, which `/usr/bin/python3` runs once they are installed.
+	fn system_tk_python() -> Option<&'static str> {
+		[
+			"/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/\
+			 Current/bin/python3",
+			"/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/\
+			 Versions/Current/bin/python3",
+		]
+		.into_iter()
+		.find(|path| Path::new(path).exists())
+	}
+
+	/// Kills and reaps the child on every exit from the test.
+	struct Reaped(std::process::Child);
+
+	impl Drop for Reaped {
+		fn drop(&mut self) {
+			let _ = self.0.kill();
+			let _ = self.0.wait();
+		}
+	}
+
+	#[test]
+	fn a_live_process_on_macos_tk_8_5_does_not_read_the_hardware_pointer() {
+		let Some(python) = system_tk_python() else {
+			eprintln!("skipped: no developer-tools Python with macOS's Tk 8.5");
+			return;
+		};
+		// Isolated mode ignores PYTHONPATH, PYTHONHOME and user site-packages,
+		// so the module imported is the developer tools' own extension.
+		let mut child = Reaped(
+			Command::new(python)
+				.args([
+					"-I",
+					"-c",
+					"import _tkinter, time; print(_tkinter.__file__, flush=True); time.sleep(30)",
+				])
+				.stdout(Stdio::piped())
+				.spawn()
+				.expect("spawn python"),
+		);
+		let mut extension = String::new();
+		BufReader::new(child.0.stdout.take().expect("stdout"))
+			.read_line(&mut extension)
+			.expect("read the _tkinter path");
+		let extension = extension.trim();
+		let linked = File::open(extension)
+			.ok()
+			.and_then(|mut file| linked_tk(&mut file));
+		if !extension.contains("/Python3.framework/") || linked != Some(TkImage::Version(8, 5)) {
+			eprintln!("skipped: {python} imported {extension:?}, which links {linked:?}");
+			return;
+		}
+		let pid = libc::pid_t::try_from(child.0.id()).expect("pid");
+		// The walk sees only `_tkinter`; the Tk 8.5 it links lives in the dyld
+		// shared cache. That Tk places presses at the event location.
+		assert!(!reads_hardware_pointer(pid), "{extension} judged as reading the hardware pointer");
 	}
 
 	#[test]

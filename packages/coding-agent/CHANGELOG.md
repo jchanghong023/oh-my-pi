@@ -2,26 +2,33 @@
 
 ## [Unreleased]
 
+## [18.12.2] - 2026-10-18
+
 ### Added
 
+- Added `computer.backgroundFallback` (`takeover` by default, or `refuse`): when a `computer` window input call has no background route, the tool reruns that one call in takeover, hands focus back to your app and says so in its result; `refuse` fails the call instead and also refuses the agent's own foreground requests (`takeover: true`, `raise()`, an activating `apps.open`, desktop input, and on macOS menus and `AXOpen`) ([#15191](https://github.com/can1357/oh-my-pi/pull/15191) by [@will-bogusz](https://github.com/will-bogusz))
 - Added DeepSeek as a web search engine (`web/deepseek`), using DeepSeek's new Search API with your existing `DEEPSEEK_API_KEY` or stored `deepseek` credential
 - Added `el.selectText(text, { prefix?, suffix?, select? })` to the macOS `computer` tool: it selects text (or places a caret) in a background app's text field without taking focus, moving the pointer or sending keys, so typing into that field replaces it ([#15175](https://github.com/can1357/oh-my-pi/pull/15175) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `{ takeover: true }` to computer-use `win.move`, so a hover that a window refuses in the background can be retried in the foreground ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
+- Added a `menu` option to the `computer` tool's `win.click`, `el.click`, `el.press` and `el.perform`, so on macOS the call that opens a menu also chooses its item, e.g. `menu: ["Add to", "Fonts"]` ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
 - Added `el.type(text)` and `el.press(chord)` to the `computer` tool, which send text and keys to that element instead of wherever its window's focus is; on macOS and Windows nothing is sent when the element cannot be addressed without taking your focus ([#15563](https://github.com/can1357/oh-my-pi/pull/15563) by [@will-bogusz](https://github.com/will-bogusz))
 - Added: pressing Escape during takeover input now stops computer use for the rest of the turn, and that session's later `computer` calls are refused, unsent, until your next message ([#15564](https://github.com/can1357/oh-my-pi/pull/15564) by [@will-bogusz](https://github.com/will-bogusz))
 - Added the `computer` tool's `UserIntervened` error on macOS: input into an app you have used since the agent last read its window fails without sending, and the agent is told to read the window again and keep your edits ([#15562](https://github.com/can1357/oh-my-pi/pull/15562) by [@will-bogusz](https://github.com/will-bogusz))
+- Added `tui.completeScrollback`: rows a growing HUD or dialog pushes off screen go straight to scrollback instead of missing from it until it shrinks ([#15692](https://github.com/can1357/oh-my-pi/pull/15692) by [@Ilm-Alan](https://github.com/Ilm-Alan))
 
 ### Changed
 
 - Keep `/team` stage inputs concise without dropping revision history, stop repeated unproductive index probes, and target shorter final reports.
+- The `computer` tool and its errors no longer tell the model to retry with `takeover: true`, and its instructions tell it never to call `raise()` or `apps.open(…, { activate: true })` to make input work ([#15191](https://github.com/can1357/oh-my-pi/pull/15191) by [@will-bogusz](https://github.com/will-bogusz))
 - Computer-use window input with `takeover` omitted now stays in the background after `computer.control.acquire`, so an acquired grant no longer activates the target app or moves the user's pointer; pass `takeover: true` for foreground input ([#15173](https://github.com/can1357/oh-my-pi/pull/15173) by [@will-bogusz](https://github.com/will-bogusz))
 - Pressing Escape in your own app no longer stops the `computer` tool's background window input unless task control is held; Escape in omp still interrupts it, and physical Escape still stops takeover input ([#15176](https://github.com/can1357/oh-my-pi/pull/15176) by [@will-bogusz](https://github.com/will-bogusz))
 - Added Box questions to `ChainJudge`: they go only to Jev judges that answer them, and the box edges measure the image you passed even when it was padded to fit Jev's size bounds
+- A relay `browser.open` without `app.target` now opens its own background tab instead of adopting the visible one (after reinstalling the relay extension; older ones select it), and `browser.close` closes it; `app.target` still borrows an existing tab ([#16119](https://github.com/can1357/oh-my-pi/pull/16119) by [@nnnnoel](https://github.com/nnnnoel) and [@will-bogusz](https://github.com/will-bogusz))
 - Computer-use `win.menu.items` now needs `exec` approval and is rejected in `read_only` runs, since on macOS it makes the window key in its own application before reading its menus ([#15184](https://github.com/can1357/oh-my-pi/pull/15184) by [@will-bogusz](https://github.com/will-bogusz))
-
-### Changed
-
+- The `computer` tool no longer takes over your screen for macOS drags and holds on sliders, scroll bars, splitters and steppers, modified clicks, right-clicks and scrolls; they run in the background ([#15185](https://github.com/can1357/oh-my-pi/pull/15185) by [@will-bogusz](https://github.com/will-bogusz))
 - The default `judge` role now uses TypeSafe Jev 1.14 (`typesafe/jev-1.14.0`, then `openrouter/typesafe/jev-1.14`): `jev-latest` is TypeSafe's stable alias and answered as `jev-1.13.0`
+- Idle compaction on a 1-hour prompt cache (Anthropic long retention) now runs just before the cache entry expires, about 54 minutes after the last request, so the summary still reads the cached context; `compaction.idleTimeoutSeconds` still applies with a 5-minute cache or an unknown lifetime ([#16198](https://github.com/can1357/oh-my-pi/pull/16198), [#16204](https://github.com/can1357/oh-my-pi/pull/16204) by [@H4vC](https://github.com/H4vC))
+- Tool-call intents now say what the agent wants from the call's output and what it already knows (e.g. "Find where the retry delay is computed and whether it honours Retry-After; the client is in http.py") instead of a short label like "Reading config file"
 
 ### Fixed
 
@@ -63,14 +70,28 @@
 
 ### Fixed
 
+- Fixed repeated status commands such as `/goal show` showing nothing after the first few times in a native terminal when the text had not changed
+- Fixed browser relay tabs that a browser already had open when its extension connected staying invisible to omp until they changed; opening such a tab by `app.target` could fail with "Selected tab did not become available before omp could attach"
+- Fixed Ollama Cloud sessions compacting too early on stripped thinking or too late after switching from another model ([#16164](https://github.com/can1357/oh-my-pi/issues/16164))
+- Fixed Google sign-in rejecting the `/login perplexity` SSO browser window with "This browser or app may not be secure"; the sign-in browser no longer runs in automation mode ([#16141](https://github.com/can1357/oh-my-pi/issues/16141))
+- Fixed `task.softRequestBudget` never stopping Cursor subagents ([#16182](https://github.com/can1357/oh-my-pi/pull/16182) by [@joseotaviorf](https://github.com/joseotaviorf))
 - Fixed image judgments (`judge()`/`judge_batch()` with images) leaving TypeSafe Jev for the local `tiny` model whenever an image fell outside Jev's 280–1568 px bounds, which most screenshots do: images are now resized into the bounds, and strips padded, before Jev sees them
 - Fixed a Codex turn stopping on "Request failed … unsupported_native_inflight_message" when you sent a message while the response was writing text; the session now keeps the partial reply and continues with your message
+- Fixed the `bash` tool dropping variables, functions, and shell options between calls whenever auto-background was on (the default): a call that starts in the foreground now runs in the session's persistent shell, a failing command under `set -e` or an `exit` no longer resets that shell, and a call that overlaps a still-running one says it ran in a temporary shell ([#16153](https://github.com/can1357/oh-my-pi/pull/16153) by [@alphastorm](https://github.com/alphastorm))
 - Fixed the macOS `computer` tool's `StaleRef` for an element the app rebuilt in place, such as an Automator rule popup after its neighbour changed, leaving the agent to re-read the window: it now names the one element of the window with the fields the ref was read with, for the agent to check before acting on it ([#15574](https://github.com/can1357/oh-my-pi/pull/15574) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed an eval cell's `timeout` aborting an awaited `tool.task(...)` or `tool.wait(...)` and losing its subagents' results: time spent waiting on them no longer counts against the cell, as with `agent()` handles, while a turn cancel still stops them ([#16154](https://github.com/can1357/oh-my-pi/pull/16154) by [@alphastorm](https://github.com/alphastorm))
 - Fixed the Up arrow crashing omp with `text.replace is not a function` when `history.db` was damaged; recall skips unreadable rows, and a damaged store is moved aside to `history.db.corrupt-*` with every readable prompt, session title, and recap copied into its replacement ([#15751](https://github.com/can1357/oh-my-pi/pull/15751) by [@Shadorain](https://github.com/Shadorain))
 - Fixed browser `tab.screenshot()` raising Chrome over the app you were typing in and switching its visible tab; background tabs and windows behind other apps are now captured in place, including ones idle long enough that Chrome stopped drawing them, as is a relay or `app.cdp_url` tab the user switched away from ([#15174](https://github.com/can1357/oh-my-pi/pull/15174) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed tabs omp opens through a relay shared by two browsers landing in whichever browser reconnected last; they open in the browser of the tab omp used last, else the one showing the first selected tab ([#16119](https://github.com/can1357/oh-my-pi/pull/16119) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a relay `browser.close` after a browser restart closing a tab the user had opened since, when Chrome reused the old tab's id; a tab omp opens while its browser's relay extension reconnects now waits for it instead of opening in another browser, and one Chrome finishes creating after the extension's connection dropped is closed ([#16119](https://github.com/can1357/oh-my-pi/pull/16119))
+- Fixed `computer.run` and browser `tab.run` silently dropping `args` that were not an array (such as `{ args: { path } }`) or were given with a code string, so the function ran without them after its first steps had already acted; both now throw before the run starts, while omitted or `null` `args` still pass none ([#16149](https://github.com/can1357/oh-my-pi/pull/16149) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed `computer` helpers or browser tab calls started together (such as `Promise.all` over `computer.window`) failing with a bare "Computer worker is busy" or "Tab … is busy"; the error now says to await each call before starting the next, or group the steps in one `computer.run` or `tab.run` ([#16149](https://github.com/can1357/oh-my-pi/pull/16149) by [@will-bogusz](https://github.com/will-bogusz))
 - Commands in `bash` can hand `skill://`, `local://`, and other file-backed URLs to external programs again (`python skill://example-skill/tool.py "query"`), and can run them from a `cd`'d writable URL directory such as `local://`; a URL the provider rejects, such as an unknown skill, now fails the command with the provider's error ([#14838](https://github.com/can1357/oh-my-pi/pull/14838) by [@koyzdev](https://github.com/koyzdev))
 - Fixed `computer.apps.open` returning before the app had a window, or never giving a hidden running app one; it now returns the app's frontmost window as `window`, waiting up to 3 s on macOS ([#15184](https://github.com/can1357/oh-my-pi/pull/15184) by [@will-bogusz](https://github.com/will-bogusz))
 - Fixed a key you were typing on macOS arriving twice or more when omp exited after computer use ([#15562](https://github.com/can1357/oh-my-pi/pull/15562) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed `omp --restore` and `/retry` reporting nothing to retry for a turn cut off by a process exit in a session that had used `eval`; the interrupted turn now continues ([#16195](https://github.com/can1357/oh-my-pi/issues/16195))
+- Fixed session loading on Windows treating a session path with a regular-file component as a missing session (an empty session) instead of rejecting it with `ENOTDIR` like POSIX does ([#16145](https://github.com/can1357/oh-my-pi/pull/16145) by [@jchanghong023](https://github.com/jchanghong023))
+- Fixed models from extension providers listed in `enabledModels` or `--models` missing from `/model`, the Ctrl+P cycle and the startup model scope notice until the background catalog refresh finished ([#16096](https://github.com/can1357/oh-my-pi/pull/16096) by [@skipper019](https://github.com/skipper019))
 
 ## [18.12.1] - 2026-10-17
 
@@ -326,7 +347,6 @@
 
 ### Changed
 
-- Tool-call intents now say what the agent wants from the call's output and what it already knows (e.g. "Find where the retry delay is computed and whether it honours Retry-After; the client is in http.py") instead of a short label like "Reading config file"
 - The `lsp` tool now uses `lsp.requestTimeout` to dynamically adjust both call deadlines and project-aware diagnostic wait times, with support for per-call overrides
 - Reduced CPU overhead during syntax checks and automatic edit repairs ([#15904](https://github.com/can1357/oh-my-pi/pull/15904) by [@iliaal](https://github.com/iliaal)).
 - Reduced status-line refresh overhead while subagents have long conversations ([#15874](https://github.com/can1357/oh-my-pi/pull/15874) by [@iliaal](https://github.com/iliaal)).
@@ -1975,141 +1995,4 @@
 - Fixed auto-compaction re-sending a failed native (server-side) compaction on every turn, re-reading the full context each time; after a failure a retry would repeat, the next configured method runs instead until a compaction succeeds ([#13310](https://github.com/can1357/oh-my-pi/pull/13310) by [@alphastorm](https://github.com/alphastorm))
 - Fixed a `/slow off` session resending requests indefinitely when another session had activated the shared Anthropic low-priority lane ([#13340](https://github.com/can1357/oh-my-pi/pull/13340) by [@H4vC](https://github.com/H4vC))
 
-## [18.3.1] - 2026-09-25
-
-### Added
-
-- Added a filter to the Esc Esc rewind selector: press `f` and type to show only items containing every word, then Enter to rewind ([#13295](https://github.com/can1357/oh-my-pi/pull/13295) by [@H4vC](https://github.com/H4vC))
-- Added native filesystem support for `local://` and `omp://` URLs across file-search, content-search, AST, shell, and related tools, including support for virtual working directories.
-- Added a native `cp` builtin for filesystem copy operations.
-- Added IDA Pro integration for opening executables and IDA databases, browsing pseudocode, assembly, imports, exports, strings, and cross-references, and performing database-aware actions such as renaming, commenting, type editing, function creation, saving, and persistent Python execution.
-- Added shared, project-scoped IDA database access with broker-managed host processes, configurable concurrency and idle cleanup via `ida.maxOpen` and `ida.idleCloseSec`, automatic autosaving, and universal Mach-O architecture selection with `:@<arch>` syntax and host-architecture detection. IDA features can be configured with `ida.enabled`, `ida.python`, and `ida.installDir`.
-- Added the `/slow [on|off|status]` command for opting into lower-priority service tiers on OpenAI, Google, and Anthropic subscription sessions, including automatic continuation when Anthropic session limits are reached.
-- Added the `providers.openaiLiveSteering` setting to control whether input can be delivered while a response is in progress.
-- Added session-wide approval for configuration changes through an `Always for this session` option in `cfg://` prompts, with clear timeout handling for unanswered prompts.
-- Added the `cfg://` protocol and a configuration registry for reading, modifying, unsetting, and reactively managing layered agent settings with approval and precedence feedback.
-- Added paged reading for large files, with metadata that allows clients to recover and continue displaying results.
-- Added per-agent compaction thresholds for task and evaluation subagents, configurable as percentages or fixed token limits without changing the main session threshold.
-- Added trusted additional context for extension and hook tool results, including `ctx.addAdditionalContext()`, allowing instructions to reach the model without altering displayed tool results.
-- Added dictation support to `/btw` follow-up input.
-- Added support for multiple simultaneous browser instances, including concurrent Chrome and Edge connections.
-- Added detailed benchmark phases for measuring single-user throughput, parallel scaling, and prefill performance, with automatic prefill sizing based on model context limits.
-- Added opt-in CUDA support to the Nix package for tiny-model inference through ONNX Runtime.
-- Added reliable RPC prompt lifecycle reporting with `prompt_result`, structured provider errors, session-settled state, prompt identifiers, event filtering, and `--no-ui` support for non-interactive hosts.
-- Added RPC session management through `open_session`, plus corresponding TypeScript and Python client APIs including `openSession`, `setEventFilter`, `onPromptResult`, `onSessionSettled`, and `waitForSettled`.
-- Added `attachment://` and `conflict://` resource URL handlers.
-- Added a per-server MCP `instructions: false` option to keep a server's guidance out of the system prompt while retaining its tools.
-- Added stale tool-result eviction for advisors: before each review, an advisor replaces its own `read`/`grep`/`glob` output from reviews older than the latest one with a short placeholder, so it stops re-sending that output on every request. The deltas it reviews, the notes it wrote, and other tool results such as `recall` are never touched. Turn it off with `advisor.evictStaleResults` ([#13238](https://github.com/can1357/oh-my-pi/pull/13238) by [@alnaggar-dev](https://github.com/alnaggar-dev))
-
-### Changed
-
-- Improved recovery from output-length and context-window limits so truncated but actionable turns can be retained and retries are handled more accurately.
-- Shortened the default system prompt by approximately 150 tokens while preserving its guidance.
-- Improved Anthropic fallback handling so credit tokens and signed thinking context are preserved across same-provider fallbacks.
-- Improved filesystem safety and path consistency across virtual URL protocols, including symlink and containment validation and correct Windows long-path reporting.
-- Improved IDA database resource management with project sharing, bounded concurrency, idle cleanup, autosave, and clearer database status in listings.
-- Improved runtime configuration behavior with type-safe layered settings, live updates, and safe sequential saves.
-- Improved authentication and credential management to support live broker and credential-store changes.
-
-### Fixed
-
-- Fixed concurrent project access by enforcing file locking across processes.
-- Fixed Windows file reads with line selectors such as `:1-40`.
-- Fixed `omp update` and startup update checks to honor configured npm registries, including scoped registries and authentication tokens.
-- Fixed invalid auto-QA grievance reports blocking the rest of the upload queue; rejected reports are now surfaced with the server error while other reports continue.
-- Fixed advisor reviews making unnecessary follow-up requests, losing context after pruning, using the wrong thinking effort, or sending excessively large edit diffs.
-- Fixed `/login` crashes in source-link and development installs after extension loading.
-- Fixed retry fallback loops that could continue indefinitely when the fallback resolved to the same effective request.
-- Fixed setup wizard detection for Gemini web search when Antigravity OAuth is active.
-- Fixed headless print mode failing to complete an advisor review when a configured fallback reviewer was available.
-- Fixed embedded shell startup when the inherited working directory had been deleted.
-- Fixed Codex usage displays showing stale subscription plans and corrected usage views that combined separate quota limits.
-- Fixed explicit model and provider selections bypassing `disabledProviders`; disabled providers are now refused and skipped during fallback.
-- Fixed memory storage errors so failed items and underlying storage failures are identified.
-- Fixed malformed user-level `mcp.json` files preventing valid MCP sources from loading.
-- Fixed Anthropic server-side fallback requests using invalid model names.
-- Fixed large-output model requests failing near the context limit by adjusting the output allowance to the remaining context.
-- Fixed tool references in system prompts for tools exposed only through `xd://` devices.
-- Fixed dictation remaining active after a recording restart during transcription.
-- Fixed automatic account sign-outs going unannounced; sessions now report the affected account and login action through interactive, print, JSON, and RPC output.
-- Fixed duplicate MCP tool listings in the system prompt.
-- Fixed supervised service exits being missed or repeatedly replayed instead of being delivered to the session that started the service.
-- Fixed memory backend failures to identify the affected item and underlying storage error.
-- Fixed `write xd://<tool>` validation behavior so devices can return precise schema-mismatch responses.
-
-## [18.3.0] - 2026-09-24
-
-### Breaking Changes
-
-- The `hub` tool is deprecated; use `wait`, `write`, and the `proc://` protocols instead.
-- The `irc.timeoutMs` configuration setting has been removed.
-- The edit mode syntax now uses `*** Edit File:`, `*** Find`, and `*** Replace` headers instead of `SM:` headers.
-- Cancelling a process through `write` now requires an explicit `proc://<id>/kill` target; other write targets validate content normally.
-
-### Added
-
-- Added `omp://` documentation scopes for `find` and `omp find`. Search all embedded harness documentation with `omp://` or a specific document with `omp://<file>.md`; results are returned as canonical URLs that `read` can open, including range selectors.
-- Added extension support for ephemeral, `/btw`-style side turns through `ctx.runEphemeralTurn()`, with optional tool suppression and output/context limits without adding the turn to session history.
-- Added background job and service management through the `wait` tool and `proc://` URLs, including supervised services in `bash` and direct agent messaging through `agent://` write targets.
-- Added `*** Insert Before` and `*** Insert After` edit operations for adding lines without replacing existing code.
-- Added the `toks` command for offline token counting, including support for Jev (TypeSafe Jev 1.13) encodings.
-- Added automatic discovery of Apple Foundation Models on supported Apple silicon devices.
-- Added `/changelog last [N]` for viewing the latest release or a selected number of recent releases.
-- Added terminal-based OAuth authentication with `omp login`, including browser-assisted login, account and organization details, and automatic model discovery refresh. Added provider support for `org-scoped-identity`, `oauth-token-env`, and per-account OAuth priority/reserve policies through `auth.accountPolicies`, with policy state shown by `omp usage`.
-- Added the `daybreak` badge to `omp usage` for enabled accounts.
-- Added `/export` and `/usage` to focused subagent views for exporting a focused transcript and viewing account usage without returning to the main session.
-- Pasted clipboard images are now saved in the session artifact directory, allowing agents to read, copy, or upload them by file path.
-- Added `/annotate` for attaching notes to diffs, replies, session messages, files, or quoted text and inserting or sending those notes in prompts and reviews.
-- Added configurable MCP startup behavior through `MCP_STARTUP_TIMEOUT_MS`/`mcp.startupTimeoutMs` and `OMP_MCP_REQUIRE_READY=1`, allowing headless runs to require MCP servers to become ready before the first turn.
-- Added native judgment usage reporting, including error stop reasons and messages, and added `openrouter/~typesafe/jev-latest` as a native judge candidate.
-
-### Changed
-
-- Session compaction now supports native Anthropic snapshot branches and rewinds.
-- The default `bash.autoBackground.strategy` is now `catalog`.
-- The `Launch` configuration group has been renamed to `Services`.
-- Terminal OAuth behavior is now consistent between `omp login` and `omp auth-broker login`.
-- Judgment fallback now uses only native candidates, preventing prompted models from replacing failed native judges.
-- Browser screenshot comparisons now tolerate minor rasterizer differences.
-
-### Fixed
-
-- Fixed credential-aware API key resolution during authentication rotation.
-- Fixed comma-separated line selectors in `read`, `grep` paths, and `fetch`; selectors now read the requested range, while a bare number selects only that line.
-- Fixed `write` reporting JavaScript character counts instead of UTF-8 byte counts.
-- Fixed background job and service status reporting, including incorrect durations, reused job IDs, stale logs after named-service restarts, and foreground calls incorrectly appearing as background jobs.
-- Fixed `wait` and agent messaging so completed subagent results and peer messages are delivered reliably, including when a wait is interrupted by an incoming message.
-- Fixed headless print mode dropping or silently ignoring MCP servers that start slowly; it now waits within the configured timeout and warns when a server is not ready.
-- Fixed reader-mode `fetch` sending inline SVG icons and base64 images as unreadable model input; alt text is retained instead.
-- Fixed long non-Latin judged TTSR output exceeding token limits by applying token-aware truncation.
-
-## [18.2.11] - 2026-09-23
-
-### Fixed
-
-- Fixed nested `eval` Todo updates not being reflected by the Todo tracker, including cases where a cell fails after committing an update.
-- Fixed strict-mode structured-output validation for JSON Schemas without a root `type`, preserving their `items` and `required` keywords.
-- Improved streamed TTSR whole-buffer matching to avoid repeated scans from the beginning of the buffer.
-- Fixed plural browser queries when compiled binaries provide shallow stack traces.
-- Fixed browser `tab.fill` timing out on pages whose animation frames stall.
-- Fixed the first LSP diagnostics request returning no results while a newly started language server is still analyzing.
-- `/shake thinking` now reports the number of tokens freed.
-
-## [18.2.10] - 2026-09-22
-
-### Added
-
-- Added live benchmark results table with real-time model ranking and per-kind performance metrics
-- Added dedicated prefill throughput reporting for prefill-focused benchmarks
-- Added `/record` slash command to capture terminal sessions as replayable `.ompcast` files
-- Added `omp play` CLI for terminal-based playback of session recordings
-- Added intent descriptions to judgment batching
-- Added live progress tracking for judgment batches in the TUI
-
-### Changed
-
-- Refined AI-assisted git staging verification to reduce false positives
-- Updated `omp bench` default profile to `chat` and improved CLI flag documentation
-- Coalesced judgment batch drain operations for better performance under high load
-
-Older entries are archived in [packages/coding-agent/CHANGELOG.md@d48cee7db400](https://github.com/can1357/oh-my-pi/blob/d48cee7db400d4ac0bb468c1e027f9990ac6f7ea/packages/coding-agent/CHANGELOG.md).
+Older entries are archived in [packages/coding-agent/CHANGELOG.md@04d4ab14b45f](https://github.com/can1357/oh-my-pi/blob/04d4ab14b45f8dbd4055b675519f8815a1eb1841/packages/coding-agent/CHANGELOG.md).

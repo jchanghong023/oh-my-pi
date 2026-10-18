@@ -17,6 +17,8 @@ export interface ComputerSessionSnapshot {
 	captureMaxHeight: number;
 	display: string;
 	readOnly: boolean;
+	/** `computer.backgroundFallback`: what a refused background input call does. */
+	backgroundFallback: "takeover" | "refuse";
 	/**
 	 * The agent turn the run belongs to, if any: once it acts, the display stays awake until that turn's
 	 * `release-display` rather than for the native grace period after its last request.

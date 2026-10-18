@@ -1657,6 +1657,25 @@ mod tests {
 	use brush_core::openfiles;
 	use crate::host::{Host, run_caught, run_util};
 
+	#[test]
+	fn path_separator_rewrites_the_native_separator_on_windows() {
+		// Defends: --path-separator must rewrite the platform's own separator
+		// too, or Windows paths keep mixing `\` and the configured separator.
+		let mut out = Vec::new();
+		RecordFormat {
+			path_separator: Some(b'#'),
+			null_paths:     false,
+			terminator:     b'\n',
+		}
+		.write_path(&mut out, b"a\\b/c")
+		.unwrap();
+		if cfg!(windows) {
+			assert_eq!(out, b"a#b#c");
+		} else {
+			assert_eq!(out, b"a\\b#c");
+		}
+	}
+
 	struct SnapshottingStdin {
 		pos:      usize,
 		snapped:  bool,

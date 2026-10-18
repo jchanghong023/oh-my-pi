@@ -39,9 +39,11 @@ import type {
 	DesktopCapabilities,
 	DesktopCapture,
 	DesktopDisplay,
+	DesktopFocusReturn,
 	DesktopPoint,
 	DesktopScreenState,
 	DesktopWindow,
+	HoldOptions as NativeHoldOptions,
 	PointerOptions,
 } from "@oh-my-pi/pi-natives";
 
@@ -221,7 +223,12 @@ class FakeNativeSession implements NativeDesktopSession {
 	async bringToCurrentSpace(target: string) {
 		this.operations.push(`space:${target}`);
 	}
-	async click(_target: string, _x: number, _y: number, _opts?: PointerOptions | null): Promise<void> {
+	async click(
+		_target: string,
+		_x: number,
+		_y: number,
+		_opts?: PointerOptions | null,
+	): Promise<DesktopFocusReturn | null | void> {
 		this.clickCount += 1;
 		this.takeovers.push(_opts?.takeover);
 	}
@@ -299,7 +306,10 @@ class EscapeNativeSession extends FakeNativeSession {
 	}
 
 	override async click(target: string, x: number, y: number, opts?: PointerOptions | null): Promise<void> {
-		if (!this.escapeOnClick) return await super.click(target, x, y, opts);
+		if (!this.escapeOnClick) {
+			await super.click(target, x, y, opts);
+			return;
+		}
 		this.escapeOnClick = false;
 		this.escapeStops += 1;
 		this.onEscape?.();
@@ -382,7 +392,11 @@ class MemoryTransport implements ComputerWorkerTransport {
 /** No Escape stop acknowledged, under a key no other test shares. */
 const escapeScope = () => ({ key: `computer-test-${crypto.randomUUID()}`, acknowledged: 0 });
 
-const snapshot = (readOnly = false, displayTurn?: number): ComputerSessionSnapshot => ({
+const snapshot = (
+	readOnly = false,
+	displayTurn?: number,
+	backgroundFallback: ComputerSessionSnapshot["backgroundFallback"] = "takeover",
+): ComputerSessionSnapshot => ({
 	cwd: import.meta.dir,
 	sessionId: crypto.randomUUID(),
 	captureMaxWidth: 1280,
@@ -390,6 +404,7 @@ const snapshot = (readOnly = false, displayTurn?: number): ComputerSessionSnapsh
 	display: "active",
 	readOnly,
 	displayTurn,
+	backgroundFallback,
 });
 
 async function runWorker(
@@ -782,6 +797,87 @@ describe("computer prelude", () => {
 		await expect(runInContext("computer.run(Math.max)", realm)).rejects.toThrow(
 			"computer.run() cannot serialize a native or bound function",
 		);
+	});
+
+	it("refuses run args it would drop before anything runs, and still runs empty or null args", async () => {
+		const prelude = createComputerPrelude(toolSession(), () => ({
+			async run() {
+				return { displays: [], returnValue: undefined, screenshots: [] };
+			},
+			async capabilities() {
+				return undefined;
+			},
+			async close() {},
+		}));
+		const calls: unknown[] = [];
+		const realm = createContext({
+			__omp_log__: () => {},
+			__omp_prelude__: async (_name: unknown, parameters: unknown) => {
+				calls.push(parameters);
+				return { text: "", details: { value: "ran" } };
+			},
+		});
+		runInContext(prelude.javascript, realm);
+
+		await expect(
+			runInContext('computer.run(async (_scope, path) => path, { args: { path: "/tmp" } })', realm),
+		).rejects.toThrow("computer.run() args must be an array of the function's arguments after its scope");
+		await expect(runInContext('computer.run("return 1;", { args: ["/tmp"] })', realm)).rejects.toThrow(
+			"computer.run() passes args only to a function; a code string receives none",
+		);
+		expect(calls).toEqual([]);
+
+		expect(await runInContext('computer.run("return 1;", { args: [] })', realm)).toBe("ran");
+		expect(await runInContext("computer.run(async () => 1, { args: null })", realm)).toBe("ran");
+		expect(calls).toEqual([
+			{ code: "return 1;", action: "run" },
+			{ fn: "async () => 1", args: [], action: "run" },
+		]);
+	});
+
+	it("tells a caller running direct helpers together to await each one or use one run", async () => {
+		const gate = Promise.withResolvers<void>();
+		class GatedSession extends FakeNativeSession {
+			override async listWindows(): Promise<DesktopWindow[]> {
+				await gate.promise;
+				return super.listWindows();
+			}
+		}
+		const session = toolSession();
+		const prelude = workerPrelude(session, new GatedSession());
+		const context = { session, toolCallId: "parallel-direct-js" };
+		const realm = createContext({
+			__omp_log__: () => {},
+			__omp_prelude__: async (_name: string, parameters: unknown) => {
+				const result = await prelude.invoke(parameters, context);
+				return { text: "", details: result.details };
+			},
+		});
+		runInContext(prelude.javascript, realm);
+		try {
+			const calls = runInContext("[computer.window(42), computer.window(42)]", realm) as Promise<unknown>[];
+			// The first lookup holds the worker in native code until the gate opens, so the other one is refused.
+			const refused = await Promise.any(
+				calls.map(call =>
+					call.then(
+						() => {
+							throw new Error("not refused");
+						},
+						error => error,
+					),
+				),
+			);
+			gate.resolve();
+			const results = await Promise.allSettled(calls);
+			expect(results.map(result => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+			const error = String(refused);
+			expect(error).toContain("Computer worker is busy");
+			expect(error).toContain("Await each call before starting the next");
+			expect(error).toContain("computer.run(");
+		} finally {
+			gate.resolve();
+			await prelude.invoke({ action: "close" }, context);
+		}
 	});
 
 	it("returns direct values and prints inner display text from the Python facade in a real kernel", async () => {
@@ -2160,6 +2256,20 @@ describe("computer worker round trips", () => {
 		const second = await runWorker(transport, "reuse-element", "await globalThis.retainedEl.bounds()");
 		expect(second.ok).toBe(true);
 		if (second.ok) expect(second.payload.returnValue).toEqual({ x: 7, y: 8, width: 9, height: 10 });
+	});
+
+	it("refuses an empty menu path before anything is sent", async () => {
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => new FakeNativeSession());
+		const result = await runWorker(
+			transport,
+			"empty-menu-path",
+			'const el = await (await desktop.window("42")).ref("e1"); return await el.press({ menu: [] }).then(() => "sent", error => error.message)',
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.payload.returnValue).not.toBe("sent");
+		expect(result.payload.returnValue).toContain("menu path");
 	});
 
 	it("answers a direct capabilities request without a prior run", async () => {
@@ -3545,5 +3655,840 @@ describe("display hold follows the agent turn", () => {
 		await run;
 		expect(native.displayHolds).toEqual(["turn"]);
 		await supervisor.close();
+	});
+});
+
+describe("computer background fallback", () => {
+	const reason = "window 42 (Wish) reads the hardware pointer for button presses";
+	const ran = `click ran in takeover because ${reason}; the input was delivered, and `;
+	const clickTarget = 'await (await desktop.window("42")).click(1, 2)';
+
+	/**
+	 * Refuses background clicks the way the native backend does; a takeover
+	 * click resolves to `report`, native's focus outcome. The window list's
+	 * `focused` flag stays on Notes throughout, as a stale listing would.
+	 */
+	class RefusingSession extends FakeNativeSession {
+		readonly sent: Array<PointerOptions | null | undefined> = [];
+		refusal = `BackgroundUnavailable: ${reason}; nothing was sent`;
+		report: DesktopFocusReturn | null = { handedBack: true, previousPid: 300, frontPid: 300 };
+
+		override async listWindows(): Promise<DesktopWindow[]> {
+			return [
+				{ ...windowFixture, id: "42", app: "Wish", pid: 200, focused: false },
+				{ ...windowFixture, id: "7", app: "Notes", pid: 300, focused: true },
+				{ ...windowFixture, id: "9", app: "Mail", pid: 400, focused: false },
+			];
+		}
+
+		override async click(
+			_target: string,
+			_x: number,
+			_y: number,
+			opts?: PointerOptions | null,
+		): Promise<DesktopFocusReturn | null | void> {
+			this.sent.push(opts);
+			if (opts?.takeover !== true) throw new Error(this.refusal);
+			return this.report;
+		}
+	}
+
+	/** The single fallback notice of a successful run. */
+	function notice(result: Extract<ComputerWorkerOutbound, { type: "result" }>): string {
+		const [text, ...rest] = texts(result);
+		expect(rest).toEqual([]);
+		expect(text).toStartWith(ran);
+		return text.slice(ran.length);
+	}
+
+	async function run(
+		native: NativeDesktopSession,
+		code: string,
+		backgroundFallback: ComputerSessionSnapshot["backgroundFallback"],
+	): Promise<Extract<ComputerWorkerOutbound, { type: "result" }>> {
+		const transport = new MemoryTransport();
+		new ComputerWorkerCore(transport, () => native);
+		const id = crypto.randomUUID();
+		transport.inbound({
+			type: "run",
+			id,
+			code,
+			timeoutMs: 2_000,
+			session: snapshot(false, undefined, backgroundFallback),
+			escape: escapeScope(),
+		});
+		const message = await transport.waitFor(candidate => candidate.type === "result" && candidate.id === id);
+		if (message.type !== "result") throw new Error(`Expected computer result, received ${message.type}`);
+		return message;
+	}
+
+	function texts(result: Extract<ComputerWorkerOutbound, { type: "result" }>): string[] {
+		if (!result.ok) throw new Error(`run failed: ${result.error.message}`);
+		return result.payload.displays.flatMap(block => (block.type === "text" ? [block.text] : []));
+	}
+
+	it("reruns a refused background call once in takeover and says so, naming the app focus returned to", async () => {
+		const native = new RefusingSession();
+		const result = await run(native, clickTarget, "takeover");
+		expect(notice(result)).toContain("returned to Notes");
+		expect(native.sent).toEqual([{}, { takeover: true, returnFocus: true }]);
+
+		// Negative control: an error other than BackgroundUnavailable is never rerun.
+		const failing = new RefusingSession();
+		failing.refusal = "InputFailed: window 42 rejected the event";
+		const failed = await run(failing, clickTarget, "takeover");
+		expect(failed.ok).toBe(false);
+		if (failed.ok) return;
+		expect(failed.error.message).toStartWith("InputFailed: window 42 rejected the event");
+		expect(failing.sent).toHaveLength(1);
+	});
+
+	it("reports a rerun as delivered, dropping the refused attempt's 'nothing was sent'", async () => {
+		for (const unsent of ["; nothing was sent", ", so nothing was sent", "; no input was sent"]) {
+			const native = new RefusingSession();
+			native.refusal = `BackgroundUnavailable: ${reason}${unsent}`;
+			const result = await run(native, clickTarget, "takeover");
+			expect(texts(result), unsent).toEqual([`${ran}focus returned to Notes`]);
+		}
+	});
+
+	it("refuses without a takeover under refuse, and tells the model so without suggesting one", async () => {
+		const native = new RefusingSession();
+		const result = await run(native, clickTarget, "refuse");
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		expect(result.error.message).toStartWith(`BackgroundUnavailable: ${reason}`);
+		expect(result.error.message).toContain('"refuse"');
+		expect(result.error.message).toContain("no takeover happened");
+		expect(result.error.message).not.toContain("takeover:");
+		expect(native.sent).toEqual([{}]);
+	});
+
+	it("passes an explicit takeover through under takeover; false never falls back", async () => {
+		const forced = new RefusingSession();
+		const result = await run(
+			forced,
+			'await (await desktop.window("42")).click(1, 2, { takeover: true })',
+			"takeover",
+		);
+		expect(texts(result)).toEqual([]);
+		expect(forced.sent).toEqual([{ takeover: true }]);
+
+		const background = new RefusingSession();
+		const refused = await run(
+			background,
+			'await (await desktop.window("42")).click(1, 2, { takeover: false })',
+			"takeover",
+		);
+		expect(refused.ok).toBe(false);
+		if (refused.ok) return;
+		expect(refused.error.message).toStartWith(`BackgroundUnavailable: ${reason}`);
+		expect(background.sent).toEqual([{ takeover: false }]);
+	});
+
+	it("never reruns a call the user stepped into, and keeps the code of a failed rerun", async () => {
+		const stepped = new RefusingSession();
+		stepped.refusal =
+			"UserIntervened: window 42's application came to the front during background input; no further input was sent; inspect the window";
+		const intervened = await run(stepped, clickTarget, "takeover");
+		expect(intervened.ok).toBe(false);
+		if (intervened.ok) return;
+		expect(intervened.error.message).toStartWith("UserIntervened: window 42's application came to the front");
+		expect(stepped.sent).toEqual([{}]);
+
+		class FailingRerun extends RefusingSession {
+			override async click(
+				_target: string,
+				_x: number,
+				_y: number,
+				opts?: PointerOptions | null,
+			): Promise<DesktopFocusReturn | null | void> {
+				this.sent.push(opts);
+				throw new Error(opts?.takeover === true ? "InputFailed: window 42 rejected the event" : this.refusal);
+			}
+		}
+		const failing = new FailingRerun();
+		const failed = await run(failing, clickTarget, "takeover");
+		expect(failed.ok).toBe(false);
+		if (failed.ok) return;
+		expect(failed.error.message).toBe(
+			`InputFailed: click fell back to takeover because ${reason}, and the takeover failed: window 42 rejected the event`,
+		);
+		expect(failing.sent).toEqual([{}, { takeover: true, returnFocus: true }]);
+	});
+
+	describe("refuse beats the model's own foreground requests", () => {
+		/** Records every native call that could take the user's foreground. */
+		class ForegroundSession extends FakeNativeSession {
+			readonly calls: string[] = [];
+
+			override async click(target: string, _x: number, _y: number, opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`click:${target}:${opts?.takeover ?? "-"}`);
+			}
+			override async keyChord(target: string, _keys: string[], opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`press:${target}:${opts?.takeover ?? "-"}`);
+			}
+			override async typeText(target: string, _text: string, opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`type:${target}:${opts?.takeover ?? "-"}`);
+			}
+			override async raiseWindow(windowId: string): Promise<void> {
+				this.calls.push(`raise:${windowId}`);
+			}
+			override async axPerform(_ref: string, action: string): Promise<void> {
+				this.calls.push(`perform:${action}`);
+			}
+			override async axClick(_ref: string, opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`axClick:${opts?.takeover ?? "-"}`);
+			}
+			override async axType(_ref: string, _text: string, opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`axType:${opts?.takeover ?? "-"}`);
+			}
+			override async axKeyChord(_ref: string, _keys: string[], opts?: PointerOptions | null): Promise<void> {
+				this.calls.push(`axKeyChord:${opts?.takeover ?? "-"}`);
+			}
+			override async axFocus(ref: string): Promise<void> {
+				this.calls.push(`focus:${ref}`);
+			}
+			override async holdKeys(target: string, _keys: string[], options: NativeHoldOptions): Promise<void> {
+				this.calls.push(`holdKeys:${target}:${options.takeover ?? "-"}`);
+			}
+			override async openApplication(id: string, options?: { activate?: boolean }) {
+				this.calls.push(`open:${id}:${options?.activate ?? "-"}`);
+				return { ...(await this.listApplications())[0]!, window: windowFixture };
+			}
+		}
+
+		/** Each call that would bring an app forward or drive the user's own input, and the route its refusal names. */
+		const foreground: Array<{ code: string; call: string; route: string }> = [
+			{
+				code: 'await (await desktop.window("42")).press("a", { takeover: true })',
+				call: "press:42:true",
+				route: "Call it without takeover",
+			},
+			{
+				code: 'await (await desktop.ref("e1")).click({ takeover: true })',
+				call: "axClick:true",
+				route: "Call it without takeover",
+			},
+			{
+				code: 'await (await desktop.ref("e1")).type("a", { takeover: true })',
+				call: "axType:true",
+				route: "Call it without takeover",
+			},
+			{
+				code: 'await (await desktop.ref("e1")).press("cmd+a", { takeover: true })',
+				call: "axKeyChord:true",
+				route: "Call it without takeover",
+			},
+			{ code: 'await (await desktop.window("42")).raise()', call: "raise:42", route: "no raise is needed" },
+			{
+				code: 'await (await desktop.ref("e1")).perform("AXRaise")',
+				call: "perform:AXRaise",
+				route: "no raise is needed",
+			},
+			{
+				code: 'await (await desktop.ref("e1")).perform(" Raise ")',
+				call: "perform: Raise ",
+				route: "no raise is needed",
+			},
+			{
+				code: 'await desktop.apps.open("test.editor", { activate: true })',
+				call: "open:test.editor:true",
+				route: "without activate",
+			},
+			{ code: 'await desktop.type("x")', call: "type:desktop:-", route: "window handle" },
+			{
+				code: 'await (await desktop.display("active")).click(1, 2)',
+				call: "click:display:active:-",
+				route: "window handle",
+			},
+		];
+
+		it("refuses each before anything is sent, saying the user's setting keeps the agent in the background", async () => {
+			for (const { code, route } of foreground) {
+				const native = new ForegroundSession();
+				const result = await run(native, code, "refuse");
+				expect(result.ok, code).toBe(false);
+				if (result.ok) continue;
+				expect(result.error.message, code).toStartWith("BackgroundUnavailable: ");
+				expect(result.error.message, code).toContain("keeps the agent in the background; nothing was sent");
+				expect(result.error.message, code).toContain(route);
+				expect(native.calls, code).toEqual([]);
+			}
+		});
+
+		it("names the window or element a refusal kept input from", async () => {
+			for (const [code, target] of [
+				['await (await desktop.window("42")).raise()', "window 42"],
+				['await (await desktop.ref("e1")).perform("AXRaise")', "element e1"],
+			] as const) {
+				const result = await run(new ForegroundSession(), code, "refuse");
+				expect(result.ok, code).toBe(false);
+				if (result.ok) continue;
+				expect(result.error.message, code).toContain(`nothing was sent to ${target}.`);
+			}
+		});
+
+		it("sends each as before under takeover", async () => {
+			for (const { code, call } of foreground) {
+				const native = new ForegroundSession();
+				const result = await run(native, code, "takeover");
+				expect(result.ok, code).toBe(true);
+				expect(native.calls, code).toEqual([call]);
+			}
+		});
+
+		it("still sends background requests under refuse", async () => {
+			const native = new ForegroundSession();
+			const code = [
+				'await (await desktop.window("42")).press("a");',
+				'await (await desktop.window("42")).press("a", { takeover: false });',
+				'await (await desktop.ref("e1")).perform("press");',
+				'await desktop.apps.open("test.editor");',
+			].join("\n");
+			expect((await run(native, code, "refuse")).ok).toBe(true);
+			expect(native.calls).toEqual(["press:42:-", "press:42:false", "perform:press", "open:test.editor:-"]);
+		});
+
+		it("checks and sends the same option value when a getter changes between reads", async () => {
+			// Each getter answers false on its first read and true afterwards.
+			const flip = "(() => { let reads = 0; return () => reads++ > 0; })()";
+			const code = [
+				`const takeover = ${flip}, activate = ${flip}, held = ${flip}, element = ${flip};`,
+				'await (await desktop.window("42")).press("a", { get takeover() { return takeover(); } });',
+				'await (await desktop.ref("e1")).click({ get takeover() { return element(); } });',
+				'await (await desktop.window("42")).holdKeys(["a"], { duration: 0, get takeover() { return held(); } });',
+				'await desktop.apps.open("test.editor", { get activate() { return activate(); } });',
+			].join("\n");
+			const native = new ForegroundSession();
+			expect((await run(native, code, "refuse")).ok).toBe(true);
+			expect(native.calls).toEqual([
+				"press:42:false",
+				"axClick:false",
+				"holdKeys:42:false",
+				"open:test.editor:false",
+			]);
+		});
+
+		it("refuses focus() off macOS, where it moves keyboard focus, and keeps macOS's background focus", async () => {
+			const elsewhere = new ForegroundSession();
+			const refused = await run(elsewhere, 'await (await desktop.ref("e1")).focus()', "refuse");
+			expect(refused.ok).toBe(false);
+			if (refused.ok) return;
+			expect(refused.error.message).toStartWith("BackgroundUnavailable: focus() would");
+			expect(refused.error.message).toContain("Use setValue(), press() or another AX action");
+			expect(elsewhere.calls).toEqual([]);
+
+			expect((await run(elsewhere, 'await (await desktop.ref("e1")).focus()', "takeover")).ok).toBe(true);
+			expect(elsewhere.calls).toEqual(["focus:e1"]);
+
+			class MacSession extends ForegroundSession {
+				override get capabilities(): DesktopCapabilities {
+					return { ...super.capabilities, backend: "quartz" };
+				}
+			}
+			const mac = new MacSession();
+			expect((await run(mac, 'await (await desktop.ref("e1")).focus()', "refuse")).ok).toBe(true);
+			expect(mac.calls).toEqual(["focus:e1"]);
+		});
+
+		it("refuses AXOpen on macOS, which brings an Open panel's application forward even when it fails", async () => {
+			class MacSession extends ForegroundSession {
+				override get capabilities(): DesktopCapabilities {
+					return { ...super.capabilities, backend: "quartz" };
+				}
+			}
+			// Native `action_name` runs exactly these two as AXOpen.
+			for (const action of ["AXOpen", "Open"]) {
+				const code = `await (await desktop.ref("e1")).perform(${JSON.stringify(action)})`;
+				const mac = new MacSession();
+				const refused = await run(mac, code, "refuse");
+				expect(refused.ok, action).toBe(false);
+				if (refused.ok) continue;
+				expect(refused.error.message, action).toStartWith(
+					`BackgroundUnavailable: perform(${JSON.stringify(action)}) would bring the window's application to the front`,
+				);
+				expect(refused.error.message, action).toContain("keeps the agent in the background; nothing was sent");
+				expect(refused.error.message, action).toContain("Use press() on a button that does the same");
+				expect(mac.calls, action).toEqual([]);
+
+				expect((await run(mac, code, "takeover")).ok, action).toBe(true);
+				expect(mac.calls, action).toEqual([`perform:${action}`]);
+			}
+
+			// Other spellings reach native as other actions ("AXopen", "AX Open ").
+			const other = new MacSession();
+			const others = ['perform("open")', 'perform(" Open ")'].map(
+				call => `await (await desktop.ref("e1")).${call};`,
+			);
+			expect((await run(other, others.join("\n"), "refuse")).ok).toBe(true);
+			expect(other.calls).toEqual(["perform:open", "perform: Open "]);
+
+			const elsewhere = new ForegroundSession();
+			expect((await run(elsewhere, 'await (await desktop.ref("e1")).perform("AXOpen")', "refuse")).ok).toBe(true);
+			expect(elsewhere.calls).toEqual(["perform:AXOpen"]);
+		});
+
+		describe("macOS calls that open a menu", () => {
+			class MacSession extends ForegroundSession {
+				override get capabilities(): DesktopCapabilities {
+					return { ...super.capabilities, backend: "quartz" };
+				}
+				override async drag(target: string, _points: DesktopPoint[], opts?: PointerOptions | null): Promise<void> {
+					this.calls.push(`drag:${target}:${opts?.takeover ?? "-"}`);
+				}
+				override async holdMouse(
+					target: string,
+					_x: number,
+					_y: number,
+					options: NativeHoldOptions,
+				): Promise<void> {
+					this.calls.push(`holdMouse:${target}:${options.takeover ?? "-"}`);
+				}
+			}
+
+			const win = 'await (await desktop.window("42"))';
+			const el = 'await (await desktop.ref("e1"))';
+			/** Each call kind that opens a context menu or names an item of the menu it opens, and the call its refusal names. */
+			const menus: Array<{ code: string; call: string; named: string }> = [
+				{
+					code: `${el}.perform("AXShowMenu")`,
+					call: "perform:AXShowMenu",
+					named: 'perform("AXShowMenu") would open a context menu',
+				},
+				{
+					code: `${el}.perform(" showMenu ")`,
+					call: "perform: showMenu ",
+					named: 'perform(" showMenu ") would open a context menu',
+				},
+				{
+					code: `${el}.perform("show_menu")`,
+					call: "perform:show_menu",
+					named: 'perform("show_menu") would open a context menu',
+				},
+				{
+					code: `${el}.perform("AXShowMenu", { menu: ["Copy"] })`,
+					call: "perform:AXShowMenu",
+					named: "would open a context menu",
+				},
+				{
+					code: `${el}.perform("press", { menu: ["New Folder"] })`,
+					call: "perform:press",
+					named: "perform with menu would open a menu",
+				},
+				{
+					code: `${el}.press({ menu: ["New Folder"] })`,
+					call: "perform:press",
+					named: "press with menu would open a menu",
+				},
+				{
+					code: 'await desktop.ref("e1").press({ menu: ["New Folder"] })',
+					call: "perform:press",
+					named: "press with menu would open a menu",
+				},
+				{
+					code: `${win}.click(1, 2, { button: "right" })`,
+					call: "click:42:-",
+					named: 'click with button: "right" would open a context menu',
+				},
+				{
+					code: `${win}.click(1, 2, { button: " Right " })`,
+					call: "click:42:-",
+					named: "would open a context menu",
+				},
+				{
+					code: `${win}.click(1, 2, { modifiers: ["ctrl"] })`,
+					call: "click:42:-",
+					named: "click with Control held would open a context menu",
+				},
+				{
+					code: `${win}.click(1, 2, { modifiers: ["cmd+Control"] })`,
+					call: "click:42:-",
+					named: "click with Control held",
+				},
+				{
+					code: `${win}.click(1, 2, { menu: ["Fonts"] })`,
+					call: "click:42:-",
+					named: "click with menu would open a menu",
+				},
+				{
+					code: `${win}.doubleClick(1, 2, { button: "right" })`,
+					call: "click:42:-",
+					named: 'doubleClick with button: "right"',
+				},
+				{
+					code: `${win}.drag([[1, 2], [3, 4]], { keys: ["control"] })`,
+					call: "drag:42:-",
+					named: "drag with Control held",
+				},
+				{
+					code: `${win}.holdMouse(1, 2, { duration: 0, button: "right" })`,
+					call: "holdMouse:42:-",
+					named: 'holdMouse with button: "right"',
+				},
+				{
+					code: `${el}.click({ button: "right" })`,
+					call: "axClick:-",
+					named: 'click with button: "right" would open a context menu',
+				},
+				{ code: `${el}.click({ modifiers: ["ctrl"] })`, call: "axClick:-", named: "click with Control held" },
+				{
+					code: `${el}.doubleClick({ button: "right" })`,
+					call: "axClick:-",
+					named: 'doubleClick with button: "right"',
+				},
+				{
+					code: 'await desktop.ref("e1").click({ button: "right", menu: ["Copy"] })',
+					call: "axClick:-",
+					named: "would open a context menu",
+				},
+			];
+
+			it("refuses each under refuse before anything is sent, naming the keyboard, the menu bar and the setting", async () => {
+				for (const { code, named } of menus) {
+					const native = new MacSession();
+					const result = await run(native, code, "refuse");
+					expect(result.ok, code).toBe(false);
+					if (result.ok) continue;
+					expect(result.error.message, code).toStartWith("BackgroundUnavailable: ");
+					expect(result.error.message, code).toContain(named);
+					expect(result.error.message, code).toContain("which takes the user's keyboard while it is open");
+					expect(result.error.message, code).toContain('computer.backgroundFallback setting is "refuse"');
+					expect(result.error.message, code).toContain("win.menu.select(...)");
+					expect(result.error.message, code).toContain("an element action such as press()");
+					expect(native.calls, code).toEqual([]);
+				}
+			});
+
+			it("sends each as before under takeover", async () => {
+				for (const { code, call } of menus) {
+					const native = new MacSession();
+					const result = await run(native, code, "takeover");
+					expect(result.ok, code).toBe(true);
+					expect(native.calls, code).toEqual([call]);
+				}
+			});
+
+			it("still sends primary clicks, presses and other AX actions under refuse, and menu calls off macOS", async () => {
+				const mac = new MacSession();
+				const code = [
+					`${win}.click(1, 2);`,
+					`${win}.click(1, 2, { button: "middle", modifiers: ["ctrl"] });`,
+					`${win}.click(1, 2, { modifiers: ["cmd", "shift"] });`,
+					`${win}.drag([[1, 2], [3, 4]], { keys: ["space"] });`,
+					`${el}.press();`,
+					`${el}.perform("AXIncrement");`,
+					`${el}.click();`,
+				].join("\n");
+				expect((await run(mac, code, "refuse")).ok).toBe(true);
+				expect(mac.calls).toEqual([
+					"click:42:-",
+					"click:42:-",
+					"click:42:-",
+					"drag:42:-",
+					"perform:press",
+					"perform:AXIncrement",
+					"axClick:-",
+				]);
+
+				const elsewhere = new ForegroundSession();
+				const menu = [
+					`${win}.click(1, 2, { button: "right" });`,
+					`${el}.perform("AXShowMenu");`,
+					`${el}.press({ menu: ["New Folder"] });`,
+				].join("\n");
+				expect((await run(elsewhere, menu, "refuse")).ok).toBe(true);
+				expect(elsewhere.calls).toEqual(["click:42:-", "perform:AXShowMenu", "perform:press"]);
+			});
+
+			describe("popup buttons and menu buttons", () => {
+				/** A macOS session whose elements are controls of `role`, recording the `refuseMenu` native gets. */
+				class ControlSession extends MacSession {
+					constructor(readonly role = "AXButton") {
+						super();
+					}
+					override async axNode(ref: string): Promise<AxNode> {
+						return { ...axNode, ref, nativeRole: this.role };
+					}
+					override async axSetValue(_ref: string, value: string): Promise<void> {
+						this.calls.push(`setValue:${value}`);
+					}
+					override async click(
+						target: string,
+						_x: number,
+						_y: number,
+						opts?: PointerOptions | null,
+					): Promise<void> {
+						this.calls.push(`click:${target}:${opts?.refuseMenu ?? "-"}`);
+					}
+					override async axClick(_ref: string, opts?: PointerOptions | null): Promise<void> {
+						this.calls.push(`axClick:${opts?.refuseMenu ?? "-"}`);
+					}
+					override async drag(
+						target: string,
+						_points: DesktopPoint[],
+						opts?: PointerOptions | null,
+					): Promise<void> {
+						this.calls.push(`drag:${target}:${opts?.refuseMenu ?? "-"}`);
+					}
+					override async holdMouse(
+						target: string,
+						_x: number,
+						_y: number,
+						options: NativeHoldOptions,
+					): Promise<void> {
+						this.calls.push(`holdMouse:${target}:${options.refuseMenu ?? "-"}`);
+					}
+				}
+
+				/** Each element call that opens a popup button's or menu button's menu, as measured on guest B. */
+				const controls: Array<{ role: string; code: string; call: string; named: string }> = [
+					{
+						role: "AXPopUpButton",
+						code: `${el}.press()`,
+						call: "perform:press",
+						named: "press() on an AXPopUpButton",
+					},
+					{
+						role: "AXMenuButton",
+						code: `${el}.press()`,
+						call: "perform:press",
+						named: "press() on an AXMenuButton",
+					},
+					{
+						role: "AXPopUpButton",
+						code: 'await desktop.ref("e1").press()',
+						call: "perform:press",
+						named: "press() on an AXPopUpButton",
+					},
+					{
+						role: "AXPopUpButton",
+						code: `${el}.perform("AXPress")`,
+						call: "perform:AXPress",
+						named: 'perform("AXPress") on an AXPopUpButton',
+					},
+					{
+						role: "AXMenuButton",
+						code: `${el}.perform(" Press ")`,
+						call: "perform: Press ",
+						named: 'perform(" Press ") on an AXMenuButton',
+					},
+					{
+						role: "AXPopUpButton",
+						code: `${el}.setValue("Large")`,
+						call: "setValue:Large",
+						named: "setValue() on an AXPopUpButton",
+					},
+					{ role: "AXPopUpButton", code: `${el}.click()`, call: "axClick:-", named: "click on an AXPopUpButton" },
+					{
+						role: "AXMenuButton",
+						code: `${el}.doubleClick()`,
+						call: "axClick:-",
+						named: "doubleClick on an AXMenuButton",
+					},
+				];
+
+				it("refuses each under refuse before anything is sent, naming the keyboard and the menu bar", async () => {
+					for (const { role, code, named } of controls) {
+						const native = new ControlSession(role);
+						const result = await run(native, code, "refuse");
+						expect(result.ok, code).toBe(false);
+						if (result.ok) continue;
+						expect(result.error.message, code).toStartWith("BackgroundUnavailable: ");
+						expect(result.error.message, code).toContain(`${named} would open its menu`);
+						expect(result.error.message, code).toContain("which takes the user's keyboard while it is open");
+						expect(result.error.message, code).toContain('computer.backgroundFallback setting is "refuse"');
+						expect(result.error.message, code).toContain("win.menu.select(...)");
+						expect(result.error.message, code).toContain("tell the user the step needs their screen");
+						expect(native.calls, code).toEqual([]);
+					}
+				});
+
+				it("sends each as before under takeover", async () => {
+					for (const { role, code, call } of controls) {
+						const native = new ControlSession(role);
+						expect((await run(native, code, "takeover")).ok, code).toBe(true);
+						expect(native.calls, code).toEqual([call]);
+					}
+				});
+
+				it("still presses, sets and clicks other controls under refuse, and menu buttons off macOS", async () => {
+					const button = new ControlSession();
+					const code = [
+						`${el}.press();`,
+						`${el}.perform("AXPress");`,
+						`${el}.setValue("x");`,
+						`${el}.click();`,
+					].join("\n");
+					expect((await run(button, code, "refuse")).ok).toBe(true);
+					expect(button.calls).toEqual(["perform:press", "perform:AXPress", "setValue:x", "axClick:true"]);
+
+					// A menu button's menu is a pull-down, so setValue and other actions do not open it.
+					const menuButton = new ControlSession("AXMenuButton");
+					const other = [`${el}.setValue("x");`, `${el}.perform("AXShowDefaultUI");`].join("\n");
+					expect((await run(menuButton, other, "refuse")).ok).toBe(true);
+					expect(menuButton.calls).toEqual(["setValue:x", "perform:AXShowDefaultUI"]);
+
+					class ElsewhereSession extends ForegroundSession {
+						override async axNode(ref: string): Promise<AxNode> {
+							return { ...axNode, ref, nativeRole: "AXPopUpButton" };
+						}
+					}
+					const elsewhere = new ElsewhereSession();
+					expect((await run(elsewhere, `${el}.press();\n${el}.click();`, "refuse")).ok).toBe(true);
+					expect(elsewhere.calls).toEqual(["perform:press", "axClick:-"]);
+				});
+
+				it("asks native to refuse a click landing on one, or a hold or drag starting on one, only under refuse on macOS", async () => {
+					const code = [
+						`${win}.click(1, 2);`,
+						`${win}.doubleClick(1, 2);`,
+						`${el}.click();`,
+						`${win}.holdMouse(1, 2, { duration: 0 });`,
+						`${win}.drag([[1, 2], [3, 4]]);`,
+					].join("\n");
+					const refusing = new ControlSession();
+					expect((await run(refusing, code, "refuse")).ok).toBe(true);
+					expect(refusing.calls).toEqual([
+						"click:42:true",
+						"click:42:true",
+						"axClick:true",
+						"holdMouse:42:true",
+						"drag:42:true",
+					]);
+
+					const taking = new ControlSession();
+					expect((await run(taking, code, "takeover")).ok).toBe(true);
+					expect(taking.calls).toEqual(["click:42:-", "click:42:-", "axClick:-", "holdMouse:42:-", "drag:42:-"]);
+				});
+
+				it("reports native's refusal of such a press with the reason, the setting and the alternatives", async () => {
+					const refusals = {
+						click: "the click on window 42 (Code), which lands on a menu button or popup button,",
+						drag: "the drag on window 42 (Code), which starts on a menu button or popup button,",
+					};
+					class LandingSession extends ControlSession {
+						override async click(
+							target: string,
+							x: number,
+							y: number,
+							opts?: PointerOptions | null,
+						): Promise<void> {
+							await super.click(target, x, y, opts);
+							if (opts?.refuseMenu)
+								throw new Error(
+									`BackgroundUnavailable: ${refusals.click} would open its menu; nothing was sent`,
+								);
+						}
+						override async drag(
+							target: string,
+							points: DesktopPoint[],
+							opts?: PointerOptions | null,
+						): Promise<void> {
+							await super.drag(target, points, opts);
+							if (opts?.refuseMenu)
+								throw new Error(
+									`BackgroundUnavailable: ${refusals.drag} would open its menu; nothing was sent`,
+								);
+						}
+					}
+					for (const [method, code] of [
+						["click", `${win}.click(1, 2)`],
+						["drag", `${win}.drag([[1, 2], [3, 4]])`],
+						// The setting refused the press, not the model's `takeover: false`.
+						["click", `${win}.click(1, 2, { takeover: false })`],
+					] as const) {
+						const native = new LandingSession();
+						const result = await run(native, code, "refuse");
+						expect(result.ok, code).toBe(false);
+						if (result.ok) continue;
+						const message = result.error.message;
+						// The same shape as the worker's own menu refusals: the press and its effect, the setting, the way around.
+						expect(message, code).toStartWith(
+							`BackgroundUnavailable: ${refusals[method]} would open its menu, which takes the user's keyboard while it is open`,
+						);
+						expect(message, code).toContain('computer.backgroundFallback setting is "refuse"');
+						expect(message, code).toContain("win.menu.select(...)");
+						expect(message, code).toContain("tell the user the step needs their screen");
+						expect(message, code).not.toContain("no takeover happened");
+						expect(native.calls, code).toEqual([`${method}:42:true`]);
+					}
+				});
+			});
+		});
+
+		it("refuses control.acquire without asking the user", async () => {
+			const transport = new MemoryTransport();
+			const native = new ForegroundSession();
+			new ComputerWorkerCore(transport, () => native);
+			const id = crypto.randomUUID();
+			transport.inbound({
+				type: "run",
+				id,
+				code: 'await desktop.control.acquire({ reason: "Test task" })',
+				timeoutMs: 2_000,
+				session: snapshot(false, undefined, "refuse"),
+				escape: escapeScope(),
+			});
+			const result = await transport.waitFor(candidate => candidate.type === "result" && candidate.id === id);
+			if (result.type !== "result" || result.ok) throw new Error("control.acquire was not refused");
+			expect(result.error.message).toStartWith("BackgroundUnavailable: control.acquire would");
+			expect(result.error.message).toContain("Window input needs no control");
+			expect(transport.outbound.some(message => message.type === "control-request")).toBe(false);
+			expect(native.acquireCount).toBe(0);
+		});
+
+		it("releases a grant acquired before the user chose refuse, at the next run", async () => {
+			const held = new ForegroundSession();
+			held.controlActive = true;
+			expect((await run(held, "return 1", "takeover")).ok).toBe(true);
+			expect(held.controlActive).toBe(true);
+			expect((await run(held, "return 1", "refuse")).ok).toBe(true);
+			expect(held.controlActive).toBe(false);
+		});
+	});
+
+	it("never forwards a model-supplied returnFocus on holds; only the host's rerun sets it", async () => {
+		const native = new RefusingSession();
+		const holds: NativeHoldOptions[] = [];
+		native.holdKeys = async (_target: string, _keys: string[], options: NativeHoldOptions) => {
+			holds.push(options);
+			if (options.takeover !== true) throw new Error(native.refusal);
+		};
+		native.holdMouse = async (_target: string, _x: number, _y: number, options: NativeHoldOptions) => {
+			holds.push(options);
+		};
+		const code = [
+			'const win = await desktop.window("42");',
+			"await win.holdMouse(1, 2, { duration: 0, takeover: true, returnFocus: true });",
+			"await win.holdKeys(['a'], { duration: 0, returnFocus: true });",
+		].join("\n");
+		await run(native, code, "takeover");
+		expect(holds.map(options => options.returnFocus)).toEqual([undefined, undefined, true]);
+	});
+
+	it("reports where native saw focus end, not the window list's focused flag", async () => {
+		const elsewhere = new RefusingSession();
+		elsewhere.report = { handedBack: false, previousPid: 300, frontPid: 400 };
+		const third = notice(await run(elsewhere, clickTarget, "takeover"));
+		expect(third).toContain("on Mail");
+		expect(third).toContain("did not return to Notes");
+		expect(third).not.toContain("returned to");
+
+		const stuck = new RefusingSession();
+		stuck.report = { handedBack: false, previousPid: 300, frontPid: 200 };
+		const stayed = notice(await run(stuck, clickTarget, "takeover"));
+		expect(stayed).toContain("stayed on Wish");
+		expect(stayed).toContain("did not return to Notes");
+
+		const unknown = new RefusingSession();
+		unknown.report = null;
+		const unread = notice(await run(unknown, clickTarget, "takeover"));
+		expect(unread).toContain("not confirmed");
+		expect(unread).not.toContain("Notes");
+
+		const front = new RefusingSession();
+		front.report = { handedBack: true, previousPid: 300 };
+		expect(notice(await run(front, clickTarget, "takeover"))).toContain("not confirmed");
 	});
 });

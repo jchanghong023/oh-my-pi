@@ -340,7 +340,7 @@ export const cfgCompactionIdleTimeoutSeconds = register({
 		tab: "context",
 		group: "上下文压缩",
 		label: "空闲上下文压缩延迟",
-		description: "空闲后等待多少秒再压缩",
+		description: "空闲后等待多少秒再压缩；使用 1 小时提示缓存时，改为在缓存即将过期前执行压缩",
 		options: [
 			{ value: "60", label: "1 分钟" },
 			{ value: "120", label: "2 分钟" },

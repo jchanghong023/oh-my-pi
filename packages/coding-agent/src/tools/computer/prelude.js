@@ -234,12 +234,21 @@
 			throw new TypeError("computer.run() expects a function or code string");
 		}
 		const opts = validateOptions("computer.run", options);
+		const args = opts.args ?? [];
+		if (typeof fnOrCode === "string" && (!Array.isArray(args) || args.length > 0)) {
+			throw new TypeError("computer.run() passes args only to a function; a code string receives none");
+		}
+		if (!Array.isArray(args)) {
+			throw new TypeError(
+				"computer.run() args must be an array of the function's arguments after its scope: computer.run(async ({ desktop }, path) => …, { args: [path] })",
+			);
+		}
 		const parameters = {};
 		if (opts.read_only !== undefined) parameters.read_only = opts.read_only;
 		if (opts.timeout !== undefined) parameters.timeout = opts.timeout;
 		if (typeof fnOrCode === "function") {
 			parameters.fn = serializeFunction("computer.run()", fnOrCode);
-			parameters.args = encodeArgs("computer.run() argument", Array.isArray(opts.args) ? opts.args : []);
+			parameters.args = encodeArgs("computer.run() argument", args);
 		} else {
 			parameters.code = fnOrCode;
 		}

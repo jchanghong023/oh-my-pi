@@ -18,14 +18,15 @@
 //! would otherwise get a release without its press. The taps stay until every
 //! key pressed into the user's app has come up; a newer action's taps on the
 //! same target take those keys over, and the theft too while the target still
-//! holds the keyboard. Notifications lost while the focus tap was disabled
-//! are made up by reading who holds the keyboard when it is re-enabled.
+//! holds the keyboard. A theft no notification reports, from before the
+//! action or while the focus tap was disabled, is found by reading who holds
+//! the keyboard as the action starts and when the tap is re-enabled.
 //!
 //! Only keys typed on a keyboard are moved, never keys a process posted. Keys
-//! are never moved when the user chose the target (a mouse button pressed, a
-//! ⌘ or ⌃ held, or another process's panel taking the keyboard, as
-//! Spotlight's does), and no key pressed while secure keyboard entry is on is
-//! moved.
+//! are never moved when the user chose the target or switched to another app
+//! (a mouse button pressed, a ⌘ or ⌃ held, or another process's panel taking
+//! the keyboard, as Spotlight's does), and no key pressed while secure
+//! keyboard entry is on is moved.
 use std::{
 	ffi::c_void,
 	ptr,
@@ -360,6 +361,11 @@ impl Theft {
 		}
 		match notification {
 			NEW_FRONT if subject == self.target => self.target_holds(signals, now),
+			// The user switched to an app other than theirs: the target taking
+			// the keyboard later must not send their keys to the app they left.
+			NEW_FRONT if subject != self.user && self.user_acted(signals, now) => {
+				self.holder = Holder::UserChose;
+			},
 			NEW_FRONT => self.holder = Holder::Elsewhere,
 			KEY_FOCUS_TAKEN if recipient == self.user && subject == self.target => {
 				self.take(signals, now);
@@ -381,7 +387,10 @@ impl Theft {
 
 	/// After the focus tap was disabled, when `WindowServer` notifications
 	/// may have been missed: the holder from who has the keyboard now, the
-	/// `front` process or the `key_focus` one within it.
+	/// `front` process or the `key_focus` one within it. With `key_focus`
+	/// unknown, only a target in front is known to hold the keyboard; the
+	/// holder otherwise stands, as a target menu may still have it from
+	/// behind the user's app.
 	fn resync(
 		&mut self,
 		front: pid_t,
@@ -392,7 +401,12 @@ impl Theft {
 		if matches!(self.holder, Holder::UserChose | Holder::Ended) {
 			return;
 		}
-		let focus = key_focus.unwrap_or(front);
+		let Some(focus) = key_focus else {
+			if front == self.target {
+				self.target_holds(signals, now);
+			}
+			return;
+		};
 		if self.is_panel(focus, front) {
 			self.holder = Holder::UserChose;
 		} else if front == self.target || focus == self.target {
@@ -404,8 +418,17 @@ impl Theft {
 
 	/// Makes this the latest action, unless a newer one already is. A newer
 	/// action on the same target takes over its predecessor's theft, which
-	/// no notification repeats while the target keeps the keyboard.
-	const fn register(&mut self, registry: &mut Registry) {
+	/// no notification repeats while the target keeps the keyboard. With no
+	/// theft to take over, the holder is read from `holders`, the front and
+	/// key focus processes as the action starts: a target menu left open
+	/// after an earlier repair gave up repeats no notification either.
+	fn register(
+		&mut self,
+		registry: &mut Registry,
+		holders: Option<(pid_t, Option<pid_t>)>,
+		signals: UserSignals,
+		now: Instant,
+	) {
 		if registry.latest.0 >= self.generation {
 			return;
 		}
@@ -413,6 +436,8 @@ impl Theft {
 			&& let Some(buttons) = registry.stolen
 		{
 			self.holder = Holder::Stolen { buttons };
+		} else if let Some((front, key_focus)) = holders {
+			self.resync(front, key_focus, signals, now);
 		}
 		registry.latest = (self.generation, self.target);
 		self.publish(registry);
@@ -749,8 +774,14 @@ impl KeyReroute {
 						control::add_live_tap(focus_tap);
 						control::add_live_tap(key_tap);
 						// From here this action's taps decide for its target, and
-						// older actions stop moving new keys.
-						context.theft.register(&mut REGISTRY.lock());
+						// older actions stop moving new keys. Read after the taps
+						// are on, so a later change still arrives as a notification.
+						let holders = skylight::keyboard_holders();
+						let now = Instant::now();
+						let signals = context.signals(now);
+						context
+							.theft
+							.register(&mut REGISTRY.lock(), holders, signals, now);
 						let _ = ready.send(true);
 						let mut ended_at = None;
 						loop {
@@ -851,6 +882,12 @@ mod tests {
 		Key { physical: false, code, stroke: Some(stroke) }
 	}
 
+	/// Registers `theft` as its action starts, the user's app holding the
+	/// keyboard.
+	fn register(theft: &mut Theft, registry: &mut Registry) {
+		theft.register(registry, Some((USER, Some(USER))), quiet(), Instant::now());
+	}
+
 	/// One action's theft, the latest armed action in its registry.
 	struct Rig {
 		theft:    Theft,
@@ -861,7 +898,7 @@ mod tests {
 		fn new() -> Self {
 			let registry = Registry { latest: (0, -1), stolen: None, held: Vec::new() };
 			let mut rig = Self { theft: theft(), registry };
-			rig.theft.register(&mut rig.registry);
+			register(&mut rig.theft, &mut rig.registry);
 			rig
 		}
 
@@ -977,7 +1014,7 @@ mod tests {
 		// starts; the target takes the keyboard again.
 		let mut newer = Theft::new(OTHER_USER, TARGET, BUTTONS, 2);
 		let mut registry = old.registry;
-		newer.register(&mut registry);
+		register(&mut newer, &mut registry);
 		newer.notify(KEY_FOCUS_TAKEN, OTHER_USER, TARGET, quiet(), Instant::now());
 		let mut route = |theft: &mut Theft, code, stroke| {
 			theft.route(&mut registry, user_key(code, stroke), false, BUTTONS)
@@ -1003,7 +1040,7 @@ mod tests {
 		old.steal();
 		let mut newer = Theft::new(USER, TARGET, BUTTONS, 2);
 		let mut registry = old.registry;
-		newer.register(&mut registry);
+		register(&mut newer, &mut registry);
 		let mut old = old.theft;
 		assert_eq!(registry.latest, (2, TARGET));
 		assert_eq!(newer.route(&mut registry, user_key(Q, Stroke::Press), false, BUTTONS), MOVED);
@@ -1018,15 +1055,31 @@ mod tests {
 				old.give_back();
 			}
 			let mut newer = Theft::new(USER, target, BUTTONS, 2);
-			newer.register(&mut old.registry);
+			register(&mut newer, &mut old.registry);
 			assert_eq!(newer.holder, Holder::Elsewhere, "target {target}");
 			assert_eq!(old.registry.stolen, None);
 		}
 		// An older action registering late changes nothing.
 		let mut rig = Rig::new();
 		rig.registry.latest = (5, OTHER_TARGET);
-		rig.theft.register(&mut rig.registry);
+		register(&mut rig.theft, &mut rig.registry);
 		assert_eq!(rig.registry.latest, (5, OTHER_TARGET));
+	}
+
+	#[test]
+	fn a_newer_action_reads_a_theft_the_last_repair_gave_up_on() {
+		// The target's menu kept the keyboard through the last action's 30 s
+		// linger: the next action on it gets no notification of the theft.
+		let mut old = Rig::new();
+		old.steal();
+		old.theft.linger(Some(USER), LINGER_MAX);
+		old.theft.publish(&mut old.registry);
+		assert_eq!(old.registry.stolen, None);
+		let mut newer = Theft::new(USER, TARGET, BUTTONS, 2);
+		let mut registry = old.registry;
+		newer.register(&mut registry, Some((USER, Some(TARGET))), quiet(), Instant::now());
+		assert_eq!(registry.stolen, Some(BUTTONS));
+		assert_eq!(newer.route(&mut registry, user_key(Q, Stroke::Press), false, BUTTONS), MOVED);
 	}
 
 	#[test]
@@ -1043,7 +1096,7 @@ mod tests {
 			assert!(theft.stolen());
 		}
 		// The keyboard came back to the user's app, or the user went to another.
-		for (front, key_focus) in [(USER, Some(USER)), (USER, None), (OTHER_USER, Some(OTHER_USER))] {
+		for (front, key_focus) in [(USER, Some(USER)), (OTHER_USER, Some(OTHER_USER))] {
 			let mut theft = theft();
 			theft.notify(KEY_FOCUS_TAKEN, USER, TARGET, quiet(), now);
 			theft.resync(front, key_focus, quiet(), now);
@@ -1058,6 +1111,22 @@ mod tests {
 		let mut theft = self::theft();
 		theft.resync(USER, Some(SPOTLIGHT), quiet(), now);
 		assert_eq!(theft.holder, Holder::UserChose);
+	}
+
+	#[test]
+	fn a_theft_stands_when_the_key_focus_cannot_be_read() {
+		let now = Instant::now();
+		// The target's menu may still have the keyboard behind the front app.
+		for front in [USER, OTHER_USER] {
+			let mut theft = theft();
+			theft.notify(KEY_FOCUS_TAKEN, USER, TARGET, quiet(), now);
+			theft.resync(front, None, quiet(), now);
+			assert!(theft.stolen(), "front {front}");
+		}
+		// Nor does an unread key focus make a theft behind the user's app.
+		let mut theft = theft();
+		theft.resync(USER, None, quiet(), now);
+		assert_eq!(theft.holder, Holder::Elsewhere);
 	}
 
 	#[test]
@@ -1202,6 +1271,27 @@ mod tests {
 		let mut stale = self::theft();
 		stale.notify(NEW_FRONT, 1, TARGET, tabbed, now + CHORD_WINDOW + Duration::from_millis(1));
 		assert!(stale.reroutes(false, BUTTONS));
+	}
+
+	#[test]
+	fn a_switch_to_another_app_keeps_a_later_theft_from_moving_keys() {
+		let now = Instant::now();
+		let later = now + CHORD_WINDOW + Duration::from_millis(1);
+		let tabbed = UserSignals { buttons: BUTTONS, last_chord: Some(now) };
+		// The user ⌘-Tabs from their app to another; the target comes forward
+		// after the chord window: their keys must not go to the app they left.
+		let mut theft = theft();
+		theft.notify(NEW_FRONT, 1, OTHER_USER, tabbed, now);
+		theft.notify(NEW_FRONT, 1, TARGET, quiet(), later);
+		assert!(!theft.reroutes(false, BUTTONS));
+		// Switching back to their own app, or another app coming forward on
+		// its own, leaves a later theft repaired.
+		for (front, signals) in [(USER, tabbed), (OTHER_USER, quiet())] {
+			let mut theft = self::theft();
+			theft.notify(NEW_FRONT, 1, front, signals, now);
+			theft.notify(NEW_FRONT, 1, TARGET, quiet(), later);
+			assert!(theft.reroutes(false, BUTTONS), "front {front}");
+		}
 	}
 
 	#[test]

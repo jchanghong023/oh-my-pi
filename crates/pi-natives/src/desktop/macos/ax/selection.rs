@@ -82,8 +82,9 @@ fn apply(
 ) -> CoreResult<Utf16Range> {
 	guard(&mut || {
 		// The probes before the write can block, the front-app read included.
-		// The selection is not moved in an app the user brought forward, nor
-		// by a run cancelled meanwhile.
+		// The selection is not moved in an app the user brought forward or used
+		// ([`control::intervention::check_press`]), nor by a run cancelled
+		// meanwhile.
 		if brought_forward() {
 			return Err(DesktopError::ax_failed(
 				"the app came to the front during the call, so its caret is the user's; nothing was \
@@ -91,6 +92,7 @@ fn apply(
 			));
 		}
 		control::check()?;
+		control::intervention::check_press()?;
 		write()?;
 		poll(settle, || (read_range() == Some(wanted)).then_some(()));
 		Ok(())
@@ -164,7 +166,10 @@ fn write_result(error: AXError) -> CoreResult<()> {
 
 #[cfg(test)]
 mod tests {
-	use std::{cell::Cell, time::Duration};
+	use std::{
+		cell::Cell,
+		time::{Duration, Instant},
+	};
 
 	use objc2_application_services::AXError;
 
@@ -297,5 +302,33 @@ mod tests {
 	#[test]
 	fn an_app_brought_forward_during_the_call_keeps_its_caret() {
 		assert_eq!(checked(false, true), (Err(ErrorCode::AxFailed), false));
+	}
+
+	#[test]
+	fn a_user_typing_in_the_app_during_the_probes_keeps_its_caret() {
+		let listener = control::intervention::Listener::simulated();
+		listener.touch(7, Some(1), || "TextEdit".to_string());
+		let token = control::CancellationSource::default().token();
+		let _watch = listener.admit(7, &token).unwrap();
+		let wrote = Cell::new(false);
+		let result = apply(
+			VALUE,
+			WANTED,
+			|action| action(),
+			|| {
+				// The user types into the field during the front-app read.
+				listener.record_for_test(7, Instant::now());
+				false
+			},
+			|| {
+				wrote.set(true);
+				Ok(())
+			},
+			|| Some(WANTED),
+			|| Some(VALUE.to_owned()),
+			Duration::ZERO,
+		);
+		assert_eq!(result.unwrap_err().code, ErrorCode::UserIntervened);
+		assert!(!wrote.get(), "the selection was written after the user's input");
 	}
 }

@@ -74,8 +74,8 @@ export declare class DesktopSession {
   menuItems(target: string, path?: Array<string> | undefined | null): Promise<Array<DesktopMenuItem>>
   menuSelect(target: string, path: Array<string>): Promise<undefined>
   bringToCurrentSpace(windowId: string): Promise<undefined>
-  holdKeys(target: string, keys: Array<string>, options: HoldOptions): Promise<undefined>
-  holdMouse(target: string, x: number, y: number, options: HoldOptions): Promise<undefined>
+  holdKeys(target: string, keys: Array<string>, options: HoldOptions): Promise<DesktopFocusReturn | undefined | null>
+  holdMouse(target: string, x: number, y: number, options: HoldOptions): Promise<DesktopFocusReturn | undefined | null>
   /**
    * Native ownership only. Human approval is required by the host before
    * calling this method.
@@ -97,12 +97,12 @@ export declare class DesktopSession {
    * coordinate frame.
    */
   captureRegion(target: string, region: CaptureRegion, caps?: CaptureCaps | undefined | null): Promise<DesktopCapture>
-  click(target: string, x: number, y: number, opts?: PointerOptions | undefined | null): Promise<undefined>
-  moveMouse(target: string, x: number, y: number, opts?: PointerOptions | undefined | null): Promise<undefined>
-  drag(target: string, path: Array<DesktopPoint>, opts?: PointerOptions | undefined | null): Promise<undefined>
-  scroll(target: string, x: number, y: number, dx: number, dy: number, opts?: PointerOptions | undefined | null): Promise<undefined>
-  typeText(target: string, text: string, opts?: PointerOptions | undefined | null): Promise<undefined>
-  keyChord(target: string, keys: Array<string>, opts?: PointerOptions | undefined | null): Promise<undefined>
+  click(target: string, x: number, y: number, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  moveMouse(target: string, x: number, y: number, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  drag(target: string, path: Array<DesktopPoint>, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  scroll(target: string, x: number, y: number, dx: number, dy: number, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  typeText(target: string, text: string, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
+  keyChord(target: string, keys: Array<string>, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   raiseWindow(windowId: string): Promise<undefined>
   axSnapshot(target: string, opts?: AxSnapshotOptions | undefined | null): Promise<AxSnapshot>
   axQuery(target: string, query: AxQuery): Promise<Array<AxNode>>
@@ -116,7 +116,11 @@ export declare class DesktopSession {
   axAttributes(reference: string): Promise<Array<[string, string]>>
   axChildren(reference: string): Promise<Array<AxNode>>
   axParent(reference: string): Promise<AxNode | undefined | null>
-  axPerform(reference: string, action: string): Promise<undefined>
+  /**
+   * Performs `action` on the element; with `menu`, chooses that item path
+   * in the menu the action opens, which closes it.
+   */
+  axPerform(reference: string, action: string, menu?: Array<string> | undefined | null): Promise<undefined>
   axSetValue(reference: string, value: string): Promise<undefined>
   /**
    * Selects `text` in the element's value by accessibility, or places a
@@ -124,14 +128,14 @@ export declare class DesktopSession {
    */
   axSelectText(reference: string, text: string, opts?: AxSelectTextOptions | undefined | null): Promise<AxTextSelection>
   axFocus(reference: string): Promise<undefined>
-  axClick(reference: string, opts?: PointerOptions | undefined | null): Promise<undefined>
+  axClick(reference: string, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   /**
    * Types `text` into the element: native text fields take it by AX
    * insertion, other elements as keystrokes once they hold keyboard focus.
    */
-  axType(reference: string, text: string, opts?: PointerOptions | undefined | null): Promise<undefined>
+  axType(reference: string, text: string, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   /** Presses a key chord in the element once it holds keyboard focus. */
-  axKeyChord(reference: string, keys: Array<string>, opts?: PointerOptions | undefined | null): Promise<undefined>
+  axKeyChord(reference: string, keys: Array<string>, opts?: PointerOptions | undefined | null): Promise<DesktopFocusReturn | undefined | null>
   /**
    * Immediately cancel operations submitted before this call. Later
    * operations may proceed.
@@ -1487,6 +1491,20 @@ export interface DesktopDisplay {
 export declare function desktopEscapeStops(key: string): number
 
 /**
+ * Where focus ended after a takeover input call, as `WindowServer` reports
+ * it. Input calls resolve to it on macOS when they took over; other
+ * backends and background delivery resolve to `null`.
+ */
+export interface DesktopFocusReturn {
+  /** Whether the takeover handed focus back to the app front before it. */
+  handedBack: boolean
+  /** The process front before the takeover. */
+  previousPid?: number
+  /** The process front once the takeover ended; absent when unreadable. */
+  frontPid?: number
+}
+
+/**
  * One immediate child of a native application menu. Paths contain the actual
  * native labels, including ellipses; selection accepts normalized labels.
  */
@@ -2349,6 +2367,16 @@ export interface HoldOptions {
   button?: string
   keys?: Array<string>
   takeover?: boolean
+  /**
+   * With `takeover`, hand focus back to the user's app even after their
+   * input during the hold; see `PointerOptions.returnFocus`.
+   */
+  returnFocus?: boolean
+  /**
+   * Refuse a background left hold that starts on a control that opens a
+   * menu; see `PointerOptions.refuseMenu`.
+   */
+  refuseMenu?: boolean
 }
 
 /**
@@ -2952,6 +2980,26 @@ export interface PointerOptions {
    * default background delivery.
    */
   takeover?: boolean
+  /**
+   * With `takeover`, hand focus back to the user's app even if they typed
+   * or clicked during the action; only a third app they switched to keeps
+   * it. The host sets this when it reruns a refused background action.
+   */
+  returnFocus?: boolean
+  /**
+   * Item path to choose in the menu a click opens, matched like a menu-bar
+   * path, e.g. a context menu's `["Add to", "Fonts"]`; the call opens the
+   * menu, presses the item and returns with the menu closed.
+   */
+  menu?: Array<string>
+  /**
+   * Refuse a background left click that lands on a control that opens a
+   * menu (on macOS a menu button or popup button), or a drag that starts on
+   * one, with `BackgroundUnavailable` before anything is sent. The host sets
+   * this when the user refuses foreground takeover: an open menu takes their
+   * keyboard.
+   */
+  refuseMenu?: boolean
 }
 
 /**

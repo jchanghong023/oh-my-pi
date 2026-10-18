@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.2] - 2026-10-18
+
 ### Added
 
 - Added shared shell-word decoding for quoted and escaped command summaries and loop-limit parsing.

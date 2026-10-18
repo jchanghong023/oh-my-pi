@@ -159,17 +159,11 @@ fn global_pointer(input: &mut Enigo, event: PointerEvent) -> CoreResult<()> {
 			with_global_modifiers(input, modifiers, |input| {
 				foreground::move_pointer(x, y)?;
 				for _ in 0..count {
-					control::bounded_hold(Duration::ZERO, |down| {
-						global_button(
-							input,
-							button,
-							if down {
-								Direction::Press
-							} else {
-								Direction::Release
-							},
-						)
-					})?;
+					// A press is always released: a cancel stops the next press.
+					control::check()?;
+					let pressed = global_button(input, button, Direction::Press);
+					let released = control::cleanup(|| global_button(input, button, Direction::Release));
+					completed(pressed, released)?;
 				}
 				Ok(())
 			})
@@ -230,8 +224,13 @@ fn global_pointer(input: &mut Enigo, event: PointerEvent) -> CoreResult<()> {
 	}
 }
 
+/// Presses `keys` and releases them. A shortcut fires on its last press, so a
+/// cancel once every key is down no longer fails the call.
 fn global_key_chord(input: &mut Enigo, keys: &[KeyName]) -> CoreResult<()> {
-	with_global_keys(input, keys, |_| control::check())
+	for &key in keys {
+		background::virtual_key(key)?;
+	}
+	with_held_keys(input, keys.iter().copied(), emit_global_key, |_| Ok(()), completed)
 }
 
 mod background {
@@ -344,8 +343,7 @@ mod background {
 
 	fn refusal(id: &str, class: &str, kind: EventKind, reason: &str) -> DesktopError {
 		DesktopError::background_unavailable(format!(
-			"window {id} ({class}) drops background {} events: {reason}; retry with takeover:true or \
-			 use ax actions",
+			"window {id} ({class}) drops background {} events: {reason}; no input was sent",
 			kind.name()
 		))
 	}
@@ -395,8 +393,7 @@ mod background {
 	fn child_under(root: HWND, point: POINT) -> CoreResult<(HWND, POINT)> {
 		window::deepest_child(root, point).ok_or_else(|| {
 			DesktopError::background_unavailable(
-				"cannot map this point into an enabled target client area; use ax actions or \
-				 takeover:true",
+				"cannot map this point into an enabled target client area; no input was sent",
 			)
 		})
 	}
@@ -495,7 +492,7 @@ mod background {
 						};
 						post(target, WM_MOUSEMOVE, flags, point)?;
 						post(target, press, flags | button_flag, point)?;
-						let result = control::wait(CLICK_HOLD);
+						let result = control::sent_gap_wait(CLICK_HOLD, index + 1 == count);
 						let release = control::cleanup(|| post(target, up, flags, point));
 						super::completed(result, release)?;
 					}
@@ -532,13 +529,13 @@ mod background {
 				let start = screen_point(x, y);
 				let hit = hit_test(root, start).ok_or_else(|| {
 					DesktopError::background_unavailable(
-						"cannot establish the drag start region; use ax actions or takeover:true",
+						"cannot establish the drag start region; no input was sent",
 					)
 				})?;
 				if let Some(region) = non_client_drag_region(hit) {
 					return Err(DesktopError::background_unavailable(format!(
 						"window {id} drag starts on its {region}, where only real pointer input drives \
-						 the system move/size loop; retry with takeover:true or use ax actions"
+						 the system move/size loop; no input was sent"
 					)));
 				}
 				let (target, client) = child_under(root, start)?;
@@ -552,13 +549,18 @@ mod background {
 					let mut end = start;
 					let movement = (|| {
 						control::wait(CLICK_HOLD)?;
-						path.iter().skip(1).try_for_each(|&(x, y)| {
-							control::check()?;
-							let next = client_point(target, x, y)?;
-							post(target, WM_MOUSEMOVE, flags | button_flag, next)?;
-							end = next;
-							control::wait(DRAG_STEP)
-						})
+						let last = path.len().saturating_sub(2);
+						path
+							.iter()
+							.skip(1)
+							.enumerate()
+							.try_for_each(|(index, &(x, y))| {
+								control::check()?;
+								let next = client_point(target, x, y)?;
+								post(target, WM_MOUSEMOVE, flags | button_flag, next)?;
+								end = next;
+								control::sent_gap_wait(DRAG_STEP, index == last)
+							})
 					})();
 					let release = control::cleanup(|| post(target, up, flags, end));
 					super::completed(movement, release)
@@ -687,8 +689,7 @@ mod background {
 		fn focused(root: HWND) -> CoreResult<Self> {
 			let hwnd = window::focused_descendant(root).ok_or_else(|| {
 				DesktopError::background_unavailable(
-					"no unambiguous focused control in the target window; use ax actions or \
-					 takeover:true",
+					"no unambiguous focused control in the target window; no input was sent",
 				)
 			})?;
 			Ok(Self { hwnd, alt_depth: 0 })
@@ -831,7 +832,7 @@ mod background {
 			};
 			if let Some(reason) = drop_reason(hwnd, &class, kind) {
 				return Err(DesktopError::background_unavailable(format!(
-					"window {} ({class}) drops held background keys: {reason}; retry with takeover:true",
+					"window {} ({class}) drops held background keys: {reason}; no input was sent",
 					hwnd as usize,
 				)));
 			}
@@ -849,8 +850,14 @@ mod background {
 		)
 	}
 
-	pub(super) fn key_chord(id: &str, keys: &[KeyName]) -> CoreResult<()> {
-		hold_keys(id, keys, KEY_GAP, None)
+	/// Presses `keys` in window `id` (in `element`, one of its control
+	/// windows, when given). A shortcut fires on its last press, so the gap
+	/// before the releases settles: a cancel then stops the next call.
+	pub(super) fn key_chord(id: &str, keys: &[KeyName], element: Option<HWND>) -> CoreResult<()> {
+		with_window_keys(id, keys, element, || {
+			control::settle(KEY_GAP);
+			Ok(())
+		})
 	}
 
 	/// Holds `keys` in window `id`: in `element`, one of its control windows,
@@ -860,6 +867,15 @@ mod background {
 		keys: &[KeyName],
 		duration: Duration,
 		element: Option<HWND>,
+	) -> CoreResult<()> {
+		with_window_keys(id, keys, element, || control::wait(duration))
+	}
+
+	fn with_window_keys(
+		id: &str,
+		keys: &[KeyName],
+		element: Option<HWND>,
+		held: impl FnOnce() -> CoreResult<()>,
 	) -> CoreResult<()> {
 		control::check()?;
 		for &key in keys {
@@ -876,35 +892,42 @@ mod background {
 			&mut emitter,
 			keys.iter().copied(),
 			KeyEmitter::emit,
-			|_| control::wait(duration),
+			|_| held(),
 			super::completed,
 		)
 	}
 
 	/// Types `text` into window `id`: into `element`, one of its control
-	/// windows, when given, else into its focused control.
+	/// windows, when given, else into its focused control. Once the last
+	/// unit is out the waits after it settle: a cancel then stops the next
+	/// call, not this one.
 	pub(super) fn type_text(id: &str, text: &str, element: Option<HWND>) -> CoreResult<()> {
 		control::check()?;
 		let root = hwnd(id)?;
 		ensure_text_supported(id, root)?;
 		let mut emitter = KeyEmitter::to(id, root, element, EventKind::TextInput)?;
+		let mut left: usize = graphemes_str(text)
+			.map(|grapheme| text_units(grapheme).count())
+			.sum();
 		for grapheme in graphemes_str(text) {
 			control::check()?;
 			for unit in text_units(grapheme) {
+				left -= 1;
+				let sent = left == 0;
 				match unit {
 					TextUnit::Enter => {
 						emitter.transition(VK_RETURN, true)?;
-						let result = control::wait(KEY_GAP);
+						let result = control::sent_gap_wait(KEY_GAP, sent);
 						let release = control::cleanup(|| emitter.transition(VK_RETURN, false));
 						super::completed(result, release)?;
-						control::wait(KEY_GAP + ENTER_SETTLE)?;
+						control::sent_gap_wait(KEY_GAP + ENTER_SETTLE, sent)?;
 					},
 					TextUnit::Char(character) => {
 						let mut units = [0; 2];
 						for &unit in character.encode_utf16(&mut units).iter() {
 							post(emitter.hwnd, WM_CHAR, usize::from(unit), 1)?;
 						}
-						control::wait(KEY_GAP)?;
+						control::sent_gap_wait(KEY_GAP, sent)?;
 					},
 				}
 			}
@@ -996,9 +1019,9 @@ mod foreground {
 
 		fn run(mut self, operation: impl FnOnce(HWND) -> CoreResult<()>) -> CoreResult<()> {
 			let result = control::check().and_then(|()| operation(self.target));
-			// Preserve the target's consumption window after partial delivery,
-			// but stop waiting immediately when the operation is cancelled.
-			let result = super::completed(result, control::wait(self.settle));
+			// Preserve the target's consumption window after any delivery, even
+			// a partial one; a cancel during it leaves sent input reported sent.
+			control::settle(self.settle);
 			super::completed(result, self.restore())
 		}
 
@@ -1394,6 +1417,8 @@ mod foreground {
 
 	/// Sends each press separately so cancellation can interrupt a long chord,
 	/// then releases only transitions successfully inserted before it stopped.
+	/// Once every press is in, only `operation` can still be cancelled: a
+	/// chord's shortcut has fired by then.
 	fn holding(
 		target: HWND,
 		presses: &[INPUT],
@@ -1406,7 +1431,6 @@ mod foreground {
 				send_to(target, std::slice::from_ref(press))?;
 				held += 1;
 			}
-			control::check()?;
 			operation()
 		})();
 		let released = control::cleanup(|| {
@@ -1442,16 +1466,23 @@ mod foreground {
 	}
 
 	pub(super) fn key_chord(id: &str, keys: &[KeyName]) -> CoreResult<()> {
-		hold_keys(id, keys, Duration::ZERO)
+		with_foreground_keys(id, keys, || Ok(()))
 	}
 
 	pub(super) fn hold_keys(id: &str, keys: &[KeyName], duration: Duration) -> CoreResult<()> {
+		with_foreground_keys(id, keys, || control::wait(duration))
+	}
+
+	fn with_foreground_keys(
+		id: &str,
+		keys: &[KeyName],
+		held: impl FnOnce() -> CoreResult<()>,
+	) -> CoreResult<()> {
 		// Resolve all key names before activation or input.
 		for &key in keys {
 			background::virtual_key(key)?;
 		}
-		ForegroundGuard::activate(id, KEY_SETTLE)?
-			.run(|target| with_keys(target, keys, || control::wait(duration)))
+		ForegroundGuard::activate(id, KEY_SETTLE)?.run(|target| with_keys(target, keys, held))
 	}
 
 	fn with_keys(
@@ -1524,7 +1555,8 @@ mod foreground {
 				}
 			}
 		}
-		control::check()
+		// Every unit is out: a cancel now stops the next call.
+		Ok(())
 	}
 
 	pub(super) fn type_text(id: &str, text: &str) -> CoreResult<()> {
@@ -1660,7 +1692,9 @@ pub(super) fn key_chord(
 	}
 	match target {
 		Target::Desktop | Target::Display(_) => global_key_chord(global, keys),
-		Target::Window(id) if mode == DeliveryMode::Background => background::key_chord(id, keys),
+		Target::Window(id) if mode == DeliveryMode::Background => {
+			background::key_chord(id, keys, None)
+		},
 		Target::Window(id) => foreground::key_chord(id, keys),
 	}
 }
@@ -1674,9 +1708,7 @@ pub(super) fn element_background(id: &str, element: HWND, input: &ElementInput) 
 		ElementInput::Chord(keys) if keys.is_empty() => {
 			Err(DesktopError::input_failed("key chord is empty"))
 		},
-		ElementInput::Chord(keys) => {
-			background::hold_keys(id, keys, background::KEY_GAP, Some(element))
-		},
+		ElementInput::Chord(keys) => background::key_chord(id, keys, Some(element)),
 	}
 }
 

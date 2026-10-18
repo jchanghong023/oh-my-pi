@@ -165,12 +165,12 @@ impl Backend for Win32Backend {
 					DesktopError::background_unavailable(format!(
 						"this element of window {id} is drawn without a control window of its own, so \
 						 background keys cannot address it, and focusing it would bring the window to \
-						 the front; nothing was sent; retry with takeover:true"
+						 the front; nothing was sent"
 					))
 				})?;
 				input::element_background(id, own, input)?;
 			},
-			DeliveryMode::Foreground => {
+			DeliveryMode::Foreground | DeliveryMode::ForegroundReturnFocus => {
 				self.ax.focus(element)?;
 				match input {
 					ElementInput::Text(text) => input::type_text(target, text, mode)?,

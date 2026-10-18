@@ -6,6 +6,10 @@ mod key_reroute;
 mod keymap;
 mod permission;
 mod process;
+#[allow(dead_code, reason = "shared with the input-release helper, which uses the rest")]
+mod release;
+mod release_guard;
+mod route;
 mod session;
 mod skylight;
 mod spaces;
@@ -21,7 +25,7 @@ pub(super) use session::screen_state;
 pub(super) use skylight::front_pid;
 pub(super) use spaces::window_on_another_space;
 
-use self::{ax::MacAx, capture::MacCapture, input::MacInput};
+use self::{ax::MacAx, capture::MacCapture, input::MacInput, release_guard::Presses};
 use super::{
 	ax::AxHandle,
 	backend::{
@@ -160,7 +164,31 @@ impl Backend for MacosBackend {
 	) -> CoreResult<()> {
 		token.check()?;
 		Self::require_input_permission()?;
-		self.input.pointer(target, event, mode, &self.capture)
+		release_guard::scope(pointer_presses(&event, target, mode), || {
+			self.input.pointer(target, event, None, mode, &self.capture)
+		})
+	}
+
+	fn pointer_menu(
+		&mut self,
+		target: &Target,
+		event: PointerEvent,
+		path: &[String],
+		_frame: &FrameGeometry,
+		mode: DeliveryMode,
+		token: &OperationToken,
+	) -> CoreResult<()> {
+		token.check()?;
+		Self::require_input_permission()?;
+		release_guard::scope(pointer_presses(&event, target, mode), || {
+			self
+				.input
+				.pointer(target, event, Some(path), mode, &self.capture)
+		})
+	}
+
+	fn refuse_menu_press(&mut self, target: &Target, event: &PointerEvent) -> CoreResult<()> {
+		input::refuse_menu_press(target, event, &self.capture)
 	}
 
 	fn type_text(
@@ -172,7 +200,9 @@ impl Backend for MacosBackend {
 	) -> CoreResult<()> {
 		token.check()?;
 		Self::require_input_permission()?;
-		self.input.type_text(target, text, mode, &self.capture)
+		release_guard::scope(presses(target, mode), || {
+			self.input.type_text(target, text, mode, &self.capture)
+		})
 	}
 
 	fn key_chord(
@@ -184,7 +214,9 @@ impl Backend for MacosBackend {
 	) -> CoreResult<()> {
 		token.check()?;
 		Self::require_input_permission()?;
-		self.input.key_chord(target, keys, mode, &self.capture)
+		release_guard::scope(presses(target, mode), || {
+			self.input.key_chord(target, keys, mode, &self.capture)
+		})
 	}
 
 	fn element_input(
@@ -200,9 +232,11 @@ impl Backend for MacosBackend {
 		let Target::Window(id) = target else {
 			return Err(DesktopError::invalid_target("element input needs the element's window"));
 		};
-		self
-			.input
-			.element_input(id, ax::mac_handle(element)?, input, mode, &self.capture)
+		release_guard::scope(presses(target, mode), || {
+			self
+				.input
+				.element_input(id, ax::mac_handle(element)?, input, mode, &self.capture)
+		})
 	}
 
 	fn hold_keys(
@@ -215,9 +249,11 @@ impl Backend for MacosBackend {
 	) -> CoreResult<()> {
 		token.check()?;
 		Self::require_input_permission()?;
-		self
-			.input
-			.hold_keys(target, keys, duration, mode, &self.capture)
+		release_guard::scope(presses(target, mode), || {
+			self
+				.input
+				.hold_keys(target, keys, duration, mode, &self.capture)
+		})
 	}
 
 	fn menu_items(
@@ -237,7 +273,8 @@ impl Backend for MacosBackend {
 	) -> CoreResult<()> {
 		token.check()?;
 		Self::require_input_permission()?;
-		menus::select(window, path)
+		// The window's activating click is the only input a menu command posts.
+		release_guard::scope(Presses::Process, || menus::select(window, path))
 	}
 
 	fn bring_to_current_space(&mut self, id: &str, token: &OperationToken) -> CoreResult<()> {
@@ -292,6 +329,31 @@ fn window_owner(
 	listed_owner: impl FnOnce() -> Option<libc::pid_t>,
 ) -> Option<libc::pid_t> {
 	id.parse().ok().and_then(server_owner).or_else(listed_owner)
+}
+
+/// How input to `target` in `mode` presses: on the HID route, which the
+/// user's own keyboard and mouse share, or to the target's process.
+const fn presses(target: &Target, mode: DeliveryMode) -> Presses {
+	if matches!(target, Target::Desktop | Target::Display(_))
+		|| !matches!(mode, DeliveryMode::Background)
+	{
+		Presses::Hid
+	} else {
+		Presses::Process
+	}
+}
+
+/// How `event` presses: as other input to `target` does if it presses a
+/// button, and not at all if it only moves or scrolls.
+const fn pointer_presses(event: &PointerEvent, target: &Target, mode: DeliveryMode) -> Presses {
+	if matches!(
+		event,
+		PointerEvent::Click { .. } | PointerEvent::Drag { .. } | PointerEvent::Hold { .. }
+	) {
+		presses(target, mode)
+	} else {
+		Presses::Nothing
+	}
 }
 
 fn permission_label(granted: bool) -> String {

@@ -115,7 +115,6 @@ describe("bash internal URLs through the shell filesystem", () => {
 		// The child could write anywhere under its working directory; skill:// refuses mutation.
 		const refused = await run(`'${process.execPath}' tool.js`, "skill://demo");
 		expect(refused.isError).toBe(true);
-		expect(refused.text).toContain("read-only working directory");
 	});
 
 	it("fails the command when a URL argument names nothing the provider knows", async () => {

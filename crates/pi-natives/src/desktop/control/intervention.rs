@@ -3,7 +3,7 @@
 //! A user who steps into an app the agent drives changes what the agent last
 //! read there. Input aimed at an app the user has used since the session last
 //! read it waits for them to pause, then fails without sending, so the agent
-//! reads the window again before acting; keys already being typed stop at the
+//! reads the window again before acting; input already being sent stops at the
 //! user's first key or click.
 use std::{
 	cell::RefCell,
@@ -37,21 +37,45 @@ struct App {
 	unread:  Option<Instant>,
 }
 
+/// A process that takes input for a watched app's windows, such as the
+/// service that draws its Open or Save panel.
+struct Route {
+	app:     libc::pid_t,
+	/// When the process started, so a later process reusing its id takes none
+	/// of the app's input.
+	started: Option<u64>,
+}
+
 #[derive(Default)]
 struct State {
 	apps:   HashMap<libc::pid_t, App>,
-	/// Processes that take input for a watched app's windows, such as the
-	/// service that draws its Open or Save panel, mapped to that app. A
+	/// Processes that take input for a watched app's windows, by id. A
 	/// process takes one app's input at a time: the latest route wins.
-	routes: HashMap<libc::pid_t, libc::pid_t>,
+	routes: HashMap<libc::pid_t, Route>,
 }
+
+/// When process `pid` started, or `None` when that cannot be told.
+type Started = fn(libc::pid_t) -> Option<u64>;
 
 /// The user's input into each app this session has read or sent input to,
 /// shared by the tap thread and the session worker.
-#[derive(Default)]
-pub(crate) struct UserInputs(Mutex<State>);
+pub(crate) struct UserInputs(
+	Mutex<State>,
+	/// Tells a route's process from a later one under the same id.
+	Started,
+);
+
+impl Default for UserInputs {
+	fn default() -> Self {
+		Self::new(crate::desktop::macos::process_started)
+	}
+}
 
 impl UserInputs {
+	fn new(started: Started) -> Self {
+		Self(Mutex::default(), started)
+	}
+
 	/// Starts recording the user's input into `pid`, which started at
 	/// `started`. Input into an app before the session first reads it or acts
 	/// on it is not the agent's concern, nor is a former process's under the
@@ -71,20 +95,34 @@ impl UserInputs {
 		state
 			.apps
 			.insert(pid, App { name, started, inputs: 0, unread: None });
-		state.routes.retain(|_, app| *app != pid);
+		state.routes.retain(|_, route| route.app != pid);
 	}
 
-	/// Counts the user's input into `input` as input into the watched `app`.
+	/// Counts the user's input into `input` as input into the watched `app`
+	/// while `input` is the process it is now.
 	fn route(&self, input: libc::pid_t, app: libc::pid_t) {
 		if input != app {
-			self.0.lock().routes.insert(input, app);
+			let started = (self.1)(input);
+			self.0.lock().routes.insert(input, Route { app, started });
 		}
 	}
 
 	/// The user pressed a key or clicked in `pid` at `at`.
 	pub(super) fn record(&self, pid: libc::pid_t, at: Instant) {
 		let mut state = self.0.lock();
-		let pid = state.routes.get(&pid).copied().unwrap_or(pid);
+		let route = state
+			.routes
+			.get(&pid)
+			.map(|route| (route.app, route.started));
+		let pid = match route {
+			Some((app, started)) if started == (self.1)(pid) => app,
+			// Another process now has the route's id: its input is its own.
+			Some(_) => {
+				state.routes.remove(&pid);
+				pid
+			},
+			None => pid,
+		};
 		if let Some(app) = state.apps.get_mut(&pid) {
 			app.inputs += 1;
 			app.unread = Some(at);
@@ -189,9 +227,10 @@ pub(crate) fn input_goes_to(pid: libc::pid_t) {
 	});
 }
 
-/// Before a key press of the current input call: refuses once the user has
-/// pressed a key or clicked in its app since the call was admitted, so at most
-/// the press already under way lands after theirs.
+/// Before a key or pointer press, or an accessibility action or write, of the
+/// current input call: refuses once the user has pressed a key or clicked in
+/// its app since the call was admitted, so at most the press already under way
+/// lands after theirs.
 pub(crate) fn check_press() -> CoreResult<()> {
 	WATCH.with_borrow(|watch| {
 		let Some(watch) = watch else {
@@ -199,8 +238,8 @@ pub(crate) fn check_press() -> CoreResult<()> {
 		};
 		match watch.inputs.0.lock().apps.get(&watch.pid) {
 			Some(app) if app.inputs != watch.baseline => Err(DesktopError::user_intervened(format!(
-				"the user pressed a key or clicked in {} during this input; keys sent before that may \
-				 already have landed, and nothing more was sent; {READ_AGAIN}",
+				"the user pressed a key or clicked in {} during this input; input sent before that \
+				 may already have landed, and nothing more was sent; {READ_AGAIN}",
 				app.name,
 			))),
 			_ => Ok(()),
@@ -412,7 +451,7 @@ mod tests {
 
 	#[test]
 	fn input_into_a_process_drawing_the_apps_panel_counts_as_input_into_the_app() {
-		let inputs = Arc::new(UserInputs::default());
+		let inputs = Arc::new(UserInputs::new(panel_started));
 		let start = Instant::now();
 		let at = |seconds| start + Duration::from_secs(seconds);
 		inputs.touch(7, Some(1), || "TextEdit".to_string());
@@ -445,7 +484,7 @@ mod tests {
 
 	#[test]
 	fn a_new_process_reusing_a_watched_id_starts_unwatched() {
-		let inputs = Arc::new(UserInputs::default());
+		let inputs = Arc::new(UserInputs::new(panel_started));
 		let start = Instant::now();
 		inputs.touch(7, Some(100), || "TextEdit".to_string());
 		inputs.route(70, 7);
@@ -462,6 +501,37 @@ mod tests {
 		// The old app's panel service no longer routes into the new process.
 		inputs.record(70, start);
 		assert_eq!(state(&inputs, 7), Some((0, None)));
+	}
+
+	thread_local! {
+		/// When the test's panel process started, for [`panel_started`].
+		static PANEL_STARTED: Cell<Option<u64>> = const { Cell::new(None) };
+	}
+
+	fn panel_started(_: libc::pid_t) -> Option<u64> {
+		PANEL_STARTED.get()
+	}
+
+	#[test]
+	fn a_new_process_reusing_a_panels_id_takes_none_of_the_apps_input() {
+		let inputs = UserInputs::new(panel_started);
+		let start = Instant::now();
+		let at = |seconds| start + Duration::from_secs(seconds);
+		inputs.touch(7, Some(1), || "TextEdit".to_string());
+		// Process 70, started at 100, draws TextEdit's Save panel.
+		PANEL_STARTED.set(Some(100));
+		inputs.route(70, 7);
+		inputs.record(70, at(0));
+		assert_eq!(state(&inputs, 7), Some((1, Some(at(0)))));
+		// It exits, and Calculator starts under id 70; the user types there.
+		PANEL_STARTED.set(Some(200));
+		inputs.record(70, at(1));
+		assert_eq!(state(&inputs, 7), Some((1, Some(at(0)))));
+		// Once the session uses Calculator, that input is Calculator's own.
+		inputs.touch(70, Some(200), || "Calculator".to_string());
+		inputs.record(70, at(2));
+		assert_eq!(state(&inputs, 70), Some((1, Some(at(2)))));
+		assert_eq!(state(&inputs, 7), Some((1, Some(at(0)))));
 	}
 
 	#[test]
