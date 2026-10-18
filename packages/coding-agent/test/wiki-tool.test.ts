@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Settings } from "../src/config/settings";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "../src/config/settings";
 import { DocsService } from "../src/docs/service";
+import { SessionManager } from "../src/session/session-manager";
+import { postProcessToolResult, wrapToolWithMetaNotice } from "../src/tools/output-meta";
 import { WikiTool } from "../src/tools/wiki";
 
 const tempDirs: string[] = [];
@@ -49,9 +52,9 @@ function text(result: ToolResult): string {
 }
 
 /** Runs the tool with unvalidated arguments, as the agent loop does for this tool. */
-function run(tool: WikiTool, params: unknown): Promise<ToolResult> {
+function run(tool: WikiTool, params: unknown, context?: AgentToolContext): Promise<ToolResult> {
 	tools.add(tool);
-	return tool.execute("t", params as never) as Promise<ToolResult>;
+	return tool.execute("t", params as never, undefined, undefined, context) as Promise<ToolResult>;
 }
 
 interface WikiQuery {
@@ -428,6 +431,56 @@ describe("WikiTool", () => {
 		expect(result[0]).toContain("carried whole");
 		expect(result.slice(1).join("\n")).toContain("needle and other evidence");
 	});
+
+	it("preserves complete multibyte pages through the session output wrapper while advancing their cursor", async () => {
+		const body = `# WIKIPAGEBEACON\n${"汉".repeat(8_800)}\nMIDDLE_EVIDENCE_MUST_SURVIVE\n${"字".repeat(8_800)}\nFINAL_EVIDENCE\n`;
+		expect(body.length).toBeLessThan(18_000);
+		expect(Buffer.byteLength(body, "utf8")).toBeGreaterThan(50 * 1024);
+		const other = "# Next\nWIKIPAGEBEACON remaining independent evidence\n";
+		const fixture = await indexedFixture({ "long.md": body, "other.md": other });
+		const manager = SessionManager.create(fixture.root, path.join(fixture.agent, "sessions"));
+		await manager.ensureOnDisk();
+		sessionCleanups.push(() => manager.close());
+		const context = { sessionManager: manager, settings: Settings.isolated() } as unknown as AgentToolContext;
+		const tool = wrapToolWithMetaNotice(new WikiTool(session(fixture.agent, fixture.root)));
+
+		// The best hit exceeds the usual page budget but must be carried whole;
+		// its continuation belongs after all of that evidence, not after a spill preview.
+		const first = text(await run(tool, { query: "WIKIPAGEBEACON" }, context));
+		expect(first).toContain(body);
+		expect(first).toContain("MIDDLE_EVIDENCE_MUST_SURVIVE");
+		expect(first).toContain("FINAL_EVIDENCE");
+		expect(first).toContain("carried whole");
+		expect(first).not.toContain("artifact://");
+		const next = continuation(first);
+		expect(next).toBeDefined();
+		const last = text(await run(tool, next!, context));
+		expect(last).toContain(other);
+		expect(last).not.toContain(body);
+		expect(last).toContain("All matching results exhausted");
+		expect(continuation(last)).toBeUndefined();
+
+		// A final page must retain the same complete body and its exhaustion footer.
+		const only = text(await run(tool, { query: "^# WIKIPAGEBEACON$", mode: "grep" }, context));
+		expect(only).toContain(body);
+		expect(only).toContain("All matching results exhausted");
+		expect(only).not.toContain("artifact://");
+		expect(continuation(only)).toBeUndefined();
+
+		// The guarantee is explicit metadata, not a relaxed byte limit for ordinary output.
+		const ordinary = await postProcessToolResult(
+			{ content: [{ type: "text", text: body }] },
+			"plain-output",
+			context,
+		);
+		const artifactId = ordinary.details?.meta?.truncation?.artifactId;
+		expect(artifactId).toBeDefined();
+		expect(text(ordinary)).not.toContain(body);
+		expect(text(ordinary)).toContain(`artifact://${artifactId}`);
+		const artifactPath = await manager.getArtifactPath(artifactId!);
+		expect(artifactPath).not.toBeNull();
+		expect(await Bun.file(artifactPath!).text()).toBe(body);
+	}, 20_000);
 
 	it("keeps a heading-only requirement line as complete evidence", async () => {
 		const fixture = await indexedFixture({

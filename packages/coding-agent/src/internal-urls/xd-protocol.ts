@@ -110,9 +110,12 @@ export class XdProtocolHandler implements ProtocolHandler {
 			// prompt a second time.
 			toolCall.context ? { ...toolCall.context, xdevApproved: true } : undefined,
 		);
+		// Carry the pagination guarantee across the transport wrapper without
+		// re-appending the inner tool's already-rendered notices.
+		const meta = isRecord(result.details) && isRecord(result.details.meta) ? result.details.meta : undefined;
 		return {
 			content: result.content,
-			details: { xdev: dispatch },
+			details: { xdev: dispatch, ...(meta?.completePage === true ? { meta: { completePage: true } } : {}) },
 			isError: result.isError,
 			useless: result.useless,
 		};

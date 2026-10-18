@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve complete Wiki evidence pages through top-level tools and `xd://wiki`, including oversized multilingual sections.
+- Keep Wiki search expressions and editing cursors visible in narrow terminals and across resizing.
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

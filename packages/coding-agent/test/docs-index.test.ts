@@ -1227,6 +1227,60 @@ describe("DocsSearchEngine indexing contract", () => {
 	});
 
 	it.each([
+		{ query: "scan", body: "**scan**ner", complete: "scanner" },
+		{ query: "mbist_check.rpt", body: "**mbist_check.rpt**.bak", complete: "mbist_check.rpt.bak" },
+		{ query: "scan", body: "*scan*ner", complete: "scanner" },
+		{ query: "scan", body: "~~scan~~ner", complete: "scanner" },
+		{ query: "scan", body: "**ＳＣＡＮ**ner", complete: "scanner" },
+	])("does not manufacture a complete $query at emphasis boundaries in $body", async ({ query, body, complete }) => {
+		for (const prefix of ["", `${"x ".repeat(8997)} `]) {
+			const root = await tempDir("docs-emphasis-boundary-root-");
+			const agentDir = await tempDir("docs-emphasis-boundary-agent-");
+			await Bun.write(path.join(root, "continued.md"), `# Notes\n${prefix}${body}\n`);
+			const writer = new DocsSearchEngine({ agentDir });
+			await writer.init(root, "manual");
+			writer.close();
+			await fs.rm(root, { recursive: true });
+			const reader = new DocsSearchEngine({ agentDir });
+			try {
+				const partial = reader.search(query, { index: "manual", limit: 500 });
+				expect(partial.exactNameMatches).toBe(0);
+				expect(partial.sections.every(hit => hit.matchKind === "related")).toBe(true);
+				const whole = reader.search(complete, { index: "manual", limit: 500 });
+				expect(whole.exactNameMatches).toBeGreaterThan(0);
+				expect(whole.sections[0]).toMatchObject({ path: "continued.md", matchKind: "exact-name" });
+			} finally {
+				reader.close();
+			}
+		}
+	});
+
+	it.each([
+		{ query: "scan", body: "`scan`ner" },
+		{ query: "mbist_check.rpt", body: "`mbist_check.rpt`.bak" },
+		{ query: "counter_value*factor*next", body: "`counter_value*factor*next`" },
+		{ query: "x->y::z()", body: "`x->y::z()`" },
+	])("keeps the literal code boundary and punctuation for $query", async ({ query, body }) => {
+		for (const prefix of ["", `${"x ".repeat(8997)} `]) {
+			const root = await tempDir("docs-code-name-boundary-root-");
+			const agentDir = await tempDir("docs-code-name-boundary-agent-");
+			await Bun.write(path.join(root, "code.md"), `# Notes\n${prefix}${body}\n`);
+			const writer = new DocsSearchEngine({ agentDir });
+			await writer.init(root, "manual");
+			writer.close();
+			await fs.rm(root, { recursive: true });
+			const reader = new DocsSearchEngine({ agentDir });
+			try {
+				const result = reader.search(query, { index: "manual", limit: 500 });
+				expect(result.exactNameMatches).toBeGreaterThan(0);
+				expect(result.sections[0]).toMatchObject({ path: "code.md", matchKind: "exact-name" });
+			} finally {
+				reader.close();
+			}
+		}
+	});
+
+	it.each([
 		{ spelling: "C++", suffix: "17", query: "C++" },
 		{ spelling: "Ｃ＋＋", suffix: "17", query: "C++" },
 		{ spelling: "mbist\\_check.rpt", suffix: ".bak", query: "mbist_check.rpt" },

@@ -1,5 +1,5 @@
 use std::{
-	collections::{HashMap, HashSet, VecDeque},
+	collections::{HashMap, VecDeque},
 	fs,
 	path::Path,
 	sync::Arc,
@@ -884,16 +884,13 @@ fn rank(
 		let raw = query::normalize_search_text(&markdown);
 		let tokens = markdown::lex_section(&markdown, context);
 		let plain = query::normalize_search_text(&markdown::plain_text(&tokens));
-		let exact = contexts.exact_names.contains(&id)
-			|| name.as_ref().is_some_and(|name| {
-				name.matches_section(&raw, &markdown, context)
-					|| (name.matches_section(&plain, &markdown, context)
-						&& name.matches_section(
-							&query::normalize_search_text(&markdown::name_text(&tokens)),
-							&markdown,
-							context,
-						))
-			});
+		let exact = contexts.exact_names.get(&id).copied().unwrap_or_else(|| {
+			name.as_ref().is_some_and(|name| {
+				// Legacy rows without source coordinates still use their lexical
+				// projection. Never let raw formatting invent a name boundary.
+				name.matches_name_section(&raw, &markdown, context)
+			})
+		});
 		if bm25.is_none() && !exact {
 			continue;
 		}
@@ -938,7 +935,7 @@ fn rank(
 
 struct DocumentContexts {
 	sections:    HashMap<i64, SectionContext>,
-	exact_names: HashSet<i64>,
+	exact_names: HashMap<i64, bool>,
 }
 
 /// Only contiguous, byte-consistent stored source participates in a name
@@ -948,24 +945,27 @@ struct NameSource {
 	start:       i64,
 	source:      String,
 	sections:    Vec<(i64, std::ops::Range<usize>)>,
-	exact_names: HashSet<i64>,
+	exact_names: HashMap<i64, bool>,
 }
 
 impl NameSource {
 	fn finish(&mut self, name: &LiteralMatcher, check: Check<'_>) -> CoreResult<()> {
-		if self.sections.len() > 1 {
+		if !self.sections.is_empty() {
+			for (id, _) in &self.sections {
+				self.exact_names.insert(*id, false);
+			}
 			// Source ranges can overlap, so order by starts rather than assuming
 			// section ends are monotonic. Each section is consumed at most once:
 			// it either intersects this occurrence or ended before it.
 			self.sections.sort_unstable_by_key(|(_, range)| range.start);
 			let mut pending = self.sections.iter().peekable();
 			let exact_names = &mut self.exact_names;
-			name.source_matches(&self.source, check, |found| {
+			name.source_name_matches(&self.source, check, |found| {
 				while let Some((id, range)) = pending.peek()
 					&& range.start < found.end
 				{
 					if range.end > found.start {
-						exact_names.insert(*id);
+						exact_names.insert(*id, true);
 					}
 					pending.next();
 				}
@@ -1203,6 +1203,7 @@ pub(super) fn file_identity(path: &Path) -> CoreResult<String> {
 #[cfg(test)]
 mod tests {
 	use std::{
+		collections::HashSet,
 		path::PathBuf,
 		sync::{
 			atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1236,8 +1237,8 @@ mod tests {
 					.unwrap();
 			}
 			source.finish(&name, &|| Ok(())).unwrap();
-			assert_eq!(source.exact_names.contains(&1), expected);
-			assert_eq!(source.exact_names.contains(&2), expected);
+			assert_eq!(source.exact_names.get(&1).copied(), Some(expected));
+			assert_eq!(source.exact_names.get(&2).copied(), Some(expected));
 		}
 	}
 
@@ -1276,7 +1277,51 @@ mod tests {
 				.unwrap();
 		}
 		source.finish(&name, &|| Ok(())).unwrap();
-		assert_eq!(source.exact_names, HashSet::from([1, 2, 4, 6]));
+		assert_eq!(
+			source
+				.exact_names
+				.into_iter()
+				.filter_map(|(id, exact)| exact.then_some(id))
+				.collect::<HashSet<_>>(),
+			HashSet::from([1, 2, 4, 6]),
+		);
+	}
+
+	#[test]
+	fn reconstructed_names_keep_lexical_boundaries_across_chunks_and_overlap() {
+		for (body, name, expected) in [
+			("**scan**ner", "scan", false),
+			("**mbist_check.rpt**.bak", "mbist_check.rpt", false),
+			("**scan**ner", "scanner", true),
+			("**mbist_check.rpt**.bak", "mbist_check.rpt.bak", true),
+			("`scan`ner", "scan", true),
+			("`counter_value*factor*next`", "counter_value*factor*next", true),
+		] {
+			let text = format!("{}{body}", "x ".repeat(8997));
+			for overlap in [0, 500] {
+				let matcher = LiteralMatcher::new(name, true);
+				let mut source = NameSource::default();
+				for (id, range) in [(1, 0..18_000), (2, 18_000 - overlap..text.len())] {
+					source
+						.push(
+							&markdown::ContextSection {
+								section_id:   id,
+								document_id:  1,
+								byte_start:   range.start as i64,
+								byte_end:     range.end as i64,
+								raw_markdown: text[range].to_owned(),
+							},
+							&matcher,
+							&|| Ok(()),
+						)
+						.unwrap();
+				}
+				source.finish(&matcher, &|| Ok(())).unwrap();
+				assert_eq!(source.exact_names.get(&1), Some(&expected), "{body} {overlap}");
+				let second = expected && (overlap != 0 || body != "`scan`ner");
+				assert_eq!(source.exact_names.get(&2), Some(&second), "{body} {overlap}");
+			}
+		}
 	}
 
 	static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);

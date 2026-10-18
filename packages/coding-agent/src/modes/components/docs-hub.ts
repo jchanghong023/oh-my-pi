@@ -331,6 +331,7 @@ export class DocsHubComponent implements Component {
 			this.#mode = "search";
 			this.#search = new Input();
 			this.#search.verbatimText = this.#inputSearchMode === "grep";
+			this.#search.focused = true;
 		} else if (data === "d" && this.#selectedIndex() && !this.#abort) this.#mode = "confirm-remove";
 		else if (matchesKey(data, "up") && this.#mode !== "detail") this.#selected = Math.max(0, this.#selected - 1);
 		else if (matchesKey(data, "down") && this.#mode !== "detail")
@@ -358,8 +359,13 @@ export class DocsHubComponent implements Component {
 		if (this.#mode === "confirm-remove")
 			body.push(theme.fg("warning", `Delete ${sanitizeTerminalLine(this.#selectedIndex()?.name ?? "")}? y/N`));
 		else if (this.#mode === "search") {
-			const label = this.#inputSearchMode === "grep" ? "Grep (regex, case-sensitive)" : "Search (relevance)";
-			body.push(`${label}: ${this.#search.render(Math.max(10, width - label.length - 2))[0] ?? ""}`);
+			const fullLabel = this.#inputSearchMode === "grep" ? "Grep (regex, case-sensitive)" : "Search (relevance)";
+			const shortLabel = this.#inputSearchMode === "grep" ? "Grep" : "Search";
+			// Give Input the whole row so its cursor-aware viewport uses the actual
+			// remaining cells, rather than clipping an oversized editor after layout.
+			const label = width >= fullLabel.length + 12 ? fullLabel : width >= shortLabel.length + 12 ? shortLabel : "";
+			this.#search.prompt = label ? `${label}: > ` : width > 2 ? "> " : "";
+			body.push(...this.#search.render(width));
 		} else if (this.#mode === "detail") {
 			header.push(
 				this.#queryMode === "grep"

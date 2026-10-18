@@ -340,6 +340,41 @@ describe("wiki CLI without source files", () => {
 		expect(observed.at(-1)?.text).toContain("All matching results exhausted");
 	}, 120_000);
 
+	it.each([0x7f, 0x80, 0x85, 0x9b, 0x9f])(
+		"continues literal DEL/C1 grep expressions unchanged through sanitized tool results (U+%s)",
+		async codePoint => {
+			mode = "grep";
+			caseSensitive = true;
+			const control = String.fromCharCode(codePoint);
+			query = `WIKIE2EBEACON|${control}`;
+			expect(await cli(toolArgs)).toContain("WIKI_E2E_DONE");
+			expect(observed.length).toBeGreaterThan(1);
+			const ids: string[] = [];
+			const procedures: number[] = [];
+			for (const result of observed) {
+				expect(result.isError).toBe(false);
+				expect(result.text).toContain("13 matching section(s)");
+				expect(result.text).not.toContain("related.md:");
+				const next = result.text.match(/^More results remain\. Continue with the same query: (.+)$/m)?.[1];
+				if (next) {
+					expect(next).not.toContain(control);
+					expect(JSON.parse(next)).toMatchObject({ query, mode: "grep", case: true, cursor: expect.any(String) });
+				}
+				for (const match of result.text.matchAll(/^## Procedure (\d+)$/gm)) {
+					const index = Number(match[1]);
+					procedures.push(index);
+					expect(result.text).toContain(sections[index]!);
+				}
+				for (const match of result.text.matchAll(/sectionId=(\d+)/g)) ids.push(match[1]!);
+			}
+			expect(procedures).toEqual(Array.from({ length: 12 }, (_, index) => index));
+			expect(ids).toHaveLength(13);
+			expect(new Set(ids).size).toBe(13);
+			expect(observed.at(-1)?.text).toContain("All matching results exhausted");
+		},
+		120_000,
+	);
+
 	it.each(["C\\+\\+", "docs/src/main\\.rs", "(?<=PAIR=)(echo) \\1"])(
 		"uses explicit grep semantics for %s",
 		async regex => {

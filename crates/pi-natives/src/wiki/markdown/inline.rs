@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{ops::Range, sync::LazyLock};
 
 use regex::Regex;
 
@@ -36,9 +36,10 @@ pub(super) fn clean_url(value: &str) -> String {
 }
 
 struct Root<'a> {
-	source:  Source<'a>,
-	closers: CloserIndexes,
-	stops:   RootTextStops,
+	source:     Source<'a>,
+	closers:    CloserIndexes,
+	stops:      RootTextStops,
+	delimiters: Option<Vec<Range<usize>>>,
 }
 
 struct Nested {
@@ -330,13 +331,33 @@ fn leaf_link(raw: &str, text: &str) -> Token {
 }
 
 pub(crate) fn lex(source: &str, links: &Links) -> Vec<Token> {
+	lex_impl(source, links, false).0
+}
+
+/// Collect only syntax removed from literal-name context, using the very same
+/// lexer decisions as rendering. Coordinates remain in this input's UTF-8.
+pub(super) fn lex_with_delimiters(source: &str, links: &Links) -> (Vec<Token>, Vec<Range<usize>>) {
+	lex_impl(source, links, true)
+}
+
+fn lex_impl(source: &str, links: &Links, collect: bool) -> (Vec<Token>, Vec<Range<usize>>) {
 	let mut root = Root {
-		source:  Source::new(source),
-		closers: CloserIndexes::default(),
-		stops:   RootTextStops::default(),
+		source:     Source::new(source),
+		closers:    CloserIndexes::default(),
+		stops:      RootTextStops::default(),
+		delimiters: collect.then(Vec::new),
 	};
 	let end = root.source.len();
-	lex_range(&mut root, 0, end, links)
+	let tokens = lex_range(&mut root, 0, end, links);
+	let mut delimiters = root.delimiters.unwrap_or_default();
+	delimiters.sort_unstable_by_key(|range| range.start);
+	(tokens, delimiters)
+}
+
+fn delimiter(root: &mut Root<'_>, start: usize, end: usize) {
+	if let Some(delimiters) = &mut root.delimiters {
+		delimiters.push(root.source.slice(0, start).len()..root.source.slice(0, end).len());
+	}
 }
 
 /// Nested links/emphasis retain only this small frame and use root-owned
@@ -350,6 +371,7 @@ fn lex_range(root: &mut Root<'_>, start: usize, end: usize, links: &Links) -> Ve
 	while pos < end {
 		let src = &root.source.units;
 		if src[pos] == 0x5c && pos + 1 < end && punctuation(src[pos + 1]) {
+			delimiter(root, pos, pos + 1);
 			output.push(token(
 				TokenKind::Escape,
 				root.source.slice(pos, pos + 2),
@@ -410,6 +432,10 @@ fn lex_range(root: &mut Root<'_>, start: usize, end: usize, links: &Links) -> Ve
 		if let Some(mut nested) =
 			match_link(root, pos, end, links).or_else(|| match_emphasis(root, pos, end, &output))
 		{
+			if matches!(nested.token.kind, TokenKind::Em | TokenKind::Strong) {
+				delimiter(root, pos, nested.start);
+				delimiter(root, nested.end, nested.raw_end);
+			}
 			// Rule frames have returned before entering the nested lex.
 			nested.token.children = Some(lex_range(root, nested.start, nested.end, links));
 			pos = nested.raw_end;
@@ -429,9 +455,19 @@ fn lex_range(root: &mut Root<'_>, start: usize, end: usize, links: &Links) -> Ve
 			&& !whitespace(src[pos + close - 1])
 		{
 			let text = root.source.slice(pos + 2, pos + close);
-			let children = lex(text, links);
+			let (children, delimiters) = lex_impl(text, links, root.delimiters.is_some());
 			let mut deletion = token(TokenKind::Del, root.source.slice(pos, pos + close + 2), text);
 			deletion.children = Some(children);
+			let offset = root.source.slice(0, pos + 2).len();
+			if let Some(output) = &mut root.delimiters {
+				output.extend(
+					delimiters
+						.into_iter()
+						.map(|range| range.start + offset..range.end + offset),
+				);
+			}
+			delimiter(root, pos, pos + 2);
+			delimiter(root, pos + close, pos + close + 2);
 			output.push(deletion);
 			pos += close + 2;
 			continue;
