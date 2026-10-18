@@ -10,6 +10,15 @@
 - Reject conflicting overlapping Wiki source slices and preserve control characters in escaped grep continuation parameters.
 - Preserve Python definitions in Python 3.6 files using `async` or `await` as legal parameters, class names and other identifiers.
 
+### Changed
+
+- Reduced allocation overhead for uncached, result-limited file searches in large directory trees ([#16115](https://github.com/can1357/oh-my-pi/pull/16115) by [@kyle-elliott](https://github.com/kyle-elliott)).
+
+### Fixed
+
+- Fixed macOS computer use reporting a working physical Escape stop (`globalEscape: true`) when Input Monitoring was turned off and the stop could not see keys; `inputPermission` now reports event-posting access, and permission errors name the terminal or IDE to grant ([#15157](https://github.com/can1357/oh-my-pi/pull/15157) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed a macOS element-ref `StaleRef` giving no lead when the app destroyed the element and put an identical one in its place: the error now names the one element of the window with the fields the ref was read with, registered as a new ref, and sends nothing to it ([#15574](https://github.com/can1357/oh-my-pi/pull/15574) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.12.1] - 2026-10-17
 
 ### Fixed

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import { recordSessionTitle, resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { recordSessionTitle, closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { getHistoryDbPath, removeSyncWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 
 /**
@@ -20,12 +20,12 @@ describe.skipIf(process.platform === "win32")("session index across a store quar
 	beforeEach(() => {
 		testAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "omp-index-quarantine-"));
 		setAgentDir(testAgentDir);
-		resetSessionIndexForTests();
+		closeSessionIndex();
 	});
 
 	afterEach(() => {
 		HistoryStorage.close();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		if (originalAgentDir) {
 			setAgentDir(originalAgentDir);
 		} else {

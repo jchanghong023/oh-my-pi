@@ -672,7 +672,9 @@ export class TurnRecovery {
 	 * reminder to pick up where the text stopped, and continue. Honors
 	 * `retry.enabled`; bounded per prompt, past the cap the error surfaces as before.
 	 * A socket close counts here but not for tool turns: without tool calls there
-	 * is no executed side effect whose resumption policy it could change.
+	 * is no executed side effect whose resumption policy it could change. So does a
+	 * Codex native-lane steer rejection: the server dropped the response over our
+	 * own `response.steer`, and the rejected steer drains as ordinary input next.
 	 */
 	handleCommittedTextStreamStall(message: AssistantMessage): boolean {
 		if (message.provider === "codeagent" || isJchToolsAgentModel(message)) return false;
@@ -682,7 +684,7 @@ export class TurnRecovery {
 			AIError.retriable(id) &&
 			!this.#host.streamingEditAbortTriggered() &&
 			isUnexpectedSocketCloseMessage(message.errorMessage ?? "");
-		if (!socketClosed && !this.#isMidStreamTransportFailure(message, id)) {
+		if (!socketClosed && !AIError.isCodexSteerRejection(message) && !this.#isMidStreamTransportFailure(message, id)) {
 			this.#streamStallContinueCount = 0;
 			return false;
 		}

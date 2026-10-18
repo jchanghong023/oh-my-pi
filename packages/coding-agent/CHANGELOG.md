@@ -34,6 +34,12 @@
 - Accept negated and conditional Team adoption prose while checking HTML entities consistently with Markdown rendering; retain unique proposal labels beyond 26 slots.
 - Distinguish blocked Team investigations from completed infeasibility conclusions, and preserve image draft ownership across asynchronous input hooks and compaction replay.
 
+### Fixed
+
+- Fixed a Codex turn stopping on "Request failed … unsupported_native_inflight_message" when you sent a message while the response was writing text; the session now keeps the partial reply and continues with your message
+- Fixed the macOS `computer` tool's `StaleRef` for an element the app rebuilt in place, such as an Automator rule popup after its neighbour changed, leaving the agent to re-read the window: it now names the one element of the window with the fields the ref was read with, for the agent to check before acting on it ([#15574](https://github.com/can1357/oh-my-pi/pull/15574) by [@will-bogusz](https://github.com/will-bogusz))
+- Fixed the Up arrow crashing omp with `text.replace is not a function` when `history.db` was damaged; recall skips unreadable rows, and a damaged store is moved aside to `history.db.corrupt-*` with every readable prompt, session title, and recap copied into its replacement ([#15751](https://github.com/can1357/oh-my-pi/pull/15751) by [@Shadorain](https://github.com/Shadorain))
+
 ## [18.12.1] - 2026-10-17
 
 ### Breaking Changes

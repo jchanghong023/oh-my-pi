@@ -11,7 +11,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
-import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 const BASE_SETTINGS = {
@@ -76,7 +76,7 @@ describe("tools.approvalMode setting", () => {
 		await session.dispose();
 		authStorage.close();
 		HistoryStorage.close();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		closeModelCache();
 		removeSyncWithRetries(tempDir);
 	}, 15_000);

@@ -19,7 +19,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { loadEntriesFromFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { resetSessionIndexForTests } from "@oh-my-pi/pi-coding-agent/session/session-index";
+import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { cfgReadDefaultLimit } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
 import { getProjectAgentDir, getSessionsDir, removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -87,7 +87,7 @@ async function withTempConfigRoot<T>(run: () => Promise<T>): Promise<T> {
 		// (history, session index, agent.db, models.db);
 		// Windows keeps their files locked until each is closed.
 		HistoryStorage.close();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		AgentStorage.close();
 		closeModelCache();
 		removeSyncWithRetries(configRoot);
@@ -130,7 +130,7 @@ describe("createAgentSession session storage isolation", () => {
 		// files locked until each is closed, which would EBUSY the temp-dir
 		// cleanup below. Same shutdown as withTempConfigRoot's finally.
 		HistoryStorage.close();
-		resetSessionIndexForTests();
+		closeSessionIndex();
 		AgentStorage.close();
 		closeModelCache();
 		for (const tempDir of tempDirs.splice(0)) {
