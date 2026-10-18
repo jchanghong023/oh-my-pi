@@ -25,6 +25,7 @@ async function createHost(root: string): Promise<string> {
 	const host = path.join(root, "native-host.ts");
 	const moduleUrl = (relative: string) => JSON.stringify(pathToFileURL(path.resolve(packageRoot, relative)).href);
 	await fs.mkdir(path.join(root, "project"));
+	await fs.mkdir(path.join(root, "smoke-tmp"));
 	await fs.writeFile(
 		host,
 		`
@@ -33,7 +34,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { declareWorkerHostEntry } from ${moduleUrl("../utils/src/index.ts")};
 import { extractEmbeddedAddons, prepareNativeVersionDir } from ${moduleUrl("../natives/native/loader-state.js")};
-import { createDaemonBrokerClient } from ${moduleUrl("src/launch/client.ts")};
+import { createDaemonBrokerClient, smokeTestDaemonBroker } from ${moduleUrl("src/launch/client.ts")};
 import { startDaemonBrokerFromEnvironment } from ${moduleUrl("src/launch/broker.ts")};
 import { DAEMON_BROKER_WORKER_ARG } from ${moduleUrl("src/launch/protocol.ts")};
 declareWorkerHostEntry();
@@ -54,6 +55,10 @@ if (mode === DAEMON_BROKER_WORKER_ARG) {
 	await startDaemonBrokerFromEnvironment();
 } else if (mode === "cold") {
 	process.stdout.write("loaded\\n");
+	await input.read();
+} else if (mode === "smoke") {
+	await smokeTestDaemonBroker();
+	process.stdout.write("smoke-complete\\n");
 	await input.read();
 } else {
 	const client = await createDaemonBrokerClient(${JSON.stringify(path.join(root, "project"))}, { runtimeDir: ${JSON.stringify(path.join(root, "runtime"))} });
@@ -80,6 +85,11 @@ function startHost(host: string, mode: string, nativeRoot: string): NativeHost {
 			PI_NATIVES_DIR: nativeRoot,
 			OMP_CONFIG_ROOT: path.join(path.dirname(host), "config"),
 			OMP_OFFLINE: "0",
+			...(mode === "smoke"
+				? Object.fromEntries(
+						["TMPDIR", "TEMP", "TMP"].map(name => [name, path.join(path.dirname(host), "smoke-tmp")]),
+					)
+				: {}),
 		},
 		stdin: "pipe",
 		stdout: "pipe",
@@ -108,6 +118,27 @@ async function expectExit(host: NativeHost): Promise<void> {
 }
 
 describe("broker native cache ownership", () => {
+	it("removes the public smoke runtime after the real embedded broker exits", async () => {
+		using temp = TempDir.createSync("@omp-broker-smoke-native-");
+		const root = temp.path();
+		const host = await createHost(root);
+		const worker = startHost(host, "smoke", path.join(root, "creator-natives"));
+		const stdout = worker.proc.stdout.getReader();
+		try {
+			// Broker re-entry loads its real DLL from the smoke runtime's natives/.
+			// On Windows the old smoke helper fails with EPERM before this signal.
+			await expectLine(stdout, "smoke-complete", worker);
+			expect(await fs.readdir(path.join(root, "smoke-tmp"))).toEqual([]);
+			const brokerPid = Number(await fs.readFile(path.join(root, "broker-pid"), "utf8"));
+			expect(Number.isSafeInteger(brokerPid) && brokerPid > 0).toBe(true);
+			const broker = Process.fromPid(brokerPid);
+			if (broker) expect(await broker.waitForExit({ timeoutMs: 10_000 })).toBe(true);
+		} finally {
+			worker.proc.stdin.end();
+			await expectExit(worker);
+		}
+	}, 30_000);
+
 	it("releases the creator leaf while another client keeps the real broker usable", async () => {
 		using temp = TempDir.createSync("@omp-broker-native-");
 		const root = temp.path();

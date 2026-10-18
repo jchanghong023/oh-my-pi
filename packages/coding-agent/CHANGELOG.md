@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

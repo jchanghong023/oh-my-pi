@@ -1,10 +1,11 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { IpcConnection } from "@oh-my-pi/pi-natives";
+import { IpcConnection, Process } from "@oh-my-pi/pi-natives";
 import { getGlobalDaemonRuntimeDir, isEexist, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
+import { readLiveDaemonBrokerPid } from "./presence";
 import {
 	DAEMON_BROKER_WORKER_ARG,
 	DAEMON_IDLE_GRACE_ENV,
@@ -506,12 +507,22 @@ export async function smokeTestDaemonBroker(): Promise<void> {
 	const runtimeDir = path.join(smokeRoot, "run");
 	await fs.mkdir(projectDir, { recursive: true });
 	const client = await createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
+	let brokerExit: Promise<boolean> | undefined;
 	try {
 		const ping = await client.request({ op: "ping" });
 		if (ping.op !== "ping" || ping.projectDir !== client.projectDir) throw new Error("daemon broker ping mismatch");
+		const brokerPid = await readLiveDaemonBrokerPid(runtimeDir);
+		const broker = brokerPid === undefined ? null : Process.fromPid(brokerPid);
+		if (!broker) throw new Error("daemon broker process unavailable after authenticated ping");
+		// Pin its OS identity before shutdown: the worker's DLL stays mapped until
+		// process exit, even after the shutdown response and connection close.
+		brokerExit = broker.waitForExit({ timeoutMs: 10_000 });
 		await client.request({ op: "shutdown" });
 	} finally {
 		client.close();
-		await fs.rm(smokeRoot, { recursive: true, force: true });
+		if (brokerExit) {
+			if (!(await brokerExit)) throw new Error("daemon broker did not exit before smoke cleanup");
+			await fs.rm(smokeRoot, { recursive: true, force: true });
+		}
 	}
 }
