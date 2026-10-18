@@ -48,15 +48,32 @@ export async function writeArtifact(path: string, content: string): Promise<numb
 	const expectedBytes = Buffer.byteLength(content);
 	const tempPath = `${path}.tmp-${crypto.randomUUID()}`;
 	try {
-		const writtenBytes = await Bun.write(tempPath, content);
-		if (writtenBytes !== expectedBytes) {
-			throw new Error(`Artifact write incomplete: wrote ${writtenBytes} of ${expectedBytes} bytes`);
+		// Bun's path-based write fails with ENOENT on existing Windows paths once
+		// the staging suffix crosses MAX_PATH. Node fs handles those paths without
+		// changing the published filename or shortening the session directory.
+		const handle = process.platform === "win32" ? await fs.open(tempPath, "w+") : undefined;
+		try {
+			const writtenBytes = handle
+				? (await handle.write(content, 0, "utf8")).bytesWritten
+				: await Bun.write(tempPath, content);
+			if (writtenBytes !== expectedBytes) {
+				throw new Error(`Artifact write incomplete: wrote ${writtenBytes} of ${expectedBytes} bytes`);
+			}
+			const file = handle ? undefined : Bun.file(tempPath);
+			const size = handle ? (await handle.stat()).size : file!.size;
+			if (size !== expectedBytes) {
+				throw new Error(`Artifact size mismatch: found ${size} of ${expectedBytes} bytes`);
+			}
+			if (handle) {
+				const probe = Buffer.alloc(Math.min(expectedBytes, 1));
+				const { bytesRead } = await handle.read(probe, 0, probe.length, 0);
+				if (bytesRead !== probe.length) throw new Error("Artifact read incomplete");
+			} else {
+				await file!.slice(0, Math.min(expectedBytes, 1)).arrayBuffer();
+			}
+		} finally {
+			await handle?.close();
 		}
-		const file = Bun.file(tempPath);
-		if (file.size !== expectedBytes) {
-			throw new Error(`Artifact size mismatch: found ${file.size} of ${expectedBytes} bytes`);
-		}
-		await file.slice(0, Math.min(expectedBytes, 1)).arrayBuffer();
 		await replaceFileAtomically(tempPath, path);
 	} catch (error) {
 		await fs.rm(tempPath, { force: true });

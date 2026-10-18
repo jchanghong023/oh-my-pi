@@ -486,14 +486,37 @@ function isEmbeddedAddonFileCurrent(targetPath, file) {
 	}
 }
 
+function publishNativeFile(tempPath, targetPath) {
+	try {
+		fs.renameSync(tempPath, targetPath);
+	} catch (error) {
+		// Another cold starter may already have published and loaded the DLL.
+		// Windows then refuses replacement. Only accept that winner when all
+		// bytes match our fully staged image; permission and corrupt-cache
+		// failures must still propagate.
+		try {
+			if (fs.readFileSync(tempPath).equals(fs.readFileSync(targetPath))) return;
+		} catch {
+			// Preserve the original publication failure below.
+		}
+		throw error;
+	} finally {
+		try {
+			fs.unlinkSync(tempPath);
+		} catch {
+			// A successful rename already removed it; otherwise best-effort cleanup.
+		}
+	}
+}
+
 function writeEmbeddedAddonFile(targetPath, content) {
 	const offline = !!getOfflineShmState();
-	const tempPath = `${targetPath}.tmp.${process.pid}.${offline ? randomUUID() : Date.now()}`;
+	const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
 	try {
 		assertOfflineShmPath(tempPath);
-		fs.writeFileSync(tempPath, content, { mode: offline ? 0o700 : 0o755, flag: offline ? "wx" : "w" });
+		fs.writeFileSync(tempPath, content, { mode: offline ? 0o700 : 0o755, flag: "wx" });
 		assertOfflineShmPath(targetPath);
-		fs.renameSync(tempPath, targetPath);
+		publishNativeFile(tempPath, targetPath);
 	} catch (err) {
 		try {
 			fs.unlinkSync(tempPath);
@@ -580,14 +603,23 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 			continue;
 		}
 
+		const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
 		try {
-			// `copyFileSync` is atomic on Windows (CopyFileW) and avoids holding
-			// two large buffers in JS for the read/write dance.
-			fs.copyFileSync(sourcePath, targetPath);
+			// Copy privately before publishing: CopyFileW can expose a partial
+			// destination to another cold starter and must never truncate a DLL
+			// that another process has already loaded.
+			fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+			publishNativeFile(tempPath, targetPath);
 			stagedPath = stagedPath || targetPath;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			errors.push(`staged addon copy (${filename}): ${message}`);
+		} finally {
+			try {
+				fs.unlinkSync(tempPath);
+			} catch {
+				// Publication normally removed it; failed copies may leave a partial file.
+			}
 		}
 	}
 	return stagedPath;

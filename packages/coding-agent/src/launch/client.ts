@@ -308,6 +308,9 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		const overlay: Record<string, string> = {
 			[DAEMON_PROJECT_DIR_ENV]: this.projectDir,
 			[DAEMON_RUNTIME_DIR_ENV]: this.#runtimeDir,
+			// Detached brokers belong to the scope, not the spawning core. Its
+			// private native leaf may be removed while other clients still use us.
+			PI_NATIVES_DIR: path.join(this.#runtimeDir, "natives"),
 		};
 		if (this.#idleGraceMs !== undefined) overlay[DAEMON_IDLE_GRACE_ENV] = String(this.#idleGraceMs);
 		const child = Bun.spawn(spawn.cmd, {

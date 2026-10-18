@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Publish native addons through unique atomic staging files and reuse a concurrent winner only after verifying its complete bytes, without overwriting loaded Windows DLLs.
 - Preserve complete names across Markdown link labels and keep split quoted code literal when Setext lines belong to different quote depths.
 - Bind Wiki imports before their first callback so database replacement cannot migrate or overwrite another database's evidence.
 - Preserve Markdown list, quote and Setext boundaries and distinguish formatting from complete-name evidence across stored slices.
