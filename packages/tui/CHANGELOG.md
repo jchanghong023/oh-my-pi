@@ -12,7 +12,7 @@
 
 - Compact tool runs keep the latest two successful calls and fold older successes into one count, preserving running calls, failures, prose boundaries, and full detailed history.
 - The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
-- The five-row thinking tail has a static heading and left guide with a two-column left margin, ignores trailing blank lines, collapses repeated paragraph blanks, and emphasizes the newest visible line with the current theme's text color.
+- The compact thinking tail uses a bold accented heading, muted context and guides, a highlighted latest-line guide, and an aligned dim summary between tool runs.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Compact thinking summaries drop their left margin when it would hide all text on very narrow terminals, preserving whole Chinese characters and emoji.
 - Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
 - Keep hashline-wrapped internal device calls compact without hiding real file-write previews.
 - Show safe reasons for shell failures before execution without exposing captured output or scripts.

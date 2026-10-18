@@ -23,8 +23,7 @@ afterEach(() => {
 });
 function bodyRows(rows: readonly string[], width: number): readonly string[] {
 	if (width <= visibleWidth("  │ ")) return rows;
-	const guide = theme.fg("border", "  │ ");
-	return rows.slice(1).map(row => row.slice(guide.length));
+	return rows.slice(1).map(row => Bun.stripANSI(row).slice(4));
 }
 
 function expectedTail(source: string, width: number): string[] {
@@ -113,16 +112,26 @@ describe("ThinkingPreviewComponent", () => {
 			for (const selected of [dark, light]) {
 				setThemeInstance(selected);
 				preview.setText("first\nlatest\n\n\n");
-				const before = [theme.fg("thinkingText", "first"), theme.fg("text", "latest")];
-				expect(bodyRows(preview.render(80), 80)).toEqual(before);
+				const before = [theme.fg("dim", "first"), theme.fg("text", "latest")];
+				expect(
+					preview
+						.render(80)
+						.slice(1)
+						.map((row, index) => row.endsWith(before[index]!)),
+				).toEqual([true, true]);
 				preview.setText("first\nlatest\n\n\nnext");
 				const after = [
-					theme.fg("thinkingText", "first"),
-					theme.fg("thinkingText", "latest"),
-					theme.fg("thinkingText", ""),
+					theme.fg("dim", "first"),
+					theme.fg("dim", "latest"),
+					theme.fg("dim", ""),
 					theme.fg("text", "next"),
 				];
-				expect(bodyRows(preview.render(80), 80)).toEqual(after);
+				expect(
+					preview
+						.render(80)
+						.slice(1)
+						.map((row, index) => row.endsWith(after[index]!)),
+				).toEqual([true, true, true, true]);
 			}
 		} finally {
 			setThemeInstance(original);
@@ -322,9 +331,10 @@ describe("ThinkingPreviewComponent", () => {
 			const after = preview.render(8);
 			expect(after).not.toBe(before);
 			const rows = expectedTail(source, 8);
-			expect(bodyRows(after, 8)).toEqual(
-				rows.map((row, index) => theme.fg(index === rows.length - 1 ? "text" : "thinkingText", row)),
-			);
+			expect(bodyRows(after, 8)).toEqual(rows);
+			for (const [index, row] of rows.entries()) {
+				expect(after[index + 1]).toEndWith(theme.fg(index === rows.length - 1 ? "text" : "dim", row));
+			}
 			preview.invalidate();
 			expect(preview.render(8)).toEqual(after);
 		} finally {
@@ -341,13 +351,12 @@ describe("ThinkingPreviewComponent", () => {
 			"latest tail text",
 		]);
 		expect(preview.collapse()).toBe(true);
-		expect(preview.render(40)).toEqual([theme.fg("thinkingText", "… latest tail text")]);
+		expect(Bun.stripANSI(preview.render(40)[0]!).trimStart()).toBe("… latest tail text");
 		// Collapsing again changes nothing; blank-only tails have nothing to retain.
 		expect(preview.collapse()).toBe(false);
 		// The stub truncates to the current width without refolding live rows.
-		expect(preview.render(10).map(row => Bun.stripANSI(row))).toEqual([
-			truncateToWidth("… latest tail text", 10, ""),
-		]);
+		expect(visibleWidth(preview.render(10)[0]!)).toBeLessThanOrEqual(10);
+		expect(Bun.stripANSI(preview.render(10)[0]!)).not.toContain("stale");
 		// A live setText retires the stub, even for identical text.
 		expect(preview.setText("stale line\nmiddle\nlatest tail text")).toBe(true);
 		expect(bodyRows(preview.render(40), 40).map(row => Bun.stripANSI(row))).toEqual([
@@ -365,11 +374,11 @@ describe("ThinkingPreviewComponent", () => {
 			const before = preview.render(40);
 			setThemeInstance(light);
 			expect(preview.render(40)).not.toBe(before);
-			expect(preview.render(40)).toEqual([theme.fg("thinkingText", "… latest tail text")]);
+			expect(preview.render(40)[0]).toContain(theme.fg("dim", Bun.stripANSI(preview.render(40)[0]!)));
 			const described = preview.describe(context(40));
 			expect(described.k).toBe("rows");
 			if (described.k === "rows") {
-				expect(described.p?.lines).toEqual([theme.fg("thinkingText", "… latest tail text")]);
+				expect(described.p?.lines).toEqual(preview.render(40));
 			}
 		} finally {
 			setThemeInstance(original);
@@ -379,6 +388,23 @@ describe("ThinkingPreviewComponent", () => {
 		expect(preview.render(40)).toEqual([]);
 		expect(preview.collapse()).toBe(false);
 		expect(preview.render(40)).toEqual([]);
+	});
+
+	it("drops the stub margin when it would hide the first wide grapheme", () => {
+		const preview = new ThinkingPreviewComponent();
+		preview.setText("中文");
+		preview.collapse();
+		expect(Bun.stripANSI(preview.render(5)[0]!)).toBe("… 中");
+		expect(Bun.stripANSI(preview.render(6)[0]!)).toBe("  … 中");
+		expect(Bun.stripANSI(preview.render(5)[0]!)).toBe("… 中");
+
+		preview.setText("👩‍💻 work");
+		preview.collapse();
+		expect(Bun.stripANSI(preview.render(5)[0]!).trimEnd()).toBe("… 👩‍💻");
+
+		preview.setText("e\u0301cho");
+		preview.collapse();
+		expect(Bun.stripANSI(preview.render(5)[0]!)).toBe("  … e\u0301");
 	});
 
 	it("clamps the live tail to three rows on short terminals and restores five when it grows", () => {
@@ -410,6 +436,7 @@ describe("ThinkingPreviewComponent", () => {
 		// The stub is always a single row regardless of the height budget.
 		height = 12;
 		preview.collapse();
-		expect(preview.render(20).map(row => Bun.stripANSI(row))).toEqual(["… eight"]);
+		expect(preview.render(20)).toHaveLength(1);
+		expect(Bun.stripANSI(preview.render(20)[0]!).trimStart()).toBe("… eight");
 	});
 });

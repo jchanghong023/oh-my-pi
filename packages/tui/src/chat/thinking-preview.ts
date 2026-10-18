@@ -181,9 +181,13 @@ export class ThinkingPreviewComponent implements Component {
 			}
 			const stubEpoch = getThemeEpoch();
 			if (this.#painted === undefined || stubEpoch !== this.#themeEpoch) {
-				// The stub is settled history, not the live line: thinkingText
-				// only, never the newest-line text emphasis.
-				this.#painted = [theme.fg("thinkingText", truncateToWidth(`… ${this.#stubLine}`, cols, ""))];
+				// Settled context stays muted instead of competing with live prose.
+				const prefix = "  … ";
+				let stub = truncateToWidth(`${prefix}${this.#stubLine}`, cols, "");
+				if (!/\S/.test(stub.slice(prefix.length))) {
+					stub = truncateToWidth(`… ${this.#stubLine}`, cols, "");
+				}
+				this.#painted = [theme.fg("dim", stub)];
 				this.#themeEpoch = stubEpoch;
 				this.#native = undefined;
 			}
@@ -230,11 +234,16 @@ export class ThinkingPreviewComponent implements Component {
 		const themeEpoch = getThemeEpoch();
 		if (this.#painted === undefined || themeEpoch !== this.#themeEpoch) {
 			const latest = this.#rows.findLastIndex(row => /\S/.test(row));
-			const guide = prefix ? theme.fg("border", prefix) : "";
+			const guide = prefix ? theme.fg("borderMuted", prefix) : "";
+			const liveGuide = prefix ? theme.fg("accent", prefix) : "";
 			const painted = this.#rows.map(
-				(row, index) => guide + theme.fg(index === latest ? "text" : "thinkingText", row),
+				(row, index) => (index === latest ? liveGuide : guide) + theme.fg(index === latest ? "text" : "dim", row),
 			);
-			if (prefix && painted.length > 0) painted.unshift(theme.fg("accent", truncateToWidth("  思考", cols, "")));
+			if (prefix && painted.length > 0) {
+				const heading =
+					theme.fg("borderMuted", cols >= 10 ? "  ╭─ " : "  ") + theme.fg("accent", theme.bold("思考"));
+				painted.unshift(truncateToWidth(heading, cols, ""));
+			}
 			this.#painted = painted;
 			this.#themeEpoch = themeEpoch;
 			this.#native = undefined;
