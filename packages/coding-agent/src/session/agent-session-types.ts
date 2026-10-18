@@ -48,6 +48,7 @@ import type { XdevState } from "../tools/xdev";
 import type { CodexAutoRedeemCoordinator } from "./codex-auto-reset";
 import type { SettingsGatedToolDelta } from "./session-tools";
 import type { SessionManager } from "./session-manager";
+import type { EventBus } from "../utils/event-bus";
 
 /** Maximum time the interactive shutdown path waits for Mnemopi consolidation. */
 export const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
@@ -166,6 +167,9 @@ export interface AgentSessionConfig {
 	agent: Agent;
 	sessionManager: SessionManager;
 	settings: Settings;
+	/** Session-local communication and root-scoped child observability buses. */
+	eventBus?: EventBus;
+	subagentEventBus?: EventBus;
 	/**
 	 * Live extension-root policy inherited from the owning session. Subagents use
 	 * this provider so explicit roots, discovery mode, configured roots, and

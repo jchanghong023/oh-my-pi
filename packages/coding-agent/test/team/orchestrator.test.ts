@@ -47,7 +47,7 @@ interface ParsedMarker {
 }
 
 function parseMarker(task: string): ParsedMarker {
-	const match = /\[team-stage:([a-z]+)(?: target=([A-Z]))?(?: round=(\d+))?( recheck)?\]/.exec(task);
+	const match = /\[team-stage:([a-z]+)(?: target=([A-Z]+))?(?: round=(\d+))?( recheck)?\]/.exec(task);
 	if (!match) throw new Error(`no stage marker in task: ${task.slice(0, 80)}`);
 	return { role: match[1], target: match[2], round: match[3] ? Number(match[3]) : undefined, recheck: !!match[4] };
 }
@@ -56,6 +56,7 @@ function proposalData(label: string): Record<string, unknown> {
 	return {
 		proposal: `方案 ${label}：扩展现有模块，改动集中在 X。`,
 		noViableProposal: false,
+		investigationBlockedReason: "",
 		keyAssumptions: [{ content: "接口 Y 稳定", basis: "code", status: "unverified", impactIfWrong: "需要适配层" }],
 		risks: ["回归风险"],
 		unknowns: [],
@@ -149,11 +150,12 @@ function revisionData(
 
 function noViableProposalData(): Record<string, unknown> {
 	return {
-		proposal: "资料缺失：内部 wiki 无该模块规范，无法形成可行方案。",
+		proposal: "已核实接口与强制兼容约束，所有候选均会破坏兼容性，因此无可行方案。",
 		noViableProposal: true,
+		investigationBlockedReason: "",
 		keyAssumptions: [],
 		risks: [],
-		unknowns: ["模块所有者不明"],
+		unknowns: [],
 		acceptanceCriteria: [],
 		ambiguityInterpretations: [],
 		evidence: [],
@@ -214,7 +216,7 @@ function createScriptedRunner(script: Script): { runner: TeamSubagentRunner; cal
 		let outcome: Record<string, unknown> | { __fail: string } | undefined;
 		switch (marker.role) {
 			case "proposal":
-				outcome = script.proposal?.(call) ?? proposalData(call.label.at(-1) ?? "A");
+				outcome = script.proposal?.(call) ?? proposalData(call.label.slice("team-proposal-".length));
 				break;
 			case "alignment":
 				outcome = script.alignment?.() ?? alignmentData();
@@ -320,7 +322,10 @@ describe("team visible participant settlement", () => {
 		const updates: TeamProgressUpdate[] = [];
 		await run(
 			{
-				proposal: call => (call.label.endsWith("A") ? { __fail: "unavailable" } : proposalData(call.label.at(-1)!)),
+				proposal: call =>
+					call.label === "team-proposal-A"
+						? { __fail: "unavailable" }
+						: proposalData(call.label.slice("team-proposal-".length)),
 				review: ({ target }) => (target === "C" ? { __fail: "review failed" } : reviewData()),
 			},
 			{ onProgress: update => updates.push(update) },
@@ -1393,6 +1398,120 @@ describe("team orchestrator", () => {
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
 	});
 
+	it("preserves a 53-slot roster and routes multi-letter finding IDs without colliding with single-letter labels", async () => {
+		const roster = resolveTeamParticipants({
+			configuredMembers: Array.from({ length: 53 }, (_, index) => [PATTERN_A, PATTERN_B, PATTERN_C][index % 3]!),
+			sessionModel: MODEL_A,
+			availableModels: [MODEL_A, MODEL_B, MODEL_C],
+		});
+		expect(roster.ok).toBe(true);
+		if (!roster.ok) throw new Error(roster.error);
+		const expectedLabels = [
+			...Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index)),
+			...Array.from({ length: 26 }, (_, index) => `A${String.fromCharCode(65 + index)}`),
+			"BA",
+		];
+		const revisions: { target: string; ids: string[] }[] = [];
+		const rechecks: { target: string; ids: string[] }[] = [];
+		const { result, calls } = await run(
+			{
+				review: ({ target, recheck, blockingIds }) => {
+					if (!recheck) return reviewData({ blocking: target === "AA" || target === "BA" ? 1 : 0 });
+					rechecks.push({ target, ids: blockingIds });
+					return reviewData({
+						resolutions: resolutions(blockingIds, target === "BA" ? "resolved" : "unresolved"),
+					});
+				},
+				revision: ({ target, findingIds }) => {
+					revisions.push({ target, ids: findingIds });
+					return revisionData({ claimsResolvedBlocking: true }, findingIds);
+				},
+				synthesis: () => synthesisData("BA"),
+			},
+			{ participants: roster.participants, maxConcurrency: 4 },
+		);
+		expect(result.status).toBe("completed");
+		const proposerCalls = calls.filter(call => call.role === "proposer");
+		expect(proposerCalls.map(call => call.label)).toEqual(expectedLabels.map(label => `team-proposal-${label}`));
+		expect(new Set(proposerCalls.map(call => call.label)).size).toBe(53);
+		expect(proposerCalls.map(call => call.modelPattern)).toEqual(
+			roster.participants.map(member => member.modelPattern),
+		);
+		expect(
+			calls
+				.filter(call => call.role === "reviewer" && !parseMarker(call.task).recheck)
+				.map(call => parseMarker(call.task).target),
+		).toEqual(expectedLabels);
+		expect(revisions.filter(item => item.target === "AA")).toEqual([
+			{ target: "AA", ids: ["AA-F1"] },
+			{ target: "AA", ids: ["AA-F1"] },
+		]);
+		expect(revisions.filter(item => item.target === "BA")).toEqual([{ target: "BA", ids: ["BA-F1"] }]);
+		expect(rechecks.filter(item => item.target === "AA")).toEqual([
+			{ target: "AA", ids: ["AA-F1"] },
+			{ target: "AA", ids: ["AA-F1"] },
+		]);
+		expect(rechecks.filter(item => item.target === "BA")).toEqual([{ target: "BA", ids: ["BA-F1"] }]);
+		const rows = result.reportMarkdown!.split("\n");
+		expect(rows.find(row => row.startsWith("| 方案 A |"))).toContain("✅ 可作为选项");
+		expect(rows.find(row => row.startsWith("| 方案 AA |"))).toContain("尚不可采用");
+		expect(rows.find(row => row.startsWith("| 方案 AA |"))).toContain("AA-F1");
+		expect(rows.find(row => row.startsWith("| 方案 BA |"))).toContain("✅ 可作为选项");
+		expect(result.reportMarkdown).toContain("**【推荐】方案 BA**");
+		expect(result.droppedRecommendation).toBe(false);
+	});
+
+	it("ends investigation with concrete reasons when all three proposers lack a required file", async () => {
+		const updates: TeamProgressUpdate[] = [];
+		const reason = "指定的 requirements/missing.md 不存在，无法核实必需的验收约束";
+		const { result, calls } = await run(
+			{
+				proposal: () => ({
+					...noViableProposalData(),
+					proposal: "",
+					investigationBlockedReason: reason,
+				}),
+			},
+			{ onProgress: update => updates.push(update) },
+		);
+		expect(result.status).toBe("failed");
+		expect(result.reportMarkdown).toBeUndefined();
+		expect(calls.map(call => call.role)).toEqual(["proposer", "proposer", "proposer"]);
+		for (const label of ["A", "B", "C"]) {
+			expect(result.failureReason).toContain(`${label}：${reason}`);
+			expect(updates.at(-1)?.participants.find(participant => participant.label === label)?.state).toBe("failed");
+		}
+		expect(updates.every(update => update.stage === "investigation")).toBe(true);
+	});
+
+	it("does not ignore one explicit necessary-investigation blocker when other proposers succeed", async () => {
+		const { result, calls } = await run({
+			proposal: call =>
+				call.label === "team-proposal-B"
+					? {
+							...noViableProposalData(),
+							investigationBlockedReason: "必需规范的 wiki 访问被拒绝，无法确认强制约束",
+						}
+					: proposalData(call.label),
+		});
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("B：必需规范的 wiki 访问被拒绝");
+		expect(calls.every(call => call.role === "proposer")).toBe(true);
+	});
+
+	it("rejects omitted investigation state before starting alignment", async () => {
+		const { result, calls } = await run({
+			proposal: () => {
+				const payload = proposalData("A");
+				delete payload.investigationBlockedReason;
+				return payload;
+			},
+		});
+		expect(result.status).toBe("failed");
+		expect(result.failureReason).toContain("所有提案子代理均失败");
+		expect(calls.every(call => call.role === "proposer")).toBe(true);
+	});
+
 	it("excludes a no-viable proposal from options and review targets", async () => {
 		const { result, calls } = await run({
 			proposal: call => (call.label.endsWith("B") ? noViableProposalData() : proposalData("A")),
@@ -1407,15 +1526,16 @@ describe("team orchestrator", () => {
 		// B's status row must not read as an adoptable option.
 		const bRow = markdown.split("\n").find(line => line.includes("| 方案 B |"))!;
 		expect(bRow).toContain("尚不可采用");
-		// The declaration is visible to alignment and synthesis inputs.
-		const alignmentTask = calls.find(call => parseMarker(call.task).role === "alignment")!.task;
-		expect(alignmentTask).toContain("提案者声明：未形成可行方案");
-		const synthesisTask = calls.find(call => parseMarker(call.task).role === "synthesis")!.task;
-		expect(synthesisTask).toContain("提案者声明：依据不足");
 	});
 
 	it("completes with an explanation when every proposal reports no viable plan", async () => {
-		const { result, calls } = await run({ proposal: () => noViableProposalData() });
+		const { result, calls } = await run({
+			proposal: () => noViableProposalData(),
+			synthesis: () => ({
+				...synthesisData(),
+				reportMarkdown: "### 不可行结论\n必要调查已完成，全部候选均违反已核实的强制兼容约束，因此无可行方案。",
+			}),
+		});
 		expect(result.status).toBe("completed");
 		expect(calls.filter(call => parseMarker(call.task).role === "review")).toHaveLength(0);
 		expect(calls.filter(call => parseMarker(call.task).role === "revision")).toHaveLength(0);

@@ -47,8 +47,11 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 ## 输出纪律
 
 - 初稿必须区分事实、推断和假设；证据给出可回查的位置。
-- 没有足够依据时，可以报告未形成可行方案（noViableProposal=true），NEVER 虚构接口、规范或代码行为。
-- 方案全文 ≤ 4000 字；不输出详细实现代码。
+- `investigationBlockedReason` MUST 始终提交：必要调查完成时填空字符串。
+- 指定文件不存在／位置不明，或关键资料／访问能力缺失使必要调查无法完成？MUST 在 `investigationBlockedReason` 写明具体缺失项、未核实约束及影响，并设 `noViableProposal=true`；本次流程将停止，不继续对齐或综合。
+- 已完成必要调查仍无可行方案？MUST 设 `noViableProposal=true`、`investigationBlockedReason=""`，并说明依据与不可行原因；NEVER 将此结论误报为调查受阻。
+- 不影响方案成立的未知项 MUST 写入 `unknowns`，NEVER 作为必要调查受阻；NEVER 虚构接口、规范或代码行为。
+- 所有文字（含 `investigationBlockedReason` 与证据来源）合计 MUST ≤ 4000 字；NEVER 输出详细实现代码。
 - 不要假设其他模型的存在或输出；你看到的就是全部输入。
 
 <critical>

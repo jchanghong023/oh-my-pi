@@ -15,6 +15,17 @@ export interface McpResourceReadOptions {
 	signal?: AbortSignal;
 }
 
+/** Explicit caller restrictions revoke MCP, including every process-global fallback. */
+export function mcpResourcesEnabled(context?: ResolveContext): boolean {
+	return context?.session?.enableMCP !== false && context?.session?.restrictToolNames !== true;
+}
+
+/** Prefer the caller's manager; legacy CLI callers may still use their global deferred loader. */
+export async function resolveMcpManager(context?: ResolveContext): Promise<MCPManager | undefined> {
+	if (!mcpResourcesEnabled(context)) return undefined;
+	return context?.session?.mcpManager ?? MCPManager.load();
+}
+
 function escapeRegex(text: string): string {
 	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -210,7 +221,7 @@ export class McpProtocolHandler implements ProtocolHandler {
 	}
 
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
-		const mcpManager = await MCPManager.load();
+		const mcpManager = await resolveMcpManager(context);
 		if (!mcpManager) {
 			throw new Error("No MCP manager available. MCP servers may not be configured.");
 		}

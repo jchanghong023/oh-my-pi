@@ -20,6 +20,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/team/controller";
 import * as orchestratorModule from "@oh-my-pi/pi-coding-agent/team/orchestrator";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
+import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -35,8 +36,14 @@ interface JobManagerStub {
 }
 
 function stubSession(jobManager: JobManagerStub, sentMessages: { customType: string; content: string }[]) {
+	const sessionChangeCallbacks = new Set<() => void>();
 	return {
 		model: MODEL,
+		sessionId: "session-A",
+		registerSessionChangeCallback: (callback: () => void) => {
+			sessionChangeCallbacks.add(callback);
+			return () => sessionChangeCallbacks.delete(callback);
+		},
 		modelRegistry: {
 			getAvailable: () => [MODEL],
 			authStorage: undefined,
@@ -60,7 +67,7 @@ function stubSession(jobManager: JobManagerStub, sentMessages: { customType: str
 			sentMessages.push({ customType: payload.customType, content: payload.content });
 			return false;
 		},
-		sessionManager: { getArtifactsDir: () => null },
+		sessionManager: { getAdditionalDirectories: () => [], getArtifactsDir: () => null },
 		sessionFile: undefined,
 		skills: [],
 		promptTemplates: [],
@@ -254,8 +261,10 @@ describe("team controller dispatch", () => {
 		});
 		const errors: string[] = [];
 		const output: string[] = [];
+		const registerSessionChange = vi.fn(() => vi.fn());
 		const session = {
 			...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+			registerSessionChangeCallback: registerSessionChange,
 			model: pinned,
 			modelRegistry: { getAvailable: () => [base] },
 			asyncJobManager: manager,
@@ -306,11 +315,171 @@ describe("team controller dispatch", () => {
 				expect(acknowledge).toHaveBeenCalledWith([job.id]);
 				expect(errors).toEqual([]);
 			}
+			expect(registerSessionChange).toHaveBeenCalledTimes(1);
+			expect(registerSessionChange.mock.results[0]!.value).toHaveBeenCalledTimes(1);
 		} finally {
 			discussion.mockRestore();
 			await manager.dispose();
 		}
 	});
+
+	it.each(["session", "job"] as const)(
+		"cancels an A-session discussion through %s without leaking callbacks or delivery",
+		async cancelThrough => {
+			const manager = new AsyncJobManager({});
+			const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
+			const callbacks = new Set<() => void>();
+			let sessionId = "A";
+			const childStarted = Promise.withResolvers<AbortSignal>();
+			const releaseChild = Promise.withResolvers<void>();
+			const child = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				childStarted.resolve(options.signal!);
+				await releaseChild.promise;
+				return {
+					index: options.index,
+					id: options.id,
+					agent: options.agent.name,
+					agentSource: options.agent.source,
+					task: options.task,
+					exitCode: 0,
+					output: "late A result",
+					stderr: "",
+					truncated: false,
+					durationMs: 0,
+					tokens: 0,
+					requests: 1,
+					resolvedModel: MODEL_PATTERN,
+				};
+			});
+			const writes: string[] = [];
+			const session = {
+				...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+				get sessionId() {
+					return sessionId;
+				},
+				registerSessionChangeCallback: (callback: () => void) => {
+					callbacks.add(callback);
+					return () => callbacks.delete(callback);
+				},
+				asyncJobManager: manager,
+				isStreaming: false,
+				appendCustomMessage: async () => {
+					writes.push(`${sessionId}:report`);
+				},
+			} as unknown as AgentSession;
+			try {
+				const dispatched = await startTeamDiscussion("分析 X", {
+					session,
+					settings: Settings.isolated({ "task.maxConcurrency": 1 }),
+					cwd: "/tmp/repo",
+					hooks: {
+						output: text => {
+							writes.push(`${sessionId}:output:${text}`);
+						},
+						showStatus: text => {
+							writes.push(`${sessionId}:status:${text}`);
+						},
+						showError: text => {
+							writes.push(`${sessionId}:error:${text}`);
+						},
+						rebuildChat: () => {
+							writes.push(`${sessionId}:rebuild`);
+						},
+					},
+				});
+				const signal = await childStarted.promise;
+				expect(callbacks.size).toBe(1);
+				if (cancelThrough === "job") manager.cancel(dispatched.jobId!);
+				sessionId = "B";
+				for (const callback of Array.from(callbacks)) callback();
+				expect(signal.aborted).toBe(true);
+				expect(callbacks.size).toBe(0);
+				expect(manager.getJob(dispatched.jobId!)!.status).toBe("cancelled");
+				releaseChild.resolve();
+				await manager.getJob(dispatched.jobId!)!.promise;
+				expect(child).toHaveBeenCalledTimes(1);
+				expect(writes.filter(write => write.startsWith("B:"))).toEqual([]);
+				expect(acknowledge).not.toHaveBeenCalled();
+				expect(callbacks.size).toBe(0);
+			} finally {
+				releaseChild.resolve();
+				await manager.dispose();
+				child.mockRestore();
+			}
+		},
+	);
+
+	it.each(["completed", "failed"] as const)(
+		"does not deliver a late %s result or progress into a switched session",
+		async status => {
+			const manager = new AsyncJobManager({});
+			const callbacks = new Set<() => void>();
+			let sessionId = "A";
+			const discussionStarted = Promise.withResolvers<AbortSignal>();
+			const releaseDiscussion = Promise.withResolvers<void>();
+			const discussion = vi.spyOn(orchestratorModule, "runTeamDiscussion").mockImplementation(async options => {
+				discussionStarted.resolve(options.signal!);
+				await releaseDiscussion.promise;
+				options.onProgress?.({ stage: "synthesis", text: "late A progress", participants: [] });
+				return {
+					status,
+					reportMarkdown: "late report",
+					failureReason: status === "failed" ? "late failure" : undefined,
+				};
+			});
+			const append = vi.fn(async () => {});
+			const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
+			const writes: string[] = [];
+			const session = {
+				...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+				get sessionId() {
+					return sessionId;
+				},
+				asyncJobManager: manager,
+				isStreaming: false,
+				appendCustomMessage: append,
+				registerSessionChangeCallback: (callback: () => void) => {
+					callbacks.add(callback);
+					return () => callbacks.delete(callback);
+				},
+			} as unknown as AgentSession;
+			try {
+				const dispatched = await startTeamDiscussion("分析 X", {
+					session,
+					settings: teamSettings(),
+					cwd: "/tmp/repo",
+					hooks: {
+						output: text => {
+							writes.push(`${sessionId}:${text}`);
+						},
+						showStatus: text => {
+							writes.push(`${sessionId}:${text}`);
+						},
+						showError: text => {
+							writes.push(`${sessionId}:${text}`);
+						},
+						rebuildChat: () => {
+							writes.push(`${sessionId}:rebuild`);
+						},
+					},
+				});
+				const signal = await discussionStarted.promise;
+				sessionId = "B";
+				for (const callback of Array.from(callbacks)) callback();
+				expect(signal.aborted).toBe(true);
+				releaseDiscussion.resolve();
+				await manager.getJob(dispatched.jobId!)!.promise;
+				expect(append).not.toHaveBeenCalled();
+				expect(acknowledge).not.toHaveBeenCalled();
+				expect(writes.filter(write => write.startsWith("B:"))).toEqual([]);
+				expect(callbacks.size).toBe(0);
+			} finally {
+				releaseDiscussion.resolve();
+				await manager.dispose();
+				discussion.mockRestore();
+			}
+		},
+	);
 
 	it("turns a job-manager registration failure into an actionable message", async () => {
 		const jobManager: JobManagerStub = {

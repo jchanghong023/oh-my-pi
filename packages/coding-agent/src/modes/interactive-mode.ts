@@ -8122,7 +8122,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		text: string,
 		mode: "steer" | "followUp",
 		images?: ImageContent[],
-		options?: { preserveDraft?: boolean },
+		options?: { preserveDraft?: boolean; imageLinks?: (string | undefined)[]; draftDetached?: boolean },
 	): void {
 		this.#uiHelpers.queueCompactionMessage(text, mode, images, options);
 	}

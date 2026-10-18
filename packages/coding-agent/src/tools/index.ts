@@ -79,6 +79,7 @@ import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
 import { YieldTool } from "./yield";
+import { isolateTeamReads } from "./team-read-isolation";
 
 import {
 	cfgAskEnabled,
@@ -863,7 +864,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
-			return tool ? wrapToolWithMetaNotice(tool) : null;
+			return tool ? wrapToolWithMetaNotice(isolateTeamReads(tool, session)) : null;
 		}),
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);

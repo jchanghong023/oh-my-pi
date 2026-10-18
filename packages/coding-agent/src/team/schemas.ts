@@ -114,7 +114,13 @@ export const TEAM_PROPOSAL_SCHEMA = obj(
 			TEAM_PROPOSAL_BUDGET,
 			"方案正文（markdown）：方向、主要实施步骤、影响范围、依据；不输出详细实现代码。所有文字字段（含证据来源）合计 MUST ≤ 4000 字，状态枚举不计入",
 		),
-		noViableProposal: bool("依据不足、未形成可行方案时为 true，并在 proposal 中说明缺口"),
+		noViableProposal: bool(
+			"未形成可行方案时为 true；调查已完成但无可行方案与必需资料缺失须用 investigationBlockedReason 区分",
+		),
+		investigationBlockedReason: str(
+			TEAM_PROPOSAL_BUDGET,
+			"必要调查完成时必须为空字符串；指定文件缺失/位置不明、关键资料或访问能力缺失使调查无法完成时，填写具体原因并将 noViableProposal 设为 true；计入全部文字 4000 字预算",
+		),
 		keyAssumptions: { type: "array", maxItems: 12, description: "关键假设（含状态与影响）", items: assumptionSchema },
 		risks: strArray(12, 300, "主要风险"),
 		unknowns: strArray(12, 300, "未知的资料、接口行为或无法确认的事项"),
@@ -130,6 +136,7 @@ export const TEAM_PROPOSAL_SCHEMA = obj(
 	[
 		"proposal",
 		"noViableProposal",
+		"investigationBlockedReason",
 		"keyAssumptions",
 		"risks",
 		"unknowns",
@@ -367,9 +374,16 @@ export function parseTeamProposal(value: unknown): TeamProposalOutput | undefine
 	if (!data) return undefined;
 	const proposal = asString(data.proposal).trim();
 	if (!proposal && !asBoolean(data.noViableProposal)) return undefined;
+	const investigationBlockedReason = asString(data.investigationBlockedReason);
+	if (
+		investigationBlockedReason !== investigationBlockedReason.trim() ||
+		(investigationBlockedReason && !asBoolean(data.noViableProposal))
+	)
+		return undefined;
 	const parsed: TeamProposalOutput = {
 		proposal,
 		noViableProposal: asBoolean(data.noViableProposal),
+		investigationBlockedReason,
 		keyAssumptions: asObjectArray(data.keyAssumptions, 12).map(parseAssumption),
 		risks: asStringArray(data.risks, 12),
 		unknowns: asStringArray(data.unknowns, 12),
@@ -381,6 +395,7 @@ export function parseTeamProposal(value: unknown): TeamProposalOutput | undefine
 	// an oversized payload. Boolean and enum metadata do not consume the budget.
 	const proposalTextLength =
 		asString(data.proposal).length +
+		investigationBlockedReason.length +
 		parsed.keyAssumptions.reduce(
 			(total, assumption) =>
 				total + assumption.content.length + assumption.basis.length + assumption.impactIfWrong.length,

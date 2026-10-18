@@ -24,7 +24,7 @@ import {
 	UrlContainmentError,
 	validateRelativePath,
 } from "./filesystem-resource";
-import { readMcpResource } from "./mcp-protocol";
+import { mcpResourcesEnabled, readMcpResource, resolveMcpManager } from "./mcp-protocol";
 import type {
 	InternalResource,
 	InternalUrl,
@@ -146,7 +146,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 			let mcpManager: MCPManager | undefined;
 			try {
 				mcpManager = await withTimeout(
-					MCPManager.load(),
+					resolveMcpManager(context),
 					UNKNOWN_SKILL_MCP_WAIT_MS,
 					"MCP startup outlasted the unknown-skill wait",
 					context?.signal,
@@ -208,7 +208,14 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		try {
 			targetPath = await skillTargetPath(url, skills, options?.directory === true, options?.create === true);
 		} catch (error) {
-			if (error instanceof UnknownSkillError && !options?.localOnly && MCPManager.available()) return null;
+			if (
+				error instanceof UnknownSkillError &&
+				!options?.localOnly &&
+				mcpResourcesEnabled(context) &&
+				(context?.session?.mcpManager || MCPManager.available())
+			) {
+				return null;
+			}
 			throw error;
 		}
 		if (options?.create) return targetPath;

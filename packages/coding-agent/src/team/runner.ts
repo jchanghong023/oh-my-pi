@@ -24,6 +24,7 @@ import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
 import type { CreateAgentSessionOptions } from "../sdk";
+import type { EventBus } from "../utils/event-bus";
 import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
 /**
@@ -46,6 +47,8 @@ export interface TeamRunnerDeps {
 	sessionFile: string | null;
 	artifactsDir: string | null;
 	parentAgentId: string;
+	eventBus?: EventBus;
+	subagentEventBus?: EventBus;
 	parentActiveModelPattern?: string;
 	skills?: readonly Skill[];
 	promptTemplates?: PromptTemplate[];
@@ -91,6 +94,7 @@ export function modelMatches(resolved: string | undefined, pattern: string): boo
 
 /** Build the default runner bound to the dispatching session's dependencies. */
 export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunner {
+	const readIsolationRoots = new Set<string>();
 	// Each discussion owns a namespace: separate managers can otherwise allocate
 	// the same stage IDs before either concurrent run has written its artifacts.
 	const outputManager = new AgentOutputManager(() => deps.artifactsDir, {
@@ -106,7 +110,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 					logger.getLogContext().team_run_id ??
 					`team-${crypto.randomUUID()}`,
 				role: call.role,
-				label: /^team-(?:proposal|review|revision|recheck)-[A-Z](?:-[12])?$|^team-(?:alignment|synthesis)$/.test(
+				label: /^team-(?:proposal|review|revision|recheck)-[A-Z]+(?:-[12])?$|^team-(?:alignment|synthesis)$/.test(
 					call.label,
 				)
 					? call.label
@@ -148,6 +152,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 				let lease: ArtifactLease;
 				try {
 					lease = await leaseArtifacts(deps);
+					readIsolationRoots.add(lease.artifactsDir);
 					logger.info("Team artifact lease prepared", {
 						component: "team.runner",
 						event: "team_lease_completed",
@@ -240,6 +245,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						artifactsDir: lease.artifactsDir,
 						localProtocolOptions: {
 							getArtifactsDir: () => path.join(lease.artifactsDir, id),
+							getReadIsolationRoots: () => [...readIsolationRoots],
 							getSessionId: () => id,
 							// agent:// and history:// are global cross-agent namespaces;
 							// disabling IRC messaging alone does not isolate their reads.
@@ -256,6 +262,8 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						promptTemplates: deps.promptTemplates,
 						rules: deps.rules,
 						parentAgentId: deps.parentAgentId,
+						eventBus: deps.eventBus,
+						subagentEventBus: deps.subagentEventBus,
 					});
 					const failure = (error: string): TeamSubagentOutcome =>
 						result.structuredOutput && Object.hasOwn(result.structuredOutput, "data")

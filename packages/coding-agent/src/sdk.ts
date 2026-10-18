@@ -4897,6 +4897,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			advisorConfigs: discoveredAdvisors.advisors,
 			advisorConfigWarnings: discoveredAdvisors.warnings,
 			agent,
+			eventBus,
+			subagentEventBus,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
 			initialRetryFallback,
@@ -5320,7 +5322,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
-		session.attachRepoLifecycle(new RepoLifecycle({ agentDir, getCwd: () => sessionManager.getCwd() }));
+		if (!restrictToolNames) {
+			session.attachRepoLifecycle(new RepoLifecycle({ agentDir, getCwd: () => sessionManager.getCwd() }));
+		}
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,
 		// invoked from the dispose wrapper AND registered as a postmortem so both
 		// explicit-dispose (SDK embedders that reuse the process across sessions) and

@@ -112,7 +112,7 @@ describe("compaction queue image forwarding", () => {
 		new UiHelpers(ctx).queueCompactionMessage("look at this screenshot", "steer", [image]);
 
 		expect(ctx.compactionQueuedMessages).toEqual([
-			{ text: "look at this screenshot", mode: "steer", images: [image] },
+			{ text: "look at this screenshot", mode: "steer", images: [image], draftDetached: true },
 		]);
 		// Pending state is consumed so the next message does not resend the image.
 		expect(ctx.editor.pendingImages).toEqual([]);
@@ -123,7 +123,9 @@ describe("compaction queue image forwarding", () => {
 	test("empty image list is normalized to undefined on the queued entry", () => {
 		const { ctx } = makeCtx();
 		new UiHelpers(ctx).queueCompactionMessage("no images here", "followUp", []);
-		expect(ctx.compactionQueuedMessages).toEqual([{ text: "no images here", mode: "followUp", images: undefined }]);
+		expect(ctx.compactionQueuedMessages).toEqual([
+			{ text: "no images here", mode: "followUp", images: undefined, draftDetached: true },
+		]);
 	});
 
 	test("flush forwards the first queued prompt's images via session.prompt", async () => {

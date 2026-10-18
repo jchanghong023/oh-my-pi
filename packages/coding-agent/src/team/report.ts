@@ -7,6 +7,7 @@
  * recommendation is dropped here with an explicit note.
  */
 import { stripInlineMarkdown } from "@oh-my-pi/pi-tui/overlays/plan-toc";
+import { normalizeHtmlEntitiesForTerminal } from "@oh-my-pi/pi-tui/utils/html-entities";
 import { Lexer } from "@oh-my-pi/pi-utils/marked";
 import type { TeamAlignmentOutput, TeamProposalRecord, TeamSynthesisOutput } from "./types";
 
@@ -85,21 +86,16 @@ function recommendationIsValid(synthesis: TeamSynthesisOutput, proposals: readon
 }
 
 /**
- * Conditional adoption clauses (§2.7 未采纳方向): explaining *when* a blocked
- * proposal could become adoptable — "在阻断问题 b 解决后即可采用" — is expected
- * synthesis content, not a tracking override. A clause is stripped only when
- * its adoption verb is explicitly guarded: either a conditional connective
- * leads into it, or a resolution verb is followed by an explicit posteriority
- * marker (后/之后/之时). The posteriority requirement keeps "…解决方案 A 可采用"
- * (解决方案 reads as "adopt solution A", not resolution + 后) unstripped, so an
- * unconditional recommendation still conflicts.
+ * A condition guards only its next adoption predicate, never a later claim.
+ * Resolution conditions have no arbitrary length limit: the sentence/field
+ * boundaries and the preceding predicate delimit their scope instead.
  */
-const CONDITIONAL_ADOPTION_CLAUSE = new RegExp(
+const CONDITIONAL_ADOPTION_PREFIX = new RegExp(
 	[
-		"(?:一旦|如果|若|只要|待|假如|倘若)[^。\\n]{0,20}?(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)?[^。\\n]{0,4}?(?:即|便|才|再|就)?(?:可|可以|建议)?(?:采用|作为(?:最终)?选项|推荐|首选)",
-		"(?:解决|修复|解除|满足|关闭|消除|证实|确认)[^。\\n]{0,8}?(?:之后|以后|之时|后)(?:[，,]|方案[A-Z]+|[A-Z]+方案){0,4}(?:即|便|才|再|就|方)?(?:可|可以|建议)?(?:采用|作为(?:最终)?选项|推荐|首选)",
+		"(?:一旦|如果|若|只要|待|假如|倘若|仅在|只有在)[^。！？；;!?\\n]*(?:解决|修复|解除|满足|关闭|消除|证实|确认|复核通过)[^，,。！？；;!?\\n]*(?:[，,]|方案[A-Z]+|[A-Z]+方案)*(?:即|便|才|再|就|方)?(?:可|可以|建议)?$",
+		"(?:解决|修复|解除|满足|关闭|消除|证实|确认|复核通过)[^。！？；;!?\\n]*?(?:之后|以后|之时|后)(?:[，,]|方案[A-Z]+|[A-Z]+方案)*(?:即|便|才|再|就|方)?(?:可|可以|建议)?$",
 	].join("|"),
-	"gu",
+	"u",
 );
 
 /** A model-authored adoption claim must not override the tracked proposal status. */
@@ -115,14 +111,11 @@ function synthesisProseConflict(
 		prose.push(synthesis.recommendationReason, synthesis.recommendationPreconditions);
 	}
 	const body = prose.join("\n\n");
-	if (stripInlineMarkdown(body).includes("【推荐】")) return "综合正文自行写入了【推荐】标记";
+	if (normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(body)).includes("【推荐】"))
+		return "综合正文自行写入了【推荐】标记";
 	// Keep commas and wrapped lines: a label and its predicate may straddle
 	// either, as may an explicit adoption condition. Paragraphs isolate claims,
 	// but Markdown subsections inherit their enclosing proposal's ownership.
-	const labels = proposals.flatMap(record => [
-		{ record, text: `方案${record.label}` },
-		{ record, text: `${record.label}方案` },
-	]);
 	const statements: { text: string; scope: readonly TeamProposalRecord[] }[] = [];
 	for (const field of prose) {
 		// Fields are independent: report headings must not scope recommendation
@@ -130,13 +123,16 @@ function synthesisProseConflict(
 		const headings: { depth: number; scope: readonly TeamProposalRecord[] }[] = [];
 		let pending = "";
 		const flushStatements = () => {
-			// Lexer tokens are Markdown structure, not claim boundaries: a
-			// paragraph label can own an adjacent list or blockquote. Split
-			// only after rejoining raw text within the same heading scope.
-			for (const text of pending.split(
-				/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却|\r?\n\s*\r?\n)/u,
-			)) {
-				statements.push({ text, scope: headings.at(-1)?.scope ?? [] });
+			// Strip Markdown before decoding, just as the renderer does: an
+			// encoded delimiter is visible text, not new Markdown syntax.
+			// Decode before sentence splitting so entity semicolons stay whole.
+			for (const paragraph of pending.split(/\r?\n\s*\r?\n/u)) {
+				const visible = normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(paragraph));
+				for (const text of visible.split(
+					/(?:[。！？；;!?]|(?<![\p{L}\p{N}_/\\-])\.|\.(?![\p{L}\p{N}_/\\-])|但是|但|而|却)/u,
+				)) {
+					statements.push({ text, scope: headings.at(-1)?.scope ?? [] });
+				}
 			}
 			pending = "";
 		};
@@ -144,11 +140,16 @@ function synthesisProseConflict(
 			if (token.type === "heading") {
 				flushStatements();
 				while (headings.length > 0 && headings.at(-1)!.depth >= token.depth) headings.pop();
-				const heading = stripInlineMarkdown(token.text).replace(/\s+/gu, "");
+				const heading = normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(token.text)).replace(/\s+/gu, "");
 				const named = [...heading.matchAll(/方案([A-Z]+)|([A-Z]+)方案/gu)]
 					.map(match => proposals.find(record => record.label === (match[1] ?? match[2])))
 					.filter((record): record is TeamProposalRecord => record !== undefined);
 				headings.push({ depth: token.depth, scope: named.length > 0 ? named : (headings.at(-1)?.scope ?? []) });
+				statements.push({
+					text: normalizeHtmlEntitiesForTerminal(stripInlineMarkdown(token.text)),
+					scope: headings.at(-1)?.scope ?? [],
+				});
+				continue;
 			}
 			pending += token.raw;
 		}
@@ -157,27 +158,24 @@ function synthesisProseConflict(
 	for (const { text: statement, scope } of statements) {
 		// Compare visible prose, not Markdown delimiters: `方案 **A**` names
 		// the same proposal as `方案 A` in the delivered report.
-		const positiveClaims = stripInlineMarkdown(statement)
+		const positiveClaims = statement
 			.replace(/\s+/gu, "")
-			.replace(CONDITIONAL_ADOPTION_CLAUSE, "")
 			// Remove only the negated predicate, not its clause: a later
 			// affirmative endorsement must still be checked.
 			.replace(
-				/(?:不(?:再|予|能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)/gu,
+				/(?:不(?:再|予|能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)|(?:没有|无)(?:任何)?推荐(?:价值|必要|理由)/gu,
 				"",
 			);
 		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];
-		for (const { record, text } of labels) {
-			for (
-				let index = positiveClaims.indexOf(text);
-				index >= 0;
-				index = positiveClaims.indexOf(text, index + text.length)
-			) {
-				mentions.push({ index, end: index + text.length, record });
-			}
+		for (const match of positiveClaims.matchAll(/方案([A-Z]+)|([A-Z]+)方案/gu)) {
+			const record = proposals.find(candidate => candidate.label === (match[1] ?? match[2]));
+			if (record) mentions.push({ index: match.index, end: match.index + match[0].length, record });
 		}
-		mentions.sort((left, right) => left.index - right.index);
+		let previousClaimEnd = 0;
 		for (const claim of positiveClaims.matchAll(/(?:可(?:以)?(?:采用|作为(?:最终)?选项)|建议采用|推荐|首选)/gu)) {
+			const prefix = positiveClaims.slice(previousClaimEnd, claim.index);
+			previousClaimEnd = claim.index + claim[0].length;
+			if (CONDITIONAL_ADOPTION_PREFIX.test(prefix)) continue;
 			// A standalone adoption claim does not name a proposal in the next
 			// comma clause. Keep label-before-predicate claims across commas
 			// ("方案 A，可以采用") and comparisons within a clause.
@@ -196,7 +194,14 @@ function synthesisProseConflict(
 				}
 			}
 			if (nearestIndex < 0) {
-				const blocked = scope.find(record => !isAdoptable(record));
+				// Comparison headings own ordered alternatives. An explicit
+				// 前者/后者 identifies one alternative, not the whole group.
+				const reference = /前者|后者/gu;
+				const before = [...prefix.matchAll(reference)].at(-1)?.[0];
+				const after = /^(前者|后者)/u.exec(positiveClaims.slice(previousClaimEnd))?.[1];
+				const relative = after ?? before;
+				const owners = scope.length === 2 && relative ? [relative === "前者" ? scope[0] : scope[1]] : scope;
+				const blocked = owners.find(record => !isAdoptable(record));
 				if (blocked) return `综合正文建议采用已标记为“尚不可采用”的方案 ${blocked.label}`;
 				continue;
 			}

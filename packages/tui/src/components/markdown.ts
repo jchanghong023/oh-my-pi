@@ -44,6 +44,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils";
+import { normalizeHtmlEntitiesForTerminal } from "../utils/html-entities";
 
 // Marked treats the backslash in an ST-terminated OSC 8 sequence (`ESC \\`) as
 // Markdown punctuation when it is immediately followed by markup such as a
@@ -502,46 +503,6 @@ function repairOrphanClosingFence(text: string): string {
 // splits/normalizes the sized span (recomputing the explicit `w=` cell count
 // and hoisting SGR out of the OSC payload), and padding would append trailing
 // cells past the doubled glyph.
-
-function normalizeHtmlEntitiesForTerminal(raw: string): string {
-	const parseCodePoint = (value: number): string => {
-		if (Number.isFinite(value) && value >= 0 && value <= 0x10ffff) {
-			try {
-				return String.fromCodePoint(value);
-			} catch {
-				// Fallback to empty string or original if invalid codepoint
-			}
-		}
-		return "";
-	};
-
-	return raw.replace(/&(amp|lt|gt|quot|apos|nbsp|#\d+|#x[0-9a-fA-F]+);/gi, (match, entity) => {
-		const lower = entity.toLowerCase();
-		switch (lower) {
-			case "nbsp":
-				return " ";
-			case "lt":
-				return "<";
-			case "gt":
-				return ">";
-			case "quot":
-				return '"';
-			case "apos":
-				return "'";
-			case "amp":
-				return "&";
-			default: {
-				if (lower.startsWith("#x")) {
-					return parseCodePoint(Number.parseInt(lower.slice(2), 16));
-				}
-				if (lower.startsWith("#")) {
-					return parseCodePoint(Number(lower.slice(1)));
-				}
-				return match;
-			}
-		}
-	});
-}
 
 interface HtmlListState {
 	type: "ol" | "ul";

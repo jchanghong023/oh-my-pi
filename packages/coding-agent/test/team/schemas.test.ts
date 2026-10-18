@@ -11,6 +11,7 @@ import {
 const proposal = () => ({
 	proposal: "Extend the existing path.",
 	noViableProposal: false,
+	investigationBlockedReason: "",
 	keyAssumptions: [
 		{ content: "API is public", basis: "src/api.ts:10", status: "verified" as const, impactIfWrong: "Change scope" },
 	],
@@ -78,6 +79,7 @@ describe("team yield payload validation", () => {
 		const data = {
 			proposal: "p".repeat(3890),
 			noViableProposal: false,
+			investigationBlockedReason: "",
 			keyAssumptions: [
 				{
 					content: "c".repeat(10),
@@ -139,6 +141,12 @@ describe("team yield payload validation", () => {
 
 	it.each([
 		{ ...proposal(), noViableProposal: "false" },
+		{ ...proposal(), investigationBlockedReason: undefined },
+		{ ...proposal(), investigationBlockedReason: null },
+		{ ...proposal(), investigationBlockedReason: false },
+		{ ...proposal(), noViableProposal: true, investigationBlockedReason: " \n " },
+		{ ...proposal(), noViableProposal: true, investigationBlockedReason: " missing.md is absent " },
+		{ ...proposal(), investigationBlockedReason: "missing.md is absent" },
 		{ ...proposal(), keyAssumptions: [{ ...proposal().keyAssumptions[0], status: "likely" }] },
 		{ ...proposal(), evidence: [{ claim: "Source omitted" }] },
 		{ ...proposal(), ambiguityInterpretations: [{ ambiguity: "X", interpretation: "Y" }] },
@@ -151,6 +159,36 @@ describe("team yield payload validation", () => {
 	it("accepts an explicit no-viable-proposal outcome without requiring proposal prose", () => {
 		expect(parseTeamProposal({ ...proposal(), proposal: "", noViableProposal: true })?.noViableProposal).toBe(true);
 		expect(parseTeamProposal({ ...proposal(), proposal: "" })).toBeUndefined();
+	});
+
+	it("requires an explicit investigation status and preserves a concrete blocked reason", () => {
+		const legacy: Record<string, unknown> = proposal();
+		delete legacy.investigationBlockedReason;
+		expect(parseTeamProposal(legacy)).toBeUndefined();
+		const blocked = {
+			...proposal(),
+			noViableProposal: true,
+			investigationBlockedReason: "Required requirements.md is absent; acceptance constraints cannot be checked.",
+		};
+		expect(parseTeamProposal(blocked)).toEqual(blocked);
+	});
+
+	it("counts the entire blocked reason in the aggregate proposal budget", () => {
+		const blocked = {
+			proposal: "p",
+			noViableProposal: true,
+			investigationBlockedReason: "b".repeat(3999),
+			keyAssumptions: [],
+			risks: [],
+			unknowns: [],
+			acceptanceCriteria: [],
+			ambiguityInterpretations: [],
+			evidence: [],
+		};
+		expect(parseTeamProposal(blocked)).toEqual(blocked);
+		expect(
+			parseTeamProposal({ ...blocked, investigationBlockedReason: `${blocked.investigationBlockedReason}b` }),
+		).toBeUndefined();
 	});
 
 	it("rejects a finding with any empty required field (§2.4)", () => {

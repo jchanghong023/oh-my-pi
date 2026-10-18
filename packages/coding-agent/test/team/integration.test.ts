@@ -9,6 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
@@ -28,6 +29,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/team";
 import type { TeamSubagentCall } from "@oh-my-pi/pi-coding-agent/team";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
@@ -73,6 +75,7 @@ function scriptedData(stage: string, text?: string): Record<string, unknown> {
 			return {
 				proposal: "方案：扩展现有模块并保持旧接口不变。",
 				noViableProposal: false,
+				investigationBlockedReason: "",
 				keyAssumptions: [
 					{ content: "旧接口稳定", basis: "src/api.ts", status: "unverified", impactIfWrong: "需要适配层" },
 				],
@@ -163,6 +166,7 @@ describe("team in-process integration", () => {
 	const recorded: RecordedCall[] = [];
 
 	let script = scriptedData;
+	let inspectChild: ((options: CreateAgentSessionOptions) => Promise<void>) | undefined;
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-team-integration-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
@@ -195,12 +199,13 @@ describe("team in-process integration", () => {
 					return () => {};
 				},
 				prompt: async (text: string) => {
+					if (inputOptions) await inspectChild?.(inputOptions);
 					const stage = stageOf(text);
 					recorded.push({
 						modelPattern,
 						agentId: options.agentId as string,
 						stage,
-						target: /\btarget=([A-Z])/.exec(text)?.[1],
+						target: /\btarget=([A-Z]+)\b/.exec(text)?.[1],
 						recheck: text.includes(" recheck]"),
 						findingIds:
 							stage === "revision"
@@ -515,6 +520,88 @@ describe("team in-process integration", () => {
 		expect(result.status).toBe("completed");
 		expect(result.reportMarkdown).toContain("【推荐】方案 A");
 	});
+
+	for (const persisted of [false, true]) {
+		it(`isolates actual child filesystem consumers across ${persisted ? "persisted" : "temporary"} leases`, async () => {
+			recorded.length = 0;
+			script = scriptedData;
+			const leases: string[] = [];
+			const ready = Promise.withResolvers<void>();
+			const checked = Promise.withResolvers<void>();
+			let inspected = 0;
+			inspectChild = async options => {
+				const local = options.localProtocolOptions;
+				const own = local?.getArtifactsDir?.();
+				if (!own || !local) throw new Error("Runner did not bind the child artifact identity");
+				await fs.mkdir(path.join(own, "local"), { recursive: true });
+				await fs.writeFile(`${own}.md`, `PRIVATE_DRAFT_${leases.length}\n`);
+				await fs.writeFile(path.join(own, "local", "own.md"), "OWN_CHILD_NOTES\n");
+				leases.push(own);
+				if (leases.length === 2) ready.resolve();
+				await ready.promise;
+				try {
+					const peer = leases.find(entry => entry !== own);
+					if (!peer) throw new Error("Missing independent child peer");
+					const childSession: ToolSession = {
+						cwd: tempDir.path(),
+						hasUI: false,
+						settings,
+						skipPythonPreflight: true,
+						restrictToolNames: true,
+						getSessionFile: () => options.sessionManager?.getSessionFile() ?? null,
+						getSessionSpawns: () => "*",
+						localProtocolOptions: local,
+					};
+					const tools = await createTools(childSession, ["read", "grep", "glob"]);
+					const read = tools.find(tool => tool.name === "read");
+					const grep = tools.find(tool => tool.name === "grep");
+					const glob = tools.find(tool => tool.name === "glob");
+					if (!read || !grep || !glob) throw new Error("Missing real filesystem consumers");
+					const ownResult = await read.execute("own-child-notes", { path: "local://own.md" });
+					expect(
+						ownResult.content.some(block => block.type === "text" && block.text.includes("OWN_CHILD_NOTES")),
+					).toBe(true);
+					await expect(read.execute("peer-child-draft", { path: `${peer}.md` })).rejects.toThrow(
+						"Team read isolation",
+					);
+					await expect(
+						grep.execute("peer-child-search", { pattern: "PRIVATE_DRAFT", path: path.dirname(peer) }),
+					).rejects.toThrow("Team read isolation");
+					await expect(glob.execute("peer-child-glob", { path: `${path.dirname(peer)}/**/*` })).rejects.toThrow(
+						"Team read isolation",
+					);
+				} finally {
+					if (++inspected === 2) checked.resolve();
+					// Hold both leases until neither consumer can race peer cleanup.
+					await checked.promise;
+				}
+			};
+			try {
+				const runner = createTeamSubagentRunner({
+					...runnerDeps(),
+					sessionFile: persisted ? path.join(tempDir.path(), "isolation-parent.jsonl") : null,
+				});
+				const outcomes = await Promise.all(
+					["A", "B"].map(label =>
+						runner(
+							{
+								role: "proposer",
+								modelPattern: PATTERN_SESSION,
+								label: `team-proposal-${label}`,
+								task: "[team-stage:proposal]",
+								schema: TEAM_PROPOSAL_SCHEMA,
+							},
+							new AbortController().signal,
+						),
+					),
+				);
+				expect(outcomes.every(outcome => outcome.ok)).toBe(true);
+				expect(leases).toHaveLength(2);
+			} finally {
+				inspectChild = undefined;
+			}
+		});
+	}
 
 	it("keeps concurrent discussions with identical stage labels in separate child namespaces", async () => {
 		recorded.length = 0;

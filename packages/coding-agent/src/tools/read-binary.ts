@@ -5,6 +5,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { acquireIdaDatabase, cfgIdaAvailable, isExecutableFile, isIdaDatabasePath, SLICE_SEPARATOR } from "../ida";
 import type { ToolSession } from "../sdk";
 import { formatPathRelativeToCwd, resolveReadPath } from "./path-utils";
+import { assertTeamReadTarget } from "./team-read-isolation";
 import { buildInMemorySelectorResult } from "./read-format";
 import type { ParsedSelector } from "./read-selector";
 
@@ -65,6 +66,7 @@ export async function resolveBinaryViewPath(session: ToolSession, readPath: stri
 	for (let i = readPath.lastIndexOf(":"); i > 0; i = readPath.lastIndexOf(":", i - 1)) {
 		const absolutePath = resolveReadPath(readPath.slice(0, i), session.cwd);
 		if (!(await isFile(absolutePath))) continue;
+		await assertTeamReadTarget(session, absolutePath);
 		if (isIdaDatabasePath(absolutePath) || (await isExecutableFile(absolutePath))) {
 			return { absolutePath, ...splitSliceView(readPath.slice(i + 1)) };
 		}

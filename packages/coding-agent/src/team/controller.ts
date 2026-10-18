@@ -223,6 +223,8 @@ export function buildRunnerDeps(session: AgentSession, settings: Settings, cwd: 
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),
 		parentAgentId: MAIN_AGENT_ID,
+		eventBus: session.eventBus,
+		subagentEventBus: session.subagentEventBus,
 		skills: session.skills,
 		promptTemplates: session.promptTemplates ? [...session.promptTemplates] : undefined,
 	};
@@ -248,9 +250,13 @@ async function startTeamDiscussionImpl(
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks } = args;
+	const sessionId = session.sessionId;
+	let sessionChanged = false;
+	const isCurrentSession = (): boolean => !sessionChanged && session.sessionId === sessionId;
 	// Best-effort transcript output: synchronous throws and rejected promises
 	// must not turn a UI failure into a failed dispatch or discussion.
 	const emitOutput = async (text: string): Promise<void> => {
+		if (!isCurrentSession()) return;
 		try {
 			await hooks.output?.(text);
 		} catch (error) {
@@ -264,6 +270,7 @@ async function startTeamDiscussionImpl(
 		}
 	};
 	const report = (text: string): void => {
+		if (!isCurrentSession()) return;
 		hooks.showError?.(text);
 		void emitOutput(text);
 	};
@@ -322,13 +329,31 @@ async function startTeamDiscussionImpl(
 	const sessionModelPattern = formatModelStringWithRouting(sessionModel);
 	const label = `/team ${previewQuestion(question)}`;
 
-	let jobId: string;
+	let jobId: string | undefined;
+	let unregisterSessionChange: (() => void) | undefined;
+	const sessionAbort = new AbortController();
 	try {
+		// Capture roots, artifacts, models and buses before the manager starts the
+		// asynchronous job; the live AgentSession may later adopt another identity.
+		const runnerDeps = buildRunnerDeps(session, settings, cwd);
+		unregisterSessionChange = session.registerSessionChangeCallback(() => {
+			sessionChanged = true;
+			sessionAbort.abort();
+			if (jobId) manager.cancel(jobId);
+			unregisterSessionChange?.();
+		});
 		jobId = manager.register(
 			"task",
 			label,
-			async ({ jobId: owningJobId, signal, reportProgress }) =>
+			async ({ jobId: owningJobId, signal: jobSignal, reportProgress }) =>
 				logger.withLogContext({ job_id: owningJobId }, async () => {
+					const signal = AbortSignal.any([jobSignal, sessionAbort.signal]);
+					const cleanupSessionChange = (): void => {
+						unregisterSessionChange?.();
+						unregisterSessionChange = undefined;
+					};
+					signal.addEventListener("abort", cleanupSessionChange, { once: true });
+					if (signal.aborted) cleanupSessionChange();
 					const started = performance.now();
 					let stage = "discussion";
 					let discussionStatus: string | undefined;
@@ -355,13 +380,15 @@ async function startTeamDiscussionImpl(
 						else logger.info("Team job finished", fields);
 					};
 					try {
-						const runner = createTeamSubagentRunner(buildRunnerDeps(session, settings, cwd));
+						const runner = createTeamSubagentRunner(runnerDeps);
 						const onProgress = (update: TeamProgressUpdate): void => {
+							if (signal.aborted || !isCurrentSession()) return;
 							void reportProgress(update.text, { stage: update.stage, participants: update.participants });
 							hooks.showStatus?.(update.text);
 							void emitOutput(update.text);
 						};
 						const onReportPersisted = (): void | Promise<void> => {
+							if (signal.aborted || !isCurrentSession()) return;
 							const ackStarted = performance.now();
 							logger.info("Team report acknowledgement started", {
 								component: "team.controller",
@@ -370,7 +397,7 @@ async function startTeamDiscussionImpl(
 								result: "started",
 							});
 							try {
-								const acknowledgedCount = manager.acknowledgeDeliveries([jobId]);
+								const acknowledgedCount = manager.acknowledgeDeliveries([owningJobId]);
 								logger.info("Team report acknowledged", {
 									component: "team.controller",
 									event: "team_delivery_ack_completed",
@@ -390,7 +417,7 @@ async function startTeamDiscussionImpl(
 								});
 								throw error;
 							}
-							return hooks.rebuildChat?.();
+							if (isCurrentSession()) return hooks.rebuildChat?.();
 						};
 						const result = await runTeamDiscussion({
 							question,
@@ -421,7 +448,7 @@ async function startTeamDiscussionImpl(
 								session,
 								signal,
 								result.reportMarkdown!,
-								{ jobId, question },
+								{ jobId: owningJobId, question },
 								onReportPersisted,
 							);
 							deliveryCompleted = delivered;
@@ -438,7 +465,7 @@ async function startTeamDiscussionImpl(
 							session,
 							signal,
 							assembleTeamFailure(question, result.failureReason ?? "未知原因"),
-							{ jobId, question },
+							{ jobId: owningJobId, question },
 							onReportPersisted,
 						);
 						deliveryCompleted = delivered;
@@ -467,7 +494,7 @@ async function startTeamDiscussionImpl(
 							const message = `/team 任务 ${owningJobId} 失败，结果仍可经 proc://${owningJobId} 恢复：${reason}`;
 							await emitOutput(message);
 							try {
-								hooks.showError?.(message);
+								if (isCurrentSession()) hooks.showError?.(message);
 							} catch (uiError) {
 								logger.warn("Team error hook failed", {
 									component: "team.controller",
@@ -483,11 +510,16 @@ async function startTeamDiscussionImpl(
 							);
 						}
 						throw error;
+					} finally {
+						signal.removeEventListener("abort", cleanupSessionChange);
+						cleanupSessionChange();
 					}
 				}),
 			{ ownerId: MAIN_AGENT_ID, suppressDelivery: true },
 		);
+		if (sessionChanged) manager.cancel(jobId);
 	} catch (error) {
+		unregisterSessionChange?.();
 		logger.warn("Team job registration failed", {
 			component: "team.controller",
 			event: "team_dispatch_failed",
@@ -539,6 +571,7 @@ async function startTeamDiscussionImpl(
 	};
 	logFollowupStage("started");
 	try {
+		if (!isCurrentSession()) return { started: true, jobId, message: dispatchNotice };
 		await session.sendCustomMessage(
 			{
 				customType: TEAM_DISPATCH_MESSAGE_TYPE,
@@ -556,11 +589,13 @@ async function startTeamDiscussionImpl(
 		noticeStage = "chat_rebuild";
 		stageStarted = performance.now();
 		logFollowupStage("started");
+		if (!isCurrentSession()) return { started: true, jobId, message: dispatchNotice };
 		await hooks.rebuildChat?.();
 		logFollowupStage("completed");
 		noticeStage = "status_update";
 		stageStarted = performance.now();
 		logFollowupStage("started");
+		if (!isCurrentSession()) return { started: true, jobId, message: dispatchNotice };
 		hooks.showStatus?.(`Dispatched /team discussion ${jobId}`);
 		logFollowupStage("completed");
 	} catch (error) {
