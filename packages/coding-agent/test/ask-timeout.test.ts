@@ -13,7 +13,7 @@ import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
 import type { GoalModeState } from "../src/goals/state";
 import type { ToolSession } from "../src/tools";
-import { AskTool } from "../src/tools/ask";
+import { AskTool, OTHER_OPTION } from "../src/tools/ask";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 
 type AskExecutionResult = AgentToolResult<AskToolDetails>;
@@ -325,6 +325,99 @@ describe("AskTool timeout", () => {
 		expect(result?.details?.results?.[1]?.timedOut).toBeUndefined();
 		expect(abort).not.toHaveBeenCalled();
 	});
+
+	for (const revisit of ["right navigation", "cancelled custom input", "manual option", "custom answer"] as const) {
+		it(`preserves timeout reply provenance until replacement after ${revisit}`, async () => {
+			vi.useFakeTimers();
+			const keepsAutomaticReply = revisit === "right navigation" || revisit === "cancelled custom input";
+			let callCount = 0;
+			const select = vi.fn<AskSelect>((_title, _options, dialogOptions) => {
+				callCount += 1;
+				if (callCount === 1) {
+					return Promise.withResolvers<string | undefined>().promise;
+				}
+				if (callCount === 2) {
+					dialogOptions?.onLeft?.();
+					return Promise.resolve(undefined);
+				}
+				if (callCount === 3) {
+					if (revisit === "right navigation") {
+						dialogOptions?.onRight?.();
+						return Promise.resolve(undefined);
+					}
+					return Promise.resolve(revisit === "manual option" ? "SQLite" : OTHER_OPTION);
+				}
+				if (callCount === 4 && revisit === "cancelled custom input") {
+					dialogOptions?.onRight?.();
+					return Promise.resolve(undefined);
+				}
+				return Promise.resolve("OAuth");
+			});
+			const editor = vi.fn(async () => (revisit === "custom answer" ? "Keep current database" : undefined));
+			const abort = vi.fn();
+			const context = {
+				hasUI: true,
+				ui: { select, editor },
+				abort,
+			} as unknown as AgentToolContext;
+			const execution = createAskTool({ getGoalModeState: createAutopilotGoal }).execute(
+				"ask-timeout-revisit",
+				{
+					questions: [
+						{
+							id: "db",
+							question: "Which database?",
+							options: [{ label: "SQLite" }, { label: "Postgres" }],
+							recommended: 1,
+						},
+						{
+							id: "auth",
+							question: "Which auth?",
+							options: [{ label: "JWT" }, { label: "OAuth" }],
+							recommended: 0,
+						},
+					],
+				},
+				undefined,
+				undefined,
+				context,
+			);
+
+			await drainMicrotasks();
+			expect(select).toHaveBeenCalledTimes(1);
+			vi.advanceTimersByTime(10);
+			const result = await execution;
+
+			expect(select.mock.calls.map(([title]) => title)).toEqual([
+				"Which database? (1/2)",
+				"Which auth? (2/2)",
+				"Which database? (1/2)",
+				...(revisit === "cancelled custom input" ? ["Which database? (1/2)"] : []),
+				"Which auth? (2/2)",
+			]);
+			const answer = result.details?.results?.[0];
+			const reply = "按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总";
+			expect(answer?.timedOut).toBe(keepsAutomaticReply ? true : undefined);
+			expect(answer?.selectedOptions).toEqual(revisit === "manual option" ? ["SQLite"] : []);
+			expect(answer?.customInput).toBe(
+				keepsAutomaticReply ? reply : revisit === "custom answer" ? "Keep current database" : undefined,
+			);
+			expect(result.details?.results?.[1]?.selectedOptions).toEqual(["OAuth"]);
+			expect(result.details?.results?.[1]?.timedOut).toBeUndefined();
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: keepsAutomaticReply
+						? `Answers:\ndb: "${reply}" (automatic reply after timeout)\nauth: OAuth`
+						: `User answers:\ndb: ${revisit === "manual option" ? "SQLite" : '"Keep current database"'}\nauth: OAuth`,
+				},
+			]);
+			expect(editor).toHaveBeenCalledTimes(
+				revisit === "cancelled custom input" || revisit === "custom answer" ? 1 : 0,
+			);
+			expect(abort).not.toHaveBeenCalled();
+		});
+	}
 
 	describe("live Goal timeout eligibility", () => {
 		for (const change of ["pause", "drop", "complete"] as const) {

@@ -1736,7 +1736,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 						AbortSignal.any([request.controller.signal, AbortSignal.timeout(JJ_COMMAND_TIMEOUT_MS)]),
 					);
 					// JJ has no index: added and modified paths are disjoint.
-					next = { ...summary, changed: summary.staged + summary.unstaged + summary.untracked };
+					next = { ...summary, changed: summary.staged + summary.unstaged + summary.untracked, paths: null };
 				} catch {
 					next = null;
 				} finally {

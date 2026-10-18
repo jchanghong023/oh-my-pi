@@ -110,7 +110,7 @@ const availabilityCache = new Map<string, Promise<PythonKernelAvailability>>();
 function enumerateEvalPythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
 	const runtimes = enumeratePythonRuntimes(cwd, baseEnv);
 	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
-	if (process.platform !== "linux" || baseEnv.OMP_OFFLINE !== "1" || !fs.existsSync(offlinePython)) {
+	if (process.platform !== "linux" || process.env.OMP_OFFLINE !== "1" || !fs.existsSync(offlinePython)) {
 		return runtimes;
 	}
 	// Isolate only the Eval child; preserve the caller and fallback candidates.

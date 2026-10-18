@@ -1147,6 +1147,48 @@ describe("Editor component", () => {
 			expect(lines).toEqual(["+------------------+", "+- ast            -+"]);
 		});
 
+		it("keeps IME cursor tails open above box bottom padding on every input row", () => {
+			for (const draft of ["ast", "first\nast"]) {
+				const editor = new CustomEditor(defaultEditorTheme);
+				editor.focused = true;
+				editor.setUseTerminalCursor(true);
+				editor.setText(draft);
+				const textLines = draft.split("\n");
+
+				for (let cursorLine = textLines.length - 1; cursorLine >= 0; cursorLine--) {
+					editor.setImeSafeCursorLayout(false);
+					const closedRows = editor.render(20);
+					const cursorRowIndex = closedRows.findIndex(row => row.includes(CURSOR_MARKER));
+					const closedCursorRow = closedRows[cursorRowIndex]!;
+					const cursorEnd = closedCursorRow.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
+					expect(closedRows).toHaveLength(textLines.length + 2);
+					expect(stripVTControlCharacters(closedCursorRow.slice(cursorEnd))).toMatch(/^ +\|$/);
+					for (const row of closedRows) expect(visibleWidth(row)).toBe(20);
+					expect(stripVTControlCharacters(closedRows[closedRows.length - 1]!)).toBe(`+-${" ".repeat(16)}-+`);
+
+					editor.setImeSafeCursorLayout(true);
+					const safeRows = editor.render(20);
+					const safeCursorRow = safeRows[cursorRowIndex]!;
+					const safeCursorEnd = safeCursorRow.indexOf(CURSOR_MARKER) + CURSOR_MARKER.length;
+					expect(safeRows).toHaveLength(closedRows.length);
+					expect(stripVTControlCharacters(safeCursorRow.replaceAll(CURSOR_MARKER, ""))).toBe(
+						`|  ${textLines[cursorLine]}`,
+					);
+					expect(stripVTControlCharacters(safeCursorRow.slice(safeCursorEnd))).toBe("");
+					for (let index = 0; index < closedRows.length; index++) {
+						if (index !== cursorRowIndex) expect(safeRows[index]).toBe(closedRows[index]);
+					}
+					editor.setImeSafeCursorLayout(false);
+					expect(editor.render(20)).toEqual(closedRows);
+
+					if (cursorLine > 0) {
+						editor.handleInput("\x1b[A");
+						editor.moveToLineEnd();
+					}
+				}
+			}
+		});
+
 		it("keeps terminal-local IME preedit from displacing the editor border (#5563)", async () => {
 			const width = 20;
 			const terminal = new VirtualTerminal(width, 6, 1_000);

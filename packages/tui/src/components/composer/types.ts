@@ -69,7 +69,7 @@ export interface ComposerRowContext extends ComposerChromeContext {
 	/** Cells the end-of-line cursor overflowed into the right chrome (box). */
 	cursorOverflow: number;
 	/** Emit an empty right chrome after the cursor so terminal-local IME
-	 *  preedit cannot shift the frame (box last row). */
+	 *  preedit cannot shift the frame. */
 	imeSafeCursorTail: boolean;
 	/** Row lies inside the right-border scrollbar thumb (box). */
 	scrollbarThumb: boolean;

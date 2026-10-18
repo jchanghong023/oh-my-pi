@@ -51,11 +51,12 @@ export const boxComposerStyle: ComposerStyle = {
 		// count: drop padding spaces first, then the trailing `─`, but never the
 		// corner/vertical bar itself.
 		const rightChromeCells = Math.max(1, paddingX + 1 - ctx.cursorOverflow);
-		if (isLastRow && ctx.imeSafeCursorTail) {
+		if (ctx.imeSafeCursorTail) {
 			// Terminal frontends render IME marked text locally before committed
 			// bytes reach the application. Keep the end-of-input cursor row empty
 			// to its right so insertion cannot shift box chrome onto the next row.
 			const leftBorder = borderColor(`${box.vertical}${padding(paddingX)}`);
+			if (!isLastRow) return [leftBorder + text];
 			const bottomBorder = borderColor(
 				`${box.bottomLeft}${box.horizontal.repeat(Math.max(0, width - 2))}${box.bottomRight}`,
 			);

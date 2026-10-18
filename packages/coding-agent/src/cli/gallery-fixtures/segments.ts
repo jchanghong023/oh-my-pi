@@ -1,4 +1,5 @@
 import { truncateToWidth } from "@oh-my-pi/pi-tui";
+import { parseGitStatus } from "@oh-my-pi/pi-tui/status-line/git-utils";
 import type { StatusLineSegmentId } from "@oh-my-pi/pi-tui/status-line/schema";
 import { ALL_SEGMENT_IDS, renderSegment } from "@oh-my-pi/pi-tui/status-line/segments";
 import type { SegmentContext } from "@oh-my-pi/pi-tui/status-line/types";
@@ -75,7 +76,9 @@ export function createGallerySegmentContext(sessionOptions?: GallerySessionOptio
 		turnElapsedMs: null,
 		git: {
 			branch: "gallery/reference",
-			status: { staged: 2, unstaged: 3, untracked: 1, changed: 6 },
+			status: parseGitStatus(
+				"M  staged-a\0M  staged-b\0 M unstaged-a\0 M unstaged-b\0 M unstaged-c\0?? untracked\0",
+			),
 			pr: { number: 1842, url: "https://github.com/can1357/oh-my-pi/pull/1842" },
 		},
 		worktree: null,
@@ -171,7 +174,7 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 				{
 					label: "clean",
 					context: {
-						git: { branch: "main", status: { staged: 0, unstaged: 0, untracked: 0, changed: 0 }, pr: null },
+						git: { branch: "main", status: parseGitStatus(""), pr: null },
 					},
 				},
 				{ label: "dirty" },
