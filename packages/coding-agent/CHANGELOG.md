@@ -24,6 +24,7 @@
 
 ### Fixed
 
+- Clarify compact display's retained file previews and diffs, and show its existing detailed-tool command without changing composer help.
 - Compact mode shows each Todo failure once with its cause and stale-progress hint, preserving independent warnings, detailed history, and existing Todo states.
 - Preserve compact-only failure-warning reconciliation without replaying stale Todo warnings below final answers in detailed mode.
 - Show exact `/team` proposal text-budget failures even when all proposals fail, and tighten alignment anonymity, meaningful-difference checks, and concise result grouping.

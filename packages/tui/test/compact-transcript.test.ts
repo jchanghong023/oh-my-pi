@@ -835,6 +835,13 @@ describe("compact transcript activity", () => {
 		const rows = transcript.render(100).map(row => Bun.stripANSI(row));
 		expect(rows.join("\n")).toContain("已收起 3 次成功调用");
 		expect(rows.join("\n")).toContain("失败 1 次");
+		expect(
+			transcript
+				.render(24)
+				.map(row => Bun.stripANSI(row))
+				.join("\n"),
+		).toContain("失败 1 次");
+		expect(nativeTranscriptView(transcript)).toContain("失败 1 次");
 		expect(rows.some(row => row.includes("待确认") && !row.includes("done"))).toBe(true);
 		expect(rows.some(row => row.includes("Permission denied"))).toBe(false);
 		expect(failure.getCompactToolFailureCount()).toBe(1);
@@ -846,6 +853,11 @@ describe("compact transcript activity", () => {
 		});
 		expect(Bun.stripANSI(applied.render(70)[0])).toContain("已应用");
 		expect(JSON.stringify(applied.describe(toolCx))).toContain("已应用");
+		for (let i = 0; i < 11; i++) make("read", {}, true);
+		const narrow = Bun.stripANSI(transcript.render(9).join("\n"));
+		expect(narrow).toContain("失败");
+		expect(narrow).not.toMatch(/\d/);
+		expect(Bun.stripANSI(transcript.render(12).join("\n"))).toContain("失败 12 次");
 	});
 
 	it("repaints detailed spinner frames without reshaping the body, including after a compact result update", () => {
@@ -1158,7 +1170,7 @@ describe("compact transcript activity", () => {
 			const description = group.describe(cx);
 			expect(
 				nodes(description)
-					.filter(node => node.k === "tool")
+					.filter(node => node.p?.role === "omp.tool.read")
 					.map(node => node.key),
 			).toEqual(["first"]);
 			expect(JSON.stringify(description)).not.toContain("PRIVATE_");

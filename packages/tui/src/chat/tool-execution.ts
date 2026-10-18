@@ -1106,7 +1106,7 @@ export class ToolExecutionComponent extends Container {
 		const collapsed =
 			this.#compactSummary > 0 || failures > 0
 				? [
-						text(compactToolSummary(this.#compactSummary, failures), {
+						text(compactToolSummary(this.#compactSummary, failures, width), {
 							lines: 1,
 							wrap: "none",
 							truncate: "end",
@@ -1128,7 +1128,7 @@ export class ToolExecutionComponent extends Container {
 					name: this.#toolName,
 					title: truncateToWidth(title, Math.max(1, width - 16)),
 					target: summary.detail
-						? truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16))
+						? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
 						: undefined,
 					targetKind: "text",
 					status,
@@ -1139,12 +1139,22 @@ export class ToolExecutionComponent extends Container {
 					collapsible: false,
 				})
 			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
-					text(`${outcome ?? status} · ${summary.label}${summary.detail ? ` · ${summary.detail}` : ""}`, {
-						lines: 1,
-						wrap: "none",
-						truncate: "end",
-						grow: 1,
-					}),
+					text(
+						[
+							span(
+								`${outcome ?? status} · `,
+								status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : "dim",
+							),
+							span(summary.label, summary.detail ? "dim" : "text"),
+							...(summary.detail ? [span(" · ", "dim"), span(summary.detail, "text")] : []),
+						],
+						{
+							lines: 1,
+							wrap: "none",
+							truncate: "end",
+							grow: 1,
+						},
+					),
 					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 				]);
 		return collapsed.length > 0 ? col([...collapsed, call]) : call;
@@ -1577,7 +1587,7 @@ export class ToolExecutionComponent extends Container {
 			const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 			const collapsed =
 				this.#compactSummary > 0 || failures > 0
-					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactSummary, failures)), width)]
+					? [theme.fg("dim", compactToolSummary(this.#compactSummary, failures, width))]
 					: [];
 			if (this.getCompactToolFailureCount() > 0 || this.getCompactToolCount() > this.#compactKeep) return collapsed;
 			const summary = this.#compactActivity();
@@ -1588,9 +1598,9 @@ export class ToolExecutionComponent extends Container {
 				status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : "dim",
 				`${this.#compactOutcome() ?? status} · `,
 			);
-			const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail}`) : "";
+			const detail = summary.detail ? `${theme.fg("dim", " · ")}${theme.fg("text", summary.detail)}` : "";
 			const line = truncateToWidth(
-				`${state}${theme.fg("toolTitle", theme.bold(summary.label))}${detail}`,
+				`${state}${theme.fg(summary.detail ? "dim" : "text", summary.label)}${detail}`,
 				Math.max(1, width - Bun.stringWidth(elapsed)),
 			);
 			return [...collapsed, truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];

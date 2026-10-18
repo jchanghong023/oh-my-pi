@@ -415,7 +415,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 			const rows =
 				this.#compactHiddenSummary > 0 || failures > 0
-					? [truncateToWidth(theme.fg("dim", compactToolSummary(this.#compactHiddenSummary, failures)), width)]
+					? [theme.fg("dim", compactToolSummary(this.#compactHiddenSummary, failures, width))]
 					: [];
 			for (const entry of this.#compactEntries()) rows.push(this.#renderCompactEntry(entry, width));
 			return rows;
@@ -743,7 +743,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
 		const state = theme.fg(status === "error" ? "error" : "dim", `${status} · `);
 		const line = truncateToWidth(
-			`${state}${theme.fg("toolTitle", theme.bold("Read"))} ${this.#compactSummary(entry)}`,
+			`${state}${theme.fg("dim", "Read")} ${theme.fg("text", this.#compactSummary(entry))}`,
 			Math.max(1, width - Bun.stringWidth(elapsed)),
 		);
 		return truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width);
@@ -754,7 +754,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
 		if (this.#compactHiddenSummary > 0 || failures > 0) {
 			calls.push(
-				text(compactToolSummary(this.#compactHiddenSummary, failures), {
+				text(compactToolSummary(this.#compactHiddenSummary, failures, width), {
 					lines: 1,
 					wrap: "none",
 					truncate: "end",
@@ -774,7 +774,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 								role: "omp.tool.read",
 								name: "read",
 								title: "Read",
-								target: truncateToWidth(summary, Math.max(1, width - 16)),
+								target: [span(truncateToWidth(summary, Math.max(1, width - 16)), "text")],
 								targetKind: "text",
 								status,
 								tone: READ_STATUS_TONE[entry.status],
@@ -790,7 +790,12 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 							"row",
 							{ role: "omp.tool.read", gap: "sm", align: "baseline" },
 							[
-								text(`${status} · Read ${summary}`, { lines: 1, wrap: "none", truncate: "end", grow: 1 }),
+								text([span(`${status} · Read `, "dim"), span(summary, "text")], {
+									lines: 1,
+									wrap: "none",
+									truncate: "end",
+									grow: 1,
+								}),
 								...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 							],
 							entry.toolCallId,

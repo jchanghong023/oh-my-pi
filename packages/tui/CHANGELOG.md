@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Compact tool summaries prioritize failure counts on narrow terminals, omit partial counts on extremely narrow rows, and emphasize operation summaries over tool names in ANSI and native text fallback rows.
 - Compact mode groups completed and failed background task/shell notifications by execution identity, shows failures as muted counts instead of individual red notices, and preserves cancellation, unknown-state and independent warnings without fragmenting tool folds.
 - Compact tool runs keep the latest two successful calls, fold older successes and ordinary failures into one muted count, and retain failure details in detailed history.
 - The live thinking tail shows only in the compact display mode, keeps the latest three body rows at every terminal height, and collapses to a single dim stub row between tool runs of the same turn.

@@ -1,6 +1,7 @@
 import { type Component, Container } from "../tui";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
+import { truncateToWidth } from "../utils";
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
 	/** Whether this activity uses compact rows rather than the upstream detail renderer. */
@@ -22,9 +23,12 @@ export function isCompactToolActivityComponent(component: Component): component 
 	return isToolActivityComponent(component) && component.isCompactToolActivity?.() !== false;
 }
 
-export function compactToolSummary(count: number, failures = 0): string {
-	if (count === 0) return `… 失败 ${failures} 次（已收起）`;
-	return `… 已收起 ${count} 次成功调用${failures > 0 ? ` · 失败 ${failures} 次（已收起）` : ""}`;
+export function compactToolSummary(count: number, failures: number, width: number): string {
+	if (failures === 0) return truncateToWidth(`… 已收起 ${count} 次成功调用`, width);
+	const failed = `… 失败 ${failures} 次`;
+	if (Bun.stringWidth(failed) > width) return truncateToWidth("… 失败", width);
+	const summary = count > 0 ? `${failed} · 已收起 ${count} 次成功调用` : `${failed}（已收起）`;
+	return truncateToWidth(Bun.stringWidth(summary) <= width ? summary : failed, width);
 }
 
 /** Keep the file identity visible before narrow rows truncate their right edge. */

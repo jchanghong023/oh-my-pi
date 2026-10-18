@@ -341,7 +341,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		subcommandOptional: true,
 		subcommands: [
 			{ name: "clean", description: "隐藏实时思考窗口和工具活动" },
-			{ name: "compact", description: "显示实时思考窗口，所有工具仅显示单行摘要，不显示预览" },
+			{ name: "compact", description: "显示实时思考窗口，普通工具单行摘要，文件修改保留预览与 diff" },
 			{ name: "detailed", description: "隐藏实时思考窗口，显示工具详情" },
 		],
 		handleTui: async (command, runtime) => {
@@ -386,13 +386,15 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const tools = cfgDisplayHideToolActivity.get(settings)
 					? "隐藏"
 					: cfgDisplayCompactToolActivity.get(settings)
-						? "单行摘要（不显示预览）"
+						? "单行摘要（文件修改保留预览与 diff）"
 						: "详细";
 				runtime.ctx.showWarning(
 					`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides}`,
 				);
 			} else {
-				runtime.ctx.showStatus(`显示模式：${label}（${mode}）`);
+				runtime.ctx.showStatus(
+					`显示模式：${label}（${mode}）${mode === "compact" ? "；工具详情：/display detailed" : ""}`,
+				);
 			}
 			clearSubmittedText(runtime);
 		},
