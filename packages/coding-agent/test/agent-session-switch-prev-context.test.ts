@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -10,6 +11,11 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { BuildSessionContextOptions, SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+
+interface RuntimeOwnershipProbe {
+	owned: boolean;
+	close: () => Promise<void>;
+}
 
 /**
  * Regression for issue #3846: in-TUI `/resume` rebuilt the *previous*
@@ -73,6 +79,54 @@ describe("AgentSession.switchSession previous-context build", () => {
 		});
 		sessions.push(session);
 		return { session, sessionManager };
+	}
+
+	// 同进程 FileSessionStorage 会共享租约，必须由独立 Bun 进程竞争真实所有权。
+	async function probeRuntimeOwnership(sessionFile: string, sessionId: string): Promise<RuntimeOwnershipProbe> {
+		const script = [
+			`import { SessionManager } from ${JSON.stringify(path.join(import.meta.dir, "../src/session/session-manager.ts"))};`,
+			`const manager = await SessionManager.open(${JSON.stringify(sessionFile)}, undefined, undefined, { suppressBreadcrumb: true, throwIfMissing: true });`,
+			"try {",
+			`  if (manager.getSessionId() !== ${JSON.stringify(sessionId)}) throw new Error("Ownership probe opened a different session");`,
+			"  try {",
+			"    manager.acquireRuntimeOwnership();",
+			'    process.stdout.write("owned\\n");',
+			"  } catch (error) {",
+			'    if (!String(error).includes("another live omp process owns it")) throw error;',
+			'    process.stdout.write("blocked\\n");',
+			"  }",
+			"  for await (const line of console) break;",
+			"} finally { await manager.close(); }",
+		].join("\n");
+		const child = Bun.spawn([process.execPath, "--eval", script], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			env: process.env,
+		});
+		const reader = child.stdout.getReader();
+		let ready = "";
+		try {
+			while (!ready.endsWith("\n")) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error(await new Response(child.stderr).text());
+				ready += new TextDecoder().decode(chunk.value);
+			}
+			expect(["owned\n", "blocked\n"]).toContain(ready);
+		} catch (error) {
+			child.stdin.end();
+			await child.exited;
+			throw error;
+		} finally {
+			reader.releaseLock();
+		}
+		return {
+			owned: ready === "owned\n",
+			close: async () => {
+				child.stdin.end();
+				expect(await child.exited).toBe(0);
+			},
+		};
 	}
 
 	/** Wrap `sessionManager.buildSessionContext` so each call's caller-visible
@@ -158,32 +212,92 @@ describe("AgentSession.switchSession previous-context build", () => {
 		]);
 	});
 
-	it("restores the previous session when cwd adoption is rejected", async () => {
-		const sourceDir = TempDir.createSync("@pi-switch-cwd-source-");
-		const targetDir = TempDir.createSync("@pi-switch-cwd-target-");
-		tempDirs.push(sourceDir, targetDir);
+	it.each([false, true])(
+		"holds the original runtime lease until cwd adoption settles (accepted=%s)",
+		async accepted => {
+			const sourceDir = TempDir.createSync("@pi-switch-cwd-source-");
+			const targetDir = TempDir.createSync("@pi-switch-cwd-target-");
+			tempDirs.push(sourceDir, targetDir);
 
-		const { session, sessionManager } = buildSession(sourceDir);
-		sessionManager.appendMessage({ role: "user", content: "source", timestamp: 1 });
-		await sessionManager.flush();
-		const previousSessionFile = sessionManager.getSessionFile();
-		const targetManager = SessionManager.create(targetDir.path(), targetDir.path());
-		targetManager.appendMessage({ role: "user", content: "target", timestamp: 2 });
-		await targetManager.ensureOnDisk();
-		await targetManager.flush();
-		const targetSessionFile = targetManager.getSessionFile();
-		await targetManager.close();
-		expect(previousSessionFile).toBeString();
-		expect(targetSessionFile).toBeString();
+			const { session, sessionManager } = buildSession(sourceDir);
+			sessionManager.appendMessage({ role: "user", content: "source", timestamp: 1 });
+			// 仅 user + flush 不会跨过懒持久化门槛；必须物化 A，避免子进程把缺文件当作新会话接管。
+			await sessionManager.ensureOnDisk();
+			await sessionManager.flush();
+			const previousSessionFile = sessionManager.getSessionFile();
+			const previousSessionId = sessionManager.getSessionId();
+			const previousMessages = sessionManager.buildSessionContext().messages;
+			session.agent.replaceMessages(previousMessages);
+			const targetManager = SessionManager.create(targetDir.path(), targetDir.path());
+			targetManager.appendMessage({ role: "user", content: "target", timestamp: 2 });
+			await targetManager.ensureOnDisk();
+			await targetManager.flush();
+			const targetSessionFile = targetManager.getSessionFile();
+			const targetSessionId = targetManager.getSessionId();
+			await targetManager.close();
+			expect(previousSessionFile).toBeString();
+			expect(targetSessionFile).toBeString();
 
-		const onCwdChange = vi.fn(async () => false);
-		const switched = await session.switchSession(targetSessionFile!, { onCwdChange });
+			const probes: RuntimeOwnershipProbe[] = [];
+			const onCwdChange = vi.fn(async () => {
+				probes.push(await probeRuntimeOwnership(previousSessionFile!, previousSessionId));
+				probes.push(await probeRuntimeOwnership(targetSessionFile!, targetSessionId));
+				return accepted;
+			});
+			try {
+				try {
+					expect(await session.switchSession(targetSessionFile!, { onCwdChange })).toBe(accepted);
+					expect(probes.map(probe => probe.owned)).toEqual([false, false]);
+				} finally {
+					for (const probe of probes.splice(0)) await probe.close();
+				}
+				expect(onCwdChange).toHaveBeenCalledWith(targetDir.path(), sourceDir.path());
+				expect(sessionManager.getSessionFile()).toBe(accepted ? targetSessionFile : previousSessionFile);
+				expect(sessionManager.getCwd()).toBe(accepted ? targetDir.path() : sourceDir.path());
+				expect(session.agent.state.messages).toEqual(
+					accepted ? sessionManager.buildSessionContext().messages : previousMessages,
+				);
+				if (!accepted) expect(sessionManager.getSessionId()).toBe(previousSessionId);
 
-		expect(switched).toBe(false);
-		expect(onCwdChange).toHaveBeenCalledWith(targetDir.path(), sourceDir.path());
-		expect(sessionManager.getSessionFile()).toBe(previousSessionFile);
-		expect(sessionManager.getCwd()).toBe(sourceDir.path());
-	});
+				const sourceProbe = await probeRuntimeOwnership(previousSessionFile!, previousSessionId);
+				probes.push(sourceProbe);
+				const targetProbe = await probeRuntimeOwnership(targetSessionFile!, targetSessionId);
+				probes.push(targetProbe);
+				expect(sourceProbe.owned).toBe(accepted);
+				expect(targetProbe.owned).toBe(!accepted);
+				for (const probe of probes.splice(0)) await probe.close();
+
+				const delivered = Promise.withResolvers<void>();
+				const message = { role: "user" as const, content: "after switch", timestamp: 3 };
+				const unsubscribe = session.subscribe(event => {
+					if (event.type === "message_end" && event.message === message) delivered.resolve();
+				});
+				try {
+					session.agent.emitExternalEvent({ type: "message_end", message });
+					await delivered.promise;
+					await session.settleInFlightMessagePersistence();
+					await sessionManager.flush();
+					expect(sessionManager.buildSessionContext().messages).toContainEqual(message);
+				} finally {
+					unsubscribe();
+				}
+
+				await session.dispose();
+				sessions.splice(sessions.indexOf(session), 1);
+				for (const [file, sessionId] of [
+					[previousSessionFile!, previousSessionId],
+					[targetSessionFile!, targetSessionId],
+				] as const) {
+					const probe = await probeRuntimeOwnership(file, sessionId);
+					probes.push(probe);
+					expect(probe.owned).toBe(true);
+				}
+			} finally {
+				for (const probe of probes) await probe.close();
+			}
+		},
+		30_000,
+	);
 	it("rejects callback-free switches across project directories", async () => {
 		const sourceDir = TempDir.createSync("@pi-switch-no-callback-source-");
 		const targetDir = TempDir.createSync("@pi-switch-no-callback-target-");

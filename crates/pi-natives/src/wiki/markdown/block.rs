@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::VecDeque, ops::Range, sync::LazyLock};
 
 use regex::Regex;
 
-use super::{Links, Token, TokenKind, inline, is_js_whitespace, js_regex, trim_js};
+use super::{Links, NameSyntax, Token, TokenKind, inline, is_js_whitespace, js_regex, trim_js};
 
 static HEADING_START: LazyLock<Regex> = LazyLock::new(|| js_regex(r"^ {0,3}#{1,6}(?:\s|\z)"));
 static HEADING: LazyLock<Regex> = LazyLock::new(|| {
@@ -905,19 +905,35 @@ fn inline_delimiters(
 	source: &str,
 	links: &Links,
 	queue: &mut DelimiterQueue,
-	ranges: &mut Vec<Range<usize>>,
+	syntax: &mut NameSyntax,
 ) {
 	let origins = queue
 		.sources
 		.pop_front()
 		.expect("pending inline source provenance");
 	debug_assert_eq!(origins.len, source.len());
-	let (_, delimiters) = inline::lex_with_delimiters(source, links);
-	for delimiter in delimiters {
+	let (_, inline) = inline::lex_with_delimiters(source, links);
+	for delimiter in inline.delimiters {
 		origins
 			.view()
 			.slice(delimiter)
-			.visit(|range, _| ranges.push(range));
+			.visit(|range, _| syntax.delimiters.push(range));
+	}
+	for (output, ranges) in [
+		(&mut syntax.link_openings, inline.link_openings),
+		(&mut syntax.link_destinations, inline.link_destinations),
+	] {
+		for range in ranges {
+			let mut original: Option<Range<usize>> = None;
+			origins.view().slice(range).visit(|range, _| {
+				if let Some(original) = &mut original {
+					original.end = range.end;
+				} else {
+					original = Some(range);
+				}
+			});
+			output.extend(original);
+		}
 	}
 }
 
@@ -925,39 +941,41 @@ fn collect_delimiters(
 	tokens: &[Token],
 	links: &Links,
 	queue: &mut DelimiterQueue,
-	ranges: &mut Vec<Range<usize>>,
+	syntax: &mut NameSyntax,
 ) {
 	for token in tokens {
 		if matches!(token.kind, TokenKind::Heading | TokenKind::Paragraph | TokenKind::Text)
 			&& token.children.is_some()
 		{
-			inline_delimiters(&token.text, links, queue, ranges);
+			inline_delimiters(&token.text, links, queue, syntax);
 		} else if let Some(children) = &token.children {
-			collect_delimiters(children, links, queue, ranges);
+			collect_delimiters(children, links, queue, syntax);
 		}
 		for item in &token.items {
-			collect_delimiters(item, links, queue, ranges);
+			collect_delimiters(item, links, queue, syntax);
 		}
 		for row in &token.rows {
 			for cell in row {
-				inline_delimiters(&cell[0].text, links, queue, ranges);
+				inline_delimiters(&cell[0].text, links, queue, syntax);
 			}
 		}
 	}
 }
 
-pub(super) fn name_delimiters(source: &str) -> Vec<Range<usize>> {
-	if !source.contains(['*', '_', '~', '\\']) {
-		return Vec::new();
+pub(super) fn name_delimiters(source: &str) -> NameSyntax {
+	if !source.contains(['*', '_', '~', '\\', '[']) {
+		return NameSyntax::default();
 	}
 	let mut origins = NameOrigins::default();
 	let normalized = normalized_source(source, Some(&mut origins));
 	let mut links = Links::new();
 	let mut queue = DelimiterQueue::default();
 	let tokens = block_tokens(&normalized, &mut links, Some(origins.view()), &mut queue);
-	let mut ranges = std::mem::take(&mut queue.ranges);
-	collect_delimiters(&tokens, &links, &mut queue, &mut ranges);
+	let mut syntax =
+		NameSyntax { delimiters: std::mem::take(&mut queue.ranges), ..NameSyntax::default() };
+	collect_delimiters(&tokens, &links, &mut queue, &mut syntax);
 	debug_assert!(queue.sources.is_empty());
+	let mut ranges = std::mem::take(&mut syntax.delimiters);
 	ranges.sort_unstable_by_key(|range| range.start);
 	let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
 	for range in ranges {
@@ -969,7 +987,11 @@ pub(super) fn name_delimiters(source: &str) -> Vec<Range<usize>> {
 			merged.push(range);
 		}
 	}
-	merged
+	syntax.delimiters = merged;
+	syntax
+		.link_destinations
+		.sort_unstable_by_key(|range| range.start);
+	syntax
 }
 
 #[cfg(test)]
@@ -1035,7 +1057,7 @@ mod tests {
 			("中😀**scan**ner\r\n", "中😀scanner\r\n"),
 			("\\*scan\\*ner\n", "*scan*ner\n"),
 		] {
-			let ranges = name_delimiters(source);
+			let ranges = name_delimiters(source).delimiters;
 			let mut projected = String::new();
 			let mut start = 0;
 			for range in ranges {
@@ -1052,10 +1074,14 @@ mod tests {
 	#[test]
 	fn name_delimiters_do_not_borrow_same_text_from_code_or_other_occurrences() {
 		let source = "`**scan**ner` a**scan**ner `x*scan*` [raw](/a**scan**) <i data-x='**scan**'>\n";
-		let ranges = name_delimiters(source);
+		let ranges = name_delimiters(source).delimiters;
 		let first = source.find(" a**").unwrap() + 2;
 		assert_eq!(ranges, [first..first + 2, first + 6..first + 8]);
-		assert!(name_delimiters("```cpp\n**scan**ner\n```\n\n    **scan**ner\n").is_empty());
+		assert!(
+			name_delimiters("```cpp\n**scan**ner\n```\n\n    **scan**ner\n")
+				.delimiters
+				.is_empty()
+		);
 	}
 
 	#[test]
@@ -1074,7 +1100,7 @@ mod tests {
 		let original = source.find("scan").unwrap();
 		assert_eq!(ranges, [original..original + 4]);
 		let delimiter = source.find("**").unwrap();
-		assert_eq!(name_delimiters(&source), [
+		assert_eq!(name_delimiters(&source).delimiters, [
 			delimiter..delimiter + 2,
 			delimiter + 6..delimiter + 8
 		]);

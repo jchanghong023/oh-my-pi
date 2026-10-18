@@ -853,17 +853,92 @@ impl LiteralMatcher {
 		check: &dyn Fn() -> Result<(), E>,
 		mut matched: impl FnMut(Range<usize>) -> bool,
 	) -> Result<(), E> {
-		if !source.contains(['*', '_', '~', '\\']) {
+		if !source.contains(['*', '_', '~', '\\', '[']) {
 			return self.source_matches(source, check, matched);
 		}
-		let delimiters = super::markdown::name_delimiters(source);
+		let super::markdown::NameSyntax { mut delimiters, link_openings, link_destinations } =
+			super::markdown::name_delimiters(source);
+		delimiters.extend(link_openings);
+		delimiters.extend(link_destinations.iter().cloned());
+		delimiters.sort_unstable_by_key(|range| range.start);
+		let mut destinations = link_destinations.iter().peekable();
+		let mut destination_window = SourceMatchWindow::default();
+		let mut destination_error = None;
+		let mut active = true;
 		self.source_matches_ignoring_with_window(
 			source,
 			&delimiters,
 			check,
-			&mut matched,
+			&mut |found: Range<usize>| {
+				// 两条来源轨道按原字节顺序发布，避免目标与标签拼接或提前消费章节。
+				active = match self.source_link_matches(
+					source,
+					&mut destinations,
+					found.start,
+					check,
+					&mut matched,
+					&mut destination_window,
+				) {
+					Ok(true) => matched(found),
+					Ok(false) => false,
+					Err(error) => {
+						destination_error = Some(error);
+						false
+					},
+				};
+				active
+			},
 			&mut SourceMatchWindow::default(),
-		)
+		)?;
+		if let Some(error) = destination_error {
+			return Err(error);
+		}
+		if active {
+			self.source_link_matches(
+				source,
+				&mut destinations,
+				usize::MAX,
+				check,
+				&mut matched,
+				&mut destination_window,
+			)?;
+		}
+		Ok(())
+	}
+
+	fn source_link_matches<E>(
+		&self,
+		source: &str,
+		destinations: &mut std::iter::Peekable<std::slice::Iter<'_, Range<usize>>>,
+		before: usize,
+		check: &dyn Fn() -> Result<(), E>,
+		matched: &mut impl FnMut(Range<usize>) -> bool,
+		window: &mut SourceMatchWindow,
+	) -> Result<bool, E> {
+		while destinations
+			.peek()
+			.is_some_and(|range| range.start < before)
+		{
+			let range = destinations.next().expect("peeked link destination");
+			let mut active = true;
+			window.text.clear();
+			window.provenance.clear();
+			window.offset = 0;
+			window.search_start = 0;
+			self.source_matches_with_window(
+				&source[range.clone()],
+				check,
+				&mut |found: Range<usize>| {
+					active = matched(found.start + range.start..found.end + range.start);
+					active
+				},
+				window,
+			)?;
+			if !active {
+				return Ok(false);
+			}
+		}
+		Ok(true)
 	}
 
 	fn source_matches_with_window<E>(
@@ -974,10 +1049,20 @@ impl LiteralMatcher {
 		markdown: &str,
 		context: &SectionContext,
 	) -> bool {
-		if !markdown.contains(['*', '_', '~', '\\']) {
+		if !markdown.contains(['*', '_', '~', '\\', '[']) {
 			return self.matches_section(raw, markdown, context);
 		}
-		let delimiters = super::markdown::section_name_delimiters(markdown, context);
+		let super::markdown::NameSyntax { mut delimiters, link_openings, link_destinations } =
+			super::markdown::section_name_delimiters(markdown, context);
+		if link_destinations
+			.iter()
+			.any(|range| self.is_match(&normalize_search_text(&markdown[range.clone()])))
+		{
+			return true;
+		}
+		delimiters.extend(link_openings);
+		delimiters.extend(link_destinations);
+		delimiters.sort_unstable_by_key(|range| range.start);
 		if delimiters.is_empty() {
 			return self.matches_section(raw, markdown, context);
 		}
@@ -1279,6 +1364,8 @@ mod tests {
 			("s**ca**n\u{0303}", "scañ", vec![0..10]),
 			("`counter_value*factor*next`", "counter_value*factor*next", vec![1..26]),
 			("[scan](scan)", "scan", vec![1..5, 7..11]),
+			("std::[vector](target)", "std::vector", vec![0..12]),
+			("中😀std::[vec**tor**](target)", "std::vector", vec![7..21]),
 			("mbist\\_check.rpt", "mbist_check.rpt", vec![0..16]),
 		] {
 			let mut found = Vec::new();

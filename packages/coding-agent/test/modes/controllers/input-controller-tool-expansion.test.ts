@@ -72,6 +72,8 @@ describe("InputController tool activity visibility", () => {
 			settings,
 			chatContainer: { children, clear, addChild, setToolActivityVisible },
 			rebuildChatFromMessages,
+			viewSession: { agent: { state: {} } },
+			syncThinkingPreview: vi.fn(),
 			showStatus,
 			ui: { clearInlineImages, resetDisplay },
 		};

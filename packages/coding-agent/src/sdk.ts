@@ -316,6 +316,7 @@ import {
 	warmupLspServers,
 	xdevEntries,
 } from "./tools";
+import { resolveToolTier } from "./tools/approval";
 import { resolveYieldReportText } from "./tools/yield";
 import { createBrowserPrelude } from "./tools/browser";
 import { isMCPToolName, normalizeToolNames } from "./tools/builtin-names";
@@ -5394,7 +5395,16 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
-		if (!restrictToolNames) {
+		// 受限清单不等于只读：按实际启用（含挂载）工具的审批级别保留写入通知。
+		// read 的动态审批及必需的只读辅助工具不代表可写；复用审批解析，缺省声明仍按 exec。
+		if (
+			!restrictToolNames ||
+			session.getEnabledToolNames().some(name => {
+				const tool = session.getToolByName(name);
+				if (!tool) return false;
+				return resolveToolTier(tool, {}) !== "read";
+			})
+		) {
 			session.attachRepoLifecycle(new RepoLifecycle({ agentDir, getCwd: () => sessionManager.getCwd() }));
 		}
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,

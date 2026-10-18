@@ -24,7 +24,7 @@ import { runSubprocess } from "../task/executor";
 import { AgentOutputManager } from "../task/output-manager";
 import type { AgentDefinition } from "../task/types";
 import type { CreateAgentSessionOptions } from "../sdk";
-import type { EventBus } from "../utils/event-bus";
+import { EventBus } from "../utils/event-bus";
 import type { TeamSubagentCall, TeamSubagentOutcome, TeamSubagentRunner } from "./types";
 
 /**
@@ -49,6 +49,7 @@ export interface TeamRunnerDeps {
 	parentAgentId: string;
 	eventBus?: EventBus;
 	subagentEventBus?: EventBus;
+	isCurrentSession?: () => boolean;
 	parentActiveModelPattern?: string;
 	skills?: readonly Skill[];
 	promptTemplates?: PromptTemplate[];
@@ -94,6 +95,20 @@ export function modelMatches(resolved: string | undefined, pattern: string): boo
 
 /** Build the default runner bound to the dispatching session's dependencies. */
 export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunner {
+	// 取消不等于切换会话：保留当前会话的取消终态，但阻止初始化／清理迟到帧重建旧 Hub 条目。
+	const isCurrentSession = deps.isCurrentSession;
+	const bindEventBus = (bus: EventBus | undefined): EventBus | undefined => {
+		if (!bus || !isCurrentSession) return bus;
+		const scopedBus = new EventBus();
+		scopedBus.emit = (channel, data) => {
+			if (isCurrentSession()) bus.emit(channel, data);
+		};
+		scopedBus.on = bus.on.bind(bus);
+		scopedBus.clear = bus.clear.bind(bus);
+		return scopedBus;
+	};
+	const eventBus = bindEventBus(deps.eventBus);
+	const subagentEventBus = deps.subagentEventBus === deps.eventBus ? eventBus : bindEventBus(deps.subagentEventBus);
 	const readIsolationRoots = new Set<string>();
 	// Each discussion owns a namespace: separate managers can otherwise allocate
 	// the same stage IDs before either concurrent run has written its artifacts.
@@ -262,8 +277,8 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						promptTemplates: deps.promptTemplates,
 						rules: deps.rules,
 						parentAgentId: deps.parentAgentId,
-						eventBus: deps.eventBus,
-						subagentEventBus: deps.subagentEventBus,
+						eventBus,
+						subagentEventBus,
 					});
 					const failure = (error: string): TeamSubagentOutcome =>
 						result.structuredOutput && Object.hasOwn(result.structuredOutput, "data")

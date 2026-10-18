@@ -118,31 +118,46 @@ pub(crate) fn lex_section(markdown: &str, context: &SectionContext) -> Vec<Token
 	block::lex(&section_source(markdown, context).0)
 }
 
-/// Original UTF-8 syntax ranges removed by the existing inline name lexer.
-/// Literal code, HTML, link destinations and unrecognized operators remain raw.
-pub(crate) fn name_delimiters(source: &str) -> Vec<Range<usize>> {
-	let stripped = source.strip_prefix('\u{feff}').unwrap_or(source);
-	let offset = source.len() - stripped.len();
-	let mut ranges = block::name_delimiters(stripped);
-	for range in &mut ranges {
-		range.start += offset;
-		range.end += offset;
-	}
-	ranges
+#[derive(Default)]
+pub(crate) struct NameSyntax {
+	pub delimiters:        Vec<Range<usize>>,
+	pub link_openings:     Vec<Range<usize>>,
+	pub link_destinations: Vec<Range<usize>>,
 }
 
-pub(crate) fn section_name_delimiters(source: &str, context: &SectionContext) -> Vec<Range<usize>> {
+/// Original UTF-8 syntax ranges removed by the existing inline name lexer.
+/// Link wrappers are projected separately from raw destinations; literal code,
+/// HTML and unrecognized operators remain raw.
+pub(crate) fn name_delimiters(source: &str) -> NameSyntax {
+	let stripped = source.strip_prefix('\u{feff}').unwrap_or(source);
+	let offset = source.len() - stripped.len();
+	let mut syntax = block::name_delimiters(stripped);
+	for ranges in [&mut syntax.delimiters, &mut syntax.link_openings, &mut syntax.link_destinations]
+	{
+		for range in ranges {
+			range.start += offset;
+			range.end += offset;
+		}
+	}
+	syntax
+}
+
+pub(crate) fn section_name_delimiters(source: &str, context: &SectionContext) -> NameSyntax {
 	let (reconstructed, prefix_length) = section_source(source, context);
 	let offset = source.len() - source.strip_prefix('\u{feff}').unwrap_or(source).len();
-	block::name_delimiters(&reconstructed)
-		.into_iter()
-		.filter_map(|range| {
-			(range.end > prefix_length).then(|| {
-				range.start.max(prefix_length) - prefix_length + offset
-					..range.end - prefix_length + offset
-			})
-		})
-		.collect()
+	let mut syntax = block::name_delimiters(&reconstructed);
+	for ranges in [&mut syntax.delimiters, &mut syntax.link_openings, &mut syntax.link_destinations]
+	{
+		ranges.retain_mut(|range| {
+			let keep = range.end > prefix_length;
+			if keep {
+				range.start = range.start.max(prefix_length) - prefix_length + offset;
+				range.end = range.end - prefix_length + offset;
+			}
+			keep
+		});
+	}
+	syntax
 }
 
 fn render(tokens: &[Token], output: &mut String) {
@@ -423,8 +438,11 @@ impl MarkdownFenceScanner {
 		let next = lines.next().unwrap_or("");
 		// An ancestor Setext heading needs the same container prefixes removed
 		// from its underline, but deeper quotes remain real child blocks.
-		let (next_line, _) = self.quote_content(next, quote_depth);
-		let projected = if line.len() == first.len() && next_line.len() == next.len() {
+		let (next_line, next_depth) = self.quote_content(next, quote_depth);
+		// 不同引用容器的横线不能成为当前行的 Setext 下划线，否则会提前清除围栏。
+		let projected = if next_depth != quote_depth {
+			std::borrow::Cow::Borrowed(line)
+		} else if line.len() == first.len() && next_line.len() == next.len() {
 			std::borrow::Cow::Borrowed(source)
 		} else {
 			let mut projected = String::with_capacity(line.len() + next_line.len());
@@ -1346,19 +1364,30 @@ mod tests {
 	#[test]
 	fn section_name_delimiters_share_reconstructed_lexer_context_and_raw_coordinates() {
 		let source = "\u{feff}> a**scan**ner\r\n";
-		assert_eq!(name_delimiters(source), [6..8, 12..14]);
-		assert_eq!(section_name_delimiters(source, &context()), name_delimiters(source));
+		assert_eq!(name_delimiters(source).delimiters, [6..8, 12..14]);
+		assert_eq!(
+			section_name_delimiters(source, &context()).delimiters,
+			name_delimiters(source).delimiters
+		);
 		let mut continued = context();
 		continued.fence_prefix = Some("> ```".to_owned());
-		assert!(section_name_delimiters(source, &continued).is_empty());
+		assert!(
+			section_name_delimiters(source, &continued)
+				.delimiters
+				.is_empty()
+		);
 		let source = "> **literal**\r\n> ```\r\na**scan**ner\r\n";
 		let start = source.find("a**").unwrap() + 1;
-		assert_eq!(section_name_delimiters(source, &continued), [
+		assert_eq!(section_name_delimiters(source, &continued).delimiters, [
 			start..start + 2,
 			start + 6..start + 8
 		]);
 		continued.fence_prefix = None;
 		continued.continues_line = true;
-		assert!(section_name_delimiters("**literal**\n", &continued).is_empty());
+		assert!(
+			section_name_delimiters("**literal**\n", &continued)
+				.delimiters
+				.is_empty()
+		);
 	}
 }

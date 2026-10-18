@@ -58,6 +58,7 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
 import { splitUrlScheme } from "../tools/url-scheme-host";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 import { parseXdUrl } from "../tools/xd-url";
+import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -870,7 +871,8 @@ export class ToolExecutionComponent extends Container {
 		if (this.#toolName !== "write" || !isRecord(this.#args)) return true;
 		const path = this.#args.file_path ?? this.#args.path;
 		if (typeof path !== "string" || !path) return true;
-		const scheme = splitUrlScheme(path)?.scheme;
+		// 执行层会剥离合法 hashline 头；分类必须使用同一目标，避免设备写入落入文件详情分支。
+		const scheme = splitUrlScheme(unwrapHashlineHeaderPath(path))?.scheme;
 		return scheme === "agent" || scheme === "proc" || scheme === "cfg" || scheme === "xd";
 	}
 
@@ -1129,16 +1131,25 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#compactActivity(): ToolActivitySummary {
-		const summary = this.#activitySummary();
+		let args = this.#args;
+		if (this.#toolName === "write" && isRecord(args)) {
+			const key = args.file_path !== undefined ? "file_path" : "path";
+			const path = args[key];
+			if (typeof path === "string") {
+				const normalized = unwrapHashlineHeaderPath(path);
+				if (normalized !== path) args = { ...args, [key]: normalized };
+			}
+		}
+		const summary = this.#activitySummary(args);
 		const label = plainText(summary.label).replace(/\s+/g, " ").trim();
 		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
-		if (isRecord(this.#args)) {
+		if (isRecord(args)) {
 			const intent = this.#compactIntent;
 			let activityTool = this.#toolName;
 			if (activityTool === "write") {
 				const details = this.#result?.details;
 				const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
-				const path = this.#args.file_path ?? this.#args.path;
+				const path = args.file_path ?? args.path;
 				activityTool =
 					typeof dispatch?.tool === "string"
 						? dispatch.tool
@@ -1149,7 +1160,7 @@ export class ToolExecutionComponent extends Container {
 			if (activityTool !== "wait" && typeof intent === "string" && intent.trim()) {
 				detail = plainText(intent).replace(/\s+/g, " ").trim();
 			} else if (["read", "write", "glob"].includes(this.#toolName)) {
-				const path = this.#args.path ?? this.#args.file_path;
+				const path = args.path ?? args.file_path;
 				if (typeof path === "string" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) detail = compactToolPath(path);
 			}
 		}
@@ -1170,12 +1181,10 @@ export class ToolExecutionComponent extends Container {
 				toolName = typeof details.xdev.tool === "string" ? details.xdev.tool : toolName;
 				details = details.xdev.inner;
 			}
-			const failure =
-				toolName === "bash"
-					? compactBashFailure(details)
-					: compactToolFailure(
-							plainText(this.#result.content.find(block => block.type === "text" && block.text)?.text ?? ""),
-						);
+			const errorText = plainText(
+				this.#result.content.find(block => block.type === "text" && block.text)?.text ?? "",
+			);
+			const failure = toolName === "bash" ? compactBashFailure(details, errorText) : compactToolFailure(errorText);
 			detail = `${failure}${detail ? ` · ${detail}` : ""}`;
 		}
 		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
@@ -1605,9 +1614,9 @@ export class ToolExecutionComponent extends Container {
 		return [truncateToWidth(`${theme.fg("dim", "╭─")} ${text}`, width), theme.fg("dim", "╰")];
 	}
 
-	#activitySummary(): ToolActivitySummary {
+	#activitySummary(args = this.#args): ToolActivitySummary {
 		this.#renderState.renderContext ??= this.#buildRenderContext();
-		const summary = this.#renderer?.activitySummary?.(this.#args, {
+		const summary = this.#renderer?.activitySummary?.(args, {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			spinnerFrame: this.#spinnerFrame,
@@ -1621,9 +1630,9 @@ export class ToolExecutionComponent extends Container {
 			// pressure — keep the generic liveness hint for in-flight calls.
 			return this.#isRunning() ? { ...summary, detail: "running" } : summary;
 		}
-		if (isRecord(this.#args)) {
+		if (isRecord(args)) {
 			for (const key of ["command", "pattern", "query", "path", "input"] as const) {
-				const value = this.#args[key];
+				const value = args[key];
 				if (typeof value === "string" && value.length > 0) {
 					return { label: this.#toolLabel, detail: value.split("\n", 1)[0] };
 				}

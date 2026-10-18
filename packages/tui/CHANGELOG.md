@@ -24,6 +24,8 @@
 
 ### Fixed
 
+- Keep hashline-wrapped internal device calls compact without hiding real file-write previews.
+- Show safe reasons for shell failures before execution without exposing captured output or scripts.
 - Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.
 - Preserve IME-safe cursor tails in boxed prompts while retaining the empty row below input.
 - Count each Git path once across the selected change categories, including staged deletions that remain as untracked files.

@@ -174,40 +174,63 @@ async function writeTextAndInvalidate(filePath: string, content: string): Promis
 	invalidateFsScanAfterWrite(filePath);
 }
 
+interface ResourceMutationSnapshot {
+	paths: string[];
+	complete: boolean;
+}
+
 /**
  * Snapshot only the resource subtree before it moves or disappears. Index
  * consumers refresh exact paths, so a directory notification alone is not enough.
  * Symlinks are leaves: never enumerate their targets.
  */
-async function resourceMutationPaths(filePath: string, stat?: Stats): Promise<string[]> {
+async function resourceMutationPaths(filePath: string, stat?: Stats): Promise<ResourceMutationSnapshot> {
 	const paths = [filePath];
-	const rootStat =
-		stat ??
-		(await fs.lstat(filePath).catch(error => {
-			if (isEnoent(error)) return undefined;
-			throw error;
-		}));
-	if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) return paths;
-	const visit = async (directory: string): Promise<void> => {
-		for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-			const child = path.join(directory, entry.name);
-			if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(child);
-			else paths.push(child);
+	try {
+		const rootStat =
+			stat ??
+			(await fs.lstat(filePath).catch(error => {
+				if (isEnoent(error)) return undefined;
+				throw error;
+			}));
+		if (rootStat?.isDirectory() && !rootStat.isSymbolicLink()) {
+			const visit = async (directory: string): Promise<void> => {
+				for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+					const child = path.join(directory, entry.name);
+					if (entry.isDirectory() && !entry.isSymbolicLink()) await visit(child);
+					else paths.push(child);
+				}
+			};
+			await visit(filePath);
 		}
-	};
-	await visit(filePath);
-	return paths;
+		return { paths, complete: true };
+	} catch {
+		// 快照只用于索引通知；枚举失败不能阻止内核允许的移动或删除，也不能把部分路径标为已核对。
+		return { paths, complete: false };
+	}
 }
 
-function invalidateResourceRename(oldPath: string, newPath: string, oldPaths: string[]): void {
-	if (oldPaths.length === 1) {
+function invalidateResourceMutation(snapshot: ResourceMutationSnapshot): void {
+	if (snapshot.complete) invalidateFsScanAfterWrites(snapshot.paths);
+	else
+		invalidateFsScanAfterUncertainWrites(
+			snapshot.paths,
+			"LSP resource snapshot incomplete; affected descendant paths could not be enumerated",
+		);
+}
+
+function invalidateResourceRename(oldPath: string, newPath: string, snapshot: ResourceMutationSnapshot): void {
+	if (snapshot.complete && snapshot.paths.length === 1) {
 		invalidateFsScanAfterRename(oldPath, newPath);
 		return;
 	}
-	invalidateFsScanAfterWrites([
-		...oldPaths,
-		...oldPaths.map(filePath => path.join(newPath, path.relative(oldPath, filePath))),
-	]);
+	invalidateResourceMutation({
+		paths: [
+			...snapshot.paths,
+			...snapshot.paths.map(filePath => path.join(newPath, path.relative(oldPath, filePath))),
+		],
+		complete: snapshot.complete,
+	});
 }
 
 /**
@@ -420,7 +443,7 @@ export async function applyWorkspaceEdit(
 					// temp dir (same filesystem, so the moves stay atomic) instead of
 					// deleting it, so a failed rename (EXDEV, permissions) can restore
 					// it and leave the workspace exactly as it was.
-					let displaced: { dir: string; file: string; paths: string[] } | undefined;
+					let displaced: { dir: string; file: string; snapshot: ResourceMutationSnapshot } | undefined;
 					let sourceStat: Stats | undefined;
 					try {
 						const targetStat = await fs.lstat(newPath);
@@ -439,12 +462,12 @@ export async function applyWorkspaceEdit(
 							const holdFile = path.join(holdDir, path.basename(newPath));
 							try {
 								await fs.rename(newPath, holdFile);
-								invalidateFsScanAfterWrites(targetPaths);
+								invalidateResourceMutation(targetPaths);
 							} catch (error) {
 								await fs.rm(holdDir, { recursive: true, force: true }).catch(() => {});
 								throw error;
 							}
-							displaced = { dir: holdDir, file: holdFile, paths: targetPaths };
+							displaced = { dir: holdDir, file: holdFile, snapshot: targetPaths };
 						}
 					} catch (error) {
 						if (!isEnoent(error)) throw error;
@@ -457,7 +480,7 @@ export async function applyWorkspaceEdit(
 						if (displaced) {
 							try {
 								await fs.rename(displaced.file, newPath);
-								invalidateFsScanAfterWrites(displaced.paths);
+								invalidateResourceMutation(displaced.snapshot);
 							} catch {
 								// Restoration failed: the destination really is gone, so
 								// report it to reconciliation as an executed delete.
@@ -485,7 +508,7 @@ export async function applyWorkspaceEdit(
 					const affectedPaths =
 						stat.isDirectory() && op.options?.recursive
 							? await resourceMutationPaths(filePath, stat)
-							: [filePath];
+							: { paths: [filePath], complete: true };
 					if (stat.isDirectory() && !stat.isSymbolicLink() && !op.options?.recursive) {
 						await fs.rmdir(filePath);
 					} else {
@@ -494,14 +517,14 @@ export async function applyWorkspaceEdit(
 						} catch (error) {
 							if (stat.isDirectory() && op.options?.recursive) {
 								invalidateFsScanAfterUncertainWrites(
-									affectedPaths,
+									affectedPaths.paths,
 									"LSP delete failed; target may have been partially removed",
 								);
 							}
 							throw error;
 						}
 					}
-					invalidateFsScanAfterWrites(affectedPaths);
+					invalidateResourceMutation(affectedPaths);
 				} catch (error) {
 					if (!(op.options?.ignoreIfNotExists && isEnoent(error))) throw error;
 					continue;

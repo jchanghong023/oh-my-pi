@@ -21,6 +21,12 @@ import {
 import * as orchestratorModule from "@oh-my-pi/pi-coding-agent/team/orchestrator";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
+import {
+	TASK_SUBAGENT_EVENT_CHANNEL,
+	TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+	TASK_SUBAGENT_PROGRESS_CHANNEL,
+} from "@oh-my-pi/pi-coding-agent/task/types";
+import { EventBus, emitSubagentFrame } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -323,18 +329,41 @@ describe("team controller dispatch", () => {
 		}
 	});
 
-	it.each(["session", "job"] as const)(
+	it.each(["session", "job", "reload"] as const)(
 		"cancels an A-session discussion through %s without leaking callbacks or delivery",
 		async cancelThrough => {
 			const manager = new AsyncJobManager({});
 			const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
 			const callbacks = new Set<() => void>();
 			let sessionId = "A";
+			const eventBus = new EventBus();
+			const subagentEventBus = new EventBus();
+			const localFrames: unknown[] = [];
+			const rootFrames: unknown[] = [];
+			const channels = [
+				TASK_SUBAGENT_LIFECYCLE_CHANNEL,
+				TASK_SUBAGENT_PROGRESS_CHANNEL,
+				TASK_SUBAGENT_EVENT_CHANNEL,
+			];
+			const unsubscribers = channels.flatMap(channel => [
+				eventBus.on(channel, frame => {
+					localFrames.push(frame);
+				}),
+				subagentEventBus.on(channel, frame => {
+					rootFrames.push(frame);
+				}),
+			]);
 			const childStarted = Promise.withResolvers<AbortSignal>();
 			const releaseChild = Promise.withResolvers<void>();
 			const child = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+				for (const channel of channels) {
+					emitSubagentFrame(options.eventBus, options.subagentEventBus, channel, { id: options.id, late: false });
+				}
 				childStarted.resolve(options.signal!);
 				await releaseChild.promise;
+				for (const channel of channels) {
+					emitSubagentFrame(options.eventBus, options.subagentEventBus, channel, { id: options.id, late: true });
+				}
 				return {
 					index: options.index,
 					id: options.id,
@@ -354,6 +383,8 @@ describe("team controller dispatch", () => {
 			const writes: string[] = [];
 			const session = {
 				...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+				eventBus,
+				subagentEventBus,
 				get sessionId() {
 					return sessionId;
 				},
@@ -389,8 +420,11 @@ describe("team controller dispatch", () => {
 				});
 				const signal = await childStarted.promise;
 				expect(callbacks.size).toBe(1);
+				expect(rootFrames).toHaveLength(channels.length);
+				expect(localFrames).toEqual(rootFrames);
 				if (cancelThrough === "job") manager.cancel(dispatched.jobId!);
-				sessionId = "B";
+				// 同一身份的会话重新加载也使旧代际失效，不能只依赖 sessionId 的变化。
+				if (cancelThrough !== "reload") sessionId = "B";
 				for (const callback of Array.from(callbacks)) callback();
 				expect(signal.aborted).toBe(true);
 				expect(callbacks.size).toBe(0);
@@ -398,11 +432,14 @@ describe("team controller dispatch", () => {
 				releaseChild.resolve();
 				await manager.getJob(dispatched.jobId!)!.promise;
 				expect(child).toHaveBeenCalledTimes(1);
+				expect(rootFrames).toHaveLength(channels.length);
+				expect(localFrames).toEqual(rootFrames);
 				expect(writes.filter(write => write.startsWith("B:"))).toEqual([]);
 				expect(acknowledge).not.toHaveBeenCalled();
 				expect(callbacks.size).toBe(0);
 			} finally {
 				releaseChild.resolve();
+				for (const unsubscribe of unsubscribers) unsubscribe();
 				await manager.dispose();
 				child.mockRestore();
 			}

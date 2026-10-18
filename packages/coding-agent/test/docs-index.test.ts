@@ -61,6 +61,22 @@ describe("Markdown parsing", () => {
 		);
 	});
 
+	it("keeps split quoted code literal unless a Setext heading shares its quote depth", () => {
+		const prefix = "> > ```\n> > " + "x".repeat(17_987) + "\n";
+		for (const [tail, expected] of [
+			["> **scan**ner\n---\n", "**scan**ner"],
+			["> **scan**ner\n> ---\n", "scanner"],
+		]) {
+			const text = prefix + tail;
+			const parsed = parseMarkdown(new TextEncoder().encode(text));
+			const section = parsed.sections.find(section => section.rawMarkdown === tail);
+			expect(section).toBeDefined();
+			expect(section!.plainText).toContain(expected);
+			expect(Buffer.from(text).subarray(section!.byteStart, section!.byteEnd).toString()).toBe(tail);
+			if (expected === "scanner") expect(section!.plainText).not.toContain("**scan**ner");
+		}
+	});
+
 	it("preserves a UTF-8 BOM and CRLF bytes while recognizing the initial heading", () => {
 		const text = "\uFEFF# 标题\r\n正文\r\n## 下一节\r\n后续\r\n";
 		const bytes = new TextEncoder().encode(text);
@@ -1749,6 +1765,44 @@ describe("DocsSearchEngine indexing contract", () => {
 			expect(result.sections[0].path).toBe("topic.md");
 			expect(result.sections[0].text).toContain("错误计数为零");
 			expect(result.total).toBeGreaterThan(1);
+		} finally {
+			service.close();
+		}
+	});
+
+	it("matches linked composite names without inventing longer-label or code-boundary evidence", async () => {
+		const root = await tempDir("docs-linked-names-root-");
+		const agentDir = await tempDir("docs-linked-names-agent-");
+		const files = {
+			"exact.md": "# Notes\nstd::[vector](target)\n",
+			"continued.md": "# Notes\nstd::[vector](target)::iterator\n",
+			"code.md": "# Notes\n`std::[vector](target)`\n",
+			"code-boundary.md": "# Notes\n`std::`[vector](target)\n",
+			"destination.md": "# Notes\n[linked](std::vector)\n",
+			"destination-operators.md": "# Notes\n[linked](std::**vector**)\n",
+			"label.md": "# Notes\nscan[ner](target)\n",
+		};
+		for (const [file, text] of Object.entries(files)) await fs.writeFile(path.join(root, file), text);
+		const service = new DocsSearchEngine({ agentDir });
+		try {
+			await service.init(root, "manual");
+			await fs.rm(root, { recursive: true });
+			const result = service.search("std::vector", { index: "manual", limit: 500 });
+			expect(result.exactNameMatches).toBe(2);
+			for (const file of ["exact.md", "destination.md"])
+				expect(result.sections.find(hit => hit.path === file)).toMatchObject({
+					text: files[file as keyof typeof files],
+					matchKind: "exact-name",
+				});
+			for (const file of ["continued.md", "code.md", "code-boundary.md"])
+				expect(result.sections.find(hit => hit.path === file)?.matchKind).toBe("related");
+			expect(result.sections.find(hit => hit.path === "destination-operators.md")).toBeUndefined();
+			expect(service.search("scan", { index: "manual" }).exactNameMatches).toBe(0);
+			expect(service.search("scanner", { index: "manual" }).sections[0]).toMatchObject({
+				path: "label.md",
+				text: files["label.md"],
+				matchKind: "exact-name",
+			});
 		} finally {
 			service.close();
 		}

@@ -308,6 +308,24 @@ describe("team consumer regressions", () => {
 	});
 
 	it.each([
+		"方案 A 若前提满足，则可以采用",
+		"方案 A 若前提满足，那么可以采用",
+		"方案 A 阻断解除后，则可以采用",
+		"方案 A 阻断解除后，那么可以采用",
+	])("limits a resolution condition with an explicit consequence to its next adoption predicate: %s", body => {
+		const result = reportWithBody(`${body}。`, { recommendedProposal: "B" });
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.markdown).toContain(`${body}。`);
+			expect(result.markdown).toContain("【推荐】方案 B");
+			expect(result.markdown).toContain("| 方案 A | ⛔ 尚不可采用");
+		}
+		const conflict = reportWithBody(`${body}，同时仍推荐方案 A。`, { recommendedProposal: "B" });
+		expect(conflict.ok).toBe(false);
+		if (!conflict.ok) expect(conflict.error).toContain("尚不可采用”的方案 A");
+	});
+
+	it.each([
 		"方案 A 没有推荐价值，仍然推荐方案 A。",
 		"方案 A 没有推荐价值，仍可以采用。",
 		"方案 A 仅在全部阻断问题经复核通过后才可采用，同时仍推荐方案 A。",

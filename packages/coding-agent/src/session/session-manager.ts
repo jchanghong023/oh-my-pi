@@ -1012,6 +1012,7 @@ export class SessionManager {
 	 * or after {@link close} gave the claim up.
 	 */
 	#sessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
+	#retainedSessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
 	#runtimeOwnership = false;
 	/**
 	 * The background artifact copy a move or branch to `sessionFile` started (see
@@ -1107,7 +1108,7 @@ export class SessionManager {
 		if (!this.#persist || !sessionFile || !this.#storage.claimSession) return;
 		const current = this.#sessionClaim;
 		if (current?.sessionId === sessionId && current.release) return;
-		if (current && current.sessionId !== sessionId) current.release?.();
+		if (current && current.sessionId !== sessionId && current !== this.#retainedSessionClaim) current.release?.();
 		// The storage also checks that the path still holds this session: if
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
@@ -1126,19 +1127,38 @@ export class SessionManager {
 		this.#runtimeOwnership = true;
 	}
 
+	/**
+	 * 切换事务中的异步 hook 仍可能拒绝目标，原租约必须保留到提交或原位恢复完成；
+	 * 否则其他进程可在 rollback 前接管原会话，令 restoreState 中断后续运行态恢复。
+	 */
+	retainRuntimeOwnership(): Disposable {
+		const retained = this.#sessionClaim;
+		this.#retainedSessionClaim = retained;
+		return {
+			[Symbol.dispose]: () => {
+				this.#retainedSessionClaim = undefined;
+				if (retained !== this.#sessionClaim) retained?.release?.();
+			},
+		};
+	}
+
 	/** 切换先取得新租约再释放旧租约；失败仍由原宿主持有原会话。 */
 	#transitionSessionClaim(sessionId: string, sessionFile: string | undefined): void {
 		const current = this.#sessionClaim;
 		if (this.#runtimeOwnership && this.#persist && sessionFile && this.#storage.claimSession) {
 			if (current?.sessionId === sessionId && current.release) return;
-			const release = this.#storage.claimSession(sessionId, sessionFile);
+			const retained = this.#retainedSessionClaim;
+			const release =
+				retained?.sessionId === sessionId && retained.release
+					? retained.release
+					: this.#storage.claimSession(sessionId, sessionFile);
 			if (!release) {
 				throw new Error(`Cannot host session "${sessionFile}": another live omp process owns it.`);
 			}
-			current?.release?.();
-			this.#sessionClaim = { sessionId, release };
+			if (current !== retained) current?.release?.();
+			this.#sessionClaim = retained?.sessionId === sessionId && retained.release ? retained : { sessionId, release };
 		} else {
-			current?.release?.();
+			if (current !== this.#retainedSessionClaim) current?.release?.();
 			this.#sessionClaim = undefined;
 		}
 	}
@@ -2943,6 +2963,12 @@ export class SessionManager {
 		const claim = this.#sessionClaim;
 		claim?.release?.();
 		if (claim) claim.release = undefined;
+		const retained = this.#retainedSessionClaim;
+		if (retained && retained !== claim) {
+			retained.release?.();
+			retained.release = undefined;
+		}
+		this.#retainedSessionClaim = undefined;
 		// A prior `flushSync` can self-conflict with this manager's own
 		// unconfirmed deferred publish; drain despite the latch so that
 		// publish can still confirm before we give up on the transcript.

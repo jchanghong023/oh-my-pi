@@ -209,7 +209,13 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 }
 
 /** Wire the runner deps from the live session. Exported for tests. */
-export function buildRunnerDeps(session: AgentSession, settings: Settings, cwd: string): TeamRunnerDeps {
+export function buildRunnerDeps(
+	session: AgentSession,
+	settings: Settings,
+	cwd: string,
+	isCurrentSession?: () => boolean,
+): TeamRunnerDeps {
+	const sessionId = session.sessionId;
 	const modelRegistry = session.modelRegistry;
 	return {
 		cwd,
@@ -225,6 +231,7 @@ export function buildRunnerDeps(session: AgentSession, settings: Settings, cwd: 
 		parentAgentId: MAIN_AGENT_ID,
 		eventBus: session.eventBus,
 		subagentEventBus: session.subagentEventBus,
+		isCurrentSession: isCurrentSession ?? (() => session.sessionId === sessionId),
 		skills: session.skills,
 		promptTemplates: session.promptTemplates ? [...session.promptTemplates] : undefined,
 	};
@@ -335,7 +342,7 @@ async function startTeamDiscussionImpl(
 	try {
 		// Capture roots, artifacts, models and buses before the manager starts the
 		// asynchronous job; the live AgentSession may later adopt another identity.
-		const runnerDeps = buildRunnerDeps(session, settings, cwd);
+		const runnerDeps = buildRunnerDeps(session, settings, cwd, isCurrentSession);
 		unregisterSessionChange = session.registerSessionChangeCallback(() => {
 			sessionChanged = true;
 			sessionAbort.abort();

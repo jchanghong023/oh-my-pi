@@ -10,6 +10,7 @@ import {
 	applyWorkspaceEdit,
 } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import type { TextEdit } from "@oh-my-pi/pi-coding-agent/lsp/types";
+import { subscribeFsMutation } from "@oh-my-pi/pi-coding-agent/tools/fs-cache-invalidation";
 import { RepoLifecycle } from "../../src/repo/lifecycle";
 import { RepoService } from "../../src/repo/service";
 
@@ -58,6 +59,154 @@ describe("applyEditsThenRename", () => {
 		expect(await Bun.file(ref).text()).toBe(refBefore);
 		expect(await Bun.file(source).exists()).toBe(true);
 		expect(await Bun.file(dest).exists()).toBe(false);
+	});
+});
+
+describe("LSP resource snapshots without a repository index", () => {
+	let cwd: string;
+	let unsubscribe: () => void;
+	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
+
+	beforeEach(async () => {
+		cwd = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-resource-snapshot-"));
+		notifications = [];
+		unsubscribe = subscribeFsMutation((paths, reason) => {
+			if (paths.some(file => file.startsWith(`${cwd}${path.sep}`))) notifications.push({ paths, reason });
+		});
+	});
+
+	afterEach(async () => {
+		unsubscribe();
+		await fs.rm(cwd, { recursive: true, force: true });
+	});
+
+	const uri = (file: string) => pathToFileURL(file).href;
+
+	function denySnapshot(directory: string) {
+		const readdir = fs.readdir;
+		const failure = Object.assign(new Error("snapshot enumeration denied"), { code: "EACCES" });
+		// 保留原始参数元组与重载，避免 options 联合类型转发时丢失返回值关联。
+		return spyOn(fs, "readdir").mockImplementation(((...args: Parameters<typeof readdir>) => {
+			if (args[0] === directory) return Promise.reject(failure);
+			return readdir(...args);
+		}) as typeof readdir);
+	}
+
+	for (const entrypoint of ["workspace", "references"] as const) {
+		it(`moves a directory via ${entrypoint} when a descendant snapshot cannot be read`, async () => {
+			const source = path.join(cwd, "source");
+			const target = path.join(cwd, "target");
+			await fs.mkdir(path.join(source, "nested"), { recursive: true });
+			await Bun.write(path.join(source, "nested", "child.py"), "def movedentry(): pass\n");
+			const snapshotSpy = denySnapshot(path.join(source, "nested"));
+			try {
+				if (entrypoint === "workspace") {
+					const result = await applyWorkspaceEdit(
+						{ documentChanges: [{ kind: "rename", oldUri: uri(source), newUri: uri(target) }] },
+						cwd,
+					);
+					expect(result.executed).toEqual([{ kind: "rename", oldUri: uri(source), newUri: uri(target) }]);
+				} else {
+					await applyEditsThenRename([], source, target);
+				}
+			} finally {
+				snapshotSpy.mockRestore();
+			}
+			expect(await Bun.file(path.join(target, "nested", "child.py")).text()).toBe("def movedentry(): pass\n");
+			expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
+			expect(notifications).toHaveLength(1);
+			expect(notifications[0].paths).toEqual([source, target]);
+			expect(notifications[0].reason).toBeDefined();
+		});
+	}
+
+	it("marks an unreadable overwrite target snapshot uncertain without blocking the real rename", async () => {
+		const source = path.join(cwd, "source");
+		const target = path.join(cwd, "target");
+		await fs.mkdir(source);
+		await Bun.write(path.join(source, "moved.py"), "def movedentry(): pass\n");
+		await fs.mkdir(path.join(target, "nested"), { recursive: true });
+		await Bun.write(path.join(target, "nested", "old.py"), "def displacedentry(): pass\n");
+		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		try {
+			await applyWorkspaceEdit(
+				{
+					documentChanges: [
+						{ kind: "rename", oldUri: uri(source), newUri: uri(target), options: { overwrite: true } },
+					],
+				},
+				cwd,
+			);
+		} finally {
+			snapshotSpy.mockRestore();
+		}
+		expect(await Bun.file(path.join(target, "moved.py")).text()).toBe("def movedentry(): pass\n");
+		expect(await Bun.file(path.join(target, "nested", "old.py")).exists()).toBe(false);
+		expect(await fs.lstat(source).catch(() => undefined)).toBeUndefined();
+		expect(notifications).toHaveLength(2);
+		expect(notifications[0].paths).toEqual([target]);
+		expect(notifications[0].reason).toBeDefined();
+		expect(notifications[1].paths).toEqual([
+			source,
+			path.join(source, "moved.py"),
+			target,
+			path.join(target, "moved.py"),
+		]);
+		expect(notifications[1].reason).toBeUndefined();
+	});
+
+	it("preserves uncertain overwrite notifications and restores the target after a real rename failure", async () => {
+		const source = path.join(cwd, "source");
+		// 内核禁止把目录移入自身后代；真实 rename 失败必须恢复已暂存的目标，而非被快照错误提前拦截。
+		const target = path.join(source, "target");
+		await fs.mkdir(path.join(target, "nested"), { recursive: true });
+		await Bun.write(path.join(source, "source.py"), "def sourceentry(): pass\n");
+		await Bun.write(path.join(target, "nested", "old.py"), "def restoredentry(): pass\n");
+		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		const executed: string[] = [];
+		try {
+			await expect(
+				applyWorkspaceEdit(
+					{
+						documentChanges: [
+							{ kind: "rename", oldUri: uri(source), newUri: uri(target), options: { overwrite: true } },
+						],
+					},
+					cwd,
+					change => executed.push(change.kind),
+				),
+			).rejects.toThrow();
+		} finally {
+			snapshotSpy.mockRestore();
+		}
+		expect(await Bun.file(path.join(source, "source.py")).text()).toBe("def sourceentry(): pass\n");
+		expect(await Bun.file(path.join(target, "nested", "old.py")).text()).toBe("def restoredentry(): pass\n");
+		expect(executed).toEqual([]);
+		expect(notifications).toHaveLength(2);
+		for (const notification of notifications) {
+			expect(notification.paths).toEqual([target]);
+			expect(notification.reason).toBeDefined();
+		}
+	});
+
+	it("deletes a directory with an incomplete snapshot while retaining uncertain coverage", async () => {
+		const target = path.join(cwd, "target");
+		await fs.mkdir(path.join(target, "nested"), { recursive: true });
+		await Bun.write(path.join(target, "nested", "child.py"), "def removedentry(): pass\n");
+		const snapshotSpy = denySnapshot(path.join(target, "nested"));
+		try {
+			const result = await applyWorkspaceEdit(
+				{ documentChanges: [{ kind: "delete", uri: uri(target), options: { recursive: true } }] },
+				cwd,
+			);
+			expect(result.executed).toEqual([{ kind: "delete", uri: uri(target) }]);
+		} finally {
+			snapshotSpy.mockRestore();
+		}
+		expect(await fs.lstat(target).catch(() => undefined)).toBeUndefined();
+		expect(notifications).toHaveLength(1);
+		expect(notifications[0].paths).toEqual([target]);
+		expect(notifications[0].reason).toBeDefined();
 	});
 });
 

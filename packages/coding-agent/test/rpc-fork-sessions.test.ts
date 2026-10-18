@@ -147,6 +147,45 @@ describe("RpcSessionDirectoryService", () => {
 		expect(await fx.service.list()).toEqual([]);
 	});
 
+	test("switch transactions reuse the retained lease on rollback and close releases both leases", async () => {
+		const fx = await setup();
+		const firstId = `s-transaction-first-${crypto.randomUUID()}`;
+		const secondId = `s-transaction-second-${crypto.randomUUID()}`;
+		const first = await writeSession(fx.sessionDir, firstId, fx.cwd);
+		const second = await writeSession(fx.sessionDir, secondId, fx.cwd);
+		const storage = new FileSessionStorage();
+		const manager = await SessionManager.open(first, fx.sessionDir, storage, { suppressBreadcrumb: true });
+		manager.acquireRuntimeOwnership();
+		const claim = spyOn(storage, "claimSession");
+		try {
+			const previous = manager.captureState();
+			{
+				using _ownership = manager.retainRuntimeOwnership();
+				await manager.setSessionFile(second);
+				await expect(fx.service.rename(firstId, "Must remain protected")).rejects.toMatchObject({
+					code: "execution_failed",
+				});
+				manager.restoreState(previous);
+				// 回滚直接复用原租约，不以同进程 storage 可重取租约掩盖所有权空窗。
+				expect(claim).toHaveBeenCalledTimes(1);
+				expect(claim).toHaveBeenCalledWith(secondId, second);
+				expect(await fx.service.rename(secondId, "Released rollback target")).toMatchObject({
+					name: "Released rollback target",
+				});
+			}
+			{
+				using _ownership = manager.retainRuntimeOwnership();
+				await manager.setSessionFile(second);
+				await manager.close();
+				expect(await fx.service.rename(firstId, "Closed source")).toMatchObject({ name: "Closed source" });
+				expect(await fx.service.rename(secondId, "Closed target")).toMatchObject({ name: "Closed target" });
+			}
+		} finally {
+			claim.mockRestore();
+			await manager.close();
+		}
+	});
+
 	test("runtime takeover refuses another owner and a failed switch retains the old lease", async () => {
 		const fx = await setup();
 		const firstId = `s-retained-${crypto.randomUUID()}`;

@@ -1,9 +1,9 @@
-use std::{ops::Range, sync::LazyLock};
+use std::sync::LazyLock;
 
 use regex::Regex;
 
 use super::{
-	Links, Token, TokenKind,
+	Links, NameSyntax, Token, TokenKind,
 	closers::{CloserIndexes, Source, can_close, can_open, escaped_at, punctuation, whitespace},
 	is_js_whitespace as js_space, js_regex,
 	text::{
@@ -36,10 +36,10 @@ pub(super) fn clean_url(value: &str) -> String {
 }
 
 struct Root<'a> {
-	source:     Source<'a>,
-	closers:    CloserIndexes,
-	stops:      RootTextStops,
-	delimiters: Option<Vec<Range<usize>>>,
+	source:  Source<'a>,
+	closers: CloserIndexes,
+	stops:   RootTextStops,
+	syntax:  Option<NameSyntax>,
 }
 
 struct Nested {
@@ -336,26 +336,26 @@ pub(crate) fn lex(source: &str, links: &Links) -> Vec<Token> {
 
 /// Collect only syntax removed from literal-name context, using the very same
 /// lexer decisions as rendering. Coordinates remain in this input's UTF-8.
-pub(super) fn lex_with_delimiters(source: &str, links: &Links) -> (Vec<Token>, Vec<Range<usize>>) {
+pub(super) fn lex_with_delimiters(source: &str, links: &Links) -> (Vec<Token>, NameSyntax) {
 	lex_impl(source, links, true)
 }
 
-fn lex_impl(source: &str, links: &Links, collect: bool) -> (Vec<Token>, Vec<Range<usize>>) {
+fn lex_impl(source: &str, links: &Links, collect: bool) -> (Vec<Token>, NameSyntax) {
 	let mut root = Root {
-		source:     Source::new(source),
-		closers:    CloserIndexes::default(),
-		stops:      RootTextStops::default(),
-		delimiters: collect.then(Vec::new),
+		source:  Source::new(source),
+		closers: CloserIndexes::default(),
+		stops:   RootTextStops::default(),
+		syntax:  collect.then(NameSyntax::default),
 	};
 	let end = root.source.len();
 	let tokens = lex_range(&mut root, 0, end, links);
-	let mut delimiters = root.delimiters.unwrap_or_default();
-	delimiters.sort_unstable_by_key(|range| range.start);
-	(tokens, delimiters)
+	let mut syntax = root.syntax.unwrap_or_default();
+	syntax.delimiters.sort_unstable_by_key(|range| range.start);
+	(tokens, syntax)
 }
 
 fn delimiter(root: &mut Root<'_>, start: usize, end: usize) {
-	if let Some(delimiters) = &mut root.delimiters {
+	if let Some(NameSyntax { delimiters, .. }) = &mut root.syntax {
 		delimiters.push(root.source.slice(0, start).len()..root.source.slice(0, end).len());
 	}
 }
@@ -435,6 +435,18 @@ fn lex_range(root: &mut Root<'_>, start: usize, end: usize, links: &Links) -> Ve
 			if matches!(nested.token.kind, TokenKind::Em | TokenKind::Strong) {
 				delimiter(root, pos, nested.start);
 				delimiter(root, nested.end, nested.raw_end);
+			} else if nested.token.kind == TokenKind::Link {
+				// 标签与相邻正文连续；目标仍单独按原字节匹配，
+				// 不解析其中的代码或强调。
+				if let Some(syntax) = &mut root.syntax {
+					syntax
+						.link_openings
+						.push(root.source.slice(0, pos).len()..root.source.slice(0, nested.start).len());
+					syntax.link_destinations.push(
+						root.source.slice(0, nested.end).len()
+							..root.source.slice(0, nested.raw_end).len(),
+					);
+				}
 			}
 			// Rule frames have returned before entering the nested lex.
 			nested.token.children = Some(lex_range(root, nested.start, nested.end, links));
@@ -455,16 +467,22 @@ fn lex_range(root: &mut Root<'_>, start: usize, end: usize, links: &Links) -> Ve
 			&& !whitespace(src[pos + close - 1])
 		{
 			let text = root.source.slice(pos + 2, pos + close);
-			let (children, delimiters) = lex_impl(text, links, root.delimiters.is_some());
+			let (children, syntax) = lex_impl(text, links, root.syntax.is_some());
 			let mut deletion = token(TokenKind::Del, root.source.slice(pos, pos + close + 2), text);
 			deletion.children = Some(children);
 			let offset = root.source.slice(0, pos + 2).len();
-			if let Some(output) = &mut root.delimiters {
-				output.extend(
-					delimiters
-						.into_iter()
-						.map(|range| range.start + offset..range.end + offset),
-				);
+			if let Some(output) = &mut root.syntax {
+				for (output, ranges) in [
+					(&mut output.delimiters, syntax.delimiters),
+					(&mut output.link_openings, syntax.link_openings),
+					(&mut output.link_destinations, syntax.link_destinations),
+				] {
+					output.extend(
+						ranges
+							.into_iter()
+							.map(|range| range.start + offset..range.end + offset),
+					);
+				}
 			}
 			delimiter(root, pos, pos + 2);
 			delimiter(root, pos + close, pos + close + 2);

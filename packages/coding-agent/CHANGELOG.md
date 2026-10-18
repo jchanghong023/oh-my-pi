@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Retain the original session's ownership until a history switch commits or rolls back.
+- Refresh Repo evidence after writable restricted SDK sessions while leaving read-only child sessions untouched.
+- Ignore late Team child events after session changes and accept conditional adoption prose using Chinese consequence connectors.
+- Keep legal LSP directory operations working when optional index snapshots cannot enumerate descendants, marking coverage unchecked instead.
 - Resolve saved-session operations for sessionless RPC directory processes and protect idle hosted sessions from external renames or deletion.
 - Keep timed-out automatic answers identified as automatic when revisiting questions without replacing their answers.
 - Honor process-level offline mode when selecting Eval's fixed Linux Python interpreter, even when the shell environment filters out the mode flag.

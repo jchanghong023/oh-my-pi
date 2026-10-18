@@ -13,9 +13,10 @@ import { createTeamSubagentRunner, modelMatches, TEAM_PROPOSAL_SCHEMA } from "@o
 import { logger, TempDir } from "@oh-my-pi/pi-utils";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import { buildRunnerDeps } from "@oh-my-pi/pi-coding-agent/team/controller";
-import { TASK_SUBAGENT_LIFECYCLE_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "@oh-my-pi/pi-coding-agent/task/types";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 
 describe("team modelMatches", () => {
@@ -234,61 +235,130 @@ describe("team runner abort diagnostics", () => {
 });
 
 describe("team root observability", () => {
-	it("delivers real executor terminal lifecycle frames to the root and local subscribers", async () => {
-		const tempDir = TempDir.createSync("@pi-team-root-events-");
-		const eventBus = new EventBus();
-		const subagentEventBus = new EventBus();
-		const rootFrames: unknown[] = [];
-		const localFrames: unknown[] = [];
-		const unsubscribeRoot = subagentEventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => {
-			rootFrames.push(frame);
-		});
-		const unsubscribeLocal = eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => {
-			localFrames.push(frame);
-		});
-		let authStorage: AuthStorage | undefined;
-		// Stop at session creation, before any model/provider call. Everything
-		// publishing lifecycle/progress remains the real executor, not an echo stub.
-		const createSession = spyOn(sdkModule, "createAgentSession").mockRejectedValue(
-			new Error("isolated child setup failure"),
-		);
-		try {
-			authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-			const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
-			const settings = Settings.isolated();
-			const session = {
-				modelRegistry,
-				eventBus,
-				subagentEventBus,
-				sessionManager: {
-					getAdditionalDirectories: () => [],
-					getArtifactsDir: () => null,
-				},
-				skills: [],
-				promptTemplates: [],
-			} as unknown as AgentSession;
-			const runner = createTeamSubagentRunner(buildRunnerDeps(session, settings, tempDir.path()));
-			const outcome = await runner(
-				{
-					role: "proposer",
-					modelPattern: "anthropic/claude-sonnet-4-5",
-					label: "team-proposal-A",
-					task: "inspect locally without contacting a provider",
-					schema: TEAM_PROPOSAL_SCHEMA,
-				},
-				new AbortController().signal,
-			);
-			expect(outcome.ok).toBe(false);
-			expect(createSession).toHaveBeenCalledTimes(1);
-			expect(rootFrames).toHaveLength(1);
-			expect(rootFrames[0]).toMatchObject({ agent: "team-proposer", status: "failed" });
-			expect(localFrames).toEqual(rootFrames);
-		} finally {
-			createSession.mockRestore();
-			unsubscribeRoot();
-			unsubscribeLocal();
-			authStorage?.close();
-			tempDir.removeSync();
-		}
-	});
+	it.each(["failed", "cancelled", "switched"] as const)(
+		"delivers current-session executor frames without reviving old children after %s",
+		async termination => {
+			const tempDir = TempDir.createSync("@pi-team-root-events-");
+			const eventBus = new EventBus();
+			const subagentEventBus = new EventBus();
+			const observers = new SessionObserverRegistry();
+			observers.subscribeToEventBus(eventBus, subagentEventBus);
+			observers.setMainSession("A.jsonl");
+			let sessionId = "A";
+			const controller = new AbortController();
+			const initializationStarted = Promise.withResolvers<void>();
+			const releaseInitialization = Promise.withResolvers<void>();
+			const rootProgress: unknown[] = [];
+			const localProgress: unknown[] = [];
+			const unsubscribeRootProgress = subagentEventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, frame => {
+				rootProgress.push(frame);
+			});
+			const unsubscribeLocalProgress = eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, frame => {
+				localProgress.push(frame);
+			});
+			const rootFrames: unknown[] = [];
+			const localFrames: unknown[] = [];
+			const unsubscribeRoot = subagentEventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => {
+				rootFrames.push(frame);
+			});
+			const unsubscribeLocal = eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, frame => {
+				localFrames.push(frame);
+			});
+			let authStorage: AuthStorage | undefined;
+			// Stop at session creation, before any model/provider call. Everything
+			// publishing lifecycle/progress remains the real executor, not an echo stub.
+			const createSession = spyOn(sdkModule, "createAgentSession").mockImplementation(async () => {
+				initializationStarted.resolve();
+				await releaseInitialization.promise;
+				throw new Error("isolated child setup failure");
+			});
+			try {
+				authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+				const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+				const settings = Settings.isolated();
+				const session = {
+					get sessionId() {
+						return sessionId;
+					},
+					modelRegistry,
+					eventBus,
+					subagentEventBus,
+					sessionManager: {
+						getAdditionalDirectories: () => [],
+						getArtifactsDir: () => null,
+					},
+					skills: [],
+					promptTemplates: [],
+				} as unknown as AgentSession;
+				const runner = createTeamSubagentRunner(buildRunnerDeps(session, settings, tempDir.path()));
+				const pending = runner(
+					{
+						role: "proposer",
+						modelPattern: "anthropic/claude-sonnet-4-5",
+						label: "team-proposal-A",
+						task: "inspect locally without contacting a provider",
+						schema: TEAM_PROPOSAL_SCHEMA,
+					},
+					controller.signal,
+				);
+				await initializationStarted.promise;
+				if (termination !== "failed") controller.abort();
+				if (termination === "switched") {
+					sessionId = "B";
+					observers.resetSessions();
+					observers.setMainSession("B.jsonl");
+				}
+				const framesAtReset = rootFrames.length;
+				const progressAtReset = rootProgress.length;
+				releaseInitialization.resolve();
+				const outcome = await pending;
+				expect(outcome.ok).toBe(false);
+				expect(createSession).toHaveBeenCalledTimes(1);
+				if (termination === "switched") {
+					expect(rootFrames).toHaveLength(framesAtReset);
+					expect(rootProgress).toHaveLength(progressAtReset);
+					expect(observers.getSessions()).toEqual([
+						expect.objectContaining({ id: "main", sessionFile: "B.jsonl" }),
+					]);
+					const currentRunner = createTeamSubagentRunner(buildRunnerDeps(session, settings, tempDir.path()));
+					await currentRunner(
+						{
+							role: "proposer",
+							modelPattern: "anthropic/claude-sonnet-4-5",
+							label: "team-proposal-B",
+							task: "inspect the current session without contacting a provider",
+							schema: TEAM_PROPOSAL_SCHEMA,
+						},
+						new AbortController().signal,
+					);
+					expect(createSession).toHaveBeenCalledTimes(2);
+					expect(rootFrames).toHaveLength(framesAtReset + 1);
+					expect(rootFrames.at(-1)).toMatchObject({ agent: "team-proposer", status: "failed" });
+					expect(observers.getSessions()).toHaveLength(2);
+					expect(observers.getSessions()[1]).toMatchObject({ status: "failed" });
+				} else {
+					const status = termination === "failed" ? "failed" : "aborted";
+					expect(rootFrames).toHaveLength(1);
+					expect(rootFrames[0]).toMatchObject({ agent: "team-proposer", status });
+					expect(observers.getSessions()[1]).toMatchObject({ status });
+					if (termination === "cancelled") {
+						expect(rootProgress.length).toBeGreaterThan(0);
+						expect(rootProgress.at(-1)).toMatchObject({ progress: { status: "aborted" } });
+					}
+				}
+				expect(localFrames).toEqual(rootFrames);
+				expect(localProgress).toEqual(rootProgress);
+			} finally {
+				releaseInitialization.resolve();
+				observers.dispose();
+				createSession.mockRestore();
+				unsubscribeRoot();
+				unsubscribeLocal();
+				unsubscribeRootProgress();
+				unsubscribeLocalProgress();
+				authStorage?.close();
+				tempDir.removeSync();
+			}
+		},
+	);
 });

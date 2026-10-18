@@ -355,6 +355,176 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 });
 
 describe("repository lifecycle coverage across session and background execution boundaries", () => {
+	it.each(["write", "bash", "eval"] as const)(
+		"maintains repository lifecycle for restricted %s sessions",
+		async kind => {
+			const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-restricted-writable-"));
+			temporary.push(temp);
+			const cwd = path.join(temp, "project");
+			const agentDir = path.join(temp, "agent");
+			await fs.mkdir(cwd);
+			await fs.mkdir(agentDir);
+			const file = path.join(cwd, "engine.py");
+			// Repo 会拆词补充召回，替换前后的查询词元必须互不重叠，才能用零命中断言旧内容已移除。
+			const updated = "def current_encoder(): return 'ACTIVE_PAYLOAD'\n";
+			await fs.writeFile(file, "def legacy_decoder(): return 'RETIRED_CIPHER'\n");
+			const service = new RepoService({ cwd, agentDir });
+			const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
+			try {
+				await service.build();
+				const mutation =
+					kind === "write"
+						? { name: kind, arguments: { path: file, content: updated } }
+						: kind === "bash"
+							? {
+									name: kind,
+									arguments: {
+										command: `printf '%s\\n' "def current_encoder(): return 'ACTIVE_PAYLOAD'" > engine.py`,
+									},
+								}
+							: {
+									name: kind,
+									arguments: {
+										language: "js",
+										code: `await Bun.write("engine.py", ${JSON.stringify(updated)})`,
+									},
+								};
+				const actions = [
+					mutation,
+					{ name: "repo", arguments: { action: "search", query: "ACTIVE_PAYLOAD" } },
+					{ name: "repo", arguments: { action: "search", query: "RETIRED_CIPHER" } },
+				];
+				let requests = 0;
+				registerCustomApi("repo-restricted-local", () => {
+					const turn = Math.floor(requests / 2);
+					const toolTurn = requests++ % 2 === 0;
+					const stream = new AssistantMessageEventStream();
+					queueMicrotask(() => {
+						const message = createAssistantMessage("done");
+						if (toolTurn) {
+							const action = actions[turn];
+							if (!action) throw new Error(`Unexpected restricted model request ${requests}`);
+							const toolCall = { type: "toolCall" as const, id: `restricted-repo-${turn}`, ...action };
+							message.content = [toolCall];
+							message.stopReason = "toolUse";
+							stream.push({ type: "toolcall_start", contentIndex: 0, partial: message });
+							stream.push({
+								type: "toolcall_delta",
+								contentIndex: 0,
+								delta: JSON.stringify(action.arguments),
+								partial: message,
+							});
+							stream.push({
+								type: "toolcall_end",
+								contentIndex: 0,
+								toolCall: toolCall as never,
+								partial: message,
+							});
+							stream.push({ type: "done", reason: "toolUse", message });
+						} else stream.push({ type: "done", reason: "stop", message });
+					});
+					return stream;
+				});
+				const model = buildModel({
+					id: "repo-restricted",
+					name: "Local Restricted Lifecycle",
+					api: "repo-restricted-local",
+					provider: "ollama",
+					baseUrl: "http://127.0.0.1:1",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 4096,
+					maxTokens: 1024,
+				} as ModelSpec<Api>) as Model<Api>;
+				const settings = await Settings.loadIsolated({
+					cwd,
+					agentDir,
+					inMemory: true,
+					overrides: {
+						"compaction.enabled": false,
+						"bash.autoBackground.enabled": false,
+						"eval.autoBackground.enabled": false,
+					},
+				});
+				const { session } = await createAgentSession({
+					cwd,
+					agentDir,
+					settings,
+					authStorage: auth,
+					modelRegistry: new ModelRegistry(auth, path.join(agentDir, "models.yml")),
+					sessionManager: SessionManager.inMemory(cwd),
+					model,
+					disableExtensionDiscovery: true,
+					extensions: [],
+					skills: [],
+					contextFiles: [],
+					promptTemplates: [],
+					slashCommands: [],
+					enableMCP: false,
+					enableLsp: false,
+					skipPythonPreflight: true,
+					restrictToolNames: true,
+					toolNames: ["read", kind, "repo"],
+				});
+				try {
+					await service.reconcile();
+					expect((await service.status()).unchecked).toBe(false);
+					await session.sendUserMessage("replace the legacy decoder with the current encoder");
+					const mutationResult = session.agent.state.messages
+						.filter(message => message.role === "toolResult")
+						.at(-1);
+					expect(mutationResult?.isError, JSON.stringify(mutationResult)).toBe(false);
+					expect(await fs.readFile(file, "utf8")).toBe(updated);
+					if (kind === "write") {
+						expect((await service.status()).pendingPaths).toEqual(["engine.py"]);
+					} else {
+						expect(await service.status()).toMatchObject({
+							unchecked: true,
+							needsReconcile: true,
+							uncertainReasons: [
+								`${kind} execution may have modified repository files; reconcile to verify coverage`,
+							],
+						});
+						await service.reconcile();
+					}
+					await session.sendUserMessage("find the active payload using repo");
+					const newResult = session.agent.state.messages.filter(message => message.role === "toolResult").at(-1);
+					expect(newResult?.isError, JSON.stringify(newResult)).toBe(false);
+					expect(newResult?.content).toEqual(
+						expect.arrayContaining([
+							expect.objectContaining({
+								type: "text",
+								text: expect.stringContaining(
+									"[1] engine.py:1-1 [source] def current_encoder(): return 'ACTIVE_PAYLOAD'",
+								),
+							}),
+						]),
+					);
+					await session.sendUserMessage("look for the retired cipher using repo");
+					const oldResult = session.agent.state.messages.filter(message => message.role === "toolResult").at(-1);
+					expect(oldResult?.isError, JSON.stringify(oldResult)).toBe(false);
+					expect(oldResult?.content).toEqual(
+						expect.arrayContaining([
+							expect.objectContaining({
+								type: "text",
+								text: expect.stringContaining('Text for "RETIRED_CIPHER": 0 hit(s) on this page'),
+							}),
+						]),
+					);
+					expect((await service.search("RETIRED_CIPHER")).hits).toEqual([]);
+					expect((await service.symbol("legacy_decoder")).hits).toEqual([]);
+					expect((await service.status()).pendingCount).toBe(0);
+				} finally {
+					await session.dispose();
+				}
+			} finally {
+				service.close();
+				auth.close();
+			}
+		},
+	);
+
 	it("keeps a reconciled index untouched in restricted SDK sessions while retaining read queries", async () => {
 		const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-restricted-session-"));
 		temporary.push(temp);
@@ -414,11 +584,14 @@ describe("repository lifecycle coverage across session and background execution 
 				...options,
 				sessionManager: SessionManager.inMemory(cwd),
 				restrictToolNames: true,
+				requireYieldTool: true,
 			});
 			try {
 				expect(service.storage.state()).toEqual(before);
 				expect(service.storage.pending()).toEqual(pending);
 				expect(service.storage.uncertainty()).toEqual(uncertainty);
+				expect(restricted.getEnabledToolNames()).toContain("yield");
+				expect(restricted.getToolByName("yield")?.approval).toBe("read");
 				const repo = restricted.getToolByName("repo");
 				const wiki = restricted.getToolByName("wiki");
 				if (!repo || !wiki) throw new Error("Restricted session lost its read-only query tools");
@@ -431,7 +604,7 @@ describe("repository lifecycle coverage across session and background execution 
 					]),
 				);
 				expect(await restricted.newSession()).toBe(true);
-				// A restricted session must not subscribe to write-oriented index hints either.
+				// A restricted read-only session must not subscribe to write-oriented index hints either.
 				invalidateFsScanAfterWrite(file);
 				expect(service.storage.state()).toEqual(before);
 				expect(service.storage.pending()).toEqual(pending);

@@ -155,33 +155,63 @@ describe("compact transcript activity", () => {
 		}
 	});
 
-	it("shows the failing shell exit code without exposing stdout in the compact failure summary", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new ToolExecutionComponent(
-			"bash",
-			{ command: "echo PRIVATE_STDOUT; exit 7", i: "检查退出状态" },
+	it.each([
+		["exit code", { exitCode: 7 }, "PRIVATE_BODY\n\n[Process exited with code 7]", "Command exited with code 7"],
+		[
+			"missing cwd",
 			{},
+			"Working directory does not exist: /PRIVATE_BODY/missing\nPRIVATE_BODY",
+			"Working directory does not exist",
+		],
+		[
+			"non-directory cwd",
+			{},
+			"Working directory is not a directory: /PRIVATE_BODY/file\nPRIVATE_BODY",
+			"Working directory is not a directory",
+		],
+		["permission", {}, "EACCES: permission denied, stat '/PRIVATE_BODY'\nPRIVATE_BODY", "Permission denied"],
+		[
+			"permission without details",
 			undefined,
-			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
-		);
-		components.push(component);
-		component.updateResult({
-			content: [{ type: "text", text: "PRIVATE_STDOUT\n\n[Process exited with code 7]" }],
-			details: { exitCode: 7 },
-			isError: true,
-		});
-		component.setExpanded(true);
-		for (const view of [
-			Bun.stripANSI(component.render(100).join("\n")),
-			JSON.stringify(component.describe(toolCx)),
-			JSON.stringify(component.describe()),
-		]) {
-			expect(view).toContain("7");
-			expect(view).toContain("检查退出状态");
-			expect(view).not.toContain("PRIVATE_STDOUT");
-		}
-		expect(nodes(component.describe(toolCx)).find(node => node.k === "tool")?.p?.status).toBe("error");
-	});
+			"Error: EPERM: operation not permitted, stat '/PRIVATE_BODY'",
+			"Permission denied",
+		],
+		["timeout", { timedOut: true }, "PRIVATE_BODY", "Command timed out"],
+		["cancellation", { async: { state: "cancelled" } }, "PRIVATE_BODY", "Command cancelled"],
+		["unclassified output", {}, "PRIVATE_BODY\nPermission denied", "Command failed"],
+	] as const)(
+		"keeps a safe compact shell failure reason for %s without exposing stdout",
+		(_case, details, output, reason) => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const component = new ToolExecutionComponent(
+				"bash",
+				{ command: "echo PRIVATE_SCRIPT; exit 7", i: "检查退出状态" },
+				{},
+				undefined,
+				{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+			);
+			components.push(component);
+			component.updateResult({
+				content: [{ type: "text", text: output }],
+				details,
+				isError: true,
+			});
+			component.setExpanded(true);
+			for (const view of [
+				Bun.stripANSI(component.render(100).join("\n")),
+				JSON.stringify(component.describe(toolCx)),
+				JSON.stringify(component.describe()),
+			]) {
+				expect(view).toContain(reason);
+				expect(view).toContain("检查退出状态");
+				expect(view).not.toContain("PRIVATE_");
+			}
+			expect(component.render(100)).toHaveLength(1);
+			expect(component.render(24)).toHaveLength(1);
+			expect(component.render(24).join("\n")).not.toContain("PRIVATE_");
+			expect(nodes(component.describe(toolCx)).find(node => node.k === "tool")?.p?.status).toBe("error");
+		},
+	);
 
 	it("retains internal-URL read conflict warnings outside the folded-success budget", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
@@ -714,76 +744,119 @@ describe("compact transcript activity", () => {
 		expect(shapes).toBe(restoredShapes);
 	});
 
-	it("bypasses custom output renderers through pending, progress, failure and expansion, then restores detail", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		let renders = 0;
-		const tool = {
-			name: "custom",
-			label: "Custom\noperation",
-			renderCall() {
-				renders++;
-				return new Text("PRIVATE_ARGUMENTS", 0, 0);
-			},
-			renderResult() {
-				renders++;
-				return new Text("PRIVATE_OUTPUT", 0, 0);
-			},
-			describeCall() {
-				renders++;
-				return { body: [md("PRIVATE_ARGUMENTS")] };
-			},
-			describeResult() {
-				renders++;
-				return { body: [md("PRIVATE_OUTPUT")] };
-			},
-		};
-		const component = new ToolExecutionComponent(
-			"custom",
-			{ path: "target.ts\ncontinued", payload: "PRIVATE_ARGUMENTS" },
-			{},
-			tool as unknown as AgentTool,
-			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
-		);
-		components.push(component);
-		expect(component.render(80)).toHaveLength(1);
-		expect(Bun.stripANSI(component.render(80)[0])).toContain("pending");
-		component.setExecutionStarted();
-		component.updateResult({ content: [{ type: "text", text: "PRIVATE_PROGRESS" }] }, true);
-		expect(Bun.stripANSI(component.render(80)[0])).toContain("running");
-		component.updateResult({
-			content: [{ type: "text", text: "Permission denied\nPRIVATE_OUTPUT" }, image],
-			isError: true,
-		});
-		component.setExpanded(true);
-		component.handleNativeEvent({ type: "toggle", key: "", collapsed: false });
-		for (const width of [12, 80]) {
-			const rows = component.render(width);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]).not.toContain("\n");
-			expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
-			expect(rows[0]).not.toContain("PRIVATE_");
-		}
-		expect(Bun.stripANSI(component.render(80)[0])).toContain("Permission denied");
-		for (const cx of [toolCx, undefined]) {
-			const described = component.describe(cx);
-			expect(JSON.stringify(described)).not.toContain("PRIVATE_");
-			expect(nodes(described).some(node => node.k === "md" || node.k === "image")).toBe(false);
-			if (described.k === "tool") {
-				expect(described.p?.status).toBe("error");
-				expect(described.p?.collapsible).toBe(false);
-				expect(described.c ?? []).toHaveLength(0);
-				expect(described.p?.took).toBeNumber();
+	it.each([
+		["custom", "target.ts\ncontinued"],
+		["write", "xd://eval"],
+		["write", "[xd://eval#ABCD]"],
+		["write", "proc://bg_1"],
+		["write", "[proc://bg_1#ABCD]"],
+		["write", "cfg://settings"],
+		["write", "[cfg://settings#ABCD]"],
+		["write", "agent://helper"],
+		["write", "[agent://helper#ABCD]"],
+	])(
+		"%s %s bypasses custom output renderers through pending, progress, failure and expansion, then restores detail",
+		(name, path) => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			let renders = 0;
+			const tool = {
+				name,
+				label: "Custom\noperation",
+				renderCall() {
+					renders++;
+					return new Text("PRIVATE_ARGUMENTS", 0, 0);
+				},
+				renderResult() {
+					renders++;
+					return new Text("PRIVATE_OUTPUT", 0, 0);
+				},
+				describeCall() {
+					renders++;
+					return { body: [md("PRIVATE_ARGUMENTS")] };
+				},
+				describeResult() {
+					renders++;
+					return { body: [md("PRIVATE_OUTPUT")] };
+				},
+			};
+			const component = new ToolExecutionComponent(
+				name,
+				{ path, content: "PRIVATE_ARGUMENTS", payload: "PRIVATE_ARGUMENTS" },
+				{},
+				tool as unknown as AgentTool,
+				{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+			);
+			components.push(component);
+			expect(component.render(80)).toHaveLength(1);
+			expect(Bun.stripANSI(component.render(80)[0])).toContain("pending");
+			component.setExecutionStarted();
+			component.updateResult({ content: [{ type: "text", text: "PRIVATE_PROGRESS" }] }, true);
+			expect(Bun.stripANSI(component.render(80)[0])).toContain("running");
+			component.updateResult({
+				content: [{ type: "text", text: "Permission denied\nPRIVATE_OUTPUT" }, image],
+				isError: true,
+			});
+			component.setExpanded(true);
+			component.handleNativeEvent({ type: "toggle", key: "", collapsed: false });
+			for (const width of [12, 80]) {
+				const rows = component.render(width);
+				expect(rows).toHaveLength(1);
+				expect(rows[0]).not.toContain("\n");
+				expect(Bun.stringWidth(rows[0])).toBeLessThanOrEqual(width);
+				expect(rows[0]).not.toContain("PRIVATE_");
 			}
+			expect(Bun.stripANSI(component.render(80)[0])).toContain("Permission denied");
+			for (const cx of [toolCx, undefined]) {
+				const described = component.describe(cx);
+				expect(JSON.stringify(described)).not.toContain("PRIVATE_");
+				expect(nodes(described).some(node => node.k === "md" || node.k === "image")).toBe(false);
+				if (described.k === "tool") {
+					expect(described.p?.status).toBe("error");
+					expect(described.p?.collapsible).toBe(false);
+					expect(described.c ?? []).toHaveLength(0);
+					expect(described.p?.took).toBeNumber();
+				}
+			}
+			expect(renders).toBe(0);
+			component.setToolActivityVisible(false);
+			expect(component.render(80)).toEqual([]);
+			expect(component.describe(toolCx).p?.hidden).toBe(true);
+			component.setToolActivityVisible(true);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			component.invalidate();
+			expect(component.render(80).join("\n")).toContain("PRIVATE_OUTPUT");
+			expect(JSON.stringify(component.describe(toolCx))).toContain("PRIVATE_OUTPUT");
+		},
+	);
+
+	it.each([
+		"preview.ts",
+		"[preview.ts#ABCD]",
+		"local://preview.ts",
+		"[local://preview.ts#ABCD]",
+		"ssh://host/project/preview.ts",
+	])("preserves real file write previews and edit diffs in compact mode for %s", path => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		for (const name of ["write", "edit"]) {
+			const component = new ToolExecutionComponent(
+				name,
+				{ path, content: "FILE_PREVIEW_LINE\nFILE_PREVIEW_TAIL" },
+				{},
+				undefined,
+				{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+			);
+			components.push(component);
+			component.updateResult({
+				content: [{ type: "text", text: "File updated" }],
+				details: name === "edit" ? { diff: "-1: OLD_FILE_LINE\n+1: FILE_DIFF_LINE" } : {},
+			});
+			component.setExpanded(true);
+			expect(component.isCompactToolActivity()).toBe(false);
+			const expected = name === "write" ? "FILE_PREVIEW_LINE" : "FILE_DIFF_LINE";
+			expect(Bun.stripANSI(component.render(100).join("\n"))).toContain(expected);
+			expect(component.render(100).length).toBeGreaterThan(1);
+			expect(JSON.stringify(component.describe(toolCx))).toContain(expected);
 		}
-		expect(renders).toBe(0);
-		component.setToolActivityVisible(false);
-		expect(component.render(80)).toEqual([]);
-		expect(component.describe(toolCx).p?.hidden).toBe(true);
-		component.setToolActivityVisible(true);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		component.invalidate();
-		expect(component.render(80).join("\n")).toContain("PRIVATE_OUTPUT");
-		expect(JSON.stringify(component.describe(toolCx))).toContain("PRIVATE_OUTPUT");
 	});
 
 	it("keeps LSP device writes on one line while streaming and settled, restoring references in detailed mode", () => {
