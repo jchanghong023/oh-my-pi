@@ -76,7 +76,11 @@ export async function writeArtifact(path: string, content: string): Promise<numb
 		}
 		await replaceFileAtomically(tempPath, path);
 	} catch (error) {
-		await fs.rm(tempPath, { force: true });
+		try {
+			await fs.rm(tempPath, { force: true });
+		} catch {
+			// Best-effort cleanup; preserve the original write or publication error.
+		}
 		throw error;
 	}
 	return expectedBytes;

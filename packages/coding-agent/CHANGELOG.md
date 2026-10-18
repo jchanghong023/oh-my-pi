@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Preserve the original artifact save error when temporary-file cleanup also fails.
 - Preserve complete Team artifacts on Windows when atomic staging paths exceed MAX_PATH, and give shared daemon brokers their own native cache instead of retaining a creator session's DLL.
 - Clarify compact display's retained file previews and diffs, and show its existing detailed-tool command without changing composer help.
 - Compact mode shows each Todo failure once with its cause and stale-progress hint, preserving independent warnings, detailed history, and existing Todo states.

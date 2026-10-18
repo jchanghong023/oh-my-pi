@@ -83,6 +83,19 @@ describe("ArtifactManager write integrity", () => {
 		expect(await fs.promises.readdir(dir)).toEqual(["Worker.md"]);
 	});
 
+	it("preserves the write failure when staging cleanup also fails", async () => {
+		const dir = freshDir();
+		await fs.promises.mkdir(dir, { recursive: true });
+		const destination = path.join(dir, "Worker.md");
+		await writeArtifact(destination, "original valid report");
+
+		injectShortWrite(2);
+		vi.spyOn(fsPromises, "rm").mockRejectedValue(Object.assign(new Error("cleanup denied"), { code: "EPERM" }));
+
+		await expect(writeArtifact(destination, "replacement report")).rejects.toThrow("Artifact write incomplete");
+		expect(await Bun.file(destination).text()).toBe("original valid report");
+	});
+
 	it("replaces an existing artifact when Windows rejects rename-over-target", async () => {
 		const dir = freshDir();
 		await fs.promises.mkdir(dir, { recursive: true });
