@@ -397,7 +397,7 @@ modelRoles:
   web: web/duckduckgo
   speech: local/kokoro
   dictation: local/parakeet-tdt-0.6b-v3
-  judge: typesafe/jev-latest
+  judge: typesafe/jev-1.14.0
 
 retry:
   fallbackChains:
