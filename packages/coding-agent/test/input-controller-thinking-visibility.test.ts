@@ -150,7 +150,7 @@ describe("InputController thinking visibility", () => {
 		},
 	);
 
-	it("applies live prose settings to the raw snapshot before taking five preview rows", async () => {
+	it("applies live prose settings before taking the latest three preview rows without changing history", async () => {
 		const history = assistant([
 			{ type: "thinking", thinking: "historical-prose\n```ts\nhistorical-code\n```" },
 			{ type: "text", text: "historical answer remains unchanged" },
@@ -168,14 +168,14 @@ describe("InputController thinking visibility", () => {
 				.filter(line => line.startsWith("preview-") || line === "```");
 		stream(message, 0);
 
-		const filteredRows = [...prose.slice(-5, -1), `${prose[6]}...`];
+		const filteredRows = [...prose.slice(-3, -1), `${prose[6]}...`];
 		expect(previewRows()).toEqual(filteredRows);
 		expect(render()).not.toContain("preview-code-");
 		expect(render()).not.toContain("```");
 
 		cfgProseOnlyThinking.set(session.settings, false);
 		await Promise.resolve();
-		expect(previewRows()).toEqual([...code.slice(-4), "```"]);
+		expect(previewRows()).toEqual([...code.slice(-2), "```"]);
 		expect(render()).not.toContain("preview-prose-");
 
 		cfgProseOnlyThinking.set(session.settings, true);
