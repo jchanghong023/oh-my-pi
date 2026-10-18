@@ -6,7 +6,7 @@ import { ensureThemeSync, getThemeEpoch, theme } from "../theme";
 import type { Component } from "../tui";
 import { getWidthConfigEpoch, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
 
-const MAX_ROWS = 5;
+const MAX_ROWS = 3;
 /** Short terminals clamp the live tail so it cannot dominate the viewport. */
 const SHORT_TERMINAL_ROW_LIMIT = 20;
 const SHORT_TERMINAL_MAX_ROWS = 3;
@@ -208,11 +208,11 @@ export class ThinkingPreviewComponent implements Component {
 			this.#maxRows = maxRows;
 		}
 		if (this.#dirty) {
-			// Compact completed blank lines only; retain the final partial line's
+			// Drop completed blank lines; retain the final partial line's
 			// whitespace so later text keeps its original indentation.
 			const source = (this.#tail ?? replaceTabs(sanitizeText(sanitizeCarriageReturns(this.#text)))).replace(
 				/(^|\n)(?:[^\S\n]*\n)+/g,
-				"$1\n",
+				"$1",
 			);
 			const wrapped = wrapTail(source, contentWidth, this.#continuedLine, maxRows);
 			let boundary = Math.max(0, wrapped.length - MUTABLE_ROWS);

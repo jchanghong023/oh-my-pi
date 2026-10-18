@@ -12,7 +12,8 @@
 
 - Compact mode groups completed and failed background task/shell notifications by execution identity, shows failures as muted counts instead of individual red notices, and preserves cancellation, unknown-state and independent warnings without fragmenting tool folds.
 - Compact tool runs keep the latest two successful calls, fold older successes and ordinary failures into one muted count, and retain failure details in detailed history.
-- The live thinking tail shows only in the compact display mode, collapses to a single dim stub row between tool runs of the same turn, and clamps to three rows on terminals under 20 rows tall.
+- The live thinking tail shows only in the compact display mode, keeps the latest three body rows at every terminal height, and collapses to a single dim stub row between tool runs of the same turn.
+- The compact thinking tail omits all blank lines while preserving indentation and the original thinking content.
 - The compact thinking tail uses a bold accented heading, muted context and guides, a highlighted latest-line guide, and an aligned dim summary between tool runs.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.

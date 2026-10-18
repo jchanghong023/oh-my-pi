@@ -34,12 +34,10 @@ function expectedTail(source: string, width: number): string[] {
 	const compact: string[] = [];
 	for (const line of clean.split("\n")) {
 		if (/\S/.test(line)) compact.push(line);
-		else if (compact.length === 0 || compact[compact.length - 1] !== "") compact.push("");
 	}
-	while (compact[compact.length - 1] === "") compact.pop();
 	const rows = wrapTextWithAnsi(compact.join("\n"), width);
 	while (rows.length > 0 && !/\S/.test(rows[rows.length - 1]!)) rows.pop();
-	return rows.slice(-5).map(row => truncateToWidth(row, width, ""));
+	return rows.slice(-3).map(row => truncateToWidth(row, width, ""));
 }
 
 function context(cols: number): DescribeContext {
@@ -47,14 +45,12 @@ function context(cols: number): DescribeContext {
 }
 
 describe("ThinkingPreviewComponent", () => {
-	it("keeps the newest five physical body rows literal and clears them with their owner", () => {
+	it("keeps the newest three physical body rows literal and clears them with their owner", () => {
 		const preview = new ThinkingPreviewComponent();
 		const source = "retired first\nretired second\n**literal**\n`literal`\n# literal\nlatest one\nlatest two";
 		expect(preview.setText(source)).toBe(true);
 		const rows = preview.render(40);
 		expect(bodyRows(rows, 40).map(row => Bun.stripANSI(row))).toEqual([
-			"**literal**",
-			"`literal`",
 			"# literal",
 			"latest one",
 			"latest two",
@@ -82,19 +78,15 @@ describe("ThinkingPreviewComponent", () => {
 		source += "next";
 		preview.setText(source);
 		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual([
-			"second",
 			"third",
 			"latest",
-			"",
 			"    next",
 		]);
 		source += "\n\n \n\nlast\n\n";
 		preview.setText(source);
 		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual([
 			"latest",
-			"",
 			"    next",
-			"",
 			"last",
 		]);
 		expect(bodyRows(preview.render(9), 9).map(row => Bun.stripANSI(row))).toEqual(expectedTail(source, 9));
@@ -123,7 +115,6 @@ describe("ThinkingPreviewComponent", () => {
 				const after = [
 					theme.fg("dim", "first"),
 					theme.fg("dim", "latest"),
-					theme.fg("dim", ""),
 					theme.fg("text", "next"),
 				];
 				expect(
@@ -131,7 +122,7 @@ describe("ThinkingPreviewComponent", () => {
 						.render(80)
 						.slice(1)
 						.map((row, index) => row.endsWith(after[index]!)),
-				).toEqual([true, true, true, true]);
+				).toEqual([true, true, true]);
 			}
 		} finally {
 			setThemeInstance(original);
@@ -154,7 +145,7 @@ describe("ThinkingPreviewComponent", () => {
 					preview.setText(prefix);
 					const rows = preview.render(width);
 					expect(bodyRows(rows, width).map(row => Bun.stripANSI(row))).toEqual(expectedTail(prefix, width));
-					expect(bodyRows(rows, width).length).toBeLessThanOrEqual(5);
+					expect(bodyRows(rows, width).length).toBeLessThanOrEqual(3);
 					for (const row of rows) expect(visibleWidth(row)).toBeLessThanOrEqual(width);
 				}
 			}
@@ -186,7 +177,7 @@ describe("ThinkingPreviewComponent", () => {
 			if (described.k !== "rows") throw new Error("preview must describe physical rows");
 			const lines = described.p?.lines ?? [];
 			expect(bodyRows(lines, 1).map(row => Bun.stripANSI(row))).toEqual(expectedTail(source, 1));
-			expect(bodyRows(lines, 1).length).toBeLessThanOrEqual(5);
+			expect(bodyRows(lines, 1).length).toBeLessThanOrEqual(3);
 		}
 	});
 
@@ -304,7 +295,7 @@ describe("ThinkingPreviewComponent", () => {
 			expect(described.p?.cols).toBe(cols);
 			const lines = described.p?.lines ?? [];
 			expect(bodyRows(lines, cols).map(row => Bun.stripANSI(row))).toEqual(expectedTail(source, cols));
-			expect(bodyRows(lines, cols).length).toBeLessThanOrEqual(5);
+			expect(bodyRows(lines, cols).length).toBeLessThanOrEqual(3);
 			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(cols);
 			expect(preview.describe(cx)).toBe(described);
 		}
@@ -407,15 +398,13 @@ describe("ThinkingPreviewComponent", () => {
 		expect(Bun.stripANSI(preview.render(5)[0]!)).toBe("  … e\u0301");
 	});
 
-	it("clamps the live tail to three rows on short terminals and restores five when it grows", () => {
+	it("keeps the live tail at three rows across terminal height changes", () => {
 		const preview = new ThinkingPreviewComponent();
 		let height = 40;
 		preview.setHeightSource(() => height);
 		const source = "one\ntwo\nthree\nfour\nfive\nsix\nseven";
 		preview.setText(source);
 		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual([
-			"three",
-			"four",
 			"five",
 			"six",
 			"seven",
@@ -427,8 +416,6 @@ describe("ThinkingPreviewComponent", () => {
 		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual(["six", "seven", "eight"]);
 		height = 20;
 		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual([
-			"four",
-			"five",
 			"six",
 			"seven",
 			"eight",
