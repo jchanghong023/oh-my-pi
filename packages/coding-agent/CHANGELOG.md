@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Resolve saved-session operations for sessionless RPC directory processes and protect idle hosted sessions from external renames or deletion.
 - Apply offline company-model initialization and cache-only catalog discovery to compression, commit generation and other standalone model consumers.
 - Start print-mode periodic backups while work is running, preserve complete rotated-log records, and flush backup-worker logs before collecting the snapshot.
 - Exclude implicit company role defaults from model-preset conflict warnings.

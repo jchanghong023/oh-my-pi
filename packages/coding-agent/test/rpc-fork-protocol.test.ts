@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDbPath, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
-import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import { parseTitleSlotFromContent, serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 
 // Fork-surface E2E against the real public entry (`omp --mode rpc-ui`, one
@@ -21,7 +22,13 @@ interface ServerControls {
 }
 
 async function withForkRpcServer<T>(
-	dirs: { cwd: string; sessionDir: string; agentDir: string },
+	dirs: {
+		cwd: string;
+		sessionDir: string;
+		agentDir: string;
+		noSession?: boolean;
+		env?: Record<string, string | undefined>;
+	},
 	run: (
 		next: (predicate?: (frame: RpcFrame) => boolean) => Promise<RpcFrame>,
 		seen: readonly RpcFrame[],
@@ -38,8 +45,7 @@ async function withForkRpcServer<T>(
 			"--no-ui",
 			"--no-skills",
 			"--no-tools",
-			"--session-dir",
-			dirs.sessionDir,
+			...(dirs.noSession ? ["--no-session"] : ["--session-dir", dirs.sessionDir]),
 			"--provider",
 			"anthropic",
 			"--model",
@@ -54,6 +60,7 @@ async function withForkRpcServer<T>(
 				// Keep model resolution configured for the restore check and role validation.
 				// Multiple persisted test credentials require a host-owned logout dialog.
 				ANTHROPIC_API_KEY: "test-key",
+				...dirs.env,
 			} as unknown as Record<string, string | undefined>,
 			stdin: "pipe",
 			stdout: "pipe",
@@ -110,6 +117,119 @@ async function withForkRpcServer<T>(
 }
 
 describe("fork RPC surface over the single-session host (rpc-ui-protocol.md)", () => {
+	test("no-session rpc-ui manages saved history in the configured profile directory", async () => {
+		await using root = await TempDir.create("@rpc-fork-no-session-");
+		const cwd = path.resolve(root.join("project"));
+		const home = path.resolve(root.join("home"));
+		const configRoot = path.join(home, ".rpc-fork");
+		const profile = "rpc-directory";
+		const agentDir = path.join(configRoot, "profiles", profile, "agent");
+		const sessionDir = SessionManager.getDefaultSessionDir(cwd, agentDir);
+		for (const dir of [cwd, home, agentDir, sessionDir]) {
+			await fs.mkdir(dir, { recursive: true });
+		}
+		await fs.writeFile(path.join(agentDir, "config.yml"), "modelRoles: {}\n");
+		const now = new Date().toISOString();
+		const savedPath = path.join(sessionDir, "no-session-saved.jsonl");
+		const savedHeader = { type: "session", version: 2, id: "no-session-saved", timestamp: now, cwd };
+		const savedMessage = {
+			type: "message",
+			id: "saved-message",
+			parentId: null,
+			timestamp: now,
+			message: { role: "user", content: [{ type: "text", text: "Saved directory history" }], timestamp: Date.now() },
+		};
+		await fs.writeFile(
+			savedPath,
+			`${serializeTitleSlot({ title: "Saved history", source: "user", updatedAt: now })}${JSON.stringify(savedHeader)}\n${JSON.stringify(savedMessage)}\n`,
+		);
+
+		await withForkRpcServer(
+			{
+				cwd,
+				sessionDir,
+				agentDir,
+				noSession: true,
+				env: {
+					HOME: home,
+					USERPROFILE: home,
+					OMP_CONFIG_ROOT: configRoot,
+					PI_CONFIG_DIR: ".rpc-fork",
+					OMP_PROFILE: profile,
+					PI_PROFILE: undefined,
+					PI_CODING_AGENT_DIR: undefined,
+				},
+			},
+			async (next, _seen, controls) => {
+				await next(frame => frame.type === "ready");
+				controls.send({ id: "n3", type: "negotiate_protocol", protocolVersion: 3 });
+				expect(await next(frame => frame.type === "response" && frame.id === "n3")).toMatchObject({
+					success: true,
+					data: { protocolVersion: 3 },
+				});
+				controls.send({ id: "state", type: "get_state" });
+				const state = await next(frame => frame.type === "response" && frame.id === "state");
+				expect(state.success).toBe(true);
+				if (!isRecord(state.data)) throw new Error("No-session state lacks its data");
+				expect(state.data.sessionFile).toBeUndefined();
+				controls.send({ id: "list", type: "list_sessions" });
+				const listed = await next(frame => frame.type === "response" && frame.id === "list");
+				expect(listed).toMatchObject({
+					success: true,
+					data: { sessions: [{ sessionId: "no-session-saved", name: "Saved history", current: false }] },
+				});
+				if (
+					!isRecord(listed.data) ||
+					!Array.isArray(listed.data.sessions) ||
+					listed.data.sessions.length !== 1 ||
+					!isRecord(listed.data.sessions[0]) ||
+					typeof listed.data.sessions[0].revision !== "string"
+				) {
+					throw new Error("No-session listing lacks the saved history revision");
+				}
+				const saved = listed.data.sessions[0];
+				controls.send({
+					id: "rename",
+					type: "rename_session",
+					sessionId: "no-session-saved",
+					name: "Renamed history",
+					expectedRevision: saved.revision,
+				});
+				const renamed = await next(frame => frame.type === "response" && frame.id === "rename");
+				expect(renamed).toMatchObject({
+					success: true,
+					data: { sessionId: "no-session-saved", name: "Renamed history", current: false },
+				});
+				if (!isRecord(renamed.data) || typeof renamed.data.revision !== "string") {
+					throw new Error("Renamed history lacks its new revision");
+				}
+				expect(parseTitleSlotFromContent(await fs.readFile(savedPath, "utf8"))?.title).toBe("Renamed history");
+				expect((await fs.readdir(sessionDir)).filter(name => name.endsWith(".jsonl"))).toEqual([
+					"no-session-saved.jsonl",
+				]);
+				controls.send({
+					id: "delete",
+					type: "delete_session",
+					sessionId: "no-session-saved",
+					expectedRevision: renamed.data.revision,
+				});
+				expect(await next(frame => frame.type === "response" && frame.id === "delete")).toMatchObject({
+					success: true,
+					data: { deleted: true },
+				});
+				expect(await Bun.file(savedPath).exists()).toBe(false);
+				controls.send({ id: "empty", type: "list_sessions" });
+				expect(await next(frame => frame.type === "response" && frame.id === "empty")).toMatchObject({
+					success: true,
+					data: { sessions: [] },
+				});
+				controls.closeStdin();
+				expect(await controls.exited).toBe(0);
+			},
+		);
+		expect((await fs.readdir(sessionDir)).filter(name => name.endsWith(".jsonl"))).toEqual([]);
+	}, 300_000);
+
 	test("v3 negotiation gates the fork commands on the real rpc-ui entry", async () => {
 		await using root = await TempDir.create("@rpc-fork-e2e-");
 		const cwd = path.resolve(root.join("project"));

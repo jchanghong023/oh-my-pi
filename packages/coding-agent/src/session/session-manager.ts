@@ -1006,12 +1006,13 @@ export class SessionManager {
 	/** Every notice raised so far, replayed to each later subscriber. */
 	#persistenceNotices: SessionPersistenceNotice[] = [];
 	/**
-	 * This process's ownership claim on the session it last wrote (file storage
-	 * only), keyed by session id so every path to the journal meets it.
-	 * `release` is unset while another live process holds the session, and
-	 * after {@link close} gave the claim up.
+	 * This process's ownership claim on the session it hosts or last wrote
+	 * (file storage only), keyed by session id so every path to the journal
+	 * meets it. `release` is unset when a non-runtime writer met another owner
+	 * or after {@link close} gave the claim up.
 	 */
 	#sessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
+	#runtimeOwnership = false;
 	/**
 	 * The background artifact copy a move or branch to `sessionFile` started (see
 	 * {@link #moveOffSessionFile}, {@link createBranchedSession}). Never rejects.
@@ -1096,10 +1097,9 @@ export class SessionManager {
 
 	/**
 	 * Hold this process's ownership claim on `#sessionId`, moving it off a
-	 * previous session. Only write paths claim, so the first process to write a
-	 * session owns it and inspection (`omp share`, `--export`, `render`) never
-	 * does. A failed claim is retried on the next write, so a writer takes over
-	 * once the owner closed the session or exited.
+	 * previous session. Writers claim lazily; a live AgentSession also claims
+	 * before its first write. Inspection (`omp share`, `--export`, `render`)
+	 * never claims. A non-runtime writer retries a failed claim on its next write.
 	 */
 	#claimSession(): void {
 		const sessionId = this.#sessionId;
@@ -1112,6 +1112,35 @@ export class SessionManager {
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
 		this.#sessionClaim = { sessionId, release: this.#storage.claimSession(sessionId, sessionFile) ?? undefined };
+	}
+
+	/**
+	 * 接管运行会话必须先持有已有租约；只读 open 不调用，避免检查者阻挡目录操作。
+	 * 已有 owner 时拒绝第二宿主，不能留下 idle 却没有租约的存活会话。
+	 */
+	acquireRuntimeOwnership(): void {
+		this.#claimSession();
+		if (this.#sessionClaim && !this.#sessionClaim.release) {
+			throw new Error(`Cannot host session "${this.#sessionFile}": another live omp process owns it.`);
+		}
+		this.#runtimeOwnership = true;
+	}
+
+	/** 切换先取得新租约再释放旧租约；失败仍由原宿主持有原会话。 */
+	#transitionSessionClaim(sessionId: string, sessionFile: string | undefined): void {
+		const current = this.#sessionClaim;
+		if (this.#runtimeOwnership && this.#persist && sessionFile && this.#storage.claimSession) {
+			if (current?.sessionId === sessionId && current.release) return;
+			const release = this.#storage.claimSession(sessionId, sessionFile);
+			if (!release) {
+				throw new Error(`Cannot host session "${sessionFile}": another live omp process owns it.`);
+			}
+			current?.release?.();
+			this.#sessionClaim = { sessionId, release };
+		} else {
+			current?.release?.();
+			this.#sessionClaim = undefined;
+		}
 	}
 
 	/**
@@ -2001,13 +2030,18 @@ export class SessionManager {
 			this.#sessionDir = resolveSessionDirectory(path.resolve(options.sessionDir), this.#storage);
 			this.#storage.ensureDirSync(this.#sessionDir);
 		}
-		this.#sessionId = mintSessionId();
+		const sessionId = mintSessionId();
+		const timestamp = nowIso();
+		const sessionFile = this.#persist
+			? (forcedSessionFile ?? path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`))
+			: undefined;
+		this.#transitionSessionClaim(sessionId, sessionFile);
+		this.#sessionId = sessionId;
 		this.#sessionName = undefined;
 		this.#titleSource = undefined;
 		this.#titleUpdatedAt = "";
 		this.#hasTitleSlot = true;
 
-		const timestamp = nowIso();
 		this.#header = {
 			type: "session",
 			version: CURRENT_SESSION_VERSION,
@@ -2045,14 +2079,8 @@ export class SessionManager {
 		this.#inMemoryArtifacts = null;
 		this.#inMemoryArtifactCounter = 0;
 
-		if (this.#persist) {
-			this.#sessionFile =
-				forcedSessionFile ??
-				path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
-			this.#rememberBreadcrumb(this.#cwd, this.#sessionFile, true);
-		} else {
-			this.#sessionFile = undefined;
-		}
+		this.#sessionFile = sessionFile;
+		if (sessionFile) this.#rememberBreadcrumb(this.#cwd, sessionFile, true);
 
 		return this.#sessionFile;
 	}
@@ -2258,6 +2286,7 @@ export class SessionManager {
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
 		if (snapshot.sessionFile) assertOfflineSessionPath(snapshot.sessionFile, this.#storage);
+		this.#transitionSessionClaim(snapshot.sessionId, snapshot.sessionFile);
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
@@ -2336,10 +2365,6 @@ export class SessionManager {
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
-		// A switch gives up the previous file. Opening claims nothing: the first
-		// write does, so inspecting a session never counts as owning it.
-		this.#sessionClaim?.release?.();
-		this.#sessionClaim = undefined;
 
 		const resolvedSessionFile = path.resolve(sessionFile);
 		const loaded = loadedSession ?? (await loadSessionFile(resolvedSessionFile, this.#storage));
@@ -2354,9 +2379,6 @@ export class SessionManager {
 				`Cannot resume session "${resolvedSessionFile}": the session header is missing or malformed. The file was not modified.`,
 			);
 		}
-
-		this.#sessionFile = resolvedSessionFile;
-		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 
 		const { entries: fileEntries, titleSlot } = loaded;
 		if (fileEntries.length === 0) {
@@ -2379,6 +2401,12 @@ export class SessionManager {
 		await resolveBlobRefsInEntries(fileEntries, this.#blobs);
 		// loadEntriesFromFile guarantees entries[0] is a valid session header.
 		const header = fileEntries[0] as SessionHeader;
+		const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
+		const adoptHeaderCwd =
+			headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryIsEnterable(headerCwd));
+		this.#transitionSessionClaim(header.id, resolvedSessionFile);
+		this.#sessionFile = resolvedSessionFile;
+		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 
 		// Adopt the loaded session's working directory only when it is verifiably
 		// accessible. Sessions live in a dir keyed by their cwd, so resuming a
@@ -2388,8 +2416,7 @@ export class SessionManager {
 		// (extension UI, RPC) would otherwise track a directory the process
 		// cannot enter. Keep the current cwd so the session stays where the
 		// user already is.
-		const headerCwd = header.cwd ? path.resolve(header.cwd) : undefined;
-		if (headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryIsEnterable(headerCwd))) {
+		if (headerCwd && adoptHeaderCwd) {
 			this.#cwd = headerCwd;
 			this.#sessionDir = path.dirname(resolvedSessionFile);
 			this.#fallbackRuntimeOnly = false;
@@ -2455,8 +2482,11 @@ export class SessionManager {
 		this.#reconcileSessionDirForFallback();
 
 		const timestamp = nowIso();
-		this.#sessionId = mintSessionId();
-		this.#sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${this.#sessionId}.jsonl`);
+		const sessionId = mintSessionId();
+		const sessionFile = path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`);
+		this.#transitionSessionClaim(sessionId, sessionFile);
+		this.#sessionId = sessionId;
+		this.#sessionFile = sessionFile;
 		this.#expectedDiskSize = null;
 		this.#header = {
 			type: "session",
@@ -2907,6 +2937,7 @@ export class SessionManager {
 
 	/** Flush, then close the append writer. */
 	async close(): Promise<void> {
+		this.#runtimeOwnership = false;
 		if (!this.#persist) return;
 		// Closing gives up this process's ownership claim; a later write reclaims it.
 		const claim = this.#sessionClaim;
@@ -3960,6 +3991,7 @@ export class SessionManager {
 			parentId = labelEntry.id;
 		}
 
+		this.#transitionSessionClaim(newSessionId, this.#persist ? newSessionFile : undefined);
 		this.#header = header;
 		this.#entries = [...entriesToKeep, ...labels];
 		this.#sessionId = newSessionId;

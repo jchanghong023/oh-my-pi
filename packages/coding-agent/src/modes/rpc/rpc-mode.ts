@@ -57,6 +57,7 @@ import { type AgentSession, SessionBusyError } from "../../session/agent-session
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
+import { SessionManager } from "../../session/session-manager";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
 import { executeRpcBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import type { AcpBuiltinSlashCommandResult, RpcSlashCommandRuntime } from "../../slash-commands/types";
@@ -1845,7 +1846,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 	});
 	let sessionDirectoryCwd = session.sessionManager.getCwd();
-	let sessionDirectoryDir = session.sessionManager.getSessionDir();
+	// --no-session 的内存管理器目录为空，但目录命令仍应访问当前配置根/profile 的历史。
+	let sessionDirectoryDir =
+		session.sessionManager.getSessionDir() || SessionManager.getDefaultSessionDir(sessionDirectoryCwd);
 	let sessionDirectory = new RpcSessionDirectoryService({
 		cwd: sessionDirectoryCwd,
 		sessionDir: sessionDirectoryDir,
@@ -1853,7 +1856,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 	const getSessionDirectory = (): RpcSessionDirectoryService => {
 		const cwd = session.sessionManager.getCwd();
-		const sessionDir = session.sessionManager.getSessionDir();
+		const sessionDir = session.sessionManager.getSessionDir() || SessionManager.getDefaultSessionDir(cwd);
 		if (cwd !== sessionDirectoryCwd || sessionDir !== sessionDirectoryDir) {
 			sessionDirectoryCwd = cwd;
 			sessionDirectoryDir = sessionDir;

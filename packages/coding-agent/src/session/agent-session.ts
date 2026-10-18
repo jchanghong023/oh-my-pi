@@ -1782,6 +1782,8 @@ export class AgentSession implements SettingsScope {
 				isHiddenUserCompanion(previous) && (isHiddenUserCompanion(next) || isUserQueuedMessage(next)),
 		);
 		this.sessionManager = config.sessionManager;
+		// idle resume 也在托管会话，必须在任何运行期写入前取得共享的文件租约。
+		this.sessionManager.acquireRuntimeOwnership();
 		this.settings = config.settings;
 		this.eventBus = config.eventBus;
 		this.subagentEventBus = config.subagentEventBus;

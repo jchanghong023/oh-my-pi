@@ -5,6 +5,15 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import * as sessionPaths from "@oh-my-pi/pi-coding-agent/session/session-paths";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { serializeTitleSlot } from "@oh-my-pi/pi-coding-agent/session/session-title-slot";
 import { FileSessionStorage, tryAcquireSessionLease } from "@oh-my-pi/pi-coding-agent/session/session-storage";
@@ -32,12 +41,19 @@ async function writeSession(sessionDir: string, id: string, cwd: string, title?:
 	const slot = serializeTitleSlot({ title, source: "user", updatedAt: now });
 	const header = {
 		type: "session",
-		version: 2,
+		version: CURRENT_SESSION_VERSION,
 		id,
 		timestamp: now,
 		cwd,
 	};
-	await Bun.write(file, `${slot}${JSON.stringify(header)}\n{"type":"user","id":"u1","ts":"${now}","message":"hi"}\n`);
+	const message = {
+		type: "message",
+		id: "u1",
+		parentId: null,
+		timestamp: now,
+		message: { role: "user", content: "hi", timestamp: Date.now() },
+	};
+	await Bun.write(file, `${slot}${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
 	return file;
 }
 
@@ -53,6 +69,179 @@ async function setup(): Promise<Fixture> {
 }
 
 describe("RpcSessionDirectoryService", () => {
+	test("an idle resumed AgentSession blocks external rename and delete until close", async () => {
+		const fx = await setup();
+		const sessionId = `s-idle-${crypto.randomUUID()}`;
+		const file = await writeSession(fx.sessionDir, sessionId, fx.cwd, "Idle history");
+		const original = await Bun.file(file).text();
+		const manager = await SessionManager.open(file, fx.sessionDir, new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		const authStorage = await AuthStorage.create(":memory:");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		if (!model) throw new Error("Expected bundled fixture model");
+		const session = new AgentSession({
+			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [] } }),
+			sessionManager: manager,
+			settings: Settings.isolated({ "compaction.enabled": false, "todo.enabled": false }),
+			modelRegistry: new ModelRegistry(authStorage),
+		});
+		try {
+			expect(session.isStreaming).toBe(false);
+			const [entry] = await fx.service.list();
+			await expect(fx.service.rename(sessionId, "External rename", entry!.revision)).rejects.toMatchObject({
+				code: "execution_failed",
+			});
+			await expect(fx.service.delete(sessionId, entry!.revision)).rejects.toMatchObject({ code: "unsupported" });
+			expect(await Bun.file(file).text()).toBe(original);
+		} finally {
+			await session.dispose();
+		}
+		expect(await fx.service.rename(sessionId, "Closed history")).toMatchObject({ name: "Closed history" });
+		await fx.service.delete(sessionId);
+		expect(await Bun.file(file).exists()).toBe(false);
+	});
+
+	test("a read-only SessionManager inspector never blocks directory mutations", async () => {
+		const fx = await setup();
+		const sessionId = `s-inspector-${crypto.randomUUID()}`;
+		const file = await writeSession(fx.sessionDir, sessionId, fx.cwd, "Inspectable");
+		const inspector = await SessionManager.open(file, fx.sessionDir, new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		try {
+			expect(await fx.service.rename(sessionId, "Inspected")).toMatchObject({ name: "Inspected" });
+			await fx.service.delete(sessionId);
+			expect(await Bun.file(file).exists()).toBe(false);
+		} finally {
+			await inspector.close();
+		}
+	});
+
+	test("runtime ownership follows history switches, rollback and a new session without leaking leases", async () => {
+		const fx = await setup();
+		const firstId = `s-first-${crypto.randomUUID()}`;
+		const secondId = `s-second-${crypto.randomUUID()}`;
+		const first = await writeSession(fx.sessionDir, firstId, fx.cwd);
+		const second = await writeSession(fx.sessionDir, secondId, fx.cwd);
+		const manager = await SessionManager.open(first, fx.sessionDir, new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		manager.acquireRuntimeOwnership();
+		try {
+			const previous = manager.captureState();
+			await manager.setSessionFile(second);
+			await expect(fx.service.delete(secondId)).rejects.toMatchObject({ code: "unsupported" });
+			expect(await fx.service.rename(firstId, "Released first")).toMatchObject({ name: "Released first" });
+			manager.restoreState(previous);
+			await expect(fx.service.rename(firstId, "Blocked again")).rejects.toMatchObject({ code: "execution_failed" });
+			await fx.service.delete(secondId);
+			expect(await Bun.file(second).exists()).toBe(false);
+			await manager.newSession();
+			await fx.service.delete(firstId);
+			await expect(fx.service.delete(manager.getSessionId())).rejects.toMatchObject({ code: "unsupported" });
+		} finally {
+			await manager.close();
+		}
+		await fx.service.delete(manager.getSessionId());
+		expect(await fx.service.list()).toEqual([]);
+	});
+
+	test("runtime takeover refuses another owner and a failed switch retains the old lease", async () => {
+		const fx = await setup();
+		const firstId = `s-retained-${crypto.randomUUID()}`;
+		const ownedId = `s-owned-${crypto.randomUUID()}`;
+		const first = await writeSession(fx.sessionDir, firstId, fx.cwd);
+		const owned = await writeSession(fx.sessionDir, ownedId, fx.cwd);
+		const original = await Bun.file(owned).text();
+		const manager = await SessionManager.open(first, fx.sessionDir, new FileSessionStorage(), {
+			suppressBreadcrumb: true,
+		});
+		manager.acquireRuntimeOwnership();
+		// 独立进程走真实运行接管入口；同进程 storage 共享租约，不能模拟外部 owner。
+		const script = [
+			`import { SessionManager } from ${JSON.stringify(path.join(import.meta.dir, "../src/session/session-manager.ts"))};`,
+			`const manager = await SessionManager.open(${JSON.stringify(owned)}, undefined, undefined, { suppressBreadcrumb: true });`,
+			"manager.acquireRuntimeOwnership();",
+			'process.stdout.write("ready\\n");',
+			"for await (const line of console) break;",
+			"await manager.close();",
+		].join("\n");
+		const child = Bun.spawn([process.execPath, "--eval", script], {
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			env: process.env,
+		});
+		const output = child.stdout.getReader();
+		let contender: SessionManager | undefined;
+		try {
+			let ready = "";
+			while (!ready.endsWith("\n")) {
+				const chunk = await output.read();
+				if (chunk.done) throw new Error(await new Response(child.stderr).text());
+				ready += new TextDecoder().decode(chunk.value);
+			}
+			expect(ready).toBe("ready\n");
+			contender = await SessionManager.open(owned, fx.sessionDir, new FileSessionStorage(), {
+				suppressBreadcrumb: true,
+			});
+			expect(() => contender!.acquireRuntimeOwnership()).toThrow("another live omp process owns it");
+			await expect(manager.setSessionFile(owned)).rejects.toThrow("another live omp process owns it");
+			expect(manager.getSessionId()).toBe(firstId);
+			expect(manager.getSessionFile()).toBe(first);
+			await expect(fx.service.rename(firstId, "Must stay protected")).rejects.toMatchObject({
+				code: "execution_failed",
+			});
+			await expect(fx.service.delete(firstId)).rejects.toMatchObject({ code: "unsupported" });
+			expect(await Bun.file(owned).text()).toBe(original);
+			child.stdin.end();
+			expect(await child.exited).toBe(0);
+			contender.acquireRuntimeOwnership();
+			await expect(fx.service.delete(ownedId)).rejects.toMatchObject({ code: "unsupported" });
+			await contender.close();
+			contender = undefined;
+			await manager.setSessionFile(owned);
+			await fx.service.delete(firstId);
+			await expect(fx.service.delete(ownedId)).rejects.toMatchObject({ code: "unsupported" });
+		} finally {
+			if (child.exitCode === null) child.stdin.end();
+			await child.exited;
+			output.releaseLock();
+			await contender?.close();
+			await manager.close();
+		}
+		await fx.service.delete(ownedId);
+	}, 30_000);
+
+	test("runtime ownership leaves in-memory and lazy persistent sessions off disk", async () => {
+		const fx = await setup();
+		const memoryStorage = new FileSessionStorage();
+		const claim = spyOn(memoryStorage, "claimSession");
+		const memory = SessionManager.inMemory(fx.cwd, memoryStorage);
+		// create 的 breadcrumb 与本回归无关，不让临时 lazy fixture 写入用户运行目录。
+		const breadcrumb = spyOn(sessionPaths, "writeTerminalBreadcrumb").mockImplementation(() => {});
+		let lazy: SessionManager;
+		try {
+			lazy = SessionManager.create(fx.cwd, fx.sessionDir);
+		} finally {
+			breadcrumb.mockRestore();
+		}
+		try {
+			memory.acquireRuntimeOwnership();
+			expect(claim).not.toHaveBeenCalled();
+			expect(memory.getSessionFile()).toBeUndefined();
+			lazy.acquireRuntimeOwnership();
+			expect(await Bun.file(lazy.getSessionFile()!).exists()).toBe(false);
+			expect(await fx.service.list()).toEqual([]);
+		} finally {
+			claim.mockRestore();
+			await memory.close();
+			await lazy.close();
+		}
+		expect(await fs.readdir(fx.sessionDir)).toEqual([]);
+	});
+
 	test("lists only this project's sessions and marks the live one current", async () => {
 		const fx = await setup();
 		await writeSession(fx.sessionDir, "s-own-1", fx.cwd, "Mine");
