@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Show exact `/team` proposal text-budget failures even when all proposals fail, and tighten alignment anonymity, meaningful-difference checks, and concise result grouping.
 - Retain the original session's ownership until a history switch commits or rolls back.
 - Refresh Repo evidence after writable restricted SDK sessions while leaving read-only child sessions untouched.
 - Ignore late Team child events after session changes and accept conditional adoption prose using Chinese consequence connectors.

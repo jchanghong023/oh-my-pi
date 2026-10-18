@@ -387,12 +387,18 @@ async function runTeamDiscussionImpl(
 			});
 			if (signal.aborted) return;
 			const parseStarted = performance.now();
-			const proposal = outcome.ok ? parseTeamProposal(outcome.data) : undefined;
+			const proposal = outcome.ok
+				? parseTeamProposal(outcome.data, reason => {
+						record.exclusionReason = reason;
+					})
+				: undefined;
 			logSchema(outcome, Boolean(proposal), performance.now() - parseStarted);
 			if (!proposal) {
 				record.proposerFailed = true;
 				record.excludedFromOptions = true;
-				record.exclusionReason = outcome.ok ? "提案输出不符合结构化要求" : `提案子代理失败：${outcome.error}`;
+				record.exclusionReason = outcome.ok
+					? (record.exclusionReason ?? "提案输出不符合结构化要求")
+					: `提案子代理失败：${outcome.error}`;
 				trackParticipant(record.label, "proposer", "failed");
 				emitProgress("investigation", `阶段一：独立调查（${record.label} 失败）`);
 				return;
@@ -434,7 +440,9 @@ async function runTeamDiscussionImpl(
 		diagnostics.reason = "all_proposers_failed";
 		return {
 			status: "failed",
-			failureReason: "所有提案子代理均失败，独立调查阶段无法完成（不输出半成品结论）",
+			failureReason: `所有提案子代理均失败，独立调查阶段无法完成（不输出半成品结论）：${records
+				.map(record => `${record.label}：${record.exclusionReason ?? "提案输出不符合结构化要求"}`)
+				.join("；")}`,
 		};
 	}
 
