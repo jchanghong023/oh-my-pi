@@ -23,7 +23,7 @@
 
 - **分支**：`can1357/oh-my-pi@main`
 * **版本**：`v18.12.1`
-- **Upstream commit**：`ba85aef0b343a25f3c90b4f86628a9bd92d8414d`
+- **Upstream commit**：`58349dc80de381057437818b8354c86826c8fa10`
 - **同步日期**：2026-10-18
 
 ## 当前功能差异

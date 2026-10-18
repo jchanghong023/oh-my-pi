@@ -246,6 +246,7 @@ import {
 	endComputerTurnForOwner,
 	releaseComputerSessionsForOwner,
 	resumeComputerTurnForOwner,
+	resumeComputerUseForOwner,
 	revokeComputerControlForOwner,
 } from "../tools/computer/supervisor";
 import { isAutoQaEnabled } from "../tools/report-tool-issue";
@@ -398,6 +399,7 @@ import {
 	type InterruptedThinkingDetails,
 	isEmptyErrorTurn,
 	titleContextWordCount,
+	isUserAuthoredMessage,
 	isUserInterruptAbort,
 	isUserInvokedSkillPrompt,
 	logProviderTurnError,
@@ -3699,6 +3701,15 @@ export class AgentSession implements SettingsScope {
 		// never revoke a foreground-control grant acquired by a later prompt.
 		const computerControlRevocation =
 			event.type === "agent_end" ? revokeComputerControlForOwner(this.#eval.getKernelOwnerId()) : undefined;
+		// Only the user's own prompt, steer or follow-up lifts the computer-use stop their Escape set;
+		// synthetic continues and agent-sent messages (subagent budget steers) never do.
+		if (
+			event.type === "message_start" &&
+			isUserAuthoredMessage(event.message) &&
+			!(event.message.role === "user" && (event.message.synthetic || event.message.attribution === "agent"))
+		) {
+			resumeComputerUseForOwner(this.#eval.getKernelOwnerId());
+		}
 		if (event.type === "tool_execution_end" && this.#isTerminalYieldToolResult(event)) {
 			const alreadyTerminated = this.#synchronouslyTerminatedYieldToolCallIds.delete(event.toolCallId);
 			if (!alreadyTerminated) {

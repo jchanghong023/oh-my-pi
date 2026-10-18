@@ -50,11 +50,7 @@ describe("ThinkingPreviewComponent", () => {
 		const source = "retired first\nretired second\n**literal**\n`literal`\n# literal\nlatest one\nlatest two";
 		expect(preview.setText(source)).toBe(true);
 		const rows = preview.render(40);
-		expect(bodyRows(rows, 40).map(row => Bun.stripANSI(row))).toEqual([
-			"# literal",
-			"latest one",
-			"latest two",
-		]);
+		expect(bodyRows(rows, 40).map(row => Bun.stripANSI(row))).toEqual(["# literal", "latest one", "latest two"]);
 		expect(preview.render(40)).toBe(rows);
 		expect(preview.setText(source)).toBe(false);
 		expect(preview.clear()).toBe(true);
@@ -77,18 +73,10 @@ describe("ThinkingPreviewComponent", () => {
 		}
 		source += "next";
 		preview.setText(source);
-		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual([
-			"third",
-			"latest",
-			"    next",
-		]);
+		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual(["third", "latest", "    next"]);
 		source += "\n\n \n\nlast\n\n";
 		preview.setText(source);
-		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual([
-			"latest",
-			"    next",
-			"last",
-		]);
+		expect(bodyRows(preview.render(80), 80).map(row => Bun.stripANSI(row))).toEqual(["latest", "    next", "last"]);
 		expect(bodyRows(preview.render(9), 9).map(row => Bun.stripANSI(row))).toEqual(expectedTail(source, 9));
 		preview.setText(" \n\t\n\n  ");
 		expect(preview.render(80)).toEqual([]);
@@ -112,11 +100,7 @@ describe("ThinkingPreviewComponent", () => {
 						.map((row, index) => row.endsWith(before[index]!)),
 				).toEqual([true, true]);
 				preview.setText("first\nlatest\n\n\nnext");
-				const after = [
-					theme.fg("dim", "first"),
-					theme.fg("dim", "latest"),
-					theme.fg("text", "next"),
-				];
+				const after = [theme.fg("dim", "first"), theme.fg("dim", "latest"), theme.fg("text", "next")];
 				expect(
 					preview
 						.render(80)
@@ -404,22 +388,14 @@ describe("ThinkingPreviewComponent", () => {
 		preview.setHeightSource(() => height);
 		const source = "one\ntwo\nthree\nfour\nfive\nsix\nseven";
 		preview.setText(source);
-		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual([
-			"five",
-			"six",
-			"seven",
-		]);
+		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual(["five", "six", "seven"]);
 		height = 19;
 		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual(["five", "six", "seven"]);
 		// Streaming continues under the clamp; growth keeps only the newest three.
 		preview.setText(`${source}\neight`);
 		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual(["six", "seven", "eight"]);
 		height = 20;
-		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual([
-			"six",
-			"seven",
-			"eight",
-		]);
+		expect(bodyRows(preview.render(20), 20).map(row => Bun.stripANSI(row))).toEqual(["six", "seven", "eight"]);
 		// The stub is always a single row regardless of the height budget.
 		height = 12;
 		preview.collapse();

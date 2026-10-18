@@ -208,6 +208,71 @@ impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_,
 	}
 }
 
+/// The host path a file-backed virtual path aliases, if any.
+///
+/// External processes have no view of the shell's virtual filesystem, so a
+/// `scheme://` path handed to one means nothing there. File-backed schemes
+/// (`skill://`, `local://`, `artifact://`, …) alias a real file and resolve to
+/// it; rendered ones (`omp://`, `history://`) and schemes no provider serves
+/// alias nothing and keep their virtual spelling. A provider error (an unknown
+/// skill, a path escaping its root) is the command's error: the child would
+/// only fail later on a URL it cannot open.
+async fn host_path(filesystem: &pi_vfs::Fs, path: &Path) -> Result<Option<PathBuf>, error::Error> {
+	if filesystem.is_native() || !pi_vfs::is_virtual_path(path) {
+		return Ok(None);
+	}
+	filesystem.backing_path(path).await.map_err(|err| {
+		error::ErrorKind::ExternalCommandVirtualPathUnresolved(path.to_owned(), err).into()
+	})
+}
+
+/// `arg` rewritten to the host path it names, if it names one.
+///
+/// Both the bare spelling (`skill://example-skill/tool.py`) and the
+/// attached-value spelling (`--index=skill://example-skill/data`) translate.
+/// Anything the filesystem does not route to a backing file is left exactly as
+/// it was written, so `https://…`, `s3://…`, and ordinary words reach the
+/// child untouched. A bare scheme root (`local://`) is far likelier a search
+/// pattern or message text than a directory, so it stays literal too.
+async fn host_arg(filesystem: &pi_vfs::Fs, arg: &OsStr) -> Result<Option<OsString>, error::Error> {
+	let Some(text) = arg.to_str() else {
+		return Ok(None);
+	};
+	if !text.contains("://") {
+		return Ok(None);
+	}
+	if pi_vfs::is_virtual_path(Path::new(text)) {
+		if is_url_root(text) {
+			return Ok(None);
+		}
+		return Ok(host_path(filesystem, Path::new(text))
+			.await?
+			.map(PathBuf::into_os_string));
+	}
+	let Some((name, value)) = text.split_once('=') else {
+		return Ok(None);
+	};
+	// Only an option name may carry an attached URL. A URL of its own that
+	// happens to embed one in a query string (`https://host/cb?next=local://x`)
+	// is one opaque string to the program receiving it.
+	if name.contains("://") || is_url_root(value) {
+		return Ok(None);
+	}
+	let Some(host) = host_path(filesystem, Path::new(value)).await? else {
+		return Ok(None);
+	};
+	let mut rewritten = OsString::from(name);
+	rewritten.push("=");
+	rewritten.push(host);
+	Ok(Some(rewritten))
+}
+
+/// Whether `text` is a URL naming nothing below its scheme (`local://`).
+fn is_url_root(text: &str) -> bool {
+	pi_vfs::url_scheme(Path::new(text))
+		.is_some_and(|scheme| text[scheme.len() + 3..].trim_matches('/').is_empty())
+}
+
 /// Composes a `std::process::Command` to execute the given command.
 /// Appropriately configures the command name and arguments, redirections,
 /// injected file descriptors, environment variables, etc.
@@ -223,7 +288,7 @@ impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_,
 ///   environment; if false, the command will inherit environment variables
 ///   marked as exported in the provided `Shell`.
 #[allow(unused_variables, reason = "argv0 is only used on unix platforms")]
-pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
+pub async fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 	context: &ExecutionContext<'_, SE>,
 	command_name: impl AsRef<OsStr>,
 	argv0: impl AsRef<OsStr>,
@@ -232,36 +297,73 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 ) -> Result<std::process::Command, error::Error> {
 	let command_name = command_name.as_ref();
 	let argv0 = argv0.as_ref();
-	// The operating system can only start native programs in native
-	// directories; virtual paths exist solely inside this process.
+	// The operating system has no view of this process's virtual filesystem: a
+	// child can only start in a native directory and only run a native program.
+	// A file-backed scheme aliases a real file, so the program, the arguments
+	// and the working directory are handed to the child as those files; a
+	// scheme backed by nothing is still refused.
 	let filesystem = context.shell.filesystem();
 	let working_dir = context.shell.working_dir();
-	if !filesystem.is_native_local(working_dir) {
-		return Err(error::ErrorKind::ExternalCommandInVirtualWorkingDir(
-			context.command_name.clone(),
-			working_dir.to_owned(),
-		)
-		.into());
-	}
+	let spawn_dir = match host_path(filesystem, working_dir).await? {
+		Some(backing) => {
+			// A child may write anywhere under its working directory, so it must
+			// not start in one the shell itself refuses to mutate (`skill://`,
+			// `artifact://`). Arguments still translate: those name single files
+			// the program was asked to use.
+			match filesystem.access(working_dir, false, true, false).await {
+				Ok(()) => backing,
+				Err(err) if err.kind() == io::ErrorKind::ReadOnlyFilesystem => {
+					return Err(error::ErrorKind::ExternalCommandInReadOnlyWorkingDir(
+						context.command_name.clone(),
+						working_dir.to_owned(),
+					)
+					.into());
+				},
+				Err(err) => {
+					return Err(error::ErrorKind::ExternalCommandVirtualPathUnresolved(
+						working_dir.to_owned(),
+						err,
+					)
+					.into());
+				},
+			}
+		},
+		None if filesystem.is_native_local(working_dir) => working_dir.to_owned(),
+		None => {
+			return Err(error::ErrorKind::ExternalCommandInVirtualWorkingDir(
+				context.command_name.clone(),
+				working_dir.to_owned(),
+			)
+			.into());
+		},
+	};
+	let mut program = PathBuf::from(command_name);
 	if command_name
 		.as_encoded_bytes()
 		.iter()
 		.any(|&byte| byte == b'/' || (cfg!(windows) && byte == b'\\'))
 	{
-		let program = context.shell.absolute_path(Path::new(command_name));
-		if !filesystem.is_native_local(&program) {
-			return Err(error::ErrorKind::ExternalCommandIsVirtual(program).into());
+		let spelled = context.shell.absolute_path(Path::new(command_name));
+		if !filesystem.is_native_local(&spelled) {
+			program = host_path(filesystem, &spelled)
+				.await?
+				.ok_or_else(|| error::ErrorKind::ExternalCommandIsVirtual(spelled))?;
 		}
 	}
 
-	let mut cmd = std::process::Command::new(command_name);
+	let mut cmd = std::process::Command::new(&program);
 
 	// Override argv[0].
 	// NOTE: Not supported on all platforms.
 	cmd.arg0(argv0);
 
-	// Pass through args.
-	cmd.args(args);
+	for arg in args {
+		let arg = arg.as_ref();
+		match host_arg(filesystem, arg).await? {
+			Some(rewritten) => cmd.arg(rewritten),
+			None => cmd.arg(arg),
+		};
+	}
 
 	// Apply `ulimit` overrides to the child only; the host keeps its own limits.
 	#[cfg(unix)]
@@ -290,8 +392,8 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 		}
 	}
 
-	// Use the shell's current working dir.
-	cmd.current_dir(context.shell.working_dir());
+	// Use the shell's current working dir, as the host spells it.
+	cmd.current_dir(&spawn_dir);
 
 	// Start with a clear environment.
 	cmd.env_clear();
@@ -306,8 +408,16 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 				cmd.env(k.as_str(), v.value().to_cow_str(context.shell).as_ref());
 			}
 		}
-		// Set _ to the resolved command path for external commands.
-		cmd.env("_", command_name);
+		// A child started in the directory a URL aliases must not be told its
+		// working directory is the URL: anything reading `PWD` directly would
+		// disagree with its own `getcwd()`. The shell's own `$PWD` keeps the
+		// URL spelling; only the child's environment is corrected.
+		if spawn_dir != working_dir {
+			cmd.env("PWD", &spawn_dir);
+		}
+		// Set _ to the resolved command path for external commands, as the host
+		// spells it when the program was a URL.
+		cmd.env("_", &program);
 	}
 
 	// Add in exported functions.
@@ -537,7 +647,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			};
 
 			if let Some(path) = path {
-				self.execute_via_external(&path)
+				self.execute_via_external(&path).await
 			} else {
 				// Bash updates $_ even when the command is not found, so mirror
 				// that here before reporting the error.
@@ -552,7 +662,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			}
 		} else {
 			let command_name = PathBuf::from(filename);
-			self.execute_via_external(command_name.as_path())
+			self.execute_via_external(command_name.as_path()).await
 		}
 	}
 
@@ -734,7 +844,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 		}
 	}
 
-	fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
+	async fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
 		let mut shell = self.shell;
 		let last_arg = Self::take_last_arg(&self.args);
 
@@ -757,7 +867,8 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 			self.process_group_id,
 			argv0,
 			&self.args[1..],
-		);
+		)
+		.await;
 
 		// Update $_ after command execution.
 		shell.update_last_arg_variable(last_arg);
@@ -770,7 +881,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 	}
 }
 
-pub(crate) fn execute_external_command(
+pub(crate) async fn execute_external_command(
 	context: ExecutionContext<'_, impl extensions::ShellExtensions>,
 	executable_path: &OsStr,
 	in_pipeline: bool,
@@ -809,7 +920,8 @@ pub(crate) fn execute_external_command(
 		argv0,
 		cmd_args.as_slice(),
 		false, /* empty environment? */
-	)?;
+	)
+	.await?;
 	let mut marker_output = if context.params.command_output_marker().is_some() {
 		let marker_args = cmd_args.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>();
 		let marker_args = marker_args.iter().map(AsRef::as_ref).collect::<Vec<&str>>();

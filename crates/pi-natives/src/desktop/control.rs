@@ -5,11 +5,12 @@
 //! until its held input and focus have been restored.
 use std::{
 	cell::{Cell, RefCell},
+	collections::HashMap,
 	marker::PhantomData,
 	rc::Rc,
 	sync::{
-		Arc, Weak,
-		atomic::{AtomicBool, AtomicU64, Ordering},
+		Arc, LazyLock, Weak,
+		atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 	},
 	thread,
 	time::{Duration, Instant},
@@ -19,6 +20,8 @@ use parking_lot::{Condvar, Mutex};
 
 use super::error::{CoreResult, DesktopError};
 
+#[cfg(target_os = "macos")]
+pub(crate) mod intervention;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -26,25 +29,43 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 #[cfg(target_os = "macos")]
-pub(crate) use macos::SYNTHETIC_EVENT_TAG;
+pub(crate) use macos::{
+	MONITORED_TYPES, POINTER_PRESS_TYPES, SYNTHETIC_EVENT_TAG, add_live_tap, invalidate_live_tap,
+	is_pointer_press, monitor_seen, uptime_ns,
+};
 
 #[derive(Default)]
 struct CancellationState {
-	generation: AtomicU64,
-	state:      Mutex<Option<Arc<ControlLease>>>,
-	wake:       Condvar,
+	generation:   AtomicU64,
+	state:        Mutex<Option<Arc<ControlLease>>>,
+	wake:         Condvar,
+	/// Takeover input stopped by the user's physical Escape. Host cancels,
+	/// retirement and release never count, so the host can tell the user's
+	/// stop from its own. Shared with every session under the same key.
+	escape_stops: Arc<AtomicU32>,
+	/// When the current computer run ends; input waiting for the user to
+	/// pause stops shortly before it.
+	#[cfg(target_os = "macos")]
+	deadline:     Mutex<Option<Instant>>,
 	#[cfg(target_os = "linux")]
-	async_wake: tokio::sync::Notify,
+	async_wake:   tokio::sync::Notify,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct CancellationSource(Arc<CancellationState>);
 
 impl CancellationSource {
+	/// A source whose physical-Escape stops count into `stops`.
+	pub(crate) fn counting_escapes(stops: Arc<AtomicU32>) -> Self {
+		Self(Arc::new(CancellationState { escape_stops: stops, ..CancellationState::default() }))
+	}
+
 	pub(crate) fn token(&self) -> OperationToken {
 		OperationToken {
-			source:     self.clone(),
+			source: self.clone(),
 			generation: self.0.generation.load(Ordering::Acquire),
+			#[cfg(target_os = "macos")]
+			reply_by: None,
 		}
 	}
 
@@ -78,7 +99,7 @@ impl CancellationSource {
 			return Err(busy());
 		}
 		if state.is_none() {
-			*state = Some(Arc::new(ControlLease::acquire(self)?));
+			*state = Some(Arc::new(ControlLease::acquire(self, true)?));
 		}
 		Ok(())
 	}
@@ -92,6 +113,18 @@ impl CancellationSource {
 	pub(crate) fn control_active(&self) -> bool {
 		self.0.state.lock().is_some()
 	}
+
+	/// How many times the user's physical Escape has stopped this session.
+	pub(crate) fn escape_stops(&self) -> u32 {
+		self.0.escape_stops.load(Ordering::Acquire)
+	}
+
+	/// Sets when the current computer run ends, `None` for no deadline. Each
+	/// run sets it before its first call.
+	#[cfg(target_os = "macos")]
+	pub(crate) fn set_deadline(&self, deadline: Option<Instant>) {
+		*self.0.deadline.lock() = deadline;
+	}
 }
 
 /// Weak callback ownership avoids a lease -> monitor -> source -> lease cycle.
@@ -104,15 +137,44 @@ impl EmergencyStop {
 			CancellationSource(source).cancel();
 		}
 	}
+
+	/// The user's physical Escape: counted before the cancel, so a host that
+	/// sees the cancelled operation already sees the stop that caused it.
+	fn escape(&self) {
+		if let Some(source) = self.0.upgrade() {
+			source.escape_stops.fetch_add(1, Ordering::AcqRel);
+			CancellationSource(source).cancel();
+		}
+	}
 }
 
 #[derive(Clone)]
 pub(crate) struct OperationToken {
 	source:     CancellationSource,
 	generation: u64,
+	/// When the caller stops waiting for this request's reply.
+	#[cfg(target_os = "macos")]
+	reply_by:   Option<Instant>,
 }
 
 impl OperationToken {
+	/// When this operation must have answered: the run's end or the caller's
+	/// reply timeout, whichever comes first.
+	#[cfg(target_os = "macos")]
+	pub(crate) fn deadline(&self) -> Option<Instant> {
+		let run = *self.source.0.deadline.lock();
+		match (run, self.reply_by) {
+			(Some(run), Some(reply)) => Some(run.min(reply)),
+			(run, reply) => run.or(reply),
+		}
+	}
+
+	/// This token for a request whose caller waits for its reply until `at`.
+	#[cfg(target_os = "macos")]
+	pub(crate) fn replying_by(self, at: Instant) -> Self {
+		Self { reply_by: Some(at), ..self }
+	}
+
 	pub(crate) fn enter(&self) -> OperationScope {
 		let previous = CURRENT.with_borrow_mut(|current| current.replace(self.clone()));
 		OperationScope { previous, _thread: PhantomData }
@@ -275,12 +337,62 @@ pub(crate) fn with_token_for_test<T>(token: &OperationToken, action: impl FnOnce
 	action()
 }
 
-#[cfg(target_os = "macos")]
-static USER_ACTIVITY: AtomicU64 = AtomicU64::new(0);
+/// Physical-Escape stop counts by host-chosen key. A count outlives the
+/// session that observed it, so a host that replaces a hung worker's session
+/// still sees a stop the old session never reported.
+static ESCAPE_STOPS: LazyLock<Mutex<HashMap<String, Arc<AtomicU32>>>> =
+	LazyLock::new(Mutex::default);
+
+/// The shared count for `key`; a session without a key counts alone.
+pub(crate) fn escape_stop_counter(key: Option<&str>) -> Arc<AtomicU32> {
+	key.map_or_else(Arc::default, |key| {
+		Arc::clone(ESCAPE_STOPS.lock().entry(key.to_owned()).or_default())
+	})
+}
+
+pub(crate) fn escape_stops(key: &str) -> u32 {
+	ESCAPE_STOPS
+		.lock()
+		.get(key)
+		.map_or(0, |stops| stops.load(Ordering::Acquire))
+}
+
+pub(crate) fn forget_escape_stops(key: &str) {
+	ESCAPE_STOPS.lock().remove(key);
+}
+
+/// Invalidates this process's event taps before it exits
+/// (`macos::close_taps`); only macOS taps are known to need it.
+#[cfg_attr(
+	not(target_os = "macos"),
+	allow(clippy::missing_const_for_fn, reason = "only macOS closes taps")
+)]
+pub(crate) fn close_event_taps() {
+	#[cfg(target_os = "macos")]
+	macos::close_taps();
+}
 
 #[cfg(target_os = "macos")]
-pub(crate) fn user_activity() -> u64 {
-	USER_ACTIVITY.load(Ordering::Acquire)
+static USER_CHOICES: AtomicU64 = AtomicU64::new(0);
+
+/// Mouse buttons and shortcuts (any key press but plain typing: Command-Tab,
+/// Control-Up, F3) the user pressed while the takeover monitor ran: the input
+/// that may pick an app, window, Space or menu, so takeover leaves the front
+/// application to the user.
+#[cfg(target_os = "macos")]
+pub(crate) fn user_choices() -> u64 {
+	USER_CHOICES.load(Ordering::Acquire)
+}
+
+#[cfg(target_os = "macos")]
+static LAST_USER_TYPING: AtomicU64 = AtomicU64::new(0);
+
+/// When (`CLOCK_UPTIME_RAW` nanoseconds) the takeover monitor last saw the
+/// user type a key or modifier that picks nothing; 0 if it never has, as
+/// without Input Monitoring.
+#[cfg(target_os = "macos")]
+pub(crate) fn last_user_typing() -> u64 {
+	LAST_USER_TYPING.load(Ordering::Acquire)
 }
 
 static OWNED: AtomicBool = AtomicBool::new(false);
@@ -324,16 +436,59 @@ struct ControlLease {
 }
 
 impl ControlLease {
-	fn acquire(source: &CancellationSource) -> CoreResult<Self> {
+	/// Physical Escape anywhere stops takeover input only. A background
+	/// operation leaves the user's keyboard alone, so an Escape they press in
+	/// their own app cancels nothing; the host interrupt still cancels it.
+	#[cfg(target_os = "macos")]
+	fn acquire(source: &CancellationSource, takeover: bool) -> CoreResult<Self> {
+		#[cfg(not(test))]
+		let start = macos::EscapeMonitor::start;
+		// Tests start the stand-in; naming the real monitor keeps it, and
+		// everything its tap uses, compiled and linted in test builds too.
+		#[cfg(test)]
+		let start = {
+			let _real = macos::EscapeMonitor::start;
+			test_escape::start
+		};
+		Self::acquire_arming(source, takeover, start)
+	}
+
+	#[cfg(target_os = "macos")]
+	fn acquire_arming(
+		source: &CancellationSource,
+		takeover: bool,
+		start: impl FnOnce(EmergencyStop) -> CoreResult<macos::EscapeMonitor>,
+	) -> CoreResult<Self> {
+		if !takeover {
+			return Self::background();
+		}
 		let kernel = KernelOwner::acquire()?;
-		#[cfg(target_os = "macos")]
-		let escape = macos::EscapeMonitor::start(EmergencyStop(Arc::downgrade(&source.0)))?;
+		let escape = start(EmergencyStop(Arc::downgrade(&source.0)))?;
+		Ok(Self { _escape: Some(escape), _kernel: kernel, running: AtomicBool::new(false) })
+	}
+
+	#[cfg(not(target_os = "macos"))]
+	fn acquire(source: &CancellationSource, takeover: bool) -> CoreResult<Self> {
+		if takeover {
+			Self::acquire_takeover(source)
+		} else {
+			Self::background()
+		}
+	}
+
+	fn background() -> CoreResult<Self> {
+		Ok(Self { _escape: None, _kernel: KernelOwner::acquire()?, running: AtomicBool::new(false) })
+	}
+
+	#[cfg(not(target_os = "macos"))]
+	fn acquire_takeover(source: &CancellationSource) -> CoreResult<Self> {
+		let kernel = KernelOwner::acquire()?;
 		#[cfg(windows)]
 		let escape = windows::EscapeMonitor::start(EmergencyStop(Arc::downgrade(&source.0)))?;
 		#[cfg(target_os = "linux")]
 		let escape = linux::EscapeMonitor::start(EmergencyStop(Arc::downgrade(&source.0)))?;
 		Ok(Self {
-			#[cfg(any(target_os = "macos", windows))]
+			#[cfg(windows)]
 			_escape: Some(escape),
 			#[cfg(target_os = "linux")]
 			_escape: escape,
@@ -394,14 +549,16 @@ pub(crate) struct InputLease {
 }
 
 impl InputLease {
-	pub(crate) fn acquire(token: &OperationToken) -> CoreResult<Self> {
+	/// `takeover` arms the physical-Escape stop for this operation; held control
+	/// keeps the stop it armed when it was granted.
+	pub(crate) fn acquire(token: &OperationToken, takeover: bool) -> CoreResult<Self> {
 		token.check()?;
 		let owner = {
 			let state = token.source.0.state.lock();
 			token.check()?;
 			match state.as_ref() {
 				Some(owner) => owner.clone(),
-				None => Arc::new(ControlLease::acquire(&token.source)?),
+				None => Arc::new(ControlLease::acquire(&token.source, takeover)?),
 			}
 		};
 		owner
@@ -568,6 +725,38 @@ pub(crate) fn grant_for_test(source: &CancellationSource) {
 	*source.0.state.lock() = Some(Arc::new(owner));
 }
 
+/// The Escape monitor's stand-in in tests, where no event tap can start: a
+/// takeover lease is refused as it is without the permission, and the
+/// [`EmergencyStop`] the monitor's tap would cancel through on a physical
+/// Escape is kept for [`press_escape_for_test`].
+#[cfg(all(test, target_os = "macos"))]
+mod test_escape {
+	use std::cell::RefCell;
+
+	use super::{CoreResult, DesktopError, EmergencyStop, macos};
+
+	thread_local! {
+		pub(super) static ARMED: RefCell<Vec<EmergencyStop>> = const { RefCell::new(Vec::new()) };
+	}
+
+	pub(super) fn start(stop: EmergencyStop) -> CoreResult<macos::EscapeMonitor> {
+		ARMED.with_borrow_mut(|armed| armed.push(stop));
+		Err(DesktopError::permission_denied("no event tap in tests"))
+	}
+}
+
+/// Presses a physical Escape for every Escape stop a lease armed on this
+/// thread since the last press, as the monitor's tap would; returns how many
+/// there were.
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) fn press_escape_for_test() -> usize {
+	let armed = test_escape::ARMED.with_borrow_mut(std::mem::take);
+	for stop in &armed {
+		stop.cancel();
+	}
+	armed.len()
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -588,15 +777,15 @@ mod tests {
 			.expect("idempotent acquisition");
 		let old = source.token();
 		{
-			let _operation = InputLease::acquire(&old).expect("reuse task ownership");
-			assert!(InputLease::acquire(&source.token()).is_err());
-			assert!(InputLease::acquire(&CancellationSource::default().token()).is_err());
+			let _operation = InputLease::acquire(&old, false).expect("reuse task ownership");
+			assert!(InputLease::acquire(&source.token(), false).is_err());
+			assert!(InputLease::acquire(&CancellationSource::default().token(), false).is_err());
 		}
 		source.retire();
 		assert!(source.control_active());
 		assert!(old.check().is_err());
 		let fresh = source.token();
-		let running = InputLease::acquire(&fresh).expect("fresh run reuses ownership");
+		let running = InputLease::acquire(&fresh, false).expect("fresh run reuses ownership");
 		source.cancel();
 		assert!(!source.control_active());
 		assert!(fresh.check().is_err());
@@ -630,6 +819,74 @@ mod tests {
 		assert!(!source.control_active());
 		assert!(fresh.check().is_err());
 		drop(KernelOwner::acquire().expect("idle Escape releases kernel ownership"));
+		remove_test_lock();
+	}
+
+	#[test]
+	fn only_the_users_escape_counts_as_an_escape_stop() {
+		let source = CancellationSource::default();
+		let emergency = EmergencyStop(Arc::downgrade(&source.0));
+		source.retire();
+		source.cancel();
+		source.release_control();
+		emergency.cancel();
+		assert_eq!(source.escape_stops(), 0, "host and monitor-failure stops are not the user's");
+		let running = source.token();
+		emergency.escape();
+		assert_eq!(source.escape_stops(), 1);
+		assert!(running.check().is_err(), "the user's Escape cancels running input");
+		source.cancel();
+		assert_eq!(source.escape_stops(), 1);
+	}
+
+	#[test]
+	fn escape_stops_outlive_the_session_under_its_key() {
+		let key = format!("escape-key-test-{}", std::process::id());
+		let first = CancellationSource::counting_escapes(escape_stop_counter(Some(&key)));
+		EmergencyStop(Arc::downgrade(&first.0)).escape();
+		drop(first);
+		assert_eq!(escape_stops(&key), 1, "the host reads a stop after its session is gone");
+		let replacement = CancellationSource::counting_escapes(escape_stop_counter(Some(&key)));
+		assert_eq!(replacement.escape_stops(), 1, "a replacement session keeps the count");
+		let keyless = CancellationSource::counting_escapes(escape_stop_counter(None));
+		EmergencyStop(Arc::downgrade(&keyless.0)).escape();
+		assert_eq!(escape_stops(&key), 1, "a session without the key counts alone");
+		forget_escape_stops(&key);
+		assert_eq!(escape_stops(&key), 0);
+	}
+
+	#[test]
+	fn the_host_interrupt_still_cancels_background_input() {
+		let _serial = OWNERSHIP_TEST.lock();
+		let source = CancellationSource::default();
+		let token = source.token();
+		let lease =
+			InputLease::acquire(&token, false).expect("background input needs no Escape stop");
+		source.cancel();
+		assert!(token.check().is_err(), "the host interrupt still cancels background input");
+		drop(lease);
+		drop(KernelOwner::acquire().expect("background input releases kernel ownership"));
+		remove_test_lock();
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn physical_escape_stops_takeover_input_but_not_background_input() {
+		let _serial = OWNERSHIP_TEST.lock();
+		press_escape_for_test();
+		let source = CancellationSource::default();
+		let background = source.token();
+		drop(InputLease::acquire(&background, false).expect("background lease"));
+		assert_eq!(press_escape_for_test(), 0, "background input arms no Escape stop");
+		assert!(background.check().is_ok(), "the user's Escape leaves background input running");
+		let takeover = source.token();
+		assert!(
+			InputLease::acquire(&takeover, true).is_err(),
+			"a takeover whose Escape stop cannot start is refused"
+		);
+		assert_eq!(press_escape_for_test(), 1);
+		assert!(takeover.check().is_err(), "physical Escape stops takeover input");
+		drop(KernelOwner::acquire().expect("takeover input releases kernel ownership"));
 		remove_test_lock();
 	}
 

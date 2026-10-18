@@ -2,20 +2,32 @@ mod ax;
 mod capture;
 mod date;
 mod input;
+mod key_reroute;
+mod keymap;
 mod permission;
 mod process;
 mod session;
 mod skylight;
 mod spaces;
 
-pub(super) use ax::menus;
+#[cfg(test)]
+pub(super) use ax::application_handle;
+pub(super) use ax::{ax_window_ids, has_open_window, menus};
+pub(super) use capture::{application_windows, has_onscreen_window};
 use image::RgbaImage;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+pub(super) use process::started as process_started;
 pub(super) use session::screen_state;
+pub(super) use skylight::front_pid;
+pub(super) use spaces::window_on_another_space;
 
 use self::{ax::MacAx, capture::MacCapture, input::MacInput};
 use super::{
-	backend::{AxBackend, Backend, DeliveryMode, DisplayAwakeHold, PointerEvent},
+	ax::AxHandle,
+	backend::{
+		AxBackend, Backend, DeliveryMode, DisplayAwakeHold, ElementDelivery, ElementInput,
+		PointerEvent,
+	},
 	control::OperationToken,
 	error::{CoreResult, DesktopError},
 	frame::FrameGeometry,
@@ -93,6 +105,34 @@ impl Backend for MacosBackend {
 		self.capture.windows()
 	}
 
+	fn window_app(&mut self, id: &str) -> Option<libc::pid_t> {
+		window_owner(id, skylight::window_owner_pid, || {
+			self
+				.capture
+				.window(id)
+				.ok()?
+				.pid
+				.and_then(|pid| libc::pid_t::try_from(pid).ok())
+		})
+	}
+
+	fn app_name(&mut self, pid: libc::pid_t) -> String {
+		NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+			.and_then(|app| app.localizedName())
+			.map_or_else(|| format!("process {pid}"), |name| name.to_string())
+	}
+
+	fn window_input(&mut self, id: &str, pid: libc::pid_t) -> libc::pid_t {
+		match self
+			.capture
+			.window(id)
+			.map(|window| ax::window_content(pid, &window))
+		{
+			Ok(ax::WindowContent::Remote { pid: owner, .. }) => owner,
+			_ => pid,
+		}
+	}
+
 	fn screen_state(&mut self, display: Option<&DisplaySelector>) -> ScreenState {
 		session::screen_state(display.unwrap_or_else(|| self.capture.selector()))
 	}
@@ -145,6 +185,24 @@ impl Backend for MacosBackend {
 		token.check()?;
 		Self::require_input_permission()?;
 		self.input.key_chord(target, keys, mode, &self.capture)
+	}
+
+	fn element_input(
+		&mut self,
+		target: &Target,
+		element: &AxHandle,
+		input: &ElementInput,
+		mode: DeliveryMode,
+		token: &OperationToken,
+	) -> CoreResult<ElementDelivery> {
+		token.check()?;
+		Self::require_input_permission()?;
+		let Target::Window(id) = target else {
+			return Err(DesktopError::invalid_target("element input needs the element's window"));
+		};
+		self
+			.input
+			.element_input(id, ax::mac_handle(element)?, input, mode, &self.capture)
 	}
 
 	fn hold_keys(
@@ -219,10 +277,43 @@ impl Backend for MacosBackend {
 	}
 }
 
+/// The process owning the element `h` names.
+pub(super) fn element_app(h: &AxHandle) -> CoreResult<libc::pid_t> {
+	ax::handle_pid(h)
+}
+
+/// The process owning window `id`: its `WindowServer` owner (`server_owner`),
+/// which answers for a window off the current Space too, else the owner the
+/// window list names (`listed_owner`), so a missing owner lookup fails only
+/// for a window that is gone.
+fn window_owner(
+	id: &str,
+	server_owner: impl FnOnce(u32) -> Option<libc::pid_t>,
+	listed_owner: impl FnOnce() -> Option<libc::pid_t>,
+) -> Option<libc::pid_t> {
+	id.parse().ok().and_then(server_owner).or_else(listed_owner)
+}
+
 fn permission_label(granted: bool) -> String {
 	if granted {
 		"granted".to_string()
 	} else {
 		"denied".to_string()
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::window_owner;
+
+	#[test]
+	fn a_window_owner_the_server_cannot_name_comes_from_the_window_list() {
+		let unasked = || -> Option<libc::pid_t> { panic!("the window list is not read") };
+		assert_eq!(window_owner("42", |_| Some(7), unasked), Some(7));
+		// `SLSGetWindowOwner` unavailable: the listed window still names its app.
+		assert_eq!(window_owner("42", |_| None, || Some(8)), Some(8));
+		// Only a window neither knows is gone.
+		assert_eq!(window_owner("42", |_| None, || None), None);
+		assert_eq!(window_owner("not-a-window", |_| Some(7), || None), None);
 	}
 }

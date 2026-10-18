@@ -22,15 +22,18 @@ use std::{
 	panic::AssertUnwindSafe,
 	sync::{
 		Arc,
-		atomic::{AtomicUsize, Ordering},
+		atomic::{AtomicU32, AtomicUsize, Ordering},
 	},
 	thread::{self, JoinHandle},
 	time::{Duration, Instant},
 };
 
-pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery};
+pub use applications::{Application, ApplicationOpenOptions, ApplicationQuery, OpenedApplication};
 use ax::{AxRegistry, register_node};
-use backend::{Backend, DeliveryMode, DisplayAwakeHold, MouseButton, PointerEvent};
+use backend::{
+	Backend, DeliveryMode, DisplayAwakeHold, ElementDelivery, ElementInput, KeyboardFocus,
+	MouseButton, PointerEvent, is_raise_action,
+};
 use control::{CancellationSource, InputLease, OperationToken};
 use error::{CoreResult, DesktopError, ErrorCode};
 use frame::{FrameGeometry, apply_capture_caps, encode_png};
@@ -153,7 +156,7 @@ enum Response {
 	Capture(DesktopCapture),
 	Observation(DesktopObservation),
 	Applications(Vec<Application>),
-	Application(Application),
+	OpenedApplication(OpenedApplication),
 	MenuItems(Vec<DesktopMenuItem>),
 	Unit,
 	Snapshot(AxSnapshot),
@@ -341,6 +344,12 @@ enum Request {
 		options:   ParsedPointerOptions,
 		reply:     Reply,
 	},
+	AxInput {
+		reference: String,
+		input:     ElementInput,
+		takeover:  Option<bool>,
+		reply:     Reply,
+	},
 	Close {
 		reply: Reply,
 	},
@@ -382,11 +391,14 @@ impl Request {
 			| Self::AxSelectText { reply, .. }
 			| Self::AxFocus { reply, .. }
 			| Self::AxClick { reply, .. }
+			| Self::AxInput { reply, .. }
 			| Self::Close { reply } => reply,
 		};
 		reply.send(result).is_ok()
 	}
 
+	/// Requests that can send input or move focus, which hold the input lease.
+	/// A menu read counts: on macOS it makes its window key first.
 	const fn is_mutation(&self) -> bool {
 		matches!(
 			self,
@@ -402,12 +414,65 @@ impl Request {
 				| Self::AxSelectText { .. }
 				| Self::AxFocus { .. }
 				| Self::AxClick { .. }
+				| Self::AxInput { .. }
 				| Self::OpenApplication { .. }
+				| Self::MenuItems { .. }
 				| Self::MenuSelect { .. }
 				| Self::BringToCurrentSpace { .. }
 				| Self::HoldKeys { .. }
 				| Self::HoldMouse { .. }
 		)
+	}
+
+	/// Whether this mutation takes over the user's own input or foreground,
+	/// which arms the physical-Escape stop: `takeover: true` delivery, input
+	/// to a desktop or display target (it drives the user's real pointer and
+	/// keyboard), an explicit raise, and an activating launch. Held control
+	/// armed the stop when it was granted, so every operation under it keeps
+	/// the stop.
+	fn takes_over(&self) -> bool {
+		let (target, takeover) = match self {
+			Self::HoldKeys { target, takeover, .. }
+			| Self::HoldMouse { target, takeover, .. }
+			| Self::MoveMouse { target, takeover, .. }
+			| Self::Scroll { target, takeover, .. }
+			| Self::TypeText { target, takeover, .. }
+			| Self::KeyChord { target, takeover, .. } => (Some(target), *takeover),
+			Self::Click { target, options, .. } | Self::Drag { target, options, .. } => {
+				(Some(target), options.takeover)
+			},
+			Self::AxClick { options, .. } => (None, options.takeover),
+			Self::AxInput { takeover, .. } => (None, *takeover),
+			Self::RaiseWindow { .. } => return true,
+			Self::OpenApplication { options, .. } => return options.activate.unwrap_or(false),
+			Self::AxPerform { action, .. } => return is_raise_action(action),
+			// Background-only mutations and reads: listed by name so a new
+			// request variant must decide whether it arms the stop.
+			Self::MenuItems { .. }
+			| Self::MenuSelect { .. }
+			| Self::BringToCurrentSpace { .. }
+			| Self::AxSetValue { .. }
+			| Self::AxSelectText { .. }
+			| Self::AxFocus { .. }
+			| Self::Capabilities { .. }
+			| Self::ListDisplays { .. }
+			| Self::ListWindows { .. }
+			| Self::Capture { .. }
+			| Self::CaptureRegion { .. }
+			| Self::Observe { .. }
+			| Self::ListApplications { .. }
+			| Self::AxSnapshot { .. }
+			| Self::AxQuery { .. }
+			| Self::AxElementAt { .. }
+			| Self::AxFocused { .. }
+			| Self::AxNode { .. }
+			| Self::AxAttributes { .. }
+			| Self::AxChildren { .. }
+			| Self::AxParent { .. }
+			| Self::Close { .. } => return false,
+		};
+		target.is_some_and(|target| !matches!(target, Target::Window(_)))
+			|| DeliveryMode::from_takeover(takeover) == DeliveryMode::Foreground
 	}
 
 	const fn frame_target(&self) -> Option<&Target> {
@@ -451,6 +516,7 @@ impl Request {
 			| Self::AxPerform { reference, .. }
 			| Self::AxSetValue { reference, .. }
 			| Self::AxSelectText { reference, .. }
+			| Self::AxInput { reference, .. }
 			| Self::AxFocus { reference, .. }
 			| Self::AxClick { reference, .. } => Some(reference),
 			_ => None,
@@ -466,6 +532,86 @@ impl Request {
 	const fn is_activity(&self) -> bool {
 		!matches!(self, Self::Capabilities { .. } | Self::Close { .. })
 	}
+
+	/// The window or element whose app this request reads or acts on, for the
+	/// user-input watch. Desktop and display targets name no app, and a launch
+	/// has no process yet.
+	#[cfg(target_os = "macos")]
+	fn app_access(&self) -> Option<AppAccess<'_>> {
+		const fn window(target: &Target) -> Option<&str> {
+			match target {
+				Target::Window(id) => Some(id.as_str()),
+				Target::Desktop | Target::Display(_) => None,
+			}
+		}
+		match self {
+			Self::Capture { target, .. }
+			| Self::CaptureRegion { target, .. }
+			| Self::Observe { target, .. }
+			| Self::AxSnapshot { target, .. }
+			| Self::AxQuery { target, .. } => window(target).map(AppAccess::Read),
+			Self::AxElementAt { target, .. } => window(target).map(AppAccess::Look),
+			// A menu read makes the window key in its app first, so it acts on
+			// the app like input.
+			Self::MenuItems { target, .. }
+			| Self::MenuSelect { target, .. }
+			| Self::HoldKeys { target, .. }
+			| Self::HoldMouse { target, .. }
+			| Self::Click { target, .. }
+			| Self::MoveMouse { target, .. }
+			| Self::Drag { target, .. }
+			| Self::Scroll { target, .. }
+			| Self::TypeText { target, .. }
+			| Self::KeyChord { target, .. } => window(target).map(AppAccess::Input),
+			Self::RaiseWindow { id, .. } | Self::BringToCurrentSpace { id, .. } => {
+				Some(AppAccess::Input(id))
+			},
+			Self::AxPerform { reference, .. }
+			| Self::AxSetValue { reference, .. }
+			| Self::AxSelectText { reference, .. }
+			| Self::AxFocus { reference, .. }
+			| Self::AxClick { reference, .. }
+			| Self::AxInput { reference, .. } => Some(AppAccess::Element(reference)),
+			// Listed by name so a new request must decide whether the watch
+			// covers it.
+			Self::Capabilities { .. }
+			| Self::ListDisplays { .. }
+			| Self::ListWindows { .. }
+			| Self::ListApplications { .. }
+			| Self::OpenApplication { .. }
+			| Self::AxFocused { .. }
+			| Self::AxNode { .. }
+			| Self::AxAttributes { .. }
+			| Self::AxChildren { .. }
+			| Self::AxParent { .. }
+			| Self::Close { .. } => None,
+		}
+	}
+}
+
+/// How a request involves an app, for the user-input watch.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+enum AppAccess<'a> {
+	/// A capture, observation, or AX snapshot or query of a window: it shows
+	/// the window as it is now.
+	Read(&'a str),
+	/// Another read of a window.
+	Look(&'a str),
+	/// Input or another mutation aimed at a window.
+	Input(&'a str),
+	/// Input or another mutation aimed at an element ref.
+	Element(&'a str),
+}
+
+/// A request's part in the user-input watch, held while it runs.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct AppWatch {
+	/// The app whose window a read shows, and when the read began.
+	read:   Option<(libc::pid_t, Instant)>,
+	/// An admitted input's key-press watch.
+	_input: Option<control::intervention::InputWatch>,
 }
 
 #[derive(Clone)]
@@ -510,6 +656,17 @@ struct Worker {
 	/// getter can answer while an operation holds the worker.
 	capabilities:  Arc<Mutex<Option<DesktopCapabilities>>>,
 	display_awake: Arc<DisplayAwake>,
+	/// The user's own input into the apps this session reads and acts on.
+	#[cfg(target_os = "macos")]
+	listener:      control::intervention::Listener,
+	/// The app whose window the request being served read, and when the read
+	/// began; it shows the user's input only once its reply is delivered.
+	#[cfg(target_os = "macos")]
+	read:          Option<(libc::pid_t, Instant)>,
+	/// Windows whose drawing process the user-input watch already looked up;
+	/// a window keeps the process that draws it, so each is probed once.
+	#[cfg(target_os = "macos")]
+	drawer_probed: std::collections::HashSet<String>,
 }
 
 impl Worker {
@@ -525,6 +682,12 @@ impl Worker {
 			frames: HashMap::new(),
 			capabilities,
 			display_awake,
+			#[cfg(target_os = "macos")]
+			listener: control::intervention::Listener::default(),
+			#[cfg(target_os = "macos")]
+			read: None,
+			#[cfg(target_os = "macos")]
+			drawer_probed: std::collections::HashSet::new(),
 		}
 	}
 
@@ -732,6 +895,13 @@ impl Worker {
 				self.frames.remove(&key);
 			}
 		}
+		#[cfg(target_os = "macos")]
+		if let Some((pid, started)) = self.read.take()
+			&& !failed
+			&& delivered
+		{
+			self.listener.read(pid, started);
+		}
 	}
 
 	/// A failure while the screen is locked or the display asleep names that
@@ -801,9 +971,26 @@ impl Worker {
 		}
 		token.check()?;
 		let _scope = token.enter();
+		// Input the user's recent activity holds back fails here, before it
+		// takes the input lease.
+		#[cfg(target_os = "macos")]
+		let watch = {
+			self.read = None;
+			match self.watch_app(request, token) {
+				Ok(watch) => watch,
+				// Naming an element's app can find it destroyed; that `StaleRef`
+				// names its match like one from the request itself.
+				Err(error) => {
+					return Err(match request.reference() {
+						Some(reference) => self.name_match(reference, error, token),
+						None => error,
+					});
+				},
+			}
+		};
 		let lease = request
 			.is_mutation()
-			.then(|| InputLease::acquire(token))
+			.then(|| InputLease::acquire(token, request.takes_over()))
 			.transpose()?;
 		token.check()?;
 		// A full capture replaces coordinates only if it completes in its
@@ -827,6 +1014,11 @@ impl Worker {
 					self.frames.remove(target.key());
 				},
 			}
+		}
+		#[cfg(target_os = "macos")]
+		if let Ok(response) = &result {
+			self.read = watch.read;
+			self.watch_found(request, response);
 		}
 		// A `StaleRef` search reads the whole window, which can take long
 		// enough to keep other sessions from input: it runs once the call has
@@ -882,6 +1074,115 @@ impl Worker {
 		}
 	}
 
+	/// Watches the user's own input into the app `request` reads or acts on,
+	/// starting with the first request to name it. Input to an app the user
+	/// has used since the session last read it waits for them to pause, then
+	/// fails ([`control::intervention::Listener::admit`]). Without the tap
+	/// nothing is watched, so the owner is not even looked up.
+	#[cfg(target_os = "macos")]
+	fn watch_app(&mut self, request: &Request, token: &OperationToken) -> CoreResult<AppWatch> {
+		let Some(access) = request.app_access() else {
+			return Ok(AppWatch::default());
+		};
+		if !self.listener.listening() {
+			return Ok(AppWatch::default());
+		}
+		let started = Instant::now();
+		let (app, input) = match access {
+			AppAccess::Read(id) | AppAccess::Look(id) | AppAccess::Input(id) => {
+				let app = self.backend()?.window_app(id);
+				// The user's input into a panel another process draws goes to
+				// that process from the first read on, before any input of the
+				// session's names it.
+				let input = match app {
+					Some(pid) if self.drawer_probed.insert(id.to_string()) => {
+						Some(self.backend()?.window_input(id, pid))
+					},
+					_ => None,
+				};
+				(app, input)
+			},
+			AppAccess::Element(reference) => match self.element_app(reference)? {
+				Some((app, input)) => (Some(app), Some(input)),
+				None => (None, None),
+			},
+		};
+		let Some(pid) = app else {
+			// Input whose app cannot be named fails like the input itself
+			// would; a ref that no longer resolves fails in `process`.
+			return match access {
+				AppAccess::Input(id) => Err(DesktopError::window_not_found(format!(
+					"window '{id}' was not found; it may be closed"
+				))),
+				_ => Ok(AppWatch::default()),
+			};
+		};
+		self.enrol(pid, input);
+		Ok(match access {
+			AppAccess::Read(_) => AppWatch { read: Some((pid, started)), _input: None },
+			AppAccess::Look(_) => AppWatch::default(),
+			AppAccess::Input(_) | AppAccess::Element(_) => {
+				AppWatch { read: None, _input: Some(self.listener.admit(pid, token)?) }
+			},
+		})
+	}
+
+	/// Records the user's input into app `pid` from now on, with their input
+	/// into process `input`, which draws its content, as input into it. The
+	/// app's name is looked up only when the app is new to the watch.
+	#[cfg(target_os = "macos")]
+	fn enrol(&mut self, pid: libc::pid_t, input: Option<libc::pid_t>) {
+		let backend = &mut self.backend;
+		self
+			.listener
+			.touch(pid, macos::process_started(pid), || match backend {
+				Ok(backend) => backend.app_name(pid),
+				Err(_) => format!("process {pid}"),
+			});
+		if let Some(input) = input {
+			self.listener.route(input, pid);
+		}
+	}
+
+	/// Watches the app of the element a read found outside any window the
+	/// request named, such as the focused element, so the user's input there
+	/// before the session acts on its ref counts. The read shows only that
+	/// element, not the window, so input the user left unread stays unread.
+	#[cfg(target_os = "macos")]
+	fn watch_found(&mut self, request: &Request, response: &Response) {
+		let Response::Node(Some(node)) = response else {
+			return;
+		};
+		if request.app_access().is_some() || !self.listener.listening() {
+			return;
+		}
+		if let Ok(Some((pid, input))) = self.element_app(&node.ref_) {
+			self.enrol(pid, Some(input));
+		}
+	}
+
+	/// The app an element ref acts in, with the process that owns the element.
+	/// The element belongs to the window it was read from, whose app may have
+	/// another process draw a panel, such as `openAndSavePanelService` for an
+	/// Open or Save panel; elements read from the desktop belong to their own
+	/// process. `None` when the ref no longer resolves.
+	#[cfg(target_os = "macos")]
+	fn element_app(&mut self, reference: &str) -> CoreResult<Option<(libc::pid_t, libc::pid_t)>> {
+		let Ok(handle) = self.registry.resolve(reference) else {
+			return Ok(None);
+		};
+		let pid = macos::element_app(&handle)?;
+		let window = match self
+			.registry
+			.target(reference)
+			.map(|key| Target::parse(&key))
+		{
+			Ok(Target::Window(id)) => self.backend()?.window_app(&id),
+			_ => None,
+		};
+		Ok(Some((window.unwrap_or(pid), pid)))
+	}
+
 	fn ax(&mut self) -> CoreResult<&mut dyn backend::AxBackend> {
 		self
 			.backend()?
@@ -914,7 +1215,7 @@ impl Worker {
 				Ok(Response::Applications(applications::list(options.clone())?))
 			},
 			Request::OpenApplication { id, options, .. } => {
-				Ok(Response::Application(applications::open(id, options.clone())?))
+				Ok(Response::OpenedApplication(applications::open(id, options.clone())?))
 			},
 			Request::MenuItems { target, path, .. } => {
 				let window = self.explicit_window(target)?;
@@ -1240,7 +1541,77 @@ impl Worker {
 				)?;
 				Ok(Response::Unit)
 			},
+			Request::AxInput { reference, input, takeover, .. } => {
+				let h = self.registry.resolve(reference)?;
+				let windows = self.backend()?.windows()?;
+				let target = Target::Window(self.ax()?.window_id(&h, &windows)?);
+				let mode = DeliveryMode::from_takeover(*takeover);
+				match self
+					.backend()?
+					.element_input(&target, &h, input, mode, token)?
+				{
+					ElementDelivery::Delivered => Ok(Response::Unit),
+					ElementDelivery::Unfocused(focus) => {
+						Err(self.element_focus_refusal(reference, focus, mode))
+					},
+				}
+			},
 			Request::Close { .. } => Ok(Response::Unit),
+		}
+	}
+}
+
+impl Worker {
+	/// The error for keys addressed to `reference` that were never sent
+	/// because the element did not take keyboard focus: where focus is now,
+	/// with the focused element's `ax()` line and a ref for it.
+	fn element_focus_refusal(
+		&mut self,
+		reference: &str,
+		focus: KeyboardFocus,
+		mode: DeliveryMode,
+	) -> DesktopError {
+		let window = match focus.window.as_deref() {
+			None => "an unidentified window".to_owned(),
+			Some(id) => {
+				let title = self
+					.backend()
+					.and_then(|backend| backend.windows())
+					.ok()
+					.and_then(|windows| windows.into_iter().find(|window| window.id == id))
+					.map(|window| window.title);
+				match title {
+					Some(title) => format!("window {id} ({title:?})"),
+					None => format!("window {id}"),
+				}
+			},
+		};
+		let target = focus
+			.window
+			.or_else(|| self.registry.target(reference).ok())
+			.unwrap_or_else(|| "desktop".to_owned());
+		let element = match focus.element {
+			None => "no element".to_owned(),
+			Some(handle) => {
+				let (backend, registry) = (&mut self.backend, &mut self.registry);
+				backend
+					.as_mut()
+					.ok()
+					.and_then(|backend| backend.ax())
+					.and_then(|ax| ax::element_line(ax, registry, &target, handle).ok())
+					.unwrap_or_else(|| "an element that could not be read".to_owned())
+			},
+		};
+		let message = format!(
+			"{reference} did not take keyboard focus, so nothing was sent; its application's \
+			 keyboard focus is in {window}, on {element}. Re-read with win.ax() or win.observe() \
+			 before retrying"
+		);
+		match mode {
+			DeliveryMode::Background => {
+				DesktopError::background_unavailable(format!("{message}, or retry with takeover:true"))
+			},
+			DeliveryMode::Foreground => DesktopError::input_failed(message),
 		}
 	}
 }
@@ -1289,11 +1660,15 @@ struct SessionCore {
 	operation_timeout: Duration,
 }
 impl SessionCore {
-	fn new(selector: DisplaySelector) -> Arc<Self> {
-		Self::with_operation_timeout(selector, OPERATION_TIMEOUT)
+	fn new(selector: DisplaySelector, escape_stops: Arc<AtomicU32>) -> Arc<Self> {
+		Self::with_operation_timeout(selector, escape_stops, OPERATION_TIMEOUT)
 	}
 
-	fn with_operation_timeout(selector: DisplaySelector, operation_timeout: Duration) -> Arc<Self> {
+	fn with_operation_timeout(
+		selector: DisplaySelector,
+		escape_stops: Arc<AtomicU32>,
+		operation_timeout: Duration,
+	) -> Arc<Self> {
 		Arc::new(Self {
 			selector,
 			lifecycle: Mutex::new(Lifecycle {
@@ -1305,7 +1680,7 @@ impl SessionCore {
 			capabilities: Arc::default(),
 			display_awake: Arc::default(),
 			in_flight: AtomicUsize::new(0),
-			cancellation: CancellationSource::default(),
+			cancellation: CancellationSource::counting_escapes(escape_stops),
 			operation_timeout,
 		})
 	}
@@ -1349,11 +1724,15 @@ impl SessionCore {
 		let (txr, rxr) = flume::bounded(0);
 		let tx = self.ensure_started()?;
 		self.in_flight.fetch_add(1, Ordering::AcqRel);
+		let reply_by = Instant::now() + self.operation_timeout;
+		// Input waiting for the user to pause gives up before this caller does.
+		#[cfg(target_os = "macos")]
+		let token = token.replying_by(reply_by);
 		let response = tx
 			.send(QueuedRequest { request: make(txr), token })
 			.map_err(|_| DesktopError::internal("native desktop worker stopped unexpectedly"))
 			.and_then(|()| {
-				rxr.recv_timeout(self.operation_timeout).map_err(|e| {
+				rxr.recv_deadline(reply_by).map_err(|e| {
 					self.display_awake.cancel_and_release(&self.cancellation);
 					DesktopError::timeout(format!("native desktop operation did not complete: {e}"))
 				})
@@ -1416,6 +1795,30 @@ fn response_unit(response: Response) -> CoreResult<()> {
 	}
 }
 
+/// Physical-Escape stops counted under `key` by every desktop session created
+/// with it, including closed ones, until the key is forgotten.
+#[napi]
+pub fn desktop_escape_stops(key: String) -> u32 {
+	control::escape_stops(&key)
+}
+
+/// Drops the stop count kept under `key` once no session will use it again.
+#[napi]
+pub fn forget_desktop_escape_stops(key: String) {
+	control::forget_escape_stops(&key);
+}
+
+/// Invalidates this process's event taps before it exits.
+///
+/// No desktop session here sees the user's input again afterwards. A macOS tap
+/// that dies with its process while the user types makes `WindowServer`
+/// deliver their key again; Bun's `process.exit` runs no native exit hook, so
+/// the host calls this from its exit handler.
+#[napi]
+pub fn close_desktop_event_taps() {
+	control::close_event_taps();
+}
+
 /// Persistent, serialized native desktop capture/input/accessibility session.
 #[napi]
 pub struct DesktopSession {
@@ -1433,7 +1836,9 @@ impl Drop for DesktopSession {
 impl DesktopSession {
 	#[napi(constructor)]
 	pub fn new(options: Option<DesktopSessionOptions>) -> Result<Self> {
-		Ok(Self { core: SessionCore::new(DisplaySelector::parse(options.and_then(|o| o.display))) })
+		let options = options.unwrap_or_default();
+		let escape_stops = control::escape_stop_counter(options.escape_stop_key.as_deref());
+		Ok(Self { core: SessionCore::new(DisplaySelector::parse(options.display), escape_stops) })
 	}
 
 	/// Asks the worker when it is idle, so permissions are read live. While
@@ -1483,6 +1888,14 @@ impl DesktopSession {
 	#[napi]
 	pub fn release_display_awake(&self) {
 		self.core.display_awake.release_turn();
+	}
+
+	/// How many times the user's physical Escape has stopped takeover input in
+	/// this session, or under its `escapeStopKey`. Host cancels, retirement and
+	/// release never count, so a rise tells the host the user stopped the work.
+	#[napi(getter)]
+	pub fn escape_stops(&self) -> u32 {
+		self.core.cancellation.escape_stops()
 	}
 
 	#[napi]
@@ -1535,7 +1948,7 @@ impl DesktopSession {
 		&self,
 		id: String,
 		options: Option<ApplicationOpenOptions>,
-	) -> Result<task::Promise<Application>> {
+	) -> Result<task::Promise<OpenedApplication>> {
 		let c = Arc::clone(&self.core);
 		let token = c.cancellation.token();
 		Ok(task::blocking("desktop.openApplication", (), move |_| {
@@ -1544,7 +1957,7 @@ impl DesktopSession {
 				options: options.unwrap_or_default(),
 				reply,
 			})? {
-				Response::Application(value) => Ok(value),
+				Response::OpenedApplication(value) => Ok(value),
 				_ => Err(DesktopError::internal("unexpected response")),
 			}
 			.map_err(Into::into)
@@ -1693,6 +2106,20 @@ impl DesktopSession {
 	#[napi]
 	pub fn retire(&self) {
 		self.core.cancellation.retire();
+	}
+
+	/// Sets when the current run ends, `remaining_ms` from now; each run sets
+	/// it before its first call. On macOS, input waiting for the user to pause
+	/// in its app gives up shortly before it.
+	#[napi]
+	pub fn set_run_deadline(&self, remaining_ms: f64) {
+		let deadline = Duration::try_from_secs_f64(remaining_ms.max(0.0) / 1000.0)
+			.ok()
+			.and_then(|remaining| Instant::now().checked_add(remaining));
+		#[cfg(target_os = "macos")]
+		self.core.cancellation.set_deadline(deadline);
+		#[cfg(not(target_os = "macos"))]
+		let _ = deadline;
 	}
 
 	#[napi]
@@ -2017,6 +2444,46 @@ impl DesktopSession {
 		}))
 	}
 
+	/// Types `text` into the element: native text fields take it by AX
+	/// insertion, other elements as keystrokes once they hold keyboard focus.
+	#[napi]
+	pub fn ax_type(
+		&self,
+		reference: String,
+		text: String,
+		opts: Option<PointerOptions>,
+	) -> Result<task::Promise<()>> {
+		let takeover = ParsedPointerOptions::parse(opts)
+			.map_err(napi::Error::from)?
+			.takeover;
+		Ok(self.unit("desktop.axType", move |reply| Request::AxInput {
+			reference,
+			input: ElementInput::Text(text),
+			takeover,
+			reply,
+		}))
+	}
+
+	/// Presses a key chord in the element once it holds keyboard focus.
+	#[napi]
+	pub fn ax_key_chord(
+		&self,
+		reference: String,
+		keys: Vec<String>,
+		opts: Option<PointerOptions>,
+	) -> Result<task::Promise<()>> {
+		let keys = parse_keys(&keys).map_err(napi::Error::from)?;
+		let takeover = ParsedPointerOptions::parse(opts)
+			.map_err(napi::Error::from)?
+			.takeover;
+		Ok(self.unit("desktop.axKeyChord", move |reply| Request::AxInput {
+			reference,
+			input: ElementInput::Chord(keys),
+			takeover,
+			reply,
+		}))
+	}
+
 	/// Immediately cancel operations submitted before this call. Later
 	/// operations may proceed.
 	#[napi]
@@ -2094,6 +2561,10 @@ mod capture_tests {
 	};
 
 	const WAYLAND_ID: &str = "atspi::1.31:/org/a11y/atspi/accessible/1";
+	/// A window of the fake's app that its window list leaves out, as macOS
+	/// leaves out windows on another Space.
+	#[cfg(target_os = "macos")]
+	const OFF_SPACE_ID: &str = "4242";
 
 	/// Elements by test id under the window root, id 1. A destroyed element
 	/// answers every request as gone.
@@ -2164,12 +2635,23 @@ mod capture_tests {
 		/// Each window listing signals the sender, then blocks until the
 		/// receiver's sender drops.
 		hang_windows:           Option<(flume::Sender<()>, flume::Receiver<()>)>,
+		/// Runs as each menu read is served.
+		on_menu_read:           Option<Box<dyn Fn() + Send>>,
+		/// Another process drawing the window, such as an Open panel's.
+		#[cfg(target_os = "macos")]
+		drawn_by:               Option<libc::pid_t>,
+		/// How many times the app's name was looked up.
+		#[cfg(target_os = "macos")]
+		name_lookups:           Arc<Mutex<u32>>,
+		/// How many times the process drawing a window was looked up.
+		#[cfg(target_os = "macos")]
+		input_lookups:          Arc<Mutex<u32>>,
 	}
 
 	impl FakeWaylandBackend {
 		fn new() -> Self {
 			Self {
-				window:                 DesktopWindow {
+				window: DesktopWindow {
 					id:      WAYLAND_ID.to_string(),
 					title:   "Obsidian".to_string(),
 					app:     "obsidian".to_string(),
@@ -2180,12 +2662,12 @@ mod capture_tests {
 					height:  48,
 					focused: true,
 				},
-				overlap:                None,
-				window_present:         true,
-				tree:                   None,
-				clicks:                 Arc::new(Mutex::new(Vec::new())),
-				modes:                  Arc::new(Mutex::new(Vec::new())),
-				layout:                 Arc::new(Mutex::new(vec![DesktopDisplay {
+				overlap: None,
+				window_present: true,
+				tree: None,
+				clicks: Arc::new(Mutex::new(Vec::new())),
+				modes: Arc::new(Mutex::new(Vec::new())),
+				layout: Arc::new(Mutex::new(vec![DesktopDisplay {
 					id:           "screen-1".to_string(),
 					name:         "Test screen".to_string(),
 					x:            0,
@@ -2199,17 +2681,24 @@ mod capture_tests {
 					pixel_height: 48,
 					is_primary:   true,
 				}])),
-				active_display:         Arc::new(Mutex::new("screen-1".to_string())),
-				captures:               Arc::new(Mutex::new(0)),
-				window_queries:         Arc::new(Mutex::new(0)),
+				active_display: Arc::new(Mutex::new("screen-1".to_string())),
+				captures: Arc::new(Mutex::new(0)),
+				window_queries: Arc::new(Mutex::new(0)),
 				cancel_on_capabilities: Arc::new(Mutex::new(None)),
-				snapshot_error:         Arc::new(Mutex::new(false)),
-				cancel_on_snapshot:     Arc::new(Mutex::new(None)),
-				screen:                 Arc::new(Mutex::new(ScreenState::default())),
-				screen_displays:        Arc::new(Mutex::new(Vec::new())),
-				awake:                  Arc::new(Mutex::new(Vec::new())),
-				unlock_on_layout:       Arc::new(Mutex::new(false)),
-				hang_windows:           None,
+				snapshot_error: Arc::new(Mutex::new(false)),
+				cancel_on_snapshot: Arc::new(Mutex::new(None)),
+				screen: Arc::new(Mutex::new(ScreenState::default())),
+				screen_displays: Arc::new(Mutex::new(Vec::new())),
+				awake: Arc::new(Mutex::new(Vec::new())),
+				unlock_on_layout: Arc::new(Mutex::new(false)),
+				hang_windows: None,
+				on_menu_read: None,
+				#[cfg(target_os = "macos")]
+				drawn_by: None,
+				#[cfg(target_os = "macos")]
+				name_lookups: Arc::new(Mutex::new(0)),
+				#[cfg(target_os = "macos")]
+				input_lookups: Arc::new(Mutex::new(0)),
 			}
 		}
 	}
@@ -2344,6 +2833,11 @@ mod capture_tests {
 		}
 
 		fn focused_element(&mut self) -> CoreResult<Option<AxHandle>> {
+			// This test process's own application element, which names a real
+			// process.
+			#[cfg(target_os = "macos")]
+			return macos::application_handle(i32::try_from(std::process::id()).unwrap()).map(Some);
+			#[cfg(not(target_os = "macos"))]
 			unreachable!("focus not exercised")
 		}
 
@@ -2403,6 +2897,23 @@ mod capture_tests {
 				.chain(self.window_present.then_some(&self.window))
 				.cloned()
 				.collect())
+		}
+
+		#[cfg(target_os = "macos")]
+		fn window_app(&mut self, id: &str) -> Option<libc::pid_t> {
+			(id == self.window.id || id == OFF_SPACE_ID).then_some(1234)
+		}
+
+		#[cfg(target_os = "macos")]
+		fn app_name(&mut self, _: libc::pid_t) -> String {
+			*self.name_lookups.lock() += 1;
+			self.window.app.clone()
+		}
+
+		#[cfg(target_os = "macos")]
+		fn window_input(&mut self, _: &str, pid: libc::pid_t) -> libc::pid_t {
+			*self.input_lookups.lock() += 1;
+			self.drawn_by.unwrap_or(pid)
 		}
 
 		fn screen_state(&mut self, display: Option<&DisplaySelector>) -> ScreenState {
@@ -2503,12 +3014,34 @@ mod capture_tests {
 			unreachable!("hold_keys not exercised")
 		}
 
+		/// The element never takes focus, which stays on element 7 of the
+		/// window.
+		fn element_input(
+			&mut self,
+			_: &Target,
+			h: &AxHandle,
+			_: &ElementInput,
+			_: DeliveryMode,
+			_: &OperationToken,
+		) -> CoreResult<ElementDelivery> {
+			if let Some(tree) = &self.tree {
+				tree.lock().element(h)?;
+			}
+			Ok(ElementDelivery::Unfocused(KeyboardFocus {
+				window:  Some(self.window.id.clone()),
+				element: Some(AxHandle::Test(7)),
+			}))
+		}
+
 		fn menu_items(
 			&mut self,
 			_: &DesktopWindow,
 			_: &[String],
 		) -> CoreResult<Vec<DesktopMenuItem>> {
-			unreachable!("menu_items not exercised")
+			if let Some(on_menu_read) = &self.on_menu_read {
+				on_menu_read();
+			}
+			Ok(Vec::new())
 		}
 
 		fn menu_select(
@@ -2562,11 +3095,17 @@ mod capture_tests {
 	/// so they must not wait for the ownership tests.
 	fn unlocked_worker(backend: impl Backend + 'static) -> Worker {
 		Worker {
-			backend:       Ok(Box::new(backend)),
-			registry:      AxRegistry::default(),
-			frames:        HashMap::new(),
-			capabilities:  Arc::default(),
+			backend: Ok(Box::new(backend)),
+			registry: AxRegistry::default(),
+			frames: HashMap::new(),
+			capabilities: Arc::default(),
 			display_awake: Arc::default(),
+			#[cfg(target_os = "macos")]
+			listener: control::intervention::Listener::simulated(),
+			#[cfg(target_os = "macos")]
+			read: None,
+			#[cfg(target_os = "macos")]
+			drawer_probed: std::collections::HashSet::new(),
 		}
 	}
 
@@ -2778,7 +3317,11 @@ mod capture_tests {
 	/// A session serving `backend` with an hour's grace, so while a request
 	/// hangs only the session giving up can release the display.
 	fn session_serving(backend: FakeWaylandBackend) -> Arc<SessionCore> {
-		let core = SessionCore::with_operation_timeout(DisplaySelector::Active, HUNG_CALL_TIMEOUT);
+		let core = SessionCore::with_operation_timeout(
+			DisplaySelector::Active,
+			Arc::default(),
+			HUNG_CALL_TIMEOUT,
+		);
 		let display_awake = Arc::clone(&core.display_awake);
 		let (tx, rx) = flume::unbounded();
 		let (done_tx, done) = flume::bounded(1);
@@ -3064,6 +3607,12 @@ mod capture_tests {
 		let mut backend = FakeWaylandBackend::new();
 		backend.tree = Some(Arc::clone(&tree));
 		let mut worker = worker_with(backend);
+		// The user-input watch names a real macOS element's app; these fake
+		// elements have none, so the watch stays off.
+		#[cfg(target_os = "macos")]
+		{
+			worker.listener = control::intervention::Listener::off();
+		}
 		let target = Target::Window(WAYLAND_ID.to_string());
 		worker
 			.snapshot(&target, &AxSnapshotOptions::default())
@@ -3138,7 +3687,7 @@ mod capture_tests {
 		}
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
-		let requests: [fn(Reply) -> Request; 9] = [
+		let requests: [fn(Reply) -> Request; 10] = [
 			|reply| Request::AxNode { reference: e2(), reply },
 			|reply| Request::AxAttributes { reference: e2(), reply },
 			|reply| Request::AxChildren { reference: e2(), reply },
@@ -3148,6 +3697,12 @@ mod capture_tests {
 			|reply| Request::AxSelectText {
 				reference: e2(),
 				request: text_range::TextSelectRequest { text: "Go".to_string(), ..Default::default() },
+				reply,
+			},
+			|reply| Request::AxInput {
+				reference: e2(),
+				input: ElementInput::Text("Stop".to_owned()),
+				takeover: None,
 				reply,
 			},
 			|reply| Request::AxFocus { reference: e2(), reply },
@@ -3233,6 +3788,25 @@ mod capture_tests {
 	}
 
 	#[test]
+	fn a_menu_read_holds_the_input_lease() {
+		let source = CancellationSource::default();
+		// Whether another call of the session could take input during the read.
+		let free = Arc::new(AtomicBool::new(true));
+		let (other, seen) = (source.clone(), Arc::clone(&free));
+		let mut backend = FakeWaylandBackend::new();
+		backend.on_menu_read = Some(Box::new(move || {
+			seen.store(InputLease::acquire(&other.token(), false).is_ok(), Ordering::SeqCst);
+		}));
+		// The worker holds the ownership tests' lock, which the grant needs.
+		let mut worker = worker_with(backend);
+		control::grant_for_test(&source);
+		let target = Target::Window(WAYLAND_ID.to_string());
+		call(&mut worker, |reply| Request::MenuItems { target, path: Vec::new(), reply }, &source)
+			.unwrap();
+		assert!(!free.load(Ordering::SeqCst), "the menu read ran without the input lease");
+	}
+
+	#[test]
 	fn a_stale_ref_search_runs_with_input_released() {
 		let (mut worker, tree) = read_buttons(&[(2, "Go"), (3, "Stop")]);
 		rebuild(&tree, 2, &[(4, "Go"), (3, "Stop")]);
@@ -3241,7 +3815,7 @@ mod capture_tests {
 		let free = Arc::new(AtomicBool::new(false));
 		let (other, seen) = (source.clone(), Arc::clone(&free));
 		tree.lock().on_call = Some(Box::new(move |_| {
-			seen.store(InputLease::acquire(&other.token()).is_ok(), Ordering::SeqCst);
+			seen.store(InputLease::acquire(&other.token(), false).is_ok(), Ordering::SeqCst);
 		}));
 		let error = call(&mut worker, press_request("e2"), &source)
 			.err()
@@ -3266,6 +3840,45 @@ mod capture_tests {
 		assert_eq!(tree.lock().reads, reads, "the walk read on after the cancel");
 	}
 
+	#[test]
+	fn element_keys_refused_for_focus_name_where_focus_is_with_a_usable_ref() {
+		for (takeover, code) in
+			[(None, ErrorCode::BackgroundUnavailable), (Some(true), ErrorCode::InputFailed)]
+		{
+			let mut worker = worker_with(FakeWaylandBackend::new());
+			let inner: &mut Worker = &mut worker;
+			let (backend, registry) = (&mut inner.backend, &mut inner.registry);
+			let ax = backend
+				.as_mut()
+				.ok()
+				.and_then(|backend| backend.ax())
+				.unwrap();
+			let reference = register_node(ax, registry, WAYLAND_ID, AxHandle::Test(1))
+				.unwrap()
+				.ref_;
+			let (reply, _rx) = flume::bounded(1);
+			let request = Request::AxInput {
+				reference: reference.clone(),
+				input: ElementInput::Text("4".to_owned()),
+				takeover,
+				reply,
+			};
+			let Err(error) = worker.process(&request, &CancellationSource::default().token()) else {
+				panic!("keys for an element without focus must be refused");
+			};
+			assert_eq!(error.code, code);
+			let message = &error.message;
+			assert!(
+				message.starts_with(&format!("{reference} did not take keyboard focus")),
+				"{message}"
+			);
+			assert!(message.contains(&format!("window {WAYLAND_ID} (\"Obsidian\")")), "{message}");
+			assert!(message.contains("on - button [ref=e2]."), "{message}");
+			assert!(message.contains("win.ax()"), "{message}");
+			assert!(worker.registry.resolve("e2").unwrap() == AxHandle::Test(7));
+		}
+	}
+
 	fn capture_request(target: Target) -> Request {
 		let (reply, _rx) = flume::bounded(1);
 		Request::Capture { target, caps: CaptureCaps::default(), reply }
@@ -3278,7 +3891,7 @@ mod capture_tests {
 
 	#[test]
 	fn capture_refreshes_the_nonblocking_capabilities_snapshot() {
-		let core = SessionCore::new(DisplaySelector::Active);
+		let core = SessionCore::new(DisplaySelector::Active, Arc::default());
 		let mut worker = worker_with(FakeWaylandBackend::new());
 		worker.capabilities = Arc::clone(&core.capabilities);
 		worker
@@ -3297,7 +3910,7 @@ mod capture_tests {
 
 	#[test]
 	fn screen_state_never_queues_behind_a_stuck_request() {
-		let core = SessionCore::new(DisplaySelector::Active);
+		let core = SessionCore::new(DisplaySelector::Active, Arc::default());
 		// A worker that never serves its queue, with a request outstanding and
 		// no capabilities snapshot: a queued read would wait out its timeout.
 		let (tx, stuck) = flume::unbounded();
@@ -3310,7 +3923,7 @@ mod capture_tests {
 
 	#[test]
 	fn cancelled_calls_never_start_the_worker_or_count_as_in_flight() {
-		let core = SessionCore::new(DisplaySelector::Active);
+		let core = SessionCore::new(DisplaySelector::Active, Arc::default());
 		let token = core.cancellation.token();
 		core.cancellation.cancel();
 		assert_eq!(
@@ -3327,7 +3940,7 @@ mod capture_tests {
 
 	#[test]
 	fn failed_queue_delivery_releases_the_in_flight_count() {
-		let core = SessionCore::new(DisplaySelector::Active);
+		let core = SessionCore::new(DisplaySelector::Active, Arc::default());
 		let (tx, rx) = flume::unbounded();
 		core.lifecycle.lock().tx = Some(tx);
 		drop(rx);
@@ -3483,6 +4096,158 @@ mod capture_tests {
 		assert!(clicks.lock().is_empty());
 	}
 
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn input_into_an_app_the_user_used_since_the_last_read_fails_before_the_backend() {
+		let backend = FakeWaylandBackend::new();
+		let clicks = Arc::clone(&backend.clicks);
+		let mut worker = worker_with(backend);
+		let source = CancellationSource::default();
+		let target = Target::Window(WAYLAND_ID.to_string());
+		let click = || Request::Click {
+			target:  target.clone(),
+			x:       1.0,
+			y:       1.0,
+			options: ParsedPointerOptions::parse(None).unwrap(),
+			reply:   flume::unbounded().0,
+		};
+		// The capture starts watching the window's app, process 1234.
+		worker.dispatch(capture_request(target.clone()), &source.token());
+		worker.listener.record_for_test(1234, Instant::now());
+		// The run ends too soon to wait for the user to pause.
+		source.set_deadline(Some(Instant::now()));
+		let error = worker.execute(&click(), &source.token()).err().unwrap();
+		assert_eq!(error.code, ErrorCode::UserIntervened);
+		assert!(error.message.contains("still using obsidian"), "{}", error.message);
+		assert!(clicks.lock().is_empty());
+		// A read before the user has paused for 5 s does not show their input.
+		let (reply, read) = flume::bounded(1);
+		worker.dispatch(
+			Request::Capture { target: target.clone(), caps: CaptureCaps::default(), reply },
+			&source.token(),
+		);
+		assert!(read.recv().unwrap().is_ok());
+		assert_eq!(
+			worker
+				.execute(&click(), &source.token())
+				.err()
+				.unwrap()
+				.code,
+			ErrorCode::UserIntervened
+		);
+		// One after the pause does, and input is admitted again.
+		worker.listener.record_for_test(
+			1234,
+			Instant::now()
+				.checked_sub(Duration::from_secs(6))
+				.expect("uptime past 6 s"),
+		);
+		let (reply, read) = flume::bounded(1);
+		worker.dispatch(
+			Request::Capture { target: target.clone(), caps: CaptureCaps::default(), reply },
+			&source.token(),
+		);
+		assert!(read.recv().unwrap().is_ok());
+		assert!(worker.watch_app(&click(), &source.token()).is_ok());
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn input_to_an_off_space_window_is_watched_without_listing_windows() {
+		let backend = FakeWaylandBackend::new();
+		let queries = Arc::clone(&backend.window_queries);
+		let mut worker = worker_with(backend);
+		let token = CancellationSource::default().token();
+		worker.dispatch(capture_request(Target::Window(WAYLAND_ID.to_string())), &token);
+		worker.listener.record_for_test(1234, Instant::now());
+		let raise =
+			|id: &str| Request::RaiseWindow { id: id.to_string(), reply: flume::unbounded().0 };
+		// The off-Space window belongs to the app the user is typing in.
+		let listed = *queries.lock();
+		let error = worker
+			.execute(&raise(OFF_SPACE_ID), &token.clone().replying_by(Instant::now()))
+			.err()
+			.unwrap();
+		assert_eq!(error.code, ErrorCode::UserIntervened);
+		assert_eq!(*queries.lock(), listed);
+		// Input whose owner cannot be found is refused, not sent unwatched.
+		assert_eq!(
+			worker.execute(&raise("gone"), &token).err().unwrap().code,
+			ErrorCode::WindowNotFound
+		);
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn an_apps_name_and_a_windows_drawing_process_are_looked_up_once_however_often_it_is_used() {
+		let backend = FakeWaylandBackend::new();
+		let (names, drawers) =
+			(Arc::clone(&backend.name_lookups), Arc::clone(&backend.input_lookups));
+		let mut worker = worker_with(backend);
+		let token = CancellationSource::default().token();
+		let target = Target::Window(WAYLAND_ID.to_string());
+		for _ in 0..3 {
+			worker.dispatch(capture_request(target.clone()), &token);
+		}
+		assert_eq!(*names.lock(), 1);
+		assert_eq!(*drawers.lock(), 1);
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn the_users_input_into_a_panel_another_process_draws_counts_from_the_first_read() {
+		let mut backend = FakeWaylandBackend::new();
+		// An Open panel, which process 4321 draws and takes input for.
+		backend.drawn_by = Some(4321);
+		let clicks = Arc::clone(&backend.clicks);
+		let mut worker = worker_with(backend);
+		let source = CancellationSource::default();
+		let target = Target::Window(WAYLAND_ID.to_string());
+		worker.dispatch(capture_request(target.clone()), &source.token());
+		// The user clicks in the panel before the session's first input names
+		// its drawing process.
+		worker.listener.record_for_test(4321, Instant::now());
+		source.set_deadline(Some(Instant::now()));
+		let click = Request::Click {
+			target,
+			x: 1.0,
+			y: 1.0,
+			options: ParsedPointerOptions::parse(None).unwrap(),
+			reply: flume::unbounded().0,
+		};
+		let error = worker.execute(&click, &source.token()).err().unwrap();
+		assert_eq!(error.code, ErrorCode::UserIntervened);
+		assert!(clicks.lock().is_empty());
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn the_focused_elements_app_is_watched_from_the_read_that_found_it() {
+		let backend = FakeWaylandBackend::new();
+		let clicks = Arc::clone(&backend.clicks);
+		let mut worker = worker_with(backend);
+		let source = CancellationSource::default();
+		// The fake's focused element is this test process's application.
+		let (reply, read) = flume::bounded(1);
+		worker.dispatch(Request::AxFocused { reply }, &source.token());
+		let Ok(Response::Node(Some(node))) = read.recv().unwrap() else {
+			panic!("expected the focused element");
+		};
+		// The user types into that app before the session acts on the ref.
+		worker
+			.listener
+			.record_for_test(i32::try_from(std::process::id()).unwrap(), Instant::now());
+		source.set_deadline(Some(Instant::now()));
+		let click = Request::AxClick {
+			reference: node.ref_,
+			options:   ParsedPointerOptions::parse(None).unwrap(),
+			reply:     flume::unbounded().0,
+		};
+		let error = worker.execute(&click, &source.token()).err().unwrap();
+		assert_eq!(error.code, ErrorCode::UserIntervened);
+		assert!(clicks.lock().is_empty());
+	}
+
 	#[test]
 	fn cancelled_full_capture_restores_previously_delivered_coordinates() {
 		let backend = FakeWaylandBackend::new();
@@ -3602,6 +4367,29 @@ mod capture_tests {
 			&token,
 		);
 		assert_eq!(worker.frame(&target).unwrap(), original);
+		// Nor does an abandoned read show the user's input to later input.
+		#[cfg(target_os = "macos")]
+		{
+			let click = Request::Click {
+				target:  target.clone(),
+				x:       1.0,
+				y:       1.0,
+				options: ParsedPointerOptions::parse(None).unwrap(),
+				reply:   flume::unbounded().0,
+			};
+			worker.listener.record_for_test(
+				1234,
+				Instant::now()
+					.checked_sub(Duration::from_secs(6))
+					.expect("uptime past 6 s"),
+			);
+			worker.dispatch(capture_request(target.clone()), &token);
+			assert_eq!(worker.execute(&click, &token).err().unwrap().code, ErrorCode::UserIntervened);
+			let (reply, read) = flume::bounded(1);
+			worker.dispatch(Request::Capture { target, caps: CaptureCaps::default(), reply }, &token);
+			assert!(read.recv().unwrap().is_ok());
+			assert!(worker.watch_app(&click, &token).is_ok());
+		}
 	}
 
 	#[test]
@@ -3715,6 +4503,148 @@ mod capture_tests {
 			background, background, background, background, foreground, foreground, foreground,
 			foreground
 		]);
+	}
+
+	/// A raise takes the user's foreground, so the worker serves it under the
+	/// physical-Escape stop; a press stays background input the user's Escape
+	/// leaves alone. Tests start no event tap, so a takeover lease is refused
+	/// after arming, as it is without the permission.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn a_raise_runs_under_the_escape_stop_and_a_press_does_not() {
+		let (mut worker, tree) = read_buttons(&[(2, "Go")]);
+		control::press_escape_for_test();
+		let perform = |action: &'static str| {
+			move |reply| Request::AxPerform {
+				reference: "e2".to_string(),
+				action: action.to_string(),
+				reply,
+			}
+		};
+		for action in ["press", "AXPress", "axraise"] {
+			let source = CancellationSource::default();
+			let result = call(&mut worker, perform(action), &source);
+			assert!(
+				result
+					.as_ref()
+					.err()
+					.is_none_or(|error| error.code != ErrorCode::PermissionDenied),
+				"{action} needs no Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 0, "{action} arms no Escape stop");
+			assert!(token.check().is_ok(), "the user's Escape leaves {action} running");
+		}
+		assert_eq!(tree.lock().pressed, [2], "the fake tree runs only `press`");
+		for action in ["raise", " Raise ", "AXRaise"] {
+			let source = CancellationSource::default();
+			let error = call(&mut worker, perform(action), &source)
+				.err()
+				.expect("no Escape stop starts in tests");
+			assert_eq!(error.code, ErrorCode::PermissionDenied, "{action}");
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 1, "{action} arms the Escape stop");
+			assert!(token.check().is_err(), "physical Escape stops {action}");
+		}
+	}
+
+	/// Background input runs without the physical-Escape stop; takeover input,
+	/// desktop and display input, raises and activating launches run under it,
+	/// so a physical Escape cancels them. Served through the worker against
+	/// the test Escape monitor, which refuses a lease after arming it.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn only_takeover_requests_run_under_the_physical_escape_stop() {
+		let (mut worker, _tree) = read_buttons(&[(2, "Go")]);
+		control::press_escape_for_test();
+		let window = Target::Window("42".to_string());
+		let reply = || flume::unbounded().0;
+		let typing = |target: &Target, takeover| Request::TypeText {
+			target: target.clone(),
+			text: "abc".to_string(),
+			takeover,
+			reply: reply(),
+		};
+		let holding = |target: &Target, takeover| Request::HoldKeys {
+			target: target.clone(),
+			keys: parse_keys(&["shift".to_string()]).unwrap(),
+			duration: Duration::ZERO,
+			takeover,
+			reply: reply(),
+		};
+		let clicking = |target: &Target, takeover| Request::Click {
+			target:  target.clone(),
+			x:       0.0,
+			y:       0.0,
+			options: ParsedPointerOptions::parse(Some(PointerOptions {
+				takeover,
+				..PointerOptions::default()
+			}))
+			.unwrap(),
+			reply:   reply(),
+		};
+		let perform = |action: &str| Request::AxPerform {
+			reference: "e1".to_string(),
+			action:    action.to_string(),
+			reply:     reply(),
+		};
+		let open = |activate| Request::OpenApplication {
+			id:      "com.apple.TextEdit".to_string(),
+			options: ApplicationOpenOptions { activate },
+			reply:   reply(),
+		};
+		// Held keys reach the fake backend only as takeover, which the test
+		// Escape monitor refuses before they are sent.
+		let background = [
+			typing(&window, None),
+			typing(&window, Some(false)),
+			clicking(&window, Some(false)),
+			perform("AXPress"),
+			perform("showMenu"),
+			open(None),
+			open(Some(false)),
+		];
+		for request in background {
+			let source = CancellationSource::default();
+			let result = worker.execute(&request, &source.token());
+			assert!(
+				result
+					.err()
+					.is_none_or(|error| error.code != ErrorCode::PermissionDenied),
+				"background input needs no Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 0, "background input arms no Escape stop");
+			assert!(token.check().is_ok(), "the user's Escape leaves background input running");
+		}
+		let display = Target::parse("display:screen-1");
+		let takeover = [
+			typing(&window, Some(true)),
+			holding(&window, Some(true)),
+			clicking(&window, Some(true)),
+			typing(&Target::Desktop, None),
+			holding(&Target::Desktop, Some(false)),
+			clicking(&display, None),
+			Request::RaiseWindow { id: "42".to_string(), reply: reply() },
+			perform("raise"),
+			perform("AXRaise"),
+			open(Some(true)),
+		];
+		for request in takeover {
+			let source = CancellationSource::default();
+			let error = worker
+				.execute(&request, &source.token())
+				.err()
+				.expect("no Escape stop starts in tests");
+			assert_eq!(
+				error.code,
+				ErrorCode::PermissionDenied,
+				"takeover input needs the Escape stop"
+			);
+			let token = source.token();
+			assert_eq!(control::press_escape_for_test(), 1, "takeover input arms the Escape stop");
+			assert!(token.check().is_err(), "physical Escape stops takeover input");
+		}
 	}
 
 	#[test]

@@ -2,6 +2,14 @@
 //!
 //! Accessibility text ranges count UTF-16 code units, so every offset here is
 //! in UTF-16 units, never UTF-8 bytes or Unicode scalars.
+#![cfg_attr(
+	not(target_os = "macos"),
+	allow(
+		dead_code,
+		reason = "only the macOS `selectText` backend locates text; other platforms use the request \
+		          types"
+	)
+)]
 
 #[cfg(any(target_os = "macos", test))]
 use std::fmt::Write as _;
