@@ -1316,11 +1316,12 @@ export interface ClipboardImage {
 }
 
 /**
- * Invalidates this process's event taps; for a host about to
- * exit, after which no desktop session here sees the user's input again. A
- * macOS tap that dies with its process while the user types makes
- * `WindowServer` deliver their key again; Bun's `process.exit` runs no native
- * exit hook, so the host calls this from its exit handler.
+ * Invalidates this process's event taps before it exits.
+ *
+ * No desktop session here sees the user's input again afterwards. A macOS tap
+ * that dies with its process while the user types makes `WindowServer`
+ * deliver their key again; Bun's `process.exit` runs no native exit hook, so
+ * the host calls this from its exit handler.
  */
 export declare function closeDesktopEventTaps(): void
 
@@ -1480,6 +1481,12 @@ export interface DesktopDisplay {
 }
 
 /**
+ * Physical-Escape stops counted under `key` by every desktop session created
+ * with it, including closed ones, until the key is forgotten.
+ */
+export declare function desktopEscapeStops(key: string): number
+
+/**
  * One immediate child of a native application menu. Paths contain the actual
  * native labels, including ellipses; selection accepts normalized labels.
  */
@@ -1510,12 +1517,6 @@ export interface DesktopScreenState {
   screenLocked: boolean
   displayAsleep: boolean
 }
-
-/**
- * Physical-Escape stops counted under `key` by every desktop session created
- * with it, including closed ones, until the key is forgotten.
- */
-export declare function desktopEscapeStops(key: string): number
 
 export interface DesktopSessionOptions {
   display?: string
@@ -2835,9 +2836,6 @@ export interface NodeSpan {
 /** Decode notebook JSON into the editable cell-marker text. */
 export declare function notebookToEditableText(json: string, displayPath: string): string
 
-/** Check syntax through the shared parse cache without constructing a summary. */
-export declare function parseCodeStatus(options: ParseStatusOptions): ParseStatus
-
 /**
  * An opened application: its [`Application`] fields and the window it
  * shows. On macOS `window` is its frontmost window once one is on screen;
@@ -2851,6 +2849,9 @@ export interface OpenedApplication {
   pid?: number
   window?: DesktopWindow
 }
+
+/** Check syntax through the shared parse cache without constructing a summary. */
+export declare function parseCodeStatus(options: ParseStatusOptions): ParseStatus
 
 /** Parsed Kitty keyboard protocol sequence result for a Kitty input sequence. */
 export interface ParsedKittyResult {
