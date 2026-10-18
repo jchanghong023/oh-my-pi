@@ -197,10 +197,14 @@ describe("InteractiveMode todo HUD persistence", () => {
 		});
 		mode.addMessageToChat(final);
 		const compact = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(compact.match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
-		expect(compact.indexOf("REBUILD_FAILURE_CAUSE")).toBeLessThan(compact.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"));
+		expect(compact).not.toContain("REBUILD_FAILURE_CAUSE");
+		expect(compact).not.toContain("FULL_REBUILD_FAILURE_DETAIL");
+		expect(compact.match(/失败 1 次/g)).toHaveLength(1);
+		expect(compact.indexOf("失败 1 次")).toBeLessThan(compact.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"));
 		mode.rebuildChatFromMessages();
-		expect(Bun.stripANSI(mode.chatContainer.render(180).join("\n")).match(/REBUILD_FAILURE_CAUSE/g)).toHaveLength(1);
+		const compactRebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
+		expect(compactRebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
+		expect(compactRebuilt.match(/失败 1 次/g)).toHaveLength(1);
 
 		cfgDisplayCompactToolActivity.override(session.settings, presentation === "clean");
 		cfgDisplayHideToolActivity.override(session.settings, presentation === "clean");
