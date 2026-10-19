@@ -204,6 +204,7 @@
 - `omp compress`、`omp commit` 与 Git AI 提交等独立模型消费者同样在注册／解析前启用 company lane、进程角色默认值及 cache-only 目录发现；未显式传递 offline 选项也不能绕过进程 offline 策略。实际模型／OAuth 请求仍按用户选择执行，不将目录发现限制扩大成网络请求总禁令。
 - 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
 - URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
+- 公司聊天复用 Anthropic 流的既有空闲检测：空正文、空思考及空工具参数 delta 不算有效进展，也不能延长 ping 保活窗口；非空片段和其他协议事件保持既有处理，不新增超时机制、不调整现有时限、不增加自动重试或后台任务。
 - 聊天使用 Anthropic Messages 协议和 Bearer 认证，仅请求上述 Claude Code 配置中的地址，不做公司模型发现，也不自动发现或回退到对应厂商的公网 API。内置参数固定如下（token 数）：
 
    | Model ID                   | 输入       |    上下文 | 最大输出 |
