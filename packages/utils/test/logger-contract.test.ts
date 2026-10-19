@@ -223,8 +223,8 @@ describe("central logger file level and batching", () => {
 	});
 
 	test("offline logging drops non-errors before context evaluation and sink delivery", async () => {
-		const result = await runDiagnosticConsumer(`
-			process.env.OMP_OFFLINE = " YeS ";
+		const result = await runDiagnosticConsumer(
+			`
 			process.env.OMP_LOG_LEVEL = "debug";
 			logger.initializeDiagnosticLogging("cli");
 			const seen = [];
@@ -248,7 +248,9 @@ describe("central logger file level and batching", () => {
 				const state = getOfflineShmState();
 				if (state) fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
 			}
-		`);
+		`,
+			{ offline: " YeS " },
+		);
 		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
 		expect(payload).toMatchObject({
 			seen: ["persisted_error"],
@@ -433,7 +435,12 @@ describe("DailyRotateFile option and retention contract", () => {
 /** Isolated consumers exercise real filesystem and async boundaries, never source text. */
 async function runDiagnosticConsumer(
 	source: string,
-	options: { setup?: (root: string) => Promise<void>; configRoot?: (root: string) => string; exitCode?: number } = {},
+	options: {
+		setup?: (root: string) => Promise<void>;
+		configRoot?: (root: string) => string;
+		exitCode?: number;
+		offline?: string;
+	} = {},
 ): Promise<{ root: string; stdout: string; stderr: string; pid: number }> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-diagnostic-contract-"));
 	roots.push(root);
@@ -466,7 +473,7 @@ async function runDiagnosticConsumer(
 				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
-				OMP_OFFLINE: "0",
+				OMP_OFFLINE: options.offline ?? "0",
 				OMP_LOG_LEVEL: "",
 				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
 			},
