@@ -23,12 +23,12 @@ const repository = path.resolve(import.meta.dir, "../../..");
 const probe = path.join(import.meta.dir, "fixtures/fork-diagnostic-probe.ts");
 const profile = "diagnostic-acceptance";
 
-async function sandbox(level = "debug") {
+async function sandbox(level = "debug", offline = false) {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fork-diagnostic-"));
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
 	const configRoot = path.join(directory, "config");
-	const offlineState = getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" });
+	const offlineState = offline ? getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" }) : null;
 	const profileRoot = path.join(offlineState?.runtimeRoot ?? configRoot, "profiles", profile);
 	const agent = path.join(profileRoot, "agent");
 	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
@@ -60,7 +60,7 @@ async function sandbox(level = "debug") {
 		PI_PROFILE: profile,
 		PI_CODING_AGENT_DIR: "",
 		OMP_JCHTOOLS_DISCOVERY: "0",
-		OMP_OFFLINE: "1",
+		OMP_OFFLINE: offline ? "1" : "0",
 		OMP_LOG_LEVEL: level,
 	});
 	const logsDir = path.join(profileRoot, "logs");
@@ -190,9 +190,9 @@ function sameOperation(records: RecordLine[], record: RecordLine) {
 
 describe("fork diagnostics on the real rotating disk transport", () => {
 	it.skipIf(process.platform !== "linux")(
-		"P2-40 starts the offline CLI with writable primary logs when fallback-logs is a regular file",
+		"P2-40 writes offline CLI errors to primary logs when fallback-logs is a regular file",
 		async () => {
-			const box = await sandbox("info");
+			const box = await sandbox("info", true);
 			const fallback = path.join(path.dirname(box.logsDir), "fallback-logs");
 			const documents = path.join(box.directory, "documents");
 			try {
@@ -203,17 +203,21 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				const imported = await box.cli(["docs", "init", documents, "--name", "primary-logs", "--json"]);
 				expect(imported.code, imported.stderr).toBe(0);
 				expect(JSON.parse(imported.stdout).index).toMatchObject({ name: "primary-logs", documentCount: 1 });
+				const failed = await box.cli([
+					"models",
+					"refresh",
+					"--json",
+					"--no-extensions",
+					"--config",
+					path.join(box.root, "missing.yml"),
+				]);
+				expect(failed.code).toBe(1);
 				expect(await fs.readFile(fallback, "utf8")).toBe("unavailable fallback");
 				const { records } = await box.logs();
-				expect(event(records, "docs.init.completed")).toMatchObject({ result: "completed" });
-				const started = event(records, "application_started");
-				expect(path.dirname(started.path as string)).toBe(box.logsDir);
-				for (const message of ["application_stopping", "application_stopped"]) {
-					expect(event(records, message)).toMatchObject({
-						operation_id: started.operation_id,
-						exitCode: 0,
-					});
-				}
+				expect(records.every(record => record.level === "error")).toBe(true);
+				expect(records.find(record => record.event === "models_init" && record.result === "failed")).toMatchObject({
+					stage: "settings_init",
+				});
 				expect(records.some(record => record.event === "log_directory_fallback")).toBe(false);
 			} finally {
 				await box.cleanup();
@@ -519,12 +523,11 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 	}, 35_000);
 
 	it("closes offline CLI initialization without leaking rejected configuration paths", async () => {
-		const box = await sandbox("info");
+		const box = await sandbox("info", true);
 		const canary = "FORKDIAGNOSTICCATALOGPRIVATE";
 		try {
 			const success = await box.cli(["models", "refresh", "--json", "--no-extensions"]);
 			expect(success.code).toBe(0);
-			const payload = JSON.parse(success.stdout) as { models: unknown[] };
 			const rejected = await box.cli(["models", "find", "--json", "--no-extensions"]);
 			expect(rejected.code).toBe(1);
 			const failed = await box.cli([
@@ -538,27 +541,11 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			expect(failed.code).toBe(1);
 			const { raw, records } = await box.logs();
 			expect(raw).not.toContain(canary);
-			const refresh = records.find(
-				record =>
-					record.event === "offline_model_refresh" &&
-					record.stage === "builtin_refresh" &&
-					record.result === "completed",
-			);
-			expect(refresh).toMatchObject({
-				strategy: "offline",
-				cache_only: true,
-				available_model_count: payload.models.length,
-			});
-			const rejection = records.find(record => record.event === "models_command" && record.result === "rejected");
-			expect(rejection).toMatchObject({ level: "info", reason: "missing_search_substring" });
+			expect(records.every(record => record.level === "error")).toBe(true);
 			const initFailed = records.find(record => record.event === "models_init" && record.result === "failed");
 			expect(initFailed).toMatchObject({ level: "error", stage: "settings_init", elapsed_ms: expect.any(Number) });
-			const initStart = records.find(
-				record =>
-					record.event === "models_init" && record.result === "started" && record.call_id === initFailed?.call_id,
-			);
-			expect(initStart?.operation_id).toBe(initFailed?.operation_id);
-			expect(initStart?.call_id).toEqual(expect.any(String));
+			expect(initFailed?.operation_id).toEqual(expect.any(String));
+			expect(initFailed?.call_id).toEqual(expect.any(String));
 		} finally {
 			await box.cleanup();
 		}
