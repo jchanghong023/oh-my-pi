@@ -39,7 +39,7 @@ function messageUpdate(text: string): Extract<AgentSessionEvent, { type: "messag
 	} as unknown as Extract<AgentSessionEvent, { type: "message_update" }>;
 }
 
-function createStreamingFixture() {
+function createStreamingFixture(offline?: string) {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const ctx = createInteractiveModeContext({
 		session: {
@@ -51,7 +51,15 @@ function createStreamingFixture() {
 		},
 		streamingComponent: new AssistantMessageComponent(),
 	});
-	const controller = new EventController(ctx);
+	const previousOffline = process.env.OMP_OFFLINE;
+	let controller: EventController;
+	try {
+		if (offline !== undefined) process.env.OMP_OFFLINE = offline;
+		controller = new EventController(ctx);
+	} finally {
+		if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+		else process.env.OMP_OFFLINE = previousOffline;
+	}
 	controller.subscribeToAgent();
 	const emit = (event: AgentSessionEvent) => {
 		for (const listener of listeners) void listener(event);
@@ -90,8 +98,7 @@ describe("EventController message_update coalescing", () => {
 	] as const)(
 		"coalesces cumulative updates without delaying the final snapshot in offline=%s",
 		async (offline, interval) => {
-			process.env.OMP_OFFLINE = offline;
-			const { ctx, ui, emit } = createStreamingFixture();
+			const { ctx, ui, emit } = createStreamingFixture(offline);
 
 			emit(messageUpdate("tok1"));
 			emit(messageUpdate("tok1 tok2"));
