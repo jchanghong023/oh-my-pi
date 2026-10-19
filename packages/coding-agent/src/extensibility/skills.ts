@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import * as path from "node:path";
 import { getProjectDir, parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
@@ -512,7 +513,18 @@ export async function loadSkillCatalog(
 
 	// Shared skills use the existing custom-directory override and take precedence within it.
 	const sharedSkillsDir = process.env.OMP_SKILLS_DIR?.trim();
-	const directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
+	let directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
+	if (process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
+		// Deduplicate before starting reads, not in a process-wide result cache:
+		// Shared stays first, and every refresh/configuration gets a fresh scan.
+		const seen = new Set<string>();
+		directories = directories.filter(dir => {
+			const resolved = path.resolve(expandTilde(dir));
+			if (seen.has(resolved)) return false;
+			seen.add(resolved);
+			return true;
+		});
+	}
 
 	const customDirectoryResults = await Promise.all(
 		directories.map(async dir => {

@@ -9,6 +9,7 @@ import {
 	enableProvider,
 	enableUserSource,
 	initializeWithSettings,
+	reset as resetCapabilities,
 } from "@oh-my-pi/pi-coding-agent/capability";
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
@@ -231,6 +232,65 @@ describe("skills", () => {
 			} finally {
 				restoreEnvValue("OMP_SKILLS_DIR", previous);
 				await removeWithRetries(userDir);
+				await removeWithRetries(root);
+			}
+		});
+
+		it("coalesces offline shared/custom roots per load and refreshes added or removed skills", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-offline-shared-"));
+			const shared = path.join(root, "shared");
+			const other = path.join(root, "other");
+			const platform = process.platform;
+			const previousOffline = process.env.OMP_OFFLINE;
+			const previousShared = process.env.OMP_SKILLS_DIR;
+			const writeSkill = async (directory: string, name: string) => {
+				await fs.mkdir(path.join(directory, name), { recursive: true });
+				await Bun.write(
+					path.join(directory, name, "SKILL.md"),
+					`---\nname: ${name}\ndescription: ${name}\n---\nBody`,
+				);
+			};
+			await writeSkill(shared, "original");
+			await writeSkill(other, "other");
+			await fs.mkdir(path.join(shared, "added"));
+			Object.defineProperty(process, "platform", { value: "linux" });
+			restoreEnvValue("OMP_OFFLINE", " TrUe ");
+			restoreEnvValue("OMP_SKILLS_DIR", shared);
+			const readdir = spyOn(fsPromises, "readdir");
+			const options = {
+				...DISABLE_ALL_BUILTIN_SKILLS,
+				cwd: root,
+				customDirectories: [shared, path.join(shared, "."), `${shared}${path.sep}`],
+			};
+			try {
+				resetCapabilities();
+				const catalog = await loadSkillCatalog(options);
+				expect(catalog.skills.map(skill => skill.name)).toEqual(["original"]);
+				expect(catalog.skills[0]._source.providerName).toBe("Shared");
+				expect(readdir.mock.calls.filter(([dir]) => String(dir) === shared)).toHaveLength(1);
+
+				const disabled = await loadSkills({ ...options, disabledExtensions: ["skill:original"] });
+				expect(disabled.skills).toEqual([]);
+				expect((await loadSkills({ ...options, enabled: false })).skills).toEqual([]);
+				expect((await loadSkills(options)).skills.map(skill => skill.name)).toEqual(["original"]);
+
+				await writeSkill(shared, "added");
+				await fs.unlink(path.join(shared, "original", "SKILL.md"));
+				resetCapabilities();
+				expect((await loadSkills(options)).skills.map(skill => skill.name)).toEqual(["added"]);
+
+				restoreEnvValue("OMP_SKILLS_DIR", undefined);
+				expect(
+					(await loadSkills({ ...options, customDirectories: [other] })).skills.map(skill => skill.name),
+				).toEqual(["other"]);
+				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
+				expect((await loadSkills({ ...options, customDirectories: [] })).skills).toEqual([]);
+			} finally {
+				readdir.mockRestore();
+				Object.defineProperty(process, "platform", { value: platform });
+				restoreEnvValue("OMP_OFFLINE", previousOffline);
+				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
+				resetCapabilities();
 				await removeWithRetries(root);
 			}
 		});

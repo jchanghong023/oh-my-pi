@@ -222,6 +222,49 @@ describe("central logger file level and batching", () => {
 		]);
 	});
 
+	test("offline logging drops non-errors before context evaluation and sink delivery", async () => {
+		const result = await runDiagnosticConsumer(`
+			process.env.OMP_OFFLINE = " YeS ";
+			process.env.OMP_LOG_LEVEL = "debug";
+			logger.initializeDiagnosticLogging("cli");
+			const seen = [];
+			const dispose = logger.registerLogSink(event => seen.push(event.message));
+			let evaluated = 0;
+			const context = { get expensive() { evaluated++; return "not-for-logging"; } };
+			logger.setTransports({ console: true, file: true });
+			try {
+				logger.debug("filtered_debug", context);
+				logger.info("filtered_info", context);
+				logger.warn("filtered_warn", context);
+				const createdBeforeError = fs.existsSync(getLogPath());
+				logger.error("persisted_error", { code: "E_OFFLINE" });
+				logger.shutdownDiagnosticLogging();
+				logger.flush();
+				const entries = fs.readFileSync(logger.getCurrentLogPath(), "utf8").trim().split(/\\r?\\n/).map(JSON.parse);
+				fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ seen, evaluated, createdBeforeError, entries }));
+			} finally {
+				dispose();
+				logger.setTransports({ console: false, file: false });
+				const state = getOfflineShmState();
+				if (state) fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
+			}
+		`);
+		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
+		expect(payload).toMatchObject({
+			seen: ["persisted_error"],
+			evaluated: 0,
+			createdBeforeError: false,
+			entries: [{ level: "error", message: "persisted_error", code: "E_OFFLINE" }],
+		});
+		expect(
+			result.stdout
+				.trim()
+				.split(/\r?\n/)
+				.map(line => JSON.parse(line).message),
+		).toEqual(["persisted_error"]);
+		expect(result.stderr).toBe("");
+	});
+
 	test("the fatal record lands after the buffered records that preceded it", async () => {
 		const result = await runScenario("uncaught", { probe: fatalProbePath, exitCode: 1 });
 		expect((await readLogEntries(result.primaryDir)).map(entry => [entry.level, entry.message])).toEqual([
@@ -403,7 +446,7 @@ async function runDiagnosticConsumer(
 			"--eval",
 			`
 		import * as logger from ${JSON.stringify(moduleUrl)};
-		import { getLogPath } from ${JSON.stringify(new URL("./dirs.ts", moduleUrl).href)};
+		import { getLogPath, getOfflineShmState } from ${JSON.stringify(new URL("./dirs.ts", moduleUrl).href)};
 		import * as fs from "node:fs";
 		import * as path from "node:path";
 		const root = ${JSON.stringify(root)};

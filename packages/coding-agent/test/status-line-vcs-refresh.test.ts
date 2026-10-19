@@ -184,6 +184,59 @@ const gitSegment: StatusLineSettings = {
 };
 
 describe("StatusLineComponent repaints when an async VCS fetch resolves", () => {
+	it.each([
+		["linux", "1", 60_000],
+		["linux", " TRUE ", 60_000],
+		["linux", "yes", 60_000],
+		["linux", "On", 60_000],
+		["linux", "false", 10_000],
+		["linux", "", 10_000],
+		["win32", "1", 10_000],
+		["darwin", "on", 10_000],
+	] as const)("preserves counts and explicit invalidation with %s offline=%s", async (platform, offline, ttl) => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		const originalOffline = process.env.OMP_OFFLINE;
+		Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+		process.env.OMP_OFFLINE = offline;
+		let now = 1_000_000;
+		vi.spyOn(Date, "now").mockImplementation(() => now);
+		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);
+		gitControls.statusPorcelain.mockResolvedValue(" M tracked.txt\0?? new.txt\0");
+		const component = new StatusLineComponent(makeSession(), statusLineHost);
+		try {
+			component.updateSettings(gitSegment);
+			component.getTopBorder(80);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(component.getTopBorder(80).content).toContain("改动2");
+			expect(gitControls.statusPorcelain).toHaveBeenCalledTimes(1);
+
+			now += ttl - 1;
+			component.invalidate();
+			expect(component.getTopBorder(80).content).toContain("改动2");
+			expect(gitControls.statusPorcelain).toHaveBeenCalledTimes(1);
+
+			now++;
+			component.getTopBorder(80);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(gitControls.statusPorcelain).toHaveBeenCalledTimes(2);
+
+			gitControls.statusPorcelain.mockResolvedValue(" M tracked.txt\0");
+			component.invalidateGitCaches();
+			component.getTopBorder(80);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(gitControls.statusPorcelain).toHaveBeenCalledTimes(3);
+			expect(component.getTopBorder(80).content).toContain("改动1");
+		} finally {
+			component.dispose();
+			Object.defineProperty(process, "platform", originalPlatform);
+			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = originalOffline;
+		}
+	});
+
 	it("fires #onBranchChange when git status resolves on the cold paint", async () => {
 		gitControls.headSync.mockReturnValue(fakeRefHead);
 		gitControls.defaultBranch.mockReturnValue(Promise.withResolvers<string | null>().promise);

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
 - Compact tool summaries prioritize failure counts on narrow terminals, omit partial counts on extremely narrow rows, and emphasize operation summaries over tool names in ANSI and native text fallback rows.
 - Compact mode groups completed and failed background task/shell notifications by execution identity, shows failures as muted counts instead of individual red notices, and preserves cancellation, unknown-state and independent warnings without fragmenting tool folds.
 - Compact tool runs keep the latest two successful calls, fold older successes and ordinary failures into one muted count, and retain failure details in detailed history.

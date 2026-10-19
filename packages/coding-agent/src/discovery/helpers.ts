@@ -467,6 +467,12 @@ export async function scanSkillsFromDir(
 	const items: Skill[] = [];
 	const warnings: string[] = [];
 	const { dir, level, providerId, requireDescription = false } = options;
+	// Custom roots include the shared NFS skills directory. readFile already
+	// follows symlinks and rejects non-regular files with an asynchronous stat.
+	const readDirectly =
+		providerId === "custom" &&
+		process.platform === "linux" &&
+		/^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
 	if (ctx.skillSourceFilter && !ctx.skillSourceFilter({ provider: providerId, level, origin: options.origin })) {
 		return { items, warnings };
 	}
@@ -516,7 +522,7 @@ export async function scanSkillsFromDir(
 	const work: Promise<void>[] = [];
 	if (options.includeSelf) {
 		const selfSkillPath = path.join(dir, "SKILL.md");
-		if (fs.existsSync(selfSkillPath)) {
+		if (readDirectly || fs.existsSync(selfSkillPath)) {
 			work.push(loadSkill(selfSkillPath));
 		}
 	}
@@ -524,7 +530,7 @@ export async function scanSkillsFromDir(
 		if (entry.name.startsWith(".")) continue;
 		if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 		const skillPath = path.join(dir, entry.name, "SKILL.md");
-		if (fs.existsSync(skillPath)) {
+		if (readDirectly || fs.existsSync(skillPath)) {
 			work.push(loadSkill(skillPath));
 		}
 	}

@@ -10,8 +10,8 @@
  * traceable. The file is created on the first record written. Records are
  * batched — one write per second or per 64 KiB — while `warn`/`error` records
  * are written at once together with everything buffered before them; exit,
- * fatal, and signal paths flush the rest. `OMP_LOG_LEVEL` optionally limits
- * the levels written to the file (default: all).
+ * fatal, and signal paths flush the rest. Offline processes emit errors only;
+ * otherwise `OMP_LOG_LEVEL` limits file levels (default: all).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -429,6 +429,7 @@ function makeFileTransport(dir?: string): RotatingFileSink {
 		onFailure: (error, stage, recoveredPath) => {
 			if (recoveredPath) {
 				if (stage !== "retention") schedulePruneStaleProcessLogs(path.dirname(recoveredPath));
+				if (isOfflineErrorOnly()) return undefined;
 				const event = stage === "retention" ? "log_retention_failed" : "log_directory_fallback";
 				return formatLogRecord(
 					"warn",
@@ -462,11 +463,16 @@ const LOG_LEVEL_RANK: Record<LogLevel, number> = { error: 0, warn: 1, info: 2, d
 /** `warn` and `error` records are written at once, with everything buffered before them. */
 const IMMEDIATE_FLUSH_RANK = LOG_LEVEL_RANK.warn;
 
+function isOfflineErrorOnly(): boolean {
+	return /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+}
+
 /**
- * Rank of the most verbose level the file transport persists: `OMP_LOG_LEVEL`
- * (error|warn|info|debug, case-insensitive), default `debug` (everything).
+ * Rank of the most verbose level the file transport persists. Offline processes
+ * persist errors only; otherwise OMP_LOG_LEVEL defaults to debug (everything).
  */
 function resolveFileLevelRank(): number {
+	if (isOfflineErrorOnly()) return LOG_LEVEL_RANK.error;
 	const requested = process.env.OMP_LOG_LEVEL?.trim().toLowerCase();
 	return requested && Object.hasOwn(LOG_LEVEL_RANK, requested)
 		? LOG_LEVEL_RANK[requested as LogLevel]
@@ -525,6 +531,7 @@ export function getCurrentLogsDir(): string {
 export function initializeDiagnosticLogging(mode?: string): void {
 	if (diagnosticStartedAt !== undefined) return;
 	diagnosticStartedAt = performance.now();
+	if (isOfflineErrorOnly()) return;
 	const transports = getLocalTransports();
 	const file = transports.file;
 	const actualPath = file?.prepare();
@@ -637,6 +644,7 @@ export function error(message: string, context?: Record<string, unknown>): void 
  * @param context - The context to log.
  */
 export function warn(message: string, context?: Record<string, unknown>): void {
+	if (isOfflineErrorOnly()) return;
 	context = mergedLogContext(context);
 	try {
 		emitLocally("warn", message, context);
@@ -652,6 +660,7 @@ export function warn(message: string, context?: Record<string, unknown>): void {
  * @param context - The context to log.
  */
 export function info(message: string, context?: Record<string, unknown>): void {
+	if (isOfflineErrorOnly()) return;
 	context = mergedLogContext(context);
 	try {
 		emitLocally("info", message, context);
@@ -667,6 +676,7 @@ export function info(message: string, context?: Record<string, unknown>): void {
  * @param context - The context to log.
  */
 export function debug(message: string, context?: Record<string, unknown>): void {
+	if (isOfflineErrorOnly()) return;
 	context = mergedLogContext(context);
 	try {
 		emitLocally("debug", message, context);

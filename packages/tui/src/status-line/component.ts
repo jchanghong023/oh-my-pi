@@ -648,6 +648,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	/** Live frame rows left below the editor; omitted for standalone renders and previews. */
 	availableRowsProvider?: () => number;
 	#renderRevision = 0;
+	readonly #offlineLinux =
+		process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+	readonly #gitStatusTtlMs = this.#offlineLinux ? 60_000 : GIT_STATUS_TTL_MS;
 	/** Fully rendered bars for the current revision/clock tick, keyed by layout. */
 	#statusLineRenderCache: Record<StatusLineLayout, CachedStatusLine | undefined> = {
 		box: undefined,
@@ -1414,13 +1417,16 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#startBrandFadeTimer(): void {
 		// The native brand segment is a terminal-clocked spinner; nothing to repaint.
 		if (this.#brandFadeTimer || this.#disposed || isNativeRendering()) return;
-		this.#brandFadeTimer = setInterval(() => {
-			const fade = this.#brandFade;
-			if (!fade || Date.now() - fade.startedAt >= BRAND_FADE_MS) this.#stopBrandFadeTimer();
-			// One trailing repaint after the stop paints the settled color.
-			this.invalidate();
-			this.#onBranchChange?.();
-		}, BRAND_FADE_FRAME_MS);
+		this.#brandFadeTimer = setInterval(
+			() => {
+				const fade = this.#brandFade;
+				if (!fade || Date.now() - fade.startedAt >= BRAND_FADE_MS) this.#stopBrandFadeTimer();
+				// One trailing repaint after the stop paints the settled color.
+				this.invalidate();
+				this.#onBranchChange?.();
+			},
+			this.#offlineLinux ? ACTIVE_WINDOW_REPAINT_MS : BRAND_FADE_FRAME_MS,
+		);
 	}
 
 	#stopBrandFadeTimer(): void {
@@ -1446,13 +1452,16 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			return;
 		}
 		if (this.#activeWindowRepaintTimer) return;
-		const timer = setInterval(() => {
-			if (this.#disposed || isNativeRendering() || this.getTurnElapsedMs() === null) {
-				this.#stopActiveWindowRepaint();
-				return;
-			}
-			this.#onBranchChange?.();
-		}, ACTIVE_WINDOW_REPAINT_MS);
+		const timer = setInterval(
+			() => {
+				if (this.#disposed || isNativeRendering() || this.getTurnElapsedMs() === null) {
+					this.#stopActiveWindowRepaint();
+					return;
+				}
+				this.#onBranchChange?.();
+			},
+			this.#offlineLinux ? 1000 : ACTIVE_WINDOW_REPAINT_MS,
+		);
 		timer.unref?.();
 		this.#activeWindowRepaintTimer = timer;
 	}
@@ -1813,8 +1822,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 		if (this.#gitStatusInFlightCwd !== undefined) {
 			return this.#cachedGitStatusCwd === gitCwd ? this.#cachedGitStatus : null;
 		}
-		if (this.#cachedGitStatusCwd === gitCwd && Date.now() - this.#gitStatusLastFetch < GIT_STATUS_TTL_MS) {
-			this.#noteVcsStaleAt(this.#gitStatusLastFetch + GIT_STATUS_TTL_MS);
+		if (this.#cachedGitStatusCwd === gitCwd && Date.now() - this.#gitStatusLastFetch < this.#gitStatusTtlMs) {
+			this.#noteVcsStaleAt(this.#gitStatusLastFetch + this.#gitStatusTtlMs);
 			return this.#cachedGitStatus;
 		}
 
@@ -1835,7 +1844,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 					this.#gitStatusLastFetch = this.#gitStatusGeneration === generation ? Date.now() : 0;
 					this.#gitStatusInFlightCwd = undefined;
 					// A zeroed stamp (superseded generation) is already due: refetch next frame.
-					this.#noteVcsStaleAt(this.#gitStatusLastFetch + GIT_STATUS_TTL_MS);
+					this.#noteVcsStaleAt(this.#gitStatusLastFetch + this.#gitStatusTtlMs);
 					if (!this.#disposed && JSON.stringify(prev) !== JSON.stringify(nextStatus)) {
 						this.#invalidateStatusLineRenderCache();
 						this.#onBranchChange?.();

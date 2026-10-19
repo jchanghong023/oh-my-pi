@@ -58,6 +58,36 @@ describe("status line active-window repaint ticker", () => {
 		await initTheme();
 	});
 
+	it.each([
+		["linux", "1", 1],
+		["linux", " TRUE ", 1],
+		["linux", "yes", 1],
+		["linux", "On", 1],
+		["linux", "false", 4],
+		["win32", "on", 4],
+		["darwin", "yes", 4],
+	] as const)("reduces decorative ticks only for %s offline=%s", (platform, offline, ticks) => {
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+		const originalOffline = process.env.OMP_OFFLINE;
+		Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+		process.env.OMP_OFFLINE = offline;
+		vi.useFakeTimers();
+		const { component, repaint } = createComponent();
+		try {
+			component.markActivityStart();
+			vi.advanceTimersByTime(1000);
+			expect(repaint.mock.calls.length).toBe(ticks);
+			component.markActivityEnd();
+			vi.advanceTimersByTime(2000);
+			expect(repaint.mock.calls.length).toBe(ticks);
+		} finally {
+			component.dispose();
+			Object.defineProperty(process, "platform", originalPlatform);
+			if (originalOffline === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = originalOffline;
+		}
+	});
+
 	it("repaints on its own cadence while a turn window is open, with no loader running", () => {
 		vi.useFakeTimers();
 		const { component, repaint } = createComponent();

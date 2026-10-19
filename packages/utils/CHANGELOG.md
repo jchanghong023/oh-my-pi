@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Offline processes record only errors, skipping lower-level context serialization, file output and log sinks.
+
 ## [18.12.2] - 2026-10-18
 
 ### Added

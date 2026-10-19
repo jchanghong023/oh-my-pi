@@ -142,6 +142,7 @@
 - 设置非空 `OMP_SKILLS_DIR` 后，将该目录作为附加技能根目录，沿用现有单层 `<目录>/<技能名>/SKILL.md` 扫描、校验、过滤、命名空间与去重机制；不要求配置文件，不下载、复制或同步技能。
 - 共享目录优先于用户、项目及 `skills.customDirectories` 中的同名技能；共享版本取得原技能名，内容不同的低优先级版本沿用现有命名空间规则保留。执行发现与管理界面沿用同一 catalog 的命名与优先级规则；管理界面标明 `Shared` 来源，展示实际生效的裸名及保留的 namespace 版本，不另行产生一套名称或优先级。面板使用当前宿主会话的 `skills` 配置，不取其他会话最新绑定的全局配置。未设置、为空或目录不存在时保留原有技能发现行为。
 - 该变量独立于 `OMP_OFFLINE`，在技能发现及刷新时生效；默认技能禁用、包含与排除规则继续有效。管理 catalog 保留禁用项、关闭来源及其诊断；执行侧在扫描前按启用来源过滤，不扫描关闭来源，也不向执行返回关闭来源的警告。通过现有 `/extensions` 启停并异步刷新执行侧技能列表、补全与可读内容；禁用项不可执行，但仍可在管理界面重新启用。启停沿用现有配置机制，不修改共享目录中的 `SKILL.md` 或其他 NFS 源文件，不新增共享写入或同步机制。
+- 仅 Linux offline 的共享／自定义目录扫描不逐技能同步探测 `SKILL.md` 是否存在，直接走既有异步普通文件校验与内容读取；同轮加载按展开后的绝对目录去重，共享来源优先，不新增跨会话缓存或目录镜像。新增、删除及正文更新仍通过既有刷新失效机制生效，禁用和来源隔离保持。
 
 
 ### Codex 压缩默认模型
@@ -346,6 +347,7 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 - 运行日志使用单行结构化记录，MUST 写入 `.log` 文件，每条记录具有含时区的毫秒时间戳、级别和 PID；业务边界补充稳定事件、组件、阶段与 `elapsed_ms`。默认路径由 `getLogsDir()` 解析为当前数据根的 `logs/omp.<日期>.<PID>.log`，随 `OMP_CONFIG_ROOT`、profile 和适用的 Linux XDG 状态目录迁移；沿用现有日期/大小轮转与保留规则。
 - 一个日志文件 MUST 仅属于一次进程运行；重启／重跑（包括 PID 被复用）MUST 创建新文件，NEVER 追加已有日志。遇到同名旧日志时沿用数字后缀选择未占用文件；目录、级别、日期／大小轮转、保留与刷新规则不变。
 - 级别约定：INFO 记录关键开始、完成和状态变化；WARN 记录可恢复异常、重试或降级；ERROR 记录当前操作失败；DEBUG 仅承载额外细节。正常取消、服务缺席和协议预期拒绝不能冒充故障；必要诊断不得全部藏在可关闭的 DEBUG 中。
+- 内网日志例外：`OMP_OFFLINE` 启用时仅记录 ERROR，优先于 `OMP_LOG_LEVEL`；WARN／INFO／DEBUG 在统一 logger 入口直接丢弃，不合并或序列化其上下文、不写本地日志，也不投递日志接收器。正常启动／退出不另写 INFO，日志回退不插入 WARN；真实 ERROR 仍沿用原目录、轮转与刷新。此项适用于全部 offline 平台，不改变界面提示、工具结果或 RPC 输出；非 offline 保留原有级别与诊断覆盖。内网不再要求上文的正常阶段与成功起止日志，接受相应诊断缺口。
 - 同一操作 MUST 通过 `operation_id` 及现有 request/job/goal/session/tool-call 标识关联起止和阶段；异步分支继承关联上下文，内部跨进程调用尽可能透传现有标识，不为日志改变外部协议。
 - RPC 对话终态须区分用户取消、本地/宿主超时、abort、断连和失败，独立响应帧仍继承发起操作的标识；后台面板吞掉的异常、已保存但 reload 降级、Goal 工具激活/恢复失败与无效持久状态不得被完成/协议成功日志遮盖。
 - 会话删除须区分主文件删除、备份清理和附件清理，明确已提交、部分清理及未知状态；team 通知发送与后续 UI 更新分别定位，内部终止仅记录安全原因分类；repo 整代读取失败使用文件指纹定位，不记录原路径或源码。
@@ -365,6 +367,7 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 - **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；不要求宿主永久保留其临时叶，不通过 `client.close()` 关闭共享 scope。Linux offline 继续使用既有 profile shm native 根。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。实现与新增回归当前未运行验证，不以源码用例替代编译二进制的真实生命周期验收。
 - **Linux offline shm**：已实现将 OMP 自有运行数据统一放在 `/dev/shm`，前台就绪满 10 分钟后首次异步备份回原始数据根，之后按周期备份；原始根优先采用有效 `OMP_CONFIG_ROOT`，未设置时沿用上游默认解析，目录名不写死。启动不复制、不恢复，不改变工具读写 NFS 项目文件的能力。完整行为与验收条件以[离线 shm 运行与异步备份](offline-shm.md)为准；非 offline 和非 Linux 不启用该运行根映射或备份。实现不等于 Linux 验收通过，当前验证结果及未验收边界统一见[需求目录](README.md)。
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
+- **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
 - `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`plan`、`slow` → `company/GLM-5.2-public`。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存、活动匹配与切换冲突比较统一排除这些隐式默认角色，不误报刚保存的 preset 与公司默认值冲突；用户显式配置或 CLI 选择的角色仍按原规则保存和比较，包括显式选择的 company 模型。普通启动不受影响。
 - offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。

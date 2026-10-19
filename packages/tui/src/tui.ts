@@ -944,6 +944,9 @@ export class TUI extends Container {
 	 */
 	#lastFrameCostMs = 0;
 	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
+	readonly #offlineLinux =
+		process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+	#inputRenderPending = false;
 	static readonly #INPUT_RENDER_GRACE_MS = TUI.#MIN_RENDER_INTERVAL_MS;
 	/**
 	 * Cap on the adaptive floor derived from `#lastFrameCostMs`. Bounds the UI
@@ -2783,6 +2786,7 @@ export class TUI extends Container {
 		if (this.#stopped) return;
 		this.#prepareForcedRender(options?.clearScrollback === true);
 		this.#renderRequested = false;
+		this.#inputRenderPending = false;
 		const start = this.#renderScheduler.now();
 		this.#lastRenderAt = start;
 		this.#doRender();
@@ -2868,7 +2872,10 @@ export class TUI extends Container {
 		}
 		const now = this.#renderScheduler.now();
 		const elapsed = now - this.#lastRenderAt;
-		const cadenceDelay = Math.max(0, TUI.#MIN_RENDER_INTERVAL_MS - elapsed);
+		// Only background frames pay the offline floor; input retains the normal
+		// cadence, grace window and adaptive/output backpressure.
+		const interval = this.#offlineLinux && !this.#inputRenderPending ? 100 : TUI.#MIN_RENDER_INTERVAL_MS;
+		const cadenceDelay = Math.max(0, interval - elapsed);
 		// Adaptive backpressure — target ~50% render duty cycle: the next frame
 		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
 		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
@@ -2891,6 +2898,7 @@ export class TUI extends Container {
 	 */
 	#executeRender(): void {
 		if (this.#deferRenderForOutputBacklog()) return;
+		this.#inputRenderPending = false;
 		const start = this.#renderScheduler.now();
 		this.#lastRenderAt = start;
 		this.#doRender();
@@ -2979,6 +2987,16 @@ export class TUI extends Container {
 			} else {
 				// No visible overlays, restore to preFocus
 				this.setFocus(focusedOverlay.preFocus);
+			}
+		}
+		if (this.#offlineLinux) {
+			this.#inputRenderPending = true;
+			// Re-evaluate a background timer on the existing scheduler rather than
+			// making an input echo wait for its slower offline deadline.
+			if (this.#renderTimer) {
+				this.#renderTimer.cancel();
+				this.#renderTimer = undefined;
+				this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 			}
 		}
 

@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { clearCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
-import { loadFilesFromDir } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { loadFilesFromDir, scanSkillsFromDir } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { parseFrontmatter, removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 
 describe("parseFrontmatter", () => {
@@ -123,5 +123,83 @@ describe("loadFilesFromDir recursion", () => {
 			path.join("mineru", "Lib", "site-packages", "gradio", "assets", "svelte", "media-query-D37ajmZt.js"),
 			"my-tool.ts",
 		]);
+	});
+});
+
+describe("offline custom skill scans", () => {
+	let tempDir: string;
+	let platform: NodeJS.Platform;
+	let offline: string | undefined;
+
+	beforeEach(() => {
+		clearCache();
+		platform = process.platform;
+		offline = process.env.OMP_OFFLINE;
+		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-offline-skills-"));
+		for (const name of ["valid", "missing", "invalid", ".hidden"]) {
+			fs.mkdirSync(path.join(tempDir, name));
+		}
+		fs.writeFileSync(
+			path.join(tempDir, "valid", "SKILL.md"),
+			"---\nname: valid\ndescription: Valid skill\n---\nBody",
+		);
+		fs.mkdirSync(path.join(tempDir, "invalid", "SKILL.md"));
+		fs.writeFileSync(path.join(tempDir, ".hidden", "SKILL.md"), "---\nname: hidden\n---\nBody");
+		fs.writeFileSync(path.join(tempDir, "not-a-directory"), "ignored");
+	});
+
+	afterEach(() => {
+		Object.defineProperty(process, "platform", { value: platform });
+		if (offline === undefined) delete process.env.OMP_OFFLINE;
+		else process.env.OMP_OFFLINE = offline;
+		clearCache();
+		removeSyncWithRetries(tempDir);
+	});
+
+	test.each([
+		["linux", " YeS ", "custom", false],
+		["linux", "false", "custom", true],
+		["win32", "true", "custom", true],
+		["linux", "true", "agents", true],
+	] as const)("preserves scan semantics on %s offline=%s provider=%s", async (host, value, providerId, probes) => {
+		Object.defineProperty(process, "platform", { value: host });
+		process.env.OMP_OFFLINE = value;
+		const exists = spyOn(fs, "existsSync");
+		try {
+			const ctx = { cwd: tempDir, home: tempDir, repoRoot: null };
+			const result = await scanSkillsFromDir(ctx, { dir: tempDir, providerId, level: "user", includeSelf: true });
+			expect(result.items.map(skill => skill.name)).toEqual(["valid"]);
+			expect(result.warnings).toEqual([]);
+			expect(exists.mock.calls.length > 0).toBe(probes);
+			const missing = await scanSkillsFromDir(ctx, {
+				dir: path.join(tempDir, "absent"),
+				providerId,
+				level: "user",
+			});
+			expect(missing).toEqual({ items: [], warnings: [] });
+		} finally {
+			exists.mockRestore();
+		}
+	});
+
+	test("follows linked skill directories without relaxing file type checks", async () => {
+		fs.symlinkSync(
+			path.join(tempDir, "valid"),
+			path.join(tempDir, "linked"),
+			platform === "win32" ? "junction" : "dir",
+		);
+		if (platform !== "win32") {
+			fs.symlinkSync(path.join(tempDir, "absent"), path.join(tempDir, "broken"), "dir");
+			fs.symlinkSync(path.join(tempDir, "valid", "SKILL.md"), path.join(tempDir, "missing", "SKILL.md"));
+		}
+		Object.defineProperty(process, "platform", { value: "linux" });
+		process.env.OMP_OFFLINE = "on";
+		const result = await scanSkillsFromDir(
+			{ cwd: tempDir, home: tempDir, repoRoot: null },
+			{ dir: tempDir, providerId: "custom", level: "user" },
+		);
+		expect(result.items).toHaveLength(platform === "win32" ? 2 : 3);
+		expect(result.items.every(skill => skill.name === "valid")).toBe(true);
+		expect(result.warnings).toEqual([]);
 	});
 });
