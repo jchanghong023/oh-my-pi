@@ -33,6 +33,7 @@ function createRuntime(
 	const settings = Settings.isolated({
 		"compaction.enabled": false,
 		"title.icons": "boring",
+		"title.generator": "tiny",
 		modelRoles: { tiny: `local/${DEFAULT_TINY_TITLE_LOCAL_MODEL_KEY}` },
 	});
 	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
