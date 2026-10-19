@@ -26,6 +26,7 @@
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
 * fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
+* 输入法恢复：`/jchime [故障现象]` 在 `src/jch-commands/workflow.ts` 注册，复用提示词命令工厂；`src/prompts/jch-ime.md` 提供完整小模型首选恢复块及失败后同用户/同 DISPLAY 的自主诊断、有限停止与重建步骤。契约见 `docs-zh-CN/requirements/fork.md`「JCH 命令」；服务状态与真实中文输入恢复分别核验。
 * RPC 命令接入复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划与循环宿主生命周期在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标复用 `rpc-goal.ts`；界面通过现有 `prompt` 与 RPC UI 对话调用，不另建命令表。
 * TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；仅紧凑模式在输入区上方使用单一实时三行思考尾窗（思考结束且回合进行中收起为单行存根，正文开始或回合结束清空），干净与详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
 
