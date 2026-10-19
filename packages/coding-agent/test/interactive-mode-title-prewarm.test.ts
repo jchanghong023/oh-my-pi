@@ -8,6 +8,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
+import { cfgTitleGenerator } from "@oh-my-pi/pi-coding-agent/utils/title-settings";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
@@ -96,6 +97,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 
 	it("prewarms the configured local tiny role on startup for an unnamed session", async () => {
 		session.settings.setModelRole("tiny", "local/lfm2.5-230m");
+		cfgTitleGenerator.set(session.settings, "tiny");
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
 		await mode.init();
@@ -111,8 +113,21 @@ describe("InteractiveMode tiny-title prewarm", () => {
 		expect(prewarm).toHaveBeenCalledWith("lfm2.5-230m");
 	});
 
+	it("does not start an unrelated local tiny worker when titles follow scout", async () => {
+		session.settings.setModelRole("tiny", "local/lfm2.5-230m");
+		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
+
+		await mode.init();
+		const immediateFlushed = Promise.withResolvers<void>();
+		setImmediate(immediateFlushed.resolve);
+		await immediateFlushed.promise;
+
+		expect(prewarm).not.toHaveBeenCalled();
+	});
+
 	it("does not prewarm when the session is already named", async () => {
 		session.settings.setModelRole("tiny", "local/lfm2.5-230m");
+		cfgTitleGenerator.set(session.settings, "tiny");
 		vi.spyOn(mode.sessionManager, "getSessionName").mockReturnValue("resumed-session");
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 
@@ -135,6 +150,7 @@ describe("InteractiveMode tiny-title prewarm", () => {
 	it("does not prewarm a paid tiny role", async () => {
 		const prewarm = vi.spyOn(tinyTitleClient, "prewarm").mockImplementation(() => {});
 		session.settings.setModelRole("tiny", "anthropic/claude-haiku-4-5");
+		cfgTitleGenerator.set(session.settings, "tiny");
 
 		await mode.init();
 		const immediateFlushed = Promise.withResolvers<void>();

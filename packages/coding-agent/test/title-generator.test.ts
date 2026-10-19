@@ -34,7 +34,7 @@ function getModelFor(provider: GeneratedProvider, id: string): Model<Api> {
 }
 
 function createSettings(model: Model<Api>): Settings {
-	return Settings.isolated({ modelRoles: { tiny: `${model.provider}/${model.id}` } });
+	return Settings.isolated({ "title.generator": "tiny", modelRoles: { tiny: `${model.provider}/${model.id}` } });
 }
 
 function createRegistry(model: Model<Api>, availableModels: Model<Api>[] = [model]) {
@@ -52,6 +52,105 @@ afterEach(() => {
 });
 
 describe("title generator", () => {
+	it("follows scout role defaults and live smol overrides rather than tiny or the current model", async () => {
+		const scoutModel = getModelOrThrow("claude-haiku-4-5");
+		const tinyModel = getModelOrThrow("claude-sonnet-4-5");
+		const currentModel = getModelOrThrow("claude-opus-4-8");
+		const registry = createRegistry(scoutModel, [scoutModel, tinyModel, currentModel]);
+		const settings = Settings.isolated({
+			modelRoles: {
+				tiny: `${tinyModel.provider}/${tinyModel.id}`,
+				commit: `${currentModel.provider}/${currentModel.id}`,
+			},
+			"retry.modelFallback": false,
+		});
+		const complete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "stop",
+			content: [{ type: "text", text: "<title>Scout Title</title>" }],
+		} as never);
+
+		for (const selector of [undefined, "@slow"]) {
+			if (selector) {
+				settings.setModelRole("slow", `${tinyModel.provider}/${tinyModel.id}`);
+				settings.setModelRole("smol", selector);
+			}
+			const scout = resolveModelOverride(["@smol"], registry, settings).model;
+			expect(
+				await generateSessionTitle(
+					"Investigate the resolver",
+					registry,
+					settings,
+					import.meta.dir,
+					undefined,
+					currentModel,
+				),
+			).toBe("Scout Title");
+			expect(formatModelStringWithRouting(complete.mock.calls.at(-1)![0])).toBe(
+				formatModelStringWithRouting(scout!),
+			);
+		}
+		settings.setModelRole("smol", "missing-provider/missing-scout-model");
+		expect(
+			await generateSessionTitle(
+				"Investigate the resolver",
+				registry,
+				settings,
+				import.meta.dir,
+				undefined,
+				currentModel,
+			),
+		).toBe("Scout Title");
+		expect(complete).toHaveBeenCalledTimes(3);
+		expect(complete.mock.calls.at(-1)?.[0]).toBe(currentModel);
+	});
+
+	it.each(["missing-key", "no-title", "same-model"] as const)(
+		"uses only smol then the current model for %s",
+		async failure => {
+			const smol = getModelOrThrow("claude-haiku-4-5");
+			const current = failure === "same-model" ? smol : getModelOrThrow("claude-opus-4-8");
+			const decoy = getModelOrThrow("claude-sonnet-4-5");
+			const settings = Settings.isolated({
+				modelRoles: {
+					smol: `${smol.provider}/${smol.id}`,
+					default: `${smol.provider}/${smol.id}`,
+				},
+				"retry.modelFallback": true,
+				"retry.fallbackChains": {
+					smol: [],
+					default: [`${decoy.provider}/${decoy.id}`],
+				},
+			});
+			const attempts: string[] = [];
+			const registry = {
+				getAvailable: () => [smol, current, decoy],
+				getApiKey: async (model: Model<Api>) => {
+					attempts.push(model.id);
+					return failure === "missing-key" && model === smol ? undefined : "test-key";
+				},
+				resolver: () => async () => "test-key",
+			} as never;
+			vi.spyOn(ai, "completeSimple").mockImplementation(
+				async model =>
+					({
+						stopReason: "stop",
+						content: model === smol ? [] : [{ type: "text", text: "<title>Recovered Title</title>" }],
+					}) as never,
+			);
+
+			const title = await generateSessionTitle(
+				"Investigate the resolver",
+				registry,
+				settings,
+				import.meta.dir,
+				undefined,
+				current,
+			);
+			expect(title).toBe(failure === "same-model" ? null : "Recovered Title");
+			expect(attempts).toEqual(failure === "same-model" ? [smol.id] : [smol.id, current.id]);
+		},
+	);
+
 	it("returns the marker-wrapped title without forcing a tool call", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
@@ -462,6 +561,7 @@ describe("title generator", () => {
 				resolver: () => async () => "test-key",
 			} as never,
 			Settings.isolated({
+				"title.generator": "tiny",
 				modelRoles: {
 					tiny: `${primary.provider}/${primary.id}`,
 					smol: `${fallback.provider}/${fallback.id}`,
@@ -649,6 +749,7 @@ describe("title generator", () => {
 
 		// Case 1: All three roles configured. 'tiny' should be used.
 		let currentSettings = Settings.isolated({
+			"title.generator": "tiny",
 			modelRoles: {
 				tiny: `${tinyModel.provider}/${tinyModel.id}`,
 				commit: `${commitModel.provider}/${commitModel.id}`,
@@ -672,6 +773,7 @@ describe("title generator", () => {
 
 		// Case 2: 'tiny' role not configured, 'commit' and 'smol' configured. 'commit' should be used.
 		currentSettings = Settings.isolated({
+			"title.generator": "tiny",
 			modelRoles: {
 				commit: `${commitModel.provider}/${commitModel.id}`,
 				smol: `${smolModel.provider}/${smolModel.id}`,
@@ -686,6 +788,7 @@ describe("title generator", () => {
 
 		// Case 3: Only 'smol' role configured. 'smol' should be used.
 		currentSettings = Settings.isolated({
+			"title.generator": "tiny",
 			modelRoles: { smol: `${smolModel.provider}/${smolModel.id}` },
 		});
 
@@ -747,6 +850,7 @@ describe("title generator", () => {
 			} as never;
 		});
 		const settings = Settings.isolated({
+			"title.generator": "tiny",
 			modelRoles: { tiny: "openrouter/google/gemini-2.5-flash@cerebras" },
 			"retry.modelFallback": true,
 		});
@@ -793,6 +897,7 @@ describe("title generator", () => {
 			} as never;
 		});
 		const settings = Settings.isolated({
+			"title.generator": "tiny",
 			"retry.modelFallback": true,
 			"retry.fallbackChains": {
 				[`${current.provider}/${current.id}`]: [`${currentFallback.provider}/${currentFallback.id}`],

@@ -335,7 +335,7 @@ export class EventController {
 	#thinkingPreviewEvents = new WeakSet<object>();
 	/** Invalidates queued handlers when a focus/rebuild replaces their UI owner. */
 	#dispatchGeneration = 0;
-	static readonly #MESSAGE_UPDATE_COALESCE_MS = 50;
+	readonly #messageUpdateCoalesceMs = /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "") ? 100 : 50;
 
 	constructor(private ctx: InteractiveModeContext) {
 		// Enhanced speech (`speech.enhanced`) rewrites blocks through the
@@ -898,7 +898,7 @@ export class EventController {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			});
-		}, EventController.#MESSAGE_UPDATE_COALESCE_MS);
+		}, this.#messageUpdateCoalesceMs);
 	}
 
 	/**

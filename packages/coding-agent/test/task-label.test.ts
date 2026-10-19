@@ -13,7 +13,7 @@ function getModelOrThrow(id: string): Model<Api> {
 
 function createSettings(model: Model<Api>) {
 	return Settings.isolated({
-		modelRoles: { tiny: `${model.provider}/${model.id}` },
+		modelRoles: { smol: `${model.provider}/${model.id}` },
 	});
 }
 

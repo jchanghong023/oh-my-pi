@@ -67,47 +67,69 @@ beforeAll(async () => {
 });
 
 describe("EventController message_update coalescing", () => {
+	let previousOffline: string | undefined;
 	beforeEach(async () => {
+		previousOffline = process.env.OMP_OFFLINE;
+		delete process.env.OMP_OFFLINE;
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
 		vi.useFakeTimers();
 	});
 
 	afterEach(() => {
+		if (previousOffline === undefined) delete process.env.OMP_OFFLINE;
+		else process.env.OMP_OFFLINE = previousOffline;
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		resetSettingsForTest();
 	});
 
-	it("runs the streaming rebuild once per window instead of once per delta, applying the latest snapshot", async () => {
-		const { ctx, ui, emit } = createStreamingFixture();
+	it.each([
+		["0", 50],
+		[" YeS ", 100],
+	] as const)(
+		"coalesces cumulative updates without delaying the final snapshot in offline=%s",
+		async (offline, interval) => {
+			process.env.OMP_OFFLINE = offline;
+			const { ctx, ui, emit } = createStreamingFixture();
 
-		emit(messageUpdate("tok1"));
-		emit(messageUpdate("tok1 tok2"));
-		emit(messageUpdate("tok1 tok2 tok3"));
-		emit(messageUpdate("tok1 tok2 tok3 tok4"));
-		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5"));
+			emit(messageUpdate("tok1"));
+			emit(messageUpdate("tok1 tok2"));
+			emit(messageUpdate("tok1 tok2 tok3"));
+			emit(messageUpdate("tok1 tok2 tok3 tok4"));
+			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5"));
 
-		vi.advanceTimersByTime(49);
-		expect(ui.requestRender).not.toHaveBeenCalled();
-		vi.advanceTimersByTime(1);
-		await flushMicrotasks();
+			vi.advanceTimersByTime(interval - 1);
+			expect(ui.requestRender).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			await flushMicrotasks();
 
-		expect(ui.requestRender).toHaveBeenCalledTimes(1);
-		expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
-			{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" },
-		]);
+			expect(ui.requestRender).toHaveBeenCalledTimes(1);
+			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
+				{ type: "text", text: "tok1 tok2 tok3 tok4 tok5" },
+			]);
 
-		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
-		emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
-		vi.advanceTimersByTime(50);
-		await flushMicrotasks();
+			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6"));
+			emit(messageUpdate("tok1 tok2 tok3 tok4 tok5 tok6 tok7"));
+			vi.advanceTimersByTime(interval);
+			await flushMicrotasks();
 
-		expect(ui.requestRender).toHaveBeenCalledTimes(2);
-		expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
-			{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" },
-		]);
-	});
+			expect(ui.requestRender).toHaveBeenCalledTimes(2);
+			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
+				{ type: "text", text: "tok1 tok2 tok3 tok4 tok5 tok6 tok7" },
+			]);
+
+			emit(messageUpdate("final snapshot"));
+			emit({ type: "message_end", message: assistantMessage("final snapshot") } as Extract<
+				AgentSessionEvent,
+				{ type: "message_end" }
+			>);
+			expect((ctx.streamingMessage as AssistantMessage | undefined)?.content).toEqual([
+				{ type: "text", text: "final snapshot" },
+			]);
+			await flushMicrotasks();
+		},
+	);
 
 	it("flushes the pending snapshot before a subsequent non-update event", async () => {
 		const { ctx, emit } = createStreamingFixture();

@@ -34,8 +34,8 @@ export const cfgTitleIcons = register({
 export const cfgTitleGenerator = register({
 	id: "title.generator",
 	type: "enum",
-	values: ["fork", "tiny"] as const,
-	default: "fork",
+	values: ["smol", "fork", "tiny"] as const,
+	default: "smol",
 	ui: {
 		tab: "tasks",
 		group: "模式",
@@ -43,9 +43,14 @@ export const cfgTitleGenerator = register({
 		description: "根据用户消息为无标题会话命名的方式",
 		options: [
 			{
+				value: "smol",
+				label: "侦察模型",
+				description: "使用与内置 scout 相同的 @smol 模型角色（默认）",
+			},
+			{
 				value: "fork",
 				label: "分叉",
-				description: "使用会话模型进行旁路回复：读取其 Prompt 缓存并添加卡片图标（默认）",
+				description: "使用会话模型进行旁路回复：读取其 Prompt 缓存并添加卡片图标",
 			},
 			{ value: "tiny", label: "微型模型", description: "仅使用 title 模型角色；生成不带卡片的纯文本标题" },
 		],

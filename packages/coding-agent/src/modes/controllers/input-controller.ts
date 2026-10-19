@@ -65,6 +65,7 @@ import { EnhancedPasteController } from "../../utils/enhanced-paste";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
 import { resendProgramStatus } from "../../utils/run-status";
 import { loadImageInput } from "../../utils/image-loading";
+import { cfgTitleGenerator } from "../../utils/title-settings";
 import { materializeImageChipLinks } from "../utils/ui-helpers";
 import { ensureSupportedImageInput, ImageInputTooLargeError } from "@oh-my-pi/pi-tui/chat/image-loading";
 import { type ImageAttachmentSource, tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
@@ -273,6 +274,7 @@ export class InputController {
 
 	/** Prewarm only the local worker selected by the current tiny role. */
 	prewarmTinyTitleModel(): void {
+		if (cfgTitleGenerator.get(this.ctx.settings) === "smol") return;
 		const modelKey = this.#resolveTinyTitleLocalModelKey();
 		if (modelKey) tinyTitleClient.prewarm(modelKey);
 	}

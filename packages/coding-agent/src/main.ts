@@ -188,10 +188,12 @@ import {
 	cfgSymbolPreset,
 	cfgThemeDark,
 	cfgThemeLight,
+	cfgTuiAutoGraph,
 	cfgTuiCompleteScrollback,
 	cfgTuiImeSafeCursor,
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
+	cfgTuiTitleState,
 	cfgUpdateChannel,
 } from "./modes/settings";
 import {
@@ -205,6 +207,7 @@ import { cfgDisabledProviders, cfgEnabledModels } from "./config/model-settings"
 import { cfgTaskAgentIdleTtlMs } from "./task/settings";
 import { cfgSkillsIncludeSkills } from "./extensibility/settings";
 import { cfgWorkspaceAdditionalDirectories } from "./session/context-settings";
+import { cfgTitleRefreshOnReplan } from "./utils/title-settings";
 
 type RunAcpMode = (createSession: AcpSessionFactory) => Promise<never>;
 type RunPrintMode = (session: AgentSession, options: PrintModeOptions) => Promise<number>;
@@ -2070,6 +2073,9 @@ export async function runRootCommand(
 			cfgStartupSetupWizard.override(settingsInstance, false);
 			cfgStartupCheckUpdate.override(settingsInstance, false);
 			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
+			cfgTuiAutoGraph.override(settingsInstance, "off");
+			cfgTuiTitleState.override(settingsInstance, false);
+			cfgTitleRefreshOnReplan.override(settingsInstance, false);
 			setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 			if (getCompanyConfig() && !disabledProviderIds(settingsInstance).has(COMPANY_PROVIDER_ID)) {
 				settingsInstance.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);

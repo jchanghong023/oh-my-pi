@@ -10355,7 +10355,7 @@ export class AgentSession implements SettingsScope {
 	 * own reading of the task, and asks for a card (icon and code, unless
 	 * `title.icons` is `boring`) to head the title. The title model
 	 * ({@link generateTitle}) takes over when the fork fails, times out or
-	 * declines, and is the only path under `tiny` or a TITLE_SYSTEM.md override.
+	 * declines, and is the only path under `smol`, `tiny` or a TITLE_SYSTEM.md override.
 	 *
 	 * Returns whether a request started.
 	 */

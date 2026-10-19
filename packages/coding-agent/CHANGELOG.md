@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
+- Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
+
 ### Fixed
 
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.

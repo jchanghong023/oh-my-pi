@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
+import { cfgSpellingAutocomplete, cfgTuiAutoGraph, cfgTuiTitleState } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgTitleRefreshOnReplan } from "@oh-my-pi/pi-coding-agent/utils/title-settings";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -12,6 +14,12 @@ const CHILD_FLAG = "--fs-tuning-child";
 
 interface FsTuningEnv {
 	scanTtl?: string;
+	runtimeUi: {
+		autoGraph: string;
+		titleState: boolean;
+		titleRefreshOnReplan: boolean;
+		spellingAutocomplete: string;
+	};
 }
 
 /** Startup also mutates provider/worker globals; keep those out of the test runner. */
@@ -43,7 +51,13 @@ async function startWith(argv: string[], overrides: Record<string, string> = {})
 async function startInProcess(argv: string[]): Promise<FsTuningEnv> {
 	using tempDir = TempDir.createSync("@omp-fs-tuning-");
 	const authStorage = await AuthStorage.create(":memory:");
-	const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+	const settings = Settings.isolated({
+		"marketplace.autoUpdate": "off",
+		"tui.autoGraph": "smart",
+		"tui.titleState": true,
+		"title.refreshOnReplan": true,
+		"spelling.autocomplete": "ngram",
+	});
 	const parsed = parseArgs(argv);
 	parsed.noExtensions = true;
 	parsed.noSkills = true;
@@ -65,7 +79,15 @@ async function startInProcess(argv: string[]): Promise<FsTuningEnv> {
 	} finally {
 		authStorage.close();
 	}
-	return { scanTtl: process.env.FS_SCAN_CACHE_TTL_MS };
+	return {
+		scanTtl: process.env.FS_SCAN_CACHE_TTL_MS,
+		runtimeUi: {
+			autoGraph: cfgTuiAutoGraph.get(settings),
+			titleState: cfgTuiTitleState.get(settings),
+			titleRefreshOnReplan: cfgTitleRefreshOnReplan.get(settings),
+			spellingAutocomplete: cfgSpellingAutocomplete.get(settings),
+		},
+	};
 }
 
 if (process.argv.includes(CHILD_FLAG)) {
@@ -78,12 +100,24 @@ describe("runRootCommand — fork filesystem tuning", () => {
 		const snapshot = await startWith(["--print", "hi"], { OMP_OFFLINE: "1" });
 
 		expect(snapshot.scanTtl).toBe("30000");
+		expect(snapshot.runtimeUi).toEqual({
+			autoGraph: "off",
+			titleState: false,
+			titleRefreshOnReplan: false,
+			spellingAutocomplete: "ngram",
+		});
 	});
 
 	it("leaves FS_SCAN_CACHE_TTL_MS alone without OMP_OFFLINE", async () => {
 		const snapshot = await startWith(["--print", "hi"]);
 
 		expect(snapshot.scanTtl).toBeUndefined();
+		expect(snapshot.runtimeUi).toEqual({
+			autoGraph: "smart",
+			titleState: true,
+			titleRefreshOnReplan: true,
+			spellingAutocomplete: "ngram",
+		});
 	});
 
 	it("keeps an explicitly configured scan-cache TTL", async () => {
