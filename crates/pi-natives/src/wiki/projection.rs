@@ -219,11 +219,12 @@ impl DocumentProjection {
 			return Err(WikiError::message("Unsupported documentation projection version"));
 		}
 		for group in &self.groups {
+			let source_len = group.source_len;
 			if group.sections.is_empty()
 				|| group
 					.sections
 					.iter()
-					.any(|(_, range)| range.start > range.end || range.end > group.source_len)
+					.any(|(_, range)| range.start > range.end || range.end > source_len)
 				|| group
 					.sections
 					.windows(2)
