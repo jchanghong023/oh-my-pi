@@ -10,6 +10,7 @@ export type KnownProvider =
 	| "amazon-bedrock"
 	| "anthropic"
 	| "apple"
+	| "ascend"
 	| "azure"
 	| "baseten"
 	| "bedrock-mantle"

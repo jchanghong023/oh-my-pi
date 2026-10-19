@@ -10,11 +10,15 @@ setenv OMP_CONFIG_ROOT "$HOME/omp-data"
 
 # 使用团队共享资源时，替换为实际网络文件系统路径：
 setenv OMP_SKILLS_DIR "/path/to/shared/skills"
+
+# 使用内置 Ascend 模型时，替换为自己的密钥：
+setenv ASCEND_API_KEY "<你的密钥>"
 ```
 
 - `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
 - `OMP_CONFIG_ROOT`：统一的原始数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Wiki／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。Linux 内网模式实际使用下述 shm 运行根，原始根用于后台备份。
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
+- `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](requirements/fork.md#ascend-内置模型)。不要将真实密钥提交到仓库或共享文档。
 
 上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI、RPC 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 

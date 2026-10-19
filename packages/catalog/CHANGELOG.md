@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added six built-in Ascend models, available with `ASCEND_API_KEY` without a custom `models.yml`.
+
 ### Removed
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.

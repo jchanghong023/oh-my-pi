@@ -1,0 +1,4 @@
+auth "ascend" {
+	name "Ascend"
+	env "ASCEND_API_KEY"
+}

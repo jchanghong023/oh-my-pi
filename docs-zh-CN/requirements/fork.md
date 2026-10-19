@@ -171,6 +171,24 @@
 - CLI/TUI 明确展示“后端 Agent 执行”，不把后端文本伪造成前端工具事件或已验证的工具执行记录；模型目录缺失的上下文、输出容量等元信息不得作为已确认的远端实际能力宣称，界面所需占位值不构成容量承诺。
 - 验收须覆盖本地单元与集成测试，以及真实 CLI/TUI 或公开 SDK 入口连接实际 JchTools 服务、由合成 ACP Agent 提供可核对行为的端到端测试，验证发现／禁用、防递归、后启动／重启刷新、真实 ID、按来源投影且保留真实用户原文／背景／约束和完整可见历史、不注入 OMP system／tools／skills／Goal 或魔法通知、SDK 远端 slash 原文送达且不执行／展开本地 extension／custom／file templates、TUI／RPC／ACP 同名技能不消费远端原文或读取本地技能文件、宿主本地管理命令不变、完整 HTTP 历史与 ACP 新增提交、同聊天复用、新建／分支／目录隔离、实际会话及终端工作目录、增量输出，以及已发请求取消后清除关联、下一次用户显式请求新会话且不自动重试／重放。合成 Agent 或本地测试通过不代表真实 OpenCode／付费模型、账号与任务质量已验证；真实 OpenCode 多轮验证须当次另行授权，未执行的验收不得标为通过。
 
+### Ascend 内置模型
+
+- 内置 `ascend`，设置环境变量 `ASCEND_API_KEY` 即可使用，无需创建 `models.yml` 或登录；普通与 offline 进程均可显式选择，不改变现有默认模型或角色。密钥不内置、不写入 OMP 配置或日志，认证复用现有环境变量解析与 Bearer 请求头。
+- 固定地址 `http://models.ascend.huawei.com`，使用 `anthropic-messages`，禁用严格工具模式；不进行 Ascend 模型目录发现，不回退至厂商公网地址。HTTP 为用户指定地址，传输不加密。
+
+  | Model ID | 输入 | 上下文 | 最大输出 |
+  | --- | --- | ---: | ---: |
+  | `minimax2.7` | 文本 | 200000 | 32768 |
+  | `kimi-k2.6` | 文本 | 200000 | 32768 |
+  | `deepseek-v4-flash` | 文本 | 200000 | 32768 |
+  | `qwen3.8-27b` | 文本 | 256000 | 32768 |
+  | `qwen-aw-35b` | 文本、图片 | 200000 | 32768 |
+  | `qwen3.8-flash-next` | 文本、图片 | 256000 | 32768 |
+
+- 全部模型支持 reasoning 与 tools；两个 `qwen3.8-*` 模型使用 `anthropic-budget-effort`，档位为 `low`、`medium`、`high`、`xhigh`，默认 `xhigh`，`high` 映射为服务端 `xhigh`。未提供计费信息，不将占位零费率视为免费承诺。
+- 使用示例（PowerShell）：`$env:ASCEND_API_KEY = "<你的密钥>"`，随后运行 `omp --model ascend/qwen3.8-flash-next`；`omp models ascend` 查看内置目录。
+- Windows 定向冒烟通过：隔离真实 CLI 列出六个模型，仅环境变量提供认证，本地 HTTP Anthropic 流式响应成功，核对 Bearer、严格工具字段缺席及 `high` → `xhigh`。未调用真实 Ascend 服务，未运行完整门禁；本地模拟不代表公司网关连通性或真实模型能力验收。
+
 ### 公司内网模型（仅 `OMP_OFFLINE`）
 
 - `company` lane 只在 offline（`OMP_OFFLINE=1`）进程中存在：普通启动不注册该 provider，没有 company 模型、向量回退或启动警告；显式 `--provider company` 或 `--model company/...` 直接报错提示需要 `OMP_OFFLINE=1`。`models.yml` 中名为 `company` 的 provider 段整段忽略（该 id 为 fork 保留），命中时启动会输出保留提示（不阻断启动）。以下条目均限于 offline 进程。
