@@ -69,7 +69,7 @@ omp usage
 
 将文件名替换为实际路径。普通本地 `read` 与已有会话的 `render` 不要求公司配置，也不为此做 auth discovery 或在线模型发现。图片问答会按需初始化 company／vision 并调用真实模型；显式配置且解析成功的非 company vision／default 角色仍按用户选择执行，公司配置错误可见但不阻断该显式路径。需要默认或显式选择的 company 模型时，缺失或无效的公司配置必须明确失败，不隐式回退到其他 Provider；`dry-balance` 解析公司模型时复用同一初始化。上述模型目录发现使用 cache-only，不表示禁止公司模型 API 或现有 usage provider 的真实请求；`usage` 仅报告现有接口取得的数据，不提供虚构的 company 额度接口。offline 覆盖仅对当前进程有效，不保存；普通启动行为不变。
 
-OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpreter` 优先；未显式设置时，只有 Linux 且 `OMP_OFFLINE` 恰为字面量 `1` 才优先尝试 `/software/public/python/3.11.4/bin/python3.11`，缺失或不适合则继续旧自动候选。Eval 最低要求 Python 3.8+；显式解释器不满足要求时会报错，不会自动换解释器。`true`／`yes`／`on` 虽可启用内网模式，但不触发此固定候选。OMP 不修改当前终端／主进程 PATH、项目虚拟环境或业务 Python 3.6，也不扫描软件目录或安装包；用 bash 执行业务脚本仍应使用项目自己的解释器。
+OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpreter` 优先；未显式设置时，Linux 内网模式优先尝试 `/software/public/python/3.11.4/bin/python3.11`，缺失或不适合则继续检查原有候选及 PATH 中的版本化 `python3.11`～`python3.15`、`python3`、`python`。内网模式的 `1`／`true`／`yes`／`on` 均生效，忽略大小写和首尾空白；Linux 内网 Eval 要求 Python ≥3.11，遇到默认 Python 3.6 会继续查找，全部候选不满足时明确报错，不降级。显式解释器不满足要求时也会报错，不会自动换解释器。其他平台或非内网模式仍要求 Python 3.8+。OMP 不修改当前终端／主进程 PATH、项目虚拟环境或业务 Python，也不扫描软件目录或安装包；用 bash 执行业务脚本仍应使用项目自己的解释器。
 
 ## 3. 常用操作
 

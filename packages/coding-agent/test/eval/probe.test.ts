@@ -21,6 +21,7 @@ const bun = process.execPath;
 const HANG = [bun, "-e", "await Bun.sleep(60_000)"];
 const IGNORE_TERM = [bun, "-e", 'process.on("SIGTERM", () => {}); await Bun.sleep(60_000)'];
 const baseEnv = (): Record<string, string | undefined> => ({ ...process.env });
+const hostPython = piUtils.$which("python") ?? piUtils.$which("python3");
 
 describe("runBoundedProbe", () => {
 	test("a hung probe is bounded by its timeout instead of hanging (regression: #9466)", async () => {
@@ -297,10 +298,53 @@ describe("P2-21 Python Eval runtime scope", () => {
 		},
 	);
 
+	test.skipIf(!hostPython).each(["available", "too-old"] as const)(
+		"probes past business Python 3.6 and requires offline Python 3.11+: %s",
+		async modern => {
+			process.env.OMP_OFFLINE = " TrUe ";
+			const modernPython = path.join(cwd, "python3.11");
+			vi.spyOn(fs, "existsSync").mockImplementation(candidate => String(candidate) === activePython);
+			vi.spyOn(piUtils, "$which").mockImplementation(command =>
+				command === "python3.11"
+					? modernPython
+					: command === "python" || command === "python3"
+						? systemPython
+						: null,
+			);
+			const probe = runtimeProbe.probeCandidates;
+			vi.spyOn(runtimeProbe, "probeCandidates").mockImplementation((candidates, options) =>
+				probe(
+					candidates.map(candidate => {
+						const minor = candidate.command[0] === modernPython ? (modern === "available" ? 11 : 10) : 6;
+						return {
+							...candidate,
+							command: [
+								hostPython!,
+								"-c",
+								`import sys;sys.version_info=(3,${minor});exec(${JSON.stringify(candidate.command[2])})`,
+							],
+							env: { ...process.env },
+						};
+					}),
+					{ ...options, cwd: process.cwd() },
+				),
+			);
+
+			const result = await checkPythonKernelAvailability(cwd, undefined, { forceProbe: true });
+
+			if (modern === "available") {
+				expect(result).toMatchObject({ ok: true, pythonPath: modernPython });
+				expect(result.runtime?.env.PYTHONPATH).toBeUndefined();
+			} else {
+				expect(result.ok).toBe(false);
+				expect(result.reason).toContain("Python 3.11+");
+			}
+		},
+	);
+
 	test.each([
 		["linux", undefined],
 		["linux", "0"],
-		["linux", "true"],
 		["darwin", "1"],
 		["win32", "1"],
 	] as const)("does not add the Eval fixed candidate on %s with OMP_OFFLINE=%s", async (platform, offline) => {

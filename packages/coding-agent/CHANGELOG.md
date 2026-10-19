@@ -5,6 +5,7 @@
 ### Fixed
 
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
+- Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.
 
 ## [18.12.2] - 2026-10-18
 

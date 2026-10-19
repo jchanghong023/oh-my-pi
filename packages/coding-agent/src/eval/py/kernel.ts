@@ -9,8 +9,9 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { $flag, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
+import { $flag, $which, isBunTestRuntime, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../config/settings";
+import { offlineFromEnv } from "../../cli/args";
 import {
 	BaseKernel,
 	getRemainingTimeMs,
@@ -106,21 +107,31 @@ interface PythonKernelExecuteOptions extends KernelExecuteOptions {
 // cached so installing a Python mid-session is picked up on the next attempt.
 const availabilityCache = new Map<string, Promise<PythonKernelAvailability>>();
 
-/** Eval alone prefers the fixed Linux offline interpreter over business Python. */
+/** Eval alone discovers modern Linux offline interpreters without changing business Python. */
 function enumerateEvalPythonRuntimes(cwd: string, baseEnv: Record<string, string | undefined>): PythonRuntime[] {
 	const runtimes = enumeratePythonRuntimes(cwd, baseEnv);
-	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
-	if (process.platform !== "linux" || process.env.OMP_OFFLINE !== "1" || !fs.existsSync(offlinePython)) {
-		return runtimes;
-	}
-	// Isolate only the Eval child; preserve the caller and fallback candidates.
+	if (process.platform !== "linux" || !offlineFromEnv()) return runtimes;
+
+	// Isolate only the Eval child; preserve the caller and existing venv candidates.
 	const env = { ...baseEnv };
 	delete env.VIRTUAL_ENV;
 	delete env.CONDA_PREFIX;
 	delete env.CONDA_DEFAULT_ENV;
 	delete env.PYTHONPATH;
 	delete env.PYTHONHOME;
-	return [{ pythonPath: offlinePython, env }, ...runtimes.filter(runtime => runtime.pythonPath !== offlinePython)];
+	const offlinePython = "/software/public/python/3.11.4/bin/python3.11";
+	if (fs.existsSync(offlinePython)) {
+		runtimes.unshift({ pythonPath: offlinePython, env });
+	}
+	const seen = new Set(runtimes.map(runtime => runtime.pythonPath));
+	for (const command of ["python3.15", "python3.14", "python3.13", "python3.12", "python3.11", "python3", "python"]) {
+		const pythonPath = $which(command, { PATH: baseEnv.PATH });
+		if (pythonPath && !seen.has(pythonPath)) {
+			seen.add(pythonPath);
+			runtimes.push({ pythonPath, env });
+		}
+	}
+	return runtimes;
 }
 
 export async function checkPythonKernelAvailability(
@@ -151,6 +162,8 @@ async function probePythonKernelAvailability(
 		const settings = await Settings.init();
 		const { env } = settings.getShellConfig();
 		const baseEnv = filterEnv(env);
+		const minimumMinor = process.platform === "linux" && offlineFromEnv() ? 11 : 8;
+		const requiredVersion = `3.${minimumMinor}+`;
 		const runtimes = interpreter
 			? [resolveExplicitPythonRuntime(interpreter, cwd, baseEnv)]
 			: enumerateEvalPythonRuntimes(cwd, baseEnv);
@@ -159,7 +172,11 @@ async function probePythonKernelAvailability(
 		}
 		const result = await probeCandidates(
 			runtimes.map(runtime => ({
-				command: [runtime.pythonPath, "-c", "import sys;sys.exit(0 if sys.version_info >= (3, 8) else 1)"],
+				command: [
+					runtime.pythonPath,
+					"-c",
+					`import sys;sys.exit(0 if sys.version_info >= (3, ${minimumMinor}) else 1)`,
+				],
 				env: runtime.env,
 				label: runtime.pythonPath,
 			})),
@@ -177,8 +194,8 @@ async function probePythonKernelAvailability(
 			pythonPath: runtimes[0].pythonPath,
 			reason: `${
 				interpreter
-					? "Configured Python interpreter is unavailable or incompatible with Eval (Python 3.8+ required)"
-					: "No working Python 3.8+ interpreter found"
+					? `Configured Python interpreter is unavailable or incompatible with Eval (Python ${requiredVersion} required)`
+					: `No working Python ${requiredVersion} interpreter found`
 			}. Tried: ${result.failures.join("; ")}`,
 		};
 	} catch (err) {
