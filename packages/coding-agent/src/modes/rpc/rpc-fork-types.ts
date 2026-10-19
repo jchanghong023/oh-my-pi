@@ -9,6 +9,55 @@
  * the surface only after `negotiate_protocol {protocolVersion:3}`.
  */
 
+import type {
+	TeamConfigErrorCode,
+	TeamConfigErrorData,
+	TeamConfigModelsResult,
+	TeamConfigPreviewInput,
+	TeamConfigSaveInput,
+	TeamConfigSaveResult,
+	TeamConfigSnapshot,
+} from "../../team/config-types";
+export type {
+	TeamConfigErrorCode,
+	TeamConfigErrorData,
+	TeamConfigIssue,
+	TeamConfigModel,
+	TeamConfigModelsResult,
+	TeamConfigParticipant,
+	TeamConfigPreview,
+	TeamConfigPreviewInput,
+	TeamConfigSaveInput,
+	TeamConfigSaveResult,
+	TeamConfigSnapshot,
+	TeamConfigSource,
+	TeamMemberSlot,
+	TeamModelRef,
+} from "../../team/config-types";
+
+/** Team configuration extends only the negotiated v3 namespace. */
+export type RpcTeamCommand =
+	| { id?: string; type: "get_team_config"; preview?: TeamConfigPreviewInput }
+	| { id?: string; type: "get_team_models"; query?: string }
+	| ({ id?: string; type: "set_team_config" } & TeamConfigSaveInput);
+
+export type RpcTeamSuccessResponse =
+	| { id?: string; type: "response"; command: "get_team_config"; success: true; data: TeamConfigSnapshot }
+	| { id?: string; type: "response"; command: "get_team_models"; success: true; data: TeamConfigModelsResult }
+	| { id?: string; type: "response"; command: "set_team_config"; success: true; data: TeamConfigSaveResult };
+
+export interface RpcTeamErrorResponse {
+	id?: string;
+	type: "response";
+	command: RpcTeamCommand["type"];
+	success: false;
+	error: string;
+	code: TeamConfigErrorCode | "unsupported";
+	data?: TeamConfigErrorData;
+}
+
+export type RpcTeamResponse = RpcTeamSuccessResponse | RpcTeamErrorResponse;
+
 /** Fork protocol version; implies v2 chunked framing. */
 export const RPC_FORK_PROTOCOL_VERSION = 3;
 
@@ -25,17 +74,20 @@ export interface RpcForkCapabilities {
 	readonly commandCompletion: true;
 	readonly modelRoleConfig: true;
 	readonly sessionDirectory: true;
+	readonly teamConfig: true;
 }
 
 export const RPC_FORK_CAPABILITIES: RpcForkCapabilities = {
 	commandCompletion: true,
 	modelRoleConfig: true,
 	sessionDirectory: true,
+	teamConfig: true,
 };
 
 /** Error codes the fork commands distinguish. */
 export type RpcForkErrorCode =
 	| "invalid_params"
+	| "invalid_config"
 	| "not_found"
 	| "unsupported"
 	| "scope_not_allowed"

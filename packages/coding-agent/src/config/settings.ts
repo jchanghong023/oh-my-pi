@@ -21,6 +21,7 @@ import { type Api, type Model, modelKind } from "@oh-my-pi/pi-catalog/types";
 import {
 	getAgentDbPath,
 	getAgentDir,
+	getOfflineShmState,
 	getLastChangelogVersionPath,
 	getProjectDir,
 	getProjectAgentDir,
@@ -57,6 +58,13 @@ import {
 import "./all-settings";
 import { cfgModelRoles, cfgModelRoleStorage } from "./model-settings";
 import { cfgShellPath } from "../exec/settings";
+import {
+	UserSettingError,
+	UserSettingsStore,
+	type UserSettingMutation,
+	type UserSettingSaveResult,
+	type UserSettingSnapshot,
+} from "./user-settings";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -663,6 +671,8 @@ export class Settings {
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
 	#savePromise?: Promise<void>;
+	/** Failed offline saves remain visible to flush; authorization is never automatically replayed. */
+	#offlineSaveError: unknown;
 	#projectSaveTimer?: NodeJS.Timeout;
 	#projectSavePromise?: Promise<void>;
 	/** In-flight layer refresh; concurrent strict reloads share it, others queue behind it. */
@@ -900,6 +910,90 @@ export class Settings {
 		return this.#parent?.getProvenance(setting) ?? "default";
 	}
 
+	/** Read the raw user leaf on each necessary storage side without quarantine or migration. */
+	async readUserSetting(id: string): Promise<UserSettingSnapshot> {
+		if (this.#parent) return this.#parent.readUserSetting(id);
+		const setting = lookupSetting(id);
+		if (!setting) throw new Error(`Unknown setting: ${id}`);
+		return new UserSettingsStore({
+			agentDir: this.#agentDir,
+			migrate: raw => this.#migrateRawSettings(raw, false),
+		}).read(setting.segments);
+	}
+
+	/** Pure projection through the same merge, parent, null, cwd and environment rules as a normal read. */
+	projectUserSetting(id: string, value: unknown): { value: unknown; source: SettingProvenance } {
+		const setting = lookupSetting(id);
+		if (!setting) throw new Error(`Unknown setting: ${id}`);
+		const project = (instance: Settings): { merged: RawSettings; source: SettingProvenance } => {
+			const parent = instance.#parent ? project(instance.#parent) : undefined;
+			const global = structuredClone(instance.#global);
+			if (!parent) {
+				if (value === undefined) deleteByPath(global, setting.segments);
+				else setByPath(global, setting.segments, value);
+			}
+			const own = instance.#mergeOwnLayers({ ...instance.#ownLayers(), global });
+			const merged = parent ? instance.#deepMerge(parent.merged, own) : own;
+			let source: SettingProvenance = parent?.source ?? "default";
+			for (const [layer, name] of [
+				[global, "global"],
+				[projectLayerForMerge(instance.#project), "project"],
+				[instance.#configOverlay, "overlay"],
+				[instance.#overrides, "runtime"],
+			] as const) {
+				if (getByPath(layer, setting.segments) !== undefined) source = name;
+			}
+			if (configuredValue(merged, setting, instance.#cwd) === undefined) source = "default";
+			return { merged, source };
+		};
+		const projected = project(this);
+		const configured = configuredValue(projected.merged, setting, this.#cwd);
+		const env = setting.envValue();
+		const useEnv =
+			env !== undefined &&
+			(!setting.envFallback ||
+				configured === undefined ||
+				(setting.envFallback === "blank" && typeof configured === "string" && configured.trim() === ""));
+		return { value: useEnv ? env : (configured ?? setting.default), source: useEnv ? "env" : projected.source };
+	}
+
+	async saveUserSetting(id: string, value: unknown, expectedRevision: string): Promise<UserSettingSaveResult> {
+		if (this.#parent) return this.#parent.saveUserSetting(id, value, expectedRevision);
+		const setting = lookupSetting(id);
+		if (!setting) throw new Error(`Unknown setting: ${id}`);
+		if (!this.#persist || this.#savesCancelled)
+			throw new UserSettingError("execution_failed", "User settings persistence is unavailable.", {
+				saveState: "failed",
+				writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+			});
+		if (this.#hasPendingUserSetting(setting.segments))
+			throw new UserSettingError("revision_conflict", "This user setting has a pending local edit.", {
+				saveState: "failed",
+				writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+			});
+		const store = new UserSettingsStore({
+			agentDir: this.#agentDir,
+			migrate: raw => this.#migrateRawSettings(raw, false),
+		});
+		this.#persistedMutationGeneration++;
+		let refresh = false;
+		try {
+			const result = await store.save([{ segments: setting.segments, value }], expectedRevision);
+			this.#offlineSaveError = undefined;
+			refresh = result.writes.active.status === "saved" || result.writes.active.status === "unchanged";
+			return result;
+		} catch (error) {
+			refresh =
+				error instanceof UserSettingError &&
+				(error.data.writes.active.status === "saved" || error.data.writes.active.status === "unknown");
+			throw error;
+		} finally {
+			this.#persistedMutationGeneration++;
+			// Adopting only the active layer preserves unrelated pending writes and never flushes them.
+			if (refresh) await this.#refreshSavedGlobal(store);
+		}
+	}
+
 	/**
 	 * Registry plumbing behind `Setting.set` / `Setting.override`: writes `value` for `setting` to the
 	 * global layer (persisted in the background; releases a soft pin, see {@link pinDefaultValue}) or
@@ -936,12 +1030,13 @@ export class Settings {
 	 */
 	unsetGlobalValue(setting: AnySetting): void {
 		const current = getByPath(this.#global, setting.segments);
-		if (current === undefined && !this.#softPins.has(setting)) return;
+		const persistRemoval = current !== undefined || (!!getOfflineShmState() && this.#persist);
+		if (!persistRemoval && !this.#softPins.has(setting)) return;
 		const prev = setting.get(this);
 		this.#releaseSoftPin(setting);
-		if (current !== undefined) this.#stageGlobal(setting.segments, undefined);
+		if (persistRemoval) this.#stageGlobal(setting.segments, undefined);
 		this.#rebuildMerged();
-		if (current !== undefined) this.#queueSave();
+		if (persistRemoval) this.#queueSave();
 		this.#fireIfChanged(setting, prev);
 	}
 
@@ -961,7 +1056,7 @@ export class Settings {
 		const staged =
 			value !== undefined
 				? !this.#globalWriteIsNoop([...setting.segments, key], value)
-				: isRecord(record) && Object.hasOwn(record, key);
+				: (isRecord(record) && Object.hasOwn(record, key)) || (!!getOfflineShmState() && this.#persist);
 		if (!staged && !this.#softPins.has(setting)) return;
 		const prev = setting.get(this);
 		this.#releaseSoftPin(setting);
@@ -1284,6 +1379,7 @@ export class Settings {
 		if (this.#modifiedProjectModelRoles.size > 0) {
 			await this.#saveProjectNow();
 		}
+		if (this.#offlineSaveError !== undefined) throw this.#offlineSaveError;
 	}
 
 	/**
@@ -1443,6 +1539,7 @@ export class Settings {
 			if (!keepLastGood) this.#validateAll(this.#mergeOverParent(this.#mergeOwnLayers(layers)), this.#cwd);
 
 			const previous = this.#snapshot();
+			this.#persistedMutationGeneration++;
 			for (const refresh of adopted) refresh.commit();
 			this.#global = layers.global;
 			this.#project = layers.project;
@@ -1782,7 +1879,11 @@ export class Settings {
 		// the runtime-override sync below still applies.
 		if (!this.#globalWriteIsNoop(["modelRoles", role], modelId)) {
 			const current = this.#modelRolesFromLayer(this.#global);
-			this.#captureGlobalMutation(role, this.#modifiedGlobalModelRoleMutations, current[role]);
+			this.#captureGlobalMutation(
+				role,
+				this.#modifiedGlobalModelRoleMutations,
+				getOfflineShmState() ? getByPath(this.#global, ["modelRoles", role]) : current[role],
+			);
 			if (modelId === undefined) {
 				delete current[role];
 			} else {
@@ -1816,7 +1917,34 @@ export class Settings {
 		if (!this.#persist || this.#savesCancelled) {
 			throw new Error("User model role persistence is unavailable.");
 		}
+		this.#persistedMutationGeneration++;
 		await this.flush();
+		const userStore = new UserSettingsStore({
+			agentDir: this.#agentDir,
+			migrate: raw => this.#migrateRawSettings(raw, false),
+		});
+		if (userStore.offline) {
+			const segments = ["modelRoles", role];
+			const snapshot = await userStore.read(segments);
+			if (modelRoleValueFromUnknown(snapshot.active.value) !== expectedValue) throw new ModelRoleConflictError(role);
+			if (snapshot.revision === null)
+				throw new UserSettingError(
+					"invalid_config",
+					"User configuration cannot be safely parsed.",
+					{
+						saveState: "failed",
+						writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+					},
+					snapshot.issues,
+				);
+			try {
+				await userStore.save([{ segments, value: modelId }], snapshot.revision);
+			} finally {
+				this.#persistedMutationGeneration++;
+				await this.#refreshSavedGlobal(userStore);
+			}
+			return;
+		}
 		const configPath = this.#configPath ?? path.join(this.#agentDir, MAIN_CONFIG_FILENAMES[0]);
 		await fs.promises.mkdir(this.#agentDir, { recursive: true });
 		await this.#withYamlWriteLock(configPath, async writePath => {
@@ -2084,6 +2212,7 @@ export class Settings {
 
 	#captureGlobalMutation(key: string, mutations: Map<string, PendingYamlMutation>, baseValue: unknown): void {
 		if (!this.#persist || !this.#configPath) return;
+		if (getOfflineShmState() && mutations.has(key)) return;
 		mutations.set(key, {
 			generation: this.#readYamlGeneration(this.#configPath),
 			baseValue: structuredClone(baseValue),
@@ -2098,6 +2227,8 @@ export class Settings {
 	#globalWriteIsNoop(segments: readonly string[], value: unknown): boolean {
 		if (!settingValuesEqual(getByPath(this.#global, segments), value)) return false;
 		if (!this.#persist || !this.#configPath) return true;
+		// The active side alone cannot establish that an explicit offline save is a no-op.
+		if (getOfflineShmState()) return false;
 		let source: string;
 		try {
 			source = fs.readFileSync(this.#configPath, "utf8");
@@ -3715,6 +3846,41 @@ export class Settings {
 	async #saveNow(): Promise<void> {
 		if (this.#savesCancelled || !this.#persist || !this.#configPath) return;
 		if (this.#modified.size === 0 && this.#modifiedGlobalModelRoles.size === 0) return;
+		const userStore = new UserSettingsStore({
+			agentDir: this.#agentDir,
+			migrate: raw => this.#migrateRawSettings(raw, false),
+		});
+		if (userStore.offline) {
+			const mutations: UserSettingMutation[] = [...this.#modified].map(([key, segments]) => ({
+				segments,
+				value: structuredClone(getByPath(this.#global, segments)),
+				baseValue: this.#modifiedPathMutations.get(key)?.baseValue,
+				checkBase: true,
+			}));
+			for (const role of this.#modifiedGlobalModelRoles)
+				mutations.push({
+					segments: ["modelRoles", role],
+					value: getByPath(this.#global, ["modelRoles", role]),
+					baseValue: this.#modifiedGlobalModelRoleMutations.get(role)?.baseValue,
+					checkBase: true,
+				});
+			// Consume this authorization once, including on partial/unknown completion.
+			this.#modified.clear();
+			this.#modifiedPathMutations.clear();
+			this.#modifiedGlobalModelRoles.clear();
+			this.#modifiedGlobalModelRoleMutations.clear();
+			try {
+				await userStore.save(mutations);
+				this.#offlineSaveError = undefined;
+			} catch (error) {
+				this.#offlineSaveError = error;
+				throw error;
+			} finally {
+				this.#persistedMutationGeneration++;
+				await this.#refreshSavedGlobal(userStore);
+			}
+			return;
+		}
 
 		const configPath = this.#configPath;
 		const modifiedPaths = [...this.#modified];
@@ -3887,6 +4053,16 @@ export class Settings {
 			throw error;
 		}
 	}
+	/** Retry a readback overtaken by another persisted mutation before adopting it. */
+	async #refreshSavedGlobal(store: UserSettingsStore): Promise<void> {
+		for (;;) {
+			const generation = this.#persistedMutationGeneration;
+			const raw = await store.readActiveRaw().catch(() => undefined);
+			if (generation !== this.#persistedMutationGeneration) continue;
+			if (raw) this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir);
+			return;
+		}
+	}
 
 	/**
 	 * Adopts `saved` (config.yml as a save just wrote it) as the live global layer, first
@@ -3897,8 +4073,10 @@ export class Settings {
 	 * Notifies every setting whose effective value changed.
 	 */
 	#adoptSavedGlobal(saved: RawSettings, source: string): void {
+		saved = this.#migrateRawSettings(saved, false);
 		this.#applyPendingGlobalWrites(saved);
 		if (!this.#acceptsLayers({ ...this.#ownLayers(), global: saved }, source)) return;
+		this.#persistedMutationGeneration++;
 		const previous = this.#snapshot();
 		this.#global = saved;
 		this.#rebuildMerged();

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Close persistent POSIX lock owners and retained descriptors on the native worker after final unlock failure, while preserving explicit-release retries and other active owners.
+- Support asynchronous persistent POSIX record locks for offline configuration saves, including same-process worker exclusion, without substituting local-only locks on unsupported platforms.
 - Fix native build lint failures in Wiki projection bounds validation without changing accepted ranges.
 - Publish native addons through unique atomic staging files and reuse a concurrent winner only after verifying its complete bytes, without overwriting loaded Windows DLLs.
 - Preserve complete names across Markdown link labels and keep split quoted code literal when Setext lines belong to different quote depths.

@@ -14,6 +14,7 @@ import {
 	resolveModelFromString,
 	resolveProviderModelReference,
 } from "../config/model-resolver";
+import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
@@ -49,6 +50,22 @@ function describeConfiguredEntry(entry: unknown): string {
 	return json === undefined ? typeof entry : `${typeof entry} ${json}`;
 }
 
+/** Capability policy shared by discussion preflight and the configuration catalog. */
+export function teamModelCapabilityIssue(model: Model): { code: string; message: string } | undefined {
+	if (isJchToolsAgentModel(model)) {
+		return {
+			code: "unsupported_agent",
+			message: `/team 不支持远端 Agent 模型 ${modelKey(model)}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。`,
+		};
+	}
+	if (model.supportsTools === false || (model.kind !== undefined && model.kind !== "chat")) {
+		return {
+			code: "missing_capability",
+			message: `模型 ${modelKey(model)} 不支持 Team 必需的聊天工具与结构化 yield。`,
+		};
+	}
+	return undefined;
+}
 /** Resolve ordered independent proposer slots. Pure: no I/O, all inputs injected. */
 export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersResult {
 	const sessionModel = input.sessionModel;
@@ -115,6 +132,10 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 				].join("\n"),
 			};
 		}
+	}
+	for (const model of [sessionModel, ...resolvedMembers]) {
+		const issue = teamModelCapabilityIssue(model);
+		if (issue) return { ok: false, error: issue.message };
 	}
 	const roster = resolvedMembers.length > 0 ? resolvedMembers : [sessionModel];
 	const participants = Array.from({ length: Math.max(3, roster.length) }, (_, index): TeamParticipant => {

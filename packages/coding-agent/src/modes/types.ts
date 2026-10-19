@@ -123,6 +123,9 @@ export interface SelectOnlyModelSelectorOptions {
 	onSelect: (selector: string) => void | Promise<void>;
 	/** `provider/id` initially highlighted in the picker. */
 	currentSelector?: string;
+	/** Complete caller-owned pool and search, bypassing session scope and recent ordering. */
+	getCandidates?: (query: string) => readonly Model[];
+	onCancel?: () => void;
 }
 
 export interface AgentHubOpenOptions {

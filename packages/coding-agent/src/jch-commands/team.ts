@@ -13,6 +13,7 @@
  */
 import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "../slash-commands/types";
 import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/helpers/draft";
+import { showTeamConfig } from "../team/config-ui";
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
 
@@ -42,8 +43,16 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		inlineHint: "<问题或需求>",
 		acpInputHint: "<问题或需求>",
+		subcommandOptional: true,
+		subcommands: [{ name: "configure", description: "编辑 Team 有序模型槽位（不调用模型）" }],
 		handle: async (command, runtime: SlashCommandRuntime) => {
 			const question = command.args.trim();
+			if (question === "configure") {
+				await runtime.output(
+					"Team 配置请使用 TUI /team configure，或 RPC v3 teamConfig 能力的 get_team_config / get_team_models / set_team_config 接口。此命令不发起讨论。",
+				);
+				return { consumed: true };
+			}
 			if (!question) {
 				await runtime.output(USAGE);
 				return { consumed: true };
@@ -64,6 +73,11 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: async (command, runtime: TuiSlashCommandRuntime) => {
 			const question = command.args.trim();
 			const ctx = runtime.ctx;
+			if (question === "configure") {
+				clearSubmittedText(runtime);
+				showTeamConfig(ctx);
+				return { consumed: true };
+			}
 			if (!question) {
 				ctx.showStatus(USAGE);
 				return { consumed: true };

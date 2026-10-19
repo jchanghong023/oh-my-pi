@@ -9,8 +9,8 @@ export function stringifyYamlConfig(value: unknown): string {
 }
 
 /** Change one config field without losing comments from the locked source document. */
-export function setYamlConfigValue(source: string, keys: readonly string[], value: string | undefined): string {
-	const doc = parseDocument(source);
+export function setYamlConfigValue(source: string, keys: readonly string[], value: unknown): string {
+	const doc = parseDocument(source, { uniqueKeys: true, strict: true });
 	if (doc.errors.length > 0) throw new Error("Settings YAML cannot be edited without losing its structure.");
 	const expandAlias = (alias: Alias): Node => {
 		const expanded = doc.createNode(alias.toJS(doc), { aliasDuplicateObjects: false });
@@ -25,6 +25,10 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 	// A role may live behind an alias. Edit a private copy rather than its shared source.
 	for (const key of keys) {
 		const parent = doc.getIn(resolvedKeys, true);
+		if (value === undefined) {
+			if (parent == null || (isScalar(parent) && parent.value === null)) return source;
+			if (!isMap(parent)) throw new Error("Setting parent must be a mapping.");
+		}
 		const pair = isMap(parent)
 			? parent.items.find(item => isScalar(item.key) && String(item.key.value) === key)
 			: undefined;
@@ -33,6 +37,7 @@ export function setYamlConfigValue(source: string, keys: readonly string[], valu
 		if (isAlias(node)) doc.setIn(resolvedKeys, expandAlias(node));
 	}
 	const existing = doc.getIn(resolvedKeys, true);
+	if (value === undefined && existing === undefined) return source;
 	const changedNodes = new Set<Node>();
 	for (let length = 0; length < keys.length; length++) {
 		const ancestor = doc.getIn(resolvedKeys.slice(0, length), true);

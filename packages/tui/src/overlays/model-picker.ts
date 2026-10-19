@@ -81,6 +81,8 @@ export interface ModelPickerOptions {
 	taskSelector?: string;
 	/** Present selection-only chrome; consumers handle the chosen selector without mutating a session. */
 	selectOnly?: boolean;
+	/** Complete selection-only catalogue and shared search; no session scope, recents or discovery. */
+	getCandidates?: (query: string) => readonly Model[];
 }
 
 /** Fixed chrome rows: top border, status row, footer, bottom border. */
@@ -138,6 +140,7 @@ export class ModelPickerComponent implements Component {
 	#taskModeKey: KeyId | undefined;
 	#taskSelector: string | undefined;
 	#selectOnly: boolean;
+	#getCandidates?: (query: string) => readonly Model[];
 	#nativeRoot: { memo: string; node: NativeNode } | undefined;
 	#pickerRoot:
 		| {
@@ -162,6 +165,7 @@ export class ModelPickerComponent implements Component {
 		this.#registry = registry;
 		this.#scopedModels = scopedModels;
 		this.#selectOnly = options.selectOnly ?? false;
+		this.#getCandidates = options.selectOnly ? options.getCandidates : undefined;
 		this.#currentSelector = options.currentSelector;
 		this.#currentQuickRoleSelector = options.currentQuickRole ? `@${options.currentQuickRole}` : undefined;
 		this.#taskSelector = options.taskSelector;
@@ -177,6 +181,7 @@ export class ModelPickerComponent implements Component {
 		this.#browser = new ModelBrowser(settings, {
 			currentContextTokens: options.currentContextTokens,
 			markOverContext: !this.#selectOnly,
+			queryItems: this.#getCandidates ? query => this.#candidateItems(query) : undefined,
 			emptyText: () =>
 				this.#roleMode
 					? `  ${editorKey("app.model.cycleForward") || formatKeyHint("ctrl+p")} 轮换中没有快捷角色`
@@ -213,6 +218,7 @@ export class ModelPickerComponent implements Component {
 		if (options.currentSelector) {
 			this.#browser.selectSelector(options.currentSelector);
 		}
+		if (this.#getCandidates) return;
 
 		// Reconcile cached state and the live local service without refreshing
 		// unrelated provider networks or delaying the first paint.
@@ -232,7 +238,21 @@ export class ModelPickerComponent implements Component {
 	invalidate(): void {}
 
 	/** Rebuild model items and role chips from the registry's in-memory state. */
+	#candidateItems(query: string): ModelBrowserItem[] {
+		return (this.#getCandidates?.(query) ?? []).map(model => ({
+			model,
+			provider: model.provider,
+			id: model.id,
+			selector: `${model.provider}/${model.id}`,
+		}));
+	}
+
 	#syncFromRegistryState(): void {
+		if (this.#getCandidates) {
+			this.#modelItems = this.#candidateItems("");
+			this.#browser.setItems(this.#modelItems);
+			return;
+		}
 		const scope = buildSessionModelScope(
 			this.#settings,
 			this.#registry,

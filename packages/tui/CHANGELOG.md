@@ -4,6 +4,7 @@
 
 ### Added
 
+- Selection-only model pickers can use a complete caller-provided catalog and shared search without changing the session model or refreshing providers.
 - Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
 - Compact transcript activity keeps non-file tool invocations on one line and keeps hidden thinking and compact tool output out of expandable native content.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.

@@ -415,6 +415,17 @@ export declare class NativeOAuthCallback {
 }
 
 /**
+ * A stable-sidecar POSIX lock, separate from the local-only `FileLock`
+ * protocol.
+ */
+export declare class PersistentFileLock {
+  /** Whether this attempt acquired ownership (false means contention). */
+  get acquired(): boolean
+  /** Release on a native blocking worker; repeated calls are safe. */
+  release(): Promise<undefined>
+}
+
+/**
  * Long-lived cross-platform power assertion.
  *
  * macOS uses `IOKit`, Linux holds login1 and desktop `ScreenSaver` inhibitors,
@@ -3838,6 +3849,12 @@ export interface TextPredictorOptions {
  * Pads with spaces when requested.
  */
 export declare function truncateToWidth(text: string, maxWidth: number, ellipsisKind: Ellipsis | undefined | null, pad: boolean | undefined | null, tabWidth: number): string
+
+/**
+ * Open and try `F_SETLK` on a native blocking worker. Unsupported platforms
+ * fail explicitly.
+ */
+export declare function tryAcquirePersistentFileLock(path: string): Promise<PersistentFileLock>
 
 /** Patch application options. */
 export interface VcsApplyOptions {

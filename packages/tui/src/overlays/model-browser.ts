@@ -952,6 +952,8 @@ export interface ModelBrowserOptions {
 	markOverContext?: boolean;
 	/** Host-provided empty-state text (e.g. provider discovery status). */
 	emptyText?: () => string | undefined;
+	/** Host-owned search over an injected catalogue; bypasses local fuzzy/MRU ranking. */
+	queryItems?: (query: string) => ModelBrowserItem[];
 }
 
 /** Rendered rows before the list window: search row + blank. */
@@ -1034,6 +1036,7 @@ export class ModelBrowser implements Component {
 	#emptyText?: () => string | undefined;
 	/** Keep role-like virtual rows in their host-defined order during search. */
 	#preserveQueryOrder = false;
+	#queryItems?: (query: string) => ModelBrowserItem[];
 	/** First visible list row; panned by the wheel, snapped to the selection on keyboard navigation. */
 	#windowStart = 0;
 	#windowCount = 0;
@@ -1099,6 +1102,7 @@ export class ModelBrowser implements Component {
 
 	constructor(settings: ModelBrowserSource, options: ModelBrowserOptions = {}) {
 		this.#settings = settings;
+		this.#queryItems = options.queryItems;
 		this.#showProvider = options.showProvider ?? true;
 		const tokens = options.currentContextTokens ?? 0;
 		this.#currentContextTokens = Number.isFinite(tokens) && tokens > 0 ? Math.floor(tokens) : 0;
@@ -1228,6 +1232,7 @@ export class ModelBrowser implements Component {
 	 * unfiltered when the query is blank.
 	 */
 	#filterItems(items: readonly ModelBrowserItem[], query: string): readonly ModelBrowserItem[] {
+		if (this.#queryItems) return this.#queryItems(query);
 		if (this.#preserveQueryOrder) {
 			const base = items.filter(item => !this.#isDisabled(item));
 			return this.#insertSeparator(

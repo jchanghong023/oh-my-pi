@@ -6,6 +6,8 @@ import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { acquireFileLock, getProjectAgentDir, logger, TempDir } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { UserSettingsStore } from "../../src/config/user-settings";
 
 import { cfgEditModelVariants } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgCompactionEnabled } from "@oh-my-pi/pi-coding-agent/session/context-settings";
@@ -44,6 +46,139 @@ describe("Settings layer refresh", () => {
 		fs.mkdirSync(getProjectAgentDir(project), { recursive: true });
 		fs.writeFileSync(path.join(getProjectAgentDir(project), "settings.json"), JSON.stringify(settings));
 	}
+
+	it("keeps migrated settings in memory when saving an unrelated user leaf without migrating disk", async () => {
+		const source = "# keep legacy spelling\ncollapseChangelog: false\nother: untouched\n";
+		await Bun.write(configPath(), source);
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		const snapshot = await settings.readUserSetting("temperature");
+		await settings.saveUserSetting("temperature", 0.5, snapshot.revision!);
+		expect(lookup("startup.changelogMode")!.get(settings)).toBe("expanded");
+		expect(await Bun.file(configPath()).text()).toContain("# keep legacy spelling\ncollapseChangelog: false\n");
+		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({
+			collapseChangelog: false,
+			other: "untouched",
+			temperature: 0.5,
+		});
+	});
+
+	it("adopts an unchanged active save while retaining unrelated pending edits", async () => {
+		await writeConfig({ temperature: 0.1, compaction: { enabled: true } });
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		await writeConfig({ temperature: 0.7, compaction: { enabled: true } });
+		cfgCompactionEnabled.set(settings, false);
+		const snapshot = await settings.readUserSetting("temperature");
+		const receipt = await settings.saveUserSetting("temperature", 0.7, snapshot.revision!);
+		expect(receipt.writes.active.status).toBe("unchanged");
+		expect(cfgTemperature.get(settings)).toBe(0.7);
+		expect(cfgCompactionEnabled.get(settings)).toBe(false);
+		expect(YAML.parse(await Bun.file(configPath()).text())).toMatchObject({ compaction: { enabled: true } });
+		await settings.flush();
+	});
+
+	it("retries a reload snapshot overtaken by an explicit user save", async () => {
+		await writeConfig({ temperature: 0.1 });
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const readFile = fs.promises.readFile;
+		let intercepted = false;
+		const reading = spyOn(fs.promises, "readFile").mockImplementation((async (
+			...args: Parameters<typeof readFile>
+		) => {
+			const value = await readFile(...args);
+			if (!intercepted && String(args[0]) === configPath()) {
+				intercepted = true;
+				entered.resolve();
+				await release.promise;
+			}
+			return value;
+		}) as typeof readFile);
+		const reloading = settings.reloadFromDisk();
+		try {
+			await entered.promise;
+			const snapshot = await settings.readUserSetting("temperature");
+			await settings.saveUserSetting("temperature", 0.7, snapshot.revision!);
+			release.resolve();
+			await reloading;
+			expect(cfgTemperature.get(settings)).toBe(0.7);
+		} finally {
+			release.resolve();
+			reading.mockRestore();
+			await reloading;
+		}
+	});
+
+	it.each(["save", "reload"] as const)(
+		"does not adopt an old save readback after a newer %s completes",
+		async newer => {
+			await writeConfig({ temperature: 0.1 });
+			const settings = await Settings.init({ cwd: startProject, agentDir });
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const readActiveRaw = UserSettingsStore.prototype.readActiveRaw;
+			let intercepted = false;
+			const reading = spyOn(UserSettingsStore.prototype, "readActiveRaw").mockImplementation(
+				async function (this: UserSettingsStore) {
+					const raw = await readActiveRaw.call(this);
+					if (!intercepted) {
+						intercepted = true;
+						entered.resolve();
+						await release.promise;
+					}
+					return raw;
+				},
+			);
+			const firstSnapshot = await settings.readUserSetting("temperature");
+			const first = settings.saveUserSetting("temperature", 0.5, firstSnapshot.revision!);
+			try {
+				await entered.promise;
+				if (newer === "save") {
+					const secondSnapshot = await settings.readUserSetting("temperature");
+					await settings.saveUserSetting("temperature", 0.7, secondSnapshot.revision!);
+				} else {
+					await writeConfig({ temperature: 0.7 });
+					await settings.reloadFromDisk();
+				}
+				release.resolve();
+				await first;
+				expect(cfgTemperature.get(settings)).toBe(0.7);
+			} finally {
+				release.resolve();
+				reading.mockRestore();
+				await first;
+			}
+		},
+	);
+
+	it("resets legacy sources that the migration leaves shadowed by an explicit canonical value", async () => {
+		await writeConfig({ queueMode: "one-at-a-time", steeringMode: "all", other: "keep" });
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		const snapshot = await settings.readUserSetting("steeringMode");
+		await settings.saveUserSetting("steeringMode", undefined, snapshot.revision!);
+		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({ other: "keep" });
+		expect(lookup("steeringMode")!.isConfigured(settings)).toBe(false);
+	});
+
+	it("resets legacy migration sources with CAS while preserving split migration siblings", async () => {
+		await Bun.write(configPath(), "serviceTier: priority\nother: keep\n");
+		const settings = await Settings.init({ cwd: startProject, agentDir });
+		const snapshot = await settings.readUserSetting("tier.openai");
+		await Bun.write(configPath(), "serviceTier: flex\nother: keep\n");
+		await expect(settings.saveUserSetting("tier.openai", undefined, snapshot.revision!)).rejects.toMatchObject({
+			code: "revision_conflict",
+		});
+		await Bun.write(configPath(), "# preserve comment\nserviceTier: priority\nother: externally-edited\n");
+		const fresh = await settings.readUserSetting("tier.openai");
+		await settings.saveUserSetting("tier.openai", undefined, fresh.revision!);
+		expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({
+			tier: { anthropic: "priority", google: "priority" },
+			other: "externally-edited",
+		});
+		expect(await Bun.file(configPath()).text()).toContain("# preserve comment");
+		expect(lookup("tier.openai")!.isConfigured(settings)).toBe(false);
+		expect(lookup("tier.anthropic")!.get(settings)).toBe("priority");
+	});
 
 	it("process role defaults yield to destination projects and later disk edits", async () => {
 		await writeConfig({});

@@ -12,7 +12,6 @@ import { logger } from "@oh-my-pi/pi-utils";
 import { AsyncJobError, type AsyncJobRunResult } from "../async";
 import { filterAvailableModelsByEnabledPatterns, formatModelStringWithRouting } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { Settings } from "../config/settings";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { cfgTeamMembers } from "./settings";
@@ -189,23 +188,11 @@ export function resolveTeamParticipantsForSession(session: AgentSession, setting
 		cfgEnabledModels.get(settings),
 		settings,
 	);
-	const members = resolveTeamParticipants({
+	return resolveTeamParticipants({
 		configuredMembers,
 		sessionModel,
 		availableModels,
 	});
-	if (members.ok) {
-		const remoteModel = isJchToolsAgentModel(sessionModel)
-			? sessionModel
-			: members.participants.find(participant => isJchToolsAgentModel(participant.model))?.model;
-		if (remoteModel) {
-			return {
-				ok: false as const,
-				error: `/team 不支持远端 Agent 模型 ${remoteModel.provider}/${remoteModel.id}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。请切换会话模型或修正 team.members 后重试。`,
-			};
-		}
-	}
-	return members;
 }
 
 /** Wire the runner deps from the live session. Exported for tests. */

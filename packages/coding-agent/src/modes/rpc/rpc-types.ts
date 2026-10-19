@@ -24,6 +24,8 @@ import type { RpcMessagesPage } from "./rpc-messages";
 import type { GoalModeState } from "../../goals/state";
 import type { RpcGoalOp, RpcGoalResult } from "./rpc-goal";
 import type { BtwHistoryRecord } from "../../session/btw-history";
+import type { RpcTeamSuccessResponse } from "./rpc-fork-types";
+import type { TeamConfigErrorData } from "../../team/config-types";
 
 // ============================================================================
 // RPC Commands (stdin)
@@ -369,6 +371,7 @@ export interface RpcSubagentMessagesResult {
 
 // Success responses with data
 export type RpcResponse =
+	| RpcTeamSuccessResponse
 	// Protocol
 	| {
 			id?: string;
@@ -600,7 +603,15 @@ export type RpcResponse =
 	  }
 
 	// Error response (any command can fail); `code` is an optional machine-readable reason.
-	| { id?: string; type: "response"; command: string; success: false; error: string; code?: string };
+	| {
+			id?: string;
+			type: "response";
+			command: string;
+			success: false;
+			error: string;
+			code?: string;
+			data?: TeamConfigErrorData;
+	  };
 
 // ============================================================================
 // Side question (/btw) frames (stdout)

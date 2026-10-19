@@ -4,6 +4,7 @@ import { runConfigCommand } from "@oh-my-pi/pi-coding-agent/cli/config-cli";
 import { resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { getConfigRootDir, setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 
 let testAgentDir: TempDir | undefined;
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -53,6 +54,34 @@ afterEach(async () => {
 });
 
 describe("config CLI schema coverage", () => {
+	it.each([
+		["{}", {}],
+		["collapseChangelog: false\nstartup: {}\nother: keep\n", { startup: {}, other: "keep" }],
+		[
+			'"startup.changelogMode": expanded\ncollapseChangelog: false\nstartup: {}\nother: keep\n',
+			{ startup: {}, other: "keep" },
+		],
+	] satisfies [string, Record<string, unknown>][])(
+		"resets a nested setting through the real CLI for %j",
+		async (source, expected) => {
+			const file = testAgentDir!.join("config.yml");
+			await Bun.write(file, source);
+			const result = await runCliProcess(["config", "reset", "startup.changelogMode", "--json"], {
+				PI_CODING_AGENT_DIR: testAgentDir!.path(),
+				PI_OFFLINE_SHM: undefined,
+			});
+			expect(result.exitCode).toBe(0);
+			expect(JSON.parse(result.output).value).toBe("summary");
+			expect(YAML.parse(await Bun.file(file).text())).toEqual(expected);
+			const reread = await runCliProcess(["config", "get", "startup.changelogMode", "--json"], {
+				PI_CODING_AGENT_DIR: testAgentDir!.path(),
+				PI_OFFLINE_SHM: undefined,
+			});
+			expect(reread.exitCode).toBe(0);
+			expect(JSON.parse(reread.output).value).toBe("summary");
+		},
+	);
+
 	it("renders record settings as JSON and with record type in text output", async () => {
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

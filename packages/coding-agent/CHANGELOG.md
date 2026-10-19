@@ -5,6 +5,7 @@
 ### Added
 
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
+- Added `/team configure` ordered drafts and shared RPC v3 Team configuration APIs, with cross-provider model selection, read-only previews, revision-aware saving and explicit offline persistence results without switching the session model.
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
 
 ### Changed
@@ -14,6 +15,7 @@
 
 ### Fixed
 
+- Preserve migrated settings and fresh effective values across configuration saves and reloads, reset legacy setting sources safely, and keep valid higher-priority Team preview participants when a user draft contains unavailable models.
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.
 - Avoid synchronous per-skill existence probes and duplicate shared/custom directory scans on Linux offline launches.

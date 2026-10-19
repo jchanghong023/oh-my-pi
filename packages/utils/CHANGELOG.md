@@ -5,6 +5,11 @@
 ### Changed
 
 - Offline processes record only errors, skipping lower-level context serialization, file output and log sinks.
+- Preserve YAML comments during targeted setting updates and provide cancellable persistent-file locking that rejects unsupported cross-host locking instead of falling back to a local-only lock.
+
+### Fixed
+
+- Treat removal of an absent nested YAML setting as a no-op, including missing or null parent mappings.
 
 ## [18.12.2] - 2026-10-18
 

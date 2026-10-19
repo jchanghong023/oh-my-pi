@@ -294,8 +294,11 @@ async function handleSet(key: string | undefined, value: string | undefined, fla
 	}
 
 	try {
-		def.setting.set(settings, def.setting.parse(value));
-		await settings.flush();
+		const parsed = def.setting.parse(value);
+		def.setting.assertWritable(parsed);
+		const snapshot = await settings.readUserSetting(def.path);
+		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was saved.");
+		await settings.saveUserSetting(def.path, parsed, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);
@@ -374,9 +377,10 @@ async function handleReset(key: string | undefined, flags: { json?: boolean }): 
 	}
 
 	try {
-		// Remove the key rather than writing the default, so later default changes still apply.
-		def.setting.unset(settings);
-		await settings.flush();
+		// Explicit CAS persistence cannot silently discard a conflicting edit and report success.
+		const snapshot = await settings.readUserSetting(def.path);
+		if (snapshot.revision === null) throw new Error("User configuration cannot be safely read; nothing was reset.");
+		await settings.saveUserSetting(def.path, undefined, snapshot.revision);
 	} catch (err) {
 		console.error(chalk.red(String(err)));
 		process.exit(1);

@@ -79,6 +79,7 @@ import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
 import { RpcForkCommandCatalogService, RpcCommandCatalogError } from "./rpc-fork-commands";
 import { RpcModelRoleError, RpcModelRoleService } from "./rpc-fork-models";
 import { RpcSessionDirectoryError, RpcSessionDirectoryService } from "./rpc-fork-sessions";
+import { isRpcTeamConfigCommand, RpcTeamConfigAdapter } from "./rpc-team-config";
 import {
 	RPC_FORK_CAPABILITIES,
 	RPC_FORK_PROTOCOL_VERSION,
@@ -552,6 +553,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// via `command.id`.
 	if (
 		BACKGROUND_COMMANDS.has(command.type) ||
+		isRpcTeamConfigCommand(parsed) ||
 		command.type === "prompt" ||
 		command.type === "steer" ||
 		command.type === "follow_up" ||
@@ -739,7 +741,7 @@ export class RpcInputDispatcher {
 				// Bash and predict_word retain their immediate side channel. Prompts,
 				// steers, follow-ups and steer_subagent start through the serial tail, but
 				// dispatchRpcInputFrame backgrounds their admission.
-				if (BACKGROUND_COMMANDS.has(command.type)) {
+				if (BACKGROUND_COMMANDS.has(command.type) || isRpcTeamConfigCommand(parsed)) {
 					dispatchRpcInputFrame(command, this.#deps);
 					return;
 				}
@@ -1677,7 +1679,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		string | undefined,
 		Array<{ context: Record<string, unknown>; started: number }>
 	>();
+	// Deferred Team replies remain owned by their initiating session, including at final emission.
+	const teamConfigResponseOwners = new WeakMap<object, () => boolean>();
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
+		if (teamConfigResponseOwners.get(obj)?.() === false) return;
 		outputWriter.write(frameEncoder.encodeFrames(obj));
 		if (isRecord(obj) && obj.type === "prompt_result") {
 			const pending = promptDiagnostics.get(typeof obj.id === "string" ? obj.id : undefined);
@@ -3352,6 +3357,24 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			default: {
+				const teamCommand: unknown = command;
+				if (isRpcTeamConfigCommand(teamCommand)) {
+					const sessionId = session.sessionId;
+					const generation = session.sessionGeneration;
+					const isCurrent = () =>
+						!clientDisconnected && session.sessionId === sessionId && session.sessionGeneration === generation;
+					const adapter = new RpcTeamConfigAdapter({
+						settings: session.settings,
+						modelRegistry: session.modelRegistry,
+						sessionModel: session.model,
+						isCurrent,
+						emit: output,
+					});
+					const response = await adapter.handle(teamCommand, forkNegotiated);
+					// Keep receipts factual; stale replies cannot be delivered into a new session.
+					teamConfigResponseOwners.set(response, isCurrent);
+					return response;
+				}
 				// Fork extension commands (rpc-ui-protocol.md): available only after
 				// `negotiate_protocol {protocolVersion: 3}`. Upstream clients never
 				// send them and keep the unknown-command error below.

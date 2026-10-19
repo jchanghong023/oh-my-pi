@@ -7,6 +7,19 @@ import { setYamlConfigValue } from "../src/yaml-config";
 // The editor must resolve the actual key nodes so updates and deletions land
 // in place instead of appending duplicate string keys or missing the entry.
 describe("setYamlConfigValue scalar keys", () => {
+	test.each(["", "# empty\n", "{}", "startup: null\n", "startup: {}\n"])(
+		"leaves missing nested reset paths byte-for-byte unchanged: %j",
+		source => {
+			expect(setYamlConfigValue(source, ["startup", "changelogMode"], undefined)).toBe(source);
+		},
+	);
+
+	test.each(["startup: false\n", "startup: []\n"])("rejects a non-mapping reset parent: %j", source => {
+		expect(() => setYamlConfigValue(source, ["startup", "changelogMode"], undefined)).toThrow(
+			"Setting parent must be a mapping.",
+		);
+	});
+
 	test("updates a numeric scalar key in place without duplicating it", () => {
 		const source = "modelRoles:\n  default: keep/default\n  123: openai/old\n";
 		const updated = setYamlConfigValue(source, ["modelRoles", "123"], "openai/new");

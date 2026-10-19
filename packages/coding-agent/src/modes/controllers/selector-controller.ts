@@ -942,7 +942,10 @@ export class SelectorController {
 					this.ctx.showStatus(`Task subagent model (session-only): ${selector}. Use /agents to persist.`);
 					done();
 				},
-				onCancel: done,
+				onCancel: () => {
+					done();
+					selectOnly?.onCancel?.();
+				},
 			},
 			{
 				currentContextTokens,
@@ -953,6 +956,7 @@ export class SelectorController {
 				quickRoleOrder,
 				currentQuickRole: quickRoleCycle?.models[quickRoleCycle.currentIndex]?.role,
 				selectOnly: selectOnly !== undefined,
+				getCandidates: selectOnly?.getCandidates,
 			},
 		);
 		this.#mountMenu(menu, picker, () => {
