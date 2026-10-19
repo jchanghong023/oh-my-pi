@@ -670,6 +670,119 @@ pub(super) fn literal_edge_starter(character: char) -> bool {
 		&& !matches!(first, '\u{1161}'..='\u{1175}' | '\u{11a8}'..='\u{11c2}')
 }
 
+/// The fallback and persisted tracks remove precisely the same lexer syntax.
+pub(super) fn name_source_syntax(source: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+	if !source.contains(['*', '_', '~', '\\', '[']) {
+		return (Vec::new(), Vec::new());
+	}
+	let super::markdown::NameSyntax { mut delimiters, link_openings, link_destinations } =
+		super::markdown::name_delimiters(source);
+	delimiters.extend(link_openings);
+	delimiters.extend(link_destinations.iter().cloned());
+	delimiters.sort_unstable_by_key(|range| range.start);
+	(delimiters, link_destinations)
+}
+
+/// Shared source normalization for streaming fallback and persisted
+/// projections. `linear` means exactly one source scalar became one equal-width
+/// scalar; every other sequence retains its complete original byte range.
+pub(super) fn visit_normalized_source<E>(
+	source: &str,
+	ignored: &[Range<usize>],
+	check: &dyn Fn() -> Result<(), E>,
+	mut emit: impl FnMut(char, Range<usize>, bool) -> bool,
+) -> Result<(), E> {
+	check()?;
+	let has_sigma = source.chars().filter(|ch| !ch.is_ascii()).any(|character| {
+		let mut sigma = false;
+		decompose_compatible(character, |decomposed| sigma |= decomposed == '\u{03a3}');
+		sigma
+	});
+	let mut skipped = 0;
+	let mut characters = source
+		.char_indices()
+		.filter(move |&(offset, _)| {
+			while ignored
+				.get(skipped)
+				.is_some_and(|range| range.end <= offset)
+			{
+				skipped += 1;
+			}
+			ignored
+				.get(skipped)
+				.is_none_or(|range| range.start > offset)
+		})
+		.peekable();
+	let mut preceded_by_cased = false;
+	let mut emitted_bytes = 0;
+	while characters.peek().is_some() {
+		let sequence = characters.clone().map(|(_, character)| character);
+		let (source_start, first) = characters.next().expect("peeked source character");
+		let mut source_end = source_start + first.len_utf8();
+		let mut count = 1;
+		while characters
+			.peek()
+			.is_some_and(|&(_, character)| !literal_edge_starter(character))
+		{
+			let (offset, character) = characters.next().expect("peeked continuation");
+			source_end = offset + character.len_utf8();
+			count += 1;
+		}
+		let range = source_start..source_end;
+		if !has_sigma && count == 1 && first.is_ascii() {
+			if !emit(first.to_ascii_lowercase(), range, true) {
+				return Ok(());
+			}
+			emitted_bytes += 1;
+		} else {
+			let mut normalized = sequence.take(count).nfkc();
+			let single = count == 1 && normalized.clone().count() == 1;
+			while let Some(character) = normalized.next() {
+				let lower = if character == '\u{03a3}' {
+					lowercase_sigma(
+						preceded_by_cased,
+						normalized
+							.clone()
+							.chain(characters.clone().map(|(_, character)| character).nfkc()),
+					)
+				} else {
+					character
+				};
+				let linear = single
+					&& lower.to_lowercase().count() == 1
+					&& lower
+						.to_lowercase()
+						.next()
+						.expect("lowercase scalar")
+						.len_utf8()
+						== range.len();
+				for lower in lower.to_lowercase() {
+					if !emit(lower, range.clone(), linear) {
+						return Ok(());
+					}
+					emitted_bytes += lower.len_utf8();
+					if emitted_bytes >= 4096 {
+						check()?;
+						emitted_bytes = 0;
+					}
+				}
+				if has_sigma {
+					if character.is_ascii_alphabetic() {
+						preceded_by_cased = true;
+					} else if !property(&PROPERTIES.case_ignorable, character) {
+						preceded_by_cased = property(&PROPERTIES.cased, character);
+					}
+				}
+			}
+		}
+		if emitted_bytes >= 4096 {
+			check()?;
+			emitted_bytes = 0;
+		}
+	}
+	check()
+}
+
 /// A bounded normalized search window. Provenance records normalization
 /// sequences, not occurrences; even a short name repeated throughout a document
 /// retains only one window's source ranges.
@@ -775,7 +888,7 @@ impl LiteralMatcher {
 		}
 	}
 
-	fn boundaries(&self, text: &str, start: usize, end: usize) -> bool {
+	pub(super) fn boundaries(&self, text: &str, start: usize, end: usize) -> bool {
 		if !self.starts_han
 			&& let Some(previous) = text[..start].chars().next_back()
 		{
@@ -828,6 +941,55 @@ impl LiteralMatcher {
 		false
 	}
 
+	/// Scan already normalized text without allocating occurrence arrays.
+	pub(super) fn normalized_matches<E>(
+		&self,
+		text: &str,
+		check: &dyn Fn() -> Result<(), E>,
+		mut matched: impl FnMut(Range<usize>) -> bool,
+	) -> Result<bool, E> {
+		check()?;
+		if self.text.is_empty() {
+			return Ok(true);
+		}
+		let mut offset = 0;
+		let mut checked = 0;
+		while offset < text.len() {
+			let mut end = (offset + 4096 + self.text.len()).min(text.len());
+			while !text.is_char_boundary(end) {
+				end += 1;
+			}
+			let Some(found) = text[offset..end].find(&self.text) else {
+				if end == text.len() {
+					break;
+				}
+				offset = end - self.text.len();
+				while !text.is_char_boundary(offset) {
+					offset -= 1;
+				}
+				check()?;
+				continue;
+			};
+			let start = offset + found;
+			let end = start + self.text.len();
+			if self.boundaries(text, start, end) && !matched(start..end) {
+				return Ok(false);
+			}
+			offset = start
+				+ text[start..]
+					.chars()
+					.next()
+					.expect("nonempty literal")
+					.len_utf8();
+			if offset - checked >= 4096 {
+				check()?;
+				checked = offset;
+			}
+		}
+		check()?;
+		Ok(true)
+	}
+
 	/// Stream complete source normalization sequences through the same literal
 	/// and boundary matcher used for individual sections. The callback consumes
 	/// each source range immediately and can stop once every section is decided.
@@ -856,11 +1018,7 @@ impl LiteralMatcher {
 		if !source.contains(['*', '_', '~', '\\', '[']) {
 			return self.source_matches(source, check, matched);
 		}
-		let super::markdown::NameSyntax { mut delimiters, link_openings, link_destinations } =
-			super::markdown::name_delimiters(source);
-		delimiters.extend(link_openings);
-		delimiters.extend(link_destinations.iter().cloned());
-		delimiters.sort_unstable_by_key(|range| range.start);
+		let (delimiters, link_destinations) = name_source_syntax(source);
 		let mut destinations = link_destinations.iter().peekable();
 		let mut destination_window = SourceMatchWindow::default();
 		let mut destination_error = None;
@@ -959,84 +1117,20 @@ impl LiteralMatcher {
 		matched: &mut impl FnMut(Range<usize>) -> bool,
 		window: &mut SourceMatchWindow,
 	) -> Result<(), E> {
-		check()?;
 		if self.text.is_empty() {
+			check()?;
 			return Ok(());
 		}
-		// Match lowercase()'s fast path without materializing all of NFKC.
-		// Compatibility characters can introduce an uppercase Greek sigma.
-		let has_sigma = source
-			.chars()
-			.filter(|character| !character.is_ascii())
-			.any(|character| {
-				let mut sigma = false;
-				decompose_compatible(character, |decomposed| sigma |= decomposed == '\u{03a3}');
-				sigma
-			});
-		let mut skipped = 0;
-		let mut characters = source
-			.char_indices()
-			.filter(move |&(offset, _)| {
-				while ignored
-					.get(skipped)
-					.is_some_and(|range| range.end <= offset)
-				{
-					skipped += 1;
-				}
-				ignored
-					.get(skipped)
-					.is_none_or(|range| range.start > offset)
-			})
-			.peekable();
-		let mut preceded_by_cased = false;
 		let limit = self.text.len() + 4096 + 12;
-		while characters.peek().is_some() {
-			check()?;
-			let sequence = characters.clone().map(|(_, character)| character);
-			let (source_start, first) = characters.next().expect("peeked source character");
-			let mut source_end = source_start + first.len_utf8();
-			let mut count = 1;
-			while characters
-				.peek()
-				.is_some_and(|&(_, character)| !literal_edge_starter(character))
-			{
-				let (offset, character) = characters.next().expect("peeked continuation");
-				source_end = offset + character.len_utf8();
-				count += 1;
-			}
-			let range = source_start..source_end;
-			let mut normalized = sequence.take(count).nfkc();
-			while let Some(character) = normalized.next() {
-				let lower = if character == '\u{03a3}' {
-					lowercase_sigma(
-						preceded_by_cased,
-						normalized
-							.clone()
-							.chain(characters.clone().map(|(_, character)| character).nfkc()),
-					)
-				} else {
-					character
-				};
-				for lower in lower.to_lowercase() {
-					window.push(lower, &range);
-					if window.text.len() >= limit {
-						check()?;
-						if !window.scan(self, false, matched) {
-							return Ok(());
-						}
-					}
-				}
-				if has_sigma {
-					if character.is_ascii_alphabetic() {
-						preceded_by_cased = true;
-					} else if !property(&PROPERTIES.case_ignorable, character) {
-						preceded_by_cased = property(&PROPERTIES.cased, character);
-					}
-				}
-			}
+		let mut active = true;
+		visit_normalized_source(source, ignored, check, |character, range, _| {
+			window.push(character, &range);
+			active = window.text.len() < limit || window.scan(self, false, matched);
+			active
+		})?;
+		if active {
+			window.scan(self, true, matched);
 		}
-		check()?;
-		window.scan(self, true, matched);
 		Ok(())
 	}
 

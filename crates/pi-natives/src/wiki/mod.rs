@@ -6,6 +6,7 @@ mod import;
 mod importer;
 pub(crate) mod markdown;
 mod page;
+mod projection;
 pub(crate) mod query;
 mod storage;
 

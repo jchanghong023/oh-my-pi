@@ -211,7 +211,7 @@ pub(super) fn scan(
 	let mut scanner = SectionContextScanner::default();
 	while let Some(row) = rows.next()? {
 		check()?;
-		let mut section = ContextSection {
+		let mut section: ContextSection = ContextSection {
 			section_id:   row.get(0)?,
 			document_id:  row.get(1)?,
 			byte_start:   row.get(2)?,

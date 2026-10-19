@@ -12,12 +12,13 @@ use napi::{
 	bindgen_prelude::{JsObjectValue, ToNapiValue, create_object_with_properties},
 };
 use napi_derive::napi;
-use rusqlite::{Connection, OpenFlags, Row, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
 	markdown,
+	projection::{DocumentProjection, SectionProjection},
 	query::{self, Candidate, LiteralMatcher, MatchKind, RankedSection, SectionContext},
 };
 
@@ -874,34 +875,52 @@ fn rank(
 			entry.insert(load_contexts(connection, document_id, name.as_ref(), check)?);
 		}
 		let contexts = document_contexts
-			.get(&document_id)
+			.get_mut(&document_id)
 			.expect("loaded document contexts");
-		let context = contexts
-			.sections
-			.get(&id)
-			.ok_or_else(|| WikiError::message("Documentation search snapshot is inconsistent"))?;
+		// Source-aware name matching has already decided these rows. Avoid
+		// copying and projecting their bodies when neither recall path matched.
+		if bm25.is_none() && contexts.exact_names.get(&id) == Some(&false) {
+			continue;
+		}
+		let projection = contexts.projections.remove(&id);
+		let context = contexts.sections.get(&id);
+		if projection.is_none() && context.is_none() {
+			return Err(WikiError::message("Documentation search snapshot is inconsistent"));
+		}
 		let markdown: String = row.get(13)?;
 		let raw = query::normalize_search_text(&markdown);
-		let tokens = markdown::lex_section(&markdown, context);
-		let plain = query::normalize_search_text(&markdown::plain_text(&tokens));
-		let exact = contexts.exact_names.get(&id).copied().unwrap_or_else(|| {
-			name.as_ref().is_some_and(|name| {
-				// Legacy rows without source coordinates still use their lexical
-				// projection. Never let raw formatting invent a name boundary.
-				name.matches_name_section(&raw, &markdown, context)
-			})
-		});
+		let exact = if let Some(exact) = contexts.exact_names.get(&id) {
+			*exact
+		} else if let Some(name) = name.as_ref() {
+			// Legacy rows without source coordinates retain the same contextual
+			// matcher, even when their scoring fields were prepared at import.
+			let context = context
+				.ok_or_else(|| WikiError::message("Documentation search snapshot is inconsistent"))?;
+			name.matches_name_section(&raw, &markdown, context)
+		} else {
+			false
+		};
 		if bm25.is_none() && !exact {
 			continue;
 		}
-		let title = query::normalize_search_text(&markdown::local_title(&markdown, context));
+		let (plain, title, shape) = if let Some(projection) = projection {
+			(projection.plain, projection.title, projection.shape)
+		} else {
+			let context = context.expect("reconstructed section context");
+			let tokens = markdown::lex_section(&markdown, context);
+			(
+				query::normalize_search_text(&markdown::plain_text(&tokens)),
+				query::normalize_search_text(&markdown::local_title(&markdown, context)),
+				context.shape,
+			)
+		};
 		candidates.push(Candidate {
 			section_id: id,
 			raw_markdown: markdown,
 			raw,
 			plain,
 			title,
-			shape: context.shape,
+			shape,
 			exact,
 			rank: bm25.unwrap_or(0.0),
 		});
@@ -936,6 +955,7 @@ fn rank(
 struct DocumentContexts {
 	sections:    HashMap<i64, SectionContext>,
 	exact_names: HashMap<i64, bool>,
+	projections: HashMap<i64, SectionProjection>,
 }
 
 /// Only contiguous, byte-consistent stored source participates in a name
@@ -1023,6 +1043,34 @@ fn load_contexts(
 	name: Option<&LiteralMatcher>,
 	check: Check<'_>,
 ) -> CoreResult<DocumentContexts> {
+	let payload: Option<Vec<u8>> = connection
+		.query_row(
+			"SELECT payload FROM wiki_document_projections WHERE document_id=?",
+			[document_id],
+			|row| row.get(0),
+		)
+		.optional()?;
+	if let Some(payload) = payload {
+		check()?;
+		let projection: DocumentProjection = serde_json::from_slice(&payload).map_err(|error| {
+			WikiError::message(format!("Invalid documentation query projection: {error}"))
+		})?;
+		projection.validate()?;
+		let exact_names = match name {
+			Some(name) => projection.exact_names(name, check)?,
+			None => HashMap::new(),
+		};
+		let mut sections = HashMap::new();
+		let mut projections = HashMap::with_capacity(projection.sections.len());
+		for section in projection.sections {
+			check()?;
+			if let Some(context) = section.legacy_context.as_ref() {
+				sections.insert(section.section_id, context.context());
+			}
+			projections.insert(section.section_id, section);
+		}
+		return Ok(DocumentContexts { sections, exact_names, projections });
+	}
 	let mut statement = connection.prepare_cached(
 		"SELECT id,document_id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
 		 ORDER BY ordinal",
@@ -1063,7 +1111,11 @@ fn load_contexts(
 	if let Some(name) = name {
 		source.finish(name, check)?;
 	}
-	Ok(DocumentContexts { sections: result, exact_names: source.exact_names })
+	Ok(DocumentContexts {
+		sections:    result,
+		exact_names: source.exact_names,
+		projections: HashMap::new(),
+	})
 }
 
 fn push_number(output: &mut String, number: f64) {
@@ -1215,6 +1267,31 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn unsupported_projection_is_rejected_for_name_and_topic_queries() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		let payload = serde_json::to_vec(&serde_json::json!({
+			"version": 2,
+			"sections": [],
+			"groups": []
+		}))
+		.unwrap();
+		connection
+			.execute("INSERT INTO wiki_document_projections(document_id,payload) VALUES(1,?)", [
+				payload,
+			])
+			.unwrap();
+		for query in ["needle", "needle evidence"] {
+			let error = fixture
+				.engine()
+				.search(query, &WikiSearchOptions::default(), &|| Ok(()))
+				.unwrap_err();
+			assert!(error.error_message().contains("projection"));
+			assert!(error.error_message().contains("version"));
+		}
+	}
+
+	#[test]
 	fn reconstructed_names_require_contiguous_consistent_source_ranges() {
 		let name = LiteralMatcher::new("foobar", true);
 		for (second_start, second_body, expected) in
@@ -1355,6 +1432,7 @@ mod tests {
 					 NULL,ordinal INTEGER NOT NULL,heading_path TEXT NOT NULL,heading_level INTEGER \
 					 NOT NULL,line_start INTEGER NOT NULL,line_end INTEGER NOT NULL,byte_start INTEGER \
 					 NOT NULL,byte_end INTEGER NOT NULL,raw_markdown TEXT NOT NULL);
+				CREATE TABLE wiki_document_projections(document_id INTEGER PRIMARY KEY,payload BLOB NOT NULL);
 				CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED,index_id \
 					 UNINDEXED,relative_path,heading_path,body,content='',contentless_delete=1);
 			",

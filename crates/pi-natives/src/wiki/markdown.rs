@@ -307,12 +307,12 @@ pub(crate) fn section_shape(markdown: &str) -> Shape {
 	}
 }
 
-pub(crate) struct ContextSection {
+pub(crate) struct ContextSection<S = String> {
 	pub section_id:   i64,
 	pub document_id:  i64,
 	pub byte_start:   i64,
 	pub byte_end:     i64,
-	pub raw_markdown: String,
+	pub raw_markdown: S,
 }
 
 #[derive(Clone, Copy)]
@@ -681,13 +681,13 @@ pub(crate) struct ContextSectionRef<'a> {
 	pub raw_markdown: &'a str,
 }
 
-impl<'a> From<&'a ContextSection> for ContextSectionRef<'a> {
-	fn from(section: &'a ContextSection) -> Self {
+impl<'a, S: AsRef<str>> From<&'a ContextSection<S>> for ContextSectionRef<'a> {
+	fn from(section: &'a ContextSection<S>) -> Self {
 		Self {
 			document_id:  section.document_id,
 			byte_start:   section.byte_start,
 			byte_end:     section.byte_end,
-			raw_markdown: &section.raw_markdown,
+			raw_markdown: section.raw_markdown.as_ref(),
 		}
 	}
 }
@@ -788,10 +788,10 @@ fn attach_edges(source: String, start: i64, contexts: &mut [(i64, i64, i64, Sect
 	}
 }
 
-pub(crate) fn contexts(
-	sections: impl IntoIterator<Item = ContextSection>,
+pub(crate) fn contexts<S: AsRef<str>>(
+	sections: impl IntoIterator<Item = ContextSection<S>>,
 ) -> Vec<(i64, SectionContext)> {
-	let mut previous: Option<ContextSection> = None;
+	let mut previous: Option<ContextSection<S>> = None;
 	let mut scanner = SectionContextScanner::default();
 	let mut output = Vec::new();
 	let mut edges = Vec::new();
@@ -817,13 +817,13 @@ pub(crate) fn contexts(
 			ContextSectionRef::from(&section),
 		);
 		if context.fence_prefix.is_none() && !context.continues_line {
-			context.shape = section_shape(&section.raw_markdown);
+			context.shape = section_shape(section.raw_markdown.as_ref());
 		}
 		let overlap = (source_start + source.len() as i64 - section.byte_start).max(0);
 		source.push_str(&buffer_slice(
-			&section.raw_markdown,
+			section.raw_markdown.as_ref(),
 			overlap,
-			section.raw_markdown.len() as i64,
+			section.raw_markdown.as_ref().len() as i64,
 		));
 		edges.push((section.section_id, section.byte_start, section.byte_end, context));
 		previous = Some(section);

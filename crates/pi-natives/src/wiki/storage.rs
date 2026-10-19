@@ -11,12 +11,13 @@ use super::{
 	database::{WikiError, check_file_identity, open_identified_connection},
 	import::WikiMarkdownDocument,
 	markdown::{self, ContextSectionRef, SectionContextScanner},
+	projection::{ProjectionSection, prepare_document},
 	query::is_ecmascript_whitespace,
 };
 
 pub(super) type CoreResult<T> = Result<T, WikiError>;
 type Check<'a> = &'a dyn Fn() -> CoreResult<()>;
-pub(super) const SCHEMA_VERSION: i64 = 11;
+pub(super) const SCHEMA_VERSION: i64 = 12;
 pub(super) const BUILDING_INDEX_PREFIX: &str = "__building__";
 const BUILDING_GLOB: &str = "__building__*";
 const CONTENTLESS_FTS_SQL: &str = "CREATE VIRTUAL TABLE sections_fts USING fts5(section_id \
@@ -57,6 +58,35 @@ CREATE TABLE IF NOT EXISTS sections (
  UNIQUE(document_id, ordinal)
 );
 CREATE INDEX IF NOT EXISTS sections_index_document ON sections(index_id, document_id);
+CREATE TABLE IF NOT EXISTS wiki_document_projections (
+ document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+ payload BLOB NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS wiki_projection_section_insert BEFORE INSERT ON sections BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id=NEW.document_id
+ OR document_id IN (SELECT document_id FROM sections WHERE id=NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_section_delete AFTER DELETE ON sections BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id=OLD.document_id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_section_update BEFORE UPDATE ON sections BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id IN (OLD.document_id,NEW.document_id)
+ OR document_id IN (SELECT document_id FROM sections WHERE id=NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_document_insert AFTER INSERT ON documents BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_document_replace BEFORE INSERT ON documents BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id IN (
+  SELECT id FROM documents WHERE index_id=NEW.index_id AND relative_path=NEW.relative_path
+ );
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_document_delete AFTER DELETE ON documents BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_projection_document_update BEFORE UPDATE OF id ON documents BEGIN
+ DELETE FROM wiki_document_projections WHERE document_id IN (OLD.id,NEW.id);
+END;
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(section_id UNINDEXED, index_id \
                           UNINDEXED, relative_path, heading_path, body, content='', \
                           contentless_delete=1);
@@ -311,7 +341,7 @@ impl Storage {
 				stage = "migration";
 				storage.migrate(version, &mut stage)?;
 			} else if version == 0 {
-				storage.connection.execute_batch("PRAGMA user_version=11")?;
+				storage.connection.execute_batch("PRAGMA user_version=12")?;
 			}
 			check_file_identity(Path::new(&storage.path), &storage.identity)?;
 			Ok(())
@@ -416,43 +446,72 @@ impl Storage {
 		event.from_version = Some(version);
 		event.to_version = Some(SCHEMA_VERSION);
 		self.emit(event, None);
-		let result = self.transaction(|storage| {
-			*stage = "migration_fts";
-			storage
+		let result = (|| -> CoreResult<()> {
+			// Reserve the writer before projection preparation reads its source.
+			// A deferred read snapshot cannot safely upgrade after another opener
+			// commits the same migration.
+			let guard = TransactionGuard::begin_immediate(&self.connection)?;
+			let version: i64 = self
 				.connection
-				.execute_batch("DROP TABLE sections_fts")?;
-			storage.connection.execute_batch(CONTENTLESS_FTS_SQL)?;
-			storage.rebuild_fts(&mut count)?;
-			*stage = "migration_schema";
-			for table in ["evidence", "entity_aliases", "assertions", "relations", "entities"] {
-				storage
-					.connection
-					.execute_batch(&format!("DROP TABLE IF EXISTS {table}"))?;
+				.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+			if version > SCHEMA_VERSION {
+				return Err(WikiError::message(format!(
+					"Document index database version {version} is newer than supported version \
+					 {SCHEMA_VERSION}"
+				)));
 			}
-			storage.drop_columns("doc_indexes", &[
-				"schema_id",
-				"schema_version",
-				"schema_json",
-				"schema_hash",
-				"mode",
-			])?;
-			storage.drop_columns("sections", &["plain_text"])?;
-			if version < 5 {
-				storage
-					.connection
-					.execute_batch("DROP INDEX IF EXISTS documents_index_status")?;
-				storage.drop_columns("doc_indexes", &[
-					"state",
-					"last_error",
-					"created_at",
-					"updated_at",
-					"indexed_at",
-				])?;
-				storage.drop_columns("documents", &["status", "last_error"])?;
+			if version == SCHEMA_VERSION {
+				check_file_identity(Path::new(&self.path), &self.identity)?;
+				return guard.commit();
 			}
-			storage.connection.execute_batch("PRAGMA user_version=11")?;
-			Ok(())
-		});
+			self.transaction(|storage| {
+				if version < 11 {
+					*stage = "migration_fts";
+					storage
+						.connection
+						.execute_batch("DROP TABLE sections_fts")?;
+					storage.connection.execute_batch(CONTENTLESS_FTS_SQL)?;
+					storage.rebuild_fts(&mut count)?;
+					*stage = "migration_schema";
+					for table in ["evidence", "entity_aliases", "assertions", "relations", "entities"] {
+						storage
+							.connection
+							.execute_batch(&format!("DROP TABLE IF EXISTS {table}"))?;
+					}
+					storage.drop_columns("doc_indexes", &[
+						"schema_id",
+						"schema_version",
+						"schema_json",
+						"schema_hash",
+						"mode",
+					])?;
+					storage.drop_columns("sections", &["plain_text"])?;
+					if version < 5 {
+						storage
+							.connection
+							.execute_batch("DROP INDEX IF EXISTS documents_index_status")?;
+						storage.drop_columns("doc_indexes", &[
+							"state",
+							"last_error",
+							"created_at",
+							"updated_at",
+							"indexed_at",
+						])?;
+						storage.drop_columns("documents", &["status", "last_error"])?;
+					}
+				}
+				*stage = "migration_projections";
+				storage.rebuild_projections(if version == 11 {
+					Some(&mut count)
+				} else {
+					None
+				})?;
+				check_file_identity(Path::new(&storage.path), &storage.identity)?;
+				storage.connection.execute_batch("PRAGMA user_version=12")?;
+				Ok(())
+			})?;
+			guard.commit()
+		})();
 		let mut event = StorageDiagnostic::new(
 			if result.is_ok() {
 				"docs.storage.migration.completed"
@@ -529,6 +588,65 @@ impl Storage {
 			])?;
 			*count += 1;
 			previous = Some(row);
+		}
+		Ok(())
+	}
+
+	fn persist_projection(
+		&self,
+		document_id: i64,
+		sections: &[ProjectionSection<'_>],
+		check: Check<'_>,
+	) -> CoreResult<()> {
+		let projection = prepare_document(sections, check)?;
+		check()?;
+		let payload =
+			serde_json::to_vec(&projection).map_err(|error| WikiError::message(error.to_string()))?;
+		check()?;
+		self.connection.execute(
+			"INSERT OR REPLACE INTO wiki_document_projections(document_id,payload) VALUES(?,?)",
+			params![document_id, payload],
+		)?;
+		Ok(())
+	}
+
+	fn rebuild_projections(&self, mut count: Option<&mut i64>) -> CoreResult<()> {
+		let mut documents = self
+			.connection
+			.prepare("SELECT id FROM documents ORDER BY id")?;
+		let mut documents = documents.query([])?;
+		let mut statement = self.connection.prepare(
+			"SELECT id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? ORDER BY \
+			 ordinal,id",
+		)?;
+		let check = || check_file_identity(Path::new(&self.path), &self.identity);
+		while let Some(document) = documents.next()? {
+			check()?;
+			let document_id: i64 = document.get(0)?;
+			let rows = statement
+				.query_map([document_id], |row| {
+					Ok((
+						row.get::<_, i64>(0)?,
+						row.get::<_, i64>(1)?,
+						row.get::<_, i64>(2)?,
+						row.get::<_, String>(3)?,
+					))
+				})?
+				.collect::<Result<Vec<_>, _>>()?;
+			let sections: Vec<_> = rows
+				.iter()
+				.map(|(section_id, byte_start, byte_end, raw)| ProjectionSection {
+					section_id: *section_id,
+					document_id,
+					byte_start: *byte_start,
+					byte_end: *byte_end,
+					raw_markdown: raw,
+				})
+				.collect();
+			self.persist_projection(document_id, &sections, &check)?;
+			if let Some(count) = count.as_deref_mut() {
+				*count += sections.len() as i64;
+			}
 		}
 		Ok(())
 	}
@@ -710,6 +828,7 @@ impl Storage {
 			let mut fts_insert: Option<rusqlite::CachedStatement<'_>> = None;
 			let mut scanner = SectionContextScanner::default();
 			let mut previous = None;
+			let mut projection_sections = Vec::with_capacity(document.sections.len());
 			for section in &document.sections {
 				check()?;
 				let current = ContextSectionRef {
@@ -749,6 +868,13 @@ impl Storage {
 						],
 						|row| row.get(0),
 					)?;
+				projection_sections.push(ProjectionSection {
+					section_id,
+					document_id,
+					byte_start: section.byte_start,
+					byte_end: section.byte_end,
+					raw_markdown: &section.raw_markdown,
+				});
 				stage = "fts_insert";
 				if fts_insert.is_none() {
 					fts_insert = Some(storage.connection.prepare_cached(FTS_INSERT)?);
@@ -776,6 +902,9 @@ impl Storage {
 					.expect("prepared FTS insert")
 					.execute(params![section_id, section_id, index_id, path, heading, body])?;
 			}
+			stage = "document_projection";
+			storage.persist_projection(document_id, &projection_sections, check)?;
+			storage.check_build(build)?;
 			check()?;
 			Ok(())
 		});
@@ -939,11 +1068,19 @@ struct TransactionGuard<'a> {
 }
 impl<'a> TransactionGuard<'a> {
 	fn begin(connection: &'a Connection) -> CoreResult<Self> {
+		Self::begin_with_statement(connection, "BEGIN DEFERRED")
+	}
+
+	fn begin_immediate(connection: &'a Connection) -> CoreResult<Self> {
+		Self::begin_with_statement(connection, "BEGIN IMMEDIATE")
+	}
+
+	fn begin_with_statement(connection: &'a Connection, statement: &str) -> CoreResult<Self> {
 		let nested = !connection.is_autocommit();
 		connection.execute_batch(if nested {
 			"SAVEPOINT _wiki_storage_transaction"
 		} else {
-			"BEGIN DEFERRED"
+			statement
 		})?;
 		Ok(Self { connection, nested, active: true })
 	}
@@ -1015,6 +1152,320 @@ mod tests {
 			mtime_ms:      0.0,
 			sections:      parsed.sections,
 		}
+	}
+
+	#[test]
+	fn cancellation_after_persisting_projection_rolls_back_entire_document() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage
+			.create("__building__projection-cancel", "/missing-source")
+			.unwrap();
+		let reached_projection = std::cell::Cell::new(false);
+		let error = storage
+			.commit_document(&build, &document(), &|| {
+				let count: i64 = storage.connection.query_row(
+					"SELECT count(*) FROM wiki_document_projections",
+					[],
+					|row| row.get(0),
+				)?;
+				if count > 0 {
+					reached_projection.set(true);
+					return Err(WikiError::named("Document indexing cancelled", "AbortError", None));
+				}
+				Ok(())
+			})
+			.unwrap_err();
+		assert!(reached_projection.get());
+		assert_eq!(error.diagnostic_error_type(), "AbortError");
+		for table in ["documents", "sections", "sections_fts", "wiki_document_projections"] {
+			let remaining: i64 = storage
+				.connection
+				.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+				.unwrap();
+			assert_eq!(remaining, 0, "cancelled document left rows in {table}");
+		}
+	}
+
+	#[test]
+	fn replacing_section_id_invalidates_replaced_document_without_recursive_triggers() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage
+			.create("__building__replace", "/missing-source")
+			.unwrap();
+		storage
+			.commit_document(&build, &document(), &|| Ok(()))
+			.unwrap();
+		storage
+			.commit_document(
+				&build,
+				&WikiMarkdownDocument { relative_path: "second.md".into(), ..document() },
+				&|| Ok(()),
+			)
+			.unwrap();
+		storage
+			.connection
+			.execute_batch(
+				"PRAGMA foreign_keys=OFF; PRAGMA recursive_triggers=OFF;
+			 INSERT OR REPLACE INTO \
+				 sections(id,index_id,document_id,ordinal,heading_path,heading_level,line_start,\
+				 line_end,byte_start,byte_end,raw_markdown)
+			 SELECT (SELECT min(id) FROM sections),index_id,document_id,999,'',0,1,1,0,1,'x'
+			 FROM sections WHERE id=(SELECT max(id) FROM sections)",
+			)
+			.unwrap();
+		let count: i64 = storage
+			.connection
+			.query_row("SELECT count(*) FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 0, "replacement must invalidate both affected documents");
+	}
+
+	#[test]
+	fn document_projection_is_persisted_and_removed_with_hidden_build() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage
+			.create("__building__projection", "/missing-source")
+			.unwrap();
+		let document = document();
+		storage
+			.commit_document(&build, &document, &|| Ok(()))
+			.unwrap();
+		let payload: Vec<u8> = storage
+			.connection
+			.query_row("SELECT payload FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		let projection: super::super::projection::DocumentProjection =
+			serde_json::from_slice(&payload).unwrap();
+		assert_eq!(projection.sections.len(), document.sections.len());
+		let section_id: i64 = storage
+			.connection
+			.query_row("SELECT id FROM sections", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(projection.sections[0].section_id, section_id);
+		assert!(projection.sections[0].plain.contains("needle evidence"));
+		storage.rollback_build(&build).unwrap();
+		let count: i64 = storage
+			.connection
+			.query_row("SELECT count(*) FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 0);
+	}
+
+	#[test]
+	fn version_eleven_projection_migration_reads_only_database_and_preserves_fts() {
+		let fixture = Fixture::new();
+		let expected_section;
+		{
+			let storage = fixture.open();
+			let build = storage
+				.create("__building__migration", "/never-existed")
+				.unwrap();
+			storage
+				.commit_document(&build, &document(), &|| Ok(()))
+				.unwrap();
+			storage.promote(&build, "migration").unwrap();
+			expected_section = storage
+				.connection
+				.query_row("SELECT id FROM sections", [], |row| row.get::<_, i64>(0))
+				.unwrap();
+			storage
+				.connection
+				.execute(FTS_INSERT, params![999_999, 999_999, build.id, "", "", "fts sentinel"])
+				.unwrap();
+			storage
+				.connection
+				.execute_batch("DELETE FROM wiki_document_projections; PRAGMA user_version=11")
+				.unwrap();
+		}
+		let storage = fixture.open();
+		let version: i64 = storage
+			.connection
+			.query_row("PRAGMA user_version", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(version, 12);
+		let payload: Vec<u8> = storage
+			.connection
+			.query_row("SELECT payload FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		let projection: super::super::projection::DocumentProjection =
+			serde_json::from_slice(&payload).unwrap();
+		assert_eq!(projection.sections[0].section_id, expected_section);
+		let sentinel: i64 = storage
+			.connection
+			.query_row(
+				"SELECT count(*) FROM sections_fts WHERE sections_fts MATCH 'sentinel'",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(sentinel, 1, "version eleven must not rebuild FTS");
+	}
+
+	#[test]
+	fn projection_migration_failure_rolls_back_all_documents_and_schema_version() {
+		let fixture = Fixture::new();
+		{
+			let storage = fixture.open();
+			let build = storage
+				.create("__building__migration", "/never-existed")
+				.unwrap();
+			storage
+				.commit_document(&build, &document(), &|| Ok(()))
+				.unwrap();
+			storage
+				.commit_document(
+					&build,
+					&WikiMarkdownDocument { relative_path: "second.md".into(), ..document() },
+					&|| Ok(()),
+				)
+				.unwrap();
+			storage
+				.connection
+				.execute_batch(
+					"DELETE FROM wiki_document_projections;
+				 CREATE TRIGGER fail_second_projection BEFORE INSERT ON wiki_document_projections
+				 WHEN (SELECT count(*) FROM wiki_document_projections)>0 BEGIN
+				  SELECT RAISE(ABORT,'projection migration failure');
+				 END;
+				 PRAGMA user_version=11",
+				)
+				.unwrap();
+		}
+		assert!(Storage::open_impl(&fixture.path, None).is_err());
+		let connection = Connection::open(&fixture.path).unwrap();
+		let version: i64 = connection
+			.query_row("PRAGMA user_version", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(version, 11);
+		let count: i64 = connection
+			.query_row("SELECT count(*) FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 0);
+		connection
+			.execute_batch("DROP TRIGGER fail_second_projection")
+			.unwrap();
+		drop(connection);
+		let storage = fixture.open();
+		let count: i64 = storage
+			.connection
+			.query_row("SELECT count(*) FROM wiki_document_projections", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(count, 2);
+	}
+
+	#[test]
+	fn raw_sql_changes_invalidate_projections_even_without_foreign_keys() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage
+			.create("__building__raw-sql", "/missing-source")
+			.unwrap();
+		storage
+			.commit_document(&build, &document(), &|| Ok(()))
+			.unwrap();
+		storage
+			.commit_document(
+				&build,
+				&WikiMarkdownDocument { relative_path: "second.md".into(), ..document() },
+				&|| Ok(()),
+			)
+			.unwrap();
+		let documents: Vec<i64> = storage
+			.connection
+			.prepare("SELECT id FROM documents ORDER BY id")
+			.unwrap()
+			.query_map([], |row| row.get(0))
+			.unwrap()
+			.collect::<Result<_, _>>()
+			.unwrap();
+		let first = documents[0];
+		let second = documents[1];
+		let first_section: i64 = storage
+			.connection
+			.query_row("SELECT id FROM sections WHERE document_id=?", [first], |row| row.get(0))
+			.unwrap();
+		let seed = || {
+			for document in &documents {
+				storage
+					.connection
+					.execute("INSERT OR REPLACE INTO wiki_document_projections VALUES(?,?)", params![
+						document,
+						b"test-only-payload".as_slice()
+					])
+					.unwrap();
+			}
+		};
+		let count = || {
+			storage
+				.connection
+				.query_row("SELECT count(*) FROM wiki_document_projections", [], |row| {
+					row.get::<_, i64>(0)
+				})
+				.unwrap()
+		};
+		storage
+			.connection
+			.execute_batch("PRAGMA foreign_keys=OFF")
+			.unwrap();
+		storage
+			.connection
+			.execute("UPDATE sections SET raw_markdown=raw_markdown || 'changed' WHERE id=?", [
+				first_section,
+			])
+			.unwrap();
+		assert_eq!(count(), 1);
+		seed();
+		storage
+			.connection
+			.execute("UPDATE sections SET document_id=?,ordinal=999 WHERE id=?", params![
+				second,
+				first_section
+			])
+			.unwrap();
+		assert_eq!(count(), 0, "both old and new documents must be invalidated");
+		seed();
+		storage
+			.connection
+			.execute("DELETE FROM sections WHERE id=?", [first_section])
+			.unwrap();
+		assert_eq!(count(), 1);
+		seed();
+		storage
+			.connection
+			.execute(
+				"INSERT INTO \
+				 sections(index_id,document_id,ordinal,heading_path,heading_level,line_start,line_end,\
+				 byte_start,byte_end,raw_markdown) VALUES(?,?,999,'',0,1,1,0,1,'x')",
+				params![build.id, first],
+			)
+			.unwrap();
+		assert_eq!(count(), 1);
+		seed();
+		storage
+			.connection
+			.execute("DELETE FROM documents WHERE id=?", [first])
+			.unwrap();
+		assert_eq!(count(), 1, "document deletion cannot rely on foreign-key cascades");
+		seed();
+		storage
+			.connection
+			.execute(
+				"INSERT INTO \
+				 documents(id,index_id,relative_path,title,source_kind,sha256,size_bytes,mtime_ms) \
+				 VALUES(?,?,'reused.md','','markdown','',0,0)",
+				params![first, build.id],
+			)
+			.unwrap();
+		assert_eq!(count(), 1, "reused document IDs must not inherit a projection");
+		seed();
+		storage
+			.connection
+			.execute("UPDATE documents SET id=999999 WHERE id=?", [first])
+			.unwrap();
+		assert_eq!(count(), 1);
 	}
 
 	#[test]
@@ -1255,7 +1706,7 @@ mod tests {
 				Some((stop_at, if after_fts { stop_at } else { stop_at - 1 }))
 			);
 			assert!(storage.connection.is_autocommit());
-			for table in ["documents", "sections", "sections_fts"] {
+			for table in ["documents", "sections", "sections_fts", "wiki_document_projections"] {
 				let remaining: i64 = storage
 					.connection
 					.query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
