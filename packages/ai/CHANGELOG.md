@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Anthropic streams remaining stuck when gateways repeatedly emit empty text, thinking, or tool-input deltas.
+
 ## [18.12.2] - 2026-10-18
 
 ### Added
