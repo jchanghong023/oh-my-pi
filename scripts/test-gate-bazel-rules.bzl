@@ -3,7 +3,7 @@
 load("@bazel_skylib//rules:native_binary.bzl", "native_binary", "native_test")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
 
-def gate_action(name, spec, bun, runner, srcs = [], tools = [], artifact_files = []):
+def gate_action(name, spec, bun, runner, srcs = [], tools = [], artifact_files = [], tags = []):
     native.genrule(
         name = name,
         srcs = depset(srcs + [runner, spec]).to_list(),
@@ -14,7 +14,7 @@ def gate_action(name, spec, bun, runner, srcs = [], tools = [], artifact_files =
         # before parsing the quoted executable and each argument.
         cmd_bat = '""$(location %s)" "$(location %s)" execute "$(location %s)" "$(location %s.success.json)""' % (bun, runner, spec, name),
         local = True,
-        tags = ["local", "no-remote", "no-sandbox"],
+        tags = ["local", "no-remote", "no-sandbox"] + tags,
     )
 
 def _quote(value, windows):

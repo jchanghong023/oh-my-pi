@@ -72,6 +72,8 @@ export interface GateOptions {
 	reportFailure?: boolean;
 	/** Public CLIs stop immediately on failure; finite scopes also enforce a total wall-clock deadline. */
 	exitOnFailure?: boolean;
+	/** A nested budget observing targets in its parent's shared Bazel invocation. */
+	observeParentActivity?: boolean;
 }
 export interface GateCapture {
 	exitCode: number;
@@ -103,6 +105,7 @@ interface Scope {
 	startedNs: bigint;
 	operationId: string;
 	gateId: string;
+	observeParentActivity: boolean;
 }
 interface Owned {
 	child: Bun.Subprocess;
@@ -604,6 +607,7 @@ class Runtime {
 			startedNs: gateClockNanoseconds(),
 			operationId: this.operationId,
 			gateId: randomUUID(),
+			observeParentActivity: options.observeParentActivity ?? false,
 		};
 		this.scopes.add(scope);
 		this.#updateWallDeadline(scope);
@@ -627,7 +631,12 @@ class Runtime {
 	): void {
 		if (scope.closed) return;
 		const at = options.at ?? performance.now();
-		for (const current of ancestors(scope)) {
+		const recipients = new Set(ancestors(scope));
+		for (const observer of this.scopes) {
+			if (!observer.closed && observer.observeParentActivity && observer.parent && recipients.has(observer.parent))
+				recipients.add(observer);
+		}
+		for (const current of recipients) {
 			current.events.push({
 				at,
 				key,

@@ -1,9 +1,11 @@
 #!/usr/bin/env bun
-// Current-platform fulltest once plus optional fixed-commit WSL/Linux coverage.
+// Current-platform fulltest and host-only Bazel integration, plus optional WSL coverage.
 // No commits/pushes, CI, publishing, tool installation, or desktop automation.
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { runFulltest } from "./fulltest";
+import { localTestEnvironment, removeFulltestHome, runFulltest } from "./fulltest";
 import {
 	discoverWsl,
 	runWslStage,
@@ -16,6 +18,8 @@ import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
+import { runBazelCommands } from "./test-gate-bazel";
+import { testTimeoutMs } from "./ci-test-ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 export interface SlowtestArgs {
@@ -36,12 +40,41 @@ export function parseSlowtestArgs(args: readonly string[]): SlowtestArgs | null 
 }
 export interface SlowtestDependencies {
 	fulltest(gate: GateRun, options: { debug: boolean }): Promise<void>;
+	bazelIntegration(gate: GateRun, root: string): Promise<void>;
 	discover(gate: GateRun, options: WslOptions): Promise<WslSelection>;
 	identity(gate: GateRun, root: string): Promise<SourceIdentity>;
 	wsl(gate: GateRun, options: WslOptions): Promise<WslStageResult>;
 }
 const dependencies: SlowtestDependencies = {
 	fulltest: runFulltest,
+	bazelIntegration: async (gate, root) => {
+		const home = await gate.charged(() => fs.mkdtemp(path.join(os.tmpdir(), "omp-slowtest-bazel-home-")));
+		try {
+			await runBazelCommands(
+				gate,
+				[
+					{
+						label: "test/repository scripts scripts/test-gate-bazel.test.ts",
+						argv: [
+							"bun",
+							"scripts/test-report-bun.ts",
+							"scripts/test-gate-bazel.test.ts",
+							"--bail=1",
+							`--timeout=${testTimeoutMs()}`,
+						],
+						cwd: root,
+						env: localTestEnvironment(home),
+						kind: "charged",
+					},
+				],
+				{ root, concurrency: 1 },
+			);
+		} catch (error) {
+			throw gate.fail(error);
+		} finally {
+			await gate.charged(() => removeFulltestHome(home));
+		}
+	},
 	discover: discoverWsl,
 	identity: captureSourceIdentity,
 	wsl: runWslStage,
@@ -151,13 +184,15 @@ async function runSlowtestObserved(
 					stage: "linux-leg",
 					result: result.status,
 					status: result.status,
-					coverage_equals_fulltest: skipped,
+					linux_coverage_added: !skipped,
 					elapsed_ms: performance.now() - linuxStarted,
 					exit_code: result.status === "PASS" ? 0 : undefined,
 					head: result.status === "PASS" ? result.head : undefined,
 				});
 				if (result.status !== "PASS")
-					console.log(`slowtest: ${result.status} — ${result.reason}; coverage equals fulltest`);
+					console.log(
+						`slowtest: ${result.status} — ${result.reason}; current-platform fulltest plus host-only Bazel integration`,
+					);
 				return result;
 			} catch (error) {
 				const failure = gate.fail(error);
@@ -173,13 +208,18 @@ async function runSlowtestObserved(
 				throw failure;
 			}
 		})();
-		const current = gate.childGate("fulltest", async child => {
-			try {
-				await injected.fulltest(child, { debug: options.debug });
-			} catch (error) {
-				throw child.fail(error);
-			}
-		});
+		const current = (async () => {
+			await gate.childGate("fulltest", async child => {
+				try {
+					await injected.fulltest(child, { debug: options.debug });
+				} catch (error) {
+					throw child.fail(error);
+				}
+			});
+			// Outside the 900s fulltest scope, still inside slowtest's original
+			// 1500s budget. WSL only runs fulltest and never this extra suite.
+			await injected.bazelIntegration(gate, root);
+		})();
 		const [, wslResult] = await Promise.all([current, linux]);
 		const after = await injected.identity(gate, root);
 		if (before.head !== after.head || before.digest !== after.digest)
