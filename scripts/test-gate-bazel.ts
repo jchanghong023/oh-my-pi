@@ -888,8 +888,7 @@ export async function runBazelCommands(
 			persistentBazel: { outputBase: `${plan.workspace}-output` },
 		});
 		for (const relay of relays) await relay.flush();
-		if (staticTargets.size)
-			throw new GateCommandError("Required fastcheck Bazel results are missing", 1);
+		if (staticTargets.size) throw new GateCommandError("Required fastcheck Bazel results are missing", 1);
 		await fastcheck;
 		await gate.charged(async () => {
 			const nested = (await Bun.file(`${requestFile}.invocation-evidence.json`).json()) as {
