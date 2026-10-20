@@ -51,16 +51,19 @@ export interface GateEventRelay {
 	close(): Promise<void>;
 }
 
-/** File relay keeps compiler events observable when a harness captures compiler stderr. */
-export async function createGateEventRelay(receive: (text: string) => void): Promise<GateEventRelay> {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-events-"));
-	const filename = path.join(directory, "activity.jsonl");
+/** Tail an activity/BEP stream; only internally created relay files are removed. */
+export async function createGateEventRelay(
+	receive: (text: string) => void,
+	existingFile?: string,
+): Promise<GateEventRelay> {
+	const directory = existingFile ? undefined : await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-events-"));
+	const filename = existingFile ?? path.join(directory!, "activity.jsonl");
 	let file: FileHandle;
 	try {
-		await fs.writeFile(filename, "");
+		if (!existingFile) await fs.writeFile(filename, "");
 		file = await fs.open(filename, "r");
 	} catch (error) {
-		await fs.rm(directory, { recursive: true, force: true });
+		if (directory) await fs.rm(directory, { recursive: true, force: true });
 		throw error;
 	}
 	let position = 0;
@@ -101,7 +104,7 @@ export async function createGateEventRelay(receive: (text: string) => void): Pro
 		});
 	} catch (error) {
 		await file.close();
-		await fs.rm(directory, { recursive: true, force: true });
+		if (directory) await fs.rm(directory, { recursive: true, force: true });
 		throw error;
 	}
 	watcher.on("error", error => {
@@ -122,7 +125,7 @@ export async function createGateEventRelay(receive: (text: string) => void): Pro
 			} finally {
 				closed = true;
 				await file.close();
-				await fs.rm(directory, { recursive: true, force: true });
+				if (directory) await fs.rm(directory, { recursive: true, force: true });
 			}
 		},
 	};

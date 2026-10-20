@@ -12,10 +12,11 @@ import { registerBazelInvocation } from "./test-gate-bazel-report";
 import { openGateLibc } from "./test-gate-libc";
 import { discoverBazelHelperInputs } from "./test-gate-bazel-inputs";
 import { bazelShell, bazelToolPath } from "./test-gate-bazel-tools";
+import { createGateEventRelay, type GateEventRelay } from "./test-gate-events";
 
 function bazelNamespace(commands: readonly GateCommand[]): string {
 	if (commands.every(command => command.label.startsWith("compile/Rust native host "))) return "native";
-	return commands.every(command => command.label.startsWith("static/"))
+	return commands.some(command => command.label.startsWith("static/"))
 		? "static"
 		: commands.some(command => command.label.startsWith("test/fork "))
 			? "tests"
@@ -491,6 +492,8 @@ async function declareTargets(
 		}
 		return [...names].filter(name => name in tools).sort();
 	};
+	const rustCheck = commands.find(command => command.label === "static/Rust fmt+clippy");
+	const orderedRustCheck = rustCheck && commands.some(command => /^test\/Rust/.test(command.label));
 	for (const command of commands) {
 		if (command.stdin !== undefined || command.decodeOutput || command.allowFailure || command.wallTimeoutSeconds)
 			throw new GateCommandError(
@@ -560,7 +563,9 @@ async function declareTargets(
 		// Cache only the launcher closure: declaring command inputs here would
 		// analyze the whole source/installed graph without guarding execution.
 		// Cached actions/tests must retain their complete semantic input graph.
-		const alwaysRun = noCache && !test;
+		// An uncached clippy must still be a build action when Rust tests
+		// consume it: bazel run's launcher does not execute as a dependency.
+		const alwaysRun = noCache && !test && !(orderedRustCheck && command === rustCheck);
 		if (command.artifactFiles?.length && (alwaysRun || test))
 			throw new GateCommandError(`Bazel artifacts require a reusable build action: ${command.label}`, 1);
 		const runtimeRepository = alwaysRun ? "@launcher" : "@sources";
@@ -570,17 +575,22 @@ async function declareTargets(
 			`${runtimeRepository}//:scripts/test-gate-clock.ts`,
 			`${runtimeRepository}//:scripts/test-gate-libc.ts`,
 			...(cacheRust ? ["@rust_inputs//:rust_inputs"] : []),
+			// This action cannot reuse results from an unclosed host environment.
+			// Declare its live execution context so Skyframe cannot incrementally
+			// skip it; no-cache alone only disables the action-result cache.
+			...(noCache && !alwaysRun && !test ? ["context.json"] : []),
+			...(rustTest && rustCheck ? [`:p_${Bun.hash(rustCheck.label).toString(16)}`] : []),
 		];
 		const attrs = `name = ${JSON.stringify(id)}, srcs = ${JSON.stringify(sources)}, tools = ${JSON.stringify(alwaysRun ? [] : commandToolNames(command).map(name => `@installed//:tools/${name}`))}, bun = ${JSON.stringify(`${alwaysRun ? "@launcher" : "@installed"}//:tools/${process.platform === "win32" ? "bun.exe" : "bun"}`)}, runner = "${runtimeRepository}//:scripts/test-gate-bazel-runner.ts", spec = ${JSON.stringify(`${id}.json`)}`;
 		const tags = ["local", "no-remote", "no-sandbox", ...(noCache ? ["external", "no-cache"] : [])];
-		if (noCache && !test) runTargets.add(command.label);
+		if (alwaysRun) runTargets.add(command.label);
 		const executableAttrs = `windows = ${process.platform === "win32" ? "True" : "False"}, bun_path = ${JSON.stringify(process.execPath)}, runner_path = ${JSON.stringify(path.join(root, "scripts/test-gate-bazel-runner.ts"))}, spec_path = ${JSON.stringify(path.join(workspace, `${id}.json`))}, command_args = ${JSON.stringify(command.argv.slice(1))}, command_cwd = ${JSON.stringify(command.cwd ?? root)}, tags = ${JSON.stringify(tags)}`;
 		build.push(
 			test
 				? `gate_test(${attrs}, ${executableAttrs}, timeout = "eternal")`
-				: noCache
+				: alwaysRun
 					? `gate_run(${attrs}, ${executableAttrs})`
-					: `gate_action(${attrs}, artifact_files = ${JSON.stringify(command.artifactFiles ?? [])})`,
+					: `gate_action(${attrs}, artifact_files = ${JSON.stringify(command.artifactFiles ?? [])}, tags = ${JSON.stringify(noCache ? ["no-cache"] : [])})`,
 		);
 		console.log(
 			`bazel required label=${JSON.stringify(command.label)} target=//:${id}${noCache ? " result_reuse=disabled (external/native side effects)" : ""}`,
@@ -703,12 +713,28 @@ async function reportTargets(
 export async function runBazelCommands(
 	gate: GateRun,
 	commands: readonly GateCommand[],
-	options: { root?: string; concurrency?: number; serverIdleSeconds?: number } = {},
+	options: { root?: string; concurrency?: number; serverIdleSeconds?: number; fastcheck?: boolean } = {},
 ): Promise<BazelTargetResult[]> {
 	if (commands.length === 0) return [];
 	const root = path.resolve(options.root ?? repository);
-	const lease = await gate.charged(() => acquireWorkspaceLease(gate, root, commands));
+	const staticTargets = new Set(
+		options.fastcheck
+			? commands
+					.filter(command => command.label.startsWith("static/"))
+					.map(command => `//:p_${Bun.hash(command.label).toString(16)}`)
+			: [],
+	);
+	const staticCompletion = Promise.withResolvers<void>();
+	const fastcheck = options.fastcheck
+		? gate.childGate("fastcheck", () => staticCompletion.promise, { observeParentActivity: true })
+		: undefined;
+	// The graph may fail during declaration before the observer is awaited.
+	void fastcheck?.catch(() => {});
+	if (staticTargets.size === 0) staticCompletion.resolve();
+	const relays: GateEventRelay[] = [];
+	let lease: { release(): void; fd?: number } | undefined;
 	try {
+		lease = await gate.charged(() => acquireWorkspaceLease(gate, root, commands));
 		const plan = await gate.charged(() => declareTargets(gate, commands, root, options.serverIdleSeconds));
 		const reports: BazelTargetResult[] = [];
 		const requests: Array<{
@@ -775,7 +801,9 @@ export async function runBazelCommands(
 		// dispatch the highest-risk band first and every remaining band together:
 		// risk ordering is preserved while the cached steady state stays bounded.
 		const bands = [...new Set(commands.map(command => gateCommandRisk(command).priority))].sort((a, b) => b - a);
-		const dispatchGroups = bands.length <= 1 ? [bands] : [[bands[0]!], bands.slice(1)];
+		// A mixed static/test graph must be dispatched together: risk bands
+		// cannot split clippy from its consumers into separate invocations.
+		const dispatchGroups = options.fastcheck || bands.length <= 1 ? [bands] : [[bands[0]!], bands.slice(1)];
 		for (const group of dispatchGroups) {
 			gate.signal.throwIfAborted();
 			const band = commands.filter(command => group.includes(gateCommandRisk(command).priority));
@@ -791,6 +819,29 @@ export async function runBazelCommands(
 				await gate.charged(() => fs.mkdir(directory, { recursive: true }));
 				const bep = path.join(directory, "events.jsonl");
 				const execution = path.join(directory, "execution.compact");
+				if (fastcheck) {
+					await fs.writeFile(bep, "");
+					let partial = "";
+					relays.push(
+						await createGateEventRelay(text => {
+							partial += text;
+							let newline: number;
+							while ((newline = partial.indexOf("\n")) >= 0) {
+								const line = partial.slice(0, newline);
+								partial = partial.slice(newline + 1);
+								if (!line.trim()) continue;
+								const event = JSON.parse(line) as BazelEvent;
+								const target = event.id?.targetCompleted?.label;
+								if (target && staticTargets.has(target)) {
+									if (event.completed?.success !== true)
+										throw gate.fail(new GateCommandError(`Static Bazel target failed: ${target}`, 1));
+									staticTargets.delete(target);
+									if (staticTargets.size === 0) staticCompletion.resolve();
+								}
+							}
+						}, bep),
+					);
+				}
 				const risk = gateCommandRisk(pending[0]!);
 				requests.push({
 					priority,
@@ -836,6 +887,10 @@ export async function runBazelCommands(
 			},
 			persistentBazel: { outputBase: `${plan.workspace}-output` },
 		});
+		for (const relay of relays) await relay.flush();
+		if (staticTargets.size)
+			throw new GateCommandError("Required fastcheck Bazel results are missing", 1);
+		await fastcheck;
 		await gate.charged(async () => {
 			const nested = (await Bun.file(`${requestFile}.invocation-evidence.json`).json()) as {
 				queryProfiles: string[];
@@ -848,7 +903,18 @@ export async function runBazelCommands(
 			reports.push(...(await gate.charged(() => reportTargets(plan, pending, bep, execution))));
 		}
 		return reports;
+	} catch (error) {
+		staticCompletion.reject(error);
+		// No observer exists for standalone commands.
+		if (!fastcheck) void staticCompletion.promise.catch(() => {});
+		throw gate.fail(error);
 	} finally {
-		lease.release();
+		try {
+			await Promise.all(relays.map(relay => relay.close()));
+		} catch (error) {
+			throw gate.fail(error);
+		} finally {
+			lease?.release();
+		}
 	}
 }

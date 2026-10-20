@@ -63,6 +63,12 @@ async function fixture(selection: WslSelection, dirty = false) {
 				argv: [process.execPath, stub, localRecord, "none", "current", "0"],
 			});
 		},
+		bazelIntegration: async gate => {
+			await gate.run({
+				label: "isolated host Bazel integration stub",
+				argv: [process.execPath, stub, `${localRecord}.bazel`, "none", "bazel", "0"],
+			});
+		},
 		wsl: async (gate, options) => {
 			if (selection.status !== "AVAILABLE") return selection;
 			await gate.run({

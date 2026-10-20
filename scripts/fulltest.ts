@@ -8,7 +8,7 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
-import { gateRepoRoot, gatePoolWidth, runFastcheck } from "./fastcheck";
+import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity } from "./test-gate-source";
@@ -312,6 +312,9 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 				onlyFiles: true,
 			})) {
 				const relative = `scripts/${file.replaceAll("\\", "/")}`;
+				// Heavy native Bazel integration runs once on the slowtest host,
+				// never in standalone fulltest or its WSL invocation.
+				if (relative === "scripts/test-gate-bazel.test.ts") continue;
 				if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
 			}
 		await runBazelCommands(
@@ -353,15 +356,16 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		// Bazel owns each lane's scheduler and resources; separate stable output
-		// bases keep static checks and tests independent. A test can launch
-		// several runtimes, so cap simultaneous test trees rather than sizing
-		// this lane as if every target were one CPU-bound process.
+		// Static checks and tests share one Bazel graph. Only Rust tests depend
+		// on clippy; TS actions/tests remain independently schedulable.
 		const cpuBudget = gateCpuBudget();
 		const concurrency = gatePoolWidth(cpuBudget, 4, 4);
-		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(cpuBudget, 3, 12)));
-		const results = await Promise.allSettled([fastcheck, runBazelCommands(gate, tests, { concurrency })]);
-		for (const result of results) if (result.status === "rejected") throw result.reason;
+		const checks = (await gate.charged(fastcheckCommands)).map(command =>
+			command.label.startsWith("static/Rust")
+				? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
+				: command,
+		);
+		await runBazelCommands(gate, [...checks, ...tests], { concurrency, fastcheck: true });
 		const after = await captureSourceIdentity(gate, gateRepoRoot);
 		logger.info("Fulltest source stability resolved", {
 			component: "test-gate-fulltest",
