@@ -18,6 +18,7 @@
 ### Fixed
 
 - Run fulltest static checks and tests in one Bazel graph, with affected Rust tests depending on clippy completion while TypeScript work remains parallel and the existing fastcheck budget is preserved.
+- Let fulltest observe completed static targets even when BEP file notifications are delayed, avoiding false fastcheck timeouts without changing budgets or check coverage.
 - Preserve migrated settings and fresh effective values across configuration saves and reloads, reset legacy setting sources safely, and keep valid higher-priority Team preview participants when a user draft contains unavailable models.
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.

@@ -110,6 +110,9 @@ export async function createGateEventRelay(
 	watcher.on("error", error => {
 		failure = error;
 	});
+	// External BEP writers must make progress even when filesystem notifications are delayed.
+	const poller = existingFile ? setInterval(() => void drain(), 20) : undefined;
+	poller?.unref();
 	return {
 		path: filename,
 		async flush() {
@@ -118,6 +121,7 @@ export async function createGateEventRelay(
 			if (failure) throw failure;
 		},
 		async close() {
+			clearInterval(poller);
 			watcher.close();
 			try {
 				await drain();
