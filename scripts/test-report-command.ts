@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // A single pre-existing smoke probe, not a replacement for a test framework.
-import { observeGateUnhandledFailures } from "./test-gate-failure-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
 observeGateUnhandledFailures();

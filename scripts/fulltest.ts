@@ -8,11 +8,16 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
-import { gateRepoRoot, gatePoolWidth, runFastcheck, runGateCommands } from "./fastcheck";
-import { GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { gateRepoRoot, gatePoolWidth, runFastcheck } from "./fastcheck";
+import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
+import { runBazelCommands } from "./test-gate-bazel";
+import { gateClockNanoseconds } from "./test-gate-clock";
+import { reportBazelRun } from "./test-gate-bazel-report";
+import { bazelShell, bazelToolPath } from "./test-gate-bazel-tools";
 
 export interface FulltestOptions {
 	debug: boolean;
@@ -43,6 +48,15 @@ export function gateCpuBudget(cores: number = os.availableParallelism(), release
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
+	// App execution aliases are not installed interpreters. Keep the same
+	// process-only Windows PATH normalization used by the prior gate acceptance.
+	if (process.platform === "win32") {
+		for (const key of Object.keys(env)) {
+			if (key.toUpperCase() !== "PATH" || !env[key]) continue;
+			env[key] = bazelToolPath(env[key]);
+		}
+		env.BAZEL_SH = bazelShell(env);
+	}
 	// GateRun overlays command environments on the host environment. Preserve
 	// the shared scrubber's deletions so that overlay cannot restore credentials.
 	for (const key of Object.keys(process.env)) {
@@ -68,6 +82,9 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 		CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo"),
 		RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(os.homedir(), ".rustup"),
 		RUSTUP_AUTO_INSTALL: "0",
+		// Bun serializes fixture stdin as UTF-8; detached Windows Python must
+		// not decode that protocol using the machine's legacy ANSI code page.
+		PYTHONUTF8: "1",
 		E2E: "",
 		GITHUB_EVENT_NAME: "",
 		OMP_TEST_SHARD: "",
@@ -153,7 +170,7 @@ export function fulltestCommands(
 	commands.push(
 		{
 			label: "test/Rust affected crates",
-			argv: ["bun", "run", "test:rs", "--affected"],
+			argv: ["bun", "scripts/run-rs-task.ts", "test:rs", "--affected"],
 			cwd: root,
 			env: {
 				...env,
@@ -254,24 +271,62 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-affected`);
 	console.log("coverage outside gates: real desktop input; live credential-backed model/gateway integration");
 	const changedPaths = await discoverForkChangedPaths(gate);
-	await runGateCommands(gate, [
-		{ label: "version/Git", argv: ["git", "--version"], cwd: gateRepoRoot },
-		{
-			label: "version/Python",
-			argv: [process.platform === "win32" ? "python" : "python3", "--version"],
-			cwd: gateRepoRoot,
-		},
-		{ label: "version/Rust", argv: ["cargo", "--version"], cwd: gateRepoRoot, env: { RUSTUP_AUTO_INSTALL: "0" } },
-	]);
+	await Promise.all(
+		[
+			{ label: "version/Git", argv: ["git", "--version"], cwd: gateRepoRoot },
+			{
+				label: "version/Python",
+				argv: [process.platform === "win32" ? "python" : "python3", "--version"],
+				cwd: gateRepoRoot,
+			},
+			{ label: "version/Rust", argv: ["cargo", "--version"], cwd: gateRepoRoot, env: { RUSTUP_AUTO_INSTALL: "0" } },
+		].map(command => gate.run(command)),
+	);
 	const home = await gate.charged(() => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
 	try {
 		// Native source/binding generation must finish before static/test readers.
-		await gate.run({
-			label: "build/native",
-			argv: ["bun", "run", "build:native"],
-			cwd: gateRepoRoot,
-			env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
-		});
+		// Invoke the install primitive directly; the public adapter would re-enter this Bazel lane.
+		await runBazelCommands(
+			gate,
+			[
+				{
+					label: "build/native",
+					argv: ["bun", "scripts/bazel-primitive.ts", "build:native"],
+					cwd: gateRepoRoot,
+					env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
+				},
+			],
+			{ concurrency: 1 },
+		);
+		// Gate orchestration selftests are the highest-risk readers after native
+		// generation. Keep their short injected budgets isolated from heavy test
+		// trees, but fail here before dispatching the bulk fork regressions.
+		const scriptConfig = Bun.TOML.parse(await Bun.file(path.join(gateRepoRoot, "bunfig.toml")).text()) as {
+			test?: { pathIgnorePatterns?: string[] };
+		};
+		const ignored = (scriptConfig.test?.pathIgnorePatterns ?? []).map(pattern => new Bun.Glob(pattern));
+		const scriptTests = new Set<string>();
+		for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"])
+			for await (const file of new Bun.Glob(pattern).scan({
+				cwd: path.join(gateRepoRoot, "scripts"),
+				onlyFiles: true,
+			})) {
+				const relative = `scripts/${file.replaceAll("\\", "/")}`;
+				if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
+			}
+		await runBazelCommands(
+			gate,
+			[...scriptTests].sort().map((file, index) => ({
+				label: `test/repository scripts ${file}`,
+				// The shared hang ceiling, not bun's 5s default: stub-heavy script
+				// tests spawn long Git Bash chains that exceed it under Bazel actions.
+				argv: ["bun", "scripts/test-report-bun.ts", file, "--bail=1", `--timeout=${testTimeoutMs()}`],
+				cwd: gateRepoRoot,
+				env: localTestEnvironment(path.join(home, "script-tests", String(index))),
+				kind: "charged" as const,
+			})),
+			{ concurrency: 1 },
+		);
 		const tests = fulltestCommands(options, home, changedPaths);
 		logger.info("Fulltest command plan selected", {
 			component: "test-gate-fulltest",
@@ -298,29 +353,15 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		// Share one bounded command budget instead of opening two full pools.
-		// Reserve one live test worker; release the other slots after the strict
-		// fastcheck gate settles. Each side still runs independent work in
-		// parallel: per-file tests spread wide, multithreaded static checks
-		// (tsgo/clippy) keep their narrower pool so they do not thrash.
-		// Leave headroom for each test's CLI/native children and the concurrent WSL leg.
+		// Bazel owns each lane's scheduler and resources; separate stable output
+		// bases keep static checks and tests independent. A test can launch
+		// several runtimes, so cap simultaneous test trees rather than sizing
+		// this lane as if every target were one CPU-bound process.
 		const cpuBudget = gateCpuBudget();
-		const concurrency = gatePoolWidth(cpuBudget, 4, 8);
+		const concurrency = gatePoolWidth(cpuBudget, 4, 4);
 		const fastcheck = gate.childGate("fastcheck", child => runFastcheck(child, gatePoolWidth(cpuBudget, 3, 12)));
-		const results = await Promise.allSettled([fastcheck, runGateCommands(gate, tests, concurrency, fastcheck)]);
+		const results = await Promise.allSettled([fastcheck, runBazelCommands(gate, tests, { concurrency })]);
 		for (const result of results) if (result.status === "rejected") throw result.reason;
-		// Runtime mechanism selftests use short injected charged budgets. Run
-		// them after process-heavy tests, rather than racing their stub startup
-		// against nextest and CLI/PTY subprocess storms on the same platform.
-		await gate.charged(() =>
-			gate.run({
-				label: "test/repository scripts",
-				argv: ["bun", "run", "test:scripts", "--bail=1"],
-				cwd: gateRepoRoot,
-				env: localTestEnvironment(home),
-				kind: "charged",
-			}),
-		);
 		const after = await captureSourceIdentity(gate, gateRepoRoot);
 		logger.info("Fulltest source stability resolved", {
 			component: "test-gate-fulltest",
@@ -379,7 +420,17 @@ if (import.meta.main) {
 			if (!options)
 				throw new GateCommandError("Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= 900>]", 2);
 			const run = await gate.charged(() => beginTestRun("fulltest: fork-affected current-platform tests"));
-			finalizeTestRun(gate, run);
+			finalizeTestRun(
+				gate,
+				run,
+				"Bazel owns test-result XML and cached artifacts; target evidence and artifact references are printed in the gate log",
+			);
+			// Finalizers remain charged and bounded by this fulltest's original watchdog.
+			// Preserve immediate first-failure exit rather than completing summary I/O.
+			gate.onFinalize(async exitCode => {
+				if (exitCode !== 0 || gate.signal.aborted) return;
+				await reportBazelRun(gate.runId, gate.startedNs, gateClockNanoseconds());
+			});
 			await runFulltest(gate, options);
 		},
 		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true },

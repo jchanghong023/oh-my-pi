@@ -3,8 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { BunTestFailureObserver } from "./test-gate-failure-events";
-import type { GateCommandError } from "./test-gate-runtime";
+import { BunTestFailureObserver, type GateCommandError } from "./test-gate-failure-events";
 
 it("notifies on the first complete Bun case marker without waiting for stream end", () => {
 	const failures: GateCommandError[] = [];

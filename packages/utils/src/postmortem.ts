@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import { APP_NAME } from "./dirs";
 import * as logger from "./logger";
 import { restoreTerminalStderr } from "./stderr-guard";
+import { EXPECTED_CLEANUP, hasExpectedCleanupMarker } from "./expected-cleanup";
 
 // Cleanup reasons, in order of priority/meaning.
 export enum Reason {
@@ -438,11 +439,6 @@ export function reportUnsettledEntry(work: Promise<unknown>, describe?: () => st
 	});
 }
 
-// Well-known key marking an error as an *expected* teardown artifact (e.g. a
-// browser run-scope abort at normal run end). `Symbol.for` so the marker
-// survives duplicate module instances across bundles/realms.
-const EXPECTED_CLEANUP = Symbol.for("omp.expectedCleanupError");
-
 /**
  * Mark an error as expected cleanup fallout so the global fatal handlers
  * downgrade it to a log line instead of tearing down the process. Use for
@@ -453,15 +449,6 @@ const EXPECTED_CLEANUP = Symbol.for("omp.expectedCleanupError");
 export function markExpectedCleanupError<T extends object>(reason: T): T {
 	Reflect.set(reason, EXPECTED_CLEANUP, true);
 	return reason;
-}
-
-function hasExpectedCleanupMarker(reason: unknown): boolean {
-	let current: unknown = reason;
-	for (let depth = 0; depth < 8 && current !== null && typeof current === "object"; depth++) {
-		if (Reflect.get(current, EXPECTED_CLEANUP) === true) return true;
-		current = Reflect.get(current, "cause");
-	}
-	return false;
 }
 
 /**

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
-import { parseFastcheckArgs, gatePoolWidth, runGateCommands } from "./fastcheck";
+import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome } from "./fulltest";
 import { runGate } from "./test-gate-runtime";
 
@@ -299,13 +299,13 @@ process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + ' {"
 		const result = await runGate(
 			"fulltest",
 			gate =>
-				runGateCommands(gate, [
-					{
+				gate.charged(() =>
+					gate.run({
 						label: "isolated mechanism fixture",
 						argv: [process.execPath, stub],
 						kind: "charged",
-					},
-				]),
+					}),
+				),
 			{ print: () => {} },
 		);
 		expect(result.status).toBe("PASS");
@@ -315,53 +315,6 @@ process.stderr.write("OMP_GATE_EVENT " + process.env.OMP_GATE_EVENT_TOKEN + ' {"
 		await fs.rm(directory, { recursive: true, force: true });
 	}
 });
-
-test("first command failure aborts live siblings and never schedules queued work", async () => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-command-first-failure-"));
-	const live = path.join(directory, "live");
-	const completed = path.join(directory, "completed");
-	const queued = path.join(directory, "queued");
-	try {
-		const result = await runGate(
-			"fulltest",
-			gate =>
-				runGateCommands(
-					gate,
-					[
-						{
-							label: "triggering failure",
-							argv: [
-								process.execPath,
-								"-e",
-								`import { watch, existsSync } from "node:fs"; const live = ${JSON.stringify(live)}; const ready = Promise.withResolvers(); const watcher = watch(${JSON.stringify(directory)}, () => { if (existsSync(live)) ready.resolve(); }); try { if (!existsSync(live)) await ready.promise; } finally { watcher.close(); } console.error("original failure"); process.exit(23);`,
-							],
-						},
-						{
-							label: "live sibling",
-							argv: [
-								process.execPath,
-								"-e",
-								`import { watch } from "node:fs"; await Bun.write(${JSON.stringify(live)}, "started"); const watcher = watch(${JSON.stringify(directory)}, () => {}); try { await Promise.withResolvers().promise; } finally { watcher.close(); } await Bun.write(${JSON.stringify(completed)}, "unexpected");`,
-							],
-						},
-						{
-							label: "queued command",
-							argv: [process.execPath, "-e", `await Bun.write(${JSON.stringify(queued)}, "unexpected");`],
-						},
-					],
-					2,
-				),
-			{ limitSeconds: 10, print: () => {} },
-		);
-		expect(result.status).toBe("FAIL");
-		expect(result.exitCode).toBe(23);
-		expect(await Bun.file(live).exists()).toBe(true);
-		expect(await Bun.file(completed).exists()).toBe(false);
-		expect(await Bun.file(queued).exists()).toBe(false);
-	} finally {
-		await fs.rm(directory, { recursive: true, force: true });
-	}
-}, 20000);
 
 test.skipIf(process.platform !== "win32")(
 	"removes denied Windows junctions without deleting their targets",

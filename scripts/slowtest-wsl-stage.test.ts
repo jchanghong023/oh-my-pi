@@ -16,7 +16,7 @@ import {
 	type WslOptions,
 } from "./slowtest-wsl-stage";
 import type { GateCapture, GateCommand, GateRun } from "./test-gate-runtime";
-import { GateCommandError } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 /**

@@ -4,6 +4,9 @@
 # `bazel build //:natives-<target>` is always release-grade.
 
 common --enable_platform_specific_config
+common --watchfs
+common --cache_computed_file_digests=500000
+common:windows --experimental_windows_watchfs
 
 # Hermetic-ish action env: no host env leaks into action keys. Build scripts
 # that need host tools (cmake for opusic-sys' bundled Opus) get an explicit

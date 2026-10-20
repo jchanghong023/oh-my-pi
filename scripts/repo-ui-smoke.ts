@@ -4,10 +4,10 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { $ } from "bun";
+import { $, type Server } from "bun";
 import type { PtySession } from "@oh-my-pi/pi-natives";
 import { RepoService } from "../packages/coding-agent/src/repo/service";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 
 interface Tui {
 	session: PtySession;
@@ -144,7 +144,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 	const agentDir = path.join(configRoot, "profiles", "localci-ui-repo", "agent");
 	const source = path.join(project, "src", "engine.py");
 	let tui: Tui | undefined;
-	let server: { port: number; stop(closeActiveConnections?: boolean): void } | undefined;
+	let server: Server<undefined> | undefined;
 	const issued = new Map<string, ToolCall[]>();
 	const results = new Map<string, Map<string, string>>();
 	const closings = new Set<string>();
@@ -196,7 +196,8 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 				const step = [...messages]
 					.reverse()
 					.filter(
-						message => message && typeof message === "object" && "role" in message && message.role === "user",
+						(message): message is Record<string, unknown> =>
+							message !== null && typeof message === "object" && "role" in message && message.role === "user",
 					)
 					.flatMap(message => {
 						const content = "content" in message ? message.content : undefined;
@@ -256,13 +257,15 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 				});
 			},
 		});
+		const port = server.port;
+		if (port === undefined) throw new Error("Mock model server did not bind a TCP port");
 		await fs.writeFile(
 			path.join(agentDir, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
 					smoke: {
 						api: "anthropic-messages",
-						baseUrl: `http://127.0.0.1:${server.port}`,
+						baseUrl: `http://127.0.0.1:${port}`,
 						apiKey: "smoke-fixture-key",
 						auth: "apiKey",
 						compat: { requiresToolResultId: true },

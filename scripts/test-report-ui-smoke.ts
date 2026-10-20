@@ -3,8 +3,7 @@
 // TUI scenario; this wrapper retains a failed stage if it cannot finish one.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { observeGateUnhandledFailures } from "./test-gate-failure-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer } from "./test-reporting";
 
 observeGateUnhandledFailures();

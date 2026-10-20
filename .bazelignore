@@ -5,3 +5,7 @@ python
 sdk
 infra
 docs
+runs
+.tmp
+.pytest_cache
+.wt

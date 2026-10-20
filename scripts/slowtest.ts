@@ -11,7 +11,8 @@ import {
 	type WslSelection,
 	type WslStageResult,
 } from "./slowtest-wsl-stage";
-import { GateCommandError, runGate, type GateRun } from "./test-gate-runtime";
+import { runGate, type GateRun } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";

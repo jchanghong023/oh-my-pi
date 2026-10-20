@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 
 const incoming = process.argv.slice(2);
 const executable = process.env.OMP_GATE_ORIGINAL_RUSTDOC || "rustdoc";

@@ -4,7 +4,9 @@
 import { existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { GATE_LIMIT_SECONDS, GateCommandError, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
+import { runBazelCommands } from "./test-gate-bazel";
 
 export const gateRepoRoot = path.resolve(import.meta.dir, "..");
 
@@ -32,49 +34,6 @@ export function parseFastcheckArgs(args: readonly string[]): FastcheckOptions | 
 		: null;
 }
 
-/** Bounded parallelism; the first failure cancels queued and live siblings. */
-export async function runGateCommands(
-	gate: GateRun,
-	commands: readonly GateCommand[],
-	// tsgo/clippy lanes are multithreaded; keep this pool narrower than the
-	// per-file test pool so static checks do not thrash each other.
-	concurrency = gatePoolWidth(undefined, 3, 12),
-	// Keep one worker live while a stricter sibling owns the remaining capacity.
-	rampUpAfter?: Promise<unknown>,
-): Promise<void> {
-	const queue = [...commands];
-	const failures: unknown[] = [];
-	await Promise.all(
-		Array.from({ length: Math.min(concurrency, queue.length) }, async (_, worker) => {
-			if (worker > 0 && rampUpAfter) {
-				try {
-					await rampUpAfter;
-				} catch (error) {
-					failures.push(gate.fail(error));
-					return;
-				}
-			}
-			for (;;) {
-				if (gate.signal.aborted) break;
-				const command = queue.shift();
-				if (!command) break;
-				try {
-					// Explicit charged stages (notably runtime selftests) cannot
-					// export simulated compiler intervals into the real gate.
-					if (command.kind === "charged") await gate.charged(() => gate.run(command));
-					else await gate.run(command);
-				} catch (error) {
-					failures.push(gate.fail(error));
-					console.error(`${command.label}: ${error instanceof Error ? error.message : String(error)}`);
-					return;
-				}
-			}
-		}),
-	);
-	gate.signal.throwIfAborted();
-	if (failures.length > 0) throw failures[0];
-}
-
 /** Preserve the fork's existing TS/Rust static primitives; execute no tests. */
 export async function fastcheckCommands(): Promise<GateCommand[]> {
 	const commands: GateCommand[] = [
@@ -83,7 +42,12 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 			label: "static/Rust fmt+clippy",
 			argv: ["bun", "run", "check:rs"],
 			cwd: gateRepoRoot,
-			env: { CI: "1", RUSTUP_AUTO_INSTALL: "0" },
+			env: {
+				CI: "1",
+				RUSTUP_AUTO_INSTALL: "0",
+				CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo"),
+				RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(os.homedir(), ".rustup"),
+			},
 		},
 	];
 	// These no-emit package primitives are independent. Reuse them unchanged
@@ -127,9 +91,16 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 }
 
 export async function runFastcheck(gate: GateRun, concurrency?: number): Promise<void> {
-	console.log("scope=fork-affected; existing TS/Rust static checks; fastcheck runs no tests");
+	const requirements = await gate.charged(() =>
+		Bun.file(path.join(gateRepoRoot, "docs-zh-CN/requirements/fork.md")).text(),
+	);
+	const baseline = requirements.match(/\*\*Upstream commit\*\*：`([0-9a-f]{40})`/)?.[1];
+	if (!baseline) throw new GateCommandError("Fork requirements do not identify the upstream baseline", 1);
+	console.log(`scope=fork-affected baseline=${baseline} selection=user-requested-prior-scope`);
+	console.log("coverage: existing TS/Rust static checks; fastcheck runs no tests");
+	console.log("omitted: all test execution; Python and standalone SDK checks; packaging");
 	const commands = await gate.charged(fastcheckCommands);
-	await runGateCommands(gate, commands, concurrency);
+	await runBazelCommands(gate, commands, { concurrency: concurrency ?? gatePoolWidth(undefined, 3, 12) });
 }
 
 if (import.meta.main) {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
-import { ownGateProcess } from "./test-gate-process";
+import { nativeBazelEnvironment, ownGateProcess } from "./test-gate-process";
 
 // Real subprocess IPC, file barriers and /proc reaping cannot be advanced by
 // this test runner's fake clock. Polls await observed state; timers only bound
@@ -135,6 +135,79 @@ async function emergencyCleanup(child: Bun.Subprocess, prefix: string) {
 		await terminateOwnedSubprocess(child, { detached: true });
 	}
 }
+
+it.each(["linux", "win32"] as const)(
+	"keeps credentials and runtime capabilities out of the native Bazel client environment (%s)",
+	platform => {
+		const secrets = {
+			ANTHROPIC_API_KEY: "fake-provider-key",
+			openai_api_key: "fake-lowercase-key",
+			ApiKey: "fake-mixedcase-key",
+			GITHUB_TOKEN: "fake-github-token",
+			aWs_SeSsIoN_tOkEn: "fake-session-token",
+			AWS_ACCESS_KEY_ID: "fake-access-key",
+			Db_PassWord: "fake-password",
+			SSH_PASSWD: "fake-passwd",
+			CLIENT_SECRET: "fake-client-secret",
+			AZURE_CREDENTIAL: "fake-credential",
+			Authorization: "fake-authorization",
+			NPM_AUTH: "fake-npm-auth",
+			HTTP_COOKIE: "fake-cookie",
+			SSH_PRIVATE_KEY: "fake-private-key",
+			GIT_CONFIG_EXTRAHEADER: "fake-auth-header",
+			DATABASE_CONNECTION_STRING: "fake-connection-string",
+			oMp_GaTe_NaTiVe_BrOkEr: '{"url":"http://127.0.0.1","token":"fake-broker-capability"}',
+			OMP_GATE_NATIVE_DECLARATION: "fake-native-declaration",
+			OMP_GATE_EVENT_FILE: "fake-event-capability",
+			OMP_GATE_EVENT_TOKEN: "fake-event-token",
+			OMP_GATE_CLOCK_TOKEN: "fake-clock-token",
+			OMP_GATE_SUPERVISED_COMMAND: "fake-supervised-command",
+			OMP_GATE_BAZEL_LEASE_FD: "fake-lease",
+			OMP_TEST_REPORT_DIR: "fake-report-directory",
+		};
+		const configuration = {
+			PATH: "stable-tool-path",
+			SystemRoot: "stable-system-root",
+			BAZEL_SH: "stable-bash",
+			CARGO_HOME: "stable-cargo",
+			RUSTUP_HOME: "stable-rustup",
+			HTTPS_PROXY: "http://proxy.invalid:8080",
+			NO_PROXY: "localhost,127.0.0.1",
+			SSL_CERT_FILE: "stable-ca-file",
+			TEMP: "stable-temp",
+			TMPDIR: "stable-tmpdir",
+			RUSTFLAGS: "stable-rust-flags",
+		};
+		const host = {
+			HOME: "stable-host-home",
+			USERPROFILE: "stable-host-profile",
+			XDG_CACHE_HOME: "stable-host-cache",
+			...secrets,
+		};
+		const cacheKeys =
+			platform === "win32"
+				? { hOmE: "isolated-home", UserProfile: "isolated-profile", xdg_cache_home: "isolated-cache" }
+				: { HOME: "isolated-home", USERPROFILE: "isolated-profile", XDG_CACHE_HOME: "isolated-cache" };
+		const env = {
+			...configuration,
+			...secrets,
+			...cacheKeys,
+			[platform === "win32" ? "test_tmpdir" : "TEST_TMPDIR"]: "isolated-test-tmpdir",
+			UNDEFINED_VALUE: undefined,
+		};
+		const original = { ...env };
+		const native = nativeBazelEnvironment(env, host, platform);
+		expect(native).toEqual({
+			...configuration,
+			HOME: host.HOME,
+			USERPROFILE: host.USERPROFILE,
+			XDG_CACHE_HOME: host.XDG_CACHE_HOME,
+		});
+		for (const value of Object.values(secrets)) expect(JSON.stringify(native)).not.toContain(value);
+		expect(env).toEqual(original);
+		expect(nativeBazelEnvironment(native, host, platform)).toEqual(native);
+	},
+);
 
 it.skipIf(process.platform !== "linux")(
 	"does not steal the command exit status when cleanup precedes its exit",

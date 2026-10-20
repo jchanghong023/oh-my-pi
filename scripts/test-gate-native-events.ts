@@ -1,4 +1,4 @@
-import { GateCommandError } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 
 /** Consume only nextest's captured libtest-json-plus stdout, never raw test output. */
 export async function forwardNextestOutput(

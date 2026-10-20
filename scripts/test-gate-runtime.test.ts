@@ -4,10 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { GateCommand, GateLevel, GateRun } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 import {
-	GateCommandError,
 	GateEventParser,
 	GATE_LIMIT_SECONDS,
+	runBazelTask,
 	runGate,
 	withRustCompilerEvents,
 } from "./test-gate-runtime";
@@ -68,7 +69,9 @@ if (plan.nested) {
 }
 if (plan.nestedCapture) {
   // This intentionally exercises module loading in an independently spawned harness.
-  const {GateCommandError,runGate} = await import(plan.runtime);
+  const {runGate} = await import(plan.runtime);
+  // Fixture readiness must precede loading failure-events and its clock dependency.
+  const {GateCommandError} = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href)});
   const controller = new AbortController();
   let captured;
   let captureError;
@@ -102,22 +105,59 @@ if (plan.nestedCapture) {
   process.exit(result.exitCode);
 }
 if (plan.rustCargo) {
-  // Exercise accounting across the independently spawned harness's runtime-selected module boundary.
-  const {withRustCompilerEvents} = await import(plan.runtime);
-  try {
-    const exitCode = await withRustCompilerEvents({...process.env}, async env => {
-      if (plan.rustCargo === "failure") throw new Error("fixture Cargo failure");
-      if (plan.rustCargo === "completed") return 0;
-      const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
-      // Cargo launches build scripts directly: this child intentionally emits no events.
-      const native = Bun.spawn([process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
-      const codes = await Promise.all([compiler.exited,native.exited]);
-      return codes[0] || codes[1];
-    });
-    if (exitCode) process.exit(exitCode);
-  } catch (error) {
-    if (plan.rustCargo !== "failure") throw error;
-    if (error.message !== "fixture Cargo failure") throw error;
+  const handshake = plan.rustCargoHandshake;
+  if (handshake && !plan.prepareRustCargo) {
+    // Forward this consumer's real relay identity, never the outer test's token.
+    await fs.writeFile(handshake.request + ".tmp", JSON.stringify({
+      OMP_GATE_EVENT_TOKEN:process.env.OMP_GATE_EVENT_TOKEN,
+      OMP_GATE_EVENT_FILE:process.env.OMP_GATE_EVENT_FILE,
+      OMP_GATE_CLOCK_TOKEN:process.env.OMP_GATE_CLOCK_TOKEN,
+    }));
+    await fs.rename(handshake.request + ".tmp", handshake.request);
+    // Poll real cross-process file readiness; fake timers cannot advance the worker.
+    for (;;) {
+      try { await fs.access(handshake.released); break; } catch (error) { if(error.code !== "ENOENT") throw error; }
+      await Bun.sleep(5);
+    }
+  } else {
+    // Load at this isolated module boundary; consumer stubs must not import the runtime.
+    const {withRustCompilerEvents} = await import(plan.runtime);
+    let cargoEnv = {...process.env};
+    if (plan.prepareRustCargo) {
+      await withRustCompilerEvents({
+        ...cargoEnv,
+        OMP_GATE_EVENT_TOKEN:"rust-cargo-preparation",
+        OMP_GATE_CLOCK_TOKEN:"rust-cargo-preparation",
+        OMP_GATE_EVENT_FILE:handshake.events,
+      }, async () => 0);
+      await fs.writeFile(handshake.ready, "prepared");
+      // The consumer is an independent process, so readiness uses its real file handshake.
+      for (;;) {
+        try { await fs.access(handshake.stop); process.exit(0); } catch (error) { if(error.code !== "ENOENT") throw error; }
+        try {
+          cargoEnv = {...cargoEnv, ...JSON.parse(await fs.readFile(handshake.request, "utf8"))};
+          break;
+        } catch (error) { if(error.code !== "ENOENT") throw error; }
+        await Bun.sleep(5);
+      }
+    }
+    try {
+      const exitCode = await withRustCompilerEvents(cargoEnv, async env => {
+        if (plan.rustCargo === "failure") throw new Error("fixture Cargo failure");
+        if (plan.rustCargo === "completed") return 0;
+        const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
+        // Cargo launches build scripts directly: this child intentionally emits no events.
+        const native = Bun.spawn([process.execPath, import.meta.path, JSON.stringify({ms:900})], {env,stdout:"inherit",stderr:"inherit"});
+        const codes = await Promise.all([compiler.exited,native.exited]);
+        return codes[0] || codes[1];
+      });
+      if (exitCode) process.exit(exitCode);
+    } catch (error) {
+      if (plan.rustCargo !== "failure") throw error;
+      if (error.message !== "fixture Cargo failure") throw error;
+    }
+    // withRustCompilerEvents has run its real finally before compilation can start.
+    if (plan.prepareRustCargo) await fs.writeFile(handshake.released, "released");
   }
   if (plan.afterRustCompile) {
     const compiler = Bun.spawn([process.execPath, plan.dispatcher, "--doctest-compile", process.execPath, import.meta.path, JSON.stringify({ms:plan.afterRustCompile})], {stdout:"inherit",stderr:"inherit"});
@@ -166,13 +206,15 @@ if (plan.barrierReady) {
   }
 }
 if (plan.reportFailure) {
-  // The parent supplies the runtime module URL across this isolated subprocess boundary.
-  const {GateCommandError,reportGateFailure} = await import(plan.runtime);
+  // Load this module only after the fixture's process-readiness/clock handshake.
+  const {GateCommandError,reportGateFailure} = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href)});
   reportGateFailure(new GateCommandError("fixture nested check failed",plan.reportFailure));
 }
 if (plan.nestedFailure) {
   // Exercise a real nested entrypoint's explicit propagation across module/process boundaries.
-  const {GateCommandError,runGate} = await import(plan.runtime);
+  const {runGate} = await import(plan.runtime);
+  // Fixture readiness must precede loading failure-events and its clock dependency.
+  const {GateCommandError} = await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href)});
   const result = await runGate("fulltest",async gate => {
     gate.fail(new GateCommandError("fixture real nested gate failure",43));
     await gate.charged(() => Promise.withResolvers().promise);
@@ -252,6 +294,103 @@ async function waitForFiles(files: string[], signal: AbortSignal): Promise<void>
 	throw signal.reason;
 }
 
+it("settles an unbounded standalone lifecycle with finalizers under strict process ownership", async () => {
+	const source = `
+import {runBazelTask} from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href)};
+let finalized = false;
+const result = await runBazelTask(async gate => {
+  gate.onFinalize(async exitCode => { finalized = exitCode === 0; });
+  await gate.run({label:"standalone fixture",argv:[process.execPath,"-e","void 0;"]});
+}, {exitOnFailure:true,print:()=>{}});
+process.stdout.write(JSON.stringify({level:result.level,status:result.status,unbounded:result.limitSeconds === Infinity,finalized}));
+`;
+	const child = Bun.spawn([process.execPath, "--eval", source], { stdout: "pipe", stderr: "pipe" });
+	const [exitCode, stdout, stderr] = await Promise.all([
+		child.exited,
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+	]);
+	expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+	expect(JSON.parse(stdout)).toEqual({ level: "bazel", status: "PASS", unbounded: true, finalized: true });
+});
+
+it("preserves standalone first failure and finishes owned process cleanup before finalization", async () => {
+	const pidFile = path.join(directory, "standalone-failure.pid");
+	let finalizedExitCode: number | undefined;
+	let cleanedAtFinalization = false;
+	const result = await runBazelTask(
+		async gate => {
+			gate.onFinalize(async exitCode => {
+				finalizedExitCode = exitCode;
+				const pid = Number(await fs.readFile(pidFile, "utf8"));
+				try {
+					process.kill(pid, 0);
+				} catch {
+					cleanedAtFinalization = true;
+				}
+			});
+			await Promise.all([
+				gate.run(command({ ms: 30000, pidFile })),
+				gate.charged(async () => {
+					await waitForFiles([pidFile], gate.signal);
+					throw gate.fail(new GateCommandError("standalone first failure", 23));
+				}),
+			]);
+		},
+		{ print: quiet },
+	);
+	expect(result.level).toBe("bazel");
+	expect(result.limitSeconds).toBe(Infinity);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(23);
+	expect(finalizedExitCode).toBe(23);
+	expect(cleanedAtFinalization).toBe(true);
+});
+
+it("keeps a finite child tier deadline within an unbounded standalone lifecycle", async () => {
+	const result = await runBazelTask(
+		async gate => {
+			// The real lifecycle clock must expire while work waits for its cancellation signal.
+			await gate.childGate(
+				"fulltest",
+				async child =>
+					new Promise<void>(resolve => {
+						child.signal.addEventListener("abort", () => resolve(), { once: true });
+					}),
+				{
+					limitSeconds: 0.3,
+					cleanupReserveMs: 0,
+					print: quiet,
+				},
+			);
+		},
+		{ print: quiet },
+	);
+	expect(result.level).toBe("bazel");
+	expect(result.limitSeconds).toBe(Infinity);
+	expect(result.status).toBe("TIMEOUT");
+	expect(result.exitCode).toBe(124);
+});
+
+it.each(["fastcheck", "fulltest", "slowtest"] as const)(
+	"does not allow %s to adopt the standalone unbounded limit",
+	async level => {
+		let started = false;
+		const result = await runGate(
+			level,
+			async () => {
+				started = true;
+			},
+			{ limitSeconds: Infinity, print: quiet },
+		);
+		expect(started).toBe(false);
+		expect(result.level).toBe(level);
+		expect(result.limitSeconds).toBe(GATE_LIMIT_SECONDS[level]);
+		expect(result.status).toBe("FAIL");
+		expect(result.exitCode).toBe(1);
+	},
+);
+
 it.each(["libc.so.6", "libc.so"])("resolves %s for both the gate clock and native watchdog exit", async soname => {
 	const source = `
 import { mock } from "bun:test";
@@ -312,6 +451,7 @@ async function windowsLauncherFixture() {
 		"runtime.ts",
 		"watchdog.ts",
 		"events.ts",
+		"failure-events.ts",
 		"clock.ts",
 		"libc.ts",
 		"process.ts",
@@ -383,7 +523,8 @@ fn main() {
 		`
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {GateCommandError,runGate,withRustCompilerEvents} from "./test-gate-runtime";
+import {runGate,withRustCompilerEvents} from "./test-gate-runtime";
+import {GateCommandError} from "./test-gate-failure-events";
 const result = await runGate("fulltest", async gate => {
   await gate.charged(() => withRustCompilerEvents({...process.env}, async env => {
     const child = Bun.spawn([env.OMP_GATE_DOCTEST_RUNNER, process.env.RUSTC, "--consumer", process.env.LAUNCHER_FIXTURE_ID], {env,stdout:"inherit",stderr:"inherit"});
@@ -1045,6 +1186,46 @@ it("never invokes queued child work after its parent has observed a failure", as
 	expect(started).toBe(false);
 });
 
+it("isolates overlapping public GateRun consumers when one task is cancelled", async () => {
+	const cancelledReady = path.join(directory, "isolated-cancelled.ready");
+	const survivorReady = path.join(directory, "isolated-survivor.ready");
+	const release = path.join(directory, "isolated-survivor.release");
+	const controller = new AbortController();
+	const cancelled = runGate(
+		"fulltest",
+		async gate => {
+			await gate.run(command({ barrierReady: cancelledReady, barrierRelease: release, ms: 30000 }));
+		},
+		{ signal: controller.signal, print: quiet },
+	);
+	const survivor = runGate(
+		"fulltest",
+		async gate => {
+			const captured = await gate.capture(
+				command({ barrierReady: survivorReady, barrierRelease: release, output: "survivor bytes" }),
+			);
+			expect(captured.stdout).toBe("survivor bytes");
+			expect(gate.signal.aborted).toBe(false);
+		},
+		{ print: quiet },
+	);
+	try {
+		await waitForFiles([cancelledReady, survivorReady], AbortSignal.timeout(30_000));
+		const cancelledPid = Number(await fs.readFile(cancelledReady, "utf8"));
+		const survivorPid = Number(await fs.readFile(survivorReady, "utf8"));
+		controller.abort();
+		expect((await cancelled).status).toBe("INTERRUPTED");
+		expect(() => process.kill(cancelledPid, 0)).toThrow();
+		expect(() => process.kill(survivorPid, 0)).not.toThrow();
+		await fs.writeFile(release, "released");
+		expect((await survivor).status).toBe("PASS");
+	} finally {
+		controller.abort();
+		await fs.writeFile(release, "released");
+		await Promise.all([cancelled, survivor]);
+	}
+});
+
 it("stops a live command on stream-decoding failure instead of waiting for its charged timeout", async () => {
 	const pidFile = path.join(directory, "decoder-failure.pid");
 	const output: string[] = [];
@@ -1461,25 +1642,67 @@ it("charges unwrapped Cargo build-script work overlapping observed compiler even
 it.each(["completed", "failure"])(
 	"releases mixed Cargo accounting after %s before later pure compilation",
 	async rustCargo => {
-		// Include native-launcher preparation in charged time. The compiler
-		// stub still exceeds the injected budget, so PASS proves exclusion.
-		const result = await runGate(
-			"fastcheck",
-			async gate => {
-				await gate.run(
-					command({
-						rustCargo,
-						afterRustCompile: 3_000,
-						runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
-						dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
-					}),
-				);
+		const root = await fs.mkdtemp(path.join(directory, `cargo-release-${rustCargo}-`));
+		const rustCargoHandshake = {
+			ready: path.join(root, "ready"),
+			request: path.join(root, "request.json"),
+			released: path.join(root, "released"),
+			stop: path.join(root, "stop"),
+			events: path.join(root, "preparation.jsonl"),
+		};
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const prepared = Bun.spawn(
+			[...command({ rustCargo, runtime, rustCargoHandshake, prepareRustCargo: true }).argv],
+			{
+				env: {
+					...process.env,
+					OMP_GATE_EVENT_TOKEN: "",
+					OMP_GATE_EVENT_FILE: "",
+					OMP_GATE_CLOCK_TOKEN: "",
+				},
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
 			},
-			{ limitSeconds: 2, print: quiet },
 		);
-		expect(result.status).toBe("PASS");
-		expect(result.totalSeconds).toBeGreaterThan(result.limitSeconds);
-		expect(result.compileExcludedSeconds).toBeGreaterThan(result.limitSeconds);
+		const output = Promise.all([
+			prepared.exited,
+			new Response(prepared.stdout).text(),
+			new Response(prepared.stderr).text(),
+		]);
+		const controller = new AbortController();
+		try {
+			// Preparation remains inside fulltest's real wall clock, outside only
+			// this injected accounting budget. The consumer handshake stays charged.
+			await Promise.race([
+				waitForFiles([rustCargoHandshake.ready], controller.signal),
+				output.then(([code, stdout, stderr]) => {
+					throw new Error(`Cargo preparation exited before readiness: ${code}\n${stdout}\n${stderr}`);
+				}),
+			]);
+			const result = await runGate(
+				"fastcheck",
+				async gate => {
+					await gate.run(
+						command({
+							rustCargo,
+							rustCargoHandshake,
+							afterRustCompile: 3_000,
+							dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
+						}),
+					);
+				},
+				{ limitSeconds: 2, print: quiet },
+			);
+			expect(result.status).toBe("PASS");
+			expect(result.totalSeconds).toBeGreaterThan(result.limitSeconds);
+			expect(result.compileExcludedSeconds).toBeGreaterThan(result.limitSeconds);
+		} finally {
+			controller.abort(new Error("Cargo fixture settled"));
+			await fs.writeFile(rustCargoHandshake.stop, "released");
+			const [code, stdout, stderr] = await output;
+			if (code !== 0) throw new Error(`Prepared Cargo callback failed: ${code}\n${stdout}\n${stderr}`);
+		}
 	},
 );
 it("parses split token events conservatively and excludes their union", () => {
@@ -2353,6 +2576,46 @@ exitGateProcess(result.exitCode);`;
 	10_000,
 );
 
+it.each(["fastcheck", "fulltest", "slowtest"] satisfies GateLevel[])(
+	"summarizes %s interrupts during watchdog startup before invoking gate work",
+	async level => {
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const script = `import {runGate} from ${JSON.stringify(runtime)};
+const pending = runGate(${JSON.stringify(level)}, async () => {
+  process.stdout.write("UNEXPECTED_WORK_STARTED");
+  await Promise.withResolvers().promise;
+}, {limitSeconds:0.4,exitOnFailure:true});
+// runGate has started the worker but cannot have received its ready message
+// in this same JavaScript turn. Keep the interrupt inside an isolated process.
+process.emit("SIGINT");
+await pending;
+process.exit(99);`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: 3000,
+			env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
+		});
+		try {
+			const [code, stdout] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(code).toBe(130);
+			expect(stdout).not.toContain("UNEXPECTED_WORK_STARTED");
+			expect(stdout).toMatch(
+				new RegExp(
+					`${level}: INTERRUPTED total=\\d+\\.\\ds compile_excluded=\\d+\\.\\ds budgeted=\\d+\\.\\ds limit=0\\.4s exit=130`,
+				),
+			);
+		} finally {
+			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	},
+	5000,
+);
+
 // The native watchdog runs on another thread against the OS clock; fake timers
 // cannot terminate an independently spawned, synchronously blocked scheduler.
 it.each([
@@ -2390,7 +2653,8 @@ it.each([
 	"$name",
 	async ({ work, exitCode, status }) => {
 		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
-		const script = `import {runGate,GateCommandError} from ${JSON.stringify(runtime)};
+		const script = `import {runGate} from ${JSON.stringify(runtime)};
+import {GateCommandError} from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href)};
 await runGate("fulltest", async gate => { ${work} }, {limitSeconds:0.4,exitOnFailure:true});
 process.exit(99);`;
 		const child = Bun.spawn([process.execPath, "-e", script], {

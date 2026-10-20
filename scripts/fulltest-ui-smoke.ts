@@ -28,8 +28,7 @@ import {
 	type DaemonWireRequest,
 } from "../packages/coding-agent/src/launch/protocol";
 import { runRepoSmoke } from "./repo-ui-smoke";
-import { observeGateUnhandledFailures } from "./test-gate-failure-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
 const repoRoot = path.resolve(import.meta.dir, "..");

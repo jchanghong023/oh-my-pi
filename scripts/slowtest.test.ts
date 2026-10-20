@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseSlowtestArgs, runSlowtest, type SlowtestDependencies } from "./slowtest";
 import type { WslSelection, WslStageResult } from "./slowtest-wsl-stage";
-import { GateCommandError, runGate } from "./test-gate-runtime";
+import { runGate } from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
 
 let temporary: string;
 let stub: string;

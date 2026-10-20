@@ -1,7 +1,7 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { appendFileSync, writeSync } from "node:fs";
+import { writeSync } from "node:fs";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
@@ -11,6 +11,7 @@ import { ownGateProcess } from "./test-gate-process";
 import type { GateEventRelay } from "./test-gate-events";
 import { createGateEventRelay, emitEvent, GATE_EVENT_PREFIX, withCompilerActivity } from "./test-gate-events";
 import { gateClockNanoseconds } from "./test-gate-clock";
+import { GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
 import {
 	exitGateProcess,
 	spawnGateAbortCommand,
@@ -22,6 +23,7 @@ import {
 export type GateLevel = "fastcheck" | "fulltest" | "slowtest";
 export type GateStatus = "PASS" | "FAIL" | "TIMEOUT" | "INTERRUPTED" | "MISSING_TOOL";
 export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = { fastcheck: 90, fulltest: 900, slowtest: 1500 };
+type RunLabel = GateLevel | "bazel";
 type Activity = "charged" | "compile";
 export interface GateActivityEvent {
 	id: string;
@@ -45,9 +47,15 @@ export interface GateCommand {
 	allowFailure?: boolean;
 	/** Independent wall guard for read-only discovery only, never a compiler/check stage. */
 	wallTimeoutSeconds?: number;
+	/** Restricted to the native Bazel driver; preserves its server on every outcome. */
+	persistentBazel?: { outputBase: string };
+	/** External state cannot be represented reliably in Bazel's test inputs. */
+	resultReuse?: "disabled";
+	/** Real producer outputs declared and retained by the native Bazel action. */
+	artifactFiles?: readonly string[];
 }
 export interface GateResult {
-	level: GateLevel;
+	level: RunLabel;
 	status: GateStatus;
 	exitCode: number;
 	totalSeconds: number;
@@ -62,7 +70,7 @@ export interface GateOptions {
 	cleanupReserveMs?: number;
 	/** Real gate entrypoints relay failures to a supervising gate; expected-failure selftests leave this off. */
 	reportFailure?: boolean;
-	/** Real fulltest/slowtest CLIs stop immediately and enforce a total wall-clock deadline. */
+	/** Public CLIs stop immediately on failure; finite scopes also enforce a total wall-clock deadline. */
 	exitOnFailure?: boolean;
 }
 export interface GateCapture {
@@ -70,22 +78,8 @@ export interface GateCapture {
 	stdout: string;
 	stderr: string;
 }
-export class GateCommandError extends Error {
-	constructor(
-		message: string,
-		readonly exitCode: number,
-		readonly status: GateStatus = "FAIL",
-	) {
-		super(message);
-	}
-}
-function gateFailure(error: unknown): GateCommandError {
-	return error instanceof GateCommandError
-		? error
-		: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
-}
 interface Scope {
-	level: GateLevel;
+	level: RunLabel;
 	parent?: Scope;
 	started: number;
 	last: number;
@@ -106,6 +100,7 @@ interface Scope {
 	exitOnFailure: boolean;
 	watchdog?: GateWatchdog;
 	runId: string;
+	startedNs: bigint;
 	operationId: string;
 	gateId: string;
 }
@@ -115,6 +110,7 @@ interface Owned {
 	scope: Scope;
 	owner?: GateProcessOwner;
 	ownership?: Promise<GateProcessOwner>;
+	persistentBazel?: { outputBase: string };
 	onAbort?: () => Promise<void>;
 	abortCommand?: GateAbortCommand;
 	relay?: GateEventRelay;
@@ -150,7 +146,8 @@ function logGateResult(result: GateResult, fields: Record<string, unknown> = {})
 		limit_ms: result.limitSeconds * 1000,
 		platform: process.platform,
 		arch: process.arch,
-		scope: "fork-affected",
+		scope: result.level === "bazel" ? "standalone" : "fork-affected",
+		name: result.level,
 		...fields,
 	});
 }
@@ -224,21 +221,6 @@ function reconcile(scope: Scope, now = performance.now()): void {
 		scope.timelineAt = at;
 	}
 	accrue(scope, now);
-}
-/** Relay the first concrete nested check/compiler failure before waiting for its other work. */
-export function reportGateFailure(error: unknown): void {
-	const token = process.env.OMP_GATE_EVENT_TOKEN;
-	if (!token) return;
-	const failure = gateFailure(error);
-	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({
-		id: randomUUID(),
-		kind: "failure",
-		exitCode: failure.exitCode,
-		status: failure.status,
-		message: failure.message,
-	})}\n`;
-	if (process.env.OMP_GATE_EVENT_FILE) appendFileSync(process.env.OMP_GATE_EVENT_FILE, line);
-	else process.stderr.write(line);
 }
 
 let reportedRustAccountingLimitation = false;
@@ -432,28 +414,31 @@ export async function withRustCompilerEvents<T>(
 		launchDirectory = rustLauncherDirectory;
 		await fs.mkdir(launchDirectory, { recursive: true });
 		await Promise.all(
-			["test-gate-rustc", "test-gate-rustdoc", "test-gate-doctest-compile", "test-gate-doctest-run"].map(
-				async name => {
-					const destination = path.join(launchDirectory, `${name}${extension}`);
-					const content = await fs.readFile(path.join(import.meta.dir, `${name}${extension}`));
-					let current: Buffer | undefined;
+			[
+				{ name: "test-gate-rustc", source: new URL("./test-gate-rustc.sh", import.meta.url) },
+				{ name: "test-gate-rustdoc", source: new URL("./test-gate-rustdoc.sh", import.meta.url) },
+				{ name: "test-gate-doctest-compile", source: new URL("./test-gate-doctest-compile.sh", import.meta.url) },
+				{ name: "test-gate-doctest-run", source: new URL("./test-gate-doctest-run.sh", import.meta.url) },
+			].map(async ({ name, source }) => {
+				const destination = path.join(launchDirectory, `${name}${extension}`);
+				const content = await fs.readFile(source);
+				let current: Buffer | undefined;
+				try {
+					current = await fs.readFile(destination);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				if (!current?.equals(content)) {
+					const temporary = `${destination}.${randomUUID()}.tmp`;
 					try {
-						current = await fs.readFile(destination);
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+						await fs.writeFile(temporary, content, { mode: 0o755 });
+						await fs.rename(temporary, destination);
+					} finally {
+						await fs.rm(temporary, { force: true });
 					}
-					if (!current?.equals(content)) {
-						const temporary = `${destination}.${randomUUID()}.tmp`;
-						try {
-							await fs.writeFile(temporary, content, { mode: 0o755 });
-							await fs.rename(temporary, destination);
-						} finally {
-							await fs.rm(temporary, { force: true });
-						}
-					}
-					await fs.chmod(destination, 0o755);
-				},
-			),
+				}
+				await fs.chmod(destination, 0o755);
+			}),
 		);
 	}
 	const wrapper = path.join(launchDirectory, `test-gate-rustc${extension}`);
@@ -578,9 +563,10 @@ class Runtime {
 		diagnosticId(logger.getLogContext().operation_id) ??
 		diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_OPERATION_ID) ??
 		this.runId;
-	create(level: GateLevel, options: GateOptions, parent?: Scope, started = performance.now()): Scope {
-		const requested = options.limitSeconds ?? GATE_LIMIT_SECONDS[level];
-		if (!Number.isFinite(requested) || requested <= 0)
+	create(level: RunLabel, options: GateOptions, parent?: Scope, started = performance.now()): Scope {
+		const maximum = level === "bazel" ? Infinity : GATE_LIMIT_SECONDS[level];
+		const requested = options.limitSeconds ?? maximum;
+		if ((requested !== Infinity || level !== "bazel") && (!Number.isFinite(requested) || requested <= 0))
 			throw new GateCommandError("Gate limit must be positive and finite", 1);
 		if (
 			options.cleanupReserveMs !== undefined &&
@@ -588,7 +574,7 @@ class Runtime {
 		) {
 			throw new GateCommandError("Cleanup reserve must be finite and nonnegative", 1);
 		}
-		const limit = Math.min(requested, GATE_LIMIT_SECONDS[level]) * 1000;
+		const limit = Math.min(requested, maximum) * 1000;
 		const strict = options.exitOnFailure || (parent && ancestors(parent).at(-1)?.exitOnFailure);
 		const reserve =
 			strict && level !== "fastcheck"
@@ -615,6 +601,7 @@ class Runtime {
 			reportFailure: options.reportFailure ?? false,
 			exitOnFailure: options.exitOnFailure ?? false,
 			runId: this.runId,
+			startedNs: gateClockNanoseconds(),
 			operationId: this.operationId,
 			gateId: randomUUID(),
 		};
@@ -702,7 +689,8 @@ class Runtime {
 	}
 	#exitFailedGate(scope: Scope, error: GateCommandError): never {
 		scope.failure = error;
-		// Supervisors continue killing/reaping their own children after IPC disconnect.
+		// Supervisors keep cancelling native invocations or killing/reaping
+		// ordinary owned children after IPC disconnect, never the shared JVM.
 		// Never wait for cleanup, streams, report writes or user exit hooks here.
 		for (const owned of this.owned) {
 			if (!ancestors(owned.scope).includes(scope)) continue;
@@ -727,7 +715,7 @@ class Runtime {
 				accrue(current);
 				writeSync(
 					1,
-					`${current.level}: ${error.message}\n${current.level}: ${error.status} total=${((current.last - current.started) / 1000).toFixed(1)}s compile_excluded=${(current.compile / 1000).toFixed(1)}s budgeted=${(current.charged / 1000).toFixed(1)}s limit=${(current.limit / 1000).toFixed(1)}s exit=${error.exitCode || 1}\n`,
+					`${current.level}: ${error.message}\n${current.level}: ${error.status}${current.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${((current.last - current.started) / 1000).toFixed(1)}s compile_excluded=${(current.compile / 1000).toFixed(1)}s budgeted=${(current.charged / 1000).toFixed(1)}s limit=${(current.limit / 1000).toFixed(1)}s exit=${error.exitCode || 1}\n`,
 				);
 			}
 		} finally {
@@ -753,7 +741,8 @@ class Runtime {
 				aborted ? Promise.resolve().then(() => owned.onAbort?.()) : Promise.resolve(),
 				(async () => {
 					try {
-						if (owner) await owner.terminate();
+						if (owner && !aborted && owned.persistentBazel) await owner.release();
+						else if (owner) await owner.terminate();
 						else await terminateOwnedSubprocess(owned.child, { detached: owned.detached });
 					} finally {
 						owner?.close();
@@ -805,14 +794,15 @@ class Runtime {
 			platform: process.platform,
 			arch: process.arch,
 			limit_ms: scope.limit,
-			scope: "fork-affected",
+			scope: scope.level === "bazel" ? "standalone" : "fork-affected",
+			name: scope.level,
 		});
 		const print = options.print ?? console.log;
-		if (scope.exitOnFailure) {
+		const root = ancestors(scope).at(-1)!;
+		if (Number.isFinite(scope.limit) && (scope.exitOnFailure || (root.level === "bazel" && root.exitOnFailure))) {
 			scope.watchdog = startGateWatchdog(scope.level, scope.limit, performance.now() - scope.started, error =>
 				this.cancel(scope, gateFailure(error)),
 			);
-			await scope.watchdog.ready;
 		}
 		const interrupt = () => this.cancel(scope, new GateCommandError("Gate interrupted", 130, "INTERRUPTED"));
 		const fatal = (error: unknown) => this.cancel(scope, gateFailure(error));
@@ -833,6 +823,9 @@ class Runtime {
 		}
 		options.signal?.addEventListener("abort", external, { once: true });
 		if (options.signal?.aborted) external();
+		// Signals and background failures must be owned while the watchdog starts,
+		// not only after its worker has acknowledged readiness.
+		if (scope.watchdog) await scope.watchdog.ready;
 		accrue(scope);
 		if (!scope.failure && scope.charged >= scope.limit - scope.reserve)
 			this.cancel(scope, new GateCommandError(`${scope.level} charged budget exhausted`, 124, "TIMEOUT"));
@@ -996,7 +989,7 @@ class Runtime {
 		}
 		if (scope.failure) print(`${scope.level}: ${scope.failure.message}`);
 		print(
-			`${scope.level}: ${result.status} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,
+			`${scope.level}: ${result.status}${scope.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,
 		);
 		scope.watchdog?.stop();
 		return result;
@@ -1007,6 +1000,12 @@ export class GateRun {
 		private readonly runtime: Runtime,
 		private readonly scope: Scope,
 	) {}
+	get runId(): string {
+		return this.scope.runId;
+	}
+	get startedNs(): bigint {
+		return this.scope.startedNs;
+	}
 	get signal(): AbortSignal {
 		return this.scope.controller.signal;
 	}
@@ -1139,9 +1138,27 @@ export class GateRun {
 		const fileParser = new GateEventParser(token, event, token, failed);
 		try {
 			this.throwIfAborted();
+			if (
+				command.persistentBazel &&
+				(command.argv[0] !== process.execPath ||
+					command.argv[1] !== path.join(import.meta.dir, "test-gate-bazel-runner.ts") ||
+					command.argv[2] !== "bazel" ||
+					!path.isAbsolute(command.persistentBazel.outputBase))
+			)
+				throw new GateCommandError("Persistent ownership is restricted to the native Bazel runner", 1);
+			const leaseFd =
+				command.persistentBazel && process.platform !== "win32"
+					? Number(command.env?.OMP_GATE_BAZEL_LEASE_FD)
+					: undefined;
+			if (leaseFd !== undefined && (!Number.isInteger(leaseFd) || leaseFd < 3))
+				throw new GateCommandError("Persistent Bazel requires its native declaration lease", 1);
 			relay = await createGateEventRelay(text => fileParser.push(text));
 			this.throwIfAborted();
-			const detached = process.platform !== "win32";
+			// Bun's Windows non-detached subprocess Job dies with this CLI.
+			// The persistent supervisor must outlive IPC loss long enough to
+			// cancel its native clients and release the declaration lease.
+			// Ordinary payload supervisors remain in their kill-on-close Jobs.
+			const detached = process.platform !== "win32" || command.persistentBazel !== undefined;
 			let child: Bun.Subprocess;
 			const ready = Promise.withResolvers<void>();
 			const outcome = Promise.withResolvers<{ exitCode: number; error?: string; missing?: boolean }>();
@@ -1165,6 +1182,8 @@ export class GateRun {
 						OMP_GATE_CLOCK_TOKEN: token,
 						OMP_GATE_EVENT_FILE: relay.path,
 						OMP_GATE_SUPERVISED_COMMAND: JSON.stringify(command.argv),
+						OMP_GATE_PERSISTENT_BAZEL: command.persistentBazel?.outputBase,
+						OMP_GATE_BAZEL_LEASE_FD: leaseFd === undefined ? undefined : "3",
 					},
 					stdin:
 						command.stdin === undefined
@@ -1174,6 +1193,9 @@ export class GateRun {
 								: command.stdin,
 					stdout: "pipe",
 					stderr: "pipe",
+					...(leaseFd === undefined
+						? {}
+						: { stdio: ["inherit", "pipe", "pipe", leaseFd] as ["inherit", "pipe", "pipe", number] }),
 					detached,
 					windowsHide: true,
 					ipc(message: unknown) {
@@ -1271,13 +1293,14 @@ export class GateRun {
 				scope: this.scope,
 				onAbort: command.onAbort,
 				abortCommand: command.abortCommand,
+				persistentBazel: command.persistentBazel,
 				relay,
 				callId,
 				stage,
 			};
 			// Publish the ownership promise before any await or cancellation can
 			// start cleanup, including a disconnect during owner initialization.
-			owned.ownership = ownGateProcess(child, detached);
+			owned.ownership = ownGateProcess(child, detached, command.persistentBazel !== undefined);
 			this.runtime.owned.add(owned);
 			if (command.abortCommand)
 				await ancestors(this.scope).at(-1)?.watchdog?.ownAbortCommand(callId, command.abortCommand);
@@ -1428,7 +1451,17 @@ export class GateRun {
 		}
 	}
 }
+/** Run a finite, capped fork-affected tier; standalone tasks cannot relax this contract. */
 export async function runGate(level: GateLevel, work: Work, options: GateOptions = {}): Promise<GateResult> {
+	return runLifecycle(level, work, options);
+}
+
+/** Preserve command lifecycle and cancellation without inventing a standalone tier deadline. */
+export async function runBazelTask(work: Work, options: GateOptions = {}): Promise<GateResult> {
+	return runLifecycle("bazel", work, options);
+}
+
+async function runLifecycle(level: RunLabel, work: Work, options: GateOptions): Promise<GateResult> {
 	const started = performance.now();
 	const runtime = new Runtime();
 	return logger.withLogContext(
@@ -1446,7 +1479,8 @@ export async function runGate(level: GateLevel, work: Work, options: GateOptions
 				gate_level: level,
 				platform: process.platform,
 				arch: process.arch,
-				scope: "fork-affected",
+				scope: level === "bazel" ? "standalone" : "fork-affected",
+				name: level,
 			});
 			try {
 				return await runtime.execute(runtime.create(level, options, undefined, started), work, options);
@@ -1459,11 +1493,11 @@ export async function runGate(level: GateLevel, work: Work, options: GateOptions
 					totalSeconds: elapsed,
 					compileExcludedSeconds: 0,
 					budgetedSeconds: elapsed,
-					limitSeconds: GATE_LIMIT_SECONDS[level],
+					limitSeconds: level === "bazel" ? Infinity : GATE_LIMIT_SECONDS[level],
 				};
 				logGateResult(result, { ...logger.diagnosticError(error) });
 				(options.print ?? console.log)(
-					`${level}: ${result.status} total=${elapsed.toFixed(1)}s compile_excluded=0.0s budgeted=${elapsed.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode} ${String(error)}`,
+					`${level}: ${result.status}${level === "bazel" ? " scope=standalone name=bazel" : ""} total=${elapsed.toFixed(1)}s compile_excluded=0.0s budgeted=${elapsed.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode} ${String(error)}`,
 				);
 				if (options.exitOnFailure) exitGateProcess(result.exitCode || 1);
 				return result;

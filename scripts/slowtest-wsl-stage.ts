@@ -6,13 +6,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import {
-	GATE_LIMIT_SECONDS,
-	GateCommandError,
-	type GateCapture,
-	type GateCommand,
-	type GateRun,
-} from "./test-gate-runtime";
+import { GateCommandError } from "./test-gate-failure-events";
+import { GATE_LIMIT_SECONDS, type GateCapture, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");

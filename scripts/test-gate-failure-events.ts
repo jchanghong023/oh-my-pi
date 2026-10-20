@@ -1,5 +1,39 @@
-import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { hasExpectedCleanupMarker } from "@oh-my-pi/pi-utils/expected-cleanup";
+import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
+import { GATE_EVENT_PREFIX } from "./test-gate-events";
+import type { GateStatus } from "./test-gate-runtime";
+
+export class GateCommandError extends Error {
+	constructor(
+		message: string,
+		readonly exitCode: number,
+		readonly status: GateStatus = "FAIL",
+	) {
+		super(message);
+	}
+}
+export function gateFailure(error: unknown): GateCommandError {
+	return error instanceof GateCommandError
+		? error
+		: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
+}
+
+/** Relay the first concrete nested check/compiler failure before waiting for its other work. */
+export function reportGateFailure(error: unknown): void {
+	const token = process.env.OMP_GATE_EVENT_TOKEN;
+	if (!token) return;
+	const failure = gateFailure(error);
+	const line = `${GATE_EVENT_PREFIX}${token} ${JSON.stringify({
+		id: randomUUID(),
+		kind: "failure",
+		exitCode: failure.exitCode,
+		status: failure.status,
+		message: failure.message,
+	})}\n`;
+	if (process.env.OMP_GATE_EVENT_FILE) appendFileSync(process.env.OMP_GATE_EVENT_FILE, line);
+	else process.stderr.write(line);
+}
 
 /** Observe Bun's per-case failure marker, not diagnostic text or suite totals. */
 export class BunTestFailureObserver {
@@ -46,7 +80,7 @@ export class BunTestFailureObserver {
 /** Notify before existing fatal handlers report or clean up; leave their exit policy intact. */
 export function observeGateUnhandledFailures(): void {
 	const report = (error: unknown): void => {
-		if (postmortem.isExpectedCleanupError(error)) return;
+		if (hasExpectedCleanupMarker(error)) return;
 		reportGateFailure(new GateCommandError(error instanceof Error ? error.message : String(error), 1));
 	};
 	process.prependListener("uncaughtException", report);

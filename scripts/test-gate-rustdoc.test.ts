@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { forwardNextestOutput } from "./test-gate-native-events";
-import { type GateCommandError, withRustCompilerEvents } from "./test-gate-runtime";
+import { withRustCompilerEvents } from "./test-gate-runtime";
+import type { GateCommandError } from "./test-gate-failure-events";
 
 let directory: string;
 let capture: string;

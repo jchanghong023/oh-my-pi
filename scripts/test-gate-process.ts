@@ -1,11 +1,380 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import { openGateLibc } from "./test-gate-libc";
 
+export interface PersistentBazelClient {
+	pid: number;
+	exited: Promise<number>;
+	cancel(): Promise<void>;
+}
+
+/** Only the native client sees this environment; payloads recover runtime
+ * capabilities from context.json after hosted request validation. */
+export function nativeBazelEnvironment(
+	env: Record<string, string | undefined>,
+	host: Record<string, string | undefined> = process.env,
+	platform: NodeJS.Platform = process.platform,
+): Record<string, string> {
+	const cacheKeys =
+		platform === "win32" ? /^(?:HOME|USERPROFILE|XDG_CACHE_HOME)$/i : /^(?:HOME|USERPROFILE|XDG_CACHE_HOME)$/;
+	// Keep system/tool/cache/proxy settings, not provider credentials or runtime
+	// capabilities: Bazel records the client's environment in the raw BEP.
+	const credentials =
+		/(?:API[_-]?KEY|TOKEN|PASSWORD|PASSWD|SECRET|CREDENTIAL|AUTH|COOKIE|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|EXTRAHEADER|CONNECTION[_-]?STRING)/i;
+	const runtime = /^(?:OMP_GATE_|OMP_TEST_(?:RUN|REPORT)|BUN_TEST_REPORT)/i;
+	const entries = Object.entries(env).filter(
+		(entry): entry is [string, string] =>
+			entry[1] !== undefined &&
+			(platform === "win32" ? entry[0].toUpperCase() : entry[0]) !== "TEST_TMPDIR" &&
+			!cacheKeys.test(entry[0]) &&
+			!credentials.test(entry[0]) &&
+			!runtime.test(entry[0]),
+	);
+	for (const [key, value] of Object.entries(host)) {
+		if (value !== undefined && cacheKeys.test(key)) entries.push([key, value]);
+	}
+	return Object.fromEntries(entries);
+}
+
+/** One native client owns its CancelRequest; never signal a shared JVM.
+ * Bazel 9.2 blaze.cc CancelThread/SendCancelMessage; Windows
+ * blaze_util_windows.cc ConsoleCtrlHandler handles CTRL_BREAK identically. */
+export function spawnPersistentBazel(
+	argv: string[],
+	options: { cwd: string; env: Record<string, string | undefined> } = { cwd: process.cwd(), env: process.env },
+): PersistentBazelClient {
+	// Only the final native host selects tool caches. A broker request carries
+	// the application's isolated HOME, not the host's installation/download root.
+	// Tests still receive their own HOME and the explicit --test_tmpdir.
+	const environmentEntries = Object.entries(nativeBazelEnvironment(options.env));
+	if (process.platform !== "win32") {
+		const child = Bun.spawn(argv, {
+			...options,
+			env: Object.fromEntries(environmentEntries),
+			stdin: "inherit",
+			stdout: "inherit",
+			stderr: "inherit",
+			detached: true,
+		});
+		let cancelled = false;
+		return {
+			pid: child.pid,
+			exited: child.exited,
+			async cancel() {
+				if (!cancelled && child.exitCode === null) {
+					cancelled = true;
+					// The native client sends its invocation's CancelRequest. Do not
+					// signal a process group that could contain unrelated descendants.
+					process.kill(child.pid, "SIGINT");
+				}
+				await child.exited;
+			},
+		};
+	}
+	const kernel = dlopen("kernel32.dll", {
+		CreateProcessW: {
+			args: [
+				FFIType.ptr,
+				FFIType.ptr,
+				FFIType.ptr,
+				FFIType.ptr,
+				FFIType.i32,
+				FFIType.u32,
+				FFIType.ptr,
+				FFIType.ptr,
+				FFIType.ptr,
+				FFIType.ptr,
+			],
+			returns: FFIType.i32,
+		},
+		GetStdHandle: { args: [FFIType.u32], returns: FFIType.u64 },
+		SetHandleInformation: { args: [FFIType.u64, FFIType.u32, FFIType.u32], returns: FFIType.i32 },
+		GetConsoleCP: { args: [], returns: FFIType.u32 },
+		AllocConsole: { args: [], returns: FFIType.i32 },
+		GenerateConsoleCtrlEvent: { args: [FFIType.u32, FFIType.u32], returns: FFIType.i32 },
+		GetExitCodeProcess: { args: [FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+		IsProcessInJob: { args: [FFIType.u64, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
+		ResumeThread: { args: [FFIType.u64], returns: FFIType.u32 },
+		TerminateProcess: { args: [FFIType.u64, FFIType.u32], returns: FFIType.i32 },
+		CloseHandle: { args: [FFIType.u64], returns: FFIType.i32 },
+		GetLastError: { args: [], returns: FFIType.u32 },
+	});
+	const stdHandles = [-10, -11, -12].map(value => Number(kernel.symbols.GetStdHandle(value >>> 0)));
+	for (const handle of stdHandles) {
+		if (handle && handle !== -1 && !kernel.symbols.SetHandleInformation(handle, 1, 1)) {
+			kernel.close();
+			throw new Error("Cannot inherit native Bazel output handles");
+		}
+	}
+	// A hidden Bun supervisor may have no console. Give this runner its own
+	// console, never attach to another agent's console or broadcast Ctrl-C.
+	if (!kernel.symbols.GetConsoleCP() && !kernel.symbols.AllocConsole()) {
+		kernel.close();
+		throw new Error("Cannot establish native Bazel cancellation console");
+	}
+	const quote = (value: string) => `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/, "$&$&")}"`;
+	const executable = Bun.which(argv[0]!) ?? argv[0]!;
+	const image = Buffer.from(`${executable}\0`, "utf16le");
+	const command = Buffer.from(`${[executable, ...argv.slice(1)].map(quote).join(" ")}\0`, "utf16le");
+	const directory = Buffer.from(`${options.cwd}\0`, "utf16le");
+	const environment = Buffer.from(
+		`${environmentEntries
+			.sort(([left], [right]) => left.toUpperCase().localeCompare(right.toUpperCase()))
+			.map(([key, value]) => `${key}=${value}`)
+			.join("\0")}\0\0`,
+		"utf16le",
+	);
+	const startup = new Uint8Array(104);
+	const startupView = new DataView(startup.buffer);
+	startupView.setUint32(0, 104, true);
+	startupView.setUint32(60, 0x101, true); // USESTDHANDLES | USESHOWWINDOW (hidden)
+	for (const [index, offset] of [80, 88, 96].entries())
+		startupView.setBigUint64(offset, BigInt(stdHandles[index]!), true);
+	const information = new Uint8Array(24);
+	if (
+		!kernel.symbols.CreateProcessW(
+			ptr(image),
+			ptr(command),
+			null,
+			null,
+			1,
+			0x01000000 | 0x4 | 0x200 | 0x400, // BREAKAWAY_FROM_JOB | SUSPENDED | NEW_PROCESS_GROUP | UNICODE_ENVIRONMENT
+			ptr(environment),
+			ptr(directory),
+			ptr(startup),
+			ptr(information),
+		)
+	) {
+		const error = kernel.symbols.GetLastError();
+		kernel.close();
+		throw new Error(`Cannot launch cancellable native Bazel client (Windows error ${error})`);
+	}
+	const info = new DataView(information.buffer);
+	const handle = Number(info.getBigUint64(0, true));
+	const thread = Number(info.getBigUint64(8, true));
+	// BREAKAWAY can succeed yet stop at a non-breakaway ancestor (Windows
+	// nested-jobs contract). Bazel 9.2 WaitableProcess creates precisely such
+	// a KILL_ON_JOB_CLOSE Job; DETACHED_PROCESS in ExecuteDaemon does not escape it.
+	// Nested tests must use the authenticated outer host, not weaken this proof.
+	// https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs
+	const inJob = new Uint8Array(4);
+	const queried = kernel.symbols.IsProcessInJob(handle, 0, ptr(inJob));
+	const queryError = queried ? undefined : kernel.symbols.GetLastError();
+	const retainedJob = queried && new DataView(inJob.buffer).getUint32(0, true) !== 0;
+	const resumeFailed = queried && !retainedJob && kernel.symbols.ResumeThread(thread) === 0xffffffff;
+	const resumeError = resumeFailed ? kernel.symbols.GetLastError() : undefined;
+	if (!queried || retainedJob || resumeFailed) {
+		kernel.symbols.TerminateProcess(handle, 1);
+		kernel.symbols.CloseHandle(thread);
+		kernel.symbols.CloseHandle(handle);
+		kernel.close();
+		throw new Error(
+			!queried
+				? `Cannot query native Bazel Job membership (Windows error ${queryError})`
+				: retainedJob
+					? "Native Bazel retained an ancestor Windows Job; an authenticated outer gate host is required"
+					: `Cannot resume native Bazel client (Windows error ${resumeError})`,
+		);
+	}
+	kernel.symbols.CloseHandle(thread);
+	const pid = info.getUint32(16, true);
+	let settled = false;
+	let cancelled = false;
+	const exited = (async () => {
+		const code = new Uint8Array(4);
+		try {
+			for (;;) {
+				if (!kernel.symbols.GetExitCodeProcess(handle, ptr(code)))
+					throw new Error("Cannot await native Bazel client");
+				const value = new DataView(code.buffer).getUint32(0, true);
+				if (value !== 259) return value;
+				await Bun.sleep(5);
+			}
+		} finally {
+			settled = true;
+			kernel.symbols.CloseHandle(handle);
+			kernel.close();
+		}
+	})();
+	return {
+		pid,
+		exited,
+		async cancel() {
+			if (!settled && !cancelled) {
+				cancelled = true;
+				if (!kernel.symbols.GenerateConsoleCtrlEvent(1, pid))
+					throw new Error(
+						`Cannot cancel native Bazel invocation (Windows error ${kernel.symbols.GetLastError()})`,
+					);
+			}
+			await exited;
+		},
+	};
+}
+
+/** The supervisor, not a fallible reporting runner, owns every native client. */
+export async function requestPersistentBazel(
+	argv: string[],
+	payload?: { charged: boolean },
+	options: { cwd: string; env: Record<string, string | undefined> } = { cwd: process.cwd(), env: { ...process.env } },
+): Promise<PersistentBazelClient> {
+	const id = randomUUID();
+	let resolveStarted!: (pid: number) => void;
+	let rejectStarted!: (error: Error) => void;
+	const started = new Promise<number>((resolve, reject) => {
+		resolveStarted = resolve;
+		rejectStarted = reject;
+	});
+	let resolveExited!: (code: number) => void;
+	const exited = new Promise<number>(resolve => {
+		resolveExited = resolve;
+	});
+	const receive = (message: unknown) => {
+		if (!message || typeof message !== "object" || !("id" in message) || message.id !== id || !("type" in message))
+			return;
+		if (message.type === "native-bazel-started" && "pid" in message && typeof message.pid === "number")
+			resolveStarted(message.pid);
+		if (message.type === "native-bazel-exited" && "exitCode" in message && typeof message.exitCode === "number") {
+			rejectStarted(new Error("Native Bazel launch failed"));
+			resolveExited(message.exitCode);
+			process.off("message", receive);
+			process.off("disconnect", disconnected);
+		}
+	};
+	const disconnected = () => {
+		rejectStarted(new Error("Native Bazel owner disconnected"));
+		resolveExited(130);
+		process.off("message", receive);
+	};
+	process.on("message", receive);
+	process.once("disconnect", disconnected);
+	if (!process.connected) disconnected();
+	else process.send?.({ type: "native-bazel-start", id, argv, ...options, payload });
+	const pid = await started;
+	return {
+		pid,
+		exited,
+		async cancel() {
+			if (process.connected) process.send?.({ type: "native-bazel-cancel", id });
+			await exited;
+		},
+	};
+}
+
+/** Reuse the enclosing gate host across Bazel's non-breakaway test Job. */
+export async function requestHostedPersistentBazel(
+	broker: { url: string; token: string },
+	argv: string[],
+	options: { cwd: string; env: Record<string, string | undefined> },
+): Promise<PersistentBazelClient> {
+	const id = randomUUID();
+	const headers = { authorization: `Bearer ${broker.token}`, "content-type": "application/json" };
+	const response = await fetch(new URL("native", broker.url), {
+		method: "POST",
+		headers,
+		body: JSON.stringify({ id, argv, ...options }),
+	});
+	if (!response.ok || !response.body)
+		throw new Error(`Outer native Bazel host rejected launch (${response.status}): ${await response.text()}`);
+	const started = Promise.withResolvers<number>();
+	const exited = (async () => {
+		let text = "";
+		const decoder = new TextDecoder();
+		for await (const chunk of response.body!) {
+			text += decoder.decode(chunk, { stream: true });
+			let newline: number;
+			while ((newline = text.indexOf("\n")) !== -1) {
+				const event = JSON.parse(text.slice(0, newline)) as { pid?: number; exitCode?: number; error?: string };
+				text = text.slice(newline + 1);
+				if (event.error) throw new Error(event.error);
+				if (Number.isSafeInteger(event.pid) && event.pid! > 0) started.resolve(event.pid!);
+				if (Number.isInteger(event.exitCode)) {
+					started.reject(new Error(`Outer native Bazel launch ended before readiness (exit ${event.exitCode})`));
+					return event.exitCode!;
+				}
+			}
+		}
+		throw new Error("Outer native Bazel host disconnected before native exit");
+	})();
+	void exited.catch(error => started.reject(error));
+	let pid: number;
+	try {
+		pid = await started.promise;
+	} catch (error) {
+		await exited.catch(() => {});
+		throw error;
+	}
+	return {
+		pid,
+		exited,
+		async cancel() {
+			const cancelled = await fetch(new URL("native/cancel", broker.url), {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ id }),
+			});
+			if (!cancelled.ok) throw new Error(`Outer native Bazel host rejected cancellation (${cancelled.status})`);
+			await exited;
+		},
+	};
+}
+
+export interface PersistentBazelRelay {
+	(message: unknown): boolean;
+	disconnect(): void;
+}
+
+/** Relay nested discovery clients to the same supervisor ownership registry. */
+export function relayPersistentBazel(child: Bun.Subprocess): PersistentBazelRelay {
+	const ids = new Set<string>();
+	const receive = (message: unknown) => {
+		if (
+			!message ||
+			typeof message !== "object" ||
+			!("id" in message) ||
+			typeof message.id !== "string" ||
+			!ids.has(message.id)
+		)
+			return;
+		if (!("type" in message) || (message.type !== "native-bazel-started" && message.type !== "native-bazel-exited"))
+			return;
+		try {
+			child.send(message);
+		} catch {}
+		if (message.type === "native-bazel-exited") ids.delete(message.id);
+	};
+	process.on("message", receive);
+	const disconnect = () => {
+		for (const id of ids) if (process.connected) process.send?.({ type: "native-bazel-cancel", id });
+		ids.clear();
+		process.off("message", receive);
+	};
+	void child.exited.then(disconnect, disconnect);
+	return Object.assign(
+		(message: unknown) => {
+			if (
+				!message ||
+				typeof message !== "object" ||
+				!("type" in message) ||
+				!("id" in message) ||
+				typeof message.id !== "string"
+			)
+				return false;
+			if (message.type !== "native-bazel-start" && message.type !== "native-bazel-cancel") return false;
+			if (message.type === "native-bazel-start") ids.add(message.id);
+			if (ids.has(message.id) && process.connected) process.send?.(message);
+			return true;
+		},
+		{ disconnect },
+	);
+}
+
 export interface GateProcessOwner {
 	terminate(): Promise<void>;
+	release(): Promise<void>;
 	close(): void;
 }
 interface LinuxIdentity {
@@ -185,7 +554,11 @@ export async function terminateLinuxGateDescendants(): Promise<void> {
 		}
 	}
 }
-export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): Promise<GateProcessOwner> {
+export async function ownGateProcess(
+	child: Bun.Subprocess,
+	detached: boolean,
+	persistentBazel = false,
+): Promise<GateProcessOwner> {
 	if (process.platform === "win32") {
 		// Windows HANDLEs are opaque integer values, not FFI pointers.
 		const kernel = dlopen("kernel32.dll", {
@@ -211,7 +584,9 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 		try {
 			// JOBOBJECT_EXTENDED_LIMIT_INFORMATION, Windows x64/arm64 ABI.
 			const limits = new Uint8Array(144);
-			new DataView(limits.buffer).setUint32(16, 0x2000, true); // KILL_ON_JOB_CLOSE
+			// Only native clients explicitly request breakaway. Ordinary payload
+			// Jobs keep both breakaway flags disabled, including nested payloads.
+			new DataView(limits.buffer).setUint32(16, persistentBazel ? 0x800 : 0x2000, true);
 			if (
 				!kernel.symbols.SetInformationJobObject(job, 9, ptr(limits), limits.byteLength) ||
 				!processHandle ||
@@ -231,6 +606,11 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 		return {
 			async terminate() {
 				if (closed) return;
+				if (persistentBazel) {
+					child.send("abort");
+					await child.exited;
+					return;
+				}
 				if (!kernel.symbols.TerminateJobObject(job, 1))
 					throw new Error(`Cannot terminate owned Windows Job Object (error ${kernel.symbols.GetLastError()})`);
 				const accounting = new Uint8Array(48);
@@ -247,6 +627,14 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 				}
 				await child.exited;
 			},
+			async release() {
+				if (closed) return;
+				const limits = new Uint8Array(144);
+				if (!kernel.symbols.SetInformationJobObject(job, 9, ptr(limits), limits.byteLength))
+					throw new Error(`Cannot disarm persistent Bazel Job Object (error ${kernel.symbols.GetLastError()})`);
+				child.send("release");
+				await child.exited;
+			},
 			close() {
 				if (closed) return;
 				closed = true;
@@ -258,6 +646,11 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 	const identity = process.platform === "linux" ? await linuxIdentity(child.pid) : undefined;
 	return {
 		async terminate() {
+			if (persistentBazel) {
+				child.send("abort");
+				await child.exited;
+				return;
+			}
 			if (identity) {
 				const root = await linuxIdentity(identity.pid);
 				if (root?.start === identity.start) {
@@ -282,6 +675,10 @@ export async function ownGateProcess(child: Bun.Subprocess, detached: boolean): 
 				return;
 			}
 			await terminateOwnedSubprocess(child, { detached });
+		},
+		async release() {
+			child.send("release");
+			await child.exited;
 		},
 		close() {},
 	};

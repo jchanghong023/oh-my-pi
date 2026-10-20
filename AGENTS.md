@@ -30,7 +30,7 @@
 * RPC 命令接入复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划与循环宿主生命周期在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标复用 `rpc-goal.ts`；界面通过现有 `prompt` 与 RPC UI 对话调用，不另建命令表。
 * TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；仅紧凑模式在输入区上方使用单一实时三行思考尾窗（思考结束且回合进行中收起为单行存根，正文开始或回合结束清空），干净与详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
 
-常用命令（工作目录为仓库根；以下入口来自 `package.json` 与脚本本身，本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
+常用命令（工作目录为仓库根；下表受支持的检查、类型、构建与测试 root scripts 默认经 Bazel 执行，三层入口不变；支持列表与缓存边界以 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」为准。本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 
 | 目的 | 入口 |
 | --- | --- |
@@ -38,11 +38,12 @@
 | 运行 CLI（源码） | `bun run dev` |
 | 类型检查 + lint（workspace 门禁） | `bun run check:ts` |
 | 仅静态检查（oxlint / oxfmt） | `bun run check:tools` |
+| 只读 lint（默认经同一 Bazel 适配器；`lint:tools`／`lint:ts` 可缓存，`lint:rs` 及聚合 `lint` 每轮真实执行） | `bun run lint`、`lint:ts`、`lint:tools`、`lint:rs`；写源码的 `fmt`／`fix` 族不接管，仍用原入口 |
 | fork 静态门禁（沿用现有 TS 与 Rust 静态/编译检查；非编译预算 90 秒） | `bun run fastcheck` |
 | TypeScript 测试 | `bun run test:ts`；分片 `ci:test:ts:workspace`、`ci:test:ts:native`、`ci:test:coding-agent:{singleton,ui,runtime,native,heavy}` |
 | Rust 检查 / 测试 / lint / 格式 | `bun run check:rs`、`test:rs`、`lint:rs`、`fmt:rs`（经 `scripts/run-rs-task.ts`，测试走 `cargo nextest`） |
 | Python 测试 | `bun run test:py` |
-| 独立 SDK 计时测试 | `bun scripts/sdk-test-go.ts`、`bun scripts/sdk-test-rust.ts`（需相应工具链；不属于 fork-affected 门禁） |
+| 独立 SDK 计时测试 | `bun run sdk:test:go`、`bun run sdk:test:go:smoke`、`bun run sdk:test:rust`（需相应工具链；不属于 fork-affected 门禁） |
 | 仓库脚本测试 | `bun run test:scripts` |
 | 端到端冒烟（真实 CLI 公开入口） | `bun run ci:test:smoke` |
 | 安装器端到端 | `bun run ci:test:install-methods` |
@@ -50,6 +51,7 @@
 | 本机 + 可用的项目所需 WSL 本地门禁（不推送、不触发 CI；非编译与总墙钟上限均为 1500 秒） | `bun run slowtest` |
 | 测试计时报告 | 已运行的测试在被忽略的 `runs/test-timing/<run-id>/` 中记录 JUnit XML、producer 元数据及 `run.json`；范围与时间口径见 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」 |
 | 构建 | `bun run build`（workspace 包）、`bun run build:native`（native addon） |
+| 显式选择独立公开 Bazel 任务（普通受支持 root scripts 已默认路由；不扩展 fulltest） | `bun run bazel -- <existing-task> [task arguments]`，例如 `check:ts`、`build:native`、`test:py`、`sdk:test:go`；支持列表、原命令语义与缓存边界见 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」 |
 | 启动独立 profile（fork 新增 `-P`，无需 shell alias） | `omp -P <name>`（等同 `omp --profile <name>`） |
 | 导出代码审查材料（内置命令） | `/code-review-export`，参数与交互同 `/review`；固定导出到仓库根 `.tmp/review-bundle.zip`，契约见 [代码审查材料导出需求](docs-zh-CN/requirements/code-review-export.md) |
 
@@ -127,14 +129,19 @@
 * NEVER 无理由 `cargo clean`，NEVER 删除当前有效的 `target` 目录：构建缓存属于项目资产，清理必须有具体理由（缓存损坏、废弃配置清理等），定点进行并说明范围。
 * 保持同一平台的构建配置与 `target` 目录稳定：不为提速切换 profile / target 目录 / `RUSTFLAGS` 等配置变体；fastcheck/fulltest 与日常开发 MUST 复用正常增量缓存，NEVER 在连续 fastcheck 之间清缓存、强制全量重建或切换缓存变体。只为 Windows/WSL 平台隔离使用各自稳定的原生缓存；编译计时包装器固定在仓库原生 `node_modules/.cache/omp-gate-wrappers/<platform>-<arch>`，不随隔离 HOME/TMPDIR、源码哈希或每轮运行改变入口路径，源码及编译器更新只原地刷新必要资产，保留已有缓存包装器、features 与 flags。自然冷启动可记录，不能清缓存制造冷样本。
 * Rust 静态检查和测试复用仓库根稳定的 `target/`、既有 dev/test profile、features 与 flags；native host 构建复用既有 Cargo/N-API 路径，使用 Bazel 的既有构建复用其缓存和配置，不为计时切换缓存变体。
-* 最终打包 / 发布 profile 的构建（native addon 打包、release 构建等）只出现在 `fulltest` / `slowtest`，NEVER 进入 `fastcheck`。
+* 三层门禁 MUST 通过 Bazel 的真实文件依赖与成功结果缓存复用既有检查原语；Bazel 已提供的摘要、传递依赖、增量判定、任务并发、结果缓存和测试产物管理 MUST 直接复用，NEVER 保留项目平行实现。同平台、同语义的 action/test 配置跨层稳定，不用 HEAD、随机运行 ID 或临时报告路径使缓存失效。每轮选择完整必需目标，报告实际执行、有效缓存命中及未完成目标；无法可靠表达的外部依赖或副作用目标须禁用结果复用并说明。缓存命中不等于本轮执行，原生 BEP／执行日志／测试产物为证据，不重放旧用例冒充新执行。
+* 公开任务的 stock Bazel 规则、原生文件监听与摘要缓存、扫描排除、规则图精简及独立适配器契约 MUST 以 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」为唯一需求来源；NEVER 将独立任务可达性当作 fulltest 覆盖或未闭合外部环境的缓存有效性证据。
+* Bazel 的版本、`output_base`、启动参数与配置来源 MUST 稳定；任意结果（含成功、失败、超时、中断及宿主断连）均 NEVER 主动终止 Server，亦不得借 fixture 清理、Job／subreaper 或进程树回收误杀 JVM。失败、超时、中断及断连仍 MUST 仅取消本轮自有 invocation/actions，保留其他 Agent 作业；普通自有进程清理与失败即停继续生效，Server 生命周期边界统一遵守 `fork.md`「Fork 验证体系」。共享工作区准备与运行上下文 MUST 防串扰，锁等待计入原预算。
+* 性能优化 MUST 先通过 `fork.md`「Fork 验证体系」的无改动双轮验收，再处理编辑后的增量运行；每轮只修一处有时间证据的瓶颈。MUST 保留外层墙钟、显式 profile 与 BEP，区分锁等待、加载／分析、实际动作、测试缓存与脚本开销；缺证标为待定位，NEVER 把诊断 probe 当作真实 `bazel test` 验收。
+* 最终打包 / 发布 profile 的构建（native addon 打包、release 构建等）NEVER 进入 `fastcheck`；三层内仅可出现在 `fulltest` / `slowtest` 的既有范围，门禁外独立构建仍遵守原授权。
 
 ## 验证
 
 * 三层语义固定，复用现有本地检查定义、通过标准与运行器，不为门禁改写上游质量规则。`bun run fastcheck` 沿用现有 TS 与 Rust 静态、类型/格式检查及编译，NEVER 执行任何测试（含冒烟或门禁自测）；`bun run fulltest` 包含全部 fastcheck 检查及声明的 fork 范围内测试、native 构建与隔离 TUI 公开入口 E2E；`bun run slowtest` 包含 fulltest 一次，并可增加同一范围的 WSL/Linux 验证。fulltest NEVER 启动另一操作系统；除适用 WSL 外，slowtest 不增加 VM、容器模拟或远端机器验证。
 * 非编译硬上限分别为 fastcheck **90 秒**、fulltest **900 秒**、slowtest **1500 秒**，排除真实观测到的纯编译区间之并集，混合命令不整段排除。fulltest/slowtest 还 MUST 遵守 **900/1500 秒总墙钟硬上限**，包含编译、准备、同步、等待、汇总与清理；独立看门狗 MUST 能在主线程同步阻塞时强退。嵌套门禁共享外层剩余额度，保留更严格内层上限。NEVER 放宽或重置时限；`--limit-seconds=<N>` 同时下调两种上限。具体计费及退出契约见需求文档「Fork 验证体系」。
 * 每次入口运行在成功、失败、缺工具、超时、中断及参数错误的最终路径均输出 status、total、compile_excluded、budgeted、limit（秒，至少一位小数）及退出码。独立且安全的检查、测试与 Windows/WSL 两端 MUST 并行；生成或改写共享文件的阶段须排在读取它们的检查之前，不能让并发读取部分生成结果。
-* 首个实际用例、检查、编译、执行、前置准备或结果核验失败时，fulltest/slowtest MUST 立即非零退出并终止全部自有并行任务、嵌套运行器和进程树；NEVER 等待 afterAll、清理钩子、报告 I/O、WSL 或本机剩余测试。嵌套运行器 MUST 在识别失败时通知外层，不等自身退出；保留首个失败码与最终计时。MAY 绕过退出钩子直接退出，不能为补齐报告延迟结束。宿主强退后的自有后代仍由监督进程回收；未启动或被取消的工作不能记为通过。
+* 门禁仅按工程风险选择就绪目标的优先批次：门禁编排、共享接口、状态/并发与平台边界优先；批次内的依赖与安全并发由 Bazel 原生调度。MUST 记录风险依据、批次及原生执行日志，不仅排序命令标签，也不另建任务许可队列；风险元数据不进入 action 输入。
+* 首个实际用例、检查、编译、执行、前置准备或结果核验失败时，fulltest/slowtest MUST 立即非零退出并终止全部自有并行任务、嵌套运行器和进程树；Bazel Server 仅按「构建与缓存纪律」取消自有工作，NEVER 杀 Server。NEVER 等待 afterAll、清理钩子、报告 I/O、WSL 或本机剩余测试。嵌套运行器 MUST 在识别失败时通知外层，不等自身退出；保留首个失败码与最终计时。MAY 绕过退出钩子直接退出，不能为补齐报告延迟结束。宿主强退后的普通自有后代仍由监督进程回收；未启动或被取消的工作不能记为通过。
 * Agent 只能在有具体验证需要且一批相关修改完成后选择 fastcheck，NEVER 每次保存文件或对已有可用通过结果反复运行。fulltest/slowtest 需要本次用户明确运行授权，授权不跨任务延续。不能通过直接执行内部测试、包装或 WSL 阶段绕过权限；新/改门禁入口脚本可直接执行显式限定到该文件的非测试静态检查，不得扩大到目录/仓库或执行测试、打包、跨 WSL。
 * 三层入口 NEVER push、触发/等待 CI、发布、部署、调用 Computer Use、操作用户共享鼠标或抢前台焦点。真实桌面输入测试保留为门禁外单独入口，并需另外明确授权；`packages/natives/test/desktop.test.ts` 不由标准本地 TS 门禁调用，不能把未运行记成通过。浏览器 DOM/协议、虚拟终端及独立 PTY 测试可在本地门禁中使用。
 * slowtest 的 WSL 扩展仅在 Windows、项目需要且现有兼容发行版可用时启动。本项目显式使用 **Ubuntu-24.04 WSL2**，不替换该目标；未指定目标的一般项目才优先合适的已安装 CentOS。无 WSL/无兼容发行版记 `SKIPPED_WSL_UNAVAILABLE`，项目不需要记 `SKIPPED_NOT_APPLICABLE`，此时覆盖等于 fulltest；其余发现、同步、脏源码、缺测试工具、执行或证据核验失败 MUST 立即终止整轮，NEVER 等本机完成或伪装成不可用跳过。NEVER 自动安装/启用 WSL、发行版或缺失测试工具。

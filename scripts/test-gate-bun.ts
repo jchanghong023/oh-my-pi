@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { withChargedActivity, withCompilerActivity } from "./test-gate-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 
 const [command, ...args] = process.argv.slice(2);
 if (command !== "build") {

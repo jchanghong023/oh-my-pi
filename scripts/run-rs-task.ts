@@ -4,7 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { $ } from "bun";
 import { windowsTestTempOverride } from "./windows-test-temp";
-import { GateCommandError, reportGateFailure, withRustCompilerEvents } from "./test-gate-runtime";
+import { withRustCompilerEvents } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { forwardNextestOutput } from "./test-gate-native-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import {

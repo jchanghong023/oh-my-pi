@@ -2,8 +2,12 @@
 // Used by package-level tests and the script suite. The chunked TS driver
 // handles its own child reporter paths instead of adding a process per chunk.
 import * as path from "node:path";
-import { BunTestFailureObserver, observeGateUnhandledFailures } from "./test-gate-failure-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import {
+	BunTestFailureObserver,
+	observeGateUnhandledFailures,
+	GateCommandError,
+	reportGateFailure,
+} from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 observeGateUnhandledFailures();

@@ -5,6 +5,7 @@
 ### Changed
 
 - Offline processes record only errors, skipping lower-level context serialization, file output and log sinks.
+- Keep expected-cleanup marker inspection independent of logging and native initialization for lightweight test reporters.
 - Preserve YAML comments during targeted setting updates and provide cancellable persistent-file locking that rejects unsupported cross-host locking instead of falling back to a local-only lock.
 
 ### Fixed

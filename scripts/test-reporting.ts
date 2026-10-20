@@ -272,8 +272,10 @@ async function writeTestRun(
 			? "complete"
 			: "partial";
 	await writeRun(run, completion, exitCode, producers, reconciliation, unreconciledScope);
-	if (reconciliation.status !== "validated")
-		console.error(`Test timing XML ${reconciliation.status}: ${reconciliation.reason}`);
+	if (reconciliation.status !== "validated") {
+		if (unreconciledScope && producers.length === 0) console.log(`Test timing delegated: ${unreconciledScope}`);
+		else console.error(`Test timing XML ${reconciliation.status}: ${reconciliation.reason}`);
+	}
 	console.log(`Test timing: ${path.join(run.dir, "run.json")} (${completion})`);
 }
 

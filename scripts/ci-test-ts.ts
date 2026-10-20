@@ -5,8 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
-import { BunTestFailureObserver } from "./test-gate-failure-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 type Mode =

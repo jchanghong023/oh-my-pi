@@ -43,7 +43,13 @@ for (const file of ["LICENSE", "THIRD-PARTY-NOTICES.txt"]) {
 	await Bun.write(path.join(distExtension, file), Bun.file(path.join(repoRoot, file)));
 }
 
-const zip = await $`zip -qr ../omp-browser-relay-extension.zip .`.cwd(distExtension).nothrow();
+// Use Windows' native bsdtar explicitly; GNU tar cannot produce ZIP archives.
+const zip =
+	process.platform === "win32"
+		? await $`${path.win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")} --format=zip -cf ../omp-browser-relay-extension.zip background.js manifest.json options.html options.js LICENSE THIRD-PARTY-NOTICES.txt`
+				.cwd(distExtension)
+				.nothrow()
+		: await $`zip -qr ../omp-browser-relay-extension.zip .`.cwd(distExtension).nothrow();
 if (zip.exitCode !== 0) {
 	console.error("zip failed:", zip.stderr.toString());
 	process.exit(1);

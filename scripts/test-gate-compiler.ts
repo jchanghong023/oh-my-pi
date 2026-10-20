@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import * as path from "node:path";
 import { withChargedActivity, withCompilerActivity } from "./test-gate-events";
-import { GateCommandError, reportGateFailure } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 
 // Cargo supplies its workspace wrapper (e.g. clippy-driver) before rustc. Never
 // exempt that mixed lint command; only the real compiler's crate invocations.
