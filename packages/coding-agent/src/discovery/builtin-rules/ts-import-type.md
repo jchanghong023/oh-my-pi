@@ -1,6 +1,8 @@
 ---
 description: "Use `import type`, not `import('pkg').Type` in type positions"
-condition: "import\\("
+condition:
+  - "\\btypeof\\s+import\\("
+  - "\\bimport\\((?:\\s|//.*|/\\*(?:[^*]|\\*(?!/))*\\*/)*(?:\"[^\"\\n]*\"|'[^'\\n]*'|\\x60[^\\x60]*\\x60)(?:\\s|//.*|/\\*(?:[^*]|\\*(?!/))*\\*/)*(?:,[^()]*)?\\)\\s*(?:\\[\\s*[\"']|\\.\\s*(?!(?:then|catch|finally)\\b)[A-Za-z_$][\\w$]*(?=[^\\w$]))"
 scope: "tool:edit(*.ts), tool:edit(*.tsx), tool:write(*.ts), tool:write(*.tsx)"
 interruptMode: never
 ---

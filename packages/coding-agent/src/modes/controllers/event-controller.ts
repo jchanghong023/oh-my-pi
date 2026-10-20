@@ -44,6 +44,7 @@ import {
 	resolveAbortLabel,
 } from "../../session/messages";
 import { formatApprovalPrompt, resolveApproval, sessionApprovalScope } from "../../tools/approval";
+import { getApprovalGrants } from "../../tools/approval-cache";
 import { recoverAskQuestions } from "../../tools/ask";
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
@@ -2056,7 +2057,11 @@ export class EventController {
 		if (!tool) return undefined;
 		const mode = cfgToolsApprovalMode.get(settings);
 		const userPolicies: Record<string, unknown> = cfgToolsApproval.get(settings);
-		const approval = resolveApproval(tool, args, mode, userPolicies);
+		const grants =
+			mode === "always-ask-cached"
+				? getApprovalGrants(settings.getAgentDir(), this.ctx.sessionManager.getSessionId())
+				: undefined;
+		const approval = resolveApproval(tool, args, mode, userPolicies, grants);
 		if (approval.policy !== "prompt") return undefined;
 		// Approved for this session: the wrapper runs it without asking.
 		const scope = sessionApprovalScope(approval, tool.name);

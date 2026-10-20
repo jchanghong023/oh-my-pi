@@ -28,6 +28,7 @@ import {
 import { expandWindowsLongPath } from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEnoent, isEnotdir } from "./fs-error";
+import { isBunTestRuntime } from "./test-runtime";
 
 export function getOfflineShmState(): OfflineShmState | undefined {
 	return resolveOfflineShmState();
@@ -187,12 +188,33 @@ function standardizeProjectPath(p: string): string {
 	return process.platform === "win32" ? expandWindowsLongPath(p) : standardizeMacOSPath(p);
 }
 
-export function resolveEquivalentPath(inputPath: string): string {
+export interface EquivalentPathOptions {
+	/**
+	 * Resolve a path that does not exist yet through its deepest existing ancestor, keeping the
+	 * missing suffix, so a symlinked parent canonicalizes the same before and after the path appears.
+	 */
+	throughMissing?: boolean;
+}
+
+export function resolveEquivalentPath(inputPath: string, options?: EquivalentPathOptions): string {
 	const resolvedPath = path.resolve(inputPath);
 	try {
 		return fs.realpathSync(resolvedPath);
 	} catch {
-		return resolvedPath;
+		if (!options?.throughMissing) return resolvedPath;
+	}
+	const missing: string[] = [];
+	let current = resolvedPath;
+	for (;;) {
+		const parent = path.dirname(current);
+		if (parent === current) return resolvedPath;
+		missing.unshift(path.basename(current));
+		current = parent;
+		try {
+			return path.join(fs.realpathSync(current), ...missing);
+		} catch {
+			// Keep walking: a higher ancestor may exist.
+		}
 	}
 }
 
@@ -701,8 +723,17 @@ export function getReportsDir(): string {
 	return dirs.rootSubdir("reports", "state");
 }
 
-/** Get the logs directory (~/.omp/logs). */
+/**
+ * Get the logs directory (~/.omp/logs). Unless an explicit OMP root or offline
+ * shm domain owns the path, `bun test` processes get `<tmpdir>/omp-test-logs-<uid>`
+ * instead, so suites never write into the developer's real logs. The uid suffix
+ * keeps users of a shared `/tmp` from owning each other's directory.
+ */
 export function getLogsDir(): string {
+	if (isBunTestRuntime() && !getOfflineShmState() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
+		const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
+		return path.join(os.tmpdir(), `omp-test-logs-${uid}`);
+	}
 	return dirs.rootSubdir("logs", "state");
 }
 

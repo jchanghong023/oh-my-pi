@@ -67,6 +67,17 @@ describe("bash internal URLs through the shell filesystem", () => {
 		},
 	);
 
+	// Like URL-to-URL symlinks above, host file symlinks require a Windows privilege.
+	it.skipIf(process.platform === "win32")("links a host path to the file a backed URL aliases", async () => {
+		const { text, isError } = await run(
+			"printf 'body\\n' > local://source.txt && ln -s local://source.txt host-link && cat host-link",
+		);
+
+		expect(isError).toBeUndefined();
+		expect(text).toContain("body");
+		expect(await fs.readlink(path.join(tempDir, "host-link"))).toBe(path.join(localRoot, "source.txt"));
+	});
+
 	it("runs in a URL working directory with relative paths inside it", async () => {
 		await fs.mkdir(path.join(localRoot, "work"), { recursive: true });
 		await fs.writeFile(path.join(localRoot, "work", "in.txt"), "inside\n");

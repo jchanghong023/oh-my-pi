@@ -690,6 +690,7 @@ async function runInteractiveMode(
 	offline = false,
 	startupGoal?: string,
 	startupRestore?: () => Promise<RestoreOutcome>,
+	refreshScopedModelsAfterLogin?: () => Promise<void>,
 ): Promise<void> {
 	const InteractiveModeConstructor = await loadInteractiveModeConstructor();
 	let mode: InteractiveMode;
@@ -704,6 +705,7 @@ async function runInteractiveMode(
 			eventBus,
 			startupLease?.composer,
 			subagentEventBus,
+			refreshScopedModelsAfterLogin,
 		);
 		startupLease?.adopt();
 	} catch (error) {
@@ -1193,6 +1195,7 @@ export async function rebuildScopedModels(
 		getModelMatchPreferences(activeSettings),
 		activeSettings,
 	);
+	if (session.isDisposed) return undefined;
 	const mapped = toSessionScopedModels(rebuilt, activeSettings);
 	if (mapped.length === 0 || sameScopedModelSet(session.scopedModels, mapped)) return undefined;
 	session.setScopedModels(mapped);
@@ -2841,6 +2844,9 @@ export async function runRootCommand(
 				}
 				if (!parsedArgs.offline) void startBackgroundModelDiscovery?.();
 			};
+			const refreshScopedModelsAfterLogin = async () => {
+				await rebuildScopedModels(session, parsedArgs, modelRegistry, settingsInstance);
+			};
 			watchScopedModelSettings(session, parsedArgs, modelRegistry, settingsInstance);
 
 			if (modelFallbackMessage) {
@@ -2973,6 +2979,7 @@ export async function runRootCommand(
 						parsedArgs.offline,
 						initialArgs.goal,
 						parsedArgs.restore ? () => restoreSession(session, { eventBus, subagentEventBus }) : undefined,
+						refreshScopedModelsAfterLogin,
 					);
 				} finally {
 					startupLease?.dispose();

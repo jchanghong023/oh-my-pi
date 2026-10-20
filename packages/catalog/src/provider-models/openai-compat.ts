@@ -569,8 +569,8 @@ function perTokenPricingCost(pricing: unknown): TokenCost {
 	return {
 		input: toPositiveNumber(rates.prompt, 0) * 1_000_000,
 		output: toPositiveNumber(rates.completion, 0) * 1_000_000,
-		cacheRead: toPositiveNumber(rates.input_cache_read, 0) * 1_000_000,
-		cacheWrite: toPositiveNumber(rates.input_cache_write, 0) * 1_000_000,
+		cacheRead: toPositiveNumber(rates.input_cache_read ?? rates.input_cache_reads, 0) * 1_000_000,
+		cacheWrite: toPositiveNumber(rates.input_cache_write ?? rates.input_cache_writes, 0) * 1_000_000,
 	};
 }
 
@@ -4740,6 +4740,48 @@ export function togetherModelManagerOptions(
 }
 
 // ---------------------------------------------------------------------------
+// Inception
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds Inception's authenticated model-discovery manager. A successful
+ * `/v1/models` fetch is the complete roster, keeping only rows that advertise
+ * `chat.completions` (the shared roster also lists FIM/edit and Decisions-only
+ * models); without an API key the bundled Mercury seeds are served.
+ */
+export function inceptionModelManagerOptions(config?: ModelManagerConfig): ModelManagerOptions<"openai-completions"> {
+	return {
+		...createOpenAICompatibleModelManagerOptions({
+			api: "openai-completions",
+			providerId: "inception",
+			defaultBaseUrl: "https://api.inceptionlabs.ai/v1",
+			config,
+			requireApiKey: true,
+			dynamicModelsAuthoritative: true,
+			mapModel: (entry, defaults, reference) => {
+				// The shared roster also contains FIM/edit and Decisions-only models;
+				// `supported_endpoints` is required, so a row without it is not chat.
+				if (!Array.isArray(entry.supported_endpoints) || !entry.supported_endpoints.includes("chat.completions")) {
+					return null;
+				}
+				const model = mapWithBundledReference(entry, defaults, reference);
+				return {
+					...model,
+					input: Array.isArray(entry.input_modalities) ? toInputCapabilities(entry.input_modalities) : model.input,
+					cost: isRecord(entry.pricing) ? perTokenPricingCost(entry.pricing) : model.cost,
+					contextWindow: toPositiveNumber(entry.context_length, model.contextWindow),
+					maxTokens: toPositiveNumber(entry.max_output_length, model.maxTokens),
+					...(Array.isArray(entry.supported_features) && {
+						supportsTools: entry.supported_features.includes("tools"),
+					}),
+				};
+			},
+		}),
+		staticModels: seedModels<"openai-completions">("inception"),
+	};
+}
+
+// ---------------------------------------------------------------------------
 // 15.5 CoreWeave Serverless Inference
 // ---------------------------------------------------------------------------
 
@@ -4927,7 +4969,7 @@ export interface MoonshotModelManagerConfig {
  * use the K2.x binary `thinking: { type }` block, so the wire path routes it
  * through OpenAI-style `reasoning_effort` (see `buildOpenAICompat`).
  */
-const MOONSHOT_KIMI_K3_COST = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 } as const;
+const MOONSHOT_KIMI_K3_COST = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 } as const;
 export function moonshotModelManagerOptions(
 	config?: MoonshotModelManagerConfig,
 ): ModelManagerOptions<"openai-completions"> {

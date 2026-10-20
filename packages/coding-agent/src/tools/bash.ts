@@ -16,6 +16,7 @@ import type {
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { PipeStreams } from "@oh-my-pi/pi-natives";
 import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { isPosixShell } from "@oh-my-pi/pi-utils/procmgr";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
@@ -24,6 +25,7 @@ import { applyDirenvPreflight, type BashResult, executeBash } from "../exec/bash
 import { InternalUrlRouter } from "../internal-urls";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlFilesystem, UrlFsError } from "../internal-urls/url-filesystem";
+import { PipeTextSources, TextTap } from "../job-widgets";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type {
 	ClientBridgeTerminalExitStatus,
@@ -646,6 +648,20 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return new InternalUrlFilesystem({ context: sessionResolveContext(this.session, { signal }), tier });
 	}
 
+	/**
+	 * Session identity for a command, read when its tool call starts, so
+	 * `/fork`, `/new`, and `/resume` take effect on the next call while a call
+	 * already under way keeps the session it began in. Always set both keys: an
+	 * empty value replaces a stale one inherited from a parent omp process,
+	 * since an env overlay cannot unset.
+	 */
+	#sessionEnv(): Record<string, string> {
+		return {
+			PI_SESSION_ID: this.session.sessionManager?.getSessionId?.() ?? this.session.getSessionId?.() ?? "",
+			PI_SESSION_FILE: this.session.getSessionFile() ?? "",
+		};
+	}
+
 	/** Service launch mode: live `launch.enabled` while `bash` itself is an active tool. */
 	get #launchEnabled(): boolean {
 		return cfgLaunchEnabled.get(this.session.settings) === true && (this.session.isToolActive?.("bash") ?? true);
@@ -838,6 +854,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		approvalTier: ToolTier;
 		/** Session the call started in; its shell, even if the session changes before the job runs. */
 		sessionId: string | undefined;
+		/** That session's identity for the command (see {@link BashTool.#sessionEnv}). */
+		sessionEnv: Record<string, string>;
+		/** The model's `i` intent on the call, for the job's widget author. */
+		intent?: string;
 	}): ManagedBashJobHandle {
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
@@ -848,6 +868,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Holds the run's Shell only while it runs: a retained reference would
 		// keep a finished `:async:` Shell (and its background children) alive.
 		let pids: () => readonly number[] = NO_PIDS;
+		// Outlives the run with the job row, so a finished pipeline stays readable.
+		const streams = new PipeStreams();
+		// The job's widget reads the command's own output and every pipe it opens.
+		const outputTap = new TextTap("out", "the command's own stdout+stderr");
+		const pipeSources = new PipeTextSources(streams);
 		let latestText = "";
 		let latestProgressDetails: BashProgressDetails | undefined;
 		let backgrounded = !options.foreground;
@@ -877,6 +902,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				try {
 					const result = await executeBash(options.command, {
 						cwd: options.commandCwd,
+						env: options.sessionEnv,
 						// A call that starts in the foreground runs in the session's
 						// persistent shell, like the direct path, so its variables,
 						// functions, and options reach the next call even after it is
@@ -891,16 +917,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 						filesystem: this.#urlFilesystem(runSignal, options.approvalTier).shellFilesystem(),
 						artifactPath,
 						artifactId,
+						onChunk: chunk => outputTap.append(chunk),
 						onPreview: text => {
 							void report(text, { output: text, async: { state: "running", jobId, type: "bash" } });
 						},
 						onMinimizedSave: originalText => saveBashOriginalArtifact(this.session, originalText),
+						streams,
 						onStart: probe => {
 							pids = probe;
 						},
 						onSessionShellBusy: () => notices.push(SESSION_SHELL_BUSY_NOTICE),
 					}).finally(() => {
 						pids = NO_PIDS;
+						outputTap.close();
 					});
 					if (result.artifactError) latestProgressDetails = { meta: { artifactError: result.artifactError } };
 					const wallTimeMs = performance.now() - wallTimeStart;
@@ -945,7 +974,11 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			{
 				ownerId: this.session.getAgentId?.() ?? undefined,
 				foreground: options.foreground,
-				process: { command: options.command, cwd: options.commandCwd, pids: () => pids() },
+				process: { command: options.command, cwd: options.commandCwd, pids: () => pids(), streams },
+				widgetInputs: {
+					sources: () => [outputTap, ...pipeSources.list()],
+					brief: () => ({ kind: "bash", command: options.command, intent: options.intent }),
+				},
 			},
 		);
 
@@ -961,7 +994,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	}
 
 	async execute(
-		_toolCallId: string,
+		toolCallId: string,
 		{
 			command: rawCommand,
 			timeout: rawTimeout,
@@ -977,8 +1010,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 	): Promise<AgentToolResult<BashToolDetails>> {
 		let command = rawCommand;
 		// The session this call belongs to, captured before any await: a session
-		// change while the call waits must not move it into the new session's shell.
+		// change while the call waits must not move it into the new session's
+		// shell, nor hand it the new session's identity.
 		const sessionId = this.session.getSessionId?.() ?? undefined;
+		const sessionEnv = this.#sessionEnv();
 
 		// Extract a leading `cd <path> && ...` into cwd when the model ignores the
 		// cwd parameter. The scanner captures only a single path token and defers
@@ -1095,6 +1130,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					cwd: commandCwd,
 					pty: pty ?? true,
 					ready,
+					env: sessionEnv,
 				},
 				signal,
 				ready === undefined ? undefined : ctx?.toolCall?.steeringSignal,
@@ -1164,6 +1200,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				foreground: false,
 				approvalTier,
 				sessionId,
+				sessionEnv,
+				intent: this.session.getToolCallIntent?.(toolCallId),
 			});
 			return this.#buildBackgroundStartResult(job.jobId, "", timeoutSec, {
 				requestedTimeoutSec,
@@ -1205,6 +1243,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				foreground: !startBackgrounded,
 				approvalTier,
 				sessionId,
+				sessionEnv,
+				intent: this.session.getToolCallIntent?.(toolCallId),
 			});
 			if (startBackgrounded) {
 				return this.#buildBackgroundStartResult(job.jobId, "", timeoutSec, {
@@ -1262,6 +1302,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const backendPreflight =
 			bridgeTerminalAvailable || canUseInteractiveBashPty(pty === true, ctx)
 				? await applyDirenvPreflight(command, commandCwd, {
+						callerEnv: sessionEnv,
 						signal,
 						timeoutMs: cfgBashDirenvLoadTimeoutMs.get(this.session.settings),
 						callerTimeoutMs: timeoutMs,
@@ -1569,6 +1610,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				// command here so the unset prefix is not applied twice.
 				await executeBash(command, {
 					cwd: commandCwd,
+					env: sessionEnv,
 					sessionKey: sessionId,
 					isSessionCurrent: () => (this.session.getSessionId?.() ?? undefined) === sessionId,
 					timeout: timeoutMs ?? 0,

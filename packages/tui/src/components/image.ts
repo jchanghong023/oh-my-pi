@@ -1,5 +1,6 @@
 import { encodeSixelAsync } from "@oh-my-pi/pi-natives";
 import { getKittyGraphics } from "../kitty-graphics";
+import { ensureSixelRasterWidth } from "../sixel";
 import {
 	encodeSixelNow,
 	getCellDimensions,
@@ -736,7 +737,7 @@ export class Image implements Component {
 		const request: SixelEncode = { widthPx, heightPx, backgroundRgb };
 		this.#sixel = request;
 		const settle = (sequence: string | null): void => {
-			request.sequence = sequence;
+			request.sequence = sequence === null ? null : ensureSixelRasterWidth(sequence);
 			if (this.#sixel !== request || getTerminalBackgroundColor() !== backgroundRgb) return;
 			this.invalidate();
 			if (this.#options.requestRender) this.#options.requestRender();

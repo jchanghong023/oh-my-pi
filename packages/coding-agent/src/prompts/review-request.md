@@ -49,7 +49,7 @@ _No files to review._
 
 ### Distribution Guidelines
 
-Use the `task` tool with `agent: "reviewer"` and a `tasks` array.
+Use the `task` tool with a `tasks` array. Set `agent: "reviewer"` inside every `tasks[]` item (`tasks[].agent`), never at the top level or omitted.
 {{#when agentCount "==" 1}}Create exactly **1 reviewer task**.{{else}}Spawn **{{agentCount}} reviewer agents** in parallel.{{/when}}
 {{#if frozenMaterials}}
 Each reviewer task MUST receive these frozen-material rules, the ZIP root and its assigned files; use the complete `instructions/reviewer.md` with the acquisition override above.

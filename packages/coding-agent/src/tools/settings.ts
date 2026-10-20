@@ -303,25 +303,32 @@ export const cfgToolsApproval = register({
 });
 
 // Default tool approval mode (interaction tab, but governs the tool wrapper).
-//   "always-ask" — auto-approves read-tier tools only; prompts for write/exec.
-//   "write"      — auto-approves read and write-tier tools; prompts for exec.
-//   "yolo"       — auto-approves every tier.
+//   "always-ask"        — auto-approves read-tier tools only; prompts for write/exec.
+//   "always-ask-cached" — like always-ask, but file reads and writes can be approved
+//                         for a file or folder, this session or across sessions.
+//   "write"             — auto-approves read and write-tier tools; prompts for exec.
+//   "yolo"              — auto-approves every tier.
 export const cfgToolsApprovalMode = register({
 	id: "tools.approvalMode",
 	type: "enum",
-	values: ["always-ask", "write", "yolo"] as const,
+	values: ["always-ask", "always-ask-cached", "write", "yolo"] as const,
 	default: "yolo",
 	ui: {
 		tab: "interaction",
 		group: "授权确认",
 		label: "工具授权确认",
 		description:
-			"工具调用的默认授权确认行为。“始终询问”仅自动授权只读工具。“允许写入”自动授权读取和工作区写入工具。“全部自动授权 (Yolo)”自动授权所有级别；用户策略仍可要求确认或阻止调用。",
+			"工具调用的默认授权确认行为。“始终询问”仅自动授权只读工具。“询问并记住”还会在读取文件前询问，并可记住文件或目录。“允许写入”自动授权读取和工作区写入工具。“全部自动授权 (Yolo)”自动授权所有级别；用户策略仍可要求确认或阻止调用。",
 		options: [
 			{
 				value: "always-ask",
 				label: "始终询问",
 				description: "自动授权只读工具；写入和执行工具需要确认。",
+			},
+			{
+				value: "always-ask-cached",
+				label: "询问并记住",
+				description: "读取或写入文件前询问，可在本会话或跨会话记住文件或目录授权；执行工具仍需确认。",
 			},
 			{
 				value: "write",
@@ -927,6 +934,19 @@ export const cfgAsyncMaxJobs = register({
 	protocolDefault: ["rpc"],
 	type: "number",
 	default: 100,
+});
+
+export const cfgAsyncWidgets = register({
+	id: "async.widgets",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "tools",
+		group: "Execution",
+		label: "Live Job Widgets",
+		description:
+			"Draw a live widget for each running background job (charts, bars, status grids derived from its output) in the wait card, the jobs pill and the jobs sheet. The `widget` model role (default: `smol`) writes one spec per job; updates need no further model calls",
+	},
 });
 
 export const cfgToolsXdev = register({

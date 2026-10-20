@@ -352,7 +352,7 @@ export class RpcForkCommandCatalogService {
 		} else if (builtin.name === "move") {
 			complete = buildDirectoryArgumentCompletions(cwd);
 		} else if (session && builtin.name === "effort") {
-			complete = buildEffortArgumentCompletions({ ctx: { session } });
+			complete = buildEffortArgumentCompletions({ ctx: { viewSession: session } });
 		} else if (session && (builtin.name === "switch" || builtin.name === "model")) {
 			complete = buildModelSelectorCompletions({ ctx: { session, settings: session.settings } });
 		}
