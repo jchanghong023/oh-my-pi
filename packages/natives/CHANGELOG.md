@@ -15,6 +15,10 @@
 - Prepare persistent Wiki query projections during import or a source-free schema upgrade, avoiding repeated Markdown parsing without changing complete search evidence or existing cursors.
 - Preserve Python definitions in Python 3.6 files using `async` or `await` as legal parameters, class names and other identifiers.
 
+### Fixed
+
+- Fixed a macOS background action leaving its target in front of your app after you clicked another of your windows, when placing the click took longer than the click itself ([#16217](https://github.com/can1357/oh-my-pi/pull/16217))
+
 ## [18.12.4] - 2026-10-20
 
 ### Changed

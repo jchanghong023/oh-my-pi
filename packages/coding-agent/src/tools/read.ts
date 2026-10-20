@@ -77,6 +77,7 @@ import { buildDirectoryTree, type DirectoryTree } from "../workspace-tree";
 import {
 	formatConflictSummary,
 	formatConflictWarning,
+	formatScanCapNote,
 	getConflictHistory,
 	recoverConflictUriPrefix,
 	scanConflictLines,
@@ -2765,18 +2766,18 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 							// Cheap full-file scan only when the window already showed
 							// at least one conflict — otherwise pay nothing on clean files.
 							let totalInFile = entries.length;
-							let scanTruncated = false;
+							let truncatedAtLine: number | undefined;
 							try {
 								const fileScan = await scanFileForConflicts(absolutePath);
 								totalInFile = Math.max(entries.length, fileScan.blocks.length);
-								scanTruncated = fileScan.scanTruncated;
+								truncatedAtLine = fileScan.truncatedAtLine;
 							} catch {
 								// Best-effort enrichment; fall back to window-only count.
 							}
 							outputText += formatConflictWarning(entries, {
 								totalInFile,
 								displayPath: displayPathForWarning,
-								scanTruncated,
+								truncatedAtLine,
 							});
 							details.conflictCount = entries.length;
 						}
@@ -2858,10 +2859,14 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 			}),
 		);
 
-		const summary =
-			entries.length === 0
-				? `No unresolved git merge conflicts in ${displayPath}.`
-				: formatConflictSummary(entries, { displayPath, scanTruncated: scan.scanTruncated });
+		let summary: string;
+		if (entries.length > 0) {
+			summary = formatConflictSummary(entries, { displayPath, truncatedAtLine: scan.truncatedAtLine });
+		} else if (scan.truncatedAtLine !== undefined) {
+			summary = `No unresolved git merge conflicts before line ${scan.truncatedAtLine} of ${displayPath}.\n${formatScanCapNote(displayPath, scan.truncatedAtLine)}`;
+		} else {
+			summary = `No unresolved git merge conflicts in ${displayPath}.`;
+		}
 
 		const details: ReadToolDetails = {
 			resolvedPath: absolutePath,

@@ -440,6 +440,7 @@ describe("builtin-defaults rule provider", () => {
 			'const GREETINGS = new Set(["say \\"hi\\"", "bye"]);',
 			'const KINDS = new Set([/* categories * kept together */ "a", "b"]);',
 			'const CLOSERS = new Map([["close", "]"]]);',
+			'const SIZES = new Map([["small", 1] as const, ["large", 2] as const]);',
 		];
 		for (const snippet of hits) expect(fired(snippet), snippet).toEqual(["ts-set-map"]);
 
@@ -455,6 +456,8 @@ describe("builtin-defaults rule provider", () => {
 			'const labels = new Map<string, string>().set("key", choose<string>(["a", "b"]));',
 			'const keep = new Set(["vendor", ...legs.map(leg => leg.id)]);',
 			'const counts = new Map([["known", 1], ...runtimeEntries]);',
+			// A table filling a 1000-character line is not small; bailing there keeps streaming one cheap.
+			`const SCHEMAS = new Map([["schema", "${"x".repeat(1000)}"]]);`,
 		];
 		for (const snippet of misses) expect(fired(snippet), snippet).toEqual([]);
 	});
@@ -477,6 +480,7 @@ describe("builtin-defaults rule provider", () => {
 			'type Mod = (typeof import("./mod"));',
 			'type Keys = keyof typeof import("./mod");',
 			'type Client = import(/* SDK * pinned */ "sdk").Client;',
+			'type Temperature = import("./units").温度;',
 		];
 		for (const snippet of hits) expect(fired(snippet), snippet).toEqual(["ts-import-type"]);
 
