@@ -165,7 +165,6 @@ for (const { cancellation, build } of [
 		let active: Promise<unknown> | undefined;
 		let cancelledQueue: Promise<unknown> | undefined;
 		let survivingQueue: Promise<unknown> | undefined;
-		let timeoutTimer: NodeJS.Timeout | undefined;
 		try {
 			const command: GateCommand = {
 				label: build ? "build/fixture payload" : "test/fork session",
@@ -195,18 +194,36 @@ for (const { cancellation, build } of [
 						}),
 						gate.charged(async () => {
 							await waitForNativeFiles([ready, descendant], gate.signal);
-							if (cancellation !== "timeout") {
-								// Let the test start and cancel a queued consumer first.
-								await waitForNativeFiles([path.join(state, "fail")], gate.signal);
-								if (cancellation === "runner death") {
-									const context = await Bun.file(
-										path.join(identity.outputBase.slice(0, -"-output".length), "context.json"),
-									).json();
-									expect(Number.isSafeInteger(context.runnerPid)).toBe(true);
-									process.kill(context.runnerPid, "SIGKILL");
-								} else {
-									gate.fail(new GateCommandError("fixture first native failure", 37));
-								}
+							// Establish queued-consumer isolation before triggering any failure.
+							await waitForNativeFiles([path.join(state, "fail")], gate.signal);
+							if (cancellation === "timeout") {
+								// Exercise the real cumulative charged budget only after native
+								// readiness. Its stricter child deadline cancels the owned root
+								// action without resetting the enclosing fulltest clock.
+								await gate.childGate(
+									"fastcheck",
+									child =>
+										child.charged(async () => {
+											const stopped = Promise.withResolvers<void>();
+											const onAbort = () => stopped.reject(child.signal.reason);
+											child.signal.addEventListener("abort", onAbort, { once: true });
+											try {
+												if (child.signal.aborted) onAbort();
+												await stopped.promise;
+											} finally {
+												child.signal.removeEventListener("abort", onAbort);
+											}
+										}),
+									{ limitSeconds: 0.4, cleanupReserveMs: 0, print: () => {} },
+								);
+							} else if (cancellation === "runner death") {
+								const context = await Bun.file(
+									path.join(identity.outputBase.slice(0, -"-output".length), "context.json"),
+								).json();
+								expect(Number.isSafeInteger(context.runnerPid)).toBe(true);
+								process.kill(context.runnerPid, "SIGKILL");
+							} else {
+								gate.fail(new GateCommandError("fixture first native failure", 37));
 							}
 						}),
 					]);
@@ -314,17 +331,6 @@ for (const { cancellation, build } of [
 			survivingQueue = survivor;
 			await survivingReady.promise;
 			await Bun.write(path.join(state, "fail"), "fail");
-			if (cancellation === "timeout") {
-				// Arm a real external timeout only after native readiness and queued
-				// consumer isolation are established, not during startup/analysis.
-				// Native subprocess cancellation needs the platform timer, not fake time.
-				// All preparation remains inside the enclosing fulltest wall budget;
-				// no product gate clock is reset or its hard deadline relaxed.
-				timeoutTimer = setTimeout(
-					() => activeController.abort(new GateCommandError("fixture native timeout", 124, "TIMEOUT")),
-					0,
-				);
-			}
 			const result = await activeRun;
 			expect(result.status).toBe(cancellation === "timeout" ? "TIMEOUT" : "FAIL");
 			if (cancellation === "runner death") expect(result.exitCode).not.toBe(0);
@@ -336,7 +342,6 @@ for (const { cancellation, build } of [
 			expect(surviving.exitCode).toBe(0);
 			expect(await nativeIdentity(survivingTargets[0]!)).toEqual(identity);
 		} finally {
-			clearTimeout(timeoutTimer);
 			activeController.abort();
 			queuedController.abort();
 			await Bun.write(release, "release");
@@ -1109,6 +1114,83 @@ test("require factory input", () => expect(${name === "alias" ? "load" : `${fact
 		await cleanup(root);
 	}
 }, 240_000);
+
+test("opaque package loading reuses unrelated shared edits but observes transitive cyclic package inputs", async () => {
+	const root = await fixture();
+	try {
+		await copyReporter(root);
+		await Bun.write(
+			path.join(root, "packages/b/package.json"),
+			JSON.stringify({ name: "@fixture/b", dependencies: { "@fixture/dependency": "workspace:*" } }),
+		);
+		await Bun.write(
+			path.join(root, "packages/dependency/package.json"),
+			JSON.stringify({ name: "@fixture/dependency", dependencies: { "@fixture/leaf": "workspace:*" } }),
+		);
+		await Bun.write(
+			path.join(root, "packages/leaf/package.json"),
+			JSON.stringify({ name: "@fixture/leaf", dependencies: { "@fixture/dependency": "workspace:*" } }),
+		);
+		await Bun.write(
+			path.join(root, "packages/b/value.cjs"),
+			'exports.value = require("../dependency/value.cjs").value;\n',
+		);
+		await Bun.write(
+			path.join(root, "packages/dependency/value.cjs"),
+			'exports.value = require("../leaf/value.cjs").value;\n',
+		);
+		await Bun.write(path.join(root, "packages/leaf/value.cjs"), "exports.value = 41;\n");
+		await Bun.write(path.join(root, "crates/unrelated/src/lib.rs"), "pub const VALUE: u8 = 1;\n");
+		const independentRuns = path.join(root, ".state/independent.runs");
+		await Bun.write(
+			path.join(root, "packages/b/opaque.test.ts"),
+			`import { test, expect } from "bun:test";
+import { createRequire } from "node:module";
+const load = createRequire(import.meta.url);
+test("dynamic local value", () => expect(load("./value.cjs").value + 1).toBe(42));
+`,
+		);
+		await Bun.write(
+			path.join(root, "packages/a/independent.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("independent consumer", () => {
+ expect(6 * 7).toBe(42);
+ mkdirSync(${JSON.stringify(path.dirname(independentRuns))}, {recursive:true});
+ appendFileSync(${JSON.stringify(independentRuns)}, "run\\n");
+});
+`,
+		);
+		const commands: GateCommand[] = [
+			{
+				label: "test/fork packages/b/opaque.test.ts",
+				argv: [process.execPath, "../../scripts/test-report-bun.ts", "opaque.test.ts", "--bail=1"],
+				cwd: path.join(root, "packages/b"),
+			},
+			{
+				label: "test/fork packages/a/independent.test.ts",
+				argv: [process.execPath, "../../scripts/test-report-bun.ts", "independent.test.ts", "--bail=1"],
+				cwd: path.join(root, "packages/a"),
+			},
+		];
+		expect((await batch(root, commands, "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, commands, "fulltest")).targets.map(target => target.status)).toEqual([
+			"cached",
+			"cached",
+		]);
+		await Bun.write(path.join(root, "docs/notes.md"), "Unrelated documentation.\n");
+		await Bun.write(path.join(root, "scripts/install.ps1"), "Write-Host 'Unrelated installer'\n");
+		await Bun.write(path.join(root, "crates/unrelated/src/lib.rs"), "pub const VALUE: u8 = 2;\n");
+		const unrelated = await batch(root, commands, "fulltest");
+		expect(unrelated.exitCode).toBe(0);
+		expect(unrelated.targets.map(target => target.status)).toEqual(["cached", "cached"]);
+		await Bun.write(path.join(root, "packages/leaf/value.cjs"), "exports.value = 99;\n");
+		expect((await batch(root, commands, "fulltest")).exitCode).not.toBe(0);
+		expect(await Bun.file(independentRuns).text()).toBe("run\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 120_000);
 
 test("native discovery refreshes installed package resolution before caching a new dependency edge", async () => {
 	const root = await fixture();

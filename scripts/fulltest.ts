@@ -11,7 +11,7 @@ import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import { captureSourceIdentity } from "./test-gate-source";
+import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
 import { runBazelCommands } from "./test-gate-bazel";
@@ -211,7 +211,52 @@ export async function removeFulltestHome(home: string): Promise<void> {
 	await removeWithRetries(home);
 }
 
-export async function runFulltest(gate: GateRun, options: FulltestOptions): Promise<void> {
+/** Only the native producer's two tracked regular-file bindings may change content. */
+function assertFulltestSourceStable(before: SourceIdentity, after: SourceIdentity, allowNativeBindings = false): void {
+	const unchanged =
+		before.head === after.head &&
+		(allowNativeBindings
+			? before.files.length === after.files.length &&
+				before.files.every((file, index) => {
+					const next = after.files[index];
+					const generated =
+						file.kind === "file" &&
+						(file.path === "packages/natives/native/index.js" ||
+							file.path === "packages/natives/native/index.d.ts");
+					return (
+						file.path === next.path &&
+						file.kind === next.kind &&
+						file.executable === next.executable &&
+						file.link === next.link &&
+						(generated || file.sha256 === next.sha256)
+					);
+				})
+			: before.digest === after.digest);
+	if (!unchanged) {
+		throw new GateCommandError(
+			"Source changed while preparing or running tests; result does not verify one source snapshot",
+			1,
+		);
+	}
+}
+
+interface FulltestInfrastructure {
+	captureSourceIdentity: typeof captureSourceIdentity;
+	runBazelCommands: typeof runBazelCommands;
+	fastcheckCommands: typeof fastcheckCommands;
+}
+
+const fulltestInfrastructure: FulltestInfrastructure = {
+	captureSourceIdentity,
+	runBazelCommands,
+	fastcheckCommands,
+};
+
+export async function runFulltest(
+	gate: GateRun,
+	options: FulltestOptions,
+	infrastructure: FulltestInfrastructure = fulltestInfrastructure,
+): Promise<void> {
 	const started = performance.now();
 	logger.info("Current platform fulltest started", {
 		component: "test-gate-fulltest",
@@ -223,7 +268,7 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 		scope: "fork-affected",
 	});
 	try {
-		await runFulltestObserved(gate, options);
+		await runFulltestObserved(gate, options, infrastructure);
 		logger.info("Current platform fulltest completed", {
 			component: "test-gate-fulltest",
 			event: "fulltest_settled",
@@ -248,7 +293,12 @@ export async function runFulltest(gate: GateRun, options: FulltestOptions): Prom
 		throw error;
 	}
 }
-async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Promise<void> {
+async function runFulltestObserved(
+	gate: GateRun,
+	options: FulltestOptions,
+	infrastructure: FulltestInfrastructure,
+): Promise<void> {
+	const { captureSourceIdentity, runBazelCommands, fastcheckCommands } = infrastructure;
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
 		throw new GateCommandError(
 			`UNVERIFIED: supported local platform is Windows/Linux x64, found ${process.platform}-${process.arch}`,
@@ -270,7 +320,6 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 	if (before.dirty) console.log(`source: uncommitted summary\n${before.status.trimEnd()}`);
 	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-affected`);
 	console.log("coverage outside gates: real desktop input; live credential-backed model/gateway integration");
-	const changedPaths = await discoverForkChangedPaths(gate);
 	await Promise.all(
 		[
 			{ label: "version/Git", argv: ["git", "--version"], cwd: gateRepoRoot },
@@ -284,6 +333,9 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 	);
 	const home = await gate.charged(() => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
 	try {
+		// Preparation is not a producer: even generated bindings must remain unchanged here.
+		const beforeNative = await captureSourceIdentity(gate, gateRepoRoot);
+		assertFulltestSourceStable(before, beforeNative);
 		// Native source/binding generation must finish before static/test readers.
 		// Invoke the install primitive directly; the public adapter would re-enter this Bazel lane.
 		await runBazelCommands(
@@ -298,6 +350,21 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 			],
 			{ concurrency: 1 },
 		);
+		const afterBuild = await captureSourceIdentity(gate, gateRepoRoot);
+		assertFulltestSourceStable(beforeNative, afterBuild, true);
+		logger.info("Fulltest post-build source identity resolved", {
+			component: "test-gate-fulltest",
+			event: "fulltest_source_identity",
+			stage: "source-after-build",
+			result: "completed",
+			head: afterBuild.head,
+			dirty: afterBuild.dirty,
+			source_fingerprint: afterBuild.digest,
+		});
+		console.log(
+			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
+		);
+		const changedPaths = await discoverForkChangedPaths(gate);
 		// Gate orchestration selftests are the highest-risk readers after native
 		// generation. Keep their short injected budgets isolated from heavy test
 		// trees, but fail here before dispatching the bulk fork regressions.
@@ -343,19 +410,6 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 		for (const command of tests) {
 			if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		}
-		const afterBuild = await captureSourceIdentity(gate, gateRepoRoot);
-		logger.info("Fulltest post-build source identity resolved", {
-			component: "test-gate-fulltest",
-			event: "fulltest_source_identity",
-			stage: "source-after-build",
-			result: "completed",
-			head: afterBuild.head,
-			dirty: afterBuild.dirty,
-			source_fingerprint: afterBuild.digest,
-		});
-		console.log(
-			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
-		);
 		// Static checks and tests share one Bazel graph. Only Rust tests depend
 		// on clippy; TS actions/tests remain independently schedulable.
 		const cpuBudget = gateCpuBudget();
@@ -376,12 +430,7 @@ async function runFulltestObserved(gate: GateRun, options: FulltestOptions): Pro
 			dirty: after.dirty,
 			source_fingerprint: after.digest,
 		});
-		if (after.digest !== afterBuild.digest || after.head !== afterBuild.head) {
-			throw new GateCommandError(
-				"Source changed while tests were running; result does not verify one source snapshot",
-				1,
-			);
-		}
+		assertFulltestSourceStable(afterBuild, after);
 	} catch (error) {
 		// Record the triggering failure before cleanup can report its own error.
 		throw gate.fail(error);

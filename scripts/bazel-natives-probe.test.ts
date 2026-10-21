@@ -55,7 +55,17 @@ test("build-only artifact install retains stamping while the default rejects an 
 		expect(skipped.exitCode).toBe(0);
 		const stamped = new Uint8Array(await Bun.file(path.join(skippedDest, filename)).arrayBuffer());
 		expect(containsVersionStamp(stamped, await nativesPackageVersion())).toBe(true);
-		const normal = await install(path.join(temp, "normal"), false);
+		const installedPath = path.join(skippedDest, filename);
+		const preservedTime = new Date("2000-01-01T00:00:00.000Z");
+		await fs.utimes(installedPath, preservedTime, preservedTime);
+		const unchanged = await install(skippedDest, true);
+		expect(unchanged.exitCode).toBe(0);
+		expect((await fs.stat(installedPath)).mtimeMs).toBe(preservedTime.getTime());
+		await Bun.write(path.join(sourceDir, filename), Buffer.concat([invalidImage, Buffer.from([0x7f])]));
+		const changed = await install(skippedDest, true);
+		expect(changed.exitCode).toBe(0);
+		expect((await fs.readFile(installedPath)).at(-1)).toBe(0x7f);
+		const normal = await install(skippedDest, false);
 		expect(normal.exitCode).not.toBe(0);
 		expect(normal.stderr).toContain("cannot be loaded on this host");
 	} finally {

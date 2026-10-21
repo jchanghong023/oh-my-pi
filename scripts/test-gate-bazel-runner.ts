@@ -18,6 +18,31 @@ interface GateContext {
 	runnerPid?: number;
 }
 
+let failureContext: GateContext | undefined;
+let firstFailure: { exitCode: number; status: string; message: string } | undefined;
+
+// Keep this wire local: native primitive runfiles do not include host failure modules.
+function reportFailure(error: unknown, exitCode?: number): void {
+	if (firstFailure) return;
+	const cause = error as { exitCode?: number; status?: string };
+	firstFailure = {
+		exitCode: exitCode ?? cause?.exitCode ?? 1,
+		status: cause?.status ?? "FAIL",
+		message: error instanceof Error ? error.message : String(error),
+	};
+	const token = process.env.OMP_GATE_EVENT_TOKEN || failureContext?.eventToken;
+	const eventFile = process.env.OMP_GATE_EVENT_FILE || failureContext?.eventFile;
+	if (!token) return;
+	const line = `OMP_GATE_EVENT ${token} ${JSON.stringify({ id: randomUUID(), kind: "failure", ...firstFailure })}\n`;
+	try {
+		if (eventFile) appendFileSync(eventFile, line);
+		else process.stderr.write(line);
+	} catch (reportError) {
+		// A broken reporting channel must not replace the command's cause or code.
+		console.error("Gate failure notification failed:", reportError);
+	}
+}
+
 interface BazelTarget {
 	label: string;
 	test: boolean;
@@ -447,10 +472,19 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 			try {
 				if (cancelled) return 130;
 				startedNs = gateClockNanoseconds();
-				active = await requestPersistentBazel(nativeArgv);
+				try {
+					active = await requestPersistentBazel(nativeArgv);
+				} catch (error) {
+					reportFailure(error, (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined);
+					throw error;
+				}
 				if (cancelled) await active.cancel();
 				exitCode = await active.exited;
+				if (exitCode !== 0 && !cancelled) reportFailure(`Native Bazel command failed: ${argv.join(" ")}`, exitCode);
 				return cancelled ? 130 : exitCode;
+			} catch (error) {
+				reportFailure(error);
+				throw error;
 			} finally {
 				active = undefined;
 				const finishedNs = gateClockNanoseconds();
@@ -486,7 +520,10 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 				`bazel dispatch priority=${batch.priority} reason=${JSON.stringify(batch.reason)} targets=${batch.targets.map(target => target.label).join(",")}`,
 			);
 			const code = batch.charged ? await withChargedActivity(() => run(batch.argv)) : await run(batch.argv);
-			if (code !== 0) return code;
+			if (code !== 0) {
+				if (!cancelled) reportFailure("Native Bazel command failed", code);
+				return code;
+			}
 			// A zero client exit is insufficient: do not start a lower-risk band
 			// unless every required native action/test has successful BEP evidence.
 			const evidenceCode = await withChargedActivity(async () => {
@@ -494,24 +531,38 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 				if (!events.some(event => event.finished?.overallSuccess === true)) return 1;
 				return verifyTargets(events, batch.targets);
 			});
-			if (evidenceCode !== 0) return evidenceCode;
+			if (evidenceCode !== 0) {
+				reportFailure(`Required Bazel evidence is missing or unsuccessful: ${batch.bep}`, evidenceCode);
+				return evidenceCode;
+			}
 			const script = batch.script;
 			if (script) {
 				// Native --script_path preserves Bazel's argv/env/cwd. Run its payload
 				// under the ordinary Job/subreaper, never the persistent server owner.
 				// This includes setsid/detached descendants that a client signal misses.
-				active = await requestPersistentBazel(
-					process.platform === "win32" ? [process.env.COMSPEC ?? "cmd.exe", "/d", "/c", script] : [script],
-					{ charged: batch.charged },
-				);
+				try {
+					active = await requestPersistentBazel(
+						process.platform === "win32" ? [process.env.COMSPEC ?? "cmd.exe", "/d", "/c", script] : [script],
+						{ charged: batch.charged },
+					);
+				} catch (error) {
+					reportFailure(error, (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined);
+					throw error;
+				}
 				if (cancelled) await active.cancel();
 				const exitCode = await active.exited;
 				active = undefined;
-				if (exitCode !== 0) return exitCode;
+				if (exitCode !== 0) {
+					if (!cancelled) reportFailure(`Bazel run payload failed: ${script}`, exitCode);
+					return exitCode;
+				}
 			}
 		}
 		succeeded = true;
 		return 0;
+	} catch (error) {
+		reportFailure(error);
+		throw error;
 	} finally {
 		closing = true;
 		for (const child of graphChildren) {
@@ -542,6 +593,7 @@ async function primitiveEnvironment(
 	spec: BazelPrimitiveSpec,
 ): Promise<{ env: Record<string, string | undefined>; context: GateContext }> {
 	const context = (await Bun.file(path.join(spec.workspace, "context.json")).json()) as GateContext;
+	failureContext = context;
 	const env: Record<string, string | undefined> = { ...process.env };
 	for (const [key, value] of Object.entries(spec.env)) {
 		if (process.platform === "win32") {
@@ -577,7 +629,7 @@ async function primitiveEnvironment(
 
 async function execute(specFile: string, output?: string): Promise<number> {
 	const spec = (await Bun.file(specFile).json()) as BazelPrimitiveSpec;
-	const { env, context } = await primitiveEnvironment(spec);
+	const { env } = await primitiveEnvironment(spec);
 	let argv = spec.argv;
 	let artifactDirectory: string | undefined;
 	if (spec.artifactFiles?.length) {
@@ -586,14 +638,15 @@ async function execute(specFile: string, output?: string): Promise<number> {
 		await fs.mkdir(artifactDirectory, { recursive: true });
 		argv = [...argv, `--output-dir=${artifactDirectory}`];
 	}
-	const child = Bun.spawn(argv, { cwd: spec.cwd, env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
-	const code = await child.exited;
-	if (code !== 0 && context.eventFile && context.eventToken) {
-		appendFileSync(
-			context.eventFile,
-			`OMP_GATE_EVENT ${context.eventToken} ${JSON.stringify({ id: randomUUID(), kind: "failure", status: "FAIL", exitCode: code, message: `${spec.label} failed` })}\n`,
-		);
+	let child: Bun.Subprocess;
+	try {
+		child = Bun.spawn(argv, { cwd: spec.cwd, env, stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+	} catch (error) {
+		reportFailure(error, (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined);
+		throw error;
 	}
+	const code = await child.exited;
+	if (code !== 0) reportFailure(`${spec.label} failed`, code);
 	if (code === 0 && artifactDirectory) {
 		for (const filename of spec.artifactFiles ?? []) {
 			const artifact = path.join(artifactDirectory, filename);
@@ -623,8 +676,9 @@ if (!import.meta.main && process.env.OMP_GATE_SPEC) {
 		process.exitCode =
 			mode === "bazel" ? await launch(first, rest[0]!) : mode === "execute" ? await execute(first, rest[0]) : 2;
 	} catch (error) {
+		reportFailure(error);
 		console.error(error);
-		process.exitCode = 1;
+		process.exitCode = firstFailure?.exitCode ?? 1;
 	} finally {
 		if (process.argv[2] === "bazel") process.disconnect?.();
 	}

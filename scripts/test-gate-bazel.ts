@@ -456,6 +456,9 @@ async function declareTargets(
 			"common --watchfs",
 			"common --cache_computed_file_digests=500000",
 			"common:windows --experimental_windows_watchfs",
+			// Bound Windows metadata I/O: the default 200 scan threads contend
+			// on junction-backed toolchain inputs even when every action is cached.
+			"common:windows --experimental_fsvc_threads=8",
 			"",
 		].join("\n"),
 	);
@@ -764,6 +767,8 @@ export async function runBazelCommands(
 			"--nokeep_going",
 			"--notest_keep_going",
 			"--test_runner_fail_fast",
+			"--flaky_test_attempts=1",
+			"--cache_test_results=auto",
 			"--test_output=errors",
 			"--nozip_undeclared_test_outputs",
 			`--test_tmpdir=${path.join(os.tmpdir(), "omp-bazel", Bun.hash(plan.root).toString(16), path.basename(plan.workspace))}`,

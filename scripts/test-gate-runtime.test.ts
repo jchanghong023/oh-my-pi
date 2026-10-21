@@ -1308,13 +1308,66 @@ it("settles interrupted child scopes before the outer summary even with blocked 
 	);
 });
 
+it.each(["root", "nested", "event"] as const)(
+	"normalizes zero-code failure at the %s runtime boundary without starting siblings",
+	async boundary => {
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const failures = pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href;
+		const script = `
+import {runGate} from ${JSON.stringify(runtime)};
+import {GateCommandError} from ${JSON.stringify(failures)};
+let siblingStarted = false;
+const result = await runGate("slowtest", async gate => {
+  const boundary = ${JSON.stringify(boundary)};
+  if (boundary === "root") gate.fail(new GateCommandError("zero-code root failure",0));
+  else if (boundary === "nested") {
+    await gate.childGate("fastcheck",async nested => {
+      nested.fail(new GateCommandError("zero-code nested failure",0));
+    },{print:()=>{}});
+  } else {
+    await gate.capture({
+      label:"zero-code authenticated event fixture",
+      eventToken:"owned-zero",
+      argv:[process.execPath,"-e",'process.stderr.write(\\'OMP_GATE_EVENT owned-zero {"id":"fixture","kind":"failure","exitCode":0,"status":"FAIL","message":"zero-code public event"}\\\\n\\');'],
+    });
+  }
+  await gate.childGate("fastcheck",async () => { siblingStarted = true; },{print:()=>{}});
+},{print:()=>{}});
+process.stdout.write(JSON.stringify({result,siblingStarted}));
+process.exit(result.exitCode);`;
+		const child = Bun.spawn([process.execPath, "-e", script], {
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { ...process.env, OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "", OMP_GATE_CLOCK_TOKEN: "" },
+		});
+		const stdout = new Response(child.stdout).text();
+		const stderr = new Response(child.stderr).text();
+		const guard = Promise.withResolvers<never>();
+		// Real subprocess deadlock protection cannot use this process's fake timers.
+		const timer = setTimeout(() => guard.reject(new Error("zero-code fixture did not exit")), 3500);
+		try {
+			const code = await Promise.race([child.exited, guard.promise]);
+			expect(code).toBe(1);
+			const output = JSON.parse(await stdout);
+			expect(output.result.status).toBe("FAIL");
+			expect(output.result.exitCode).toBe(1);
+			expect(output.siblingStarted).toBe(false);
+		} finally {
+			clearTimeout(timer);
+			if (child.exitCode === null) child.kill("SIGKILL");
+			await child.exited;
+			await Promise.all([stdout, stderr]);
+		}
+	},
+);
+
 it("rejects malformed and foreign failure events while keeping the authenticated failure intact", () => {
 	const failures: GateCommandError[] = [];
 	const parser = new GateEventParser("owned", quiet, undefined, failure => failures.push(failure));
 	parser.push(
 		'OMP_GATE_EVENT foreign {"id":"a","kind":"failure","exitCode":37,"status":"FAIL","message":"foreign"}\n',
 	);
-	parser.push('OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":0,"status":"FAIL","message":"invalid"}\n');
+	parser.push('OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":"0","status":"FAIL","message":"invalid"}\n');
 	parser.push('OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":37,"status":"PASS","message":"invalid"}\n');
 	parser.push(
 		'OMP_GATE_EVENT owned {"id":"a","kind":"failure","exitCode":37,"status":"FAIL","message":"first failure"}\n',
@@ -2614,6 +2667,122 @@ process.exit(99);`;
 		}
 	},
 	5000,
+);
+
+it.each([
+	{ name: "first-failure", exitCode: 23 },
+	{ name: "watchdog-deadline", exitCode: 124 },
+	{ name: "startup-interrupt", exitCode: 130 },
+])(
+	"exits with full unconsumed stdout and stderr at $name",
+	async ({ name, exitCode }) => {
+		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const failures = pathToFileURL(path.join(import.meta.dir, "test-gate-failure-events.ts")).href;
+		const marker = path.join(directory, `blocked-output-${name}.markers`);
+		await fs.writeFile(marker, "");
+		const script = `
+import {Worker} from "node:worker_threads";
+import {appendFileSync} from "node:fs";
+const mark = phase => appendFileSync(${JSON.stringify(marker)}, phase+"\\n");
+import {runGate} from ${JSON.stringify(runtime)};
+import {GateCommandError} from ${JSON.stringify(failures)};
+async function saturate() {
+const state = new Int32Array(new SharedArrayBuffer(8));
+// Only fixture workers fill the inherited pipes; no gate command/business work runs.
+for (let index = 0; index < 2; index++) {
+  new Worker(\`const {workerData}=require("node:worker_threads");
+const {writeSync}=require("node:fs");
+const state=new Int32Array(workerData.state);
+const bytes=Buffer.alloc(4096,120);
+for (;;) {
+  try { const written=writeSync(workerData.fd,bytes); if(written>0){if (Atomics.add(state,workerData.index,1) >= 2048) throw new Error("fixture pipe unexpectedly drained beyond 8MiB");}else Atomics.wait(state,workerData.index,Atomics.load(state,workerData.index),5); }
+  catch (error) { if (error.code !== "EAGAIN") throw error; Atomics.wait(state,workerData.index,Atomics.load(state,workerData.index),5); }
+}\`,{eval:true,workerData:{state:state.buffer,index,fd:index+1}});
+}
+// Observe positive progress followed by stable saturation on BOTH actual pipes.
+// These independent native pipes/threads use the real OS clock, not fake timers.
+let previous = [-1,-1];
+for (;;) {
+  await Bun.sleep(100);
+  const current = [Atomics.load(state,0),Atomics.load(state,1)];
+  if (current.every((count,index) => count > 0 && count === previous[index])) break;
+  previous = current;
+}
+mark("saturated");
+}
+${name !== "first-failure" ? 'await saturate(); mark("runtime-start");' : ""}
+const pending=runGate("fulltest",async gate => {
+  ${name === "first-failure" ? "await saturate();" : ""}
+  mark("gate-start");
+  ${name === "first-failure" ? 'gate.fail(new GateCommandError("blocked-output original failure",23));' : "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0);"}
+},{${name !== "first-failure" ? "limitSeconds:0.4," : ""}exitOnFailure:true,reportFailure:true});
+${name === "startup-interrupt" ? 'process.emit("SIGINT");' : ""}
+await pending;
+process.exit(99);`;
+		// Bun eagerly drains captured subprocess pipes. An actual Node process owns
+		// these paused child streams so the OS pipes really fill, with bounded data.
+		const harness = `
+import {spawn} from "node:child_process";
+import {watch,readFileSync} from "node:fs";
+const marker=${JSON.stringify(marker)};
+let gateStarted;
+let guarded=false;
+const child=spawn(${JSON.stringify(process.execPath)},["-e",${JSON.stringify(script)}],{
+  stdio:["ignore","pipe","pipe"],
+  env:{...process.env,OMP_GATE_EVENT_TOKEN:"blocked-output-fixture",OMP_GATE_EVENT_FILE:"",OMP_GATE_CLOCK_TOKEN:""}
+});
+// Do not attach data listeners or resume either stream.
+const guard=()=>{guarded=true;child.kill("SIGKILL");};
+let timer=setTimeout(guard,20000);
+const inspect=()=>{
+  if(gateStarted===undefined && readFileSync(marker,"utf8").includes(${JSON.stringify(name === "first-failure" ? "gate-start\n" : "runtime-start\n")})){
+    gateStarted=performance.now();clearTimeout(timer);timer=setTimeout(guard,3500);
+  }
+};
+const watcher=watch(marker,inspect);
+process.on("SIGTERM",guard);
+child.on("error",error=>{console.error(error);process.exitCode=1;});
+child.on("exit",async(code,signal)=>{
+  inspect();
+  const elapsed=gateStarted===undefined?null:performance.now()-gateStarted;
+  clearTimeout(timer);watcher.close();
+  const markers=readFileSync(marker,"utf8");
+  // Only after native exit: drain our own finite pipes, retaining bounded diagnostics.
+  const drain=async stream=>{
+    let text="";
+    for await(const bytes of stream) text=(text+bytes.toString()).slice(-16384);
+    return text;
+  };
+  const [stdout,stderr]=await Promise.all([drain(child.stdout),drain(child.stderr)]);
+  console.log(JSON.stringify({code,signal,guarded,elapsed,markers,stdout,stderr}));
+});
+`;
+		const child = Bun.spawn(["node", "--input-type=module", "-e", harness], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const stdout = new Response(child.stdout).text();
+		const stderr = new Response(child.stderr).text();
+		try {
+			const code = await child.exited;
+			expect(code).toBe(0);
+			const result = JSON.parse(await stdout);
+			if (!result.markers.includes("saturated\n")) {
+				throw new Error(`Pipe fixture exited before saturation: ${JSON.stringify(result)}`);
+			}
+			expect(result.markers).toContain("saturated\n");
+			expect(result.markers).toContain(name === "first-failure" ? "gate-start\n" : "runtime-start\n");
+			expect(result.guarded).toBe(false);
+			expect(result.code).toBe(exitCode);
+			if (name === "startup-interrupt") expect(result.markers).not.toContain("gate-start\n");
+			expect(result.elapsed).toBeLessThan(2000);
+		} finally {
+			if (child.exitCode === null) child.kill("SIGTERM");
+			await child.exited;
+			await Promise.all([stdout, stderr]);
+		}
+	},
+	25_000,
 );
 
 // The native watchdog runs on another thread against the OS clock; fake timers

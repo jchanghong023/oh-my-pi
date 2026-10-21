@@ -1,7 +1,6 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import { writeSync } from "node:fs";
 import * as path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import * as logger from "@oh-my-pi/pi-utils/logger";
@@ -14,8 +13,10 @@ import { gateClockNanoseconds } from "./test-gate-clock";
 import { GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
 import {
 	exitGateProcess,
+	prepareGateDiagnosticOutput,
 	spawnGateAbortCommand,
 	startGateWatchdog,
+	writeGateDiagnostic,
 	type GateAbortCommand,
 	type GateWatchdog,
 } from "./test-gate-watchdog";
@@ -101,6 +102,7 @@ interface Scope {
 	reportFailure: boolean;
 	exitOnFailure: boolean;
 	watchdog?: GateWatchdog;
+	watchdogReady?: boolean;
 	runId: string;
 	startedNs: bigint;
 	operationId: string;
@@ -505,7 +507,6 @@ export class GateEventParser {
 						"exitCode" in event &&
 						typeof event.exitCode === "number" &&
 						Number.isSafeInteger(event.exitCode) &&
-						event.exitCode !== 0 &&
 						"status" in event &&
 						(event.status === "FAIL" ||
 							event.status === "TIMEOUT" ||
@@ -661,7 +662,14 @@ class Runtime {
 		if (scope.closed) return;
 		const report = !scope.failure && scope.reportFailure;
 		error = scope.failure ?? error;
-		if (scope.exitOnFailure) this.#exitFailedGate(scope, error);
+		if (scope.exitOnFailure) {
+			if (scope.watchdog && !scope.watchdogReady) {
+				scope.failure = error;
+				scope.watchdog.failStartup(error.exitCode);
+				return;
+			}
+			this.#exitFailedGate(scope, error);
+		}
 		for (const current of this.scopes) {
 			if (!ancestors(current).includes(scope) || current.closed || current.failure) continue;
 			(error.status === "INTERRUPTED" ? logger.info : logger.error)("Gate cancellation requested", {
@@ -714,21 +722,21 @@ class Runtime {
 		}
 		try {
 			if (scope.reportFailure && this.outerToken) {
-				writeSync(
+				writeGateDiagnostic(
 					2,
-					`${GATE_EVENT_PREFIX}${this.outerToken} ${JSON.stringify({ id: randomUUID(), kind: "failure", exitCode: error.exitCode || 1, status: error.status, message: error.message })}\n`,
+					`${GATE_EVENT_PREFIX}${this.outerToken} ${JSON.stringify({ id: randomUUID(), kind: "failure", exitCode: error.exitCode, status: error.status, message: error.message })}\n`,
 				);
 			}
 			for (const current of this.scopes) {
 				if (current.closed || !ancestors(current).includes(scope)) continue;
 				accrue(current);
-				writeSync(
+				writeGateDiagnostic(
 					1,
-					`${current.level}: ${error.message}\n${current.level}: ${error.status}${current.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${((current.last - current.started) / 1000).toFixed(1)}s compile_excluded=${(current.compile / 1000).toFixed(1)}s budgeted=${(current.charged / 1000).toFixed(1)}s limit=${(current.limit / 1000).toFixed(1)}s exit=${error.exitCode || 1}\n`,
+					`${current.level}: ${error.message}\n${current.level}: ${error.status}${current.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${((current.last - current.started) / 1000).toFixed(1)}s compile_excluded=${(current.compile / 1000).toFixed(1)}s budgeted=${(current.charged / 1000).toFixed(1)}s limit=${(current.limit / 1000).toFixed(1)}s exit=${error.exitCode}\n`,
 				);
 			}
 		} finally {
-			exitGateProcess(error.exitCode || 1);
+			exitGateProcess(error.exitCode);
 		}
 	}
 	cleanup(owned: Owned, aborted = true): Promise<void> {
@@ -795,17 +803,6 @@ class Runtime {
 		return execution;
 	}
 	private async executeScoped(scope: Scope, work: Work, options: GateOptions): Promise<GateResult> {
-		logger.info("Gate started", {
-			component: "test-gate",
-			event: "gate_started",
-			stage: scope.level,
-			result: "started",
-			platform: process.platform,
-			arch: process.arch,
-			limit_ms: scope.limit,
-			scope: scope.level === "bazel" ? "standalone" : "fork-affected",
-			name: scope.level,
-		});
 		const print = options.print ?? console.log;
 		const root = ancestors(scope).at(-1)!;
 		if (Number.isFinite(scope.limit) && (scope.exitOnFailure || (root.level === "bazel" && root.exitOnFailure))) {
@@ -834,7 +831,38 @@ class Runtime {
 		if (options.signal?.aborted) external();
 		// Signals and background failures must be owned while the watchdog starts,
 		// not only after its worker has acknowledged readiness.
-		if (scope.watchdog) await scope.watchdog.ready;
+		if (scope.watchdog) {
+			await scope.watchdog.ready;
+			// Only the main thread configures synchronous Windows handles, after
+			// the independent deadline is armed and before any lifecycle output.
+			prepareGateDiagnosticOutput();
+			scope.watchdogReady = true;
+			if (scope.failure) this.#exitFailedGate(scope, scope.failure);
+		}
+		logger.info("Gate started", {
+			component: "test-gate",
+			event: "gate_started",
+			stage: scope.level,
+			result: "started",
+			platform: process.platform,
+			arch: process.arch,
+			limit_ms: scope.limit,
+			scope: scope.level === "bazel" ? "standalone" : "fork-affected",
+			name: scope.level,
+		});
+		if (!scope.parent) {
+			logger.info("Gate entry started", {
+				component: "test-gate",
+				event: "gate_entry_started",
+				stage: scope.level,
+				result: "started",
+				gate_level: scope.level,
+				platform: process.platform,
+				arch: process.arch,
+				scope: scope.level === "bazel" ? "standalone" : "fork-affected",
+				name: scope.level,
+			});
+		}
 		accrue(scope);
 		if (!scope.failure && scope.charged >= scope.limit - scope.reserve)
 			this.cancel(scope, new GateCommandError(`${scope.level} charged budget exhausted`, 124, "TIMEOUT"));
@@ -1480,17 +1508,6 @@ async function runLifecycle(level: RunLabel, work: Work, options: GateOptions): 
 			parent_call_id: diagnosticId(process.env.OMP_GATE_DIAGNOSTIC_CALL_ID),
 		},
 		async () => {
-			logger.info("Gate entry started", {
-				component: "test-gate",
-				event: "gate_entry_started",
-				stage: level,
-				result: "started",
-				gate_level: level,
-				platform: process.platform,
-				arch: process.arch,
-				scope: level === "bazel" ? "standalone" : "fork-affected",
-				name: level,
-			});
 			try {
 				return await runtime.execute(runtime.create(level, options, undefined, started), work, options);
 			} catch (error) {

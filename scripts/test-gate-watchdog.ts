@@ -1,5 +1,4 @@
-import { dlopen, FFIType } from "bun:ffi";
-import { writeSync } from "node:fs";
+import { dlopen, FFIType, ptr } from "bun:ffi";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { gateClockNanoseconds } from "./test-gate-clock";
 import { openGateLibc } from "./test-gate-libc";
@@ -9,6 +8,7 @@ interface WatchdogData {
 	limitMs: number;
 	started: bigint;
 	state: SharedArrayBuffer;
+	output: SharedArrayBuffer;
 }
 export interface GateAbortCommand {
 	argv: readonly string[];
@@ -19,11 +19,97 @@ type WatchdogMessage =
 	| { kind: "deadline" | "stop" };
 export interface GateWatchdog {
 	ready: Promise<void>;
+	failStartup(exitCode: number): void;
 	update(charged: number, compile: number, compileOnly: boolean, elapsed: number): void;
 	setLimit(totalMs: number): void;
 	ownAbortCommand(id: string, command: GateAbortCommand): Promise<void>;
 	releaseAbortCommand(id: string): void;
 	stop(): void;
+}
+
+const outputBuffer: SharedArrayBuffer =
+	(!isMainThread && workerData?.output) || new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
+const outputState = new Int32Array(outputBuffer);
+
+/** Called only after the independent deadline thread acknowledges readiness. */
+export function prepareGateDiagnosticOutput(): void {
+	if (process.platform !== "win32") return;
+	const kernel = dlopen("kernel32.dll", {
+		GetStdHandle: { args: [FFIType.u32], returns: FFIType.ptr },
+		GetFileType: { args: [FFIType.ptr], returns: FFIType.u32 },
+		SetNamedPipeHandleState: {
+			args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+			returns: FFIType.i32,
+		},
+	});
+	try {
+		for (const fd of [1, 2] as const) {
+			if (Atomics.load(outputState, fd - 1) !== 0) continue;
+			let ready = -1;
+			try {
+				const handle = kernel.symbols.GetStdHandle(fd === 1 ? 0xfffffff5 : 0xfffffff4);
+				if (handle) {
+					if (kernel.symbols.GetFileType(handle) === 3) {
+						const mode = new Uint32Array([1]); // PIPE_NOWAIT, retained through exit.
+						// May block behind inherited writes; never run on the deadline thread.
+						if (kernel.symbols.SetNamedPipeHandleState(handle, ptr(mode), null, null)) ready = 1;
+					} else ready = 2;
+				}
+			} finally {
+				Atomics.store(outputState, fd - 1, ready);
+			}
+		}
+	} finally {
+		kernel.close();
+	}
+}
+
+/** Fatal writes never change Windows pipe modes or wait for an unprepared sink. */
+export function writeGateDiagnostic(fd: 1 | 2, text: string): void {
+	try {
+		const bytes = Buffer.from(text);
+		if (process.platform === "win32") {
+			const ready = Atomics.load(outputState, fd - 1);
+			// Only confirmed nonblocking pipes are safe on the deadline thread.
+			if (ready !== 1 && (!isMainThread || ready !== 2)) return;
+			const kernel = dlopen("kernel32.dll", {
+				GetStdHandle: { args: [FFIType.u32], returns: FFIType.ptr },
+				WriteFile: {
+					args: [FFIType.ptr, FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr],
+					returns: FFIType.i32,
+				},
+			});
+			try {
+				const handle = kernel.symbols.GetStdHandle(fd === 1 ? 0xfffffff5 : 0xfffffff4);
+				if (!handle) return;
+				const written = new Uint32Array(1);
+				kernel.symbols.WriteFile(handle, ptr(bytes), bytes.byteLength, ptr(written), null);
+			} finally {
+				kernel.close();
+			}
+		} else {
+			const nonblocking =
+				process.platform === "linux"
+					? 0x800
+					: ["darwin", "freebsd", "openbsd", "netbsd"].includes(process.platform)
+						? 4
+						: 0;
+			if (!nonblocking) return;
+			const libc = openGateLibc({
+				fcntl: { args: [FFIType.i32, FFIType.i32, FFIType.i32], returns: FFIType.i32 },
+				write: { args: [FFIType.i32, FFIType.ptr, FFIType.u64], returns: FFIType.i64 },
+			});
+			try {
+				const flags = libc.symbols.fcntl(fd, 3, 0);
+				if (flags < 0 || libc.symbols.fcntl(fd, 4, flags | nonblocking) < 0) return;
+				libc.symbols.write(fd, ptr(bytes), bytes.byteLength);
+			} finally {
+				libc.close();
+			}
+		}
+	} catch {
+		// Broken/full/unsupported sinks must never prevent native failure exit.
+	}
 }
 
 /** Bypass exit hooks: neither report I/O nor an exit listener may hold a failed gate open. */
@@ -52,7 +138,7 @@ export function spawnGateAbortCommand(command: GateAbortCommand): void {
 			windowsHide: true,
 		});
 	} catch (error) {
-		writeSync(2, `CLEANUP_FAIL: could not launch owned cross-OS cancellation: ${String(error)}\n`);
+		writeGateDiagnostic(2, `CLEANUP_FAIL: could not launch owned cross-OS cancellation: ${String(error)}\n`);
 	}
 }
 
@@ -63,8 +149,8 @@ export function startGateWatchdog(
 	elapsedMs: number,
 	onFailure: (error: unknown) => void,
 ): GateWatchdog {
-	// stopped, charged ns, compile ns, last elapsed ns, compile-only, effective wall limit ns.
-	const state = new BigInt64Array(new SharedArrayBuffer(6 * BigInt64Array.BYTES_PER_ELEMENT));
+	// stopped, charged, compile, elapsed, compile-only, wall limit, startup failure code/deadline.
+	const state = new BigInt64Array(new SharedArrayBuffer(8 * BigInt64Array.BYTES_PER_ELEMENT));
 	Atomics.store(state, 5, BigInt(Math.round(limitMs * 1e6)));
 	const ready = Promise.withResolvers<void>();
 	const worker = new Worker(new URL(import.meta.url), {
@@ -73,6 +159,7 @@ export function startGateWatchdog(
 			limitMs,
 			started: gateClockNanoseconds() - BigInt(Math.round(elapsedMs * 1e6)),
 			state: state.buffer,
+			output: outputBuffer,
 		} satisfies WatchdogData,
 	});
 	const registrations = new Map<string, { resolve: () => void }>();
@@ -108,6 +195,13 @@ export function startGateWatchdog(
 			worker.postMessage({ kind: "deadline" } satisfies WatchdogMessage);
 		},
 		ready: ready.promise,
+		failStartup(exitCode) {
+			if (Atomics.compareExchange(state, 6, 0n, BigInt(exitCode)) !== 0n) return;
+			// Only startup interruption may wait for readable-sink initialization.
+			// Bound it independently, never extending the original wall deadline.
+			Atomics.store(state, 7, gateClockNanoseconds() + 100_000_000n);
+			worker.postMessage({ kind: "deadline" } satisfies WatchdogMessage);
+		},
 		update(charged, compile, compileOnly, elapsed) {
 			Atomics.store(state, 1, BigInt(Math.round(charged * 1e6)));
 			Atomics.store(state, 2, BigInt(Math.round(compile * 1e6)));
@@ -129,12 +223,16 @@ if (!isMainThread) {
 	const checkDeadline = () => {
 		clearTimeout(timer);
 		if (Atomics.load(state, 0) !== 0n) return;
-		const deadline = data.started + Atomics.load(state, 5);
+		const wallDeadline = data.started + Atomics.load(state, 5);
+		const startupDeadline = Atomics.load(state, 7);
+		const deadline = startupDeadline > 0n && startupDeadline < wallDeadline ? startupDeadline : wallDeadline;
 		const now = gateClockNanoseconds();
 		if (now < deadline) {
 			timer = setTimeout(checkDeadline, Math.max(1, Number(deadline - now) / 1e6));
 			return;
 		}
+		const startupFailure = Atomics.load(state, 6);
+		if (startupFailure !== 0n) exitGateProcess(Number(startupFailure));
 		const elapsed = now - data.started;
 		const unobserved = elapsed - Atomics.load(state, 3);
 		const compileOnly = Atomics.load(state, 4) === 1n;
@@ -145,12 +243,12 @@ if (!isMainThread) {
 			for (const command of abortCommands.values()) spawnGateAbortCommand(command);
 			const token = process.env.OMP_GATE_EVENT_TOKEN;
 			if (token) {
-				writeSync(
+				writeGateDiagnostic(
 					2,
 					`OMP_GATE_EVENT ${token} ${JSON.stringify({ id: "wall-watchdog", kind: "failure", exitCode: 124, status: "TIMEOUT", message: "Total wall-clock deadline exhausted" })}\n`,
 				);
 			}
-			writeSync(
+			writeGateDiagnostic(
 				1,
 				`${data.level}: TIMEOUT total=${seconds(elapsed)}s compile_excluded=${seconds(compile)}s budgeted=${seconds(charged)}s limit=${(data.limitMs / 1000).toFixed(1)}s exit=124 (total wall-clock deadline, including nested limits)\n`,
 			);

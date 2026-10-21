@@ -4,8 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
-import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome } from "./fulltest";
-import { runGate } from "./test-gate-runtime";
+import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome, runFulltest } from "./fulltest";
+import { runGate, type GateRun } from "./test-gate-runtime";
+import type { SourceIdentity } from "./test-gate-source";
 
 test("fulltest reaches its CLI error boundary without loading the native addon", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-bootstrap-"));
@@ -135,6 +136,126 @@ describe("complete fork-delta TS selection", () => {
 			"test/Rust affected crates",
 			"smoke/isolated dev TUI PTY",
 		]);
+	});
+});
+
+describe("fulltest source snapshot checkpoints", () => {
+	const sourcePath = "packages/metaharness/adapters/edit/runner.test.ts";
+	const generatedPaths = ["packages/natives/native/index.js", "packages/natives/native/index.d.ts"];
+
+	async function exercise(
+		change: "source" | "new-test" | "head" | "bindings" | "binding-mode",
+		interval: "preparation" | "native" | "scripts" | "tests",
+	) {
+		let identity: SourceIdentity = {
+			head: "initial-head",
+			digest: "initial-digest",
+			dirty: false,
+			status: "",
+			files: [sourcePath, ...generatedPaths]
+				.filter(file => change !== "new-test" || file !== sourcePath)
+				.map(file => ({
+					path: file,
+					kind: "file",
+					sha256: "initial",
+					executable: false,
+				})),
+		};
+		let changedPaths: string[] = [];
+		let mutated = false;
+		const selectedPaths: string[][] = [];
+		const mutate = () => {
+			if (mutated) return;
+			mutated = true;
+			const paths = change === "bindings" || change === "binding-mode" ? generatedPaths : [sourcePath];
+			identity = {
+				...identity,
+				head: change === "head" ? "moved-head" : identity.head,
+				digest: change === "head" ? identity.digest : "changed-digest",
+				dirty: change !== "head",
+				status: change === "head" ? "" : paths.map(file => ` M ${file}\n`).join(""),
+				files: identity.files.map(file =>
+					change !== "head" && paths.includes(file.path)
+						? { ...file, sha256: "changed", executable: change === "binding-mode" }
+						: file,
+				),
+			};
+			if (change === "new-test") {
+				identity.files = [
+					...identity.files,
+					{ path: sourcePath, kind: "file", sha256: "new-test", executable: false },
+				];
+			}
+			changedPaths = paths;
+		};
+		const gate = {
+			signal: new AbortController().signal,
+			charged: async <T>(operation: () => T | Promise<T>) => operation(),
+			run: async () => {
+				if (interval === "preparation") mutate();
+			},
+			capture: async (command: { label: string }) => ({
+				stdout: command.label === "scope/complete fork delta" ? changedPaths.join("\0") : "",
+			}),
+			fail: (error: unknown) => error,
+		} as unknown as GateRun;
+		let failure: unknown;
+		try {
+			await runFulltest(
+				gate,
+				{ debug: false },
+				{
+					captureSourceIdentity: async () => identity,
+					fastcheckCommands: async () => [],
+					runBazelCommands: async (_gate, commands) => {
+						if (commands.some(command => command.label === "build/native")) {
+							if (interval === "native") mutate();
+						} else if (commands.some(command => command.label.startsWith("test/repository scripts "))) {
+							if (interval === "scripts") mutate();
+						} else {
+							const rust = commands.find(command => command.label === "test/Rust affected crates");
+							if (rust) selectedPaths.push(JSON.parse(rust.env!.OMP_FULLTEST_CHANGED_PATHS!));
+							if (interval === "tests") mutate();
+						}
+						// No command is executed: this replaces the native/script/static/product dispatch boundary.
+						return [];
+					},
+				},
+			);
+		} catch (error) {
+			failure = error;
+		}
+		expect(mutated).toBe(true);
+		return { failure, selectedPaths };
+	}
+
+	for (const interval of ["preparation", "native", "scripts", "tests"] as const) {
+		for (const change of ["source", "new-test", "head"] as const) {
+			test(`rejects ${change} movement during ${interval} rather than certifying an omitted snapshot`, async () => {
+				const { failure } = await exercise(change, interval);
+				expect(failure).toBeInstanceOf(Error);
+				expect(String(failure)).toContain("Source changed");
+			});
+		}
+	}
+	for (const interval of ["preparation", "scripts", "tests"] as const) {
+		test(`rejects binding regeneration outside native generation during ${interval}`, async () => {
+			const { failure } = await exercise("bindings", interval);
+			expect(failure).toBeInstanceOf(Error);
+			expect(String(failure)).toContain("Source changed");
+		});
+	}
+
+	test("rejects generated binding mode changes even during native generation", async () => {
+		const { failure } = await exercise("binding-mode", "native");
+		expect(failure).toBeInstanceOf(Error);
+		expect(String(failure)).toContain("Source changed");
+	});
+
+	test("preserves sanctioned native bindings and selects the complete post-native fork delta", async () => {
+		const { failure, selectedPaths } = await exercise("bindings", "native");
+		expect(failure).toBeUndefined();
+		expect(selectedPaths.map(paths => [...paths].sort())).toEqual([[...generatedPaths].sort()]);
 	});
 });
 

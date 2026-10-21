@@ -18,7 +18,10 @@
 
 ### Fixed
 
+- Keep gate scope tied to one source snapshot, fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
 - Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.
+- Keep package-local dynamic loaders from inheriting unrelated shared and Rust inputs through transitive workspace dependencies and package cycles, while retaining complete package resources and explicit cross-package inputs.
+- Avoid rewriting unchanged stamped native addons and writable bindings during installation, while retaining version/load verification, and bound Windows gate filesystem scanning to avoid metadata contention.
 - Fixed compacted-history replay losing running background tool updates, dropping message-form skill requests, and showing synthetic prompts as user messages.
 - Run fulltest static checks and tests in one Bazel graph, with affected Rust tests depending on clippy completion while TypeScript work remains parallel and the existing fastcheck budget is preserved.
 - Let fulltest observe completed static targets even when BEP file notifications are delayed, avoiding false fastcheck timeouts without changing budgets or check coverage.

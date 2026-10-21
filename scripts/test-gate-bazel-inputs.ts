@@ -600,7 +600,7 @@ export async function discoverGateInputs(
 						: input.startsWith("node_modules/")
 							? "@installed//:installed"
 							: owner
-								? `pkg_${owner}`
+								? `fallback_pkg_${owner}`
 								: "all",
 				);
 				dependencies.add("@installed//:installed");

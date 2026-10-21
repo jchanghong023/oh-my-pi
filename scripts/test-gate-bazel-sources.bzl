@@ -711,14 +711,19 @@ def _sources_impl(ctx):
             if target != name:
                 edges[name].append(target)
     cyclic_inputs = [":shared", ":crates"]
+    cyclic_fallback_inputs = []
     cyclic_dependencies = {}
     for name in sorted(cyclic):
         cyclic_inputs.extend(groups[name].keys())
+        cyclic_fallback_inputs.extend(groups[name].keys())
         for target in edges.get(name, []):
             if target not in cyclic:
                 cyclic_dependencies[target] = True
     cyclic_inputs.extend([":" + target for target in sorted(cyclic_dependencies)])
     build.append("filegroup(name = \"cyclic_sources\", srcs = %r)" % sorted({source: True for source in cyclic_inputs}))
+    cyclic_fallback_inputs.extend([":fallback_" + target for target in sorted(cyclic_dependencies)])
+    build.append("filegroup(name = \"fallback_cyclic_sources\", srcs = %r)" % sorted({source: True for source in cyclic_fallback_inputs}))
+    fallback_groups = {"fallback_cyclic_sources": True}
     for name in sorted(groups):
         inputs = groups[name].keys()
         if name == "installed":
@@ -733,6 +738,14 @@ def _sources_impl(ctx):
         elif name.startswith("pkg_"):
             inputs = inputs + [":shared", ":crates"] + [":" + target for target in edges.get(name, [])]
         build.append("filegroup(name = %r, srcs = %r)" % (name, inputs))
+        if name.startswith("pkg_"):
+            # Keep this boundary through transitive dependencies and native
+            # package cycle domains; coarse pkg_* groups reintroduce shared
+            # scripts/docs and crates even when the owner omitted them.
+            fallback = "fallback_" + name
+            fallback_groups[fallback] = True
+            fallback_inputs = [":fallback_cyclic_sources"] if name in cyclic else groups[name].keys() + [":fallback_" + target for target in edges.get(name, [])]
+            build.append("filegroup(name = %r, srcs = %r)" % (fallback, fallback_inputs))
     for target, members in sorted(module_domains.items()):
         module_inputs = {}
         for name in members:
@@ -743,13 +756,13 @@ def _sources_impl(ctx):
                     module_inputs[dependency if dependency.startswith("@") else ":" + cyclic_modules.get(dependency, dependency)] = True
         build.append("filegroup(name = %r, srcs = %r)" % (target, sorted(module_inputs)))
     for name in sorted(fine_groups):
-        if name in groups or name in module_domains or name in ["rust_inputs", "crates", "cyclic_sources", "BUILD.bazel", "REPO.bazel"] or name in exported:
+        if name in groups or name in fallback_groups or name in module_domains or name in ["rust_inputs", "crates", "cyclic_sources", "BUILD.bazel", "REPO.bazel"] or name in exported:
             fail("Input group collides with an existing target: " + name)
         inputs = {destinations[relative]: True for relative in fine_groups[name]}
         for dependency in input_deps.get(name, []):
             if dependency.startswith("@"):
                 inputs[dependency] = True
-            elif dependency in fine_groups or dependency in groups or dependency == "crates":
+            elif dependency in fine_groups or dependency in groups or dependency in fallback_groups or dependency == "crates":
                 # A cycle member is only an alias of its complete domain.
                 # Depend on that domain once, not on every member's filegroup;
                 # retain the public member labels without analyzing each alias.

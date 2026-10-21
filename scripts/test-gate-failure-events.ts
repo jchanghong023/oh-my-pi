@@ -5,12 +5,14 @@ import { GATE_EVENT_PREFIX } from "./test-gate-events";
 import type { GateStatus } from "./test-gate-runtime";
 
 export class GateCommandError extends Error {
+	readonly exitCode: number;
 	constructor(
 		message: string,
-		readonly exitCode: number,
+		exitCode: number,
 		readonly status: GateStatus = "FAIL",
 	) {
 		super(message);
+		this.exitCode = exitCode === 0 ? 1 : exitCode;
 	}
 }
 export function gateFailure(error: unknown): GateCommandError {

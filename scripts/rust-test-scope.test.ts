@@ -257,17 +257,6 @@ describe("Rust affected test scope", () => {
 		expect(result.stdout).toContain("Rust test commands: none");
 	});
 
-	it("falls back to workspace tests when Cargo metadata cannot resolve the affected scope", async () => {
-		const result = await runRustTaskRunner(["test:rs", "--affected", "--dry-run"], ["crates/pi-shell/src/lib.rs"]);
-
-		expect(result.exitCode).toBe(0);
-		expect(result.stderr).toContain("Selecting the full Rust workspace");
-		expect(result.stdout).toMatch(/cargo nextest run\b[^\r\n]* --workspace\b/);
-		expect(result.stdout).toContain("cargo test --doc --workspace");
-		expect(result.stdout).toContain("--exclude brush-core");
-		expect(result.stdout).toContain("--exclude napi");
-	});
-
 	it("rejects unknown and misplaced Rust runner arguments", async () => {
 		const unknown = await runRustTaskRunner(["test:rs", "--unknown"]);
 		const misplaced = await runRustTaskRunner(["check:rs", "--affected"]);

@@ -170,16 +170,10 @@ async function runAffectedRustTests(dryRun: boolean): Promise<void> {
 		commands = affectedRustTestCommands(scope.crates, metadata);
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
-		console.warn(`Warning: unable to resolve affected Rust crates: ${detail}. Selecting the full Rust workspace.`);
-		const commands = TASK_COMMANDS["test:rs"];
-		if (dryRun) {
-			printTestPlan({ crates: [] }, commands, "full workspace (affected scope unavailable)");
-			return;
-		}
-		Object.assign(process.env, windowsTestTempOverride());
-		prepareWindowsRustEnvironment();
-		await runCommands(commands, "rust-affected-full-workspace");
-		return;
+		const message = `Error: unable to resolve affected Rust crates: ${detail}`;
+		console.error(message);
+		reportGateFailure(new GateCommandError(message, 1));
+		process.exit(1);
 	}
 	if (scope.crates.length === 0) {
 		console.log("Rust affected test crates: none");

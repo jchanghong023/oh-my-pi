@@ -293,6 +293,17 @@ async function atomicInstallAddon(tempPath: string, destPath: string): Promise<v
 	if (renamedAside) await fs.unlink(backupPath).catch(() => {});
 }
 
+async function matchesInstalledFile(sourcePath: string, destPath: string): Promise<boolean> {
+	try {
+		const installed = await fs.stat(destPath);
+		if (!installed.isFile() || !(installed.mode & 0o200)) return false;
+		return (await fs.readFile(destPath)).equals(await fs.readFile(sourcePath));
+	} catch {
+		// A comparison is optional; retain the normal replacement/error path.
+		return false;
+	}
+}
+
 /**
  * Copy an addon into place, stamping `version` into the copy before the atomic
  * rename. Returns whether the copy was stamped.
@@ -316,7 +327,8 @@ async function installAddon(
 		await fs.chmod(tempPath, 0o644);
 		const stamp = !allowUnstamped || hasVersionStampSlot(await fs.readFile(tempPath));
 		if (stamp) await stampNativeVersion(tempPath, version);
-		await atomicInstallAddon(tempPath, destPath);
+		if (await matchesInstalledFile(tempPath, destPath)) await fs.unlink(tempPath);
+		else await atomicInstallAddon(tempPath, destPath);
 		return stamp;
 	} catch (err) {
 		await fs.unlink(tempPath).catch(() => {});
@@ -396,6 +408,7 @@ async function buildLocalHostAddon(host: HostInfo, destDir: string, skipLoadProb
 			[artifacts.loader, "index.js"],
 		] as const) {
 			const destination = path.join(destDir, name);
+			if (await matchesInstalledFile(source, destination)) continue;
 			try {
 				await fs.chmod(destination, 0o644);
 			} catch (error) {

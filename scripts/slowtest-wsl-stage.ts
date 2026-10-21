@@ -851,7 +851,6 @@ printf 'CLONED_REPOSITORY=%s\\n' "$destination"
 			"-c",
 			`set -eu
 trap 'code=$?; trap - EXIT; if [ "$code" -ne 0 ]; then status=FAIL; case "$code" in 124|137) status=TIMEOUT;; 130) status=INTERRUPTED;; esac; printf "OMP_GATE_EVENT %s {\\"id\\":\\"wsl-command\\",\\"kind\\":\\"failure\\",\\"exitCode\\":%s,\\"status\\":\\"%s\\",\\"message\\":\\"Linux preparation, fulltest or source certification failed\\"}\\n" "${token}" "$code" "$status" >&2; fi; exit "$code"' EXIT
-bun install --frozen-lockfile
 bun scripts/fulltest.ts${options.debug ? " --debug" : ""}
 source_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none)
 test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fixed commit during preparation or tests' >&2; exit 1; }`,

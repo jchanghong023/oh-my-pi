@@ -12,6 +12,7 @@ import {
 } from "./test-gate-process";
 import type { PersistentBazelClient } from "./test-gate-process";
 import { runGate } from "./test-gate-runtime";
+import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 
 const launchedAt = performance.now();
 const correlation = Object.fromEntries(
@@ -58,6 +59,19 @@ let reapChildren: (() => Promise<boolean>) | undefined;
 const nativeClients = new Map<string, { client?: PersistentBazelClient; cancelled: boolean }>();
 const nativeOperations = new Set<Promise<void>>();
 let nativeAccepting = true;
+let firstFailure: GateCommandError | undefined;
+function reportFailure(error: unknown, exitCode?: number): void {
+	if (firstFailure || aborting) return;
+	firstFailure =
+		error instanceof GateCommandError
+			? error
+			: new GateCommandError(error instanceof Error ? error.message : String(error), exitCode ?? 1);
+	try {
+		reportGateFailure(firstFailure);
+	} catch (reportError) {
+		console.error("Gate failure notification failed:", reportError);
+	}
+}
 async function cancelNativeClients() {
 	const cancellations = await Promise.allSettled(
 		[...nativeClients.values()].map(entry => {
@@ -306,131 +320,160 @@ process.on("message", async (message: unknown) => {
 			stage: "launch",
 			result: "started",
 		});
-		const child = Bun.spawn(argv, {
-			stdin: "inherit",
-			stdout: "inherit",
-			stderr: "inherit",
-			env: process.env,
-			windowsHide: true,
-			...(persistentBazel
-				? {
-						onDisconnect() {
-							nativeAccepting = false;
-							void cancelNativeClients();
-						},
-						ipc(message: unknown) {
-							if (
-								message &&
-								typeof message === "object" &&
-								"type" in message &&
-								"id" in message &&
-								typeof message.id === "string"
-							) {
-								const id = message.id;
-								if (message.type === "native-bazel-cancel") {
-									const entry = nativeClients.get(id);
-									if (entry) {
-										entry.cancelled = true;
-										void entry.client
-											?.cancel()
-											.catch(error => console.error("Native Bazel cancellation failed:", error));
-									}
-									return;
-								}
-								if (message.type === "native-bazel-start") {
-									// Hosted readiness can arrive after cancellation; keep ownership from receipt through exit.
-									const entry: { client?: PersistentBazelClient; cancelled: boolean } = { cancelled: false };
-									nativeClients.set(id, entry);
-									const operation = (async () => {
-										let exitCode = 1;
-										try {
-											if (aborting || !nativeAccepting) {
-												exitCode = 130;
-												return;
-											}
-											if (
-												!("argv" in message) ||
-												!Array.isArray(message.argv) ||
-												!message.argv.every(arg => typeof arg === "string") ||
-												!("cwd" in message) ||
-												typeof message.cwd !== "string" ||
-												!("env" in message) ||
-												!message.env ||
-												typeof message.env !== "object"
-											)
-												throw new Error("Invalid native Bazel invocation");
-											let client: PersistentBazelClient;
-											if ("payload" in message && message.payload && typeof message.payload === "object") {
-												const controller = new AbortController();
-												const argv = message.argv;
-												const cwd = message.cwd;
-												const env = message.env as Record<string, string>;
-												const charged = "charged" in message.payload && message.payload.charged === true;
-												const exited = runGate(
-													"fulltest",
-													async gate => {
-														await gate.run({
-															label: "build/Bazel run payload",
-															argv,
-															cwd,
-															env,
-															kind: charged ? "charged" : undefined,
-														});
-													},
-													{ signal: controller.signal, print: () => {} },
-												).then(result => result.exitCode);
-												client = {
-													pid: process.pid,
-													exited,
-													async cancel() {
-														controller.abort();
-														await exited;
-													},
-												};
-											} else {
-												const options = { cwd: message.cwd, env: message.env as Record<string, string> };
-												const broker = process.env.OMP_GATE_NATIVE_BROKER;
-												client = broker
-													? await requestHostedPersistentBazel(JSON.parse(broker), message.argv, options)
-													: spawnPersistentBazel(message.argv, options);
-											}
-											entry.client = client;
-											if (entry.cancelled || aborting || !nativeAccepting) await client.cancel();
-											try {
-												persistentCommand?.send({ type: "native-bazel-started", id, pid: client.pid });
-											} catch {}
-											exitCode = await client.exited;
-										} catch (error) {
-											console.error(error);
-										} finally {
-											nativeClients.delete(id);
-											try {
-												persistentCommand?.send({ type: "native-bazel-exited", id, exitCode });
-											} catch {}
+		let child: Bun.Subprocess;
+		try {
+			child = Bun.spawn(argv, {
+				stdin: "inherit",
+				stdout: "inherit",
+				stderr: "inherit",
+				env: process.env,
+				windowsHide: true,
+				...(persistentBazel
+					? {
+							onDisconnect() {
+								nativeAccepting = false;
+								void cancelNativeClients();
+							},
+							ipc(message: unknown) {
+								if (
+									message &&
+									typeof message === "object" &&
+									"type" in message &&
+									"id" in message &&
+									typeof message.id === "string"
+								) {
+									const id = message.id;
+									if (message.type === "native-bazel-cancel") {
+										const entry = nativeClients.get(id);
+										if (entry) {
+											entry.cancelled = true;
+											void entry.client
+												?.cancel()
+												.catch(error => console.error("Native Bazel cancellation failed:", error));
 										}
-									})();
-									nativeOperations.add(operation);
-									void operation.finally(() => nativeOperations.delete(operation));
-									return;
+										return;
+									}
+									if (message.type === "native-bazel-start") {
+										// Hosted readiness can arrive after cancellation; keep ownership from receipt through exit.
+										const entry: { client?: PersistentBazelClient; cancelled: boolean } = {
+											cancelled: false,
+										};
+										nativeClients.set(id, entry);
+										const operation = (async () => {
+											let exitCode = 1;
+											try {
+												if (aborting || !nativeAccepting) {
+													exitCode = 130;
+													return;
+												}
+												if (
+													!("argv" in message) ||
+													!Array.isArray(message.argv) ||
+													!message.argv.every(arg => typeof arg === "string") ||
+													!("cwd" in message) ||
+													typeof message.cwd !== "string" ||
+													!("env" in message) ||
+													!message.env ||
+													typeof message.env !== "object"
+												)
+													throw new Error("Invalid native Bazel invocation");
+												let client: PersistentBazelClient;
+												if (
+													"payload" in message &&
+													message.payload &&
+													typeof message.payload === "object"
+												) {
+													const controller = new AbortController();
+													const argv = message.argv;
+													const cwd = message.cwd;
+													const env = message.env as Record<string, string>;
+													const charged = "charged" in message.payload && message.payload.charged === true;
+													const exited = runGate(
+														"fulltest",
+														async gate => {
+															await gate.run({
+																label: "build/Bazel run payload",
+																argv,
+																cwd,
+																env,
+																kind: charged ? "charged" : undefined,
+															});
+														},
+														{ signal: controller.signal, print: () => {} },
+													).then(result => result.exitCode);
+													client = {
+														pid: process.pid,
+														exited,
+														async cancel() {
+															controller.abort();
+															await exited;
+														},
+													};
+												} else {
+													const options = { cwd: message.cwd, env: message.env as Record<string, string> };
+													const broker = process.env.OMP_GATE_NATIVE_BROKER;
+													try {
+														client = broker
+															? await requestHostedPersistentBazel(
+																	JSON.parse(broker),
+																	message.argv,
+																	options,
+																)
+															: spawnPersistentBazel(message.argv, options);
+													} catch (error) {
+														if (!entry.cancelled)
+															reportFailure(
+																error,
+																(error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined,
+															);
+														throw error;
+													}
+												}
+												entry.client = client;
+												if (entry.cancelled || aborting || !nativeAccepting) await client.cancel();
+												try {
+													persistentCommand?.send({ type: "native-bazel-started", id, pid: client.pid });
+												} catch {}
+												exitCode = await client.exited;
+												if (exitCode !== 0 && !entry.cancelled)
+													reportFailure("Native Bazel client failed", exitCode);
+											} catch (error) {
+												if (!entry.cancelled) reportFailure(error);
+												exitCode = firstFailure?.exitCode ?? 1;
+												console.error(error);
+											} finally {
+												nativeClients.delete(id);
+												try {
+													persistentCommand?.send({ type: "native-bazel-exited", id, exitCode });
+												} catch {}
+											}
+										})();
+										nativeOperations.add(operation);
+										void operation.finally(() => nativeOperations.delete(operation));
+										return;
+									}
 								}
-							}
-							if (
-								message &&
-								typeof message === "object" &&
-								"type" in message &&
-								message.type === "persistent-bazel-ready"
-							) {
-								persistentCommandReady = true;
-								if (aborting) {
-									try {
-										persistentCommand?.send("abort");
-									} catch {}
+								if (
+									message &&
+									typeof message === "object" &&
+									"type" in message &&
+									message.type === "persistent-bazel-ready"
+								) {
+									persistentCommandReady = true;
+									if (aborting) {
+										try {
+											persistentCommand?.send("abort");
+										} catch {}
+									}
 								}
-							}
-						},
-					}
-				: {}),
-		});
+							},
+						}
+					: {}),
+			});
+		} catch (error) {
+			reportFailure(error, (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined);
+			throw error;
+		}
 		commandPid = child.pid;
 		if (persistentBazel) persistentCommand = child;
 		logger.info("Supervised command spawned", {
@@ -443,6 +486,9 @@ process.on("message", async (message: unknown) => {
 		});
 		const exitCode = await child.exited;
 		nativeAccepting = false;
+		// Publish failure without releasing the ownership/lease acknowledgment.
+		// The final IPC reply still follows native cancellation.
+		if (exitCode !== 0) reportFailure("Supervised command failed", exitCode);
 		if (persistentBazel) await cancelNativeClients();
 		commandSettled = true;
 		if (persistentBazel && aborting) process.exit(0);
@@ -471,6 +517,7 @@ process.on("message", async (message: unknown) => {
 		if (exitCode === 0 && !aborting) logger.flush();
 		sendReply({ exitCode });
 	} catch (error) {
+		reportFailure(error);
 		commandSettled = true;
 		logger.error("Supervised command failed", {
 			...fields,
@@ -478,14 +525,14 @@ process.on("message", async (message: unknown) => {
 			stage: commandPid === undefined ? "launch" : "execute",
 			result: "failed",
 			missing_tool: (error as NodeJS.ErrnoException).code === "ENOENT",
-			exit_code: (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
+			exit_code: firstFailure?.exitCode ?? 1,
 			peer_pid: commandPid,
 			elapsed_ms: performance.now() - startedAt,
 			...logger.diagnosticError(error),
 		});
 		sendReply({
-			exitCode: (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
-			error: error instanceof Error ? error.message : String(error),
+			exitCode: firstFailure?.exitCode ?? 1,
+			error: firstFailure?.message ?? (error instanceof Error ? error.message : String(error)),
 			missing: (error as NodeJS.ErrnoException).code === "ENOENT",
 		});
 		logger.info("Supervisor failure IPC reply sent", {
@@ -493,7 +540,7 @@ process.on("message", async (message: unknown) => {
 			event: "gate_supervisor_ipc_sent",
 			stage: "reply",
 			result: "reply",
-			exit_code: (error as NodeJS.ErrnoException).code === "ENOENT" ? 127 : 1,
+			exit_code: firstFailure?.exitCode ?? 1,
 			elapsed_ms: performance.now() - startedAt,
 		});
 	}

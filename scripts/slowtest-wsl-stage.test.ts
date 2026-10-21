@@ -513,7 +513,7 @@ describe("streamed deployed fixed-commit execution", () => {
 			[
 				"#!/bin/sh",
 				'case "$1" in',
-				"install) exit 0;;",
+				"install) echo 'UNEXPECTED_DEPENDENCY_INSTALL' >&2; exit 79;;",
 				"scripts/fulltest.ts)",
 				...(row.mutation === "tracked" ? ["printf 'regenerated binding\\n' > native-binding.ts"] : []),
 				...(row.mutation === "added" ? ["printf 'new source\\n' > generated.ts"] : []),
