@@ -178,7 +178,19 @@ if ($PSVersionTable.PSVersion -lt [version]"5.1") {
 function Set-InstallTlsPolicy {
     if ($PSVersionTable.PSVersion.Major -lt 7) {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        [Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+        # TLS validation runs on a .NET worker thread without a PowerShell
+        # runspace. A scriptblock delegate fails there with a send error.
+        if (-not ("Omp.InstallerTls" -as [type])) {
+            Add-Type -TypeDefinition @'
+namespace Omp {
+    public static class InstallerTls {
+        public static readonly System.Net.Security.RemoteCertificateValidationCallback Callback =
+            (sender, certificate, chain, errors) => true;
+    }
+}
+'@
+        }
+        [Net.ServicePointManager]::ServerCertificateValidationCallback = [Omp.InstallerTls]::Callback
     }
 }
 $script:WebSkipCertCheck = if ($PSVersionTable.PSVersion.Major -ge 7) { @{ SkipCertificateCheck = $true } } else { @{} }

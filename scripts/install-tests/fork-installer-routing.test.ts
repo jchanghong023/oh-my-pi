@@ -1057,51 +1057,61 @@ Save-InstallBinary -Uri "http://omp-download.invalid/omp.exe" -OutFile $env:TEST
 	);
 });
 
-describe.skipIf(!windowsPowerShell || !Bun.which("curl.exe") || !Bun.which("openssl.exe"))(
-	"Windows installer untrusted-certificate downloads",
-	() => {
-		test("downloads binary bytes from a self-signed HTTPS endpoint through the relaxed TLS posture", async () => {
-			const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-"));
-			tempDirs.push(dir);
-			const payload = new Uint8Array([0x4d, 0x5a, 0, 0xff, 0x0d, 0x0a]);
-			const keyFile = path.join(dir, "key.pem");
-			const certFile = path.join(dir, "cert.pem");
-			const openssl = Bun.spawnSync(
-				[
-					Bun.which("openssl.exe")!,
-					"req",
-					"-x509",
-					"-newkey",
-					"rsa:2048",
-					"-keyout",
-					keyFile,
-					"-out",
-					certFile,
-					"-days",
-					"1",
-					"-nodes",
-					"-subj",
-					"/CN=localhost",
-				],
-				{ stdout: "ignore", stderr: "pipe" },
-			);
-			expect(openssl.exitCode, openssl.stderr?.toString()).toBe(0);
-			const server = Bun.serve({
-				hostname: "127.0.0.1",
-				port: 0,
-				tls: { key: Bun.file(keyFile), cert: Bun.file(certFile) },
-				fetch: () => new Response(payload),
-			});
-			try {
-				const harness = path.join(dir, "tls-download.ps1");
-				const outFile = path.join(dir, "download.exe");
-				await Bun.write(
-					harness,
-					`$ErrorActionPreference = "Stop"
+for (const powerShell of metadataPowerShellHosts) {
+	describe.skipIf(!Bun.which("curl.exe") || !Bun.which("openssl.exe"))(
+		`Windows installer untrusted-certificate requests (${path.basename(powerShell)})`,
+		() => {
+			test("fetches metadata and downloads via both transports from a self-signed HTTPS endpoint", async () => {
+				const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-tls-"));
+				tempDirs.push(dir);
+				const payload = new Uint8Array([0x4d, 0x5a, 0, 0xff, 0x0d, 0x0a]);
+				const keyFile = path.join(dir, "key.pem");
+				const certFile = path.join(dir, "cert.pem");
+				const openssl = Bun.spawnSync(
+					[
+						Bun.which("openssl.exe")!,
+						"req",
+						"-x509",
+						"-newkey",
+						"rsa:2048",
+						"-keyout",
+						keyFile,
+						"-out",
+						certFile,
+						"-days",
+						"1",
+						"-nodes",
+						"-subj",
+						"/CN=localhost",
+					],
+					{ stdout: "ignore", stderr: "pipe" },
+				);
+				expect(openssl.exitCode, openssl.stderr?.toString()).toBe(0);
+				const requests: string[] = [];
+				const server = Bun.serve({
+					hostname: "127.0.0.1",
+					port: 0,
+					tls: { key: Bun.file(keyFile), cert: Bun.file(certFile) },
+					fetch(request) {
+						const pathname = new URL(request.url).pathname;
+						requests.push(pathname);
+						return pathname === "/release"
+							? Response.json({ tag_name: "v18.0.9+fork.125" })
+							: new Response(payload);
+					},
+				});
+				try {
+					const harness = path.join(dir, "tls-download.ps1");
+					const outFile = path.join(dir, "download.exe");
+					await Bun.write(
+						harness,
+						`$ErrorActionPreference = "Stop"
 $env:HTTP_PROXY = $null
 $env:HTTPS_PROXY = $null
 $env:ALL_PROXY = $null
 $env:NO_PROXY = $null
+# Exclude PowerShell 7 so the installer cannot delegate to pwsh.exe.
+$env:PATH = (Join-Path $env:SystemRoot "System32") + ";" + (Join-Path $env:SystemRoot "System32/WindowsPowerShell/v1.0")
 $tokens = $null
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TEST_INSTALLER, [ref]$tokens, [ref]$parseErrors)
@@ -1110,45 +1120,51 @@ $source = [IO.File]::ReadAllText($env:TEST_INSTALLER)
 . ([scriptblock]::Create($source.Substring(0, $ast.EndBlock.Statements[-1].Extent.StartOffset))) -Binary
 # No proxy for this probe: exercise the TLS posture, not proxy resolution.
 [Net.WebRequest]::DefaultWebProxy = $null
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    if (-not [Net.ServicePointManager]::ServerCertificateValidationCallback) { throw "TLS policy callback not installed" }
-    if (([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]::Tls12) -eq 0) { throw "TLS 1.2 not enabled" }
-}
+$release = Invoke-RestMethod -Uri "https://127.0.0.1:$env:TEST_PORT/release" @script:WebSkipCertCheck
+if ($release.tag_name -ne "v18.0.9+fork.125") { throw "Unexpected release metadata" }
 Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile $env:TEST_OUTFILE
+function Get-Command([string]$Name) {
+    if ($Name -eq "curl.exe") { return $null }
+    Microsoft.PowerShell.Core\\Get-Command $Name
+}
+Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$env:TEST_OUTFILE.fallback"
 `,
-				);
-				const child = Bun.spawn(
-					[windowsPowerShell!, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
-					{
-						cwd: repoRoot,
-						env: {
-							...process.env,
-							OMP_CONFIG_ROOT: path.join(dir, "config"),
-							OMP_PROFILE: "default",
-							PI_PROFILE: "default",
-							CURL_HOME: dir,
-							TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
-							TEST_PORT: String(server.port),
-							TEST_OUTFILE: outFile,
-							PROCESSOR_ARCHITECTURE: "AMD64",
+					);
+					const child = Bun.spawn(
+						[powerShell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", harness],
+						{
+							cwd: repoRoot,
+							env: {
+								...process.env,
+								OMP_CONFIG_ROOT: path.join(dir, "config"),
+								OMP_PROFILE: "default",
+								PI_PROFILE: "default",
+								CURL_HOME: dir,
+								TEST_INSTALLER: path.join(repoRoot, "scripts", "install.ps1"),
+								TEST_PORT: String(server.port),
+								TEST_OUTFILE: outFile,
+								PROCESSOR_ARCHITECTURE: "AMD64",
+							},
+							stdout: "pipe",
+							stderr: "pipe",
 						},
-						stdout: "pipe",
-						stderr: "pipe",
-					},
-				);
-				const [exitCode, stdout, stderr] = await Promise.all([
-					child.exited,
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-				]);
-				// Without --insecure curl exits 60 on the self-signed chain and the
-				// Invoke-WebRequest fallback would have to rescue the download.
-				expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
-				expect(stdout).not.toContain("curl download failed");
-				expect(new Uint8Array(await fs.readFile(outFile))).toEqual(payload);
-			} finally {
-				server.stop(true);
-			}
-		}, 30_000);
-	},
-);
+					);
+					const [exitCode, stdout, stderr] = await Promise.all([
+						child.exited,
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+					]);
+					// Without --insecure curl exits 60 on the self-signed chain and the
+					// Invoke-WebRequest fallback would have to rescue the download.
+					expect(exitCode, `${stdout}\n${stderr}`).toBe(0);
+					expect(stdout).not.toContain("curl download failed");
+					expect(new Uint8Array(await fs.readFile(outFile))).toEqual(payload);
+					expect(new Uint8Array(await fs.readFile(`${outFile}.fallback`))).toEqual(payload);
+					expect(requests).toEqual(["/release", "/omp.exe", "/omp.exe"]);
+				} finally {
+					server.stop(true);
+				}
+			}, 30_000);
+		},
+	);
+}

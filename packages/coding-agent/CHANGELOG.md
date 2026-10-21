@@ -18,6 +18,7 @@
 
 ### Fixed
 
+- Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.
 - Fixed compacted-history replay losing running background tool updates, dropping message-form skill requests, and showing synthetic prompts as user messages.
 - Run fulltest static checks and tests in one Bazel graph, with affected Rust tests depending on clippy completion while TypeScript work remains parallel and the existing fastcheck budget is preserved.
 - Let fulltest observe completed static targets even when BEP file notifications are delayed, avoiding false fastcheck timeouts without changing budgets or check coverage.

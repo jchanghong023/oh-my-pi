@@ -92,7 +92,9 @@ Windows 运行时代理专项（installGlobalProxyFetch 系统代理回退）：
 
 零配置 TLS 默认（applyForkNetworkDefaults）：单测 3 例通过（未设→默认 `0`/`true`、显式 `NODE_TLS_REJECT_UNAUTHORIZED=1` 与 `GIT_SSL_NO_VERIFY=false` 保留）；本机自签证书真实链路验证默认生效（证书错误→200）、显式 `=1` 恢复严格校验。fastcheck 通过。CLI 主进程真实入口（TUI/RPC 全链路）、git 子进程继承与 fulltest/slowtest 未验证。
 
-安装器 TLS 放宽专项（install.ps1）：`fork-installer-routing.test.ts` 26 用例中 Windows 侧 15 通过／11 POSIX 跳过，含新增自签证书 HTTPS 真实下载用例（curl `--insecure --ssl-no-revoke` 直接成功、不走 IWR 回退）与 PS 5.1 TLS 1.2/证书回调装接断言；既有代理三路径（system/environment/fallback）与替换/回滚/PATH 用例不回归。fastcheck 通过（25.5 秒）。PowerShell 7 真实 `-SkipCertificateCheck` 路径、真实公网下载与 fulltest/slowtest 未验证。
+安装器 PowerShell 兼容专项：Windows 定向安装器回归 24 通过；更新下载／替换既有回归 23 通过／1 平台跳过。PowerShell 5.1 与 7.6.7 均在排除 `pwsh.exe` 的 PATH 下，通过自签 HTTPS 的真实元数据请求、curl 下载和 Invoke-WebRequest 下载；5.1 修复前复现相同发送错误，修复后通过。隔离的系统 PowerShell 5.1 真实执行当前 `install.ps1 -Binary`，再由安装的现有 `18.12.2` 二进制执行 `omp update --force`，下载、SHA-256、替换及最终版本核对均成功；当前 `18.12.4` 源码的 fork 更新入口也完成同一替换链路。冒烟使用本地自签 HTTPS 代理夹具与现有二进制，不是公网最新 Release 升级验收；临时安装、配置、代理及本次新增的用户 PATH 项均已清理。证据 `node_modules/.cache/installer-ps51-20261021/evidence.json`。
+
+当前 Windows `scope=fork-affected` fulltest 未通过：外层在 900 秒硬上限超时（实际墙钟 900.05 秒），共享 Bazel 图终态 `INTERRUPTED`／exit 8；未将中断或未完成目标记为通过。已完成 native 构建、30 个仓库脚本目标（13 缓存／17 实跑），全部 fastcheck 检查通过（68.2 秒，编译排除 0.0 秒，exit 0）；共享图 353 个测试目标中 211 个已通过（3 缓存／208 实跑），其余及最终 TUI 冒烟未完成。依据 `node_modules/.cache/test-gate-bazel/static/runs/1745ac48-2e86-4ed2-b5ae-72d209e41e27/events.jsonl`；此前通过的定向与隔离真实入口证据不替代本轮完整门禁。未运行 slowtest，未验证用户实机公网。
 
 README CMD 安装命令：根 README 新增的 CMD 等价安装命令（curl 下载脚本 + `powershell -File` 执行）已在真实 cmd.exe 完整验证一次：隔离 `PI_INSTALL_DIR` 下解析最新 Release、自动经本机 Windows 系统代理下载二进制、安装成功 exit 0、`omp --version` 报告 `omp/18.9.2+fork.307`；验证后用户 PATH 已恢复原值、临时安装与配置目录已清理。PowerShell 5.1/7 的原有单行命令行为未变，未重复验证。
 
