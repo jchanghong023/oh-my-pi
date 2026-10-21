@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.12.5] - 2026-10-21
+
 ### Fixed
 
 - Close persistent POSIX lock owners and retained descriptors on the native worker after final unlock failure, while preserving explicit-release retries and other active owners.

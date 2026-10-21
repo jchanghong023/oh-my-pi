@@ -1157,8 +1157,9 @@ export const cfgProvidersCacheRetention = register({
 			},
 			{
 				value: "long",
-				label: "长期（1 小时）",
-				description: "Provider 支持时使用 1 小时 TTL；写入成本较高，仅在活跃运行期间预热",
+				label: "长期（1 小时以上）",
+				description:
+					"Provider 支持时使用更长 TTL（Anthropic/Bedrock 为 1 小时，OpenAI GPT-5.6+ Responses 为 12 小时）；写入成本较高，仅在活跃运行期间预热",
 			},
 			{ value: "none", label: "关闭", description: "关闭 Prompt 缓存和缓存亲和路由" },
 		],

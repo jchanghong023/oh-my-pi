@@ -10,6 +10,8 @@
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.
 
+## [18.12.5] - 2026-10-21
+
 ### Fixed
 
 - Fixed Moonshot `kimi-k3` pricing cache writes at $0; usage cost now includes cache writes at Moonshot's $3/M 5-minute rate ([#16508](https://github.com/can1357/oh-my-pi/issues/16508))
