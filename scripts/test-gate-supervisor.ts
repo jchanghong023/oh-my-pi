@@ -60,12 +60,16 @@ const nativeClients = new Map<string, { client?: PersistentBazelClient; cancelle
 const nativeOperations = new Set<Promise<void>>();
 let nativeAccepting = true;
 let firstFailure: GateCommandError | undefined;
+// The caller opted into inspecting this command's exit status itself; only
+// failures the payload reports explicitly may settle the enclosing gate.
+const allowFailure = process.env.OMP_GATE_ALLOW_FAILURE === "1";
 function reportFailure(error: unknown, exitCode?: number): void {
 	if (firstFailure || aborting) return;
 	firstFailure =
 		error instanceof GateCommandError
 			? error
 			: new GateCommandError(error instanceof Error ? error.message : String(error), exitCode ?? 1);
+	if (allowFailure) return;
 	try {
 		reportGateFailure(firstFailure);
 	} catch (reportError) {
@@ -471,7 +475,15 @@ process.on("message", async (message: unknown) => {
 					: {}),
 			});
 		} catch (error) {
-			reportFailure(error, (error as NodeJS.ErrnoException)?.code === "ENOENT" ? 127 : undefined);
+			const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
+			// Match the IPC reply's missing-tool classification; the early
+			// notification must not downgrade it to an ordinary failure.
+			reportFailure(
+				missing
+					? new GateCommandError(error instanceof Error ? error.message : String(error), 127, "MISSING_TOOL")
+					: error,
+				missing ? 127 : undefined,
+			);
 			throw error;
 		}
 		commandPid = child.pid;

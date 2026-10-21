@@ -1218,6 +1218,7 @@ export class GateRun {
 						OMP_GATE_EVENT_TOKEN: token,
 						OMP_GATE_CLOCK_TOKEN: token,
 						OMP_GATE_EVENT_FILE: relay.path,
+						OMP_GATE_ALLOW_FAILURE: command.allowFailure ? "1" : undefined,
 						OMP_GATE_SUPERVISED_COMMAND: JSON.stringify(command.argv),
 						OMP_GATE_PERSISTENT_BAZEL: command.persistentBazel?.outputBase,
 						OMP_GATE_BAZEL_LEASE_FD: leaseFd === undefined ? undefined : "3",
