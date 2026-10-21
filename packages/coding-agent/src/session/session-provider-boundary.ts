@@ -157,6 +157,8 @@ export class SessionProviderBoundary {
 			this.#host.sessionManager.buildSessionContext({
 				transcript: true,
 				collapseCompactedHistory: options?.collapseCompactedHistory,
+				compactedHistoryTextOnly: options?.compactedHistoryTextOnly,
+				activeToolCallIds: options?.activeToolCallIds,
 				inFlightToolCallIds: keepLive ? this.#host.runToolCallIds() : undefined,
 			}),
 			this.#host.obfuscator(),

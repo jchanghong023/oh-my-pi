@@ -108,6 +108,8 @@ export function snapcompactHistoryBlockOptions(
 
 export interface SessionContext {
 	messages: AgentMessage[];
+	/** Transcript-only prefix of raw conversation messages; render text only, never tools or other history UI. */
+	compactedHistoryMessageCount?: number;
 	thinkingLevel?: string;
 	/** Configured thinking selector (`"auto"` or a concrete level) from the latest change. */
 	configuredThinkingLevel?: string;
@@ -170,6 +172,10 @@ export interface BuildSessionContextOptions {
 	preserveFailedTurns?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
+	/** Internal transcript projection: retain compacted conversation text before the ordinary live tail. */
+	compactedHistoryTextOnly?: boolean;
+	/** Active tool calls whose launch records must survive compacted-history projection. */
+	activeToolCallIds?: ReadonlySet<string>;
 	/**
 	 * Tool calls the live agent loop is still executing. They count as paired, so a
 	 * mid-turn rebuild keeps the in-flight assistant turn; the loop appends their results.
@@ -183,7 +189,10 @@ export interface BuildSessionContextOptions {
 }
 
 /** Options for `AgentSession.buildTranscriptSessionContext` (via `SessionProviderBoundary`). */
-export interface TranscriptSessionContextOptions extends Pick<BuildSessionContextOptions, "collapseCompactedHistory"> {
+export interface TranscriptSessionContextOptions extends Pick<
+	BuildSessionContextOptions,
+	"collapseCompactedHistory" | "compactedHistoryTextOnly" | "activeToolCallIds"
+> {
 	/**
 	 * Keep the unpaired tool calls of the turn the agent loop is still executing,
 	 * so a mid-turn rebuild keeps them routable. Calls left unpaired by earlier
@@ -363,6 +372,8 @@ export function buildSessionContext(
 	// 3. Emit messages after compaction
 	const messages: AgentMessage[] = [];
 	const cacheMissExplainedAt: boolean[] = [];
+	const compactedHistoryTextOnly = options?.transcript === true && options.compactedHistoryTextOnly === true;
+	let compactedHistoryMessageCount: number | undefined;
 	let pendingReset = false;
 	let currentMode = "none";
 	let lastAssistantModel: string | undefined;
@@ -423,7 +434,7 @@ export function buildSessionContext(
 		}
 	};
 
-	if (options?.transcript && !options.collapseCompactedHistory) {
+	if (options?.transcript && !options.collapseCompactedHistory && !compactedHistoryTextOnly) {
 		// Display transcript: every entry in chronological order. Compactions do
 		// not erase prior history here — each renders inline (as a divider in the
 		// TUI) at the point it fired, with any snapcompact frames re-attached so
@@ -536,23 +547,20 @@ export function buildSessionContext(
 		// Re-attach any archived snapcompact frames so the model can keep
 		// reading the archived history after every context rebuild.
 		const snapcompactArchive = snapcompact.getPreservedArchive(compaction.preserveData);
-		const compactionSummaryMsg = createCompactionSummaryMessage(
-			compaction.summary,
-			compaction.tokensBefore,
-			compaction.timestamp,
-			{
-				shortSummary: compaction.shortSummary,
-				providerPayload,
-				blocks: snapcompactHistoryBlocksForContext(snapcompactArchive, options),
-				warning: compaction.warning,
-				method: compaction.method,
-				tokensAfter: compaction.tokensAfter,
-				historyRewriteAt,
-			},
-		);
+		const compactionSummaryMsg = compactedHistoryTextOnly
+			? undefined
+			: createCompactionSummaryMessage(compaction.summary, compaction.tokensBefore, compaction.timestamp, {
+					shortSummary: compaction.shortSummary,
+					providerPayload,
+					blocks: snapcompactHistoryBlocksForContext(snapcompactArchive, options),
+					warning: compaction.warning,
+					method: compaction.method,
+					tokensAfter: compaction.tokensAfter,
+					historyRewriteAt,
+				});
 		// Agent context (non-transcript): summary first so the LLM sees the
 		// compacted context before recent messages.
-		if (!options?.transcript) {
+		if (!options?.transcript && compactionSummaryMsg) {
 			pushMessage(compactionSummaryMsg);
 		}
 
@@ -595,8 +603,8 @@ export function buildSessionContext(
 					? path.findIndex(entry => entry.id === compaction.providerReplayThroughEntryId)
 					: -1;
 			const retainedStart = firstKeptIdx >= 0 ? firstKeptIdx : snapshotIdx >= 0 ? snapshotIdx + 1 : -1;
+			let displayStartIdx = retainedStart >= 0 && retainedStart < compactionIdx ? retainedStart : compactionIdx;
 			if (retainedStart >= 0 && retainedStart < compactionIdx) {
-				let displayStartIdx = retainedStart;
 				if (options?.transcript) {
 					// `findCutPoint` may leave the collapsed display's kept region
 					// mid-turn. Trim only to a new turn initiated by the user:
@@ -612,6 +620,56 @@ export function buildSessionContext(
 						}
 					}
 				}
+			}
+			if (compactedHistoryTextOnly) {
+				// Reuse the selected branch and its actual display cut, including
+				// dialogue omitted by the mid-turn trim. Do not alter raw assistants
+				// or let old history change the live tail's cache-reset tracking.
+				for (let i = resetBoundaryIdx + 1; i < displayStartIdx; i++) {
+					const entry = path[i];
+					const message =
+						entry.type === "message"
+							? entry.message
+							: entry.type === "custom_message"
+								? customMessageEntryMessage(entry)
+								: undefined;
+					if (!message) continue;
+					if (message.role === "user") {
+						if (message.synthetic || message.attribution === "agent") continue;
+					} else if (message.role !== "assistant" && (message.role !== "custom" || !isUserRequestEntry(entry))) {
+						continue;
+					}
+					const hasText =
+						typeof message.content === "string"
+							? message.content.trim().length > 0
+							: message.content.some(block => block.type === "text" && block.text.trim().length > 0);
+					if (!hasText) continue;
+					messages.push(message);
+					cacheMissExplainedAt.push(false);
+				}
+				compactedHistoryMessageCount = messages.length;
+				const activeToolCallIds = options?.activeToolCallIds;
+				if (activeToolCallIds?.size) {
+					for (let i = resetBoundaryIdx + 1; i < displayStartIdx; i++) {
+						const entry = path[i];
+						if (entry.type !== "message") continue;
+						const message = entry.message;
+						if (message.role === "assistant") {
+							const content = message.content.filter(
+								block => block.type === "toolCall" && activeToolCallIds.has(block.id),
+							);
+							if (content.length === 0) continue;
+							messages.push({ ...message, content });
+						} else if (message.role === "toolResult" && activeToolCallIds.has(message.toolCallId)) {
+							messages.push(message);
+						} else {
+							continue;
+						}
+						cacheMissExplainedAt.push(false);
+					}
+				}
+			}
+			if (retainedStart >= 0 && retainedStart < compactionIdx) {
 				for (let i = retainedStart; i < compactionIdx; i++) {
 					const entry = path[i];
 					if (i < displayStartIdx) {
@@ -639,7 +697,7 @@ export function buildSessionContext(
 		// here so the first post-compaction assistant turn — not a kept
 		// pre-compaction one — is marked as a cache miss.
 		if (options?.transcript) handleEntryResetTracking(compaction);
-		if (options?.transcript) {
+		if (options?.transcript && compactionSummaryMsg) {
 			pushMessage(compactionSummaryMsg);
 		}
 
@@ -711,7 +769,7 @@ export function buildSessionContext(
 		for (const message of messages) {
 			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
 		}
-		for (let i = messages.length - 1; i >= 0; i--) {
+		for (let i = messages.length - 1; i >= (compactedHistoryMessageCount ?? 0); i--) {
 			const message = messages[i];
 			if (message.role !== "assistant") continue;
 			let strippedToolCalls = 0;
@@ -782,6 +840,7 @@ export function buildSessionContext(
 
 	return {
 		messages,
+		...(compactedHistoryMessageCount === undefined ? {} : { compactedHistoryMessageCount }),
 		cacheMissExplainedAt: options?.transcript ? cacheMissExplainedAt : undefined,
 		thinkingLevel,
 		configuredThinkingLevel,

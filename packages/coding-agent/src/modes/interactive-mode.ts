@@ -4248,12 +4248,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				if (liveSet.has(child)) liveComponents.push(child);
 			}
 		}
-		// Live display collapses to the compacted transcript tail unless the
-		// user opted into the full inline history; export/resume callers choose
-		// their own mode.
-		const context = this.viewSession.buildTranscriptSessionContext({
-			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
-		});
+		// Compact mode retains old conversation prose; other modes keep their
+		// configured collapsed/full history. Explicit history viewers are unchanged.
+		const context = this.#uiHelpers.buildTranscriptSessionContext();
 		const failureWarnings = this.#uiHelpers.collectToolFailureWarnings(context);
 		this.chatContainer.clear();
 		const preservedLiveToolCallIds = new Set<string>();

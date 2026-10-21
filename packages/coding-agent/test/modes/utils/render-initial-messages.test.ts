@@ -1,9 +1,7 @@
 /**
- * Contract: renderInitialMessages renders the collapsed live DISPLAY TRANSCRIPT,
- * not the LLM context. The transcript comes from
- * `session.buildTranscriptSessionContext({ collapseCompactedHistory: true })`;
- * `sessionManager.buildSessionContext()` — the LLM-context builder — must not be
- * consulted for display.
+ * Contract: renderInitialMessages renders the display transcript, never the
+ * provider context. Compact mode preserves compacted conversation prose without
+ * replaying its tool, thinking, or auxiliary UI records.
  *
  * Also guards the cold-launch terminal cleanup: `omp` / `omp -c` leave the
  * previous run's transcript in native scrollback because the TUI's initial
@@ -16,7 +14,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCollapseCompacted, cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
@@ -26,6 +24,7 @@ import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { SessionContext, StrippedToolCallsMarker } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session-events";
 import { type Component, Container, Image, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -200,6 +199,7 @@ function makeRenderCtx(
 		viewSession: {
 			getQueuedMessages: () => ({ steering: [], followUp: [] }),
 			buildTranscriptSessionContext: () => transcript,
+			activeToolExecutionUpdates: () => [],
 			getToolByName: () => undefined,
 			hasBuiltInTool: () => true,
 			extensionRunner: undefined,
@@ -239,20 +239,184 @@ function makeRenderCtx(
 	return { ctx, chatContainer };
 }
 
-describe("UiHelpers.renderInitialMessages — transcript source", () => {
-	it("renders the collapsed live display transcript, never the LLM context", async () => {
-		await Settings.init({ inMemory: true });
-		const { ctx, transcriptSpy, llmContextSpy, renderSessionContextSpy } = makeCtx();
-		const transcript = makeEmptyContext();
-		transcriptSpy.mockReturnValue(transcript);
-
-		await new UiHelpers(ctx).renderInitialMessages();
-
-		expect(transcriptSpy).toHaveBeenCalledWith({ collapseCompactedHistory: true });
-		expect(llmContextSpy).not.toHaveBeenCalled();
-		expect(renderSessionContextSpy).toHaveBeenCalledWith(transcript, {
-			updateFooter: true,
+describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
+	it("restores old prose without tool or auxiliary UI and reverses the projection on mode changes", async () => {
+		using tempDir = TempDir.createSync("@pi-compacted-conversation-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		session.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "ORIGINAL_USER_REQUEST" }, pngImage],
+			timestamp: 1,
 		});
+		session.appendMessage({
+			role: "user",
+			content: "SYSTEM_INJECTED_HISTORY",
+			synthetic: true,
+			timestamp: 1,
+		});
+		session.appendMessage({
+			role: "user",
+			content: "AGENT_ATTRIBUTED_HISTORY",
+			attribution: "agent",
+			timestamp: 1,
+		});
+		session.appendMessage({
+			role: "custom",
+			customType: "skill-prompt",
+			content: "DIRECT_EXPANDED_SKILL_BODY",
+			display: true,
+			attribution: "user",
+			details: { name: "direct-audit", args: "original.ts" },
+			timestamp: 1,
+		});
+		const oldAssistant: AssistantMessage = {
+			...assistantToolCall("old-read", "read", { path: "OLD_TOOL_PATH" }),
+			content: [
+				{ type: "thinking", thinking: "OLD_PRIVATE_THINKING" },
+				{ type: "text", text: "OLD_PROSE_BEFORE_TOOL" },
+				{ type: "toolCall", id: "old-read", name: "read", arguments: { path: "OLD_TOOL_PATH" } },
+				{ type: "text", text: "OLD_PROSE_AFTER_TOOL" },
+			],
+			stopReason: "error",
+			errorMessage: "OLD_ASSISTANT_ERROR_UI",
+		};
+		session.appendMessage(oldAssistant);
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "old-read",
+			toolName: "read",
+			content: [{ type: "text", text: "OLD_TOOL_OUTPUT" }],
+			isError: true,
+			timestamp: 2,
+		});
+		session.appendCustomMessageEntry("launch-completion", "OLD_NOTICE_UI", true);
+		session.appendCustomMessageEntry(
+			"skill-prompt",
+			"EXPANDED_SKILL_BODY",
+			true,
+			{ name: "audit", args: "source.ts" },
+			"user",
+		);
+		const kept = session.appendMessage({ role: "user", content: "KEPT_USER_REQUEST", timestamp: 3 });
+		session.appendCompaction("COMPACTION_SUMMARY_UI", undefined, kept, 1000);
+		session.appendMessage(
+			assistantToolCall("recent-write", "write", { path: "recent.txt", content: "RECENT_FILE_BODY" }),
+		);
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "recent-write",
+			toolName: "write",
+			content: [{ type: "text", text: "RECENT_TOOL_RESULT" }],
+			isError: false,
+			timestamp: 4,
+		});
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, false, true);
+		vi.spyOn(ctx.viewSession, "buildTranscriptSessionContext").mockImplementation(options =>
+			session.buildSessionContext({ transcript: true, ...options }),
+		);
+		const helpers = new UiHelpers(ctx);
+		const before = JSON.stringify(session.getEntries());
+		const assertCompact = () => {
+			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+			for (const text of [
+				"ORIGINAL_USER_REQUEST",
+				"OLD_PROSE_BEFORE_TOOL",
+				"OLD_PROSE_AFTER_TOOL",
+				"/skill:audit source.ts",
+				"/skill:direct-audit original.ts",
+				"KEPT_USER_REQUEST",
+				"recent.txt",
+			])
+				expect(rendered).toContain(text);
+			for (const text of [
+				"OLD_PRIVATE_THINKING",
+				"OLD_TOOL_PATH",
+				"OLD_TOOL_OUTPUT",
+				"OLD_NOTICE_UI",
+				"EXPANDED_SKILL_BODY",
+				"OLD_ASSISTANT_ERROR_UI",
+				"COMPACTION_SUMMARY_UI",
+				"SYSTEM_INJECTED_HISTORY",
+				"AGENT_ATTRIBUTED_HISTORY",
+				"DIRECT_EXPANDED_SKILL_BODY",
+			])
+				expect(rendered).not.toContain(text);
+			expect(hasImageComponent(chatContainer)).toBeFalse();
+		};
+		await helpers.renderInitialMessages();
+		assertCompact();
+
+		cfgDisplayCollapseCompacted.override(Settings.instance, false);
+		cfgDisplayCompactToolActivity.override(Settings.instance, false);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		await helpers.renderInitialMessages();
+		const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(detailed).toContain("OLD_TOOL_PATH");
+		expect(detailed).toContain("OLD_NOTICE_UI");
+
+		cfgDisplayCompactToolActivity.override(Settings.instance, true);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		await helpers.renderInitialMessages();
+		assertCompact();
+		expect(JSON.stringify(session.getEntries())).toBe(before);
+	});
+
+	it("keeps an idle session's compacted background task routable until its final update", async () => {
+		using tempDir = TempDir.createSync("@pi-compacted-background-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		session.appendMessage({ role: "user", content: "start a background task", timestamp: 1 });
+		session.appendMessage(assistantToolCall("old-background", "task", { i: "BACKGROUND_TASK_LABEL", task: "work" }));
+		const runningDetails = { async: { state: "running", jobId: "background-job", type: "task" } };
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: "old-background",
+			toolName: "task",
+			content: [{ type: "text", text: "background task started" }],
+			details: runningDetails,
+			isError: false,
+			timestamp: 2,
+		});
+		const kept = session.appendMessage({ role: "user", content: "continue", timestamp: 3 });
+		session.appendCompaction("summary", undefined, kept, 1000);
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), false, false, true);
+		let update: Extract<AgentSessionEvent, { type: "tool_execution_update" }> = {
+			type: "tool_execution_update",
+			toolCallId: "old-background",
+			toolName: "task",
+			args: { i: "BACKGROUND_TASK_LABEL", task: "work" },
+			partialResult: {
+				content: [{ type: "text", text: "running progress" }],
+				details: runningDetails,
+			},
+		};
+		vi.spyOn(ctx.viewSession, "activeToolExecutionUpdates").mockImplementation(() => [update]);
+		vi.spyOn(ctx.viewSession, "buildTranscriptSessionContext").mockImplementation(options =>
+			session.buildSessionContext({ transcript: true, ...options }),
+		);
+		const helpers = new UiHelpers(ctx);
+		await helpers.renderInitialMessages();
+		const handle = ctx.pendingTools.get("old-background");
+		expect(handle).toBeDefined();
+		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("BACKGROUND_TASK_LABEL");
+		handle!.updateResult(
+			{
+				content: [{ type: "text", text: "later progress" }],
+				details: runningDetails,
+			},
+			true,
+			"old-background",
+		);
+		expect(ctx.pendingTools.get("old-background")).toBe(handle);
+		update = {
+			...update,
+			partialResult: {
+				content: [{ type: "text", text: "finished" }],
+				details: { async: { ...runningDetails.async, state: "completed" } },
+			},
+		};
+		await helpers.renderInitialMessages();
+		expect(ctx.pendingTools.has("old-background")).toBeFalse();
+		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).not.toContain("BACKGROUND_TASK_LABEL");
 	});
 });
 

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Compact mode now keeps user requests and assistant prose from compacted history, without replaying its tools, thinking, notifications, or other historical UI; recent activity and full-history viewers are unchanged.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Simplified Bazel gate source graphs by reusing the complete native-build file union with excluded products restored, and by linking consumers directly to deduplicated cycle domains without dropping transitive inputs.
@@ -17,6 +18,7 @@
 
 ### Fixed
 
+- Fixed compacted-history replay losing running background tool updates, dropping message-form skill requests, and showing synthetic prompts as user messages.
 - Run fulltest static checks and tests in one Bazel graph, with affected Rust tests depending on clippy completion while TypeScript work remains parallel and the existing fastcheck budget is preserved.
 - Let fulltest observe completed static targets even when BEP file notifications are delayed, avoiding false fastcheck timeouts without changing budgets or check coverage.
 - Preserve migrated settings and fresh effective values across configuration saves and reloads, reset legacy setting sources safely, and keep valid higher-priority Team preview participants when a user draft contains unavailable models.

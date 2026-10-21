@@ -735,7 +735,8 @@ export const cfgDisplayCollapseCompacted = register({
 		tab: "appearance",
 		group: "显示",
 		label: "折叠已压缩历史",
-		description: "在实时对话记录中将压缩前的历史折叠到摘要分隔线后；关闭后内嵌保留完整记录，并在每次压缩处显示分隔线",
+		description:
+			"干净／详细模式下将已压缩历史折叠到摘要分隔线后；关闭后保留完整记录。紧凑模式始终只保留旧对话正文，不受此项影响",
 	},
 });
 
