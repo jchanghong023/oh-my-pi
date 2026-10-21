@@ -25,9 +25,9 @@
 核心代码入口：
 
 * CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（ZCode 接入的 RPC 协议 v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式，需求见 `docs-zh-CN/requirements/rpc-ui-protocol.md`）。
+* fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（已有独立 RPC v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式）。ZCode app-server 的独立协议目录、同进程 AgentSession API 调用、多会话隔离、存储准备及完整交付契约见 `docs-zh-CN/requirements/rpc-ui-protocol.md`；不得把独立 RPC 入口当作 app-server 内部调用链，也不提前登记尚未实现的源码入口。
 * 输入法恢复：`/jchime [故障现象]` 在 `src/jch-commands/workflow.ts` 注册，复用提示词命令工厂；`src/prompts/jch-ime.md` 提供完整小模型首选恢复块及失败后同用户/同 DISPLAY 的自主诊断、有限停止与重建步骤。契约见 `docs-zh-CN/requirements/fork.md`「JCH 命令」；服务状态与真实中文输入恢复分别核验。
-* RPC 命令接入复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划与循环宿主生命周期在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标复用 `rpc-goal.ts`；界面通过现有 `prompt` 与 RPC UI 对话调用，不另建命令表。
+* RPC 命令入口复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，既有 RPC 计划／循环宿主在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标在 `rpc-goal.ts`。独立 RPC 客户端使用 prompt 与 RPC UI；app-server 按需求同进程复用其底层会话、命令与 UI 业务能力，不另建命令表或通过 RPC 绕行。
 * TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；仅紧凑模式在输入区上方使用单一实时三行思考尾窗（思考结束且回合进行中收起为单行存根，正文开始或回合结束清空），干净与详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
 
 常用命令（工作目录为仓库根；下表受支持的检查、类型、构建与测试 root scripts 默认经 Bazel 执行，三层入口不变；支持列表与缓存边界以 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」为准。本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
@@ -67,7 +67,7 @@
 
 * `AGENTS.md`：本仓库的维护原则与 agent 规则。
 * JCH 的 `jch-upstream-sync` Skill：每日定时同步或手动同步上游的通用流程及 Git 执行脚本；本仓库的来源、镜像、基线记录与验证限制由本文件维护。调用入口统一使用新名称，不保留旧名称别名或平行实现。
-* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求，`rpc-ui-protocol.md` 保存 rpc-ui 协议 v3 扩展（ZCode 接入）需求；它们共同作为开发和冲突后重建的依据。
+* `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求；`rpc-ui-protocol.md` 保存 app-server 独立协议目录、同进程业务 API／多会话隔离、存储准备生产端、OMP 功能／权限及既有独立 RPC 参考合同。ZCode 侧启动消费与发行装配以其中引用的 OmpCode FORK-003 为准；同进程调用不新增内部 wire，也不能将 OMP RPC 当作 ZCode 外部协议。
 
 同步 MUST 保留 `AGENTS.md`、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。共享 Skill 不随本仓库同步改写。
 

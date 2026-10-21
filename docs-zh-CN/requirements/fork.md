@@ -103,7 +103,7 @@
 
 ### ZCode 接入
 
-完整功能、权限边界与验收要求统一维护在 [ZCode 接入需求](rpc-ui-protocol.md)。
+通过 `ZCODE_AGENT_SERVER_COMMAND=omp` 由 ZCode 拉起 `omp app-server --stdio`；协议层位于 OMP 独立目录，与多会话 AgentSession 同进程直接调用业务 API，不设内部 RPC 或每会话执行宿主。[ZCode 接入需求](rpc-ui-protocol.md#文档职责与需求引用) 定义 OMP 目录、调用／隔离、存储准备生产端及功能／权限合同；ZCode 保留上游源码，启动消费、环境注入与发行装配以其引用的 FORK-003 为准。全部有效需求一次实现、统一验收；新入口与整体验收尚未完成，历史 RPC 证据不替代新架构验收。
 
 ### JCH 命令
 
