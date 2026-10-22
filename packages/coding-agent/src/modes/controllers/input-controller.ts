@@ -1036,6 +1036,8 @@ export class InputController {
 			const teamDraftDetached = parseSlashCommand(text)?.name === "team";
 			if (teamDraftDetached) this.#dropSubmittedPending(inputImages, inputImageLinks);
 
+			// A startup-deferred extension's input hook must see the first submission.
+			if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
 			if (runner?.hasHandlers("input")) {
 				try {
 					const input = await this.#runInputHandlers(text, inputImages, inputImageLinks);
@@ -1919,6 +1921,7 @@ export class InputController {
 		// same draft, and later typing belongs to the next submission.
 		this.ctx.editor.clearDraft();
 
+		if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
 		if (this.ctx.session.extensionRunner?.hasHandlers("input")) {
 			try {
 				const input = await this.#runInputHandlers(text, images, imageLinks);

@@ -12,6 +12,10 @@
 - Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
 
+### Fixed
+
+- Fixed split-turn compaction leaving `session.compacting` context out of the turn-prefix summary ([#16707](https://github.com/can1357/oh-my-pi/pull/16707) by [@integrITsolutions](https://github.com/integrITsolutions))
+
 ## [18.12.4] - 2026-10-20
 
 ### Fixed

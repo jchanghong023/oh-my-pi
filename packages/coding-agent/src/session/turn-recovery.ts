@@ -836,12 +836,31 @@ export class TurnRecovery {
 		return (await recorded).switchedCredential;
 	}
 
-	/** Prompts after transient overlap with a prior agent run. */
-	promptAgentWithIdleRetry(messages: AgentMessage[], options?: AgentPromptOptions): Promise<void> {
+	/** Prompts after transient overlap with a prior agent run. `onClaimed` fires synchronously
+	 *  right after a successful `agent.prompt` claim (before the run is awaited), letting the
+	 *  caller mark the exact moment its own run went live. */
+	async promptAgentWithIdleRetry(
+		messages: AgentMessage[],
+		options?: AgentPromptOptions,
+		onClaimed?: () => void,
+	): Promise<void> {
 		if (isJchToolsAgentModel(this.#host.model())) {
-			return this.#host.agent.prompt(messages);
+			// JchTools runs must never be retried, so this branch does not
+			// enter the idle-retry loop. Probe the claim the same way the
+			// loop does: a busy agent rejects synchronously, and that run is
+			// not ours — waking parked steers for it would admit them into an
+			// autonomous run with no client forwarder.
+			let claimFailed = false;
+			const claim = this.#host.agent.prompt(messages).then(undefined, error => {
+				claimFailed = true;
+				throw error;
+			});
+			await Promise.resolve();
+			if (!claimFailed) onClaimed?.();
+			await claim;
+			return;
 		}
-		return this.#promptAgentWithIdleRetry(messages, options);
+		return this.#promptAgentWithIdleRetry(messages, options, onClaimed);
 	}
 
 	/** Parses provider retry and rate-limit reset hints into a delay. */
@@ -1917,10 +1936,14 @@ export class TurnRecovery {
 		return current && current !== pinned ? [pinned, current] : [pinned];
 	}
 
-	/** Live session role for chain lookup, provided its assignment still matches the active model. */
+	/**
+	 * Live session role for chain lookup, provided its assignment still matches the active model.
+	 * Temporary switches record the `fallback` role; skipping them keeps the assigned role (e.g. a
+	 * subagent's own, possibly empty, chain) once the session is back on that role's model.
+	 */
 	#liveRetryRoleHint(currentModel: Model | null | undefined): string | undefined {
-		const role = this.#host.sessionManager?.getLastModelChangeRole?.();
-		if (!role || role === EPHEMERAL_MODEL_CHANGE_ROLE || !currentModel) return undefined;
+		const role = this.#host.sessionManager?.getLastModelChangeRole?.({ skipEphemeral: true });
+		if (!role || !currentModel) return undefined;
 		const configured = this.#host.settings.getModelRole(role);
 		if (!configured) return undefined;
 		const resolved = resolveModelOverride([configured], this.#host.modelRegistry, this.#host.settings);
@@ -3144,11 +3167,31 @@ export class TurnRecovery {
 		this.resolveRetry();
 	}
 
-	async #promptAgentWithIdleRetry(messages: AgentMessage[], options?: AgentPromptOptions): Promise<void> {
+	async #promptAgentWithIdleRetry(
+		messages: AgentMessage[],
+		options?: AgentPromptOptions,
+		onClaimed?: () => void,
+	): Promise<void> {
 		const deadline = Date.now() + 30_000;
 		for (;;) {
+			// A claim whose synchronous prefix throws (busy agent, missing
+			// model) returns an already-rejected promise. Probe for that
+			// before firing `onClaimed`: a busy-retry parked behind an
+			// autonomous run must not report that run's streaming as ours
+			// going live. The rejection handler rethrows, so the error
+			// still surfaces at the await below.
+			let claimFailed = false;
 			try {
-				await this.#host.agent.prompt(messages, options);
+				const claim = this.#host.agent.prompt(messages, options).then(undefined, error => {
+					claimFailed = true;
+					throw error;
+				});
+				// One microtask turn: an already-rejected promise's reaction
+				// job is queued ahead of this await's continuation, so
+				// `claimFailed` is settled by the time we resume.
+				await Promise.resolve();
+				if (!claimFailed) onClaimed?.();
+				await claim;
 				return;
 			} catch (err) {
 				if (!(err instanceof AgentBusyError)) {

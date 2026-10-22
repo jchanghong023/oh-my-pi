@@ -922,7 +922,7 @@ describe("session lifecycle commands", () => {
 	it("/session delete: returns in-memory usage when no sessionFile", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("in-memory");
 	});
 
@@ -931,7 +931,7 @@ describe("session lifecycle commands", () => {
 		session.isStreaming = true;
 		fakeSessionManager._sessionFile = "/tmp/session.jsonl";
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("streaming");
 	});
 
@@ -980,7 +980,7 @@ describe("session lifecycle commands", () => {
 		const { output, session, runtime } = createRuntime();
 		session.isStreaming = true;
 		const result = await executeAcpBuiltinSlashCommand("/move /tmp", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("streaming");
 	});
 });
@@ -1007,7 +1007,7 @@ describe("wave 3 commands", () => {
 			throw new Error("disk full");
 		};
 		const result = await executeAcpBuiltinSlashCommand("/export", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Failed to export session: disk full");
 	});
 
@@ -1114,7 +1114,7 @@ describe("wave 3 commands", () => {
 
 			const result = await executeAcpBuiltinSlashCommand("/todo import", runtime);
 
-			expect(result).toEqual({ consumed: true });
+			expect(result).toEqual({ consumed: true, failed: true });
 			expect(output[0]).toContain(`Could not parse ${target}:`);
 			expect(session._todoPhases).toEqual([]);
 		} finally {
@@ -1128,7 +1128,7 @@ describe("wave 3 commands", () => {
 
 		const result = await executeAcpBuiltinSlashCommand("/todo export artifact://1", runtime);
 
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Failed to write todos:");
 		expect(output[0]).toContain("internal scheme");
 	});
@@ -1138,7 +1138,7 @@ describe("wave 3 commands", () => {
 
 		const result = await executeAcpBuiltinSlashCommand("/todo import artifact://1", runtime);
 
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Failed to read todos:");
 		expect(output[0]).toContain("internal scheme");
 		expect(session._todoPhases).toEqual([]);
@@ -1147,21 +1147,21 @@ describe("wave 3 commands", () => {
 	it("/todo edit: returns TUI-only usage message", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/todo edit", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("TUI editor");
 	});
 
 	it("/todo expand: returns HUD-only usage message in ACP mode", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/todo expand", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("interactive HUD");
 	});
 
 	it("/todo unknown: returns usage message", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/todo foobar", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Unknown /todo subcommand");
 	});
 
@@ -1169,14 +1169,14 @@ describe("wave 3 commands", () => {
 	it("/move: returns usage when no arg", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/move", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Usage: /move");
 	});
 
 	it("/move: returns usage when path does not exist", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/move /no/such/path/xyz", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("does not exist");
 	});
 
@@ -1214,7 +1214,7 @@ describe("wave 3 commands", () => {
 		fakeSessionManager._cwd = plainDir;
 		try {
 			const result = await executeAcpBuiltinSlashCommand("/wt feature", runtime);
-			expect(result).toEqual({ consumed: true });
+			expect(result).toEqual({ consumed: true, failed: true });
 			expect(output[0]).toContain("Not inside a git repository");
 			expect(fakeSessionManager._movedTo).toBeUndefined();
 		} finally {
@@ -1444,7 +1444,7 @@ describe("wave 3 commands", () => {
 
 			const result = await executeAcpBuiltinSlashCommand("/wt feature/flush-fail", runtime);
 
-			expect(result).toEqual({ consumed: true });
+			expect(result).toEqual({ consumed: true, failed: true });
 			expect(output[0]).toContain("Failed to save pending settings: disk full");
 			expect(fakeSessionManager._movedTo).toBeUndefined();
 			expect(await Bun.file(path.join(repoDir, "tracked.txt")).text()).toBe("dirty\n");
@@ -1467,7 +1467,7 @@ describe("wave 3 commands", () => {
 	it("/memory unknown: returns usage message", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/memory unknownverb", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Usage: /memory");
 	});
 
@@ -1539,6 +1539,30 @@ describe("wave 3 commands", () => {
 		expect(compactCalled).toBe(true);
 		expect(output[0]).toContain("Compaction complete.");
 	});
+
+	it("/compact: marks the run failed when session.compact throws", async () => {
+		// Print mode turns a failed compaction into a nonzero exit; the
+		// `failed` marker is what maps the operational failure to that status.
+		const { output, session, runtime } = createRuntime();
+		session.compact = async (_args?: string) => {
+			throw new Error("no available model");
+		};
+		const result = await executeAcpBuiltinSlashCommand("/compact", runtime);
+		expect(result).toEqual({ consumed: true, failed: true });
+		expect(output[0]).toContain("Compaction failed: no available model");
+	});
+
+	it("/handoff: marks the run failed when the handoff fails", async () => {
+		// Same contract as /compact: an operational failure (here: nothing to
+		// hand off) must reach print mode's exit status, not only its output.
+		const { output, session, runtime } = createRuntime();
+		session.handoff = async (_instr?: string) => {
+			throw new Error("nothing to hand off");
+		};
+		const result = await executeAcpBuiltinSlashCommand("/handoff", runtime);
+		expect(result).toEqual({ consumed: true, failed: true });
+		expect(output.join("\n")).toContain("Handoff failed: nothing to hand off");
+	});
 });
 
 describe("wave 4 commands", () => {
@@ -1557,7 +1581,7 @@ describe("wave 4 commands", () => {
 	it("/mcp add (no args): returns usage string", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/mcp add", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Usage");
 	});
 
@@ -1584,7 +1608,7 @@ describe("wave 4 commands", () => {
 	it("/mcp unknown-verb: returns usage pointing to help", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/mcp frobnicate", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Unknown");
 	});
 
@@ -1608,14 +1632,14 @@ describe("wave 4 commands", () => {
 	it("/ssh add (no args): returns usage", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/ssh add", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Usage");
 	});
 
 	it("/ssh unknown-verb: returns unknown subcommand message", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/ssh frobnicate", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Unknown");
 	});
 
@@ -1631,14 +1655,14 @@ describe("wave 4 commands", () => {
 	it("/marketplace install (no args): returns interactive picker usage", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/marketplace install", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("TUI-only");
 	});
 
 	it("/marketplace uninstall (no args): returns interactive picker usage", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/marketplace uninstall", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("TUI-only");
 	});
 
@@ -1714,7 +1738,7 @@ describe("wave 5 — adapters and polish", () => {
 		const { output, runtime } = createRuntime();
 		// No servers in /tmp/project config — server not found
 		const result = await executeAcpBuiltinSlashCommand("/mcp test bogus", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("not found");
 	});
 
@@ -1742,7 +1766,7 @@ describe("wave 5 — adapters and polish", () => {
 	it("/model gpt-fake-9000: returns unknown-model message", async () => {
 		const { output, runtime } = createRuntime();
 		const result = await executeAcpBuiltinSlashCommand("/model gpt-fake-9000", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Unknown model");
 	});
 
@@ -1857,7 +1881,7 @@ describe("/move preflight flush", () => {
 
 			const result = await executeAcpBuiltinSlashCommand(`/move ${targetDir}`, runtime);
 
-			expect(result).toEqual({ consumed: true });
+			expect(result).toEqual({ consumed: true, failed: true });
 			expect(output[0]).toContain("disk full");
 			expect(fakeSessionManager!._movedTo).toBeUndefined();
 		} finally {

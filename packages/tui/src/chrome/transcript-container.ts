@@ -2,7 +2,7 @@ import { type Component, Container, type HistoryBatch } from "../tui";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
-import { renderForScrollback } from "../components/image";
+import { measureRender, renderForScrollback } from "../components/image";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { isNativeSettled, settleNative } from "../native/settle";
@@ -161,6 +161,13 @@ const PINNED_FRONTIER_WARN_MS = 30_000;
 const RETIREMENT_BUDGET_MS = 8;
 const EMPTY_ROWS: readonly string[] = [];
 const EMPTY_STABLE_ROWS: readonly TranscriptStableRow[] = [];
+
+/** A block's full-allocation render taken by {@link TranscriptContainer}'s walk-order measurement. */
+interface MeasuredBlock {
+	rows: readonly string[];
+	/** Whether the render observed a budgeted image; see {@link measureRender}. */
+	images: boolean;
+}
 
 function isFinalized(component: Component): boolean {
 	const block = component as Component & FinalizableBlock;
@@ -325,7 +332,7 @@ export class TranscriptContainer extends Container {
 	 * composition, with no block mutation possible in between; replaying the
 	 * first measurement spares every block its second render per frame.
 	 */
-	#frameRows = new Map<TranscriptEntry, readonly string[]>();
+	#frameRows = new Map<TranscriptEntry, MeasuredBlock>();
 	#frameRowsWidth = 0;
 	#releaseFailures = new WeakSet<Component>();
 	/** The `children` array `#entries` last mirrored; see {@link #syncEntries}. */
@@ -576,7 +583,7 @@ export class TranscriptContainer extends Container {
 		let total = 0;
 		let previous: Component | undefined;
 		for (const { entry, index } of this.#liveEntries()) {
-			const block = this.#liveBlockRows(entry, index, width);
+			const block = this.#liveBlock(entry, index, width).rows;
 			if (block.length > 0) {
 				total += block.length + blockGap(previous, entry.component);
 				previous = entry.component;
@@ -586,34 +593,40 @@ export class TranscriptContainer extends Container {
 		return total;
 	}
 
-	/** One live block's un-emitted rows at `width`, rendered against its full-height allocation. */
-	#liveBlockRows(entry: TranscriptEntry, index: number, width: number): readonly string[] {
-		const rows = this.#measuredRows(entry, width);
+	/** One live block's un-emitted rows at `width`, measured against its full-height allocation. */
+	#liveBlock(entry: TranscriptEntry, index: number, width: number): MeasuredBlock {
+		const measured = this.#measure(entry, width);
 		const emitted = this.#projectedEmittedRowCount(entry, index, width);
-		return emitted === 0 ? rows : rows.slice(emitted);
+		return emitted === 0 ? measured : { rows: measured.rows.slice(emitted), images: measured.images };
 	}
 
 	/**
 	 * One block's blank-trimmed render at its full-height allocation. Inside an
 	 * open frame the first measurement of each block is replayed to later ones,
 	 * leaving whatever allocation the viewport has since rendered it at.
+	 *
+	 * Measurements run in walk order, not display order, so they render under
+	 * {@link measureRender}: a block whose images they observed must render
+	 * again in display order before its rows are laid out.
 	 */
-	#measuredRows(entry: TranscriptEntry, width: number): readonly string[] {
-		if (this.#openFrame === undefined) {
-			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-			return this.#renderEntry(entry, width);
-		}
+	#measure(entry: TranscriptEntry, width: number): MeasuredBlock {
+		if (this.#openFrame === undefined) return this.#measureEntry(entry, width);
 		if (this.#frameRowsWidth !== width) {
 			this.#frameRows.clear();
 			this.#frameRowsWidth = width;
 		}
-		let rows = this.#frameRows.get(entry);
-		if (rows === undefined) {
-			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-			rows = this.#renderEntry(entry, width);
-			this.#frameRows.set(entry, rows);
+		let measured = this.#frameRows.get(entry);
+		if (measured === undefined) {
+			measured = this.#measureEntry(entry, width);
+			this.#frameRows.set(entry, measured);
 		}
-		return rows;
+		return measured;
+	}
+
+	#measureEntry(entry: TranscriptEntry, width: number): MeasuredBlock {
+		this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
+		const { value: rows, images } = measureRender(() => this.#renderEntry(entry, width));
+		return { rows, images };
 	}
 
 	#closeFrame(): void {
@@ -675,6 +688,7 @@ export class TranscriptContainer extends Container {
 		// show — the whole ledger on a resumed session's first paint (#12933).
 		const shown: Array<{ entry: TranscriptEntry; index: number }> = [];
 		const blocks: (readonly string[])[] = [];
+		const measuredImages: boolean[] = [];
 		let unrendered = 0;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			if (shown.length > capacity) {
@@ -682,17 +696,15 @@ export class TranscriptContainer extends Container {
 				break;
 			}
 			const candidate = live[cursor]!;
-			const block = this.#liveBlockRows(candidate.entry, candidate.index, width);
-			if (block.length === 0) continue;
+			const block = this.#liveBlock(candidate.entry, candidate.index, width);
+			if (block.rows.length === 0) continue;
 			shown.push(candidate);
-			blocks.push(block);
+			blocks.push(block.rows);
+			measuredImages.push(block.images);
 		}
 		shown.reverse();
 		blocks.reverse();
-		let total = 0;
-		for (let index = 0; index < blocks.length; index++) {
-			total += blocks[index]!.length + blockGap(shown[index - 1]?.entry.component, shown[index]!.entry.component);
-		}
+		measuredImages.reverse();
 		if (shown.length === 0) {
 			this.#lastViewportSpans = [];
 			return EMPTY_ROWS;
@@ -701,6 +713,21 @@ export class TranscriptContainer extends Container {
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
+		}
+		// The walk ran newest-first, so the images it measured claimed no
+		// display slot (see #measure). Render those blocks again oldest-first:
+		// the image budget keeps the newest images live by observation order.
+		for (let blockIndex = 0; blockIndex < shown.length; blockIndex++) {
+			if (!measuredImages[blockIndex]) continue;
+			const { entry, index } = shown[blockIndex]!;
+			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, frame);
+			blocks[blockIndex] = this.#renderEntry(entry, width).slice(
+				this.#projectedEmittedRowCount(entry, index, width),
+			);
+		}
+		let total = 0;
+		for (let index = 0; index < blocks.length; index++) {
+			total += blocks[index]!.length + blockGap(shown[index - 1]?.entry.component, shown[index]!.entry.component);
 		}
 		if (total <= capacity) {
 			const output: string[] = [];
@@ -864,7 +891,7 @@ export class TranscriptContainer extends Container {
 		// Only a render publishes a block's stable rows, so the head renders
 		// before its progressive-append eligibility is read.
 		const head = this.#entries[this.#frontier];
-		if (head !== undefined) this.#measuredRows(head, width);
+		if (head !== undefined) this.#measure(head, width);
 		const appendHead =
 			policy === "pressure" &&
 			head?.mode === "appendOnly" &&
@@ -890,7 +917,7 @@ export class TranscriptContainer extends Container {
 		let boundaryGap = 0;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			const candidate = live[cursor]!;
-			const height = this.#liveBlockRows(candidate.entry, candidate.index, width).length;
+			const height = this.#liveBlock(candidate.entry, candidate.index, width).rows.length;
 			const gap = height > 0 ? blockGap(candidate.entry.component, nextComponent) : 0;
 			if (height > 0) liveRows += height + gap;
 			if (fits) {
@@ -1025,11 +1052,13 @@ export class TranscriptContainer extends Container {
 		width: number,
 		visible: number,
 	): { rows: readonly string[]; split: RowSplit } | "whole" | undefined {
-		const measured = this.#measuredRows(entry, width);
+		const measured = this.#measure(entry, width).rows;
 		const start = this.#emittedRowCount(entry, width);
 		const cut = measured.length - visible;
 		if (cut <= start) return undefined;
-		const scrollback = renderForScrollback(() => this.#renderEntry(entry, width));
+		// The boundary block stays live, so the viewport renders it in display
+		// order; this render precedes the retired blocks and must claim no slot.
+		const scrollback = measureRender(() => renderForScrollback(() => this.#renderEntry(entry, width))).value;
 		if (scrollback.length !== measured.length) return undefined;
 		const total = cutBelowWholeImage(scrollback, cut);
 		if (total >= scrollback.length) return "whole";
@@ -1243,7 +1272,7 @@ export class TranscriptContainer extends Container {
 	 * content stays live: it can repeat committed text but never drop any.
 	 */
 	#splitRowCount(entry: TranscriptEntry, split: RowSplit, width: number): number {
-		const rendered = this.#measuredRows(entry, width);
+		const rendered = this.#measure(entry, width).rows;
 		if (split.located?.rendered === rendered) return split.located.count;
 		let count = 0;
 		if (
@@ -1428,7 +1457,7 @@ export class TranscriptContainer extends Container {
 			if (displayPreferences.compactToolActivity && isToolActivityComponent(previous)) {
 				for (let index = reached; index < this.#entries.length; index++) {
 					const entry = this.#entries[index]!;
-					if (this.#measuredRows(entry, width).length === 0) continue;
+					if (this.#measure(entry, width).rows.length === 0) continue;
 					next = entry.component;
 					break;
 				}
@@ -1469,10 +1498,10 @@ export class TranscriptContainer extends Container {
 			const entry = this.#entries[this.#frontier]!;
 			if (entry.state !== "settled") return;
 			if (entry.split !== undefined) {
-				if (this.#splitRowCount(entry, entry.split, width) < this.#measuredRows(entry, width).length) return;
+				if (this.#splitRowCount(entry, entry.split, width) < this.#measure(entry, width).rows.length) return;
 			} else {
 				if (entry.mode !== "appendOnly") return;
-				const rendered = this.#measuredRows(entry, width);
+				const rendered = this.#measure(entry, width).rows;
 				if (entry.emitted !== entry.stableRows.length) return;
 				if (this.#renderStablePrefix(entry, entry.emitted, width).length !== rendered.length) return;
 			}
@@ -1538,7 +1567,7 @@ export class TranscriptContainer extends Container {
 		let hiddenBelow = 0;
 		for (const candidate of behind) {
 			if (candidate.entry.state !== "active") continue;
-			if (this.#liveBlockRows(candidate.entry, candidate.index, width).length > 0) hiddenBelow++;
+			if (this.#liveBlock(candidate.entry, candidate.index, width).rows.length > 0) hiddenBelow++;
 		}
 		let behindEmergency: { candidate: { entry: TranscriptEntry; index: number }; row: string } | null | undefined;
 		const findBehindEmergency = () => {
@@ -1549,7 +1578,7 @@ export class TranscriptContainer extends Container {
 				if (candidate.entry.state !== "settled") continue;
 				const block = candidate.entry.component as Component & FinalizableBlock;
 				if (block.renderTranscriptBlockEmergencyRow === undefined) continue;
-				if (this.#liveBlockRows(candidate.entry, candidate.index, width).length === 0) continue;
+				if (this.#liveBlock(candidate.entry, candidate.index, width).rows.length === 0) continue;
 				const row = block.renderTranscriptBlockEmergencyRow(width);
 				if (row === undefined) continue;
 				behindEmergency = { candidate, row };

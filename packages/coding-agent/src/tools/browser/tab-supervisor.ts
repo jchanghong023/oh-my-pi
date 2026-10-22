@@ -1375,7 +1375,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 				tab,
 				timeoutMs,
 				`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
-				closeOrphanTarget(tab),
+				closeOrphanTarget(tab, timeoutMs),
 			));
 		} catch (error) {
 			targetCloseFailed = true;
@@ -2168,7 +2168,7 @@ async function forceKillTabTeardown(tab: WorkerTabSession): Promise<void> {
 			tab,
 			DEFAULT_TAB_CLOSE_TIMEOUT_MS,
 			`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
-			closeOrphanTarget(tab),
+			closeOrphanTarget(tab, DEFAULT_TAB_CLOSE_TIMEOUT_MS),
 		).catch(() => false);
 	}
 	await releaseBrowser(tab.browser, { kill: false });
@@ -2186,9 +2186,13 @@ async function forceKillTabTeardown(tab: WorkerTabSession): Promise<void> {
  * wedged during initialization can make Puppeteer's page close wait for the
  * protocol timeout, retaining the cleanup hold for tens of seconds.
  */
-async function closeTargetById(browser: PuppeteerBrowserHandle, targetId: string): Promise<boolean> {
+async function closeTargetById(
+	browser: PuppeteerBrowserHandle,
+	targetId: string,
+	confirmTimeoutMs?: number,
+): Promise<boolean> {
 	if (browser.kind.kind === "relay") return await closeRelayTarget(browserConnection(browser.browser), targetId);
-	return await closeCdpTarget(browser.browser, targetId);
+	return await closeCdpTarget(browser.browser, targetId, confirmTimeoutMs);
 }
 
 /**
@@ -2224,9 +2228,12 @@ function recheckSharedBrowser(scope: SharedTargetScope): void {
  * reported as created. A run caller is never a browser ref holder, so the
  * browser is still in the registry; the tab's browser is the only place that
  * page can be, so no targetId guesswork across multiple sessions.
+ *
+ * `budgetMs` is the caller's bound on the whole close. The `targetDestroyed`
+ * wait gets half of it, leaving the rest for the `Target.getTargets` fallback.
  */
-async function closeOrphanTarget(tab: WorkerTabSession): Promise<boolean> {
-	return await closeTargetById(tab.browser, tab.targetId);
+async function closeOrphanTarget(tab: WorkerTabSession, budgetMs: number): Promise<boolean> {
+	return await closeTargetById(tab.browser, tab.targetId, budgetMs / 2);
 }
 
 /**
