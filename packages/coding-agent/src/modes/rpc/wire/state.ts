@@ -68,13 +68,7 @@ export const stateDefs = {
 		"A tracked goal: its objective, lifecycle status, and resource accounting.",
 	),
 	GoalModeState: doc(
-		{
-			enabled: "boolean",
-			mode: "'active' | 'exiting'",
-			"reason?": "'completed'",
-			"autoOrchestrate?": "boolean",
-			goal: "Goal",
-		},
+		{ enabled: "boolean", mode: "'active' | 'exiting'", "reason?": "'completed'", goal: "Goal" },
 		'Session goal mode; `mode` is `"exiting"` while a completed goal unwinds.',
 	),
 	GoalResult: doc(

@@ -866,7 +866,6 @@ describe("AgentSession queued steer delivery", () => {
 			injected = true;
 			await tryRunRpcSkillCommand(
 				{
-					model: session.model,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{
@@ -1132,7 +1131,6 @@ describe("AgentSession queued steer delivery", () => {
 				injected = true;
 				await tryRunRpcSkillCommand(
 					{
-						model: session.model,
 						skillsSettings: { enableSkillCommands: true },
 						skills: [
 							{
@@ -1186,7 +1184,6 @@ describe("AgentSession queued steer delivery", () => {
 				const queued = Promise.withResolvers<void>();
 				void tryRunRpcSkillCommand(
 					{
-						model: session.model,
 						skillsSettings: { enableSkillCommands: true },
 						skills: [
 							{

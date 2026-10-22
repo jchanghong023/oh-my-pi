@@ -3,8 +3,8 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
-import { RpcPlanController, type RpcPlanSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-plan";
+import { LoopHost } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/loop-host";
+import { PlanHost, type PlanHostSession } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/plan-host";
 import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import { dispatchApprovedPlan } from "@oh-my-pi/pi-coding-agent/plan-mode/session-approval";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -18,7 +18,7 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true });
 });
 
-const loops: RpcLoopController[] = [];
+const loops: LoopHost[] = [];
 afterEach(() => {
 	for (const loop of loops) loop.clear();
 	loops.length = 0;
@@ -53,7 +53,7 @@ function createHost(cwd: string) {
 		input: async () => undefined,
 		confirm: async () => true,
 	};
-	const session: RpcPlanSession &
+	const session: PlanHostSession &
 		Pick<AgentSession, "setPlanReferencePath" | "markPlanReferenceSent" | "prompt" | "followUp"> = {
 		settings: Settings.isolated(),
 		get sessionManager() {
@@ -140,7 +140,7 @@ function createHost(cwd: string) {
 		hasAdmittedSubmission: false,
 		queuedMessageCount: 0,
 	});
-	const loop = new RpcLoopController(loopSession as AgentSession, {
+	const loop = new LoopHost(loopSession as AgentSession, {
 		output: text => output.push(text),
 		submit: async (text, current) => {
 			if (current()) repeated.push(text);
@@ -150,7 +150,7 @@ function createHost(cwd: string) {
 		continuationAllowed: () => !controller.reviewPending,
 	});
 	loops.push(loop);
-	const controller = new RpcPlanController(
+	const controller = new PlanHost(
 		session,
 		ui,
 		text => output.push(text),
@@ -210,7 +210,7 @@ function createHost(cwd: string) {
 	};
 }
 
-describe("RPC plan mode host", () => {
+describe("ZCode plan mode host", () => {
 	test("entering with a task activates guarded write and plan role, then toggles paused and off", async () => {
 		await using root = await TempDir.create("rpc-plan-toggle-");
 		const host = createHost(root.absolute());

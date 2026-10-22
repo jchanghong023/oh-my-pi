@@ -2919,7 +2919,6 @@ export async function runRootCommand(
 					headless: parsedArgs.noUi === true,
 					subagentEventBus,
 					input: rpcInput,
-					mcpManager,
 				});
 			} else if (isInteractive) {
 				// Offline startup must not reach the network at all; the runtime

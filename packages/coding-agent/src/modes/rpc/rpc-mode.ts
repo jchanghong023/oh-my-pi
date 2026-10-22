@@ -12,9 +12,7 @@
  * - Extension UI: Extension UI requests are emitted, client responds with extension_ui_response
  */
 import * as fs from "node:fs";
-import { AsyncLocalStorage } from "node:async_hooks";
 import * as path from "node:path";
-import { createHash } from "node:crypto";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
@@ -22,10 +20,7 @@ import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import { $env, isRecord, logger, Snowflake, toError } from "@oh-my-pi/pi-utils";
-import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
-import type { MCPManager } from "../../mcp";
-import { startOfflineShmBackup } from "../../offline/backup-lifecycle";
 import {
 	type ExtensionAskDialogQuestion,
 	type ExtensionAskDialogResult,
@@ -57,10 +52,8 @@ import { type AgentSession, SessionBusyError } from "../../session/agent-session
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { CACHE_WARMING_MODES } from "../../session/cache-warmer";
 import { findMostRecentNonEmptySession } from "../../session/session-listing";
-import { SessionManager } from "../../session/session-manager";
 import { SKILL_PROMPT_MESSAGE_TYPE, USER_INTERRUPT_LABEL } from "../../session/messages";
-import { executeRpcBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
-import type { AcpBuiltinSlashCommandResult, RpcSlashCommandRuntime } from "../../slash-commands/types";
+import { executeAcpBuiltinSlashCommand } from "../../slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "../../slash-commands/available-commands";
 import { listLogoutAccounts, logoutCredential } from "../../slash-commands/helpers/logout";
 import { defaultLoadModeForToolName } from "../../tools/essential-tools";
@@ -77,23 +70,11 @@ import { initializeExtensions } from "../runtime-init";
 import { cfgSpellingAutocomplete } from "../settings";
 import { isRpcHostToolResult, isRpcHostToolUpdate, RpcHostToolBridge } from "./host-tools";
 import { isRpcHostUriResult, RpcHostUriBridge } from "./host-uris";
-import { RpcForkCommandCatalogService, RpcCommandCatalogError } from "./rpc-fork-commands";
-import { RpcModelRoleError, RpcModelRoleService } from "./rpc-fork-models";
-import { RpcSessionDirectoryError, RpcSessionDirectoryService } from "./rpc-fork-sessions";
-import { isRpcTeamConfigCommand, RpcTeamConfigAdapter } from "./rpc-team-config";
-import {
-	RPC_FORK_CAPABILITIES,
-	RPC_FORK_PROTOCOL_VERSION,
-	RPC_SUPPORTED_PROTOCOL_VERSIONS,
-	isNegotiableRpcProtocolVersion,
-} from "./rpc-fork-types";
 import { MAX_RPC_FRAME_BYTES, MAX_RPC_REASSEMBLED_BYTES, RpcFrameEncoder } from "./rpc-frame";
 import { claimRpcInput, readRpcInputFrames } from "./rpc-input";
 import { pageRpcMessages, RPC_MESSAGES_PAGE_BUSY_ERROR, RpcMessagesPageError } from "./rpc-messages";
 import { RpcBtwController } from "./rpc-btw";
 import { RpcGoalController } from "./rpc-goal";
-import { RpcLoopController } from "./rpc-loop";
-import { RpcPlanController } from "./rpc-plan";
 import { RpcLiveBridge, type RpcLiveSessionFactory } from "./rpc-live";
 import { RpcOutputWriter } from "./rpc-output";
 import {
@@ -127,17 +108,6 @@ import type {
 } from "./rpc-types";
 
 const INVALID_TEXT_CURSOR_ERROR = "cursor must be an integer UTF-16 offset within text";
-
-function rpcDiagnosticId(value: unknown, internal = false): string | undefined {
-	if (typeof value !== "string") return undefined;
-	return internal && /^[A-Za-z0-9_-]{1,96}$/.test(value)
-		? value
-		: createHash("sha256").update(value).digest("hex").slice(0, 24);
-}
-
-function rpcDiagnosticType(value: unknown): string {
-	return typeof value === "string" && /^[a-z_]{1,64}$/.test(value) ? value : "invalid_type";
-}
 
 function isTextCursor(text: unknown, cursor: unknown): text is string {
 	return (
@@ -227,11 +197,6 @@ export type PendingExtensionRequest = {
 export class RpcPendingExtensionRequests extends Map<string, PendingExtensionRequest> {
 	#closedError: Error | undefined;
 
-	/** Diagnostic state only; pending request rejection semantics stay unchanged. */
-	get closed(): boolean {
-		return this.#closedError !== undefined;
-	}
-
 	override set(id: string, request: PendingExtensionRequest): this {
 		if (this.#closedError) {
 			request.reject(this.#closedError);
@@ -280,7 +245,7 @@ export type RpcSessionChangeResult =
 
 export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchSession" | "branch" | "fork">;
 
-export type RpcSkillCommandSession = Pick<AgentSession, "model" | "promptCustomMessage" | "skills" | "skillsSettings">;
+export type RpcSkillCommandSession = Pick<AgentSession, "promptCustomMessage" | "skills" | "skillsSettings">;
 export type RpcSkillCommandResult = { agentInvoked: true };
 
 export interface RpcSkillInvocation extends SkillPromptInput {
@@ -294,7 +259,6 @@ export interface RpcSkillInvocation extends SkillPromptInput {
  * command. Performs no I/O — safe to run on the RPC serial queue.
  */
 export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text: string): RpcSkillInvocation | null {
-	if (isJchToolsAgentModel(session.model)) return null;
 	if (!session.skillsSettings?.enableSkillCommands) return null;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return null;
@@ -317,7 +281,6 @@ export async function runRpcSkillCommand(
 	prebuilt?: BuiltSkillPromptMessage,
 	onPromptAdmitted?: () => void,
 	images?: ImageContent[],
-	goalAutoOrchestrateInitialId?: string,
 ): Promise<boolean> {
 	const built = prebuilt ?? (await buildSkillPromptMessage(invocation.skill, invocation, "user"));
 	return session.promptCustomMessage(
@@ -328,12 +291,7 @@ export async function runRpcSkillCommand(
 			details: built.details,
 			attribution: "user",
 		},
-		{
-			streamingBehavior,
-			queueChipText: invocation.queueChipText,
-			onPromptAdmitted,
-			...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
-		},
+		{ streamingBehavior, queueChipText: invocation.queueChipText, onPromptAdmitted },
 	);
 }
 
@@ -359,7 +317,6 @@ export async function dispatchRpcSkillPrompt(input: {
 	extensionUserMessageTracker: RpcExtensionUserMessageTracker;
 	images?: ImageContent[];
 	isCurrent?: () => boolean;
-	goalAutoOrchestrateInitialId?: string;
 }): Promise<RpcSkillCommandResult | "cancelled" | null> {
 	const invocation = resolveRpcSkillInvocation(input.session, input.message);
 	if (!invocation) return null;
@@ -382,7 +339,6 @@ export async function dispatchRpcSkillPrompt(input: {
 				built,
 				onPromptAdmitted,
 				input.images,
-				input.goalAutoOrchestrateInitialId,
 			),
 		results: input.results,
 		onError: input.onError,
@@ -502,45 +458,6 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// unknown discriminants as an error response, so we do not shape-check
 	// the union here.
 	const command = parsed as RpcCommand;
-	const started = performance.now();
-	const dispatch = async (): Promise<RpcResponse> => {
-		const fields = {
-			component: "rpc",
-			command: rpcDiagnosticType(command.type),
-			request_id: rpcDiagnosticId(command.id),
-		};
-		logger.info("RPC request dispatch started", {
-			...fields,
-			event: "rpc_request_started",
-			stage: "dispatch",
-			result: "started",
-		});
-		try {
-			const response = await deps.handleCommand(command);
-			logger.info("RPC request response ready", {
-				...fields,
-				event: "rpc_request_terminal",
-				stage: "response",
-				result: response.success ? "acknowledged" : "rejected",
-				error_code: response.success ? undefined : rpcDiagnosticType(response.code ?? "command_rejected"),
-				elapsed_ms: performance.now() - started,
-			});
-			return response;
-		} catch (error) {
-			const cancelled = error instanceof Error && error.name === "AbortError";
-			const failure = {
-				...fields,
-				event: "rpc_request_terminal",
-				stage: "dispatch",
-				result: cancelled ? "cancelled" : "failed",
-				elapsed_ms: performance.now() - started,
-				...logger.diagnosticError(error),
-			};
-			if (cancelled) logger.info("RPC request cancelled", failure);
-			else logger.error("RPC request failed", failure);
-			throw error;
-		}
-	};
 
 	// `bash` can run for a long time, and `prompt`'s response is held until
 	// admission (see PromptOptions.onPromptAdmitted), which can likewise span
@@ -554,7 +471,6 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	// via `command.id`.
 	if (
 		BACKGROUND_COMMANDS.has(command.type) ||
-		isRpcTeamConfigCommand(parsed) ||
 		command.type === "prompt" ||
 		command.type === "steer" ||
 		command.type === "follow_up" ||
@@ -562,7 +478,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	) {
 		const task = (async () => {
 			try {
-				deps.output(await dispatch());
+				deps.output(await deps.handleCommand(command));
 			} catch (err: unknown) {
 				const message = err instanceof Error ? err.message : String(err);
 				deps.output(deps.errorResponse(command.id, command.type, message));
@@ -573,7 +489,7 @@ export function dispatchRpcInputFrame(parsed: unknown, deps: RpcInputFrameDeps):
 	}
 
 	return (async () => {
-		deps.output(await dispatch());
+		deps.output(await deps.handleCommand(command));
 	})();
 }
 
@@ -601,23 +517,11 @@ const SESSION_CHANGE_TYPES: Record<string, true> = {
  * before the change frame, and only once the change succeeds: a vetoed change keeps
  * that input, and input pipelined after the change still runs in the new session.
  */
-
-/** Identity of the running gate section: inline re-entrancy matches this exact pair. */
-interface GateSectionScope {
-	readonly gate: RpcUserInputGate;
-	readonly section: number;
-}
-
-const gateSectionScope = new AsyncLocalStorage<GateSectionScope>();
-
 export class RpcUserInputGate {
 	#tail: Promise<void> = Promise.resolve();
 	#sequence = 0;
 	#validFrom = 0;
 	#acceptedAt = new WeakMap<object, number>();
-	/** Monotonic token handed to each queued section; `#runningSection` holds the live one. */
-	#sectionCounter = 0;
-	#runningSection = 0;
 
 	/** Call from {@link RpcInputDispatcher.dispatch} before the handler is queued. */
 	accept(command: RpcCommand): void {
@@ -647,47 +551,14 @@ export class RpcUserInputGate {
 		return sequence !== undefined && sequence >= this.#validFrom;
 	}
 
-	/**
-	 * Run user-input work in accept order. The tail releases when `work`
-	 * settles, not when a model turn ends. Only enqueues reached from within
-	 * the currently running section's own async subtree (across its awaits),
-	 * on this same gate, run inline (fork fix: the tail-only queue deadlocked
-	 * on such re-entrancy); every independently dispatched frame still queues
-	 * behind it in arrival order, and contexts that merely carry a settled
-	 * section's store (timers it scheduled, other gate instances) queue too.
-	 */
+	/** Run user-input work in accept order. The tail releases when `work` settles, not when a model turn ends. */
 	enqueue<T>(work: () => Promise<T>): Promise<T> {
-		const scope = gateSectionScope.getStore();
-		if (scope && scope.gate === this && scope.section === this.#runningSection) return work();
-		const section = ++this.#sectionCounter;
-		const run = this.#tail.then(
-			() => this.#runSection(section, work),
-			() => this.#runSection(section, work),
-		);
+		const run = this.#tail.then(work, work);
 		this.#tail = run.then(
 			() => {},
 			() => {},
 		);
 		return run;
-	}
-
-	/**
-	 * Runs one queued section under its scope token. The token is live only
-	 * from the section's actual start until its work settles — the cleanup runs
-	 * before the tail chain advances — which is exactly what enqueue's inline
-	 * check matches against.
-	 */
-	#runSection<T>(section: number, work: () => Promise<T>): Promise<T> {
-		this.#runningSection = section;
-		try {
-			return gateSectionScope.run({ gate: this, section }, work).finally(() => {
-				if (this.#runningSection === section) this.#runningSection = 0;
-			});
-		} catch (error) {
-			// work() itself threw synchronously: no promise will run the finally.
-			if (this.#runningSection === section) this.#runningSection = 0;
-			throw error;
-		}
 	}
 }
 
@@ -714,60 +585,31 @@ export class RpcInputDispatcher {
 
 	/** Accept a parsed input frame without blocking the stdin reader. */
 	dispatch(parsed: unknown): void {
-		const context = {
-			...logger.getLogContext(),
-			operation_id: `rpc-${crypto.randomUUID()}`,
-			request_id: isRecord(parsed) ? rpcDiagnosticId(parsed.id) : undefined,
-			command: isRecord(parsed) ? rpcDiagnosticType(parsed.type) : "invalid_frame",
-		};
-		logger.withLogContext(context, () => {
-			try {
-				if (dispatchRpcControlFrame(parsed, this.#deps)) {
-					logger.debug("RPC control frame received", {
-						component: "rpc",
-						event: "rpc_control_received",
-						stage: "control",
-						result: "routed",
-					});
-					return;
-				}
-				logger.info("RPC request received", {
-					component: "rpc",
-					event: "rpc_request_received",
-					stage: "input",
-					result: "received",
-				});
-				const command = parsed as RpcCommand;
-				this.#acceptInput?.(command);
-				// Bash and predict_word retain their immediate side channel. Prompts,
-				// steers, follow-ups and steer_subagent start through the serial tail, but
-				// dispatchRpcInputFrame backgrounds their admission.
-				if (BACKGROUND_COMMANDS.has(command.type) || isRpcTeamConfigCommand(parsed)) {
-					dispatchRpcInputFrame(command, this.#deps);
-					return;
-				}
-
-				const task = this.#tail.then(
-					() => this.#dispatchSerialCommand(command),
-					() => this.#dispatchSerialCommand(command),
-				);
-				this.#tail = task.catch(() => {});
-				this.#tasks.add(task);
-				void task.finally(() => {
-					this.#tasks.delete(task);
-				});
-			} catch (err: unknown) {
-				logger.warn("RPC input rejected", {
-					component: "rpc",
-					event: "rpc_input_failed",
-					stage: "input",
-					result: "rejected",
-					...logger.diagnosticError(err),
-				});
-				const message = err instanceof Error ? err.message : String(err);
-				this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
+		try {
+			if (dispatchRpcControlFrame(parsed, this.#deps)) return;
+			const command = parsed as RpcCommand;
+			this.#acceptInput?.(command);
+			// Bash and predict_word retain their immediate side channel. Prompts,
+			// steers, follow-ups and steer_subagent start through the serial tail, but
+			// dispatchRpcInputFrame backgrounds their admission.
+			if (BACKGROUND_COMMANDS.has(command.type)) {
+				dispatchRpcInputFrame(command, this.#deps);
+				return;
 			}
-		});
+
+			const task = this.#tail.then(
+				() => this.#dispatchSerialCommand(command),
+				() => this.#dispatchSerialCommand(command),
+			);
+			this.#tail = task.catch(() => {});
+			this.#tasks.add(task);
+			void task.finally(() => {
+				this.#tasks.delete(task);
+			});
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.#deps.output(this.#deps.errorResponse(undefined, "parse", `Failed to parse command: ${message}`));
+		}
 	}
 
 	/** Await every accepted serial command, including commands queued before EOF. */
@@ -1004,14 +846,7 @@ export async function handleRpcSteerSubagent(
 		() => accepted.resolve(),
 		err => {
 			accepted.reject(err);
-			logger.warn("RPC subagent message failed", {
-				component: "rpc",
-				event: "rpc_subagent_message_failed",
-				stage: "subagent_admission",
-				result: "failed",
-				subagent_id: rpcDiagnosticId(subagentId),
-				...logger.diagnosticError(err),
-			});
+			logger.warn("steer_subagent message failed", { subagentId, error: String(err) });
 		},
 	);
 	try {
@@ -1067,50 +902,6 @@ export type RpcOpenSessionSession = Pick<
 	"newSession" | "switchSession" | "sessionFile" | "sessionId" | "messages" | "model" | "setModel"
 >;
 
-interface RpcSessionOpenTarget {
-	dir: string;
-	latest: string | null;
-	alreadyOpen: boolean;
-}
-
-async function resolveRpcSessionOpenTarget(
-	session: RpcOpenSessionSession,
-	sessionDir: string,
-): Promise<RpcSessionOpenTarget> {
-	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
-	const dir = path.resolve(sessionDir);
-	const latest = await findMostRecentNonEmptySession(dir);
-	const current = path.resolve(session.sessionFile);
-	const alreadyOpen = latest
-		? current === path.resolve(latest)
-		: path.dirname(current) === dir && session.messages.length === 0;
-	return { dir, latest, alreadyOpen };
-}
-
-async function openResolvedRpcSession(
-	session: RpcOpenSessionSession,
-	{ dir, latest, alreadyOpen }: RpcSessionOpenTarget,
-	subagentRegistry?: RpcSubagentResetRegistry,
-	model?: Model,
-): Promise<RpcOpenSessionResult> {
-	let cancelled = false;
-	if (!alreadyOpen) {
-		cancelled = latest
-			? !(await session.switchSession(latest, model ? { model } : undefined))
-			: !(await session.newSession({ sessionDir: dir }));
-		if (!cancelled) subagentRegistry?.clear();
-	}
-	// A resumed session is bound to the model by the switch; an already-open or
-	// fresh one selects it as `set_model` would.
-	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
-	return {
-		cancelled,
-		resumed: !cancelled && latest !== null,
-		sessionId: session.sessionId,
-		sessionFile: session.sessionFile,
-	};
-}
-
 /**
  * Continue the newest non-empty session in `sessionDir`, or start a fresh one
  * there — the runtime equivalent of `--session-dir <dir> --continue`, so a host
@@ -1129,8 +920,29 @@ export async function openRpcSession(
 	subagentRegistry?: RpcSubagentResetRegistry,
 	model?: Model,
 ): Promise<RpcOpenSessionResult> {
-	const target = await resolveRpcSessionOpenTarget(session, sessionDir);
-	return openResolvedRpcSession(session, target, subagentRegistry, model);
+	if (!session.sessionFile) throw new Error("open_session requires session persistence (omit --no-session)");
+	const dir = path.resolve(sessionDir);
+	const latest = await findMostRecentNonEmptySession(dir);
+	const current = path.resolve(session.sessionFile);
+	const alreadyOpen = latest
+		? current === path.resolve(latest)
+		: path.dirname(current) === dir && session.messages.length === 0;
+	let cancelled = false;
+	if (!alreadyOpen) {
+		cancelled = latest
+			? !(await session.switchSession(latest, model ? { model } : undefined))
+			: !(await session.newSession({ sessionDir: dir }));
+		if (!cancelled) subagentRegistry?.clear();
+	}
+	// A resumed session is bound to the model by the switch; an already-open or
+	// fresh one selects it as `set_model` would.
+	if (!cancelled && model && !modelsAreEqual(session.model, model)) await session.setModel(model);
+	return {
+		cancelled,
+		resumed: !cancelled && latest !== null,
+		sessionId: session.sessionId,
+		sessionFile: session.sessionFile,
+	};
 }
 
 type RpcModelLookupSession = Pick<AgentSession, "getAvailableModels" | "modelRegistry">;
@@ -1337,50 +1149,6 @@ export async function requestRpcAskDialog(
 	return timedOut ? timedOutAskDialogResult(questions) : result;
 }
 
-function startRpcDialogDiagnostic(id: string, method: unknown) {
-	const context = logger.getLogContext();
-	const fields = {
-		...context,
-		operation_id: context.operation_id ?? `rpc-dialog-${id}`,
-		session_id: context.session_id,
-		session_generation: context.session_generation,
-		request_id: context.request_id,
-		command: context.command,
-		component: "rpc-dialog",
-		dialog_id: rpcDiagnosticId(id, true),
-		method:
-			method === "select" || method === "confirm" || method === "input" || method === "ask" || method === "editor"
-				? method
-				: "unknown",
-	};
-	const started = performance.now();
-	let terminalLogged = false;
-	logger.info("RPC dialog started", {
-		...fields,
-		event: "rpc_dialog_started",
-		stage: "request",
-		result: "started",
-	});
-	return (
-		result: "responded" | "cancelled" | "timed_out" | "aborted" | "disconnected" | "failed",
-		stage: "request" | "response" | "abort" | "timeout" | "output",
-		error?: unknown,
-	) => {
-		if (terminalLogged) return;
-		terminalLogged = true;
-		const terminal = {
-			...fields,
-			event: "rpc_dialog_terminal",
-			stage,
-			result,
-			elapsed_ms: performance.now() - started,
-			...(error === undefined ? {} : logger.diagnosticError(error)),
-		};
-		if (result === "failed") logger.error("RPC dialog failed", terminal);
-		else logger.info("RPC dialog ended", terminal);
-	};
-}
-
 export function requestRpcEditor(
 	pendingRequests: Map<string, PendingExtensionRequest>,
 	output: RpcOutput,
@@ -1389,12 +1157,9 @@ export function requestRpcEditor(
 	dialogOptions?: ExtensionUIDialogOptions,
 	editorOptions?: { promptStyle?: boolean },
 ): Promise<string | undefined> {
-	const id = dialogOptions?.signal?.aborted ? `rpc-dialog-${crypto.randomUUID()}` : (Snowflake.next() as string);
-	const logTerminal = startRpcDialogDiagnostic(id, "editor");
-	if (dialogOptions?.signal?.aborted) {
-		logTerminal("aborted", "request");
-		return Promise.resolve(undefined);
-	}
+	if (dialogOptions?.signal?.aborted) return Promise.resolve(undefined);
+
+	const id = Snowflake.next() as string;
 	const { promise, resolve, reject } = Promise.withResolvers<string | undefined>();
 	let settled = false;
 
@@ -1402,65 +1167,49 @@ export function requestRpcEditor(
 		dialogOptions?.signal?.removeEventListener("abort", onAbort);
 		pendingRequests.delete(id);
 	};
-	const finish = (value: string | undefined, result: "responded" | "cancelled" | "timed_out" | "aborted") => {
+	const finish = (value: string | undefined) => {
 		if (settled) return;
 		settled = true;
 		cleanup();
-		logTerminal(result, result === "aborted" ? "abort" : "response");
 		resolve(value);
 	};
 	const fail = (error: Error) => {
 		if (settled) return;
 		settled = true;
 		cleanup();
-		logTerminal(
-			pendingRequests instanceof RpcPendingExtensionRequests && pendingRequests.closed ? "disconnected" : "failed",
-			"response",
-			error,
-		);
 		reject(error);
 	};
 	const onAbort = () => {
-		try {
-			output({
-				type: "extension_ui_request",
-				id: Snowflake.next() as string,
-				method: "cancel",
-				targetId: id,
-			} as RpcExtensionUIRequest);
-		} catch (error) {
-			logTerminal("failed", "output", error);
-			throw error;
-		}
-		finish(undefined, "aborted");
+		output({
+			type: "extension_ui_request",
+			id: Snowflake.next() as string,
+			method: "cancel",
+			targetId: id,
+		} as RpcExtensionUIRequest);
+		finish(undefined);
 	};
 
 	dialogOptions?.signal?.addEventListener("abort", onAbort, { once: true });
 	pendingRequests.set(id, {
 		resolve: response => {
 			if ("cancelled" in response && response.cancelled) {
-				finish(undefined, response.timedOut ? "timed_out" : "cancelled");
+				finish(undefined);
 			} else if ("value" in response) {
-				finish(response.value, "responded");
+				finish(response.value);
 			} else {
-				finish(undefined, "responded");
+				finish(undefined);
 			}
 		},
 		reject: fail,
 	});
-	try {
-		output({
-			type: "extension_ui_request",
-			id,
-			method: "editor",
-			title,
-			prefill,
-			promptStyle: editorOptions?.promptStyle,
-		} as RpcExtensionUIRequest);
-	} catch (error) {
-		logTerminal("failed", "output", error);
-		throw error;
-	}
+	output({
+		type: "extension_ui_request",
+		id,
+		method: "editor",
+		title,
+		prefill,
+		promptStyle: editorOptions?.promptStyle,
+	} as RpcExtensionUIRequest);
 	return promise;
 }
 
@@ -1473,12 +1222,9 @@ export function requestRpcDialog<T>(
 	request: Record<string, unknown>,
 	parseResponse: (response: RpcExtensionUIResponse) => T,
 ): Promise<T> {
-	const id = opts?.signal?.aborted ? `rpc-dialog-${crypto.randomUUID()}` : (Snowflake.next() as string);
-	const logTerminal = startRpcDialogDiagnostic(id, request.method);
-	if (opts?.signal?.aborted) {
-		logTerminal("aborted", "request");
-		return Promise.resolve(defaultValue);
-	}
+	if (opts?.signal?.aborted) return Promise.resolve(defaultValue);
+
+	const id = Snowflake.next() as string;
 	const { promise, resolve, reject } = Promise.withResolvers<T>();
 	let timeoutId: NodeJS.Timeout | undefined;
 
@@ -1489,39 +1235,26 @@ export function requestRpcDialog<T>(
 	};
 	// Tells the host to close a dialog omp has already settled, so a late answer
 	// cannot look actionable after abort or timeout.
-	const cancelHostDialog = () => {
-		try {
-			output({
-				type: "extension_ui_request",
-				id: Snowflake.next() as string,
-				method: "cancel",
-				targetId: id,
-			} as RpcExtensionUIRequest);
-		} catch (error) {
-			logTerminal("failed", "output", error);
-			throw error;
-		}
-	};
+	const cancelHostDialog = () =>
+		output({
+			type: "extension_ui_request",
+			id: Snowflake.next() as string,
+			method: "cancel",
+			targetId: id,
+		} as RpcExtensionUIRequest);
 	const onAbort = () => {
 		cancelHostDialog();
 		cleanup();
-		logTerminal("aborted", "abort");
 		resolve(defaultValue);
 	};
 	opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
 	if (opts?.timeout !== undefined) {
 		timeoutId = setTimeout(() => {
-			try {
-				opts.onTimeout?.();
-			} catch (error) {
-				logTerminal("failed", "timeout", error);
-				throw error;
-			}
+			opts.onTimeout?.();
 			cancelHostDialog();
 			cleanup();
 			resolve(defaultValue);
-			logTerminal("timed_out", "timeout");
 		}, opts.timeout);
 	}
 
@@ -1529,38 +1262,14 @@ export function requestRpcDialog<T>(
 		resolve: response => {
 			cleanup();
 			try {
-				const value = parseResponse(response);
-				logTerminal(
-					"cancelled" in response && response.cancelled
-						? response.timedOut
-							? "timed_out"
-							: "cancelled"
-						: "responded",
-					"response",
-				);
-				resolve(value);
+				resolve(parseResponse(response));
 			} catch (err) {
-				logTerminal("failed", "response", err);
 				reject(err);
 			}
 		},
-		reject: error => {
-			logTerminal(
-				pendingRequests instanceof RpcPendingExtensionRequests && pendingRequests.closed
-					? "disconnected"
-					: "failed",
-				"response",
-				error,
-			);
-			reject(error);
-		},
+		reject,
 	});
-	try {
-		output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
-	} catch (error) {
-		logTerminal("failed", "output", error);
-		throw error;
-	}
+	output({ type: "extension_ui_request", id, ...request } as RpcExtensionUIRequest);
 	return promise;
 }
 /**
@@ -1625,8 +1334,6 @@ export interface RpcModeOptions {
 	input?: ReadableStream<Uint8Array>;
 	/** Builds `live_start` sessions; defaults to the real {@link LiveSessionController}. */
 	createLiveSession?: RpcLiveSessionFactory;
-	/** Session MCP manager; feeds `/mcp` argument completion on the fork surface. */
-	mcpManager?: MCPManager;
 }
 
 /**
@@ -1634,15 +1341,7 @@ export interface RpcModeOptions {
  * Listens for JSON commands on stdin, outputs events and responses on stdout.
  */
 export async function runRpcMode(session: AgentSession, options: RpcModeOptions = {}): Promise<never> {
-	const {
-		setToolUIContext,
-		headless = false,
-		subagentEventBus,
-		input = claimRpcInput(),
-		createLiveSession,
-		mcpManager,
-	} = options;
-	let stopOfflineBackup = (): void => {};
+	const { setToolUIContext, headless = false, subagentEventBus, input = claimRpcInput(), createLiveSession } = options;
 	// Signal to RPC clients that the server is ready to accept commands
 	// Suppress terminal notifications: they write \x07 (BEL) or OSC sequences directly to
 	// process.stdout with no newline, which the reader merges with the next JSON line and
@@ -1657,57 +1356,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// writes from the threadpool and reports backpressure, letting the writer spool.
 	const stdout = process.platform === "win32" ? fs.createWriteStream("", { fd: 1, autoClose: false }) : process.stdout;
 	const outputWriter = new RpcOutputWriter(stdout, failure => {
-		logger.error("RPC output delivery failed", {
-			component: "rpc",
-			event: "rpc_output_failed",
-			stage: "output_delivery",
-			result: "failed",
-			session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
-			...logger.diagnosticError(failure),
-		});
+		logger.error("RPC output delivery failed", { error: String(failure) });
 		void session.dispose().finally(() => process.exit(1));
 	});
 	outputWriter.write(
 		frameEncoder.encodeFrames({
 			type: "ready",
 			protocolVersion: 1,
-			supportedProtocolVersions: RPC_SUPPORTED_PROTOCOL_VERSIONS,
+			supportedProtocolVersions: [1, 2],
 			maxFrameBytes: MAX_RPC_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_RPC_REASSEMBLED_BYTES,
 		}),
 	);
-	const promptDiagnostics = new Map<
-		string | undefined,
-		Array<{ context: Record<string, unknown>; started: number }>
-	>();
-	// Deferred Team replies remain owned by their initiating session, including at final emission.
-	const teamConfigResponseOwners = new WeakMap<object, () => boolean>();
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
-		if (teamConfigResponseOwners.get(obj)?.() === false) return;
 		outputWriter.write(frameEncoder.encodeFrames(obj));
-		if (isRecord(obj) && obj.type === "prompt_result") {
-			const pending = promptDiagnostics.get(typeof obj.id === "string" ? obj.id : undefined);
-			const inherited = logger.getLogContext();
-			const index =
-				pending?.findIndex(
-					item =>
-						item.context.operation_id === inherited.operation_id && item.context.call_id === inherited.call_id,
-				) ?? -1;
-			const ambiguous = index < 0 && (pending?.length ?? 0) > 1;
-			const diagnostic = pending?.splice(Math.max(index, 0), 1)[0];
-			if (!pending?.length) promptDiagnostics.delete(typeof obj.id === "string" ? obj.id : undefined);
-			logger.info("RPC prompt reached terminal result", {
-				...diagnostic?.context,
-				component: "rpc",
-				event: "rpc_prompt_terminal",
-				stage: "prompt_result",
-				result: obj.status === "error" ? "failed" : obj.status === "aborted" ? "cancelled" : "completed",
-				agent_invoked: obj.agentInvoked === true,
-				session_settled: obj.sessionSettled === true,
-				correlation_ambiguous: ambiguous,
-				elapsed_ms: diagnostic ? performance.now() - diagnostic.started : undefined,
-			});
-		}
 		if (isRecord(obj) && obj.type === "response" && obj.command === "negotiate_protocol" && obj.success === true)
 			frameEncoder.setProtocolVersion(2);
 	};
@@ -1731,63 +1393,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const extensionUserMessageTracker = new RpcExtensionUserMessageTracker();
 	const wordPredictor = new RpcWordPredictor();
 	const btw = new RpcBtwController(session, output);
-	const commandOperations = new Set<AbortController>();
-	const sessionChangeGate = new RpcUserInputGate();
-	let clientDisconnected = false;
-	const loopController = new RpcLoopController(session, {
-		output: text => output({ type: "command_output", text }),
-		submit: async (message, current) => {
-			const command: RpcCommand = { type: "prompt", message };
-			inputGate.accept(command);
-			const ticket = promptResults.begin(undefined);
-			const pending = promptDiagnostics.get(undefined) ?? [];
-			pending.push({ context: { ...logger.getLogContext() }, started: performance.now() });
-			promptDiagnostics.set(undefined, pending);
-			try {
-				const outcome = await dispatchOrderedUserInput(command, ticket, true, current);
-				if (outcome === "local") promptResults.completeLocal(ticket);
-				else if (outcome === "cancelled") promptResults.settle(ticket);
-			} catch (cause) {
-				promptResults.fail(ticket, toError(cause).message);
-				throw cause;
-			}
-		},
-		reset: async current => {
-			const generation = session.sessionGeneration;
-			return sessionChangeGate.enqueue(async () => {
-				if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
-				await btw.close();
-				if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
-				await beginModeSessionChange(true);
-				let changed = false;
-				try {
-					if (clientDisconnected || !current() || generation !== session.sessionGeneration) return false;
-					changed = await session.newSession();
-					if (changed) subagentRegistry?.clear();
-					return changed;
-				} finally {
-					await endModeSessionChange({ detachedRun: changed });
-					if (changed && !clientDisconnected && loopController.enabled) await emitAvailableCommandsUpdate();
-				}
-			});
-		},
-		onContinuationDropped: () => {
-			goalController.refresh();
-			void settleWatcher.check();
-		},
-		continuationAllowed: () => !clientDisconnected && !planController.reviewPending,
-	});
 	// A continuation abandoned while waiting leaves nothing to end the activity stretch: re-check settlement.
-	const goalController = new RpcGoalController(
-		session,
-		() => void settleWatcher.check(),
-		() => !clientDisconnected && !loopController.enabled,
-		() => planController.assertCanEnterGoal(),
-	);
+	const goalController = new RpcGoalController(session, () => void settleWatcher.check());
 	// A scheduled or held goal turn will start a turn: every settle report treats it as busy,
 	// and any report of "not settled" for that reason is later closed by `session_settled`.
 	const goalTurnScheduled = watchedScheduledTurnProbe(
-		() => goalController.continuationPending || loopController.continuationPending,
+		() => goalController.continuationPending,
 		() => settleWatcher,
 	);
 	const promptResults = new RpcPromptResults(session, output, goalTurnScheduled);
@@ -1800,76 +1411,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// Live frames go straight to `output`, so `set_event_filter` (session events only) never drops them.
 	const liveBridge = new RpcLiveBridge(session, output, createLiveSession);
 	const subagentRegistry = subagentEventBus ? new RpcSubagentRegistry(subagentEventBus, output) : undefined;
-
-	// Fork extensions (rpc-ui-protocol.md), active only after the client
-	// negotiates protocol v3: rich command catalog + completion, persisted
-	// model roles, and saved-session directory management. Everything else on
-	// this wire is stock upstream RPC.
-	let forkNegotiated = false;
-	const commandCatalog = new RpcForkCommandCatalogService({
-		cwd: session.sessionManager.getCwd(),
-		getMcpManager: () => mcpManager,
-	});
-	const modelRoles = new RpcModelRoleService({
-		getSettings: () => session.settings,
-		getModelRegistry: () => session.modelRegistry,
-		emit: output,
-		reloadSessionSettings: async () => {
-			const started = performance.now();
-			let stage: "settings_reload" | "plan_refresh" = "settings_reload";
-			logger.info("RPC model role session settings reload started", {
-				component: "rpc",
-				event: "rpc_settings_reload_started",
-				stage,
-				result: "started",
-				persisted: true,
-			});
-			try {
-				await session.settings.reloadFromDisk();
-				stage = "plan_refresh";
-				await planController.refreshModelRole();
-				logger.info("RPC model role session settings reload completed", {
-					component: "rpc",
-					event: "rpc_settings_reload_terminal",
-					stage,
-					result: "completed",
-					persisted: true,
-					elapsed_ms: performance.now() - started,
-				});
-				return { result: "completed" as const };
-			} catch (err) {
-				logger.warn("RPC model role session settings reload failed", {
-					component: "rpc",
-					event: "rpc_settings_reload_failed",
-					stage,
-					result: "degraded",
-					persisted: true,
-					elapsed_ms: performance.now() - started,
-					...logger.diagnosticError(err),
-				});
-				return { result: "degraded" as const, failed_stage: stage };
-			}
-		},
-	});
-	let sessionDirectoryCwd = session.sessionManager.getCwd();
-	// --no-session 的内存管理器目录为空，但目录命令仍应访问当前配置根/profile 的历史。
-	let sessionDirectoryDir =
-		session.sessionManager.getSessionDir() || SessionManager.getDefaultSessionDir(sessionDirectoryCwd);
-	let sessionDirectory = new RpcSessionDirectoryService({
-		cwd: sessionDirectoryCwd,
-		sessionDir: sessionDirectoryDir,
-		getSession: () => session,
-	});
-	const getSessionDirectory = (): RpcSessionDirectoryService => {
-		const cwd = session.sessionManager.getCwd();
-		const sessionDir = session.sessionManager.getSessionDir() || SessionManager.getDefaultSessionDir(cwd);
-		if (cwd !== sessionDirectoryCwd || sessionDir !== sessionDirectoryDir) {
-			sessionDirectoryCwd = cwd;
-			sessionDirectoryDir = sessionDir;
-			sessionDirectory = new RpcSessionDirectoryService({ cwd, sessionDir, getSession: () => session });
-		}
-		return sessionDirectory;
-	};
 
 	// Shutdown request flag (wrapped in object to allow mutation with const)
 	const shutdownState = { requested: false };
@@ -2077,60 +1618,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// A single shared instance routes all responses received on stdin to the
 	// correct waiting promise regardless of which code path created the request.
 	const rpcUiContext = new RpcExtensionUIContext(pendingExtensionRequests, output);
-	const planController = new RpcPlanController(
-		session,
-		rpcUiContext,
-		text => output({ type: "command_output", text }),
-		task => {
-			if (!clientDisconnected) shutdownCoordinator.track(task());
-		},
-		() => loopController.refresh(),
-	);
-	const cancelCommandOperations = (preserve?: AbortController) => {
-		for (const controller of commandOperations) {
-			if (controller === preserve) continue;
-			controller.abort();
-			commandOperations.delete(controller);
-		}
-		planController.cancel();
-	};
-	const beginModeSessionChange = async (
-		preserveLoop = false,
-		detachesRun = true,
-		preserveCommand?: AbortController,
-	) => {
-		cancelCommandOperations(preserveCommand);
-		if (!preserveLoop) loopController.clear();
-		await goalController.beginSessionChange();
-		try {
-			await planController.beginSessionChange({ detachesRun });
-		} catch (cause) {
-			await goalController.endSessionChange();
-			throw cause;
-		}
-	};
-	const endModeSessionChange = async (change: { detachedRun?: boolean }) => {
-		try {
-			await planController.endSessionChange();
-		} finally {
-			await goalController.endSessionChange(change);
-		}
-	};
 	setToolUIContext?.(rpcUiContext, true);
-	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) => {
-		const fields = {
-			component: "rpc",
-			event: "rpc_prompt_failed",
-			stage: "prompt_execution",
-			result: promptError.name === "AbortError" ? "cancelled" : "failed",
-			command: rpcDiagnosticType(command),
-			request_id: rpcDiagnosticId(id),
-			...logger.diagnosticError(promptError),
-		};
-		if (promptError.name === "AbortError") logger.info("RPC prompt cancelled", fields);
-		else logger.error("RPC prompt execution failed", fields);
+	const onPromptError = (id: string | undefined, command: string) => (promptError: Error) =>
 		output(error(id, command, promptError.message));
-	};
 
 	// Set up extensions with RPC-based UI context
 	await initializeExtensions(session, {
@@ -2140,26 +1630,24 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			change: () => Promise<T>,
 			{ detachesRun }: { detachesRun: boolean },
 		): Promise<T> => {
-			return sessionChangeGate.enqueue(async () => {
-				await btw.close();
-				await beginModeSessionChange(false, detachesRun);
-				let result: T | undefined;
-				try {
-					result = await change();
-					return result;
-				} finally {
-					// Reattaches only if the session actually changed, then re-checks settlement.
-					// A change that throws may already have detached the run: count it as detached.
-					await endModeSessionChange({ detachedRun: detachesRun && result?.cancelled !== true });
-					if (result && !result.cancelled) {
-						// As for the host's new/switch commands: a detached run never yields, so
-						// close the prompts it was answering. Branch and navigation leave a live
-						// run streaming to its normal yield.
-						if (detachesRun) promptResults.abortOpen();
-						void settleWatcher.check();
-					}
+			await btw.close();
+			await goalController.beginSessionChange();
+			let result: T | undefined;
+			try {
+				result = await change();
+				return result;
+			} finally {
+				// Reattaches only if the session actually changed, then re-checks settlement.
+				// A change that throws may already have detached the run: count it as detached.
+				await goalController.endSessionChange({ detachedRun: detachesRun && result?.cancelled !== true });
+				if (result && !result.cancelled) {
+					// As for the host's new/switch commands: a detached run never yields, so
+					// close the prompts it was answering. Branch and navigation leave a live
+					// run streaming to its normal yield.
+					if (detachesRun) promptResults.abortOpen();
+					void settleWatcher.check();
 				}
-			});
+			}
 		},
 		reportSendError: (action, err) => {
 			output(error(undefined, action, err.message));
@@ -2169,9 +1657,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		},
 		onShutdown: () => {
 			shutdownState.requested = true;
-			cancelCommandOperations();
-			loopController.clear();
-			goalController.stopForHostAbort();
 		},
 		trackAgentInvokingMessage: task => {
 			extensionUserMessageTracker.trackAgentMessageTask(task);
@@ -2180,22 +1665,17 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		uiContext: headless ? undefined : rpcUiContext,
 	});
 
-	// Forward generic session lifecycle facts unchanged (including cancellation intent
-	// and manual compaction); the wire definitions describe the same event stream.
-	// Prompt results follow the frame that settled them, not session_abort.
+	// Output all agent events as JSON; prompt results follow the frame that settled them.
 	session.subscribe(event => {
 		sessionEvents.forward(event);
 		// Before the prompt-result and settle reports: a goal continuation decided at this
 		// agent_end is scheduled (and reported as pending) before either reads settlement.
 		goalController.observe(event);
-		loopController.observe(event);
-		if (!clientDisconnected) planController.observe(event);
 		promptResults.observe(event);
 		settleWatcher.observe(event);
 	});
 	await goalController.reconcile();
 	await goalController.settled();
-	await planController.reconcile();
 
 	// Discriminates a store failure from any other dispose rejection below.
 	let persistenceFailure: Error | undefined;
@@ -2216,18 +1696,11 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	 * rejection with no latched store failure still surfaces to the caller.
 	 */
 	const disposeAndExit = async (): Promise<never> => {
-		stopOfflineBackup();
 		try {
 			// The process ends regardless; report an unsaved side answer instead of skipping dispose.
 			await btw.close().catch(btwError => {
 				const message = toError(btwError).message;
-				logger.error("RPC side answer close failed", {
-					component: "rpc",
-					event: "rpc_btw_close_failed",
-					stage: "shutdown",
-					result: "failed",
-					...logger.diagnosticError(btwError),
-				});
+				logger.error(message);
 				output({ type: "notice", level: "error", message, source: "btw-history" });
 			});
 			// Close the realtime call (microphone, socket) before the session it delegates into.
@@ -2265,8 +1738,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		process.exit(0);
 	};
 
-	const getAvailableCommands = async () =>
-		buildAvailableSlashCommands(session, undefined, { includeRpcBuiltins: true });
+	const getAvailableCommands = async () => buildAvailableSlashCommands(session);
 	const reloadPluginState = async () => {
 		const cwd = session.sessionManager.getCwd();
 		const projectPath = await resolveActiveProjectRegistryPath(cwd);
@@ -2288,57 +1760,23 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const dispatchOrderedUserInput = (
 		command: OrderedUserInput,
 		ticket: RpcPromptTicket | undefined,
-		loopSubmission = false,
-		continuationCurrent?: () => boolean,
-	): Promise<OrderedInputOutcome> => {
-		const started = performance.now();
-		const context = { ...logger.getLogContext() };
-		return inputGate.enqueue(async () => {
-			let sessionId = session.sessionId;
-			let sessionGeneration = session.sessionGeneration;
+	): Promise<OrderedInputOutcome> =>
+		inputGate.enqueue(async () => {
+			const sessionId = session.sessionId;
 			const isCurrent = () =>
-				inputGate.isCurrent(command) &&
-				!clientDisconnected &&
-				!shutdownState.requested &&
-				session.sessionId === sessionId &&
-				session.sessionGeneration === sessionGeneration &&
-				continuationCurrent?.() !== false;
-			const cancelInput = (stage: "before_input" | "input_hook" | "admission"): OrderedInputOutcome => {
-				if (command.type === "steer" || command.type === "follow_up") {
-					const reason = clientDisconnected
-						? "disconnected"
-						: shutdownState.requested
-							? "shutdown"
-							: session.sessionId !== sessionId || session.sessionGeneration !== sessionGeneration
-								? "session_changed"
-								: "input_invalidated";
-					logger.info("RPC ordered user input cancelled", {
-						...context,
-						component: "rpc",
-						event: "rpc_user_input_cancelled",
-						command: command.type,
-						request_id: rpcDiagnosticId(command.id),
-						stage,
-						result: "cancelled",
-						reason,
-						elapsed_ms: performance.now() - started,
-					});
-				}
-				return "cancelled";
-			};
-			if (!isCurrent()) return cancelInput("before_input");
+				inputGate.isCurrent(command) && !shutdownState.requested && session.sessionId === sessionId;
+			if (!isCurrent()) return "cancelled";
 			let text = command.message;
 			let images = command.images;
-			let goalAutoOrchestrateInitialId: string | undefined;
 			const runner = session.extensionRunner;
 			if (runner?.hasHandlers("input")) {
 				const result = await runner.emitInput(text, images, "rpc");
-				if (!isCurrent()) return cancelInput("input_hook");
+				if (!isCurrent()) return "cancelled";
 				if (result.handled) return "local";
 				if (result.text !== undefined) text = result.text;
 				if (result.images !== undefined) images = result.images;
 			}
-			if (!isCurrent()) return cancelInput("admission");
+			if (!isCurrent()) return "cancelled";
 			if (!text.trim() && !images?.length) return "local";
 			if (command.type === "steer") {
 				await session.steer(text, images);
@@ -2350,7 +1788,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 			if (command.type === "prompt") {
 				if (!ticket) return "cancelled";
-				if (!loopSubmission && resolveRpcSkillInvocation(session, text)) loopController.capturePrompt(text);
 				const skillResult = await dispatchRpcSkillPrompt({
 					ticket,
 					session,
@@ -2364,134 +1801,22 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				});
 				if (skillResult === "cancelled") return "cancelled";
 				if (skillResult) return "admitted";
-				const controller = new AbortController();
-				if (clientDisconnected) controller.abort();
-				commandOperations.add(controller);
-				let generation = session.sessionGeneration;
-				let backgroundTasks = 0;
-				let dispatchFinished = false;
-				const commandIsCurrent = () => !controller.signal.aborted && generation === session.sessionGeneration;
-				const commandOutput = (message: string) => {
-					if (commandIsCurrent()) output({ type: "command_output", text: message });
-				};
-				const runtime: RpcSlashCommandRuntime = {
+				const builtinResult = await executeAcpBuiltinSlashCommand(text, {
 					session,
 					sessionManager: session.sessionManager,
 					settings: session.settings,
 					cwd: session.sessionManager.getCwd(),
-					ui: rpcUiContext,
-					signal: controller.signal,
-					output: commandOutput,
+					output: commandOutput => output({ type: "command_output", text: commandOutput }),
 					refreshCommands: emitAvailableCommandsUpdate,
 					reloadPlugins: reloadPluginState,
-					newSession: options =>
-						sessionChangeGate.enqueue(async () => {
-							if (!commandIsCurrent() || !isCurrent()) return false;
-							await btw.close();
-							await beginModeSessionChange(false, true, controller);
-							try {
-								if (!commandIsCurrent() || !isCurrent()) return false;
-								return await session.newSession(options);
-							} finally {
-								const nextId = session.sessionId;
-								const nextGeneration = session.sessionGeneration;
-								const changed = nextId !== sessionId || nextGeneration !== generation;
-								await endModeSessionChange({ detachedRun: changed });
-								if (changed) {
-									subagentRegistry?.clear();
-									inputGate.commitSessionChange(command);
-									promptResults.abortOpen();
-									void settleWatcher.check();
-									// Only this command's own rollover may adopt the new identity.
-									// Abort or a later transition still suppresses its final output.
-									if (
-										!controller.signal.aborted &&
-										session.sessionId === nextId &&
-										session.sessionGeneration === nextGeneration
-									) {
-										sessionId = nextId;
-										generation = nextGeneration;
-										sessionGeneration = nextGeneration;
-									}
-									await emitAvailableCommandsUpdate();
-								}
-							}
-						}),
-					runCommandInBackground: task => {
-						if (!commandIsCurrent()) return;
-						backgroundTasks++;
-						const context = {
-							...logger.getLogContext(),
-							call_id: `rpc-command-background-${crypto.randomUUID()}`,
-						};
-						const started = performance.now();
-						shutdownCoordinator.track(
-							logger.withLogContext(context, () => {
-								logger.info("RPC command background started", {
-									component: "rpc",
-									event: "rpc_command_background_started",
-									stage: "builtin_background",
-									result: "started",
-								});
-								let result = "completed";
-								return task()
-									.catch(cause => {
-										result =
-											commandIsCurrent() && !(cause instanceof Error && cause.name === "AbortError")
-												? "failed"
-												: "cancelled";
-										if (result === "failed")
-											logger.error("RPC command background failed", {
-												component: "rpc",
-												event: "rpc_command_background_failed",
-												stage: "builtin_background",
-												result,
-												elapsed_ms: performance.now() - started,
-												...logger.diagnosticError(cause),
-											});
-										commandOutput(`Command failed: ${toError(cause).message}`);
-									})
-									.finally(() => {
-										if (result !== "failed")
-											logger.info("RPC command background ended", {
-												component: "rpc",
-												event: "rpc_command_background_terminal",
-												stage: "builtin_background",
-												result: commandIsCurrent() ? result : "cancelled",
-												elapsed_ms: performance.now() - started,
-											});
-										backgroundTasks--;
-										if (dispatchFinished && backgroundTasks === 0) commandOperations.delete(controller);
-									});
-							}),
-						);
-					},
-					runModeCommand: async (mode, args) => {
-						if (!commandIsCurrent()) return { consumed: true };
-						if (mode === "plan") return planController.handle(args, controller.signal);
-						if (mode === "loop") {
-							const result = await loopController.handle(args);
-							goalController.refresh();
-							return result;
-						}
-						return goalController.handleSlash(args, runtime, {
-							autoOrchestrate: mode === "goal-autopilot",
-						});
-					},
+					runCommandInBackground: task => shutdownCoordinator.track(task()),
 					notifyTitleChanged: async () => {
 						output({ type: "session_info_update", title: session.sessionName, sessionId: session.sessionId });
 					},
 					notifyConfigChanged: async () => {
 						output({ type: "config_update", model: session.model, thinkingLevel: session.thinkingLevel });
 					},
-				};
-				let builtinResult: AcpBuiltinSlashCommandResult;
-				try {
-					builtinResult = await executeRpcBuiltinSlashCommand(text, runtime);
-				} finally {
-					dispatchFinished = true;
-					if (backgroundTasks === 0) commandOperations.delete(controller);
-				}
+				});
 				if (!isCurrent()) return "cancelled";
 				if (builtinResult !== false) {
 					if (!("prompt" in builtinResult)) {
@@ -2509,26 +1834,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						return "local";
 					}
 					text = builtinResult.prompt;
-					goalAutoOrchestrateInitialId = builtinResult.goalAutoOrchestrateInitialId;
-					if (!loopSubmission && resolveRpcSkillInvocation(session, text)) loopController.capturePrompt(text);
-					const expandedSkill = await dispatchRpcSkillPrompt({
-						ticket,
-						session,
-						message: text,
-						streamingBehavior: command.streamingBehavior,
-						results: promptResults,
-						onError: onPromptError(command.id, "prompt"),
-						extensionUserMessageTracker,
-						images,
-						goalAutoOrchestrateInitialId,
-						isCurrent,
-					});
-					if (expandedSkill === "cancelled") return "cancelled";
-					if (expandedSkill) return "admitted";
 				}
 			}
 			if (!isCurrent() || !ticket) return "cancelled";
-			if (!loopSubmission) loopController.capturePrompt(text);
 			await watchAndReportPromptResult({
 				ticket,
 				startPrompt: onPromptAdmitted =>
@@ -2536,7 +1844,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 						images,
 						...(command.type === "prompt" ? { streamingBehavior: command.streamingBehavior } : {}),
 						onPromptAdmitted,
-						...(goalAutoOrchestrateInitialId ? { goalAutoOrchestrateInitialId } : {}),
 					}),
 				results: promptResults,
 				onError: onPromptError(command.id, command.type),
@@ -2544,7 +1851,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			});
 			return "admitted";
 		});
-	};
 
 	// Handle a single command
 	const handleCommand = async (command: RpcCommand): Promise<RpcResponse> => {
@@ -2552,15 +1858,8 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 
 		switch (command.type) {
 			case "negotiate_protocol": {
-				if (!isNegotiableRpcProtocolVersion(command.protocolVersion))
+				if (command.protocolVersion !== 2)
 					return error(id, "negotiate_protocol", `Unsupported RPC protocol version: ${command.protocolVersion}`);
-				forkNegotiated = command.protocolVersion === RPC_FORK_PROTOCOL_VERSION;
-				if (forkNegotiated) {
-					return success(id, "negotiate_protocol", {
-						protocolVersion: RPC_FORK_PROTOCOL_VERSION,
-						capabilities: RPC_FORK_CAPABILITIES,
-					});
-				}
 				return success(id, "negotiate_protocol", { protocolVersion: 2 });
 			}
 
@@ -2620,8 +1919,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "abort": {
-				cancelCommandOperations();
-				loopController.pause();
 				goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return success(id, "abort");
@@ -2632,16 +1929,12 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 				// dequeued but never recorded) before aborting, so neither the aborted turn nor
 				// abort()'s stranded-queue drain can run it.
 				const restored = session.clearQueue({ forInterrupt: true });
-				cancelCommandOperations();
-				loopController.pause();
 				goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				return fitAbortAndRestoreQueueResponse(id, restored, frameEncoder.maxResponseBytes);
 			}
 
 			case "abort_and_prompt": {
-				cancelCommandOperations();
-				loopController.pause();
 				goalController.stopForHostAbort();
 				await session.abort({ reason: USER_INTERRUPT_LABEL });
 				const ticket = promptResults.begin(id);
@@ -2664,76 +1957,66 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "switch_session":
 			case "branch":
 			case "fork": {
-				return sessionChangeGate.enqueue(async () => {
-					// Fast refusal before the goal controller voids a waiting continuation;
-					// fork() repeats the check after each of its own awaits.
-					if (command.type === "fork" && session.isBusyForSnapshot) {
-						return error(id, "fork", new SessionBusyError("fork the session").message, "session_busy");
-					}
-					const requestedModel =
-						command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
-					// Validation first: a refused change must not cancel the running side question.
-					await btw.close();
-					await beginModeSessionChange(false, command.type !== "branch" && command.type !== "fork");
-					let result: RpcSessionChangeResult | undefined;
-					try {
-						result = await handleRpcSessionChange(session, command, subagentRegistry, requestedModel);
-					} catch (err) {
-						// fork() refuses when work started while its transition awaited.
-						if (err instanceof SessionBusyError) return error(id, command.type, err.message, "session_busy");
-						throw err;
-					} finally {
-						// Branch and fork switch files in-process without detaching a run (fork requires idle).
-						await endModeSessionChange({
-							detachedRun:
-								command.type !== "branch" && command.type !== "fork" && result?.data.cancelled !== true,
-						});
-						// Respond only once this change's reattach (and any queued ahead of it) has run.
-						await goalController.settled();
-					}
-					if (!result.data.cancelled) {
-						inputGate.commitSessionChange(command);
-						// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
-						if (command.type !== "branch" && command.type !== "fork") promptResults.abortOpen();
-						// The detached run publishes no terminal agent_end to settle on.
-						void settleWatcher.check();
-						await emitAvailableCommandsUpdate();
-					}
-					return success(id, result.type, result.data);
-				});
+				// Fast refusal before the goal controller voids a waiting continuation;
+				// fork() repeats the check after each of its own awaits.
+				if (command.type === "fork" && session.isBusyForSnapshot) {
+					return error(id, "fork", new SessionBusyError("fork the session").message, "session_busy");
+				}
+				const requestedModel =
+					command.type === "switch_session" ? await resolveRequestedRpcModel(session, command) : undefined;
+				// Validation first: a refused change must not cancel the running side question.
+				await btw.close();
+				await goalController.beginSessionChange();
+				let result: RpcSessionChangeResult | undefined;
+				try {
+					result = await handleRpcSessionChange(session, command, subagentRegistry, requestedModel);
+				} catch (err) {
+					// fork() refuses when work started while its transition awaited.
+					if (err instanceof SessionBusyError) return error(id, command.type, err.message, "session_busy");
+					throw err;
+				} finally {
+					// Branch and fork switch files in-process without detaching a run (fork requires idle).
+					await goalController.endSessionChange({
+						detachedRun: command.type !== "branch" && command.type !== "fork" && result?.data.cancelled !== true,
+					});
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await goalController.settled();
+				}
+				if (!result.data.cancelled) {
+					inputGate.commitSessionChange(command);
+					// `branch` leaves a live run streaming to its normal yield; new/switch detach it.
+					if (command.type !== "branch" && command.type !== "fork") promptResults.abortOpen();
+					// The detached run publishes no terminal agent_end to settle on.
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+				}
+				return success(id, result.type, result.data);
 			}
 
 			case "open_session": {
-				return sessionChangeGate.enqueue(async () => {
-					const requestedModel = await resolveRequestedRpcModel(session, command);
-					// Resolve once, inside the session gate, before tearing down any current work.
-					const target = await resolveRpcSessionOpenTarget(session, command.sessionDir);
-					const fileBeforeOpen = session.sessionFile;
-					if (!target.alreadyOpen) {
-						await btw.close();
-						await beginModeSessionChange();
-					}
-					let result: RpcOpenSessionResult | undefined;
-					try {
-						result = await openResolvedRpcSession(session, target, subagentRegistry, requestedModel);
-					} finally {
-						if (!target.alreadyOpen) {
-							await endModeSessionChange({ detachedRun: session.sessionFile !== fileBeforeOpen });
-						}
-						// Respond only once this change's reattach (and any queued ahead of it) has run.
-						await goalController.settled();
-					}
-					if (!result.cancelled) {
-						if (!target.alreadyOpen) inputGate.commitSessionChange(command);
-						// Opening the session that is already open switches nothing and leaves a live run
-						// going. Any real open (switch or new) changes the file, even when an aliased path
-						// reopens a transcript with the same id.
-						if (session.sessionFile !== fileBeforeOpen) promptResults.abortOpen();
-						void settleWatcher.check();
-						await emitAvailableCommandsUpdate();
-					}
-					return success(id, "open_session", result);
-				});
+				const requestedModel = await resolveRequestedRpcModel(session, command);
+				const fileBeforeOpen = session.sessionFile;
+				await btw.close();
+				await goalController.beginSessionChange();
+				let result: RpcOpenSessionResult | undefined;
+				try {
+					result = await openRpcSession(session, command.sessionDir, subagentRegistry, requestedModel);
+				} finally {
+					// Opening the session that is already open leaves a live run going (see below).
+					await goalController.endSessionChange({ detachedRun: session.sessionFile !== fileBeforeOpen });
+					// Respond only once this change's reattach (and any queued ahead of it) has run.
+					await goalController.settled();
+				}
+				if (!result.cancelled) {
+					inputGate.commitSessionChange(command);
+					// Opening the session that is already open switches nothing and leaves a live run
+					// going. Any real open (switch or new) changes the file, even when an aliased path
+					// reopens a transcript with the same id.
+					if (session.sessionFile !== fileBeforeOpen) promptResults.abortOpen();
+					void settleWatcher.check();
+					await emitAvailableCommandsUpdate();
+				}
+				return success(id, "open_session", result);
 			}
 
 			// =================================================================
@@ -2743,7 +2026,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			case "get_state": {
 				// A goal exit triggered by the last turn restores tools asynchronously; report after it.
 				await goalController.settled();
-				await planController.settled();
 				const queuedMessages = session.getQueuedMessages();
 				const state: RpcSessionState = {
 					model: session.model,
@@ -2825,15 +2107,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "get_available_commands": {
-				// Fork surface (v3): the same listing as rich catalog descriptors with
-				// execution verdicts and a revision, so a GUI can render the command
-				// palette and flag terminal-only commands without running them.
-				if (forkNegotiated) {
-					return success(id, "get_available_commands", {
-						commands: await commandCatalog.buildCatalog(session),
-						revision: commandCatalog.revision,
-					});
-				}
 				return success(id, "get_available_commands", { commands: await getAvailableCommands() });
 			}
 
@@ -3362,132 +2635,6 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			default: {
-				const teamCommand: unknown = command;
-				if (isRpcTeamConfigCommand(teamCommand)) {
-					const sessionId = session.sessionId;
-					const generation = session.sessionGeneration;
-					const isCurrent = () =>
-						!clientDisconnected && session.sessionId === sessionId && session.sessionGeneration === generation;
-					const adapter = new RpcTeamConfigAdapter({
-						settings: session.settings,
-						modelRegistry: session.modelRegistry,
-						sessionModel: session.model,
-						isCurrent,
-						emit: output,
-					});
-					const response = await adapter.handle(teamCommand, forkNegotiated);
-					// Keep receipts factual; stale replies cannot be delivered into a new session.
-					teamConfigResponseOwners.set(response, isCurrent);
-					return response;
-				}
-				// Fork extension commands (rpc-ui-protocol.md): available only after
-				// `negotiate_protocol {protocolVersion: 3}`. Upstream clients never
-				// send them and keep the unknown-command error below.
-				if (forkNegotiated) {
-					const forkCommand = command as Record<string, unknown>;
-					const forkSuccess = (data?: object | null): RpcResponse =>
-						data === undefined
-							? ({ id, type: "response", command: String(forkCommand.type), success: true } as RpcResponse)
-							: ({
-									id,
-									type: "response",
-									command: String(forkCommand.type),
-									success: true,
-									data,
-								} as RpcResponse);
-					const forkError = (cause: unknown): RpcResponse =>
-						cause instanceof RpcCommandCatalogError ||
-						cause instanceof RpcModelRoleError ||
-						cause instanceof RpcSessionDirectoryError
-							? error(id, String(forkCommand.type), cause.message, cause.code)
-							: error(id, String(forkCommand.type), cause instanceof Error ? cause.message : String(cause));
-					switch (forkCommand.type) {
-						case "complete_command": {
-							try {
-								const text = forkCommand.text;
-								const cursor = forkCommand.cursor;
-								if (typeof text !== "string")
-									return error(id, "complete_command", "complete_command requires text", "invalid_params");
-								if (typeof cursor !== "number")
-									return error(id, "complete_command", "complete_command requires cursor", "invalid_params");
-								return forkSuccess(await commandCatalog.complete({ text, cursor, session }));
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-						case "get_model_roles": {
-							try {
-								const currentModel = session.model;
-								return forkSuccess(
-									await modelRoles.listRoles({
-										sessionModel: currentModel
-											? { provider: currentModel.provider, modelId: currentModel.id }
-											: undefined,
-									}),
-								);
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-						case "set_model_role": {
-							try {
-								return forkSuccess(
-									await modelRoles.setRole({
-										roleId: forkCommand.roleId as string,
-										scope: forkCommand.scope as "user",
-										selection: forkCommand.selection as never,
-										expectedRevision: forkCommand.expectedRevision as string,
-									}),
-								);
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-						case "list_sessions": {
-							try {
-								return forkSuccess({ sessions: await getSessionDirectory().list() });
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-						case "rename_session": {
-							try {
-								const sessionId = forkCommand.sessionId;
-								const name = forkCommand.name;
-								if (typeof sessionId !== "string")
-									return error(id, "rename_session", "rename_session requires sessionId", "invalid_params");
-								if (typeof name !== "string")
-									return error(id, "rename_session", "rename_session requires name", "invalid_params");
-								if ("expectedRevision" in forkCommand && typeof forkCommand.expectedRevision !== "string")
-									return error(id, "rename_session", "expectedRevision must be a string", "invalid_params");
-								const summary = await getSessionDirectory().rename(
-									sessionId,
-									name,
-									forkCommand.expectedRevision as string | undefined,
-								);
-								return forkSuccess(summary);
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-						case "delete_session": {
-							try {
-								const sessionId = forkCommand.sessionId;
-								if (typeof sessionId !== "string")
-									return error(id, "delete_session", "delete_session requires sessionId", "invalid_params");
-								if ("expectedRevision" in forkCommand && typeof forkCommand.expectedRevision !== "string")
-									return error(id, "delete_session", "expectedRevision must be a string", "invalid_params");
-								await getSessionDirectory().delete(
-									sessionId,
-									forkCommand.expectedRevision as string | undefined,
-								);
-								return forkSuccess({ sessionId, deleted: true });
-							} catch (cause) {
-								return forkError(cause);
-							}
-						}
-					}
-				}
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
 			}
@@ -3511,63 +2658,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	});
 
 	const dispatchFrameDeps: RpcInputFrameDeps = {
-		handleCommand: command =>
-			logger.withLogContext(
-				{
-					session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
-					session_generation: session.sessionGeneration,
-				},
-				async () => {
-					const prompt = command.type === "prompt" || command.type === "abort_and_prompt";
-					const diagnostic = { context: { ...logger.getLogContext() }, started: performance.now() };
-					if (prompt) {
-						const pending = promptDiagnostics.get(command.id) ?? [];
-						pending.push(diagnostic);
-						promptDiagnostics.set(command.id, pending);
-					}
-					try {
-						const response = await handleCommand(command);
-						const completedLocally =
-							prompt &&
-							response.success &&
-							"data" in response &&
-							isRecord(response.data) &&
-							"agentInvoked" in response.data &&
-							response.data.agentInvoked === false;
-						if (completedLocally) {
-							logger.info("RPC prompt completed locally", {
-								...diagnostic.context,
-								component: "rpc",
-								event: "rpc_prompt_terminal",
-								stage: "local_completion",
-								result: "completed",
-								agent_invoked: false,
-								elapsed_ms: performance.now() - diagnostic.started,
-							});
-						}
-						// Local acknowledgements discard their ticket and never emit prompt_result.
-						if (prompt && (!response.success || completedLocally)) {
-							const pending = promptDiagnostics.get(command.id);
-							if (pending) {
-								const index = pending.indexOf(diagnostic);
-								if (index >= 0) pending.splice(index, 1);
-								if (!pending.length) promptDiagnostics.delete(command.id);
-							}
-						}
-						return response;
-					} catch (error) {
-						if (prompt) {
-							const pending = promptDiagnostics.get(command.id);
-							if (pending) {
-								const index = pending.indexOf(diagnostic);
-								if (index >= 0) pending.splice(index, 1);
-								if (!pending.length) promptDiagnostics.delete(command.id);
-							}
-						}
-						throw error;
-					}
-				},
-			),
+		handleCommand,
 		output,
 		errorResponse: error,
 		trackBackgroundTask: task => shutdownCoordinator.track(task),
@@ -3580,18 +2671,7 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	const inputDispatcher = new RpcInputDispatcher({
 		deps: dispatchFrameDeps,
 		afterSerialCommand: () => shutdownCoordinator.checkShutdownRequested(),
-		acceptInput: command => {
-			inputGate.accept(command);
-			// Stop an automatic repeat as soon as its interrupt frame arrives, even
-			// while the serial handler is still finishing an earlier command.
-			if (
-				command.type === "abort" ||
-				command.type === "abort_and_prompt" ||
-				command.type === "abort_and_restore_queue"
-			) {
-				loopController.pause();
-			}
-		},
+		acceptInput: command => inputGate.accept(command),
 	});
 
 	// Keep the stdin reader moving: side-channel frames dispatch immediately,
@@ -3600,70 +2680,20 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 	// line-by-line by readRpcInputFrames so a single malformed line is reported
 	// as an error frame and the loop keeps running instead of throwing out of
 	// the reader and killing the whole process (issue #5194).
-	const inputRead = readRpcInputFrames(
+	await readRpcInputFrames(
 		input ?? Bun.stdin.stream(),
-		parsed =>
-			logger.withLogContext(
-				{
-					session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
-					session_generation: session.sessionGeneration,
-				},
-				() => inputDispatcher.dispatch(parsed),
-			),
-		message => {
-			logger.warn("RPC frame decode rejected", {
-				component: "rpc",
-				event: "rpc_input_failed",
-				stage: "frame_decode",
-				result: "rejected",
-				error_code: "invalid_frame",
-				session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
-			});
-			output(error(undefined, "parse", message));
-		},
+		parsed => inputDispatcher.dispatch(parsed),
+		message => output(error(undefined, "parse", message)),
 	);
-	// The reader is now accepting requests; start the first full backup period.
-	stopOfflineBackup = startOfflineShmBackup(message => {
-		if (!clientDisconnected) output({ type: "notice", level: "warning", source: "offline-shm-backup", message });
-	});
-	await inputRead.finally(() => stopOfflineBackup());
 
 	// stdin closed — RPC client is gone. Fail pending side-channel requests
 	// first so active/queued commands can settle, then drain accepted work.
-	clientDisconnected = true;
-	logger.info("RPC client disconnected", {
-		component: "rpc",
-		event: "rpc_client_disconnected",
-		stage: "eof",
-		result: "disconnected",
-		session_id: rpcDiagnosticId(session.sessionManager.getSessionId(), true),
-		pending_ui_count: pendingExtensionRequests.size,
-		pending_prompt_count: Array.from(promptDiagnostics.values()).reduce(
-			(count, pending) => count + pending.length,
-			0,
-		),
-	});
-	cancelCommandOperations();
-	loopController.clear();
-	goalController.stopForHostAbort();
 	pendingExtensionRequests.rejectAll("RPC client disconnected before extension UI response completed");
 	hostToolBridge.close("RPC client disconnected before host tool execution completed");
 	hostUriBridge.clear("RPC client disconnected before host URI request completed");
 	await liveBridge.stop();
 	await inputDispatcher.drain();
 	await shutdownCoordinator.drain();
-	for (const pending of promptDiagnostics.values()) {
-		for (const diagnostic of pending)
-			logger.info("RPC prompt disconnected", {
-				...diagnostic.context,
-				component: "rpc",
-				event: "rpc_prompt_terminal",
-				stage: "disconnect_drain",
-				result: "cancelled",
-				elapsed_ms: performance.now() - diagnostic.started,
-			});
-	}
-	promptDiagnostics.clear();
 	subagentRegistry?.dispose();
 	// Dispose the main session before exiting so the browser reaper and other
 	// bounded teardown run on the stdin-EOF path too (#5643). Idempotent: a

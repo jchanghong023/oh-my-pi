@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { dispatchRpcSkillPrompt, tryRunRpcSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import {
 	RpcExtensionUserMessageTracker,
@@ -25,7 +24,6 @@ describe("tryRunRpcSkillCommand", () => {
 
 		const handled = await tryRunRpcSkillCommand(
 			{
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
@@ -63,7 +61,6 @@ describe("tryRunRpcSkillCommand", () => {
 		try {
 			const handled = await tryRunRpcSkillCommand(
 				{
-					model: undefined,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{
@@ -105,7 +102,6 @@ describe("tryRunRpcSkillCommand", () => {
 		try {
 			const handled = await tryRunRpcSkillCommand(
 				{
-					model: undefined,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{
@@ -141,7 +137,6 @@ describe("tryRunRpcSkillCommand", () => {
 	test("ignores unknown skill commands so normal prompt handling can continue", async () => {
 		const handled = await tryRunRpcSkillCommand(
 			{
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [],
 				async promptCustomMessage() {
@@ -166,7 +161,6 @@ describe("tryRunRpcSkillCommand", () => {
 		try {
 			const handled = await tryRunRpcSkillCommand(
 				{
-					model: undefined,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{
@@ -212,58 +206,6 @@ function promptResultsFor(id: string, frames: object[] = []) {
 }
 
 describe("dispatchRpcSkillPrompt", () => {
-	test("leaves colliding backend-owned /skill commands unhandled without reading local skill files", async () => {
-		const dir = await fs.mkdtemp(path.join(os.tmpdir(), `omp-rpc-skill-${Snowflake.next()}-`));
-		let customMessageCalls = 0;
-		const session = {
-			model: buildModel({
-				id: "remote-reviewer",
-				name: "Remote reviewer",
-				api: "jchtools-agent",
-				provider: "anthropic",
-				baseUrl: "https://example.invalid",
-				reasoning: true,
-				input: ["text"],
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 200_000,
-				maxTokens: 8_192,
-			}),
-			skillsSettings: { enableSkillCommands: true },
-			skills: [
-				{
-					name: "reviewer",
-					description: "Local skill collision",
-					filePath: path.join(dir, "missing-SKILL.md"),
-					baseDir: dir,
-					source: "project",
-				},
-			],
-			async promptCustomMessage() {
-				customMessageCalls++;
-				return true;
-			},
-		};
-		const text = "/skill:reviewer focus on risks\nKeep the native command literal.";
-
-		try {
-			expect(await tryRunRpcSkillCommand(session, text)).toBe(false);
-			const result = await dispatchRpcSkillPrompt({
-				...promptResultsFor("remote-skill"),
-				session,
-				message: text,
-				streamingBehavior: undefined,
-				onError: error => {
-					throw error;
-				},
-				extensionUserMessageTracker: new RpcExtensionUserMessageTracker(),
-			});
-			expect(result).toBeNull();
-			expect(customMessageCalls).toBe(0);
-		} finally {
-			await removeWithRetries(dir);
-		}
-	});
-
 	test("answers the prompt command once admitted, before the skill dispatch completes", async () => {
 		const dir = await fs.mkdtemp(path.join(os.tmpdir(), `omp-rpc-skill-${Snowflake.next()}-`));
 		const skillPath = path.join(dir, "SKILL.md");
@@ -277,7 +219,6 @@ describe("dispatchRpcSkillPrompt", () => {
 		const result = await dispatchRpcSkillPrompt({
 			...promptResultsFor("cmd-1"),
 			session: {
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
@@ -319,7 +260,6 @@ describe("dispatchRpcSkillPrompt", () => {
 		const resultPromise = dispatchRpcSkillPrompt({
 			...promptResultsFor("cmd-1b"),
 			session: {
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
@@ -358,7 +298,6 @@ describe("dispatchRpcSkillPrompt", () => {
 		const result = await dispatchRpcSkillPrompt({
 			...promptResultsFor("cmd-2"),
 			session: {
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [],
 				async promptCustomMessage() {
@@ -382,7 +321,6 @@ describe("dispatchRpcSkillPrompt", () => {
 		await dispatchRpcSkillPrompt({
 			...promptResultsFor("cmd-3"),
 			session: {
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
@@ -412,7 +350,6 @@ describe("dispatchRpcSkillPrompt", () => {
 			dispatchRpcSkillPrompt({
 				...promptResultsFor("cmd-4"),
 				session: {
-					model: undefined,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{
@@ -448,7 +385,6 @@ describe("dispatchRpcSkillPrompt", () => {
 		const result = await dispatchRpcSkillPrompt({
 			...promptResultsFor("cmd-5", frames),
 			session: {
-				model: undefined,
 				skillsSettings: { enableSkillCommands: true },
 				skills: [
 					{ name: "reviewer", description: "Review code", filePath: skillPath, baseDir: dir, source: "project" },
@@ -486,7 +422,6 @@ describe("dispatchRpcSkillPrompt", () => {
 			const result = await dispatchRpcSkillPrompt({
 				...promptResultsFor("cmd-img"),
 				session: {
-					model: undefined,
 					skillsSettings: { enableSkillCommands: true },
 					skills: [
 						{

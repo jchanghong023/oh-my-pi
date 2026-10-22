@@ -2,15 +2,15 @@ import { afterEach, describe, expect, spyOn, test, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import * as conditions from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
-import { RpcGoalController, type RpcGoalSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
-import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
+import { GoalHost, type GoalHostSession } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/goal-host";
+import { LoopHost } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/loop-host";
 import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-settle";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 
 const agentEnd = { type: "agent_end", isTerminal: true, messages: [] } satisfies AgentSessionEvent;
 
-describe("RPC loop continuation", () => {
-	const controllers: RpcLoopController[] = [];
+describe("ZCode host loop continuation", () => {
+	const controllers: LoopHost[] = [];
 	afterEach(() => {
 		for (const controller of controllers) controller.clear();
 		controllers.length = 0;
@@ -45,7 +45,7 @@ describe("RPC loop continuation", () => {
 		};
 		let dropped = 0;
 		let continuationAllowed = true;
-		const controller = new RpcLoopController(session as unknown as AgentSession, {
+		const controller = new LoopHost(session as unknown as AgentSession, {
 			output: text => output.push(text),
 			submit:
 				submit ??
@@ -207,7 +207,7 @@ describe("RPC loop continuation", () => {
 				return true;
 			},
 		};
-		const goal = new RpcGoalController(session as unknown as RpcGoalSession, undefined, () => !f.controller.enabled);
+		const goal = new GoalHost(session as unknown as GoalHostSession, undefined, () => !f.controller.enabled);
 		await f.controller.handle("1 1s work");
 		f.controller.capturePrompt("work");
 		// rpc-mode observes Goal before loop: Goal first encounters the loop host gate.

@@ -3,10 +3,10 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { GoalRuntime } from "@oh-my-pi/pi-coding-agent/goals/runtime";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import {
-	RpcGoalController,
-	type RpcGoalSession,
-	type RpcGoalSlashRuntime,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+	GoalHost,
+	type GoalHostSession,
+	type GoalHostSlashRuntime,
+} from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/goal-host";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import { escapeXmlText, logger } from "@oh-my-pi/pi-utils";
@@ -77,8 +77,8 @@ function fixture(continuation = false, goalEnabled = true) {
 		hasAdmittedSubmission: false,
 		queuedMessageCount: 0,
 	};
-	const controller = new RpcGoalController(session as unknown as RpcGoalSession, undefined, () => allowContinuation);
-	const runtime: RpcGoalSlashRuntime = {
+	const controller = new GoalHost(session as unknown as GoalHostSession, undefined, () => allowContinuation);
+	const runtime: GoalHostSlashRuntime = {
 		output: text => {
 			output.push(text);
 		},
@@ -113,7 +113,7 @@ async function tick(): Promise<void> {
 	await promise;
 }
 
-describe("RPC goal slash adapter", () => {
+describe("ZCode goal slash adapter", () => {
 	test("set creates and replaces through GoalRuntime without racing its first prompt with auto-continuation", async () => {
 		const f = fixture(true);
 		expect(await f.controller.handleSlash("set first objective", f.runtime)).toEqual({ prompt: "first objective" });

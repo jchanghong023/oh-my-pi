@@ -1,8 +1,8 @@
 /**
- * Fork RPC model-role catalog and persistence service (rpc-ui-protocol.md).
+ * Model-role catalog and persistence service for the ZCode command hosts.
  *
- * Serves the full configurable role catalog (`get_model_roles`) and the
- * per-role scoped write path (`set_model_role`). Role discovery, resolution,
+ * Serves the full configurable role catalog (`listRoles`) and the per-role
+ * scoped write path (`setRole`). Role discovery, resolution,
  * and provenance come straight from the shared {@link Settings} instance and
  * the process-wide {@link ModelRegistry}: every role OMP knows — built-in
  * (hidden ones included), custom roles from `modelTags`/`cycleOrder`, and any
@@ -20,32 +20,32 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { MAX_THINKING_SUFFIX_OPTIONS, parseThinkingSuffix } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { logger } from "@oh-my-pi/pi-utils";
-import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../config/model-roles";
-import type { ModelRegistry } from "../../config/model-registry";
-import { ModelRoleConflictError, type Settings, type SettingProvenance } from "../../config/settings";
-import { formatRoleModelValue, resolveRoleModelFull } from "../../session/role-models";
+import { DEFAULT_MODEL_ROLE_ALIAS, getKnownRoleIds, getRoleInfo, MODEL_ROLE_IDS } from "../../../config/model-roles";
+import type { ModelRegistry } from "../../../config/model-registry";
+import { ModelRoleConflictError, type Settings, type SettingProvenance } from "../../../config/settings";
+import { formatRoleModelValue, resolveRoleModelFull } from "../../../session/role-models";
 import type {
-	RpcForkErrorCode,
-	RpcModelRef,
-	RpcModelRoleDescriptor,
-	RpcModelRoleSelection,
-	RpcModelRolesResult,
-	RpcSetModelRoleResult,
-} from "./rpc-fork-types";
+	HostErrorCode,
+	ModelRef,
+	ModelRoleDescriptor,
+	ModelRoleSelection,
+	ModelRolesResult,
+	SetModelRoleResult,
+} from "./types";
 
 /** Typed failure surfaced by the role service. */
-export class RpcModelRoleError extends Error {
-	readonly code: RpcForkErrorCode;
+export class ModelRoleError extends Error {
+	readonly code: HostErrorCode;
 
-	constructor(code: RpcForkErrorCode, message: string) {
+	constructor(code: HostErrorCode, message: string) {
 		super(message);
-		this.name = "RpcModelRoleError";
+		this.name = "ModelRoleError";
 		this.code = code;
 	}
 }
 
 /** Collaborators the role service needs from the RPC host. */
-export interface RpcModelRoleServiceDeps {
+export interface ModelRoleServiceDeps {
 	/** Settings instance shared by this process (all layers already merged). */
 	readonly getSettings: () => Settings;
 	/** Process-wide model registry backing availability and selector formatting. */
@@ -64,8 +64,8 @@ export interface RpcModelRoleServiceDeps {
 	}>;
 }
 
-/** Options for {@link RpcModelRoleService.listRoles}. */
-export interface RpcModelRoleListOptions {
+/** Options for {@link ModelRoleService.listRoles}. */
+export interface ModelRoleListOptions {
 	/** Include an unconfigured custom role so clients can obtain its server-owned CAS revision. */
 	readonly roleId?: string;
 	/**
@@ -73,21 +73,21 @@ export interface RpcModelRoleListOptions {
 	 * session's actual model next to the persisted catalog. The service itself
 	 * needs no session.
 	 */
-	readonly sessionModel?: RpcModelRef;
+	readonly sessionModel?: ModelRef;
 }
 
-/** Options for {@link RpcModelRoleService.setRole}. */
-export interface RpcModelRoleSetOptions {
+/** Options for {@link ModelRoleService.setRole}. */
+export interface ModelRoleSetOptions {
 	readonly roleId: string;
 	/** Wire contract allows `"user"` only; other runtime values reject with scope_not_allowed. */
 	readonly scope: "user";
-	readonly selection: RpcModelRoleSelection;
+	readonly selection: ModelRoleSelection;
 	/** Required revision of this user role slot, not the role catalog. */
 	readonly expectedRevision: string;
 }
 
 /** Map settings provenance onto the descriptor source union. `getModelRoleProvenance` never returns `"env"`. */
-function roleDescriptorSource(provenance: SettingProvenance): RpcModelRoleDescriptor["source"] {
+function roleDescriptorSource(provenance: SettingProvenance): ModelRoleDescriptor["source"] {
 	switch (provenance) {
 		case "runtime":
 		case "overlay":
@@ -118,11 +118,11 @@ function unresolvedRoleReason(explicitValue: string | undefined, warning: string
  * reads need no session by construction; the per-role revision detects stale
  * `expectedRevision` attempts (concurrent GUI edits).
  */
-export class RpcModelRoleService {
-	readonly #deps: RpcModelRoleServiceDeps;
+export class ModelRoleService {
+	readonly #deps: ModelRoleServiceDeps;
 	readonly #roleWrites = new Map<string, Promise<unknown>>();
 
-	constructor(deps: RpcModelRoleServiceDeps) {
+	constructor(deps: ModelRoleServiceDeps) {
 		this.#deps = deps;
 	}
 
@@ -134,7 +134,7 @@ export class RpcModelRoleService {
 	 * by its acceptance predicate) so kind-section roles resolve too; an empty
 	 * pool lists every role with an `unresolvedReason` instead of hiding rows.
 	 */
-	async listRoles(options: RpcModelRoleListOptions = {}): Promise<RpcModelRolesResult> {
+	async listRoles(options: ModelRoleListOptions = {}): Promise<ModelRolesResult> {
 		return logger.withLogContext(
 			{ operation_id: logger.getLogContext().operation_id ?? `rpc-roles-${crypto.randomUUID()}` },
 			async () => {
@@ -147,7 +147,7 @@ export class RpcModelRoleService {
 					const roleIds = this.#catalogRoleIds(settings);
 					if (options.roleId !== undefined) {
 						if (!/^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/.test(options.roleId))
-							throw new RpcModelRoleError("invalid_params", "Invalid model role ID");
+							throw new ModelRoleError("invalid_params", "Invalid model role ID");
 						if (!roleIds.includes(options.roleId)) roleIds.push(options.roleId);
 					}
 					const roles = roleIds.map(role => this.#buildDescriptor(role, settings, availableModels));
@@ -184,7 +184,7 @@ export class RpcModelRoleService {
 	 * the user assignment so OMP's existing per-role fallback semantics apply.
 	 * A stale `expectedRevision` rejects with `revision_conflict`.
 	 */
-	async setRole(command: RpcModelRoleSetOptions): Promise<RpcSetModelRoleResult> {
+	async setRole(command: ModelRoleSetOptions): Promise<SetModelRoleResult> {
 		return logger.withLogContext(
 			{
 				operation_id: logger.getLogContext().operation_id ?? `rpc-role-${crypto.randomUUID()}`,
@@ -222,7 +222,7 @@ export class RpcModelRoleService {
 		);
 	}
 
-	async #setRole(command: RpcModelRoleSetOptions, started: number): Promise<RpcSetModelRoleResult> {
+	async #setRole(command: ModelRoleSetOptions, started: number): Promise<SetModelRoleResult> {
 		let stage = "queue";
 		let persisted: boolean | undefined = false;
 		let saveError: unknown;
@@ -244,24 +244,24 @@ export class RpcModelRoleService {
 			const { roleId, selection } = command;
 
 			if (typeof roleId !== "string" || !/^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/.test(roleId)) {
-				throw new RpcModelRoleError("invalid_params", `Invalid model role: ${String(roleId)}`);
+				throw new ModelRoleError("invalid_params", `Invalid model role: ${String(roleId)}`);
 			}
 
 			// Wire-level scope guard: the declared type is "user", but the raw
 			// frame value is untyped at runtime and needs a distinct error code.
 			const scope: unknown = command.scope;
 			if (scope !== "user") {
-				throw new RpcModelRoleError("scope_not_allowed", "Model roles support only user writes");
+				throw new ModelRoleError("scope_not_allowed", "Model roles support only user writes");
 			}
 			if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {
-				throw new RpcModelRoleError("invalid_params", "expectedRevision is required");
+				throw new ModelRoleError("invalid_params", "expectedRevision is required");
 			}
 
 			stage = "revision";
 			const expectedValue = settings.getGlobalModelRole(roleId);
 			const currentRevision = this.#roleRevision(roleId, expectedValue);
 			if (command.expectedRevision !== currentRevision) {
-				throw new RpcModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
+				throw new ModelRoleError("revision_conflict", `Model role ${roleId} changed; read the role again`);
 			}
 			logger.debug("RPC model role revision accepted", { ...fields(), result: "completed" });
 
@@ -277,9 +277,9 @@ export class RpcModelRoleService {
 				saveError = error;
 				if (error instanceof ModelRoleConflictError) {
 					persisted = false;
-					throw new RpcModelRoleError("revision_conflict", error.message);
+					throw new ModelRoleError("revision_conflict", error.message);
 				}
-				throw new RpcModelRoleError(
+				throw new ModelRoleError(
 					"persistence_failed",
 					`Failed to persist model role ${roleId}: ${error instanceof Error ? error.message : String(error)}`,
 				);
@@ -324,11 +324,11 @@ export class RpcModelRoleService {
 			});
 			return { role, persisted: true, ...(effectiveNote ? { effectiveNote } : {}) };
 		} catch (error) {
-			const refused = error instanceof RpcModelRoleError && error.code !== "persistence_failed" && !persisted;
+			const refused = error instanceof ModelRoleError && error.code !== "persistence_failed" && !persisted;
 			const details = {
 				...fields(),
 				result: refused ? "refused" : "failed",
-				...(error instanceof RpcModelRoleError ? { rpc_error_code: error.code } : {}),
+				...(error instanceof ModelRoleError ? { rpc_error_code: error.code } : {}),
 				...logger.diagnosticError(saveError ?? error),
 			};
 			if (refused) logger.info("RPC model role save refused", details);
@@ -349,7 +349,7 @@ export class RpcModelRoleService {
 	}
 
 	/** Build one catalog row from live settings. */
-	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): RpcModelRoleDescriptor {
+	#buildDescriptor(role: string, settings: Settings, availableModels: Model[]): ModelRoleDescriptor {
 		const info = getRoleInfo(role, settings);
 		const explicitValue = settings.getModelRole(role);
 		const candidates = availableModels.filter(info.accepts);
@@ -393,15 +393,15 @@ export class RpcModelRoleService {
 		settings: Settings,
 		registry: ModelRegistry,
 		roleId: string,
-		selection: RpcModelRoleSelection,
+		selection: ModelRoleSelection,
 	): string | undefined {
 		if (selection === null) return undefined;
 		if (typeof selection !== "object" || Array.isArray(selection) || !("kind" in selection)) {
-			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
+			throw new ModelRoleError("invalid_params", "A valid selection is required");
 		}
 		if (selection.kind === "auto") return undefined;
 		if (selection.kind !== "model" || !("model" in selection)) {
-			throw new RpcModelRoleError("invalid_params", "A valid selection is required");
+			throw new ModelRoleError("invalid_params", "A valid selection is required");
 		}
 		const modelSelection = selection.model;
 		if (
@@ -411,7 +411,7 @@ export class RpcModelRoleService {
 			!("provider" in modelSelection) ||
 			!("modelId" in modelSelection)
 		) {
-			throw new RpcModelRoleError("invalid_params", "A model selection is required");
+			throw new ModelRoleError("invalid_params", "A model selection is required");
 		}
 		const provider = modelSelection.provider;
 		const modelId = modelSelection.modelId;
@@ -421,23 +421,20 @@ export class RpcModelRoleService {
 			typeof modelId !== "string" ||
 			(thinkingLevel !== undefined && typeof thinkingLevel !== "string")
 		) {
-			throw new RpcModelRoleError("invalid_params", "Model selection fields are invalid");
+			throw new ModelRoleError("invalid_params", "Model selection fields are invalid");
 		}
 		const available = registry.getAvailable("all");
 		const model = available.find(candidate => candidate.provider === provider && candidate.id === modelId);
 		if (!model) {
-			throw new RpcModelRoleError("invalid_params", `Model not available: ${String(provider)}/${String(modelId)}`);
+			throw new ModelRoleError("invalid_params", `Model not available: ${String(provider)}/${String(modelId)}`);
 		}
 		if (!getRoleInfo(roleId, settings).accepts(model)) {
-			throw new RpcModelRoleError(
-				"invalid_params",
-				`Model ${model.provider}/${model.id} does not fit role ${roleId}`,
-			);
+			throw new ModelRoleError("invalid_params", `Model ${model.provider}/${model.id} does not fit role ${roleId}`);
 		}
 		const level =
 			thinkingLevel === undefined ? undefined : parseThinkingSuffix(thinkingLevel, MAX_THINKING_SUFFIX_OPTIONS);
 		if (thinkingLevel !== undefined && level === undefined) {
-			throw new RpcModelRoleError("invalid_params", `Invalid thinking level: ${String(thinkingLevel)}`);
+			throw new ModelRoleError("invalid_params", `Invalid thinking level: ${String(thinkingLevel)}`);
 		}
 		// `formatRoleModelValue` types its override as ThinkingLevel but only
 		// forwards it to `formatModelSelectorValue`, which also accepts the
@@ -452,7 +449,7 @@ export class RpcModelRoleService {
 	 * intentionally has no fixed concrete model (auto policy / no current
 	 * match). Absent when the saved value simply took effect.
 	 */
-	#effectiveNote(role: RpcModelRoleDescriptor, selection: RpcModelRoleSelection): string | undefined {
+	#effectiveNote(role: ModelRoleDescriptor, selection: ModelRoleSelection): string | undefined {
 		const action =
 			selection === null || selection.kind === "auto" ? "Cleared the user config value" : "Saved to user config";
 		if (role.source === "runtime" || role.source === "overlay" || role.source === "project") {

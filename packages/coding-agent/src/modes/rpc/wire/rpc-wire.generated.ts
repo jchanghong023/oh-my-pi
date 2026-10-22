@@ -449,7 +449,6 @@ export interface GoalModeState {
 	mode: "active" | "exiting";
 	goal: Goal;
 	reason?: "completed";
-	autoOrchestrate?: boolean;
 }
 
 /** Outcome of every `goal` op; both fields are null when the session has no goal. */
@@ -857,34 +856,10 @@ export interface ToolExecutionEndEvent {
 	isError?: boolean;
 }
 
-/** Cancellation began for this session; this does not by itself mean the session has settled. */
-export interface SessionAbortEvent {
-	type: "session_abort";
-	reason?: string;
-}
-
-export interface ManualCompactionStartEvent {
-	type: "manual_compaction_start";
-	operationId: string;
-}
-
-export interface ManualCompactionEndEvent {
-	type: "manual_compaction_end";
-	operationId: string;
-	aborted: boolean;
-	result?: CompactionResult;
-	/** Canonical journal compaction entry committed by this operation, when present. */
-	summaryRef?: string;
-	errorMessage?: string;
-	/** Compaction was skipped for a benign reason. */
-	skipped?: boolean;
-}
-
 export interface AutoCompactionStartEvent {
 	type: "auto_compaction_start";
 	reason: AutoCompactionReason;
 	action: AutoCompactionAction;
-	operationId?: string;
 }
 
 export interface AutoCompactionEndEvent {
@@ -892,9 +867,6 @@ export interface AutoCompactionEndEvent {
 	action: AutoCompactionAction;
 	aborted: boolean;
 	willRetry: boolean;
-	operationId?: string;
-	/** Canonical journal compaction entry committed by this operation, when present. */
-	summaryRef?: string;
 	result?: CompactionResult;
 	errorMessage?: string;
 	/** Compaction was skipped for a benign reason. */
@@ -1025,7 +997,7 @@ export interface QueueUpdateEvent {
 }
 
 /** A session event, discriminated by `type`; `set_event_filter` selects which are sent. */
-export type RpcAgentEvent = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | SessionAbortEvent | ManualCompactionStartEvent | ManualCompactionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
+export type RpcAgentEvent = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent;
 
 /** First frame after startup; transport fields are absent on servers without protocol v2. */
 export interface ReadyEvent {

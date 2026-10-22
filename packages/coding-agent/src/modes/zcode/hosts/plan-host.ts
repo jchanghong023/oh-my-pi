@@ -1,23 +1,23 @@
-/** Plan-mode host lifecycle for RPC; planning and approval use the shared session implementation. */
+/** Plan-mode host lifecycle; planning and approval use the shared session implementation. */
 import { createHash } from "node:crypto";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { ExtensionUIContext } from "../../extensibility/extensions/types";
-import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
-import { resolvePlanModelTransition } from "../../plan-mode/model-transition";
-import { listPlanFiles, readPlanFile } from "../../plan-mode/plan-files";
-import { dispatchApprovedPlan } from "../../plan-mode/session-approval";
-import { cfgPlanEnabled } from "../../plan-mode/settings";
-import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import { USER_INTERRUPT_LABEL } from "../../session/messages";
-import type { SlashCommandResult } from "../../slash-commands/types";
-import { isMCPToolName } from "../../tools/builtin-names";
-import { writeDeviceDispatch } from "../../tools/resolve";
+import type { ExtensionUIContext } from "../../../extensibility/extensions/types";
+import type { PlanApprovalDetails } from "../../../plan-mode/approved-plan";
+import { resolvePlanModelTransition } from "../../../plan-mode/model-transition";
+import { listPlanFiles, readPlanFile } from "../../../plan-mode/plan-files";
+import { dispatchApprovedPlan } from "../../../plan-mode/session-approval";
+import { cfgPlanEnabled } from "../../../plan-mode/settings";
+import type { AgentSession, AgentSessionEvent } from "../../../session/agent-session";
+import { USER_INTERRUPT_LABEL } from "../../../session/messages";
+import type { SlashCommandResult } from "../../../slash-commands/types";
+import { isMCPToolName } from "../../../tools/builtin-names";
+import { writeDeviceDispatch } from "../../../tools/resolve";
 
-function rpcPlanDiagnosticId(value: string): string {
+function planHostDiagnosticId(value: string): string {
 	return /^[A-Za-z0-9_-]{1,96}$/.test(value) ? value : createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
@@ -32,7 +32,7 @@ interface ToolPresentation {
 }
 
 /** Narrow session seam also used by the controller's contract tests. */
-export type RpcPlanSession = Pick<
+export type PlanHostSession = Pick<
 	AgentSession,
 	| "settings"
 	| "sessionManager"
@@ -67,8 +67,8 @@ export type RpcPlanSession = Pick<
 	| "clearPlanInternalAbortPending"
 >;
 
-export class RpcPlanController {
-	readonly #session: RpcPlanSession;
+export class PlanHost {
+	readonly #session: PlanHostSession;
 	readonly #ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">;
 	readonly #output: (text: string) => void;
 	readonly #runInBackground: (task: () => Promise<void>) => void;
@@ -99,14 +99,14 @@ export class RpcPlanController {
 			event,
 			stage,
 			result,
-			session_id: rpcPlanDiagnosticId(this.#session.sessionManager.getSessionId()),
+			session_id: planHostDiagnosticId(this.#session.sessionManager.getSessionId()),
 			session_generation: this.#session.sessionGeneration,
 			...fields,
 		});
 	}
 
 	constructor(
-		session: RpcPlanSession,
+		session: PlanHostSession,
 		ui: Pick<ExtensionUIContext, "select" | "confirm" | "input">,
 		output: (text: string) => void,
 		runInBackground: (task: () => Promise<void>) => void,
@@ -401,7 +401,7 @@ export class RpcPlanController {
 			operation_id:
 				logger.getLogContext().operation_id ?? this.#logContext.operation_id ?? `rpc-plan-${crypto.randomUUID()}`,
 			call_id: `rpc-plan-background-${crypto.randomUUID()}`,
-			session_id: rpcPlanDiagnosticId(this.#session.sessionManager.getSessionId()),
+			session_id: planHostDiagnosticId(this.#session.sessionManager.getSessionId()),
 		};
 		const started = performance.now();
 		this.#runInBackground(() =>

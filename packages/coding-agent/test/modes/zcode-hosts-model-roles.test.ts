@@ -9,7 +9,7 @@ import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-regis
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
-import { RpcModelRoleService, type RpcModelRoleServiceDeps } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-models";
+import { ModelRoleService, type ModelRoleServiceDeps } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/model-roles";
 
 beforeAll(() => Settings.init({ inMemory: true }));
 const temporaryDirectories: TempDir[] = [];
@@ -33,14 +33,14 @@ const IMAGE_MODEL: FakeModel = { provider: "p", id: "img", name: "Probe Image Mo
 function serviceFor(
 	settings: Settings,
 	models: FakeModel[],
-	reloadSessionSettings?: RpcModelRoleServiceDeps["reloadSessionSettings"],
+	reloadSessionSettings?: ModelRoleServiceDeps["reloadSessionSettings"],
 ) {
 	const emitted: object[] = [];
 	const registry = {
 		getAvailable: () => models,
 		find: (provider: string, id: string) => models.find(model => model.provider === provider && model.id === id),
 	} as unknown as ModelRegistry;
-	const service = new RpcModelRoleService({
+	const service = new ModelRoleService({
 		getSettings: () => settings,
 		getModelRegistry: () => registry,
 		emit: frame => emitted.push(frame),
@@ -52,7 +52,7 @@ function serviceFor(
 async function setup(
 	models: FakeModel[] = [],
 	projectValue?: string,
-	reloadSessionSettings?: RpcModelRoleServiceDeps["reloadSessionSettings"],
+	reloadSessionSettings?: ModelRoleServiceDeps["reloadSessionSettings"],
 ) {
 	const root = await TempDir.create("@rpc-role-disk-");
 	temporaryDirectories.push(root);
@@ -71,12 +71,12 @@ async function setup(
 	return { ...serviceFor(settings, models, reloadSessionSettings), settings, cwd, agentDir, configFile };
 }
 
-async function roleRevision(service: RpcModelRoleService, roleId: string) {
+async function roleRevision(service: ModelRoleService, roleId: string) {
 	return (await service.listRoles()).roles.find(role => role.roleId === roleId)!.revision;
 }
 
 async function writeInAnotherProcess(cwd: string, agentDir: string, role: string, value: string) {
-	const settingsModule = path.resolve(import.meta.dir, "../src/config/settings.ts");
+	const settingsModule = path.resolve(import.meta.dir, "../../src/config/settings.ts");
 	const script = `import { Settings } from ${JSON.stringify(settingsModule)}; const s = await Settings.loadIsolated(${JSON.stringify({ cwd, agentDir })}); await s.saveUserModelRole(${JSON.stringify(role)}, ${JSON.stringify(value)}, undefined); s.cancelPendingSaves();`;
 	const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
 	const [exitCode, stderr] = await Promise.all([
@@ -153,7 +153,7 @@ function expectRoleWriteLogs(
 	expect(events.some(event => event.level === "error")).toBe(false);
 }
 
-describe("RpcModelRoleService", () => {
+describe("ModelRoleService", () => {
 	test("empty accounts/settings still expose all built-in roles and user-only write capabilities", async () => {
 		const { service } = await setup();
 		const result = await service.listRoles();
@@ -270,7 +270,7 @@ describe("RpcModelRoleService", () => {
 						stage: "validate",
 						persisted: false,
 						rpc_error_code: "invalid_params",
-						error_type: "RpcModelRoleError",
+						error_type: "ModelRoleError",
 					},
 				});
 			}

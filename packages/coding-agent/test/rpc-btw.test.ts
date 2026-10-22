@@ -6,7 +6,7 @@ import { RpcClient, RpcCommandError } from "@oh-my-pi/pi-coding-agent/modes/rpc/
 import type { BtwHistoryRecord } from "@oh-my-pi/pi-coding-agent/session/btw-history";
 import { isRecord, readJsonl, removeWithRetries } from "@oh-my-pi/pi-utils";
 
-/** Settle a request before `expect` sees it (see rpc-goal.test.ts). */
+/** Settle a request before `expect` sees it (see modes/zcode-hosts-goal.test.ts). */
 async function rejectionOf(request: Promise<unknown>): Promise<Error> {
 	return await request.then(
 		() => new Error("expected the request to fail"),

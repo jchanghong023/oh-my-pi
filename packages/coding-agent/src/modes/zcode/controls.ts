@@ -5,7 +5,7 @@ import { cfgToolsApprovalMode } from "../../tools/settings";
 
 export type ZCodeCollaborationMode = "build" | "edit" | "plan" | "yolo" | "guarded";
 export interface ZCodeRuntimeControlOptions {
-	/** The command host's shared RpcPlanController, including draft exit confirmation. */
+	/** The command host's shared PlanHost, including draft exit confirmation. */
 	setPlanEnabled(enabled: boolean, atInputBoundary?: boolean, signal?: AbortSignal): Promise<void>;
 }
 export interface ZCodeRuntimeControlSnapshot {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { RpcClient } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-client";
-import { RpcGoalController, type RpcGoalSession } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-goal";
+import { GoalHost, type GoalHostSession } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/goal-host";
 import {
 	isRpcSessionSettled,
 	RpcSessionSettleWatcher,
@@ -47,15 +47,13 @@ describe("RPC goal command", () => {
 
 	async function start(options: {
 		continuation: boolean;
-		script?: "complete" | "idle" | "slow" | "recover" | "gate-stop";
+		script?: "complete" | "idle" | "slow";
 		plan?: boolean;
 		persist?: boolean;
 	}): Promise<RpcClient> {
 		directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-rpc-goal-"));
-		if (options.script === "recover")
-			await Bun.write(path.join(directory, "task-input.txt"), "GOAL_RPC_READ_EVIDENCE");
 		client = new RpcClient({
-			command: [process.execPath, path.join(import.meta.dir, "fixtures", "goal-rpc-agent.ts")],
+			command: [process.execPath, path.join(import.meta.dir, "..", "fixtures", "goal-rpc-agent.ts")],
 			cwd: directory,
 			env: {
 				PI_CODING_AGENT_DIR: directory,
@@ -90,69 +88,29 @@ describe("RPC goal command", () => {
 	test("plan mode refuses create and resume", async () => {
 		const rpc = await start({ continuation: true, plan: true });
 		const refused = await rejectionOf(rpc.goal("create", { objective: "not while planning" }));
-		expect(refused).toMatchObject({ message: "Exit plan mode first." });
+		expect(refused).toMatchObject({ command: "goal", message: "Exit plan mode before starting a goal." });
 		const state = await rpc.getState();
 		expect(state.goal).toBeNull();
 		expect(state.messageCount).toBe(0);
 	}, 30_000);
 
-	test.each(["idle", "gate-stop"] as const)(
-		"stops a failed recovery: %s",
-		async script => {
-			const rpc = await start({ continuation: true, script });
-			const settled = Promise.withResolvers<void>();
-			const unsubscribe = rpc.onSessionSettled(() => settled.resolve());
-			const notices: string[] = [];
-			const unsubscribeNotices = rpc.onSessionEvent(event => {
-				if (event.type === "notice" && event.source === "goal") notices.push(event.message);
-			});
-			try {
-				await rpc.goal("create", { objective: "loop forever" });
-				await withTimeout(settled.promise, 15_000, "No-progress continuation never settled");
-			} finally {
-				unsubscribe();
-				unsubscribeNotices();
-			}
-			const state = await rpc.getState();
-			expect(state.goal?.goal.status).toBe("active");
-			expect(state.isSettled).toBe(true);
-			const continuations = (await rpc.getMessages()).filter(
-				message =>
-					message.role === "custom" &&
-					(message.customType === "goal-continuation" || message.customType === "goal-tool-recovery"),
-			);
-			expect(continuations.flatMap(message => (message.role === "custom" ? [message.customType] : []))).toEqual([
-				"goal-continuation",
-				"goal-tool-recovery",
-			]);
-			expect(notices.some(notice => notice.includes("unfinished"))).toBe(true);
-		},
-		30_000,
-	);
-
-	test("a forced recovery executes the real read tool and then releases tool choice so the goal can finish", async () => {
-		const rpc = await start({ continuation: true, script: "recover" });
+	test("continuation stops after a turn with no progress and the goal stays active", async () => {
+		const rpc = await start({ continuation: true, script: "idle" });
 		const settled = Promise.withResolvers<void>();
 		const unsubscribe = rpc.onSessionSettled(() => settled.resolve());
 		try {
-			await rpc.goal("create", { objective: "Read task-input.txt and complete after observing its contents." });
-			await withTimeout(settled.promise, 15_000, "Recovered goal never settled");
+			await rpc.goal("create", { objective: "loop forever" });
+			await withTimeout(settled.promise, 15_000, "No-progress continuation never settled");
 		} finally {
 			unsubscribe();
 		}
-		const messages = await rpc.getMessages();
-		expect((await rpc.getState()).goal).toBeNull();
-		expect(
-			messages.some(
-				message =>
-					message.role === "toolResult" &&
-					message.toolName === "read" &&
-					message.content.some(block => block.type === "text" && block.text.includes("GOAL_RPC_READ_EVIDENCE")),
-			),
-		).toBe(true);
-		expect(
-			messages.filter(message => message.role === "custom" && message.customType === "goal-tool-recovery"),
-		).toHaveLength(1);
+		const state = await rpc.getState();
+		expect(state.goal?.goal.status).toBe("active");
+		expect(state.isSettled).toBe(true);
+		const continuations = (await rpc.getMessages()).filter(
+			message => message.role === "custom" && message.customType === "goal-continuation",
+		);
+		expect(continuations).toHaveLength(1);
 	}, 30_000);
 
 	test("create refuses a second goal, a paused goal, and invalid input; pause/resume/drop restore tools", async () => {
@@ -455,7 +413,7 @@ describe("RPC goal command", () => {
 	}, 30_000);
 });
 
-describe("RpcGoalController continuation gate", () => {
+describe("GoalHost continuation gate", () => {
 	const agentEnd = { type: "agent_end", messages: [], isTerminal: true } as unknown as AgentSessionEvent;
 	const hostInput = { type: "message_start", message: { role: "user", content: [] } } as unknown as AgentSessionEvent;
 
@@ -575,7 +533,7 @@ describe("RpcGoalController continuation gate", () => {
 			waitForIdle: () => idle.promise,
 		};
 		let dropped = 0;
-		const controller = new RpcGoalController(session as unknown as RpcGoalSession, () => dropped++);
+		const controller = new GoalHost(session as unknown as GoalHostSession, () => dropped++);
 		return {
 			session,
 			controller,

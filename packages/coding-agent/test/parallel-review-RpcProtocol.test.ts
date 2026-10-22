@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { RpcLoopController } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-loop";
+import { LoopHost } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/loop-host";
 import { RpcUserInputGate } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import type { RpcCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -36,7 +36,7 @@ describe("queued RPC loop admission", () => {
 			// so sequence invalidation alone cannot cancel it.
 			const change: RpcCommand = { type: "new_session" };
 			gate.accept(change);
-			const controller = new RpcLoopController(session as unknown as AgentSession, {
+			const controller = new LoopHost(session as unknown as AgentSession, {
 				output: () => {},
 				reset: async (current = () => true) => {
 					queued.resolve();

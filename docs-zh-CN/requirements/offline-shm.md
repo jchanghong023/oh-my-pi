@@ -41,7 +41,7 @@
 
 ### 2.3 用户配置的 shm／NFS 双写（权威要求，程序实现待验收）
 
-本节是 Linux offline 下**用户主动持久化 OMP 配置**的唯一权威保存要求，适用于 TUI、RPC、配置命令和经用户授权的 Agent 代配；Team 配置服务必须遵循本节，不能以局部实现约定降低要求。Settings 共享保存、Team TUI／RPC 与 CLI 配置入口已接入双端保存机制，Windows 定向回归及真实入口已有证据；标题“程序实现待验收”保留，真实 Linux／公司 NFS 跨主机锁及 CentOS 实机仍未验收，Windows seam 不能代替。实施与验证状态、失败复验记录见[需求目录](README.md)。
+本节是 Linux offline 下**用户主动持久化 OMP 配置**的唯一权威保存要求，适用于 TUI、配置命令和经用户授权的 Agent 代配；Team 配置服务及未来 Team 配置接口实现必须遵循本节，不能以局部实现约定降低要求。Settings 共享保存、Team TUI 与 CLI 配置入口已接入双端保存机制，Windows 定向回归及真实入口已有证据（原 RPC 入口证据对应独立 RPC 退役前源码）；标题“程序实现待验收”保留，真实 Linux／公司 NFS 跨主机锁及 CentOS 实机仍未验收，Windows seam 不能代替。实施与验证状态、失败复验记录见[需求目录](README.md)。
 
 当前 `ConfigFile`／`ModelsConfigFile` 只承担读取／迁移，没有主动 `models.yml` writer 或 provider 保存 API；这不豁免下述已授权 provider 变更的双端要求，也不表示 Team 接口提供 provider 配置。Agent 获授权新增 provider 时仍须双端最小安全写，不能把任意文本 `edit` 视为具有共享程序服务的锁、版本校验或事务保证。
 
