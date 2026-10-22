@@ -292,8 +292,10 @@ export interface SessionStorage {
 	 * then moves its session to a sibling instead of writing that file.
 	 * Optional because only backends with a process-owned lock can tell that
 	 * another process writes a session.
+	 * An explicit owner makes the claim exclusive within this process too;
+	 * callers without an owner retain the native process-shared claim behavior.
 	 */
-	claimSession?(sessionId: string, sessionPath: string): (() => void) | null;
+	claimSession?(sessionId: string, sessionPath: string, owner?: object): (() => void) | null;
 	/**
 	 * Atomically delete a session and its artifacts only when `shouldDelete`
 	 * accepts the current session content. Optional because backends without a
@@ -606,11 +608,11 @@ function isPidAlive(pid: number): boolean {
 
 /**
  * This process's ownership leases by session id, shared by every
- * `FileSessionStorage` instance: managers in one process share one lease per
- * session and only ever contend with other processes. The OS reclaims a lease
- * when its process exits, so a crashed owner never blocks a later claim.
+ * `FileSessionStorage` instance. Native writers share a process lease; an
+ * explicit runtime owner holds it exclusively, including within this process.
+ * The OS reclaims a lease when its process exits.
  */
-const sessionLeases = new Map<string, { lease: FileLockHandle; holders: number }>();
+const sessionLeases = new Map<string, { lease: FileLockHandle; holders: number; owner?: object }>();
 
 const TEST_SESSION_OWNERS_DIR_ENV = "PI_TEST_SESSION_OWNERS_DIR";
 
@@ -1384,24 +1386,25 @@ export class FileSessionStorage implements SessionStorage {
 	/**
 	 * The lease is an OS lock (abstract socket, named mutex, or `flock` sidecar
 	 * under ~/.omp/run/session-owners), so the kernel drops a dead owner's claim.
-	 * Never throws: a lock that cannot be taken for another reason counts as
-	 * owned, so it never moves a session off its file.
+	 * Probe errors retain native best-effort behavior; explicit runtime owners
+	 * fail closed rather than receiving an unprotected claim.
 	 */
-	claimSession(sessionId: string, sessionPath: string): (() => void) | null {
+	claimSession(sessionId: string, sessionPath: string, owner?: object): (() => void) | null {
 		assertOfflineSessionPath(sessionPath);
 		const onDisk = readSessionHeaderIdSync(sessionPath);
 		if (onDisk !== undefined && onDisk !== sessionId) return null;
 		let held = sessionLeases.get(sessionId);
+		if (held && (owner !== undefined || held.owner !== undefined) && held.owner !== owner) return null;
 		if (!held) {
 			let lease: FileLockHandle | null;
 			try {
 				lease = tryAcquireSessionLease(sessionId);
 			} catch (err) {
 				logger.debug("Session ownership lease unavailable", { sessionId, error: toError(err).message });
-				return () => {};
+				return owner === undefined ? () => {} : null;
 			}
 			if (!lease) return null;
-			held = { lease, holders: 0 };
+			held = { lease, holders: 0, owner };
 			sessionLeases.set(sessionId, held);
 		}
 		const claim = held;

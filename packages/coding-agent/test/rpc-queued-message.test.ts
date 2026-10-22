@@ -103,7 +103,7 @@ describe("RPC queued-message editing", () => {
 	test("queue_update mirrors get_state.queuedMessages, matches the removal invariant, and never repeats", async () => {
 		await client.start();
 
-		const updates: Array<{ steering: string[]; followUp: string[]; liveSteered: number }> = [];
+		const updates: Array<{ steering: readonly string[]; followUp: readonly string[]; liveSteered: number }> = [];
 		const unsubscribe = client.onSessionEvent(event => {
 			if (event.type === "queue_update")
 				updates.push({ steering: event.steering, followUp: event.followUp, liveSteered: event.liveSteered });
@@ -117,7 +117,7 @@ describe("RPC queued-message editing", () => {
 
 			expect(await client.removeQueuedMessage("first", "followUp")).toEqual({ removed: true });
 			expect(updates.at(-1)?.followUp).toEqual(["second"]);
-			expect((await client.getState()).queuedMessages).toEqual(updates.at(-1)!);
+			expect(updates.at(-1)).toEqual((await client.getState()).queuedMessages);
 
 			// Snapshot-string-removal invariant: every chip string in a snapshot,
 			// passed back verbatim to remove_queued_message with its queue, removes

@@ -69,6 +69,9 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 		extensionsResult:
 			{} as unknown as import("@oh-my-pi/pi-coding-agent/extensibility/extensions/types").LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Native tool context is unavailable in this fixture");
+		},
 		eventBus: new EventBus(),
 	};
 }

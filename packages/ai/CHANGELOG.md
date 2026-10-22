@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
+
 ## [18.12.5] - 2026-10-21
 
 ### Added

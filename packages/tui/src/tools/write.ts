@@ -79,6 +79,16 @@ export interface WriteToolDetails {
 	/** Absolute filesystem path the write resolved to. Used by the renderer to wrap
 	 * the (possibly cwd-relative) header path in an OSC 8 `file://` hyperlink. */
 	resolvedPath?: string;
+	/** Filesystem checkpoint only; absent for devices, archive members and database rows. */
+	op?: "create" | "update";
+	/** Filesystem destination; canonical when the checkpoint owner could resolve it. */
+	path?: string;
+	/** Exact UTF-8 before/after bytes as text, jointly bounded to 32,768 characters.
+	 * A newly created file has oldText "". Both fields are absent if unavailable. */
+	oldText?: string;
+	newText?: string;
+	/** The prior or committed state could not be captured exactly within the budget. */
+	snapshotsPruned?: boolean;
 	/** Set when the write dispatched an `xd://` tool device; drives renderer delegation. */
 	xdev?: XdevRenderDispatch;
 	message?: CoordinationDetails;

@@ -33,7 +33,7 @@
  * them also activates (`omp --print --profile work`).
  */
 
-import { isSubcommand, LAUNCH_FLAG_COMMANDS } from "../cli-commands";
+import { isSubcommand, PROFILE_FLAG_COMMANDS } from "../cli-commands";
 import {
 	EXTENSION_SHADOWABLE_STRING_FLAGS,
 	isUnknownLongValueCandidate,
@@ -68,9 +68,8 @@ export interface ProfileBootstrapResult {
  * registered command that owns its own flags (e.g. `grep`): everything from
  * that token onward is forwarded verbatim so a subcommand's own flags and
  * positionals are never stolen (`omp grep --profile <path>` greps for
- * `--profile`; it does not select a profile). `launch` and `acp` are explicit
- * spellings of launch-shaped commands, so `omp launch --profile work` and
- * `omp acp --profile work` still select profile `work`.
+ * `--profile`; it does not select a profile). `launch`, `acp`, and `app-server`
+ * accept profile selection after their command token, before their modules load.
  *
  * Throws when either flag is supplied without a value.
  */
@@ -216,9 +215,9 @@ export function extractProfileFlags(argv: readonly string[]): ProfileBootstrapRe
 
 		// Only the first residual argv token can be the dispatched subcommand. Once
 		// any other token has been forwarded, later subcommand names are launch text.
-		// `launch` and `acp` are explicit spellings of launch-shaped commands, so
-		// global launch flags that follow them must still be extracted.
-		if (canDispatchSubcommand && isSubcommand(arg) && LAUNCH_FLAG_COMMANDS[arg] !== true) {
+		// Profile-aware commands use this same bootstrap before loading their modules;
+		// accepting profile flags does not imply accepting the launch flag surface.
+		if (canDispatchSubcommand && isSubcommand(arg) && PROFILE_FLAG_COMMANDS[arg] !== true) {
 			sawSubcommand = true;
 		}
 		canDispatchSubcommand = false;

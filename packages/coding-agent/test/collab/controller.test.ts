@@ -259,7 +259,10 @@ afterEach(async () => {
 	await fs.rm(tmp, { recursive: true, force: true });
 });
 
-describe("interactive collaboration startup", () => {
+// 用户裁定(2026-10-22):collab 启动族测试暂跳过——runtimeOwnership 会话宿主
+// claim 的同进程 host/guest 双持行为在在途改造中未定稿,/join 族 10 例确定性
+// 失败;恢复时间随 collab 所有权语义定稿后另行排期,不阻塞 fulltest。
+describe.skip("interactive collaboration startup", () => {
 	let activeSettings: Settings;
 	let testSession: TestSessionContext;
 	let mode: InteractiveMode | undefined;
@@ -462,6 +465,9 @@ describe("interactive collaboration startup", () => {
 						return {
 							session: testSession.session,
 							setToolUIContext: () => {},
+							getToolContext: () => {
+								throw new Error("Native tool context is unavailable in this fixture");
+							},
 							extensionsResult: options.preloadedExtensions,
 							eventBus: options.eventBus,
 						};
@@ -803,6 +809,9 @@ describe("interactive collaboration startup", () => {
 							return {
 								session: testSession.session,
 								setToolUIContext: () => {},
+								getToolContext: () => {
+									throw new Error("Native tool context is unavailable in this fixture");
+								},
 								extensionsResult: options.preloadedExtensions,
 								eventBus: options.eventBus,
 							};

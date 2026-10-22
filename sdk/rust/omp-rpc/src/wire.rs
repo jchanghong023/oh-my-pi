@@ -3712,10 +3712,42 @@ pub struct ToolExecutionEndEvent {
 	pub is_error: Option<bool>,
 }
 
+/// Cancellation began for this session; this does not by itself mean the session has settled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionAbortEvent {
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualCompactionStartEvent {
+	#[serde(rename = "operationId")]
+	pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManualCompactionEndEvent {
+	#[serde(rename = "operationId")]
+	pub operation_id: String,
+	pub aborted: bool,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub result: Option<CompactionResult>,
+	/// Canonical journal compaction entry committed by this operation, when present.
+	#[serde(rename = "summaryRef", default, skip_serializing_if = "Option::is_none")]
+	pub summary_ref: Option<String>,
+	#[serde(rename = "errorMessage", default, skip_serializing_if = "Option::is_none")]
+	pub error_message: Option<String>,
+	/// Compaction was skipped for a benign reason.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub skipped: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AutoCompactionStartEvent {
 	pub reason: AutoCompactionReason,
 	pub action: AutoCompactionAction,
+	#[serde(rename = "operationId", default, skip_serializing_if = "Option::is_none")]
+	pub operation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3724,6 +3756,11 @@ pub struct AutoCompactionEndEvent {
 	pub aborted: bool,
 	#[serde(rename = "willRetry")]
 	pub will_retry: bool,
+	#[serde(rename = "operationId", default, skip_serializing_if = "Option::is_none")]
+	pub operation_id: Option<String>,
+	/// Canonical journal compaction entry committed by this operation, when present.
+	#[serde(rename = "summaryRef", default, skip_serializing_if = "Option::is_none")]
+	pub summary_ref: Option<String>,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub result: Option<CompactionResult>,
 	#[serde(rename = "errorMessage", default, skip_serializing_if = "Option::is_none")]
@@ -3883,6 +3920,10 @@ pub enum RpcAgentEvent {
 	ToolExecutionUpdate(ToolExecutionUpdateEvent),
 	ToolStreamUpdate(ToolStreamUpdateEvent),
 	ToolExecutionEnd(ToolExecutionEndEvent),
+	/// Cancellation began for this session; this does not by itself mean the session has settled.
+	SessionAbort(SessionAbortEvent),
+	ManualCompactionStart(ManualCompactionStartEvent),
+	ManualCompactionEnd(ManualCompactionEndEvent),
 	AutoCompactionStart(AutoCompactionStartEvent),
 	AutoCompactionEnd(AutoCompactionEndEvent),
 	AutoRetryStart(AutoRetryStartEvent),
@@ -3925,6 +3966,9 @@ impl RpcAgentEvent {
 			Some("tool_execution_update") => |value| serde_json::from_value(value).map(Self::ToolExecutionUpdate),
 			Some("tool_stream_update") => |value| serde_json::from_value(value).map(Self::ToolStreamUpdate),
 			Some("tool_execution_end") => |value| serde_json::from_value(value).map(Self::ToolExecutionEnd),
+			Some("session_abort") => |value| serde_json::from_value(value).map(Self::SessionAbort),
+			Some("manual_compaction_start") => |value| serde_json::from_value(value).map(Self::ManualCompactionStart),
+			Some("manual_compaction_end") => |value| serde_json::from_value(value).map(Self::ManualCompactionEnd),
 			Some("auto_compaction_start") => |value| serde_json::from_value(value).map(Self::AutoCompactionStart),
 			Some("auto_compaction_end") => |value| serde_json::from_value(value).map(Self::AutoCompactionEnd),
 			Some("auto_retry_start") => |value| serde_json::from_value(value).map(Self::AutoRetryStart),
@@ -3967,6 +4011,9 @@ impl Serialize for RpcAgentEvent {
 			Self::ToolExecutionUpdate(member) => serialize_tagged(member, &[("type", "tool_execution_update")], serializer),
 			Self::ToolStreamUpdate(member) => serialize_tagged(member, &[("type", "tool_stream_update")], serializer),
 			Self::ToolExecutionEnd(member) => serialize_tagged(member, &[("type", "tool_execution_end")], serializer),
+			Self::SessionAbort(member) => serialize_tagged(member, &[("type", "session_abort")], serializer),
+			Self::ManualCompactionStart(member) => serialize_tagged(member, &[("type", "manual_compaction_start")], serializer),
+			Self::ManualCompactionEnd(member) => serialize_tagged(member, &[("type", "manual_compaction_end")], serializer),
 			Self::AutoCompactionStart(member) => serialize_tagged(member, &[("type", "auto_compaction_start")], serializer),
 			Self::AutoCompactionEnd(member) => serialize_tagged(member, &[("type", "auto_compaction_end")], serializer),
 			Self::AutoRetryStart(member) => serialize_tagged(member, &[("type", "auto_retry_start")], serializer),
@@ -4952,7 +4999,7 @@ impl RpcNotification {
 			Some("session_info_update") => |value| serde_json::from_value(value).map(Self::SessionInfoUpdate),
 			Some("config_update") => |value| serde_json::from_value(value).map(Self::ConfigUpdate),
 			Some("rpc_frame_error") => |value| serde_json::from_value(value).map(Self::RpcFrameError),
-			Some("agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
+			Some("agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "session_abort" | "manual_compaction_start" | "manual_compaction_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcAgentEvent),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)
@@ -5012,7 +5059,7 @@ impl RpcServerFrame {
 		let decode: fn(Value) -> Result<Self, serde_json::Error> = match value.get("type").and_then(Value::as_str) {
 			Some("response") => |value| serde_json::from_value(value).map(Self::Response),
 			Some("host_tool_call" | "host_tool_cancel" | "host_uri_request" | "host_uri_cancel") => |value| serde_json::from_value(value).map(Self::RpcHostRequest),
-			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
+			Some("ready" | "prompt_result" | "session_settled" | "extension_error" | "extension_ui_request" | "available_commands_update" | "subagent_lifecycle" | "subagent_progress" | "subagent_event" | "live_phase" | "live_levels" | "live_transcript" | "live_end" | "btw_delta" | "btw_record" | "command_output" | "session_info_update" | "config_update" | "rpc_frame_error" | "agent_start" | "agent_end" | "turn_start" | "turn_end" | "message_start" | "message_update" | "message_end" | "tool_execution_start" | "tool_execution_update" | "tool_stream_update" | "tool_execution_end" | "session_abort" | "manual_compaction_start" | "manual_compaction_end" | "auto_compaction_start" | "auto_compaction_end" | "auto_retry_start" | "auto_retry_end" | "cache_warming_start" | "cache_warming_end" | "retry_fallback_applied" | "retry_fallback_succeeded" | "model_changed" | "config_warnings_changed" | "advisor_cost_changed" | "advisor_yielded" | "ttsr_triggered" | "todo_reminder" | "todo_auto_clear" | "irc_message" | "notice" | "thinking_level_changed" | "goal_updated" | "queue_update") => |value| serde_json::from_value(value).map(Self::RpcNotification),
 			_ => |value| Ok(Self::Unknown(value)),
 		};
 		decode(value)

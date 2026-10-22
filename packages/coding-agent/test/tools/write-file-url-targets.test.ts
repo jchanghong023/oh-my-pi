@@ -62,6 +62,53 @@ describe("write to file-backed internal URLs", () => {
 		expect(resultText(result)).not.toContain(vaultRoot);
 	});
 
+	it("returns exact bounded create and update checkpoints through the tool result", async () => {
+		const tool = new WriteTool(createSession(tmpDir));
+		const file = path.join(tmpDir, "checkpoint.txt");
+		const created = await tool.execute("create-checkpoint", { path: file, content: "\uFEFFbefore\r\n" });
+		expect(created.details).toMatchObject({
+			op: "create",
+			path: await fs.realpath(file),
+			oldText: "",
+			newText: "\uFEFFbefore\r\n",
+		});
+		const updated = await tool.execute("update-checkpoint", { path: file, content: "after\n" });
+		expect(updated.details).toMatchObject({
+			op: "update",
+			oldText: "\uFEFFbefore\r\n",
+			newText: "after\n",
+		});
+		expect(JSON.parse(JSON.stringify(updated.details)).oldText).toBe("\uFEFFbefore\r\n");
+	});
+
+	it("prunes oversized combined snapshots and binary or invalid UTF-8 prior bytes", async () => {
+		const tool = new WriteTool(createSession(tmpDir));
+		const file = path.join(tmpDir, "checkpoint.txt");
+		for (const prior of [Buffer.from([0xff]), Buffer.from([0, 1]), Buffer.from("a".repeat(32_768))]) {
+			await fs.writeFile(file, prior);
+			const result = await tool.execute("pruned-checkpoint", { path: file, content: "after\n" });
+			expect(result.details?.snapshotsPruned).toBe(true);
+			expect(result.details?.oldText).toBeUndefined();
+			expect(result.details?.newText).toBeUndefined();
+			expect(await fs.readFile(file, "utf8")).toBe("after\n");
+		}
+	});
+
+	it("retains snapshots at the budget boundary and prunes oversized new files", async () => {
+		const tool = new WriteTool(createSession(tmpDir));
+		const file = path.join(tmpDir, "budget.txt");
+		const kept = await tool.execute("budget-kept", { path: file, content: "a".repeat(32_768) });
+		expect(kept.details?.newText?.length).toBe(32_768);
+		expect(kept.details?.snapshotsPruned).toBeUndefined();
+		const oversized = await tool.execute("budget-pruned", {
+			path: path.join(tmpDir, "oversized.txt"),
+			content: "b".repeat(32_769),
+		});
+		expect(oversized.details).toMatchObject({ op: "create", snapshotsPruned: true });
+		expect(oversized.details?.oldText).toBeUndefined();
+		expect(oversized.details?.newText).toBeUndefined();
+	});
+
 	it("refuses vault:// writes while vault.enabled is off", async () => {
 		vi.spyOn(vaultProtocol, "isVaultEnabled").mockReturnValue(false);
 

@@ -1381,7 +1381,11 @@ it("rejects invalid budgets and reserves with a complete final summary", async (
 		const output: string[] = [];
 		const result = await runGate("fastcheck", async () => {}, { ...options, print: line => output.push(line) });
 		expect(result.status).toBe("FAIL");
-		expect(output.at(-1)).toMatch(/FAIL total=\d+\.\ds compile_excluded=0\.0s budgeted=\d+\.\ds limit=90\.0s exit=1/);
+		expect(output.at(-1)).toMatch(
+			new RegExp(
+				`FAIL total=\\d+\\.\\ds compile_excluded=0\\.0s budgeted=\\d+\\.\\ds limit=${GATE_LIMIT_SECONDS.fastcheck}\\.0s exit=1`,
+			),
+		);
 	}
 });
 it("keeps one cumulative clock across successive stages", async () => {
@@ -2255,6 +2259,8 @@ it("charges a doctest executable that overlaps another doctest compiler", async 
 	expect(result.compileExcludedSeconds).toBeLessThan(0.2);
 });
 it("returns captured bytes without echoing them into the surrounding stream", async () => {
+	// This checks bytes across real nested processes, not their startup latency.
+	// Use the normal tier budget, as other non-timing command regressions do.
 	const result = await runGate(
 		"slowtest",
 		async gate => {
@@ -2269,7 +2275,7 @@ it("returns captured bytes without echoing them into the surrounding stream", as
 			const nested: unknown = JSON.parse(captured.stdout.slice("CAPTURE_RESULT".length));
 			expect(nested).toEqual({ exitCode: 0, stdout: "private fixture bytes\n", stderr: "stderr preserved\n" });
 		},
-		{ limitSeconds: 1.5, print: quiet },
+		{ print: quiet },
 	);
 	expect(result.status).toBe("PASS");
 });
@@ -2442,14 +2448,16 @@ it("returns a bounded discovery timeout without cancelling the enclosing gate", 
 			);
 			expect(probe.exitCode).toBe(124);
 			expect(gate.signal.aborted).toBe(false);
-			await gate.run(command({ exit: 0 }));
+			// Check cleanup as continued gate work, without timing an unrelated second process startup.
+			await gate.charged(async () => {
+				const pid = Number(await fs.readFile(pidFile, "utf8"));
+				expect(() => process.kill(pid, 0)).toThrow();
+			});
 		},
 		{ limitSeconds: 1.5, print: quiet },
 	);
 	expect(result.status).toBe("PASS");
 	expect(aborted).toBe(true);
-	const pid = Number(await fs.readFile(pidFile, "utf8"));
-	expect(() => process.kill(pid, 0)).toThrow();
 });
 it("rejects independent wall guards on required checks and compiler stages", async () => {
 	for (const options of [

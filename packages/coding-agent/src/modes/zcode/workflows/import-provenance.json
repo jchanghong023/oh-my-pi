@@ -1,0 +1,28 @@
+{
+	"repository": "https://github.com/jchanghong023/OmpCode",
+	"commit": "c7c190724f3a00a2de998a0a5511201d5a2ba1a0",
+	"files": [
+		{
+			"source": "apps/zcode-cli/packages/bootstrap/src/app/dynamic-workflow-import.ts",
+			"sourceSha256": "4fed2f05457aef4759144e4f7a0fa3fcb6227dd6f0e549f8ea185a3b7f223f69",
+			"target": "import-cache.ts",
+			"adaptations": [
+				"Replace contracts Logger and branded SessionId with narrow native transcript port.",
+				"Redirect domain types to the pinned local pure dynamic-workflow vendor.",
+				"Inline terminal statuses completed/errored/stopped instead of importing original observation runtime.",
+				"Redirect transcript store type to native actor-transcript.ts; cache algorithm unchanged."
+			]
+		},
+		{
+			"source": "apps/zcode-cli/packages/bootstrap/src/app/workflow-actor-transcript.ts",
+			"sourceSha256": "35f31f4f1bd9b3025aacabc53bb36d4f55fee50089e2e4233773e2b7c584d9ad",
+			"target": "actor-transcript.ts",
+			"adaptations": [
+				"Retain source read/count and prefix-only idempotent seeding invariants using native AgentMessage and SessionManager.",
+				"Replace original Core fork/message/part clone dependencies with native appendMessage value-copy and durable per-message seed ordinal/digest metadata.",
+				"Perform seeding before native actor hydration; never append source messages after target-owned history."
+			]
+		}
+	],
+	"runtimeBoundary": "No original Core Agent runtime, session database, contracts package, or cross-repository runtime imports."
+}

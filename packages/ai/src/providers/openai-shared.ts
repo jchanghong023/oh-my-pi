@@ -62,6 +62,7 @@ import {
 	type ToolResultMessage,
 	type Usage,
 } from "../types";
+import { mergeHeaders } from "./anthropic";
 import { resolveCopilotRequestIdentity } from "./github-copilot-headers";
 import { resolveXaiBaseUrl } from "./xai-base-url";
 
@@ -70,6 +71,7 @@ export type { OpenAIPromptCacheOptions } from "../types";
 import {
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
+	hasRequestAuthMaterial,
 	normalizeResponsesToolCallId,
 	normalizeSystemPrompts,
 	resolveCacheRetention,
@@ -162,6 +164,7 @@ export interface OpenAICacheOptions {
 
 export interface OpenAIRequestSetupOptions {
 	apiKey?: string;
+	requestAuth?: StreamOptions["requestAuth"];
 	extraHeaders?: Record<string, string>;
 	initiatorOverride?: MessageAttribution;
 	messages: Message[];
@@ -218,8 +221,11 @@ export function resolveOpenAIRequestSetup(
 	model: OpenAIRequestSetupModel,
 	options: OpenAIRequestSetupOptions,
 ): OpenAIRequestSetup {
-	let apiKey = options.apiKey;
-	if (!apiKey) {
+	let apiKey = (options.requestAuth !== undefined ? options.requestAuth.apiKey : options.apiKey) ?? "";
+	if (options.requestAuth !== undefined && !hasRequestAuthMaterial(options.requestAuth)) {
+		throw new AIError.MissingApiKeyError(model.provider);
+	}
+	if (!apiKey && options.requestAuth === undefined) {
 		if (!$env.OPENAI_API_KEY) {
 			throw new AIError.MissingApiKeyError(
 				undefined,
@@ -233,7 +239,7 @@ export function resolveOpenAIRequestSetup(
 	if (model.provider === "openrouter") {
 		Object.assign(headers, getOpenRouterHeaders());
 	}
-	Object.assign(headers, options.extraHeaders);
+	headers = mergeHeaders(headers, options.extraHeaders);
 	if (model.provider === "coreweave") {
 		applyCoreWeaveProjectHeader(headers);
 	}
@@ -346,8 +352,8 @@ export function resolveOpenAIRequestSetup(
 	// `headers.x-api-key`) and reject the bogus bearer — mirror the sentinel
 	// guards in google-vertex / amazon-bedrock and send no Authorization here
 	// (#6188). A caller-supplied Authorization in `model.headers` still wins.
-	if (apiKey !== NO_AUTH_SENTINEL) {
-		headers.Authorization ??= `Bearer ${apiKey}`;
+	if (apiKey && apiKey !== NO_AUTH_SENTINEL) {
+		setHeaderIfAbsent(headers, "Authorization", `Bearer ${apiKey}`);
 	}
 	return { copilotPremiumRequests, baseUrl, headers, query, requestHeaders, copilotCacheKey, copilotCacheSnapshot };
 }
@@ -3860,7 +3866,11 @@ export async function processResponsesStream<TApi extends Api>(
 						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
 							? `status_details: ${statusDetailsReason}`
 							: "Unknown error (no error details in response)";
-				throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
+				throw new AIError.ProviderResponseError(message, {
+					provider: model.provider,
+					kind: "output",
+					providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error }, undefined).code,
+				});
 			}
 			if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
 				// A content-filtered turn is a failure, not a token-cap truncation —
@@ -3906,6 +3916,7 @@ export async function processResponsesStream<TApi extends Api>(
 			throw new AIError.ProviderResponseError(`Error Code ${code}: ${message}`, {
 				provider: model.provider,
 				kind: "output",
+				providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error: err }, undefined).code,
 			});
 		} else if (event.type === "response.failed") {
 			populateResponsesUsageFromResponse(output, event.response?.usage);
@@ -3918,7 +3929,11 @@ export async function processResponsesStream<TApi extends Api>(
 				: details?.reason
 					? `incomplete: ${details.reason}`
 					: "Unknown error (no error details in response)";
-			throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
+			throw new AIError.ProviderResponseError(message, {
+				provider: model.provider,
+				kind: "output",
+				providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error }, undefined).code,
+			});
 		}
 	}
 }

@@ -38,6 +38,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.acpHelp,
 	},
 	{
+		name: "app-server",
+		load: () => import("./modes/zcode").then(m => m.default),
+		help: commandHelp.appServerHelp,
+	},
+	{
 		name: "auth",
 		load: () => import("./commands/auth").then(m => m.default),
 		help: commandHelp.authHelp,
@@ -316,6 +321,9 @@ for (const command of commands) {
 
 /** Commands that accept launch-global flags before their command token. */
 export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
+
+/** Commands whose trailing profile flags must be applied before their modules load. */
+export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = { ...LAUNCH_FLAG_COMMANDS, "app-server": true };
 
 /** Whether a token names a registered top-level command or alias. */
 export function isSubcommand(first: string | undefined): boolean {

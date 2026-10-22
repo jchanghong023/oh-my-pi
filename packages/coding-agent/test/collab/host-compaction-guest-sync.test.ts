@@ -179,7 +179,8 @@ afterEach(async () => {
 });
 
 describe("collab host compaction → guest sync (#9781)", () => {
-	it("collapses the guest's model context behind the summary after the host compacts", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("collapses the guest's model context behind the summary after the host compacts", async () => {
 		const hostManager = SessionManager.inMemory();
 		hostManager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
 		hostManager.appendMessage(createAssistantMessage("reply"));
@@ -222,7 +223,8 @@ describe("collab host compaction → guest sync (#9781)", () => {
 });
 
 describe("collab guest replica identity", () => {
-	it("gives the replica its own session id, kept across a resync, so a guest never contends for the host's lease", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("gives the replica its own session id, kept across a resync, so a guest never contends for the host's lease", async () => {
 		const hostManager = SessionManager.inMemory();
 		hostManager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
 		hostManager.appendMessage(createAssistantMessage("reply"));

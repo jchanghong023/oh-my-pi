@@ -1,14 +1,12 @@
 name: CI
 run-name: CI
 on:
-
    workflow_dispatch:
       inputs:
          publish_release:
             description: "Create a GitHub Release and tag"
             type: boolean
             default: false
-
 
 concurrency:
    group: "${{ github.workflow }}-${{ github.ref }}"
@@ -237,12 +235,23 @@ jobs:
               RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
               RELEASE_TIMESTAMP: ${{ needs.release_metadata.outputs.release-timestamp }}
               UPDATE_REPOSITORY: ${{ github.repository }}
+              ZCODE_ARTIFACT_ROOT: packages/coding-agent/binaries/zcode
+              RELEASE_COMMIT: ${{ github.sha }}
            run: bun run ci:release:build-binaries
          - name: Upload release binary artifact
            uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
               name: omp-binary-${{ matrix.target_id }}
               path: ${{ matrix.binary_path }}
+         # Separate payload: preserve standalone binary publishing/checksum globs.
+         # Contains the final executable plus its target manifest and immutable release pin.
+         # These build artifacts do not assert Windows signing or macOS notarization.
+         - name: Upload ZCode OMP artifact
+           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: omp-zcode-${{ matrix.target_id }}
+              path: packages/coding-agent/binaries/zcode/
+              if-no-files-found: error
          # Main-only save, after the build so it is off the leg's critical
          # path: caches saved on a tag or branch are readable only by that ref
          # yet count against the shared 10 GB quota (see bazel-cache).
@@ -253,7 +262,6 @@ jobs:
            with:
               path: ~/.bun/install/cache
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
-
 
    release_github:
       name: Publish GitHub release

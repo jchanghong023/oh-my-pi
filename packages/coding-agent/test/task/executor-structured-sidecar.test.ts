@@ -69,6 +69,9 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 		session,
 		extensionsResult: { extensions: [], errors: [], runtime: {} as unknown } as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Native tool context is unavailable in this fixture");
+		},
 		eventBus: new EventBus(),
 	};
 }
@@ -105,6 +108,18 @@ describe("structured output sidecar lifecycle", () => {
 			}
 			return (originalWrite as (...args: unknown[]) => unknown)(dest, ...rest);
 		}) as typeof Bun.write);
+		// writeArtifact deliberately stages Windows writes through node fs.open
+		// instead of Bun.write (MAX_PATH staging suffix); simulate the same disk
+		// failure on the code path this platform actually takes.
+		if (process.platform === "win32") {
+			const originalOpen = fs.open.bind(fs);
+			vi.spyOn(fs, "open").mockImplementation(((target: unknown, ...rest: unknown[]) => {
+				if (typeof target === "string" && target.includes(`${id}.json.tmp-`)) {
+					return Promise.reject(new Error("simulated disk failure"));
+				}
+				return (originalOpen as (...args: unknown[]) => unknown)(target, ...rest);
+			}) as typeof fs.open);
+		}
 
 		const result = await runSubprocess({
 			cwd: "/tmp",

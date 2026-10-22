@@ -15,7 +15,10 @@
 		"url": "https://github.com/can1357/oh-my-pi/issues"
 	},
 	"license": "MIT",
-	"author": { "name": "Stencil Labs, Inc.", "url": "https://stencil.so" },
+	"author": {
+		"name": "Stencil Labs, Inc.",
+		"url": "https://stencil.so"
+	},
 	"contributors": [
 		"Mario Zechner"
 	],
@@ -568,7 +571,9 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"axe-core": "4.13.0",
-		"puppeteer-core": "catalog:"
+		"puppeteer-core": "catalog:",
+		"zcode-workflow-typescript": "npm:typescript@5.9.3",
+		"zod": "4.6.5"
 	},
 	"devDependencies": {
 		"@types/bun": "catalog:"

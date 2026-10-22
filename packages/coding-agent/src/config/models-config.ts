@@ -29,6 +29,8 @@ export interface ProviderValidationConfig {
 	api?: Api;
 	auth?: ProviderAuthMode;
 	oauthConfigured?: boolean;
+	/** Runtime caller owns a request-bound credential source; never read from models.yml. */
+	requestAuthConfigured?: boolean;
 	discovery?: ProviderDiscovery;
 	compat?: ModelSpec<Api>["compat"];
 	remoteCompaction?: unknown;
@@ -76,12 +78,12 @@ export function validateProviderConfiguration(
 		}
 		const requiresAuth =
 			mode === "runtime-register"
-				? !config.apiKey && !config.oauthConfigured
+				? !config.apiKey && !config.oauthConfigured && !config.requestAuthConfigured
 				: !config.apiKey && (config.auth ?? "apiKey") !== "none" && (config.auth ?? "apiKey") !== "oauth";
 		if (requiresAuth) {
 			throw new Error(
 				mode === "runtime-register"
-					? `Provider ${providerName}: "apiKey" or "oauth" is required when defining models.`
+					? `Provider ${providerName}: "apiKey", "oauth", or a configured request authentication source is required when defining models.`
 					: `Provider ${providerName}: "apiKey" is required when defining custom models unless auth is "none" or "oauth".`,
 			);
 		}

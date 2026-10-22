@@ -776,10 +776,14 @@ const streamOpenAIResponsesOnce = (
 			// avoid perturbing provider conversation state without cold-starting the cache.
 			const routingSessionId = getOpenAIResponsesRoutingSessionId(options);
 			const promptCacheSessionId = getOpenAIPromptCacheKey(options);
-			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+			const apiKey =
+				options?.requestAuth !== undefined
+					? (options.requestAuth.apiKey ?? "")
+					: options?.apiKey || getEnvApiKey(model.provider) || "";
 			const { headers, copilotPremiumRequests, baseUrl, copilotCacheKey, copilotCacheSnapshot } =
 				resolveOpenAIRequestSetup(model, {
 					apiKey,
+					requestAuth: options?.requestAuth,
 					extraHeaders: options?.headers,
 					initiatorOverride: options?.initiatorOverride,
 					messages: context.messages,
@@ -865,6 +869,7 @@ const streamOpenAIResponsesOnce = (
 				method: "POST",
 				url: requestUrl,
 				body: chained.params,
+				requestAuth: options?.requestAuth,
 			};
 			rawRequestDump = activeRawRequestDump;
 			const openResponsesStream = async (
@@ -1280,6 +1285,7 @@ const streamOpenAIResponsesOnce = (
 					output.errorMessage = undefined;
 					output.errorStatus = undefined;
 					output.errorId = undefined;
+					output.providerErrorCode = undefined;
 					output.stopDetails = undefined;
 					output.providerPayload = undefined;
 					output.usage = retryOutput.usage;
@@ -1373,6 +1379,7 @@ const streamOpenAIResponsesOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			if (AIError.isRequestBodyReadTimeout(result.status, result.message) && lastSubmittedRequestWasFullReplay) {
 				output.requestBodyReadTimeoutFullReplay = true;

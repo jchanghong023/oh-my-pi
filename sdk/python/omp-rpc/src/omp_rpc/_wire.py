@@ -1043,10 +1043,37 @@ class ToolExecutionEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class SessionAbortEvent:
+    """Cancellation began for this session; this does not by itself mean the session has settled."""
+    type: Literal["session_abort"] = "session_abort"
+    reason: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ManualCompactionStartEvent:
+    type: Literal["manual_compaction_start"] = "manual_compaction_start"
+    operation_id: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class ManualCompactionEndEvent:
+    type: Literal["manual_compaction_end"] = "manual_compaction_end"
+    operation_id: str
+    aborted: bool
+    result: CompactionResult | None = None
+    summary_ref: str | None = None
+    """Canonical journal compaction entry committed by this operation, when present."""
+    error_message: str | None = None
+    skipped: bool | None = None
+    """Compaction was skipped for a benign reason."""
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class AutoCompactionStartEvent:
     type: Literal["auto_compaction_start"] = "auto_compaction_start"
     reason: AutoCompactionReason
     action: AutoCompactionAction
+    operation_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1055,6 +1082,9 @@ class AutoCompactionEndEvent:
     action: AutoCompactionAction
     aborted: bool
     will_retry: bool
+    operation_id: str | None = None
+    summary_ref: str | None = None
+    """Canonical journal compaction entry committed by this operation, when present."""
     result: CompactionResult | None = None
     error_message: str | None = None
     skipped: bool | None = None
@@ -1606,7 +1636,7 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 """Provider-neutral state of an account past its usage limit, discriminated by `stage`."""
 
 
-RpcAgentEvent: TypeAlias = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | SessionAbortEvent | ManualCompactionStartEvent | ManualCompactionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
@@ -2374,12 +2404,42 @@ def parse_tool_execution_end_event(value: object, path: str = "ToolExecutionEndE
     )
 
 
+def parse_session_abort_event(value: object, path: str = "SessionAbortEvent") -> SessionAbortEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["session_abort"]]', literal(frozenset({"session_abort"}))), path)
+    return SessionAbortEvent(
+        reason=optional(payload, "reason", decode_str, path),
+    )
+
+
+def parse_manual_compaction_start_event(value: object, path: str = "ManualCompactionStartEvent") -> ManualCompactionStartEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["manual_compaction_start"]]', literal(frozenset({"manual_compaction_start"}))), path)
+    return ManualCompactionStartEvent(
+        operation_id=required(payload, "operationId", decode_str, path),
+    )
+
+
+def parse_manual_compaction_end_event(value: object, path: str = "ManualCompactionEndEvent") -> ManualCompactionEndEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["manual_compaction_end"]]', literal(frozenset({"manual_compaction_end"}))), path)
+    return ManualCompactionEndEvent(
+        operation_id=required(payload, "operationId", decode_str, path),
+        aborted=required(payload, "aborted", decode_bool, path),
+        result=optional(payload, "result", parse_compaction_result, path),
+        summary_ref=optional(payload, "summaryRef", decode_str, path),
+        error_message=optional(payload, "errorMessage", decode_str, path),
+        skipped=optional(payload, "skipped", decode_bool, path),
+    )
+
+
 def parse_auto_compaction_start_event(value: object, path: str = "AutoCompactionStartEvent") -> AutoCompactionStartEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["auto_compaction_start"]]', literal(frozenset({"auto_compaction_start"}))), path)
     return AutoCompactionStartEvent(
         reason=required(payload, "reason", _decode_auto_compaction_reason, path),
         action=required(payload, "action", _decode_auto_compaction_action, path),
+        operation_id=optional(payload, "operationId", decode_str, path),
     )
 
 
@@ -2390,6 +2450,8 @@ def parse_auto_compaction_end_event(value: object, path: str = "AutoCompactionEn
         action=required(payload, "action", _decode_auto_compaction_action, path),
         aborted=required(payload, "aborted", decode_bool, path),
         will_retry=required(payload, "willRetry", decode_bool, path),
+        operation_id=optional(payload, "operationId", decode_str, path),
+        summary_ref=optional(payload, "summaryRef", decode_str, path),
         result=optional(payload, "result", parse_compaction_result, path),
         error_message=optional(payload, "errorMessage", decode_str, path),
         skipped=optional(payload, "skipped", decode_bool, path),
@@ -3038,6 +3100,9 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "tool_execution_update": parse_tool_execution_update_event,
         "tool_stream_update": parse_tool_stream_update_event,
         "tool_execution_end": parse_tool_execution_end_event,
+        "session_abort": parse_session_abort_event,
+        "manual_compaction_start": parse_manual_compaction_start_event,
+        "manual_compaction_end": parse_manual_compaction_end_event,
         "auto_compaction_start": parse_auto_compaction_start_event,
         "auto_compaction_end": parse_auto_compaction_end_event,
         "auto_retry_start": parse_auto_retry_start_event,
@@ -3092,6 +3157,9 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "tool_execution_update": parse_rpc_agent_event,
         "tool_stream_update": parse_rpc_agent_event,
         "tool_execution_end": parse_rpc_agent_event,
+        "session_abort": parse_rpc_agent_event,
+        "manual_compaction_start": parse_rpc_agent_event,
+        "manual_compaction_end": parse_rpc_agent_event,
         "auto_compaction_start": parse_rpc_agent_event,
         "auto_compaction_end": parse_rpc_agent_event,
         "auto_retry_start": parse_rpc_agent_event,
@@ -3636,6 +3704,18 @@ class WireClient:
         """Subscribe to `tool_execution_end` frames."""
         return self._listen("tool_execution_end", listener)
 
+    def on_session_abort(self, listener: Callable[[SessionAbortEvent], None]) -> Callable[[], None]:
+        """Subscribe to `session_abort`: Cancellation began for this session; this does not by itself mean the session has settled."""
+        return self._listen("session_abort", listener)
+
+    def on_manual_compaction_start(self, listener: Callable[[ManualCompactionStartEvent], None]) -> Callable[[], None]:
+        """Subscribe to `manual_compaction_start` frames."""
+        return self._listen("manual_compaction_start", listener)
+
+    def on_manual_compaction_end(self, listener: Callable[[ManualCompactionEndEvent], None]) -> Callable[[], None]:
+        """Subscribe to `manual_compaction_end` frames."""
+        return self._listen("manual_compaction_end", listener)
+
     def on_auto_compaction_start(self, listener: Callable[[AutoCompactionStartEvent], None]) -> Callable[[], None]:
         """Subscribe to `auto_compaction_start` frames."""
         return self._listen("auto_compaction_start", listener)
@@ -3814,6 +3894,8 @@ __all__ = [
     "LoginProvider",
     "LogoutAccount",
     "LogoutResult",
+    "ManualCompactionEndEvent",
+    "ManualCompactionStartEvent",
     "MessageContent",
     "MessageEndEvent",
     "MessageStartEvent",
@@ -3851,6 +3933,7 @@ __all__ = [
     "RpcNotification",
     "SelectOptionDetail",
     "SelectUiRequest",
+    "SessionAbortEvent",
     "SessionCredits",
     "SessionEntries",
     "SessionInfoUpdateEvent",
@@ -3990,6 +4073,8 @@ __all__ = [
     "parse_login_provider",
     "parse_logout_account",
     "parse_logout_result",
+    "parse_manual_compaction_end_event",
+    "parse_manual_compaction_start_event",
     "parse_message_end_event",
     "parse_message_start_event",
     "parse_message_update_event",
@@ -4021,6 +4106,7 @@ __all__ = [
     "parse_rpc_frame_error_event",
     "parse_select_option_detail",
     "parse_select_ui_request",
+    "parse_session_abort_event",
     "parse_session_credits",
     "parse_session_entries",
     "parse_session_info_update_event",

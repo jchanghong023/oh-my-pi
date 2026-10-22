@@ -1011,8 +1011,10 @@ export class SessionManager {
 	 * meets it. `release` is unset when a non-runtime writer met another owner
 	 * or after {@link close} gave the claim up.
 	 */
-	#sessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
-	#retainedSessionClaim: { sessionId: string; release: (() => void) | undefined } | undefined;
+	#sessionClaim: { sessionId: string; release: (() => void) | undefined; runtimeOwnership?: boolean } | undefined;
+	#retainedSessionClaim:
+		| { sessionId: string; release: (() => void) | undefined; runtimeOwnership?: boolean }
+		| undefined;
 	#runtimeOwnership = false;
 	/**
 	 * The background artifact copy a move or branch to `sessionFile` started (see
@@ -1112,12 +1114,21 @@ export class SessionManager {
 		const sessionFile = this.#sessionFile;
 		if (!this.#persist || !sessionFile || !this.#storage.claimSession) return;
 		const current = this.#sessionClaim;
-		if (current?.sessionId === sessionId && current.release) return;
-		if (current && current.sessionId !== sessionId && current !== this.#retainedSessionClaim) current.release?.();
+		if (current?.sessionId === sessionId && current.release && (!this.#runtimeOwnership || current.runtimeOwnership))
+			return;
+		if (current && current !== this.#retainedSessionClaim) {
+			current.release?.();
+			current.release = undefined;
+		}
 		// The storage also checks that the path still holds this session: if
 		// another session was moved onto it, the claim fails and the next write
 		// moves this session to a sibling instead of appending into that journal.
-		this.#sessionClaim = { sessionId, release: this.#storage.claimSession(sessionId, sessionFile) ?? undefined };
+		this.#sessionClaim = {
+			sessionId,
+			release:
+				this.#storage.claimSession(sessionId, sessionFile, this.#runtimeOwnership ? this : undefined) ?? undefined,
+			runtimeOwnership: this.#runtimeOwnership,
+		};
 	}
 
 	/**
@@ -1125,11 +1136,17 @@ export class SessionManager {
 	 * 已有 owner 时拒绝第二宿主，不能留下 idle 却没有租约的存活会话。
 	 */
 	acquireRuntimeOwnership(): void {
-		this.#claimSession();
-		if (this.#sessionClaim && !this.#sessionClaim.release) {
-			throw new Error(`Cannot host session "${this.#sessionFile}": another live omp process owns it.`);
-		}
+		const wasRuntimeOwner = this.#runtimeOwnership;
 		this.#runtimeOwnership = true;
+		try {
+			this.#claimSession();
+			if (this.#sessionClaim && !this.#sessionClaim.release) {
+				throw new Error(`Cannot host session "${this.#sessionFile}": another live omp owner holds it.`);
+			}
+		} catch (error) {
+			this.#runtimeOwnership = wasRuntimeOwner;
+			throw error;
+		}
 	}
 
 	/**
@@ -1156,12 +1173,15 @@ export class SessionManager {
 			const release =
 				retained?.sessionId === sessionId && retained.release
 					? retained.release
-					: this.#storage.claimSession(sessionId, sessionFile);
+					: this.#storage.claimSession(sessionId, sessionFile, this);
 			if (!release) {
 				throw new Error(`Cannot host session "${sessionFile}": another live omp process owns it.`);
 			}
 			if (current !== retained) current?.release?.();
-			this.#sessionClaim = retained?.sessionId === sessionId && retained.release ? retained : { sessionId, release };
+			this.#sessionClaim =
+				retained?.sessionId === sessionId && retained.release
+					? retained
+					: { sessionId, release, runtimeOwnership: true };
 		} else {
 			if (current !== this.#retainedSessionClaim) current?.release?.();
 			this.#sessionClaim = undefined;
@@ -1179,6 +1199,9 @@ export class SessionManager {
 		if (this.#released || this.#sessionFileRelocating) return false;
 		this.#claimSession();
 		const claim = this.#sessionClaim;
+		if (this.#runtimeOwnership && claim && !claim.release) {
+			throw new Error(`Cannot host session "${this.#sessionFile}": another live omp owner holds it.`);
+		}
 		return claim !== undefined && claim.sessionId === this.#sessionId && claim.release === undefined;
 	}
 
@@ -2045,7 +2068,11 @@ export class SessionManager {
 		}
 	}
 
-	#resetToNewSession(options?: NewSessionOptions, forcedSessionFile?: string): string | undefined {
+	#resetToNewSession(
+		options?: NewSessionOptions,
+		forcedSessionFile?: string,
+		requestedSessionId?: string,
+	): string | undefined {
 		if (forcedSessionFile) assertOfflineSessionPath(forcedSessionFile, this.#storage);
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
@@ -2055,7 +2082,10 @@ export class SessionManager {
 			this.#sessionDir = resolveSessionDirectory(path.resolve(options.sessionDir), this.#storage);
 			this.#storage.ensureDirSync(this.#sessionDir);
 		}
-		const sessionId = mintSessionId();
+		if (requestedSessionId !== undefined && !/^[A-Za-z0-9_-]+$/.test(requestedSessionId)) {
+			throw new Error("Invalid requested session identity");
+		}
+		const sessionId = requestedSessionId ?? mintSessionId();
 		const timestamp = nowIso();
 		const sessionFile = this.#persist
 			? (forcedSessionFile ?? path.join(this.#sessionDir, `${fileSafeTimestamp(timestamp)}_${sessionId}.jsonl`))
@@ -2423,7 +2453,6 @@ export class SessionManager {
 			return;
 		}
 
-		const migrated = migrateToCurrentVersion(fileEntries);
 		await resolveBlobRefsInEntries(fileEntries, this.#blobs);
 		// loadEntriesFromFile guarantees entries[0] is a valid session header.
 		const header = fileEntries[0] as SessionHeader;
@@ -2431,6 +2460,7 @@ export class SessionManager {
 		const adoptHeaderCwd =
 			headerCwd && headerCwd !== path.resolve(this.#cwd) && (await directoryIsEnterable(headerCwd));
 		this.#transitionSessionClaim(header.id, resolvedSessionFile);
+		const migrated = migrateToCurrentVersion(fileEntries);
 		this.#sessionFile = resolvedSessionFile;
 		this.#rememberBreadcrumb(this.#cwd, resolvedSessionFile);
 
@@ -2963,64 +2993,76 @@ export class SessionManager {
 
 	/** Flush, then close the append writer. */
 	async close(): Promise<void> {
-		this.#runtimeOwnership = false;
-		if (!this.#persist) return;
-		// Closing gives up this process's ownership claim; a later write reclaims it.
-		const claim = this.#sessionClaim;
-		claim?.release?.();
-		if (claim) claim.release = undefined;
-		const retained = this.#retainedSessionClaim;
-		if (retained && retained !== claim) {
-			retained.release?.();
-			retained.release = undefined;
+		if (!this.#persist) {
+			this.#runtimeOwnership = false;
+			return;
 		}
-		this.#retainedSessionClaim = undefined;
-		// A prior `flushSync` can self-conflict with this manager's own
-		// unconfirmed deferred publish; drain despite the latch so that
-		// publish can still confirm before we give up on the transcript.
-		await this.#scheduleDiskWork(
-			async () => {
-				const hadWriter = this.#writer !== undefined;
-				await this.#closeWriterHandle();
-				if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
-					this.#fileIsCurrent = true;
-			},
-			{ ignorePriorError: true },
-		);
-		await this.#pendingArtifactCopy?.done;
-		await this.#dropIfEmptyAndNoDraft();
-		// Wait for any queued backing writes (IndexedSessionStorage per-path
-		// tail) to become durable so a graceful shutdown does not exit while
-		// a fire-and-forget publish is still on the wire.
-		await this.#scheduleDiskWork(
-			async () => {
-				await this.#storage.drain();
-			},
-			{ ignorePriorError: true },
-		);
-		if (
-			this.#diskFailure &&
-			this.#sessionFile &&
-			this.#storage.defersSyncPublish &&
-			!this.#entriesReleased &&
-			this.#shouldHaveSessionFile()
-		) {
-			// Deferred-publish only: a synchronous backend's drain() is a
-			// no-op, so any failure there is a genuine external conflict or a
-			// permanent write failure, not a self-race this retry can catch
-			// up on. seal() disabled the ordinary mid-life repair path, so
-			// close() issues the terminal write directly instead.
-			const operationError = this.#diskFailure;
-			const sessionFile = this.#sessionFile;
+		let terminalError: Error | undefined;
+		try {
+			// Drain even after a latched error: deferred publishes may still
+			// confirm, and no new owner may overlap the terminal writer.
 			await this.#scheduleDiskWork(
 				async () => {
-					await this.#publishAuthoritativeBody(sessionFile, operationError);
-					this.#clearDiskError();
+					const hadWriter = this.#writer !== undefined;
+					await this.#closeWriterHandle();
+					if (hadWriter || (this.#sessionFile && this.#storage.existsSync(this.#sessionFile)))
+						this.#fileIsCurrent = true;
 				},
-				{ ignorePriorError: true },
-			).catch(() => undefined);
+				{ ignorePriorError: true, ignoreEpoch: true },
+			).catch(error => {
+				terminalError = toError(error);
+			});
+			await this.#pendingArtifactCopy?.done;
+			await this.#dropIfEmptyAndNoDraft();
+			await this.#scheduleDiskWork(
+				async () => {
+					await this.#storage.drain();
+				},
+				{ ignorePriorError: true, ignoreEpoch: true },
+			).catch(error => {
+				terminalError ??= toError(error);
+			});
+			if (
+				this.#diskFailure &&
+				this.#sessionFile &&
+				this.#storage.defersSyncPublish &&
+				!this.#entriesReleased &&
+				this.#shouldHaveSessionFile()
+			) {
+				// Only deferred-publish backends can repair an unconfirmed
+				// synchronous publish during terminal close.
+				const operationError = this.#diskFailure;
+				const sessionFile = this.#sessionFile;
+				await this.#scheduleDiskWork(
+					async () => {
+						await this.#publishAuthoritativeBody(sessionFile, operationError);
+						this.#clearDiskError();
+					},
+					{ ignorePriorError: true, ignoreEpoch: true },
+				).catch(() => undefined);
+			}
+			if (terminalError) throw terminalError;
+			if (this.#diskFailure) throw this.#diskFailure;
+		} finally {
+			// Only this manager's callbacks are released, after all terminal
+			// persistence work, including when close reports a real failure.
+			this.#runtimeOwnership = false;
+			const claim = this.#sessionClaim;
+			const retained = this.#retainedSessionClaim;
+			this.#retainedSessionClaim = undefined;
+			try {
+				claim?.release?.();
+			} finally {
+				if (claim) claim.release = undefined;
+				if (retained && retained !== claim) {
+					try {
+						retained.release?.();
+					} finally {
+						retained.release = undefined;
+					}
+				}
+			}
 		}
-		if (this.#diskFailure) throw this.#diskFailure;
 	}
 
 	/**
@@ -3636,19 +3678,34 @@ export class SessionManager {
 			fromExtension?: boolean;
 			preserveData?: Record<string, unknown>;
 			method?: CompactionMethod;
+			origin?: CompactionEntry["origin"];
+			operationId?: string;
 			providerReplayThroughEntryId?: string;
 			tokensAfter?: number;
+			/** Commit a prepared summary directly onto a replacement-input branch. */
+			rebaseParentId?: string | null;
 		} = {},
 	): string {
+		if (
+			options.rebaseParentId !== undefined &&
+			options.rebaseParentId !== null &&
+			!this.#index.has(options.rebaseParentId)
+		) {
+			throw new Error(`Entry ${options.rebaseParentId} not found`);
+		}
+		if (options.rebaseParentId !== undefined) this.#index.detachBranchView();
 		const entry: CompactionEntry<T> = {
 			type: "compaction",
 			...this.#freshEntryFields(),
+			...(options.rebaseParentId === undefined ? {} : { parentId: options.rebaseParentId }),
 			summary,
 			shortSummary,
 			firstKeptEntryId,
 			tokensBefore,
 			tokensAfter: options.tokensAfter,
 			method: options.method,
+			origin: options.origin,
+			operationId: options.operationId,
 			providerReplayThroughEntryId: options.providerReplayThroughEntryId,
 			details: options.details,
 			fromExtension: options.fromExtension,
@@ -3918,6 +3975,18 @@ export class SessionManager {
 		this.#setLeaf(null);
 	}
 
+	/** 精确恢复已选分支；保留提交后的旁支记录，并让重载恢复同一 leaf。 */
+	async restoreLeaf(leafId: string | null): Promise<void> {
+		if (leafId !== null && !this.#index.has(leafId)) throw new Error(`Entry ${leafId} not found`);
+		this.#setLeaf(leafId);
+		const lastEntry = this.#entries.at(-1);
+		if (lastEntry) {
+			// 修复：仅移动内存 leaf 会在重载时误选最后写入的压缩旁支。
+			lastEntry.activeLeafId = leafId;
+			await this.rewriteEntries();
+		}
+	}
+
 	/**
 	 * Durably move the active branch past a discarded entry.
 	 *
@@ -4080,10 +4149,15 @@ export class SessionManager {
 	 * @param cwd Working directory (stored in the session header)
 	 * @param sessionDir Optional session directory; defaults to the cwd-derived dir.
 	 */
-	static create(cwd: string, sessionDir?: string, storage: SessionStorage = new FileSessionStorage()): SessionManager {
+	static create(
+		cwd: string,
+		sessionDir?: string,
+		storage: SessionStorage = new FileSessionStorage(),
+		options?: { sessionId?: string },
+	): SessionManager {
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
-		manager.#resetToNewSession();
+		manager.#resetToNewSession(undefined, undefined, options?.sessionId);
 		return manager;
 	}
 
@@ -4136,6 +4210,8 @@ export class SessionManager {
 			resetInheritedCost?: boolean;
 			repairInterruptedTail?: boolean;
 			seance?: boolean;
+			/** Copy only the ancestry ending at this stable journal entry. */
+			entryId?: string;
 		},
 	): Promise<SessionManager> {
 		assertOfflineSessionPath(sourcePath, storage);
@@ -4159,6 +4235,20 @@ export class SessionManager {
 
 		const history = sourceEntries.filter(entry => entry.type !== "session") as SessionEntry[];
 		normalizeLoadedUsage(history);
+		if (options?.entryId !== undefined) {
+			const byId = new Map(history.map(entry => [entry.id, entry]));
+			const branch: SessionEntry[] = [];
+			let entry = byId.get(options.entryId);
+			if (!entry) throw new Error(`Fork target entry not found: ${options.entryId}`);
+			const visited = new Set<string>();
+			while (entry) {
+				if (visited.has(entry.id)) throw new Error("Cycle in fork source history");
+				visited.add(entry.id);
+				branch.push(entry);
+				entry = entry.parentId === null ? undefined : byId.get(entry.parentId);
+			}
+			history.splice(0, history.length, ...branch.reverse());
+		}
 		if (options?.resetInheritedCost) SessionManager.#resetInheritedUsageCost(history);
 		manager.#resetToNewSession(
 			{
@@ -4283,7 +4373,13 @@ export class SessionManager {
 		filePath: string,
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
-		options?: { initialCwd?: string; parentSession?: string; suppressBreadcrumb?: boolean; throwIfMissing?: boolean },
+		options?: {
+			initialCwd?: string;
+			parentSession?: string;
+			suppressBreadcrumb?: boolean;
+			throwIfMissing?: boolean;
+			runtimeOwnership?: boolean;
+		},
 	): Promise<SessionManager> {
 		assertOfflineSessionPath(filePath, storage);
 		const probed = await loadSessionFile(filePath, storage, { throwIfMissing: options?.throwIfMissing });
@@ -4304,6 +4400,7 @@ export class SessionManager {
 				: path.dirname(path.resolve(filePath)));
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
+		manager.#runtimeOwnership = options?.runtimeOwnership === true;
 		// Freshness gate for fail-closed callers (revive): the cwd probe above
 		// yields, so re-read after it and adopt only the fresh snapshot. A
 		// transcript deleted, truncated, or replaced mid-probe then fails
@@ -4312,10 +4409,15 @@ export class SessionManager {
 		const loaded = options?.throwIfMissing
 			? await loadSessionFile(filePath, storage, { throwIfMissing: true })
 			: probed;
-		await manager.#setSessionFile(filePath, loaded, {
-			throwIfMissing: options?.throwIfMissing,
-			newSession: { parentSession: options?.parentSession },
-		});
+		try {
+			await manager.#setSessionFile(filePath, loaded, {
+				throwIfMissing: options?.throwIfMissing,
+				newSession: { parentSession: options?.parentSession },
+			});
+		} catch (error) {
+			await manager.close().catch(() => undefined);
+			throw error;
+		}
 		return manager;
 	}
 

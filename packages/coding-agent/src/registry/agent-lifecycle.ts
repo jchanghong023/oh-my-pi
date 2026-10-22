@@ -112,8 +112,18 @@ interface ReopeningAgent {
 
 export class AgentLifecycleManager {
 	static #global: AgentLifecycleManager | undefined;
+	static readonly #scoped = new WeakMap<AgentRegistry, AgentLifecycleManager>();
 
 	static global(): AgentLifecycleManager {
+		const scopedRegistry = AgentRegistry.scoped();
+		if (scopedRegistry) {
+			let manager = AgentLifecycleManager.#scoped.get(scopedRegistry);
+			if (!manager) {
+				manager = new AgentLifecycleManager(scopedRegistry);
+				AgentLifecycleManager.#scoped.set(scopedRegistry, manager);
+			}
+			return manager;
+		}
 		const current = AgentLifecycleManager.#global;
 		if (current) {
 			// The manager captures its registry at construction and subscribes to

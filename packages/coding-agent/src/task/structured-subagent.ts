@@ -596,6 +596,8 @@ function buildExecutorOptions(
 		cwd: session.cwd,
 		additionalDirectories: session.additionalDirectories,
 		getApiKey: session.getApiKey,
+		createInteractionUI: session.createInteractionUI,
+		interactionParentSessionId: session.getSessionId?.() ?? undefined,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,
 		task: renderSubagentPrompt(request.assignment),

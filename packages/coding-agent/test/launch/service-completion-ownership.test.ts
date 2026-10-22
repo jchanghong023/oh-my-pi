@@ -301,7 +301,7 @@ describe("session-owned supervised services", () => {
 		const session: ToolSession = {
 			cwd: projectDir,
 			hasUI: false,
-			settings: Settings.isolated(),
+			settings: serviceSettings(),
 			getSessionFile: () => sessionFile,
 			getSessionSpawns: () => "*",
 			getAgentId: () => "Main",
@@ -310,7 +310,8 @@ describe("session-owned supervised services", () => {
 		try {
 			vi.spyOn(brokerClients, "daemonClientForProject").mockResolvedValue(client);
 			const result = await new BashTool(session).execute("svc-env", {
-				command: `echo "env=$PI_SESSION_ID|$PI_SESSION_FILE"; read answer`,
+				command:
+					"console.log(`env=${process.env.PI_SESSION_ID}|${process.env.PI_SESSION_FILE}`); await Bun.stdin.stream().getReader().read();",
 				name: "env-service",
 				pty: false,
 				ready: { log: `env=session-svc\\|${sessionFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, timeout: 5 },

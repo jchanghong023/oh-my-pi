@@ -41,7 +41,7 @@ export type { ToolApproval, ToolApprovalDecision, ToolTier } from "@oh-my-pi/pi-
 export type ApprovalPolicy = "allow" | "deny" | "prompt";
 
 /** Every approval mode: the type below and `isApprovalMode` read from one list. */
-const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "yolo"] as const;
+const APPROVAL_MODES = ["always-ask", "always-ask-cached", "write", "yolo", "guarded"] as const;
 export type ApprovalMode = (typeof APPROVAL_MODES)[number];
 
 /** The slice of `AgentToolContext` that approval resolution actually reads. */
@@ -152,6 +152,7 @@ const APPROVAL_MODE_MAX_TIER: Record<ApprovalMode, ToolTier> = {
 	"always-ask-cached": "read",
 	write: "write",
 	yolo: "exec",
+	guarded: "exec",
 };
 
 /** Cache targets a tool reports for this call, blanks dropped; empty when the tool declares none. */
@@ -329,6 +330,8 @@ function modeApprovesTier(mode: ApprovalMode, tier: ToolTier): boolean {
  *
  * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
  * settings remain authoritative.
+ * Guarded approves the same tiers but keeps tool-owned critical overrides
+ * on the ordinary, non-cacheable prompt path.
  */
 export function resolveApproval(
 	tool: ApprovalSubject,

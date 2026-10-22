@@ -261,7 +261,7 @@ describe("AgentSession advisor context maintenance", () => {
 			contextWindow: CONTEXT_WINDOW + 1,
 		});
 		const { advisor, advisorMock, modelRegistry } = createHarness(`${promotion.provider}/${promotion.id}`, true);
-		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisor.state.model, promotion]);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisorMock, promotion]);
 		const credentialStarted = Promise.withResolvers<void>();
 		const releaseCredential = Promise.withResolvers<void>();
 		const credentialReturned = Promise.withResolvers<void>();
@@ -287,7 +287,7 @@ describe("AgentSession advisor context maintenance", () => {
 		await credentialReturned.promise;
 		await prompt;
 		expect(credentialSignal?.aborted).toBe(true);
-		expect(session.getAdvisorAgent()?.state.model.id).toBe(advisorMock.id);
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe(advisorMock.id);
 	});
 
 	it("includes advisor system prompt and tool schemas in the local maintenance floor", async () => {
@@ -325,7 +325,7 @@ describe("AgentSession advisor context maintenance", () => {
 			`${promotion.provider}/${promotion.id}`,
 			true,
 		);
-		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisor.state.model, promotion]);
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([advisorMock, promotion]);
 		vi.spyOn(modelRegistry, "getApiKey").mockResolvedValue("test-key");
 		const seed: AgentMessage = { role: "user", content: "stored advisor message", timestamp: 1 };
 		advisor.state.messages.push(seed);
@@ -337,7 +337,7 @@ describe("AgentSession advisor context maintenance", () => {
 
 		await session.prompt("update after promotion");
 
-		expect(advisor.state.model.id).toBe(promotion.id);
+		expect(advisor.state.model?.id).toBe(promotion.id);
 		expect(advisorMock.calls).toHaveLength(1);
 		expect(JSON.stringify(advisorMock.calls[0].context.messages)).toContain("stored advisor message");
 	});
@@ -510,7 +510,9 @@ describe("AgentSession advisor context maintenance", () => {
 				},
 				compactionModel: `${writer.provider}/${writer.id}`,
 			});
-			vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue([advisor.state.model, writer]);
+			const reader = advisor.state.model;
+			if (!reader) throw new Error("Expected initialized advisor model");
+			vi.spyOn(session.modelRegistry, "getAvailable").mockReturnValue([reader, writer]);
 			cfgCompactionKeepRecentTokens.set(settings, 1);
 			const retained = advisor.state.messages.at(-1);
 			if (retained?.role !== "assistant") throw new Error("Expected retained advisor output");
@@ -621,7 +623,7 @@ describe("AgentSession advisor context maintenance", () => {
 			expect(wire).toContain("portable archived decision");
 			expect(wire.match(/retained-readable-tail/g)).toHaveLength(1);
 			expect(JSON.stringify(summarizer.calls[0].context.messages)).toContain("archived readable decision");
-			expect(advisor.state.model.id).toBe(active.id);
+			expect(advisor.state.model?.id).toBe(active.id);
 		},
 	);
 
@@ -659,7 +661,7 @@ describe("AgentSession advisor context maintenance", () => {
 
 		await session.prompt("promote and compact the advisor");
 
-		expect(advisor.state.model.id).toBe(promoted.id);
+		expect(advisor.state.model?.id).toBe(promoted.id);
 		const wire = JSON.stringify(convertAnthropicMessages(advisorMock.calls[0].context.messages, promoted, false));
 		expect(wire).toContain("portable promoted-model summary");
 		expect(wire.match(/post-promotion-retained-tail/g)).toHaveLength(1);
@@ -699,7 +701,7 @@ describe("AgentSession advisor context maintenance", () => {
 
 			await session.prompt("review after native context promotion");
 
-			expect(advisor.state.model.id).toBe(compatible ? target.id : active.id);
+			expect(advisor.state.model?.id).toBe(compatible ? target.id : active.id);
 			const wire = JSON.stringify(
 				buildParams(
 					advisor.state.model as Model<"openai-responses">,

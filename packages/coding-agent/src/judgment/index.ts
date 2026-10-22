@@ -54,8 +54,14 @@ import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { normalizeModelContextImages } from "../utils/image-loading";
 import { type FittedImage, fitImage } from "../utils/image-resize";
 import type { ModelRegistry } from "../config/model-registry";
-import { formatModelStringWithRouting, resolveRoleChain, type RoleChainCandidate } from "../config/model-resolver";
+import {
+	formatModelStringWithRouting,
+	filterAvailableModelsByEnabledPatterns,
+	resolveRoleChain,
+	type RoleChainCandidate,
+} from "../config/model-resolver";
 import { roleCandidatePool } from "../config/model-roles";
+import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings } from "../config/settings";
 import type { SessionManager } from "../session/session-manager";
 import { getTinyLocalModelSpec } from "../tiny/models";
@@ -186,7 +192,7 @@ function cachedJudgeRoleChain(
 	if (cached && cached.settings === settings && cached.revision === revision && now < cached.expiresAt) {
 		return cached;
 	}
-	const roleChain = resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry));
+	const roleChain = resolveRoleChain("judge", settings, scopedJudgeCandidatePool(settings, registry));
 	const entry = {
 		settings,
 		revision,
@@ -253,6 +259,21 @@ function textJudgeRoleChain(chain: RoleChainCandidate[]): RoleChainCandidate[] {
 	const firstNative = chain.findIndex(candidate => kindOf(candidate) === "native");
 	if (firstNative < 0) return chain;
 	return chain.filter((candidate, index) => index < firstNative || kindOf(candidate) === "native");
+}
+
+/**
+ * 会话隔离缺陷(来源: omp-child-approval-isolation-defect,OMP 联调阻塞第 3 节):
+ * 子会话的自动 thinking judge 曾按全局 judge 默认链外呼会话/项目未配置的远端模型
+ * (opencode-zen/claude-haiku-5-5,401 后才回本地)。judge 候选池必须先经过会话/项目
+ * `enabledModels` 作用域过滤(与 ModelControls.getAvailableModels、team config 同一
+ * 语义):作用域外的远端不得进入候选链,主候选与 fallback 均不得外呼。未配置
+ * enabledModels 时保持原池不变。会话自身模型(withSessionFallback 追加)仍可用。
+ */
+function scopedJudgeCandidatePool(settings: Settings, registry: ModelRegistry): Model[] {
+	const pool = roleCandidatePool("judge", settings, registry);
+	const patterns = cfgEnabledModels.get(settings);
+	if (!patterns || patterns.length === 0) return pool;
+	return filterAvailableModelsByEnabledPatterns(pool, patterns, settings);
 }
 
 /**
@@ -336,7 +357,7 @@ function unfitBox(box: BoxEdges, content: BoxEdges): BoxEdges {
 }
 
 function judgeRoleChain(settings: Settings, registry: ModelRegistry): RoleChainCandidate[] {
-	return textJudgeRoleChain(resolveRoleChain("judge", settings, roleCandidatePool("judge", settings, registry)));
+	return textJudgeRoleChain(resolveRoleChain("judge", settings, scopedJudgeCandidatePool(settings, registry)));
 }
 
 /**

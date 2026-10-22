@@ -20,39 +20,39 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 
 ### 语义与字段规格
 
-| 权威内容 | ZCode 仓内的直接路径 |
-| --- | --- |
-| 总览、传输拓扑、职责和兼容面 | `F:/code2026/forkZcode/docs/zcode-protocol.md` |
-| 当前 conversation 产品语义 | `F:/code2026/forkZcode/docs/conversation-product-protocol.md` |
-| V4 字段级主规格 | `F:/code2026/forkZcode/docs/v4-refactor/10-protocol-spec.md` |
-| command、ACK、inbox 与幂等裁决 | `F:/code2026/forkZcode/docs/v4-refactor/03-commands.md` |
-| topic、seq、snapshot 和恢复 | `F:/code2026/forkZcode/docs/v4-refactor/04-sync-and-recovery.md` |
-| stdio／wire 分帧、大小限制与背压 | `F:/code2026/forkZcode/docs/v4-refactor/05-transport-and-backpressure.md` |
-| fault／reason code | `F:/code2026/forkZcode/docs/v4-refactor/12-fault-catalog.md` |
-| sessions-index 语义及与组织元数据的边界 | `F:/code2026/forkZcode/docs/v4-refactor/14-sessions-index.md` |
+| 权威内容                                | ZCode 仓内的直接路径                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------- |
+| 总览、传输拓扑、职责和兼容面            | `F:/code2026/forkZcode/docs/zcode-protocol.md`                            |
+| 当前 conversation 产品语义              | `F:/code2026/forkZcode/docs/conversation-product-protocol.md`             |
+| V4 字段级主规格                         | `F:/code2026/forkZcode/docs/v4-refactor/10-protocol-spec.md`              |
+| command、ACK、inbox 与幂等裁决          | `F:/code2026/forkZcode/docs/v4-refactor/03-commands.md`                   |
+| topic、seq、snapshot 和恢复             | `F:/code2026/forkZcode/docs/v4-refactor/04-sync-and-recovery.md`          |
+| stdio／wire 分帧、大小限制与背压        | `F:/code2026/forkZcode/docs/v4-refactor/05-transport-and-backpressure.md` |
+| fault／reason code                      | `F:/code2026/forkZcode/docs/v4-refactor/12-fault-catalog.md`              |
+| sessions-index 语义及与组织元数据的边界 | `F:/code2026/forkZcode/docs/v4-refactor/14-sessions-index.md`             |
 
 ### 可执行合同与真实消费边界
 
-| 合同或参考实现 | ZCode 仓内的直接路径 |
-| --- | --- |
-| V4 全部公开 schema、类型、限制和纯函数 | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/` |
-| 方法、通知、握手、订阅及查询全集：`V4_METHODS`、`V4_NOTIFICATIONS` | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/transport.ts` |
-| 命令 payload、ACK、CAS、查询合同：`commandPayloadSchemas` | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/command.ts` |
-| wire 版本、row target、profile 与限额；snapshot／row／delta 字段另见同目录对应文件 | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/core.ts` |
-| 外层信封、legacy 方法／通知、capabilities 与启动存储控制帧 | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol/index.ts` |
-| Host 请求关联、反向请求、错误、超时和启动门 | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeProtocolClient.ts` |
-| Host stdio 编解码、LF 分帧、非法输出与 EOF | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeStdioTransport.ts` |
-| 正常启动状态的 attempt／sequence／ready／failed 门禁 | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeStorageStartupGate.ts` |
-| Host 实际调用：配置同步、会话列表／读取／恢复及 V4 转发 | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentService.ts` |
-| attachment 的 hello／clientHello、可信连接与 relay 路由 | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentConnectionScope.ts` |
-| 环境变量选择、参数追加与进程生命周期 | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts` |
-| 桌面发行环境注入：`buildHostProcessEnv()` | `F:/code2026/forkZcode/packages/desktop/src/main/desktopRuntimeEnv.ts` |
-| 桌面 Host／Agent 存储准备及成功／失败判定 | `F:/code2026/forkZcode/packages/desktop/src/host/database-startup/storagePreparationProcesses.ts` |
-| 原 app-server 入口装配、存储准备与启动顺序参考 | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol-entrypoint.ts` |
-| 原 stdio server 的双向分发与传输参考 | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts`、`F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/transport.ts` |
-| Agent 存储准备的路径确认、初始化、关闭与结果顺序 | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/storage-startup.ts` |
-| UI 实际调用、帧装配和 workspace 定位 | `F:/code2026/forkZcode/packages/ui/src/v4/agentConversationTransport.ts` |
-| UI attachment 业务握手及 capability 消费 | `F:/code2026/forkZcode/packages/ui/src/v4/agentV4ConnectionHandshake.ts` |
+| 合同或参考实现                                                                     | ZCode 仓内的直接路径                                                                                                                                                              |
+| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| V4 全部公开 schema、类型、限制和纯函数                                             | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/`                                                                                                                    |
+| 方法、通知、握手、订阅及查询全集：`V4_METHODS`、`V4_NOTIFICATIONS`                 | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/transport.ts`                                                                                                        |
+| 命令 payload、ACK、CAS、查询合同：`commandPayloadSchemas`                          | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/command.ts`                                                                                                          |
+| wire 版本、row target、profile 与限额；snapshot／row／delta 字段另见同目录对应文件 | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol-v4/core.ts`                                                                                                             |
+| 外层信封、legacy 方法／通知、capabilities 与启动存储控制帧                         | `F:/code2026/forkZcode/packages/shared/src/zcode-protocol/index.ts`                                                                                                               |
+| Host 请求关联、反向请求、错误、超时和启动门                                        | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeProtocolClient.ts`                                                                                                  |
+| Host stdio 编解码、LF 分帧、非法输出与 EOF                                         | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeStdioTransport.ts`                                                                                                  |
+| 正常启动状态的 attempt／sequence／ready／failed 门禁                               | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeStorageStartupGate.ts`                                                                                              |
+| Host 实际调用：配置同步、会话列表／读取／恢复及 V4 转发                            | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentService.ts`                                                                                                    |
+| attachment 的 hello／clientHello、可信连接与 relay 路由                            | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentConnectionScope.ts`                                                                                            |
+| 环境变量选择、参数追加与进程生命周期                                               | `F:/code2026/forkZcode/packages/services/src/zcode-agent/zcodeAgentProcessManager.ts`                                                                                             |
+| 桌面发行环境注入：`buildHostProcessEnv()`                                          | `F:/code2026/forkZcode/packages/desktop/src/main/desktopRuntimeEnv.ts`                                                                                                            |
+| 桌面 Host／Agent 存储准备及成功／失败判定                                          | `F:/code2026/forkZcode/packages/desktop/src/host/database-startup/storagePreparationProcesses.ts`                                                                                 |
+| 原 app-server 入口装配、存储准备与启动顺序参考                                     | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol-entrypoint.ts`                                                                                        |
+| 原 stdio server 的双向分发与传输参考                                               | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/server.ts`、`F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/transport.ts` |
+| Agent 存储准备的路径确认、初始化、关闭与结果顺序                                   | `F:/code2026/forkZcode/apps/zcode-cli/packages/bootstrap/src/zcode-protocol/storage-startup.ts`                                                                                   |
+| UI 实际调用、帧装配和 workspace 定位                                               | `F:/code2026/forkZcode/packages/ui/src/v4/agentConversationTransport.ts`                                                                                                          |
+| UI attachment 业务握手及 capability 消费                                           | `F:/code2026/forkZcode/packages/ui/src/v4/agentV4ConnectionHandshake.ts`                                                                                                          |
 
 ### 权威优先级与兼容规则
 
@@ -81,6 +81,38 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 - 适配层可直接调用现有 `createAgentSession`、`AgentSession`、会话存储及配置／命令等内部业务 API，无需为形式包装内部 RPC、回环连接或通用引擎接口。当前业务能力有缺口时，在原状态所有者处最小补齐，不复制业务实现。
 - 直接调用不等于任意写私有字段：不能绕过业务入口改队列、运行态或 journal，不能修改原始消息对象来迁就 ZCode schema。协议层只做协议校验、上下文路由、命令／结果映射和投影，业务状态仍由原 OMP 服务拥有。
 
+- Stop held 与自动消费偏好的唯一所有者为原生 AgentSession／Agent：`getQueueAutoDrain()` 同时反映 `queuedMessagesHeld` 和 `followUpAutoDrain`。Stop 先 hold 原队列，再终结当前执行；队列文本与身份未变化时，原生 `queue_update` 可以合并而不发事件。投影必须在既有运行事实刷新及终态 settle 发布真实 `queue.autoDrain`，不能只等待条目事件；同批发布 idle 且非空 held 队列的 `inputRouting=choice`，运行中仍为 `enqueue`。Host／UI 仅消费事实，不另存暂停权威或将 choice 改为 startNow。
+- UI 对非空且 `autoDrain=false` 的队列显示暂停提示及继续操作；继续命令交给同一原生 owner 解除 hold／武装消费，投影随后发布 `autoDrain=true`，idle 路由回 `startNow`，running 保持 `enqueue` 且不抢占当前执行。keep 保留 held 队列，clear 清空旧队列；两者不隐式恢复自动消费。验收复用原 B02／B04／B06／B14／B15 E2E，投影回归须覆盖同 items 的 hold／resume、实际 consumer reducer、普通队列条目的身份及 Highspeed 卡保留。
+- held 处置仍由原生队列 owner 在新输入的同步 admission 边界执行：先校验 `expectedHeldQueueItemIds` 的完整有序 CAS（keep 可省略，传入则必须校验；clear 必填），再保留／清除旧队列，最后写新输入 admission 并交给 Agent 生成 user row。该边界已经持有本次 prompt 的准备态，不等同已有响应正在流式执行；不得因此拒绝自己的 admission。CAS 或处置失败须在 accepted receipt／ACK 之前拒绝，旧队列和新输入正文／执行材料不得被吞掉，Host 据失败回执恢复输入。冻结模型执行继续由 session manager 单一 lease owner 管理，真实 completion 释放租约，busy-only 材料校验不放宽，不以定时重试、丢弃材料或提前删租约恢复。
+
+### Highspeed 输入事实与恢复
+
+- 卡快照的唯一事实所有者为本会话 OMP native journal；`sendText`（含排队）、`editUserQuery`、`sendQueuedNow` 收到的 `highspeedMeta` 仅在对应输入实际 admission 后写入既有 `session_input` custom entry，以 `inputId`／`sourceCommand` 归属。拒绝、丢弃及其他会话不得写入卡事实；凭据与 header 不进入该事实。
+- 队列提升、编辑、fork 继承与冷恢复只读取所在 native branch 的事实，不能按模型名推断卡或给普通历史输入补卡；扁平 queueItem.highspeed 与 user row.highspeed 必须一致。
+- Stop 保留原生队列后，idle 会话的显式 `sendQueuedNow`（含无 execution）必须通过原生 `takeQueuedInput` 仅提取所选输入，并沿既有 prompt admission 真正提交；不能只改为 steering 后返回成功，也不能打开全局 autoDrain／解除 Stop held 来批量释放其他输入。busy 且无 execution 仍沿原生 steer 规则，携带 execution 仍受现有 idle-only guard 与模型材料校验约束。
+- 显式提升继续使用原 `queueItemId` 作为 `inputId`，优先保留原排队输入的 `sourceCommand`；新提升命令的 commandId 只标识控制 ACK，不抢占原输入归属。缺省 `highspeedMeta` 从该 inputId 所在 native branch 的原卡事实继承；只有真实 admission 后才能 ACK 成功或发布 accepted／promoted。admission 前失败须由原生队列 owner 恢复所选输入及原位置，不伪造提升事实。
+- running 中显式 `sendQueuedNow` 提升 Goal 时，必须在同一命令 owner 内先将所选原输入交给既有 Goal slash 控制器，再沿原生 steering 消费其结果；不得等待当前 HTTP stream 结束才设置目标，也不得把 `/goal` 原文当模型正文。普通排队 Goal 仍等原生 dequeue admission 才应用；提升按原 inputId 去重，保留 sourceCommand，未选队列与 Stop held、revision CAS、busy execution 拒绝边界均不改变。不支持实时 steer 的 provider 在当前响应结束前仍真实保留 pending 输入，不提前移除队列或伪造 promoted，也不为达成 UI 超时断言而中断当前执行。真实 app-server 回归须在 HTTP stream 未结束时观察目标 active／verifying 与真实 pending 队列，释放响应后在原生 boundary 核对所选输入精确消费、journal 原归属、模型正文无 `/goal` 原文及未选输入保留。
+- `setHighspeedMetrics` 使用既有 row target 解析到本会话已持久化用户输入，仅对已存在卡快照追加 native annotation；只写调用方提供且经 schema 校验的真实指标，不补造耗时、成功或 TPS。
+- 验收必须覆盖迟到卡用于下一轮的 HS-E2E-02 标签、普通轮不误标、同一已接受 inputId 的 snapshot／刷新／冷恢复一致以及跨会话隔离。无 execution 的 busy queue 必须保留卡；现有 idle-only execution guard 不因卡投影而绕过，busy 且携带 execution 时明确拒绝且不写卡，不得静默丢弃或改写原执行材料。原 OMP TUI／独立 RPC 不改变；未执行验收不能称为通过。
+- Stop 后显式提升的验收须从真实公开 app-server 入口，在不改原输入与断言的条件下观察 promoted userInput；核对原 queueItemId／command 归属、卡快照与刷新恢复一致，未选输入仍 held；覆盖 admission 前失败恢复、无 execution 的 idle 提升、GUI 携带 `modelExecution` 的提升及 busy steer／execution 拒绝边界。队列断言必须消费本次订阅／恢复的完整组装快照，不能误取历史 initial snapshot；revision CAS 拒绝与原生 admission 失败须依据真实 ACK 区分，不以放宽 CAS 或伪造 accepted 掩盖。
+
+```mermaid
+sequenceDiagram
+    participant U as ZCode UI
+    participant B as 协议桥接层
+    participant N as OMP native session / journal
+    U->>B: 输入(inputId, highspeedMeta)
+    B->>B: 校验协议与会话归属
+    B->>N: 沿既有入口 admission
+    alt 输入被接受
+        N->>N: session_input 保存该 inputId 的卡事实
+        N-->>B: 权威输入与分支事实
+        B-->>U: 刷新 queue / user row 投影与 ACK
+    else 输入被拒绝
+        B-->>U: 显式失败，不写卡事实
+    end
+```
+
 ### 桌面呈现合同
 
 - `--surface desktop` 选择适配器的桌面呈现上下文，并作用于其管理的全部会话：正文、工具过程、命令输出与通知映射为 ZCode 结构化帧；提问、确认和计划审批沿已有交互往返，不能调用终端选择器或等待用户直接操作进程 stdin。
@@ -105,6 +137,8 @@ flowchart TD
 
 - 每个 window-scoped Host 的每个 workspaceKey 最多一个 app-server 进程，其内同进程托管多个主会话 AgentSession；协议层与会话运行时直接调用，不启动每会话 RPC 宿主，也不以子进程隔离代替本节多会话上下文隔离。两个窗口可各有 app-server，但持久会话写租约仍跨进程约束，不能同时写同一 journal。
 - OMP 会话运行时是正文 journal、上下文、输入／执行队列、模型执行、工具、Goal、loop 和子代理工作的唯一权威。适配层只拥有协议会话映射、命令裁决及结果账本、投影与订阅恢复；账本不能成为第二条待执行队列。
+- 上下文用量投影直接读取目标 `AgentSession.getContextUsage()` 的当前事实，并随会话运行事实刷新持续发布；不能只在首次恢复或切换模型时取一次值，也不能以累计 usage 或适配器自行估算替代。终态及等待后台工作的 settle 发布 idle／held 路由时，同批包含该原生 owner 的当前上下文水位；不得先发布携带旧水位的 idle，再让同次收口的延迟用量刷新无谓推进 Resume 所依据的 revision。实际后续事实变化仍正常发布并参与 CAS，不忽略、重写或重试过期命令。压缩后水位仍由同一会话状态所有者计算。
+- Provider 显式报告上下文耗尽（如 Anthropic `model_context_window_exceeded`）时，OMP 必须保留该终止语义，优先于低用量／输出 `length` 启发式进入既有上下文恢复链；无可用扩窗目标时先实际压缩历史再重试原输入，不伪造 usage，不注入输出上限纠偏或额外 Continue。普通 `max_tokens` 仍按输出截断处理，保留已有部分正文与无正文时的输出恢复策略；协议层和 ZCode 不另建恢复循环。
 - Window Host 只保留可信连接路由、attachment、进程监督及项目／任务组织元数据；UI 只保留草稿和展示状态。Main、Host 和 relay 不接管 conversation 的业务状态，手机不另起 Agent。
 - 身份 key 使用 `workspaceIdentity?.trim() || workspacePath`；`workspacePath` 用于文件和命令执行，远端保留 `remoteSessionId`。`desktop-continuous` 与 `web-remote-replayable` 共享 OMP 事实，但拥有各自投递和恢复边界。
 - 命令经过校验／幂等裁决并由 OMP 实际接纳后，才能按合同返回 accepted；随后由 OMP 事件生成权威投影。停止、切换、进程重启和会话换代必须隔离迟到结果。
@@ -125,7 +159,34 @@ flowchart TD
 - OMP 会话记录及存储 API 是会话身份、标题、父链、正文和历史的事实源；`session/list`、`session/read`、`session/messages` 从该来源生成兼容视图，不能扫描 Host tasks-index 冒充 OMP 历史。
 - Host `tasks-index.sqlite` 是持久项目／任务行集合、归属、pin／archive／group／unread 等组织态的事实源。app-server 不写第二份组织库，不把 OMP 会话目录视为全部 UI 列表 membership，也不反向用 tasks-index 重建正文或新建空会话。
 - app-server 从 OMP 会话事实派生 `sessions-index/<workspaceId>` 活性与详情摘要；它是可重建的 projection，不是第三份持久会话列表。客户端按既有合同，以 tasks-index 行集合为左表 join 可用摘要；摘要缺失不删除组织行，也不能把旧 running 摘要当作当前执行。
+- 当前原生执行 turn 在首个内容到达前及仅执行工具的阶段，`turnHeader` 必须保持 `running`，与同一会话的 control 执行事实一致；只有原生执行进入真实终态后才发布完成。完成时沿用原生时间事实发布 `endedAt`／`activeMs`，不伪造结束时间或有效工作时长，等待用户回答的时间不计入有效工作时长。
 - 冲突按字段归属处理，不整库互相覆盖：正文／历史取 OMP，组织态取 Host，实时活性取当前运行代际的 OMP 投影。只读列表／索引遵守 `existing-only`，不隐式启动会话、抢写租约或续跑 Goal；缺失／不可读历史如实报状态，不伪造空历史或自动删除 Host 行。
+
+### 后台 Bash 的冷子会话只读查询
+
+- 后台执行事实与输出仍由创建任务的原生 `AsyncJobManager` 持有；子代理共享其祖先的 manager。查询只访问现存执行所有者，不恢复会话、不抢 journal 写租约、不产生模型请求，也不为冷会话重建历史后台任务目录。
+- 请求的原始 `sessionId` 必须贯穿归属校验。子代理 runtime 已释放、或独立重开后使用新 manager 时，仍可按原生 registry 与持久子会话身份定位现存祖先持有的 Bash；不能仅按可重用的 `workId` 查遍其他 root，不能读取兄弟或其他工作区的任务。
+- 仅任务确实不在当前所有者时继续查找；`output` 与 `read_failed` 直接返回，不用其他任务的同名输出掩盖失败。没有现存匹配任务时返回 `unavailable`，不把启动 receipt 当作当前 running 事实，不重启旧进程。
+- 复用既有 8192 字节 UTF-8 安全尾窗与读取前状态截面；输出不进入 snapshot、事件日志或会话持久化。`desktop-continuous` 与 `web-remote-replayable` 共用该只读查询，均不新增队列或恢复事件。
+- 验收覆盖 live child、冷 child、已有但不持有旧任务的 child runtime、嵌套子代理、不同 root 的同名 workId、兄弟任务拒绝，以及任务结束／owner 关闭后的实际输出或明确不可用；查询前后不得新增执行或模型请求。
+
+```mermaid
+sequenceDiagram
+    participant C as 原始子会话查询
+    participant Q as 只读归属查询
+    participant O as 现存祖先 AsyncJobManager
+    C->>Q: sessionId + workId
+    Q->>Q: 校验原生子会话身份与 owner
+    Q->>O: 读取已存在的任务
+    O-->>C: 有界输出和实际状态 / 明确不可用
+```
+
+### 原生资源的普通目录消费
+
+- `plugins/list`、`plugins/overview`、`plugins/referenceCatalog`（含 category 入口）与 `skills/referenceCatalog` 从 OMP 当前 profile、请求 cwd 的原生发现／安装清单投影；保留原生插件 ID、有效启用态、来源、组件及不可用诊断，不把 ZCode 内置资源假定为已安装。npm `omp`／`pi` manifest、市场安装 manifest 与 portable Agent Plugins manifest 由原生所有者解析，适配层只映射公开字段。
+- 工作区目录读取使用只读 Settings，不创建 Agent、不打开会话历史写租约、不导入插件执行模块，也不触发模型、认证或市场刷新。`configScope` 限定实际安装来源；已有 session 的引用目录只读取 resident runtime 的资源快照，未知／冷 session 明确失败，不能激活或回落工作区目录。
+- Plugin 引用目录与模型 reminder 仅包含规范身份和实际可用组件名，不携带安装路径、环境、用户配置或 MCP 凭据。Skill 的资源路径仅用于公开 schema 约定的资源预览，不把任意诊断原文、配置内容或凭据加入目录。
+- Hook 目录是只读配置／可用性事实，不是执行或授权入口；信任决定仍须由原生策略所有者处理，不能由 UI 投影授信、自动执行或重放已跳过事件。原生没有等价声明／策略时必须明确说明不可用原因，不制造已信任状态或平行 trust store。新插件管理 UI 不在本次接入范围。
 
 ### 外部协议与启动初始化
 
@@ -136,6 +197,8 @@ flowchart TD
 - 取消外层请求等待不等于停止业务；需要停止时须直接调用目标会话的实际取消 API。单会话停止不能退出 app-server；stdin EOF、stdio 连接关闭或 owner 消失时须处置本进程托管的会话及自有工具／子代理资源，不得影响其他 workspace 或非本次拥有的进程。
 - `ZCODE_AGENT_SERVER_COMMAND` 只选择程序，不绕过准备；OMP 生产端按下节合同完成真实初始化，ZCode 的任务索引准备、外部进程 spawn、帧消费及监督按 OmpCode FORK-003 装配。不能把 Bun 二进制作为 Node Worker 脚本，也不能用空成功、静默跳过或放宽时限伪造 ready。
 - 配置源、role 默认值与当前会话选择按本文现有范围分别管理；适配 ZCode 配置输入时明确作用域和覆盖顺序，不维护第二套隐式双向同步的配置真值，也不依赖真实用户已有配置才能完成隔离启动验证。
+- app-server 的进程级网络配置在创建任何会话／Provider 前一次消费 Host 的 `ZCODE_HTTP_PROXY`、`ZCODE_NO_PROXY`、`ZCODE_AGENT_CA_CERT`（键名复用协议 vendor 的 `runtimeEnv` 定义），转接原生代理和额外 CA 机制，不建立每会话代理状态。非空 Host 代理适用于 HTTP／HTTPS，保留原生 per-request／per-provider 代理优先级与本地地址／NO_PROXY 绕过；连接失败直接报告，不重试直连或 Windows 系统代理。显式存在但为空的代理键表示直连默认值，不落回继承的标准代理或系统代理；Host 空设置目前不注入该键，完全没有 Host 显式网络配置时保持 OMP 原生行为。
+- Host CA 只接受可读取的现有证书文件，并由原生额外 CA 合并机制加入信任根；app-server 使用该配置时必须严格验证 TLS，不通过关闭证书验证接通代理。启动前已安装的全局系统代理 wrapper 不得覆盖随后消费的 Host 显式代理；该适配仅属于 app-server，不改变普通 TUI、独立 RPC 或原生 Provider 的传输优先级。验收从真实 app-server／Provider 请求进入本地捕获代理并返回正文，另验证不可连接时失败、不绕过，以及无 Host 配置时原生行为不变；环境键复制或回显不算网络边界验收。
 - 只有未知操作、本文明确排除的独立能力或上游明确限定为 TUI 的命令可以按合同返回不支持；本文约定的必需能力必须在同次交付中真实实现，不能通过隐藏 UI、关闭 capability 或返回 unsupported 缩减范围。实际能力展示必须与实现一致，不回 accepted 后空执行，不通过权限默认放行掩盖差异。
 - 本地和 SSH／WSL／Docker 执行端分别部署并选择同一兼容版本；本地环境变量不等于远端配置。OMP 启动、版本或初始化失败必须明确失败，不静默回退 ZCode 原 Agent 或本地运行时。
 
@@ -146,14 +209,14 @@ flowchart TD
 - **执行形态**：独立子进程运行 `omp app-server --stdio --prepare-storage --cwd <绝对路径>`，复用正常 app-server 已解析的同一产物、cwd、profile、配置覆盖和环境；不能用 Node Worker 加载 EXE。此入口只准备真实 OMP 存储，不创建聊天会话、不启动模型／工具／Goal，不迁移原 ZCode session 库，也不抢占其他运行会话的租约。
 - **真实资源边界**：先解析有效 OMP 数据根与本次需要准备的存储，私有准备通道报告实际存储路径（主存储文件或其有效数据根）；不能伪造一个无用途的 ZCode SQLite 文件。路径不进入业务 snapshot／遥测，公开状态中的 databaseId 为不透明资源身份，不含路径或凭据。
 
-| 顺序 | 生产端与对端行为 |
-| --- | --- |
-| 路径声明 | OMP 输出 `{method:"startup/storagePath",params:{path}}`，同次准备只声明一个已解析的资源路径；在 Host 确认观测边界前不修改该存储 |
-| 路径确认 | 等待 Host 的 `{method:"startup/storagePathReady",reuse?:boolean}`；`reuse` 在顶层，不放进 params |
+| 顺序       | 生产端与对端行为                                                                                                                                                                     |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 路径声明   | OMP 输出 `{method:"startup/storagePath",params:{path}}`，同次准备只声明一个已解析的资源路径；在 Host 确认观测边界前不修改该存储                                                      |
+| 路径确认   | 等待 Host 的 `{method:"startup/storagePathReady",reuse?:boolean}`；`reuse` 在顶层，不放进 params                                                                                     |
 | 准备与状态 | 未 reuse 时核验并初始化／迁移实际 OMP 存储，按 schema 发送 `startup/storageState`；同一 attemptId／databaseId 下 sequence 递增，failed 必须带真实 errorCode，不能伪造 migration 事实 |
-| 复用边界 | `reuse:true` 只接受 Host 对同一轮已成功准备的同一真实资源的确认，不写永久跳过标志，不把不同 profile／存储身份混为同一资源 |
-| 准备完成 | 必要操作确认成功并关闭准备资源后，才输出 `{method:"startup/storagePrepared",params:{}}`，随后正常结束；Host 可在接到该帧后关闭 stdin，成功仍要求退出码 0 且无失败 |
-| 失败与取消 | 非法／缺失确认、提前 EOF、时限、存储错误或取消均不发 prepared／ready；能发帧时输出合法 failed 状态，非零退出并清理自有资源，保留原始错误，不杀其他进程 |
+| 复用边界   | `reuse:true` 只接受 Host 对同一轮已成功准备的同一真实资源的确认，不写永久跳过标志，不把不同 profile／存储身份混为同一资源                                                            |
+| 准备完成   | 必要操作确认成功并关闭准备资源后，才输出 `{method:"startup/storagePrepared",params:{}}`，随后正常结束；Host 可在接到该帧后关闭 stdin，成功仍要求退出码 0 且无失败                    |
+| 失败与取消 | 非法／缺失确认、提前 EOF、时限、存储错误或取消均不发 prepared／ready；能发帧时输出合法 failed 状态，非零退出并清理自有资源，保留原始错误，不杀其他进程                               |
 
 - 没有待迁移项也须完成真实路径、可用性与必要资源检查后才能报告 prepared；无需打开的资源不为制造进度而打开，不以立即成功的 no-op 绕过准备。准备不执行后台预热、模型发现或额外迁移。
 - 正常 app-server 是另一个运行代次，按相同有效环境真实打开需要的运行存储，通过 `startup/storageState` 报告自身 checking／ready 或 failed；不能重放准备进程的 ready。必要初始化 ready 前不接受执行命令，模型／认证仍有独立就绪边界。
@@ -183,11 +246,34 @@ flowchart TD
 
 保留普通消息、流式回答、工具过程、停止、执行中插话和排队补充，以及创建、历史恢复、关闭、改名和删除会话。改名不得破坏无标题槽的旧格式；被任何运行时托管的会话（含同进程其他会话和其他 Host）均不得通过离线文件改写绕过所有权。活跃会话改名走目标会话 API，删除须先关闭目标运行时并释放租约，但不能因此退出整个 app-server 或关闭其他会话；失败以可辨识错误拒绝，不新增审批流程。
 
+命令回执扫描由会话管理器协调读取与删除的生命周期：删除等待此前已接纳的 journal 读取完成；扫描快照中已被本管理器成功删除的会话返回明确缺席，不得使其他会话的创建或查询失败。读取损坏／不可读的 journal 或删除失败仍须报错，不以重试或空历史掩盖。相同显式 ID 的创建与删除只允许单向等待，不能因互相等待而阻塞请求或关闭。
+
+```mermaid
+sequenceDiagram
+    participant L as Command ledger
+    participant S as Session manager
+    participant J as Owned journal
+    L->>S: 接纳只读扫描
+    S->>J: 读取
+    Note over S: 删除等待此前读取；后续扫描等待删除结果
+    J-->>L: 已接纳读取完成
+    S->>J: 关闭运行时并删除
+    S-->>L: 成功删除的旧快照项明确缺席
+    Note over S: 同 ID 重建等待既有删除；删除不等待该重建
+```
+
 恢复或切换到持久会话前先查本 app-server 的已托管实例，不能对同一 sessionId 重复创建运行时。首次写入前取得并持续持有同一所有权租约；其他进程已持有时明确拒绝接管，切换失败保留原会话及其所有权，关闭目标会话后释放。纯历史读取、导出和渲染不取得运行所有权。独立 RPC 的 `--no-session` 目录操作仍按当前 cwd/profile 的标准持久会话目录处理；app-server 存储操作始终绑定显式目标上下文。
 
 上述功能的具体行为，包括忙时限制、失败处理、停止后的内容保留和恢复语义，统一跟随上游 OMP，不维护 fork 独立规则。
 
 真实 `agent://` 消息的成功投递回执保留总线生成的消息 ID 与发送时间，每个广播收件人使用其实际消息身份；写工具原有结构化结果直接持久化这些字段，使接入方在冷恢复时可将发送与接收记录幂等关联。不新增通信日志或猜测处理回执，失败仍保留真实失败语义。
+
+### 既有界面的工作流与记忆消费
+
+- 替换后仍保留 ZCode 已保存工作流界面的文件目录、元数据编辑、移动、删除、实参校验、直接启动、运行历史、产物与从实际 run 保存能力。复用固定兼容提交的独立编译器、引擎与沙箱 runner，保留来源和依赖闭包，不实例化原 Agent runtime；actor 执行由同进程 OMP AgentSession 承担。
+- 已保存定义仍由 project/global 定义文件持有；run、actor、node、event 由独立的持久工作流 journal 持有，不把 Host tasks-index 当运行历史，不以内存仓储兜底。会话 journal 只记录真实启动及执行引用；活动 run 句柄仅属于创建它的 app-server，取消／EOF 必须关闭自有执行与沙箱。
+- Host 的会话创建期 Memory 偏好须落实到该会话的原生 OMP backend，活动会话不随设置开关热切换。消息 ACK 与执行 telemetry 使用实际采用值；记忆文件与读写跟随 OMP backend，不复制旧 ZCode Memory 数据库或假造 Extraction 结果。跨运行时 E2E fixture 应断言各自真实公开能力，不把旧数据库布局当 OMP 状态来源。
+- 会话内定时任务复用既有 Host `automation/create` 等反向协议与 Host 持久调度所有者；适配器仅注册真实工具、校验并转交显式会话上下文及实际结果。调度触发轮禁止再创建／修改调度，取消后不提交迟到结果；不在 OMP 再建第二份调度队列。
 
 ## 权限与提问
 
@@ -211,6 +297,7 @@ app-server 的同进程命令入口与既有 `--mode rpc-ui` 均须支持 `/wiki
 - `/plan [任务]` 进入或切换计划模式，复用计划只读保护、计划 role 临时模型、计划文件及 `xd://propose` 提交链路；已有草稿退出前确认。提交计划后展示计划正文并请求用户确认，取消或拒绝保留计划模式，批准后恢复工具与模型并复用上游计划保存、引用和执行链路。本次 RPC 审批支持保留当前上下文继续执行；清空上下文、压缩后执行和终端计划编辑器不属于本次接入范围。
 - `/loop` 复用共享参数解析、次数/时长限制、`--while` / `--until` 条件和 prompt/compact/reset 设置；位置间隔参数与计数语义见 [循环间隔契约](fork.md#loop-轮次间隔)。首轮正常发送，后续轮次在会话空闲且间隔结束后执行；停止暂停重复提交，下一条用户提示可恢复，再次 `/loop` 关闭。切换或关闭会话取消旧会话的待提交、间隔定时器与条件进程；启用 loop 时不同时自动提交 goal 续跑。
 - `/goal` 复用上游目标生命周期与已有 RPC goal 控制器，保留目标创建/替换、查看、暂停、恢复、删除和预算调整；不得维护第二份目标状态。自动续跑沿用上游 RPC 设置，无工具输出的一次性纠偏与停止提示统一见 [Goal 续跑边界](goal-autopilot.md#6-无人值守与权限边界)。
+- app-server 的独立 `pauseGoal`／`resumeGoal` 控制必须即时交给同一原生 Goal 控制器，不得因会话正在执行或压缩而排到运行中目标之后；暂停与恢复由原有 owner 发布事实，恢复继续同一目标，不转为模型正文或重复创建目标。普通目标正文、`/goal set` 与 `/goal-autopilot` 的创建／替换仍走原生输入队列 admission，保留 `inputId`／`sourceCommand`、Stop held 与手动压缩期间的队列行为；控制不绕过会话 generation、取消或 owner 边界。
 - `/goal-autopilot` 的完整模式契约与验收条件统一见 [Goal 自动编排需求](goal-autopilot.md)；接入沿用上述命令提交、目录、补全、输出与宿主对话机制，不维护第二份业务语义。
 - `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>` 复用共享命令处理器，以普通用户消息展开并沿用 workflowz；完整批处理约束见 [JCH 命令](fork.md#jch-命令)。通过 v3 目录和补全发现，使用现有 `prompt.message` 提交；正文内部空白及字面量须保留，非法参数只返回用法且不启动模型回合。不增加 RPC 专属调度、配置写入或程序级并发/禁测拦截。
 - `/team`、`/advisor` 的开关/状态/记录、魔法关键词命令、技能与 `/compact` 复用已有执行路径。`/advisor configure` 的终端编辑器仍明确报告仅 TUI 可用，role 保存继续使用现有配置接口。
@@ -232,29 +319,29 @@ app-server 的同进程命令入口与既有 `--mode rpc-ui` 均须支持 `/wiki
 
 #### 能力发现与通用约定
 
-* 沿用现有 stdio RPC v3、请求 ID、响应外壳及分帧；协商 `negotiate_protocol {protocolVersion:3}` 后以 `capabilities.teamConfig: true` 宣布本能力，不增加协议大版本、HTTP 服务或独立连接。旧服务未声明该能力时 GUI 禁用配置入口并说明不支持，不能改读配置文件兜底。
-* 独立 RPC 的三个接口绑定该宿主当前会话、profile 和项目；app-server 直接调用共享服务时，必须从显式 session／workspace 目标获取同进程会话上下文，不能读取全局“当前会话”。均不接受任意路径、跨 profile 写入、凭据或 YAML 文本；GUI 切换目标会话后重新读取，不要求切换或重启进程。
-* 写入的模型引用复用 `RpcModelRef` 的 `provider`／`modelId`，只接受具体身份，不接受自然语言、通配符、`auto` 或思考级别扩展。查询采用下述无损槽位表示，原始 selector 即使失效也不能丢弃；只读预览可以携带该原文用于诊断，不能借预览将其写入。顺序及重复项完整保留，响应不含密钥、完整配置文件或无关设置。
-* 正常响应沿用 `{id,type:"response",command,success:true,data}`；失败沿用现有错误消息及机器可读错误码。Team 失败响应允许附带结构化 `data`，用于返回问题索引、实际保存回执及可取得的最新配置；GUI 不从错误消息文本解析状态。
+- 沿用现有 stdio RPC v3、请求 ID、响应外壳及分帧；协商 `negotiate_protocol {protocolVersion:3}` 后以 `capabilities.teamConfig: true` 宣布本能力，不增加协议大版本、HTTP 服务或独立连接。旧服务未声明该能力时 GUI 禁用配置入口并说明不支持，不能改读配置文件兜底。
+- 独立 RPC 的三个接口绑定该宿主当前会话、profile 和项目；app-server 直接调用共享服务时，必须从显式 session／workspace 目标获取同进程会话上下文，不能读取全局“当前会话”。均不接受任意路径、跨 profile 写入、凭据或 YAML 文本；GUI 切换目标会话后重新读取，不要求切换或重启进程。
+- 写入的模型引用复用 `RpcModelRef` 的 `provider`／`modelId`，只接受具体身份，不接受自然语言、通配符、`auto` 或思考级别扩展。查询采用下述无损槽位表示，原始 selector 即使失效也不能丢弃；只读预览可以携带该原文用于诊断，不能借预览将其写入。顺序及重复项完整保留，响应不含密钥、完整配置文件或无关设置。
+- 正常响应沿用 `{id,type:"response",command,success:true,data}`；失败沿用现有错误消息及机器可读错误码。Team 失败响应允许附带结构化 `data`，用于返回问题索引、实际保存回执及可取得的最新配置；GUI 不从错误消息文本解析状态。
 
 #### `get_team_config`
 
 请求含 `id`、`type:"get_team_config"` 及可选 `preview`（见后文），不执行模型推理、不发起讨论、不修改配置。明确打开配置时可以按需读取原始 NFS 持久主配置以展示双方原值；不扫描其他目录，不进入启动回源。未提供 `preview` 时只返回已保存配置的查询快照；返回 `data`：
 
-| 字段 | 契约 |
-| --- | --- |
-| `profile` | 当前命名 profile；默认 profile 为 `null` |
-| `revision` | 当前用户层目标配置的不透明版本；Linux offline 联合覆盖活动和持久两端目标字段的原始值、缺失状态及实际文件身份，不是进程内计数。任一必要目标存在结构非法／重复键或不可安全读取时为 `null`；仅 selector 失效／模型不可用不影响版本生成 |
-| `userMembers` | 活动端用户层的完整有序 `TeamMemberSlot[]`；字段缺失为 `null`，显式空名单为 `[]`，结构非法或不可读时省略。是否可读由 `storage.active.readState` 判定，不能把读失败或失效成员当成字段缺失 |
-| `persistentMembers` | 原始 NFS 端同一 profile 的完整有序 `TeamMemberSlot[]`；字段缺失为 `null`，显式空名单为 `[]`。结构非法、不可读或单端模式不适用时省略，由 `storage.persistent.readState` 区分；不得只返回 `different` 而隐藏持久端原值 |
-| `effectiveMembers` | 当前有效基础名单的完整有序 `TeamMemberSlot[]`，失效项原位保留；有效空名单／未配置时按既有规则回退为当前会话模型的一行。结构非法或无模型可供默认回退时为 `null` 并附问题 |
-| `source` | 当前有效配置来源：`default`、`global`、`project`、`overlay` 或 `runtime`；无法确定时为 `null`。不因为某行模型不可用而抹去已知来源 |
-| `sessionModel` | 当前主模型的引用、展示名称及 `available` 状态；无会话模型时为 `null`。其问题独立于成员名单，不通过保存成员顺带切换主模型 |
-| `participants` | 当前有效名单按既有规则展开的 `{index,label,model}` 槽位数组；成员无法解析或实际 Team 资格校验失败时为空并附问题，不能以少量合法项拼成成功预览 |
-| `issues` | 每项含 `code`、`message`、`target`。`target:"member"` 时必须含 `list`、零基 `index` 和原始 `selector`，`list` 精确指向 `userMembers`、`persistentMembers` 或 `effectiveMembers`；有效名单问题另含其 `source`。其他 target 为 `session_model`、`config` 或 `storage`；用户配置文件／存储问题必须有 `side:"active"` 或 `"persistent"`，高层配置问题则用 `source` 标识、不伪填用户文件 side。可含安全的逻辑文件标识及行／列 |
-| `writableScopes` | 本能力仅支持 `["user"]`，不借此修改项目、overlay 或运行时层；服务无法保存时可返回空数组，并附原因 |
-| `storage` | `{mode,syncState,active,persistent}`；`mode` 为 `single` 或 `offline_shm`。每端 `{readState}` 明确 `present`、`missing`、`invalid`、`unreadable`，持久端另可为 `not_applicable`；`present` 指目标字段是合法的字符串列表，包括 `[]`，`missing` 包括字段或文件缺失。`syncState` 为 `in_sync`、`different`、`unknown` 或 `not_applicable`，比较两端本次字段的原始有序值及缺失状态，不比较整文件；单端持久端不适用 |
-| `preview` | 仅在请求含合法 `preview` 时返回的只读草稿投影；结构与语义见下文，不替换以上已保存快照 |
+| 字段                | 契约                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `profile`           | 当前命名 profile；默认 profile 为 `null`                                                                                                                                                                                                                                                                                                                                                                                 |
+| `revision`          | 当前用户层目标配置的不透明版本；Linux offline 联合覆盖活动和持久两端目标字段的原始值、缺失状态及实际文件身份，不是进程内计数。任一必要目标存在结构非法／重复键或不可安全读取时为 `null`；仅 selector 失效／模型不可用不影响版本生成                                                                                                                                                                                      |
+| `userMembers`       | 活动端用户层的完整有序 `TeamMemberSlot[]`；字段缺失为 `null`，显式空名单为 `[]`，结构非法或不可读时省略。是否可读由 `storage.active.readState` 判定，不能把读失败或失效成员当成字段缺失                                                                                                                                                                                                                                  |
+| `persistentMembers` | 原始 NFS 端同一 profile 的完整有序 `TeamMemberSlot[]`；字段缺失为 `null`，显式空名单为 `[]`。结构非法、不可读或单端模式不适用时省略，由 `storage.persistent.readState` 区分；不得只返回 `different` 而隐藏持久端原值                                                                                                                                                                                                     |
+| `effectiveMembers`  | 当前有效基础名单的完整有序 `TeamMemberSlot[]`，失效项原位保留；有效空名单／未配置时按既有规则回退为当前会话模型的一行。结构非法或无模型可供默认回退时为 `null` 并附问题                                                                                                                                                                                                                                                  |
+| `source`            | 当前有效配置来源：`default`、`global`、`project`、`overlay` 或 `runtime`；无法确定时为 `null`。不因为某行模型不可用而抹去已知来源                                                                                                                                                                                                                                                                                        |
+| `sessionModel`      | 当前主模型的引用、展示名称及 `available` 状态；无会话模型时为 `null`。其问题独立于成员名单，不通过保存成员顺带切换主模型                                                                                                                                                                                                                                                                                                 |
+| `participants`      | 当前有效名单按既有规则展开的 `{index,label,model}` 槽位数组；成员无法解析或实际 Team 资格校验失败时为空并附问题，不能以少量合法项拼成成功预览                                                                                                                                                                                                                                                                            |
+| `issues`            | 每项含 `code`、`message`、`target`。`target:"member"` 时必须含 `list`、零基 `index` 和原始 `selector`，`list` 精确指向 `userMembers`、`persistentMembers` 或 `effectiveMembers`；有效名单问题另含其 `source`。其他 target 为 `session_model`、`config` 或 `storage`；用户配置文件／存储问题必须有 `side:"active"` 或 `"persistent"`，高层配置问题则用 `source` 标识、不伪填用户文件 side。可含安全的逻辑文件标识及行／列 |
+| `writableScopes`    | 本能力仅支持 `["user"]`，不借此修改项目、overlay 或运行时层；服务无法保存时可返回空数组，并附原因                                                                                                                                                                                                                                                                                                                        |
+| `storage`           | `{mode,syncState,active,persistent}`；`mode` 为 `single` 或 `offline_shm`。每端 `{readState}` 明确 `present`、`missing`、`invalid`、`unreadable`，持久端另可为 `not_applicable`；`present` 指目标字段是合法的字符串列表，包括 `[]`，`missing` 包括字段或文件缺失。`syncState` 为 `in_sync`、`different`、`unknown` 或 `not_applicable`，比较两端本次字段的原始有序值及缺失状态，不比较整文件；单端持久端不适用           |
+| `preview`           | 仅在请求含合法 `preview` 时返回的只读草稿投影；结构与语义见下文，不替换以上已保存快照                                                                                                                                                                                                                                                                                                                                    |
 
 **无损成员槽位 `TeamMemberSlot`：** `{index,rawSelector,model,name?,status,reasonCode?,reason?}`。`index` 为原列表零基位置，`rawSelector` 原样保留配置中的字符串（不擅自 trim、改写大小写、去重或丢行）；`model` 为能确认身份时的具体引用，否则为 `null`；`status` 为 `available`、`unavailable` 或 `unresolved`，后两种必须给原因。例如用户列表 `[p/A,"失效旧别名",p/B]` 必须返回三行，中间行的 `model:null` 不得造成 A、B 丢失或索引前移；高层也有失效项时用不同 `list/source` 精确归属。重复映射键、非数组或非字符串成员属于结构非法，不伪装成模型失效；仅无法解析或当前不可用的字符串成员仍可显示并修复。
 
@@ -266,16 +353,16 @@ GUI 编辑 `userMembers`，分别展示 `persistentMembers` 和 `effectiveMember
 
 ```json
 {
-  "id": "team-preview-1",
-  "type": "get_team_config",
-  "preview": {
-    "clientRevision": "draft-7",
-    "members": [
-      {"provider": "company", "modelId": "GLM-5.2-public"},
-      {"rawSelector": "失效旧别名"},
-      {"provider": "company", "modelId": "Qwen3.8-27B"}
-    ]
-  }
+	"id": "team-preview-1",
+	"type": "get_team_config",
+	"preview": {
+		"clientRevision": "draft-7",
+		"members": [
+			{ "provider": "company", "modelId": "GLM-5.2-public" },
+			{ "rawSelector": "失效旧别名" },
+			{ "provider": "company", "modelId": "Qwen3.8-27B" }
+		]
+	}
 }
 ```
 
@@ -297,50 +384,55 @@ GUI 编辑 `userMembers`，分别展示 `persistentMembers` 和 `effectiveMember
 
 ```json
 {
-  "id": "team-save-1",
-  "type": "set_team_config",
-  "scope": "user",
-  "expectedRevision": "opaque-revision-from-get_team_config",
-  "members": [
-    {"provider": "company", "modelId": "GLM-5.2-public"},
-    {"provider": "company", "modelId": "Qwen3.8-27B"},
-    {"provider": "company", "modelId": "GLM-5.2-public"}
-  ]
+	"id": "team-save-1",
+	"type": "set_team_config",
+	"scope": "user",
+	"expectedRevision": "opaque-revision-from-get_team_config",
+	"members": [
+		{ "provider": "company", "modelId": "GLM-5.2-public" },
+		{ "provider": "company", "modelId": "Qwen3.8-27B" },
+		{ "provider": "company", "modelId": "GLM-5.2-public" }
+	]
 }
 ```
 
 示例 ID 必须以目标环境实际目录为准。`members` 为具体模型引用数组、`[]` 或 `null`：非空数组保存有序名单；`[]` 保存显式默认回退；`null` 移除用户层字段。不可省略 `members`，不把省略、非法类型、空字符串或未知 ID 当成重置。`scope` 只接受 `"user"`；`expectedRevision` 为必需的非空字符串。
 
-* 保存前重新核对当前候选资格，非法项返回零基位置及原因，不静默删除；允许重复身份。主模型问题独立返回，不阻止用户修复成员名单，也不宣称保存成员就已具备运行资格。
-* 校验 revision、重复键和实际目标后，按[双写权威要求](offline-shm.md#23-用户配置的-shmnfs-双写权威要求程序实现待验收)的统一锁顺序持有 NFS 跨主机锁与活动端本机锁，在锁内重读、比较双方版本，首次提交前发现冲突不改任一配置。同旧版本的合作写入不能因锁只在本机生效而双双通过；保存阶段第二端 I/O 或目标身份变化仍须返回实际部分／未知结果。
-* `success:true` 仅表示本请求在锁保护下将所有必要目标确认保存或判定同值无变更，并完成锁内读回；不代表没有高层覆盖。返回 `data` 含 `config`（随后取得的最新查询快照，含两端原值／读取状态）、`saveState`、`writes`、`effectiveMatchesRequested` 及可选 `effectiveNote`。`writes` 是本请求已确认的提交事实，不冒充永久不变的现值；若随后查询已被新保存改变，`config` 展示现值并明确说明，不把它伪造成此前请求未提交。
-* `saveState` 为 `complete`、`partial`、`failed` 或 `unknown`；`writes` 含 `active` 与 `persistent`，每端为 `{status,message?}`，`status` 为 `saved`、`unchanged`、`failed`、`not_attempted`、`unknown` 或 `not_applicable`。普通单端模式的 `persistent` 为 `not_applicable`，不是重复写同一路径。
-* 所有必要目标都已确认完成且读回成功才为 `complete`；部分目标已完成而其他未完成为 `partial`；确定没有提交且失败为 `failed`；任何关键提交／读回事实无法确定为 `unknown`。后三种均 `success:false` 并携带已知回执；部分或未知不是可自动重试的普通失败。
-* `effectiveMatchesRequested` 是布尔值；存在高层覆盖或不能确定有效值时为 `false` 并给 `effectiveNote`，不能用保存成功遮蔽未生效。清除／空名单时按删除用户字段／默认回退语义判断，不与非空运行槽位机械比较。
-* 复用 `invalid_params`、`scope_not_allowed`、`revision_conflict`、`persistence_failed`、`execution_failed`；本能力增加 `invalid_config` 区分重复键、非法 YAML 等必须先修复的配置问题。前置校验失败为 `failed`、两端 `not_attempted`；错误 data 可附 `issues` 和可安全取得的 `config`。返回错误码不能抹去实际提交状态。
-* 本能力只改 `team.members`，不写 `models.yml`、role、凭据或 provider 开关，不创建／迁移数据库，不触发真实模型探测。失败或连接断开后 GUI 先重新查询，不自动重放保存或用旧 revision 覆盖。
+- 保存前重新核对当前候选资格，非法项返回零基位置及原因，不静默删除；允许重复身份。主模型问题独立返回，不阻止用户修复成员名单，也不宣称保存成员就已具备运行资格。
+- 校验 revision、重复键和实际目标后，按[双写权威要求](offline-shm.md#23-用户配置的-shmnfs-双写权威要求程序实现待验收)的统一锁顺序持有 NFS 跨主机锁与活动端本机锁，在锁内重读、比较双方版本，首次提交前发现冲突不改任一配置。同旧版本的合作写入不能因锁只在本机生效而双双通过；保存阶段第二端 I/O 或目标身份变化仍须返回实际部分／未知结果。
+- `success:true` 仅表示本请求在锁保护下将所有必要目标确认保存或判定同值无变更，并完成锁内读回；不代表没有高层覆盖。返回 `data` 含 `config`（随后取得的最新查询快照，含两端原值／读取状态）、`saveState`、`writes`、`effectiveMatchesRequested` 及可选 `effectiveNote`。`writes` 是本请求已确认的提交事实，不冒充永久不变的现值；若随后查询已被新保存改变，`config` 展示现值并明确说明，不把它伪造成此前请求未提交。
+- `saveState` 为 `complete`、`partial`、`failed` 或 `unknown`；`writes` 含 `active` 与 `persistent`，每端为 `{status,message?}`，`status` 为 `saved`、`unchanged`、`failed`、`not_attempted`、`unknown` 或 `not_applicable`。普通单端模式的 `persistent` 为 `not_applicable`，不是重复写同一路径。
+- 所有必要目标都已确认完成且读回成功才为 `complete`；部分目标已完成而其他未完成为 `partial`；确定没有提交且失败为 `failed`；任何关键提交／读回事实无法确定为 `unknown`。后三种均 `success:false` 并携带已知回执；部分或未知不是可自动重试的普通失败。
+- `effectiveMatchesRequested` 是布尔值；存在高层覆盖或不能确定有效值时为 `false` 并给 `effectiveNote`，不能用保存成功遮蔽未生效。清除／空名单时按删除用户字段／默认回退语义判断，不与非空运行槽位机械比较。
+- 复用 `invalid_params`、`scope_not_allowed`、`revision_conflict`、`persistence_failed`、`execution_failed`；本能力增加 `invalid_config` 区分重复键、非法 YAML 等必须先修复的配置问题。前置校验失败为 `failed`、两端 `not_attempted`；错误 data 可附 `issues` 和可安全取得的 `config`。返回错误码不能抹去实际提交状态。
+- 本能力只改 `team.members`，不写 `models.yml`、role、凭据或 provider 开关，不创建／迁移数据库，不触发真实模型探测。失败或连接断开后 GUI 先重新查询，不自动重放保存或用旧 revision 覆盖。
 
 #### GUI 展示、通知与会话隔离
 
 GUI 提供专用 Team 模型配置面板，交互能力和预览按 Team 第 2.9 节，不要求用户了解配置文件或 shm。打开时读取完整用户／NFS 持久／有效三份列表及各自问题，分别展示具体原值、读取状态、主模型和覆盖来源；失效原槽位不得丢弃或把两端不同简化为一个告警。草稿编辑、排序、复制、删除后通过可选 `preview` 查询共享投影，不逐次写盘；保存时将所有修复后的具体模型引用一次提交，使用返回快照更新页面，不能在请求发出时乐观标为已持久化。
 
-* 完整保存且生效、保存但被项目／overlay 覆盖、两端部分保存、结果未知及并发冲突分别展示；版本冲突保留草稿，允许重新读取并比较，不能直接自动重试。取消不调用保存；恢复默认只改草稿。
-* 保存后复用现有 `settings_changed {scope:"user"}` 事件，不增加另一套订阅总线。面板收到事件或重新获得焦点时按需重读；有脏草稿时提示外部变化而不覆盖草稿。其他进程不能依赖此进程的广播，最终正确性依赖后端重新读取与版本检查。
-* 面板请求与草稿绑定发起会话／profile，切换、关闭或失联后不得把旧响应写到新面板；取消界面不证明已发保存请求未提交，必须依据回执或重新查询。配置保存不占用模型生成通道，不阻塞停止讨论和普通消息。
-* `prompt.message` 方式提交 `/team configure` 时，RPC 宿主须通过已有对话机制接入同一配置服务或明确指引客户端使用本能力，不把配置命令交给模型，不输出虚假保存成功。原 `/team <任务>` 派发及状态协议不变。
+- 完整保存且生效、保存但被项目／overlay 覆盖、两端部分保存、结果未知及并发冲突分别展示；版本冲突保留草稿，允许重新读取并比较，不能直接自动重试。取消不调用保存；恢复默认只改草稿。
+- 保存后复用现有 `settings_changed {scope:"user"}` 事件，不增加另一套订阅总线。面板收到事件或重新获得焦点时按需重读；有脏草稿时提示外部变化而不覆盖草稿。其他进程不能依赖此进程的广播，最终正确性依赖后端重新读取与版本检查。
+- 面板请求与草稿绑定发起会话／profile，切换、关闭或失联后不得把旧响应写到新面板；取消界面不证明已发保存请求未提交，必须依据回执或重新查询。配置保存不占用模型生成通道，不阻塞停止讨论和普通消息。
+- `prompt.message` 方式提交 `/team configure` 时，RPC 宿主须通过已有对话机制接入同一配置服务或明确指引客户端使用本能力，不把配置命令交给模型，不输出虚假保存成功。原 `/team <任务>` 派发及状态协议不变。
 
 #### Team 模型配置验收
 
-* 在隔离环境从真实 `cli.ts --mode rpc-ui` 进程验证 v3 capability、旧协议／缺能力拒绝、三个接口的响应及错误字段、空名单／清除、跨 provider 搜索、中文别称多解、不支持／失效成员与主模型问题。请求不触发真实模型或不允许的网络访问。
-* 通过真实配置文件验证保存、顺序／重复保留、同 profile 重启读回、命名 profile 隔离、高层覆盖提示、重复键拒绝、同字段冲突及无关字段合并；三个来源列表各含不同位置失效 selector 时逐行无损返回，问题的 `list/source` 无歧义，模型失效但结构合法时仍可取得 revision 并替换／删除修复。
-* 默认／命名 profile 的 shm 与原始 NFS 名单分别为不同非空列表、`[]` 和字段缺失时，查询及保存回执中的 `config` 都能展示双方具体值与读取状态；结构非法、读失败和单端不适用不混同。锁内确认双方写入成功才返回完整成功，NFS 权限／写入失败、提交事实未知及后续保存改变现值均有准确回执，不靠备份或异步补写求成功；验收按双写权威要求执行。
-* 在实际 NFS 部署的两台主机、同一用户／目标上，从同一持久旧版本并发提交，只能一方提交该版本，另一方在首次写前冲突且原值不被覆盖；证明锁由共享服务器协调，锁不可用时不降级。只跑本机进程／Windows seam 不代表此项通过。
-* `get_team_config` 的草稿预览覆盖添加、排序、重复、失效原槽位、`[]`、`null`、高层覆盖及无主模型，返回实际快照与投影不混同；对真实临时配置断言预览前后文件字节不变，未启动保存／备份；不同 `clientRevision` 的迟到响应不覆盖当前草稿。
-* GUI 单独验证目录展示、成员编辑、草稿取消、有效来源、失效状态、保存／部分完成／冲突、通知时草稿保护及切换会话后迟到响应隔离。OMP 侧接口通过不等于 ZCode GUI 已实现／联调通过，需分别记录证据；当前仅有 OMP 侧 Windows 定向入口证据，外部 GUI 验收仍待执行。
+- 在隔离环境从真实 `cli.ts --mode rpc-ui` 进程验证 v3 capability、旧协议／缺能力拒绝、三个接口的响应及错误字段、空名单／清除、跨 provider 搜索、中文别称多解、不支持／失效成员与主模型问题。请求不触发真实模型或不允许的网络访问。
+- 通过真实配置文件验证保存、顺序／重复保留、同 profile 重启读回、命名 profile 隔离、高层覆盖提示、重复键拒绝、同字段冲突及无关字段合并；三个来源列表各含不同位置失效 selector 时逐行无损返回，问题的 `list/source` 无歧义，模型失效但结构合法时仍可取得 revision 并替换／删除修复。
+- 默认／命名 profile 的 shm 与原始 NFS 名单分别为不同非空列表、`[]` 和字段缺失时，查询及保存回执中的 `config` 都能展示双方具体值与读取状态；结构非法、读失败和单端不适用不混同。锁内确认双方写入成功才返回完整成功，NFS 权限／写入失败、提交事实未知及后续保存改变现值均有准确回执，不靠备份或异步补写求成功；验收按双写权威要求执行。
+- 在实际 NFS 部署的两台主机、同一用户／目标上，从同一持久旧版本并发提交，只能一方提交该版本，另一方在首次写前冲突且原值不被覆盖；证明锁由共享服务器协调，锁不可用时不降级。只跑本机进程／Windows seam 不代表此项通过。
+- `get_team_config` 的草稿预览覆盖添加、排序、重复、失效原槽位、`[]`、`null`、高层覆盖及无主模型，返回实际快照与投影不混同；对真实临时配置断言预览前后文件字节不变，未启动保存／备份；不同 `clientRevision` 的迟到响应不覆盖当前草稿。
+- GUI 单独验证目录展示、成员编辑、草稿取消、有效来源、失效状态、保存／部分完成／冲突、通知时草稿保护及切换会话后迟到响应隔离。OMP 侧接口通过不等于 ZCode GUI 已实现／联调通过，需分别记录证据；当前仅有 OMP 侧 Windows 定向入口证据，外部 GUI 验收仍待执行。
 
 ## 范围与验收
 
 除上述明确要求的 Team 模型配置及显示外，不新增此前已取消的管理面、附件协议、子代理管理或 SDK 同步义务。具体不要求：子代理过程和历史查看及控制；技能启停、删除和刷新管理；队列查看、删除、重排和清空管理；通用设置、Provider、MCP、用量、搜索和 jobs 管理；结构化附件协议；SDK 同步与未列出命令的逐命令覆盖；独立的 `/btw` GUI 接入。上游自带功能随上游保留，不因此新增 GUI 接入承诺。
+
+**用户裁定（2026-10-22）追加排除项：**
+
+- **v4 permission 交互通道不支持**：OMP app-server 不产出 `permissionRequestPayload` 形状的悬挂交互（permissionCount 恒 0、pendingPermissions 恒空），工具审批按 OMP 自身 approval 策略（approvalMode 分层）裁决，适配层不得伪造 permission 形状或降级为 userInput 伪审批。ZCode 侧不得把 permission 面板行为作为 OMP 验收项；依赖 permission 反馈输入的用例按不支持处理。
+- **插件引用与插件目录不支持**：`plugin_reference` reminder、canonical `plugin://` 引用解析、插件目录 Picker 投影（icon/displayName(I18n)/category）均不作为交付或验收项。含插件引用的输入不得因插件未安装/未知而被拒绝整条输入（fail-open 跳过引用并继续对话），其余正文正常执行。
 
 “一次实现所有”指本文全部有效需求与正常接入必需的协议／启动合同同时完成，不重新引入上段明确排除的产品范围；排除独立管理面也不能被用来跳过普通聊天、历史、配置或启动必需的底层调用。
 

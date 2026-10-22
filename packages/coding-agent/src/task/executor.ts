@@ -411,6 +411,9 @@ export interface ExecutorOptions {
 	additionalDirectories?: string[];
 	/** Exact provider credential resolver inherited from the parent session. */
 	getApiKey?: CreateAgentSessionOptions["getApiKey"];
+	/** Scoped non-terminal interaction host of the owning root session. */
+	createInteractionUI?: CreateAgentSessionOptions["createInteractionUI"];
+	interactionParentSessionId?: string;
 	/** Parent session's manager; the child and its revived turns use this exact delivery scope. */
 	asyncJobManager?: AsyncJobManager;
 	/** Parent session whose stored credential affinities seed the child session. */
@@ -4097,13 +4100,14 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		const mcpManager = capture.spec.options.mcpManager;
 		const mcpFollower = mcpManager ? followMCPTools(mcpManager, explicitSubagentToolNames(capture.spec)) : undefined;
 		let revived: AgentSession;
+		let interactionUI: CreateAgentSessionResult["interactionUI"];
 		// Account pools are owner policy: take the live exact-name entry, as
 		// dispatch and persisted revival do, never the spawn-time copy.
 		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
 		capture.spec.prompt.reviving = true;
 		try {
 			try {
-				({ session: revived } = await createAgentSession({
+				({ session: revived, interactionUI } = await createAgentSession({
 					...buildSubagentSessionOptions(
 						capture.spec,
 						restoreSubagentSettings(capture.settings),
@@ -4133,6 +4137,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 			// runner pre-init, so a `tool_call` handler touching a runtime action trips the
 			// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
 			await initializeExtensions(revived, {
+				uiContext: interactionUI,
 				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
 				filterActiveTools: withoutParentOwnedTools,
@@ -4669,6 +4674,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					preloadedPreparedExtensions: options.preloadedPreparedExtensions,
 					preloadedCustomToolPaths: restrictToolNames ? [] : options.preloadedCustomToolPaths,
 					hasUI: false,
+					interactivePrompts: options.createInteractionUI !== undefined,
+					createInteractionUI: options.createInteractionUI,
+					interactionParentSessionId: options.interactionParentSessionId,
+					interactionParentToolCallId: options.parentToolCallId,
 					prewalk,
 					spawns: spawnsEnv,
 					taskDepth: childDepth,
@@ -4732,6 +4741,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				? followMCPTools(mcpManager, explicitSubagentToolNames(sessionSpec))
 				: undefined;
 			let session: AgentSession;
+			let interactionUI: CreateAgentSessionResult["interactionUI"];
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
 			try {
 				sessionPromise = createAgentSession(
@@ -4746,7 +4756,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						},
 					}),
 				);
-				({ session } = await awaitAbortable(sessionPromise));
+				({ session, interactionUI } = await awaitAbortable(sessionPromise));
 				if (preparedSession) untrackedSession = session;
 			} catch (err) {
 				mcpFollower?.dispose();
@@ -4897,6 +4907,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const pendingExtensionMessages: Array<Promise<unknown>> = [];
 			await awaitAbortable(
 				initializeExtensions(session, {
+					uiContext: interactionUI,
 					reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
 					reportRuntimeError: err =>
 						logger.error("Extension error", { path: err.extensionPath, error: err.error }),

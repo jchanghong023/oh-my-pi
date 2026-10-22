@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `omp app-server --stdio` with the ZCode protocol, in-process multi-session execution, isolated session ownership, structured desktop interactions and supervised storage preparation while preserving the native TUI and independent RPC entrypoints.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
 - Added `/team configure` ordered drafts and shared RPC v3 Team configuration APIs, with cross-provider model selection, read-only previews, revision-aware saving and explicit offline persistence results without switching the session model.
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
@@ -18,6 +19,23 @@
 
 ### Fixed
 
+- Refresh ZCode context usage from the owning native session after replies and compaction, including cold-restored sessions whose model selection does not change, and publish the final watermark atomically with terminal state so idle controls do not race a delayed usage refresh.
+- Route explicit Anthropic context-window exhaustion through the existing overflow recovery path instead of retrying unchanged history with an output-limit continuation.
+- Apply independent ZCode Goal pause/resume controls while work is busy without admitting them to the queued objective stream.
+- Keep the executing ZCode turn header running before first content and during tool work, then settle it from native lifecycle and trustworthy timing facts without reviving historical turns.
+- Preserve admitted Highspeed card facts through ZCode queue promotion and native history restoration, and persist validated card metrics without inferring cards for ordinary turns.
+- Deliver an explicitly selected stopped ZCode queue item through native admission instead of leaving it blocked by the stopped queue hold, preserving its identity and unselected queued inputs.
+- Apply explicitly promoted queued Goal intent through the native command owner before an open provider stream finishes, while preserving native steering admission, original input identity and unselected queued inputs.
+- Refresh ZCode queue pause and auto-drain projection when native hold state changes without a queue-content event, keeping paused controls consistent after Stop and Resume.
+- Apply frozen ZCode execution mode and Plan intent at native input delivery, refresh model metadata without rewriting selection intent, release partially bound workflow actors without waiting on their own initialization, and settle unfinished cold-history tool rows as interrupted.
+- Keep background Bash output readable from cold subagent sessions while their original execution owner is still alive, without reviving tasks or exposing another session's output.
+- Order same-identity ZCode recreation after deletion without a circular wait, while allowing already admitted command-journal reads to finish and releasing the retired runtime lease.
+- Preserve admitted automation run identity and manual/scheduled attribution in native ZCode turn telemetry so Host-dispatched executions report their real steps and completion.
+- Publish authoritative queued-input updates while manual compaction suspends agent listeners, so queued Goal inputs remain visible until normal delivery resumes.
+- Keep execution model fallbacks active across tool turns without reusing another provider's credentials or retaining expired child authorization.
+- Keep ZCode history pagination complete when late rows arrive, avoid executing extensions during cold workspace catalog reads, and reject unsupported tool approval dialogs without disguising them as user questions.
+- Keep ZCode fork dividers after the actual inherited response and resolve native parent journal paths to session identities across live and cold history.
+- Keep runtime journal leases exclusive within one process and held through writer shutdown; preserve callable tool schemas through admission wrappers and cancel failed MCP initialization without affecting other sessions.
 - Keep gate scope tied to one source snapshot, fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
 - Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.
 - Keep package-local dynamic loaders from inheriting unrelated shared and Rust inputs through transitive workspace dependencies and package cycles, while retaining complete package resources and explicit cross-package inputs.
@@ -1070,7 +1088,6 @@
 - RPC loop repeats and resets queued behind command dialogs or session changes no longer run after Stop or a session switch.
 - Failed multi-file AST edits now refresh potentially changed repository-index paths and keep coverage unchecked until reconciliation.
 
-
 ### Added
 
 - Added `/jobs kill <id>|all` to cancel a running background job (or every one this session owns) from the command line, even while the agent is busy ([#14160](https://github.com/can1357/oh-my-pi/pull/14160) by [@KanwarGill](https://github.com/KanwarGill))
@@ -1258,7 +1275,6 @@
 - Canceled slowtest-owned local and WSL processes without bypassing guest cleanup, including cancellation before guest PID publication.
 - Resolved SCP-style WSL clone destinations correctly and verified Linux toolchains before changing the guest Git checkout.
 
-
 ### Removed
 
 - Removed the `PI_SUBPROCESS_CMD` environment variable; subagents run in-process and never read it ([#14632](https://github.com/can1357/oh-my-pi/pull/14632) by [@jorgoose](https://github.com/jorgoose))
@@ -1276,7 +1292,6 @@
 ### Added
 
 - Exported `WikiTool` and its parameter type from the public tools barrel.
-
 
 ## [18.8.4] - 2026-10-08
 

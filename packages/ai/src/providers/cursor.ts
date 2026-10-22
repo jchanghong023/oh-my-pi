@@ -1860,6 +1860,7 @@ function streamCursorWithWireMode(
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			if (error instanceof ConnectEndStreamError) {
 				output.errorClassificationMessage = result.message;
 				output.errorMessage = error.diagnosticMessage;

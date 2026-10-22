@@ -75,6 +75,8 @@ interface MCPServerConfigBase {
 	enabled?: boolean;
 	/** MCP request timeout in milliseconds (default: 30000, 0 to disable) */
 	timeout?: number;
+	/** Keep this server's tools top-level; false uses the existing discoverable device catalog. */
+	alwaysLoad?: boolean;
 	/**
 	 * Encoding for outgoing JSON-RPC request ids (default: `"number"`).
 	 *
@@ -97,6 +99,8 @@ interface MCPServerConfigBase {
 	auth?: MCPAuthConfig;
 	/** OAuth configuration for servers requiring explicit client credentials */
 	oauth?: {
+		type?: "authorization_code" | "client_credentials";
+		clientName?: string;
 		clientId?: string;
 		clientSecret?: string;
 		scope?: string;

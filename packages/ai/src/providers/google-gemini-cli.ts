@@ -43,6 +43,7 @@ import {
 	convertMessages,
 	convertTools,
 	EMPTY_STREAM_BASE_DELAY_MS,
+	extractGoogleErrorCode,
 	type GoogleThinkingLevel,
 	hasMeaningfulGoogleContent,
 	isThinkingPart,
@@ -789,9 +790,14 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 					if (chunk.error) {
 						const detail = chunk.error.message || chunk.error.status || "unknown error";
 						const message = `Cloud Code Assist stream error: ${detail}`;
+						const providerErrorCode = AIError.OpenAIHttpError.parseEnvelope(chunk, undefined).code;
 						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-							? new AIError.GeminiCliApiError(message, chunk.error.code)
-							: new AIError.ProviderResponseError(message, { provider: model.provider, kind: "runtime" });
+							? new AIError.GeminiCliApiError(message, chunk.error.code, { code: providerErrorCode })
+							: new AIError.ProviderResponseError(message, {
+									provider: model.provider,
+									kind: "runtime",
+									providerErrorCode,
+								});
 					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
@@ -974,7 +980,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						throw new AIError.GeminiCliApiError(
 							`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
 							response.status,
-							{ headers: response.headers },
+							{ headers: response.headers, code: extractGoogleErrorCode(errorText) },
 						);
 					}
 
@@ -1010,7 +1016,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 								throw new AIError.GeminiCliApiError(
 									`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
 									currentResponse.status,
-									{ headers: currentResponse.headers },
+									{ headers: currentResponse.headers, code: extractGoogleErrorCode(retryErrorText) },
 								);
 							}
 						}
@@ -1118,6 +1124,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

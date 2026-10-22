@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Mark interruptible tool calls skipped before execution as cancelled rather than failed.
 - Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
 

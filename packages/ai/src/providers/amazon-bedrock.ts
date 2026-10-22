@@ -1095,6 +1095,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message + diagnostics;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

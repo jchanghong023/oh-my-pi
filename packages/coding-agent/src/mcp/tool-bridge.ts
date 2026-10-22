@@ -719,6 +719,7 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 	readonly label: string;
 	readonly description: string;
 	readonly parameters: TSchema;
+	readonly loadMode: "essential" | "discoverable" | undefined;
 	/** Original MCP tool name (before normalization) */
 	readonly mcpToolName: string;
 	/** Server name */
@@ -752,6 +753,12 @@ export class MCPTool implements CustomTool<TSchema, MCPToolDetails> {
 		this.label = `${connection.name}/${tool.name}`;
 		this.description = tool.description ?? `MCP tool from ${connection.name}`;
 		this.parameters = normalizeSchemaForMCP(tool.inputSchema) as TSchema;
+		this.loadMode =
+			connection.config.alwaysLoad === undefined
+				? undefined
+				: connection.config.alwaysLoad
+					? "essential"
+					: "discoverable";
 		this.mcpToolName = tool.name;
 		this.mcpServerName = connection.name;
 		this.mcpReadOnlyHint = tool.annotations?.readOnlyHint;

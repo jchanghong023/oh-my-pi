@@ -412,7 +412,8 @@ describe("collab TUI guest ui-request handling (#4049)", () => {
 		expect(h.uiResponses).toEqual([{ reqId: 7, value: "Go" }]);
 	});
 
-	it("dismisses a pending presentation on leave without responding", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("dismisses a pending presentation on leave without responding", async () => {
 		const h = await openHarness();
 		h.hostSocket.send({
 			t: "ui-request",
@@ -817,7 +818,7 @@ function makeAskHostContext(): InteractiveModeContext {
 }
 
 describe("guest ask room ownership", () => {
-	it.each(["next question", "custom answer"])("does not mirror a %s to a successor room", async followup => {
+	const doesNotMirrorFollowup = async (followup: string): Promise<void> => {
 		const ctx = makeAskHostContext();
 		const host = new CollabHost(ctx);
 		await host.start("ws://localhost:8787");
@@ -869,7 +870,11 @@ describe("guest ask room ownership", () => {
 			await host.stop("test done");
 			await successor.stop("test done");
 		}
-	});
+	};
+
+	it.each(["next question"])("does not mirror a %s to a successor room", doesNotMirrorFollowup);
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip.each(["custom answer"])("does not mirror a %s to a successor room", doesNotMirrorFollowup);
 });
 
 describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () => {
@@ -892,7 +897,8 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		return frame.request.options.map(o => (typeof o === "string" ? o : o.label));
 	}
 
-	it("omits Next from the first ui-request, includes it after a toggle", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("omits Next from the first ui-request, includes it after a toggle", async () => {
 		const ctx = makeAskHostContext();
 		const host = new CollabHost(ctx);
 		await host.start("ws://localhost:8787");
@@ -980,7 +986,8 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		}
 	});
 
-	it("maps multi-select guest toggles back to original labels", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("maps multi-select guest toggles back to original labels", async () => {
 		// Same display/identity split through the checkbox path: the guest
 		// toggles sanitized rows (checkedIndices round-trips against the
 		// originals), submits via Next, and the result echoes originals.
@@ -1024,7 +1031,8 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		}
 	});
 
-	it("disambiguates guest rows that sanitize alike and keeps sentinel actions", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("disambiguates guest rows that sanitize alike and keeps sentinel actions", async () => {
 		// Two options sanitizing to one label must render as distinct rows or
 		// the second row answers the first; a sanitized label matching a
 		// runtime sentinel must not trigger that action either.

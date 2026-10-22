@@ -291,7 +291,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 						.some(
 							entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
 						);
-				await runMaintenance.call(this, messages);
+				return runMaintenance.call(this, messages);
 			},
 		);
 

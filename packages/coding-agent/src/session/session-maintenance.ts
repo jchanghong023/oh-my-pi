@@ -721,6 +721,18 @@ export class SessionMaintenance {
 	 * before maintenance returns.
 	 */
 	#emitLifecycleEvent(event: AgentSessionEvent, detach: boolean): Promise<void> {
+		if (event.type === "auto_compaction_start" || event.type === "auto_compaction_end") {
+			const operationId = logger.getLogContext().compaction_id;
+			if (typeof operationId === "string") {
+				event = { ...event, operationId };
+				if (event.type === "auto_compaction_end" && event.result !== undefined) {
+					const entry = this.#host.sessionManager
+						.getBranch()
+						.findLast(candidate => candidate.type === "compaction" && candidate.operationId === operationId);
+					event = { ...event, summaryRef: entry?.id };
+				}
+			}
+		}
 		return this.#host.emitSessionEvent(event, detach ? { detachExtensions: true } : undefined);
 	}
 	/**
@@ -1609,6 +1621,7 @@ export class SessionMaintenance {
 
 					markCommitted();
 					await this.#commitCompactionEntry({
+						origin: "manual",
 						summary,
 						shortSummary,
 						firstKeptEntryId,
@@ -1782,6 +1795,7 @@ export class SessionMaintenance {
 		// interrupted-turn resume.
 		onCommitted();
 		await this.#commitCompactionEntry({
+			origin: "manual",
 			...result,
 			fromExtension,
 			method: undefined,
@@ -1808,6 +1822,7 @@ export class SessionMaintenance {
 			terminalTextAnswer?: boolean;
 			triggerContextTokens?: number;
 			detachPostCommit?: boolean;
+			rebaseParentId?: string | null;
 		},
 	): Promise<CompactionCheckResult> {
 		const model = this.#model;
@@ -1937,7 +1952,9 @@ export class SessionMaintenance {
 							preserveData: prepared.preserveData,
 						};
 			await this.#commitCompactionEntry({
+				origin: "auto",
 				...result,
+				rebaseParentId: options.rebaseParentId,
 				fromExtension,
 				method: undefined,
 				codexCompaction: undefined,
@@ -2166,6 +2183,7 @@ export class SessionMaintenance {
 			if (!result) return undefined;
 			const { summary, details } = handoffSummaryFromDocument(result.document, preparation);
 			await this.#commitCompactionEntry({
+				origin: "manual",
 				summary,
 				shortSummary: undefined,
 				firstKeptEntryId: preparation.firstKeptEntryId,
@@ -2538,6 +2556,7 @@ export class SessionMaintenance {
 	 * and emit the `session_compact` extension hook.
 	 */
 	async #commitCompactionEntry(args: {
+		origin: "manual" | "auto";
 		summary: string;
 		shortSummary: string | undefined;
 		firstKeptEntryId: string;
@@ -2551,13 +2570,22 @@ export class SessionMaintenance {
 		advisorResetReason: string;
 		detachExtensionEmit?: boolean;
 		retryDropReason?: "overflow" | "threshold" | "idle" | "incomplete";
+		rebaseParentId?: string | null;
 	}): Promise<CompactionEntry | undefined> {
+		if (args.rebaseParentId !== undefined) {
+			// 修复：编辑分支保留真实摘要及 provider opaque payload，不重放被替换的原始尾部。
+			args = { ...args, firstKeptEntryId: "", providerReplayThroughEntryId: undefined };
+		}
+		const operationId = logger.getLogContext().compaction_id;
 		const entryId = this.#host.sessionManager.appendCompaction(
 			args.summary,
 			args.shortSummary,
 			args.firstKeptEntryId,
 			args.tokensBefore,
 			{
+				origin: args.origin,
+				rebaseParentId: args.rebaseParentId,
+				operationId: typeof operationId === "string" ? operationId : `compact-${crypto.randomUUID()}`,
 				details: args.details,
 				fromExtension: args.fromExtension,
 				preserveData: args.preserveData,
@@ -2710,18 +2738,18 @@ export class SessionMaintenance {
 		return tokens;
 	}
 
-	async runPrePromptCompactionIfNeeded(messages: AgentMessage[]): Promise<void> {
+	async runPrePromptCompactionIfNeeded(messages: AgentMessage[], rebaseParentId?: string | null): Promise<boolean> {
 		const model = this.#model;
-		if (!model) return;
+		if (!model) return true;
 		const contextWindow = model.contextWindow ?? 0;
-		if (contextWindow <= 0) return;
+		if (contextWindow <= 0) return true;
 		const compactionSettings = this.#compactionSettings;
 		const contextTokens = this.#estimatePrePromptContextTokens(messages, contextWindow);
 		const pendingMidTurnDeadEnd = this.#midTurnDeadEndPendingPrePrompt;
 		this.#midTurnDeadEndPendingPrePrompt = false;
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			this.maybeStartSpeculativeCompaction(contextTokens, contextWindow);
-			return;
+			return true;
 		}
 		if (
 			pendingMidTurnDeadEnd &&
@@ -2731,17 +2759,17 @@ export class SessionMaintenance {
 			// The prior tool loop already attempted the rescue and warned for this
 			// persisted oversized turn. Only a later persisted cut point makes a
 			// pre-prompt retry useful; the new agent loop may warn for its own turn.
-			return;
+			return rebaseParentId === undefined;
 		}
 		// Grace band: a live (or just-started) background speculation absorbs the
 		// blocking summarization; the user's prompt goes out immediately and the
 		// armed result is spliced in at the next boundary.
-		if (this.deferThresholdCompactionToSpeculation(contextTokens, contextWindow)) {
+		if (rebaseParentId === undefined && this.deferThresholdCompactionToSpeculation(contextTokens, contextWindow)) {
 			logger.debug("Pre-prompt threshold deferred to speculative compaction", {
 				contextTokens,
 				contextWindow,
 			});
-			return;
+			return true;
 		}
 
 		// Auto-promote first: switching to a larger-context model avoids compacting
@@ -2754,7 +2782,7 @@ export class SessionMaintenance {
 				contextWindow,
 				model: `${model.provider}/${model.id}`,
 			});
-			return;
+			return true;
 		}
 
 		logger.debug("Pre-prompt context maintenance triggered by pending prompt size", {
@@ -2762,13 +2790,29 @@ export class SessionMaintenance {
 			contextWindow,
 			model: `${model.provider}/${model.id}`,
 		});
+		const previousLeaf = this.#host.sessionManager.getLeafId();
 		await this.runAutoCompaction("threshold", false, {
 			autoContinue: false,
+			rebaseParentId,
 			triggerContextTokens: contextTokens,
 			pendingContextTokens: this.#tokenizer.countMessages(messages, { excludeEncryptedReasoning: true }),
 			preparedContextTokens: this.#estimateStoredContextTokens(),
 			phase: "pre_turn",
 		});
+		return rebaseParentId === undefined || this.#host.sessionManager.getLeafId() !== previousLeaf;
+	}
+
+	/**
+	 * 缺陷 G02(队列自动 drain 没有计算待输入预算并提前压缩): agent loop 在
+	 * stop 边界将自动消费的待输入消息。与 loop 的 dequeue 条件保持一致:显式
+	 * hold(`queuedMessagesHeld`)时不消费;`followUpAutoDrain` 关闭时 follow-up
+	 * 队列保持排队。steering 在 stop 边界同样强制下一轮模型调用,因此两个队列
+	 * 都计入待输入预算。
+	 */
+	#pendingQueuedDrainMessages(): AgentMessage[] {
+		const agent = this.#host.agent;
+		if (agent.queuedMessagesHeld) return [];
+		return [...agent.peekSteeringQueue(), ...(agent.followUpAutoDrain ? agent.peekFollowUpQueue() : [])];
 	}
 
 	/**
@@ -2785,12 +2829,21 @@ export class SessionMaintenance {
 		signal: AbortSignal | undefined,
 		context: AgentTurnEndContext | undefined,
 	): Promise<void> {
+		// 缺陷 G02(队列自动 drain 没有计算待输入预算并提前压缩): 文本完成的
+		// turn(willContinue=false)若待消费队列非空,agent loop 马上会在 yield 边界
+		// 自动 drain 队列输入作为下一个 prompt。queued 输入与直接 prompt 一样属于
+		// 待输入预算(直接路径已由 runPrePromptCompactionIfNeeded 覆盖),这里补齐
+		// 队列路径:超阈值先 auto compact,再消费队列首条。
+		const queuedDrainMessages =
+			context !== undefined && !context.willContinue && !signal?.aborted && !this.#host.isDisposed()
+				? this.#pendingQueuedDrainMessages()
+				: [];
 		if (
 			signal?.aborted ||
 			this.#host.isDisposed() ||
 			this.isCompacting ||
 			this.#host.isGeneratingHandoff() ||
-			!context?.willContinue
+			(!context?.willContinue && queuedDrainMessages.length === 0)
 		)
 			return;
 
@@ -2850,7 +2903,21 @@ export class SessionMaintenance {
 		// request or tool running.
 		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
-		const contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		let contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		if (queuedDrainMessages.length > 0) {
+			// 缺陷 G02: 队列待消费输入按直接 prompt 同一口径计入待输入预算 ——
+			// provider usage(锚定估算)+pending 与本地估算+pending 取较大者,
+			// 与 #estimatePrePromptContextTokens 的 max 语义一致,不改阈值。
+			const queuedBreakdown = this.#host.getContextBreakdown({
+				contextWindow,
+				pendingMessages: queuedDrainMessages,
+			});
+			const queuedEstimate = compactionContextTokens(
+				queuedBreakdown?.usedTokens ?? 0,
+				this.#estimateStoredContextTokens(queuedDrainMessages),
+			);
+			contextTokens = Math.max(contextTokens, queuedEstimate);
+		}
 		if (!shouldCompact(contextTokens, contextWindow, compactionSettings)) {
 			this.maybeStartSpeculativeCompaction(contextTokens, contextWindow);
 			return;
@@ -2908,7 +2975,15 @@ export class SessionMaintenance {
 			autoContinue: false,
 			suppressContinuation: true,
 			triggerContextTokens: contextTokens,
-			phase: "mid_turn",
+			// 缺陷 G02: 队列待消费输入已计入 triggerContextTokens,但不在 prepared
+			// history 中;pendingContextTokens 让 armed speculation 校验与直接
+			// prompt 路径保持同一口径。phase 用 pre_turn:queued 输入尚未进入上下文,
+			// 与直接路径的 pre-prompt 压缩同语义。
+			pendingContextTokens:
+				queuedDrainMessages.length > 0
+					? this.#tokenizer.countMessages(queuedDrainMessages, { excludeEncryptedReasoning: true })
+					: undefined,
+			phase: queuedDrainMessages.length > 0 ? "pre_turn" : "mid_turn",
 			detachPostCommit: true,
 		});
 		if (result.automaticContinuationBlocked) {
@@ -3119,8 +3194,15 @@ export class SessionMaintenance {
 			});
 			return COMPACTION_CHECK_BLOCK_AUTOMATIC_CONTINUATION;
 		}
+		// Provider 明示上下文耗尽时，低 usage 不能把它误判成仅输出上限并原历史重发。
+		const explicitContextExhaustion =
+			assistantMessage.api === "anthropic-messages" &&
+			assistantMessage.stopReason === "length" &&
+			assistantMessage.stopDetails?.type === "model_context_window_exceeded";
 		const overflowEvidence =
-			sameModel && !errorIsFromBeforeCompaction && AIError.isContextOverflow(assistantMessage, contextWindow);
+			sameModel &&
+			!errorIsFromBeforeCompaction &&
+			(explicitContextExhaustion || AIError.isContextOverflow(assistantMessage, contextWindow));
 		if (overflowEvidence || reclaimablePayloadHistory || (payloadRejection && !trustedPayloadRejection)) {
 			if (noRecoveryReplay) {
 				const result = compactionAvailable
@@ -3289,11 +3371,11 @@ export class SessionMaintenance {
 		}
 
 		// Case 3: Output-side incomplete — `response.incomplete` from OpenAI Responses
-		// (and Codex), Anthropic `max_tokens` / `model_context_window_exceeded`, all
-		// map to stopReason === "length". Promotion if available; compaction only
-		// when the window is what ran out, since shrinking the input cannot raise an
-		// output cap. Unlike overflow, the *input* is fine, so a reachable handoff
-		// preference may run.
+		// (and Codex), or Anthropic `max_tokens`, map to stopReason === "length".
+		// Explicit context exhaustion already took the overflow route above.
+		// Promotion if available; compaction only when usage shows the window ran
+		// out, since shrinking the input cannot raise an output cap. Unlike overflow,
+		// the *input* is fine, so a reachable handoff preference may run.
 		if (sameModel && !errorIsFromBeforeCompaction && assistantMessage.stopReason === "length") {
 			const incompleteCompactionSettings = this.#compactionSettings;
 			const incompleteContextTokens = calculateContextTokens(assistantMessage.usage);
@@ -4733,6 +4815,7 @@ export class SessionMaintenance {
 		if (!rebuilt || rebuilt.frames.length >= archive.frames.length) return undefined;
 
 		await this.#commitCompactionEntry({
+			origin: "auto",
 			...result,
 			shortSummary: result.shortSummary,
 			details: result.details,
@@ -5009,6 +5092,7 @@ export class SessionMaintenance {
 			 * request (#11482).
 			 */
 			excludeMediaMethods?: boolean;
+			rebaseParentId?: string | null;
 		} = {},
 	): Promise<CompactionCheckResult> {
 		const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
@@ -5181,6 +5265,7 @@ export class SessionMaintenance {
 									reason,
 								});
 								return await this.#commitAutoCompactionResult({
+									rebaseParentId: options.rebaseParentId,
 									summary: armedSpec.result.summary,
 									shortSummary: armedSpec.result.shortSummary,
 									firstKeptEntryId: armedSpec.result.firstKeptEntryId,
@@ -5980,6 +6065,7 @@ export class SessionMaintenance {
 							}
 
 							return await this.#commitAutoCompactionResult({
+								rebaseParentId: options.rebaseParentId,
 								summary,
 								shortSummary,
 								firstKeptEntryId,
@@ -6135,6 +6221,7 @@ export class SessionMaintenance {
 		detachPostCommit: boolean;
 		autoCompactionSignal: AbortSignal;
 		onCommitted: () => void;
+		rebaseParentId?: string | null;
 	}): Promise<CompactionCheckResult> {
 		const { action, reason, willRetry, detachPostCommit, autoCompactionSignal } = args;
 		if (autoCompactionSignal.aborted) {
@@ -6153,6 +6240,8 @@ export class SessionMaintenance {
 
 		args.onCommitted();
 		const savedCompactionEntry = await this.#commitCompactionEntry({
+			origin: "auto",
+			rebaseParentId: args.rebaseParentId,
 			summary: args.summary,
 			shortSummary: args.shortSummary,
 			firstKeptEntryId: args.firstKeptEntryId,

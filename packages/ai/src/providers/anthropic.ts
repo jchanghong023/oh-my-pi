@@ -508,7 +508,8 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		// same sentinel guard as the openai transports. A caller-supplied
 		// Authorization in `model.headers` still wins.
 		const bearer =
-			incomingAuthorization ?? (options.apiKey !== NO_AUTH_SENTINEL ? `Bearer ${options.apiKey}` : undefined);
+			incomingAuthorization ??
+			(options.apiKey && options.apiKey !== NO_AUTH_SENTINEL ? `Bearer ${options.apiKey}` : undefined);
 		return {
 			...modelHeaders,
 			Accept: acceptHeader,
@@ -1425,15 +1426,24 @@ const ANTHROPIC_PING_EVENT: RawMessagePingEvent = { type: "ping" };
  */
 function createAnthropicSseStreamError(data: string): Error {
 	try {
-		const parsed = JSON.parse(data) as { error?: { type?: unknown; message?: unknown } };
+		const parsed = JSON.parse(data) as { error?: { code?: unknown; type?: unknown; message?: unknown } };
 		const errorType = typeof parsed?.error?.type === "string" ? parsed.error.type : undefined;
 		const message = typeof parsed?.error?.message === "string" ? parsed.error.message : undefined;
 		if (message) {
 			return new AIError.ProviderResponseError(
 				errorType ? `Anthropic stream error (${errorType}): ${message}` : `Anthropic stream error: ${message}`,
-				{ provider: "anthropic", kind: "output" },
+				{
+					provider: "anthropic",
+					kind: "output",
+					providerErrorCode: AIError.OpenAIHttpError.parseEnvelope(parsed, undefined).code,
+				},
 			);
 		}
+		return new AIError.ProviderResponseError(data, {
+			provider: "anthropic",
+			kind: "output",
+			providerErrorCode: AIError.OpenAIHttpError.parseEnvelope(parsed, undefined).code,
+		});
 	} catch {
 		// Not a JSON envelope; fall through to the raw payload.
 	}
@@ -2287,7 +2297,10 @@ const streamAnthropicOnce = (
 			// an error event instead of an unhandled rejection that leaves the stream
 			// (and any consumer awaiting `result()`) hanging forever.
 			if (transport) options = transport.prepareOptions(options ?? {});
-			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+			const apiKey =
+				options?.requestAuth !== undefined
+					? (options.requestAuth.apiKey ?? "")
+					: (options?.apiKey ?? getEnvApiKey(model.provider) ?? "");
 			const copilotApiKey = model.provider === "github-copilot" ? parseGitHubCopilotApiKey(apiKey) : undefined;
 			const copilotBaseUrl =
 				model.provider === "github-copilot"
@@ -2721,6 +2734,7 @@ const streamAnthropicOnce = (
 						body: nextParams,
 					};
 				}
+				rawRequestDump.requestAuth = options?.requestAuth;
 				logger.info("Anthropic request build completed", {
 					...diagnosticFields(),
 					event: "anthropic_build_completed",
@@ -2755,6 +2769,7 @@ const streamAnthropicOnce = (
 					method: "POST",
 					url: `${baseUrl}/v1/messages${isOAuthToken ? "?beta=true" : ""}`,
 					body: params,
+					requestAuth: options?.requestAuth,
 				};
 			} else {
 				params = await prepareParams();
@@ -3112,6 +3127,7 @@ const streamAnthropicOnce = (
 						number,
 						{
 							contentIndex: number;
+							signatureDeltaStarted?: boolean;
 							kind:
 								| "text"
 								| "thinking"
@@ -3312,7 +3328,8 @@ const streamAnthropicOnce = (
 								const block: Block = {
 									type: "thinking",
 									thinking: event.content_block.thinking ?? "",
-									thinkingSignature: "",
+									thinkingSignature:
+										typeof event.content_block.signature === "string" ? event.content_block.signature : "",
 									[kStreamingBlockIndex]: event.index,
 								};
 								output.content.push(block);
@@ -3470,8 +3487,13 @@ const streamAnthropicOnce = (
 									continue;
 								}
 								streamedReplayUnsafeContent = true;
-								block.thinkingSignature = block.thinkingSignature || "";
-								block.thinkingSignature += event.delta.signature;
+								// Some compatible endpoints put the signature on block_start.
+								// It is a fallback, not a prefix of the native delta sequence.
+								if (!openBlock.signatureDeltaStarted) {
+									block.thinkingSignature = "";
+									openBlock.signatureDeltaStarted = true;
+								}
+								block.thinkingSignature = (block.thinkingSignature ?? "") + event.delta.signature;
 							}
 						} else if (event.type === "content_block_stop") {
 							if (sawTerminalEnvelope) {
@@ -3521,6 +3543,10 @@ const streamAnthropicOnce = (
 							if (rawStopReason) {
 								output.stopReason = mapStopReason(rawStopReason);
 								sawTerminalEnvelope = true;
+								// 显式上下文耗尽不能丢成普通输出上限；保留正文和 length，供会话选择压缩恢复。
+								if (rawStopReason === "model_context_window_exceeded") {
+									output.stopDetails = { type: rawStopReason };
+								}
 								// On-demand compaction ends with no ordinary assistant content.
 								// A non-compaction stop (e.g. max_tokens) is not a usable summary.
 								if (rawStopReason === "compaction") {
@@ -4251,6 +4277,7 @@ const streamAnthropicOnce = (
 			});
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = transport ? result.message : maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

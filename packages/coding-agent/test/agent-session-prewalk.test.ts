@@ -194,12 +194,16 @@ describe("AgentSession prewalk", () => {
 		created.session.subscribe(event => {
 			if (event.type === "notice" && event.source === "prewalk") notices.push(event.message);
 		});
-		// The temporary-model switch requires a configured credential for the
-		// target; denying it rejects the handoff, which must disarm the prewalk
-		// and keep every turn on the primary model.
+		// Deny both the configured source and resolved request credential for the
+		// target, while leaving the primary authorized. A rejected handoff must
+		// disarm prewalk and keep every turn on the primary model.
 		const original = modelRegistry.hasConfiguredAuth.bind(modelRegistry);
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(model =>
 			model.id === created.target.id ? false : original(model),
+		);
+		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async (model, sessionId, options) =>
+			model.id === created.target.id ? undefined : originalGetApiKey(model, sessionId, options),
 		);
 
 		await created.session.prompt("first task");
@@ -489,6 +493,10 @@ describe("AgentSession prewalk", () => {
 		]);
 		await created.session.prompt("old task");
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockReturnValueOnce(false);
+		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementationOnce(async (model, sessionId, options) =>
+			model.id === created.target.id ? undefined : originalGetApiKey(model, sessionId, options),
+		);
 		await expect(created.session.setModel(created.target)).rejects.toThrow("No API key");
 		expect(await created.session.cycleRoleModels(["smol"])).toBeUndefined();
 		expect(await created.session.newSession()).toBe(true);
@@ -507,6 +515,10 @@ describe("AgentSession prewalk", () => {
 		await created.session.prompt("old task");
 		const oldSessionId = created.session.sessionId;
 		vi.spyOn(modelRegistry, "hasConfiguredAuth").mockImplementation(model => model.id !== created.primary.id);
+		const originalGetApiKey = modelRegistry.getApiKey.bind(modelRegistry);
+		vi.spyOn(modelRegistry, "getApiKey").mockImplementation(async (model, sessionId, options) =>
+			model.id === created.primary.id ? undefined : originalGetApiKey(model, sessionId, options),
+		);
 		expect(await created.session.newSession()).toBe(true);
 		expect(created.session.sessionId).not.toBe(oldSessionId);
 		expect(created.session.model?.id).toBe(created.target.id);

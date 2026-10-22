@@ -1,0 +1,720 @@
+{
+  "repository": "https://github.com/jchanghong023/OmpCode",
+  "commit": "c7c190724f3a00a2de998a0a5511201d5a2ba1a0",
+  "packages": [
+    "@zcode/dynamic-workflow",
+    "@zcode/dynamic-workflow-runtime"
+  ],
+  "scope": "Full production src closure; testing-only helpers excluded. Original source retained except external import relocation and the documented harness process-lifecycle adaptation. No original AgentRuntime, storage, or session modules.",
+  "compiler": {
+    "dependency": "zcode-workflow-typescript",
+    "specifier": "npm:typescript@5.9.3",
+    "generatedSource": "apps/zcode-cli/packages/dynamic-workflow/src/compiler/libs.generated.ts",
+    "generatedSha256": "c13483cdc1d7848983a64d3c66f4d841c6f597b3ce15044f69aec71e17aabd6e",
+    "generator": "apps/zcode-cli/packages/dynamic-workflow/scripts/generate-libs.mjs",
+    "note": "Existing generated ES2022 library closure copied verbatim from reference package using its installed TypeScript 5.9.3; generator not executed."
+  },
+  "files": [
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/child-cell-streams.ts",
+      "sha256": "8e3dbb47437aa2c9d0f8276c2f35854d6d506ae887410dbb533231d1d90c94bf",
+      "target": "dynamic-workflow-runtime/child-cell-streams.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/child-entry-file.ts",
+      "sha256": "c2771b1ef35e4221b4d96688bb6f9815eacbd22b3ae2ce177f44fb8e2bd2f709",
+      "target": "dynamic-workflow-runtime/child-entry-file.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/child-source.ts",
+      "sha256": "5b9f3b7086f3d6172d7c3b2745b30d847fffd8ccc89418262f915e2df6d51c53",
+      "target": "dynamic-workflow-runtime/child-source.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/harness.ts",
+      "sha256": "8bec6a75035e3e426f63aca893ca42d5a796f85b36b07703aed95616fbd7dbdf",
+      "target": "dynamic-workflow-runtime/harness.ts",
+      "adaptedImports": true,
+      "adaptations": [
+        "bridge preserves the original engine settlement but waits for ChildProcess close (process exit plus stdio closure) before returning; end stdin, drain stdout after closing readline, and request termination rather than returning immediately after kill.",
+        "Register child error/close and stdio handlers before handling an already-aborted signal, so cancellation cannot miss owned-process release or spawn failure.",
+        "Ignore buffered child protocol lines after engine settlement while waiting for close."
+      ]
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/index.ts",
+      "sha256": "6bfea24dd6f314066cd5f40a0a599d900ec7aa96b1f0a25c52d99cd883f4f2f8",
+      "target": "dynamic-workflow-runtime/index.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow-runtime/src/protocol.ts",
+      "sha256": "fc8cfba586b80aa6fd7f086e3bb4fb951522484e4f527fa9386725f0d2795f45",
+      "target": "dynamic-workflow-runtime/protocol.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/actor-graph.ts",
+      "sha256": "a9a3b95712698982c5760fa9faadc345798b430470f4034a52639ef160bb1830",
+      "target": "dynamic-workflow/analysis/actor-graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/actor-models.ts",
+      "sha256": "b28cf4efb9cb3adf9f4bd6da6eb8747fc6b18424b2b607532b5881ba8ce8ef3b",
+      "target": "dynamic-workflow/analysis/actor-models.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/actor-names.ts",
+      "sha256": "5530008ff1a072567766e624554dd3cf95f5b20c893fd82b43232d709ad22c72",
+      "target": "dynamic-workflow/analysis/actor-names.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/analyze.ts",
+      "sha256": "2321a47ca2c9b84036c89e157bb6b369fb6ef572dd6d7f10dbe2900471f9282a",
+      "target": "dynamic-workflow/analysis/analyze.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/array-methods.ts",
+      "sha256": "a8733fcdbf0e0e5aa75c46799bf8a3e84e65350dcc3419356480616108730467",
+      "target": "dynamic-workflow/analysis/array-methods.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/artifact-types.ts",
+      "sha256": "f8170714ef999b78f7f84107a87c74a3d1a9c9b0df95413c39f26b7665fcd06d",
+      "target": "dynamic-workflow/analysis/artifact-types.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/artifacts.ts",
+      "sha256": "4191c208346e5cba828ae4ebfc63b61e183e867ecd8413ccb0e2713f92803ee8",
+      "target": "dynamic-workflow/analysis/artifacts.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/assign.ts",
+      "sha256": "46230efec4e434a7c0a264b57dbe2ae74611f59ac5e8615745f0e7cf3f6eff5a",
+      "target": "dynamic-workflow/analysis/assign.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/callbacks.ts",
+      "sha256": "fc25af89242c2f97261c3af5fb96927e55479bd6670d166d6a92c630361c3a94",
+      "target": "dynamic-workflow/analysis/callbacks.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/calls.ts",
+      "sha256": "48196ef74706ccbe776d04769bbd6253861b18e321a2bb406f5af1d1860b04c8",
+      "target": "dynamic-workflow/analysis/calls.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-graph-lanes.ts",
+      "sha256": "91cfe8684ed75502cdfa9c1c079d2e367bafe1f240e518e96734b3dd16d95bd8",
+      "target": "dynamic-workflow/analysis/causality-graph-lanes.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-graph-types.ts",
+      "sha256": "7610c1958472d8de7d6f2b9a375893160e30e4435dd9ea7657977a62a98e24f0",
+      "target": "dynamic-workflow/analysis/causality-graph-types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-graph.ts",
+      "sha256": "50159df53f2b7087a2d6e844d3175572d7fd6fdebe16be9d2bdc56555556bf21",
+      "target": "dynamic-workflow/analysis/causality-graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-calls.ts",
+      "sha256": "7a85a6bcc1fd29d3cdfc33ebfd2ea1065e0bc6a78e2d6d9713e2a2121b110246",
+      "target": "dynamic-workflow/analysis/causality-order-calls.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-functions.ts",
+      "sha256": "76196deb7c5889b5125f19c47d5104955bf4b174b3221fb2b17fb2d3503fe14d",
+      "target": "dynamic-workflow/analysis/causality-order-functions.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-loops.ts",
+      "sha256": "ce80981d778eb5d2d3eb15c4349aab8770cb94081c4fc45bc462a41c26c7f76f",
+      "target": "dynamic-workflow/analysis/causality-order-loops.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-settle.ts",
+      "sha256": "0d43b6c54db63e8607a4b461462c02059b7e1d8feb5b99ed6682ac862049f703",
+      "target": "dynamic-workflow/analysis/causality-order-settle.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-state.ts",
+      "sha256": "04edc3f4be331937fb55ddca809d7494df24b418f0cf20a27b9c189fbde3e63f",
+      "target": "dynamic-workflow/analysis/causality-order-state.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-strands.ts",
+      "sha256": "919132d12de90b0b59825637e92bfd35bca89799d63cdc2977dc80c132878861",
+      "target": "dynamic-workflow/analysis/causality-order-strands.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-types.ts",
+      "sha256": "d22df6cb5605b7a47548a55ac983983d894c20bfa63f33859641ee9dfe999976",
+      "target": "dynamic-workflow/analysis/causality-order-types.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order-walk.ts",
+      "sha256": "a63999b12058dc2fa97cce78417d0e7a798e62a84a000431bfbff8b3dadb8044",
+      "target": "dynamic-workflow/analysis/causality-order-walk.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-order.ts",
+      "sha256": "5cf50c169179fe8705af1a29cfdceba673c344f0640e3653b86c62bc17d3b8e9",
+      "target": "dynamic-workflow/analysis/causality-order.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/causality-reduce.ts",
+      "sha256": "e8c99c4beb9eaadea4f9fcd31c82ccf66489a51d021da3a61ebcfa10584b2d2f",
+      "target": "dynamic-workflow/analysis/causality-reduce.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/classes.ts",
+      "sha256": "39c326cb1e662aca236ebbff18e8c62f43bf043b5300e5ede02dd497fb3520f7",
+      "target": "dynamic-workflow/analysis/classes.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/constants.ts",
+      "sha256": "dec44bb45653f784f9e285c26fcf45fbd9f165dde9254b8a6ba91f1317d4b453",
+      "target": "dynamic-workflow/analysis/constants.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/control-flow.ts",
+      "sha256": "7ee218370e4c3b2a5d769baffeff5f233d131e2d925e95a869831a578da8f379",
+      "target": "dynamic-workflow/analysis/control-flow.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/core-json.ts",
+      "sha256": "d9d554c51818edfeb0be53ffa1f4fa38b5cbbf64aef63b72b5ada2830eca36b6",
+      "target": "dynamic-workflow/analysis/core-json.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/core.ts",
+      "sha256": "a6f42a65a045bb3cc1158456920a8c732eb6a6824e30eccdd0d4066a17422f3a",
+      "target": "dynamic-workflow/analysis/core.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/domain.ts",
+      "sha256": "199f52f155da2252281ff4ad0e5afe7ba6638f2356be916cb2cb1c7ae5cd401a",
+      "target": "dynamic-workflow/analysis/domain.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/facade-misuse.ts",
+      "sha256": "84925f4817e05811afee033454319a94f9ab0654c140ea54487d843f7f341760",
+      "target": "dynamic-workflow/analysis/facade-misuse.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/fanout-cardinality.ts",
+      "sha256": "8f967c348b025d1616bf3c68c3116ef0ac95c325237d4e688609c9d2d75ed3cb",
+      "target": "dynamic-workflow/analysis/fanout-cardinality.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/flow-graph.ts",
+      "sha256": "a51fbdcaa7677fb3f10e0fa7390005e3a4efd3a34b03d4ac8d8d40e05fc6877a",
+      "target": "dynamic-workflow/analysis/flow-graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/flow-phase.ts",
+      "sha256": "c7554f5c8d2d86905c737b86b063926e19e8559e5c222129e12afde4034a8cdf",
+      "target": "dynamic-workflow/analysis/flow-phase.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/flow-strands.ts",
+      "sha256": "84d54f2e04f9d6ef9637be9cfd2d853ce39824815da9d3b9f997db5efa086376",
+      "target": "dynamic-workflow/analysis/flow-strands.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/flow-tree.ts",
+      "sha256": "fdb7ac7b27134382980f0e4728926996c7c6872aff123ab32a19b77bf93d9d85",
+      "target": "dynamic-workflow/analysis/flow-tree.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/graph.ts",
+      "sha256": "68b6b37fb39059994ffd2b34dbbe14278fa3ad015c790fba83a04ea54e3b05aa",
+      "target": "dynamic-workflow/analysis/graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/handoff-graph.ts",
+      "sha256": "a38d2e5cbbc060c74fb2c07cc6512d35836ff504f0bf6f0e31b2fc51022d7583",
+      "target": "dynamic-workflow/analysis/handoff-graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/heap-ops.ts",
+      "sha256": "11507dc605b84f4ad643967bdea68413ebde790af89b20db174da4fd37dfd6b0",
+      "target": "dynamic-workflow/analysis/heap-ops.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/hole-id.ts",
+      "sha256": "7720e764930ebeca1b57de76b0c362eac2d1eb9ceb4296aab860ed3ef6d6e4fc",
+      "target": "dynamic-workflow/analysis/hole-id.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/hole-sites.ts",
+      "sha256": "d26052e40407c14e7643fdc59e6c97824698610e4dcebdcaa7e433067c5e4d12",
+      "target": "dynamic-workflow/analysis/hole-sites.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/hole-splice.ts",
+      "sha256": "298494d665fe027e8d49b9a72504f2a59954f30b3001ba6be0141af9fbc50eae",
+      "target": "dynamic-workflow/analysis/hole-splice.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/interpret.ts",
+      "sha256": "ae589c45782ec30065eae532206f35bc210e870457bf2a30be18591c25d185b3",
+      "target": "dynamic-workflow/analysis/interpret.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/literals.ts",
+      "sha256": "beac2d27fc4b91c7e9a97c394132beabdeb6104c0847218275cb7d60f5679794",
+      "target": "dynamic-workflow/analysis/literals.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/mermaid.ts",
+      "sha256": "6eef0d27ad5943c0e209c5cf1e9f27af6edddc0ee3417403a8bfb5168285845b",
+      "target": "dynamic-workflow/analysis/mermaid.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/patterns.ts",
+      "sha256": "a89028fe1130d05b0643f2666d0cbbbf75195f1775eae1dc8e0d5f4c921c5b6b",
+      "target": "dynamic-workflow/analysis/patterns.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/phase-graph.ts",
+      "sha256": "4a995ca593b95e527c7a605e550056323ab313bffc60f5caf2dc543791ca8999",
+      "target": "dynamic-workflow/analysis/phase-graph.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/phases.ts",
+      "sha256": "27418cde742a6128842498cb202e4972196e3c95bd479523f29b9034f1afbd0d",
+      "target": "dynamic-workflow/analysis/phases.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/promise-ops.ts",
+      "sha256": "ab7e1dbc677276001abe71e748a0cb6d266a93353ea3f49605f92059d2eee4a8",
+      "target": "dynamic-workflow/analysis/promise-ops.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/relays.ts",
+      "sha256": "fe1d717caeda7a615af26416b7b1cf1c91341cb1454a72ad30e453745f6b5fa1",
+      "target": "dynamic-workflow/analysis/relays.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/serialize.ts",
+      "sha256": "c7f93c4dbb3f7661d87de83e62421441f242471832955aaf4c35753eb484f4d8",
+      "target": "dynamic-workflow/analysis/serialize.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/site-phases.ts",
+      "sha256": "ffaa8ffe30726d4d437ddd87062508ac7944223a7e7e47f4687f9acfa13876b9",
+      "target": "dynamic-workflow/analysis/site-phases.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/sites-labels.ts",
+      "sha256": "aa606eef6898fec5a4964b019991d2a9fe4610a63a074313d91aac3906761a72",
+      "target": "dynamic-workflow/analysis/sites-labels.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/sites.ts",
+      "sha256": "3882441c984204561b8ee36116082c47a6ad98e2c111f7b41c9a546ca7306638",
+      "target": "dynamic-workflow/analysis/sites.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/state.ts",
+      "sha256": "a2a326b088f1889ecc68d58b53e49320fdec95961dbc832ec8ebae12a4de759e",
+      "target": "dynamic-workflow/analysis/state.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/taint.ts",
+      "sha256": "7e286b59bafe779516d8ac4478f0897ef90dfdd42385df218c16761394ff396f",
+      "target": "dynamic-workflow/analysis/taint.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/types.ts",
+      "sha256": "6a61682883b87aeece204672646efe8e4f535d07328b96fef72fb51614127c5c",
+      "target": "dynamic-workflow/analysis/types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/analysis/world-run.ts",
+      "sha256": "2ecba8073a7c5664dd65fb274418f5637a345b3fc695c3152c17cd443b231d9c",
+      "target": "dynamic-workflow/analysis/world-run.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/compiler/compile.ts",
+      "sha256": "3e23dcd45091286a70c1decb1bdda6727ade8be564baa7bcccc875caf0e54bc1",
+      "target": "dynamic-workflow/compiler/compile.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/artifact-spec.ts",
+      "sha256": "ab16b674bbcd7e6ea0e49b9bc8af66e87cb76a099971b1d217fc304e31b1fa8e",
+      "target": "dynamic-workflow/engine/artifact-spec.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/ask-observation-types.ts",
+      "sha256": "2a8b8a32f12dc09b95b98a7e732095698dc0b615505d94fad57d31d4c279a164",
+      "target": "dynamic-workflow/engine/ask-observation-types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/cached-ask-facts.ts",
+      "sha256": "cda2d9ea521e60f6c48f177da3b2258efed2f9c26d545f460c1a6760d6fa126a",
+      "target": "dynamic-workflow/engine/cached-ask-facts.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/concurrency.ts",
+      "sha256": "a289c4da9a00f6be79ec3f0424d4b62bda18a10f21c982f47c231eb63882e971",
+      "target": "dynamic-workflow/engine/concurrency.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-artifacts-primary.ts",
+      "sha256": "273274d148c051b41c88cd524f0bbfe3ff81333b8df7b6fa19548aea8c103036",
+      "target": "dynamic-workflow/engine/engine-artifacts-primary.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-artifacts.ts",
+      "sha256": "d20de3d7dc88ff2a9f4eb691a05a68d13c7a66f0f62b6fd7363ca838d66a49d3",
+      "target": "dynamic-workflow/engine/engine-artifacts.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-config.ts",
+      "sha256": "3290941602722d26cd753f754dbcb3661169feb70173fd34154b3ef72ababb34",
+      "target": "dynamic-workflow/engine/engine-config.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-holes.ts",
+      "sha256": "bd6b24889d887fa1981b31f56edc1845f3a2b5d54484e68e71205ae91a6c9742",
+      "target": "dynamic-workflow/engine/engine-holes.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-launch.ts",
+      "sha256": "46c38188a033c0527977dcbfafc263c080710918c657188452dbc321b07b7606",
+      "target": "dynamic-workflow/engine/engine-launch.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-phase-stamp.ts",
+      "sha256": "1fc1548761c1d146d5065dc2226910b294fc46a448d8a2f0d99895e375a96e9d",
+      "target": "dynamic-workflow/engine/engine-phase-stamp.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-report.ts",
+      "sha256": "edfb15409a1fd2603c2b88dea5cb05cb81a49b3a7d924a2cffe48caf8f492588",
+      "target": "dynamic-workflow/engine/engine-report.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-resume.ts",
+      "sha256": "784964825c8f38e3834ed5a0f651cfe220bc7f6add46514523be0cfc909f84e4",
+      "target": "dynamic-workflow/engine/engine-resume.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-settlement.ts",
+      "sha256": "7fbf2afbb2da957c75b67d4b19cfbafbe9e2123c05a33e3b6d9f875ac8426dc0",
+      "target": "dynamic-workflow/engine/engine-settlement.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-state.ts",
+      "sha256": "6d19505192b7f910145c04dfc44f07ea043c20e7d1c50ff78c18fdcbf3126b49",
+      "target": "dynamic-workflow/engine/engine-state.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine-world.ts",
+      "sha256": "2de277860791a025f59b599e3953f554c936f2bbf611f3ee84e1b20dc28256b7",
+      "target": "dynamic-workflow/engine/engine-world.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/engine.ts",
+      "sha256": "790728c8d415f2fd721242fc35627069676c5a0ee6a6f349232da67a1e239934",
+      "target": "dynamic-workflow/engine/engine.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/errors.ts",
+      "sha256": "6d8c70bc553320fd7ac55dac75ad09ee4e6db1f60991f3690094f192aeaced6e",
+      "target": "dynamic-workflow/engine/errors.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/hash-mismatch.ts",
+      "sha256": "ac0b245cfcc08d22dbe495fabeb5a384c3c3017be3ed831a3e4f479c7e7bd016",
+      "target": "dynamic-workflow/engine/hash-mismatch.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/hash.ts",
+      "sha256": "9b96aac60af892ee7bea42bf685f714a637535569afe8a1231040568df83c427",
+      "target": "dynamic-workflow/engine/hash.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/imported-cache-types.ts",
+      "sha256": "e83bea8268272b5dd0a109edea04221c905c7a3818442b7ed241cc6ecc6ab9fa",
+      "target": "dynamic-workflow/engine/imported-cache-types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/imported-cache.ts",
+      "sha256": "1888d8b7a977f601efdff6dea4999d32439c373d28fe379ca447398769959a74",
+      "target": "dynamic-workflow/engine/imported-cache.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/index.ts",
+      "sha256": "aa3a11096263966304a86b5b1ffc8819e0a1db4ada47dfd8f85fbddec74756b1",
+      "target": "dynamic-workflow/engine/index.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/journal-memory.ts",
+      "sha256": "32cbe0c07cae5ab517dfd8493714dbe222e64bd420b976195a1b0b276bdc39aa",
+      "target": "dynamic-workflow/engine/journal-memory.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/journal-read-types.ts",
+      "sha256": "49187826d0e2ac9887aa9fc0f762ebb6e8e439178de648ea1b31938be7adfd0a",
+      "target": "dynamic-workflow/engine/journal-read-types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/persona.ts",
+      "sha256": "a1774037382272156ab25c516c7f090a69c19b1ef6d607080acc62418d55e48d",
+      "target": "dynamic-workflow/engine/persona.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/replay-order.ts",
+      "sha256": "aba075578676e095e1578bd021e1b017931d4bb33930fa8c672d3ffb22d2bb69",
+      "target": "dynamic-workflow/engine/replay-order.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/run-terminal.ts",
+      "sha256": "1289a06f7928e06e34a992ffced8067f102162f8ab623900003e1afb320bb418",
+      "target": "dynamic-workflow/engine/run-terminal.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/scheduler-submit.ts",
+      "sha256": "58e220b86f9c84e2dcb45af4e8933c0bc7f3ad77eeed5a5d6782f3dc96636d5e",
+      "target": "dynamic-workflow/engine/scheduler-submit.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/scheduler-types.ts",
+      "sha256": "06852e6c2668beaeaf1950e4bc00bc8f2f108175f83a465d1afb9758ac8e82c9",
+      "target": "dynamic-workflow/engine/scheduler-types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/scheduler.ts",
+      "sha256": "f1f8e1c2829cd90914fb04cf1ced25136597ec8fccdea88343a4affc8a15fd30",
+      "target": "dynamic-workflow/engine/scheduler.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/types.ts",
+      "sha256": "42501b4b8fcd3cfd9976907a4b8bd61fa3779920f7256dc09dcd90eab2cfc7ec",
+      "target": "dynamic-workflow/engine/types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/engine/world-read-input.ts",
+      "sha256": "3438eb91f8c23165a4d5821820dc162a092f963a172c5fcc30aba5e8793e54b5",
+      "target": "dynamic-workflow/engine/world-read-input.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/artifact-caps.ts",
+      "sha256": "2370e966732e519248a89c73c40cad8bcd0d9c15d5a029d1cb309922e395b7ae",
+      "target": "dynamic-workflow/facade/artifact-caps.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/dts-hole.ts",
+      "sha256": "a367618dfe01cc6a528ca0272440f617f4d019559bd7d10c577a1c7e9614f1fb",
+      "target": "dynamic-workflow/facade/dts-hole.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/dts-model.ts",
+      "sha256": "96b21aa8e7df1feb7c98b50ae6f5a12883766afc039ac58d1a92e01b7ec58515",
+      "target": "dynamic-workflow/facade/dts-model.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/dts-stream.ts",
+      "sha256": "6cccec32d6531eca72031486b2bb6b63efd021960695f55631a0e777111fc20d",
+      "target": "dynamic-workflow/facade/dts-stream.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/dts.ts",
+      "sha256": "83aed2749e5f3a11be819ac2f3b8678c2944ef20c3e9fdd937df3af4c1c7357a",
+      "target": "dynamic-workflow/facade/dts.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/registry.ts",
+      "sha256": "425cc29a04b48ce4f81a731988da72ce7f0e101ebfdb27c3b4f4bd3df0bc0640",
+      "target": "dynamic-workflow/facade/registry.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/report-caps.ts",
+      "sha256": "5973c27ed5b755790196a3ccd904a01db6b2f3a2cc4cee1c75a3252b62e5765e",
+      "target": "dynamic-workflow/facade/report-caps.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/facade/world-read-caps.ts",
+      "sha256": "aa2aedf2fd96e99a5192f3deaea7e00723780c9a69c20bea63684d1df27a144f",
+      "target": "dynamic-workflow/facade/world-read-caps.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/index.ts",
+      "sha256": "b5691da248f6c1319bdb0b50e7f25d8f9f7eea12806cb1a7a88aa0f5bba54f91",
+      "target": "dynamic-workflow/index.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/lowering/index.ts",
+      "sha256": "dd2441a20902c6e3c1524d88b2a925c2b8d7683be25ce6dab61f837edc8874c8",
+      "target": "dynamic-workflow/lowering/index.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/lowering/lower-hole.ts",
+      "sha256": "8d8bb78d58a46eb395f87384d47b5a6c8b2ded2a721ddcc5bd157015d0f35d40",
+      "target": "dynamic-workflow/lowering/lower-hole.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/lowering/lower.ts",
+      "sha256": "4eadbdfad642a4310ebd78716f9ade043ebdb580d8fd90d73f57fb8ed8030505",
+      "target": "dynamic-workflow/lowering/lower.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/projections.ts",
+      "sha256": "2597436336b22990e6616691ea8997d5faca00001f69e13ff51878d3f000c9be",
+      "target": "dynamic-workflow/projections.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/actor-submit-profiles.ts",
+      "sha256": "ab3aff8a609722ba4854c1f04f3738a6dbe6588812fa946f4ac56da8628d3fb7",
+      "target": "dynamic-workflow/schema/actor-submit-profiles.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/emit.ts",
+      "sha256": "98b19778e7228d2ac4cafa5057c16873e8b47acec30be9ccf3b53995b2ed6fa1",
+      "target": "dynamic-workflow/schema/emit.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/jsdoc.ts",
+      "sha256": "c51e51ac2fe1465b6d0109a32fc1f742f1a08444f60b0b2ef32c195b9e883444",
+      "target": "dynamic-workflow/schema/jsdoc.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/serialize.ts",
+      "sha256": "e599d6701a73c526264056da042ae2a5291906bb36ebc47ec374085b0cb83d0b",
+      "target": "dynamic-workflow/schema/serialize.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/synthesize.ts",
+      "sha256": "85b3c645c6c444d0c88200de976c3851a3c1302c345eb2d89c994fc866031693",
+      "target": "dynamic-workflow/schema/synthesize.ts",
+      "adaptedImports": true
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/types.ts",
+      "sha256": "328bda07061843d17e8d9699e2cc92b37c7803586f38a7f92722811063e6e082",
+      "target": "dynamic-workflow/schema/types.ts",
+      "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/dynamic-workflow/src/schema/validate.ts",
+      "sha256": "915fd213e12d521ed585f061aa04e9c4777c6813457fcdf54d6da3acd2c4ec12",
+      "target": "dynamic-workflow/schema/validate.ts",
+      "adaptedImports": false
+    }
+  ]
+}

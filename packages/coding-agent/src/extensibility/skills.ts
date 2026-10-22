@@ -297,6 +297,8 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 export interface LoadSkillsOptions extends SkillsSettings {
 	/** Working directory for project-local skills. Default: getProjectDir() */
 	cwd?: string;
+	/** Native profile config root; does not bind process-global settings. */
+	agentDir?: string;
 	/** Disabled extension ids (`disabledExtensions`); `skill:<name>` entries hide those skills. */
 	disabledExtensions?: string[];
 	/**
@@ -324,6 +326,7 @@ export async function loadSkillCatalog(
 ): Promise<LoadSkillCatalogResult> {
 	const {
 		cwd = getProjectDir(),
+		agentDir,
 		enabled = true,
 		enableCodexUser = true,
 		enableClaudeUser = false,
@@ -367,6 +370,7 @@ export async function loadSkillCatalog(
 	// Use capability API to load all skills
 	const result = await loadCapability<CapabilitySkill>(skillCapability.id, {
 		cwd,
+		agentDir,
 		// Item disables are applied after catalog name resolution, not by capability dedup.
 		disabledExtensions: scope === "active" ? [] : disabledExtensions,
 		extensionRoots,

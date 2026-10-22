@@ -234,6 +234,9 @@ describe("team in-process integration", () => {
 				session,
 				extensionsResult: { extensions: [], errors: [], runtime: new ExtensionRuntime() },
 				setToolUIContext: () => {},
+				getToolContext: () => {
+					throw new Error("Native tool context is unavailable in this fixture");
+				},
 				eventBus: new EventBus(),
 			};
 			return result;

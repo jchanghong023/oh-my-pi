@@ -11,7 +11,7 @@ import type { OAuthController, OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/ty
 import type { FetchImpl } from "@oh-my-pi/pi-ai/types";
 import { getActiveProfile } from "@oh-my-pi/pi-utils/dirs";
 import type { OAuthCredential } from "../session/auth-storage";
-import { buildWellKnownUrls } from "./oauth-discovery";
+import { buildWellKnownUrls, discoverOAuthEndpoints } from "./oauth-discovery";
 
 /** Credential-id prefix for OMP-managed MCP OAuth credentials keyed by profile and server URL. */
 const MCP_OAUTH_URL_CREDENTIAL_PREFIX = "mcp_oauth:";
@@ -851,4 +851,45 @@ export async function refreshMCPOAuthToken(
 		refresh: data.refresh_token ?? refreshToken,
 		expires: Date.now() + expiresIn * 1000,
 	};
+}
+
+/** Acquire the non-interactive OAuth grant through the same MCP discovery/token boundary. */
+export async function requestMCPClientCredentialsToken(
+	serverUrl: string,
+	client: { clientId: string; clientSecret: string; scope?: string },
+	signal?: AbortSignal,
+): Promise<OAuthCredentials> {
+	const endpoints = await discoverOAuthEndpoints(serverUrl, undefined, undefined, { signal, tokenOnly: true });
+	if (!endpoints?.tokenUrl) throw new Error("MCP OAuth token endpoint is unavailable");
+	const params = new URLSearchParams({
+		grant_type: "client_credentials",
+		client_id: client.clientId,
+		client_secret: client.clientSecret,
+		resource: endpoints.resource ?? serverUrl,
+	});
+	if (client.scope) params.set("scope", client.scope);
+	const response = await fetch(endpoints.tokenUrl, {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: params,
+		signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
+		redirect: "error",
+	});
+	if (!response.ok) throw new Error(`MCP OAuth client credentials grant failed (${response.status})`);
+	const data: unknown = await response.json();
+	if (
+		!data ||
+		typeof data !== "object" ||
+		!("access_token" in data) ||
+		typeof data.access_token !== "string" ||
+		data.access_token.length === 0 ||
+		("token_type" in data && String(data.token_type).toLowerCase() !== "bearer")
+	) {
+		throw new Error("MCP OAuth client credentials response is invalid");
+	}
+	const expiresIn = "expires_in" in data ? data.expires_in : 3600;
+	if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+		throw new Error("MCP OAuth client credentials expiry is invalid");
+	}
+	return { access: data.access_token, refresh: "", expires: Date.now() + expiresIn * 1000 };
 }

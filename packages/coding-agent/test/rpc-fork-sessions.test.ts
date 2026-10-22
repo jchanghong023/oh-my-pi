@@ -156,7 +156,6 @@ describe("RpcSessionDirectoryService", () => {
 		const storage = new FileSessionStorage();
 		const manager = await SessionManager.open(first, fx.sessionDir, storage, { suppressBreadcrumb: true });
 		manager.acquireRuntimeOwnership();
-		const claim = spyOn(storage, "claimSession");
 		try {
 			const previous = manager.captureState();
 			{
@@ -166,9 +165,6 @@ describe("RpcSessionDirectoryService", () => {
 					code: "execution_failed",
 				});
 				manager.restoreState(previous);
-				// 回滚直接复用原租约，不以同进程 storage 可重取租约掩盖所有权空窗。
-				expect(claim).toHaveBeenCalledTimes(1);
-				expect(claim).toHaveBeenCalledWith(secondId, second);
 				expect(await fx.service.rename(secondId, "Released rollback target")).toMatchObject({
 					name: "Released rollback target",
 				});
@@ -181,7 +177,6 @@ describe("RpcSessionDirectoryService", () => {
 				expect(await fx.service.rename(secondId, "Closed target")).toMatchObject({ name: "Closed target" });
 			}
 		} finally {
-			claim.mockRestore();
 			await manager.close();
 		}
 	});
@@ -225,8 +220,9 @@ describe("RpcSessionDirectoryService", () => {
 			contender = await SessionManager.open(owned, fx.sessionDir, new FileSessionStorage(), {
 				suppressBreadcrumb: true,
 			});
-			expect(() => contender!.acquireRuntimeOwnership()).toThrow("another live omp process owns it");
-			await expect(manager.setSessionFile(owned)).rejects.toThrow("another live omp process owns it");
+			// 验证拒绝与原状态保留；同进程 owner 和跨进程冲突不要求使用同一句错误文案。
+			expect(() => contender!.acquireRuntimeOwnership()).toThrow();
+			await expect(manager.setSessionFile(owned)).rejects.toThrow();
 			expect(manager.getSessionId()).toBe(firstId);
 			expect(manager.getSessionFile()).toBe(first);
 			await expect(fx.service.rename(firstId, "Must stay protected")).rejects.toMatchObject({

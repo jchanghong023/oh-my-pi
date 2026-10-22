@@ -132,7 +132,7 @@ function createHarness(options?: { hangPrompt?: boolean; asyncJobManager?: Async
 		agent: { state: { systemPrompt: ["test"] } },
 		model: undefined,
 		extensionRunner: undefined,
-		sessionManager: { appendSessionInit: () => {} },
+		sessionManager: { appendSessionInit: () => {}, getCwd: () => process.cwd() },
 		getActiveToolNames: () => ["read", "yield"],
 		getEnabledToolNames: () => ["read", "yield"],
 		getToolByName: () => undefined,
@@ -223,6 +223,9 @@ describe("runSubprocess result acceptance", () => {
 			session: harness.session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
+			getToolContext: () => {
+				throw new Error("Native tool context is unavailable in this fixture");
+			},
 			eventBus: new EventBus(),
 		} as CreateAgentSessionResult);
 
@@ -252,6 +255,9 @@ describe("runSubprocess result acceptance", () => {
 			session: harness.session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
+			getToolContext: () => {
+				throw new Error("Native tool context is unavailable in this fixture");
+			},
 			eventBus: new EventBus(),
 		} as CreateAgentSessionResult);
 		const delivered = Promise.withResolvers<{ id: string; text: string }>();

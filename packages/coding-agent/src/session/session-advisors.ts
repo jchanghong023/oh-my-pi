@@ -1566,7 +1566,10 @@ export class SessionAdvisors {
 				snapshotMessages: () => this.#host.agent.state.messages,
 				maintainContext: (incoming, signal) => this.#maintainAdvisorContext(advisorRef, incoming, signal),
 				obfuscator: this.#host.obfuscator(),
-				getModelIdentity: () => formatModelString(advisorRef.agent.state.model),
+				getModelIdentity: () => {
+					const model = advisorRef.agent.state.model;
+					return model ? formatModelString(model) : "unknown";
+				},
 				beginAdvisorUpdate: inProgress => {
 					advisorRef.recorder.beginTurn();
 					// Flushes the deferred backlog on the in-progress→completed
@@ -1594,7 +1597,7 @@ export class SessionAdvisors {
 					advisorRef.retryFallbackPendingSuccess = false;
 					await this.#host.emitSessionEvent({
 						type: "retry_fallback_succeeded",
-						model: formatRetryFallbackSelector(advisorRef.agent.state.model, advisorRef.thinkingLevel),
+						model: formatRetryFallbackSelector(this.#requireAdvisorModel(advisorRef), advisorRef.thinkingLevel),
 						role: fallback.role,
 					});
 				},
@@ -1602,9 +1605,10 @@ export class SessionAdvisors {
 				notifyFailure: error => {
 					this.#advisorStatuses.set(slug, { name: advisorName, status: "error" });
 					const message = error instanceof Error ? error.message : String(error);
+					const model = advisorAgent.state.model;
 					this.#host.emitNotice(
 						"warning",
-						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${formatModelString(advisorAgent.state.model)}: ${message}`,
+						`Advisor${slug ? ` "${advisorName}"` : ""} unavailable for ${model ? formatModelString(model) : "unknown"}: ${message}`,
 						"advisor",
 					);
 				},
@@ -1922,6 +1926,12 @@ export class SessionAdvisors {
 		});
 	}
 
+	#requireAdvisorModel(advisor: ActiveAdvisor): Model {
+		const model = advisor.agent.state.model;
+		if (!model) throw new Error(`Advisor "${advisor.name}": no model configured`);
+		return model;
+	}
+
 	/** Switch one advisor model while preserving its context and effort invariants. */
 	#setAdvisorModel(advisor: ActiveAdvisor, model: Model, requestedThinkingLevel: ThinkingLevel): ThinkingLevel {
 		const resolvedThinkingLevel = resolveThinkingLevelForModel(model, requestedThinkingLevel);
@@ -1998,7 +2008,7 @@ export class SessionAdvisors {
 			advisor.retryFallbackPendingSuccess = false;
 			return;
 		}
-		const currentSelector = formatRetryFallbackSelector(advisor.agent.state.model, advisor.thinkingLevel);
+		const currentSelector = formatRetryFallbackSelector(this.#requireAdvisorModel(advisor), advisor.thinkingLevel);
 		if (currentSelector === originalSelector.raw) {
 			if (!this.#host.isRetryFallbackSelectorSuppressed(originalSelector)) {
 				advisor.retryFallback = undefined;
@@ -2051,7 +2061,7 @@ export class SessionAdvisors {
 		const assistantFailure = failedMessage?.stopReason === "error" ? failedMessage : undefined;
 		if (assistantFailure?.content.some(block => block.type === "toolCall")) return false;
 
-		const currentModel = advisor.agent.state.model;
+		const currentModel = this.#requireAdvisorModel(advisor);
 		const message = assistantFailure?.errorMessage ?? (error instanceof Error ? error.message : String(error));
 		const errorId = assistantFailure
 			? AIError.classifyMessage({
@@ -2324,7 +2334,7 @@ export class SessionAdvisors {
 			return false;
 		}
 		const compactionMethod = methods.includes("remote") ? "remote" : "soft";
-		let advisorModel = agent.state.model;
+		let advisorModel = this.#requireAdvisorModel(advisor);
 		let compactionSettings = resolveMethodSettings(
 			resolveModelCompactionSettings(this.#host.settings, advisorModel),
 			compactionMethod,
@@ -2365,7 +2375,7 @@ export class SessionAdvisors {
 		// 1. Try promotion first
 		if (await this.#promoteAdvisorContextModel(advisor, advisorModel, signal)) {
 			// Promotion succeeded, check if new model has enough space under its own compaction point
-			const newModel = agent.state.model;
+			const newModel = this.#requireAdvisorModel(advisor);
 			compactionSettings = resolveMethodSettings(
 				resolveModelCompactionSettings(this.#host.settings, newModel),
 				compactionMethod,
@@ -2376,7 +2386,7 @@ export class SessionAdvisors {
 				if (!stillNeedsCompaction) return false;
 			}
 		}
-		advisorModel = agent.state.model;
+		advisorModel = this.#requireAdvisorModel(advisor);
 		const previousSummary = messages.findLast(
 			(message): message is AdvisorCompactionSummaryMessage => message.role === "compactionSummary",
 		);
@@ -2969,7 +2979,7 @@ export class SessionAdvisors {
 					? "error"
 					: "running",
 			model,
-			contextWindow: model.contextWindow ?? 0,
+			contextWindow: model?.contextWindow ?? 0,
 			contextTokens,
 			tokens: { input, output, reasoning, cacheRead, cacheWrite, total: totalTokens },
 			cost: this.#advisorCosts.get(advisor.slug) ?? 0,
@@ -3061,7 +3071,10 @@ export class SessionAdvisors {
 					});
 		if (this.#advisors.length === 1) return dump(this.#advisors[0]);
 		return this.#advisors
-			.map(a => `### Advisor: ${a.name} (${a.agent.state.model.provider}/${a.agent.state.model.id})\n\n${dump(a)}`)
+			.map(a => {
+				const model = a.agent.state.model;
+				return `### Advisor: ${a.name} (${model ? `${model.provider}/${model.id}` : "unknown"})\n\n${dump(a)}`;
+			})
 			.join("\n\n");
 	}
 }

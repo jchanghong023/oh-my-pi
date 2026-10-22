@@ -73,6 +73,9 @@ export class RpcPlanController {
 	readonly #output: (text: string) => void;
 	readonly #runInBackground: (task: () => Promise<void>) => void;
 	readonly #onReviewRejected: (() => void) | undefined;
+	readonly #approvePlan:
+		| ((details: PlanApprovalDetails, content: string, signal: AbortSignal) => Promise<boolean>)
+		| undefined;
 	#previousTools: ToolPresentation | undefined;
 	#previousModel: ModelSnapshot | undefined;
 	#pendingModel: ModelSnapshot | undefined;
@@ -108,12 +111,14 @@ export class RpcPlanController {
 		output: (text: string) => void,
 		runInBackground: (task: () => Promise<void>) => void,
 		onReviewRejected?: () => void,
+		approvePlan?: (details: PlanApprovalDetails, content: string, signal: AbortSignal) => Promise<boolean>,
 	) {
 		this.#session = session;
 		this.#ui = ui;
 		this.#output = output;
 		this.#runInBackground = runInBackground;
 		this.#onReviewRejected = onReviewRejected;
+		this.#approvePlan = approvePlan;
 	}
 
 	get reviewPending(): boolean {
@@ -254,7 +259,7 @@ export class RpcPlanController {
 		}
 	}
 
-	async handle(args: string, signal?: AbortSignal): Promise<SlashCommandResult> {
+	async handle(args: string, signal?: AbortSignal, atInputBoundary = false): Promise<SlashCommandResult> {
 		this.#logContext = {
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `rpc-plan-${crypto.randomUUID()}`,
@@ -287,10 +292,13 @@ export class RpcPlanController {
 				if (!current()) return;
 				await this.#enqueue(async () => {
 					if (!current()) return;
-					await this.#session.runModeExitTeardown(async () => {
-						if (this.#session.isStreaming) await this.#session.abort({ reason: USER_INTERRUPT_LABEL });
-						if (current()) await this.#exit(true);
-					});
+					// 已由原生输入投递边界串行化，不能 abort 等待自己；普通 /plan 仍先停止运行。
+					if (atInputBoundary) await this.#exit(true, true, false, true);
+					else
+						await this.#session.runModeExitTeardown(async () => {
+							if (this.#session.isStreaming) await this.#session.abort({ reason: USER_INTERRUPT_LABEL });
+							if (current()) await this.#exit(true);
+						});
 				});
 			}, signal);
 			return { consumed: true };
@@ -307,7 +315,7 @@ export class RpcPlanController {
 		await this.#enqueue(async () => {
 			if (!current()) return;
 			try {
-				await this.#enter(undefined, false, current);
+				await this.#enter(undefined, false, current, undefined, atInputBoundary);
 			} catch (error) {
 				if (current() || !(error instanceof Error && error.name === "AbortError")) throw error;
 			}
@@ -505,6 +513,7 @@ export class RpcPlanController {
 		preserveModel = false,
 		current: () => boolean = () => true,
 		previousModel?: ModelSnapshot,
+		atInputBoundary = false,
 	): Promise<void> {
 		const started = performance.now();
 		this.#log("plan_enter_started", "enter", "started");
@@ -539,7 +548,7 @@ export class RpcPlanController {
 				...new Set([...tools.filter(name => name !== "write"), ...(builtInWrite ? ["write"] : [])]),
 			]);
 			assertCurrent();
-			if (!preserveModel) await this.#applyPlanModel();
+			if (!preserveModel) await this.#applyPlanModel(atInputBoundary);
 			assertCurrent();
 			session.setPlanProposalHandler(async title => {
 				const current = this.#guard(this.#operation.signal);
@@ -553,7 +562,7 @@ export class RpcPlanController {
 				if (current() && result.details) this.#proposal = { details: result.details, current };
 				return result;
 			});
-			if (session.isStreaming) await session.sendPlanModeContext({ deliverAs: "steer" });
+			if (session.isStreaming && !atInputBoundary) await session.sendPlanModeContext({ deliverAs: "steer" });
 			assertCurrent();
 		} catch (error) {
 			this.#log("plan_rollback_started", "enter_rollback", "started", { elapsed_ms: performance.now() - started });
@@ -580,13 +589,13 @@ export class RpcPlanController {
 		this.#log("plan_enter_completed", "enter", "enabled", { elapsed_ms: performance.now() - started });
 	}
 
-	async #applyPlanModel(): Promise<void> {
+	async #applyPlanModel(atInputBoundary = false): Promise<void> {
 		this.#modelRevision++;
 		const session = this.#session;
 		const transition = resolvePlanModelTransition(
 			session.model,
 			session.resolveRoleModelWithThinking("plan"),
-			session.isStreaming,
+			session.isStreaming && !atInputBoundary,
 		);
 		this.#pendingModel = undefined;
 		if (transition.kind === "thinking") session.setThinkingLevel(transition.thinkingLevel);
@@ -602,7 +611,7 @@ export class RpcPlanController {
 		else await this.#session.setModelTemporary(previous.model, previous.thinkingLevel);
 	}
 
-	async #exit(paused: boolean, journal = true, ensureRead = false): Promise<void> {
+	async #exit(paused: boolean, journal = true, ensureRead = false, atInputBoundary = false): Promise<void> {
 		const started = performance.now();
 		this.#log("plan_exit_started", "exit", "started", { paused });
 		const session = this.#session;
@@ -621,7 +630,7 @@ export class RpcPlanController {
 				await session.restoreNonMCPToolPresentation(executionTools, this.#previousTools.mounted);
 			}
 			if (this.#previousModel) {
-				if (session.isStreaming) pendingModel = this.#previousModel;
+				if (session.isStreaming && !atInputBoundary) pendingModel = this.#previousModel;
 				else await this.#restoreModel(this.#previousModel);
 			}
 		} catch (error) {
@@ -681,11 +690,11 @@ export class RpcPlanController {
 			this.#output(content);
 			stage = "approval";
 			this.#log("plan_stage_started", stage, "started");
-			const approved = await this.#ui.confirm(
-				"Approve plan?",
-				`Execute ${details.title} while keeping the current context?`,
-				{ signal },
-			);
+			const approved = this.#approvePlan
+				? await this.#approvePlan(details, content, signal)
+				: await this.#ui.confirm("Approve plan?", `Execute ${details.title} while keeping the current context?`, {
+						signal,
+					});
 			result = current() ? (approved ? "approved" : "rejected") : "cancelled";
 			this.#log("plan_stage_completed", stage, result);
 			if (!current() || !approved) return;

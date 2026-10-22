@@ -9,6 +9,7 @@
  * revival) and are only removed on explicit release/teardown.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentSession } from "../session/agent-session";
 import { AgentAwaits } from "./agent-awaits";
@@ -124,8 +125,20 @@ export interface RegisterInput {
 
 export class AgentRegistry {
 	static #global: AgentRegistry | undefined;
+	static readonly #scope = new AsyncLocalStorage<AgentRegistry>();
+
+	/** Bind legacy lookups to an embedded session tree, including its asynchronous work. */
+	static runScoped<T>(registry: AgentRegistry, fn: () => T): T {
+		return AgentRegistry.#scope.run(registry, fn);
+	}
+
+	static scoped(): AgentRegistry | undefined {
+		return AgentRegistry.#scope.getStore();
+	}
 
 	static global(): AgentRegistry {
+		const scoped = AgentRegistry.scoped();
+		if (scoped) return scoped;
 		if (!AgentRegistry.#global) {
 			AgentRegistry.#global = new AgentRegistry();
 		}

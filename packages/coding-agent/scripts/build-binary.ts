@@ -2,6 +2,7 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { captureArtifactSource, produceZCodeArtifacts } from "../../../scripts/zcode-artifact";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -79,6 +80,9 @@ async function runCommand(command: string[]): Promise<void> {
 
 async function main(): Promise<void> {
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
+	const artifactRoot = Bun.env.ZCODE_ARTIFACT_ROOT;
+	const artifactSource = artifactRoot ? await captureArtifactSource(repoRoot) : undefined;
+	const artifactVersion: string = (await Bun.file(path.join(packageDir, "package.json")).json()).version;
 	const shouldAdhocSign =
 		process.platform === "darwin" &&
 		(!crossBuild || crossBuild.platform === "darwin") &&
@@ -120,6 +124,21 @@ async function main(): Promise<void> {
 		}
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
+	}
+	if (artifactRoot && artifactSource) {
+		const platform = crossBuild?.platform ?? process.platform;
+		const arch = crossBuild?.arch ?? process.arch;
+		await produceZCodeArtifacts({
+			source: artifactSource,
+			version: artifactVersion,
+			outputRoot: artifactRoot,
+			binaries: [
+				{
+					target: `${platform}-${arch}`,
+					executable: platform === "win32" ? `${outputPath}.exe` : outputPath,
+				},
+			],
+		});
 	}
 }
 

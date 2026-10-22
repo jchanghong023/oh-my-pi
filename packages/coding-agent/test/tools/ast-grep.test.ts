@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { withTlaplusGrammar } from "../helpers/tlaplus-grammar";
 
 function createTestSession(cwd = "/tmp/test", overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -154,29 +155,30 @@ describe("ast_grep parse errors", () => {
 		}
 	});
 
-	it("parses PlusCal content through the tlaplus language aliases", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-pluscal-"));
-		try {
-			const filePath = path.join(tempDir, "algo.tla");
-			await Bun.write(
-				filePath,
-				"---- MODULE Algo ----\n(*--algorithm Demo\nvariables x = 0;\nbegin\n  x := x + 1;\nend algorithm;*)\n====\n",
-			);
-			const tools = await createTools(createTestSession(tempDir), ["ast_grep"]);
-			const tool = tools.find(entry => entry.name === "ast_grep");
-			expect(tool).toBeDefined();
+	it("parses PlusCal content through the tlaplus language aliases", () =>
+		withTlaplusGrammar(async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-pluscal-"));
+			try {
+				const filePath = path.join(tempDir, "algo.tla");
+				await Bun.write(
+					filePath,
+					"---- MODULE Algo ----\n(*--algorithm Demo\nvariables x = 0;\nbegin\n  x := x + 1;\nend algorithm;*)\n====\n",
+				);
+				const tools = await createTools(createTestSession(tempDir), ["ast_grep"]);
+				const tool = tools.find(entry => entry.name === "ast_grep");
+				expect(tool).toBeDefined();
 
-			const result = await tool!.execute("ast-grep-pluscal", {
-				pat: "x",
-				path: filePath,
-				lang: "pluscal",
-			});
-			const details = result.details as { matchCount?: number } | undefined;
-			expect(details?.matchCount).toBeGreaterThan(0);
-		} finally {
-			await removeWithRetries(tempDir);
-		}
-	});
+				const result = await tool!.execute("ast-grep-pluscal", {
+					pat: "x",
+					path: filePath,
+					lang: "pluscal",
+				});
+				const details = result.details as { matchCount?: number } | undefined;
+				expect(details?.matchCount).toBeGreaterThan(0);
+			} finally {
+				await removeWithRetries(tempDir);
+			}
+		}));
 
 	it("skips unknown and extensionless files unless a language is explicitly selected", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-grep-file-filter-"));

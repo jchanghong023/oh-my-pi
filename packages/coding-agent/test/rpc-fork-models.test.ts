@@ -306,16 +306,37 @@ describe("RpcModelRoleService", () => {
 		).rejects.toMatchObject({ code: "scope_not_allowed" });
 		await expect(
 			fx.service.setRole({
-				roleId: "missing-role",
+				roleId: "invalid/role",
 				scope: "user",
 				selection: null,
 				expectedRevision: await roleRevision(fx.service, "default"),
 			}),
-		).rejects.toMatchObject({ code: "not_found" });
+		).rejects.toMatchObject({ code: "invalid_params" });
 		expect(fx.settings.getGlobalModelRole("default")).toBeUndefined();
 		expect((await fx.service.listRoles()).roles.find(role => role.roleId === "image")!.candidateModels).toEqual([
 			{ provider: "p", modelId: "img" },
 		]);
+	});
+
+	test("unconfigured custom role exposes a server revision and persists through the shared CAS writer", async () => {
+		const fx = await setup([CHAT_MODEL]);
+		const before = await fs.readFile(fx.configFile, "utf8");
+		const draft = (await fx.service.listRoles({ roleId: "custom_reviewer" })).roles.find(
+			role => role.roleId === "custom_reviewer",
+		)!;
+		expect(draft.userValue).toBeNull();
+		expect(draft.revision).toBeTruthy();
+		expect(await fs.readFile(fx.configFile, "utf8")).toBe(before);
+		await fx.service.setRole({
+			roleId: draft.roleId,
+			scope: "user",
+			expectedRevision: draft.revision,
+			selection: { kind: "model", model: { provider: "p", modelId: "m" } },
+		});
+		expect(fx.settings.getGlobalModelRole("custom_reviewer")).toBe("p/m");
+		await expect(
+			fx.service.setRole({ roleId: draft.roleId, scope: "user", expectedRevision: draft.revision, selection: null }),
+		).rejects.toMatchObject({ code: "revision_conflict" });
 	});
 
 	test("null clears only the user role and preserves higher-precedence project/runtime values", async () => {

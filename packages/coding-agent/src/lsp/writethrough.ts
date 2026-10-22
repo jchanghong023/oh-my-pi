@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 import { isEnoent, isRecord, logger, untilAborted } from "@oh-my-pi/pi-utils";
 import type { BunFile } from "bun";
+import { withFileMutationLocks } from "../edit/file-rewind";
 import { isPermissionDeniedError, writeFileWithFallback } from "../tools/file-write-fallback";
 import {
 	beginPendingDiskWrite,
@@ -147,9 +149,9 @@ interface PendingWritethrough {
 	file?: BunFile;
 	changeType: FileChangeType;
 	/**
-	 * The bytes this entry committed. The flush prefers a fresh read of `dst` so
-	 * post-processing sees whatever else in the batch touched the file, and falls
-	 * back to these when that read is denied.
+	 * The bytes this entry committed. A flush reads under mutation admission and
+	 * skips post-processing when those bytes changed, including a session rewind.
+	 * A brokered write that denies read-back falls back to these bytes.
 	 */
 	content: string;
 }
@@ -170,8 +172,76 @@ interface LspWritethroughBatchState {
 
 const writethroughBatches = new Map<string, LspWritethroughBatchState>();
 
+interface WritethroughMutationScope {
+	active: boolean;
+	files: readonly string[];
+	batchId?: string;
+	state?: LspWritethroughBatchState;
+}
+
+const mutationScope = new AsyncLocalStorage<WritethroughMutationScope>();
+
+/**
+ * Freeze the flush set before waiting for any mutation locks. The tool's
+ * checkpoint capture and every formatter read/commit share this one admission,
+ * so neither same-path reentry nor opposite-order batches acquire nested locks.
+ */
+export async function withWritethroughMutationLocks<T>(
+	files: readonly string[],
+	flushBatchId: string | undefined,
+	run: () => Promise<T>,
+): Promise<T> {
+	const state = flushBatchId ? writethroughBatches.get(flushBatchId) : undefined;
+	if (flushBatchId) writethroughBatches.delete(flushBatchId);
+	const destinations = [...files, ...(state ? [...state.entries.keys()] : [])];
+	const scope: WritethroughMutationScope = {
+		active: false,
+		files: destinations,
+		batchId: flushBatchId,
+		state,
+	};
+	try {
+		return await withFileMutationLocks(destinations, () =>
+			mutationScope.run(scope, async () => {
+				scope.active = true;
+				try {
+					return await run();
+				} finally {
+					// Detached work cannot inherit ownership after admission ends.
+					scope.active = false;
+				}
+			}),
+		);
+	} finally {
+		// A bridge short circuit or pre-write failure did not consume this flush.
+		// Preserve its entries without replacing concurrently queued newer writes.
+		if (scope.state && flushBatchId) {
+			const pending = getOrCreateWritethroughBatch(flushBatchId, scope.state.options);
+			for (const [dst, entry] of scope.state.entries) {
+				if (!pending.entries.has(dst)) pending.entries.set(dst, entry);
+			}
+		}
+	}
+}
+
+function currentBatchScope(id: string): WritethroughMutationScope | undefined {
+	const scope = mutationScope.getStore();
+	return scope?.active && scope.batchId === id ? scope : undefined;
+}
+
+function getWritethroughBatch(id: string): LspWritethroughBatchState | undefined {
+	const scope = currentBatchScope(id);
+	return scope ? scope.state : writethroughBatches.get(id);
+}
+
+function deleteWritethroughBatch(id: string): void {
+	const scope = currentBatchScope(id);
+	if (scope) scope.state = undefined;
+	else writethroughBatches.delete(id);
+}
+
 function getOrCreateWritethroughBatch(id: string, options: ResolvedWritethroughOptions): LspWritethroughBatchState {
-	const existing = writethroughBatches.get(id);
+	const existing = getWritethroughBatch(id);
 	if (existing) {
 		existing.options.enableFormat ||= options.enableFormat;
 		existing.options.enableDiagnostics ||= options.enableDiagnostics;
@@ -183,7 +253,9 @@ function getOrCreateWritethroughBatch(id: string, options: ResolvedWritethroughO
 		entries: new Map<string, PendingWritethrough>(),
 		options: { ...options },
 	};
-	writethroughBatches.set(id, batch);
+	const scope = currentBatchScope(id);
+	if (scope) scope.state = batch;
+	else writethroughBatches.set(id, batch);
 	return batch;
 }
 
@@ -192,11 +264,12 @@ export async function flushLspWritethroughBatch(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<FileDiagnosticsResult | undefined> {
-	const state = writethroughBatches.get(id);
-	if (!state) {
-		return undefined;
+	if (!currentBatchScope(id)) {
+		return withWritethroughMutationLocks([], id, () => flushLspWritethroughBatch(id, cwd, signal));
 	}
-	writethroughBatches.delete(id);
+	const state = getWritethroughBatch(id);
+	if (!state) return undefined;
+	deleteWritethroughBatch(id);
 	return (await flushWritethroughBatch(Array.from(state.entries.values()), "", cwd, state.options, signal))
 		.diagnostics;
 }
@@ -394,13 +467,19 @@ async function runLspWritethrough(
 	// Bytes this operation has committed to disk; `undefined` until they land
 	// there (the caller already wrote `content` when `contentAlreadyWritten`).
 	let diskContent = contentAlreadyWritten ? content : undefined;
-	const writeContent = async (value: string) => {
-		await writeFileWithFallback(dst, value, file);
-		diskContent = value;
+	let pendingWrite: Promise<void> | undefined;
+	const writeContent = async (value: string, writeSignal?: AbortSignal) => {
+		writeSignal?.throwIfAborted();
+		pendingWrite = (async () => {
+			await writeFileWithFallback(dst, value, file);
+			diskContent = value;
+		})();
+		await pendingWrite;
 	};
 	/** Commit {@link finalContent} unless those exact bytes are already on disk. */
-	const commitWrite = async () => {
-		if (diskContent !== finalContent) await writeContent(finalContent);
+	const commitWrite = async (writeSignal?: AbortSignal) => {
+		writeSignal?.throwIfAborted();
+		if (diskContent !== finalContent) await writeContent(finalContent, writeSignal);
 	};
 	let writeNotified = false;
 	const notifyWriteCommitted = async (notifySignal: AbortSignal | undefined = signal) => {
@@ -466,11 +545,12 @@ async function runLspWritethrough(
 			if (useCustomFormatter) {
 				// Custom linters operate on on-disk input; the shared pre-write also
 				// supports implementations that inspect the file before formatting.
-				if (diskContent !== content) await writeContent(content);
+				if (diskContent !== content) await writeContent(content, operationSignal);
 				const [formattedContent, capturedVersions] = await Promise.all([
 					formatContent(dst, content, cwd, customLinterServers, operationSignal),
 					minVersionsPromise,
 				]);
+				operationSignal?.throwIfAborted();
 				finalContent = formattedContent.content;
 				minVersions = capturedVersions;
 				if (formattedContent.failed) {
@@ -480,7 +560,7 @@ async function runLspWritethrough(
 				} else {
 					formatter = finalContent !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED;
 				}
-				await commitWrite();
+				await commitWrite(operationSignal);
 				await notifyWriteCommitted(operationSignal);
 				if (changeType === FileChangeType.Created) {
 					await reloadTypeScriptProjectsAfterCreate(cwd, lspServers, operationSignal, {
@@ -494,7 +574,7 @@ async function runLspWritethrough(
 				// (notably macOS FSEvents), opening immediately after the write pins the
 				// dependent's cached missing-module resolution indefinitely.
 				if (changeType === FileChangeType.Created) {
-					await commitWrite();
+					await commitWrite(operationSignal);
 					await notifyWriteCommitted(operationSignal);
 					await reloadTypeScriptProjectsAfterCreate(cwd, lspServers, operationSignal);
 				}
@@ -505,6 +585,7 @@ async function runLspWritethrough(
 				// 2. Format in-memory via LSP
 				if (enableFormat) {
 					const formatted = await formatContent(dst, content, cwd, lspServers, operationSignal);
+					operationSignal?.throwIfAborted();
 					finalContent = formatted.content;
 					if (formatted.failed) {
 						formatter = FileFormatResult.FAILED;
@@ -522,7 +603,7 @@ async function runLspWritethrough(
 
 				// 4. Write to disk. A formatter-altered body is the only thing left to
 				// commit when the create already landed above.
-				await commitWrite();
+				await commitWrite(operationSignal);
 				await notifyWriteCommitted(operationSignal);
 			}
 
@@ -535,6 +616,16 @@ async function runLspWritethrough(
 		});
 		synced = true;
 	} catch {
+		// untilAborted can return before its callback. Drain a disk mutation that
+		// already began before releasing admission; late formatter results cannot
+		// start another mutation because operation commits check the dead signal.
+		if (pendingWrite) {
+			try {
+				await pendingWrite;
+			} catch {
+				// The fallback commit below reports write failures.
+			}
+		}
 		if (timedOut) {
 			formatter = undefined;
 			diagnostics = undefined;
@@ -616,6 +707,13 @@ async function flushWritethroughBatch(
 			if (!isPermissionDeniedError(error)) throw error;
 			content = entry.content;
 		}
+		if (content !== entry.content) {
+			// This queued post-processing belongs to an older mutation. Do not
+			// format a successful rewind (or another writer's replacement).
+			finalContents.set(entry.dst, content);
+			bundle?.finalize(undefined);
+			continue;
+		}
 		const deferredInner =
 			bundle &&
 			({
@@ -654,7 +752,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		transformDiagnostics: options?.transformDiagnostics,
 		deferredWaitMs: deferredDiagnosticsWaitMs(options?.requestTimeoutSec),
 	};
-	return async (
+	const run: WritethroughCallback = async (
 		dst: string,
 		content: string,
 		signal?: AbortSignal,
@@ -691,9 +789,9 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 			await writethroughNoop(dst, content, signal, file);
 		} catch (error) {
 			if (batch.flush) {
-				const pending = writethroughBatches.get(batch.id);
+				const pending = getWritethroughBatch(batch.id);
 				if (pending) {
-					writethroughBatches.delete(batch.id);
+					deleteWritethroughBatch(batch.id);
 					try {
 						await flushWritethroughBatch(
 							Array.from(pending.entries.values()),
@@ -717,7 +815,7 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 		const state = getOrCreateWritethroughBatch(batch.id, resolvedOptions);
 		state.entries.set(dst, { dst, file, changeType, content });
 		if (!batch.flush) return { finalContent: content };
-		writethroughBatches.delete(batch.id);
+		deleteWritethroughBatch(batch.id);
 		const result = await flushWritethroughBatch(
 			Array.from(state.entries.values()),
 			dst,
@@ -727,5 +825,14 @@ export function createLspWritethrough(cwd: string, options?: WritethroughOptions
 			getDeferred,
 		);
 		return result;
+	};
+	return (dst, content, signal, file, batch, getDeferred) => {
+		const scope = mutationScope.getStore();
+		if (scope?.active && scope.files.includes(dst)) {
+			return run(dst, content, signal, file, batch, getDeferred);
+		}
+		return withWritethroughMutationLocks([dst], batch?.flush ? batch.id : undefined, () =>
+			run(dst, content, signal, file, batch, getDeferred),
+		);
 	};
 }

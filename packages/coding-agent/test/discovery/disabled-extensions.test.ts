@@ -95,7 +95,7 @@ describe("disabledExtensions runtime filtering", () => {
 		await fs.writeFile(path.join(tempDir, ".gemini", "GEMINI.md"), "# disabled project instructions\n");
 
 		const disabledExtensions = ["context-file:project:GEMINI.md", "context-file:user:GEMINI.md"];
-		const settings = Settings.isolated({ disabledExtensions });
+		const settings = await Settings.loadIsolated({ cwd: tempDir, inMemory: true, overrides: { disabledExtensions } });
 		initializeWithSettings(settings);
 
 		const runtime = await loadCapability<ContextFile>(contextFileCapability.id, { cwd: tempDir });
@@ -115,7 +115,9 @@ describe("disabledExtensions runtime filtering", () => {
 		await fs.writeFile(path.join(tempDir, ".gemini", "GEMINI.md"), "# session-disabled project instructions\n");
 
 		// Process-global settings disable nothing; the disablement is session-local.
-		initializeWithSettings(Settings.isolated({ disabledExtensions: [] }));
+		initializeWithSettings(
+			await Settings.loadIsolated({ cwd: tempDir, inMemory: true, overrides: { disabledExtensions: [] } }),
+		);
 
 		const disabledIds = ["context-file:project:GEMINI.md", "context-file:user:GEMINI.md"];
 		const dashboard = await loadAllExtensions(tempDir, disabledIds);
@@ -132,7 +134,13 @@ describe("disabledExtensions runtime filtering", () => {
 		await fs.mkdir(path.join(tempDir, ".gemini"), { recursive: true });
 		await fs.writeFile(path.join(tempDir, ".gemini", "GEMINI.md"), "# higher-priority project instructions\n");
 
-		initializeWithSettings(Settings.isolated({ disabledExtensions: ["context-file:project:GEMINI.md"] }));
+		initializeWithSettings(
+			await Settings.loadIsolated({
+				cwd: tempDir,
+				inMemory: true,
+				overrides: { disabledExtensions: ["context-file:project:GEMINI.md"] },
+			}),
+		);
 
 		const dashboard = await loadAllExtensions(tempDir);
 		const agents = dashboard.find(extension => extension.path === path.join(tempDir, "AGENTS.md"));
@@ -150,7 +158,9 @@ describe("disabledExtensions runtime filtering", () => {
 		await fs.writeFile(path.join(tempDir, ".gemini", "GEMINI.md"), "# disabled lower-priority instructions\n");
 
 		const disabledIds = ["context-file:project:GEMINI.md"];
-		initializeWithSettings(Settings.isolated({ disabledExtensions: disabledIds }));
+		initializeWithSettings(
+			await Settings.loadIsolated({ cwd: tempDir, inMemory: true, overrides: { disabledExtensions: disabledIds } }),
+		);
 
 		const dashboard = await loadAllExtensions(tempDir, disabledIds);
 		const agents = dashboard.find(extension => extension.path === path.join(tempDir, ".omp", "AGENTS.md"));

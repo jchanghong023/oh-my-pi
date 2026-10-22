@@ -169,6 +169,8 @@ interface InBandSignal {
 	status?: number;
 	/** Machine code from the body (`error.code` preferred over `error.type`). */
 	code?: string;
+	/** Original wire code, before classification normalization. */
+	providerErrorCode?: string;
 	/** Human-readable detail from the body. */
 	detail?: string;
 }
@@ -201,6 +203,17 @@ function readInBandSignal(frame: unknown): InBandSignal | undefined {
 		}
 	}
 	const code = normalizeCodeToken(error?.code ?? root.code) ?? normalizeCodeToken(error?.type ?? root.type);
+	const rawCode =
+		error?.code ??
+		root.code ??
+		error?.type ??
+		(typeof root.type === "string" && IN_BAND_RETRYABLE_TEXT_PATTERN.test(root.type) ? root.type : undefined);
+	const providerErrorCode =
+		typeof rawCode === "string"
+			? rawCode
+			: typeof rawCode === "number" && Number.isFinite(rawCode)
+				? String(rawCode)
+				: undefined;
 	if (code !== undefined && NON_RETRYABLE_CODE_PATTERN.test(code)) return undefined;
 	// A flat retryable code/type is itself an in-band failure: Responses-API
 	// `error` events expose `{ type: "rate_limit_error" }` with no `error` member,
@@ -236,7 +249,7 @@ function readInBandSignal(frame: unknown): InBandSignal | undefined {
 		(code !== undefined && Object.hasOwn(RETRYABLE_STATUS_BY_CODE, code)
 			? readStatusField(RETRYABLE_STATUS_BY_CODE[code])
 			: undefined);
-	if (status !== undefined) return { status, code, detail };
+	if (status !== undefined) return { status, code, providerErrorCode, detail };
 	// No reported status: classify only when the upstream *message* is itself
 	// unambiguous throttle wording. A generic code alone must not qualify —
 	// Azure uses `server_error` for terminal backend failures whose
@@ -244,7 +257,7 @@ function readInBandSignal(frame: unknown): InBandSignal | undefined {
 	// the shared transient rule already matches), so intercepting it would
 	// change an established error format without adding retry information.
 	if (detail === undefined || !IN_BAND_RETRYABLE_TEXT_PATTERN.test(detail)) return undefined;
-	return { code, detail };
+	return { code, providerErrorCode, detail };
 }
 
 /**
@@ -275,9 +288,12 @@ function formatInBandMessage(status: number, detail: string | undefined, code: s
 export function createInBandProviderError(frame: unknown): Error | undefined {
 	const signal = readInBandSignal(frame);
 	if (!signal) return undefined;
-	const { status, code, detail } = signal;
+	const { status, code, providerErrorCode, detail } = signal;
 	if (isRetryableStatus(status)) {
-		return attach(new ProviderHttpError(formatInBandMessage(status, detail, code), status, { code }), IN_BAND_FLAGS);
+		return attach(
+			new ProviderHttpError(formatInBandMessage(status, detail, code), status, { code, providerErrorCode }),
+			IN_BAND_FLAGS,
+		);
 	}
 	if (detail === undefined && code === undefined) return undefined;
 	// Keep the upstream code visible (`(<code>)`) — it is real provider data and
@@ -286,6 +302,7 @@ export function createInBandProviderError(frame: unknown): Error | undefined {
 	return attach(
 		new ProviderResponseError(`${detail ?? IN_BAND_DETAIL_PLACEHOLDER}${code ? ` (${code})` : ""}`, {
 			kind: "runtime",
+			providerErrorCode,
 		}),
 		IN_BAND_FLAGS,
 	);

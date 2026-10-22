@@ -87,4 +87,47 @@ describe("session listing scan cache", () => {
 		expect(await listSessions(SESSION_DIR, storage)).toEqual([]);
 		expect(readSpy).toHaveBeenCalledTimes(1);
 	});
+
+	it("keeps the full first prompt when the 4 KB prefix window cuts its line (default title)", async () => {
+		// 缺陷回归(automation 首条输入默认标题截断): 无标题会话的默认标题取
+		// firstMessage。首条用户消息行被前缀窗口按字节截断时,旧行为把窗口碎片
+		// (如 "E2E_AUTOMA")当完整文本写进默认标题。窗口必须扩读到该行完整,
+		// 默认标题保持完整首条输入。
+		const storage = new MemorySessionStorage();
+		const file = `${SESSION_DIR}/window-cut.jsonl`;
+		const header =
+			JSON.stringify({
+				type: "session",
+				id: "window-cut-id",
+				cwd: "/repo",
+				timestamp: "2026-10-21T23:45:37.186Z",
+			}) + "\n";
+		const userLine =
+			JSON.stringify({
+				type: "message",
+				message: {
+					role: "user",
+					content: [{ type: "text", text: "E2E_AUTOMATION_TITLE_STABLE 随机介绍一位红楼梦人物" }],
+				},
+			}) + "\n";
+		// 用一条大 custom 前缀条目把用户消息行推到 4096 字节边界中间。
+		const prefixOverhead = Buffer.byteLength(header, "utf8");
+		const padLine =
+			JSON.stringify({
+				type: "custom",
+				customType: "session_input",
+				data: { pad: "x".repeat(4096 - prefixOverhead - 120) },
+			}) + "\n";
+		if (Buffer.byteLength(header + padLine, "utf8") <= 4096 - Buffer.byteLength(userLine, "utf8")) {
+			throw new Error("fixture padding must push the user line across the 4096-byte window");
+		}
+		if (Buffer.byteLength(header + padLine, "utf8") >= 4096) {
+			throw new Error("fixture padding must keep the user line starting inside the window");
+		}
+		storage.writeTextSync(file, header + padLine + userLine);
+
+		const sessions = await listSessions(SESSION_DIR, storage);
+		expect(sessions[0]?.title).toBeUndefined();
+		expect(sessions[0]?.firstMessage).toBe("E2E_AUTOMATION_TITLE_STABLE 随机介绍一位红楼梦人物");
+	});
 });

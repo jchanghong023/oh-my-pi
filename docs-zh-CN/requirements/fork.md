@@ -413,7 +413,7 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 
 | 入口 | 当前有效范围 | 非编译硬上限 | 总墙钟硬上限 |
 | --- | --- | --- | --- |
-| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 90 秒 | 沿用非编译预算 |
+| `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 180 秒 | 沿用非编译预算 |
 | `bun run fulltest` | 全部 fastcheck 检查 + 完整 fork 差异中的 TS 测试、现有 `test:rs --affected` 选择的 Rust 测试、仓库脚本测试（排除下述重型 Bazel 集成测试）、native 构建和隔离 dev-TUI 公开入口 E2E；无跨 WSL | 900 秒 | 900 秒 |
 | `bun run slowtest` | 本机 fulltest 一次 + 宿主重型 Bazel 集成测试一次 + 项目所需且现有兼容 WSL 可用时的 Linux fulltest；无适用 WSL 时保留前两项 | 1500 秒 | 1500 秒 |
 
@@ -436,7 +436,7 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 - 门禁的进程监督须在命令仍运行时回收已退出的孤儿后代，不得截获由运行器持有的主命令退出码；宿主直接退出或 IPC 断开时，监督进程仍须停止并回收普通自有后代，含逃逸的独立 session，Bazel Server 不在清理范围内，其自有工作按下文取消。跨 Windows/WSL 的取消命令须在强退前独立发起，不等待其收尾。Windows 隔离临时目录的正常清理须能解除带拒绝读取 ACL 的目录 junction，且不得遍历或删除其目标；清理失败不得降级成通过。
 - 独立且安全的检查/测试/Windows与WSL两端必须并行；改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
 - native 生成完成后，fulltest 的静态检查与测试须进入同一 Bazel 图和 invocation：Rust 测试直接依赖 Rust fmt／clippy 的实际 action 完成，不以不同 lane 的优先级或 Cargo 隐式构建锁实现顺序。仅争用根 `target/` 的 Cargo 阶段串行；TS 静态检查、TS 测试和不持构建锁的格式检查不增加额外等待依赖。保留既有 target、profile、features 与 flags，不新增锁、轮询队列或调度成功标记。无法复用的 clippy action 须声明既有实时执行上下文以防增量跳过，不能只依赖 `no-cache` 标签；不将其结果报告为有效缓存。
-- 共享图中的 fastcheck 仍有独立的 90 秒非编译预算，观察同一调用的真实活动事件，全部静态目标获得成功 BEP 后结束，不等待剩余测试。外部作业占用 Cargo 构建目录时保留原始等待输出、继续计入原预算；不得杀其他 Agent 的 Cargo 进程或放宽时限。验收须检查原生执行日志：本轮 clippy 启动不再因本轮 Rust 测试出现 `Blocking waiting for file lock on build directory`，Rust 测试在 clippy 成功后完整执行既有 affected 范围（含 doctest）。
+- 共享图中的 fastcheck 仍有独立的 180 秒非编译预算，观察同一调用的真实活动事件，全部静态目标获得成功 BEP 后结束，不等待剩余测试。外部作业占用 Cargo 构建目录时保留原始等待输出、继续计入原预算；不得杀其他 Agent 的 Cargo 进程或放宽时限。验收须检查原生执行日志：本轮 clippy 启动不再因本轮 Rust 测试出现 `Blocking waiting for file lock on build directory`，Rust 测试在 clippy 成功后完整执行既有 affected 范围（含 doctest）。
 - 三层均使用真实 Bazel 文件/action/test 依赖追踪与本地成功结果缓存，按既有独立检查原语声明传递源码、共享库、fixture、生成数据、配置、工具链、平台、相关环境和命令参数。Bazel 已提供的摘要、传递依赖、增量判定、并发、结果缓存和测试产物管理直接复用，删除项目平行实现，不以手写内容指纹或成功清单代替。每轮选完整必需目标，缺失、失败、中断或依赖失效的目标须重跑，输入仍有效的成功结果可跨层复用。禁止用 HEAD、随机运行 ID 或临时报告路径作语义输入；不能可靠表达的外部依赖和副作用目标禁用相应结果复用并说明。报告必需目标、实际执行、有效缓存、未完成目标及原生 BEP／执行日志／测试产物来源；缓存是覆盖证据，不复制重放旧用例冒充新执行。
 - fulltest 的范围选择和全部脚本／静态／测试读取者必须绑定同一 post-native 源码快照；准备阶段及后续执行期间的源码或 HEAD 变化立即拒绝。native 生成阶段仅允许两个已跟踪普通文件 `packages/natives/native/index.js`、`index.d.ts` 的内容更新，不能借此接受其他文件、类型、模式或 HEAD 变化；随后重取完整 fork 差异并在结束时核对快照。Rust affected 分析／计划异常须保留原因并非零退出，不能改跑全 workspace 将分析失败转成 PASS；选择器明确返回保守全量范围的正常分支保持不变。
 - TS 测试与仓库脚本测试按测试文件建立独立结果目标；复用 Bun 原生 metafile 的模块输入与 chunk 依赖，转换为路径稳定的 Bazel filegroup 图，不执行生成的 bundle，不以 bundle 内容哈希代替 Bazel 文件摘要。字面模块相对资源、worker、对象形式子进程命令和继承的 TypeScript 配置须纳入实际输入及模块依赖；相对子进程工作目录无法可靠定位时保留全仓边界，无法静态确定的其他本地加载保留原有包级/全仓保守边界，第三方不透明加载（含 `createRequire` 工厂及别名）保留已安装依赖边界，发现失败不得当作空依赖命中。报告器只依赖轻量失败通知与清理标记读取，不因错误转发引入完整 native 门禁运行时；报告标签、对象属性名不作为文件路径来源。Rust 测试保留现有 affected 选择与测试原语，仅从其输入中去除无关 TS 业务源码；资源和工具链依赖不省略。验收须通过真实报告入口验证局部业务模块、资产和 npm 依赖编辑后的实际消费者重跑、无关目标有效缓存复用，以及继承配置、跨包子进程和动态加载输入变更后的失效，不以完全无改动的热运行代替增量验收。

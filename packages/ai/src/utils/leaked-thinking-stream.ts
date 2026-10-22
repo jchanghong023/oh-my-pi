@@ -542,6 +542,16 @@ class LeakedThinkingProjector {
 			};
 			anchored.push({ block: cloned, sourceIndex: srcIndex, order: srcIndex });
 		}
+		// 缺陷 I70(anthropic-redacted-block-lost-before-journal): 非官方端点的
+		// provider 流都会经过本投影器,而 redacted_thinking 只有 content_block_start/
+		// stop、没有任何 delta 事件,重建 content 时被静默丢弃,持久化 assistant 与
+		// 后续 live 请求都缺该块。opaque bytes 原样透传:不伪造签名、不改写数据,
+		// 与 server-tool history 一样按源位置锚定合并。
+		for (let srcIndex = 0; srcIndex < message.content.length; srcIndex++) {
+			const content = message.content[srcIndex];
+			if (content?.type !== "redactedThinking") continue;
+			anchored.push({ block: { ...content }, sourceIndex: srcIndex, order: srcIndex });
+		}
 		anchored.sort((left, right) => left.sourceIndex - right.sourceIndex || left.order - right.order);
 		return anchored.map(({ block }) => block);
 	}

@@ -789,7 +789,11 @@ function createOpenAICompletionsStreamError(chunk: unknown, provider: string): E
 		parseOpenAICompletionsErrorStatus(codeValue) ??
 		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
 	if (status === undefined) {
-		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
+		return new AIError.ProviderResponseError(detail, {
+			provider,
+			kind: "runtime",
+			providerErrorCode: parsed.code,
+		});
 	}
 	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code: parsed.code });
 }
@@ -846,7 +850,10 @@ export const streamOpenAICompletionsOnce = (
 		let finishOpenBlocksOnError: () => void = () => {};
 
 		try {
-			const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
+			const apiKey =
+				options?.requestAuth !== undefined
+					? (options.requestAuth.apiKey ?? "")
+					: options?.apiKey || getEnvApiKey(model.provider) || "";
 			const idleTimeoutFallbackMs = model.compat.streamIdleTimeoutMs;
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getOpenAIStreamIdleTimeoutMs(idleTimeoutFallbackMs);
 			const firstEventTimeoutMs =
@@ -870,6 +877,7 @@ export const streamOpenAICompletionsOnce = (
 				options?.initiatorOverride,
 				getOpenAIPromptCacheKey(options),
 				options?.sessionId,
+				options?.requestAuth,
 			);
 			const premiumRequestsTotal = copilotPremiumRequests;
 			let appliedStrictTools = false;
@@ -919,6 +927,7 @@ export const streamOpenAICompletionsOnce = (
 					url: completionsUrl,
 					headers: requestHeaders,
 					body: params,
+					requestAuth: options?.requestAuth,
 				};
 				let requestTimeout: NodeJS.Timeout | undefined;
 				if (requestTimeoutMs !== undefined) {
@@ -1846,6 +1855,8 @@ export const streamOpenAICompletionsOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode =
+				codeAgent && result.stopReason === "error" ? AIError.providerErrorCode(error) : result.providerErrorCode;
 			output.errorMessage = result.message;
 			// Some providers via OpenRouter include extra details here.
 			if (!codeAgent) {
@@ -1909,11 +1920,13 @@ function createRequestSetup(
 	initiatorOverride?: MessageAttribution,
 	promptCacheSessionId?: string,
 	sessionId?: string,
+	requestAuth?: OpenAICompletionsOptions["requestAuth"],
 ): OpenAIRequestSetup & { baseUrl: string } {
 	const apiVersion = $env.AZURE_OPENAI_API_VERSION || "2024-10-21";
 	const deploymentName = parseAzureDeploymentNameMap($env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(model.id) ?? model.id;
 	const setup = resolveOpenAIRequestSetup(model, {
 		apiKey,
+		requestAuth,
 		extraHeaders,
 		initiatorOverride,
 		promptCacheSessionId,

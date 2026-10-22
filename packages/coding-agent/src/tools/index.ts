@@ -14,6 +14,7 @@ import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type {
 	BeforeSubagentSpawnEvent,
 	BeforeSubagentSpawnEventResult,
+	ExtensionUIContext,
 	PreparedExtension,
 } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
@@ -35,6 +36,7 @@ import type { CustomMessage } from "../session/messages";
 import type { UsageStatistics } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
 import type { ToolChoiceQueue } from "../session/tool-choice-queue";
+import type { ToolRestrictions } from "../session/tool-restrictions";
 import { TaskTool } from "../task";
 import type { AgentOutputManager } from "../task/output-manager";
 import { type AgentDefinition, canSpawnAtDepth } from "../task/types";
@@ -220,6 +222,14 @@ export interface ToolSession {
 	hasUI: boolean;
 	/** Whether `ask` can reach a human. Defaults to `hasUI`. */
 	canPromptUser?: boolean;
+	/** Host-owned human interaction surface inherited by native child sessions, without enabling terminal UI. */
+	createInteractionUI?: (origin: {
+		agentId: string;
+		agentName: string;
+		sessionId: string;
+		parentSessionId: string;
+		parentToolCallId?: string;
+	}) => { ui: ExtensionUIContext; cancel(): void; dispose(): void };
 	/** Keep `ask` in a headless fork's roster; execution still requires UI. */
 	advertiseHeadlessAsk?: boolean;
 	/** The user approves `cfg://` writes for this session (top-level TUI session only). */
@@ -328,6 +338,8 @@ export interface ToolSession {
 	 * required yield tool). Suppresses automatic tool-set expansion.
 	 */
 	restrictToolNames?: boolean;
+	/** Caller admission policy shared by advertised tools and canonical execution. */
+	toolRestrictions?: ToolRestrictions;
 	/** Seance forks: the consulted session's artifacts dir, read in place by history://, artifact://, agent://. */
 	readonly seanceSourceArtifactsDir?: string;
 	/** Task recursion depth (0 = top-level, 1 = first child, etc.) */
@@ -636,7 +648,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		: toolNames
 			? normalizeToolNames(toolNames)
 			: undefined;
-	if (!restrictToolNames && requestedTools?.includes("read")) {
+	if (!restrictToolNames && !session.toolRestrictions?.hasAllowlist && requestedTools?.includes("read")) {
 		if (!requestedTools.includes("wiki")) requestedTools.push("wiki");
 		if (!requestedTools.includes("repo")) requestedTools.push("repo");
 	}
@@ -644,7 +656,12 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	const externalThinkingActive =
 		cfgExternalThinking.get(session.settings) && supportsExternalThinking(session.getActiveModel?.());
-	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
+	if (
+		goalModeActive &&
+		requestedTools &&
+		!session.toolRestrictions?.hasAllowlist &&
+		!requestedTools.includes("goal")
+	) {
 		requestedTools.push("goal");
 	}
 	const backends = resolveEvalBackends(session);
@@ -676,12 +693,8 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	// unreachable, in which case eval dispatches exclusively to the others.
 	const allowEval = effectivePythonAllowed || allowJs;
 
-	// Checkpoint and rewind are a pair: listing one without the other strands
-	// the agent (it can checkpoint but not rewind, or vice versa). Auto-include
-	// the sister tool so a one-sided frontmatter `tools:` entry still works.
-	// Unlike the AST/auto-learn convenience auto-includes below, this is a
-	// safety pairing — it applies to restricted sessions too.
-	if (requestedTools && cfgCheckpointEnabled.get(session.settings)) {
+	// Convenience pairing cannot widen an explicit caller allowlist.
+	if (requestedTools && !session.toolRestrictions?.hasAllowlist && cfgCheckpointEnabled.get(session.settings)) {
 		if (requestedTools.includes("checkpoint") && !requestedTools.includes("rewind")) {
 			requestedTools.push("rewind");
 		} else if (requestedTools.includes("rewind") && !requestedTools.includes("checkpoint")) {
@@ -690,7 +703,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	}
 	// Auto-include AST counterparts when their text-based sibling is present.
 	// Restricted callers own the active list and must not have it widened.
-	if (requestedTools && !restrictToolNames) {
+	if (requestedTools && !restrictToolNames && !session.toolRestrictions?.hasAllowlist) {
 		if (
 			cfgCompactionExperimentalContextManagement.get(session.settings) &&
 			requestedTools.includes("read") &&
@@ -744,6 +757,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		}
 	}
 	const isToolAllowed = (name: string) => {
+		if (session.toolRestrictions?.allows(name) === false) return false;
 		// Never in the default set. Explicitly activatable while goal.enabled and
 		// no goal record exists yet — /guided-goal enables it so the agent can
 		// finish the interview with `goal create`, which turns goal mode on. Once
@@ -806,7 +820,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		}
 		return true;
 	};
-	if (includeYield && requestedTools && !requestedTools.includes("yield")) {
+	if (includeYield && requestedTools && !session.toolRestrictions?.hasAllowlist && !requestedTools.includes("yield")) {
 		requestedTools.push("yield");
 	}
 
@@ -832,10 +846,11 @@ export function createXdevState(
 		tools,
 		mountedNames,
 		builtInNames,
-		isActive: name => session.isToolActive?.(name) === true,
+		isAllowed: name => session.toolRestrictions?.allows(name) !== false,
+		isActive: name => session.toolRestrictions?.allows(name) !== false && session.isToolActive?.(name) === true,
 		// Card rendering reads the same predicate as execution: mounted devices
 		// plus active top-level tools, which the `write` transport also accepts.
-		resolve: name => resolveXdevTool(state, name),
+		resolve: name => (session.toolRestrictions?.allows(name) === false ? undefined : resolveXdevTool(state, name)),
 	};
 	return state;
 }
@@ -866,7 +881,9 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const baseResults = await Promise.all(
 		baseEntries.map(async ([name, factory]) => {
 			const tool = await logger.time(`createTools:${name}`, factory as ToolFactory, session);
-			return tool ? wrapToolWithMetaNotice(isolateTeamReads(tool, session)) : null;
+			if (!tool) return null;
+			const wrapped = wrapToolWithMetaNotice(isolateTeamReads(tool, session));
+			return session.toolRestrictions?.wrap(wrapped) ?? wrapped;
 		}),
 	);
 	let tools = baseResults.filter((r): r is Tool => r !== null);
@@ -888,6 +905,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	// mounting, they were already presented — and callable — top-level.
 	if (
 		xdevRequested &&
+		!session.toolRestrictions?.hasAllowlist &&
+		session.toolRestrictions?.allows("write") !== false &&
 		requestedTools !== undefined &&
 		!tools.some(tool => tool.name === "write") &&
 		tools.some(tool => tool.name === "read")
@@ -895,7 +914,8 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		session.deviceOnlyWrite = true;
 		const writeTool = await logger.time("createTools:write:xdev-transport", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
-			const wrapped = wrapToolWithMetaNotice(writeTool);
+			const base = wrapToolWithMetaNotice(writeTool);
+			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);
@@ -926,21 +946,31 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const xdevMounted = (session.xdev?.mountedNames.size ?? 0) > 0;
 	if (
 		!restrictToolNames &&
+		!session.toolRestrictions?.hasAllowlist &&
+		session.toolRestrictions?.allows("write") !== false &&
 		tools.some(tool => tool.deferrable === true) &&
 		!tools.some(tool => tool.name === "write")
 	) {
 		const writeTool = await logger.time("createTools:write", BUILTIN_TOOLS.write, session);
 		if (writeTool) {
-			const wrapped = wrapToolWithMetaNotice(writeTool);
+			const base = wrapToolWithMetaNotice(writeTool);
+			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);
 		}
 	}
-	if (!restrictToolNames && xdevMounted && !tools.some(tool => tool.name === "read")) {
+	if (
+		!restrictToolNames &&
+		!session.toolRestrictions?.hasAllowlist &&
+		session.toolRestrictions?.allows("read") !== false &&
+		xdevMounted &&
+		!tools.some(tool => tool.name === "read")
+	) {
 		const readTool = await logger.time("createTools:read", BUILTIN_TOOLS.read, session);
 		if (readTool) {
-			const wrapped = wrapToolWithMetaNotice(readTool);
+			const base = wrapToolWithMetaNotice(readTool);
+			const wrapped = session.toolRestrictions?.wrap(base) ?? base;
 			tools.push(wrapped);
 			toolRegistry.set(wrapped.name, wrapped);
 			builtInNames.add(wrapped.name);

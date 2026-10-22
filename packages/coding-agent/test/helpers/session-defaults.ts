@@ -17,5 +17,11 @@ export function createSessionDefaults() {
 		isAdvisorActive: () => false,
 		subscribeRunState: () => () => {},
 		addDisposer: () => {},
+		// The executor's IRC wake monitor resolves its run cwd through the
+		// session manager; fakes that spread these defaults must stay stubbable.
+		sessionManager: {
+			getCwd: () => process.cwd(),
+			appendSessionInit: () => "",
+		} as unknown as AgentSession["sessionManager"],
 	} satisfies Partial<AgentSession>;
 }

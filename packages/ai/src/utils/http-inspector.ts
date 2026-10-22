@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getLogsDir, isBunTestRuntime, isEnoent, isRecord, logger } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error/flags";
+import type { StreamOptions } from "../types";
 import { formatErrorMessageWithRetryAfter } from "./retry-after.js";
 
 export type RawHttpRequestDump = {
@@ -12,6 +13,8 @@ export type RawHttpRequestDump = {
 	url?: string;
 	headers?: Record<string, string>;
 	body?: unknown;
+	/** @internal Credential provenance for diagnostics only; removed before serialization. */
+	requestAuth?: StreamOptions["requestAuth"];
 };
 
 export type CapturedHttpErrorResponse = {
@@ -45,7 +48,7 @@ export function buildHttp400DumpPayload(
 ): RawHttpRequestDump & { errorResponse: { status: number | undefined; message: string } } {
 	return {
 		...sanitizeDump(dump),
-		errorResponse: { status: AIError.status(error), message },
+		errorResponse: { status: AIError.status(error), message: redactDeclaredCredentials(message, dump) },
 	};
 }
 
@@ -84,6 +87,8 @@ export async function appendRawHttpRequestDumpFor400(
 	error: unknown,
 	dump: RawHttpRequestDump | undefined,
 ): Promise<string> {
+	// Error text can echo credentials even when no dump is written.
+	if (dump) message = redactDeclaredCredentials(message, dump);
 	// Never persist dumps under the test runner: providers exercise the 400 path
 	if (!dump || isBunTestRuntime() || !shouldDumpRejectedRequest(error)) {
 		return message;
@@ -102,7 +107,10 @@ export async function appendRawHttpRequestDumpFor400(
 		});
 		return `${message}\n${RAW_HTTP_REQUEST_LINE}${filePath}`;
 	} catch (writeError) {
-		const writeMessage = writeError instanceof Error ? writeError.message : String(writeError);
+		const writeMessage = redactDeclaredCredentials(
+			writeError instanceof Error ? writeError.message : String(writeError),
+			dump,
+		);
 		return `${message}\n${RAW_HTTP_REQUEST_SAVE_FAILED_LINE}${writeMessage}`;
 	}
 }
@@ -242,11 +250,71 @@ export function rewriteClinePassError(errorMessage: string, provider: string): s
 }
 
 function sanitizeDump(dump: RawHttpRequestDump): RawHttpRequestDump {
-	return {
-		...dump,
-		url: redactUrlQuery(dump.url),
-		headers: redactHeaders(dump.headers),
+	const { requestAuth, ...request } = dump;
+	const headers = redactHeaders(dump.headers);
+	if (headers && requestAuth?.headers) {
+		const declaredNames = new Set(Object.keys(requestAuth.headers).map(name => name.toLowerCase()));
+		for (const name of Object.keys(headers)) {
+			if (declaredNames.has(name.toLowerCase())) headers[name] = "[redacted]";
+		}
+	}
+	return redactDeclaredCredentials({ ...request, url: redactUrlQuery(dump.url), headers }, dump);
+}
+
+/** Copy only branches containing declared credentials, never the entire request body. */
+function redactDeclaredCredentials<T>(value: T, dump: RawHttpRequestDump): T {
+	const auth = dump.requestAuth;
+	if (!auth) return value;
+	const credentials = new Set(Object.values(auth.headers ?? {}));
+	if (auth.apiKey) credentials.add(auth.apiKey);
+	if (auth.headers && dump.headers) {
+		const declaredNames = new Set(Object.keys(auth.headers).map(name => name.toLowerCase()));
+		for (const [name, headerValue] of Object.entries(dump.headers)) {
+			if (declaredNames.has(name.toLowerCase())) credentials.add(headerValue);
+		}
+	}
+	credentials.delete("");
+	if (credentials.size === 0) return value;
+	// Longer credentials must be removed first when one contains another.
+	const secrets = [...credentials].sort((a, b) => b.length - a.length);
+	const redactText = (text: string): string => {
+		for (const secret of secrets) {
+			if (text.includes(secret)) text = text.replaceAll(secret, "[redacted]");
+		}
+		return text;
 	};
+	const redact = (input: unknown): unknown => {
+		if (typeof input === "string") return redactText(input);
+		if (Array.isArray(input)) {
+			let result: unknown[] | undefined;
+			for (let index = 0; index < input.length; index++) {
+				const next = redact(input[index]);
+				if (next !== input[index]) {
+					result ??= input.slice();
+					result[index] = next;
+				}
+			}
+			return result ?? input;
+		}
+		if (!isRecord(input)) return input;
+		let result: Record<string, unknown> | undefined;
+		for (const key of Object.keys(input)) {
+			const nextKey = redactText(key);
+			const next = redact(input[key]);
+			if (nextKey !== key || next !== input[key]) {
+				result ??= { ...input };
+				if (nextKey !== key) delete result[key];
+				Object.defineProperty(result, nextKey, {
+					value: next,
+					enumerable: true,
+					configurable: true,
+					writable: true,
+				});
+			}
+		}
+		return result ?? input;
+	};
+	return redact(value) as T;
 }
 
 /**

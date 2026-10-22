@@ -2101,9 +2101,9 @@ async function streamAssistantResponse(
 	// stealing them from the configured hook.
 	let capturedHeaders: Readonly<Record<string, string>> | undefined;
 	const userOnResponse = config.onResponse;
-	const captureOnResponse: AgentLoopConfig["onResponse"] = (response, modelInfo) => {
+	const captureOnResponse: AgentLoopConfig["onResponse"] = (response, modelInfo, signal) => {
 		capturedHeaders = response.headers;
-		return userOnResponse?.(response, modelInfo);
+		return userOnResponse?.(response, modelInfo, signal);
 	};
 
 	// Cursor executes its tools server-side during the stream and hands each
@@ -3484,7 +3484,12 @@ async function executeToolCalls(
 		}
 	};
 
-	const emitToolResult = (record: (typeof records)[number], result: AgentToolResult<any>, isError: boolean): void => {
+	const emitToolResult = (
+		record: (typeof records)[number],
+		result: AgentToolResult<any>,
+		isError: boolean,
+		cancelled = false,
+	): void => {
 		if (record.resultEmitted) return;
 		const { toolCall } = record;
 		if (!record.started) {
@@ -3504,7 +3509,7 @@ async function executeToolCalls(
 			isError,
 		});
 
-		const toolResultMessage: ToolResultMessage = {
+		const toolResultMessage: ToolResultMessage & { cancelled?: boolean } = {
 			role: "toolResult",
 			toolCallId: toolCall.id,
 			toolName: toolCall.name,
@@ -3512,6 +3517,7 @@ async function executeToolCalls(
 			details: result.details,
 			providerMetadata: result.providerMetadata,
 			isError,
+			...(cancelled ? { cancelled: true } : {}),
 			...(result.useless && !isError ? { useless: true } : {}),
 			timestamp: Date.now(),
 		};
@@ -3571,7 +3577,7 @@ async function executeToolCalls(
 				toolName: toolCall.name,
 				status: "aborted",
 			});
-			emitToolResult(record, createToolSignalAbortedResult(record.signal), true);
+			emitToolResult(record, createToolSignalAbortedResult(record.signal), true, true);
 			return;
 		}
 		record.started = true;
@@ -3747,13 +3753,13 @@ async function executeToolCalls(
 			// user abort can also fail a non-interruptible tool (e.g. cancelled
 			// ask); keep its actual error instead of attributing it to the queue.
 			record.skipped = true;
-			emitToolResult(record, createSkippedToolResult(interruptState.source, executionStarted), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source, executionStarted), true, true);
 		} else {
 			// A tool that finished before the interrupt landed (`completedToolExecution`)
 			// keeps its real result even if its signal aborted around completion:
 			// the model must see the work it actually performed (#4752).
 			// Non-interruptible tools also retain errors from external user aborts.
-			emitToolResult(record, result, isError);
+			emitToolResult(record, result, isError, abortedDuringExecution);
 		}
 
 		const firstTextBlock = result.content?.[0];
@@ -3908,7 +3914,7 @@ async function executeToolCalls(
 				toolName: record.toolCall.name,
 				status: "skipped",
 			});
-			emitToolResult(record, createSkippedToolResult(interruptState.source, false), true);
+			emitToolResult(record, createSkippedToolResult(interruptState.source, false), true, interruptState.triggered);
 		}
 	}
 	await speculationCoordinator?.discardAll("candidate was not dispatched");

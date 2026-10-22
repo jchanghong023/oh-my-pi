@@ -66,6 +66,8 @@ export interface RpcModelRoleServiceDeps {
 
 /** Options for {@link RpcModelRoleService.listRoles}. */
 export interface RpcModelRoleListOptions {
+	/** Include an unconfigured custom role so clients can obtain its server-owned CAS revision. */
+	readonly roleId?: string;
 	/**
 	 * Live-session passthrough echoed as `sessionModel` so the GUI can show the
 	 * session's actual model next to the persisted catalog. The service itself
@@ -142,9 +144,13 @@ export class RpcModelRoleService {
 				try {
 					const settings = this.#deps.getSettings();
 					const availableModels = this.#deps.getModelRegistry().getAvailable("all");
-					const roles = this.#catalogRoleIds(settings).map(role =>
-						this.#buildDescriptor(role, settings, availableModels),
-					);
+					const roleIds = this.#catalogRoleIds(settings);
+					if (options.roleId !== undefined) {
+						if (!/^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/.test(options.roleId))
+							throw new RpcModelRoleError("invalid_params", "Invalid model role ID");
+						if (!roleIds.includes(options.roleId)) roleIds.push(options.roleId);
+					}
+					const roles = roleIds.map(role => this.#buildDescriptor(role, settings, availableModels));
 					logger.info("RPC model role listing completed", {
 						...fields,
 						result: "completed",
@@ -237,8 +243,8 @@ export class RpcModelRoleService {
 			const registry = this.#deps.getModelRegistry();
 			const { roleId, selection } = command;
 
-			if (typeof roleId !== "string" || !this.#catalogRoleIds(settings).includes(roleId)) {
-				throw new RpcModelRoleError("not_found", `Unknown model role: ${String(roleId)}`);
+			if (typeof roleId !== "string" || !/^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/.test(roleId)) {
+				throw new RpcModelRoleError("invalid_params", `Invalid model role: ${String(roleId)}`);
 			}
 
 			// Wire-level scope guard: the declared type is "user", but the raw

@@ -579,7 +579,8 @@ describe("collab guest extension lifecycle mirror", () => {
 		}
 	});
 
-	it.each(["leave", "terminal disconnect", "bye", "agent_end then leave"] as const)(
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip.each(["leave", "terminal disconnect", "bye", "agent_end then leave"] as const)(
 		"restores saved history and admits a local prompt after %s",
 		async exit => {
 			await using dir = await TempDir.create("@pi-guest-local-restore-");

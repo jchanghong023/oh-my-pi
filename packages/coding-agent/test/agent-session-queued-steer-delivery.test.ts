@@ -22,12 +22,15 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
+import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { tryRunRpcSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import { cfgMagicKeyword, cfgMagicKeywordsEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm, type CustomMessage, USER_INTERRUPT_LABEL } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
@@ -84,6 +87,7 @@ describe("AgentSession queued steer delivery", () => {
 	async function createSession(
 		responses: MockHandler[],
 		promptTemplates: PromptTemplate[] = [],
+		compactGate?: { entered: () => void; release: Promise<void> },
 	): Promise<SteerHarness> {
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
 		const mock = createMockModel({ responses });
@@ -94,9 +98,32 @@ describe("AgentSession queued steer delivery", () => {
 			streamFn: mock.stream,
 		});
 		const sessionManager = SessionManager.inMemory();
-		const settings = Settings.isolated({ "compaction.enabled": false });
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			...(compactGate
+				? { "compaction.keepRecentTokens": 1, "compaction.experimentalContextManagement": false }
+				: {}),
+		});
+		let extensionRunner: ExtensionRunner | undefined;
+		if (compactGate) {
+			const runtime = new ExtensionRuntime();
+			const extension = await loadExtensionFromFactory(
+				pi => {
+					pi.on("session_before_compact", async () => {
+						compactGate.entered();
+						await compactGate.release;
+						return { cancel: true };
+					});
+				},
+				tempDir,
+				new EventBus(),
+				runtime,
+				"queued-admission-compaction",
+			);
+			extensionRunner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+		}
 
-		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, promptTemplates });
+		session = new AgentSession({ agent, sessionManager, settings, modelRegistry, promptTemplates, extensionRunner });
 		return { session, sessionManager, mock };
 	}
 
@@ -401,6 +428,202 @@ describe("AgentSession queued steer delivery", () => {
 		expect(mock.calls.length).toBe(3);
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 		expect(session.getQueuedMessages().steering).toEqual([]);
+	});
+
+	it("holds original queued input identities across an explicit stop until resume", async () => {
+		const started = Promise.withResolvers<void>();
+		const { session, mock } = await createSession([
+			() => {
+				started.resolve();
+				return { content: ["interrupted"], delayMs: 60_000 };
+			},
+			{ content: ["steering delivered"] },
+			{ content: ["follow-up delivered"] },
+		]);
+		const run = session.prompt("hello");
+		await started.promise;
+		session.setQueueAutoDrain(false);
+		await session.prompt("first held", {
+			inputId: "held-first",
+			streamingBehavior: "steer",
+			sourceCommand: { sessionId: null, commandId: "first", fingerprint: "first", type: "sendText" },
+		});
+		await session.prompt("second held", { inputId: "held-second", streamingBehavior: "followUp" });
+		const queued = session.getQueuedInputMessages();
+		await session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true });
+		await run;
+		await session.waitForIdle();
+		const held = session.getQueuedInputMessages();
+		expect(held).toHaveLength(2);
+		expect(held[0]).toBe(queued[0]);
+		expect(held[1]).toBe(queued[1]);
+		expect(held.map(message => ("inputId" in message ? message.inputId : undefined))).toEqual([
+			"held-first",
+			"held-second",
+		]);
+		expect(session.getQueueAutoDrain()).toBe(false);
+		expect(mock.calls).toHaveLength(1);
+
+		session.setQueueAutoDrain(true);
+		await session.waitForIdle();
+		expect(session.getQueuedInputMessages()).toEqual([]);
+		const delivered = session.messages.filter(
+			message => message.role === "user" && message.inputId?.startsWith("held-"),
+		);
+		expect(held).toEqual(delivered);
+		expect(mock.calls.length).toBeGreaterThan(1);
+	});
+
+	it("admits a Goal input to the canonical queue before manual compaction cleanup", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const { session, mock } = await createSession(
+			[{ content: ["first answer"] }, { content: ["second answer"] }, { content: ["queued answer"] }],
+			[],
+			{ entered: entered.resolve, release: release.promise },
+		);
+		await session.prompt("first turn");
+		await session.prompt("second turn");
+		session.setQueueAutoDrain(false);
+		const compaction = session.compact().catch(error => error);
+		await entered.promise;
+		try {
+			expect(session.isCompacting).toBe(true);
+			expect(session.isStreaming).toBe(false);
+			let admitted = false;
+			await session.prompt("queued objective", {
+				inputId: "goal-during-compact",
+				sourceCommand: { sessionId: null, commandId: "goal", fingerprint: "goal", type: "goal" },
+				queueOnly: true,
+				streamingBehavior: "followUp",
+				onPromptAdmitted: () => {
+					admitted = true;
+				},
+			});
+			expect(admitted).toBe(true);
+			const queued = session.getQueuedInputMessages();
+			expect(queued).toHaveLength(1);
+			expect(queued[0]).toBe(session.agent.peekFollowUpQueue().at(-1)!);
+			expect("inputId" in queued[0] && queued[0].inputId).toBe("goal-during-compact");
+			expect(mock.calls).toHaveLength(2);
+			release.resolve();
+			expect(await compaction).toBeInstanceOf(Error);
+			await session.waitForIdle();
+			expect(session.getQueuedInputMessages()[0]).toBe(queued[0]);
+			session.setQueueAutoDrain(true);
+			await session.waitForIdle();
+			expect(
+				session.messages.find(message => message.role === "user" && message.inputId === "goal-during-compact"),
+			).toBe(queued[0]);
+			expect(session.getQueuedInputMessages()).toEqual([]);
+		} finally {
+			release.resolve();
+			await compaction;
+		}
+	});
+
+	it("keeps initial Goal provenance through queued text replacement and a preserving stop, delivering it once", async () => {
+		const { session, mock } = await createSession([{ content: ["goal answer"] }, { content: ["next answer"] }]);
+		session.setQueueAutoDrain(false);
+		session.agent.setFollowUpMode("one-at-a-time");
+		await session.prompt("original objective", {
+			inputId: "goal-original",
+			queueOnly: true,
+			streamingBehavior: "followUp",
+		});
+		await session.prompt("later input", {
+			inputId: "goal-later",
+			queueOnly: true,
+			streamingBehavior: "followUp",
+		});
+		const original = session.getQueuedInputMessages()[0];
+		await session.goalRuntime.createGoal({ objective: "rewritten objective", autoOrchestrate: true });
+		const goalId = session.getGoalModeState()!.goal.id;
+		expect(
+			session.mutateQueuedInput("goal-original", "edit", {
+				text: "rewritten objective",
+				goalAutoOrchestrateInitialId: goalId,
+			}),
+		).toBe(true);
+		// Further ordinary edits must retain the initial command's provenance as well.
+		expect(session.mutateQueuedInput("goal-original", "edit", { text: "final objective" })).toBe(true);
+		const queued = session.getQueuedInputMessages();
+		expect(queued.map(message => ("inputId" in message ? message.inputId : undefined))).toEqual([
+			"goal-original",
+			"goal-later",
+		]);
+		expect(queued[0].timestamp).toBe(original.timestamp);
+		await session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true });
+		const held = session.getQueuedInputMessages();
+		expect(held[0]).toBe(queued[0]);
+		expect(held[1]).toBe(queued[1]);
+		expect(mock.calls).toHaveLength(0);
+		await session.goalRuntime.resumeGoal();
+		session.setQueueAutoDrain(true);
+		await session.waitForIdle();
+		const contexts = session.messages.filter(
+			message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+		);
+		expect(contexts).toHaveLength(1);
+		expect(session.getQueuedInputMessages()).toEqual([]);
+		expect(session.messages.filter(message => message.role === "user").map(message => message.inputId)).toEqual([
+			"goal-original",
+			"goal-later",
+		]);
+		expect(
+			session.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(1);
+		expect(JSON.stringify(mock.calls[0].context.messages)).toContain("rewritten objective");
+		expect(session.messages.find(message => message.role === "user" && message.inputId === "goal-original")).toBe(
+			queued[0],
+		);
+		expect(mock.calls.length).toBeGreaterThan(0);
+	});
+
+	it("emits native manual compaction lifecycle while preserving the original failure", async () => {
+		const { session } = await createSession([]);
+		const events: Array<{ type: string; operationId: string; errorMessage?: string }> = [];
+		session.subscribe(event => {
+			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end") {
+				events.push(event);
+			}
+		});
+		let failure: unknown;
+		try {
+			await session.compact();
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeInstanceOf(Error);
+		expect(events.map(event => event.type)).toEqual(["manual_compaction_start", "manual_compaction_end"]);
+		expect(events[1].operationId).toBe(events[0].operationId);
+		expect(events[1].errorMessage).toBe((failure as Error).message);
+	});
+
+	it("does not admit a steer whose preparation crosses a preserving stop", async () => {
+		const started = Promise.withResolvers<void>();
+		const { session } = await createSession([
+			() => {
+				started.resolve();
+				return { content: ["interrupted"], delayMs: 60_000 };
+			},
+		]);
+		const run = session.prompt("hello");
+		await started.promise;
+		let cancellationReason: string | undefined;
+		session.subscribe(event => {
+			if (event.type === "session_abort") cancellationReason = event.reason;
+		});
+		// Even text-only queue preparation yields during normalization.
+		const pending = session.steer("cancelled before admission");
+		const stopping = session.abort({ preserveQueuedInputs: true, reason: USER_INTERRUPT_LABEL });
+		expect(cancellationReason).toBe(USER_INTERRUPT_LABEL);
+		await stopping;
+		await pending;
+		await run;
+		expect(session.getQueuedInputMessages()).toEqual([]);
 	});
 
 	// Interrupt-and-send (empty Enter with a queued steer): the abort's own drain
@@ -1362,7 +1585,7 @@ describe("AgentSession queued steer delivery", () => {
 		it("reports a promotion as one queue_update that never shows the message missing", async () => {
 			const { session } = await createSession([{ content: ["delivered"] }]);
 			await session.followUp("keep me visible");
-			const updates: Array<{ steering: string[]; followUp: string[]; liveSteered: number }> = [];
+			const updates: Array<{ steering: readonly string[]; followUp: readonly string[]; liveSteered: number }> = [];
 			const unsubscribe = session.subscribe(event => {
 				if (event.type === "queue_update")
 					updates.push({ steering: event.steering, followUp: event.followUp, liveSteered: event.liveSteered });

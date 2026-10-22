@@ -116,8 +116,8 @@ describe("AgentSession advisor descriptor thinking level", () => {
 		// and the provider's default routing applies.
 		const advisor = session.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected advisor Agent to be live");
-		expect(advisor.state.model.provider).toBe(devinModel.provider);
-		expect(advisor.state.model.id).toBe(devinModel.id);
+		expect(advisor.state.model?.provider).toBe(devinModel.provider);
+		expect(advisor.state.model?.id).toBe(devinModel.id);
 		expect(advisor.state.thinkingLevel).toBeUndefined();
 		// `Off` is reserved for the explicit "disable reasoning" selector; the
 		// Devin path forwards no effort while keeping reasoning enabled.
@@ -132,7 +132,7 @@ describe("AgentSession advisor descriptor thinking level", () => {
 
 		const advisor = session.getAdvisorAgent();
 		if (!advisor) throw new Error("Expected advisor Agent to be live");
-		expect(advisor.state.model.provider).toBe(anthropicModel.provider);
+		expect(advisor.state.model?.provider).toBe(anthropicModel.provider);
 		expect(advisor.state.thinkingLevel).toBe(Effort.Medium);
 	});
 

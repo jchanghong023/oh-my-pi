@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome, runFulltest } from "./fulltest";
-import { runGate, type GateRun } from "./test-gate-runtime";
+import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
 import type { SourceIdentity } from "./test-gate-source";
 
 test("fulltest reaches its CLI error boundary without loading the native addon", async () => {
@@ -369,9 +369,10 @@ describe("standard gate charged-budget parameters", () => {
 
 	test("fastcheck accepts only a finite positive downward limit", () => {
 		expect(parseFastcheckArgs(["--limit-seconds=0.25"])).toEqual({ limitSeconds: 0.25 });
-		expect(parseFastcheckArgs(["--limit-seconds=90"])).toEqual({ limitSeconds: 90 });
+		const fastcheckMax = GATE_LIMIT_SECONDS.fastcheck;
+		expect(parseFastcheckArgs([`--limit-seconds=${fastcheckMax}`])).toEqual({ limitSeconds: fastcheckMax });
 		for (const args of [
-			["--limit-seconds=90.01"],
+			[`--limit-seconds=${fastcheckMax + 0.01}`],
 			["--limit-seconds=0"],
 			["--limit-seconds=-1"],
 			["--limit-seconds=Infinity"],

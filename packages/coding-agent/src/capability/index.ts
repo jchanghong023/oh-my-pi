@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 
 import type { Settings } from "../config/settings";
+import { findSettingsContext, getActiveSettings, withActiveSettings } from "../config/settings-context";
 import { clearCache as clearFsCache, findRepoRoot, cacheStats as fsCacheStats, invalidate as invalidateFs } from "./fs";
 import type {
 	Capability,
@@ -71,15 +72,20 @@ export function boundSettings(): Settings | undefined {
 	return settingsHolds.at(-1)?.settings;
 }
 
-/** Disabled provider IDs in effect: the bound settings' live value, else the unbound set. */
-function disabledProviders(): ReadonlySet<string> {
-	const settings = boundSettings();
+/** Async session identity wins; explicit discovery scope precedes the ordinary TUI binding. */
+function scopedSettings(ctx?: LoadContext): Settings | undefined {
+	return getActiveSettings() ?? (ctx ? findSettingsContext(ctx.cwd, ctx.agentDir) : undefined) ?? boundSettings();
+}
+
+/** Disabled provider IDs in effect for this discovery/session, else the unbound set. */
+function disabledProviders(ctx?: LoadContext): ReadonlySet<string> {
+	const settings = scopedSettings(ctx);
 	return settings ? cfgDisabledProviderSet.get(settings) : unboundDisabledProviders;
 }
 
-/** Explicitly enabled provider IDs in effect: the bound settings' live value, else the unbound set. */
-function enabledProviders(): ReadonlySet<string> {
-	const settings = boundSettings();
+/** Explicitly enabled provider IDs for this discovery/session, else the unbound set. */
+function enabledProviders(ctx?: LoadContext): ReadonlySet<string> {
+	const settings = scopedSettings(ctx);
 	return settings ? cfgEnabledProviderSet.get(settings) : unboundEnabledProviders;
 }
 
@@ -150,7 +156,7 @@ async function loadImpl<T>(
 	const disabledItems = new Set<T & { _source: SourceMeta; _shadowed?: boolean }>();
 	const allWarnings: string[] = [];
 	const contributingProviders: string[] = [];
-	const settings = boundSettings();
+	const settings = scopedSettings(ctx);
 	const disabledExtensionIds = new Set<string>(
 		options.disabledExtensions ?? (settings ? cfgDisabledExtensions.get(settings) : undefined) ?? [],
 	);
@@ -195,7 +201,8 @@ async function loadImpl<T>(
 
 			const extensionId = capability.toExtensionId?.(itemWithSource);
 			const isDisabled =
-				!isProviderEnabled(provider.id) || (extensionId !== undefined && disabledExtensionIds.has(extensionId));
+				disabledProviders(ctx).has(provider.id) ||
+				(extensionId !== undefined && disabledExtensionIds.has(extensionId));
 			if (isDisabled && !options.includeDisabled) {
 				continue;
 			}
@@ -304,8 +311,8 @@ async function loadImpl<T>(
 /**
  * Filter providers based on options and disabled state.
  */
-function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>): Provider<T>[] {
-	const disabled = disabledProviders();
+function filterProviders<T>(capability: Capability<T>, options: LoadOptions<T>, ctx: LoadContext): Provider<T>[] {
+	const disabled = disabledProviders(ctx);
 	let providers = (capability.providers as Provider<T>[]).filter(p => options.includeDisabled || !disabled.has(p.id));
 
 	if (options.providers) {
@@ -341,9 +348,10 @@ export async function loadCapability<T>(
 	if (options.includeDisabled) ctx.includeOptOutUserSources = true;
 	if (options.extensionRoots !== undefined) ctx.extensionRoots = options.extensionRoots;
 	if (options.skillSourceFilter !== undefined) ctx.skillSourceFilter = options.skillSourceFilter;
-	const providers = filterProviders(capability, options);
-
-	return await loadImpl(capability, providers, ctx, options);
+	return await withActiveSettings(scopedSettings(ctx), async () => {
+		const providers = filterProviders(capability, options, ctx);
+		return await loadImpl(capability, providers, ctx, options);
+	});
 }
 
 // =============================================================================
@@ -364,11 +372,11 @@ export function isForeignUserProvider(providerId: string): boolean {
  */
 export function isUserSourceEnabled(source: string, ctx?: LoadContext): boolean {
 	const id = source.replace(/^\./, "");
-	if (disabledProviders().has(id) && !ctx?.includeOptOutUserSources) return false;
+	if (disabledProviders(ctx).has(id) && !ctx?.includeOptOutUserSources) return false;
 	if (ctx?.skillSourceFilter) return ctx.skillSourceFilter({ provider: id, level: "user" });
 	if (FOREIGN_USER_PROVIDERS[id] !== true) return true;
 	if (ctx?.explicitProviders?.has(id) || ctx?.includeOptOutUserSources) return true;
-	const enabled = enabledProviders();
+	const enabled = enabledProviders(ctx);
 	if (enabled.has(id) || enabled.has("*") || enabled.has("all")) return true;
 	if (id === "claude-plugins" && enabled.has("claude")) return true;
 	if (id === "claude" && process.env.CLAUDE_CONFIG_DIR?.trim()) return true;
@@ -433,10 +441,10 @@ export function getDisabledProviders(): string[] {
 }
 
 /**
- * Set disabled providers from a list (replaces current set), persisting to the bound settings.
+ * Set disabled providers from a list, persisting to the async session or ordinary bound settings.
  */
 export function setDisabledProviders(providerIds: string[]): void {
-	const settings = boundSettings();
+	const settings = scopedSettings();
 	if (settings) cfgDisabledProviders.set(settings, [...new Set(providerIds)]);
 	else unboundDisabledProviders = new Set(providerIds);
 }
@@ -449,10 +457,10 @@ export function getEnabledProviders(): string[] {
 }
 
 /**
- * Set enabled providers from a list (replaces current set), persisting to the bound settings.
+ * Set enabled providers from a list, persisting to the async session or ordinary bound settings.
  */
 export function setEnabledProviders(providerIds: string[]): void {
-	const settings = boundSettings();
+	const settings = scopedSettings();
 	if (settings) cfgEnabledProviders.set(settings, [...new Set(providerIds)]);
 	else unboundEnabledProviders = new Set(providerIds);
 }

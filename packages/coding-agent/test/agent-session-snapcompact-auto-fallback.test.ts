@@ -10,6 +10,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import type { CompactionMethod } from "@oh-my-pi/pi-coding-agent/session/compaction-methods";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgCompaction } from "@oh-my-pi/pi-coding-agent/session/context-settings";
+import { archiveSourceText, getPreservedArchive } from "@oh-my-pi/snapcompact";
 import { mockSchedulerWaitWithClock } from "./helpers/mock-scheduler-clock";
 
 const UNRENDERABLE_SNAPCOMPACT_TEXT = "\uE000\uE001\uE002\uE003\uE004\uE005\uE006\uE007\uE008\uE009";
@@ -210,18 +211,49 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 	});
 
 	it("falls through from a failed OpenAI server compaction to snapcompact", async () => {
+		const historyText = "Keep the deployment constraint: the service must remain available during migration.";
+		const seedMessage: Message = { role: "user", content: historyText, timestamp: 1 };
 		const harness = await createHarness(modelRegistry, {
 			activeModel: { provider: "openai", id: "gpt-5" },
 			methodOrder: null,
+			seedMessages: [seedMessage],
 		});
 		session = harness.session;
+		const prompt = vi.spyOn(session.agent, "prompt").mockResolvedValue();
+		const retry = vi.spyOn(session.agent, "continue").mockResolvedValue();
+		const actions: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "auto_compaction_start") actions.push(event.action);
+		});
 		vi.spyOn(compactionModule, "compact").mockRejectedValue(new Error("server compaction unavailable"));
 		harness.triggerThreshold();
 
 		const result = await harness.awaitCompactionEnd();
+		await session.waitForIdle();
 
 		expect(result).toEqual({ action: "snapcompact", errorMessage: undefined });
-		expect(compactionModule.compact).toHaveBeenCalledTimes(1);
+		expect(actions).toEqual(["remote", "snapcompact"]);
+		expect(harness.failures.some(message => message.includes("server compaction unavailable"))).toBe(true);
+		const compaction = harness.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
+		if (compaction?.type !== "compaction") throw new Error("Expected committed snapcompact fallback");
+		expect(compaction.method).toBe("snapcompact");
+		const archive = getPreservedArchive(compaction.preserveData);
+		if (!archive) throw new Error("Expected persisted snapcompact archive");
+		expect(archiveSourceText(archive)).toContain(historyText);
+		expect(harness.sessionManager.getBranch().find(entry => entry.type === "message")?.message).toEqual(seedMessage);
+		expect(session.messages.some(message => message.role === "compactionSummary")).toBe(true);
+		expect(
+			session.messages.some(
+				message =>
+					message.role === "assistant" &&
+					message.content.some(block => block.type === "text" && block.text === "Done."),
+			),
+		).toBe(true);
+		// remote 可在同一 pass 内遍历多个候选；应验证提交后的上下文与终态，
+		// 而非把候选调用数误当作新周期重试，更不能为已完成的回答制造续跑。
+		expect(prompt).not.toHaveBeenCalled();
+		expect(retry).not.toHaveBeenCalled();
+		expect(session.messages.some(message => message.role === "developer" && message.synthetic === true)).toBe(false);
 	});
 
 	it("advances past a long Anthropic native retry-after instead of parking the turn", async () => {

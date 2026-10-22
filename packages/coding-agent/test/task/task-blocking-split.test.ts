@@ -18,8 +18,11 @@
  *    and reports the failed spawn.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { currentExecutionModel, withExecutionModelContext } from "@oh-my-pi/pi-coding-agent/session/execution-model";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
@@ -108,6 +111,62 @@ describe("task per-item blocking split", () => {
 		}
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
+	});
+
+	it("keeps execution-policy background-denied tasks inline without changing session defaults", async () => {
+		mockDiscovery();
+		const detached: Array<boolean | undefined> = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			detached.push(options.detached);
+			return makeResult(options.id ?? "?", options.agent.name);
+		});
+		const manager = createManager();
+		const session = createSession({ manager });
+		const tool = await TaskTool.create(session);
+		const result = await withExecutionModelContext(
+			{
+				model: getBundledModel("anthropic", "claude-sonnet-4-5"),
+				policies: { subagents: { foregroundModel: "submission", background: "deny" } },
+			},
+			() =>
+				tool.execute("tc-execution-inline", {
+					context: "ctx",
+					tasks: [{ name: "InlineWorker", agent: "task", task: "Build B." }],
+				} as TaskParams),
+		);
+		expect(detached).toEqual([false]);
+		expect(manager.getJob("InlineWorker")).toBeUndefined();
+		expect(result.details?.results.map(item => item.id)).toEqual(["InlineWorker"]);
+		expect(result.details?.async).toBeUndefined();
+		expect(cfgAsyncEnabled.get(session.settings)).toBe(true);
+	});
+
+	it("does not pass execution credentials or selection context into allowed detached work", async () => {
+		mockDiscovery();
+		const inherited: boolean[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			inherited.push(currentExecutionModel() !== undefined);
+			expect(options.detached).toBe(true);
+			return makeResult(options.id ?? "?", options.agent.name);
+		});
+		const manager = createManager();
+		const tool = await TaskTool.create(createSession({ manager }));
+		await withExecutionModelContext(
+			{
+				model: getBundledModel("anthropic", "claude-sonnet-4-5"),
+				policies: { subagents: { foregroundModel: "submission", background: "allow" } },
+				resolveRequestAuth: async () => ({ apiKey: "foreground-only" }),
+			},
+			async () => {
+				await tool.execute("tc-execution-detached", {
+					context: "ctx",
+					tasks: [{ name: "DetachedWorker", agent: "task", task: "Build B." }],
+				} as TaskParams);
+				await manager.getJob("DetachedWorker")!.promise;
+				expect(currentExecutionModel()).toBeDefined();
+			},
+		);
+		expect(inherited).toEqual([false]);
 	});
 
 	it("runs blocking items inline while non-blocking siblings spawn as jobs", async () => {

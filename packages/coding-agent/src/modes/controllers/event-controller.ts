@@ -389,6 +389,13 @@ export class EventController {
 				}
 			},
 			tool_execution_end: e => this.#handleToolExecutionEnd(e),
+			// CommandController.executeCompaction owns the manual spinner, transcript
+			// rebuild and queue flush around compact(); handling these again duplicates UI.
+			manual_compaction_start: async () => {},
+			manual_compaction_end: async () => {},
+			// Interrupt call sites own immediate UI cleanup; agent_end and the existing
+			// compaction/retry end events still own settlement, not cancellation intent.
+			session_abort: async () => {},
 			auto_compaction_start: e => this.#handleAutoCompactionStart(e),
 			auto_compaction_end: e => this.#handleAutoCompactionEnd(e),
 			auto_retry_start: e => this.#handleAutoRetryStart(e),

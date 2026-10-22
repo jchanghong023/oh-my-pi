@@ -26,7 +26,7 @@ import { isRecord, logger, prompt, untilAborted } from "@oh-my-pi/pi-utils";
 import type { ExtensionUISelectItem } from "../extensibility/extensions";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
-import { theme } from "@oh-my-pi/pi-tui/theme";
+import { activeThemeSymbol } from "@oh-my-pi/pi-tui/theme/active-symbols";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import askTimeoutReply from "../prompts/tools/ask-timeout.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
@@ -140,7 +140,7 @@ const ASK_TIMEOUT_REPLY = askTimeoutReply.trim();
 const TIMEOUT_DETECTION_TOLERANCE_MS = 1_000;
 
 function getDoneOptionLabel(): string {
-	return `${theme.status.success} Done selecting`;
+	return `${activeThemeSymbol("status.success")} Done selecting`;
 }
 
 /** Add "(Recommended)" suffix to the option at the given index if not already present */

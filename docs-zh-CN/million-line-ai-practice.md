@@ -130,7 +130,7 @@
 | `fulltest` | 当前平台完整本地验证 | 须人工授权，不触发其他平台或远端流水线 |
 | `slowtest` | 综合验收 | 含 `fulltest` 及跨环境、远端或发布流程；须人工授权 |
 
-**技能方案与仓库现状要分开**：本 OMP fork 的 `fastcheck` 非编译硬上限为 90 秒，`fulltest` 按需求记录的上游基线差异选测试，`slowtest` 包含一次 `fulltest` 及适用的 WSL 本地验证，不推送、不触发 CI、不发布，以[根 AGENTS.md](../AGENTS.md#验证) 为准。调用技能也不等于授权运行测试；脚本里的授权标记代替不了用户授权。
+**技能方案与仓库现状要分开**：本 OMP fork 的 `fastcheck` 非编译硬上限为 180 秒，`fulltest` 按需求记录的上游基线差异选测试，`slowtest` 包含一次 `fulltest` 及适用的 WSL 本地验证，不推送、不触发 CI、不发布，以[根 AGENTS.md](../AGENTS.md#验证) 为准。调用技能也不等于授权运行测试；脚本里的授权标记代替不了用户授权。
 
 ![三级门禁报告：fastcheck 失败，fulltest 与 slowtest 未获授权执行](assets/jch-test-gates-example.png)
 

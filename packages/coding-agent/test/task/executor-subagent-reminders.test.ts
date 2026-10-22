@@ -68,6 +68,7 @@ function createMockSession(
 		extensionRunner: undefined,
 		sessionManager: {
 			appendSessionInit: () => {},
+			getCwd: () => process.cwd(),
 		},
 		getActiveToolNames: () => ["read", "yield"],
 		getEnabledToolNames: () => ["read", "yield"],
@@ -95,6 +96,9 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Native tool context is unavailable in this fixture");
+		},
 		eventBus: new EventBus(),
 	};
 }

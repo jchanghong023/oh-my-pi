@@ -1000,14 +1000,44 @@ export interface CustomAgentMessages {
  * This abstraction allows apps to add custom message types while maintaining
  * type safety and compatibility with the base LLM messages.
  */
-export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+/** Stable input provenance retained by the runtime queue and journal, never sent as provider options. */
+export interface AgentInputMetadata {
+	inputId?: string;
+	inputAdmissionSeq?: number;
+	inputClientId?: string;
+	sourceCommand?: {
+		sessionId: string | null;
+		commandId: string;
+		fingerprint: string;
+		epoch?: string;
+		type?: string;
+		automationId?: string;
+	};
+	toolDenylist?: readonly string[];
+	attachments?: readonly {
+		ref: string;
+		fileName: string;
+		mime: string;
+		bytes: number;
+		sourceKind?: string;
+		messageCount?: number;
+		previewRef?: string;
+	}[];
+}
+
+export type AgentUserMessage = Extract<Message, { role: "user" }> & AgentInputMetadata;
+
+export type AgentMessage =
+	| Exclude<Message, { role: "user" }>
+	| AgentUserMessage
+	| CustomAgentMessages[keyof CustomAgentMessages];
 
 /**
  * Agent state containing all configuration and conversation data.
  */
 export interface AgentState {
 	systemPrompt: string[];
-	model: Model;
+	model: Model | undefined;
 	thinkingLevel?: Effort;
 	disableReasoning?: boolean;
 	tools: AgentTool<any>[];

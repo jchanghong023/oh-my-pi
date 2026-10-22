@@ -28,6 +28,7 @@ import { $env, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ToolSession } from "..";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
+import { currentExecutionModel, withoutExecutionModelContext } from "../session/execution-model";
 import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskAsyncContractTemplate from "../prompts/tools/task-async-contract.md" with { type: "text" };
@@ -850,19 +851,22 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 	}): SpawnRun {
 		return new SpawnRun(
 			this.#permit,
-			run =>
-				this.#runSpawn(
-					spawn.toolCallId,
-					spawn.params,
-					run.signal,
-					run.onUpdate,
-					spawn.agentId,
-					spawn.index,
-					spawn.detached,
-					run.timing,
-					spawn.detached ? run.onArtifactsRetained : undefined,
-					run.tools,
-				),
+			run => {
+				const execute = () =>
+					this.#runSpawn(
+						spawn.toolCallId,
+						spawn.params,
+						run.signal,
+						run.onUpdate,
+						spawn.agentId,
+						spawn.index,
+						spawn.detached,
+						run.timing,
+						spawn.detached ? run.onArtifactsRetained : undefined,
+						run.tools,
+					);
+				return spawn.detached ? withoutExecutionModelContext(execute) : execute();
+			},
 			{ agentId: spawn.agentId, detached: spawn.detached },
 		);
 	}
@@ -886,7 +890,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			return undefined;
 		}
 		const detached =
-			cfgAsyncEnabled.get(this.session.settings) && this.session.asyncJobManager !== undefined && !blocking;
+			currentExecutionModel()?.policies?.subagents?.background !== "deny" &&
+			cfgAsyncEnabled.get(this.session.settings) &&
+			this.session.asyncJobManager !== undefined &&
+			!blocking;
 		const agentId = await this.#outputManager().allocate(spawn.name?.trim() || generateTaskName());
 		if (signal.aborted) return undefined;
 		return this.#launch({ toolCallId, params: spawn, index, agentId, detached });
@@ -1020,7 +1027,9 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// `blocking: true` runs inline on this turn (the parent waits on its
 		// result); every other item becomes a background job when async
 		// execution is available.
-		const asyncEnabled = cfgAsyncEnabled.get(this.session.settings);
+		const asyncEnabled =
+			currentExecutionModel()?.policies?.subagents?.background !== "deny" &&
+			cfgAsyncEnabled.get(this.session.settings);
 		const manager = asyncEnabled ? this.session.asyncJobManager : undefined;
 		const asyncItems = manager ? spawnItems.filter((_, index) => !itemBlocking[index]) : [];
 		// Runs started while the call streamed. An item runs detached iff it

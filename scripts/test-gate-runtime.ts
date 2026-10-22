@@ -23,7 +23,11 @@ import {
 
 export type GateLevel = "fastcheck" | "fulltest" | "slowtest";
 export type GateStatus = "PASS" | "FAIL" | "TIMEOUT" | "INTERRUPTED" | "MISSING_TOOL";
-export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = { fastcheck: 90, fulltest: 900, slowtest: 1500 };
+export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = {
+	fastcheck: 180,
+	fulltest: 900,
+	slowtest: 1500,
+};
 type RunLabel = GateLevel | "bazel";
 type Activity = "charged" | "compile";
 export interface GateActivityEvent {

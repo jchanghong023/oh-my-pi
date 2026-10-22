@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import { rmSync, symlinkSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -801,7 +802,17 @@ describe("detachGitDir", () => {
 		expect((await runGit(iso, ["rev-list", "HEAD"])).split("\n")).toHaveLength(1);
 	});
 
-	it("detaches when sourceCommonDir is reached through a symlinked path", async () => {
+	// Windows denies symlink creation without Developer Mode/admin (EPERM);
+	// probe once so the alias-path case skips instead of failing on privilege.
+	const symlinkProbe = path.join(os.tmpdir(), `omp-symlink-probe-${process.pid}`);
+	let symlinkPermitted = true;
+	try {
+		symlinkSync(os.tmpdir(), symlinkProbe);
+		rmSync(symlinkProbe, { force: true });
+	} catch {
+		symlinkPermitted = false;
+	}
+	it.skipIf(!symlinkPermitted)("detaches when sourceCommonDir is reached through a symlinked path", async () => {
 		const { wt, commonDir, baseSha } = await makeLinkedWorktree();
 		// Alias the main checkout through a symlink and hand detachGitDir the
 		// lexical (un-canonicalized) common dir — the shape ensureIsolation

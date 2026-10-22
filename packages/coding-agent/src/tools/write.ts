@@ -1,5 +1,7 @@
 import type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
+export type { WriteToolDetails } from "@oh-my-pi/pi-tui/tools/write";
 import { Database } from "bun:sqlite";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -21,6 +23,7 @@ import {
 	readArchiveEntries,
 	writeArchive,
 } from "@oh-my-pi/pi-utils/ar";
+import { withWritethroughMutationLocks } from "../lsp/writethrough";
 import { normalizeToLF } from "../edit/normalize";
 
 import { extractUriScheme, InternalUrlRouter, sessionResolveContext, sessionWriteContext } from "../internal-urls";
@@ -77,6 +80,83 @@ import {
 const EXECUTABLE_NOTICE = "[Notice: Made executable via chmod +x]";
 const URI_LIKE_WRITE_PATH_RE = /^([a-z][a-z0-9+.-]*):\/{1,2}(.*)$/i;
 const MISSING_DELIMITER_RE = /^([a-z][a-z0-9+.-]*)\/+(.*)$/i;
+
+// Match the edit result's combined oldText/newText journal budget.
+const MAX_WRITE_SNAPSHOT_TEXT_CHARS = 32_768;
+const MAX_WRITE_SNAPSHOT_BYTES = MAX_WRITE_SNAPSHOT_TEXT_CHARS * 4;
+type WriteCheckpointState = {
+	path: string;
+	op: "create" | "update";
+	text?: string;
+	identity?: Stats;
+};
+
+function sameWriteIdentity(a: Stats, b: Stats): boolean {
+	return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+}
+
+async function canonicalWritePath(file: string): Promise<string> {
+	try {
+		return await fs.realpath(file);
+	} catch (error) {
+		if (!isEnoent(error) || path.dirname(file) === file) throw error;
+		// A dangling link is not evidence that the destination did not exist.
+		if (await fs.lstat(file).catch(() => undefined)) throw error;
+		return path.join(await canonicalWritePath(path.dirname(file)), path.basename(file));
+	}
+}
+
+async function captureWriteCheckpoint(file: string, textBudget: number): Promise<WriteCheckpointState | undefined> {
+	try {
+		const canonical = await canonicalWritePath(file);
+		const handle = await fs.open(file, "r").catch(async error => {
+			if (!isEnoent(error) || (await fs.lstat(file).catch(() => undefined))) throw error;
+			return undefined;
+		});
+		if (!handle) return { path: canonical, op: "create", text: "" };
+		try {
+			const identity = await handle.stat();
+			const state: WriteCheckpointState = { path: canonical, op: "update", identity };
+			if (!identity.isFile() || identity.size > MAX_WRITE_SNAPSHOT_BYTES || textBudget < 0) return state;
+			// Never read a growing file without a bound, or decode invalid UTF-8 lossily.
+			const bytes = Buffer.allocUnsafe(identity.size + 1);
+			let count = 0;
+			while (count < bytes.length) {
+				const read = await handle.read(bytes, count, bytes.length - count, count);
+				if (read.bytesRead === 0) break;
+				count += read.bytesRead;
+			}
+			if (count !== identity.size || !sameWriteIdentity(identity, await handle.stat())) return state;
+			if (!sameWriteIdentity(identity, await fs.stat(file)) || (await fs.realpath(file)) !== canonical) return state;
+			try {
+				const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, count));
+				if (text.length <= textBudget && !text.includes("\0")) state.text = text;
+			} catch {
+				// Invalid UTF-8 remains a known update, but cannot be restored as text.
+			}
+			return state;
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		// Checkpoint failures must not change write permissions or success behavior.
+		return undefined;
+	}
+}
+
+async function writeCheckpointDetails(
+	file: string,
+	before: WriteCheckpointState | undefined,
+	finalContent: string,
+): Promise<Pick<WriteToolDetails, "path" | "op" | "oldText" | "newText" | "snapshotsPruned">> {
+	const unavailable = { path: before?.path ?? file, op: before?.op, snapshotsPruned: true as const };
+	if (before?.text === undefined || before.text.length + finalContent.length > MAX_WRITE_SNAPSHOT_TEXT_CHARS) {
+		return unavailable;
+	}
+	const after = await captureWriteCheckpoint(file, MAX_WRITE_SNAPSHOT_TEXT_CHARS - before.text.length);
+	if (after?.op !== "update" || after.path !== before.path || after.text !== finalContent) return unavailable;
+	return { path: before.path, op: before.op, oldText: before.text, newText: after.text };
+}
 
 /** True when `typo` is exactly one insertion, deletion, substitution, or adjacent swap away from `word`. */
 function isOneEditAway(typo: string, word: string): boolean {
@@ -978,70 +1058,108 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 			emitWriteProgress(onUpdate, cleanBytes, displayPath, absolutePath);
 
-			// Try ACP bridge first for editor-visible filesystem paths. Internal
-			// artifacts such as local:// plans are owned by OMP, not the editor.
-			const bridgeWrite = await routeWriteThroughBridge(this.session, path, absolutePath, cleanContent, signal);
-			if (bridgeWrite) {
-				// `write` always replaces the whole file, so (unlike hashline's
-				// hunk-scoped diff) there's no size cost to keying the header/
-				// executable-bit check on the verified post-write content —
-				// use it so a drifted write (e.g. client format-on-save) still
-				// hands back a tag that matches what's actually on disk.
-				const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
-				const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
-				const writeLine = `Successfully wrote ${cleanBytes} bytes to ${displayPath}`;
-				let resultText = header ? `${header}\n${writeLine}` : writeLine;
-				if (stripped) {
-					resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
-				}
-				if (madeExecutable) {
-					resultText += `\n${EXECUTABLE_NOTICE}`;
-				}
-				return {
-					content: [{ type: "text", text: resultText }],
-					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
-				};
-			}
+			return withWritethroughMutationLocks(
+				[absolutePath],
+				batchRequest?.flush ? batchRequest.id : undefined,
+				async (): Promise<AgentToolResult<WriteToolDetails>> => {
+					signal?.throwIfAborted();
+					// Try ACP bridge first for editor-visible filesystem paths. Internal
+					// artifacts such as local:// plans are owned by OMP, not the editor.
+					const bridgeWrite = await routeWriteThroughBridge(
+						this.session,
+						path,
+						absolutePath,
+						cleanContent,
+						signal,
+					);
+					if (bridgeWrite) {
+						// `write` always replaces the whole file, so (unlike hashline's
+						// hunk-scoped diff) there's no size cost to keying the header/
+						// executable-bit check on the verified post-write content —
+						// use it so a drifted write (e.g. client format-on-save) still
+						// hands back a tag that matches what's actually on disk.
+						const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
+						const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
+						const writeLine = `Successfully wrote ${cleanBytes} bytes to ${displayPath}`;
+						let resultText = header ? `${header}\n${writeLine}` : writeLine;
+						if (stripped) {
+							resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+						}
+						if (madeExecutable) {
+							resultText += `\n${EXECUTABLE_NOTICE}`;
+						}
+						return {
+							content: [{ type: "text", text: resultText }],
+							details: {
+								resolvedPath: absolutePath,
+								path: absolutePath,
+								snapshotsPruned: true,
+								madeExecutable: madeExecutable || undefined,
+							},
+						};
+					}
 
-			const { writethrough, deferred } = this.#lspWritethrough();
-			const diagnostics = await writethrough(absolutePath, cleanContent, signal, undefined, batchRequest, dst =>
-				deferred?.begin(dst),
-			);
-			invalidateFsScanAfterWrite(absolutePath);
-			if (!deferred || batchRequest?.flush === false) {
-				this.session.bumpFileMutationVersion?.(absolutePath);
-			}
-			const finalContent = diagnostics.finalContent;
-			const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
+					const before = await captureWriteCheckpoint(
+						absolutePath,
+						MAX_WRITE_SNAPSHOT_TEXT_CHARS - cleanContent.length,
+					);
+					// Detect path replacement or mutation between the bounded read and commit.
+					if (before?.identity) {
+						const current = await fs.stat(absolutePath).catch(() => undefined);
+						if (!current || !sameWriteIdentity(before.identity, current)) before.text = undefined;
+					}
+					const { writethrough, deferred } = this.#lspWritethrough();
+					const diagnostics = await writethrough(
+						absolutePath,
+						cleanContent,
+						signal,
+						undefined,
+						batchRequest,
+						dst => deferred?.begin(dst),
+					);
+					invalidateFsScanAfterWrite(absolutePath);
+					if (!deferred || batchRequest?.flush === false) {
+						this.session.bumpFileMutationVersion?.(absolutePath);
+					}
+					const finalContent = diagnostics.finalContent;
+					const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, finalContent);
+					const checkpoint = await writeCheckpointDetails(absolutePath, before, finalContent);
 
-			const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
-			const finalBytes = finalContent === cleanContent ? cleanBytes : Buffer.byteLength(finalContent, "utf8");
-			const writeLine = `Successfully wrote ${finalBytes} bytes to ${displayPath}`;
-			let resultText = header ? `${header}\n${writeLine}` : writeLine;
-			if (stripped) {
-				resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
-			}
-			if (madeExecutable) {
-				resultText += `\n${EXECUTABLE_NOTICE}`;
-			}
-			if (!diagnostics.diagnostics) {
-				return {
-					content: [{ type: "text", text: resultText }],
-					details: { resolvedPath: absolutePath, madeExecutable: madeExecutable || undefined },
-				};
-			}
+					const header = maybeWriteSnapshotHeader(this.session, absolutePath, finalContent, displayPath);
+					const finalBytes = finalContent === cleanContent ? cleanBytes : Buffer.byteLength(finalContent, "utf8");
+					const writeLine = `Successfully wrote ${finalBytes} bytes to ${displayPath}`;
+					let resultText = header ? `${header}\n${writeLine}` : writeLine;
+					if (stripped) {
+						resultText += `\nNote: auto-stripped hashline display prefixes from content before writing.`;
+					}
+					if (madeExecutable) {
+						resultText += `\n${EXECUTABLE_NOTICE}`;
+					}
+					if (!diagnostics.diagnostics) {
+						return {
+							content: [{ type: "text", text: resultText }],
+							details: {
+								resolvedPath: absolutePath,
+								...checkpoint,
+								madeExecutable: madeExecutable || undefined,
+							},
+						};
+					}
 
-			return {
-				content: [{ type: "text", text: resultText }],
-				details: {
-					resolvedPath: absolutePath,
-					diagnostics: diagnostics.diagnostics,
-					madeExecutable: madeExecutable || undefined,
-					meta: outputMeta()
-						.diagnostics(diagnostics.diagnostics.summary, diagnostics.diagnostics.messages ?? [])
-						.get(),
+					return {
+						content: [{ type: "text", text: resultText }],
+						details: {
+							resolvedPath: absolutePath,
+							...checkpoint,
+							diagnostics: diagnostics.diagnostics,
+							madeExecutable: madeExecutable || undefined,
+							meta: outputMeta()
+								.diagnostics(diagnostics.diagnostics.summary, diagnostics.diagnostics.messages ?? [])
+								.get(),
+						},
+					};
 				},
-			};
+			);
 		});
 	}
 }

@@ -293,7 +293,8 @@ describe("MCP fallback and prompt formatting", () => {
 			resource: "apiVersion: v1\nkind: Pod\nmetadata:\n  name: probe\n  namespace: probe-ns",
 		};
 		const definition: MCPToolDefinition = { name: "apply", inputSchema: { type: "object" } };
-		const connection = { name: "kubernetes" } as MCPServerConnection;
+		// tool-bridge 在途改动读取 connection.config.alwaysLoad,夹具需补 config。
+		const connection = { name: "kubernetes", config: {} } as MCPServerConnection;
 		const eager = new MCPTool(connection, definition);
 		const deferred = new DeferredMCPTool("kubernetes", definition, async () => connection);
 		const writeTool = new WriteTool({ cwd: "." } as ToolSession);

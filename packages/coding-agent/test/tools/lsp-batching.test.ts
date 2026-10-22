@@ -7,6 +7,8 @@ import * as lspConfig from "@oh-my-pi/pi-coding-agent/lsp/config";
 import type { LinterClient, ServerConfig } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import { addFileWriteFallback } from "@oh-my-pi/pi-coding-agent/tools/file-write-fallback";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { restoreFileCheckpoints } from "../../src/edit/file-rewind";
+import { withWritethroughMutationLocks } from "../../src/lsp/writethrough";
 
 function createFormatter(format: (filePath: string, content: string) => Promise<string>): ServerConfig {
 	return {
@@ -110,6 +112,104 @@ describe("createLspWritethrough batching", () => {
 
 		expect(await Bun.file(fileA).exists()).toBe(false);
 		expect(await Bun.file(fileB).text()).toBe("const survivor = true;\n");
+	});
+
+	it("serializes another session's rewind with every queued formatter destination", async () => {
+		const fileA = path.join(tempDir.path(), "rewound.ts");
+		const fileB = path.join(tempDir.path(), "flush.ts");
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const formatter = createFormatter(async (filePath, content) => {
+			if (filePath === fileA) {
+				entered.resolve();
+				await release.promise;
+				return content.replace("=1", " = 1;");
+			}
+			return content;
+		});
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["formatter", formatter]]);
+		const sessionB = createLspWritethrough(tempDir.path(), { enableFormat: true });
+		const sessionA = createLspWritethrough(tempDir.path());
+		const before = "const original = true;\n";
+		const after = "const value=1\n";
+		await sessionA(fileA, before);
+		await sessionB(fileA, after, undefined, undefined, { id: "rewind-race", flush: false });
+		const flush = withWritethroughMutationLocks([fileB], "rewind-race", () =>
+			sessionB(fileB, "const other = true;\n", undefined, undefined, { id: "rewind-race", flush: true }),
+		);
+		await entered.promise;
+		let rewindSettled = false;
+		const rewind = restoreFileCheckpoints([{ path: fileA, before, after }]).then(result => {
+			rewindSettled = true;
+			return result;
+		});
+		try {
+			// An unrelated session mutation is not blocked by the paused formatter.
+			const unrelated = path.join(tempDir.path(), "unrelated.ts");
+			await sessionA(unrelated, "progress\n");
+			expect(await Bun.file(unrelated).text()).toBe("progress\n");
+			expect(rewindSettled).toBe(false);
+		} finally {
+			release.resolve();
+			await flush;
+			await rewind;
+		}
+		// The formatter changed the checkpoint's expected bytes: never report a
+		// successful restore that its pending commit can subsequently overwrite.
+		expect((await rewind).applied).toBe(false);
+		const formatted = "const value = 1;\n";
+		expect(await Bun.file(fileA).text()).toBe(formatted);
+		const restored = await restoreFileCheckpoints([{ path: fileA, before, after: formatted }]);
+		expect(restored.applied).toBe(true);
+		expect(restored.receipts[0].status).toBe("restored");
+		expect(await Bun.file(fileA).text()).toBe(before);
+	});
+
+	it("does not format a completed rewind's bytes when a queued batch is flushed later", async () => {
+		const fileA = path.join(tempDir.path(), "restored.ts");
+		const fileB = path.join(tempDir.path(), "last.ts");
+		const formattedPaths: string[] = [];
+		const formatter = createFormatter(async (filePath, content) => {
+			formattedPaths.push(filePath);
+			return `${content}// formatted\n`;
+		});
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["formatter", formatter]]);
+		const sessionB = createLspWritethrough(tempDir.path(), { enableFormat: true });
+		const before = "const original = true;\n";
+		const after = "const replacement = true;\n";
+		await Bun.write(fileA, before);
+		await sessionB(fileA, after, undefined, undefined, { id: "restored-before-flush", flush: false });
+		const restored = await restoreFileCheckpoints([{ path: fileA, before, after }]);
+		expect(restored.applied).toBe(true);
+		await sessionB(fileB, "const last = true;\n", undefined, undefined, {
+			id: "restored-before-flush",
+			flush: true,
+		});
+		expect(formattedPaths).toEqual([fileB]);
+		expect(await Bun.file(fileA).text()).toBe(before);
+	});
+
+	it("admits opposite-order session batches without nested cross-path locks", async () => {
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([]);
+		const fileA = path.join(tempDir.path(), "opposite-a.ts");
+		const fileB = path.join(tempDir.path(), "opposite-b.ts");
+		const sessionA = createLspWritethrough(tempDir.path(), { enableFormat: true });
+		const sessionB = createLspWritethrough(tempDir.path(), { enableFormat: true });
+		await sessionA(fileA, "a1\n", undefined, undefined, { id: "opposite-a", flush: false });
+		await sessionB(fileB, "b1\n", undefined, undefined, { id: "opposite-b", flush: false });
+		await Promise.all([
+			withWritethroughMutationLocks([fileB], "opposite-a", () =>
+				sessionA(fileB, "b2\n", undefined, undefined, { id: "opposite-a", flush: true }),
+			),
+			withWritethroughMutationLocks([fileA], "opposite-b", () =>
+				sessionB(fileA, "a2\n", undefined, undefined, { id: "opposite-b", flush: true }),
+			),
+		]);
+		expect(await Bun.file(fileA).text()).toBe("a2\n");
+		expect(await Bun.file(fileB).text()).toBe("b2\n");
 	});
 
 	it("preserves a UTF-8 BOM when batch formatting changes content", async () => {

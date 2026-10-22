@@ -158,7 +158,7 @@ describe("advisor classifier-refusal fallback", () => {
 		await review("third turn after the cooldown window");
 
 		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(refusals);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(advisorFallback.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(advisorFallback.id);
 	});
 
 	it("still returns a provider-failure fallback to its primary after the cooldown", async () => {
@@ -169,7 +169,7 @@ describe("advisor classifier-refusal fallback", () => {
 		await review("turn after the cooldown window");
 
 		expect(advisorRequests.filter(id => id === advisorPrimary.id).length).toBeGreaterThan(failures);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(advisorPrimary.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(advisorPrimary.id);
 	});
 
 	it("retries the refusing primary after the session compacts", async () => {
@@ -184,30 +184,30 @@ describe("advisor classifier-refusal fallback", () => {
 		await review("turn after compaction");
 
 		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(refusals + 1);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(advisorPrimary.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(advisorPrimary.id);
 	});
 
 	it("returns to a primary that only overloaded when a later fallback refuses", async () => {
 		const { s, advisorRequests, review } = await startSession("overloaded", { fallbackRefuses: true });
 		expect(advisorRequests).toContain(advisorFallback.id);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(secondFallback.id);
 
 		vi.spyOn(Date, "now").mockReturnValue(Date.now() + PAST_COOLDOWN_MS);
 		await review("turn after the cooldown window");
 
 		expect(advisorRequests.at(-1)).toBe(advisorPrimary.id);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(advisorPrimary.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(advisorPrimary.id);
 	});
 
 	it("stays pinned when the primary refuses and a fallback refuses too", async () => {
 		const { s, advisorRequests, review } = await startSession("refusal", { fallbackRefuses: true });
 		const primaryRequests = advisorRequests.filter(id => id === advisorPrimary.id).length;
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(secondFallback.id);
 
 		vi.spyOn(Date, "now").mockReturnValue(Date.now() + PAST_COOLDOWN_MS);
 		await review("turn after the cooldown window");
 
 		expect(advisorRequests.filter(id => id === advisorPrimary.id)).toHaveLength(primaryRequests);
-		expect(s.getAdvisorAgent()?.state.model.id).toBe(secondFallback.id);
+		expect(s.getAdvisorAgent()?.state.model?.id).toBe(secondFallback.id);
 	});
 });

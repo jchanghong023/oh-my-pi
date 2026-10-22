@@ -3848,9 +3848,98 @@ func (v ToolExecutionEndEvent) MarshalJSON() ([]byte, error) {
 	return encodeObject(plain(v), `"type":"tool_execution_end"`, nil)
 }
 
+// Cancellation began for this session; this does not by itself mean the session has settled.
+type SessionAbortEvent struct {
+	Reason *string `json:"reason,omitempty"`
+}
+
+func (v *SessionAbortEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "SessionAbortEvent", v.decodeFrom)
+}
+
+func (v *SessionAbortEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out SessionAbortEvent
+	d := fieldDecoder{raw: raw, owner: "SessionAbortEvent"}
+	d.constant("type", "session_abort")
+	d.optional("reason", &out.Reason)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v SessionAbortEvent) MarshalJSON() ([]byte, error) {
+	type plain SessionAbortEvent
+	return encodeObject(plain(v), `"type":"session_abort"`, nil)
+}
+
+type ManualCompactionStartEvent struct {
+	OperationID string `json:"operationId"`
+}
+
+func (v *ManualCompactionStartEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ManualCompactionStartEvent", v.decodeFrom)
+}
+
+func (v *ManualCompactionStartEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ManualCompactionStartEvent
+	d := fieldDecoder{raw: raw, owner: "ManualCompactionStartEvent"}
+	d.constant("type", "manual_compaction_start")
+	d.required("operationId", &out.OperationID)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ManualCompactionStartEvent) MarshalJSON() ([]byte, error) {
+	type plain ManualCompactionStartEvent
+	return encodeObject(plain(v), `"type":"manual_compaction_start"`, nil)
+}
+
+type ManualCompactionEndEvent struct {
+	OperationID string            `json:"operationId"`
+	Aborted     bool              `json:"aborted"`
+	Result      *CompactionResult `json:"result,omitempty"`
+	// Canonical journal compaction entry committed by this operation, when present.
+	SummaryRef   *string `json:"summaryRef,omitempty"`
+	ErrorMessage *string `json:"errorMessage,omitempty"`
+	// Compaction was skipped for a benign reason.
+	Skipped *bool `json:"skipped,omitempty"`
+}
+
+func (v *ManualCompactionEndEvent) UnmarshalJSON(data []byte) error {
+	return decodeWith(data, "ManualCompactionEndEvent", v.decodeFrom)
+}
+
+func (v *ManualCompactionEndEvent) decodeFrom(raw map[string]json.RawMessage) error {
+	var out ManualCompactionEndEvent
+	d := fieldDecoder{raw: raw, owner: "ManualCompactionEndEvent"}
+	d.constant("type", "manual_compaction_end")
+	d.required("operationId", &out.OperationID)
+	d.required("aborted", &out.Aborted)
+	d.optional("result", &out.Result)
+	d.optional("summaryRef", &out.SummaryRef)
+	d.optional("errorMessage", &out.ErrorMessage)
+	d.optional("skipped", &out.Skipped)
+	if d.err != nil {
+		return d.err
+	}
+	*v = out
+	return nil
+}
+
+func (v ManualCompactionEndEvent) MarshalJSON() ([]byte, error) {
+	type plain ManualCompactionEndEvent
+	return encodeObject(plain(v), `"type":"manual_compaction_end"`, nil)
+}
+
 type AutoCompactionStartEvent struct {
-	Reason AutoCompactionReason `json:"reason"`
-	Action AutoCompactionAction `json:"action"`
+	Reason      AutoCompactionReason `json:"reason"`
+	Action      AutoCompactionAction `json:"action"`
+	OperationID *string              `json:"operationId,omitempty"`
 }
 
 func (v *AutoCompactionStartEvent) UnmarshalJSON(data []byte) error {
@@ -3863,6 +3952,7 @@ func (v *AutoCompactionStartEvent) decodeFrom(raw map[string]json.RawMessage) er
 	d.constant("type", "auto_compaction_start")
 	d.required("reason", &out.Reason)
 	d.required("action", &out.Action)
+	d.optional("operationId", &out.OperationID)
 	if d.err != nil {
 		return d.err
 	}
@@ -3876,11 +3966,14 @@ func (v AutoCompactionStartEvent) MarshalJSON() ([]byte, error) {
 }
 
 type AutoCompactionEndEvent struct {
-	Action       AutoCompactionAction `json:"action"`
-	Aborted      bool                 `json:"aborted"`
-	WillRetry    bool                 `json:"willRetry"`
-	Result       *CompactionResult    `json:"result,omitempty"`
-	ErrorMessage *string              `json:"errorMessage,omitempty"`
+	Action      AutoCompactionAction `json:"action"`
+	Aborted     bool                 `json:"aborted"`
+	WillRetry   bool                 `json:"willRetry"`
+	OperationID *string              `json:"operationId,omitempty"`
+	// Canonical journal compaction entry committed by this operation, when present.
+	SummaryRef   *string           `json:"summaryRef,omitempty"`
+	Result       *CompactionResult `json:"result,omitempty"`
+	ErrorMessage *string           `json:"errorMessage,omitempty"`
 	// Compaction was skipped for a benign reason.
 	Skipped *bool `json:"skipped,omitempty"`
 }
@@ -3896,6 +3989,8 @@ func (v *AutoCompactionEndEvent) decodeFrom(raw map[string]json.RawMessage) erro
 	d.required("action", &out.Action)
 	d.required("aborted", &out.Aborted)
 	d.required("willRetry", &out.WillRetry)
+	d.optional("operationId", &out.OperationID)
+	d.optional("summaryRef", &out.SummaryRef)
 	d.optional("result", &out.Result)
 	d.optional("errorMessage", &out.ErrorMessage)
 	d.optional("skipped", &out.Skipped)
@@ -4434,6 +4529,9 @@ func (ToolExecutionStartEvent) isRpcAgentEvent()     {}
 func (ToolExecutionUpdateEvent) isRpcAgentEvent()    {}
 func (ToolStreamUpdateEvent) isRpcAgentEvent()       {}
 func (ToolExecutionEndEvent) isRpcAgentEvent()       {}
+func (SessionAbortEvent) isRpcAgentEvent()           {}
+func (ManualCompactionStartEvent) isRpcAgentEvent()  {}
+func (ManualCompactionEndEvent) isRpcAgentEvent()    {}
 func (AutoCompactionStartEvent) isRpcAgentEvent()    {}
 func (AutoCompactionEndEvent) isRpcAgentEvent()      {}
 func (AutoRetryStartEvent) isRpcAgentEvent()         {}
@@ -4497,6 +4595,12 @@ func (v *RpcAgentEvent) decodeFrom(raw map[string]json.RawMessage) error {
 		value, err = decodeVariant[ToolStreamUpdateEvent](raw)
 	case "tool_execution_end":
 		value, err = decodeVariant[ToolExecutionEndEvent](raw)
+	case "session_abort":
+		value, err = decodeVariant[SessionAbortEvent](raw)
+	case "manual_compaction_start":
+		value, err = decodeVariant[ManualCompactionStartEvent](raw)
+	case "manual_compaction_end":
+		value, err = decodeVariant[ManualCompactionEndEvent](raw)
 	case "auto_compaction_start":
 		value, err = decodeVariant[AutoCompactionStartEvent](raw)
 	case "auto_compaction_end":
@@ -6470,6 +6574,9 @@ func (ToolExecutionStartEvent) isRpcNotification()      {}
 func (ToolExecutionUpdateEvent) isRpcNotification()     {}
 func (ToolStreamUpdateEvent) isRpcNotification()        {}
 func (ToolExecutionEndEvent) isRpcNotification()        {}
+func (SessionAbortEvent) isRpcNotification()            {}
+func (ManualCompactionStartEvent) isRpcNotification()   {}
+func (ManualCompactionEndEvent) isRpcNotification()     {}
 func (AutoCompactionStartEvent) isRpcNotification()     {}
 func (AutoCompactionEndEvent) isRpcNotification()       {}
 func (AutoRetryStartEvent) isRpcNotification()          {}
@@ -6564,6 +6671,12 @@ func (v *RpcNotification) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ToolStreamUpdateEvent](raw)
 	case "tool_execution_end":
 		value, err = decodeVariant[ToolExecutionEndEvent](raw)
+	case "session_abort":
+		value, err = decodeVariant[SessionAbortEvent](raw)
+	case "manual_compaction_start":
+		value, err = decodeVariant[ManualCompactionStartEvent](raw)
+	case "manual_compaction_end":
+		value, err = decodeVariant[ManualCompactionEndEvent](raw)
 	case "auto_compaction_start":
 		value, err = decodeVariant[AutoCompactionStartEvent](raw)
 	case "auto_compaction_end":
@@ -6660,6 +6773,9 @@ func (ToolExecutionStartEvent) isRpcServerFrame()      {}
 func (ToolExecutionUpdateEvent) isRpcServerFrame()     {}
 func (ToolStreamUpdateEvent) isRpcServerFrame()        {}
 func (ToolExecutionEndEvent) isRpcServerFrame()        {}
+func (SessionAbortEvent) isRpcServerFrame()            {}
+func (ManualCompactionStartEvent) isRpcServerFrame()   {}
+func (ManualCompactionEndEvent) isRpcServerFrame()     {}
 func (AutoCompactionStartEvent) isRpcServerFrame()     {}
 func (AutoCompactionEndEvent) isRpcServerFrame()       {}
 func (AutoRetryStartEvent) isRpcServerFrame()          {}
@@ -6764,6 +6880,12 @@ func (v *RpcServerFrame) UnmarshalJSON(data []byte) error {
 		value, err = decodeVariant[ToolStreamUpdateEvent](raw)
 	case "tool_execution_end":
 		value, err = decodeVariant[ToolExecutionEndEvent](raw)
+	case "session_abort":
+		value, err = decodeVariant[SessionAbortEvent](raw)
+	case "manual_compaction_start":
+		value, err = decodeVariant[ManualCompactionStartEvent](raw)
+	case "manual_compaction_end":
+		value, err = decodeVariant[ManualCompactionEndEvent](raw)
 	case "auto_compaction_start":
 		value, err = decodeVariant[AutoCompactionStartEvent](raw)
 	case "auto_compaction_end":

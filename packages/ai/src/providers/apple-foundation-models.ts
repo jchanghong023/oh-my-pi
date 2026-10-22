@@ -402,6 +402,7 @@ export const streamAppleFoundationModels: StreamFunction<"apple-foundation-model
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
+			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

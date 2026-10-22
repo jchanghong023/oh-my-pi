@@ -2262,7 +2262,7 @@ describe("AgentSession retry fallback", () => {
 			await recovered.promise;
 
 			expect(requestedModels.map(selector)).toEqual([selector(primary), selector(compatible)]);
-			expect(advisor.state.model.api).toBe(compatible.api);
+			expect(advisor.state.model?.api).toBe(compatible.api);
 			const wire = JSON.stringify(
 				buildParams(
 					advisor.state.model as Model<"openai-responses">,
@@ -2346,7 +2346,7 @@ describe("AgentSession retry fallback", () => {
 				fallbackSelector,
 				compatible ? primarySelector : fallbackSelector,
 			]);
-			expect(advisor.state.model.id).toBe(compatible ? primary.id : fallback.id);
+			expect(advisor.state.model?.id).toBe(compatible ? primary.id : fallback.id);
 			const wire = JSON.stringify(
 				buildParams(
 					advisor.state.model as Model<"openai-responses">,

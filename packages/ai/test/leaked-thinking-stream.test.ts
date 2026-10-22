@@ -910,6 +910,55 @@ describe("wrapLeakedThinkingStream", () => {
 		}
 		expect(result.content).toEqual([]);
 	});
+
+	it("preserves an event-less redactedThinking block verbatim at its source position (I70)", async () => {
+		// 缺陷 I70 回归:redacted_thinking 只有 content_block_start/stop,没有任何
+		// delta 事件;投影器按事件重建 content 时曾把它整块丢弃,持久化 assistant
+		// 与后续 live 请求随之缺失。opaque bytes 必须原样保留,不伪造签名。
+		const redacted = { type: "redactedThinking" as const, data: "E2E_AR_REDACTED_DATA" };
+		const signed = { type: "thinking" as const, thinking: "signed reasoning", thinkingSignature: "sig" };
+		const text = { type: "text" as const, text: "reply" };
+		const { result } = await runWrapper(inner => {
+			inner.push({ type: "start", partial: msg() });
+			inner.push({
+				type: "thinking_start",
+				contentIndex: 0,
+				partial: msg({ content: [{ type: "thinking", thinking: "" }] }),
+			});
+			inner.push({
+				type: "thinking_delta",
+				contentIndex: 0,
+				delta: "signed reasoning",
+				partial: msg({ content: [signed] }),
+			});
+			inner.push({
+				type: "thinking_end",
+				contentIndex: 0,
+				content: "signed reasoning",
+				partial: msg({ content: [signed] }),
+			});
+			inner.push({
+				type: "text_start",
+				contentIndex: 2,
+				partial: msg({ content: [signed, redacted, { type: "text", text: "" }] }),
+			});
+			inner.push({
+				type: "text_delta",
+				contentIndex: 2,
+				delta: "reply",
+				partial: msg({ content: [signed, redacted, text] }),
+			});
+			inner.push({
+				type: "text_end",
+				contentIndex: 2,
+				content: "reply",
+				partial: msg({ content: [signed, redacted, text] }),
+			});
+			inner.push({ type: "done", reason: "stop", message: msg({ content: [signed, redacted, text] }) });
+		});
+
+		expect(result.content).toEqual([signed, redacted, text]);
+	});
 });
 
 describe("leaked thinking healing through stream()", () => {

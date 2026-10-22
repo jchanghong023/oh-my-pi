@@ -11,6 +11,8 @@ export interface ProviderHttpErrorOptions {
 	headers?: Headers;
 	/** Machine-readable error code from the response body (`error.code` / `error.type`). */
 	code?: string;
+	/** Original wire code when `code` retains a normalized classification token. */
+	providerErrorCode?: string;
 	cause?: unknown;
 }
 
@@ -19,6 +21,7 @@ export class ProviderHttpError extends Error {
 	readonly status: number;
 	readonly headers: Headers | undefined;
 	readonly code: string | undefined;
+	readonly providerErrorCode: string | undefined;
 
 	constructor(message: string, status: number, options?: ProviderHttpErrorOptions) {
 		super(message, options?.cause === undefined ? undefined : { cause: options.cause });
@@ -26,6 +29,7 @@ export class ProviderHttpError extends Error {
 		this.status = status;
 		this.headers = options?.headers;
 		this.code = options?.code;
+		this.providerErrorCode = options && "providerErrorCode" in options ? options.providerErrorCode : options?.code;
 	}
 }
 
@@ -56,7 +60,14 @@ export class OpenAIHttpError extends ProviderHttpError {
 				const { message, code, type } = error as { message?: unknown; code?: unknown; type?: unknown };
 				return {
 					detail: typeof message === "string" && message.length > 0 ? message : bodyText,
-					code: typeof code === "string" ? code : typeof type === "string" ? type : undefined,
+					code:
+						typeof code === "string"
+							? code
+							: typeof code === "number" && Number.isFinite(code)
+								? String(code)
+								: typeof type === "string"
+									? type
+									: undefined,
 				};
 			}
 			if (typeof error === "string" && error.length > 0) {
@@ -183,7 +194,11 @@ export class AnthropicApiError extends ProviderHttpError {
 			if (parsed && typeof parsed === "object" && "error" in parsed) {
 				const err = parsed.error;
 				if (err && typeof err === "object") {
-					if (
+					if ("code" in err && typeof err.code === "string") {
+						code = err.code;
+					} else if ("code" in err && typeof err.code === "number" && Number.isFinite(err.code)) {
+						code = String(err.code);
+					} else if (
 						"details" in err &&
 						err.details &&
 						typeof err.details === "object" &&

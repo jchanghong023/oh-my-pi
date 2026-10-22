@@ -381,13 +381,22 @@ describe("AgentSession auto-compaction queue resume", () => {
 			await Promise.resolve();
 		}
 
-		// A message arrives DURING compaction (post-abort, still disconnected).
-		session.agent.followUp({
-			role: "user",
-			content: "please respond after compaction",
-			timestamp: Date.now(),
+		// A native input admitted DURING compaction must be observable before cleanup.
+		// queue_update.followUp 是 readonly string[],元素保持只读即可。
+		const queueUpdates: (readonly string[])[] = [];
+		const unsubscribeQueue = session.subscribe(event => {
+			if (event.type === "queue_update") queueUpdates.push(event.followUp);
+		});
+		await session.prompt("/goal set please respond after compaction", {
+			inputId: "goal-during-manual-compact",
+			queueOnly: true,
+			streamingBehavior: "followUp",
 		});
 		expect(session.agent.hasQueuedMessages()).toBe(true);
+		expect(session.getQueuedInputMessages()).toHaveLength(1);
+		expect(queueUpdates).toEqual([["/goal set please respond after compaction"]]);
+		expect(continueSpy).not.toHaveBeenCalled();
+		unsubscribeQueue();
 
 		gate.resolve();
 		await compactPromise;

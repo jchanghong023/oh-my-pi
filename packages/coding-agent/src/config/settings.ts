@@ -10,7 +10,6 @@
  *   const isolated = Settings.isolated({ "compaction.enabled": false });
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -65,6 +64,13 @@ import {
 	type UserSettingSaveResult,
 	type UserSettingSnapshot,
 } from "./user-settings";
+import {
+	findSettingsContext,
+	getActiveSettings as getContextActiveSettings,
+	registerSettingsInstance,
+	resetSettingsInstancesForTest,
+	withActiveSettings as runWithActiveSettings,
+} from "./settings-context";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -695,7 +701,7 @@ export class Settings {
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
-		liveSettingsInstances.add(new WeakRef(this));
+		registerSettingsInstance(this);
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
 	}
 
@@ -4239,14 +4245,10 @@ export class Settings {
 // Global Singleton
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * Weak registry of every constructed instance so `resetSettingsForTest` can
- * disarm stray background saves on isolated instances too. WeakRefs never
- * retain instances; the set is cleared on every test reset.
- */
-const liveSettingsInstances = new Set<WeakRef<Settings>>();
-
-const activeSettingsScope = new AsyncLocalStorage<Settings>();
+/** The current async session's settings, without a process-global fallback. */
+export function getActiveSettings(): Settings | undefined {
+	return getContextActiveSettings();
+}
 
 /**
  * Run extension-owned work with the settings instance of its active session.
@@ -4257,7 +4259,7 @@ const activeSettingsScope = new AsyncLocalStorage<Settings>();
  * identity without process-global mutation.
  */
 export function withActiveSettings<T>(instance: Settings | undefined, fn: () => T): T {
-	return instance ? activeSettingsScope.run(instance, fn) : fn();
+	return runWithActiveSettings(instance, fn);
 }
 
 let globalInstance: Settings | null = null;
@@ -4283,25 +4285,10 @@ export function isSettingsInitialized(): boolean {
  * best available scope; an unscoped lookup falls back to the global singleton.
  */
 export function findScopedSettings(cwd?: string, agentDir?: string): Settings | undefined {
-	const active = activeSettingsScope.getStore();
-	if (active) return active;
-
-	const wantCwd = cwd === undefined ? undefined : path.normalize(cwd);
-	const wantAgentDir = agentDir === undefined ? undefined : path.normalize(agentDir);
-	if (wantCwd === undefined && wantAgentDir === undefined) return globalInstance ?? undefined;
-
-	let found: Settings | undefined;
-	for (const ref of liveSettingsInstances) {
-		const instance = ref.deref();
-		if (
-			instance &&
-			(wantCwd === undefined || instance.getCwd() === wantCwd) &&
-			(wantAgentDir === undefined || instance.getAgentDir() === wantAgentDir)
-		) {
-			found = instance;
-		}
-	}
-	return found;
+	return (
+		findSettingsContext(cwd, agentDir) ??
+		(cwd === undefined && agentDir === undefined ? (globalInstance ?? undefined) : undefined)
+	);
 }
 
 /**
@@ -4309,14 +4296,7 @@ export function findScopedSettings(cwd?: string, agentDir?: string): Settings | 
  * @internal
  */
 export function resetSettingsForTest(): void {
-	// Disarm every constructed instance's debounced saves — including isolated
-	// (non-singleton) instances: an armed timer or chained in-flight save on a
-	// dropped instance fires mid-way through the NEXT test and races its file
-	// locks/spies (cross-file pollution).
-	for (const ref of liveSettingsInstances) {
-		ref.deref()?.cancelPendingSaves();
-	}
-	liveSettingsInstances.clear();
+	resetSettingsInstancesForTest();
 	globalInstance = null;
 	globalInstancePromise = null;
 	clearBoundSettingsMethods();

@@ -87,6 +87,9 @@ function createSessionResult(session: AgentSession): CreateAgentSessionResult {
 		session,
 		extensionsResult: { extensions: [], errors: [], runtime: {} as unknown } as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Native tool context is unavailable in this fixture");
+		},
 		eventBus: new EventBus(),
 	};
 }

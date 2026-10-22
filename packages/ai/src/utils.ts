@@ -2,7 +2,7 @@ import { $env } from "@oh-my-pi/pi-utils";
 import type { ResponseInput, ResponseInputItem } from "./providers/openai-responses-wire";
 import { isMalformedToolCallName, redactSensitiveCredentials } from "./providers/transform-messages";
 export { normalizeToolCallId } from "./providers/transform-messages";
-import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload } from "./types";
+import type { CacheRetention, OpenAIResponsesHistoryPayload, ProviderPayload, StreamOptions } from "./types";
 import { invalidToolCallArguments } from "./utils/tool-call-arguments";
 
 type OpenAIResponsesReplayItem = ResponseInput[number];
@@ -25,6 +25,17 @@ export function getHeaderCaseInsensitive(
 		if (key.toLowerCase() === normalizedName) return value;
 	}
 	return undefined;
+}
+
+/** Check actual explicitly resolved credentials, rather than declaration or identity metadata. */
+export function hasRequestAuthMaterial(auth: StreamOptions["requestAuth"]): boolean {
+	if (auth?.apiKey?.trim()) return true;
+	const headers = auth?.headers;
+	if (!headers) return false;
+	for (const name in headers) {
+		if (Object.hasOwn(headers, name) && name.trim() && headers[name]?.trim()) return true;
+	}
+	return false;
 }
 
 export function normalizeSystemPrompts(systemPrompt: readonly string[] | string | undefined | null): string[] {

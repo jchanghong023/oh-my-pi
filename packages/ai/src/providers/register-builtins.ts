@@ -200,6 +200,7 @@ function createProviderStreamError<TApi extends Api>(
 		},
 		stopReason,
 		errorId: stopReason === "error" ? AIError.classify(error, model.api) || undefined : undefined,
+		providerErrorCode: stopReason === "error" ? AIError.providerErrorCode(error) : undefined,
 		errorMessage:
 			stopReason === "aborted" ? "Request was aborted" : error instanceof Error ? error.message : String(error),
 		timestamp: Date.now(),

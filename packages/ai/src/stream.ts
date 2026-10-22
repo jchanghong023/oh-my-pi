@@ -29,7 +29,7 @@ import { ProviderHttpError } from "./error";
 import { isConcurrencyCapExclusion, isUsageLimitOutcome } from "./error/rate-limit";
 import type { BedrockOptions } from "./providers/amazon-bedrock";
 import { reachesOfficialEndpoint } from "./providers/anthropic-state";
-import type { AnthropicOptions } from "./providers/anthropic";
+import { type AnthropicOptions, mergeHeaders } from "./providers/anthropic";
 import type { AppleFoundationModelsOptions } from "./providers/apple-foundation-models";
 import type { CursorOptions } from "./providers/cursor";
 import type { DevinOptions } from "./providers/devin";
@@ -74,7 +74,7 @@ import type {
 	ThinkingBudgets,
 	ToolChoice,
 } from "./types";
-import { getHeaderCaseInsensitive, resolveCacheRetention } from "./utils";
+import { getHeaderCaseInsensitive, hasRequestAuthMaterial, resolveCacheRetention } from "./utils";
 import { AssistantMessageEventStream } from "./utils/event-stream";
 import { applyGlyphCodec } from "./utils/glyph-codec";
 import { wrapLeakedThinkingStream } from "./utils/leaked-thinking-stream";
@@ -861,6 +861,14 @@ function streamDispatch<TApi extends Api>(
 	options: OptionsForApi<TApi> | undefined,
 	limited: boolean,
 ): AssistantMessageEventStream {
+	if (options?.requestAuth !== undefined) {
+		if (!hasRequestAuthMaterial(options.requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
+		options = {
+			...options,
+			apiKey: options.requestAuth.apiKey,
+			headers: mergeHeaders(options.headers, options.requestAuth.headers),
+		};
+	}
 	const requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, (options || {}) as StreamOptions),
@@ -874,7 +882,10 @@ function streamDispatch<TApi extends Api>(
 	}
 
 	if (model.provider === "gitlab-duo") {
-		const apiKey = requestOptions.apiKey || getEnvApiKey(model.provider);
+		const apiKey =
+			requestOptions.requestAuth !== undefined
+				? requestOptions.requestAuth.apiKey
+				: requestOptions.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
 			throw new AIError.MissingApiKeyError(model.provider);
 		}
@@ -886,7 +897,10 @@ function streamDispatch<TApi extends Api>(
 	}
 
 	if (model.api === "gitlab-duo-agent") {
-		const apiKey = (requestOptions as StreamOptions | undefined)?.apiKey || getEnvApiKey(model.provider);
+		const apiKey =
+			requestOptions.requestAuth !== undefined
+				? requestOptions.requestAuth.apiKey
+				: requestOptions.apiKey || getEnvApiKey(model.provider);
 		if (!apiKey) {
 			throw new AIError.MissingApiKeyError(model.provider);
 		}
@@ -915,8 +929,10 @@ function streamDispatch<TApi extends Api>(
 	const prepared = providerDefinition?.prepareRequest?.(requestModel, requestOptions as StreamOptions);
 	const providerModel = prepared?.model ?? requestModel;
 	const preparedOptions = prepared?.options ?? (requestOptions as StreamOptions);
-	const apiKey = preparedOptions.apiKey || getEnvApiKey(providerModel.provider);
-	if (!apiKey) {
+	const requestAuth = requestOptions.requestAuth;
+	const apiKey =
+		requestAuth !== undefined ? requestAuth.apiKey : preparedOptions.apiKey || getEnvApiKey(providerModel.provider);
+	if (!apiKey && !hasRequestAuthMaterial(requestAuth)) {
 		throw new AIError.MissingApiKeyError(providerModel.provider);
 	}
 	const providerOptions = isGoogleVertexAuthenticatedModel(providerModel)
@@ -925,7 +941,14 @@ function streamDispatch<TApi extends Api>(
 				apiKey: "vertex-adc",
 				fetch: createVertexAuthenticatedFetch(preparedOptions),
 			}
-		: { ...preparedOptions, apiKey };
+		: requestAuth !== undefined
+			? {
+					...preparedOptions,
+					apiKey,
+					requestAuth,
+					headers: mergeHeaders(preparedOptions.headers, requestAuth.headers),
+				}
+			: { ...preparedOptions, apiKey };
 
 	const api: Api = providerModel.api;
 	if (api === "openrouter" && $env.PI_OPENROUTER_RESPONSES !== "0") {
@@ -1225,6 +1248,14 @@ function streamSimpleRequest<TApi extends Api>(
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+	if (options?.requestAuth !== undefined) {
+		if (!hasRequestAuthMaterial(options.requestAuth)) throw new AIError.MissingApiKeyError(model.provider);
+		options = {
+			...options,
+			apiKey: options.requestAuth.apiKey,
+			headers: mergeHeaders(options.headers, options.requestAuth.headers),
+		};
+	}
 	const requestOptions = withSupportedSamplingParams(
 		model,
 		withTransportFetch(model, (options || {}) as SimpleStreamOptions),
@@ -1440,7 +1471,11 @@ function streamSimpleRequest<TApi extends Api>(
 		const providerOptions = mapOptionsForApi(
 			model,
 			requestOptions,
-			typeof requestOptions.apiKey === "string" ? requestOptions.apiKey : getEnvApiKey(model.provider),
+			typeof requestOptions.apiKey === "string"
+				? requestOptions.apiKey
+				: requestOptions.requestAuth === undefined
+					? getEnvApiKey(model.provider)
+					: undefined,
 		);
 		return stream(model, context, providerOptions);
 	}
@@ -1448,8 +1483,11 @@ function streamSimpleRequest<TApi extends Api>(
 	// The resolver form is handled by the wrapper above; only a static string
 	// key reaches this point.
 	const apiKey =
-		(typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) || getEnvApiKey(model.provider);
-	if (!apiKey) {
+		requestOptions.requestAuth !== undefined
+			? requestOptions.requestAuth.apiKey
+			: (typeof requestOptions?.apiKey === "string" ? requestOptions.apiKey : undefined) ||
+				getEnvApiKey(model.provider);
+	if (!apiKey && !hasRequestAuthMaterial(requestOptions.requestAuth)) {
 		throw new AIError.MissingApiKeyError(model.provider);
 	}
 
@@ -1781,6 +1819,7 @@ function mapOptionsForApi<TApi extends Api>(
 		signal: options?.signal,
 		maxHttpAttempts: options?.maxHttpAttempts,
 		apiKey: apiKey ?? (typeof options?.apiKey === "string" ? options.apiKey : undefined),
+		requestAuth: options?.requestAuth,
 		credentialId: options?.credentialId,
 		oauthIdentity: options?.oauthIdentity,
 		cacheRetention: options?.cacheRetention,

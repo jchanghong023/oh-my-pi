@@ -82,7 +82,9 @@ function createMockSession(
 		agent: { state: { systemPrompt: ["test"] } } as never,
 		model: { api: "anthropic-messages" } as never,
 		extensionRunner: undefined as never,
-		sessionManager: { appendSessionInit: () => {} } as never,
+		// In-flight ToolSession rework resolves toolSession.cwd through the session
+		// manager during irc wake delivery; fake sessions must stub getCwd too.
+		sessionManager: { appendSessionInit: () => {}, getCwd: () => process.cwd() } as never,
 		getActiveToolNames: () => ["read", "yield"],
 		getEnabledToolNames: () => ["read", "yield"],
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
@@ -170,6 +172,9 @@ function mockCreateAgentSession(session: AgentSession) {
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
+		getToolContext: () => {
+			throw new Error("Native tool context is unavailable in this fixture");
+		},
 		eventBus: new EventBus(),
 	} satisfies CreateAgentSessionResult);
 }
@@ -585,6 +590,9 @@ describe("runSubprocess soft request budget", () => {
 				session: handle.session,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
+				getToolContext: () => {
+					throw new Error("Native tool context is unavailable in this fixture");
+				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});
@@ -629,6 +637,9 @@ describe("runSubprocess soft request budget", () => {
 				session: handle.session,
 				extensionsResult: {} as unknown as LoadExtensionsResult,
 				setToolUIContext: () => {},
+				getToolContext: () => {
+					throw new Error("Native tool context is unavailable in this fixture");
+				},
 				eventBus: new EventBus(),
 			} satisfies CreateAgentSessionResult;
 		});

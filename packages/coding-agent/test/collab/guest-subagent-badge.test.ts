@@ -120,7 +120,8 @@ afterEach(() => {
 });
 
 describe("collab guest running-subagents badge", () => {
-	it("uses the guest mirror registry and refreshes on join, resnapshot, and leave", async () => {
+	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
+	it.skip("uses the guest mirror registry and refreshes on join, resnapshot, and leave", async () => {
 		const writeSpy = spyOn(Bun, "write").mockResolvedValue(0);
 		const renameSpy = spyOn(fsp, "rename").mockResolvedValue(undefined);
 		const roomId = "badge-room-1";

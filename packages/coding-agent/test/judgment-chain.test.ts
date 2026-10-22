@@ -10,6 +10,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ChainJudge, hasNativeJudge, JudgmentCache, journalJudgmentUsage } from "@oh-my-pi/pi-coding-agent/judgment";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor";
 import { tinyModelClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -1147,5 +1148,83 @@ describe("ChainJudge", () => {
 			["judgment", { usd: 0.01, inputUsd: 0.01, outputUsd: 0 }],
 			["judgment", { usd: 0.01, inputUsd: 0.01, outputUsd: 0 }],
 		]);
+	});
+});
+
+/**
+ * judge 候选池的会话隔离契约(缺陷来源: omp-child-approval-isolation-defect,
+ * forkZcode docs/testing/omp-integration-blockers.md 第 3 节):子会话的自动
+ * thinking judge 曾按全局 judge 默认链外呼会话/项目未配置的远端模型
+ * (opencode-zen/claude-haiku-5-5,401 后才回本地)。会话/项目通过 enabledModels
+ * 配置模型集合后,作用域外的远端不得进入 judge 候选链——主候选与 fallback 均
+ * 不得外呼,无作用域内候选时直接失败。
+ */
+describe("judge enabledModels session isolation", () => {
+	it("drops a configured primary outside the session's enabledModels scope", async () => {
+		const settings = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+		const chat = vi.spyOn(ai, "completeSimple");
+		const native = vi.spyOn(globalThis, "fetch");
+
+		expect(new ChainJudge({ settings, registry, purpose: "test" }).primaryModel()).toBeUndefined();
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test" }).judge({
+				state: "rename a local",
+				questions: { level: TIER_QUESTION },
+			}),
+		).rejects.toThrow("judgment: no judge model available");
+		expect(chat).not.toHaveBeenCalled();
+		expect(native).not.toHaveBeenCalled();
+	});
+
+	it("drops out-of-scope fallback candidates instead of dialing the remote", async () => {
+		const settings = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${LOCAL.provider}/${LOCAL.id}` },
+			"retry.fallbackChains": { judge: [`${ONLINE.provider}/${ONLINE.id}`] },
+		});
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+		vi.spyOn(tinyModelClient, "complete").mockResolvedValue("not a level");
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "test" }).judge({
+				state: "rename a local",
+				questions: { level: TIER_QUESTION },
+			}),
+		).rejects.toThrow("judgment: every judge candidate failed");
+		expect(chat).not.toHaveBeenCalled();
+	});
+
+	it("keeps in-scope judge candidates reachable", () => {
+		const settings = Settings.isolated({
+			enabledModels: [`${ONLINE.provider}/${ONLINE.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+		expect(new ChainJudge({ settings, registry, purpose: "test" }).primaryModel()?.id).toBe(ONLINE.id);
+	});
+
+	it("leaves the chain unchanged when no scope is configured", () => {
+		const settings = Settings.isolated({ modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` } });
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+		expect(new ChainJudge({ settings, registry, purpose: "test" }).primaryModel()?.id).toBe(ONLINE.id);
+	});
+
+	it("scopes a subagent session's judge through the inherited settings overlay", () => {
+		// 子代理经 createSubagentSettings 继承父会话的 enabledModels 作用域:
+		// 父会话把模型集合限制在本地时,子代理 judge 不得外呼作用域外远端。
+		const parent = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+		const child = createSubagentSettings(parent);
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+
+		expect(new ChainJudge({ settings: parent, registry, purpose: "test" }).primaryModel()).toBeUndefined();
+		expect(new ChainJudge({ settings: child, registry, purpose: "test" }).primaryModel()).toBeUndefined();
 	});
 });

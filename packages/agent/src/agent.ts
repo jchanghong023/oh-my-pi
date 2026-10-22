@@ -985,15 +985,24 @@ export class Agent {
 	}
 
 	async #dequeueSteeringMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
-		if (signal.aborted || this.#steeringQueue.length === 0) return [];
+		if (signal.aborted || this.queuedMessagesHeld || this.#steeringQueue.length === 0) return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("steering", signal);
+		return signal.aborted || this.queuedMessagesHeld ? [] : this.#prepareQueuedMessageBatch("steering", signal);
 	}
 
+	/** Whether ordinary follow-up input may advance automatically at the next yield. */
+	followUpAutoDrain = true;
+
+	/** Explicit owner hold: neither steering nor follow-ups may enter a model turn until released. */
+	queuedMessagesHeld = false;
+
 	async #dequeueFollowUpMessagesAfterHooks(signal: AbortSignal): Promise<AgentMessage[]> {
-		if (signal.aborted || this.#followUpQueue.length === 0) return [];
+		if (signal.aborted || this.queuedMessagesHeld || !this.followUpAutoDrain || this.#followUpQueue.length === 0)
+			return [];
 		await this.#runBeforeQueuedMessageDequeueHooks(signal);
-		return signal.aborted ? [] : this.#prepareQueuedMessageBatch("followUp", signal);
+		return signal.aborted || this.queuedMessagesHeld || !this.followUpAutoDrain
+			? []
+			: this.#prepareQueuedMessageBatch("followUp", signal);
 	}
 
 	async #prepareQueuedMessageBatch(queue: QueuedMessageQueue, signal: AbortSignal): Promise<AgentMessage[]> {
@@ -1284,7 +1293,7 @@ export class Agent {
 		this.#state.systemPrompt = typeof v === "string" ? [v] : v;
 	}
 
-	setModel(model: Model) {
+	setModel(model: Model | undefined) {
 		// Sessions may start with no model selected (`initialState.model: undefined`).
 		const resolved = this.#modelResolver && model ? this.#modelResolver(model) : model;
 		this.#state.model = resolved;
@@ -1417,6 +1426,7 @@ export class Agent {
 		for (const delivery of this.#queuedMessageDeliveries) {
 			if (delivery.messages[delivery.next] !== m) continue;
 			if (++delivery.next === delivery.messages.length) this.#queuedMessageDeliveries.delete(delivery);
+			this.#emitQueueChanged();
 			break;
 		}
 	}
@@ -1647,6 +1657,7 @@ export class Agent {
 		this.#state.activeThinkingIndex = undefined;
 		this.#state.pendingToolCalls.clear();
 		this.#state.error = undefined;
+		this.queuedMessagesHeld = false;
 		this.clearAllQueues();
 	}
 
@@ -2040,10 +2051,12 @@ export class Agent {
 			},
 			hasSteeringMessages: () =>
 				steeringQueueState(
-					this.#steeringQueue,
-					this.#steeringMode === "one-at-a-time"
-						? Math.min(1, this.#steeringQueue.length)
-						: this.#steeringQueue.length,
+					this.queuedMessagesHeld ? [] : this.#steeringQueue,
+					this.queuedMessagesHeld
+						? 0
+						: this.#steeringMode === "one-at-a-time"
+							? Math.min(1, this.#steeringQueue.length)
+							: this.#steeringQueue.length,
 				),
 			waitForSteeringMessages: signal => this.#waitForSteeringMessages(signal),
 			onLiveSteeringTaken: messages => this.#adoptLiveSteering(messages),

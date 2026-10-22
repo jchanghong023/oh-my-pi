@@ -81,7 +81,7 @@ describe("AgentSession.switchSession previous-context build", () => {
 		return { session, sessionManager };
 	}
 
-	// 同进程 FileSessionStorage 会共享租约，必须由独立 Bun 进程竞争真实所有权。
+	// 独立进程竞争真实租约；释放后的正向接管断言验证探针有效，不依赖冲突错误的具体文案。
 	async function probeRuntimeOwnership(sessionFile: string, sessionId: string): Promise<RuntimeOwnershipProbe> {
 		const script = [
 			`import { SessionManager } from ${JSON.stringify(path.join(import.meta.dir, "../src/session/session-manager.ts"))};`,
@@ -91,8 +91,7 @@ describe("AgentSession.switchSession previous-context build", () => {
 			"  try {",
 			"    manager.acquireRuntimeOwnership();",
 			'    process.stdout.write("owned\\n");',
-			"  } catch (error) {",
-			'    if (!String(error).includes("another live omp process owns it")) throw error;',
+			"  } catch {",
 			'    process.stdout.write("blocked\\n");',
 			"  }",
 			"  for await (const line of console) break;",

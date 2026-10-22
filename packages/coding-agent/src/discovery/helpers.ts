@@ -1024,6 +1024,8 @@ export interface ClaudePluginRoot {
 	scope: "user" | "project";
 	/** Registry or explicit CLI source that supplied this root. */
 	origin: "claude" | "omp" | "plugin-dir";
+	/** Effective native switch, populated for inventory loads (active roots are enabled). */
+	enabled?: boolean;
 }
 
 /**
@@ -1231,6 +1233,7 @@ export function registerPluginCacheInvalidator(invalidator: () => void): void {
 export async function listClaudePluginRoots(
 	home: string,
 	cwd?: string,
+	options: { includeDisabled?: boolean } = {},
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
 	const claudeConfigDir = resolveClaudePaths(home).configDir;
 	const ompRegistryPath = path.join(getPluginsDir(home), "installed_plugins.json");
@@ -1244,7 +1247,7 @@ export async function listClaudePluginRoots(
 	const canonicalCwd = cwd ? await canonicalClaudeProjectPath(cwd) : null;
 	const settingsDirs = [...new Set([activeClaudeProjectPath, canonicalCwd].filter((d): d is string => !!d))];
 	const enabledOverrides = await readClaudeEnabledPlugins(claudeConfigDir, settingsDirs);
-	const cacheKey = `${claudeConfigDir}:${ompRegistryPath}:${resolvedProjectPath ?? ""}:${activeClaudeProjectPath ?? ""}:${canonicalCwd ?? ""}:${enabledOverrides.sources.join("|")}`;
+	const cacheKey = `${claudeConfigDir}:${ompRegistryPath}:${resolvedProjectPath ?? ""}:${activeClaudeProjectPath ?? ""}:${canonicalCwd ?? ""}:${enabledOverrides.sources.join("|")}:${options.includeDisabled === true}`;
 	const cached = pluginRootsCache.get(cacheKey);
 	if (cached) return cached;
 
@@ -1255,6 +1258,7 @@ export async function listClaudePluginRoots(
 		resolvedProjectPath,
 		activeClaudeProjectPath,
 		enabledOverrides,
+		includeDisabled: options.includeDisabled === true,
 	});
 	pluginRootsCache.set(cacheKey, pending);
 	try {
@@ -1271,12 +1275,14 @@ async function loadClaudePluginRoots({
 	resolvedProjectPath,
 	activeClaudeProjectPath,
 	enabledOverrides,
+	includeDisabled,
 }: {
 	claudeConfigDir: string;
 	ompRegistryPath: string;
 	resolvedProjectPath: string | null;
 	activeClaudeProjectPath: string | null;
 	enabledOverrides: { enabled: Map<string, boolean>; sources: string[] };
+	includeDisabled: boolean;
 }): Promise<PluginRootsResult> {
 	const roots: ClaudePluginRoot[] = [];
 	const warnings: string[] = [];
@@ -1312,13 +1318,13 @@ async function loadClaudePluginRoots({
 						warnings.push(`Plugin ${pluginId} entry has no installPath`);
 						continue;
 					}
-					if (entry.enabled === false) continue;
+					if (entry.enabled === false && !includeDisabled) continue;
 					// Claude Code's own on/off switch: `enabledPlugins` in settings.json /
 					// settings.local.json. `false` hides the plugin here even though it is
 					// installed; `true` opts a project-bound install into this project even
 					// when its recorded projectPath is a different directory.
 					const override = enabledOverrides.enabled.get(pluginId);
-					if (override === false) continue;
+					if (override === false && !includeDisabled) continue;
 					if ((entry.scope === "local" || entry.scope === "project") && override !== true) {
 						if (!entry.projectPath || !activeClaudeProjectPath) continue;
 						let entryProjectPath = canonicalClaudeProjectPaths.get(entry.projectPath);
@@ -1337,6 +1343,7 @@ async function loadClaudePluginRoots({
 						path: entry.installPath,
 						scope: entry.scope === "local" ? "project" : entry.scope || "user",
 						origin: "claude",
+						...(includeDisabled ? { enabled: override ?? entry.enabled ?? true } : {}),
 					});
 				}
 			}
@@ -1374,7 +1381,7 @@ async function loadClaudePluginRoots({
 						warnings.push(`Plugin ${pluginId} entry has no installPath`);
 						continue;
 					}
-					if (entry.enabled === false) continue;
+					if (entry.enabled === false && !includeDisabled) continue;
 					// Deduplicate by installPath within same ID
 					if (roots.some(r => r.id === pluginId && r.path === entry.installPath)) continue;
 
@@ -1386,6 +1393,7 @@ async function loadClaudePluginRoots({
 						path: entry.installPath,
 						scope: entry.scope === "local" ? "project" : entry.scope || "user",
 						origin: "omp",
+						...(includeDisabled ? { enabled: entry.enabled !== false } : {}),
 					});
 				}
 			}
@@ -1416,7 +1424,7 @@ async function loadClaudePluginRoots({
 							warnings.push(`Plugin ${pluginId} entry has no installPath`);
 							continue;
 						}
-						if (entry.enabled === false) continue;
+						if (entry.enabled === false && !includeDisabled) continue;
 						projectRoots.push({
 							id: pluginId,
 							marketplace,
@@ -1425,6 +1433,7 @@ async function loadClaudePluginRoots({
 							path: entry.installPath,
 							scope: "project",
 							origin: "omp",
+							...(includeDisabled ? { enabled: entry.enabled !== false } : {}),
 						});
 					}
 				}

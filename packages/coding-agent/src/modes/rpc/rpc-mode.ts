@@ -2180,7 +2180,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 		uiContext: headless ? undefined : rpcUiContext,
 	});
 
-	// Output all agent events as JSON; prompt results follow the frame that settled them.
+	// Forward generic session lifecycle facts unchanged (including cancellation intent
+	// and manual compaction); the wire definitions describe the same event stream.
+	// Prompt results follow the frame that settled them, not session_abort.
 	session.subscribe(event => {
 		sessionEvents.forward(event);
 		// Before the prompt-result and settle reports: a goal continuation decided at this

@@ -308,10 +308,11 @@ export const cfgToolsApproval = register({
 //                         for a file or folder, this session or across sessions.
 //   "write"             — auto-approves read and write-tier tools; prompts for exec.
 //   "yolo"              — auto-approves every tier.
+//   "guarded"           — auto-approves every tier, retaining critical tool-owned prompts.
 export const cfgToolsApprovalMode = register({
 	id: "tools.approvalMode",
 	type: "enum",
-	values: ["always-ask", "always-ask-cached", "write", "yolo"] as const,
+	values: ["always-ask", "always-ask-cached", "write", "yolo", "guarded"] as const,
 	default: "yolo",
 	ui: {
 		tab: "interaction",
@@ -339,6 +340,11 @@ export const cfgToolsApprovalMode = register({
 				value: "yolo",
 				label: "全部自动授权 (Yolo)",
 				description: "自动授权读取、写入和执行工具。用户策略仍可要求确认或阻止调用。",
+			},
+			{
+				value: "guarded",
+				label: "危险操作确认 (Guarded)",
+				description: "自动授权普通调用，保留工具声明的危险操作逐次确认与用户策略。",
 			},
 		],
 	},

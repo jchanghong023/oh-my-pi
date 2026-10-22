@@ -507,6 +507,8 @@ export interface StreamOptions {
 	 */
 	maxHttpAttempts?: number;
 	apiKey?: string;
+	/** Explicit per-request credentials. When present, ambient key lookup is disabled. */
+	requestAuth?: { apiKey?: string; headers?: Record<string, string> };
 	/** @internal Stored credential row serving this request, when known. */
 	credentialId?: number;
 	/** @internal Non-secret identity of the bearer serving this attempt; never persisted in history. */
@@ -1331,6 +1333,8 @@ export interface AssistantMessage {
 	toolCallAbortMessages?: Record<string, string>;
 	/** HTTP status surfaced by the provider when the request failed. Populated by every provider's catch block alongside `errorMessage` so consumers (auth retry, telemetry, UI) can branch without regex-scraping the message. */
 	errorStatus?: number;
+	/** Exact structured error code returned by the provider, absent when unknown or caller-aborted. */
+	providerErrorCode?: string;
 	/** Structured machine-readable error classifier; see `utils/error-id.ts` for bit layout and helpers. */
 	errorId?: number;
 	/**

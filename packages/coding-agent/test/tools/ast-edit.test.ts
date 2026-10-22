@@ -9,6 +9,7 @@ import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-q
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { subscribeFsMutation } from "@oh-my-pi/pi-coding-agent/tools/fs-cache-invalidation";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
+import { withTlaplusGrammar } from "../helpers/tlaplus-grammar";
 
 type InvokedToolResult = {
 	content: Array<{ type: string; text?: string }>;
@@ -409,40 +410,44 @@ describe("ast_edit tool schema", () => {
 		}
 	});
 
-	it("infers tlaplus from .tla files for AST edits", async () => {
-		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-tlaplus-"));
-		try {
-			const filePath = path.join(tempDir, "Spec.tla");
-			await Bun.write(filePath, `---- MODULE Spec ----\nVARIABLE x\n\nInit == x = 0\n\nNext == x' = x + 1\n====\n`);
-			const queue = new ToolChoiceQueue();
+	it("infers tlaplus from .tla files for AST edits", () =>
+		withTlaplusGrammar(async () => {
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-tlaplus-"));
+			try {
+				const filePath = path.join(tempDir, "Spec.tla");
+				await Bun.write(
+					filePath,
+					`---- MODULE Spec ----\nVARIABLE x\n\nInit == x = 0\n\nNext == x' = x + 1\n====\n`,
+				);
+				const queue = new ToolChoiceQueue();
 
-			const tools = await createTools(
-				createTestSession(tempDir, {
-					getToolChoiceQueue: () => queue,
-					buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
-					steer: () => {},
-				}),
-				["ast_edit"],
-			);
-			const tool = tools.find(entry => entry.name === "ast_edit");
-			expect(tool).toBeDefined();
+				const tools = await createTools(
+					createTestSession(tempDir, {
+						getToolChoiceQueue: () => queue,
+						buildToolChoice: () => ({ type: "tool" as const, name: "resolve" }),
+						steer: () => {},
+					}),
+					["ast_edit"],
+				);
+				const tool = tools.find(entry => entry.name === "ast_edit");
+				expect(tool).toBeDefined();
 
-			const previewResult = await tool!.execute("ast-edit-tlaplus", {
-				ops: [{ pat: "Init", out: "Start" }],
-				paths: [filePath],
-			});
+				const previewResult = await tool!.execute("ast-edit-tlaplus", {
+					ops: [{ pat: "Init", out: "Start" }],
+					paths: [filePath],
+				});
 
-			const text = previewResult.content.find(content => content.type === "text")?.text ?? "";
-			const details = previewResult.details as { totalReplacements?: number; parseErrors?: string[] } | undefined;
-			expect(text).toContain("Start");
-			expect(details?.totalReplacements).toBe(1);
-			expect(details?.parseErrors).toBeUndefined();
+				const text = previewResult.content.find(content => content.type === "text")?.text ?? "";
+				const details = previewResult.details as { totalReplacements?: number; parseErrors?: string[] } | undefined;
+				expect(text).toContain("Start");
+				expect(details?.totalReplacements).toBe(1);
+				expect(details?.parseErrors).toBeUndefined();
 
-			const invoker = queue.peekPendingInvoker()!;
-			await invoker({ action: "apply", reason: "apply tlaplus AST edit" });
-			expect(await Bun.file(filePath).text()).toContain("Start == x = 0");
-		} finally {
-			await removeWithRetries(tempDir);
-		}
-	});
+				const invoker = queue.peekPendingInvoker()!;
+				await invoker({ action: "apply", reason: "apply tlaplus AST edit" });
+				expect(await Bun.file(filePath).text()).toContain("Start == x = 0");
+			} finally {
+				await removeWithRetries(tempDir);
+			}
+		}));
 });

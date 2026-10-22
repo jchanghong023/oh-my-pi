@@ -111,6 +111,9 @@ describe("runSubprocess deferred cleanup outcome (issue #9670)", () => {
 			session,
 			extensionsResult: {} as unknown as LoadExtensionsResult,
 			setToolUIContext: () => {},
+			getToolContext: () => {
+				throw new Error("Native tool context is unavailable in this fixture");
+			},
 			eventBus: new EventBus(),
 		} as CreateAgentSessionResult);
 

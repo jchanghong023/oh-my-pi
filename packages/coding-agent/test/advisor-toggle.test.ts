@@ -190,47 +190,47 @@ describe("AgentSession advisor toggle", () => {
 	it("explicit enable rebuilds the runtime when the advisor role changes", () => {
 		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
 		expect(session.setAdvisorEnabled(true)).toBe(true);
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
-		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe(model.id);
 
 		session.settings.setModelRole("advisor", `${replacementModel.provider}/${replacementModel.id}`);
 		expect(session.setAdvisorEnabled(true)).toBe(true);
 
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
-		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe(replacementModel.id);
 	});
 
 	it("refreshes the live advisor when the advisor role setting changes", async () => {
 		session.settings.setModelRole("advisor", `${model.provider}/${model.id}`);
 		expect(session.setAdvisorEnabled(true)).toBe(true);
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
-		expect(session.getAdvisorAgent()?.state.model.id).toBe(model.id);
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe(model.provider);
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe(model.id);
 
 		session.settings.setModelRole("advisor", `${replacementModel.provider}/${replacementModel.id}`);
 		// Role listeners run on the next microtask.
 		await Promise.resolve();
 
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
-		expect(session.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe(replacementModel.provider);
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe(replacementModel.id);
 	});
 
 	it("refreshes the live advisor when only the advisor route changes", async () => {
 		session.settings.setModelRole("advisor", "openrouter/z-ai/glm-4.7@cerebras");
 		expect(session.setAdvisorEnabled(true)).toBe(true);
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
-		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe("z-ai/glm-4.7");
 		expect(
-			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+			(session.getAdvisorAgent()?.state.model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)
 				?.openRouterRouting?.only,
 		).toEqual(["cerebras"]);
 
 		session.settings.setModelRole("advisor", "openrouter/z-ai/glm-4.7@fireworks");
 		await Promise.resolve();
 
-		expect(session.getAdvisorAgent()?.state.model.provider).toBe("openrouter");
-		expect(session.getAdvisorAgent()?.state.model.id).toBe("z-ai/glm-4.7");
+		expect(session.getAdvisorAgent()?.state.model?.provider).toBe("openrouter");
+		expect(session.getAdvisorAgent()?.state.model?.id).toBe("z-ai/glm-4.7");
 		expect(
-			(session.getAdvisorAgent()?.state.model.compat as { openRouterRouting?: { only?: string[] } } | undefined)
+			(session.getAdvisorAgent()?.state.model?.compat as { openRouterRouting?: { only?: string[] } } | undefined)
 				?.openRouterRouting?.only,
 		).toEqual(["fireworks"]);
 	});
@@ -289,13 +289,13 @@ describe("AgentSession advisor toggle", () => {
 
 		try {
 			expect(customSession.setAdvisorEnabled(true)).toBe(true);
-			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(model.provider);
-			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(model.id);
+			expect(customSession.getAdvisorAgent()?.state.model?.provider).toBe(model.provider);
+			expect(customSession.getAdvisorAgent()?.state.model?.id).toBe(model.id);
 
 			await settings.reloadForCwd(projectB);
 
-			expect(customSession.getAdvisorAgent()?.state.model.provider).toBe(replacementModel.provider);
-			expect(customSession.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+			expect(customSession.getAdvisorAgent()?.state.model?.provider).toBe(replacementModel.provider);
+			expect(customSession.getAdvisorAgent()?.state.model?.id).toBe(replacementModel.id);
 		} finally {
 			await customSession.dispose();
 			AgentStorage.close();
@@ -405,7 +405,7 @@ describe("AgentSession advisor toggle", () => {
 			discovered = true;
 			settleRefresh();
 			await registry.awaitBackgroundRefresh();
-			expect(raceSession.getAdvisorAgent()?.state.model.id).toBe(replacementModel.id);
+			expect(raceSession.getAdvisorAgent()?.state.model?.id).toBe(replacementModel.id);
 			expect(raceSession.isAdvisorActive()).toBe(true);
 		} finally {
 			settleRefresh();

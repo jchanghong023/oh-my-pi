@@ -45,6 +45,9 @@ describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 						runner: undefined,
 					} as unknown as CreateAgentSessionResult["extensionsResult"],
 					setToolUIContext: () => {},
+					getToolContext: () => {
+						throw new Error("Native tool context is unavailable in this fixture");
+					},
 					eventBus: {
 						emit: () => {},
 						on: () => () => {},
@@ -139,6 +142,9 @@ describe("createAcpSessionFactory MCP isolation (issue #1234)", () => {
 						session: fakeSession,
 						extensionsResult: options.preloadedExtensions,
 						setToolUIContext: () => {},
+						getToolContext: () => {
+							throw new Error("Native tool context is unavailable in this fixture");
+						},
 						eventBus: options.eventBus,
 					} as CreateAgentSessionResult;
 				},
@@ -208,6 +214,9 @@ describe("createAcpSessionFactory TITLE_SYSTEM.md per-cwd resolution (PR #3736)"
 						runner: undefined,
 					} as unknown as CreateAgentSessionResult["extensionsResult"],
 					setToolUIContext: () => {},
+					getToolContext: () => {
+						throw new Error("Native tool context is unavailable in this fixture");
+					},
 					eventBus: {
 						emit: () => {},
 						on: () => () => {},

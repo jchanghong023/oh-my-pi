@@ -24,6 +24,7 @@ import {
 import { streamJchToolsAgent } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import type { ExtensionEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import { AgentSession, type AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -211,6 +212,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		inputTokens: number,
 		content: AssistantMessage["content"] = [{ type: "text", text: "Delivered partial result." }],
 		maintenanceOutcome: "success" | "cancel" | "error" = "success",
+		sessionDir?: string,
 	) {
 		const model = getCodeAgentModels()[0]!;
 		const message: AssistantMessage = {
@@ -231,7 +233,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			},
 			timestamp: Date.now(),
 		};
-		const manager = SessionManager.inMemory();
+		const manager = sessionDir ? SessionManager.create(sessionDir, sessionDir) : SessionManager.inMemory();
 		manager.appendMessage({ role: "user", content: "previous request", timestamp: message.timestamp - 2000 });
 		manager.appendMessage({
 			...message,
@@ -320,6 +322,92 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 		});
 		return { session, manager, events, providerCalls: () => calls };
 	}
+
+	it.each(["success", "cancel", "error"] as const)(
+		"persists only committed manual compaction identity (%s) across journal reload",
+		async outcome => {
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-compaction-identity-"));
+			try {
+				const { manager, events } = await createTerminalSession("length", 100, undefined, outcome, directory);
+				if (outcome === "success") await session!.compact();
+				else await expect(session!.compact()).rejects.toBeInstanceOf(Error);
+				await manager.flush();
+				const sessionFile = manager.getSessionFile()!;
+				await session!.dispose();
+				session = undefined;
+				const restored = await SessionManager.open(sessionFile);
+				const entries = restored.getBranch().filter(entry => entry.type === "compaction");
+				await restored.close();
+				const start = events.find(event => event.type === "manual_compaction_start");
+				const end = events.find(event => event.type === "manual_compaction_end");
+				expect(start?.type).toBe("manual_compaction_start");
+				expect(end?.type).toBe("manual_compaction_end");
+				if (start?.type !== "manual_compaction_start" || end?.type !== "manual_compaction_end") {
+					throw new Error("Missing manual compaction lifecycle");
+				}
+				expect(end.operationId).toBe(start.operationId);
+				if (outcome === "success") {
+					expect(entries).toHaveLength(1);
+					expect(entries[0]).toMatchObject({
+						id: end.summaryRef,
+						operationId: start.operationId,
+						origin: "manual",
+					});
+					expect(end.summaryRef).toBeDefined();
+				} else {
+					expect(entries).toHaveLength(0);
+					expect(end.result).toBeUndefined();
+					expect(end.summaryRef).toBeUndefined();
+				}
+			} finally {
+				await session?.dispose();
+				session = undefined;
+				removeSyncWithRetries(directory);
+			}
+		},
+	);
+
+	it("restores automatic compaction provenance without inventing legacy provenance", async () => {
+		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-auto-compaction-identity-"));
+		try {
+			const fixture = await createTerminalSession("length", 190000, undefined, "success", directory);
+			await fixture.session.prompt("current request");
+			await fixture.session.waitForIdle();
+			const live = fixture.manager.getBranch().findLast(entry => entry.type === "compaction");
+			expect(live?.type).toBe("compaction");
+			if (live?.type !== "compaction") throw new Error("Missing automatic compaction");
+			expect(live.origin).toBe("auto");
+			expect(live.operationId).toBeDefined();
+			expect(fixture.events.find(event => event.type === "auto_compaction_start")).toMatchObject({
+				operationId: live.operationId,
+			});
+			expect(fixture.events.findLast(event => event.type === "auto_compaction_end")).toMatchObject({
+				operationId: live.operationId,
+				summaryRef: live.id,
+			});
+			// Public append callers without provenance remain unknown, as do old journals.
+			const legacyId = fixture.manager.appendCompaction("Legacy summary", undefined, live.firstKeptEntryId, 100);
+			const sessionFile = fixture.manager.getSessionFile()!;
+			await fixture.session.dispose();
+			session = undefined;
+			const restored = await SessionManager.open(sessionFile);
+			const entries = restored.getBranch();
+			await restored.close();
+			expect(entries.find(entry => entry.id === live.id)).toMatchObject({
+				origin: "auto",
+				operationId: live.operationId,
+			});
+			const legacy = entries.find(entry => entry.id === legacyId);
+			expect(legacy?.type).toBe("compaction");
+			if (legacy?.type !== "compaction") throw new Error("Missing legacy compaction");
+			expect(legacy.origin).toBeUndefined();
+			expect(legacy.operationId).toBeUndefined();
+		} finally {
+			await session?.dispose();
+			session = undefined;
+			removeSyncWithRetries(directory);
+		}
+	});
 
 	it("warns about CodeAgent truncation below threshold and retains delivered output", async () => {
 		const fixture = await createTerminalSession("length", 100);
@@ -428,6 +516,349 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			}
 		},
 	);
+});
+
+describe("AgentSession edited-input compaction admission", () => {
+	it.each([
+		["success", false],
+		["below-threshold", false],
+		["cancel", false],
+		["admission-failure", false],
+		["cancel", true],
+		["admission-failure", true],
+		["below-threshold-admission-failure", true],
+	] as const)(
+		"keeps the replacement branch and native compaction identity coherent (%s, user leaf: %s)",
+		async (outcome, userLeaf) => {
+			const belowThreshold = outcome.startsWith("below-threshold");
+			const admissionFailure = outcome.endsWith("admission-failure");
+			const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-edited-compaction-"));
+			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const auth = await AuthStorage.create(":memory:");
+			auth.keys.setRuntime(model.provider, "fixture-key");
+			const manager = SessionManager.create(directory, directory);
+			const userId = manager.appendMessage({ role: "user", content: "original query", timestamp: Date.now() });
+			const answer: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Original answer" }],
+				api: model.api,
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+				usage: {
+					input: belowThreshold ? 100 : 29900,
+					output: 12,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: belowThreshold ? 112 : 29912,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+				timestamp: Date.now(),
+			};
+			const answerId = manager.appendMessage(answer);
+			const originalLeaf = userLeaf
+				? manager.appendMessage({ role: "user", content: "original pending query", timestamp: Date.now() })
+				: answerId;
+			const opaqueSummary = {
+				anthropicCompaction: {
+					provider: "anthropic",
+					content: "The abandoned branch was summarized.",
+					encryptedContent: "opaque-native-edit-summary",
+				},
+			};
+			const requests: unknown[] = [];
+			const registry = new ModelRegistry(auth);
+			vi.spyOn(registry, "getAvailable").mockReturnValue([model]);
+			const events: AgentSessionEvent[] = [];
+			const session = new AgentSession({
+				agent: new Agent({
+					convertToLlm,
+					getApiKey: () => "fixture-key",
+					initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
+					streamFn: (_model, context) => {
+						requests.push(context.messages);
+						const stream = new AssistantMessageEventStream();
+						queueMicrotask(() => {
+							const message = { ...answer, usage: { ...answer.usage, input: 100, totalTokens: 112 } };
+							stream.push({ type: "done", reason: "stop", message });
+						});
+						return stream;
+					},
+				}),
+				sessionManager: manager,
+				modelRegistry: registry,
+				settings: Settings.isolated({
+					"compaction.enabled": true,
+					"compaction.thresholdTokens": 30000,
+					"compaction.keepRecentTokens": 1,
+					"compaction.methodOrder": ["soft"],
+					"compaction.asyncEnabled": false,
+				}),
+				extensionRunner: {
+					hasHandlers: (type: string) => type === "session_before_compact",
+					emit: async (event: ExtensionEvent) => {
+						// 修复：emit 同样接收 session_compact 等通知，只有 before hook 带 preparation。
+						if (event.type !== "session_before_compact") return undefined;
+						if (outcome === "cancel") return { cancel: true };
+						return {
+							compaction: {
+								summary: "The abandoned branch was summarized.",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+								details: {},
+								preserveData: opaqueSummary,
+							},
+						};
+					},
+					emitBeforeAgentStart: async () => undefined,
+				} as never,
+			});
+			session.subscribe(event => events.push(event));
+			const edited = `edited query ${"budget ".repeat(512)}`;
+			try {
+				if (admissionFailure) {
+					vi.spyOn(registry, "getApiKey").mockResolvedValue(undefined);
+				}
+				const completion = session.promptEditedUserQuery(userId, edited, { inputId: "edited-input" });
+				if (outcome === "cancel" || admissionFailure) {
+					await expect(completion).rejects.toBeInstanceOf(Error);
+					expect(manager.getLeafId()).toBe(originalLeaf);
+					expect(requests).toHaveLength(0);
+					expect(manager.getBranch().some(entry => entry.type === "compaction")).toBe(false);
+					expect(session.agent.state.messages).toEqual(manager.buildSessionContext().messages);
+					expect(
+						manager
+							.getEntries()
+							.some(
+								entry =>
+									entry.type === "message" &&
+									entry.message.role === "user" &&
+									entry.message.inputId === "edited-input",
+							),
+					).toBe(false);
+					const committed = manager.getEntries().find(entry => entry.type === "compaction");
+					if (admissionFailure && !belowThreshold) {
+						// 修复：admission 失败不能删除已落盘的真实摘要，只恢复旧的活动分支。
+						if (committed?.type !== "compaction")
+							throw new Error("Missing committed compaction after admission failure");
+						expect(committed).toMatchObject({ origin: "auto", preserveData: opaqueSummary });
+						expect(events.find(event => event.type === "auto_compaction_end")).toMatchObject({
+							summaryRef: committed.id,
+							operationId: committed.operationId,
+							aborted: false,
+							result: { summary: "The abandoned branch was summarized." },
+						});
+					} else {
+						expect(committed).toBeUndefined();
+					}
+					await manager.flush();
+					const restored = await SessionManager.open(manager.getSessionFile()!);
+					try {
+						expect(restored.getLeafId()).toBe(originalLeaf);
+						expect(restored.getBranch().map(entry => entry.id)).toEqual(
+							manager.getBranch().map(entry => entry.id),
+						);
+						if (committed?.type === "compaction") {
+							expect(restored.getEntry(committed.id)).toMatchObject({
+								id: committed.id,
+								type: "compaction",
+								origin: "auto",
+								operationId: committed.operationId,
+								parentId: null,
+								firstKeptEntryId: "",
+								summary: "The abandoned branch was summarized.",
+								preserveData: opaqueSummary,
+								activeLeafId: originalLeaf,
+							});
+						}
+					} finally {
+						await restored.close();
+					}
+				} else {
+					await completion;
+					await session.waitForIdle();
+					expect(requests).toHaveLength(1);
+					expect(JSON.stringify(requests[0])).toContain(edited);
+					expect(JSON.stringify(requests[0])).not.toContain("original query");
+					const branch = manager.getBranch();
+					expect(branch.some(entry => entry.id === userId)).toBe(false);
+					expect(branch.find(entry => entry.type === "message" && entry.message.role === "user")).toMatchObject({
+						message: { inputId: "edited-input", content: [{ type: "text", text: edited }] },
+					});
+					const compacted = branch.find(entry => entry.type === "compaction");
+					if (belowThreshold) {
+						expect(compacted).toBeUndefined();
+						expect(events.some(event => event.type === "auto_compaction_start")).toBe(false);
+					} else {
+						if (compacted?.type !== "compaction") throw new Error("Missing edited-input compaction");
+						const summaryId = compacted.id;
+						const operationId = compacted.operationId;
+						expect(compacted.parentId).toBeNull();
+						expect(compacted.firstKeptEntryId).toBe("");
+						expect(compacted.origin).toBe("auto");
+						expect(compacted.preserveData).toEqual(opaqueSummary);
+						const summary = (requests[0] as { role: string; providerPayload?: unknown }[]).find(
+							message => message.providerPayload !== undefined,
+						);
+						expect(summary?.providerPayload).toEqual({
+							type: "anthropicCompaction",
+							...opaqueSummary.anthropicCompaction,
+						});
+						expect(operationId).toBeDefined();
+						expect(events.find(event => event.type === "auto_compaction_end")).toMatchObject({
+							summaryRef: summaryId,
+							operationId,
+							aborted: false,
+							result: { summary: "The abandoned branch was summarized." },
+						});
+						await manager.flush();
+						const restored = await SessionManager.open(manager.getSessionFile()!);
+						try {
+							expect(restored.getBranch().find(entry => entry.id === summaryId)).toMatchObject({
+								origin: "auto",
+								operationId,
+								parentId: null,
+								preserveData: opaqueSummary,
+							});
+							expect(restored.getBranch().some(entry => entry.id === userId)).toBe(false);
+						} finally {
+							await restored.close();
+						}
+					}
+				}
+			} finally {
+				await session.dispose();
+				auth.close();
+				vi.restoreAllMocks();
+				removeSyncWithRetries(directory);
+			}
+		},
+	);
+});
+
+describe("AgentSession explicit context exhaustion recovery", () => {
+	it.each([
+		["model_context_window_exceeded", false],
+		["model_context_window_exceeded", true],
+		["max_tokens", false],
+		["max_tokens", true],
+	] as const)("distinguishes %s from output truncation (delivered=%s)", async (stopType, delivered) => {
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const usage = {
+			input: 12,
+			output: 5,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 17,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const manager = SessionManager.inMemory();
+		manager.appendMessage({ role: "user", content: "old request", timestamp: Date.now() - 2000 });
+		manager.appendMessage({
+			role: "assistant",
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			content: [{ type: "text", text: "Old completed work to summarize." }],
+			stopReason: "stop",
+			usage,
+			timestamp: Date.now() - 1000,
+		});
+		const requests: string[] = [];
+		const order: string[] = [];
+		const agent = new Agent({
+			convertToLlm,
+			getApiKey: () => "test-key",
+			initialState: { model, tools: [], messages: manager.buildSessionContext().messages },
+			streamFn: (_model, context) => {
+				requests.push(JSON.stringify(context.messages));
+				order.push("request");
+				if (requests.length > 2) throw new Error("Unexpected recovery replay");
+				const first = requests.length === 1;
+				const message: AssistantMessage = {
+					role: "assistant",
+					api: model.api,
+					provider: model.provider,
+					model: model.id,
+					content: first
+						? delivered
+							? [{ type: "text", text: "Partial result." }]
+							: []
+						: [{ type: "text", text: "Recovered result." }],
+					stopReason: first ? "length" : "stop",
+					stopDetails: first && stopType === "model_context_window_exceeded" ? { type: stopType } : undefined,
+					usage,
+					timestamp: Date.now(),
+				};
+				const stream = new AssistantMessageEventStream();
+				queueMicrotask(() => {
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "done", reason: first ? "length" : "stop", message });
+				});
+				return stream;
+			},
+		});
+		const auth = await AuthStorage.create(":memory:");
+		auth.keys.setRuntime(model.provider, "test-key");
+		const registry = new ModelRegistry(auth);
+		vi.spyOn(registry, "getAvailable").mockReturnValue([model]);
+		const session = new AgentSession({
+			agent,
+			sessionManager: manager,
+			modelRegistry: registry,
+			settings: Settings.isolated({
+				"compaction.enabled": true,
+				"compaction.autoContinue": true,
+				"compaction.methodOrder": ["soft"],
+				"compaction.keepRecentTokens": 1,
+				"compaction.thresholdTokens": 160000,
+				"compaction.asyncEnabled": false,
+				"compaction.supersedeReads": false,
+				"compaction.dropUseless": false,
+			}),
+			extensionRunner: {
+				hasHandlers: (type: string) => type === "session_before_compact",
+				emit: async (event: { type: string; preparation?: CompactionPreparation }) => {
+					if (event.type !== "session_before_compact" || !event.preparation) return undefined;
+					order.push("compact");
+					return {
+						compaction: {
+							summary: "Previous work summarized.",
+							firstKeptEntryId: event.preparation.firstKeptEntryId,
+							tokensBefore: event.preparation.tokensBefore,
+							details: {},
+						},
+					};
+				},
+				emitBeforeAgentStart: async () => undefined,
+			} as never,
+		});
+		try {
+			await session.prompt("current original input");
+			await session.waitForIdle();
+			const compacted = stopType === "model_context_window_exceeded";
+			expect(manager.getBranch().filter(entry => entry.type === "compaction")).toHaveLength(compacted ? 1 : 0);
+			expect(order).toEqual(
+				compacted ? ["request", "compact", "request"] : delivered ? ["request"] : ["request", "request"],
+			);
+			if (compacted || !delivered) {
+				expect(requests[1]).toContain("current original input");
+				expect(requests[1]).not.toContain("Partial result.");
+				expect(requests[1]?.includes("Previous response hit the 5-token output limit")).toBe(!compacted);
+			}
+			if (compacted) {
+				expect(requests[1]).toContain("Previous work summarized.");
+				expect(requests[1]).not.toContain("Old completed work to summarize.");
+			}
+			expect(session.getLastAssistantMessage()?.content).toEqual([
+				{ type: "text", text: !compacted && delivered ? "Partial result." : "Recovered result." },
+			]);
+		} finally {
+			await session.dispose();
+			auth.close();
+			vi.restoreAllMocks();
+		}
+	});
 });
 
 describe("AgentSession compaction provider replay policy", () => {

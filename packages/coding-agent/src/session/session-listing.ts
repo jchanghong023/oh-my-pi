@@ -73,6 +73,12 @@ export interface RecentSessionInfo {
 
 const SESSION_LIST_PREFIX_BYTES = 4096;
 /**
+ * 首条用户消息被 4 KB 前缀窗口截断时的扩窗上限:默认标题合同要求完整首条
+ * 输入,但列表扫描必须保持有界,超过该上限仍未读到完整行时放弃(标题退回
+ * "(no messages)"),不再无限读大文件。
+ */
+const SESSION_LIST_PREFIX_GROW_MAX_BYTES = 1024 * 1024;
+/**
  * Tail window read to derive {@link SessionStatus}. Large enough to capture a
  * typical final assistant turn (thinking + text); when the final message exceeds
  * it the status falls back to `unknown` rather than misreporting.
@@ -429,6 +435,7 @@ async function scanSessionFile(
 	withStatus: boolean,
 	knownStat?: SessionStorageStat,
 	retries = 2,
+	prefixBytes = SESSION_LIST_PREFIX_BYTES,
 ): Promise<SessionInfo | undefined> {
 	let stat: SessionStorageStat;
 	try {
@@ -449,12 +456,21 @@ async function scanSessionFile(
 	try {
 		const [content, suffix] = await storage.readTextSlices(
 			file,
-			SESSION_LIST_PREFIX_BYTES,
+			prefixBytes,
 			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
 		);
 		if (!sameFileSnapshot(stat, storage.statSync(file))) {
 			return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
 		}
+		// 缺陷(automation 首条输入默认标题截断): 4 KB 前缀窗口可能正好把首条
+		// 用户消息行截断在词/字节中间。截断的行 JSON 解析失败被跳过,而
+		// fallback(extractFirstDisplayMessageFromPrefix)曾把窗口碎片当完整文本
+		// 提取,产出被截断的默认标题(如 E2E_AUTOMA)。这里只保留完整行参与
+		// fallback;当窗口确实被截断且尚未找到首条用户消息时,按界扩窗重读。
+		// stat.size 与 prefixBytes 都是字节口径;多字节字符被窗口切开时
+		// content.length 不可靠。
+		const windowTruncated = !content.endsWith("\n") && stat.size > prefixBytes;
+		const completeContent = windowTruncated ? content.slice(0, content.lastIndexOf("\n") + 1) : content;
 		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
@@ -496,7 +512,20 @@ async function scanSessionFile(
 			}
 		}
 
-		firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
+		// 只在完整行上做 fallback 提取,窗口碎片不再产生截断文本;若窗口被截断
+		// 且尚未找到首条用户消息,扩窗重读直到该行完整或达到上限(默认标题合同:
+		// 无标题会话的默认标题就是完整首条输入,不能被读取窗口截断)。
+		firstMessage ||= extractFirstDisplayMessageFromPrefix(completeContent) ?? "";
+		if (!firstMessage && windowTruncated && prefixBytes < SESSION_LIST_PREFIX_GROW_MAX_BYTES) {
+			return scanSessionFile(
+				file,
+				storage,
+				withStatus,
+				stat,
+				retries,
+				Math.min(prefixBytes * 4, SESSION_LIST_PREFIX_GROW_MAX_BYTES),
+			);
+		}
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
 		// Either bounded window may hold the only copy of an assistant record,
 		// and neither may: a >prefix record before a >suffix tail leaves the

@@ -1689,6 +1689,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		}
 		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
 		const currentModel = session.agent.state.model;
+		if (!currentModel) throw new Error("Expected initialized session model");
 		session.agent.setModel({ ...currentModel, contextWindow: 4096, maxTokens: 1024 });
 		cfgContextPromotionEnabled.set(session.settings, false);
 		cfgCompactionReserveTokens.set(session.settings, 16384);
@@ -1744,6 +1745,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		}
 		session.agent.replaceMessages(session.buildDisplaySessionContext().messages);
 		const currentModel = session.agent.state.model;
+		if (!currentModel) throw new Error("Expected initialized session model");
 		session.agent.setModel({ ...currentModel, contextWindow: 16385, maxTokens: 1024 });
 		cfgContextPromotionEnabled.set(session.settings, false);
 		// compaction.reserveTokens stays unset: the DEFAULTED reserve is the
@@ -1779,6 +1781,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// prompt in the reserved headroom band can retry straight into overflow.
 		seedPriorTurns();
 		const currentModel = session.agent.state.model;
+		if (!currentModel) throw new Error("Expected initialized session model");
 		session.agent.setModel({ ...currentModel, contextWindow: 20000, maxTokens: 1024 });
 		cfgContextPromotionEnabled.set(session.settings, false);
 		cfgCompactionReserveTokens.set(session.settings, 5000);
@@ -1811,6 +1814,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 		// default/impossible reserves, not explicit large reserves.
 		seedPriorTurns();
 		const currentModel = session.agent.state.model;
+		if (!currentModel) throw new Error("Expected initialized session model");
 		session.agent.setModel({ ...currentModel, contextWindow: 100000, maxTokens: 1024 });
 		cfgContextPromotionEnabled.set(session.settings, false);
 		cfgCompactionReserveTokens.set(session.settings, 90000);

@@ -21,6 +21,8 @@ export type ProviderResponseErrorKind =
 export interface ProviderResponseErrorOptions {
 	provider?: string;
 	kind?: ProviderResponseErrorKind;
+	/** Exact machine-readable code from a structured provider response. */
+	providerErrorCode?: string;
 	cause?: unknown;
 }
 
@@ -32,12 +34,14 @@ export interface ProviderResponseErrorOptions {
 export class ProviderResponseError extends Error {
 	readonly provider: string | undefined;
 	readonly kind: ProviderResponseErrorKind;
+	readonly providerErrorCode: string | undefined;
 
 	constructor(message: string, options: ProviderResponseErrorOptions = {}) {
 		super(message, options.cause === undefined ? undefined : { cause: options.cause });
 		this.name = "ProviderResponseError";
 		this.provider = options.provider;
 		this.kind = options.kind ?? "output";
+		this.providerErrorCode = options.providerErrorCode;
 		// A safety filter block is terminal and intentionally non-retryable.
 		if (this.kind === "content-blocked") attach(this, create(Flag.ContentBlocked));
 		// A logically empty completed output needs a session-level reminder that
