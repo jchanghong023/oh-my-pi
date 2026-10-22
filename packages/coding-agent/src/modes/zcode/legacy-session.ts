@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { collectSubSessions } from "../../session/sub-sessions";
-import type { ZCodeSessionRecord } from "./sessions";
+import type { ZCodeNativeChild, ZCodeSessionRecord } from "./sessions";
 import type { ZCodeProjection } from "./projection";
 import {
 	LegacyProtocol as L,
@@ -12,7 +12,10 @@ import {
 } from "./schema";
 
 interface LegacySessionOptions {
-	manager: { read(id: string): Promise<{ cwd: string; info?: { path: string }; messages: readonly AgentMessage[] }> };
+	manager: {
+		read(id: string): Promise<{ cwd: string; info?: { path: string }; messages: readonly AgentMessage[] }>;
+		nativeChild(id: string): Promise<ZCodeNativeChild | undefined>;
+	};
 	getProjection(id: string): ZCodeProjection | Promise<ZCodeProjection>;
 	getRecord?(id: string): ZCodeSessionRecord | undefined;
 	snapshot(id: string): Promise<L.ZCodeSessionStateSnapshot>;
@@ -138,7 +141,8 @@ export class LegacySessionBridge {
 		});
 		const native = await this.#options.manager.nativeChild(params.sessionId);
 		const owner = this.#options.getRecord?.(params.sessionId) ?? native?.root;
-		const parentId = native?.agentId ?? owner?.registry.list().find(ref => ref.session === owner?.session)?.id ?? "Main";
+		const parentId =
+			native?.agentId ?? owner?.registry.list().find(ref => ref.session === owner?.session)?.id ?? "Main";
 		const refs =
 			owner?.registry.list().filter(ref => ref.kind === "sub" && (ref.parentId ?? "Main") === parentId) ?? [];
 		const running: L.ZCodeSessionRunningSubagent[] = [];

@@ -9,7 +9,7 @@ function fixture(limit = 32, messages: AgentMessage[] = []) {
 	const projection = new ZCodeProjection({ sessionId: "a", cwd: process.cwd(), messages });
 	const delivered: L.ZCodeSessionEvent[] = [];
 	const bridge = new LegacySessionBridge({
-		manager: { read: async () => ({ cwd: process.cwd(), messages }) },
+		manager: { read: async () => ({ cwd: process.cwd(), messages }), nativeChild: async () => undefined },
 		getProjection: async id => {
 			if (id !== "a") throw new Error("missing");
 			return projection;
@@ -197,6 +197,7 @@ describe("legacy sessions share canonical projection", () => {
 					messages: [],
 					info: { path: `${process.cwd()}/nonexistent-legacy-fixture/main.jsonl` },
 				}),
+				nativeChild: async () => undefined,
 			},
 			getRecord: () => ({ registry }) as unknown as ZCodeSessionRecord,
 			getProjection: () => projection,

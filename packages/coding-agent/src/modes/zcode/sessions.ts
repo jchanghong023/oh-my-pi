@@ -250,7 +250,8 @@ export class ZCodeSessionManager {
 		}
 		const native = await this.nativeChild(id);
 		const root = this.get(id) ?? native?.root;
-		const parentId = native?.agentId ?? root?.registry.list().find(ref => ref.session === root?.session)?.id ?? "Main";
+		const parentId =
+			native?.agentId ?? root?.registry.list().find(ref => ref.session === root?.session)?.id ?? "Main";
 		for (const ref of root?.registry.list() ?? []) {
 			if (ref.kind === "sub" && (ref.parentId ?? "Main") === parentId && ref.session)
 				identities[ref.id] = ref.session.sessionId;
@@ -363,7 +364,8 @@ export class ZCodeSessionManager {
 			// 身份解析也属于同一次 opening；放在 flight 外 await 会错过已完成并清除的旧 flight，
 			// 从而在同进程再次打开已由首个请求持有的 session 并触发 writer lease 冲突。
 			// 子会话执行权属于原生 lifecycle；普通 resume 会建立第二个 root 并抢占 writer。
-			if (await this.nativeChild(id)) throw new Error("Native child sessions are read-only; control them from their parent");
+			if (await this.nativeChild(id))
+				throw new Error("Native child sessions are read-only; control them from their parent");
 			const info = await this.#find(id);
 			await this.#assertDirectory(info.cwd);
 			const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
@@ -555,7 +557,11 @@ export class ZCodeSessionManager {
 			capture.setEnabled(this.#modelIoPreferences.get(cwd) ?? this.#options.modelIoRetention?.(cwd) ?? false);
 			const captureForSession = capture;
 			const supplied = { ...this.#options.sessionOptions, ...options };
-			const resolveRequestAuth: NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]> = (model, signal, context) =>
+			const resolveRequestAuth: NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]> = (
+				model,
+				signal,
+				context,
+			) =>
 				supplied.interactionParentSessionId && supplied.resolveRequestAuth
 					? supplied.resolveRequestAuth(model, signal, context)
 					: this.#options.resolveRequestAuth
@@ -649,7 +655,14 @@ export class ZCodeSessionManager {
 							? await supplied.transformRequestPayload(payload, model, signal, context)
 							: payload;
 						return this.#options.transformRequestPayload
-							? this.#options.transformRequestPayload(manager.getSessionId(), cwd, mapped, model, signal, context)
+							? this.#options.transformRequestPayload(
+									manager.getSessionId(),
+									cwd,
+									mapped,
+									model,
+									signal,
+									context,
+								)
 							: mapped;
 					},
 				}),

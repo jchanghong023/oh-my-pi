@@ -195,7 +195,10 @@ export function createZCodeWorkflowTools(context: ZCodeWorkflowToolContext): Cus
 			description: "Answer a pending escalation from a workflow actor owned by this parent session.",
 			execute: async (_toolCallId, raw, _onUpdate, _context, signal) => {
 				signal?.throwIfAborted();
-				const input = z.object({ question_id: z.string().min(1), answer: z.string() }).strict().parse(raw);
+				const input = z
+					.object({ question_id: z.string().min(1), answer: z.string() })
+					.strict()
+					.parse(raw);
 				const answered = context.service.resolveQuestion(context.record().id, input.question_id, input.answer);
 				return result({ ok: true, ...answered }, { kind: "resolve_workflow_question", ...answered });
 			},

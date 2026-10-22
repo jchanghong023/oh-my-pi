@@ -339,8 +339,10 @@ export class ZCodeProjection {
 		this.#restoreCompactions(options.entries ?? (options.session ? projectionBranch(options.session) : []));
 		// 详情可能在首个流式 delta 之后打开；journal 尚无这条消息，不能只等未来事件。
 		const stream = options.session?.agent.state.streamMessage;
-		if (stream?.role === "assistant" &&
-			!history.some(message => message.role === "assistant" && message.timestamp === stream.timestamp)) {
+		if (
+			stream?.role === "assistant" &&
+			!history.some(message => message.role === "assistant" && message.timestamp === stream.timestamp)
+		) {
 			const obfuscator = options.session?.obfuscator;
 			const message = obfuscator?.hasSecrets()
 				? { ...stream, content: deobfuscateAssistantContent(obfuscator, stream.content) }
@@ -611,7 +613,8 @@ export class ZCodeProjection {
 	#syncSubagents(): void {
 		const parentId = this.#options.agentId ?? "Main";
 		const children =
-			this.#options.registry?.list().filter(ref => ref.kind === "sub" && (ref.parentId ?? "Main") === parentId) ?? [];
+			this.#options.registry?.list().filter(ref => ref.kind === "sub" && (ref.parentId ?? "Main") === parentId) ??
+			[];
 		let identityChanged = false;
 		for (const ref of children) {
 			if (!ref.session || this.#childSessions.get(ref.id) === ref.session.sessionId) continue;
@@ -637,7 +640,8 @@ export class ZCodeProjection {
 					status: "running" as const,
 					startedAt: ref.createdAt,
 				})),
-			endedTotal: new Set(this.#childSessions.values()).size -
+			endedTotal:
+				new Set(this.#childSessions.values()).size -
 				children.filter(ref => ref.status === "running" && this.#childSessions.has(ref.id)).length,
 		};
 		const previous = this.#state.subagents;
@@ -1439,8 +1443,8 @@ export class ZCodeProjection {
 								? /^xd:\/\/([^/?#:]+)/.exec(args.path)?.[1]
 								: undefined;
 						const presentationName = semantic?.toolName ?? deviceName ?? block.name ?? "";
-						const agentMessageWrite = presentationName === "write" &&
-							typeof args?.path === "string" && args.path.startsWith("agent://");
+						const agentMessageWrite =
+							presentationName === "write" && typeof args?.path === "string" && args.path.startsWith("agent://");
 						const messageReceipt = agentMessageWrite ? semantic?.details.message : undefined;
 						const display = toolResultDisplaySchema.safeParse(semantic?.details ?? result?.details);
 						// Agent is the renderer's semantic card, not an executable tool alias.
@@ -1497,8 +1501,9 @@ export class ZCodeProjection {
 								...common,
 								kind: "toolCall",
 								toolCallId: block.id ?? `${entity}:${blockIndex}`,
-								toolName:
-									agentMessageWrite ? presentationName : presentationName === "task"
+								toolName: agentMessageWrite
+									? presentationName
+									: presentationName === "task"
 										? "Agent"
 										: (TOOL_PRESENTATION_NAMES[presentationName] ?? presentationName),
 								status,
@@ -1509,9 +1514,11 @@ export class ZCodeProjection {
 									result || live?.output !== undefined
 										? {
 												// 通信保留原生正文回执事实，不能套用文件 Write 的隐藏成功结果策略。
-												text: result ? messageReceipt !== undefined
-													? `${textContent(result)}\n${JSON.stringify(messageReceipt, null, 2)}`
-													: textContent(result) : (live?.output ?? ""),
+												text: result
+													? messageReceipt !== undefined
+														? `${textContent(result)}\n${JSON.stringify(messageReceipt, null, 2)}`
+														: textContent(result)
+													: (live?.output ?? ""),
 												display: display.success ? display.data : bashDisplay,
 											}
 										: undefined,

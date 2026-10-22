@@ -203,11 +203,13 @@ export class OmpWorkflowJournal implements JournalStorePort {
 	}
 	isActorSession(sessionId: string): boolean {
 		// actor 归属以持久 journal 为准，不能按会话名或 dwf 前缀猜测并污染主任务索引。
-		return this.#db
-			.query<{ present: number }, [string]>(
-				"SELECT 1 AS present FROM workflow_actor WHERE json_extract(data,'$.sessionId')=? LIMIT 1",
-			)
-			.get(sessionId) !== null;
+		return (
+			this.#db
+				.query<{ present: number }, [string]>(
+					"SELECT 1 AS present FROM workflow_actor WHERE json_extract(data,'$.sessionId')=? LIMIT 1",
+				)
+				.get(sessionId) !== null
+		);
 	}
 	listActors(runId: string, opts: ListActorsOptions): ActorRecord[] {
 		return this.#db

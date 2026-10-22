@@ -35,7 +35,7 @@ import {
 } from "./schema";
 
 export interface ZCodeQueryContext {
-	manager: Pick<ZCodeSessionManager, "get" | "getAsyncJob" | "read" | "list">;
+	manager: Pick<ZCodeSessionManager, "get" | "getAsyncJob" | "read" | "list" | "childIdentities">;
 	getProjection(sessionId: string): ZCodeProjection | undefined;
 	reasoning?(
 		providerId: string,
@@ -152,7 +152,9 @@ export class ZCodeQueries {
 	}
 
 	async subagentsState(sessionId: string): Promise<NonNullable<StatePatch["subagents"]>> {
-		const childSessionIds = [...new Set(Object.values(await this.#context.manager.childIdentities(sessionId)))].sort();
+		const childSessionIds = [
+			...new Set(Object.values(await this.#context.manager.childIdentities(sessionId))),
+		].sort();
 		// This is a cold persisted directory, not a claim that historical work is still running.
 		return { revision: 0, childSessionIds, running: [], endedTotal: childSessionIds.length };
 	}

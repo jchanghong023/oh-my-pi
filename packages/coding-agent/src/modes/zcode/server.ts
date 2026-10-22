@@ -17,7 +17,12 @@ import { ZCodeRuntimeControls, workspaceMode } from "./controls";
 import { LegacySessionBridge } from "./legacy-session";
 import * as P from "./schema";
 import { LegacyProtocol as L } from "./schema";
-import { ZCodeSessionManager, type ZCodeSessionRecord, type ZCodeExecutionSubmission, type ZCodeNativeChild } from "./sessions";
+import {
+	ZCodeSessionManager,
+	type ZCodeSessionRecord,
+	type ZCodeExecutionSubmission,
+	type ZCodeNativeChild,
+} from "./sessions";
 import { ZCodeStorageStartup } from "./storage";
 import { ZCodeTopics } from "./topics";
 import type { ModelSelection } from "./schema/vendor/model-selection";
@@ -112,15 +117,18 @@ export class ZCodeServer {
 	#inputAdmissionObservers = new Map<string, () => void>();
 	#casDecisions = new Map<string, Promise<P.CommandAck>>();
 	#cold = new Map<string, { projection: ZCodeProjection; version: number }>();
-	readonly #nativeProjections = new Map<string, {
-		projection?: ZCodeProjection;
-		child: ZCodeNativeChild;
-		generation: number;
-		unsubscribe?: () => void;
-		pending?: Promise<ZCodeProjection>;
-		/** Session targeted by the in-flight open; null = persisted-only rebuild. */
-		pendingSession?: AgentSession | null;
-	}>();
+	readonly #nativeProjections = new Map<
+		string,
+		{
+			projection?: ZCodeProjection;
+			child: ZCodeNativeChild;
+			generation: number;
+			unsubscribe?: () => void;
+			pending?: Promise<ZCodeProjection>;
+			/** Session targeted by the in-flight open; null = persisted-only rebuild. */
+			pendingSession?: AgentSession | null;
+		}
+	>();
 	readonly #agentDefinitions = new Map<string, readonly AgentDefinition[]>();
 	#reverse = new Map<
 		string,
@@ -193,9 +201,12 @@ export class ZCodeServer {
 					entry.projection = undefined;
 					entry.pending = undefined;
 					entry.pendingSession = undefined;
-					void this.manager.nativeChild(childId).then(child => {
-						if (child && !this.#closed) return this.#nativeProjection(childId, child);
-					}).catch(error => process.stderr.write(`${String(error)}\n`));
+					void this.manager
+						.nativeChild(childId)
+						.then(child => {
+							if (child && !this.#closed) return this.#nativeProjection(childId, child);
+						})
+						.catch(error => process.stderr.write(`${String(error)}\n`));
 				}
 			},
 			workflowInteractionUI: parentId => this.#hosted.get(parentId)?.commands.interactions.createSubagentUI,
@@ -275,7 +286,10 @@ export class ZCodeServer {
 		this.startup = new ZCodeStorageStartup(frame => this.writer.write(frame));
 		this.queries = new ZCodeQueries({
 			manager: this.manager,
-			getProjection: id => this.#hosted.get(id)?.projection ?? this.#nativeProjections.get(id)?.projection ?? this.#cold.get(id)?.projection,
+			getProjection: id =>
+				this.#hosted.get(id)?.projection ??
+				this.#nativeProjections.get(id)?.projection ??
+				this.#cold.get(id)?.projection,
 			reasoning: (provider, model, level) => this.configuration.readReasoningConfig(provider, model, level),
 		});
 		this.attachments = new ZCodeAttachmentResources({
@@ -541,11 +555,17 @@ export class ZCodeServer {
 			// 先订阅冷 child、后恢复父树时，只绑定该树原生复活出来的同一身份。
 			for (const [id, entry] of this.#nativeProjections) {
 				if (entry.child.root || event.ref.kind !== "sub") continue;
-				if (event.ref.session?.sessionId !== id &&
-					(!event.ref.sessionFile || path.resolve(event.ref.sessionFile) !== path.resolve(entry.child.file))) continue;
-				void this.manager.nativeChild(id).then(child => {
-					if (child) return this.#nativeProjection(id, child);
-				}).catch(error => process.stderr.write(`${String(error)}\n`));
+				if (
+					event.ref.session?.sessionId !== id &&
+					(!event.ref.sessionFile || path.resolve(event.ref.sessionFile) !== path.resolve(entry.child.file))
+				)
+					continue;
+				void this.manager
+					.nativeChild(id)
+					.then(child => {
+						if (child) return this.#nativeProjection(id, child);
+					})
+					.catch(error => process.stderr.write(`${String(error)}\n`));
 			}
 		});
 		hosted.unsubscribe = () => {
@@ -603,8 +623,12 @@ export class ZCodeServer {
 					? parseZCodeThinkingLevel(profile.modelSelection.options.reasoningLevel)
 					: undefined,
 				restrictToolNames: profile.tools !== undefined || profile.disallowedTools !== undefined,
-				tools: tools !== undefined ? tools.filter(tool => !denied.has(tool))
-					: denied.size ? toolNames.filter(tool => !denied.has(tool)) : undefined,
+				tools:
+					tools !== undefined
+						? tools.filter(tool => !denied.has(tool))
+						: denied.size
+							? toolNames.filter(tool => !denied.has(tool))
+							: undefined,
 				autoloadSkills: profile.skills ? [...profile.skills] : undefined,
 			};
 		});
@@ -616,10 +640,13 @@ export class ZCodeServer {
 		this.#agentDefinitions.set(record.id, definitions);
 		// 此层只承载本次 Host 覆盖；移除覆盖后回落原生配置，不能保留上个父 turn 的值。
 		cfgTaskAgentModelOverrides.clearOverride(record.settings);
-		if (Object.keys(mapped).length) cfgTaskAgentModelOverrides.override(record.settings, {
-			...cfgTaskAgentModelOverrides.get(record.settings),
-			...Object.fromEntries(Object.entries(mapped).map(([name, selection]) => [name, subagentModelPattern(selection)])),
-		});
+		if (Object.keys(mapped).length)
+			cfgTaskAgentModelOverrides.override(record.settings, {
+				...cfgTaskAgentModelOverrides.get(record.settings),
+				...Object.fromEntries(
+					Object.entries(mapped).map(([name, selection]) => [name, subagentModelPattern(selection)]),
+				),
+			});
 	}
 	/** 登记工作区身份(key/identity/路径均指向同一 cwd),维持 #workspaceIds 双向表。 */
 	#registerWorkspace(workspace: { workspacePath: string; workspaceKey: string; workspaceIdentity?: string }): void {
@@ -1915,10 +1942,11 @@ export class ZCodeServer {
 					const id = params.topic.slice(13);
 					const child = await this.manager.nativeChild(id);
 					if (child) await this.#nativeProjection(id, child);
-					else await this.#attach(
-						this.manager.get(id) ??
-							(await this.manager.resume(id, { additionalDirectories: params.additionalDirectories })),
-					);
+					else
+						await this.#attach(
+							this.manager.get(id) ??
+								(await this.manager.resume(id, { additionalDirectories: params.additionalDirectories })),
+						);
 				} else if (params.topic.startsWith("sessions-index/")) {
 					const workspaceId = params.topic.slice(15);
 					// 初始快照按该工作区 cwd 过滤:manager.list() 的 listAll 合并了所有项目
@@ -2146,9 +2174,12 @@ export class ZCodeServer {
 				// 只观察原生 owner 的换代；不调用 ensureLive、不获得 writer 或 dispose child。
 				current.generation++;
 				current.pending = undefined;
-				void this.manager.nativeChild(id).then(next => {
-					if (next) return this.#nativeProjection(id, next);
-				}).catch(error => process.stderr.write(`${String(error)}\n`));
+				void this.manager
+					.nativeChild(id)
+					.then(next => {
+						if (next) return this.#nativeProjection(id, next);
+					})
+					.catch(error => process.stderr.write(`${String(error)}\n`));
 			});
 			this.topics.register(`conversation/${id}`, {
 				snapshot: () => projection.snapshot(),

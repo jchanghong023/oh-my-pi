@@ -210,25 +210,27 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 					this.journal.appendEvent(this.context.runId, event);
 					this.emit(event);
 					// 复用父 AgentSession 的原生通知准入，不维护另一条父输入队列。
-					void this.parent.run(() =>
-						this.parent.session.sendCustomMessage(
-							{
-								customType: "workflow-escalation",
-								content: JSON.stringify({
-									runId: this.context.runId,
-									question_id: qid,
-									question,
-									context,
-									instruction: "Answer with ResolveWorkflowQuestion({question_id, answer}).",
-								}),
-								display: true,
-							},
-							{ deliverAs: "followUp", triggerTurn: true },
-						),
-					).catch(error => {
-						ask.escalations.delete(qid);
-						pending.reject(error);
-					});
+					void this.parent
+						.run(() =>
+							this.parent.session.sendCustomMessage(
+								{
+									customType: "workflow-escalation",
+									content: JSON.stringify({
+										runId: this.context.runId,
+										question_id: qid,
+										question,
+										context,
+										instruction: "Answer with ResolveWorkflowQuestion({question_id, answer}).",
+									}),
+									display: true,
+								},
+								{ deliverAs: "followUp", triggerTurn: true },
+							),
+						)
+						.catch(error => {
+							ask.escalations.delete(qid);
+							pending.reject(error);
+						});
 					const answer = await pending.promise;
 					return { content: [{ type: "text", text: answer }], details: { qid, answer } };
 				} finally {
