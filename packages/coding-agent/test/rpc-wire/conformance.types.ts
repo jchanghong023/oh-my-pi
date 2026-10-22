@@ -173,13 +173,22 @@ export type CommandNullability = Assert<
 // --- Session events and notifications ---------------------------------------
 
 type ServerEventType = RpcAgentSessionEventFrame["type"];
-export type SessionEventSet = Assert<Same<Wire.RpcAgentEvent["type"], ServerEventType>>;
+// The fork adds session-layer event kinds the upstream wire does not model (goal-autopilot
+// command hosts consume them in-process); the wire set stays authoritative and must be a
+// subset of the server's, so a wire event the server never writes is still drift.
+export type SessionEventSet = Assert<
+	[Wire.RpcAgentEvent["type"]] extends [ServerEventType]
+		? true
+		: { wireOnly: Exclude<Wire.RpcAgentEvent["type"], ServerEventType> }
+>;
+// Compaction events carry fork journaling fields (operationId, summaryRef) the wire does
+// not model; they are server-side extras, so those events are checked as a subset.
+type WireSubsetEvents = "auto_compaction_start" | "auto_compaction_end";
 export type SessionEvents = Assert<
 	AllTrue<{
-		[K in ServerEventType]: Outbound<
-			Extract<RpcAgentSessionEventFrame, { type: K }>,
-			Extract<Wire.RpcAgentEvent, { type: K }>
-		>;
+		[K in Wire.RpcAgentEvent["type"]]: [K] extends [WireSubsetEvents]
+			? OutboundSubset<Extract<RpcAgentSessionEventFrame, { type: K }>, Extract<Wire.RpcAgentEvent, { type: K }>>
+			: Outbound<Extract<RpcAgentSessionEventFrame, { type: K }>, Extract<Wire.RpcAgentEvent, { type: K }>>;
 	}>
 >;
 
@@ -254,7 +263,8 @@ export type State = Assert<
 		todoPhaseInbound: Inbound<Wire.TodoPhase, TodoPhase>;
 		todoItemInbound: Inbound<Wire.TodoItem, TodoItem>;
 		goal: Outbound<Goal, Wire.Goal>;
-		goalModeState: Outbound<GoalModeState, Wire.GoalModeState>;
+		// Fork goal-autopilot adds the session-layer `autoOrchestrate` flag the wire does not model.
+		goalModeState: OutboundSubset<GoalModeState, Wire.GoalModeState>;
 		goalResult: Outbound<RpcGoalResult, Wire.GoalResult>;
 		usageLimitLowPriority: Outbound<Extract<UsageLimitState, { stage: "low_priority" }>, Wire.UsageLimitLowPriority>;
 		usageLimitWrapUp: Outbound<Extract<UsageLimitState, { stage: "wrap_up" }>, Wire.UsageLimitWrapUp>;

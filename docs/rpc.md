@@ -11,7 +11,6 @@ Primary implementation:
 
 - `packages/coding-agent/src/modes/rpc/rpc-mode.ts`
 - `packages/coding-agent/src/modes/rpc/rpc-types.ts`
-- `packages/coding-agent/src/modes/rpc/rpc-fork-types.ts` — fork v3 extensions
 - `packages/coding-agent/src/session/agent-session.ts`
 - `packages/coding-agent/src/session/agent-session-events.ts`
 - `packages/agent/src/agent.ts`
@@ -42,15 +41,15 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
 
 ```json
 {
-	"type": "ready",
-	"protocolVersion": 1,
-	"supportedProtocolVersions": [1, 2, 3],
-	"maxFrameBytes": 1048576,
-	"maxReassembledFrameBytes": 67108864
+  "type": "ready",
+  "protocolVersion": 1,
+  "supportedProtocolVersions": [1, 2],
+  "maxFrameBytes": 1048576,
+  "maxReassembledFrameBytes": 67108864
 }
 ```
 
-Clients that support this fork's v3 SHOULD negotiate `3` when advertised; otherwise v2-capable clients SHOULD immediately send:
+Clients that support protocol v2 SHOULD immediately send:
 
 ```json
 { "id": "protocol-1", "type": "negotiate_protocol", "protocolVersion": 2 }
@@ -60,20 +59,20 @@ After the success response, oversized stdout objects use an uninterrupted sequen
 
 ```json
 {
-	"type": "rpc_chunk",
-	"chunkId": "rpc-1",
-	"index": 0,
-	"count": 7,
-	"byteLength": 1600042,
-	"data": "eyJ0eXBlIjoicmVzcG9uc2UiLC4uLn0="
+  "type": "rpc_chunk",
+  "chunkId": "rpc-1",
+  "index": 0,
+  "count": 7,
+  "byteLength": 1600042,
+  "data": "eyJ0eXBlIjoicmVzcG9uc2UiLC4uLn0="
 }
 ```
 
-Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation for chunked v2/v3. The bundled TypeScript, Python, Rust and Go clients negotiate v2 automatically; fork v3 requires an explicitly negotiated host transport.
+Clients MUST validate `chunkId`, `index`, `count`, and `byteLength`, reject interleaved or interrupted sequences, enforce the advertised reassembly limit, concatenate decoded bytes in index order, decode them as strict UTF-8, and parse the result as one JSON object. The TypeScript `RpcFrameDecoder`, exported from `@oh-my-pi/pi-coding-agent/modes/rpc/rpc-frame`, implements this validation. The bundled TypeScript and Python `RpcClient` implementations and the Rust and Go clients negotiate v2 automatically when the ready frame advertises it.
 
-For an oversized `agent_end` in v1 or chunked v2/v3, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
+For an oversized `agent_end` in either version, the encoder first removes the leading messages already delivered unchanged in `message_end` frames and adds `messageCount` with the original count. Hosts must retain streamed messages rather than treating `agent_end.messages` as a complete transcript.
 
-Legacy clients may ignore the added ready fields and remain on v1. In v1, an oversized response becomes `success: false` with `error: "RPC response exceeded the transport limit"`; oversized events may have strings, arrays, or object fields elided. If a v2/v3 logical frame exceeds 64 MiB after terminal-frame compaction, responses receive the same overflow error, other events produce `rpc_frame_error`, and `agent_end` falls back to an empty `messages` array plus `messageCount`. Large history APIs should use pagination rather than depending on arbitrarily large logical frames.
+Legacy clients may ignore the added ready fields and remain on v1. In v1, an oversized response becomes `success: false` with `error: "RPC response exceeded the transport limit"`; oversized events may have strings, arrays, or object fields elided. If a v2 logical frame exceeds 64 MiB after terminal-frame compaction, responses receive the same overflow error, other events produce `rpc_frame_error`, and `agent_end` falls back to an empty `messages` array plus `messageCount`. Large history APIs should use pagination rather than depending on arbitrarily large logical frames.
 
 Output goes directly to stdout while the reader keeps up. Under backpressure, the server spills pending bytes to a private temporary file and drains it in 64 KiB blocks, preserving frame order. This limits queued output memory at the cost of disk I/O and temporary disk usage, which can grow until the reader catches up. The file is removed when the backlog drains or the process shuts down. Output or spool failures are logged, dispose the session, and exit with code `1`.
 
@@ -90,14 +89,14 @@ Clients MUST continue reading stdout after closing stdin. Normal EOF and extensi
 7. Extension errors (`{ type: "extension_error", extensionPath, event, error }`)
 8. Available-commands updates (`{ type: "available_commands_update", commands }`), emitted at startup and whenever command metadata changes
 9. Prompt completion (`{ type: "prompt_result", id?, agentInvoked, status, error?, sessionSettled }`), unless the response already completed the prompt locally; see [`prompt` payload](#prompt-payload)
-10.   Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
-11.   Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
-12.   Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
-13.   Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
-14.   Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
-15.   Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
+10. Session quiescence (`{ type: "session_settled" }`); see [Yield vs settled](#yield-vs-settled)
+11. Subagent frames (`subagent_lifecycle`, `subagent_progress`, `subagent_event`), gated by `set_subagent_subscription`
+12. Side-question frames (`btw_delta`, `btw_record`); see [Side questions](#side-questions-btw)
+13. Builtin slash-command side channels (`command_output`, `session_info_update`, `config_update`)
+14. Transport overflow notifications (`rpc_frame_error`), when an event cannot fit within the transport limits
+15. Live voice frames (`live_phase`, `live_levels`, `live_transcript`, `live_end`); see [Live Voice Sub-Protocol](#live-voice-sub-protocol)
 
-Protocols v2/v3 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
+Protocol v2 may wrap oversized logical frames from these categories in `rpc_chunk` frames.
 
 ### Inbound frame categories (stdin)
 
@@ -108,7 +107,7 @@ Protocols v2/v3 may wrap oversized logical frames from these categories in `rpc_
 
 ## Request/Response Correlation
 
-Single-session commands accept optional `id?: string`.
+All commands accept optional `id?: string`.
 
 - If provided, normal command responses echo the same `id`.
 - `RpcClient` relies on this for pending-request resolution.
@@ -120,22 +119,9 @@ Important edge behavior from runtime:
 - Ordinary `prompt` handling acknowledges after the message is admitted (queued, given an idle turn slot, or routed to an extension command), not before native `input` handlers or image preparation finish, and without waiting for the agent run. `abort_and_prompt` first awaits the abort, then acknowledges. A failure before admission is the command's error response. A failure after admission can still emit a later error response with the same `id`.
 - An accepted `prompt` or `abort_and_prompt` completes exactly once: either its success response carries `data.agentInvoked: false` (finished locally), or a later `prompt_result` frame with the same `id` reports how its work ended. `prompt_result` is always written after the response for that `id`.
 
-## Fork v3 surface
+## Command Schema (canonical)
 
-Fork business commands are opt-in: negotiate `{"type":"negotiate_protocol","protocolVersion":3,"id":"protocol-1"}` before using them. V3 retains v2 lossless chunk framing and responds with the fork capability flags (`commandCompletion`, `modelRoleConfig`, `sessionDirectory`). Clients remaining on v1/v2 do not receive fork-only behavior. A later v2 negotiation revokes the fork surface and restores the stock command catalog while retaining chunked framing.
-
-Each standalone RPC process hosts one current session. The planned ZCode integration instead uses an `omp app-server` protocol adapter and multiple AgentSession instances in the same process, calling business APIs directly rather than spawning per-session RPC hosts. This is a target architecture, not an implemented or accepted integration; its contract is maintained in the [ZCode integration requirements](../docs-zh-CN/requirements/rpc-ui-protocol.md). Standalone RPC remains supported, but its wire format is not an internal app-server transport.
-
-- After v3, `get_available_commands` returns rich catalog descriptors — name, aliases, description, input hint, subcommands, source, an `execution` verdict (`omp` vs `tui`), and an `availability` reason so terminal-only commands report themselves instead of failing at dispatch — plus a catalog `revision`. Command and skill invocation stays on the upstream `prompt` pipeline.
-- `complete_command` (`{ id, type: "complete_command", text, cursor }`) is zero-side-effect completion over that catalog: `/prefix` completes command names and aliases, `/name arg…` completes builtin arguments using the hosted session's current cwd. Responses carry the revision actually used.
-- `get_model_roles` separates user/project stored values from runtime effective selections and returns candidates and writable scopes; `sessionModel` echoes the hosted session's current model when one exists. `set_model_role` writes only the user layer with per-role disk compare-and-swap; conflicts fail with `revision_conflict`, and saving a default never clears project/runtime overrides. A successful save emits a `settings_changed { scope: "user" }` frame and reloads the hosted session's settings so its role resolution adopts the new value.
-- Existing persisted `*` role values retain the upstream default-role alias semantics. If the alias resolves, the catalog returns its `effectiveModel`; otherwise it reports `unresolvedReason: "auto"`, not `"no_matching_model"`. Saving `{ kind: "auto" }` clears the user assignment instead of persisting `*`, so role-specific upstream fallbacks apply.
-- `list_sessions` lists the hosted session's current saved-session directory, following changes to its cwd or session directory, including `/move` (the hosted session is flagged `current` once it has persisted). `rename_session` renames the hosted session through its live API or a saved entry through a title-slot rewrite (legacy files written before the title-slot format are rewritten with the slot prepended, never overlaid in place). `delete_session` removes a saved session with its artifacts; the session this process hosts must be closed (its process ended) first, a session whose ownership lease another process still holds refuses with `unsupported`, and both refusals precede any file mutation.
-- `set_model_role` requires the role's `expectedRevision`; session rename/delete accept an optional session `expectedRevision` and reject a stale supplied revision. These are resource revisions, not a global catalog revision.
-- `/clear` shares the in-place TUI/ACP/RPC reset: abort and await active compaction, preserve id/title/cwd/file, and clear the rendered TUI transcript/scrollback. It is not `/new`; `/fresh` still preserves conversation while resetting provider stream state.
-- `/logout` uses real provider/account selection and removes the selected stored row only after cancellation/session ownership checks. It reports remaining auth sources; a headless/no-op selector is not a substitute.
-
-Fork payload interfaces and capabilities are defined in `rpc-fork-types.ts`; command validation and dispatch live in `rpc-mode.ts`, backed by `rpc-fork-commands.ts`, `rpc-fork-models.ts`, and `rpc-fork-sessions.ts`. The maintained requirements are [ZCode 接入需求](../docs-zh-CN/requirements/rpc-ui-protocol.md). These extensions are not emitted into the upstream generated wire schema.
+`RpcCommand` is defined in `packages/coding-agent/src/modes/rpc/rpc-types.ts`:
 
 ### Prompting
 
@@ -152,7 +138,7 @@ Fork payload interfaces and capabilities are defined in `rpc-fork-types.ts`; com
 
 ### Protocol
 
-- `{ id?, type: "negotiate_protocol", protocolVersion: 2 | 3 }`
+- `{ id?, type: "negotiate_protocol", protocolVersion: 2 }`
 
 ### State
 
@@ -213,7 +199,7 @@ Invalid modes return the usual `success: false` response. Success reports the
 effective mode after applying the override:
 
 ```json
-{ "id": "warming-off", "type": "response", "command": "set_cache_warming", "success": true, "data": { "mode": "off" } }
+{"id":"warming-off","type":"response","command":"set_cache_warming","success":true,"data":{"mode":"off"}}
 ```
 
 The TypeScript client exposes `setCacheWarming(mode): Promise<CacheWarmingMode>`.
@@ -332,11 +318,11 @@ Data payloads are command-specific and defined in `rpc-types.ts`.
 
 ```json
 {
-	"id": "req_1",
-	"type": "response",
-	"command": "prompt",
-	"success": true,
-	"data": { "agentInvoked": false }
+  "id": "req_1",
+  "type": "response",
+  "command": "prompt",
+  "success": true,
+  "data": { "agentInvoked": false }
 }
 ```
 
@@ -383,13 +369,7 @@ A resumed session restores its saved model, as `--continue` does. When none of i
 To bind with a specific model instead, pass `provider` and `modelId` together, as in `set_model`. Like `--model` at startup, they replace the saved model and skip its check. An unknown pair fails with `Model not found: <provider>/<modelId>` before any session change. A resumed session records the model when it differs from the saved one, and an already-open or fresh session selects it as `set_model` does. `switch_session` accepts the same pair.
 
 ```json
-{
-	"id": "open-1",
-	"type": "open_session",
-	"sessionDir": "/srv/threads/t1",
-	"provider": "anthropic",
-	"modelId": "claude-sonnet-4-5"
-}
+{ "id": "open-1", "type": "open_session", "sessionDir": "/srv/threads/t1", "provider": "anthropic", "modelId": "claude-sonnet-4-5" }
 ```
 
 ### `remove_queued_message` payload
@@ -484,58 +464,58 @@ field is absent outside both stages. No event carries it, so re-read
 
 ```json
 {
-	"model": { "provider": "...", "id": "..." },
-	"thinkingLevel": "off|minimal|low|medium|high|xhigh|max",
-	"isStreaming": false,
-	"isCompacting": false,
-	"steeringMode": "all|one-at-a-time",
-	"followUpMode": "all|one-at-a-time",
-	"interruptMode": "immediate|wait",
-	"sessionFile": "...",
-	"sessionId": "...",
-	"sessionName": "...",
-	"fastModeEnabled": false,
-	"tokensPerSecond": null,
-	"fastModeActive": false,
-	"slowModeSupported": true,
-	"slowModeEnabled": true,
-	"slowModeScope": "global",
-	"usageLimit": {
-		"stage": "low_priority",
-		"resetsAtSec": 1770000000,
-		"allowanceLeftPercent": 62
-	},
-	"autoCompactionEnabled": true,
-	"messageCount": 0,
-	"queuedMessageCount": 0,
-	"hasPendingAsyncWork": false,
-	"isSettled": true,
-	"queuedMessages": { "steering": [], "followUp": [] },
-	"todoPhases": [
-		{
-			"name": "Todos",
-			"tasks": [
-				{
-					"content": "Map the tool surface",
-					"status": "in_progress"
-				}
-			]
-		}
-	],
-	"systemPrompt": ["..."],
-	"dumpTools": [
-		{
-			"name": "read",
-			"description": "Read files and URLs",
-			"parameters": {}
-		}
-	],
-	"contextUsage": {
-		"tokens": 1100,
-		"contextWindow": 200000,
-		"percent": 0.55
-	},
-	"goal": null
+  "model": { "provider": "...", "id": "..." },
+  "thinkingLevel": "off|minimal|low|medium|high|xhigh|max",
+  "isStreaming": false,
+  "isCompacting": false,
+  "steeringMode": "all|one-at-a-time",
+  "followUpMode": "all|one-at-a-time",
+  "interruptMode": "immediate|wait",
+  "sessionFile": "...",
+  "sessionId": "...",
+  "sessionName": "...",
+  "fastModeEnabled": false,
+  "tokensPerSecond": null,
+  "fastModeActive": false,
+  "slowModeSupported": true,
+  "slowModeEnabled": true,
+  "slowModeScope": "global",
+  "usageLimit": {
+    "stage": "low_priority",
+    "resetsAtSec": 1770000000,
+    "allowanceLeftPercent": 62
+  },
+  "autoCompactionEnabled": true,
+  "messageCount": 0,
+  "queuedMessageCount": 0,
+  "hasPendingAsyncWork": false,
+  "isSettled": true,
+  "queuedMessages": { "steering": [], "followUp": [] },
+  "todoPhases": [
+    {
+      "name": "Todos",
+      "tasks": [
+        {
+          "content": "Map the tool surface",
+          "status": "in_progress"
+        }
+      ]
+    }
+  ],
+  "systemPrompt": ["..."],
+  "dumpTools": [
+    {
+      "name": "read",
+      "description": "Read files and URLs",
+      "parameters": {}
+    }
+  ],
+  "contextUsage": {
+    "tokens": 1100,
+    "contextWindow": 200000,
+    "percent": 0.55
+  },
+  "goal": null
 }
 ```
 
@@ -649,11 +629,11 @@ the sticky rejection fallback, even when fast mode was already enabled.
 
 ```json
 {
-	"id": "req_fast_on",
-	"type": "response",
-	"command": "set_fast_mode",
-	"success": true,
-	"data": { "enabled": true, "active": true }
+  "id": "req_fast_on",
+  "type": "response",
+  "command": "set_fast_mode",
+  "success": true,
+  "data": { "enabled": true, "active": true }
 }
 ```
 
@@ -662,11 +642,11 @@ model that does not offer the priority tier, fails with the error below:
 
 ```json
 {
-	"id": "req_fast_on",
-	"type": "response",
-	"command": "set_fast_mode",
-	"success": false,
-	"error": "Fast mode is unavailable for the current model."
+  "id": "req_fast_on",
+  "type": "response",
+  "command": "set_fast_mode",
+  "success": false,
+  "error": "Fast mode is unavailable for the current model."
 }
 ```
 
@@ -680,11 +660,11 @@ priority keeps the computed active state true:
 
 ```json
 {
-	"id": "req_fast_off",
-	"type": "response",
-	"command": "set_fast_mode",
-	"success": true,
-	"data": { "enabled": false, "active": true }
+  "id": "req_fast_off",
+  "type": "response",
+  "command": "set_fast_mode",
+  "success": true,
+  "data": { "enabled": false, "active": true }
 }
 ```
 
@@ -692,8 +672,8 @@ The corresponding `get_state` result reports the same computed state:
 
 ```json
 {
-	"fastModeEnabled": false,
-	"fastModeActive": true
+  "fastModeEnabled": false,
+  "fastModeActive": true
 }
 ```
 
@@ -712,11 +692,11 @@ fallback when enabling fails.
 
 ```json
 {
-	"id": "req_ask",
-	"type": "response",
-	"command": "set_ask_dialog",
-	"success": true,
-	"data": { "enabled": true }
+  "id": "req_ask",
+  "type": "response",
+  "command": "set_ask_dialog",
+  "success": true,
+  "data": { "enabled": true }
 }
 ```
 
@@ -730,23 +710,23 @@ task `details` and `notes`.
 
 ```json
 {
-	"id": "req_2",
-	"type": "set_todos",
-	"phases": [
-		{
-			"name": "Evaluation",
-			"tasks": [
-				{
-					"content": "Map the read tool surface",
-					"status": "in_progress"
-				},
-				{
-					"content": "Exercise edit operations",
-					"status": "pending"
-				}
-			]
-		}
-	]
+  "id": "req_2",
+  "type": "set_todos",
+  "phases": [
+    {
+      "name": "Evaluation",
+      "tasks": [
+        {
+          "content": "Map the read tool surface",
+          "status": "in_progress"
+        },
+        {
+          "content": "Exercise edit operations",
+          "status": "pending"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -759,23 +739,23 @@ into over stdio:
 
 ```json
 {
-	"id": "req_3",
-	"type": "set_host_tools",
-	"tools": [
-		{
-			"name": "echo_host",
-			"label": "Echo Host",
-			"description": "Echo a value from the embedding host",
-			"parameters": {
-				"type": "object",
-				"properties": {
-					"message": { "type": "string" }
-				},
-				"required": ["message"],
-				"additionalProperties": false
-			}
-		}
-	]
+  "id": "req_3",
+  "type": "set_host_tools",
+  "tools": [
+    {
+      "name": "echo_host",
+      "label": "Echo Host",
+      "description": "Echo a value from the embedding host",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      }
+    }
+  ]
 }
 ```
 
@@ -783,7 +763,7 @@ The response payload is:
 
 ```json
 {
-	"toolNames": ["echo_host"]
+  "toolNames": ["echo_host"]
 }
 ```
 
@@ -808,16 +788,16 @@ dispatch reads/writes through:
 
 ```json
 {
-	"id": "req_4",
-	"type": "set_host_uri_schemes",
-	"schemes": [
-		{
-			"scheme": "db",
-			"description": "Virtual db row files",
-			"writable": true,
-			"immutable": false
-		}
-	]
+  "id": "req_4",
+  "type": "set_host_uri_schemes",
+  "schemes": [
+    {
+      "scheme": "db",
+      "description": "Virtual db row files",
+      "writable": true,
+      "immutable": false
+    }
+  ]
 }
 ```
 
@@ -825,7 +805,7 @@ The response payload is:
 
 ```json
 {
-	"schemes": ["db"]
+  "schemes": ["db"]
 }
 ```
 
@@ -871,8 +851,7 @@ Emitted whenever the displayable steering/follow-up queue changes: a `steer`,
 or a session switch removes from or clears it. The server coalesces this
 against the last value sent — a mutation that leaves the snapshot unchanged
 (for example, an agent-authored aside that never renders as a chip) never
-re-emits. `steering`/`followUp` mirror `get_state`'s
-`queuedMessages` field and
+re-emits. `steering`/`followUp` mirror `get_state`'s `queuedMessages` field and
 carry the queue-chip text accepted by `remove_queued_message` while the message
 is still pending. Live-steered messages stay listed until recorded in the
 transcript, even after they cease to be removable. Render the queue from this
@@ -883,10 +862,10 @@ Extension runner errors are emitted separately as:
 
 ```json
 {
-	"type": "extension_error",
-	"extensionPath": "...",
-	"event": "...",
-	"error": "..."
+  "type": "extension_error",
+  "extensionPath": "...",
+  "event": "...",
+  "error": "..."
 }
 ```
 
@@ -1213,12 +1192,12 @@ they do not write global `config.yml`. `set_auto_compaction` and
 ### Mode semantics
 
 - `set_steering_mode` / `set_follow_up_mode`
-   - `"one-at-a-time"`: dequeue one delivery group per queue drain, keeping hidden companions with their user message
-   - `"all"`: dequeue the entire queue at once
+  - `"one-at-a-time"`: dequeue one delivery group per queue drain, keeping hidden companions with their user message
+  - `"all"`: dequeue the entire queue at once
 - `set_interrupt_mode`
-   - `"immediate"`: queued steering raises a cooperative signal for foreground tools, allowing auto-backgroundable work to step aside; it does not hard-kill or skip non-interruptible tools
-   - `"wait"`: omit that cooperative steering signal and let side-effecting work finish before injecting steering at the tool-batch boundary
-   - In both modes, interruptible waits are cancelled or skipped when steering arrives. This setting is not equivalent to `abort`.
+  - `"immediate"`: queued steering raises a cooperative signal for foreground tools, allowing auto-backgroundable work to step aside; it does not hard-kill or skip non-interruptible tools
+  - `"wait"`: omit that cooperative steering signal and let side-effecting work finish before injecting steering at the tool-batch boundary
+  - In both modes, interruptible waits are cancelled or skipped when steering arrives. This setting is not equivalent to `abort`.
 
 ## Extension UI Sub-Protocol
 
@@ -1239,15 +1218,15 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
 `RpcExtensionUIRequest` (`type: "extension_ui_request"`) methods:
 
 - `select`, `confirm`, `input`, `editor`, `ask`, `cancel`
-   - `select` keeps labels in `options: string[]` and, when any option has a
-     description, emits a positionally aligned
-     `optionDetails: Array<{ description?: string }>` array. Hosts that do not
-     render descriptions can continue using `options` alone.
-   - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
-     question of one `ask` tool call:
-     `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
-     plus `timeout?: number`. `options` never include an "Other" entry; hosts
-     always offer free text.
+  - `select` keeps labels in `options: string[]` and, when any option has a
+    description, emits a positionally aligned
+    `optionDetails: Array<{ description?: string }>` array. Hosts that do not
+    render descriptions can continue using `options` alone.
+  - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
+    question of one `ask` tool call:
+    `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
+    plus `timeout?: number`. `options` never include an "Other" entry; hosts
+    always offer free text.
 - `notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`
 - `open_url` (emitted by RPC login flows): includes `url`, optional `launchUrl`, and optional `instructions`. When present, `launchUrl` is a short loopback redirect and is the recommended copy target so terminal truncation cannot corrupt OAuth query parameters.
 
@@ -1262,12 +1241,12 @@ Example:
 
 ```json
 {
-	"type": "extension_ui_request",
-	"id": "123",
-	"method": "confirm",
-	"title": "Confirm",
-	"message": "Continue?",
-	"timeout": 30000
+  "type": "extension_ui_request",
+  "id": "123",
+  "method": "confirm",
+  "title": "Confirm",
+  "message": "Continue?",
+  "timeout": 30000
 }
 ```
 
@@ -1297,34 +1276,24 @@ is trimmed and ignored when empty. Any other shape fails the `ask` tool call ins
 
 ```json
 {
-	"type": "extension_ui_request",
-	"id": "ui_9",
-	"method": "ask",
-	"questions": [
-		{
-			"id": "db",
-			"question": "Which database?",
-			"options": [{ "label": "Postgres" }, { "label": "SQLite" }],
-			"recommended": 1
-		},
-		{
-			"id": "features",
-			"question": "Which features?",
-			"options": [{ "label": "Auth" }, { "label": "Billing" }, { "label": "Search" }],
-			"multi": true
-		}
-	]
+  "type": "extension_ui_request",
+  "id": "ui_9",
+  "method": "ask",
+  "questions": [
+    { "id": "db", "question": "Which database?", "options": [{ "label": "Postgres" }, { "label": "SQLite" }], "recommended": 1 },
+    { "id": "features", "question": "Which features?", "options": [{ "label": "Auth" }, { "label": "Billing" }, { "label": "Search" }], "multi": true }
+  ]
 }
 ```
 
 ```json
 {
-	"type": "extension_ui_response",
-	"id": "ui_9",
-	"answers": [
-		{ "id": "db", "selectedOptions": [], "customInput": "DuckDB" },
-		{ "id": "features", "selectedOptions": ["Auth", "Search"] }
-	]
+  "type": "extension_ui_response",
+  "id": "ui_9",
+  "answers": [
+    { "id": "db", "selectedOptions": [], "customInput": "DuckDB" },
+    { "id": "features", "selectedOptions": ["Auth", "Search"] }
+  ]
 }
 ```
 
@@ -1344,11 +1313,11 @@ When the agent wants the host to execute one of those tools, RPC mode emits:
 
 ```json
 {
-	"type": "host_tool_call",
-	"id": "host_1",
-	"toolCallId": "toolu_123",
-	"toolName": "echo_host",
-	"arguments": { "message": "hello" }
+  "type": "host_tool_call",
+  "id": "host_1",
+  "toolCallId": "toolu_123",
+  "toolName": "echo_host",
+  "arguments": { "message": "hello" }
 }
 ```
 
@@ -1356,9 +1325,9 @@ If the tool execution is later aborted, RPC mode emits:
 
 ```json
 {
-	"type": "host_tool_cancel",
-	"id": "host_cancel_1",
-	"targetId": "host_1"
+  "type": "host_tool_cancel",
+  "id": "host_cancel_1",
+  "targetId": "host_1"
 }
 ```
 
@@ -1368,11 +1337,11 @@ Hosts can optionally stream progress:
 
 ```json
 {
-	"type": "host_tool_update",
-	"id": "host_1",
-	"partialResult": {
-		"content": [{ "type": "text", "text": "working" }]
-	}
+  "type": "host_tool_update",
+  "id": "host_1",
+  "partialResult": {
+    "content": [{ "type": "text", "text": "working" }]
+  }
 }
 ```
 
@@ -1380,11 +1349,11 @@ Completion uses:
 
 ```json
 {
-	"type": "host_tool_result",
-	"id": "host_1",
-	"result": {
-		"content": [{ "type": "text", "text": "done" }]
-	}
+  "type": "host_tool_result",
+  "id": "host_1",
+  "result": {
+    "content": [{ "type": "text", "text": "done" }]
+  }
 }
 ```
 
@@ -1447,10 +1416,10 @@ When a session tool resolves a host-owned URL, RPC mode emits:
 
 ```json
 {
-	"type": "host_uri_request",
-	"id": "uri_1",
-	"operation": "read",
-	"url": "db://users/42"
+  "type": "host_uri_request",
+  "id": "uri_1",
+  "operation": "read",
+  "url": "db://users/42"
 }
 ```
 
@@ -1462,9 +1431,9 @@ emits:
 
 ```json
 {
-	"type": "host_uri_cancel",
-	"id": "uri_cancel_1",
-	"targetId": "uri_1"
+  "type": "host_uri_cancel",
+  "id": "uri_cancel_1",
+  "targetId": "uri_1"
 }
 ```
 
@@ -1474,12 +1443,12 @@ For successful reads:
 
 ```json
 {
-	"type": "host_uri_result",
-	"id": "uri_1",
-	"content": "id=42\nname=Alice\n",
-	"contentType": "text/plain",
-	"notes": ["fresh from cache"],
-	"immutable": false
+  "type": "host_uri_result",
+  "id": "uri_1",
+  "content": "id=42\nname=Alice\n",
+  "contentType": "text/plain",
+  "notes": ["fresh from cache"],
+  "immutable": false
 }
 ```
 
@@ -1494,10 +1463,10 @@ a message or fall back to `content` for textual error surfacing:
 
 ```json
 {
-	"type": "host_uri_result",
-	"id": "uri_1",
-	"isError": true,
-	"error": "row 42 not found"
+  "type": "host_uri_result",
+  "id": "uri_1",
+  "isError": true,
+  "error": "row 42 not found"
 }
 ```
 
@@ -1522,11 +1491,11 @@ Failures are `success: false` with string `error`.
 
 ```json
 {
-	"id": "req_2",
-	"type": "response",
-	"command": "set_model",
-	"success": false,
-	"error": "Model not found: provider/model"
+  "id": "req_2",
+  "type": "response",
+  "command": "set_model",
+  "success": false,
+  "error": "Model not found: provider/model"
 }
 ```
 
@@ -1566,10 +1535,10 @@ stdin:
 
 ```json
 {
-	"id": "req_2",
-	"type": "prompt",
-	"message": "Also include risks",
-	"streamingBehavior": "followUp"
+  "id": "req_2",
+  "type": "prompt",
+  "message": "Also include risks",
+  "streamingBehavior": "followUp"
 }
 ```
 
@@ -1589,11 +1558,11 @@ stdout:
 
 ```json
 {
-	"type": "extension_ui_request",
-	"id": "ui_7",
-	"method": "input",
-	"title": "Branch name",
-	"placeholder": "feature/..."
+  "type": "extension_ui_request",
+  "id": "ui_7",
+  "method": "input",
+  "title": "Branch name",
+  "placeholder": "feature/..."
 }
 ```
 
@@ -1607,26 +1576,26 @@ stdin:
 
 ### Wire schema and generated clients
 
-`packages/coding-agent/src/modes/rpc/wire` describes the upstream-compatible
-commands (parameters, success `data`, nullability, timeouts), unsolicited frames,
-and shared types as omptype schemas. Fork v3 payload interfaces remain in `rpc-fork-types.ts` and are not generated. `bun run gen:rpc` emits:
+`packages/coding-agent/src/modes/rpc/wire` describes every command (parameters,
+success `data`, nullability, timeouts), every unsolicited frame, and every shared
+type as omptype schemas. `bun run gen:rpc` emits:
 
 - `rpc-wire.schema.json`: a JSON Schema 2020-12 bundle plus an `x-rpc` section:
   the command table, the stdout frame union (`serverFrame`: responses, host
   requests, notifications), the notification and session-event unions, and the
   host-to-server frame union (`inbound`). It is the language-neutral input for
   client generators, with these decoder rules:
-   - objects marked `"x-open": true` are open records (messages, content, usage,
-     assistant streaming events): decoders check the `role`/`type` discriminator
-     and keep every key, so persisted messages missing newer fields still decode;
-   - a property `default` is the value decoders substitute when an older server
-     omits the field;
-   - string enums are closed: an unknown value fails the frame, which clients then
-     surface as an unknown notification instead of stopping;
-   - `x-unknown-fallback` on a property (a subagent's forwarded event) degrades a
-     value that fails to decode to an unknown notification without failing its
-     frame, and `x-scalar-or-array` marks an array older servers sent as a bare
-     scalar.
+  - objects marked `"x-open": true` are open records (messages, content, usage,
+    assistant streaming events): decoders check the `role`/`type` discriminator
+    and keep every key, so persisted messages missing newer fields still decode;
+  - a property `default` is the value decoders substitute when an older server
+    omits the field;
+  - string enums are closed: an unknown value fails the frame, which clients then
+    surface as an unknown notification instead of stopping;
+  - `x-unknown-fallback` on a property (a subagent's forwarded event) degrades a
+    value that fails to decode to an unknown notification without failing its
+    frame, and `x-scalar-or-array` marks an array older servers sent as a bare
+    scalar.
 - `rpc-wire.generated.ts`: the wire types in TypeScript.
 - `sdk/python/omp-rpc/src/omp_rpc/_wire.py`: Python types, decoders, command methods,
   and frame listeners for the `omp-rpc` package.
@@ -1640,10 +1609,10 @@ generated types: they negotiate v2 and reassemble chunks, page message history,
 wait for a prompt's `prompt_result` (`prompt_and_wait` / `PromptAndWait`), and serve
 host-owned tools and URI schemes. Their READMEs cover the APIs.
 
-`packages/coding-agent/test/rpc-wire` detects stale committed outputs and
-type-checks the generated TypeScript against the upstream-compatible server
-surface. Explicit fork commands and fork-only parameter/result fields are
-excluded from that conformance comparison; they need the fork protocol tests.
+`packages/coding-agent/test/rpc-wire` fails when a committed output is stale, and
+type-checks the generated TypeScript against `rpc-types.ts` and the internal types
+behind it: a new command, command parameter, event, event field, or enum value on
+the server breaks `bun check` until the schema covers it.
 
 ### TypeScript helper
 
@@ -1652,13 +1621,13 @@ excluded from that conformance comparison; they need the fork protocol tests.
 Current helper characteristics:
 
 - Spawns `bun <cliPath> --mode rpc` by default (`cliPath` defaults to `dist/cli.js`). A `command` argv prefix receives generated agent arguments; a command builder returns complete argv. A custom `spawn` transport takes precedence.
-- Correlates responses by generated `req_<n>` ids, negotiates and validates v2 when advertised, reassembles chunks, and pages message history; it does not automatically opt into fork v3
+- Correlates responses by generated `req_<n>` ids, negotiates v2, reassembles chunks, and pages message history
 - Dispatches recognized core `AgentEvent` types through `onEvent()` and recognized session events through `onSessionEvent()`; the raw server stream can include additional event types
 - Exposes `onPromptResult()`, `onSessionSettled()`, command-availability and subagent listeners, plus extension UI requests
 - Supports host-owned custom tools via `setCustomTools()` and automatic handling of `host_tool_call` / `host_tool_cancel`
 - Drives live voice sessions with `liveStart()`, `liveStop()`, `liveMute()`, and delivers live frames through `onLive()`
 - `promptAndWait()` waits for that prompt's result (or synchronous local completion); `waitForSettled()` also waits for session quiescence. `waitForIdle()` and `collectEvents()` stop at the next `agent_end`, including a non-terminal one, and are not settle barriers.
-- Wraps common upstream protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts(providerId)` / `logout(providerId, credentialId)`; these helpers cover only the single-session host surface. Fork v3 commands require a host-owned transport; host-URI registration and delta-only message updates remain raw transport surfaces.
+- Wraps common protocol commands including OAuth `getLoginProviders()` / `login(...)` and `getLogoutAccounts(...)` / `logout(...)`; use raw protocol frames for unwrapped surfaces such as host-URI registration or delta-only message updates.
 
 ### Python package
 
@@ -1673,4 +1642,4 @@ with RpcClient(provider="anthropic", model="claude-sonnet-4-5") as client:
     print(turn.require_assistant_text())
 ```
 
-By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its generated command methods and `on_<frame type>` listeners cover the upstream wire schema, not the fork unions; fork commands are sent as raw frames after a v3 `negotiate_protocol`. The `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and the server's RPC type modules remain the canonical wire contract.
+By default, `RpcClient` starts `omp --mode rpc`; pass `command=[...]` to own the exact child command. It handles request correlation, typed notifications, v2 negotiation and chunk reassembly, message pagination, extension UI (including the opt-in `ask` dialog), and host-owned tools and URI schemes. Its command methods and `on_<frame type>` listeners are generated from the wire schema, so it wraps every command above; the `messageUpdates: "delta"` projection stays raw-protocol only. The Python package owns that client API and process lifecycle; this document and `rpc-types.ts` remain the canonical wire contract. Use raw protocol frames when a client library does not wrap the surface you need.

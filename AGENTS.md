@@ -1,6 +1,6 @@
 # Fork 维护规则
 
-本仓库 fork 自 `can1357/oh-my-pi`，是仅供个人使用的 fork 维护仓库，不以对外发布为目标。以近乎每日合并上游最新 `main` 为维护节奏，保持 OMP 核心持续跟进上游。三种使用场景与零配置目标统一见 [Fork 需求：项目定位与使用场景](docs-zh-CN/requirements/fork.md#项目定位与使用场景)。
+本仓库 fork 自 `can1357/oh-my-pi`，是仅供个人使用的 fork 维护仓库，不以对外发布为目标。以近乎每日合并上游最新 `main` 为维护节奏，保持 OMP 核心持续跟进上游。两种使用场景与零配置目标统一见 [Fork 需求：项目定位与使用场景](docs-zh-CN/requirements/fork.md#项目定位与使用场景)。
 
 ## 项目概况
 
@@ -25,10 +25,10 @@
 核心代码入口：
 
 - CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-- fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/rpc/` 的 `rpc-fork-*.ts`（已有独立 RPC v3 扩展：命令目录与补全、role 持久配置、保存会话目录管理，宿主为上游单会话 RPC 模式）。ZCode app-server 的独立协议目录、同进程 AgentSession API 调用、多会话隔离、存储准备及完整交付契约见 `docs-zh-CN/requirements/rpc-ui-protocol.md`；不得把独立 RPC 入口当作 app-server 内部调用链，也不提前登记尚未实现的源码入口。
-- ZCode app-server：`src/modes/zcode/index.ts` 注册独立 stdio 入口，`server.ts` 路由公开协议，`sessions.ts` 直接组合同进程 AgentSession，`projection.ts`／`topics.ts` 管理可重建投影与订阅，`storage.ts` 生产真实存储准备事实；完整功能与验收仍以 `docs-zh-CN/requirements/rpc-ui-protocol.md` 为准，不将独立 RPC 入口作为内部传输。
+- fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `docs-zh-CN/requirements/goal-autopilot.md`）、`src/modes/zcode/hosts/`（命令宿主：plan／loop／goal、命令目录与补全、role 持久保存，由 app-server 命令链路同进程调用）。`src/modes/rpc/` 与上游保持逐字一致，fork 不修改、不使用。ZCode app-server 的独立协议目录、同进程 AgentSession API 调用、多会话隔离、存储准备及完整交付契约见 `docs-zh-CN/requirements/rpc-ui-protocol.md`；不提前登记尚未实现的源码入口。
+- ZCode app-server：`src/modes/zcode/index.ts` 注册独立 stdio 入口，`server.ts` 路由公开协议，`sessions.ts` 直接组合同进程 AgentSession，`projection.ts`／`topics.ts` 管理可重建投影与订阅，`storage.ts` 生产真实存储准备事实；完整功能与验收仍以 `docs-zh-CN/requirements/rpc-ui-protocol.md` 为准。
 - 输入法恢复：`/jchime [故障现象]` 在 `src/jch-commands/workflow.ts` 注册，复用提示词命令工厂；`src/prompts/jch-ime.md` 提供完整小模型首选恢复块及失败后同用户/同 DISPLAY 的自主诊断、有限停止与重建步骤。契约见 `docs-zh-CN/requirements/fork.md`「JCH 命令」；服务状态与真实中文输入恢复分别核验。
-- RPC 命令入口复用同一 slash 注册表的 `handleRpc` / `handle`：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，既有 RPC 计划／循环宿主在 `src/modes/rpc/rpc-plan.ts`、`rpc-loop.ts`，目标在 `rpc-goal.ts`。独立 RPC 客户端使用 prompt 与 RPC UI；app-server 按需求同进程复用其底层会话、命令与 UI 业务能力，不另建命令表或通过 RPC 绕行。
+- 命令宿主复用同一 slash 注册表：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划／循环／目标宿主位于 `src/modes/zcode/hosts/`（plan-host／loop-host／goal-host），命令目录与 role 保存在同目录（command-catalog、model-roles），由 app-server 命令链路调用，不另建命令表。
 - TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；仅紧凑模式在输入区上方使用单一实时三行思考尾窗（思考结束且回合进行中收起为单行存根，正文开始或回合结束清空），干净与详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
 
 常用命令（工作目录为仓库根；下表受支持的检查、类型、构建与测试 root scripts 默认经 Bazel 执行，三层入口不变；支持列表与缓存边界以 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」为准。本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
@@ -69,7 +69,7 @@
 
 - `AGENTS.md`：本仓库的维护原则与 agent 规则。
 - JCH 的 `jch-upstream-sync` Skill：每日定时同步或手动同步上游的通用流程及 Git 执行脚本；本仓库的来源、镜像、基线记录与验证限制由本文件维护。调用入口统一使用新名称，不保留旧名称别名或平行实现。
-- `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、三种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求；`rpc-ui-protocol.md` 保存 app-server 独立协议目录、同进程业务 API／多会话隔离、存储准备生产端、OMP 功能／权限及既有独立 RPC 参考合同。ZCode 侧启动消费与发行装配以其中引用的 OmpCode FORK-003 为准；同进程调用不新增内部 wire，也不能将 OMP RPC 当作 ZCode 外部协议。
+- `docs-zh-CN/requirements/`：唯一固定需求目录，完整文档清单及功能边界见其中的 `README.md`。`fork.md` 保存项目定位、两种使用场景与零配置目标、当前上游基线和通用差异，`team.md` 保存多模型讨论契约，`goal-auto-orchestrate.md` 保存 `/goal-auto-orchestrate` 无人值守 Goal 编排需求，`repo-index.md` 保存代码索引需求；`rpc-ui-protocol.md` 保存 app-server 独立协议目录、同进程业务 API／多会话隔离、存储准备生产端及 OMP 功能／权限合同；上游独立 RPC 模式保持上游原样，fork 不修改、不使用，桌面接入唯一入口是 ZCode 协议。ZCode 侧启动消费与发行装配以其中引用的 OmpCode FORK-003 为准；同进程调用不新增内部 wire。
 
 同步 MUST 保留 `AGENTS.md`、整个需求目录、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。共享 Skill 不随本仓库同步改写。
 
@@ -121,9 +121,9 @@
 
 现状与缺口（2026-10-07 依据仓库内容整理；当日精简会话运行的验证以各功能域记录为准）：
 
-- fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`rpc-fork-*`，以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `fork.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
+- fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`modes/zcode`（hosts 宿主），以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `fork.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
 - fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器），永久只构建和发布，不运行测试、冒烟、lint、类型检查或独立校验作业。该独立发布流程保持不变，但 NEVER 由 fastcheck/fulltest/slowtest 推送、触发或监控；直接运行 CI 不代表本地验证通过。
-- 上游 Windows 专属 `clippy::map_unwrap_or` 问题已随上游修复合入；标准 fulltest 不再保留只运行 `check:ts` 的 Rust 静态跳过，必须包含 fastcheck 的全部检查。现有 `test:rs` 在 Windows 过滤上游确定性失败的 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open`，Linux 不过滤；该既有测试定义在门禁迁移中不改写，不能据此声称该用例已通过。上游带入的格式差异、RPC 重入修复与 Linux 会话隔离测试的既有适配仍按相应源码注释维护；门禁迁移不改变其检查定义、产品行为或通过标准。
+- 上游 Windows 专属 `clippy::map_unwrap_or` 问题已随上游修复合入；标准 fulltest 不再保留只运行 `check:ts` 的 Rust 静态跳过，必须包含 fastcheck 的全部检查。现有 `test:rs` 在 Windows 过滤上游确定性失败的 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open`，Linux 不过滤；该既有测试定义在门禁迁移中不改写，不能据此声称该用例已通过。上游带入的格式差异与 Linux 会话隔离测试的既有适配仍按相应源码注释维护；门禁迁移不改变其检查定义、产品行为或通过标准。
 - 未执行的门禁与因工具/环境受阻的验证均须如实记录为未验证；运行授权本身不是通过证据，不能报告未运行的检查已通过或功能已验收。
 
 ## 构建与缓存纪律

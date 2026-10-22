@@ -9,7 +9,7 @@ import { ModelRegistry, type ProviderConfigInput } from "../../src/config/model-
 import { Settings } from "../../src/config/settings";
 import { ZCodeProviderConfiguration } from "../../src/modes/zcode/provider-config";
 import { ZCodeFrameWriter } from "../../src/modes/zcode/server";
-import { RpcModelRoleService } from "../../src/modes/rpc/rpc-fork-models";
+import { ModelRoleService } from "../../src/modes/zcode/hosts/model-roles";
 import { zcodeSessionConfigureResultSchema } from "../../src/modes/zcode/schema/omp-config-extension";
 import { TeamConfigService } from "../../src/team/config";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -214,7 +214,7 @@ describe("ZCode provider configuration consumer", () => {
 			getSessionModel: () => currentModel,
 			emit: () => {},
 		};
-		const roles = await new RpcModelRoleService(dependencies).listRoles({
+		const roles = await new ModelRoleService(dependencies).listRoles({
 			sessionModel: { provider: currentModel.provider, modelId: currentModel.id },
 		});
 		const models = new TeamConfigService(dependencies).getModels();
@@ -503,7 +503,7 @@ describe("ZCode provider configuration consumer", () => {
 		// SDK startup synchronizes extension lifetimes after preparing Host configuration.
 		f.modelRegistry.syncExtensionSources([]);
 		const model = f.modelRegistry.find("account:test", "model-a")!;
-		const catalog = await new RpcModelRoleService({
+		const catalog = await new ModelRoleService({
 			getSettings: () => f.settings,
 			getModelRegistry: () => f.modelRegistry,
 			emit: () => {},

@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { LoopConditionConfig, LoopLimitRuntime } from "@oh-my-pi/pi-tui/status-line/loop";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { AgentSession, AgentSessionEvent } from "../../session/agent-session";
-import type { SlashCommandResult } from "../../slash-commands/types";
-import { describeLoopCondition, evaluateLoopCondition } from "../loop-condition";
+import type { AgentSession, AgentSessionEvent } from "../../../session/agent-session";
+import type { SlashCommandResult } from "../../../slash-commands/types";
+import { describeLoopCondition, evaluateLoopCondition } from "../../loop-condition";
 import {
 	consumeLoopLimitIteration,
 	createLoopLimitRuntime,
@@ -11,14 +11,14 @@ import {
 	isLoopDurationExpired,
 	isLoopLimitExhausted,
 	parseLoopArgs,
-} from "../loop-limit";
-import { cfgLoopConditionTimeoutMs, cfgLoopMode } from "../settings";
+} from "../../loop-limit";
+import { cfgLoopConditionTimeoutMs, cfgLoopMode } from "../../settings";
 
-function rpcLoopDiagnosticId(value: string): string {
+function loopHostDiagnosticId(value: string): string {
 	return /^[A-Za-z0-9_-]{1,96}$/.test(value) ? value : createHash("sha256").update(value).digest("hex").slice(0, 24);
 }
 
-export interface RpcLoopOptions {
+export interface LoopHostOptions {
 	output(text: string): void;
 	/** Re-enter the host pipeline; recheck current at admission after any input-gate wait. */
 	submit(text: string, current: () => boolean): Promise<void>;
@@ -29,10 +29,10 @@ export interface RpcLoopOptions {
 	continuationAllowed?(): boolean;
 }
 
-/** RPC host scheduling for the shared /loop parser, limits, and condition runner. */
-export class RpcLoopController {
+/** Host scheduling for the shared /loop parser, limits, and condition runner. */
+export class LoopHost {
 	readonly #session: AgentSession;
-	readonly #options: RpcLoopOptions;
+	readonly #options: LoopHostOptions;
 	#enabled = false;
 	#paused = false;
 	#prompt: string | undefined;
@@ -49,7 +49,7 @@ export class RpcLoopController {
 	#logContext: Record<string, unknown> = {};
 	#iteration = 0;
 
-	constructor(session: AgentSession, options: RpcLoopOptions) {
+	constructor(session: AgentSession, options: LoopHostOptions) {
 		this.#session = session;
 		this.#options = options;
 	}
@@ -83,7 +83,7 @@ export class RpcLoopController {
 		this.#logContext = {
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `rpc-loop-${crypto.randomUUID()}`,
-			session_id: rpcLoopDiagnosticId(this.#transcriptId),
+			session_id: loopHostDiagnosticId(this.#transcriptId),
 		};
 		this.#iteration = 0;
 		logger.info("RPC loop enabled", {
@@ -118,7 +118,7 @@ export class RpcLoopController {
 		this.#logContext = {
 			...logger.getLogContext(),
 			operation_id: logger.getLogContext().operation_id ?? `rpc-loop-${crypto.randomUUID()}`,
-			session_id: rpcLoopDiagnosticId(this.#transcriptId),
+			session_id: loopHostDiagnosticId(this.#transcriptId),
 		};
 	}
 
@@ -287,7 +287,7 @@ export class RpcLoopController {
 			component: "rpc-loop",
 			generation,
 			stage,
-			session_id: rpcLoopDiagnosticId(this.#session.sessionManager.getSessionId()),
+			session_id: loopHostDiagnosticId(this.#session.sessionManager.getSessionId()),
 			elapsed_ms: performance.now() - started,
 		});
 		logger.info("RPC loop iteration started", { ...fields(), event: "loop_iteration_started", result: "started" });

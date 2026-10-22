@@ -19,11 +19,11 @@ import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { TeamConfigService } from "../../team/config";
 import type { TeamConfigPreviewInput, TeamConfigSaveInput } from "../../team/config-types";
 import { initializeExtensions } from "../runtime-init";
-import { RpcForkCommandCatalogService } from "../rpc/rpc-fork-commands";
-import { RpcModelRoleService, type RpcModelRoleSetOptions } from "../rpc/rpc-fork-models";
-import { RpcGoalController } from "../rpc/rpc-goal";
-import { RpcLoopController } from "../rpc/rpc-loop";
-import { RpcPlanController } from "../rpc/rpc-plan";
+import { CommandCatalogService } from "./hosts/command-catalog";
+import { GoalHost } from "./hosts/goal-host";
+import { LoopHost } from "./hosts/loop-host";
+import { ModelRoleService, type ModelRoleSetOptions } from "./hosts/model-roles";
+import { PlanHost } from "./hosts/plan-host";
 import { DECLINE_ANSWER, ZCodeInteractions } from "./interactions";
 import type { ModelSelection, PendingInteraction } from "./schema";
 import type { ModelExecution } from "./schema/vendor/model-execution";
@@ -67,7 +67,7 @@ export async function workspaceCatalog(cwd: string, settings: Settings) {
 			agentDir: settings.getAgentDir(),
 			disabledExtensions: cfgDisabledExtensions.get(settings),
 		});
-		const catalog = new RpcForkCommandCatalogService({ cwd });
+		const catalog = new CommandCatalogService({ cwd });
 		// Only native metadata discovery is safe here. Executable custom and extension
 		// registrations are advertised by the resident session's real catalog.
 		return catalog.buildCatalog({
@@ -83,11 +83,11 @@ export async function workspaceCatalog(cwd: string, settings: Settings) {
 /** Direct session-affine command adapter; controllers remain the shared business owners. */
 export class ZCodeCommandHost {
 	readonly interactions: ZCodeInteractions;
-	readonly #catalog: RpcForkCommandCatalogService;
-	readonly #plan: RpcPlanController;
-	readonly #loop: RpcLoopController;
-	readonly #goal: RpcGoalController;
-	readonly #roles: RpcModelRoleService;
+	readonly #catalog: CommandCatalogService;
+	readonly #plan: PlanHost;
+	readonly #loop: LoopHost;
+	readonly #goal: GoalHost;
+	readonly #roles: ModelRoleService;
 	readonly #operations = new Set<AbortController>();
 	readonly #planTasks = new Set<Promise<void>>();
 	readonly #goalPromotions = new Map<string, Promise<void>>();
@@ -102,8 +102,8 @@ export class ZCodeCommandHost {
 		readonly options: ZCodeCommandHostOptions = {},
 	) {
 		this.interactions = new ZCodeInteractions(publishInteractions, text => this.#output(text));
-		this.#catalog = new RpcForkCommandCatalogService({ cwd, getMcpManager: () => options.mcpManager });
-		this.#plan = new RpcPlanController(
+		this.#catalog = new CommandCatalogService({ cwd, getMcpManager: () => options.mcpManager });
+		this.#plan = new PlanHost(
 			session,
 			options.uiContext ?? this.interactions.ui,
 			text => this.#output(text),
@@ -150,7 +150,7 @@ export class ZCodeCommandHost {
 				throw new DOMException("Plan approval was cancelled", "AbortError");
 			},
 		);
-		this.#loop = new RpcLoopController(session, {
+		this.#loop = new LoopHost(session, {
 			output: text => this.#output(text),
 			submit: async (text, current) => {
 				if (!this.#disposed && current()) await this.#submit(text);
@@ -172,13 +172,13 @@ export class ZCodeCommandHost {
 			onContinuationDropped: () => this.#goal.refresh(),
 			continuationAllowed: () => !this.#disposed && !this.#plan.reviewPending,
 		});
-		this.#goal = new RpcGoalController(
+		this.#goal = new GoalHost(
 			session,
 			undefined,
 			() => !this.#disposed && !this.#loop.enabled,
 			() => this.#plan.assertCanEnterGoal(),
 		);
-		this.#roles = new RpcModelRoleService({
+		this.#roles = new ModelRoleService({
 			getSettings: () => session.settings,
 			getModelRegistry: () => session.modelRegistry,
 			emit: frame => {
@@ -540,7 +540,7 @@ export class ZCodeCommandHost {
 				});
 			case "set_model_role":
 			case "set_role_model":
-				return this.#roles.setRole(params as unknown as RpcModelRoleSetOptions);
+				return this.#roles.setRole(params as unknown as ModelRoleSetOptions);
 			case "get_team_config":
 				return team.getConfig(params.preview as TeamConfigPreviewInput | undefined);
 			case "get_team_models":

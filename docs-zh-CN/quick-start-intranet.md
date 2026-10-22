@@ -20,7 +20,7 @@ setenv ASCEND_API_KEY "<你的密钥>"
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
 - `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](requirements/fork.md#ascend-内置模型)。不要将真实密钥提交到仓库或共享文档。
 
-上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI、RPC 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
+上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 
 ### Linux 内网模式的数据与备份
 
@@ -133,7 +133,7 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 
 这些命令会向模型追加任务要求。`/orchestrate` 依赖 `task` 工具，`/workflowz` 依赖 `task` 和 `eval` 工具；使用时需启用所依赖的工具及相关设置。
 
-独立任务批处理使用 `/jch-workflowzbatch`，参数、执行限制和 rpc-ui 接入见第 4.6 节。
+独立任务批处理使用 `/jch-workflowzbatch`，参数与执行限制见第 4.6 节。
 
 ## 4. 企业核心功能（本 fork）
 
@@ -363,9 +363,9 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 这些是发送给模型的执行要求，**不是工具层拦截或绝对保证**。结果应列出完成项、失败或受阻项、修改文件和实际文件级检查，并明确注明测试未运行、跨文件及运行时行为未验证；不能把批处理结束当成功能验收通过。
 
-OMP 终端与 `rpc-ui` 后端支持同一命令。RPC 接入方从命令目录和补全发现它，再通过现有 `prompt.message` 发送整条命令，不需要新增批处理协议；这不代表桌面 GUI 联调或真实模型的大规模批处理已验收。
+OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目录、补全与提交使用同一机制，无需新增批处理协议；这不代表桌面 GUI 联调或真实模型的大规模批处理已验收。
 
-完整行为与优先级见[需求：JCH 命令](requirements/fork.md#jch-命令)，RPC 接入见[ZCode 接入需求](requirements/rpc-ui-protocol.md#必须接入的命令)。
+完整行为与优先级见[需求：JCH 命令](requirements/fork.md#jch-命令)，app-server 命令接入见[ZCode 接入需求](requirements/rpc-ui-protocol.md#必须接入的命令)。
 
 ### 4.7 `/goal-autopilot`：无人值守目标
 
@@ -401,7 +401,7 @@ OMP 终端与 `rpc-ui` 后端支持同一命令。RPC 接入方从命令目录�
 
 它不同于第 4.6 节的独立批处理命令，**不会自动附带“禁止测试、禁止全仓检查”的限制**；检查和测试按本次目标及项目规则执行。用 `/todo`、`/hub` 查看任务与子代理进度，是否完成以实际结果为准。
 
-OMP 终端、`rpc` 与 `rpc-ui` 后端均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
+OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
 
 ## 5. 直接复制的例子
 

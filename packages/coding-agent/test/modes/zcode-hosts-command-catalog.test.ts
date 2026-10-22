@@ -1,4 +1,4 @@
-// Unit coverage for RpcForkCommandCatalogService (rpc-fork-commands.ts):
+// Unit coverage for CommandCatalogService (modes/zcode/hosts/command-catalog.ts):
 // live-session catalog snapshots with execution verdicts, zero-side-effect
 // name/argument completion, strict resolution, and revision drift.
 
@@ -9,11 +9,11 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgSkills } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import {
-	RpcCommandCatalogError,
-	RpcForkCommandCatalogService,
+	CommandCatalogError,
+	CommandCatalogService,
 	scoreCommandText,
-} from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-commands";
-import type { RpcCommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-fork-types";
+} from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/command-catalog";
+import type { CommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/types";
 
 let globalSettingsReady: Promise<unknown> | undefined;
 
@@ -35,16 +35,16 @@ async function writeProjectSkill(root: string, name: string, description: string
 	);
 }
 
-function byName(commands: readonly RpcCommandDescriptor[]): Map<string, RpcCommandDescriptor> {
+function byName(commands: readonly CommandDescriptor[]): Map<string, CommandDescriptor> {
 	return new Map(commands.map(command => [command.name, command]));
 }
 
-describe("RpcForkCommandCatalogService", () => {
+describe("CommandCatalogService", () => {
 	test("live session catalog lists builtins, skills, and terminal-only verdicts", async () => {
-		await using temp = await TempDir.create("rpc-fork-catalog-");
+		await using temp = await TempDir.create("zcode-hosts-catalog-");
 		const cwd = path.resolve(temp.path());
 		await writeProjectSkill(cwd, "probe", "Probe skill for the catalog");
-		const service = new RpcForkCommandCatalogService({ cwd });
+		const service = new CommandCatalogService({ cwd });
 		const session = {
 			customCommands: [],
 			setSlashCommands: () => {},
@@ -91,10 +91,10 @@ describe("RpcForkCommandCatalogService", () => {
 	});
 
 	test("name and directory completion honor cursor ranges and the session's current project", async () => {
-		await using temp = await TempDir.create("rpc-fork-complete-name-");
+		await using temp = await TempDir.create("zcode-hosts-complete-name-");
 		const cwd = path.resolve(temp.path());
 		let currentCwd = cwd;
-		const service = new RpcForkCommandCatalogService({ cwd });
+		const service = new CommandCatalogService({ cwd });
 		const session = {
 			customCommands: [],
 			setSlashCommands: () => {},
@@ -116,7 +116,7 @@ describe("RpcForkCommandCatalogService", () => {
 		expect(scoreCommandText("model", "zzz")).toBe(0);
 		// Non-command text and invalid cursors.
 		expect((await service.complete({ text: "hello", cursor: 5, session })).items).toEqual([]);
-		expect(() => service.complete({ text: "/mo", cursor: 99, session })).toThrow(RpcCommandCatalogError);
+		expect(() => service.complete({ text: "/mo", cursor: 99, session })).toThrow(CommandCatalogError);
 		await fs.mkdir(path.join(cwd, "startup-only"));
 		const movedCwd = path.join(cwd, "moved");
 		await fs.mkdir(path.join(movedCwd, "destination-only"), { recursive: true });
@@ -153,10 +153,10 @@ describe("RpcForkCommandCatalogService", () => {
 	});
 
 	test("strict resolution distinguishes builtins, skills, and unknown input", async () => {
-		await using temp = await TempDir.create("rpc-fork-resolve-");
+		await using temp = await TempDir.create("zcode-hosts-resolve-");
 		const cwd = path.resolve(temp.path());
 		await writeProjectSkill(cwd, "probe", "Probe skill");
-		const service = new RpcForkCommandCatalogService({ cwd });
+		const service = new CommandCatalogService({ cwd });
 		const session = {
 			customCommands: [],
 			setSlashCommands: () => {},
@@ -181,9 +181,9 @@ describe("RpcForkCommandCatalogService", () => {
 	});
 
 	test("catalog changes are observable through the revision", async () => {
-		await using temp = await TempDir.create("rpc-fork-revision-");
+		await using temp = await TempDir.create("zcode-hosts-revision-");
 		const cwd = path.resolve(temp.path());
-		const service = new RpcForkCommandCatalogService({ cwd });
+		const service = new CommandCatalogService({ cwd });
 		const session = {
 			customCommands: [],
 			setSlashCommands: () => {},
