@@ -176,6 +176,22 @@ export async function discoverAgents(
 	};
 }
 
+/** Apply explicit session definitions without mutating shared filesystem discovery results. */
+export function mergeAgentDefinitions(
+	discovered: AgentDefinition[],
+	definitions?: readonly AgentDefinition[],
+): AgentDefinition[] {
+	if (!definitions?.length) return discovered;
+	// Host 配置属于当前会话；同名覆盖只在消费边界合并，不能写入进程级 discovery 缓存。
+	const names = new Set<string>();
+	const explicit = definitions.filter(agent => {
+		if (names.has(agent.name)) return false;
+		names.add(agent.name);
+		return true;
+	});
+	return [...explicit, ...discovered.filter(agent => !names.has(agent.name))];
+}
+
 /**
  * Get an agent by name from discovered agents.
  */

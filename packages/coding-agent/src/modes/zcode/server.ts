@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import type { SessionInfo } from "../../session/session-listing";
+import type { AgentSession } from "../../session/agent-session";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { Settings } from "../../config/settings";
 import { ZCodeCommandHost, workspaceCatalog } from "./commands";
@@ -16,7 +17,7 @@ import { ZCodeRuntimeControls, workspaceMode } from "./controls";
 import { LegacySessionBridge } from "./legacy-session";
 import * as P from "./schema";
 import { LegacyProtocol as L } from "./schema";
-import { ZCodeSessionManager, type ZCodeSessionRecord, type ZCodeExecutionSubmission } from "./sessions";
+import { ZCodeSessionManager, type ZCodeSessionRecord, type ZCodeExecutionSubmission, type ZCodeNativeChild } from "./sessions";
 import { ZCodeStorageStartup } from "./storage";
 import { ZCodeTopics } from "./topics";
 import type { ModelSelection } from "./schema/vendor/model-selection";
@@ -28,6 +29,7 @@ import { ZCodeWorkflowService } from "./workflows/service";
 import { ZCodeConversationTelemetry } from "./memory-telemetry";
 import { createZCodeAutomationTools } from "./automation";
 import { createZCodeWorkflowTools } from "./workflows/tools";
+import type { AgentDefinition } from "../../task/types";
 
 export interface ZCodeServerOptions {
 	cwd?: string;
@@ -110,8 +112,16 @@ export class ZCodeServer {
 	#inputAdmissionObservers = new Map<string, () => void>();
 	#casDecisions = new Map<string, Promise<P.CommandAck>>();
 	#cold = new Map<string, { projection: ZCodeProjection; version: number }>();
-	// I20:Host 子代理运行时模型覆盖,每个 Host 连接读取一次(Host 侧有解析缓存)。
-	#subagentRuntimeConfig?: Promise<L.SubagentRuntimeConfig | undefined>;
+	readonly #nativeProjections = new Map<string, {
+		projection?: ZCodeProjection;
+		child: ZCodeNativeChild;
+		generation: number;
+		unsubscribe?: () => void;
+		pending?: Promise<ZCodeProjection>;
+		/** Session targeted by the in-flight open; null = persisted-only rebuild. */
+		pendingSession?: AgentSession | null;
+	}>();
+	readonly #agentDefinitions = new Map<string, readonly AgentDefinition[]>();
 	#reverse = new Map<
 		string,
 		{ resolve: (value: unknown) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
@@ -159,6 +169,7 @@ export class ZCodeServer {
 		this.manager = new ZCodeSessionManager({
 			cwd: path.resolve(options.cwd ?? process.cwd()),
 			modelIoRetention: cwd => this.configuration.getWorkspacePreferences(cwd).fullRetentionEnabled,
+			getAgentDefinitions: id => this.#agentDefinitions.get(id) ?? [],
 			onWorkflowActor: async record => {
 				await this.#attach(record);
 			},
@@ -170,8 +181,22 @@ export class ZCodeServer {
 				hosted?.unsubscribe();
 				hosted?.projection.dispose();
 				this.#hosted.delete(id);
+				this.#agentDefinitions.delete(id);
 				this.legacy.disposeSession(id);
 				this.attachments.disposeSession(id);
+				for (const [childId, entry] of this.#nativeProjections) {
+					if (entry.child.root?.id !== id) continue;
+					entry.generation++;
+					entry.unsubscribe?.();
+					entry.unsubscribe = undefined;
+					entry.projection?.dispose();
+					entry.projection = undefined;
+					entry.pending = undefined;
+					entry.pendingSession = undefined;
+					void this.manager.nativeChild(childId).then(child => {
+						if (child && !this.#closed) return this.#nativeProjection(childId, child);
+					}).catch(error => process.stderr.write(`${String(error)}\n`));
+				}
 			},
 			workflowInteractionUI: parentId => this.#hosted.get(parentId)?.commands.interactions.createSubagentUI,
 			runtimeTools: sessionId => [
@@ -215,8 +240,8 @@ export class ZCodeServer {
 			onOffPeakEvent: params => {
 				void this.writer.write({ method: P.V4_NOTIFICATIONS.offPeakLifecycle, params });
 			},
-			resolveRequestAuth: (sessionId, cwd, model, signal) => {
-				const thought = this.manager.get(sessionId)?.session.configuredThinkingLevel();
+			resolveRequestAuth: (sessionId, cwd, model, signal, context) => {
+				const thought = context?.thinkingLevel ?? this.manager.get(sessionId)?.session.configuredThinkingLevel();
 				return this.configuration.resolveRequestAuth(
 					{
 						sessionId,
@@ -231,9 +256,10 @@ export class ZCodeServer {
 					signal,
 				);
 			},
-			transformRequestPayload: (sessionId, _cwd, payload, model) => {
+			transformRequestPayload: (sessionId, _cwd, payload, model, _signal, context) => {
 				if (!model) return payload;
-				const thought = this.manager.get(sessionId)?.session.configuredThinkingLevel();
+				// hook 可由 child 继承，但思考配置必须取当前请求 owner，不能捕获父模型的 off。
+				const thought = context?.thinkingLevel ?? this.manager.get(sessionId)?.session.configuredThinkingLevel();
 				return this.configuration.transformRequestPayload(payload, model, {
 					providerId: model.provider,
 					modelId: model.id,
@@ -249,7 +275,7 @@ export class ZCodeServer {
 		this.startup = new ZCodeStorageStartup(frame => this.writer.write(frame));
 		this.queries = new ZCodeQueries({
 			manager: this.manager,
-			getProjection: id => this.#hosted.get(id)?.projection ?? this.#cold.get(id)?.projection,
+			getProjection: id => this.#hosted.get(id)?.projection ?? this.#nativeProjections.get(id)?.projection ?? this.#cold.get(id)?.projection,
 			reasoning: (provider, model, level) => this.configuration.readReasoningConfig(provider, model, level),
 		});
 		this.attachments = new ZCodeAttachmentResources({
@@ -387,9 +413,7 @@ export class ZCodeServer {
 				sessionId: record.id,
 			}),
 		);
-		// I20:会话建立时经反向请求通道读取 Host 的子代理模型覆盖(GUI 写入的
-		// built-in/plugin 覆盖)并应用到本会话;Host 未实现(-32601)或读取失败时
-		// 静默跳过,绝不阻塞会话建立。
+		// Host 只提供已解析定义；实际派生、模型与工具限制仍交给当前原生 session。
 		await this.#applySubagentRuntimeConfig(record);
 		this.#cold.get(record.id)?.projection.dispose();
 		this.#cold.delete(record.id);
@@ -398,6 +422,8 @@ export class ZCodeServer {
 			cwd: record.cwd,
 			session: record.session,
 			registry: record.registry,
+			agentId: record.registry.list().find(ref => ref.session === record.session)?.id,
+			childSessions: await this.manager.childIdentities(record.id),
 			...(await this.manager.forkProjection(record.id)),
 			reasoning: session => {
 				const model = session.model;
@@ -418,6 +444,7 @@ export class ZCodeServer {
 			{
 				run: record.run,
 				setToolUIContext: record.creationResult.setToolUIContext,
+				uiContext: record.creationResult.interactionUI,
 				recordInputAdmission: async (inputId, sourceCommand) => {
 					await this.manager.recordInputAdmission(record.id, inputId, sourceCommand);
 					this.#inputAdmissionObservers.get(JSON.stringify([record.id, inputId]))?.();
@@ -501,7 +528,7 @@ export class ZCodeServer {
 			snapshot: () => projection.snapshot(),
 			subscribe: listener => projection.subscribe(listener),
 		});
-		hosted.unsubscribe = projection.subscribe(() => {
+		const unsubscribeProjection = projection.subscribe(() => {
 			// 只向归属该会话 cwd 的 workspace index 投递增量,避免跨工作区污染(findings P2)。
 			for (const workspaceId of this.#indexInfos.keys()) {
 				if (!this.#ownsWorkspaceSession(workspaceId, record)) continue;
@@ -510,7 +537,23 @@ export class ZCodeServer {
 				]);
 			}
 		});
+		const unsubscribeRegistry = record.registry.onChange(event => {
+			// 先订阅冷 child、后恢复父树时，只绑定该树原生复活出来的同一身份。
+			for (const [id, entry] of this.#nativeProjections) {
+				if (entry.child.root || event.ref.kind !== "sub") continue;
+				if (event.ref.session?.sessionId !== id &&
+					(!event.ref.sessionFile || path.resolve(event.ref.sessionFile) !== path.resolve(entry.child.file))) continue;
+				void this.manager.nativeChild(id).then(child => {
+					if (child) return this.#nativeProjection(id, child);
+				}).catch(error => process.stderr.write(`${String(error)}\n`));
+			}
+		});
+		hosted.unsubscribe = () => {
+			unsubscribeProjection();
+			unsubscribeRegistry();
+		};
 		await commands.initialize();
+		await this.workflows.reconcileParentOwnership(record.id);
 		projection.setWorkflowState(await this.workflows.projection(record.id));
 		if (this.#closed) throw new ZCodeProtocolError(-32000, "Owner disconnected");
 		commands.interactions.setAutoResolutionEnabled(
@@ -519,8 +562,8 @@ export class ZCodeServer {
 		return hosted;
 	}
 	#readSubagentRuntimeConfig(sessionId: string): Promise<L.SubagentRuntimeConfig | undefined> {
-		// 每个 Host 连接只发起一次;结果形状以 vendor schema(subagent-runtime-config.ts)为准。
-		this.#subagentRuntimeConfig ??= this.requestHost(
+		// Host 自有解析缓存已保证低成本；不能把首个主会话的配置缓存到其他 root。
+		return this.requestHost(
 			L.zcodeProtocolMethods.subagentsReadRuntimeConfig,
 			L.zcodeSubagentsReadRuntimeConfigParamsSchema.parse({ sessionId }),
 		)
@@ -531,35 +574,52 @@ export class ZCodeServer {
 					process.stderr.write(`Subagent runtime config unavailable: ${String(error)}\n`);
 				return undefined;
 			});
-		return this.#subagentRuntimeConfig;
 	}
 	async #applySubagentRuntimeConfig(record: ZCodeSessionRecord): Promise<void> {
-		try {
-			const config = await this.#readSubagentRuntimeConfig(record.id);
-			// built-in-fallback 是 Host 侧读取失败的显式回退:无覆盖可应用,静默跳过。
-			if (!config || config.kind !== "ready") return;
-			const mapped = await this.catalogs.mapSubagentModelSelectionOverrides(
-				record.cwd,
-				{
-					session: record.session,
-					settings: record.settings,
-					sessionId: record.id,
-				},
-				config,
-			);
-			const entries = Object.entries(mapped).map(
-				([agentName, selection]) => [agentName, subagentModelPattern(selection)] as const,
-			);
-			if (!entries.length) return;
-			// task.agentModelOverrides 是 OMP 既有的逐 agent 模型覆盖机制(task child 创建时
-			// settingsOverride 优先于 agent 自带 model);写 runtime-override 层,不落盘。
-			cfgTaskAgentModelOverrides.override(record.settings, {
-				...cfgTaskAgentModelOverrides.get(record.settings),
-				...Object.fromEntries(entries),
-			});
-		} catch (error) {
-			process.stderr.write(`Subagent runtime config application failed: ${String(error)}\n`);
+		const config = await this.#readSubagentRuntimeConfig(record.id);
+		if (!config || config.kind !== "ready") {
+			this.#agentDefinitions.delete(record.id);
+			cfgTaskAgentModelOverrides.clearOverride(record.settings);
+			return;
 		}
+		const toolNames = record.session.getAllToolNames();
+		const nativeTool = (name: string): string => {
+			const resolved = toolNames.find(tool => tool === name || tool.toLowerCase() === name.toLowerCase());
+			if (!resolved) throw new Error(`Subagent configuration references unavailable native tool: ${name}`);
+			return resolved;
+		};
+		// Host Markdown 不在 .omp discovery 路径内；只转换其已解析 snapshot，既不复制文件也不另建 registry。
+		const definitions: AgentDefinition[] = config.profiles.map(profile => {
+			const denied = new Set((profile.disallowedTools ?? []).map(nativeTool));
+			const tools = profile.tools?.map(nativeTool);
+			return {
+				name: profile.name,
+				description: profile.description,
+				systemPrompt: profile.systemPrompt,
+				source: profile.source === "built-in" ? "bundled" : profile.source,
+				filePath: profile.path,
+				model: profile.modelSelection ? [subagentModelPattern(profile.modelSelection)] : undefined,
+				thinkingLevel: profile.modelSelection?.options?.reasoningLevel
+					? parseZCodeThinkingLevel(profile.modelSelection.options.reasoningLevel)
+					: undefined,
+				restrictToolNames: profile.tools !== undefined || profile.disallowedTools !== undefined,
+				tools: tools !== undefined ? tools.filter(tool => !denied.has(tool))
+					: denied.size ? toolNames.filter(tool => !denied.has(tool)) : undefined,
+				autoloadSkills: profile.skills ? [...profile.skills] : undefined,
+			};
+		});
+		const mapped = await this.catalogs.mapSubagentModelSelectionOverrides(
+			record.cwd,
+			{ session: record.session, settings: record.settings, sessionId: record.id },
+			config,
+		);
+		this.#agentDefinitions.set(record.id, definitions);
+		// 此层只承载本次 Host 覆盖；移除覆盖后回落原生配置，不能保留上个父 turn 的值。
+		cfgTaskAgentModelOverrides.clearOverride(record.settings);
+		if (Object.keys(mapped).length) cfgTaskAgentModelOverrides.override(record.settings, {
+			...cfgTaskAgentModelOverrides.get(record.settings),
+			...Object.fromEntries(Object.entries(mapped).map(([name, selection]) => [name, subagentModelPattern(selection)])),
+		});
 	}
 	/** 登记工作区身份(key/identity/路径均指向同一 cwd),维持 #workspaceIds 双向表。 */
 	#registerWorkspace(workspace: { workspacePath: string; workspaceKey: string; workspaceIdentity?: string }): void {
@@ -576,9 +636,13 @@ export class ZCodeServer {
 	#workspaceCwd(workspaceId: string): string {
 		return path.resolve(this.#workspaceCwds.get(workspaceId) ?? this.options.cwd ?? process.cwd());
 	}
+	#isRootSession(id: string): boolean {
+		// actor 不是独立主任务：实时采用原生 scoped UI，冷态只查同一工作流 journal。
+		return !this.manager.isNestedSession(id) && !this.workflows.isActorSession(id);
+	}
 	/** 会话 info 是否归属该 workspaceId 的 cwd(路径归一化后比较)。 */
-	#ownsWorkspaceSession(workspaceId: string, info: { cwd: string }): boolean {
-		return path.resolve(info.cwd) === this.#workspaceCwd(workspaceId);
+	#ownsWorkspaceSession(workspaceId: string, info: { id: string; cwd: string }): boolean {
+		return this.#isRootSession(info.id) && path.resolve(info.cwd) === this.#workspaceCwd(workspaceId);
 	}
 	async #refreshIndexes(): Promise<void> {
 		if (!this.#indexInfos.size) return;
@@ -835,6 +899,7 @@ export class ZCodeServer {
 		options: PromptOptions & { highspeedMeta?: HighspeedMessageMeta } = {},
 		execution?: ZCodeExecutionSubmission,
 	): Promise<P.CommandResult | undefined> {
+		await this.#applySubagentRuntimeConfig(hosted.record);
 		const references = await hosted.record.run(() =>
 			this.catalogs.prepareReferences(hosted.record.cwd, text, {
 				session: hosted.record.session,
@@ -1670,6 +1735,7 @@ export class ZCodeServer {
 					sessions: sessions
 						.filter(
 							info =>
+								this.#isRootSession(info.id) &&
 								(!params.sessionIds || params.sessionIds.includes(info.id)) &&
 								// 路径归一化比较(与 #readCatalog 一致):裸字符串相等会漏掉
 								// 分隔符/大小写写法不同的同一工作区。
@@ -1845,14 +1911,15 @@ export class ZCodeServer {
 				if (knownMode && knownMode !== params.clientMode)
 					throw new ZCodeProtocolError(-32602, "Connection delivery profile changed");
 				this.#connections.set(params.connectionId, params.clientMode);
-				if (params.topic.startsWith("conversation/"))
-					await this.#attach(
-						this.manager.get(params.topic.slice(13)) ??
-							(await this.manager.resume(params.topic.slice(13), {
-								additionalDirectories: params.additionalDirectories,
-							})),
+				if (params.topic.startsWith("conversation/")) {
+					const id = params.topic.slice(13);
+					const child = await this.manager.nativeChild(id);
+					if (child) await this.#nativeProjection(id, child);
+					else await this.#attach(
+						this.manager.get(id) ??
+							(await this.manager.resume(id, { additionalDirectories: params.additionalDirectories })),
 					);
-				else if (params.topic.startsWith("sessions-index/")) {
+				} else if (params.topic.startsWith("sessions-index/")) {
 					const workspaceId = params.topic.slice(15);
 					// 初始快照按该工作区 cwd 过滤:manager.list() 的 listAll 合并了所有项目
 					// 的会话,不过滤会把其他工作区的会话发进本工作区侧栏(findings P2)。
@@ -1999,7 +2066,7 @@ export class ZCodeServer {
 			}
 			case "v4/sessionsIndex/reconcile": {
 				const params = P.sessionsIndexReconcileParamsSchema.parse(raw);
-				const infos = await this.manager.list();
+				const infos = (await this.manager.list()).filter(info => this.#isRootSession(info.id));
 				return {
 					sessions: params.sessionIds.map(sessionId => {
 						const info = infos.find(row => row.id === sessionId);
@@ -2021,9 +2088,89 @@ export class ZCodeServer {
 				throw new ZCodeProtocolError(-32601, `Unknown method: ${method}`);
 		}
 	}
+	async #nativeProjection(id: string, child: ZCodeNativeChild): Promise<ZCodeProjection> {
+		let entry = this.#nativeProjections.get(id);
+		if (!entry) {
+			entry = { child, generation: 0 };
+			this.#nativeProjections.set(id, entry);
+		}
+		if (child.session && entry.child.session === child.session && entry.projection) return entry.projection;
+		const target = child.session ?? null;
+		if (entry.pending && entry.pendingSession === target) return entry.pending;
+		if (entry.pending) {
+			// 冷态重建期间 child 被原生复活时，必须由 live 重绑取代旧 flight；
+			// 否则 registered 通知会被在途冷读吞掉，详情长期停在旧投影。
+			entry.generation++;
+			entry.pending = undefined;
+			entry.pendingSession = undefined;
+		}
+		const current = entry;
+		const generation = ++current.generation;
+		current.pendingSession = target;
+		current.pending = (async () => {
+			if (child.session) {
+				this.#cold.get(id)?.projection.dispose();
+				this.#cold.delete(id);
+			}
+			const projection = child.session
+				? new ZCodeProjection({
+						sessionId: id,
+						cwd: child.session.sessionManager.getCwd(),
+						session: child.session,
+						registry: child.root?.registry,
+						agentId: child.agentId,
+						childSessions: await this.manager.childIdentities(id),
+					})
+				: await this.#coldProjection(id);
+			// registry 的 release/revive 可跨 await 换代；旧详情不能重新接管已释放的 child。
+			if (this.#closed || this.#nativeProjections.get(id) !== current || current.generation !== generation) {
+				projection.dispose();
+				throw new Error("Native child projection owner changed");
+			}
+			if (child.session && child.root?.registry.get(child.agentId)?.session !== child.session) {
+				projection.dispose();
+				current.pending = undefined;
+				current.pendingSession = undefined;
+				const next = await this.manager.nativeChild(id);
+				if (!next) throw new Error("Native child owner disappeared");
+				return this.#nativeProjection(id, next);
+			}
+			if (current.projection === projection) return projection;
+			current.unsubscribe?.();
+			if (current.projection !== projection) current.projection?.dispose();
+			current.child = child;
+			current.projection = projection;
+			current.unsubscribe = child.root?.registry.onChange(event => {
+				if (event.ref.id !== child.agentId) return;
+				if (event.ref.session === current.child.session && event.type !== "removed") return;
+				// 只观察原生 owner 的换代；不调用 ensureLive、不获得 writer 或 dispose child。
+				current.generation++;
+				current.pending = undefined;
+				void this.manager.nativeChild(id).then(next => {
+					if (next) return this.#nativeProjection(id, next);
+				}).catch(error => process.stderr.write(`${String(error)}\n`));
+			});
+			this.topics.register(`conversation/${id}`, {
+				snapshot: () => projection.snapshot(),
+				subscribe: listener => projection.subscribe(listener),
+			});
+			return projection;
+		})().finally(() => {
+			if (current.generation === generation) {
+				current.pending = undefined;
+				current.pendingSession = undefined;
+			}
+		});
+		return current.pending;
+	}
 	async #projection(id: string): Promise<ZCodeProjection> {
 		const hosted = this.#hosted.get(id);
 		if (hosted) return hosted.projection;
+		const child = await this.manager.nativeChild(id);
+		if (child) return this.#nativeProjection(id, child);
+		return this.#coldProjection(id);
+	}
+	async #coldProjection(id: string): Promise<ZCodeProjection> {
 		const read = await this.manager.read(id);
 		const version = read.info.modified.getTime();
 		const cached = this.#cold.get(id);
@@ -2042,6 +2189,7 @@ export class ZCodeServer {
 			state,
 			goalState,
 			revertedTargets,
+			childSessions: await this.manager.childIdentities(id),
 			...(await this.manager.forkProjection(id)),
 		});
 		projection.setWorkflowState(await this.workflows.projection(id));
@@ -2069,6 +2217,12 @@ export class ZCodeServer {
 			hosted.projection.dispose();
 		}
 		this.#hosted.clear();
+		for (const entry of this.#nativeProjections.values()) {
+			entry.generation++;
+			entry.unsubscribe?.();
+			entry.projection?.dispose();
+		}
+		this.#nativeProjections.clear();
 		for (const cold of this.#cold.values()) cold.projection.dispose();
 		this.#cold.clear();
 		try {

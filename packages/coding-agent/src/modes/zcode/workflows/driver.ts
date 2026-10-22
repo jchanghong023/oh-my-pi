@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Type } from "@oh-my-pi/omptype/typebox";
 import type { Model } from "@oh-my-pi/pi-ai";
 import type { CustomTool } from "../../../extensibility/custom-tools/types";
@@ -43,6 +43,7 @@ interface Ask {
 	toolCalls: number;
 	worldToolCalls: number;
 	turns: number;
+	escalations: Map<string, { resolve(answer: string): void; reject(error: Error): void }>;
 }
 interface Actor {
 	releaseRequest?: () => void;
@@ -159,12 +160,90 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 				return { content: [{ type: "text", text: "Result accepted." }], details: { accepted: true } };
 			},
 		};
+		// escalate 属于 DSL 的 ask 内协议；只停驻当前 actor，不把问题伪装成新工作节点。
+		const escalate: CustomTool = {
+			name: "escalate",
+			label: "Escalate workflow question",
+			approval: "read",
+			loadMode: "essential",
+			description: "Ask the parent agent a blocking question and continue this ask with its answer.",
+			parameters: Type.Object({
+				question: Type.String({ minLength: 1, maxLength: 4000 }),
+				context: Type.Optional(Type.String({ maxLength: 4000 })),
+			}),
+			execute: async (_toolCallId, params, _onUpdate, _ctx, signal) => {
+				const ask = state?.current;
+				if (!ask || ask.cancelled || ask.accepted || this.#disposed) throw new Error("No active workflow ask");
+				if (
+					typeof params !== "object" ||
+					params === null ||
+					!("question" in params) ||
+					typeof params.question !== "string" ||
+					!params.question.trim() ||
+					params.question.length > 4000 ||
+					("context" in params &&
+						params.context !== undefined &&
+						(typeof params.context !== "string" || params.context.length > 4000))
+				)
+					throw new Error("A workflow question and optional context are required");
+				const question = params.question;
+				const context = "context" in params && typeof params.context === "string" ? params.context : undefined;
+				const qid = `dwfq-${this.context.runId}-${randomUUID()}`;
+				const pending = Promise.withResolvers<string>();
+				ask.escalations.set(qid, pending);
+				const cancel = () => {
+					ask.escalations.delete(qid);
+					pending.reject(new Error("Workflow escalation cancelled"));
+				};
+				try {
+					signal?.throwIfAborted();
+					signal?.addEventListener("abort", cancel, { once: true });
+					const event: RunEvent = {
+						type: "escalation-raised",
+						qid,
+						actor,
+						...(persona.name === undefined ? {} : { actorName: persona.name }),
+						question,
+						...(context === undefined ? {} : { context }),
+						askedAt: Date.now(),
+					};
+					this.journal.appendEvent(this.context.runId, event);
+					this.emit(event);
+					// 复用父 AgentSession 的原生通知准入，不维护另一条父输入队列。
+					void this.parent.run(() =>
+						this.parent.session.sendCustomMessage(
+							{
+								customType: "workflow-escalation",
+								content: JSON.stringify({
+									runId: this.context.runId,
+									question_id: qid,
+									question,
+									context,
+									instruction: "Answer with ResolveWorkflowQuestion({question_id, answer}).",
+								}),
+								display: true,
+							},
+							{ deliverAs: "followUp", triggerTurn: true },
+						),
+					).catch(error => {
+						ask.escalations.delete(qid);
+						pending.reject(error);
+					});
+					const answer = await pending.promise;
+					return { content: [{ type: "text", text: answer }], details: { qid, answer } };
+				} finally {
+					signal?.removeEventListener("abort", cancel);
+					ask.escalations.delete(qid);
+				}
+			},
+		};
 		const record = await this.context.sessions.createWorkflowActor(this.parent, {
 			sessionId: id,
 			model,
 			agentId: `Workflow-${hash.slice(0, 12)}`,
 			agentDisplayName: persona.name ?? refToString(actor),
-			customTools: [submit],
+			customTools: [submit, escalate],
+			requireExisting: journaled !== undefined,
 			...(persona.system === undefined ? {} : { systemPrompt: blocks => [...blocks, persona.system!] }),
 			...(seed === undefined ? {} : { seed: { sessionId: seed.sourceSessionId, messageCount: seed.messageCount } }),
 		});
@@ -220,6 +299,7 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 			toolCalls: 0,
 			worldToolCalls: 0,
 			turns: 0,
+			escalations: new Map(),
 		};
 		this.#asks.set(refToString(instance), ask);
 		// Engine acceptance may release the next ask before the preceding native prompt has drained.
@@ -251,7 +331,7 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 			if (actor.current !== ask || ask.cancelled) return;
 			if (event.type === "tool_execution_start") {
 				ask.toolCalls++;
-				if (event.toolName !== "submit_result") {
+				if (event.toolName !== "submit_result" && event.toolName !== "escalate") {
 					ask.worldToolCalls++;
 					const tool = session.getToolByName(event.toolName);
 					if (tool?.approval !== "read") this.sink.askMutating(ask.instance);
@@ -261,7 +341,7 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 					tokens: 0,
 					toolCalls: 1,
 					turns: 0,
-					worldToolCalls: event.toolName === "submit_result" ? 0 : 1,
+					worldToolCalls: event.toolName === "submit_result" || event.toolName === "escalate" ? 0 : 1,
 				});
 			}
 			if (event.type === "tool_execution_end" && ask.accepted) {
@@ -330,12 +410,29 @@ export class OmpWorkflowDriver implements WorkflowDriver {
 		resolve?.(verdict);
 	}
 
+	respondToEscalation(qid: string, answer: string): boolean {
+		if (this.#disposed) return false;
+		for (const ask of this.#asks.values()) {
+			const pending = ask.escalations.get(qid);
+			if (!pending || ask.cancelled || ask.accepted) continue;
+			const event: RunEvent = { type: "escalation-resolved", qid, answer };
+			this.journal.appendEvent(this.context.runId, event);
+			this.emit(event);
+			ask.escalations.delete(qid);
+			pending.resolve(answer);
+			return true;
+		}
+		return false;
+	}
+
 	cancelAsk(instance: InstanceRef): void {
 		const ask = this.#asks.get(refToString(instance));
 		if (!ask) return;
 		ask.cancelled = true;
 		ask.pending?.({ kind: "reject", violations: [] });
 		ask.pending = undefined;
+		for (const pending of ask.escalations.values()) pending.reject(new Error("Workflow escalation cancelled"));
+		ask.escalations.clear();
 		if (ask.actor.current === ask) ask.drain ??= ask.actor.record.run(() => ask.actor.record.session.abort());
 	}
 

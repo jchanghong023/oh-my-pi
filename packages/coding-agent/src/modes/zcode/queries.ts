@@ -7,7 +7,6 @@ import { resolveSessionLeafId, type SessionEntry } from "../../session/session-e
 import { loadEntriesFromFile } from "../../session/session-loader";
 import { migrateToCurrentVersion } from "../../session/session-migrations";
 import { buildSessionContext, getRestorableSessionModels } from "../../session/session-context";
-import { collectSubSessions } from "../../session/sub-sessions";
 import { goalFromModeData, type GoalModeState } from "../../goals/state";
 import { resolveDispatchDetails, writeDeviceDispatch } from "../../tools/resolve";
 import { restoreFileCheckpoints } from "../../edit/file-rewind";
@@ -153,21 +152,7 @@ export class ZCodeQueries {
 	}
 
 	async subagentsState(sessionId: string): Promise<NonNullable<StatePatch["subagents"]>> {
-		const history = await this.#context.manager.read(sessionId);
-		const children = await collectSubSessions(history.info.path, key => {
-			throw new Error(`Subagent history is unreadable: ${key}`);
-		});
-		const childSessionIds = [
-			...new Set(
-				Object.values(children)
-					.filter(child => child.parent === null)
-					.map(child => {
-						if (!child.header?.id || child.malformedRecords > 0)
-							throw new Error("Subagent history identity is invalid");
-						return child.header.id;
-					}),
-			),
-		].sort();
+		const childSessionIds = [...new Set(Object.values(await this.#context.manager.childIdentities(sessionId)))].sort();
 		// This is a cold persisted directory, not a claim that historical work is still running.
 		return { revision: 0, childSessionIds, running: [], endedTotal: childSessionIds.length };
 	}

@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- Keep native ZCode subagent detail sessions read-only across live and cold history, retain each child's configured model/thinking/tools, and hydrate late subscribers from the owning native stream without starting a second runtime.
+- Preserve workflow actors' parent-scoped user interactions, publish the bounded causality/flow/handoff graph for saved launches, and keep actor sessions out of the public root task index while retaining run history drill-down.
 - Refresh ZCode context usage from the owning native session after replies and compaction, including cold-restored sessions whose model selection does not change, and publish the final watermark atomically with terminal state so idle controls do not race a delayed usage refresh.
 - Route explicit Anthropic context-window exhaustion through the existing overflow recovery path instead of retrying unchanged history with an output-limit continuation.
 - Apply independent ZCode Goal pause/resume controls while work is busy without admitting them to the queued objective stream.

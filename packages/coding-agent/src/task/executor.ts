@@ -549,6 +549,8 @@ export interface ExecutorOptions {
 	mcpManager?: MCPManager;
 	/** User-authorized model agents available to this child and its descendants. */
 	inheritedSessionAgents?: CreateAgentSessionOptions["inheritedSessionAgents"];
+	/** Owning session's explicit definitions, retained by native nested/revived children. */
+	getAgentDefinitions?: CreateAgentSessionOptions["getAgentDefinitions"];
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
@@ -4265,7 +4267,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (agent.tools) {
 		toolNames = structured ? agent.tools : agent.tools.filter(name => name !== "yield");
 		// Auto-include task tool if spawns defined but task not in tools
-		if (agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
+		if (!restrictToolNames && agent.spawns !== undefined && !toolNames.includes("task") && !atMaxDepth) {
 			toolNames = [...toolNames, "task"];
 		}
 	}
@@ -4646,6 +4648,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					credentialSourceSessionId: options.credentialSourceSessionId,
 					oauthAccountPools: options.oauthAccountPools,
 					inheritedSessionAgents: options.inheritedSessionAgents,
+					getAgentDefinitions: options.getAgentDefinitions,
 					model,
 					// Offline agent-definition patterns are automatic selections too.
 					// Keep an unresolved role explicit to the SDK instead of falling

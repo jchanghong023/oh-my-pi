@@ -267,12 +267,14 @@ export function canSpawnAtDepth(maxRecursionDepth: number, taskDepth: number): b
 	return maxRecursionDepth < 0 || taskDepth < maxRecursionDepth;
 }
 
-/** Agent definition (bundled or discovered) */
+/** Agent definition (bundled, discovered, or supplied by the owning session). */
 export interface AgentDefinition {
 	name: string;
 	description: string;
 	systemPrompt: string;
 	tools?: string[];
+	/** Exact host allowlist: suppress native convenience-tool additions (structured yield remains required). */
+	restrictToolNames?: boolean;
 	spawns?: string[] | "*";
 	model?: string[];
 	thinkingLevel?: ConfiguredThinkingLevel;

@@ -38,6 +38,8 @@ export interface ZCodeCommandHostOptions {
 	settingsChanged?: (frame: object) => void;
 	run?: <T>(operation: () => T) => T;
 	mcpManager?: MCPManager;
+	/** Native child UI already allocated under its parent's interaction owner. */
+	uiContext?: ExtensionUIContext;
 	setToolUIContext?: (
 		ui: ExtensionUIContext,
 		hasUI: boolean,
@@ -103,7 +105,7 @@ export class ZCodeCommandHost {
 		this.#catalog = new RpcForkCommandCatalogService({ cwd, getMcpManager: () => options.mcpManager });
 		this.#plan = new RpcPlanController(
 			session,
-			this.interactions.ui,
+			options.uiContext ?? this.interactions.ui,
 			text => this.#output(text),
 			task => {
 				const pending = task();
@@ -262,10 +264,12 @@ export class ZCodeCommandHost {
 	}
 	initialize(): Promise<void> {
 		return (this.#initialized ??= this.#run(async () => {
-			this.options.setToolUIContext?.(this.interactions.ui, true, this.interactions.createSubagentUI);
+			// actor 的 SDK 已绑定父 owner；重新绑定本地 interactions 会把 ask 错投到 actor 新任务。
+			if (!this.options.uiContext)
+				this.options.setToolUIContext?.(this.interactions.ui, true, this.interactions.createSubagentUI);
 			await initializeExtensions(this.session, {
 				mode: "rpc",
-				uiContext: this.interactions.ui,
+				uiContext: this.options.uiContext ?? this.interactions.ui,
 				reportSendError: (_action, error) => this.#output(error.message),
 				reportRuntimeError: error => this.#output(error.error),
 				onShutdown: () => this.cancel(),

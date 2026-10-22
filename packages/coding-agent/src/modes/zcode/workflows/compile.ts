@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { toolCallCreateWorkflowDisplaySchema } from "../schema/vendor/zcode-protocol-v4/create-workflow-display.js";
+import type { WorkflowLaunchMeta } from "../schema/vendor/zcode-protocol-v4/workflow-row-meta.js";
+import { boundCausalityGraph } from "./vendor/workflow-display/create-workflow-graph-bounds.js";
 import {
 	analyzeWorkflowScript,
 	buildAskSpecs,
@@ -24,6 +27,7 @@ export interface CompiledWorkflow {
 	phases: { phaseNames: string[]; holes: number[] };
 	modelBindings: Map<string, Model<Api>>;
 	scriptHash: string;
+	display: NonNullable<WorkflowLaunchMeta["display"]>;
 }
 export type WorkflowCompilation = CompiledWorkflow | { ok: false; diagnostics: CompileDiagnostic[]; message: string };
 export function compileWorkflow(script: string, catalog?: readonly Model<Api>[]): WorkflowCompilation {
@@ -66,6 +70,16 @@ export function compileWorkflow(script: string, catalog?: readonly Model<Api>[])
 		phases: collectPhaseNames(analysis.flow!),
 		modelBindings,
 		scriptHash: createHash("sha256").update(script, "utf8").digest("hex"),
+		// 启动轮过去丢弃分析图，真实 actor 虽完成却无法显示阶段；与模型工具共用同一编译投影。
+		display: toolCallCreateWorkflowDisplaySchema.parse({
+			kind: "create_workflow",
+			ok: true,
+			errorCount: 0,
+			diagnostics: [],
+			...(analysis.causality === undefined
+				? {}
+				: { causalityGraph: boundCausalityGraph(analysis.causality, analysis.flow, analysis.handoff) }),
+		}),
 	};
 }
 export function formatDiagnostics(diagnostics: readonly CompileDiagnostic[]): string {

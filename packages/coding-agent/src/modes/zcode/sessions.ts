@@ -5,7 +5,7 @@ import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { getAgentDir, getBlobsDir } from "@oh-my-pi/pi-utils/dirs";
 import { Settings, withActiveSettings } from "../../config/settings";
-import { AgentRegistry } from "../../registry/agent-registry";
+import { AgentRegistry, type AgentRef } from "../../registry/agent-registry";
 import {
 	createAgentSession,
 	discoverAuthStorage,
@@ -14,7 +14,7 @@ import {
 } from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
 import type { PromptOptions } from "../../session/agent-session-types";
-import type { SessionInfo } from "../../session/session-listing";
+import { readSessionInfo, type SessionInfo } from "../../session/session-listing";
 import { loadEntriesFromFile, resolveBlobRefsInEntries } from "../../session/session-loader";
 import { BlobStore } from "../../session/blob-store";
 import type { SessionEntry } from "../../session/session-entries";
@@ -52,6 +52,7 @@ import type {
 import { adoptZCodeMemoryPreference, type ZCodeAdoptedMemory } from "./memory-telemetry";
 import { cfgMemoryBackend } from "../../memory-backend/settings";
 import { makeActorTranscriptStore, seedActorTranscript } from "./workflows/actor-transcript";
+import type { AgentDefinition } from "../../task/types";
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export type ZCodeExecutionSubmission = ModelExecution & { selection: ModelSelection; offPeakTaskId?: string };
 type ZCodeInputOptions = PromptOptions & { inputId: string; highspeedMeta?: HighspeedMessageMeta };
@@ -109,6 +110,14 @@ export interface ZCodeSessionRecord {
 	run<T>(fn: () => T): T;
 }
 
+export interface ZCodeNativeChild {
+	readonly root?: ZCodeSessionRecord;
+	readonly agentId: string;
+	readonly ref?: AgentRef;
+	readonly session?: AgentSession;
+	readonly file: string;
+}
+
 export interface ZCodeSessionManagerOptions {
 	cwd: string;
 	agentDir?: string;
@@ -121,11 +130,13 @@ export interface ZCodeSessionManagerOptions {
 	memoryPreference?: (sessionId: string, cwd: string) => Promise<boolean | undefined>;
 	onSessionClosed?: (sessionId: string) => void;
 	runtimeTools?: (sessionId: string, cwd: string) => NonNullable<CreateAgentSessionOptions["customTools"]>;
+	getAgentDefinitions?: (sessionId: string) => readonly AgentDefinition[];
 	resolveRequestAuth?: (
 		sessionId: string,
 		cwd: string,
 		model: Model,
 		signal?: AbortSignal,
+		context?: Parameters<NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]>>[2],
 	) => Promise<
 		| {
 				apiKey?: string;
@@ -139,6 +150,7 @@ export interface ZCodeSessionManagerOptions {
 		payload: unknown,
 		model?: Model,
 		signal?: AbortSignal,
+		context?: Parameters<NonNullable<CreateAgentSessionOptions["transformRequestPayload"]>>[3],
 	) => unknown | Promise<unknown>;
 	onOffPeakEvent?: (notification: OffPeakLifecycleNotification) => void;
 	onSelectionFallback?: (
@@ -187,6 +199,63 @@ export class ZCodeSessionManager {
 		// 绑定完成前仅保留内部清理所有权，不能作为就绪会话暴露。
 		if (this.#opening.has(id)) return undefined;
 		return this.#records.get(id);
+	}
+
+	/** Native scoped UI identifies nested actors even while readiness hides their live record. */
+	isNestedSession(id: string): boolean {
+		return this.#records.get(id)?.creationResult.interactionUI !== undefined;
+	}
+
+	/** Resolve the native tree owner; viewing a child must never create a second runtime. */
+	async nativeChild(id: string): Promise<ZCodeNativeChild | undefined> {
+		if (this.#records.has(id)) return undefined;
+		for (const root of this.#records.values()) {
+			for (const ref of root.registry.list()) {
+				if (ref.kind !== "sub" || ref.session?.sessionId !== id) continue;
+				const file = ref.session.sessionManager.getSessionFile() ?? ref.sessionFile;
+				if (file) return { root, agentId: ref.id, ref, session: ref.session, file };
+			}
+		}
+		for (const info of await this.list()) {
+			const children = await collectSubSessions(info.path);
+			for (const [key, child] of Object.entries(children)) {
+				if (child.header?.id !== id) continue;
+				if (child.malformedRecords) throw new Error("Subagent history identity is invalid");
+				const file = path.join(info.path.slice(0, -6), `${key}.jsonl`);
+				const root = this.get(info.id);
+				const candidate = root?.registry.get(child.agentId);
+				const ref =
+					candidate &&
+					(candidate.session?.sessionId === id ||
+						(candidate.sessionFile && path.resolve(candidate.sessionFile) === path.resolve(file)))
+						? candidate
+						: undefined;
+				return { root, agentId: child.agentId, ref, session: ref?.session ?? undefined, file };
+			}
+		}
+		return undefined;
+	}
+
+	/** Direct descendants and progress→session identity derive from the native journal and registry. */
+	async childIdentities(id: string): Promise<Record<string, string>> {
+		const info = await this.#find(id);
+		const children = await collectSubSessions(info.path, key => {
+			throw new Error(`Subagent history is unreadable: ${key}`);
+		});
+		const identities: Record<string, string> = {};
+		for (const child of Object.values(children)) {
+			if (child.parent !== null) continue;
+			if (!child.header?.id || child.malformedRecords) throw new Error("Subagent history identity is invalid");
+			identities[child.agentId] = child.header.id;
+		}
+		const native = await this.nativeChild(id);
+		const root = this.get(id) ?? native?.root;
+		const parentId = native?.agentId ?? root?.registry.list().find(ref => ref.session === root?.session)?.id ?? "Main";
+		for (const ref of root?.registry.list() ?? []) {
+			if (ref.kind === "sub" && (ref.parentId ?? "Main") === parentId && ref.session)
+				identities[ref.id] = ref.session.sessionId;
+		}
+		return identities;
 	}
 
 	/** Existing-only lookup; a cold child never acquires a runtime or a writer lease. */
@@ -291,6 +360,10 @@ export class ZCodeSessionManager {
 		const pending = this.#opening.get(id);
 		if (pending) return pending;
 		const opening = (async () => {
+			// 身份解析也属于同一次 opening；放在 flight 外 await 会错过已完成并清除的旧 flight，
+			// 从而在同进程再次打开已由首个请求持有的 session 并触发 writer lease 冲突。
+			// 子会话执行权属于原生 lifecycle；普通 resume 会建立第二个 root 并抢占 writer。
+			if (await this.nativeChild(id)) throw new Error("Native child sessions are read-only; control them from their parent");
 			const info = await this.#find(id);
 			await this.#assertDirectory(info.cwd);
 			const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
@@ -343,6 +416,8 @@ export class ZCodeSessionManager {
 		options: {
 			sessionId: string;
 			model?: Model;
+			thinkingLevel?: CreateAgentSessionOptions["thinkingLevel"];
+			requireExisting?: boolean;
 			systemPrompt?: CreateAgentSessionOptions["systemPrompt"];
 			customTools?: CreateAgentSessionOptions["customTools"];
 			agentId: string;
@@ -357,6 +432,8 @@ export class ZCodeSessionManager {
 		const opening = (async () => {
 			if (options.seed) await this.get(options.seed.sessionId)?.session.sessionManager.flush();
 			const existing = (await this.list()).find(info => info.id === options.sessionId);
+			// journal 已绑定的 actor 丢失上下文时必须失败，不能用同 ID 新建空会话伪装恢复。
+			if (options.requireExisting && !existing) throw new Error("Persisted workflow actor session is unavailable");
 			if (existing && existing.cwd !== parent.cwd) throw new Error("Workflow actor working directory changed");
 			const manager = existing
 				? await SessionManager.open(existing.path, this.#sessionDir, this.#storage, {
@@ -384,7 +461,7 @@ export class ZCodeSessionManager {
 				| undefined;
 			const restricted = this.#options.sessionOptions?.restrictToolNames === true;
 			const actorTools = restricted
-				? (options.customTools ?? []).filter(tool => tool.name === "submit_result")
+				? (options.customTools ?? []).filter(tool => tool.name === "submit_result" || tool.name === "escalate")
 				: options.customTools;
 			const record = await this.#host(
 				manager,
@@ -404,7 +481,7 @@ export class ZCodeSessionManager {
 					customTools: actorTools,
 					cwd: parent.cwd,
 					model: options.model ?? parent.session.model,
-					thinkingLevel: parent.session.thinkingLevel,
+					thinkingLevel: options.thinkingLevel ?? parent.session.thinkingLevel,
 					additionalDirectories: parent.session.sessionManager.getHeader()?.additionalDirectories,
 					mcpServers: restoreZCodeMcpConfiguration(
 						parent.session.modelRegistry.authStorage,
@@ -478,12 +555,12 @@ export class ZCodeSessionManager {
 			capture.setEnabled(this.#modelIoPreferences.get(cwd) ?? this.#options.modelIoRetention?.(cwd) ?? false);
 			const captureForSession = capture;
 			const supplied = { ...this.#options.sessionOptions, ...options };
-			const resolveRequestAuth: NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]> = (model, signal) =>
+			const resolveRequestAuth: NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]> = (model, signal, context) =>
 				supplied.interactionParentSessionId && supplied.resolveRequestAuth
-					? supplied.resolveRequestAuth(model, signal)
+					? supplied.resolveRequestAuth(model, signal, context)
 					: this.#options.resolveRequestAuth
-						? this.#options.resolveRequestAuth(manager.getSessionId(), cwd, model, signal)
-						: (supplied.resolveRequestAuth?.(model, signal) ?? Promise.resolve(undefined));
+						? this.#options.resolveRequestAuth(manager.getSessionId(), cwd, model, signal, context)
+						: (supplied.resolveRequestAuth?.(model, signal, context) ?? Promise.resolve(undefined));
 			const authStorage =
 				supplied.authStorage ??
 				supplied.modelRegistry?.authStorage ??
@@ -535,6 +612,9 @@ export class ZCodeSessionManager {
 					agentRegistry: registry,
 					agentId: supplied.agentId ?? "Main",
 					bindProcessState: false,
+					getAgentDefinitions: this.#options.getAgentDefinitions
+						? () => this.#options.getAgentDefinitions!(manager.getSessionId())
+						: supplied.getAgentDefinitions,
 					// Register human-input tools before attaching the non-terminal Host UI.
 					interactivePrompts: true,
 					parentTaskPrefix: supplied.parentTaskPrefix,
@@ -564,12 +644,12 @@ export class ZCodeSessionManager {
 						captureForSession.onModelResponse(message, model, signal);
 					},
 					resolveRequestAuth,
-					transformRequestPayload: async (payload, model, signal) => {
+					transformRequestPayload: async (payload, model, signal, context) => {
 						const mapped = supplied.transformRequestPayload
-							? await supplied.transformRequestPayload(payload, model, signal)
+							? await supplied.transformRequestPayload(payload, model, signal, context)
 							: payload;
 						return this.#options.transformRequestPayload
-							? this.#options.transformRequestPayload(manager.getSessionId(), cwd, mapped, model, signal)
+							? this.#options.transformRequestPayload(manager.getSessionId(), cwd, mapped, model, signal, context)
 							: mapped;
 					},
 				}),
@@ -791,8 +871,12 @@ export class ZCodeSessionManager {
 
 	async #find(id: string): Promise<SessionInfo> {
 		const info = (await this.list()).find(item => item.id === id);
-		if (!info) throw new Error(`Session not found: ${id}`);
-		return info;
+		if (info) return info;
+		const child = await this.nativeChild(id);
+		await child?.session?.sessionManager.flush();
+		const persisted = child ? await readSessionInfo(child.file) : undefined;
+		if (!persisted || persisted.id !== id) throw new Error(`Session not found: ${id}`);
+		return persisted;
 	}
 
 	async read(id: string): Promise<{

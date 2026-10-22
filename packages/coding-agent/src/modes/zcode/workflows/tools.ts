@@ -158,7 +158,7 @@ export function createZCodeWorkflowTools(context: ZCodeWorkflowToolContext): Cus
 						backgroundTaskId: launched.runId,
 						response: `Workflow ${launched.runId} is running in the background. Follow its workflow run state; do not submit it again or poll repeatedly.`,
 					},
-					{ kind: "create_workflow", ok: true, errorCount: 0, diagnostics: [] },
+					preparation.prepared.compiled.display,
 				);
 			},
 		},
@@ -184,6 +184,20 @@ export function createZCodeWorkflowTools(context: ZCodeWorkflowToolContext): Cus
 					},
 					{ kind: "resume_workflow_run", runId: resumed.runId },
 				);
+			},
+		},
+		{
+			name: "ResolveWorkflowQuestion",
+			label: "Answer workflow question",
+			loadMode: "essential",
+			approval: "read",
+			parameters: Type.Object({ question_id: Type.String({ minLength: 1 }), answer: Type.String() }),
+			description: "Answer a pending escalation from a workflow actor owned by this parent session.",
+			execute: async (_toolCallId, raw, _onUpdate, _context, signal) => {
+				signal?.throwIfAborted();
+				const input = z.object({ question_id: z.string().min(1), answer: z.string() }).strict().parse(raw);
+				const answered = context.service.resolveQuestion(context.record().id, input.question_id, input.answer);
+				return result({ ok: true, ...answered }, { kind: "resolve_workflow_question", ...answered });
 			},
 		},
 	];

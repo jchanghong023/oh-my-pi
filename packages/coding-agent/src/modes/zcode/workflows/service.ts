@@ -153,6 +153,37 @@ export class ZCodeWorkflowService {
 			},
 		});
 	}
+	/** Called only after the native parent session's exclusive runtime lease is acquired. */
+	reconcileParentOwnership(sessionId: string): void {
+		// 旧进程退出后 journal 仍会留下 running；只有拿到同一父会话原生租约才可判定其失主。
+		// 冷历史读取和其他父会话不能触发收敛，也不能覆盖本 owner 仍持有的执行句柄。
+		for (const run of this.journal.listRuns({
+			parentSessionId: sessionId,
+			statuses: ["pending", "running"],
+			limit: Number.MAX_SAFE_INTEGER,
+		})) {
+			if (this.#active.has(run.runId)) continue;
+			this.journal.updateRunStatus(run.runId, "stopped", {
+				stopReason: "interrupted",
+				failure: {
+					code: "Interrupted",
+					message: `Workflow run ${run.runId} lost its native parent owner before settlement`,
+				},
+			});
+			this.#changed(sessionId, run.runId);
+		}
+	}
+	resolveQuestion(sessionId: string, qid: string, answer: string): { qid: string } {
+		if (this.#closed) throw new Error("Workflow service is closed");
+		for (const handle of this.#active.values()) {
+			if (handle.parentSessionId !== sessionId || handle.abort.signal.aborted) continue;
+			if (handle.driver?.respondToEscalation(qid, answer)) return { qid };
+		}
+		throw new Error("Workflow question is not pending in this parent session");
+	}
+	isActorSession(sessionId: string): boolean {
+		return this.journal.isActorSession(sessionId);
+	}
 	list(params: Wire.ZCodeWorkflowsListParams) {
 		return this.definitions.list(params);
 	}
@@ -288,6 +319,7 @@ export class ZCodeWorkflowService {
 			name: prepared.name.slice(0, 200),
 			...(prepared.path && prepared.path.length <= 1024 ? { path: prepared.path, scope: prepared.scope } : {}),
 			script: prepared.script.slice(0, 256_000),
+			display: prepared.compiled.display,
 			description: prepared.meta.description.slice(0, 500),
 			...(Object.keys(prepared.args).length && JSON.stringify(prepared.args).length <= 4096
 				? { args: prepared.args }
@@ -677,6 +709,7 @@ export class ZCodeWorkflowService {
 					runId: run.runId,
 					toolCallId,
 					name: run.name,
+					display: compiled.display,
 					amend: changes,
 				} satisfies WorkflowLaunchMeta,
 			};
@@ -743,6 +776,7 @@ export class ZCodeWorkflowService {
 				toolCallId,
 				name: run.name,
 				script: run.scriptText,
+				display: compiled.display,
 				amend: { ...changes, predecessorRunId: run.runId },
 			} satisfies WorkflowLaunchMeta,
 		};

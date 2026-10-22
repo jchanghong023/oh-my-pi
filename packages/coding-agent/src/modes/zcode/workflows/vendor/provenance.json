@@ -5,7 +5,7 @@
     "@zcode/dynamic-workflow",
     "@zcode/dynamic-workflow-runtime"
   ],
-  "scope": "Full production src closure; testing-only helpers excluded. Original source retained except external import relocation and the documented harness process-lifecycle adaptation. No original AgentRuntime, storage, or session modules.",
+  "scope": "Full production dynamic-workflow/runtime src closure plus the two pure workflow graph bounds/fold adapters listed below; testing-only helpers excluded. Original source retained except external import/type relocation and documented adaptations. No original AgentRuntime, storage, or session modules.",
   "compiler": {
     "dependency": "zcode-workflow-typescript",
     "specifier": "npm:typescript@5.9.3",
@@ -715,6 +715,25 @@
       "sha256": "915fd213e12d521ed585f061aa04e9c4777c6813457fcdf54d6da3acd2c4ec12",
       "target": "dynamic-workflow/schema/validate.ts",
       "adaptedImports": false
+    },
+    {
+      "source": "apps/zcode-cli/packages/core/src/tool/handlers/create-workflow-graph-bounds.ts",
+      "sha256": "665a8af239bac2b1c254d279623c9b515b2c571e735ff3d23fa3a86d97f9a7b2",
+      "target": "workflow-display/create-workflow-graph-bounds.ts",
+      "adaptedImports": true,
+      "adaptations": [
+        "Relocate imports and type references to the vendored workflow analyzer and fixed ZCode wire schema.",
+        "Inline the original graph bound constants instead of importing the original Agent core contracts; preserve causality, flow and handoff graph bounding semantics."
+      ]
+    },
+    {
+      "source": "apps/zcode-cli/packages/core/src/tool/handlers/create-workflow-graph-fold.ts",
+      "sha256": "6c646e75884f6bc364c48220c936d5121d00b91276252d11d2547f966d97b84c",
+      "target": "workflow-display/create-workflow-graph-fold.ts",
+      "adaptedImports": true,
+      "adaptations": [
+        "Relocate imports and type references to the vendored analyzer, graph bounds adapter and fixed ZCode wire schema; retain the original pure graph folding algorithm without Agent runtime dependencies."
+      ]
     }
   ]
 }

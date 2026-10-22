@@ -1,5 +1,13 @@
 import { reduceWorkflowRunsState } from "../schema/vendor/zcode-protocol-v4/workflow-runs-reducer.js";
-import { workflowRunsStateSchema, type WorkflowRunsState } from "../schema/vendor/zcode-protocol-v4/workflow-runs.js";
+import {
+	WORKFLOW_RUNS_LIMITS,
+	workflowRunsStateSchema,
+	type WorkflowRunsState,
+} from "../schema/vendor/zcode-protocol-v4/workflow-runs.js";
+import { withDerivedWorkflowActorStatuses } from "../schema/vendor/zcode-protocol-v4/workflow-runs-actor-status.js";
+import { withoutCooldown } from "../schema/vendor/zcode-protocol-v4/workflow-runs-concurrency.js";
+import { serializeWorkflowArtifact } from "../schema/vendor/zcode-protocol-v4/workflow-artifact.js";
+import { withoutWaitingHoles } from "../schema/vendor/zcode-protocol-v4/workflow-runs-holes.js";
 import type { BackgroundWorkSummary } from "../schema/vendor/zcode-protocol-v4/snapshot.js";
 import type { OmpWorkflowJournal } from "./journal.js";
 import type { RunRecord, StoredEvent } from "./vendor/dynamic-workflow/index.js";
@@ -78,6 +86,50 @@ export function projectWorkflowSession(journal: OmpWorkflowJournal, sessionId: s
 				afterSequence = stored.sequence;
 			}
 			if (page.length < 256) break;
+		}
+		if (run.status === "completed" || run.status === "errored" || run.status === "stopped") {
+			// owner 失联由宿主收敛 run 行，不会冒充引擎追加 run-settled；冷读必须以持久终态为准。
+			// 只覆盖派生快照，不伪造事件或推进持久事件游标，且清除已无人等待的交互残影。
+			// listRuns 会剥离大数据列（result/failure）；终态行数量有限，这里仅对它们读完整行。
+			const complete = journal.getRun(run.runId) ?? run;
+			state = {
+				...state,
+				runs: state.runs.map(projected => {
+					if (projected.runId !== run.runId) return projected;
+					// 顶层返回值只保存在 run 行；此前的终态覆盖把它丢了，详情页因此只剩泛化提示。
+					// 用与报告预览相同的序列化规则，并遵守既有预览长度上界。
+					const resultPreview = serializeWorkflowArtifact(complete.result)?.slice(
+						0,
+						WORKFLOW_RUNS_LIMITS.maxResultPreviewLength,
+					);
+					const {
+						pendingQuestions: _questions,
+						stopReason: _reason,
+						supersededBy: _successor,
+						error: _error,
+						resumable: _resumable,
+						resultPreview: _result,
+						...historical
+					} = projected;
+					return withDerivedWorkflowActorStatuses(
+						withoutWaitingHoles(
+							withoutCooldown({
+								...historical,
+								status: complete.status,
+								...(complete.status === "stopped" && complete.stopReason
+									? { stopReason: complete.stopReason }
+									: {}),
+								...(complete.supersededBy ? { supersededBy: complete.supersededBy } : {}),
+								...(complete.failure?.message
+									? { error: complete.failure.message.slice(0, WORKFLOW_RUNS_LIMITS.maxErrorLength) }
+									: {}),
+								...(workflowRunResumable(complete) ? { resumable: true as const } : {}),
+								...(resultPreview === undefined ? {} : { resultPreview }),
+							}),
+						),
+					);
+				}),
+			};
 		}
 		// Historical rows remain inspectable in workflowRuns; only truly live executions are background work.
 		if (run.status === "running" || run.status === "pending")

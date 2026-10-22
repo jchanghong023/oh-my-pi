@@ -583,13 +583,19 @@ export interface CreateAgentSessionOptions {
 	/** Observe actual provider response metadata after extension handlers. */
 	onResponse?: SimpleStreamOptions["onResponse"];
 	/** Apply a host's explicit provider option mapping before request observers see the payload. */
-	transformRequestPayload?: (payload: unknown, model?: Model, signal?: AbortSignal) => unknown | Promise<unknown>;
+	transformRequestPayload?: (
+		payload: unknown,
+		model?: Model,
+		signal?: AbortSignal,
+		context?: { thinkingLevel?: ConfiguredThinkingLevel },
+	) => unknown | Promise<unknown>;
 	/** Observe terminal provider output for both primary and auxiliary requests. */
 	onModelResponse?: (message: unknown, model: Model, signal?: AbortSignal) => void | Promise<void>;
 	/** Resolve embedding-host credentials for this actual request, including temporary headers. */
 	resolveRequestAuth?: (
 		model: Model,
 		signal?: AbortSignal,
+		context?: { thinkingLevel?: ConfiguredThinkingLevel },
 	) => Promise<
 		| {
 				apiKey?: string;
@@ -603,6 +609,8 @@ export interface CreateAgentSessionOptions {
 	spawns?: string;
 	/** User-authorized model agents inherited from the parent session for nested delegation. */
 	inheritedSessionAgents?: readonly AgentDefinition[];
+	/** Explicit session-local task agents; live definitions override filesystem/bundled names without changing global discovery. */
+	getAgentDefinitions?: () => readonly AgentDefinition[];
 
 	/** Auth storage for credentials. Default: discoverAuthStorage(agentDir) */
 	authStorage?: AuthStorage;
@@ -2697,6 +2705,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					? () => AgentLifecycleManager.global()
 					: undefined,
 			getSessionSpawns: () => options.spawns ?? "*",
+			getAgentDefinitions: options.getAgentDefinitions,
 			getSessionAgents: () => session?.getSessionAgents() ?? [],
 			advertisedSessionAgents: () => session?.getAdvertisedSessionAgents() ?? [],
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
@@ -4769,7 +4778,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			const transformed = await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
 			const mapped = options.transformRequestPayload
-				? await options.transformRequestPayload(transformed ?? payload, model, signal)
+				? await options.transformRequestPayload(transformed ?? payload, model, signal, {
+						// Host wire 只接收本会话已解析的实际档位；auto 是内部选择策略，undefined 表示关闭。
+						thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
+					})
 				: transformed;
 			await options.onPayload?.(mapped ?? payload, model, signal);
 			return mapped;
@@ -4868,7 +4880,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			};
 			const execution = currentExecutionModel();
 			const resolver = resolveAuth ?? execution?.resolveRequestAuth ?? options.resolveRequestAuth;
-			let auth = await resolver?.(streamModel, requestSignal);
+			let auth = await resolver?.(streamModel, requestSignal, {
+				thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
+			});
 			if (execution && auth === undefined) {
 				// Resolve for the effective model, never reuse the loop's seeded key resolver.
 				const apiKey = await resolveApiKeyOnce(await effectiveGetApiKey(streamModel));
@@ -5295,7 +5309,9 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				options.toolRestrictions ? options.toolRestrictions.runInput(denylist, run) : run(),
 			validateRequestAuth: async (requestModel, signal) => {
 				const resolver = currentExecutionModel()?.resolveRequestAuth ?? options.resolveRequestAuth;
-				const auth = await resolver?.(requestModel, signal);
+				const auth = await resolver?.(requestModel, signal, {
+					thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
+				});
 				return Boolean(auth?.apiKey || (auth?.headers && Object.keys(auth.headers).length > 0));
 			},
 			allowSessionModelFallback: options.hasUI === true && options.allowSessionModelFallback !== false,

@@ -34,7 +34,7 @@ import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
 import { buildOutputValidator } from "../tools/output-schema-validator";
 import { trackLateCleanup } from "../utils/late-cleanup";
-import { type DiscoveryResult, discoverAgents, getAgent } from "./discovery";
+import { type DiscoveryResult, discoverAgents, getAgent, mergeAgentDefinitions } from "./discovery";
 import { type ExecutorOptions, runSubprocess, type SubagentToolResult } from "./executor";
 import {
 	applyEligibleNestedPatches,
@@ -359,7 +359,10 @@ export async function resolveEffectiveSubagentPolicy(
 	assertDepthAndSpawnAllowed(request, agentName);
 
 	const discovery = await discoverAgentsShared(request.session.cwd, request.session.effectiveExtensionRoots?.());
-	const agents = [...discovery.agents, ...(request.session.getSessionAgents?.() ?? [])];
+	const agents = [
+		...mergeAgentDefinitions(discovery.agents, request.session.getAgentDefinitions?.()),
+		...(request.session.getSessionAgents?.() ?? []),
+	];
 	const agent = getAgent(agents, agentName);
 	if (!agent) {
 		const available = agents.map(candidate => candidate.name).join(", ") || "none";
@@ -590,7 +593,12 @@ function buildExecutorOptions(
 	const preparedSession = policy.preparedSession;
 	const { skills, autoloadSkills } = resolveAutoloadSkills(session, policy.agent);
 	const localProtocolOptions = sessionLocalProtocolOptions(session);
-	const restrictToolNames = preparedSession !== undefined || policy.planMode || session.restrictToolNames === true;
+	// Host 的显式工具清单是授权边界，复用原生 restricted 路径，不能自动附加便利工具。
+	const restrictToolNames =
+		preparedSession !== undefined ||
+		policy.planMode ||
+		session.restrictToolNames === true ||
+		policy.effectiveAgent.restrictToolNames === true;
 	const enableMCP = !restrictToolNames && (session.enableMCP ?? true);
 	return {
 		cwd: session.cwd,
@@ -652,6 +660,7 @@ function buildExecutorOptions(
 		settings: session.settings,
 		asyncJobManager: session.asyncJobManager,
 		inheritedSessionAgents: session.getSessionAgents?.(),
+		getAgentDefinitions: session.getAgentDefinitions,
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
 		enableMCP,
 		customTools: request.customTools,

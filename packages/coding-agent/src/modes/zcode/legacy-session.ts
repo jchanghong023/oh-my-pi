@@ -136,11 +136,11 @@ export class LegacySessionBridge {
 		const persisted = await collectSubSessions(read.info.path, key => {
 			throw new Error(`Subagent history is unreadable: ${key}`);
 		});
+		const native = await this.#options.manager.nativeChild(params.sessionId);
+		const owner = this.#options.getRecord?.(params.sessionId) ?? native?.root;
+		const parentId = native?.agentId ?? owner?.registry.list().find(ref => ref.session === owner?.session)?.id ?? "Main";
 		const refs =
-			this.#options
-				.getRecord?.(params.sessionId)
-				?.registry.list()
-				.filter(ref => ref.kind === "sub" && (!ref.parentId || ref.parentId === "Main")) ?? [];
+			owner?.registry.list().filter(ref => ref.kind === "sub" && (ref.parentId ?? "Main") === parentId) ?? [];
 		const running: L.ZCodeSessionRunningSubagent[] = [];
 		const ended = new Map<string, L.ZCodeSessionEndedSubagent>();
 		for (const child of Object.values(persisted).filter(child => child.parent === null)) {
