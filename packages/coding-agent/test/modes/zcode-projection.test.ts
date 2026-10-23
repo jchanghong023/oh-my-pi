@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentUserMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "../../src/async/job-manager";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 import { AgentSession } from "../../src/session/agent-session";
 import type { SessionEntry } from "../../src/session/session-entries";
 import { ZCodeProjection } from "../../src/modes/zcode/projection";
@@ -233,7 +234,11 @@ function projectionSession(entries: SessionEntry[], manager?: AsyncJobManager, d
 			getSessionFile: () => (durable ? "/work/session.jsonl" : undefined),
 			onSessionNameChanged: () => () => {},
 		},
-		agent: { peekSteeringQueue: () => [] },
+		agent: {
+			// SDK 在非流式状态保留 state，并用 null 表示没有活动消息。
+			state: { streamMessage: null } satisfies Pick<Agent["state"], "streamMessage">,
+			peekSteeringQueue: () => [],
+		},
 		getQueuedMessages: () => ({ steering: [], followUp: [], liveSteered: 0 }),
 		getQueuedInputMessages: () => [],
 		getQueueAutoDrain: () => true,
@@ -1324,6 +1329,158 @@ describe("native task background projection", () => {
 });
 
 describe("native row identity stability", () => {
+	it("preserves streamed targets after direct journal reminders and separates new branch messages", () => {
+		const input = user("identity");
+		const entries: SessionEntry[] = [
+			{
+				type: "message",
+				id: "input",
+				parentId: null,
+				timestamp: new Date(100).toISOString(),
+				message: input,
+			},
+		];
+		const projection = new ZCodeProjection({
+			sessionId: "identity",
+			cwd: "/work",
+			session: projectionSession(entries),
+		});
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			timestamp: 300,
+			api: "openai-completions",
+			provider: "local",
+			model: "mock",
+			usage,
+			stopReason: "stop",
+			content: [{ type: "text", text: "first answer" }],
+		};
+		const deltas: ConversationDelta[] = [];
+		let consumer = projection.snapshot();
+		projection.subscribe(batch => {
+			deltas.push(...batch);
+			consumer = applyConversationDeltas(consumer, batch);
+		});
+		try {
+			// 原生提醒无 message 事件，assistant 的临时 ordinal 比持久 ordinal 少一。
+			entries.push({
+				type: "message",
+				id: "reminder",
+				parentId: "input",
+				timestamp: new Date(200).toISOString(),
+				message: { role: "developer", content: [{ type: "text", text: "native reminder" }], timestamp: 200 },
+			});
+			projection.applyEvent({ type: "message_start", message: assistant });
+			const before = projection.rows().find(row => row.kind === "assistantText")!;
+			const target = { rowId: before.rowId, entityId: before.entityId! };
+			expect(() => projection.resolveTarget(target)).toThrow("guard.rowNotPersisted");
+			entries.push({
+				type: "message",
+				id: "answer-one",
+				parentId: "reminder",
+				timestamp: new Date(300).toISOString(),
+				message: assistant,
+			});
+			deltas.length = 0;
+			projection.applyEvent({ type: "message_end", message: assistant });
+			expect(projection.rows().find(row => row.kind === "assistantText")).toMatchObject(target);
+			expect(projection.resolveTarget(target).entryId).toBe("answer-one");
+			expect(deltas.some(delta => delta.op === "row.removed" || delta.op === "row.appended")).toBe(false);
+			expect(consumer.rows.window).toEqual(projection.rows());
+			projection.resetEpoch();
+			expect(projection.resolveTarget(target).entryId).toBe("answer-one");
+			// 同时间戳的另一消息不能复用已发布实体；target 解析依据真实 entry 而非时间戳。
+			const next = { ...assistant, content: [{ type: "text" as const, text: "second answer" }] };
+			projection.applyEvent({ type: "message_start", message: next });
+			entries.push({
+				type: "message",
+				id: "answer-two",
+				parentId: "answer-one",
+				timestamp: new Date(300).toISOString(),
+				message: next,
+			});
+			projection.applyEvent({ type: "message_end", message: next });
+			const second = projection.rows().find(row => row.kind === "assistantText" && row.text === "second answer")!;
+			expect(second.entityId).not.toBe(target.entityId);
+			expect(projection.resolveTarget({ rowId: second.rowId, entityId: second.entityId! }).entryId).toBe(
+				"answer-two",
+			);
+			// 切到相同 ordinal/时间戳的真正新 branch，再切回旧 branch，均保留各自身份。
+			const original = entries.slice();
+			entries.splice(2, 2, {
+				type: "message",
+				id: "branch-answer",
+				parentId: "reminder",
+				timestamp: new Date(300).toISOString(),
+				message: { ...assistant, content: [{ type: "text", text: "branch answer" }] },
+			});
+			projection.resetEpoch();
+			const branch = projection.rows().find(row => row.kind === "assistantText")!;
+			expect(branch.entityId).not.toBe(target.entityId);
+			expect(() => projection.resolveTarget(target)).toThrow("guard.staleRowTarget");
+			entries.splice(0, entries.length, ...original);
+			projection.resetEpoch();
+			expect(projection.resolveTarget(target).entryId).toBe("answer-one");
+			expect(projection.resolveTarget({ rowId: second.rowId, entityId: second.entityId! }).entryId).toBe(
+				"answer-two",
+			);
+		} finally {
+			projection.dispose();
+		}
+	});
+
+	it("uses native child identity for progress drilldown despite provider session overrides and keeps cold fallback", () => {
+		const child = projectionSession([]);
+		const nativeChild = {
+			...child,
+			sessionId: "provider-override",
+			sessionManager: { ...child.sessionManager, getSessionId: () => "native-child" },
+		} as unknown as AgentSession;
+		const registry = new AgentRegistry();
+		registry.register({ id: "Child", displayName: "Child", kind: "sub", parentId: "Main", session: nativeChild });
+		const assistant: AssistantMessage = {
+			role: "assistant",
+			timestamp: 200,
+			api: "openai-completions",
+			provider: "local",
+			model: "mock",
+			usage,
+			stopReason: "toolUse",
+			content: [{ type: "toolCall", id: "spawn", name: "task", arguments: { tasks: [] } }],
+		};
+		const result: ToolResultMessage = {
+			role: "toolResult",
+			timestamp: 201,
+			toolCallId: "spawn",
+			toolName: "task",
+			isError: false,
+			content: [{ type: "text", text: "child progress" }],
+			details: {
+				projectAgentsDir: null,
+				results: [],
+				totalDurationMs: 1,
+				progress: [{ id: "Child", agent: "scout", status: "running", task: "inspect child" }],
+			},
+		};
+		for (const live of [true, false]) {
+			const projection = new ZCodeProjection({
+				sessionId: "parent",
+				cwd: "/work",
+				messages: [user("child"), assistant, result],
+				registry: live ? registry : undefined,
+				childSessions: { Child: "native-child" },
+			});
+			try {
+				expect(projection.rows().find(row => row.kind === "subagent")).toMatchObject({
+					childSessionId: "native-child",
+				});
+				if (live) expect(projection.snapshot().subagents?.childSessionIds).toEqual(["native-child"]);
+			} finally {
+				projection.dispose();
+			}
+		}
+	});
+
 	it("keeps existing rowIds and appends late task child rows in rowId order", () => {
 		const assistant: AssistantMessage = {
 			role: "assistant",

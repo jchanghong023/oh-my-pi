@@ -1,7 +1,13 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import type { ExtensionUIDialogOptions, ExtensionUIContext } from "../../extensibility/extensions/types";
+import type {
+	ExtensionApprovalAnswer,
+	ExtensionUIDialogOptions,
+	ExtensionUIContext,
+} from "../../extensibility/extensions/types";
 import type { ToolSession } from "../../tools";
-import type { PendingInteraction, UserInputRequestPayload } from "./schema";
+import { approvalOnceLabel } from "../../tools/approval";
+import type { PendingInteraction, PermissionRequestPayload, UserInputRequestPayload } from "./schema";
 
 /**
  * resolve(answer.action === "decline") 的应答标记(用户裁定,findings B):
@@ -13,6 +19,21 @@ export const DECLINE_ANSWER = Symbol("zcode.userDeclined");
 
 /** declined 提交在 AskUserQuestion tool_result 中的模型可见文案(findings B)。 */
 const DECLINED_CUSTOM_INPUT = "User declined to answer";
+
+export interface ZCodeToolCall {
+	id: string;
+	name: string;
+	input: unknown;
+	signal?: AbortSignal;
+	sessionId?: string;
+}
+
+const toolCallScope = new AsyncLocalStorage<ZCodeToolCall>();
+
+/** 桥接工具入口提供真实调用身份，不改变原生审批 API 或 TUI。 */
+export function runZCodeToolCall<T>(toolCall: ZCodeToolCall, fn: () => T): T {
+	return toolCallScope.run(toolCall, fn);
+}
 
 interface WaitingInteraction {
 	interaction: PendingInteraction;
@@ -28,6 +49,9 @@ export class ZCodeInteractions {
 	#autoResolutionEnabled = true;
 	readonly #children = new Set<ZCodeInteractions>();
 	readonly ui: ExtensionUIContext;
+	runToolCall<T>(toolCall: ZCodeToolCall, fn: () => T): T {
+		return runZCodeToolCall(toolCall, fn);
+	}
 	constructor(
 		readonly publish: (pending: PendingInteraction[]) => void,
 		readonly output: (text: string) => void = () => {},
@@ -61,9 +85,52 @@ export class ZCodeInteractions {
 				);
 				return answer && labels.includes(answer) ? answer : undefined;
 			},
-			approve: async () => {
-				// Keep this hook present so native requestApproval cannot fall back to select.
-				throw new Error("Native tool approval is not supported by the ZCode host");
+			approve: async (prompt, options) => {
+				// 仅使用原生 prompt 的选项映射授权；客户端 response/permissionUpdates 不参与授权。
+				const toolCall = toolCallScope.getStore();
+				if (!toolCall?.id || !toolCall.name) {
+					output("工具审批不可用：OMP 原生审批接口未提供可安全关联的工具调用上下文，本次调用已拒绝。");
+					return "deny";
+				}
+				if (toolCall.signal?.aborted) return "deny";
+				// 子代理异步链会继承父 task 的 scope；不能将父调用冒充本次子工具。
+				if (this.origin?.kind === "subagent" && toolCall.sessionId !== this.origin.childSessionId) {
+					output("子代理工具审批不可用：OMP 原生子会话未继承审批上下文包装入口，无法安全关联本次调用，已拒绝。");
+					return "deny";
+				}
+				const answers = new Map<string, ExtensionApprovalAnswer>([
+					["once", "once"],
+					["deny", "deny"],
+				]);
+				const choices: PermissionRequestPayload["options"] = [
+					{ optionId: "once", label: approvalOnceLabel(prompt), kind: "allowOnce" },
+				];
+				if (prompt.session) {
+					answers.set("session", "session");
+					choices.push({ optionId: "session", label: prompt.session, kind: "allowAlways" });
+				}
+				for (const grant of prompt.grants ?? []) {
+					for (const always of [false, true]) {
+						const optionId = `grant-${grant.scope}${always ? "-always" : ""}`;
+						answers.set(optionId, { grant: grant.scope, always });
+						choices.push({ optionId, label: always ? grant.alwaysLabel : grant.label, kind: "allowAlways" });
+					}
+				}
+				choices.push({ optionId: "deny", label: "拒绝", kind: "deny" });
+				const answer = await this.request(
+					{
+						kind: "permission",
+						toolCallId: toolCall.id,
+						toolName: toolCall.name,
+						summary: prompt.full,
+						detail: toolCall.input,
+						freeText: false,
+						options: choices,
+					},
+					{ ...options, signal: toolCall.signal ?? options?.signal },
+				);
+				if (toolCall.signal?.aborted || options?.signal?.aborted) return "deny";
+				return typeof answer === "string" ? (answers.get(answer) ?? "deny") : "deny";
 			},
 			confirm: async (title, message, options) => {
 				const answer = await this.request(
@@ -232,7 +299,10 @@ export class ZCodeInteractions {
 			},
 		};
 	};
-	request(payload: UserInputRequestPayload, options?: ExtensionUIDialogOptions): Promise<unknown> {
+	request(
+		payload: UserInputRequestPayload | PermissionRequestPayload,
+		options?: ExtensionUIDialogOptions,
+	): Promise<unknown> {
 		if (this.#closed || options?.signal?.aborted) return Promise.resolve(undefined);
 		const { promise, resolve } = Promise.withResolvers<unknown>();
 		const interactionId = crypto.randomUUID();
@@ -249,7 +319,7 @@ export class ZCodeInteractions {
 		};
 		const interaction: PendingInteraction = {
 			interactionId,
-			kind: "userInput",
+			kind: payload.kind,
 			anchorRowId: null,
 			createdAt: Date.now(),
 			payload: this.origin ? { ...payload, origin: this.origin } : payload,
@@ -296,6 +366,19 @@ export class ZCodeInteractions {
 			for (const child of this.#children) if (child.resolve(id, response)) return true;
 			return false;
 		}
+		if (request.interaction.payload.kind === "permission") {
+			// 权限不能走 userInput 的 content 解包或自由文本分支；首个应答无论是否合法都收口。
+			const answer = response && typeof response === "object" ? response : undefined;
+			const optionId = answer && "optionId" in answer ? answer.optionId : undefined;
+			const accepted =
+				answer &&
+				(!("action" in answer) || answer.action === "accept") &&
+				!("content" in answer) &&
+				typeof optionId === "string" &&
+				request.interaction.payload.options.some(option => option.optionId === optionId);
+			request.finish(accepted ? optionId : undefined);
+			return true;
+		}
 		if (response && typeof response === "object" && "action" in response && response.action === "cancel")
 			// cancel 保持取消语义:消费者以 undefined 表达硬取消(用户裁定,findings B)。
 			request.finish(undefined);
@@ -339,6 +422,12 @@ export class ZCodeInteractions {
 		for (const child of this.#children) affected += child.setAutoResolutionEnabled(enabled);
 		this.publish(this.pending);
 		return affected;
+	}
+	cancelPermissions(): void {
+		for (const request of [...this.#waiting.values()]) {
+			if (request.interaction.kind === "permission") request.finish(undefined);
+		}
+		for (const child of this.#children) child.cancelPermissions();
 	}
 	cancel(): void {
 		for (const request of [...this.#waiting.values()]) request.finish(undefined);

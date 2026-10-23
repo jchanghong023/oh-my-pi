@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpath } from "node:fs/promises";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
@@ -6,8 +7,12 @@ import type { SessionInfo } from "../../session/session-listing";
 import type { AgentSession } from "../../session/agent-session";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { Settings } from "../../config/settings";
+import { ModelRegistry } from "../../config/model-registry";
+import { discoverAuthStorage } from "../../sdk";
+import { TeamConfigError, TeamConfigService } from "../../team/config";
+import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { ZCodeCommandHost, workspaceCatalog } from "./commands";
-import { ZCodeCatalogs, type ZCodeCatalogOptions } from "./catalogs";
+import { ZCodeCatalogs, zcodeSkillsManageParamsSchema, type ZCodeCatalogOptions } from "./catalogs";
 import { ZCodeQueries } from "./queries";
 import { ZCodeAttachmentResources } from "./attachments";
 import { parseZCodeThinkingLevel, toZCodeReasoningLevel, ZCodeProviderConfiguration } from "./provider-config";
@@ -35,6 +40,11 @@ import { ZCodeConversationTelemetry } from "./memory-telemetry";
 import { createZCodeAutomationTools } from "./automation";
 import { createZCodeWorkflowTools } from "./workflows/tools";
 import type { AgentDefinition } from "../../task/types";
+import { OmpIndexesBridge } from "./indexes";
+import { OmpTeamBridge } from "./team";
+import { OmpProfilesBridge, type OmpProfileBlocker } from "./profiles";
+import { OmpTanBridge, ompTanListParamsSchema, ompTanStartParamsSchema, ompTanStopParamsSchema } from "./tan";
+import { generateWorkspaceText } from "./workspace-text";
 
 export interface ZCodeServerOptions {
 	cwd?: string;
@@ -112,6 +122,11 @@ export class ZCodeServer {
 	readonly writer: ZCodeFrameWriter;
 	readonly startup: ZCodeStorageStartup;
 	readonly workflows: ZCodeWorkflowService;
+	readonly indexes: OmpIndexesBridge;
+	readonly team: OmpTeamBridge;
+	readonly profiles: OmpProfilesBridge;
+	readonly tan: OmpTanBridge;
+	#businessDispatches = 0;
 	#hosted = new Map<string, HostedSession>();
 	#attaching = new Map<string, Promise<HostedSession>>();
 	#inputAdmissionObservers = new Map<string, () => void>();
@@ -136,6 +151,8 @@ export class ZCodeServer {
 	>();
 	#closed = false;
 	#ready = false;
+	readonly #lifetime = new AbortController();
+	#ownerSignal?: AbortSignal;
 	#initialization?: Promise<void>;
 	#stopBackup = () => {};
 	#workspaceEpoch = randomUUID();
@@ -147,9 +164,12 @@ export class ZCodeServer {
 	#connections = new Map<string, string>();
 	#closedConnections = new Set<string>();
 	#subscriptions = new Map<string, { connectionId: string; topic: string }>();
+	// 视图退订不释放审批所有权；仅真正断连或会话关闭才清理 root 归属。
+	#permissionOwners = new Map<string, Set<string>>();
 	#indexInfos = new Map<string, SessionInfo[]>();
 	#registeredTopics = new Set<string>();
 	#workspaceConfigs = new Map<string, P.WorkspaceConfigState>();
+	readonly #workspaceText = new Map<string, AbortController>();
 	constructor(readonly options: ZCodeServerOptions = {}) {
 		this.configuration = new ZCodeProviderConfiguration({
 			records: () =>
@@ -182,6 +202,11 @@ export class ZCodeServer {
 				await this.#attach(record);
 			},
 			onSessionClosed: id => {
+				this.team.detach(id);
+				for (const [connectionId, roots] of this.#permissionOwners) {
+					roots.delete(id);
+					if (roots.size === 0) this.#permissionOwners.delete(connectionId);
+				}
 				const hosted = this.#hosted.get(id);
 				hosted?.unsubscribeTelemetry();
 				hosted?.telemetry.close();
@@ -281,8 +306,51 @@ export class ZCodeServer {
 				prepareConfiguration: (cwd, settings, registry) => this.configuration.prepare(cwd, settings, registry),
 			},
 		});
+		this.tan = new OmpTanBridge(this.manager);
 		this.ledger = new ZCodeCommandLedger(this.manager);
 		this.writer = new ZCodeFrameWriter(options.output ?? process.stdout);
+		this.indexes = new OmpIndexesBridge({
+			notify: (method, params) => {
+				void this.writer.write({ method, params }).catch(error => {
+					process.stderr.write(`${String(error)}\n`);
+				});
+			},
+		});
+		this.team = new OmpTeamBridge({ sessions: this.manager });
+		this.profiles = new OmpProfilesBridge({
+			cwd: path.resolve(options.cwd ?? process.cwd()),
+			blockers: () => {
+				const blockers: OmpProfileBlocker[] = this.manager.profileSwitchBlockers();
+				if (this.#businessDispatches)
+					blockers.push({ code: "inflightDispatch", message: "Business requests are still in flight" });
+				if (this.#reverse.size)
+					blockers.push({ code: "hostInteraction", message: "Native runtime is awaiting Host responses" });
+				if (this.#attaching.size || this.#casDecisions.size)
+					blockers.push({
+						code: "bridgeTransition",
+						message: "Session attachment or command admission is in flight",
+					});
+				for (const hosted of this.#hosted.values()) {
+					if (hosted.commands.interactions.pending.length)
+						blockers.push({
+							code: "pendingInteraction",
+							sessionId: hosted.record.id,
+							message: "Native session is awaiting an interaction answer",
+						});
+				}
+				// journal 保留真实 pending/running 状态；不能把没有可证明终态的工作流当 idle。
+				for (const run of this.workflows.journal.listRuns({
+					statuses: ["pending", "running"],
+					limit: Number.MAX_SAFE_INTEGER,
+				}))
+					blockers.push({
+						code: "workflowRunning",
+						sessionId: run.parentSessionId,
+						message: "Native workflow has not reached a terminal state",
+					});
+				return blockers;
+			},
+		});
 		this.startup = new ZCodeStorageStartup(frame => this.writer.write(frame));
 		this.queries = new ZCodeQueries({
 			manager: this.manager,
@@ -314,6 +382,7 @@ export class ZCodeServer {
 		});
 	}
 	initialize(signal?: AbortSignal): Promise<void> {
+		this.#ownerSignal ??= signal;
 		return (this.#initialization ??= this.startup.open(signal).then(() => {
 			this.#ready = true;
 			this.#stopBackup = startOfflineShmBackup(message => process.stderr.write(`${message}\n`));
@@ -386,17 +455,30 @@ export class ZCodeServer {
 				return;
 			}
 			const fault = error as { code?: unknown; message?: string; data?: unknown };
+			// 字符串业务错误码不能被参数错误覆盖；保留回执字段并用数字外层满足 wire schema。
+			const data =
+				typeof fault.code === "string"
+					? {
+							...(fault.data !== null && typeof fault.data === "object" && !Array.isArray(fault.data)
+								? fault.data
+								: fault.data === undefined
+									? {}
+									: { data: fault.data }),
+							code: fault.code,
+						}
+					: fault.data;
 			await this.writer.write({
 				id: frame.id,
 				error: {
-					code: typeof fault.code === "number" ? fault.code : -32602,
+					code: typeof fault.code === "number" ? fault.code : typeof fault.code === "string" ? -32000 : -32602,
 					message: fault.message || "Request failed",
-					...(fault.data === undefined ? {} : { data: fault.data }),
+					...(data === undefined ? {} : { data }),
 				},
 			});
 		}
 	}
 	#attach(record: ZCodeSessionRecord): Promise<HostedSession> {
+		this.team.observeSession(record);
 		const pending = this.#attaching.get(record.id);
 		if (pending) return pending;
 		const existing = this.#hosted.get(record.id);
@@ -457,6 +539,16 @@ export class ZCodeServer {
 			pendingInteractions => projection.setState({ pendingInteractions }),
 			{
 				run: record.run,
+				mcpManager: record.creationResult.mcpManager,
+				startTan: work => this.tan.start(record, work, () => projection.refresh()),
+				resourcesReloaded: async () => {
+					this.catalogs.invalidateSession(record.session);
+					await this.catalogs.captureSession(record.cwd, {
+						session: record.session,
+						settings: record.settings,
+						sessionId: record.id,
+					});
+				},
 				setToolUIContext: record.creationResult.setToolUIContext,
 				uiContext: record.creationResult.interactionUI,
 				recordInputAdmission: async (inputId, sourceCommand) => {
@@ -488,17 +580,42 @@ export class ZCodeServer {
 					void admission.completion.catch(error => process.stderr.write(`${String(error)}\n`));
 					return admission;
 				},
-				output: text => {
-					void record
-						.run(() =>
-							record.session.sendCustomMessage({
-								customType: "zcode-command-output",
-								content: text,
-								display: true,
-							}),
+				output: text =>
+					record.run(async () => {
+						const session = record.session;
+						const manager = session.sessionManager;
+						const generation = session.sessionGeneration;
+						const transcript = manager.getSessionId();
+						const message = {
+							role: "custom" as const,
+							customType: "zcode-command-output",
+							content: text,
+							display: true,
+							attribution: "agent" as const,
+							timestamp: Date.now(),
+						};
+						// 命令结果不是新输入；sendCustomMessage 在 streaming 时会 steer，
+						// 导致 /goal pause 的输出等模型结束才出现，甚至误触发后续 turn。
+						// 保留原生 custom-message 的 journal/context 所有者，不进入输入队列。
+						manager.appendCustomMessageEntry(
+							message.customType,
+							message.content,
+							message.display,
+							undefined,
+							message.attribution,
+							message.timestamp,
+						);
+						session.agent.appendMessage(message);
+						await manager.ensureOnDisk();
+						await manager.flush();
+						if (
+							session.isDisposed ||
+							generation !== session.sessionGeneration ||
+							transcript !== manager.getSessionId()
 						)
-						.catch(error => process.stderr.write(`${String(error)}\n`));
-				},
+							return;
+						projection.applyEvent({ type: "message_end", message });
+					}),
 			},
 		);
 		const controls = new ZCodeRuntimeControls(record.session, {
@@ -556,7 +673,7 @@ export class ZCodeServer {
 			for (const [id, entry] of this.#nativeProjections) {
 				if (entry.child.root || event.ref.kind !== "sub") continue;
 				if (
-					event.ref.session?.sessionId !== id &&
+					event.ref.session?.sessionManager.getSessionId() !== id &&
 					(!event.ref.sessionFile || path.resolve(event.ref.sessionFile) !== path.resolve(entry.child.file))
 				)
 					continue;
@@ -658,6 +775,19 @@ export class ZCodeServer {
 			),
 		))
 			this.#workspaceCwds.set(id, workspace.workspacePath);
+	}
+	#registerIndexWorkspace(raw: unknown): void {
+		const workspace = L.zcodeWorkflowsListParamsSchema.shape.workspace.parse(
+			raw && typeof raw === "object" && "workspace" in raw ? raw.workspace : undefined,
+		);
+		// 原始身份必须仍路由到已登记的执行目录，不能用索引请求重绑另一工作区。
+		for (const id of [workspace.workspaceKey, workspace.workspaceIdentity, workspace.workspacePath]) {
+			if (!id) continue;
+			const registered = this.#workspaceCwds.get(id);
+			if (registered !== undefined && path.resolve(registered) !== path.resolve(workspace.workspacePath))
+				throw new ZCodeProtocolError(-32602, "Index workspace does not match registered route");
+		}
+		this.#registerWorkspace(workspace);
 	}
 	/** workspaceId 归属的 cwd;未登记时退回进程默认工作区(app-server 按主工作区拉起)。 */
 	#workspaceCwd(workspaceId: string): string {
@@ -808,7 +938,28 @@ export class ZCodeServer {
 				totalTokenCount,
 				contextUsed: state.usage.contextWindow?.usedTokens ?? 0,
 				contextWindow: state.usage.contextWindow?.maxTokens ?? model?.contextWindow ?? 0,
-				pendingPermissions: [],
+				pendingPermissions: state.pendingInteractions.flatMap(interaction =>
+					interaction.payload.kind === "permission"
+						? [
+								{
+									requestId: interaction.interactionId,
+									toolCallId: interaction.payload.toolCallId,
+									toolName: interaction.payload.toolName,
+									reason: interaction.payload.summary,
+									riskLevel: "medium",
+									input: interaction.payload.detail,
+									origin: interaction.payload.origin,
+									options: interaction.payload.options.map(option => ({
+										optionId: option.optionId,
+										kind: option.kind,
+										name: option.label,
+										response: option.response ?? { decision: option.kind === "deny" ? "deny" : "allow" },
+									})),
+									requestedAt: interaction.createdAt,
+								},
+							]
+						: [],
+				),
 				activeToolCalls: state.rows.window.flatMap(row =>
 					row.kind === "toolCall" && ["inputStreaming", "pendingApproval", "running"].includes(row.status)
 						? [
@@ -849,14 +1000,20 @@ export class ZCodeServer {
 		}
 	}
 	async #workspaceConfig(cwd: string): Promise<P.WorkspaceConfigState> {
-		const hosted = Array.from(this.#hosted.values()).find(item => item.record.cwd === cwd);
-		const settings = hosted?.record.settings ?? (await Settings.loadReadOnly({ cwd }));
-		const commands = hosted ? await hosted.commands.catalog() : await workspaceCatalog(cwd, settings);
-		const slashCommands = commands.map(command => ({
-			name: command.name,
-			description: command.description ?? "",
-			source: "builtin" as const,
-		}));
+		// Git 等调用方可返回 Windows 正斜杠路径；与 manager 同样规范化，避免漏选真实 resident 扩展目录。
+		const resolvedCwd = path.resolve(cwd);
+		const hosted = Array.from(this.#hosted.values()).find(item => path.resolve(item.record.cwd) === resolvedCwd);
+		const settings = hosted?.record.settings ?? (await Settings.loadReadOnly({ cwd: resolvedCwd }));
+		const commands = hosted ? await hosted.commands.catalog() : await workspaceCatalog(resolvedCwd, settings);
+		// 既有 wire schema 没有 aliases；将实际注册别名投影成同行，不能丢掉原生补全入口。
+		const slashCommands = commands.flatMap(command =>
+			[command.name, ...(command.aliases ?? [])].map(name => ({
+				name,
+				description: command.description ?? "",
+				...(command.inputHint ? { inputHint: command.inputHint } : {}),
+				source: command.source === "builtin" ? ("builtin" as const) : ("custom" as const),
+			})),
+		);
 		const models = hosted?.record.session.modelRegistry.getAvailable() ?? [];
 		const selected = this.configuration.getDefaultModelSelection();
 		return {
@@ -927,6 +1084,14 @@ export class ZCodeServer {
 		execution?: ZCodeExecutionSubmission,
 	): Promise<P.CommandResult | undefined> {
 		await this.#applySubagentRuntimeConfig(hosted.record);
+		// 原生 parser 同时支持 /tan work 与 /tan:work；必须早于父会话 stop/admission。
+		if (parseSlashCommand(text)?.name === "tan") {
+			if (attachments?.length || execution)
+				throw new ZCodeProtocolError(-32602, "Tan accepts work text without parent execution material");
+			const receipt = await hosted.commands.dispatch(text, { ...options, inputId, sourceCommand });
+			await receipt.completion;
+			return { type: "inputAccepted", inputId, delivery: "startNow" };
+		}
 		const references = await hosted.record.run(() =>
 			this.catalogs.prepareReferences(hosted.record.cwd, text, {
 				session: hosted.record.session,
@@ -1149,9 +1314,11 @@ export class ZCodeServer {
 					case "sendText":
 					case "sendGoalCommand": {
 						const input = P.commandPayloadSchemas.sendText.parse(payload);
-						if (input.modelSelection && !input.modelExecution) await this.#model(hosted, input.modelSelection);
+						const tanControl = envelope.type === "sendText" && parseSlashCommand(input.text)?.name === "tan";
+						if (!tanControl && input.modelSelection && !input.modelExecution)
+							await this.#model(hosted, input.modelSelection);
 						const target = hosted;
-						const held = hosted.projection.snapshot().inputRouting.mode === "choice";
+						const held = !tanControl && hosted.projection.snapshot().inputRouting.mode === "choice";
 						// held 会话仍必带 disposition;但 keepQueueAndSend 语义是「保留队列并直接
 						// 发送」,无 CAS 需要——Host(zcodeTaskServiceAdapter)固定只发 keepQueueAndSend
 						// 且不带 expectedHeldQueueItemIds,此前的双全硬校验会把 choice 会话的派发
@@ -1599,8 +1766,183 @@ export class ZCodeServer {
 		if (!this.#ready && this.#initialization) await this.#initialization;
 		if (!this.#ready || this.#closed) throw new ZCodeProtocolError(-32000, "Storage is not ready");
 		switch (method) {
+			case "omp/profiles/list":
+				return this.profiles.list(raw);
+			case "omp/profiles/prepareSwitch":
+				return this.profiles.prepare(raw);
+			case "omp/profiles/cancelSwitch":
+				return this.profiles.cancel(raw);
+		}
+		if (method === "runtime/capabilities") return this.#dispatchAdmitted(method, raw, afterResponse);
+		if (this.profiles.blocked)
+			throw new ZCodeProtocolError(-32000, "Profile switch admission barrier is active", {
+				kind: "omp.profileSwitchPrepared",
+			});
+		this.#businessDispatches++;
+		try {
+			return await this.#dispatchAdmitted(method, raw, afterResponse);
+		} finally {
+			this.#businessDispatches--;
+		}
+	}
+	async #dispatchAdmitted(
+		method: string,
+		raw: unknown,
+		afterResponse: (callback: () => void) => void,
+	): Promise<unknown> {
+		switch (method) {
 			case "runtime/capabilities":
-				return { historyFirst: true, independentPlanState: true, ompConfiguration: true };
+				return {
+					historyFirst: true,
+					independentPlanState: true,
+					ompConfiguration: true,
+					ompSkillManagement: true,
+					ompIndexes: true,
+					ompTeam: true,
+					ompProfiles: true,
+					ompTan: true,
+				};
+			case "workspace/generateText": {
+				const params = L.zcodeWorkspaceGenerateTextParamsSchema.parse(raw);
+				this.#registerIndexWorkspace(params);
+				const operationId = params.operationId?.trim();
+				if (operationId && this.#workspaceText.has(operationId))
+					throw new ZCodeProtocolError(-32600, `Workspace generate operation is already active: ${operationId}`);
+				const controller = new AbortController();
+				if (operationId) this.#workspaceText.set(operationId, controller);
+				try {
+					return await generateWorkspaceText(
+						this.configuration,
+						params,
+						AbortSignal.any([this.#lifetime.signal, controller.signal]),
+					);
+				} finally {
+					if (operationId && this.#workspaceText.get(operationId) === controller)
+						this.#workspaceText.delete(operationId);
+				}
+			}
+			case "workspace/cancelGenerateText": {
+				const { operationId } = L.zcodeWorkspaceCancelGenerateTextParamsSchema.parse(raw);
+				const controller = this.#workspaceText.get(operationId);
+				if (!controller) return { operationId, cancelled: false };
+				controller.abort(new DOMException("Workspace model request cancelled", "AbortError"));
+				this.#workspaceText.delete(operationId);
+				return { operationId, cancelled: true };
+			}
+			case "omp/tan/start":
+			case "omp/tan/list":
+			case "omp/tan/stop": {
+				const params =
+					method === "omp/tan/start"
+						? ompTanStartParamsSchema.parse(raw)
+						: method === "omp/tan/stop"
+							? ompTanStopParamsSchema.parse(raw)
+							: ompTanListParamsSchema.parse(raw);
+				this.#registerIndexWorkspace(params);
+				const info = await this.manager.read(params.sessionId);
+				if (!this.#ownsWorkspaceSession(params.workspace.workspaceKey, info))
+					throw new ZCodeProtocolError(-32602, "Tan session does not belong to this workspace");
+				if (method === "omp/tan/list") return { jobs: await this.tan.list(params.sessionId) };
+				const hosted = await this.#active(params.sessionId);
+				if (method === "omp/tan/start" && "work" in params && typeof params.work === "string") {
+					await this.#applySubagentRuntimeConfig(hosted.record);
+					return { job: await this.tan.start(hosted.record, params.work, () => hosted.projection.refresh()) };
+				}
+				if ("jobId" in params && typeof params.jobId === "string")
+					return this.tan.stop(hosted.record, params.jobId);
+				throw new ZCodeProtocolError(-32602, "Invalid Tan method parameters");
+			}
+			case "omp/wiki/list":
+			case "omp/wiki/init":
+			case "omp/wiki/remove":
+			case "omp/wiki/search":
+			case "omp/wiki/grep":
+			case "omp/wiki/cancel":
+				this.#registerIndexWorkspace(raw);
+				return this.indexes.handleWiki(method.slice("omp/wiki/".length), raw, this.#lifetime.signal);
+			case "omp/repo/status":
+			case "omp/repo/init":
+			case "omp/repo/update":
+			case "omp/repo/rebuild":
+			case "omp/repo/remove":
+			case "omp/repo/text":
+			case "omp/repo/symbol":
+			case "omp/repo/cancel":
+				this.#registerIndexWorkspace(raw);
+				return this.indexes.handleRepo(method.slice("omp/repo/".length), raw, this.#lifetime.signal);
+			case "omp/team/configure": {
+				const { workspace, request } = P.ompTeamConfigureParamsSchema.parse(raw);
+				const cwd = path.resolve(this.options.cwd ?? process.cwd());
+				// workspace 只负责可信进程路由；不能借全局配置接口访问任意目录或创建隐藏会话。
+				if (
+					!path.isAbsolute(workspace.workspacePath) ||
+					(await realpath(workspace.workspacePath)) !== (await realpath(cwd))
+				)
+					throw new ZCodeProtocolError(-32602, "Team configuration workspace does not match execution directory");
+				const settings =
+					request.operation === "set_team_config"
+						? await Settings.loadIsolated({ cwd })
+						: await Settings.loadReadOnly({ cwd });
+				const auth = await discoverAuthStorage(undefined, { cwd, settings });
+				try {
+					const registry = new ModelRegistry(auth, undefined, { settings });
+					await this.configuration.prepare(cwd, settings, registry);
+					// 构造器不恢复账号隔离缓存；与 SDK 一致仅离线补齐，不能靠隐藏会话或联网刷新模型目录。
+					await registry.hydrateCredentialScopedModelCaches();
+					let committed = false;
+					const service = new TeamConfigService({
+						getSettings: () => settings,
+						getModelRegistry: () => registry,
+						getSessionModel: () => undefined,
+						emit: () => {
+							committed = true;
+						},
+					});
+					let data;
+					switch (request.operation) {
+						case "get_team_config":
+							data = await service.getConfig(request.preview);
+							break;
+						case "get_team_models":
+							data = service.getModels(request.query);
+							break;
+						case "set_team_config": {
+							let failure: unknown;
+							try {
+								data = await service.setConfig({
+									scope: request.scope,
+									expectedRevision: request.expectedRevision,
+									members: request.members,
+								});
+							} catch (error) {
+								failure = error;
+								if (error instanceof TeamConfigError && error.data?.writes.active.status === "unknown")
+									committed = true;
+								throw error;
+							} finally {
+								// 旧会话持有独立 settings 快照；保存后重读同一全局事实，后续 /team 不再沿用旧成员。
+								if (committed) {
+									try {
+										await Promise.all(
+											Array.from(this.#hosted.values(), hosted => hosted.record.settings.reloadFromDisk()),
+										);
+									} catch (error) {
+										if (failure) throw failure;
+										throw new TeamConfigError("execution_failed", String(error), data);
+									}
+								}
+							}
+							break;
+						}
+					}
+					return P.zcodeSessionConfigureResultSchema.parse({ operation: request.operation, data });
+				} finally {
+					auth.close();
+					settings.cancelPendingSaves();
+				}
+			}
+			case "omp/team":
+				return this.team.handle(raw);
 			case "workflows/list":
 				return L.zcodeWorkflowsListResultSchema.parse(
 					await this.workflows.list(L.zcodeWorkflowsListParamsSchema.parse(raw)),
@@ -1687,6 +2029,26 @@ export class ZCodeServer {
 					this.catalogs.skillReferences(params.workspace.workspacePath, options),
 				);
 			}
+			case "skills/manage": {
+				const params = zcodeSkillsManageParamsSchema.parse(raw);
+				return this.catalogs.manageSkills(params.workspacePath, params, {
+					onChanged: async () => {
+						// 原生 profile 是唯一启停事实；驻留会话重读同一持久层，不维护第二份开关。
+						for (const hosted of this.#hosted.values()) {
+							await hosted.record.run(async () => {
+								await hosted.record.settings.reloadFromDisk();
+								await hosted.record.session.refreshSkillsAndCommands();
+								this.catalogs.invalidateSession(hosted.record.session);
+							});
+						}
+					},
+				});
+			}
+			case "provider/testModelConnectivity":
+				return this.configuration.testModelConnectivity(
+					raw,
+					this.#ownerSignal ? AbortSignal.any([this.#lifetime.signal, this.#ownerSignal]) : this.#lifetime.signal,
+				);
 			case "provider/updateAccountConfig": {
 				const result = await this.configuration.updateAccountConfig(raw);
 				await this.#refreshAllWorkspaceConfigs();
@@ -1938,15 +2300,28 @@ export class ZCodeServer {
 				if (knownMode && knownMode !== params.clientMode)
 					throw new ZCodeProtocolError(-32602, "Connection delivery profile changed");
 				this.#connections.set(params.connectionId, params.clientMode);
+				let permissionRoot: string | undefined;
 				if (params.topic.startsWith("conversation/")) {
 					const id = params.topic.slice(13);
 					const child = await this.manager.nativeChild(id);
+					permissionRoot = child?.root?.id ?? id;
 					if (child) await this.#nativeProjection(id, child);
 					else
 						await this.#attach(
 							this.manager.get(id) ??
 								(await this.manager.resume(id, { additionalDirectories: params.additionalDirectories })),
 						);
+					// actor 是独立 runtime record，但审批仍由 SDK 分配的父级 scoped UI 持有。
+					// 原生 child 可能属于 actor；沿同一运行时父链归一，不能另建 actor owner 表。
+					let permissionOwner = child?.root ?? this.manager.get(id);
+					while (permissionOwner?.interactionParentSessionId) {
+						permissionRoot = permissionOwner.interactionParentSessionId;
+						const parentChild = await this.manager.nativeChild(permissionRoot);
+						permissionOwner = parentChild?.root ?? this.manager.get(permissionRoot);
+						permissionRoot = permissionOwner?.id ?? permissionRoot;
+					}
+					// 复用已挂载 projection 时也要先观察 SDK 晚绑定的真实 child 身份，再交付恢复快照。
+					(await this.#projection(id)).refresh();
 				} else if (params.topic.startsWith("sessions-index/")) {
 					const workspaceId = params.topic.slice(15);
 					// 初始快照按该工作区 cwd 过滤:manager.list() 的 listAll 合并了所有项目
@@ -1991,6 +2366,9 @@ export class ZCodeServer {
 						this.#registeredTopics.add(params.topic);
 					}
 				}
+				// 打开 projection 期间可能已收到 closed，不能重新登记失效连接的审批 owner。
+				if (this.#closedConnections.has(params.connectionId))
+					throw new ZCodeProtocolError(-32602, "Connection is closed");
 				const subscription = this.topics.subscribe(params, wire => {
 					void this.writer.write({ method: "v4/conversation/frame", params: wire });
 				});
@@ -2001,6 +2379,11 @@ export class ZCodeServer {
 					connectionId: params.connectionId,
 					topic: params.topic,
 				});
+				if (permissionRoot) {
+					const owners = this.#permissionOwners.get(params.connectionId) ?? new Set<string>();
+					owners.add(permissionRoot);
+					this.#permissionOwners.set(params.connectionId, owners);
+				}
 				afterResponse(subscription.flush);
 				return { ack: subscription.ack };
 			}
@@ -2009,6 +2392,7 @@ export class ZCodeServer {
 				const owner = this.#subscriptions.get(params.subscriptionId);
 				if (!owner || owner.connectionId !== params.connectionId || owner.topic !== params.topic)
 					throw new ZCodeProtocolError(-32602, "Subscription ownership mismatch");
+				if (params.topic.startsWith("conversation/")) (await this.#projection(params.topic.slice(13))).refresh();
 				const subscription = this.topics.recover(params);
 				afterResponse(subscription.flush);
 				return { ack: subscription.ack };
@@ -2072,8 +2456,15 @@ export class ZCodeServer {
 					this.topics.closeConnection(params.connectionId);
 					this.attachments.closeConnection(params.connectionId);
 					this.#connections.delete(params.connectionId);
+					// 退订 A 后切到 B 仍拥有 A 的审批；真正断连才撤销失去最后活连接 owner 的审批。
+					const abandonedRoots = this.#permissionOwners.get(params.connectionId) ?? new Set<string>();
+					this.#permissionOwners.delete(params.connectionId);
 					for (const [id, owner] of this.#subscriptions)
 						if (owner.connectionId === params.connectionId) this.#subscriptions.delete(id);
+					for (const sessionId of abandonedRoots) {
+						const hasOwner = Array.from(this.#permissionOwners.values()).some(roots => roots.has(sessionId));
+						if (!hasOwner) this.#hosted.get(sessionId)?.commands.interactions.cancelPermissions();
+					}
 				} else this.topics.setConnectionFlow(params.connectionId, params.state);
 				return {};
 			}
@@ -2230,16 +2621,20 @@ export class ZCodeServer {
 	async dispose(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
+		this.#lifetime.abort(new Error("Owner disconnected"));
+		this.#workspaceText.clear();
 		for (const pending of this.#reverse.values()) {
 			clearTimeout(pending.timer);
 			pending.reject(new ZCodeProtocolError(-32000, "Owner disconnected"));
 		}
 		this.#reverse.clear();
+		this.#permissionOwners.clear();
+		this.#subscriptions.clear();
+		this.#connections.clear();
+		this.#closedConnections.clear();
 		this.#stopBackup();
-		this.topics.dispose();
-		this.attachments.dispose();
-		this.legacy.dispose();
-		await this.workflows.dispose();
+		// 取消审批会同步发布投影，订阅者仍需查询 workflow journal；
+		// 必须先取消自有交互并卸载订阅，再关闭这些订阅依赖的资源。
 		for (const hosted of this.#hosted.values()) {
 			hosted.commands.dispose();
 			hosted.unsubscribeTelemetry();
@@ -2256,6 +2651,12 @@ export class ZCodeServer {
 		this.#nativeProjections.clear();
 		for (const cold of this.#cold.values()) cold.projection.dispose();
 		this.#cold.clear();
+		this.team.dispose();
+		await this.indexes.dispose();
+		this.topics.dispose();
+		this.attachments.dispose();
+		this.legacy.dispose();
+		await this.workflows.dispose();
 		try {
 			await this.manager.dispose();
 		} finally {

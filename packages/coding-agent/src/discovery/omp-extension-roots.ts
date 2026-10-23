@@ -21,7 +21,7 @@ import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, MAIN_CONFIG_FILENAMES, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
 import { readDirEntries, readFile } from "../capability/fs";
-import type { ExtensionRootMode, LoadContext } from "../capability/types";
+import type { EffectiveExtensionRoots, ExtensionRootMode, LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
 import { expandTilde } from "../tools/path-utils";
 import { listClaudePluginRoots } from "./helpers";
@@ -150,6 +150,17 @@ export function clearOmpExtensionCliRoots(): void {
 /** Inspect currently-injected CLI roots (read-only). Exposed for diagnostics + tests. */
 export function getInjectedOmpExtensionCliRoots(): readonly OmpExtensionRoot[] {
 	return injectedCliRoots.map(({ path: p, level }) => ({ path: p, level, name: path.basename(p) }));
+}
+
+/** 只读投影原生调用上下文；管理目录不能用空 explicit/merge 丢失已有 CLI 根及模式。 */
+export function getCurrentOmpExtensionRootInputs(): Readonly<Pick<EffectiveExtensionRoots, "explicit" | "mode">> {
+	const scope = invocationRootScope.getStore();
+	return scope
+		? { explicit: scope.paths, mode: scope.mode }
+		: {
+				explicit: injectedCliRoots.map(root => root.relativePath ?? root.path),
+				mode: injectedCliRootMode,
+			};
 }
 
 interface ScopeDirs {

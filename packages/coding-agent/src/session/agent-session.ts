@@ -8299,7 +8299,11 @@ export class AgentSession implements SettingsScope {
 				}
 
 				// Try custom commands (TypeScript slash commands)
-				const customResult = await this.#tryExecuteCustomCommand(text, commandGeneration);
+				const customResult = await this.#tryExecuteCustomCommand(
+					text,
+					commandGeneration,
+					options?.onPromptAdmitted,
+				);
 				if (customResult !== null) {
 					if (
 						customResult === "" ||
@@ -9502,7 +9506,7 @@ export class AgentSession implements SettingsScope {
 	 * Try to execute a custom command. Returns the prompt string if found, null otherwise.
 	 * If the command returns void, returns empty string to indicate it was handled.
 	 */
-	async #tryExecuteCustomCommand(text: string, generation: number): Promise<string | null> {
+	async #tryExecuteCustomCommand(text: string, generation: number, onHandled?: () => void): Promise<string | null> {
 		if (this.#customCommands.length === 0 && this.#mcpPromptCommands.length === 0) return null;
 
 		// Parse command name and args
@@ -9520,6 +9524,7 @@ export class AgentSession implements SettingsScope {
 		const controller = new AbortController();
 		this.#customCommandAbortControllers.add(controller);
 		let headlessExport = false;
+		let result: string | undefined;
 
 		try {
 			// Get command context from extension runner (includes session control methods)
@@ -9542,11 +9547,8 @@ export class AgentSession implements SettingsScope {
 
 			const args = parseCommandArgs(argsString);
 			controller.signal.throwIfAborted();
-			const result = await loaded.command.execute(args, ctx, argsString);
+			result = await loaded.command.execute(args, ctx, argsString);
 			controller.signal.throwIfAborted();
-			// If result is a string, it's a prompt to send to LLM
-			// If void/undefined, command handled everything
-			return result ?? "";
 		} catch (err) {
 			if (controller.signal.aborted) return "";
 			if (headlessExport) {
@@ -9565,10 +9567,13 @@ export class AgentSession implements SettingsScope {
 				const message = err instanceof Error ? err.message : String(err);
 				logger.error("Custom command failed", { commandName, error: message });
 			}
-			return ""; // Command was handled (with error)
 		} finally {
 			this.#customCommandAbortControllers.delete(controller);
 		}
+		// 原生命令返回 void／空串时已完成副作用，没有后续模型准入；
+		// 仅在此补报一次，非空变换仍由原有 prompt／队列边界报告准入。
+		if (!result) onHandled?.();
+		return result ?? "";
 	}
 
 	/**

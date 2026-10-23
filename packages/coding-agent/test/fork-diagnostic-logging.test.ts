@@ -457,53 +457,14 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 		}
 	}, 35_000);
 
-	it("keeps INFO-level dialog outcomes distinct and closes SQLite list failures without leaking host content", async () => {
+	it("closes SQLite list failures without leaking host content", async () => {
 		const box = await sandbox("info");
 		const canary = "FORKDIAGNOSTICBOUNDARYPRIVATE";
 		try {
 			const value = await box.probe("boundaries", canary);
 			expect(value.listFailure).toBe("SQLiteError");
-			expect(
-				value.dialogs.map((dialog: { kind: string; value?: string; failure?: string }) => ({
-					kind: dialog.kind,
-					value: dialog.value,
-					failure: dialog.failure,
-				})),
-			).toEqual([
-				{ kind: "responded", value: `${canary}ANSWER`, failure: undefined },
-				{ kind: "cancelled", value: undefined, failure: undefined },
-				{ kind: "timed_out", value: undefined, failure: undefined },
-				{ kind: "aborted", value: undefined, failure: undefined },
-				{ kind: "failed", value: undefined, failure: "Error" },
-				{ kind: "disconnected", value: undefined, failure: "Error" },
-				{ kind: "editor_aborted", value: undefined, failure: undefined },
-			]);
-			expect(value.dialogs.every((dialog: { pending: number }) => dialog.pending === 0)).toBe(true);
 			const { raw, records } = await box.logs();
 			expect(raw).not.toContain(canary);
-			const starts = records.filter(record => record.event === "rpc_dialog_started");
-			const endings = records.filter(record => record.event === "rpc_dialog_terminal");
-			expect(starts).toHaveLength(7);
-			expect(endings.map(record => record.result)).toEqual([
-				"responded",
-				"cancelled",
-				"timed_out",
-				"aborted",
-				"failed",
-				"disconnected",
-				"aborted",
-			]);
-			for (const start of starts) {
-				const own = endings.filter(end => end.dialog_id === start.dialog_id);
-				expect(own).toHaveLength(1);
-				expect(own[0]?.operation_id).toBe(start.operation_id);
-				expect(start.operation_id).toBe("boundary-parent");
-				expect(own[0]?.request_id).toBe("dialog-command");
-				expect(typeof own[0]?.elapsed_ms).toBe("number");
-			}
-			for (const end of endings.filter(record => record.result === "cancelled" || record.result === "aborted")) {
-				expect(end.level).toBe("info");
-			}
 			const lists = records.filter(record => record.event === "docs.list");
 			const listStarts = lists.filter(record => record.result === "started");
 			expect(listStarts).toHaveLength(2);

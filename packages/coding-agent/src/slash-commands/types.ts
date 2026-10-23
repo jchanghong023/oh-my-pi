@@ -76,6 +76,8 @@ export interface SlashCommandRuntime {
 	sessionManager: SessionManager;
 	settings: Settings;
 	cwd: string;
+	/** Rebind a session-scoped host after native relocation; absent hosts retain process cwd binding. */
+	rebindCwd?: (cwd: string) => Promise<void> | void;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */

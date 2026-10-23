@@ -117,11 +117,9 @@ describe("JCH scope parsing through the public ACP dispatcher", () => {
 		"/jchverify",
 		"/jchverify uncommitted extra",
 		"/jchcatchup unknown",
-	])("consumes %s without producing a model prompt", async input => {
-		const { runtime, output } = textRuntime();
-		expect(await executeAcpBuiltinSlashCommand(input, runtime)).toEqual({ consumed: true });
-		expect(output).toHaveLength(1);
-		expect(output[0]?.length).toBeGreaterThan(0);
+	])("rejects %s without producing a model prompt", async input => {
+		const { runtime } = textRuntime();
+		expect(await executeAcpBuiltinSlashCommand(input, runtime)).toEqual({ consumed: true, failed: true });
 	});
 
 	it.each([
@@ -168,9 +166,11 @@ describe("JCH batch argument parsing", () => {
 		["unsafe task target", "9007199254740992 30 审查"],
 		["unsafe count", "200 9007199254740992 审查"],
 	])("rejects %s without starting a model turn", async (_boundary, args) => {
-		const { runtime, output } = textRuntime();
-		expect(await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch ${args}`, runtime)).toEqual({ consumed: true });
-		expect(output[0]).toStartWith("用法：/jch-workflowzbatch ");
+		const { runtime } = textRuntime();
+		expect(await executeAcpBuiltinSlashCommand(`/jch-workflowzbatch ${args}`, runtime)).toEqual({
+			consumed: true,
+			failed: true,
+		});
 	});
 });
 

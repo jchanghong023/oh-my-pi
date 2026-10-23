@@ -8,6 +8,7 @@ import { AgentStorage } from "../../session/agent-storage";
 import { HistoryStorage } from "../../session/history-storage";
 import { closeSessionIndex } from "../../session/session-index";
 import { LegacyProtocol } from "./schema";
+import { getOmpProfileStorageIdentity } from "./profiles";
 
 type WriteFrame = (frame: unknown) => Promise<void>;
 
@@ -75,6 +76,7 @@ export async function prepareZCodeStorage(input: Readable, write: WriteFrame): P
 	const startup = new ZCodeStorageStartup(write);
 	let buffer = Buffer.alloc(0);
 	let confirmed = false;
+	let closed = false;
 	const controller = new AbortController();
 	const { promise: acknowledgement, resolve, reject } = Promise.withResolvers<boolean>();
 	const fail = (message: string, kind: string) => {
@@ -117,12 +119,14 @@ export async function prepareZCodeStorage(input: Readable, write: WriteFrame): P
 	};
 	void acknowledgement.catch(() => {});
 	try {
+		await write({ method: "omp/startup/profile", params: getOmpProfileStorageIdentity() });
 		await write({ method: "startup/storagePath", params: { path: startup.resourcePath } });
 		const reuse = await acknowledgement;
 		clearTimeout(timer);
 		if (reuse) await fsp.access(startup.resourcePath, fs.constants.R_OK | fs.constants.W_OK);
 		else await startup.open(controller.signal);
 		startup.close();
+		closed = true;
 		controller.signal.throwIfAborted();
 		await write({ method: "startup/storagePrepared", params: {} });
 	} catch (error) {
@@ -132,6 +136,6 @@ export async function prepareZCodeStorage(input: Readable, write: WriteFrame): P
 		clearTimeout(timer);
 		cleanup();
 		input.pause();
-		startup.close();
+		if (!closed) startup.close();
 	}
 }

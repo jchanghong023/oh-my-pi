@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { z } from "zod";
 import { getAgentDir, getMarketplacesRegistryPath, isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import { Settings, withActiveSettings } from "../../config/settings";
 import { hookCapability } from "../../capability/hook";
@@ -10,7 +11,7 @@ import type { EffectiveExtensionRoots, LoadContext } from "../../capability/type
 import { loadCapability, isUserSourceEnabled, type Hook } from "../../discovery";
 import { classifyAgentPluginRoot } from "../../discovery/agent-plugin-format";
 import { listClaudePluginRoots, type ClaudePluginRoot } from "../../discovery/helpers";
-import { listOmpExtensionRoots } from "../../discovery/omp-extension-roots";
+import { getCurrentOmpExtensionRootInputs, listOmpExtensionRoots } from "../../discovery/omp-extension-roots";
 import { buildPluginDirRoot } from "../../discovery/plugin-dir-roots";
 import { getInstalledPlugins } from "../../extensibility/plugins/loader";
 import { parseMarketplaceCatalog } from "../../extensibility/plugins/marketplace/fetcher";
@@ -23,6 +24,64 @@ import { LegacyProtocol as L } from "./schema";
 import type { SubagentRuntimeConfig } from "./schema/vendor/subagent-runtime-config";
 import type { ModelSelection } from "./schema/vendor/model-selection";
 
+/** Local bridge extension; vendor protocol schemas stay unchanged. */
+export const zcodeSkillsManageParamsSchema = z.discriminatedUnion("action", [
+	z.object({ action: z.literal("list"), workspacePath: z.string().min(1) }).strict(),
+	z.object({ action: z.literal("refresh"), workspacePath: z.string().min(1) }).strict(),
+	z
+		.object({
+			action: z.literal("setEnabled"),
+			workspacePath: z.string().min(1),
+			skillId: z.string().min(1),
+			enabled: z.boolean(),
+			scope: z.enum(["user", "workspace"]).default("user"),
+		})
+		.strict(),
+]);
+export const zcodeSkillsManageResultSchema = z
+	.object({
+		skills: z.array(
+			z
+				.object({
+					id: z.string(),
+					name: z.string(),
+					description: z.string(),
+					body: z.string(),
+					path: z.string(),
+					scope: z.enum(["workspace", "user", "plugin"]),
+					enabled: z.boolean(),
+					pluginName: z.string().optional(),
+					source: z
+						.object({
+							provider: z.string(),
+							providerName: z.string(),
+							path: z.string(),
+							level: z.enum(["user", "project", "native"]),
+							origin: z.string().optional(),
+							pluginName: z.string().optional(),
+						})
+						.strict(),
+					disabledReason: z.enum(["item-disabled", "provider-disabled", "user-opt-in"]).optional(),
+				})
+				.strict(),
+		),
+		capability: z.object({ userScopeAvailable: z.literal(true), toggleScope: z.literal("profile") }).strict(),
+		diagnostics: z.array(
+			z
+				.object({
+					code: z.literal("skill_read_failed"),
+					severity: z.literal("warning"),
+					message: z.string(),
+					path: z.string(),
+				})
+				.strict(),
+		),
+		sharedDirectory: z
+			.object({ path: z.string(), readOnly: z.literal(true) })
+			.strict()
+			.optional(),
+	})
+	.strict();
 export interface ZCodeCatalogOptions {
 	settings?: Settings;
 	session?: AgentSession;
@@ -58,9 +117,121 @@ function publicFailure(error: unknown): string {
 	return "Resource could not be read or validated";
 }
 
-/** Read-only adapter. Native discovery and the resident runtime remain the resource owners. */
+function effectiveExtensionRoots(settings: Settings, session?: AgentSession): EffectiveExtensionRoots {
+	return (
+		session?.effectiveExtensionRoots ?? {
+			...getCurrentOmpExtensionRootInputs(),
+			configured: cfgExtensions.get(settings),
+			configuredLevel: settings.extensionsSourceLevel(),
+		}
+	);
+}
+
+/** Native discovery and Settings remain the resource and configuration owners. */
 export class ZCodeCatalogs {
 	readonly #resident = new WeakMap<AgentSession, Promise<Inventory>>();
+	#skillManagementTail: Promise<unknown> = Promise.resolve();
+	/** Invalidate only after the native resident resource refresh has completed. */
+	invalidateSession(session: AgentSession): void {
+		this.#resident.delete(session);
+	}
+	async manageSkills(
+		cwd: string,
+		raw: unknown,
+		options: ZCodeCatalogOptions & {
+			onChanged?: () => Promise<void>;
+		} = {},
+	) {
+		const run = () => this.#manageSkills(cwd, raw, options);
+		const result = this.#skillManagementTail.then(run, run);
+		this.#skillManagementTail = result.catch(() => {});
+		return result;
+	}
+	async #manageSkills(
+		cwd: string,
+		raw: unknown,
+		options: ZCodeCatalogOptions & {
+			onChanged?: () => Promise<void>;
+		},
+	) {
+		const params = zcodeSkillsManageParamsSchema.parse(raw);
+		// 管理清单直接使用原生 inventory；不得创建 Session，也不得写旧 .zcode 配置。
+		// loadIsolated({ readOnly: true }) 不读取全局层；使用原生只读工厂才能看到 profile 开关。
+		const settingsOptions = {
+			cwd,
+			agentDir: options.agentDir ?? options.session?.settings.getAgentDir() ?? options.settings?.getAgentDir(),
+		};
+		const settings =
+			params.action === "setEnabled"
+				? await Settings.loadIsolated(settingsOptions)
+				: (options.session?.settings ?? options.settings ?? (await Settings.loadReadOnly(settingsOptions)));
+		const discoverySettings = options.session?.settings ?? options.settings ?? settings;
+		const discover = () =>
+			withActiveSettings(discoverySettings, () =>
+				loadSkillCatalog(
+					{
+						...cfgSkills.get(discoverySettings),
+						cwd,
+						agentDir: options.agentDir ?? settings.getAgentDir(),
+						// 管理与引用目录共用当前调用的根；显式根只能来自该会话，不能借其他会话。
+						extensionRoots: effectiveExtensionRoots(discoverySettings, options.session),
+						disabledExtensions: cfgDisabledExtensions.get(settings),
+					},
+					"inventory",
+				),
+			);
+		let catalog = await discover();
+		if (params.action === "setEnabled") {
+			try {
+				if (params.scope !== "user")
+					throw new Error(
+						"Workspace skill settings are unsupported; toggles belong to the active OMP profile user layer",
+					);
+				const skill = catalog.skills.find(item => item.filePath === params.skillId);
+				if (!skill) throw new Error("Native skill not found");
+				// 原生开关按技能名持久化；include/ignored/source/master 的更高约束不被桥接层改写。
+				cfgDisabledExtensions.setMember(settings, `skill:${skill.name}`, { member: !params.enabled });
+				await settings.flush();
+				await options.onChanged?.();
+				catalog = await discover();
+				const current = catalog.skills.find(item => item.filePath === params.skillId);
+				if (!current || !current.disabledReason !== params.enabled)
+					throw new Error(
+						"Native skill remains constrained by include/ignored/master/source settings; inspect OMP settings",
+					);
+			} finally {
+				// 临时写入实例已 flush；取消其定时保存，不关闭进程共享的原生 AgentStorage。
+				settings.cancelPendingSaves();
+			}
+		}
+		if (params.action === "refresh") await options.onChanged?.();
+		return zcodeSkillsManageResultSchema.parse({
+			skills: catalog.skills.map(skill => ({
+				id: skill.filePath,
+				name: skill.name,
+				description: skill.description,
+				body: skill.content,
+				path: skill.filePath,
+				enabled: !skill.disabledReason,
+				source: { ...skill._source },
+				...(skill.disabledReason ? { disabledReason: skill.disabledReason } : {}),
+				scope: skill._source.pluginName ? "plugin" : skill._source.level === "project" ? "workspace" : "user",
+				...(skill._source.pluginName ? { pluginName: skill._source.pluginName } : {}),
+			})),
+			capability: { userScopeAvailable: true, toggleScope: "profile" },
+			...(process.env.OMP_SKILLS_DIR?.trim()
+				? {
+						sharedDirectory: { path: expandTilde(process.env.OMP_SKILLS_DIR.trim()), readOnly: true },
+					}
+				: {}),
+			diagnostics: catalog.warnings.map(warning => ({
+				code: "skill_read_failed",
+				severity: "warning",
+				message: warning.message,
+				path: warning.skillPath,
+			})),
+		});
+	}
 	/** Capture at runtime initialization, not when a later Picker first opens. */
 	async captureSession(cwd: string, options: ZCodeCatalogOptions & { session: AgentSession }): Promise<void> {
 		await this.#inventory(cwd, options);
@@ -124,17 +295,12 @@ export class ZCodeCatalogs {
 		const settings =
 			options.session?.settings ??
 			options.settings ??
-			(await Settings.loadIsolated({ cwd, agentDir: options.agentDir, readOnly: true }));
+			(await Settings.loadReadOnly({ cwd, agentDir: options.agentDir }));
 		return withActiveSettings(settings, () => this.#discoverScoped(cwd, options, settings));
 	}
 	async #discoverScoped(cwd: string, options: ZCodeCatalogOptions, settings: Settings): Promise<Inventory> {
 		const agentDir = options.agentDir ?? settings.getAgentDir() ?? getAgentDir();
-		const extensionRoots: EffectiveExtensionRoots = options.session?.effectiveExtensionRoots ?? {
-			explicit: [],
-			mode: "merge",
-			configured: cfgExtensions.get(settings),
-			configuredLevel: settings.extensionsSourceLevel(),
-		};
+		const extensionRoots = effectiveExtensionRoots(settings, options.session);
 		const context: LoadContext = { cwd, home: os.homedir(), repoRoot: null, agentDir, extensionRoots };
 		const diagnostics: L.ZCodePluginDiagnostic[] = [];
 		const report = (code: string, message: string, pluginId?: string) =>

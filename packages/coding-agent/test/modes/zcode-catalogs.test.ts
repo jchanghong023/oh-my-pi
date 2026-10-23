@@ -3,13 +3,31 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { __resetDirsFromEnvForTests, getAgentDir, getPluginsDir } from "@oh-my-pi/pi-utils";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { clearPluginRootsAndCaches } from "../../src/discovery/helpers";
+import {
+	clearOmpExtensionCliRoots,
+	injectOmpExtensionCliRoots,
+	withOmpExtensionRootScope,
+} from "../../src/discovery/omp-extension-roots";
 import { ZCodeCatalogs } from "../../src/modes/zcode/catalogs";
 import { LegacyProtocol as L } from "../../src/modes/zcode/schema";
+import { AgentStorage } from "../../src/session/agent-storage";
+import { createAgentSession } from "../../src/sdk";
+import { AuthStorage } from "../../src/session/auth-storage";
+import { SessionManager } from "../../src/session/session-manager";
 
 const roots: string[] = [];
-const envKeys = ["OMP_CONFIG_ROOT", "PI_CODING_AGENT_DIR", "OMP_PROFILE", "PI_PROFILE", "PI_CONFIG_DIR"] as const;
+const envKeys = [
+	"OMP_CONFIG_ROOT",
+	"PI_CODING_AGENT_DIR",
+	"OMP_PROFILE",
+	"PI_PROFILE",
+	"PI_CONFIG_DIR",
+	"OMP_SKILLS_DIR",
+] as const;
 let savedEnv: Array<string | undefined>;
 beforeEach(async () => {
 	savedEnv = envKeys.map(key => process.env[key]);
@@ -22,6 +40,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
 	clearPluginRootsAndCaches();
+	// 写入 profile 会打开原生进程级数据库；Windows 删除目录前必须显式关闭连接。
+	AgentStorage.close();
 	for (const [index, key] of envKeys.entries()) {
 		const value = savedEnv[index];
 		if (value === undefined) delete process.env[key];
@@ -57,7 +77,7 @@ async function fixture(scope: "project" | "user" = "project") {
 			},
 		}),
 	);
-	const settings = await Settings.loadIsolated({
+	const settings = await Settings.loadReadOnly({
 		cwd,
 		agentDir: getAgentDir(),
 		readOnly: true,
@@ -83,7 +103,7 @@ describe("native profile catalog settings", () => {
 	});
 	it("keeps disabled skills in plugin inventory but excludes them from executable references", async () => {
 		const f = await fixture();
-		const settings = await Settings.loadIsolated({
+		const settings = await Settings.loadReadOnly({
 			cwd: f.cwd,
 			agentDir: getAgentDir(),
 			readOnly: true,
@@ -109,7 +129,7 @@ describe("native profile catalog settings", () => {
 	});
 	it("applies the configured master skill switch without dropping installed plugin metadata", async () => {
 		const f = await fixture();
-		const settings = await Settings.loadIsolated({
+		const settings = await Settings.loadReadOnly({
 			cwd: f.cwd,
 			agentDir: getAgentDir(),
 			readOnly: true,
@@ -272,5 +292,247 @@ describe("native ZCode resource catalogs", () => {
 				{ kind: "built-in-fallback" },
 			),
 		).toEqual({});
+	});
+});
+
+describe("native skill management bridge", () => {
+	it("uses settings overlay extension roots for management and persists native toggles", async () => {
+		const f = await fixture();
+		const root = path.join(f.cwd, "overlay-root");
+		await fs.mkdir(path.join(root, "skills", "overlay"), { recursive: true });
+		await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "overlay-root", omp: {} }));
+		await fs.writeFile(
+			path.join(root, "skills", "overlay", "SKILL.md"),
+			"---\nname: overlay\ndescription: Overlay skill\n---\nOverlay body.\n",
+		);
+		const settings = await Settings.loadReadOnly({
+			cwd: f.cwd,
+			agentDir: getAgentDir(),
+			overrides: { extensions: [root] },
+		});
+		const options = { settings };
+		const params = { workspacePath: f.cwd };
+		const listed = await f.catalogs.manageSkills(f.cwd, { ...params, action: "list" }, options);
+		const skill = listed.skills.find(item => item.name === "overlay")!;
+		expect(skill).toBeDefined();
+		expect((await f.catalogs.skillReferences(f.cwd, options)).skills.some(item => item.name === skill.name)).toBe(
+			true,
+		);
+		for (const enabled of [false, true]) {
+			const result = await f.catalogs.manageSkills(
+				f.cwd,
+				{ ...params, action: "setEnabled", scope: "user", skillId: skill.id, enabled },
+				options,
+			);
+			expect(result.skills.find(item => item.id === skill.id)?.enabled).toBe(enabled);
+		}
+		expect(await fs.readFile(path.join(root, "skills", "overlay", "SKILL.md"), "utf8")).toContain("Overlay body.");
+		await withOmpExtensionRootScope([], "explicit-only", async () => {
+			const managed = await f.catalogs.manageSkills(f.cwd, { ...params, action: "list" }, options);
+			expect(managed.skills.some(item => item.name === "overlay")).toBe(false);
+			expect((await f.catalogs.skillReferences(f.cwd, options)).skills.some(item => item.name === "overlay")).toBe(
+				false,
+			);
+		});
+		await withOmpExtensionRootScope([root], "explicit-only", async () => {
+			const invocation = { settings: f.settings };
+			const managed = await f.catalogs.manageSkills(f.cwd, { ...params, action: "list" }, invocation);
+			expect(managed.skills.some(item => item.name === "overlay")).toBe(true);
+			expect(
+				(await f.catalogs.skillReferences(f.cwd, invocation)).skills.some(item => item.name === "overlay"),
+			).toBe(true);
+		});
+		injectOmpExtensionCliRoots([root], os.homedir(), f.cwd, { mode: "explicit-only", replace: true });
+		try {
+			const invocation = { settings: f.settings };
+			const managed = await f.catalogs.manageSkills(f.cwd, { ...params, action: "list" }, invocation);
+			expect(managed.skills.some(item => item.name === "overlay")).toBe(true);
+			expect(
+				(await f.catalogs.skillReferences(f.cwd, invocation)).skills.some(item => item.name === "overlay"),
+			).toBe(true);
+		} finally {
+			clearOmpExtensionCliRoots();
+		}
+	});
+
+	it("uses the supplied session explicit roots in explicit-only management", async () => {
+		const f = await fixture();
+		const root = path.join(f.cwd, "explicit-root");
+		await fs.mkdir(path.join(root, "skills", "explicit"), { recursive: true });
+		await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "explicit-root", omp: {} }));
+		await fs.writeFile(
+			path.join(root, "skills", "explicit", "SKILL.md"),
+			"---\nname: explicit\ndescription: Explicit skill\n---\nExplicit body.\n",
+		);
+		const authStorage = await AuthStorage.create(":memory:");
+		const { session } = await createAgentSession({
+			cwd: f.cwd,
+			agentDir: getAgentDir(),
+			settings: f.settings,
+			authStorage,
+			modelRegistry: new ModelRegistry(authStorage, path.join(f.cwd, "absent-models.yml")),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			sessionManager: SessionManager.inMemory(f.cwd),
+			extensionRoots: () => ({
+				explicit: [root],
+				mode: "explicit-only",
+				configured: [],
+				configuredLevel: "project",
+			}),
+			bindProcessState: false,
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			toolNames: [],
+			restrictToolNames: true,
+			enableMCP: false,
+			enableLsp: false,
+			skipPythonPreflight: true,
+			taskDepth: 1,
+			agentId: "SubAgent",
+		});
+		try {
+			const options = { session };
+			const listed = await f.catalogs.manageSkills(f.cwd, { workspacePath: f.cwd, action: "list" }, options);
+			expect(listed.skills.some(item => item.name === "explicit" && item.enabled)).toBe(true);
+			expect((await f.catalogs.skillReferences(f.cwd, options)).skills.map(item => item.name).sort()).toEqual(
+				listed.skills
+					.filter(item => item.enabled)
+					.map(item => item.name)
+					.sort(),
+			);
+		} finally {
+			await session.dispose();
+			authStorage.close();
+		}
+	});
+
+	it("persists disable/enable in the active profile and refreshes executable references", async () => {
+		const f = await fixture();
+		const request = { workspacePath: f.cwd };
+		const listed = await f.catalogs.manageSkills(f.cwd, { ...request, action: "list" });
+		const skill = listed.skills.find(item => item.name === "sample")!;
+		expect(skill.enabled).toBe(true);
+		expect(listed.capability.toggleScope).toBe("profile");
+		let refreshes = 0;
+		const onChanged = async () => {
+			refreshes++;
+		};
+		const disabled = await f.catalogs.manageSkills(
+			f.cwd,
+			{
+				...request,
+				action: "setEnabled",
+				skillId: skill.id,
+				enabled: false,
+				scope: "user",
+			},
+			{ onChanged },
+		);
+		expect(disabled.skills.find(item => item.id === skill.id)?.enabled).toBe(false);
+		expect(disabled.skills.find(item => item.id === skill.id)?.disabledReason).toBe("item-disabled");
+		expect(await fs.readFile(path.join(getAgentDir(), "config.yml"), "utf8")).toContain("skill:sample");
+		expect((await f.catalogs.skillReferences(f.cwd)).skills.some(item => item.name === "sample")).toBe(false);
+		await expect(f.catalogs.prepareReferences(f.cwd, `[$sample](${skill.path})`, {})).rejects.toThrow("unavailable");
+		await f.catalogs.manageSkills(f.cwd, { ...request, action: "refresh" }, { onChanged });
+		expect(refreshes).toBe(2);
+		const enabled = await f.catalogs.manageSkills(
+			f.cwd,
+			{
+				...request,
+				action: "setEnabled",
+				skillId: skill.id,
+				enabled: true,
+				scope: "user",
+			},
+			{ onChanged },
+		);
+		expect(enabled.skills.find(item => item.id === skill.id)?.enabled).toBe(true);
+		expect((await f.catalogs.skillReferences(f.cwd)).skills.some(item => item.name === "sample")).toBe(true);
+		expect(await f.catalogs.prepareReferences(f.cwd, `[$sample](${skill.path})`, {})).toEqual({
+			text: "/skill:sample",
+		});
+		await expect(fs.access(path.join(f.cwd, ".zcode"))).rejects.toThrow();
+	});
+	it("isolates profile configuration and discovers only the requested workspace", async () => {
+		const f = await fixture();
+		const skill = (await f.catalogs.manageSkills(f.cwd, { workspacePath: f.cwd, action: "list" })).skills.find(
+			item => item.name === "sample",
+		)!;
+		await f.catalogs.manageSkills(f.cwd, {
+			workspacePath: f.cwd,
+			action: "setEnabled",
+			skillId: skill.id,
+			enabled: false,
+		});
+		const otherProfile = path.join(f.cwd, "other-profile");
+		const independent = await f.catalogs.manageSkills(
+			f.cwd,
+			{ workspacePath: f.cwd, action: "list" },
+			{
+				agentDir: otherProfile,
+			},
+		);
+		expect(independent.skills.find(item => item.name === "sample")?.enabled).toBe(true);
+		// 原生发现会扫描祖先；使用另一个真实项目，而不是在原项目下创建子目录。
+		const otherFixture = await fixture();
+		const otherWorkspace = otherFixture.cwd;
+		const other = await f.catalogs.manageSkills(otherWorkspace, { workspacePath: otherWorkspace, action: "list" });
+		expect(other.skills.some(item => item.id === skill.id)).toBe(false);
+		expect(
+			other.skills.some(item => item.path === path.join(otherFixture.plugin, "skills", "sample", "SKILL.md")),
+		).toBe(true);
+		await expect(fs.access(otherProfile)).rejects.toThrow();
+	});
+	it("rejects workspace persistence and unsupported destructive actions without changing files", async () => {
+		const f = await fixture();
+		const skill = (await f.catalogs.manageSkills(f.cwd, { workspacePath: f.cwd, action: "list" })).skills.find(
+			item => item.name === "sample",
+		)!;
+		await expect(
+			f.catalogs.manageSkills(f.cwd, {
+				workspacePath: f.cwd,
+				action: "setEnabled",
+				skillId: skill.id,
+				enabled: false,
+				scope: "workspace",
+			}),
+		).rejects.toThrow("Workspace skill settings are unsupported");
+		for (const action of ["delete", "copy"]) {
+			await expect(
+				f.catalogs.manageSkills(f.cwd, { workspacePath: f.cwd, action, skillId: skill.id }),
+			).rejects.toThrow();
+		}
+		expect(await fs.readFile(skill.path, "utf8")).toContain("Real discovered skill");
+	});
+	it("projects native Shared source and directory without changing shared files or environment", async () => {
+		const f = await fixture();
+		const shared = path.join(f.cwd, "shared-skills");
+		const sharedSkill = path.join(shared, "shared-management", "SKILL.md");
+		await fs.mkdir(path.dirname(sharedSkill), { recursive: true });
+		const content = "---\nname: shared-management\ndescription: Shared native skill\n---\nShared body.\n";
+		await fs.writeFile(sharedSkill, content);
+		process.env.OMP_SKILLS_DIR = shared;
+		const listed = await f.catalogs.manageSkills(f.cwd, { workspacePath: f.cwd, action: "list" });
+		expect(listed.sharedDirectory).toEqual({ path: shared, readOnly: true });
+		const skill = listed.skills.find(item => item.name === "shared-management")!;
+		expect(skill.source).toMatchObject({
+			provider: "custom",
+			providerName: "Shared",
+			level: "user",
+			path: sharedSkill,
+		});
+		for (const enabled of [false, true]) {
+			const result = await f.catalogs.manageSkills(f.cwd, {
+				workspacePath: f.cwd,
+				action: "setEnabled",
+				skillId: skill.id,
+				enabled,
+			});
+			expect(result.skills.find(item => item.id === skill.id)?.enabled).toBe(enabled);
+			expect(await fs.readFile(sharedSkill, "utf8")).toBe(content);
+			expect(process.env.OMP_SKILLS_DIR).toBe(shared);
+		}
+		expect(await fs.readdir(path.dirname(sharedSkill))).toEqual(["SKILL.md"]);
 	});
 });

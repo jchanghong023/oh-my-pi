@@ -58,6 +58,11 @@ export class ToolRestrictions {
 		};
 	}
 
+	/** Preserve snapshot isolation while allowing embedding policies to retain their wrapper. */
+	clone(): ToolRestrictions {
+		return new ToolRestrictions(this.snapshot());
+	}
+
 	allows(name: string): boolean {
 		const canonical = normalizeToolNames([name.startsWith("xd://") ? name.slice(5) : name])[0];
 		if (this.#denylist.has(canonical) || (this.#allowlist && !this.#allowlist.has(canonical))) return false;

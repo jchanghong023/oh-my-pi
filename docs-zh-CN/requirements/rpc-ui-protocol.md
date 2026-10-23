@@ -64,17 +64,63 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 - **兼容评估触发**：OmpCode 合并 ZCode 上游、升级目标发行，或修改协议 schema、Host 调用、启动装配、UI 消费链时，必须核对固定基线与目标合同。合同未变可复用有效兼容结果；合同变化才重钉 SHA、适配并验证受影响链路。纯注释、排版或无关代码变化不机械重钉，不仅盯 `zcode-protocol*` 文件而遗漏调用方变化。
 - **新增接口的形态对齐规则**：新增协议能力（含 `omp-config-extension` 等附加式扩展）的字段与交互形态 MUST 按功能对齐固定提交中 ZCode 既有同类交互的协议样式，不发明平行形态：数据列表（候选／目录／成员等）用查询返回有序列表、由客户端本地渲染；单项选择由客户端依据选项数据本地渲染选择框、提交时只带具体身份（同 `switchModelConfig`／`switchCollaborationMode` 的选项枚举＋命令提交具体值的形态）；会话内阻塞式问答走 pending interaction 行（`userInput` payload 的 `options`／`questions`，含 `multiSelect` 多选、`sensitive` 输入与 `freeText`），以 `resolveInteraction` 应答；长列表分页沿用 rows range 查询语义。确实没有可对应的既有形态时，先在需求中说明差异依据再定义，不得直接另造。
 
+### OMP 附加能力与方法契约
+
+本节说明当前 OMP 适配层已有的附加 wire，不改变上述固定基线、既有方法／字段／枚举或版本。`runtime/capabilities` 分别以 `ompProfiles`、`ompTan`、`ompTeam`、`ompIndexes`、`ompSkillManagement` 宣布下列能力；Team／role 配置另由 `ompConfiguration` 宣布，不能将运行观测与配置能力互相替代。客户端仅在对应能力为 `true` 时开放入口，缺失时明确不支持，不直接读写执行端配置或另造调用。
+
+字段及严格校验直接引用以下当前源码，方法名由 `server.ts` 分发；本地声明不是对 vendored schema 的修改。以下路径均相对本仓 `packages/coding-agent/src/`：
+
+| 能力 | 现有方法与参数／结果权威 |
+| --- | --- |
+| `ompProfiles` | `omp/profiles/list`、`omp/profiles/prepareSwitch`、`omp/profiles/cancelSwitch`；`modes/zcode/profiles.ts` 的 `listParams`、`prepareParams`、`cancelParams` 与桥接返回值 |
+| `ompTan` | `omp/tan/start`、`omp/tan/list`、`omp/tan/stop`；`modes/zcode/tan.ts` 的 `ompTanStartParamsSchema`、`ompTanListParamsSchema`、`ompTanStopParamsSchema`、`OmpTanJob` |
+| `ompTeam` | `omp/team` 的 `list`／`read`／`stop` action；`modes/zcode/team.ts` 的 `handle` 字段校验、`OmpTeamRun`、`OmpTeamNode`、`OmpTeamEdge` |
+| `ompIndexes` | `omp/wiki/list`、`init`、`remove`、`search`、`grep`、`cancel` 及 `omp/repo/status`、`init`、`update`、`rebuild`、`remove`、`text`、`symbol`、`cancel`；各 action 均加对应 `omp/wiki/` 或 `omp/repo/` 前缀，参数见 `modes/zcode/indexes.ts` 的 `ompWikiParamsSchema`、`ompRepoParamsSchema` |
+| `ompSkillManagement` | `skills/manage` 的 `list`／`refresh`／`setEnabled` action；`modes/zcode/catalogs.ts` 的 `zcodeSkillsManageParamsSchema`、`zcodeSkillsManageResultSchema` |
+
+- 上述 workspace 对象复用 `LegacyProtocol.zcodeWorkflowsListParamsSchema.shape.workspace`，不是新的身份格式。外层沿用既有 stdio 请求 ID、result／error 信封；数字协议错误码原样保留，字符串业务码放在数字 `error.code:-32000` 的 `error.data.code`，已知业务 data／回执不得丢失。无专用数字码的校验或业务异常按当前分发器返回 `-32602`，客户端不凭消息文本推断成功、取消或可自动重试。
+- 全部请求受既有启动 ready 门禁与进程生命周期约束；owner EOF 关闭本进程资源，不增加 shutdown／exit 方法。attachment／详情关闭只释放原订阅，不等于关闭原生运行 owner。附加查询不改变 desktop-continuous／web-remote-replayable 的快照与恢复语义，也不把临时响应当作持久执行事实。
+
+#### Profile 身份与重启屏障
+
+- 三个方法均带 `workspace`。`list` 可带 `candidate`，返回 `activeProfile`、`configRoot`、`storageScope`、`profiles:[{name,active}]` 及请求中的规范化 `candidate`；默认 profile 为 `null`。候选选择不是运行身份，不创建、复制或激活 profile。
+- `configRoot` 保留原生配置根含义；`storageScope` 标识实际有效持久数据域与运行 profile，以存储准备所声明的真实数据位置为依据。XDG 分流的数据域不能仅按配置根合并；offline 的临时 shm 路径须映射回持久根，不把主机／用户临时缓存身份当成数据域。相同域重启稳定，数据域或运行 profile 不同则隔离；不使用待重启选择或进程随机身份。
+- `prepareSwitch` 带 `expectedProfile`，先核对当前运行身份，再同步检查原生任务与生命周期 blocker；有阻塞返回 `{ready:false,blockers}`，无阻塞返回 `{ready:true,token,blockers:[]}` 并设进程准入屏障，不热切换。屏障期间业务请求以 `-32000`／`data.kind:"omp.profileSwitchPrepared"` 拒绝，profile 控制与能力查询仍可用。`cancelSwitch` 带同 workspace 的 `token`，仅匹配屏障时返回 `{cancelled:true}`；不匹配返回 `false`，不解除他人的屏障。实际切换仍由应用完整退出并重启完成。
+
+#### Tan 与 Team 运行观测
+
+- Tan 三个方法带 `workspace`、`sessionId`，先校验父会话属于该 workspace；`start` 另带非空 `work`，返回 `{job}`；`list` 返回 `{jobs}`；`stop` 另带 `jobId`，返回 `{accepted,job}`。job 的原生 `jobId`／`agentId` 与 journal `childSessionId` 不混用 provider session identity。执行、结果与取消均由父会话原生 Tan／AsyncJobManager 所有，桥接层不建第二个调度器。
+- `stop` 只取消当前 manager 中属于该父会话 owner 的 live Tan job；仅有派发历史或同 ID 非 Tan 任务不构成取消授权，`accepted` 不是已完成取消。冷历史不恢复执行：原生状态不再保留时为 `unavailable` 并说明缺口，派发 receipt 不证明完成，已知模型错误不得伪报成功。输入 receipt 的冷恢复仅认所属原生 journal 中 `zcode_tan_admission` 的 `{inputId,sourceCommand,jobId}` 精确关联、对应原生 dispatch 及仍为 admitted 的输入事实，并核对 command key／fingerprint／epoch；不按临近顺序猜关联，不迁移缺少关联的旧 receipt，不把未提升的普通排队输入认作已接受。该关联是内部持久事实，不新增 wire 字段。
+- `omp/team` 带 `action`、`sessionId`，`read`／`stop` 另带 `jobId`；`list` 返回 `{runs}`，`read` 返回 `{run}`，`stop` 返回 `{accepted,run}`。它只观测／停止指定会话的既有 Team run，不派发讨论、不保存成员配置；发起仍走 `/team`，配置仍走 `session/configure`。
+- Team 运行事实来自原生事件、registry、job 与所属 journal；`source` 区分 `native-live`／`native-journal`。节点、工具、消息、时间线只记录真实变化，查询与收口刷新真实状态；冷查询不新建 AgentSession 或抢写租约。无 live owner 的历史 running 状态须为 `unavailable`，不能推断完成／取消。`stop` 仅对所属 live 原生 job 尝试取消，历史不可停止时返回 `accepted:false`。
+- 现有 edge 仅支持 `reviews`／`revises`／`rechecks`，`evidence` 标明原生调用标签依据；未公开的对齐输入、反馈及综合消费因果关系通过 `unavailable` 明确提示，不添加枚举、不按时间或模型猜边。该观测面不等于 [Team 动态运行视图完整关系目标](team.md#210-team-动态运行视图与交互关系新增需求未验收) 已实现或验收。
+
+#### Wiki／Repo 的进度、取消与只读边界
+
+- 每个请求带 `workspace`、非空 `operationId`；方法后缀决定 action，wire 参数不另传 `action`。Wiki `init` 带绝对执行端 `directory`、`name` 与 `confirmedDirectory`，`remove` 带 `name`；查询字段及分页／预算限制按上述 schema。Repo 维护带 `confirmedRoot`，查询支持 `query` 及既有 `path`／`category`／`limit`／`cursor`。确认路径按执行端 canonical 目录比较，不能用客户端路径猜根或绕过确认。
+- 返回值直接来自 `DocsService`／`RepoService`，类型见 `docs/types.ts`、`repo/types.ts`；Wiki list 为 `{indexes}`，remove 为 `{removed:true}`，Repo remove 另含 `root`。缺库只读查询返回原生缺失状态／结果，不建目录、库或 AgentSession。损坏／较新 Repo schema 的 status 用已有 `exists`、`root`、`needsReconcile`、`uncertainReasons`、`unchecked`、`incomplete` 暴露恢复需要，确认后 `rebuild` 复用原生 recovery，不静默删除重建。
+- 通知 `omp/wiki/progress`／`omp/repo/progress` 为 `{operationId,workspace,progress}`；`progress` 原样采用 `DocsProgress`／`RepoProgress`，不得造百分比或将通知视作成功终态。客户端以完整 workspace 与 operationId 关联；最终结果／错误仍在原请求返回，不进入 conversation snapshot 或重放日志。
+- `cancel` 使用目标操作同一 `operationId` 与 workspace，返回 `{cancelled:boolean}`；归属同时受类型、canonical cwd、workspace identity／key、remoteSessionId 限定。`true` 只表示找到并发出 abort，不证明回滚；同域 ID 正在使用时拒绝重复准入，不把另一次调用当重试。完成／取消后释放身份；不再发送被取消或已销毁操作的进度。EOF／dispose 取消并等待自有操作收口，不因关闭详情而取消。
+- 持久索引代际及维护仍由原生服务拥有；同 Repo 根维护互斥，失败／取消如实结算，不增加平行索引或后台队列。
+
+#### Skill 管理
+
+- `skills/manage` 带执行端 `workspacePath` 和 action；`setEnabled` 另带 `skillId`、`enabled`、可选 `scope`（缺省 `user`）。schema 虽保留 `workspace` scope，当前管理面不支持该写域，必须显式拒绝；不能写旧 `.zcode` 配置或伪报工作区开关成功。
+- `list` 读取原生 inventory（含禁用项），`refresh` 重读并刷新驻留会话目录；均不创建聊天会话或执行扩展。返回 `skills`、`capability:{userScopeAvailable:true,toggleScope:"profile"}`、`diagnostics` 及可选只读 `sharedDirectory`。每项的路径身份、正文、来源及 `disabledReason` 以结果 schema 为准；目录项的来源 scope 不等于启停写入范围。
+- 管理清单与引用目录共用原生有效根计算。当前 `skills/manage` wire 仅有 workspacePath，没有 session／owner 字段，默认消费目标 workspace 的 Settings 与原生 invocation／CLI roots，不等于管理任意会话的私有 overlay 目录，也不能挑选一个驻留会话借用其根。仅已有明确内部 session 上下文时，才采用该会话的 settings overlay、explicit roots／explicit-only；不为此新增 wire 字段。
+- 启停仅写当前运行 profile 的用户层原生开关，按技能名持久化，成功后刷新同进程驻留会话并失效目录缓存；不改 provider／include／ignored／master 等高层限制，不复制／修改团队共享技能。高层仍禁用时显式失败，不以请求值冒充有效启用。保存失败也不得关闭进程共享存储；读取 warning 保留在 `diagnostics`，不能伪造可用条目。
+
 ## 接入架构与启动合同
 
-**状态：目标方案已确认；app-server 入口及本节接入实现尚未完成，整体验收未完成。需求是否已发布与功能是否已实现分开记录。**
+**状态：`omp app-server` 入口、同进程协议及 Host／UI 接入已实现；OMP 原生现有定向验证已通过，整体验收尚未完成。当前新版 GUI 的 Team 结构化详情、profile 待重启角色写入边界、mention 及命令错误专项仍在修复／待定向复验，不能宣称新 GUI 全部通过。跨仓真实验收状态统一见 [OMP 联调阻塞记录](../../../forkZcode/docs/testing/omp-integration-blockers.md)，不在本需求复制第二套历史或清单；真实模型及平台／远端范围按该记录分别界定。**
 
 ### 入口与仓库边界
 
-- 用户带着 `ZCODE_AGENT_SERVER_COMMAND=omp` 启动 ZCode，现有 Host 默认调用 `omp app-server --stdio`，桌面追加 `--surface desktop`。OMP 实现对应子命令，对外说 ZCode 协议，对内与 AgentSession 同进程直接调用业务 API，不启动会话宿主子进程。
+- OMP 是用户预先独立安装的外部依赖，不打入 OmpCode 安装包、ZIP 或其他发行归档，不由 OmpCode 自动下载、安装、升级或替换。ZCode 桌面按 OmpCode FORK-003 选择已有外部 OMP：显式非空 `ZCODE_AGENT_SERVER_COMMAND` 优先；未设置时直接调用当前终端继承 PATH 中的 `omp`，不扫描安装目录、自行遍历 PATH 或维护发现缓存，开发态与打包态一致。显式配置失败不回退；未找到、不可用或协议不兼容时明确阻断并提示安装／更新兼容 OMP，不回退随包副本、源码运行器或原 Agent；完整选择及发行排除合同由 OmpCode FORK-003 维护。现有 Host 默认调用 `omp app-server --stdio`，桌面追加 `--surface desktop`；OMP 对外说 ZCode 协议，对内与 AgentSession 同进程直接调用业务 API，不启动会话宿主子进程。
 - 不带该子命令直接运行 `omp` 时仍进入原生 TUI；上游自带的 RPC／ACP 入口与默认行为不因 ZCode 接入改变，fork 不扩展、不依赖独立 RPC。
 - 协议实现目标目录为 `packages/coding-agent/src/modes/zcode/`，是待实现的独立模式目录；CLI 注册和构建复用上游入口。协议解析、路由、事件映射和投影集中在该目录，不在 Agent 核心、工具或 UI 中散布 ZCode 专属分支，也不另造 Agent loop。
-- OmpCode 保留上游 Agent 源码，通过启动、初始化、打包和远端分发装配替换运行入口；两仓各自持续合并上游。OMP 不跨仓深路径引用 ZCode 源码，ZCode 不嵌入 OMP 的私有运行时实现。
-- 通过固定版本、可校验的 OMP 发行物交付，记录所兼容的 ZCode 协议基线和实际能力。需要提取协议 schema 时包含完整依赖闭包及来源；schema diff／结构校验不等于行为兼容，更不能把 MCP 的 `protocolVersion` 配置当作 App–Agent 协商。
+- OmpCode 保留上游 Agent 源码，通过启动和初始化接入外部 OMP；两仓各自持续合并上游。OMP 不跨仓深路径引用 ZCode 源码，OmpCode 不嵌入 OMP 的私有运行时实现或发行资产。
+- OMP 项目独立交付可安装、可校验的发行物；OmpCode 仅记录兼容的 OMP 版本／提交范围、ZCode 协议基线和实际能力，不将 OMP 发行物装配进自己的桌面或远端发行包。需要提取协议 schema 时包含完整依赖闭包及来源；schema diff／结构校验不等于行为兼容，更不能把 MCP 的 `protocolVersion` 配置当作 App–Agent 协商。
 
 ### 独立目录与同进程调用边界
 
@@ -196,6 +242,8 @@ sequenceDiagram
 - stdout 只输出约定协议帧，诊断走日志／stderr。V4 的 seq、logEpoch、revision 和订阅恢复不能由 OMP journal entry cursor 或进程内输入序号冒充；初始及恢复 snapshot 必须来自一致性截面，重启不能拼接旧运行态。
 - 命令 ACK、单轮 yield 与整个会话 settled 分开处理；后台工作仍可能唤醒会话时不能按 `agent_end` 提前宣称完成或回收运行时。
 - 取消外层请求等待不等于停止业务；需要停止时须直接调用目标会话的实际取消 API。单会话停止不能退出 app-server；stdin EOF、stdio 连接关闭或 owner 消失时须处置本进程托管的会话及自有工具／子代理资源，不得影响其他 workspace 或非本次拥有的进程。
+- Host 仍消费的 `workspace/generateText`／`workspace/cancelGenerateText` 纳入普通工作区能力，用于 Git 提交信息等独立文本生成；请求、结果及取消身份沿固定基线 legacy schema，不改既有 wire。使用目标工作区与当前 profile 的原生模型／认证解析及 completion，生成不写聊天历史、不创建持久会话、不执行工具；取消只终止匹配的生成，owner EOF 释放本进程全部自有生成资源，不影响其他会话。
+- 文本生成的 envelope id 仅关联响应；可选 `operationId` 标识本进程待取消的生成，活跃同名请求明确拒绝、完成后允许复用，未知取消返回 `cancelled:false`。`messages` 与 `prompt` 同时提供时按基线优先使用 messages；原样返回选择身份与真实文本、toolCalls、finishReason 和 usage，不执行模型返回的工具调用。生成期间仍受 profile 切换准入屏障保护。
 - `ZCODE_AGENT_SERVER_COMMAND` 只选择程序，不绕过准备；OMP 生产端按下节合同完成真实初始化，ZCode 的任务索引准备、外部进程 spawn、帧消费及监督按 OmpCode FORK-003 装配。不能把 Bun 二进制作为 Node Worker 脚本，也不能用空成功、静默跳过或放宽时限伪造 ready。
 - 配置源、role 默认值与当前会话选择按本文现有范围分别管理；适配 ZCode 配置输入时明确作用域和覆盖顺序，不维护第二套隐式双向同步的配置真值，也不依赖真实用户已有配置才能完成隔离启动验证。
 - app-server 的进程级网络配置在创建任何会话／Provider 前一次消费 Host 的 `ZCODE_HTTP_PROXY`、`ZCODE_NO_PROXY`、`ZCODE_AGENT_CA_CERT`（键名复用协议 vendor 的 `runtimeEnv` 定义），转接原生代理和额外 CA 机制，不建立每会话代理状态。非空 Host 代理适用于 HTTP／HTTPS，保留原生 per-request／per-provider 代理优先级与本地地址／NO_PROXY 绕过；连接失败直接报告，不重试直连或 Windows 系统代理。显式存在但为空的代理键表示直连默认值，不落回继承的标准代理或系统代理；Host 空设置目前不注入该键，完全没有 Host 显式网络配置时保持 OMP 原生行为。
@@ -209,6 +257,7 @@ sequenceDiagram
 
 - **执行形态**：独立子进程运行 `omp app-server --stdio --prepare-storage --cwd <绝对路径>`，复用正常 app-server 已解析的同一产物、cwd、profile、配置覆盖和环境；不能用 Node Worker 加载 EXE。此入口只准备真实 OMP 存储，不创建聊天会话、不启动模型／工具／Goal，不迁移原 ZCode session 库，也不抢占其他运行会话的租约。
 - **真实资源边界**：先解析有效 OMP 数据根与本次需要准备的存储，私有准备通道报告实际存储路径（主存储文件或其有效数据根）；不能伪造一个无用途的 ZCode SQLite 文件。路径不进入业务 snapshot／遥测，公开状态中的 databaseId 为不透明资源身份，不含路径或凭据。
+- 同次准备在路径声明前发送附加通知 `omp/startup/profile`，参数为严格的 `{configRoot,activeProfile,storageScope}`，与正常进程 `omp/profiles/list` 的实际原生事实同源。Host 据此准备同域任务组织索引后确认路径，不从会话路径或待重启选择猜测执行域；既有 `startup/storagePath`、确认及状态 schema 不变。
 
 | 顺序       | 生产端与对端行为                                                                                                                                                                     |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -315,21 +364,63 @@ sequenceDiagram
 
 ## 权限与提问
 
-权限行为与上游 OMP 默认保持一致，不维护 fork 自有权限策略，不新增 ZCode 权限审批界面。不得将“不做审批界面”解释为自动放行或自动拒绝。
+工具授权策略与上游 OMP 一致，原生运行时是允许、拒绝、一次／会话及持久授权的唯一所有者。原生 `approve` 需要用户决定时，app-server 必须通过 ZCode 已有 `permission` pending interaction 和权限面板完成真实审批，不降级为普通 `userInput`，不自动批准或默认报不支持。
 
-保留模型向用户提问、用户回答后继续执行的交互。接入时须核对上游权限流程与无专用审批界面的兼容性。
+- 原生请求携带真实 toolCallId、toolName、已解析输入及可提供的授权选项；协议层只发布本次原生允许的选项。仅允许一次、会话授权、目录／目标及持久授权按原生 prompt 精确映射；不新增全访问选项，不接受客户端自带规则扩大范围。未知选项、取消、拒绝及失效应答均不得执行工具或记录授权。
+- `resolveInteraction` 按 session／interaction 身份先到者生效，重复或迟到应答幂等 noop。工具行呈现 pendingApproval，conversation pendingInteractions、兼容 pendingPermissions 和 sessions-index permissionCount 来自同一等待事实；用户确认前不得出现真实工具副作用。
+- Stop、会话关闭、owner EOF 和真实连接关闭必须取消相关审批等待，撤除投影，迟到批准不能恢复工具。仅切换查看目标或 unsubscribe 不等于关闭运行时；continuous／replayable 的订阅恢复仍使用各自 snapshot／seq 水位，不能复制审批执行或跨会话应答。
+- 关闭顺序先取消待审批与反向请求、卸载投影订阅，再关闭 workflow journal 等被观察资源；不能在数据库关闭后由取消回调再次查询，也不能吞掉清理错误冒充正常退出。
+- 原生子代理与工作流 actor 的审批保留 origin、父工具和 child 身份，由父级已有权限面板路由到实际原生等待者；并发主会话不被审批阻塞。
+- 验收从真实 GUI → Host → 当前 OMP → 真实工具验证允许一次、拒绝、取消、隔离与刷新恢复；原生协议回归另覆盖重复／迟到应答、非法授权、会话关闭／EOF、连接关闭和两种 delivery profile。模型仅使用隔离本地模拟服务，不操作共享桌面输入。普通模型提问和计划确认仍保持原有交互。
+
+```mermaid
+sequenceDiagram
+    participant N as OMP 原生授权所有者
+    participant B as ZCode 协议适配层
+    participant U as 既有权限面板
+    participant T as 实际工具
+    N->>B: approve(真实toolCall、可授权选项、signal)
+    B-->>U: permission pending + 工具等待态
+    alt 用户选择仍有效的选项
+        U->>B: resolveInteraction(sessionId, interactionId, optionId)
+        B->>N: 精确原生授权结果
+        N->>T: 原生策略放行且未取消才执行
+    else 拒绝、停止、关闭或失联
+        B->>N: 拒绝或取消，不记录授权
+    end
+    B-->>U: 清除pending并发布真实执行或终态
+```
+
+### Skill 与 Provider 管理桥接
+
+- ZCode 的 Skill 与 Provider 管理在 OMP 现有能力范围内尽力完整适配，不再作为独立管理面整体排除。仅修改 ZCode 协议适配层与消费侧，复用原生 Settings、Skill 发现／刷新及 Provider registry／认证／请求 API，不改变 OMP 核心执行语义，不建立平行配置或业务状态。
+- Skill 页面以原生发现清单与有效启用状态为事实源；启停通过原生已有配置入口保存，刷新复用原生发现与会话资源刷新。清单能力以可选 `toggleScope:"profile"` 明确原生只能保存当前 profile 用户层；UI 必须提示影响该 profile 下工作区，并发送 `scope:"user"`，不得根据资源的 workspace 发现范围伪装工作区持久化。字段缺省保持旧 Agent 的 scope 语义，显式原生 workspace 写请求明确拒绝。仅原生已有安全业务入口支持的删除／复制才提供真实操作；缺少等价 API 时在现有页面明确返回不支持，不擅自操作原 ZCode 技能目录或删除共享／插件资源。
+- `OMP_SKILLS_DIR` 以原生 catalog 的真实来源元数据展示 `Shared`、执行端和只读路径，不根据路径猜测来源、不另行扫描。共享技能仍沿用原生命名与优先级；启停只写当前 profile 设置，不修改共享源文件。尚无原生安全 API 的新建、导入、删除、复制或同步 UI 必须保留可见，禁用并说明原因，不执行旧 ZCode 目录操作。目录环境变量只展示执行端实际值，不修改系统环境或静默重启 Agent。
+- Provider 继续复用已有账户配置同步、registry 刷新与会话模型切换，补齐现有 `provider/testModelConnectivity` 调用，使用目标 workspace 下实际解析的模型及认证进行最小真实请求；失败保留结构化原因，不能只检查配置存在或伪造成功。连接测试不改变默认模型、已有会话或持久凭据。
+- 管理操作保持 workspaceIdentity／远端路由、profile 与请求代际归属；只读清单不启动会话，不把 Host 的旧 `.zcode/cli` 配置当成 OMP 配置。验证仅使用隔离本地模型和临时 Skill，分别证明真实持久启停／刷新与 Provider 成功／认证失败／不可达；不自动调用真实模型。MCP 等其他管理面不随本需求扩大。
+
+### Team、Wiki 与 Repo 核心界面
+
+- Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；完整合同见 [Team 2.9–2.10](team.md#210-team-动态运行视图与交互关系新增需求未验收)。
+- Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，CAS 与离线双写合同不变。
+- Wiki 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Wiki 专页](fork.md#zcode-wiki-专页新增需求未实现未验收)；Repo 专页承接全部 TUI 维护操作及原生查询，权威合同见 [Repo 专页](repo-index.md#zcode-repo-专页新增需求未实现未验收)。两者左侧入口位于自动化下方，相邻展示。
+- OMP 已尽力适配但仍无法实现的功能，ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Wiki／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因。
+- Wiki／Repo 严格只增加可选能力、独立方法／通知和 schema，不修改既有 ZCode 协议的字段、方法、通知、信封、版本或语义，不改 vendor 基线。Host 只桥接、UI 只展示，管理与查询仍由各自原生索引服务拥有。新增进度、取消和错误也属于扩展，不借修改旧聊天／会话合同承载；旧客户端与缺少扩展的旧 Agent 保持既有行为。
 
 ## 命令与技能
 
-保留完整命令目录、动态参数补全，以及命令和技能调用。目录来自实际注册信息，避免另行维护人工清单。
+保留完整真实命令目录、命令名补全及已有参数用法提示。名称、别名、说明和用法来自目标工作区当前 OMP 注册信息，不维护人工白名单；本次不要求动态参数候选或命令专属表单。
 
 终端专属命令可以明确报告不支持。调用及错误处理优先跟随上游，不为界面另造业务语义。
 
 ### 必须接入的命令
 
-app-server 的同进程命令入口须支持 `/wiki`、`/repo`、`/team`、`/plan`、`/loop`、`/goal`、`/goal-autopilot`、`/advisor`、`/ultrathink`、`/orchestrate`、`/workflowz`、`/jch-workflowzbatch`、`/fullsend`、`/skill:<name>` 与 `/compact`。正文中的 `ultrathink` 等魔法关键词仍按共享会话规则生效；它不是 `/advisor` 的参数。
+app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原生内置命令及其合法参数，不以此文档的示例命令限制实际目录。使用既有 `createSession.firstInput.text`、`sendText.text` 与交互应答，不新增逐命令接口、参数字段或协议版本；ZCode 不复制参数解析、校验或业务逻辑。新增普通内置命令应由实际目录发现并复用同一提交路径，无需增加 ZCode 命令分支。下列已有命令的业务合同继续有效，但不得据旧本地解析拦截实际注册的命令。
 
 - app-server 直接调用目标会话的 prompt／命令业务入口，复用同一注册表的命令、别名与补全，不另维护人工目录。已识别但仅限 TUI 的命令必须明确拒绝，不能原样交给模型。
+- 原生 custom command 以 `void`／空串完成、不产生模型正文时，在真实处理完成的原生 admission 边界记录受理并返回 accepted；原处理器已消费并展示的错误仍保留其真实输出，不将 accepted 解释为业务成功。返回非空 prompt 的命令继续在原 prompt／queue 边界准入，未知、取消或未完成的处理不能提前接受；同 commandId 沿用既有 ledger 去重。
+- OMP 运行时实际目录中的命令及别名优先于 ZCode 同名本地逻辑；文本中的引号、换行和内部空白完整交给 OMP 原生处理器。非法参数返回原生用法或错误，不降为普通模型问题、不以受理代替完成；仅 TUI 专属子操作明确不可用，不阻断同命令其他独立操作。普通对话、既有按钮及上游 Agent 路径不改变。
+- 验收从现有输入框执行 `/goal show`、`/goal pause` 及带完整参数的 `/compact`，核对原生结果、真实错误、交互、取消与历史，保留会话身份、队列准入、停止和去重边界。
 - app-server 从同进程结果、事件及 UI 回调生成 ZCode 输出和交互，调用同一业务服务，不为界面另造命令执行、权限或配置保存实现，也不通过内部序列化绕行。
 - `/wiki` 提供已有索引的查看、检索、新建与删除；仍只有 init/remove 两种维护动作，业务契约见 [文档索引](fork.md#markdown-文档索引)。`/repo` 提供状态、首次确认建立、更新、重建恢复、删除及进度和取消，业务契约见 [代码定位索引](repo-index.md#用户入口repo-内置命令)。ZCode 对话作为用户入口，与终端面板使用同一服务。
 - `/plan [任务]` 进入或切换计划模式，复用计划只读保护、计划 role 临时模型、计划文件及 `xd://propose` 提交链路；已有草稿退出前确认。提交计划后展示计划正文并请求用户确认，取消或拒绝保留计划模式，批准后恢复工具与模型并复用上游计划保存、引用和执行链路。本次审批支持保留当前上下文继续执行；清空上下文、压缩后执行和终端计划编辑器不属于本次接入范围。
@@ -341,6 +432,15 @@ app-server 的同进程命令入口须支持 `/wiki`、`/repo`、`/team`、`/pla
 - `/team`、`/advisor` 的开关/状态/记录、魔法关键词命令、技能与 `/compact` 复用已有执行路径。`/advisor configure` 的终端编辑器仍明确报告仅 TUI 可用，role 保存继续使用现有配置接口。
 - 长操作与审批等待不得占住停止通道；取消、会话切换及 EOF 后不得向其他会话写入结果或启动后续轮次。命令的调用受理、模型运行与最终完成沿用现有命令事件语义。
 
+### Tan 原生后台委派
+
+- 接入 `/tan <任务>` 和可发现的“后台委派”入口，复用原生 Tan 控制器、Agent Registry、AsyncJobManager 及结果投递；不修改 OMP 核心或 TUI，不把已有 `/side`／fork 改名冒充 Tan，不新增后台调度、执行状态机或结果存储。
+- Tan 在所属父会话的 `record.run` 注册表作用域中派发，父回合继续运行且不被 steer。继承原生稳定上下文、模型／思考、工具、扩展、MCP、认证／缓存及 `local://` 归属；清理父待办、修复未完成工具尾部，并沿原生压缩恢复规则避免重复请求。
+- 原生 job、独立 Agent 与 parent owner 精确绑定；工具与最终结果只投递所属 Main，不能泄漏到并发 root、其他 Tan 或 profile。等待自身与派生异步任务收口，失败不伪报成功；正常完成 park 并保留真实历史。
+- 独立停止 Tan 使用原生取消入口，父会话 Stop 保持原生语义；关闭 owner／EOF 回收其自有任务。关闭详情视图只退订，不取消后台任务。权限与提问沿原生 headless 安全策略，不借 UI 扩权；原生无安全支持时保留 UI 并说明限制。
+- 通过可选附加能力与现有会话／子代理投影公开派发、过程、结果、错误、停止和历史，保留 desktop-continuous 与 web-remote-replayable 的恢复边界。验收覆盖父运行中派发、继承隔离、真实工具／结果回投、多 Tan／root／profile、取消／EOF、视图关闭、正常历史和失败；仅用隔离本地模型及现有真实 CLI／GUI 自动化入口。
+- Tan 必须增加并实际运行一个最小端到端测试：从真实界面派发到原生 Tan、实际执行并将结果展示给所属父会话，使用隔离本地模型；不能以仅 schema／单测或未执行的测试定义代替。其余边界仅按本次实现的具体风险选择最小必要回归，不扩大无关套件。
+
 ## 模型配置
 
 保留仅作用于当前会话的临时切模型操作，不写持久配置，不改变其他会话及新会话默认值。
@@ -351,16 +451,26 @@ app-server 的同进程命令入口须支持 `/wiki`、`/repo`、`/team`、`/pla
 
 模型筛选和可用性统一跟随上游，不新增 fork 专有禁用策略。
 
+### 多 profile、多 role 与临时模型界面
+
+- 三者是 OMP 核心优势，均须在界面提供可发现入口；不能把 OMP 压缩为 ZCode CLI 的单套模型设置。页面显示实际执行端、当前原生 profile、配置来源及作用范围；无法支持的操作仍保留可见并明确原因。
+- profile 选择复用 OMP 原生名称校验、目录及启动机制。不同 profile 的模型角色、用户设置、技能启停、凭据和会话历史保持原生隔离；不在已经运行的同一 OMP 进程中改写全局 profile，不把旧会话交给另一 profile 执行。切换目标不得静默停止或迁移运行中任务，也不得借 GUI 复制配置或认证。端到端验收使用两个隔离 profile 证明配置与会话互不串写。
+- `omp/profiles/list` 的附加返回包含原生实际 `configRoot` 与稳定 `storageScope`；后者标识实际有效持久数据域与运行 profile，而非仅配置文件根，在相同域重启后保持；offline 临时 shm 域映射回持久数据域，不采用进程随机身份或待重启选择。`configRoot` 含义不变。OmpCode 的任务组织索引、草稿与 Recent 隔离消费此可信事实，应用侧具体所有者及切回恢复合同由 ZCode 仓 FORK-004 维护。
+- 会话删除的已完成墓碑只供历史／账本扫描确认缺席，不构成 profile 切换 blocker；只有实际进行中的创建、恢复、关闭和删除才阻塞切换。并发恢复同一会话可以共用一次打开，但不能静默忽略调用方不兼容的目录、MCP 或工具策略。
+- 设置页枚举默认／命名 profile，选择由应用持久化并于完整退出重启后生效；不热切换正在运行的同一原生进程。待重启期间设置页、会话工具栏及 Host 持久写入边界均禁止向旧 profile 保存角色，并明确说明原因；当前会话临时模型仍保持既有运行语义。
+- role 界面展示原生完整角色目录、未配置项及自定义角色，分别编辑保存，保留无损原值、来源、revision、冲突和保存回执；只写目标 role，不顺带更改 Team、当前主模型或其他 profile。
+- 临时模型选择只改变显式目标会话的运行态，显示当前生效值；不修改用户 role、Team、workspace 默认模型或新会话默认值。取消不产生写入，目标会话或连接代际变化后不应用迟到结果。验收从实际界面选择模型并核对当前会话请求模型及持久文件未变。
+
 ### Team 模型配置接口（规划，未实现）
 
-**状态：Team 配置已由 OMP 附加式协议扩展接入 ZCode 协议：`session/configure` 的 `get_team_config`／`get_team_models`／`set_team_config` operation（schema 见 `packages/coding-agent/src/modes/zcode/schema/omp-config-extension.ts`），能力经 `runtime/capabilities` 的 `ompConfiguration: true` 宣布，由 `modes/zcode/commands.ts` 分发至共享服务 `src/team/config.ts`；不修改任何既有协议方法与 vendored schema。原 RPC v3 wire 适配（`modes/rpc/rpc-team-config.ts`）已随独立 RPC 场景退役删除；外部 ZCode GUI 面板的实现与联调仍未完成。** 原标题仅保留既有链接锚点；既有 `/team` 讨论可用不证明 GUI 面板已存在。业务、TUI 与保存服务以 [Team 第 2.9 节](team.md#29-team-模型配置界面规划未实现)及[第 5.6 节](team.md#56-模型配置实现方案规划未实现)为权威；offline 配置必须服从[用户配置的 shm／NFS 双写权威要求](offline-shm.md#23-用户配置的-shmnfs-双写权威要求程序实现待验收)。本节以下字段契约为该扩展 operation 的 data 结构规格（`ompTeamConfigSchema` 等，含 role／模型 operation），不另立存储规则；具体证据、失败修复复用与未验收范围见[需求目录](README.md)。
+**状态：Team 配置已由 OMP 附加式协议扩展接入 ZCode 协议：`session/configure` 的 `get_team_config`／`get_team_models`／`set_team_config` operation（schema 见 `packages/coding-agent/src/modes/zcode/schema/omp-config-extension.ts`），能力经 `runtime/capabilities` 的 `ompConfiguration: true` 宣布，由 `modes/zcode/commands.ts` 分发至共享服务 `src/team/config.ts`；不修改任何既有协议方法与 vendored schema。原 RPC v3 wire 适配（`modes/rpc/rpc-team-config.ts`）已随独立 RPC 场景退役删除；ZCode GUI 配置面板与 Host 路由已接入，当前新版 GUI 尚待定向复验。** 原标题仅保留既有链接锚点，不代表配置面板仍未实现；既有 `/team` 讨论及原生定向通过不替代 GUI 验收。业务、TUI 与保存服务以 [Team 第 2.9 节](team.md#29-team-模型配置界面规划未实现)及[第 5.6 节](team.md#56-模型配置实现方案规划未实现)为权威；offline 配置必须服从[用户配置的 shm／NFS 双写权威要求](offline-shm.md#23-用户配置的-shmnfs-双写权威要求程序实现待验收)。本节以下字段契约为该扩展 operation 的 data 结构规格（`ompTeamConfigSchema` 等，含 role／模型 operation），不另立存储规则；跨仓真实验收状态统一见 [OMP 联调阻塞记录](../../../forkZcode/docs/testing/omp-integration-blockers.md)。
 
 #### 能力发现与通用约定
 
 - 传输与能力发现使用既有附加式扩展：`session/configure` 携带 operation 与参数（schema 在 `packages/coding-agent/src/modes/zcode/schema/omp-config-extension.ts`，不改任何既有方法与 vendored schema），能力经 `runtime/capabilities` 的 `ompConfiguration` 宣布；沿用既有请求关联与分帧，不增加协议大版本、HTTP 服务或独立连接。旧版本未声明该能力时 GUI 禁用配置入口并说明不支持，不能改读配置文件兜底。
 - 三个接口绑定目标会话、profile 和项目，从显式 session／workspace 目标获取同进程会话上下文，不能读取全局“当前会话”。均不接受任意路径、跨 profile 写入、凭据或 YAML 文本；GUI 切换目标会话后重新读取，不要求切换或重启进程。
 - 写入的模型引用使用 `provider`／`modelId` 组成的具体身份，不接受自然语言、通配符、`auto` 或思考级别扩展。查询采用下述无损槽位表示，原始 selector 即使失效也不能丢弃；只读预览可以携带该原文用于诊断，不能借预览将其写入。顺序及重复项完整保留，响应不含密钥、完整配置文件或无关设置。
-- 正常响应与失败回执沿用 ZCode 协议 `session/configure` 的 result／error 信封（data 结构以扩展 schema 为准）及机器可读错误码。Team 失败响应允许附带结构化 `data`，用于返回问题索引、实际保存回执及可取得的最新配置；GUI 不从错误消息文本解析状态。
+- 正常响应与失败回执沿用 ZCode 协议 `session/configure` 的 result／error 信封（data 结构以扩展 schema 为准）及机器可读错误码。外层 `error.code` 仍是数字；共享配置服务的字符串错误码保留在 `error.data.code`，已有问题索引、实际保存回执及可取得的最新配置一并保留。GUI 不从错误消息文本解析状态。
 
 #### `get_team_config`
 
@@ -458,7 +568,7 @@ GUI 提供专用 Team 模型配置面板，交互能力和预览按 Team 第 2.9
 
 #### Team 模型配置验收
 
-**状态：以下各条的入口均已切至 `omp app-server` 的 `session/configure` operation（能力协商经 `runtime/capabilities` 的 `ompConfiguration`）；外部 ZCode GUI 面板实现前，服务端定向验证可执行，GUI 联调项不可执行。**
+**状态：以下各条的入口均已切至 `omp app-server` 的 `session/configure` operation（能力协商经 `runtime/capabilities` 的 `ompConfiguration`）；服务端及 ZCode GUI 面板已接入，GUI 联调项现可执行。OMP 原生现有定向验证已通过，历史 GUI 局部证据不代表当前新版 GUI 已全部验收；当前定向复验、未验收平台与真实模型边界统一见 [OMP 联调阻塞记录](../../../forkZcode/docs/testing/omp-integration-blockers.md)。**
 
 - 在隔离环境从真实入口验证能力门控、旧协议／缺能力拒绝、三个接口的响应及错误字段、空名单／清除、跨 provider 搜索、中文别称多解、不支持／失效成员与主模型问题；入口为 `session/configure` 的对应 operation。请求不触发真实模型或不允许的网络访问。
 - 通过真实配置文件验证保存、顺序／重复保留、同 profile 重启读回、命名 profile 隔离、高层覆盖提示、重复键拒绝、同字段冲突及无关字段合并；三个来源列表各含不同位置失效 selector 时逐行无损返回，问题的 `list/source` 无歧义，模型失效但结构合法时仍可取得 revision 并替换／删除修复。
@@ -469,11 +579,11 @@ GUI 提供专用 Team 模型配置面板，交互能力和预览按 Team 第 2.9
 
 ## 范围与验收
 
-除上述明确要求的 Team 模型配置、子代理核心能力、工作流及其显示／控制外，不新增此前已取消的管理面、附件协议或 SDK 同步义务。具体不要求：技能启停、删除和刷新管理；队列查看、删除、重排和清空管理；通用设置、Provider、MCP、用量、搜索和 jobs 管理；结构化附件协议；SDK 同步与未列出命令的逐命令覆盖；独立的 `/btw` GUI 接入。上游自带功能随上游保留，不因此新增 GUI 接入承诺。此处的 jobs 管理排除不包含上述必须交付的子代理任务控制或工作流 run／actor 历史与控制。
+除上述明确要求的 Team 模型配置、工具权限审批、Skill／Provider 原生能力桥接、子代理核心能力、工作流及其显示／控制外，不新增此前已取消的管理面、附件协议或 SDK 同步义务。具体不要求：队列查看、删除、重排和清空的独立管理面；通用设置、MCP、用量、搜索和 jobs 管理；结构化附件协议；SDK 同步与未列出命令的逐命令覆盖；独立的 `/btw` GUI 接入。上游自带功能随上游保留，不因此新增 GUI 接入承诺。此处的 jobs 管理排除不包含上述必须交付的子代理任务控制或工作流 run／actor 历史与控制。Skill／Provider 的原生能力边界按上节专门合同，不以旧排除项拒绝桥接。
 
-**用户裁定（2026-10-22）追加排除项：**
+**明确排除项：**
 
-- **v4 permission 交互通道不支持**：OMP app-server 不产出 `permissionRequestPayload` 形状的悬挂交互（permissionCount 恒 0、pendingPermissions 恒空），工具审批按 OMP 自身 approval 策略（approvalMode 分层）裁决，适配层不得伪造 permission 形状或降级为 userInput 伪审批。ZCode 侧不得把 permission 面板行为作为 OMP 验收项；依赖 permission 反馈输入的用例按不支持处理。
+- v4 permission 工具审批已纳入上述「权限」合同，不再属于排除项；旧用例依赖原 Agent 工具名／私有规则或存储时仍需原生验收，不以旧夹具失败取消审批闭环。
 - **插件引用与插件目录不支持**：`plugin_reference` reminder、canonical `plugin://` 引用解析、插件目录 Picker 投影（icon/displayName(I18n)/category）均不作为交付或验收项。含插件引用的输入不得因插件未安装/未知而被拒绝整条输入（fail-open 跳过引用并继续对话），其余正文正常执行。
 
 “一次实现所有”指本文全部有效需求与正常接入必需的协议／启动合同同时完成，不重新引入上段明确排除的产品范围；排除独立管理面也不能被用来跳过普通聊天、历史、配置或启动必需的底层调用。

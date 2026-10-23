@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { SessionEntry } from "../../session/session-entries";
 import type { SessionManager } from "../../session/session-manager";
+import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
 import type { CommandAck, CommandEnvelope, CommandKey, CommandResult } from "./schema";
 
 const RECEIPT_TYPE = "zcode_command_result";
@@ -302,6 +303,28 @@ export class ZCodeCommandLedger {
 			};
 		}
 		if (fact.epoch === this.#epoch) return fact;
+		// Tan 派发已经完成输入副作用，不生成 promoted user row；必须核对精确命令身份和原生派发。
+		const dispatched = entries.some(entry => {
+			if (entry.type !== "custom" || entry.customType !== "zcode_tan_admission") return false;
+			const input = entry.data as (InputFact & { jobId?: string }) | undefined;
+			const source = input?.sourceCommand;
+			if (
+				input?.inputId !== id ||
+				!input.jobId ||
+				source?.sessionId !== fact.key.sessionId ||
+				source?.commandId !== fact.key.commandId ||
+				source?.fingerprint !== fact.fingerprint ||
+				source?.epoch !== fact.epoch
+			)
+				return false;
+			return entries.some(candidate => {
+				if (candidate.type !== "custom_message" || candidate.customType !== BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE)
+					return false;
+				const details: unknown = candidate.details;
+				return !!details && typeof details === "object" && "jobId" in details && details.jobId === input.jobId;
+			});
+		});
+		if (state === "admitted" && dispatched) return fact;
 		const promoted = entries.some(
 			entry => entry.type === "message" && "inputId" in entry.message && entry.message.inputId === id,
 		);

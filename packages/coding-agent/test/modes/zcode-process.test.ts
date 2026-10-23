@@ -3,7 +3,12 @@ import type { Subprocess } from "bun";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
+import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
+import { cursorModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models";
+import { getModelDbPath, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	COMMANDS_REQUIRING_BASE_REVISION,
 	type CommandType,
@@ -21,6 +26,7 @@ import {
 } from "../../src/modes/zcode/schema";
 import { conversationTelemetryFactSchema } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/telemetry";
 import { SessionManager } from "../../src/session/session-manager";
+import { discoverAuthStorage } from "../../src/sdk";
 
 type Frame = Record<string, unknown>;
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
@@ -402,21 +408,19 @@ async function output(peer: ProcessPeer, sessionId: string, marker: string) {
 			throw new Error(`Waiting for ${sessionId} output ${marker} failed`, { cause: error });
 		});
 }
-function findInteraction(value: unknown): Frame | undefined {
+function findInteraction(
+	value: unknown,
+	matches: (payload: Frame) => boolean = payload => payload.prompt === "Continue isolated session?",
+): Frame | undefined {
 	if (Array.isArray(value)) {
 		for (const item of value) {
-			const found = findInteraction(item);
+			const found = findInteraction(item, matches);
 			if (found) return found;
 		}
 	} else if (isRecord(value)) {
-		if (
-			typeof value.interactionId === "string" &&
-			isRecord(value.payload) &&
-			value.payload.prompt === "Continue isolated session?"
-		)
-			return value;
+		if (typeof value.interactionId === "string" && isRecord(value.payload) && matches(value.payload)) return value;
 		for (const item of Object.values(value)) {
-			const found = findInteraction(item);
+			const found = findInteraction(item, matches);
 			if (found) return found;
 		}
 	}
@@ -454,6 +458,89 @@ async function retainedModelIo(root: string): Promise<Map<string, string>> {
 }
 
 describe("ZCode actual public app-server process", () => {
+	test("unknown runtime shutdown leaves the public owner alive until EOF", async () => {
+		await using root = await TempDir.create("@zcode-owner-eof-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		expect((await peer.requestFrame("runtime/shutdown", {})).error).toMatchObject({ code: -32601 });
+		expect(await peer.request("runtime/capabilities", {})).toBeDefined();
+		expect(await peer.eof()).toBe(0);
+	}, 90_000);
+
+	test("workflow actor viewers retain the parent permission owner until the last real connection closes", async () => {
+		await using root = await TempDir.create("@zcode-actor-owner-");
+		await using config = await fixture(root);
+		const directory = path.join(config.cwdA, ".zcode", "workflows");
+		await fs.mkdir(directory, { recursive: true });
+		await fs.writeFile(
+			path.join(directory, "permission-owner.dwf.ts"),
+			'/* zcode-workflow\ndescription: Scoped actor permission ownership\n*/\nconst writer = agent("writer");\nreturn await writer.ask("ZCODE_TEST_TOOL_WORKFLOW_OWNER");\n',
+		);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		for (const closeParentFirst of [true, false]) {
+			const sessionId = await create(peer, config.cwdA);
+			const parentConnection = `parent-${closeParentFirst}`;
+			const actorConnection = `actor-${closeParentFirst}`;
+			await peer.request("v4/conversation/subscribe", {
+				topic: `conversation/${sessionId}`,
+				connectionId: parentConnection,
+				clientMode: "desktop-continuous",
+			});
+			expect(await command(peer, sessionId, "switchCollaborationMode", { mode: "build" })).toMatchObject({
+				status: "accepted",
+			});
+			expect(
+				await command(peer, sessionId, "startSavedWorkflow", { name: "permission-owner", args: {} }),
+			).toMatchObject({ status: "accepted" });
+			const isPermission = (payload: Frame) => payload.kind === "permission" && payload.toolName === "write";
+			const waiting = await peer.next(
+				frame =>
+					frame.method === "v4/conversation/frame" &&
+					isRecord(frame.params) &&
+					frame.params.topic === `conversation/${sessionId}` &&
+					findInteraction(frame.params, isPermission) !== undefined,
+			);
+			const interaction = findInteraction(waiting.params, isPermission)!;
+			const interactionId = interaction.interactionId;
+			if (typeof interactionId !== "string") throw new Error("Workflow permission has no interaction identity");
+			if (!isRecord(interaction.payload) || !isRecord(interaction.payload.origin))
+				throw new Error("Workflow permission has no native child origin");
+			const actorId = interaction.payload.origin.childSessionId;
+			if (typeof actorId !== "string") throw new Error("Workflow permission has no actor identity");
+			const topic = `conversation/${actorId}`;
+			const subscription = await peer.request("v4/conversation/subscribe", {
+				topic,
+				connectionId: actorConnection,
+				clientMode: "web-remote-replayable",
+			});
+			if (!isRecord(subscription) || !isRecord(subscription.ack))
+				throw new Error("Missing actor subscription acknowledgment");
+			// 退订仅撤掉投影，不撤掉实际连接对父级 scoped 审批的所有权。
+			await peer.request("v4/conversation/unsubscribe", {
+				topic,
+				connectionId: actorConnection,
+				subscriptionId: subscription.ack.subscriptionId,
+			});
+			const first = closeParentFirst ? parentConnection : actorConnection;
+			const last = closeParentFirst ? actorConnection : parentConnection;
+			await peer.request("v4/connection/flow", { connectionId: first, state: "closed" });
+			const retained = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+				await peer.request("session/read", { sessionId }),
+			);
+			expect(retained.runtime.pendingRequestIds).toContain(interactionId);
+			await peer.request("v4/connection/flow", { connectionId: last, state: "closed" });
+			const cancelled = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+				await peer.request("session/read", { sessionId }),
+			);
+			expect(cancelled.runtime.pendingRequestIds).not.toContain(interactionId);
+			expect(await Bun.file(path.join(config.cwdA, "proof.txt")).exists()).toBe(false);
+			expect(await command(peer, sessionId, "stop", {})).toMatchObject({ status: "accepted" });
+		}
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
 	test("canonical skill references execute the resident native skill rather than remaining model prose", async () => {
 		await using root = await TempDir.create("@zcode-native-reference-");
 		await using config = await fixture(root);
@@ -482,16 +569,41 @@ describe("ZCode actual public app-server process", () => {
 		await using root = await TempDir.create("@zcode-prepare-");
 		await using config = await fixture(root);
 		await using prepare = new ProcessPeer(config.cwdA, config.env, ["--prepare-storage"]);
+		const profile = await prepare.next(frame => frame.method === "omp/startup/profile");
 		const declaration = await prepare.next(frame => frame.method === "startup/storagePath");
-		expect(declaration.params).toHaveProperty("path");
+		const resourcePath = LegacyProtocol.zcodeStoragePreparationFrameSchema.options[0].parse(declaration).params.path;
+		expect(path.isAbsolute(resourcePath)).toBe(true);
+		expect(prepare.seen.indexOf(profile)).toBeLessThan(prepare.seen.indexOf(declaration));
 		expect(prepare.seen.some(frame => frame.method === "startup/storagePrepared")).toBe(false);
 		prepare.write({ method: "startup/storagePathReady", reuse: false });
 		const preparedReady = await prepare.ready();
 		await prepare.next(frame => frame.method === "startup/storagePrepared");
 		expect(await prepare.eof()).toBe(0);
+		const preparedStates = prepare.seen
+			.filter(frame => frame.method === "startup/storageState")
+			.map(frame => LegacyProtocol.zcodeStorageStartupStateSchema.parse(frame.params));
+		expect(preparedStates.map(state => state.phase)).toEqual(["checking", "ready"]);
+		expect(preparedStates[1]!.sequence).toBeGreaterThan(preparedStates[0]!.sequence);
+		expect(preparedStates[1]!.attemptId).toBe(preparedStates[0]!.attemptId);
+		expect(preparedStates[1]!.databaseId).toBe(preparedStates[0]!.databaseId);
+		// Host 只对同一已准备资源确认 reuse；不能再初始化或改变 profile/storage 身份。
+		await using reuse = new ProcessPeer(config.cwdA, config.env, ["--prepare-storage"]);
+		const reusedProfile = await reuse.next(frame => frame.method === "omp/startup/profile");
+		const reusedPath = await reuse.next(frame => frame.method === "startup/storagePath");
+		expect(reusedPath.params).toEqual(declaration.params);
+		expect(reusedProfile.params).toEqual(profile.params);
+		reuse.write({ method: "startup/storagePathReady", reuse: true });
+		await reuse.next(frame => frame.method === "startup/storagePrepared");
+		expect(await reuse.eof()).toBe(0);
+		expect(reuse.seen.some(frame => frame.method === "startup/storageState")).toBe(false);
 		await using normal = new ProcessPeer(config.cwdA, config.env);
 		const normalReady = await normal.ready();
 		expect(normalReady.params).not.toEqual(preparedReady.params);
+		const nativeProfile = await normal.request("omp/profiles/list", {
+			workspace: { workspaceKey: config.cwdA, workspacePath: config.cwdA },
+		});
+		if (!isRecord(profile.params)) throw new Error("Expected native startup profile identity");
+		expect(nativeProfile).toMatchObject(profile.params);
 		expect(config.requests).toHaveLength(0);
 		expect(await normal.eof()).toBe(0);
 	}, 90_000);
@@ -505,6 +617,14 @@ describe("ZCode actual public app-server process", () => {
 			if (ack) peer.write(ack);
 			expect(await peer.eof()).not.toBe(0);
 			expect(peer.seen.some(frame => frame.method === "startup/storagePrepared")).toBe(false);
+			const failed = peer.seen
+				.filter(frame => frame.method === "startup/storageState")
+				.map(frame => LegacyProtocol.zcodeStorageStartupStateSchema.parse(frame.params));
+			expect(failed).toHaveLength(1);
+			expect(failed[0]).toMatchObject({
+				phase: "failed",
+				errorCode: ack ? "open_failed" : "transport_closed",
+			});
 		}
 		await using peer = new ProcessPeer(config.cwdA, config.env);
 		await peer.ready();
@@ -774,7 +894,7 @@ describe("ZCode actual public app-server process", () => {
 		await assertBoundary(cold, nativeId, 2);
 	}, 120_000);
 
-	test("selected yolo mode authorizes actual writes while build rejects and sibling permissions stay unchanged", async () => {
+	test("selected yolo mode authorizes actual writes while build awaits denial and sibling permissions stay unchanged", async () => {
 		await using root = await TempDir.create("@zcode-mode-write-");
 		await using config = await fixture(root);
 		await using peer = new ProcessPeer(config.cwdA, config.env);
@@ -787,22 +907,195 @@ describe("ZCode actual public app-server process", () => {
 		expect(await command(peer, b, "switchCollaborationMode", { mode: "build" })).toMatchObject({
 			status: "accepted",
 		});
-		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_BUILD_A" });
-		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_BUILD_A_DONE");
-		expect(await Bun.file(path.join(config.cwdA, "proof.txt")).exists()).toBe(false);
-		const denied = await peer.request("session/messages", { sessionId: a });
-		expect(JSON.stringify(denied)).toContain("Native tool approval is not supported by the ZCode host");
+		const denyBuildWrite = async (sessionId: string, cwd: string, marker: string) => {
+			await command(peer, sessionId, "sendText", { text: marker });
+			// build 现在走原生审批；必须拒绝真实交互，不能等待旧版 unsupported 错误或自动授权。
+			const isWritePermission = (payload: Frame) => payload.kind === "permission" && payload.toolName === "write";
+			const waiting = await peer.next(
+				frame =>
+					frame.method === "v4/conversation/frame" &&
+					isRecord(frame.params) &&
+					frame.params.topic === `conversation/${sessionId}` &&
+					findInteraction(frame.params, isWritePermission) !== undefined,
+			);
+			const interaction = findInteraction(waiting.params, isWritePermission)!;
+			expect(interaction.payload).toMatchObject({
+				kind: "permission",
+				toolName: "write",
+				detail: { path: "proof.txt", content: marker },
+				options: expect.arrayContaining([expect.objectContaining({ optionId: "deny", kind: "deny" })]),
+			});
+			expect(await Bun.file(path.join(cwd, "proof.txt")).exists()).toBe(false);
+			expect(
+				await command(peer, sessionId, "resolveInteraction", {
+					interactionId: interaction.interactionId,
+					answer: { optionId: "deny" },
+				}),
+			).toMatchObject({ status: "accepted" });
+			await finishedOutput(peer, sessionId, `${marker}_DONE`);
+			expect(await Bun.file(path.join(cwd, "proof.txt")).exists()).toBe(false);
+		};
+		await denyBuildWrite(a, config.cwdA, "ZCODE_TEST_TOOL_BUILD_A");
 		expect(await command(peer, a, "switchCollaborationMode", { mode: "yolo" })).toMatchObject({
 			status: "accepted",
 		});
 		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_YOLO_A" });
 		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_YOLO_A_DONE");
 		expect(await fs.readFile(path.join(config.cwdA, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_YOLO_A");
-		await command(peer, b, "sendText", { text: "ZCODE_TEST_TOOL_BUILD_B" });
-		await finishedOutput(peer, b, "ZCODE_TEST_TOOL_BUILD_B_DONE");
-		expect(await Bun.file(path.join(config.cwdB, "proof.txt")).exists()).toBe(false);
-		const sibling = await peer.request("session/messages", { sessionId: b });
-		expect(JSON.stringify(sibling)).toContain("Native tool approval is not supported by the ZCode host");
+		await denyBuildWrite(b, config.cwdB, "ZCODE_TEST_TOOL_BUILD_B");
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
+	test("native move and worktree relocate only their session tools and resources", async () => {
+		await using root = await TempDir.create("@zcode-native-relocation-");
+		await using config = await fixture(root);
+		const moved = root.join("moved-existing");
+		const probe = root.join("native-process-cwd.txt");
+		// 进程探针属于测试 profile 的用户级扩展，不应随离开的 project root 失效。
+		await fs.mkdir(path.join(config.agentDir, "extensions"), { recursive: true });
+		await fs.writeFile(
+			path.join(config.agentDir, "extensions", "process-cwd.ts"),
+			`import * as fs from "node:fs/promises";\nexport default function(pi) { pi.registerCommand("native-process-cwd", { description: "Read actual host process cwd", handler: async () => { await fs.writeFile(${JSON.stringify(probe)}, process.cwd()); } }); }\n`,
+		);
+		// 显式配置测试自有可信模块，不依赖 ambient extension 扫描或改变宿主权限边界。
+		await fs.appendFile(
+			path.join(config.agentDir, "config.yml"),
+			`extensions:\n  - ${JSON.stringify(path.join(config.agentDir, "extensions", "process-cwd.ts"))}\n`,
+		);
+		await fs.mkdir(path.join(moved, ".omp", "skills", "relocated-resource"), { recursive: true });
+		await fs.writeFile(
+			path.join(moved, ".omp", "skills", "relocated-resource", "SKILL.md"),
+			"---\nname: relocated-resource\ndescription: Destination-only native resource\n---\nZCODE_TEST_RELOCATED_RESOURCE\n",
+		);
+		await fs.writeFile(path.join(moved, ".omp", "config.yml"), "worktree:\n  clone: false\n");
+		const git = async (...args: string[]) => {
+			const child = Bun.spawn(["git", "-C", moved, ...args], { stdout: "pipe", stderr: "pipe" });
+			const stderr = new Response(child.stderr).text();
+			expect(await child.exited, await stderr).toBe(0);
+		};
+		await git("init");
+		await git("add", ".omp");
+		await git(
+			"-c",
+			"user.name=Native relocation test",
+			"-c",
+			"user.email=native@example.invalid",
+			"commit",
+			"--allow-empty",
+			"-m",
+			"fixture",
+		);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const [a, b] = await Promise.all([create(peer, config.cwdA), create(peer, config.cwdB)]);
+		await Promise.all([subscribe(peer, a), subscribe(peer, b)]);
+		const readProcessCwd = async () => {
+			const controller = new AbortController();
+			// 订阅真实子进程文件 IO 的完成信号，不依赖 UI notify 的投影来判定 handler 完成。
+			const events = fs.watch(root.path(), { signal: controller.signal });
+			const observed = deadline(
+				(async () => {
+					for await (const event of events) {
+						if (event.filename !== path.basename(probe)) continue;
+						try {
+							const value = await fs.readFile(probe, "utf8");
+							if (value) return value;
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+						}
+					}
+					throw new Error("Native process cwd watcher ended without a probe file");
+				})(),
+			);
+			void observed.catch(() => {});
+			let receipt: unknown;
+			try {
+				receipt = await command(peer, a, "sendText", { text: "/native-process-cwd" });
+				expect(receipt).toMatchObject({ status: "accepted" });
+				return await observed;
+			} catch (error) {
+				const history = await peer.request("session/messages", { sessionId: a });
+				console.error("Native process cwd file was not produced", {
+					receipt,
+					probe: await fs.readFile(probe, "utf8").catch(() => "not-created"),
+					historyTail: JSON.stringify(history).slice(-2400),
+				});
+				throw error;
+			} finally {
+				controller.abort();
+			}
+		};
+		const initialCatalog = LegacyProtocol.zcodeWorkspacePresentationSchema.parse(
+			await peer.request("workspace/readPresentation", { workspace: workspace(config.cwdA) }),
+		);
+		expect(initialCatalog.slashCommands).toContainEqual(expect.objectContaining({ name: "native-process-cwd" }));
+		expect(await readProcessCwd()).toBe(config.cwdA);
+		await fs.unlink(probe);
+		for (const id of [a, b]) await command(peer, id, "switchCollaborationMode", { mode: "yolo" });
+		expect(await command(peer, a, "sendText", { text: `/move ${moved}` })).toMatchObject({ status: "accepted" });
+		// 目的地 skill 的原生描述压缩允许辅助请求；带工具的主会话不得执行 /move 文本。
+		expect(config.requests.filter(request => (request.tools?.length ?? 0) > 0)).toHaveLength(0);
+		const encodedMove = JSON.stringify(`/move ${moved}`).slice(1, -1);
+		expect(config.requests.some(request => JSON.stringify(request.messages).includes(encodedMove))).toBe(false);
+		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_MOVED_A" });
+		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_MOVED_A_DONE");
+		expect(await fs.readFile(path.join(moved, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_MOVED_A");
+		expect(await Bun.file(path.join(config.cwdA, "proof.txt")).exists()).toBe(false);
+		const useRelocatedReference = async (cwd: string) => {
+			const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
+				await peer.request("skills/referenceCatalog", { workspace: workspace(cwd), sessionId: a }),
+			);
+			expect(catalog.authority).toBe("session");
+			const skill = catalog.skills.find(item => item.name === "relocated-resource");
+			expect(skill).toMatchObject({
+				enabled: true,
+				path: path.join(cwd, ".omp", "skills", "relocated-resource", "SKILL.md"),
+			});
+			if (!skill) throw new Error("Destination skill missing from resident reference catalog");
+			// 使用目录返回的真实资源路径，必须经过 prepareReferences，不能绕到 /skill 直呼。
+			expect(
+				await command(peer, a, "sendText", { text: `[$${skill.name}](${skill.path.replace(/\\/g, "\\\\")})` }),
+			).toMatchObject({ status: "accepted" });
+		};
+		await useRelocatedReference(moved);
+		await finishedOutput(peer, a, "ZCODE_TEST_RELOCATED_RESOURCE_DONE");
+		expect(await command(peer, a, "sendText", { text: `/move ${root.join("missing-target")}` })).toMatchObject({
+			status: "failed",
+		});
+		expect(await command(peer, a, "sendText", { text: "/move" })).toMatchObject({ status: "failed" });
+		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_AFTER_FAILED_MOVE" });
+		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_AFTER_FAILED_MOVE_DONE");
+		expect(await fs.readFile(path.join(moved, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_AFTER_FAILED_MOVE");
+		expect(await command(peer, a, "sendText", { text: "/wt isolated-native-branch" })).toMatchObject({
+			status: "accepted",
+		});
+		const listed = Bun.spawn(["git", "-C", moved, "worktree", "list", "--porcelain"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const worktrees = await new Response(listed.stdout).text();
+		expect(await listed.exited).toBe(0);
+		const worktree = worktrees
+			.split("\n\n")
+			.find(block => block.includes("branch refs/heads/isolated-native-branch"))
+			?.split("\n")
+			.find(line => line.startsWith("worktree "))
+			?.slice("worktree ".length);
+		if (!worktree) throw new Error(`Native worktree was not created: ${worktrees}`);
+		expect(path.relative(root.path(), worktree).startsWith("..")).toBe(false);
+		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_WORKTREE_A" });
+		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_WORKTREE_A_DONE");
+		expect(await fs.readFile(path.join(worktree, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_WORKTREE_A");
+		await useRelocatedReference(worktree);
+		await finishedOutput(peer, a, "ZCODE_TEST_RELOCATED_RESOURCE_DONE");
+		await command(peer, b, "sendText", { text: "ZCODE_TEST_TOOL_UNMOVED_B" });
+		await finishedOutput(peer, b, "ZCODE_TEST_TOOL_UNMOVED_B_DONE");
+		expect(await fs.readFile(path.join(config.cwdB, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_UNMOVED_B");
+		const relocatedCatalog = LegacyProtocol.zcodeWorkspacePresentationSchema.parse(
+			await peer.request("workspace/readPresentation", { workspace: workspace(worktree) }),
+		);
+		expect(relocatedCatalog.slashCommands).toContainEqual(expect.objectContaining({ name: "native-process-cwd" }));
+		expect(await readProcessCwd()).toBe(config.cwdA);
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
@@ -838,6 +1131,149 @@ describe("ZCode actual public app-server process", () => {
 					JSON.stringify(request.messages.at(-1)).includes("ZCODE_TEST_TOOL_B"),
 			),
 		).toHaveLength(1);
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
+	test("global Team configuration reads, previews and saves without creating a session", async () => {
+		await using root = await TempDir.create("@zcode-global-team-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const target = { workspace: workspace(config.cwdA) };
+		const sessions = await peer.request("session/list", {});
+		const team = zcodeSessionConfigureResultSchema.parse(
+			await peer.request("omp/team/configure", { ...target, request: { operation: "get_team_config" } }),
+		);
+		if (team.operation !== "get_team_config") throw new Error("Expected Team configuration");
+		expect(team.data.sessionModel).toBeNull();
+		const models = zcodeSessionConfigureResultSchema.parse(
+			await peer.request("omp/team/configure", { ...target, request: { operation: "get_team_models" } }),
+		);
+		if (models.operation !== "get_team_models") throw new Error("Expected Team models");
+		expect(models.data.models.filter(item => item.model.provider === model.providerId)).toEqual(
+			["chat-a", "chat-b"].map(modelId => ({
+				model: { provider: model.providerId, modelId },
+				name: modelId,
+				selectable: true,
+			})),
+		);
+		const before = await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8");
+		expect(
+			await peer.request("omp/team/configure", {
+				...target,
+				request: { operation: "get_team_config", preview: { clientRevision: "global-draft", members: [] } },
+			}),
+		).toMatchObject({ data: { preview: { clientRevision: "global-draft", userMembers: [] } } });
+		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(before);
+		const members = [
+			{ provider: model.providerId, modelId: "chat-b" },
+			{ provider: model.providerId, modelId: "chat-b" },
+		];
+		const saved = await peer.request("omp/team/configure", {
+			...target,
+			request: { operation: "set_team_config", scope: "user", expectedRevision: team.data.revision, members },
+		});
+		expect(saved).toMatchObject({
+			data: {
+				saveState: "complete",
+				config: {
+					userMembers: [
+						{ index: 0, model: members[0] },
+						{ index: 1, model: members[1] },
+					],
+				},
+			},
+		});
+		const persisted = await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8");
+		const stale = await peer.requestFrame("omp/team/configure", {
+			...target,
+			request: { operation: "set_team_config", scope: "user", expectedRevision: team.data.revision, members: [] },
+		});
+		expect(stale.error).toMatchObject({
+			data: {
+				code: "revision_conflict",
+				writes: {
+					active: { status: "not_attempted" },
+					persistent: { status: "not_attempted" },
+				},
+			},
+		});
+		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(persisted);
+		const foreign = await peer.requestFrame("omp/team/configure", {
+			workspace: workspace(config.cwdB),
+			request: { operation: "get_team_config" },
+		});
+		expect(foreign.error).toMatchObject({ code: -32602 });
+		expect(await peer.request("session/list", {})).toEqual(sessions);
+		expect(config.requests).toHaveLength(0);
+		const [a, b] = await Promise.all([create(peer, config.cwdA), create(peer, config.cwdB)]);
+		for (const sessionId of [a, b]) {
+			expect(await peer.request("session/configure", { sessionId, operation: "get_team_config" })).toMatchObject({
+				data: { userMembers: [{ model: members[0] }, { model: members[1] }] },
+			});
+		}
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
+	test("cold global Team restores authenticated credential-scoped cached models without a session or inference", async () => {
+		await using root = await TempDir.create("@zcode-global-team-cache-");
+		await using config = await fixture(root);
+		const bundled = getBundledModel("cursor", "claude-opus-5-5");
+		if (!bundled) throw new Error("Expected bundled Cursor model for credential-scoped cache fixture");
+		const cached = buildModel({
+			...bundled,
+			id: "claude-opus-5-5-1m",
+			name: "Team cached Cursor model",
+			contextWindow: 1_000_000,
+		});
+		const token = `${Buffer.from('{"alg":"HS256"}').toString("base64url")}.${Buffer.from(
+			JSON.stringify({ sub: "auth0|team-cache-fixture", iat: 1_800_000_000, exp: 4_000_000_000 }),
+		).toString("base64url")}.sig`;
+		const auth = await discoverAuthStorage(config.agentDir, { cwd: config.cwdA });
+		try {
+			await auth.credentials.set("cursor", {
+				type: "oauth",
+				access: token,
+				refresh: "isolated-team-cache-refresh",
+				expires: 4_000_000_000_000,
+			});
+		} finally {
+			auth.close();
+		}
+		const cacheProviderId = cursorModelManagerOptions({ apiKey: token }).cacheProviderId;
+		if (!cacheProviderId) throw new Error("Expected credential-scoped Cursor cache namespace");
+		writeModelCache(
+			cacheProviderId,
+			Date.now(),
+			[cached],
+			true,
+			fingerprintStaticModels(getBundledModels("cursor"), true),
+			getModelDbPath(config.agentDir),
+		);
+		// 冷入口必须像 SDK 一样离线恢复账号缓存；读取模型不能靠创建会话或联网刷新补齐。
+		await using peer = new ProcessPeer(config.cwdA, { ...config.env, OMP_OFFLINE: "1" });
+		await peer.ready();
+		const before = await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8");
+		expect(
+			LegacyProtocol.zcodeSessionListResultSchema.parse(await peer.request("session/list", {})).sessions,
+		).toEqual([]);
+		const models = zcodeSessionConfigureResultSchema.parse(
+			await peer.request("omp/team/configure", {
+				workspace: workspace(config.cwdA),
+				request: { operation: "get_team_models", query: cached.id },
+			}),
+		);
+		if (models.operation !== "get_team_models") throw new Error("Expected Team models");
+		expect(models.data.models).toContainEqual({
+			model: { provider: "cursor", modelId: cached.id },
+			name: cached.name,
+			selectable: true,
+		});
+		expect(
+			LegacyProtocol.zcodeSessionListResultSchema.parse(await peer.request("session/list", {})).sessions,
+		).toEqual([]);
+		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(before);
+		expect(config.requests).toHaveLength(0);
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
@@ -891,17 +1327,29 @@ describe("ZCode actual public app-server process", () => {
 		});
 		expect(preview).toMatchObject({ data: { preview: { clientRevision: "draft-1", userMembers: [] } } });
 		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(before);
-		const save = await peer.request("session/configure", {
-			sessionId: a,
-			operation: "set_team_config",
-			scope: "user",
-			expectedRevision: team.data.revision,
-			members: [
-				{ provider: model.providerId, modelId: "chat-b" },
-				{ provider: model.providerId, modelId: "chat-b" },
-			],
+		const save = await peer.request("omp/team/configure", {
+			workspace: workspace(config.cwdA),
+			request: {
+				operation: "set_team_config",
+				scope: "user",
+				expectedRevision: team.data.revision,
+				members: [
+					{ provider: model.providerId, modelId: "chat-b" },
+					{ provider: model.providerId, modelId: "chat-b" },
+				],
+			},
 		});
 		expect(save).toMatchObject({ data: { saveState: "complete" } });
+		for (const sessionId of [a, b]) {
+			expect(await peer.request("session/configure", { sessionId, operation: "get_team_config" })).toMatchObject({
+				data: {
+					effectiveMembers: [
+						{ index: 0, model: { provider: model.providerId, modelId: "chat-b" } },
+						{ index: 1, model: { provider: model.providerId, modelId: "chat-b" } },
+					],
+				},
+			});
+		}
 		const stale = await peer.requestFrame("session/configure", {
 			sessionId: a,
 			operation: "set_team_config",
@@ -1109,6 +1557,67 @@ describe("ZCode actual public app-server process", () => {
 		).toMatchObject({
 			message: { role: "user", inputId: queuedInputId, sourceCommand: { commandId: queuedInputId } },
 		});
+	}, 120_000);
+
+	test("busy native Goal output persists and projects before the parent stream ends without steering it", async () => {
+		await using root = await TempDir.create("@zcode-busy-command-output-");
+		await using config = await fixture(root);
+		let id = "";
+		const marker = "ZCODE_TEST_COMMAND_STOP_GOAL";
+		const rows = async (peer: ProcessPeer) =>
+			v4ConversationRowsRangeResultSchema.parse(
+				await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 100 }),
+			).rows;
+		const assertOutput = async (peer: ProcessPeer) => {
+			expect((await rows(peer)).filter(row => JSON.stringify(row).includes("Goal mode paused."))).toHaveLength(1);
+		};
+		{
+			await using peer = new ProcessPeer(config.cwdA, config.env);
+			await peer.ready();
+			id = await create(peer, config.cwdA);
+			await subscribe(peer, id);
+			expect(await command(peer, id, "sendText", { text: `/goal set ${marker}` })).toMatchObject({
+				status: "accepted",
+			});
+			await output(peer, id, `${marker}_STREAMING`);
+			expect(await command(peer, id, "sendText", { text: "/goal pause" })).toMatchObject({ status: "accepted" });
+			await output(peer, id, "Goal mode paused.");
+			const live = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+				await peer.request("session/read", { sessionId: id }),
+			);
+			expect(live.projection.status).toBe("running");
+			expect(config.requests).toHaveLength(1);
+			await assertOutput(peer);
+			// 下一次原生 refresh 不能丢行；不依靠 Stop/stream 完成来解锁输出。
+			await peer.request("session/read", { sessionId: id });
+			await assertOutput(peer);
+			const files = await fs.readdir(path.join(config.agentDir, "sessions"), { recursive: true });
+			const journalFile = files.find(file => file.endsWith(`_${id}.jsonl`));
+			if (!journalFile) throw new Error("Missing busy command journal");
+			const entries = (await fs.readFile(path.join(config.agentDir, "sessions", journalFile), "utf8"))
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line) as Frame);
+			expect(
+				entries.filter(entry => entry.type === "custom_message" && entry.content === "Goal mode paused."),
+			).toHaveLength(1);
+			config.releaseHeldStream(marker);
+			await finishedOutput(peer, id, `${marker}_DONE`);
+			await assertOutput(peer);
+			expect(
+				(await rows(peer)).filter(
+					row => row.kind === "assistantText" && JSON.stringify(row).includes(`${marker}_STREAMING`),
+				),
+			).toHaveLength(1);
+			expect(config.requests).toHaveLength(1);
+		}
+		const requestCount = config.requests.length;
+		await using cold = new ProcessPeer(config.cwdA, config.env);
+		await cold.ready();
+		await assertOutput(cold);
+		await cold.request("session/resume", { sessionId: id });
+		await assertOutput(cold);
+		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
 
 	test("running queued Goal promotion dispatches native intent before the current stream ends", async () => {
@@ -1377,12 +1886,13 @@ describe("ZCode actual public app-server process", () => {
 		]);
 	}, 120_000);
 
-	test("Highspeed input cards survive public queue promotion, refresh and cold journal recovery without leaking", async () => {
+	test("HS-E2E-02: late Highspeed cards apply only to the next round; busy execution rejects without card facts", async () => {
 		await using root = await TempDir.create("@zcode-highspeed-input-");
 		await using config = await fixture(root);
 		const directCommandId = crypto.randomUUID();
 		const queuedCommandId = crypto.randomUUID();
 		const plainCommandId = crypto.randomUUID();
+		const rejectedCommandId = crypto.randomUUID();
 		const issuedAt = Date.now();
 		const card = {
 			schemaVersion: 1 as const,
@@ -1394,6 +1904,8 @@ describe("ZCode actual public app-server process", () => {
 			expiresAt: issuedAt + 60_000,
 		};
 		const queuedCard = { ...card, cardId: "queued-card" };
+		const lateCardDelivery = Promise.withResolvers<typeof queuedCard>();
+		const rejectedCard = { ...card, cardId: "rejected-busy-execution-card" };
 		const metrics = {
 			regularTps: 10.5,
 			outputTokens: 42,
@@ -1461,6 +1973,7 @@ describe("ZCode actual public app-server process", () => {
 			});
 			expect(inputs.find(row => row.sourceCommandId === queuedCommandId)?.highspeed).toEqual(queuedCard);
 			expect(inputs.find(row => row.sourceCommandId === plainCommandId)?.highspeed).toBeUndefined();
+			expect(inputs.some(row => row.sourceCommandId === rejectedCommandId)).toBe(false);
 			const refreshed = await snapshot(peer, sessionId);
 			expect(refreshed.rows.window.filter(row => row.kind === "userInput")).toEqual(inputs);
 			return inputs;
@@ -1508,12 +2021,35 @@ describe("ZCode actual public app-server process", () => {
 					...metrics,
 				}),
 			).toMatchObject({ status: "failed" });
-			// The existing STOP fixture holds a real provider stream open: queue admission
-			// is observed while busy, without secrets or execution-selection overrides.
+			// HS-E2E-02：普通轮已开始后才收到卡，只能交给下一轮，不能追溯补标当前输入。
+			// STOP fixture 确定性保持真实 localhost provider stream，无定时竞态。
 			expect(
 				await command(peer, sessionId, "sendText", { text: "ZCODE_TEST_CARD_STOP" }, plainCommandId),
 			).toMatchObject({ status: "accepted" });
 			await output(peer, sessionId, "ZCODE_TEST_CARD_STOP_STREAMING");
+			const plainInputs = await rows(peer, sessionId);
+			expect(plainInputs.find(row => row.sourceCommandId === plainCommandId)?.highspeed).toBeUndefined();
+			lateCardDelivery.resolve(queuedCard);
+			expect(
+				await command(
+					peer,
+					sessionId,
+					"sendText",
+					{
+						text: "ZCODE_TEST_REJECTED_CARD",
+						requestedDelivery: "queue",
+						modelSelection: model,
+						modelExecution: { selectionScope: "execution" },
+						highspeedMeta: rejectedCard,
+					},
+					rejectedCommandId,
+				),
+			).toMatchObject({ status: "failed" });
+			expect(await rows(peer, sessionId)).toEqual(plainInputs);
+			const rejectedSnapshot = await snapshot(peer, sessionId);
+			expect(rejectedSnapshot.rows.window.filter(row => row.kind === "userInput")).toEqual(plainInputs);
+			expect(rejectedSnapshot.queue.items).toEqual([]);
+			expect(JSON.stringify(config.requests)).not.toContain("ZCODE_TEST_REJECTED_CARD");
 			expect(
 				await command(
 					peer,
@@ -1522,7 +2058,7 @@ describe("ZCode actual public app-server process", () => {
 					{
 						text: "ZCODE_TEST_CARD",
 						requestedDelivery: "queue",
-						highspeedMeta: queuedCard,
+						highspeedMeta: await lateCardDelivery.promise,
 					},
 					queuedCommandId,
 				),
@@ -1571,6 +2107,35 @@ describe("ZCode actual public app-server process", () => {
 			expect((await rows(peer, otherSessionId)).every(row => row.highspeed === undefined)).toBe(true);
 			expect(await peer.eof()).toBe(0);
 		}
+		const files = await fs.readdir(path.join(config.agentDir, "sessions"), { recursive: true });
+		const journalFile = files.find(file => file.endsWith(`_${sessionId}.jsonl`));
+		if (!journalFile) throw new Error("Missing Highspeed native journal");
+		const entries = (await fs.readFile(path.join(config.agentDir, "sessions", journalFile), "utf8"))
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as Frame);
+		const inputFacts = entries.filter(entry => entry.type === "custom" && entry.customType === "session_input");
+		const admittedCards = inputFacts.filter(
+			entry => isRecord(entry.data) && entry.data.state === "admitted" && entry.data.highspeed !== undefined,
+		);
+		// 同一 input 在 queue admission 与显式 promotion 时可各记一次 admitted，
+		// 消费事实按原 command 身份归并，不能把合法提升误判成第三张卡。
+		const cardsByCommand = new Map<string, unknown>();
+		for (const entry of admittedCards) {
+			if (
+				!isRecord(entry.data) ||
+				!isRecord(entry.data.sourceCommand) ||
+				typeof entry.data.sourceCommand.commandId !== "string"
+			)
+				throw new Error("Missing Highspeed input ownership");
+			cardsByCommand.set(entry.data.sourceCommand.commandId, entry.data.highspeed);
+		}
+		expect([...cardsByCommand]).toEqual([
+			[directCommandId, card],
+			[queuedCommandId, queuedCard],
+		]);
+		expect(JSON.stringify(inputFacts)).not.toContain(rejectedCard.cardId);
+		expect(JSON.stringify(inputFacts)).not.toContain(rejectedCommandId);
 		const requestCount = config.requests.length;
 		await using cold = new ProcessPeer(config.cwdA, config.env);
 		await cold.ready();

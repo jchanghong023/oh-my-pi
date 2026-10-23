@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -305,6 +305,79 @@ describe("ZCodeSessionManager", () => {
 		await manager.create();
 		expect(manager.applyModelIoPreferences(cwd, false)).toBe(2);
 		expect(manager.applyModelIoPreferences(other, true)).toBe(1);
+	});
+
+	it("blocks profile switching only while deletion is active and recovers after a failed deletion", async () => {
+		const { manager } = await fixture();
+		const record = await manager.create();
+		const close = manager.close.bind(manager);
+		const closeSpy = spyOn(manager, "close");
+		try {
+			closeSpy.mockImplementationOnce(async () => {
+				throw new Error("close failed before deleting history");
+			});
+			await expect(manager.delete(record.id)).rejects.toThrow("close failed");
+			expect(manager.profileSwitchBlockers()).toEqual([]);
+			expect(await manager.readCommandEntries(record.id)).toBeArray();
+			expect(manager.get(record.id)).toBe(record);
+
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			closeSpy.mockImplementationOnce(async id => {
+				entered.resolve();
+				await release.promise;
+				await close(id);
+			});
+			const deleting = manager.delete(record.id);
+			try {
+				await entered.promise;
+				expect(manager.profileSwitchBlockers()).toContainEqual(
+					expect.objectContaining({ code: "sessionTransition" }),
+				);
+			} finally {
+				release.resolve();
+				await deleting;
+			}
+			expect(manager.profileSwitchBlockers()).toEqual([]);
+		} finally {
+			closeSpy.mockRestore();
+		}
+	});
+
+	it("validates concurrent resume options against the winning session without replacing its configuration", async () => {
+		const { manager, cwd, other, root } = await fixture();
+		const record = await manager.create({ additionalDirectories: [other] });
+		await manager.close(record.id);
+		const opening = manager.resume(record.id, {
+			mcpServers: [],
+			toolAllowlist: ["read"],
+			toolDenylist: ["bash"],
+			additionalDirectories: [other],
+		});
+		const conflicts = [
+			manager.resume(record.id, {
+				mcpServers: [{ name: "different", command: process.execPath, args: [], env: [] }],
+			}),
+			manager.resume(record.id, { toolAllowlist: [] }),
+			manager.resume(record.id, { toolDenylist: [] }),
+			manager.resume(record.id, { additionalDirectories: [root] }),
+		];
+		const compatible = manager.resume(record.id, {
+			mcpServers: [],
+			toolAllowlist: ["read"],
+			toolDenylist: ["bash"],
+			additionalDirectories: [path.relative(cwd, other), other, cwd],
+		});
+		const results = await Promise.allSettled(conflicts);
+		const restored = await opening;
+		expect(results.map(result => result.status)).toEqual(["rejected", "rejected", "rejected", "rejected"]);
+		expect(await compatible).toBe(restored);
+		expect(manager.get(record.id)).toBe(restored);
+		expect(restored.configuration.toolAllowlist).toEqual(["read"]);
+		expect(restored.configuration.toolDenylist).toEqual(["bash"]);
+		expect(restored.session.sessionManager.getAdditionalDirectories()).toEqual([other]);
+		await expect(manager.resume(record.id, { additionalDirectories: [root] })).rejects.toThrow();
+		expect(await manager.resume(record.id, { additionalDirectories: [] })).toBe(restored);
 	});
 
 	it("reads and renames cold history without hosting it, then restores and deletes it", async () => {

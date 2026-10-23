@@ -2221,9 +2221,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			onPayload: options.onPayload ?? inheritedHooks.onPayload,
 			onResponse: options.onResponse ?? inheritedHooks.onResponse,
 			onModelResponse: options.onModelResponse ?? inheritedHooks.onModelResponse,
-			toolRestrictions:
-				options.toolRestrictions ??
-				(inheritedHooks.toolRestrictions && new ToolRestrictions(inheritedHooks.toolRestrictions.snapshot())),
+			toolRestrictions: options.toolRestrictions ?? inheritedHooks.toolRestrictions?.clone(),
 		};
 	if (!options.parentTaskPrefix)
 		embeddingSessionHooks.set(modelRegistry, {

@@ -5,7 +5,8 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { ZCodeQueries, type ZCodeQueryContext } from "../../src/modes/zcode/queries";
 import { ZCodeProjection } from "../../src/modes/zcode/projection";
-import type { ZCodeSessionRecord } from "../../src/modes/zcode/sessions";
+import { ZCodeSessionManager, type ZCodeSessionRecord } from "../../src/modes/zcode/sessions";
+import { SessionManager } from "../../src/session/session-manager";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -45,9 +46,11 @@ async function fixture(messages: Record<string, unknown>[], extra: Record<string
 		logEpoch: "epoch",
 	});
 	let activations = 0;
+	const coldManager = new ZCodeSessionManager({ cwd, agentDir: path.join(cwd, "agent"), sessionDir: cwd });
 	const manager = {
 		get: () => undefined,
 		list: async () => [{ id: "session" }],
+		childIdentities: (id: string) => coldManager.childIdentities(id),
 		read: async (id: string) => {
 			if (id !== "session") throw new Error("Session not found");
 			return { id, cwd, messages: messages as unknown as AgentMessage[], info: { path: file } };
@@ -136,24 +139,30 @@ describe("ZCode business read queries", () => {
 		);
 		const childrenDir = path.join(f.cwd, "session");
 		await mkdir(childrenDir);
-		await writeFile(
-			path.join(childrenDir, "AgentName.jsonl"),
-			JSON.stringify({
-				type: "session",
-				version: 3,
-				id: "actual-child-session",
-				timestamp,
-				cwd: f.cwd,
-				parentSession: path.join(f.cwd, "session.jsonl"),
-			}) + "\n",
-		);
+		// 子会话的公开 UUID 由真实 journal header 生成，不能把 agent 名或 provider 身份当成 session ID。
+		const child = await SessionManager.open(path.join(childrenDir, "AgentName.jsonl"), childrenDir, undefined, {
+			initialCwd: f.cwd,
+			parentSession: path.join(f.cwd, "session.jsonl"),
+			suppressBreadcrumb: true,
+		});
+		let childSessionId: string;
+		try {
+			childSessionId = child.getSessionId();
+			await child.ensureOnDisk();
+		} finally {
+			await child.close();
+		}
 		const state = await f.queries.projectionState("session");
 		expect(state.config?.provider).toBe("chosen");
 		expect(state.config?.model).toBe("new-model");
 		expect(state.config?.thought).toBe("high");
-		expect(state.subagents?.childSessionIds).toEqual(["actual-child-session"]);
+		expect(state.subagents?.childSessionIds).toEqual([childSessionId]);
+		expect(childSessionId).not.toBe("AgentName");
 		expect(state.subagents?.running).toEqual([]);
 		expect(state.usage?.cumulative.inputTokens).toBe(10);
+		await expect(f.queries.projectionState("unknown-session")).rejects.toThrow("Session not found");
+		await writeFile(path.join(childrenDir, "BrokenChild.jsonl"), "not a session header\n");
+		await expect(f.queries.projectionState("session")).rejects.toThrow("Subagent history");
 		expect(f.activations()).toBe(0);
 	});
 	test("cold projection normalizes saved reasoning and consumes declared choices without activation", async () => {
@@ -189,6 +198,7 @@ describe("ZCode business read queries", () => {
 			thought: "disabled",
 			thoughtLevels: ["disabled", "enabled"],
 		});
+		expect(state.subagents?.childSessionIds).toEqual([]);
 		expect((await f.queries.projectionState("session")).config?.thought).toBe("disabled");
 		expect(f.activations()).toBe(0);
 	});
@@ -224,6 +234,7 @@ describe("ZCode business read queries", () => {
 			model: "omp-alternate",
 			modelSelection: { providerId: "omp-e2e", modelId: "omp-alternate", options: { reasoningLevel: "disabled" } },
 		});
+		expect(state.subagents?.childSessionIds).toEqual([]);
 		expect(f.activations()).toBe(0);
 	});
 	test("usage range is based on message time in requested timezone, not session creation", async () => {

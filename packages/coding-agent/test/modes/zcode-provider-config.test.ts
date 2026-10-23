@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -97,7 +99,281 @@ async function fixture() {
 	};
 }
 
+function connectivityServer(
+	mode: "success" | "unauthorized" | "empty" = "success",
+	apiKey = "secret-one",
+	requestHeaders?: Record<string, string>,
+) {
+	let contacted = false;
+	let authorization: string | null = null;
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		async fetch(request) {
+			contacted = true;
+			authorization = request.headers.get("authorization");
+			await request.json();
+			const authorized = requestHeaders
+				? authorization === null &&
+					Object.entries(requestHeaders).every(([name, value]) => request.headers.get(name) === value)
+				: authorization === `Bearer ${apiKey}`;
+			if (mode === "unauthorized" || !authorized)
+				return Response.json(
+					{
+						error: {
+							message: `Invalid test API key ${apiKey} ${Object.values(requestHeaders ?? {}).join(" ")}`,
+							type: "authentication_error",
+						},
+					},
+					{ status: 401 },
+				);
+			const chunks = [
+				{
+					id: "connectivity",
+					object: "chat.completion.chunk",
+					model: "model-a",
+					choices: [
+						{
+							index: 0,
+							delta: { role: "assistant", content: mode === "empty" ? "" : "OK" },
+							finish_reason: null,
+						},
+					],
+				},
+				{
+					id: "connectivity",
+					object: "chat.completion.chunk",
+					model: "model-a",
+					choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+				},
+			];
+			return new Response(`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`, {
+				headers: { "content-type": "text/event-stream" },
+			});
+		},
+	});
+	return {
+		server,
+		get contacted() {
+			return contacted;
+		},
+		get authorization() {
+			return authorization;
+		},
+		baseUrl: `http://127.0.0.1:${server.port}/v1`,
+	};
+}
+
+async function pendingConnectivityServer() {
+	const started = Promise.withResolvers<void>();
+	const cancelled = Promise.withResolvers<void>();
+	const server = createServer((request, response) => {
+		request.socket.once("close", () => cancelled.resolve());
+		request.resume();
+		request.once("end", () => {
+			if (request.headers.authorization !== "Bearer secret-one") {
+				started.reject(new Error("Invalid test API key"));
+				response.writeHead(401).end();
+				return;
+			}
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.flushHeaders();
+			// Bun 的服务端 stream.cancel 不保证对应 socket 断开；发送真实 SSE 首块后观察公开 socket close 边界。
+			response.write(
+				`data: ${JSON.stringify({
+					id: "connectivity",
+					object: "chat.completion.chunk",
+					model: "model-a",
+					choices: [{ index: 0, delta: { role: "assistant", content: "O" }, finish_reason: null }],
+				})}\n\n`,
+				error => {
+					if (error) started.reject(error);
+					else started.resolve();
+				},
+			);
+		});
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("Missing test server address");
+	return {
+		started: started.promise,
+		cancelled: cancelled.promise,
+		baseUrl: `http://127.0.0.1:${address.port}/v1`,
+		async stop() {
+			const closed = Promise.withResolvers<void>();
+			server.close(error => (error ? closed.reject(error) : closed.resolve()));
+			server.closeAllConnections();
+			await closed.promise;
+		},
+	};
+}
+
 describe("ZCode provider configuration consumer", () => {
+	test("connectivity executes the selected workspace model without changing configuration", async () => {
+		const f = await fixture();
+		const other = await fixture();
+		const endpoint = connectivityServer();
+		try {
+			await f.save("secret-one", endpoint.baseUrl);
+			const config = new ZCodeProviderConfiguration({ env: f.env, records: () => [other, f] });
+			await config.prepare(f.dir, f.settings, f.modelRegistry);
+			const before = await readFile(f.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, "utf8");
+			const model = f.modelRegistry.find("local-test", "model-a");
+			const role = f.settings.getModelRole("default");
+			expect(
+				await config.testModelConnectivity({
+					workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+					selection: { providerId: "local-test", modelId: "model-a" },
+				}),
+			).toEqual({ success: true });
+			expect(f.modelRegistry.find("local-test", "model-a")).toBe(model);
+			expect(f.settings.getModelRole("default")).toBe(role);
+			expect(await readFile(f.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE, "utf8")).toBe(before);
+			expect(await f.modelRegistry.getApiKey(model!)).toBe("secret-one");
+		} finally {
+			await endpoint.server.stop(true);
+		}
+	});
+
+	for (const mode of ["success", "unauthorized"] as const) {
+		test(`connectivity honors headers-only Host credentials and redacts ${mode} responses`, async () => {
+			const f = await fixture();
+			const secret = "host-header-credential";
+			const endpoint = connectivityServer(mode, "decoy-registry-key", { "x-host-auth": secret });
+			try {
+				await f.save("decoy-registry-key", endpoint.baseUrl);
+				class HeadersOnlyConfiguration extends ZCodeProviderConfiguration {
+					override async resolveRequestAuth() {
+						return { headers: { "x-host-auth": secret } };
+					}
+				}
+				const config = new HeadersOnlyConfiguration({ env: f.env, records: () => [f] });
+				await config.prepare(f.dir, f.settings, f.modelRegistry);
+				const request = config.testModelConnectivity({
+					workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+					selection: { providerId: "local-test", modelId: "model-a" },
+				});
+				if (mode === "success") {
+					expect(await request).toEqual({ success: true });
+				} else {
+					const error = await request.catch((failure: unknown) => failure);
+					expect(error).toBeInstanceOf(Error);
+					expect(String(error)).toContain("Invalid test API key");
+					expect(String(error)).not.toContain(secret);
+				}
+				expect(endpoint.contacted).toBe(true);
+				expect(endpoint.authorization).toBeNull();
+			} finally {
+				await endpoint.server.stop(true);
+			}
+		});
+	}
+
+	for (const mode of ["unauthorized", "empty"] as const) {
+		test(`connectivity rejects ${mode} HTTP completions`, async () => {
+			const f = await fixture();
+			const endpoint = connectivityServer(mode);
+			try {
+				await f.save("secret-one", endpoint.baseUrl);
+				const config = new ZCodeProviderConfiguration({ env: f.env, records: () => [f] });
+				await config.prepare(f.dir, f.settings, f.modelRegistry);
+				await expect(
+					config.testModelConnectivity({
+						workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+						selection: { providerId: "local-test", modelId: "model-a" },
+					}),
+				).rejects.toThrow(mode === "empty" ? "no completion text" : "Invalid test API key");
+			} finally {
+				await endpoint.server.stop(true);
+			}
+		});
+	}
+
+	test("unknown selections, strict params, catalog and refresh never issue a completion", async () => {
+		const f = await fixture();
+		const endpoint = connectivityServer();
+		try {
+			await f.save("secret-one", endpoint.baseUrl);
+			const config = new ZCodeProviderConfiguration({
+				env: f.env,
+				records: () => [f],
+				createCatalogAuthStorage: () => AuthStorage.create(":memory:"),
+			});
+			await config.prepare(f.dir, f.settings, f.modelRegistry);
+			await config.refreshRegistry({ reason: "test" });
+			await config.catalog(f.dir);
+			const params = {
+				workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+				selection: { providerId: "local-test", modelId: "missing" },
+			};
+			await expect(config.testModelConnectivity(params)).rejects.toThrow("Unknown model");
+			await expect(config.testModelConnectivity({ ...params, extra: true })).rejects.toThrow();
+			await expect(
+				config.testModelConnectivity({
+					...params,
+					selection: { providerId: "local-test", modelId: "model-a", options: { reasoningLevel: "invalid" } },
+				}),
+			).rejects.toThrow("Unsupported Host reasoning level");
+			expect(endpoint.contacted).toBe(false);
+		} finally {
+			await endpoint.server.stop(true);
+		}
+	});
+
+	test("cold connectivity rejects unreachable endpoints and propagates cancellation", async () => {
+		const f = await fixture();
+		const endpoint = connectivityServer();
+		await endpoint.server.stop(true);
+		await f.save("secret-one", endpoint.baseUrl);
+		const config = new ZCodeProviderConfiguration({
+			env: f.env,
+			createCatalogAuthStorage: () => AuthStorage.create(":memory:"),
+		});
+		const params = {
+			workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+			selection: { providerId: "local-test", modelId: "model-a" },
+		};
+		await expect(config.testModelConnectivity(params)).rejects.toThrow();
+		const controller = new AbortController();
+		controller.abort(new Error("test cancelled"));
+		await expect(config.testModelConnectivity(params, controller.signal)).rejects.toThrow("test cancelled");
+	});
+
+	test("connectivity cancellation stops an in-flight completion", async () => {
+		const f = await fixture();
+		const endpoint = await pendingConnectivityServer();
+		const controller = new AbortController();
+		try {
+			await f.save("secret-one", endpoint.baseUrl);
+			const config = new ZCodeProviderConfiguration({
+				env: f.env,
+				createCatalogAuthStorage: () => AuthStorage.create(":memory:"),
+			});
+			const result = config.testModelConnectivity(
+				{
+					workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+					selection: { providerId: "local-test", modelId: "model-a" },
+				},
+				controller.signal,
+			);
+			// 先注册拒绝收集，再触发取消；不能让异步 matcher 的等待阻塞 abort。
+			const settled = Promise.allSettled([result]);
+			await endpoint.started;
+			controller.abort(new Error("test cancelled"));
+			const [outcome] = await settled;
+			expect(outcome.status).toBe("rejected");
+			if (outcome.status !== "rejected") throw new Error("Cancelled completion unexpectedly succeeded");
+			expect(outcome.reason).toBeInstanceOf(Error);
+			expect(outcome.reason.message).toContain("test cancelled");
+			await endpoint.cancelled;
+		} finally {
+			controller.abort();
+			await endpoint.stop();
+		}
+	});
+
 	test("cold reasoning reads declared Host choices without catalog auth or runtime records", async () => {
 		const f = await fixture();
 		const path = f.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE;
@@ -437,6 +713,14 @@ describe("ZCode provider configuration consumer", () => {
 				options: { reasoningLevel: "high" },
 			}),
 		).toEqual({ messages: [], max_tokens: 1024, reasoning_effort: "high" });
+		expect(
+			config.transformRequestPayload(
+				{ messages: [] },
+				model,
+				{ providerId: "local-test", modelId: "model-a", options: { reasoningLevel: "high" } },
+				8,
+			),
+		).toEqual({ messages: [], max_tokens: 8, reasoning_effort: "high" });
 		expect(() =>
 			config.transformRequestPayload({}, model, {
 				providerId: "local-test",
@@ -472,6 +756,7 @@ describe("ZCode provider configuration consumer", () => {
 		let denied = false;
 		const config = new ZCodeProviderConfiguration({
 			env: f.env,
+			records: () => [f],
 			requestRuntimeHeaders: async params => {
 				requests.push(params);
 				if (denied) return { headersApplied: false, errorMessage: "must-not-leak-secret" };
@@ -530,5 +815,22 @@ describe("ZCode provider configuration consumer", () => {
 			"Host provider credentials are unavailable",
 		);
 		expect(await f.modelRegistry.getApiKey(model)).toBeUndefined();
+		const endpoint = connectivityServer("success", "request-secret");
+		try {
+			accountRule.config.api.baseUrl = endpoint.baseUrl;
+			await writeFile(f.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE, JSON.stringify(builtin));
+			await config.refreshRegistry({ reason: "connectivity-test" });
+			const params = { workspace: context.workspace, selection: context.modelSelection };
+			await expect(config.testModelConnectivity(params)).rejects.toThrow(
+				"Host provider credentials are unavailable",
+			);
+			expect(endpoint.contacted).toBe(false);
+			denied = false;
+			expect(await config.testModelConnectivity(params)).toEqual({ success: true });
+			expect(f.modelRegistry.hasConcreteAuth("account:test")).toBe(false);
+			expect(await f.modelRegistry.getApiKey(f.modelRegistry.find("account:test", "model-a")!)).toBeUndefined();
+		} finally {
+			await endpoint.server.stop(true);
+		}
 	});
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
@@ -9,15 +10,36 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "../../src/extensibility/extensions/loader";
 import { ExtensionRunner } from "../../src/extensibility/extensions/runner";
-import type { ToolSession } from "../../src/tools";
+import type {
+	ExtensionApprovalAnswer,
+	ExtensionApprovalPrompt,
+	ExtensionUIDialogOptions,
+	ExtensionUIContext,
+} from "../../src/extensibility/extensions/types";
+import type { Tool, ToolSession } from "../../src/tools";
 import { AskTool } from "../../src/tools/ask";
-import { ZCodeInteractions } from "../../src/modes/zcode/interactions";
+import { requestApproval } from "../../src/tools/approval";
+import { runZCodeToolCall, type ZCodeToolCall, ZCodeInteractions } from "../../src/modes/zcode/interactions";
 import { ZCodeCommandHost } from "../../src/modes/zcode/commands";
+import { ZCodeApprovalToolRestrictions } from "../../src/modes/zcode/approval";
 import { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { convertToLlm, USER_INTERRUPT_LABEL } from "../../src/session/messages";
 import { SessionManager } from "../../src/session/session-manager";
+import { ToolRestrictions } from "../../src/session/tool-restrictions";
 import { EventBus } from "../../src/utils/event-bus";
+
+interface NativeApprovalTestPrompt extends ExtensionApprovalPrompt {
+	toolCall: ZCodeToolCall;
+}
+
+function approveNative(
+	ui: ExtensionUIContext,
+	prompt: NativeApprovalTestPrompt,
+	options?: ExtensionUIDialogOptions,
+): Promise<ExtensionApprovalAnswer> {
+	return runZCodeToolCall({ ...prompt.toolCall, signal: options?.signal }, () => ui.approve!(prompt, options));
+}
 
 describe("ZCode session interactions", () => {
 	it("publishes a selection and resolves only its owning pending request", async () => {
@@ -313,9 +335,7 @@ describe("ZCode session interactions", () => {
 		parent.resolve(pending.interactionId, { answers: { q: ["Continue"] } });
 		expect(await childAnswer).toMatchObject({ details: { selectedOptions: ["Continue"] } });
 		expect(aborted).toBe(false);
-		await expect(child.ui.approve!({ full: "Child native approval", compact: "Approval" })).rejects.toThrow(
-			"Native tool approval is not supported by the ZCode host",
-		);
+		expect(await child.ui.approve!({ full: "Child native approval", compact: "Approval" })).toBe("deny");
 		child.dispose();
 		expect(parent.pending).toHaveLength(2);
 		parent.cancel();
@@ -323,12 +343,285 @@ describe("ZCode session interactions", () => {
 		expect(await peerAnswer).toBeUndefined();
 		expect(await peer.ui.input("After stop")).toBeUndefined();
 	});
-	it("rejects native tool approval without publishing a surrogate interaction", async () => {
-		const interactions = new ZCodeInteractions(() => {});
-		await expect(interactions.ui.approve!({ full: "Native approval", compact: "Approve" })).rejects.toThrow(
-			"Native tool approval is not supported by the ZCode host",
+	it("denies native approval without authentic tool-call metadata", async () => {
+		const messages: string[] = [];
+		const interactions = new ZCodeInteractions(
+			() => {},
+			message => messages.push(message),
 		);
+		expect(await interactions.ui.approve!({ full: "Native approval", compact: "Approve" })).toBe("deny");
 		expect(interactions.pending).toHaveLength(0);
+		expect(messages).toEqual(["工具审批不可用：OMP 原生审批接口未提供可安全关联的工具调用上下文，本次调用已拒绝。"]);
+	});
+	it("projects only native approval choices and maps each stable option to its native answer", async () => {
+		const prompt: NativeApprovalTestPrompt = {
+			full: "Approve native write?",
+			compact: "Write",
+			toolCall: { id: "native-write", name: "write", input: { path: "file.txt", content: "data" } },
+			session: "Allow writes this session",
+			grants: [
+				{ scope: "folder", label: "Folder", alwaysLabel: "Always folder" },
+				{ scope: "target", label: "File", alwaysLabel: "Always file" },
+			],
+		};
+		const cases: [string, ExtensionApprovalAnswer][] = [
+			["once", "once"],
+			["session", "session"],
+			["deny", "deny"],
+			["grant-folder", { grant: "folder", always: false }],
+			["grant-target", { grant: "target", always: false }],
+			["grant-folder-always", { grant: "folder", always: true }],
+			["grant-target-always", { grant: "target", always: true }],
+		];
+		for (const [optionId, expected] of cases) {
+			const interactions = new ZCodeInteractions(() => {});
+			const answer = approveNative(interactions.ui, prompt);
+			const pending = interactions.pending[0]!;
+			expect(pending).toMatchObject({
+				kind: "permission",
+				payload: {
+					kind: "permission",
+					toolCallId: "native-write",
+					toolName: "write",
+					detail: prompt.toolCall!.input,
+					freeText: false,
+				},
+			});
+			expect(
+				pending.payload.kind === "permission" && pending.payload.options.map(option => option.optionId),
+			).toEqual([
+				"once",
+				"session",
+				"grant-folder",
+				"grant-folder-always",
+				"grant-target",
+				"grant-target-always",
+				"deny",
+			]);
+			expect(interactions.resolve(pending.interactionId, { optionId })).toBe(true);
+			expect(interactions.resolve(pending.interactionId, { optionId: "once" })).toBe(false);
+			expect(await answer).toEqual(expected);
+		}
+	});
+	it("denies unknown, forged, content, and conflicting-action permission answers", async () => {
+		for (const response of [
+			{ optionId: "session" },
+			{ optionId: "grant-target-always" },
+			{ optionId: "fullAccess", response: { behavior: "allow" } },
+			{ action: "accept", content: { optionId: "once" } },
+			{ optionId: "once", content: { permissionUpdates: [] } },
+			{ optionId: "once", action: "decline" },
+			{ optionId: "once", action: "cancel" },
+			{ optionId: "once", action: "invented" },
+			"once",
+			{ response: { behavior: "allow" }, permissionUpdates: [{ type: "setMode", mode: "bypassPermissions" }] },
+		]) {
+			const interactions = new ZCodeInteractions(() => {});
+			const answer = approveNative(interactions.ui, {
+				full: "Approve?",
+				compact: "Approve",
+				toolCall: { id: "native-only-once", name: "write", input: {} },
+			});
+			const pending = interactions.pending[0]!;
+			expect(
+				pending.payload.kind === "permission" && pending.payload.options.map(option => option.optionId),
+			).toEqual(["once", "deny"]);
+			interactions.resolve(pending.interactionId, response);
+			expect(await answer).toBe("deny");
+			expect(interactions.resolve(pending.interactionId, { optionId: "once" })).toBe(false);
+		}
+		// 客户端声称扩大权限不能改变已选择的 once，也不会新增宿主授权。
+		const interactions = new ZCodeInteractions(() => {});
+		const answer = approveNative(interactions.ui, {
+			full: "Approve?",
+			compact: "Approve",
+			toolCall: { id: "native-once", name: "write", input: {} },
+		});
+		interactions.resolve(interactions.pending[0]!.interactionId, {
+			optionId: "once",
+			response: { behavior: "allow" },
+			permissionUpdates: [{ mode: "bypassPermissions" }],
+		});
+		expect(await answer).toBe("once");
+	});
+	it("keeps permissions blocked until explicit choice and denies timeout, abort, and disposed requests", async () => {
+		const prompt: NativeApprovalTestPrompt = {
+			full: "Approve?",
+			compact: "Approve",
+			toolCall: { id: "native-blocked", name: "write", input: {} },
+		};
+		const interactions = new ZCodeInteractions(() => {});
+		let settled = false;
+		const controller = new AbortController();
+		const blocked = approveNative(interactions.ui, prompt, { signal: controller.signal }).then(answer => {
+			settled = true;
+			return answer;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+		const id = interactions.pending[0]!.interactionId;
+		controller.abort();
+		expect(await blocked).toBe("deny");
+		expect(interactions.resolve(id, { optionId: "once" })).toBe(false);
+		expect(await approveNative(interactions.ui, prompt, { signal: controller.signal })).toBe("deny");
+		expect(await approveNative(interactions.ui, prompt, { timeout: 0 })).toBe("deny");
+		const disposed = approveNative(interactions.ui, prompt);
+		interactions.dispose();
+		expect(await disposed).toBe("deny");
+		expect(await approveNative(interactions.ui, prompt)).toBe("deny");
+	});
+	it("cancels only permissions recursively while retaining parent, child, and other-session questions", async () => {
+		const parent = new ZCodeInteractions(() => {});
+		const other = new ZCodeInteractions(() => {});
+		const child = parent.createSubagentUI({
+			agentId: "child",
+			agentName: "task",
+			sessionId: "child-session",
+			parentSessionId: "parent-session",
+			parentToolCallId: "spawn",
+		});
+		const prompt: NativeApprovalTestPrompt = {
+			full: "Approve?",
+			compact: "Approve",
+			toolCall: { id: "same-call", name: "write", input: {} },
+		};
+		const childPrompt = { ...prompt, toolCall: { ...prompt.toolCall, sessionId: "child-session" } };
+		expect(await approveNative(child.ui, prompt)).toBe("deny");
+		const rootPermission = approveNative(parent.ui, prompt);
+		const childPermission = approveNative(child.ui, childPrompt);
+		const otherPermission = approveNative(other.ui, prompt);
+		const rootQuestion = parent.ui.input("Root question");
+		const childQuestion = child.ui.input("Child question");
+		const childPending = parent.pending.find(item => item.payload.kind === "permission" && item.payload.origin)!;
+		expect(childPending.payload.kind === "permission" && childPending.payload.origin).toMatchObject({
+			agentId: "child",
+			childSessionId: "child-session",
+			parentSessionId: "parent-session",
+			parentToolCallId: "spawn",
+		});
+		const otherId = other.pending[0]!.interactionId;
+		expect(parent.resolve(otherId, { optionId: "once" })).toBe(false);
+		parent.cancelPermissions();
+		expect(await rootPermission).toBe("deny");
+		expect(await childPermission).toBe("deny");
+		expect(parent.resolve(childPending.interactionId, { optionId: "once" })).toBe(false);
+		expect(parent.pending).toHaveLength(2);
+		expect(other.pending).toHaveLength(1);
+		other.resolve(otherId, { optionId: "once" });
+		expect(await otherPermission).toBe("once");
+		const nextChildPermission = approveNative(child.ui, childPrompt);
+		const nextId = parent.pending.find(item => item.kind === "permission")!.interactionId;
+		parent.resolve(nextId, { optionId: "once" });
+		expect(await nextChildPermission).toBe("once");
+		parent.cancel();
+		expect(await rootQuestion).toBeUndefined();
+		expect(await childQuestion).toBeUndefined();
+		child.dispose();
+	});
+	it("passes actual native metadata and signal, denying approval when abort wins the resume race", async () => {
+		const interactions = new ZCodeInteractions(() => {});
+		const controller = new AbortController();
+		const tool = { name: "write", description: "Write file", approval: "write" as const };
+		const result = runZCodeToolCall(
+			{ id: "real-call", name: "write", input: { path: "file.txt" }, signal: controller.signal },
+			() => requestApproval(interactions.ui, tool, { path: "file.txt" }, { sessionSubject: "write" }),
+		);
+		const pending = interactions.pending[0]!;
+		expect(pending.payload).toMatchObject({
+			toolCallId: "real-call",
+			toolName: "write",
+			detail: { path: "file.txt" },
+		});
+		interactions.resolve(pending.interactionId, { optionId: "session" });
+		controller.abort();
+		expect(await result).toBe("deny");
+		expect(interactions.pending).toEqual([]);
+	});
+	it("clones the effective base policy without sharing input lifetimes or widening admission", () => {
+		const parent = new ToolRestrictions({ allowlist: ["read", "write", "bash", "grep"], denylist: ["bash"] });
+		const release = parent.beginInput(["write"]);
+		const child = parent.runInput(["read"], () => parent.clone());
+		expect(child).not.toBe(parent);
+		for (const name of ["read", "write", "bash", "edit"]) expect(child.allows(name)).toBe(false);
+		release();
+		expect(parent.allows("read")).toBe(true);
+		expect(parent.allows("write")).toBe(true);
+		expect(child.allows("write")).toBe(false);
+		const releaseChild = child.beginInput(["grep"]);
+		expect(child.allows("grep")).toBe(false);
+		expect(parent.allows("grep")).toBe(true);
+		releaseChild();
+		expect(child.allows("grep")).toBe(true);
+		const releaseParent = parent.beginInput(["grep"]);
+		expect(parent.allows("grep")).toBe(false);
+		expect(child.allows("grep")).toBe(true);
+		releaseParent();
+		expect(child.allows("read")).toBe(false);
+		expect(parent.allows("bash")).toBe(false);
+		expect(new ToolRestrictions({ allowlist: [] }).clone().allows("read")).toBe(false);
+		expect(new ToolRestrictions().clone().allows("write")).toBe(true);
+	});
+	it("binds concurrent and nested native approval calls through the registry bridge without cross-talk", async () => {
+		const interactions = new ZCodeInteractions(() => {});
+		const childSession = SessionManager.inMemory();
+		const childSessionId = childSession.getSessionId();
+		const child = interactions.createSubagentUI({
+			agentId: "registry-child",
+			agentName: "task",
+			sessionId: childSessionId,
+			parentSessionId: "registry-parent",
+			parentToolCallId: "registry-spawn",
+		});
+		const context = { sessionManager: childSession } as unknown as AgentToolContext;
+		const restrictions = new ZCodeApprovalToolRestrictions({ allowlist: ["write", "nested"] });
+		const native: Tool = {
+			name: "write",
+			label: "Write",
+			description: "Native approval bridge test",
+			parameters: type({ value: "string" }),
+			approval: "write",
+			async execute(_id, args) {
+				const answer = await requestApproval(child.ui, native, args);
+				return { content: [{ type: "text", text: String(answer) }], details: {} };
+			},
+		};
+		const wrapped = restrictions.wrap(native);
+		expect(restrictions.wrap(native)).toBe(wrapped);
+		expect(wrapped.parameters).toBe(native.parameters);
+		const first = wrapped.execute("first-native", { value: "first" }, undefined, undefined, context);
+		const second = wrapped.execute("second-native", { value: "second" }, undefined, undefined, context);
+		const nested = restrictions
+			.wrap({
+				...native,
+				name: "nested",
+				execute: (_id, _args, signal, onUpdate, innerContext) =>
+					wrapped.execute("inner-native", { value: "inner" }, signal, onUpdate, innerContext),
+			})
+			.execute("outer-native", { value: "outer" }, undefined, undefined, context);
+		for (const [toolCallId, value, optionId] of [
+			["first-native", "first", "once"],
+			["second-native", "second", "deny"],
+			["inner-native", "inner", "once"],
+		]) {
+			const pending = interactions.pending.find(
+				item => item.payload.kind === "permission" && item.payload.toolCallId === toolCallId,
+			)!;
+			expect(pending.payload).toMatchObject({ toolCallId, toolName: "write", detail: { value } });
+			expect(pending.payload.kind === "permission" && pending.payload.origin).toMatchObject({
+				childSessionId,
+				parentSessionId: "registry-parent",
+				parentToolCallId: "registry-spawn",
+			});
+			interactions.resolve(pending.interactionId, { optionId });
+		}
+		expect((await first).content).toEqual([{ type: "text", text: "once" }]);
+		expect((await second).content).toEqual([{ type: "text", text: "deny" }]);
+		expect((await nested).content).toEqual([{ type: "text", text: "once" }]);
+		const stopped = new AbortController();
+		stopped.abort();
+		expect(() => wrapped.execute("stopped-native", { value: "none" }, stopped.signal)).toThrow();
+		expect(interactions.pending).toEqual([]);
+		child.dispose();
 	});
 	it("delivers a public option answer through the real nonterminal Ask tool", async () => {
 		const interactions = new ZCodeInteractions(() => {});
@@ -385,38 +678,19 @@ describe("ZCode session interactions", () => {
 		interactions.cancel();
 		await answer;
 	});
-	it("rejects a registered terminal command before it can reach the model", async () => {
-		let prompts = 0;
+	it("reads cwd from the native session owner rather than the constructor snapshot", () => {
+		const processCwd = process.cwd();
+		let cwd = "/native/original";
 		const session = {
+			sessionManager: { getCwd: () => cwd },
 			agent: { addBeforeQueuedMessageDequeueHook: () => () => {} },
 			subscribe: () => () => {},
-			prompt: async () => {
-				prompts++;
-			},
 		} as unknown as AgentSession;
-		const host = new ZCodeCommandHost(session, ".", () => {});
-		await expect(host.dispatch("/display")).rejects.toMatchObject({ code: "unsupported" });
-		expect(prompts).toBe(0);
-	});
-	it("rejects /move and /wt at dispatch because they would chdir the shared process", async () => {
-		// 用户裁定(findings P2):/move、/wt 的 headless handle 会 setProjectDir →
-		// process.chdir 改整个进程 cwd,违反同进程多会话禁令;app-server 直接拒绝,仅 TUI 可用。
-		let prompts = 0;
-		const session = {
-			agent: { addBeforeQueuedMessageDequeueHook: () => () => {} },
-			subscribe: () => () => {},
-			prompt: async () => {
-				prompts++;
-			},
-		} as unknown as AgentSession;
-		const host = new ZCodeCommandHost(session, ".", () => {});
-		for (const text of ["/move ..", "/move", "/wt feature-x", "/worktree"]) {
-			await expect(host.dispatch(text)).rejects.toMatchObject({
-				code: "unsupported",
-				message: "/move、/wt 仅 TUI 可用",
-			});
-		}
-		expect(prompts).toBe(0);
+		const host = new ZCodeCommandHost(session, "/stale/startup", () => {});
+		expect(host.cwd).toBe(cwd);
+		cwd = "/native/relocated";
+		expect(host.cwd).toBe(cwd);
+		expect(process.cwd()).toBe(processCwd);
 	});
 	it("does not return accepted when runtime initialization fails", async () => {
 		const session = {
@@ -454,6 +728,151 @@ describe("ZCode session interactions", () => {
 		const receipt = await request;
 		expect(receipt.accepted).toBe(true);
 		await receipt.completion;
+	});
+	it("runs registered native extensions, Goal controls and compact validation without model fallback", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-native-command-"));
+		const authStorage = await AuthStorage.create(":memory:");
+		authStorage.keys.setRuntime("anthropic", "native-command-test-key");
+		const mock = createMockModel({ responses: [{ content: ["first answer"] }, { content: ["second answer"] }] });
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model: getBundledModel("anthropic", "claude-sonnet-4-5")!,
+				systemPrompt: ["Test"],
+				tools: [],
+			},
+			convertToLlm,
+			streamFn: mock.stream,
+		});
+		const sessionManager = SessionManager.inMemory();
+		const settings = Settings.isolated({
+			"compaction.enabled": false,
+			"compaction.keepRecentTokens": 1,
+			"compaction.experimentalContextManagement": false,
+		});
+		const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"), {
+			ignoreLocalModelConfig: true,
+			settings,
+			fetch: () => Promise.reject(new Error("network forbidden in native command regression")),
+		});
+		const runtime = new ExtensionRuntime();
+		const focus: Array<string | undefined> = [];
+		const extension = await loadExtensionFromFactory(
+			pi => {
+				pi.registerCommand("append-session-note", {
+					description: "Append a note to the session workspace",
+					handler: async args => {
+						await fs.appendFile(path.join(root, "session-note.txt"), args || "(empty note)");
+					},
+				});
+				pi.on("session_before_compact", event => {
+					focus.push(event.customInstructions);
+					// 真实 compaction hook 取消 provider 工作，不替换 handler 或伪造回显。
+					return { cancel: true };
+				});
+			},
+			root,
+			new EventBus(),
+			runtime,
+			"zcode-native-command-regression",
+		);
+		const session = new AgentSession({
+			agent,
+			sessionManager,
+			settings,
+			modelRegistry,
+			extensionRunner: new ExtensionRunner([extension], runtime, root, sessionManager, modelRegistry),
+		});
+		const output: string[] = [];
+		let admissions = 0;
+		const host = new ZCodeCommandHost(session, root, () => {}, {
+			output: async text => {
+				sessionManager.appendCustomMessageEntry("zcode-command-output", text, true);
+				await sessionManager.flush();
+				output.push(text);
+			},
+			recordInputAdmission: async () => {
+				admissions++;
+			},
+		});
+		// 不发现外部插件；以下保留真实 native handler、状态所有者和 compaction 引擎。
+		host.initialize = async () => {};
+		try {
+			await session.prompt("first turn");
+			await session.prompt("second turn");
+			expect(await host.catalog()).toContainEqual(
+				expect.objectContaining({ name: "append-session-note", source: "extension" }),
+			);
+			const noteText = ' "quoted  note"\nkeep   internal spaces  ';
+			await (
+				await host.dispatch("/append-session-note")
+			).completion;
+			await (
+				await host.dispatch(`/append-session-note ${noteText}`)
+			).completion;
+			expect(await fs.readFile(path.join(root, "session-note.txt"), "utf8")).toBe(`(empty note)${noteText}`);
+			expect(mock.calls).toHaveLength(2);
+			await session.goalRuntime.createGoal({ objective: '"quoted  objective"\nnext   line' });
+			await (
+				await host.dispatch("/goal show")
+			).completion;
+			expect(output.some(text => text.includes('"quoted  objective"\nnext   line'))).toBe(true);
+			await (
+				await host.dispatch("/goal pause")
+			).completion;
+			expect(session.getGoalModeState()?.goal.status).toBe("paused");
+			expect(output).toContain("Goal mode paused.");
+			const before = session.messages.length;
+			// 使用真实 SDK 会话及其所属 manager，验证终端命令拒绝不会进入 prompt admission。
+			await expect(
+				host.dispatch("/display", {
+					inputId: "terminal-refusal",
+					onPromptAdmitted: () => {
+						admissions++;
+					},
+				}),
+			).rejects.toMatchObject({ code: "unsupported" });
+			expect(output).toContainEqual(expect.stringContaining("terminal UI"));
+			expect(session.sessionManager).toBe(sessionManager);
+			expect(sessionManager.getEntries()).toContainEqual(
+				expect.objectContaining({
+					type: "custom_message",
+					customType: "zcode-command-output",
+					content: expect.stringContaining("terminal UI"),
+					display: true,
+				}),
+			);
+			expect(session.messages).toHaveLength(before);
+			expect(mock.calls).toHaveLength(2);
+			expect(admissions).toBe(0);
+			await expect(host.dispatch("/compact snapcompact forbidden-focus")).rejects.toThrow(
+				"/compact snapcompact does not take focus instructions",
+			);
+			expect(focus).toEqual([]);
+			const instructions = '"quoted  focus"\nkeep   internal spaces';
+			await (
+				await host.dispatch(`/compact soft ${instructions}`)
+			).completion;
+			expect(focus).toEqual([instructions]);
+			expect(session.messages).toHaveLength(before);
+			await expect(host.dispatch("/dirs unexpected-argument")).rejects.toMatchObject({ code: "invalid_params" });
+			await expect(host.dispatch("/dirs:unexpected-argument")).rejects.toMatchObject({ code: "invalid_params" });
+			expect(session.messages).toHaveLength(before);
+			expect(sessionManager.getEntries()).toContainEqual(
+				expect.objectContaining({
+					type: "custom_message",
+					customType: "zcode-command-output",
+					content: expect.stringContaining("Invalid arguments for /dirs"),
+					display: true,
+				}),
+			);
+			expect(mock.calls).toHaveLength(2);
+		} finally {
+			host.dispose();
+			await session.dispose();
+			authStorage.close();
+			await fs.rm(root, { recursive: true, force: true });
+		}
 	});
 	for (const busy of ["streaming", "compacting"] as const) {
 		it(`controls the native Goal while ${busy} without admitting controls to the held objective queue`, async () => {

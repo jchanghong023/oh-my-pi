@@ -8,12 +8,14 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { cfgSkills } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
+import type { LoadedCustomCommand } from "@oh-my-pi/pi-coding-agent/extensibility/custom-commands";
 import {
 	CommandCatalogError,
 	CommandCatalogService,
 	scoreCommandText,
 } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/command-catalog";
 import type { CommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/types";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
 let globalSettingsReady: Promise<unknown> | undefined;
 
@@ -61,6 +63,26 @@ describe("CommandCatalogService", () => {
 			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 		};
 		const catalog = byName(await service.buildCatalog(session));
+		// 目录必须覆盖真实 registry；新增普通 builtin 不需要再维护 ZCode 命令名单。
+		const registered = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(command =>
+			Boolean(command.handle || command.handleRpc || command.handleTui),
+		);
+		expect(
+			[...catalog.values()].filter(command => command.source === "builtin").map(command => command.name),
+		).toEqual(registered.map(command => command.name));
+		for (const command of registered) {
+			expect(catalog.get(command.name)).toMatchObject({
+				name: command.name,
+				description: command.acpDescription ?? command.description,
+				...(command.aliases?.length ? { aliases: command.aliases } : {}),
+				...((command.acpInputHint ?? command.inlineHint)
+					? { inputHint: command.acpInputHint ?? command.inlineHint }
+					: {}),
+			});
+			for (const alias of command.aliases ?? []) {
+				expect(await service.resolve(`/${alias}`, session)).toMatchObject({ kind: "builtin", name: command.name });
+			}
+		}
 		expect(catalog.get("model")).toMatchObject({
 			source: "builtin",
 			execution: "omp",
@@ -88,6 +110,43 @@ describe("CommandCatalogService", () => {
 		expect(tuiOnly?.availability).toMatchObject({ available: false, reason: "tui_only" });
 		// No session: the catalog is empty (the fork surface is session-scoped).
 		expect(await service.buildCatalog()).toEqual([]);
+	});
+
+	test("lists native loaded custom commands without executing their side effects", async () => {
+		await using temp = await TempDir.create("zcode-native-catalog-");
+		const cwd = path.resolve(temp.path());
+		let effects = 0;
+		const nativeCommand: LoadedCustomCommand = {
+			path: "native-catalog-probe.ts",
+			resolvedPath: path.join(cwd, "native-catalog-probe.ts"),
+			source: "project",
+			command: {
+				name: "native-catalog-probe",
+				description: "Native side-effect-only command",
+				execute: () => {
+					effects++;
+					return undefined;
+				},
+			},
+		};
+		const session = {
+			customCommands: [nativeCommand],
+			setSlashCommands: () => {},
+			sessionManager: { getCwd: () => cwd },
+			skills: [],
+			skillsSettings: cfgSkills.get(Settings.isolated()),
+		};
+		const service = new CommandCatalogService({ cwd });
+		expect(byName(await service.buildCatalog(session)).get("native-catalog-probe")).toMatchObject({
+			source: "custom",
+			execution: "omp",
+			availability: { available: true },
+		});
+		const text = "/native-catalog";
+		expect((await service.complete({ text, cursor: text.length, session })).items).toEqual(
+			expect.arrayContaining([expect.objectContaining({ label: "native-catalog-probe" })]),
+		);
+		expect(effects).toBe(0);
 	});
 
 	test("name and directory completion honor cursor ranges and the session's current project", async () => {

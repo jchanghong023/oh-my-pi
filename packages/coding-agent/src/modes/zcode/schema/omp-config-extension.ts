@@ -1,5 +1,6 @@
 // Optional OMP configuration extension, developed with the Host adapter; not part of the pinned upstream baseline.
 import { z } from "zod";
+import { zcodeWorkflowsListParamsSchema } from "./vendor/zcode-protocol/index";
 // Optional OMP configuration extension. Session identity is explicit; profile is
 // derived by the server from the trusted connection, never supplied by the UI.
 export const ompModelRefSchema = z
@@ -150,6 +151,25 @@ const ompPreviewInputSchema = z
 		members: z.array(z.union([ompTeamModelRefSchema, z.object({ rawSelector: z.string() }).strict()])).nullable(),
 	})
 	.strict();
+export const ompTeamConfigureRequestSchema = z.discriminatedUnion("operation", [
+	z.object({ operation: z.literal("get_team_config"), preview: ompPreviewInputSchema.optional() }).strict(),
+	z.object({ operation: z.literal("get_team_models"), query: z.string().optional() }).strict(),
+	z
+		.object({
+			operation: z.literal("set_team_config"),
+			scope: z.literal("user"),
+			expectedRevision: z.string().min(1),
+			members: z.array(ompTeamModelRefSchema).nullable(),
+		})
+		.strict(),
+]);
+export const ompTeamConfigureParamsSchema = z
+	.object({
+		workspace: zcodeWorkflowsListParamsSchema.shape.workspace,
+		request: ompTeamConfigureRequestSchema,
+	})
+	.strict();
+export type OmpTeamConfigureRequest = z.infer<typeof ompTeamConfigureRequestSchema>;
 export const zcodeSessionConfigureParamsSchema = z.discriminatedUnion("operation", [
 	z
 		.object({

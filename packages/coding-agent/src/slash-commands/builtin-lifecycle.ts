@@ -88,7 +88,7 @@ async function reportFailedRollback(runtime: SlashCommandRuntime, rollbackError:
 
 /**
  * Relocate the headless session to `resolvedPath` (an existing directory):
- * flush settings, move the session file, re-scope the process, rolling back
+ * flush settings, move the session file, re-scope its runtime, rolling back
  * on failure. Returns a result when the move did not complete; `undefined`
  * on success so the caller can report its own confirmation.
  */
@@ -108,7 +108,8 @@ async function relocateHeadlessSession(
 		return usage(`Move failed: ${errorMessage(err)}`, runtime);
 	}
 	try {
-		setProjectDir(resolvedPath);
+		// 共享进程 Host 由 sessionManager 唯一持有 cwd，不能修改兄弟会话的进程目录。
+		if (!runtime.rebindCwd) setProjectDir(resolvedPath);
 	} catch (err) {
 		try {
 			await runtime.sessionManager.rollbackMove(previousState);
@@ -875,7 +876,8 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 	},
 ];
 async function rescopeHeadlessToCwd(runtime: SlashCommandRuntime, cwd: string): Promise<void> {
-	setProjectDir(cwd);
+	if (runtime.rebindCwd) await runtime.rebindCwd(cwd);
+	else setProjectDir(cwd);
 	await runtime.settings.reloadForCwd(cwd);
 	await rebindMemoryBackendForCwd(runtime.session);
 	clearClaudePluginRootsCache();

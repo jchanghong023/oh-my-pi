@@ -57,6 +57,8 @@ interface MessageRecord {
 	message: ProjectionMessage;
 	streaming: boolean;
 	pendingSettlement?: boolean;
+	entity?: string;
+	journalEntryId?: string;
 }
 export interface ZCodeProjectionOptions {
 	sessionId: string;
@@ -96,6 +98,37 @@ function projectionBranch(session: AgentSession): readonly SessionEntry[] {
 	const branch = session.sessionManager.getBranchView();
 	const boundary = branch.findLastIndex(entry => entry.type === "reset_boundary");
 	return boundary < 0 ? branch : branch.slice(boundary + 1);
+}
+
+function visibleJournalEntries(entries: readonly SessionEntry[]): SessionEntry[] {
+	const boundary = entries.findLastIndex(entry => entry.type === "reset_boundary");
+	return entries
+		.slice(boundary + 1)
+		.filter(entry => entry.type === "message" || (entry.type === "custom_message" && entry.display));
+}
+
+function messageEntity(
+	sessionId: string,
+	message: Pick<ProjectionMessage, "role" | "timestamp" | "inputId">,
+	ordinal: number,
+): string {
+	return `${sessionId}:${message.inputId ?? `${message.role}:${message.timestamp ?? 0}:${ordinal}`}`;
+}
+
+/** Public custom rows use the same visible journal ordinals as the conversation projection. */
+export function projectCustomMessageEntityIds(
+	sessionId: string,
+	entries: readonly SessionEntry[],
+): Map<string, string> {
+	const entities = new Map<string, string>();
+	for (const [ordinal, entry] of visibleJournalEntries(entries).entries()) {
+		if (entry.type !== "custom_message") continue;
+		entities.set(
+			entry.id,
+			`${messageEntity(sessionId, { role: "custom", timestamp: new Date(entry.timestamp).getTime() }, ordinal)}:custom`,
+		);
+	}
+	return entities;
 }
 
 /**
@@ -212,6 +245,9 @@ export class ZCodeProjection {
 	// 按时间戳插入 compact 伪消息、task 子行晚于同消息后续块出现)不再让后续行按位置漂移。
 	// 跨 resetEpoch 保留映射:同一实体保持同一 rowId,消失分支的 id 永不复用。
 	readonly #rowIds = new Map<string, number>();
+	readonly #journalEntities = new Map<string, string>();
+	readonly #messageEntities = new Set<string>();
+	#nextMessageEntity = 1;
 	#nextRowId = 1;
 	readonly #childSessions = new Map<string, string>();
 	readonly #fileSummaries = new Map<
@@ -438,21 +474,22 @@ export class ZCodeProjection {
 		const messageIndex = this.#rowMessages.get(target.entityId);
 		if (!row || messageIndex === undefined) throw new Error("guard.staleRowTarget");
 		const record = this.#messages[messageIndex];
-		let journalIndex = 0;
-		for (let index = 0; index < messageIndex; index++)
-			if (this.#messages[index].message.role !== "compact") journalIndex++;
 		const entries = this.#options.session
 			? projectionBranch(this.#options.session).filter(
 					entry => entry.type === "message" || (entry.type === "custom_message" && entry.display),
 				)
 			: [];
-		const entry = record.message.inputId
-			? entries.find(
-					candidate =>
-						candidate.type === "message" &&
-						(candidate.message as AgentMessage & { inputId?: string }).inputId === record.message.inputId,
-				)
-			: entries[journalIndex];
+		const journalIndex = entries.findIndex(
+			candidate =>
+				candidate.type === "message" &&
+				(record.journalEntryId
+					? candidate.id === record.journalEntryId
+					: record.message.inputId
+						? (candidate.message as AgentMessage & { inputId?: string }).inputId === record.message.inputId
+						: candidate.message.role === record.message.role &&
+							candidate.message.timestamp === record.message.timestamp),
+		);
+		const entry = entries[journalIndex];
 		if (!entry || entry.type !== "message") throw new Error("guard.rowNotPersisted");
 		return {
 			entryId: entry.id,
@@ -476,6 +513,21 @@ export class ZCodeProjection {
 
 	setState(patch: StatePatch): void {
 		const checked = statePatchSchema.parse(patch);
+		if (checked.pendingInteractions) {
+			// 审批锚定真实工具行；child 的工具不属于父行，保留 null 及原生 origin。
+			checked.pendingInteractions = checked.pendingInteractions.map(interaction => {
+				const payload = interaction.payload;
+				return {
+					...interaction,
+					anchorRowId:
+						payload.kind === "permission"
+							? (this.#state.rows.window.find(
+									row => row.kind === "toolCall" && row.toolCallId === payload.toolCallId,
+								)?.rowId ?? null)
+							: interaction.anchorRowId,
+				};
+			});
+		}
 		if (
 			Object.entries(checked).every(
 				([key, value]) => JSON.stringify(this.#state[key as keyof ConversationSnapshot]) === JSON.stringify(value),
@@ -617,8 +669,10 @@ export class ZCodeProjection {
 			[];
 		let identityChanged = false;
 		for (const ref of children) {
-			if (!ref.session || this.#childSessions.get(ref.id) === ref.session.sessionId) continue;
-			this.#childSessions.set(ref.id, ref.session.sessionId);
+			const childSessionId = ref.session?.sessionManager.getSessionId();
+			if (!childSessionId || this.#childSessions.get(ref.id) === childSessionId) continue;
+			// provider sessionId 可被 Tan 覆盖；公开历史目标必须保持 native journal header 身份。
+			this.#childSessions.set(ref.id, childSessionId);
 			identityChanged = true;
 		}
 		// task 进度可以早于 registry 的真实 child 身份；同一次通知必须同时补齐卡片下钻。
@@ -694,6 +748,8 @@ export class ZCodeProjection {
 		const session = this.#options.session;
 		if (!session) return;
 		this.#observeResetBoundary();
+		// SDK attachSession 不发 registry 事件，重复 running 状态也不发；从真实 owner 刷新晚绑定身份。
+		this.#syncSubagents();
 		// 上下文水位归 AgentSession 所有；回复或压缩后沿用事实刷新发布，避免冷恢复旧值滞留。
 		this.setState({
 			...this.#queueRuntimeFacts(!session.isStreaming && !session.isCompacting),
@@ -821,6 +877,15 @@ export class ZCodeProjection {
 			let index = message.inputId
 				? this.#messages.findIndex(record => record.message.inputId === message.inputId)
 				: -1;
+			// journal-only custom 已由事实刷新补入；晚到的 message_end 只能更新同一行，不能重复追加。
+			if (index < 0 && message.role === "custom")
+				index = this.#messages.findIndex(
+					record =>
+						record.message.role === "custom" &&
+						record.message.customType === message.customType &&
+						record.message.timestamp === message.timestamp &&
+						textContent(record.message) === textContent(message),
+				);
 			if (index < 0 && this.#activeMessage >= 0) {
 				const active = this.#messages[this.#activeMessage];
 				if (active.message.role === message.role && active.message.timestamp === message.timestamp)
@@ -835,11 +900,19 @@ export class ZCodeProjection {
 				});
 			} else
 				this.#messages[index] = {
+					...this.#messages[index],
 					message,
 					streaming: event.type !== "message_end" || pendingSettlement,
 					pendingSettlement,
 				};
-			this.#activeMessage = event.type === "message_end" ? -1 : index;
+			// busy 命令结果独立追加，不能抢走仍在 streaming 的 assistant 消息所有权。
+			if (
+				message.role !== "custom" ||
+				event.type !== "message_end" ||
+				this.#activeMessage < 0 ||
+				this.#messages[this.#activeMessage].message.role !== "assistant"
+			)
+				this.#activeMessage = event.type === "message_end" ? -1 : index;
 			this.#rebuild();
 			this.#publishRows(before);
 			if (message.role === "assistant" && message.stopReason === "error")
@@ -1180,6 +1253,54 @@ export class ZCodeProjection {
 	}
 
 	#rebuild(): void {
+		const entries = this.#options.session ? visibleJournalEntries(projectionBranch(this.#options.session)) : [];
+		// 原生 nextTurn/triggerTurn:false（包括 Team dispatch/result）只提交 journal，不发布消息事件。
+		// 沿用既有事实刷新投影这些真实公开行；以 journal ordinal 生成锚点，不能等重新打开会话才出现。
+		const customMessages = new Map<string, MessageRecord[]>();
+		for (const record of this.#messages) {
+			if (record.message.role !== "custom") continue;
+			const key = `${record.message.timestamp ?? 0}:${record.message.customType ?? ""}`;
+			const records = customMessages.get(key);
+			if (records) records.push(record);
+			else customMessages.set(key, [record]);
+		}
+		let appendedCustom = false;
+		for (const entry of entries) {
+			if (entry.type !== "custom_message") continue;
+			const timestamp = new Date(entry.timestamp).getTime();
+			const existing =
+				customMessages.get(`${timestamp}:${entry.customType ?? ""}`)?.shift() ??
+				this.#messages.find(
+					record =>
+						!record.journalEntryId &&
+						record.message.role === "custom" &&
+						record.message.customType === entry.customType &&
+						textContent(record.message) ===
+							textContent({ role: "custom", content: entry.content } as ProjectionMessage),
+				);
+			if (existing) {
+				existing.journalEntryId = entry.id;
+				continue;
+			}
+			this.#messages.push({
+				message: {
+					role: "custom",
+					customType: entry.customType,
+					content: entry.content,
+					display: entry.display,
+					details: entry.details,
+					timestamp,
+				},
+				streaming: false,
+				journalEntryId: entry.id,
+			});
+			appendedCustom = true;
+		}
+		if (appendedCustom) {
+			const active = this.#messages[this.#activeMessage];
+			this.#messages.sort((a, b) => (a.message.timestamp ?? 0) - (b.message.timestamp ?? 0));
+			this.#activeMessage = active ? this.#messages.indexOf(active) : -1;
+		}
 		const rows: ConversationRow[] = [];
 		const highspeed = readHighspeedInputFacts(
 			this.#options.session ? projectionBranch(this.#options.session) : (this.#options.entries ?? []),
@@ -1236,11 +1357,20 @@ export class ZCodeProjection {
 				.filter(job => job.type === "task" && job.agentId)
 				.map(job => [job.agentId, job]),
 		);
-		const entries = this.#options.session
-			? projectionBranch(this.#options.session).filter(
-					entry => entry.type === "message" || (entry.type === "custom_message" && entry.display),
-				)
-			: [];
+		const journalOrdinals = new Map<string, number[]>();
+		for (const [ordinal, entry] of entries.entries()) {
+			const message =
+				entry.type === "message"
+					? (entry.message as unknown as ProjectionMessage)
+					: entry.type === "custom_message"
+						? { role: "custom", timestamp: new Date(entry.timestamp).getTime(), customType: entry.customType }
+						: undefined;
+			if (!message) continue;
+			const key = `${message.role}:${message.timestamp ?? 0}:${message.customType ?? ""}`;
+			const ordinals = journalOrdinals.get(key);
+			if (ordinals) ordinals.push(ordinal);
+			else journalOrdinals.set(key, [ordinal]);
+		}
 		let messageOrdinal = -1;
 		// The manager resolves the actual inherited journal boundary, including later-turn forks.
 		// Allocate the marker before any child rows so rowId order survives cold reconstruction.
@@ -1267,7 +1397,13 @@ export class ZCodeProjection {
 		};
 		for (const [index, record] of this.#messages.entries()) {
 			const message = record.message;
-			if (message.role !== "compact") messageOrdinal++;
+			// 直接追加的 developer 提醒没有 message 事件；已持久化消息必须以真实 journal ordinal 为准。
+			// 同时冷读不包含 display:false custom，不能把它们计入公开实体序号。
+			if (message.role !== "compact" && !(message.role === "custom" && !message.display)) messageOrdinal++;
+			const nativeOrdinal = journalOrdinals
+				.get(`${message.role}:${message.timestamp ?? 0}:${message.customType ?? ""}`)
+				?.shift();
+			if (nativeOrdinal !== undefined) messageOrdinal = nativeOrdinal;
 			if (message.role !== "compact" && messageOrdinal >= (this.#options.inheritedMessageCount ?? Infinity))
 				emitForkNotice();
 			if (message.role === "toolResult") {
@@ -1278,7 +1414,21 @@ export class ZCodeProjection {
 				records.push(record);
 				turnMessages.set(turnId, records);
 			}
-			const entity = `${this.#options.sessionId}:${message.inputId ?? `${message.role}:${message.timestamp ?? 0}:${messageOrdinal}`}`;
+			const entry = nativeOrdinal === undefined ? undefined : entries[nativeOrdinal];
+			// developer 提醒直接写 journal 后 ordinal 会补齐；迁移 journal→已发布实体，
+			// 不重新分配流式行。以 entry.id 恢复分支身份，不能让同时间戳的新消息复用旧 target。
+			let entity = (entry && this.#journalEntities.get(entry.id)) ?? record.entity;
+			if (!entity) {
+				entity = messageEntity(this.#options.sessionId, message, messageOrdinal);
+				if (!message.inputId && this.#messageEntities.has(entity))
+					entity = `${entity}:message:${this.#nextMessageEntity++}`;
+				this.#messageEntities.add(entity);
+			}
+			record.entity = entity;
+			if (entry) {
+				this.#journalEntities.set(entry.id, entity);
+				record.journalEntryId = entry.id;
+			}
 			const createdAt = message.timestamp ?? 0;
 			const base = (suffix: string) => {
 				const entityId = `${entity}:${suffix}`;
@@ -1539,7 +1689,8 @@ export class ZCodeProjection {
 						);
 						for (const progress of taskDetails?.progress ?? []) {
 							const ref = this.#options.registry?.list().find(child => child.id === progress.id);
-							const childSessionId = ref?.session?.sessionId ?? this.#childSessions.get(progress.id);
+							const childSessionId =
+								ref?.session?.sessionManager.getSessionId() ?? this.#childSessions.get(progress.id);
 							const delivered = deliveredJobs.get(progress.id);
 							const job = taskJobs.get(progress.id);
 							const status = job?.status ?? delivered?.status;

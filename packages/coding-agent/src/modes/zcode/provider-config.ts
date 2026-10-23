@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Api, Model } from "@oh-my-pi/pi-ai";
-import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import { completeSimple, type Api, type Model } from "@oh-my-pi/pi-ai";
+import { concreteThinkingLevel, parseConfiguredThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
 import { z } from "zod";
 import { ModelRegistry, type ProviderConfigInput } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
@@ -17,6 +17,7 @@ import {
 import {
 	zcodeProviderUpdateAccountConfigParamsSchema,
 	zcodeProviderRefreshRegistryParamsSchema,
+	zcodeProviderTestModelConnectivityParamsSchema,
 	zcodeWorkspaceUpdateInteractionPreferencesParamsSchema,
 	zcodeWorkspaceUpdateModelIoPreferencesParamsSchema,
 	zcodeProviderAccountAccessSchema,
@@ -337,6 +338,66 @@ export class ZCodeProviderConfiguration {
 			settings.cancelPendingSaves();
 		}
 	}
+	async testModelConnectivity(input: unknown, signal?: AbortSignal): Promise<{ success: true }> {
+		const { workspace, selection } = zcodeProviderTestModelConnectivityParamsSchema.parse(input);
+		signal?.throwIfAborted();
+		const cwd = resolve(workspace.workspacePath);
+		const live = this.#records().find(record => resolve(record.cwd) === cwd);
+		const settings = live?.settings ?? (await Settings.loadReadOnly({ cwd }));
+		let auth: AuthStorage | undefined;
+		try {
+			const registry =
+				live?.modelRegistry ??
+				new ModelRegistry(
+					(auth = await (this.#options.createCatalogAuthStorage?.(cwd, settings) ??
+						discoverAuthStorage(undefined, { cwd, settings }))),
+					undefined,
+					{ settings },
+				);
+			if (!live) await this.prepare(cwd, settings, registry);
+			const model = registry.find(selection.providerId, selection.modelId);
+			if (!model) throw new Error(`Unknown model: ${selection.providerId}/${selection.modelId}`);
+			const level = selection.options?.reasoningLevel;
+			const thinking = level === undefined ? undefined : this.resolveThinkingLevel(model.provider, model.id, level);
+			if (level !== undefined && thinking === undefined) throw new Error("Unsupported Host reasoning level");
+			const sessionId = randomUUID();
+			const supplied = await this.resolveRequestAuth(
+				{ sessionId, workspace, modelSelection: selection },
+				model,
+				signal,
+			);
+			// Host 显式 headers-only 凭据与正常会话一致：不得补入 registry/env 的另一把 key。
+			const apiKey = supplied ? supplied.apiKey : await registry.getApiKey(model, sessionId, { signal });
+			const headers = { ...(await registry.getProviderHeaders(model.provider)), ...supplied?.headers };
+			if (apiKey === undefined && Object.keys(headers).length === 0)
+				throw new Error(`No request authentication for provider: ${model.provider}`);
+			// 连接测试必须执行原生请求并校验结果；不能把 HTTP 错误消息或空流当作连接成功。
+			const response = await completeSimple(
+				model,
+				{ messages: [{ role: "user", content: "Reply OK.", timestamp: Date.now() }] },
+				{
+					apiKey,
+					headers,
+					requestAuth: { apiKey, headers },
+					signal,
+					maxTokens: 8,
+					maxHttpAttempts: 1,
+					reasoning: toReasoningEffort(concreteThinkingLevel(thinking)),
+					disableReasoning: thinking === "off",
+					onPayload: payload => this.transformRequestPayload(payload, model, selection, 8),
+				},
+			);
+			signal?.throwIfAborted();
+			if (response.stopReason === "error" || response.stopReason === "aborted")
+				throw new Error(response.errorMessage || `Provider request ${response.stopReason}`);
+			if (!response.content.some(block => block.type === "text" && block.text.trim().length > 0))
+				throw new Error("Provider returned no completion text");
+			return { success: true };
+		} finally {
+			auth?.close();
+			if (!live) settings.cancelPendingSaves();
+		}
+	}
 	async resolveRequestAuth(
 		context: ZCodeModelRequestContext,
 		model: Model,
@@ -374,7 +435,12 @@ export class ZCodeProviderConfiguration {
 			throw new Error("Host returned no request authentication");
 		return { apiKey, headers };
 	}
-	transformRequestPayload(payload: unknown, model: Model | undefined, selection: ModelSelection): unknown {
+	transformRequestPayload(
+		payload: unknown,
+		model: Model | undefined,
+		selection: ModelSelection,
+		maxOutputTokens?: number,
+	): unknown {
 		if (!model) return payload;
 		const config = this.#template?.models.get(`${model.provider}\u0000${model.id}`);
 		if (!config?.optionMaps) return payload;
@@ -384,7 +450,7 @@ export class ZCodeProviderConfiguration {
 			throw new Error("Unsupported Host reasoning level");
 		return config.optionMaps.apply(payload as JsonObject, {
 			reasoningLevel,
-			maxOutputTokens: config.maxOutputTokens,
+			maxOutputTokens: Math.min(maxOutputTokens ?? config.maxOutputTokens, config.maxOutputTokens),
 		});
 	}
 	prepare(cwd: string, settings: Settings, modelRegistry: ModelRegistry): Promise<void> {

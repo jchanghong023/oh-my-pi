@@ -34,10 +34,13 @@ export interface ZCodeDispatchOptions extends PromptOptions {
 }
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export interface ZCodeCommandHostOptions {
-	output?: (text: string) => void;
+	output?: (text: string) => void | Promise<void>;
 	settingsChanged?: (frame: object) => void;
 	run?: <T>(operation: () => T) => T;
 	mcpManager?: MCPManager;
+	/** Native Tan adapter; execution remains owned by TanCommandController. */
+	startTan?: (work: string) => Promise<{ jobId: string }>;
+	resourcesReloaded?: () => Promise<void>;
 	/** Native child UI already allocated under its parent's interaction owner. */
 	uiContext?: ExtensionUIContext;
 	setToolUIContext?: (
@@ -97,7 +100,7 @@ export class ZCodeCommandHost {
 	#initialized: Promise<void> | undefined;
 	constructor(
 		readonly session: AgentSession,
-		readonly cwd: string,
+		cwd: string,
 		publishInteractions: (pending: PendingInteraction[]) => void,
 		readonly options: ZCodeCommandHostOptions = {},
 	) {
@@ -202,11 +205,15 @@ export class ZCodeCommandHost {
 			this.#run(() => this.#promoteGoalCommand(signal)),
 		);
 	}
+	/** Native SessionManager is the sole cwd owner, including relocation rollback. */
+	get cwd(): string {
+		return this.session.sessionManager.getCwd();
+	}
 	#run<T>(operation: () => T): T {
 		return this.options.run ? this.options.run(operation) : operation();
 	}
-	#output(text: string): void {
-		if (!this.#disposed) this.options.output?.(text);
+	#output(text: string): void | Promise<void> {
+		if (!this.#disposed) return this.options.output?.(text);
 	}
 	#background(task: Promise<unknown>): void {
 		void task.catch(error => {
@@ -279,8 +286,13 @@ export class ZCodeCommandHost {
 			await this.#plan.reconcile();
 		}));
 	}
-	catalog() {
-		return this.#run(() => this.#catalog.buildCatalog(this.session));
+	async catalog() {
+		const catalog = await this.#run(() => this.#catalog.buildCatalog(this.session));
+		return catalog.map(command =>
+			command.name === "tan" && this.options.startTan
+				? { ...command, execution: "omp" as const, availability: { available: true as const } }
+				: command,
+		);
 	}
 	complete(text: string, cursor: number) {
 		return this.#run(() => this.#catalog.complete({ text, cursor, session: this.session }));
@@ -360,21 +372,24 @@ export class ZCodeCommandHost {
 	}
 	async #dispatch(text: string, options: ZCodeDispatchOptions, promoting = false): Promise<ZCodeCommandReceipt> {
 		if (this.#disposed) throw new Error("Session command host is closed");
-		// /move、/wt(别名 /worktree)的 headless handle 会 setProjectDir → process.chdir
-		// (slash-commands/builtin-lifecycle.ts → utils/dirs.ts)改整个进程 cwd,违反同
-		// 进程多会话禁令;app-server(zcode 模式)在 dispatch 层直接拒绝,仅 TUI 可用。
-		if (/^\/(?:move|wt|worktree)(?:\s|$)/.test(text))
-			throw Object.assign(new Error("/move、/wt 仅 TUI 可用"), { code: "unsupported" });
 		const resolved = await this.#catalog.resolve(text, this.session);
-		if (resolved.kind === "builtin" && !resolved.spec?.handleRpc && !resolved.spec?.handle)
-			throw Object.assign(new Error(`/${resolved.name} requires a terminal UI`), { code: "unsupported" });
-		// A recognized command with invalid arguments must never become model prose.
-		if (resolved.kind === "unknown" && text.startsWith("/")) {
-			const token = text.slice(1).split(/\s/, 1)[0];
-			const known = (await this.catalog()).find(
-				command => command.name === token || command.aliases?.includes(token ?? ""),
-			);
-			if (known) throw Object.assign(new Error(`Invalid arguments for /${token}`), { code: "invalid_params" });
+		// /tan 是运行中父会话的独立控制入口；必须先于 TUI-only 判定和 prompt admission。
+		if (resolved.kind === "builtin" && resolved.name === "tan" && this.options.startTan) {
+			const command = parseSlashCommand(text);
+			const job = await this.options.startTan(command?.args ?? "");
+			if (options.inputId) {
+				await this.options.recordInputAdmission?.(options.inputId, options.sourceCommand);
+				// Tan 不经过 user-row promotion；把已完成派发和本次 admission 精确关联供冷恢复使用。
+				await this.session.sessionManager.appendEntriesAtomically(() =>
+					this.session.sessionManager.appendCustomEntry("zcode_tan_admission", {
+						inputId: options.inputId,
+						sourceCommand: options.sourceCommand,
+						jobId: job.jobId,
+					}),
+				);
+			}
+			options.onPromptAdmitted?.();
+			return { accepted: true, completion: Promise.resolve() };
 		}
 		const command = parseSlashCommand(text);
 		const goalSubcommand =
@@ -411,6 +426,18 @@ export class ZCodeCommandHost {
 		);
 		const completion = (async () => {
 			try {
+				if (resolved.kind === "builtin" && !resolved.spec?.handleRpc && !resolved.spec?.handle)
+					throw Object.assign(new Error(`/${resolved.name} requires a terminal UI`), { code: "unsupported" });
+				// resolve 的 unknown 也包含原生扩展/自定义命令；只能拒绝 builtin 的非法参数，
+				// 其余已注册入口必须保留原文交给 session.prompt 的原生解析与执行链。
+				if (resolved.kind === "unknown" && text.startsWith("/")) {
+					const token = parseSlashCommand(text)?.name;
+					const known = (await this.catalog()).find(
+						command => command.name === token || command.aliases?.includes(token ?? ""),
+					);
+					if (known?.source === "builtin")
+						throw Object.assign(new Error(`Invalid arguments for /${token}`), { code: "invalid_params" });
+				}
 				await this.initialize();
 				if (!current()) throw new DOMException("Command cancelled", "AbortError");
 				if (resolved.kind !== "builtin" || !resolved.spec) {
@@ -418,11 +445,19 @@ export class ZCodeCommandHost {
 					await this.#submit(text, options, admit, rejectAdmission);
 					return;
 				}
+				let lastOutput: string | undefined;
 				const runtime: RpcSlashCommandRuntime = {
 					session: this.session,
 					sessionManager: this.session.sessionManager,
 					settings: this.session.settings,
-					cwd: this.cwd,
+					mcpManager: this.options.mcpManager,
+					get cwd(): string {
+						return runtime.sessionManager.getCwd();
+					},
+					rebindCwd: () => {
+						// 原生工具与 ExtensionContext 已从 manager 取实时 cwd；只刷新本会话仓库资源。
+						this.session.refreshRepoLifecycle();
+					},
 					signal: operation.signal,
 					ui: {
 						select: async (...args) => {
@@ -442,7 +477,8 @@ export class ZCodeCommandHost {
 						},
 					},
 					output: message => {
-						if (current()) this.#output(message);
+						lastOutput = message;
+						if (current()) return this.#output(message);
 					},
 					refreshCommands: async () => {
 						await this.catalog();
@@ -452,6 +488,8 @@ export class ZCodeCommandHost {
 						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 						await this.session.refreshSkillsAndCommands();
 						await this.catalog();
+						// /move、/wt 的 rebindCwd 尚未刷新原生资源；最终 reload 完成后才能重建引用目录。
+						if (current()) await this.options.resourcesReloaded?.();
 					},
 					setModel: async model => {
 						if (current()) await this.session.setModelTemporary(model);
@@ -479,6 +517,10 @@ export class ZCodeCommandHost {
 				const result = resolved.spec.handleRpc
 					? await resolved.spec.handleRpc(command, runtime)
 					: await resolved.spec.handle?.(command, runtime);
+				// usage() 已输出原生诊断并标记 failed；不能把 consumed 误记为执行成功。
+				if (result && "failed" in result && result.failed) {
+					throw Object.assign(new Error(lastOutput ?? `/${resolved.name} failed`), { code: "execution_failed" });
+				}
 				if (current() && result && "prompt" in result) {
 					this.#loop.capturePrompt(result.prompt);
 					if (promoting && options.inputId) {
@@ -502,6 +544,13 @@ export class ZCodeCommandHost {
 					if (promoting && options.inputId) this.session.mutateQueuedInput(options.inputId, "delete");
 					admit();
 				}
+			} catch (error) {
+				// 拒绝若在 completion 外抛出，桌面只能收到通用发送失败，所属会话没有诊断。
+				// 复用 native output 并等待落盘；仍抛出原错误，绝不能把拒绝记成 admission。
+				if (current() && !(error instanceof Error && error.name === "AbortError")) {
+					await this.#output(String(error));
+				}
+				throw error;
 			} finally {
 				await Promise.allSettled(background);
 				this.#operations.delete(operation);
@@ -509,7 +558,7 @@ export class ZCodeCommandHost {
 		})();
 		// Failure before runtime/handler admission rejects the receipt, never reports accepted.
 		void completion.then(() => rejectAdmission(new Error("Command was not admitted")), rejectAdmission);
-		this.#background(completion);
+		void completion.catch(() => {});
 		await admitted;
 		return { accepted: true, completion };
 	}
@@ -533,13 +582,11 @@ export class ZCodeCommandHost {
 		});
 		switch (operation) {
 			case "get_model_roles":
-			case "get_role_model_config":
 				return this.#roles.listRoles({
 					roleId: typeof params.roleId === "string" ? params.roleId : undefined,
 					sessionModel: model ? { provider: model.provider, modelId: model.id } : undefined,
 				});
 			case "set_model_role":
-			case "set_role_model":
 				return this.#roles.setRole(params as unknown as ModelRoleSetOptions);
 			case "get_team_config":
 				return team.getConfig(params.preview as TeamConfigPreviewInput | undefined);
@@ -551,16 +598,6 @@ export class ZCodeCommandHost {
 					expectedRevision: params.expectedRevision,
 					members: params.members,
 				} as TeamConfigSaveInput);
-			case "get_available_models":
-				return { models: this.session.modelRegistry.getAvailable() };
-			case "set_model": {
-				const target = this.session.modelRegistry
-					.getAvailable()
-					.find(candidate => candidate.provider === params.provider && candidate.id === params.modelId);
-				if (!target) throw Object.assign(new Error("Model is unavailable"), { code: "invalid_params" });
-				await this.session.setModelTemporary(target);
-				return { model: { provider: target.provider, modelId: target.id } };
-			}
 			default:
 				throw Object.assign(new Error(`Unknown configuration operation: ${operation}`), { code: "unsupported" });
 		}
@@ -581,9 +618,6 @@ export class ZCodeCommandHost {
 			if (!!this.session.getPlanModeState()?.enabled !== enabled)
 				throw Object.assign(new Error("Plan mode change was cancelled"), { code: "execution_failed" });
 		});
-	}
-	config(operation: string, params: Record<string, unknown> = {}) {
-		return this.configure(operation, params);
 	}
 	cancel(): void {
 		this.#run(() => this.#cancel());

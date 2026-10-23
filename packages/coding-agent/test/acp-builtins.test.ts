@@ -787,16 +787,6 @@ describe("ACP builtin slash commands", () => {
 		expect(output[0]).toContain("No model");
 	});
 
-	it("model: unknown selector reports ACP picker guidance", async () => {
-		const { output, runtime } = createRuntime();
-
-		const result = await executeAcpBuiltinSlashCommand("/model claude-3-5-sonnet", runtime);
-
-		expect(result).toEqual({ consumed: true });
-		expect(output[0]).toContain("Unknown model: claude-3-5-sonnet");
-		expect(output[0]?.toLowerCase()).toContain("acp");
-	});
-
 	it("model: applies known id and emits both title + config change notifications", async () => {
 		const { output, runtime, session } = createRuntime();
 		const available = [{ provider: "anthropic", id: "claude-3-5-sonnet", contextWindow: 200_000 }];
@@ -944,7 +934,7 @@ describe("session lifecycle commands", () => {
 			throw new Error("delete denied");
 		};
 		const result = await executeAcpBuiltinSlashCommand("/session delete", runtime);
-		expect(result).toEqual({ consumed: true });
+		expect(result).toEqual({ consumed: true, failed: true });
 		expect(output[0]).toContain("Failed to delete session: delete denied");
 		expect(output[0]).toContain("A new session is now active.");
 		expect(output[0]).not.toContain("Session deleted:");

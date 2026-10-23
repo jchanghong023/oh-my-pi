@@ -42,6 +42,9 @@ export function gateResources(
 	const requireNamespaces = new Set<string>();
 	const globFactories = new Set<string>();
 	const globNamespaces = new Set<string>();
+	const functions = new Map<string, ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression>();
+	const parents = new Map<ts.Node, ts.Node>();
+	const bindings = new Map<string, ts.Expression>();
 	// Literal arguments usually are not filenames. Enumerate each candidate
 	// directory once instead of issuing a failed stat for every distinct string.
 	// All reuse ends with this source scan.
@@ -86,6 +89,7 @@ export function gateResources(
 	let fallback = false;
 	let repositoryFallback = false;
 	const visit = (node: ts.Node, parent?: ts.Node) => {
+		if (parent) parents.set(node, parent);
 		collect(node, parent);
 		ts.forEachChild(node, child => visit(child, node));
 	};
@@ -111,6 +115,14 @@ export function gateResources(
 	};
 	const collect = (node: ts.Node, parent?: ts.Node) => {
 		if (ts.isCallExpression(node) || ts.isNewExpression(node)) calls.push(node);
+		if (ts.isFunctionDeclaration(node) && node.name && node.body) functions.set(node.name.text, node);
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.initializer &&
+			(ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+		)
+			functions.set(node.name.text, node.initializer);
 		if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
 			const module = node.moduleSpecifier.text.replace(/^node:/, "");
 			if (module === "bun:test" || module === "assert" || module === "assert/strict") {
@@ -215,13 +227,15 @@ export function gateResources(
 			if (node.text === "__dirname") return directory;
 			if (node.text === "__filename") return filename;
 			if (seen.has(node.text)) return undefined;
-			const expression = constants.get(node.text);
+			const expression = bindings.get(node.text) ?? constants.get(node.text);
 			return expression ? value(expression, new Set([...seen, node.text])) : undefined;
 		}
 		if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression)) {
 			if (node.name.text === "dir") return directory;
 			if (node.name.text === "url") return pathToFileURL(filename).href;
+			if (node.name.text === "path") return filename;
 		}
+		if (ts.isPropertyAccessExpression(node) && node.name.text === "href") return value(node.expression, seen);
 		if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
 			const left = value(node.left, seen),
 				right = value(node.right, seen);
@@ -264,6 +278,7 @@ export function gateResources(
 			if (name === "dirname" && strings[0]) return path.dirname(strings[0]);
 			if (name === "relative" && strings.length === 2) return path.relative(strings[0]!, strings[1]!);
 			if (name === "fileURLToPath" && strings[0]?.startsWith("file:")) return fileURLToPath(strings[0]);
+			if (name === "pathToFileURL" && strings[0]) return pathToFileURL(strings[0]).href;
 		}
 		return undefined;
 	};

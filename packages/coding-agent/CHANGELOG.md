@@ -4,7 +4,9 @@
 
 ### Added
 
-- Added `omp app-server --stdio` with the ZCode protocol, in-process multi-session execution, isolated session ownership, structured desktop interactions and supervised storage preparation while preserving the native TUI and independent RPC entrypoints.
+- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
+- Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
+- Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
 - Added `/team configure` ordered drafts and shared RPC v3 Team configuration APIs, with cross-provider model selection, read-only previews, revision-aware saving and explicit offline persistence results without switching the session model.
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
@@ -19,6 +21,9 @@
 
 ### Fixed
 
+- Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
+- Allow ZCode profile switching after a completed session deletion, reject incompatible concurrent resume options, and retain structured Team configuration error codes and save receipts on the wire.
+- Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log, native Goal and ZCode coverage and leaving upstream RPC behavior unchanged.
 - Keep native ZCode subagent detail sessions read-only across live and cold history, retain each child's configured model/thinking/tools, and hydrate late subscribers from the owning native stream without starting a second runtime.
 - Preserve workflow actors' parent-scoped user interactions, publish the bounded causality/flow/handoff graph for saved launches, and keep actor sessions out of the public root task index while retaining run history drill-down.
 - Refresh ZCode context usage from the owning native session after replies and compaction, including cold-restored sessions whose model selection does not change, and publish the final watermark atomically with terminal state so idle controls do not race a delayed usage refresh.

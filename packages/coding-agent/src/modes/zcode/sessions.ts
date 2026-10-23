@@ -20,11 +20,13 @@ import { BlobStore } from "../../session/blob-store";
 import type { SessionEntry } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
 import { FileSessionStorage } from "../../session/session-storage";
+import { normalizeSessionWorkspace } from "../../session/session-workspace";
 import { collectSubSessions } from "../../session/sub-sessions";
 import type { AsyncJob } from "../../async/job-manager";
 import { ZCodeModelIoRetention } from "./model-io";
 import { parseZCodeThinkingLevel, toZCodeReasoningLevel } from "./provider-config";
-import { ToolRestrictions } from "../../session/tool-restrictions";
+import type { ToolRestrictions } from "../../session/tool-restrictions";
+import { ZCodeApprovalToolRestrictions } from "./approval";
 import type { CustomMessage } from "../../session/messages";
 import type { AuthStorage } from "../../session/auth-storage";
 import { createAuthStorageSettingsSync } from "../../session/auth-broker-config";
@@ -53,6 +55,7 @@ import { adoptZCodeMemoryPreference, type ZCodeAdoptedMemory } from "./memory-te
 import { cfgMemoryBackend } from "../../memory-backend/settings";
 import { makeActorTranscriptStore, seedActorTranscript } from "./workflows/actor-transcript";
 import type { AgentDefinition } from "../../task/types";
+import type { OmpProfileBlocker } from "./profiles";
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export type ZCodeExecutionSubmission = ModelExecution & { selection: ModelSelection; offPeakTaskId?: string };
 type ZCodeInputOptions = PromptOptions & { inputId: string; highspeedMeta?: HighspeedMessageMeta };
@@ -100,6 +103,8 @@ export interface ZCodeSessionRecord {
 	readonly cwd: string;
 	readonly session: AgentSession;
 	readonly creationResult: CreateAgentSessionResult;
+	/** Native scoped interaction host owner; absent for independently owned roots. */
+	readonly interactionParentSessionId?: string;
 	readonly settings: Settings;
 	readonly registry: AgentRegistry;
 	readonly toolRestrictions: ToolRestrictions;
@@ -173,8 +178,10 @@ export class ZCodeSessionManager {
 	readonly #records = new Map<string, ZCodeSessionRecord>();
 	readonly #opening = new Map<string, Promise<ZCodeSessionRecord>>();
 	readonly #closing = new Map<string, Promise<void>>();
+	readonly #nativeLaunches = new Map<string, Promise<unknown>>();
 	readonly #commandJournalReads = new Map<string, Set<Promise<readonly SessionEntry[]>>>();
 	readonly #deletions = new Map<string, Promise<void>>();
+	readonly #deleted = new Set<string>();
 	readonly #options: ZCodeSessionManagerOptions;
 	readonly #agentDir: string;
 	readonly #sessionDir: string;
@@ -195,10 +202,63 @@ export class ZCodeSessionManager {
 		this.#sessionDir = options.sessionDir ?? SessionManager.getDefaultSessionDir(options.cwd, this.#agentDir);
 	}
 
+	/** Read existing runtime facts only; probing idleness must never close or settle a session. */
+	profileSwitchBlockers(): OmpProfileBlocker[] {
+		const blockers: OmpProfileBlocker[] = [];
+		const add = (code: string, message: string, sessionId?: string) =>
+			blockers.push({ code, message, ...(sessionId ? { sessionId } : {}) });
+		if (this.#disposed) add("ownerClosed", "Session owner is closing");
+		if (this.#starting.size || this.#opening.size || this.#closing.size || this.#deletions.size)
+			add("sessionTransition", "Native sessions are opening, closing or being deleted");
+		if (this.#executions.size) add("execution", "Native execution admission or settlement is still active");
+		const seen = new Set<AgentSession>();
+		const inspect = (session: AgentSession, sessionId: string) => {
+			if (seen.has(session)) return;
+			seen.add(session);
+			if (session.isBusyForSnapshot || session.hasAdmittedSubmission)
+				add("runtimeBusy", "Native session has unfinished execution", sessionId);
+			if (session.getQueuedInputMessages().length || session.agent.hasQueuedMessages())
+				add("queuedInput", "Native session has queued or held input", sessionId);
+			// hasPendingAsyncWork 排除 suppressed delivery；仍运行的 suppressed job 同样不能被切换杀掉。
+			if (session.hasPendingAsyncWork() || session.asyncJobManager?.getRunningJobs().length)
+				add("asyncWork", "Native session has background jobs or pending async delivery", sessionId);
+			if (!session.sessionManager.isSessionOnDisk())
+				add("unpersistedSession", "Native session is not durably persisted", sessionId);
+		};
+		for (const record of this.#records.values()) {
+			inspect(record.session, record.id);
+			for (const ref of record.registry.list()) {
+				if (ref.kind !== "sub") continue;
+				if (ref.status === "running") add("childRunning", "Native child agent is still running", record.id);
+				if (ref.session) inspect(ref.session, ref.session.sessionManager.getSessionId());
+			}
+		}
+		return blockers;
+	}
+
 	get(id: string): ZCodeSessionRecord | undefined {
 		// 绑定完成前仅保留内部清理所有权，不能作为就绪会话暴露。
 		if (this.#opening.has(id)) return undefined;
 		return this.#records.get(id);
+	}
+
+	/** Serialize only native registration handoff; owner close drains it before cancelling jobs. */
+	async runNativeLaunch<T>(record: ZCodeSessionRecord, launch: () => Promise<T>): Promise<T> {
+		const previous = this.#nativeLaunches.get(record.id) ?? Promise.resolve();
+		const pending = previous
+			.catch(() => {})
+			.then(() =>
+				record.run(() => {
+					if (this.get(record.id) !== record || this.#disposed) throw new Error("Native launch owner is closed");
+					return launch();
+				}),
+			);
+		this.#nativeLaunches.set(record.id, pending);
+		try {
+			return await pending;
+		} finally {
+			if (this.#nativeLaunches.get(record.id) === pending) this.#nativeLaunches.delete(record.id);
+		}
 	}
 
 	/** Native scoped UI identifies nested actors even while readiness hides their live record. */
@@ -211,7 +271,7 @@ export class ZCodeSessionManager {
 		if (this.#records.has(id)) return undefined;
 		for (const root of this.#records.values()) {
 			for (const ref of root.registry.list()) {
-				if (ref.kind !== "sub" || ref.session?.sessionId !== id) continue;
+				if (ref.kind !== "sub" || ref.session?.sessionManager.getSessionId() !== id) continue;
 				const file = ref.session.sessionManager.getSessionFile() ?? ref.sessionFile;
 				if (file) return { root, agentId: ref.id, ref, session: ref.session, file };
 			}
@@ -220,13 +280,12 @@ export class ZCodeSessionManager {
 			const children = await collectSubSessions(info.path);
 			for (const [key, child] of Object.entries(children)) {
 				if (child.header?.id !== id) continue;
-				if (child.malformedRecords) throw new Error("Subagent history identity is invalid");
 				const file = path.join(info.path.slice(0, -6), `${key}.jsonl`);
 				const root = this.get(info.id);
 				const candidate = root?.registry.get(child.agentId);
 				const ref =
 					candidate &&
-					(candidate.session?.sessionId === id ||
+					(candidate.session?.sessionManager.getSessionId() === id ||
 						(candidate.sessionFile && path.resolve(candidate.sessionFile) === path.resolve(file)))
 						? candidate
 						: undefined;
@@ -245,7 +304,9 @@ export class ZCodeSessionManager {
 		const identities: Record<string, string> = {};
 		for (const child of Object.values(children)) {
 			if (child.parent !== null) continue;
-			if (!child.header?.id || child.malformedRecords) throw new Error("Subagent history identity is invalid");
+			// 原生 loader 区分 header 身份与可跳过的 body 记录；取消/park 期间不能把 body 诊断误判为 UUID 无效。
+			// collectSubSessions 仍报告真正不可读的 header，且身份只取当前 parent 路径下的真实 header。
+			if (!child.header?.id) throw new Error("Subagent history identity is invalid");
 			identities[child.agentId] = child.header.id;
 		}
 		const native = await this.nativeChild(id);
@@ -254,7 +315,7 @@ export class ZCodeSessionManager {
 			native?.agentId ?? root?.registry.list().find(ref => ref.session === root?.session)?.id ?? "Main";
 		for (const ref of root?.registry.list() ?? []) {
 			if (ref.kind === "sub" && (ref.parentId ?? "Main") === parentId && ref.session)
-				identities[ref.id] = ref.session.sessionId;
+				identities[ref.id] = ref.session.sessionManager.getSessionId();
 		}
 		return identities;
 	}
@@ -273,12 +334,12 @@ export class ZCodeSessionManager {
 		if (directJob) return directJob;
 
 		// 冷子会话不在 #records 中，但后台工作仍由存活祖先的共享 manager 持有。
-		// 必须同时确认原始 session 身份和 agent owner，不能按碰巧相同的 workId 跨树读取。
+		// Tan 公开 journal UUID，provider sessionId 可能不同；仍须同时确认 tree 和 agent owner，避免跨树读取。
 		for (const record of this.#records.values()) {
 			const job = visibleJob(record);
 			if (!job?.ownerId) continue;
 			const ref = record.registry.get(job.ownerId);
-			if (ref?.session?.sessionId === sessionId) return job;
+			if (ref?.session?.sessionManager.getSessionId() === sessionId) return job;
 			if (ref?.session) continue;
 			const file = record.session.sessionManager.getSessionFile();
 			if (!file) continue;
@@ -316,9 +377,7 @@ export class ZCodeSessionManager {
 				throw new Error(`Session identity already exists: ${options.sessionId}`);
 			}
 			this.#assertOpen();
-			if (options.sessionId && this.#deletions.get(options.sessionId) === deletion) {
-				this.#deletions.delete(options.sessionId);
-			}
+			if (options.sessionId) this.#deleted.delete(options.sessionId);
 			const manager = SessionManager.create(cwd, this.#sessionDir, this.#storage, { sessionId: options.sessionId });
 			return this.#host(manager, options);
 		})();
@@ -340,7 +399,9 @@ export class ZCodeSessionManager {
 		this.#assertOpen();
 		const closing = this.#closing.get(id);
 		if (closing) await closing;
-		const live = this.get(id);
+		// 并发恢复也必须校验首个 flight 的最终配置，不能直接返回而吞掉后续请求选项。
+		const pending = this.#opening.get(id);
+		const live = this.get(id) ?? (pending ? await pending : undefined);
 		if (live) {
 			if (
 				options.mcpServers !== undefined &&
@@ -356,10 +417,19 @@ export class ZCodeSessionManager {
 					throw new Error("Live session tool policy cannot be replaced by resume");
 				}
 			}
+			if (options.additionalDirectories !== undefined) {
+				const current = normalizeSessionWorkspace({
+					cwd: live.cwd,
+					directories: live.session.sessionManager.getAdditionalDirectories(),
+				});
+				const requested = normalizeSessionWorkspace({ cwd: live.cwd, directories: options.additionalDirectories });
+				// 冷恢复是追加目录；热恢复只能确认已有覆盖，不能静默丢弃新增目录或热替换 workspace。
+				if (requested.directories.some(directory => !current.directories.includes(directory))) {
+					throw new Error("Live session workspace directories cannot be extended by resume");
+				}
+			}
 			return live;
 		}
-		const pending = this.#opening.get(id);
-		if (pending) return pending;
 		const opening = (async () => {
 			// 身份解析也属于同一次 opening；放在 flight 外 await 会错过已完成并清除的旧 flight，
 			// 从而在同进程再次打开已由首个请求持有的 session 并触发 writer lease 冲突。
@@ -565,7 +635,7 @@ export class ZCodeSessionManager {
 				supplied.interactionParentSessionId && supplied.resolveRequestAuth
 					? supplied.resolveRequestAuth(model, signal, context)
 					: this.#options.resolveRequestAuth
-						? this.#options.resolveRequestAuth(manager.getSessionId(), cwd, model, signal, context)
+						? this.#options.resolveRequestAuth(manager.getSessionId(), manager.getCwd(), model, signal, context)
 						: (supplied.resolveRequestAuth?.(model, signal, context) ?? Promise.resolve(undefined));
 			const authStorage =
 				supplied.authStorage ??
@@ -586,7 +656,10 @@ export class ZCodeSessionManager {
 					previous?.memory?.memoryEnabled ??
 					(await this.#options.memoryPreference?.(manager.getSessionId(), cwd)),
 			);
-			const toolRestrictions = new ToolRestrictions({ allowlist: toolAllowlist, denylist: toolDenylist });
+			const toolRestrictions = new ZCodeApprovalToolRestrictions({
+				allowlist: toolAllowlist,
+				denylist: toolDenylist,
+			});
 			if (supplied.enableMCP !== false && !supplied.restrictToolNames) {
 				ownedMcpManager = await run(() =>
 					prepareZCodeMcpManager({
@@ -657,7 +730,7 @@ export class ZCodeSessionManager {
 						return this.#options.transformRequestPayload
 							? this.#options.transformRequestPayload(
 									manager.getSessionId(),
-									cwd,
+									manager.getCwd(),
 									mapped,
 									model,
 									signal,
@@ -679,11 +752,14 @@ export class ZCodeSessionManager {
 			await manager.flush();
 			const record: ZCodeSessionRecord = {
 				id: manager.getSessionId(),
-				cwd,
+				get cwd() {
+					return manager.getCwd();
+				},
 				settings,
 				registry,
 				session: result.session,
 				creationResult: result,
+				interactionParentSessionId: supplied.interactionParentSessionId,
 				run,
 				toolRestrictions,
 				configuration,
@@ -710,7 +786,13 @@ export class ZCodeSessionManager {
 					);
 				}),
 			);
-			this.#modelIo.set(record.id, { cwd, capture: captureForSession, unsubscribe });
+			this.#modelIo.set(record.id, {
+				get cwd() {
+					return manager.getCwd();
+				},
+				capture: captureForSession,
+				unsubscribe,
+			});
 			this.#resources.set(record.id, { authStorage: ownedAuthStorage, mcpManager: ownedMcpManager });
 			if (ownedAuthStorage) createAuthStorageSettingsSync(record.session, ownedAuthStorage);
 			this.#records.set(record.id, record);
@@ -816,6 +898,7 @@ export class ZCodeSessionManager {
 			await deletion;
 			return undefined;
 		}
+		if (this.#deleted.has(id)) return undefined;
 		const read = this.readEntries(id);
 		let readers = this.#commandJournalReads.get(id);
 		if (!readers) {
@@ -1218,10 +1301,15 @@ export class ZCodeSessionManager {
 	delete(id: string): Promise<void> {
 		const existing = this.#deletions.get(id);
 		if (existing) return existing;
-		const deletion = this.#delete(id).catch(error => {
-			this.#deletions.delete(id);
-			throw error;
-		});
+		if (this.#deleted.has(id)) return Promise.resolve();
+		// 成功墓碑用于扫描缺席语义，不再占用进行中删除的 profile 切换 blocker。
+		const deletion = this.#delete(id)
+			.then(() => {
+				this.#deleted.add(id);
+			})
+			.finally(() => {
+				this.#deletions.delete(id);
+			});
 		this.#deletions.set(id, deletion);
 		return deletion;
 	}
@@ -1515,6 +1603,8 @@ export class ZCodeSessionManager {
 			const modelIo = this.#modelIo.get(id);
 			this.#modelIo.delete(id);
 			try {
+				// 关闭先封住 owner，再等原生注册交接；否则 fork await 后可能注册到已释放的 manager。
+				await this.#nativeLaunches.get(id)?.catch(() => {});
 				const execution = this.#executions.get(id);
 				execution?.controller.abort(new Error("Session closed"));
 				await record.session.abort();

@@ -1,17 +1,23 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { AgentUserMessage } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentUserMessage } from "@oh-my-pi/pi-agent-core";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
+import { Settings } from "../../src/config/settings";
+import type { LoadedCustomCommand } from "../../src/extensibility/custom-commands";
 import { ZCodeCommandLedger } from "../../src/modes/zcode/command-ledger";
 import type { CommandAck, CommandEnvelope } from "../../src/modes/zcode/schema";
 import { ZCodeSessionManager } from "../../src/modes/zcode/sessions";
+import { AgentSession } from "../../src/session/agent-session";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
 import type { SessionEntry } from "../../src/session/session-entries";
 import { closeSessionIndex } from "../../src/session/session-index";
+import { convertToLlm } from "../../src/session/messages";
 import { loadEntriesFromFile } from "../../src/session/session-loader";
 import { SessionManager } from "../../src/session/session-manager";
 import { FileSessionStorage } from "../../src/session/session-storage";
@@ -227,6 +233,209 @@ describe("ZCode durable command facts", () => {
 				throw new Error("must not admit after an unreadable journal");
 			}),
 		).rejects.toBe(failure);
+	});
+
+	it.each([
+		{ name: "void", result: undefined, known: true },
+		{ name: "empty", result: "", known: true },
+		{ name: "transformed", result: "Expanded native command prompt", known: true },
+		{ name: "unknown", result: undefined, known: false },
+	])("admits a native custom command exactly once: $name", async ({ name, result, known }) => {
+		const { manager, adapter } = await fixture();
+		const auth = await AuthStorage.create(":memory:");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		auth.keys.setRuntime(model.provider, "isolated-native-command-test");
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const registry = new ModelRegistry(auth, path.join(manager.getCwd(), "models.yml"), {
+			settings,
+			ignoreLocalModelConfig: true,
+			fetch: () => Promise.reject(new Error("Network forbidden in native command regression")),
+		});
+		const executed = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let effects = 0;
+		let admissions = 0;
+		let modelTurns = 0;
+		const customCommand: LoadedCustomCommand = {
+			path: "native-admission-probe.ts",
+			resolvedPath: path.join(manager.getCwd(), "native-admission-probe.ts"),
+			source: "project",
+			command: {
+				name: "native-admission-probe",
+				description: "Native custom command admission regression",
+				execute: async () => {
+					effects++;
+					executed.resolve();
+					await release.promise;
+					return result;
+				},
+			},
+		};
+		const mock = createMockModel({
+			handler: () => {
+				modelTurns++;
+				return { content: ["Input completed."] };
+			},
+		});
+		const session = new AgentSession({
+			sessionManager: manager,
+			settings,
+			modelRegistry: registry,
+			customCommands: [customCommand],
+			agent: new Agent({
+				getApiKey: () => "isolated-native-command-test",
+				initialState: { model, systemPrompt: ["Isolated native command admission"], tools: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			}),
+		});
+		const text = known ? "/native-admission-probe" : "/unregistered-admission-probe";
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), `native-${name}`),
+			payload: { text },
+		};
+		const ledger = new ZCodeCommandLedger(adapter);
+		const decide = async () => {
+			await session.prompt(text, {
+				inputId: envelope.commandId,
+				sourceCommand: ledger.identity(envelope),
+				onPromptAdmitted: () => {
+					admissions++;
+				},
+			});
+			// 中文修复依据：原生 void 命令不产生模型正文，必须仍有真实准入；
+			// 非空变换与未知命令只能由后续模型／队列边界准入一次。
+			if (admissions !== 1) throw new Error("Input completed without exactly one runtime admission");
+			return accepted(envelope);
+		};
+		try {
+			const first = ledger.execute(envelope, decide);
+			if (known) {
+				await executed.promise;
+				expect(admissions).toBe(0);
+			}
+			release.resolve();
+			expect(await first).toMatchObject({ status: "accepted" });
+			expect(await ledger.execute(envelope, decide)).toMatchObject({ status: "duplicate" });
+			expect(effects).toBe(known ? 1 : 0);
+			expect(admissions).toBe(1);
+			expect(modelTurns).toBe(result || !known ? 1 : 0);
+			const userMessages = session.messages.filter(message => message.role === "user");
+			if (result || !known) {
+				expect(userMessages).toHaveLength(1);
+				expect(userMessages[0]?.content).toEqual([{ type: "text", text: result || text }]);
+			} else {
+				expect(userMessages).toHaveLength(0);
+			}
+		} finally {
+			release.resolve();
+			await session.dispose();
+			auth.close();
+		}
+	});
+
+	it("keeps raw native command arguments in durable identity across reconnect and session boundaries", async () => {
+		const { manager, managers, adapter, cold } = await fixture();
+		const peer = SessionManager.create(manager.getCwd(), path.dirname(manager.getSessionFile()!));
+		await peer.ensureOnDisk();
+		managers.push(peer);
+		const text = '/compact Preserve "quoted checkpoint"  and   internal spaces\nKeep cedar-731.';
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), "raw-native-command"),
+			payload: { text },
+		};
+		const auth = await AuthStorage.create(":memory:");
+		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		auth.keys.setRuntime(model.provider, "isolated-ledger-test");
+		const settings = Settings.isolated({ "compaction.enabled": false });
+		const registry = new ModelRegistry(auth, path.join(manager.getCwd(), "models.yml"), {
+			settings,
+			ignoreLocalModelConfig: true,
+			fetch: () => Promise.reject(new Error("Network forbidden in ledger regression")),
+		});
+		const sessions = [manager, peer].map(sessionManager => {
+			const mock = createMockModel({ handler: { content: ["Input completed."] } });
+			return new AgentSession({
+				sessionManager,
+				settings,
+				modelRegistry: registry,
+				agent: new Agent({
+					getApiKey: () => "isolated-ledger-test",
+					initialState: { model, systemPrompt: ["Isolated ledger input lifecycle"], tools: [] },
+					convertToLlm,
+					streamFn: mock.stream,
+				}),
+			});
+		});
+		const ledger = new ZCodeCommandLedger(adapter);
+		let decisions = 0;
+		const decide = async (input: CommandEnvelope, index: number) => {
+			decisions++;
+			// 使用真实 AgentSession admission 与 journal promotion，而不是只返回
+			// inputAccepted；未 promotion 的输入跨 epoch 应按合同 discarded。
+			await sessions[index]!.prompt(text, {
+				inputId: input.commandId,
+				sourceCommand: ledger.identity(input),
+			});
+			await sessions[index]!.sessionManager.flush();
+			return accepted(input);
+		};
+		try {
+			await ledger.execute(envelope, () => decide(envelope, 0));
+			const reconnected = new ZCodeCommandLedger(adapter);
+			expect(
+				await reconnected.execute({ ...envelope, clientId: "reconnected", issuedAt: 99 }, async () => {
+					throw new Error("A restored command must not execute again");
+				}),
+			).toMatchObject({ status: "duplicate" });
+			// 中文修复依据：引号、换行和内部空格均属于原生命令参数，去重不能把
+			// 规范化后的另一条输入当成相同 payload，更不能在恢复时重新执行。
+			for (const changed of [
+				text.replace('"quoted checkpoint"', "quoted checkpoint"),
+				text.replace("\n", " "),
+				text.replace("  and   ", " and "),
+			]) {
+				await expect(
+					reconnected.execute({ ...envelope, payload: { text: changed } }, async () => {
+						throw new Error("Conflicting arguments must not reach admission");
+					}),
+				).rejects.toThrow("different payload");
+			}
+			const isolated = { ...envelope, sessionId: peer.getSessionId() };
+			expect(await reconnected.execute(isolated, () => decide(isolated, 1))).toMatchObject({ status: "accepted" });
+			expect(decisions).toBe(2);
+			await Promise.all(managers.map(item => item.close()));
+			cold();
+			const keys = [
+				{ sessionId: envelope.sessionId, commandId: envelope.commandId },
+				{ sessionId: isolated.sessionId, commandId: isolated.commandId },
+			];
+			const restarted = new ZCodeCommandLedger(adapter);
+			const facts = await restarted.query(keys);
+			expect(facts.results).toEqual([
+				{ key: keys[0], result: accepted(envelope) },
+				{ key: keys[1], result: accepted(isolated) },
+			]);
+			expect(
+				await restarted.execute(envelope, async () => {
+					throw new Error("Cold history recovery must not execute again");
+				}),
+			).toMatchObject({ status: "duplicate" });
+			const rows = await loadEntriesFromFile(manager.getSessionFile()!, new FileSessionStorage(), {
+				throwIfMissing: true,
+			});
+			expect(
+				rows.filter(
+					entry =>
+						entry.type === "message" &&
+						"inputId" in entry.message &&
+						entry.message.inputId === envelope.commandId,
+				),
+			).toHaveLength(1);
+		} finally {
+			await Promise.all(sessions.map(session => session.dispose()));
+			auth.close();
+		}
 	});
 
 	it("shares an in-flight decision and rejects semantic identity reuse", async () => {
