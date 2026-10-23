@@ -312,6 +312,7 @@ describe("team in-process integration", () => {
 
 			const result = await runTeamDiscussion({
 				question: "如何在不破坏旧接口的前提下扩展模块？",
+				inputVersion: "confirmed-spec:compatibility-7",
 				cwd: tempDir.path(),
 				participants: roster.participants,
 				sessionModelPattern: PATTERN_SESSION,
@@ -321,6 +322,25 @@ describe("team in-process integration", () => {
 			});
 
 			expect(result.status).toBe("completed");
+			expect(result.inputVersion).toBe("confirmed-spec:compatibility-7");
+			expect(result.interpretationDifferences.some(difference => difference.affectsChoice)).toBe(true);
+			expect(result.candidates.map(candidate => candidate.label)).toEqual(["A", "B", "C"]);
+			for (const candidate of result.candidates) {
+				expect(candidate.reviewSucceeded).toBe(true);
+				expect(candidate.recheckSucceeded).toBe(true);
+				expect(candidate.adoptable).toBe(
+					candidate.label !== scenario.blockedLabel && candidate.label !== scenario.residualLabel,
+				);
+				expect(candidate.conditions.some(condition => condition.includes("旧接口稳定"))).toBe(true);
+				if (candidate.label === scenario.blockedLabel) {
+					expect(candidate.unresolvedBlocking).toContainEqual(
+						expect.objectContaining({ id: `${candidate.label}-F3`, issue: "破坏旧接口兼容" }),
+					);
+				}
+				if (candidate.label === scenario.residualLabel) {
+					expect(candidate.unresolvedBlocking.map(finding => finding.id)).toContain(`${candidate.label}-F2`);
+				}
+			}
 			const markdown = result.reportMarkdown!;
 			expect(markdown).toContain("### 核心方案");
 			expect(markdown).toContain("方案状态（结构化追踪，机械生效）");

@@ -1,0 +1,837 @@
+import { describe, expect, test as bunTest } from "bun:test";
+import type { Subprocess } from "bun";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { isRecord, parseFrontmatter, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import {
+	COMMANDS_REQUIRING_BASE_REVISION,
+	LegacyProtocol,
+	TopicWireFrameAssembler,
+	conversationTopicFrameSchema,
+	conversationTopicWireCandidateSchema,
+	v4ConversationRowsRangeResultSchema,
+} from "../../src/modes/zcode/schema";
+import inventory from "../../src/spec-driven/vendor/inventory.json";
+import {
+	CHANGE_ID,
+	contentText,
+	createProviderFixture,
+	IMPLEMENTATION_PATH,
+	MARKER,
+	type ModelRequest,
+	REQUIREMENT,
+	rolePayload,
+	TEST_PATH,
+} from "./provider-fixture";
+
+const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
+if (executable && !path.isAbsolute(executable))
+	throw new Error("OMP_SPEC_TEST_EXECUTABLE must be an absolute executable path");
+const launch = executable ? [executable] : [process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts")];
+// One gate budget covers child startup, native Team, real Git and all validations. No shorter IO deadlines.
+const GATE_BUDGET = 600_000;
+type Frame = Record<string, unknown>;
+const caseDiagnostics = new AsyncLocalStorage<Array<() => unknown>>();
+function bounded(value: unknown): string {
+	return JSON.stringify(value, (key, item: unknown) => {
+		if (/authorization|apiKey|token|secret|password/iu.test(key)) return "[redacted]";
+		if (typeof item === "string") return item.length > 2_000 ? `${item.slice(0, 2_000)}…[truncated]` : item;
+		return item;
+	}).slice(0, 24_000);
+}
+function test(name: string, body: () => Promise<void>, budget: number): void {
+	bunTest(
+		name,
+		() =>
+			caseDiagnostics.run([], async () => {
+				const diagnostics = caseDiagnostics.getStore()!;
+				let reported = false;
+				const report = () => {
+					if (reported) return;
+					reported = true;
+					console.error(
+						`Public acceptance diagnostics: ${bounded({ case: name, observations: diagnostics.map(snapshot => snapshot()) })}`,
+					);
+				};
+				// Diagnostic-only timer at the existing gate boundary, not a new execution deadline.
+				const timer = setTimeout(report, budget);
+				try {
+					await body();
+				} catch (error) {
+					report();
+					throw error;
+				} finally {
+					clearTimeout(timer);
+				}
+			}),
+		budget,
+	);
+}
+class PublicPeer {
+	readonly child: Subprocess<"pipe", "pipe", "pipe">;
+	readonly seen: Frame[] = [];
+	readonly stderr: Promise<string>;
+	#changed = Promise.withResolvers<void>();
+	#ended = false;
+	#failure?: unknown;
+	#id = 0;
+	#pump: Promise<void>;
+	#currentCommand?: Frame;
+	#currentPhase?: Frame;
+	#waiting?: string;
+	#stderrText = "";
+	#observed: Frame[] = [];
+	#statusRowIds = new Map<string, number>();
+	#assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
+	constructor(cwd: string, env: NodeJS.ProcessEnv, provider: { requests: ModelRequest[]; failures: string[] }) {
+		const child = Bun.spawn([...launch, "app-server", "--stdio", "--surface", "desktop", "--cwd", cwd], {
+			cwd,
+			env,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		this.child = child;
+		caseDiagnostics.getStore()?.push(() => ({
+			command: this.#currentCommand,
+			phase: this.#currentPhase,
+			waiting: this.#waiting,
+			providerFailures: provider.failures.slice(-12),
+			providerRequests: provider.requests.slice(-8).map(request => ({
+				model: request.model,
+				role: rolePayload(request)?.specDrivenRole,
+				kind: rolePayload(request)?.input.kind,
+				tools: request.tools?.map(tool => tool.function?.name),
+				messages: request.messages.slice(-4).map(message => ({
+					role: message.role,
+					toolCalls: message.tool_calls,
+					...(message.role === "tool" ? { content: contentText(message.content) } : {}),
+				})),
+			})),
+			stderr: this.#stderrText,
+			ended: this.#ended,
+			frames: this.#observed,
+		}));
+		this.stderr = (async () => {
+			const decoder = new TextDecoder();
+			for await (const chunk of child.stderr)
+				this.#stderrText = `${this.#stderrText}${decoder.decode(chunk, { stream: true })}`.slice(-8_000);
+			this.#stderrText = `${this.#stderrText}${decoder.decode()}`.slice(-8_000);
+			return this.#stderrText;
+		})();
+		this.#pump = (async () => {
+			try {
+				for await (const value of readJsonl<unknown>(child.stdout)) {
+					if (!isRecord(value) || "jsonrpc" in value || "type" in value || !("method" in value || "id" in value))
+						throw new Error(`Non-public stdout frame: ${JSON.stringify(value)}`);
+					this.#observed.push(value);
+					if (this.#observed.length > 12) this.#observed.shift();
+					if (typeof value.method === "string" && value.id !== undefined) {
+						if (value.method === "session/requestRuntimePreferences")
+							this.write({
+								id: value.id,
+								result: { nativeSearchEnhancementsEnabled: false, memoryEnabled: false },
+							});
+						else if (value.method === "subagents/readRuntimeConfig")
+							this.write({
+								id: value.id,
+								error: {
+									code: -32601,
+									message: "Fixture host does not override native subagent configuration",
+								},
+							});
+					}
+					if (value.method === "v4/conversation/frame") {
+						for (const event of this.#assembler.accept(
+							conversationTopicWireCandidateSchema.parse(value.params),
+						)) {
+							if (event.kind === "fault")
+								throw new Error(`Public conversation assembly failed: ${event.fault.reasonCode}`);
+							this.seen.push({ method: value.method, params: event.frame });
+						}
+					} else this.seen.push(value);
+					const changed = this.#changed;
+					this.#changed = Promise.withResolvers<void>();
+					changed.resolve();
+				}
+			} catch (error) {
+				this.#failure = error;
+			} finally {
+				this.#ended = true;
+				this.#changed.resolve();
+			}
+		})();
+	}
+	write(frame: Frame): void {
+		this.child.stdin.write(`${JSON.stringify(frame)}\n`);
+	}
+	async next(predicate: (frame: Frame) => boolean, since = 0): Promise<Frame> {
+		let cursor = since;
+		for (;;) {
+			if (this.#failure) throw this.#failure;
+			for (; cursor < this.seen.length; cursor++) if (predicate(this.seen[cursor]!)) return this.seen[cursor]!;
+			if (this.#ended) throw new Error(`OMP ended before expected public output: ${await this.stderr}`);
+			await this.#changed.promise;
+		}
+	}
+	async request(method: string, params: unknown): Promise<unknown> {
+		const id = `spec-public-${++this.#id}`;
+		this.#waiting = `${method} (${id})`;
+		this.write({ id, method, params });
+		const frame = await this.next(item => item.id === id);
+		if (frame.error) throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
+		this.#waiting = undefined;
+		return frame.result;
+	}
+	async ready(): Promise<void> {
+		this.#waiting = "startup/storageState ready";
+		await this.next(frame => {
+			if (frame.method !== "startup/storageState" || !isRecord(frame.params)) return false;
+			if (frame.params.phase === "failed")
+				throw new Error(`Public storage startup failed: ${bounded(frame.params)}`);
+			return frame.params.phase === "ready";
+		});
+		this.#waiting = undefined;
+	}
+	async create(cwd: string): Promise<string> {
+		const snapshot = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+			await this.request("session/create", {
+				workspace: workspace(cwd),
+				model: { providerId: "spec-fixture", modelId: "chat-a" },
+				titleGenerationEnabled: false,
+			}),
+		);
+		const id = snapshot.session.sessionId;
+		await this.request("v4/conversation/subscribe", {
+			topic: `conversation/${id}`,
+			connectionId: `spec-${id}`,
+			clientMode: "desktop-continuous",
+		});
+		return id;
+	}
+	async send(sessionId: string, text: string): Promise<number> {
+		const since = this.seen.length;
+		this.#currentCommand = { sessionId, text };
+		const type = "sendText";
+		const current = COMMANDS_REQUIRING_BASE_REVISION.has(type)
+			? v4ConversationRowsRangeResultSchema.parse(
+					await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
+				)
+			: undefined;
+		expect(
+			await this.request("v4/command", {
+				commandId: crypto.randomUUID(),
+				clientId: "omp-spec-acceptance",
+				sessionId,
+				type,
+				payload: { text },
+				...(current ? { baseRevision: current.atRevision } : {}),
+				issuedAt: Date.now(),
+			}),
+		).toMatchObject({ status: "accepted" });
+		return since;
+	}
+	async phase(sessionId: string, phase: string, since: number): Promise<{ state: Frame; text: string }> {
+		this.#waiting = `session ${sessionId} phase ${phase}`;
+		let observed: { state: Frame; text: string } | undefined;
+		await this.next(item => {
+			if (!isConversation(item, sessionId) || !isRecord(item.params)) return false;
+			// assembler 已将 wire envelope 解成 logical frame，params 本身就是帧；
+			// 再读 params.frame 会漏掉全部当前状态增量，永久等待已发布的阶段。
+			const frame = item.params;
+			if (!isRecord(frame.payload) || frame.payload.kind !== "deltas") return false;
+			if (!Array.isArray(frame.payload.deltas)) return false;
+			// Snapshot/history text is not a new command result. Observe only newly
+			// published status rows, retaining the greatest row ID across commands.
+			let latest: { rowId: number; state: Frame; text: string } | undefined;
+			for (const delta of frame.payload.deltas) {
+				if (!isRecord(delta) || (delta.op !== "row.appended" && delta.op !== "row.upserted")) continue;
+				const row = delta.row;
+				if (!isRecord(row) || row.kind !== "assistantText" || typeof row.text !== "string") continue;
+				if (typeof row.rowId !== "number" || row.rowId <= (this.#statusRowIds.get(sessionId) ?? 0)) continue;
+				const state = statusLines(row.text).at(-1);
+				if (state && (!latest || row.rowId >= latest.rowId)) latest = { rowId: row.rowId, state, text: row.text };
+			}
+			if (!latest) return false;
+			this.#statusRowIds.set(sessionId, latest.rowId);
+			this.#currentPhase = latest.state;
+			const state = latest.state;
+			// A refused stale command can report a reason while leaving the workflow
+			// active at its gate. Real workflow pauses and terminal failures still fail fast.
+			// /spec cancel 的终态自身带 paused；仅该明确请求的终态可以通过，
+			// 执行中的真实暂停仍立即失败，并保留状态正文里的阻塞原因。
+			if (
+				(state.paused === true && !(phase === "cancelled" && state.phase === "cancelled")) ||
+				state.phase === "failed" ||
+				state.phase === "blocked"
+			)
+				throw new Error(`Workflow stopped before ${phase}: ${bounded({ state, text: latest.text })}`);
+			if (state.phase !== phase) return false;
+			observed = { state, text: latest.text };
+			return true;
+		}, since);
+		if (!observed) throw new Error(`No current public status for ${phase}`);
+		this.#waiting = undefined;
+		return observed;
+	}
+	async [Symbol.asyncDispose](): Promise<void> {
+		if (this.child.exitCode === null) this.child.kill();
+		await this.child.exited;
+		await this.#pump;
+	}
+}
+function workspace(cwd: string) {
+	return { workspacePath: cwd, workspaceKey: cwd };
+}
+function textValues(value: unknown): string[] {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value)) return value.flatMap(textValues);
+	return isRecord(value) ? Object.values(value).flatMap(textValues) : [];
+}
+function statusLines(text: string): Frame[] {
+	return text.split("\n").flatMap(line => {
+		try {
+			const value: unknown = JSON.parse(line);
+			return isRecord(value) && typeof value.phase === "string" ? [value] : [];
+		} catch {
+			return [];
+		}
+	});
+}
+function isConversation(frame: Frame, sessionId: string): boolean {
+	return (
+		frame.method === "v4/conversation/frame" &&
+		isRecord(frame.params) &&
+		frame.params.topic === `conversation/${sessionId}`
+	);
+}
+async function fixture(root: TempDir, baseUrl: string) {
+	const cwd = root.join("project");
+	const home = root.join("home");
+	const configRoot = root.join("config");
+	const agentDir = path.join(configRoot, "agent");
+	// 原生隔离保护临时产物的父目录；临时空间与项目必须分开，
+	// 否则把 fixture 根作为 TEMP 会连真实项目源码也划入受保护范围。
+	const temp = root.join("tmp");
+	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
+	await fs.writeFile(
+		path.join(agentDir, "models.yml"),
+		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n      - id: chat-b\n        reasoning: false\n`,
+	);
+	await fs.writeFile(
+		path.join(agentDir, "config.yml"),
+		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\n",
+	);
+	const env: NodeJS.ProcessEnv = {
+		PATH: Bun.env.PATH,
+		SystemRoot: Bun.env.SystemRoot,
+		WINDIR: Bun.env.WINDIR,
+		ProgramFiles: Bun.env.ProgramFiles,
+		LOCALAPPDATA: home,
+		TEMP: temp,
+		TMP: temp,
+		HOME: home,
+		USERPROFILE: home,
+		OMP_CONFIG_ROOT: configRoot,
+		PI_CODING_AGENT_DIR: agentDir,
+		PI_CONFIG_DIR: ".omp",
+		OMP_OFFLINE: "0",
+		PI_NO_TITLE: "1",
+		NO_PROXY: "127.0.0.1,localhost",
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: root.join("empty-gitconfig"),
+		GIT_TERMINAL_PROMPT: "0",
+		GIT_AUTHOR_NAME: "OMP Acceptance",
+		GIT_AUTHOR_EMAIL: "omp-acceptance@example.invalid",
+		GIT_COMMITTER_NAME: "OMP Acceptance",
+		GIT_COMMITTER_EMAIL: "omp-acceptance@example.invalid",
+		OPENSPEC_TELEMETRY: "0",
+		DO_NOT_TRACK: "1",
+	};
+	await fs.writeFile(env.GIT_CONFIG_GLOBAL!, "");
+	await git(cwd, env, ["init", "--initial-branch=main"]);
+	await fs.writeFile(path.join(cwd, "baseline.txt"), "Baseline belongs to the acceptance fixture.\n");
+	await git(cwd, env, ["add", "baseline.txt"]);
+	await git(cwd, env, ["-c", "core.hooksPath=", "commit", "-m", "Fixture baseline"]);
+	return { cwd, env, root: root.path() };
+}
+async function run(cwd: string, env: NodeJS.ProcessEnv, command: string[]) {
+	const child = Bun.spawn(command, { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return { stdout, stderr, exitCode };
+}
+async function git(cwd: string, env: NodeJS.ProcessEnv, args: string[]): Promise<string> {
+	const result = await run(cwd, env, ["git", ...args]);
+	if (result.exitCode !== 0) throw new Error(`Fixture Git ${args.join(" ")}: ${result.stderr}`);
+	return result.stdout.trim();
+}
+async function absent(cwd: string, relative: string): Promise<void> {
+	const stat = await fs.lstat(path.join(cwd, relative)).catch((error: NodeJS.ErrnoException) => {
+		if (error.code === "ENOENT") return undefined;
+		throw error;
+	});
+	expect(stat).toBeUndefined();
+}
+function commandFrom(text: string, command: string): string {
+	const line = text.split("\n").find(value => value.startsWith(`/spec ${command} `));
+	if (!line) throw new Error(`No public /spec ${command} decision in ${text}`);
+	return line;
+}
+
+describe("spec-driven actual OMP public entry", () => {
+	test(
+		"strict decisions drive native Team, real TDD, task commits, independent reviews, final entry and authorized archive",
+		async () => {
+			await using root = await TempDir.create("@omp-spec-public-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			// Unrelated staged, unstaged and new user material must survive workflow publication.
+			await fs.writeFile(path.join(config.cwd, "user-staged.txt"), "user staged\n");
+			await git(config.cwd, config.env, ["add", "user-staged.txt"]);
+			await fs.appendFile(path.join(config.cwd, "baseline.txt"), "user unstaged\n");
+			await fs.writeFile(path.join(config.cwd, "user-new.txt"), "user untracked\n");
+			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			const first = await peer.send(
+				session,
+				`/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
+			);
+			const specification = await peer.phase(session, "awaiting-specification", first);
+			expect(
+				provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
+			).toBe(false);
+			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			await absent(config.cwd, TEST_PATH);
+			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/design.md`);
+			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/tasks.md`);
+			const stale = await peer.send(session, "/spec confirm-spec obsolete-version");
+			const rejected = await peer.phase(session, "awaiting-specification", stale);
+			expect(rejected.state.specificationVersion).toBe(specification.state.specificationVersion);
+			expect(
+				provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
+			).toBe(false);
+			expect(rejected.state.planVersion).toBeUndefined();
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			await absent(config.cwd, TEST_PATH);
+			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`);
+			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+			const discussionStart = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+			const choice = await peer.phase(session, "awaiting-choice", discussionStart);
+			expect(choice.state.runId).toBeString();
+			expect(
+				provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
+					.length,
+			).toBeGreaterThanOrEqual(2);
+			expect(choice.text).toContain('"adoptable":true');
+			expect(choice.text).toContain('"reviewSucceeded":true');
+			expect(choice.text).toContain('"recheckSucceeded":true');
+			const planStart = await peer.send(session, commandFrom(choice.text, "choose"));
+			const plan = await peer.phase(session, "awaiting-plan", planStart);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			await absent(config.cwd, TEST_PATH);
+			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+			expect(await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`), "utf8")).toContain(
+				"T001",
+			);
+			await absent(config.cwd, "docs/superpowers/plans");
+			const badPlan = await peer.send(session, "/spec confirm-plan obsolete-version");
+			await peer.phase(session, "awaiting-plan", badPlan);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			const executing = await peer.send(session, commandFrom(plan.text, "confirm-plan"));
+			const acceptance = await peer.phase(session, "awaiting-acceptance", executing);
+			const published = await git(config.cwd, config.env, ["log", "--format=%H", `${baseline}..HEAD`]);
+			expect(published.split("\n").length).toBeGreaterThanOrEqual(1);
+			const committedFiles = (await git(config.cwd, config.env, ["diff", "--name-only", `${baseline}..HEAD`])).split(
+				"\n",
+			);
+			expect(committedFiles).toContain(IMPLEMENTATION_PATH);
+			expect(committedFiles).toContain(TEST_PATH);
+			expect(committedFiles).not.toContain("user-staged.txt");
+			expect(committedFiles).not.toContain("user-new.txt");
+			expect(committedFiles).not.toContain("baseline.txt");
+			expect(await git(config.cwd, config.env, ["diff", "--cached", "--name-only"])).toBe("user-staged.txt");
+			expect(await fs.readFile(path.join(config.cwd, "baseline.txt"), "utf8")).toContain("user unstaged");
+			expect(await fs.readFile(path.join(config.cwd, "user-new.txt"), "utf8")).toBe("user untracked\n");
+			// Auxiliary task labels quote role input but do not run a reviewer.
+			const reviewRequests = provider.requests.filter(
+				request =>
+					rolePayload(request)?.specDrivenRole === "reviewer" &&
+					request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "yield"),
+			);
+			const reviewerInputs = reviewRequests.map(rolePayload);
+			for (const kind of ["requirements", "plan", "task", "overall"]) {
+				const inputs = reviewerInputs.filter(payload => payload?.input.kind === kind);
+				expect(inputs.length).toBeGreaterThan(0);
+				// Multiple HTTP rounds are tool continuations, not additional review seats.
+				const initial = reviewRequests.filter(
+					request =>
+						rolePayload(request)?.input.kind === kind &&
+						request.messages.every(message => message.role !== "tool"),
+				);
+				expect(initial).toHaveLength(1);
+			}
+			const taskReview = reviewerInputs.find(payload => payload?.input.kind === "task")!;
+			const taskEvidence = JSON.stringify(taskReview.input);
+			expect(taskEvidence).toContain("Hello, Ada!");
+			expect(taskEvidence).toContain("3 pass");
+			expect(taskEvidence).toMatch(/3 fail|Expected:|expect\\?\(received/u);
+			expect(taskEvidence).toContain("toolCallId");
+			expect(taskEvidence).toContain("base");
+			expect(taskEvidence).toContain("head");
+			expect(taskEvidence).toContain("review");
+			const ranges = taskReview.input.commits;
+			expect(Array.isArray(ranges)).toBe(true);
+			if (!Array.isArray(ranges) || !ranges.length) throw new Error("Task review has no actual commit range");
+			for (const range of ranges) {
+				if (
+					!isRecord(range) ||
+					typeof range.base !== "string" ||
+					typeof range.head !== "string" ||
+					typeof range.reviewPackage !== "string"
+				)
+					throw new Error("Invalid actual review-package binding");
+				expect(range.base).toMatch(/^[a-f0-9]{40}$/u);
+				expect(range.head).toMatch(/^[a-f0-9]{40}$/u);
+				expect(range.head).not.toBe(range.base);
+				const packageContent = range.reviewPackage;
+				expect(packageContent).toContain(IMPLEMENTATION_PATH);
+				expect(packageContent).toContain(TEST_PATH);
+				expect(packageContent).toContain("export function greet");
+				expect(packageContent).not.toContain("user-staged.txt");
+				expect(packageContent).not.toContain("user-new.txt");
+			}
+			const overall = reviewerInputs.find(payload => payload?.input.kind === "overall")!;
+			expect(JSON.stringify(overall.input)).toContain("real-bun-entry");
+			expect(JSON.stringify(overall.input)).toContain("3 pass");
+			// A separate observation through the approved executable entry, not a model claim.
+			const actual = await run(config.cwd, config.env, [process.execPath, "test", TEST_PATH]);
+			expect(actual.exitCode).toBe(0);
+			expect(`${actual.stdout}\n${actual.stderr}`).toContain("3 pass");
+			expect(await Bun.file(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`)).exists()).toBe(true);
+			await absent(config.cwd, "openspec/specs/greeting/spec.md");
+			const badAcceptance = await peer.send(session, "/spec accept obsolete-version");
+			await peer.phase(session, "awaiting-acceptance", badAcceptance);
+			await absent(config.cwd, "openspec/specs/greeting/spec.md");
+			const final = await peer.send(session, commandFrom(acceptance.text, "accept"));
+			await peer.phase(session, "completed", final);
+			expect(await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
+				"Normalized greeting",
+			);
+			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`);
+			const archive = await fs.readdir(path.join(config.cwd, "openspec/changes/archive"));
+			expect(archive.filter(name => name.endsWith(`-${CHANGE_ID}`))).toHaveLength(1);
+			expect(provider.failures).toEqual([]);
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"amending confirmed requirements invalidates actual prior approval and Team choice without deleting material",
+		async () => {
+			await using root = await TempDir.create("@omp-spec-stale-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			let since = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+			const original = await peer.phase(session, "awaiting-specification", since);
+			since = await peer.send(session, commandFrom(original.text, "confirm-spec"));
+			const priorChoice = await peer.phase(session, "awaiting-choice", since);
+			const countTeam = () =>
+				provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
+					.length;
+			const teamCount = countTeam();
+			since = await peer.send(
+				session,
+				`/spec amend ${MARKER}: retain the greeting behavior and explicitly exclude networking, logging and side effects.`,
+			);
+			const changed = await peer.phase(session, "awaiting-specification", since);
+			expect(changed.state.specificationVersion).not.toBe(original.state.specificationVersion);
+			expect(changed.state.selection).toBeUndefined();
+			expect(changed.state.planVersion).toBeUndefined();
+			expect(countTeam()).toBe(teamCount);
+			since = await peer.send(session, commandFrom(original.text, "confirm-spec"));
+			const stale = await peer.phase(session, "awaiting-specification", since);
+			expect(stale.state.specificationVersion).toBe(changed.state.specificationVersion);
+			expect(countTeam()).toBe(teamCount);
+			expect(stale.state.selection).toBeUndefined();
+			expect(stale.state.planVersion).toBeUndefined();
+			since = await peer.send(session, commandFrom(priorChoice.text, "choose"));
+			await peer.phase(session, "awaiting-specification", since);
+			expect(provider.requests.some(request => rolePayload(request)?.specDrivenRole === "planner")).toBe(false);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+			expect(
+				await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`), "utf8"),
+			).toContain("exclude networking");
+			since = await peer.send(session, "/spec cancel");
+			await peer.phase(session, "cancelled", since);
+			expect(provider.failures).toEqual([]);
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"packaged skills preserve default discovery and explicit-only access",
+		async () => {
+			await using root = await TempDir.create("@omp-spec-skills-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			expect(inventory.skills).toHaveLength(28);
+			const defaultSkills: Record<string, true> = {
+				"verification-before-completion": true,
+				"systematic-debugging": true,
+			};
+			const ordinary = await peer.create(config.cwd);
+			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
+			await peer.next(
+				frame =>
+					isConversation(frame, ordinary) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+				since,
+			);
+			const ordinaryRequests = provider.requests.filter(request => (request.tools?.length ?? 0) > 0);
+			expect(ordinaryRequests.length).toBeGreaterThan(0);
+			for (const request of ordinaryRequests)
+				for (const skill of inventory.skills) {
+					expect(JSON.stringify(request.messages)).not.toContain(`/skill:${skill.name}`);
+					expect(JSON.stringify(request.messages)).not.toContain(`name: ${skill.name}`);
+					expect(JSON.stringify(request.messages)).not.toContain(skill.path);
+				}
+			const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
+				await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: ordinary }),
+			);
+			const resourceMetadata = new Map<string, { name: string; description: string }>();
+			for (const entry of inventory.skills) {
+				const skill = catalog.skills.find(item => item.name === entry.name);
+				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);
+				const canonical = await fs.realpath(skill.path);
+				expect(path.relative(config.root, canonical).startsWith("..")).toBe(false);
+				expect(canonical.replaceAll("\\", "/")).toEndWith(entry.path);
+				const source = await fs.readFile(canonical, "utf8");
+				const metadata = parseFrontmatter(source, { source: canonical, repair: false, level: "off" });
+				if (typeof metadata.frontmatter.name !== "string" || typeof metadata.frontmatter.description !== "string")
+					throw new Error(`Packaged resource lacks skill identity: ${entry.name}`);
+				for (const request of ordinaryRequests) {
+					const context = request.messages.map(message => contentText(message.content)).join("\n");
+					if (typeof metadata.frontmatter.description === "string") {
+						if (defaultSkills[entry.name]) expect(context).toContain(entry.name);
+						else expect(context).not.toContain(metadata.frontmatter.description);
+					}
+				}
+				resourceMetadata.set(entry.name, {
+					name: metadata.frontmatter.name,
+					description: metadata.frontmatter.description,
+				});
+			}
+			for (const entry of inventory.skills) {
+				const session = await peer.create(config.cwd);
+				const requestStart = provider.requests.length;
+				const selectedPath = `skill://${entry.name}:raw`;
+				const others = inventory.skills.filter(other => other.name !== entry.name && !defaultSkills[other.name]);
+				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
+				since = await peer.send(
+					session,
+					`${defaultSkills[entry.name] ? "" : `/skill:${entry.name} `}${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, deniedPaths })}`,
+				);
+				await peer.next(
+					frame =>
+						isConversation(frame, session) &&
+						textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+					since,
+				);
+				const requests = provider.requests.slice(requestStart).filter(request => (request.tools?.length ?? 0) > 0);
+				expect(requests.length).toBeGreaterThan(0);
+				// Inspect native results delivered back to the model, correlated by the
+				// public provider tool-call ID. The model's final text is only a barrier.
+				const completed = requests.at(-1)!;
+				const published = v4ConversationRowsRangeResultSchema.parse(
+					await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 100 }),
+				);
+				const readResult = (target: string): string => {
+					const call = completed.messages
+						.flatMap(message => (message.role === "assistant" ? (message.tool_calls ?? []) : []))
+						.find(value => {
+							if (!isRecord(value) || !isRecord(value.function)) return false;
+							if (typeof value.function.arguments !== "string") return false;
+							const args: unknown = JSON.parse(value.function.arguments);
+							return (
+								typeof value.function.name === "string" &&
+								value.function.name.replace(/^_/u, "") === "read" &&
+								isRecord(args) &&
+								args.path === target
+							);
+						});
+					if (!isRecord(call) || typeof call.id !== "string") throw new Error(`No native read call for ${target}`);
+					const result = completed.messages.find(
+						message => isRecord(message) && message.role === "tool" && message.tool_call_id === call.id,
+					);
+					if (!result) throw new Error(`No native read result for ${target}`);
+					if (target === selectedPath) {
+						const row = published.rows.find(item => item.kind === "toolCall" && item.toolCallId === call.id);
+						if (!row || row.kind !== "toolCall" || row.status !== "success")
+							throw new Error(
+								`Selected package read failed: ${bounded({
+									resource: entry.name,
+									path: target,
+									status: row?.kind === "toolCall" ? row.status : "missing",
+									output: contentText(result.content).slice(0, 500),
+								})}`,
+							);
+					}
+					return contentText(result.content);
+				};
+				const selected = parseFrontmatter(readResult(selectedPath), {
+					source: selectedPath,
+					repair: false,
+					level: "off",
+				});
+				// Resource identity and usable instructions, not rendered prompt wording
+				// or a copied body, establish that the real package read succeeded.
+				expect(selected.frontmatter.name).toBe(resourceMetadata.get(entry.name)!.name);
+				expect(typeof selected.frontmatter.description).toBe("string");
+				const denied = readResult(deniedPaths.join(";"));
+				const context = completed.messages.map(message => contentText(message.content)).join("\n");
+				for (const other of others) {
+					expect(denied).toContain(`Skill access denied: ${other.name}`);
+					const description = resourceMetadata.get(other.name)!.description;
+					if (typeof description === "string") expect(context).not.toContain(description);
+				}
+			}
+			// Public packaged companion entry uses the embedded runtime and trusted launcher,
+			// not a raw extracted script or a developer-machine Node installation.
+			const graphDirectory = root.join("graphviz-fixture");
+			await fs.mkdir(graphDirectory, { recursive: true });
+			await fs.writeFile(
+				path.join(graphDirectory, "SKILL.md"),
+				"# Acceptance graph\n\n```dot\ndigraph acceptance { specification -> approved; }\n```\n",
+			);
+			const rendered = await run(config.cwd, config.env, [
+				...launch,
+				"superpowers",
+				"skills/writing-skills/render-graphs.js",
+				graphDirectory,
+			]);
+			const graphOutput = `${rendered.stdout}\n${rendered.stderr}`;
+			const svg = Bun.file(path.join(graphDirectory, "diagrams/acceptance.svg"));
+			if (rendered.exitCode === 0) {
+				expect(await svg.exists()).toBe(true);
+				expect(await svg.text()).toContain("<svg");
+				expect(graphOutput).toContain("Rendered:");
+			} else {
+				expect(await svg.exists()).toBe(false);
+				expect(graphOutput).toMatch(/graphviz \(dot\) not found/iu);
+				expect(graphOutput).not.toContain("Rendered:");
+			}
+			// Missing Bash is observable through the trusted public launcher. With Bash,
+			// no-argument usage is a real safe failure; never run destructive inventory probes.
+			const reviewUsage = await run(config.cwd, config.env, [
+				...launch,
+				"superpowers",
+				"skills/subagent-driven-development/scripts/review-package",
+			]);
+			expect(reviewUsage.exitCode).not.toBe(0);
+			expect(`${reviewUsage.stdout}\n${reviewUsage.stderr}`).toMatch(/usage|require.*bash/iu);
+			expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
+			expect(provider.failures).toEqual([]);
+			expect(await git(config.cwd, config.env, ["status", "--porcelain"])).toBe("");
+			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"detached public omp openspec dispatch supplies native commands, schema and instructions",
+		async () => {
+			await using root = await TempDir.create("@omp-openspec-distribution-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			const invoke = async (args: string[]) => run(config.cwd, config.env, [...launch, "openspec", ...args]);
+			const help = await invoke(["--help"]);
+			expect(help.exitCode).toBe(0);
+			for (const command of [
+				"init",
+				"list",
+				"view",
+				"show",
+				"change",
+				"spec",
+				"new",
+				"status",
+				"instructions",
+				"schema",
+				"validate",
+				"archive",
+			])
+				expect(help.stdout).toContain(command);
+			const version = await invoke(["--version"]);
+			expect(version.exitCode).toBe(0);
+			expect(version.stdout).toContain(inventory.openspec.version);
+			let resourceRoot: string;
+			{
+				// Locate the distribution through its public skill catalog, not the source resource loader.
+				await using peer = new PublicPeer(config.cwd, config.env, provider);
+				await peer.ready();
+				const session = await peer.create(config.cwd);
+				const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
+					await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: session }),
+				);
+				const entry = catalog.skills.find(skill => skill.name === "openspec-explore");
+				if (!entry) throw new Error("Packaged OpenSpec skill unavailable through public catalog");
+				resourceRoot = path.resolve(entry.path, "../../../..");
+				expect((await fs.realpath(resourceRoot)).startsWith(await fs.realpath(config.root))).toBe(true);
+			}
+			const catalogRequestCount = provider.requests.length;
+			const bundledSchema = path.join(resourceRoot, "omp-spec");
+			const schema = path.join(config.cwd, "openspec/schemas/omp-spec");
+			await fs.mkdir(path.dirname(schema), { recursive: true });
+			await fs.cp(bundledSchema, schema, { recursive: true });
+			const created = await invoke(["new", "change", "distribution-check", "--schema", "omp-spec"]);
+			expect(created.exitCode).toBe(0);
+			const status = await invoke(["status", "--change", "distribution-check", "--json"]);
+			expect(status.exitCode).toBe(0);
+			const state = JSON.parse(status.stdout) as { artifacts: Array<{ id: string }> };
+			expect(state.artifacts.map(artifact => artifact.id).sort()).toEqual(["proposal", "specs"]);
+			for (const artifact of ["proposal", "specs"]) {
+				const instruction = await invoke(["instructions", artifact, "--change", "distribution-check", "--json"]);
+				expect(instruction.exitCode).toBe(0);
+				const value: unknown = JSON.parse(instruction.stdout);
+				expect(isRecord(value)).toBe(true);
+				expect(JSON.stringify(value)).toContain(artifact);
+				expect(JSON.stringify(value)).toContain("template");
+			}
+			const schemas = await invoke(["schema", "which", "omp-spec", "--json"]);
+			expect(schemas.exitCode).toBe(0);
+			expect(schemas.stdout.replaceAll("\\\\", "/").replaceAll("\\", "/")).toContain("omp-spec");
+			const invalid = await invoke(["validate", "distribution-check", "--json"]);
+			expect(invalid.exitCode).not.toBe(0);
+			const change = path.join(config.cwd, "openspec/changes/distribution-check");
+			await fs.writeFile(
+				path.join(change, "proposal.md"),
+				"## Why\nExercise packaged CLI.\n\n## What Changes\nAdd greeting.\n\n## Capabilities\n### New Capabilities\n- greeting: greeting behavior\n\n## Impact\nFixture only.\n",
+			);
+			await fs.mkdir(path.join(change, "specs/greeting"), { recursive: true });
+			await fs.writeFile(
+				path.join(change, "specs/greeting/spec.md"),
+				"## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL return a greeting.\n\n#### Scenario: Greeting requested\n- **WHEN** greeting is requested\n- **THEN** return a greeting\n",
+			);
+			const valid = await invoke(["validate", "distribution-check", "--json"]);
+			expect(valid.exitCode).toBe(0);
+			expect(valid.stdout).toContain("true");
+			expect(provider.requests).toHaveLength(catalogRequestCount);
+		},
+		GATE_BUDGET,
+	);
+});

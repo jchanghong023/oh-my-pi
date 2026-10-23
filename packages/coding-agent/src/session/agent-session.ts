@@ -6946,6 +6946,12 @@ export class AgentSession implements SettingsScope {
 		return this.#tools.hasEditTool;
 	}
 
+	/** Loaded project constraints for restricted native workers, without inheriting conversation history. */
+	get loadedProjectContext(): Readonly<Pick<ToolSession, "contextFiles" | "activeRules">> | undefined {
+		const context = this.#evalToolSession;
+		return context ? { contextFiles: context.contextFiles, activeRules: context.activeRules } : undefined;
+	}
+
 	/** Looks up a registered tool by name. */
 	getToolByName(name: string): AgentTool | undefined {
 		return this.#tools.getToolByName(name);

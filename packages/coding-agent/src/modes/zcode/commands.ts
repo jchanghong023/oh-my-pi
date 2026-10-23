@@ -310,7 +310,10 @@ export class ZCodeCommandHost {
 			invocation &&
 			this.session.skills.find(candidate => getSkillSlashCommandName(candidate) === `skill:${invocation.name}`);
 		if (skill && invocation && this.session.skillsSettings?.enableSkillCommands) {
-			const built = await buildSkillPromptMessage(skill, invocation, "user");
+			const built = await buildSkillPromptMessage(skill, invocation, "user", {
+				scope: this.session.sessionManager,
+				getSessionBranch: () => this.session.sessionManager.getBranch(),
+			});
 			const message: ZCodeCustomPrompt = {
 				customType: SKILL_PROMPT_MESSAGE_TYPE,
 				content: options.images?.length

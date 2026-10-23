@@ -15,6 +15,7 @@
  * - proposer/reviewer/reviser failures mark that participant failed and the
  *   rest continue, with participation noted.
  */
+import * as nodeCrypto from "node:crypto";
 import { logger } from "@oh-my-pi/pi-utils";
 import { Semaphore } from "../task/parallel";
 import {
@@ -38,6 +39,8 @@ import {
 } from "./prompts";
 import { assembleTeamReport } from "./report";
 import type {
+	TeamCandidate,
+	TeamInterpretationDifference,
 	TeamFinding,
 	TeamParticipant,
 	TeamProgressUpdate,
@@ -57,6 +60,8 @@ export const TEAM_MAX_REVISION_ROUNDS = 2;
 
 export interface TeamOrchestratorOptions {
 	question: string;
+	/** Workflow callers bind the discussion to this exact confirmed spec version. */
+	inputVersion?: string;
 	cwd: string;
 	participants: readonly TeamParticipant[];
 	/** Exact pattern of the session model; alignment and synthesis run on it. */
@@ -158,10 +163,80 @@ interface TeamCallDiagnosticsOutcome {
 	diagnostics: Record<string, unknown>;
 }
 
+type TeamDiscussionOutcome = Omit<TeamRunResult, "runId" | "inputVersion" | "candidates" | "interpretationDifferences">;
+
+interface TeamDiscussionState {
+	records: TeamProposalRecord[];
+	interpretationDifferences: TeamInterpretationDifference[];
+	recommendedProposal: string;
+	recommendationPreconditions: string;
+}
+
+function contentVersion(content: string): string {
+	return nodeCrypto.createHash("sha256").update(content).digest("hex");
+}
+
+function buildCandidates(state: TeamDiscussionState, runId: string, completed: boolean): TeamCandidate[] {
+	return state.records.map(record => {
+		const proposal = record.latestProposal;
+		const reviewSucceeded = record.reviews.length > 0 && !record.reviewFailed;
+		const recheckSucceeded = !record.pendingRecheck && !record.recheckFailed;
+		const adoptable =
+			completed &&
+			reviewSucceeded &&
+			recheckSucceeded &&
+			!record.excludedFromOptions &&
+			!record.blockedAfterRoundCap &&
+			record.unresolvedBlocking.length === 0;
+		const text = proposal?.proposal ?? "";
+		return {
+			id: `${runId}:${record.label}`,
+			label: record.label,
+			version: contentVersion(text),
+			proposal: text,
+			adoptable,
+			reviewSucceeded,
+			recheckSucceeded,
+			unresolvedBlocking: record.unresolvedBlocking,
+			exclusionReason: record.exclusionReason ?? (!completed ? "讨论未成功完成" : undefined),
+			conditions: [
+				...(proposal?.keyAssumptions
+					.filter(assumption => assumption.status === "unverified")
+					.map(
+						assumption =>
+							`${assumption.content}；待验证依据：${assumption.basis}；若不成立：${assumption.impactIfWrong}`,
+					) ?? []),
+				...(proposal?.unknowns ?? []),
+				...(state.recommendedProposal === record.label && state.recommendationPreconditions.trim()
+					? [state.recommendationPreconditions]
+					: []),
+			],
+			assumptions: proposal?.keyAssumptions ?? [],
+			evidence: proposal?.evidence ?? [],
+		};
+	});
+}
+
 export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promise<TeamRunResult> {
-	const teamRunId = logger.getLogContext().team_run_id ?? `team-${crypto.randomUUID()}`;
+	const logContext = logger.getLogContext();
+	const teamRunId =
+		typeof logContext.team_run_id === "string" ? logContext.team_run_id : `team-${crypto.randomUUID()}`;
+	const inputVersion = options.inputVersion ?? contentVersion(options.question);
+	const state: TeamDiscussionState = {
+		records: [],
+		interpretationDifferences: [],
+		recommendedProposal: "",
+		recommendationPreconditions: "",
+	};
+	const completeResult = (result: TeamDiscussionOutcome): TeamRunResult => ({
+		...result,
+		runId: teamRunId,
+		inputVersion,
+		candidates: buildCandidates(state, teamRunId, result.status === "completed"),
+		interpretationDifferences: state.interpretationDifferences,
+	});
 	return logger.withLogContext(
-		{ team_run_id: teamRunId, operation_id: logger.getLogContext().operation_id ?? teamRunId },
+		{ team_run_id: teamRunId, operation_id: logContext.operation_id ?? teamRunId },
 		async () => {
 			const started = performance.now();
 			const diagnostics = { stage: "dispatch", reason: "stage_incomplete" };
@@ -176,7 +251,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				revision_round_cap: TEAM_MAX_REVISION_ROUNDS,
 			});
 			try {
-				const result = await runTeamDiscussionImpl(options, diagnostics, subagentResults);
+				const result = await runTeamDiscussionImpl(options, diagnostics, subagentResults, state);
 				result.subagentResults = subagentResults;
 				const fields = {
 					component: "team.orchestrator",
@@ -189,7 +264,7 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				};
 				if (result.status === "failed") logger.error("Team discussion failed", fields);
 				else logger.info("Team discussion finished", fields);
-				return result;
+				return completeResult(result);
 			} catch (error) {
 				const fields = {
 					component: "team.orchestrator",
@@ -201,11 +276,11 @@ export async function runTeamDiscussion(options: TeamOrchestratorOptions): Promi
 				};
 				if (options.signal.aborted) logger.info("Team discussion interrupted", fields);
 				else logger.error("Team discussion threw", fields);
-				return {
+				return completeResult({
 					status: options.signal.aborted ? "cancelled" : "failed",
 					failureReason: error instanceof Error ? error.message : String(error),
 					subagentResults,
-				};
+				});
 			}
 		},
 	);
@@ -215,7 +290,8 @@ async function runTeamDiscussionImpl(
 	options: TeamOrchestratorOptions,
 	diagnostics: { stage: string; reason: string },
 	subagentResults: NonNullable<TeamRunResult["subagentResults"]>,
-): Promise<TeamRunResult> {
+	state: TeamDiscussionState,
+): Promise<TeamDiscussionOutcome> {
 	const { question, cwd, participants, runner, signal } = options;
 	const semaphore = new Semaphore(options.maxConcurrency);
 	const participantStatus = new Map<
@@ -367,6 +443,7 @@ async function runTeamDiscussionImpl(
 		excludedFromOptions: false,
 		blockedAfterRoundCap: false,
 	}));
+	state.records = records;
 	await Promise.all(
 		records.map(async record => {
 			trackParticipant(record.label, "proposer", "running");
@@ -473,6 +550,7 @@ async function runTeamDiscussionImpl(
 		};
 	}
 	trackParticipant("alignment", "aligner", "completed");
+	state.interpretationDifferences = alignment.interpretationDifferences;
 
 	// Initial review and recheck read the same question/proposal context; the
 	// fields a review sees must not drift between the two rounds.
@@ -827,6 +905,8 @@ async function runTeamDiscussionImpl(
 		});
 	}
 	trackParticipant("synthesis", "synthesizer", "completed");
+	state.recommendedProposal = synthesis.recommendedProposal.trim();
+	state.recommendationPreconditions = synthesis.recommendationPreconditions;
 
 	const participationNotes: string[] = [];
 	for (const record of records) {

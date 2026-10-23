@@ -8,11 +8,11 @@
  * budget enforcement, alignment/synthesis failure handling, partial
  * participation, cancellation, and concurrency bounds.
  */
+import * as crypto from "node:crypto";
 import { describe, expect, it } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import {
-	TEAM_CLOSING_CONTRACT,
 	assignReviewerParticipant,
 	computeUnresolvedBlocking,
 	needsRecheck,
@@ -26,6 +26,10 @@ import type {
 	TeamSubagentRunner,
 	TeamReviewRecord,
 	TeamBlockingResolution,
+	TeamProposalOutput,
+	TeamRevisionFlags,
+	TeamRevisionOutput,
+	TeamRevisionResponse,
 } from "@oh-my-pi/pi-coding-agent/team";
 
 function participantOf(model: Model, index: number, isSessionModel = false): TeamParticipant {
@@ -52,7 +56,7 @@ function parseMarker(task: string): ParsedMarker {
 	return { role: match[1], target: match[2], round: match[3] ? Number(match[3]) : undefined, recheck: !!match[4] };
 }
 
-function proposalData(label: string): Record<string, unknown> {
+function proposalData(label: string) {
 	return {
 		proposal: `方案 ${label}：扩展现有模块，改动集中在 X。`,
 		noViableProposal: false,
@@ -63,7 +67,7 @@ function proposalData(label: string): Record<string, unknown> {
 		acceptanceCriteria: ["现有测试全绿"],
 		ambiguityInterpretations: [{ ambiguity: "并发需求", interpretation: "按单线程实现", impact: "性能上限" }],
 		evidence: [{ claim: "模块 X 已存在", source: "src/x.ts" }],
-	};
+	} satisfies TeamProposalOutput;
 }
 
 function alignmentData(): Record<string, unknown> {
@@ -124,10 +128,10 @@ function reviewData(options?: {
 }
 
 function revisionData(
-	flags: Partial<Record<string, boolean>> = {},
+	flags: Partial<TeamRevisionFlags> = {},
 	findingIds: readonly string[] = [],
-	responses?: Record<string, unknown>[],
-): Record<string, unknown> {
+	responses?: TeamRevisionResponse[],
+) {
 	return {
 		revisedProposal: "修订后的方案：同上并补充迁移步骤。",
 		revisionSummary: "补充迁移",
@@ -145,7 +149,7 @@ function revisionData(
 			disputesBlockingFinding: false,
 			...flags,
 		},
-	};
+	} satisfies TeamRevisionOutput;
 }
 
 function noViableProposalData(): Record<string, unknown> {
@@ -260,6 +264,8 @@ function participants3(): TeamParticipant[] {
 async function run(
 	script: Script,
 	options?: {
+		question?: string;
+		inputVersion?: string;
 		participants?: TeamParticipant[];
 		maxConcurrency?: number;
 		signal?: AbortSignal;
@@ -268,7 +274,8 @@ async function run(
 ) {
 	const { runner, calls } = createScriptedRunner(script);
 	const result = await runTeamDiscussion({
-		question: "如何实现 X？",
+		question: options?.question ?? "如何实现 X？",
+		inputVersion: options?.inputVersion,
 		cwd: "/tmp/repo",
 		participants: options?.participants ?? participants3(),
 		sessionModelPattern: PATTERN_A,
@@ -414,11 +421,11 @@ describe("team reviewer rotation", () => {
 
 describe("team revision flags and blocking tracking", () => {
 	it("triggers a recheck only when a flag is set", () => {
-		expect(needsRecheck(revisionData().reviewFlags as never)).toBe(false);
-		expect(needsRecheck(revisionData({ changedCoreDesign: true }).reviewFlags as never)).toBe(true);
-		expect(needsRecheck(revisionData({ claimsResolvedBlocking: true }).reviewFlags as never)).toBe(true);
-		expect(needsRecheck(revisionData({ newEvidenceChangesAssumptions: true }).reviewFlags as never)).toBe(true);
-		expect(needsRecheck(revisionData({ disputesBlockingFinding: true }).reviewFlags as never)).toBe(true);
+		expect(needsRecheck(revisionData().reviewFlags)).toBe(false);
+		expect(needsRecheck(revisionData({ changedCoreDesign: true }).reviewFlags)).toBe(true);
+		expect(needsRecheck(revisionData({ claimsResolvedBlocking: true }).reviewFlags)).toBe(true);
+		expect(needsRecheck(revisionData({ newEvidenceChangesAssumptions: true }).reviewFlags)).toBe(true);
+		expect(needsRecheck(revisionData({ disputesBlockingFinding: true }).reviewFlags)).toBe(true);
 	});
 
 	it("closes blockers by exact ID, retaining identical issues and newly discovered blockers", () => {
@@ -727,13 +734,50 @@ describe("team orchestrator", () => {
 		expect(calls.filter(call => parseMarker(call.task).role === "revision")).toHaveLength(0);
 	});
 
-	it("emits the closing contract and structured tracking sections in the final report", async () => {
-		const { result } = await run({});
+	it("binds spec versions exactly and derives ordinary input versions from the actual question", async () => {
+		const first = await run({}, { question: "First requirement" });
+		const second = await run({}, { question: "Changed requirement" });
+		const workflow = await run({}, { question: "First requirement", inputVersion: "approved-spec-v7" });
+		expect(first.result.inputVersion).toBe(crypto.createHash("sha256").update("First requirement").digest("hex"));
+		expect(second.result.inputVersion).not.toBe(first.result.inputVersion);
+		expect(workflow.result.inputVersion).toBe("approved-spec-v7");
+		expect(first.result.runId).not.toBe(second.result.runId);
+		expect(first.result.candidates.map(candidate => candidate.label)).toEqual(["A", "B", "C"]);
+		expect(new Set(first.result.candidates.map(candidate => candidate.id)).size).toBe(3);
+		for (const candidate of first.result.candidates) {
+			expect(candidate.id).not.toBe(second.result.candidates.find(other => other.label === candidate.label)!.id);
+			expect(candidate.version).toBe(
+				second.result.candidates.find(other => other.label === candidate.label)!.version,
+			);
+			expect(candidate.assumptions).toEqual(proposalData(candidate.label).keyAssumptions);
+			expect(candidate.evidence).toEqual(proposalData(candidate.label).evidence);
+			expect(candidate.conditions.some(condition => condition.includes("接口 Y 稳定"))).toBe(true);
+		}
+	});
+
+	it("binds the minor accepted revision without adding an unnecessary recheck", async () => {
+		const original = "Reviewed design: retain the existing API";
+		const unchecked = "Unreviewed wording revision";
+		const { result } = await run(
+			{
+				proposal: () => ({ ...proposalData("A"), proposal: original }),
+				review: () => reviewData({ important: 1 }),
+				revision: ({ findingIds }) => ({ ...revisionData({}, findingIds), revisedProposal: unchecked }),
+			},
+			{ participants: [participantOf(MODEL_A, 0, true)] },
+		);
 		expect(result.status).toBe("completed");
-		const markdown = result.reportMarkdown!;
-		expect(markdown).toContain(TEAM_CLOSING_CONTRACT.split("\n")[0]!.slice(2));
-		expect(markdown).toContain("方案状态（结构化追踪，机械生效）");
-		expect(markdown).toContain("team-result");
+		expect(result.candidates[0]).toMatchObject({
+			proposal: unchecked,
+			version: crypto.createHash("sha256").update(unchecked).digest("hex"),
+			adoptable: true,
+			reviewSucceeded: true,
+			recheckSucceeded: true,
+		});
+		expect(result.subagentResults!.find(call => call.role === "reviser")!.outcome).toMatchObject({
+			ok: true,
+			data: { revisedProposal: unchecked },
+		});
 	});
 
 	it("escapes pipes and newlines from review text so they cannot forge status-table rows", async () => {
@@ -767,6 +811,13 @@ describe("team orchestrator", () => {
 		const reportIndex = markdown.indexOf("### 核心方案");
 		expect(noticeIndex).toBeGreaterThan(-1);
 		expect(noticeIndex).toBeLessThan(reportIndex);
+		expect(result.interpretationDifferences).toEqual([
+			{
+				ambiguity: "是否需要并发",
+				interpretations: [{ view: "需要", impact: "架构不同" }],
+				affectsChoice: true,
+			},
+		]);
 	});
 
 	it("runs revision rounds and rechecks when findings exist, resolving blocking after a recheck", async () => {
@@ -813,6 +864,10 @@ describe("team orchestrator", () => {
 			expect(rounds.map(call => parseMarker(call.task).round)).toEqual([1, 2]);
 		}
 		expect(result.reportMarkdown).toContain("尚不可采用 — 未解决阻断问题（两轮修订后仍未解决）");
+		expect(result.candidates.filter(candidate => candidate.adoptable)).toHaveLength(0);
+		for (const candidate of result.candidates) {
+			expect(candidate.unresolvedBlocking.map(finding => finding.id)).toEqual([`${candidate.label}-F1`]);
+		}
 	});
 
 	it("skips the recheck when all revision flags are false but keeps blocking tracked", async () => {
@@ -866,6 +921,10 @@ describe("team orchestrator", () => {
 		const rechecks = calls.filter(call => parseMarker(call.task).recheck);
 		expect(revisions).toHaveLength(6);
 		expect(rechecks).toHaveLength(6);
+		expect(result.candidates.every(candidate => !candidate.adoptable && !candidate.recheckSucceeded)).toBe(true);
+		for (const candidate of result.candidates) {
+			expect(candidate.proposal).toBe(revisionData().revisedProposal);
+		}
 	});
 
 	it("lets a later round's successful recheck verify the revision after an earlier failure", async () => {
@@ -942,6 +1001,14 @@ describe("team orchestrator", () => {
 			expect(synthesisTask).toContain(firstChange);
 			expect(synthesisTask).toContain(secondChange);
 			expect(result.status).toBe("completed");
+			expect(result.candidates[0]).toMatchObject({
+				label: "A",
+				proposal: secondChange,
+				version: crypto.createHash("sha256").update(secondChange).digest("hex"),
+				reviewSucceeded: true,
+				recheckSucceeded: recovery,
+				adoptable: recovery,
+			});
 			if (recovery) {
 				expect(result.reportMarkdown).toContain("| 方案 A | ✅ 可作为选项");
 				expect(result.reportMarkdown).toContain("【推荐】方案 A");
@@ -1023,6 +1090,12 @@ describe("team orchestrator", () => {
 		expect(result.reportMarkdown).toContain("| 方案 B | ✅ 可作为选项");
 		expect(result.droppedRecommendation).toBe(true);
 		expect(result.reportMarkdown).not.toContain("【推荐】");
+		expect(result.candidates.find(candidate => candidate.label === "A")).toMatchObject({
+			adoptable: false,
+			reviewSucceeded: true,
+			unresolvedBlocking: [{ id: "A-F2", issue: "破坏旧接口兼容", evidence: "src/x.ts:10 与共同验收标准冲突" }],
+		});
+		expect(result.candidates.find(candidate => candidate.label === "B")!.adoptable).toBe(true);
 	});
 
 	it("rejects synthesis violations naming a nonexistent candidate", async () => {
@@ -1265,6 +1338,7 @@ describe("team orchestrator", () => {
 		expect(result.droppedRecommendation).toBeFalsy();
 		expect(result.reportMarkdown).toContain("【推荐】方案 A");
 		expect(result.reportMarkdown).toContain("前提：接口 Y 稳定");
+		expect(result.candidates.find(candidate => candidate.label === "A")!.conditions).toContain("接口 Y 稳定");
 	});
 
 	it.each(["", " \t\n"])(
@@ -1316,6 +1390,8 @@ describe("team orchestrator", () => {
 		expect(result.status).toBe("failed");
 		expect(result.failureReason).toContain("综合子调用失败");
 		expect(result.reportMarkdown).toBeUndefined();
+		expect(result.candidates).toHaveLength(3);
+		expect(result.candidates.every(candidate => candidate.reviewSucceeded && !candidate.adoptable)).toBe(true);
 		expect(
 			updates.some(
 				update =>
@@ -1396,6 +1472,21 @@ describe("team orchestrator", () => {
 		const { result, calls } = await run({ onCall: () => controller.abort() }, { signal: controller.signal });
 		expect(result.status).toBe("cancelled");
 		expect(calls.filter(call => parseMarker(call.task).role === "alignment")).toHaveLength(0);
+	});
+
+	it("revokes all choices when cancelled after successful reviews", async () => {
+		const controller = new AbortController();
+		const { result } = await run(
+			{
+				onCall: call => {
+					if (call.role === "synthesizer") controller.abort();
+				},
+			},
+			{ signal: controller.signal },
+		);
+		expect(result.status).toBe("cancelled");
+		expect(result.candidates).toHaveLength(3);
+		expect(result.candidates.every(candidate => candidate.reviewSucceeded && !candidate.adoptable)).toBe(true);
 	});
 
 	it("preserves a 53-slot roster and routes multi-letter finding IDs without colliding with single-letter labels", async () => {
@@ -1502,8 +1593,7 @@ describe("team orchestrator", () => {
 	it("rejects omitted investigation state before starting alignment", async () => {
 		const { result, calls } = await run({
 			proposal: () => {
-				const payload = proposalData("A");
-				delete payload.investigationBlockedReason;
+				const { investigationBlockedReason: _omitted, ...payload } = proposalData("A");
 				return payload;
 			},
 		});
@@ -1526,6 +1616,11 @@ describe("team orchestrator", () => {
 		// B's status row must not read as an adoptable option.
 		const bRow = markdown.split("\n").find(line => line.includes("| 方案 B |"))!;
 		expect(bRow).toContain("尚不可采用");
+		expect(result.candidates.find(candidate => candidate.label === "B")).toMatchObject({
+			adoptable: false,
+			reviewSucceeded: false,
+		});
+		expect(result.candidates.find(candidate => candidate.label === "B")!.exclusionReason).toBeTruthy();
 	});
 
 	it("completes with an explanation when every proposal reports no viable plan", async () => {
@@ -1542,6 +1637,8 @@ describe("team orchestrator", () => {
 		expect(calls.filter(call => parseMarker(call.task).role === "synthesis")).toHaveLength(1);
 		expect(result.reportMarkdown).toContain("提案者报告未形成可行方案");
 		expect(result.reportMarkdown).not.toContain("✅ 可作为选项");
+		expect(result.candidates.filter(candidate => candidate.adoptable)).toHaveLength(0);
+		expect(result.candidates.every(candidate => !candidate.reviewSucceeded && candidate.exclusionReason)).toBe(true);
 	});
 
 	for (const maxConcurrency of [1, 2]) {

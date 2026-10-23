@@ -50,6 +50,12 @@ import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { PreparedExtension } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
+import {
+	bindSpecSkillPolicy,
+	grantSpecSkillAccess,
+	isExplicitOnlySkill,
+	type SpecSkillPhasePolicy,
+} from "../spec-driven/skill-policy";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { IrcBus } from "../irc/bus";
@@ -494,6 +500,12 @@ export interface ExecutorOptions {
 	 * tool, suppressing discovered and always-included capabilities.
 	 */
 	restrictToolNames?: boolean;
+	/** Native specification controller's child-scoped invocation policy. */
+	specSkillPolicy?: SpecSkillPhasePolicy;
+	/** Observe the actual child before autoload/dispatch; cleanup runs before deferred shutdown. */
+	onSessionCreated?: (session: AgentSession) => void | (() => void);
+	/** Preserve required source material; oversized context must fail rather than auto-compact. */
+	disableAutoCompaction?: boolean;
 	signal?: AbortSignal;
 	onProgress?: (progress: AgentProgress) => void;
 	/** Receives each tool call the subagent finishes, with its result text; feeds the task job's widget. */
@@ -4226,6 +4238,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		settings,
 		{
 			...compactionThresholdSettings(options.compactionThresholdOverride),
+			...(options.disableAutoCompaction
+				? { "compaction.enabled": false, "compaction.midTurnEnabled": false }
+				: undefined),
 			...(agent.readSummarize === false ? { "read.summarize.enabled": false } : undefined),
 			// Isolated runs must not expose roots outside the worktree.
 			...(worktree !== undefined ? { "workspace.additionalDirectories": [] } : undefined),
@@ -4250,7 +4265,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const softRequestBudgetNotice = cfgTaskSoftRequestBudgetNotice.get(settings);
 	const parentDepth = options.taskDepth ?? 0;
 	const childDepth = parentDepth + 1;
-	const restrictToolNames = options.restrictToolNames === true || preparedSession !== undefined;
+	const restrictToolNames =
+		options.restrictToolNames === true ||
+		preparedSession !== undefined ||
+		(agent.source === "bundled" && ["spec-requirements", "spec-planner", "spec-executor"].includes(agent.name));
 	const atMaxDepth = maxRecursionDepth >= 0 && childDepth >= maxRecursionDepth;
 
 	// Add tools if specified. Unstructured runs never get `yield`, even when
@@ -4280,7 +4298,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	// Restricted sessions own their explicit list and are never widened.
 	if (
 		toolNames &&
-		!options.restrictToolNames &&
+		!restrictToolNames &&
 		!toolNames.includes("wait") &&
 		(toolNames.includes("task") || toolNames.includes("bash"))
 	) {
@@ -4404,6 +4422,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		let sessionOpenedAt: number | undefined;
 		let sessionCreatedAt: number | undefined;
 		let readyAt: number | undefined;
+		const skillAccessDisposers: Array<() => void> = [];
+		let disposeSessionObserver: (() => void) | undefined;
 
 		try {
 			checkAbort();
@@ -4695,6 +4715,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					mcpManager,
 					// MCP proxies are minted per build as `mcpTools` in buildSubagentSessionOptions.
 					customTools: options.customTools,
+					// Only the native spec controller may install scoped replacements in restricted children.
+					allowRestrictedCustomTools: options.specSkillPolicy !== undefined,
 					localProtocolOptions: options.localProtocolOptions,
 					telemetry: subagentTelemetry,
 					// Seance isolation overrides every inherited field above in one place.
@@ -4720,6 +4742,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			};
 
 			const sessionManager = await awaitAbortable(sessionManagerPromise);
+			if (options.specSkillPolicy) {
+				skillAccessDisposers.push(bindSpecSkillPolicy(sessionManager, options.specSkillPolicy));
+			}
 			if (preparedSession) openedSessionManager = sessionManager;
 			if (options.parentArtifactManager && !preparedSession) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
@@ -4895,6 +4920,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (abortSignal.aborted) {
 				void monitor.abortActiveSession();
 			}
+			disposeSessionObserver = options.onSessionCreated?.(session) ?? undefined;
 
 			// No closure in this block may capture `session`: JSC gives every closure in a
 			// block one shared scope object, so the lifecycle reviver built above would
@@ -4909,7 +4935,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					trackExtensionSend: task => {
 						pendingExtensionMessages.push(task.catch(() => {}));
 					},
-					filterActiveTools: toolNames => toolNames.filter(name => !isParentOwnedTool(name)),
+					filterActiveTools: activeToolNames =>
+						activeToolNames.filter(
+							name => !isParentOwnedTool(name) && (!restrictToolNames || toolNames?.includes(name) === true),
+						),
 				}),
 			);
 			while (pendingExtensionMessages.length > 0) {
@@ -4922,7 +4951,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// Autoload skills via sendCustomMessage (same mechanic as /skill:<name>)
 			if (options.autoloadSkills?.length) {
 				for (const skill of options.autoloadSkills) {
-					const { message } = await buildSkillPromptMessage(skill, { args: "" }, "autoload");
+					// Grant exact pinned identity, never the catalog winner for a colliding name.
+					if (isExplicitOnlySkill(skill)) {
+						skillAccessDisposers.push(grantSpecSkillAccess(sessionManager, skill));
+					}
+					const { message } = await buildSkillPromptMessage(skill, { args: "" }, "autoload", {
+						scope: sessionManager,
+						getSessionBranch: () => sessionManager.getBranch(),
+					});
 					await session.sendCustomMessage(
 						{
 							customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -4956,6 +4992,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				error = err instanceof Error ? err.stack || err.message : String(err);
 			}
 		} finally {
+			// Revoke before any awaited/deferred cleanup, including aborted startup.
+			for (const dispose of skillAccessDisposers.reverse()) dispose();
+			try {
+				disposeSessionObserver?.();
+			} catch (cleanupError) {
+				logger.warn("Subagent session observer cleanup failed", { id, error: String(cleanupError) });
+			}
 			const cleanupDeadlineAt = Date.now() + cleanupGraceMs;
 			const cleanupChangeStatus =
 				worktree === undefined

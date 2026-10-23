@@ -2411,6 +2411,8 @@ export class ZCodeServer {
 				return this.legacy.subagents(raw);
 			case "workspace/readPresentation": {
 				const params = L.zcodeWorkspaceReadPresentationParamsSchema.parse(raw);
+				// 草稿预热先读取工作区展示，再按 identity 创建会话；此时尚无会话可用于订阅登记。
+				this.#registerWorkspace(params.workspace);
 				const config = await this.#workspaceConfig(params.workspace.workspacePath);
 				return L.zcodeWorkspacePresentationSchema.parse({
 					workspace: params.workspace,

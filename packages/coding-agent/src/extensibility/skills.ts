@@ -24,6 +24,7 @@ import userInvocationTemplate from "../prompts/skills/user-invocation.md" with {
 import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
 import type { SkillPromptDetails } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
+import { checkSkillInvocation, type SkillAccessContext } from "../spec-driven/skill-policy";
 
 export { allowsSkillTokens, SKILL_TOKEN_RE };
 
@@ -740,7 +741,9 @@ export async function buildSkillPromptMessage(
 	skill: Pick<Skill, "name" | "filePath" | "baseDir">,
 	input: SkillPromptInput,
 	invocation: SkillInvocationKind = "user",
+	context?: SkillAccessContext,
 ): Promise<BuiltSkillPromptMessage> {
+	checkSkillInvocation(skill, context);
 	const content = await Bun.file(skill.filePath).text();
 	// Only the body is used: keep HTML comments (`repair: false`) and leave YAML
 	// diagnostics to the loader, which already parsed this frontmatter.

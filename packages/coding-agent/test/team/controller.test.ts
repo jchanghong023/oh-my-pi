@@ -19,6 +19,7 @@ import {
 	waitForSessionIdle,
 } from "@oh-my-pi/pi-coding-agent/team/controller";
 import * as orchestratorModule from "@oh-my-pi/pi-coding-agent/team/orchestrator";
+import type { TeamRunResult } from "@oh-my-pi/pi-coding-agent/team/types";
 import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import {
@@ -246,7 +247,11 @@ describe("team controller dispatch", () => {
 		const modelSink = vi.fn();
 		manager.registerDeliverySink("Main", modelSink);
 		const acknowledge = vi.spyOn(manager, "acknowledgeDeliveries");
-		const aggregate = {
+		const aggregate: TeamRunResult = {
+			runId: "team-controller-completion",
+			inputVersion: "controller-input-v1",
+			candidates: [],
+			interpretationDifferences: [],
 			status: discussionFails ? ("failed" as const) : ("completed" as const),
 			reportMarkdown: discussionFails ? undefined : "durable team report",
 			failureReason: discussionFails ? "discussion rejected" : undefined,
@@ -459,6 +464,10 @@ describe("team controller dispatch", () => {
 				await releaseDiscussion.promise;
 				options.onProgress?.({ stage: "synthesis", text: "late A progress", participants: [] });
 				return {
+					runId: "team-controller-late-result",
+					inputVersion: "controller-input-v1",
+					candidates: [],
+					interpretationDifferences: [],
 					status,
 					reportMarkdown: "late report",
 					failureReason: status === "failed" ? "late failure" : undefined,

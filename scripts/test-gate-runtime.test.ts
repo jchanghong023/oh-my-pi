@@ -2430,7 +2430,9 @@ it("immediately enforces already-charged time when a delayed compiler-end timest
 });
 it("returns a bounded discovery timeout without cancelling the enclosing gate", async () => {
 	const pidFile = path.join(directory, "bounded-probe.pid");
+	const output: string[] = [];
 	let aborted = false;
+	let continued = false;
 	const result = await runGate(
 		"slowtest",
 		async gate => {
@@ -2448,16 +2450,25 @@ it("returns a bounded discovery timeout without cancelling the enclosing gate", 
 			);
 			expect(probe.exitCode).toBe(124);
 			expect(gate.signal.aborted).toBe(false);
-			// Check cleanup as continued gate work, without timing an unrelated second process startup.
+			// The wall guard includes startup, so the probe may never publish a PID.
+			// If it did start, cleanup must still finish before continued gate work.
 			await gate.charged(async () => {
-				const pid = Number(await fs.readFile(pidFile, "utf8"));
-				expect(() => process.kill(pid, 0)).toThrow();
+				const pid = await fs.readFile(pidFile, "utf8").then(
+					value => Number(value),
+					error => {
+						if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+						return undefined;
+					},
+				);
+				if (pid !== undefined) expect(() => process.kill(pid, 0)).toThrow();
+				continued = true;
 			});
 		},
-		{ limitSeconds: 1.5, print: quiet },
+		{ limitSeconds: 1.5, print: line => output.push(line) },
 	);
-	expect(result.status).toBe("PASS");
+	expect(result.status, output.join("\n")).toBe("PASS");
 	expect(aborted).toBe(true);
+	expect(continued).toBe(true);
 });
 it("rejects independent wall guards on required checks and compiler stages", async () => {
 	for (const options of [

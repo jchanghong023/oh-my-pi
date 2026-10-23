@@ -17,6 +17,14 @@ import { resolveContainedPath } from "../discovery/contained-path";
 import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
+import { ensureSpecDrivenResources } from "../spec-driven/resources";
+import { resourceManifest } from "../spec-driven/vendor/archive.generated";
+import {
+	checkSkillReadAccess,
+	getGrantedSpecSkill,
+	isExplicitOnlySkill,
+	skillAccessContext,
+} from "../spec-driven/skill-policy";
 import {
 	buildDirectoryResource,
 	contentTypeForPath,
@@ -57,13 +65,16 @@ async function skillTargetPath(
 	skills: readonly Skill[],
 	directory: boolean,
 	create = false,
+	context?: ResolveContext,
 ): Promise<string> {
 	const skillName = url.rawHost || url.hostname;
 	if (!skillName) {
 		throw new Error("skill:// URL requires a skill name: skill://<name>");
 	}
 
-	let urlPath = url.pathname;
+	const access = skillAccessContext(context);
+	// WHATWG pathname 会先折叠原始或编码的 ..；使用原始路径让现有校验在解析目标前拒绝遍历。
+	let urlPath = url.rawPathname ?? url.pathname;
 	let skill: Skill | undefined;
 	if (urlPath.length > 1) {
 		// A namespaced skill (`<plugin>/<name>`) spans the host and the first
@@ -72,15 +83,33 @@ async function skillTargetPath(
 		// a bare skill that happens to share the namespace's name.
 		const slash = urlPath.indexOf("/", 1);
 		const namespaced = `${skillName}/${decodeURIComponent(slash === -1 ? urlPath.slice(1) : urlPath.slice(1, slash))}`;
-		skill = skills.find(s => s.name === namespaced);
+		skill = getGrantedSpecSkill(namespaced, access) ?? skills.find(s => s.name === namespaced);
 		if (skill) urlPath = slash === -1 ? "" : urlPath.slice(slash);
 	}
-	skill ??= skills.find(s => s.name === skillName);
+	skill ??= getGrantedSpecSkill(skillName, access) ?? skills.find(s => s.name === skillName);
+	// A disabled/unloaded pinned name is still protected, not an MCP fallback opportunity.
 	if (!skill) {
-		const available = skills.map(s => s.name);
+		const entry = resourceManifest.skills.find(entry => entry.name === skillName);
+		if (entry) {
+			const resources = await ensureSpecDrivenResources();
+			const filePath = path.resolve(resources.root, entry.path);
+			skill = {
+				name: entry.name,
+				filePath,
+				baseDir: path.dirname(filePath),
+				description: "",
+				source: `bundled-${entry.source}`,
+				hide: true,
+				containRoot: entry.source === "openspec" ? resources.openspecRoot : resources.superpowersRoot,
+			};
+		}
+	}
+	if (!skill) {
+		const available = skills.filter(s => !s.hide && !isExplicitOnlySkill(s)).map(s => s.name);
 		const availableStr = available.length > 0 ? available.join(", ") : "none";
 		throw new UnknownSkillError(`Unknown skill: ${skillName}\nAvailable: ${availableStr}`);
 	}
+	checkSkillReadAccess(skill, access);
 
 	let resolvedPath: string;
 	if (!urlPath || urlPath === "/") {
@@ -134,7 +163,7 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	async resolve(url: InternalUrl, context?: ResolveContext): Promise<InternalResource> {
 		let targetPath: string;
 		try {
-			targetPath = await skillTargetPath(url, context?.skills ?? getActiveSkills(), false);
+			targetPath = await skillTargetPath(url, context?.skills ?? getActiveSkills(), false, false, context);
 		} catch (error) {
 			if (!(error instanceof UnknownSkillError)) throw error;
 			// Loaded skills always win; otherwise serve the resource an MCP server advertises under
@@ -206,7 +235,13 @@ export class SkillProtocolHandler implements ProtocolHandler {
 		const skills = context?.skills ?? getActiveSkills();
 		let targetPath: string;
 		try {
-			targetPath = await skillTargetPath(url, skills, options?.directory === true, options?.create === true);
+			targetPath = await skillTargetPath(
+				url,
+				skills,
+				options?.directory === true,
+				options?.create === true,
+				context,
+			);
 		} catch (error) {
 			if (
 				error instanceof UnknownSkillError &&
@@ -229,9 +264,11 @@ export class SkillProtocolHandler implements ProtocolHandler {
 	}
 
 	async complete(): Promise<UrlCompletion[]> {
-		return getActiveSkills().map(skill => ({
-			value: skill.name,
-			...(skill.description ? { description: skill.description } : {}),
-		}));
+		return getActiveSkills()
+			.filter(skill => !skill.hide && !isExplicitOnlySkill(skill))
+			.map(skill => ({
+				value: skill.name,
+				...(skill.description ? { description: skill.description } : {}),
+			}));
 	}
 }

@@ -186,9 +186,10 @@ async function fixture(root: TempDir) {
 		path.join(agentDir, "models.yml"),
 		`providers:\n  workflow-fixture:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: constant-host\n        reasoning: false\n`,
 	);
+	// 常量工作流只验证执行与拒绝边界，禁用技能以免后台描述压缩污染零模型请求断言。
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: workflow-fixture/constant-host\n  smol: workflow-fixture/constant-host\ntools:\n  xdev: false\n",
+		"modelRoles:\n  default: workflow-fixture/constant-host\n  smol: workflow-fixture/constant-host\nskills:\n  enabled: false\ntools:\n  xdev: false\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,

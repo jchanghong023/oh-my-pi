@@ -178,6 +178,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ pendingStart: false });
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -196,6 +197,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ pendingStart: false });
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -214,6 +216,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -242,6 +245,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -258,6 +262,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: true,
@@ -281,6 +286,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -302,6 +308,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -322,6 +329,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -342,6 +350,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => {
 				throw new Error("attachment too large");
 			}),
@@ -366,6 +375,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ skillCommands: new Map([["skill:recap", skill]]) });
 		const session = {
 			model: undefined,
+			sessionManager: SessionManager.inMemory(),
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,

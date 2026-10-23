@@ -175,7 +175,7 @@ class ProcessPeer {
 	}
 }
 
-async function fixture(root: TempDir) {
+async function fixture(root: TempDir, skillsEnabled = false) {
 	const cwdA = root.join("workspace-a");
 	const cwdB = root.join("workspace-b");
 	const home = root.join("home");
@@ -280,9 +280,10 @@ async function fixture(root: TempDir) {
 		path.join(agentDir, "models.yml"),
 		`providers:\n  zcode-fixture:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n      - id: chat-b\n        reasoning: false\n`,
 	);
+	// 非技能场景不启动描述压缩推理；真正验证资源的用例显式启用，保留其原生发现与读取链路。
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: zcode-fixture/chat-a\n  smol: zcode-fixture/chat-a\ntools:\n  xdev: false\nteam:\n  members:\n    - zcode-fixture/chat-a\n    - stale-provider/removed-model\n",
+		`modelRoles:\n  default: zcode-fixture/chat-a\n  smol: zcode-fixture/chat-a\ntools:\n  xdev: false\nskills:\n  enabled: ${skillsEnabled}\nteam:\n  members:\n    - zcode-fixture/chat-a\n    - stale-provider/removed-model\n`,
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,
@@ -598,7 +599,7 @@ describe("ZCode actual public app-server process", () => {
 
 	test("canonical skill references execute the resident native skill rather than remaining model prose", async () => {
 		await using root = await TempDir.create("@zcode-native-reference-");
-		await using config = await fixture(root);
+		await using config = await fixture(root, true);
 		const directory = path.join(config.cwdA, ".omp", "skills", "zcode-reference");
 		await fs.mkdir(directory, { recursive: true });
 		await fs.writeFile(
@@ -1003,7 +1004,7 @@ describe("ZCode actual public app-server process", () => {
 
 	test("native move and worktree relocate only their session tools and resources", async () => {
 		await using root = await TempDir.create("@zcode-native-relocation-");
-		await using config = await fixture(root);
+		await using config = await fixture(root, true);
 		const moved = root.join("moved-existing");
 		const probe = root.join("native-process-cwd.txt");
 		// 进程探针属于测试 profile 的用户级扩展，不应随离开的 project root 失效。
@@ -2293,6 +2294,42 @@ describe("ZCode actual public app-server process", () => {
 			message: expect.stringContaining(unknownWorkspaceId),
 		});
 		expect(config.requests.every(request => !JSON.stringify(request).includes(unknownWorkspaceId))).toBe(true);
+		// 桌面预热先读取另一个工作区的命令目录，再用 v4 创建草稿；不能要求先创建会话才能登记路由。
+		const unregistered = commandAckSchema.parse(
+			await peer.request("v4/command", {
+				commandId: crypto.randomUUID(),
+				clientId: "public-process-test",
+				sessionId: null,
+				type: "createSession",
+				payload: { workspaceId: config.cwdB, config: { modelSelection: model } },
+				issuedAt: Date.now(),
+			}),
+		);
+		expect(unregistered).toMatchObject({
+			status: "failed",
+			message: expect.stringContaining(config.cwdB),
+		});
+		const presentation = LegacyProtocol.zcodeWorkspacePresentationSchema.parse(
+			await peer.request("workspace/readPresentation", { workspace: workspace(config.cwdB) }),
+		);
+		expect(presentation.workspace).toEqual(workspace(config.cwdB));
+		const created = commandAckSchema.parse(
+			await peer.request("v4/command", {
+				commandId: crypto.randomUUID(),
+				clientId: "public-process-test",
+				sessionId: null,
+				type: "createSession",
+				payload: { workspaceId: config.cwdB, config: { modelSelection: model } },
+				issuedAt: Date.now(),
+			}),
+		);
+		expect(created).toMatchObject({ status: "accepted", result: { type: "createSession" } });
+		if (created.result?.type !== "createSession") throw new Error("Missing foreign draft createSession result");
+		const draft = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+			await peer.request("session/read", { sessionId: created.result.sessionId }),
+		);
+		expect(draft.session.workspace.workspacePath).toBe(config.cwdB);
+		expect(draft.session.workspace.workspaceKey).toBe(config.cwdB);
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
@@ -2443,7 +2480,7 @@ describe("ZCode actual public app-server process", () => {
 		// 外部原生配置写入必须推送 config.updated，不依赖重连或切换会话。
 		await fs.writeFile(
 			path.join(config.agentDir, "config.yml"),
-			"modelRoles:\n  default: zcode-fixture/chat-b\ntools:\n  xdev: false\n",
+			"modelRoles:\n  default: zcode-fixture/chat-b\ntools:\n  xdev: false\nskills:\n  enabled: false\n",
 		);
 		expect((await readModelOption("zcode-fixture/chat-b")).currentValue).toBe("zcode-fixture/chat-b");
 		const modelsPath = path.join(config.agentDir, "models.yml");
@@ -2468,7 +2505,7 @@ describe("ZCode actual public app-server process", () => {
 
 	test("workspace catalog stays native before and after resident session initialization without changing its default", async () => {
 		await using root = await TempDir.create("@zcode-workspace-catalog-");
-		await using config = await fixture(root);
+		await using config = await fixture(root, true);
 		const env = { ...config.env, OMP_OFFLINE: "1" };
 		await fs.appendFile(path.join(config.agentDir, "models.yml"), "  azure:\n    apiKey: isolated-catalog-key\n");
 		const bundled = getBundledModels("azure");

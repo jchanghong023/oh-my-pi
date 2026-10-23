@@ -44,6 +44,7 @@ export type {
 	TeamAlignmentOutput,
 	TeamAssumption,
 	TeamBlockingResolution,
+	TeamCandidate,
 	TeamDisposition,
 	TeamEvidenceItem,
 	TeamFactDifference,

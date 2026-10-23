@@ -525,6 +525,57 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.exitCode = 1;
 		return;
 	}
+	// Bootstrap exception: static resource imports snapshot the default agent .env before profile selection.
+	if (resolvedArgv[0] === "openspec") {
+		const controller = new AbortController();
+		const abort = () => controller.abort();
+		process.once("SIGINT", abort);
+		process.once("SIGTERM", abort);
+		try {
+			const { runOpenSpec } = await import("./spec-driven/resources");
+			const result = await runOpenSpec(resolvedArgv.slice(1), process.cwd(), controller.signal);
+			process.stdout.write(result.stdout);
+			process.stderr.write(result.stderr);
+			process.exitCode = result.exitCode;
+		} finally {
+			process.removeListener("SIGINT", abort);
+			process.removeListener("SIGTERM", abort);
+		}
+		return;
+	}
+	if (resolvedArgv[0] === "superpowers") {
+		const usage =
+			"Usage: omp superpowers <relative-skill-script> [args...]\n\nExamples:\n  omp superpowers skills/writing-skills/render-graphs.js <skill-directory>\n  omp superpowers skills/subagent-driven-development/scripts/review-package <plan-file> <base> <head> [output-file]\n\nRuns only trusted bundled Superpowers skill scripts. JavaScript uses OMP's embedded Bun; shell scripts require Bash and POSIX utilities (Git Bash on Windows). Graph rendering also requires Graphviz (dot).\n";
+		const script = resolvedArgv[1];
+		if (!script || script === "--help" || script === "-h") {
+			if (script) {
+				process.stdout.write(usage);
+				process.exitCode = 0;
+			} else {
+				process.stderr.write(usage);
+				process.exitCode = 2;
+			}
+			return;
+		}
+		const controller = new AbortController();
+		const abort = () => controller.abort();
+		process.once("SIGINT", abort);
+		process.once("SIGTERM", abort);
+		try {
+			const { runSuperpowersScript } = await import("./spec-driven/resources");
+			const result = await runSuperpowersScript(script, resolvedArgv.slice(2), process.cwd(), controller.signal);
+			process.stdout.write(result.stdout);
+			process.stderr.write(result.stderr);
+			process.exitCode = result.exitCode;
+		} catch (error) {
+			process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+			process.exitCode = 1;
+		} finally {
+			process.removeListener("SIGINT", abort);
+			process.removeListener("SIGTERM", abort);
+		}
+		return;
+	}
 
 	// Declare this module as the worker-host entry now that the active profile
 	// is resolved. The worker-host module is side-effect-free; importing

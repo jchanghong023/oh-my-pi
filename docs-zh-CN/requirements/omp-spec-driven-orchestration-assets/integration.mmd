@@ -1,0 +1,9 @@
+flowchart TB
+    OS["OpenSpec · 规格管理<br/>命令、技能与规格 schema<br/>提案、增量与规格状态"]
+    SP["Superpowers<br/>全部原有技能<br/>配套脚本和资源"]
+    OS --> Adapter["OMP 最小必要适配<br/>工具接口与资源路径<br/>平台兼容与调用元数据"]
+    SP --> Adapter
+    Adapter --> Control["OMP · 唯一执行状态<br/>阶段权限与用户门禁<br/>任务依赖、审查与证据"]
+    User["用户手动入口<br/>后续由 GUI 承接交互"] --> Control
+    Control --> Agents["三个专用内置 Agent<br/>按阶段、任务隔离上下文"]
+    Control --> Team["Team · 结构化候选交接<br/>非 Team 节点一席独立审查<br/>统一复用 team.members"]

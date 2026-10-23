@@ -240,7 +240,33 @@ export interface TeamProposalRecord {
 	blockedAfterRoundCap: boolean;
 }
 
+/** A report-labelled direction and its mechanically established selection eligibility. */
+export interface TeamCandidate {
+	/** Stable within this discussion; never reused by another discussion. */
+	id: string;
+	label: string;
+	/** SHA-256 identity of the current accepted proposal text. */
+	version: string;
+	/** Current accepted revision; required recheck failures remain visible but ineligible. */
+	proposal: string;
+	adoptable: boolean;
+	reviewSucceeded: boolean;
+	/** True when no recheck was required or the current required recheck succeeded. */
+	recheckSucceeded: boolean;
+	unresolvedBlocking: TeamTrackedFinding[];
+	exclusionReason?: string;
+	/** Unverified assumptions, unknowns and explicit execution-before-adoption checks. */
+	conditions: string[];
+	assumptions: TeamAssumption[];
+	evidence: TeamEvidenceItem[];
+}
+
 export interface TeamRunResult {
+	runId: string;
+	/** Exact supplied spec version, or SHA-256 of the ordinary Team question. */
+	inputVersion: string;
+	candidates: TeamCandidate[];
+	interpretationDifferences: TeamInterpretationDifference[];
 	status: "completed" | "failed" | "cancelled";
 	/** Final assembled markdown (completed runs only). */
 	reportMarkdown?: string;

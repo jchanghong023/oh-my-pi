@@ -12,6 +12,7 @@ import * as os from "node:os";
 import path from "node:path";
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
 import type { AuthStorage } from "../session/auth-storage";
+import type { AgentSession } from "../session/agent-session";
 import type { ContextFileEntry } from "../tools";
 import type { ModelRegistry } from "../config/model-registry";
 import type { Settings } from "../config/settings";
@@ -56,6 +57,11 @@ export interface TeamRunnerDeps {
 	rules?: Rule[];
 	contextFiles?: ContextFileEntry[];
 	workspaceTree?: WorkspaceTree;
+	/** Observe real child requests without equating participant calls with provider requests. */
+	onSessionCreated?: (call: TeamSubagentCall, session: AgentSession) => void | (() => void);
+	disableAutoCompaction?: boolean;
+	/** Restricted workflows preserve their already-loaded project constraints verbatim. */
+	preserveContextFiles?: boolean;
 }
 
 interface ArtifactLease {
@@ -252,6 +258,8 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						restrictToolNames: true,
 						keepAlive: false,
 						signal,
+						onSessionCreated: session => deps.onSessionCreated?.(call, session),
+						disableAutoCompaction: deps.disableAutoCompaction,
 						onCleanupDeferred: completion => {
 							deferredCleanup = completion;
 						},
@@ -269,9 +277,9 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						authStorage: deps.authStorage,
 						modelRegistry: deps.modelRegistry,
 						settings: deps.settings,
-						contextFiles: deps.contextFiles?.filter(
-							file => path.basename(file.path).toLowerCase() !== "agents.md",
-						),
+						contextFiles: deps.preserveContextFiles
+							? deps.contextFiles
+							: deps.contextFiles?.filter(file => path.basename(file.path).toLowerCase() !== "agents.md"),
 						skills: deps.skills ? [...deps.skills] : undefined,
 						workspaceTree: deps.workspaceTree,
 						promptTemplates: deps.promptTemplates,
