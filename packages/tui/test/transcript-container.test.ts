@@ -3,6 +3,10 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import {
 	TranscriptContainer,
 	type TranscriptStableRow,
 	trimBlankEdges,
@@ -934,6 +938,42 @@ describe("TranscriptContainer", () => {
 		expect(rows[0]).toBe("2 more transcript blocks active");
 		expect(Bun.stripANSI(rows[1] ?? "").trim()).toBe("Implemented");
 		expect(rows[2]).toBe("task running");
+	});
+
+	it("keeps a contiguous prose tail in compact mode while an active prefix blocks history", () => {
+		const compactToolActivity = chatTranscriptDisplayPreferences.compactToolActivity;
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		try {
+			const transcript = new TranscriptContainer();
+			const active = new Block(["active prefix"], false);
+			transcript.addChild(active);
+			transcript.addChild(new UserMessageComponent("USER_FIRST\n\nUSER_MIDDLE\n\nUSER_LAST"));
+			transcript.addChild(
+				new AssistantMessageComponent({
+					...finalAnswer,
+					content: [{ type: "text", text: "ARTICLE_FIRST\n\nARTICLE_MIDDLE\n\nARTICLE_LAST" }],
+				}),
+			);
+			transcript.addChild(new Block(["latest first", "latest middle", "latest last"], true));
+			const full = transcript.render(80);
+			for (const capacity of [12, 2]) {
+				expect(transcript.peekFinalizedBatch(80, capacity)).toBeUndefined();
+				expect(transcript.renderViewport(80, capacity, frame)).toEqual(full.slice(-capacity));
+			}
+			active.finalize(["active final"]);
+			const history = transcript.peekFlushBatch(80);
+			const text = Bun.stripANSI(history?.rows.join("\n") ?? "");
+			expect(text.match(/(?:USER|ARTICLE)_(?:FIRST|MIDDLE|LAST)/g)).toEqual([
+				"USER_FIRST",
+				"USER_MIDDLE",
+				"USER_LAST",
+				"ARTICLE_FIRST",
+				"ARTICLE_MIDDLE",
+				"ARTICLE_LAST",
+			]);
+		} finally {
+			setChatTranscriptDisplayPreferences({ compactToolActivity });
+		}
 	});
 
 	it("gives surplus rows to assistant text before a growing tool card (issue 9718)", () => {

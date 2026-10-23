@@ -709,7 +709,7 @@ export class TranscriptContainer extends Container {
 			this.#lastViewportSpans = [];
 			return EMPTY_ROWS;
 		}
-		if (shown.length > capacity) {
+		if (shown.length > capacity && !displayPreferences.compactToolActivity) {
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
@@ -729,17 +729,27 @@ export class TranscriptContainer extends Container {
 		for (let index = 0; index < blocks.length; index++) {
 			total += blocks[index]!.length + blockGap(shown[index - 1]?.entry.component, shown[index]!.entry.component);
 		}
-		if (total <= capacity) {
+		if (total <= capacity || displayPreferences.compactToolActivity) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
+			// Compact chat scrolls as one document, even while an active prefix
+			// pins retirement. Never squeeze each user/assistant block to one row.
+			let skip = Math.max(0, total - capacity);
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
 				if (blockGap(shown[blockIndex - 1]?.entry.component, shown[blockIndex]!.entry.component)) {
-					output.push("");
-					owners.push(undefined);
+					if (skip > 0) {
+						skip--;
+					} else {
+						output.push("");
+						owners.push(undefined);
+					}
 				}
 				const component = shown[blockIndex]!.entry.component;
-				for (const line of blocks[blockIndex]!) {
-					output.push(line);
+				const block = blocks[blockIndex]!;
+				const start = Math.min(skip, block.length);
+				skip -= start;
+				for (let row = start; row < block.length; row++) {
+					output.push(block[row]!);
 					owners.push(component);
 				}
 			}

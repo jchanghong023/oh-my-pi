@@ -29,6 +29,7 @@
 
 ### Fixed
 
+- Compact chat keeps a continuous prose tail under viewport pressure instead of squeezing user messages and assistant replies into one row each.
 - Preserve compact failure counts and replayed history when sealed tool blocks receive late results after their activity segment has retired.
 - Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.
 - Compact thinking summaries drop their left margin when it would hide all text on very narrow terminals, preserving whole Chinese characters and emoji.
