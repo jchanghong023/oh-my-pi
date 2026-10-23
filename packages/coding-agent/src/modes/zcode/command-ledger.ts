@@ -3,6 +3,8 @@ import type { SessionEntry } from "../../session/session-entries";
 import type { SessionManager } from "../../session/session-manager";
 import type { SessionInfo } from "../../session/session-listing";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
+import type { AgentStorage } from "../../session/agent-storage";
+import { extractCommandEvidence, ZCodeCommandIndex, type CommandEvidence, type CommandJournal } from "./command-index";
 import type { CommandAck, CommandEnvelope, CommandKey, CommandResult } from "./schema";
 
 const RECEIPT_TYPE = "zcode_command_result";
@@ -12,6 +14,9 @@ interface LedgerManager {
 	get(id: string): { session: { sessionManager: SessionManager; isStreaming: boolean } } | undefined;
 	list(): Promise<readonly Pick<SessionInfo, "id" | "path">[]>;
 	readCommandEntries(info: Pick<SessionInfo, "id" | "path">): Promise<readonly SessionEntry[] | undefined>;
+	listCommandJournals?(): Promise<readonly string[]>;
+	commandIndexStorage?(): Promise<AgentStorage>;
+	withCommandJournalRead?<T>(file: string, read: () => Promise<T>): Promise<T | undefined>;
 }
 interface Fact {
 	version: 1;
@@ -35,6 +40,7 @@ interface CachedDecision {
 	decision: Promise<CommandAck>;
 	settled: boolean;
 	ack?: CommandAck;
+	journal?: Pick<SessionInfo, "id" | "path">;
 }
 
 function keyOf(key: CommandKey): string {
@@ -67,11 +73,25 @@ export class ZCodeCommandLedger {
 	readonly #epoch = randomUUID();
 	readonly #decisions = new Map<string, CachedDecision>();
 	readonly #settledLimit: number;
+	readonly #index?: ZCodeCommandIndex;
 	constructor(
 		readonly manager: LedgerManager,
 		options: { settledLimit?: number } = {},
 	) {
 		this.#settledLimit = Math.max(1, options.settledLimit ?? 256);
+		if (manager.listCommandJournals && manager.commandIndexStorage) {
+			this.#index = new ZCodeCommandIndex({
+				listCommandJournals: () => manager.listCommandJournals!(),
+				commandIndexStorage: () => manager.commandIndexStorage!(),
+				withCommandJournalRead: (file, read) =>
+					manager.withCommandJournalRead ? manager.withCommandJournalRead(file, read) : read(),
+			});
+		}
+	}
+
+	/** Explicit ready-after backfill; constructing SDK/test ledgers never scans history. */
+	async warmIndex(signal?: AbortSignal): Promise<void> {
+		await this.#index?.warm(signal);
 	}
 
 	identity(envelope: CommandEnvelope): {
@@ -104,14 +124,16 @@ export class ZCodeCommandLedger {
 		if (existing) {
 			this.#assertFingerprint(existing.fingerprint, identity.fingerprint);
 			this.#touch(key, existing);
-			return { ...(await this.#cachedResult(identity, existing)), status: "duplicate" };
+			const result = await this.#cachedResult(identity, existing);
+			if (!result) throw new Error("Command result journal no longer exists");
+			return { ...result, status: "duplicate" };
 		}
 		// Install the in-flight reservation synchronously, before any journal read or side effect.
 		const cached: CachedDecision = {
 			fingerprint: identity.fingerprint,
 			settled: false,
 			decision: Promise.resolve().then(async () => {
-				const persisted = await this.#find(identity);
+				const persisted = await this.#find(identity, undefined, cached);
 				if (persisted) {
 					// A durable identity mismatch rejects before admission, so this incoming
 					// reservation must not poison retries of the original durable command.
@@ -175,21 +197,26 @@ export class ZCodeCommandLedger {
 	async query(
 		keys: readonly CommandKey[],
 	): Promise<{ results: { key: CommandKey; result: CommandAck | "unknown" }[] }> {
+		const cachedDecisions = keys.map(key => this.#decisions.get(keyOf(key)));
+		const missingKeys = keys.filter((_, index) => !cachedDecisions[index]);
+		let journals: Promise<readonly CommandJournal[]> | undefined;
 		const results = await Promise.all(
-			keys.map(async key => {
-				const cached = this.#decisions.get(keyOf(key));
+			keys.map(async (key, index) => {
+				const cached = cachedDecisions[index];
 				if (cached) {
 					this.#touch(keyOf(key), cached);
-					return { key, result: await this.#cachedResult(key, cached) };
+					return { key, result: (await this.#cachedResult(key, cached)) ?? ("unknown" as const) };
 				}
-				const fact = await this.#find(key);
+				// 仅持久回源共享一次发现；缓存命中不能被无关 journal 的损坏或删除阻断。
+				const fact = await this.#find(key, await (journals ??= this.#readJournals(missingKeys)));
 				return { key, result: fact?.ack ?? ("unknown" as const) };
 			}),
 		);
 		this.#trim();
 		return { results };
 	}
-	async #cachedResult(key: CommandKey, cached: CachedDecision): Promise<CommandAck> {
+	async #cachedResult(key: CommandKey, cached: CachedDecision): Promise<CommandAck | undefined> {
+		if (!cached.settled) return cached.decision;
 		const ack = await cached.decision;
 		const destination =
 			ack.result?.type === "createSession" ||
@@ -198,22 +225,67 @@ export class ZCodeCommandLedger {
 				? ack.result.sessionId
 				: key.sessionId;
 		const live = destination ? this.manager.get(destination) : undefined;
-		if (!live || !destination || !inputId(ack)) return ack;
+		if (!destination || !inputId(ack)) return ack;
+		// 冷 owner 的缓存仍须核对输入终态，但只读取执行时确认的目标，不能重新枚举无关 journal。
+		const entries = live
+			? live.session.sessionManager.getEntries()
+			: cached.journal
+				? await this.manager.readCommandEntries(cached.journal)
+				: undefined;
+		if (!entries) return undefined;
 		return this.#reconcile(
 			{ version: 1, key, fingerprint: cached.fingerprint, epoch: this.#epoch, journalSessionId: destination, ack },
-			live.session.sessionManager.getEntries(),
+			extractCommandEvidence(entries),
 		).ack;
 	}
 
 	async #persist(id: string, customType: string, fact: Fact): Promise<void> {
 		const manager = this.manager.get(id)?.session.sessionManager;
 		if (!manager) throw new Error(`No active journal for command result: ${id}`);
+		const file = manager.getSessionFile();
+		const cached = this.#decisions.get(keyOf(fact.key));
+		// 在持久化前记录真实 owner/path，产出 child 或写入中断后的 reservation 都复用同一目标。
+		if (file && cached) cached.journal = { id, path: file };
 		await manager.appendEntriesAtomically(() => manager.appendCustomEntry(customType, fact));
+		const persistedFile = manager.getSessionFile();
+		if (persistedFile && cached) cached.journal = { id, path: persistedFile };
+		if (persistedFile) this.#index?.invalidate(persistedFile);
 	}
 
-	async #find(key: CommandKey): Promise<Fact | undefined> {
-		// Existing-only journal reads: no resume(), runtime construction, or ownership acquisition.
+	async #readJournals(keys: readonly CommandKey[]): Promise<readonly CommandJournal[]> {
+		if (this.#index)
+			return this.#index.read(keys, journals =>
+				// 完整回执可在 fork 产出的 child；只有每个回源 key 都已证明，才忽略无关文件读取失败。
+				keys.every(key =>
+					journals.some(journal =>
+						journal.entries.some(entry => {
+							if (entry.type !== "custom" || entry.customType !== RECEIPT_TYPE) return false;
+							const fact = entry.data as Fact | undefined;
+							return (
+								fact?.version === 1 && fact.journalSessionId === journal.id && keyOf(fact.key) === keyOf(key)
+							);
+						}),
+					),
+				),
+			);
+		// In-memory/test adapters retain their explicit source contract, rather than silently
+		// bypassing production persistence based on filesystem or environment heuristics.
 		const sessions = await this.manager.list();
+		const journals: CommandJournal[] = [];
+		for (const info of sessions) {
+			const entries = await this.manager.readCommandEntries(info);
+			if (entries) journals.push({ ...info, entries: extractCommandEvidence(entries) });
+		}
+		return journals;
+	}
+
+	async #find(
+		key: CommandKey,
+		snapshot?: readonly CommandJournal[],
+		cached?: CachedDecision,
+	): Promise<Fact | undefined> {
+		// Existing-only journal reads: no resume(), runtime construction, or ownership acquisition.
+		const sessions = snapshot ?? (await this.#readJournals([key]));
 		const ordered = key.sessionId
 			? [
 					...sessions.filter(info => info.id === key.sessionId),
@@ -222,9 +294,10 @@ export class ZCodeCommandLedger {
 			: sessions;
 		let produced: Fact | undefined;
 		let admission: Fact | undefined;
+		let producedJournal: CommandJournal | undefined;
+		let admissionJournal: CommandJournal | undefined;
 		for (const info of ordered) {
-			const entries = await this.manager.readCommandEntries(info);
-			if (!entries) continue; // The session owner deleted this journal after the list snapshot.
+			const entries = info.entries;
 			for (let index = entries.length - 1; index >= 0; index--) {
 				const entry = entries[index];
 				if (entry.type === "message" && "sourceCommand" in entry.message && "inputId" in entry.message) {
@@ -248,6 +321,7 @@ export class ZCodeCommandLedger {
 							},
 							entries,
 						);
+						admissionJournal = info;
 					}
 				}
 				if (entry.type === "custom" && entry.customType === "session_input") {
@@ -266,6 +340,7 @@ export class ZCodeCommandLedger {
 							},
 							entries,
 						);
+						admissionJournal = info;
 					}
 				}
 				if (entry.type !== "custom" || (entry.customType !== RECEIPT_TYPE && entry.customType !== PRODUCED_TYPE))
@@ -273,14 +348,22 @@ export class ZCodeCommandLedger {
 				const fact = entry.data as Fact | undefined;
 				if (fact?.version !== 1 || fact.journalSessionId !== info.id || keyOf(fact.key) !== keyOf(key)) continue;
 				const reconciled = this.#reconcile(fact, entries);
-				if (entry.customType === RECEIPT_TYPE) return reconciled;
-				produced ??= reconciled;
+				if (entry.customType === RECEIPT_TYPE) {
+					if (cached) cached.journal = { id: info.id, path: info.path };
+					return reconciled;
+				}
+				if (!produced) {
+					produced = reconciled;
+					producedJournal = info;
+				}
 			}
 		}
+		const journal = producedJournal ?? admissionJournal;
+		if (cached && journal) cached.journal = { id: journal.id, path: journal.path };
 		return produced ?? admission;
 	}
 
-	#reconcile(fact: Fact, entries: readonly SessionEntry[]): Fact {
+	#reconcile(fact: Fact, entries: readonly CommandEvidence[]): Fact {
 		const id = fact.inputId ?? inputId(fact.ack);
 		if (!id || fact.ack.status !== "accepted") return fact;
 		const lifecycle = [...entries]

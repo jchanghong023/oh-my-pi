@@ -12,6 +12,8 @@ import { getModelDbPath, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils
 import {
 	COMMANDS_REQUIRING_BASE_REVISION,
 	type CommandType,
+	commandAckSchema,
+	commandsQueryResultSchema,
 	LegacyProtocol,
 	ROW_TARGETING_COMMANDS,
 	TopicWireFrameAssembler,
@@ -458,6 +460,59 @@ async function retainedModelIo(root: string): Promise<Map<string, string>> {
 }
 
 describe("ZCode actual public app-server process", () => {
+	test("clock probes bypass corrupt journals while ordinary command queries retain durable facts", async () => {
+		await using root = await TempDir.create("@zcode-clock-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const key = { sessionId: null, commandId: crypto.randomUUID() };
+		const ack = commandAckSchema.parse(
+			await peer.request("v4/command", {
+				...key,
+				clientId: "public-process-test",
+				type: "createSession",
+				payload: { workspaceId: config.cwdA },
+				issuedAt: Date.now(),
+			}),
+		);
+		expect(ack).toMatchObject({ status: "accepted", result: { type: "createSession" } });
+		const ordinary = commandsQueryResultSchema.parse(await peer.request("v4/commands/query", { commands: [key] }));
+		expect(ordinary).toEqual({ results: [{ key, result: ack }] });
+		const startedAt = performance.timeOrigin + performance.now();
+		const probe = commandsQueryResultSchema.parse(
+			await peer.request("v4/commands/query", { commands: [key], clock: true }),
+		);
+		const endedAt = performance.timeOrigin + performance.now();
+		expect(probe.results).toEqual([{ key, result: "unknown" }]);
+		if (!probe.clock) throw new Error("Missing app-server calibration clock");
+		expect(probe.clock.receivedAt).toBeGreaterThanOrEqual(startedAt);
+		expect(probe.clock.sentAt).toBeGreaterThanOrEqual(probe.clock.receivedAt);
+		expect(probe.clock.sentAt).toBeLessThanOrEqual(endedAt);
+		const keys = Array.from({ length: 64 }, (_, index) => ({ sessionId: null, commandId: `probe-${index}` }));
+		const batch = commandsQueryResultSchema.parse(
+			await peer.request("v4/commands/query", { commands: keys, clock: true }),
+		);
+		expect(batch.results).toEqual(keys.map(key => ({ key, result: "unknown" })));
+		expect(batch.clock?.instanceId).toBe(probe.clock.instanceId);
+		expect(await peer.eof()).toBe(0);
+		// 冷进程消除内存 receipt 的影响；同一损坏 journal 必须阻断事实查询，却不影响纯时钟探测。
+		const files = await fs.readdir(path.join(config.agentDir, "sessions"), { recursive: true });
+		const journal = files.find(file => file.endsWith(".jsonl"));
+		if (!journal) throw new Error("Missing durable createSession journal");
+		await fs.writeFile(path.join(config.agentDir, "sessions", journal), "{invalid journal\n");
+		await using cold = new ProcessPeer(config.cwdA, config.env);
+		await cold.ready();
+		const coldProbe = commandsQueryResultSchema.parse(
+			await cold.request("v4/commands/query", { commands: [key], clock: true }),
+		);
+		expect(coldProbe.results).toEqual([{ key, result: "unknown" }]);
+		expect(coldProbe.clock?.instanceId).toBeDefined();
+		expect(coldProbe.clock?.instanceId).not.toBe(probe.clock.instanceId);
+		expect((await cold.requestFrame("v4/commands/query", { commands: [key] })).error).toBeDefined();
+		expect(config.requests).toHaveLength(0);
+		expect(await cold.eof()).toBe(0);
+	}, 90_000);
+
 	test("unknown runtime shutdown leaves the public owner alive until EOF", async () => {
 		await using root = await TempDir.create("@zcode-owner-eof-");
 		await using config = await fixture(root);

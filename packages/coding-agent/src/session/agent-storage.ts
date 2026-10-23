@@ -163,12 +163,25 @@ const USAGE_KINDS = ["command", "hint"] as const;
 type UsageStatements = { upsert: Statement; list: Statement };
 
 /** Current agent.db schema version; bump when schema changes require migration. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 const SQLITE_NOW_EPOCH = "CAST(strftime('%s','now') AS INTEGER)";
 
 /** Singleton instances per database path */
 const instances = new Map<string, AgentStorage>();
 let cancelExitCleanup: (() => void) | undefined;
+
+/** Rebuildable command evidence; journal JSONL remains the only fact source. */
+export interface CommandIndexRow {
+	entryOrder: number;
+	commandKey: string | null;
+	data: string;
+}
+
+export interface CommandJournalCoverage {
+	journalPath: string;
+	sessionId: string;
+	version: string;
+}
 
 /**
  * Unified SQLite storage for agent settings, model usage, and auth credentials.
@@ -382,6 +395,25 @@ CREATE TABLE settings (
 			using clearBackfillStmt = this.#db.prepare("DELETE FROM meta WHERE key = ?");
 			clearBackfillStmt.run(MODEL_PERF_BACKFILL_KEY);
 		}
+		if (fromVersion < 7) {
+			this.#db.transaction(() => {
+				this.#db.run(`
+CREATE TABLE IF NOT EXISTS zcode_command_journals (
+	journal_path TEXT PRIMARY KEY,
+	session_id TEXT NOT NULL,
+	version TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS zcode_command_facts (
+	journal_path TEXT NOT NULL,
+	entry_order INTEGER NOT NULL,
+	command_key TEXT,
+	data TEXT NOT NULL,
+	PRIMARY KEY (journal_path, entry_order)
+);
+CREATE INDEX IF NOT EXISTS zcode_command_facts_key ON zcode_command_facts(command_key, journal_path);
+`);
+			})();
+		}
 	}
 
 	#migrateSchemaV4ToV5(): void {
@@ -416,6 +448,60 @@ FROM model_usage_legacy
 			this.#db.run("DROP TABLE model_usage_legacy");
 		});
 		migrate();
+	}
+
+	/** Coverage and evidence are read in one SQLite snapshot, never across a writer's replacement. */
+	readCommandJournal(journalPath: string): { coverage?: CommandJournalCoverage; rows: CommandIndexRow[] } {
+		return this.#db.transaction(() => {
+			using coverage = this.#db.prepare(
+				"SELECT journal_path AS journalPath, session_id AS sessionId, version FROM zcode_command_journals WHERE journal_path = ?",
+			);
+			using facts = this.#db.prepare(
+				"SELECT entry_order AS entryOrder, command_key AS commandKey, data FROM zcode_command_facts WHERE journal_path = ? ORDER BY entry_order",
+			);
+			return {
+				coverage: coverage.get(journalPath) as CommandJournalCoverage | undefined,
+				rows: facts.all(journalPath) as CommandIndexRow[],
+			};
+		})();
+	}
+
+	getCommandJournalCoverage(journalPath: string): CommandJournalCoverage | undefined {
+		using statement = this.#db.prepare(
+			"SELECT journal_path AS journalPath, session_id AS sessionId, version FROM zcode_command_journals WHERE journal_path = ?",
+		);
+		return (statement.get(journalPath) as CommandJournalCoverage | null) ?? undefined;
+	}
+
+	replaceCommandJournal(coverage: CommandJournalCoverage, rows: readonly CommandIndexRow[]): void {
+		this.#db.transaction(() => {
+			this.removeCommandJournal(coverage.journalPath);
+			using insert = this.#db.prepare(
+				"INSERT INTO zcode_command_facts(journal_path, entry_order, command_key, data) VALUES (?, ?, ?, ?)",
+			);
+			for (const row of rows) insert.run(coverage.journalPath, row.entryOrder, row.commandKey, row.data);
+			using complete = this.#db.prepare(
+				"INSERT INTO zcode_command_journals(journal_path, session_id, version) VALUES (?, ?, ?)",
+			);
+			complete.run(coverage.journalPath, coverage.sessionId, coverage.version);
+		})();
+	}
+
+	removeCommandJournal(journalPath: string): void {
+		this.#db.transaction(() => {
+			using facts = this.#db.prepare("DELETE FROM zcode_command_facts WHERE journal_path = ?");
+			using coverage = this.#db.prepare("DELETE FROM zcode_command_journals WHERE journal_path = ?");
+			facts.run(journalPath);
+			coverage.run(journalPath);
+		})();
+	}
+
+	commandJournalMatches(journalPath: string, keys: readonly string[]): boolean {
+		if (keys.length === 0) return false;
+		using statement = this.#db.prepare(
+			`SELECT 1 FROM zcode_command_facts WHERE journal_path = ? AND command_key IN (${keys.map(() => "?").join(",")}) LIMIT 1`,
+		);
+		return statement.get(journalPath, ...keys) !== null;
 	}
 
 	/**

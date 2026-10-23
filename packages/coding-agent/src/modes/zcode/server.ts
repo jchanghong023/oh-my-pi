@@ -53,6 +53,7 @@ import type { ZCodeConfigurationRecord } from "./provider-config";
 import type { AuthStorage } from "../../session/auth-storage";
 import { logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../../cli/args";
+import { localTtftNow } from "./schema/vendor/localTtft";
 
 export interface ZCodeServerOptions {
 	cwd?: string;
@@ -159,6 +160,7 @@ export class ZCodeServer {
 	>();
 	#closed = false;
 	#ready = false;
+	readonly #clockInstanceId = randomUUID();
 	readonly #lifetime = new AbortController();
 	#ownerSignal?: AbortSignal;
 	#initialization?: Promise<void>;
@@ -431,6 +433,7 @@ export class ZCodeServer {
 		}
 	}
 	async receive(value: unknown): Promise<void> {
+		const receivedAt = localTtftNow();
 		const parsed = L.zcodeProtocolMessageSchema.safeParse(value);
 		if (!parsed.success) throw new ZCodeProtocolError(-32600, "Invalid ZCode protocol envelope");
 		const frame = parsed.data;
@@ -450,6 +453,13 @@ export class ZCodeServer {
 			});
 			if (this.#closed) return;
 			if ("id" in frame) {
+				if (frame.method === "v4/commands/query") {
+					const query = result as P.CommandsQueryResult;
+					if (query.clock) {
+						query.clock.receivedAt = receivedAt;
+						query.clock.sentAt = localTtftNow();
+					}
+				}
 				await this.writer.write({ id: frame.id, result });
 				responded = true;
 			}
@@ -2420,6 +2430,18 @@ export class ZCodeServer {
 				return this.#command(raw);
 			case "v4/commands/query": {
 				const params = P.commandsQueryParamsSchema.parse(raw);
+				// 校准是纯探测；账本损坏或历史回填都不能阻塞它，也不能触发命令事实读取。
+				if (params.clock) {
+					return {
+						results: params.commands.map(key => ({ key, result: "unknown" as const })),
+						clock: {
+							instanceId: this.#clockInstanceId,
+							// 直接 dispatch 也返回真实采样；stdio receive 在发送前替换为完整收发边界。
+							receivedAt: localTtftNow(),
+							sentAt: localTtftNow(),
+						},
+					} satisfies P.CommandsQueryResult;
+				}
 				return this.ledger.query(params.commands);
 			}
 			case "v4/conversation/subscribe": {
@@ -2819,6 +2841,7 @@ export async function runZCodeAppServer(options: ZCodeServerOptions = {}): Promi
 	const { promise: ended, resolve, reject } = Promise.withResolvers<void>();
 	void ended.catch(() => {});
 	const owner = new AbortController();
+	let warmIndex: Promise<void> | undefined;
 	const fail = (error: unknown) => {
 		owner.abort(error);
 		reject(error);
@@ -2879,6 +2902,10 @@ export async function runZCodeAppServer(options: ZCodeServerOptions = {}): Promi
 	process.once("SIGTERM", onSignal);
 	try {
 		await server.initialize(owner.signal);
+		// initialize 已等待 ready 帧写出；只在真实进程入口回填，不阻塞协议可用性。
+		warmIndex = server.ledger.warmIndex(owner.signal).catch(error => {
+			if (!owner.signal.aborted) logger.warn("ZCode command index warmup failed", { error: String(error) });
+		});
 		await ended;
 	} finally {
 		input.off("data", onData);
@@ -2888,6 +2915,8 @@ export async function runZCodeAppServer(options: ZCodeServerOptions = {}): Promi
 		input.pause();
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
+		owner.abort(new Error("Owner disconnected"));
+		await warmIndex;
 		await server.dispose();
 		await Promise.allSettled(work);
 	}

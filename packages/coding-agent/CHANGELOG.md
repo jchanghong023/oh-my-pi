@@ -23,7 +23,7 @@
 ### Fixed
 
 - Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
-- Avoid repeatedly enumerating every native session when reading ZCode command receipts, reducing startup and first-message delays while preserving live and cold receipt lookup.
+- Keep ZCode clock calibration independent of history scans and reuse indexed receipts across restarts, without queuing foreground lookups behind full background rebuilds or shortening deduplication history.
 - Allow ZCode profile switching after a completed session deletion, reject incompatible concurrent resume options, and retain structured Team configuration error codes and save receipts on the wire.
 - Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log, native Goal and ZCode coverage and leaving upstream RPC behavior unchanged.
 - Keep native ZCode subagent detail sessions read-only across live and cold history, retain each child's configured model/thinking/tools, and hydrate late subscribers from the owning native stream without starting a second runtime.

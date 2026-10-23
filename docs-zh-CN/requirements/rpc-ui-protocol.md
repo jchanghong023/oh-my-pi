@@ -201,6 +201,15 @@ flowchart TD
 - UI 切换查看目标只改变订阅与请求路由，不替换或取消原会话及其 loop／Goal。attachment 断开仅释放该订阅，不自动关闭共享会话；app-server 的 stdin EOF／owner 消失才收尾全部本进程托管的会话及自有资源。
 - 工具和子代理仍可按上游机制使用必要子进程；禁止的是为主会话另起执行宿主，不是禁止 OMP 的 Bash、工具或子代理能力。存储准备入口保留独立短生命周期进程，不托管会话。
 
+### 命令事实查询与启动减负
+
+- `v4/commands/query` 的 `clock:true` 是纯时钟校准：仅接受 null-session 探测 key，返回原 results 结构及真实进程实例、接收／发送单调 epoch 时间；不得枚举会话、查询命令账本或进入 admission。普通命令查询不使用此旁路。
+- 命令持久事实仍以 OMP journal 为准；当前 profile 的 `agent.db` 仅保存可重建索引，不保存待执行命令，不设置时间 TTL，不因桌面显示窗口裁剪幂等范围。索引包含完整回执、produced-session、输入 admission／promotion／终态及 Tan 实际派发证据，保留现有事实优先级、fingerprint、epoch 和来源 journal 身份裁决。
+- 索引以 journal 文件代际及已完整提取的版本证明覆盖；事实与覆盖状态事务提交。成功持久化后的变化增量更新或使对应 journal 失效，删除／同 ID 重建、fork、原子替换、外部进程写入及 journal 已提交而索引未提交的崩溃缺口均须回源。完整可信范围内查无事实才是 `unknown`；读取失败或覆盖不明不得伪装 unknown 或放行重复副作用。
+- 历史回填不阻塞 app-server ready，可恢复、可取消，并在 journal 文件之间让出前台查询；前台只等待当前已接纳文件，不排在整轮回填之后。回填期间真实查询仍对未覆盖范围回源，已找到全部所查命令的可信完整回执即可收口，未知及低优先级事实仍须完整证明。批量查询共享发现和提取工作。性能目标是避免重复 journal 全文解析，不承诺消除首次回填、目录元数据或实际写入成本。
+- 桌面近七天列表由 Host 任务查询与 UI 策略实现，具体以 ZCode sessions-index 规格为准；不修改冻结 topic／wire，不限制 OMP 精确历史访问、TUI／CLI 列举或手机恢复。普通 pending 的 unknown 不自动重发；客户端按当前恢复合同静默结算，拥有首发草稿的未知结果保留线索。
+- 验收覆盖纯 clock 零 journal 读取、重启后旧命令去重、admission-only 恢复、取消／失败与 produced 优先级、索引缺口／失效回源及读取失败；通过真实 app-server 验证，不以局部 mock 代替协议边界。桌面时间窗口独立验证，不用窗口缩小回执验收范围。
+
 ### 会话存储、组织索引与活动投影
 
 - OMP 会话记录及存储 API 是会话身份、标题、父链、正文和历史的事实源；`session/list`、`session/read`、`session/messages` 从该来源生成兼容视图，不能扫描 Host tasks-index 冒充 OMP 历史。

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import { getAgentDir, getBlobsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getAgentDbPath, getAgentDir, getBlobsDir, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
 import { Settings, withActiveSettings } from "../../config/settings";
 import { AgentRegistry, type AgentRef } from "../../registry/agent-registry";
 import {
@@ -13,13 +13,20 @@ import {
 	type CreateAgentSessionResult,
 } from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
+import { AgentStorage } from "../../session/agent-storage";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { readSessionInfo, type SessionInfo } from "../../session/session-listing";
-import { loadEntriesFromFile, resolveBlobRefsInEntries } from "../../session/session-loader";
+import {
+	hasFileAsPathComponent,
+	loadEntriesFromFile,
+	loadSessionFile,
+	resolveBlobRefsInEntries,
+} from "../../session/session-loader";
 import { BlobStore } from "../../session/blob-store";
 import type { SessionEntry } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
-import { FileSessionStorage } from "../../session/session-storage";
+import { assertOfflineSessionPath, FileSessionStorage } from "../../session/session-storage";
+import { resolveSessionDirectory } from "../../session/session-paths";
 import { normalizeSessionWorkspace } from "../../session/session-workspace";
 import { collectSubSessions } from "../../session/sub-sessions";
 import type { AsyncJob } from "../../async/job-manager";
@@ -179,7 +186,8 @@ export class ZCodeSessionManager {
 	readonly #opening = new Map<string, Promise<ZCodeSessionRecord>>();
 	readonly #closing = new Map<string, Promise<void>>();
 	readonly #nativeLaunches = new Map<string, Promise<unknown>>();
-	readonly #commandJournalReads = new Map<string, Set<Promise<readonly SessionEntry[]>>>();
+	readonly #commandJournalReads = new Map<string, Set<Promise<unknown>>>();
+	readonly #commandJournalOwners = new Map<string, string>();
 	readonly #deletions = new Map<string, Promise<void>>();
 	readonly #deleted = new Set<string>();
 	readonly #options: ZCodeSessionManagerOptions;
@@ -819,6 +827,60 @@ export class ZCodeSessionManager {
 		return [...merged.values()];
 	}
 
+	commandIndexStorage(): Promise<AgentStorage> {
+		return AgentStorage.open(getAgentDbPath(this.#agentDir));
+	}
+
+	/** Unlike picker discovery, failure is not evidence of an empty command history. */
+	async listCommandJournals(): Promise<readonly string[]> {
+		// Existing discovery may recover a committed orphan backup; inventory must follow recovery.
+		const listed = await this.list();
+		for (const info of listed) this.#commandJournalOwners.set(path.resolve(info.path), info.id);
+		const directories = new Set([resolveSessionDirectory(this.#sessionDir, this.#storage)]);
+		const readDirectory = async (directory: string) => {
+			assertOfflineSessionPath(directory, this.#storage);
+			try {
+				return await fs.readdir(directory, { withFileTypes: true });
+			} catch (error) {
+				if (
+					error &&
+					typeof error === "object" &&
+					"code" in error &&
+					error.code === "ENOENT" &&
+					!(await hasFileAsPathComponent(directory))
+				)
+					return [];
+				throw error;
+			}
+		};
+		if (path.resolve(this.#agentDir) === path.resolve(getAgentDir())) {
+			const root = resolveSessionDirectory(getSessionsDir(), this.#storage);
+			for (const entry of await readDirectory(root)) {
+				if (entry.isDirectory() && !entry.isSymbolicLink()) directories.add(path.join(root, entry.name));
+			}
+		}
+		const files = new Map<string, string>();
+		for (const directory of directories) {
+			for (const entry of await readDirectory(directory)) {
+				if (!entry.name.endsWith(".jsonl")) continue;
+				const file = path.join(directory, entry.name);
+				assertOfflineSessionPath(file, this.#storage);
+				const real = await this.withCommandJournalRead(file, () => fs.realpath(file));
+				if (real !== undefined) {
+					assertOfflineSessionPath(real, this.#storage);
+					files.set(real, file);
+				}
+			}
+		}
+		// 保留既有 pinned/modified 列表优先级；严格发现的余项不能被宽松 UI 列表吞掉。
+		const order = new Map(listed.map((info, index) => [path.resolve(info.path), index]));
+		return [...files.values()].sort(
+			(a, b) =>
+				(order.get(path.resolve(a)) ?? Number.MAX_SAFE_INTEGER) -
+				(order.get(path.resolve(b)) ?? Number.MAX_SAFE_INTEGER),
+		);
+	}
+
 	/** Resolve native ID/path linkage and the inherited boundary without IO in the projection. */
 	async forkProjection(id: string): Promise<{ parentSessionId?: string; inheritedMessageCount?: number }> {
 		const live = this.#records.get(id);
@@ -893,28 +955,38 @@ export class ZCodeSessionManager {
 	 * a completed deletion is absence, not unreadable history. Real read/delete failures still reject.
 	 */
 	async readCommandEntries(info: Pick<SessionInfo, "id" | "path">): Promise<readonly SessionEntry[] | undefined> {
-		const { id } = info;
-		const deletion = this.#deletions.get(id);
+		this.#commandJournalOwners.set(path.resolve(info.path), info.id);
+		return this.withCommandJournalRead(info.path, async () => {
+			const loaded = await loadSessionFile(info.path, this.#storage, { throwIfMissing: true });
+			if (loaded.invalidHeader || loaded.malformedRecords)
+				throw new Error(`Unreadable command journal: ${info.path}`);
+			return loaded.entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+		});
+	}
+
+	/** Index coverage checks and extraction share the existing journal read/delete owner. */
+	async withCommandJournalRead<T>(file: string, action: () => Promise<T>): Promise<T | undefined> {
+		const key = path.resolve(file);
+		const id = this.#commandJournalOwners.get(key);
+		const deletion = id ? this.#deletions.get(id) : undefined;
 		if (deletion) {
 			await deletion;
 			return undefined;
 		}
-		if (this.#deleted.has(id)) return undefined;
-		// 账本已持有本管理器列举的可信路径；逐项按 ID 查找会重复全局枚举，阻塞首次创建。
-		const read = loadEntriesFromFile(info.path, this.#storage, { throwIfMissing: true }).then(entries =>
-			entries.filter((entry): entry is SessionEntry => entry.type !== "session"),
-		);
-		let readers = this.#commandJournalReads.get(id);
+		if (id && this.#deleted.has(id)) return undefined;
+		// 先登记再执行 IO，删除必须等整个版本校验/提取边界，而不只是 loadSessionFile。
+		const read = Promise.resolve().then(action);
+		let readers = this.#commandJournalReads.get(key);
 		if (!readers) {
 			readers = new Set();
-			this.#commandJournalReads.set(id, readers);
+			this.#commandJournalReads.set(key, readers);
 		}
 		readers.add(read);
 		try {
 			return await read;
 		} finally {
 			readers.delete(read);
-			if (readers.size === 0) this.#commandJournalReads.delete(id);
+			if (readers.size === 0) this.#commandJournalReads.delete(key);
 		}
 	}
 
@@ -1322,11 +1394,13 @@ export class ZCodeSessionManager {
 		this.#assertOpen();
 		// Only openings admitted before this deletion belong to the generation being removed.
 		const opening = this.#opening.get(id);
-		// Readers admitted before deletion own their snapshot until the file read completes.
-		await Promise.allSettled(this.#commandJournalReads.get(id) ?? []);
 		if (opening) await opening;
-		await this.close(id);
 		const info = await this.#find(id);
+		const key = path.resolve(info.path);
+		this.#commandJournalOwners.set(key, id);
+		// 已接纳的枚举、缓存校验与提取共用原读 pin；之后的读取通过删除 promise 等待。
+		await Promise.allSettled(this.#commandJournalReads.get(key) ?? []);
+		await this.close(id);
 		const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
 			throwIfMissing: true,
 			suppressBreadcrumb: true,

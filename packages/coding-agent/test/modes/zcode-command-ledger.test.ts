@@ -9,6 +9,7 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import type { LoadedCustomCommand } from "../../src/extensibility/custom-commands";
 import { ZCodeCommandLedger } from "../../src/modes/zcode/command-ledger";
+import { ZCodeCommandIndex } from "../../src/modes/zcode/command-index";
 import type { CommandAck, CommandEnvelope } from "../../src/modes/zcode/schema";
 import { ZCodeSessionManager } from "../../src/modes/zcode/sessions";
 import { AgentSession } from "../../src/session/agent-session";
@@ -26,6 +27,7 @@ const resources: { dir: TempDir; managers: SessionManager[] }[] = [];
 afterEach(async () => {
 	for (const { dir, managers } of resources.splice(0)) {
 		await Promise.all(managers.map(manager => manager.close()));
+		AgentStorage.close();
 		await dir.remove();
 	}
 });
@@ -48,10 +50,23 @@ async function fixture() {
 			);
 		},
 	};
+	const owner = new ZCodeSessionManager({
+		cwd: manager.getCwd(),
+		sessionDir: path.dirname(manager.getSessionFile()!),
+		agentDir: path.join(dir.path(), "agent"),
+	});
+	const indexedAdapter = {
+		...adapter,
+		listCommandJournals: () => owner.listCommandJournals(),
+		commandIndexStorage: () => owner.commandIndexStorage(),
+		withCommandJournalRead: <T>(file: string, read: () => Promise<T>) => owner.withCommandJournalRead(file, read),
+	};
 	return {
 		manager,
+		owner,
 		managers,
 		adapter,
+		indexedAdapter,
 		cold: () => {
 			active = false;
 		},
@@ -174,6 +189,300 @@ describe("ZCode durable command facts", () => {
 		}
 	});
 
+	it("pins production index extraction until local deletion and treats its stale inventory as absence", async () => {
+		const { manager, owner, adapter } = await fixture();
+		const id = manager.getSessionId();
+		const envelope = command(id, "indexed-before-delete");
+		await new ZCodeCommandLedger(adapter).execute(envelope, async () => accepted(envelope));
+		await manager.flush();
+		await manager.close();
+		const files = await owner.listCommandJournals();
+		const snapshot = await owner.list();
+		const index = new ZCodeCommandIndex({
+			listCommandJournals: async () => files,
+			commandIndexStorage: () => owner.commandIndexStorage(),
+			withCommandJournalRead: (file, read) => owner.withCommandJournalRead(file, read),
+		});
+		const admitted = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const original = FileSessionStorage.prototype.readText;
+		const file = manager.getSessionFile()!;
+		let pause = true;
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			target: string,
+		) {
+			if (pause && target === file) {
+				pause = false;
+				admitted.resolve();
+				await release.promise;
+			}
+			return original.call(this, target);
+		});
+		const order: string[] = [];
+		try {
+			const reading = index.read([envelope]).then(result => {
+				order.push("read");
+				return result;
+			});
+			await admitted.promise;
+			const deleting = owner.delete(id).then(() => {
+				order.push("delete");
+			});
+			expect(order).toEqual([]);
+			expect(await Bun.file(file).exists()).toBe(true);
+			release.resolve();
+			expect((await reading)[0]?.entries.length).toBeGreaterThan(0);
+			await deleting;
+			expect(order).toEqual(["read", "delete"]);
+			expect(await Bun.file(file).exists()).toBe(false);
+			expect(await index.read([envelope])).toEqual([]);
+			// 严格目录枚举也可能拿到删除前的 list 快照，已知本地删除不应成为 realpath 失败。
+			const listSpy = spyOn(owner, "list").mockResolvedValue(snapshot);
+			try {
+				expect(await owner.listCommandJournals()).toEqual([]);
+			} finally {
+				listSpy.mockRestore();
+			}
+		} finally {
+			release.resolve();
+			readSpy.mockRestore();
+		}
+	});
+
+	it("uses a valid production index snapshot during another session append without publishing stale coverage", async () => {
+		const { manager, managers, owner, adapter } = await fixture();
+		const other = SessionManager.create(manager.getCwd(), path.dirname(manager.getSessionFile()!));
+		await other.ensureOnDisk();
+		managers.push(other);
+		const envelope: CommandEnvelope = {
+			...command(other.getSessionId(), "other-session"),
+			type: "renameSession",
+			payload: { title: "Existing receipt" },
+		};
+		const concurrent: CommandEnvelope = {
+			...command(manager.getSessionId(), "concurrent-writer"),
+			type: "renameSession",
+			payload: { title: "Appended receipt" },
+		};
+		const writer = new ZCodeCommandLedger({ ...adapter, list: async () => [] });
+		await writer.execute(envelope, async () => ({
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 2,
+		}));
+		await other.flush();
+		const file = manager.getSessionFile()!;
+		// 先经过追加中的文件，确保回归实际覆盖版本变化，而不依赖目录枚举顺序。
+		const files = (await owner.listCommandJournals()).toSorted(
+			(left, right) => Number(right === file) - Number(left === file),
+		);
+		const ledger = new ZCodeCommandLedger({
+			...adapter,
+			get: () => undefined,
+			listCommandJournals: async () => files,
+			commandIndexStorage: () => owner.commandIndexStorage(),
+			withCommandJournalRead: (file, read) => owner.withCommandJournalRead(file, read),
+		});
+		const original = FileSessionStorage.prototype.readText;
+		let append = true;
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			target: string,
+		) {
+			const snapshot = await original.call(this, target);
+			if (append && target === file) {
+				append = false;
+				await writer.execute(concurrent, async () => ({
+					commandId: concurrent.commandId,
+					status: "accepted",
+					revisionAtDecision: 3,
+				}));
+				await manager.flush();
+			}
+			return snapshot;
+		});
+		try {
+			expect((await ledger.query([envelope])).results[0]?.result).toMatchObject({
+				status: "accepted",
+				revisionAtDecision: 2,
+			});
+			// 追加发生在旧快照读取之后；后续消费者必须看到新回执，不能复用被错误标记为最新的旧 coverage。
+			expect((await ledger.query([concurrent])).results[0]?.result).toMatchObject({
+				status: "accepted",
+				revisionAtDecision: 3,
+			});
+		} finally {
+			readSpy.mockRestore();
+		}
+	});
+
+	it("keeps cached and inflight decisions independent of unavailable journals and shares mixed-query discovery", async () => {
+		const { manager, indexedAdapter, cold } = await fixture();
+		const ledger = new ZCodeCommandLedger(indexedAdapter);
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), "memory-first"),
+			type: "renameSession",
+			payload: { title: "Cached control decision" },
+		};
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const executing = ledger.execute(envelope, async () => {
+			entered.resolve();
+			await release.promise;
+			return { commandId: envelope.commandId, status: "accepted", revisionAtDecision: 1 };
+		});
+		await entered.promise;
+		const unavailable = new Error("journal source unavailable");
+		const discovery = spyOn(indexedAdapter, "listCommandJournals").mockRejectedValue(unavailable);
+		try {
+			const pending = ledger.query([envelope]);
+			release.resolve();
+			expect(await executing).toMatchObject({ status: "accepted" });
+			expect((await pending).results[0]?.result).toMatchObject({ status: "accepted" });
+			cold();
+			expect((await ledger.query([envelope])).results[0]?.result).toMatchObject({ status: "accepted" });
+			expect(discovery).not.toHaveBeenCalled();
+			await expect(
+				ledger.query([envelope, command(manager.getSessionId(), "missing-a"), command(null, "missing-b")]),
+			).rejects.toThrow("journal source unavailable");
+			expect(discovery).toHaveBeenCalledTimes(1);
+		} finally {
+			release.resolve();
+			discovery.mockRestore();
+		}
+	});
+
+	it("recovers a complete indexed receipt despite an unrelated corrupt journal but never proves unknown from it", async () => {
+		const { manager, adapter, indexedAdapter, cold } = await fixture();
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), "complete-before-corruption"),
+			type: "renameSession",
+			payload: { title: "Durable control receipt" },
+		};
+		await new ZCodeCommandLedger(adapter).execute(envelope, async () => ({
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 1,
+		}));
+		await manager.flush();
+		await manager.close();
+		cold();
+		await Bun.write(path.join(path.dirname(manager.getSessionFile()!), "unrelated-corrupt.jsonl"), "{broken\n");
+		const recovered = await new ZCodeCommandLedger(indexedAdapter).query([envelope]);
+		expect(recovered.results[0]?.result).toMatchObject({ status: "accepted" });
+		await expect(
+			new ZCodeCommandLedger(indexedAdapter).query([command(manager.getSessionId(), "unproven")]),
+		).rejects.toThrow("Cannot prove command journal coverage");
+	});
+
+	it("recovers a complete cold receipt between warm journals without waiting for unrelated IO", async () => {
+		const { manager, managers, owner, adapter, indexedAdapter, cold } = await fixture();
+		const unrelated = SessionManager.create(manager.getCwd(), path.dirname(manager.getSessionFile()!));
+		await unrelated.ensureOnDisk();
+		managers.push(unrelated);
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), "foreground-during-warm"),
+			type: "renameSession",
+			payload: { title: "Cold control receipt" },
+		};
+		const ack: CommandAck = {
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 7,
+		};
+		await new ZCodeCommandLedger(adapter).execute(envelope, async () => ack);
+		await Promise.all(managers.map(item => item.flush()));
+		await Promise.all(managers.map(item => item.close()));
+		cold();
+		const targetFile = manager.getSessionFile()!;
+		const files = (await owner.listCommandJournals()).toSorted(
+			(left, right) => Number(right === targetFile) - Number(left === targetFile),
+		);
+		expect(files).toHaveLength(2);
+		expect(files).toContain(targetFile);
+		const index = new ZCodeCommandIndex({
+			...indexedAdapter,
+			listCommandJournals: async () => files,
+		});
+		const firstEntered = Promise.withResolvers<void>();
+		const releaseFirst = Promise.withResolvers<void>();
+		const secondEntered = Promise.withResolvers<void>();
+		const releaseSecond = Promise.withResolvers<void>();
+		const original = FileSessionStorage.prototype.readText;
+		const tasks: Promise<unknown>[] = [];
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			file: string,
+		) {
+			if (file === targetFile) {
+				firstEntered.resolve();
+				await releaseFirst.promise;
+			} else if (file === files[1]) {
+				secondEntered.resolve();
+				await releaseSecond.promise;
+			}
+			return original.call(this, file);
+		});
+		try {
+			const warming = index.warm();
+			tasks.push(warming);
+			await firstEntered.promise;
+			const foreground = index.read([envelope], journals =>
+				journals.some(journal =>
+					journal.entries.some(entry => {
+						if (entry.type !== "custom" || entry.customType !== "zcode_command_result") return false;
+						const fact = entry.data;
+						return (
+							typeof fact === "object" &&
+							fact !== null &&
+							"version" in fact &&
+							fact.version === 1 &&
+							"journalSessionId" in fact &&
+							fact.journalSessionId === journal.id &&
+							"key" in fact &&
+							typeof fact.key === "object" &&
+							fact.key !== null &&
+							"sessionId" in fact.key &&
+							fact.key.sessionId === envelope.sessionId &&
+							"commandId" in fact.key &&
+							fact.key.commandId === envelope.commandId
+						);
+					}),
+				),
+			);
+			tasks.push(foreground);
+			// 第一文件尚在真实 reader pin 内时排入前台；整轮锁或继续扫描无关文件都会先触发第二道 IO 栅栏。
+			const outcome = Promise.race([
+				foreground.then(journals => ({
+					type: "foreground" as const,
+					receipts: journals.flatMap(journal =>
+						journal.entries.flatMap(entry =>
+							entry.type === "custom" &&
+							entry.customType === "zcode_command_result" &&
+							typeof entry.data === "object" &&
+							entry.data !== null &&
+							"ack" in entry.data
+								? [entry.data.ack]
+								: [],
+						),
+					),
+				})),
+				secondEntered.promise.then(() => ({ type: "unrelated" as const })),
+			]);
+			releaseFirst.resolve();
+			expect(await outcome).toEqual({
+				type: "foreground",
+				receipts: [ack],
+			});
+		} finally {
+			releaseFirst.resolve();
+			releaseSecond.resolve();
+			await Promise.allSettled(tasks);
+			readSpy.mockRestore();
+		}
+	});
+
 	it("finishes an admitted read and deletion before recreating the same explicit identity", async () => {
 		const { manager, managers, adapter } = await fixture();
 		const id = manager.getSessionId();
@@ -198,6 +507,7 @@ describe("ZCode durable command facts", () => {
 			},
 		});
 		const info = (await owner.list()).find(item => item.id === id)!;
+		await new ZCodeCommandLedger(owner).warmIndex();
 		const gate = Promise.withResolvers<void>();
 		const readText = FileSessionStorage.prototype.readText;
 		const order: string[] = [];
@@ -593,7 +903,7 @@ describe("ZCode durable command facts", () => {
 	);
 
 	it("recovers durable runtime admission when the process dies before the ACK receipt", async () => {
-		const { manager, adapter, cold } = await fixture();
+		const { manager, indexedAdapter: adapter, cold } = await fixture();
 		const envelope = command(manager.getSessionId());
 		const sourceCommand = new ZCodeCommandLedger(adapter).identity(envelope);
 		await manager.appendEntriesAtomically(() =>
@@ -645,10 +955,12 @@ describe("ZCode durable command facts", () => {
 	});
 
 	it("reports actual cancellation instead of a stale cached accepted receipt", async () => {
-		const { manager, adapter } = await fixture();
+		const { manager, indexedAdapter: adapter, cold } = await fixture();
 		const envelope = command(manager.getSessionId());
 		const ledger = new ZCodeCommandLedger(adapter);
 		await ledger.execute(envelope, async () => accepted(envelope));
+		cold();
+		await ledger.query([{ sessionId: envelope.sessionId, commandId: envelope.commandId }]);
 		await manager.appendEntriesAtomically(() =>
 			manager.appendCustomEntry("session_input", {
 				inputId: envelope.commandId,
@@ -662,7 +974,7 @@ describe("ZCode durable command facts", () => {
 	});
 
 	it("discovers fork results in the produced session and ignores copied parent receipts", async () => {
-		const { manager, managers, adapter, cold } = await fixture();
+		const { manager, managers, indexedAdapter: adapter, cold } = await fixture();
 		const ledger = new ZCodeCommandLedger(adapter);
 		const original = command(manager.getSessionId(), "shared-id");
 		await ledger.execute(original, async () => ({
@@ -692,5 +1004,57 @@ describe("ZCode durable command facts", () => {
 				throw new Error("must not fork twice");
 			}),
 		).toMatchObject({ status: "duplicate", result });
+	});
+
+	it("shares a 64-key discovery and reuses persistent coverage after restart", async () => {
+		const { manager, indexedAdapter: adapter } = await fixture();
+		const envelope = command(manager.getSessionId(), "old-indexed-key");
+		const original = new ZCodeCommandLedger(adapter);
+		await original.execute(envelope, async () => ({
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 9,
+		}));
+		await original.warmIndex();
+		AgentStorage.close();
+		const restarted = new ZCodeCommandLedger(adapter);
+		const discovery = spyOn(adapter, "listCommandJournals");
+		const read = spyOn(FileSessionStorage.prototype, "readText");
+		try {
+			const keys = Array.from({ length: 64 }, (_, index) => ({
+				sessionId: envelope.sessionId,
+				commandId: index === 0 ? envelope.commandId : `unknown-${index}`,
+			}));
+			const result = await restarted.query(keys);
+			expect(result.results[0]?.result).toMatchObject({ status: "accepted", revisionAtDecision: 9 });
+			expect(result.results.slice(1).every(row => row.result === "unknown")).toBe(true);
+			expect(discovery).toHaveBeenCalledTimes(1);
+			expect(read).not.toHaveBeenCalled();
+			await expect(
+				restarted.execute(envelope, async () => {
+					throw new Error("Indexed history must not execute again");
+				}),
+			).resolves.toMatchObject({ status: "duplicate", revisionAtDecision: 9 });
+		} finally {
+			discovery.mockRestore();
+			read.mockRestore();
+		}
+	});
+
+	it("fails closed when a covered journal changes to unreadable history", async () => {
+		const { manager, indexedAdapter: adapter } = await fixture();
+		const ledger = new ZCodeCommandLedger(adapter);
+		await ledger.warmIndex();
+		await Bun.write(manager.getSessionFile()!, "{invalid journal\\n");
+		const envelope = command(manager.getSessionId(), "must-not-admit");
+		let effects = 0;
+		await expect(ledger.query([{ sessionId: envelope.sessionId, commandId: envelope.commandId }])).rejects.toThrow();
+		await expect(
+			ledger.execute(envelope, async () => {
+				effects++;
+				return accepted(envelope);
+			}),
+		).rejects.toThrow();
+		expect(effects).toBe(0);
 	});
 });

@@ -10,6 +10,7 @@ import type {
 import {
 	LegacyProtocol,
 	TopicWireFrameAssembler,
+	commandsQueryResultSchema,
 	conversationTopicFrameSchema,
 	conversationTopicWireCandidateSchema,
 	subscribeAckSchema,
@@ -396,6 +397,10 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		const peer = new CorePeer(config.cwdA, config.env);
 		peers.push(peer);
 		await peer.ready();
+		const clockParams = { commands: [{ sessionId: null, commandId: "core-clock-calibration" }], clock: true };
+		const initialClock = commandsQueryResultSchema.parse(await peer.request("v4/commands/query", clockParams));
+		expect(initialClock.results).toEqual([{ key: clockParams.commands[0], result: "unknown" }]);
+		if (!initialClock.clock) throw new Error("Missing real process calibration clock");
 		const parent = await create(peer, config.cwdA);
 		const other = await create(peer, config.cwdB);
 		const parentSub = await subscription(peer, parent, "parent-host", "desktop-continuous");
@@ -564,6 +569,8 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		expect(await send(peer, other, "CORE_OTHER_LIVE")).toMatchObject({ status: "accepted" });
 		await markerFrame(otherSub, "CORE_OTHER_LIVE_DONE", otherDone.toSeq);
 
+		const runningClock = commandsQueryResultSchema.parse(await peer.request("v4/commands/query", clockParams));
+		expect(runningClock.clock?.instanceId).toBe(initialClock.clock.instanceId);
 		// EOF while a distinct native child owns an open Provider stream must cancel it.
 		expect(await send(peer, parent, "CORE_OWNER")).toMatchObject({ status: "accepted" });
 		const ownedGate = await config.gate("CORE_CHILD_OWNER");
@@ -574,6 +581,9 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		const cold = new CorePeer(config.cwdA, config.env);
 		peers.push(cold);
 		await cold.ready();
+		const coldClock = commandsQueryResultSchema.parse(await cold.request("v4/commands/query", clockParams));
+		expect(coldClock.clock?.instanceId).toBeDefined();
+		expect(coldClock.clock?.instanceId).not.toBe(initialClock.clock.instanceId);
 		await cold.request("session/read", { sessionId: child });
 		await cold.request("session/subagents", { sessionId: child });
 		const coldRows = await cold.request("v4/conversation/rowsRange", { sessionId: child, limit: 100 });
