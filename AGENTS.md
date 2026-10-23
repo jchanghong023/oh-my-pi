@@ -6,6 +6,7 @@
 
 - `omp` 是终端编码代理 CLI：TypeScript（Bun）为主体，Rust（`crates/`，cargo / bazel）提供 native 能力，另有 Python（`python/robomp`、`sdk/python/omp-rpc`）组件。
 - 本仓库完全由 AI Agent 实现和维护：改动是否正确不能依赖用户手工读代码或人工回归来保证，MUST 依靠可复现的自动化验证，以及本文件（开发与维护规则）、`docs-zh-CN/requirements/fork.md`（需求契约）中的明确约定。
+- 本仓库禁用全部 Git 钩子，NEVER 在安装、开发或上游同步中恢复。提交与推送不自动运行检查；验证仅按任务授权从既有入口手动执行，契约见 [Git 钩子](docs-zh-CN/requirements/fork.md#git-钩子)。
 
 ## 主要入口
 
