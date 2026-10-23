@@ -318,7 +318,8 @@ describe("ZCodeSessionManager", () => {
 			});
 			await expect(manager.delete(record.id)).rejects.toThrow("close failed");
 			expect(manager.profileSwitchBlockers()).toEqual([]);
-			expect(await manager.readCommandEntries(record.id)).toBeArray();
+			const info = (await manager.list()).find(item => item.id === record.id)!;
+			expect(await manager.readCommandEntries(info)).toBeArray();
 			expect(manager.get(record.id)).toBe(record);
 
 			const entered = Promise.withResolvers<void>();

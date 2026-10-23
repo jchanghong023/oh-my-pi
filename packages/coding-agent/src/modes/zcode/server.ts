@@ -8,7 +8,7 @@ import type { AgentSession } from "../../session/agent-session";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { Settings } from "../../config/settings";
 import { ModelRegistry } from "../../config/model-registry";
-import { discoverAuthStorage } from "../../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
 import { TeamConfigError, TeamConfigService } from "../../team/config";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { ZCodeCommandHost, workspaceCatalog } from "./commands";
@@ -45,6 +45,14 @@ import { OmpTeamBridge } from "./team";
 import { OmpProfilesBridge, type OmpProfileBlocker } from "./profiles";
 import { OmpTanBridge, ompTanListParamsSchema, ompTanStartParamsSchema, ompTanStopParamsSchema } from "./tan";
 import { generateWorkspaceText } from "./workspace-text";
+import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { resolveRoleAssignments } from "@oh-my-pi/pi-tui/overlays/model-browser";
+import { createModelBrowserSource } from "../model-browser-source";
+import { createAuthStorageSettingsSync } from "../../session/auth-broker-config";
+import type { ZCodeConfigurationRecord } from "./provider-config";
+import type { AuthStorage } from "../../session/auth-storage";
+import { logger } from "@oh-my-pi/pi-utils";
+import { offlineFromEnv } from "../../cli/args";
 
 export interface ZCodeServerOptions {
 	cwd?: string;
@@ -169,15 +177,14 @@ export class ZCodeServer {
 	#indexInfos = new Map<string, SessionInfo[]>();
 	#registeredTopics = new Set<string>();
 	#workspaceConfigs = new Map<string, P.WorkspaceConfigState>();
+	readonly #catalogs = new Map<string, Promise<ZCodeConfigurationRecord>>();
+	readonly #catalogDisposers = new Set<() => void>();
+	#catalogTimer?: NodeJS.Timeout;
+	#catalogRefresh?: Promise<void>;
 	readonly #workspaceText = new Map<string, AbortController>();
 	constructor(readonly options: ZCodeServerOptions = {}) {
 		this.configuration = new ZCodeProviderConfiguration({
-			records: () =>
-				Array.from(this.#hosted.values(), hosted => ({
-					cwd: hosted.record.cwd,
-					settings: hosted.record.settings,
-					modelRegistry: hosted.record.session.modelRegistry,
-				})),
+			records: () => this.#configurationRecords(),
 			applyInteractionPreferences: (cwd, enabled) =>
 				Array.from(this.#hosted.values())
 					.filter(hosted => hosted.record.cwd === cwd)
@@ -303,7 +310,7 @@ export class ZCodeServer {
 				});
 			},
 			sessionOptions: {
-				prepareConfiguration: (cwd, settings, registry) => this.configuration.prepare(cwd, settings, registry),
+				prepareConfiguration: (cwd, settings, registry) => this.#prepareConfiguration(cwd, settings, registry),
 			},
 		});
 		this.tan = new OmpTanBridge(this.manager);
@@ -982,40 +989,154 @@ export class ZCodeServer {
 			messages: selectedMessages,
 		});
 	}
-	async #refreshAllWorkspaceConfigs(): Promise<void> {
+	async #prepareConfiguration(cwd: string, settings: Settings, registry: ModelRegistry): Promise<void> {
+		await this.configuration.prepare(cwd, settings, registry);
+		// resident 会话会接管 workspace 目录；仅 SDK 凭据域水合会重新暴露构造器的过期元数据。
+		// 两条初始化路径均完整解析本地缓存，在线时保留原生自动 provider discovery 权限。
+		if (offlineFromEnv()) await registry.refresh("offline");
+		else await registry.reapplyModelPolicies();
+	}
+	#configurationRecords(): ZCodeConfigurationRecord[] {
+		return [
+			...Array.from(this.#hosted.values(), hosted => ({
+				cwd: hosted.record.cwd,
+				settings: hosted.record.settings,
+				modelRegistry: hosted.record.session.modelRegistry,
+			})),
+			...this.#catalogRecords.values(),
+		];
+	}
+	readonly #catalogRecords = new Map<string, ZCodeConfigurationRecord>();
+	async #catalog(cwd: string): Promise<ZCodeConfigurationRecord> {
+		const live = this.#configurationRecords().find(record => path.resolve(record.cwd) === cwd);
+		if (live) return live;
+		let pending = this.#catalogs.get(cwd);
+		if (!pending) {
+			pending = (async () => {
+				// 目录属于 workspace，不创建 AgentSession；与 SDK 共享原生设置、认证及离线缓存。
+				const settings = await Settings.loadIsolated({ cwd });
+				let auth: AuthStorage | undefined;
+				try {
+					auth = await discoverAuthStorage(undefined, { cwd, settings });
+					const modelRegistry = new ModelRegistry(auth, undefined, { settings });
+					await loadCliExtensionProviders(modelRegistry, settings, cwd, { discoverModels: false });
+					await this.#prepareConfiguration(cwd, settings, modelRegistry);
+					if (!offlineFromEnv()) modelRegistry.refreshInBackground();
+					const sync = createAuthStorageSettingsSync(settings, auth);
+					const record = { cwd, settings, modelRegistry };
+					this.#catalogDisposers.add(() => {
+						sync.stop();
+						auth!.close();
+						settings.cancelPendingSaves();
+					});
+					this.#catalogRecords.set(cwd, record);
+					return record;
+				} catch (error) {
+					auth?.close();
+					settings.cancelPendingSaves();
+					throw error;
+				}
+			})();
+			this.#catalogs.set(cwd, pending);
+			void pending.catch(() => this.#catalogs.delete(cwd));
+		}
+		return pending;
+	}
+	#watchCatalogs(): void {
+		if (this.#catalogTimer || this.#closed) return;
+		// SQLite 外部写使用原生 generation/poll；models.yml 使用 registry 的 stale 检测。
+		// 单航班也覆盖后台 discovery 已在两轮之间完成的情况，不另建模型或认证状态。
+		this.#catalogTimer = setInterval(() => {
+			if (this.#closed || this.#catalogRefresh) return;
+			const directories = new Set(
+				Array.from(this.#subscriptions.values())
+					.filter(owner => owner.topic.startsWith("workspace-config/"))
+					.map(owner =>
+						path.resolve(this.#workspaceIds.get(owner.topic.slice(17)) ?? this.options.cwd ?? process.cwd()),
+					),
+			);
+			if (directories.size === 0) {
+				clearInterval(this.#catalogTimer);
+				this.#catalogTimer = undefined;
+				return;
+			}
+			this.#catalogRefresh = (async () => {
+				for (const record of this.#configurationRecords()) {
+					if (!directories.has(path.resolve(record.cwd))) continue;
+					const { settings, modelRegistry } = record;
+					await settings.reloadFromDisk();
+					const authChanged = await modelRegistry.authStorage.credentials.poll();
+					if (authChanged) await modelRegistry.hydrateCredentialScopedModelCaches();
+					await modelRegistry.refreshIfStale();
+				}
+				if (!this.#closed) await this.#refreshAllWorkspaceConfigs(false);
+			})()
+				.catch(error => {
+					logger.warn("ZCode workspace catalog refresh failed; retaining the last projection", {
+						error: String(error),
+					});
+				})
+				.finally(() => {
+					this.#catalogRefresh = undefined;
+				});
+		}, 1000);
+		this.#catalogTimer.unref();
+	}
+	async #refreshAllWorkspaceConfigs(force = true): Promise<void> {
 		const directories = new Set(
 			Array.from(
-				this.#workspaceConfigs.keys(),
+				Array.from(this.#workspaceConfigs.keys()).filter(
+					id =>
+						force ||
+						Array.from(this.#subscriptions.values()).some(owner => owner.topic === `workspace-config/${id}`),
+				),
 				id => this.#workspaceIds.get(id) ?? this.options.cwd ?? process.cwd(),
 			),
 		);
-		await Promise.all(Array.from(directories, cwd => this.#refreshWorkspaceConfigs(cwd)));
+		await Promise.all(Array.from(directories, cwd => this.#refreshWorkspaceConfigs(cwd, force)));
 	}
-	async #refreshWorkspaceConfigs(cwd: string): Promise<void> {
-		const config = await this.#workspaceConfig(cwd);
+	async #refreshWorkspaceConfigs(cwd: string, force = true): Promise<void> {
+		const previous = !force
+			? Array.from(this.#workspaceConfigs.entries()).find(
+					([id]) => (this.#workspaceIds.get(id) ?? this.options.cwd ?? process.cwd()) === cwd,
+				)?.[1]
+			: undefined;
+		const config = await this.#workspaceConfig(cwd, previous?.slashCommands);
 		for (const workspaceId of this.#workspaceConfigs.keys()) {
 			if ((this.#workspaceIds.get(workspaceId) ?? this.options.cwd ?? process.cwd()) !== cwd) continue;
+			if (!force && JSON.stringify(this.#workspaceConfigs.get(workspaceId)) === JSON.stringify(config)) continue;
 			this.#workspaceConfigs.set(workspaceId, config);
 			this.topics.publish(`workspace-config/${workspaceId}`, [{ op: "config.updated", config }]);
 		}
 	}
-	async #workspaceConfig(cwd: string): Promise<P.WorkspaceConfigState> {
+	async #workspaceConfig(
+		cwd: string,
+		retainedSlashCommands?: P.WorkspaceConfigState["slashCommands"],
+	): Promise<P.WorkspaceConfigState> {
 		// Git 等调用方可返回 Windows 正斜杠路径；与 manager 同样规范化，避免漏选真实 resident 扩展目录。
 		const resolvedCwd = path.resolve(cwd);
 		const hosted = Array.from(this.#hosted.values()).find(item => path.resolve(item.record.cwd) === resolvedCwd);
-		const settings = hosted?.record.settings ?? (await Settings.loadReadOnly({ cwd: resolvedCwd }));
-		const commands = hosted ? await hosted.commands.catalog() : await workspaceCatalog(resolvedCwd, settings);
+		const catalog = await this.#catalog(resolvedCwd);
+		const settings = catalog.settings;
+		const commands = retainedSlashCommands
+			? []
+			: hosted
+				? await hosted.commands.catalog()
+				: await workspaceCatalog(resolvedCwd, settings);
 		// 既有 wire schema 没有 aliases；将实际注册别名投影成同行，不能丢掉原生补全入口。
-		const slashCommands = commands.flatMap(command =>
-			[command.name, ...(command.aliases ?? [])].map(name => ({
-				name,
-				description: command.description ?? "",
-				...(command.inputHint ? { inputHint: command.inputHint } : {}),
-				source: command.source === "builtin" ? ("builtin" as const) : ("custom" as const),
-			})),
-		);
-		const models = hosted?.record.session.modelRegistry.getAvailable() ?? [];
-		const selected = this.configuration.getDefaultModelSelection();
+		const slashCommands =
+			retainedSlashCommands ??
+			commands.flatMap(command =>
+				[command.name, ...(command.aliases ?? [])].map(name => ({
+					name,
+					description: command.description ?? "",
+					...(command.inputHint ? { inputHint: command.inputHint } : {}),
+					source: command.source === "builtin" ? ("builtin" as const) : ("custom" as const),
+				})),
+			);
+		const models = catalog.modelRegistry.getAvailable();
+		const source = createModelBrowserSource(settings);
+		const selected = resolveRoleAssignments(source, models, models).default;
 		return {
 			slashCommands,
 			configOptions: [
@@ -1023,15 +1144,27 @@ export class ZCodeServer {
 					id: "model",
 					name: "Model",
 					type: "select",
-					currentValue: selected ? `${selected.providerId}/${selected.modelId}` : "",
+					currentValue: selected ? `${selected.model.provider}/${selected.model.id}` : "",
 					options: models.map(model => ({
 						value: `${model.provider}/${model.id}`,
 						name: model.name,
 						modelProviderId: model.provider,
+						modelProviderName: model.provider,
+						modelDefaultThoughtLevel: toZCodeReasoningLevel(
+							!model.reasoning
+								? "off"
+								: selected?.model.provider === model.provider && selected.model.id === model.id
+									? selected.thinkingLevel
+									: source.defaultThinkingLevel,
+						),
 						origin: "native",
-						modelThoughtLevels: this.configuration
-							.getReasoningLevels(model.provider, model.id)
-							?.map(toZCodeReasoningLevel),
+						modelThoughtLevels: (
+							this.configuration.getReasoningLevels(model.provider, model.id) ?? [
+								"off",
+								...(model.reasoning && !model.thinking?.unverified ? ["auto"] : []),
+								...getSupportedEfforts(model),
+							]
+						).map(toZCodeReasoningLevel),
 					})),
 				},
 				{
@@ -2379,6 +2512,7 @@ export class ZCodeServer {
 					connectionId: params.connectionId,
 					topic: params.topic,
 				});
+				if (params.topic.startsWith("workspace-config/")) this.#watchCatalogs();
 				if (permissionRoot) {
 					const owners = this.#permissionOwners.get(params.connectionId) ?? new Set<string>();
 					owners.add(permissionRoot);
@@ -2632,6 +2766,16 @@ export class ZCodeServer {
 		this.#subscriptions.clear();
 		this.#connections.clear();
 		this.#closedConnections.clear();
+		clearInterval(this.#catalogTimer);
+		await this.#catalogRefresh;
+		await Promise.allSettled(this.#catalogs.values());
+		await Promise.allSettled(
+			Array.from(this.#catalogRecords.values(), record => record.modelRegistry.awaitBackgroundRefresh()),
+		);
+		for (const dispose of this.#catalogDisposers) dispose();
+		this.#catalogDisposers.clear();
+		this.#catalogRecords.clear();
+		this.#catalogs.clear();
 		this.#stopBackup();
 		// 取消审批会同步发布投影，订阅者仍需查询 workflow journal；
 		// 必须先取消自有交互并卸载订阅，再关闭这些订阅依赖的资源。

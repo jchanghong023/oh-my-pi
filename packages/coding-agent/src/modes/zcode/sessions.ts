@@ -892,14 +892,18 @@ export class ZCodeSessionManager {
 	 * Ledger scans may outlive their list snapshot. Pin each journal read against local deletion;
 	 * a completed deletion is absence, not unreadable history. Real read/delete failures still reject.
 	 */
-	async readCommandEntries(id: string): Promise<readonly SessionEntry[] | undefined> {
+	async readCommandEntries(info: Pick<SessionInfo, "id" | "path">): Promise<readonly SessionEntry[] | undefined> {
+		const { id } = info;
 		const deletion = this.#deletions.get(id);
 		if (deletion) {
 			await deletion;
 			return undefined;
 		}
 		if (this.#deleted.has(id)) return undefined;
-		const read = this.readEntries(id);
+		// 账本已持有本管理器列举的可信路径；逐项按 ID 查找会重复全局枚举，阻塞首次创建。
+		const read = loadEntriesFromFile(info.path, this.#storage, { throwIfMissing: true }).then(entries =>
+			entries.filter((entry): entry is SessionEntry => entry.type !== "session"),
+		);
 		let readers = this.#commandJournalReads.get(id);
 		if (!readers) {
 			readers = new Set();

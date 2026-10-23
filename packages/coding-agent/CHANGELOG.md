@@ -13,6 +13,7 @@
 
 ### Changed
 
+- ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Compact mode now keeps user requests and assistant prose from compacted history, without replaying its tools, thinking, notifications, or other historical UI; recent activity and full-history viewers are unchanged.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
@@ -22,6 +23,7 @@
 ### Fixed
 
 - Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
+- Avoid repeatedly enumerating every native session when reading ZCode command receipts, reducing startup and first-message delays while preserving live and cold receipt lookup.
 - Allow ZCode profile switching after a completed session deletion, reject incompatible concurrent resume options, and retain structured Team configuration error codes and save receipts on the wire.
 - Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log, native Goal and ZCode coverage and leaving upstream RPC behavior unchanged.
 - Keep native ZCode subagent detail sessions read-only across live and cold history, retain each child's configured model/thinking/tools, and hydrate late subscribers from the owning native stream without starting a second runtime.

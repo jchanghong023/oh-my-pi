@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { Agent, type AgentUserMessage } from "@oh-my-pi/pi-agent-core";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -41,13 +41,11 @@ async function fixture() {
 			active && managers.some(item => item.getSessionId() === id)
 				? { session: { sessionManager: managers.find(item => item.getSessionId() === id)!, isStreaming: false } }
 				: undefined,
-		list: async () => managers.map(item => ({ id: item.getSessionId() })),
-		readCommandEntries: async (id: string): Promise<readonly SessionEntry[]> => {
-			const source = managers.find(item => item.getSessionId() === id);
-			if (!source) throw new Error("Session not found");
-			return (
-				await loadEntriesFromFile(source.getSessionFile()!, new FileSessionStorage(), { throwIfMissing: true })
-			).filter((entry): entry is SessionEntry => entry.type !== "session");
+		list: async () => managers.map(item => ({ id: item.getSessionId(), path: item.getSessionFile()! })),
+		readCommandEntries: async (info: { id: string; path: string }): Promise<readonly SessionEntry[]> => {
+			return (await loadEntriesFromFile(info.path, new FileSessionStorage(), { throwIfMissing: true })).filter(
+				(entry): entry is SessionEntry => entry.type !== "session",
+			);
 		},
 	};
 	return {
@@ -72,6 +70,40 @@ function accepted(envelope: CommandEnvelope): CommandAck {
 }
 
 describe("ZCode durable command facts", () => {
+	it("recovers a cold create receipt without activating or recreating the produced session", async () => {
+		const { manager, managers, adapter } = await fixture();
+		const destination = SessionManager.create(manager.getCwd(), path.dirname(manager.getSessionFile()!));
+		await destination.ensureOnDisk();
+		managers.push(destination);
+		const envelope: CommandEnvelope = {
+			...command(null, "cold-create"),
+			type: "createSession",
+			payload: { workspaceId: "workspace" },
+		};
+		const result = { type: "createSession" as const, sessionId: destination.getSessionId() };
+		await new ZCodeCommandLedger(adapter).execute(envelope, async () => ({
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 4,
+			result,
+		}));
+		await Promise.all(managers.map(item => item.close()));
+		const owner = new ZCodeSessionManager({
+			// 隔离真实磁盘夹具：默认 agentDir 会额外枚举用户全部历史，
+			// 避免把外部历史耗时和超时后的目录清理竞态引入冷恢复与幂等回归。
+			cwd: manager.getCwd(),
+			sessionDir: path.dirname(manager.getSessionFile()!),
+			agentDir: path.join(manager.getCwd(), "agent"),
+		});
+		const ledger = new ZCodeCommandLedger(owner);
+		expect(
+			await ledger.execute(envelope, async () => {
+				throw new Error("Recovered creation must never execute again");
+			}),
+		).toMatchObject({ status: "duplicate", revisionAtDecision: 4, result });
+		expect(owner.get(destination.getSessionId())).toBeUndefined();
+	});
+
 	it("does not let deletion after the journal list snapshot poison a new create or query", async () => {
 		const { manager, managers, adapter } = await fixture();
 		const retiredId = manager.getSessionId();
@@ -88,7 +120,7 @@ describe("ZCode durable command facts", () => {
 		const ledger = new ZCodeCommandLedger({
 			...adapter,
 			list: async () => snapshot,
-			readCommandEntries: id => owner.readCommandEntries(id),
+			readCommandEntries: info => owner.readCommandEntries(info),
 		});
 		const envelope: CommandEnvelope = {
 			...command(null, "next-draft"),
@@ -106,7 +138,7 @@ describe("ZCode durable command facts", () => {
 		const query = await new ZCodeCommandLedger({
 			...adapter,
 			list: async () => snapshot,
-			readCommandEntries: id => owner.readCommandEntries(id),
+			readCommandEntries: info => owner.readCommandEntries(info),
 		}).query([{ sessionId: null, commandId: envelope.commandId }]);
 		expect(query.results[0]?.result).toMatchObject({ status: "accepted", result });
 	});
@@ -119,18 +151,27 @@ describe("ZCode durable command facts", () => {
 			sessionDir: path.dirname(manager.getSessionFile()!),
 		});
 		await manager.close();
-		const readEntries = owner.readEntries.bind(owner);
+		const info = (await owner.list()).find(item => item.id === id)!;
+		const readText = FileSessionStorage.prototype.readText;
 		const gate = Promise.withResolvers<void>();
-		owner.readEntries = async sessionId => {
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			file: string,
+		) {
 			await gate.promise;
-			return readEntries(sessionId);
-		};
-		const reading = owner.readCommandEntries(id);
-		const deleting = owner.delete(id);
-		gate.resolve();
-		expect(await reading).toBeArray();
-		await deleting;
-		expect(await owner.readCommandEntries(id)).toBeUndefined();
+			return readText.call(this, file);
+		});
+		try {
+			const reading = owner.readCommandEntries(info);
+			const deleting = owner.delete(id);
+			gate.resolve();
+			expect(await reading).toBeArray();
+			await deleting;
+			expect(await owner.readCommandEntries(info)).toBeUndefined();
+		} finally {
+			gate.resolve();
+			readSpy.mockRestore();
+		}
 	});
 
 	it("finishes an admitted read and deletion before recreating the same explicit identity", async () => {
@@ -156,15 +197,19 @@ describe("ZCode durable command facts", () => {
 				disableExtensionDiscovery: true,
 			},
 		});
+		const info = (await owner.list()).find(item => item.id === id)!;
 		const gate = Promise.withResolvers<void>();
-		const readEntries = owner.readEntries.bind(owner);
+		const readText = FileSessionStorage.prototype.readText;
 		const order: string[] = [];
-		owner.readEntries = async sessionId => {
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			file: string,
+		) {
 			await gate.promise;
-			return readEntries(sessionId);
-		};
+			return readText.call(this, file);
+		});
 		try {
-			const reading = owner.readCommandEntries(id).then(entries => {
+			const reading = owner.readCommandEntries(info).then(entries => {
 				order.push("read");
 				return entries;
 			});
@@ -203,6 +248,7 @@ describe("ZCode durable command facts", () => {
 			await foreign.close();
 		} finally {
 			gate.resolve();
+			readSpy.mockRestore();
 			await owner.dispose();
 			// Hosting opens process-wide SQLite caches outside the session manager's lifetime.
 			// Release their Windows file handles before the fixture removes its agent directory.
@@ -221,18 +267,20 @@ describe("ZCode durable command facts", () => {
 			cwd: manager.getCwd(),
 			sessionDir: path.dirname(manager.getSessionFile()!),
 		});
-		owner.readEntries = async () => {
-			throw failure;
-		};
-		const ledger = new ZCodeCommandLedger({
-			...adapter,
-			readCommandEntries: id => owner.readCommandEntries(id),
-		});
-		await expect(
-			ledger.execute(command(manager.getSessionId()), async () => {
-				throw new Error("must not admit after an unreadable journal");
-			}),
-		).rejects.toBe(failure);
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockRejectedValueOnce(failure);
+		try {
+			const ledger = new ZCodeCommandLedger({
+				...adapter,
+				readCommandEntries: info => owner.readCommandEntries(info),
+			});
+			await expect(
+				ledger.execute(command(manager.getSessionId()), async () => {
+					throw new Error("must not admit after an unreadable journal");
+				}),
+			).rejects.toBe(failure);
+		} finally {
+			readSpy.mockRestore();
+		}
 	});
 
 	it.each([

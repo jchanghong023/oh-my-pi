@@ -2283,16 +2283,203 @@ describe("ZCode actual public app-server process", () => {
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
-	test("workspace catalog is available before any conversation without creating history or invoking a model", async () => {
+	test("background native registry discovery publishes into an already open workspace catalog", async () => {
+		await using root = await TempDir.create("@zcode-native-catalog-discovery-");
+		await using config = await fixture(root);
+		const discovered = Promise.withResolvers<void>();
+		const requested = Promise.withResolvers<void>();
+		const endpoint = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (new URL(request.url).pathname !== "/v1/models") return new Response(null, { status: 404 });
+				requested.resolve();
+				await discovered.promise;
+				return Response.json({ data: [{ id: "background-chat" }] });
+			},
+		});
+		try {
+			await fs.appendFile(
+				path.join(config.agentDir, "models.yml"),
+				`  zcode-discovery:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    discovery:\n      type: openai-models-list\n`,
+			);
+			await using peer = new ProcessPeer(config.cwdA, config.env);
+			await peer.ready();
+			const topic = `workspace-config/${config.cwdA}`;
+			await peer.request("v4/conversation/subscribe", {
+				topic,
+				connectionId: "native-background",
+				clientMode: "desktop-continuous",
+				workspace: workspace(config.cwdA),
+			});
+			const initial = await peer.next(
+				frame => frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
+			);
+			expect(JSON.stringify(initial)).not.toContain("zcode-discovery/background-chat");
+			await deadline(requested.promise);
+			discovered.resolve();
+			const notification = await peer.next(
+				frame =>
+					frame.method === "v4/conversation/frame" &&
+					isRecord(frame.params) &&
+					frame.params.topic === topic &&
+					JSON.stringify(frame.params).includes("zcode-discovery/background-chat"),
+			);
+			const wire = workspaceConfigTopicWireFrameSchema.parse(notification.params);
+			if (wire.kind !== "complete" || wire.frame.payload.kind !== "deltas")
+				throw new Error("Background discovery did not publish a native config delta");
+			expect(wire.frame.payload.deltas[0]?.op).toBe("config.updated");
+			expect(config.requests).toHaveLength(0);
+			expect(await peer.eof()).toBe(0);
+		} finally {
+			discovered.resolve();
+			endpoint.stop(true);
+		}
+	}, 120_000);
+
+	test("native workspace models and persisted default role update the existing subscription without Host sources", async () => {
+		await using root = await TempDir.create("@zcode-native-model-catalog-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const topic = `workspace-config/${config.cwdA}`;
+		await peer.request("v4/conversation/subscribe", {
+			topic,
+			connectionId: "native-catalog-hot",
+			clientMode: "desktop-continuous",
+			workspace: workspace(config.cwdA),
+		});
+		const readModelOption = async (expected: string, snapshot = false) => {
+			const frame = await peer.next(item => {
+				if (item.method !== "v4/conversation/frame" || !isRecord(item.params) || item.params.topic !== topic)
+					return false;
+				const wire = workspaceConfigTopicWireFrameSchema.parse(item.params);
+				if (wire.kind !== "complete") return false;
+				const payload = wire.frame.payload;
+				const states =
+					payload.kind === "snapshot" ? [payload.snapshot.config] : payload.deltas.map(delta => delta.config);
+				return (
+					(payload.kind === "snapshot") === snapshot &&
+					states.some(state =>
+						state.configOptions.some(option => option.id === "model" && option.currentValue === expected),
+					)
+				);
+			});
+			const wire = workspaceConfigTopicWireFrameSchema.parse(frame.params);
+			if (wire.kind !== "complete") throw new Error("Expected complete isolated model config frame");
+			const payload = wire.frame.payload;
+			const state = payload.kind === "snapshot" ? payload.snapshot.config : payload.deltas.at(-1)!.config;
+			return state.configOptions.find(option => option.id === "model")!;
+		};
+		const initial = await readModelOption("zcode-fixture/chat-a", true);
+		if (!initial.options) throw new Error("Native model selector did not expose its catalog options");
+		expect(initial.options.map(option => option.value)).toContain("zcode-fixture/chat-b");
+		// 临时会话选 B 不能覆盖 workspace 持久 default=A。
+		const sessionId = await create(peer, config.cwdA, { providerId: model.providerId, modelId: "chat-b" });
+		expect(await peer.request("provider/refreshRegistry", { reason: "native-catalog" })).toEqual({ refreshed: true });
+		expect((await readModelOption("zcode-fixture/chat-a")).currentValue).toBe("zcode-fixture/chat-a");
+		const rejected = await peer.requestFrame("provider/updateAccountConfig", {
+			revision: "1",
+			basedOnZCodeBuiltinRevision: "1",
+			providers: {},
+			states: {},
+		});
+		expect(rejected.error).toMatchObject({ message: "Account config requires matching built-in source" });
+		// 外部原生配置写入必须推送 config.updated，不依赖重连或切换会话。
+		await fs.writeFile(
+			path.join(config.agentDir, "config.yml"),
+			"modelRoles:\n  default: zcode-fixture/chat-b\ntools:\n  xdev: false\n",
+		);
+		expect((await readModelOption("zcode-fixture/chat-b")).currentValue).toBe("zcode-fixture/chat-b");
+		const modelsPath = path.join(config.agentDir, "models.yml");
+		await fs.appendFile(modelsPath, "      - id: chat-hot\n        reasoning: false\n");
+		const changed = await peer.next(
+			item =>
+				item.method === "v4/conversation/frame" &&
+				isRecord(item.params) &&
+				item.params.topic === topic &&
+				JSON.stringify(item.params).includes("zcode-fixture/chat-hot"),
+		);
+		const wire = workspaceConfigTopicWireFrameSchema.parse(changed.params);
+		expect(wire.kind).toBe("complete");
+		expect(JSON.stringify(wire)).toContain("config.updated");
+		const current = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+			await peer.request("session/read", { sessionId }),
+		);
+		expect(current.settings.model.current).toMatchObject({ providerId: model.providerId, modelId: "chat-b" });
+		expect(config.requests).toHaveLength(0);
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
+	test("workspace catalog stays native before and after resident session initialization without changing its default", async () => {
 		await using root = await TempDir.create("@zcode-workspace-catalog-");
 		await using config = await fixture(root);
+		const env = { ...config.env, OMP_OFFLINE: "1" };
+		await fs.appendFile(path.join(config.agentDir, "models.yml"), "  azure:\n    apiKey: isolated-catalog-key\n");
+		const bundled = getBundledModels("azure");
+		expect(bundled.length).toBeGreaterThan(0);
+		const staleModels = bundled.map(candidate => buildModel({ ...candidate, name: `Stale cache: ${candidate.id}` }));
+		writeModelCache(
+			"azure",
+			1,
+			staleModels,
+			false,
+			fingerprintStaticModels(bundled),
+			getModelDbPath(config.agentDir),
+			bundled,
+		);
+		// 旧构造快路径保留同一批 id 的过期名称；完整离线解析必须应用原生 additive 缓存规则。
+		// 用相同隔离配置下的真实 registry 作基准，不能靠行数相等证明 GUI/CLI 元数据一致。
+		const reference = Bun.spawn(
+			[
+				process.execPath,
+				"--eval",
+				`
+					import { ModelRegistry } from ${JSON.stringify(import.meta.resolve("../../src/config/model-registry.ts"))};
+					import { discoverAuthStorage } from ${JSON.stringify(import.meta.resolve("../../src/sdk.ts"))};
+					const auth = await discoverAuthStorage(${JSON.stringify(config.agentDir)}, {
+						cwd: ${JSON.stringify(config.cwdA)}, offline: true,
+					});
+					try {
+						const registry = new ModelRegistry(auth, ${JSON.stringify(path.join(config.agentDir, "models.yml"))}, {
+							cacheDbPath: ${JSON.stringify(getModelDbPath(config.agentDir))},
+						});
+						const constructorRows = registry.getAvailableForProviders(new Set(["azure"]))
+							.map(model => ({ value: model.provider + "/" + model.id, name: model.name }))
+							.sort((a, b) => a.value.localeCompare(b.value));
+						await registry.refresh("offline");
+						const offlineRows = registry.getAvailableForProviders(new Set(["azure"]))
+							.map(model => ({ value: model.provider + "/" + model.id, name: model.name }))
+							.sort((a, b) => a.value.localeCompare(b.value));
+						process.stdout.write(JSON.stringify({ constructorRows, offlineRows }));
+					} finally {
+						auth.close();
+					}
+				`,
+			],
+			{ cwd: config.cwdA, env, stdout: "pipe", stderr: "pipe" },
+		);
+		const [referenceStdout, referenceStderr, referenceExit] = await deadline(
+			Promise.all([new Response(reference.stdout).text(), new Response(reference.stderr).text(), reference.exited]),
+		);
+		expect({ exit: referenceExit, stderr: referenceExit === 0 ? "" : referenceStderr }).toEqual({
+			exit: 0,
+			stderr: "",
+		});
+		const { constructorRows, offlineRows } = JSON.parse(referenceStdout) as {
+			constructorRows: Array<{ value: string; name: string }>;
+			offlineRows: Array<{ value: string; name: string }>;
+		};
+		expect(constructorRows.map(row => row.value)).toEqual(offlineRows.map(row => row.value));
+		expect(offlineRows.length).toBeGreaterThan(0);
+		expect(constructorRows).not.toEqual(offlineRows);
 		const skillDir = path.join(config.cwdA, ".omp", "skills", "zcode-process-fixture");
 		await fs.mkdir(skillDir, { recursive: true });
 		await fs.writeFile(
 			path.join(skillDir, "SKILL.md"),
 			"---\nname: zcode-process-fixture\ndescription: Isolated public process catalog fixture\n---\nReturn the isolated fixture marker.\n",
 		);
-		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await using peer = new ProcessPeer(config.cwdA, env);
 		await peer.ready();
 		const before = await peer.request("session/list", { workspace: workspace(config.cwdA) });
 		const journalFilesBefore = (await fs.readdir(config.configRoot, { recursive: true }))
@@ -2312,8 +2499,27 @@ describe("ZCode actual public app-server process", () => {
 		);
 		const physical = workspaceConfigTopicWireFrameSchema.parse(notification.params);
 		if (physical.kind !== "complete" || physical.frame.payload.kind !== "snapshot") {
-			throw new Error("Isolated two-model workspace catalog did not produce a complete initial snapshot");
+			throw new Error("Isolated workspace catalog did not produce a complete initial snapshot");
 		}
+		const modelOption = physical.frame.payload.snapshot.config.configOptions.find(option => option.id === "model");
+		expect(modelOption?.currentValue).toBe("zcode-fixture/chat-a");
+		expect(modelOption?.options).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					value: "zcode-fixture/chat-a",
+					modelProviderId: "zcode-fixture",
+					modelProviderName: "zcode-fixture",
+					origin: "native",
+					modelThoughtLevels: ["disabled"],
+				}),
+				expect.objectContaining({ value: "zcode-fixture/chat-b" }),
+			]),
+		);
+		const workspaceRows = (modelOption?.options ?? [])
+			.filter(option => option.modelProviderId === "azure")
+			.map(option => ({ value: option.value, name: option.name }))
+			.sort((a, b) => a.value.localeCompare(b.value));
+		expect(workspaceRows).toEqual(offlineRows);
 		const names = physical.frame.payload.snapshot.config.slashCommands.map(item => item.name.replace(/^\//, ""));
 		for (const name of [
 			"wiki",
@@ -2360,6 +2566,41 @@ describe("ZCode actual public app-server process", () => {
 			(await fs.readdir(config.configRoot, { recursive: true })).filter(file => file.endsWith(".jsonl")).sort(),
 		).toEqual(journalFilesBefore);
 		expect(config.requests).toHaveLength(0);
+		// resident registry 优先于 workspace-only registry；预热后的 SDK 目录不能退回构造器缓存。
+		// 会话临时选 B，workspace default 和完整模型元数据仍应与创建会话前一致。
+		const sessionId = await create(peer, config.cwdA, { providerId: model.providerId, modelId: "chat-b" });
+		expect(
+			await peer.request("v4/conversation/subscribe", {
+				topic,
+				connectionId: "resident-session-catalog",
+				clientMode: "desktop-continuous",
+				workspace: workspace(config.cwdA),
+			}),
+		).toMatchObject({ ack: { mode: "snapshot" } });
+		const residentNotification = await peer.next(frame => {
+			if (frame.method !== "v4/conversation/frame" || !isRecord(frame.params) || frame.params.topic !== topic)
+				return false;
+			const wire = workspaceConfigTopicWireFrameSchema.parse(frame.params);
+			return wire.kind === "complete" && wire.frame.payload.kind === "snapshot";
+		});
+		const resident = workspaceConfigTopicWireFrameSchema.parse(residentNotification.params);
+		if (resident.kind !== "complete" || resident.frame.payload.kind !== "snapshot") {
+			throw new Error("Resident workspace catalog did not produce a complete snapshot");
+		}
+		const residentModelOption = resident.frame.payload.snapshot.config.configOptions.find(
+			option => option.id === "model",
+		);
+		expect(residentModelOption?.currentValue).toBe("zcode-fixture/chat-a");
+		expect(residentModelOption?.options).toEqual(modelOption?.options);
+		const residentRows = (residentModelOption?.options ?? [])
+			.filter(option => option.modelProviderId === "azure")
+			.map(option => ({ value: option.value, name: option.name }))
+			.sort((a, b) => a.value.localeCompare(b.value));
+		expect(residentRows).toEqual(offlineRows);
+		const session = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+			await peer.request("session/read", { sessionId }),
+		);
+		expect(session.settings.model.current).toMatchObject({ providerId: model.providerId, modelId: "chat-b" });
 	}, 90_000);
 
 	test("public model IO preference reaches live and future matching sessions without capturing other workspaces", async () => {

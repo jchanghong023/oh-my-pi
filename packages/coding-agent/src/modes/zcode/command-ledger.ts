@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { SessionEntry } from "../../session/session-entries";
 import type { SessionManager } from "../../session/session-manager";
+import type { SessionInfo } from "../../session/session-listing";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
 import type { CommandAck, CommandEnvelope, CommandKey, CommandResult } from "./schema";
 
@@ -9,8 +10,8 @@ const PRODUCED_TYPE = "zcode_produced_session";
 
 interface LedgerManager {
 	get(id: string): { session: { sessionManager: SessionManager; isStreaming: boolean } } | undefined;
-	list(): Promise<readonly { id: string }[]>;
-	readCommandEntries(id: string): Promise<readonly SessionEntry[] | undefined>;
+	list(): Promise<readonly Pick<SessionInfo, "id" | "path">[]>;
+	readCommandEntries(info: Pick<SessionInfo, "id" | "path">): Promise<readonly SessionEntry[] | undefined>;
 }
 interface Fact {
 	version: 1;
@@ -222,7 +223,7 @@ export class ZCodeCommandLedger {
 		let produced: Fact | undefined;
 		let admission: Fact | undefined;
 		for (const info of ordered) {
-			const entries = await this.manager.readCommandEntries(info.id);
+			const entries = await this.manager.readCommandEntries(info);
 			if (!entries) continue; // The session owner deleted this journal after the list snapshot.
 			for (let index = entries.length - 1; index >= 0; index--) {
 				const entry = entries[index];

@@ -332,6 +332,7 @@ export class ZCodeProviderConfiguration {
 		try {
 			const registry = new ModelRegistry(auth, undefined, { settings });
 			await this.prepare(cwd, settings, registry);
+			await registry.hydrateCredentialScopedModelCaches();
 			return registry.getAvailable();
 		} finally {
 			auth.close();
@@ -467,6 +468,9 @@ export class ZCodeProviderConfiguration {
 	updateAccountConfig(input: unknown) {
 		return this.#exclusive(async () => {
 			const next = zcodeProviderUpdateAccountConfigParamsSchema.parse(input);
+			// 退役 Host 源后保留明确错误，不被通用源解析错误包裹，也不悄悄接纳空账号。
+			if (!this.#env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE?.trim())
+				throw new Error("Account config requires matching built-in source");
 			if (this.#account?.revision === next.revision) {
 				if (JSON.stringify(this.#account) !== JSON.stringify(next)) throw new Error("Account revision conflict");
 				return {

@@ -393,10 +393,11 @@ sequenceDiagram
 
 ### Skill 与 Provider 管理桥接
 
-- ZCode 的 Skill 与 Provider 管理在 OMP 现有能力范围内尽力完整适配，不再作为独立管理面整体排除。仅修改 ZCode 协议适配层与消费侧，复用原生 Settings、Skill 发现／刷新及 Provider registry／认证／请求 API，不改变 OMP 核心执行语义，不建立平行配置或业务状态。
+- Skill 管理在 OMP 现有能力范围内尽力完整适配；Provider 只保留原生目录、就绪事实、模型选择、role 配置与连接测试。复用原生 Settings、Skill 发现／刷新及 Provider registry／认证／请求 API，不改变 OMP 核心执行语义，不建立平行配置或业务状态。下述 fork 桌面模型认证入口退役是明确产品取舍，不是因能力缺失隐藏管理面。
 - Skill 页面以原生发现清单与有效启用状态为事实源；启停通过原生已有配置入口保存，刷新复用原生发现与会话资源刷新。清单能力以可选 `toggleScope:"profile"` 明确原生只能保存当前 profile 用户层；UI 必须提示影响该 profile 下工作区，并发送 `scope:"user"`，不得根据资源的 workspace 发现范围伪装工作区持久化。字段缺省保持旧 Agent 的 scope 语义，显式原生 workspace 写请求明确拒绝。仅原生已有安全业务入口支持的删除／复制才提供真实操作；缺少等价 API 时在现有页面明确返回不支持，不擅自操作原 ZCode 技能目录或删除共享／插件资源。
 - `OMP_SKILLS_DIR` 以原生 catalog 的真实来源元数据展示 `Shared`、执行端和只读路径，不根据路径猜测来源、不另行扫描。共享技能仍沿用原生命名与优先级；启停只写当前 profile 设置，不修改共享源文件。尚无原生安全 API 的新建、导入、删除、复制或同步 UI 必须保留可见，禁用并说明原因，不执行旧 ZCode 目录操作。目录环境变量只展示执行端实际值，不修改系统环境或静默重启 Agent。
-- Provider 继续复用已有账户配置同步、registry 刷新与会话模型切换，补齐现有 `provider/testModelConnectivity` 调用，使用目标 workspace 下实际解析的模型及认证进行最小真实请求；失败保留结构化原因，不能只检查配置存在或伪造成功。连接测试不改变默认模型、已有会话或持久凭据。
+- fork 桌面不激活 Host 的账户配置同步、provider 源注入或其触发的 registry 刷新；模型与认证唯一来自同一配置根、运行 profile 和有效环境的 OMP 原生 registry／Settings／auth 链。GUI 取消所有模型 Provider 登录、OAuth、API key 录入、登出及登录提示入口，不增加凭据写入协议；ZCode 产品账号不在本次取消范围。OMP 的 `provider-config` 老 Host 兼容实现保留，但不由本 fork 桌面调用，也不能保留一条隐藏的桌面注入路径。
+- `provider/testModelConnectivity` 保留，使用目标 workspace 下原生实际解析的模型及原生凭据进行最小真实请求；原生支持的内置免凭据模型直接沿其原生请求链执行，不要求补 key。确实需要凭据而缺失、认证失败及不可达须保留结构化原因，不能注入测试凭据、只检查配置存在或伪造成功。连接测试不改变默认模型、已有会话或持久凭据。
 - 管理操作保持 workspaceIdentity／远端路由、profile 与请求代际归属；只读清单不启动会话，不把 Host 的旧 `.zcode/cli` 配置当成 OMP 配置。验证仅使用隔离本地模型和临时 Skill，分别证明真实持久启停／刷新与 Provider 成功／认证失败／不可达；不自动调用真实模型。MCP 等其他管理面不随本需求扩大。
 
 ### Team、Wiki 与 Repo 核心界面
@@ -404,7 +405,7 @@ sequenceDiagram
 - Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；完整合同见 [Team 2.9–2.10](team.md#210-team-动态运行视图与交互关系新增需求未验收)。
 - Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，CAS 与离线双写合同不变。
 - Wiki 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Wiki 专页](fork.md#zcode-wiki-专页新增需求未实现未验收)；Repo 专页承接全部 TUI 维护操作及原生查询，权威合同见 [Repo 专页](repo-index.md#zcode-repo-专页新增需求未实现未验收)。两者左侧入口位于自动化下方，相邻展示。
-- OMP 已尽力适配但仍无法实现的功能，ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Wiki／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因。
+- 除本次明确取消的模型 Provider 认证界面及操作外，OMP 已尽力适配但仍无法实现的功能，其 ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Wiki／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因；此例外不扩大到 Skill、MCP 或其他管理面。
 - Wiki／Repo 严格只增加可选能力、独立方法／通知和 schema，不修改既有 ZCode 协议的字段、方法、通知、信封、版本或语义，不改 vendor 基线。Host 只桥接、UI 只展示，管理与查询仍由各自原生索引服务拥有。新增进度、取消和错误也属于扩展，不借修改旧聊天／会话合同承载；旧客户端与缺少扩展的旧 Agent 保持既有行为。
 
 ## 命令与技能
@@ -450,6 +451,33 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 保存单个用户 role 由 Settings 的现有文件锁、比较并交换及原子写入统一负责；只改变目标 role，保留其他角色、配置字段及 YAML 注释。并发冲突不得改写文件，非法配置继续隔离备份并显式失败。验收覆盖已有角色更新、新角色添加、取消角色和并发外部编辑后的注释与字段保留，并通过真实 GUI 保存及重启读回。
 
 模型筛选和可用性统一跟随上游，不新增 fork 专有禁用策略。
+
+### 原生模型目录与 GUI 投影（v2，未验收）
+
+- 同一配置根、运行 profile、cwd 和有效环境下，GUI 模型目录必须严格等于原生 TUI 可用目录，沿用原生筛选与认证裁决；Host 账户、旧 ZCode provider registry 与 GUI 不得增删、合并或重新排序出第二份事实。
+- 原生 `getAvailable()` 包含 OMP 源码内置且无需登录或配置的可用模型；这些模型必须原样出现在 GUI。GUI、Renderer 与 Host 不得将「无 key／无用户模型配置」等同未就绪，不得以旧 `providerRuntime.modelSelection`、账户登录或配置存在作为额外启动／模型过滤门禁；ready 只反映原生事实，需凭据模型仍遵守原生认证判定。
+- GUI 以 `workspace-config` 的 `configOptions` 中 `id:"model"` 且选项非空的原生模型配置为目录来源，完整消费 provider 身份与显示名、支持的思考档位及默认思考档位；不按模型名称猜 provider 或能力。`currentValue` 必须是 OMP 原生 `default` role 真实解析出的模型身份，不能取目录首项或旧 Host 默认值。未手选的新会话初值跟随该原生默认；已存在会话保留原生会话临时模型及档位。
+- `workspace-config` 由 app-server 投影发布，registry、Settings、认证或 role 有效事实变化后重新解析并发布；GUI 热更新目录、档位与默认值，迟到的旧 workspace／profile／连接代际响应不得覆盖新事实。presentation 的 mode／命令恢复不得清空已收到的模型投影。
+- 非空原生模型配置来源具有绝对优先级；来源缺失或选项为空时，仅沿当前已有机制显示真实空态或等待态，不回落 Host 注入目录，不调用账户同步、注入 provider 源或新增目录查询协议，不捏造模型或就绪状态。
+- 原生 registry／Settings 是模型、role 与认证事实的唯一 owner；app-server 只投影，Host 只路由／保留已接受投影，GUI 只消费和提交既有模型操作。桌面与手机向同一 owner 投递，分别保留 desktop-continuous 与 web-remote-replayable 的恢复语义。
+
+```mermaid
+sequenceDiagram
+    participant U as Desktop / Mobile GUI
+    participant H as Window Host / attachment 路由
+    participant B as OMP app-server 投影
+    participant O as OMP registry / Settings / native auth
+    U->>H: 既有模型选择 / role 保存 / 连接测试
+    H->>B: 按 workspace、profile、代际路由
+    B->>O: 调用原生操作，不注入账户或凭据
+    O->>O: 解析真实模型、认证、default role 与档位
+    O-->>B: 原生结果 / 有效事实变化
+    B-->>H: workspace-config 模型投影
+    H-->>U: 按各 attachment 的 delivery profile 投递
+    Note over U,O: 无模型登录 GUI、无 key 写协议、无第二份模型 owner
+```
+
+- 验收须对比同一 profile 的真实 TUI 与 GUI 目录、provider 名、档位、默认档位及 default role 解析初值；覆盖非空原生源绝对优先、无源真实空态／等待态且不回落 Host 注入目录、role 保存后的热更新、空目录／缺凭据／不可达、连接测试不改凭据，以及桌面／手机同 owner 与迟到结果隔离。仅需求确认不构成实现或验证通过。
 
 ### 多 profile、多 role 与临时模型界面
 
