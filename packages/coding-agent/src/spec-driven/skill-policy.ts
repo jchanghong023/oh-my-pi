@@ -83,7 +83,6 @@ export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "h
 	return (
 		skill.hide === true &&
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER ||
-			skill.source === "bundled-openspec" ||
 			skill.source === "bundled-superpowers" ||
 			skill.source === "bundled-jch")
 	);

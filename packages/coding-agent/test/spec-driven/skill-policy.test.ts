@@ -29,12 +29,6 @@ import { Settings } from "../../src/config/settings";
 import type { ToolSession } from "../../src/tools";
 
 const handler = new SkillProtocolHandler();
-// Keep tests runnable against the pre-cutover loader while exercising the approved signature.
-const loadControlledSkill = loadSpecDrivenSkill as (
-	source: "openspec" | "superpowers" | "jch",
-	name: string,
-	options?: { role?: "requirements" | "solution" | "planner" | "executor" | "reviewer" },
-) => Promise<Skill>;
 const temporary: string[] = [];
 afterEach(async () => {
 	resetActiveSkillsForTests();
@@ -150,7 +144,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("opens hidden Grill-me and its metadata only after explicit current-branch invocation", async () => {
-		const skill = await loadControlledSkill("jch", "jch-grill-me");
+		const skill = await loadSpecDrivenSkill("jch", "jch-grill-me");
 		setActiveSkills([skill]);
 		expect(await handler.complete()).toEqual([]);
 		const url = parseInternalUrl("skill://jch-grill-me");
@@ -169,7 +163,7 @@ describe("pinned skill discovery and access", () => {
 
 	it("resolves adapted SDD references and scripts inside the granted effective branch, never the ordinary tree", async () => {
 		const ordinary = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
-		const effective = await loadControlledSkill("superpowers", ordinary.name, { role: "executor" });
+		const effective = await loadSpecDrivenSkill("superpowers", ordinary.name, { role: "executor" });
 		expect(effective.filePath).not.toBe(ordinary.filePath);
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
@@ -214,7 +208,7 @@ describe("pinned skill discovery and access", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated(),
 		};
-		const allowed = await loadControlledSkill("jch", "jch-grill-me", { role: "requirements" });
+		const allowed = await loadSpecDrivenSkill("jch", "jch-grill-me", { role: "requirements" });
 		const endRequirements = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: [allowed.name] });
 		const revoke = grantSpecSkillAccess(session, allowed);
 		const url = parseInternalUrl(`skill://${allowed.name}`);
@@ -233,7 +227,7 @@ describe("pinned skill discovery and access", () => {
 					["superpowers", "writing-plans"],
 					["superpowers", "subagent-driven-development"],
 				] as const) {
-					await expect(loadControlledSkill(source, name, { role: "solution" })).rejects.toThrow();
+					await expect(loadSpecDrivenSkill(source, name, { role: "solution" })).rejects.toThrow();
 				}
 				await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
 					SkillAccessDeniedError,
@@ -361,7 +355,7 @@ describe("pinned skill discovery and access", () => {
 		const skill = await fixture();
 		const ordinary = { ...skill, source: "custom:project", hide: false };
 		const scope = {};
-		const end = bindSpecSkillPolicy(scope, { phase: "requirements", allowedSkills: ["openspec-explore"] });
+		const end = bindSpecSkillPolicy(scope, { phase: "requirements", allowedSkills: ["jch-grill-me"] });
 		await fs.rm(skill.filePath);
 		try {
 			await expect(buildSkillPromptMessage(ordinary, { args: "" }, "user", { scope })).rejects.toBeInstanceOf(
@@ -388,7 +382,7 @@ describe("pinned skill discovery and access", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated(),
 		};
-		const end = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: ["openspec-explore"] });
+		const end = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: ["jch-grill-me"] });
 		try {
 			for (const skill of skills) {
 				expect(skill.hide).not.toBe(true);
@@ -425,7 +419,7 @@ describe("pinned skill discovery and access", () => {
 			expect(failure).toBeInstanceOf(Error);
 			for (const name of [pinned.name, custom.name]) expect((failure as Error).message).not.toContain(name);
 			await expect(
-				handler.resolve(parseInternalUrl("skill://openspec-explore"), { skills: [] }),
+				handler.resolve(parseInternalUrl("skill://brainstorming"), { skills: [] }),
 			).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			expect(mcp).toHaveBeenCalledTimes(1);
 		} finally {

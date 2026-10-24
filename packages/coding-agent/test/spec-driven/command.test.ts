@@ -255,6 +255,28 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 }
 
 describe("/spec shared command surface", () => {
+	it("refuses independent OpenSpec maintenance while a strict workflow owns approvals, including pause", async () => {
+		const f = fixture();
+		const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "opsx-sync")!;
+		const parsed = { name: "opsx-sync", args: "result-change", text: "/opsx-sync result-change" };
+		try {
+			await f.invoke("start result-change 展示结果");
+			await f.settle();
+			expect(f.controller.status().phase).toBe("awaiting-specification");
+			expect(await command.handle!(parsed, f.host)).toEqual({ consumed: true, failed: true });
+			await f.invoke("pause");
+			expect(await command.handle!(parsed, f.host)).toEqual({ consumed: true, failed: true });
+			expect(f.controller.status().specification?.version).toBe("spec-v1");
+			expect(f.controller.status().phase).toBe("awaiting-specification");
+			expect(f.calls).not.toContain("plan");
+			await f.invoke("cancel");
+			const independent = await command.handle!(parsed, f.host);
+			expect(independent && "prompt" in independent).toBe(true);
+		} finally {
+			await f.dispose();
+		}
+	});
+
 	it("is discovered once, has headless dispatch and provides native subcommand completion", async () => {
 		expect(BUILTIN_SLASH_COMMANDS_INTERNAL.filter(item => item.name === "spec")).toHaveLength(1);
 		expect(BUILTIN_SLASH_COMMAND_DEFS.find(item => item.name === "spec")?.allowArgs).toBe(true);

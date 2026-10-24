@@ -1550,8 +1550,8 @@ describe("spec-driven actual OMP public entry", () => {
 				const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
 					await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: session }),
 				);
-				const entry = catalog.skills.find(skill => skill.name === "openspec-explore");
-				if (!entry) throw new Error("Packaged OpenSpec skill unavailable through public catalog");
+				const entry = catalog.skills.find(skill => skill.name === "brainstorming");
+				if (!entry) throw new Error("Packaged Superpowers skill unavailable through public catalog");
 				resourceRoot = path.resolve(entry.path, "../../../..");
 				expect((await fs.realpath(resourceRoot)).startsWith(await fs.realpath(config.root))).toBe(true);
 			}

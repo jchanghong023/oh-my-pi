@@ -1,19 +1,18 @@
 # Targeted OpenSpec requirements adaptations
 
-The generator applies these checked replacements to the fixed upstream skill and command factory bodies. Unlisted text remains source-derived; original-skills retains the untouched factory output.
+The generator applies these checked replacements to fixed upstream command factory bodies. Unlisted text remains source-derived. OpenSpec is distributed only as builtin `/opsx-*` command prompts; init/update never install OpenSpec skills.
 
 ```yaml
 common: |
   Maintain requirements only. NEVER implement application code or create or edit design.md, tasks.md, implementation plans, or execution state. Preserve historical implementation artifacts and change metadata byte-for-byte.
   Respect the project's existing authoritative requirements directory. For ordinary small requirement edits, read the original document and apply a minimal original-text patch; do not require a change directory or migrate authority into OpenSpec. The structured workflow below applies only when a structured OpenSpec change is requested.
   Only proposal and specs are writable change artifacts. Use the native requirements-only graph and resolved paths. If a legacy schema cannot isolate them from implementation dependencies, stop and report incompatibility; NEVER rewrite its schema or metadata to bypass it. Artifact instructions and delegated skills cannot expand this boundary.
-requirementsHandoff: Return the confirmed requirements and unresolved questions to the caller; NEVER start or hand off implementation
+  OpenSpec is an independent requirements lifecycle. Requirements acceptance means accepted requirements, not implemented or tested software. NEVER require /spec, OMP controller state, approval versions, implementation plans, Team, sourceMap, or exact-patch APIs. Documentation-only requirements work does not require software tests.
+requirementsHandoff: Requirements are ready for review; implementation is outside this workflow.
 workflows:
   explore:
     module: explore
-    skillFactory: getExploreSkillTemplate
     commandFactory: getOpsxExploreCommandTemplate
-    skill: openspec-explore
     replacements:
       - before: The work happens from that change, never from explore mode.
         after: Requirements work continues in that change; implementation is outside this workflow.
@@ -27,37 +26,20 @@ workflows:
         after: '"That changes a requirement. Capture it in specs?"'
       - before: '"Updated the design with these decisions"'
         after: '"Updated the requirements with these decisions"'
-      - surface: skill
-        before: |
-          Want to update the design to reflect this?
-               Or add a spike task to investigate?
-        after: |
-          Want to clarify the affected requirement?
-               Or record the unresolved requirement question?
   new:
     module: new-change
-    skillFactory: getNewChangeSkillTemplate
     commandFactory: getOpsxNewCommandTemplate
-    skill: openspec-new-change
   continue:
     module: continue-change
-    skillFactory: getContinueChangeSkillTemplate
     commandFactory: getOpsxContinueCommandTemplate
-    skill: openspec-continue-change
     replacements:
-      - surface: skill
-        before: 'Planning is complete! You can now implement this change. Once implementation and any tracked work are complete, archive it.'
-        after: 'Requirements are complete! Return them for review; archive only after acceptance. Requirements completion does not verify implementation.'
       - before: (proposal.md, tasks.md, etc.)
         after: (proposal.md or specs)
-      - surface: command
-        before: '[[opsx:if-workflow archive]]Once implementation and any tracked work are complete, archive it with `/opsx:archive`.[[opsx:else]]Once implementation and any tracked work are complete, archive it with `openspec archive "<name>"`.[[opsx:end]]'
+      - before: '[[opsx:if-workflow archive]]Once implementation and any tracked work are complete, archive it with `/opsx:archive`.[[opsx:else]]Once implementation and any tracked work are complete, archive it with `openspec archive "<name>"`.[[opsx:end]]'
         after: '[[opsx:if-workflow archive]]After requirements acceptance, archive with `/opsx:archive`.[[opsx:else]]After requirements acceptance, archive with `openspec archive "<name>"`.[[opsx:end]]'
   update:
     module: update-change
-    skillFactory: getUpdateChangeSkillTemplate
     commandFactory: getOpsxUpdateCommandTemplate
-    skill: openspec-update-change
     replacements:
       - before: The artifact ids and paths come from the active schema - do NOT assume them, and do NOT branch on hardcoded artifact names. Custom schemas must work unchanged.
         after: The artifact ids and paths come from the native requirements-only projection. Reconcile only proposal and specs; historical implementation artifacts remain untouched, even if now inconsistent. Report that boundary instead of updating them.
@@ -71,9 +53,7 @@ workflows:
         after: '- Use the proposal/specs ids and paths reported by `openspec status`; never write historical implementation artifacts.'
   propose:
     module: propose
-    skillFactory: getOpsxProposeSkillTemplate
     commandFactory: getOpsxProposeCommandTemplate
-    skill: openspec-propose
     description: Draft a complete OpenSpec requirement proposal and capability specifications, without design, task planning, or implementation.
     replacements:
       - before: Wait for a new user request after the artifacts are presented; then start the apply workflow.
@@ -106,23 +86,170 @@ workflows:
         after: '- Create proposal and specs in native dependency order; no implementation artifacts'
   sync:
     module: sync-specs
-    skillFactory: getSyncSpecsSkillTemplate
     commandFactory: getOpsxSyncCommandTemplate
-    skill: openspec-sync-specs
     replacements:
+      - before: |
+          The JSON includes `planningHome.root`. Main specs live under `<planningHome.root>/openspec/specs/` — use that (store-aware) root for every main-spec path below, not a hardcoded repo path. When a store is selected it points at the store, not the current repository.
+        after: |
+          The JSON includes `planningHome.root`; preserve that store-aware root for native OpenSpec paths.
+
+             Resolve the authoritative requirements destination before assessing or writing specs:
+             - Read applicable project instructions and the user's explicit requirements-authority choice. Existing authoritative Markdown outside `openspec/specs/` (for example `docs/requirements/`) selects the external-Markdown branch. NEVER create a parallel authority in `openspec/specs/`.
+             - Otherwise use the native branch at `<planningHome.root>/openspec/specs/<capability-path>/spec.md`, preserving complete capability paths and selected-store scope.
+             - If the authority is missing, conflicting, or ambiguous, ask the user to resolve it before writing. A selected store resolves OpenSpec paths; it does not silently override the project's declared requirements authority.
+      - before: |
+          Then sync only the named paths and leave the remaining delta specs untouched:
+             bulk archive excludes a delta whose implementation it could not find, and
+             syncing it anyway would write a main spec the caller deliberately withheld.
+        after: |
+          Then sync only the named paths and leave the remaining delta specs untouched.
+             NEVER widen a caller's confirmed requirements scope.
+      - before: |
+          For each capability delta spec path selected in step 3 — the full `existingOutputPaths` list, or the narrowed subset when a caller supplied one (these may belong to a selected store, not the repo):
+        after: |
+          **External-Markdown branch:** This is an agent-driven original-text editing workflow, not a programmatic Markdown merger.
+             - Read every selected delta and the authoritative documents. Map each ADDED, MODIFIED, REMOVED, or RENAMED requirement to an exact document path, existing heading, and original text. For ADDED requirements, identify the exact insertion heading and surrounding original text; for a new document, obtain explicit confirmation of its path and authoritative role.
+             - Show the requirement-to-document mapping and intended original-text patches before writes. Resolve missing or ambiguous targets, conflicting deltas, and unconfirmed scope with the user before any write. A prior explicit confirmation of these exact patches is sufficient; NEVER invent a missing MODIFIED/RENAMED target.
+             - Apply only the confirmed requirements changes. Merge scenarios semantically, preserving unaffected scenarios, ordering, formatting, headings, and unrelated text. REMOVED deletes only the confirmed requirement text; RENAMED changes only the mapped name and confirmed references. NEVER apply native capability-file retirement rules to an external document or rewrite it into the native Main Spec Format Reference.
+             - Reread every written document and compare against its original text and confirmed patches. Verify every selected delta's intended requirement/scenario outcome and exact preservation of all unrelated content. Re-running must produce no additional change. Report mismatches and stop; NEVER claim sync succeeded with unresolved differences.
+             - Do not write mirror specs under `openspec/specs/`. Native `validate --specs` cannot validate external Markdown; do not use it as evidence for these documents. After the content checks, proceed directly to step 6.
+
+             **Native branch only:** The remainder of step 4, step 5, and the Main Spec Format Reference apply only when native OpenSpec specs are authoritative. Preserve the existing semantic merge, Purpose, missing-capability, scenario-preservation, and capability-retirement rules below.
+
+             For each capability delta spec path selected in step 3 — the full `existingOutputPaths` list, or the narrowed subset when a caller supplied one (these may belong to a selected store, not the repo):
+      - before: |
+          **Main Spec Format Reference**
+
+          Main specs are what the delta merges INTO.
+        after: |
+          **Main Spec Format Reference (native branch only)**
+
+          Main specs are what the delta merges INTO.
+      - before: '- Never copy a delta file into a main spec as-is - merge its content so the main spec keeps the Main Spec Format Reference structure, with no delta operation headers'
+        after: '- Never copy a delta file into authoritative requirements as-is. Native specs keep the Main Spec Format Reference; external Markdown keeps its existing document structure and confirmed original-text patches.'
+      - before: '- A MODIFIED block carries the whole requirement - body plus every scenario that survives the change. `openspec validate` and `openspec archive` both reject one that drops a scenario the main spec still has.'
+        after: '- A MODIFIED block carries the whole requirement, including every surviving scenario. Preserve unaffected scenarios in both branches. Native validation checks OpenSpec files only; external Markdown requires the explicit reread and original-text comparison above.'
       - before: The change remains active - archive when implementation is complete.
         after: The change remains active - archive when requirements are accepted. This does not verify implementation.
   archive:
     module: archive-change
-    skillFactory: getArchiveChangeSkillTemplate
     commandFactory: getOpsxArchiveCommandTemplate
-    skill: openspec-archive-change
     description: Archive an accepted OpenSpec requirements change using native validation and specification synchronization; requirements acceptance does not verify implementation.
+    replacements:
+      - before: Archive a completed change in the experimental workflow.
+        after: Archive an accepted requirements change. Requirements acceptance does not establish implementation delivery.
+      - before: |
+          **If delta specs exist:**
+             - Compare each delta spec with its corresponding main spec at `<planningHome.root>/openspec/specs/<capability-path>/spec.md` (use the store-aware `planningHome.root` from step 2, not a hardcoded repo path)
+        after: |
+          **If delta specs exist, resolve requirements authority first:**
+             - Use applicable project instructions and the user's explicit authority choice. Existing authoritative Markdown outside `openspec/specs/` selects the external-Markdown branch. If authority is unclear or conflicting, ask before writes; NEVER silently relocate authority, including when a store is selected.
+             - External-Markdown assessment: read all deltas and authoritative documents; map each requirement to exact document + heading + original text (ADDED uses an exact insertion heading and surrounding text). Show intended original-text patches and resolve missing/ambiguous targets and scope before writes. Mark unresolved mappings sync-blocked; determine whether confirmed changes are needed or already present. NEVER create mirror native specs.
+             - Native assessment only: compare each delta with `<planningHome.root>/openspec/specs/<capability-path>/spec.md`, using the store-aware root. The following missing-spec and retirement bullets apply only to this native branch; external Markdown retains its own document structure and is never retired using native capability-file rules.
+      - before: |
+          After the sync writes each main spec, verify its structure against the canonical sync contract:
+        after: |
+          **External-Markdown post-sync verification:** Reread every written authoritative document. Check each selected delta against its exact mapped heading and confirmed original-text patch; verify intended requirement/scenario outcomes and exact preservation of unrelated text, unaffected scenarios, ordering, formatting, and headings. A second assessment must find nothing left to apply. Any unresolved mapping, difference, or incomplete sync MUST stop archive. No native mirror files, native formatting conversion, software tests, or /spec APIs are required. After successful checks, proceed directly to step 5; the remaining native structure/comparison checks below do not apply to external Markdown.
+
+             **Native branch only:** After the sync writes each main spec, verify its structure against the canonical sync contract:
+      - before: |
+          Create an `archive` directory under `planningHome.changesDir` if it doesn't exist:
+             ```bash
+             mkdir -p "<planningHome.changesDir>/archive"
+             ```
+
+             Generate the target name: use the change name as-is when it already starts with a `YYYY-MM-DD-` prefix; otherwise prepend the current date as `YYYY-MM-DD-<change-name>`. Never stack a second date (same rule as `openspec archive`).
+
+             **Check if target already exists:**
+             - If yes: Fail with error, suggest renaming existing archive or using different date
+             - If no: Move `changeRoot` to the archive directory
+
+             ```bash
+             mv "<changeRoot>" "<planningHome.changesDir>/archive/<target-name>"
+             ```
+        after: |
+          After any requested inline sync has finished and its branch-specific verification passed, run the native archive command:
+             ```bash
+             openspec archive "<name>" --skip-specs --yes
+             ```
+             Append the selected `--store <id>` when applicable. Use this command for every archive route: already synced, user chose to skip sync, no delta specs, and external-Markdown authority. `--skip-specs` prevents a second native merge or a parallel authority; it does not disable native archive validation. `--yes` follows the explicit choices already collected above.
+
+             Retain native validation. NEVER pass `--no-validate`, hand-create archive directories, or move `changeRoot` yourself. Artifact existence/status is not validation. A nonzero exit means the change was NOT archived: report the CLI error, leave the change active, and do not emit a completion summary. Only a zero exit permits step 6; use the archive path actually reported by the CLI.
+      - before: '- Don''t block archive on warnings - just inform and confirm'
+        after: '- Advisory warnings require informed user confirmation; native archive validation failures block archiving even after confirmation.'
+      - before: |
+          **Output On Success**
+
+          ```markdown
+          ## Archive Complete
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** the archive path derived from `planningHome.changesDir`/<target-name>/
+        after: |
+          **Output On Success**
+
+          ```markdown
+          ## Archive Complete
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** <path reported by successful native archive>
+      - before: |
+          **Output On Success (No Delta Specs)**
+
+          ```markdown
+          ## Archive Complete
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** the archive path derived from `planningHome.changesDir`/<target-name>/
+        after: |
+          **Output On Success (No Delta Specs)**
+
+          ```markdown
+          ## Archive Complete
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** <path reported by successful native archive>
+      - before: |
+          **Output On Success With Warnings**
+
+          ```markdown
+          ## Archive Complete (with warnings)
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** the archive path derived from `planningHome.changesDir`/<target-name>/
+        after: |
+          **Output On Success With Warnings**
+
+          ```markdown
+          ## Archive Complete (with warnings)
+
+          **Change:** <change-name>
+          **Schema:** <schema-name>
+          **Archived to:** <path reported by successful native archive>
+      - before: |
+          **Output On Error (Archive Exists)**
+
+          ```markdown
+          ## Archive Failed
+
+          **Change:** <change-name>
+          **Target:** the archive path derived from `planningHome.changesDir`/<target-name>/
+        after: |
+          **Output On Error (Archive Exists)**
+
+          ```markdown
+          ## Archive Failed
+
+          **Change:** <change-name>
+          **Target:** <conflicting target reported by native archive>
   verify:
     module: verify-change
-    skillFactory: getVerifyChangeSkillTemplate
     commandFactory: getOpsxVerifyCommandTemplate
-    skill: openspec-verify-change
 proposalInstruction: |
   Write the requirement change proposal: why it is needed, observable behavior changes, affected new/modified capabilities, and scope/impact. Define acceptance boundaries and unresolved questions. Implementation details, design documents, and task plans are outside this requirements-only graph. This proposal is the foundation for capability delta specifications only.
 specsInstruction: |

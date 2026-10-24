@@ -102,51 +102,45 @@
       "adaptation": "omp-four-role-v1"
     }
   ],
+  "commands": [
+    {
+      "name": "opsx-explore",
+      "path": "openspec/commands/opsx-explore.md"
+    },
+    {
+      "name": "opsx-new",
+      "path": "openspec/commands/opsx-new.md"
+    },
+    {
+      "name": "opsx-continue",
+      "path": "openspec/commands/opsx-continue.md"
+    },
+    {
+      "name": "opsx-update",
+      "path": "openspec/commands/opsx-update.md"
+    },
+    {
+      "name": "opsx-propose",
+      "path": "openspec/commands/opsx-propose.md"
+    },
+    {
+      "name": "opsx-sync",
+      "path": "openspec/commands/opsx-sync.md"
+    },
+    {
+      "name": "opsx-archive",
+      "path": "openspec/commands/opsx-archive.md"
+    },
+    {
+      "name": "opsx-verify",
+      "path": "openspec/commands/opsx-verify.md"
+    }
+  ],
   "skills": [
     {
       "source": "jch",
       "name": "jch-grill-me",
       "path": "jch/skills/jch-grill-me/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-explore",
-      "path": "openspec/skills/openspec-explore/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-new-change",
-      "path": "openspec/skills/openspec-new-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-continue-change",
-      "path": "openspec/skills/openspec-continue-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-update-change",
-      "path": "openspec/skills/openspec-update-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-propose",
-      "path": "openspec/skills/openspec-propose/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-sync-specs",
-      "path": "openspec/skills/openspec-sync-specs/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-archive-change",
-      "path": "openspec/skills/openspec-archive-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-verify-change",
-      "path": "openspec/skills/openspec-verify-change/SKILL.md"
     },
     {
       "source": "superpowers",
@@ -257,7 +251,7 @@
     },
     {
       "path": "omp-spec/templates/proposal.md",
-      "sha256": "0dd70e35db5c696ba8ac3cc3a53e2d6561865c1e4e7d49db5a1eaa3e4a6ad86e",
+      "sha256": "847ca99765d2bb213818adad90bc6a2422c7a55636fa02c73f36655bd35bc2ec",
       "executable": false
     },
     {
@@ -283,6 +277,46 @@
     {
       "path": "openspec/bun.lock",
       "sha256": "ed55b3821f71111e7424741db4ea25f393d940143228c51aad6684573b5f9ce4",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-archive.md",
+      "sha256": "68bc055828d211ad5040daaea69c840629c719abe6ad38ba61db34de924391d2",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-continue.md",
+      "sha256": "10b68311d254d8164a4fe5a43bc5b0056002fe7c017d9fd1fbff60e855d063ee",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-explore.md",
+      "sha256": "8d8ccd9dbad85926e2ce73fd9206934fba4ec3262b17d227e019f1f0be25cc45",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-new.md",
+      "sha256": "c9b0293e789e082e3c63b33a95a06f348cdacec7cdf8019d41c11c4bcfada1e4",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-propose.md",
+      "sha256": "a1fecd636d10446080d891e05fb0aa0609443b148f9c7e3a0dbf7de6718ded54",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-sync.md",
+      "sha256": "1768cb4c89a7b2ab00277a5a98e2ec6772183b8df3d945df1c6e4bcc3e959229",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-update.md",
+      "sha256": "1bd73cafbd460659b93fac149ab6af77f5593a54f74306691bdd1b7487ad709a",
+      "executable": false
+    },
+    {
+      "path": "openspec/commands/opsx-verify.md",
+      "sha256": "3889d8236f883615f66ef0d4e989e4580915d96e032a86420ff130ec8ff7ba04",
       "executable": false
     },
     {
@@ -362,7 +396,7 @@
     },
     {
       "path": "openspec/dist/cli/index.js",
-      "sha256": "10074ec7c2a06e633270e05a47a8dfca96602947d79e76a04428072f3e13953b",
+      "sha256": "457e80a315ffa219439d92b740fb950812f87b957fc9960a61e2df845de33dcb",
       "executable": false
     },
     {
@@ -372,7 +406,7 @@
     },
     {
       "path": "openspec/dist/commands/change.js",
-      "sha256": "40fd48a39ab52505524eb3a4de40de4c76e847c95ee0adccb7823114b43637d7",
+      "sha256": "d8e73dd73aa8601e934aac1185b9996384681764fa6fc97ce51efda0914b395a",
       "executable": false
     },
     {
@@ -382,7 +416,7 @@
     },
     {
       "path": "openspec/dist/commands/completion.js",
-      "sha256": "37b11baf85a51e09c16777ffa115c22a375a351fd9f2baab2702df5711977cae",
+      "sha256": "ff1c6bc8eb994579926df2e2dd3f26566d9c64798594487a19fa67bdc4410ced",
       "executable": false
     },
     {
@@ -392,7 +426,7 @@
     },
     {
       "path": "openspec/dist/commands/config.js",
-      "sha256": "9853c65508344c5f40f8f0f9ac7cc1cb6665ed16abd68cfd56fa60d84bc14807",
+      "sha256": "a2584adb319db1b268d9d6ba5a7fffa48ea0f7125a25edf77672bc1b58884d63",
       "executable": false
     },
     {
@@ -402,7 +436,7 @@
     },
     {
       "path": "openspec/dist/commands/context.js",
-      "sha256": "f0b671b65753c0acc5297082f29da8480ba84a85735518d4f2df7a548b33e5e8",
+      "sha256": "04763adb7659e9039291358cfc8ca58bd8c6470e3a79a913d6af52ff34159e77",
       "executable": false
     },
     {
@@ -412,7 +446,7 @@
     },
     {
       "path": "openspec/dist/commands/doctor.js",
-      "sha256": "ec5fed0250f8fa6c8ce4d6447fcab52face338c8119381249f8b75d28cc885f3",
+      "sha256": "1721a31b8be0e2219200fa28d36020239544d8653ee3d8740f5ca3a63ff8eac9",
       "executable": false
     },
     {
@@ -432,7 +466,7 @@
     },
     {
       "path": "openspec/dist/commands/schema.js",
-      "sha256": "76fb5607f2800e5278a170e61c418e40a64090443ba4d8b5204291d00ece581a",
+      "sha256": "7b4cbf8e4f418bc38e1bf43a89d13a9d79e7de951cc85998cbe62c01bb1d2aa5",
       "executable": false
     },
     {
@@ -462,7 +496,7 @@
     },
     {
       "path": "openspec/dist/commands/show.js",
-      "sha256": "733a6c043d23919161535e796d57e02be240d87ef4071aa874bd802d9e072f21",
+      "sha256": "1a9fd88b419e56df79b9ba05ba167626fc5f8a47b50e0d0e83ed80a46618238f",
       "executable": false
     },
     {
@@ -482,7 +516,7 @@
     },
     {
       "path": "openspec/dist/commands/store.js",
-      "sha256": "0d5797a8848fe05ffa79c561bc36b180f0f0c8ac7dca4801e75f4a6e209a701c",
+      "sha256": "9b11795639958429d70712ea269c18f85ccc71b0640a8b659116a553739fe0ee",
       "executable": false
     },
     {
@@ -492,7 +526,7 @@
     },
     {
       "path": "openspec/dist/commands/validate.js",
-      "sha256": "a34168ff339a157ec4b821989c99ce8d2019374c89a4d9bfdb06905e9efe038c",
+      "sha256": "1a55a51bc268b95130d20531e878c0ba588cdb29fc48e983c3c1a28ff2702f9c",
       "executable": false
     },
     {
@@ -522,7 +556,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/instructions.js",
-      "sha256": "2891599e8c39aff4c1abd8974ad9cc495fbaa284532f044cb33ac02a7203a3b1",
+      "sha256": "3542171e7fc8209f5696cf64cebcfb60fad2d09ca3359af97bc434e344acc073",
       "executable": false
     },
     {
@@ -532,7 +566,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/new-change.js",
-      "sha256": "dd2e6c256499dd279348f53df47c3febd8335b6ae4053d007c3e62f9367ecafd",
+      "sha256": "5875b364f22bb84ef32abf6a5e06eb87dfb6776c9558ec7c1c2128a62100e1a1",
       "executable": false
     },
     {
@@ -552,7 +586,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/shared.js",
-      "sha256": "f28f15fa9d8511b161159fdd16c65a869e6fb93598f1033b60b07217f2146fe8",
+      "sha256": "1b69d6c44c981250c8126bf9343dc10c512a96611e9a55c7c40bb256580af747",
       "executable": false
     },
     {
@@ -562,7 +596,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/status.js",
-      "sha256": "d39265fb1d08feb75178bb029885a1167447bee49c64755817af27ff4c4577c6",
+      "sha256": "56537e47da95fa8226df39bd9589a89f3e4ddd06baa839b36247331d6d316e10",
       "executable": false
     },
     {
@@ -582,7 +616,7 @@
     },
     {
       "path": "openspec/dist/commands/workset-input.js",
-      "sha256": "d50f86c97d28e8d4aebaa4b28babe4e384a4906a5836f01b177a30cae6721907",
+      "sha256": "18a419f412059ebc52ffa9a938899452f87cddb91bf9d42982baec72c1cf346b",
       "executable": false
     },
     {
@@ -602,7 +636,7 @@
     },
     {
       "path": "openspec/dist/commands/workset.js",
-      "sha256": "8ab149d2536209ac11192224fa9ee26cc09416eabfc8d2bd1d8b53e9b1a7b6a5",
+      "sha256": "6f3e821d031f1d620c9b0394d1b575faae82c2446abeeb9259e044f61c3fda11",
       "executable": false
     },
     {
@@ -612,7 +646,7 @@
     },
     {
       "path": "openspec/dist/core/archive.js",
-      "sha256": "735ba65808316699b10022da7a66408cf0ef0d412e00ca0b4f18c88a04202853",
+      "sha256": "6e74530fd7d9472b838050865144554eeea4a29f73607ac0eeea1631c8c6cfd0",
       "executable": false
     },
     {
@@ -732,7 +766,7 @@
     },
     {
       "path": "openspec/dist/core/change-status-policy.js",
-      "sha256": "a999a6e286f45c72424a2dd14c3c5edba5e7392d3c17330a38a100b30d17b1a3",
+      "sha256": "5428c9eb3e3963192258e22f4b2edec9474a19521d541f65b78bf81ece7da6ec",
       "executable": false
     },
     {
@@ -1172,7 +1206,7 @@
     },
     {
       "path": "openspec/dist/core/completion-tip.js",
-      "sha256": "622164ff548285c7dcb11817d0c6cf283b40e20626846753bfdd71b3fbd4ae8a",
+      "sha256": "86a61b09f4630beb119a8574c24a87ef1f6a083b50659499ec042ffc01ed4562",
       "executable": false
     },
     {
@@ -1422,7 +1456,7 @@
     },
     {
       "path": "openspec/dist/core/global-config.js",
-      "sha256": "f2701f932592372b6c60a87f5a5a9b6149d4ff3641b7085bec31893e660bb14a",
+      "sha256": "c77b37c1b480fd79d12221bd14140d3e298a79064d053ff837c6ebf903b55f62",
       "executable": false
     },
     {
@@ -1452,7 +1486,7 @@
     },
     {
       "path": "openspec/dist/core/init.js",
-      "sha256": "3ca077e81f2f72d06b50d6543436e3339ba6df60c5bee7b2df11d007e6022f2a",
+      "sha256": "f2d99a22d9806ec70999179e0edb4e4591c90dc4d311b65445539761d0d61586",
       "executable": false
     },
     {
@@ -1482,7 +1516,7 @@
     },
     {
       "path": "openspec/dist/core/migration.js",
-      "sha256": "1f9dda4a8f429afb0260aa11cdc2eaa1d9399e467e8843d62d3bb66167bd06de",
+      "sha256": "af1b70e2ddaede1cc931b688119765915703f25b64bc3e86c60a719294d3960e",
       "executable": false
     },
     {
@@ -1492,7 +1526,7 @@
     },
     {
       "path": "openspec/dist/core/onboarding-commands.js",
-      "sha256": "8ad3dbe11d608995b9d5a5811062c008d32ed618b8d889720d60b8188580bc06",
+      "sha256": "70e6f5d305e9789634d0a6ea06555d1ad9c20997681d7b6bd166ef601fc80a2c",
       "executable": false
     },
     {
@@ -1622,7 +1656,7 @@
     },
     {
       "path": "openspec/dist/core/references.js",
-      "sha256": "941ed1164ff18df2cb4a444a2e14c2fd903cc8f3c774c6822d435481558216cb",
+      "sha256": "0f0ff5e38243d2b2e97968febcbb3801f08af3147c75bdf1b049a1d3fa6a1d64",
       "executable": false
     },
     {
@@ -1632,7 +1666,7 @@
     },
     {
       "path": "openspec/dist/core/relationship-health.js",
-      "sha256": "e9ebc76050d1157c7c85b9e1253ab583a15fdaa6ddbf10ce7e53cfb3f1ef0c22",
+      "sha256": "8cd6c9f71d690dfffdd60707e0578e6c32a74a636f575beb7ed68883e88762f6",
       "executable": false
     },
     {
@@ -1642,7 +1676,7 @@
     },
     {
       "path": "openspec/dist/core/root-selection.js",
-      "sha256": "73360a4ca1da5414ee7917bc2ee5290a99d4da58600335b7b1dd56756fef20b3",
+      "sha256": "c152abf757be1d72f7efa36435f307fe2411a7e381c26395aa8b199dbfe6e50d",
       "executable": false
     },
     {
@@ -1742,7 +1776,7 @@
     },
     {
       "path": "openspec/dist/core/shared/skill-generation.js",
-      "sha256": "00179e53d8820b9276373ed401d5c75a2774f3b6410423b9c40abe9057635b1f",
+      "sha256": "d319c681e40fea48491170f9a2fad9e8b04fb51ede2a0106a21d70cc4d519cfe",
       "executable": false
     },
     {
@@ -1772,7 +1806,7 @@
     },
     {
       "path": "openspec/dist/core/specs-apply.js",
-      "sha256": "54eb0e80c13e569ca2bfe84ed5ff937545d925e629b372533129923827d4c3ff",
+      "sha256": "0bd52cd465ebb404a7e5f665f152c677702bbab8cff87f3835b6371710df89dc",
       "executable": false
     },
     {
@@ -1822,7 +1856,7 @@
     },
     {
       "path": "openspec/dist/core/store/operations.js",
-      "sha256": "0f76cf7be405e67ebc592ecf775771ce70e9003456e8ef76c688ab817c48df7d",
+      "sha256": "4965f9bdc9357b1ba14a78a6b9816057e52361422e1a0261a4b83ad0e388def0",
       "executable": false
     },
     {
@@ -1832,7 +1866,7 @@
     },
     {
       "path": "openspec/dist/core/store/registry.js",
-      "sha256": "55fd214623a76c3b5f613ad2d4f8a07a2cf88fb8cbf1d6b20559da9589a59b8c",
+      "sha256": "33d7a06d010978e606a69d6c28df0f4e24d50802621b1af8910591e9fab70ba8",
       "executable": false
     },
     {
@@ -1867,12 +1901,12 @@
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.d.ts",
-      "sha256": "356c7dd175f3d31d0407f543f045144964e3a73b995abc5929e20071059c88cc",
+      "sha256": "616682cbfd7e384ad923b99276d8da5108ee4ca8d2a6d5cc1840a045e6ea421a",
       "executable": false
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.js",
-      "sha256": "cc6e70220fa0d03457288136f0174c402a2a2e1c9da2d8788edaad3283b29436",
+      "sha256": "616682cbfd7e384ad923b99276d8da5108ee4ca8d2a6d5cc1840a045e6ea421a",
       "executable": false
     },
     {
@@ -1892,7 +1926,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/archive-change.js",
-      "sha256": "2c7001a67226829d39aa1ac640638817d4f0c93140d8d607d9a0f25aa07150d2",
+      "sha256": "8d54bec84706f6a742439c3ecda9b46553cc0d21b2e0302e6a717fe53d414a5c",
       "executable": false
     },
     {
@@ -1902,7 +1936,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/continue-change.js",
-      "sha256": "addeaf6187b1d8b88eb0f833abe2afb4dd0a1d0b92f6b5c50450ac9584863dc9",
+      "sha256": "afc91dcc52035f8394aa543e78370efad7679cddcd2cf115e50afabf09691497",
       "executable": false
     },
     {
@@ -1912,7 +1946,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/explore.js",
-      "sha256": "dcefa171e88dd6dbcd46b6a037353c702e9331a78f9d8a5ca852c6380f20f4b2",
+      "sha256": "90780fd4a0e443f9b8af2158a062baccdcbda1cd8c9aff8b54f2776b20bd81fe",
       "executable": false
     },
     {
@@ -1922,7 +1956,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/new-change.js",
-      "sha256": "b6625fe5540756d154e6c813495debc1ca6503cf4aa8b1b1602e7df323945c75",
+      "sha256": "aeeefde6c8e378740e55fb4308d860500a49927e3dd0015aaf51bcdc8e650f25",
       "executable": false
     },
     {
@@ -1942,7 +1976,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/propose.js",
-      "sha256": "987ca99ac9aca989a8918f2bd131ef6ea428ab79de1d71d9553fba1c93e5f69d",
+      "sha256": "224bc8f154f9b2e58f56787eb4e7c5cdce22a9da4ff1ea4191af41d7732766cc",
       "executable": false
     },
     {
@@ -1962,7 +1996,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/sync-specs.js",
-      "sha256": "3bd09308847ccccd3cf0a1a7007abff178162fd92cb0093aa9c7ce7546f777d2",
+      "sha256": "4924b4c0cc1cbae22bb88a7ff4b277fe857d8792d5ee13c6737c497def71a769",
       "executable": false
     },
     {
@@ -1972,7 +2006,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/update-change.js",
-      "sha256": "b7648aa3dcb214a40650de249a9d86f69a9e37f6715547fef0039284e68d3027",
+      "sha256": "8b00de4c3fdd60234f47c8a49cf9730440d3649a89c1f9b9f41b41a2aaeb0299",
       "executable": false
     },
     {
@@ -1982,7 +2016,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/verify-change.js",
-      "sha256": "fd0b21d7f4cbedf0674e84234dc98fd0a175230ea49f968e67fe60a8f4778243",
+      "sha256": "91630be9ff8e251c5e9ab46f7c481e4fb243d1e618ca9a3b220a74b4ea52ef83",
       "executable": false
     },
     {
@@ -11226,46 +11260,6 @@
       "executable": false
     },
     {
-      "path": "openspec/original-skills/openspec-archive-change/SKILL.md",
-      "sha256": "23f1e6cc6abdc5894802b1737638a1898e622efeb9091f005ad8edd445ff0db0",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-continue-change/SKILL.md",
-      "sha256": "2f73f6150da3b5d7399e4ee0684ac85fe1099b67c61f6638cb759595f5383524",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-explore/SKILL.md",
-      "sha256": "38739287aa2cb3474ee87b44dba8a4cb757ce351f600198b4a4fa2c50a2f17fc",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-new-change/SKILL.md",
-      "sha256": "dfb487a27cf0e8ff8bae5bb4b2af1b998474a9bbb673b8480a7b4f40085643ee",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-propose/SKILL.md",
-      "sha256": "8253a963ab9f80fe34490b048497cb86842d93061a202894cbf8bfa13a4a12b9",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-sync-specs/SKILL.md",
-      "sha256": "68888268b618ca040b48a726f07a9a70a694cafbb6c3afd729baf705ceddbb4c",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-update-change/SKILL.md",
-      "sha256": "71349240bfc98bbb39553556cc15c55b989a9e799bc21fa4f40c8e498249598d",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-verify-change/SKILL.md",
-      "sha256": "c3edfcc590a4e89f64292c1f2764cba4f92422003599c47d48b09ac26c81d44d",
-      "executable": false
-    },
-    {
       "path": "openspec/package.json",
       "sha256": "f1ec4479b28e107da8bf7a7963d01a0ebb664061cbc2e5fd9c3bca70f18814af",
       "executable": false
@@ -11277,7 +11271,7 @@
     },
     {
       "path": "openspec/schemas/omp-spec/templates/proposal.md",
-      "sha256": "0dd70e35db5c696ba8ac3cc3a53e2d6561865c1e4e7d49db5a1eaa3e4a6ad86e",
+      "sha256": "847ca99765d2bb213818adad90bc6a2422c7a55636fa02c73f36655bd35bc2ec",
       "executable": false
     },
     {
@@ -11292,52 +11286,12 @@
     },
     {
       "path": "openspec/schemas/spec-driven/templates/proposal.md",
-      "sha256": "0dd70e35db5c696ba8ac3cc3a53e2d6561865c1e4e7d49db5a1eaa3e4a6ad86e",
+      "sha256": "847ca99765d2bb213818adad90bc6a2422c7a55636fa02c73f36655bd35bc2ec",
       "executable": false
     },
     {
       "path": "openspec/schemas/spec-driven/templates/spec.md",
       "sha256": "1cccfb573f031c6352bed2a879b7035ff710bc909112fc23d10bdcfcdd8d4318",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-archive-change/SKILL.md",
-      "sha256": "695013a58a19cffb0ac58f9020165df22e258750050b882dce05bb6296f6716c",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-continue-change/SKILL.md",
-      "sha256": "745557d118d5522287b81e574dd482ebfbc4473f4788e2eef9f2b64561191000",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-explore/SKILL.md",
-      "sha256": "c44c30701a9d58ecc59c1681081054e66b80ed86a8974fb222b7f0d952dea29d",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-new-change/SKILL.md",
-      "sha256": "cf5adf7fb07f719cca970b7b2746fc624fd367204683483967de487a421d8825",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-propose/SKILL.md",
-      "sha256": "47b65d8f891fc1f2cb09f00442f7f2a9d63e73380144c4abad6a72368dd2616f",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-sync-specs/SKILL.md",
-      "sha256": "27f248d4c8b9af954a9c9088d7b7048964742393432a4f2d19b075a22951e01c",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-update-change/SKILL.md",
-      "sha256": "a1533fb855e3b05f6c8f2e5b19203fe4bb67b5fde6bedbe2b4afc89180c205cf",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-verify-change/SKILL.md",
-      "sha256": "d7f18314f05813c44b81f886946ea6158277a3ccf736bb976fd408d0d625106e",
       "executable": false
     },
     {

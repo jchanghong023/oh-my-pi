@@ -64,11 +64,9 @@ const superpowersSkills = [
 const superpowersDescriptions = parseYaml(superpowersDescriptionSource) as Record<string, string>;
 interface RequirementsWorkflow {
 	module: string;
-	skillFactory: string;
 	commandFactory: string;
-	skill: string;
 	description?: string;
-	replacements?: { before: string; after: string; surface?: "skill" | "command" }[];
+	replacements?: { before: string; after: string }[];
 }
 const requirementsAdaptation = parseYaml(openspecAdaptationSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
 	common: string;
@@ -78,7 +76,6 @@ const requirementsAdaptation = parseYaml(openspecAdaptationSource.match(/```yaml
 	specsInstruction: string;
 };
 const requirementsWorkflows = Object.entries(requirementsAdaptation.workflows);
-const factories = requirementsWorkflows.map(([, workflow]) => workflow.skillFactory);
 const removedWorkflowModules = ["apply-change", "ff-change", "bulk-archive-change", "onboard", "feedback"];
 const removedFactories = [
 	"getApplyInstructions",
@@ -95,11 +92,6 @@ const removedFactories = [
 interface PackageMetadata {
 	version: string;
 	dist: { tarball: string; integrity: string };
-}
-interface UpstreamSkill {
-	name: string;
-	description: string;
-	instructions: string;
 }
 interface UpstreamCommand {
 	name: string;
@@ -277,15 +269,15 @@ function normalizeTar(bytes: Uint8Array): void {
 	}
 }
 
+function adaptOpenSpecCommandReferences(text: string): string {
+	return text.replace(/(?<![\w/.-])(?<!omp )openspec (?=[a-z-])/g, "omp openspec ");
+}
+
 /**
  * Adapt archive entries, not staging: --embed always starts from the same pinned
  * offline originals, and interrupted generation cannot leave a half-adapted CLI.
  */
-function adaptOpenSpecEntries(
-	entries: Record<string, Uint8Array>,
-	templates: UpstreamSkill[],
-	commands: UpstreamCommand[],
-): UpstreamSkill[] {
+function adaptOpenSpecEntries(entries: Record<string, Uint8Array>, commands: UpstreamCommand[]): UpstreamCommand[] {
 	const root = "openspec/dist/";
 	const readEntry = (relative: string): string => {
 		const value = entries[root + relative];
@@ -303,16 +295,13 @@ function adaptOpenSpecEntries(
 		writeEntry(relative, text.replace(before, after));
 	};
 	const adapted = requirementsWorkflows.map(([, workflow], index) => {
-		const original = templates[index];
 		const originalCommand = commands[index];
-		if (original?.name !== workflow.skill || !originalCommand)
-			throw new Error(`Missing retained OpenSpec factory: ${workflow.skill}`);
-		const adaptBody = (body: string, surface: "skill" | "command"): string => {
+		if (!originalCommand) throw new Error(`Missing retained OpenSpec command factory: ${workflow.commandFactory}`);
+		const adaptBody = (body: string): string => {
 			for (const replacement of workflow.replacements ?? []) {
-				if (replacement.surface && replacement.surface !== surface) continue;
 				const before = replacement.before.trimEnd();
 				if (!body.includes(before) || body.indexOf(before) !== body.lastIndexOf(before))
-					throw new Error(`Pinned OpenSpec ${workflow.module}/${surface} body anchor changed: ${before}`);
+					throw new Error(`Pinned OpenSpec ${workflow.module} command body anchor changed: ${before}`);
 				body = body.replace(before, replacement.after.trimEnd());
 			}
 			// Remove both implementation branches, not only the currently unavailable one.
@@ -320,52 +309,47 @@ function adaptOpenSpecEntries(
 				/\[\[opsx:if-workflow apply\]\][\s\S]*?\[\[opsx:else\]\][\s\S]*?\[\[opsx:end\]\]/g,
 				requirementsAdaptation.requirementsHandoff,
 			);
-			return (
-				workflow.module === "verify-change" ? body : `${requirementsAdaptation.common.trim()}\n\n${body}`
-			).replace(/(?<![\w/.-])openspec (?=[a-z-])/g, "omp openspec ");
-		};
-		const template = {
-			...original,
-			description: workflow.description ?? original.description,
-			instructions: adaptBody(original.instructions, "skill"),
+			return adaptOpenSpecCommandReferences(
+				workflow.module === "verify-change" ? body : `${requirementsAdaptation.common.trim()}\n\n${body}`,
+			).replaceAll("/opsx:", "/opsx-");
 		};
 		const command = {
 			...originalCommand,
 			description: workflow.description ?? originalCommand.description,
-			content: adaptBody(originalCommand.content, "command"),
+			content: adaptBody(originalCommand.content),
 		};
 		writeEntry(
 			`core/templates/workflows/${workflow.module}.js`,
-			`export function ${workflow.skillFactory}() { return ${JSON.stringify(template)}; }\n` +
-				`export function ${workflow.commandFactory}() { return ${JSON.stringify(command)}; }\n`,
+			`export function ${workflow.commandFactory}() { return ${JSON.stringify(command)}; }\n`,
 		);
-		return template;
+		return command;
 	});
 	for (const name of Object.keys(entries)) {
 		if (
-			removedWorkflowModules.some(module => name.startsWith(`${root}core/templates/workflows/${module}.`)) ||
-			removedWorkflowModules.some(
-				module =>
-					name.startsWith(`openspec/skills/openspec-${module}/`) ||
-					name.startsWith(`openspec/original-skills/openspec-${module}/`),
-			) ||
-			name.startsWith("openspec/skills/feedback/") ||
-			name.startsWith("openspec/original-skills/feedback/")
+			name.startsWith("openspec/skills/") ||
+			name.startsWith("openspec/original-skills/") ||
+			removedWorkflowModules.some(module => name.startsWith(`${root}core/templates/workflows/${module}.`))
 		)
 			delete entries[name];
 	}
 	for (const extension of ["js", "d.ts"]) {
-		const relative = `core/templates/skill-templates.${extension}`;
 		writeEntry(
-			relative,
-			readEntry(relative)
-				.split("\n")
-				.filter(line => !removedWorkflowModules.some(module => line.includes(`./workflows/${module}.`)))
-				.join("\n"),
+			`core/templates/skill-templates.${extension}`,
+			requirementsWorkflows
+				.map(([, workflow]) => `export { ${workflow.commandFactory} } from './workflows/${workflow.module}.js';`)
+				.join("\n") + "\n",
 		);
 	}
 	let generation = readEntry("core/shared/skill-generation.js");
 	for (const factory of removedFactories) generation = generation.replaceAll(`${factory}, `, "");
+	generation = generation.replace(/\bget\w*SkillTemplate, /g, "");
+	const skillStart = generation.indexOf("export function getSkillTemplates(workflowFilter) {");
+	const commandStart = generation.indexOf("/**\n * Gets command templates", skillStart);
+	if (skillStart < 0 || commandStart < 0) throw new Error("Pinned skill distribution anchor changed");
+	generation =
+		generation.slice(0, skillStart) +
+		"export function getSkillTemplates() { return []; }\n" +
+		generation.slice(commandStart);
 	generation = generation
 		.split("\n")
 		.filter(line => !removedFactories.some(factory => line.includes(`template: ${factory}()`)))
@@ -424,6 +408,32 @@ function adaptOpenSpecEntries(
 			";\n" +
 			"        return { ...schema, artifacts: retained.map(a => ({ ...a, instruction: instructions[a.id] })), apply: undefined };",
 	);
+	// Rewrite only pinned guidance producers at generation time. Runtime JSON,
+	// project context, user templates, paths, and artifact data remain untouched.
+	const guidanceModules = [
+		"cli/index.js",
+		"core/archive.js",
+		"core/change-status-policy.js",
+		"core/completion-tip.js",
+		"core/global-config.js",
+		"core/init.js",
+		"core/migration.js",
+		"core/onboarding-commands.js",
+		"core/references.js",
+		"core/relationship-health.js",
+		"core/root-selection.js",
+		"core/specs-apply.js",
+		"core/store/operations.js",
+		"core/store/registry.js",
+	];
+	for (const name of Object.keys(entries)) {
+		if (name.startsWith(`${root}commands/`) && name.endsWith(".js")) guidanceModules.push(name.slice(root.length));
+	}
+	for (const relative of guidanceModules) {
+		const original = readEntry(relative);
+		const adapted = adaptOpenSpecCommandReferences(original);
+		if (adapted !== original) writeEntry(relative, adapted);
+	}
 	return adapted;
 }
 
@@ -438,7 +448,7 @@ async function embed(): Promise<void> {
 	const templateRunner = path.join(staging, "templates.mjs");
 	await Bun.write(
 		templateRunner,
-		`import { ${[...factories, ...requirementsWorkflows.map(([, workflow]) => workflow.commandFactory)].join(", ")} } from './openspec/dist/core/templates/skill-templates.js';\nconsole.log(JSON.stringify({ skills: [${factories.map(name => `${name}()`).join(", ")}], commands: [${requirementsWorkflows.map(([, workflow]) => `${workflow.commandFactory}()`).join(", ")}] }));\n`,
+		`import { ${requirementsWorkflows.map(([, workflow]) => workflow.commandFactory).join(", ")} } from './openspec/dist/core/templates/skill-templates.js';\nconsole.log(JSON.stringify([${requirementsWorkflows.map(([, workflow]) => `${workflow.commandFactory}()`).join(", ")}]));\n`,
 	);
 	const child = Bun.spawn([process.execPath, templateRunner], {
 		cwd: staging,
@@ -451,13 +461,9 @@ async function embed(): Promise<void> {
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
-	if (exit !== 0) throw new Error(`Pinned skill generation failed: ${error}`);
-	const { skills: templates, commands } = JSON.parse(output) as {
-		skills: UpstreamSkill[];
-		commands: UpstreamCommand[];
-	};
-	if (templates.length !== requirementsWorkflows.length || commands.length !== requirementsWorkflows.length)
-		throw new Error("Expected retained OpenSpec skill/command pairs");
+	if (exit !== 0) throw new Error(`Pinned command generation failed: ${error}`);
+	const commands = JSON.parse(output) as UpstreamCommand[];
+	if (commands.length !== requirementsWorkflows.length) throw new Error("Expected retained OpenSpec commands");
 	const entries: Record<string, Uint8Array> = {};
 	const skills: SpecDrivenSkillEntry[] = [];
 	const executable = new Set<string>();
@@ -481,23 +487,19 @@ async function embed(): Promise<void> {
 	}
 	skills.push({ source: "jch", name: "jch-grill-me", path: "jch/skills/jch-grill-me/SKILL.md" });
 	const methods = embedMethods(entries, executable);
-	for (const [index, template] of adaptOpenSpecEntries(entries, templates, commands).entries()) {
-		if (!/^[a-z0-9-]+$/.test(template.name) || !template.instructions || !template.description)
-			throw new Error("Invalid pinned upstream skill template");
-		const original = templates[index]!;
-		// Provenance is the untouched fixed factory output, before routing or adaptation.
-		entries[`openspec/original-skills/${template.name}/SKILL.md`] = Buffer.from(
-			`---\nname: ${original.name}\ndescription: ${JSON.stringify(original.description)}\n---\n\n${original.instructions}\n`,
+	const commandEntries: SpecDrivenResourceManifest["commands"][number][] = [];
+	for (const [index, command] of adaptOpenSpecEntries(entries, commands).entries()) {
+		if (!command.content || !command.description) throw new Error("Invalid pinned upstream command template");
+		const name = `opsx-${requirementsWorkflows[index]![0]}`;
+		const relative = `openspec/commands/${name}.md`;
+		const body = command.content.replace(
+			/\[\[opsx:if-workflow ([a-z-]+)\]\]([\s\S]*?)\[\[opsx:else\]\]([\s\S]*?)\[\[opsx:end\]\]/g,
+			(_match, id: string, installed: string, missing: string) =>
+				requirementsWorkflows.some(([workflow]) => workflow === id) ? installed : missing,
 		);
-		const relative = `openspec/skills/${template.name}/SKILL.md`;
-		const raw =
-			`---\nname: ${template.name}\ndescription: ${JSON.stringify(template.description)}\n---\n\n${template.instructions}\n`.replace(
-				/\[\[opsx:if-workflow ([a-z-]+)\]\]([\s\S]*?)\[\[opsx:else\]\]([\s\S]*?)\[\[opsx:end\]\]/g,
-				(_match, id: string, installed: string, missing: string) =>
-					requirementsWorkflows.some(([workflow]) => workflow === id) ? installed : missing,
-			);
-		entries[relative] = Buffer.from(hidden(raw));
-		skills.push({ source: "openspec", name: template.name, path: relative });
+		if (body.includes("[[opsx:")) throw new Error(`Unresolved OpenSpec command conditional: ${name}`);
+		entries[relative] = Buffer.from(body);
+		commandEntries.push({ name, path: relative });
 	}
 	for (const name of superpowersSkills) {
 		const relative = `superpowers/skills/${name}/SKILL.md`;
@@ -525,18 +527,18 @@ async function embed(): Promise<void> {
 	// requirements-only. Project-local legacy schemas are projected at load time.
 	for (const name of ["omp-spec", "spec-driven"]) {
 		entries[`openspec/schemas/${name}/schema.yaml`] = Buffer.from(stringifyYaml({ ...schema, name }));
-		for (const template of ["proposal.md", "spec.md"])
-			entries[`openspec/schemas/${name}/templates/${template}`] = await Bun.file(
-				path.join(openspec, "schemas/spec-driven/templates", template),
-			).bytes();
+		for (const template of ["proposal.md", "spec.md"]) {
+			const original = await Bun.file(path.join(openspec, "schemas/spec-driven/templates", template)).text();
+			entries[`openspec/schemas/${name}/templates/${template}`] = Buffer.from(
+				adaptOpenSpecCommandReferences(original),
+			);
+		}
 		for (const template of ["design.md", "tasks.md"])
 			delete entries[`openspec/schemas/${name}/templates/${template}`];
 	}
 	entries["omp-spec/schema.yaml"] = Buffer.from(stringifyYaml(schema));
 	for (const template of ["proposal.md", "spec.md"])
-		entries[`omp-spec/templates/${template}`] = await Bun.file(
-			path.join(openspec, "schemas/spec-driven/templates", template),
-		).bytes();
+		entries[`omp-spec/templates/${template}`] = entries[`openspec/schemas/omp-spec/templates/${template}`]!;
 	// Bash scripts use `node`; route that command to the same embedded Bun runtime.
 	entries["omp-runtime/node"] = Buffer.from(
 		'#!/usr/bin/env bash\nset -e\nruntime="$OMP_BUN_EXECUTABLE"\nif command -v cygpath >/dev/null 2>&1; then runtime="$(cygpath -u "$runtime")"; fi\nexport BUN_BE_BUN=1\nexec "$runtime" "$@"\n',
@@ -547,6 +549,7 @@ async function embed(): Promise<void> {
 		superpowers: { version: superpowersVersion, revision },
 		jch: { revision: jchRevision },
 		methods,
+		commands: commandEntries,
 		skills,
 		files: Object.keys(entries)
 			.sort()
@@ -571,7 +574,9 @@ async function embed(): Promise<void> {
 	await fs.rm(templateRunner);
 	// Staging must not expose upstream examples to the package TypeScript source graph.
 	await fs.rm(staging, { recursive: true, force: true });
-	console.log(`Embedded ${manifest.files.length} complete files, ${skills.length} skills; archive SHA256 ${sha}`);
+	console.log(
+		`Embedded ${manifest.files.length} complete files, ${skills.length} skills, ${commandEntries.length} commands; archive SHA256 ${sha}`,
+	);
 }
 
 if (import.meta.main) {
