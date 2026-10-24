@@ -235,7 +235,7 @@ async function runPairedArm() {
 	const selected = [await loadSpecDrivenSkill("superpowers", "brainstorming")];
 	const resources = await ensureSpecDrivenResources();
 	const commands = await Promise.all(
-		["opsx-explore", "opsx-new", "opsx-continue"].map(async name => ({
+		["opsx-explore", "opsx-propose", "opsx-update"].map(async name => ({
 			name,
 			filePath: path.join(resources.root, resources.manifest.commands.find(command => command.name === name)!.path),
 			body: await loadOpenSpecCommand(name),

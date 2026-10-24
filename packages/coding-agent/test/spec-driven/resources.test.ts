@@ -14,9 +14,11 @@ import {
 } from "../../src/spec-driven/resources";
 import { archiveBase64 } from "../../src/spec-driven/vendor/archive.generated";
 
-const retainedWorkflows = ["archive", "continue", "explore", "new", "propose", "sync", "update", "verify"];
+const retainedWorkflows = ["archive", "explore", "propose", "sync", "update", "verify"];
 const retainedOpenSpecCommands = retainedWorkflows.map(name => `opsx-${name}`);
 const removedOpenSpecSkills = [
+	"openspec-new-change",
+	"openspec-continue-change",
 	"openspec-apply-change",
 	"openspec-ff-change",
 	"openspec-bulk-archive-change",
@@ -28,7 +30,7 @@ const proposalContent =
 const deltaContent =
 	"## Purpose\nDescribe how users can read the bundled requirements without any network connection or external checkout.\n\n## ADDED Requirements\n\n### Requirement: Offline requirements access\nThe system SHALL expose bundled requirements without a network connection.\n\n#### Scenario: Read requirements offline\n- **WHEN** a user requests the bundled requirements offline\n- **THEN** the requirements are available without a network request\n";
 
-// Init and update read global preferences; give each consumer its own HOME and XDG roots.
+// Give each native CLI consumer its own HOME and XDG roots.
 async function isolatedOpenSpec(project: string, configuration?: Record<string, unknown>) {
 	const resources = await ensureSpecDrivenResources();
 	const home = path.join(project, ".consumer-home");
@@ -66,19 +68,6 @@ async function isolatedOpenSpec(project: string, configuration?: Record<string, 
 		]);
 		return { stdout, stderr, exitCode };
 	};
-}
-
-async function expectRequirementsDelivery(project: string) {
-	const skills = path.join(project, ".claude", "skills");
-	const commands = path.join(project, ".claude", "commands", "opsx");
-	const installedSkills = await fs.readdir(skills).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return [];
-		throw error;
-	});
-	expect(installedSkills.filter(name => name.startsWith("openspec-"))).toEqual([]);
-	expect((await fs.readdir(commands)).filter(name => name.endsWith(".md")).sort()).toEqual(
-		retainedWorkflows.map(name => `${name}.md`),
-	);
 }
 
 async function expectNoImplementationArtifacts(project: string, change: string) {
@@ -216,7 +205,15 @@ describe("pinned upstream resources", () => {
 				);
 			}
 		}
-		for (const module of ["apply-change", "ff-change", "bulk-archive-change", "onboard", "feedback"]) {
+		for (const module of [
+			"new-change",
+			"continue-change",
+			"apply-change",
+			"ff-change",
+			"bulk-archive-change",
+			"onboard",
+			"feedback",
+		]) {
 			expect(
 				resources.manifest.files.some(file =>
 					file.path.startsWith(`openspec/dist/core/templates/workflows/${module}.`),
@@ -225,118 +222,115 @@ describe("pinned upstream resources", () => {
 		}
 	});
 
-	it("loads exactly the eight builtin OpenSpec command prompts and rejects unknown names", async () => {
+	it("loads exactly the six builtin OpenSpec command prompts and rejects unknown names", async () => {
 		const resources = await ensureSpecDrivenResources();
 		expect(resources.manifest.commands.map(command => command.name).sort()).toEqual(retainedOpenSpecCommands);
 		for (const command of resources.manifest.commands) {
 			const body = await loadOpenSpecCommand(command.name);
 			expect(body.length).toBeGreaterThan(100);
+			expect(body).not.toMatch(/\/opsx-(?:new|continue)\b/);
 			expect(body).not.toContain("/opsx:");
 			expect(body).not.toContain("[[opsx:");
 			expect(body).not.toMatch(/(?<![\w/.-])(?<!omp )openspec (?=[a-z-])/);
 			expect(body).toBe((await fs.readFile(path.join(resources.root, command.path), "utf8")).trim());
 		}
 		await expect(loadOpenSpecCommand("opsx-apply")).rejects.toThrow("Unknown bundled OpenSpec command");
+		await expect(loadOpenSpecCommand("opsx-new")).rejects.toThrow("Unknown bundled OpenSpec command");
+		await expect(loadOpenSpecCommand("opsx-continue")).rejects.toThrow("Unknown bundled OpenSpec command");
 		await expect(loadOpenSpecCommand("../opsx-new")).rejects.toThrow("Unknown bundled OpenSpec command");
 	});
 
-	for (const profile of ["core", "custom"] as const) {
-		it(`generates commands without reinstalling OpenSpec skills through init and forced update (${profile})`, async () => {
-			const project = path.join(temporary, `generated-${profile}`);
-			await fs.mkdir(project);
-			const cli = await isolatedOpenSpec(project, {
-				profile,
-				workflows: [...retainedWorkflows, "apply", "ff", "bulk-archive", "onboard", "feedback"],
-			});
-			const initialized = await cli(["init", "--tools", "claude", "--force", "--no-animation"]);
-			expect(initialized.exitCode).toBe(0);
-			await expectRequirementsDelivery(project);
-			// Remove managed outputs so update must regenerate, rather than merely retain init's output.
-			await fs.rm(path.join(project, ".claude", "commands", "opsx", "propose.md"));
-			const updated = await cli(["update", "--force"]);
-			expect(updated.exitCode).toBe(0);
-			await expectRequirementsDelivery(project);
-		}, 30_000);
-	}
-
-	for (const command of ["init", "update"] as const) {
-		it(`removes obsolete Kilo workflows through native ${command} without changing user files or history`, async () => {
-			const project = path.join(temporary, `kilo-legacy-cleanup-${command}`);
-			const legacy = path.join(project, ".kilocode", "workflows");
-			const history = path.join(project, "openspec", "changes", "archive", "2026-10-01-existing");
-			await fs.mkdir(legacy, { recursive: true });
-			await fs.mkdir(history, { recursive: true });
-			const historical = {
-				"proposal.md": proposalContent,
-				"design.md": "# Existing design\nPreserve implementation history.\n",
-				"tasks.md": "- [x] Existing implementation task\n",
-				".openspec.yaml": "schema: spec-driven\ncreated: 2026-10-01\n",
-			};
-			for (const [name, content] of Object.entries(historical)) {
-				await fs.writeFile(path.join(history, name), content);
-			}
-			const obsolete = ["apply", "ff", "bulk-archive", "onboard"];
-			for (const workflow of obsolete) {
-				await fs.writeFile(
-					path.join(legacy, `opsx-${workflow}.md`),
-					"<!-- OPENSPEC:START -->\nLegacy managed workflow\n<!-- OPENSPEC:END -->\n",
-				);
-			}
-			const userWorkflow = "# User workflow\nKeep this unrelated command.\n";
-			await fs.writeFile(path.join(legacy, "user-workflow.md"), userWorkflow);
-			const userSkill = path.join(project, ".kilocode", "skills", "user-skill", "SKILL.md");
-			await fs.mkdir(path.dirname(userSkill), { recursive: true });
-			await fs.writeFile(userSkill, "# User skill\nPreserve unrelated skills.\n");
-			const cli = await isolatedOpenSpec(project);
-			const result = await cli(
-				command === "init" ? ["init", "--tools", "kilocode", "--force", "--no-animation"] : ["update", "--force"],
-			);
-			expect(result.exitCode).toBe(0);
-			expect((await fs.readdir(legacy)).sort()).toEqual(["user-workflow.md"]);
-			expect(await fs.readFile(path.join(legacy, "user-workflow.md"), "utf8")).toBe(userWorkflow);
-			expect((await fs.readdir(path.join(project, ".kilo", "command"))).sort()).toEqual(
-				retainedWorkflows.map(workflow => `opsx-${workflow}.md`),
-			);
-			expect(
-				(await fs.readdir(path.join(project, ".kilocode", "skills")))
-					.filter(name => name.startsWith("openspec-"))
-					.sort(),
-			).toEqual([]);
-			expect(await fs.readFile(userSkill, "utf8")).toBe("# User skill\nPreserve unrelated skills.\n");
-			for (const [name, content] of Object.entries(historical)) {
-				expect(await fs.readFile(path.join(history, name), "utf8")).toBe(content);
-			}
-		}, 30_000);
-	}
-
-	it("keeps legacy tool migration within the retained workflows", async () => {
-		const project = path.join(temporary, "legacy-tool-migration");
-		const legacy = path.join(project, ".claude", "commands", "openspec");
-		await fs.mkdir(legacy, { recursive: true });
-		await fs.mkdir(path.join(project, "openspec"), { recursive: true });
-		// Native migration requires ownership markers; unmarked commands belong to the user and cannot trigger an upgrade.
-		await fs.writeFile(
-			path.join(legacy, "proposal.md"),
-			"<!-- OPENSPEC:START -->\nLegacy proposal command\n<!-- OPENSPEC:END -->\n",
-		);
-		await fs.writeFile(
-			path.join(legacy, "apply.md"),
-			"<!-- OPENSPEC:START -->\nLegacy implementation command\n<!-- OPENSPEC:END -->\n",
-		);
-		const cli = await isolatedOpenSpec(project);
-		const migrated = await cli(["update", "--force"]);
-		expect(migrated.exitCode).toBe(0);
-		await expectRequirementsDelivery(project);
-		expect(await Bun.file(path.join(legacy, "proposal.md")).exists()).toBe(false);
-		expect(await Bun.file(path.join(legacy, "apply.md")).exists()).toBe(false);
+	it("initializes requirements directories and config without installing external tool integrations", async () => {
+		const project = path.join(temporary, "minimal-init");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project, {
+			profile: "custom",
+			delivery: "both",
+			workflows: ["new", "continue", "apply", "ff", "onboard", ...retainedWorkflows],
+		});
+		const initialized = await cli(["init"]);
+		expect(initialized.exitCode).toBe(0);
+		const config = await fs.readFile(path.join(project, "openspec", "config.yaml"), "utf8");
+		expect(config).toMatch(/^schema:\s*omp-spec\s*$/m);
+		for (const directory of ["specs", "changes", "changes/archive"]) {
+			expect((await fs.stat(path.join(project, "openspec", directory))).isDirectory()).toBe(true);
+		}
+		for (const directory of ["specs", "changes/archive"]) {
+			expect(await Bun.file(path.join(project, "openspec", directory, ".gitkeep")).exists()).toBe(true);
+		}
+		expect((await fs.readdir(project)).sort()).toEqual([".consumer-home", "openspec"]);
+		await expect(fs.access(path.join(project, ".consumer-home", "codex"))).rejects.toThrow();
 	}, 30_000);
 
-	it("uses a requirements-only default schema for new, continue, and completed proposal flows", async () => {
+	it("preserves custom config, requirements history, and external tool files across repeated init", async () => {
+		const project = path.join(temporary, "existing-minimal-init");
+		const preserved: Record<string, string> = {
+			"openspec/config.yaml": "schema: custom-schema\ncontext: |\n  Preserve the owner's context.\n",
+			"openspec/specs/existing/spec.md": "# Existing requirements\r\nKeep exact bytes.\r\n",
+			"openspec/changes/archive/2026-10-01-existing/proposal.md": proposalContent,
+			"openspec/changes/archive/2026-10-01-existing/design.md": "# Existing design\n",
+			"openspec/changes/archive/2026-10-01-existing/tasks.md": "- [x] Existing task\n",
+			"openspec/changes/archive/2026-10-01-existing/.openspec.yaml": "schema: spec-driven\ncreated: 2026-10-01\n",
+			".claude/commands/openspec/apply.md":
+				"<!-- OPENSPEC:START -->\nExisting managed command\n<!-- OPENSPEC:END -->\n",
+			".claude/skills/openspec-apply-change/SKILL.md": "# Existing managed skill\n",
+			".kilocode/workflows/opsx-new.md":
+				"<!-- OPENSPEC:START -->\nExisting legacy workflow\n<!-- OPENSPEC:END -->\n",
+			".github/copilot-instructions.md": "# Existing Copilot instructions\n",
+			".github/workflows/user.yml": "name: Preserve user workflow\n",
+			".codex/skills/user-skill/SKILL.md": "# User skill\n",
+		};
+		for (const [relative, content] of Object.entries(preserved)) {
+			const file = path.join(project, relative);
+			await fs.mkdir(path.dirname(file), { recursive: true });
+			await fs.writeFile(file, content);
+		}
+		const cli = await isolatedOpenSpec(project, {
+			profile: "custom",
+			delivery: "both",
+			workflows: ["new", "apply", ...retainedWorkflows],
+		});
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expect((await cli(["init"])).exitCode).toBe(0);
+		}
+		for (const [relative, content] of Object.entries(preserved)) {
+			expect(await fs.readFile(path.join(project, relative), "utf8")).toBe(content);
+		}
+		const externalFiles = (
+			await Promise.all(
+				[".claude", ".kilocode", ".github", ".codex"].map(async directory =>
+					(await fs.readdir(path.join(project, directory), { recursive: true, withFileTypes: true }))
+						.filter(entry => entry.isFile())
+						.map(entry =>
+							path.relative(project, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"),
+						),
+				),
+			)
+		).flat();
+		expect(externalFiles.sort()).toEqual(
+			Object.keys(preserved)
+				.filter(relative => !relative.startsWith("openspec/"))
+				.sort(),
+		);
+		expect(await Bun.file(path.join(project, ".kilo")).exists()).toBe(false);
+	}, 30_000);
+
+	it("rejects the removed tools option and native installer commands without creating project files", async () => {
+		const project = path.join(temporary, "removed-installers");
+		await fs.mkdir(project);
+		const cli = await isolatedOpenSpec(project);
+		for (const args of [["init", "--tools", "none"], ["update"], ["experimental"]]) {
+			expect((await cli(args)).exitCode).not.toBe(0);
+		}
+		expect(await fs.readdir(project)).toEqual([".consumer-home"]);
+	}, 30_000);
+
+	it("uses a requirements-only default schema for native creation, artifact instructions, and completed proposals", async () => {
 		const project = path.join(temporary, "default-requirements");
 		await fs.mkdir(project);
 		await fs.writeFile(path.join(project, "business.ts"), "export const unchanged = true;\n");
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "none", "--force", "--no-animation"])).exitCode).toBe(0);
+		expect((await cli(["init"])).exitCode).toBe(0);
 		const created = await cli(["new", "change", "requirements-only"]);
 		expect(created.exitCode).toBe(0);
 		expect(created.stdout).toContain("Next: omp openspec status --change requirements-only");
@@ -408,7 +402,7 @@ describe("pinned upstream resources", () => {
 		const project = path.join(temporary, "invalid-delta-archive");
 		await fs.mkdir(project);
 		const cli = await isolatedOpenSpec(project);
-		expect((await cli(["init", "--tools", "none", "--force", "--no-animation"])).exitCode).toBe(0);
+		expect((await cli(["init"])).exitCode).toBe(0);
 		expect((await cli(["new", "change", "invalid-delta"])).exitCode).toBe(0);
 		const changeDir = path.join(project, "openspec", "changes", "invalid-delta");
 		await fs.writeFile(path.join(changeDir, "proposal.md"), proposalContent);

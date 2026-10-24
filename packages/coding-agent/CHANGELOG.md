@@ -14,7 +14,8 @@
 
 ### Changed
 
-- Replace bundled OpenSpec skills with independent built-in `/opsx-explore`, `/opsx-new`, `/opsx-continue`, `/opsx-update`, `/opsx-propose`, `/opsx-sync`, `/opsx-archive` and `/opsx-verify` commands. Keep CLI guidance on `omp openspec`, synchronize the existing requirements authority, and archive through native validation without requiring `/spec` or changing its approval flow.
+- Replace bundled OpenSpec skills with six independent built-in `/opsx-explore`, `/opsx-update`, `/opsx-propose`, `/opsx-sync`, `/opsx-archive` and `/opsx-verify` commands. Create requirements through propose and revise or complete unfinished requirements through update; remove the incremental new/continue workflows and their hidden-entry mechanism. Keep native CLI guidance, validation and `/spec` behavior intact.
+- Simplify bundled OpenSpec initialization to `omp openspec init [path] [--language <language>]` with the requirements-only default schema. Remove external-tool selection, installation/update entrypoints and flags; preserve existing project configuration, requirements, history and external-tool files.
 
 - Make eight referenced Superpowers skills discoverable with compact hints for explicit user invocation or a required active-skill handoff; keep `brainstorming` and `using-superpowers` hidden, preserve original skill bodies and the two existing discoverable originals, and leave system instructions and `/spec` gates unchanged.
 - Keep bundled OpenSpec requirements maintenance and the original standalone `verify-change` workflow without implementation fallbacks. Store `/spec` machine state and original Team selection in project-local runtime JSON, retain the single plan under `docs/superpowers/plans/`, and preserve read-only delivery snapshots when archiving.

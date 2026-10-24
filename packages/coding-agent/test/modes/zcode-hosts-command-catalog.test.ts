@@ -42,6 +42,33 @@ function byName(commands: readonly CommandDescriptor[]): Map<string, CommandDesc
 }
 
 describe("CommandCatalogService", () => {
+	test("offers six OpenSpec commands and rejects removed incremental entrypoints", async () => {
+		const cwd = process.cwd();
+		const service = new CommandCatalogService({ cwd });
+		const session = {
+			customCommands: [],
+			setSlashCommands() {},
+			sessionManager: { getCwd: () => cwd },
+			skills: [],
+		};
+		const catalog = await service.buildCatalog(session);
+		const completion = await service.complete({ text: "/opsx-", cursor: 6, session });
+		const visible = ["opsx-explore", "opsx-update", "opsx-propose", "opsx-sync", "opsx-archive", "opsx-verify"];
+		expect(
+			catalog
+				.filter(command => command.name.startsWith("opsx-"))
+				.map(command => command.name)
+				.sort(),
+		).toEqual(visible.toSorted());
+		for (const name of ["opsx-new", "opsx-continue"]) {
+			expect(completion.items.some(item => item.label === name || item.label === `/${name}`)).toBe(false);
+			expect(await service.resolve(`/${name} incremental-change`, session)).toMatchObject({
+				kind: "unknown",
+				name,
+			});
+		}
+	});
+
 	test("live session catalog lists builtins, skills, and terminal-only verdicts", async () => {
 		await using temp = await TempDir.create("zcode-hosts-catalog-");
 		const cwd = path.resolve(temp.path());

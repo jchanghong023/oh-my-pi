@@ -76,18 +76,14 @@ const requirementsAdaptation = parseYaml(openspecAdaptationSource.match(/```yaml
 	specsInstruction: string;
 };
 const requirementsWorkflows = Object.entries(requirementsAdaptation.workflows);
-const removedWorkflowModules = ["apply-change", "ff-change", "bulk-archive-change", "onboard", "feedback"];
-const removedFactories = [
-	"getApplyInstructions",
-	"getApplyChangeSkillTemplate",
-	"getOpsxApplyCommandTemplate",
-	"getFfChangeSkillTemplate",
-	"getOpsxFfCommandTemplate",
-	"getBulkArchiveChangeSkillTemplate",
-	"getOpsxBulkArchiveCommandTemplate",
-	"getOnboardSkillTemplate",
-	"getOpsxOnboardCommandTemplate",
-	"getFeedbackSkillTemplate",
+const removedWorkflowModules = [
+	"new-change",
+	"continue-change",
+	"apply-change",
+	"ff-change",
+	"bulk-archive-change",
+	"onboard",
+	"feedback",
 ];
 interface PackageMetadata {
 	version: string;
@@ -340,54 +336,157 @@ function adaptOpenSpecEntries(entries: Record<string, Uint8Array>, commands: Ups
 				.join("\n") + "\n",
 		);
 	}
-	let generation = readEntry("core/shared/skill-generation.js");
-	for (const factory of removedFactories) generation = generation.replaceAll(`${factory}, `, "");
-	generation = generation.replace(/\bget\w*SkillTemplate, /g, "");
-	const skillStart = generation.indexOf("export function getSkillTemplates(workflowFilter) {");
-	const commandStart = generation.indexOf("/**\n * Gets command templates", skillStart);
-	if (skillStart < 0 || commandStart < 0) throw new Error("Pinned skill distribution anchor changed");
-	generation =
-		generation.slice(0, skillStart) +
-		"export function getSkillTemplates() { return []; }\n" +
-		generation.slice(commandStart);
-	generation = generation
-		.split("\n")
-		.filter(line => !removedFactories.some(factory => line.includes(`template: ${factory}()`)))
-		.join("\n");
-	writeEntry("core/shared/skill-generation.js", generation);
-	const workflowIds = requirementsWorkflows.map(([id]) => id);
-	writeEntry(
-		"core/profiles.js",
-		`export const CORE_WORKFLOWS = ${JSON.stringify(workflowIds)};\n` +
-			"export const ALL_WORKFLOWS = CORE_WORKFLOWS;\n" +
-			"export function getProfileWorkflows(profile, customWorkflows) {\n" +
-			"  if (profile !== 'custom') return CORE_WORKFLOWS;\n" +
-			"  const workflows = (customWorkflows ?? []).filter(id => ALL_WORKFLOWS.includes(id));\n" +
-			"  if (workflows.includes('archive') && !workflows.includes('sync')) workflows.push('sync');\n" +
-			"  return workflows;\n}\n",
-	);
-	// Removal loops must still recognize previously installed implementation wrappers.
-	// Selection/creation loops see only retained workflows.
-	const cleanupWorkflows = JSON.stringify([...workflowIds, "apply", "ff", "bulk-archive", "onboard", "feedback"]);
-	replaceOnce(
-		"core/legacy-cleanup.js",
-		"...ALL_WORKFLOWS.map(workflow => `.kilocode/workflows/opsx-${workflow}.md`),",
-		`...${cleanupWorkflows}.map(workflow => \`.kilocode/workflows/opsx-\${workflow}.md\`),`,
-	);
-	replaceOnce(
-		"core/profile-sync-drift.js",
-		"export const WORKFLOW_TO_SKILL_DIR = {",
-		"export const WORKFLOW_TO_SKILL_DIR = {\n    'feedback': 'feedback',",
-	);
-	for (const relative of ["core/init.js", "core/update.js", "core/shared/tool-detection.js"]) {
-		writeEntry(
-			relative,
-			readEntry(relative).replaceAll(
-				"for (const workflow of ALL_WORKFLOWS)",
-				`for (const workflow of ${cleanupWorkflows})`,
-			),
+	// Init is a requirements-directory initializer. Reuse the pinned filesystem,
+	// config and pointer guards without importing any integration installers.
+	const initSource = readEntry("core/init.js");
+	const checkedSection = (text: string, start: string, end: string): string => {
+		const offset = text.indexOf(start);
+		const limit = text.indexOf(end, offset + start.length);
+		if (
+			offset < 0 ||
+			limit < 0 ||
+			text.indexOf(start, offset + start.length) >= 0 ||
+			text.indexOf(end, limit + end.length) >= 0
+		)
+			throw new Error(`Pinned OpenSpec adapter section changed: ${start}`);
+		return text.slice(offset, limit);
+	};
+	const helperNames = [
+		"validate",
+		"createDirectoryStructure",
+		"writeGitkeepFiles",
+		"normalizeLanguage",
+		"languageContext",
+		"assertLanguageCanBeApplied",
+		"createConfig",
+		"startSpinner",
+	];
+	const helpers = helperNames.map(name => {
+		const matches = [
+			...initSource.matchAll(new RegExp(`^    (?:async )?${name}\\([^\\n]*\\) \\{\\n[\\s\\S]*?^    \\}`, "gm")),
+		];
+		if (matches.length !== 1) throw new Error(`Pinned OpenSpec init helper changed: ${name}`);
+		return matches[0]![0];
+	});
+	const imports = [
+		"path",
+		"ora",
+		"fs",
+		"../utils/file-system.js",
+		"./project-config.js",
+		"./planning-home.js",
+		"./root-selection.js",
+		"./openspec-root.js",
+		"./styles/palette.js",
+		"./config-prompts.js",
+	].map(module => {
+		const matches = initSource
+			.split("\n")
+			.filter(line => line.startsWith("import ") && line.endsWith(`from '${module}';`));
+		if (matches.length !== 1) throw new Error(`Pinned OpenSpec init import changed: ${module}`);
+		return matches[0]!;
+	});
+	if (!/^import \{ .*OPENSPEC_DIR_NAME, .* \} from '\.\/config\.js';$/m.test(initSource))
+		throw new Error("Pinned OpenSpec init directory constant import changed");
+	imports.push("import { OPENSPEC_DIR_NAME } from './config.js';");
+	const constants = checkedSection(
+		initSource,
+		"const DEFAULT_SCHEMA = 'spec-driven';",
+		"const WORKFLOW_TO_SKILL_DIR = {",
+	).replace("const DEFAULT_SCHEMA = 'spec-driven';", "const DEFAULT_SCHEMA = 'omp-spec';");
+	const pointerGuard = checkedSection(
+		initSource,
+		"        const guardRoot = findRepoPlanningRootSync(projectPath);",
+		"        // Pointer repos keep their local planning files untouched.",
+	)
+		.replaceAll("integrationsOnly", "pointerOnly")
+		.replace("to install integrations.", "to initialize OpenSpec.")
+		.replace(
+			"                    // A valid pointer repo already has its planning root in the declared\n" +
+				"                    // store. Init should still be able to install agent integrations in\n" +
+				"                    // the code repo, without creating a second local planning root.\n",
+			"                    // Validate the external root without creating a second local planning root.\n",
 		);
-	}
+	writeEntry(
+		"core/init.js",
+		`${imports.join("\n")}\n${constants}export class InitCommand {\n` +
+			"    language;\n" +
+			"    constructor(options = {}) {\n" +
+			"        this.language = this.normalizeLanguage(options.language);\n" +
+			"    }\n" +
+			"    async execute(targetPath) {\n" +
+			"        const projectPath = FileSystemUtils.canonicalizeExistingPath(targetPath);\n" +
+			"        const openspecPath = path.join(projectPath, OPENSPEC_DIR_NAME);\n" +
+			"        const extendMode = await this.validate(projectPath, openspecPath);\n" +
+			pointerGuard +
+			"        if (pointerOnly) return;\n" +
+			"        await this.createDirectoryStructure(openspecPath, extendMode);\n" +
+			"        await this.createConfig(openspecPath, extendMode);\n" +
+			"        console.log('OpenSpec initialized.');\n" +
+			"    }\n" +
+			helpers.join("\n") +
+			"\n}\n",
+	);
+	writeEntry(
+		"core/init.d.ts",
+		"type InitCommandOptions = { language?: string; };\n" +
+			"export declare class InitCommand {\n" +
+			"    private readonly language?;\n" +
+			"    constructor(options?: InitCommandOptions);\n" +
+			"    execute(targetPath: string): Promise<void>;\n" +
+			helperNames.map(name => `    private ${name};`).join("\n") +
+			"\n}\nexport {};\n",
+	);
+	const cliSource = readEntry("cli/index.js");
+	const toolOptions = checkedSection(
+		cliSource,
+		"const availableToolIds = AI_TOOLS",
+		"program\n    .command('init [path]')",
+	);
+	replaceOnce("cli/index.js", toolOptions, "");
+	replaceOnce("cli/index.js", "import { AI_TOOLS, TOOL_ID_ALIASES } from '../core/config.js';\n", "");
+	replaceOnce(
+		"cli/index.js",
+		checkedSection(
+			cliSource,
+			"// Hidden alias: 'experimental' -> 'init' for backwards compatibility",
+			"program\n    .command('list')",
+		),
+		"",
+	);
+	for (const option of [
+		"    .option('--tools <tools>', toolsOptionDescription)\n",
+		"    .option('--force', 'Auto-cleanup legacy files without prompting')\n",
+		"    .option('--profile <profile>', 'Override global config profile (core or custom)')\n",
+		"    .option('--no-animation', 'Show a static welcome screen instead of the animated one')\n",
+		"    .option('--copilot-cloud', 'Set up GitHub Copilot cloud coding-agent files without prompting')\n",
+		"    .option('--no-copilot-cloud', 'Skip GitHub Copilot cloud coding-agent files without prompting')\n",
+		"            tools: options?.tools,\n",
+		"            force: options?.force,\n",
+		"            profile: options?.profile,\n",
+		"            animation: options?.animation,\n",
+		"            copilotCloud: options?.copilotCloud,\n",
+	])
+		replaceOnce("cli/index.js", option, "");
+	for (const extension of ["js", "d.ts", "js.map", "d.ts.map"]) delete entries[`${root}core/update.${extension}`];
+	const registryPath = "core/completions/command-registry.js";
+	const registrySource = readEntry(registryPath);
+	replaceOnce(
+		registryPath,
+		checkedSection(registrySource, "    {\n        name: 'init',", "    {\n        name: 'version',"),
+		"    {\n" +
+			"        name: 'init',\n" +
+			"        description: 'Initialize OpenSpec in your project',\n" +
+			"        acceptsPositional: true,\n" +
+			"        positionalType: 'path',\n" +
+			"        positionals: [{ name: 'path', type: 'path', optional: true }],\n" +
+			"        flags: [{\n" +
+			"            name: 'language',\n" +
+			"            description: 'Write new OpenSpec artifacts in this language',\n" +
+			"            takesValue: true,\n" +
+			"        }],\n" +
+			"    },\n",
+	);
 	replaceOnce("commands/workflow/default-schema.js", "'spec-driven'", "'omp-spec'");
 	// Resolve legacy graphs as an in-memory requirements projection. Never rewrite
 	// their schema, metadata, or historical implementation artifacts.

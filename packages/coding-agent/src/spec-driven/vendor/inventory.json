@@ -108,14 +108,6 @@
       "path": "openspec/commands/opsx-explore.md"
     },
     {
-      "name": "opsx-new",
-      "path": "openspec/commands/opsx-new.md"
-    },
-    {
-      "name": "opsx-continue",
-      "path": "openspec/commands/opsx-continue.md"
-    },
-    {
       "name": "opsx-update",
       "path": "openspec/commands/opsx-update.md"
     },
@@ -285,18 +277,8 @@
       "executable": false
     },
     {
-      "path": "openspec/commands/opsx-continue.md",
-      "sha256": "10b68311d254d8164a4fe5a43bc5b0056002fe7c017d9fd1fbff60e855d063ee",
-      "executable": false
-    },
-    {
       "path": "openspec/commands/opsx-explore.md",
       "sha256": "8d8ccd9dbad85926e2ce73fd9206934fba4ec3262b17d227e019f1f0be25cc45",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-new.md",
-      "sha256": "c9b0293e789e082e3c63b33a95a06f348cdacec7cdf8019d41c11c4bcfada1e4",
       "executable": false
     },
     {
@@ -311,7 +293,7 @@
     },
     {
       "path": "openspec/commands/opsx-update.md",
-      "sha256": "1bd73cafbd460659b93fac149ab6af77f5593a54f74306691bdd1b7487ad709a",
+      "sha256": "b9996bbd5292d53a9886a4cf638549436086973c35163e4082d3e3ba15bdd5d5",
       "executable": false
     },
     {
@@ -396,7 +378,7 @@
     },
     {
       "path": "openspec/dist/cli/index.js",
-      "sha256": "457e80a315ffa219439d92b740fb950812f87b957fc9960a61e2df845de33dcb",
+      "sha256": "acf49d5cd4e4ffea603f89847e216bb45e268fbc2391a268f07ee56dea6795f2",
       "executable": false
     },
     {
@@ -1216,7 +1198,7 @@
     },
     {
       "path": "openspec/dist/core/completions/command-registry.js",
-      "sha256": "5929f5ba83b6ef2ec3f94661b8633584d78bddfce60032d2a3e7c34b7947f3b9",
+      "sha256": "1babfa4dc7059f166cf553b622cdb7fa5172fa4d24277b4b8e352652f5e5a422",
       "executable": false
     },
     {
@@ -1481,12 +1463,12 @@
     },
     {
       "path": "openspec/dist/core/init.d.ts",
-      "sha256": "67417b4fff6e72ad21a1c8975fbe5880f5142ecd31b20d50adbf8bf14714a219",
+      "sha256": "4d232be562570bc874ba4b4797cd2e28ac5d74cb5bd85d6cdba60f2af9f98d0a",
       "executable": false
     },
     {
       "path": "openspec/dist/core/init.js",
-      "sha256": "f2d99a22d9806ec70999179e0edb4e4591c90dc4d311b65445539761d0d61586",
+      "sha256": "31fa999548af80be2d3fc9a406187c8b2f745297a79ea6a7618bb617e737ee99",
       "executable": false
     },
     {
@@ -1496,7 +1478,7 @@
     },
     {
       "path": "openspec/dist/core/legacy-cleanup.js",
-      "sha256": "e412462f3c9f6f8fef5d7a1abb1744b2ae699ed3e3b47a094ccda656beaaca62",
+      "sha256": "1392c44d48bc06b9594cab70d2a4d1099a6859c7e4e2561f2141a0412b1cc273",
       "executable": false
     },
     {
@@ -1626,7 +1608,7 @@
     },
     {
       "path": "openspec/dist/core/profile-sync-drift.js",
-      "sha256": "e1222897ebebafe4c29d98f1ce0ad2df34e980fe107fe626e9ef140d094a9d28",
+      "sha256": "49759d0127e93655b98ad15f77b6644d5c4fbc62c4a04c6445dba2cf914f09f9",
       "executable": false
     },
     {
@@ -1636,7 +1618,7 @@
     },
     {
       "path": "openspec/dist/core/profiles.js",
-      "sha256": "d0391a87daca54cca3e998b3d52ef2f700d2c496b37f8b2d24114b859fa4a03b",
+      "sha256": "9ac30d888490d9f46c559dc34e9561ef1d2c306d3c82d73c5048d99a8c50c7b8",
       "executable": false
     },
     {
@@ -1776,7 +1758,7 @@
     },
     {
       "path": "openspec/dist/core/shared/skill-generation.js",
-      "sha256": "d319c681e40fea48491170f9a2fad9e8b04fb51ede2a0106a21d70cc4d519cfe",
+      "sha256": "ef5419e82d0d89fe25f85a78ae9b53c0f564e7cd6c720fc59267c27fdd196b9a",
       "executable": false
     },
     {
@@ -1796,7 +1778,7 @@
     },
     {
       "path": "openspec/dist/core/shared/tool-detection.js",
-      "sha256": "85a4b19cd94fcbd525d60faf5ef407e46c2a6ca1da6ec9bbe1a52bccafa61f1b",
+      "sha256": "8bfbd76c6f72659b3da77a1a09f58fc906ec90f162da276d2dd5c6b43e087640",
       "executable": false
     },
     {
@@ -1901,12 +1883,12 @@
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.d.ts",
-      "sha256": "616682cbfd7e384ad923b99276d8da5108ee4ca8d2a6d5cc1840a045e6ea421a",
+      "sha256": "2b7e5cab9beaa48759aff7b160231e9cecd99971d48175148007e74e0e867ef2",
       "executable": false
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.js",
-      "sha256": "616682cbfd7e384ad923b99276d8da5108ee4ca8d2a6d5cc1840a045e6ea421a",
+      "sha256": "2b7e5cab9beaa48759aff7b160231e9cecd99971d48175148007e74e0e867ef2",
       "executable": false
     },
     {
@@ -1930,16 +1912,6 @@
       "executable": false
     },
     {
-      "path": "openspec/dist/core/templates/workflows/continue-change.d.ts",
-      "sha256": "80995aa75da90e4880ffa5c0c756d99f8cfbb99eb8e556dbb2e5d446f4600b93",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/continue-change.js",
-      "sha256": "afc91dcc52035f8394aa543e78370efad7679cddcd2cf115e50afabf09691497",
-      "executable": false
-    },
-    {
       "path": "openspec/dist/core/templates/workflows/explore.d.ts",
       "sha256": "f2b3a27dc6ce00c032265d074abb3ff876020d850ffe0687977ad26e28a78ff7",
       "executable": false
@@ -1947,16 +1919,6 @@
     {
       "path": "openspec/dist/core/templates/workflows/explore.js",
       "sha256": "90780fd4a0e443f9b8af2158a062baccdcbda1cd8c9aff8b54f2776b20bd81fe",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/new-change.d.ts",
-      "sha256": "d5b52aaf9387469a5f8bb42982536560a823788751256cde55bf3695b25ce738",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/new-change.js",
-      "sha256": "aeeefde6c8e378740e55fb4308d860500a49927e3dd0015aaf51bcdc8e650f25",
       "executable": false
     },
     {
@@ -2006,7 +1968,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/update-change.js",
-      "sha256": "8b00de4c3fdd60234f47c8a49cf9730440d3649a89c1f9b9f41b41a2aaeb0299",
+      "sha256": "324e47b9ef9d451509a6ffbc88bc4bfc0ce0e4a5bf39dec49a122a6f46efdfdf",
       "executable": false
     },
     {
@@ -2017,16 +1979,6 @@
     {
       "path": "openspec/dist/core/templates/workflows/verify-change.js",
       "sha256": "91630be9ff8e251c5e9ab46f7c481e4fb243d1e618ca9a3b220a74b4ea52ef83",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/update.d.ts",
-      "sha256": "d43aeafb503fa3c5aaff7acde1fa9790803e8b81c40a2ac65fa90d4857447edb",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/update.js",
-      "sha256": "9a5247e9c16f09b3c00e11cbc40909f0555b4a7a965ee6350b85697fcd2b455e",
       "executable": false
     },
     {

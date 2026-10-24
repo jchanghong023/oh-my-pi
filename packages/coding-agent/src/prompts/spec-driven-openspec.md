@@ -26,31 +26,63 @@ workflows:
         after: '"That changes a requirement. Capture it in specs?"'
       - before: '"Updated the design with these decisions"'
         after: '"Updated the requirements with these decisions"'
-  new:
-    module: new-change
-    commandFactory: getOpsxNewCommandTemplate
-  continue:
-    module: continue-change
-    commandFactory: getOpsxContinueCommandTemplate
-    replacements:
-      - before: (proposal.md, tasks.md, etc.)
-        after: (proposal.md or specs)
-      - before: '[[opsx:if-workflow archive]]Once implementation and any tracked work are complete, archive it with `/opsx:archive`.[[opsx:else]]Once implementation and any tracked work are complete, archive it with `openspec archive "<name>"`.[[opsx:end]]'
-        after: '[[opsx:if-workflow archive]]After requirements acceptance, archive with `/opsx:archive`.[[opsx:else]]After requirements acceptance, archive with `openspec archive "<name>"`.[[opsx:end]]'
   update:
     module: update-change
     commandFactory: getOpsxUpdateCommandTemplate
+    description: Revise or resume an existing OpenSpec requirements change, completing confirmed proposal and capability specifications without implementation.
     replacements:
+      - before: Revise a change's existing planning artifacts and keep them coherent. Never edit code.
+        after: Revise or resume an existing requirements change. Reconcile existing proposal and specs and complete requested missing requirement artifacts within confirmed scope. NEVER edit implementation code or historical design/tasks.
+      - before: '[[opsx:if-workflow continue]]This workflow revises artifacts that already exist; `/opsx:continue` is what creates the ones that do not.[[opsx:else]]This workflow revises artifacts that already exist; it never creates missing ones. When an artifact is missing, `openspec status --change "<name>" --json` names the next one and `openspec instructions "<artifact-id>" --change "<name>" --json` explains how to write it.[[opsx:end]]'
+        after: This workflow also resumes unfinished changes. Use native status and artifact instructions to create confirmed missing proposal/specs in dependency order; NEVER hand off missing requirement artifacts to another workflow.
       - before: The artifact ids and paths come from the active schema - do NOT assume them, and do NOT branch on hardcoded artifact names. Custom schemas must work unchanged.
         after: The artifact ids and paths come from the native requirements-only projection. Reconcile only proposal and specs; historical implementation artifacts remain untouched, even if now inconsistent. Report that boundary instead of updating them.
+      - before: 'The files to edit are `artifactPaths.<id>.existingOutputPaths` - the concrete files that exist on disk, already glob-expanded for glob artifacts (e.g. `specs/**/*.md`), plus any confirmed concrete path allowed under a partly populated glob artifact (step 4). Do NOT write to `resolvedOutputPath`: for a glob artifact it is still the glob pattern, not a real file.'
+        after: 'Existing files come from `artifactPaths.<id>.existingOutputPaths`. New requirement files use confirmed concrete paths allowed by native artifact instructions and `artifactPaths.<id>.outputPath`, including empty and partly populated artifacts (step 4). NEVER write to a glob `resolvedOutputPath`.'
       - before: '("the design now uses X")'
         after: '("the requirement now includes X")'
-      - before: 'Change already implemented (tasks checked off / already applied) -> the code may no longer match the revised plan;'
-        after: 'Requirements revised -> report any effect on implementation as out of scope;'
-      - before: 'Everything done and implemented ->'
-        after: 'Requirements accepted ->'
+      - before: '- Read the artifact(s) the request touches and the change''s other existing artifacts.'
+        after: '- Read the requested requirement artifacts and existing proposal/specs. Use project requirements authority and relevant source context to ground scope and acceptance scenarios; NEVER reconcile historical design/tasks.'
+      - before: 'Build order is a useful reading order, not a constraint on which artifacts may be revised.'
+        after: 'Existing requirement artifacts may be revised in either direction; missing artifacts MUST be created in native dependency order.'
+      - before: 'Propose revisions to files that already exist (`existingOutputPaths`). If an artifact has no existing output files and status `ready` or `blocked`, note it and [[opsx:if-workflow continue]]point the user to `/opsx:continue` to create them[[opsx:else]]point the user to `openspec instructions "<artifact-id>" --change "<name>" --json` for how to create them[[opsx:end]]. Leave `skipped` artifacts untouched; do not treat them as missing or defer them to the continue workflow.'
+        after: 'Propose revisions to existing proposal/specs and completion of requested missing requirement artifacts. Walk the `requires` edges in `openspec status --change "<name>" --json` transitively, including edges on `done` artifacts: file-existence status does not prove dependencies exist. Include a missing proposal prerequisite before specs when within the confirmed requirement scope; if a prerequisite is outside that scope, obtain explicit confirmation before any dependent write. NEVER write a blocked dependent before its non-skipped prerequisites exist. Leave `skipped` artifacts untouched and NEVER create design/tasks or implementation dependencies; report incompatible graphs instead.'
+      - before: 'A glob artifact (e.g. `specs/**/*.md`) is marked `done` after at least one file matches, and the continue workflow only handles `ready` artifacts. When reconciliation identifies a missing file for a glob artifact whose `existingOutputPaths` is non-empty:'
+        after: 'A glob artifact (e.g. `specs/**/*.md`) is marked `done` after one match, so also identify requested missing capability files under partly populated specs. For every missing proposal/specs file, whether its artifact is empty or partly populated:'
+      - before: 'Run `openspec instructions "<artifact-id>" --change "<name>" --json` and use its `instruction` and `template`. Treat `context` and `rules` as constraints; do not copy them into the file. If instructions report `skipped: true`, do not create the file. Read current dependency files from disk; if a required non-skipped dependency is missing, stop and ask the user to restore it first.'
+        after: 'Run `openspec instructions "<artifact-id>" --change "<name>" --json` and use its `instruction` and `template`. Treat `context` and `rules` as constraints, not file content. If instructions report `skipped: true`, NEVER create the file. Read current dependency files from disk. Draft missing in-scope proposal/specs prerequisites first using their own native instructions; create them only in step 5 after confirmation, refresh status, and then obtain dependent instructions. Out-of-scope or incompatible prerequisites block the dependent, not unrelated confirmed work.'
+      - before: 'Choose a concrete path inside `changeRoot` that matches `artifactPaths.<id>.outputPath` and does not already exist. Verify it remains inside `changeRoot` after resolving any symlinked parent directories. The glob `resolvedOutputPath` is not a valid target.'
+        after: 'Choose a concrete path inside the selected-store-aware `changeRoot` that matches `artifactPaths.<id>.outputPath` and native instructions and does not already exist. Resolve symlinked parents and verify containment inside that `changeRoot`; NEVER fall back to a repo-local root or write a glob `resolvedOutputPath`.'
+      - before: 'After confirmation, immediately before creation, refresh status and instructions. Verify the artifact is still in scope, not skipped, and partially populated; repeat the concrete-path checks above.'
+        after: 'After confirmation, immediately before each creation, refresh native status and instructions. Verify the artifact remains in confirmed scope, not skipped, and all non-skipped `requires` prerequisites exist on disk; NEVER write while blocked. Repeat selected-store root and concrete-path containment checks. A changed draft, dependency, or path requires reconciling and confirming the affected scope again.'
+      - before: '- If the change is already coherent, say so and propose no revisions.'
+        after: '- If existing requirements are coherent and every requested non-skipped requirement artifact exists, say so and propose no revisions. Coherence alone does not complete an unfinished change.'
+      - before: '- Show each proposed revision and why - including the requested edit drafted in step 4. Write only after the user confirms.'
+        after: '- Show each proposed requirement revision or creation, exact concrete paths, missing prerequisites, and why, including step 4 drafts. Write only within explicit user-confirmed requirements scope. Apply confirmed missing prerequisites before their dependents; refresh status and instructions between creations. A rejected prerequisite blocks dependent creation; NEVER silently expand scope.'
+      - before: |
+          6. **Point to the next step (guidance only - NEVER act on it)**
+             - Artifacts with empty `existingOutputPaths` and status `ready` or `blocked` -> [[opsx:if-workflow continue]]suggest `/opsx:continue` to create them[[opsx:else]]run `openspec status --change "<name>" --json` for the next artifact and point the user to `openspec instructions "<artifact-id>" --change "<name>" --json` for how to create it[[opsx:end]].
+             - Change already implemented (tasks checked off / already applied) -> the code may no longer match the revised plan; [[opsx:if-workflow apply]]suggest `/opsx:apply` to carry the delta into code[[opsx:else]]say that the code may need updating and offer to carry the delta into it[[opsx:end]].
+             - Everything done and implemented -> [[opsx:if-workflow archive]]suggest `/opsx:archive`[[opsx:else]]suggest archiving with `openspec archive "<name>"`[[opsx:end]].
+        after: |
+          6. **Report requirement readiness (guidance only)**
+             - Refresh native status and check requested concrete requirement files, including missing files under a `done` glob artifact. Complete confirmed in-scope missing proposal/specs through steps 4–5 before returning; report rejected or out-of-scope prerequisites and incompatible graphs precisely.
+             - Unfinished work can resume with `/opsx:update <name>`; NEVER create a second change merely to finish missing artifacts.
+             - Requirements ready for review -> report readiness, not implementation completion. After explicit requirements acceptance, suggest `/opsx:archive`; NEVER implement or alter historical implementation state.
+      - before: '- Any file created under a glob artifact that was already partially populated'
+        after: '- Every proposal/specs file created, including missing files under partly populated glob artifacts'
+      - before: '- [[opsx:if-workflow continue]]Anything deferred to `/opsx:continue` (artifacts with no files yet and status `ready` or `blocked`, never `skipped` artifacts)[[opsx:else]]Anything deferred because it does not exist yet (artifacts with no files and status `ready` or `blocked`, never `skipped` artifacts)[[opsx:end]]'
+        after: '- Any requested requirement artifact left incomplete, its exact prerequisite or confirmation blocker, and how `/opsx:update <name>` resumes it; skipped artifacts are not missing'
+      - before: '- Planning artifacts only - NEVER edit implementation code. If the revised plan implies code changes, [[opsx:if-workflow apply]]stop and point to `/opsx:apply`[[opsx:else]]stop and say that the revised plan now implies code changes; implementing them is a separate step[[opsx:end]].'
+        after: '- Requirements only. NEVER edit implementation code, design/tasks, metadata, or implementation state. Report implementation implications as out of scope.'
       - before: '- Use the artifact ids and paths reported by `openspec status`; never branch on hardcoded artifact names.'
-        after: '- Use the proposal/specs ids and paths reported by `openspec status`; never write historical implementation artifacts.'
+        after: '- Use native proposal/specs ids, `requires` edges, and selected-store paths reported by `openspec status`; NEVER write historical implementation artifacts.'
+      - before: '- Edit only the concrete files in `existingOutputPaths`, plus any confirmed concrete path allowed under a partly populated glob artifact (step 4); never write to a glob `resolvedOutputPath`.'
+        after: '- Edit only native concrete proposal/specs files and explicitly confirmed missing requirement paths allowed by step 4, including empty or partly populated artifacts. NEVER write a glob `resolvedOutputPath` or escape the selected `changeRoot`.'
+      - before: '- Do not advance the build frontier: if an artifact has empty `existingOutputPaths` and status `ready` or `blocked`, [[opsx:if-workflow continue]]that is `/opsx:continue`''s job[[opsx:else]]creating them is a separate step, outside this workflow[[opsx:end]]. Leave `skipped` artifacts untouched. The only new-file scope is a confirmed concrete path under a glob artifact whose `existingOutputPaths` is non-empty.'
+        after: '- Complete confirmed missing proposal/specs using native instructions and `requires` dependency order. NEVER create skipped artifacts, blocked dependents, historical design/tasks, or files outside confirmed requirements scope.'
+      - before: '[[opsx:if-workflow new]]recommend starting fresh with `/opsx:new` (the "Update vs. Start Fresh" heuristic)[[opsx:else]]ask for a distinct unused change name and recommend `openspec new change "<new-change-name>"` instead (the "Update vs. Start Fresh" heuristic)[[opsx:end]]'
+        after: 'recommend `/opsx:propose` with a distinct unused change name for the intentionally different requirements; ordinary missing artifacts belong in this existing change'
   propose:
     module: propose
     commandFactory: getOpsxProposeCommandTemplate

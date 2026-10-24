@@ -7,9 +7,7 @@ import type { SlashCommandSpec } from "./types";
 const renderOpenSpecCommand = prompt.compile(openSpecCommandPrompt);
 const openSpecCommands = [
 	["opsx-explore", "探索问题与需求，不实施代码", "[问题]"],
-	["opsx-new", "创建需求变更，不生成实施方案", "[变更说明]"],
-	["opsx-continue", "继续完善需求变更", "[变更名]"],
-	["opsx-update", "修订需求材料并检查一致性", "[变更名及修改要求]"],
+	["opsx-update", "修订或补齐需求材料并检查一致性", "[变更名及修改要求]"],
 	["opsx-propose", "生成需求提案与规格，不实施代码", "[需求]"],
 	["opsx-sync", "将规格增量合入正式需求书，不代表已实现", "[变更名]"],
 	["opsx-archive", "归档需求变更，不代替实现验收", "[变更名]"],

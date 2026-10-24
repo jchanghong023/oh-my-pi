@@ -445,7 +445,9 @@ OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编�
 
 这是 OMP 内置的 OpenSpec fork，和 `/spec` 是两个独立功能。它不要求 `/spec` 的运行、批准、方案、计划或回写接口；可以只确认需求、同步正式需求并归档，暂不实施代码。
 
-在 OMP 输入框使用 `/opsx-explore [问题]`、`/opsx-propose [需求]`、`/opsx-update [变更名及修改要求]`、`/opsx-sync [变更名]`、`/opsx-archive [变更名]`；逐步维护用 `/opsx-new`、`/opsx-continue`，独立实现核对用 `/opsx-verify`。命令开箱可用，无需先运行 `init` 安装模板；新项目确需建立 OpenSpec 变更目录时，再按明确请求初始化项目。同步是将已确认的增量需求合入唯一正式需求书：原生项目更新 `openspec/specs/`，已有 Markdown 权威目录则定位原文并应用最小补丁，不另建一份主规格。归档通过原生校验及归档引擎结束变更记录，失败时保留变更；同步和归档都不等于代码已实现或验收通过。运行中或暂停的 `/spec` 不允许借独立命令绕过其门禁。终端仍可运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等真实 CLI。Superpowers 是另外的独立技能能力，例如 `/skill:writing-plans 按已确认需求编写计划`；OpenSpec 不以其计划为前提。
+在 OMP 输入框使用 `/opsx-explore [问题]`、`/opsx-propose [需求]`、`/opsx-update [变更名及修改要求]`、`/opsx-sync [变更名]`、`/opsx-archive [变更名]`、`/opsx-verify [变更名]` 六项命令。新建需求用 `/opsx-propose`；修订或继续补齐已有变更用 `/opsx-update`，不再提供 new／continue 逐产物命令。命令开箱可用，无需先运行 `init` 安装模板；新项目确需建立 OpenSpec 变更目录时，再按明确请求初始化项目。同步是将已确认的增量需求合入唯一正式需求书：原生项目更新 `openspec/specs/`，已有 Markdown 权威目录则定位原文并应用最小补丁，不另建一份主规格。归档通过原生校验及归档引擎结束变更记录，失败时保留变更；同步和归档都不等于代码已实现或验收通过。运行中或暂停的 `/spec` 不允许借独立命令绕过其门禁。终端仍可运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等真实 CLI。Superpowers 是另外的独立技能能力，例如 `/skill:writing-plans 按已确认需求编写计划`；OpenSpec 不以其计划为前提。
+
+mini 版初始化只需 `omp openspec init`（可指定目标路径及 `--language <语言>`），只建立规格目录和配置；不使用 `--tools none`，也不选择或安装 Claude Code 等外部工具适配。命令模板由 OMP 内置，无需执行原生工具安装用的 `update`；该入口及旧 `experimental` 别名已移除，需求修订仍用 `/opsx-update`。
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
