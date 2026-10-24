@@ -124,8 +124,11 @@ export function respond(request: ModelRequest): Reply {
 			!selected.deniedPaths.every(value => typeof value === "string")
 		)
 			throw new Error("Invalid selected package resource");
+		const allowedPaths = selected.allowedPaths ?? [];
+		if (!Array.isArray(allowedPaths) || !allowedPaths.every(value => typeof value === "string"))
+			throw new Error("Invalid selected package resource");
 		const executed = calls(request);
-		const targets = [selected.path, selected.deniedPaths.join(";")];
+		const targets = [selected.path, ...allowedPaths, selected.deniedPaths.join(";")];
 		for (const target of targets)
 			if (!executed.some(call => call.name === "read" && call.args.path === target))
 				return tool(request, "read", { i: "Inspecting packaged resource access", path: target });

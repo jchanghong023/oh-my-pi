@@ -32,7 +32,18 @@ describe("pinned upstream resources", () => {
 			const skill = await loadSpecDrivenSkill(entry.source, entry.name);
 			const ordinarilyVisible =
 				entry.source === "superpowers" &&
-				(entry.name === "verification-before-completion" || entry.name === "systematic-debugging");
+				[
+					"verification-before-completion",
+					"systematic-debugging",
+					"writing-plans",
+					"subagent-driven-development",
+					"executing-plans",
+					"using-git-worktrees",
+					"test-driven-development",
+					"requesting-code-review",
+					"finishing-a-development-branch",
+					"writing-skills",
+				].includes(entry.name);
 			expect(skill.hide).toBe(!ordinarilyVisible);
 			expect(skill.containRoot).toBe(
 				entry.source === "openspec" ? resources.openspecRoot : resources.superpowersRoot,

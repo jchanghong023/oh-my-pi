@@ -14,7 +14,7 @@
 
 ### Changed
 
-- Expose bundled `verification-before-completion` and `systematic-debugging` for ordinary skill discovery using their unchanged upstream originals; other bundled skills remain explicit-only, and `/spec` stage permissions and approvals are unchanged.
+- Make eight referenced Superpowers skills discoverable with compact hints for explicit user invocation or a required active-skill handoff; keep `brainstorming` and `using-superpowers` hidden, preserve original skill bodies and the two existing discoverable originals, and leave system instructions and `/spec` gates unchanged.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Compact mode now keeps user requests and assistant prose from compacted history, without replaying its tools, thinking, notifications, or other historical UI; recent activity and full-history viewers are unchanged.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.

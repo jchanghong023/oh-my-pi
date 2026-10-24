@@ -11947,7 +11947,7 @@
     },
     {
       "path": "superpowers/skills/executing-plans/SKILL.md",
-      "sha256": "f8a6f2b2f3fcee1576f0e27f488ea92f012db9ecacc177df81c09f9f79565b5c",
+      "sha256": "1cb2b3854851004a07e3b94fd32343776b538b4a7df706668f422f0dc2e9c576",
       "executable": false
     },
     {
@@ -11962,7 +11962,7 @@
     },
     {
       "path": "superpowers/skills/finishing-a-development-branch/SKILL.md",
-      "sha256": "37a843b32aa4ba748104b06330aef5c711f238cb78e99ea6a2be7e55ce16ed0a",
+      "sha256": "b38275aa6107551aaaba829437e2b6830b1668b1365b5189b7c8bafe3ad64644",
       "executable": false
     },
     {
@@ -11972,7 +11972,7 @@
     },
     {
       "path": "superpowers/skills/requesting-code-review/SKILL.md",
-      "sha256": "6cbf192b59b5be02f310b9232d8f11febffc52e7dcb7a9118ef15e5f76097f10",
+      "sha256": "5fcabe92e5e228838d11509c4e4b8dae3f59201ba5c07a71a2fb6f56a76c68d8",
       "executable": false
     },
     {
@@ -11982,7 +11982,7 @@
     },
     {
       "path": "superpowers/skills/subagent-driven-development/SKILL.md",
-      "sha256": "063013ac3159a6354a68a831a8ab5cede31bcc6ef3bb988162ca1474678d6f51",
+      "sha256": "744b23f47aac339dd1712a0f0ca26ed0826566c52558ce0d428ccfbd29eb3b26",
       "executable": false
     },
     {
@@ -12107,7 +12107,7 @@
     },
     {
       "path": "superpowers/skills/test-driven-development/SKILL.md",
-      "sha256": "fb79984222f67297724cc7101dce5d37b0dd1b728ee1a8fa11b923ed58b52a7b",
+      "sha256": "a64192bf0ad6dd75d48c3a3ca9513a64545f00a9b78e61d7ba58101432e891fa",
       "executable": false
     },
     {
@@ -12117,7 +12117,7 @@
     },
     {
       "path": "superpowers/skills/using-git-worktrees/SKILL.md",
-      "sha256": "93076242c5b91b58692b74a2309df5bd319a38ec27b3f2a1440d706c1743653f",
+      "sha256": "38fea2ee83e38854db591e85b5de7245059bf2a02231752c2dc2c2b31fe8cbea",
       "executable": false
     },
     {
@@ -12167,12 +12167,12 @@
     },
     {
       "path": "superpowers/skills/writing-plans/SKILL.md",
-      "sha256": "12404dc12ce196b46498ffbe72d2f1ab07955c594338fd9818568bdc1fdd0769",
+      "sha256": "28620c53ccf43ec05c6e27004b9097c08fed33febc38f6ad430c8c98c215effd",
       "executable": false
     },
     {
       "path": "superpowers/skills/writing-skills/SKILL.md",
-      "sha256": "a776fccf7cab6f97cf1b3d56c39c0efc18de5ea642d2e13ce4b0af300fdb106f",
+      "sha256": "b6e9d8a07ff4b36e545fd46f5078b1342d28c5ba290341e01ae8ea9347834706",
       "executable": false
     },
     {

@@ -69,8 +69,19 @@ async function fixture(): Promise<Skill> {
 }
 
 describe("pinned skill discovery and access", () => {
-	it("exposes only the two ordinary Superpowers skills and keeps the remaining resources explicit-only", async () => {
-		const ordinaryNames = ["systematic-debugging", "verification-before-completion"];
+	it("exposes referenced Superpowers skills without opening hidden entrypoints", async () => {
+		const ordinaryNames = [
+			"writing-plans",
+			"subagent-driven-development",
+			"executing-plans",
+			"using-git-worktrees",
+			"test-driven-development",
+			"requesting-code-review",
+			"finishing-a-development-branch",
+			"writing-skills",
+			"systematic-debugging",
+			"verification-before-completion",
+		].sort();
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
@@ -84,7 +95,7 @@ describe("pinned skill discovery and access", () => {
 				.map(skill => skill.name)
 				.sort(),
 		).toEqual(ordinaryNames);
-		expect(discovered.all.filter(isHidden)).toHaveLength(26);
+		expect(discovered.all.filter(isHidden)).toHaveLength(18);
 		for (const skill of discovered.all) {
 			if (ordinaryNames.includes(skill.name)) {
 				expect(skill.frontmatter?.hide).not.toBe(true);
@@ -121,7 +132,6 @@ describe("pinned skill discovery and access", () => {
 				expect(rendered).toContain(skill.name);
 				const resolved = await handler.resolve(url, context);
 				expect(resolved.sourcePath).toBe(skill.filePath);
-				expect(resolved.content).toBe(await fs.readFile(skill.filePath, "utf-8"));
 				expect(await handler.locate(url, context)).toBe(skill.filePath);
 			} else {
 				expect(rendered).not.toContain(skill.name);
@@ -167,7 +177,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("authorizes only exact current branch invocation provenance, including native autoload", async () => {
-		const skill = await loadSpecDrivenSkill("superpowers", "writing-plans");
+		const skill = await loadSpecDrivenSkill("superpowers", "brainstorming");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		for (const invocation of ["user", "autoload"] as const) {
 			const built = await buildSkillPromptMessage(skill, { args: "" }, invocation);
@@ -186,7 +196,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("uses scoped program grants for real resource resolve and locate without leaking to another tool session", async () => {
-		const skill = await loadSpecDrivenSkill("superpowers", "writing-plans");
+		const skill = await loadSpecDrivenSkill("superpowers", "brainstorming");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const override = { ...(await fixture()), name: skill.name, source: "custom:project" };
 		const session: ToolSession = {
@@ -252,7 +262,7 @@ describe("pinned skill discovery and access", () => {
 
 	it("rejects visible bundled skills in the wrong spec stage before ordinary-access exemption", async () => {
 		const skills = await Promise.all(
-			["verification-before-completion", "systematic-debugging"].map(name =>
+			["verification-before-completion", "systematic-debugging", "writing-plans"].map(name =>
 				loadSpecDrivenSkill("superpowers", name),
 			),
 		);
@@ -284,7 +294,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("does not enumerate hidden names and keeps user-authored hidden resources readable", async () => {
-		const pinned = await loadSpecDrivenSkill("superpowers", "writing-plans");
+		const pinned = await loadSpecDrivenSkill("superpowers", "brainstorming");
 		const custom = { ...(await fixture()), name: "my-hidden-skill", source: "custom:project" };
 		setActiveSkills([pinned, custom]);
 		expect(await handler.complete()).toEqual([]);

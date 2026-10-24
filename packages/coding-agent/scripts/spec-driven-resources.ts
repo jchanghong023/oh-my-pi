@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { SpecDrivenResourceManifest, SpecDrivenSkillEntry } from "../src/spec-driven/resources";
+import superpowersDescriptionSource from "../src/prompts/skills/superpowers-descriptions.md" with { type: "text" };
 
 const vendor = path.resolve(import.meta.dir, "../src/spec-driven/vendor");
 const staging = path.join(vendor, "staging");
@@ -39,6 +40,7 @@ const superpowersSkills = [
 	"writing-plans",
 	"writing-skills",
 ];
+const superpowersDescriptions = parseYaml(superpowersDescriptionSource) as Record<string, string>;
 const factories = [
 	"getExploreSkillTemplate",
 	"getNewChangeSkillTemplate",
@@ -139,6 +141,17 @@ function hidden(content: string): string {
 	if (!content.startsWith("---\n")) throw new Error("Upstream skill is missing YAML frontmatter");
 	return content.replace(/^---\n/, "---\ndisable-model-invocation: true\n");
 }
+function adaptSuperpowersSkill(name: string, raw: Uint8Array): Uint8Array {
+	if (name === "verification-before-completion" || name === "systematic-debugging") return raw;
+	const content = Buffer.from(raw).toString("utf8");
+	const description = superpowersDescriptions[name];
+	if (description === undefined) return Buffer.from(hidden(content));
+	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/u.exec(content);
+	if (!frontmatter) throw new Error("Upstream skill is missing YAML frontmatter");
+	const metadata = parseYaml(frontmatter[1]!) as Record<string, unknown>;
+	metadata.description = description;
+	return Buffer.from(`---\n${stringifyYaml(metadata)}---${content.slice(frontmatter[0].length)}`);
+}
 function normalizeTar(bytes: Uint8Array): void {
 	for (let offset = 0; offset + 512 <= bytes.length;) {
 		const header = bytes.subarray(offset, offset + 512);
@@ -221,8 +234,7 @@ async function embed(): Promise<void> {
 		const raw = entries[relative];
 		if (!raw) throw new Error(`Missing upstream Superpowers skill ${name}`);
 		entries[`superpowers/original-skills/${name}/SKILL.md`] = raw;
-		if (name !== "verification-before-completion" && name !== "systematic-debugging")
-			entries[relative] = Buffer.from(hidden(Buffer.from(raw).toString("utf8")));
+		entries[relative] = adaptSuperpowersSkill(name, raw);
 		skills.push({ source: "superpowers", name, path: relative });
 	}
 	const schema = parseYaml(
