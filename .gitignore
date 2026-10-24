@@ -51,6 +51,7 @@ packages/ai/test/.temp-images/
 # Project specific
 !.omp/
 .omp/plugins/
+.omp/spec-sessions/
 .pi_config/
 .opencode/
 .worktrees/

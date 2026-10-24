@@ -27,7 +27,6 @@ export interface SpecDocument {
 	content: string;
 }
 export interface SpecRequirementsDraft {
-	document: SpecDocument;
 	proposal: string;
 	specs: SpecDocument[];
 	/** Stable Requirement IDs and their exact source text; used to retain unrelated task work. */

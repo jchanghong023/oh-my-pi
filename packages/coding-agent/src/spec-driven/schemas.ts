@@ -39,7 +39,6 @@ const sourcePatch: Schema = {
 };
 export const SPEC_REQUIREMENTS_SCHEMA: Schema = {
 	...object({
-		document: object({ path: { type: "string", const: "requirements.md" }, content: text() }),
 		proposal: text(),
 		specs: array(object({ path: text(), content: text() }), 1),
 		requirements: array(object({ id: text(), text: text() }), 1),
@@ -47,7 +46,7 @@ export const SPEC_REQUIREMENTS_SCHEMA: Schema = {
 		sourceMapVersion: text(),
 		sourcePatches: array(sourcePatch),
 	}),
-	required: ["document", "proposal", "specs", "requirements", "questions"],
+	required: ["proposal", "specs", "requirements", "questions"],
 };
 export const SPEC_TASK_SCHEMA: Schema = object({
 	id: { type: "string", pattern: "^T[0-9]{3,}$" },

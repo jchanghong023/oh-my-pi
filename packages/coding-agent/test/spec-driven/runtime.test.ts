@@ -227,7 +227,7 @@ test("native Team differences retain structured questions and stop choice until 
 				path: `handoffs/${input.transition}.md`,
 				digest: new Bun.CryptoHasher("sha256").update(body).digest("hex"),
 				body,
-				versions: { [input.specification.document.path]: input.specification.version },
+				versions: { "proposal.md": input.specification.version },
 			};
 		},
 		artifacts: {
@@ -248,7 +248,6 @@ test("native Team differences retain structured questions and stop choice until 
 		models: {
 			async requirements() {
 				return {
-					document: { path: "requirements.md", content: "# R1\nDeploy offline\n" },
 					proposal: "Deploy offline",
 					specs: [
 						{
@@ -530,7 +529,6 @@ async function runtimePlan(consumer: Awaited<ReturnType<typeof runtimeConsumer>>
 	const { ports } = consumer.runtime;
 	await ports.artifacts.initialize(changeId, context);
 	const draft: SpecRequirementsDraft = {
-		document: { path: "requirements.md", content: "# Requirements\nR1: Read the approved prerequisite.\n" },
 		proposal:
 			"# Why\nRead the approved prerequisite.\n\n# What Changes\nAdd a scoped text result.\n\n# Impact\nFixture only.\n",
 		specs: [
@@ -668,7 +666,7 @@ test("runtime condition inputs qualify before dependent owned files exist and na
 		.filter(item => item.role === "system")
 		.map(item => contentText(item.content))
 		.join("\n");
-	expect(system).not.toContain(input.specification.document.content);
+	expect(system).not.toContain(input.specification.proposal);
 	expect(consumer.provider.failures).toEqual([]);
 }, 600_000);
 

@@ -82,8 +82,8 @@ export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
 		);
 	if (state.phase === "awaiting-specification" && state.specification) {
 		lines.push(
-			`待确认的需求原文：${state.specification.document.path}`,
-			state.specification.document.content,
+			"待确认的 OpenSpec 需求提案及规格：",
+			state.specification.proposal,
 			...state.specification.specs.map(spec => `### ${spec.path}\n${spec.content}`),
 		);
 	}

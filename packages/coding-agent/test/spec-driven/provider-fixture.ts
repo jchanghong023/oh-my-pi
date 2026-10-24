@@ -318,10 +318,6 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 	if (payload.specDrivenRole === "requirements")
 		return yieldData(request, {
 			...(sourcePatches ? { sourceMapVersion: originals!.version, sourcePatches } : {}),
-			document: {
-				path: "requirements.md",
-				content: `# ${MARKER} requirements\n\n## Goal and scope\nProvide normalized greetings using the existing Bun entry with independent blank-input and whitespace coverage.\n\n## Constraints\nOnly change ${[IMPLEMENTATION_PATH, TEST_PATH, ...parallelCoverage.map(task => task.path)].join(", ")}.\n\n## R001\n${REQUIREMENT}\n\n## Acceptance\nOuter whitespace is trimmed, blank names use world, and internal whitespace is preserved. Independent coverage must be integrated and validated on the target.\n`,
-			},
 			proposal: `# ${MARKER}\n\n## Why\nProvide a deterministic greeting.\n\nRequested scope: ${String(payload.input.request ?? "")}\n\n## What Changes\nAdd greet(name), real Bun behavior tests and independent blank-input/whitespace coverage.\n\n## Capabilities\n### New Capabilities\n- greeting: normalized greeting\n\n## Impact\nOnly ${[IMPLEMENTATION_PATH, TEST_PATH, ...parallelCoverage.map(task => task.path)].join(", ")}.\n`,
 			specs: [
 				{

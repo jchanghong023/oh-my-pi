@@ -24,7 +24,6 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 	let disposed = 0;
 	let specificationVersion = "";
 	const draft: SpecRequirementsDraft = {
-		document: { path: "requirements.md", content: "# R1\n用户应能查看结果\n" },
 		proposal: "用户应能查看结果",
 		specs: [
 			{ path: "specs/result/spec.md", content: "### Requirement: 查看结果\n#### Scenario: 成功\n展示真实结果" },
@@ -56,8 +55,8 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 				digest: new Bun.CryptoHasher("sha256").update(body).digest("hex"),
 				body,
 				versions: {
-					[input.specification.document.path]: input.specification.version,
-					...(input.solution ? { "solution.md": input.solution.artifactVersion } : {}),
+					"proposal.md": input.specification.version,
+					...(input.solution ? { "state.json#/solution": input.solution.artifactVersion } : {}),
 					...(input.plan ? { "plan.md": input.plan.artifactVersion } : {}),
 				},
 			};

@@ -96,11 +96,6 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 	let time = 10;
 	let requirementsDraft: SpecRequirementsDraft = {
 		proposal: "Add approved behavior",
-		document: {
-			path: "requirements.md",
-			content:
-				"# Requirements\n\n## Goal and scope\nImplement approved behavior; no unrelated migration.\n\n## Constraints\nPreserve existing user files.\n\n## R1\nApproved behavior.\n\n### Acceptance\nThe public entry returns the approved result.\n\n## R2\nUnrelated behavior remains intact.\n\n## Decisions\nReuse the stable interface.\n",
-		},
 		specs: [{ path: "specs/capability/spec.md", content: "### Requirement: behavior\n#### Scenario: normal\nWorks" }],
 		requirements: [
 			{ id: "R1", text: "Approved behavior" },
@@ -236,8 +231,8 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 				digest: crypto.createHash("sha256").update(body).digest("hex"),
 				body,
 				versions: {
-					[input.specification.document.path]: input.specification.version,
-					...(input.solution ? { "solution.md": input.solution.artifactVersion } : {}),
+					"proposal.md": input.specification.version,
+					...(input.solution ? { "state.json#/solution": input.solution.artifactVersion } : {}),
 					...(input.plan ? { "plan.md": input.plan.artifactVersion } : {}),
 				},
 			};
@@ -868,7 +863,13 @@ describe("current-content evidence qualification", () => {
 });
 
 describe("formal approval and complete parent-task contracts", () => {
-	for (const target of ["requirements.md", "solution.md", "plan body", "coverage table"] as const) {
+	for (const target of [
+		"proposal.md",
+		"selected candidate",
+		"task projection",
+		"plan body",
+		"coverage table",
+	] as const) {
 		it(`rejects old confirm-plan after actual ${target} byte tampering`, async () => {
 			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-formal-"));
 			try {
@@ -882,13 +883,20 @@ describe("formal approval and complete parent-task contracts", () => {
 				f.ports.artifacts.readPlan = async () => store.readPlan();
 				const ready = await f.toPlan();
 				expect(ready.phase).toBe("awaiting-plan");
-				for (const name of ["requirements.md", "solution.md", "plan.md"]) {
-					expect((await fs.readFile(path.join(cwd, store.changeDir, name), "utf8")).length).toBeGreaterThan(0);
-				}
-				const relative = target === "plan body" || target === "coverage table" ? "plan.md" : target;
-				const file = path.join(cwd, store.changeDir, relative);
+				const runtime = target === "selected candidate" || target === "task projection";
+				const relative = runtime
+					? store.statePath
+					: target === "proposal.md"
+						? `${store.changeDir}/proposal.md`
+						: store.planPath;
+				const file = path.join(cwd, relative);
 				const bytes = await fs.readFile(file, "utf8");
-				if (target === "coverage table") {
+				if (runtime) {
+					const state = JSON.parse(bytes);
+					if (target === "selected candidate") state.solution.proposal += "\nUnapproved interface.";
+					else state.plan.tasks[0].instructions += "\nUnapproved obligation.";
+					await fs.writeFile(file, JSON.stringify(state));
+				} else if (target === "coverage table") {
 					const row = bytes.split(/\r?\n/).find(line => line.startsWith("|") && line.includes("R1"));
 					expect(row).toBeDefined();
 					await fs.writeFile(file, bytes.replace(row!, "| R1 | T999 |"));
@@ -910,7 +918,7 @@ describe("formal approval and complete parent-task contracts", () => {
 		const f = fixture();
 		const requirements = f.getRequirements();
 		requirements.requirements.push({ id: "R3", text: "Explicitly affected existing scenario" });
-		requirements.document.content += "\n## R3\nPreserve the affected existing scenario.\n";
+		requirements.proposal += "\nPreserve the affected existing scenario.\n";
 		f.setRequirements(requirements);
 		const plan = f.getPlan();
 		plan.tasks = [

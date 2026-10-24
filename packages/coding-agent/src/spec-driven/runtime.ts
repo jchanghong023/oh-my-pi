@@ -378,15 +378,14 @@ export async function createSpecDrivenRuntime(args: {
 		if (role !== "requirements" && !handoff) throw new Error(`Missing approved predecessor handoff for ${role}`);
 		const documents = handoff
 			? await Promise.all(
-					Object.keys(handoff.versions).map(async file => ({
-						path: file,
-						content: await fs.readFile(await containedSpecPath(cwd, file), "utf8"),
-					})),
+					Object.keys(handoff.versions).map(async file => {
+						const document = await requireStore().readDocument(file);
+						if (document.version !== handoff.versions[file])
+							throw new Error("Approved predecessor document changed before successor admission");
+						return { path: file, content: document.content };
+					}),
 				)
 			: [];
-		for (const document of documents)
-			if (artifactVersion(document.content) !== handoff!.versions[document.path])
-				throw new Error("Approved predecessor document changed before successor admission");
 		ctx.signal.throwIfAborted();
 		const actor = await getActor(role);
 		const bytes =
@@ -579,7 +578,6 @@ export async function createSpecDrivenRuntime(args: {
 			)
 				throw new Error("Approved handoff document version changed");
 			const snapshots = [
-				requirements.document,
 				requirements.proposal,
 				...requirements.specs,
 				...requirements.checks,
@@ -603,10 +601,7 @@ export async function createSpecDrivenRuntime(args: {
 				if (actors.get(role) !== actor || actor.session.isDisposed)
 					throw new Error("Handoff producer ownership changed");
 				for (const document of documents)
-					if (
-						artifactVersion(await fs.readFile(await containedSpecPath(cwd, document.path), "utf8")) !==
-						document.version
-					)
+					if ((await artifacts.readDocument(document.path)).version !== document.version)
 						throw new Error("Approved handoff document changed during native handoff");
 			};
 			await check();
@@ -636,11 +631,12 @@ export async function createSpecDrivenRuntime(args: {
 				store = new SpecArtifactStore({
 					cwd,
 					changeId,
+					runId: context.runId,
 					requirementsDir: await requirementsAuthority(cwd),
 					checkPaths: ["checks/source-approval.json", "checks/requirements.json"],
 				});
 				await store.initialize();
-				root = path.join(cwd, ".omp", "spec-sessions", crypto.randomUUID());
+				root = path.dirname(path.join(cwd, store.statePath));
 				await fs.mkdir(root, { recursive: true });
 				try {
 					sourceMap = await store.prepareSourceMap();
@@ -784,14 +780,17 @@ export async function createSpecDrivenRuntime(args: {
 					const requirements = await artifacts.readRequirements();
 					const solution = await artifacts.readSolution();
 					const plan = await artifacts.readPlan();
-					const files = [
-						requirements.document,
-						requirements.proposal,
-						...requirements.specs,
-						...requirements.checks,
-						solution,
-						plan,
-					].map(item => ({ path: path.posix.relative(artifacts.changeDir, item.path), content: item.content }));
+					const files = [requirements.proposal, ...requirements.specs, ...requirements.checks].map(item => ({
+						path: path.posix.relative(artifacts.changeDir, item.path),
+						content: item.content,
+					}));
+					files.push(
+						{ path: "plan.md", content: plan.content },
+						{
+							path: "checks/orchestration.json",
+							content: await fs.readFile(await containedSpecPath(cwd, artifacts.statePath), "utf8"),
+						},
+					);
 					const outcome = await artifacts.archive(approval, ctx.signal, markdown, {
 						sync: input.plan.closure.sync,
 					});
@@ -1054,6 +1053,7 @@ export async function createSpecDrivenRuntime(args: {
 					}),
 				);
 				ctx.signal.throwIfAborted();
+				await requireStore().saveTeamResult(result);
 				return adaptSpecTeamResult(result);
 			},
 		},
@@ -1219,6 +1219,7 @@ export async function createSpecDrivenRuntime(args: {
 						),
 					};
 				}
+				if (store) await store.saveState(status);
 				if (services.length) {
 					await tracked(
 						aggregateSpecEvidence(

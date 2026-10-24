@@ -22,12 +22,12 @@ files:
     - before: "Word each question so \"yes\" accepts your recommended answer."
       after: "Word each question so \"yes\" accepts your recommended answer. Give the reason and relevant tradeoff for each recommendation. Accept numbered answers or acceptance of all recommendations in this round. A clarification of a current question remains in the same round: clarify it without reopening settled decisions or asking questions that depend on its still-unsettled answer."
     - before: "The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding."
-      after: "When the frontier is empty, write readable requirements.md through the host's formal requirements artifact interface: goals, scope and exclusions, constraints, stable requirement IDs, acceptance scenarios, and key decisions. Keep same-version OpenSpec requirements consistent. Present the written requirements for explicit user approval; shared understanding or an empty frontier is not approval. Do not implement, select a solution, create an implementation plan, commit, or execute commands. After explicit approval, return control to the host for the real requirements-to-solution handoff; do not take over the workflow."
+      after: "When the frontier is empty, write readable OpenSpec proposal/specs through the host's requirements artifact interface: goals, scope and exclusions, constraints, stable requirement IDs, acceptance scenarios, and key decisions. Present these authoritative artifacts for explicit user approval; shared understanding or an empty frontier is not approval. NEVER add a competing requirements.md. Do not implement, select a solution, create an implementation plan, commit, or execute commands. After explicit approval, return control to the host for the real requirements-to-solution handoff; do not take over the workflow."
   jch/skills/jch-grill-me/agents/openai.yaml:
     - before: 'short_description: "Manual invocation only; examine decisions and dependencies in a plan or design one at a time"'
       after: 'short_description: "Authorized OMP requirements role; interview the complete ready frontier and write requirements for approval"'
     - before: 'default_prompt: "Use $jch-grill-me to ask one question at a time and provide a reasoned recommendation with its tradeoffs; clarify and summarize only, without executing the plan."'
-      after: 'default_prompt: "Use $jch-grill-me in the authorized requirements role: ask every currently ready decision in numbered rounds with reasoned recommendations; accept numbered answers or all recommendations, clarify within the same round, defer dependent questions, and never repeat settled decisions. Find facts with permitted read-only tools. Write goals, scope, constraints, stable requirement IDs, acceptance scenarios and key decisions to requirements.md; require explicit user approval and return to the host without implementation or workflow takeover."'
+      after: 'default_prompt: "Use $jch-grill-me in the authorized requirements role: ask every currently ready decision in numbered rounds with reasoned recommendations; accept numbered answers or all recommendations, clarify within the same round, defer dependent questions, and never repeat settled decisions. Find facts with permitted read-only tools. Write goals, scope, constraints, stable requirement IDs, acceptance scenarios and key decisions to OpenSpec proposal/specs; require explicit user approval and return to the host without implementation or workflow takeover."'
   superpowers/skills/brainstorming/SKILL.md:
     - start: 'description:'
       end: "---\n\n# Brainstorming"
@@ -55,7 +55,7 @@ files:
     - start: '**How it gets made.**'
       end: '**Ground to cover.**'
       body: |
-        **How it gets made.** Record confirmed requirements-level constraints and current platform, tools, materials, resources and existing-work facts. Distinguish facts from user-imposed constraints. Disclose unresolved implementation defaults only as proposals in requirements.md, never as agreed decisions or choices in a design document. Defer implementation choice to the host's solution gate after requirements approval.
+        **How it gets made.** Record confirmed requirements-level constraints and current platform, tools, materials, resources and existing-work facts. Distinguish facts from user-imposed constraints. Disclose unresolved implementation defaults only as proposals in OpenSpec proposal/specs, never as agreed decisions or choices in a design document. Defer implementation choice to the host's solution gate after requirements approval.
 
     - start: '**Offer recon.**'
       end: '## Play It Back'
@@ -68,7 +68,7 @@ files:
       body: |
         ## Written Requirements and Approval
 
-        Once all material decisions are settled, write the host-owned requirements.md: intent, goals, scope, exclusions, constraints, stable requirement IDs, observable acceptance scenarios, and key decisions. Label proposals versus confirmed decisions. Keep same-version OpenSpec requirements consistent. Do not create a second design document, implementation plan, commits, builder check, or visual companion.
+        Once all material decisions are settled, write the authoritative OpenSpec proposal/specs: intent, goals, scope, exclusions, constraints, stable requirement IDs, observable acceptance scenarios, and key decisions. Label proposals versus confirmed decisions. Do not create requirements.md, a second design document, implementation plan, commits, builder check, or visual companion.
 
         Present the written requirements and wait for explicit user approval. Corrections return only affected decisions to the frontier. Do not invoke writing-plans or advance stages yourself. After approval, the host obtains this producer session's real handoff and admits the solution role.
   superpowers/skills/writing-plans/SKILL.md:
@@ -79,7 +79,7 @@ files:
       body: |
         **Authority:** Read the approved requirements, selected solution verbatim, adoption conditions, and real predecessor handoff. Reuse their decisions; do not restart brainstorming or choose another solution.
 
-        **Output:** Return one complete structured plan through the host's plan interface for its unique plan.md. Do not create a second plan in docs/superpowers/plans, commit, run commands, create worktrees, or implement. Include stable parent-task IDs, acceptance coverage, dependencies, exact interfaces, and native workspace/integration intent. Task-local refinements retain their parent IDs and cannot create another completion ledger.
+        **Output:** Return one complete structured plan through the host's plan interface for the supplied uniquePlanPath under docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md. The host stores machine task projections and approvals in its runtime JSON, NEVER Markdown comments. Do not create another plan, commit, run commands, create worktrees, or implement. Include stable parent-task IDs, acceptance coverage, dependencies, exact interfaces, and native workspace/integration intent. Task-local refinements retain their parent IDs and cannot create another completion ledger.
 
     - before: '> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.'
       after: '> **For agentic workers:** The host owns approval, native execution and task status. The executor may implement directly or delegate natively using authorized controlled methods. Checkboxes are presentation, never completion evidence.'

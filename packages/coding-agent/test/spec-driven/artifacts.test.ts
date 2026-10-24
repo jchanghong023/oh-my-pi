@@ -14,11 +14,6 @@ import {
 import { createSpecPairedReport, summarizeSpecRun, type SpecRunMeasurement } from "../../src/spec-driven/metrics";
 import type { SpecPlanDraft } from "../../src/spec-driven/types";
 
-const requirementDocument = {
-	path: "requirements.md",
-	content:
-		"# Requirements\r\n\r\n## Background and goal\r\nReturn a sample result.\r\n\r\n## Scope\r\nSample capability only; no unrelated migration.\r\n\r\n## Constraints\r\nPreserve existing scenarios.\r\n\r\n## R1 Sample\r\nThe public entry SHALL return the sample result.\r\n\r\n### Acceptance scenario\r\nWHEN requested, THEN return the sample result.\r\n\r\n## Decisions and references\r\nReuse the existing public entry.\r\n",
-};
 function formalPlan(content: string): SpecPlanDraft {
 	return {
 		content,
@@ -77,7 +72,6 @@ async function fixture() {
 		checkPaths: ["checks/review.json"],
 	});
 	await store.writeRequirements({
-		document: requirementDocument,
 		proposal: "# Why\n\nA real change.\n",
 		specs: [
 			{
@@ -110,7 +104,6 @@ describe("specification authority and exact patches", () => {
 		const { store, cwd } = await fixture();
 		await expect(
 			store.writeRequirements({
-				document: requirementDocument,
 				proposal: "must not publish",
 				specs: [{ path: "design.md", content: "design" }],
 			}),
@@ -118,25 +111,22 @@ describe("specification authority and exact patches", () => {
 		expect((await store.readRequirements()).proposal.content).toContain("A real change");
 		const first = await store.writePlan(formalPlan("# Plan\nTask T001\n"));
 		const second = await store.writePlan(formalPlan("# Plan\nTask T001 revised\n"));
-		expect(first.path).toBe("openspec/changes/change-one/plan.md");
+		expect(first.path).toBe(store.planPath);
 		expect(first.version).not.toBe(second.version);
 		expect(await fs.readFile(path.join(cwd, second.path), "utf8")).toBe(second.content);
 		await expect(
 			store.writeRequirements({
-				document: requirementDocument,
 				proposal: "x",
 				specs: [],
 				checks: [{ path: "../escape.md", content: "bad" }],
 			}),
 		).rejects.toThrow();
 	});
-	test("publishes the formal requirements document verbatim and binds edits of every approval input", async () => {
+	test("binds edits to proposal and specification without creating a competing requirements document", async () => {
 		const { cwd, store } = await fixture();
-		const documentPath = path.join(cwd, store.changeDir, "requirements.md");
-		expect(await fs.readFile(documentPath, "utf8")).toBe(requirementDocument.content);
+		await expect(fs.stat(path.join(cwd, store.changeDir, "requirements.md"))).rejects.toThrow();
 		const approved = await store.readRequirements();
 		for (const [relative, replacement] of [
-			["requirements.md", `${requirementDocument.content}\r\nChanged acceptance.\r\n`],
 			["proposal.md", "# Changed proposal\n"],
 			["specs/sample/spec.md", "## ADDED Requirements\nChanged scenario.\n"],
 		]) {
@@ -147,19 +137,6 @@ describe("specification authority and exact patches", () => {
 			await fs.writeFile(file, original);
 			expect((await store.readRequirements()).version).toBe(approved.version);
 		}
-	});
-	test("rejects a caller-selected formal document path without publishing proposal or escaped bytes", async () => {
-		const { cwd, store } = await fixture();
-		const before = await store.readRequirements();
-		await expect(
-			store.writeRequirements({
-				document: { path: "../escaped.md", content: "must not escape" },
-				proposal: "must not replace approved proposal",
-				specs: [],
-			}),
-		).rejects.toThrow();
-		expect((await store.readRequirements()).version).toBe(before.version);
-		await expect(fs.stat(path.join(cwd, "openspec/changes/escaped.md"))).rejects.toThrow();
 	});
 	test("renders coverage from structured tasks into the sole plan and versions actual body and coverage bytes", async () => {
 		const { cwd, store } = await fixture();
@@ -192,11 +169,8 @@ describe("specification authority and exact patches", () => {
 		await expect(fs.stat(path.join(cwd, store.changeDir, "tasks.md"))).rejects.toThrow();
 		await expect(fs.stat(path.join(cwd, store.changeDir, "design.md"))).rejects.toThrow();
 	});
-	test("persists the selected solution bytes, selection identity and conditions in solution.md", async () => {
+	test("preserves selected candidate bytes and selection identity in runtime JSON without a solution document", async () => {
 		const { cwd, store } = await fixture();
-		expect(await fs.readFile(path.join(cwd, store.changeDir, "requirements.md"), "utf8")).toBe(
-			requirementDocument.content,
-		);
 		const solution = {
 			specificationVersion: (await store.readRequirements()).version,
 			runId: "discussion-1",
@@ -206,9 +180,11 @@ describe("specification authority and exact patches", () => {
 			conditions: [{ id: "C1", description: "Keep compatibility", command: "check compatibility" }],
 		};
 		const saved = await store.writeSolution(solution);
-		expect(saved.path).toBe(`${store.changeDir}/solution.md`);
-		const bytes = await fs.readFile(path.join(cwd, saved.path), "utf8");
-		expect(bytes).toContain(solution.proposal);
+		expect(saved.path).toBe(`${store.statePath}#/solution`);
+		const state = JSON.parse(await fs.readFile(path.join(cwd, store.statePath), "utf8"));
+		expect(state.solution).toEqual(solution);
+		const bytes = JSON.stringify(state.solution);
+		await expect(fs.stat(path.join(cwd, store.changeDir, "solution.md"))).rejects.toThrow();
 		for (const value of [
 			solution.specificationVersion,
 			solution.runId,
@@ -220,7 +196,8 @@ describe("specification authority and exact patches", () => {
 		])
 			expect(bytes).toContain(value);
 		expect((await store.readSolution()).content).toBe(bytes);
-		await fs.appendFile(path.join(cwd, saved.path), "\nUnapproved design change.\n");
+		state.solution.proposal += "\nUnapproved design change.\n";
+		await fs.writeFile(path.join(cwd, store.statePath), JSON.stringify(state));
 		expect((await store.readSolution()).version).not.toBe(saved.version);
 	});
 	test("rejects lexical escapes and symlink/junction escapes before any write", async () => {
@@ -231,7 +208,7 @@ describe("specification authority and exact patches", () => {
 		await expect(containedSpecPath(cwd, "../escape.md")).rejects.toThrow();
 		await expect(containedSpecPath(cwd, "escape/new.md")).rejects.toThrow();
 		const unsafe = new SpecArtifactStore({ cwd, changeId: "other-change", changeDir: "escape/change" });
-		await expect(unsafe.writePlan(formalPlan("must not escape"))).rejects.toThrow();
+		await expect(unsafe.writeRequirements({ proposal: "must not escape", specs: [] })).rejects.toThrow();
 		expect(await fs.readdir(outside)).toEqual([]);
 		expect((await store.readRequirements()).proposal.content).toContain("A real change");
 	});
@@ -508,7 +485,6 @@ test("real OpenSpec native archive retains the plan and failed native sync prese
 	const delta =
 		"## ADDED Requirements\n\n### Requirement: Sample behavior\nThe system SHALL return a sample result when requested.\n\n#### Scenario: Sample requested\n- **WHEN** a caller requests a sample\n- **THEN** the system returns a sample result\n";
 	await store.writeRequirements({
-		document: requirementDocument,
 		proposal,
 		specs: [{ path: "specs/sample/spec.md", content: delta }],
 	});
@@ -524,7 +500,6 @@ test("real OpenSpec native archive retains the plan and failed native sync prese
 	const failed = new SpecArtifactStore({ cwd, changeId: "failed-change" });
 	await failed.initialize();
 	await failed.writeRequirements({
-		document: requirementDocument,
 		proposal,
 		specs: [
 			{
@@ -552,7 +527,6 @@ async function nativeFixture() {
 	const store = new SpecArtifactStore({ cwd, changeId: "native-change" });
 	await store.initialize();
 	await store.writeRequirements({
-		document: requirementDocument,
 		proposal:
 			"# Native change\n\n## Why\n\nAdd observable sample behavior.\n\n## What Changes\n\n- Add sample behavior.\n\n## Capabilities\n\n### New Capabilities\n\n- `sample`: Sample behavior.\n\n## Impact\n\nSpecification only.\n",
 		specs: [
@@ -604,12 +578,9 @@ async function closureMaterial(cwd: string, store: SpecArtifactStore): Promise<A
 		await fs.mkdir(path.dirname(file), { recursive: true });
 		await fs.writeFile(file, content);
 	}
-	return Promise.all(
-		["requirements.md", "solution.md", "plan.md", ...evidence.map(([relative]) => relative)].map(
-			async relative =>
-				[relative, await fs.readFile(path.join(cwd, store.changeDir, relative), "utf8")] as [string, string],
-		),
-	);
+	const plan = await store.readPlan();
+	const state = await fs.readFile(path.join(cwd, store.statePath), "utf8");
+	return [["plan.md", plan.content], ["checks/orchestration.json", state], ...evidence];
 }
 async function expectClosureMaterial(cwd: string, directory: string, material: Array<[string, string]>) {
 	for (const [relative, content] of material)
@@ -633,7 +604,11 @@ describe("independently authorized real upstream closure", () => {
 			"### Requirement: Sample behavior",
 		);
 		expect(await tree(path.join(cwd, store.changeDir))).toEqual(before);
-		await expectClosureMaterial(cwd, store.changeDir, material);
+		await expectClosureMaterial(
+			cwd,
+			store.changeDir,
+			material.filter(([file]) => file !== "plan.md" && file !== "checks/orchestration.json"),
+		);
 		expect((await store.readPlan()).version).toBe(plan.version);
 		await expect(fs.stat(path.join(cwd, "openspec/changes/archive"))).rejects.toThrow();
 	});
@@ -660,7 +635,6 @@ describe("independently authorized real upstream closure", () => {
 	test("upstream merge rejection and stale approvals leave all original files and directories unchanged", async () => {
 		const { cwd, store, accepted } = await nativeFixture();
 		await store.writeRequirements({
-			document: requirementDocument,
 			proposal: (await store.readRequirements()).proposal.content,
 			specs: [
 				{

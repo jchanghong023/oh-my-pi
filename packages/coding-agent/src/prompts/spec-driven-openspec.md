@@ -118,6 +118,11 @@ workflows:
     commandFactory: getOpsxArchiveCommandTemplate
     skill: openspec-archive-change
     description: Archive an accepted OpenSpec requirements change using native validation and specification synchronization; requirements acceptance does not verify implementation.
+  verify:
+    module: verify-change
+    skillFactory: getVerifyChangeSkillTemplate
+    commandFactory: getOpsxVerifyCommandTemplate
+    skill: openspec-verify-change
 proposalInstruction: |
   Write the requirement change proposal: why it is needed, observable behavior changes, affected new/modified capabilities, and scope/impact. Define acceptance boundaries and unresolved questions. Implementation details, design documents, and task plans are outside this requirements-only graph. This proposal is the foundation for capability delta specifications only.
 specsInstruction: |

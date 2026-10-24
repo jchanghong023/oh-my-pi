@@ -18,7 +18,7 @@
       "path": "jch/methods/requirements/skills/jch-grill-me/SKILL.md",
       "originalPath": "jch/skills/jch-grill-me/SKILL.md",
       "originalSha256": "c23875b96e374af17fd10aaa3efa7daaf4c54ad086ef47d001dc69be97e01e58",
-      "sha256": "0e8e8f0d7c7024bf86a3bd80b21308a0b625bc4a1da0459268a59bf55145bf38",
+      "sha256": "a662f4c9ec33c89d0376f44d13ed95af11935781058cc011f2849f31cb324fea",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -28,7 +28,7 @@
       "path": "superpowers/methods/requirements/skills/brainstorming/SKILL.md",
       "originalPath": "superpowers/original-skills/brainstorming/SKILL.md",
       "originalSha256": "61a7ef918652108c76a3fd01e02dd92d39996c6b46d4cb2819cbd03f6c45e46a",
-      "sha256": "80155ffafad8b1228626bf4513801451baca1f75b08d9ed5287132011dc91a64",
+      "sha256": "30f06f6f8a46335989ead56867c9e6fd064054ea146e765c8c523fc9d43c04d8",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -38,7 +38,7 @@
       "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
       "originalPath": "superpowers/original-skills/writing-plans/SKILL.md",
       "originalSha256": "a6c67c1900064347c2a329990dd3c555657c51c3ec53b259a08aa01a2c26139a",
-      "sha256": "8a2083c91f1b6390a5983a99a82176434cc2eabde737829d4423c111382d938d",
+      "sha256": "b049fe8837fafa8367ddbe2960724415af8adceca2eefe0a2a207cd8294b8086",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -144,6 +144,11 @@
       "path": "openspec/skills/openspec-archive-change/SKILL.md"
     },
     {
+      "source": "openspec",
+      "name": "openspec-verify-change",
+      "path": "openspec/skills/openspec-verify-change/SKILL.md"
+    },
+    {
       "source": "superpowers",
       "name": "brainstorming",
       "path": "superpowers/skills/brainstorming/SKILL.md"
@@ -222,12 +227,12 @@
   "files": [
     {
       "path": "jch/methods/requirements/skills/jch-grill-me/SKILL.md",
-      "sha256": "0e8e8f0d7c7024bf86a3bd80b21308a0b625bc4a1da0459268a59bf55145bf38",
+      "sha256": "a662f4c9ec33c89d0376f44d13ed95af11935781058cc011f2849f31cb324fea",
       "executable": false
     },
     {
       "path": "jch/methods/requirements/skills/jch-grill-me/agents/openai.yaml",
-      "sha256": "1be70f802c4cc1775bdccf1f8bd0440ffdbd2ad4744c1d15a0f231d353a432c6",
+      "sha256": "2d552545feaa5922b2bacca1109c1f8517a22a8c39a6a6d7ac1a89def141f83d",
       "executable": false
     },
     {
@@ -517,7 +522,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/instructions.js",
-      "sha256": "280da9e38ea5d25a9c50a710c8a4b04937997a332fd7cacbd80e5749c4b6585d",
+      "sha256": "2891599e8c39aff4c1abd8974ad9cc495fbaa284532f044cb33ac02a7203a3b1",
       "executable": false
     },
     {
@@ -1447,7 +1452,7 @@
     },
     {
       "path": "openspec/dist/core/init.js",
-      "sha256": "354832e5ed5168a60dd8e577f23e4f76a910487deb81d1cd17b833a3d8da6ee2",
+      "sha256": "3ca077e81f2f72d06b50d6543436e3339ba6df60c5bee7b2df11d007e6022f2a",
       "executable": false
     },
     {
@@ -1457,7 +1462,7 @@
     },
     {
       "path": "openspec/dist/core/legacy-cleanup.js",
-      "sha256": "6472b839f710d67bf51a1c71ada7deae7fba95fd8f2cfafef974d4e71c101b8e",
+      "sha256": "e412462f3c9f6f8fef5d7a1abb1744b2ae699ed3e3b47a094ccda656beaaca62",
       "executable": false
     },
     {
@@ -1597,7 +1602,7 @@
     },
     {
       "path": "openspec/dist/core/profiles.js",
-      "sha256": "666ded5d295e97a04b227e0f40c59f60cca265b507e0514db68c8975ca75ab7d",
+      "sha256": "d0391a87daca54cca3e998b3d52ef2f700d2c496b37f8b2d24114b859fa4a03b",
       "executable": false
     },
     {
@@ -1737,7 +1742,7 @@
     },
     {
       "path": "openspec/dist/core/shared/skill-generation.js",
-      "sha256": "5278ceac5a09054e81a1ba56130bfee87aced32381fb60ccbcc0d62e0f656cae",
+      "sha256": "00179e53d8820b9276373ed401d5c75a2774f3b6410423b9c40abe9057635b1f",
       "executable": false
     },
     {
@@ -1757,7 +1762,7 @@
     },
     {
       "path": "openspec/dist/core/shared/tool-detection.js",
-      "sha256": "9872801e417bb11779a10617e3a16a412dcdbe7c00a8da9929a2abafd79db1dd",
+      "sha256": "85a4b19cd94fcbd525d60faf5ef407e46c2a6ca1da6ec9bbe1a52bccafa61f1b",
       "executable": false
     },
     {
@@ -1862,12 +1867,12 @@
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.d.ts",
-      "sha256": "f413ccae0b6c4ba8f06d22ba9bc1ab9431138ed31dd037d6437f410b0a8ad381",
+      "sha256": "356c7dd175f3d31d0407f543f045144964e3a73b995abc5929e20071059c88cc",
       "executable": false
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.js",
-      "sha256": "8ae1645421477286def9a8170906d27fa57a89b0d7c0180a6fb2f221f273adf0",
+      "sha256": "cc6e70220fa0d03457288136f0174c402a2a2e1c9da2d8788edaad3283b29436",
       "executable": false
     },
     {
@@ -1971,13 +1976,23 @@
       "executable": false
     },
     {
+      "path": "openspec/dist/core/templates/workflows/verify-change.d.ts",
+      "sha256": "c5c0d1f27f44acb7a1679126deffdcb6b59d4a5e8985e7d31f458cf7770e65ff",
+      "executable": false
+    },
+    {
+      "path": "openspec/dist/core/templates/workflows/verify-change.js",
+      "sha256": "fd0b21d7f4cbedf0674e84234dc98fd0a175230ea49f968e67fe60a8f4778243",
+      "executable": false
+    },
+    {
       "path": "openspec/dist/core/update.d.ts",
       "sha256": "d43aeafb503fa3c5aaff7acde1fa9790803e8b81c40a2ac65fa90d4857447edb",
       "executable": false
     },
     {
       "path": "openspec/dist/core/update.js",
-      "sha256": "9cf9be5aa12b26399634510af193e3f2d77c56547e11f34cefdd22a516a10f74",
+      "sha256": "9a5247e9c16f09b3c00e11cbc40909f0555b4a7a965ee6350b85697fcd2b455e",
       "executable": false
     },
     {
@@ -11246,6 +11261,11 @@
       "executable": false
     },
     {
+      "path": "openspec/original-skills/openspec-verify-change/SKILL.md",
+      "sha256": "c3edfcc590a4e89f64292c1f2764cba4f92422003599c47d48b09ac26c81d44d",
+      "executable": false
+    },
+    {
       "path": "openspec/package.json",
       "sha256": "f1ec4479b28e107da8bf7a7963d01a0ebb664061cbc2e5fd9c3bca70f18814af",
       "executable": false
@@ -11313,6 +11333,11 @@
     {
       "path": "openspec/skills/openspec-update-change/SKILL.md",
       "sha256": "a1533fb855e3b05f6c8f2e5b19203fe4bb67b5fde6bedbe2b4afc89180c205cf",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/openspec-verify-change/SKILL.md",
+      "sha256": "d7f18314f05813c44b81f886946ea6158277a3ccf736bb976fd408d0d625106e",
       "executable": false
     },
     {
@@ -11822,12 +11847,12 @@
     },
     {
       "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
-      "sha256": "8a2083c91f1b6390a5983a99a82176434cc2eabde737829d4423c111382d938d",
+      "sha256": "b049fe8837fafa8367ddbe2960724415af8adceca2eefe0a2a207cd8294b8086",
       "executable": false
     },
     {
       "path": "superpowers/methods/requirements/skills/brainstorming/SKILL.md",
-      "sha256": "80155ffafad8b1228626bf4513801451baca1f75b08d9ed5287132011dc91a64",
+      "sha256": "30f06f6f8a46335989ead56867c9e6fd064054ea146e765c8c523fc9d43c04d8",
       "executable": false
     },
     {

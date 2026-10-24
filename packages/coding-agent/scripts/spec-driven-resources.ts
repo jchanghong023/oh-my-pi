@@ -79,22 +79,13 @@ const requirementsAdaptation = parseYaml(openspecAdaptationSource.match(/```yaml
 };
 const requirementsWorkflows = Object.entries(requirementsAdaptation.workflows);
 const factories = requirementsWorkflows.map(([, workflow]) => workflow.skillFactory);
-const removedWorkflowModules = [
-	"apply-change",
-	"ff-change",
-	"verify-change",
-	"bulk-archive-change",
-	"onboard",
-	"feedback",
-];
+const removedWorkflowModules = ["apply-change", "ff-change", "bulk-archive-change", "onboard", "feedback"];
 const removedFactories = [
 	"getApplyInstructions",
 	"getApplyChangeSkillTemplate",
 	"getOpsxApplyCommandTemplate",
 	"getFfChangeSkillTemplate",
 	"getOpsxFfCommandTemplate",
-	"getVerifyChangeSkillTemplate",
-	"getOpsxVerifyCommandTemplate",
 	"getBulkArchiveChangeSkillTemplate",
 	"getOpsxBulkArchiveCommandTemplate",
 	"getOnboardSkillTemplate",
@@ -329,10 +320,9 @@ function adaptOpenSpecEntries(
 				/\[\[opsx:if-workflow apply\]\][\s\S]*?\[\[opsx:else\]\][\s\S]*?\[\[opsx:end\]\]/g,
 				requirementsAdaptation.requirementsHandoff,
 			);
-			return `${requirementsAdaptation.common.trim()}\n\n${body}`.replace(
-				/(?<![\w/.-])openspec (?=[a-z-])/g,
-				"omp openspec ",
-			);
+			return (
+				workflow.module === "verify-change" ? body : `${requirementsAdaptation.common.trim()}\n\n${body}`
+			).replace(/(?<![\w/.-])openspec (?=[a-z-])/g, "omp openspec ");
 		};
 		const template = {
 			...original,
@@ -393,16 +383,8 @@ function adaptOpenSpecEntries(
 			"  return workflows;\n}\n",
 	);
 	// Removal loops must still recognize previously installed implementation wrappers.
-	// Selection/creation loops continue to see only the seven retained workflows.
-	const cleanupWorkflows = JSON.stringify([
-		...workflowIds,
-		"apply",
-		"ff",
-		"verify",
-		"bulk-archive",
-		"onboard",
-		"feedback",
-	]);
+	// Selection/creation loops see only retained workflows.
+	const cleanupWorkflows = JSON.stringify([...workflowIds, "apply", "ff", "bulk-archive", "onboard", "feedback"]);
 	replaceOnce(
 		"core/legacy-cleanup.js",
 		"...ALL_WORKFLOWS.map(workflow => `.kilocode/workflows/opsx-${workflow}.md`),",
@@ -442,18 +424,6 @@ function adaptOpenSpecEntries(
 			";\n" +
 			"        return { ...schema, artifacts: retained.map(a => ({ ...a, instruction: instructions[a.id] })), apply: undefined };",
 	);
-	const instructionsPath = "commands/workflow/instructions.js";
-	const instructions = readEntry(instructionsPath);
-	const start = instructions.indexOf("export async function generateApplyInstructions(");
-	const end = instructions.indexOf("export async function applyInstructionsCommand(", start);
-	if (start < 0 || end < 0) throw new Error("Pinned OpenSpec apply instruction boundary changed");
-	writeEntry(
-		instructionsPath,
-		instructions.slice(0, start) +
-			"export async function generateApplyInstructions() {\n" +
-			"    throw new Error('Implementation instructions are unavailable in the requirements-only OpenSpec engine');\n}\n" +
-			instructions.slice(end),
-	);
 	return adapted;
 }
 
@@ -487,7 +457,7 @@ async function embed(): Promise<void> {
 		commands: UpstreamCommand[];
 	};
 	if (templates.length !== requirementsWorkflows.length || commands.length !== requirementsWorkflows.length)
-		throw new Error("Expected seven retained OpenSpec skill/command pairs");
+		throw new Error("Expected retained OpenSpec skill/command pairs");
 	const entries: Record<string, Uint8Array> = {};
 	const skills: SpecDrivenSkillEntry[] = [];
 	const executable = new Set<string>();

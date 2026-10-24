@@ -21,7 +21,7 @@ const loadControlledSkill = loadSpecDrivenSkill as (
 	options?: { role?: "requirements" | "solution" | "planner" | "executor" | "reviewer" },
 ) => Promise<Skill>;
 
-const retainedWorkflows = ["archive", "continue", "explore", "new", "propose", "sync", "update"];
+const retainedWorkflows = ["archive", "continue", "explore", "new", "propose", "sync", "update", "verify"];
 const retainedOpenSpecSkills = [
 	"openspec-archive-change",
 	"openspec-continue-change",
@@ -30,11 +30,11 @@ const retainedOpenSpecSkills = [
 	"openspec-propose",
 	"openspec-sync-specs",
 	"openspec-update-change",
+	"openspec-verify-change",
 ];
 const removedOpenSpecSkills = [
 	"openspec-apply-change",
 	"openspec-ff-change",
-	"openspec-verify-change",
 	"openspec-bulk-archive-change",
 	"openspec-onboard",
 	"feedback",
@@ -221,7 +221,7 @@ describe("pinned upstream resources", () => {
 		});
 	}
 
-	it("rejects explicit loading of all six removed OpenSpec wrappers", async () => {
+	it("rejects explicit loading of removed OpenSpec implementation wrappers", async () => {
 		const resources = await ensureSpecDrivenResources();
 		for (const name of removedOpenSpecSkills) {
 			await expect(loadSpecDrivenSkill("openspec", name)).rejects.toThrow("Unknown bundled");
@@ -231,14 +231,7 @@ describe("pinned upstream resources", () => {
 				);
 			}
 		}
-		for (const module of [
-			"apply-change",
-			"ff-change",
-			"verify-change",
-			"bulk-archive-change",
-			"onboard",
-			"feedback",
-		]) {
+		for (const module of ["apply-change", "ff-change", "bulk-archive-change", "onboard", "feedback"]) {
 			expect(
 				resources.manifest.files.some(file =>
 					file.path.startsWith(`openspec/dist/core/templates/workflows/${module}.`),
@@ -248,12 +241,12 @@ describe("pinned upstream resources", () => {
 	});
 
 	for (const profile of ["core", "custom"] as const) {
-		it(`generates only seven requirements workflows through init and forced update (${profile})`, async () => {
+		it(`generates the retained workflows through init and forced update (${profile})`, async () => {
 			const project = path.join(temporary, `generated-${profile}`);
 			await fs.mkdir(project);
 			const cli = await isolatedOpenSpec(project, {
 				profile,
-				workflows: [...retainedWorkflows, "apply", "ff", "verify", "bulk-archive", "onboard", "feedback"],
+				workflows: [...retainedWorkflows, "apply", "ff", "bulk-archive", "onboard", "feedback"],
 			});
 			const initialized = await cli(["init", "--tools", "claude", "--force", "--no-animation"]);
 			expect(initialized.exitCode).toBe(0);
@@ -283,7 +276,7 @@ describe("pinned upstream resources", () => {
 			for (const [name, content] of Object.entries(historical)) {
 				await fs.writeFile(path.join(history, name), content);
 			}
-			const obsolete = ["apply", "ff", "verify", "bulk-archive", "onboard"];
+			const obsolete = ["apply", "ff", "bulk-archive", "onboard"];
 			for (const workflow of obsolete) {
 				await fs.writeFile(
 					path.join(legacy, `opsx-${workflow}.md`),
@@ -313,7 +306,7 @@ describe("pinned upstream resources", () => {
 		}, 30_000);
 	}
 
-	it("keeps legacy tool migration within the seven requirements workflows", async () => {
+	it("keeps legacy tool migration within the retained workflows", async () => {
 		const project = path.join(temporary, "legacy-tool-migration");
 		const legacy = path.join(project, ".claude", "commands", "openspec");
 		await fs.mkdir(legacy, { recursive: true });
@@ -365,7 +358,13 @@ describe("pinned upstream resources", () => {
 		const completed = await cli(["status", "--change", "requirements-only", "--json"]);
 		expect(completed.exitCode).toBe(0);
 		expect(JSON.parse(completed.stdout).isComplete).toBe(true);
-		for (const artifact of ["apply", "design", "tasks"]) {
+		const context = await cli(["instructions", "apply", "--change", "requirements-only", "--json"]);
+		expect(context.exitCode).toBe(0);
+		const available = JSON.parse(context.stdout);
+		expect(available.contextFiles.proposal).toEqual([path.join(changeDir, "proposal.md")]);
+		expect(available.contextFiles.specs).toEqual([path.join(changeDir, "specs", "offline-resources", "spec.md")]);
+		expect(available.tasks).toEqual([]);
+		for (const artifact of ["design", "tasks"]) {
 			const forbidden = await cli(["instructions", artifact, "--change", "requirements-only", "--json"]);
 			expect(forbidden.exitCode).not.toBe(0);
 		}
@@ -457,7 +456,8 @@ describe("pinned upstream resources", () => {
 				);
 			}
 			const apply = await cli(["instructions", "apply", "--change", "legacy-change", "--json"]);
-			expect(apply.exitCode).not.toBe(0);
+			expect(apply.exitCode).toBe(separable ? 0 : 1);
+			if (separable) expect(JSON.parse(apply.stdout).contextFiles).toHaveProperty("proposal");
 			for (const [file, bytes] of Object.entries(historical))
 				expect((await fs.readFile(path.join(changeDir, file))).equals(bytes)).toBe(true);
 			expect(await fs.readFile(path.join(project, "business.ts"), "utf8")).toBe("export const unchanged = true;\n");

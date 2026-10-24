@@ -537,7 +537,9 @@ async function assertNativeTransition(
 	const handoff = provider.handoffs[ordinal - 1]!;
 	expect(rolePayload(handoff)?.specDrivenRole).toBe(producer);
 	const incoming = handoff.messages.map(message => contentText(message.content)).join("\n");
-	const formal = await fs.readFile(path.join(cwd, formalPath), "utf8");
+	const [file, pointer] = formalPath.split("#");
+	const bytes = await fs.readFile(path.join(cwd, file!), "utf8");
+	const formal = pointer === "/solution" ? JSON.stringify(JSON.parse(bytes).solution) : bytes;
 	expect(incoming.includes(formal) || incoming.includes(JSON.stringify(formal).slice(1, -1))).toBe(true);
 	expect(incoming).toContain(decision);
 	const successorRequest = provider.requests.find(
@@ -674,7 +676,7 @@ describe("spec-driven actual OMP public entry", () => {
 						if (failure === "provider-error") throw new Error("Injected native handoff transport failure");
 						if (failure === "version-drift")
 							await fs.appendFile(
-								path.join(cwd, `openspec/changes/${CHANGE_ID}/requirements.md`),
+								path.join(cwd, `openspec/changes/${CHANGE_ID}/proposal.md`),
 								"\nExternal requirements change while native handoff is in flight.\n",
 							);
 						return { text: `${respond(request).text}\n${HANDOFF_MARKER}-1` };
@@ -935,6 +937,12 @@ describe("spec-driven actual OMP public entry", () => {
 					`/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
 				);
 				const specification = await peer.phase(session, "awaiting-specification", first);
+				const runtimeDirs = (await fs.readdir(path.join(config.cwd, ".omp/spec-sessions"))).filter(
+					name => name !== ".gitignore",
+				);
+				expect(runtimeDirs).toHaveLength(1);
+				const statePath = `.omp/spec-sessions/${runtimeDirs[0]}/state.json`;
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/requirements.md`);
 				if (markdown) {
 					const requirementsInput = provider.requests
 						.map(rolePayload)
@@ -987,7 +995,7 @@ describe("spec-driven actual OMP public entry", () => {
 					1,
 					"requirements",
 					"solution",
-					`openspec/changes/${CHANGE_ID}/requirements.md`,
+					`openspec/changes/${CHANGE_ID}/proposal.md`,
 					String(specification.state.specificationVersion),
 				);
 				expect(choice.state.runId).toBeString();
@@ -1006,16 +1014,28 @@ describe("spec-driven actual OMP public entry", () => {
 					2,
 					"solution",
 					"planner",
-					`openspec/changes/${CHANGE_ID}/solution.md`,
+					`${statePath}#/solution`,
 					commandFrom(choice.text, "choose").split(" ").at(-1)!,
 				);
 				await absent(config.cwd, IMPLEMENTATION_PATH);
 				await absent(config.cwd, TEST_PATH);
 				expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
-				expect(await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`), "utf8")).toContain(
-					"T001",
-				);
-				await absent(config.cwd, "docs/superpowers/plans");
+				const planNames = await fs.readdir(path.join(config.cwd, "docs/superpowers/plans"));
+				expect(planNames).toHaveLength(1);
+				const planPath = `docs/superpowers/plans/${planNames[0]}`;
+				expect(await fs.readFile(path.join(config.cwd, planPath), "utf8")).toContain("T001");
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`);
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/solution.md`);
+				const runtimeState = JSON.parse(await fs.readFile(path.join(config.cwd, statePath), "utf8"));
+				expect(runtimeState.solution.candidateId).toBe(runtimeState.status.selection.candidateId);
+				expect(runtimeState.teamResult.runId).toBe(runtimeState.solution.runId);
+				expect(runtimeState.plan.tasks[0].id).toBe("T001");
+				expect(runtimeState.plan.path).toBe(planPath);
+				expect(
+					new Bun.CryptoHasher("sha256").update(await fs.readFile(path.join(config.cwd, planPath))).digest("hex"),
+				).toBe(runtimeState.plan.documentVersion);
+				const visible = await git(config.cwd, config.env, ["status", "--porcelain", "--untracked-files=all"]);
+				expect(visible).not.toContain(".omp/spec-sessions/");
 				const badPlan = await peer.send(session, "/spec confirm-plan obsolete-version");
 				await peer.phase(session, "awaiting-plan", badPlan);
 				await absent(config.cwd, IMPLEMENTATION_PATH);
@@ -1068,7 +1088,7 @@ describe("spec-driven actual OMP public entry", () => {
 					3,
 					"planner",
 					"executor",
-					`openspec/changes/${CHANGE_ID}/plan.md`,
+					planPath,
 					String(plan.state.planVersion),
 				);
 				await assertFixedRoleSystems(provider.requests);
@@ -1239,17 +1259,19 @@ describe("spec-driven actual OMP public entry", () => {
 					archive.find(name => name.endsWith(`-${CHANGE_ID}`))!,
 				);
 				for (const file of [
-					"requirements.md",
-					"solution.md",
 					"plan.md",
 					"verification.md",
 					"checks/requirements.json",
+					"checks/orchestration.json",
 					...(markdown ? ["checks/source-approval.json"] : []),
 					...["requirements-to-solution", "solution-to-plan", "plan-to-execution"].map(
 						name => `handoffs/${name}.md`,
 					),
 				])
 					expect((await fs.readFile(path.join(archived, file), "utf8")).length).toBeGreaterThan(0);
+				expect(await fs.readFile(path.join(config.cwd, planPath), "utf8")).toBe(
+					await fs.readFile(path.join(archived, "plan.md"), "utf8"),
+				);
 				const archivedReport = await fs.readFile(path.join(archived, "verification.md"), "utf8");
 				expect([...archivedReport.matchAll(/\]\(([^)]+)\)/gu)].length).toBeGreaterThan(0);
 				for (const match of archivedReport.matchAll(/\]\(([^)]+)\)/gu)) {

@@ -7,7 +7,8 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { ensureSpecDrivenResources, runOpenSpec } from "./resources";
 import { parseSpecPlan } from "./schemas";
-import type { SpecDocument, SpecPlanDraft, SpecSolutionDraft } from "./types";
+import type { SpecDrivenStatus, SpecPlanDraft, SpecSolutionDraft } from "./types";
+import type { TeamRunResult } from "../team/types";
 
 export interface ArtifactSnapshot {
 	path: string;
@@ -15,7 +16,6 @@ export interface ArtifactSnapshot {
 	version: string;
 }
 export interface RequirementArtifacts {
-	document: ArtifactSnapshot;
 	proposal: ArtifactSnapshot;
 	specs: ArtifactSnapshot[];
 	checks: ArtifactSnapshot[];
@@ -65,6 +65,14 @@ export interface SpecArtifactStoreOptions {
 	requirementsDir?: string;
 	changeDir?: string;
 	checkPaths?: readonly string[];
+	runId?: string;
+}
+interface SpecRuntimeSnapshot {
+	schemaVersion: 1;
+	solution?: SpecSolutionDraft;
+	plan?: SpecPlanDraft & { path: string; documentVersion: string };
+	status?: Omit<SpecDrivenStatus, "solution" | "plan">;
+	teamResult?: TeamRunResult;
 }
 export function artifactVersion(content: string): string {
 	return crypto.createHash("sha256").update(content).digest("hex");
@@ -365,15 +373,20 @@ export class SpecArtifactStore {
 	readonly changeId: string;
 	readonly changeDir: string;
 	readonly planPath: string;
+	readonly statePath: string;
 	readonly requirementsDir: string;
 	readonly native: boolean;
 	readonly #checks: Set<string>;
+	#stateWrites: Promise<void> = Promise.resolve();
 	constructor(options: SpecArtifactStoreOptions) {
 		if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(options.changeId)) throw new Error("Invalid change ID");
 		this.cwd = path.resolve(options.cwd);
 		this.changeId = options.changeId;
 		this.changeDir = options.changeDir ?? `openspec/changes/${options.changeId}`;
-		this.planPath = `${this.changeDir}/plan.md`;
+		this.planPath = `docs/superpowers/plans/${new Date().toISOString().slice(0, 10)}-${options.changeId}.md`;
+		const runId = options.runId ?? crypto.randomUUID();
+		if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid specification run ID");
+		this.statePath = `.omp/spec-sessions/${runId}/state.json`;
 		this.requirementsDir = options.requirementsDir ?? "openspec/specs";
 		this.native = options.requirementsDir === undefined || options.requirementsDir === "openspec/specs";
 		this.#checks = new Set(options.checkPaths ?? []);
@@ -395,17 +408,15 @@ export class SpecArtifactStore {
 		if (existing !== undefined && existing !== "schema: omp-spec\n")
 			throw new Error("Change metadata selects a different schema");
 		changes.set(metadata, "schema: omp-spec\n");
+		changes.set(".omp/spec-sessions/.gitignore", "*\n");
 		await publish(this.cwd, changes);
 	}
 	async writeRequirements(input: {
-		document: SpecDocument;
 		proposal: string;
 		specs: Array<{ path: string; content: string }>;
 		checks?: Array<{ path: string; content: string }>;
 	}): Promise<RequirementArtifacts> {
-		if (input.document.path !== "requirements.md") throw new Error("Formal requirements must use requirements.md");
 		const changes = new Map<string, string | undefined>();
-		changes.set(`${this.changeDir}/requirements.md`, input.document.content);
 		changes.set(`${this.changeDir}/proposal.md`, input.proposal);
 		for (const spec of input.specs) {
 			if (!/^specs\/[a-z0-9]+(?:-[a-z0-9]+)*\/spec\.md$/.test(spec.path))
@@ -438,7 +449,6 @@ export class SpecArtifactStore {
 		return this.readRequirements();
 	}
 	async readRequirements(): Promise<RequirementArtifacts> {
-		const document = await this.#read(`${this.changeDir}/requirements.md`);
 		const proposal = await this.#read(`${this.changeDir}/proposal.md`);
 		const specRoot = await containedSpecPath(this.cwd, `${this.changeDir}/specs`);
 		let names: string[] = [];
@@ -459,20 +469,20 @@ export class SpecArtifactStore {
 			if (content !== undefined) checks.push(snapshot(file, content));
 		}
 		return {
-			document,
 			proposal,
 			specs,
 			checks,
-			version: artifactVersion(JSON.stringify([document, proposal, ...specs, ...checks])),
+			version: artifactVersion(JSON.stringify([proposal, ...specs, ...checks])),
 		};
 	}
 	async writeSolution(solution: SpecSolutionDraft): Promise<ArtifactSnapshot> {
-		const content = `${solution.proposal}\n\n<!-- OMP selected solution metadata\n${JSON.stringify(solution)}\n-->\n`;
-		await publish(this.cwd, new Map([[`${this.changeDir}/solution.md`, content]]));
+		await this.#updateState({ solution });
 		return this.readSolution();
 	}
 	async readSolution(): Promise<ArtifactSnapshot> {
-		return this.#read(`${this.changeDir}/solution.md`);
+		const { solution } = await this.#readState();
+		if (!solution) throw new Error("No selected Team candidate");
+		return snapshot(`${this.statePath}#/solution`, JSON.stringify(solution));
 	}
 	async writePlan(draft: SpecPlanDraft): Promise<ArtifactSnapshot> {
 		parseSpecPlan(draft);
@@ -486,12 +496,43 @@ export class SpecArtifactStore {
 		}
 		const cell = (value: string): string => value.replaceAll("|", "\\|").replaceAll("\n", " ");
 		const rows = [...coverage].map(([id, tasks]) => `| ${cell(id)} | ${tasks.map(cell).join(", ")} |`);
-		const content = `${draft.content}\n\n## Requirement coverage\n\n| Requirement | Tasks |\n| --- | --- |\n${rows.join("\n")}\n\n<!-- OMP approved plan metadata\n${JSON.stringify(draft)}\n-->\n`;
+		const content = `${draft.content}\n\n## Requirement coverage\n\n| Requirement | Tasks |\n| --- | --- |\n${rows.join("\n")}\n`;
 		await publish(this.cwd, new Map([[this.planPath, content]]));
+		await this.#updateState({ plan: { ...draft, path: this.planPath, documentVersion: artifactVersion(content) } });
 		return this.readPlan();
 	}
 	async readPlan(): Promise<ArtifactSnapshot> {
-		return this.#read(this.planPath);
+		const plan = await this.#read(this.planPath);
+		const { plan: projection } = await this.#readState();
+		if (!projection) throw new Error("No machine projection for the implementation plan");
+		return { ...plan, version: artifactVersion(JSON.stringify([plan, projection])) };
+	}
+	/** Resolve the selected-candidate JSON pointer without hashing unrelated runtime status. */
+	async readDocument(file: string): Promise<ArtifactSnapshot> {
+		if (file === `${this.statePath}#/solution`) return this.readSolution();
+		if (file === this.planPath) return this.readPlan();
+		return this.#read(file);
+	}
+	async saveState(status: SpecDrivenStatus): Promise<void> {
+		const { solution: _solution, plan: _plan, ...stage } = status;
+		await this.#updateState({ status: stage });
+	}
+	async saveTeamResult(teamResult: TeamRunResult): Promise<void> {
+		await this.#updateState({ teamResult });
+	}
+	async #readState(): Promise<SpecRuntimeSnapshot> {
+		const content = await optionalRead(await containedSpecPath(this.cwd, this.statePath));
+		return content === undefined ? { schemaVersion: 1 } : JSON.parse(content);
+	}
+	async #updateState(update: Partial<SpecRuntimeSnapshot>): Promise<void> {
+		const operation = this.#stateWrites.then(async () => {
+			const state = { ...(await this.#readState()), ...update };
+			const file = await containedSpecPath(this.cwd, this.statePath);
+			await fs.mkdir(path.dirname(file), { recursive: true });
+			await writeFileAtomically(file, `${JSON.stringify(state, null, 2)}\n`);
+		});
+		this.#stateWrites = operation.catch(() => {});
+		await operation;
 	}
 	async validateRequirements(signal?: AbortSignal): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		return runOpenSpec(["validate", this.changeId, "--type", "change", "--strict", "--json"], this.cwd, signal);
@@ -721,6 +762,15 @@ export class SpecArtifactStore {
 				if ((await optionalRead(path.join(stagedRoot, name))) !== original.content)
 					throw new Error(`Archive copy changed: ${name}`);
 			}
+			// These are delivery snapshots, not additional editable authorities.
+			const delivery = path.join(stagedRoot, "changes", this.changeId);
+			await fs.writeFile(path.join(delivery, "plan.md"), plan.content, { flag: "wx" });
+			await fs.mkdir(path.join(delivery, "checks"), { recursive: true });
+			await fs.writeFile(
+				path.join(delivery, "checks/orchestration.json"),
+				await fs.readFile(await containedSpecPath(this.cwd, this.statePath), "utf8"),
+				{ flag: "wx" },
+			);
 			// OpenSpec has no standalone sync CLI. Its real archive performs the pinned merge
 			// and validation in isolation; sync-only publishes ONLY the resulting master delta.
 			const result = await runOpenSpec(
@@ -781,6 +831,8 @@ export class SpecArtifactStore {
 			signal?.throwIfAborted();
 			await publish(this.cwd, changes, archive ? this.changeDir : undefined, expected, async published => {
 				signal?.throwIfAborted();
+				if ((await this.readPlan()).version !== plan.version)
+					throw new Error("Approved implementation plan changed during closure");
 				// The accepted composite becomes unreadable once our archive starts retiring it.
 				// Remaining targets still have their individual preflight ownership checks.
 				if (![...published].some(file => file.startsWith(`${this.changeDir}/`))) await this.#approve(approval);
