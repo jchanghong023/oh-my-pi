@@ -20,11 +20,15 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 	const transcript: string[] = [];
 	const requests: string[] = [];
 	const calls: string[] = [];
+	const executionModes: string[] = [];
 	let disposed = 0;
 	let specificationVersion = "";
 	const draft: SpecRequirementsDraft = {
+		document: { path: "requirements.md", content: "# R1\n用户应能查看结果\n" },
 		proposal: "用户应能查看结果",
-		specs: [{ path: "result/spec.md", content: "### Requirement: 查看结果\n#### Scenario: 成功\n展示真实结果" }],
+		specs: [
+			{ path: "specs/result/spec.md", content: "### Requirement: 查看结果\n#### Scenario: 成功\n展示真实结果" },
+		],
 		requirements: [{ id: "R1", text: "展示结果" }],
 		questions: [],
 	};
@@ -32,6 +36,32 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 		throw new Error("Implementation must not be dispatched by a missing or stale approval");
 	};
 	const ports: SpecDrivenPorts = {
+		async handoff(input, context) {
+			calls.push(`handoff:${input.transition}`);
+			const role =
+				input.transition === "requirements-to-solution"
+					? "requirements"
+					: input.transition === "solution-to-plan"
+						? "solution"
+						: "planner";
+			const body = `Detached command-fixture native boundary: ${input.transition}`;
+			return {
+				actorId: `fixture-${role}`,
+				sessionId: `fixture-session-${role}`,
+				role,
+				runId: context.runId,
+				generation: context.generation,
+				transition: input.transition,
+				path: `handoffs/${input.transition}.md`,
+				digest: new Bun.CryptoHasher("sha256").update(body).digest("hex"),
+				body,
+				versions: {
+					[input.specification.document.path]: input.specification.version,
+					...(input.solution ? { "solution.md": input.solution.artifactVersion } : {}),
+					...(input.plan ? { "plan.md": input.plan.artifactVersion } : {}),
+				},
+			};
+		},
 		artifacts: {
 			async initialize() {},
 			async writeRequirements() {
@@ -42,6 +72,12 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 				return { version: specificationVersion };
 			},
 			async validateRequirements() {},
+			async writeSolution() {
+				return { version: "solution-file-v1" };
+			},
+			async readSolution() {
+				return { version: "solution-file-v1" };
+			},
 			async writePlan() {
 				return { version: "plan-file-v1" };
 			},
@@ -71,6 +107,7 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 				calls.push("plan");
 				return {
 					content: "# 唯一计划\n写入结果说明并核对入口。",
+					workspace: { executionPath: ".", isolation: "native", integration: "native" },
 					tasks: [
 						{
 							id: "T001",
@@ -82,16 +119,29 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 							ownedPaths: ["result.txt"],
 							implementationPaths: [],
 							solutionBinding: "result-contract",
-							validation: [{ id: "result", command: "check-result", behavior: "查看结果" }],
+							validation: [
+								{ id: "result", command: "check-result", behavior: "查看结果", inputPaths: ["result.txt"] },
+							],
 							tdd: { mode: "exception", reason: "纯文档", alternativeCommands: ["check-result"] },
 						},
 					],
 					conditions: [],
-					finalValidation: [{ id: "entry", command: "public-entry", behavior: "查看结果", realEntry: true }],
+					finalValidation: [
+						{
+							id: "entry",
+							command: "public-entry",
+							behavior: "查看结果",
+							inputPaths: ["result.txt"],
+							realEntry: true,
+						},
+					],
 					closure: { sync: false, archive: false },
 				};
 			},
-			execute: unexpected,
+			async execute(input) {
+				executionModes.push(input.mode);
+				throw new Error("Fixture stops after observing whole-stage execution admission");
+			},
 		},
 		team: {
 			async run(input) {
@@ -120,8 +170,14 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 				};
 			},
 		},
-		git: { preflight: unexpected, commit: unexpected },
-		evidence: { read: unexpected },
+		git: { async preflight() {}, commit: unexpected },
+		evidence: {
+			read: unexpected,
+			async revalidate() {
+				return { taskIds: [], reasons: [], overall: false };
+			},
+			async flush() {},
+		},
 		validation: { run: unexpected },
 	};
 	const sessionManager = {};
@@ -186,6 +242,7 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 		transcript,
 		requests,
 		calls,
+		executionModes,
 		invoke,
 		settle,
 		entered: entered.promise,
@@ -245,11 +302,74 @@ describe("/spec shared command surface", () => {
 			expect(state.phase).toBe("awaiting-plan");
 			expect(state.plan?.version).not.toBe(state.plan?.artifactVersion);
 			expect(f.output.join("\n")).toContain(`/spec confirm-plan ${state.plan!.version}`);
-			expect(f.output.join("\n")).toContain("本地 commit");
+			expect(f.output.join("\n")).toContain(`/spec confirm-plan ${state.plan!.version} --goal`);
 			await f.invoke("confirm-plan plan-file-v1");
 			await f.settle();
 			expect(f.controller.status().phase).toBe("awaiting-plan");
-			expect(f.transcript.some(text => text.includes("唯一计划"))).toBe(true);
+			expect(f.controller.status().handoffs?.map(handoff => handoff.transition)).toEqual([
+				"requirements-to-solution",
+				"solution-to-plan",
+			]);
+			expect(f.output.join("\n")).toContain("handoffs/solution-to-plan.md");
+			expect(f.output.join("\n")).toContain("Detached command-fixture native boundary: solution-to-plan");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	for (const mode of ["normal", "goal"] as const)
+		it(`routes exact plan approval into ${mode} stage execution`, async () => {
+			const f = fixture();
+			try {
+				await f.invoke("start execution-mode request");
+				await f.settle();
+				await f.invoke("confirm-spec spec-v1");
+				await f.settle();
+				await f.invoke("choose discussion-v1 A candidate-v1");
+				await f.settle();
+				const version = f.controller.status().plan!.version;
+				const approval = await f.invoke(`confirm-plan ${version}${mode === "goal" ? " --goal" : ""}`);
+				if (!approval || !("consumed" in approval))
+					throw new Error("Expected plan approval to consume the command");
+				expect(approval.failed).not.toBe(true);
+				await f.settle();
+				expect(f.executionModes).toEqual([mode]);
+				expect(f.controller.status().executionMode).toBe(mode);
+				expect(f.calls).toContain("handoff:plan-to-execution");
+				expect(f.output.join("\n")).toContain(`"executionMode":"${mode}"`);
+				expect(f.controller.status().tasks.every(task => task.status !== "completed")).toBe(true);
+			} finally {
+				await f.dispose();
+			}
+		});
+
+	it("rejects unknown, repeated, misplaced and excess plan flags before dispatch", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("start reject-mode request");
+			await f.settle();
+			await f.invoke("confirm-spec spec-v1");
+			await f.settle();
+			await f.invoke("choose discussion-v1 A candidate-v1");
+			await f.settle();
+			const version = f.controller.status().plan!.version;
+			for (const args of [
+				"",
+				`${version} --normal`,
+				`${version} --unknown`,
+				`--goal ${version}`,
+				`${version} --goal --goal`,
+				`${version} --goal extra`,
+			]) {
+				const result = await f.invoke(`confirm-plan ${args}`);
+				if (!result || !("consumed" in result))
+					throw new Error("Expected rejected plan flags to consume the command");
+				expect(result.failed).toBe(true);
+				expect(f.controller.status().phase).toBe("awaiting-plan");
+				expect(f.controller.status().planApproval).toBeUndefined();
+			}
+			expect(f.executionModes).toEqual([]);
+			expect(f.calls).not.toContain("handoff:plan-to-execution");
 		} finally {
 			await f.dispose();
 		}

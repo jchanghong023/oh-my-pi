@@ -101,6 +101,8 @@ export function createPersistedSubagentReviverFactory(
 		// is gone (isolated/merged worktree, moved dir): leave it transcript-only
 		// (history://) rather than resurrect a wrong or broken session.
 		if (!peek?.init) return undefined;
+		// Live capability callbacks cannot be reconstructed from a persisted transcript.
+		if (peek.init.requiresLiveHost) return undefined;
 		let restoredSeance: RestoredSeanceSession | undefined;
 		if (peek.seanceSource !== undefined) {
 			try {

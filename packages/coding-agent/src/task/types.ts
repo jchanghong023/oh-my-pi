@@ -10,8 +10,55 @@ export type {
 import { type BaseType, type FluentType, type } from "@oh-my-pi/omptype";
 import { $env } from "@oh-my-pi/pi-utils";
 
-import type { AgentSessionEvent } from "../session/agent-session";
+import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
+import type { CreateAgentSessionOptions } from "../sdk";
+import type { StructuredSubagentRequest } from "./structured-subagent";
+import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
+
+/** Per-invocation publication policy; never mutates shared settings. */
+export interface NativeSpawnOverrides {
+	applyChanges?: boolean;
+	/** Select the existing per-invocation native lifetime; absent preserves the caller default. */
+	keepAlive?: boolean;
+	/** Map the requested repository-relative cwd into this invocation's native isolation. */
+	preserveCwd?: boolean;
+}
+
+/** Capability-only overrides: native identity, models and ownership remain host-owned. */
+export type NativeSubagentOverrides = Pick<
+	CreateAgentSessionOptions,
+	| "toolRestrictions"
+	| "toolNames"
+	| "customTools"
+	| "systemPrompt"
+	| "skills"
+	| "rules"
+	| "restrictToolNames"
+	| "allowRestrictedCustomTools"
+	| "enableMCP"
+	| "enableLsp"
+	| "lspReadOnly"
+	| "enableIrc"
+	| "subagentHooks"
+> & {
+	onSessionCreated?: (session: AgentSession) => void | (() => void);
+};
+
+/** Optional live-host callbacks, independently bound for every native child. */
+export interface NativeSubagentHooks {
+	beforeSpawn(request: StructuredSubagentRequest): Promise<NativeSpawnOverrides | void>;
+	/** Release invocation-local admission after an actual failure before a child result exists. */
+	onSpawnFailed?(request: StructuredSubagentRequest, error: unknown): Promise<void>;
+	configureSession(
+		request: StructuredSubagentRequest,
+		options: Readonly<CreateAgentSessionOptions>,
+	): Promise<NativeSubagentOverrides>;
+	/** Observe quiescent native source before capture; rejection preserves recovery bytes. */
+	beforeCapture?(request: StructuredSubagentRequest, result: SingleResult): Promise<void>;
+	/** Observe the actual native capture outcome before its remaining artifacts can be removed. */
+	afterResult?(request: StructuredSubagentRequest, result: SingleResult): Promise<void>;
+}
 
 const parseNumber = (value: string | undefined, defaultValue: number): number => {
 	if (value) {

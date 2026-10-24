@@ -111,7 +111,7 @@ function coverage(spec: string | null): ScenarioCoverage {
 
 // Opt-in only: this runs real OMP SDK/native child tasks and local Git, not a fake port graph.
 test.skipIf(Bun.env.OMP_SPEC_PAIRED_E2E !== "1")(
-	"AC18 bounded actual upstream-direct versus OMP pre-approval paired scenario",
+	"AC18 bounded retained-capability independent calls versus OMP pre-approval paired scenario",
 	async () => {
 		await using root = await TempDir.create("@omp-spec-paired-");
 		await using provider = createPairedProvider();
@@ -276,8 +276,8 @@ test.skipIf(Bun.env.OMP_SPEC_PAIRED_E2E !== "1")(
 		const report = createSpecPairedReport(baseline.measurement, workflow.measurement);
 		report.attribution = {
 			upstream: [
-				"Both arms use pinned OpenSpec exploration/new-change/continue-change methods",
-				"Direct arm reads original Superpowers brainstorming with normal SDK tools; OMP arm follows native requirements and independent-review roles",
+				"Both arms select the retained pinned OpenSpec exploration/new-change/continue-change resources; selectedResources records actual resource identities",
+				"Baseline invokes retained capabilities independently through ordinary SDK tools, not the complete pre-removal upstream distribution; it reads Superpowers brainstorming while OMP uses requirements and independent-review actors",
 			],
 			orchestration: [
 				"Actual OMP requirements role tool restrictions versus unrestricted ordinary SDK write",
@@ -285,7 +285,7 @@ test.skipIf(Bun.env.OMP_SPEC_PAIRED_E2E !== "1")(
 			],
 		};
 		report.conclusion =
-			"This single deterministic localhost adversarial pre-approval scenario measures spec scenario presence and actual early-write effects, not general model/delivery quality or billing. A scripted provider attempts the same unauthorized write in each arm. The direct SDK arm does not share OMP stage gates. Different role contexts, tool rosters and independent review overhead are intentional treatment differences. Team/TDD/implementation/release and human correction outcomes are unmeasured; planned approval waits are not corrections. No causal or statistical quality/cost improvement claim is supported.";
+			"This single deterministic localhost adversarial pre-approval scenario measures spec scenario presence and actual early-write effects, not general model/delivery quality or billing. Baseline is the ordinary independent-call path for retained capabilities, not removed full upstream or an unadapted upstream version. A scripted provider attempts the same unauthorized write in each arm. The direct SDK arm does not share OMP stage gates. Different role contexts, tool rosters and independent review overhead are intentional treatment differences. Team/TDD/implementation/release and human correction outcomes are unmeasured; planned approval waits are not corrections. No causal or statistical quality/cost improvement claim is supported.";
 		const limitations = {
 			measuredQuality: arms.map(arm => ({
 				mode: arm.output.mode,

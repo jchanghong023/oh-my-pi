@@ -15,6 +15,7 @@ import type {
 	SpecReviewKind,
 	SpecReviewSlot,
 	SpecRunContext,
+	SpecSolution,
 	SpecTask,
 	SpecTaskState,
 	SpecToolRecord,
@@ -54,6 +55,8 @@ export class SpecDrivenOrchestrator {
 	#initialized = false;
 	#taskIdentities = new Map<string, string>();
 	#preservedTasks = new Map<string, SpecTaskState>();
+	#preservedDependencies = new Map<string, readonly string[]>();
+	#preserving: Promise<void> = Promise.resolve();
 
 	constructor(ports: SpecDrivenPorts, options: SpecDrivenOptions) {
 		if (!options.currentModel.trim()) throw new Error("A current model is required");
@@ -117,19 +120,35 @@ export class SpecDrivenOrchestrator {
 		if (!candidate || !this.#eligible(candidate)) throw new Error("Stale or ineligible candidate");
 		return this.#launch(async context => {
 			await this.#checkSpecification(context);
+			const draft = {
+				specificationVersion: this.#specification().version,
+				runId,
+				candidateId,
+				candidateVersion,
+				proposal: candidate.proposal,
+				conditions: structuredClone(candidate.conditions),
+			};
+			const snapshot = await this.#checked(this.#ports.artifacts.writeSolution(draft, context), context);
+			if (!snapshot.version) throw new Error("Solution artifact has no content identity");
+			this.#state.solution = {
+				...draft,
+				artifactVersion: snapshot.version,
+				version: hash({ draft, artifactVersion: snapshot.version }),
+			};
 			this.#state.selection = { runId, candidateId, candidateVersion };
 			this.#state.phase = "planning";
 		});
 	}
 
 	/** Explicitly starts implementation AND authorizes only local, task-owned commits. */
-	async confirmPlan(expectedVersion: string): Promise<SpecDrivenStatus> {
+	async confirmPlan(expectedVersion: string, options?: { mode?: "normal" | "goal" }): Promise<SpecDrivenStatus> {
 		this.#expect("awaiting-plan");
 		const plan = this.#plan();
 		if (expectedVersion !== plan.version) throw new Error("Stale plan approval");
 		return this.#launch(async context => {
 			await this.#checkInputs(context);
 			this.#state.planApproval = expectedVersion;
+			this.#state.executionMode = options?.mode ?? "normal";
 			this.#state.phase = "executing";
 		});
 	}
@@ -140,6 +159,9 @@ export class SpecDrivenOrchestrator {
 			throw new Error("Stale final acceptance");
 		return this.#launch(async context => {
 			await this.#checkInputs(context);
+			if (await this.#refreshEvidence(context))
+				throw new Error("Stale final acceptance: selected input content changed");
+			if (this.#state.acceptanceVersion !== expectedVersion) throw new Error("Stale final acceptance");
 			this.#state.finalApproval = expectedVersion;
 			this.#state.phase = "closing";
 		});
@@ -177,6 +199,7 @@ export class SpecDrivenOrchestrator {
 		this.#state.blockedReason = "Paused by user";
 		this.#abort.abort();
 		this.#state.generation++;
+		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
 		return this.status();
 	}
 
@@ -184,6 +207,7 @@ export class SpecDrivenOrchestrator {
 		if (!this.#state.paused) throw new Error("Workflow is not paused");
 		if (this.#state.phase === "cancelled") throw new Error("Cancelled workflow cannot resume");
 		if (this.#driving) await this.#driving;
+		await this.#preserving;
 		this.#state.paused = false;
 		this.#state.blockedReason = undefined;
 		this.#abort = new AbortController();
@@ -193,6 +217,7 @@ export class SpecDrivenOrchestrator {
 	cancel(): SpecDrivenStatus {
 		this.pause();
 		if (this.#state.phase !== "completed") this.#state.phase = "cancelled";
+		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
 		return this.status();
 	}
 
@@ -206,17 +231,24 @@ export class SpecDrivenOrchestrator {
 	async #interrupt(): Promise<void> {
 		this.pause();
 		if (this.#driving) await this.#driving;
+		await this.#preserving;
 		this.#state.paused = false;
 		this.#state.blockedReason = undefined;
 		this.#abort = new AbortController();
 	}
 	#rememberTasks(): void {
 		for (const task of this.#state.tasks)
-			if (task.status === "completed") this.#preservedTasks.set(task.id, structuredClone(task));
+			if (task.status === "completed") {
+				this.#preservedTasks.set(task.id, structuredClone(task));
+				this.#preservedDependencies.set(task.id, [
+					...(this.#state.plan?.tasks.find(item => item.id === task.id)?.dependencies ?? []),
+				]);
+			}
 	}
 	#invalidateDownstream(): void {
 		this.#state.team = undefined;
 		this.#state.selection = undefined;
+		this.#state.solution = undefined;
 		this.#state.planApproval = undefined;
 		this.#state.acceptanceVersion = undefined;
 		this.#state.finalApproval = undefined;
@@ -243,12 +275,33 @@ export class SpecDrivenOrchestrator {
 		this.#guard(context);
 		return result;
 	}
+	async #handoff(input: Parameters<SpecDrivenPorts["handoff"]>[0], context: SpecRunContext) {
+		await this.#refreshEvidence(context);
+		const handoff = await this.#checked(this.#ports.handoff(input, context), context);
+		this.#state.handoffs = [
+			...(this.#state.handoffs ?? []).filter(item => item.transition !== handoff.transition),
+			handoff,
+		];
+		await this.#ports.evidence.flush(this.status(), context);
+		return handoff;
+	}
+	async #preserve(): Promise<void> {
+		try {
+			await this.#ports.evidence.flush(this.status(), this.#context());
+		} catch (error) {
+			this.#state.paused = true;
+			if (this.#state.phase === "completed") this.#state.phase = "closing";
+			this.#state.blockedReason ??= error instanceof Error ? error.message : String(error);
+			this.#abort.abort();
+		}
+	}
 	async #launch(before?: (context: SpecRunContext) => Promise<void>): Promise<SpecDrivenStatus> {
 		if (this.#driving) throw new Error("Workflow dispatch is already active");
 		const context = this.#context();
 		const drive = async (): Promise<SpecDrivenStatus> => {
 			try {
 				this.#guard(context);
+				await this.#refreshEvidence(context);
 				if (before) await before(context);
 				await this.#drive(context);
 			} catch (error) {
@@ -259,6 +312,7 @@ export class SpecDrivenOrchestrator {
 					this.#state.generation++;
 				}
 			}
+			await this.#preserve();
 			return this.status();
 		};
 		this.#driving = drive();
@@ -289,6 +343,19 @@ export class SpecDrivenOrchestrator {
 					await this.#reviewPlan(context);
 					break;
 				case "executing":
+					await this.#checked(
+						this.#handoff(
+							{
+								transition: "plan-to-execution",
+								specification: this.#specification(),
+								solution: this.#solution(),
+								plan: this.#plan(),
+								decision: { planApproval: this.#state.planApproval },
+							},
+							context,
+						),
+						context,
+					);
 					await this.#execute(context);
 					break;
 				case "validating":
@@ -330,6 +397,27 @@ export class SpecDrivenOrchestrator {
 			!candidate.exclusionReason
 		);
 	}
+	#solution(): SpecSolution {
+		if (!this.#state.solution) throw new Error("Selected solution missing");
+		return this.#state.solution;
+	}
+	async #checkSolution(context: SpecRunContext): Promise<void> {
+		const solution = this.#solution();
+		const current = await this.#checked(this.#ports.artifacts.readSolution(context), context);
+		const selection = this.#state.selection;
+		if (
+			current.version !== solution.artifactVersion ||
+			solution.specificationVersion !== this.#state.specificationApproval ||
+			solution.runId !== selection?.runId ||
+			solution.candidateId !== selection?.candidateId ||
+			solution.candidateVersion !== selection?.candidateVersion
+		) {
+			this.#rememberTasks();
+			this.#invalidateDownstream();
+			this.#state.phase = "team";
+			throw new Error("Selected solution changed; select and approve current inputs before continuing");
+		}
+	}
 	async #checkSpecification(context: SpecRunContext): Promise<void> {
 		const current = await this.#checked(this.#ports.artifacts.readRequirements(context), context);
 		if (current.version !== this.#specification().version) {
@@ -343,12 +431,14 @@ export class SpecDrivenOrchestrator {
 	}
 	async #checkInputs(context: SpecRunContext): Promise<void> {
 		await this.#checkSpecification(context);
+		await this.#checkSolution(context);
 		const plan = this.#plan();
 		const current = await this.#checked(this.#ports.artifacts.readPlan(context), context);
 		if (
 			current.version !== plan.artifactVersion ||
 			plan.specificationVersion !== this.#state.specificationApproval ||
-			plan.candidateVersion !== this.#candidate().version
+			plan.candidateVersion !== this.#candidate().version ||
+			plan.solutionVersion !== this.#solution().version
 		) {
 			this.#state.planApproval = undefined;
 			this.#state.acceptanceVersion = undefined;
@@ -407,11 +497,47 @@ export class SpecDrivenOrchestrator {
 		this.#state.reviews.push(slot);
 		return slot;
 	}
+	async #refreshEvidence(context: SpecRunContext): Promise<boolean> {
+		const invalid = await this.#checked(this.#ports.evidence.revalidate(context), context);
+		if (!invalid.taskIds.length && !invalid.overall) return false;
+		const affected = new Set(invalid.taskIds);
+		const dependencies = new Map(this.#preservedDependencies);
+		for (const task of this.#state.plan?.tasks ?? []) dependencies.set(task.id, task.dependencies);
+		let expanded = true;
+		while (expanded) {
+			expanded = false;
+			for (const [id, required] of dependencies)
+				if (!affected.has(id) && required.some(dependency => affected.has(dependency))) {
+					affected.add(id);
+					expanded = true;
+				}
+		}
+		for (const task of [...this.#state.tasks, ...this.#preservedTasks.values()]) {
+			if (!affected.has(task.id)) continue;
+			task.status = task.execution ? "implemented" : "pending";
+			task.validatedIds = [];
+			if (task.review?.lastReview?.verdict === "pass") task.review.reviewedRevision = undefined;
+		}
+		for (const condition of this.#state.plan?.conditions ?? [])
+			if (this.#state.plan?.tasks.some(task => affected.has(task.id) && task.conditionIds.includes(condition.id)))
+				this.#conditionRecords.delete(condition.id);
+		this.#finalValidationRecords.clear();
+		this.#finalRecords = [];
+		this.#state.acceptanceVersion = undefined;
+		this.#state.finalApproval = undefined;
+		if (this.#overallSlot?.lastReview?.verdict === "pass") this.#overallSlot.reviewedRevision = undefined;
+		if (["validating", "overall-review", "awaiting-acceptance", "closing"].includes(this.#state.phase))
+			this.#state.phase = this.#state.tasks.some(task => task.status !== "completed") ? "executing" : "validating";
+		return true;
+	}
 	async #review(
 		slot: SpecReviewSlot,
 		input: Omit<SpecReviewInput, "slot" | "kind" | "specification" | "previous">,
 		context: SpecRunContext,
 	): Promise<SpecReview> {
+		const invalidated = await this.#refreshEvidence(context);
+		if (invalidated && slot.kind !== "requirements" && slot.kind !== "plan")
+			throw new Error("Review inputs changed before independent analysis");
 		if (slot.reviewedRevision === 2 && slot.lastReview?.verdict !== "pass") {
 			throw new Error(`${slot.kind} review still blocked after two repair rounds`);
 		}
@@ -423,6 +549,7 @@ export class SpecDrivenOrchestrator {
 						kind: slot.kind,
 						slot: structuredClone(slot),
 						specification: this.#specification(),
+						solution: this.#state.solution,
 						previous: slot.lastReview,
 					},
 					context,
@@ -430,6 +557,7 @@ export class SpecDrivenOrchestrator {
 				context,
 			),
 		);
+		if (await this.#refreshEvidence(context)) throw new Error("Review inputs changed during independent analysis");
 		for (const finding of review.findings) {
 			const existing = slot.findings.find(item => item.issue === finding.issue);
 			if (existing && existing.id !== finding.id) throw new Error("Review changed a stable finding ID");
@@ -474,6 +602,17 @@ export class SpecDrivenOrchestrator {
 		await this.#checkSpecification(context);
 		if (this.#state.specificationApproval !== this.#specification().version)
 			throw new Error("Specification is not approved");
+		await this.#checked(
+			this.#handoff(
+				{
+					transition: "requirements-to-solution",
+					specification: this.#specification(),
+					decision: { specificationApproval: this.#state.specificationApproval },
+				},
+				context,
+			),
+			context,
+		);
 		const team = await this.#checked(
 			this.#ports.team.run({ specification: this.#specification(), answer: this.#answer }, context),
 			context,
@@ -531,12 +670,26 @@ export class SpecDrivenOrchestrator {
 	}
 	async #draftPlan(context: SpecRunContext): Promise<void> {
 		await this.#checkSpecification(context);
+		await this.#checkSolution(context);
+		await this.#checked(
+			this.#handoff(
+				{
+					transition: "solution-to-plan",
+					specification: this.#specification(),
+					solution: this.#solution(),
+					decision: this.#state.selection,
+				},
+				context,
+			),
+			context,
+		);
 		const draft = parseSpecPlan(
 			await this.#checked(
 				this.#ports.models.plan(
 					{
 						specification: this.#specification(),
 						candidate: this.#candidate(),
+						solution: this.#solution(),
 						previous: this.#state.plan,
 						review: this.#planSlot?.lastReview,
 					},
@@ -552,6 +705,7 @@ export class SpecDrivenOrchestrator {
 			artifactVersion: snapshot.version,
 			specificationVersion: this.#specification().version,
 			candidateVersion: this.#candidate().version,
+			solutionVersion: this.#solution().version,
 		};
 		this.#state.plan = { ...draft, ...binding, version: hash({ ...binding, draft }) };
 		this.#state.phase = "plan-review";
@@ -565,7 +719,8 @@ export class SpecDrivenOrchestrator {
 			if (
 				!plannedCondition ||
 				plannedCondition.description !== candidateCondition.description ||
-				!plannedCondition.command.trim()
+				!plannedCondition.command.trim() ||
+				(candidateCondition.command !== undefined && plannedCondition.command !== candidateCondition.command)
 			) {
 				throw new Error(`Missing executable candidate condition ${candidateCondition.id}`);
 			}
@@ -585,6 +740,7 @@ export class SpecDrivenOrchestrator {
 			visiting.delete(id);
 			visited.add(id);
 		};
+		const taskIdentities = new Map<string, string>();
 		for (const task of plan.tasks) {
 			visit(task.id);
 			if (task.requirementIds.some(id => !requirementIds.has(id)))
@@ -604,10 +760,14 @@ export class SpecDrivenOrchestrator {
 			const identity = this.#taskIdentities.get(task.id);
 			const newIdentity = hash({ title: task.title, requirementIds: [...task.requirementIds].sort() });
 			if (identity && identity !== newIdentity) throw new Error(`Stable task ID ${task.id} was reassigned`);
-			this.#taskIdentities.set(task.id, newIdentity);
+			taskIdentities.set(task.id, newIdentity);
 		}
+		const covered = new Set(plan.tasks.flatMap(task => task.requirementIds));
+		for (const id of requirementIds) if (!covered.has(id)) throw new Error(`Plan omits requirement ${id}`);
 		if (!plan.finalValidation.some(item => item.realEntry))
 			throw new Error("Plan omits real public-entry validation");
+		// Rejected drafts must not reserve identities before all plan guards succeed.
+		for (const [id, identity] of taskIdentities) this.#taskIdentities.set(id, identity);
 	}
 	async #reviewPlan(context: SpecRunContext): Promise<void> {
 		const slot = (this.#planSlot ??= this.#slot("plan"));
@@ -626,7 +786,7 @@ export class SpecDrivenOrchestrator {
 		const requirements = task.requirementIds.map(id =>
 			this.#specification().requirements.find(item => item.id === id),
 		);
-		return hash({ task, requirements });
+		return hash({ task, requirements, workspace: this.#plan().workspace });
 	}
 	#bindTasks(): void {
 		const plan = this.#plan();
@@ -640,8 +800,12 @@ export class SpecDrivenOrchestrator {
 				const dependency = plan.tasks.find(item => item.id === id)!;
 				return bind(dependency).status === "completed";
 			});
-			const retained =
-				previous?.fingerprint === fingerprint && dependenciesValid ? structuredClone(previous) : undefined;
+			const retained = previous?.fingerprint === fingerprint ? structuredClone(previous) : undefined;
+			if (retained && !dependenciesValid) {
+				retained.status = retained.execution ? "implemented" : "pending";
+				retained.validatedIds = [];
+				if (retained.review?.lastReview?.verdict === "pass") retained.review.reviewedRevision = undefined;
+			}
 			const state: SpecTaskState = retained ?? {
 				id: task.id,
 				fingerprint,
@@ -670,7 +834,10 @@ export class SpecDrivenOrchestrator {
 			if (
 				!ids.includes(record.id) ||
 				record.runId !== context.runId ||
-				record.generation !== context.generation ||
+				record.generation > context.generation ||
+				!record.binding ||
+				record.binding.planVersion !== this.#plan().version ||
+				record.binding.specificationVersion !== this.#specification().version ||
 				!record.toolCallId ||
 				!record.tool ||
 				!record.args.command ||
@@ -680,7 +847,7 @@ export class SpecDrivenOrchestrator {
 				!Number.isFinite(record.startedAt) ||
 				!Number.isFinite(record.finishedAt) ||
 				record.finishedAt < record.startedAt ||
-				!Number.isInteger(record.result.exitCode)
+				(record.result.exitCode !== null && !Number.isInteger(record.result.exitCode))
 			)
 				throw new Error("Counterfeit, stale or malformed native execution evidence");
 		}
@@ -694,7 +861,16 @@ export class SpecDrivenOrchestrator {
 	): Promise<SpecToolRecord> {
 		const recordId = await this.#checked(this.#ports.validation.run({ command, purpose, id }, context), context);
 		const [record] = await this.#records([recordId], context);
-		if (!record || record.args.command !== command || record.result.isError || record.result.exitCode !== 0)
+		if (
+			!record ||
+			record.args.command !== command ||
+			record.result.status !== "completed" ||
+			record.result.isError ||
+			record.result.exitCode !== 0 ||
+			!record.inputsBefore?.complete ||
+			!record.inputsAfter?.complete ||
+			record.inputsBefore.version !== record.inputsAfter.version
+		)
 			throw new Error(`Required ${purpose} validation failed: ${id}`);
 		return record;
 	}
@@ -716,47 +892,84 @@ export class SpecDrivenOrchestrator {
 					await this.#command(condition.command, "condition", condition.id, context),
 				);
 		}
-		const next = this.#plan().tasks.find(
-			task =>
-				this.#state.tasks.find(state => state.id === task.id)?.status !== "completed" &&
-				task.dependencies.every(id => this.#state.tasks.find(state => state.id === id)?.status === "completed"),
-		);
-		if (!next) {
-			if (this.#state.tasks.some(task => task.status !== "completed"))
-				throw new Error("No task can run: unmet dependency");
-			this.#state.phase = "validating";
-			return;
-		}
-		// Serial publication intentionally avoids shared index/range and interface-state conflicts.
-		await this.#executeTask(next, context);
-	}
-	async #executeTask(task: SpecTask, context: SpecRunContext): Promise<void> {
-		const state = this.#state.tasks.find(item => item.id === task.id)!;
-		if (task.conditionIds.some(id => !this.#conditionRecords.has(id)))
-			throw new Error(`Unverified adoption condition for ${task.id}`);
-		if (state.status === "pending") {
-			const execution = await this.#checked(
-				this.#ports.models.execute(
-					{
-						specification: this.#specification(),
-						plan: this.#plan(),
-						task,
-						review: state.repairReview ?? state.review?.lastReview,
-						revision: state.review?.revision ?? 0,
-					},
-					context,
-				),
+		await this.#checked(
+			this.#ports.models.execute(
+				structuredClone({
+					specification: this.#specification(),
+					solution: this.#solution(),
+					plan: this.#plan(),
+					tasks: this.#state.tasks,
+					mode: this.#state.executionMode ?? "normal",
+				}),
 				context,
-			);
+				{
+					status: () => structuredClone(this.#state.tasks),
+					start: async taskId => {
+						this.#guard(context);
+						await this.#checkInputs(context);
+						await this.#refreshEvidence(context);
+						const task = this.#plan().tasks.find(item => item.id === taskId);
+						await this.#qualifyDependencies(taskId, context);
+						if (task) await this.#conditions(task, context);
+						const state = this.#state.tasks.find(item => item.id === taskId);
+						if (!task || !state || state.status === "completed")
+							throw new Error(`Unknown or ended parent task ${taskId}`);
+						if (
+							state.planVersion !== this.#plan().version ||
+							state.specificationVersion !== this.#specification().version
+						)
+							throw new Error("Task approval binding is stale");
+						if (
+							task.dependencies.some(
+								id => this.#state.tasks.find(item => item.id === id)?.status !== "completed",
+							)
+						)
+							throw new Error(`Unmet dependency for ${taskId}`);
+						if (task.conditionIds.some(id => !this.#conditionRecords.has(id)))
+							throw new Error(`Unverified adoption condition for ${taskId}`);
+						return structuredClone(task);
+					},
+					checkpoint: async (taskId, execution) => {
+						this.#guard(context);
+						const task = this.#plan().tasks.find(item => item.id === taskId);
+						if (!task) throw new Error(`Unknown parent task ${taskId}`);
+						await this.#checkpoint(task, execution, context);
+						await this.#ports.evidence.flush(this.status(), context);
+						return structuredClone(this.#state.tasks.find(item => item.id === taskId)!);
+					},
+				},
+			),
+			context,
+		);
+		await this.#refreshEvidence(context);
+		if (this.#state.tasks.some(task => task.status !== "completed"))
+			throw new Error("Execution stage ended before every actual parent task completed");
+		this.#state.phase = "validating";
+	}
+	async #checkpoint(task: SpecTask, execution: SpecExecution, context: SpecRunContext): Promise<void> {
+		await this.#checkInputs(context);
+		await this.#refreshEvidence(context);
+		await this.#qualifyDependencies(task.id, context);
+		await this.#conditions(task, context);
+		const state = this.#state.tasks.find(item => item.id === task.id)!;
+		if (state.status === "completed") throw new Error(`Parent task ${task.id} has already ended`);
+		if (
+			task.dependencies.some(id => this.#state.tasks.find(item => item.id === id)?.status !== "completed") ||
+			task.conditionIds.some(id => !this.#conditionRecords.has(id))
+		)
+			throw new Error(`Parent task ${task.id} is not ready`);
+		if (state.status === "pending" || (state.execution && hash(state.execution) !== hash(execution))) {
 			if (execution.requestedTddException)
 				throw new Error(`Unapproved TDD exemption: ${execution.requestedTddException}`);
-			if (execution.changedPaths.some(path => !task.ownedPaths.includes(path)))
+			if (execution.changedPaths.some(file => !task.ownedPaths.includes(file)))
 				throw new Error(`Executor changed unowned paths for ${task.id}`);
 			const records =
 				task.tdd.mode === "exception" && !execution.recordIds.length
 					? []
 					: await this.#records(execution.recordIds, context);
 			this.#checkTdd(task, execution, records);
+			if (records.some(record => record.binding?.taskId !== task.id))
+				throw new Error("Execution evidence belongs to a different approved parent");
 			state.execution = execution;
 			state.records = records;
 			state.validatedIds = [];
@@ -773,7 +986,7 @@ export class SpecDrivenOrchestrator {
 		}
 		if (state.status === "verified") {
 			const execution = state.execution!;
-			const executionIdentity = hash(execution.recordIds);
+			const executionIdentity = hash({ records: execution.recordIds, content: execution.contentVersion });
 			if (execution.changedPaths.length && !state.committedExecutionIds?.includes(executionIdentity)) {
 				const commit = await this.#checked(
 					this.#ports.git.commit(
@@ -803,6 +1016,7 @@ export class SpecDrivenOrchestrator {
 			);
 			if (review.verdict === "pass") {
 				this.#checkSemanticEvidence(task, execution, review);
+				if (await this.#refreshEvidence(context)) return;
 				state.status = "completed";
 				state.repairReview = undefined;
 			} else if (review.verdict === "clarify")
@@ -810,7 +1024,28 @@ export class SpecDrivenOrchestrator {
 			else {
 				this.#revise(slot);
 				state.status = "pending";
+				state.repairReview = review;
 			}
+		}
+	}
+	async #conditions(task: SpecTask, context: SpecRunContext): Promise<void> {
+		for (const id of task.conditionIds)
+			if (!this.#conditionRecords.has(id)) {
+				const condition = this.#plan().conditions.find(item => item.id === id)!;
+				this.#conditionRecords.set(id, await this.#command(condition.command, "condition", id, context));
+			}
+	}
+	async #qualifyDependencies(taskId: string, context: SpecRunContext): Promise<void> {
+		const task = this.#plan().tasks.find(item => item.id === taskId);
+		if (!task) return;
+		for (const id of task.dependencies) {
+			const dependency = this.#state.tasks.find(item => item.id === id)!;
+			if ((dependency.status === "implemented" || dependency.status === "verified") && dependency.execution)
+				await this.#checkpoint(
+					this.#plan().tasks.find(item => item.id === id)!,
+					dependency.execution,
+					context,
+				);
 		}
 	}
 	#checkTdd(task: SpecTask, execution: SpecExecution, records: SpecToolRecord[]): void {
@@ -822,15 +1057,30 @@ export class SpecDrivenOrchestrator {
 			!red ||
 			!green ||
 			red.id === green.id ||
-			red.result.exitCode === 0 ||
+			red.result.exitCode === null ||
+			red.result.exitCode <= 0 ||
 			red.result.isError ||
 			green.result.exitCode !== 0 ||
 			green.result.isError ||
-			red.args.command !== green.args.command ||
+			!green.inputsBefore?.complete ||
+			!green.inputsAfter?.complete ||
+			green.inputsBefore.version !== green.inputsAfter.version ||
+			red.result.status !== "completed" ||
+			green.result.status !== "completed" ||
+			!red.obligation ||
+			!green.obligation ||
+			red.obligation.validationId !== green.obligation.validationId ||
+			red.obligation.stage !== "red" ||
+			green.obligation.stage !== "green" ||
+			(red.args.command !== red.obligation.approvedCommand && !red.obligation.reason?.trim()) ||
+			(green.args.command !== green.obligation.approvedCommand && !green.obligation.reason?.trim()) ||
 			red.tool !== "spec_verify" ||
 			green.tool !== "spec_verify" ||
 			!task.validation.some(
-				validation => validation.command === red.args.command && validation.behavior === requiredBehavior,
+				validation =>
+					validation.id === red.obligation?.validationId &&
+					validation.command === red.obligation.approvedCommand &&
+					validation.behavior === requiredBehavior,
 			) ||
 			!(red.result.stdout.trim() || red.result.stderr.trim()) ||
 			execution.implementationStartedAt === null ||
@@ -843,6 +1093,15 @@ export class SpecDrivenOrchestrator {
 		}
 	}
 	#checkSemanticEvidence(task: SpecTask, execution: SpecExecution, review: SpecReview): void {
+		const state = this.#state.tasks.find(item => item.id === task.id)!;
+		for (const record of state.records.filter(
+			item => item.obligation && item.args.command !== item.obligation.approvedCommand,
+		))
+			if (
+				!record.obligation?.reason?.trim() ||
+				!review.evidenceChecks.some(check => check.recordId === record.id && check.valid && check.reason.trim())
+			)
+				throw new Error(`Independent review did not establish equivalent verification ${record.id}`);
 		if (task.tdd.mode !== "required") return;
 		const behavior = task.tdd.behavior;
 		for (const recordId of [execution.redRecordId, execution.greenRecordId]) {
@@ -858,6 +1117,7 @@ export class SpecDrivenOrchestrator {
 	}
 	async #validateFinal(context: SpecRunContext): Promise<void> {
 		await this.#checkInputs(context);
+		if (await this.#refreshEvidence(context)) return;
 		if (this.#state.tasks.some(task => task.status !== "completed"))
 			throw new Error("Final validation requires verified and reviewed tasks");
 		for (const validation of this.#plan().finalValidation) {
@@ -883,6 +1143,7 @@ export class SpecDrivenOrchestrator {
 			context,
 		);
 		if (review.verdict === "pass") {
+			if (await this.#refreshEvidence(context)) return;
 			this.#state.acceptanceVersion = hash({
 				specification: this.#specification().version,
 				plan: this.#plan().version,
@@ -924,6 +1185,14 @@ export class SpecDrivenOrchestrator {
 		}
 	}
 	async #close(context: SpecRunContext): Promise<void> {
+		if (await this.#refreshEvidence(context)) throw new Error("Current target changed before closure");
+		for (const task of this.#state.tasks)
+			if (task.records.length)
+				task.records = await this.#ports.evidence.read(
+					task.records.map(record => record.id),
+					context,
+				);
+		await this.#ports.evidence.flush(this.status(), context);
 		if (!this.#state.finalApproval || this.#state.finalApproval !== this.#state.acceptanceVersion)
 			throw new Error("Close requires current final acceptance");
 		await this.#checkInputs(context);
@@ -943,6 +1212,12 @@ export class SpecDrivenOrchestrator {
 				),
 				context,
 			);
+			for (const task of this.#state.tasks)
+				if (task.records.length)
+					task.records = await this.#ports.evidence.read(
+						task.records.map(record => record.id),
+						context,
+					);
 		} else
 			this.#state.pendingClosure = [
 				"Specification synchronization and archive were not authorized; change files remain in place.",

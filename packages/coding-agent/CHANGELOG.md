@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added opt-in `/spec` orchestration with version-bound approvals, restricted stage roles, Team candidate selection, task-owned local commits and evidence-gated acceptance, plus bundled `omp openspec` / `omp superpowers` entrypoints and hidden, manually callable upstream skills. Pause/resume is limited to the live native session in the current process; restarting does not restore workflow progress.
+- Added opt-in `/spec` orchestration with four owned requirements, solution, planning and execution actors, formal requirements/solution/plan documents, three native handoffs, version-bound approvals and content-bound evidence. The execution stage actor can implement inline or delegate parallel native tasks through scoped lifecycle hooks; `/spec confirm-plan <version> --goal` explicitly selects its optional actor-scoped Goal, while plain approval uses normal execution. Native records own `checks/` outputs and the generated `verification.md`; final acceptance remains explicit. Pause/resume is limited to the live native session in the current process; restarting does not restore workflow progress.
 - Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
@@ -15,6 +15,7 @@
 ### Changed
 
 - Make eight referenced Superpowers skills discoverable with compact hints for explicit user invocation or a required active-skill handoff; keep `brainstorming` and `using-superpowers` hidden, preserve original skill bodies and the two existing discoverable originals, and leave system instructions and `/spec` gates unchanged.
+- Limit bundled OpenSpec to seven requirements-maintenance workflows without implementation fallbacks, and bundle JCH Grill-me with role-effective methods for the explicit specification workflow while preserving independent skill entrypoints.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Compact mode now keeps user requests and assistant prose from compacted history, without replaying its tools, thinking, notifications, or other historical UI; recent activity and full-history viewers are unchanged.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
@@ -25,6 +26,7 @@
 ### Fixed
 
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
+- Preserve quoted Windows verification commands, complete per-owner command evidence and external edits during failed specification publication.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
 - Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
 - Keep ZCode clock calibration independent of history scans and reuse indexed receipts across restarts, without queuing foreground lookups behind full background rebuilds or shortening deduplication history.

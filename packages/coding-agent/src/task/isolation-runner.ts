@@ -188,6 +188,8 @@ export interface IsolatedRunOptions {
 	baseOptions: ExecutorOptions;
 	/** Context returned by {@link prepareIsolationContext}. */
 	context: IsolationContext;
+	/** Explicitly preserve a contained requested cwd instead of the ordinary copied-repository root. */
+	preserveCwd?: boolean;
 	/** PAL backend hint from `parseIsolationBackend(...)` (undefined ⇒ resolver picks). */
 	preferredBackend: IsoBackendKind | undefined;
 	/** Stable id used as the isolation worktree namespace and as the branch suffix. */
@@ -208,6 +210,9 @@ export interface IsolatedRunOptions {
 	buildFailureResult: (err: unknown) => SingleResult;
 	/** Observe the real child result before post-run isolation work. */
 	onSubprocessResult?: (result: SingleResult) => void;
+	/** Awaited observations at the actual source lifetime boundary, never result overrides. */
+	onBeforeCapture?: (result: SingleResult) => Promise<void>;
+	onAfterResult?: (result: SingleResult) => Promise<void>;
 }
 
 /**
@@ -390,6 +395,34 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 	let baseReleasePromise: Promise<void> | undefined;
 	let cleanupPromise: Promise<void> | undefined;
 	let releasePromise: Promise<void> | undefined;
+	let sourceResult: SingleResult | undefined;
+	let runOutcome: SingleResult | undefined;
+	const preserveObservationFailure = async (result: SingleResult, error: unknown): Promise<SingleResult> => {
+		const retained =
+			handle && !retainWorkspace ? await retainIsolationWorkspace(handle.mergedDir, handle.backend) : undefined;
+		retainWorkspace = true;
+		const message = error instanceof Error ? error.message : String(error);
+		result.error = [
+			result.error,
+			`Native capture observation failed: ${message}`,
+			retained ? `Isolation workspace retained at ${retained.dir}.` : undefined,
+		]
+			.filter(Boolean)
+			.join("\n");
+		Object.assign(result, rememberAgentArtifacts(result));
+		return result;
+	};
+	const finish = async (result: SingleResult): Promise<SingleResult> => {
+		runOutcome = rememberAgentArtifacts(result);
+		// A retained session can still write. Its final observer belongs to releaseIsolation.
+		if (opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId)) return runOutcome;
+		try {
+			await opts.onAfterResult?.(runOutcome);
+		} catch (error) {
+			return preserveObservationFailure(runOutcome, error);
+		}
+		return runOutcome;
+	};
 	const releaseBase = (): Promise<void> => {
 		baseReleasePromise ??= opts.baseOptions.onRelease?.() ?? Promise.resolve();
 		return baseReleasePromise;
@@ -407,7 +440,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				await cleanupHandle();
 				return;
 			}
+			let outcomeObservationStarted = false;
 			try {
+				await deferredCleanup;
+				if (sourceResult) await opts.onBeforeCapture?.(sourceResult);
 				let capture: IsolationPatchCapture;
 				try {
 					capture = await writeIsolationPatch(handle.mergedDir, taskBaseline, opts.artifactsDir, opts.agentId);
@@ -430,19 +466,39 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 				// Nothing changed since the run-end capture the caller already
 				// merged or applied: a branch now would only duplicate that work.
-				if (capture.fingerprint === handedOff) return;
-				const commitResult = await commitToBranch(
-					handle.mergedDir,
-					taskBaseline,
-					opts.agentId,
-					opts.description,
-					undefined,
-				);
+				if (capture.fingerprint === handedOff && !opts.onAfterResult) return;
+				const commitResult =
+					capture.fingerprint === handedOff
+						? undefined
+						: await commitToBranch(handle.mergedDir, taskBaseline, opts.agentId, opts.description, undefined);
 				AgentRegistry.global().setHistory(opts.agentId, {
 					patchPath: patchResult.patchPath,
-					branchName: commitResult?.branchName,
+					branchName: commitResult === undefined ? runOutcome?.branchName : commitResult?.branchName,
 					nestedPatchPaths: patchResult.nestedPatchPaths,
 				});
+				if (runOutcome) {
+					Object.assign(runOutcome, patchResult);
+					if (commitResult !== undefined)
+						Object.assign(runOutcome, {
+							branchName: commitResult?.branchName,
+							branchBaseSha: commitResult?.baseSha,
+							nestedPatches: commitResult?.nestedPatches,
+						});
+					outcomeObservationStarted = true;
+					await opts.onAfterResult?.(runOutcome);
+				}
+			} catch (error) {
+				if (sourceResult && (opts.onBeforeCapture || opts.onAfterResult)) {
+					await preserveObservationFailure(runOutcome ?? sourceResult, error);
+					if (!outcomeObservationStarted && opts.onAfterResult) {
+						try {
+							await opts.onAfterResult(runOutcome ?? sourceResult);
+						} catch (observationError) {
+							await preserveObservationFailure(runOutcome ?? sourceResult, observationError);
+						}
+					}
+				}
+				throw error;
 			} finally {
 				await cleanupHandle();
 			}
@@ -450,14 +506,36 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		return releasePromise;
 	};
 	try {
+		let requestedSubdir: string | undefined;
+		if (opts.preserveCwd === true) {
+			const repoRoot = await fs.realpath(opts.context.repoRoot);
+			const requestedCwd = await fs.realpath(opts.baseOptions.cwd);
+			requestedSubdir = path.relative(repoRoot, requestedCwd);
+			if (
+				path.isAbsolute(requestedSubdir) ||
+				requestedSubdir === ".." ||
+				requestedSubdir.startsWith(`..${path.sep}`)
+			) {
+				throw new Error("Requested subagent cwd is outside the isolation repository");
+			}
+		}
 		handle = await ensureIsolation(opts.context.repoRoot, opts.agentId, opts.preferredBackend);
 		const isolationDir = handle.mergedDir;
 		const isolationBackend = handle.backend;
 		const baseline = await captureIsolationBaseline(isolationDir, opts.context.repoRoot);
 		taskBaseline = baseline;
+		let executionDir = isolationDir;
+		if (requestedSubdir !== undefined) {
+			executionDir = await fs.realpath(path.join(isolationDir, requestedSubdir));
+			const isolatedRoot = await fs.realpath(isolationDir);
+			const relative = path.relative(isolatedRoot, executionDir);
+			if (path.isAbsolute(relative) || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+				throw new Error("Requested subagent cwd escapes the copied isolation repository");
+			}
+		}
 		const result = await runSubprocess({
 			...opts.baseOptions,
-			worktree: isolationDir,
+			worktree: executionDir,
 			preloadedExtensionPaths: undefined,
 			preloadedPreparedExtensions: undefined,
 			preloadedCustomToolPaths: undefined,
@@ -470,14 +548,27 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			// post-run capture, so the handle must survive until the `finally`
 			// below cleans it up. Only kept-alive runs hand full capture+cleanup
 			// (`releaseIsolation`) to the agent lifecycle.
-			onRelease: opts.baseOptions.keepAlive === false ? releaseBase : releaseIsolation,
+			onRelease:
+				opts.baseOptions.keepAlive === false
+					? releaseBase
+					: opts.onBeforeCapture || opts.onAfterResult
+						? () => (sourceResult ? releaseIsolation() : releaseBase())
+						: releaseIsolation,
 		});
 		opts.onSubprocessResult?.(result);
+		sourceResult = result;
 		// A successful result cannot be captured while deferred owner jobs or
 		// shutdown hooks may still write the worktree. Failed runs skip capture,
 		// so their cleanup remains asynchronous.
-		if (deferredCleanup && result.exitCode === 0) {
+		if (deferredCleanup && (result.exitCode === 0 || opts.onBeforeCapture || opts.onAfterResult)) {
 			await deferredCleanup;
+		}
+		if (!(opts.baseOptions.keepAlive !== false && AgentLifecycleManager.global().has(opts.agentId))) {
+			try {
+				await opts.onBeforeCapture?.(result);
+			} catch (error) {
+				return await finish(await preserveObservationFailure(result, error));
+			}
 		}
 		if (opts.mergeMode === "branch" && result.exitCode === 0) {
 			let commitResult: CommitToBranchResult | null;
@@ -506,7 +597,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				const msg = mergeErr instanceof Error ? mergeErr.message : String(mergeErr);
 				try {
 					const capture = await writeIsolationPatch(isolationDir, baseline, opts.artifactsDir, opts.agentId);
-					return rememberAgentArtifacts({
+					return await finish({
 						...result,
 						...capture.artifacts,
 						error: renderIsolationError({ kind: "merge-failed", message: msg, rescueBranch }),
@@ -514,7 +605,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				} catch (patchErr) {
 					retainWorkspace = true;
 					const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
-					return rememberAgentArtifacts({
+					return await finish({
 						...result,
 						error: renderIsolationError({
 							kind: "merge-failed",
@@ -536,7 +627,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					opts.agentId,
 					commitResult?.nestedPatches ?? [],
 				);
-				return rememberAgentArtifacts({
+				return await finish({
 					...result,
 					branchName: commitResult?.branchName,
 					branchBaseSha: commitResult?.baseSha,
@@ -546,7 +637,7 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			} catch (persistErr) {
 				retainWorkspace = true;
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
-				return rememberAgentArtifacts({
+				return await finish({
 					...result,
 					branchName: commitResult?.branchName,
 					branchBaseSha: commitResult?.baseSha,
@@ -564,11 +655,11 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 			try {
 				const capture = await writeIsolationPatch(isolationDir, baseline, opts.artifactsDir, opts.agentId);
 				handedOff = capture.fingerprint;
-				return rememberAgentArtifacts({ ...result, ...capture.artifacts });
+				return await finish({ ...result, ...capture.artifacts });
 			} catch (patchErr) {
 				retainWorkspace = true;
 				const retained = await retainIsolationWorkspace(isolationDir, isolationBackend);
-				return rememberAgentArtifacts({
+				return await finish({
 					...result,
 					error: renderIsolationError({
 						kind: "patch-capture-failed",
@@ -579,9 +670,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				});
 			}
 		}
-		return rememberAgentArtifacts(result);
+		return await finish(result);
 	} catch (err) {
-		return rememberAgentArtifacts(opts.buildFailureResult(err));
+		return await finish(opts.buildFailureResult(err));
 	} finally {
 		if (
 			handle &&

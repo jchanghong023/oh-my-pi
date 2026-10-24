@@ -5,17 +5,27 @@ import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import type { Skill } from "../extensibility/skills";
+import type { SpecStageRole } from "./types";
 import { archiveBase64, archiveSha256, resourceManifest } from "./vendor/archive.generated";
 
-export type SpecDrivenResourceSource = "openspec" | "superpowers";
+export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
 export interface SpecDrivenSkillEntry {
 	source: SpecDrivenResourceSource;
 	name: string;
 	path: string;
 }
+export interface SpecDrivenMethodEntry extends SpecDrivenSkillEntry {
+	role: SpecStageRole | "reviewer";
+	originalPath: string;
+	originalSha256: string;
+	sha256: string;
+	adaptation: string;
+}
 export interface SpecDrivenResourceManifest {
 	openspec: { version: string; integrity: string };
 	superpowers: { version: string; revision: string };
+	jch: { revision: string };
+	methods: readonly SpecDrivenMethodEntry[];
 	skills: readonly SpecDrivenSkillEntry[];
 	files: readonly { path: string; sha256: string; executable: boolean }[];
 }
@@ -23,6 +33,7 @@ export interface SpecDrivenResources {
 	root: string;
 	openspecRoot: string;
 	superpowersRoot: string;
+	jchRoot: string;
 	manifest: SpecDrivenResourceManifest;
 	specSchemaPath: string;
 }
@@ -102,17 +113,51 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		root,
 		openspecRoot: path.join(root, "openspec"),
 		superpowersRoot: path.join(root, "superpowers"),
+		jchRoot: path.join(root, "jch"),
 		manifest: resourceManifest,
 		specSchemaPath: path.join(root, "omp-spec", "schema.yaml"),
 	};
 }
 
-export async function loadSpecDrivenSkill(source: SpecDrivenResourceSource, name: string): Promise<Skill> {
+export async function loadSpecDrivenSkill(
+	source: SpecDrivenResourceSource,
+	name: string,
+	options: { role?: SpecStageRole | "reviewer" } = {},
+): Promise<Skill> {
 	const resources = await ensureSpecDrivenResources();
-	const entry = resources.manifest.skills.find(skill => skill.source === source && skill.name === name);
-	if (!entry) throw new Error(`Unknown bundled ${source} skill: ${name}`);
+	const original = resources.manifest.skills.find(skill => skill.source === source && skill.name === name);
+	if (!original) throw new Error(`Unknown bundled ${source} skill: ${name}`);
+	const method = options.role
+		? resources.manifest.methods.find(
+				skill => skill.source === source && skill.name === name && skill.role === options.role,
+			)
+		: undefined;
+	if (options.role && !method && !(source === "openspec" && options.role === "requirements"))
+		throw new Error(`Bundled ${source} skill ${name} is not allowed for role ${options.role}`);
+	const entry = method ?? original;
+	const containRoot = {
+		openspec: resources.openspecRoot,
+		superpowers: resources.superpowersRoot,
+		jch: resources.jchRoot,
+	}[source];
 	const filePath = await resolveSpecDrivenResourcePath(resources.root, entry.path);
+	if (!inside(await fs.realpath(containRoot), filePath)) throw new Error("Bundled skill escapes source root");
 	const content = await fs.readFile(filePath, "utf8");
+	const digest = resources.manifest.files.find(file => file.path === entry.path)?.sha256;
+	if (!digest || crypto.createHash("sha256").update(content).digest("hex") !== digest)
+		throw new Error(`Bundled resource digest mismatch: ${entry.path}`);
+	if (method) {
+		const originalPath = await resolveSpecDrivenResourcePath(resources.root, method.originalPath);
+		if (
+			!inside(await fs.realpath(containRoot), originalPath) ||
+			crypto
+				.createHash("sha256")
+				.update(await fs.readFile(originalPath))
+				.digest("hex") !== method.originalSha256 ||
+			digest !== method.sha256
+		)
+			throw new Error(`Bundled method provenance mismatch: ${name}`);
+	}
 	const parsed = parseFrontmatter(content, { source: filePath, repair: false, level: "off" });
 	return {
 		name,
@@ -121,7 +166,7 @@ export async function loadSpecDrivenSkill(source: SpecDrivenResourceSource, name
 		baseDir: path.dirname(filePath),
 		source: `bundled-${source}`,
 		hide: parsed.frontmatter.hide === true || parsed.frontmatter.disableModelInvocation === true,
-		containRoot: source === "openspec" ? resources.openspecRoot : resources.superpowersRoot,
+		containRoot,
 	};
 }
 

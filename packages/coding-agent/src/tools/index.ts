@@ -8,6 +8,7 @@ import type { EffectiveExtensionRoots } from "../capability/types";
 import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
+import type { NativeSubagentHooks } from "../task/types";
 import { EditTool } from "../edit";
 import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
@@ -214,6 +215,10 @@ export interface DeferredDiagnosticsEntry {
 
 /** Session context for tool factories */
 export interface ToolSession {
+	/** Optional live-host native child callbacks. */
+	subagentHooks?: NativeSubagentHooks;
+	/** Explicit restricted Goal grant; never widens the requested tool list. */
+	allowRestrictedGoal?: boolean;
 	/** Current working directory */
 	cwd: string;
 	/** Additional workspace directories beyond cwd (multi-root), forwarded to subagents. */
@@ -766,7 +771,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 		// a goal record exists, only an enabled goal keeps the tool: a completed
 		// (exiting) or paused goal must stop advertising it on the next rebuild.
 		if (name === "goal") {
-			if (!goalEnabled || restrictToolNames) return false;
+			if (!goalEnabled || (restrictToolNames && session.allowRestrictedGoal !== true)) return false;
 			const goalState = session.getGoalModeState?.();
 			return goalState === undefined || goalState.enabled === true || goalState.goal.status === "dropped";
 		}

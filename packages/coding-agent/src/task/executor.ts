@@ -50,12 +50,7 @@ import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { PreparedExtension } from "../extensibility/extensions/types";
 import { buildSkillPromptMessage, type Skill } from "../extensibility/skills";
-import {
-	bindSpecSkillPolicy,
-	grantSpecSkillAccess,
-	isExplicitOnlySkill,
-	type SpecSkillPhasePolicy,
-} from "../spec-driven/skill-policy";
+import { grantSpecSkillAccess, isExplicitOnlySkill } from "../spec-driven/skill-policy";
 import type { HindsightSessionState } from "../hindsight/state";
 import type { LocalProtocolOptions } from "../internal-urls";
 import { IrcBus } from "../irc/bus";
@@ -128,6 +123,8 @@ import {
 } from "./types";
 import { seanceIsolationOptions } from "./seance-policy";
 import type { PreparedSeanceSession } from "./seance";
+import type { NativeSubagentHooks } from "./types";
+import type { StructuredSubagentRequest } from "./structured-subagent";
 import {
 	type AgentProgress,
 	type SingleResult,
@@ -500,8 +497,9 @@ export interface ExecutorOptions {
 	 * tool, suppressing discovered and always-included capabilities.
 	 */
 	restrictToolNames?: boolean;
-	/** Native specification controller's child-scoped invocation policy. */
-	specSkillPolicy?: SpecSkillPhasePolicy;
+	/** Live-host callbacks and their invocation-local request, never persisted as authority. */
+	subagentHooks?: NativeSubagentHooks;
+	subagentRequest?: StructuredSubagentRequest;
 	/** Observe the actual child before autoload/dispatch; cleanup runs before deferred shutdown. */
 	onSessionCreated?: (session: AgentSession) => void | (() => void);
 	/** Preserve required source material; oversized context must fail rather than auto-compact. */
@@ -3920,6 +3918,9 @@ interface SubagentSessionSpec {
 	>;
 	preparedSession?: Pick<PreparedSeanceSession, "promptSuffix">;
 	prompt: SubagentPromptInputs;
+	hooks?: NativeSubagentHooks;
+	request?: StructuredSubagentRequest;
+	onSessionCreated?: ExecutorOptions["onSessionCreated"];
 }
 
 /** Launch-only session inputs: a revived session restores these from its transcript or goes without. */
@@ -3995,6 +3996,42 @@ function buildSubagentSessionOptions(
 			return [...defaultPrompt, subagentPrompt, ...(seancePrompt ? [seancePrompt] : [])];
 		},
 	};
+}
+
+/** Copy only declared capability fields, even when a caller returns extra runtime properties. */
+async function configureNativeSubagentSession(
+	spec: SubagentSessionSpec,
+	options: CreateAgentSessionOptions,
+): Promise<{
+	options: CreateAgentSessionOptions;
+	onSessionCreated?: (session: AgentSession) => void | (() => void);
+}> {
+	if (!spec.hooks || !spec.request) return { options };
+	const resolvedOptions = { ...options, cwd: options.sessionManager?.getCwd() ?? options.cwd };
+	const overrides = await spec.hooks.configureSession(spec.request, Object.freeze(resolvedOptions));
+	const configured = { ...resolvedOptions };
+	const keys = [
+		"toolRestrictions",
+		"toolNames",
+		"customTools",
+		"systemPrompt",
+		"skills",
+		"rules",
+		"restrictToolNames",
+		"allowRestrictedCustomTools",
+		"enableMCP",
+		"enableLsp",
+		"lspReadOnly",
+		"enableIrc",
+		"subagentHooks",
+	] as const;
+	for (const key of keys) {
+		if (Object.hasOwn(overrides, key)) Object.assign(configured, { [key]: overrides[key] });
+	}
+	if (configured.enableMCP === false || configured.restrictToolNames === true) {
+		configured.mcpTools = undefined;
+	}
+	return { options: configured, onSessionCreated: overrides.onSessionCreated };
 }
 
 /** Remembers the roster `block` shows, dropping blocks the live session's base prompt no longer holds. */
@@ -4087,74 +4124,123 @@ function trackSubagentSettings(session: AgentSession, capture: WarmReviveCapture
  */
 function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 	return async expectedAgentRef => {
-		const { id } = capture.spec.prompt;
-		const reopened = await SessionManager.open(capture.sessionFile, undefined, undefined, {
-			suppressBreadcrumb: true,
-			throwIfMissing: true,
-		});
-		if (!hasConversationalHistory(reopened.getEntries())) {
-			await reopened.close();
-			throw new Error(
-				`Cannot revive subagent "${id}": session file "${capture.sessionFile}" has no message history ` +
-					`(truncated to header/session_init). The agent was not revived.`,
-			);
+		// Warm revival must consult live authority again, never replay its old capability grant.
+		if (capture.spec.hooks && capture.spec.request) {
+			await capture.spec.hooks.beforeSpawn(capture.spec.request);
 		}
-		if (capture.parentArtifactManager) {
-			reopened.adoptArtifactManager(capture.parentArtifactManager);
-		}
-		await refreshSubagentIrcRoot(capture.spec.prompt, reopened, capture.sessionFile);
-		const mcpManager = capture.spec.options.mcpManager;
-		const mcpFollower = mcpManager ? followMCPTools(mcpManager, explicitSubagentToolNames(capture.spec)) : undefined;
-		let revived: AgentSession;
-		let interactionUI: CreateAgentSessionResult["interactionUI"];
-		// Account pools are owner policy: take the live exact-name entry, as
-		// dispatch and persisted revival do, never the spawn-time copy.
-		const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
-		capture.spec.prompt.reviving = true;
 		try {
-			try {
-				({ session: revived, interactionUI } = await createAgentSession({
-					...buildSubagentSessionOptions(
-						capture.spec,
-						restoreSubagentSettings(capture.settings),
-						reopened,
-						expectedAgentRef,
-					),
-					oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
-						? agentAccountPools[capture.agentName]
-						: undefined,
-				}));
-			} catch (error) {
-				mcpFollower?.dispose();
-				throw error;
+			return await reviveAdmittedSubagent(capture, expectedAgentRef);
+		} catch (error) {
+			if (capture.spec.request) {
+				try {
+					await capture.spec.hooks?.onSpawnFailed?.(capture.spec.request, error);
+				} catch {
+					// Keep the real revival failure even if admission cleanup fails.
+				}
 			}
-			mcpFollower?.bind(revived);
-			trackSubagentSettings(revived, capture);
-			trackSubagentIrcRoster(revived, capture.spec.prompt);
-			const withoutParentOwnedTools = (toolNames: string[]): string[] =>
-				capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo");
-			// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
-			const revivedToolNames = revived.getEnabledToolNames();
-			const subagentToolNames = withoutParentOwnedTools(revivedToolNames);
-			if (subagentToolNames.length !== revivedToolNames.length) {
-				await revived.setActiveToolsByName(subagentToolNames);
-			}
-			// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
-			// runner pre-init, so a `tool_call` handler touching a runtime action trips the
-			// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
-			await initializeExtensions(revived, {
-				uiContext: interactionUI,
-				reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
-				reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
-				filterActiveTools: withoutParentOwnedTools,
-			});
-		} finally {
-			capture.spec.prompt.reviving = false;
+			throw error;
 		}
-		AgentRegistry.global().syncSessionStatus(id, revived);
-		attachIrcWakeTurnMonitor(revived, capture.wake);
-		return revived;
 	};
+}
+
+async function reviveAdmittedSubagent(
+	capture: WarmReviveCapture,
+	expectedAgentRef: Parameters<AgentReviver>[0],
+): Promise<AgentSession> {
+	const { id } = capture.spec.prompt;
+	const reopened = await SessionManager.open(capture.sessionFile, undefined, undefined, {
+		suppressBreadcrumb: true,
+		throwIfMissing: true,
+	});
+	if (!hasConversationalHistory(reopened.getEntries())) {
+		await reopened.close();
+		throw new Error(
+			`Cannot revive subagent "${id}": session file "${capture.sessionFile}" has no message history ` +
+				`(truncated to header/session_init). The agent was not revived.`,
+		);
+	}
+	if (capture.parentArtifactManager) {
+		reopened.adoptArtifactManager(capture.parentArtifactManager);
+	}
+	await refreshSubagentIrcRoot(capture.spec.prompt, reopened, capture.sessionFile);
+	const mcpManager = capture.spec.options.mcpManager;
+	let mcpFollower =
+		!capture.spec.hooks && mcpManager
+			? followMCPTools(mcpManager, explicitSubagentToolNames(capture.spec))
+			: undefined;
+	let revived: AgentSession;
+	let interactionUI: CreateAgentSessionResult["interactionUI"];
+	// Account pools are owner policy: take the live exact-name entry, as
+	// dispatch and persisted revival do, never the spawn-time copy.
+	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
+	capture.spec.prompt.reviving = true;
+	try {
+		let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
+		try {
+			const sessionOptions: CreateAgentSessionOptions = {
+				...buildSubagentSessionOptions(
+					capture.spec,
+					restoreSubagentSettings(capture.settings),
+					reopened,
+					expectedAgentRef,
+				),
+				oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
+					? agentAccountPools[capture.agentName]
+					: undefined,
+			};
+			let configuredOptions = sessionOptions;
+			let observeSession: ExecutorOptions["onSessionCreated"];
+			if (capture.spec.hooks) {
+				const configured = await configureNativeSubagentSession(capture.spec, sessionOptions);
+				configuredOptions = configured.options;
+				observeSession = configured.onSessionCreated;
+				if (mcpManager && configuredOptions.enableMCP !== false && !configuredOptions.restrictToolNames) {
+					mcpFollower = followMCPTools(
+						mcpManager,
+						new Set((configuredOptions.customTools ?? []).map(tool => tool.name)),
+					);
+					configuredOptions.mcpTools = createMCPProxyTools(mcpManager);
+				}
+			}
+			sessionPromise = createAgentSession(configuredOptions);
+			({ session: revived, interactionUI } = await sessionPromise);
+			const disposeObserver = observeSession?.(revived);
+			if (disposeObserver) revived.addDisposer(disposeObserver);
+			const disposeOriginalObserver = capture.spec.onSessionCreated?.(revived);
+			if (disposeOriginalObserver) revived.addDisposer(disposeOriginalObserver);
+		} catch (error) {
+			mcpFollower?.dispose();
+			// Observer setup can fail after SDK attachment; dispose the session and
+			// its installed observers before exposing the failed revival to callers.
+			await sessionPromise?.then(created => created.session.dispose()).catch(() => {});
+			throw error;
+		}
+		mcpFollower?.bind(revived);
+		trackSubagentSettings(revived, capture);
+		trackSubagentIrcRoster(revived, capture.spec.prompt);
+		const withoutParentOwnedTools = (toolNames: string[]): string[] =>
+			capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo");
+		// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
+		const revivedToolNames = revived.getEnabledToolNames();
+		const subagentToolNames = withoutParentOwnedTools(revivedToolNames);
+		if (subagentToolNames.length !== revivedToolNames.length) {
+			await revived.setActiveToolsByName(subagentToolNames);
+		}
+		// Re-run the executor's extension wiring on the rebuilt session. Skipping it leaves the
+		// runner pre-init, so a `tool_call` handler touching a runtime action trips the
+		// fail-closed gate and blocks every tool (including `yield`) in the revived agent (issue #8824).
+		await initializeExtensions(revived, {
+			uiContext: interactionUI,
+			reportSendError: (action, err) => logger.error("Extension send failed", { action, error: err.message }),
+			reportRuntimeError: err => logger.error("Extension error", { path: err.extensionPath, error: err.error }),
+			filterActiveTools: withoutParentOwnedTools,
+		});
+	} finally {
+		capture.spec.prompt.reviving = false;
+	}
+	AgentRegistry.global().syncSessionStatus(id, revived);
+	attachIrcWakeTurnMonitor(revived, capture.wake);
+	return revived;
 }
 
 /**
@@ -4647,6 +4733,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			// createAgentSession with this spec (same agent id, tools, model, system
 			// prompt, artifacts dir) — only the SessionManager and settings differ.
 			const sessionSpec: SubagentSessionSpec = {
+				hooks: options.subagentHooks,
+				request: options.subagentRequest,
+				onSessionCreated: options.subagentHooks ? options.onSessionCreated : undefined,
 				options: {
 					taskPromptCacheKey:
 						options.parentPromptCacheKey === undefined
@@ -4715,8 +4804,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					mcpManager,
 					// MCP proxies are minted per build as `mcpTools` in buildSubagentSessionOptions.
 					customTools: options.customTools,
-					// Only the native spec controller may install scoped replacements in restricted children.
-					allowRestrictedCustomTools: options.specSkillPolicy !== undefined,
+					subagentHooks: options.subagentHooks,
 					localProtocolOptions: options.localProtocolOptions,
 					telemetry: subagentTelemetry,
 					// Seance isolation overrides every inherited field above in one place.
@@ -4742,9 +4830,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			};
 
 			const sessionManager = await awaitAbortable(sessionManagerPromise);
-			if (options.specSkillPolicy) {
-				skillAccessDisposers.push(bindSpecSkillPolicy(sessionManager, options.specSkillPolicy));
-			}
 			if (preparedSession) openedSessionManager = sessionManager;
 			if (options.parentArtifactManager && !preparedSession) {
 				sessionManager.adoptArtifactManager(options.parentArtifactManager);
@@ -4757,26 +4842,39 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const hasExistingModelRole = !preparedSession && sessionManager.getLastModelChangeRole() !== undefined;
 			// Subscribe before the builder mints proxies so a manager change during
 			// session startup is replayed on bind instead of lost.
-			const mcpFollower = mcpManager
-				? followMCPTools(mcpManager, explicitSubagentToolNames(sessionSpec))
-				: undefined;
+			let mcpFollower =
+				!sessionSpec.hooks && mcpManager
+					? followMCPTools(mcpManager, explicitSubagentToolNames(sessionSpec))
+					: undefined;
 			let session: AgentSession;
 			let interactionUI: CreateAgentSessionResult["interactionUI"];
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
 			try {
-				sessionPromise = createAgentSession(
-					buildSubagentSessionOptions(sessionSpec, subagentSettings, sessionManager, null, {
-						workPoolYieldItems: options.workPoolYieldItems ?? [],
-						// A revived session restores the tier history it persisted (including
-						// tiers a provider rejected or an extension changed since spawn); only
-						// the fresh spawn resolves the per-agent override.
-						resolveServiceTierByFamily,
-						onFirstChatDispatch: () => {
-							firstChatDispatchAt ??= performance.now();
-						},
-					}),
-				);
+				const sessionOptions = buildSubagentSessionOptions(sessionSpec, subagentSettings, sessionManager, null, {
+					workPoolYieldItems: options.workPoolYieldItems ?? [],
+					// Only fresh launches resolve a new per-agent service tier.
+					resolveServiceTierByFamily,
+					onFirstChatDispatch: () => {
+						firstChatDispatchAt ??= performance.now();
+					},
+				});
+				let configuredOptions = sessionOptions;
+				let observeSession: ExecutorOptions["onSessionCreated"];
+				if (sessionSpec.hooks) {
+					const configured = await configureNativeSubagentSession(sessionSpec, sessionOptions);
+					configuredOptions = configured.options;
+					observeSession = configured.onSessionCreated;
+					if (mcpManager && configuredOptions.enableMCP !== false && !configuredOptions.restrictToolNames) {
+						mcpFollower = followMCPTools(
+							mcpManager,
+							new Set((configuredOptions.customTools ?? []).map(tool => tool.name)),
+						);
+						configuredOptions.mcpTools = createMCPProxyTools(mcpManager);
+					}
+				}
+				sessionPromise = createAgentSession(configuredOptions);
 				({ session, interactionUI } = await awaitAbortable(sessionPromise));
+				disposeSessionObserver = observeSession?.(session) ?? undefined;
 				if (preparedSession) untrackedSession = session;
 			} catch (err) {
 				mcpFollower?.dispose();
@@ -4905,6 +5003,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// stamp the contract so cold revival leaves them transcript-only
 				// even when the workspace was retained for recovery.
 				isolated: worktree !== undefined || undefined,
+				requiresLiveHost: options.subagentHooks !== undefined || undefined,
 			});
 
 			abortSignal.addEventListener(
@@ -4920,7 +5019,17 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			if (abortSignal.aborted) {
 				void monitor.abortActiveSession();
 			}
-			disposeSessionObserver = options.onSessionCreated?.(session) ?? undefined;
+			const disposeOriginalObserver = options.onSessionCreated?.(session);
+			if (disposeOriginalObserver) {
+				const disposeConfiguredObserver = disposeSessionObserver;
+				disposeSessionObserver = () => {
+					try {
+						disposeOriginalObserver();
+					} finally {
+						disposeConfiguredObserver?.();
+					}
+				};
+			}
 
 			// No closure in this block may capture `session`: JSC gives every closure in a
 			// block one shared scope object, so the lifecycle reviver built above would
@@ -4990,6 +5099,13 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			exitCode = 1;
 			if (!abortSignal.aborted) {
 				error = err instanceof Error ? err.stack || err.message : String(err);
+			}
+			if (readyAt === undefined && options.subagentRequest) {
+				try {
+					await options.subagentHooks?.onSpawnFailed?.(options.subagentRequest, err);
+				} catch {
+					// Report the actual setup error through the existing native result contract.
+				}
 			}
 		} finally {
 			// Revoke before any awaited/deferred cleanup, including aborted startup.

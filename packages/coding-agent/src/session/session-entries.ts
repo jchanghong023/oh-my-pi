@@ -295,6 +295,8 @@ export interface SessionInitEntry extends SessionEntryBase {
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	/** True when the subagent ran inside an isolation worktree: never revivable, transcript-only after park. Absent on older files. */
 	isolated?: boolean;
+	/** Requires live host callbacks; cold revival must leave this session transcript-only. */
+	requiresLiveHost?: boolean;
 	/** Work-pool yield items of the last model call; revival restores them so the yield tool matches. Absent when none. */
 	workPoolYieldItems?: WorkPoolYieldItem[];
 }

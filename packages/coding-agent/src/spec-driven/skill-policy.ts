@@ -54,6 +54,7 @@ export function clearSpecSkillAccess(scope: object): void {
 
 /** Native controller capability, not a model tool. Dispose when its autoload/run ends. */
 export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
+	checkSkillInvocation(skill, { scope });
 	const state = stateFor(scope);
 	const grant = { ...skill, filePath: path.resolve(skill.filePath) };
 	state.grants.add(grant);
@@ -83,7 +84,8 @@ export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "h
 		skill.hide === true &&
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER ||
 			skill.source === "bundled-openspec" ||
-			skill.source === "bundled-superpowers")
+			skill.source === "bundled-superpowers" ||
+			skill.source === "bundled-jch")
 	);
 }
 

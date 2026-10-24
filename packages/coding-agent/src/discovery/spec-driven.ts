@@ -28,7 +28,11 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 			items.push({
 				...skill,
 				name: entry.name,
-				containRoot: entry.source === "openspec" ? resources.openspecRoot : resources.superpowersRoot,
+				containRoot: {
+					openspec: resources.openspecRoot,
+					superpowers: resources.superpowersRoot,
+					jch: resources.jchRoot,
+				}[entry.source],
 			});
 		}
 	}
@@ -38,7 +42,7 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 registerProvider<Skill>(skillCapability.id, {
 	id: SPEC_DRIVEN_SKILL_PROVIDER,
 	displayName: "Spec-driven resources",
-	description: "Pinned OpenSpec and Superpowers skills with resource-defined discovery visibility",
+	description: "Pinned OpenSpec, Superpowers and JCH skills with resource-defined discovery visibility",
 	priority: 1,
 	load: loadSpecDrivenSkills,
 });

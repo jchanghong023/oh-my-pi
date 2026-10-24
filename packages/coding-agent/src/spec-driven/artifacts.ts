@@ -1,10 +1,13 @@
 import * as crypto from "node:crypto";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { ensureSpecDrivenResources, runOpenSpec } from "./resources";
+import { parseSpecPlan } from "./schemas";
+import type { SpecDocument, SpecPlanDraft, SpecSolutionDraft } from "./types";
 
 export interface ArtifactSnapshot {
 	path: string;
@@ -12,6 +15,7 @@ export interface ArtifactSnapshot {
 	version: string;
 }
 export interface RequirementArtifacts {
+	document: ArtifactSnapshot;
 	proposal: ArtifactSnapshot;
 	specs: ArtifactSnapshot[];
 	checks: ArtifactSnapshot[];
@@ -120,87 +124,236 @@ async function filesBelow(root: string, prefix = ""): Promise<string[]> {
 	}
 	return result.sort();
 }
-async function removeEmptyDirectories(root: string, removed: Array<{ path: string; mode: number }>): Promise<void> {
-	for (const entry of await fs.readdir(root, { withFileTypes: true })) {
-		if (entry.isDirectory() && !entry.isSymbolicLink())
-			await removeEmptyDirectories(path.join(root, entry.name), removed);
-	}
-	const mode = (await fs.stat(root)).mode;
-	try {
-		await fs.rmdir(root);
-		removed.push({ path: root, mode });
-	} catch (error) {
-		if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOTEMPTY") throw error;
-	}
+type PublicationIdentity = Pick<Stats, "dev" | "ino" | "mtimeMs" | "ctimeMs" | "mode" | "size">;
+interface PublicationFile {
+	content: string;
+	identity: PublicationIdentity;
 }
-/** Preflight the complete write set; failed publication restores already-published originals. */
+function sameIdentity(a: PublicationIdentity, b: PublicationIdentity): boolean {
+	return (
+		a.dev === b.dev &&
+		a.ino === b.ino &&
+		a.mtimeMs === b.mtimeMs &&
+		a.ctimeMs === b.ctimeMs &&
+		a.mode === b.mode &&
+		a.size === b.size
+	);
+}
+async function publicationFile(target: string): Promise<PublicationFile | undefined> {
+	const before = await fs.lstat(target).catch(error => {
+		if (isEnoent(error)) return undefined;
+		throw error;
+	});
+	if (!before) return undefined;
+	if (!before.isFile()) throw new Error(`Publication target is not a regular file: ${target}`);
+	const content = await fs.readFile(target, "utf8");
+	const identity = await fs.lstat(target);
+	if (!sameIdentity(before, identity)) throw new Error(`Publication target changed while reading: ${target}`);
+	return { content, identity };
+}
+function samePublication(a: PublicationFile | undefined, b: PublicationFile | undefined): boolean {
+	return a === undefined
+		? b === undefined
+		: b !== undefined && a.content === b.content && sameIdentity(a.identity, b.identity);
+}
+/** Best-effort ownership checks, not an atomic transaction against external processes. */
 async function publish(
 	root: string,
 	changes: Map<string, string | undefined>,
 	retireDirectory?: string,
+	expected?: ReadonlyMap<string, string | undefined>,
+	recheck?: (published: ReadonlySet<string>) => Promise<void>,
 ): Promise<void> {
-	const originals = new Map<string, { content: string | undefined; mode: number }>();
+	const originals = new Map<string, PublicationFile | undefined>();
+	const targets = new Map<string, string>();
 	for (const relative of changes.keys()) {
 		const target = await containedSpecPath(root, relative);
 		if (originals.has(target)) throw new Error(`Aliased write target: ${relative}`);
-		const content = await optionalRead(target);
-		originals.set(target, { content, mode: content === undefined ? 0o644 : (await fs.stat(target)).mode });
+		const original = await publicationFile(target);
+		if (expected && (!expected.has(relative) || expected.get(relative) !== original?.content))
+			throw new Error(`Specification source changed before publication: ${relative}`);
+		originals.set(target, original);
+		targets.set(relative, target);
 	}
-	const missingDirectories = new Set<string>();
-	for (const relative of changes.keys()) {
-		let directory = path.dirname(await containedSpecPath(root, relative));
-		while (inside(root, directory) && directory !== root) {
-			try {
-				await fs.stat(directory);
-				break;
-			} catch (error) {
-				if (!isEnoent(error)) throw error;
-				missingDirectories.add(directory);
-				directory = path.dirname(directory);
-			}
+	const retired: Array<{ path: string; identity: PublicationIdentity }> = [];
+	async function retirementDirectories(directory: string): Promise<void> {
+		const identity = await fs.lstat(directory);
+		if (!identity.isDirectory() || identity.isSymbolicLink())
+			throw new Error(`Linked retirement directory: ${directory}`);
+		for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+			if (entry.isDirectory()) await retirementDirectories(path.join(directory, entry.name));
 		}
+		retired.push({ path: directory, identity });
 	}
-	const applied: string[] = [];
-	const removedDirectories: Array<{ path: string; mode: number }> = [];
+	if (retireDirectory) await retirementDirectories(await containedSpecPath(root, retireDirectory));
+	const created: Array<{ path: string; identity: PublicationIdentity }> = [];
+	const removed: typeof retired = [];
+	const applied: Array<{
+		relative: string;
+		target: string;
+		content: string | undefined;
+		parentIdentity: PublicationIdentity;
+		published?: PublicationFile;
+		confirmed: boolean;
+	}> = [];
+	const published = new Set<string>();
 	try {
 		for (const [relative, content] of changes) {
+			await recheck?.(published);
 			const target = await containedSpecPath(root, relative);
-			await fs.mkdir(path.dirname(target), { recursive: true });
-			await containedSpecPath(root, relative);
-			applied.push(target);
-			if (content === undefined) await fs.rm(target);
-			else await writeFileAtomically(target, content, originals.get(target)!.mode);
+			if (target !== targets.get(relative)) throw new Error(`Specification target mapping changed: ${relative}`);
+			const missing: string[] = [];
+			let directory = path.dirname(target);
+			while (directory !== root) {
+				try {
+					const stat = await fs.lstat(directory);
+					if (!stat.isDirectory() || stat.isSymbolicLink())
+						throw new Error(`Unsafe publication directory: ${directory}`);
+					break;
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+					missing.unshift(directory);
+					directory = path.dirname(directory);
+				}
+			}
+			for (const name of missing) {
+				await fs.mkdir(name);
+				created.push({ path: name, identity: await fs.lstat(name) });
+			}
+			if (
+				(await containedSpecPath(root, relative)) !== target ||
+				!samePublication(originals.get(target), await publicationFile(target))
+			)
+				throw new Error(`Specification source ownership conflict before publication: ${relative}`);
+			const attempt = {
+				relative,
+				target,
+				content,
+				parentIdentity: await fs.lstat(path.dirname(target)),
+				published: undefined as PublicationFile | undefined,
+				confirmed: false,
+			};
+			applied.push(attempt);
+			if (content === undefined) await fs.unlink(target);
+			else await writeFileAtomically(target, content, originals.get(target)?.identity.mode ?? 0o644);
+			attempt.published = await publicationFile(target);
+			attempt.confirmed = attempt.published?.content === content;
+			if (!attempt.confirmed) throw new Error(`Publication ownership uncertain: ${relative}`);
+			published.add(relative);
 		}
-		if (retireDirectory)
-			await removeEmptyDirectories(await containedSpecPath(root, retireDirectory), removedDirectories);
+		for (const directory of retired) {
+			await recheck?.(published);
+			const current = await fs.lstat(directory.path);
+			// Removing our files changes directory timestamps; inode/device still bind its owner.
+			if (
+				!current.isDirectory() ||
+				current.isSymbolicLink() ||
+				current.ino !== directory.identity.ino ||
+				current.dev !== directory.identity.dev
+			)
+				throw new Error(`Retirement directory ownership conflict: ${directory.path}`);
+			await fs.rmdir(directory.path);
+			removed.push(directory);
+		}
 	} catch (error) {
 		const failures: unknown[] = [];
-		for (const directory of removedDirectories.reverse()) {
-			try {
-				await fs.mkdir(directory.path, { mode: directory.mode });
-			} catch (rollbackError) {
-				failures.push(rollbackError);
+		let recovery: string | undefined;
+		let recoverySaved = false;
+		// Persist originals and intended bytes before any rollback can discard the only copy.
+		try {
+			const base = await containedSpecPath(root, ".omp/spec-recovery");
+			await fs.mkdir(base, { recursive: true });
+			await containedSpecPath(root, ".omp/spec-recovery");
+			recovery = await fs.mkdtemp(path.join(base, "publication-"));
+			await fs.writeFile(
+				path.join(recovery, "publication.json"),
+				JSON.stringify(
+					{
+						format: 1,
+						error: String(error),
+						files: [...changes].map(([relative, content]) => ({
+							path: relative,
+							original: originals.get(targets.get(relative)!) ?? null,
+							attempted: content ?? null,
+							publication: applied.find(item => item.target === targets.get(relative)) ?? null,
+						})),
+						createdDirectories: created,
+						removedDirectories: removed,
+					},
+					null,
+					2,
+				),
+				{ flag: "wx" },
+			);
+			recoverySaved = true;
+		} catch (recoveryError) {
+			failures.push(new Error("Publication recovery material could not be fully saved", { cause: recoveryError }));
+		}
+		// A failed journal must not strand deleted originals. Only exclusive-create
+		// restores are safe without it; preserve surviving attempted/external bytes.
+		{
+			const restoredDirectories = new Map<string, PublicationIdentity>();
+			for (const directory of [...removed].reverse()) {
+				try {
+					await fs.mkdir(directory.path, { mode: directory.identity.mode });
+					restoredDirectories.set(directory.path, await fs.lstat(directory.path));
+				} catch (rollbackError) {
+					failures.push(
+						new Error(`Rollback directory ownership conflict: ${directory.path}`, { cause: rollbackError }),
+					);
+				}
+			}
+			for (const attempt of [...applied].reverse()) {
+				if (!recoverySaved && attempt.content !== undefined) continue;
+				try {
+					const relative = attempt.relative;
+					const parent = path.dirname(attempt.target);
+					const parentIdentity = restoredDirectories.get(parent) ?? attempt.parentIdentity;
+					const currentParent = await fs.lstat(parent);
+					if (
+						!currentParent.isDirectory() ||
+						currentParent.isSymbolicLink() ||
+						currentParent.dev !== parentIdentity.dev ||
+						currentParent.ino !== parentIdentity.ino ||
+						currentParent.mode !== parentIdentity.mode
+					)
+						throw new Error(`Rollback directory ownership conflict; preserved target: ${relative}`);
+					if (
+						!attempt.confirmed ||
+						(await containedSpecPath(root, relative)) !== attempt.target ||
+						!samePublication(attempt.published, await publicationFile(attempt.target))
+					)
+						throw new Error(`Rollback ownership conflict; preserved current target: ${relative}`);
+					const original = originals.get(attempt.target);
+					if (original === undefined) await fs.unlink(attempt.target);
+					else if (attempt.content === undefined) {
+						// Exclusive creation cannot overwrite an external replacement of a removed file.
+						await fs.writeFile(attempt.target, original.content, { flag: "wx", mode: original.identity.mode });
+					} else await writeFileAtomically(attempt.target, original.content, original.identity.mode);
+				} catch (rollbackError) {
+					failures.push(rollbackError);
+				}
+			}
+			for (const directory of recoverySaved ? [...created].reverse() : []) {
+				try {
+					const current = await fs.lstat(directory.path);
+					if (
+						!current.isDirectory() ||
+						current.isSymbolicLink() ||
+						current.ino !== directory.identity.ino ||
+						current.dev !== directory.identity.dev
+					)
+						throw new Error(`Rollback directory ownership conflict: ${directory.path}`);
+					await fs.rmdir(directory.path);
+				} catch (rollbackError) {
+					failures.push(rollbackError);
+				}
 			}
 		}
-		for (const target of applied.reverse()) {
-			const original = originals.get(target)!;
-			try {
-				if (original.content === undefined) await fs.rm(target, { force: true });
-				else await writeFileAtomically(target, original.content, original.mode);
-			} catch (rollbackError) {
-				failures.push(rollbackError);
-			}
-		}
-		for (const directory of [...missingDirectories].sort((a, b) => b.length - a.length)) {
-			try {
-				await fs.rmdir(directory);
-			} catch (rollbackError) {
-				if (!isEnoent(rollbackError)) failures.push(rollbackError);
-			}
-		}
-		if (failures.length)
-			throw new AggregateError([error, ...failures], "Specification publication and rollback failed");
-		throw error;
+		throw new AggregateError(
+			[error, ...failures],
+			`Specification publication partial failure: ${error instanceof Error ? error.message : String(error)}${failures.length ? "; ownership conflict or recovery/rollback failure" : "; owned changes rolled back"}. Recovery: ${recoverySaved ? recovery : "unavailable (recovery save failed)"}${!recoverySaved && recovery ? `; incomplete material: ${recovery}` : ""}`,
+		);
 	}
 }
 function snapshot(file: string, content: string): ArtifactSnapshot {
@@ -245,11 +398,14 @@ export class SpecArtifactStore {
 		await publish(this.cwd, changes);
 	}
 	async writeRequirements(input: {
+		document: SpecDocument;
 		proposal: string;
 		specs: Array<{ path: string; content: string }>;
 		checks?: Array<{ path: string; content: string }>;
 	}): Promise<RequirementArtifacts> {
+		if (input.document.path !== "requirements.md") throw new Error("Formal requirements must use requirements.md");
 		const changes = new Map<string, string | undefined>();
+		changes.set(`${this.changeDir}/requirements.md`, input.document.content);
 		changes.set(`${this.changeDir}/proposal.md`, input.proposal);
 		for (const spec of input.specs) {
 			if (!/^specs\/[a-z0-9]+(?:-[a-z0-9]+)*\/spec\.md$/.test(spec.path))
@@ -282,6 +438,7 @@ export class SpecArtifactStore {
 		return this.readRequirements();
 	}
 	async readRequirements(): Promise<RequirementArtifacts> {
+		const document = await this.#read(`${this.changeDir}/requirements.md`);
 		const proposal = await this.#read(`${this.changeDir}/proposal.md`);
 		const specRoot = await containedSpecPath(this.cwd, `${this.changeDir}/specs`);
 		let names: string[] = [];
@@ -301,9 +458,35 @@ export class SpecArtifactStore {
 			const content = await optionalRead(await containedSpecPath(this.cwd, file));
 			if (content !== undefined) checks.push(snapshot(file, content));
 		}
-		return { proposal, specs, checks, version: artifactVersion(JSON.stringify([proposal, ...specs, ...checks])) };
+		return {
+			document,
+			proposal,
+			specs,
+			checks,
+			version: artifactVersion(JSON.stringify([document, proposal, ...specs, ...checks])),
+		};
 	}
-	async writePlan(content: string): Promise<ArtifactSnapshot> {
+	async writeSolution(solution: SpecSolutionDraft): Promise<ArtifactSnapshot> {
+		const content = `${solution.proposal}\n\n<!-- OMP selected solution metadata\n${JSON.stringify(solution)}\n-->\n`;
+		await publish(this.cwd, new Map([[`${this.changeDir}/solution.md`, content]]));
+		return this.readSolution();
+	}
+	async readSolution(): Promise<ArtifactSnapshot> {
+		return this.#read(`${this.changeDir}/solution.md`);
+	}
+	async writePlan(draft: SpecPlanDraft): Promise<ArtifactSnapshot> {
+		parseSpecPlan(draft);
+		const coverage = new Map<string, string[]>();
+		for (const task of draft.tasks) {
+			for (const requirement of task.requirementIds) {
+				const tasks = coverage.get(requirement) ?? [];
+				tasks.push(task.id);
+				coverage.set(requirement, tasks);
+			}
+		}
+		const cell = (value: string): string => value.replaceAll("|", "\\|").replaceAll("\n", " ");
+		const rows = [...coverage].map(([id, tasks]) => `| ${cell(id)} | ${tasks.map(cell).join(", ")} |`);
+		const content = `${draft.content}\n\n## Requirement coverage\n\n| Requirement | Tasks |\n| --- | --- |\n${rows.join("\n")}\n\n<!-- OMP approved plan metadata\n${JSON.stringify(draft)}\n-->\n`;
 		await publish(this.cwd, new Map([[this.planPath, content]]));
 		return this.readPlan();
 	}
@@ -375,7 +558,10 @@ export class SpecArtifactStore {
 		approval: SpecPatchApproval,
 	): Promise<ArtifactSnapshot[]> {
 		const changes = await this.#prepareSpecChanges(patches, sourceMap, approval);
-		await publish(this.cwd, changes);
+		const expected = new Map<string, string | undefined>(
+			[...changes.keys()].map(file => [file, sourceMap.files.find(source => source.path === file)?.content]),
+		);
+		await publish(this.cwd, changes, undefined, expected, () => this.#approve(approval));
 		return [...changes]
 			.filter((item): item is [string, string] => item[1] !== undefined)
 			.map(([file, content]) => snapshot(file, content));
@@ -471,7 +657,17 @@ export class SpecArtifactStore {
 			if (!markdown) throw new Error("Markdown synchronization requires reviewed exact patches");
 			const changes = await this.#prepareSpecChanges(markdown.patches, markdown.sourceMap, markdown.approval);
 			signal?.throwIfAborted();
-			await publish(this.cwd, changes);
+			const expected = new Map<string, string | undefined>(
+				[...changes.keys()].map(file => [
+					file,
+					markdown.sourceMap.files.find(source => source.path === file)?.content,
+				]),
+			);
+			await publish(this.cwd, changes, undefined, expected, async () => {
+				signal?.throwIfAborted();
+				await this.#approve(approval);
+				await this.#approve(markdown.approval);
+			});
 			return;
 		}
 		await this.#close(approval, false, true, signal, markdown);
@@ -559,12 +755,16 @@ export class SpecArtifactStore {
 			}
 			await this.#approve(approval);
 			const changes = new Map<string, string | undefined>();
+			const expected = new Map<string, string | undefined>();
 			for (const name of new Set([...before, ...after])) {
 				const canonical = name.replaceAll(path.sep, "/");
 				if (!archive && !canonical.startsWith("specs/")) continue;
 				if (!sync && canonical.startsWith("specs/")) continue;
 				const updated = after.includes(name) ? await fs.readFile(path.join(stagedRoot, name), "utf8") : undefined;
-				if (baseline.get(name)?.content !== updated) changes.set(`openspec/${canonical}`, updated);
+				if (baseline.get(name)?.content !== updated) {
+					changes.set(`openspec/${canonical}`, updated);
+					expected.set(`openspec/${canonical}`, baseline.get(name)?.content);
+				}
 			}
 			if (markdown) {
 				const sourceChanges = await this.#prepareSpecChanges(
@@ -575,10 +775,16 @@ export class SpecArtifactStore {
 				for (const [file, content] of sourceChanges) {
 					if (changes.has(file)) throw new Error("Markdown authority overlaps native archive writes");
 					changes.set(file, content);
+					expected.set(file, markdown.sourceMap.files.find(source => source.path === file)?.content);
 				}
 			}
 			signal?.throwIfAborted();
-			await publish(this.cwd, changes, archive ? this.changeDir : undefined);
+			await publish(this.cwd, changes, archive ? this.changeDir : undefined, expected, async published => {
+				signal?.throwIfAborted();
+				// The accepted composite becomes unreadable once our archive starts retiring it.
+				// Remaining targets still have their individual preflight ownership checks.
+				if (![...published].some(file => file.startsWith(`${this.changeDir}/`))) await this.#approve(approval);
+			});
 			return {
 				archivePath: `openspec/${path.dirname(archivePlan).replaceAll(path.sep, "/")}`,
 				stdout: result.stdout,

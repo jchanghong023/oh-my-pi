@@ -39,6 +39,8 @@ export interface IsolationOwner {
  * neither (e.g. Windows) yield `null`, degrading to a pid-only liveness check.
  */
 async function processStartToken(pid: number): Promise<string | null> {
+	// Windows ownership is pid-only; invoking a POSIX ps shim can block sandbox creation.
+	if (process.platform === "win32") return null;
 	if (process.platform === "linux") {
 		let stat: string;
 		try {

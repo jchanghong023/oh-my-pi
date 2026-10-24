@@ -7,7 +7,107 @@
     "version": "7.0.1",
     "revision": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b"
   },
+  "jch": {
+    "revision": "d1332445063976050be7aecfcac893a9b9c2fbfd"
+  },
+  "methods": [
+    {
+      "source": "jch",
+      "name": "jch-grill-me",
+      "role": "requirements",
+      "path": "jch/methods/requirements/skills/jch-grill-me/SKILL.md",
+      "originalPath": "jch/skills/jch-grill-me/SKILL.md",
+      "originalSha256": "c23875b96e374af17fd10aaa3efa7daaf4c54ad086ef47d001dc69be97e01e58",
+      "sha256": "0e8e8f0d7c7024bf86a3bd80b21308a0b625bc4a1da0459268a59bf55145bf38",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "brainstorming",
+      "role": "requirements",
+      "path": "superpowers/methods/requirements/skills/brainstorming/SKILL.md",
+      "originalPath": "superpowers/original-skills/brainstorming/SKILL.md",
+      "originalSha256": "61a7ef918652108c76a3fd01e02dd92d39996c6b46d4cb2819cbd03f6c45e46a",
+      "sha256": "80155ffafad8b1228626bf4513801451baca1f75b08d9ed5287132011dc91a64",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "writing-plans",
+      "role": "planner",
+      "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
+      "originalPath": "superpowers/original-skills/writing-plans/SKILL.md",
+      "originalSha256": "a6c67c1900064347c2a329990dd3c555657c51c3ec53b259a08aa01a2c26139a",
+      "sha256": "8a2083c91f1b6390a5983a99a82176434cc2eabde737829d4423c111382d938d",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "subagent-driven-development",
+      "role": "executor",
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/SKILL.md",
+      "originalPath": "superpowers/original-skills/subagent-driven-development/SKILL.md",
+      "originalSha256": "ba41f697136cba88a7962d60c8e2f97488ba04a8688b1d0fbeb27f6953808e75",
+      "sha256": "ec9e837f29d87edbdbc89da9c9198b64db7242cbf66f5e4ba2edc1d8ff7a23af",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "test-driven-development",
+      "role": "executor",
+      "path": "superpowers/methods/executor/skills/test-driven-development/SKILL.md",
+      "originalPath": "superpowers/original-skills/test-driven-development/SKILL.md",
+      "originalSha256": "64b03fce4aee5a97a93160cea8111f3ba13a17b7c001db4bd5836d67fd10705d",
+      "sha256": "3a03349237251250404051abc82e04ab690d1670b51831ad6b7756d2bd0e38b8",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "systematic-debugging",
+      "role": "executor",
+      "path": "superpowers/methods/executor/skills/systematic-debugging/SKILL.md",
+      "originalPath": "superpowers/original-skills/systematic-debugging/SKILL.md",
+      "originalSha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202",
+      "sha256": "e518bc80c7e690b26a9e294ecd361ebf17e3539dc85c8f2370ecdd86f536fc0f",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "verification-before-completion",
+      "role": "executor",
+      "path": "superpowers/methods/executor/skills/verification-before-completion/SKILL.md",
+      "originalPath": "superpowers/original-skills/verification-before-completion/SKILL.md",
+      "originalSha256": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3",
+      "sha256": "0b94248bffc7c587727f1c87b00c63b16d54c16d23c55127748b169a09461994",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "requesting-code-review",
+      "role": "reviewer",
+      "path": "superpowers/methods/reviewer/skills/requesting-code-review/SKILL.md",
+      "originalPath": "superpowers/original-skills/requesting-code-review/SKILL.md",
+      "originalSha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc",
+      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "adaptation": "omp-four-role-v1"
+    },
+    {
+      "source": "superpowers",
+      "name": "requesting-code-review",
+      "role": "executor",
+      "path": "superpowers/methods/executor/skills/requesting-code-review/SKILL.md",
+      "originalPath": "superpowers/original-skills/requesting-code-review/SKILL.md",
+      "originalSha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc",
+      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "adaptation": "omp-four-role-v1"
+    }
+  ],
   "skills": [
+    {
+      "source": "jch",
+      "name": "jch-grill-me",
+      "path": "jch/skills/jch-grill-me/SKILL.md"
+    },
     {
       "source": "openspec",
       "name": "openspec-explore",
@@ -25,18 +125,13 @@
     },
     {
       "source": "openspec",
-      "name": "openspec-apply-change",
-      "path": "openspec/skills/openspec-apply-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
       "name": "openspec-update-change",
       "path": "openspec/skills/openspec-update-change/SKILL.md"
     },
     {
       "source": "openspec",
-      "name": "openspec-ff-change",
-      "path": "openspec/skills/openspec-ff-change/SKILL.md"
+      "name": "openspec-propose",
+      "path": "openspec/skills/openspec-propose/SKILL.md"
     },
     {
       "source": "openspec",
@@ -47,31 +142,6 @@
       "source": "openspec",
       "name": "openspec-archive-change",
       "path": "openspec/skills/openspec-archive-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-bulk-archive-change",
-      "path": "openspec/skills/openspec-bulk-archive-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-verify-change",
-      "path": "openspec/skills/openspec-verify-change/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-onboard",
-      "path": "openspec/skills/openspec-onboard/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "openspec-propose",
-      "path": "openspec/skills/openspec-propose/SKILL.md"
-    },
-    {
-      "source": "openspec",
-      "name": "feedback",
-      "path": "openspec/skills/feedback/SKILL.md"
     },
     {
       "source": "superpowers",
@@ -151,13 +221,33 @@
   ],
   "files": [
     {
+      "path": "jch/methods/requirements/skills/jch-grill-me/SKILL.md",
+      "sha256": "0e8e8f0d7c7024bf86a3bd80b21308a0b625bc4a1da0459268a59bf55145bf38",
+      "executable": false
+    },
+    {
+      "path": "jch/methods/requirements/skills/jch-grill-me/agents/openai.yaml",
+      "sha256": "1be70f802c4cc1775bdccf1f8bd0440ffdbd2ad4744c1d15a0f231d353a432c6",
+      "executable": false
+    },
+    {
+      "path": "jch/skills/jch-grill-me/SKILL.md",
+      "sha256": "c23875b96e374af17fd10aaa3efa7daaf4c54ad086ef47d001dc69be97e01e58",
+      "executable": false
+    },
+    {
+      "path": "jch/skills/jch-grill-me/agents/openai.yaml",
+      "sha256": "0c035fc04e9bd95ab107eb1232bc2df0ee61e4e74ba218cd61d80410a136fdb1",
+      "executable": false
+    },
+    {
       "path": "omp-runtime/node",
       "sha256": "42fecb0cf5a1993e9ec846214a072a4f38c48d86b0e955a4ad5a4810bc6a23dd",
       "executable": true
     },
     {
       "path": "omp-spec/schema.yaml",
-      "sha256": "ef6ff6c879e42811e69d2e1b193c897860808398a285c762231e35da53642b8a",
+      "sha256": "c7c6dd25f11b813c214bf2402b5a49f56e093d0d6971aa7f38f94b20c0c60865",
       "executable": false
     },
     {
@@ -407,7 +497,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/default-schema.js",
-      "sha256": "f9701771b90b1f9ef56f66026d34a6e797b74ba7630df3c26e3247c2dafb4e7e",
+      "sha256": "5af397ad190b77b7f86510674f0a53c2e41498d0b5a6cd143948cda2c3958841",
       "executable": false
     },
     {
@@ -427,7 +517,7 @@
     },
     {
       "path": "openspec/dist/commands/workflow/instructions.js",
-      "sha256": "2891599e8c39aff4c1abd8974ad9cc495fbaa284532f044cb33ac02a7203a3b1",
+      "sha256": "280da9e38ea5d25a9c50a710c8a4b04937997a332fd7cacbd80e5749c4b6585d",
       "executable": false
     },
     {
@@ -567,7 +657,7 @@
     },
     {
       "path": "openspec/dist/core/artifact-graph/resolver.js",
-      "sha256": "d3f4963910ad064667328404f7fc04dde0c300f3ee3b50c26c169470d88557d0",
+      "sha256": "ff09e3f2675bc78b12a09deaa981ee08c7011bf43c691ecd9c646ed1a66d3748",
       "executable": false
     },
     {
@@ -1357,7 +1447,7 @@
     },
     {
       "path": "openspec/dist/core/init.js",
-      "sha256": "8519d706c03c1c8536c73fc7743d2aa6272114be5e5fef091228385282ee2b6b",
+      "sha256": "354832e5ed5168a60dd8e577f23e4f76a910487deb81d1cd17b833a3d8da6ee2",
       "executable": false
     },
     {
@@ -1367,7 +1457,7 @@
     },
     {
       "path": "openspec/dist/core/legacy-cleanup.js",
-      "sha256": "1392c44d48bc06b9594cab70d2a4d1099a6859c7e4e2561f2141a0412b1cc273",
+      "sha256": "6472b839f710d67bf51a1c71ada7deae7fba95fd8f2cfafef974d4e71c101b8e",
       "executable": false
     },
     {
@@ -1497,7 +1587,7 @@
     },
     {
       "path": "openspec/dist/core/profile-sync-drift.js",
-      "sha256": "49759d0127e93655b98ad15f77b6644d5c4fbc62c4a04c6445dba2cf914f09f9",
+      "sha256": "e1222897ebebafe4c29d98f1ce0ad2df34e980fe107fe626e9ef140d094a9d28",
       "executable": false
     },
     {
@@ -1507,7 +1597,7 @@
     },
     {
       "path": "openspec/dist/core/profiles.js",
-      "sha256": "9ac30d888490d9f46c559dc34e9561ef1d2c306d3c82d73c5048d99a8c50c7b8",
+      "sha256": "666ded5d295e97a04b227e0f40c59f60cca265b507e0514db68c8975ca75ab7d",
       "executable": false
     },
     {
@@ -1647,7 +1737,7 @@
     },
     {
       "path": "openspec/dist/core/shared/skill-generation.js",
-      "sha256": "ef5419e82d0d89fe25f85a78ae9b53c0f564e7cd6c720fc59267c27fdd196b9a",
+      "sha256": "5278ceac5a09054e81a1ba56130bfee87aced32381fb60ccbcc0d62e0f656cae",
       "executable": false
     },
     {
@@ -1667,7 +1757,7 @@
     },
     {
       "path": "openspec/dist/core/shared/tool-detection.js",
-      "sha256": "8bfbd76c6f72659b3da77a1a09f58fc906ec90f162da276d2dd5c6b43e087640",
+      "sha256": "9872801e417bb11779a10617e3a16a412dcdbe7c00a8da9929a2abafd79db1dd",
       "executable": false
     },
     {
@@ -1772,12 +1862,12 @@
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.d.ts",
-      "sha256": "6d0611e0508e363ad1ee43c8a2c91a7b01d6b78ebf14c68356a91c70681b2591",
+      "sha256": "f413ccae0b6c4ba8f06d22ba9bc1ab9431138ed31dd037d6437f410b0a8ad381",
       "executable": false
     },
     {
       "path": "openspec/dist/core/templates/skill-templates.js",
-      "sha256": "1189318c279cdf0bfd2e83848137cbebd196070a36707c0dfa5ca5dfd70b263d",
+      "sha256": "8ae1645421477286def9a8170906d27fa57a89b0d7c0180a6fb2f221f273adf0",
       "executable": false
     },
     {
@@ -1791,33 +1881,13 @@
       "executable": false
     },
     {
-      "path": "openspec/dist/core/templates/workflows/apply-change.d.ts",
-      "sha256": "9d46dc004fd975b581e81aef9c06e27de1bd1d96f420139caa797e9f2893e34c",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/apply-change.js",
-      "sha256": "889429a56e6f0efb310e8fdba977efccb3954a737369a8ff60398110efd39f30",
-      "executable": false
-    },
-    {
       "path": "openspec/dist/core/templates/workflows/archive-change.d.ts",
       "sha256": "bdd1151c30c026a9726a941830793b9553f70751ecf49ae8285ecc77e15c9d06",
       "executable": false
     },
     {
       "path": "openspec/dist/core/templates/workflows/archive-change.js",
-      "sha256": "eb8fe442efcdf8078e0a27b1db6467e48d824d7b82aee244e9cea127d7f0c920",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/bulk-archive-change.d.ts",
-      "sha256": "465e9a1eabfadd88b082235365b886d0b780500cb9cdb8fc9b2d63d5bbdf9b77",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/bulk-archive-change.js",
-      "sha256": "d1cae8d2daef00aaf8c83b55d0bdc9bd7f67aff6e9a4c127f74390453ebf10a0",
+      "sha256": "2c7001a67226829d39aa1ac640638817d4f0c93140d8d607d9a0f25aa07150d2",
       "executable": false
     },
     {
@@ -1827,7 +1897,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/continue-change.js",
-      "sha256": "8e75d17edfae7a16deeacf9520cf46efccef3c2986dbfbf94c7e49f4a071a9df",
+      "sha256": "addeaf6187b1d8b88eb0f833abe2afb4dd0a1d0b92f6b5c50450ac9584863dc9",
       "executable": false
     },
     {
@@ -1837,27 +1907,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/explore.js",
-      "sha256": "498f743d5a2ed3a12e0f83cde5eaba4ade747e52c9b58c1062669d6a89fb7e63",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/feedback.d.ts",
-      "sha256": "0c2204be0d237b8838d9ceec27965c125a6665b37c4053dc8929b53e3f2853df",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/feedback.js",
-      "sha256": "65d9749076130465c02b93a1a7c759bffa9dbd82322159bd4fb9d78ceac98ad8",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/ff-change.d.ts",
-      "sha256": "1c5cbfb494d7df8059ae0a099f4cc4764f424dc1ec50b400447fbdb1e8477edb",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/ff-change.js",
-      "sha256": "573cf4ec0ac768950ab0890bcfa850028876d4e04fd70416fc9d32b9ba3f5c25",
+      "sha256": "dcefa171e88dd6dbcd46b6a037353c702e9331a78f9d8a5ca852c6380f20f4b2",
       "executable": false
     },
     {
@@ -1867,17 +1917,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/new-change.js",
-      "sha256": "1bd79706905d1feda61c822c4aa2a74f212abffd2a1cf98f114ea90395dfe297",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/onboard.d.ts",
-      "sha256": "2bf8aca4f667f1035d06a197a8efcc57ed4b9ec5421605dd8293add0438002c2",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/onboard.js",
-      "sha256": "39c9e6148473baa1a93f8ea82b1fca6c337f7e99429b3dc7f67f0f4b728d4ea8",
+      "sha256": "b6625fe5540756d154e6c813495debc1ca6503cf4aa8b1b1602e7df323945c75",
       "executable": false
     },
     {
@@ -1897,7 +1937,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/propose.js",
-      "sha256": "f98c4dde68bc4c5614fe821c281d067ce50006c7236460413358f3f8284dd4bc",
+      "sha256": "987ca99ac9aca989a8918f2bd131ef6ea428ab79de1d71d9553fba1c93e5f69d",
       "executable": false
     },
     {
@@ -1917,7 +1957,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/sync-specs.js",
-      "sha256": "ca4480746dd9e6af293caf69547fc3e38502b06ff8a8cdbfc2e180135ce2dafc",
+      "sha256": "3bd09308847ccccd3cf0a1a7007abff178162fd92cb0093aa9c7ce7546f777d2",
       "executable": false
     },
     {
@@ -1927,17 +1967,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/update-change.js",
-      "sha256": "86a26257f7386cfa27ef3ca8a0e7c56f58a2a0dd420f1367ef48613eac55fe97",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/verify-change.d.ts",
-      "sha256": "c5c0d1f27f44acb7a1679126deffdcb6b59d4a5e8985e7d31f458cf7770e65ff",
-      "executable": false
-    },
-    {
-      "path": "openspec/dist/core/templates/workflows/verify-change.js",
-      "sha256": "6f44b6e191b62e894188e9617fe0121e3b9aa6b699175cc9c4b379660c34508d",
+      "sha256": "b7648aa3dcb214a40650de249a9d86f69a9e37f6715547fef0039284e68d3027",
       "executable": false
     },
     {
@@ -1947,7 +1977,7 @@
     },
     {
       "path": "openspec/dist/core/update.js",
-      "sha256": "dc2c7cb3939fecaf7b164b384b373585d3bf95da3c5ca8bf572992de457a0846",
+      "sha256": "9cf9be5aa12b26399634510af193e3f2d77c56547e11f34cefdd22a516a10f74",
       "executable": false
     },
     {
@@ -11181,23 +11211,8 @@
       "executable": false
     },
     {
-      "path": "openspec/original-skills/feedback/SKILL.md",
-      "sha256": "cff7c216c66464b475af81df21e4c0f4f75fe5c3c18be0cb98133883293fc251",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-apply-change/SKILL.md",
-      "sha256": "f32ad0fb6f357d4871190f34e8d1a96af4d745fb2144bf6accc09c3df721bc6c",
-      "executable": false
-    },
-    {
       "path": "openspec/original-skills/openspec-archive-change/SKILL.md",
       "sha256": "23f1e6cc6abdc5894802b1737638a1898e622efeb9091f005ad8edd445ff0db0",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-bulk-archive-change/SKILL.md",
-      "sha256": "bd5ac6b7664db1766fab08b9e490b5894f19426410d7c4287dab0fcb1fa237c8",
       "executable": false
     },
     {
@@ -11211,18 +11226,8 @@
       "executable": false
     },
     {
-      "path": "openspec/original-skills/openspec-ff-change/SKILL.md",
-      "sha256": "b7fec9501d156fa06faa7bf6834b9f211ed8e386c916be0e14cacb681158257f",
-      "executable": false
-    },
-    {
       "path": "openspec/original-skills/openspec-new-change/SKILL.md",
       "sha256": "dfb487a27cf0e8ff8bae5bb4b2af1b998474a9bbb673b8480a7b4f40085643ee",
-      "executable": false
-    },
-    {
-      "path": "openspec/original-skills/openspec-onboard/SKILL.md",
-      "sha256": "8bce6a36d6d872d6d37edfd8504e114c5fe60061d703e337ca35a286d007adb4",
       "executable": false
     },
     {
@@ -11241,23 +11246,28 @@
       "executable": false
     },
     {
-      "path": "openspec/original-skills/openspec-verify-change/SKILL.md",
-      "sha256": "c3edfcc590a4e89f64292c1f2764cba4f92422003599c47d48b09ac26c81d44d",
-      "executable": false
-    },
-    {
       "path": "openspec/package.json",
       "sha256": "f1ec4479b28e107da8bf7a7963d01a0ebb664061cbc2e5fd9c3bca70f18814af",
       "executable": false
     },
     {
-      "path": "openspec/schemas/spec-driven/schema.yaml",
-      "sha256": "b6f28f305ab7f33b061949251bba82c79de66c82424cfed60582327db3f888f2",
+      "path": "openspec/schemas/omp-spec/schema.yaml",
+      "sha256": "c7c6dd25f11b813c214bf2402b5a49f56e093d0d6971aa7f38f94b20c0c60865",
       "executable": false
     },
     {
-      "path": "openspec/schemas/spec-driven/templates/design.md",
-      "sha256": "6ccc87f5017fb190e69e8759dd4e20d5ac3320cc4dabf152708bf8f2aa5205f8",
+      "path": "openspec/schemas/omp-spec/templates/proposal.md",
+      "sha256": "0dd70e35db5c696ba8ac3cc3a53e2d6561865c1e4e7d49db5a1eaa3e4a6ad86e",
+      "executable": false
+    },
+    {
+      "path": "openspec/schemas/omp-spec/templates/spec.md",
+      "sha256": "1cccfb573f031c6352bed2a879b7035ff710bc909112fc23d10bdcfcdd8d4318",
+      "executable": false
+    },
+    {
+      "path": "openspec/schemas/spec-driven/schema.yaml",
+      "sha256": "ba61b82b52088769292f8c59e297cf6baa66355d8329cdc7aa018b93b93ca777",
       "executable": false
     },
     {
@@ -11271,73 +11281,38 @@
       "executable": false
     },
     {
-      "path": "openspec/schemas/spec-driven/templates/tasks.md",
-      "sha256": "fa67d99fb4a93b12d702f89ea83e1838219d1cad1c90a4192c402278001cd30e",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/feedback/SKILL.md",
-      "sha256": "7237edd6f5940d04855b258d4865a4268832737a3738ea920cfb069af83b7d5b",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-apply-change/SKILL.md",
-      "sha256": "5275e4bbf14610d9e2dce173a6c7087f107235e0cb60ffc0b6b78b12248846a7",
-      "executable": false
-    },
-    {
       "path": "openspec/skills/openspec-archive-change/SKILL.md",
-      "sha256": "c978fe53182b7f20413dd8a1e1287a526208e9b4d76fd0a1e3db48c5da0be73c",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-bulk-archive-change/SKILL.md",
-      "sha256": "ac5697fb702183cce7d97ed96c75a9ef2133aebb7948305b9052a917fdf69d7d",
+      "sha256": "695013a58a19cffb0ac58f9020165df22e258750050b882dce05bb6296f6716c",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-continue-change/SKILL.md",
-      "sha256": "22ccb9860f8b73fba34bd646dea9f6df4d3c47f5251f427ede5d18633c1c9b58",
+      "sha256": "745557d118d5522287b81e574dd482ebfbc4473f4788e2eef9f2b64561191000",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-explore/SKILL.md",
-      "sha256": "e566181510ce8cbc09640c3e29f9f8f7f6e164a70d7586d30c56f7bff5616922",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-ff-change/SKILL.md",
-      "sha256": "eb658eca5f9f8be4b2608352146e764909311d677cc1618f27bbfd72ea51614c",
+      "sha256": "c44c30701a9d58ecc59c1681081054e66b80ed86a8974fb222b7f0d952dea29d",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-new-change/SKILL.md",
-      "sha256": "192d36b1ecf9c4263f91f37aa5773fbae0a3fd3efdbffee2b73a3ecf56238e8e",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-onboard/SKILL.md",
-      "sha256": "8c2efc5cd92be7038e41f0368e3772b89dc80c93119b8e08f8cabe4d2eafd1e2",
+      "sha256": "cf5adf7fb07f719cca970b7b2746fc624fd367204683483967de487a421d8825",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-propose/SKILL.md",
-      "sha256": "2784c3da53b46f2818fa3faf87ec46322c4e50043ffcb00a7f59adb83a073a42",
+      "sha256": "47b65d8f891fc1f2cb09f00442f7f2a9d63e73380144c4abad6a72368dd2616f",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-sync-specs/SKILL.md",
-      "sha256": "1e3ed5da18bc4e1649a08eff98b6c0ee2e092479dc2646856685e879694bcb2b",
+      "sha256": "27f248d4c8b9af954a9c9088d7b7048964742393432a4f2d19b075a22951e01c",
       "executable": false
     },
     {
       "path": "openspec/skills/openspec-update-change/SKILL.md",
-      "sha256": "9e8df18c6ddfd91cc4dc76816f01048c884ba6612a27b16e5bcb9d3805735921",
-      "executable": false
-    },
-    {
-      "path": "openspec/skills/openspec-verify-change/SKILL.md",
-      "sha256": "9a6e9642ad4b4d8ea3287caeac150d71e361fb6af4d202f7ad2168781ed10d49",
+      "sha256": "a1533fb855e3b05f6c8f2e5b19203fe4bb67b5fde6bedbe2b4afc89180c205cf",
       "executable": false
     },
     {
@@ -11696,6 +11671,211 @@
       "executable": false
     },
     {
+      "path": "superpowers/methods/executor/skills/requesting-code-review/SKILL.md",
+      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/requesting-code-review/code-reviewer.md",
+      "sha256": "78f760a1c2a3c31c5550642524ba1d6fde5a8d19a24e6aa9226b79afec21cd3d",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/SKILL.md",
+      "sha256": "ec9e837f29d87edbdbc89da9c9198b64db7242cbf66f5e4ba2edc1d8ff7a23af",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/implementer-prompt.md",
+      "sha256": "4508df9728863eb61fea4ac75411f51b83cb75b727760870bbefca4fbc8e519e",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/re-review-prompt.md",
+      "sha256": "ce97335a106ca247d857c544b756201b7e9dca5f0f4a8541eca443bea70e64b1",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/batching.md",
+      "sha256": "ab5133f085e20b8582a26287235108f05e2002d57ee93d09546fac584fb7a97d",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/cannot-verify.md",
+      "sha256": "e698713a15e0eabf1a2ab26ffe1bb04bf70c9d6d2e2060d44a0f9a1bdd4408bf",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/final-review.md",
+      "sha256": "1d78ce598e9754dfa4141a8abbcdc9b9a59a673323441ffd7f5c64ead543f22a",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/fix-loop.md",
+      "sha256": "977cc6f6041c07ba48dee4d7642bf92663fe590676450e4e74f2b6c6cec67c48",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/handling-reports.md",
+      "sha256": "965ca90830dc1bc9c34ae2f0e5acc42bedecc31f2f5593ee0dfbd3999f8bfc9f",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/preflight.md",
+      "sha256": "5407b9b4d953e77427b1145eea9d88f251202a7ea7e53c46dfbc6415b41ff374",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/references/resuming.md",
+      "sha256": "44e37d969f00a957e512c05cedf64a7ec1480d9b06172b81f985bcae3a7d437a",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/scripts/review-package",
+      "sha256": "31e37e1f5c4c841ce3474a9509b79d2497878dd2757150cd7d22e9512625fd56",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/scripts/sdd-workspace",
+      "sha256": "4fd9770e7a49b6bde488c0e92bac1b3bd01fcbdaf8f06b6c4efbe3a1abd99f86",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/scripts/task-brief",
+      "sha256": "cc563538e09abf719b34ddf4b2fa7a65cf3b301729039dbfa923cb060f729146",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/executor/skills/subagent-driven-development/task-reviewer-prompt.md",
+      "sha256": "a3f1ba70e4d71c0b4b008ab41089ae58f512c1b2e08724749be90e6f3e0e3373",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/CREATION-LOG.md",
+      "sha256": "c24733a5b1821bd6bed1fc950261f0b9f4e90097e0bbb96459d8179713730789",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/SKILL.md",
+      "sha256": "e518bc80c7e690b26a9e294ecd361ebf17e3539dc85c8f2370ecdd86f536fc0f",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/condition-based-waiting-example.ts",
+      "sha256": "40ae5ebe497fdf310200e43fe986552546d0a22837c0d39e855db1cfd33eb88e",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/condition-based-waiting.md",
+      "sha256": "e89fec8400d6cd50f43407cec9fab50976ba4d55d0ec2eb51c0bd68036b54c26",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/defense-in-depth.md",
+      "sha256": "1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/find-polluter.sh",
+      "sha256": "dd7b8f13c4cc2a24b33ff87b18da9248f3e1c80a085c3316224f69ff0fa5c43c",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/root-cause-tracing.md",
+      "sha256": "75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/test-academic.md",
+      "sha256": "fe2ba480d78ac0d686dc025f41c2a32a43d642bf533f91b0c6053a04d35d6486",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/test-pressure-1.md",
+      "sha256": "0b6a915db0054577819834c79be9eb614e97bddba10d73768e1fbe91cfed048a",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/test-pressure-2.md",
+      "sha256": "b2030aeffba07050e8ad573ddf87486457c4a016a786bb326235bebd856f2016",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/systematic-debugging/test-pressure-3.md",
+      "sha256": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/test-driven-development/SKILL.md",
+      "sha256": "3a03349237251250404051abc82e04ab690d1670b51831ad6b7756d2bd0e38b8",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/test-driven-development/writing-good-tests.md",
+      "sha256": "51471c853306ff92ca8bb41dcaea05f31c0e46b03651f8f3c99754b7172f4ae1",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/executor/skills/verification-before-completion/SKILL.md",
+      "sha256": "0b94248bffc7c587727f1c87b00c63b16d54c16d23c55127748b169a09461994",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
+      "sha256": "8a2083c91f1b6390a5983a99a82176434cc2eabde737829d4423c111382d938d",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/SKILL.md",
+      "sha256": "80155ffafad8b1228626bf4513801451baca1f75b08d9ed5287132011dc91a64",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/builder-check-prompt.md",
+      "sha256": "36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/scripts/frame-template.html",
+      "sha256": "6a8a4e58bd6a44b904e2e3c57de774481d909204597e1498de53f1b2fecc4c4e",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/scripts/helper.js",
+      "sha256": "43c6d69954a46ec34a2a262bcc62a9a7e83e839c739f199cb72646d397c686e3",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/scripts/server.cjs",
+      "sha256": "763abf96510e0b892a1141397b31aa82ef900cf87ed34dde94bc8782baf4a7ca",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/scripts/start-server.sh",
+      "sha256": "a4e5ae84275bcaacd2f84345afeabe59cf7b00ba080e123da7cc1fb226f12847",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/scripts/stop-server.sh",
+      "sha256": "0b5ccbbd57f62d3ed88993f7940b5ee0e5c0fc9b21c550c623da4f6292e47daf",
+      "executable": true
+    },
+    {
+      "path": "superpowers/methods/requirements/skills/brainstorming/visual-companion.md",
+      "sha256": "6ffcb038b53254bd31debaa15e12dcd4ff24bd63d690e0b644ac6396701cf2e2",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/reviewer/skills/requesting-code-review/SKILL.md",
+      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "executable": false
+    },
+    {
+      "path": "superpowers/methods/reviewer/skills/requesting-code-review/code-reviewer.md",
+      "sha256": "78f760a1c2a3c31c5550642524ba1d6fde5a8d19a24e6aa9226b79afec21cd3d",
+      "executable": false
+    },
+    {
       "path": "superpowers/original-skills/brainstorming/SKILL.md",
       "sha256": "61a7ef918652108c76a3fd01e02dd92d39996c6b46d4cb2819cbd03f6c45e46a",
       "executable": false
@@ -11947,7 +12127,7 @@
     },
     {
       "path": "superpowers/skills/executing-plans/SKILL.md",
-      "sha256": "1cb2b3854851004a07e3b94fd32343776b538b4a7df706668f422f0dc2e9c576",
+      "sha256": "2f544fce4041a0d07fdcdf59f71911b808aa242e2dbf66d801faa2ce2e952fcf",
       "executable": false
     },
     {
@@ -11962,7 +12142,7 @@
     },
     {
       "path": "superpowers/skills/finishing-a-development-branch/SKILL.md",
-      "sha256": "b38275aa6107551aaaba829437e2b6830b1668b1365b5189b7c8bafe3ad64644",
+      "sha256": "89c21a973fd4c0692376048c421f03ae72d7cd26ec87b049fd931bff570ac108",
       "executable": false
     },
     {
@@ -11972,7 +12152,7 @@
     },
     {
       "path": "superpowers/skills/requesting-code-review/SKILL.md",
-      "sha256": "5fcabe92e5e228838d11509c4e4b8dae3f59201ba5c07a71a2fb6f56a76c68d8",
+      "sha256": "2111535f997186600f7dacb8022347443e73fa88bbe12daebb84233311b1b8a7",
       "executable": false
     },
     {
@@ -11982,7 +12162,7 @@
     },
     {
       "path": "superpowers/skills/subagent-driven-development/SKILL.md",
-      "sha256": "744b23f47aac339dd1712a0f0ca26ed0826566c52558ce0d428ccfbd29eb3b26",
+      "sha256": "458386cfee697fea103e2d8c561f74123725b0d433b6e81dd739e6c4e4066a6d",
       "executable": false
     },
     {
@@ -12107,7 +12287,7 @@
     },
     {
       "path": "superpowers/skills/test-driven-development/SKILL.md",
-      "sha256": "a64192bf0ad6dd75d48c3a3ca9513a64545f00a9b78e61d7ba58101432e891fa",
+      "sha256": "b2c0cc7156aec4b703c47adb7b436e5f782b7e0afd5a7b5197b1d07f9e253916",
       "executable": false
     },
     {
@@ -12117,7 +12297,7 @@
     },
     {
       "path": "superpowers/skills/using-git-worktrees/SKILL.md",
-      "sha256": "38fea2ee83e38854db591e85b5de7245059bf2a02231752c2dc2c2b31fe8cbea",
+      "sha256": "0ddd771f380419f0e4ead669014252a89138e12ab1f8a2ea5fd41d8069ef4f85",
       "executable": false
     },
     {
@@ -12167,12 +12347,12 @@
     },
     {
       "path": "superpowers/skills/writing-plans/SKILL.md",
-      "sha256": "28620c53ccf43ec05c6e27004b9097c08fed33febc38f6ad430c8c98c215effd",
+      "sha256": "dd87fd512a1409a692c2677fe750eaeab0671de08b10f35f66a0dfe8d6943dee",
       "executable": false
     },
     {
       "path": "superpowers/skills/writing-skills/SKILL.md",
-      "sha256": "b6e9d8a07ff4b36e545fd46f5078b1342d28c5ba290341e01ae8ea9347834706",
+      "sha256": "9eab9ac38c7635b9baac6620f1ab5306fee1ae4cef34247566cc9f8cbef83358",
       "executable": false
     },
     {

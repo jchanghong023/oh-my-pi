@@ -29,6 +29,7 @@ import subagentUserPromptTemplate from "../prompts/system/subagent-user-prompt.m
 import isolationRecoveryHintTemplate from "../prompts/tools/isolation-recovery-hint.md" with { type: "text" };
 import salvagedChildHintTemplate from "../prompts/tools/salvaged-child-hint.md" with { type: "text" };
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
+import { AgentLifecycleManager } from "../registry/agent-lifecycle";
 import type { TaskEffort } from "@oh-my-pi/pi-tui/thinking";
 import type { ToolSession } from "../tools";
 import { isIrcEnabled } from "../irc/messaging";
@@ -51,7 +52,7 @@ import { AgentOutputManager } from "./output-manager";
 import { resolveSpawnPolicy } from "./spawn-policy";
 import { isBundledSeance, prepareSeance, type PreparedSeanceSession } from "./seance";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
-import { type AgentDefinition, canSpawnAtDepth } from "./types";
+import { type AgentDefinition, type NativeSpawnOverrides, canSpawnAtDepth } from "./types";
 import type {
 	AgentProgress,
 	SingleResult,
@@ -650,6 +651,8 @@ function buildExecutorOptions(
 		maxRuntimeMs: request.maxRuntimeMs,
 		restrictToolNames,
 		keepAlive: request.keepAlive,
+		subagentHooks: session.subagentHooks,
+		subagentRequest: session.subagentHooks ? request : undefined,
 		signal: request.signal,
 		eventBus: session.eventBus,
 		subagentEventBus: session.subagentEventBus,
@@ -837,7 +840,29 @@ function describeSalvagedWork(result: SingleResult): string {
  * lease or child dispatch; callers keep responsibility for their result text.
  */
 export async function runStructuredSubagent(request: StructuredSubagentRequest): Promise<StructuredSubagentResult> {
+	// Admission precedes even policy resolution: seance resolution can acquire resources.
+	const hooks = request.session.subagentHooks;
+	const spawnOverrides = await hooks?.beforeSpawn(request);
+	try {
+		return await runAdmittedSubagent(request, spawnOverrides);
+	} catch (error) {
+		if (!(error instanceof StructuredSubagentError && error.result)) {
+			try {
+				await hooks?.onSpawnFailed?.(request, error);
+			} catch {
+				// Admission cleanup must not replace the actual spawn failure.
+			}
+		}
+		throw error;
+	}
+}
+
+async function runAdmittedSubagent(
+	request: StructuredSubagentRequest,
+	spawnOverrides: NativeSpawnOverrides | void,
+): Promise<StructuredSubagentResult> {
 	const policy = await applySpawnHook(request, await resolveEffectiveSubagentPolicy(request));
+	if (spawnOverrides?.applyChanges !== undefined) policy.applyChanges = spawnOverrides.applyChanges;
 	const lease = await leaseArtifacts(request.session, request.invocationKind);
 	let changesApplied: boolean | null = null;
 	let mergeSummary = "";
@@ -851,8 +876,12 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	let settled: SingleResult | undefined;
 	let retainSalvagedArtifact = false;
 	const onSubprocessResult =
-		request.invocationKind === "eval"
-			? (result: SingleResult) => request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0)
+		request.invocationKind === "eval" || request.session.subagentHooks?.onSpawnFailed
+			? (result: SingleResult): void => {
+					if (request.session.subagentHooks?.onSpawnFailed) settled = result;
+					if (request.invocationKind === "eval")
+						request.session.recordEvalSubagentUsage?.(result.usage?.output ?? 0);
+				}
 			: undefined;
 	try {
 		const id = await reserveStructuredSubagentId(request.session, {
@@ -861,6 +890,32 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 		});
 		if (policy.preparedSession === undefined) await refreshSkillsForAutoload(request.session, policy.agent);
 		const baseOptions = buildExecutorOptions(request, policy, lease, id);
+		if (spawnOverrides?.keepAlive !== undefined) baseOptions.keepAlive = spawnOverrides.keepAlive;
+		const hooks = request.session.subagentHooks;
+		let spawnFailed = false;
+		if (hooks?.onSpawnFailed) {
+			baseOptions.subagentHooks = {
+				...hooks,
+				onSpawnFailed: async (child, error) => {
+					spawnFailed = true;
+					await hooks.onSpawnFailed!(child, error);
+				},
+			};
+		}
+		let sharedResult: SingleResult | undefined;
+		const observeSharedResult = async (result: SingleResult): Promise<void> => {
+			await deferredCleanup;
+			if (spawnFailed) return;
+			await hooks?.beforeCapture?.(request, result);
+			await hooks?.afterResult?.(request, result);
+		};
+		if (!policy.isIsolated && (hooks?.beforeCapture || hooks?.afterResult)) {
+			const release = baseOptions.onRelease;
+			baseOptions.onRelease = async () => {
+				await release?.();
+				if (sharedResult) await observeSharedResult(sharedResult);
+			};
+		}
 		baseOptions.onCleanupDeferred = completion => {
 			deferredCleanup = completion;
 		};
@@ -893,18 +948,42 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 			if (!isolationContext) {
 				result = await runSubprocess(baseOptions);
 				onSubprocessResult?.(result);
+				settled = result;
+				sharedResult = result;
+				if (hooks?.beforeCapture || hooks?.afterResult) {
+					if (baseOptions.keepAlive === false || !AgentLifecycleManager.global().has(id)) {
+						await observeSharedResult(result);
+					}
+				}
 			} else {
 				result = await runIsolatedSubprocess({
 					baseOptions,
 					context: isolationContext,
+					preserveCwd: spawnOverrides?.preserveCwd,
 					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
 					agentId: id,
 					mergeMode: policy.mergeMode,
 					artifactsDir: lease.artifactsDir,
 					description: trimToUndefined(request.identity?.label),
 					buildCommitMessage: makeIsolationCommitMessage(request.session),
-					buildFailureResult: buildFailureResult(request, policy, id, Date.now()),
+					buildFailureResult: hooks?.onSpawnFailed
+						? error => {
+								// Live admission owners need real pre-result failures, not synthetic child outcomes.
+								if (!settled) throw error;
+								return buildFailureResult(request, policy, id, Date.now())(error);
+							}
+						: buildFailureResult(request, policy, id, Date.now()),
 					onSubprocessResult,
+					onBeforeCapture: hooks?.beforeCapture
+						? async result => {
+								if (!spawnFailed) await hooks.beforeCapture!(request, result);
+							}
+						: undefined,
+					onAfterResult: hooks?.afterResult
+						? async result => {
+								if (!spawnFailed) await hooks.afterResult!(request, result);
+							}
+						: undefined,
 				});
 			}
 		} finally {

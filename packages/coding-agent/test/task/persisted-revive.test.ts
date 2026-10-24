@@ -156,6 +156,7 @@ async function createPersistedSession(
 		readOnly?: boolean;
 		agent?: string;
 		isolated?: boolean;
+		requiresLiveHost?: boolean;
 		retryFallback?: RetryFallbackRole;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	},
@@ -174,6 +175,7 @@ async function createPersistedSession(
 		readOnly: contract?.readOnly,
 		agent: contract?.agent,
 		isolated: contract?.isolated,
+		requiresLiveHost: contract?.requiresLiveHost,
 		retryFallback: contract?.retryFallback,
 		...(contract?.compactionThreshold !== undefined
 			? { compactionThreshold: contract.compactionThreshold }
@@ -546,6 +548,18 @@ describe("persisted subagent revival", () => {
 		const ref = createRef(sessionFile);
 		const reviver = await createFactory(cwd)(ref);
 		expect(reviver).toBeUndefined();
+	});
+
+	it("leaves live-host-configured sessions transcript-only after process restart", async () => {
+		const cwd = makeTempDir("@pi-live-host-revive-");
+		const sessionFile = await createPersistedSession(cwd, true, undefined, undefined, {
+			tools: ["read", "write"],
+			requiresLiveHost: true,
+		});
+		const createSession = vi.spyOn(sdkModule, "createAgentSession");
+		const reviver = await createFactory(cwd)(createRef(sessionFile));
+		expect(reviver).toBeUndefined();
+		expect(createSession).not.toHaveBeenCalled();
 	});
 
 	it("restores the persisted agent definition name on cold revival so agent-scoped rules keep matching", async () => {

@@ -29,6 +29,12 @@ import { Settings } from "../../src/config/settings";
 import type { ToolSession } from "../../src/tools";
 
 const handler = new SkillProtocolHandler();
+// Keep tests runnable against the pre-cutover loader while exercising the approved signature.
+const loadControlledSkill = loadSpecDrivenSkill as (
+	source: "openspec" | "superpowers" | "jch",
+	name: string,
+	options?: { role?: "requirements" | "solution" | "planner" | "executor" | "reviewer" },
+) => Promise<Skill>;
 const temporary: string[] = [];
 afterEach(async () => {
 	resetActiveSkillsForTests();
@@ -69,7 +75,7 @@ async function fixture(): Promise<Skill> {
 }
 
 describe("pinned skill discovery and access", () => {
-	it("exposes referenced Superpowers skills without opening hidden entrypoints", async () => {
+	it("discovers exactly ten ordinary original skills without indexing controlled methods or hidden entrypoints", async () => {
 		const ordinaryNames = [
 			"writing-plans",
 			"subagent-driven-development",
@@ -95,7 +101,6 @@ describe("pinned skill discovery and access", () => {
 				.map(skill => skill.name)
 				.sort(),
 		).toEqual(ordinaryNames);
-		expect(discovered.all.filter(isHidden)).toHaveLength(18);
 		for (const skill of discovered.all) {
 			if (ordinaryNames.includes(skill.name)) {
 				expect(skill.frontmatter?.hide).not.toBe(true);
@@ -109,6 +114,9 @@ describe("pinned skill discovery and access", () => {
 		const skills = await Promise.all(
 			resources.manifest.skills.map(entry => loadSpecDrivenSkill(entry.source, entry.name)),
 		);
+		for (const discoveredSkill of discovered.all) {
+			expect(discoveredSkill.path).toBe(skills.find(skill => skill.name === discoveredSkill.name)!.filePath);
+		}
 		const prompt = await buildSystemPrompt({
 			skills,
 			toolNames: ["read"],
@@ -138,6 +146,113 @@ describe("pinned skill discovery and access", () => {
 				await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 				await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			}
+		}
+	});
+
+	it("opens hidden Grill-me and its metadata only after explicit current-branch invocation", async () => {
+		const skill = await loadControlledSkill("jch", "jch-grill-me");
+		setActiveSkills([skill]);
+		expect(await handler.complete()).toEqual([]);
+		const url = parseInternalUrl("skill://jch-grill-me");
+		const metadataUrl = parseInternalUrl("skill://jch-grill-me/agents/openai.yaml");
+		const context = { skills: [skill], getSessionBranch: () => [] };
+		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		await expect(handler.locate(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
+		const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
+		expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
+		const metadataPath = path.join(skill.baseDir, "agents", "openai.yaml");
+		expect(await handler.locate(metadataUrl, authorized)).toBe(metadataPath);
+		expect((await handler.resolve(metadataUrl, authorized)).content).toBe(await fs.readFile(metadataPath, "utf8"));
+		await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+	});
+
+	it("resolves adapted SDD references and scripts inside the granted effective branch, never the ordinary tree", async () => {
+		const ordinary = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+		const effective = await loadControlledSkill("superpowers", ordinary.name, { role: "executor" });
+		expect(effective.filePath).not.toBe(ordinary.filePath);
+		const session: ToolSession = {
+			cwd: os.tmpdir(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+		const end = bindSpecSkillPolicy(session, { phase: "executor", allowedSkills: [effective.name] });
+		const revoke = grantSpecSkillAccess(session, effective);
+		try {
+			for (const relative of [
+				"SKILL.md",
+				"references/fix-loop.md",
+				"references/final-review.md",
+				"scripts/review-package",
+			]) {
+				const url = parseInternalUrl(`skill://${effective.name}/${relative}`);
+				const context = { session, skills: [ordinary] };
+				const located = await handler.locate(url, context);
+				expect(located).toBe(path.join(effective.baseDir, relative));
+				expect(located).not.toBe(path.join(ordinary.baseDir, relative));
+			}
+			for (const relative of ["references/fix-loop.md", "references/final-review.md"]) {
+				expect(
+					(await fs.readFile(path.join(effective.baseDir, relative))).equals(
+						await fs.readFile(path.join(ordinary.baseDir, relative)),
+					),
+				).toBe(false);
+			}
+		} finally {
+			revoke();
+			end();
+		}
+	});
+
+	it("denies phase-incompatible effective loading and invocation without leaking grants into solution or another session", async () => {
+		const session: ToolSession = {
+			cwd: os.tmpdir(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+		const allowed = await loadControlledSkill("jch", "jch-grill-me", { role: "requirements" });
+		const endRequirements = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: [allowed.name] });
+		const revoke = grantSpecSkillAccess(session, allowed);
+		const url = parseInternalUrl(`skill://${allowed.name}`);
+		try {
+			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
+			await expect(handler.resolve(url, { session: { ...session }, skills: [allowed] })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
+			);
+			const endSolution = bindSpecSkillPolicy(session, { phase: "solution", allowedSkills: [] });
+			try {
+				// A stale disposer must not restore the requirements grant or remove the replacement policy.
+				endRequirements();
+				for (const [source, name] of [
+					["jch", "jch-grill-me"],
+					["superpowers", "brainstorming"],
+					["superpowers", "writing-plans"],
+					["superpowers", "subagent-driven-development"],
+				] as const) {
+					await expect(loadControlledSkill(source, name, { role: "solution" })).rejects.toThrow();
+				}
+				await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
+					SkillAccessDeniedError,
+				);
+				await expect(handler.locate(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
+					SkillAccessDeniedError,
+				);
+				await expect(
+					buildSkillPromptMessage(allowed, { args: "" }, "autoload", { scope: session }),
+				).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			} finally {
+				endSolution();
+			}
+			await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
+			);
+		} finally {
+			revoke();
+			endRequirements();
 		}
 	});
 

@@ -1,4 +1,7 @@
 import type { SpecPatch } from "./artifacts";
+import type { SpecNativePublication, SpecNativeSource } from "./git";
+
+export type SpecStageRole = "requirements" | "solution" | "planner" | "executor";
 
 export type SpecDrivenPhase =
 	| "idle"
@@ -24,6 +27,7 @@ export interface SpecDocument {
 	content: string;
 }
 export interface SpecRequirementsDraft {
+	document: SpecDocument;
 	proposal: string;
 	specs: SpecDocument[];
 	/** Stable Requirement IDs and their exact source text; used to retain unrelated task work. */
@@ -40,6 +44,8 @@ export interface SpecCondition {
 	id: string;
 	description: string;
 	command: string;
+	/** Existing prerequisite inputs, approved independently of files that dependent tasks will create. */
+	inputPaths: string[];
 }
 export interface SpecCandidate {
 	id: string;
@@ -52,6 +58,24 @@ export interface SpecCandidate {
 	unresolvedBlocking: Array<{ id: string; evidence: string }>;
 	exclusionReason?: string;
 	conditions: Array<{ id: string; description: string; command?: string }>;
+}
+export interface SpecSolutionDraft {
+	specificationVersion: string;
+	runId: string;
+	candidateId: string;
+	candidateVersion: string;
+	proposal: string;
+	conditions: SpecCandidate["conditions"];
+}
+export interface SpecSolution extends SpecSolutionDraft {
+	version: string;
+	artifactVersion: string;
+}
+export interface SpecValidation {
+	id: string;
+	command: string;
+	behavior: string;
+	inputPaths: string[];
 }
 export interface SpecTeamResult {
 	runId: string;
@@ -73,14 +97,15 @@ export interface SpecTask {
 	implementationPaths: string[];
 	/** Explicit interface/state contract. Changes invalidate this task even when its prose is unchanged. */
 	solutionBinding: string;
-	validation: Array<{ id: string; command: string; behavior: string }>;
+	validation: SpecValidation[];
 	tdd: { mode: "required"; behavior: string } | { mode: "exception"; reason: string; alternativeCommands: string[] };
 }
 export interface SpecPlanDraft {
 	content: string;
+	workspace: { executionPath: string; isolation: "none" | "native"; integration: "native" };
 	tasks: SpecTask[];
 	conditions: SpecCondition[];
-	finalValidation: Array<{ id: string; command: string; behavior: string; realEntry: boolean }>;
+	finalValidation: Array<SpecValidation & { realEntry: boolean }>;
 	closure: { sync: boolean; archive: boolean };
 }
 export interface SpecPlan extends SpecPlanDraft {
@@ -89,6 +114,7 @@ export interface SpecPlan extends SpecPlanDraft {
 	artifactVersion: string;
 	specificationVersion: string;
 	candidateVersion: string;
+	solutionVersion: string;
 }
 export interface SpecFinding {
 	id: string;
@@ -117,6 +143,34 @@ export interface SpecReviewSlot {
 	lastReview?: SpecReview;
 	reviewedRevision?: number;
 }
+export interface SpecEvidenceBinding {
+	actorId: string;
+	taskId: string | null;
+	workspace: string;
+	specificationVersion: string;
+	planVersion: string;
+}
+export interface SpecInputIdentity {
+	id: string;
+	runId: string;
+	generation: number;
+	binding: SpecEvidenceBinding;
+	inputPaths: string[];
+	entries: Array<{
+		path: string;
+		canonicalPath: string;
+		kind: "file" | "directory" | "missing";
+		digest?: string;
+		members?: string[];
+	}>;
+	version: string;
+	complete: boolean;
+}
+export interface SpecEvidenceInputs {
+	inputPaths: readonly string[];
+	/** Distinguishes independent obligations owned by the same task. */
+	validationId: string;
+}
 /** Captured by the trusted native runner, NEVER parsed from a model's yielded JSON. */
 export interface SpecToolRecord {
 	id: string;
@@ -127,7 +181,29 @@ export interface SpecToolRecord {
 	args: { command: string; cwd: string };
 	startedAt: number;
 	finishedAt: number;
-	result: { exitCode: number; stdout: string; stderr: string; isError: boolean };
+	binding: SpecEvidenceBinding | null;
+	inputsBefore: SpecInputIdentity | null;
+	inputsAfter: SpecInputIdentity | null;
+	conditions: {
+		platform: NodeJS.Platform;
+		shell: string;
+		runtime: string;
+		runtimeVersion: string;
+		inputCaptureError?: string;
+	};
+	obligation: {
+		validationId: string;
+		approvedCommand: string;
+		reason: string | null;
+		stage?: "red" | "green";
+	} | null;
+	result: {
+		status: "completed" | "cancelled" | "unknown";
+		exitCode: number | null;
+		stdout: string;
+		stderr: string;
+		isError: boolean;
+	};
 	artifact: { path: string; version: string };
 }
 export interface SpecExecution {
@@ -138,6 +214,8 @@ export interface SpecExecution {
 	/** Time of the first implementation write, from native tool capture. */
 	implementationStartedAt: number | null;
 	requestedTddException: string | null;
+	/** Actual owned-file content identity; runtime supplies it even for tasks without TDD records. */
+	contentVersion?: string;
 }
 export interface SpecCommitRange {
 	base: string;
@@ -160,6 +238,36 @@ export interface SpecTaskState {
 	repairReview?: SpecReview;
 	validatedIds?: string[];
 }
+export interface SpecExecutionControl {
+	status(): SpecTaskState[];
+	start(taskId: string): Promise<SpecTask>;
+	checkpoint(taskId: string, execution: SpecExecution): Promise<SpecTaskState>;
+}
+export interface SpecReviewArtifact {
+	slotId: string;
+	actorId: string;
+	sessionId: string | null;
+	model: string | null;
+	path: string;
+	version: string;
+}
+export interface SpecGitEvidence {
+	baselines: Array<{
+		planVersion: string;
+		workspace: string;
+		head: string;
+		status: string;
+		dirtyPaths: string[];
+		observedAt: number;
+	}>;
+	current: {
+		workspace: string;
+		head: string | null;
+		status: string | null;
+		observedAt: number;
+		error?: string;
+	} | null;
+}
 export interface SpecDrivenStatus {
 	phase: SpecDrivenPhase;
 	paused: boolean;
@@ -168,10 +276,16 @@ export interface SpecDrivenStatus {
 	changeId?: string;
 	specification?: SpecRequirements;
 	plan?: SpecPlan;
+	solution?: SpecSolution;
 	team?: SpecTeamResult;
 	selection?: { runId: string; candidateId: string; candidateVersion: string };
 	specificationApproval?: string;
 	planApproval?: string;
+	executionMode?: "normal" | "goal";
+	handoffs?: SpecHandoff[];
+	executionEvidence?: { sources: SpecNativeSource[]; publications: SpecNativePublication[] };
+	reviewArtifacts?: SpecReviewArtifact[];
+	gitEvidence?: SpecGitEvidence;
 	acceptanceVersion?: string;
 	finalApproval?: string;
 	questions: string[];
@@ -184,11 +298,37 @@ export interface SpecRunContext {
 	generation: number;
 	signal: AbortSignal;
 }
+
+export interface SpecActorInput {
+	documents: SpecDocument[];
+	handoff?: SpecHandoff;
+	payload: unknown;
+}
+export type SpecHandoffTransition = "requirements-to-solution" | "solution-to-plan" | "plan-to-execution";
+export interface SpecHandoffInput {
+	transition: SpecHandoffTransition;
+	documents: (SpecDocument & { version: string })[];
+	decision: unknown;
+	path: string;
+}
+export interface SpecHandoff {
+	actorId: string;
+	sessionId: string;
+	role: SpecStageRole;
+	runId: string;
+	generation: number;
+	transition: SpecHandoffTransition;
+	path: string;
+	digest: string;
+	body: string;
+	versions: Record<string, string>;
+}
 export interface SpecReviewInput {
 	kind: SpecReviewKind;
 	slot: SpecReviewSlot;
 	specification: SpecRequirements;
 	plan?: SpecPlan;
+	solution?: SpecSolution;
 	task?: SpecTask;
 	execution?: SpecExecution;
 	records: SpecToolRecord[];
@@ -197,11 +337,23 @@ export interface SpecReviewInput {
 	previous?: SpecReview;
 }
 export interface SpecDrivenPorts {
+	handoff(
+		input: {
+			transition: SpecHandoffTransition;
+			specification: SpecRequirements;
+			solution?: SpecSolution;
+			plan?: SpecPlan;
+			decision: unknown;
+		},
+		context: SpecRunContext,
+	): Promise<SpecHandoff>;
 	artifacts: {
 		initialize(changeId: string, context: SpecRunContext): Promise<void>;
 		writeRequirements(draft: SpecRequirementsDraft, context: SpecRunContext): Promise<{ version: string }>;
 		readRequirements(context: SpecRunContext): Promise<{ version: string }>;
 		validateRequirements(context: SpecRunContext): Promise<void>;
+		writeSolution(draft: SpecSolutionDraft, context: SpecRunContext): Promise<{ version: string }>;
+		readSolution(context: SpecRunContext): Promise<{ version: string }>;
 		writePlan(draft: SpecPlanDraft, context: SpecRunContext): Promise<{ version: string }>;
 		readPlan(context: SpecRunContext): Promise<{ version: string }>;
 		/** Must atomically recheck approved source identities before sync/archive. */
@@ -221,19 +373,26 @@ export interface SpecDrivenPorts {
 			context: SpecRunContext,
 		): Promise<unknown>;
 		plan(
-			input: { specification: SpecRequirements; candidate: SpecCandidate; previous?: SpecPlan; review?: SpecReview },
+			input: {
+				specification: SpecRequirements;
+				candidate: SpecCandidate;
+				solution: SpecSolution;
+				previous?: SpecPlan;
+				review?: SpecReview;
+			},
 			context: SpecRunContext,
 		): Promise<unknown>;
 		execute(
 			input: {
 				specification: SpecRequirements;
 				plan: SpecPlan;
-				task: SpecTask;
-				review?: SpecReview;
-				revision: number;
+				solution: SpecSolution;
+				tasks: SpecTaskState[];
+				mode: "normal" | "goal";
 			},
 			context: SpecRunContext,
-		): Promise<SpecExecution>;
+			control: SpecExecutionControl,
+		): Promise<void>;
 		review(input: SpecReviewInput, context: SpecRunContext): Promise<unknown>;
 	};
 	team: {
@@ -250,7 +409,11 @@ export interface SpecDrivenPorts {
 		): Promise<SpecCommitRange>;
 	};
 	/** Execution records live in a runner-owned ledger. Model output can reference but cannot insert them. */
-	evidence: { read(ids: readonly string[], context: SpecRunContext): Promise<SpecToolRecord[]> };
+	evidence: {
+		read(ids: readonly string[], context: SpecRunContext): Promise<SpecToolRecord[]>;
+		revalidate(context: SpecRunContext): Promise<{ taskIds: string[]; reasons: string[]; overall: boolean }>;
+		flush(status: SpecDrivenStatus, context: SpecRunContext): Promise<void>;
+	};
 	validation: {
 		run(
 			input: { command: string; purpose: "condition" | "task" | "final"; id: string },

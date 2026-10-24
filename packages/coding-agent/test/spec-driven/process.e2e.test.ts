@@ -13,13 +13,19 @@ import {
 	v4ConversationRowsRangeResultSchema,
 } from "../../src/modes/zcode/schema";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
+import type { Skill } from "../../src/extensibility/skills";
+import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
 	CHANGE_ID,
 	contentText,
 	createProviderFixture,
 	IMPLEMENTATION_PATH,
+	HANDOFF_MARKER,
 	MARKER,
+	isNativeHandoff,
 	type ModelRequest,
+	type ProviderFixture,
+	respond,
 	REQUIREMENT,
 	rolePayload,
 	TEST_PATH,
@@ -68,6 +74,87 @@ function test(name: string, body: () => Promise<void>, budget: number): void {
 		budget,
 	);
 }
+function executorToolDiagnostics(request: ModelRequest | undefined): unknown[] {
+	if (!request) return [];
+	const input = rolePayload(request)?.input;
+	const latestInput = request.messages.findLastIndex(
+		message =>
+			message.role === "user" && rolePayload({ ...request, messages: [message] })?.specDrivenRole === "executor",
+	);
+	const tasks = Array.isArray(input?.tasks) ? input.tasks : [];
+	const projection = {
+		latestInput,
+		messageCount: request.messages.length,
+		tasks: tasks.map(task =>
+			isRecord(task)
+				? {
+						id: task.id,
+						status: task.status,
+						execution: isRecord(task.execution)
+							? {
+									redRecordId: task.execution.redRecordId,
+									greenRecordId: task.execution.greenRecordId,
+									recordIds: task.execution.recordIds,
+								}
+							: null,
+						recordCount: Array.isArray(task.records) ? task.records.length : null,
+					}
+				: null,
+		),
+	};
+	return [
+		projection,
+		...request.messages
+			.flatMap(message => message.tool_calls ?? [])
+			.slice(-30)
+			.map(call => {
+				if (!isRecord(call) || !isRecord(call.function) || typeof call.function.arguments !== "string")
+					return { malformed: true };
+				const args: unknown = JSON.parse(call.function.arguments);
+				const response = request.messages.find(
+					message => message.role === "tool" && message.tool_call_id === call.id,
+				);
+				const raw = contentText(response?.content);
+				let outcome: unknown = raw.slice(0, 1_400);
+				try {
+					const value: unknown = JSON.parse(raw);
+					if (isRecord(value)) {
+						const task = isRecord(value.task) ? { id: value.task.id, status: value.task.status } : undefined;
+						outcome = {
+							task,
+							id: value.id,
+							result: value.result,
+							obligation: value.obligation,
+							binding: value.binding,
+							inputsBefore: isRecord(value.inputsBefore) ? value.inputsBefore.version : undefined,
+							inputsAfter: isRecord(value.inputsAfter) ? value.inputsAfter.version : undefined,
+						};
+					}
+				} catch {
+					/* Native text errors remain useful without inventing structured success. */
+				}
+				return {
+					id: call.id,
+					name: call.function.name,
+					args: isRecord(args)
+						? {
+								action: args.action,
+								taskId: args.taskId,
+								validationId: args.validationId,
+								stage: args.stage,
+								path: args.path,
+								writeContent:
+									typeof args.content === "string"
+										? { length: args.content.length, includesBroken: args.content.includes("BROKEN") }
+										: undefined,
+							}
+						: args,
+					outcome,
+				};
+			}),
+	];
+}
+
 class PublicPeer {
 	readonly child: Subprocess<"pipe", "pipe", "pipe">;
 	readonly seen: Frame[] = [];
@@ -79,6 +166,7 @@ class PublicPeer {
 	#pump: Promise<void>;
 	#currentCommand?: Frame;
 	#currentPhase?: Frame;
+	#currentPhaseText?: string;
 	#waiting?: string;
 	#stderrText = "";
 	#observed: Frame[] = [];
@@ -96,13 +184,20 @@ class PublicPeer {
 		caseDiagnostics.getStore()?.push(() => ({
 			command: this.#currentCommand,
 			phase: this.#currentPhase,
+			phaseText: this.#currentPhaseText,
+			phaseTextTail: this.#currentPhaseText?.slice(-4_000),
 			waiting: this.#waiting,
 			providerFailures: provider.failures.slice(-12),
+			executorTools: executorToolDiagnostics(
+				provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor"),
+			),
 			providerRequests: provider.requests.slice(-8).map(request => ({
 				model: request.model,
 				role: rolePayload(request)?.specDrivenRole,
 				kind: rolePayload(request)?.input.kind,
 				tools: request.tools?.map(tool => tool.function?.name),
+				nativeHandoff: isNativeHandoff(request),
+				lastUser: contentText(request.messages.findLast(message => message.role === "user")?.content),
 				messages: request.messages.slice(-4).map(message => ({
 					role: message.role,
 					toolCalls: message.tool_calls,
@@ -232,47 +327,59 @@ class PublicPeer {
 		).toMatchObject({ status: "accepted" });
 		return since;
 	}
-	async phase(sessionId: string, phase: string, since: number): Promise<{ state: Frame; text: string }> {
+	async phase(
+		sessionId: string,
+		phase: string | readonly string[],
+		since: number,
+		allowStopped = false,
+		requireStopped = false,
+	): Promise<{ state: Frame; text: string }> {
+		const expected = typeof phase === "string" ? [phase] : phase;
 		this.#waiting = `session ${sessionId} phase ${phase}`;
 		let observed: { state: Frame; text: string } | undefined;
 		await this.next(item => {
-			if (!isConversation(item, sessionId) || !isRecord(item.params)) return false;
-			// assembler 已将 wire envelope 解成 logical frame，params 本身就是帧；
-			// 再读 params.frame 会漏掉全部当前状态增量，永久等待已发布的阶段。
-			const frame = item.params;
-			if (!isRecord(frame.payload) || frame.payload.kind !== "deltas") return false;
-			if (!Array.isArray(frame.payload.deltas)) return false;
-			// Snapshot/history text is not a new command result. Observe only newly
-			// published status rows, retaining the greatest row ID across commands.
-			let latest: { rowId: number; state: Frame; text: string } | undefined;
-			for (const delta of frame.payload.deltas) {
-				if (!isRecord(delta) || (delta.op !== "row.appended" && delta.op !== "row.upserted")) continue;
-				const row = delta.row;
-				if (!isRecord(row) || row.kind !== "assistantText" || typeof row.text !== "string") continue;
-				if (typeof row.rowId !== "number" || row.rowId <= (this.#statusRowIds.get(sessionId) ?? 0)) continue;
-				const state = statusLines(row.text).at(-1);
-				if (state && (!latest || row.rowId >= latest.rowId)) latest = { rowId: row.rowId, state, text: row.text };
-			}
+			const latest = publishedStatus(item, sessionId, this.#statusRowIds.get(sessionId) ?? 0);
 			if (!latest) return false;
 			this.#statusRowIds.set(sessionId, latest.rowId);
 			this.#currentPhase = latest.state;
+			this.#currentPhaseText = latest.text;
 			const state = latest.state;
 			// A refused stale command can report a reason while leaving the workflow
 			// active at its gate. Real workflow pauses and terminal failures still fail fast.
 			// /spec cancel 的终态自身带 paused；仅该明确请求的终态可以通过，
 			// 执行中的真实暂停仍立即失败，并保留状态正文里的阻塞原因。
 			if (
-				(state.paused === true && !(phase === "cancelled" && state.phase === "cancelled")) ||
-				state.phase === "failed" ||
-				state.phase === "blocked"
+				(state.paused === true &&
+					!(expected.includes("cancelled") && state.phase === "cancelled") &&
+					!allowStopped) ||
+				((state.phase === "failed" || state.phase === "blocked") && !expected.includes(String(state.phase)))
 			)
 				throw new Error(`Workflow stopped before ${phase}: ${bounded({ state, text: latest.text })}`);
-			if (state.phase !== phase) return false;
+			// 初始 gate-status 和运行中阶段不是本条命令的停止结果。
+			if (requireStopped && !isStoppedStatus(state)) return false;
+			if (!expected.includes(String(state.phase))) return false;
 			observed = { state, text: latest.text };
 			return true;
 		}, since);
 		if (!observed) throw new Error(`No current public status for ${phase}`);
 		this.#waiting = undefined;
+		return observed;
+	}
+	async stopped(sessionId: string, since: number): Promise<{ state: Frame; text: string }> {
+		// Observe without consuming phase()'s row cursor: the later pause/cancel
+		// command must still read its own published result.
+		const minimumRowId = this.#statusRowIds.get(sessionId) ?? 0;
+		let observed: { state: Frame; text: string } | undefined;
+		await this.next(item => {
+			const latest = publishedStatus(item, sessionId, minimumRowId);
+			if (!latest) return false;
+			this.#currentPhase = latest.state;
+			this.#currentPhaseText = latest.text;
+			if (!isStoppedStatus(latest.state)) return false;
+			observed = latest;
+			return true;
+		}, since);
+		if (!observed) throw new Error("No stopped command result");
 		return observed;
 	}
 	async [Symbol.asyncDispose](): Promise<void> {
@@ -299,6 +406,40 @@ function statusLines(text: string): Frame[] {
 		}
 	});
 }
+function isStoppedStatus(state: Frame): boolean {
+	return (
+		state.paused === true ||
+		[
+			"awaiting-choice",
+			"awaiting-plan",
+			"awaiting-acceptance",
+			"completed",
+			"cancelled",
+			"blocked",
+			"failed",
+		].includes(String(state.phase))
+	);
+}
+function publishedStatus(
+	item: Frame,
+	sessionId: string,
+	minimumRowId: number,
+): { rowId: number; state: Frame; text: string } | undefined {
+	if (!isConversation(item, sessionId) || !isRecord(item.params)) return undefined;
+	const frame = item.params;
+	if (!isRecord(frame.payload) || frame.payload.kind !== "deltas" || !Array.isArray(frame.payload.deltas))
+		return undefined;
+	let latest: { rowId: number; state: Frame; text: string } | undefined;
+	for (const delta of frame.payload.deltas) {
+		if (!isRecord(delta) || (delta.op !== "row.appended" && delta.op !== "row.upserted")) continue;
+		const row = delta.row;
+		if (!isRecord(row) || row.kind !== "assistantText" || typeof row.text !== "string") continue;
+		if (typeof row.rowId !== "number" || row.rowId <= minimumRowId) continue;
+		const state = statusLines(row.text).at(-1);
+		if (state && (!latest || row.rowId >= latest.rowId)) latest = { rowId: row.rowId, state, text: row.text };
+	}
+	return latest;
+}
 function isConversation(frame: Frame, sessionId: string): boolean {
 	return (
 		frame.method === "v4/conversation/frame" &&
@@ -317,11 +458,11 @@ async function fixture(root: TempDir, baseUrl: string) {
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n      - id: chat-b\n        reasoning: false\n`,
+		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 200000\n`,
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\n",
+		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nasync:\n  enabled: false\ntask:\n  batch: true\n  isolation:\n    enabled: true\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,
@@ -383,155 +524,742 @@ function commandFrom(text: string, command: string): string {
 	return line;
 }
 
-describe("spec-driven actual OMP public entry", () => {
-	test(
-		"strict decisions drive native Team, real TDD, task commits, independent reviews, final entry and authorized archive",
-		async () => {
-			await using root = await TempDir.create("@omp-spec-public-");
-			await using provider = createProviderFixture();
-			const config = await fixture(root, provider.baseUrl);
-			// Unrelated staged, unstaged and new user material must survive workflow publication.
-			await fs.writeFile(path.join(config.cwd, "user-staged.txt"), "user staged\n");
-			await git(config.cwd, config.env, ["add", "user-staged.txt"]);
-			await fs.appendFile(path.join(config.cwd, "baseline.txt"), "user unstaged\n");
-			await fs.writeFile(path.join(config.cwd, "user-new.txt"), "user untracked\n");
-			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
-			await using peer = new PublicPeer(config.cwd, config.env, provider);
-			await peer.ready();
-			const session = await peer.create(config.cwd);
-			const first = await peer.send(
-				session,
-				`/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
-			);
-			const specification = await peer.phase(session, "awaiting-specification", first);
-			expect(
-				provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
-			).toBe(false);
-			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			await absent(config.cwd, TEST_PATH);
-			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/design.md`);
-			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/tasks.md`);
-			const stale = await peer.send(session, "/spec confirm-spec obsolete-version");
-			const rejected = await peer.phase(session, "awaiting-specification", stale);
-			expect(rejected.state.specificationVersion).toBe(specification.state.specificationVersion);
-			expect(
-				provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
-			).toBe(false);
-			expect(rejected.state.planVersion).toBeUndefined();
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			await absent(config.cwd, TEST_PATH);
-			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`);
-			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
-			const discussionStart = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
-			const choice = await peer.phase(session, "awaiting-choice", discussionStart);
-			expect(choice.state.runId).toBeString();
-			expect(
-				provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
-					.length,
-			).toBeGreaterThanOrEqual(2);
-			expect(choice.text).toContain('"adoptable":true');
-			expect(choice.text).toContain('"reviewSucceeded":true');
-			expect(choice.text).toContain('"recheckSucceeded":true');
-			const planStart = await peer.send(session, commandFrom(choice.text, "choose"));
-			const plan = await peer.phase(session, "awaiting-plan", planStart);
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			await absent(config.cwd, TEST_PATH);
-			expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
-			expect(await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`), "utf8")).toContain(
-				"T001",
-			);
-			await absent(config.cwd, "docs/superpowers/plans");
-			const badPlan = await peer.send(session, "/spec confirm-plan obsolete-version");
-			await peer.phase(session, "awaiting-plan", badPlan);
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			const executing = await peer.send(session, commandFrom(plan.text, "confirm-plan"));
-			const acceptance = await peer.phase(session, "awaiting-acceptance", executing);
-			const published = await git(config.cwd, config.env, ["log", "--format=%H", `${baseline}..HEAD`]);
-			expect(published.split("\n").length).toBeGreaterThanOrEqual(1);
-			const committedFiles = (await git(config.cwd, config.env, ["diff", "--name-only", `${baseline}..HEAD`])).split(
-				"\n",
-			);
-			expect(committedFiles).toContain(IMPLEMENTATION_PATH);
-			expect(committedFiles).toContain(TEST_PATH);
-			expect(committedFiles).not.toContain("user-staged.txt");
-			expect(committedFiles).not.toContain("user-new.txt");
-			expect(committedFiles).not.toContain("baseline.txt");
-			expect(await git(config.cwd, config.env, ["diff", "--cached", "--name-only"])).toBe("user-staged.txt");
-			expect(await fs.readFile(path.join(config.cwd, "baseline.txt"), "utf8")).toContain("user unstaged");
-			expect(await fs.readFile(path.join(config.cwd, "user-new.txt"), "utf8")).toBe("user untracked\n");
-			// Auxiliary task labels quote role input but do not run a reviewer.
-			const reviewRequests = provider.requests.filter(
-				request =>
-					rolePayload(request)?.specDrivenRole === "reviewer" &&
-					request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "yield"),
-			);
-			const reviewerInputs = reviewRequests.map(rolePayload);
-			for (const kind of ["requirements", "plan", "task", "overall"]) {
-				const inputs = reviewerInputs.filter(payload => payload?.input.kind === kind);
-				expect(inputs.length).toBeGreaterThan(0);
-				// Multiple HTTP rounds are tool continuations, not additional review seats.
-				const initial = reviewRequests.filter(
-					request =>
-						rolePayload(request)?.input.kind === kind &&
-						request.messages.every(message => message.role !== "tool"),
-				);
-				expect(initial).toHaveLength(1);
-			}
-			const taskReview = reviewerInputs.find(payload => payload?.input.kind === "task")!;
-			const taskEvidence = JSON.stringify(taskReview.input);
-			expect(taskEvidence).toContain("Hello, Ada!");
-			expect(taskEvidence).toContain("3 pass");
-			expect(taskEvidence).toMatch(/3 fail|Expected:|expect\\?\(received/u);
-			expect(taskEvidence).toContain("toolCallId");
-			expect(taskEvidence).toContain("base");
-			expect(taskEvidence).toContain("head");
-			expect(taskEvidence).toContain("review");
-			const ranges = taskReview.input.commits;
-			expect(Array.isArray(ranges)).toBe(true);
-			if (!Array.isArray(ranges) || !ranges.length) throw new Error("Task review has no actual commit range");
-			for (const range of ranges) {
-				if (
-					!isRecord(range) ||
-					typeof range.base !== "string" ||
-					typeof range.head !== "string" ||
-					typeof range.reviewPackage !== "string"
-				)
-					throw new Error("Invalid actual review-package binding");
-				expect(range.base).toMatch(/^[a-f0-9]{40}$/u);
-				expect(range.head).toMatch(/^[a-f0-9]{40}$/u);
-				expect(range.head).not.toBe(range.base);
-				const packageContent = range.reviewPackage;
-				expect(packageContent).toContain(IMPLEMENTATION_PATH);
-				expect(packageContent).toContain(TEST_PATH);
-				expect(packageContent).toContain("export function greet");
-				expect(packageContent).not.toContain("user-staged.txt");
-				expect(packageContent).not.toContain("user-new.txt");
-			}
-			const overall = reviewerInputs.find(payload => payload?.input.kind === "overall")!;
-			expect(JSON.stringify(overall.input)).toContain("real-bun-entry");
-			expect(JSON.stringify(overall.input)).toContain("3 pass");
-			// A separate observation through the approved executable entry, not a model claim.
-			const actual = await run(config.cwd, config.env, [process.execPath, "test", TEST_PATH]);
-			expect(actual.exitCode).toBe(0);
-			expect(`${actual.stdout}\n${actual.stderr}`).toContain("3 pass");
-			expect(await Bun.file(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`)).exists()).toBe(true);
-			await absent(config.cwd, "openspec/specs/greeting/spec.md");
-			const badAcceptance = await peer.send(session, "/spec accept obsolete-version");
-			await peer.phase(session, "awaiting-acceptance", badAcceptance);
-			await absent(config.cwd, "openspec/specs/greeting/spec.md");
-			const final = await peer.send(session, commandFrom(acceptance.text, "accept"));
-			await peer.phase(session, "completed", final);
-			expect(await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
-				"Normalized greeting",
-			);
-			await absent(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`);
-			const archive = await fs.readdir(path.join(config.cwd, "openspec/changes/archive"));
-			expect(archive.filter(name => name.endsWith(`-${CHANGE_ID}`))).toHaveLength(1);
-			expect(provider.failures).toEqual([]);
-		},
-		GATE_BUDGET,
+async function assertNativeTransition(
+	provider: ProviderFixture,
+	cwd: string,
+	ordinal: number,
+	producer: string,
+	successor: string,
+	formalPath: string,
+	decision: string,
+) {
+	expect(provider.handoffs).toHaveLength(ordinal);
+	const handoff = provider.handoffs[ordinal - 1]!;
+	expect(rolePayload(handoff)?.specDrivenRole).toBe(producer);
+	const incoming = handoff.messages.map(message => contentText(message.content)).join("\n");
+	const formal = await fs.readFile(path.join(cwd, formalPath), "utf8");
+	expect(incoming.includes(formal) || incoming.includes(JSON.stringify(formal).slice(1, -1))).toBe(true);
+	expect(incoming).toContain(decision);
+	const successorRequest = provider.requests.find(
+		request => (request.tools?.length ?? 0) > 0 && rolePayload(request)?.specDrivenRole === successor,
 	);
+	expect(successorRequest).toBeDefined();
+	expect(provider.requests.indexOf(successorRequest!)).toBeGreaterThan(provider.requests.indexOf(handoff));
+	const successorInput = successorRequest!.messages
+		.filter(message => message.role === "user")
+		.map(message => contentText(message.content))
+		.join("\n");
+	expect(successorInput).toContain(`${HANDOFF_MARKER}-${ordinal}`);
+	const nativeBody = `${respond(handoff).text}\n\nNative response identity: ${HANDOFF_MARKER}-${ordinal}`;
+	expect(successorInput.includes(nativeBody) || successorInput.includes(JSON.stringify(nativeBody).slice(1, -1))).toBe(
+		true,
+	);
+	expect(successorInput.includes(formal) || successorInput.includes(JSON.stringify(formal).slice(1, -1))).toBe(true);
+	const names = ["requirements-to-solution", "solution-to-plan", "plan-to-execution"];
+	const persisted = await fs.readFile(
+		path.join(cwd, `openspec/changes/${CHANGE_ID}/handoffs/${names[ordinal - 1]}.md`),
+		"utf8",
+	);
+	expect(persisted.trim()).toBe(nativeBody.trim());
+}
+
+async function assertFixedRoleSystems(requests: ModelRequest[]) {
+	const controlled = loadSpecDrivenSkill as (
+		source: "superpowers" | "jch",
+		name: string,
+		options: { role: "requirements" | "planner" | "executor" },
+	) => Promise<Skill>;
+	const required = {
+		requirements: [
+			["superpowers", "brainstorming"],
+			["jch", "jch-grill-me"],
+		],
+		planner: [["superpowers", "writing-plans"]],
+		executor: [
+			["superpowers", "subagent-driven-development"],
+			["superpowers", "test-driven-development"],
+			["superpowers", "systematic-debugging"],
+			["superpowers", "verification-before-completion"],
+			["superpowers", "requesting-code-review"],
+		],
+	} as const;
+	const systems = new Map<string, string>();
+	for (const role of ["requirements", "solution", "planner", "executor"] as const) {
+		const turns = requests.filter(
+			request => (request.tools?.length ?? 0) > 0 && rolePayload(request)?.specDrivenRole === role,
+		);
+		expect(turns.length).toBeGreaterThan(0);
+		for (const request of turns) {
+			const system = request.messages
+				.filter(message => message.role === "system")
+				.map(message => contentText(message.content))
+				.join("\n");
+			expect(system).not.toContain(REQUIREMENT);
+			expect(system).not.toContain(HANDOFF_MARKER);
+			systems.set(role, system);
+			if (role === "solution") {
+				// No upstream skill is invented for this actor: its fixed authority
+				// organizes native OMP Team and keeps the user in charge of selection.
+				expect(system).toMatch(/(?:existing|native|原生).*Team|Team.*(?:existing|native|原生)/isu);
+				expect(system).toMatch(/candidate|候选/iu);
+				expect(system).toMatch(/(?:user|用户).*(?:select|choose|选择)|(?:selection|选择).*(?:user|用户)/isu);
+				continue;
+			}
+			for (const [source, name] of required[role]) {
+				const skill = await controlled(source, name, { role });
+				const body = (await fs.readFile(skill.filePath, "utf8"))
+					.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "")
+					.trim();
+				expect(body.length).toBeGreaterThan(100);
+				expect(system).toContain(body);
+			}
+		}
+	}
+	expect(new Set(systems.values()).size).toBe(4);
+}
+
+async function assertNativeImplementationMethods(requests: ModelRequest[]) {
+	const names = [
+		"subagent-driven-development",
+		"test-driven-development",
+		"systematic-debugging",
+		"verification-before-completion",
+		"requesting-code-review",
+	];
+	const methods = await Promise.all(
+		names.map(async name => {
+			const skill = await loadSpecDrivenSkill("superpowers", name, { role: "executor" });
+			const body = (await fs.readFile(skill.filePath, "utf8")).replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u, "").trim();
+			return { name, body, allowed: name !== "subagent-driven-development" && name !== "requesting-code-review" };
+		}),
+	);
+	const children = requests.filter(
+		request =>
+			(request.tools?.length ?? 0) > 0 &&
+			request.messages.some(
+				message => message.role === "user" && /OMP_SPEC_CHILD_TASK T00[23]/u.test(contentText(message.content)),
+			) &&
+			rolePayload(request)?.specDrivenRole !== "executor",
+	);
+	expect(children.length).toBeGreaterThan(0);
+	for (const request of children) {
+		const system = request.messages
+			.filter(message => message.role === "system")
+			.map(message => contentText(message.content))
+			.join("\n");
+		const methodInventory = [...system.matchAll(/^name:\s*(.+)$/gmu)].map(match => match[1]!.trim());
+		expect(methodInventory.filter(name => names.includes(name)).sort()).toEqual(
+			methods
+				.filter(method => method.allowed)
+				.map(method => method.name)
+				.sort(),
+		);
+		for (const { body, allowed } of methods) {
+			if (allowed) expect(system).toContain(body);
+			else expect(system).not.toContain(body);
+		}
+	}
+}
+
+describe("spec-driven actual OMP public entry", () => {
+	for (const failure of ["empty", "provider-error", "save-error", "version-drift"] as const) {
+		test(
+			`native handoff ${failure} blocks solution and native Team successor admission`,
+			async () => {
+				await using root = await TempDir.create("@omp-spec-handoff-failure-");
+				let cwd = "";
+				await using provider = createProviderFixture({
+					async handoff(request) {
+						if (failure === "empty") return { text: "" };
+						if (failure === "provider-error") throw new Error("Injected native handoff transport failure");
+						if (failure === "version-drift")
+							await fs.appendFile(
+								path.join(cwd, `openspec/changes/${CHANGE_ID}/requirements.md`),
+								"\nExternal requirements change while native handoff is in flight.\n",
+							);
+						return { text: `${respond(request).text}\n${HANDOFF_MARKER}-1` };
+					},
+				});
+				const config = await fixture(root, provider.baseUrl);
+				cwd = config.cwd;
+				await using peer = new PublicPeer(cwd, config.env, provider);
+				await peer.ready();
+				const session = await peer.create(cwd);
+				const first = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+				const specification = await peer.phase(session, "awaiting-specification", first);
+				if (failure === "save-error")
+					// A directory at the exact durable destination makes native result
+					// persistence fail without mocking filesystem APIs or actor code.
+					await fs.mkdir(path.join(cwd, `openspec/changes/${CHANGE_ID}/handoffs/requirements-to-solution.md`), {
+						recursive: true,
+					});
+				const since = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+				const stopped = await peer.stopped(session, since);
+				if (!provider.handoffs.length)
+					throw new Error(`Command stopped without native handoff ingress: ${bounded(stopped)}`);
+				expect(provider.handoffs.length).toBeGreaterThan(0);
+				expect(stopped.state.paused === true || ["blocked", "failed"].includes(String(stopped.state.phase))).toBe(
+					true,
+				);
+				expect(provider.requests.filter(request => rolePayload(request)?.specDrivenRole === "solution")).toEqual(
+					[],
+				);
+				expect(
+					provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
+				).toBe(false);
+				await absent(cwd, `openspec/changes/${CHANGE_ID}/solution.md`);
+				await absent(cwd, `openspec/changes/${CHANGE_ID}/plan.md`);
+				await absent(cwd, IMPLEMENTATION_PATH);
+				if (failure !== "provider-error") expect(provider.failures).toEqual([]);
+				else
+					expect(
+						provider.failures.some(value => value.includes("Injected native handoff transport failure")),
+					).toBe(true);
+			},
+			GATE_BUDGET,
+		);
+	}
+
+	for (const interruption of ["pause", "cancel"] as const) {
+		test(
+			`native handoff ${interruption} rejects late generation and ${interruption === "pause" ? "reuses live producer on resume" : "never admits a successor"}`,
+			async () => {
+				await using root = await TempDir.create("@omp-spec-handoff-interrupt-");
+				const entered = Promise.withResolvers<void>();
+				const release = Promise.withResolvers<void>();
+				await using provider = createProviderFixture({
+					async handoff(request, ordinal) {
+						if (ordinal === 1) {
+							entered.resolve();
+							await release.promise;
+						}
+						return { text: `${respond(request).text}\n${HANDOFF_MARKER}-${ordinal}` };
+					},
+				});
+				const config = await fixture(root, provider.baseUrl);
+				await using peer = new PublicPeer(config.cwd, config.env, provider);
+				try {
+					await peer.ready();
+					const session = await peer.create(config.cwd);
+					const first = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+					const specification = await peer.phase(session, "awaiting-specification", first);
+					const confirming = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+					// A non-consuming observer cannot steal the interrupt command's
+					// status row from phase(), which tracks each published row once.
+					const completed = peer.stopped(session, confirming);
+					// No sleeps or shorter IO timeouts: fail on the actual paused or
+					// successor-gate result, with its real refusal text, not a waiting row.
+					const ingress = await Promise.race([
+						entered.promise.then(() => ({ kind: "handoff" as const })),
+						completed.then(stopped => ({ kind: "completed" as const, stopped })),
+					]);
+					if (ingress.kind !== "handoff")
+						throw new Error(`Command stopped before native handoff ingress: ${bounded(ingress.stopped)}`);
+					const interrupting = await peer.send(session, `/spec ${interruption}`);
+					const paused = await peer.phase(
+						session,
+						interruption === "cancel" ? "cancelled" : ["team", "awaiting-specification"],
+						interrupting,
+						true,
+						true,
+					);
+					expect(paused.state.paused).toBe(true);
+					expect(Number(paused.state.generation)).toBeGreaterThan(Number(specification.state.generation));
+					const ordinary = await peer.create(config.cwd);
+					const ordinaryStart = await peer.send(
+						ordinary,
+						"/goal set OMP_SPEC_ORDINARY_CONTROL: exercise normal read, write and native Task while the other session is interrupted.",
+					);
+					await peer.next(
+						frame =>
+							isConversation(frame, ordinary) &&
+							textValues(frame).some(text => text.includes("OMP_SPEC_ORDINARY_CONTROL_DONE")),
+						ordinaryStart,
+					);
+					expect(await fs.readFile(path.join(config.cwd, "ordinary-note.txt"), "utf8")).toBe(
+						"ordinary session remains writable\n",
+					);
+					const ordinaryRequests = provider.requests.filter(request =>
+						request.messages.some(
+							message =>
+								message.role === "user" && contentText(message.content).includes("OMP_SPEC_ORDINARY_CONTROL"),
+						),
+					);
+					expect(ordinaryRequests.length).toBeGreaterThan(0);
+					for (const request of ordinaryRequests) {
+						expect(rolePayload(request)).toBeUndefined();
+						expect(request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "spec_task")).toBe(
+							false,
+						);
+						expect(request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "spec_verify")).toBe(
+							false,
+						);
+					}
+					expect(
+						ordinaryRequests.some(request =>
+							request.messages.some(
+								message =>
+									message.role === "assistant" &&
+									(message.tool_calls ?? []).some(
+										call =>
+											isRecord(call) &&
+											isRecord(call.function) &&
+											typeof call.function.name === "string" &&
+											call.function.name.replace(/^_/u, "") === "goal",
+									),
+							),
+						),
+					).toBe(true);
+					release.resolve();
+					const statusStart = await peer.send(session, "/spec status");
+					const late = await peer.phase(
+						session,
+						interruption === "cancel" ? "cancelled" : ["team", "awaiting-specification"],
+						statusStart,
+						true,
+						true,
+					);
+					expect(late.state.generation).toBe(paused.state.generation);
+					expect(provider.requests.filter(request => rolePayload(request)?.specDrivenRole === "solution")).toEqual(
+						[],
+					);
+					await absent(config.cwd, `openspec/changes/${CHANGE_ID}/solution.md`);
+					if (interruption === "pause") {
+						const resuming = await peer.send(session, "/spec resume");
+						await peer.phase(session, "awaiting-choice", resuming);
+						expect(provider.handoffs).toHaveLength(2);
+						const successor = provider.requests.find(
+							request => (request.tools?.length ?? 0) > 0 && rolePayload(request)?.specDrivenRole === "solution",
+						);
+						expect(successor).toBeDefined();
+						const input = successor!.messages.map(message => contentText(message.content)).join("\n");
+						expect(input).toContain(`${HANDOFF_MARKER}-2`);
+						expect(input).not.toContain(`${HANDOFF_MARKER}-1`);
+					}
+					expect(provider.failures).toEqual([]);
+				} finally {
+					release.resolve();
+				}
+			},
+			GATE_BUDGET,
+		);
+	}
+
+	for (const { executionMode, markdown } of [
+		{ executionMode: "normal", markdown: false },
+		{ executionMode: "goal", markdown: false },
+		{ executionMode: "normal", markdown: true },
+	] as const)
+		test(
+			`strict decisions drive native Team, real TDD, task commits, independent reviews, final entry and authorized archive${markdown ? " with existing Markdown authority" : executionMode === "goal" ? " with native Goal continuation" : ""}`,
+			async () => {
+				await using root = await TempDir.create("@omp-spec-public-");
+				const nativeEntered = new Set<string>();
+				const parallelReady = Promise.withResolvers<void>();
+				await using provider = createProviderFixture({
+					async observe(request) {
+						const user = request.messages
+							.filter(message => message.role === "user")
+							.map(message => contentText(message.content))
+							.join("\n");
+						if (user.includes("OMP_SPEC_FORBIDDEN_")) {
+							const matchedUserIndex = request.messages.findIndex(
+								message =>
+									message.role === "user" && contentText(message.content).includes("OMP_SPEC_FORBIDDEN_"),
+							);
+							const matched = contentText(request.messages[matchedUserIndex]?.content);
+							const offset = matched.indexOf("OMP_SPEC_FORBIDDEN_");
+							const labelRequest = request.messages.some(
+								message =>
+									message.role === "system" &&
+									contentText(message.content).startsWith(
+										"# Task\nLabel the delegated work in the next user message:",
+									),
+							);
+							throw new Error(
+								`Rejected native task reached provider ingress: ${JSON.stringify({
+									tools: request.tools?.map(tool => tool.function?.name) ?? [],
+									role: rolePayload(request)?.specDrivenRole ?? null,
+									matchedUserIndex,
+									context: matched.slice(Math.max(0, offset - 100), offset + 180),
+									delegatedLabel: labelRequest
+										? contentText(
+												request.messages.findLast(message => message.role === "user")?.content,
+											).slice(0, 240)
+										: null,
+								})}`,
+							);
+						}
+						if (!request.tools?.length) return;
+						const child = user.match(/OMP_SPEC_CHILD_TASK (T00[23])/u);
+						if (!child) return;
+						nativeEntered.add(child[1]!);
+						if (nativeEntered.size === 2) parallelReady.resolve();
+						await parallelReady.promise;
+					},
+				});
+				const config = await fixture(root, provider.baseUrl);
+				const authorityPath = "docs/requirements/greeting.md";
+				const oldBehavior =
+					"greet(name) returns Hello, <name>! without normalizing outer whitespace or empty names.";
+				const preservedIntro =
+					"# Greeting requirements\n\nThis document remains the sole long-term greeting authority.\n\n";
+				const preservedScenarios =
+					'### Scenario: Named greeting\nCalling greet("Ada") returns "Hello, Ada!".\n\n### Scenario: Internal whitespace\nCalling greet("Ada  Lovelace") returns "Hello, Ada  Lovelace!".\n';
+				const preservedUnrelated =
+					"\n## Release notes\n\nKeep the existing release cadence and operator instructions unchanged.\n";
+				const originalAuthority = `${preservedIntro}## R001 Greeting\n${oldBehavior}\n\n${preservedScenarios}${preservedUnrelated}`;
+				if (markdown) {
+					await fs.mkdir(path.join(config.cwd, "docs/requirements"), { recursive: true });
+					await fs.writeFile(path.join(config.cwd, authorityPath), originalAuthority);
+					await git(config.cwd, config.env, ["add", authorityPath]);
+					await git(config.cwd, config.env, [
+						"-c",
+						"core.hooksPath=",
+						"commit",
+						"-m",
+						"Fixture existing Markdown authority",
+					]);
+				}
+				// Unrelated staged, unstaged and new user material must survive workflow publication.
+				await fs.writeFile(path.join(config.cwd, "user-staged.txt"), "user staged\n");
+				await git(config.cwd, config.env, ["add", "user-staged.txt"]);
+				await fs.appendFile(path.join(config.cwd, "baseline.txt"), "user unstaged\n");
+				await fs.writeFile(path.join(config.cwd, "user-new.txt"), "user untracked\n");
+				const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
+				await using peer = new PublicPeer(config.cwd, config.env, provider);
+				await peer.ready();
+				const session = await peer.create(config.cwd);
+				const first = await peer.send(
+					session,
+					`/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
+				);
+				const specification = await peer.phase(session, "awaiting-specification", first);
+				if (markdown) {
+					const requirementsInput = provider.requests
+						.map(rolePayload)
+						.find(payload => payload?.specDrivenRole === "requirements")!.input;
+					expect(isRecord(requirementsInput.originals)).toBe(true);
+					const mapped = requirementsInput.originals as Record<string, unknown>;
+					expect(mapped.version).toBeString();
+					expect(JSON.stringify(mapped.files)).toContain(authorityPath);
+					expect(JSON.stringify(mapped.entries)).toContain(oldBehavior);
+					const sourceApproval = JSON.parse(
+						await fs.readFile(
+							path.join(config.cwd, `openspec/changes/${CHANGE_ID}/checks/source-approval.json`),
+							"utf8",
+						),
+					);
+					expect(sourceApproval.sourceMap.version).toBe(mapped.version);
+					expect(sourceApproval.sourcePatches).toHaveLength(1);
+					expect(sourceApproval.sourcePatches[0].operation).toBe("modify");
+					const source = sourceApproval.sourceMap.entries.find(
+						(entry: { id: string }) => entry.id === sourceApproval.sourcePatches[0].sourceId,
+					);
+					expect(source.path).toBe(authorityPath);
+					expect(source.headingPath.at(-1)).toBe("R001 Greeting");
+					expect(source.original).toContain(oldBehavior);
+				}
+				expect(
+					provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
+				).toBe(false);
+				expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+				await absent(config.cwd, IMPLEMENTATION_PATH);
+				await absent(config.cwd, TEST_PATH);
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/design.md`);
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/tasks.md`);
+				const stale = await peer.send(session, "/spec confirm-spec obsolete-version");
+				const rejected = await peer.phase(session, "awaiting-specification", stale);
+				expect(rejected.state.specificationVersion).toBe(specification.state.specificationVersion);
+				expect(
+					provider.requests.some(request => JSON.stringify(request.tools ?? []).includes("noViableProposal")),
+				).toBe(false);
+				expect(rejected.state.planVersion).toBeUndefined();
+				await absent(config.cwd, IMPLEMENTATION_PATH);
+				await absent(config.cwd, TEST_PATH);
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`);
+				expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+				const discussionStart = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+				const choice = await peer.phase(session, "awaiting-choice", discussionStart);
+				await assertNativeTransition(
+					provider,
+					config.cwd,
+					1,
+					"requirements",
+					"solution",
+					`openspec/changes/${CHANGE_ID}/requirements.md`,
+					String(specification.state.specificationVersion),
+				);
+				expect(choice.state.runId).toBeString();
+				expect(
+					provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
+						.length,
+				).toBeGreaterThanOrEqual(2);
+				expect(choice.text).toContain('"adoptable":true');
+				expect(choice.text).toContain('"reviewSucceeded":true');
+				expect(choice.text).toContain('"recheckSucceeded":true');
+				const planStart = await peer.send(session, commandFrom(choice.text, "choose"));
+				const plan = await peer.phase(session, "awaiting-plan", planStart);
+				await assertNativeTransition(
+					provider,
+					config.cwd,
+					2,
+					"solution",
+					"planner",
+					`openspec/changes/${CHANGE_ID}/solution.md`,
+					commandFrom(choice.text, "choose").split(" ").at(-1)!,
+				);
+				await absent(config.cwd, IMPLEMENTATION_PATH);
+				await absent(config.cwd, TEST_PATH);
+				expect(await git(config.cwd, config.env, ["rev-parse", "HEAD"])).toBe(baseline);
+				expect(await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/plan.md`), "utf8")).toContain(
+					"T001",
+				);
+				await absent(config.cwd, "docs/superpowers/plans");
+				const badPlan = await peer.send(session, "/spec confirm-plan obsolete-version");
+				await peer.phase(session, "awaiting-plan", badPlan);
+				await absent(config.cwd, IMPLEMENTATION_PATH);
+				const executing = await peer.send(
+					session,
+					`${commandFrom(plan.text, "confirm-plan")}${executionMode === "goal" ? " --goal" : ""}`,
+				);
+				const acceptance = await peer.phase(session, "awaiting-acceptance", executing);
+				expect(acceptance.state.executionMode).toBe(executionMode);
+				expect([...nativeEntered].sort()).toEqual(["T002", "T003"]);
+				const executionRequests = provider.requests.filter(
+					request => rolePayload(request)?.specDrivenRole === "executor",
+				);
+				const executionHistory = executionRequests.at(-1)!;
+				for (const reason of ["unknown", "non-ready", "overlap"]) {
+					const attempted = executionHistory.messages
+						.flatMap(message => message.tool_calls ?? [])
+						.find(call => {
+							if (!isRecord(call) || !isRecord(call.function) || typeof call.function.arguments !== "string")
+								return false;
+							const args: unknown = JSON.parse(call.function.arguments);
+							return isRecord(args) && args.context === `OMP_SPEC_REJECT_${reason}`;
+						});
+					if (!isRecord(attempted)) throw new Error(`No public native ${reason} admission probe`);
+					const response = executionHistory.messages.find(
+						message => message.role === "tool" && message.tool_call_id === attempted.id,
+					);
+					expect(contentText(response?.content)).toMatch(
+						/reject|unknown|ready|active|bound|overlap|already|cannot|invalid|refus|error/iu,
+					);
+				}
+				if (executionMode === "goal")
+					expect(
+						executionRequests.some(request =>
+							request.messages.some(
+								message =>
+									message.role === "user" && contentText(message.content).includes("Continue active goal."),
+							),
+						),
+					).toBe(true);
+				else
+					expect(
+						executionRequests
+							.flatMap(request => request.tools ?? [])
+							.some(tool => tool.function?.name.replace(/^_/u, "") === "goal"),
+					).toBe(false);
+				await assertNativeTransition(
+					provider,
+					config.cwd,
+					3,
+					"planner",
+					"executor",
+					`openspec/changes/${CHANGE_ID}/plan.md`,
+					String(plan.state.planVersion),
+				);
+				await assertFixedRoleSystems(provider.requests);
+				await assertNativeImplementationMethods(provider.requests);
+				const published = await git(config.cwd, config.env, ["log", "--format=%H", `${baseline}..HEAD`]);
+				expect(published.split("\n").length).toBeGreaterThanOrEqual(1);
+				const committedFiles = (
+					await git(config.cwd, config.env, ["diff", "--name-only", `${baseline}..HEAD`])
+				).split("\n");
+				expect(committedFiles).toContain(IMPLEMENTATION_PATH);
+				expect(committedFiles).toContain(TEST_PATH);
+				expect(committedFiles).not.toContain("user-staged.txt");
+				expect(committedFiles).not.toContain("user-new.txt");
+				expect(committedFiles).not.toContain("baseline.txt");
+				expect(await git(config.cwd, config.env, ["diff", "--cached", "--name-only"])).toBe("user-staged.txt");
+				expect(await fs.readFile(path.join(config.cwd, "baseline.txt"), "utf8")).toContain("user unstaged");
+				expect(await fs.readFile(path.join(config.cwd, "user-new.txt"), "utf8")).toBe("user untracked\n");
+				// Auxiliary task labels quote role input but do not run a reviewer.
+				const reviewRequests = provider.requests.filter(
+					request =>
+						rolePayload(request)?.specDrivenRole === "reviewer" &&
+						request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "yield"),
+				);
+				const reviewerInputs = reviewRequests.map(rolePayload);
+				for (const kind of ["requirements", "plan", "task", "overall"]) {
+					const inputs = reviewerInputs.filter(payload => payload?.input.kind === kind);
+					expect(inputs.length).toBeGreaterThan(0);
+					// Multiple HTTP rounds are tool continuations, not additional review seats.
+					const initial = reviewRequests.filter(
+						request =>
+							rolePayload(request)?.input.kind === kind &&
+							request.messages.every(message => message.role !== "tool"),
+					);
+					expect(initial).toHaveLength(kind === "task" ? 3 : 1);
+				}
+				const taskReview = reviewerInputs.find(payload => payload?.input.kind === "task")!;
+				const taskEvidence = JSON.stringify(taskReview.input);
+				expect(taskEvidence).toContain("Hello, Ada!");
+				expect(taskEvidence).toContain("3 pass");
+				expect(taskEvidence).toMatch(/3 fail|Expected:|expect\\?\(received/u);
+				expect(taskEvidence).toContain("toolCallId");
+				expect(taskEvidence).toContain("base");
+				expect(taskEvidence).toContain("head");
+				expect(taskEvidence).toContain("review");
+				const ranges = taskReview.input.commits;
+				expect(Array.isArray(ranges)).toBe(true);
+				if (!Array.isArray(ranges) || !ranges.length) throw new Error("Task review has no actual commit range");
+				for (const range of ranges) {
+					if (
+						!isRecord(range) ||
+						typeof range.base !== "string" ||
+						typeof range.head !== "string" ||
+						typeof range.reviewPackage !== "string"
+					)
+						throw new Error("Invalid actual review-package binding");
+					expect(range.base).toMatch(/^[a-f0-9]{40}$/u);
+					expect(range.head).toMatch(/^[a-f0-9]{40}$/u);
+					expect(range.head).not.toBe(range.base);
+					const packageContent = range.reviewPackage;
+					expect(packageContent).toContain(IMPLEMENTATION_PATH);
+					expect(packageContent).toContain(TEST_PATH);
+					expect(packageContent).toContain("export function greet");
+					expect(packageContent).not.toContain("user-staged.txt");
+					expect(packageContent).not.toContain("user-new.txt");
+				}
+				const overall = reviewerInputs.find(payload => payload?.input.kind === "overall")!;
+				expect(JSON.stringify(overall.input)).toContain("real-bun-entry");
+				expect(JSON.stringify(overall.input)).toContain("3 pass");
+				// A separate observation through the approved executable entry, not a model claim.
+				const actual = await run(config.cwd, config.env, [process.execPath, "test", TEST_PATH]);
+				expect(actual.exitCode).toBe(0);
+				expect(`${actual.stdout}\n${actual.stderr}`).toContain("3 pass");
+				for (const file of ["test/greeting-empty.test.ts", "test/greeting-spacing.test.ts"]) {
+					const result = await run(config.cwd, config.env, [process.execPath, "test", file]);
+					expect(result.exitCode).toBe(0);
+					expect(`${result.stdout}\n${result.stderr}`).toContain("3 pass");
+				}
+				const verificationPath = path.join(config.cwd, `openspec/changes/${CHANGE_ID}/verification.md`);
+				const verification = await fs.readFile(verificationPath, "utf8");
+				const evidenceLinks = [...verification.matchAll(/\]\(([^)]+)\)/gu)].map(match => match[1]!);
+				expect(evidenceLinks.length).toBeGreaterThan(0);
+				for (const link of evidenceLinks) {
+					expect(path.isAbsolute(link)).toBe(false);
+					expect(link.startsWith("../")).toBe(false);
+					expect(
+						(await fs.readFile(path.resolve(path.dirname(verificationPath), link), "utf8")).length,
+					).toBeGreaterThan(0);
+				}
+				expect(await Bun.file(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`)).exists()).toBe(
+					true,
+				);
+				if (markdown)
+					expect(await fs.readFile(path.join(config.cwd, authorityPath), "utf8")).toBe(originalAuthority);
+				await absent(config.cwd, "openspec/changes/archive");
+				await absent(config.cwd, "openspec/specs/greeting/spec.md");
+				const badAcceptance = await peer.send(session, "/spec accept obsolete-version");
+				await peer.phase(session, "awaiting-acceptance", badAcceptance);
+				await absent(config.cwd, "openspec/specs/greeting/spec.md");
+				let currentAcceptance = acceptance;
+				if (executionMode === "normal" && !markdown) {
+					// Explicit external input mutation is fault injection, not a fabricated workflow record.
+					await fs.appendFile(
+						path.join(config.cwd, TEST_PATH),
+						'\ntest("external input invalidates acceptance", () => expect(greet?.(" Ada ")).toBe("BROKEN"));\n',
+					);
+					const staleAccept = await peer.send(session, commandFrom(acceptance.text, "accept"));
+					const invalidated = await peer.stopped(session, staleAccept);
+					expect(invalidated.state.phase).not.toBe("completed");
+					expect(invalidated.state.acceptanceVersion).not.toBe(acceptance.state.acceptanceVersion);
+					expect(invalidated.state.specificationVersion).toBe(acceptance.state.specificationVersion);
+					expect(invalidated.state.planVersion).toBe(acceptance.state.planVersion);
+					await absent(config.cwd, "openspec/specs/greeting/spec.md");
+					expect((await fs.readFile(verificationPath, "utf8")).length).toBeGreaterThan(0);
+					const ordinary = await peer.create(config.cwd);
+					const ordinaryStart = await peer.send(
+						ordinary,
+						"OMP_SPEC_ORDINARY_CONTROL during invalidated workflow recovery",
+					);
+					await peer.next(
+						frame =>
+							isConversation(frame, ordinary) &&
+							textValues(frame).some(text => text.includes("OMP_SPEC_ORDINARY_CONTROL_DONE")),
+						ordinaryStart,
+					);
+					const resume = await peer.send(session, "/spec resume");
+					currentAcceptance = await peer.phase(session, "awaiting-acceptance", resume);
+					expect(currentAcceptance.state.acceptanceVersion).not.toBe(acceptance.state.acceptanceVersion);
+					const repairedReport = await fs.readFile(verificationPath, "utf8");
+					const rawLinks = [...repairedReport.matchAll(/\]\(([^)]+)\)/gu)].map(match => match[1]!);
+					const actualEvidence = (
+						await Promise.all(
+							rawLinks.map(link => fs.readFile(path.resolve(path.dirname(verificationPath), link), "utf8")),
+						)
+					).join("\n");
+					expect(actualEvidence).toContain("external input invalidates acceptance");
+					expect(actualEvidence).toContain("BROKEN");
+					expect(actualEvidence).toContain("3 pass");
+					const oldAgain = await peer.send(session, commandFrom(acceptance.text, "accept"));
+					await peer.phase(session, "awaiting-acceptance", oldAgain);
+					await absent(config.cwd, "openspec/specs/greeting/spec.md");
+				}
+				const final = await peer.send(session, commandFrom(currentAcceptance.text, "accept"));
+				await peer.phase(session, "completed", final);
+				if (markdown) {
+					const authority = await fs.readFile(path.join(config.cwd, authorityPath), "utf8");
+					const releaseOffset = originalAuthority.indexOf("## Release notes");
+					expect(authority).toBe(
+						originalAuthority.slice(0, releaseOffset).replace(oldBehavior, REQUIREMENT) +
+							'\n### Scenario: Outer whitespace\nCalling greet("  Ada  ") returns "Hello, Ada!".\n\n### Scenario: Blank name\nCalling greet("  ") returns "Hello, world!".\n' +
+							originalAuthority.slice(releaseOffset),
+					);
+					expect(authority).toContain(preservedIntro);
+					expect(authority).toContain(preservedScenarios);
+					expect(authority).toContain(preservedUnrelated);
+					expect(await fs.readdir(path.join(config.cwd, "docs/requirements"))).toEqual(["greeting.md"]);
+					await absent(config.cwd, "openspec/specs/greeting/spec.md");
+				} else {
+					expect(await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
+						"Normalized greeting",
+					);
+				}
+				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`);
+				const archive = await fs.readdir(path.join(config.cwd, "openspec/changes/archive"));
+				expect(archive.filter(name => name.endsWith(`-${CHANGE_ID}`))).toHaveLength(1);
+				const archived = path.join(
+					config.cwd,
+					"openspec/changes/archive",
+					archive.find(name => name.endsWith(`-${CHANGE_ID}`))!,
+				);
+				for (const file of [
+					"requirements.md",
+					"solution.md",
+					"plan.md",
+					"verification.md",
+					"checks/requirements.json",
+					...(markdown ? ["checks/source-approval.json"] : []),
+					...["requirements-to-solution", "solution-to-plan", "plan-to-execution"].map(
+						name => `handoffs/${name}.md`,
+					),
+				])
+					expect((await fs.readFile(path.join(archived, file), "utf8")).length).toBeGreaterThan(0);
+				const archivedReport = await fs.readFile(path.join(archived, "verification.md"), "utf8");
+				expect([...archivedReport.matchAll(/\]\(([^)]+)\)/gu)].length).toBeGreaterThan(0);
+				for (const match of archivedReport.matchAll(/\]\(([^)]+)\)/gu)) {
+					expect(path.isAbsolute(match[1]!)).toBe(false);
+					expect((await fs.readFile(path.resolve(archived, match[1]!), "utf8")).length).toBeGreaterThan(0);
+				}
+				expect(provider.failures).toEqual([]);
+			},
+			GATE_BUDGET,
+		);
 
 	test(
 		"amending confirmed requirements invalidates actual prior approval and Team choice without deleting material",
@@ -590,7 +1318,6 @@ describe("spec-driven actual OMP public entry", () => {
 			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
-			expect(inventory.skills).toHaveLength(28);
 			const defaultSkills: Record<string, true> = {
 				"verification-before-completion": true,
 				"systematic-debugging": true,

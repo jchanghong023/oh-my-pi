@@ -1,0 +1,7 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Manual invocation only; examine decisions and dependencies in a plan or design one at a time"
+  default_prompt: "Use $jch-grill-me to ask one question at a time and provide a reasoned recommendation with its tradeoffs; clarify and summarize only, without executing the plan."
+
+policy:
+  allow_implicit_invocation: false

@@ -12,8 +12,8 @@ const object = (properties: Record<string, Schema>): Schema => ({
 	additionalProperties: false,
 });
 const strings = array(text());
-const condition = object({ id: text(), description: text(), command: text() });
-const validation = object({ id: text(), command: text(), behavior: text() });
+const condition = object({ id: text(), description: text(), command: text(), inputPaths: array(text(), 1) });
+const validation = object({ id: text(), command: text(), behavior: text(), inputPaths: array(text(), 1) });
 const sourcePatch: Schema = {
 	anyOf: [
 		object({ operation: { type: "string", enum: ["modify", "remove"] }, sourceId: text(), replacement: text(0) }),
@@ -39,6 +39,7 @@ const sourcePatch: Schema = {
 };
 export const SPEC_REQUIREMENTS_SCHEMA: Schema = {
 	...object({
+		document: object({ path: { type: "string", const: "requirements.md" }, content: text() }),
 		proposal: text(),
 		specs: array(object({ path: text(), content: text() }), 1),
 		requirements: array(object({ id: text(), text: text() }), 1),
@@ -46,7 +47,7 @@ export const SPEC_REQUIREMENTS_SCHEMA: Schema = {
 		sourceMapVersion: text(),
 		sourcePatches: array(sourcePatch),
 	}),
-	required: ["proposal", "specs", "requirements", "questions"],
+	required: ["document", "proposal", "specs", "requirements", "questions"],
 };
 export const SPEC_TASK_SCHEMA: Schema = object({
 	id: { type: "string", pattern: "^T[0-9]{3,}$" },
@@ -72,9 +73,17 @@ export const SPEC_TASK_SCHEMA: Schema = object({
 });
 export const SPEC_PLAN_SCHEMA: Schema = object({
 	content: text(),
+	workspace: object({
+		executionPath: text(),
+		isolation: { type: "string", enum: ["none", "native"] },
+		integration: { type: "string", const: "native" },
+	}),
 	tasks: array(SPEC_TASK_SCHEMA, 1),
 	conditions: array(condition),
-	finalValidation: array(object({ id: text(), command: text(), behavior: text(), realEntry: flag }), 1),
+	finalValidation: array(
+		object({ id: text(), command: text(), behavior: text(), inputPaths: array(text(), 1), realEntry: flag }),
+		1,
+	),
 	closure: object({ sync: flag, archive: flag }),
 });
 export const SPEC_REVIEW_SCHEMA: Schema = object({
@@ -124,8 +133,25 @@ export function parseSpecRequirements(value: unknown): SpecRequirementsDraft {
 	}
 	return draft;
 }
+function relativeSelection(value: string, label: string): void {
+	if (
+		!value.trim() ||
+		/^[\\/]/.test(value) ||
+		/[:\0\r\n$`|;&<>*?{}()[\]!]/.test(value) ||
+		value.split(/[\\/]/).includes("..")
+	)
+		throw new Error(`Invalid ${label}: expected a workspace-relative file or directory`);
+}
 export function parseSpecPlan(value: unknown): SpecPlanDraft {
 	const draft = parse<SpecPlanDraft>(value, SPEC_PLAN_SCHEMA, "plan");
+	relativeSelection(draft.workspace.executionPath, "workspace");
+	for (const item of [
+		...draft.conditions,
+		...draft.finalValidation,
+		...draft.tasks.flatMap(task => task.validation),
+	]) {
+		for (const input of item.inputPaths) relativeSelection(input, "validation input path");
+	}
 	unique(
 		draft.tasks.map(item => item.id),
 		"task",
@@ -140,6 +166,13 @@ export function parseSpecPlan(value: unknown): SpecPlanDraft {
 	);
 	for (const task of draft.tasks) {
 		unique(task.dependencies, "dependency");
+		unique(task.requirementIds, "requirement reference");
+		unique(task.conditionIds, "condition reference");
+		if (
+			task.tdd.mode === "exception" &&
+			(!task.tdd.reason.trim() || task.tdd.alternativeCommands.some(command => !command.trim()))
+		)
+			throw new Error(`Invalid TDD exception in ${task.id}`);
 		unique(
 			task.validation.map(item => item.id),
 			"task validation",

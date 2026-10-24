@@ -102,7 +102,7 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 | `/repo`                        | 建立、更新代码定位索引                               |
 | `/team 需求`                   | 多代理独立调查、交叉审查并汇总方案，只读             |
 | `/goal-autopilot 目标`          | 持久目标、自动编排与无人值守要求，见第 4.7 节         |
-| `/spec start 变更名 需求`       | 主动启用规格、方案计划、执行验收三阶段流程，见第 4.8 节 |
+| `/spec start 变更名 需求`       | 主动启用需求、方案、计划、执行四职责流程，见第 4.8 节 |
 | `/advisor on` / `/advisor off` | 开启 / 关闭第二模型复审，默认逐轮，频率可配置        |
 | `/skill:技能名 任务`           | 调用本地技能，从补全中选择技能名                     |
 | `/todo` / `/hub`               | 查看待办进度 / 子代理活动                            |
@@ -404,7 +404,7 @@ OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目�
 
 OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
 
-### 4.8 `/spec`：主动启用规格驱动三阶段流程
+### 4.8 `/spec`：主动启用规格驱动四职责流程
 
 适合需要明确需求、比较方案和独立审查的重要任务；普通对话不会自动进入此流程。在项目目录启动 OMP 后，在 **OMP 输入框**使用：
 
@@ -418,12 +418,12 @@ OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编�
 
 | 决策 | 命令与授权边界 |
 | --- | --- |
-| 确认当前规格 | `/spec confirm-spec <spec-version>`：进入 Team 方案讨论，不授权实施 |
-| 选择当前候选 | `/spec choose <run-id> <candidate-id> <candidate-version>`：只授权编写计划 |
-| 批准计划并启动 | `/spec confirm-plan <plan-version>`：授权获批工作区内本任务相关改动的**本地 commit**，不包含用户无关改动 |
-| 最终用户验收 | `/spec accept <acceptance-version>`：在必需验证与整体审查通过后确认；仅执行已获授权的规格同步、归档 |
+| 确认当前需求书 | `/spec confirm-spec <spec-version>`：确认需求书及同版本规格材料，完成需求→方案的原生 handoff 后进入方案比较，不授权实施 |
+| 选择当前候选 | `/spec choose <run-id> <candidate-id> <candidate-version>`：保存选定方案，完成方案→计划的原生 handoff 后只授权编写计划 |
+| 批准计划并启动 | `/spec confirm-plan <plan-version> [--goal]`：默认普通执行，显式添加 `--goal` 才使用可选原生 Goal；完成计划→执行的原生 handoff 后启动，同时授权获批工作区内本任务相关改动的**本地 commit**及既定任务工作区集成，不包含用户无关改动 |
+| 最终用户验收 | `/spec accept <acceptance-version>`：在当前内容的必需验证与整体审查通过后确认；随后仅执行已获授权的规格同步、归档 |
 
-批准绑定当前有效版本，旧命令不能用来批准新材料。需求角色只负责提案和规格，方案／计划角色只负责方案与唯一计划，执行角色在批准后按任务实施；前两阶段及独立审查者不能改业务代码、运行任意命令或提交。需求与计划通过限定产物入口写入，不能借上游技能越权。需求、计划、任务和整体结果各有独立审查，任务勾选、模型自报或已有提交都不等于验证通过。
+批准绑定当前有效版本，旧命令不能用来批准新材料。需求、方案、计划、执行各有独立职责：需求节点实际加载包内 `jch-grill-me`（Grill-me）技能的受控访谈分支，结合 Brainstorming 澄清需求，按决策依赖分轮给出编号问题、推荐答案和理由；方案节点复用 Team 比较候选并忠实保存用户选择；计划节点根据已确认需求和选定方案编写唯一计划；执行主代理在批准后自主细化、实现或通过原生子代理委派和并行，组织验证、独立审查及修复。前三个节点及独立审查者不能改业务代码、运行任意命令或提交；文档通过限定产物入口写入，不能借上游技能越权。需求、计划、任务和整体结果各有独立审查，任务勾选、模型自报或已有提交都不等于验证通过。普通执行与可选 Goal 均不增加逐任务确认，也不扩大授权；两者完成执行后都等待最终用户验收，Goal 完成不等于自动同步归档。
 
 模型名单复用 `/team` 的 `team.members`，不另设名单。审查优先使用与作者不同的模型；没有不同模型时明确标注“同模型独立分析”，使用新的独立上下文，不冒称多模型。未配置名单时沿用当前模型回退；显式模型／Provider 无效、缺少证据、必需验证失败或缺工具时停住，不静默换模型或伪造通过。此流程不授权 push、merge、发布、PR 或改写历史。
 
@@ -439,13 +439,13 @@ OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编�
 
 需求或核心方案变化会撤销受影响的下游批准，但保留已有材料与代码，不自动重置工作区。暂停后不再派发后续节点；继续不重复仍有效的已完成工作。控制状态只保存在**当前进程内仍存活的原生会话**中；同一会话的宿主共享控制器。切换或释放原生会话、变更其工作目录或退出进程后，不承诺续接原运行；即使文档、提交和聊天记录仍在，重新打开历史也不能恢复原批准和调度进度。取消不等于删除或回滚文件。
 
-唯一计划为 `<change-dir>/plan.md`，默认 `openspec/changes/<change-id>/plan.md`，不再生成竞争性的 `design`、`tasks` 或第二份计划。项目已有 Markdown 需求目录时，原目录仍是唯一权威；收尾只按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
+正式需求书、选定方案书和唯一计划分别保存为 `<change-dir>/requirements.md`、`<change-dir>/solution.md`、`<change-dir>/plan.md`，默认变更目录为 `openspec/changes/<change-id>/`，不再生成竞争性的 `design`、`tasks` 或第二份计划。需求→方案、方案→计划、计划→执行三次转换均在用户确认对应产物后真实调用上一节点会话的原生 handoff，将原始返回正文分别保存到变更目录的 `handoffs/requirements-to-solution.md`、`handoffs/solution-to-plan.md`、`handoffs/plan-to-execution.md`；交接失败或版本失效时不启动下一节点，交接也不继承上一节点权限。项目已有 Markdown 需求目录时，原目录仍是唯一权威；收尾只按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
 
 **也可单独调用上游能力。** 在系统终端运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等原生 OpenSpec 命令；在 OMP 输入框用 `/skill:<name> 任务` 手动调用完整上游技能，例如 `/skill:openspec-explore 调查当前需求`、`/skill:writing-plans 按已确认需求编写计划`。`verification-before-completion`、`systematic-debugging` 保留固定上游原文，名称和描述默认可发现、正文按需加载；其余技能由隐藏 Provider 按需提供。普通模型上下文不自动注入整套目录、描述、正文，也不自动加载 Superpowers bootstrap；包括这两个技能在内，单项调用都不能绕过已启用流程的阶段权限。
 
-系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前两阶段可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
+系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），不要求内网运行时在线安装。GUI 使用现有共享命令入口和交互消费者展示同一流程，不新增工作流设计器，也不另立界面审批规则。
+包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器；本流程不新增 GUI 页面、协议或工作流设计器，后续 GUI 接入也不能另立审批规则。
 
 此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。状态中的实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单；本地模拟模型验证编排也不代表真实模型任务质量已验收。完整门禁与验收条件见[规格驱动编排需求](requirements/spec-driven-orchestration.md)。Windows 源码和编译产物的公开入口、Electron／ZCode 场景、两仓相应门禁及 Computer Use 真实窗口操作均已有通过证据，范围见[需求目录](requirements/README.md)；桌面对话仍使用隔离 localhost 模拟模型，不代表真实模型质量、计费或其他平台已验收。
 

@@ -13,8 +13,14 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type { SpecDrivenResourceManifest, SpecDrivenSkillEntry } from "../src/spec-driven/resources";
+import type {
+	SpecDrivenMethodEntry,
+	SpecDrivenResourceManifest,
+	SpecDrivenSkillEntry,
+} from "../src/spec-driven/resources";
 import superpowersDescriptionSource from "../src/prompts/skills/superpowers-descriptions.md" with { type: "text" };
+import openspecAdaptationSource from "../src/prompts/spec-driven-openspec.md" with { type: "text" };
+import methodAdaptationSource from "../src/prompts/spec-driven-methods.md" with { type: "text" };
 
 const vendor = path.resolve(import.meta.dir, "../src/spec-driven/vendor");
 const staging = path.join(vendor, "staging");
@@ -23,6 +29,21 @@ const superpowers = path.join(staging, "superpowers");
 const version = "1.14.3";
 const revision = "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b";
 const superpowersVersion = "7.0.1";
+const jchRevision = "d1332445063976050be7aecfcac893a9b9c2fbfd";
+const jchFiles = {
+	"SKILL.md": "c23875b96e374af17fd10aaa3efa7daaf4c54ad086ef47d001dc69be97e01e58",
+	"agents/openai.yaml": "0c035fc04e9bd95ab107eb1232bc2df0ee61e4e74ba218cd61d80410a136fdb1",
+};
+type MethodPatch = { before: string; after: string } | { start: string; end?: string; body: string };
+const methodAdaptation = parseYaml(methodAdaptationSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
+	adaptation: string;
+	methods: {
+		source: "jch" | "superpowers";
+		name: string;
+		roles: SpecDrivenMethodEntry["role"][];
+	}[];
+	files: Record<string, MethodPatch[]>;
+};
 const superpowersSkills = [
 	"brainstorming",
 	"diagnosing-superpowers",
@@ -41,19 +62,43 @@ const superpowersSkills = [
 	"writing-skills",
 ];
 const superpowersDescriptions = parseYaml(superpowersDescriptionSource) as Record<string, string>;
-const factories = [
-	"getExploreSkillTemplate",
-	"getNewChangeSkillTemplate",
-	"getContinueChangeSkillTemplate",
+interface RequirementsWorkflow {
+	module: string;
+	skillFactory: string;
+	commandFactory: string;
+	skill: string;
+	description?: string;
+	replacements?: { before: string; after: string; surface?: "skill" | "command" }[];
+}
+const requirementsAdaptation = parseYaml(openspecAdaptationSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
+	common: string;
+	requirementsHandoff: string;
+	workflows: Record<string, RequirementsWorkflow>;
+	proposalInstruction: string;
+	specsInstruction: string;
+};
+const requirementsWorkflows = Object.entries(requirementsAdaptation.workflows);
+const factories = requirementsWorkflows.map(([, workflow]) => workflow.skillFactory);
+const removedWorkflowModules = [
+	"apply-change",
+	"ff-change",
+	"verify-change",
+	"bulk-archive-change",
+	"onboard",
+	"feedback",
+];
+const removedFactories = [
+	"getApplyInstructions",
 	"getApplyChangeSkillTemplate",
-	"getUpdateChangeSkillTemplate",
+	"getOpsxApplyCommandTemplate",
 	"getFfChangeSkillTemplate",
-	"getSyncSpecsSkillTemplate",
-	"getArchiveChangeSkillTemplate",
-	"getBulkArchiveChangeSkillTemplate",
+	"getOpsxFfCommandTemplate",
 	"getVerifyChangeSkillTemplate",
+	"getOpsxVerifyCommandTemplate",
+	"getBulkArchiveChangeSkillTemplate",
+	"getOpsxBulkArchiveCommandTemplate",
 	"getOnboardSkillTemplate",
-	"getOpsxProposeSkillTemplate",
+	"getOpsxOnboardCommandTemplate",
 	"getFeedbackSkillTemplate",
 ];
 interface PackageMetadata {
@@ -64,6 +109,11 @@ interface UpstreamSkill {
 	name: string;
 	description: string;
 	instructions: string;
+}
+interface UpstreamCommand {
+	name: string;
+	description: string;
+	content: string;
 }
 interface Schema {
 	name: string;
@@ -152,6 +202,63 @@ function adaptSuperpowersSkill(name: string, raw: Uint8Array): Uint8Array {
 	metadata.description = description;
 	return Buffer.from(`---\n${stringifyYaml(metadata)}---${content.slice(frontmatter[0].length)}`);
 }
+
+function adaptMethodFile(relative: string, raw: Uint8Array): Uint8Array {
+	const patches = methodAdaptation.files[relative];
+	if (!patches) return raw;
+	let content = Buffer.from(raw).toString("utf8").replace(/\r\n/g, "\n");
+	for (const patch of patches) {
+		const anchor = "before" in patch ? patch.before : patch.start;
+		const start = content.indexOf(anchor);
+		if (start < 0 || content.indexOf(anchor, start + anchor.length) >= 0)
+			throw new Error(`Controlled method anchor missing or ambiguous: ${relative}: ${anchor}`);
+		if ("before" in patch) {
+			content = content.slice(0, start) + patch.after + content.slice(start + anchor.length);
+		} else {
+			const end = patch.end === undefined ? content.length : content.indexOf(patch.end, start + anchor.length);
+			if (end < 0) throw new Error(`Controlled method section end missing: ${relative}: ${patch.end}`);
+			content = content.slice(0, start) + patch.body + content.slice(end);
+		}
+	}
+	return Buffer.from(content);
+}
+
+function embedMethods(entries: Record<string, Uint8Array>, executable: Set<string>): SpecDrivenMethodEntry[] {
+	const originals = { ...entries };
+	const methods: SpecDrivenMethodEntry[] = [];
+	for (const method of methodAdaptation.methods) {
+		const originalPath = `${method.source}/skills/${method.name}/SKILL.md`;
+		const original = originals[originalPath];
+		if (!original) throw new Error(`Missing controlled method source: ${originalPath}`);
+		for (const role of method.roles) {
+			const prefix = `${method.source}/methods/${role}/skills/${method.name}/`;
+			const originalPrefix = `${method.source}/skills/${method.name}/`;
+			for (const [relative, raw] of Object.entries(originals)) {
+				if (!relative.startsWith(originalPrefix)) continue;
+				const target = prefix + relative.slice(originalPrefix.length);
+				entries[target] = adaptMethodFile(relative, raw);
+				if (executable.has(relative)) executable.add(target);
+			}
+			const effectivePath = `${prefix}SKILL.md`;
+			const effective = Buffer.from(entries[effectivePath]!).toString("utf8");
+			entries[effectivePath] = Buffer.from(
+				/^disable-model-invocation: true$/m.test(effective) ? effective : hidden(effective),
+			);
+			methods.push({
+				source: method.source,
+				name: method.name,
+				role,
+				path: effectivePath,
+				originalPath:
+					method.source === "superpowers" ? `superpowers/original-skills/${method.name}/SKILL.md` : originalPath,
+				originalSha256: crypto.createHash("sha256").update(original).digest("hex"),
+				sha256: crypto.createHash("sha256").update(entries[effectivePath]!).digest("hex"),
+				adaptation: methodAdaptation.adaptation,
+			});
+		}
+	}
+	return methods;
+}
 function normalizeTar(bytes: Uint8Array): void {
 	for (let offset = 0; offset + 512 <= bytes.length;) {
 		const header = bytes.subarray(offset, offset + 512);
@@ -178,6 +285,178 @@ function normalizeTar(bytes: Uint8Array): void {
 		offset += 512 * (1 + Math.ceil(size / 512));
 	}
 }
+
+/**
+ * Adapt archive entries, not staging: --embed always starts from the same pinned
+ * offline originals, and interrupted generation cannot leave a half-adapted CLI.
+ */
+function adaptOpenSpecEntries(
+	entries: Record<string, Uint8Array>,
+	templates: UpstreamSkill[],
+	commands: UpstreamCommand[],
+): UpstreamSkill[] {
+	const root = "openspec/dist/";
+	const readEntry = (relative: string): string => {
+		const value = entries[root + relative];
+		if (!value) throw new Error(`Missing pinned OpenSpec adapter target: ${relative}`);
+		return Buffer.from(value).toString("utf8");
+	};
+	const writeEntry = (relative: string, text: string): void => {
+		entries[root + relative] = Buffer.from(text);
+		delete entries[root + relative + ".map"];
+	};
+	const replaceOnce = (relative: string, before: string, after: string): void => {
+		const text = readEntry(relative);
+		if (!text.includes(before) || text.indexOf(before) !== text.lastIndexOf(before))
+			throw new Error(`Pinned OpenSpec adapter anchor changed: ${relative}`);
+		writeEntry(relative, text.replace(before, after));
+	};
+	const adapted = requirementsWorkflows.map(([, workflow], index) => {
+		const original = templates[index];
+		const originalCommand = commands[index];
+		if (original?.name !== workflow.skill || !originalCommand)
+			throw new Error(`Missing retained OpenSpec factory: ${workflow.skill}`);
+		const adaptBody = (body: string, surface: "skill" | "command"): string => {
+			for (const replacement of workflow.replacements ?? []) {
+				if (replacement.surface && replacement.surface !== surface) continue;
+				const before = replacement.before.trimEnd();
+				if (!body.includes(before) || body.indexOf(before) !== body.lastIndexOf(before))
+					throw new Error(`Pinned OpenSpec ${workflow.module}/${surface} body anchor changed: ${before}`);
+				body = body.replace(before, replacement.after.trimEnd());
+			}
+			// Remove both implementation branches, not only the currently unavailable one.
+			body = body.replace(
+				/\[\[opsx:if-workflow apply\]\][\s\S]*?\[\[opsx:else\]\][\s\S]*?\[\[opsx:end\]\]/g,
+				requirementsAdaptation.requirementsHandoff,
+			);
+			return `${requirementsAdaptation.common.trim()}\n\n${body}`.replace(
+				/(?<![\w/.-])openspec (?=[a-z-])/g,
+				"omp openspec ",
+			);
+		};
+		const template = {
+			...original,
+			description: workflow.description ?? original.description,
+			instructions: adaptBody(original.instructions, "skill"),
+		};
+		const command = {
+			...originalCommand,
+			description: workflow.description ?? originalCommand.description,
+			content: adaptBody(originalCommand.content, "command"),
+		};
+		writeEntry(
+			`core/templates/workflows/${workflow.module}.js`,
+			`export function ${workflow.skillFactory}() { return ${JSON.stringify(template)}; }\n` +
+				`export function ${workflow.commandFactory}() { return ${JSON.stringify(command)}; }\n`,
+		);
+		return template;
+	});
+	for (const name of Object.keys(entries)) {
+		if (
+			removedWorkflowModules.some(module => name.startsWith(`${root}core/templates/workflows/${module}.`)) ||
+			removedWorkflowModules.some(
+				module =>
+					name.startsWith(`openspec/skills/openspec-${module}/`) ||
+					name.startsWith(`openspec/original-skills/openspec-${module}/`),
+			) ||
+			name.startsWith("openspec/skills/feedback/") ||
+			name.startsWith("openspec/original-skills/feedback/")
+		)
+			delete entries[name];
+	}
+	for (const extension of ["js", "d.ts"]) {
+		const relative = `core/templates/skill-templates.${extension}`;
+		writeEntry(
+			relative,
+			readEntry(relative)
+				.split("\n")
+				.filter(line => !removedWorkflowModules.some(module => line.includes(`./workflows/${module}.`)))
+				.join("\n"),
+		);
+	}
+	let generation = readEntry("core/shared/skill-generation.js");
+	for (const factory of removedFactories) generation = generation.replaceAll(`${factory}, `, "");
+	generation = generation
+		.split("\n")
+		.filter(line => !removedFactories.some(factory => line.includes(`template: ${factory}()`)))
+		.join("\n");
+	writeEntry("core/shared/skill-generation.js", generation);
+	const workflowIds = requirementsWorkflows.map(([id]) => id);
+	writeEntry(
+		"core/profiles.js",
+		`export const CORE_WORKFLOWS = ${JSON.stringify(workflowIds)};\n` +
+			"export const ALL_WORKFLOWS = CORE_WORKFLOWS;\n" +
+			"export function getProfileWorkflows(profile, customWorkflows) {\n" +
+			"  if (profile !== 'custom') return CORE_WORKFLOWS;\n" +
+			"  const workflows = (customWorkflows ?? []).filter(id => ALL_WORKFLOWS.includes(id));\n" +
+			"  if (workflows.includes('archive') && !workflows.includes('sync')) workflows.push('sync');\n" +
+			"  return workflows;\n}\n",
+	);
+	// Removal loops must still recognize previously installed implementation wrappers.
+	// Selection/creation loops continue to see only the seven retained workflows.
+	const cleanupWorkflows = JSON.stringify([
+		...workflowIds,
+		"apply",
+		"ff",
+		"verify",
+		"bulk-archive",
+		"onboard",
+		"feedback",
+	]);
+	replaceOnce(
+		"core/legacy-cleanup.js",
+		"...ALL_WORKFLOWS.map(workflow => `.kilocode/workflows/opsx-${workflow}.md`),",
+		`...${cleanupWorkflows}.map(workflow => \`.kilocode/workflows/opsx-\${workflow}.md\`),`,
+	);
+	replaceOnce(
+		"core/profile-sync-drift.js",
+		"export const WORKFLOW_TO_SKILL_DIR = {",
+		"export const WORKFLOW_TO_SKILL_DIR = {\n    'feedback': 'feedback',",
+	);
+	for (const relative of ["core/init.js", "core/update.js", "core/shared/tool-detection.js"]) {
+		writeEntry(
+			relative,
+			readEntry(relative).replaceAll(
+				"for (const workflow of ALL_WORKFLOWS)",
+				`for (const workflow of ${cleanupWorkflows})`,
+			),
+		);
+	}
+	replaceOnce("commands/workflow/default-schema.js", "'spec-driven'", "'omp-spec'");
+	// Resolve legacy graphs as an in-memory requirements projection. Never rewrite
+	// their schema, metadata, or historical implementation artifacts.
+	replaceOnce(
+		"core/artifact-graph/resolver.js",
+		"return parseSchema(content);",
+		"const schema = parseSchema(content);\n" +
+			"        const retained = schema.artifacts.filter(a => a.id === 'proposal' || a.id === 'specs');\n" +
+			"        const ids = new Set(retained.map(a => a.id));\n" +
+			"        if (retained.length !== 2 || retained.some(a => a.requires.some(id => !ids.has(id))) ||\n" +
+			"            retained.some(a => a.id === 'proposal' ? a.generates !== 'proposal.md' : a.generates !== 'specs/**/*.md'))\n" +
+			"            throw new Error('Incompatible requirements schema: proposal/specs cannot be isolated from implementation artifacts');\n" +
+			"        const instructions = " +
+			JSON.stringify({
+				proposal: requirementsAdaptation.proposalInstruction,
+				specs: requirementsAdaptation.specsInstruction,
+			}) +
+			";\n" +
+			"        return { ...schema, artifacts: retained.map(a => ({ ...a, instruction: instructions[a.id] })), apply: undefined };",
+	);
+	const instructionsPath = "commands/workflow/instructions.js";
+	const instructions = readEntry(instructionsPath);
+	const start = instructions.indexOf("export async function generateApplyInstructions(");
+	const end = instructions.indexOf("export async function applyInstructionsCommand(", start);
+	if (start < 0 || end < 0) throw new Error("Pinned OpenSpec apply instruction boundary changed");
+	writeEntry(
+		instructionsPath,
+		instructions.slice(0, start) +
+			"export async function generateApplyInstructions() {\n" +
+			"    throw new Error('Implementation instructions are unavailable in the requirements-only OpenSpec engine');\n}\n" +
+			instructions.slice(end),
+	);
+	return adapted;
+}
+
 async function embed(): Promise<void> {
 	const source = await Bun.file(path.join(staging, "source.json")).json();
 	if (source.revision !== revision) throw new Error("Staging source revision mismatch");
@@ -189,7 +468,7 @@ async function embed(): Promise<void> {
 	const templateRunner = path.join(staging, "templates.mjs");
 	await Bun.write(
 		templateRunner,
-		`import { ${factories.join(", ")} } from './openspec/dist/core/templates/skill-templates.js';\nconsole.log(JSON.stringify([${factories.map(name => `${name}()`).join(", ")} ]));\n`,
+		`import { ${[...factories, ...requirementsWorkflows.map(([, workflow]) => workflow.commandFactory)].join(", ")} } from './openspec/dist/core/templates/skill-templates.js';\nconsole.log(JSON.stringify({ skills: [${factories.map(name => `${name}()`).join(", ")}], commands: [${requirementsWorkflows.map(([, workflow]) => `${workflow.commandFactory}()`).join(", ")}] }));\n`,
 	);
 	const child = Bun.spawn([process.execPath, templateRunner], {
 		cwd: staging,
@@ -203,8 +482,12 @@ async function embed(): Promise<void> {
 		child.exited,
 	]);
 	if (exit !== 0) throw new Error(`Pinned skill generation failed: ${error}`);
-	const templates = JSON.parse(output) as UpstreamSkill[];
-	if (templates.length !== 13) throw new Error("Expected all 13 OpenSpec skills");
+	const { skills: templates, commands } = JSON.parse(output) as {
+		skills: UpstreamSkill[];
+		commands: UpstreamCommand[];
+	};
+	if (templates.length !== requirementsWorkflows.length || commands.length !== requirementsWorkflows.length)
+		throw new Error("Expected seven retained OpenSpec skill/command pairs");
 	const entries: Record<string, Uint8Array> = {};
 	const skills: SpecDrivenSkillEntry[] = [];
 	const executable = new Set<string>();
@@ -220,13 +503,30 @@ async function embed(): Promise<void> {
 				executable.add(`${prefix}/${relative}`);
 		}
 	}
-	for (const template of templates) {
+	for (const [relative, digest] of Object.entries(jchFiles)) {
+		const raw = new Uint8Array(await fs.readFile(path.join(vendor, "jch-grill-me", relative)));
+		if (crypto.createHash("sha256").update(raw).digest("hex") !== digest)
+			throw new Error(`Pinned JCH source digest mismatch: ${relative}`);
+		entries[`jch/skills/jch-grill-me/${relative}`] = raw;
+	}
+	skills.push({ source: "jch", name: "jch-grill-me", path: "jch/skills/jch-grill-me/SKILL.md" });
+	const methods = embedMethods(entries, executable);
+	for (const [index, template] of adaptOpenSpecEntries(entries, templates, commands).entries()) {
 		if (!/^[a-z0-9-]+$/.test(template.name) || !template.instructions || !template.description)
 			throw new Error("Invalid pinned upstream skill template");
-		const raw = `---\nname: ${template.name}\ndescription: ${JSON.stringify(template.description)}\n---\n\n${template.instructions}\n`;
-		entries[`openspec/original-skills/${template.name}/SKILL.md`] = Buffer.from(raw);
+		const original = templates[index]!;
+		// Provenance is the untouched fixed factory output, before routing or adaptation.
+		entries[`openspec/original-skills/${template.name}/SKILL.md`] = Buffer.from(
+			`---\nname: ${original.name}\ndescription: ${JSON.stringify(original.description)}\n---\n\n${original.instructions}\n`,
+		);
 		const relative = `openspec/skills/${template.name}/SKILL.md`;
-		entries[relative] = Buffer.from(hidden(raw).replace(/(?<![\w/.-])openspec (?=[a-z-])/g, "omp openspec "));
+		const raw =
+			`---\nname: ${template.name}\ndescription: ${JSON.stringify(template.description)}\n---\n\n${template.instructions}\n`.replace(
+				/\[\[opsx:if-workflow ([a-z-]+)\]\]([\s\S]*?)\[\[opsx:else\]\]([\s\S]*?)\[\[opsx:end\]\]/g,
+				(_match, id: string, installed: string, missing: string) =>
+					requirementsWorkflows.some(([workflow]) => workflow === id) ? installed : missing,
+			);
+		entries[relative] = Buffer.from(hidden(raw));
 		skills.push({ source: "openspec", name: template.name, path: relative });
 	}
 	for (const name of superpowersSkills) {
@@ -244,20 +544,24 @@ async function embed(): Promise<void> {
 	schema.description = "OMP requirements-only proposal and specification artifacts";
 	schema.artifacts = schema.artifacts.filter(artifact => artifact.id === "proposal" || artifact.id === "specs");
 	delete schema.apply;
-	const proposal = schema.artifacts.find(artifact => artifact.id === "proposal");
-	if (!proposal || schema.artifacts.length !== 2) throw new Error("Upstream schema does not contain proposal/specs");
-	// Requirement phase has no implementation artifacts: remove the upstream handoff only.
-	proposal.instruction = proposal.instruction
-		.replace(
-			"implementation details belong in design.md.",
-			"implementation details are outside this requirements-only phase.",
-		)
-		.replace(
-			"This is the foundation - specs, design, and tasks all build on this.",
-			"This is the foundation for the specification artifacts.",
-		);
-	for (const artifact of schema.artifacts)
-		artifact.instruction = artifact.instruction.replace(/(?<![\w/.-])openspec (?=[a-z-])/g, "omp openspec ");
+	if (schema.artifacts.length !== 2) throw new Error("Upstream schema does not contain proposal/specs");
+	for (const artifact of schema.artifacts) {
+		artifact.instruction =
+			artifact.id === "proposal"
+				? requirementsAdaptation.proposalInstruction
+				: requirementsAdaptation.specsInstruction;
+	}
+	// Both the dedicated OMP schema and the upstream built-in default are
+	// requirements-only. Project-local legacy schemas are projected at load time.
+	for (const name of ["omp-spec", "spec-driven"]) {
+		entries[`openspec/schemas/${name}/schema.yaml`] = Buffer.from(stringifyYaml({ ...schema, name }));
+		for (const template of ["proposal.md", "spec.md"])
+			entries[`openspec/schemas/${name}/templates/${template}`] = await Bun.file(
+				path.join(openspec, "schemas/spec-driven/templates", template),
+			).bytes();
+		for (const template of ["design.md", "tasks.md"])
+			delete entries[`openspec/schemas/${name}/templates/${template}`];
+	}
 	entries["omp-spec/schema.yaml"] = Buffer.from(stringifyYaml(schema));
 	for (const template of ["proposal.md", "spec.md"])
 		entries[`omp-spec/templates/${template}`] = await Bun.file(
@@ -271,6 +575,8 @@ async function embed(): Promise<void> {
 	const manifest: SpecDrivenResourceManifest = {
 		openspec: { version, integrity: source.integrity },
 		superpowers: { version: superpowersVersion, revision },
+		jch: { revision: jchRevision },
+		methods,
 		skills,
 		files: Object.keys(entries)
 			.sort()
@@ -293,7 +599,7 @@ async function embed(): Promise<void> {
 	);
 	await Bun.write(path.join(vendor, "inventory.json"), JSON.stringify(manifest, null, 2));
 	await fs.rm(templateRunner);
-	// Staging is not a distribution convention: the statically imported module contains everything.
+	// Staging must not expose upstream examples to the package TypeScript source graph.
 	await fs.rm(staging, { recursive: true, force: true });
 	console.log(`Embedded ${manifest.files.length} complete files, ${skills.length} skills; archive SHA256 ${sha}`);
 }

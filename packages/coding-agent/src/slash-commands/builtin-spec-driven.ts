@@ -7,7 +7,7 @@ const usages = [
 	["answer", "<text>", "回答当前澄清问题"],
 	["confirm-spec", "<version>", "明确确认当前规格版本"],
 	["choose", "<run-id> <candidate-id> <candidate-version>", "选择当前已审查候选，仅授权编写计划"],
-	["confirm-plan", "<version>", "批准计划、启动执行并授权本任务本地 commit"],
+	["confirm-plan", "<version> [--goal]", "批准计划并启动自主执行；可选 Goal，仅授权本任务本地 commit"],
 	["accept", "<acceptance-version>", "最终验收当前交付版本"],
 	["amend", "<text>", "修改需求，撤销受影响下游批准"],
 	["change-solution", "<reason>", "重新讨论核心方案"],
@@ -19,7 +19,7 @@ const usages = [
 export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 	{
 		name: "spec",
-		description: "规格驱动三阶段编排（显式版本批准，仅运行期状态）",
+		description: "规格驱动四职责编排（显式版本批准，仅运行期状态）",
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: usages.map(([name, usage, description]) => ({ name, usage, description })),
@@ -91,8 +91,16 @@ export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 						break;
 					}
 					case "confirm-plan": {
-						const [version] = exact(1);
-						jobId = controller.schedule(core => core.confirmPlan(version!));
+						const values = text ? text.split(/\s+/) : [];
+						if (
+							values.length < 1 ||
+							values.length > 2 ||
+							values[0]!.startsWith("-") ||
+							(values.length === 2 && values[1] !== "--goal")
+						)
+							throw new Error("用法：/spec confirm-plan <version> [--goal]");
+						const mode = values.length === 2 ? "goal" : "normal";
+						jobId = controller.schedule(core => core.confirmPlan(values[0]!, { mode }));
 						break;
 					}
 					case "accept": {

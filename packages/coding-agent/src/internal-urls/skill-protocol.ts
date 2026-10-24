@@ -100,7 +100,11 @@ async function skillTargetPath(
 				description: "",
 				source: `bundled-${entry.source}`,
 				hide: true,
-				containRoot: entry.source === "openspec" ? resources.openspecRoot : resources.superpowersRoot,
+				containRoot: {
+					openspec: resources.openspecRoot,
+					superpowers: resources.superpowersRoot,
+					jch: resources.jchRoot,
+				}[entry.source],
 			};
 		}
 	}

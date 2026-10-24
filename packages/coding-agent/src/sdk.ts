@@ -273,7 +273,7 @@ import {
 	loadProjectContextFiles as loadContextFilesInternal,
 	projectSystemPromptToolMetadata,
 } from "./system-prompt";
-import type { AgentDefinition } from "./task/types";
+import type { AgentDefinition, NativeSubagentHooks } from "./task/types";
 import { AgentOutputManager } from "./task/output-manager";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { sessionDelegationBias } from "./task/prompt-policy";
@@ -880,6 +880,10 @@ export interface CreateAgentSessionOptions {
 	 * and ambient custom tools remain disabled. Default: false.
 	 */
 	allowRestrictedCustomTools?: boolean;
+	/** Explicit restricted Goal grant; settings, requested names and restrictions still apply. */
+	allowRestrictedGoal?: boolean;
+	/** Live-host native child admission/configuration; absent on ordinary sessions. */
+	subagentHooks?: NativeSubagentHooks;
 
 	/** Output schema for structured completion (subagents). */
 	outputSchema?: unknown;
@@ -2542,6 +2546,10 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	let hasSession = false;
 	let hasRegistered = false;
 	const restrictToolNames = options.restrictToolNames === true;
+	const restrictedGoalGranted =
+		options.allowRestrictedGoal === true &&
+		options.toolNames?.includes("goal") === true &&
+		options.toolRestrictions?.allows("goal") !== false;
 	const enableLsp = options.enableLsp ?? !restrictToolNames;
 	const lspReadOnly = options.lspReadOnly ?? restrictToolNames;
 	// Every root owns an independent manager. Children borrow the exact manager
@@ -2633,6 +2641,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 		const toolSession: ToolSession = {
 			toolRestrictions: options.toolRestrictions,
+			allowRestrictedGoal: options.allowRestrictedGoal,
+			subagentHooks: options.subagentHooks,
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -3948,7 +3958,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		for (const [name, tool] of toolRegistry) {
 			nativeToolsByName.set(name, tool);
 		}
-		if (!restrictToolNames && !toolRegistry.has("goal") && cfgGoalEnabled.get(settings)) {
+		if ((!restrictToolNames || restrictedGoalGranted) && !toolRegistry.has("goal") && cfgGoalEnabled.get(settings)) {
 			const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 			if (goalTool) {
 				const wrapped = wrapToolWithMetaNotice(goalTool);
@@ -4079,8 +4089,11 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// lazily on demand, mirroring `ensureWriteRegistered`.
 		let goalRegistration: Promise<boolean> | undefined;
 		const ensureGoalRegistered = (): Promise<boolean> => {
+			if (restrictToolNames && (!restrictedGoalGranted || !cfgGoalEnabled.get(settings))) {
+				return Promise.resolve(false);
+			}
 			if (toolRegistry.has("goal")) return Promise.resolve(true);
-			if (restrictToolNames || !cfgGoalEnabled.get(settings)) return Promise.resolve(false);
+			if (!cfgGoalEnabled.get(settings)) return Promise.resolve(false);
 			goalRegistration ??= (async () => {
 				const goalTool = await logger.time("createTools:goal:session", HIDDEN_TOOLS.goal, toolSession);
 				if (!goalTool || toolRegistry.has("goal")) return toolRegistry.has("goal");

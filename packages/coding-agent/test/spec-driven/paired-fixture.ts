@@ -285,7 +285,7 @@ async function runPairedArm() {
 		let measurement: SpecRunMeasurement;
 		if (mode === "baseline") {
 			await session.prompt(
-				`OMP_PAIRED_DIRECT\n${PAIRED_TASK}\nUse the selected original OpenSpec proposal/specification methods and Superpowers brainstorming directly with normal native tools, without /spec or the OMP orchestration runtime.\nOMP_PAIRED_RESOURCES ${JSON.stringify(selected.map(skill => skill.filePath))}`,
+				`OMP_PAIRED_DIRECT\n${PAIRED_TASK}\nUse the retained OpenSpec proposal/specification capabilities and Superpowers brainstorming as independent ordinary native calls, without /spec or the OMP orchestration runtime. This is not the full upstream distribution before capability removal.\nOMP_PAIRED_RESOURCES ${JSON.stringify(selected.map(skill => skill.filePath))}`,
 			);
 			measurement = {
 				task: PAIRED_TASK,

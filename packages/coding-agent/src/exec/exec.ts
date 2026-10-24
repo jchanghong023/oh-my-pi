@@ -13,6 +13,8 @@ export interface ExecOptions {
 	timeout?: number;
 	/** Working directory */
 	cwd?: string;
+	/** Preserve cmd.exe shell syntax instead of applying ordinary Windows CRT argv escaping. */
+	windowsVerbatimArguments?: boolean;
 }
 
 /**
@@ -41,6 +43,9 @@ export async function execCommand(
 		cwd,
 		signal: options?.signal,
 		timeout: options?.timeout,
+		...(options?.windowsVerbatimArguments === undefined
+			? {}
+			: { windowsVerbatimArguments: options.windowsVerbatimArguments }),
 		allowNonZero: true,
 		allowAbort: true,
 		stderr: "full",

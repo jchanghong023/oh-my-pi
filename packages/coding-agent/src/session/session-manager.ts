@@ -3662,6 +3662,7 @@ export class SessionManager {
 		advisor?: string;
 		compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 		isolated?: boolean;
+		requiresLiveHost?: boolean;
 		workPoolYieldItems?: WorkPoolYieldItem[];
 	}): string {
 		const entry: SessionInitEntry = { type: "session_init", ...this.#freshEntryFields(), ...init };
@@ -4711,6 +4712,7 @@ export interface PersistedSessionInit {
 	advisor?: string;
 	compactionThreshold?: { thresholdPercent: number; thresholdTokens: number };
 	isolated?: boolean;
+	requiresLiveHost?: boolean;
 	workPoolYieldItems?: WorkPoolYieldItem[];
 }
 
@@ -4738,6 +4740,7 @@ export function extractSessionInit(entries: readonly FileEntry[]): PersistedSess
 			spawns: entry.spawns,
 			advisor: entry.advisor,
 			isolated: entry.isolated,
+			requiresLiveHost: entry.requiresLiveHost,
 			...(entry.compactionThreshold !== undefined ? { compactionThreshold: entry.compactionThreshold } : undefined),
 			...(entry.workPoolYieldItems !== undefined ? { workPoolYieldItems: entry.workPoolYieldItems } : undefined),
 		};

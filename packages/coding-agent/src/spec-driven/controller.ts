@@ -60,8 +60,10 @@ export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
 			phase: state.phase,
 			paused: state.paused,
 			generation: state.generation,
+			executionMode: state.executionMode,
 			changeId: state.changeId,
 			specificationVersion: state.specification?.version,
+			solutionVersion: state.solution?.version,
 			planVersion: state.plan?.version,
 			artifactVersion: state.plan?.artifactVersion,
 			runId: state.team?.runId,
@@ -80,8 +82,8 @@ export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
 		);
 	if (state.phase === "awaiting-specification" && state.specification) {
 		lines.push(
-			"待确认的需求原文：",
-			state.specification.proposal,
+			`待确认的需求原文：${state.specification.document.path}`,
+			state.specification.document.content,
 			...state.specification.specs.map(spec => `### ${spec.path}\n${spec.content}`),
 		);
 	}
@@ -105,11 +107,25 @@ export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
 		for (const difference of state.team.interpretationDifferences)
 			lines.push(`理解差异：${JSON.stringify(difference)}`);
 	}
+	if (state.solution) lines.push(`已选方案原文（${state.solution.artifactVersion}）：`, state.solution.proposal);
+	for (const handoff of state.handoffs ?? [])
+		lines.push(
+			`原生交接 ${handoff.transition}：${handoff.path}`,
+			JSON.stringify({
+				actorId: handoff.actorId,
+				sessionId: handoff.sessionId,
+				runId: handoff.runId,
+				generation: handoff.generation,
+				digest: handoff.digest,
+				versions: handoff.versions,
+			}),
+			handoff.body,
+		);
 	if (state.phase === "awaiting-plan" && state.plan)
 		lines.push(
 			"待批准的唯一计划：",
 			state.plan.content,
-			"确认计划会启动执行，并仅授权已批准工作区内本任务相关改动的本地 commit；不授权合并、推送、发布、PR 或改写历史。",
+			"确认计划会启动自主执行（默认 normal；--goal 仅为执行代理启用原生 Goal），并仅授权已批准工作区内本任务相关改动的本地 commit；不授权最终分支合并、推送、发布、PR 或改写历史。",
 		);
 	for (const task of state.tasks)
 		lines.push(
@@ -134,7 +150,8 @@ export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
 			)
 				next.push(`/spec choose ${state.team.runId} ${candidate.id} ${candidate.version}`);
 		if (!next.length) next.push("/spec change-solution <重新讨论的原因>");
-	} else if (state.phase === "awaiting-plan" && state.plan) next.push(`/spec confirm-plan ${state.plan.version}`);
+	} else if (state.phase === "awaiting-plan" && state.plan)
+		next.push(`/spec confirm-plan ${state.plan.version}`, `/spec confirm-plan ${state.plan.version} --goal`);
 	else if (state.phase === "awaiting-acceptance" && state.acceptanceVersion)
 		next.push(`/spec accept ${state.acceptanceVersion}`);
 	else if (!["completed", "cancelled"].includes(state.phase)) next.push("/spec status", "/spec pause");

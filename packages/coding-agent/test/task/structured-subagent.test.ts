@@ -4,7 +4,12 @@ import * as os from "node:os";
 import path from "node:path";
 import { AuthStorage, type Api, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
-import { createMockModel, registerMockApi } from "@oh-my-pi/pi-ai/providers/mock";
+import {
+	createMockModel,
+	registerMockApi,
+	type MockModel,
+	type MockModelOptions,
+} from "@oh-my-pi/pi-ai/providers/mock";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
@@ -26,6 +31,7 @@ import {
 	resolveModelOverride,
 } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
+import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
 import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
@@ -35,12 +41,17 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import * as sdkModule from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
+import { ToolRestrictions } from "@oh-my-pi/pi-coding-agent/session/tool-restrictions";
+import { SpecExecutionHost } from "@oh-my-pi/pi-coding-agent/spec-driven/execution";
+import { SpecGitService } from "@oh-my-pi/pi-coding-agent/spec-driven/git";
+import type { SpecPlan, SpecTask } from "@oh-my-pi/pi-coding-agent/spec-driven/types";
 
 import { TaskTool } from "@oh-my-pi/pi-coding-agent/task";
 import * as discoveryModule from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { createEvalCustomTools } from "@oh-my-pi/pi-coding-agent/task/eval-tools";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
 import * as isolationRunner from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import * as seanceModule from "@oh-my-pi/pi-coding-agent/task/seance";
 import {
 	buildStructuredSubagentRecoveryHint,
 	resolveEffectiveSubagentPolicy,
@@ -48,7 +59,7 @@ import {
 	StructuredSubagentError,
 	type StructuredSubagentRequest,
 } from "@oh-my-pi/pi-coding-agent/task/structured-subagent";
-import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
+import type { AgentDefinition, NativeSubagentHooks } from "@oh-my-pi/pi-coding-agent/task/types";
 import type { SingleResult, TaskParams } from "@oh-my-pi/pi-tui/tools/task";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { VibeSessionRegistry } from "@oh-my-pi/pi-coding-agent/vibe/runtime";
@@ -56,7 +67,13 @@ import { __resetDirsFromEnvForTests, removeWithRetries, setAgentDir } from "@oh-
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 import { cfgRetryFallbackChains, cfgRetryModelFallback } from "@oh-my-pi/pi-coding-agent/session/settings";
-import { cfgTaskAgentModelOverrides, cfgTaskEnableEffort } from "@oh-my-pi/pi-coding-agent/task/settings";
+import {
+	cfgTaskAgentModelOverrides,
+	cfgTaskEnableEffort,
+	cfgTaskIsolationApply,
+	cfgTaskIsolationCommits,
+	cfgTaskIsolationEnabled,
+} from "@oh-my-pi/pi-coding-agent/task/settings";
 
 const AGENT: AgentDefinition = {
 	name: "worker",
@@ -1648,6 +1665,765 @@ describe("agent frontmatter structured opt-in", () => {
 		}
 	});
 
+	async function withNativeHookFixture(
+		body: (fixture: { parent: ToolSession; cwd: string; model: MockModel; worker: AgentDefinition }) => Promise<void>,
+		handler: MockModelOptions["handler"],
+		isolationEnabled = false,
+	): Promise<void> {
+		const cwd = path.join(root, "home", "native-hooks");
+		await fs.mkdir(cwd, { recursive: true });
+		const authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime("mock", "test-key");
+		const model = createMockModel({ handler });
+		const modelRegistry = new ModelRegistry(authStorage, path.join(root, "models.yml"));
+		modelRegistry.getAvailable = () => [model];
+		const find = modelRegistry.find.bind(modelRegistry);
+		modelRegistry.find = (provider, id) => (provider === "mock" && id === model.id ? model : find(provider, id));
+		const settings = Settings.isolated({
+			modelRoles: { default: `mock/${model.id}` },
+			"task.structured": false,
+			"task.agentIdleTtlMs": 0,
+			"task.maxRecursionDepth": 4,
+			"task.isolation.enabled": isolationEnabled,
+			"async.enabled": false,
+			"compaction.enabled": false,
+			"retry.enabled": false,
+			"todo.enabled": false,
+			"todo.reminders": false,
+			"advisor.enabled": false,
+		});
+		const parent = Object.assign(session({ cwd, settings }), {
+			authStorage,
+			modelRegistry,
+			enableLsp: false,
+			enableMCP: false,
+			enableIrc: false,
+		});
+		const worker = { ...AGENT, model: [`mock/${model.id}`], output: undefined, tools: ["read", "task"] };
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [worker, { ...worker, name: "leaf", tools: ["read"] }, getBundledAgent("seance")!],
+			projectAgentsDir: null,
+		});
+		try {
+			await body({ parent, cwd, model, worker });
+		} finally {
+			await AgentLifecycleManager.global().dispose();
+			authStorage.close();
+		}
+	}
+
+	it.each(["admission", "policy", "lease", "prepare", "configure", "session"] as const)(
+		"failed native %s preparation releases only its admission and permits same-stage retry",
+		async boundary => {
+			const enteredB = Promise.withResolvers<void>();
+			const releaseB = Promise.withResolvers<void>();
+			await withNativeHookFixture(
+				async ({ parent, cwd, worker }) => {
+					worker.systemPrompt = "Selected worker role must survive pinned methods.";
+					for (const args of [
+						["init"],
+						["config", "user.email", "native-retry@example.invalid"],
+						["config", "user.name", "Native retry fixture"],
+					]) {
+						const command = Bun.spawnSync(["git", ...args], { cwd });
+						expect(command.exitCode).toBe(0);
+					}
+					await fs.writeFile(path.join(cwd, "A.txt"), "branch A actual read");
+					await fs.writeFile(path.join(cwd, "B.txt"), "branch B actual read");
+					await fs.writeFile(path.join(cwd, ".gitignore"), ".spec-checks/\n");
+					for (const args of [
+						["add", "."],
+						["commit", "-m", "native retry baseline"],
+					])
+						expect(Bun.spawnSync(["git", ...args], { cwd }).exitCode).toBe(0);
+					const tasks: SpecTask[] = ["A", "B"].map(branch => ({
+						id: branch === "A" ? "T001" : "T002",
+						title: branch,
+						instructions: `Read ${branch}.txt`,
+						requirementIds: ["R001"],
+						dependencies: [],
+						conditionIds: [],
+						ownedPaths: [`${branch}.txt`],
+						implementationPaths: [],
+						solutionBinding: `independent-${branch}`,
+						validation: [],
+						tdd: { mode: "exception", reason: "Read-only preparation regression", alternativeCommands: [] },
+					}));
+					const plan: SpecPlan = {
+						version: "approved-plan",
+						artifactVersion: "approved-artifact",
+						specificationVersion: "approved-spec",
+						candidateVersion: "approved-candidate",
+						solutionVersion: "approved-solution",
+						content: "# Native retry plan",
+						workspace: { executionPath: cwd, isolation: "native", integration: "native" },
+						tasks,
+						conditions: [],
+						finalValidation: [],
+						closure: { sync: false, archive: false },
+					};
+					const methodPath = path.join(cwd, "implementation-method.md");
+					await fs.writeFile(methodPath, "Pinned native execution methods.\n");
+					const git = new SpecGitService(cwd);
+					await git.preflight();
+					const host = new SpecExecutionHost({
+						plan,
+						specificationVersion: plan.specificationVersion,
+						workspace: await fs.realpath(cwd),
+						changeDir: path.join(cwd, ".spec-checks"),
+						checksDirectory: ".spec-checks",
+						planPath: ".spec-checks/plan.md",
+						methods: ["Pinned native execution methods."],
+						skills: [
+							{
+								name: "test-driven-development",
+								description: "Pinned implementation fixture method.",
+								filePath: methodPath,
+								baseDir: cwd,
+								source: "project",
+								hide: true,
+							},
+						],
+						context: { runId: "native-retry", generation: 1, signal: new AbortController().signal },
+						control: {
+							status: () => [],
+							start: async id => {
+								const task = tasks.find(item => item.id === id);
+								if (!task) throw new Error(`Unknown approved task ${id}`);
+								if (fail && boundary === "admission" && id === "T001")
+									throw new Error("control admission rejected");
+								return task;
+							},
+							checkpoint: async () => {
+								throw new Error("No checkpoint in preparation regression");
+							},
+						},
+						git,
+						session: parent,
+						onEvidence: () => {},
+						onRecord: () => {},
+					});
+					const hooks = host.hooks();
+					let fail = true;
+					const failures: unknown[] = [];
+					parent.subagentHooks = {
+						...hooks,
+						configureSession: async (child, options) => {
+							const failing = fail && child.identity?.label === "T001";
+							const configured = await hooks.configureSession(
+								child,
+								failing && boundary === "configure"
+									? { ...options, cwd: path.join(cwd, "missing-configure-workspace") }
+									: options,
+							);
+							if (failing && boundary === "session")
+								return {
+									...configured,
+									onSessionCreated: () => {
+										throw new Error("actual session observer rejected");
+									},
+								};
+							return configured;
+						},
+						onSpawnFailed: async (child, error) => {
+							failures.push(error);
+							await hooks.onSpawnFailed?.(child, error);
+							// A repeated cleanup cannot disturb another admitted branch.
+							await hooks.onSpawnFailed?.(child, error);
+							throw new Error("cleanup observer failure must not mask preparation");
+						},
+					};
+					const nativeRequest = (branch: string) =>
+						request({
+							session: parent,
+							identity: { label: branch === "A" ? "T001" : "T002" },
+							context: `NATIVE_BRANCH=${branch}`,
+							assignment: `Read ${branch}.txt and report its content.`,
+							isolation: { requested: true },
+							structured: true,
+							outputSchema: {
+								type: "object",
+								properties: { content: { type: "string" } },
+								required: ["content"],
+							},
+						});
+					await expect(runStructuredSubagent({ ...nativeRequest("A"), isolation: undefined })).rejects.toThrow(
+						"require approved actual isolation",
+					);
+					expect(failures).toHaveLength(0);
+					const parallel = runStructuredSubagent(nativeRequest("B"));
+					try {
+						await enteredB.promise;
+						const failed = runStructuredSubagent({
+							...nativeRequest("A"),
+							...(boundary === "policy" ? { agent: "missing-worker" } : {}),
+							...(boundary === "lease"
+								? { session: { ...parent, getSessionFile: () => path.join(cwd, "A.txt", "child.jsonl") } }
+								: {}),
+							...(boundary === "prepare"
+								? { session: { ...parent, cwd: path.join(cwd, "missing-prepare-workspace") } }
+								: {}),
+						});
+						if (boundary === "configure" || boundary === "session") {
+							const outcome = await failed;
+							expect(outcome.result.exitCode).toBe(1);
+							expect(outcome.result.error).toContain(
+								boundary === "session" ? "actual session observer rejected" : "missing-configure-workspace",
+							);
+							expect(outcome.result.error).not.toContain("cleanup observer failure");
+						} else if (boundary === "prepare") {
+							await expect(failed).rejects.toBeInstanceOf(Error);
+						} else {
+							await expect(failed).rejects.toThrow(
+								boundary === "admission"
+									? "control admission rejected"
+									: boundary === "policy"
+										? 'Unknown agent "missing-worker"'
+										: "A.txt",
+							);
+						}
+						await expect(runStructuredSubagent(nativeRequest("B"))).rejects.toThrow("conflicts");
+						fail = false;
+						const retry = await runStructuredSubagent(nativeRequest("A"));
+						expect(retry.result.exitCode).toBe(0);
+						expect(retry.result.structuredOutput?.status).toBe("valid");
+						expect(retry.result.output).toContain("branch A actual read");
+						releaseB.resolve();
+						const unaffected = await parallel;
+						expect(unaffected.result.exitCode).toBe(0);
+						expect(unaffected.result.output).toContain("branch B actual read");
+						expect(host.sourceFacts.map(source => source.taskId).sort()).toEqual(["T001", "T002"]);
+						expect(await fs.readFile(path.join(cwd, "A.txt"), "utf8")).toBe("branch A actual read");
+						expect(await fs.readFile(path.join(cwd, "B.txt"), "utf8")).toBe("branch B actual read");
+						expect(failures).toHaveLength(boundary === "admission" ? 0 : 1);
+					} finally {
+						releaseB.resolve();
+						await parallel.catch(() => {});
+						host.dispose();
+					}
+				},
+				async context => {
+					const system = context.systemPrompt?.join("\n") ?? "";
+					const branch =
+						/NATIVE_BRANCH=([AB])/.exec(system)?.[1] ??
+						/Read ([AB])\.txt/.exec(JSON.stringify(context.messages))?.[1];
+					if (!branch) return { content: ["label"] };
+					if (branch === "B") enteredB.resolve();
+					expect(system).toContain("Selected worker role must survive pinned methods.");
+					expect(system).toContain("§ Coop");
+					expect(system).toContain("§ Completion");
+					expect(system).toContain("Yield protocol:");
+					expect(system).toContain("schema fields go inside");
+					expect(system.indexOf("Selected worker role")).toBeLessThan(
+						system.indexOf("Pinned native execution methods."),
+					);
+					if (branch === "B") {
+						await releaseB.promise;
+					}
+					const last = context.messages.at(-1);
+					if (last?.role === "toolResult") {
+						expect(last.isError).not.toBe(true);
+						if (last.toolName === "yield") return { content: ["complete"] };
+						return {
+							content: [
+								{
+									type: "toolCall",
+									name: "yield",
+									arguments: {
+										data: {
+											content: last.content.map(part => (part.type === "text" ? part.text : "")).join("\n"),
+										},
+									},
+								},
+							],
+						};
+					}
+					return { content: [{ type: "toolCall", name: "read", arguments: { path: `${branch}.txt` } }] };
+				},
+				true,
+			);
+		},
+		30_000,
+	);
+
+	it("absent native hooks preserve an ordinary child read operation", async () => {
+		await withNativeHookFixture(
+			async ({ parent, cwd, model }) => {
+				await fs.writeFile(path.join(cwd, "ordinary.txt"), "ordinary native child evidence");
+				const settled = await runStructuredSubagent(
+					request({ session: parent, structured: false, keepAlive: false }),
+				);
+				expect(settled.result.exitCode).toBe(0);
+				expect(settled.result.output).toContain("ordinary native child evidence");
+				expect(model.calls.length).toBeGreaterThanOrEqual(2);
+				expect(artifactsDirsFromRegistry()).toEqual([]);
+			},
+			context => {
+				const last = context.messages.at(-1);
+				if (last?.role === "toolResult") {
+					return { content: [last.content.map(part => (part.type === "text" ? part.text : "")).join("\n")] };
+				}
+				return { content: [{ type: "toolCall", name: "read", arguments: { path: "ordinary.txt" } }] };
+			},
+		);
+	}, 30_000);
+
+	it.each([false, true])(
+		"awaits settled shared-checkout observations (failure=%s)",
+		async fail => {
+			await withNativeHookFixture(
+				async ({ parent, cwd }) => {
+					const observations: string[] = [];
+					let observed: SingleResult | undefined;
+					parent.subagentHooks = {
+						beforeSpawn: async () => ({ keepAlive: false }),
+						configureSession: async (_request, options) => {
+							expect(options.cwd).toBe(cwd);
+							return {};
+						},
+						beforeCapture: async (_request, nativeResult) => {
+							expect(nativeResult.output).toContain("settled shared result");
+							await fs.writeFile(path.join(cwd, "observed.txt"), "settled");
+							observations.push("before");
+						},
+						afterResult: async (_request, nativeResult) => {
+							expect(await fs.readFile(path.join(cwd, "observed.txt"), "utf8")).toBe("settled");
+							expect(nativeResult.patchPath).toBeUndefined();
+							observed = nativeResult;
+							observations.push("after");
+							if (fail) throw new Error("shared persistence rejected");
+						},
+					};
+					const invocation = runStructuredSubagent(
+						request({ session: parent, structured: false, keepAlive: true }),
+					);
+					if (fail) {
+						await expect(invocation).rejects.toThrow("shared persistence rejected");
+						expect(observed?.outputPath).toBeDefined();
+						expect(await Bun.file(observed!.outputPath!).exists()).toBe(true);
+						await fs.rm(path.dirname(observed!.outputPath!), { recursive: true, force: true });
+					} else {
+						expect((await invocation).result).toBe(observed!);
+					}
+					expect(observations).toEqual(["before", "after"]);
+				},
+				() => ({ content: ["settled shared result"] }),
+			);
+		},
+		30_000,
+	);
+
+	it.each(["configured", "original"] as const)(
+		"warm revival disposes the attached session when the %s observer throws",
+		async failingObserver => {
+			await withNativeHookFixture(
+				async ({ parent, cwd, worker }) => {
+					const id = "ObserverRevival";
+					// Native warm revival is registered only for an artifact-backed persisted child.
+					const artifactsDir = path.join(cwd, "observer-revival-artifacts");
+					await fs.mkdir(artifactsDir, { recursive: true });
+					const failure = new Error(`${failingObserver} revival observer failed`);
+					const sessions: sdkModule.CreateAgentSessionResult["session"][] = [];
+					const cleaned: sdkModule.CreateAgentSessionResult["session"][] = [];
+					let admissions = 0;
+					let denyAdmission = false;
+					let reserved = false;
+					const failedSpawns: unknown[] = [];
+					const hooks: NonNullable<executorModule.ExecutorOptions["subagentHooks"]> = {
+						beforeSpawn: async () => {
+							admissions++;
+							if (denyAdmission) throw new Error("renewed admission denied");
+							if (reserved) throw new Error("previous revival still owns admission");
+							reserved = true;
+						},
+						onSpawnFailed: async (_child, error) => {
+							expect(cleaned).toEqual(sessions);
+							reserved = false;
+							failedSpawns.push(error);
+							throw new Error("cleanup must not replace the observer failure");
+						},
+						configureSession: async () => ({
+							enableMCP: false,
+							enableLsp: false,
+							enableIrc: false,
+							onSessionCreated: child => {
+								sessions.push(child);
+								const cleanup = () => {
+									cleaned.push(child);
+								};
+								if (sessions.length === 2 && failingObserver === "configured") {
+									child.addDisposer(cleanup);
+									throw failure;
+								}
+								return cleanup;
+							},
+						}),
+					};
+					const settled = await executorModule.runSubprocess({
+						cwd,
+						artifactsDir,
+						agent: worker,
+						task: "Complete the initial child turn.",
+						id,
+						index: 0,
+						structured: false,
+						keepAlive: true,
+						settings: parent.settings,
+						authStorage: parent.authStorage,
+						modelRegistry: parent.modelRegistry,
+						enableMCP: false,
+						enableLsp: false,
+						enableIrc: false,
+						subagentHooks: hooks,
+						subagentRequest: request({ session: parent, structured: false, keepAlive: true }),
+						onSessionCreated: () => {
+							if (sessions.length === 2 && failingObserver === "original") throw failure;
+						},
+					});
+					expect(settled.exitCode).toBe(0);
+					const registry = AgentRegistry.global();
+					const lifecycle = AgentLifecycleManager.global();
+					expect(registry.get(id)?.sessionFile).toBe(path.join(artifactsDir, `${id}.jsonl`));
+					expect(registry.get(id)?.session).toBe(sessions[0]);
+					await lifecycle.park(id);
+					expect(registry.get(id)?.status).toBe("parked");
+					expect(registry.get(id)?.session).toBeNull();
+					expect(cleaned).toEqual([sessions[0]]);
+
+					await expect(lifecycle.ensureLive(id)).rejects.toBe(failure);
+					expect(sessions).toHaveLength(2);
+					expect(admissions).toBe(1);
+					expect(cleaned).toEqual(sessions);
+					expect(reserved).toBe(false);
+					expect(failedSpawns).toEqual([failure]);
+					expect(registry.get(id)?.session ?? null).toBeNull();
+					expect(registry.get(id)?.status).not.toBe("running");
+					denyAdmission = true;
+					// A failed setup must never leave a session that bypasses live admission.
+					await expect(lifecycle.ensureLive(id)).rejects.toThrow();
+					expect(sessions).toHaveLength(2);
+					expect(failedSpawns).toEqual([failure]);
+				},
+				() => ({ content: ["initial child complete"] }),
+			);
+		},
+		30_000,
+	);
+
+	it.each(["worker", "seance"])(
+		"beforeSpawn rejects %s before seance preparation, artifacts, isolation, or model dispatch",
+		async agent => {
+			await withNativeHookFixture(
+				async ({ parent, model }) => {
+					cfgTaskIsolationEnabled.set(parent.settings, true);
+					const prepare = vi.spyOn(seanceModule, "prepareSeance");
+					const isolate = vi.spyOn(isolationRunner, "prepareIsolationContext");
+					const create = vi.spyOn(sdkModule, "createAgentSession");
+					const artifacts = vi.fn(() => null);
+					parent.getArtifactsDir = artifacts;
+					const admission = vi.fn(async () => {
+						throw new Error("native admission denied");
+					});
+					const configureSession = vi.fn<NativeSubagentHooks["configureSession"]>(async () => {
+						throw new Error("session configuration must not run after denied admission");
+					});
+					parent.subagentHooks = { beforeSpawn: admission, configureSession };
+					await expect(
+						runStructuredSubagent(
+							request({
+								session: parent,
+								agent,
+								sourceSession: agent === "seance" ? path.join(root, "missing.jsonl") : undefined,
+								isolation: { requested: true },
+								structured: false,
+								keepAlive: false,
+							}),
+						),
+					).rejects.toThrow("native admission denied");
+					expect(admission).toHaveBeenCalledTimes(1);
+					expect(configureSession).not.toHaveBeenCalled();
+					expect(prepare).not.toHaveBeenCalled();
+					expect(artifacts).not.toHaveBeenCalled();
+					expect(isolate).not.toHaveBeenCalled();
+					expect(create).not.toHaveBeenCalled();
+					expect(model.calls).toHaveLength(0);
+					expect(artifactsDirsFromRegistry()).toEqual([]);
+				},
+				() => ({ content: ["unexpected dispatch"] }),
+			);
+		},
+		30_000,
+	);
+
+	it.each([
+		"capture",
+		"branch",
+		"subdir",
+		"ordinary-subdir",
+		"freeze-failure",
+		"persist-failure",
+		"retained",
+	] as const)(
+		"observes actual isolated source and preserves callback failures (%s)",
+		async mode => {
+			await withNativeHookFixture(
+				async ({ parent, cwd }) => {
+					cfgTaskIsolationEnabled.set(parent.settings, true);
+					cfgTaskIsolationCommits.set(parent.settings, "generic");
+					for (const args of [
+						["init"],
+						["config", "user.email", "native-hooks@example.invalid"],
+						["config", "user.name", "Native hook fixture"],
+					]) {
+						const command = Bun.spawnSync(["git", ...args], { cwd });
+						expect(command.exitCode).toBe(0);
+					}
+					await fs.writeFile(path.join(cwd, "scope.txt"), "isolated fixture");
+					if (mode === "subdir" || mode === "ordinary-subdir") {
+						const requestedCwd = path.join(cwd, "app");
+						await fs.mkdir(requestedCwd);
+						await fs.writeFile(path.join(requestedCwd, "scope.txt"), "approved subdir fixture");
+						expect(Bun.spawnSync(["git", "add", "app/scope.txt"], { cwd }).exitCode).toBe(0);
+						Object.assign(parent, { cwd: requestedCwd });
+					}
+					expect(Bun.spawnSync(["git", "add", "scope.txt"], { cwd }).exitCode).toBe(0);
+					expect(Bun.spawnSync(["git", "commit", "-m", "fixture"], { cwd }).exitCode).toBe(0);
+					let configuredCwd: string | undefined;
+					let operatedCwd: string | undefined;
+					let configuredBeforeDispatch = false;
+					const observations: string[] = [];
+					let observedResult: SingleResult | undefined;
+					parent.subagentHooks = {
+						beforeSpawn: async () => ({
+							applyChanges: false,
+							keepAlive: mode === "retained",
+							preserveCwd: mode === "subdir" ? true : undefined,
+						}),
+						configureSession: async (_request, options) => {
+							configuredCwd = options.cwd;
+							configuredBeforeDispatch = true;
+							const probe: CustomTool = {
+								name: "scope_probe",
+								label: "Scope probe",
+								description: "Read the bound workspace.",
+								parameters: { type: "object", properties: {} },
+								loadMode: "essential",
+								execute: async (_id, _params, _update, context) => {
+									operatedCwd = context.sessionManager.getCwd();
+									await fs.writeFile(path.join(operatedCwd, "child-only.txt"), "child mutation");
+									return {
+										content: [
+											{ type: "text", text: await fs.readFile(path.join(operatedCwd, "scope.txt"), "utf8") },
+										],
+									};
+								},
+							};
+							return {
+								restrictToolNames: true,
+								allowRestrictedCustomTools: true,
+								toolNames: ["scope_probe"],
+								customTools: [probe],
+								toolRestrictions: new ToolRestrictions({ allowlist: ["scope_probe"] }),
+								enableMCP: false,
+								enableLsp: false,
+								enableIrc: false,
+							};
+						},
+						beforeCapture: async (_request, nativeResult) => {
+							expect(nativeResult.exitCode).toBe(0);
+							expect(await fs.readFile(path.join(configuredCwd!, "child-only.txt"), "utf8")).toBe(
+								"child mutation",
+							);
+							await Promise.resolve();
+							observations.push("before");
+							if (mode === "freeze-failure") throw new Error("freeze rejected");
+						},
+						afterResult: async (_request, nativeResult) => {
+							observedResult = nativeResult;
+							observations.push("after");
+							if (mode === "freeze-failure") {
+								expect(nativeResult.error).toContain("freeze rejected");
+								return;
+							}
+							if (mode === "branch") {
+								expect(nativeResult.branchName).toBeDefined();
+								const committed = Bun.spawnSync(["git", "show", `${nativeResult.branchName}:child-only.txt`], {
+									cwd,
+								});
+								expect(committed.exitCode).toBe(0);
+								expect(committed.stdout.toString()).toBe("child mutation");
+							} else {
+								expect(await fs.readFile(nativeResult.patchPath!, "utf8")).toContain("child mutation");
+								if (mode === "subdir") {
+									expect(await fs.readFile(nativeResult.patchPath!, "utf8")).toContain("app/child-only.txt");
+								}
+							}
+							expect(await Bun.file(path.join(configuredCwd!, "child-only.txt")).exists()).toBe(true);
+							if (mode === "retained") {
+								expect(await fs.readFile(nativeResult.patchPath!, "utf8")).toContain("late mutation");
+							}
+							if (mode === "persist-failure") throw new Error("persistence rejected");
+						},
+					};
+					const settled = await runStructuredSubagent(
+						request({
+							session: parent,
+							structured: false,
+							keepAlive: true,
+							isolation: { requested: true, merge: mode === "branch" ? "branch" : "patch" },
+						}),
+					);
+					expect(settled.result.exitCode).toBe(0);
+					expect(configuredBeforeDispatch).toBe(true);
+					expect(configuredCwd).not.toBe(cwd);
+					expect(operatedCwd).toBe(configuredCwd);
+					expect(settled.result.output).toContain(
+						mode === "subdir" ? "approved subdir fixture" : "isolated fixture",
+					);
+					if (mode === "subdir") expect(path.basename(configuredCwd!)).toBe("app");
+					if (mode === "subdir" || mode === "ordinary-subdir") {
+						expect(await Bun.file(path.join(cwd, "app", "child-only.txt")).exists()).toBe(false);
+					}
+					expect(await Bun.file(path.join(cwd, "child-only.txt")).exists()).toBe(false);
+					expect(cfgTaskIsolationApply.get(parent.settings)).toBe(true);
+					if (mode === "retained") {
+						expect(observations).toEqual([]);
+						await fs.writeFile(path.join(configuredCwd!, "late.txt"), "late mutation");
+						await AgentLifecycleManager.global().dispose();
+					}
+					expect(observations).toEqual(["before", "after"]);
+					expect(observedResult).toBe(settled.result);
+					if (mode === "freeze-failure" || mode === "persist-failure") {
+						expect(settled.result.error).toContain(
+							mode === "freeze-failure" ? "freeze rejected" : "persistence rejected",
+						);
+						const retained = /Isolation workspace retained at (.+)\./.exec(settled.result.error!)?.[1];
+						expect(retained).toBeDefined();
+						expect(await fs.readFile(path.join(retained!, "child-only.txt"), "utf8")).toBe("child mutation");
+						await fs.rm(path.dirname(retained!), { recursive: true, force: true });
+					} else {
+						expect(settled.result.error).toBeUndefined();
+						expect(await Bun.file(path.join(configuredCwd!, "child-only.txt")).exists()).toBe(false);
+					}
+					if (settled.artifactsDir) await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+				},
+				context => {
+					const names = (context.tools ?? []).map(tool => tool.name);
+					expect(names).toContain("scope_probe");
+					expect(names).not.toContain("write");
+					expect(names).not.toContain("task");
+					const last = context.messages.at(-1);
+					if (last?.role === "toolResult")
+						return { content: [last.content.map(part => (part.type === "text" ? part.text : "")).join("\n")] };
+					return { content: [{ type: "toolCall", name: "scope_probe", arguments: {} }] };
+				},
+				true,
+			);
+		},
+		30_000,
+	);
+
+	it("parallel native descendants retain per-invocation hooks through actual nested task calls", async () => {
+		const operated: string[] = [];
+		const admitted: string[] = [];
+		await withNativeHookFixture(
+			async ({ parent, worker }) => {
+				// 原生 worker 未声明 spawns 时禁止后代；本夹具必须显式授权 leaf，而不是放宽核心策略。
+				worker.spawns = ["leaf"];
+				let arrivals = 0;
+				const { promise: bothConfigured, resolve: release } = Promise.withResolvers<void>();
+				function hooks(scope?: string): NativeSubagentHooks {
+					return {
+						beforeSpawn: async child => {
+							if (scope) admitted.push(`${scope}:${child.identity?.label}`);
+						},
+						configureSession: async (child, options) => {
+							const owner = scope ?? child.assignment;
+							const leaf = scope !== undefined;
+							if (!leaf) {
+								if (++arrivals === 2) release();
+								await bothConfigured;
+							}
+							const probe: CustomTool = {
+								name: "scope_probe",
+								label: "Scope probe",
+								description: "Record this child's owner.",
+								parameters: { type: "object", properties: {} },
+								loadMode: "essential",
+								execute: async (_id, _params, _update, context) => {
+									expect(context.sessionManager.getCwd()).toBe(options.cwd!);
+									operated.push(owner);
+									return { content: [{ type: "text", text: owner }] };
+								},
+							};
+							return {
+								systemPrompt: `HOOK scope=${owner} tier=${leaf ? "leaf" : "root"}`,
+								restrictToolNames: true,
+								allowRestrictedCustomTools: true,
+								toolNames: leaf ? ["scope_probe"] : ["task"],
+								customTools: leaf ? [probe] : [],
+								toolRestrictions: new ToolRestrictions({ allowlist: leaf ? ["scope_probe"] : ["task"] }),
+								subagentHooks: hooks(owner),
+								enableMCP: false,
+								enableLsp: false,
+								enableIrc: false,
+							};
+						},
+					};
+				}
+				parent.subagentHooks = hooks();
+				const results = await Promise.all(
+					["A", "B"].map(assignment =>
+						runStructuredSubagent(
+							request({
+								session: parent,
+								assignment,
+								structured: false,
+								keepAlive: false,
+							}),
+						),
+					),
+				);
+				expect(results.map(value => value.result.exitCode)).toEqual([0, 0]);
+				expect(operated.sort()).toEqual(["A", "B"]);
+				expect(admitted.sort()).toEqual(["A:NestedA", "B:NestedB"]);
+			},
+			context => {
+				const system = context.systemPrompt?.join("\n") ?? "";
+				const marker = /HOOK scope=([AB]) tier=(root|leaf)/.exec(system);
+				if (!marker) throw new Error("Unbound native session in nested hook fixture");
+				const last = context.messages.at(-1);
+				if (last?.role === "toolResult") {
+					if (last.isError) {
+						const detail = last.content.map(part => (part.type === "text" ? part.text : "")).join("\n");
+						throw new Error(`Nested ${marker[1]} ${last.toolName} failed: ${detail}`);
+					}
+					expect(last.toolName).toBe(marker[2] === "leaf" ? "scope_probe" : "task");
+					return { content: ["complete"] };
+				}
+				if (marker[2] === "leaf") return { content: [{ type: "toolCall", name: "scope_probe", arguments: {} }] };
+				return {
+					content: [
+						{
+							type: "toolCall",
+							name: "task",
+							arguments: {
+								context: "Run the child probe.",
+								tasks: [
+									{
+										agent: "leaf",
+										name: `Nested${marker[1]}`,
+										task: "Probe.",
+										solutionSpace: "one action: invoke probe",
+									},
+								],
+							},
+						},
+					],
+				};
+			},
+		);
+	}, 30_000);
 	it.each([
 		{ setting: false, structured: { reporter: true, plain: false } },
 		{ setting: true, structured: { reporter: true, plain: true } },
