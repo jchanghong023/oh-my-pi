@@ -54,6 +54,8 @@ import type { AuthStorage } from "../../session/auth-storage";
 import { logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../../cli/args";
 import { localTtftNow } from "./schema/vendor/localTtft";
+import { OmpSpecActionRejection, OmpSpecDrivenBridge } from "./spec-driven";
+import * as BaselineV4 from "./schema/vendor/zcode-protocol-v4/index";
 
 export interface ZCodeServerOptions {
 	cwd?: string;
@@ -135,6 +137,7 @@ export class ZCodeServer {
 	readonly team: OmpTeamBridge;
 	readonly profiles: OmpProfilesBridge;
 	readonly tan: OmpTanBridge;
+	readonly specDriven: OmpSpecDrivenBridge;
 	#businessDispatches = 0;
 	#hosted = new Map<string, HostedSession>();
 	#attaching = new Map<string, Promise<HostedSession>>();
@@ -171,6 +174,8 @@ export class ZCodeServer {
 	// 路径↔key 双向表,单看查到的值无法区分是路径还是 key;sessions-index 过滤与
 	// createSession 归属裁决需要无歧义的 cwd(findings P2/J)。
 	#workspaceCwds = new Map<string, string>();
+	#workspaceIdentities = new Map<string, string>();
+	#workspaceRemoteSessions = new Map<string, string | null>();
 	#connections = new Map<string, string>();
 	#closedConnections = new Set<string>();
 	#subscriptions = new Map<string, { connectionId: string; topic: string }>();
@@ -210,6 +215,7 @@ export class ZCodeServer {
 			onWorkflowActor: async record => {
 				await this.#attach(record);
 			},
+			onSessionClosing: id => this.specDriven.detach(id),
 			onSessionClosed: id => {
 				this.team.detach(id);
 				for (const [connectionId, roots] of this.#permissionOwners) {
@@ -373,6 +379,11 @@ export class ZCodeServer {
 			getSession: async id => (await this.#active(id)).record,
 			getRows: async id => (await this.#projection(id)).rows(),
 		});
+		this.specDriven = new OmpSpecDrivenBridge(
+			this.manager,
+			cwd => this.#workspaceIdentities.get(cwd) ?? cwd,
+			cwd => this.#workspaceRemoteSessions.get(cwd) ?? null,
+		);
 		this.workflows = new ZCodeWorkflowService({
 			agentDir: getAgentDir(),
 			manager: this.manager,
@@ -671,6 +682,14 @@ export class ZCodeServer {
 			unsubscribeTelemetry: record.session.subscribe(event => telemetry.consume(event)),
 		};
 		this.#hosted.set(record.id, hosted);
+		this.specDriven.attach(record, () => {
+			void this.specDriven
+				.runs(record.id)
+				.then(runs => {
+					if (this.#hosted.get(record.id)?.record === record) projection.setSpecDrivenRuns(runs);
+				})
+				.catch(error => process.stderr.write(`${String(error)}\n`));
+		});
 		this.legacy.attach(record, projection);
 		this.topics.register(`conversation/${record.id}`, {
 			snapshot: () => projection.snapshot(),
@@ -709,6 +728,7 @@ export class ZCodeServer {
 		await commands.initialize();
 		await this.workflows.reconcileParentOwnership(record.id);
 		projection.setWorkflowState(await this.workflows.projection(record.id));
+		projection.setSpecDrivenRuns(await this.specDriven.runs(record.id));
 		if (this.#closed) throw new ZCodeProtocolError(-32000, "Owner disconnected");
 		commands.interactions.setAutoResolutionEnabled(
 			this.configuration.getWorkspacePreferences(record.cwd).askUserQuestionAutoResolutionEnabled,
@@ -783,7 +803,17 @@ export class ZCodeServer {
 			});
 	}
 	/** 登记工作区身份(key/identity/路径均指向同一 cwd),维持 #workspaceIds 双向表。 */
-	#registerWorkspace(workspace: { workspacePath: string; workspaceKey: string; workspaceIdentity?: string }): void {
+	#registerWorkspace(workspace: {
+		workspacePath: string;
+		workspaceKey: string;
+		workspaceIdentity?: string;
+		remoteSessionId?: string;
+	}): void {
+		this.#workspaceIdentities.set(
+			workspace.workspacePath,
+			workspace.workspaceIdentity?.trim() || workspace.workspacePath,
+		);
+		this.#workspaceRemoteSessions.set(workspace.workspacePath, workspace.remoteSessionId ?? null);
 		this.#workspaceIds.set(workspace.workspacePath, workspace.workspaceKey);
 		this.#workspaceIds.set(workspace.workspaceKey, workspace.workspacePath);
 		for (const id of new Set(
@@ -1223,7 +1253,10 @@ export class ZCodeServer {
 		delivery?: string,
 		attachments?: unknown[],
 		sourceCommand?: PromptOptions["sourceCommand"],
-		options: PromptOptions & { highspeedMeta?: HighspeedMessageMeta } = {},
+		options: PromptOptions & {
+			highspeedMeta?: HighspeedMessageMeta;
+			validateBeforeDispatch?: (text: string) => void;
+		} = {},
 		execution?: ZCodeExecutionSubmission,
 	): Promise<P.CommandResult | undefined> {
 		await this.#applySubagentRuntimeConfig(hosted.record);
@@ -1328,6 +1361,20 @@ export class ZCodeServer {
 			const payload = envelope.payload as Record<string, unknown>;
 			let hosted: HostedSession | undefined;
 			let workflowPreparation: Awaited<ReturnType<ZCodeWorkflowService["prepareSaved"]>> | undefined;
+			// Bound controls must be checked without resuming a cold source or acquiring its lease.
+			if (envelope.type === "sendText" || envelope.type === "sendGoalCommand") {
+				const input = P.commandPayloadSchemas.sendText.parse(payload);
+				if (input.specRun) {
+					revision = envelope.sessionId
+						? (this.#hosted.get(envelope.sessionId)?.projection.snapshot().revision ?? 0)
+						: 0;
+					this.specDriven.validate(
+						envelope.sessionId ? this.manager.get(envelope.sessionId) : undefined,
+						envelope.type === "sendGoalCommand" ? `/goal set ${input.text}` : input.text,
+						input.specRun,
+					);
+				}
+			}
 			if (envelope.type === "startSavedWorkflow") {
 				if (!envelope.sessionId) throw new ZCodeProtocolError(-32602, "Workflow command requires sessionId");
 				const params = P.commandPayloadSchemas.startSavedWorkflow.parse(payload);
@@ -1457,6 +1504,12 @@ export class ZCodeServer {
 					case "sendText":
 					case "sendGoalCommand": {
 						const input = P.commandPayloadSchemas.sendText.parse(payload);
+						if (input.specRun)
+							this.specDriven.validate(
+								hosted.record,
+								envelope.type === "sendGoalCommand" ? `/goal set ${input.text}` : input.text,
+								input.specRun,
+							);
 						const tanControl = envelope.type === "sendText" && parseSlashCommand(input.text)?.name === "tan";
 						if (!tanControl && input.modelSelection && !input.modelExecution)
 							await this.#model(hosted, input.modelSelection);
@@ -1514,6 +1567,9 @@ export class ZCodeServer {
 							{
 								inputClientId: envelope.clientId,
 								onPromptAdmitted,
+								validateBeforeDispatch: input.specRun
+									? text => this.specDriven.validate(target.record, text, input.specRun!)
+									: undefined,
 								highspeedMeta: input.highspeedMeta,
 								toolDenylist: input.automationId
 									? [...new Set([...(input.toolDisallowlist ?? []), "CronCreate", "CronUpdate", "CronDelete"])]
@@ -1866,6 +1922,14 @@ export class ZCodeServer {
 				...(result ? { result } : {}),
 			});
 		} catch (error) {
+			if (error instanceof OmpSpecActionRejection)
+				return {
+					commandId: envelope.commandId,
+					status: "rejected",
+					reasonCode: error.reasonCode,
+					message: error.message,
+					revisionAtDecision: revision,
+				};
 			return {
 				commandId: envelope.commandId,
 				status: "failed",
@@ -1888,6 +1952,7 @@ export class ZCodeServer {
 		return record.run(() => read({ sessionId, session: record.session, settings: record.settings }));
 	}
 	async #close(id: string): Promise<void> {
+		await this.specDriven.detach(id);
 		await this.workflows.cancelSession(id);
 		const hosted = this.#hosted.get(id);
 		this.legacy.disposeSession(id);
@@ -1944,6 +2009,7 @@ export class ZCodeServer {
 					ompTeam: true,
 					ompProfiles: true,
 					ompTan: true,
+					ompSpecDriven: true,
 				};
 			case "workspace/generateText": {
 				const params = L.zcodeWorkspaceGenerateTextParamsSchema.parse(raw);
@@ -2106,10 +2172,38 @@ export class ZCodeServer {
 				return L.zcodeWorkflowsMoveResultSchema.parse(
 					await this.workflows.move(L.zcodeWorkflowsMoveParamsSchema.parse(raw)),
 				);
-			case "workflows/runs":
-				return L.zcodeWorkflowsRunsResultSchema.parse(
-					await this.workflows.runs(L.zcodeWorkflowsRunsParamsSchema.parse(raw)),
-				);
+			case "workflows/runs": {
+				const params = P.zcodeWorkflowsRunsParamsSchema.parse(raw);
+				const result = await this.workflows.runs(params);
+				if (!params.includeSpecDriven) return L.zcodeWorkflowsRunsResultSchema.parse(result);
+				const native = (
+					await this.specDriven.workspaceRuns(
+						params.workspace.workspacePath,
+						params.workspace.workspaceIdentity,
+						params.workspace.remoteSessionId,
+					)
+				).filter(row => !params.name || row.spec.changeId === params.name);
+				return P.zcodeWorkflowsRunsResultSchema.parse({
+					...result,
+					runs: [
+						...result.runs,
+						...native.map(row => ({
+							runId: row.runId,
+							name: row.spec.changeId,
+							status: row.status,
+							...(row.stopReason ? { stopReason: row.stopReason } : {}),
+							createdAt: row.spec.createdAt,
+							updatedAt: row.spec.updatedAt,
+							spentTokens: null,
+							parentSessionId: row.spec.sessionId,
+							cwd: row.spec.workspacePath,
+							spec: row.spec,
+						})),
+					]
+						.sort((a, b) => b.updatedAt - a.updatedAt)
+						.slice(0, params.limit),
+				});
+			}
 			case "workflows/save":
 				return L.zcodeWorkflowsSaveResultSchema.parse(
 					await this.workflows.save(L.zcodeWorkflowsSaveParamsSchema.parse(raw)),
@@ -2120,9 +2214,25 @@ export class ZCodeServer {
 				);
 			case "v4/conversation/workflowRuns": {
 				const params = P.v4ConversationWorkflowRunsParamsSchema.parse(raw);
-				return P.v4ConversationWorkflowRunsResultSchema.parse(
-					await this.workflows.listRuns(params.sessionId, params),
-				);
+				const result = await this.workflows.listRuns(params.sessionId, params);
+				const native = params.includeSpecDriven ? await this.specDriven.runs(params.sessionId) : [];
+				return P.v4ConversationWorkflowRunsResultSchema.parse({
+					runs: [
+						...result.runs,
+						...native.map(row => ({
+							runId: row.runId,
+							label: row.spec.changeId.slice(0, 160),
+							updatedAt: row.spec.updatedAt,
+							status: row.status,
+							...(row.stopReason ? { stopReason: row.stopReason } : {}),
+							resumable: false,
+							spec: row.spec,
+						})),
+					]
+						.filter(row => !params.runId || row.runId === params.runId)
+						.sort((a, b) => b.updatedAt - a.updatedAt)
+						.slice(0, params.limit ?? 64),
+				});
 			}
 			case "v4/conversation/workflowRunEvents": {
 				const params = P.v4ConversationWorkflowRunEventsParamsSchema.parse(raw);
@@ -2132,17 +2242,38 @@ export class ZCodeServer {
 			}
 			case "v4/conversation/workflowRunArtifacts": {
 				const params = P.v4ConversationWorkflowRunArtifactsParamsSchema.parse(raw);
+				if (this.workflows.owns(params.sessionId, params.runId))
+					return BaselineV4.v4ConversationWorkflowRunArtifactsResultSchema.parse(
+						await this.workflows.getRunArtifacts(params.sessionId, params.runId),
+					);
 				return P.v4ConversationWorkflowRunArtifactsResultSchema.parse(
-					await this.workflows.getRunArtifacts(params.sessionId, params.runId),
+					(await this.specDriven.artifacts(params.sessionId, params.runId)) ??
+						(await this.workflows.getRunArtifacts(params.sessionId, params.runId)),
 				);
 			}
 			case "v4/conversation/workflowRunArtifactRead": {
 				const params = P.v4ConversationWorkflowRunArtifactReadParamsSchema.parse(raw);
-				return P.v4ConversationWorkflowRunArtifactReadResultSchema.parse(await this.workflows.artifactRead(params));
+				if (this.workflows.owns(params.sessionId, params.runId))
+					return BaselineV4.v4ConversationWorkflowRunArtifactReadResultSchema.parse(
+						await this.workflows.artifactRead(
+							BaselineV4.v4ConversationWorkflowRunArtifactReadParamsSchema.parse(raw),
+						),
+					);
+				return P.v4ConversationWorkflowRunArtifactReadResultSchema.parse(
+					(await this.specDriven.artifactRead(params)) ?? (await this.workflows.artifactRead(params)),
+				);
 			}
 			case "v4/conversation/workflowRunArtifactData": {
 				const params = P.v4ConversationWorkflowRunArtifactDataParamsSchema.parse(raw);
-				return P.v4ConversationWorkflowRunArtifactDataResultSchema.parse(await this.workflows.artifactData(params));
+				if (this.workflows.owns(params.sessionId, params.runId))
+					return BaselineV4.v4ConversationWorkflowRunArtifactDataResultSchema.parse(
+						await this.workflows.artifactData(
+							BaselineV4.v4ConversationWorkflowRunArtifactDataParamsSchema.parse(raw),
+						),
+					);
+				return P.v4ConversationWorkflowRunArtifactDataResultSchema.parse(
+					(await this.specDriven.artifactData(params)) ?? (await this.workflows.artifactData(params)),
+				);
 			}
 			case "v4/conversation/workflowRunWorkspace": {
 				const params = P.v4ConversationWorkflowRunWorkspaceParamsSchema.parse(raw);
@@ -2463,7 +2594,13 @@ export class ZCodeServer {
 					const child = await this.manager.nativeChild(id);
 					permissionRoot = child?.root?.id ?? id;
 					if (child) await this.#nativeProjection(id, child);
-					else
+					else if (params.includeSpecDriven && !this.manager.get(id)) {
+						const projection = await this.#coldProjection(id);
+						this.topics.register(params.topic, {
+							snapshot: () => projection.snapshot(),
+							subscribe: listener => projection.subscribe(listener),
+						});
+					} else
 						await this.#attach(
 							this.manager.get(id) ??
 								(await this.manager.resume(id, { additionalDirectories: params.additionalDirectories })),
@@ -2754,7 +2891,10 @@ export class ZCodeServer {
 		const read = await this.manager.read(id);
 		const version = read.info.modified.getTime();
 		const cached = this.#cold.get(id);
-		if (cached?.version === version) return cached.projection;
+		if (cached?.version === version) {
+			cached.projection.setSpecDrivenRuns(await this.specDriven.runs(id));
+			return cached.projection;
+		}
 		cached?.projection.dispose();
 		const [state, goalState, revertedTargets] = await Promise.all([
 			this.queries.projectionState(id),
@@ -2773,6 +2913,7 @@ export class ZCodeServer {
 			...(await this.manager.forkProjection(id)),
 		});
 		projection.setWorkflowState(await this.workflows.projection(id));
+		projection.setSpecDrivenRuns(await this.specDriven.runs(id));
 		this.#cold.set(id, { projection, version });
 		return projection;
 	}
@@ -2824,6 +2965,7 @@ export class ZCodeServer {
 		this.topics.dispose();
 		this.attachments.dispose();
 		this.legacy.dispose();
+		await this.specDriven.dispose();
 		await this.workflows.dispose();
 		try {
 			await this.manager.dispose();

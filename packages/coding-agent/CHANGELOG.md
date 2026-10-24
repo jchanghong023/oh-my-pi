@@ -6,6 +6,7 @@
 
 - Added opt-in `/spec` orchestration with four owned requirements, solution, planning and execution actors, OpenSpec proposal/specs, one Superpowers implementation plan, three native handoffs, version-bound approvals and content-bound evidence. The execution stage actor can implement inline or delegate parallel native tasks through scoped lifecycle hooks; `/spec confirm-plan <version> --goal` explicitly selects its optional actor-scoped Goal, while plain approval uses normal execution. Native records own `checks/` outputs and the generated `verification.md`; final acceptance remains explicit. Pause/resume is limited to the live native session in the current process; restarting does not restore workflow progress.
 - Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
+- Expose native `/spec` runs through opt-in ZCode workflow queries and subscriptions, with native approval actions, parent-task progress, versioned artifacts and read-only restart history. Controls reuse the existing command path and reject stale or foreign run bindings; desktop UI integration remains separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
@@ -28,6 +29,7 @@
 
 ### Fixed
 
+- Route bundled Superpowers implementation tasks to `task` and code reviews to `reviewer`, instead of requesting an unavailable `general-purpose` agent.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
 - Preserve quoted Windows verification commands, complete per-owner command evidence and external edits during failed specification publication.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.

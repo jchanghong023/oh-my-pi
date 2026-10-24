@@ -141,6 +141,7 @@ export interface ZCodeSessionManagerOptions {
 	workflowInteractionUI?: (parentId: string) => CreateAgentSessionOptions["createInteractionUI"];
 	memoryPreference?: (sessionId: string, cwd: string) => Promise<boolean | undefined>;
 	onSessionClosed?: (sessionId: string) => void;
+	onSessionClosing?: (sessionId: string) => Promise<void>;
 	runtimeTools?: (sessionId: string, cwd: string) => NonNullable<CreateAgentSessionOptions["customTools"]>;
 	getAgentDefinitions?: (sessionId: string) => readonly AgentDefinition[];
 	resolveRequestAuth?: (
@@ -1698,7 +1699,11 @@ export class ZCodeSessionManager {
 				await modelIo?.capture.close();
 			} finally {
 				try {
-					await record.session.dispose();
+					try {
+						await this.#options.onSessionClosing?.(id);
+					} finally {
+						await record.session.dispose();
+					}
 				} finally {
 					const resources = this.#resources.get(id);
 					this.#resources.delete(id);

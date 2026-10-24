@@ -11,11 +11,9 @@ import {
 	sessionsIndexTopicFrameSchema,
 	sessionsIndexTopicWireCandidateSchema,
 	subscribeAckSchema,
+	type ConversationSnapshot,
 } from "../../src/modes/zcode/schema";
-import type {
-	ConversationSnapshot,
-	PendingInteraction,
-} from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/snapshot";
+import type { PendingInteraction } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/snapshot";
 
 type Frame = Record<string, unknown>;
 interface ModelRequest {

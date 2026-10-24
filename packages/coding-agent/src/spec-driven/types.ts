@@ -427,4 +427,6 @@ export interface SpecDrivenOptions {
 	/** Explicit unavailable configured members must be rejected, never silently dropped. */
 	unavailableMembers?: readonly string[];
 	runId?: string;
+	/** In-process observations only; listener failures never affect native execution or evidence. */
+	onStatusChange?: (status: SpecDrivenStatus) => void;
 }

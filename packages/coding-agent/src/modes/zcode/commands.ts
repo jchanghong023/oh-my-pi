@@ -31,6 +31,8 @@ import type { ToolSession } from "../../tools";
 
 export interface ZCodeDispatchOptions extends PromptOptions {
 	execution?: ModelExecution & { selection: ModelSelection; offPeakTaskId?: string };
+	/** Recheck owner-bound native controls after asynchronous command preparation. */
+	validateBeforeDispatch?: (text: string) => void;
 }
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export interface ZCodeCommandHostOptions {
@@ -443,6 +445,7 @@ export class ZCodeCommandHost {
 				}
 				await this.initialize();
 				if (!current()) throw new DOMException("Command cancelled", "AbortError");
+				options.validateBeforeDispatch?.(text);
 				if (resolved.kind !== "builtin" || !resolved.spec) {
 					this.#loop.capturePrompt(text);
 					await this.#submit(text, options, admit, rejectAdmission);

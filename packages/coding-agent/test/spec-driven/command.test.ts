@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import {
 	getSpecDrivenController,
+	observeSpecDrivenController,
+	type SpecControllerObservation,
 	renderSpecDrivenStatus,
 	type SpecRuntimeFactory,
 } from "../../src/spec-driven/controller";
@@ -14,7 +16,10 @@ import {
 } from "../../src/slash-commands/builtin-registry";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 
-function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<void>; noCandidates?: boolean } = {}) {
+function fixture(
+	manager = new AsyncJobManager({}),
+	options: { hold?: Promise<void>; noCandidates?: boolean; sessionManager?: object; runId?: string } = {},
+) {
 	const output: string[] = [];
 	const entered = Promise.withResolvers<void>();
 	const transcript: string[] = [];
@@ -179,7 +184,7 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 		},
 		validation: { run: unexpected },
 	};
-	const sessionManager = {};
+	const sessionManager = options.sessionManager ?? {};
 	const disposers: Array<() => void> = [];
 	const session = {
 		asyncJobManager: manager,
@@ -207,7 +212,7 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 	} as unknown as SlashCommandRuntime;
 	const factory: SpecRuntimeFactory = async () => ({
 		ports,
-		options: { currentModel: "author", members: ["author", "reviewer"] },
+		options: { currentModel: "author", members: ["author", "reviewer"], runId: options.runId },
 		async dispose() {
 			disposed++;
 		},
@@ -237,6 +242,7 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 		host,
 		session,
 		controller,
+		factory,
 		output,
 		transcript,
 		requests,
@@ -255,6 +261,79 @@ function fixture(manager = new AsyncJobManager({}), options: { hold?: Promise<vo
 }
 
 describe("/spec shared command surface", () => {
+	it("observes without implicit creation, replays state, isolates listeners and follows replacement runs", async () => {
+		const sessionManager = {};
+		const seen: SpecControllerObservation[] = [];
+		const stop = observeSpecDrivenController(sessionManager, observation => seen.push(observation));
+		expect(seen).toEqual([]);
+		const hold = Promise.withResolvers<void>();
+		const f = fixture(undefined, { sessionManager, hold: hold.promise, runId: "native-run-first" });
+		const stopBroken = observeSpecDrivenController(sessionManager, observation => {
+			observation.status.phase = "cancelled";
+			throw new Error("Observer failure is not a workflow failure");
+		});
+		let unrelated = 0;
+		const stopUnrelated = observeSpecDrivenController({}, () => unrelated++);
+		try {
+			expect(seen.at(-1)).toMatchObject({ runId: null, active: false, disposed: false });
+			expect(f.requests).toEqual([]);
+			expect(f.controller.status().phase).toBe("idle");
+			await f.invoke("start first-change request");
+			await f.entered;
+			expect(seen.at(-1)).toMatchObject({
+				runId: "native-run-first",
+				cwd: "/fixture",
+				active: true,
+				status: { phase: "requirements" },
+			});
+			const replay: SpecControllerObservation[] = [];
+			const stopReplay = observeSpecDrivenController(sessionManager, observation => replay.push(observation));
+			expect(replay).toHaveLength(1);
+			expect(replay[0]).toEqual(f.controller.observation());
+			stopReplay();
+			hold.resolve();
+			await f.settle();
+			expect(seen.at(-1)).toMatchObject({ active: false, status: { phase: "awaiting-specification" } });
+			await f.invoke("confirm-spec spec-v1");
+			await f.settle();
+			expect(seen.at(-1)?.runId).toBe("native-run-first");
+			expect(seen.at(-1)?.status.team?.runId).toBe("discussion-v1");
+			await f.invoke("pause");
+			expect(seen.at(-1)).toMatchObject({ active: false, status: { paused: true } });
+			await f.invoke("cancel");
+			expect(seen.at(-1)).toMatchObject({ released: true, disposed: true, status: { phase: "cancelled" } });
+			const first = seen.at(-1)!;
+			const second = getSpecDrivenController(f.host, {
+				restart: true,
+				factory: async input => {
+					const native = await f.factory(input);
+					return { ...native, options: { ...native.options, runId: "native-run-second" } };
+				},
+			});
+			expect(second).not.toBe(f.controller);
+			expect(seen.at(-1)).toMatchObject({ runId: null, released: false, disposed: false });
+			second.schedule(core => core.start("second request", "second-change"));
+			await f.settle();
+			expect(seen.at(-1)).toMatchObject({ runId: "native-run-second", active: false });
+			expect(first.status.phase).toBe("cancelled");
+			expect(first.updatedAt).toBeGreaterThanOrEqual(first.createdAt);
+			await second.dispose();
+			expect(seen.at(-1)).toMatchObject({ runId: "native-run-second", disposed: true, released: true });
+			expect(unrelated).toBe(0);
+			stop();
+			const count = seen.length;
+			getSpecDrivenController(f.host, { restart: true, factory: f.factory });
+			expect(seen).toHaveLength(count);
+			await getSpecDrivenController(f.host).dispose();
+		} finally {
+			hold.resolve();
+			stop();
+			stopBroken();
+			stopUnrelated();
+			await f.dispose();
+		}
+	});
+
 	it("refuses independent OpenSpec maintenance while a strict workflow owns approvals, including pause", async () => {
 		const f = fixture();
 		const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "opsx-sync")!;

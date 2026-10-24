@@ -11608,7 +11608,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/requesting-code-review/code-reviewer.md",
-      "sha256": "78f760a1c2a3c31c5550642524ba1d6fde5a8d19a24e6aa9226b79afec21cd3d",
+      "sha256": "f0fe9b182b8f4dfec21daab0a3b2f0d43ac4a7f36049e783916f1afa5b84bbd0",
       "executable": false
     },
     {
@@ -11618,12 +11618,12 @@
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/implementer-prompt.md",
-      "sha256": "4508df9728863eb61fea4ac75411f51b83cb75b727760870bbefca4fbc8e519e",
+      "sha256": "bd4f812cfbd5ecd7c01d31607dff440c6a81f67b8d9a64846d8e6ff20525dce1",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/re-review-prompt.md",
-      "sha256": "ce97335a106ca247d857c544b756201b7e9dca5f0f4a8541eca443bea70e64b1",
+      "sha256": "064c720fa3285047c70da36e09d2c72d6471cf662c462f8a59072b58a4286f47",
       "executable": false
     },
     {
@@ -11678,7 +11678,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/task-reviewer-prompt.md",
-      "sha256": "a3f1ba70e4d71c0b4b008ab41089ae58f512c1b2e08724749be90e6f3e0e3373",
+      "sha256": "9843c9f6a3534ede713389f58ac9bf5bb92fe2735b227b544bc74eee0c2ccd7a",
       "executable": false
     },
     {
@@ -11763,7 +11763,7 @@
     },
     {
       "path": "superpowers/methods/requirements/skills/brainstorming/builder-check-prompt.md",
-      "sha256": "36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e",
+      "sha256": "caa7397f7292b1c30a9a385a3a24454b700d5a59f9919901862d026c534ab77d",
       "executable": false
     },
     {
@@ -11803,7 +11803,7 @@
     },
     {
       "path": "superpowers/methods/reviewer/skills/requesting-code-review/code-reviewer.md",
-      "sha256": "78f760a1c2a3c31c5550642524ba1d6fde5a8d19a24e6aa9226b79afec21cd3d",
+      "sha256": "f0fe9b182b8f4dfec21daab0a3b2f0d43ac4a7f36049e783916f1afa5b84bbd0",
       "executable": false
     },
     {
@@ -11918,7 +11918,7 @@
     },
     {
       "path": "superpowers/skills/brainstorming/builder-check-prompt.md",
-      "sha256": "36d51a4723d6f0a3ce5811a0ea3b3a8424f07533947e1355f5d8cb8cce40c55e",
+      "sha256": "caa7397f7292b1c30a9a385a3a24454b700d5a59f9919901862d026c534ab77d",
       "executable": false
     },
     {
@@ -12053,7 +12053,7 @@
     },
     {
       "path": "superpowers/skills/dispatching-parallel-agents/SKILL.md",
-      "sha256": "faad41c1e9adbdb676d38ec594de566f792e125ef39099c9593fb53eb2db1b9f",
+      "sha256": "ffa8240037e7eb9dac0078c66556d089db09aa34006aaf5fa6fb0159836724e6",
       "executable": false
     },
     {
@@ -12083,12 +12083,12 @@
     },
     {
       "path": "superpowers/skills/requesting-code-review/SKILL.md",
-      "sha256": "2111535f997186600f7dacb8022347443e73fa88bbe12daebb84233311b1b8a7",
+      "sha256": "2ec369dc58c807399a9838b83563d56f1018ffa17f9d8bee92656a2c4a9d1278",
       "executable": false
     },
     {
       "path": "superpowers/skills/requesting-code-review/code-reviewer.md",
-      "sha256": "82e370be6b3447523816286195571e4216ba56ba1ad6ad0e87862294c4c78dcb",
+      "sha256": "f9d32abeb9b2ce83dc2707ceab0e909116673cb964ca05b70a131e1d8a95b69a",
       "executable": false
     },
     {
@@ -12098,12 +12098,12 @@
     },
     {
       "path": "superpowers/skills/subagent-driven-development/implementer-prompt.md",
-      "sha256": "81dd9d5a3fb0b09b96b5829f03b9796842f3199ef7591d1ba1c2db2a515f64d0",
+      "sha256": "06ed0e8e0bf9671f5c3215a1462f6ccdf9eb00602115121180a18ef758878d2d",
       "executable": false
     },
     {
       "path": "superpowers/skills/subagent-driven-development/re-review-prompt.md",
-      "sha256": "0828a5e9cbb12ba49f14621dd8c3953c48c0fc383e75bb5494f055ed0d6d824f",
+      "sha256": "f2be1a3a65209da116388582caea2b3e16c69320206536f0bf913487d8c9d25b",
       "executable": false
     },
     {
@@ -12158,7 +12158,7 @@
     },
     {
       "path": "superpowers/skills/subagent-driven-development/task-reviewer-prompt.md",
-      "sha256": "bfed55c8f19d0ff6ed57b0fe09127c92890e9311c6c73917129598826bf9ebe8",
+      "sha256": "7acbfb2406da90ea611d267c993bb05979bd4f2a461fab511a8a349a8904e55e",
       "executable": false
     },
     {

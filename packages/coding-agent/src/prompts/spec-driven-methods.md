@@ -1,9 +1,17 @@
-# OMP controlled method branches
+# OMP method and agent adapters
 
-These adaptations belong to OMP, not upstream. The generator applies them only to role-effective copies of the pinned sources. Ordinary assets and upstream original bytes remain separate. Section anchors are fail-closed against source drift; referenced files retain their relative layout. No solution-stage upstream method is invented.
+These adaptations belong to OMP, not upstream. The generator maps dispatch agents in ordinary and role-effective resources: implementation uses `task`, code review uses `reviewer`. Other method patches apply only to role-effective copies. Upstream original bytes remain separate. Section anchors are fail-closed against source drift; referenced files retain their relative layout. No solution-stage upstream method is invented.
 
 ```yaml
 adaptation: omp-four-role-v1
+agents:
+  superpowers/skills/brainstorming/builder-check-prompt.md: task
+  superpowers/skills/dispatching-parallel-agents/SKILL.md: task
+  superpowers/skills/requesting-code-review/SKILL.md: reviewer
+  superpowers/skills/requesting-code-review/code-reviewer.md: reviewer
+  superpowers/skills/subagent-driven-development/implementer-prompt.md: task
+  superpowers/skills/subagent-driven-development/task-reviewer-prompt.md: reviewer
+  superpowers/skills/subagent-driven-development/re-review-prompt.md: reviewer
 methods:
   - { source: jch, name: jch-grill-me, roles: [requirements] }
   - { source: superpowers, name: brainstorming, roles: [requirements] }

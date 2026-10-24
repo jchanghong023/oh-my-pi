@@ -12,6 +12,7 @@ import { toZCodeReasoningLevel } from "./provider-config";
 import { modelSelectionSchema, type ModelSelection } from "./schema/vendor/model-selection";
 import { readHighspeedInputFacts } from "./sessions";
 import { deobfuscateAssistantContent } from "../../secrets/message-transform";
+import type { OmpSpecRun } from "./schema";
 import {
 	conversationSnapshotSchema,
 	conversationRowSchema,
@@ -24,6 +25,7 @@ import {
 	type SessionSummary,
 	type AttachmentRef,
 	PROTOCOL_V4_LIMITS,
+	WORKFLOW_RUNS_LIMITS,
 	workflowLaunchMetaSchema,
 	deriveSessionWorkflowActivity,
 } from "./schema";
@@ -276,6 +278,7 @@ export class ZCodeProjection {
 	#forkParentSessionId?: string;
 
 	#workflowState: Pick<StatePatch, "workflowRuns" | "backgroundWorks"> = {};
+	#specRuns: OmpSpecRun[] = [];
 	constructor(options: ZCodeProjectionOptions) {
 		this.#options = options;
 		for (const [agentId, sessionId] of Object.entries(options.childSessions ?? {}))
@@ -451,10 +454,25 @@ export class ZCodeProjection {
 				}
 			: undefined;
 	}
+	setSpecDrivenRuns(runs: OmpSpecRun[]): void {
+		this.#specRuns = runs.slice(0, WORKFLOW_RUNS_LIMITS.maxRuns);
+		this.setWorkflowState(this.#workflowState);
+	}
 	setWorkflowState(state: Pick<StatePatch, "workflowRuns" | "backgroundWorks">): void {
 		this.#workflowState = state;
 		this.setState({
-			workflowRuns: state.workflowRuns,
+			workflowRuns: this.#specRuns.length
+				? {
+						revision: Math.max(
+							state.workflowRuns?.revision ?? 0,
+							...this.#specRuns.map(run => run.spec.updatedAt),
+						),
+						runs: [
+							...(state.workflowRuns?.runs ?? []).filter(run => !("spec" in run) || !run.spec),
+							...this.#specRuns,
+						],
+					}
+				: state.workflowRuns,
 			backgroundWorks: [
 				...this.#state.backgroundWorks.filter(work => work.kind !== "workflow"),
 				...(state.backgroundWorks ?? []),
@@ -1159,7 +1177,14 @@ export class ZCodeProjection {
 			sessionEnded: state.control.sessionEnded,
 			hasBackgroundWork: state.backgroundWorks.some(work => work.status === "running"),
 			workflowActivity: deriveSessionWorkflowActivity({
-				workflowRuns: state.workflowRuns,
+				workflowRuns: state.workflowRuns
+					? {
+							...state.workflowRuns,
+							runs: state.workflowRuns.runs.filter(
+								(run): run is Exclude<typeof run, OmpSpecRun> => !("spec" in run) || !run.spec,
+							),
+						}
+					: undefined,
 				backgroundWorks: state.backgroundWorks,
 			}),
 			createdAt: times[0] ?? 0,

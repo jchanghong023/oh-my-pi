@@ -3,10 +3,7 @@ import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, readJsonl } from "@oh-my-pi/pi-utils";
-import type {
-	ConversationTopicFrame,
-	SubscribeAck,
-} from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/transport";
+import type { SubscribeAck } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/transport";
 import {
 	LegacyProtocol,
 	TopicWireFrameAssembler,
@@ -15,6 +12,7 @@ import {
 	conversationTopicWireCandidateSchema,
 	subscribeAckSchema,
 	v4ConversationRowsRangeResultSchema,
+	type ConversationTopicFrame,
 } from "../../src/modes/zcode/schema";
 
 type Frame = Record<string, unknown>;

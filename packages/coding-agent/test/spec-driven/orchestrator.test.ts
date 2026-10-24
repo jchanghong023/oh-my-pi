@@ -430,6 +430,50 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 	};
 }
 
+describe("native status observations", () => {
+	it("publishes completed parent progress before the executor returns without suppressing evidence", async () => {
+		const observations: SpecDrivenStatus[] = [];
+		const f = fixture({
+			onStatusChange(status) {
+				observations.push(structuredClone(status));
+				status.phase = "cancelled";
+				throw new Error("An observer cannot own native phase or persistence");
+			},
+		});
+		const reached = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const execute = f.ports.models.execute;
+		f.ports.models.execute = async (...args) => {
+			const result = await execute(...args);
+			reached.resolve();
+			await release.promise;
+			return result;
+		};
+		let flushed = 0;
+		f.ports.evidence.flush = async () => {
+			flushed++;
+		};
+		const running = f.toAcceptance();
+		try {
+			await reached.promise;
+			expect(f.orchestrator.runId).toBe("test-run");
+			expect(observations.some(state => state.phase === "requirements")).toBe(true);
+			expect(
+				observations.some(
+					state => state.phase === "executing" && state.tasks.some(task => task.status === "completed"),
+				),
+			).toBe(true);
+			expect(f.orchestrator.status().phase).toBe("executing");
+			expect(observations.some(state => state.phase === "awaiting-acceptance")).toBe(false);
+			expect(flushed).toBeGreaterThan(0);
+		} finally {
+			release.resolve();
+		}
+		expect((await running).phase).toBe("awaiting-acceptance");
+		expect(observations.at(-1)?.phase).toBe("awaiting-acceptance");
+	});
+});
+
 /** A runner-owned filesystem ledger; model responses only reference its record IDs. */
 async function contentFixture() {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-content-"));

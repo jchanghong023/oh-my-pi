@@ -74,6 +74,20 @@ export class SpecDrivenOrchestrator {
 		return structuredClone(this.#state);
 	}
 
+	get runId(): string {
+		return this.#runId;
+	}
+
+	#notify(): void {
+		const listener = this.#options.onStatusChange;
+		if (!listener) return;
+		try {
+			listener(this.status());
+		} catch {
+			// Observation must never interrupt native execution, approvals, or evidence persistence.
+		}
+	}
+
 	async start(request: string, changeId: string): Promise<SpecDrivenStatus> {
 		this.#expect("idle");
 		if (!request.trim() || !changeId.trim()) throw new Error("Request and change ID are required");
@@ -200,6 +214,7 @@ export class SpecDrivenOrchestrator {
 		this.#abort.abort();
 		this.#state.generation++;
 		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
+		this.#notify();
 		return this.status();
 	}
 
@@ -218,6 +233,7 @@ export class SpecDrivenOrchestrator {
 		this.pause();
 		if (this.#state.phase !== "completed") this.#state.phase = "cancelled";
 		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
+		this.#notify();
 		return this.status();
 	}
 
@@ -271,8 +287,10 @@ export class SpecDrivenOrchestrator {
 			throw new StaleRun();
 	}
 	async #checked<T>(promise: Promise<T>, context: SpecRunContext): Promise<T> {
+		this.#notify();
 		const result = await promise;
 		this.#guard(context);
+		this.#notify();
 		return result;
 	}
 	async #handoff(input: Parameters<SpecDrivenPorts["handoff"]>[0], context: SpecRunContext) {
@@ -282,6 +300,7 @@ export class SpecDrivenOrchestrator {
 			...(this.#state.handoffs ?? []).filter(item => item.transition !== handoff.transition),
 			handoff,
 		];
+		this.#notify();
 		await this.#ports.evidence.flush(this.status(), context);
 		return handoff;
 	}
@@ -294,6 +313,7 @@ export class SpecDrivenOrchestrator {
 			this.#state.blockedReason ??= error instanceof Error ? error.message : String(error);
 			this.#abort.abort();
 		}
+		this.#notify();
 	}
 	async #launch(before?: (context: SpecRunContext) => Promise<void>): Promise<SpecDrivenStatus> {
 		if (this.#driving) throw new Error("Workflow dispatch is already active");
@@ -326,6 +346,7 @@ export class SpecDrivenOrchestrator {
 	async #drive(context: SpecRunContext): Promise<void> {
 		while (true) {
 			this.#guard(context);
+			this.#notify();
 			switch (this.#state.phase) {
 				case "requirements":
 					await this.#draftRequirements(context);
@@ -528,6 +549,7 @@ export class SpecDrivenOrchestrator {
 		if (this.#overallSlot?.lastReview?.verdict === "pass") this.#overallSlot.reviewedRevision = undefined;
 		if (["validating", "overall-review", "awaiting-acceptance", "closing"].includes(this.#state.phase))
 			this.#state.phase = this.#state.tasks.some(task => task.status !== "completed") ? "executing" : "validating";
+		this.#notify();
 		return true;
 	}
 	async #review(
@@ -935,6 +957,7 @@ export class SpecDrivenOrchestrator {
 						if (!task) throw new Error(`Unknown parent task ${taskId}`);
 						await this.#checkpoint(task, execution, context);
 						await this.#ports.evidence.flush(this.status(), context);
+						this.#notify();
 						return structuredClone(this.#state.tasks.find(item => item.id === taskId)!);
 					},
 				},
@@ -974,6 +997,7 @@ export class SpecDrivenOrchestrator {
 			state.records = records;
 			state.validatedIds = [];
 			state.status = "implemented";
+			this.#notify();
 		}
 		if (state.status === "implemented") {
 			for (const validation of task.validation) {
@@ -983,6 +1007,7 @@ export class SpecDrivenOrchestrator {
 				(state.validatedIds ??= []).push(validation.id);
 			}
 			state.status = "verified";
+			this.#notify();
 		}
 		if (state.status === "verified") {
 			const execution = state.execution!;
@@ -1027,6 +1052,7 @@ export class SpecDrivenOrchestrator {
 				state.repairReview = review;
 			}
 		}
+		this.#notify();
 	}
 	async #conditions(task: SpecTask, context: SpecRunContext): Promise<void> {
 		for (const id of task.conditionIds)

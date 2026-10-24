@@ -37,6 +37,7 @@ const jchFiles = {
 type MethodPatch = { before: string; after: string } | { start: string; end?: string; body: string };
 const methodAdaptation = parseYaml(methodAdaptationSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
 	adaptation: string;
+	agents: Record<string, "task" | "reviewer">;
 	methods: {
 		source: "jch" | "superpowers";
 		name: string;
@@ -182,6 +183,14 @@ function adaptSuperpowersSkill(name: string, raw: Uint8Array): Uint8Array {
 	return Buffer.from(`---\n${stringifyYaml(metadata)}---${content.slice(frontmatter[0].length)}`);
 }
 
+function adaptSuperpowersAgent(relative: string, raw: Uint8Array): Uint8Array {
+	const agent = methodAdaptation.agents[relative];
+	if (!agent) return raw;
+	const content = Buffer.from(raw).toString("utf8");
+	if (!content.includes("general-purpose")) throw new Error(`Upstream dispatch agent missing: ${relative}`);
+	return Buffer.from(content.replaceAll("general-purpose", agent));
+}
+
 function adaptMethodFile(relative: string, raw: Uint8Array): Uint8Array {
 	const patches = methodAdaptation.files[relative];
 	if (!patches) return raw;
@@ -215,7 +224,7 @@ function embedMethods(entries: Record<string, Uint8Array>, executable: Set<strin
 			for (const [relative, raw] of Object.entries(originals)) {
 				if (!relative.startsWith(originalPrefix)) continue;
 				const target = prefix + relative.slice(originalPrefix.length);
-				entries[target] = adaptMethodFile(relative, raw);
+				entries[target] = adaptMethodFile(relative, adaptSuperpowersAgent(relative, raw));
 				if (executable.has(relative)) executable.add(target);
 			}
 			const effectivePath = `${prefix}SKILL.md`;
@@ -607,6 +616,11 @@ async function embed(): Promise<void> {
 		entries[`superpowers/original-skills/${name}/SKILL.md`] = raw;
 		entries[relative] = adaptSuperpowersSkill(name, raw);
 		skills.push({ source: "superpowers", name, path: relative });
+	}
+	for (const relative of Object.keys(methodAdaptation.agents)) {
+		const raw = entries[relative];
+		if (!raw) throw new Error(`Missing upstream Superpowers dispatch resource: ${relative}`);
+		entries[relative] = adaptSuperpowersAgent(relative, raw);
 	}
 	const schema = parseYaml(
 		await fs.readFile(path.join(openspec, "schemas/spec-driven/schema.yaml"), "utf8"),

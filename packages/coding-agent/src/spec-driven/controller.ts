@@ -21,6 +21,45 @@ export type SpecRuntimeFactory = (input: {
 
 type Operation = (core: SpecDrivenOrchestrator) => Promise<SpecDrivenStatus>;
 const controllers = new WeakMap<object, SpecDrivenController>();
+export interface SpecControllerObservation {
+	runId: string | null;
+	cwd: string;
+	createdAt: number;
+	updatedAt: number;
+	active: boolean;
+	released: boolean;
+	disposed: boolean;
+	status: SpecDrivenStatus;
+}
+
+type ObservationListener = (observation: SpecControllerObservation) => void;
+const observers = new WeakMap<object, Set<ObservationListener>>();
+
+function deliver(listener: ObservationListener, observation: SpecControllerObservation): void {
+	try {
+		listener(observation);
+	} catch {
+		// An observer is not an execution or approval owner.
+	}
+}
+
+/** Attaches to the manager identity without creating a controller or native runtime. */
+export function observeSpecDrivenController(sessionManager: object, listener: ObservationListener): () => void {
+	let listeners = observers.get(sessionManager);
+	if (!listeners) {
+		listeners = new Set();
+		observers.set(sessionManager, listeners);
+	}
+	// Each registration owns its lifetime, even when the same callback is registered twice.
+	const registered: ObservationListener = observation => listener(observation);
+	listeners.add(registered);
+	const controller = controllers.get(sessionManager);
+	if (controller) deliver(registered, controller.observation());
+	return () => {
+		listeners.delete(registered);
+		if (!listeners.size && observers.get(sessionManager) === listeners) observers.delete(sessionManager);
+	};
+}
 const emptyStatus = (): SpecDrivenStatus => ({
 	phase: "idle",
 	paused: false,
@@ -48,6 +87,7 @@ export function getSpecDrivenController(
 	if (!controller) {
 		controller = new SpecDrivenController(host, options.factory);
 		controllers.set(host.sessionManager, controller);
+		controller.publishObservation();
 	}
 	controller.setOutput(host.output);
 	return controller;
@@ -179,6 +219,8 @@ export class SpecDrivenController {
 	#active = false;
 	#cancelled = false;
 	#failure?: string;
+	readonly #createdAt = Date.now();
+	#updatedAt = this.#createdAt;
 
 	constructor(host: SlashCommandRuntime, factory: SpecRuntimeFactory = createSpecDrivenRuntime) {
 		if (!host.session.asyncJobManager) throw new Error("当前会话缺少原生 AsyncJobManager，无法启动 /spec");
@@ -211,6 +253,28 @@ export class SpecDrivenController {
 		if (this.#paused) state.paused = true;
 		if (this.#failure) state.blockedReason = this.#failure;
 		return state;
+	}
+	observation(): SpecControllerObservation {
+		return {
+			runId: this.#core?.runId ?? null,
+			cwd: this.#host.cwd,
+			createdAt: this.#createdAt,
+			updatedAt: this.#updatedAt,
+			active: this.#active,
+			released: this.#released,
+			disposed: this.#disposed,
+			status: this.status(),
+		};
+	}
+	/** Publishes only through this manager's current controller, never through a global current run. */
+	publishObservation(): void {
+		this.#updatedAt = Date.now();
+		if (controllers.get(this.#host.sessionManager) !== this) return;
+		const listeners = observers.get(this.#host.sessionManager);
+		if (!listeners?.size) return;
+		// Keep registrations stable while callbacks subscribe or unsubscribe.
+		const currentListeners = [...listeners];
+		for (const listener of currentListeners) deliver(listener, this.observation());
 	}
 	async report(): Promise<void> {
 		let text = renderSpecDrivenStatus(this.status());
@@ -253,7 +317,24 @@ export class SpecDrivenController {
 					return;
 				}
 				this.#native = native;
-				this.#core = new SpecDrivenOrchestrator(native.ports, native.options);
+				const controller = this;
+				const notify = (status: SpecDrivenStatus): void => {
+					try {
+						native.options.onStatusChange?.(structuredClone(status));
+					} catch {
+						// A factory listener must not suppress manager observers.
+					}
+					controller.publishObservation();
+				};
+				this.#core = new SpecDrivenOrchestrator(native.ports, {
+					...native.options,
+					get onStatusChange() {
+						return native.options.onStatusChange || observers.get(controller.#host.sessionManager)?.size
+							? notify
+							: undefined;
+					},
+				});
+				this.publishObservation();
 			})();
 		await this.#initializing;
 	}
@@ -267,6 +348,7 @@ export class SpecDrivenController {
 		this.#bind("dispatching");
 		const epoch = ++this.#epoch;
 		this.#active = true;
+		this.publishObservation();
 		let jobId = "";
 		try {
 			jobId = this.#manager.register(
@@ -286,6 +368,7 @@ export class SpecDrivenController {
 						this.#bind(this.#core.status().phase);
 						await reportProgress(`phase=${this.#core.status().phase}`);
 						this.#active = false;
+						this.publishObservation();
 						await this.report();
 						if (["completed", "cancelled"].includes(this.#core.status().phase)) await this.#release();
 						return renderSpecDrivenStatus(this.#core.status());
@@ -294,13 +377,17 @@ export class SpecDrivenController {
 							this.#failure = error instanceof Error ? error.message : String(error);
 							this.#bind(this.status().phase);
 							this.#active = false;
+							this.publishObservation();
 							await this.report();
 						}
 						throw error;
 					} finally {
 						signal.removeEventListener("abort", abort);
 						this.#jobs.delete(jobId);
-						if (epoch === this.#epoch) this.#active = false;
+						if (epoch === this.#epoch && this.#active) {
+							this.#active = false;
+							this.publishObservation();
+						}
 					}
 				},
 				{ ownerId: this.#host.session.getAgentId(), suppressDelivery: true },
@@ -308,6 +395,7 @@ export class SpecDrivenController {
 		} catch (error) {
 			this.#active = false;
 			this.#bind(this.status().phase);
+			this.publishObservation();
 			throw error;
 		}
 		this.#jobs.add(jobId);
@@ -320,6 +408,7 @@ export class SpecDrivenController {
 		this.#active = false;
 		this.#bind(this.status().phase);
 		for (const id of this.#jobs) this.#manager.cancel(id, { ownerId: this.#host.session.getAgentId() });
+		this.publishObservation();
 	}
 	resume(): string {
 		if (!this.#paused && !this.#core?.status().paused) throw new Error("流程未暂停");
@@ -332,6 +421,7 @@ export class SpecDrivenController {
 		this.#pending = undefined;
 		this.#core?.cancel();
 		if (!this.#core) this.#failure = "已取消初始化中的流程";
+		this.publishObservation();
 		await this.report();
 		await this.dispose();
 	}
@@ -340,6 +430,7 @@ export class SpecDrivenController {
 		this.#releasePolicy = undefined;
 		if (this.#released) return;
 		this.#released = true;
+		this.publishObservation();
 		await this.#native?.dispose();
 	}
 	async dispose(): Promise<void> {
@@ -347,6 +438,7 @@ export class SpecDrivenController {
 		this.pause();
 		this.#core?.cancel();
 		this.#disposed = true;
+		this.publishObservation();
 		await this.#release();
 	}
 }
