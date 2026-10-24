@@ -1,0 +1,151 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title description">
+  <title id="title">OpenSpec + Superpowers + OMP 受控协同工作流</title>
+  <desc id="description">需求 Agent 使用 Brainstorming、Grill-me 和 OpenSpec 编写规格，独立审查后由用户确认；方案 Agent 使用 OMP Team 比较候选，由用户选择；计划 Agent 使用 Superpowers 形成唯一计划并完成覆盖检查和独立审查，由用户批准并启动。前三次阶段转换分别调用原生 handoff。执行主 Agent 自主实现或并行派发，组织 TDD、验证、独立审查和修复，可选 Goal。当前有效证据齐备后交用户最终验收，验收后才由 OpenSpec 执行获批的同步与归档。OMP 程序控制权限、批准、唯一任务状态及可信证据。</desc>
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5198f6"/>
+      <stop offset="1" stop-color="#4388e8"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7bd4a5"/>
+      <stop offset="1" stop-color="#63c793"/>
+    </linearGradient>
+    <filter id="shadow" x="-25%" y="-25%" width="150%" height="165%">
+      <feDropShadow dx="0" dy="12" stdDeviation="13" flood-color="#24567e" flood-opacity="0.16"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L8 5 L1 9" fill="none" stroke="#3981ae" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <g id="document" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-24-31 H10 L25-16 V31 H-24 Z M10-31 V-16 H25 M-13-3 H14 M-13 8 H14 M-13 19 H5"/>
+    </g>
+    <g id="team" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cy="-20" r="10"/><circle cx="-27" cy="-7" r="8"/><circle cx="27" cy="-7" r="8"/>
+      <path d="M-17 19 V12 Q-17-2 0-2 Q17-2 17 12 V19 Z M-20 7 Q-41 3-41 20 V25 H-25 M20 7 Q41 3 41 20 V25 H25"/>
+    </g>
+    <g id="plan" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="-25" y="-27" width="50" height="61" rx="4"/><rect x="-10" y="-34" width="20" height="14" rx="4" fill="#7bd4a5"/>
+      <path d="M-15-8 L-11-4 L-5-12 M3-8 H15 M-15 8 L-11 12 L-5 4 M3 8 H15 M-15 24 H-6 M3 24 H15"/>
+    </g>
+    <g id="robot" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="-31" y="-20" width="62" height="43" rx="9"/><circle cy="-36" r="4"/><path d="M0-32 V-20 M-40-6 V10 M40-6 V10 M-12 13 H12 M-18 34 Q0 24 18 34"/>
+      <circle cx="-13" cy="-3" r="3"/><circle cx="13" cy="-3" r="3"/>
+    </g>
+    <g id="check" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+      <circle r="31"/><path d="M-16 0 L-4 13 L18-14"/>
+    </g>
+    <g id="archive" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M-31-22 H31 V-7 H-31 Z M-25-7 V30 H25 V-7 M-9 5 H9 M0-40 V-25 M-9-33 L0-24 L9-33"/>
+    </g>
+  </defs>
+  <style>
+    text { font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif; text-anchor: middle; fill: #132534; }
+    .heading { font-size: 37px; font-weight: 700; }
+    .english { font-size: 30px; font-weight: 700; }
+    .detail { font-size: 25px; }
+    .white { fill: #fff; }
+    .muted { fill: #547083; }
+    .connector { stroke: #3981ae; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+    .gate { fill: #edf8f2; stroke: #42a579; stroke-width: 2; }
+    .gate-text { fill: #287f5a; font-size: 26px; font-weight: 700; }
+    .handoff { fill: #f3f8ff; stroke: #b8d3ef; stroke-width: 2; }
+  </style>
+  <rect width="1920" height="1080" fill="#fff"/>
+  <text x="960" y="145" font-size="53" font-weight="700">OpenSpec + Superpowers + OMP 受控协同工作流</text>
+  <text x="960" y="205" font-size="28" class="muted">规格与工程方法之上，加上明确职责、用户决策与程序门禁</text>
+
+  <rect x="710" y="355" width="670" height="350" rx="48" fill="#e4f6eb"/>
+  <g filter="url(#shadow)">
+    <rect x="70" y="380" width="285" height="285" rx="34" fill="url(#blue)"/>
+    <rect x="425" y="380" width="235" height="285" rx="34" fill="url(#blue)"/>
+    <rect x="730" y="380" width="255" height="285" rx="34" fill="url(#green)"/>
+    <rect x="1055" y="380" width="305" height="285" rx="34" fill="url(#green)"/>
+    <rect x="1430" y="380" width="185" height="285" rx="34" fill="url(#blue)"/>
+    <rect x="1685" y="380" width="175" height="285" rx="34" fill="url(#blue)"/>
+  </g>
+
+  <g color="#142f40">
+    <use href="#document" transform="translate(212.5 439)"/>
+    <use href="#team" transform="translate(542.5 439)"/>
+    <use href="#plan" transform="translate(857.5 439)"/>
+    <use href="#robot" transform="translate(1207.5 439)"/>
+    <use href="#check" transform="translate(1522.5 439)"/>
+    <use href="#archive" transform="translate(1772.5 439)"/>
+  </g>
+
+  <text x="212.5" y="512" class="english">requirements</text>
+  <text x="212.5" y="556" class="heading white">需求澄清与规格</text>
+  <text x="212.5" y="601" font-size="23" class="white">Brainstorming＋Grill-me</text>
+  <text x="212.5" y="637" class="detail white">OpenSpec · 独立审查</text>
+
+  <text x="542.5" y="512" class="english">solution</text>
+  <text x="542.5" y="556" class="heading white">方案比较</text>
+  <text x="542.5" y="601" class="detail white">OMP Team</text>
+  <text x="542.5" y="637" class="detail white">候选与采用条件</text>
+
+  <text x="857.5" y="512" class="english">write-plan</text>
+  <text x="857.5" y="556" class="heading">执行计划</text>
+  <text x="857.5" y="601" class="detail">唯一计划 · 覆盖检查</text>
+  <text x="857.5" y="637" font-size="21">Superpowers · 独立审查</text>
+
+  <text x="1207.5" y="512" class="english">orchestrate</text>
+  <text x="1207.5" y="556" class="heading">主代理自主执行</text>
+  <text x="1207.5" y="601" class="detail">自行实现／并行派发</text>
+  <text x="1207.5" y="637" class="detail">验证 · 独立审查 · 修复</text>
+
+  <text x="1522.5" y="512" class="english">accept</text>
+  <text x="1522.5" y="556" font-size="27" font-weight="700" class="white">用户最终验收</text>
+  <text x="1522.5" y="601" class="detail white">当前内容</text>
+  <text x="1522.5" y="637" class="detail white">有效证据齐备</text>
+
+  <text x="1772.5" y="512" class="english">archive</text>
+  <text x="1772.5" y="556" font-size="32" font-weight="700" class="white">同步与归档</text>
+  <text x="1772.5" y="601" class="detail white">OpenSpec</text>
+  <text x="1772.5" y="637" font-size="22" class="white">仅执行获批收尾</text>
+
+  <path d="M355 520 H415" class="connector"/>
+  <path d="M660 520 H720" class="connector"/>
+  <path d="M985 520 H1045" class="connector"/>
+  <path d="M1360 520 H1420" class="connector"/>
+  <path d="M1615 520 H1675" class="connector"/>
+
+  <g>
+    <path d="M390 350 V500 M695 350 V500 M1020 350 V500 M1650 350 V500" stroke="#8bc5a8" stroke-width="2" stroke-dasharray="5 7" fill="none"/>
+    <rect x="310" y="300" width="160" height="50" rx="25" class="gate"/>
+    <text x="390" y="334" class="gate-text">确认需求</text>
+    <rect x="615" y="300" width="160" height="50" rx="25" class="gate"/>
+    <text x="695" y="334" class="gate-text">选定方案</text>
+    <rect x="930" y="300" width="180" height="50" rx="25" class="gate"/>
+    <text x="1020" y="334" class="gate-text">批准并启动</text>
+    <rect x="1570" y="300" width="160" height="50" rx="25" class="gate"/>
+    <text x="1650" y="334" class="gate-text">验收确认后</text>
+  </g>
+
+  <g>
+    <path d="M390 540 V712 M695 540 V712 M1020 540 V712" stroke="#a4c4df" stroke-width="2" stroke-dasharray="5 7" fill="none"/>
+    <rect x="285" y="712" width="210" height="48" rx="24" class="handoff"/>
+    <text x="390" y="744" font-size="25" fill="#30688f">原生 handoff ①</text>
+    <rect x="590" y="712" width="210" height="48" rx="24" class="handoff"/>
+    <text x="695" y="744" font-size="25" fill="#30688f">原生 handoff ②</text>
+    <rect x="915" y="712" width="210" height="48" rx="24" class="handoff"/>
+    <text x="1020" y="744" font-size="25" fill="#30688f">原生 handoff ③</text>
+    <rect x="1128" y="681" width="159" height="48" rx="24" fill="#22a573" stroke="#fff" stroke-width="3"/>
+    <text x="1207.5" y="714" font-size="28" font-weight="700" class="white">✓ TDD</text>
+    <text x="1207.5" y="765" font-size="25" class="muted">Goal 可选</text>
+  </g>
+
+  <path d="M85 790 V806 Q85 826 108 826 H1822 Q1845 826 1845 806 V790" fill="none" stroke="#329b75" stroke-width="4"/>
+  <rect x="70" y="859" width="1790" height="120" rx="30" fill="#edf6fc" stroke="#c7dfed" stroke-width="2"/>
+  <text x="282" y="914" font-size="32" font-weight="700">OMP 程序控制</text>
+  <text x="282" y="953" font-size="23" class="muted">贯穿全流程，不靠模型自报</text>
+  <path d="M505 882 V958" stroke="#bad3e4" stroke-width="2"/>
+  <text x="675" y="911" font-size="28" font-weight="700">权限与阶段隔离</text>
+  <text x="675" y="951" font-size="23" class="muted">各节点只做获准工作</text>
+  <text x="1005" y="911" font-size="28" font-weight="700">有效批准与交接</text>
+  <text x="1005" y="951" font-size="23" class="muted">版本一致才允许推进</text>
+  <text x="1335" y="911" font-size="28" font-weight="700">唯一任务状态</text>
+  <text x="1335" y="951" font-size="23" class="muted">原生调度与依赖准入</text>
+  <text x="1665" y="911" font-size="28" font-weight="700">可信验证证据</text>
+  <text x="1665" y="951" font-size="23" class="muted">实际结果绑定当前内容</text>
+  <text x="960" y="1032" font-size="24" class="muted">四类职责节点 · 三次真实交接 · 用户最终验收 · 验收后获批收尾</text>
+</svg>

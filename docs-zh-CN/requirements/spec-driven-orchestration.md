@@ -12,20 +12,27 @@
 
 ## 流程总览
 
-```mermaid
-flowchart TD
-    R["需求 Agent<br/>Brainstorming 受控探索＋Grill-me 访谈<br/>可用 Wiki／Repo，编写 proposal／specs"]
-    R --> RC{"用户确认需求"}
-    RC -->|"原生 handoff＋已确认规格"| S["方案 Agent＋OMP Team<br/>比较候选，保留原始结果"]
-    S --> SC{"用户选定方案"}
-    SC -->|"原生 handoff＋规格／选定候选"| P["计划 Agent<br/>Superpowers 默认目录内唯一计划<br/>程序检查需求覆盖，独立审查"]
-    P --> PC{"用户批准计划并启动"}
-    PC -->|"上一节点原生 handoff＋获批文档"| E["执行主 Agent<br/>自主编排、自行实现或并行派发子代理<br/>验证、审查与修复；可选无人值守 Goal"]
-    E --> AC{"用户最终验收"}
-    AC -->|"确认后"| O["OpenSpec 同步规格并归档<br/>保留规格、方案及计划快照、交接和证据"]
-```
+下面依次对比单独使用 OpenSpec、单独使用 Superpowers、两者协同，以及加入 OMP 受控编排后的流程。前三张图原样转载自 lixueduan 的[《OpenSpec + Superpowers: SDD+TDD 双驱动 AI 编程工作流》](https://www.lixueduan.com/posts/ai/21-openspec+superpowers/#why-openspec)，图片保存在本地，不依赖外网加载；图中命令、自动流转及优缺点表述属于原文介绍，不作为本文固定上游版本或 OMP 的能力与验收结论。
 
-图中的 handoff 是原生交接能力的真实调用，不是给“传几个字段”换一个名字。它负责延续业务理解；阶段权限、批准状态和是否允许启动下一节点仍由 OMP 控制。后续桌面界面展示和操作同一套流程，不另建界面专属状态机。
+### 图 1：单独使用 OpenSpec
+
+![图 1：原文 OpenSpec 工作流，探索项目、提出需求、实现、归档](omp-spec-driven-orchestration-assets/openspec-workflow.jpg)
+
+### 图 2：单独使用 Superpowers
+
+![图 2：原文 Superpowers 工作流，头脑风暴、编写计划、子代理开发与 TDD](omp-spec-driven-orchestration-assets/superpowers-workflow.jpg)
+
+### 图 3：OpenSpec + Superpowers
+
+![图 3：原文 OpenSpec 与 Superpowers 协同工作流，规格驱动与 TDD 工程方法结合](omp-spec-driven-orchestration-assets/combined-workflow.jpg)
+
+### 图 4：OpenSpec + Superpowers + OMP
+
+![图 4：OMP 受控协同工作流，四类职责、三次原生 handoff、用户决策与验收后获批归档](omp-spec-driven-orchestration-assets/omp-workflow.svg)
+
+图 4 为本文新绘，沿用原图的横向圆角卡片、图标及蓝绿配色。它展示的是本文既定流程：OpenSpec 管理需求规格，Superpowers 提供计划与工程方法，OMP 组织 Team、主代理及原生子代理，并由程序控制阶段权限、有效批准、唯一任务状态与可信证据；不是在图 3 后简单追加一个 Agent。
+
+图 4 中的 handoff 是原生交接能力的真实调用，不是给“传几个字段”换一个名字。它负责延续业务理解；阶段权限、批准状态和是否允许启动下一节点仍由 OMP 控制。后续桌面界面展示和操作同一套流程，不另建界面专属状态机。
 
 
 ## 一、先复用成熟能力，不再重写一套方法论
@@ -52,8 +59,6 @@ OpenSpec 把长期有效的主规格和本次变更分开管理。主规格按�
 Superpowers 原有入口通常先通过 `brainstorming` 澄清意图和设计，再用 `writing-plans` 编写可执行计划。用户确认后，可以采用 `subagent-driven-development` 逐任务派发新的实现者和审查者；也提供由当前 Agent 连续执行的 `executing-plans` 路径。最后结合验证、代码审查及分支收尾处理交付。
 
 TDD 是 Test-Driven Development，即测试驱动开发。它不是实现后补几个测试，而是先写针对目标行为的测试，实际运行并确认因尚未实现该行为而失败；随后写最小实现使其通过，再在保持测试通过的条件下做必要重构，也就是 RED、GREEN、REFACTOR。
-
-![图 1：OpenSpec 的规格变更流程与 Superpowers 的计划、TDD 执行路径概览](omp-spec-driven-orchestration-assets/upstream.png)
 
 ### OMP 的组合：OpenSpec 管规格，OMP 管执行状态
 
