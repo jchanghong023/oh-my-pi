@@ -16,12 +16,13 @@
 
 ### Changed
 
+- Compact mode now shows a running `bash` call's last three non-empty output lines under its one-line summary, without parameters or wrapping, and collapses back to one line once the call settles; full output remains available through expansion and detailed mode.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 - Deliver OpenSpec explore, update, propose, sync, archive and verify as manual-only built-in skills (`/skill:opsx-*`) instead of built-in commands or command templates. Keep native CLI guidance, validation and `/dev` behavior intact.
 - Simplify bundled OpenSpec initialization to `omp openspec init [path] [--language <language>]` with the requirements-only default schema. Remove external-tool selection, installation/update entrypoints and flags; preserve existing project configuration, requirements, history and external-tool files.
 
-- Make eight referenced Superpowers skills discoverable with compact hints for explicit user invocation or a required active-skill handoff; keep `brainstorming` and `using-superpowers` hidden, preserve original skill bodies and the two existing discoverable originals, and leave system instructions and `/dev` gates unchanged.
+- Expose only debugging, completion verification and skill authoring from bundled Superpowers in ordinary chats; keep brainstorming manual-only and reserve all remaining skills for native `/dev` authorization, without changing skill bodies or controlled methods.
 - Keep bundled OpenSpec requirements maintenance and the original standalone `verify-change` workflow without implementation fallbacks. Preserve `/dev` runtime observations and original Team selection in project-local records, keep live control state session-local, retain the single plan under `docs/superpowers/plans/`, and preserve read-only delivery snapshots when archiving.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Compact mode now keeps user requests and assistant prose from compacted history, without replaying its tools, thinking, notifications, or other historical UI; recent activity and full-history viewers are unchanged.
