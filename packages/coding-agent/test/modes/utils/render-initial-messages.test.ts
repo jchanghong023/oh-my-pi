@@ -325,10 +325,11 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 				"/skill:audit source.ts",
 				"/skill:direct-audit original.ts",
 				"KEPT_USER_REQUEST",
-				"recent.txt",
 			])
 				expect(rendered).toContain(text);
 			for (const text of [
+				"recent.txt",
+				"RECENT_FILE_BODY",
 				"OLD_PRIVATE_THINKING",
 				"OLD_TOOL_PATH",
 				"OLD_TOOL_OUTPUT",
@@ -353,6 +354,8 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
 		expect(detailed).toContain("OLD_TOOL_PATH");
 		expect(detailed).toContain("OLD_NOTICE_UI");
+		expect(detailed).toContain("recent.txt");
+		expect(detailed).toContain("RECENT_FILE_BODY");
 
 		cfgDisplayCompactToolActivity.override(Settings.instance, true);
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
@@ -597,7 +600,7 @@ describe("UiHelpers.renderInitialMessages — responsiveness", () => {
 });
 
 describe("UiHelpers.renderInitialMessages — image replay", () => {
-	it("replays image-only reads as counted compact calls without changing their stored content", async () => {
+	it("hides idle compact image reads while retaining active call restoration and detailed images", async () => {
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
 			assistantToolCall("legacy-image", "read", { path: "legacy.png" }),
@@ -631,12 +634,27 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 				)
 				.join("\n");
 			if (display === "compact") {
-				expect(ansi).toContain("legacy.png");
-				expect(native).toContain("legacy.png");
+				expect(ansi).not.toContain("legacy.png");
+				expect(native).not.toContain("legacy.png");
 				const group = chatContainer.children.find(child => child instanceof ReadToolGroupComponent);
 				expect(group?.getCompactToolCount()).toBe(1);
 				expect(hasImageComponent(chatContainer)).toBe(false);
 				expect(native).not.toContain('"k":"image"');
+				chatContainer.setCompactTurnActive(true);
+				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("legacy.png");
+				expect(
+					JSON.stringify(
+						chatContainer.compactToolActivityBlock()?.describe?.({
+							cols: 120,
+							reduceMotion: true,
+							dark: true,
+							supports: () => false,
+							feature: () => false,
+						}),
+					),
+				).toContain("legacy.png");
+				chatContainer.setCompactTurnActive(false);
+				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).not.toContain("legacy.png");
 			} else if (hidden) {
 				expect(ansi).not.toContain("legacy.png");
 				expect(hasImageComponent(chatContainer)).toBe(false);

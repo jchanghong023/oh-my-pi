@@ -1,6 +1,12 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { ThinkingPreviewComponent } from "@oh-my-pi/pi-tui/chat/thinking-preview";
+import { Loader } from "@oh-my-pi/pi-tui/components/loader";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -165,6 +171,283 @@ beforeAll(async () => {
 });
 
 describe("composer inline shrink (#11007)", () => {
+	it("keeps compact prose complete while self-clearing chrome expands and collapses", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const h = makeHarness(60, 18, 0);
+		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
+			selfClearingChrome: [h.hud],
+			transientChrome: [h.editor],
+		});
+		const message = new AssistantMessageComponent();
+		h.transcript.addChild(message);
+		const paragraphs = Array.from({ length: 24 }, (_, i) => `PARA${String(i + 1).padStart(2, "0")}`);
+		try {
+			h.hud.rows = 3;
+			for (let count = 1; count <= paragraphs.length; count++) {
+				message.updateContent(reply(paragraphs.slice(0, count).join("\n\n")), { transient: true });
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+			}
+			message.updateContent(
+				reply(`${paragraphs.join("\n\n")}\n\n| Item | Value |\n| --- | --- |\n| active | table |`),
+				{ transient: true },
+			);
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			const prose = () => h.terminal.getScrollBuffer().flatMap(row => Bun.stripANSI(row).match(/PARA\d{2}/g) ?? []);
+			expect(prose()).toEqual(paragraphs);
+			h.hud.rows = 0;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(prose()).toEqual(paragraphs);
+			h.hud.rows = 3;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(prose()).toEqual(paragraphs);
+		} finally {
+			h.composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("keeps the final live table cell visible beside narrow activity, draft, and status chrome", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(100, 24);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { quiet: true },
+		});
+		const status = createStartupStatusLine({
+			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		for (let index = 0; index < 7; index++) status.setHookStatus(`status-${index}`, `STATUS ${index}`);
+		composer.setStatusComponent(status);
+		composer.editor.setText("draft-kept");
+		const activity = new InlineWidget();
+		activity.rows = 3;
+		const transcript = new TranscriptContainer();
+		const message = new AssistantMessageComponent(
+			undefined,
+			false,
+			undefined,
+			[],
+			undefined,
+			true,
+			undefined,
+			false,
+			false,
+			true,
+		);
+		transcript.addChild(message);
+		composer.setRuntimeChildren([transcript, activity, composer.editor], {
+			transientChrome: [composer.editor],
+			selfClearingChrome: [activity],
+		});
+		composer.start({ playWelcomeIntro: false });
+		const source =
+			Array.from({ length: 24 }, (_, index) => `P${index} 正文不能丢失。`).join("\n\n") +
+			"\n\n| 轮次 | 总耗时 | 非编译耗时／结果 | 备注 |\n| --- | ---: | --- | --- |\n" +
+			Array.from(
+				{ length: 5 },
+				(_, index) => `| 第 ${index + 1} 轮 | 111.1 秒 | 11.1 秒，通过 | 静态检查预算耗尽ROW${index + 1} |`,
+			).join("\n");
+		let streamed = "";
+		try {
+			for (const line of source.split("\n")) {
+				streamed += `${line}\n`;
+				message.updateContent(reply(streamed), { transient: true });
+				composer.ui.requestRender();
+				await scheduler.settle(terminal);
+			}
+			terminal.resize(24, 12);
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			const visible = terminal.getScrollBuffer().join("\n");
+			expect(visible).toContain("W5");
+			expect(composer.editor.getText()).toBe("draft-kept");
+			expect(terminal.getViewport().some(row => row.includes("draft-kept"))).toBe(true);
+		} finally {
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("reserves compact transcript space beside narrow-screen placeholder and status decorations", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(24, 12);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { quiet: true },
+		});
+		const status = createStartupStatusLine({
+			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		for (let i = 0; i < 7; i++) status.setHookStatus(`narrow-${i}`, `STATUS ${i}`);
+		composer.setStatusComponent(status);
+		composer.editor.placeholder = () => "Type a message, use slash commands, or ask a question about your project";
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Text("CURRENT BODY", 0, 0));
+		composer.setRuntimeChildren([transcript, composer.editor], { transientChrome: [composer.editor] });
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		try {
+			await scheduler.settle(terminal);
+			expect(terminal.getViewport().some(row => row.includes("CURRENT BODY"))).toBe(true);
+			expect(composer.renderFrame({ columns: 24, rows: 12 }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
+				true,
+			);
+			const compactEditorRows = composer.editor.render(24).length;
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+			const detailedEditorRows = composer.editor.render(24).length;
+			expect(detailedEditorRows).toBeGreaterThan(compactEditorRows);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			expect(composer.editor.render(24).length).toBe(detailedEditorRows);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+			composer.editor.handleInput("draft");
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(terminal.getViewport().some(row => row.includes("draft"))).toBe(true);
+			expect(terminal.getViewport().some(row => row.includes("CURRENT BODY"))).toBe(true);
+			expect(composer.editor.getText()).toBe("draft");
+		} finally {
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("protects compact prose and draft from a huge self-clearing HUD before dropping thinking", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(24, 12);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Text("CURRENT BODY", 0, 0));
+		const thinking = new ThinkingPreviewComponent();
+		thinking.setText("first thought\nlatest thought");
+		const hud = new InlineWidget();
+		hud.rows = 80;
+		composer.editor.setText("draft");
+		composer.setRuntimeChildren([transcript, thinking, hud, composer.editor], {
+			transientChrome: [composer.editor],
+			selfClearingChrome: [thinking, hud],
+		});
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		try {
+			await scheduler.settle(terminal);
+			const view = terminal.getViewport().map(row => Bun.stripANSI(row));
+			expect(view.some(row => row.includes("CURRENT BODY"))).toBe(true);
+			expect(view.some(row => row.includes("draft"))).toBe(true);
+			expect(view.filter(row => row.includes("thought"))).toHaveLength(2);
+			expect(composer.renderFrame({ columns: 24, rows: 12 }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
+				true,
+			);
+			expect(composer.editor.getText()).toBe("draft");
+			terminal.resize(24, 6);
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			const shortView = terminal.getViewport().map(row => Bun.stripANSI(row));
+			expect(shortView.some(row => row.includes("CURRENT BODY"))).toBe(true);
+			expect(shortView.some(row => row.includes("draft"))).toBe(true);
+			expect(shortView.filter(row => row.includes("thought"))).toHaveLength(0);
+			expect(composer.editor.getText()).toBe("draft");
+		} finally {
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("protects real compact assistant prose and draft from the actual working loader at 24x6", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(24, 6);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		const prose = new AssistantMessageComponent();
+		prose.updateContent(reply("REAL ASSISTANT BODY"));
+		transcript.addChild(prose);
+		const thinking = new ThinkingPreviewComponent();
+		thinking.setText("first thought\nlatest thought");
+		const statusRoot = new (class extends Container {
+			override render(width: number): readonly string[] {
+				return ["Working status", ...super.render(width)];
+			}
+		})();
+		const loader = new Loader(
+			composer.ui,
+			text => text,
+			text => text,
+			"Inspecting first local fixture",
+			[" ⎋"],
+		);
+		statusRoot.addChild(loader);
+		const status = createStartupStatusLine({
+			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
+			gitEnabled: false,
+			autoThinking: false,
+			fastMode: false,
+			usingSubscription: false,
+			autoCompactEnabled: false,
+			compactionBoundaries: null,
+		});
+		status.setHookStatus("runtime-status", "Runtime status detail");
+		composer.setStatusComponent(status);
+		composer.editor.setText("draft");
+		composer.setRuntimeChildren([transcript, thinking, statusRoot, composer.editor], {
+			transientChrome: [composer.editor],
+			selfClearingChrome: [thinking],
+		});
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		try {
+			for (const rows of [6, 12]) {
+				terminal.resize(24, rows);
+				composer.ui.requestRender();
+				await scheduler.settle(terminal);
+				const view = terminal.getViewport().map(row => Bun.stripANSI(row));
+				expect(view.some(row => row.includes("REAL ASSISTANT BODY"))).toBe(true);
+				expect(view.some(row => row.includes("draft"))).toBe(true);
+				expect(composer.renderFrame({ columns: 24, rows }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
+					true,
+				);
+				expect(composer.editor.getText()).toBe("draft");
+			}
+		} finally {
+			loader.stop();
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	it("keeps input and cursor inside the shared below-editor and status height budget after resizing", async () => {
 		const terminal = new VirtualTerminal(24, 6);
 		const scheduler = new VirtualRenderScheduler();

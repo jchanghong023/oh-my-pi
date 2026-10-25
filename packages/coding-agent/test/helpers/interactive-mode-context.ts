@@ -46,7 +46,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { TokenRateMeter } from "@oh-my-pi/pi-coding-agent/utils/token-rate";
 import { type Component, Container } from "@oh-my-pi/pi-tui";
 
-import { cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCompactToolActivity, cfgTerminalShowImages } from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 type AnyFn = (...args: never[]) => unknown;
 
@@ -305,14 +305,18 @@ export function createInteractiveModeContext(
 		setWorkingMessage: vi.fn(),
 		syncRetryHintRow: vi.fn(),
 		syncThinkingPreview(this: InteractiveModeContext, message, activeThinkingIndex) {
+			const hidden =
+				this.hideToolActivity ||
+				!cfgDisplayCompactToolActivity.get(this.settings) ||
+				this.effectiveHideThinkingBlock;
 			if (
 				projectThinkingPreview(
 					thinkingPreview,
 					message,
 					activeThinkingIndex,
-					this.effectiveHideThinkingBlock,
+					hidden,
 					this.proseOnlyThinking,
-					!this.effectiveHideThinkingBlock && this.viewSession.isStreaming,
+					!hidden && this.viewSession.isStreaming,
 				)
 			) {
 				this.ui.requestRender();
@@ -322,7 +326,11 @@ export function createInteractiveModeContext(
 			if (thinkingPreview.clear()) this.ui.requestRender();
 		},
 		collapseThinkingPreview(this: InteractiveModeContext) {
-			if (thinkingPreview.collapse()) this.ui.requestRender();
+			const hidden =
+				this.hideToolActivity ||
+				!cfgDisplayCompactToolActivity.get(this.settings) ||
+				this.effectiveHideThinkingBlock;
+			if (hidden ? thinkingPreview.clear() : thinkingPreview.collapse()) this.ui.requestRender();
 		},
 		clearTransientSessionUi: vi.fn(),
 		prepareSessionSwitch: vi.fn(async () => {}),

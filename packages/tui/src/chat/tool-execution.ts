@@ -8,7 +8,7 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
-import { compactToolPath, compactToolSummary } from "../chrome/tool-activity";
+import { compactToolPath } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -31,7 +31,7 @@ import {
 	rootToggleExpanded,
 } from "../native/node";
 import { plainText } from "../native/spans";
-import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
+import { diagnosticsSection, displayPath, fileDiffSection, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
@@ -52,9 +52,8 @@ import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, Wid
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
-import { renderDiff } from "../chrome/diff";
+import { nativeDiff, renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { splitUrlScheme } from "../tools/url-scheme-host";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 import { parseXdUrl } from "../tools/xd-url";
 import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
@@ -64,6 +63,7 @@ export function toolRenderName(wireName: string, tool: AgentTool | undefined): s
 	return tool?.name ?? wireName;
 }
 type DisplaceableToolName = "wait" | "todo";
+const EMPTY_DIFF_BLOCKS: readonly Component[] = [];
 
 function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 	return (
@@ -396,9 +396,6 @@ export class ToolExecutionComponent extends Container {
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
-	#compactKeep = 1;
-	#compactSummary = 0;
-	#compactFailures: number | undefined;
 	#compactToolResultListener: (() => void) | undefined;
 	#compactIntent: string | undefined;
 	#compactLiveTailCache?: { version: number; lines: readonly string[] };
@@ -453,6 +450,7 @@ export class ToolExecutionComponent extends Container {
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
 	#previewReady?: PromiseWithResolvers<void>;
+	#compactDiffCache: { version: string; blocks: readonly Component[] } | undefined;
 	// Payload keys whose Kitty PNG conversion is already awaited; the converted
 	// images themselves live in the process-wide cache behind
 	// `convertImageToPngShared`, so rebuilt components reuse them.
@@ -915,14 +913,59 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isCompactToolActivity(): boolean {
-		if (this.#compactToolActivityOverride === false) return false;
-		if (isEditLikeToolName(this.#toolName)) return false;
-		if (this.#toolName !== "write" || !isRecord(this.#args)) return true;
-		const path = this.#args.file_path ?? this.#args.path;
-		if (typeof path !== "string" || !path) return true;
-		// 执行层会剥离合法 hashline 头；分类必须使用同一目标，避免设备写入落入文件详情分支。
-		const scheme = splitUrlScheme(unwrapHashlineHeaderPath(path))?.scheme;
-		return scheme === "agent" || scheme === "proc" || scheme === "cfg" || scheme === "xd";
+		return this.#compactToolActivityOverride !== false;
+	}
+
+	/** One actual call, shared by the live ANSI/native activity dock. */
+	renderCompactActivityRows(width: number): readonly string[] {
+		return this.#renderCompact(width, true);
+	}
+	/** Live shell output follows the summary, so a truncated dock keeps the head. */
+	compactActivityKeepsHead(): boolean {
+		return this.#compactLiveTail().length > 0;
+	}
+	/** Running background jobs remain visible when no model turn owns the dock. */
+	isCompactBackgroundActive(): boolean {
+		return this.#parkedBackground && !this.#sealed && asyncJobState(this.#result?.details) === "running";
+	}
+
+	/** Diff-only projection: parameters, ordinary output and intent stay out of prose. */
+	compactEditDiffBlocks(): readonly Component[] {
+		if (!isEditLikeToolName(this.#toolName) || this.#compactToolActivityOverride === false) return EMPTY_DIFF_BLOCKS;
+		const version = `${this.#resultVersion}|${this.#displayInputVersion}|${getThemeEpoch()}`;
+		if (this.#compactDiffCache?.version === version) return this.#compactDiffCache.blocks;
+		const details = this.#result?.details;
+		const files: PerFileDiffPreview[] = [];
+		if (isRecord(details) && Array.isArray(details.perFileResults)) {
+			for (const file of details.perFileResults) {
+				if (isRecord(file) && typeof file.diff === "string" && file.diff.trim()) {
+					files.push({ path: typeof file.path === "string" ? file.path : "", diff: file.diff });
+				}
+			}
+		} else if (isRecord(details) && typeof details.diff === "string" && details.diff.trim()) {
+			files.push({ path: typeof details.path === "string" ? details.path : "", diff: details.diff });
+		} else if (!this.#result) {
+			for (const preview of this.#editDiffPreview ?? []) {
+				if (preview.diff?.trim()) files.push(preview);
+			}
+		}
+		const blocks = files.slice(-3).map(file => {
+			const view = new Text(
+				`${file.path ? `${theme.fg("dim", compactToolPath(file.path))}\n` : ""}${renderDiff(file.diff!, { filePath: file.path })}`,
+				0,
+				0,
+			);
+			return {
+				render: (width: number) => view.render(width),
+				describe: () =>
+					file.path
+						? fileDiffSection({ path: file.path }, [nativeDiff(file.diff!)], { role: "omp.active-edit-diff" })
+						: col([nativeDiff(file.diff!)], { role: "omp.active-edit-diff" }),
+				isTranscriptBlockFinalized: () => false,
+			};
+		});
+		this.#compactDiffCache = { version, blocks };
+		return blocks;
 	}
 
 	getCompactToolCount(): number {
@@ -945,24 +988,6 @@ export class ToolExecutionComponent extends Container {
 	/** Presentation identity remains available while a streamed call is still pending. */
 	get toolCallId(): string | undefined {
 		return this.#toolCallId;
-	}
-
-	/** Exact identity of a failed execution represented by the compact failure count. */
-	getCompactToolFailureId(): string | undefined {
-		return this.#toolActivityVisible && this.#compactToolActivity && this.#result?.isError && !this.#isPartial
-			? this.#toolCallId
-			: undefined;
-	}
-
-	setCompactToolLimit(keep: number, summary: number, failures = 0): boolean {
-		if (this.#compactKeep === keep && this.#compactSummary === summary && this.#compactFailures === failures)
-			return false;
-		this.#compactKeep = keep;
-		this.#compactSummary = summary;
-		this.#compactFailures = failures;
-		this.#blockVersion++;
-		this.#native.clear();
-		return true;
 	}
 
 	/**
@@ -1150,19 +1175,6 @@ export class ToolExecutionComponent extends Container {
 
 	/** Compact mode never constructs a renderer body, so terminal-local expansion cannot reveal it. */
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
-		const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
-		const collapsed =
-			this.#compactSummary > 0 || failures > 0
-				? [
-						text(compactToolSummary(this.#compactSummary, failures, width), {
-							lines: 1,
-							wrap: "none",
-							truncate: "end",
-						}),
-					]
-				: [];
-		if (this.getCompactToolFailureCount() > 0 || this.getCompactToolCount() > this.#compactKeep)
-			return col(collapsed);
 		const summary = this.#compactActivity();
 		const outcome = this.#compactOutcome();
 		const title = `${summary.label}${outcome ? ` · ${outcome}` : ""}`;
@@ -1213,8 +1225,7 @@ export class ToolExecutionComponent extends Container {
 				truncate: "end",
 			}),
 		);
-		const children = [...collapsed, call, ...tail];
-		return children.length > 1 ? col(children) : call;
+		return tail.length > 0 ? col([call, ...tail]) : call;
 	}
 
 	#compactActivity(): ToolActivitySummary {
@@ -1668,12 +1679,6 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
-			const failures = this.#compactFailures ?? this.getCompactToolFailureCount();
-			const collapsed =
-				this.#compactSummary > 0 || failures > 0
-					? [theme.fg("dim", compactToolSummary(this.#compactSummary, failures, width))]
-					: [];
-			if (this.getCompactToolFailureCount() > 0 || this.getCompactToolCount() > this.#compactKeep) return collapsed;
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);
@@ -1691,7 +1696,7 @@ export class ToolExecutionComponent extends Container {
 			const tail = tailLines.map((output, index) =>
 				truncateToWidth(`  ${theme.fg(index === tailLines.length - 1 ? "text" : "dim", output)}`, width),
 			);
-			return [...collapsed, truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width), ...tail];
+			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width), ...tail];
 		}
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";

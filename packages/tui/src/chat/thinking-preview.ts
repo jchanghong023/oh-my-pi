@@ -4,12 +4,9 @@ import type { DescribeContext, NativeNode } from "../native/node";
 import { sanitizeCarriageReturns } from "../render/render-utils";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme";
 import type { Component } from "../tui";
-import { getWidthConfigEpoch, replaceTabs, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "../utils";
+import { getWidthConfigEpoch, replaceTabs, truncateToWidth, wrapTextWithAnsi } from "../utils";
 
-const MAX_ROWS = 3;
-/** Short terminals clamp the live tail so it cannot dominate the viewport. */
-const SHORT_TERMINAL_ROW_LIMIT = 20;
-const SHORT_TERMINAL_MAX_ROWS = 3;
+const MAX_ROWS = 2;
 // A growing final word can move off the previous row when it becomes too long.
 // Keep both rows mutable, including their original whitespace and graphemes.
 const MUTABLE_ROWS = 2;
@@ -78,38 +75,24 @@ export class ThinkingPreviewComponent implements Component {
 	#width: number | undefined;
 	#widthEpoch = -1;
 	#maxRows = MAX_ROWS;
-	#heightSource: (() => number) | undefined;
 	#dirty = false;
 	#normalizationStart: number | undefined;
 	#painted: readonly string[] | undefined;
 	#themeEpoch = -1;
 	#native: NativeNode | undefined;
-	/** Last non-blank line of a finished tail, shown as a single dim stub row. */
-	#stubLine: string | undefined;
-
-	/** Feed the terminal height so short terminals clamp the live tail to three rows. */
-	setHeightSource(source: (() => number) | undefined): void {
-		this.#heightSource = source;
-	}
-
-	#liveMaxRows(): number {
-		const height = this.#heightSource?.();
-		return height !== undefined && Number.isFinite(height) && height > 0 && height < SHORT_TERMINAL_ROW_LIMIT
-			? SHORT_TERMINAL_MAX_ROWS
-			: MAX_ROWS;
-	}
+	/** A finished phase retains the same two-row tail until its execution turn ends. */
+	#collapsed = false;
 
 	setText(text: string): boolean {
 		if (text === this.#text) {
-			// Re-attaching the same live content retires a stub from an
-			// earlier collapse; unchanged live text stays cached.
-			if (this.#stubLine === undefined) return false;
-			this.#stubLine = undefined;
+			// Re-attaching the same content restores its live emphasis.
+			if (!this.#collapsed) return false;
+			this.#collapsed = false;
 			this.#dirty = true;
 			this.invalidate();
 			return true;
 		}
-		this.#stubLine = undefined;
+		this.#collapsed = false;
 		const previous = this.#text;
 		const append = text.startsWith(previous);
 		const delta = append ? text.slice(previous.length) : text;
@@ -141,19 +124,10 @@ export class ThinkingPreviewComponent implements Component {
 		return this.setText("");
 	}
 
-	/**
-	 * Collapse the finished tail to one dim stub row bridging tool runs within
-	 * the turn. The next {@link setText} goes live again; `clear` wipes fully.
-	 */
+	/** Retain the complete physical tail, muting it between thinking phases. */
 	collapse(): boolean {
-		if (this.#text.length === 0 || this.#stubLine !== undefined) return false;
-		const normalized = replaceTabs(sanitizeText(sanitizeCarriageReturns(this.#text)));
-		let stubLine: string | undefined;
-		for (const line of normalized.split("\n")) {
-			if (/\S/.test(line)) stubLine = line;
-		}
-		if (stubLine === undefined) return false;
-		this.#stubLine = stubLine;
+		if (this.#text.length === 0 || this.#collapsed || !/\S/.test(this.#text)) return false;
+		this.#collapsed = true;
 		this.invalidate();
 		return true;
 	}
@@ -168,36 +142,9 @@ export class ThinkingPreviewComponent implements Component {
 		if (cols === 0) return EMPTY_ROWS;
 		ensureThemeSync();
 		const widthEpoch = getWidthConfigEpoch();
-		if (this.#stubLine !== undefined) {
-			if (cols !== this.#width || widthEpoch !== this.#widthEpoch) {
-				// Rows folded at the old width are stale once the stub retires.
-				this.#tail = undefined;
-				this.#continuedLine = false;
-				this.#settled = EMPTY_ROWS;
-				this.#dirty = true;
-				this.#width = cols;
-				this.#widthEpoch = widthEpoch;
-				this.invalidate();
-			}
-			const stubEpoch = getThemeEpoch();
-			if (this.#painted === undefined || stubEpoch !== this.#themeEpoch) {
-				// Settled context stays muted instead of competing with live prose.
-				const prefix = "  … ";
-				let stub = truncateToWidth(`${prefix}${this.#stubLine}`, cols, "");
-				if (!/\S/.test(stub.slice(prefix.length))) {
-					stub = truncateToWidth(`… ${this.#stubLine}`, cols, "");
-				}
-				this.#painted = [theme.fg("dim", stub)];
-				this.#themeEpoch = stubEpoch;
-				this.#native = undefined;
-			}
-			return this.#painted;
-		}
 		if (this.#text.length === 0) return EMPTY_ROWS;
-		const prefixWidth = visibleWidth("  │ ");
-		const prefix = cols > prefixWidth ? "  │ " : "";
-		const contentWidth = cols - (prefix ? prefixWidth : 0);
-		const maxRows = this.#liveMaxRows();
+		const contentWidth = cols;
+		const maxRows = MAX_ROWS;
 		if (cols !== this.#width || widthEpoch !== this.#widthEpoch || maxRows !== this.#maxRows) {
 			this.#tail = undefined;
 			this.#continuedLine = false;
@@ -234,16 +181,10 @@ export class ThinkingPreviewComponent implements Component {
 		const themeEpoch = getThemeEpoch();
 		if (this.#painted === undefined || themeEpoch !== this.#themeEpoch) {
 			const latest = this.#rows.findLastIndex(row => /\S/.test(row));
-			const guide = prefix ? theme.fg("borderMuted", prefix) : "";
-			const liveGuide = prefix ? theme.fg("accent", prefix) : "";
-			const painted = this.#rows.map(
-				(row, index) => (index === latest ? liveGuide : guide) + theme.fg(index === latest ? "text" : "dim", row),
+			const painted = this.#rows.map((row, index) =>
+				theme.fg(!this.#collapsed && index === latest ? "text" : "dim", row),
 			);
-			if (prefix && painted.length > 0) {
-				const heading =
-					theme.fg("borderMuted", cols >= 10 ? "  ╭─ " : "  ") + theme.fg("accent", theme.bold("思考"));
-				painted.unshift(truncateToWidth(heading, cols, ""));
-			}
+			if (painted.length === 1) painted.push("");
 			this.#painted = painted;
 			this.#themeEpoch = themeEpoch;
 			this.#native = undefined;

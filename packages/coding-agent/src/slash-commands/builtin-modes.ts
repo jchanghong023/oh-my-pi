@@ -343,7 +343,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		subcommandOptional: true,
 		subcommands: [
 			{ name: "clean", description: "隐藏实时思考窗口和工具活动" },
-			{ name: "compact", description: "显示实时思考窗口，普通工具单行摘要，文件修改保留预览与 diff" },
+			{ name: "compact", description: "工具与思考各两行，活动回合最多显示三个编辑 diff，长用户消息折叠到十行" },
 			{ name: "detailed", description: "隐藏实时思考窗口，显示工具详情" },
 		],
 		handleTui: async (command, runtime) => {

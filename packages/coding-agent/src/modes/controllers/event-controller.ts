@@ -9,6 +9,7 @@ import { extractTextContent } from "../../commit/utils";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import {
 	groupedReadUsageCallIds,
 	ReadToolGroupComponent,
@@ -396,7 +397,10 @@ export class EventController {
 			manual_compaction_end: async () => {},
 			// Interrupt call sites own immediate UI cleanup; agent_end and the existing
 			// compaction/retry end events still own settlement, not cancellation intent.
-			session_abort: async () => {},
+			session_abort: async () => {
+				this.ctx.chatContainer.setCompactTurnActive(false);
+				this.ctx.clearThinkingPreview();
+			},
 			auto_compaction_start: e => this.#handleAutoCompactionStart(e),
 			auto_compaction_end: e => this.#handleAutoCompactionEnd(e),
 			auto_retry_start: e => this.#handleAutoRetryStart(e),
@@ -775,7 +779,11 @@ export class EventController {
 		const trimmed = normalizeIntent(intent);
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
-		this.ctx.setWorkingMessage(trimmed);
+		this.ctx.setWorkingMessage(
+			chatTranscriptDisplayPreferences.compactToolActivity && !chatTranscriptDisplayPreferences.hideToolActivity
+				? undefined
+				: trimmed,
+		);
 	}
 
 	subscribeToAgent(): void {
@@ -1037,16 +1045,6 @@ export class EventController {
 			(event.type === "message_end" && event.message.role === "assistant") ||
 			event.type === "agent_end"
 		) {
-			// Answer prose supersedes the stub: its bridging job between tool
-			// runs is done and the answer itself is now streaming above.
-			if (
-				event.type === "message_update" &&
-				event.assistantMessageEvent.type === "text_start" &&
-				this.ctx.viewSession.agent.state.activeThinkingIndex === undefined
-			) {
-				this.ctx.clearThinkingPreview();
-				return;
-			}
 			// Notifications may lag a new stream or a synchronous abort. Only the
 			// runtime's current snapshot/phase owns the window, never event content
 			// or a timestamp shared by two messages.
@@ -1147,6 +1145,7 @@ export class EventController {
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#runEpoch += 1;
+		this.ctx.chatContainer.setCompactTurnActive(true);
 		// A run with no user prompt in it (synthetic-only: `/goal` kickoff,
 		// approved-plan execution) must not measure prompt→yield from an unrelated
 		// earlier prompt. Normal user turns reseed via message_start before
@@ -1287,6 +1286,9 @@ export class EventController {
 			const replacesOptimistic =
 				this.ctx.optimisticUserMessageSignature !== undefined && !wasOptimistic && !matchedLocalSubmission;
 			if (wasOptimistic) {
+				if (!event.message.synthetic && event.message.attribution !== "agent" && !event.message.liveSteered) {
+					this.ctx.chatContainer.noteCompactUserTurnStart();
+				}
 				this.ctx.clearOptimisticUserMessage();
 			} else if (replacesOptimistic) {
 				this.ctx.replaceOptimisticUserMessage(event.message);
@@ -2362,6 +2364,7 @@ export class EventController {
 				this.ctx.statusContainer.disposeChildren();
 			}
 			this.#runActive = view.isStreaming;
+			this.ctx.chatContainer.setCompactTurnActive(view.isStreaming);
 			this.#syncComposerActivity();
 			return;
 		}
@@ -2462,6 +2465,7 @@ export class EventController {
 	}
 
 	async #finishAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
+		this.ctx.chatContainer.setCompactTurnActive(false);
 		this.#setTerminalProgress(false);
 		this.ctx.statusLine.markActivityEnd();
 		this.#lastAgentEndAt = Date.now();

@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { vocalizer } from "@oh-my-pi/pi-coding-agent/tts/vocalizer";
@@ -34,18 +38,21 @@ function toolStartWithIntent(toolCallId: string, intent: string): AgentSessionEv
 }
 
 describe("EventController aborted-turn working messages", () => {
+	let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	beforeAll(async () => {
 		await initTheme(false);
 	});
 
 	beforeEach(async () => {
 		resetSettingsForTest();
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true });
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	});
 
 	it("preserves playback across internal continuations and clears it for a user message", async () => {
@@ -82,6 +89,7 @@ describe("EventController aborted-turn working messages", () => {
 
 	it("resumes intent updates once aborting clears", async () => {
 		const { ctx, setWorkingMessage, sessionState } = createContext();
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		sessionState.isAborting = true;

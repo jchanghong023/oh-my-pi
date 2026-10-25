@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
+import { setSvgFigureRendering, svgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
+import { setTableCharts, tableChartMode } from "@oh-my-pi/pi-tui/chat/table-chart";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -11,8 +13,14 @@ import {
 	type TranscriptStableRow,
 	trimBlankEdges,
 } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { type Component, ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+import { getThemeByName, initTheme, setThemeInstance, theme } from "@oh-my-pi/pi-tui/theme";
+import {
+	type Component,
+	ImageProtocol,
+	setTerminalHyperlinks,
+	setTerminalImageProtocol,
+	TERMINAL,
+} from "@oh-my-pi/pi-tui";
 
 class Block implements Component {
 	#rows: string[];
@@ -1188,6 +1196,557 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 		if (!batch) throw new Error("Expected a stable-row batch");
 		transcript.acknowledgeFinalizedBatch(batch.id);
 		return batch.rows;
+	}
+
+	function compactTranscript(run: () => void): () => void {
+		return () => {
+			const compactToolActivity = chatTranscriptDisplayPreferences.compactToolActivity;
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			try {
+				run();
+			} finally {
+				setChatTranscriptDisplayPreferences({ compactToolActivity });
+			}
+		};
+	}
+
+	for (const shape of ["unfinished table row", "potential table header"] as const) {
+		it(
+			`keeps ${shape} out of native history until its layout is stable`,
+			compactTranscript(() => {
+				const transcript = new TranscriptContainer();
+				const component = new AssistantMessageComponent();
+				transcript.addChild(component);
+				const history: string[] = [];
+				const drain = (): void => {
+					let batch = transcript.peekFinalizedBatch(24, 1);
+					while (batch) {
+						history.push(...batch.rows);
+						transcript.acknowledgeFinalizedBatch(batch.id);
+						batch = transcript.peekFinalizedBatch(24, 1);
+					}
+				};
+				const pending =
+					shape === "unfinished table row"
+						? "| Left | Right |\n| --- | --- |\n| UNSAFE alpha beta gamma delta epsilon zeta eta theta iota kappa lambda | "
+						: "UNSAFE | " + "alpha beta gamma delta epsilon zeta eta theta ".repeat(8) + "Right";
+				for (let end = 8; end < pending.length + 8; end += 8) {
+					component.updateContent(
+						{ ...finalAnswer, content: [{ type: "text", text: pending.slice(0, end) }] },
+						{ transient: true },
+					);
+					drain();
+				}
+				expect(Bun.stripANSI(history.join("\n"))).not.toContain("UNSAFE");
+				const complete =
+					pending +
+					(shape === "unfinished table row"
+						? "completed cell |\n\nAFTER\n\n"
+						: "\n--- | ---\nvalue | completed cell\n\nAFTER\n\n");
+				component.updateContent(
+					{ ...finalAnswer, content: [{ type: "text", text: complete }] },
+					{ transient: true },
+				);
+				drain();
+				const observed = Bun.stripANSI([...history, ...transcript.renderViewport(24, 1, frame)].join("\n"));
+				expect(observed.split("UNSAFE")).toHaveLength(2);
+				expect(observed.split("AFTER")).toHaveLength(2);
+			}),
+		);
+	}
+
+	for (const shape of ["SVG", "numeric chart"] as const) {
+		it(`lifts a ${shape} that arrives after compact plain prose was cached`, async () => {
+			const compact = chatTranscriptDisplayPreferences.compactToolActivity;
+			const protocol = TERMINAL.imageProtocol;
+			const svg = svgFigureRendering();
+			const charts = tableChartMode();
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			setTerminalImageProtocol(ImageProtocol.Kitty);
+			setSvgFigureRendering(true);
+			setTableCharts("always");
+			try {
+				const landed = Promise.withResolvers<void>();
+				const component = new AssistantMessageComponent(undefined, false, () => landed.resolve());
+				const intro = "The answer starts as ordinary streaming prose.\n\n";
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: intro }] }, { transient: true });
+				component.render(80);
+				const figure =
+					shape === "SVG"
+						? '```svg\n<svg viewBox="0 0 120 40"><rect width="120" height="40" fill="red"/></svg>\n```'
+						: "| Section | Time |\n| --- | --- |\n| analysis | 10879 ms |\n| commit | 20.5 ms |\n| context | 1.2 s |\n| other | 10 ms |";
+				component.updateContent(
+					{ ...finalAnswer, content: [{ type: "text", text: intro + figure + "\n\nFollowing prose." }] },
+					{ transient: true },
+				);
+				const first = component.render(80);
+				const ready = first.some(row => TERMINAL.isImageLine(row));
+				expect(ready || component.isTranscriptBlockPending()).toBe(true);
+				if (!ready) await landed.promise;
+				const rows = component.render(80);
+				const image = rows.findIndex(row => TERMINAL.isImageLine(row));
+				expect(image).toBeGreaterThanOrEqual(0);
+				expect(rows.findIndex(row => row.includes("Following prose."))).toBeGreaterThan(image);
+			} finally {
+				setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+				setTerminalImageProtocol(protocol);
+				setSvgFigureRendering(svg);
+				setTableCharts(charts);
+			}
+		});
+	}
+
+	it(
+		"refreshes link destinations on a reused compact streaming prose block",
+		compactTranscript(() => {
+			const hyperlinks = TERMINAL.hyperlinks;
+			setTerminalHyperlinks(true);
+			try {
+				const component = new AssistantMessageComponent();
+				const message = { ...finalAnswer, content: [{ type: "text" as const, text: "[target](./relative.ts)" }] };
+				component.updateContent(message, { transient: true });
+				const original = component.render(80);
+				component.setLinkTargets(new Map([["./relative.ts", "https://example.com/resolved.ts"]]));
+				const fresh = new AssistantMessageComponent();
+				fresh.setLinkTargets(new Map([["./relative.ts", "https://example.com/resolved.ts"]]));
+				fresh.updateContent(message, { transient: true });
+				expect(fresh.render(80)).not.toEqual(original);
+				expect(fresh.render(80).join("\n")).toContain("https://example.com/resolved.ts");
+				expect(component.render(80)).toEqual(fresh.render(80));
+			} finally {
+				setTerminalHyperlinks(hyperlinks);
+			}
+		}),
+	);
+
+	it("refreshes cached compact prose after a theme invalidation", async () => {
+		const compact = chatTranscriptDisplayPreferences.compactToolActivity;
+		const originalTheme = theme;
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		try {
+			const dark = await getThemeByName("dark");
+			const light = await getThemeByName("light");
+			if (!dark || !light) throw new Error("Expected bundled dark and light themes");
+			setThemeInstance(dark);
+			const component = new AssistantMessageComponent();
+			const message = {
+				...finalAnswer,
+				content: [{ type: "text" as const, text: "# Theme heading\n\n**Styled prose**" }],
+			};
+			component.updateContent(message, { transient: true });
+			const before = component.render(80);
+			setThemeInstance(light);
+			component.invalidate();
+			const fresh = new AssistantMessageComponent();
+			fresh.updateContent(message, { transient: true });
+			expect(fresh.render(80)).not.toEqual(before);
+			expect(component.render(80)).toEqual(fresh.render(80));
+		} finally {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+			setThemeInstance(originalTheme);
+		}
+	});
+
+	it(
+		"continues transient retirement after already emitted code closes and following prose arrives",
+		compactTranscript(() => {
+			const transcript = new TranscriptContainer();
+			const component = new AssistantMessageComponent();
+			transcript.addChild(component);
+			const history: string[] = [];
+			const drain = (): void => {
+				let batch = transcript.peekFinalizedBatch(40, 2);
+				while (batch) {
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+					batch = transcript.peekFinalizedBatch(40, 2);
+				}
+			};
+			let source = "```text\n";
+			for (let index = 0; index < 12; index++) {
+				source += `BODY${String(index).padStart(2, "0")} literal source\n`;
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+				drain();
+			}
+			expect(Bun.stripANSI(history.join("\n"))).toContain("BODY00");
+			const emitted = history.slice();
+			source += "```\n\n";
+			for (let index = 0; index < 8; index++) {
+				source += `AFTER${index} following prose stays visible.\n\n`;
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+				drain();
+			}
+			expect(history.slice(0, emitted.length)).toEqual(emitted);
+			const observed = Bun.stripANSI([...history, ...transcript.renderViewport(40, 2, frame)].join("\n"));
+			for (let index = 0; index < 12; index++)
+				expect(observed.split(`BODY${String(index).padStart(2, "0")}`)).toHaveLength(2);
+			for (let index = 0; index < 8; index++) expect(observed.split(`AFTER${index}`)).toHaveLength(2);
+			expect(component.isTranscriptBlockFinalized()).toBe(false);
+		}),
+	);
+
+	it(
+		"preserves every marker of a closed transient table and fence when resized to one prose row",
+		compactTranscript(() => {
+			const transcript = new TranscriptContainer();
+			const component = new AssistantMessageComponent();
+			transcript.addChild(component);
+			const paragraphs = Array.from({ length: 24 }, (_, index) => `PARA${String(index + 1).padStart(2, "0")}`);
+			const table = Array.from({ length: 5 }, (_, index) => `TAB${String(index + 1).padStart(2, "0")}`);
+			const code = Array.from({ length: 8 }, (_, index) => `CODE${String(index + 1).padStart(2, "0")}`);
+			const source =
+				paragraphs.map(marker => `${marker} 正文完整保留，不得丢失。`).join("\n\n") +
+				"\n\n| Item | Value |\n| --- | --- |\n" +
+				table.map(marker => `| ${marker} | table value |`).join("\n") +
+				"\n\n```text\n" +
+				code.map(marker => `${marker} literal text`).join("\n") +
+				"\n```\n\n";
+			const history: string[] = [];
+			let streamed = "";
+			let width = 120;
+			let room = 36;
+			const drain = (): void => {
+				let batch = transcript.peekFinalizedBatch(width, room);
+				while (batch) {
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+					batch = transcript.peekFinalizedBatch(width, room);
+				}
+			};
+			for (const line of source.split("\n")) {
+				streamed += `${line}\n`;
+				component.updateContent(
+					{ ...finalAnswer, content: [{ type: "text", text: streamed }] },
+					{ transient: true },
+				);
+				drain();
+				transcript.renderViewport(width, room, frame);
+			}
+			width = 24;
+			room = 1;
+			drain();
+			const visible = Bun.stripANSI([...history, ...transcript.renderViewport(width, room, frame)].join("\n"));
+			for (const marker of [...paragraphs, ...table, ...code]) expect(visible.split(marker)).toHaveLength(2);
+			expect(component.isTranscriptBlockFinalized()).toBe(false);
+		}),
+	);
+
+	for (const shape of ["table", "paragraph", "fence"] as const) {
+		it(
+			`reflows a compact live ${shape} as one source document without frozen physical fragments`,
+			compactTranscript(() => {
+				const component = new AssistantMessageComponent(
+					undefined,
+					false,
+					undefined,
+					[],
+					undefined,
+					true,
+					undefined,
+					false,
+					false,
+					true,
+				);
+				let source = shape === "table" ? "| Name | Body |\n| --- | --- |\n" : shape === "fence" ? "```text\n" : "";
+				for (let index = 0; index < 8; index++) {
+					source +=
+						shape === "table"
+							? `| ROW${index} | Unicode 👩‍💻 中文 and a growing cell with enough words to wrap |\n`
+							: `ROW${index} Unicode 👩‍💻 中文 and enough prose to wrap at a narrow width.\n${shape === "paragraph" ? "\n" : ""}`;
+					component.updateContent(
+						{ ...finalAnswer, content: [{ type: "text", text: source }] },
+						{ transient: true },
+					);
+					component.render(WIDTH);
+				}
+				for (const width of [24, 80, 36]) {
+					const fresh = new AssistantMessageComponent(
+						undefined,
+						false,
+						undefined,
+						[],
+						undefined,
+						true,
+						undefined,
+						false,
+						false,
+						true,
+					);
+					fresh.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+					expect(component.render(width)).toEqual(fresh.render(width));
+				}
+			}),
+		);
+	}
+
+	for (const shape of ["table", "paragraph", "fence"] as const) {
+		for (const externalThinking of [false, true]) {
+			it(
+				`preserves every streamed ${shape} row in scrollback plus a small viewport${externalThinking ? " with external thinking" : ""}`,
+				compactTranscript(() => {
+					const transcript = new TranscriptContainer();
+					const component = new AssistantMessageComponent(
+						undefined,
+						false,
+						undefined,
+						[],
+						undefined,
+						true,
+						undefined,
+						false,
+						externalThinking,
+						true,
+					);
+					transcript.addChild(component);
+					const history: string[] = [];
+					const message = (text: string): AssistantMessage => ({
+						...finalAnswer,
+						content: [
+							...(externalThinking ? [{ type: "thinking" as const, thinking: "Live dock reasoning" }] : []),
+							{ type: "text", text },
+						],
+					});
+					let source =
+						shape === "table" ? "| Item | Value |\n| --- | --- |\n" : shape === "fence" ? "```text\n" : "";
+					const drain = (): void => {
+						let batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+						while (batch) {
+							history.push(...batch.rows);
+							transcript.acknowledgeFinalizedBatch(batch.id);
+							batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+						}
+					};
+					for (let index = 0; index < 18; index++) {
+						const marker = `BODY_${index.toString().padStart(2, "0")}`;
+						source +=
+							shape === "table"
+								? `| ${marker} | value ${index} |\n`
+								: shape === "fence"
+									? `${marker} code payload\n`
+									: `${marker} a substantial stretch of uninterrupted prose without a paragraph boundary. `;
+						component.updateContent(message(source), { transient: true });
+						drain();
+						const visible = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
+						for (let prior = 0; prior <= index; prior++) {
+							const token = `BODY_${prior.toString().padStart(2, "0")}`;
+							expect(visible.split(token).length - 1).toBe(1);
+						}
+					}
+					expect(history.length).toBeGreaterThan(ROOM);
+					if (shape === "fence") source += "```";
+					component.updateContent(message(source));
+					component.markTranscriptBlockFinalized();
+					drain();
+					const complete = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
+					for (let index = 0; index < 18; index++) {
+						expect(complete.split(`BODY_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
+					}
+				}),
+			);
+		}
+	}
+
+	it(
+		"consumes source spans without losing repeated punctuation when late inline markup closes",
+		compactTranscript(() => {
+			const transcript = new TranscriptContainer();
+			const component = new AssistantMessageComponent(
+				undefined,
+				false,
+				undefined,
+				[],
+				undefined,
+				true,
+				undefined,
+				false,
+				false,
+				true,
+			);
+			transcript.addChild(component);
+			const history: string[] = [];
+			let source = "**";
+			const drain = (): void => {
+				let batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+				while (batch) {
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+					batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+				}
+			};
+			for (let index = 0; index < 12; index++) {
+				source += `SPAN_${index.toString().padStart(2, "0")}: repeated, repeated; !? a long flowing inline span. `;
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+				drain();
+			}
+			source += "** [TAIL_LABEL](https://example.com) END_BODY";
+			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] });
+			component.markTranscriptBlockFinalized();
+			drain();
+			const complete = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
+			for (let index = 0; index < 12; index++)
+				expect(complete.split(`SPAN_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
+			expect(complete.split("END_BODY").length - 1).toBe(1);
+			expect(complete.split("TAIL_LABEL").length - 1).toBe(1);
+			expect(complete.replace(/\s+/g, "").split("repeated,repeated;!?").length - 1).toBe(12);
+		}),
+	);
+
+	it(
+		"keeps consumed fence source intact through narrowing, widening, and finalization",
+		compactTranscript(() => {
+			const transcript = new TranscriptContainer();
+			const component = new AssistantMessageComponent(
+				undefined,
+				false,
+				undefined,
+				[],
+				undefined,
+				true,
+				undefined,
+				false,
+				false,
+				true,
+			);
+			transcript.addChild(component);
+			const history: string[] = [];
+			let source = "```text\n";
+			let width = WIDTH;
+			const drain = (): void => {
+				let batch = transcript.peekFinalizedBatch(width, ROOM);
+				while (batch) {
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+					batch = transcript.peekFinalizedBatch(width, ROOM);
+				}
+			};
+			for (let index = 0; index < 15; index++) {
+				width = index < 5 ? WIDTH : index < 10 ? 44 : 84;
+				source += `RESIZE_${index.toString().padStart(2, "0")} code data preserved in source order\n`;
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+				drain();
+				const visible = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
+				for (let prior = 0; prior <= index; prior++)
+					expect(
+						visible.split(`RESIZE_${prior.toString().padStart(2, "0")}`).length - 1,
+						`index=${index}, prior=${prior}, width=${width}, emitted=${JSON.stringify(transcript.emittedStableRows())}, visible=${JSON.stringify(visible)}`,
+					).toBe(1);
+			}
+			source += "```";
+			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] });
+			component.markTranscriptBlockFinalized();
+			drain();
+			const complete = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
+			for (let index = 0; index < 15; index++)
+				expect(complete.split(`RESIZE_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
+			const detailed = new AssistantMessageComponent({ ...finalAnswer, content: [{ type: "text", text: source }] });
+			const reconstructed = detailed.render(width).join("\n");
+			for (let index = 0; index < 15; index++)
+				expect(reconstructed.split(`RESIZE_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
+		}),
+	);
+
+	it(
+		"preserves the last live table cell through a narrow resize",
+		compactTranscript(() => {
+			const transcript = new TranscriptContainer();
+			const component = new AssistantMessageComponent(
+				undefined,
+				false,
+				undefined,
+				[],
+				undefined,
+				true,
+				undefined,
+				false,
+				false,
+				true,
+			);
+			transcript.addChild(component);
+			const history: string[] = [];
+			let source = "| Row | Value |\n| --- | --- |\n";
+			let width = 100;
+			const drain = (): void => {
+				let batch = transcript.peekFinalizedBatch(width, ROOM);
+				while (batch) {
+					history.push(...batch.rows);
+					transcript.acknowledgeFinalizedBatch(batch.id);
+					batch = transcript.peekFinalizedBatch(width, ROOM);
+				}
+			};
+			for (let index = 0; index < 10; index++) {
+				width = index < 5 ? 100 : 24;
+				source += `| ${index} | source data stays readable across changing widths ${String.fromCodePoint(0x7500 + index)} |\n`;
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
+				drain();
+				const visible = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
+				for (let prior = 0; prior <= index; prior++)
+					expect(visible.split(String.fromCodePoint(0x7500 + prior)).length - 1).toBe(1);
+			}
+			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] });
+			component.markTranscriptBlockFinalized();
+			drain();
+			const complete = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
+			for (let index = 0; index < 10; index++)
+				expect(complete.split(String.fromCodePoint(0x7500 + index)).length - 1).toBe(1);
+		}),
+	);
+
+	for (const shape of ["unbroken prose", "growing table cell"] as const) {
+		it(
+			`preserves every grapheme of ${shape} beyond the compact viewport`,
+			compactTranscript(() => {
+				const transcript = new TranscriptContainer();
+				const component = new AssistantMessageComponent(
+					undefined,
+					false,
+					undefined,
+					[],
+					undefined,
+					true,
+					undefined,
+					false,
+					false,
+					true,
+				);
+				transcript.addChild(component);
+				const history: string[] = [];
+				let payload = "";
+				const sourcePrefix = shape === "growing table cell" ? "| Name | Body |\n| --- | --- |\n| SIDE | " : "";
+				const drain = (): void => {
+					let batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+					while (batch) {
+						history.push(...batch.rows);
+						transcript.acknowledgeFinalizedBatch(batch.id);
+						batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+					}
+				};
+				const observed = (): string => {
+					const rows = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)];
+					const plain = Bun.stripANSI(rows.join("\n"));
+					expect(plain).not.toMatch(/[\uD800-\uDFFF]/u);
+					return plain.replace(/[^\p{Unified_Ideograph}\p{Extended_Pictographic}\u200d]/gu, "");
+				};
+				for (let index = 0; index < 10; index++) {
+					payload += String.fromCodePoint(0x4e00 + index).repeat(48) + "👩‍💻";
+					component.updateContent(
+						{ ...finalAnswer, content: [{ type: "text", text: sourcePrefix + payload }] },
+						{ transient: true },
+					);
+					drain();
+					expect(observed()).toBe(payload);
+				}
+				expect(history.length).toBeGreaterThan(ROOM);
+				const completeSource = sourcePrefix + payload + (shape === "growing table cell" ? " |" : "");
+				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: completeSource }] });
+				component.markTranscriptBlockFinalized();
+				drain();
+				expect(observed()).toBe(payload);
+				if (shape === "growing table cell") {
+					const plain = Bun.stripANSI([...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n"));
+					expect(plain.split("SIDE").length - 1).toBe(1);
+				}
+			}),
+		);
 	}
 
 	it("retires several published prefixes per batch as exactly the block's leading rows", () => {

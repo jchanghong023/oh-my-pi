@@ -1,18 +1,12 @@
 import { type Component, Container } from "../tui";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
-import { truncateToWidth } from "../utils";
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
 	/** Whether this activity uses compact rows rather than the upstream detail renderer. */
 	isCompactToolActivity?(): boolean;
-	/** Successful calls eligible for compact transcript folding. */
-	getCompactToolCount?(): number;
-	getCompactToolFailureCount?(): number;
 	/** Notify the owning transcript when a terminal tool result arrives. */
 	setCompactToolResultListener?(listener: (() => void) | undefined): void;
-	/** Whether the compact presentation changed, including a previously retired summary. */
-	setCompactToolLimit?(keep: number, summary: number, failures?: number): boolean;
 }
 
 export function isToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
@@ -21,14 +15,6 @@ export function isToolActivityComponent(component: Component): component is Comp
 
 export function isCompactToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
 	return isToolActivityComponent(component) && component.isCompactToolActivity?.() !== false;
-}
-
-export function compactToolSummary(count: number, failures: number, width: number): string {
-	if (failures === 0) return truncateToWidth(`… 已收起 ${count} 次成功调用`, width);
-	const failed = `… 失败 ${failures} 次`;
-	if (Bun.stringWidth(failed) > width) return truncateToWidth("… 失败", width);
-	const summary = count > 0 ? `${failed} · 已收起 ${count} 次成功调用` : `${failed}（已收起）`;
-	return truncateToWidth(Bun.stringWidth(summary) <= width ? summary : failed, width);
 }
 
 /** Keep the file identity visible before narrow rows truncate their right edge. */

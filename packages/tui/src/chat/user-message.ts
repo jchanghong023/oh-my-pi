@@ -1,4 +1,4 @@
-import { applyBackgroundToLine, padding, stripTerminalSequences, visibleWidth } from "../utils";
+import { applyBackgroundToLine, padding, stripTerminalSequences, truncateToWidth, visibleWidth } from "../utils";
 import type { AnimationFrame, TranscriptPresentationTarget } from "../chrome/transcript-container";
 import { type Component, Container } from "../tui";
 import { Disclosure } from "../components/disclosure";
@@ -33,6 +33,8 @@ import {
 	rootToggleExpanded,
 } from "../native/node";
 import { Memo } from "../native/memo";
+import { chatTranscriptDisplayPreferences } from "./display-preferences";
+import { actionButton } from "../native/overlay";
 
 // OSC 133 shell integration: marks prompt zones for terminal multiplexers.
 //
@@ -70,6 +72,8 @@ export interface UserBubbleOptions {
 	skillPath?: (name: string) => string | undefined;
 	/** When the message was sent (ms); shown beside the native hover toolbar. */
 	timestamp?: number;
+	/** Explicit full-history viewers disable the compact sent-message preview. */
+	compactPreview?: boolean;
 }
 
 /**
@@ -136,6 +140,12 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	readonly #bgColor: (value: string) => string;
 	readonly #liveSteered: boolean;
 	readonly #synthetic: boolean;
+	readonly #compactPreview: boolean;
+	readonly #sourceText: string;
+	#zoneCompact = false;
+	#previewWidth = 80;
+	#nativeCompact = false;
+	#nativeWidth = 0;
 	readonly #timestamp: number | undefined;
 	readonly #images: readonly ImageContent[];
 	readonly #imageLinks: readonly (string | undefined)[] | undefined;
@@ -152,6 +162,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
 		ensureThemeSync();
+		this.#sourceText = text;
+		this.#compactPreview = options.compactPreview !== false;
 		// Display-only collapse: the stored/wire text carries bracketed `[Image #N, WxH]` markers,
 		// but the transcript shows the same compact `<icon> #N` chip the composer used. Runs before
 		// Markdown layout so wrapping and bubble padding are computed on the visible text.
@@ -207,9 +219,20 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		const hour12 = cx?.hour12;
 		// Chip marks and thumbnails carry links only under an enabled policy.
 		const linked = imageLinksEnabled();
-		if (this.#native && this.#nativeHour12 === hour12 && this.#nativeLinked === linked) return this.#native;
+		const width = cx?.cols ?? this.#previewWidth;
+		const compact = this.#isCompact() && super.render(width).length > 10;
+		if (
+			this.#native &&
+			this.#nativeHour12 === hour12 &&
+			this.#nativeLinked === linked &&
+			this.#nativeCompact === compact &&
+			this.#nativeWidth === width
+		)
+			return this.#native;
 		this.#nativeHour12 = hour12;
 		this.#nativeLinked = linked;
+		this.#nativeCompact = compact;
+		this.#nativeWidth = width;
 		const children: NativeChild[] = [];
 		if (!this.#synthetic && hasTranscriptActions()) {
 			const tools: NativeChild[] = [
@@ -239,6 +262,9 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 					"rewind",
 				),
 			];
+			if (compact) {
+				tools.push(actionButton("查看全文", "view-message"));
+			}
 			if (this.#timestamp !== undefined) {
 				const at = new Date(this.#timestamp);
 				tools.push(
@@ -265,7 +291,17 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			children.push(row(thumbs, { gap: "sm", wrap: true, align: "start", role: "omp.user.images" }));
 		}
 		const marks = this.#synthetic ? [] : tokenMarks(this.#text, this.#tokens, this.#imageLinks);
-		children.push(md(this.#text, marks.length > 0 ? { marks } : undefined));
+		if (compact) {
+			children.push(
+				text(
+					this.render(width)
+						.map(line => stripTerminalSequences(line))
+						.join("\n"),
+				),
+			);
+		} else {
+			children.push(md(this.#text, marks.length > 0 ? { marks } : undefined));
+		}
 		const badges: NativeChild[] = [];
 		if (this.#liveSteered) {
 			badges.push(
@@ -289,8 +325,9 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	/** Hover toolbar clicks: omp's own copy and rewind commands. */
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type !== "action") return;
-		if (event.act === "copy-message") runTranscriptAction({ act: "copy", text: this.#text });
+		if (event.act === "copy-message") runTranscriptAction({ act: "copy", text: this.#sourceText });
 		else if (event.act === "rewind") runTranscriptAction({ act: "rewind" });
+		else if (event.act === "view-message") runTranscriptAction({ act: "view-message", text: this.#sourceText });
 	}
 
 	/**
@@ -336,8 +373,24 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		return lines[0];
 	}
 
+	#isCompact(): boolean {
+		return (
+			this.#compactPreview &&
+			!this.#synthetic &&
+			chatTranscriptDisplayPreferences.compactToolActivity &&
+			!chatTranscriptDisplayPreferences.hideToolActivity
+		);
+	}
+
+	/** Original source only when this ordinary bubble currently needs a compact preview. */
+	getCompactPreviewSource(width: number): string | undefined {
+		return this.#isCompact() && super.render(width).length > 10 ? this.#sourceText : undefined;
+	}
+
 	override render(width: number): readonly string[] {
 		const lines = super.render(width);
+		this.#previewWidth = width;
+		const compact = this.#isCompact() && lines.length > 10;
 		if (lines.length === 0) {
 			return lines;
 		}
@@ -345,14 +398,28 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			const emergency = this.#selectEmergencyRow(lines);
 			if (emergency !== undefined) return [emergency];
 		}
-		if (this.#zoneSource === lines && this.#zoneLines !== undefined) {
+		if (this.#zoneSource === lines && this.#zoneLines !== undefined && this.#zoneCompact === compact) {
 			return this.#zoneLines;
 		}
-		const wrapped = lines.slice();
+		const wrapped = compact
+			? [
+					...lines.slice(0, 5),
+					applyBackgroundToLine(
+						theme.fg(
+							"dim",
+							truncateToWidth(`… 已省略 ${lines.length - 9} 行 · Ctrl+Alt+U 查看全文`, Math.max(0, width)),
+						),
+						width,
+						this.#bgColor,
+					),
+					...lines.slice(-4),
+				]
+			: lines.slice();
 		if (this.#reaction !== undefined || this.#liveSteered) wrapped[0] = this.#badgeRow(width);
 		wrapped[0] = OSC133_ZONE_START + wrapped[0];
 		wrapped[wrapped.length - 1] = wrapped[wrapped.length - 1] + OSC133_ZONE_CLOSE;
 		this.#zoneSource = lines;
+		this.#zoneCompact = compact;
 		this.#zoneLines = wrapped;
 		return wrapped;
 	}

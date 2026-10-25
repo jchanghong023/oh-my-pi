@@ -2240,8 +2240,280 @@ function splitPushedHighlightLines(pushed: string): string[] {
 	return lines;
 }
 
+interface TranscriptCellSpan {
+	start: number;
+	end: number;
+}
+
+/** Source spans using the same outer-pipe, escaped-pipe and trim rules as marked's splitTableRow. */
+function transcriptTableCellSpans(raw: string): TranscriptCellSpan[][] {
+	const rows: TranscriptCellSpan[][] = [];
+	let lineStart = 0;
+	let lineIndex = 0;
+	while (lineStart < raw.length) {
+		const newline = raw.indexOf("\n", lineStart);
+		const lineEnd = newline < 0 ? raw.length : newline;
+		if (lineIndex >= 2) {
+			const line = raw.slice(lineStart, lineEnd);
+			let start = line.length - line.trimStart().length;
+			let end = line.trimEnd().length;
+			if (line[start] === "|") start++;
+			if (line[end - 1] === "|" && line[end - 2] !== "\\") end--;
+			const cells: TranscriptCellSpan[] = [];
+			let cellStart = start;
+			for (const pipe of line.slice(start, end).matchAll(UNESCAPED_PIPE)) {
+				const cellEnd = start + pipe.index;
+				const cell = line.slice(cellStart, cellEnd);
+				cells.push({
+					start: lineStart + cellStart + cell.length - cell.trimStart().length,
+					end: lineStart + cellStart + cell.trimEnd().length,
+				});
+				cellStart = cellEnd + 1;
+			}
+			const cell = line.slice(cellStart, end);
+			cells.push({
+				start: lineStart + cellStart + cell.length - cell.trimStart().length,
+				end: lineStart + cellStart + cell.trimEnd().length,
+			});
+			rows.push(cells);
+		}
+		lineIndex++;
+		lineStart = lineEnd + 1;
+	}
+	return rows;
+}
+
+/** Translate normalized table-cell offsets back through marked's removal of `\|` escapes. */
+function transcriptCellSourceOffsets(raw: string): number[] {
+	const offsets = [0];
+	for (let index = 0; index < raw.length; index++) {
+		if (raw[index] === "\\" && raw[index + 1] === "|") index++;
+		offsets.push(index + 1);
+	}
+	return offsets;
+}
+
+/** Slice by lexer source spans, never by rendered characters or row indices. */
+function transcriptTokenSlice(token: Token, start: number, end: number): Token | undefined {
+	const raw = token.raw;
+	start = Math.max(0, start);
+	end = Math.min(raw.length, end);
+	if (start >= end) return undefined;
+	if (start === 0 && end === raw.length) return token;
+	if (isTableToken(token)) {
+		const spans = transcriptTableCellSpans(raw);
+		const rows: Tokens.TableCell[][] = [];
+		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
+			const row: Tokens.TableCell[] = token.rows[rowIndex]!;
+			const sourceCells = spans[rowIndex];
+			if (!sourceCells || !sourceCells.some(cell => cell.end > start && cell.start < end)) continue;
+			rows.push(
+				row.map((cell, column) => {
+					const span = sourceCells[column];
+					if (!span || span.end <= start || span.start >= end) return { ...cell, text: "", tokens: [] };
+					const cellRaw = raw.slice(span.start, span.end);
+					const from = cellRaw.slice(0, Math.max(0, start - span.start)).replace(/\\\|/g, "|").length;
+					const to = cellRaw.slice(0, Math.max(0, end - span.start)).replace(/\\\|/g, "|").length;
+					const inline: Token = { type: "paragraph", raw: cell.text, text: cell.text, tokens: cell.tokens };
+					const part = transcriptTokenSlice(inline, from, to);
+					return {
+						...cell,
+						tokens: part && "tokens" in part ? (part.tokens ?? []) : [],
+						text: cell.text.slice(from, to),
+					};
+				}),
+			);
+		}
+		return { ...token, rows, transcriptContinuation: start > 0, transcriptOpenEnd: end < raw.length };
+	}
+	if (token.type === "code") {
+		const bodyStart = raw.indexOf("\n") + 1;
+		if (bodyStart === 0) return undefined;
+		return {
+			...token,
+			text: token.text.slice(Math.max(0, start - bodyStart), Math.max(0, end - bodyStart)).replace(/\n$/, ""),
+			transcriptContinuation: start > 0,
+			transcriptOpenEnd: end < raw.length,
+		};
+	}
+	if ("tokens" in token && Array.isArray(token.tokens)) {
+		const children: Token[] = [];
+		let cursor = 0;
+		for (const child of token.tokens) {
+			const offset = raw.indexOf(child.raw, cursor);
+			if (offset < 0) return undefined;
+			cursor = offset + child.raw.length;
+			const sliced = transcriptTokenSlice(child, start - offset, end - offset);
+			if (sliced) children.push(sliced);
+		}
+		return children.length > 0 ? { ...token, tokens: children } : undefined;
+	}
+	if ("text" in token && typeof token.text === "string") {
+		const offset = raw.indexOf(token.text);
+		if (offset >= 0) {
+			const text = token.text.slice(Math.max(0, start - offset), Math.max(0, end - offset));
+			return text.length > 0 ? { ...token, text } : undefined;
+		}
+	}
+	return token;
+}
+
+function transcriptBoundaries(token: Token, splitWords = false, from = 0): number[] {
+	const raw = token.raw;
+	if (isTableToken(token)) {
+		const boundaries: number[] = [];
+		let line = 0;
+		for (let index = 0; index < raw.length; index++) {
+			if (raw[index] === "\n" && ++line >= 2 && index >= from) boundaries.push(index + 1);
+		}
+		const spans = transcriptTableCellSpans(raw);
+		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
+			// A later column may still fill the same physical rows. Only the
+			// final column of an unfinished row can retire its wrapped head.
+			const incomplete = rowIndex === token.rows.length - 1 && !raw.endsWith("\n");
+			for (let column = 0; column < token.rows[rowIndex]!.length; column++) {
+				if (incomplete && column < token.header.length - 1) continue;
+				const cell = token.rows[rowIndex]![column]!;
+				const span = spans[rowIndex]?.[column];
+				if (!span || span.end <= from) continue;
+				const offsets = transcriptCellSourceOffsets(raw.slice(span.start, span.end));
+				const inline: Token = { type: "paragraph", raw: cell.text, text: cell.text, tokens: cell.tokens };
+				const cellFrom = raw.slice(span.start, Math.max(span.start, from)).replace(/\\\|/g, "|").length;
+				for (const boundary of transcriptBoundaries(inline, splitWords, cellFrom)) {
+					const sourceOffset = offsets[boundary];
+					if (sourceOffset !== undefined) boundaries.push(span.start + sourceOffset);
+				}
+			}
+		}
+		return boundaries.sort((a, b) => a - b);
+	}
+	if (token.type === "code") {
+		const bodyStart = raw.indexOf("\n") + 1;
+		if (bodyStart === 0) return [];
+		const text: string = token.text;
+		const start = Math.max(0, from - bodyStart);
+		const tail = text.slice(start);
+		return splitWords
+			? Array.from(getSegmenter().segment(tail), part => bodyStart + start + part.index + part.segment.length)
+			: Array.from(tail.matchAll(/\s/g), part => bodyStart + start + part.index + part[0].length);
+	}
+	if (token.type !== "paragraph") return [];
+	const boundaries: number[] = [];
+	const visit = (node: Token, base: number): void => {
+		if (base + node.raw.length <= from) return;
+		if ("tokens" in node && Array.isArray(node.tokens)) {
+			let cursor = 0;
+			for (const child of node.tokens) {
+				const offset = node.raw.indexOf(child.raw, cursor);
+				if (offset < 0) return;
+				cursor = offset + child.raw.length;
+				visit(child, base + offset);
+			}
+		} else if (node.type === "text") {
+			if (!splitWords) {
+				for (const match of node.raw.matchAll(/\s/g)) boundaries.push(base + match.index + match[0].length);
+				return;
+			}
+			const start = Math.max(0, from - base);
+			const tail = node.raw.slice(start);
+			const entities = [...tail.matchAll(/&(?:#\d+|#x[\da-f]+|[a-z][\da-z]+);/gi)];
+			for (const part of getSegmenter().segment(tail)) {
+				const end = part.index + part.segment.length;
+				if (!entities.some(entity => end > entity.index && end < entity.index + entity[0].length))
+					boundaries.push(base + start + end);
+			}
+		}
+	};
+	visit(token, 0);
+	return boundaries;
+}
+
 export class Markdown implements Component {
 	#text: string;
+	#transcriptStreaming = false;
+	#transcriptConsumed = 0;
+	#transcriptSource = "";
+	#transcriptRender?: { tokens: Token[]; source: string; width: number; signature: RenderSignature; rows: string[] };
+	#transcriptPrefixCounts = new Map<number, Map<number, { signature: RenderSignature; count: number }>>();
+
+	/** Enable source-span retirement; a fresh history component still renders the original document normally. */
+	setTranscriptStreaming(enabled: boolean = true): void {
+		if (this.#transcriptStreaming === enabled) return;
+		this.#transcriptStreaming = enabled;
+		this.#transcriptRender = undefined;
+		this.invalidate();
+	}
+
+	getTranscriptStableSourceEnd(): number {
+		return this.#transcriptConsumed;
+	}
+
+	/** Resolve a source boundary against the whole document's current layout. */
+	renderTranscriptSourcePrefix(end: number, width: number): readonly string[] {
+		this.render(width);
+		const current = this.#transcriptRender;
+		if (!current || end <= 0) return [];
+		if (end >= current.source.length) return current.rows;
+		const cached = this.#transcriptPrefixCounts.get(width)?.get(end);
+		if (cached && this.#signatureEquals(cached.signature, current.signature))
+			return current.rows.slice(0, cached.count);
+		const parts: Token[] = [];
+		let offset = 0;
+		let partial = false;
+		let tableCellCut = false;
+		for (const token of current.tokens) {
+			const part = transcriptTokenSlice(token, 0, end - offset);
+			if (end > offset && end < offset + token.raw.length) {
+				partial = true;
+				tableCellCut = isTableToken(token) && token.raw[end - offset - 1] !== "\n";
+			}
+			if (part) parts.push(part);
+			offset += token.raw.length;
+			if (offset >= end) break;
+		}
+		// Reuse the renderer's verified frozen-token rows. An advancing source
+		// seam only needs to render the remaining token range, not re-highlight
+		// every already archived paragraph/fence on every streamed delta.
+		const frozen = this.#streamPrefixLineCache;
+		let tokenStart = 0;
+		let rowStart = 0;
+		if (frozen && current.source.startsWith(frozen.text) && this.#signatureEquals(frozen, current.signature)) {
+			if (frozen.text.length <= end) {
+				tokenStart = frozen.tokenCount;
+				rowStart = frozen.lines.length;
+			} else {
+				for (let index = frozen.marks.length - 1; index >= 0; index--) {
+					const mark = frozen.marks[index]!;
+					if (mark.textEnd > end) continue;
+					tokenStart = mark.tokenCount;
+					rowStart = mark.lineEnd;
+					break;
+				}
+			}
+		}
+		const prefix = current.rows.slice(0, rowStart);
+		appendLines(prefix, this.#renderContentLines(parts, tokenStart, parts.length, current.width, current.signature));
+		// The synthetic table separator is not the final source body row.
+		// Remove it before withholding a still-growing cell's last row.
+		const last = parts.at(-1);
+		if (
+			tableCellCut &&
+			last &&
+			isTableToken(last) &&
+			last.rows.length > 0 &&
+			current.width >= 4 * last.header.length + 1
+		)
+			prefix.pop();
+		let count = 0;
+		while (count < prefix.length && prefix[count] === current.rows[count]) count++;
+		// Only a source cut inside a token can leave its final row growing.
+		if (partial && count === prefix.length && count > 0) count--;
+		while (count > 0 && prefix[count - 1]?.trim() === "") count--;
+		let counts = this.#transcriptPrefixCounts.get(width);
+		if (!counts) this.#transcriptPrefixCounts.set(width, (counts = new Map()));
+		counts.set(end, { signature: current.signature, count });
+		return current.rows.slice(0, count);
+	}
 	// Suffix of #text a future append could still complete into a match
 	// (see trailingOsc8Partial); drives the append-only fast path.
 	#oscPartialEscape?: string;
@@ -2905,6 +3177,7 @@ export class Markdown implements Component {
 		// the spliced span stay byte-identical.
 		if (
 			this.transientRenderCache &&
+			!this.#transcriptStreaming &&
 			this.#fastTail !== undefined &&
 			contentWidth === this.#fastTail.width &&
 			this.#text.length > this.#fastTail.source.length &&
@@ -3033,7 +3306,8 @@ export class Markdown implements Component {
 		// whole-document tab scan/copy (the delta-only replaceTabs inside the
 		// branch is the only tab work a streamed frame pays).
 		const tabbed = this.#text.includes("\t") ? replaceTabs(this.#text) : this.#text;
-		const normalizedText = this.transientRenderCache ? tabbed : repairOrphanClosingFence(tabbed);
+		const normalizedText =
+			this.transientRenderCache || this.#transcriptStreaming ? tabbed : repairOrphanClosingFence(tabbed);
 		if (!this.transientRenderCache && normalizedText.length < tabbed.length) {
 			// repairOrphanClosingFence deleted bytes this frame (orphan fence
 			// removed): the guard-scan memo's checked region is no longer
@@ -3062,7 +3336,7 @@ export class Markdown implements Component {
 		// theme.heading is used as the representative theme probe — it's required
 		// by MarkdownTheme and is one of the most styling-sensitive entries.
 		let cacheKey: string | undefined;
-		if (!this.transientRenderCache) {
+		if (!this.transientRenderCache && !this.#transcriptStreaming) {
 			cacheKey = this.#renderCacheKey(normalizedText, signature);
 			const cached = renderCache.get(cacheKey);
 			if (cached !== undefined) {
@@ -3087,9 +3361,11 @@ export class Markdown implements Component {
 		let contentLines: string[];
 		this.#activeRenderSignature = signature;
 		try {
-			contentLines = this.transientRenderCache
-				? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
-				: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+			contentLines = this.#transcriptStreaming
+				? this.#renderTranscriptContent(tokens, normalizedText, contentWidth, signature)
+				: this.transientRenderCache
+					? this.#renderStreamingContentLines(tokens, normalizedText, signature, contentWidth)
+					: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
 		} finally {
 			this.#activeRenderSignature = undefined;
 		}
@@ -3354,6 +3630,69 @@ export class Markdown implements Component {
 		return limit;
 	}
 
+	#renderTranscriptContent(
+		tokens: Token[],
+		source: string,
+		contentWidth: number,
+		signature: RenderSignature,
+	): string[] {
+		if (this.#transcriptConsumed > 0 && !source.startsWith(this.#transcriptSource)) {
+			this.#transcriptConsumed = 0;
+			this.#transcriptPrefixCounts.clear();
+		}
+		// Render one document. Source slices below only locate a publishable seam;
+		// they never become separately rendered table/fence/prose fragments.
+		const rows = this.transientRenderCache
+			? this.#renderStreamingContentLines(tokens, source, signature, contentWidth)
+			: this.#renderContentLines(tokens, 0, tokens.length, contentWidth, signature);
+		this.#transcriptRender = { tokens, source, width: contentWidth, signature, rows };
+		if (this.transientRenderCache && rows.length > 2) {
+			let settled = this.getLastRenderStableText().length;
+			let tailEnd = source.length;
+			for (let index = tokens.length - 1; index >= 0; index--) {
+				const token = tokens[index]!;
+				if (token.type === "space") {
+					tailEnd -= token.raw.length;
+					continue;
+				}
+				// A real closing fence is immutable even when the provider pauses
+				// with only whitespace after it; it needs no following prose token.
+				if (token.type === "code" && this.#codeTokenHasClosingFence(token)) settled = Math.max(settled, tailEnd);
+				break;
+			}
+			const target = Math.max(settled, Math.floor((source.length * (rows.length - 2)) / rows.length));
+			let boundary = Math.max(this.#transcriptConsumed, settled);
+			let offset = 0;
+			const tailIndex = tokens.findLastIndex(token => token.type !== "space");
+			for (let index = 0; index < tokens.length; index++) {
+				const token = tokens[index]!;
+				let mutableFrom = token.raw.length;
+				if (index === tailIndex && token.type === "paragraph") {
+					const raw = token.raw;
+					const lineEnd = raw.endsWith("\n") ? raw.length - 1 : raw.length;
+					let lineStart = raw.lastIndexOf("\n", lineEnd - 1) + 1;
+					// A delimiter may reinterpret this pipe-bearing line as a
+					// table header, including while the delimiter is partial.
+					if (!matchesAt(PIPE_IN_LINE_AT, raw, lineStart) && /^[ \t:|-]*$/.test(raw.slice(lineStart, lineEnd)))
+						lineStart = raw.lastIndexOf("\n", lineStart - 2) + 1;
+					if (matchesAt(PIPE_IN_LINE_AT, raw, lineStart)) mutableFrom = lineStart;
+				}
+				if (offset + token.raw.length > boundary) {
+					for (const end of transcriptBoundaries(token, true, Math.max(0, this.#transcriptConsumed - offset))) {
+						const absolute = offset + end;
+						if (end <= mutableFrom && absolute > boundary && absolute <= target) boundary = absolute;
+					}
+				}
+				offset += token.raw.length;
+				if (offset <= target && offset > boundary) boundary = offset;
+				if (offset > target) break;
+			}
+			this.#transcriptConsumed = boundary;
+			this.#transcriptSource = source.slice(0, boundary);
+		}
+		return rows;
+	}
+
 	#renderContentLines(
 		tokens: Token[],
 		start: number,
@@ -3510,11 +3849,12 @@ export class Markdown implements Component {
 			bodyLines.push(renderedLine(literalCode ? linked : codeIndent + linked, literalCode));
 		};
 
-		const streaming = this.transientRenderCache && !this.#renderingStablePrefix;
-		if (this.#theme.highlightCode && (!streaming || this.#codeTokenHasClosingFence(token))) {
-			// Finalized content — or a fence that closed mid-stream, which
-			// highlights through the same whole-block call the finalized render
-			// uses so cached stable rows byte-match it.
+		// Compact source seams may already have emitted an open fence's body.
+		// Closing or moving that token into the lexer prefix must not switch
+		// those bytes from streaming/plain styling to whole-block highlighting.
+		const streaming = this.transientRenderCache && (this.#transcriptStreaming || !this.#renderingStablePrefix);
+		const closed = this.#codeTokenHasClosingFence(token);
+		if (this.#theme.highlightCode && (!streaming || (closed && !this.#transcriptStreaming))) {
 			const highlightedLines = this.#theme.highlightCode(tokenText, lang);
 			for (const hlLine of highlightedLines) {
 				addBodyLine(hlLine);
@@ -3523,17 +3863,18 @@ export class Markdown implements Component {
 		}
 
 		if (streaming && this.#theme.highlightCode) {
-			// Open fence: highlight completed lines incrementally so semantic
-			// colors reach completed rows immediately; only the trailing partial
-			// line stays unhighlighted.
-			const lineEnd = tokenText.lastIndexOf("\n");
+			// Feed every body line once the fence closes; an open fence retains
+			// its partial last line until a source newline completes it.
+			const lineEnd = closed && this.#transcriptStreaming ? tokenText.length : tokenText.lastIndexOf("\n");
 			const completedLines = lineEnd >= 0 ? this.#highlightStreamingLines(tokenText, lineEnd, lang) : null;
 			if (completedLines) {
 				for (const hlLine of completedLines) {
 					addBodyLine(hlLine);
 				}
-				for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
-					addBodyLine(this.#theme.codeBlock(codeLine));
+				if (lineEnd < tokenText.length) {
+					for (const codeLine of tokenText.slice(lineEnd + 1).split("\n")) {
+						addBodyLine(this.#theme.codeBlock(codeLine));
+					}
 				}
 				return bodyLines;
 			}
@@ -3896,11 +4237,13 @@ export class Markdown implements Component {
 				}
 
 				const codeIndent = padding(this.#codeBlockIndent);
-				lines.push(renderedLine(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`)));
+				if (!("transcriptContinuation" in token && token.transcriptContinuation))
+					lines.push(renderedLine(this.#theme.codeBlockBorder(`\`\`\`${token.lang || ""}`)));
 				for (const bodyLine of this.#renderCodeBodyLines(token, codeIndent)) {
 					lines.push(bodyLine);
 				}
-				lines.push(renderedLine(this.#theme.codeBlockBorder("```")));
+				if (!("transcriptOpenEnd" in token && token.transcriptOpenEnd))
+					lines.push(renderedLine(this.#theme.codeBlockBorder("```")));
 				if (nextTokenType && nextTokenType !== "space") {
 					lines.push(renderedLine("")); // Add spacing after code blocks (unless space token follows)
 				}
@@ -4537,7 +4880,10 @@ export class Markdown implements Component {
 		// cells are final and count already. The first data row has no finished
 		// rows to borrow from, so it counts whole.
 		const openCell =
-			this.#transientRenderCache && !this.#renderingStablePrefix && token.rows.length > 1
+			this.#transientRenderCache &&
+			!this.#renderingStablePrefix &&
+			!this.#transcriptStreaming &&
+			token.rows.length > 1
 				? growingTableCell(token.raw)
 				: -1;
 		const lastRow = token.rows.length - 1;
@@ -4625,6 +4971,13 @@ export class Markdown implements Component {
 				}
 			}
 		}
+		if (this.#transcriptStreaming) {
+			const base = Math.floor(availableForCells / numCols);
+			columnWidths = Array.from(
+				{ length: numCols },
+				(_, index) => base + (index < availableForCells % numCols ? 1 : 0),
+			);
+		}
 
 		const t = this.#symbols.table;
 		const h = t.horizontal;
@@ -4660,6 +5013,7 @@ export class Markdown implements Component {
 		const separatorCells = columnWidths.map(w => h.repeat(w));
 		const separatorLine = `${t.teeRight}${h}${separatorCells.join(`${h}${t.cross}${h}`)}${h}${t.teeLeft}`;
 		lines.push(separatorLine);
+		if ("transcriptContinuation" in token && token.transcriptContinuation) lines.length = 0;
 
 		// Render rows with wrapping
 		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
@@ -4705,10 +5059,11 @@ export class Markdown implements Component {
 			}
 		}
 
-		// Render bottom border
+		// A consumed table prefix ends at a data-row boundary, not a new table.
 		const bottomBorderCells = columnWidths.map(w => h.repeat(w));
 		const bottomBorder = `${t.bottomLeft}${h}${bottomBorderCells.join(`${h}${t.teeUp}${h}`)}${h}${t.bottomRight}`;
-		lines.push(bottomBorder);
+		if (!(token.rows.length === 0 && "transcriptOpenEnd" in token && token.transcriptOpenEnd))
+			lines.push("transcriptOpenEnd" in token && token.transcriptOpenEnd ? separatorLine : bottomBorder);
 		if (nextTokenType && nextTokenType !== "space") {
 			lines.push(""); // Add spacing after table
 		}

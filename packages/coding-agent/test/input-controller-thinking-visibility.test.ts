@@ -128,7 +128,7 @@ describe("InputController thinking visibility", () => {
 	});
 
 	it.each(["clean", "detailed"] as const)(
-		"does not reveal active reasoning or its finished stub through Alt+P in %s mode",
+		"does not reveal active reasoning or its retained tail through Alt+P in %s mode",
 		async display => {
 			cfgDisplayHideToolActivity.set(session.settings, display === "clean");
 			cfgDisplayCompactToolActivity.set(session.settings, display !== "detailed");
@@ -150,7 +150,7 @@ describe("InputController thinking visibility", () => {
 		},
 	);
 
-	it("applies live prose settings before taking the latest three preview rows without changing history", async () => {
+	it("applies live prose settings before taking the latest two preview rows without changing history", async () => {
 		const history = assistant([
 			{ type: "thinking", thinking: "historical-prose\n```ts\nhistorical-code\n```" },
 			{ type: "text", text: "historical answer remains unchanged" },
@@ -168,14 +168,14 @@ describe("InputController thinking visibility", () => {
 				.filter(line => line.startsWith("preview-") || line === "```");
 		stream(message, 0);
 
-		const filteredRows = [...prose.slice(-3, -1), `${prose[6]}...`];
+		const filteredRows = [prose[5]!, `${prose[6]}...`];
 		expect(previewRows()).toEqual(filteredRows);
 		expect(render()).not.toContain("preview-code-");
 		expect(render()).not.toContain("```");
 
 		cfgProseOnlyThinking.set(session.settings, false);
 		await Promise.resolve();
-		expect(previewRows()).toEqual([...code.slice(-2), "```"]);
+		expect(previewRows()).toEqual([code[6]!, "```"]);
 		expect(render()).not.toContain("preview-prose-");
 
 		cfgProseOnlyThinking.set(session.settings, true);
@@ -230,7 +230,7 @@ describe("InputController thinking visibility", () => {
 		expect(message.content).toEqual([{ type: "thinking", thinking: "active-prose\n```ts\nactive-code\n```" }]);
 	});
 
-	it("keeps the finished thinking stub through settings refreshes during a running turn", async () => {
+	it("keeps both finished thinking rows through settings refreshes during a running turn", async () => {
 		const message = assistant([{ type: "thinking", thinking: "earlier thought\nretained-tool-bridge" }]);
 		session.agent.state.isStreaming = true;
 		try {
@@ -239,8 +239,8 @@ describe("InputController thinking visibility", () => {
 			mode.collapseThinkingPreview();
 			cfgProseOnlyThinking.set(session.settings, false);
 			await Promise.resolve();
-			expect(render()).toContain("… retained-tool-bridge");
-			expect(render()).not.toContain("earlier thought");
+			expect(render()).toContain("retained-tool-bridge");
+			expect(render()).toContain("earlier thought");
 
 			stream(message, 0);
 			session.agent.state.streamMessage = null;
@@ -248,8 +248,8 @@ describe("InputController thinking visibility", () => {
 			mode.syncThinkingPreview();
 			cfgExpandThinkingBlocks.set(session.settings, true);
 			await Promise.resolve();
-			expect(render()).toContain("… retained-tool-bridge");
-			expect(render()).not.toContain("earlier thought");
+			expect(render()).toContain("retained-tool-bridge");
+			expect(render()).toContain("earlier thought");
 
 			session.agent.state.isStreaming = false;
 			mode.syncThinkingPreview();
