@@ -2103,6 +2103,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				"speechgen.enabled": true,
 				"memory.backend": "hindsight",
 				"autolearn.enabled": true,
+				"lsp.enabled": true,
 			});
 
 		const inheritedManager = {
