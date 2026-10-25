@@ -736,7 +736,46 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	} satisfies ToolRenderer<TArgs, BashToolDetails>;
 }
 
-/** Show only a literal executable, never a leading environment assignment or script fragment. */
+/** Builtins that only prepare the shell; the command after the next separator does the work. */
+const SHELL_CONTEXT_BUILTINS: ReadonlySet<string> = new Set([
+	"cd",
+	"pushd",
+	"popd",
+	"export",
+	"set",
+	"unset",
+	"shopt",
+	"source",
+	".",
+	"true",
+	":",
+]);
+
+/** Text after the next top-level `&&`, `||`, `;` or newline, or undefined when none follows. */
+function afterCommandSeparator(rest: string): string | undefined {
+	let quote: '"' | "'" | undefined;
+	for (let index = 0; index < rest.length; index++) {
+		const char = rest[index]!;
+		if (quote) {
+			if (char === quote) quote = undefined;
+			else if (char === "\\" && quote === '"') index++;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === "\\") {
+			index++;
+			continue;
+		}
+		if (char === "\n" || char === ";") return rest.slice(index + 1);
+		if ((char === "&" || char === "|") && rest[index + 1] === char) return rest.slice(index + 2);
+	}
+	return undefined;
+}
+
+/** Show only a literal executable, never a leading environment assignment, context builtin or script fragment. */
 function compactBashExecutable(command: string): string {
 	let remaining = command.trim();
 	while (remaining) {
@@ -750,6 +789,12 @@ function compactBashExecutable(command: string): string {
 			continue;
 		}
 		if (word.value.startsWith("#")) return "Shell command";
+		if (SHELL_CONTEXT_BUILTINS.has(word.value)) {
+			const next = afterCommandSeparator(word.rest);
+			if (next === undefined) return word.value || "Shell command";
+			remaining = next;
+			continue;
+		}
 		return word.value || "Shell command";
 	}
 	return "Shell command";

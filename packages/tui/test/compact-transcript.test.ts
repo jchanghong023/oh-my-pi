@@ -430,6 +430,11 @@ describe("compact transcript activity", () => {
 		for (const [command, executable] of [
 			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun -e "PRIVATE_SCRIPT"', "bun"],
 			['CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py', "python.exe"],
+			["cd /tmp/private-dir && bun test", "bun"],
+			['cd "/tmp/quiet && path" && python3 train.py', "python3"],
+			["export FOO=1; bun run check", "bun"],
+			["true && bun test", "bun"],
+			["cd /tmp/private-dir", "cd"],
 		]) {
 			const component = new ToolExecutionComponent("bash", { command }, {}, undefined, {
 				requestRender() {},
@@ -448,6 +453,8 @@ describe("compact transcript activity", () => {
 					expect(view).not.toContain("PRIVATE");
 					expect(view).not.toContain("CUDA_VISIBLE_DEVICES");
 					expect(view).not.toContain("ACCESS_TOKEN");
+					expect(view).not.toContain("private-dir");
+					expect(view).not.toContain("/tmp/quiet");
 				}
 			}
 		}
