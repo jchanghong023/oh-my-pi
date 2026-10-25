@@ -1841,6 +1841,30 @@ describe("ZCode actual public app-server process", () => {
 			config.requests.find(request => JSON.stringify(request.messages.at(-1)).includes("ZCODE_TEST_DELEGATE"))
 				?.model,
 		).toBe("chat-a");
+		const children = LegacyProtocol.zcodeSessionSubagentsResultSchema.parse(
+			await peer.request("session/subagents", { sessionId: id }),
+		);
+		const childId = children.childSessionIds[0];
+		if (!childId) throw new Error("Native child history was not registered");
+		const watched = await subscribe(peer, childId, "web-remote-replayable");
+		await output(peer, childId, "ZCODE_TEST_CHILD_MARKER_DONE");
+		const count = config.requests.length;
+		expect(await peer.request("session/close", { sessionId: id })).toEqual({ closed: true });
+		const rows = v4ConversationRowsRangeResultSchema.parse(
+			await peer.request("v4/conversation/rowsRange", { sessionId: childId, limit: 100 }),
+		);
+		expect(JSON.stringify(rows)).toContain("ZCODE_TEST_CHILD_MARKER_DONE");
+		const { ack } = watched as { ack: { subscriptionId: string } };
+		expect(
+			await peer.request("v4/conversation/resync", {
+				topic: `conversation/${childId}`,
+				connectionId: "test-web-remote-replayable",
+				subscriptionId: ack.subscriptionId,
+				base: { logEpoch: rows.atLogEpoch, seq: rows.atSeq },
+				forceSnapshot: true,
+			}),
+		).toMatchObject({ ack: { subscriptionId: ack.subscriptionId, mode: "snapshot" } });
+		expect(config.requests).toHaveLength(count);
 	}, 180_000);
 
 	test("two Host owners cannot write one journal and profiles resolve independent storage", async () => {
@@ -1917,6 +1941,68 @@ describe("ZCode actual public app-server process", () => {
 		expect((await fs.stat(proofPath)).mtimeMs).toBe(proofModifiedAt);
 		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
+	test("cold projection eviction preserves pinned viewers and rebuilds history without replaying tools", async () => {
+		await using root = await TempDir.create("@zcode-cold-cache-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const ids: string[] = [];
+		for (let index = 0; index < 20; index++) {
+			const id = await create(peer, config.cwdA);
+			ids.push(id);
+			if (index === 1) {
+				await subscribe(peer, id);
+				await command(peer, id, "sendText", { text: "ZCODE_TEST_CACHE_TOOL" });
+				await finishedOutput(peer, id, "ZCODE_TEST_CACHE_TOOL_DONE");
+				// Keep this cold projection unobserved until the next explicit subscription.
+				await peer.request("v4/connection/flow", { connectionId: "test-desktop-continuous", state: "closed" });
+			}
+			await peer.request("session/close", { sessionId: id });
+		}
+		const count = config.requests.length;
+		const proof = path.join(config.cwdA, "proof.txt");
+		const modified = (await fs.stat(proof)).mtimeMs;
+		const read = async (id: string) =>
+			v4ConversationRowsRangeResultSchema.parse(
+				await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 100 }),
+			);
+		const epochs = new Map<string, string>();
+		for (const id of ids) {
+			await peer.request("v4/conversation/subscribe", {
+				topic: `conversation/${id}`,
+				connectionId: "cache-viewer",
+				clientMode: "desktop-continuous",
+				includeSpecDriven: true,
+			});
+			epochs.set(id, (await read(id)).atLogEpoch);
+		}
+		// More active viewers than idle cache slots must remain attached to their epochs.
+		expect((await read(ids[0]!)).atLogEpoch).toBe(epochs.get(ids[0]!)!);
+		await peer.request("v4/connection/flow", { connectionId: "cache-viewer", state: "closed" });
+		// Access refreshed the first entry, so it survives; the oldest remaining entry is evicted.
+		expect((await read(ids[0]!)).atLogEpoch).toBe(epochs.get(ids[0]!)!);
+		expect((await read(ids.at(-1)!)).atLogEpoch).toBe(epochs.get(ids.at(-1)!)!);
+		const rebuilt = await read(ids[1]!);
+		expect(rebuilt.atLogEpoch).not.toBe(epochs.get(ids[1]!));
+		expect(JSON.stringify(rebuilt.rows)).toContain("ZCODE_TEST_CACHE_TOOL_DONE");
+		for (const clientMode of ["desktop-continuous", "web-remote-replayable"]) {
+			const result = await peer.request("v4/conversation/subscribe", {
+				topic: `conversation/${ids[1]}`,
+				connectionId: `recovered-${clientMode}`,
+				clientMode,
+				includeSpecDriven: true,
+				base: { logEpoch: epochs.get(ids[1]!), seq: 0 },
+			});
+			expect(result).toMatchObject({ ack: { mode: "snapshot", logEpoch: rebuilt.atLogEpoch } });
+		}
+		expect(
+			await peer.requestFrame("v4/conversation/rowsRange", { sessionId: crypto.randomUUID(), limit: 1 }),
+		).toHaveProperty("error");
+		expect(await fs.readFile(proof, "utf8")).toBe("ZCODE_TEST_CACHE_TOOL");
+		expect((await fs.stat(proof)).mtimeMs).toBe(modified);
+		expect(config.requests).toHaveLength(count);
+	}, 120_000);
+
 	test("equal user text has distinct durable command identities, including input queued during streaming", async () => {
 		await using root = await TempDir.create("@zcode-input-identity-");
 		await using config = await fixture(root);

@@ -202,6 +202,87 @@ describe("compact transcript activity", () => {
 		expect(rows[2]).toMatch(/3.*1/);
 	});
 
+	it("preserves call ownership and totals across compaction without counting replay twice", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		const group = new ReadToolGroupComponent();
+		components.push(group);
+		for (const id of ["one", "two", "three"]) {
+			group.updateArgs({ path: `${id}.ts` }, id);
+			group.updateResult({ content: [], isError: id === "one" }, false, id);
+		}
+		transcript.addChild(group);
+		transcript.noteCompactUserTurnStart(); // An interjection is still the same activity.
+		const state = transcript.snapshotCompactTurn();
+		transcript.clear();
+		const replay = new ReadToolGroupComponent();
+		components.push(replay);
+		replay.updateArgs({ path: "three.ts" }, "three");
+		replay.updateResult({ content: [] }, false, "three");
+		transcript.addChild(replay);
+		transcript.restoreCompactTurn(state);
+		const next = new ReadToolGroupComponent();
+		components.push(next);
+		next.updateArgs({ path: "four.ts" }, "four");
+		next.updateResult({ content: [] }, false, "four");
+		transcript.addChild(next);
+		const dock = () => (transcript.compactToolActivityBlock()?.render(100) ?? []).map(Bun.stripANSI).join("\n");
+		expect(dock()).toContain("工具调用 4 次 · 失败 1 次");
+		transcript.setCompactTurnActive(false);
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		expect(dock()).toBe("");
+	});
+
+	it("keeps a late background failure in its original turn after a transcript rebuild", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		const bash = new ToolExecutionComponent(
+			"bash",
+			{ command: "OLD_BACKGROUND" },
+			{},
+			undefined,
+			{
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			},
+			undefined,
+			"old-background",
+		);
+		components.push(bash);
+		bash.setExecutionStarted();
+		bash.updateResult({ content: [], details: { async: { state: "running" } } }, true);
+		bash.parkAsBackground();
+		transcript.addChild(bash);
+		transcript.setCompactTurnActive(false);
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		const state = transcript.snapshotCompactTurn();
+		transcript.clear();
+		transcript.addChild(bash);
+		transcript.restoreCompactTurn(state);
+		const group = new ReadToolGroupComponent();
+		components.push(group);
+		for (const id of ["new-one", "new-two", "new-three"]) {
+			group.updateArgs({ path: `${id}.ts` }, id);
+			group.updateResult({ content: [] }, false, id);
+		}
+		transcript.addChild(group);
+		bash.updateResult(
+			{ content: [{ type: "text", text: "OLD_FAILURE" }], isError: true, details: { async: { state: "failed" } } },
+			false,
+		);
+		const rows = (transcript.compactToolActivityBlock()?.render(100) ?? []).map(Bun.stripANSI).join("\n");
+		expect(rows).toContain("工具调用 3 次 · 失败 0 次");
+		expect(rows).not.toContain("OLD_");
+		expect(Bun.stripANSI(transcript.render(100).join("\n"))).not.toContain("OLD_FAILURE");
+	});
+
 	it("does not show a summary when a grouped read's two calls are both visible", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();
@@ -220,6 +301,42 @@ describe("compact transcript activity", () => {
 		expect(rows.join("\n")).not.toContain("工具调用");
 		const native = JSON.stringify(transcript.compactToolActivityBlock()?.describe?.(toolCx));
 		expect(native).not.toContain("工具调用");
+	});
+
+	it("folds review prompt diffs as user prose without consuming the three actual writes", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const transcript = new TranscriptContainer();
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		transcript.addChild(
+			new UserMessageComponent(
+				"Review the following diff:\n```diff\n" +
+					Array.from({ length: 20 }, (_, i) => `+REVIEW_LINE_${i}`).join("\n") +
+					"\n```",
+			),
+		);
+		for (let index = 0; index < 3; index++) {
+			const edit = new ToolExecutionComponent("edit", { path: `actual-${index}.ts` }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(edit);
+			edit.updateResult({ content: [], details: { diff: `@@ -1 +1 @@\n-old\n+ACTUAL_WRITE_${index}` } });
+			transcript.addChild(edit);
+		}
+		for (const active of [true, false]) {
+			transcript.setCompactTurnActive(active);
+			const rows = Bun.stripANSI(transcript.render(100).join("\n"));
+			expect(rows).toContain("已折叠");
+			expect(rows).not.toContain("REVIEW_LINE_19");
+			for (let index = 0; index < 3; index++) expect(rows).toContain(`actual-${index}.ts`);
+		}
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		const history = Bun.stripANSI(transcript.render(100).join("\n"));
+		expect(history).toContain("已折叠");
+		expect(history).not.toContain("REVIEW_LINE_19");
 	});
 
 	it("keeps the original diffs for the latest three actual file-write calls", () => {

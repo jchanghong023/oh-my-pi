@@ -213,7 +213,8 @@ export class ZCodeTopics {
 	cancel(subscriptionId: string): void {
 		const sub = this.#subscriptions.get(subscriptionId);
 		this.#subscriptions.delete(subscriptionId);
-		if (sub && this.#topics.get(sub.topic)?.released && !this.hasSubscribers(sub.topic)) this.#topics.delete(sub.topic);
+		if (sub && this.#topics.get(sub.topic)?.released && !this.hasSubscribers(sub.topic))
+			this.#topics.delete(sub.topic);
 	}
 	closeConnection(connectionId: string): void {
 		for (const sub of this.#subscriptions.values()) if (sub.connectionId === connectionId) this.cancel(sub.id);

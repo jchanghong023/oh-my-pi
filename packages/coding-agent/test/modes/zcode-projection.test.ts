@@ -1064,6 +1064,75 @@ describe("ZCode public consumer projection", () => {
 		topics.dispose();
 	});
 
+	it("publishes deltas without snapshots and resets recovery when the source epoch changes", () => {
+		const topics = new ZCodeTopics();
+		let projection = new ZCodeProjection({ sessionId: "s", cwd: "/work", logEpoch: "old" });
+		const snapshot = vi.fn(() => projection.snapshot());
+		topics.register("conversation/s", {
+			snapshot,
+			logEpoch: () => projection.logEpoch(),
+		});
+		const frames: unknown[] = [];
+		const sub = topics.subscribe(
+			{ topic: "conversation/s", connectionId: "desktop", clientMode: "desktop-continuous" },
+			frame => frames.push(frame),
+		);
+		sub.flush();
+		snapshot.mockClear();
+		topics.publish("conversation/s", [{ op: "state.updated", patch: { revision: 1 } }]);
+		expect(snapshot).not.toHaveBeenCalled();
+		expect(routedTopicWireFrameSchema.parse(frames.at(-1))).toMatchObject({
+			frame: { fromSeq: 0, toSeq: 1, payload: { kind: "deltas" } },
+		});
+		projection.dispose();
+		projection = new ZCodeProjection({ sessionId: "s", cwd: "/work", logEpoch: "new" });
+		topics.publish("conversation/s", [{ op: "state.updated", patch: { revision: 0 } }]);
+		expect(routedTopicWireFrameSchema.parse(frames.at(-1))).toMatchObject({
+			frame: { toSeq: 0, payload: { kind: "snapshot", snapshot: { logEpoch: "new" } } },
+		});
+		const recovery = topics.recover({ subscriptionId: sub.ack.subscriptionId, base: { logEpoch: "old", seq: 1 } });
+		expect(recovery.ack).toMatchObject({ mode: "snapshot", logEpoch: "new" });
+		recovery.flush();
+		topics.dispose();
+		projection.dispose();
+	});
+
+	it("releases a closed owner while keeping existing viewers recoverable until the last disconnect", () => {
+		const topics = new ZCodeTopics();
+		const projection = new ZCodeProjection({ sessionId: "s", cwd: "/work", logEpoch: "closed-owner" });
+		topics.register("conversation/s", projection);
+		const frames: unknown[] = [];
+		const sub = topics.subscribe(
+			{ topic: "conversation/s", connectionId: "first", clientMode: "desktop-continuous" },
+			frame => frames.push(frame),
+		);
+		sub.flush();
+		const other = topics.subscribe(
+			{ topic: "conversation/s", connectionId: "second", clientMode: "web-remote-replayable" },
+			() => {},
+		);
+		other.flush();
+		projection.applyEvent({ type: "message_end", message: user("before-close") });
+		const rows = projection.snapshot().rows;
+		topics.releaseSource("conversation/s");
+		const count = frames.length;
+		projection.applyEvent({ type: "message_end", message: user("late-event") });
+		expect(frames).toHaveLength(count);
+		const recovery = topics.recover({ subscriptionId: sub.ack.subscriptionId, forceSnapshot: true });
+		recovery.flush();
+		expect(routedTopicWireFrameSchema.parse(frames.at(-1))).toMatchObject({
+			frame: { payload: { kind: "snapshot", snapshot: { rows } } },
+		});
+		topics.cancel(sub.ack.subscriptionId);
+		expect(topics.recover({ subscriptionId: other.ack.subscriptionId }).ack.logEpoch).toBe("closed-owner");
+		topics.closeConnection("second");
+		expect(() =>
+			topics.subscribe({ topic: "conversation/s", connectionId: "new", clientMode: "desktop-continuous" }, () => {}),
+		).toThrow("Unknown existing topic");
+		topics.dispose();
+		projection.dispose();
+	});
+
 	it("replaces a closed session epoch without delivering stale-owner events", () => {
 		const topics = new ZCodeTopics();
 		const old = new ZCodeProjection({ sessionId: "s", cwd: "/work", logEpoch: "old" });

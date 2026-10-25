@@ -334,7 +334,7 @@ export class ChatTranscriptBuilder {
 					// update` replay dumps — can be hundreds of KiB of Markdown each.
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
-					// ctrl+o expand. Real user prompts stay fully rendered.
+					// ctrl+o expand. Real user prompts use the selected display mode.
 					if (isSynthetic) {
 						const collapsed = new CollapsedSyntheticMessageComponent(userText);
 						this.#trackExpandable(collapsed);
@@ -342,6 +342,7 @@ export class ChatTranscriptBuilder {
 					} else {
 						this.container.addChild(
 							new UserMessageComponent(userText, {
+								compactToolActivity: this.#deps.toolActivityDisplay?.compactToolActivity,
 								liveSteered: message.role === "user" && message.liveSteered === true,
 								timestamp: message.timestamp,
 								images: imageContent(message.content),

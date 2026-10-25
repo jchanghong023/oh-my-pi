@@ -1,4 +1,4 @@
-import { applyBackgroundToLine, padding, stripTerminalSequences, visibleWidth } from "../utils";
+import { applyBackgroundToLine, padding, stripTerminalSequences, truncateToWidth, visibleWidth } from "../utils";
 import type { AnimationFrame, TranscriptPresentationTarget } from "../chrome/transcript-container";
 import { type Component, Container } from "../tui";
 import { Disclosure } from "../components/disclosure";
@@ -22,7 +22,7 @@ import { expandKeyHint, fileHyperlink, fileLinkSpan } from "../render";
 import { imageLinksEnabled, imageReferenceHyperlink } from "../prompt/image-references";
 import { highlightMagicKeywords } from "../prompt/magic-keywords";
 import type { ReactionTarget } from "./reaction";
-import { card, md, node, row, span, text } from "../native/describe";
+import { card, col, md, node, row, span, text } from "../native/describe";
 import { base64ImageNode, openableImageProps } from "../native/blobs";
 import { hasTranscriptActions, runTranscriptAction } from "./transcript-actions";
 import {
@@ -33,6 +33,8 @@ import {
 	rootToggleExpanded,
 } from "../native/node";
 import { Memo } from "../native/memo";
+import { compactText, styledSpans } from "../native/spans";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 
 // OSC 133 shell integration: marks prompt zones for terminal multiplexers.
 //
@@ -58,6 +60,8 @@ const OSC133_ZONE_CLOSE = OSC133_ZONE_END + OSC133_COMMAND_START + OSC133_COMMAN
 
 /** How a user bubble styles its prose and chips (see {@link userBubbleColor}). */
 export interface UserBubbleOptions {
+	/** Explicit history viewers can retain full messages independently of the main chat. */
+	compactToolActivity?: boolean;
 	/** Filesystem paths for attached image chips, indexed by chip number. */
 	imageLinks?: readonly (string | undefined)[];
 	/** The message's attached images in chip order (`#1` first); a native bubble shows them. */
@@ -133,6 +137,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	// never mutates the container's cached array.
 	#zoneSource: readonly string[] | undefined;
 	#zoneLines: string[] | undefined;
+	#zoneCompact = false;
+	readonly #compactOverride: boolean | undefined;
 	readonly #bgColor: (value: string) => string;
 	readonly #liveSteered: boolean;
 	readonly #synthetic: boolean;
@@ -148,6 +154,8 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	/** The terminal's clock and the image link policy {@link #native} was described with. */
 	#nativeHour12: boolean | undefined;
 	#nativeLinked = false;
+	#nativeWidth = 0;
+	#nativeCompact = false;
 
 	constructor(text: string, options: UserBubbleOptions = {}) {
 		super();
@@ -167,6 +175,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		this.#bgColor = bgColor;
 		this.#liveSteered = options.liveSteered === true;
 		this.#synthetic = options.synthetic === true;
+		this.#compactOverride = options.compactToolActivity;
 		this.#timestamp = options.timestamp;
 		this.#images = options.images ?? [];
 		this.#imageLinks = options.imageLinks;
@@ -207,9 +216,20 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		const hour12 = cx?.hour12;
 		// Chip marks and thumbnails carry links only under an enabled policy.
 		const linked = imageLinksEnabled();
-		if (this.#native && this.#nativeHour12 === hour12 && this.#nativeLinked === linked) return this.#native;
+		const compact = this.#compact;
+		const width = cx?.cols ?? 80;
+		if (
+			this.#native &&
+			this.#nativeHour12 === hour12 &&
+			this.#nativeLinked === linked &&
+			this.#nativeCompact === compact &&
+			(!compact || this.#nativeWidth === width)
+		)
+			return this.#native;
 		this.#nativeHour12 = hour12;
 		this.#nativeLinked = linked;
+		this.#nativeCompact = compact;
+		this.#nativeWidth = width;
 		const children: NativeChild[] = [];
 		if (!this.#synthetic && hasTranscriptActions()) {
 			const tools: NativeChild[] = [
@@ -265,7 +285,18 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			children.push(row(thumbs, { gap: "sm", wrap: true, align: "start", role: "omp.user.images" }));
 		}
 		const marks = this.#synthetic ? [] : tokenMarks(this.#text, this.#tokens, this.#imageLinks);
-		children.push(md(this.#text, marks.length > 0 ? { marks } : undefined));
+		const folded = compact ? this.#foldedRows(super.render(width), width) : undefined;
+		if (folded) {
+			children.push(
+				col(
+					folded
+						.slice(1, -1)
+						.map(line => text(compactText(styledSpans(line)), { lines: 1, wrap: "none", truncate: "end" })),
+				),
+			);
+		} else {
+			children.push(md(this.#text, marks.length > 0 ? { marks } : undefined));
+		}
 		const badges: NativeChild[] = [];
 		if (this.#liveSteered) {
 			badges.push(
@@ -336,6 +367,27 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		return lines[0];
 	}
 
+	get #compact(): boolean {
+		return (
+			!this.#synthetic &&
+			!displayPreferences.hideToolActivity &&
+			(this.#compactOverride ?? displayPreferences.compactToolActivity)
+		);
+	}
+
+	#foldedRows(lines: readonly string[], width: number): readonly string[] | undefined {
+		// Markdown has one bubble padding row on either side; only content counts.
+		const content = lines.slice(1, -1);
+		if (content.length <= 6) return undefined;
+		const hint = truncateToWidth(`已折叠 ${content.length - 5} 行，切换全量模式查看`, Math.max(1, width - 2));
+		return [
+			lines[0]!,
+			...content.slice(0, 5),
+			applyBackgroundToLine(` ${theme.fg("dim", hint)}`, width, this.#bgColor),
+			lines.at(-1)!,
+		];
+	}
+
 	override render(width: number): readonly string[] {
 		const lines = super.render(width);
 		if (lines.length === 0) {
@@ -345,14 +397,16 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 			const emergency = this.#selectEmergencyRow(lines);
 			if (emergency !== undefined) return [emergency];
 		}
-		if (this.#zoneSource === lines && this.#zoneLines !== undefined) {
+		const compact = this.#compact;
+		if (this.#zoneSource === lines && this.#zoneCompact === compact && this.#zoneLines !== undefined) {
 			return this.#zoneLines;
 		}
-		const wrapped = lines.slice();
+		const wrapped = (compact ? (this.#foldedRows(lines, width) ?? lines) : lines).slice();
 		if (this.#reaction !== undefined || this.#liveSteered) wrapped[0] = this.#badgeRow(width);
 		wrapped[0] = OSC133_ZONE_START + wrapped[0];
 		wrapped[wrapped.length - 1] = wrapped[wrapped.length - 1] + OSC133_ZONE_CLOSE;
 		this.#zoneSource = lines;
+		this.#zoneCompact = compact;
 		this.#zoneLines = wrapped;
 		return wrapped;
 	}

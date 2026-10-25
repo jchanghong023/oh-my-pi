@@ -4456,6 +4456,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// configured collapsed/full history. Explicit history viewers are unchanged.
 		const context = this.#uiHelpers.buildTranscriptSessionContext();
 		const failureWarnings = this.#uiHelpers.collectToolFailureWarnings(context);
+		const compactTurn = this.chatContainer.snapshotCompactTurn();
 		this.chatContainer.clear();
 		const preservedLiveToolCallIds = new Set<string>();
 		// A preserved pending-tool component whose result has already landed in
@@ -4547,6 +4548,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// signature is cleared by `EventController`, so this replay is a no-op
 		// post-streaming and cannot duplicate.
 		this.#replayOptimisticUserMessage();
+		this.chatContainer.restoreCompactTurn(compactTurn);
 	}
 
 	#replayOptimisticUserMessage(): void {

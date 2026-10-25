@@ -8,7 +8,7 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth, wrapTextWithAnsi } from "../utils";
-import { compactToolPath } from "../chrome/tool-activity";
+import { type CompactLogLine, type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -333,7 +333,7 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
 const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
 
 const COMPACT_BASH_LOG_DELAY_MS = 30_000;
-const COMPACT_BASH_LOG_LINES = 3;
+const COMPACT_BASH_LOG_LINES = 5;
 const COMPACT_BASH_LOG_SLICE = 8_192;
 
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
@@ -465,7 +465,8 @@ export class ToolExecutionComponent extends Container {
 	#compactBashLogCache: { version: number; lines: readonly string[] } | undefined;
 	#compactBashOutputText = "";
 	#compactBashLastOutputAtNow: number | undefined;
-	#compactBashBeforeResult: { text: string; at: number | undefined } | undefined;
+	#compactBashLogLines: readonly CompactLogLine[] = [];
+	#compactBashBeforeResult: { text: string; at: number | undefined; lines: readonly CompactLogLine[] } | undefined;
 	#compactNeedsUserInput: string | undefined;
 	// Payload keys whose Kitty PNG conversion is already awaited; the converted
 	// images themselves live in the process-wide cache behind
@@ -685,7 +686,11 @@ export class ToolExecutionComponent extends Container {
 
 	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
 		if (this.#toolName === "bash") {
-			this.#compactBashBeforeResult = { text: this.#compactBashOutputText, at: this.#compactBashLastOutputAtNow };
+			this.#compactBashBeforeResult = {
+				text: this.#compactBashOutputText,
+				at: this.#compactBashLastOutputAtNow,
+				lines: this.#compactBashLogLines,
+			};
 			const output = result.content
 				.filter(block => block.type === "text")
 				.map(block => block.text ?? "")
@@ -697,8 +702,25 @@ export class ToolExecutionComponent extends Container {
 				output &&
 				output !== this.#compactBashOutputText
 			) {
+				const at = performance.now();
+				const previous = this.#compactBashOutputText;
+				let retained = this.#compactBashLogLines;
+				let added = output;
+				if (previous && output.startsWith(previous)) {
+					const boundary = previous.endsWith("\n") ? previous.length : previous.lastIndexOf("\n") + 1;
+					added = output.slice(boundary);
+					if (previous.slice(boundary).trim()) retained = retained.slice(0, -1);
+				} else {
+					retained = [];
+				}
+				const lines = sanitizeText(added.slice(-COMPACT_BASH_LOG_SLICE))
+					.split("\n")
+					.map(line => replaceTabs(line).trimEnd())
+					.filter(line => line.trim().length > 0)
+					.map(text => ({ text, at }));
+				this.#compactBashLogLines = [...retained, ...lines].slice(-COMPACT_BASH_LOG_LINES);
 				this.#compactBashOutputText = output;
-				this.#compactBashLastOutputAtNow = performance.now();
+				this.#compactBashLastOutputAtNow = at;
 			}
 		}
 		const hadNoResult = this.#result === undefined;
@@ -1093,6 +1115,11 @@ export class ToolExecutionComponent extends Container {
 		);
 	}
 
+	/** Per-line times let the shared dock merge output without reordering an unchanged prefix. */
+	getCompactBashLogLines(): readonly CompactLogLine[] {
+		return this.#compactBashLogLines;
+	}
+
 	/** One actual call, shared by the live ANSI/native activity dock. */
 	renderCompactActivityRows(width: number): readonly string[] {
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
@@ -1114,6 +1141,11 @@ export class ToolExecutionComponent extends Container {
 
 	getCompactToolFailureCount(): number {
 		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
+	}
+
+	getCompactToolCalls(): readonly CompactToolCall[] {
+		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
+		return [{ id: this.#toolCallId ?? this, failed: this.#nativeStatus() === "error" }];
 	}
 
 	/** Exact identity of a failed execution represented by the compact activity rows. */
@@ -1159,6 +1191,7 @@ export class ToolExecutionComponent extends Container {
 			// The start receipt carries a job notice, not fresh process output.
 			this.#compactBashOutputText = this.#compactBashBeforeResult.text;
 			this.#compactBashLastOutputAtNow = this.#compactBashBeforeResult.at;
+			this.#compactBashLogLines = this.#compactBashBeforeResult.lines;
 			this.#compactBashLogCache = undefined;
 		}
 		this.#parkedBackground = true;

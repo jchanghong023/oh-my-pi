@@ -2998,6 +2998,12 @@ export class ZCodeServer {
 		projection.setWorkflowState(await this.workflows.projection(id));
 		projection.setSpecDrivenRuns(await this.specDriven.runs(id));
 		this.#cold.set(id, { projection, version });
+		if (this.topics.hasSubscribers(`conversation/${id}`))
+			this.topics.register(`conversation/${id}`, {
+				snapshot: () => projection.snapshot(),
+				logEpoch: () => projection.logEpoch(),
+				subscribe: listener => projection.subscribe(listener),
+			});
 		this.#trimColdProjections();
 		return projection;
 	}

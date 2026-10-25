@@ -8,12 +8,19 @@ import type { NativeNode } from "../native/node";
 import { compactText, styledSpans } from "../native/spans";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isUsageRowBlock } from "../overlays/usage-row";
-import { isCompactToolActivityComponent, isToolActivityComponent } from "./tool-activity";
+import {
+	type CompactLogLine,
+	type CompactToolCall,
+	isCompactToolActivityComponent,
+	isToolActivityComponent,
+} from "./tool-activity";
 import { theme } from "../theme";
 import { directPlacementLift, ImageProtocol, iterm2ImagePayload, TERMINAL } from "../terminal-capabilities";
 import { truncateToWidth } from "../utils";
 
 interface CompactCallActivity {
+	getCompactToolCalls?(): readonly CompactToolCall[];
+	getCompactBashLogLines?(): readonly CompactLogLine[];
 	renderCompactActivityRows(width: number, limit?: number): readonly string[];
 	renderCompactRunningActivityRows?(width: number): readonly string[];
 	isCompactBackgroundActive?(): boolean;
@@ -25,6 +32,13 @@ interface CompactCallActivity {
 	describeCompactFileWrite?(cx: undefined, autoExpanded: boolean): NativeNode;
 	/** Exact identity of a failed execution this call's compact row represents. */
 	getCompactToolFailureId?(): string | undefined;
+}
+
+export interface CompactTurnState {
+	active: boolean;
+	started: boolean;
+	turn: number;
+	calls: Map<string | object, { turn: number; failed: boolean }>;
 }
 
 /** Transcript blocks that hide themselves while compact activity already shows the same failure. */
@@ -348,6 +362,8 @@ export class TranscriptContainer extends Container {
 	#compactTurnActive = false;
 	#compactTurnStarted = false;
 	#compactTurnStart = 0;
+	#compactTurn = 0;
+	#compactCalls = new Map<string | object, { turn: number; failed: boolean }>();
 	#compactDockVisible = true;
 	#compactOriginalWriteBlocks = new WeakMap<Component, Component>();
 	#compactAutoExpandedWrites = new WeakMap<Component, boolean>();
@@ -372,6 +388,7 @@ export class TranscriptContainer extends Container {
 		if (this.#compactTurnActive === active) return;
 		if (active && !this.#compactTurnStarted) {
 			this.#compactTurnStarted = true;
+			this.#compactTurn++;
 			// Restored active turns may already contain their user and tool blocks.
 			// Fresh user input supplies its precise boundary via noteCompactUserTurnStart.
 			this.#compactTurnStart = 0;
@@ -384,10 +401,60 @@ export class TranscriptContainer extends Container {
 	/** Live/replayed metadata supplies this boundary; midturn steering never calls it. */
 	noteCompactUserTurnStart(): void {
 		if (this.#compactTurnActive) return;
+		this.#recordCompactCalls();
+		this.#compactTurn++;
 		this.#compactTurnStarted = true;
 		this.#compactTurnStart = this.children.length;
 		this.#frameRows.clear();
 		this.invalidate();
+	}
+
+	/** Keep call ownership and totals when compaction replaces the displayed message list. */
+	snapshotCompactTurn(): CompactTurnState {
+		this.#recordCompactCalls();
+		return {
+			active: this.#compactTurnActive,
+			started: this.#compactTurnStarted,
+			turn: this.#compactTurn,
+			calls: new Map(this.#compactCalls),
+		};
+	}
+
+	restoreCompactTurn(state: CompactTurnState): void {
+		this.#compactTurnActive = state.active;
+		this.#compactTurnStarted = state.started;
+		this.#compactTurn = state.turn;
+		this.#compactCalls = state.calls;
+		// Replayed calls keep their recorded owner; only subsequently added calls are new.
+		this.#compactTurnStart = this.children.length;
+		this.#frameRows.clear();
+		this.invalidate();
+	}
+
+	#callFacts(component: Component & CompactCallActivity): readonly CompactToolCall[] {
+		return (
+			component.getCompactToolCalls?.() ?? [{ id: component, failed: !!component.getCompactToolFailureCount?.() }]
+		);
+	}
+
+	#recordCompactCalls(): void {
+		for (let index = 0; index < this.children.length; index++) {
+			const component = this.children[index]!;
+			if (!isCompactCall(component)) continue;
+			for (const call of this.#callFacts(component)) {
+				const turn =
+					this.#compactCalls.get(call.id)?.turn ??
+					(this.#compactTurnStarted && index >= this.#compactTurnStart ? this.#compactTurn : -1);
+				this.#compactCalls.set(call.id, { turn, failed: call.failed });
+			}
+		}
+	}
+
+	#isCurrentCompactCall(component: Component & CompactCallActivity): boolean {
+		return (
+			this.#compactTurnStarted &&
+			this.#callFacts(component).some(call => this.#compactCalls.get(call.id)?.turn === this.#compactTurn)
+		);
 	}
 
 	/** Native chrome mounts the same live activity directly before thinking. */
@@ -410,18 +477,20 @@ export class TranscriptContainer extends Container {
 			return { rows: EMPTY_ROWS, covered: EMPTY_COVERAGE };
 		const calls: Array<{ component: Component & CompactCallActivity; row: string; running: boolean }> = [];
 		const covered = new Set<string>();
+		this.#recordCompactCalls();
 		let callCount = 0;
 		let failureCount = 0;
+		for (const call of this.#compactCalls.values()) {
+			if (call.turn !== this.#compactTurn) continue;
+			callCount++;
+			failureCount += Number(call.failed);
+		}
 		for (let index = 0; index < this.children.length; index++) {
 			const component = this.children[index]!;
 			if (!isCompactCall(component)) continue;
-			const current = this.#compactTurnStarted && index >= this.#compactTurnStart;
+			const current = this.#isCurrentCompactCall(component);
 			if (!current && !component.isCompactBackgroundActive?.()) continue;
 			const activity = component.renderCompactActivityRows(width);
-			if (current && activity.length) {
-				callCount += activity.length;
-				failureCount += component.getCompactToolFailureCount?.() ?? 0;
-			}
 			if (component.isCompactActualFileWrite?.()) continue;
 			const runningCounts = new Map<string, number>();
 			for (const row of component.renderCompactRunningActivityRows?.(width) ?? []) {
@@ -448,10 +517,26 @@ export class TranscriptContainer extends Container {
 		if (rows.length === 1) rows.push("");
 		if (callCount > selected.length && this.#compactTurnStarted)
 			rows.push(truncateToWidth(theme.fg("dim", `工具调用 ${callCount} 次 · 失败 ${failureCount} 次`), width));
+		const statuses: string[] = [];
+		const logs: Array<{ row: string; at: number }> = [];
 		for (const component of selectedComponents) {
 			rows.push(...(component.compactBashCommandRows?.(width) ?? []));
-			rows.push(...(component.compactBashLogRows?.(width) ?? []));
+			const window = component.compactBashLogRows?.(width) ?? [];
+			if (!window.length) continue;
+			const id = this.#callFacts(component)[0]?.id;
+			const label = typeof id === "string" ? id : `任务${this.children.indexOf(component) + 1}`;
+			statuses.push(`[${label}] ${window[0]}`);
+			for (const line of window.length > 1 ? (component.getCompactBashLogLines?.() ?? []) : []) {
+				logs.push({ row: truncateToWidth(theme.fg("muted", `[${label}] ${line.text}`), width), at: line.at });
+			}
 		}
+		if (statuses.length) rows.push(truncateToWidth(statuses.join(" · "), width));
+		rows.push(
+			...logs
+				.sort((a, b) => a.at - b.at)
+				.slice(-5)
+				.map(line => line.row),
+		);
 		return { rows, covered };
 	}
 
@@ -466,9 +551,11 @@ export class TranscriptContainer extends Container {
 		)
 			return blocks;
 		let remaining = 3;
-		for (let index = this.children.length - 1; index >= this.#compactTurnStart && remaining > 0; index--) {
+		this.#recordCompactCalls();
+		for (let index = this.children.length - 1; index >= 0 && remaining > 0; index--) {
 			const component = this.children[index]!;
 			if (!isCompactCall(component)) continue;
+			if (!this.#isCurrentCompactCall(component)) continue;
 			if (!component.isCompactActualFileWrite?.()) continue;
 			this.#compactAutoExpandedWrites.set(component, remaining === 3);
 			let original = this.#compactOriginalWriteBlocks.get(component);
@@ -577,6 +664,8 @@ export class TranscriptContainer extends Container {
 		this.#compactTurnActive = false;
 		this.#compactTurnStarted = false;
 		this.#compactTurnStart = 0;
+		this.#compactTurn = 0;
+		this.#compactCalls.clear();
 		this.#entries = [];
 		this.#frontier = 0;
 		this.#offered = undefined;

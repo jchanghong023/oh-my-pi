@@ -37,7 +37,7 @@ import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { compactToolPath } from "../chrome/tool-activity";
+import { type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -437,6 +437,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			if (entry.status === "error") count++;
 		}
 		return count;
+	}
+
+	getCompactToolCalls(): readonly CompactToolCall[] {
+		return [...this.#entries].map(([id, entry]) => ({ id, failed: entry.status === "error" }));
 	}
 
 	setCompactToolResultListener(listener: (() => void) | undefined): void {

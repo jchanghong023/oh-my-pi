@@ -1,6 +1,16 @@
 import { type Component, Container } from "../tui";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
+export interface CompactToolCall {
+	id: string | object;
+	failed: boolean;
+}
+
+export interface CompactLogLine {
+	text: string;
+	at: number;
+}
+
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
 	/** Whether this activity uses compact rows rather than the upstream detail renderer. */

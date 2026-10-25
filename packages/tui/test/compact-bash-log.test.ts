@@ -2,6 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
 import { parksAsBackground, ToolExecutionComponent, stopSharedSpinnerTicker } from "../src/chat/tool-execution";
 import { initTheme } from "../src/theme";
+import { TranscriptContainer } from "../src/chrome/transcript-container";
 
 let now = 1_000;
 const components: ToolExecutionComponent[] = [];
@@ -35,6 +36,32 @@ afterEach(() => {
 });
 
 describe("compact Bash live logs", () => {
+	it("shares one status and the latest five timestamped log lines across tasks", () => {
+		now = 1_000;
+		vi.spyOn(performance, "now").mockImplementation(() => now);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		transcript.noteCompactUserTurnStart();
+		transcript.setCompactTurnActive(true);
+		const first = bash().component;
+		const second = bash().component;
+		transcript.addChild(first);
+		transcript.addChild(second);
+		now = 2_000;
+		output(first, "a1\na2\n");
+		now = 3_000;
+		output(second, "b1\nb2\n");
+		now = 32_000;
+		output(first, "a1\na2\na3\n");
+		now = 33_000;
+		output(second, "b1\nb2\nb3\n");
+		const rows = (transcript.compactToolActivityBlock()?.render(160) ?? []).map(Bun.stripANSI);
+		// Two call previews, followed by the shared six-line log window.
+		expect(rows).toHaveLength(8);
+		expect(rows[2]).toContain("已运行");
+		expect(rows.slice(3)).toEqual(["[任务1] a2", "[任务2] b1", "[任务2] b2", "[任务1] a3", "[任务2] b3"]);
+		expect(rows.join("\n")).not.toContain("a1");
+	});
 	it("projects the original write card with only the latest call auto-expanded", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const edit = new ToolExecutionComponent("edit", { path: "file.ts" }, {}, undefined, {
