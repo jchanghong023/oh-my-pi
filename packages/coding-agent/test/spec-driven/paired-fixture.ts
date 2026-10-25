@@ -308,6 +308,7 @@ async function runPairedArm() {
 			const core = new SpecDrivenOrchestrator(native.ports, native.options);
 			state = await core.start(PAIRED_TASK, PAIRED_CHANGE);
 			measurement = native.measurement();
+			Object.assign(measurement, core.timing());
 		}
 		await fs.writeFile(
 			output,

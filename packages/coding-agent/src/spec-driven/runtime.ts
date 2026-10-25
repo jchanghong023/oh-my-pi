@@ -26,7 +26,7 @@ import { aggregateSpecEvidence, SpecEvidenceService } from "./evidence";
 import { cfgGoalEnabled, cfgGoalContinuationModes } from "../goals/settings";
 import { GoalHost, GOAL_CONTINUATION_MODE } from "../modes/zcode/hosts/goal-host";
 import { SpecGitService, type SpecNativePublication, type SpecNativeSource } from "./git";
-import type { SpecRunMeasurement, SpecRequestMeasurement } from "./metrics";
+import { specRequestCost, type SpecRunMeasurement, type SpecRequestMeasurement } from "./metrics";
 import { loadSpecDrivenSkill, runOpenSpec } from "./resources";
 import { SPEC_PLAN_SCHEMA, SPEC_REQUIREMENTS_SCHEMA, SPEC_REVIEW_SCHEMA } from "./schemas";
 import { createSpecActor, type SpecActor } from "./actors";
@@ -107,6 +107,7 @@ export async function createSpecDrivenRuntime(args: {
 	settings: Settings;
 	cwd: string;
 	onOutput?: (text: string) => Promise<void>;
+	onRequest?: () => void;
 }): Promise<SpecDrivenRuntime> {
 	const { session, settings } = args;
 	const asyncJobs = session.asyncJobManager;
@@ -227,9 +228,10 @@ export async function createSpecDrivenRuntime(args: {
 				outputTokens: observedNumber(usage?.output),
 				cacheReadTokens: observedNumber(usage?.cacheRead),
 				cacheWriteTokens: observedNumber(usage?.cacheWrite),
-				cost: null,
+				cost: specRequestCost(usage?.cost),
 				evidence: `Native child ${id} message_end; persisted transcript`,
 			});
+			args.onRequest?.();
 		});
 	};
 	const originals = (): SpecSourceMap | undefined => (sourceMap ? structuredClone(sourceMap) : undefined);
