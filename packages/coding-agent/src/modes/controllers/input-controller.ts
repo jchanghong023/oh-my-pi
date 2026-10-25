@@ -433,6 +433,14 @@ export class InputController {
 					this.ctx.resetDisplayAfterAppearanceRefresh();
 					return { consume: true };
 				}
+				if (
+					!this.ctx.ui.hasOverlay() &&
+					this.ctx.ui.getFocused() === this.ctx.editor &&
+					this.ctx.chatContainer.handleCompactScroll(data)
+				) {
+					this.ctx.ui.requestRender();
+					return { consume: true };
+				}
 				return undefined;
 			});
 		}
@@ -795,6 +803,7 @@ export class InputController {
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
+		if (event.wheel && this.ctx.chatContainer.scrollCompact(event.wheel * 3)) this.ctx.ui.requestRender();
 		if (event.motion) this.#updateHoverHighlight(event.row);
 		else if (event.leftClick) this.#focusClickedAgent(event.row);
 		return { consume: true };

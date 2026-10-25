@@ -298,6 +298,7 @@ export class EventController {
 	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
 	#toolArgsReveal: ToolArgsRevealController;
+	#prevHideThinking = false;
 	#handlers: AgentSessionEventHandlers;
 	#terminalProgressActive = false;
 	/**
@@ -334,8 +335,6 @@ export class EventController {
 	// keeps working — the WeakSet makes the coalesced path speak each delta exactly
 	// once instead of twice.
 	#vocalizedMessageUpdates = new WeakSet<object>();
-	/** Arrival-time preview updates must not be replayed by a delayed cumulative snapshot. */
-	#thinkingPreviewEvents = new WeakSet<object>();
 	/** Invalidates queued handlers when a focus/rebuild replaces their UI owner. */
 	#dispatchGeneration = 0;
 	readonly #messageUpdateCoalesceMs = /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "") ? 100 : 50;
@@ -362,11 +361,8 @@ export class EventController {
 		);
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => cfgDisplaySmoothStreaming.get(this.ctx.settings),
-			// Only compact/clean reasoning bypasses the upstream transcript reveal queue.
 			getHideThinkingBlock: () =>
-				chatTranscriptDisplayPreferences.hideToolActivity ||
-				chatTranscriptDisplayPreferences.compactToolActivity ||
-				this.ctx.effectiveHideThinkingBlock,
+				chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: component => this.ctx.ui.requestComponentRender(component),
 		});
@@ -398,12 +394,7 @@ export class EventController {
 			// rebuild and queue flush around compact(); handling these again duplicates UI.
 			manual_compaction_start: async () => {},
 			manual_compaction_end: async () => {},
-			// Interrupt call sites own immediate UI cleanup; agent_end and the existing
-			// compaction/retry end events still own settlement, not cancellation intent.
-			session_abort: async () => {
-				this.ctx.chatContainer.setCompactTurnActive(false);
-				this.ctx.clearThinkingPreview();
-			},
+			session_abort: async () => {},
 			auto_compaction_start: e => this.#handleAutoCompactionStart(e),
 			auto_compaction_end: e => this.#handleAutoCompactionEnd(e),
 			auto_retry_start: e => this.#handleAutoRetryStart(e),
@@ -437,12 +428,14 @@ export class EventController {
 			thinking_level_changed: async () => {
 				this.ctx.statusLine.invalidate();
 				this.ctx.updateEditorBorderColor();
-				const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
-				this.ctx.syncThinkingPreview(
-					streamMessage?.role === "assistant" ? streamMessage : undefined,
-					activeThinkingIndex,
-				);
-				this.ctx.ui.requestRender();
+				const hidden = chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock;
+				if (hidden === this.#prevHideThinking) {
+					this.ctx.ui.requestRender();
+					return;
+				}
+				this.#prevHideThinking = hidden;
+				this.refreshThinkingVisibility();
+				this.ctx.ui.requestRender(true);
 			},
 			goal_updated: async () => {},
 			// The TUI already refreshes the pending-messages bar at every queue
@@ -470,7 +463,6 @@ export class EventController {
 
 	dispose(): void {
 		++this.#dispatchGeneration;
-		this.ctx.clearThinkingPreview();
 		this.#detachToolApprovalPreviewWaiter?.();
 		this.#detachToolApprovalPreviewWaiter = undefined;
 		this.#clearApprovalPreviewGates();
@@ -627,11 +619,16 @@ export class EventController {
 		if (pending && !this.ctx.pendingTools.has(newId)) {
 			this.ctx.pendingTools.delete(oldId);
 			this.ctx.pendingTools.set(newId, pending);
+			if (pending instanceof ToolExecutionComponent) pending.updateToolCallId(newId);
 		}
 		const timeline = this.#toolTimelineComponents.get(oldId);
 		if (timeline && !this.#toolTimelineComponents.has(newId)) {
 			this.#toolTimelineComponents.delete(oldId);
 			this.#toolTimelineComponents.set(newId, timeline);
+			if (timeline instanceof ToolExecutionComponent) timeline.updateToolCallId(newId);
+			else if (timeline instanceof ReadToolGroupComponent && timeline !== pending) {
+				timeline.renameEntry(oldId, newId);
+			}
 		}
 		// A held stream preview is id-keyed and consumed under the card's final id
 		// (message_update creation / tool_execution_start); move it with the card
@@ -779,21 +776,23 @@ export class EventController {
 
 	/** Apply display changes to retained live segments as well as settled history. */
 	refreshThinkingVisibility(): void {
-		const external =
-			chatTranscriptDisplayPreferences.hideToolActivity || chatTranscriptDisplayPreferences.compactToolActivity;
+		const hidden = chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock;
 		const components = new Set(this.ctx.chatContainer.children);
 		if (this.ctx.streamingComponent) components.add(this.ctx.streamingComponent);
 		for (const component of components) {
 			if (!(component instanceof AssistantMessageComponent)) continue;
-			component.setExternalThinking(external);
-			component.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+			component.setHideThinkingBlock(hidden);
 			component.setProseOnlyThinking(this.ctx.proseOnlyThinking);
 			component.setExpandThinkingBlocks(this.ctx.expandThinkingBlocks);
 			component.invalidate();
 		}
 		this.#streamingReveal.resyncVisibility();
 		if (this.#lastIntent && this.ctx.viewSession.isStreaming) {
-			this.ctx.setWorkingMessage(external ? undefined : this.#lastIntent);
+			this.ctx.setWorkingMessage(
+				chatTranscriptDisplayPreferences.hideToolActivity || chatTranscriptDisplayPreferences.compactToolActivity
+					? undefined
+					: this.#lastIntent,
+			);
 		}
 	}
 
@@ -844,7 +843,6 @@ export class EventController {
 	 */
 	async dispatchSessionEvent(event: AgentSessionEvent): Promise<void> {
 		const generation = this.#dispatchGeneration;
-		this.#syncThinkingPreviewEvent(event);
 		if (event.type === "message_update") {
 			this.#enqueueMessageUpdate(event);
 			return;
@@ -982,7 +980,6 @@ export class EventController {
 	resetTranscriptAnchors(): void {
 		++this.#dispatchGeneration;
 		++this.#runEpoch;
-		this.ctx.clearThinkingPreview();
 		if (this.#messageUpdateTimer) {
 			clearTimeout(this.#messageUpdateTimer);
 			this.#messageUpdateTimer = undefined;
@@ -1052,50 +1049,8 @@ export class EventController {
 		}
 	}
 
-	/** Focus attach consumes arrival phases before awaiting synthetic transcript restoration. */
-	observeThinkingPreviewEvent(event: AgentSessionEvent): void {
-		this.#syncThinkingPreviewEvent(event);
-	}
-
-	/** Consume real phases before a coalescer or an awaited handler can supersede them. */
-	#syncThinkingPreviewEvent(event: AgentSessionEvent): void {
-		if (this.#thinkingPreviewEvents.has(event)) return;
-		this.#thinkingPreviewEvents.add(event);
-		if (
-			(event.type === "message_update" &&
-				event.message.role === "assistant" &&
-				event.assistantMessageEvent.type !== "start") ||
-			(event.type === "message_end" && event.message.role === "assistant") ||
-			event.type === "agent_end"
-		) {
-			// Notifications may lag a new stream or a synchronous abort. Only the
-			// runtime's current snapshot/phase owns the window, never event content
-			// or a timestamp shared by two messages.
-			const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
-			this.ctx.syncThinkingPreview(
-				streamMessage?.role === "assistant" ? streamMessage : undefined,
-				activeThinkingIndex,
-			);
-		} else if (
-			event.type === "agent_start" ||
-			event.type === "auto_retry_start" ||
-			event.type === "tool_execution_start" ||
-			(event.type === "message_start" && event.message.role === "assistant")
-		) {
-			if (this.ctx.viewSession.agent.state.activeThinkingIndex === undefined) {
-				// A new turn must not inherit the previous turn's stub; tool runs
-				// and retry backoff bridge on it until thinking resumes.
-				if (event.type === "agent_start") this.ctx.clearThinkingPreview();
-				else this.ctx.collapseThinkingPreview();
-			}
-		}
-	}
-
-	async handleEvent(event: AgentSessionEvent, options?: { replay?: boolean }): Promise<void> {
+	async handleEvent(event: AgentSessionEvent): Promise<void> {
 		const generation = this.#dispatchGeneration;
-		// Focus restores run bookkeeping, not a new turn boundary. Live phases
-		// received during persistence settlement already own the preview.
-		if (!options?.replay || event.type !== "agent_start") this.#syncThinkingPreviewEvent(event);
 		if (!this.ctx.isInitialized) {
 			await this.ctx.init();
 		}
@@ -1168,7 +1123,6 @@ export class EventController {
 
 	async #handleAgentStart(_event: Extract<AgentSessionEvent, { type: "agent_start" }>): Promise<void> {
 		this.#runEpoch += 1;
-		this.ctx.chatContainer.setCompactTurnActive(true);
 		// A run with no user prompt in it (synthetic-only: `/goal` kickoff,
 		// approved-plan execution) must not measure prompt→yield from an unrelated
 		// earlier prompt. Normal user turns reseed via message_start before
@@ -1533,11 +1487,6 @@ export class EventController {
 		}
 	}
 
-	/** A completion that outran its card must retain its only visible failure during rebuild. */
-	hasHeldToolFailure(toolCallId: string): boolean {
-		return this.#orphanedToolCompletions.get(toolCallId)?.isError === true;
-	}
-
 	async #handleNotice(event: Extract<AgentSessionEvent, { type: "notice" }>): Promise<void> {
 		const message = event.source ? `${event.source}: ${event.message}` : event.message;
 		if (event.level === "error") {
@@ -1591,7 +1540,9 @@ export class EventController {
 		if (this.ctx.streamingComponent && event.message.role === "assistant") {
 			const unlockedThinkingVisibility = this.ctx.noteDisplayableThinkingContent(event.message);
 			if (unlockedThinkingVisibility) {
-				this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+				this.ctx.streamingComponent.setHideThinkingBlock(
+					chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock,
+				);
 				this.#streamingReveal.resyncVisibility();
 			}
 			this.ctx.streamingMessage = event.message;
@@ -1795,7 +1746,9 @@ export class EventController {
 		const unlockedThinkingVisibility =
 			event.message.role === "assistant" && this.ctx.noteDisplayableThinkingContent(event.message);
 		if (unlockedThinkingVisibility && this.ctx.streamingComponent) {
-			this.ctx.streamingComponent.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+			this.ctx.streamingComponent.setHideThinkingBlock(
+				chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock,
+			);
 			this.#streamingReveal.resyncVisibility();
 		}
 		if (event.message.role === "assistant" && cfgSpeechEnabled.get(settings)) {
@@ -2323,7 +2276,7 @@ export class EventController {
 			const detail = textContent ? previewLine(sanitizeText(textContent), TRUNCATE_LENGTHS.LINE) : "";
 			this.ctx.showWarning(
 				`Todo update failed${detail ? `: ${detail}` : ". Progress may be stale until todo succeeds."}`,
-				{ hideWithToolActivity: true, toolFailure: { toolCallId: event.toolCallId } },
+				{ hideWithToolActivity: true },
 			);
 		}
 		// Plan approval rides a `write` to xd://propose: the dispatch metadata on
@@ -2389,7 +2342,6 @@ export class EventController {
 				this.ctx.statusContainer.disposeChildren();
 			}
 			this.#runActive = view.isStreaming;
-			this.ctx.chatContainer.setCompactTurnActive(view.isStreaming);
 			this.#syncComposerActivity();
 			return;
 		}
@@ -2490,7 +2442,6 @@ export class EventController {
 	}
 
 	async #finishAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
-		this.ctx.chatContainer.setCompactTurnActive(false);
 		this.#setTerminalProgress(false);
 		this.ctx.statusLine.markActivityEnd();
 		this.#lastAgentEndAt = Date.now();

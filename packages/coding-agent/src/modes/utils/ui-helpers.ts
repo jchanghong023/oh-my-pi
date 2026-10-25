@@ -14,8 +14,6 @@ import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
-import { withHidden } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -230,49 +228,6 @@ function imageLinksForMessage(
 	});
 }
 
-const HIDDEN_WARNING_ROWS: readonly string[] = [];
-
-/** The warning stays independent until its exact failed execution is represented in compact activity. */
-class ToolFailureWarning extends ToolActivityContainer {
-	readonly session: InteractiveModeContext["viewSession"];
-	#merged = false;
-	#nativeProjection: { source: NativeNode; merged: boolean; result: NativeNode } | undefined;
-
-	constructor(
-		content: Component[],
-		private ctx: InteractiveModeContext,
-		readonly toolCallId: string,
-	) {
-		super(content);
-		this.session = ctx.viewSession;
-	}
-
-	/** The transcript reconciles this before each paint; a committed warning is never rewritten. */
-	reconcileCompactToolFailure(covered: ReadonlySet<string>): boolean {
-		const merged =
-			chatTranscriptDisplayPreferences.compactToolActivity &&
-			this.session === this.ctx.viewSession &&
-			covered.has(this.toolCallId);
-		if (merged === this.#merged) return false;
-		this.#merged = merged;
-		this.invalidate();
-		return true;
-	}
-
-	override render(width: number): readonly string[] {
-		return this.#merged ? HIDDEN_WARNING_ROWS : super.render(width);
-	}
-
-	override describe(): NativeNode {
-		const source = super.describe();
-		const cached = this.#nativeProjection;
-		if (cached?.source === source && cached.merged === this.#merged) return cached.result;
-		const result = withHidden(source, this.#merged);
-		this.#nativeProjection = { source, merged: this.#merged, result };
-		return result;
-	}
-}
-
 export class UiHelpers {
 	/**
 	 * Tail of the transcript-replay chain. Replays swap `ctx.chatContainer` and the
@@ -295,25 +250,6 @@ export class UiHelpers {
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
 			keepInFlightToolCalls,
 		});
-	}
-
-	/** Compact replay alone retains same-session failures still in history or waiting for their late card. */
-	collectToolFailureWarnings(sessionContext: SessionContext): Component[] {
-		if (!chatTranscriptDisplayPreferences.compactToolActivity || chatTranscriptDisplayPreferences.hideToolActivity) {
-			return [];
-		}
-		const warnings = this.ctx.chatContainer.children.filter(
-			(child): child is ToolFailureWarning =>
-				child instanceof ToolFailureWarning && child.session === this.ctx.viewSession,
-		);
-		if (warnings.length === 0) return warnings;
-		const failedIds = new Set<string>();
-		for (const message of sessionContext.messages) {
-			if (message.role === "toolResult" && message.isError) failedIds.add(message.toolCallId);
-		}
-		return warnings.filter(
-			child => failedIds.has(child.toolCallId) || this.ctx.eventController?.hasHeldToolFailure(child.toolCallId),
-		);
 	}
 
 	/**
@@ -348,12 +284,6 @@ export class UiHelpers {
 	}
 
 	addMessageToChat(message: AgentMessage, options?: AddMessageOptions): Component[] {
-		if (
-			(message.role === "user" && !message.synthetic && message.attribution !== "agent" && !message.liveSteered) ||
-			(message.role === "custom" && isUserTurnInitiator(message))
-		) {
-			this.ctx.chatContainer.noteCompactUserTurnStart();
-		}
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);
@@ -1237,19 +1167,17 @@ export class UiHelpers {
 			const replayedChatChildren = [...stagedChatContainer.children];
 			stagedChatContainer.clear();
 			this.ctx.chatContainer = visibleChatContainer;
-			const failureWarnings = preservedChatChildren ? [] : this.collectToolFailureWarnings(context);
 			if (preservedChatChildren) {
 				visibleChatContainer.clear();
 			} else {
 				for (const child of visibleChatContainer.children) {
-					if (!failureWarnings.includes(child)) child.dispose?.();
+					child.dispose?.();
 				}
 				visibleChatContainer.clear();
 			}
 			for (const child of replayedChatChildren) {
 				visibleChatContainer.addChild(child);
 			}
-			for (const warning of failureWarnings) visibleChatContainer.addChild(warning);
 			if (preservedChatChildren) {
 				for (const child of preservedChatChildren) {
 					visibleChatContainer.addChild(child);
@@ -1305,14 +1233,7 @@ export class UiHelpers {
 	showWarning(warningMessage: string, options?: Parameters<InteractiveModeContext["showWarning"]>[1]): void {
 		const text = new Text(`Warning: ${warningMessage}`, 1, 0).setStyleFn(t => theme.fg("warning", t));
 		const content = [new Spacer(1), text];
-		const toolCallId = options?.toolFailure?.toolCallId;
-		this.ctx.present(
-			toolCallId
-				? new ToolFailureWarning(content, this.ctx, toolCallId)
-				: options?.hideWithToolActivity
-					? new ToolActivityContainer(content)
-					: content,
-		);
+		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(content) : content);
 	}
 
 	showNewVersionNotification(newVersion: string): void {

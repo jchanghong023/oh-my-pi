@@ -189,12 +189,6 @@ export interface InteractiveModeContext {
 	setClickHoverId(id: string | undefined): void;
 	/** Clear loader, transient HUD/pending containers, streaming state, and pending tools. */
 	clearTransientSessionUi(): void;
-	/** Synchronize the editor-anchored preview from a real streaming snapshot and active thinking block. */
-	syncThinkingPreview(message?: AssistantMessage, activeThinkingIndex?: number): void;
-	/** Clear both the preview and its retained live snapshot. */
-	clearThinkingPreview(): void;
-	/** Collapse the finished preview to its single-row stub, keeping the component content. */
-	collapseThinkingPreview(): void;
 	settings: Settings;
 	keybindings: KeybindingsManager;
 	agent: AgentSession["agent"];
@@ -364,8 +358,6 @@ export interface InteractiveModeContext {
 		message: string,
 		options?: {
 			hideWithToolActivity?: boolean;
-			/** Presentation-only identity of the failed execution, never a text/name heuristic. */
-			toolFailure?: { toolCallId: string };
 		},
 	): void;
 	showNewVersionNotification(newVersion: string): void;

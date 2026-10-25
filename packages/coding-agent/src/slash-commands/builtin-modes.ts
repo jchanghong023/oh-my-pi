@@ -342,8 +342,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: [
-			{ name: "clean", description: "隐藏实时思考窗口和工具活动" },
-			{ name: "compact", description: "工具与思考各两行，活动回合最多显示三个编辑 diff，长用户消息折叠到十行" },
+			{ name: "clean", description: "隐藏思考与工具活动" },
+			{ name: "compact", description: "连续工具段末两条预览，写入段末三次修改；思考两行，用户消息超六行显示前五行与折叠提示" },
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],
 		handleTui: async (command, runtime) => {
@@ -386,7 +386,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				const tools = cfgDisplayHideToolActivity.get(settings)
 					? "隐藏"
 					: cfgDisplayCompactToolActivity.get(settings)
-						? "单行摘要（文件修改保留预览与 diff）"
+						? "连续工具段末两条预览（写入段保留末三次修改）"
 						: "详细";
 				runtime.ctx.showWarning(
 					`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides}`,

@@ -79,6 +79,19 @@ describe("InteractiveMode loop auto-submit", () => {
 		resetSettingsForTest();
 	});
 
+	it("requires leaving an armed or paused Loop before entering dev without changing the loop", async () => {
+		await mode.handleLoopCommand("3");
+		mode.setLoopPrompt("repeat this");
+		expect(() => mode.assertCanActivateMode("dev")).toThrow("Loop");
+		expect(mode.loopPrompt).toBe("repeat this");
+		expect(mode.loopModeEnabled).toBe(true);
+		mode.pauseLoop();
+		expect(() => mode.assertCanActivateMode("dev")).toThrow("Loop");
+		expect(mode.loopModePaused).toBe(true);
+		mode.disableLoopMode();
+		expect(() => mode.assertCanActivateMode("dev")).not.toThrow();
+	});
+
 	it("does not resolve the next loop prompt while compaction is running", async () => {
 		vi.useFakeTimers();
 		let compacting = true;
