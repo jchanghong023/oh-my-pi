@@ -19,101 +19,27 @@ import { formatArtifactErrorNotice, type OutputMeta } from "../tools/output-meta
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
-import {
-	type CompactBackgroundCounts,
-	type CompactBackgroundJob,
-	type TranscriptBlock,
-} from "../chrome/transcript-container";
+import { type TranscriptBlock } from "../chrome/transcript-container";
 import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
 import { theme } from "../theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
-/** Background completion rows retain their originals while compact mode projects a segment-local count. */
+/** Tool completions stay out of compact history; independent diagnostics remain visible. */
 class AsyncResultBlock extends ToolActivityContainer {
-	readonly #compactRows: readonly TranscriptStatusRow[];
-	readonly #jobs: readonly (CompactBackgroundJob | undefined)[];
 	readonly #compactOverride: boolean | undefined;
-	#counts: readonly CompactBackgroundCounts[];
-	#compactBlock: TranscriptStatusBlock;
+	readonly #compactBlock: TranscriptStatusBlock;
 	#visible = true;
 
-	constructor(
-		original: TranscriptStatusBlock,
-		rows: readonly TranscriptStatusRow[],
-		jobs: readonly (CompactBackgroundJob | undefined)[],
-		compactOverride?: boolean,
-	) {
+	constructor(original: TranscriptStatusBlock, warnings: TranscriptStatusRow[], compactOverride?: boolean) {
 		super(original);
-		this.#compactRows = rows;
-		this.#jobs = jobs;
 		this.#compactOverride = compactOverride;
-		this.#counts = [];
-		this.#compactBlock = new TranscriptStatusBlock([]);
-		const counts = jobs.map(() => ({ completed: 0, failed: 0 }));
-		const identities = new Set<string>();
-		let anchor = -1;
-		for (let index = 0; index < jobs.length; index++) {
-			const job = jobs[index];
-			if (job === undefined) {
-				anchor = -1;
-				identities.clear();
-			} else {
-				if (anchor < 0) anchor = index;
-				if (!identities.has(job.id)) {
-					identities.add(job.id);
-					if (job.failed) counts[anchor]!.failed++;
-					else counts[anchor]!.completed++;
-				}
-			}
-		}
-		this.setCompactBackgroundCounts(counts);
+		this.#compactBlock = new TranscriptStatusBlock(warnings);
 	}
 
 	isCompactToolActivity(): boolean {
 		return this.#compactOverride ?? displayPreferences.compactToolActivity;
-	}
-
-	/** Undefined slots are independent visible boundaries, not ordinary terminal notifications. */
-	getCompactBackgroundJobs(): readonly (CompactBackgroundJob | undefined)[] {
-		return this.#jobs;
-	}
-
-	setCompactBackgroundCounts(counts: readonly CompactBackgroundCounts[]): boolean {
-		if (
-			counts.every(
-				(count, index) =>
-					count.completed === this.#counts[index]?.completed && count.failed === this.#counts[index]?.failed,
-			)
-		) {
-			return false;
-		}
-		this.#counts = counts;
-		const rows: TranscriptStatusRow[] = [];
-		for (let index = 0; index < this.#compactRows.length; index++) {
-			const count = counts[index]!;
-			if (this.#jobs[index] === undefined) {
-				rows.push(this.#compactRows[index]!);
-			} else if (count.completed > 0 || count.failed > 0) {
-				rows.push({
-					parts: [
-						count.completed > 0
-							? { text: `${theme.status.done} 后台任务已完成 ${count.completed} 项`, color: "success" }
-							: undefined,
-						count.failed > 0
-							? {
-									text: `${count.completed > 0 ? "· " : "… 后台任务"}失败 ${count.failed} 项`,
-									color: "dim",
-								}
-							: undefined,
-					],
-				});
-			}
-		}
-		this.#compactBlock = new TranscriptStatusBlock(rows);
-		this.invalidate();
-		return true;
 	}
 
 	override setToolActivityVisible(visible: boolean): void {
@@ -135,10 +61,7 @@ class AsyncResultBlock extends ToolActivityContainer {
 	}
 }
 
-/**
- * Project actual async delivery identities/states, without changing the persisted
- * message or the original clean/detailed presentation.
- */
+/** Preserve detailed delivery receipts while compact history keeps only independent diagnostics. */
 export function buildAsyncResultBlock(
 	message: CustomOrHookMessage,
 	compactToolActivity?: boolean,
@@ -156,11 +79,9 @@ export function buildAsyncResultBlock(
 	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
 	const compactRows: TranscriptStatusRow[] = [];
-	const jobSlots: (CompactBackgroundJob | undefined)[] = [];
 	const addWarning = (row: TranscriptStatusRow, original = true) => {
 		if (original) rows.push(row);
 		compactRows.push(row);
-		jobSlots.push(undefined);
 	};
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
@@ -175,26 +96,6 @@ export function buildAsyncResultBlock(
 			],
 		};
 		rows.push(original);
-		const identified =
-			typeof job.jobId === "string" &&
-			job.jobId.trim().length > 0 &&
-			(job.type === "task" || job.type === "bash" || job.type === "eval");
-		const completed = identified && job.status === "completed";
-		const status = completed
-			? { text: `${theme.status.done} Background job completed`, color: "success" as const }
-			: job.status === "failed"
-				? { text: `${theme.status.error} Background job failed`, color: "error" as const }
-				: job.status === "cancelled"
-					? { text: `${theme.status.warning} Background job cancelled`, color: "warning" as const }
-					: { text: "Background job status unknown", color: "warning" as const };
-		compactRows.push({ parts: [status, ...original.parts.slice(1)] });
-		jobSlots.push(
-			identified &&
-				(job.type === "task" || job.type === "bash") &&
-				(job.status === "completed" || job.status === "failed")
-				? { id: jobId, failed: job.status === "failed" }
-				: undefined,
-		);
 		if (job.meta?.artifactError) {
 			addWarning({ parts: [{ text: formatArtifactErrorNotice(job.meta.artifactError), color: "warning" }] });
 		}
@@ -215,15 +116,17 @@ export function buildAsyncResultBlock(
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
 		addWarning({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, jobSlots, compactToolActivity);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, compactToolActivity);
 }
 
 /**
  * Render a `launch-completion` custom message (terminal supervised-process
- * exits from the launch broker) as a transcript block of one compact
- * "Supervised process ..." row per daemon, matching background-job rows.
+ * exits from the launch broker). Receipt rows belong to detailed mode only.
  */
-export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolActivityContainer {
+export function buildLaunchCompletionBlock(
+	message: CustomOrHookMessage,
+	compactToolActivity?: boolean,
+): ToolActivityContainer {
 	const details = (message as CustomMessage<{ daemons?: DaemonSnapshot[] }>).details;
 	const rows: TranscriptStatusRow[] = [];
 	const daemons = details?.daemons ?? [];
@@ -247,7 +150,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			],
 		});
 	}
-	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), [], compactToolActivity);
 }
 
 /**

@@ -3666,6 +3666,9 @@ export class Markdown implements Component {
 			const tailIndex = tokens.findLastIndex(token => token.type !== "space");
 			for (let index = 0; index < tokens.length; index++) {
 				const token = tokens[index]!;
+				// An unfinished environment can absorb preceding list/paragraph
+				// text once its closer arrives, just as in the lexer checkpoint.
+				if (token.type !== "math" && token.type !== "code" && BARE_ENV_BEGIN.test(token.raw)) break;
 				let mutableFrom = token.raw.length;
 				if (index === tailIndex && token.type === "paragraph") {
 					const raw = token.raw;

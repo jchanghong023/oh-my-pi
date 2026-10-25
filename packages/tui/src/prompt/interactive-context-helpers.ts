@@ -5,6 +5,7 @@ import { EMPTY_LINK_TARGETS } from "../render/render-utils";
 import type { ImageBudget } from "../components/image";
 import type { AssistantThinkingRenderer } from "../chat/extension-types";
 import { AssistantMessageComponent } from "../chat/assistant-message";
+import { chatTranscriptDisplayPreferences } from "../chat/display-preferences";
 /** Session display capabilities supplied unchanged by the interactive host. */
 export interface AssistantMessageSession {
 	readonly model?: Model;
@@ -107,8 +108,8 @@ export function assistantMessageLinkTargets(
 }
 
 /**
- * Construct an {@link AssistantMessageComponent} with main-chat external
- * thinking presentation and the live context's image settings. `message` is
+ * Construct an {@link AssistantMessageComponent} with the current main-chat
+ * thinking presentation and image settings. `message` is
  * omitted for streaming placeholders and supplied for persisted turns.
  */
 export function createAssistantMessageComponent(
@@ -125,7 +126,7 @@ export function createAssistantMessageComponent(
 		ctx.proseOnlyThinking,
 		linkTargets,
 		ctx.expandThinkingBlocks,
-		true,
+		ctx.hideToolActivity || chatTranscriptDisplayPreferences.compactToolActivity,
 	);
 	component.setImagesVisible(ctx.assistantImagesVisible);
 	component.setTableChartsVisible(ctx.tableChartsVisible);

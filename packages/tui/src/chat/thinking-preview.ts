@@ -182,7 +182,7 @@ export class ThinkingPreviewComponent implements Component {
 		if (this.#painted === undefined || themeEpoch !== this.#themeEpoch) {
 			const latest = this.#rows.findLastIndex(row => /\S/.test(row));
 			const painted = this.#rows.map((row, index) =>
-				theme.fg(!this.#collapsed && index === latest ? "text" : "dim", row),
+				theme.fg(!this.#collapsed && index === latest ? "thinkingText" : "dim", row),
 			);
 			if (painted.length === 1) painted.push("");
 			this.#painted = painted;

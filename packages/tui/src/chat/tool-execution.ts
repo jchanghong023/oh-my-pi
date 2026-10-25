@@ -7,7 +7,7 @@ import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
-import { truncateToWidth } from "../utils";
+import { truncateToWidth, wrapTextWithAnsi } from "../utils";
 import { compactToolPath } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
@@ -22,7 +22,7 @@ import {
 } from "../tools/index";
 import { describeDefaultToolExecution, formatDefaultToolExecution } from "../tools/default-renderer";
 import { INTENT_FIELD, type TspCardStatus, type TspPreview, type TspText, type TspTone } from "@oh-my-pi/pi-wire";
-import { card, col, EMPTY_NODE, node, span, text, withHidden } from "../native/describe";
+import { card, code, col, EMPTY_NODE, node, span, text, withHidden } from "../native/describe";
 import {
 	type DescribeContext,
 	type NativeChild,
@@ -31,7 +31,7 @@ import {
 	rootToggleExpanded,
 } from "../native/node";
 import { plainText } from "../native/spans";
-import { diagnosticsSection, displayPath, fileDiffSection, toolHead } from "../tools/native-view";
+import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
@@ -52,7 +52,7 @@ import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, Wid
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { FenceFigure } from "./fence-figure";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
-import { nativeDiff, renderDiff } from "../chrome/diff";
+import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 import { parseXdUrl } from "../tools/xd-url";
@@ -63,7 +63,6 @@ export function toolRenderName(wireName: string, tool: AgentTool | undefined): s
 	return tool?.name ?? wireName;
 }
 type DisplaceableToolName = "wait" | "todo";
-const EMPTY_DIFF_BLOCKS: readonly Component[] = [];
 
 function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 	return (
@@ -71,6 +70,22 @@ function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 		details !== null &&
 		"phases" in details &&
 		Array.isArray((details as { phases?: unknown }).phases)
+	);
+}
+
+function hasAppliedFileChange(details: unknown): boolean {
+	if (!isRecord(details) || details.applied === false) return false;
+	if (Array.isArray(details.perFileResults)) {
+		return details.perFileResults.some(file => isRecord(file) && file.isError !== true && hasAppliedFileChange(file));
+	}
+	return (
+		(typeof details.diff === "string" && details.diff.length > 0) ||
+		details.op === "create" ||
+		details.op === "delete" ||
+		(typeof details.move === "string" && details.move.length > 0) ||
+		(typeof details.oldText === "string" &&
+			typeof details.newText === "string" &&
+			details.oldText !== details.newText)
 	);
 }
 
@@ -260,7 +275,11 @@ const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", ba
  */
 export function parksAsBackground(toolName: string, details: unknown): boolean {
 	const mode = JOB_CARD_TOOLS[toolName];
-	if (mode === undefined || (mode === "native" && !isNativeRendering())) return false;
+	if (
+		mode === undefined ||
+		(mode === "native" && !isNativeRendering() && !(toolName === "bash" && displayPreferences.compactToolActivity))
+	)
+		return false;
 	return asyncJobState(details) === "running";
 }
 
@@ -313,17 +332,10 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
  * each independently waking the render scheduler (issue #8731). */
 const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
 
-/**
- * Compact mode keeps a settled call to one line, but a running call that
- * streams raw output is otherwise opaque. Show its last few output lines while
- * it runs; the tail disappears when the call settles (the full output stays
- * available through expansion / detailed mode).
- */
-const COMPACT_LIVE_TAIL_LINES = 3;
-/** Only tools whose partial updates carry raw output; other progress text is not a log. */
-const COMPACT_LIVE_TAIL_TOOLS: Readonly<Record<string, true>> = { bash: true };
-/** Bound the text sliced per paint; the tail only needs the end of the stream. */
-const COMPACT_LIVE_TAIL_SLICE = 8192;
+const COMPACT_BASH_LOG_DELAY_MS = 30_000;
+const COMPACT_BASH_LOG_LINES = 3;
+const COMPACT_BASH_LOG_SLICE = 8_192;
+
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
 
 /** Arm the shared spinner ticker if it is not already running. */
@@ -398,9 +410,9 @@ export class ToolExecutionComponent extends Container {
 	#toolActivityVisible = true;
 	#compactToolResultListener: (() => void) | undefined;
 	#compactIntent: string | undefined;
-	#compactLiveTailCache?: { version: number; lines: readonly string[] };
 	#showImages: boolean;
 	readonly #compactToolActivityOverride: boolean | undefined;
+	#forceOriginalFileWrite = false;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
@@ -450,7 +462,11 @@ export class ToolExecutionComponent extends Container {
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
 	#previewReady?: PromiseWithResolvers<void>;
-	#compactDiffCache: { version: string; blocks: readonly Component[] } | undefined;
+	#compactBashLogCache: { version: number; lines: readonly string[] } | undefined;
+	#compactBashOutputText = "";
+	#compactBashLastOutputAtNow: number | undefined;
+	#compactBashBeforeResult: { text: string; at: number | undefined } | undefined;
+	#compactNeedsUserInput: string | undefined;
 	// Payload keys whose Kitty PNG conversion is already awaited; the converted
 	// images themselves live in the process-wide cache behind
 	// `convertImageToPngShared`, so rebuilt components reuse them.
@@ -668,6 +684,23 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
+		if (this.#toolName === "bash") {
+			this.#compactBashBeforeResult = { text: this.#compactBashOutputText, at: this.#compactBashLastOutputAtNow };
+			const output = result.content
+				.filter(block => block.type === "text")
+				.map(block => block.text ?? "")
+				.join("\n");
+			// The foreground-to-background receipt appends a job notice to the preview.
+			// Keep following the last real progress frame until the job sends another.
+			if (
+				!(asyncJobState(result.details) === "running" && !isPartial) &&
+				output &&
+				output !== this.#compactBashOutputText
+			) {
+				this.#compactBashOutputText = output;
+				this.#compactBashLastOutputAtNow = performance.now();
+			}
+		}
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
@@ -821,13 +854,16 @@ export class ToolExecutionComponent extends Container {
 	 * quiet command's elapsed time advances without the 30fps spinner ticker.
 	 */
 	#updateElapsedTicker(isBackgroundAsyncRunning: boolean): void {
+		const compactBashRunning =
+			this.#compactToolActivity && this.#toolName === "bash" && this.#executionStarted && this.#isRunning();
 		const needsTicker =
-			this.#renderer?.tickElapsed === true &&
-			this.#executionStarted &&
-			this.#isPartial &&
-			!this.#sealed &&
-			!isBackgroundAsyncRunning &&
-			!isNativeRendering();
+			compactBashRunning ||
+			(this.#renderer?.tickElapsed === true &&
+				this.#executionStarted &&
+				this.#isPartial &&
+				!this.#sealed &&
+				!isBackgroundAsyncRunning &&
+				!isNativeRendering());
 		if (needsTicker && !this.#elapsedTicker) {
 			this.#elapsedTicker = setInterval(() => this.#ui.requestComponentRender(this), 1000);
 		} else if (!needsTicker) {
@@ -916,56 +952,155 @@ export class ToolExecutionComponent extends Container {
 		return this.#compactToolActivityOverride !== false;
 	}
 
+	/** UI-only marker from the existing blocked prompt decision. */
+	setCompactNeedsUserInput(reason?: string): void {
+		if (this.#compactNeedsUserInput === reason) return;
+		this.#compactNeedsUserInput = reason;
+		this.#blockVersion++;
+		this.#ui.requestComponentRender(this);
+	}
+
+	/** A queued call has not begun; parked background Bash remains genuinely running. */
+	isCompactToolRunning(): boolean {
+		return this.#executionStarted && this.#isRunning() && this.#compactNeedsUserInput === undefined;
+	}
+
+	renderCompactRunningActivityRows(width: number): readonly string[] {
+		return this.isCompactToolRunning() ? this.renderCompactActivityRows(width) : [];
+	}
+
+	/** Successful write/edit executions retain their upstream card in the compact live run. */
+	isCompactActualFileWrite(): boolean {
+		if (this.#result === undefined || this.#isPartial || this.#result.isError || this.#compactOutcome() === "待确认")
+			return false;
+		if (this.#toolName === "edit" || this.#toolName === "apply_patch")
+			return hasAppliedFileChange(this.#result.details);
+		if (this.#toolName !== "write") return false;
+		const details = this.#result.details;
+		if (isRecord(details) && isRecord(details.xdev)) {
+			if (details.xdev.mode !== "execute") return false;
+			if (details.xdev.tool === "write") return true;
+			return (
+				(details.xdev.tool === "edit" || details.xdev.tool === "apply_patch") &&
+				hasAppliedFileChange(details.xdev.inner)
+			);
+		}
+		const args = this.#args;
+		const path = isRecord(args) ? (args.path ?? args.file_path) : undefined;
+		return typeof path !== "string" || !/^[a-z][a-z0-9+.-]*:\/\//i.test(unwrapHashlineHeaderPath(path));
+	}
+
+	/** Explicit expansion shows the complete original Bash source, including later lines. */
+	compactBashCommandRows(width: number): readonly string[] {
+		if (!this.#compactToolActivity || this.#toolName !== "bash" || !this.#expanded) return [];
+		const args = this.#args;
+		const command = isRecord(args) && typeof args.command === "string" ? args.command : "";
+		return command ? wrapTextWithAnsi(theme.fg("muted", `$ ${sanitizeText(command)}`), Math.max(1, width)) : [];
+	}
+
+	/** Render the existing detailed card without replacing its original component state. */
+	renderOriginalFileWriteRows(width: number): readonly string[] {
+		this.#forceOriginalFileWrite = true;
+		try {
+			return this.render(width);
+		} finally {
+			this.#forceOriginalFileWrite = false;
+		}
+	}
+
+	/** Keep auto expansion local to the compact projection; global/user expansion still wins. */
+	renderCompactFileWriteRows(width: number, autoExpanded: boolean): readonly string[] {
+		const expanded = this.#expanded;
+		this.#expanded ||= autoExpanded;
+		try {
+			return this.renderOriginalFileWriteRows(width);
+		} finally {
+			this.#expanded = expanded;
+		}
+	}
+
+	/** Native counterpart of the existing detailed card. */
+	describeOriginalFileWrite(cx?: DescribeContext): NativeNode {
+		this.#forceOriginalFileWrite = true;
+		try {
+			return this.describe(cx);
+		} finally {
+			this.#forceOriginalFileWrite = false;
+		}
+	}
+
+	describeCompactFileWrite(cx: DescribeContext | undefined, autoExpanded: boolean): NativeNode {
+		const expanded = this.#expanded;
+		this.#expanded ||= autoExpanded;
+		try {
+			return this.describeOriginalFileWrite(cx);
+		} finally {
+			this.#expanded = expanded;
+		}
+	}
+
+	/** Screen lines for a long-running Bash call; the model-facing result stays unchanged. */
+	compactBashLogRows(width: number): readonly string[] {
+		if (!this.#compactToolActivity || this.#toolName !== "bash") return [];
+		if (this.#compactNeedsUserInput !== undefined) {
+			return [
+				truncateToWidth(theme.fg("warning", `等待用户输入：${sanitizeText(this.#compactNeedsUserInput)}`), width),
+			];
+		}
+		if (this.#result?.isError && !this.#isPartial) {
+			const lines = this.#compactBashOutputText
+				.split("\n")
+				.map(line => line.trimEnd())
+				.filter(Boolean);
+			return [truncateToWidth(theme.fg("error", lines.at(-1) || "命令失败（工具未提供错误详情）"), width)];
+		}
+		if (!this.#isRunning() || this.#executionStartedAtNow === undefined) return [];
+		const elapsed = performance.now() - this.#executionStartedAtNow;
+		if (elapsed <= COMPACT_BASH_LOG_DELAY_MS) return [];
+		const cached = this.#compactBashLogCache;
+		if (cached?.version !== this.#resultVersion) {
+			const lines = sanitizeText(this.#compactBashOutputText.slice(-COMPACT_BASH_LOG_SLICE))
+				.split("\n")
+				.map(line => replaceTabs(line).trimEnd())
+				.filter(line => line.trim().length > 0)
+				.slice(-COMPACT_BASH_LOG_LINES);
+			this.#compactBashLogCache = { version: this.#resultVersion, lines };
+		}
+		const lastOutputAt = this.#compactBashLastOutputAtNow;
+		const activity =
+			lastOutputAt === undefined
+				? "尚无输出"
+				: `距上次输出 ${Math.floor((performance.now() - lastOutputAt) / 1000)}s`;
+		const status = truncateToWidth(theme.fg("muted", `已运行 ${Math.floor(elapsed / 1000)}s · ${activity}`), width);
+		return [
+			status,
+			...(this.#compactBashLogCache?.lines ?? []).map(line =>
+				truncateToWidth(`  ${theme.fg("muted", line)}`, width),
+			),
+		];
+	}
+
+	/** Native rows share the same delayed tail selection as ANSI. */
+	compactBashLogNodes(width: number): readonly NativeNode[] {
+		const tone =
+			this.#compactNeedsUserInput !== undefined
+				? "warning"
+				: this.#result?.isError && !this.#isPartial
+					? "error"
+					: "dim";
+		return this.compactBashLogRows(width).map(line =>
+			text([span(Bun.stripANSI(line), tone)], { lines: 1, wrap: "none", truncate: "end" }),
+		);
+	}
+
 	/** One actual call, shared by the live ANSI/native activity dock. */
 	renderCompactActivityRows(width: number): readonly string[] {
+		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
 		return this.#renderCompact(width, true);
-	}
-	/** Live shell output follows the summary, so a truncated dock keeps the head. */
-	compactActivityKeepsHead(): boolean {
-		return this.#compactLiveTail().length > 0;
 	}
 	/** Running background jobs remain visible when no model turn owns the dock. */
 	isCompactBackgroundActive(): boolean {
 		return this.#parkedBackground && !this.#sealed && asyncJobState(this.#result?.details) === "running";
-	}
-
-	/** Diff-only projection: parameters, ordinary output and intent stay out of prose. */
-	compactEditDiffBlocks(): readonly Component[] {
-		if (!isEditLikeToolName(this.#toolName) || this.#compactToolActivityOverride === false) return EMPTY_DIFF_BLOCKS;
-		const version = `${this.#resultVersion}|${this.#displayInputVersion}|${getThemeEpoch()}`;
-		if (this.#compactDiffCache?.version === version) return this.#compactDiffCache.blocks;
-		const details = this.#result?.details;
-		const files: PerFileDiffPreview[] = [];
-		if (isRecord(details) && Array.isArray(details.perFileResults)) {
-			for (const file of details.perFileResults) {
-				if (isRecord(file) && typeof file.diff === "string" && file.diff.trim()) {
-					files.push({ path: typeof file.path === "string" ? file.path : "", diff: file.diff });
-				}
-			}
-		} else if (isRecord(details) && typeof details.diff === "string" && details.diff.trim()) {
-			files.push({ path: typeof details.path === "string" ? details.path : "", diff: details.diff });
-		} else if (!this.#result) {
-			for (const preview of this.#editDiffPreview ?? []) {
-				if (preview.diff?.trim()) files.push(preview);
-			}
-		}
-		const blocks = files.slice(-3).map(file => {
-			const view = new Text(
-				`${file.path ? `${theme.fg("dim", compactToolPath(file.path))}\n` : ""}${renderDiff(file.diff!, { filePath: file.path })}`,
-				0,
-				0,
-			);
-			return {
-				render: (width: number) => view.render(width),
-				describe: () =>
-					file.path
-						? fileDiffSection({ path: file.path }, [nativeDiff(file.diff!)], { role: "omp.active-edit-diff" })
-						: col([nativeDiff(file.diff!)], { role: "omp.active-edit-diff" }),
-				isTranscriptBlockFinalized: () => false,
-			};
-		});
-		this.#compactDiffCache = { version, blocks };
-		return blocks;
 	}
 
 	getCompactToolCount(): number {
@@ -1009,7 +1144,9 @@ export class ToolExecutionComponent extends Container {
 
 	get #compactToolActivity(): boolean {
 		return (
-			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) && this.isCompactToolActivity()
+			!this.#forceOriginalFileWrite &&
+			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) &&
+			this.isCompactToolActivity()
 		);
 	}
 
@@ -1018,6 +1155,12 @@ export class ToolExecutionComponent extends Container {
 	}
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
 	parkAsBackground(): void {
+		if (this.#toolName === "bash" && this.#compactBashBeforeResult) {
+			// The start receipt carries a job notice, not fresh process output.
+			this.#compactBashOutputText = this.#compactBashBeforeResult.text;
+			this.#compactBashLastOutputAtNow = this.#compactBashBeforeResult.at;
+			this.#compactBashLogCache = undefined;
+		}
 		this.#parkedBackground = true;
 	}
 
@@ -1184,33 +1327,51 @@ export class ToolExecutionComponent extends Container {
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const summary = this.#compactActivity();
 		const outcome = this.#compactOutcome();
-		const title = `${summary.label}${outcome ? ` · ${outcome}` : ""}`;
+		const title = `${this.#compactNeedsUserInput === undefined ? "" : "等待用户输入 · "}${summary.label}${outcome ? ` · ${outcome}` : ""}`;
 		const status = outcome === "待确认" ? "pending" : this.#nativeStatus();
 		const ms = this.#elapsedMs(this.#nativeStatus());
 		const live = this.#isRunning();
+		const expandedCommand =
+			this.#toolName === "bash" && this.#expanded && isRecord(this.#args) && typeof this.#args.command === "string"
+				? sanitizeText(this.#args.command)
+				: undefined;
 		const call = dataFirst
-			? node("tool", {
-					role: `omp.tool.${this.#toolName}`,
-					key: this.#toolCallId,
-					name: this.#toolName,
-					title: truncateToWidth(title, Math.max(1, width - 16)),
-					target: summary.detail
-						? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
-						: undefined,
-					targetKind: "text",
-					status,
-					tone: status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : undefined,
-					age: live ? ms : undefined,
-					took: live ? undefined : ms,
-					frame: "inline",
-					collapsible: false,
-				})
+			? node(
+					"tool",
+					{
+						role: `omp.tool.${this.#toolName}`,
+						key: this.#toolCallId,
+						name: this.#toolName,
+						title: truncateToWidth(title, Math.max(1, width - 16)),
+						target: summary.detail
+							? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
+							: undefined,
+						targetKind: "text",
+						status,
+						tone:
+							status === "error"
+								? "error"
+								: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
+									? "warning"
+									: undefined,
+						age: live ? ms : undefined,
+						took: live ? undefined : ms,
+						frame: "inline",
+						collapsible: this.#toolName === "bash",
+						collapsed: this.#toolName === "bash" ? !this.#expanded : undefined,
+					},
+					expandedCommand ? [code(expandedCommand, { lang: "bash" })] : undefined,
+				)
 			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
 					text(
 						[
 							span(
-								`${outcome ?? status} · `,
-								status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : "dim",
+								`${this.#compactNeedsUserInput === undefined ? (outcome ?? status) : "等待用户输入"} · `,
+								status === "error"
+									? "error"
+									: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
+										? "warning"
+										: "dim",
 							),
 							span(summary.label, summary.detail ? "dim" : "text"),
 							...(summary.detail ? [span(" · ", "dim"), span(summary.detail, "text")] : []),
@@ -1224,15 +1385,7 @@ export class ToolExecutionComponent extends Container {
 					),
 					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 				]);
-		const tailLines = this.#compactLiveTail();
-		const tail = tailLines.map((line, index) =>
-			text([span(`  ${line}`, index === tailLines.length - 1 ? "text" : "dim")], {
-				lines: 1,
-				wrap: "none",
-				truncate: "end",
-			}),
-		);
-		return tail.length > 0 ? col([call, ...tail]) : call;
+		return expandedCommand && !dataFirst ? col([call, code(expandedCommand, { lang: "bash" })]) : call;
 	}
 
 	#compactActivity(): ToolActivitySummary {
@@ -1307,33 +1460,6 @@ export class ToolExecutionComponent extends Container {
 		if (details.applied === true || (details.action === "apply" && details.sourceToolName === "ast_edit"))
 			return "已应用";
 		return undefined;
-	}
-
-	/**
-	 * The last non-empty output lines of a running streaming call. Compact mode
-	 * keeps a settled call to one line; while the call still runs, its tail is
-	 * the only honest progress signal, so the card shows it under the summary.
-	 * Only raw-output tools participate, and the parse is cached per result
-	 * version so repaints never re-split the same preview.
-	 */
-	#compactLiveTail(): readonly string[] {
-		if (!COMPACT_LIVE_TAIL_TOOLS[this.#toolName] || !this.#isRunning()) return [];
-		const cached = this.#compactLiveTailCache;
-		if (cached?.version === this.#resultVersion) return cached.lines;
-		const output =
-			this.#result?.content
-				.filter(block => block.type === "text")
-				.map(block => block.text ?? "")
-				.join("\n") ?? "";
-		const lines = output
-			? sanitizeText(output.slice(-COMPACT_LIVE_TAIL_SLICE))
-					.split("\n")
-					.map(line => replaceTabs(line).trimEnd())
-					.filter(line => line.trim().length > 0)
-					.slice(-COMPACT_LIVE_TAIL_LINES)
-			: [];
-		this.#compactLiveTailCache = { version: this.#resultVersion, lines };
-		return lines;
 	}
 
 	/**
@@ -1691,19 +1817,19 @@ export class ToolExecutionComponent extends Container {
 			const ms = this.#elapsedMs(status);
 			const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
 			const state = theme.fg(
-				status === "error" ? "error" : this.#hasCompactReadWarning() ? "warning" : "dim",
-				`${this.#compactOutcome() ?? status} · `,
+				status === "error"
+					? "error"
+					: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
+						? "warning"
+						: "dim",
+				`${this.#compactNeedsUserInput === undefined ? (this.#compactOutcome() ?? status) : "等待用户输入"} · `,
 			);
 			const detail = summary.detail ? `${theme.fg("dim", " · ")}${theme.fg("text", summary.detail)}` : "";
 			const line = truncateToWidth(
 				`${state}${theme.fg(summary.detail ? "dim" : "text", summary.label)}${detail}`,
 				Math.max(1, width - Bun.stringWidth(elapsed)),
 			);
-			const tailLines = this.#compactLiveTail();
-			const tail = tailLines.map((output, index) =>
-				truncateToWidth(`  ${theme.fg(index === tailLines.length - 1 ? "text" : "dim", output)}`, width),
-			);
-			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width), ...tail];
+			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
 		}
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";

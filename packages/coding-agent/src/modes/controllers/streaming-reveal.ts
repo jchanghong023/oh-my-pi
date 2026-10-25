@@ -414,7 +414,7 @@ export class StreamingRevealController {
 		// Recalculate visible units — hiding thinking blocks may reduce the total,
 		// and the reveal position may now exceed it.
 		const total = this.#visibleUnits(this.#target);
-		this.#revealed = Math.min(this.#revealed, total);
+		this.#revealed = this.#smoothStreaming ? Math.min(this.#revealed, total) : total;
 		this.#renderCurrent();
 		this.#syncTimer(total);
 	}

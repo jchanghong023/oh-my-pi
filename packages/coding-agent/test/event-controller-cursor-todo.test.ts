@@ -8,7 +8,7 @@ import {
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import type { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
+import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -616,5 +616,25 @@ describe("compact Todo failure projection", () => {
 		expect(rendered).not.toContain("LATER_REASON_todo-3");
 		expect(renderDock(f.ctx)).not.toBe("");
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
+	});
+
+	it("reveals the exact failure warning while a short viewport hides its dock", async () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const f = createPresentationFixture();
+		f.ctx.chatContainer.setCompactTurnActive(true);
+		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
+		await f.controller.handleEvent(todoFailure("SHORT_VIEWPORT_FAILURE"));
+		const frame = { tick: 0, now: 0 };
+		expect(Bun.stripANSI(f.ctx.chatContainer.renderViewport(100, 2, frame).join("\n"))).toContain(
+			"SHORT_VIEWPORT_FAILURE",
+		);
+		expect(Bun.stripANSI(f.ctx.chatContainer.renderViewport(100, 8, frame).join("\n"))).not.toContain(
+			"SHORT_VIEWPORT_FAILURE",
+		);
+		// Native main blocks are reconciled before the separately mounted dock.
+		f.ctx.chatContainer.setCompactToolActivityVisibleInViewport(false);
+		f.ctx.chatContainer.nativeBlocks();
+		const warning = f.ctx.chatContainer.children.find(child => child instanceof ToolActivityContainer);
+		expect(warning?.render(100).join("\n")).toContain("SHORT_VIEWPORT_FAILURE");
 	});
 });

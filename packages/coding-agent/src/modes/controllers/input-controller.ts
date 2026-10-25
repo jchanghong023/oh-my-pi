@@ -20,9 +20,7 @@ import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { showUserMessageDetails } from "@oh-my-pi/pi-tui/overlays/user-message-details";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
@@ -720,25 +718,6 @@ export class InputController {
 		for (const key of this.ctx.keybindings.getKeys("app.clipboard.copyLine")) {
 			this.ctx.editor.setCustomKeyHandler(key, () => this.handleCopyCurrentLine());
 		}
-		// A message reading shortcut, deliberately separate from tool expansion and clipboard actions.
-		this.ctx.editor.setCustomKeyHandler("ctrl+alt+u", () => {
-			if (
-				!chatTranscriptDisplayPreferences.compactToolActivity ||
-				chatTranscriptDisplayPreferences.hideToolActivity ||
-				this.ctx.ui.hasOverlay()
-			)
-				return;
-			const children = this.ctx.chatContainer.children;
-			for (let index = children.length - 1; index >= 0; index--) {
-				const bubble = children[index];
-				if (!(bubble instanceof UserMessageComponent)) continue;
-				const source = bubble.getCompactPreviewSource(this.ctx.ui.terminal.columns);
-				if (source !== undefined) {
-					showUserMessageDetails(this.ctx.ui, source);
-					return;
-				}
-			}
-		});
 		const hubKeys = new Set([
 			...this.ctx.keybindings.getKeys("app.agents.hub"),
 			...this.ctx.keybindings.getKeys("app.session.observe"),
@@ -2866,6 +2845,12 @@ export class InputController {
 			streamMessage?.role === "assistant" ? streamMessage : undefined,
 			activeThinkingIndex,
 		);
+
+		if (!this.ctx.hideToolActivity && !chatTranscriptDisplayPreferences.compactToolActivity) {
+			this.ctx.eventController.refreshThinkingVisibility();
+			this.ctx.chatContainer.resetStableEmission();
+			this.ctx.ui.resetDisplay();
+		}
 
 		this.ctx.showStatus(`Thinking blocks: ${this.ctx.hideThinkingBlock ? "hidden" : "visible"}`);
 	}

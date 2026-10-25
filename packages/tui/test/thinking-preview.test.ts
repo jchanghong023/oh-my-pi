@@ -109,10 +109,11 @@ describe("ThinkingPreviewComponent", () => {
 			for (const selected of [dark, light]) {
 				setThemeInstance(selected);
 				preview.setText("first\nlatest\n\n\n");
-				const before = [theme.fg("dim", "first"), theme.fg("text", "latest")];
+				const before = [theme.fg("dim", "first"), theme.fg("thinkingText", "latest")];
 				expect(preview.render(80).map((row, index) => row.endsWith(before[index]!))).toEqual([true, true]);
+				expect(theme.fg("thinkingText", "latest")).not.toBe(theme.fg("text", "latest"));
 				preview.setText("first\nlatest\n\n\nnext");
-				const after = [theme.fg("dim", "latest"), theme.fg("text", "next")];
+				const after = [theme.fg("dim", "latest"), theme.fg("thinkingText", "next")];
 				expect(preview.render(80).map((row, index) => row.endsWith(after[index]!))).toEqual([true, true]);
 			}
 		} finally {
@@ -315,7 +316,7 @@ describe("ThinkingPreviewComponent", () => {
 			const rows = expectedTail(source, 8);
 			expect(bodyRows(after, 8)).toEqual(rows);
 			for (const [index, row] of rows.entries()) {
-				expect(after[index]).toEndWith(theme.fg(index === rows.length - 1 ? "text" : "dim", row));
+				expect(after[index]).toEndWith(theme.fg(index === rows.length - 1 ? "thinkingText" : "dim", row));
 			}
 			preview.invalidate();
 			expect(preview.render(8)).toEqual(after);

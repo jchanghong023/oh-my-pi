@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import {
@@ -76,6 +77,92 @@ describe("EventController aborted-turn working messages", () => {
 		expect(clear).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not start a second compact activity when the optimistic user row is reconciled", async () => {
+		const prompt = "follow up";
+		const { ctx } = createContext();
+		ctx.optimisticUserMessageSignature = `${prompt}\u00000`;
+		const boundary = vi.spyOn(ctx.chatContainer, "noteCompactUserTurnStart");
+		const controller = new EventController(ctx);
+
+		await controller.handleEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: prompt }],
+				attribution: "user",
+				timestamp: Date.now(),
+			},
+		});
+
+		expect(boundary).not.toHaveBeenCalled();
+		expect(ctx.clearOptimisticUserMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("shows a blocked tool's user-input state until its completion", async () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const { ctx } = createContext();
+		const controller = new EventController(ctx);
+		await controller.handleEvent(AGENT_START);
+		await controller.handleEvent({
+			type: "tool_execution_start",
+			toolCallId: "question-1",
+			toolName: "ask",
+			args: { questions: [{ question: "Confirm the action?" }] },
+		} as AgentSessionEvent);
+		const active = Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(100) ?? []).join("\n"));
+		expect(active).toContain("等待用户输入");
+
+		await controller.handleEvent({
+			type: "tool_execution_end",
+			toolCallId: "question-1",
+			toolName: "ask",
+			result: { content: [{ type: "text", text: "confirmed" }] },
+			isError: false,
+		} as AgentSessionEvent);
+		const settled = Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(100) ?? []).join("\n"));
+		expect(settled).not.toContain("等待用户输入");
+	});
+
+	it("keeps one compact task across a steered message and ordinary assistant text", async () => {
+		const { ctx } = createContext();
+		const active = vi.spyOn(ctx.chatContainer, "setCompactTurnActive");
+		const boundary = vi.spyOn(ctx.chatContainer, "noteCompactUserTurnStart");
+		const controller = new EventController(ctx);
+		await controller.handleEvent(AGENT_START);
+		await controller.handleEvent({
+			type: "message_start",
+			message: {
+				role: "user",
+				content: [{ type: "text", text: "one more detail" }],
+				attribution: "user",
+				liveSteered: true,
+				timestamp: Date.now(),
+			},
+		});
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "text", text: "Working through that detail." }],
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			model: "test",
+			stopReason: "stop",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			timestamp: Date.now(),
+		};
+		await controller.handleEvent({ type: "message_start", message });
+		await controller.handleEvent({ type: "message_end", message });
+		await controller.handleEvent({ type: "turn_end", message, toolResults: [] });
+		expect(active.mock.calls).toEqual([[true]]);
+		expect(boundary).not.toHaveBeenCalled();
+	});
+
 	it("suppresses late intent-driven working-message updates while aborting", async () => {
 		const { ctx, setWorkingMessage, sessionState } = createContext();
 		const controller = new EventController(ctx);
@@ -85,6 +172,17 @@ describe("EventController aborted-turn working messages", () => {
 		await controller.handleEvent(toolStartWithIntent("late-call", "Reticulating splines"));
 
 		expect(setWorkingMessage).not.toHaveBeenCalled();
+	});
+
+	it("keeps tool intent out of the clean working line", async () => {
+		const { ctx, setWorkingMessage } = createContext();
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		const controller = new EventController(ctx);
+		await controller.handleEvent(AGENT_START);
+		setWorkingMessage.mockClear();
+		await controller.handleEvent(toolStartWithIntent("clean-call", "PRIVATE_TOOL_INTENT"));
+		expect(setWorkingMessage).toHaveBeenCalledWith(undefined);
+		expect(setWorkingMessage.mock.calls.flat()).not.toContain("PRIVATE_TOOL_INTENT");
 	});
 
 	it("resumes intent updates once aborting clears", async () => {

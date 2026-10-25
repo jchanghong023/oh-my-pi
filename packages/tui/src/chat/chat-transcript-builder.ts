@@ -342,9 +342,6 @@ export class ChatTranscriptBuilder {
 					} else {
 						this.container.addChild(
 							new UserMessageComponent(userText, {
-								compactPreview:
-									this.#deps.toolActivityDisplay?.compactToolActivity === true &&
-									!this.#deps.toolActivityDisplay.hideToolActivity,
 								liveSteered: message.role === "user" && message.liveSteered === true,
 								timestamp: message.timestamp,
 								images: imageContent(message.content),
@@ -630,7 +627,9 @@ export class ChatTranscriptBuilder {
 			return;
 		}
 		if (message.customType === LAUNCH_COMPLETION_MESSAGE_TYPE) {
-			this.container.addChild(buildLaunchCompletionBlock(message));
+			this.container.addChild(
+				buildLaunchCompletionBlock(message, this.#deps.toolActivityDisplay?.compactToolActivity),
+			);
 			return;
 		}
 		if (message.customType === BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE) {

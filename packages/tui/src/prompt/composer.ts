@@ -592,6 +592,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				dock.push(...roots);
 			} else {
 				const transcript = roots[transcriptIndex] as TranscriptContainer;
+				const rows = this.ui.terminal.rows;
+				const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
+				transcript.setCompactToolActivityVisibleInViewport(rows - Math.min(rows, 3) - proseRows >= 2);
 				main.push(...roots.slice(0, transcriptIndex), ...transcript.nativeBlocks());
 				dock.push(...(this.#nativeDock ?? roots.slice(transcriptIndex + 1)));
 			}
@@ -986,8 +989,10 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			if (!(root instanceof ThinkingPreviewComponent) && this.#compactThinkingSuppressed) return [];
 			const rows = this.#frameRows ?? this.ui.terminal.rows;
 			const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
-			const remaining = Math.max(0, rows - proseRows - Math.min(rows, 3) - this.#inputPrefixRows);
-			// Thinking stays a whole two-row block; expendable HUDs yield first.
+			const transcript = this.#runtimeChildren.find(child => child instanceof TranscriptContainer);
+			const toolRows = transcript?.compactToolActivityRowCount(width) ?? 0;
+			const remaining = Math.max(0, rows - proseRows - Math.min(rows, 3) - toolRows - this.#inputPrefixRows);
+			// Tools have priority over thinking; expendable HUDs yield before either.
 			const reserveThinking =
 				root instanceof ThinkingPreviewComponent
 					? 0

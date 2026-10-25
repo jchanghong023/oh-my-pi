@@ -23,7 +23,7 @@ function displayPreferences(settings: Settings) {
 const presets = {
 	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: true },
 	compact: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: true },
-	detailed: { hideThinkingBlock: true, hideToolActivity: false, compactToolActivity: false },
+	detailed: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: false },
 };
 
 function createRuntime(settings = Settings.isolated()) {
@@ -155,16 +155,15 @@ describe("/display slash command", () => {
 				compactToolActivity: mode === "compact",
 			});
 			expect(h.settings.getGlobalSettings()).toMatchObject({
-				hideThinkingBlock: mode === "detailed",
+				hideThinkingBlock: false,
 				display: { hideToolActivity: false, compactToolActivity: mode === "compact" },
 			});
 			expect(h.showStatus).not.toHaveBeenCalled();
 			const warning = h.showWarning.mock.calls.at(-1)?.[0];
-			// Detailed hides the thinking window itself, so only compact's
-			// thinking preference can still be blocked by the override.
+			// Both visible presets must report a blocked thinking preference.
 			expect(warning).toContain("display.hideToolActivity");
 			expect(warning).toContain("运行时");
-			if (mode === "compact") expect(warning).toContain("hideThinkingBlock");
+			expect(warning).toContain("hideThinkingBlock");
 			expect(warning).toMatch(/实时思考窗口隐藏.*工具隐藏/);
 		}
 	});

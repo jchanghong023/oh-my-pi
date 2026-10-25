@@ -256,7 +256,6 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { setSvgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
 import { setTableCharts } from "@oh-my-pi/pi-tui/chat/table-chart";
 import { setTranscriptActionHandler } from "@oh-my-pi/pi-tui/chat/transcript-actions";
-import { showUserMessageDetails } from "@oh-my-pi/pi-tui/overlays/user-message-details";
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -2543,9 +2542,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// run the same commands as their key bindings.
 		setTranscriptActionHandler(action => {
 			switch (action.act) {
-				case "view-message":
-					showUserMessageDetails(this.ui, action.text);
-					return;
 				case "retry":
 					void this.#inputController.handleRetry();
 					return;
@@ -4108,6 +4104,22 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (any("expandThinkingBlocks") && expandThinkingBlocks !== this.expandThinkingBlocks) {
 			this.expandThinkingBlocks = expandThinkingBlocks;
 			this.#refreshThinkingPreview();
+		}
+
+		if (
+			any(
+				"display.hideToolActivity",
+				"display.compactToolActivity",
+				"hideThinkingBlock",
+				"proseOnlyThinking",
+				"expandThinkingBlocks",
+			)
+		) {
+			this.#eventController.refreshThinkingVisibility();
+			if (!hideToolActivity && !compactToolActivity) {
+				this.chatContainer.resetStableEmission();
+				resetDisplay = true;
+			}
 		}
 
 		// Usage-row detection, compacted-history collapse, and markdown render

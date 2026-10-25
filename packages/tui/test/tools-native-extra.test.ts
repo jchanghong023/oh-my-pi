@@ -22,6 +22,24 @@ function nodes(children: readonly NativeChild[] | undefined): NativeNode[] {
 const opts = { expanded: false, isPartial: false };
 
 describe("native todo", () => {
+	it("uses the upstream checklist content in compact display", () => {
+		const details: TodoToolDetails = {
+			storage: "session",
+			phases: [
+				{
+					name: "Work",
+					tasks: [
+						{ content: "implement", status: "in_progress" },
+						{ content: "review", status: "blocked", blocker: "waiting" },
+					],
+				},
+			],
+		};
+		const normal = todoToolRenderer.describeResult({ content: [], details }, opts)?.body?.[0];
+		const compact = todoToolRenderer.describeResult({ content: [], details }, { ...opts, compactToolActivity: true })
+			?.body?.[0];
+		expect(compact).toEqual(normal);
+	});
 	it("renders one checklist with mapped statuses, plain phase titles and folded completed phases", () => {
 		const details: TodoToolDetails = {
 			storage: "memory",

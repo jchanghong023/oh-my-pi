@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { trimBlankEdges } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { ImageBudget } from "@oh-my-pi/pi-tui/components/image";
 import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
@@ -45,7 +46,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	resetSettingsForTest();
-	await Settings.init({ inMemory: true });
+	await Settings.init({ inMemory: true, overrides: { "display.compactToolActivity": false } });
 });
 
 afterEach(() => {
@@ -59,6 +60,7 @@ afterEach(() => {
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
 	it("constructs main-chat history with external thinking before any renderer mounts", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		let rendererCalls = 0;
 		const message = msg([
 			{ type: "thinking", thinking: "PRIVATE HISTORICAL REASONING" },
@@ -111,6 +113,7 @@ describe("AssistantMessageComponent streaming fast path", () => {
 	});
 
 	it("never emits inline thinking, live pulses or retired reasoning after display toggles", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const component = new AssistantMessageComponent(
 			undefined,
 			false,
@@ -163,6 +166,7 @@ describe("AssistantMessageComponent streaming fast path", () => {
 	});
 
 	it("still publishes safe ordinary answer rows while excluding every earlier thinking row", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const component = new AssistantMessageComponent(
 			undefined,
 			false,
@@ -408,8 +412,11 @@ describe("AssistantMessageComponent streaming fast path", () => {
 		expect(rendered).not.toContain(". . .");
 	});
 
-	it("repairs Gemini's lone closing fence when the streamed turn becomes final", () => {
-		const text = `=== PACED IP ROTATION SOAK RESULTS ===
+	it.each([false, true])(
+		"repairs Gemini's lone closing fence when the streamed turn becomes final (compact=%s)",
+		compact => {
+			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+			const text = `=== PACED IP ROTATION SOAK RESULTS ===
 Average Latency: 1,240 ms
 \`\`\`
 
@@ -420,18 +427,19 @@ Average Latency: 1,240 ms
 | Workload | Pod Status |
 | :--- | :--- |
 | google-scraper | **1/1 Running** |`;
-		const message = msg([{ type: "text", text }]);
-		const component = new AssistantMessageComponent();
+			const message = msg([{ type: "text", text }]);
+			const component = new AssistantMessageComponent();
 
-		component.updateContent(message, { transient: true });
-		expect(Bun.stripANSI(component.render(W).join("\n"))).toContain("| :--- | :--- |");
+			component.updateContent(message, { transient: true });
+			expect(Bun.stripANSI(component.render(W).join("\n"))).toContain("| :--- | :--- |");
 
-		component.updateContent(message);
-		const finalized = Bun.stripANSI(component.render(W).join("\n"));
-		expect(finalized).not.toContain("| :--- | :--- |");
-		expect(finalized).toContain("google-scraper");
-		expect(finalized).toContain("1/1 Running");
-	});
+			component.updateContent(message);
+			const finalized = Bun.stripANSI(component.render(W).join("\n"));
+			expect(finalized).not.toContain("| :--- | :--- |");
+			expect(finalized).toContain("google-scraper");
+			expect(finalized).toContain("1/1 Running");
+		},
+	);
 
 	// Regression: theme/symbol changes reach the component via invalidate()
 	// (InteractiveMode clears the markdown render cache and invalidates the

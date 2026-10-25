@@ -453,6 +453,13 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		return entries.map(entry => this.#renderCompactEntry(entry, width));
 	}
 
+	/** Running entries are selected ahead of settled calls in the compact activity dock. */
+	renderCompactRunningActivityRows(width: number): readonly string[] {
+		return [...this.#entries.values()]
+			.filter(entry => entry.status === "pending" && entry.executionStartedAtNow !== undefined)
+			.map(entry => this.#renderCompactEntry(entry, width));
+	}
+
 	*#compactEntries(): IterableIterator<ReadEntry> {
 		yield* this.#entries.values();
 	}

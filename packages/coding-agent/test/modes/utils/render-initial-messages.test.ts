@@ -1,7 +1,7 @@
 /**
  * Contract: renderInitialMessages renders the display transcript, never the
- * provider context. Compact mode preserves compacted conversation prose without
- * replaying its tool, thinking, or auxiliary UI records.
+ * provider context. Compacted display follows the upstream collapse setting
+ * in every mode, without reopening source history behind a summary.
  *
  * Also guards the cold-launch terminal cleanup: `omp` / `omp -c` leave the
  * previous run's transcript in native scrollback because the TUI's initial
@@ -240,7 +240,29 @@ function makeRenderCtx(
 }
 
 describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
-	it("restores old prose without tool or auxiliary UI and reverses the projection on mode changes", async () => {
+	it("uses the same collapsed compaction display as upstream in compact mode", async () => {
+		using tempDir = TempDir.createSync("@pi-compacted-upstream-display-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		session.appendMessage({ role: "user", content: "OLD_REQUEST_BEFORE_COMPACTION", timestamp: 1 });
+		const kept = session.appendMessage({ role: "user", content: "KEPT_REQUEST", timestamp: 2 });
+		session.appendCompaction("UPSTREAM_COMPACTION_SUMMARY", undefined, kept, 1000);
+		session.appendMessage({ role: "user", content: "CURRENT_REQUEST", timestamp: 3 });
+		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), true, false, true);
+		vi.spyOn(ctx.viewSession, "buildTranscriptSessionContext").mockImplementation(options =>
+			session.buildSessionContext({ transcript: true, ...options }),
+		);
+
+		await new UiHelpers(ctx).renderInitialMessages();
+
+		const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+		expect(rendered).toContain("compacted · Ctrl+O");
+		expect(rendered).not.toContain("UPSTREAM_COMPACTION_SUMMARY");
+		expect(rendered).toContain("KEPT_REQUEST");
+		expect(rendered).toContain("CURRENT_REQUEST");
+		expect(rendered).not.toContain("OLD_REQUEST_BEFORE_COMPACTION");
+	});
+
+	it("honors the upstream compaction collapse setting across display mode changes", async () => {
 		using tempDir = TempDir.createSync("@pi-compacted-conversation-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
 		session.appendMessage({
@@ -316,18 +338,19 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		);
 		const helpers = new UiHelpers(ctx);
 		const before = JSON.stringify(session.getEntries());
-		const assertCompact = () => {
+		const modelContextBefore = JSON.stringify(session.buildSessionContext());
+		expect(modelContextBefore).toContain("recent.txt");
+		expect(modelContextBefore).toContain("RECENT_TOOL_RESULT");
+		const assertCollapsed = () => {
 			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+			expect(rendered).toContain("KEPT_USER_REQUEST");
+			expect(rendered).toContain("compacted · Ctrl+O");
 			for (const text of [
 				"ORIGINAL_USER_REQUEST",
 				"OLD_PROSE_BEFORE_TOOL",
 				"OLD_PROSE_AFTER_TOOL",
 				"/skill:audit source.ts",
 				"/skill:direct-audit original.ts",
-				"KEPT_USER_REQUEST",
-			])
-				expect(rendered).toContain(text);
-			for (const text of [
 				"recent.txt",
 				"RECENT_FILE_BODY",
 				"OLD_PRIVATE_THINKING",
@@ -345,7 +368,8 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 			expect(hasImageComponent(chatContainer)).toBeFalse();
 		};
 		await helpers.renderInitialMessages();
-		assertCompact();
+		assertCollapsed();
+		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
 		cfgDisplayCollapseCompacted.override(Settings.instance, false);
 		cfgDisplayCompactToolActivity.override(Settings.instance, false);
@@ -356,15 +380,22 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(detailed).toContain("OLD_NOTICE_UI");
 		expect(detailed).toContain("recent.txt");
 		expect(detailed).toContain("RECENT_FILE_BODY");
+		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
 		cfgDisplayCompactToolActivity.override(Settings.instance, true);
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		await helpers.renderInitialMessages();
-		assertCompact();
+		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("ORIGINAL_USER_REQUEST");
+		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
+
+		cfgDisplayCollapseCompacted.override(Settings.instance, true);
+		await helpers.renderInitialMessages();
+		assertCollapsed();
 		expect(JSON.stringify(session.getEntries())).toBe(before);
+		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 	});
 
-	it("keeps an idle session's compacted background task routable until its final update", async () => {
+	it("does not reopen a precompaction background task from a live update", async () => {
 		using tempDir = TempDir.createSync("@pi-compacted-background-");
 		const session = SessionManager.create(tempDir.path(), tempDir.path());
 		session.appendMessage({ role: "user", content: "start a background task", timestamp: 1 });
@@ -382,7 +413,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		const kept = session.appendMessage({ role: "user", content: "continue", timestamp: 3 });
 		session.appendCompaction("summary", undefined, kept, 1000);
 		const { ctx, chatContainer } = makeRenderCtx(makeEmptyContext(), false, false, true);
-		let update: Extract<AgentSessionEvent, { type: "tool_execution_update" }> = {
+		const update: Extract<AgentSessionEvent, { type: "tool_execution_update" }> = {
 			type: "tool_execution_update",
 			toolCallId: "old-background",
 			toolName: "task",
@@ -397,26 +428,6 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 			session.buildSessionContext({ transcript: true, ...options }),
 		);
 		const helpers = new UiHelpers(ctx);
-		await helpers.renderInitialMessages();
-		const handle = ctx.pendingTools.get("old-background");
-		expect(handle).toBeDefined();
-		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("BACKGROUND_TASK_LABEL");
-		handle!.updateResult(
-			{
-				content: [{ type: "text", text: "later progress" }],
-				details: runningDetails,
-			},
-			true,
-			"old-background",
-		);
-		expect(ctx.pendingTools.get("old-background")).toBe(handle);
-		update = {
-			...update,
-			partialResult: {
-				content: [{ type: "text", text: "finished" }],
-				details: { async: { ...runningDetails.async, state: "completed" } },
-			},
-		};
 		await helpers.renderInitialMessages();
 		expect(ctx.pendingTools.has("old-background")).toBeFalse();
 		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).not.toContain("BACKGROUND_TASK_LABEL");
@@ -654,6 +665,8 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 					),
 				).toContain("legacy.png");
 				chatContainer.setCompactTurnActive(false);
+				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("legacy.png");
+				chatContainer.noteCompactUserTurnStart();
 				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).not.toContain("legacy.png");
 			} else if (hidden) {
 				expect(ansi).not.toContain("legacy.png");

@@ -41,7 +41,6 @@ import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { truncateToWidth } from "../utils";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
 
 /**
@@ -251,9 +250,9 @@ function lerpHex(from: string, to: string, t: number): string {
  * Renders an assistant message; streaming content remains mutable until the
  * provider finalizes it because later deltas can revise earlier Markdown.
  * Safe frozen prose prefixes publish as append-only stable rows and can retire
- * into native scrollback while the block streams. Main-chat callers select
- * external thinking at construction, so only answer prose can enter that
- * ledger; direct callers retain the independent viewer's thinking details.
+ * into native scrollback while the block streams. Compact/clean main-chat
+ * callers keep reasoning out of that ledger; detailed callers retain the
+ * upstream inline reasoning presentation.
  */
 export class AssistantMessageComponent extends Container {
 	readonly transcriptBlockMode = "appendOnly" as const;
@@ -531,8 +530,8 @@ export class AssistantMessageComponent extends Container {
 		return { ...message, content };
 	}
 	#hideThinkingBlock: boolean;
-	/** Main-chat reasoning lives in its ephemeral dock, never this transcript block. */
-	readonly #externalThinking: boolean;
+	/** Compact/clean hosts route reasoning outside this transcript block. */
+	#externalThinking: boolean;
 	readonly #onImageUpdate?: () => void;
 	readonly #thinkingRenderers: readonly AssistantThinkingRenderer[];
 	readonly #imageBudget?: ImageBudget;
@@ -548,7 +547,7 @@ export class AssistantMessageComponent extends Container {
 		proseOnlyThinking = true,
 		linkTargets?: ReadonlyMap<string, string>,
 		expandThinkingBlocks = false,
-		// Resolve before the initial message is rendered; settings cannot undo it.
+		// Resolve before the initial render; a host mode change can update it later.
 		externalThinking = false,
 		compactToolActivity?: boolean,
 	) {
@@ -636,6 +635,15 @@ export class AssistantMessageComponent extends Container {
 		this.#emergencyText?.releaseRenderCaches();
 	}
 
+	/** Switch the main chat between its compact dock and upstream inline reasoning. */
+	setExternalThinking(external: boolean): void {
+		if (this.#externalThinking === external) return;
+		this.#externalThinking = external;
+		// The host pairs this mode change with a transcript/display rebuild.
+		this.resetTranscriptStableRows();
+		this.invalidate();
+	}
+
 	setHideThinkingBlock(hide: boolean): void {
 		this.#hideThinkingBlock = hide;
 		this.#thinkingCollapsed.clear();
@@ -710,10 +718,7 @@ export class AssistantMessageComponent extends Container {
 	#thinkingDotsLabel(): string {
 		const glyph = THINKING_DOTS_FRAMES[this.#thinkingDotsFrame % THINKING_DOTS_FRAMES.length] ?? "…";
 		const coloredGlyph = theme.fg("thinkingText", glyph);
-		const tail = this.#displayedMessage ? this.#thinkingTailIndex(this.#displayedMessage) : undefined;
-		const clock = tail === undefined ? undefined : this.#thinkingClock.get(tail);
-		const seconds = clock ? Math.max(0, Math.floor((performance.now() - clock.start) / 1000)) : 0;
-		const thinkingLabel = theme.fg("muted", ` Thinking ${seconds}s`);
+		const thinkingLabel = theme.fg("muted", " Thinking");
 		const rate = Math.min(SPEED_MAX, sharedSpeedTracker.getSpeed());
 		// The numeric badge ("<total> · <rate> toks/s") only renders while this block
 		// is genuinely streaming provider tokens. A block that has observed no token
@@ -818,7 +823,9 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		if (this.#displayCompactToolActivity !== this.#compactToolActivity) this.invalidate();
-		for (const md of this.#transcriptProseBlocks.values()) md.setTranscriptStreaming(this.#compactToolActivity);
+		for (const md of this.#transcriptProseBlocks.values()) {
+			md.setTranscriptStreaming(this.#compactToolActivity && this.#lastUpdateTransient);
+		}
 		const items = this.#fastPathItems;
 		const compactProse =
 			this.#compactToolActivity &&
@@ -1006,10 +1013,8 @@ export class AssistantMessageComponent extends Container {
 					});
 				} else if (content.type === "thinking") {
 					if (this.#externalThinking) continue;
-					const display = this.#hideThinkingBlock
-						? undefined
-						: resolveThinkingDisplay(content, this.#proseOnlyThinking);
-					if (!this.#hideThinkingBlock && !display?.visible) continue;
+					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
+					if (!display.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;
 					const clock = this.#thinkingClock.get(index);
 					if (thinkingLive) {
@@ -1020,21 +1025,6 @@ export class AssistantMessageComponent extends Container {
 					}
 					// Hidden (Ctrl+T): only the live "Thinking…" head shows; a finished thought leaves nothing.
 					if (this.#hideThinkingBlock && !thinkingLive) continue;
-					if (this.#hideThinkingBlock) {
-						children.push(
-							node(
-								"row",
-								{ role: "omp.thinking.live", gap: "sm", align: "baseline" },
-								[
-									node("spinner", { style: "starburst" }),
-									text("Thinking…", { lines: 1, truncate: "end" }),
-									elapsed(performance.now() - (this.#thinkingClock.get(index)?.start ?? performance.now())),
-								],
-								`k${index}`,
-							),
-						);
-						continue;
-					}
 					const tokens = thinkingLive ? this.#thinkingTokens : (clock?.tokens ?? 0);
 					const title = tokens > 0 ? `${formatNumber(tokens)} tokens` : undefined;
 					// Live: starburst · "Thinking…" · ticking timer · tok/s. Done: "Thought for 12s".
@@ -1051,7 +1041,7 @@ export class AssistantMessageComponent extends Container {
 								"head",
 							)
 						: node("text", { spans: [span(thoughtLabel(clock), "muted")], title }, undefined, "head");
-					const body = markdown(`k${index}`, "body", display?.text ?? "", streaming);
+					const body = markdown(`k${index}`, "body", display.text, streaming);
 					children.push(
 						node(
 							"section",
@@ -2045,9 +2035,7 @@ export class AssistantMessageComponent extends Container {
 
 		if (this.#shouldAnimateThinking(message)) {
 			if (hasVisibleContent) this.#contentContainer.addChild(new Spacer(1));
-			this.#thinkingDots = new Text(this.#thinkingDotsLabel(), 1, 0).setWrapLine((line, width) => [
-				truncateToWidth(line, width),
-			]);
+			this.#thinkingDots = new Text(this.#thinkingDotsLabel(), 1, 0);
 			this.#contentContainer.addChild(this.#thinkingDots);
 			this.#startThinkingAnimation();
 		} else {

@@ -7,7 +7,11 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgDisplayCompactToolActivity,
+	cfgDisplayHideToolActivity,
+	cfgDisplaySmoothStreaming,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -127,11 +131,11 @@ describe("InputController thinking visibility", () => {
 		expect(session.agent.state.streamMessage).toBe(live);
 	});
 
-	it.each(["clean", "detailed"] as const)(
+	it.each(["clean"] as const)(
 		"does not reveal active reasoning or its retained tail through Alt+P in %s mode",
 		async display => {
 			cfgDisplayHideToolActivity.set(session.settings, display === "clean");
-			cfgDisplayCompactToolActivity.set(session.settings, display !== "detailed");
+			cfgDisplayCompactToolActivity.set(session.settings, true);
 			cfgHideThinkingBlock.set(session.settings, true);
 			await Promise.resolve();
 			session.agent.state.isStreaming = true;
@@ -149,6 +153,52 @@ describe("InputController thinking visibility", () => {
 			session.agent.state.isStreaming = false;
 		},
 	);
+
+	it("restores upstream reasoning and its visibility toggle in detailed mode across live mode changes", async () => {
+		session.setThinkingLevel(Effort.High);
+		cfgDisplaySmoothStreaming.set(session.settings, false);
+		cfgDisplayCompactToolActivity.set(session.settings, false);
+		cfgHideThinkingBlock.set(session.settings, false);
+		await Promise.resolve();
+		const history = assistant([
+			{ type: "thinking", thinking: "detailed historical reasoning" },
+			{ type: "text", text: "historical answer" },
+		]);
+		session.agent.state.messages.push(history);
+		session.sessionManager.appendMessage(history);
+		mode.addMessageToChat(history);
+		expect(render()).toContain("detailed historical reasoning");
+
+		session.agent.state.isStreaming = true;
+		const live = assistant([{ type: "thinking", thinking: "detailed live reasoning" }]);
+		session.agent.state.streamMessage = live;
+		session.agent.state.activeThinkingIndex = 0;
+		await mode.eventController.handleEvent({ type: "agent_start" });
+		await mode.eventController.handleEvent({ type: "message_start", message: live });
+		expect(render()).toContain("detailed live reasoning");
+		controller.toggleThinkingBlockVisibility();
+		expect(render()).not.toContain("detailed historical reasoning");
+		expect(render()).not.toContain("detailed live reasoning");
+		controller.toggleThinkingBlockVisibility();
+		expect(render()).toContain("detailed historical reasoning");
+		expect(render()).toContain("detailed live reasoning");
+
+		cfgDisplayCompactToolActivity.set(session.settings, true);
+		await Promise.resolve();
+		expect(render()).not.toContain("detailed historical reasoning");
+		expect(render()).toContain("detailed live reasoning");
+		cfgDisplayHideToolActivity.set(session.settings, true);
+		await Promise.resolve();
+		expect(render()).not.toContain("detailed live reasoning");
+		cfgDisplayHideToolActivity.set(session.settings, false);
+		cfgDisplayCompactToolActivity.set(session.settings, false);
+		await Promise.resolve();
+		expect(render()).toContain("detailed historical reasoning");
+		expect(render()).toContain("detailed live reasoning");
+		expect(session.agent.state.messages).toEqual([history]);
+		expect(session.agent.state.streamMessage).toBe(live);
+		session.agent.state.isStreaming = false;
+	});
 
 	it("applies live prose settings before taking the latest two preview rows without changing history", async () => {
 		const history = assistant([

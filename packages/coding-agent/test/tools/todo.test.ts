@@ -1040,8 +1040,8 @@ describe("todoToolRenderer.renderCall preview sanitization", () => {
 	});
 });
 
-describe("compact todo presentation boundaries", () => {
-	it("distinguishes lifecycle states without color and switches existing ANSI/native views back to detailed", () => {
+describe("todo presentation across display modes", () => {
+	it("keeps the upstream ANSI and native todo views in compact mode", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		const phases: TodoPhase[] = [
 			{
@@ -1065,18 +1065,10 @@ describe("compact todo presentation boundaries", () => {
 			const detailedNative = todoToolRenderer.describeResult(result, options);
 			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 			const compact = component.render(160).join("\n");
-			const plain = Bun.stripANSI(compact);
-			expect(plain).toContain("[active] running work");
-			expect(plain).toContain("[blocked] waiting work");
-			expect(plain).toContain("[abandoned] cancelled work");
-			expect(plain).toContain(`${theme.checkbox.checked} finished work`);
-			expect(compact).toContain(theme.fg("text", `${theme.checkbox.unchecked} queued work`));
-			expect(compact).toContain(theme.fg("muted", `${theme.checkbox.checked} \x1b[9mfinished work\x1b[29m`));
+			expect(compact).toBe(detailed);
 			const compactNative = todoToolRenderer.describeResult(result, options);
-			expect(JSON.stringify(compactNative)).toContain("[active] running work");
-			expect(JSON.stringify(compactNative)).toContain("[blocked] waiting work");
-			expect(JSON.stringify(compactNative)).toContain("[abandoned] cancelled work");
-			expect(todoChecklistPhases(phases, () => false, true)[0].items.map(item => item.status)).toEqual([
+			expect(compactNative).toEqual(detailedNative);
+			expect(todoChecklistPhases(phases, () => false)[0].items.map(item => item.status)).toEqual([
 				"pending",
 				"active",
 				"blocked",
@@ -1095,7 +1087,7 @@ describe("compact todo presentation boundaries", () => {
 		}
 	});
 
-	it("honors explicit detailed and compact options independently of global mode without stale ANSI/native views", () => {
+	it("ignores compact-only styling options while preserving todo statuses", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		const phases: TodoPhase[] = [
 			{
@@ -1135,14 +1127,8 @@ describe("compact todo presentation boundaries", () => {
 			}
 			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 			options.compactToolActivity = true;
-			for (const view of [
-				Bun.stripANSI(component.render(160).join("\n")),
-				JSON.stringify(todoToolRenderer.describeResult(result, options)),
-			]) {
-				expect(view).toContain("[active] running work");
-				expect(view).toContain("[blocked] waiting work");
-				expect(view).toContain("[abandoned] cancelled work");
-			}
+			expect(component.render(160).join("\n")).toBe(detailed);
+			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
 			options.compactToolActivity = false;
 			expect(component.render(160).join("\n")).toBe(detailed);
 			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
@@ -1170,13 +1156,15 @@ describe("compact todo presentation boundaries", () => {
 			const rendered = Bun.stripANSI(
 				todoToolRenderer.renderResult(result, { expanded: false, isPartial: false }, theme).render(160).join("\n"),
 			);
-			expect(rendered).toContain("[active] first worker");
-			expect(rendered).toContain("[active] second worker");
-			expect(rendered).toContain("[abandoned] last closed context");
+			expect(rendered).toContain("first worker");
+			expect(rendered).toContain("second worker");
+			expect(rendered).toContain("last closed context");
+			expect(rendered).not.toContain("[active]");
 			expect(rendered).not.toContain("older completion");
 			const native = todoToolRenderer.describeResult(result, { expanded: false, isPartial: false });
-			expect(JSON.stringify(native)).toContain("[active] first worker");
-			expect(JSON.stringify(native)).toContain("[active] second worker");
+			expect(JSON.stringify(native)).toContain("first worker");
+			expect(JSON.stringify(native)).toContain("second worker");
+			expect(JSON.stringify(native)).toContain('"status":"active"');
 			expect(tasks).toEqual(snapshot);
 		} finally {
 			setActiveTodoDescriptionsProvider(() => []);

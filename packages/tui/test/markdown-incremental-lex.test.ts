@@ -953,6 +953,24 @@ describe("Streamed Markdown equals a one-shot render across the frozen prefix", 
 		streamAgainstOneShot(`${open}$$\n\nAfter the math.\n`, 40);
 	});
 
+	it("keeps compact transcript rows immutable when a streamed math environment absorbs list text", () => {
+		const text = "Intro.\n\n- one\n- two\n\\begin{align}\n- x\n\\end{align}\n- three\n\nDone.";
+		const streaming = new Markdown("", 0, 0, THEME);
+		streaming.transientRenderCache = true;
+		streaming.setTranscriptStreaming();
+		let published: readonly string[] = [];
+		for (let end = 1; end <= text.length; end++) {
+			streaming.setText(text.slice(0, end));
+			const rows = streaming.render(100);
+			const stable = streaming.renderTranscriptSourcePrefix(streaming.getTranscriptStableSourceEnd(), 100);
+			expect(rows.slice(0, stable.length)).toEqual([...stable]);
+			expect(stable.slice(0, published.length)).toEqual([...published]);
+			published = stable;
+		}
+		streaming.transientRenderCache = false;
+		expect(streaming.render(100).slice(0, published.length)).toEqual([...published]);
+	});
+
 	/** Wall time of streaming `doc` through one transient instance in `step`-character frames. */
 	function streamTime(doc: string, step: number): number {
 		const streaming = new Markdown("", 0, 0, THEME);

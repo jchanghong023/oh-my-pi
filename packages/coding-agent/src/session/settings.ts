@@ -211,8 +211,8 @@ export const cfgHideThinkingBlock = register({
 	ui: {
 		tab: "model",
 		group: "思考",
-		label: "隐藏实时思考窗口",
-		description: "隐藏主界面正在生成的思考尾窗；显示时仅保留最新五个屏幕行",
+		label: "隐藏思考块",
+		description: "隐藏思考内容；紧凑模式显示最近两行，详细模式沿用上游思考显示",
 	},
 });
 
@@ -224,7 +224,7 @@ export const cfgExpandThinkingBlocks = register({
 		tab: "model",
 		group: "思考",
 		label: "展开历史思考块",
-		description: "仅在显式历史查看器中展开已完成的思考块，不影响主界面实时思考窗口",
+		description: "在详细模式和显式历史查看器中展开已完成的思考块，不影响紧凑模式两行尾窗",
 		condition: "nativeRendering",
 	},
 });

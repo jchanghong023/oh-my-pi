@@ -13,11 +13,10 @@ import { framedToolCard } from "../render/tool-card";
 
 import { formatErrorDetail, formatMoreItems, PREVIEW_LIMITS, pluralize, replaceTabs } from "../render/render-utils";
 import type { TspChecklistItem, TspChecklistPhase } from "@oh-my-pi/pi-wire";
-import { node, span } from "../native/describe";
+import { node } from "../native/describe";
 import { OwnerMemo } from "../native/memo";
 import { errorText, noteText, resultText } from "./native-view";
 import type { NativeToolView, ToolRenderResult } from "./renderer";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
 
 // =============================================================================
 // Types
@@ -361,12 +360,6 @@ function strikeRevealCount(label: TodoLabel, frame: number | undefined): number 
 	return Math.ceil((count * revealFrame) / TODO_STRIKE_REVEAL_FRAMES);
 }
 
-function compactTodoActivity(options: RenderResultOptions): boolean {
-	return (
-		options.compactToolActivity ?? (displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity)
-	);
-}
-
 function formatTodoLine(
 	item: TodoItem,
 	label: TodoLabel,
@@ -374,7 +367,6 @@ function formatTodoLine(
 	prefix: string,
 	completionKeys: Set<string>,
 	frame: number | undefined,
-	compact: boolean,
 	matched = false,
 ): string {
 	const checkbox = uiTheme.checkbox;
@@ -385,31 +377,20 @@ function formatTodoLine(
 		case "completed": {
 			const revealCount = completionKeys.has(item.content) ? strikeRevealCount(label, frame) : undefined;
 			const content = revealCount === undefined ? strikethroughText(text) : partialStrikethrough(label, revealCount);
-			return uiTheme.fg(compact ? "muted" : "success", `${prefix}${checkbox.checked} ${content}`);
+			return uiTheme.fg("success", `${prefix}${checkbox.checked} ${content}`);
 		}
 		case "in_progress":
-			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${compact ? "[active] " : ""}${text}`);
+			return uiTheme.fg("accent", `${prefix}${checkbox.unchecked} ${text}`);
 		case "abandoned":
-			return uiTheme.fg(
-				compact ? "muted" : "error",
-				`${prefix}${checkbox.unchecked} ${compact ? "[abandoned] " : ""}${strikethroughText(text)}`,
-			);
+			return uiTheme.fg("error", `${prefix}${checkbox.unchecked} ${strikethroughText(text)}`);
 		case "blocked": {
 			const note = item.blocker ? `blocked: ${forDisplay(item.blocker)}` : "blocked";
-			return uiTheme.fg(
-				"warning",
-				compact
-					? `${prefix}${checkbox.unchecked} [blocked] ${text}${item.blocker ? ` (${forDisplay(item.blocker)})` : ""}`
-					: `${prefix}${checkbox.unchecked} ${text} (${note})`,
-			);
+			return uiTheme.fg("warning", `${prefix}${checkbox.unchecked} ${text} (${note})`);
 		}
 		default:
 			// A pending todo lit by a live subagent match renders accent, matching
 			// the sticky HUD's convention (#5873).
-			return uiTheme.fg(
-				matched ? "accent" : compact ? "text" : "dim",
-				`${prefix}${checkbox.unchecked} ${compact && matched ? "[active] " : ""}${text}`,
-			);
+			return uiTheme.fg(matched ? "accent" : "dim", `${prefix}${checkbox.unchecked} ${text}`);
 	}
 }
 
@@ -493,31 +474,12 @@ const CHECKLIST_STATUS: Record<TodoStatus, TspChecklistItem["status"]> = {
 };
 
 /** Checklist item for one todo; a pending todo an in-flight subagent executes reads as active. */
-function checklistItem(task: TodoItem, id: string, matched = false, compact = false): TspChecklistItem {
+function checklistItem(task: TodoItem, id: string, matched = false): TspChecklistItem {
 	const status = task.status === "pending" && matched ? "active" : CHECKLIST_STATUS[task.status];
 	const note = task.status === "blocked" && task.blocker ? forDisplay(task.blocker) : undefined;
-	const content = forDisplay(task.content);
-	const text = compact
-		? [
-				span(
-					status === "active"
-						? `[active] ${content}`
-						: status === "blocked"
-							? `[blocked] ${content}`
-							: status === "dropped"
-								? `[abandoned] ${content}`
-								: content,
-					isClosedTodo(task)
-						? "muted del"
-						: status === "active"
-							? "accent"
-							: status === "blocked"
-								? "warning"
-								: "text",
-				),
-			]
-		: content;
-	return note === undefined ? { id, text, status } : { id, text, status, note };
+	return note === undefined
+		? { id, text: forDisplay(task.content), status }
+		: { id, text: forDisplay(task.content), status, note };
 }
 
 /**
@@ -527,12 +489,11 @@ function checklistItem(task: TodoItem, id: string, matched = false, compact = fa
 export function todoChecklistPhases(
 	phases: readonly { name: string; tasks: readonly TodoItem[] }[],
 	isMatched: (task: TodoItem) => boolean = () => false,
-	compact = false,
 ): TspChecklistPhase[] {
 	return phases.map((phase, p) => ({
 		id: `p${p}`,
 		title: forDisplay(phase.name),
-		items: phase.tasks.map((task, t) => checklistItem(task, `p${p}.${t}`, isMatched(task), compact)),
+		items: phase.tasks.map((task, t) => checklistItem(task, `p${p}.${t}`, isMatched(task))),
 		collapsed: phase.tasks.length > 0 && phase.tasks.every(isClosedTodo),
 	}));
 }
@@ -566,17 +527,7 @@ function describeTodoResult(
 		activeDescs.length > 0 && todoMatchesAnyDescription(task.content, activeDescs);
 	return {
 		tool: { title: "Todo", target: `${closed}/${total}`, targetKind: "text" },
-		body: [
-			node(
-				"checklist",
-				{
-					mode: "full",
-					phases: todoChecklistPhases(phases, isMatched, compactTodoActivity(options)),
-				},
-				[],
-				"checklist",
-			),
-		],
+		body: [node("checklist", { mode: "full", phases: todoChecklistPhases(phases, isMatched) }, [], "checklist")],
 		preview: "none",
 		open: true,
 	};
@@ -696,7 +647,6 @@ export const todoToolRenderer = {
 
 		return framedToolCard(uiTheme, ({ contentWidth }) => {
 			const { expanded, spinnerFrame } = options;
-			const compact = compactTodoActivity(options);
 			const multiPhase = phases.length > 1;
 			const indent = multiPhase ? "  " : "";
 			// Collapse phases this update didn't touch down to a one-line summary so
@@ -750,7 +700,7 @@ export const todoToolRenderer = {
 								expanded,
 								itemType: "todo",
 								renderItem: todo =>
-									formatTodoLine(todo, labelFor(todo), uiTheme, "", completionKeys, spinnerFrame, compact),
+									formatTodoLine(todo, labelFor(todo), uiTheme, "", completionKeys, spinnerFrame),
 							},
 							uiTheme,
 						)
@@ -769,7 +719,6 @@ export const todoToolRenderer = {
 											"",
 											completionKeys,
 											spinnerFrame,
-											compact,
 											isMatched(todo),
 										),
 								},
@@ -803,9 +752,7 @@ export const todoToolRenderer = {
 	},
 
 	describeResult(result: ToolRenderResult<TodoToolDetails>, options: RenderResultOptions): NativeToolView | undefined {
-		return todoResultMemo.get(result, [options.expanded, compactTodoActivity(options)], () =>
-			describeTodoResult(result, options),
-		);
+		return todoResultMemo.get(result, [options.expanded], () => describeTodoResult(result, options));
 	},
 
 	mergeCallAndResult: true,

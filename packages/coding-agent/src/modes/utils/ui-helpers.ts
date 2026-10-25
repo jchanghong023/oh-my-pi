@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, Markdown, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { type Component, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { QueuedMessagesBand } from "@oh-my-pi/pi-tui/prompt/queued-messages";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -41,7 +41,6 @@ import {
 	readArgsCollapseIntoGroup,
 } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { SkillMessageComponent } from "@oh-my-pi/pi-tui/chat/skill-message";
-import { titleTextFromSkillPrompt } from "@oh-my-pi/pi-tui/chat/skill-title-input";
 import { StrippedToolCallsPlaceholder } from "@oh-my-pi/pi-tui/chat/stripped-tool-calls-placeholder";
 import { imageContent, textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
@@ -64,7 +63,6 @@ import {
 import { normalizeBlobExtension } from "@oh-my-pi/pi-tui/prompt/image-format";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import { getMarkdownThemeWithLinkTargets } from "@oh-my-pi/pi-tui/theme/tui-adapters";
 import type {
 	CompactionQueuedMessage,
 	InteractiveModeContext,
@@ -107,7 +105,6 @@ import {
 	cfgComposerRecallClearedDrafts,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
-	cfgDisplayCompactToolActivity,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
 	cfgTerminalShowImages,
@@ -294,28 +291,8 @@ export class UiHelpers {
 
 	/** Use one projection policy for synchronous, incremental, and rewind rebuilds. */
 	buildTranscriptSessionContext(keepInFlightToolCalls = false): SessionContext {
-		const compactedHistoryTextOnly = !this.ctx.hideToolActivity && cfgDisplayCompactToolActivity.get(settings);
-		const activeToolCallIds = new Set<string>();
-		if (compactedHistoryTextOnly) {
-			for (const update of this.ctx.viewSession.activeToolExecutionUpdates?.() ?? []) {
-				if (parksAsBackground(update.toolName, update.partialResult.details))
-					activeToolCallIds.add(update.toolCallId);
-			}
-			const runningJobs = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running ?? [];
-			if (runningJobs.length > 0) {
-				for (const entry of this.ctx.viewSession.sessionManager.getBranchView()) {
-					if (entry.type !== "message" || entry.message.role !== "toolResult") continue;
-					const message = entry.message;
-					if (!parksAsBackground(message.toolName, message.details)) continue;
-					const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
-					if (runningJobs.some(job => job.id === jobId)) activeToolCallIds.add(message.toolCallId);
-				}
-			}
-		}
 		return this.ctx.viewSession.buildTranscriptSessionContext({
 			collapseCompactedHistory: cfgDisplayCollapseCompacted.get(settings),
-			compactedHistoryTextOnly,
-			activeToolCallIds: activeToolCallIds.size > 0 ? activeToolCallIds : undefined,
 			keepInFlightToolCalls,
 		});
 	}
@@ -710,35 +687,6 @@ export class UiHelpers {
 			// the next iteration is reached no matter how the prior message exited.
 			if (i > 0) yield;
 			const message = messages[i]!;
-			if (i < (sessionContext.compactedHistoryMessageCount ?? 0)) {
-				const prose =
-					message.role === "user" || message.role === "assistant"
-						? textContent(message.content, "\n\n")
-						: message.role === "custom" && isUserTurnInitiator(message)
-							? (titleTextFromSkillPrompt(message) ?? textContent(message.content, "\n\n"))
-							: "";
-				if (!prose.trim()) continue;
-				let component: Component;
-				if (message.role === "assistant") {
-					const block = new TranscriptBlock();
-					block.addChild(
-						new Markdown(
-							prose,
-							1,
-							0,
-							getMarkdownThemeWithLinkTargets(getAssistantMessageLinkTargets(this.ctx)),
-							{ color: value => theme.fg("assistantMessageText", value), proseFg: true },
-							0,
-						),
-					);
-					component = block;
-				} else {
-					component = new UserMessageComponent(prose);
-				}
-				this.ctx.transcriptMessageComponents.set(message, component);
-				this.ctx.chatContainer.addChild(component);
-				continue;
-			}
 			if (message.role !== "toolResult") flushPendingUsage();
 			// Assistant messages need special handling for tool calls
 			if (message.role === "assistant") {

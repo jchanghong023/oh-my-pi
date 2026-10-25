@@ -162,7 +162,6 @@ export class SkillMessageComponent extends Container {
 		const label = skillChipLabel(name);
 		const leading = display.startsWith(label) && /^\s*$/.test(display.charAt(label.length));
 		const bubble: UserBubbleOptions = {
-			compactPreview: false,
 			imageLinks: this.#imageLinks,
 			skillPath: candidate => (candidate === name ? details?.path : undefined),
 		};

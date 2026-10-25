@@ -362,8 +362,11 @@ export class EventController {
 		);
 		this.#streamingReveal = new StreamingRevealController({
 			getSmoothStreaming: () => cfgDisplaySmoothStreaming.get(this.ctx.settings),
-			// Reasoning has its own real-phase preview, never a smooth transcript reveal queue.
-			getHideThinkingBlock: () => true,
+			// Only compact/clean reasoning bypasses the upstream transcript reveal queue.
+			getHideThinkingBlock: () =>
+				chatTranscriptDisplayPreferences.hideToolActivity ||
+				chatTranscriptDisplayPreferences.compactToolActivity ||
+				this.ctx.effectiveHideThinkingBlock,
 			getProseOnlyThinking: () => this.ctx.proseOnlyThinking,
 			requestRender: component => this.ctx.ui.requestComponentRender(component),
 		});
@@ -774,13 +777,33 @@ export class EventController {
 		return component;
 	}
 
+	/** Apply display changes to retained live segments as well as settled history. */
+	refreshThinkingVisibility(): void {
+		const external =
+			chatTranscriptDisplayPreferences.hideToolActivity || chatTranscriptDisplayPreferences.compactToolActivity;
+		const components = new Set(this.ctx.chatContainer.children);
+		if (this.ctx.streamingComponent) components.add(this.ctx.streamingComponent);
+		for (const component of components) {
+			if (!(component instanceof AssistantMessageComponent)) continue;
+			component.setExternalThinking(external);
+			component.setHideThinkingBlock(this.ctx.effectiveHideThinkingBlock);
+			component.setProseOnlyThinking(this.ctx.proseOnlyThinking);
+			component.setExpandThinkingBlocks(this.ctx.expandThinkingBlocks);
+			component.invalidate();
+		}
+		this.#streamingReveal.resyncVisibility();
+		if (this.#lastIntent && this.ctx.viewSession.isStreaming) {
+			this.ctx.setWorkingMessage(external ? undefined : this.#lastIntent);
+		}
+	}
+
 	#updateWorkingMessageFromIntent(intent: unknown): void {
 		if (this.ctx.session.isAborting) return;
 		const trimmed = normalizeIntent(intent);
 		if (!trimmed || trimmed === this.#lastIntent) return;
 		this.#lastIntent = trimmed;
 		this.ctx.setWorkingMessage(
-			chatTranscriptDisplayPreferences.compactToolActivity && !chatTranscriptDisplayPreferences.hideToolActivity
+			chatTranscriptDisplayPreferences.compactToolActivity || chatTranscriptDisplayPreferences.hideToolActivity
 				? undefined
 				: trimmed,
 		);
@@ -1286,9 +1309,6 @@ export class EventController {
 			const replacesOptimistic =
 				this.ctx.optimisticUserMessageSignature !== undefined && !wasOptimistic && !matchedLocalSubmission;
 			if (wasOptimistic) {
-				if (!event.message.synthetic && event.message.attribution !== "agent" && !event.message.liveSteered) {
-					this.ctx.chatContainer.noteCompactUserTurnStart();
-				}
 				this.ctx.clearOptimisticUserMessage();
 			} else if (replacesOptimistic) {
 				this.ctx.replaceOptimisticUserMessage(event.message);
@@ -2044,6 +2064,10 @@ export class EventController {
 				this.ctx.ui.requestRender();
 			}
 		}
+		const activeComponent = this.ctx.pendingTools.get(event.toolCallId);
+		if (activeComponent instanceof ToolExecutionComponent) {
+			activeComponent.setCompactNeedsUserInput(blocked ? (blocked.msg ?? "需要确认") : undefined);
+		}
 		this.#startToolApprovalPreview(event.toolCallId);
 	}
 
@@ -2057,7 +2081,7 @@ export class EventController {
 	 * `resolveApproval` rather than `requiresApproval` so a `deny` policy does not
 	 * throw in the render path.
 	 */
-	#blockingPrompt(toolName: string, args: unknown): RunStatus | undefined {
+	#blockingPrompt(toolName: string, args: unknown): Extract<RunStatus, { state: "blocked" }> | undefined {
 		if (toolName === "ask") {
 			const questions = recoverAskQuestions(args)?.map(question => question.question);
 			return { state: "blocked", kind: "question", msg: questions?.join(" ") };
@@ -2153,6 +2177,7 @@ export class EventController {
 		component: ToolExecutionHandle,
 		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
+		if (component instanceof ToolExecutionComponent) component.setCompactNeedsUserInput(undefined);
 		const settled = this.#settledBeforeReturn.get(event.toolCallId)?.partialResult;
 		this.#settledBeforeReturn.delete(event.toolCallId);
 		const parks = parksAsBackground(event.toolName, event.result.details);
