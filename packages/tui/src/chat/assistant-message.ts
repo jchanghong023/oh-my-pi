@@ -40,8 +40,29 @@ import { formatTurnUsage, type TurnUsageSummary } from "../overlays/usage-row";
 import { FigureMarkdown } from "./figure-markdown";
 import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
+import { clipThinkingRows } from "./thinking-preview";
+
+/** The original Markdown block, with only its laid-out compact rows clipped. */
+class InlineThinkingMarkdown extends Markdown {
+	constructor(
+		text: string,
+		readonly contentIndex: number,
+		readonly compact: () => boolean,
+		readonly active: () => boolean,
+	) {
+		super(text, 1, 0, getMarkdownTheme(), {
+			color: value => theme.fg("thinkingText", value),
+			italic: true,
+		});
+	}
+
+	override render(width: number): readonly string[] {
+		const rows = super.render(width);
+		return this.compact() ? clipThinkingRows(rows, this.active()) : rows;
+	}
+}
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -249,10 +270,11 @@ function lerpHex(from: string, to: string, t: number): string {
 /**
  * Renders an assistant message; streaming content remains mutable until the
  * provider finalizes it because later deltas can revise earlier Markdown.
- * Safe frozen prose prefixes publish as append-only stable rows and can retire
- * into native scrollback while the block streams. Compact/clean main-chat
- * callers keep reasoning out of that ledger; detailed callers retain the
- * upstream inline reasoning presentation.
+ * The exception is the leading run of visible thinking blocks: raw thinking
+ * only ever appends, so its frozen Markdown prefix publishes as append-only
+ * stable rows ({@link AppendOnlyTranscriptBlock}) and can retire into native
+ * scrollback while the block still streams — a long reasoning trace is no
+ * longer clipped to the mutable viewport.
  */
 export class AssistantMessageComponent extends Container {
 	readonly transcriptBlockMode = "appendOnly" as const;
@@ -373,9 +395,6 @@ export class AssistantMessageComponent extends Container {
 	/** Reused for final parts of published snapshots rendered off-ledger (reflow, replay). */
 	#stableReplayRenderer: StablePartRenderer | undefined;
 	#stableRenderInputs: StableRenderInputs | undefined;
-	/** Compact publications retain source seams, never rows at a historical width. */
-	#compactSourceSnapshots = new Map<number, readonly { child: Component; end?: number }[]>();
-	#transcriptProseBlocks = new Map<number, Markdown>();
 	/** Provider-reported tokens in the live thinking block — reasoning tokens when
 	 *  the provider streams them, else total output — shown dimmed beside the
 	 *  speed badge. 0 when no thinking is streaming. */
@@ -459,7 +478,6 @@ export class AssistantMessageComponent extends Container {
 		}
 		this.#linkTargets = targets;
 		this.#markdownTheme = undefined;
-		this.#transcriptProseBlocks.clear();
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
@@ -530,8 +548,6 @@ export class AssistantMessageComponent extends Container {
 		return { ...message, content };
 	}
 	#hideThinkingBlock: boolean;
-	/** Compact/clean hosts route reasoning outside this transcript block. */
-	#externalThinking: boolean;
 	readonly #onImageUpdate?: () => void;
 	readonly #thinkingRenderers: readonly AssistantThinkingRenderer[];
 	readonly #imageBudget?: ImageBudget;
@@ -547,13 +563,10 @@ export class AssistantMessageComponent extends Container {
 		proseOnlyThinking = true,
 		linkTargets?: ReadonlyMap<string, string>,
 		expandThinkingBlocks = false,
-		// Resolve before the initial render; a host mode change can update it later.
-		externalThinking = false,
 		compactToolActivity?: boolean,
 	) {
 		super();
 		this.#hideThinkingBlock = hideThinkingBlock;
-		this.#externalThinking = externalThinking;
 		this.#compactToolActivityOverride = compactToolActivity;
 		this.#onImageUpdate = onImageUpdate;
 		this.#thinkingRenderers = thinkingRenderers;
@@ -620,7 +633,6 @@ export class AssistantMessageComponent extends Container {
 		// rebuild with the current theme. Streaming updates call updateContent()
 		// directly and keep the fast path.
 		this.#markdownTheme = undefined;
-		this.#transcriptProseBlocks.clear();
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
@@ -633,15 +645,6 @@ export class AssistantMessageComponent extends Container {
 		super.releaseRenderCaches();
 		this.#dropStableRenders();
 		this.#emergencyText?.releaseRenderCaches();
-	}
-
-	/** Switch the main chat between its compact dock and upstream inline reasoning. */
-	setExternalThinking(external: boolean): void {
-		if (this.#externalThinking === external) return;
-		this.#externalThinking = external;
-		// The host pairs this mode change with a transcript/display rebuild.
-		this.resetTranscriptStableRows();
-		this.invalidate();
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
@@ -698,7 +701,7 @@ export class AssistantMessageComponent extends Container {
 	 * and the tail visible block is thinking. Undefined otherwise.
 	 */
 	#thinkingTailIndex(message: AssistantMessage): number | undefined {
-		if (this.#externalThinking || this.#transcriptBlockFinalized) return undefined;
+		if (this.#transcriptBlockFinalized) return undefined;
 		let tail: "text" | "thinking" | undefined;
 		let tailIndex = -1;
 		for (let index = 0; index < message.content.length; index++) {
@@ -823,62 +826,9 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		if (this.#displayCompactToolActivity !== this.#compactToolActivity) this.invalidate();
-		for (const md of this.#transcriptProseBlocks.values()) {
-			md.setTranscriptStreaming(this.#compactToolActivity && this.#lastUpdateTransient);
-		}
-		const items = this.#fastPathItems;
-		const compactProse =
-			this.#compactToolActivity &&
-			this.#midStreamPublication &&
-			this.#lastUpdateTransient &&
-			items?.some(item => item.blockType === "text" && item.md instanceof Markdown);
-		if (compactProse) {
-			for (const item of items ?? []) {
-				if (item.blockType === "text" && item.md instanceof Markdown) {
-					item.md.setTranscriptStreaming();
-					this.#transcriptProseBlocks.set(item.contentIndex, item.md);
-				}
-			}
-		}
 		const rows = super.render(width);
-		if (!compactProse) {
-			this.#publishStableSnapshot(rows, width);
-			return rows;
-		}
-		const parts: { child: Component; end?: number }[] = [];
-		for (const child of this.#contentContainer.children) {
-			if (child === items?.at(-1)?.md) {
-				if (child instanceof Markdown) parts.push({ child, end: child.getTranscriptStableSourceEnd() });
-				break;
-			}
-			parts.push({ child });
-		}
-		const candidate = this.#renderCompactSourceSnapshot(parts, width);
-		const previous = this.renderTranscriptStableRows(this.#transcriptStableRows.length, width);
-		if (
-			candidate.length > previous.length &&
-			isRowPrefix(previous, candidate) &&
-			isRowPrefix(candidate, trimBlankEdges(rows))
-		) {
-			this.#transcriptStableRows.push({ key: `prose:${this.#nextStableRowId++}` });
-			this.#compactSourceSnapshots.set(this.#transcriptStableRows.length, parts);
-		}
+		this.#publishStableSnapshot(rows, width);
 		return rows;
-	}
-
-	#renderCompactSourceSnapshot(
-		parts: readonly { child: Component; end?: number }[],
-		width: number,
-	): readonly string[] {
-		const rows: string[] = [];
-		for (const { child, end } of parts) {
-			rows.push(
-				...(end !== undefined && child instanceof Markdown
-					? child.renderTranscriptSourcePrefix(end, width)
-					: child.render(width)),
-			);
-		}
-		return trimBlankEdges(rows);
 	}
 
 	/**
@@ -904,13 +854,14 @@ export class AssistantMessageComponent extends Container {
 			this.#showImages,
 			this.#showToolResultImages,
 			this.#compactToolActivity,
+			cx?.cols,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
 			media,
 			getThemeEpoch(),
 		];
-		return this.#native.get(key, () => this.#describeMessage(tail, rate, media));
+		return this.#native.get(key, () => this.#describeMessage(tail, rate, media, cx?.cols ?? 80));
 	}
 
 	/**
@@ -936,7 +887,7 @@ export class AssistantMessageComponent extends Container {
 		this.#nativeViewVersion++;
 	}
 
-	#describeMessage(thinkingTail: number | undefined, rate: number, media: boolean): NativeNode {
+	#describeMessage(thinkingTail: number | undefined, rate: number, media: boolean, width: number): NativeNode {
 		const message = this.#displayedMessage;
 		const previousParts = this.#nativeParts;
 		const parts = new Map<string, { text: string; stream: boolean; node: NativeNode }>();
@@ -1012,7 +963,6 @@ export class AssistantMessageComponent extends Container {
 						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
-					if (this.#externalThinking) continue;
 					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
 					if (!display.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;
@@ -1041,7 +991,14 @@ export class AssistantMessageComponent extends Container {
 								"head",
 							)
 						: node("text", { spans: [span(thoughtLabel(clock), "muted")], title }, undefined, "head");
-					const body = markdown(`k${index}`, "body", display.text, streaming);
+					const inline = this.#compactToolActivity
+						? this.#contentContainer.children.find(
+								child => child instanceof InlineThinkingMarkdown && child.contentIndex === index,
+							)
+						: undefined;
+					const body = inline
+						? node("rows", { cols: width, lines: inline.render(width) }, undefined, "body")
+						: markdown(`k${index}`, "body", display.text, streaming);
 					children.push(
 						node(
 							"section",
@@ -1253,13 +1210,10 @@ export class AssistantMessageComponent extends Container {
 		this.#stableSnapshots = [];
 		this.#stableParts = [];
 		this.#transcriptStableRows = [];
-		this.#compactSourceSnapshots.clear();
 		this.#dropStableRenders();
 	}
 
 	renderTranscriptStableRows(count: number, width: number): readonly string[] {
-		const compact = this.#compactSourceSnapshots.get(Math.trunc(count));
-		if (compact) return this.#renderCompactSourceSnapshot(compact, width);
 		const index = Math.min(Math.trunc(count), this.#stableSnapshots.length);
 		if (index <= 0) return EMPTY_STABLE_RENDER;
 		this.#syncStableRenderInputs();
@@ -1341,6 +1295,8 @@ export class AssistantMessageComponent extends Container {
 			const item = items[itemIndex];
 			if (item?.md === child) {
 				const md = item.md;
+				// A sliding two-row thinking tail has no immutable prefix to publish.
+				if (item.blockType === "thinking" && this.#compactToolActivity) break;
 				if (md instanceof FigureMarkdown) {
 					// Plain Markdown reproduces only the prose ahead of the first figure.
 					if (md.leadingProse) parts.push({ kind: item.blockType, text: md.leadingProse });
@@ -1492,14 +1448,7 @@ export class AssistantMessageComponent extends Container {
 	 * `previous` so its figures keep their rasters across rebuilds.
 	 */
 	#proseBlock(index: number, text: string, previous: ReadonlyMap<number, FigureMarkdown>): ProseBlock {
-		const streaming = this.#transcriptProseBlocks.get(index);
-		const liftsFigures = this.#liftsFigures(text);
-		if (streaming && !liftsFigures) {
-			streaming.setText(text);
-			return streaming;
-		}
-		this.#transcriptProseBlocks.delete(index);
-		if (!liftsFigures) return this.#createMarkdown("text", text);
+		if (!this.#liftsFigures(text)) return this.#createMarkdown("text", text);
 		let block = previous.get(index);
 		if (block) {
 			block.setText(text);
@@ -1795,9 +1744,7 @@ export class AssistantMessageComponent extends Container {
 					!canonicalizeMessage(content.text) ? "T0" : this.#liftsFigures(content.text.trim()) ? "TF" : "T1",
 				);
 			} else if (content.type === "thinking") {
-				if (this.#externalThinking) {
-					parts.push("KE");
-				} else if (this.#hideThinkingBlock) {
+				if (this.#hideThinkingBlock) {
 					// Match the pulse's empty/nonempty transition without formatting hidden text.
 					parts.push(canonicalizeMessage(content.thinking) ? "KH" : "K0");
 				} else {
@@ -1975,8 +1922,7 @@ export class AssistantMessageComponent extends Container {
 			c =>
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
 				(c.type === "image" && c.data && c.mimeType) ||
-				(!this.#externalThinking &&
-					!this.#hideThinkingBlock &&
+				(!this.#hideThinkingBlock &&
 					c.type === "thinking" &&
 					resolveThinkingDisplay(c, this.#proseOnlyThinking).visible),
 		);
@@ -1995,7 +1941,7 @@ export class AssistantMessageComponent extends Container {
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
 				hasRenderedContent = true;
 			} else if (content.type === "thinking") {
-				if (this.#externalThinking || this.#hideThinkingBlock) {
+				if (this.#hideThinkingBlock) {
 					thinkingIndex += 1;
 					continue;
 				}
@@ -2014,7 +1960,12 @@ export class AssistantMessageComponent extends Container {
 					);
 
 				// Thinking traces in thinkingText color, italic
-				const md = this.#createMarkdown("thinking", thinkingText);
+				const md = new InlineThinkingMarkdown(
+					thinkingText,
+					i,
+					() => this.#compactToolActivity,
+					() => this.#displayedMessage !== undefined && this.#thinkingTailIndex(this.#displayedMessage) === i,
+				);
 				md.transientRenderCache = this.#lastUpdateTransient;
 				this.#contentContainer.addChild(md);
 				captureItems?.push({ md, contentIndex: i, blockType: "thinking", lastText: thinkingText });

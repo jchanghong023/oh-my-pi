@@ -1,60 +1,30 @@
 import { type Component, Container, type HistoryBatch } from "../tui";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
 import { measureRender, renderForScrollback } from "../components/image";
 import { col, text } from "../native/describe";
+import { styledSpans } from "../native/spans";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
+import { theme } from "../theme";
+import { truncateToWidth } from "../utils";
 import type { NativeNode } from "../native/node";
-import { compactText, styledSpans } from "../native/spans";
 import { isNativeSettled, settleNative } from "../native/settle";
 import { isUsageRowBlock } from "../overlays/usage-row";
-import {
-	type CompactLogLine,
-	type CompactToolCall,
-	isCompactToolActivityComponent,
-	isToolActivityComponent,
-} from "./tool-activity";
-import { theme } from "../theme";
+import { isToolActivityComponent, isCompactToolActivityComponent, type CompactToolCall } from "./tool-activity";
 import { directPlacementLift, ImageProtocol, iterm2ImagePayload, TERMINAL } from "../terminal-capabilities";
-import { truncateToWidth } from "../utils";
 
-interface CompactCallActivity {
-	getCompactToolCalls?(): readonly CompactToolCall[];
-	getCompactBashLogLines?(): readonly CompactLogLine[];
-	renderCompactActivityRows(width: number, limit?: number): readonly string[];
-	renderCompactRunningActivityRows?(width: number): readonly string[];
-	isCompactBackgroundActive?(): boolean;
-	getCompactToolFailureCount?(): number;
-	compactBashCommandRows?(width: number): readonly string[];
-	compactBashLogRows?(width: number): readonly string[];
+
+interface CompactRunComponent extends Component {
+	getCompactToolCalls(): readonly CompactToolCall[];
+	hasCompactCriticalFeedback?(): boolean;
 	isCompactActualFileWrite?(): boolean;
-	renderCompactFileWriteRows?(width: number, autoExpanded: boolean): readonly string[];
-	describeCompactFileWrite?(cx: undefined, autoExpanded: boolean): NativeNode;
-	/** Exact identity of a failed execution this call's compact row represents. */
-	getCompactToolFailureId?(): string | undefined;
+	isCompactWriteCall?(): boolean;
+	setCompactToolSelection?(ids: ReadonlySet<string | object> | undefined): void;
 }
 
-export interface CompactTurnState {
-	active: boolean;
-	started: boolean;
-	turn: number;
-	calls: Map<string | object, { turn: number; failed: boolean }>;
-}
-
-/** Transcript blocks that hide themselves while compact activity already shows the same failure. */
-interface CompactFailureProjection {
-	reconcileCompactToolFailure(covered: ReadonlySet<string>): boolean;
-}
-
-/** Every actual call occupies one of the two dock rows. */
-const COMPACT_ACTIVITY_ROWS = 2;
-const EMPTY_COVERAGE: ReadonlySet<string> = new Set();
-
-function isCompactCall(component: Component): component is Component & CompactCallActivity {
-	return (
-		isCompactToolActivityComponent(component) &&
-		typeof (component as Partial<CompactCallActivity>).renderCompactActivityRows === "function"
-	);
+function isCompactRunComponent(component: Component): component is CompactRunComponent {
+	return isCompactToolActivityComponent(component) &&
+		typeof (component as Partial<CompactRunComponent>).getCompactToolCalls === "function";
 }
 
 /** Shared animation time supplied by the constrained transcript root. */
@@ -299,16 +269,6 @@ export function trimBlankEdges(rows: readonly string[]): readonly string[] {
 	return start === 0 && end === rows.length ? rows : rows.slice(start, end);
 }
 
-/** Consecutive tool blocks share a tight stack only in compact display mode. */
-function blockGap(previous: Component | undefined, next: Component | undefined): number {
-	if (!previous || !next) return 0;
-	return displayPreferences.compactToolActivity &&
-		isCompactToolActivityComponent(previous) &&
-		isCompactToolActivityComponent(next)
-		? 0
-		: 1;
-}
-
 /** One live block's row span in the last `renderViewport` output (half-open `[start, end)`). */
 export interface TranscriptViewportSpan {
 	component: Component;
@@ -326,8 +286,6 @@ export class TranscriptContainer extends Container {
 	#replayRequested = false;
 	#toolActivityVisible = true;
 	#lastFrame: AnimationFrame = { tick: 0, now: 0 };
-	/** Failure warnings keyed by child index; reconciled against the dock before each paint. */
-	#compactFailureProjections = new Map<Component, number>();
 	// Start rows from the last full render(), keyed by child component (transcript deep-links).
 	#childStartRows = new Map<Component, number>();
 	// Watchdog for the wedge where an unfinalized frontier block pins pressure
@@ -359,252 +317,95 @@ export class TranscriptContainer extends Container {
 	/** Block list handed to the native frame provider, reused while the children are unchanged. */
 	#nativeBlocks: readonly Component[] = [];
 	#nativeNode: NativeNode | undefined;
-	#compactTurnActive = false;
-	#compactTurnStarted = false;
-	#compactTurnStart = 0;
-	#compactTurn = 0;
-	#compactCalls = new Map<string | object, { turn: number; failed: boolean }>();
-	#compactDockVisible = true;
-	#compactOriginalWriteBlocks = new WeakMap<Component, Component>();
-	#compactAutoExpandedWrites = new WeakMap<Component, boolean>();
-	readonly #compactActivityBlock: Component = {
-		render: width => this.#compactActivityRows(width),
-		describe: cx =>
-			col(
-				this.#compactActivityRows(cx?.cols ?? 80).map(line =>
-					text(compactText(styledSpans(line || " ")), { lines: 1, wrap: "none", truncate: "end" }),
-				),
-				{ role: "omp.compact-tool-activity" },
-			),
-	};
 
-	/** Layout supplies the real dock capacity before reconciling failure warnings. */
-	setCompactToolActivityVisibleInViewport(visible: boolean): void {
-		this.#compactDockVisible = visible;
-	}
+	/** Local display decisions only; committed entries retain their archived selection. */
+	#compactSelection = new Map<Component, { visible: boolean; count: number; failures: number }>();
+	#compactNative = new WeakMap<Component, Component>();
 
-	/** Real execution-turn state, not individual model-message/tool boundaries. */
-	setCompactTurnActive(active: boolean): void {
-		if (this.#compactTurnActive === active) return;
-		if (active && !this.#compactTurnStarted) {
-			this.#compactTurnStarted = true;
-			this.#compactTurn++;
-			// Restored active turns may already contain their user and tool blocks.
-			// Fresh user input supplies its precise boundary via noteCompactUserTurnStart.
-			this.#compactTurnStart = 0;
+	#selectCompactRuns(): void {
+		const compact = displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity && this.#toolActivityVisible;
+		if (!compact) {
+			for (const child of this.children) {
+				if (isCompactRunComponent(child)) child.setCompactToolSelection?.(undefined);
+			}
+			return;
 		}
-		this.#compactTurnActive = active;
-		this.#frameRows.clear();
-		this.invalidate();
-	}
-
-	/** Live/replayed metadata supplies this boundary; midturn steering never calls it. */
-	noteCompactUserTurnStart(): void {
-		if (this.#compactTurnActive) return;
-		this.#recordCompactCalls();
-		this.#compactTurn++;
-		this.#compactTurnStarted = true;
-		this.#compactTurnStart = this.children.length;
-		this.#frameRows.clear();
-		this.invalidate();
-	}
-
-	/** Keep call ownership and totals when compaction replaces the displayed message list. */
-	snapshotCompactTurn(): CompactTurnState {
-		this.#recordCompactCalls();
-		return {
-			active: this.#compactTurnActive,
-			started: this.#compactTurnStarted,
-			turn: this.#compactTurn,
-			calls: new Map(this.#compactCalls),
+		let run: CompactRunComponent[] = [];
+		let writeRun = false;
+		const flush = () => {
+			if (!run.length) return;
+			const facts = run.flatMap(component => component.getCompactToolCalls());
+			const selected = new Set(facts.slice(-2).map(call => call.id));
+			const writes = run.filter(component => component.isCompactActualFileWrite?.()).slice(-3);
+			for (const component of run) {
+				component.setCompactToolSelection?.(selected);
+				const visible = component.hasCompactCriticalFeedback?.() === true ||
+					(writeRun ? !component.isCompactActualFileWrite?.() || writes.includes(component) :
+						component.getCompactToolCalls().some(call => selected.has(call.id)));
+				this.#compactSelection.set(component, { visible, count: 0, failures: 0 });
+			}
+			if (!writeRun && facts.length > 2) {
+				const first = this.#compactSelection.get(run[0]!)!;
+				first.count = facts.length;
+				first.failures = facts.filter(call => call.failed).length;
+			}
+			run = [];
 		};
-	}
-
-	restoreCompactTurn(state: CompactTurnState): void {
-		this.#compactTurnActive = state.active;
-		this.#compactTurnStarted = state.started;
-		this.#compactTurn = state.turn;
-		this.#compactCalls = state.calls;
-		// Replayed calls keep their recorded owner; only subsequently added calls are new.
-		this.#compactTurnStart = this.children.length;
-		this.#frameRows.clear();
-		this.invalidate();
-	}
-
-	#callFacts(component: Component & CompactCallActivity): readonly CompactToolCall[] {
-		return (
-			component.getCompactToolCalls?.() ?? [{ id: component, failed: !!component.getCompactToolFailureCount?.() }]
-		);
-	}
-
-	#recordCompactCalls(): void {
-		for (let index = 0; index < this.children.length; index++) {
-			const component = this.children[index]!;
-			if (!isCompactCall(component)) continue;
-			for (const call of this.#callFacts(component)) {
-				const turn =
-					this.#compactCalls.get(call.id)?.turn ??
-					(this.#compactTurnStarted && index >= this.#compactTurnStart ? this.#compactTurn : -1);
-				this.#compactCalls.set(call.id, { turn, failed: call.failed });
+		for (const entry of this.#entries) {
+			if (entry.state === "committed" || entry.split !== undefined) { flush(); continue; }
+			const component = entry.component;
+			if (!isCompactRunComponent(component)) {
+				// Empty upstream blocks (hidden thinking, attached feedback) are not boundaries.
+				if (!isToolActivityComponent(component) && component.render(this.#frameRowsWidth || 80).some(row => /\S/.test(row))) flush();
+				continue;
 			}
+			const write = component.isCompactWriteCall?.() === true || component.isCompactActualFileWrite?.() === true;
+			if (run.length && write !== writeRun) flush();
+			writeRun = write;
+			run.push(component);
 		}
+		flush();
 	}
 
-	#isCurrentCompactCall(component: Component & CompactCallActivity): boolean {
-		return (
-			this.#compactTurnStarted &&
-			this.#callFacts(component).some(call => this.#compactCalls.get(call.id)?.turn === this.#compactTurn)
-		);
+	#compactDecision(component: Component) {
+		return displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity && this.#toolActivityVisible
+			? this.#compactSelection.get(component) : undefined;
 	}
 
-	/** Native chrome mounts the same live activity directly before thinking. */
-	compactToolActivityBlock(): Component | undefined {
-		return this.#compactActivityRows(this.#frameRowsWidth || 80).length ? this.#compactActivityBlock : undefined;
+	#compactSummary(component: Component, width: number): string | undefined {
+		const selection = this.#compactDecision(component);
+		return selection?.count ? truncateToWidth(theme.fg("dim", `工具调用 ${selection.count} 次 · 失败 ${selection.failures} 次`), width) : undefined;
 	}
 
-	/** Rows the chrome must reserve for the live activity block at this width. */
-	compactToolActivityRowCount(width = this.#frameRowsWidth || 80): number {
-		return this.#compactActivityRows(width).length;
+	#renderComponent(component: Component, width: number): readonly string[] {
+		const decision = this.#compactDecision(component);
+		const rows = decision?.visible === false ? EMPTY_ROWS : component.render(width);
+		const summary = this.#compactSummary(component, width);
+		return summary === undefined ? rows : [summary, ...trimBlankEdges(rows)];
 	}
 
-	#compactActivityRows(width: number): readonly string[] {
-		return this.#selectCompactActivity(width).rows;
+	#nativeComponent(component: Component): Component {
+		let wrapper = this.#compactNative.get(component);
+		if (!wrapper) {
+			wrapper = {
+				render: width => this.#renderComponent(component, width),
+				describe: cx => {
+					const summary = this.#compactSummary(component, cx?.cols ?? 80);
+					return col([
+						...(summary === undefined ? [] : [text(styledSpans(summary), { lines: 1, wrap: "none" })]),
+						...(this.#compactDecision(component)?.visible === false ? [] : [component]),
+					]);
+				},
+			};
+			this.#compactNative.set(component, wrapper);
+		}
+		return wrapper;
 	}
 
-	/** Dock rows plus the exact failed executions those rows represent. */
-	#selectCompactActivity(width: number): { rows: readonly string[]; covered: ReadonlySet<string> } {
-		if (!displayPreferences.compactToolActivity || displayPreferences.hideToolActivity || !this.#toolActivityVisible)
-			return { rows: EMPTY_ROWS, covered: EMPTY_COVERAGE };
-		const calls: Array<{ component: Component & CompactCallActivity; row: string; running: boolean }> = [];
-		const covered = new Set<string>();
-		this.#recordCompactCalls();
-		let callCount = 0;
-		let failureCount = 0;
-		for (const call of this.#compactCalls.values()) {
-			if (call.turn !== this.#compactTurn) continue;
-			callCount++;
-			failureCount += Number(call.failed);
-		}
-		for (let index = 0; index < this.children.length; index++) {
-			const component = this.children[index]!;
-			if (!isCompactCall(component)) continue;
-			const current = this.#isCurrentCompactCall(component);
-			if (!current && !component.isCompactBackgroundActive?.()) continue;
-			const activity = component.renderCompactActivityRows(width);
-			if (component.isCompactActualFileWrite?.()) continue;
-			const runningCounts = new Map<string, number>();
-			for (const row of component.renderCompactRunningActivityRows?.(width) ?? []) {
-				runningCounts.set(row, (runningCounts.get(row) ?? 0) + 1);
-			}
-			for (const row of activity) {
-				const pending = runningCounts.get(row) ?? 0;
-				if (pending) runningCounts.set(row, pending - 1);
-				calls.push({ component, row, running: pending > 0 || !current });
-			}
-		}
-		const running = calls.filter(call => call.running);
-		const settled = calls.filter(call => !call.running);
-		const selected =
-			running.length >= COMPACT_ACTIVITY_ROWS
-				? running
-				: [...running, ...settled.slice(-(COMPACT_ACTIVITY_ROWS - running.length))];
-		const rows = selected.map(call => call.row);
-		const selectedComponents = new Set(selected.map(call => call.component));
-		for (const component of selectedComponents) {
-			const failureId = component.getCompactToolFailureId?.();
-			if (failureId) covered.add(failureId);
-		}
-		if (rows.length === 1) rows.push("");
-		if (callCount > selected.length && this.#compactTurnStarted)
-			rows.push(truncateToWidth(theme.fg("dim", `工具调用 ${callCount} 次 · 失败 ${failureCount} 次`), width));
-		const statuses: string[] = [];
-		const logs: Array<{ row: string; at: number }> = [];
-		for (const component of selectedComponents) {
-			rows.push(...(component.compactBashCommandRows?.(width) ?? []));
-			const window = component.compactBashLogRows?.(width) ?? [];
-			if (!window.length) continue;
-			const id = this.#callFacts(component)[0]?.id;
-			const label = typeof id === "string" ? id : `任务${this.children.indexOf(component) + 1}`;
-			statuses.push(`[${label}] ${window[0]}`);
-			for (const line of window.length > 1 ? (component.getCompactBashLogLines?.() ?? []) : []) {
-				logs.push({ row: truncateToWidth(theme.fg("muted", `[${label}] ${line.text}`), width), at: line.at });
-			}
-		}
-		if (statuses.length) rows.push(truncateToWidth(statuses.join(" · "), width));
-		rows.push(
-			...logs
-				.sort((a, b) => a.at - b.at)
-				.slice(-5)
-				.map(line => line.row),
-		);
-		return { rows, covered };
-	}
-
-	/** Original write/edit cards remain mutable projections of the latest three real writes. */
-	#compactDiffBlocks(): Map<Component, readonly Component[]> {
-		const blocks = new Map<Component, readonly Component[]>();
-		if (
-			!displayPreferences.compactToolActivity ||
-			displayPreferences.hideToolActivity ||
-			!this.#toolActivityVisible ||
-			!this.#compactTurnStarted
-		)
-			return blocks;
-		let remaining = 3;
-		this.#recordCompactCalls();
-		for (let index = this.children.length - 1; index >= 0 && remaining > 0; index--) {
-			const component = this.children[index]!;
-			if (!isCompactCall(component)) continue;
-			if (!this.#isCurrentCompactCall(component)) continue;
-			if (!component.isCompactActualFileWrite?.()) continue;
-			this.#compactAutoExpandedWrites.set(component, remaining === 3);
-			let original = this.#compactOriginalWriteBlocks.get(component);
-			if (!original) {
-				const candidate: Component & FinalizableBlock = {
-					render: width =>
-						component.renderCompactFileWriteRows?.(
-							width,
-							this.#compactAutoExpandedWrites.get(component) ?? false,
-						) ?? EMPTY_ROWS,
-					describe: () =>
-						component.describeCompactFileWrite?.(
-							undefined,
-							this.#compactAutoExpandedWrites.get(component) ?? false,
-						) ?? col([]),
-					isTranscriptBlockFinalized: () => false,
-				};
-				original = candidate;
-				this.#compactOriginalWriteBlocks.set(component, candidate);
-			}
-			blocks.set(component, [original]);
-			remaining--;
-		}
-		return blocks;
-	}
-
-	/** Retirement and painting must reserve identical transient rows in each frame. */
-	#compactViewportActivity(width: number, rows: number): { activity: readonly string[]; diffs: readonly string[] } {
-		const activity = rows > 2 ? this.#compactActivityRows(width) : EMPTY_ROWS;
-		const diffs: string[] = [];
-		// Preserve at least half the remaining viewport for answer prose. Select
-		// newest sections first, retaining their file/hunk context when shortened.
-		let remaining = rows > 4 ? Math.floor((rows - activity.length) / 2) : 0;
-		const blocks = [...this.#compactDiffBlocks().values()].reverse().flat();
-		for (let index = blocks.length - 1; index >= 0 && remaining >= 3; index--) {
-			const rendered = blocks[index]!.render(width);
-			const kept =
-				rendered.length <= remaining
-					? rendered
-					: [...rendered.slice(0, remaining - 1), truncateToWidth("… /display detailed", width)];
-			diffs.unshift(...kept);
-			remaining -= kept.length;
-		}
-		return { activity, diffs };
-	}
 	override addChild(component: Component): void {
 		if (isToolActivityComponent(component)) component.setToolActivityVisible(this.#toolActivityVisible);
 		super.addChild(component);
-		const entry: TranscriptEntry = {
+		this.#entries.push({
 			component,
 			state: "active",
 			mode: blockMode(component),
@@ -614,12 +415,7 @@ export class TranscriptContainer extends Container {
 			emitted: 0,
 			stableFrozen: false,
 			split: undefined,
-		};
-		this.#entries.push(entry);
-		if (!this.#compactTurnStarted && !this.#compactTurnActive) this.#compactTurnStart = this.children.length;
-		if (typeof (component as Partial<CompactFailureProjection>).reconcileCompactToolFailure === "function") {
-			this.#compactFailureProjections.set(component, this.children.length - 1);
-		}
+		});
 		// `children` is public and may be edited externally; re-check the whole
 		// list once instead of trusting positions. Insert-after-anchor callers
 		// use insertChildAt, which keeps both arrays in lockstep.
@@ -654,18 +450,13 @@ export class TranscriptContainer extends Container {
 		// memoized render, so splicing children directly is the whole removal.
 		this.children.splice(index, 1);
 		this.#entries.splice(index, 1);
-		this.#compactFailureProjections.delete(component);
 		this.#frontier = Math.min(this.#frontier, this.#entries.length);
 		this.#childStartRows.delete(component);
 	}
 
 	override clear(): void {
 		super.clear();
-		this.#compactTurnActive = false;
-		this.#compactTurnStarted = false;
-		this.#compactTurnStart = 0;
-		this.#compactTurn = 0;
-		this.#compactCalls.clear();
+		this.#compactSelection.clear();
 		this.#entries = [];
 		this.#frontier = 0;
 		this.#offered = undefined;
@@ -673,7 +464,6 @@ export class TranscriptContainer extends Container {
 		this.#pinnedFrontier = undefined;
 		this.#replayPending = false;
 		this.#replayRequested = false;
-		this.#compactFailureProjections.clear();
 		this.#lastViewportSpans = [];
 	}
 
@@ -827,17 +617,12 @@ export class TranscriptContainer extends Container {
 	 * a lower bound, guaranteed only to be greater than `limit`.
 	 */
 	liveRowCount(width: number, limit = Number.POSITIVE_INFINITY): number {
-		this.#syncEntries(width);
+		this.#syncEntries();
 		this.#settleFinalized();
-		const transient = this.#compactViewportActivity(width, Number.POSITIVE_INFINITY);
-		let total = transient.activity.length + transient.diffs.length;
-		let previous: Component | undefined;
+		let total = 0;
 		for (const { entry, index } of this.#liveEntries()) {
 			const block = this.#liveBlock(entry, index, width).rows;
-			if (block.length > 0) {
-				total += block.length + blockGap(previous, entry.component);
-				previous = entry.component;
-			}
+			if (block.length > 0) total += block.length + (total > 0 ? 1 : 0);
 			if (total > limit) break;
 		}
 		return total;
@@ -913,20 +698,17 @@ export class TranscriptContainer extends Container {
 	 * its measurements first.
 	 */
 	renderViewport(width: number, rows: number, frame: AnimationFrame): readonly string[] {
-		this.#compactDockVisible = rows > 2;
 		if (frame !== this.#openFrame) this.#closeFrame();
 		this.#lastFrame = frame;
 		try {
-			const { activity, diffs } = this.#compactViewportActivity(width, rows);
-			const prose = this.#composeViewport(width, Math.max(0, rows - activity.length - diffs.length), frame);
-			return activity.length || diffs.length ? [...prose, ...diffs, ...activity] : prose;
+			return this.#composeViewport(width, rows, frame);
 		} finally {
 			this.#closeFrame();
 		}
 	}
 
 	#composeViewport(width: number, rows: number, frame: AnimationFrame): readonly string[] {
-		this.#syncEntries(width);
+		this.#syncEntries();
 		this.#settleFinalized();
 		const live = this.#liveEntries();
 		const capacity = Math.max(0, Math.trunc(rows));
@@ -962,7 +744,7 @@ export class TranscriptContainer extends Container {
 			this.#lastViewportSpans = [];
 			return EMPTY_ROWS;
 		}
-		if (shown.length > capacity && !displayPreferences.compactToolActivity) {
+		if (shown.length > capacity) {
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
@@ -979,30 +761,18 @@ export class TranscriptContainer extends Container {
 			);
 		}
 		let total = 0;
-		for (let index = 0; index < blocks.length; index++) {
-			total += blocks[index]!.length + blockGap(shown[index - 1]?.entry.component, shown[index]!.entry.component);
-		}
-		if (total <= capacity || displayPreferences.compactToolActivity) {
+		for (const block of blocks) total += block.length + (total > 0 ? 1 : 0);
+		if (total <= capacity) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
-			// Compact chat scrolls as one document, even while an active prefix
-			// pins retirement. Never squeeze each user/assistant block to one row.
-			let skip = Math.max(0, total - capacity);
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-				if (blockGap(shown[blockIndex - 1]?.entry.component, shown[blockIndex]!.entry.component)) {
-					if (skip > 0) {
-						skip--;
-					} else {
-						output.push("");
-						owners.push(undefined);
-					}
+				if (output.length > 0) {
+					output.push("");
+					owners.push(undefined);
 				}
 				const component = shown[blockIndex]!.entry.component;
-				const block = blocks[blockIndex]!;
-				const start = Math.min(skip, block.length);
-				skip -= start;
-				for (let row = start; row < block.length; row++) {
-					output.push(block[row]!);
+				for (const line of blocks[blockIndex]!) {
+					output.push(line);
 					owners.push(component);
 				}
 			}
@@ -1056,14 +826,14 @@ export class TranscriptContainer extends Container {
 
 	/** Returns only a prepared complete replay, never a normal retirement offer. */
 	peekReplayBatch(width: number): HistoryBatch | undefined {
-		this.#syncEntries(width);
+		this.#syncEntries();
 		this.#settleFinalized();
 		return this.#peekReplayBatch(width);
 	}
 
 	#peekReplayBatch(width: number): HistoryBatch | undefined {
 		if (this.#offered !== undefined) {
-			return this.#offered.batch.kind === "replay" ? this.#offered.batch : undefined;
+			return this.#offered.kind === "replay" ? this.#offered.batch : undefined;
 		}
 		if (!this.#replayPending) return undefined;
 		// The one path that must compose the whole ledger in a single frame; the
@@ -1080,11 +850,7 @@ export class TranscriptContainer extends Container {
 			this.#releaseCommittedRenderCaches();
 			return undefined;
 		}
-		const batch: HistoryBatch = {
-			id: this.#nextBatchId++,
-			rows,
-			kind: "replay",
-		};
+		const batch: HistoryBatch = { id: this.#nextBatchId++, rows, kind: "replay" };
 		this.#offered = { batch, kind: "replay" };
 		return batch;
 	}
@@ -1124,28 +890,21 @@ export class TranscriptContainer extends Container {
 		} else {
 			rows = this.#renderReplay(width);
 		}
-		if (offered.kind !== "replay" && offered.batch.kind === "replay") {
-			rows = [...this.#renderReplay(width), ...rows];
-		}
-		offered.batch = { ...offered.batch, rows };
+		offered.batch = { id: offered.batch.id, rows, kind: offered.batch.kind };
 		return offered.batch;
 	}
 
 	#peekBatch(width: number, capacity: number, policy: RetirementPolicy): HistoryBatch | undefined {
-		if (policy === "pressure") this.#compactDockVisible = capacity > 2;
-		this.#syncEntries(width);
+		this.#syncEntries();
 		this.#settleFinalized();
 		if (this.#offered !== undefined) return this.#offered.batch;
 		const replay = this.#peekReplayBatch(width);
 		if (replay !== undefined) return replay;
+
 		this.#completeFullyEmittedHeads(width);
-		const transient = policy === "pressure" ? this.#compactViewportActivity(width, capacity) : undefined;
-		const room = Math.max(
-			0,
-			Math.trunc(capacity) - (transient?.activity.length ?? 0) - (transient?.diffs.length ?? 0),
-		);
+		const room = Math.max(0, Math.trunc(capacity));
 		const live = this.#liveEntries();
-		if (live.length === 0) return this.#peekReplayBatch(width);
+		if (live.length === 0) return undefined;
 
 		// Only a render publishes a block's stable rows, so the head renders
 		// before its progressive-append eligibility is read.
@@ -1172,30 +931,25 @@ export class TranscriptContainer extends Container {
 		let liveRows = 0;
 		let keep = 0;
 		let fits = true;
-		let nextComponent: Component | undefined;
-		let boundaryGap = 0;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			const candidate = live[cursor]!;
 			const height = this.#liveBlock(candidate.entry, candidate.index, width).rows.length;
-			const gap = height > 0 ? blockGap(candidate.entry.component, nextComponent) : 0;
-			if (height > 0) liveRows += height + gap;
+			if (height > 0) liveRows += height + (liveRows > 0 ? 1 : 0);
 			if (fits) {
-				const next = height > 0 ? tailRows + height + gap : tailRows;
+				const next = height > 0 ? tailRows + height + (tailRows > 0 ? 1 : 0) : tailRows;
 				if (next > room) {
 					fits = false;
 					keep = cursor + 1;
-					boundaryGap = gap;
 				} else {
 					tailRows = next;
 				}
 			}
-			if (height > 0) nextComponent = candidate.entry.component;
 			if (!fits && appendHead === undefined) break;
 		}
 		const overflowing = keep > 0 || this.#liveCount() >= MAX_LIVE_BLOCKS;
 		if (policy === "pressure" && !overflowing) {
 			this.#pinnedFrontier = undefined;
-			return this.#peekReplayBatch(width);
+			return undefined;
 		}
 
 		if (appendHead !== undefined && keep > 0) {
@@ -1238,7 +992,7 @@ export class TranscriptContainer extends Container {
 		let split: { index: number; rows: readonly string[]; split: RowSplit } | undefined;
 		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
 			const boundary = live[keep - 1]!;
-			const visible = room - tailRows - boundaryGap;
+			const visible = room - tailRows - (tailRows > 0 ? 1 : 0);
 			if (boundary.entry.state === "settled" && visible > 0) {
 				const offer = this.#splitOffer(boundary.entry, width, visible);
 				if (offer === "whole") {
@@ -1254,7 +1008,7 @@ export class TranscriptContainer extends Container {
 		if (split !== undefined && end !== split.index) split = undefined;
 		if (end === this.#frontier && split === undefined) {
 			if (policy === "pressure") this.#notePinnedFrontier();
-			return this.#peekReplayBatch(width);
+			return undefined;
 		}
 		this.#pinnedFrontier = undefined;
 		pushLoopPhase("ui.transcript-retire");
@@ -1326,8 +1080,7 @@ export class TranscriptContainer extends Container {
 			this.#frontier = offered.end;
 			const head = offered.split ? this.#entries[offered.end] : undefined;
 			if (head !== undefined) head.split = offered.split;
-		}
-		if (offered.batch.kind === "replay") {
+		} else {
 			this.#releaseCommittedRenderCaches();
 		}
 		this.#offered = undefined;
@@ -1340,20 +1093,18 @@ export class TranscriptContainer extends Container {
 	 * tail rows per resize event — never the full committed ledger.
 	 */
 	renderTail(width: number, maxRows: number): readonly string[] {
-		this.#syncEntries(width);
+		this.#syncEntries();
 		const cap = Math.max(0, Math.trunc(maxRows));
 		if (cap === 0) return EMPTY_ROWS;
 		const rows: string[] = [];
-		let next: Component | undefined;
 		for (let index = this.#entries.length - 1; index >= 0; index--) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-			const block = this.#renderEntry(entry, width);
+			const block = trimBlankEdges(this.#renderComponent(entry.component, width));
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (blockGap(entry.component, next)) rows.unshift("");
+			if (rows.length > 0) rows.unshift("");
 			rows.unshift(...block);
-			next = entry.component;
 			if (rows.length >= cap) break;
 		}
 		return rows.length > cap ? rows.slice(rows.length - cap) : rows;
@@ -1370,11 +1121,11 @@ export class TranscriptContainer extends Container {
 	 */
 	nativeBlocks(): readonly Component[] {
 		this.#syncEntries();
-		const diffs = this.#compactDiffBlocks();
-		const children =
-			displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity
-				? this.children.flatMap(child => (isCompactCall(child) ? (diffs.get(child) ?? []) : [child]))
-				: this.children;
+		const children = this.children.flatMap(child => {
+			const decision = this.#compactDecision(child);
+			if (decision?.visible === false && !decision.count) return [];
+			return [decision?.count ? this.#nativeComponent(child) : child];
+		});
 		for (const child of children) {
 			if (!isNativeSettled(child) && isFinalized(child)) settleNative(child);
 		}
@@ -1396,25 +1147,19 @@ export class TranscriptContainer extends Container {
 
 	/** Full semantic render used by exports and non-terminal commands. */
 	override render(width: number): readonly string[] {
-		this.#compactDockVisible = true;
-		this.#syncEntries(width);
+		this.#syncEntries();
 		this.#childStartRows.clear();
 		const rows: string[] = [];
-		const diffs = this.#compactDiffBlocks();
-		let previous: Component | undefined;
 		for (const entry of this.#entries) {
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
-			const block =
-				diffs.get(entry.component)?.flatMap(section => section.render(width)) ?? this.#renderEntry(entry, width);
+			const block = this.#renderEntry(entry, width);
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (blockGap(previous, entry.component)) rows.push("");
+			if (rows.length > 0) rows.push("");
 			this.#childStartRows.set(entry.component, rows.length);
 			rows.push(...block);
-			previous = entry.component;
 		}
-		const activity = this.#compactActivityRows(width);
-		return activity.length ? [...rows, ...activity] : rows;
+		return rows;
 	}
 
 	/** Rendered row where a child's block begins in the last full render() (transcript deep-links). */
@@ -1423,13 +1168,7 @@ export class TranscriptContainer extends Container {
 	}
 
 	#renderEntry(entry: TranscriptEntry, width: number): readonly string[] {
-		if (
-			displayPreferences.compactToolActivity &&
-			!displayPreferences.hideToolActivity &&
-			isCompactCall(entry.component)
-		)
-			return EMPTY_ROWS;
-		const rendered = trimBlankEdges(entry.component.render(width));
+		const rendered = trimBlankEdges(this.#renderComponent(entry.component, width));
 		if (entry.state === "committed" || entry.mode === "mutable" || entry.stableFrozen) return rendered;
 		const appendOnly = entry.component as Component & AppendOnlyTranscriptBlock;
 		const stable = appendOnly.getTranscriptStableRows();
@@ -1550,32 +1289,19 @@ export class TranscriptContainer extends Container {
 					count++;
 					continue;
 				}
-				// Reflow changes table borders/padding without changing source content.
-				// Only whitespace/box-drawing runs with a matching text continuation may
-				// move the seam; emoji/punctuation-only user rows must remain live.
+				// An empty-content row matches at any offset, so the walk cannot tell it
+				// apart from a revealed row history never received; only the next
+				// archived image carries the seam on, through its own reserved rows to
+				// its row, whatever its height here.
 				let index = count;
-				let tableDecorationOnly = true;
 				while (
 					index < rendered.length &&
 					!TERMINAL.isImageLine(rendered[index]!) &&
 					contentOf([rendered[index]!]).length === 0
 				) {
-					tableDecorationOnly &&= /^[ \t\u2500-\u257f]*$/u.test(Bun.stripANSI(rendered[index]!));
 					index++;
 				}
 				const imageRow = rendered[index];
-				if (
-					displayPreferences.compactToolActivity &&
-					!displayPreferences.hideToolActivity &&
-					tableDecorationOnly &&
-					index > count &&
-					imageRow !== undefined &&
-					!TERMINAL.isImageLine(imageRow) &&
-					split.text.startsWith(contentOf([imageRow]), consumed)
-				) {
-					count = index;
-					continue;
-				}
 				if (
 					imageRow === undefined ||
 					!TERMINAL.isImageLine(imageRow) ||
@@ -1600,8 +1326,8 @@ export class TranscriptContainer extends Container {
 	 * `renderedStableByWidth` holds the newest, so each count's rows are a
 	 * prefix of it and the batch is one slice. Undefined when a count the walk
 	 * needs was never recorded here (published between renders, or before a
-	 * resize); the rendered walk then decides. Compact layout may retire the
-	 * first whole stable unit across the viewport edge rather than lose its head.
+	 * resize); the rendered walk then decides. Like the rendered walk, it never
+	 * passes `overflow`: a prefix reaching onto the screen waits.
 	 */
 	#measuredAppendBatch(entry: TranscriptEntry, width: number, overflow: number): AppendBatch | undefined {
 		const counts = entry.stableRowCountByWidth.get(width);
@@ -1621,7 +1347,7 @@ export class TranscriptContainer extends Container {
 				}
 				break;
 			}
-			if (next - start > overflow && (emittedEnd > entry.emitted || !displayPreferences.compactToolActivity)) break;
+			if (next - start > overflow) break;
 			end = next;
 			emittedEnd += 1;
 		}
@@ -1631,10 +1357,11 @@ export class TranscriptContainer extends Container {
 	/**
 	 * Size a progressive-append batch by rendering each further stable prefix:
 	 * extend the emitted prefix while its new rows stay within `overflow` — the
-	 * rows that left the screen. Compact layout retires at least the first whole
-	 * stable unit: wrapping one source row into two screen rows must not strand
-	 * its first row between scrollback and the viewport. Other display modes
-	 * retain the existing rule against committing still-visible rows.
+	 * rows that left the screen — stopping at the first prefix that would reach
+	 * onto it, adds no row, or stops extending the emitted one (freezing the
+	 * block when that is the very next prefix). A prefix still partly on screen
+	 * stays live: committing it would strand those rows above the live tail,
+	 * where a later shrink of the chrome below opens a band no frame can fill.
 	 */
 	#renderedAppendBatch(entry: TranscriptEntry, width: number, overflow: number): AppendBatch {
 		const before = this.#renderStablePrefix(entry, entry.emitted, width);
@@ -1648,11 +1375,7 @@ export class TranscriptContainer extends Container {
 				}
 				break;
 			}
-			if (
-				next.length - before.length > overflow &&
-				(emittedEnd > entry.emitted || !displayPreferences.compactToolActivity)
-			)
-				break;
+			if (next.length - before.length > overflow) break;
 			after = next;
 			emittedEnd += 1;
 		}
@@ -1703,7 +1426,6 @@ export class TranscriptContainer extends Container {
 		const rows: string[] = [];
 		const startedAt = budgetMs === undefined ? 0 : performance.now();
 		let reached = start;
-		let previous: Component | undefined;
 		for (let index = start; index < end; index++) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
@@ -1712,29 +1434,19 @@ export class TranscriptContainer extends Container {
 			// full render of the block's stable prefix) is skipped for them. This
 			// keeps a complete-ledger replay at one render per block. These rows go
 			// to native scrollback, where nothing can repaint them.
-			const rendered = renderForScrollback(() => this.#renderEntry(entry, width));
+			const rendered = renderForScrollback(() =>
+				index === start ? this.#renderEntry(entry, width) : trimBlankEdges(this.#renderComponent(entry.component, width)),
+			);
 			const emittedRows = index === start ? this.#emittedRowCount(entry, width) : 0;
 			const block = rendered.slice(emittedRows);
 			reached = index + 1;
 			if (block.length > 0) {
-				if (blockGap(previous, entry.component)) rows.push("");
+				if (rows.length > 0) rows.push("");
 				rows.push(...block);
-				previous = entry.component;
 			}
 			if (budgetMs !== undefined && performance.now() - startedAt >= budgetMs) break;
 		}
-		if (trailingBlank && previous) {
-			let next: Component | undefined;
-			if (displayPreferences.compactToolActivity && isToolActivityComponent(previous)) {
-				for (let index = reached; index < this.#entries.length; index++) {
-					const entry = this.#entries[index]!;
-					if (this.#measure(entry, width).rows.length === 0) continue;
-					next = entry.component;
-					break;
-				}
-			}
-			if (!next || blockGap(previous, next)) rows.push("");
-		}
+		if (trailingBlank && rows.length > 0) rows.push("");
 		return { rows, end: reached };
 	}
 
@@ -1803,7 +1515,6 @@ export class TranscriptContainer extends Container {
 	}
 
 	#startReplay(): void {
-		this.#reconcileCompactFailureProjections();
 		const head = this.#entries[this.#frontier];
 		this.#replayPending =
 			this.#frontier > 0 || head?.split !== undefined || (head?.mode === "appendOnly" && head.emitted > 0);
@@ -1926,28 +1637,6 @@ export class TranscriptContainer extends Container {
 		(component as Component & TranscriptPresentationTarget).setTranscriptAllocation?.(rows, frame);
 	}
 
-	/** Live compact projections repaint in place; immutable history is never replaced for a fold. */
-	#compactProjectionChanged(index: number): void {
-		const entry = this.#entries[index];
-		if (entry !== undefined) this.#frameRows.delete(entry);
-	}
-
-	/** Hide a warning exactly while its own failed execution is one of the dock rows. */
-	#reconcileCompactFailureProjections(): void {
-		if (this.#compactFailureProjections.size === 0) return;
-		const covered = this.#compactDockVisible
-			? this.#selectCompactActivity(this.#frameRowsWidth || 80).covered
-			: EMPTY_COVERAGE;
-		for (const [component, index] of this.#compactFailureProjections) {
-			const entry = this.#entries[index];
-			// Emitted warnings are immutable history; hiding them would require rewriting scrollback.
-			if (entry?.component === component && (entry.state === "committed" || entry.split !== undefined)) continue;
-			if ((component as Component & CompactFailureProjection).reconcileCompactToolFailure(covered)) {
-				this.#compactProjectionChanged(index);
-			}
-		}
-	}
-
 	#settleFinalized(): void {
 		for (let index = this.#frontier; index < this.#entries.length; index++) {
 			const entry = this.#entries[index]!;
@@ -1975,12 +1664,8 @@ export class TranscriptContainer extends Container {
 	 * blocks are immutable history nothing reorders, and the scan skipping
 	 * them keeps this proportional to the live tail rather than the session.
 	 */
-	#syncEntries(width?: number): void {
-		if (width !== undefined && this.#frameRowsWidth !== width) {
-			this.#frameRows.clear();
-			this.#frameRowsWidth = width;
-		}
-		this.#reconcileCompactFailureProjections();
+	#syncEntries(): void {
+		this.#selectCompactRuns();
 		const children = this.children;
 		if (
 			!this.#entriesUnverified &&
@@ -1992,13 +1677,6 @@ export class TranscriptContainer extends Container {
 		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
 		if (this.#entriesMatch(children, 0)) return;
-		this.#compactFailureProjections.clear();
-		for (let index = 0; index < children.length; index++) {
-			const component = children[index]!;
-			if (typeof (component as Partial<CompactFailureProjection>).reconcileCompactToolFailure === "function") {
-				this.#compactFailureProjections.set(component, index);
-			}
-		}
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		this.#entries = this.children.map(
 			component =>
@@ -2014,6 +1692,7 @@ export class TranscriptContainer extends Container {
 					split: undefined,
 				},
 		);
+		this.#selectCompactRuns();
 		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
 		if (this.#frontier < 0) this.#frontier = this.#entries.length;
 	}

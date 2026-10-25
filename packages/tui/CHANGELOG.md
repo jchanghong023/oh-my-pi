@@ -12,11 +12,12 @@
 ### Changed
 
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
-- Compact tools show the latest two actual calls, including pending, failed, write, and edit calls; thinking shows the latest two rendered rows. Both leave the lower row blank after the first item, omit headings, borders, and count folds, and retain their height through prose, tools, and retries until execution ends.
+- Compact tool feedback uses stable short task labels and Chinese status text while preserving meaningful Bash failure reasons before trailing JSON delimiters.
+- Compact tools show the latest two actual calls, including pending, failed, write, and edit calls; thinking shows the latest two rendered rows and leaves its lower row blank after the first item. Tool previews, counts, logs, and thinking align with prose using one-cell horizontal gutters and single-row section gaps, without headings or frames; narrow screens prioritize tools and editable input.
 - A running `bash` call shows its latest three non-empty output lines under the summary row, temporarily expanding the compact tool activity dock from two to four rows and returning to two when the call settles; ANSI and native surfaces agree.
 - Compact `bash` summaries without an explicit intent skip leading assignments and context-only builtins (`cd`, `export`, `set`, …) and keep the remaining command text on one line, collapsed and truncated to the row width; leading assignment values stay hidden.
-- Compact layout orders prose, tools, thinking, then input; short screens prioritize input, cursor, and prose over decorations, thinking, and tools. The actual busy loader shows tool intent without duplicating it.
-- Compact inline diffs show only the latest three per-file Edit/apply_patch sections during the active execution turn, including multi-file calls; multiple hunks in one section count once. Steering does not reset the turn. Completion, cancellation, and session switches clear them; completed/history turns show no inline diffs. Arguments, long output, ordinary file previews, and older diffs remain available on demand in detailed/history views.
+- Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals; thinking and input follow the transcript. The actual busy loader shows tool intent without duplicating it.
+- Compact mode keeps the latest three actual write/edit/apply_patch calls fully expanded, including complete file contents and diffs. Long writes remain accessible through PageUp/PageDown or enabled mouse scrolling without collapsing older calls, truncating their bodies, changing drafts, or publishing transient writes into history; native cards cannot be collapsed.
 - Compact history retains only user messages and assistant prose, including prose around tools and failures; original records and clean/detailed behavior remain unchanged.
 - The compact thinking tail filters blank lines while preserving indentation, original content, and theme-aware latest-line emphasis without collapsing to a stub.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
@@ -30,6 +31,11 @@
 
 ### Fixed
 
+- Keep compact tool feedback, expanded writes, and prose in one component layout while sharing short-screen thinking budgets across ANSI and native terminals.
+- Keep overflowing compact tool activity within the viewport and reachable by paging, and preserve ordinary tool previews during terminal resizing.
+- Keep working, retry, and compaction status visible when compact previews run out of screen space.
+
+- Keep all three recent write cards visible when the newest diff fills the compact viewport, without appending a display-mode command hint.
 - Preserve compact streaming prose, tables, and code across viewport pressure and resizing without dropping content between the screen and scrollback.
 - Keep compact live activity mutable until execution ends instead of archiving it or erasing terminal history.
 - Reserve room for compact conversation text, editable input, and cursor on short terminals before decorations, thinking, and tool activity.

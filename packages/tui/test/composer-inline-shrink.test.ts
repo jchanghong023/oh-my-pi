@@ -7,6 +7,7 @@ import {
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ThinkingPreviewComponent } from "@oh-my-pi/pi-tui/chat/thinking-preview";
 import { Loader } from "@oh-my-pi/pi-tui/components/loader";
+import type { DescribeContext, NativeChild } from "@oh-my-pi/pi-tui/native/node";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -1347,6 +1348,130 @@ describe("composer inline shrink (#11007)", () => {
 });
 
 describe("composer compact chrome budget", () => {
+	it("uses the same thinking boundary for native dock, normal ANSI and resize with preceding messages", () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(60, 12);
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: new VirtualRenderScheduler() },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		transcript.addChild(new Text("CURRENT BODY", 0, 0));
+		const pending = new Text("queued one\nqueued two\nqueued three", 0, 0);
+		const thinking = new ThinkingPreviewComponent();
+		thinking.setText("first thought\nlatest thought");
+		composer.editor.setText("editable draft");
+		composer.setRuntimeChildren([transcript, pending, thinking, composer.editor], {
+			nativeDock: [thinking, pending, composer.editor],
+			selfClearingChrome: [thinking],
+			transientChrome: [composer.editor],
+		});
+		const cx: DescribeContext = {
+			cols: 60,
+			reduceMotion: true,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
+		const nativeRows = (child: NativeChild): string[] => {
+			if (!("k" in child)) {
+				const described = child.describe?.(cx);
+				return described ? nativeRows(described) : [...child.render(cx.cols)];
+			}
+			if (child.k === "rows") return [...(child.p?.lines ?? [])];
+			return (child.c ?? []).flatMap(nativeRows);
+		};
+		composer.start({ playWelcomeIntro: false });
+		try {
+			for (const [rows, visible] of [
+				[12, false],
+				[14, true],
+				[12, false],
+			] as const) {
+				terminal.resize(60, rows);
+				const viewport = composer.renderFrame({ columns: 60, rows }).viewport;
+				expect(viewport.join("\n").includes("latest thought")).toBe(visible);
+				const dock = composer.describeSurface().dock.flatMap(nativeRows);
+				expect(dock.join("\n").includes("latest thought")).toBe(visible);
+				expect(composer.editor.getText()).toBe("editable draft");
+				const resized = composer.renderResizeFrame({ columns: 60, rows });
+				expect(resized.join("\n").includes("latest thought")).toBe(visible);
+				if (visible) {
+					expect(dock.some(line => Bun.stripANSI(line) === " latest thought ")).toBe(true);
+					expect(dock.some(line => Bun.stripANSI(line) === " first thought ")).toBe(true);
+				}
+			}
+		} finally {
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("keeps working, retry and compaction status visible when thinking exceeds the compact budget", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const terminal = new VirtualTerminal(60, 12);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		const pressure = new InlineWidget();
+		pressure.rows = 6;
+		const thinking = new ThinkingPreviewComponent();
+		thinking.setText("thinking first\nthinking second");
+		const status = new (class extends Container {
+			override render(width: number): readonly string[] {
+				return super.render(width);
+			}
+
+			isCompactBudgetedChrome(): boolean {
+				return false;
+			}
+		})();
+		const loader = new Loader(
+			composer.ui,
+			text => text,
+			text => text,
+			"处理中…",
+		);
+		status.addChild(loader);
+		const editor = new Container();
+		editor.addChild(new Text("EDITOR", 0, 0));
+		composer.setRuntimeChildren([transcript, pressure, thinking, status, editor], {
+			transientChrome: [editor],
+			selfClearingChrome: [thinking],
+		});
+		composer.start({ playWelcomeIntro: false });
+		try {
+			for (const message of ["处理中…", "Retrying", "Compacting context…"]) {
+				loader.setMessage(message);
+				composer.ui.requestRender();
+				await scheduler.settle(terminal);
+				const view = terminal
+					.getViewport()
+					.map(row => Bun.stripANSI(row))
+					.join("\n");
+				expect(view).toContain(message);
+				expect(view).toContain("EDITOR");
+				expect(view).not.toContain("thinking first");
+			}
+			loader.stop();
+			status.removeChild(loader);
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			expect(terminal.getViewport().join("\n")).not.toContain("Compacting context…");
+		} finally {
+			loader.stop();
+			composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	function statusRows(terminal: VirtualTerminal): string[] {
 		return terminal
 			.getViewport()

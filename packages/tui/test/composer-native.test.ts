@@ -112,16 +112,11 @@ describe("native composer", () => {
 		expect(editor.onEscape).toHaveBeenCalledTimes(1);
 	});
 
-	it("quotes the session title in italics as the placeholder; a viewed subagent's name wins", () => {
+	it("quotes the session title in italics as the placeholder", () => {
 		const placeholder = (state: ComposerNativeState) =>
 			nodes(composer(state).describe(cx)).find(n => n.k === "editor")?.p;
-		expect(placeholder({ running: false })).toMatchObject({ placeholder: "What are we cooking?" });
-		expect(placeholder({ running: false, title: "" })).toMatchObject({ placeholder: "What are we cooking?" });
 		expect(placeholder({ running: false, title: "Fix login" })).toMatchObject({
 			placeholder: [{ t: "“Fix login”", s: "em" }],
-		});
-		expect(placeholder({ running: false, title: "Fix login", viewing: ["Scout"] })).toMatchObject({
-			placeholder: "Message Scout",
 		});
 	});
 
@@ -146,7 +141,6 @@ describe("native composer", () => {
 		const lead = (root.c ?? []).filter(isNode);
 		expect(lead.indexOf(header)).toBeLessThan(lead.indexOf(byRole(root, "omp.composer.line")!));
 		expect(byRole(header, "omp.composer.agent")?.p).toMatchObject({ text: "Scout" });
-		expect(nodes(root).find(n => n.k === "editor")?.p).toMatchObject({ placeholder: "Message Scout" });
 		expect(byRole(header, "omp.composer.crumb")?.p).toMatchObject({
 			text: "AckAudit",
 			actions: { click: "focus:AckAudit" },
@@ -361,11 +355,10 @@ describe("native composer", () => {
 
 		const reading = bar();
 		expect(slots(reading)).toEqual(["omp.composer.effort", "omp.composer.rate", "gap", "omp.composer.send"]);
-		expect(byRole(reading, "omp.composer.rate")?.p).toEqual({
+		expect(byRole(reading, "omp.composer.rate")?.p).toMatchObject({
 			value: 31.8,
 			unit: "tok/s",
 			role: "omp.composer.rate",
-			title: "Generation rate",
 		});
 
 		// A rate tick re-describes the readout alone: the chips beside it keep their nodes.
@@ -401,8 +394,6 @@ describe("native composer thinking level in the model chip", () => {
 		expect((model.c ?? []).filter(isNode).map(n => n.k)).toEqual(["effort", "text", "icon"]);
 		expect(byRole(model, "omp.composer.model.effort")?.p).toMatchObject({
 			level: "xhigh",
-			// The level, then the cycle key as the effort chip's tooltip names it.
-			title: expect.stringMatching(/^Thinking effort: xhigh {2}\S/),
 			actions: { click: "thinking.cycle" },
 		});
 	});

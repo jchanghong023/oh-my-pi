@@ -7,8 +7,8 @@ import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
-import { truncateToWidth, wrapTextWithAnsi } from "../utils";
-import { type CompactLogLine, type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
+import { truncateToWidth } from "../utils";
+import { COMPACT_STATUS_LABEL, type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -22,7 +22,7 @@ import {
 } from "../tools/index";
 import { describeDefaultToolExecution, formatDefaultToolExecution } from "../tools/default-renderer";
 import { INTENT_FIELD, type TspCardStatus, type TspPreview, type TspText, type TspTone } from "@oh-my-pi/pi-wire";
-import { card, code, col, EMPTY_NODE, node, span, text, withHidden } from "../native/describe";
+import { card, col, EMPTY_NODE, node, span, text, withHidden } from "../native/describe";
 import {
 	type DescribeContext,
 	type NativeChild,
@@ -275,11 +275,7 @@ const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", ba
  */
 export function parksAsBackground(toolName: string, details: unknown): boolean {
 	const mode = JOB_CARD_TOOLS[toolName];
-	if (
-		mode === undefined ||
-		(mode === "native" && !isNativeRendering() && !(toolName === "bash" && displayPreferences.compactToolActivity))
-	)
-		return false;
+	if (mode === undefined || (mode === "native" && !isNativeRendering())) return false;
 	return asyncJobState(details) === "running";
 }
 
@@ -331,10 +327,6 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
  * and one coalesced render frame per tick instead of N unsynchronized timers
  * each independently waking the render scheduler (issue #8731). */
 const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
-
-const COMPACT_BASH_LOG_DELAY_MS = 30_000;
-const COMPACT_BASH_LOG_LINES = 5;
-const COMPACT_BASH_LOG_SLICE = 8_192;
 
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
 
@@ -412,7 +404,6 @@ export class ToolExecutionComponent extends Container {
 	#compactIntent: string | undefined;
 	#showImages: boolean;
 	readonly #compactToolActivityOverride: boolean | undefined;
-	#forceOriginalFileWrite = false;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
@@ -462,11 +453,6 @@ export class ToolExecutionComponent extends Container {
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
 	#previewReady?: PromiseWithResolvers<void>;
-	#compactBashLogCache: { version: number; lines: readonly string[] } | undefined;
-	#compactBashOutputText = "";
-	#compactBashLastOutputAtNow: number | undefined;
-	#compactBashLogLines: readonly CompactLogLine[] = [];
-	#compactBashBeforeResult: { text: string; at: number | undefined; lines: readonly CompactLogLine[] } | undefined;
 	#compactNeedsUserInput: string | undefined;
 	// Payload keys whose Kitty PNG conversion is already awaited; the converted
 	// images themselves live in the process-wide cache behind
@@ -498,7 +484,7 @@ export class ToolExecutionComponent extends Container {
 	#executionStartedAtNow: number | undefined;
 	// When the call settled (final result or seal), same clock; freezes the native elapsed timer.
 	#executionEndedAtNow: number | undefined;
-	readonly #toolCallId: string | undefined;
+	#toolCallId: string | undefined;
 	readonly #native = new Memo();
 	// LSP diagnostics that arrived after the result (native only), shown in the frame.
 	#lateDiagnostics: readonly FileDiagnosticsResult[] | undefined;
@@ -579,6 +565,13 @@ export class ToolExecutionComponent extends Container {
 
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
+	}
+
+	updateToolCallId(toolCallId: string): void {
+		if (this.#toolCallId === toolCallId) return;
+		this.#toolCallId = toolCallId;
+		this.#blockVersion++;
+		this.#ui.requestComponentRender(this);
 	}
 
 	updateArgs(args: unknown, _toolCallId?: string): void {
@@ -685,44 +678,6 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
-		if (this.#toolName === "bash") {
-			this.#compactBashBeforeResult = {
-				text: this.#compactBashOutputText,
-				at: this.#compactBashLastOutputAtNow,
-				lines: this.#compactBashLogLines,
-			};
-			const output = result.content
-				.filter(block => block.type === "text")
-				.map(block => block.text ?? "")
-				.join("\n");
-			// The foreground-to-background receipt appends a job notice to the preview.
-			// Keep following the last real progress frame until the job sends another.
-			if (
-				!(asyncJobState(result.details) === "running" && !isPartial) &&
-				output &&
-				output !== this.#compactBashOutputText
-			) {
-				const at = performance.now();
-				const previous = this.#compactBashOutputText;
-				let retained = this.#compactBashLogLines;
-				let added = output;
-				if (previous && output.startsWith(previous)) {
-					const boundary = previous.endsWith("\n") ? previous.length : previous.lastIndexOf("\n") + 1;
-					added = output.slice(boundary);
-					if (previous.slice(boundary).trim()) retained = retained.slice(0, -1);
-				} else {
-					retained = [];
-				}
-				const lines = sanitizeText(added.slice(-COMPACT_BASH_LOG_SLICE))
-					.split("\n")
-					.map(line => replaceTabs(line).trimEnd())
-					.filter(line => line.trim().length > 0)
-					.map(text => ({ text, at }));
-				this.#compactBashLogLines = [...retained, ...lines].slice(-COMPACT_BASH_LOG_LINES);
-				this.#compactBashOutputText = output;
-				this.#compactBashLastOutputAtNow = at;
-			}
-		}
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
@@ -747,7 +702,7 @@ export class ToolExecutionComponent extends Container {
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
-		if (!isPartial) this.#compactToolResultListener?.();
+		this.#compactToolResultListener?.();
 		this.#resetDisplayForResultTopologyChange(
 			hadNoResult && firstResultRepaintShapePainted,
 			wasPartialResult && partialResultPainted,
@@ -876,16 +831,13 @@ export class ToolExecutionComponent extends Container {
 	 * quiet command's elapsed time advances without the 30fps spinner ticker.
 	 */
 	#updateElapsedTicker(isBackgroundAsyncRunning: boolean): void {
-		const compactBashRunning =
-			this.#compactToolActivity && this.#toolName === "bash" && this.#executionStarted && this.#isRunning();
 		const needsTicker =
-			compactBashRunning ||
-			(this.#renderer?.tickElapsed === true &&
-				this.#executionStarted &&
-				this.#isPartial &&
-				!this.#sealed &&
-				!isBackgroundAsyncRunning &&
-				!isNativeRendering());
+			this.#renderer?.tickElapsed === true &&
+			this.#executionStarted &&
+			this.#isPartial &&
+			!this.#sealed &&
+			!isBackgroundAsyncRunning &&
+			!isNativeRendering();
 		if (needsTicker && !this.#elapsedTicker) {
 			this.#elapsedTicker = setInterval(() => this.#ui.requestComponentRender(this), 1000);
 		} else if (!needsTicker) {
@@ -979,16 +931,21 @@ export class ToolExecutionComponent extends Container {
 		if (this.#compactNeedsUserInput === reason) return;
 		this.#compactNeedsUserInput = reason;
 		this.#blockVersion++;
+		this.#compactToolResultListener?.();
 		this.#ui.requestComponentRender(this);
 	}
 
-	/** A queued call has not begun; parked background Bash remains genuinely running. */
-	isCompactToolRunning(): boolean {
-		return this.#executionStarted && this.#isRunning() && this.#compactNeedsUserInput === undefined;
+	/** Critical upstream feedback bypasses ordinary compact previews. */
+	hasCompactCriticalFeedback(): boolean {
+		return (
+			this.#result?.isError === true ||
+			this.#compactNeedsUserInput !== undefined ||
+			this.#compactOutcome() === "待确认"
+		);
 	}
 
-	renderCompactRunningActivityRows(width: number): readonly string[] {
-		return this.isCompactToolRunning() ? this.renderCompactActivityRows(width) : [];
+	isCompactWriteCall(): boolean {
+		return this.#toolName === "write" || this.#toolName === "edit" || this.#toolName === "apply_patch";
 	}
 
 	/** Successful write/edit executions retain their upstream card in the compact live run. */
@@ -1012,147 +969,10 @@ export class ToolExecutionComponent extends Container {
 		return typeof path !== "string" || !/^[a-z][a-z0-9+.-]*:\/\//i.test(unwrapHashlineHeaderPath(path));
 	}
 
-	/** Explicit expansion shows the complete original Bash source, including later lines. */
-	compactBashCommandRows(width: number): readonly string[] {
-		if (!this.#compactToolActivity || this.#toolName !== "bash" || !this.#expanded) return [];
-		const args = this.#args;
-		const command = isRecord(args) && typeof args.command === "string" ? args.command : "";
-		return command ? wrapTextWithAnsi(theme.fg("muted", `$ ${sanitizeText(command)}`), Math.max(1, width)) : [];
-	}
-
-	/** Render the existing detailed card without replacing its original component state. */
-	renderOriginalFileWriteRows(width: number): readonly string[] {
-		this.#forceOriginalFileWrite = true;
-		try {
-			return this.render(width);
-		} finally {
-			this.#forceOriginalFileWrite = false;
-		}
-	}
-
-	/** Keep auto expansion local to the compact projection; global/user expansion still wins. */
-	renderCompactFileWriteRows(width: number, autoExpanded: boolean): readonly string[] {
-		const expanded = this.#expanded;
-		this.#expanded ||= autoExpanded;
-		try {
-			return this.renderOriginalFileWriteRows(width);
-		} finally {
-			this.#expanded = expanded;
-		}
-	}
-
-	/** Native counterpart of the existing detailed card. */
-	describeOriginalFileWrite(cx?: DescribeContext): NativeNode {
-		this.#forceOriginalFileWrite = true;
-		try {
-			return this.describe(cx);
-		} finally {
-			this.#forceOriginalFileWrite = false;
-		}
-	}
-
-	describeCompactFileWrite(cx: DescribeContext | undefined, autoExpanded: boolean): NativeNode {
-		const expanded = this.#expanded;
-		this.#expanded ||= autoExpanded;
-		try {
-			return this.describeOriginalFileWrite(cx);
-		} finally {
-			this.#expanded = expanded;
-		}
-	}
-
-	/** Screen lines for a long-running Bash call; the model-facing result stays unchanged. */
-	compactBashLogRows(width: number): readonly string[] {
-		if (!this.#compactToolActivity || this.#toolName !== "bash") return [];
-		if (this.#compactNeedsUserInput !== undefined) {
-			return [
-				truncateToWidth(theme.fg("warning", `等待用户输入：${sanitizeText(this.#compactNeedsUserInput)}`), width),
-			];
-		}
-		if (this.#result?.isError && !this.#isPartial) {
-			const lines = this.#compactBashOutputText
-				.split("\n")
-				.map(line => line.trimEnd())
-				.filter(Boolean);
-			return [truncateToWidth(theme.fg("error", lines.at(-1) || "命令失败（工具未提供错误详情）"), width)];
-		}
-		if (!this.#isRunning() || this.#executionStartedAtNow === undefined) return [];
-		const elapsed = performance.now() - this.#executionStartedAtNow;
-		if (elapsed <= COMPACT_BASH_LOG_DELAY_MS) return [];
-		const cached = this.#compactBashLogCache;
-		if (cached?.version !== this.#resultVersion) {
-			const lines = sanitizeText(this.#compactBashOutputText.slice(-COMPACT_BASH_LOG_SLICE))
-				.split("\n")
-				.map(line => replaceTabs(line).trimEnd())
-				.filter(line => line.trim().length > 0)
-				.slice(-COMPACT_BASH_LOG_LINES);
-			this.#compactBashLogCache = { version: this.#resultVersion, lines };
-		}
-		const lastOutputAt = this.#compactBashLastOutputAtNow;
-		const activity =
-			lastOutputAt === undefined
-				? "尚无输出"
-				: `距上次输出 ${Math.floor((performance.now() - lastOutputAt) / 1000)}s`;
-		const status = truncateToWidth(theme.fg("muted", `已运行 ${Math.floor(elapsed / 1000)}s · ${activity}`), width);
-		return [
-			status,
-			...(this.#compactBashLogCache?.lines ?? []).map(line =>
-				truncateToWidth(`  ${theme.fg("muted", line)}`, width),
-			),
-		];
-	}
-
-	/** Native rows share the same delayed tail selection as ANSI. */
-	compactBashLogNodes(width: number): readonly NativeNode[] {
-		const tone =
-			this.#compactNeedsUserInput !== undefined
-				? "warning"
-				: this.#result?.isError && !this.#isPartial
-					? "error"
-					: "dim";
-		return this.compactBashLogRows(width).map(line =>
-			text([span(Bun.stripANSI(line), tone)], { lines: 1, wrap: "none", truncate: "end" }),
-		);
-	}
-
-	/** Per-line times let the shared dock merge output without reordering an unchanged prefix. */
-	getCompactBashLogLines(): readonly CompactLogLine[] {
-		return this.#compactBashLogLines;
-	}
-
-	/** One actual call, shared by the live ANSI/native activity dock. */
-	renderCompactActivityRows(width: number): readonly string[] {
-		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
-		return this.#renderCompact(width, true);
-	}
-	/** Running background jobs remain visible when no model turn owns the dock. */
-	isCompactBackgroundActive(): boolean {
-		return this.#parkedBackground && !this.#sealed && asyncJobState(this.#result?.details) === "running";
-	}
-
-	getCompactToolCount(): number {
-		return Number(
-			this.isCompactToolActivity() &&
-				this.#nativeStatus() === "done" &&
-				this.#compactOutcome() !== "待确认" &&
-				!this.#hasCompactReadWarning(),
-		);
-	}
-
-	getCompactToolFailureCount(): number {
-		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
-	}
-
+	/** Stable actual-call identity survives provider tool-call ID corrections. */
 	getCompactToolCalls(): readonly CompactToolCall[] {
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
-		return [{ id: this.#toolCallId ?? this, failed: this.#nativeStatus() === "error" }];
-	}
-
-	/** Exact identity of a failed execution represented by the compact activity rows. */
-	getCompactToolFailureId(): string | undefined {
-		return this.#toolActivityVisible && this.#compactToolActivity && this.#result?.isError && !this.#isPartial
-			? this.#toolCallId
-			: undefined;
+		return [{ id: this, failed: this.#nativeStatus() === "error" }];
 	}
 
 	setCompactToolResultListener(listener: (() => void) | undefined): void {
@@ -1176,7 +996,9 @@ export class ToolExecutionComponent extends Container {
 
 	get #compactToolActivity(): boolean {
 		return (
-			!this.#forceOriginalFileWrite &&
+			!this.#expanded &&
+			!this.hasCompactCriticalFeedback() &&
+			!this.isCompactActualFileWrite() &&
 			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) &&
 			this.isCompactToolActivity()
 		);
@@ -1187,13 +1009,6 @@ export class ToolExecutionComponent extends Container {
 	}
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
 	parkAsBackground(): void {
-		if (this.#toolName === "bash" && this.#compactBashBeforeResult) {
-			// The start receipt carries a job notice, not fresh process output.
-			this.#compactBashOutputText = this.#compactBashBeforeResult.text;
-			this.#compactBashLastOutputAtNow = this.#compactBashBeforeResult.at;
-			this.#compactBashLogLines = this.#compactBashBeforeResult.lines;
-			this.#compactBashLogCache = undefined;
-		}
 		this.#parkedBackground = true;
 	}
 
@@ -1321,6 +1136,7 @@ export class ToolExecutionComponent extends Container {
 		const media = cx?.supports("media") === true;
 		const key = [
 			dataFirst,
+			this.#toolCallId,
 			this.#resultVersion,
 			this.#expanded,
 			this.#isPartial,
@@ -1356,7 +1172,7 @@ export class ToolExecutionComponent extends Container {
 		return Math.max(0, Math.round((ended ?? performance.now()) - started));
 	}
 
-	/** Compact mode never constructs a renderer body, so terminal-local expansion cannot reveal it. */
+	/** Ordinary compact preview; expansion and critical feedback use the original renderer. */
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const summary = this.#compactActivity();
 		const outcome = this.#compactOutcome();
@@ -1364,10 +1180,6 @@ export class ToolExecutionComponent extends Container {
 		const status = outcome === "待确认" ? "pending" : this.#nativeStatus();
 		const ms = this.#elapsedMs(this.#nativeStatus());
 		const live = this.#isRunning();
-		const expandedCommand =
-			this.#toolName === "bash" && this.#expanded && isRecord(this.#args) && typeof this.#args.command === "string"
-				? sanitizeText(this.#args.command)
-				: undefined;
 		const call = dataFirst
 			? node(
 					"tool",
@@ -1393,13 +1205,12 @@ export class ToolExecutionComponent extends Container {
 						collapsible: this.#toolName === "bash",
 						collapsed: this.#toolName === "bash" ? !this.#expanded : undefined,
 					},
-					expandedCommand ? [code(expandedCommand, { lang: "bash" })] : undefined,
 				)
 			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
 					text(
 						[
 							span(
-								`${this.#compactNeedsUserInput === undefined ? (outcome ?? status) : "等待用户输入"} · `,
+								`${this.#compactNeedsUserInput === undefined ? (outcome ?? COMPACT_STATUS_LABEL[status]) : "等待用户输入"} · `,
 								status === "error"
 									? "error"
 									: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
@@ -1418,7 +1229,7 @@ export class ToolExecutionComponent extends Container {
 					),
 					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 				]);
-		return expandedCommand && !dataFirst ? col([call, code(expandedCommand, { lang: "bash" })]) : call;
+		return call;
 	}
 
 	#compactActivity(): ToolActivitySummary {
@@ -1826,7 +1637,7 @@ export class ToolExecutionComponent extends Container {
 			return [];
 		}
 		if (this.#compactToolActivity) return this.#renderCompact(width, true);
-		if (this.#displayCompactToolActivity) this.#updateDisplay();
+		if (this.#displayCompactToolActivity || this.#renderState.expanded !== this.#expanded) this.#updateDisplay();
 		let lines = super.render(width);
 		if (this.#allocation < 3) {
 			// A squeezed allocation degrades only blocks that genuinely overflow it.
@@ -1855,7 +1666,7 @@ export class ToolExecutionComponent extends Container {
 					: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
 						? "warning"
 						: "dim",
-				`${this.#compactNeedsUserInput === undefined ? (this.#compactOutcome() ?? status) : "等待用户输入"} · `,
+				`${this.#compactNeedsUserInput === undefined ? (this.#compactOutcome() ?? COMPACT_STATUS_LABEL[status]) : "等待用户输入"} · `,
 			);
 			const detail = summary.detail ? `${theme.fg("dim", " · ")}${theme.fg("text", summary.detail)}` : "";
 			const line = truncateToWidth(
@@ -2336,7 +2147,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.#toolName === "bash") {
 			// Bash needs render context even before a result exists. The renderer uses the pending-call args
 			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
-			if (this.#result && !this.#compactToolActivity) {
+			if (this.#result) {
 				// Pass raw output and expanded state - renderer handles width-aware truncation
 				const output = this.#getTextOutput().trimEnd();
 				context.output = output;
@@ -2344,7 +2155,7 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = DEFAULT_TERMINAL_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(isRecord(this.#args) ? this.#args.timeout : undefined, 3600);
-		} else if (this.#toolName === "eval" && this.#result && !this.#compactToolActivity) {
+		} else if (this.#toolName === "eval" && this.#result) {
 			const output = this.#getTextOutput().trimEnd();
 			context.output = output;
 			context.expanded = this.#expanded;
@@ -2370,7 +2181,7 @@ export class ToolExecutionComponent extends Container {
 					context.perFileDiffPreview = previews;
 				}
 			}
-			if (!this.#compactToolActivity && !previews?.some(preview => preview.diff)) {
+			if (!previews?.some(preview => preview.diff)) {
 				const editMode = this.#editMode;
 				const fallback = editMode ? renderStreamingFallback(editMode, this.#args, theme) : "";
 				if (fallback) context.editStreamingFallback = fallback;

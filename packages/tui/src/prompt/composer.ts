@@ -22,6 +22,7 @@ import {
 } from "../tui";
 import { wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
+import { EMPTY_NODE, node } from "../native/describe";
 import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { CustomEditor } from "./custom-editor";
@@ -121,7 +122,7 @@ export interface RuntimeChildrenOptions {
 	readonly selfClearingChrome?: readonly Component[];
 }
 
-/** A chrome root that yields its rows to prose and input on short compact terminals. */
+/** Controls whether a chrome root yields space on short compact terminals; false preserves status rows. */
 export interface CompactBudgetedChrome {
 	isCompactBudgetedChrome?(): boolean;
 }
@@ -233,6 +234,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#inputTailRows: number | undefined;
 	#inputPrefixRows = 0;
 	#compactThinkingSuppressed = false;
+	readonly #compactChromeRows = new Map<Component, readonly string[]>();
+	readonly #compactChromeUnboundedRows = new Map<Component, number>();
 	readonly #exit: (code: number) => void;
 	readonly #now: () => number;
 	#preferences: ComposerPreferences;
@@ -502,7 +505,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// height. Otherwise the final physical slice can discard prose that was
 		// never committed to history. Other modes retain their resting-floor
 		// policy so temporary chrome can refill when it closes.
-		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
+		let active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
+		if (
+			active.length &&
+			after.length &&
+			!Bun.stripANSI(active[active.length - 1]!).trim() &&
+			!Bun.stripANSI(after[0]!).trim()
+		)
+			active = active.slice(0, -1);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
 			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
@@ -596,7 +606,49 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
 				transcript.setCompactToolActivityVisibleInViewport(rows - Math.min(rows, 3) - proseRows >= 2);
 				main.push(...roots.slice(0, transcriptIndex), ...transcript.nativeBlocks());
-				dock.push(...(this.#nativeDock ?? roots.slice(transcriptIndex + 1)));
+				const dockRoots = this.#nativeDock ?? roots.slice(transcriptIndex + 1);
+				// Measure the canonical runtime order, not the native dock's different
+				// HUD order. Both backends must make the same short-screen decision.
+				this.#frameRows = rows;
+				this.#inputTailRows = undefined;
+				this.#inputPrefixRows = 0;
+				this.#compactThinkingSuppressed = false;
+				this.#compactChromeRows.clear();
+				for (const root of displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity
+					? roots.slice(transcriptIndex + 1)
+					: []) {
+					if (root === this.editor || (root instanceof Container && root.children.includes(this.editor))) break;
+					const prefix = this.#inputPrefixRows;
+					this.#inputPrefixRows = prefix + this.#renderInputRoot(root, this.ui.terminal.columns).length;
+				}
+				for (const root of dockRoots) {
+					if (
+						!roots.includes(root) &&
+						this.#isBudgetedCompactChrome(root) &&
+						(this.#compactThinkingSuppressed || this.#compactChromeAvailableRows(this.ui.terminal.columns) === 0)
+					) {
+						dock.push(EMPTY_NODE);
+						continue;
+					}
+					const bounded = this.#compactChromeRows.get(root);
+					if (bounded === undefined && !(root instanceof ThinkingPreviewComponent)) {
+						dock.push(root);
+					} else if (
+						(bounded === undefined || bounded.length > 0) &&
+						(!(root instanceof ThinkingPreviewComponent) || root.render(this.ui.terminal.columns).length > 0)
+					) {
+						if (root instanceof ThinkingPreviewComponent) {
+							// Keep the preview's own describe contract and gutters.
+							dock.push(node("col", {}, [node("rows", { cols: this.ui.terminal.columns, lines: [""] }), root]));
+						} else if (bounded?.length === this.#compactChromeUnboundedRows.get(root)) {
+							dock.push(root);
+						} else {
+							dock.push(node("col", { max: { h: bounded?.length ?? 0 } }, [root]));
+						}
+					} else {
+						dock.push(EMPTY_NODE);
+					}
+				}
 			}
 		}
 		const previous = this.#nativeSurface;
@@ -969,11 +1021,19 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		return (
 			displayPreferences.compactToolActivity &&
 			!displayPreferences.hideToolActivity &&
-			(this.#selfClearingChrome.has(root) ||
-				(root as Partial<CompactBudgetedChrome>).isCompactBudgetedChrome?.() === true ||
-				root instanceof Loader ||
-				(root instanceof Container && root.children.length === 1 && root.children[0] instanceof Loader))
+			((root as Partial<CompactBudgetedChrome>).isCompactBudgetedChrome?.() ??
+				(this.#selfClearingChrome.has(root) ||
+					root instanceof Loader ||
+					(root instanceof Container && root.children.length === 1 && root.children[0] instanceof Loader)))
 		);
+	}
+
+	#compactChromeAvailableRows(width: number): number {
+		const rows = this.#frameRows ?? this.ui.terminal.rows;
+		const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
+		const transcript = this.#runtimeChildren.find(child => child instanceof TranscriptContainer);
+		const toolRows = transcript?.compactToolActivityRowCount(width) ?? 0;
+		return Math.max(0, rows - proseRows - Math.min(rows, 3) - toolRows - this.#inputPrefixRows);
 	}
 
 	/** Budget mounted rows after the input from the same render used for composition. */
@@ -986,12 +1046,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			return this.#renderRoots(root.children, width);
 		}
 		if (this.#inputTailRows === undefined && this.#isBudgetedCompactChrome(root)) {
-			if (!(root instanceof ThinkingPreviewComponent) && this.#compactThinkingSuppressed) return [];
-			const rows = this.#frameRows ?? this.ui.terminal.rows;
-			const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
-			const transcript = this.#runtimeChildren.find(child => child instanceof TranscriptContainer);
-			const toolRows = transcript?.compactToolActivityRowCount(width) ?? 0;
-			const remaining = Math.max(0, rows - proseRows - Math.min(rows, 3) - toolRows - this.#inputPrefixRows);
+			if (!(root instanceof ThinkingPreviewComponent) && this.#compactThinkingSuppressed) {
+				this.#compactChromeRows.set(root, []);
+				return [];
+			}
+			const remaining = this.#compactChromeAvailableRows(width);
 			// Tools have priority over thinking; expendable HUDs yield before either.
 			const reserveThinking =
 				root instanceof ThinkingPreviewComponent
@@ -1000,17 +1059,24 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 								(child, index) =>
 									index > this.#runtimeChildren.indexOf(root) && child instanceof ThinkingPreviewComponent,
 						  )
-						? 2
+						? 3
 						: 0;
 			const available = Math.max(0, remaining - reserveThinking);
-			const rendered = root.render(width);
+			const content = root.render(width);
+			const rendered = root instanceof ThinkingPreviewComponent && content.length ? ["", ...content] : content;
+			this.#compactChromeUnboundedRows.set(root, rendered.length);
 			if (root instanceof ThinkingPreviewComponent) {
 				this.#compactThinkingSuppressed = rendered.length > available;
-				return this.#compactThinkingSuppressed ? [] : rendered;
+				const bounded = this.#compactThinkingSuppressed ? [] : rendered;
+				this.#compactChromeRows.set(root, bounded);
+				return bounded;
 			}
-			return rendered.length <= available ? rendered : rendered.slice(0, available);
+			const bounded = rendered.length <= available ? rendered : rendered.slice(0, available);
+			this.#compactChromeRows.set(root, bounded);
+			return bounded;
 		}
-		const rendered = root.render(width);
+		const content = root.render(width);
+		const rendered = root instanceof ThinkingPreviewComponent && content.length ? ["", ...content] : content;
 		if (root === this.editor || (root instanceof Container && root.children.includes(this.editor))) {
 			this.#inputTailRows = rendered.length;
 			if (!this.#runtimeMounted) this.#recordBootstrapEditorRows(this.editor.renderedRows);

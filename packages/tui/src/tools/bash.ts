@@ -1,6 +1,5 @@
 import type { Component } from "../tui";
-import { getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
-import { readShellWord } from "@oh-my-pi/pi-utils/shell";
+import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
@@ -23,8 +22,6 @@ import {
 import type {
 	NativeToolHead,
 	NativeToolView,
-	ToolActivityContext,
-	ToolActivitySummary,
 	RenderResultContextOptions,
 	RenderResultOptions,
 	ToolRenderer,
@@ -736,116 +733,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 	} satisfies ToolRenderer<TArgs, BashToolDetails>;
 }
 
-/** Builtins that only prepare the shell; the command after the next separator does the work. */
-const SHELL_CONTEXT_BUILTINS: ReadonlySet<string> = new Set([
-	"cd",
-	"pushd",
-	"popd",
-	"export",
-	"set",
-	"unset",
-	"shopt",
-	"source",
-	".",
-	"true",
-	":",
-]);
-
-/** Text after the next top-level `&&`, `||`, `;` or newline, or undefined when none follows. */
-function afterCommandSeparator(rest: string): string | undefined {
-	let quote: '"' | "'" | undefined;
-	for (let index = 0; index < rest.length; index++) {
-		const char = rest[index]!;
-		if (quote) {
-			if (char === quote) quote = undefined;
-			else if (char === "\\" && quote === '"') index++;
-			continue;
-		}
-		if (char === '"' || char === "'") {
-			quote = char;
-			continue;
-		}
-		if (char === "\\") {
-			index++;
-			continue;
-		}
-		if (char === "\n" || char === ";") return rest.slice(index + 1);
-		if ((char === "&" || char === "|") && rest[index + 1] === char) return rest.slice(index + 2);
-	}
-	return undefined;
-}
-
-/** One-line command text after leading assignments/context builtins, or undefined when unparseable. */
-function compactBashCommandText(command: string): string | undefined {
-	let remaining = command.trim();
-	while (remaining) {
-		const word = readShellWord(remaining);
-		if (!word || word === "unterminated") return undefined;
-		const source = remaining.slice(0, remaining.length - word.rest.length).trimEnd();
-		// The shared word reader resolves quotes, not shell grammar or expansion.
-		if (/[$`;&|()<>{}*?[\]~\r\n]/.test(source)) return undefined;
-		if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value)) {
-			remaining = word.rest;
-			continue;
-		}
-		if (word.value.startsWith("#")) return undefined;
-		if (SHELL_CONTEXT_BUILTINS.has(word.value)) {
-			const next = afterCommandSeparator(word.rest);
-			if (next === undefined) return undefined;
-			remaining = next;
-			continue;
-		}
-		// One row: collapse the first line; the renderer truncates it to the row width.
-		const text = sanitizeText(remaining.split("\n", 1)[0]!).replace(/\s+/g, " ").trim();
-		return text ? text.slice(0, 512) : undefined;
-	}
-	return undefined;
-}
-
-/** Show only a literal executable, never a leading environment assignment, context builtin or script fragment. */
-function compactBashExecutable(command: string): string {
-	let remaining = command.trim();
-	while (remaining) {
-		const word = readShellWord(remaining);
-		if (!word || word === "unterminated") return "Shell command";
-		const source = remaining.slice(0, remaining.length - word.rest.length).trimEnd();
-		// The shared word reader resolves quotes, not shell grammar or expansion.
-		if (/[$`;&|()<>{}*?[\]~\r\n]/.test(source)) return "Shell command";
-		if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value)) {
-			remaining = word.rest;
-			continue;
-		}
-		if (word.value.startsWith("#")) return "Shell command";
-		if (SHELL_CONTEXT_BUILTINS.has(word.value)) {
-			const next = afterCommandSeparator(word.rest);
-			if (next === undefined) return word.value || "Shell command";
-			remaining = next;
-			continue;
-		}
-		return word.value || "Shell command";
-	}
-	return "Shell command";
-}
-
 /** Renders bash command previews and output. */
-export const bashToolRenderer = {
-	...createShellRenderer<BashRenderArgs>({
-		resolveTitle: args => (args?.name ? `Bash · ${String(args.name)}` : "Bash"),
-		resolveCommand: args => args?.command,
-		resolveCwd: args => args?.cwd,
-		resolveEnv: args => args?.env,
-		showHeader: false,
-	}),
-	activitySummary(args: BashRenderArgs, context: ToolActivityContext): ToolActivitySummary | undefined {
-		if (!context.compactToolActivity) return undefined;
-		const intent = args?.[INTENT_FIELD];
-		const command = typeof args?.command === "string" ? args.command : "";
-		return {
-			label: "Bash",
-			detail:
-				typeof intent === "string" && intent.trim()
-					? intent
-					: (compactBashCommandText(command) ?? compactBashExecutable(command)),
-		};
-	},
-} satisfies ToolRenderer<BashRenderArgs, BashToolDetails>;
+export const bashToolRenderer = createShellRenderer<BashRenderArgs>({
+	resolveTitle: args => (args?.name ? `Bash · ${String(args.name)}` : "Bash"),
+	resolveCommand: args => args?.command,
+	resolveCwd: args => args?.cwd,
+	resolveEnv: args => args?.env,
+	showHeader: false,
+});

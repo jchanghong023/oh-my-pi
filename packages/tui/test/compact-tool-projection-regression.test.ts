@@ -48,7 +48,11 @@ describe("compact tool projection regressions", () => {
 			details: { source: "interrupt_skipped", __synthetic: true },
 		});
 		transcript.addChild(wait);
-		const rows = transcript.compactToolActivityBlock()?.render(80) ?? [];
+		const rows =
+			transcript
+				.compactToolActivityBlock()
+				?.render(80)
+				.filter(row => Bun.stripANSI(row).trim()) ?? [];
 		expect(rows).toHaveLength(2);
 		expect(Bun.stripANSI(rows.join("\n"))).toMatch(/first\.ts[^]*second\.ts/);
 		expect(Bun.stripANSI(rows.join("\n"))).not.toContain("Wait");

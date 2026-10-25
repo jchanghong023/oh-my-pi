@@ -1,15 +1,21 @@
+import type { TspCardStatus } from "@oh-my-pi/pi-wire";
 import { type Component, Container } from "../tui";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
+
+export const COMPACT_STATUS_LABEL: Record<TspCardStatus, string> = {
+	pending: "待执行",
+	running: "执行中",
+	done: "完成",
+	error: "失败",
+	cancelled: "已取消",
+};
+
 export interface CompactToolCall {
 	id: string | object;
 	failed: boolean;
 }
 
-export interface CompactLogLine {
-	text: string;
-	at: number;
-}
 
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
