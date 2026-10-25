@@ -45,6 +45,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行设置向导。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
+- `composer.predictions=true`：所有平台、普通与 offline 启动均默认启用上游输入区预测；沿用当前模型生成下一条消息建议、Tab／右方向键插入但不发送及额外用量计入 `/stats` 的行为。用户显式配置 `false` 时保持关闭，不改写已有配置。
 - `theme.dark=dark-terminal`
 - `display.showTurnTime=true`
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
@@ -57,3 +58,10 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 
 - **WHEN** 用户未显式配置运行默认值
 - **THEN** 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置和环境变量仍按原优先级覆盖
+
+#### Scenario: 输入区预测默认开启且允许显式关闭
+
+- **WHEN** 用户未配置 `composer.predictions`
+- **THEN** 输入区预测默认启用，正常完成一轮后按上游条件请求预测并在空输入区展示有效建议；没有有效预测时不显示。
+- **WHEN** 用户显式设置 `composer.predictions=false`
+- **THEN** 不请求或展示输入区预测；默认值变更不覆盖该选择。
