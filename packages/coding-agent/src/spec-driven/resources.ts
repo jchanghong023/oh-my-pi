@@ -5,6 +5,7 @@ import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import type { Skill } from "../extensibility/skills";
+import { isModelInvocableSuperpowersSkill } from "./skill-policy";
 import type { SpecStageRole } from "./types";
 import { archiveBase64, archiveSha256, resourceManifest } from "./vendor/archive.generated";
 
@@ -165,7 +166,10 @@ export async function loadSpecDrivenSkill(
 		filePath,
 		baseDir: path.dirname(filePath),
 		source: `bundled-${source}`,
-		hide: parsed.frontmatter.hide === true || parsed.frontmatter.disableModelInvocation === true,
+		hide:
+			(source === "superpowers" && !isModelInvocableSuperpowersSkill(name)) ||
+			parsed.frontmatter.hide === true ||
+			parsed.frontmatter.disableModelInvocation === true,
 		containRoot,
 	};
 }

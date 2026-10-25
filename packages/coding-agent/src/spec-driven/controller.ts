@@ -654,10 +654,17 @@ export class SpecDrivenController {
 		return jobId;
 	}
 	pause(): void {
+		const phase = this.status().phase;
+		if (["completed", "cancelled"].includes(phase) || (phase === "idle" && !this.#active)) return;
 		this.#messageAbort?.abort();
 		this.#stopHeartbeat();
 		for (const message of this.#messages) {
 			if (message.status === "processing") message.status = "cancelling";
+			else if (message.status === "queued") {
+				// Pausing invalidates this generation; retain undelivered input as an explicit failure.
+				message.status = "failed";
+				message.error = "流程已暂停，消息未投递；恢复后请重新提交";
+			}
 		}
 		this.#paused = true;
 		this.#epoch++;

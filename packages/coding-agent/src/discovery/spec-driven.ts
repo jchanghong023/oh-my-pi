@@ -1,9 +1,11 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { isEnoent } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
 import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { ensureSpecDrivenResources } from "../spec-driven/resources";
-import { isOrdinarySuperpowersSkill, SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
+import { isModelInvocableSuperpowersSkill, SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { scanSkillsFromDir } from "./helpers";
 
 /** Low-priority builtins use the ordinary catalog collision rules; native autoload bypasses that catalog. */
@@ -11,8 +13,14 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 	const resources = await ensureSpecDrivenResources();
 	const items: Skill[] = [];
 	const warnings: string[] = [];
+	const hasOpenSpec = await fs.stat(path.join(ctx.cwd, "openspec")).then(
+		stat => stat.isDirectory(),
+		error => {
+			if (isEnoent(error)) return false;
+			throw error;
+		},
+	);
 	for (const entry of resources.manifest.skills) {
-		if (entry.source === "superpowers" && !isOrdinarySuperpowersSkill(entry.name)) continue;
 		const filePath = path.resolve(resources.root, entry.path);
 		const result = await scanSkillsFromDir(ctx, {
 			dir: path.dirname(filePath),
@@ -29,6 +37,14 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 			items.push({
 				...skill,
 				name: entry.name,
+				...(entry.source === "superpowers" &&
+					!isModelInvocableSuperpowersSkill(entry.name) && {
+						frontmatter: { ...skill.frontmatter, disableModelInvocation: true },
+					}),
+				...(entry.source === "openspec" &&
+					!hasOpenSpec && {
+						frontmatter: { ...skill.frontmatter, hide: true },
+					}),
 				containRoot: {
 					openspec: resources.openspecRoot,
 					superpowers: resources.superpowersRoot,

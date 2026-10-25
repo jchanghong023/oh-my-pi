@@ -461,7 +461,7 @@ const startText = `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize s
 
 describe("Native spec desktop public-entry acceptance", () => {
 	test(
-		"mode/help and drafts create neither a workflow row nor a model call",
+		"mode/help and drafts create neither a workflow row nor a model call and reject file rewind",
 		async () => {
 			await using root = await TempDir.create("@omp-dev-idle-");
 			await using provider = createProviderFixture();
@@ -474,6 +474,26 @@ describe("Native spec desktop public-entry acceptance", () => {
 				await peer.subscribe(sessionId, `idle-${profile}`, profile);
 			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
 			await peer.interaction(sessionId, interaction => interaction.mode === "dev");
+			const rows = v4ConversationRowsRangeResultSchema.parse(
+				await peer.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
+			);
+			const rewind = commandAckSchema.parse(
+				await peer.request("v4/command", {
+					commandId: crypto.randomUUID(),
+					clientId: "native-spec-consumer",
+					sessionId,
+					type: "applyFileRewind",
+					payload: { target: { rowId: 0, entityId: "unavailable-rewind-target" } },
+					baseRevision: rows.atRevision,
+					baseLogEpoch: rows.atLogEpoch,
+					issuedAt: Date.now(),
+				}),
+			);
+			expect(rewind).toMatchObject({
+				status: "rejected",
+				reasonCode: "fault.command.invalid",
+				message: expect.stringContaining("协同开发模式不能执行 /applyFileRewind"),
+			});
 			expect(await peer.send(sessionId, "/spec status")).toMatchObject({ status: "rejected" });
 			expect(await peer.send(sessionId, "/dev help")).toMatchObject({ status: "accepted" });
 			expect(await peer.send(sessionId, "Draft only; do not start any actors.")).toMatchObject({
@@ -884,6 +904,15 @@ describe("Native spec desktop public-entry acceptance", () => {
 				const completed = await peer.phase(sessionId, "completed");
 				expect(completed.spec.stage).toBe("closure");
 				expect(completed.spec.actions).toEqual([]);
+				expect(completed.spec.materials.find(material => material.id === "proposal")?.readiness).toBe("present");
+				expect(completed.spec.materials.find(material => material.id === "verification")?.readiness).toBe(
+					"present",
+				);
+				expect(
+					completed.spec.materials.some(
+						material => material.id.startsWith("review:") && material.readiness === "present",
+					),
+				).toBe(true);
 				expect(peer.frames.some(frame => nativeDetails(frame).some(spec => spec.phase === "closing"))).toBe(true);
 				const count = provider.requests.length;
 				await peer.close();

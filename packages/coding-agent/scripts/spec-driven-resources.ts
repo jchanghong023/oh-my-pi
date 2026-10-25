@@ -607,7 +607,7 @@ async function embed(): Promise<void> {
 		);
 		if (body.includes("[[opsx:")) throw new Error(`Unresolved OpenSpec command conditional: ${name}`);
 		entries[relative] = Buffer.from(
-			`---\n${stringifyYaml({ name, description: command.description, "disable-model-invocation": true })}---\n\n${body}`,
+			`---\n${stringifyYaml({ name, description: command.description })}---\n\n${body}`,
 		);
 		skills.push({ source: "openspec", name, path: relative });
 	}

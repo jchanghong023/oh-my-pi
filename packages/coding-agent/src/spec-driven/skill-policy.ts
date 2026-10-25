@@ -2,26 +2,12 @@ import * as path from "node:path";
 import type { Skill } from "../extensibility/skills";
 import type { ResolveContext } from "../internal-urls/types";
 import type { SessionEntry } from "../session/session-entries";
-import { resourceManifest } from "./vendor/archive.generated";
 
 export const SPEC_DRIVEN_SKILL_PROVIDER = "spec-driven";
 
-/** The only bundled Superpowers resources admitted to the ordinary skill catalog. */
-export function isOrdinarySuperpowersSkill(name: string): boolean {
-	return (
-		name === "brainstorming" ||
-		name === "systematic-debugging" ||
-		name === "verification-before-completion" ||
-		name === "writing-skills"
-	);
-}
-
-/** Reserved bundled names that ordinary command hosts must not send as plain prompts. */
-export function isDevOnlySuperpowersSkill(name: string): boolean {
-	return (
-		!isOrdinarySuperpowersSkill(name) &&
-		resourceManifest.skills.some(skill => skill.source === "superpowers" && skill.name === name)
-	);
+/** Bundled Superpowers skills included in the default model index; all others are manual-only. */
+export function isModelInvocableSuperpowersSkill(name: string): boolean {
+	return name === "systematic-debugging" || name === "verification-before-completion" || name === "writing-skills";
 }
 
 type InvocationSkill = Pick<Skill, "name"> & Partial<Pick<Skill, "source" | "_source" | "filePath">>;
@@ -30,7 +16,7 @@ function requiresNativeGrant(skill: InvocationSkill): boolean {
 	const bundled =
 		skill.source === "bundled-superpowers" ||
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER && skill._source.pluginName === "superpowers");
-	return bundled && !isOrdinarySuperpowersSkill(skill.name.split("/").at(-1)!);
+	return bundled && !isModelInvocableSuperpowersSkill(skill.name.split("/").at(-1)!);
 }
 
 function checkPhase(skill: Pick<Skill, "name">, state?: ScopeState): void {
@@ -97,9 +83,6 @@ export function clearSpecSkillAccess(scope: object): void {
 export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
 	const state = stateFor(scope);
 	checkPhase(skill, state);
-	if (requiresNativeGrant(skill) && !state.policy) {
-		throw new SkillAccessDeniedError(skill.name, "native phase binding required");
-	}
 	const grant = { ...skill, filePath: path.resolve(skill.filePath) };
 	state.grants.add(grant);
 	return () => {
@@ -112,7 +95,7 @@ export function getGrantedSpecSkill(name: string, context?: SkillAccessContext):
 	const state = context?.scope ? scopes.get(context.scope) : undefined;
 	if (!state) return undefined;
 	for (const grant of state.grants) {
-		if (grant.name === name && (!requiresNativeGrant(grant) || state.policy)) return grant;
+		if (grant.name === name) return grant;
 	}
 	return undefined;
 }
@@ -139,8 +122,8 @@ export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "h
 export function checkSkillInvocation(skill: InvocationSkill, context?: SkillAccessContext): void {
 	const state = context?.scope ? scopes.get(context.scope) : undefined;
 	checkPhase(skill, state);
-	if (requiresNativeGrant(skill) && (!state?.policy || !hasExactGrant(skill, state))) {
-		throw new SkillAccessDeniedError(skill.name, "native phase binding and exact resource grant required");
+	if (state?.policy && requiresNativeGrant(skill) && !hasExactGrant(skill, state)) {
+		throw new SkillAccessDeniedError(skill.name, "exact resource grant required during native phase");
 	}
 }
 

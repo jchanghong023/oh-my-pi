@@ -11222,32 +11222,32 @@
     },
     {
       "path": "openspec/skills/opsx-archive/SKILL.md",
-      "sha256": "17e0b92ca8191bb7466815bbaeb54584c5de62e5359fad61e9b6797bd7f0ad7b",
+      "sha256": "d008d1628a9ba0a6d4ea3cabe540a89fa8e1a70038767f55d8d60c8dc786e734",
       "executable": false
     },
     {
       "path": "openspec/skills/opsx-explore/SKILL.md",
-      "sha256": "a9e9b658ab467178470bf9128d90631f9b4a8c8e15f79d46134393030a0723e8",
+      "sha256": "4bf4bd86da2103d5137da89275fd7e67f6d20ddca5e08c47984f439e8a2a67bf",
       "executable": false
     },
     {
       "path": "openspec/skills/opsx-propose/SKILL.md",
-      "sha256": "7a2e47549c010eeab67b438be4058c5a47264f7bc449d5ed3cb5203be05b43da",
+      "sha256": "73814ad2d7bffef5222c07c197fe94f1017a607354c01b3d9df83c458a37346e",
       "executable": false
     },
     {
       "path": "openspec/skills/opsx-sync/SKILL.md",
-      "sha256": "ac2354cf006d44498d1a63c128db73ee88aef52fa612862b7b7793c1f28c41bd",
+      "sha256": "5ad34dd8c5392bcbd3a1908af9550f80278a74dd85d4c8dd9c8f02fe609bfe3f",
       "executable": false
     },
     {
       "path": "openspec/skills/opsx-update/SKILL.md",
-      "sha256": "0a6727d4db11508d7bd48a8a9a4caeaaa8d979b8edc5e5f0a88538133d33c219",
+      "sha256": "d08eb38c5c336b4db33c7288ec5397b47389f0f66b26757a8247781dc8e0688b",
       "executable": false
     },
     {
       "path": "openspec/skills/opsx-verify/SKILL.md",
-      "sha256": "5ba4587f6ae2f98feb3ad8e7c99b86fca6f893d6561b487f42441916c5c074b6",
+      "sha256": "53280b2b40beb306a24f17402868c2b88deaeab92ff82ede66d83aff99462e36",
       "executable": false
     },
     {

@@ -10,6 +10,7 @@ import {
 	type SpecControllerObservation,
 } from "../../spec-driven/controller";
 import { stageForPhase } from "../../spec-driven/stages";
+import type { SpecDrivenStatus } from "../../spec-driven/types";
 import { writeFileAtomically } from "../../utils/atomic-file";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
@@ -136,6 +137,16 @@ export class OmpSpecDrivenBridge {
 						: "active";
 		const artifacts = structuredClone(previous?.artifacts ?? []);
 		const materials: OmpSpecMaterial[] = [];
+		let nativeState:
+			| { solution?: unknown; plan?: { path?: string; documentVersion?: string }; status?: SpecDrivenStatus }
+			| undefined;
+		try {
+			nativeState = JSON.parse(
+				await readFile(await containedSpecPath(owner.record.cwd, `.omp/spec-sessions/${runId}/state.json`), "utf8"),
+			);
+		} catch {
+			/* Readiness is represented below, not as fabricated content. */
+		}
 		await mkdir(path.join(directory, "zcode-artifacts"), { recursive: true });
 		const capture = async (
 			id: string,
@@ -178,6 +189,7 @@ export class OmpSpecDrivenBridge {
 					};
 					artifacts.push(artifact);
 				}
+				artifact.sourcePath = sourcePath;
 				let version = artifact.versions.at(-1);
 				if (!version || version.digest !== hash || version.sourceVersion !== sourceVersion) {
 					const target = await containedSpecPath(
@@ -210,7 +222,10 @@ export class OmpSpecDrivenBridge {
 				});
 			}
 		};
-		const change = `openspec/changes/${status.changeId}`;
+		const originalChange = `openspec/changes/${status.changeId}`;
+		const archivedChange = nativeState?.status?.archivedChangePath;
+		const archiveMatch = /^openspec\/changes\/archive\/\d{4}-\d{2}-\d{2}-([a-z0-9-]+)$/.exec(archivedChange ?? "");
+		const change = archivedChange && archiveMatch?.[1] === status.changeId ? archivedChange : originalChange;
 		await capture(
 			"proposal",
 			"Proposal",
@@ -230,14 +245,6 @@ export class OmpSpecDrivenBridge {
 				undefined,
 				digest(Buffer.from(spec.content)),
 			);
-		let nativeState: { solution?: unknown; plan?: { path?: string; documentVersion?: string } } | undefined;
-		try {
-			nativeState = JSON.parse(
-				await readFile(await containedSpecPath(owner.record.cwd, `.omp/spec-sessions/${runId}/state.json`), "utf8"),
-			);
-		} catch {
-			/* Readiness is represented below, not as fabricated content. */
-		}
 		await capture(
 			"solution",
 			"Selected solution",
@@ -303,17 +310,22 @@ export class OmpSpecDrivenBridge {
 			await capture(
 				`handoff:${handoff.actorId}:${handoff.transition}`,
 				handoff.transition,
-				handoff.path,
+				handoff.path.startsWith(`${originalChange}/`)
+					? `${change}/${handoff.path.slice(originalChange.length + 1)}`
+					: handoff.path,
 				handoff.digest,
 				true,
 				undefined,
 				handoff.digest,
 			);
-		for (const review of status.reviewArtifacts ?? [])
+		const reviewArtifacts = new Map(
+			(status.reviewArtifacts ?? nativeState?.status?.reviewArtifacts ?? []).map(review => [review.slotId, review]),
+		);
+		for (const review of reviewArtifacts.values())
 			await capture(
 				`review:${review.slotId}`,
 				review.slotId,
-				review.path,
+				`${change}/${review.path}`,
 				review.version,
 				true,
 				undefined,
@@ -508,7 +520,7 @@ export class OmpSpecDrivenBridge {
 					// Inspect current readiness only; historical byte responses always use the immutable capture.
 					if (
 						!artifact.sourcePath.includes("#") &&
-						(artifact.sourcePath.startsWith(`openspec/changes/${saved.row.spec.changeId}/`) ||
+						(artifact.sourcePath.startsWith("openspec/changes/") ||
 							artifact.sourcePath.startsWith("docs/superpowers/plans/"))
 					) {
 						const source = await containedSpecPath(saved.row.spec.workspacePath, artifact.sourcePath);

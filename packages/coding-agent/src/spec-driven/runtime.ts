@@ -1278,6 +1278,7 @@ export async function createSpecDrivenRuntime(args: {
 						),
 					};
 				}
+				if (archived) status.archivedChangePath = archived.path;
 				if (store) await store.saveState(status);
 				if (services.length) {
 					await tracked(

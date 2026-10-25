@@ -69,6 +69,8 @@ export class SpecDrivenOrchestrator {
 	#repair?: { text: string; taskIds: string[] };
 	// Retain admitted work through failed/interrupted scope analysis; only explicit resume retries it.
 	#pendingRepair?: string;
+	#reviewClarification?: "plan-review" | "overall-review";
+	#reviewAnswer?: { kind: "plan" | "overall"; text: string };
 	#acceptanceRound = 0;
 	#clarificationRound = 0;
 	#phaseStartedAt = Date.now();
@@ -131,7 +133,11 @@ export class SpecDrivenOrchestrator {
 	currentRole(): SpecStageRole | undefined {
 		const phase = this.#state.phase;
 		if (["idle", "completed", "cancelled"].includes(phase)) return undefined;
-		if (phase === "awaiting-answers") return this.#state.specificationApproval ? "solution" : "requirements";
+		if (phase === "awaiting-answers") {
+			if (this.#pendingRepair !== undefined || this.#reviewClarification === "overall-review") return "executor";
+			if (this.#reviewClarification === "plan-review") return "planner";
+			return this.#state.specificationApproval ? "solution" : "requirements";
+		}
 		if (["requirements", "requirements-review", "awaiting-specification"].includes(phase)) return "requirements";
 		if (["team", "awaiting-choice"].includes(phase)) return "solution";
 		if (["planning", "plan-review", "awaiting-plan"].includes(phase)) return "planner";
@@ -167,6 +173,13 @@ export class SpecDrivenOrchestrator {
 		this.#dialoguing = true;
 		try {
 			this.#guard(context);
+			if (phase === "awaiting-answers" && this.#pendingRepair !== undefined) {
+				this.#pendingRepair = text;
+				this.#state.questions = [];
+				this.#state.phase = "awaiting-acceptance";
+				await this.#runRepair(text, context.signal);
+				return { text: this.#state.questions.join("\n") || "已更新修复范围。" };
+			}
 			const reply = await this.#checked(
 				conversation.respond({ text, role: actual.role, status: this.status(), messageId }, context),
 				context,
@@ -194,7 +207,14 @@ export class SpecDrivenOrchestrator {
 				this.#state.phase = draft.questions.length ? "awaiting-answers" : "requirements-review";
 				await this.#drive(context);
 			} else if (reply.plan) {
-				if (actual.role !== "planner" || phase !== "awaiting-plan" || this.#state.planApproval)
+				if (
+					actual.role !== "planner" ||
+					!(
+						phase === "awaiting-plan" ||
+						(phase === "awaiting-answers" && this.#reviewClarification === "plan-review")
+					) ||
+					this.#state.planApproval
+				)
 					throw new Error("Only an unapproved current plan can be revised by dialogue");
 				const draft = parseSpecPlan(reply.plan);
 				this.#validatePlan(draft);
@@ -208,7 +228,16 @@ export class SpecDrivenOrchestrator {
 					solutionVersion: this.#solution().version,
 				};
 				this.#state.plan = { ...draft, ...binding, version: hash({ ...binding, draft }) };
+				this.#reviewClarification = undefined;
+				this.#reviewAnswer = { kind: "plan", text };
+				this.#state.questions = [];
 				this.#state.phase = "plan-review";
+				await this.#drive(context);
+			} else if (phase === "awaiting-answers" && this.#reviewClarification) {
+				this.#reviewAnswer = { kind: this.#reviewClarification === "plan-review" ? "plan" : "overall", text };
+				this.#state.questions = [];
+				this.#state.phase = this.#reviewClarification;
+				this.#reviewClarification = undefined;
 				await this.#drive(context);
 			} else if (phase === "awaiting-answers" && actual.role === "solution") {
 				this.#answer = text;
@@ -240,7 +269,7 @@ export class SpecDrivenOrchestrator {
 		};
 	}
 
-	async #runRepair(text: string): Promise<SpecDrivenStatus> {
+	async #runRepair(text: string, signal?: AbortSignal): Promise<SpecDrivenStatus> {
 		return this.#launch(async context => {
 			await this.#checkInputs(context);
 			const scope = this.#ports.conversation?.repairScope;
@@ -260,10 +289,16 @@ export class SpecDrivenOrchestrator {
 						expanded = true;
 					}
 			}
+			const exhausted = this.#state.tasks.filter(task => affected.has(task.id) && task.review?.revision === 2);
+			if (exhausted.length) {
+				this.#clarificationRound++;
+				this.#state.questions = [
+					`任务 ${exhausted.map(task => task.id).join("、")} 已用尽两轮修订。请修改修复说明，或通过 amend／change-solution 修改已批准约定；旧验收版本已撤销。`,
+				];
+				this.#state.phase = "awaiting-answers";
+				return;
+			}
 			if (this.#overallSlot) this.#revise(this.#overallSlot);
-			for (const task of this.#state.tasks)
-				if (affected.has(task.id) && task.review?.revision === 2)
-					throw new Error("Task review is still bounded to two repair rounds");
 			for (const task of this.#state.tasks)
 				if (affected.has(task.id)) {
 					task.status = "pending";
@@ -281,7 +316,7 @@ export class SpecDrivenOrchestrator {
 			this.#finalRecords = [];
 			this.#pendingRepair = undefined;
 			this.#state.phase = "executing";
-		});
+		}, signal);
 	}
 
 	async repair(expectedVersion: string, text: string): Promise<SpecDrivenStatus> {
@@ -292,6 +327,8 @@ export class SpecDrivenOrchestrator {
 		this.#expect("awaiting-acceptance");
 		if (!text.trim() || !expectedVersion || expectedVersion !== this.#state.acceptanceVersion)
 			throw new SpecAdmissionError("Stale final acceptance or missing repair instructions");
+		if (this.#overallSlot?.revision === 2)
+			throw new SpecAdmissionError("Overall review is still bounded to two repair rounds");
 	}
 
 	#notify(): void {
@@ -317,6 +354,12 @@ export class SpecDrivenOrchestrator {
 	async answer(text: string): Promise<SpecDrivenStatus> {
 		if (!text.trim()) throw new SpecAdmissionError("An explicit answer is required");
 		this.#expect("awaiting-answers");
+		if (this.#reviewClarification || this.#pendingRepair !== undefined) {
+			const recipient = this.recipient();
+			if (!recipient) throw new SpecAdmissionError("Current stage actor is unavailable");
+			await this.converse(text, crypto.randomUUID(), recipient, this.#abort.signal);
+			return this.status();
+		}
 		this.#answer = text;
 		this.#state.questions = [];
 		if (this.#state.specificationApproval) this.#state.phase = "team";
@@ -455,6 +498,9 @@ export class SpecDrivenOrchestrator {
 		this.pause();
 		if (this.#state.phase !== "completed") this.#state.phase = "cancelled";
 		this.#pendingRepair = undefined;
+		this.#repair = undefined;
+		this.#reviewClarification = undefined;
+		this.#reviewAnswer = undefined;
 		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
 		this.#notify();
 		return this.status();
@@ -496,6 +542,9 @@ export class SpecDrivenOrchestrator {
 		this.#state.acceptanceVersion = undefined;
 		this.#state.finalApproval = undefined;
 		this.#pendingRepair = undefined;
+		this.#repair = undefined;
+		this.#reviewClarification = undefined;
+		this.#reviewAnswer = undefined;
 		this.#state.questions = [];
 		this.#state.pendingClosure = [];
 		this.#state.tasks = [];
@@ -543,9 +592,14 @@ export class SpecDrivenOrchestrator {
 		}
 		this.#notify();
 	}
-	async #launch(before?: (context: SpecRunContext) => Promise<void>): Promise<SpecDrivenStatus> {
+	async #launch(before?: (context: SpecRunContext) => Promise<void>, signal?: AbortSignal): Promise<SpecDrivenStatus> {
 		if (this.#driving) throw new Error("Workflow dispatch is already active");
 		const context = this.#context();
+		if (signal) context.signal = AbortSignal.any([context.signal, signal]);
+		const onAbort = () => {
+			if (!this.#state.paused && context.generation === this.#state.generation) this.pause();
+		};
+		signal?.addEventListener("abort", onAbort, { once: true });
 		const drive = async (): Promise<SpecDrivenStatus> => {
 			try {
 				this.#guard(context);
@@ -567,6 +621,7 @@ export class SpecDrivenOrchestrator {
 		try {
 			return await this.#driving;
 		} finally {
+			signal?.removeEventListener("abort", onAbort);
 			this.#driving = undefined;
 		}
 	}
@@ -789,7 +844,7 @@ export class SpecDrivenOrchestrator {
 		const invalidated = await this.#refreshEvidence(context);
 		if (invalidated && slot.kind !== "requirements" && slot.kind !== "plan")
 			throw new Error("Review inputs changed before independent analysis");
-		if (slot.reviewedRevision === 2 && slot.lastReview?.verdict !== "pass") {
+		if (slot.reviewedRevision === 2 && slot.lastReview?.verdict === "revise") {
 			throw new Error(`${slot.kind} review still blocked after two repair rounds`);
 		}
 		const review = parseSpecReview(
@@ -802,6 +857,7 @@ export class SpecDrivenOrchestrator {
 						specification: this.#specification(),
 						solution: this.#state.solution,
 						previous: slot.lastReview,
+						answer: this.#reviewAnswer?.kind === slot.kind ? this.#reviewAnswer.text : undefined,
 					},
 					context,
 				),
@@ -831,6 +887,7 @@ export class SpecDrivenOrchestrator {
 		slot.findings = review.findings;
 		slot.lastReview = review;
 		slot.reviewedRevision = slot.revision;
+		if (this.#reviewAnswer?.kind === slot.kind) this.#reviewAnswer = undefined;
 		return review;
 	}
 	#revise(slot: SpecReviewSlot): void {
@@ -916,9 +973,9 @@ export class SpecDrivenOrchestrator {
 				.map(item => item.question);
 			this.#state.phase = "awaiting-answers";
 		} else {
-			this.#state.phase = "awaiting-choice";
 			if (!team.candidates.some(item => this.#eligible(item)))
 				throw new Error("Team returned zero adoptable candidates");
+			this.#state.phase = "awaiting-choice";
 		}
 	}
 	async #draftPlan(context: SpecRunContext): Promise<void> {
@@ -1028,9 +1085,12 @@ export class SpecDrivenOrchestrator {
 		if (review.verdict === "pass") {
 			this.#bindTasks();
 			this.#state.phase = "awaiting-plan";
-		} else if (review.verdict === "clarify")
-			throw new Error(`Plan needs clarification: ${review.questions.join("; ")}`);
-		else {
+		} else if (review.verdict === "clarify") {
+			this.#clarificationRound++;
+			this.#reviewClarification = "plan-review";
+			this.#state.questions = review.questions;
+			this.#state.phase = "awaiting-answers";
+		} else {
 			this.#revise(slot);
 			this.#state.phase = "planning";
 		}
@@ -1416,9 +1476,12 @@ export class SpecDrivenOrchestrator {
 				review,
 			});
 			this.#state.phase = "awaiting-acceptance";
-		} else if (review.verdict === "clarify")
-			throw new Error(`Overall review needs clarification: ${review.questions.join("; ")}`);
-		else {
+		} else if (review.verdict === "clarify") {
+			this.#clarificationRound++;
+			this.#reviewClarification = "overall-review";
+			this.#state.questions = review.questions;
+			this.#state.phase = "awaiting-answers";
+		} else {
 			this.#revise(slot);
 			const affected = new Set(review.findings.filter(substantive).flatMap(finding => finding.taskIds));
 			if (!affected.size || [...affected].some(id => !this.#state.tasks.some(task => task.id === id)))
@@ -1478,6 +1541,8 @@ export class SpecDrivenOrchestrator {
 						task.records.map(record => record.id),
 						context,
 					);
+			// Publish the actual archive location before observers see a completed delivery.
+			if (plan.closure.archive) await this.#checked(this.#ports.evidence.flush(this.status(), context), context);
 		} else
 			this.#state.pendingClosure = [
 				"Specification synchronization and archive were not authorized; change files remain in place.",

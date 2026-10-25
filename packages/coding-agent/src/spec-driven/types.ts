@@ -301,6 +301,8 @@ export interface SpecDrivenStatus {
 	blockedReason?: string;
 	generation: number;
 	changeId?: string;
+	/** Actual native archive location; persisted observations use it to resolve retained materials. */
+	archivedChangePath?: string;
 	specification?: SpecRequirements;
 	plan?: SpecPlan;
 	solution?: SpecSolution;
@@ -353,6 +355,7 @@ export interface SpecHandoff {
 }
 export interface SpecReviewInput {
 	kind: SpecReviewKind;
+	answer?: string;
 	slot: SpecReviewSlot;
 	specification: SpecRequirements;
 	plan?: SpecPlan;

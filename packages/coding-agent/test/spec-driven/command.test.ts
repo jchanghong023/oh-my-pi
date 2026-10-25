@@ -538,6 +538,25 @@ describe("/dev shared command surface", () => {
 			await f.dispose();
 		}
 	});
+	it("does not restrict ordinary skills when pausing an idle or released workflow", async () => {
+		const f = fixture();
+		const skill = { name: "systematic-debugging" };
+		const context = { scope: f.host.sessionManager };
+		try {
+			await f.invoke("pause");
+			expect(f.controller.status()).toMatchObject({ phase: "idle", paused: false });
+			expect(() => checkSkillInvocation(skill, context)).not.toThrow();
+			await f.invoke("start pause-policy request");
+			await f.settle();
+			await f.invoke("cancel");
+			const cancelled = f.controller.status();
+			await f.invoke("pause");
+			expect(f.controller.status()).toEqual(cancelled);
+			expect(() => checkSkillInvocation(skill, context)).not.toThrow();
+		} finally {
+			await f.dispose();
+		}
+	});
 
 	it("is discovered once, has headless dispatch and provides native subcommand completion", async () => {
 		expect(BUILTIN_SLASH_COMMANDS_INTERNAL.filter(item => item.name === "dev")).toHaveLength(1);
@@ -907,6 +926,49 @@ describe("/dev shared command surface", () => {
 		}
 	});
 
+	it("resumes after pause with undelivered input retained as failed and processing cancellation settled", async () => {
+		const f = fixture();
+		const entered = Promise.withResolvers<void>();
+		const stopped = Promise.withResolvers<void>();
+		const received: string[] = [];
+		f.ports.conversation!.respond = async input => {
+			received.push(input.text);
+			entered.resolve();
+			await stopped.promise;
+			return { text: "late reply must not publish" };
+		};
+		try {
+			await f.invoke("start paused-queue request");
+			await f.settle();
+			const first = await f.controller.submitText("processing");
+			if (first.kind !== "queued") throw new Error("Expected native message");
+			await entered.promise;
+			const second = await f.controller.submitText("undelivered");
+			if (second.kind !== "queued") throw new Error("Expected queued message");
+			f.controller.pause();
+			expect(() => f.controller.resume()).toThrow("用户消息尚未结清");
+			expect(f.controller.observation().interaction.messages[1]).toMatchObject({
+				id: second.messageId,
+				text: "undelivered",
+				status: "failed",
+				error: expect.stringContaining("未投递"),
+			});
+			const settled = f.settleMessage(first.messageId);
+			stopped.resolve();
+			await settled;
+			await f.controller.submitText("paused draft");
+			f.controller.resume();
+			await f.settle();
+			expect(f.controller.status()).toMatchObject({ phase: "awaiting-specification", paused: false });
+			expect(f.controller.observation().interaction.draft).toBe("paused draft");
+			expect(received).toEqual(["processing"]);
+			expect(f.transcript.join("\n")).not.toContain("late reply must not publish");
+			expect(f.controller.actions().find(action => action.id === "confirm-spec")?.available).toBe(true);
+		} finally {
+			stopped.resolve();
+			await f.dispose();
+		}
+	});
 	it("retains paused drafts and never sends them automatically on resume", async () => {
 		const f = fixture();
 		const received: string[] = [];

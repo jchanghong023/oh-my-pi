@@ -1534,6 +1534,7 @@ export class ZCodeServer {
 						"editUserQuery",
 						"forkAssistant",
 						"sendQueuedNow",
+						"applyFileRewind",
 					].includes(envelope.type)
 				)
 					assertDevCommandAllowed(hosted.record.session, envelope.type);

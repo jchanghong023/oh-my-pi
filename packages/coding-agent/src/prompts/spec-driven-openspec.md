@@ -1,6 +1,6 @@
 # Targeted OpenSpec requirements adaptations
 
-The generator applies these checked replacements to fixed upstream factory bodies. Unlisted text remains source-derived. OpenSpec is distributed as six builtin `opsx-*` skills with `disable-model-invocation: true`, invoked explicitly through `/skill:opsx-*`; init/update never install project-local skills or command templates.
+The generator applies these checked replacements to fixed upstream factory bodies. Unlisted text remains source-derived. OpenSpec is distributed as six builtin `opsx-*` skills with Chinese descriptions. Names and descriptions enter the model's default skill catalog only when the session working directory directly contains an `openspec/` directory; bodies are read on demand without prior explicit invocation there. Elsewhere these skills remain manual-only. `/skill:opsx-*` remains available; `/dev` phase restrictions still apply. Init/update never install project-local skills or command templates.
 
 ```yaml
 common: |
@@ -13,6 +13,7 @@ workflows:
   explore:
     module: explore
     commandFactory: getOpsxExploreCommandTemplate
+    description: 研究项目与问题，澄清需求和验收边界；不实施代码。
     replacements:
       - before: The work happens from that change, never from explore mode.
         after: Requirements work continues in that change; implementation is outside this workflow.
@@ -29,7 +30,7 @@ workflows:
   update:
     module: update-change
     commandFactory: getOpsxUpdateCommandTemplate
-    description: Revise or resume an existing OpenSpec requirements change, completing confirmed proposal and capability specifications without implementation.
+    description: 修订或继续已有 OpenSpec 需求变更，补齐已确认范围内的提案与能力规格；不实施代码。
     replacements:
       - before: Revise a change's existing planning artifacts and keep them coherent. Never edit code.
         after: Revise or resume an existing requirements change. Reconcile existing proposal and specs and complete requested missing requirement artifacts within confirmed scope. NEVER edit implementation code or historical design/tasks.
@@ -86,7 +87,7 @@ workflows:
   propose:
     module: propose
     commandFactory: getOpsxProposeCommandTemplate
-    description: Draft a complete OpenSpec requirement proposal and capability specifications, without design, task planning, or implementation.
+    description: 为新需求生成 OpenSpec 提案与能力规格；不生成设计、任务计划或代码。
     replacements:
       - before: Wait for a new user request after the artifacts are presented; then start the apply workflow.
         after: Return requirements for review; implementation is outside this workflow, including on a later request.
@@ -119,6 +120,7 @@ workflows:
   sync:
     module: sync-specs
     commandFactory: getOpsxSyncCommandTemplate
+    description: 将 OpenSpec 变更中的增量规格同步到项目已有的正式需求；不归档、不宣称实现通过验收。
     replacements:
       - before: |
           The JSON includes `planningHome.root`. Main specs live under `<planningHome.root>/openspec/specs/` — use that (store-aware) root for every main-spec path below, not a hardcoded repo path. When a store is selected it points at the store, not the current repository.
@@ -166,7 +168,7 @@ workflows:
   archive:
     module: archive-change
     commandFactory: getOpsxArchiveCommandTemplate
-    description: Archive an accepted OpenSpec requirements change using native validation and specification synchronization; requirements acceptance does not verify implementation.
+    description: 使用原生校验与规格同步归档已接受的 OpenSpec 需求变更；归档不代表软件实现通过验收。
     replacements:
       - before: Archive a completed change in the experimental workflow.
         after: Archive an accepted requirements change. Requirements acceptance does not establish implementation delivery.
@@ -282,6 +284,7 @@ workflows:
   verify:
     module: verify-change
     commandFactory: getOpsxVerifyCommandTemplate
+    description: 对照 OpenSpec 变更产物核对实际实现与验证证据，报告缺失和不一致；不修改代码或批准状态。
 proposalInstruction: |
   Write the requirement change proposal: why it is needed, observable behavior changes, affected new/modified capabilities, and scope/impact. Define acceptance boundaries and unresolved questions. Implementation details, design documents, and task plans are outside this requirements-only graph. This proposal is the foundation for capability delta specifications only.
 specsInstruction: |
