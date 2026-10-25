@@ -1,7 +1,7 @@
 /**
  * `/team` code-driven five-stage orchestrator.
  *
- * Every guarantee from docs-zh-CN/requirements/team.md is mechanical here:
+ * Every guarantee from openspec/specs/team-discussion/spec.md is mechanical here:
  * - independent investigation: identical inputs fanned out in parallel under
  *   the `task.maxConcurrency` semaphore, no shared digest;
  * - reviewer rotation to the next different participant model; the session

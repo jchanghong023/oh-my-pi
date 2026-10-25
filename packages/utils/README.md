@@ -25,7 +25,7 @@ Import from the root barrel or per-module subpaths (`@oh-my-pi/pi-utils/<module>
 
 ## Logging
 
-Runtime diagnostics use the existing `logger` (`@oh-my-pi/pi-utils/logger`), not console output or session transcripts. The [fork logging contract](../../docs-zh-CN/requirements/fork.md#运行诊断日志) is authoritative for diagnostic coverage.
+Runtime diagnostics use the existing `logger` (`@oh-my-pi/pi-utils/logger`), not console output or session transcripts. The [fork logging contract](../../openspec/specs/fork-runtime/spec.md) is authoritative for diagnostic coverage.
 
 Logs are JSON records with millisecond timestamps and PID in `getLogsDir()/omp.<local-date>.<pid>.log`. The directory follows the current data root, profile and applicable Linux XDG state directory; `OMP_CONFIG_ROOT` relocates it. Existing daily/size rotation remains in effect (10 MiB per file, `maxFiles: 5`, five-day stale-process retention). `OMP_LOG_LEVEL` accepts `error`, `warn`, `info`, `debug` (default: all levels).
 

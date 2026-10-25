@@ -158,7 +158,7 @@ describe("compaction thinking-level resolution (regression)", () => {
 });
 
 // ============================================================================
-// Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+// Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
 // `openai-codex/gpt-6-luna` is the pinned Codex compaction model and its
 // compaction effort is fixed at `low` on every summarization path. The session
 // dial — high/max, the unset high default, and even Off — must not leak into

@@ -1,5 +1,5 @@
 /**
- * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+ * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
  * compaction candidates that would land on the `openai-codex` provider are
  * substituted with `openai-codex/gpt-6-luna` (cheap, fast, pinned `low`
  * effort); an explicitly configured `compactionModel` target is never

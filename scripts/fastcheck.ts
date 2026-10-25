@@ -92,7 +92,7 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 
 export async function runFastcheck(gate: GateRun, concurrency?: number): Promise<void> {
 	const requirements = await gate.charged(() =>
-		Bun.file(path.join(gateRepoRoot, "docs-zh-CN/requirements/fork.md")).text(),
+		Bun.file(path.join(gateRepoRoot, "openspec/specs/fork-upstream-baseline/spec.md")).text(),
 	);
 	const baseline = requirements.match(/\*\*Upstream commit\*\*：`([0-9a-f]{40})`/)?.[1];
 	if (!baseline) throw new GateCommandError("Fork requirements do not identify the upstream baseline", 1);

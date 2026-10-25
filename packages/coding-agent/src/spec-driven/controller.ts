@@ -215,8 +215,7 @@ export class SpecDrivenController {
 	#messageBlock(): string | undefined {
 		return this.#outstanding() ? "用户消息尚未结清；请等待或取消指定消息" : undefined;
 	}
-	actions(): SpecControllerAction[] {
-		const state = this.status();
+	actions(state = this.status()): SpecControllerAction[] {
 		const blocked = this.#disposed
 			? "流程所有者已释放"
 			: (this.#messageBlock() ?? (this.#active ? "阶段操作正在运行" : undefined));
@@ -429,6 +428,7 @@ export class SpecDrivenController {
 		return state;
 	}
 	observation(): SpecControllerObservation {
+		const status = this.status();
 		return {
 			runId: this.#core?.runId ?? null,
 			cwd: this.#host.cwd,
@@ -437,17 +437,17 @@ export class SpecDrivenController {
 			active: this.#active,
 			released: this.#released,
 			disposed: this.#disposed,
-			status: this.status(),
+			status,
 			interaction: {
 				mode: this.#mode,
 				draft: this.#draft,
 				recipient: this.#core?.recipient(),
 				messages: structuredClone(this.#messages),
-				actions: this.actions(),
-				clarification: this.status().clarification,
+				actions: this.actions(status),
+				clarification: status.clarification,
 				blockedReason:
 					this.#messageBlock() ??
-					this.status().blockedReason ??
+					status.blockedReason ??
 					(!this.#core?.recipient() ? "尚无可接收消息的阶段 Agent" : undefined),
 			},
 		};

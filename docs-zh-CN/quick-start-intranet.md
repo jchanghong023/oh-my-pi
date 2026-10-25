@@ -18,7 +18,7 @@ setenv ASCEND_API_KEY "<你的密钥>"
 - `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
 - `OMP_CONFIG_ROOT`：统一的原始数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Wiki／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。Linux 内网模式实际使用下述 shm 运行根，原始根用于后台备份。
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
-- `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](requirements/fork.md#ascend-内置模型)。不要将真实密钥提交到仓库或共享文档。
+- `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](../openspec/specs/model-providers/spec.md)。不要将真实密钥提交到仓库或共享文档。
 
 上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 
@@ -31,7 +31,7 @@ setenv ASCEND_API_KEY "<你的密钥>"
 - **可能丢失的数据**：退出不做最终同步备份；重启、断电、卸载或外部清理可能使 shm 数据丢失。可丢失范围从最近一次成功备份起算，备份持续失败时可能超过 10 分钟；尚无成功备份时不能保证任何新增数据已持久化。tmpfs 也可能使用 Swap，并非保证数据绝不落盘。
 - **外部文件与平台前提**：项目源码、项目级 `.omp/`、EDA 文件、Claude Code 配置和共享技能仍在原位置访问，可能继续产生 NFS I/O。`/dev/shm` 不存在、不可写或空间不足时会报告操作失败，不静默换回 NFS 或其他磁盘目录。native 缓存优先普通 shm 映像加载；仅该路径无法执行（如 `noexec`）时，才使用可执行内存后备并要求相应内核／backport、glibc、procfs、运行时及安全策略支持，不为所有 Linux offline 运行统一提高内核／glibc 前提。后备不可用时明确失败，不通过修改挂载、安装依赖或写持久可执行副本绕过，具体前提见下方契约。
 
-路径、逐库而非全局事务的一致性及人工恢复边界以[离线 shm 运行与异步备份契约](requirements/offline-shm.md)为准；实际验证状态见[需求目录](requirements/README.md)，不代表公司 CentOS 7 或实际 shm／NFS 已验收。
+路径、逐库而非全局事务的一致性及人工恢复边界以[离线 shm 运行与异步备份契约](../openspec/specs/offline-shm/spec.md)为准；实际验证状态见[历史验证记录](verification-history.md)，不代表公司 CentOS 7 或实际 shm／NFS 已验收。
 
 ## 2. 启动
 
@@ -77,7 +77,7 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 
 命令会让模型核对当前用户和 X11 显示会话，优先请求一次 IBus 自重启，再重新连接并切回 `libpinyin`。若首选方法无效，模型会依据实际结果继续诊断，自主选择同会话内的引擎切换、环境对齐或 daemon 重建；确认卡死时允许精确 PID 的 SIGTERM 后重建，daemon 已退出时也可在核实会话后启动。共用该 daemon 的窗口会短暂中断输入，尚未提交的候选文字可能丢失。它不安装软件、不改持久配置、不全局杀进程或自动强杀；无法确认操作目标、安全手段耗尽或需要客户端操作时才报告具体阻塞，不强行操作其他会话。
 
-模型报告服务正常后，在当前输入框按 `Ctrl+Space`，输入 `中文测试` 确认实际恢复。此命令需要当前模型可用，仅适用于 Linux IBus/X11；Windows 本机或客户端问题不保证能从服务端修复。完整边界见 [JCH 命令契约](requirements/fork.md#jch-命令)。
+模型报告服务正常后，在当前输入框按 `Ctrl+Space`，输入 `中文测试` 确认实际恢复。此命令需要当前模型可用，仅适用于 Linux IBus/X11；Windows 本机或客户端问题不保证能从服务端修复。完整边界见 [JCH 命令契约](../openspec/specs/personal-commands/spec.md)。
 
 ## 3. 常用操作
 
@@ -192,7 +192,7 @@ omp docs init "/path/to/company-markdown" --name "company-docs"
 
 刷新前先确认新导出目录可读。删除后若重新导入失败，旧索引不会自动恢复。没有 `omp docs update`、`list` 或 `status` 命令；查看已有索引用 `/wiki`。
 
-引用的路径、行号对应导入时的版本，不一定是源文件现状。查不到不等于公司没有相关规定，历史资料也不自动代表现行规范。详细约定见[文档索引需求](requirements/fork.md#markdown-文档索引)。
+引用的路径、行号对应导入时的版本，不一定是源文件现状。查不到不等于公司没有相关规定，历史资料也不自动代表现行规范。详细约定见[文档索引需求](../openspec/specs/wiki-index/spec.md)。
 
 ### 4.2 `/repo`：为当前项目建立代码定位索引
 
@@ -238,7 +238,7 @@ Git 项目索引当前 worktree 的根目录；即使从子目录启动，也会
 
 索引遵循忽略规则，不纳入符号链接、二进制、无效 UTF-8、超 2 MiB 等文件；具体排除或失败情况看状态。
 
-**命中只是定位线索**。编辑前必须读当前源码；找全部出现位置用 `grep`，按文件名找文件用 `glob`。调查调用方或影响范围，需结合当前源码和可用 LSP。索引不提供调用图、依赖分析或测试覆盖判断，无命中不能证明代码不存在。详细约定见[代码定位索引需求](requirements/repo-index.md)。
+**命中只是定位线索**。编辑前必须读当前源码；找全部出现位置用 `grep`，按文件名找文件用 `glob`。调查调用方或影响范围，需结合当前源码和可用 LSP。索引不提供调用图、依赖分析或测试覆盖判断，无命中不能证明代码不存在。详细约定见[代码定位索引需求](../openspec/specs/repo-index/spec.md)。
 
 ### 4.3 `/team 需求`：多代理调查、交叉审查与方案汇总
 
@@ -270,36 +270,11 @@ Git 项目索引当前 worktree 的根目录；即使从子目录启动，也会
 
 回复“选择方案 A”只确认方案，不授权改代码。实施需另发明确任务，例如后文的 `/goal` 示例。
 
-若补充约束实质改变了方案，或结果提示需求理解存在重要差异，带上澄清后的要求重跑 `/team`。详细约定见[多代理方案讨论需求](requirements/team.md)。
+若补充约束实质改变了方案，或结果提示需求理解存在重要差异，带上澄清后的要求重跑 `/team`。详细约定见[多代理方案讨论需求](../openspec/specs/team-discussion/spec.md)。
 
-### 4.4 项目文档初始化与维护：`jch-project-init`（可选本地技能）
+### 4.4 项目规则与需求维护
 
-接手大项目、补齐 Agent 开发规则，或在模块和需求变化后重新核对文档体系时，可以使用该技能。这里俗称的 **jch-init**，实际技能名是 `jch-project-init`；它不是内置 `/init` 命令。
-
-**前提：** 该技能已安装在本地，并能在 `/skill:` 补全中找到。以下两个技能都不是 OMP 自带功能，内网使用前须准备好本地技能，不在任务中在线安装。
-
-截图中的 `$技能名` 是另一宿主的选择界面，OMP 使用 `/skill:技能名`。
-
-在目标项目目录启动 OMP，输入：
-
-```text
-/skill:jch-project-init
-```
-
-该技能只允许显式调用，作用于当前项目，**不接受参数**。它自动分析项目并维护两类文档：
-
-- **多层级 `AGENTS.md`**：根文件保存全局规则、真实入口和验证要求。少量有独立业务职责的子目录保存本模块规则、入口和注意事项，不在每个目录建一份。全仓含根文件最多 8 份，子文件不重复根规则。
-- **固定需求目录**：优先使用项目已明确的目录，否则默认 `docs/requirements/`。自有项目维护产品需求，持续同步上游的 fork 维护本地差异需求。按功能边界组织，每条需求只有一个权威位置，需求文档数量不限。
-
-已有文档会增量核对和更新，缺失时补齐；分散的需求会按权威关系迁移，并修正引用。技能会保留有效需求、明确规划和已有改动，不会因为实现未完成就删减需求。
-
-后续需求或用户可见行为变化时，应按写入的项目规则同步维护对应需求文档。该技能不是后台监听服务，重新核对仍需显式调用。
-
-**只维护文档体系和必要引用**，不修改业务代码、配置或测试，不同步上游、不提交或推送。文档检查通过不代表功能验收通过。
-
-![项目文档维护实战：更新 Agent 规则与需求文档，并说明失败和未验证范围](assets/jch-project-init-example.png)
-
-截图来自另一项目，报告了文档更新和类型检查结果，也明确说明 Lint 失败、未运行功能测试。截图展示的是维护报告，不能据此认为该项目整体已验证。
+仓库根 `AGENTS.md` 保存开发、同步及验证规则。已批准需求只在 `openspec/specs/` 按能力域维护；未批准提议留在 `openspec/changes/` 的原生 proposal 和增量规格中。需求或用户可见行为变化时更新对应规格；仅实现方式变化且需求不变时，无需制造需求变更。需求文档的结构校验不等于软件实现或功能验收通过。
 
 ### 4.5 为项目建立三级测试门禁：`jch-fastcheck-fulltest-slowtest-gates`（可选本地技能）
 
@@ -366,7 +341,7 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目录、补全与提交使用同一机制，无需新增批处理协议；这不代表桌面 GUI 联调或真实模型的大规模批处理已验收。
 
-完整行为与优先级见[需求：JCH 命令](requirements/fork.md#jch-命令)，app-server 命令接入见[ZCode 接入需求](requirements/rpc-ui-protocol.md#必须接入的命令)。
+完整行为与优先级见[需求：JCH 命令](../openspec/specs/personal-commands/spec.md)，app-server 命令接入见[ZCode 接入需求](../openspec/specs/zcode-app-server/spec.md)。
 
 ### 4.7 `/goal-autopilot`：无人值守目标
 
@@ -376,7 +351,7 @@ OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目�
 
 本模式的附加提示词明确要求：完成目标全过程及所需全部操作已获用户授权，直接自主执行、验证和修复，不提问、不请求确认、不要求选择、不等待输入；与此前用户级要求冲突时，以本次明确授权为准。
 
-稳定历史不等于免费或保证缓存命中；实际压缩仍按上游流程改写上下文，不能保证旧缓存跨压缩保留或费用下降。实际实现与验收状态见[需求目录](requirements/README.md)。
+稳定历史不等于免费或保证缓存命中；实际压缩仍按上游流程改写上下文，不能保证旧缓存跨压缩保留或费用下降。实际实现与验收状态见[历史验证记录](verification-history.md)。
 
 先退出计划模式，再在 **OMP 输入框**输入：
 
@@ -402,7 +377,7 @@ OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目�
 
 它不同于第 4.6 节的独立批处理命令，**不会自动附带“禁止测试、禁止全仓检查”的限制**；检查和测试按本次目标及项目规则执行。用 `/todo`、`/hub` 查看任务与子代理进度，是否完成以实际结果为准。
 
-OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
+OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
 
 ### 4.8 `/dev`：协同开发模式
 
@@ -437,7 +412,7 @@ Agent 忙碌时，消息绑定当前运行、阶段及实际 Agent 排队；“�
 
 状态仅属于当前进程内仍存活的原生会话；切换／释放会话、改变工作目录或退出进程后，不承诺续接。材料、提交和聊天记录不是可恢复的控制器检查点，重新打开历史也不恢复旧批准。
 
-默认变更目录为 `openspec/changes/<change-id>/`：需求材料沿用 OpenSpec 的 `proposal.md` 和 `specs/`，选定 Team 候选原文保存在项目本地运行记录的方案 JSON 中；唯一计划沿用 `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`，不另建竞争性的需求书、方案书、`design`、`tasks` 或第二份计划。三次原生 handoff 的原始正文分别保存到变更目录的 `handoffs/requirements-to-solution.md`、`handoffs/solution-to-plan.md`、`handoffs/plan-to-execution.md`；交接失败或版本失效时不启动下一节点，也不继承上一节点权限。项目已有 Markdown 需求目录时，原目录仍是唯一权威；收尾只按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
+默认变更目录为 `openspec/changes/<change-id>/`：需求材料沿用 OpenSpec 的 `proposal.md` 和 `specs/`，选定 Team 候选原文保存在项目本地运行记录的方案 JSON 中；唯一计划沿用 `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`，不另建竞争性的需求书、方案书、`design`、`tasks` 或第二份计划。三次原生 handoff 的原始正文分别保存到变更目录的 `handoffs/requirements-to-solution.md`、`handoffs/solution-to-plan.md`、`handoffs/plan-to-execution.md`；交接失败或版本失效时不启动下一节点，也不继承上一节点权限。本仓库的正式需求写入原生 `openspec/specs/`；其他项目若已有 Markdown 需求权威，仍按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
 
 ### 4.9 OpenSpec：独立需求闭环
 
@@ -451,7 +426,7 @@ mini 版初始化只需 `omp openspec init`（可指定目标路径及 `--langua
 
 包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器，ZCode 通过显式协商的既有协议扩展读取材料与操作事实；不另建独立 wire 协议、执行／批准状态机、GUI 页面或工作流设计器，后续 GUI 接入也不能另立审批规则。
 
-此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](requirements/spec-driven-orchestration.md)，各项证据边界见[需求目录](requirements/README.md)。
+此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 
 ## 5. 直接复制的例子
 

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Bun、TypeScript、既有 YAML/frontmatter 工具、包内 tar.gz 资源、Bun 测试和现有 app-server＋localhost 模型夹具。
 
-**Spec:** `docs-zh-CN/requirements/spec-driven-orchestration.md` 第二节及 AC-02；该文档已先于本计划更新，是唯一需求权威，不另建设计或规格副本。
+**Spec:** `openspec/specs/spec-driven-orchestration/spec.md` 中的技能发现要求及 AC-02；本计划原引用的行号对应迁移前文档。
 
 ## Global Constraints
 
@@ -34,7 +34,7 @@
 
 | 文件 | 职责及改动 |
 | --- | --- |
-| `docs-zh-CN/requirements/spec-driven-orchestration.md:58-84,304` | 已更新发现范围、隐藏入口及 AC-02；实施不再改变已确认范围 |
+| `openspec/specs/spec-driven-orchestration/spec.md` | 已更新发现范围、隐藏入口及 AC-02；实施不再改变已确认范围 |
 | `packages/coding-agent/src/prompts/skills/superpowers-descriptions.md`（新增） | 八项简短描述的静态源；内容为 YAML 映射，每个技能名对应一个字符串，由既有 YAML 解析器读取 |
 | `packages/coding-agent/scripts/spec-driven-resources.ts:138-141,219-227` | 基于固定上游原件生成普通可发现技能或隐藏技能；生成产物仍由该脚本负责 |
 | `packages/coding-agent/src/spec-driven/vendor/archive.generated.ts`、`inventory.json` | 通过现有生成器重建归档和文件摘要，不手工修改生成内容 |
@@ -42,7 +42,7 @@
 | `packages/coding-agent/test/spec-driven/resources.test.ts:25-60` | 更新资源加载后的可见范围；沿用现有真实资源/CLI 覆盖，不新增 description 文字快照 |
 | `packages/coding-agent/test/spec-driven/process.e2e.test.ts:584-753` | 更新真实公开入口的可见集合，补同会话 A→B 的读取场景 |
 | `packages/coding-agent/test/spec-driven/provider-fixture.ts:113-133` | 仅为同会话资源场景扩展既有 localhost 模型夹具；真实 read 工具结果而非模型回答决定验收 |
-| `docs-zh-CN/requirements/README.md:43`、`packages/coding-agent/CHANGELOG.md:17` | 同步需求索引说明和 Unreleased 用户可见变更，不改历史验证记录或发布段落 |
+| `docs-zh-CN/verification-history.md`、`packages/coding-agent/CHANGELOG.md:17` | 当时同步状态说明和 Unreleased 用户可见变更，不改历史验证记录或发布段落 |
 
 `resources.ts`、`discovery/spec-driven.ts`、`skill-policy.ts`、`internal-urls/skill-protocol.ts` 与系统技能匹配提示词预期无需修改：八项不再隐藏后即可复用既有普通分支。若实际运行证明必须修改这些运行时接口，先说明具体证据和最小必要变化，不扩大为通用授权改造。
 

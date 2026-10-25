@@ -428,6 +428,9 @@ export class ZCodeProjection {
 		}
 	}
 
+	logEpoch(): string {
+		return this.#state.logEpoch;
+	}
 	snapshot(): ConversationSnapshot {
 		return structuredClone({
 			...this.#state,
@@ -1235,7 +1238,8 @@ export class ZCodeProjection {
 		// 新行 row.appended。删除按协议后缀语义(row.removed 移除客户端所有 rowId >= fromRowId
 		// 的行),先截断,再完整重交付该后缀内仍存活的行。
 		const previousById = new Map(before.map(row => [row.rowId, row]));
-		const orphaned = before.filter(row => !this.#state.rows.window.some(current => current.rowId === row.rowId));
+		const currentIds = new Set(this.#state.rows.window.map(row => row.rowId));
+		const orphaned = before.filter(row => !currentIds.has(row.rowId));
 		const removedFromRowId = orphaned.length ? Math.min(...orphaned.map(row => row.rowId)) : undefined;
 		if (removedFromRowId !== undefined) deltas.push({ op: "row.removed", fromRowId: removedFromRowId });
 		for (const row of this.#state.rows.window) {
@@ -1344,7 +1348,7 @@ export class ZCodeProjection {
 		const turnResults = new Map<string, ProjectionMessage[]>();
 		const turnMessages = new Map<string, MessageRecord[]>();
 		const revertedTargets = new Set(this.#options.revertedTargets);
-		for (const entry of this.#options.session?.sessionManager.getBranch() ?? []) {
+		for (const entry of this.#options.session?.sessionManager.getBranchView() ?? []) {
 			if (
 				entry.type !== "custom" ||
 				entry.customType !== "workspace-file-rewind" ||

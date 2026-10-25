@@ -1,7 +1,7 @@
 /**
  * `/team` participant resolution.
  *
- * Rules (docs-zh-CN/requirements/team.md §2.2):
+ * Rules (openspec/specs/team-discussion/spec.md §2.2):
  * - Ordered configured full model IDs resolve strictly, preserving duplicates.
  * - Unset or empty configuration uses the current session model.
  * - N = max(3, M) independent slots cycle through the M resolved members.

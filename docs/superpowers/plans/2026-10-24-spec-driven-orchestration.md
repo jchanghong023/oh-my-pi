@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript、Bun、现有 SDK／AgentSession、原生 Task／隔离 workspace／VCS、固定版本 OpenSpec／Superpowers、现有资源归档生成器、Bun 测试与 localhost Provider 公开入口夹具；不新增运行框架或依赖。
 
-**Spec:** [唯一需求与设计](../../../docs-zh-CN/requirements/spec-driven-orchestration.md)，AC-01—AC-28；[仓库验证与授权](../../../docs-zh-CN/requirements/fork.md#fork-验证体系)；Goal 的独立行为继续遵守 [goal-autopilot.md](../../../docs-zh-CN/requirements/goal-autopilot.md)。本计划是当前仓库的实施材料，不是运行中 `/spec` 为目标项目生成的 `plan.md`。
+**Spec:** [唯一需求与设计](../../../openspec/specs/spec-driven-orchestration/spec.md)，AC-01—AC-28；[仓库验证与授权](../../../openspec/specs/fork-verification-gates/spec.md)；Goal 的独立行为继续遵守 [goal-autopilot.md](../../../openspec/specs/goal-autopilot/spec.md)。本计划是当前仓库的实施材料，不是运行中 `/spec` 为目标项目生成的 `plan.md`。
 
 ## Global Constraints
 
@@ -56,7 +56,7 @@
 | `packages/coding-agent/src/slash-commands/builtin-spec-driven.ts` | 既有命令解析与执行方式选择；不新增 UI 协议或另一套命令表 |
 | `packages/coding-agent/test/spec-driven/` 现有测试及夹具 | 按任务迁移消费者行为；新建必要的 `actors.test.ts`、`evidence.test.ts`、`execution.test.ts`，不按文件机械建测试 |
 | `packages/coding-agent/test/task/structured-subagent.test.ts`、`test/modes/zcode-hosts-goal.test.ts`、`test/sdk-session-isolation.test.ts` | 复用相关普通路径回归；仅共享触点所需，不扩展全仓测试 |
-| `packages/coding-agent/CHANGELOG.md`、`docs-zh-CN/requirements/README.md`、根 `AGENTS.md` 的相关入口段 | 实施并完成冒烟后维护实际入口和状态；不新建第二份产品需求 |
+| `packages/coding-agent/CHANGELOG.md`、`docs-zh-CN/verification-history.md`、根 `AGENTS.md` 的相关入口段 | 实施并完成冒烟后维护实际入口和状态；不新建第二份产品需求 |
 
 此前的 `2026-10-24-superpowers-skill-discovery.md` 已有实施及验证记录，作为现状复用，不把它当成本轮新增功能已通过。其旧示例 description 不能覆盖当前权威需求的显式触发前提；不重复执行已完成的发现改造。
 

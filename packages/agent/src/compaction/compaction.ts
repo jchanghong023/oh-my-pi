@@ -635,7 +635,7 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 }
 
 /**
- * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+ * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
  * automatically selected `openai-codex` compaction candidates are redirected
  * to `gpt-6-luna` when available; explicit `compactionModel` overrides are
  * left alone. This module pins compaction requests using luna to `low`.

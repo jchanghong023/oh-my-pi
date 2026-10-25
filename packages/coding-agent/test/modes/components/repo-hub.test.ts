@@ -23,7 +23,7 @@ async function until(predicate: () => boolean, deadlineMs = 20_000): Promise<voi
 	}
 }
 
-describe("RepoHubComponent /repo panel contract (requirements/repo-index.md)", () => {
+describe("RepoHubComponent /repo panel contract (openspec/specs/repo-index/spec.md)", () => {
 	it("guards operations behind index state and y/N confirmations, then deletes and closes", async () => {
 		await initTheme();
 		const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-repo-hub-profile-"));

@@ -27,14 +27,16 @@ export type TopicDelta = ConversationDelta | SessionsIndexDelta | WorkspaceConfi
 export type TopicSnapshot = ConversationSnapshot | SessionsIndexSnapshot | WorkspaceConfigSnapshot;
 export interface ZCodeTopicSource<D extends TopicDelta = TopicDelta> {
 	snapshot(): TopicSnapshot;
+	logEpoch?(): string;
 	subscribe?(listener: (deltas: D[]) => void): () => void;
 }
 interface TopicState {
-	source: Pick<ZCodeTopicSource, "snapshot">;
+	source: Pick<ZCodeTopicSource, "snapshot" | "logEpoch">;
 	epoch: string;
 	seq: number;
 	history: { from: number; to: number; deltas: TopicDelta[] }[];
 	dispose?: () => void;
+	released?: true;
 	specRunIds: Set<string>;
 }
 interface Subscription {
@@ -89,8 +91,9 @@ export class ZCodeTopics {
 	publish(topic: string, deltas: TopicDelta[]): void {
 		const state = this.#requireTopic(topic);
 		if (!deltas.length) return;
-		const snapshot = state.source.snapshot();
-		if (snapshot.logEpoch !== state.epoch) {
+		const epoch = state.source.logEpoch?.() ?? state.source.snapshot().logEpoch;
+		if (epoch !== state.epoch) {
+			const snapshot = state.source.snapshot();
 			state.epoch = snapshot.logEpoch;
 			state.seq = "seq" in snapshot ? snapshot.seq : 0;
 			state.history = [];
@@ -190,8 +193,27 @@ export class ZCodeTopics {
 			}
 	}
 
+	hasSubscribers(topic: string): boolean {
+		return Array.from(this.#subscriptions.values()).some(sub => sub.topic === topic);
+	}
+	/** Drop owner references while preserving recovery for viewers of a closed owner. */
+	releaseSource(topic: string): void {
+		const state = this.#topics.get(topic);
+		if (!state) return;
+		state.dispose?.();
+		state.dispose = undefined;
+		if (!this.hasSubscribers(topic)) {
+			this.#topics.delete(topic);
+			return;
+		}
+		const snapshot = state.source.snapshot();
+		state.source = { snapshot: () => structuredClone(snapshot), logEpoch: () => snapshot.logEpoch };
+		state.released = true;
+	}
 	cancel(subscriptionId: string): void {
+		const sub = this.#subscriptions.get(subscriptionId);
 		this.#subscriptions.delete(subscriptionId);
+		if (sub && this.#topics.get(sub.topic)?.released && !this.hasSubscribers(sub.topic)) this.#topics.delete(sub.topic);
 	}
 	closeConnection(connectionId: string): void {
 		for (const sub of this.#subscriptions.values()) if (sub.connectionId === connectionId) this.cancel(sub.id);

@@ -180,7 +180,7 @@ function canUseLiveProviderNativeCompaction(
 }
 
 /**
- * Fork contract (docs-zh-CN/requirements/fork.md, 「Codex 压缩默认模型」):
+ * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
  * replace an `openai-codex` compaction candidate with `gpt-6-luna`, so
  * compaction on the Codex lane always runs on the cheap fast model at its
  * pinned `low` effort (see `FORK_CODEX_COMPACTION_MODEL`). Non-codex models

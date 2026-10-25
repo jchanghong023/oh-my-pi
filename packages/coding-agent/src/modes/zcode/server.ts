@@ -123,6 +123,8 @@ interface HostedSession {
 	unsubscribeTelemetry: () => void;
 }
 
+const COLD_PROJECTION_CACHE_MAX = 16;
+
 export class ZCodeServer {
 	readonly manager: ZCodeSessionManager;
 	readonly queries: ZCodeQueries;
@@ -231,22 +233,19 @@ export class ZCodeServer {
 				hosted?.unsubscribe();
 				hosted?.projection.dispose();
 				this.#hosted.delete(id);
+				this.topics.releaseSource(`conversation/${id}`);
 				this.#agentDefinitions.delete(id);
 				this.legacy.disposeSession(id);
 				this.attachments.disposeSession(id);
 				for (const [childId, entry] of this.#nativeProjections) {
 					if (entry.child.root?.id !== id) continue;
-					entry.generation++;
-					entry.unsubscribe?.();
-					entry.unsubscribe = undefined;
-					entry.projection?.dispose();
-					entry.projection = undefined;
-					entry.pending = undefined;
-					entry.pendingSession = undefined;
+					this.#releaseNativeProjection(childId);
+					if (!this.topics.hasSubscribers(`conversation/${childId}`)) continue;
 					void this.manager
 						.nativeChild(childId)
 						.then(child => {
-							if (child && !this.#closed) return this.#nativeProjection(childId, child);
+							if (child && !this.#closed && !this.#nativeProjections.has(childId))
+								return this.#nativeProjection(childId, child);
 						})
 						.catch(error => process.stderr.write(`${String(error)}\n`));
 				}
@@ -696,6 +695,7 @@ export class ZCodeServer {
 		this.legacy.attach(record, projection);
 		this.topics.register(`conversation/${record.id}`, {
 			snapshot: () => projection.snapshot(),
+			logEpoch: () => projection.logEpoch(),
 			subscribe: listener => projection.subscribe(listener),
 		});
 		const unsubscribeProjection = projection.subscribe(() => {
@@ -719,7 +719,8 @@ export class ZCodeServer {
 				void this.manager
 					.nativeChild(id)
 					.then(child => {
-						if (child) return this.#nativeProjection(id, child);
+						if (child && !this.#closed && this.#nativeProjections.get(id) === entry)
+							return this.#nativeProjection(id, child);
 					})
 					.catch(error => process.stderr.write(`${String(error)}\n`));
 			}
@@ -2649,6 +2650,7 @@ export class ZCodeServer {
 						const projection = await this.#coldProjection(id);
 						this.topics.register(params.topic, {
 							snapshot: () => projection.snapshot(),
+							logEpoch: () => projection.logEpoch(),
 							subscribe: listener => projection.subscribe(listener),
 						});
 					} else
@@ -2724,6 +2726,7 @@ export class ZCodeServer {
 					connectionId: params.connectionId,
 					topic: params.topic,
 				});
+				this.#trimColdProjections();
 				if (params.topic.startsWith("workspace-config/")) this.#watchCatalogs();
 				if (permissionRoot) {
 					const owners = this.#permissionOwners.get(params.connectionId) ?? new Set<string>();
@@ -2750,6 +2753,7 @@ export class ZCodeServer {
 					throw new ZCodeProtocolError(-32602, "Subscription ownership mismatch");
 				this.topics.cancel(params.subscriptionId);
 				this.#subscriptions.delete(params.subscriptionId);
+				this.#trimColdProjections();
 				return {};
 			}
 			case "v4/conversation/usage":
@@ -2800,6 +2804,7 @@ export class ZCodeServer {
 				if (params.state === "closed") {
 					this.#closedConnections.add(params.connectionId);
 					this.topics.closeConnection(params.connectionId);
+					this.#trimColdProjections();
 					this.attachments.closeConnection(params.connectionId);
 					this.#connections.delete(params.connectionId);
 					// 退订 A 后切到 B 仍拥有 A 的审批；真正断连才撤销失去最后活连接 owner 的审批。
@@ -2909,17 +2914,24 @@ export class ZCodeServer {
 				if (event.ref.id !== child.agentId) return;
 				if (event.ref.session === current.child.session && event.type !== "removed") return;
 				// 只观察原生 owner 的换代；不调用 ensureLive、不获得 writer 或 dispose child。
-				current.generation++;
+				const generation = ++current.generation;
 				current.pending = undefined;
 				void this.manager
 					.nativeChild(id)
 					.then(next => {
-						if (next) return this.#nativeProjection(id, next);
+						if (
+							next &&
+							!this.#closed &&
+							this.#nativeProjections.get(id) === current &&
+							current.generation === generation
+						)
+							return this.#nativeProjection(id, next);
 					})
 					.catch(error => process.stderr.write(`${String(error)}\n`));
 			});
 			this.topics.register(`conversation/${id}`, {
 				snapshot: () => projection.snapshot(),
+				logEpoch: () => projection.logEpoch(),
 				subscribe: listener => projection.subscribe(listener),
 			});
 			return projection;
@@ -2938,11 +2950,31 @@ export class ZCodeServer {
 		if (child) return this.#nativeProjection(id, child);
 		return this.#coldProjection(id);
 	}
+	#releaseNativeProjection(id: string): void {
+		const entry = this.#nativeProjections.get(id);
+		if (!entry) return;
+		entry.generation++;
+		entry.unsubscribe?.();
+		entry.projection?.dispose();
+		this.#nativeProjections.delete(id);
+		this.topics.releaseSource(`conversation/${id}`);
+	}
+	#trimColdProjections(): void {
+		const idle = Array.from(this.#cold).filter(([id]) => !this.topics.hasSubscribers(`conversation/${id}`));
+		for (const [id, cached] of idle.slice(0, Math.max(0, idle.length - COLD_PROJECTION_CACHE_MAX))) {
+			this.#cold.delete(id);
+			if (this.#nativeProjections.get(id)?.projection === cached.projection) this.#releaseNativeProjection(id);
+			else this.topics.releaseSource(`conversation/${id}`);
+			cached.projection.dispose();
+		}
+	}
 	async #coldProjection(id: string): Promise<ZCodeProjection> {
 		const read = await this.manager.read(id);
 		const version = read.info.modified.getTime();
 		const cached = this.#cold.get(id);
 		if (cached?.version === version) {
+			this.#cold.delete(id);
+			this.#cold.set(id, cached);
 			cached.projection.setSpecDrivenRuns(await this.specDriven.runs(id));
 			return cached.projection;
 		}
@@ -2966,6 +2998,7 @@ export class ZCodeServer {
 		projection.setWorkflowState(await this.workflows.projection(id));
 		projection.setSpecDrivenRuns(await this.specDriven.runs(id));
 		this.#cold.set(id, { projection, version });
+		this.#trimColdProjections();
 		return projection;
 	}
 	async dispose(): Promise<void> {

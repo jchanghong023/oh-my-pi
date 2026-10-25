@@ -94,7 +94,7 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 
 /** Use the complete fork delta, including new unstaged tests, as before. */
 async function discoverForkChangedPaths(gate: GateRun): Promise<string[]> {
-	const requirements = await Bun.file(path.join(gateRepoRoot, "docs-zh-CN/requirements/fork.md")).text();
+	const requirements = await Bun.file(path.join(gateRepoRoot, "openspec/specs/fork-upstream-baseline/spec.md")).text();
 	const baseline = requirements.match(/\*\*Upstream commit\*\*：`([0-9a-f]{40})`/)?.[1];
 	if (!baseline) throw new GateCommandError("Fork requirements do not identify the upstream baseline", 1);
 	const diff = await gate.capture({

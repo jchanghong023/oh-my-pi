@@ -24,14 +24,7 @@
 
 **项目全程交给 AI 之后，最需要维护的是需求文档，而不是代码。** 读写代码、跑验证都可以交给代理，“应该做成什么、不做哪些、到什么程度算完成”只有需求文档能回答；它一旦失真，所有审查和修复都在核对错误的预期。缺少需求，代理就会把当前实现当预期：代码怎么写，就认为应该怎么运行。
 
-需求文档不由人执笔，由两个本地技能维护（都不是 OMP 内置命令，需先安装；`jch-project-init` 不带参数、处理当前项目；截图中的 `$jch-project-init` 是另一宿主入口）：
-
-- **`jch-project-init`**（有时简称 jch-init，调用名 `/skill:jch-project-init`）建立并日常维护基线：多层级 `AGENTS.md`（全仓含根最多 8 份，子文档不复制根规则）加固定需求目录（自有项目放产品需求，fork 放本地差异需求；按功能域拆分，每条需求只有一个权威位置）。已有的有效需求与实现冲突时保留需求、标出差距；未实现的规划也保留，不能把需求改成代码的样子。
-- **`jch-requirements-interview-rebuild`**（`/skill:jch-requirements-interview-rebuild`）逐项重新确认：文档、代码、测试三方一致，也不代表需求就是我真正需要的——代理擅自选的默认行为、过时的需求、一句话里没确认过的选择，只有我能裁决。它一次只问一个决策问题，每问给出推荐与备选；确认后按功能边界重建文档。从实现还原的需求在访谈里只是草稿。
-
-![项目文档维护实战：更新开发规则、需求索引与功能需求，并保留验证限制](assets/jch-project-init-example.png)
-
-两个技能只维护文档，不改业务代码、不跑测试、不提交推送。基线建立后，主代理应把相关需求提供给子代理，而不是假定它们自动拥有主代理的上下文。
+本仓库已批准需求以 `openspec/specs/` 中的能力规格为准；待确认变化保存在原生 `openspec/changes/` 提案和增量规格中。需求理解发生实质分歧时，先由用户裁定目标，再更新对应规格；实现缺口不改变已批准目标。主代理向子代理交付任务时，应提供相关规格和约束，而不是假定它们自动拥有主代理的上下文。
 
 ## 三、把模块拆成可以回答的流程问题
 
@@ -145,6 +138,6 @@
 - **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本文使用的 OMP fork。
 - **桌面 App**：[OmpCode](https://github.com/jchanghong023/OmpCode)，内置 OMP 核心，无需另装 CLI。提供 **CentOS 7 x64 专用兼容 ZIP**，可由普通用户解压后离线运行，无需 root 或升级系统 glibc；仍需图形会话和系统桌面库。
 - **文档转换**：[xberg](https://github.com/jchanghong023/xberg)，fork 自上游 [xberg-io/xberg](https://github.com/xberg-io/xberg)。把办公文档、PDF 以及音频视频统一转换成 Markdown；代码约 217 万行，核心为约 156 万行 Rust，其余为 Dart、Python、Swift、Java、C# 等上游生态语言绑定。
-- **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](requirements/fork.md#魔法关键词的内置命令与-fullsend)。
+- **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](../openspec/specs/personal-commands/spec.md)。
 
 CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。下载和运行方法见 OmpCode 项目 README。
