@@ -58,6 +58,7 @@ describe("TTSR eval bridge enforcement", () => {
 		const content = kind === "regex" ? "FORBIDDEN_TOKEN\n" : 'console.log("FORBIDDEN_TOKEN");\n';
 		const manager = SessionManager.inMemory(tempDir.path());
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"compaction.enabled": false,
 			"eval.autoBackground.enabled": false,
 			"tools.approvalMode": "yolo",

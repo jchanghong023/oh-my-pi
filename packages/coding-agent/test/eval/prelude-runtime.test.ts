@@ -80,6 +80,7 @@ describe("eval prelude runtime", () => {
 			const calls: unknown[] = [];
 			const prelude = definition("frames", calls, [original, ordinary]);
 			const toolSession = session(() => [prelude]);
+			toolSession.settings = Settings.isolated({ "eval.js": true });
 			toolSession.getEvalSessionId = () => `frame-fidelity-${language}`;
 			const tool = new EvalTool(toolSession);
 			const printImages = [original, ordinary].map(image =>

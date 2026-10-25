@@ -732,6 +732,44 @@ describe("LSP diagnostics freshness", () => {
 		expect(await Bun.file(filePath).text()).toBe("export const value: number = 'x';\n");
 	});
 
+	it.each(["write", "edit"] as const)("does not start LSP for %s when lsp.enabled is false", async operation => {
+		const filePath = path.join(tempDir.path(), `${operation}-disabled.ts`);
+		await Bun.write(filePath, "export const value = 1;\n");
+		vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: {}, idleTimeoutMs: undefined });
+		vi.spyOn(lspConfig, "getServersForFile").mockReturnValue([["test-lsp", TEST_SERVER]]);
+		const start = vi.spyOn(lspClient, "getOrCreateClient").mockRejectedValue(new Error("LSP is disabled"));
+		const notify = vi.spyOn(lspClient, "notifyWorkspaceWatchedFiles").mockResolvedValue();
+		const session: ToolSession = {
+			cwd: tempDir.path(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated({
+				"lsp.enabled": false,
+				"lsp.formatOnWrite": true,
+				"lsp.diagnosticsOnWrite": true,
+				"lsp.diagnosticsOnEdit": true,
+			}),
+		};
+
+		const result =
+			operation === "write"
+				? await new WriteTool(session).execute("write-disabled", {
+						path: filePath,
+						content: "export const value = 2;\n",
+					})
+				: await new EditTool(session, "replace").execute("edit-disabled", {
+						path: filePath,
+						old_string: "export const value = 1;",
+						new_string: "export const value = 2;",
+					});
+
+		expect(result.isError).not.toBe(true);
+		expect(await Bun.file(filePath).text()).toBe("export const value = 2;\n");
+		expect(start).not.toHaveBeenCalled();
+		expect(notify).not.toHaveBeenCalled();
+	});
+
 	it("returns the write tool result before slow diagnostics and queues them for the agent", async () => {
 		const filePath = path.join(tempDir.path(), "write-tool.ts");
 		const uri = fileToUri(filePath);
@@ -760,6 +798,7 @@ describe("LSP diagnostics freshness", () => {
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated({
+				"lsp.enabled": true,
 				"lsp.formatOnWrite": false,
 				"lsp.diagnosticsOnWrite": true,
 				"lsp.diagnosticsDeduplicate": true,
@@ -815,6 +854,7 @@ describe("LSP diagnostics freshness", () => {
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated({
+				"lsp.enabled": true,
 				"lsp.formatOnWrite": false,
 				"lsp.diagnosticsOnEdit": true,
 				"lsp.diagnosticsDeduplicate": true,

@@ -70,6 +70,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "speculative content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -163,6 +164,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -218,6 +220,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -276,6 +279,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -328,6 +332,7 @@ describe("streamed eval speculation", () => {
 		await fs.writeFile(path.join(directory, "a.txt"), "stale content");
 		await fs.writeFile(path.join(directory, "b.txt"), "fresh content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -387,6 +392,7 @@ describe("streamed eval speculation", () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-eval-committed-"));
 		temporaryDirectories.push(directory);
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -459,6 +465,7 @@ describe("streamed eval speculation", () => {
 		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-eval-appended-"));
 		temporaryDirectories.push(directory);
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -508,6 +515,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -562,6 +570,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -609,6 +618,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -679,6 +689,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -796,6 +807,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,
@@ -881,6 +893,7 @@ describe("streamed eval speculation", () => {
 		temporaryDirectories.push(directory);
 		await fs.writeFile(path.join(directory, "note.txt"), "content");
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"eval.autoBackground.enabled": false,
 			"images.autoResize": false,
 			"tools.speculativeExecution.enabled": true,

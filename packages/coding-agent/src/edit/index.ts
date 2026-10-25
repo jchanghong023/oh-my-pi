@@ -81,6 +81,7 @@ import {
 import {
 	cfgLspDiagnosticsDeduplicate,
 	cfgLspDiagnosticsOnEdit,
+	cfgLspEnabled,
 	cfgLspFormatOnWrite,
 	cfgLspRequestTimeout,
 } from "../lsp/settings";
@@ -177,7 +178,7 @@ export function resolveEditToolDescription(
 
 /** Builds the LSP writethrough from the current `lsp.*` settings; called per write so changes apply immediately. */
 function createEditWritethrough(session: ToolSession): WritethroughCallback {
-	const enableLsp = session.enableLsp ?? true;
+	const enableLsp = (session.enableLsp ?? true) && cfgLspEnabled.get(session.settings);
 	const enableDiagnostics = enableLsp && cfgLspDiagnosticsOnEdit.get(session.settings);
 	const enableFormat = enableLsp && cfgLspFormatOnWrite.get(session.settings);
 	const deduplicate = enableDiagnostics && cfgLspDiagnosticsDeduplicate.get(session.settings);
@@ -712,7 +713,7 @@ export class EditTool implements AgentTool<TInput> {
 	async #writeLocked(request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
 		if (request.op === "delete") {
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
-			if (this.session.enableLsp ?? true) {
+			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
 					[{ filePath: request.path, type: FileChangeType.Deleted }],
@@ -744,7 +745,7 @@ export class EditTool implements AgentTool<TInput> {
 			await writeFileWithFallback(request.moveTo, request.content);
 			if (mode !== undefined) await chmodMovedFile(request.moveTo, mode);
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
-			if (this.session.enableLsp ?? true) {
+			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
 					[

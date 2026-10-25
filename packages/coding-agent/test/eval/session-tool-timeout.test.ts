@@ -34,6 +34,7 @@ function makeSession(...tools: AgentTool[]): ToolSession {
 		cwd: tempDir.path(),
 		hasUI: false,
 		settings: Settings.isolated({
+			"eval.js": true,
 			"async.enabled": false,
 			"eval.autoProvision": false,
 			"python.interpreter": Bun.env.PYTHON ?? $which("python3") ?? $which("python") ?? "",

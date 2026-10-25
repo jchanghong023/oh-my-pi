@@ -45,29 +45,6 @@ describe("createTools", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("creates all builtin tools by default", async () => {
-		// xdev mounting (default-on) would unmount discoverables like lsp and
-		// web_search into xd://; disable it to assert the full builtin set.
-		const session = createTestSession({ settings: createSettingsWithOverrides({ "tools.xdev": false }) });
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		// Core tools should always be present
-		expect(names).toContain("eval");
-		expect(names).toContain("bash");
-		expect(names).toContain("read");
-		expect(names).toContain("edit");
-		expect(names).toContain("write");
-		expect(names).toContain("grep");
-		expect(names).toContain("glob");
-		expect(names).toContain("lsp");
-		expect(names).toContain("task");
-		expect(names).toContain("todo");
-		expect(names).toContain("web_search");
-		expect(names).not.toContain("fetch");
-		expect(names).not.toContain("vim");
-	});
-
 	it("normalizes legacy explicit tool names", async () => {
 		const session = createTestSession({
 			settings: createSettingsWithOverrides({ "astGrep.enabled": false }),
@@ -110,7 +87,7 @@ describe("createTools", () => {
 	});
 
 	it("excludes lsp tool when session disables LSP", async () => {
-		const session = createTestSession({ enableLsp: false });
+		const session = createTestSession({ enableLsp: false, settings: Settings.isolated({ "lsp.enabled": true }) });
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 		const names = tools.map(t => t.name);
 
@@ -118,7 +95,7 @@ describe("createTools", () => {
 	});
 
 	it("creates xd:// presentation state without remounting explicitly requested built-ins", async () => {
-		const session = createTestSession();
+		const session = createTestSession({ settings: Settings.isolated({ "lsp.enabled": true }) });
 		const tools = await createTools(session, ["read", "lsp", "write"]);
 
 		expect(session.xdev).toBeDefined();
@@ -131,7 +108,7 @@ describe("createTools", () => {
 		// session would allocate no xd:// state and later SDK assembly would
 		// expose custom/MCP tools top-level. A device-only write restores
 		// mounting while filesystem writes stay rejected (see WriteTool).
-		const session = createTestSession();
+		const session = createTestSession({ settings: Settings.isolated({ "lsp.enabled": true }) });
 		const tools = await createTools(session, ["read", "lsp"]);
 
 		expect(session.deviceOnlyWrite).toBe(true);

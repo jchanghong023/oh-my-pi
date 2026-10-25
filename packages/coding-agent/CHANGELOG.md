@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
+- Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 - Deliver OpenSpec explore, update, propose, sync, archive and verify as manual-only built-in skills (`/skill:opsx-*`) instead of built-in commands or command templates. Keep native CLI guidance, validation and `/dev` behavior intact.
 - Simplify bundled OpenSpec initialization to `omp openspec init [path] [--language <language>]` with the requirements-only default schema. Remove external-tool selection, installation/update entrypoints and flags; preserve existing project configuration, requirements, history and external-tool files.
 

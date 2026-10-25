@@ -20,7 +20,7 @@ function restoreEnv(name: "PI_PY" | "PI_JS", value: string | undefined): void {
 	}
 	Bun.env[name] = value;
 }
-function makeSession(settings = Settings.isolated()): ToolSession {
+function makeSession(settings = Settings.isolated({ "eval.js": true })): ToolSession {
 	return {
 		cwd: "/tmp/eval-test",
 		hasUI: false,

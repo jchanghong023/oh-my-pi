@@ -22,6 +22,7 @@ function sessionFor(root: string, manager?: AsyncJobManager): ToolSession {
 		allocateOutputArtifact: async () => ({ path: root, id: "failed" }),
 		asyncJobManager: manager,
 		settings: Settings.isolated({
+			"eval.js": true,
 			"async.enabled": true,
 			"bashInterceptor.enabled": false,
 			"bash.autoBackground.enabled": false,

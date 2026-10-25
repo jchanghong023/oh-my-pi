@@ -35,7 +35,7 @@ function makeSession(tool: AgentTool): ToolSession {
 	return {
 		cwd: temp.path(),
 		hasUI: false,
-		settings: Settings.isolated({ "async.enabled": false, "eval.autoProvision": false }),
+		settings: Settings.isolated({ "eval.js": true, "async.enabled": false, "eval.autoProvision": false }),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		getArtifactsDir: () => null,
@@ -142,6 +142,7 @@ describe("MCP progress through the shared Eval tool bridge", () => {
 			...session,
 			asyncJobManager: manager,
 			settings: Settings.isolated({
+				"eval.js": true,
 				"eval.autoProvision": false,
 				"eval.autoBackground.enabled": true,
 				"eval.autoBackground.thresholdMs": 10,

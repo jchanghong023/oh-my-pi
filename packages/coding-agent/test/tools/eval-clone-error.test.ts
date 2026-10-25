@@ -10,7 +10,7 @@ function makeSession(): ToolSession {
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "eval.js": true }),
 	} as unknown as ToolSession;
 }
 

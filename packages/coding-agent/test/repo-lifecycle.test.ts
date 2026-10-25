@@ -130,6 +130,7 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			agentDir,
 			inMemory: true,
 			overrides: {
+				"eval.js": true,
 				"compaction.enabled": false,
 				"edit.mode": "replace",
 				"edit.enforceSeenLines": false,
@@ -442,6 +443,7 @@ describe("repository lifecycle coverage across session and background execution 
 					agentDir,
 					inMemory: true,
 					overrides: {
+						"eval.js": true,
 						"compaction.enabled": false,
 						"bash.autoBackground.enabled": false,
 						"eval.autoBackground.enabled": false,
@@ -921,6 +923,7 @@ describe("repository lifecycle coverage across session and background execution 
 			agentDir,
 			inMemory: true,
 			overrides: {
+				"eval.js": true,
 				"compaction.enabled": false,
 				"bashInterceptor.enabled": false,
 				"async.enabled": true,

@@ -73,6 +73,7 @@ import { isReadOnlyIndexDevice } from "./xdev";
 import {
 	cfgLspDiagnosticsDeduplicate,
 	cfgLspDiagnosticsOnWrite,
+	cfgLspEnabled,
 	cfgLspFormatOnWrite,
 	cfgLspRequestTimeout,
 } from "../lsp/settings";
@@ -609,8 +610,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	/** Resolves the LSP writethrough from the current `lsp.*` settings so changes apply to the next write. */
 	#lspWritethrough(): { writethrough: WritethroughCallback; deferred: DeferredDiagnostics | undefined } {
-		if (!(this.session.enableLsp ?? true)) return { writethrough: writethroughNoop, deferred: undefined };
 		const { settings } = this.session;
+		if (!(this.session.enableLsp ?? true) || !cfgLspEnabled.get(settings)) {
+			return { writethrough: writethroughNoop, deferred: undefined };
+		}
 		const enableDiagnostics = cfgLspDiagnosticsOnWrite.get(settings);
 		const dedup = enableDiagnostics && cfgLspDiagnosticsDeduplicate.get(settings);
 		const writethrough = createLspWritethrough(this.session.cwd, {

@@ -40,6 +40,7 @@ describe("TTSR eval near-miss controls", () => {
 		];
 		const manager = SessionManager.inMemory(tempDir.path());
 		const settings = Settings.isolated({
+			"eval.js": true,
 			"compaction.enabled": false,
 			"eval.autoBackground.enabled": false,
 			"tools.approvalMode": "yolo",

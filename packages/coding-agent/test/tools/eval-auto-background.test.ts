@@ -100,6 +100,7 @@ describe("EvalTool auto-background", () => {
 		const tool = new EvalTool(
 			makeSession(
 				Settings.isolated({
+					"eval.js": true,
 					"eval.autoBackground.enabled": true,
 					"eval.autoBackground.thresholdMs": 2_000,
 				}),
@@ -133,6 +134,7 @@ describe("EvalTool auto-background", () => {
 		const tool = new EvalTool(
 			makeSession(
 				Settings.isolated({
+					"eval.js": true,
 					"eval.autoBackground.enabled": true,
 					"eval.autoBackground.thresholdMs": 10,
 				}),
@@ -191,6 +193,7 @@ describe("EvalTool auto-background", () => {
 		const tool = new EvalTool(
 			makeSession(
 				Settings.isolated({
+					"eval.js": true,
 					"eval.autoBackground.enabled": true,
 					// High threshold: only the steering signal can background this.
 					"eval.autoBackground.thresholdMs": 60_000,

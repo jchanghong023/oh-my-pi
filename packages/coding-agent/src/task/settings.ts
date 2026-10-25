@@ -300,7 +300,7 @@ export const cfgTaskMaxConcurrency = register({
 export const cfgTaskEnableLsp = register({
 	id: "task.enableLsp",
 	type: "boolean",
-	default: true,
+	default: false,
 	ui: {
 		tab: "tasks",
 		group: "Subagents",

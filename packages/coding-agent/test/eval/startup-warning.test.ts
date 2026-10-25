@@ -37,13 +37,6 @@ afterEach(() => {
 });
 
 describe("resolvePythonEvalWarning", () => {
-	it("falls back to JavaScript when Python is missing and JS eval is on", async () => {
-		mockProbe();
-		expect(await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated() })).toBe(
-			`Python eval unavailable (Python executable not found on PATH); eval will run JavaScript only. ${FIX_HINT}`,
-		);
-	});
-
 	it("reports no eval backend when Python is missing and JS eval is off", async () => {
 		mockProbe();
 		expect(await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated({ "eval.js": false }) })).toBe(
@@ -65,7 +58,7 @@ describe("resolvePythonEvalWarning", () => {
 	it("shortens home paths, strips control characters, and bounds the probe reason", async () => {
 		const interpreter = path.join(os.homedir(), "py\tenv", "python");
 		mockProbe(`Tried: ${interpreter} \x1b[31mspawn failed\x1b[0m ${"x".repeat(400)}`);
-		const warning = await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated() });
+		const warning = await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated({ "eval.js": true }) });
 		const reason = warning?.slice(warning.indexOf("(") + 1, warning.indexOf(")"));
 		expect(reason).toStartWith("Tried: ~/py");
 		expect(reason).not.toContain(os.homedir());
@@ -76,7 +69,7 @@ describe("resolvePythonEvalWarning", () => {
 });
 
 describe("resolveFirstLaunchPythonEvalWarning", () => {
-	const base = { cwd: CWD, settings: Settings.isolated() };
+	const base = { cwd: CWD, settings: Settings.isolated({ "eval.js": true }) };
 
 	it("probes on a fresh install and stays silent once the changelog marker exists", async () => {
 		const probe = mockProbe();

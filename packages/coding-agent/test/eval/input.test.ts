@@ -26,7 +26,7 @@ async function cursorEval(args: Record<string, unknown>): Promise<{ isError: boo
 	const ownerId = `eval-input-${crypto.randomUUID()}`;
 	const context: ToolSession = {
 		...session(tmp.path()),
-		settings: Settings.isolated({ "eval.autoBackground.enabled": false }),
+		settings: Settings.isolated({ "eval.js": true, "eval.autoBackground.enabled": false }),
 		getEvalSessionId: () => ownerId,
 		getEvalKernelOwnerId: () => ownerId,
 	};

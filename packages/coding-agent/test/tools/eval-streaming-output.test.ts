@@ -18,7 +18,7 @@ import { removeWithRetries, sanitizeText } from "@oh-my-pi/pi-utils";
 
 import { cfgToolsOutputMaxColumns } from "@oh-my-pi/pi-coding-agent/tools/settings";
 
-function makeSession(settings = Settings.isolated()): ToolSession {
+function makeSession(settings = Settings.isolated({ "eval.js": true })): ToolSession {
 	return {
 		cwd: "/tmp/eval-test",
 		hasUI: false,
@@ -99,7 +99,7 @@ describe("EvalTool live stdout streaming", () => {
 	});
 
 	it("preserves the column-cap notice after rebuilding the final eval summary", async () => {
-		const settings = Settings.isolated();
+		const settings = Settings.isolated({ "eval.js": true });
 		cfgToolsOutputMaxColumns.set(settings, 8);
 		vi.spyOn(evalIndex.jsBackend, "execute").mockImplementation((async (
 			_code: string,
@@ -132,6 +132,7 @@ describe("EvalTool live stdout streaming", () => {
 			const sessionManager = SessionManager.inMemory(dir);
 			try {
 				const settings = Settings.isolated({
+					"eval.js": true,
 					"tools.outputMaxColumns": 8,
 					"tools.artifactSpillThreshold": 1,
 					"tools.artifactTailBytes": 1,

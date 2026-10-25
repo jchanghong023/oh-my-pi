@@ -340,6 +340,7 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 - `recap.enabled=false`
 - `title.generator=smol`：所有平台、普通与 offline 进程的自动会话标题优先使用与内置 `scout` 相同的 `@smol` 角色解析，随当前 smol 配置／预设变化，不固定模型 ID。smol 无法解析时直接使用当前会话模型；smol 请求失败、缺少凭证或未生成有效标题时，除非显式设置 `retry.modelFallback=false`，否则回退到当前会话模型；两者相同（含路由）只尝试一次，不插入 tiny／commit／default 或模型专属 fallback 链。不默认分叉主模型，也不预热无关 tiny 标题 Worker；保留取消及本地推理不回退付费模型的边界。重新规划触发的标题刷新共用此解析；显式 `title.generator=fork`／`tiny` 保持各自行为，`--no-title` 和手动命名优先，不改写已有配置。
 - `debug.enabled=false`、`ida.enabled=false`、`archive.enabled=false`（普通与 offline 启动均默认关闭；已有配置和用户显式开启仍优先，不改写配置文件）。
+- `eval.js=false`、`eval.py=true`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval，保留 Python Eval；复用现有后端开关，已有显式配置与 `PI_JS`／`PI_PY` 环境变量仍按原优先级生效，不改写用户配置。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。验收须覆盖默认 Python 实际执行、JavaScript 拒绝及显式开启后的实际执行。
 - 主目录会话与 OTLP 导出的默认值及显式覆盖契约见 [1016 默认行为需求](新增需求1016.md)。
 - `ask.timeout=60`（秒；显式 `0` 关闭超时，计划模式继续关闭 ask 超时；同一设置也约束 `cfg://` 审批，未回答时仍拒绝写入）
   - 仅当前 Goal 处于已启用、执行中且带有 `/goal-autopilot` 模式标记时，内置 `ask` 对超时未回答的题目不代选推荐项、肯定选项或首项；返回明确标记的自动回复，正文为“按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总”，将决策交回已有完整上下文的当前主模型，直至完整目标完成，不在阶段边界收尾或再次询问是否继续。模式依据当前目标状态，不依据最近输入的命令名称；暂停、退出、完成或预算受限时不使用固定回复。
@@ -352,7 +353,8 @@ Windows 租约最小同步权限、归档复制 fallback 的独占目标、temp 
 - `theme.dark=dark-terminal`（浅色主题仍为上游默认 `light`）
 - `display.showTurnTime=true`
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](#display-界面显示模式)。
-- `task.enableLsp=true`（默认允许子代理使用 LSP；仍遵循父会话禁用与计划模式限制）
+- **LSP 默认关闭**：`lsp.enabled=false`、`task.enableLsp=false`。所有平台、普通与 offline 启动，在用户未显式启用时，主会话与 task 子代理均不启用 LSP，不自动启动语言服务器；文件写入、编辑、移动和删除的自动格式化、诊断及 LSP 文件通知同样遵循总开关。保留现有显式开启方式及配置优先级，不覆盖用户已保存的设置；子代理仍遵循父会话禁用与计划模式限制。实现与验证状态见[目录索引](README.md)。
+  - 验收：无显式配置启动并创建 task 子代理，两者均不启动语言服务器；显式开启后 LSP 可用，显式关闭仍生效，普通与 offline 模式遵循相同默认值和覆盖规则。
 - `error.notify=on`（默认在 Agent 因错误停止时发送终端通知；实际呈现取决于终端支持）
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`（本地 Whisper 与云端转录的区域标签均归一化为基语言，如 `zh-CN`→`zh`；默认 tier parakeet/sherpa 不使用语言参数）
