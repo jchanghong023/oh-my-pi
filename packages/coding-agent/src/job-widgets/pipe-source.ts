@@ -1,6 +1,27 @@
-import type { PipeStreamInfo, PipeStreams } from "@oh-my-pi/pi-natives";
+import { PipeStreams, type PipeStreamInfo } from "@oh-my-pi/pi-natives";
 import { truncate } from "@oh-my-pi/pi-utils";
 import type { JobTextChunk, JobTextSource } from "./types";
+
+/**
+ * Build the run's stream taps, or `undefined` when the loaded native addon
+ * predates `PipeStreams`.
+ *
+ * The loader keeps a previous release's addon next to a newer tree on purpose,
+ * and classes have no `missingNativeExport` fallback, so `new PipeStreams()`
+ * would otherwise throw `undefined is not a constructor` out of every bash
+ * call. Stream taps only feed `proc://<id>/streams` and the pipe widgets, so a
+ * stale addon degrades that one view instead of failing the command (and, in
+ * the field, pushing the agent to retry interactive `pty` mode, which takes
+ * over the terminal).
+ */
+export function createPipeStreams(binding: unknown = PipeStreams): PipeStreams | undefined {
+	if (typeof binding !== "function") return undefined;
+	try {
+		return new (binding as new () => PipeStreams)();
+	} catch {
+		return undefined;
+	}
+}
 
 /** Longest pipe label: `producer → consumer` on one line. */
 const MAX_LABEL_CHARS = 80;

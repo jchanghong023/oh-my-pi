@@ -832,10 +832,10 @@ export class CommandController {
 	}
 
 	/**
-	 * `/jobs`: natively the live jobs sheet the jobs pill opens (inspect and
-	 * cancel included); `/jobs full`, and text mode, a report of the running
-	 * and recent jobs (see {@link showCommandReport}). Both list the viewed
-	 * session's jobs and its subagents' as a tree (see {@link buildJobTree}).
+	 * `/jobs` opens the live jobs sheet (inspect and cancel included) on both
+	 * terminal surfaces; `/jobs full` shows a full-command snapshot report
+	 * (see {@link showCommandReport}). Both list the viewed session's jobs and
+	 * its subagents as a tree (see {@link buildJobTree}).
 	 */
 	async handleJobsCommand(options?: { full?: boolean }): Promise<void> {
 		const full = options?.full === true;
@@ -844,7 +844,7 @@ export class CommandController {
 			this.ctx.showWarning("Async background jobs are unavailable in this session.");
 			return;
 		}
-		if (isNativeRendering() && !full) {
+		if (!full) {
 			this.ctx.showJobsSheet();
 			return;
 		}
@@ -872,15 +872,10 @@ export class CommandController {
 			// A spawned subagent's task job takes the agent's id as its id and label: name it once.
 			const agent = row.agent && row.agent.id !== job.id ? ` ${theme.bold(row.agent.id)}` : "";
 			info += `${guide}${renderJobLine(job, now)}${agent}\n`;
-			const text = full ? (job.command ?? job.label) : job.label;
+			const text = job.command ?? job.label;
 			if (text === job.id) continue;
 			const indent = jobTreeIndent(row, theme);
 			const prefix = theme.fg("dim", indent);
-			if (!full) {
-				const label = truncateJobLabel(text, Math.max(24, columns - 22 - visibleWidth(indent)));
-				info += `${prefix}${theme.fg("dim", label)}\n`;
-				continue;
-			}
 			for (const line of wrapTextWithAnsi(
 				replaceTabs(sanitizeText(text)),
 				Math.max(1, columns - 4 - visibleWidth(indent)),

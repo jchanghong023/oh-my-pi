@@ -68,7 +68,7 @@ describe("CommandController /jobs full", () => {
 	});
 });
 
-describe("/jobs in the native terminal", () => {
+describe("/jobs in the terminal", () => {
 	let tempDir: TempDir;
 	let authStorage: AuthStorage;
 	let manager: AsyncJobManager;
@@ -114,9 +114,19 @@ describe("/jobs in the native terminal", () => {
 		resetSettingsForTest();
 	});
 
-	it("opens the live jobs sheet listing the running job, leaves the transcript alone, and Esc closes it", async () => {
+	it.each([false, true])("shows live output without changing the transcript (native=%s)", async native => {
+		setNativeRendering(native);
 		const gate = Promise.withResolvers<string>();
-		manager.register("bash", "cargo test --workspace", () => gate.promise, { ownerId: "main" });
+		let progress: ((text: string) => Promise<void>) | undefined;
+		manager.register(
+			"bash",
+			"cargo test --workspace",
+			ctx => {
+				progress = ctx.reportProgress;
+				return gate.promise;
+			},
+			{ ownerId: "main" },
+		);
 		const transcript = [...mode.chatContainer.children];
 
 		await mode.handleJobsCommand();
@@ -126,6 +136,10 @@ describe("/jobs in the native terminal", () => {
 		expect(mode.ui.getFocused()).toBe(sheet ?? null);
 		expect(Bun.stripANSI(sheet?.render(100).join("\n") ?? "")).toContain("cargo test --workspace");
 		expect(mode.chatContainer.children).toEqual(transcript);
+		await progress?.("stdout: compilation started");
+		expect(Bun.stripANSI(sheet?.render(100).join("\n") ?? "")).toContain("stdout: compilation started");
+		await progress?.("stdout: compilation started\nstderr: warning from compiler");
+		expect(Bun.stripANSI(sheet?.render(100).join("\n") ?? "")).toContain("stderr: warning from compiler");
 
 		sheet?.handleInput?.("\x1b");
 		expect(mode.ui.hasOverlay()).toBe(false);

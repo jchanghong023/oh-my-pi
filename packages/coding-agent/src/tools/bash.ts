@@ -16,7 +16,6 @@ import type {
 	ToolTier,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
-import { PipeStreams } from "@oh-my-pi/pi-natives";
 import { isEnoent, logger, prompt } from "@oh-my-pi/pi-utils";
 import { isPosixShell } from "@oh-my-pi/pi-utils/procmgr";
 import { raceJobSettlement, resolveAutoBackgroundWaitMs } from "../async";
@@ -25,7 +24,7 @@ import { applyDirenvPreflight, type BashResult, executeBash } from "../exec/bash
 import { InternalUrlRouter } from "../internal-urls";
 import { sessionResolveContext } from "../internal-urls/context";
 import { InternalUrlFilesystem, UrlFsError } from "../internal-urls/url-filesystem";
-import { PipeTextSources, TextTap } from "../job-widgets";
+import { createPipeStreams, PipeTextSources, TextTap } from "../job-widgets";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import type {
 	ClientBridgeTerminalExitStatus,
@@ -871,10 +870,13 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// keep a finished `:async:` Shell (and its background children) alive.
 		let pids: () => readonly number[] = NO_PIDS;
 		// Outlives the run with the job row, so a finished pipeline stays readable.
-		const streams = new PipeStreams();
+		// `undefined` only when the loaded native addon predates `PipeStreams`;
+		// the command must still run then (see `createPipeStreams`).
+		const streams = createPipeStreams();
+		if (!streams) logger.debug("bash pipe streams unavailable; running without stream taps");
 		// The job's widget reads the command's own output and every pipe it opens.
 		const outputTap = new TextTap("out", "the command's own stdout+stderr");
-		const pipeSources = new PipeTextSources(streams);
+		const pipeSources = streams ? new PipeTextSources(streams) : undefined;
 		let latestText = "";
 		let latestProgressDetails: BashProgressDetails | undefined;
 		let backgrounded = !options.foreground;
@@ -978,7 +980,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				foreground: options.foreground,
 				process: { command: options.command, cwd: options.commandCwd, pids: () => pids(), streams },
 				widgetInputs: {
-					sources: () => [outputTap, ...pipeSources.list()],
+					sources: () => [outputTap, ...(pipeSources?.list() ?? [])],
 					brief: () => ({ kind: "bash", command: options.command, intent: options.intent }),
 				},
 			},

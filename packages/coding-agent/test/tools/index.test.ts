@@ -72,7 +72,9 @@ describe("createTools", () => {
 	});
 
 	it("still exposes eval when python kernel is unavailable (dispatches to js)", async () => {
-		const session = createTestSession();
+		// JS eval is off by default; opting in is what makes the js fallback
+		// reachable when the python kernel probe reports no interpreter.
+		const session = createTestSession({ settings: createSettingsWithOverrides({ "eval.js": true }) });
 		vi.spyOn(
 			await import("@oh-my-pi/pi-coding-agent/eval/py/kernel"),
 			"checkPythonKernelAvailability",

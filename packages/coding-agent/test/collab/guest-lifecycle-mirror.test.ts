@@ -297,11 +297,11 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY")]);
+			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
 			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
 			await send({ type: "message_end", message });
 			expect(ctx.session.agent.state.streamMessage).toBeNull();
-			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY")]);
+			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
 			expect(ctx.session.messages).toEqual(history);
 			expect(ctx.session.agent.state.messages).toHaveLength(1);
 			expect(agentEvents).toEqual([]);
@@ -310,8 +310,9 @@ describe("collab guest extension lifecycle mirror", () => {
 			expect(ctx.thinkingPreview.render(60)).toEqual([]);
 			expect(ctx.session.isStreaming).toBe(false);
 
-			// A later real stream must discard the old stub, and prose closes
-			// the next thinking window even when its start arrived mid-message.
+			// A later real stream must discard the old stub, and prose collapses
+			// the next thinking window (retained dimmed) even when its start
+			// arrived mid-message; agent_end clears it.
 			await send({ type: "agent_start" });
 			await send({ type: "message_start", message });
 			await send({
@@ -331,7 +332,7 @@ describe("collab guest extension lifecycle mirror", () => {
 				assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: prose },
 			});
 			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
-			expect(ctx.thinkingPreview.render(60)).toEqual([]);
+			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
 			await send({ type: "message_end", message: prose });
 			await send({ type: "agent_end", messages: [prose], isTerminal: true });
 			expect(ctx.session.agent.state.messages).toEqual(history);

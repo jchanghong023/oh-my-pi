@@ -33,6 +33,8 @@
 
 ### Fixed
 
+- Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
+- Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.
 - Hide a tool-failure warning while its exact failed execution is one of the visible compact activity rows, and show it again once the dock no longer represents that call; independent warnings and already-committed history are never hidden or rewritten.
 - Route bundled Superpowers implementation tasks to `task` and code reviews to `reviewer`, instead of requesting an unavailable `general-purpose` agent.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
