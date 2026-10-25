@@ -1,5 +1,5 @@
 import type { Component } from "../tui";
-import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, sanitizeText } from "@oh-my-pi/pi-utils";
 import { readShellWord } from "@oh-my-pi/pi-utils/shell";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
@@ -775,7 +775,7 @@ function afterCommandSeparator(rest: string): string | undefined {
 	return undefined;
 }
 
-/** Command text after leading assignments/context builtins, or undefined when it would echo quoted content. */
+/** One-line command text after leading assignments/context builtins, or undefined when unparseable. */
 function compactBashCommandText(command: string): string | undefined {
 	let remaining = command.trim();
 	while (remaining) {
@@ -795,10 +795,9 @@ function compactBashCommandText(command: string): string | undefined {
 			remaining = next;
 			continue;
 		}
-		const text = remaining.split("\n", 1)[0]!.trim();
-		// Quoted arguments often carry scripts, tokens or messages; keep only the program then.
-		if (/["'`]/.test(text)) return undefined;
-		return text || undefined;
+		// One row: collapse the first line; the renderer truncates it to the row width.
+		const text = sanitizeText(remaining.split("\n", 1)[0]!).replace(/\s+/g, " ").trim();
+		return text ? text.slice(0, 512) : undefined;
 	}
 	return undefined;
 }

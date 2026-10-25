@@ -405,38 +405,44 @@ describe("compact transcript activity", () => {
 		},
 	);
 
-	it("uses intent or executable for shell summaries without exposing the script", () => {
+	it("prefers the intent over the command text", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		for (const [args, expected] of [
-			[{ command: 'bun -e "PRIVATE_SCRIPT"', i: "检查本地输出" }, "检查本地输出"],
-			[{ command: 'bun -e "PRIVATE_SCRIPT"' }, "bun"],
-		] as const) {
-			const component = new ToolExecutionComponent("bash", args, {}, undefined, {
+		const withIntent = new ToolExecutionComponent(
+			"bash",
+			{ command: 'bun -e "PRIVATE_SCRIPT"', i: "检查本地输出" },
+			{},
+			undefined,
+			{
 				requestRender() {},
 				requestComponentRender() {},
 				resetDisplay() {},
-			});
-			components.push(component);
-			component.updateArgs({ command: args.command });
-			expect(Bun.stripANSI(component.render(70)[0])).toContain(expected);
-			expect(component.render(70)[0]).not.toContain("PRIVATE_SCRIPT");
-			expect(JSON.stringify(component.describe(toolCx))).toContain(expected);
-			expect(JSON.stringify(component.describe(toolCx))).not.toContain("PRIVATE_SCRIPT");
-		}
+			},
+		);
+		components.push(withIntent);
+		expect(Bun.stripANSI(withIntent.render(70)[0])).toContain("检查本地输出");
+		expect(withIntent.render(70)[0]).not.toContain("PRIVATE_SCRIPT");
+		expect(JSON.stringify(withIntent.describe(toolCx))).toContain("检查本地输出");
+		expect(JSON.stringify(withIntent.describe(toolCx))).not.toContain("PRIVATE_SCRIPT");
+
+		const withoutIntent = new ToolExecutionComponent("bash", { command: 'bun -e "PRIVATE_SCRIPT"' }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(withoutIntent);
+		expect(Bun.stripANSI(withoutIntent.render(70)[0])).toContain('bun -e "PRIVATE_SCRIPT"');
 	});
 
-	it("keeps assignment values and quoted content out of compact command summaries", () => {
+	it("skips leading assignments and context builtins in one-line command summaries", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		for (const [command, summary, hidden] of [
-			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun -e "PRIVATE_SCRIPT"', "bun", "PRIVATE_SCRIPT"],
-			['CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py', "python.exe", "train.py"],
-			["cd /tmp/private-dir && bun test", "bun test", undefined],
+			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun test', "bun test", "PRIVATE value"],
+			["cd /tmp/private-dir && git diff --stat", "git diff --stat", "private-dir"],
 			['cd "/tmp/quiet && path" && python3 train.py', "python3 train.py", "/tmp/quiet"],
-			["export FOO=1; bun run check", "bun run check", undefined],
+			["export FOO=1; bun run check", "bun run check", "FOO=1"],
 			["true && bun test", "bun test", undefined],
 			["cd /tmp/private-dir", "cd", "private-dir"],
 			["git diff --stat", "git diff --stat", undefined],
-			['git commit -m "PRIVATE commit message"', "git", "PRIVATE commit message"],
 		] as const) {
 			const component = new ToolExecutionComponent("bash", { command }, {}, undefined, {
 				requestRender() {},
@@ -452,7 +458,6 @@ describe("compact transcript activity", () => {
 					JSON.stringify(component.describe()),
 				]) {
 					expect(view).toContain(summary);
-					expect(view).not.toContain("PRIVATE");
 					expect(view).not.toContain("CUDA_VISIBLE_DEVICES");
 					expect(view).not.toContain("ACCESS_TOKEN");
 					expect(view).not.toContain("private-dir");
@@ -461,6 +466,43 @@ describe("compact transcript activity", () => {
 				}
 			}
 		}
+	});
+
+	it("shows quoted command arguments in the rendered summary", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		for (const [command, rendered, nativeText] of [
+			[
+				'CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py',
+				'"C:/Program Files/Python/python.exe" train.py',
+				"python.exe",
+			],
+			['git commit -m "update docs"', 'git commit -m "update docs"', "update docs"],
+		] as const) {
+			const component = new ToolExecutionComponent("bash", { command }, {}, undefined, {
+				requestRender() {},
+				requestComponentRender() {},
+				resetDisplay() {},
+			});
+			components.push(component);
+			expect(Bun.stripANSI(component.render(100).join("\n"))).toContain(rendered);
+			const native = JSON.stringify(component.describe(toolCx));
+			expect(native).toContain(nativeText);
+			expect(native).not.toContain("CUDA_VISIBLE_DEVICES");
+		}
+	});
+
+	it("truncates an overlong shell command to a single row", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent("bash", { command: `bun test ${"a".repeat(300)}` }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(component);
+		const rows = component.render(60);
+		expect(rows).toHaveLength(1);
+		expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(60);
+		expect(Bun.stripANSI(rows[0]!)).toContain("bun test");
 	});
 
 	it("shows only the running shell output tail in compact mode and drops it when settled", () => {
@@ -1269,7 +1311,7 @@ describe("compact transcript activity", () => {
 		}
 	});
 
-	it("preserves eval intent precedence and executable-only Bash summaries through xd dispatch", () => {
+	it("preserves eval intent precedence and Bash command summaries through xd dispatch", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		for (const [inner, outerIntent, expected] of [
 			[{ title: "INNER_TITLE" }, undefined, "INNER_TITLE"],
@@ -1304,9 +1346,10 @@ describe("compact transcript activity", () => {
 			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
 		);
 		components.push(shell);
-		expect(Bun.stripANSI(shell.render(100)[0])).toContain("bun");
-		expect(JSON.stringify(shell.describe(toolCx))).not.toContain("PRIVATE");
+		expect(Bun.stripANSI(shell.render(100)[0])).toContain('bun -e "PRIVATE_SCRIPT"');
+		expect(JSON.stringify(shell.describe(toolCx))).toContain("PRIVATE_SCRIPT");
 		expect(shell.render(100).join("\n")).not.toContain("TOKEN");
+		expect(shell.render(100).join("\n")).not.toContain("PRIVATE value");
 	});
 
 	it.each([false, true])(
