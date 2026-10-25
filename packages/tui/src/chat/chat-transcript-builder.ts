@@ -342,6 +342,9 @@ export class ChatTranscriptBuilder {
 					} else {
 						this.container.addChild(
 							new UserMessageComponent(userText, {
+								compactPreview:
+									this.#deps.toolActivityDisplay?.compactToolActivity === true &&
+									!this.#deps.toolActivityDisplay.hideToolActivity,
 								liveSteered: message.role === "user" && message.liveSteered === true,
 								timestamp: message.timestamp,
 								images: imageContent(message.content),

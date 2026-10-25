@@ -31,7 +31,7 @@
 - 规格驱动流程：`src/spec-driven/` 独占 `/spec` 的阶段、批准、任务、证据与审查状态；入口为 `src/slash-commands/builtin-spec-driven.ts`，隐藏上游技能由 `src/discovery/spec-driven.ts` 提供。`omp openspec ...` 与 `omp superpowers <相对脚本> ...` 复用包内固定资源；需求及验收见 `docs-zh-CN/requirements/spec-driven-orchestration.md`，不提供跨进程恢复。
 - 输入法恢复：`/jchime [故障现象]` 在 `src/jch-commands/workflow.ts` 注册，复用提示词命令工厂；`src/prompts/jch-ime.md` 提供完整小模型首选恢复块及失败后同用户/同 DISPLAY 的自主诊断、有限停止与重建步骤。契约见 `docs-zh-CN/requirements/fork.md`「JCH 命令」；服务状态与真实中文输入恢复分别核验。
 - 命令宿主复用同一 slash 注册表：索引对话在 `src/slash-commands/helpers/index-dashboard.ts`，计划／循环／目标宿主位于 `src/modes/zcode/hosts/`（plan-host／loop-host／goal-host），命令目录与 role 保存在同目录（command-catalog、model-roles），由 app-server 命令链路调用，不另建命令表。
-- TUI 显示模式：`/display [clean|compact|detailed]` 复用已有思考／工具可见性设置与 `display.compactToolActivity`，默认紧凑；仅紧凑模式在输入区上方使用单一实时三行思考尾窗（思考结束且回合进行中收起为单行存根，正文开始或回合结束清空），干净与详细模式不显示该尾窗。命令在现有 slash 注册表，渲染在 `packages/tui/src/chat/`，契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」。
+- TUI 显示模式：`/display [clean|compact|detailed]` 复用既有设置，默认紧凑；仅紧凑模式使用两行最新工具活动与两行思考、普通用户十行预览，diff 仅限活动回合最新至多三个逐文件区段，历史仅用户／助手正文。MUST 保持 clean／detailed、Skill、原始模型／会话数据不变；完整契约见 `docs-zh-CN/requirements/fork.md`「`/display` 界面显示模式」，命令沿用现有 slash 注册表，渲染在 `packages/tui/src/chat/`。
 
 常用命令（工作目录为仓库根；下表受支持的检查、类型、构建与测试 root scripts 默认经 Bazel 执行，三层入口不变；支持列表与缓存边界以 `docs-zh-CN/requirements/fork.md`「Fork 验证体系」为准。本文档不声称已在当前机器执行过；能否运行受「验证」一节限制）：
 

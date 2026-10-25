@@ -675,7 +675,7 @@ export const cfgDisplayCompactToolActivity = register({
 		tab: "appearance",
 		group: "显示",
 		label: "紧凑显示工具调用",
-		description: "工具调用显示为一行状态；编辑、写入保留默认预览、diff 和展开能力",
+		description: "工具与思考各保留两行；仅活动回合显示最近三个编辑 diff，完整详情在详细模式查看",
 	},
 });
 

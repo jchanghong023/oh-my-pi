@@ -374,6 +374,9 @@ export class AssistantMessageComponent extends Container {
 	/** Reused for final parts of published snapshots rendered off-ledger (reflow, replay). */
 	#stableReplayRenderer: StablePartRenderer | undefined;
 	#stableRenderInputs: StableRenderInputs | undefined;
+	/** Compact publications retain source seams, never rows at a historical width. */
+	#compactSourceSnapshots = new Map<number, readonly { child: Component; end?: number }[]>();
+	#transcriptProseBlocks = new Map<number, Markdown>();
 	/** Provider-reported tokens in the live thinking block — reasoning tokens when
 	 *  the provider streams them, else total output — shown dimmed beside the
 	 *  speed badge. 0 when no thinking is streaming. */
@@ -457,6 +460,7 @@ export class AssistantMessageComponent extends Container {
 		}
 		this.#linkTargets = targets;
 		this.#markdownTheme = undefined;
+		this.#transcriptProseBlocks.clear();
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
@@ -617,6 +621,7 @@ export class AssistantMessageComponent extends Container {
 		// rebuild with the current theme. Streaming updates call updateContent()
 		// directly and keep the fast path.
 		this.#markdownTheme = undefined;
+		this.#transcriptProseBlocks.clear();
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
@@ -813,9 +818,60 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): readonly string[] {
 		if (this.#displayCompactToolActivity !== this.#compactToolActivity) this.invalidate();
+		for (const md of this.#transcriptProseBlocks.values()) md.setTranscriptStreaming(this.#compactToolActivity);
+		const items = this.#fastPathItems;
+		const compactProse =
+			this.#compactToolActivity &&
+			this.#midStreamPublication &&
+			this.#lastUpdateTransient &&
+			items?.some(item => item.blockType === "text" && item.md instanceof Markdown);
+		if (compactProse) {
+			for (const item of items ?? []) {
+				if (item.blockType === "text" && item.md instanceof Markdown) {
+					item.md.setTranscriptStreaming();
+					this.#transcriptProseBlocks.set(item.contentIndex, item.md);
+				}
+			}
+		}
 		const rows = super.render(width);
-		this.#publishStableSnapshot(rows, width);
+		if (!compactProse) {
+			this.#publishStableSnapshot(rows, width);
+			return rows;
+		}
+		const parts: { child: Component; end?: number }[] = [];
+		for (const child of this.#contentContainer.children) {
+			if (child === items?.at(-1)?.md) {
+				if (child instanceof Markdown) parts.push({ child, end: child.getTranscriptStableSourceEnd() });
+				break;
+			}
+			parts.push({ child });
+		}
+		const candidate = this.#renderCompactSourceSnapshot(parts, width);
+		const previous = this.renderTranscriptStableRows(this.#transcriptStableRows.length, width);
+		if (
+			candidate.length > previous.length &&
+			isRowPrefix(previous, candidate) &&
+			isRowPrefix(candidate, trimBlankEdges(rows))
+		) {
+			this.#transcriptStableRows.push({ key: `prose:${this.#nextStableRowId++}` });
+			this.#compactSourceSnapshots.set(this.#transcriptStableRows.length, parts);
+		}
 		return rows;
+	}
+
+	#renderCompactSourceSnapshot(
+		parts: readonly { child: Component; end?: number }[],
+		width: number,
+	): readonly string[] {
+		const rows: string[] = [];
+		for (const { child, end } of parts) {
+			rows.push(
+				...(end !== undefined && child instanceof Markdown
+					? child.renderTranscriptSourcePrefix(end, width)
+					: child.render(width)),
+			);
+		}
+		return trimBlankEdges(rows);
 	}
 
 	/**
@@ -1207,10 +1263,13 @@ export class AssistantMessageComponent extends Container {
 		this.#stableSnapshots = [];
 		this.#stableParts = [];
 		this.#transcriptStableRows = [];
+		this.#compactSourceSnapshots.clear();
 		this.#dropStableRenders();
 	}
 
 	renderTranscriptStableRows(count: number, width: number): readonly string[] {
+		const compact = this.#compactSourceSnapshots.get(Math.trunc(count));
+		if (compact) return this.#renderCompactSourceSnapshot(compact, width);
 		const index = Math.min(Math.trunc(count), this.#stableSnapshots.length);
 		if (index <= 0) return EMPTY_STABLE_RENDER;
 		this.#syncStableRenderInputs();
@@ -1443,7 +1502,14 @@ export class AssistantMessageComponent extends Container {
 	 * `previous` so its figures keep their rasters across rebuilds.
 	 */
 	#proseBlock(index: number, text: string, previous: ReadonlyMap<number, FigureMarkdown>): ProseBlock {
-		if (!this.#liftsFigures(text)) return this.#createMarkdown("text", text);
+		const streaming = this.#transcriptProseBlocks.get(index);
+		const liftsFigures = this.#liftsFigures(text);
+		if (streaming && !liftsFigures) {
+			streaming.setText(text);
+			return streaming;
+		}
+		this.#transcriptProseBlocks.delete(index);
+		if (!liftsFigures) return this.#createMarkdown("text", text);
 		let block = previous.get(index);
 		if (block) {
 			block.setText(text);
@@ -1515,7 +1581,10 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity;
+		return (
+			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) &&
+			!displayPreferences.hideToolActivity
+		);
 	}
 
 	getTranscriptBlockVersion(): number {

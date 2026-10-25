@@ -5,19 +5,18 @@
 ### Added
 
 - Selection-only model pickers can use a complete caller-provided catalog and shared search without changing the session model or refreshing providers.
-- Added a cached, width-aware five-row thinking tail for ANSI and native surfaces, without publishing live reasoning into transcript history.
-- Compact transcript activity keeps non-file tool invocations on one line and keeps hidden thinking and compact tool output out of expandable native content.
+- Added cached, width-aware two-row live thinking and tool activity in compact mode, without publishing transient activity into transcript history.
+- Compact ordinary user previews use at most ten rendered physical rows including padding (first five, omission row, last four); `Ctrl+Alt+U` reuses displayed transcript bubbles, including compacted history, and native bubble actions open scrollable full originals without changing drafts, chat position, model input, session data, or full-copy text. Skill, synthetic messages, explicit full viewers, clean, and detailed mode bypass previews.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
 
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
-- Compact tool summaries prioritize failure counts on narrow terminals, omit partial counts on extremely narrow rows, and emphasize operation summaries over tool names in ANSI and native text fallback rows.
-- Compact mode groups completed and failed background task/shell notifications by execution identity, shows failures as muted counts instead of individual red notices, and preserves cancellation, unknown-state and independent warnings without fragmenting tool folds.
-- Compact tool runs keep the latest two successful calls, fold older successes and ordinary failures into one muted count, and retain failure details in detailed history.
-- The live thinking tail shows only in the compact display mode, keeps the latest three body rows at every terminal height, and collapses to a single dim stub row between tool runs of the same turn.
-- The compact thinking tail omits all blank lines while preserving indentation and the original thinking content.
-- The compact thinking tail uses a bold accented heading, muted context and guides, a highlighted latest-line guide, and an aligned dim summary between tool runs.
+- Compact tools show the latest two actual calls, including pending, failed, write, and edit calls; thinking shows the latest two rendered rows. Both leave the lower row blank after the first item, omit headings, borders, and count folds, and retain their height through prose, tools, and retries until execution ends.
+- Compact layout orders prose, tools, thinking, then input; short screens prioritize input, cursor, and prose over decorations, thinking, and tools. The actual busy loader shows tool intent without duplicating it.
+- Compact inline diffs show only the latest three per-file Edit/apply_patch sections during the active execution turn, including multi-file calls; multiple hunks in one section count once. Steering does not reset the turn. Completion, cancellation, and session switches clear them; completed/history turns show no inline diffs. Arguments, long output, ordinary file previews, and older diffs remain available on demand in detailed/history views.
+- Compact history retains only user messages and assistant prose, including prose around tools and failures; original records and clean/detailed behavior remain unchanged.
+- The compact thinking tail filters blank lines while preserving indentation, original content, and theme-aware latest-line emphasis without collapsing to a stub.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
@@ -29,19 +28,24 @@
 
 ### Fixed
 
+- Preserve compact streaming prose, tables, and code across viewport pressure and resizing without dropping content between the screen and scrollback.
+- Keep compact live activity mutable until execution ends instead of archiving it or erasing terminal history.
+- Reserve room for compact conversation text, editable input, and cursor on short terminals before decorations, thinking, and tool activity.
+- Compact short-screen budgeting also covers custom HUD wrappers around the working loader; focused thinking restoration respects steering and user-invoked Skill boundaries.
+
 - Compact chat keeps a continuous prose tail under viewport pressure instead of squeezing user messages and assistant replies into one row each.
-- Preserve compact failure counts and replayed history when sealed tool blocks receive late results after their activity segment has retired.
+- Preserve original tool failure records when late results arrive, without replacing scrollback or archiving compact activity.
 - Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.
-- Compact thinking summaries drop their left margin when it would hide all text on very narrow terminals, preserving whole Chinese characters and emoji.
+- Keep compact thinking width-safe on very narrow terminals without headings, borders, or guides.
 - Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
-- Keep hashline-wrapped internal device calls compact without hiding real file-write previews.
+- Keep hashline-wrapped internal device calls compact while retaining full originals in explicit detail views.
 - Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.
 - Preserve IME-safe cursor tails in boxed prompts while retaining the empty row below input.
 - Count each Git path once across the selected change categories, including staged deletions that remain as untracked files.
 - Compact mode reclaims collapsed rows instead of leaving a large blank band between tool activity and the thinking or TODO area.
-- Compact mode preserves upstream file-write previews and edit diffs instead of reducing file changes to single-line or counted summaries.
-- Compact tool runs keep a single folded-success summary when the final answer moves older calls into scrollback.
-- Preserve compact read warnings outside success folding, including virtual reads, while retaining full failure records in detailed history.
+- Reuse existing Edit/apply_patch rendering for the active three-file-section diff cap without permanently archiving transient diffs.
+- Preserve compact prose across execution completion and native archival, without partial Markdown documents, dropped or duplicate body text, or clearing external shell history.
+- Preserve independent approvals and execution-affecting errors while retaining full warning and failure records in detailed history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
 - Compact Eval rows, including `xd://eval`, show the supplied intent or title instead of a bare tool name and redundant running hint.
 - Compact search rows show the search pattern or query before the search directory.

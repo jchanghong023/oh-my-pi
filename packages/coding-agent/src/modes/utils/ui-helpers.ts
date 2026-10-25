@@ -14,8 +14,6 @@ import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
-import { withHidden } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -233,53 +231,16 @@ function imageLinksForMessage(
 	});
 }
 
-const HIDDEN_WARNING_ROWS: readonly string[] = [];
-
-/** The warning stays independent until its exact failed execution is represented in compact activity. */
+/** Execution warnings remain independent of transient compact activity. */
 class ToolFailureWarning extends ToolActivityContainer {
 	readonly session: InteractiveModeContext["viewSession"];
-	#merged = false;
-	#failureRowIndex = -1;
-	#nativeProjection: { source: NativeNode; merged: boolean; result: NativeNode } | undefined;
-
 	constructor(
 		content: Component[],
-		private ctx: InteractiveModeContext,
+		ctx: InteractiveModeContext,
 		readonly toolCallId: string,
 	) {
 		super(content);
 		this.session = ctx.viewSession;
-	}
-
-	/** TranscriptContainer applies the usual committed-projection replay when this changes. */
-	reconcileCompactToolFailure(children: readonly Component[]): boolean {
-		let merged = false;
-		if (chatTranscriptDisplayPreferences.compactToolActivity && this.session === this.ctx.viewSession) {
-			const matches = (child: Component | undefined) =>
-				child instanceof ToolExecutionComponent && child.toolCallId === this.toolCallId;
-			if (!matches(children[this.#failureRowIndex])) {
-				this.#failureRowIndex = children.findIndex(matches);
-			}
-			const row = children[this.#failureRowIndex];
-			merged = row instanceof ToolExecutionComponent && row.getCompactToolFailureId() === this.toolCallId;
-		}
-		if (merged === this.#merged) return false;
-		this.#merged = merged;
-		this.invalidate();
-		return true;
-	}
-
-	override render(width: number): readonly string[] {
-		return this.#merged ? HIDDEN_WARNING_ROWS : super.render(width);
-	}
-
-	override describe(): NativeNode {
-		const source = super.describe();
-		const cached = this.#nativeProjection;
-		if (cached?.source === source && cached.merged === this.#merged) return cached.result;
-		const result = withHidden(source, this.#merged);
-		this.#nativeProjection = { source, merged: this.#merged, result };
-		return result;
 	}
 }
 
@@ -378,6 +339,12 @@ export class UiHelpers {
 	}
 
 	addMessageToChat(message: AgentMessage, options?: AddMessageOptions): Component[] {
+		if (
+			(message.role === "user" && !message.synthetic && message.attribution !== "agent" && !message.liveSteered) ||
+			(message.role === "custom" && isUserTurnInitiator(message))
+		) {
+			this.ctx.chatContainer.noteCompactUserTurnStart();
+		}
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);

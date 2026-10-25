@@ -13,6 +13,8 @@ export type TranscriptAction =
 	| { readonly act: "rewind" }
 	/** Resume the session stored at `path` (a welcome card's recent session). */
 	| { readonly act: "resume"; readonly path: string }
+	/** Open the original user message in a separately scrollable full view. */
+	| { readonly act: "view-message"; readonly text: string }
 	/** Put `text` on the clipboard. */
 	| { readonly act: "copy"; readonly text: string };
 
