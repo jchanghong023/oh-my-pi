@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SpecArtifactStore } from "../../src/spec-driven/artifacts";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setSystemTime } from "bun:test";
 import { SpecEvidenceService } from "../../src/spec-driven/evidence";
 import { recordSpecCommand } from "../../src/spec-driven/execution-tools";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
@@ -440,6 +440,20 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 }
 
 describe("native current-stage collaboration", () => {
+	it("reports accumulated user-decision wait from real phase time", async () => {
+		const base = Date.now();
+		const f = fixture();
+		try {
+			await f.orchestrator.start("request", "change");
+			setSystemTime(base + 30);
+			const timing = f.orchestrator.timing();
+			expect(timing.plannedDecisionWaitMs).toBeGreaterThanOrEqual(20);
+			expect(timing.executionWaitMs).toBe(0);
+		} finally {
+			setSystemTime();
+		}
+	});
+
 	it("discusses waiting materials without approval and saves reviewed revisions only at their unapproved stage", async () => {
 		const f = fixture();
 		const initial = await f.orchestrator.start("request", "change");

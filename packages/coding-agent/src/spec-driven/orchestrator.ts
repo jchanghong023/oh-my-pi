@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import { parseSpecPlan, parseSpecRequirements, parseSpecReview } from "./schemas";
+import { isDecisionPhase, isExecutionPhase, type SpecRunTiming } from "./stages";
 import type {
 	SpecCandidate,
 	SpecConversationRecipient,
@@ -24,7 +25,7 @@ import type {
 	SpecToolRecord,
 } from "./types";
 
-class StaleRun extends Error {}
+export class StaleRun extends Error {}
 /** Invalid caller identity, state or approval; execution failures keep their original error. */
 export class SpecAdmissionError extends Error {
 	readonly code = "invalid_params";
@@ -70,6 +71,9 @@ export class SpecDrivenOrchestrator {
 	#pendingRepair?: string;
 	#acceptanceRound = 0;
 	#clarificationRound = 0;
+	#phaseStartedAt = Date.now();
+	#timedPhase: SpecDrivenStatus["phase"] = "idle";
+	#timingTotals: SpecRunTiming = { plannedDecisionWaitMs: 0, executionWaitMs: 0 };
 
 	constructor(ports: SpecDrivenPorts, options: SpecDrivenOptions) {
 		if (!options.currentModel.trim()) throw new Error("A current model is required");
@@ -84,6 +88,7 @@ export class SpecDrivenOrchestrator {
 	}
 
 	status(): SpecDrivenStatus {
+		this.#trackTiming();
 		const state = structuredClone(this.#state);
 		if (state.phase === "awaiting-answers")
 			state.clarification = {
@@ -100,6 +105,27 @@ export class SpecDrivenOrchestrator {
 
 	get runId(): string {
 		return this.#runId;
+	}
+
+	#trackTiming(now = Date.now()): void {
+		if (this.#state.phase === this.#timedPhase) return;
+		const elapsed = Math.max(0, now - this.#phaseStartedAt);
+		if (isDecisionPhase(this.#timedPhase)) this.#timingTotals.plannedDecisionWaitMs += elapsed;
+		else if (isExecutionPhase(this.#timedPhase)) this.#timingTotals.executionWaitMs += elapsed;
+		this.#timedPhase = this.#state.phase;
+		this.#phaseStartedAt = now;
+	}
+
+	/** Observed phase time; the current phase is included up to `now` without double counting. */
+	timing(): SpecRunTiming {
+		const now = Date.now();
+		this.#trackTiming(now);
+		const current = Math.max(0, now - this.#phaseStartedAt);
+		return {
+			plannedDecisionWaitMs:
+				this.#timingTotals.plannedDecisionWaitMs + (isDecisionPhase(this.#state.phase) ? current : 0),
+			executionWaitMs: this.#timingTotals.executionWaitMs + (isExecutionPhase(this.#state.phase) ? current : 0),
+		};
 	}
 
 	currentRole(): SpecStageRole | undefined {
@@ -269,6 +295,7 @@ export class SpecDrivenOrchestrator {
 	}
 
 	#notify(): void {
+		this.#trackTiming();
 		const listener = this.#options.onStatusChange;
 		if (!listener) return;
 		try {

@@ -1,7 +1,7 @@
 import type { SpecPatch } from "./artifacts";
 import type { SpecNativePublication, SpecNativeSource } from "./git";
-
-export type SpecStageRole = "requirements" | "solution" | "planner" | "executor";
+import type { SpecDrivenPhase, SpecStageRole } from "./stages";
+export type { SpecDrivenPhase, SpecStageRole } from "./stages";
 
 export type SpecInputMode = "chat" | "dev";
 export interface SpecConversationRecipient {
@@ -50,25 +50,6 @@ export interface SpecClarificationRound {
 	/** Complete native question text, including numbering, recommendation and rationale. */
 	questions: string[];
 }
-export type SpecDrivenPhase =
-	| "idle"
-	| "requirements"
-	| "requirements-review"
-	| "awaiting-answers"
-	| "awaiting-specification"
-	| "team"
-	| "awaiting-choice"
-	| "planning"
-	| "plan-review"
-	| "awaiting-plan"
-	| "executing"
-	| "validating"
-	| "overall-review"
-	| "awaiting-acceptance"
-	| "closing"
-	| "completed"
-	| "cancelled";
-
 export interface SpecDocument {
 	path: string;
 	content: string;
