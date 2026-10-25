@@ -981,6 +981,13 @@ export class ToolExecutionComponent extends Container {
 		return Number(this.isCompactToolActivity() && this.#nativeStatus() === "error");
 	}
 
+	/** Exact identity of a failed execution represented by the compact activity rows. */
+	getCompactToolFailureId(): string | undefined {
+		return this.#toolActivityVisible && this.#compactToolActivity && this.#result?.isError && !this.#isPartial
+			? this.#toolCallId
+			: undefined;
+	}
+
 	setCompactToolResultListener(listener: (() => void) | undefined): void {
 		this.#compactToolResultListener = listener;
 	}

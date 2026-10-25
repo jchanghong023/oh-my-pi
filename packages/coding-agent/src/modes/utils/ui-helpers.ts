@@ -14,6 +14,8 @@ import { settings } from "../../config/settings";
 import { createAdvisorMessageCard } from "@oh-my-pi/pi-tui/chat/advisor-message";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
+import { withHidden } from "@oh-my-pi/pi-tui/native/describe";
+import type { NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { createBackgroundTanDispatchBlock } from "@oh-my-pi/pi-tui/chat/background-tan-message";
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { detectCacheInvalidation } from "@oh-my-pi/pi-tui/chat/cache-invalidation-marker";
@@ -231,16 +233,46 @@ function imageLinksForMessage(
 	});
 }
 
-/** Execution warnings remain independent of transient compact activity. */
+const HIDDEN_WARNING_ROWS: readonly string[] = [];
+
+/** The warning stays independent until its exact failed execution is represented in compact activity. */
 class ToolFailureWarning extends ToolActivityContainer {
 	readonly session: InteractiveModeContext["viewSession"];
+	#merged = false;
+	#nativeProjection: { source: NativeNode; merged: boolean; result: NativeNode } | undefined;
+
 	constructor(
 		content: Component[],
-		ctx: InteractiveModeContext,
+		private ctx: InteractiveModeContext,
 		readonly toolCallId: string,
 	) {
 		super(content);
 		this.session = ctx.viewSession;
+	}
+
+	/** The transcript reconciles this before each paint; a committed warning is never rewritten. */
+	reconcileCompactToolFailure(covered: ReadonlySet<string>): boolean {
+		const merged =
+			chatTranscriptDisplayPreferences.compactToolActivity &&
+			this.session === this.ctx.viewSession &&
+			covered.has(this.toolCallId);
+		if (merged === this.#merged) return false;
+		this.#merged = merged;
+		this.invalidate();
+		return true;
+	}
+
+	override render(width: number): readonly string[] {
+		return this.#merged ? HIDDEN_WARNING_ROWS : super.render(width);
+	}
+
+	override describe(): NativeNode {
+		const source = super.describe();
+		const cached = this.#nativeProjection;
+		if (cached?.source === source && cached.merged === this.#merged) return cached.result;
+		const result = withHidden(source, this.#merged);
+		this.#nativeProjection = { source, merged: this.#merged, result };
+		return result;
 	}
 }
 

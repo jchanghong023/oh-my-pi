@@ -121,6 +121,11 @@ export interface RuntimeChildrenOptions {
 	readonly selfClearingChrome?: readonly Component[];
 }
 
+/** A chrome root that yields its rows to prose and input on short compact terminals. */
+export interface CompactBudgetedChrome {
+	isCompactBudgetedChrome?(): boolean;
+}
+
 /** Controls the first terminal paint for a composer that does not already own the terminal. */
 export interface ComposerStartOptions {
 	readonly clearScrollback?: boolean;
@@ -962,6 +967,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			displayPreferences.compactToolActivity &&
 			!displayPreferences.hideToolActivity &&
 			(this.#selfClearingChrome.has(root) ||
+				(root as Partial<CompactBudgetedChrome>).isCompactBudgetedChrome?.() === true ||
 				root instanceof Loader ||
 				(root instanceof Container && root.children.length === 1 && root.children[0] instanceof Loader))
 		);

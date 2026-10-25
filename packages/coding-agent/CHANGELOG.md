@@ -33,6 +33,7 @@
 
 ### Fixed
 
+- Hide a tool-failure warning while its exact failed execution is one of the visible compact activity rows, and show it again once the dock no longer represents that call; independent warnings and already-committed history are never hidden or rewritten.
 - Route bundled Superpowers implementation tasks to `task` and code reviews to `reviewer`, instead of requesting an unavailable `general-purpose` agent.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
 - Preserve quoted Windows verification commands, complete per-owner command evidence and external edits during failed specification publication.

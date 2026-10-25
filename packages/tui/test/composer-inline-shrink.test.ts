@@ -1345,3 +1345,61 @@ describe("composer inline shrink (#11007)", () => {
 		h.composer.stop();
 	});
 });
+
+describe("composer compact chrome budget", () => {
+	function statusRows(terminal: VirtualTerminal): string[] {
+		return terminal
+			.getViewport()
+			.filter(row => Bun.stripANSI(row).includes("Live widget row"))
+			.map(row => Bun.stripANSI(row));
+	}
+
+	async function renderStatus(rows: number, optIn: boolean): Promise<{ visible: string[]; stop: () => void }> {
+		const terminal = new VirtualTerminal(60, 12);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		const editor = new Container();
+		editor.addChild(new Text("EDITOR", 0, 0));
+		const status = new (class extends InlineWidget {
+			isCompactBudgetedChrome(): boolean {
+				return optIn;
+			}
+		})();
+		status.rows = rows;
+		composer.setRuntimeChildren([transcript, status, editor], { transientChrome: [editor] });
+		composer.start({ playWelcomeIntro: false });
+		composer.ui.requestRender();
+		await scheduler.settle(terminal);
+		return { visible: statusRows(terminal), stop: () => composer.stop() };
+	}
+
+	it("trims opted-in status chrome to the short-screen budget", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const status = await renderStatus(8, true);
+		try {
+			// 12 rows keep 4 for prose and 3 for input, so five status rows fit.
+			expect(status.visible).toHaveLength(5);
+		} finally {
+			status.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("renders status chrome that did not opt in in full", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const status = await renderStatus(8, false);
+		try {
+			expect(status.visible).toHaveLength(8);
+		} finally {
+			status.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+});

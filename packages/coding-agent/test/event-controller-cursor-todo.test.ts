@@ -14,7 +14,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { assistantMsg } from "./utilities";
 
@@ -408,9 +408,15 @@ describe("EventController + Cursor todo bridge", () => {
 });
 
 describe("compact Todo failure projection", () => {
-	it("merges only the matching failed execution and restores full details on mode switches", async () => {
+	/** Newest activity rows owned by the active turn. */
+	function renderDock(ctx: InteractiveModeContext, width = 180): string {
+		return Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(width) ?? []).join("\n"));
+	}
+
+	it("hides the warning only while its own failed execution is a dock row", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
 		await f.controller.handleEvent(todoFailure("PROVIDER_FAILURE_REASON\nFULL_DETAIL_LINE"));
 		const warning = f.ctx.chatContainer.children.at(-1) as ToolActivityContainer;
@@ -418,8 +424,8 @@ describe("compact Todo failure projection", () => {
 		const compact = renderTranscript(f.ctx);
 		expect(f.ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent)).toHaveLength(1);
 		expect(compact).not.toContain("PROVIDER_FAILURE_REASON");
-		expect(compact).toContain("失败 1 次");
 		expect(compact).not.toContain("FULL_DETAIL_LINE");
+		expect(renderDock(f.ctx)).not.toBe("");
 		expect(warning.render(180)).toHaveLength(0);
 		f.ctx.chatContainer.nativeBlocks();
 		expect(warning.describe().p?.hidden).toBe(true);
@@ -432,17 +438,19 @@ describe("compact Todo failure projection", () => {
 		expect(warning.describe().p?.hidden).not.toBe(true);
 
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
+		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
 		expect(warning.describe().p?.hidden).toBe(true);
 		f.ctx.chatContainer.setToolActivityVisible(false);
 		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
 		f.ctx.chatContainer.setToolActivityVisible(true);
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
+		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
+		expect(warning.describe().p?.hidden).toBe(true);
 	});
 
 	it("keeps independent warnings, unknown identities and separate identical failures", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		const ids = ["todo-1", "todo-2"];
 		for (const [index, id] of ids.entries()) {
 			await f.controller.handleEvent(streamedTodoBlock(id, ids.slice(0, index)));
@@ -458,13 +466,13 @@ describe("compact Todo failure projection", () => {
 			toolFailure: { toolCallId: "" },
 		});
 		expect(renderTranscript(f.ctx).match(/SAME_FAILURE_REASON/g)).toHaveLength(3);
-		expect(renderTranscript(f.ctx)).toContain("失败 2 次");
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
 
-	it("does not merge a warning into a pending or successful row with the same identity", async () => {
+	it("does not merge a warning into a pending or successful execution with the same identity", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
 		f.ctx.showWarning("UNMERGED_REASON", {
 			hideWithToolActivity: true,
@@ -475,39 +483,37 @@ describe("compact Todo failure projection", () => {
 		expect(renderTranscript(f.ctx)).toContain("UNMERGED_REASON");
 	});
 
-	it("reconciles a warning already committed before its late failed row appears", async () => {
+	it("keeps an already committed warning visible instead of rewriting scrollback", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
 		await f.controller.handleEvent(todoFailure("LATE_FAILURE_REASON"));
-		const warning = f.ctx.chatContainer.children[0]!;
+		const warning = f.ctx.chatContainer.children[0] as ToolActivityContainer;
 		const batch = f.ctx.chatContainer.peekFinalizedBatch(180, 0);
 		expect(batch?.rows.join("\n")).toContain("LATE_FAILURE_REASON");
 		f.ctx.chatContainer.acknowledgeFinalizedBatch(batch!.id);
-		// The match must not depend on warning/row adjacency or their compact run.
-		f.ctx.chatContainer.addChild(new Text("Independent assistant text", 0, 0));
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
+		await f.controller.handleEvent(todoFailure("LATE_FAILURE_REASON", "todo-1"));
 
-		expect(renderTranscript(f.ctx)).not.toContain("LATE_FAILURE_REASON");
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
-		expect(warning.render(180)).toHaveLength(0);
-		const replay = f.ctx.chatContainer.peekReplayBatch(180);
-		expect(replay?.kind).toBe("replay");
-		expect(replay?.clearScrollback).toBe(true);
-		expect(replay?.rows.join("\n")).not.toContain("LATE_FAILURE_REASON");
+		// The failed execution is docked now, but the warning already entered
+		// immutable history; hiding it would require clearing and replaying.
+		expect(warning.render(180).length).toBeGreaterThan(0);
+		expect(warning.describe().p?.hidden).not.toBe(true);
+		expect(f.ctx.chatContainer.peekReplayBatch(180)).toBeUndefined();
 		expect(f.ctx.pendingTools.size).toBe(0);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
 
-	it("keeps the only failure through an empty rebuild, then links its late materialization", async () => {
+	it("keeps a rebuilt warning independent until its exact failed execution is docked", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
 		f.ctx.viewSession.buildTranscriptSessionContext = () => f.ctx.sessionManager.buildSessionContext();
 		await f.controller.handleEvent(todoFailure("REBUILD_FAILURE_REASON"));
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).toContain("REBUILD_FAILURE_REASON");
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
 		expect(renderTranscript(f.ctx)).not.toContain("REBUILD_FAILURE_REASON");
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
 		expect(f.ctx.pendingTools.size).toBe(0);
 	});
 
@@ -552,10 +558,8 @@ describe("compact Todo failure projection", () => {
 		const storedResult = JSON.stringify(context.messages[1]);
 		f.ctx.viewSession.buildTranscriptSessionContext = () => context;
 		await f.helpers.renderInitialMessages();
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
-		expect(renderTranscript(f.ctx).indexOf("失败 1 次")).toBeLessThan(
-			renderTranscript(f.ctx).indexOf("FINAL_ANSWER_AFTER_FAILURE"),
-		);
+		// Compact replay keeps the warning as the failure trace; history hides tool rows.
+		expect(renderTranscript(f.ctx)).toContain("HISTORY_FAILURE_REASON");
 		setChatTranscriptDisplayPreferences({
 			compactToolActivity: presentation === "clean",
 			hideToolActivity: presentation === "clean",
@@ -579,7 +583,7 @@ describe("compact Todo failure projection", () => {
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		expect(renderTranscript(f.ctx)).toContain("失败 1 次");
+		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		expect(JSON.stringify(context.messages[1])).toBe(storedResult);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
@@ -587,48 +591,30 @@ describe("compact Todo failure projection", () => {
 	it("does not treat a different successful update as recovery of the failed execution", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
+		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
 		await f.controller.handleEvent(todoFailure("UNRESOLVED_FAILURE_REASON"));
 		await f.controller.handleEvent(streamedTodoBlock("todo-success", ["todo-1"]));
 		await f.controller.handleEvent(todoEnd("todo-success", []));
 		const rendered = renderTranscript(f.ctx);
 		expect(rendered).not.toContain("UNRESOLVED_FAILURE_REASON");
-		expect(rendered).toContain("失败 1 次");
+		expect(renderDock(f.ctx)).not.toBe("");
 	});
 
-	it("keeps a visible warning as a boundary between compact successful tool runs", async () => {
+	it("keeps a warning visible once newer calls evict its failed execution from the dock", async () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
-		const ids = ["before-one", "before-two", "after-one", "after-two"];
+		f.ctx.chatContainer.setCompactTurnActive(true);
+		const ids = ["todo-1", "todo-2", "todo-3"];
 		for (const [index, id] of ids.entries()) {
-			if (id === "after-one") {
-				f.ctx.showWarning("Independent warning", {
-					hideWithToolActivity: true,
-					toolFailure: { toolCallId: "unknown-call" },
-				});
-			}
-			// Stream updates append blocks within the same assistant message;
-			// replacing index zero would instead model a provider re-keying one call.
-			await f.controller.handleEvent(
-				streamedToolBlock(
-					id,
-					"grep",
-					{ pattern: id },
-					ids.slice(0, index).map(previous => ({ id: previous, name: "grep", arguments: { pattern: previous } })),
-				),
-			);
-			await f.controller.handleEvent({
-				type: "tool_execution_end",
-				toolCallId: id,
-				toolName: "grep",
-				isError: false,
-				result: { content: [{ type: "text", text: "match" }] },
-			});
+			await f.controller.handleEvent(streamedTodoBlock(id, ids.slice(0, index)));
+			await f.controller.handleEvent(todoFailure(id === "todo-1" ? "EVICTED_REASON" : `LATER_REASON_${id}`, id));
 		}
 		const rendered = renderTranscript(f.ctx);
-		for (const id of ids) expect(rendered).toContain(id);
-		const warningIndex = rendered.indexOf("Independent warning");
-		expect(warningIndex).toBeGreaterThan(rendered.indexOf("before-two"));
-		expect(warningIndex).toBeLessThan(rendered.indexOf("after-one"));
+		expect(rendered).toContain("EVICTED_REASON");
+		expect(rendered).not.toContain("LATER_REASON_todo-2");
+		expect(rendered).not.toContain("LATER_REASON_todo-3");
+		expect(renderDock(f.ctx)).not.toBe("");
+		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
 });

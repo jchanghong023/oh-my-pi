@@ -33,6 +33,7 @@
 - Keep compact live activity mutable until execution ends instead of archiving it or erasing terminal history.
 - Reserve room for compact conversation text, editable input, and cursor on short terminals before decorations, thinking, and tool activity.
 - Compact short-screen budgeting also covers custom HUD wrappers around the working loader; focused thinking restoration respects steering and user-invoked Skill boundaries.
+- Compact short-screen budgeting also yields opted-in status/help chrome before prose and input instead of leaving a functional row outside the budget.
 
 - Compact chat keeps a continuous prose tail under viewport pressure instead of squeezing user messages and assistant replies into one row each.
 - Preserve original tool failure records when late results arrive, without replacing scrollback or archiving compact activity.

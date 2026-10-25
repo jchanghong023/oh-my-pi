@@ -283,6 +283,7 @@ import { stopSharedSpinnerTicker, type ToolExecutionHandle } from "@oh-my-pi/pi-
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import {
 	Composer,
+	type CompactBudgetedChrome,
 	type ComposerPreferences,
 	type ComposerStatusCache,
 	PINNED_HUD_TOGGLE_ID,
@@ -848,9 +849,14 @@ function describeRunningSegment(spec: RunningSegmentSpec, running: number): Nati
 	);
 }
 
-class StatusHudContainer extends AnchoredLiveContainer {
+class StatusHudContainer extends AnchoredLiveContainer implements CompactBudgetedChrome {
 	constructor(private readonly mode: InteractiveMode) {
 		super();
+	}
+
+	/** Status/help chrome yields rows to prose and input on short compact terminals. */
+	isCompactBudgetedChrome(): boolean {
+		return true;
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
@@ -2508,7 +2514,18 @@ export class InteractiveMode implements InteractiveModeContext {
 								: this.#thinkingPreview.describe(cx);
 						},
 					},
-					this.statusContainer,
+					{
+						render: width => this.statusContainer.render(width),
+						describe: cx => {
+							const rows = this.ui.terminal.rows;
+							const available = rows - Math.min(rows, 3) - Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
+							const tools = this.chatContainer.compactToolActivityRowCount(cx?.cols ?? 80);
+							// Status/help chrome yields before prose and input on short terminals.
+							return available < tools + 2 + 1
+								? node("col", { hidden: true }, [])
+								: this.statusContainer.describe(cx);
+						},
+					},
 					this.pendingMessagesContainer,
 					this.hookWidgetContainerAbove,
 					this.editorContainer,

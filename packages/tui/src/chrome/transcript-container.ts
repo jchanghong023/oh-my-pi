@@ -16,11 +16,19 @@ interface CompactCallActivity {
 	compactEditDiffBlocks?(): readonly Component[];
 	/** The leading row is a summary that must survive truncation (live output follows it). */
 	compactActivityKeepsHead?(): boolean;
+	/** Exact identity of a failed execution this call's compact row represents. */
+	getCompactToolFailureId?(): string | undefined;
+}
+
+/** Transcript blocks that hide themselves while compact activity already shows the same failure. */
+interface CompactFailureProjection {
+	reconcileCompactToolFailure(covered: ReadonlySet<string>): boolean;
 }
 
 /** Default dock rows; a running shell may claim the expanded budget for its output tail. */
 const COMPACT_ACTIVITY_ROWS = 2;
 const COMPACT_LIVE_ACTIVITY_ROWS = 4;
+const EMPTY_COVERAGE: ReadonlySet<string> = new Set();
 
 function keepCompactHead(calls: readonly string[], remaining: number): readonly string[] {
 	if (calls.length <= remaining) return calls;
@@ -330,6 +338,8 @@ export class TranscriptContainer extends Container {
 	#compactRunStart = Number.POSITIVE_INFINITY;
 	/** First still-changing compact row; it cannot enter immutable terminal history yet. */
 	#compactRetirementLimit = Number.POSITIVE_INFINITY;
+	/** Failure warnings keyed by child index; reconciled against the dock before each paint. */
+	#compactFailureProjections = new Map<Component, number>();
 	// Start rows from the last full render(), keyed by child component (transcript deep-links).
 	#childStartRows = new Map<Component, number>();
 	// Watchdog for the wedge where an unfinalized frontier block pins pressure
@@ -401,9 +411,15 @@ export class TranscriptContainer extends Container {
 	}
 
 	#compactActivityRows(width: number): readonly string[] {
+		return this.#selectCompactActivity(width).rows;
+	}
+
+	/** Dock rows plus the exact failed executions those rows represent. */
+	#selectCompactActivity(width: number): { rows: readonly string[]; covered: ReadonlySet<string> } {
 		if (!displayPreferences.compactToolActivity || displayPreferences.hideToolActivity || !this.#toolActivityVisible)
-			return EMPTY_ROWS;
+			return { rows: EMPTY_ROWS, covered: EMPTY_COVERAGE };
 		const rows: string[] = [];
+		const covered = new Set<string>();
 		// The two-row dock holds the newest calls; a running shell may claim the
 		// expanded budget so its summary keeps the live output tail beneath it.
 		let cap = COMPACT_ACTIVITY_ROWS;
@@ -420,10 +436,13 @@ export class TranscriptContainer extends Container {
 			const remaining = Math.max(0, Math.min(cap, COMPACT_LIVE_ACTIVITY_ROWS) - rows.length);
 			if (remaining === 0) break;
 			const calls = component.renderCompactActivityRows(width, remaining);
-			rows.unshift(...(keepsHead ? keepCompactHead(calls, remaining) : calls.slice(-remaining)));
+			const kept = keepsHead ? keepCompactHead(calls, remaining) : calls.slice(-remaining);
+			rows.unshift(...kept);
+			const failureId = kept.length > 0 ? component.getCompactToolFailureId?.() : undefined;
+			if (failureId) covered.add(failureId);
 		}
 		if (rows.length === 1) rows.push("");
-		return rows;
+		return { rows, covered };
 	}
 
 	/** Mutable diff-only blocks never join the retirement ledger. */
@@ -477,6 +496,9 @@ export class TranscriptContainer extends Container {
 		};
 		this.#entries.push(entry);
 		this.#trackCompactToolResults(entry);
+		if (typeof (component as Partial<CompactFailureProjection>).reconcileCompactToolFailure === "function") {
+			this.#compactFailureProjections.set(component, this.children.length - 1);
+		}
 		// `children` is public and may be edited externally; re-check the whole
 		// list once instead of trusting positions. Insert-after-anchor callers
 		// use insertChildAt, which keeps both arrays in lockstep.
@@ -511,6 +533,7 @@ export class TranscriptContainer extends Container {
 		// memoized render, so splicing children directly is the whole removal.
 		this.children.splice(index, 1);
 		this.#entries.splice(index, 1);
+		this.#compactFailureProjections.delete(component);
 		this.#frontier = Math.min(this.#frontier, this.#entries.length);
 		this.#childStartRows.delete(component);
 		if (isToolActivityComponent(component)) component.setCompactToolResultListener?.(undefined);
@@ -532,6 +555,7 @@ export class TranscriptContainer extends Container {
 		this.#replayRequested = false;
 		this.#compactRunStart = Number.POSITIVE_INFINITY;
 		this.#compactRetirementLimit = Number.POSITIVE_INFINITY;
+		this.#compactFailureProjections.clear();
 		this.#lastViewportSpans = [];
 	}
 
@@ -1798,8 +1822,23 @@ export class TranscriptContainer extends Container {
 		});
 	}
 
+	/** Hide a warning exactly while its own failed execution is one of the dock rows. */
+	#reconcileCompactFailureProjections(): void {
+		if (this.#compactFailureProjections.size === 0) return;
+		const covered = this.#selectCompactActivity(this.#frameRowsWidth || 80).covered;
+		for (const [component, index] of this.#compactFailureProjections) {
+			const entry = this.#entries[index];
+			// Emitted warnings are immutable history; hiding them would require rewriting scrollback.
+			if (entry?.component === component && (entry.state === "committed" || entry.split !== undefined)) continue;
+			if ((component as Component & CompactFailureProjection).reconcileCompactToolFailure(covered)) {
+				this.#compactProjectionChanged(index);
+			}
+		}
+	}
+
 	/** Keep the changing end of each open compact run outside immutable terminal history. */
 	#updateCompactTools(startIndex = Math.min(this.#frontier, this.#compactRunStart)): void {
+		this.#reconcileCompactFailureProjections();
 		this.#compactRetirementLimit = Number.POSITIVE_INFINITY;
 		if (!displayPreferences.compactToolActivity || !this.#toolActivityVisible) return;
 		this.#compactRunStart = Number.POSITIVE_INFINITY;
@@ -1903,6 +1942,13 @@ export class TranscriptContainer extends Container {
 		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
 		if (this.#entriesMatch(children, 0)) return;
+		this.#compactFailureProjections.clear();
+		for (let index = 0; index < children.length; index++) {
+			const component = children[index]!;
+			if (typeof (component as Partial<CompactFailureProjection>).reconcileCompactToolFailure === "function") {
+				this.#compactFailureProjections.set(component, index);
+			}
+		}
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		for (const entry of this.#entries) {
 			if (isToolActivityComponent(entry.component)) entry.component.setCompactToolResultListener?.(undefined);
