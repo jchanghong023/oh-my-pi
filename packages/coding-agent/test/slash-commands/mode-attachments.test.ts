@@ -59,6 +59,7 @@ function createHarness(
 			},
 		},
 		sessionManager: {
+			getSessionId: () => "session",
 			putBlob: vi.fn(async () => ({ displayPath: "file:///replacement.png" })),
 		},
 		focusedAgentId: undefined,
@@ -69,6 +70,7 @@ function createHarness(
 		showStatus: vi.fn(),
 		showWarning: vi.fn(),
 		showError,
+		handleDevInput: async () => false,
 		handlePlanModeCommand,
 		handleVibeModeCommand,
 		handleGoalModeCommand,

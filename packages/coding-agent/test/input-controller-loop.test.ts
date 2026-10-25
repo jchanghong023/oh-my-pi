@@ -10,6 +10,7 @@ function createLoopContext(options: {
 	onInputCallback?: (...args: never[]) => void;
 }) {
 	const extensionCommandNames = options.extensionCommandNames ?? [];
+	const sessionId = crypto.randomUUID();
 	const extensionRunner =
 		extensionCommandNames.length > 0
 			? {
@@ -50,7 +51,8 @@ function createLoopContext(options: {
 			promptTemplates: [],
 			prompt,
 		},
-		sessionManager: { putBlob: vi.fn() },
+		sessionManager: { getSessionId: () => sessionId, putBlob: vi.fn() },
+		handleDevInput: async () => false,
 		loopModeEnabled: true,
 		get loopPrompt() {
 			return loopPrompt;

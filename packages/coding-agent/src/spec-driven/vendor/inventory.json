@@ -102,37 +102,41 @@
       "adaptation": "omp-four-role-v1"
     }
   ],
-  "commands": [
-    {
-      "name": "opsx-explore",
-      "path": "openspec/commands/opsx-explore.md"
-    },
-    {
-      "name": "opsx-update",
-      "path": "openspec/commands/opsx-update.md"
-    },
-    {
-      "name": "opsx-propose",
-      "path": "openspec/commands/opsx-propose.md"
-    },
-    {
-      "name": "opsx-sync",
-      "path": "openspec/commands/opsx-sync.md"
-    },
-    {
-      "name": "opsx-archive",
-      "path": "openspec/commands/opsx-archive.md"
-    },
-    {
-      "name": "opsx-verify",
-      "path": "openspec/commands/opsx-verify.md"
-    }
-  ],
   "skills": [
     {
       "source": "jch",
       "name": "jch-grill-me",
       "path": "jch/skills/jch-grill-me/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-explore",
+      "path": "openspec/skills/opsx-explore/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-update",
+      "path": "openspec/skills/opsx-update/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-propose",
+      "path": "openspec/skills/opsx-propose/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-sync",
+      "path": "openspec/skills/opsx-sync/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-archive",
+      "path": "openspec/skills/opsx-archive/SKILL.md"
+    },
+    {
+      "source": "openspec",
+      "name": "opsx-verify",
+      "path": "openspec/skills/opsx-verify/SKILL.md"
     },
     {
       "source": "superpowers",
@@ -269,36 +273,6 @@
     {
       "path": "openspec/bun.lock",
       "sha256": "ed55b3821f71111e7424741db4ea25f393d940143228c51aad6684573b5f9ce4",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-archive.md",
-      "sha256": "68bc055828d211ad5040daaea69c840629c719abe6ad38ba61db34de924391d2",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-explore.md",
-      "sha256": "8d8ccd9dbad85926e2ce73fd9206934fba4ec3262b17d227e019f1f0be25cc45",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-propose.md",
-      "sha256": "a1fecd636d10446080d891e05fb0aa0609443b148f9c7e3a0dbf7de6718ded54",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-sync.md",
-      "sha256": "1768cb4c89a7b2ab00277a5a98e2ec6772183b8df3d945df1c6e4bcc3e959229",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-update.md",
-      "sha256": "b9996bbd5292d53a9886a4cf638549436086973c35163e4082d3e3ba15bdd5d5",
-      "executable": false
-    },
-    {
-      "path": "openspec/commands/opsx-verify.md",
-      "sha256": "3889d8236f883615f66ef0d4e989e4580915d96e032a86420ff130ec8ff7ba04",
       "executable": false
     },
     {
@@ -1908,7 +1882,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/archive-change.js",
-      "sha256": "8d54bec84706f6a742439c3ecda9b46553cc0d21b2e0302e6a717fe53d414a5c",
+      "sha256": "2a796ed4aeadf40b6cf2a960234e48cf024078e260f9b0a3215f48d5e16ea505",
       "executable": false
     },
     {
@@ -1918,7 +1892,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/explore.js",
-      "sha256": "90780fd4a0e443f9b8af2158a062baccdcbda1cd8c9aff8b54f2776b20bd81fe",
+      "sha256": "7d1becc0207871ccb01f344f65078563e0744f82665ee8e9353affd78f2fdca6",
       "executable": false
     },
     {
@@ -1938,7 +1912,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/propose.js",
-      "sha256": "224bc8f154f9b2e58f56787eb4e7c5cdce22a9da4ff1ea4191af41d7732766cc",
+      "sha256": "57c21a41da1d436e21917b4fcb228ab3a3bb8a0fa4cb8ccbee21db9810cc0830",
       "executable": false
     },
     {
@@ -1958,7 +1932,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/sync-specs.js",
-      "sha256": "4924b4c0cc1cbae22bb88a7ff4b277fe857d8792d5ee13c6737c497def71a769",
+      "sha256": "39ed3216c93623cd6c54e0ac3fb9f8b71cdba8d4573380dc699d9954431a04e2",
       "executable": false
     },
     {
@@ -1968,7 +1942,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/update-change.js",
-      "sha256": "324e47b9ef9d451509a6ffbc88bc4bfc0ce0e4a5bf39dec49a122a6f46efdfdf",
+      "sha256": "1e6d1d5339b855e1bfcbee9be68f2c8b0d5a32ad24ba18d4cb1ffa65617cffa6",
       "executable": false
     },
     {
@@ -1978,7 +1952,7 @@
     },
     {
       "path": "openspec/dist/core/templates/workflows/verify-change.js",
-      "sha256": "91630be9ff8e251c5e9ab46f7c481e4fb243d1e618ca9a3b220a74b4ea52ef83",
+      "sha256": "093d922c2dade11fc654c41cf5eb18e30c7861d9989932df78e83da61aa7986e",
       "executable": false
     },
     {
@@ -11244,6 +11218,36 @@
     {
       "path": "openspec/schemas/spec-driven/templates/spec.md",
       "sha256": "1cccfb573f031c6352bed2a879b7035ff710bc909112fc23d10bdcfcdd8d4318",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-archive/SKILL.md",
+      "sha256": "17e0b92ca8191bb7466815bbaeb54584c5de62e5359fad61e9b6797bd7f0ad7b",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-explore/SKILL.md",
+      "sha256": "a9e9b658ab467178470bf9128d90631f9b4a8c8e15f79d46134393030a0723e8",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-propose/SKILL.md",
+      "sha256": "7a2e47549c010eeab67b438be4058c5a47264f7bc449d5ed3cb5203be05b43da",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-sync/SKILL.md",
+      "sha256": "ac2354cf006d44498d1a63c128db73ee88aef52fa612862b7b7793c1f28c41bd",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-update/SKILL.md",
+      "sha256": "0a6727d4db11508d7bd48a8a9a4caeaaa8d979b8edc5e5f0a88538133d33c219",
+      "executable": false
+    },
+    {
+      "path": "openspec/skills/opsx-verify/SKILL.md",
+      "sha256": "5ba4587f6ae2f98feb3ad8e7c99b86fca6f893d6561b487f42441916c5c074b6",
       "executable": false
     },
     {

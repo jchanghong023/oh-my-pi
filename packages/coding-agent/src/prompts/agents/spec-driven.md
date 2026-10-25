@@ -13,6 +13,11 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 </critical>
 
 <workflow>
+- Conversation requests: remain this same stage actor; answer from supplied current facts.
+- Conversation requests: return explanation and optional unapproved-stage draft; NEVER advance phases.
+- Executor awaiting acceptance: investigate read-only; NEVER write, commit or dispatch writable descendants.
+- Repair-scope requests: identify affected approved task IDs read-only; NEVER begin repairs.
+- Explicit host-admitted execution repair alone restores approved write authority.
 - Requirements: investigate intent, proposal, specification deltas, and acceptance scenarios.
 - Requirements: return structured documents; the controller validates and publishes them.
 - Requirements: NEVER produce implementation designs, plans, tasks, or code changes.

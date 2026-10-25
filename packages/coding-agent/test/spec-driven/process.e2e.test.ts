@@ -11,6 +11,7 @@ import {
 	conversationTopicFrameSchema,
 	conversationTopicWireCandidateSchema,
 	v4ConversationRowsRangeResultSchema,
+	v4ConversationWorkflowRunsResultSchema,
 } from "../../src/modes/zcode/schema";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
 import type { Skill } from "../../src/extensibility/skills";
@@ -261,11 +262,11 @@ class PublicPeer {
 	write(frame: Frame): void {
 		this.child.stdin.write(`${JSON.stringify(frame)}\n`);
 	}
-	async next(predicate: (frame: Frame) => boolean, since = 0): Promise<Frame> {
+	async next(predicate: (frame: Frame) => boolean | Promise<boolean>, since = 0): Promise<Frame> {
 		let cursor = since;
 		for (;;) {
 			if (this.#failure) throw this.#failure;
-			for (; cursor < this.seen.length; cursor++) if (predicate(this.seen[cursor]!)) return this.seen[cursor]!;
+			for (; cursor < this.seen.length; cursor++) if (await predicate(this.seen[cursor]!)) return this.seen[cursor]!;
 			if (this.#ended) throw new Error(`OMP ended before expected public output: ${await this.stderr}`);
 			await this.#changed.promise;
 		}
@@ -337,22 +338,25 @@ class PublicPeer {
 		const expected = typeof phase === "string" ? [phase] : phase;
 		this.#waiting = `session ${sessionId} phase ${phase}`;
 		let observed: { state: Frame; text: string } | undefined;
-		await this.next(item => {
-			const latest = publishedStatus(item, sessionId, this.#statusRowIds.get(sessionId) ?? 0);
+		await this.next(async item => {
+			const latest = await publishedStatus(item, sessionId, this.#statusRowIds.get(sessionId) ?? 0, this);
 			if (!latest) return false;
 			this.#statusRowIds.set(sessionId, latest.rowId);
 			this.#currentPhase = latest.state;
 			this.#currentPhaseText = latest.text;
 			const state = latest.state;
+			// A phase may publish before its native operation releases the decision gate.
+			if (state.ready === false) return false;
 			// A refused stale command can report a reason while leaving the workflow
 			// active at its gate. Real workflow pauses and terminal failures still fail fast.
-			// /spec cancel 的终态自身带 paused；仅该明确请求的终态可以通过，
+			// /dev cancel 的终态自身带 paused；仅该明确请求的终态可以通过，
 			// 执行中的真实暂停仍立即失败，并保留状态正文里的阻塞原因。
 			if (
 				(state.paused === true &&
 					!(expected.includes("cancelled") && state.phase === "cancelled") &&
 					!allowStopped) ||
-				((state.phase === "failed" || state.phase === "blocked") && !expected.includes(String(state.phase)))
+				((state.phase === "failed" || state.phase === "blocked" || state.blockedReason !== undefined) &&
+					!expected.includes(String(state.phase)))
 			)
 				throw new Error(`Workflow stopped before ${phase}: ${bounded({ state, text: latest.text })}`);
 			// 初始 gate-status 和运行中阶段不是本条命令的停止结果。
@@ -370,8 +374,8 @@ class PublicPeer {
 		// command must still read its own published result.
 		const minimumRowId = this.#statusRowIds.get(sessionId) ?? 0;
 		let observed: { state: Frame; text: string } | undefined;
-		await this.next(item => {
-			const latest = publishedStatus(item, sessionId, minimumRowId);
+		await this.next(async item => {
+			const latest = await publishedStatus(item, sessionId, minimumRowId, this);
 			if (!latest) return false;
 			this.#currentPhase = latest.state;
 			this.#currentPhaseText = latest.text;
@@ -396,19 +400,11 @@ function textValues(value: unknown): string[] {
 	if (Array.isArray(value)) return value.flatMap(textValues);
 	return isRecord(value) ? Object.values(value).flatMap(textValues) : [];
 }
-function statusLines(text: string): Frame[] {
-	return text.split("\n").flatMap(line => {
-		try {
-			const value: unknown = JSON.parse(line);
-			return isRecord(value) && typeof value.phase === "string" ? [value] : [];
-		} catch {
-			return [];
-		}
-	});
-}
 function isStoppedStatus(state: Frame): boolean {
+	if (state.ready === false) return false;
 	return (
 		state.paused === true ||
+		state.blockedReason !== undefined ||
 		[
 			"awaiting-choice",
 			"awaiting-plan",
@@ -420,25 +416,60 @@ function isStoppedStatus(state: Frame): boolean {
 		].includes(String(state.phase))
 	);
 }
-function publishedStatus(
+async function publishedStatus(
 	item: Frame,
 	sessionId: string,
 	minimumRowId: number,
-): { rowId: number; state: Frame; text: string } | undefined {
+	peer: PublicPeer,
+): Promise<{ rowId: number; state: Frame; text: string } | undefined> {
 	if (!isConversation(item, sessionId) || !isRecord(item.params)) return undefined;
 	const frame = item.params;
 	if (!isRecord(frame.payload) || frame.payload.kind !== "deltas" || !Array.isArray(frame.payload.deltas))
 		return undefined;
-	let latest: { rowId: number; state: Frame; text: string } | undefined;
+	let latest: { rowId: number; text: string } | undefined;
+	let workflowUpdated = false;
 	for (const delta of frame.payload.deltas) {
-		if (!isRecord(delta) || (delta.op !== "row.appended" && delta.op !== "row.upserted")) continue;
+		if (!isRecord(delta)) continue;
+		if (
+			delta.op === "workflowRun.updated" ||
+			(delta.op === "state.updated" && isRecord(delta.patch) && delta.patch.workflowRuns !== undefined)
+		)
+			workflowUpdated = true;
+		if (delta.op !== "row.appended" && delta.op !== "row.upserted") continue;
 		const row = delta.row;
 		if (!isRecord(row) || row.kind !== "assistantText" || typeof row.text !== "string") continue;
 		if (typeof row.rowId !== "number" || row.rowId <= minimumRowId) continue;
-		const state = statusLines(row.text).at(-1);
-		if (state && (!latest || row.rowId >= latest.rowId)) latest = { rowId: row.rowId, state, text: row.text };
+		if (!latest || row.rowId >= latest.rowId) latest = { rowId: row.rowId, text: row.text };
 	}
-	return latest;
+	// Terminal transitions need not append a new assistant row.
+	if (!latest && !workflowUpdated) return undefined;
+	const result = v4ConversationWorkflowRunsResultSchema.parse(
+		await peer.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
+	);
+	const run = result.runs.findLast(run => run.spec);
+	if (!run?.spec) return undefined;
+	const spec = run.spec;
+	return {
+		rowId: latest?.rowId ?? minimumRowId,
+		state: {
+			phase: spec.phase,
+			ready: spec.actions.every(action => action.available !== false),
+			paused: spec.state === "paused" || spec.phase === "cancelled",
+			blockedReason: spec.state === "blocked" ? spec.explanation : undefined,
+			generation: spec.generation,
+			runId: run.runId,
+			specificationVersion: spec.versions.specification,
+			planVersion: spec.versions.plan,
+			acceptanceVersion: spec.versions.acceptance,
+			selection: spec.selectedCandidate ?? undefined,
+			candidates: spec.candidates,
+		},
+		// Decisions come from negotiated native actions, never from UI wording.
+		text: spec.actions
+			.filter(action => action.available !== false && action.command)
+			.map(action => action.command)
+			.join("\n"),
+	};
 }
 function isConversation(frame: Frame, sessionId: string): boolean {
 	return (
@@ -446,6 +477,36 @@ function isConversation(frame: Frame, sessionId: string): boolean {
 		isRecord(frame.params) &&
 		frame.params.topic === `conversation/${sessionId}`
 	);
+}
+async function confirmCancellation(peer: PublicPeer, sessionId: string): Promise<void> {
+	const since = peer.seen.length;
+	await peer.request("v4/conversation/subscribe", {
+		topic: `conversation/${sessionId}`,
+		connectionId: `cancel-confirmation-${crypto.randomUUID()}`,
+		clientMode: "desktop-continuous",
+	});
+	const frame = await peer.next(
+		frame =>
+			isConversation(frame, sessionId) &&
+			conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
+		since,
+	);
+	const payload = conversationTopicFrameSchema.parse(frame.params).payload;
+	if (payload.kind !== "snapshot") throw new Error("Native confirmation snapshot missing");
+	const confirmation = payload.snapshot.pendingInteractions.find(
+		interaction => interaction.payload.kind === "userInput",
+	);
+	expect(confirmation).toBeDefined();
+	expect(
+		await peer.request("v4/command", {
+			commandId: crypto.randomUUID(),
+			clientId: "omp-spec-acceptance",
+			sessionId,
+			type: "resolveInteraction",
+			payload: { interactionId: confirmation!.interactionId, answer: { optionId: "yes" } },
+			issuedAt: Date.now(),
+		}),
+	).toMatchObject({ status: "accepted" });
 }
 async function fixture(root: TempDir, baseUrl: string) {
 	const cwd = root.join("project");
@@ -519,8 +580,8 @@ async function absent(cwd: string, relative: string): Promise<void> {
 	expect(stat).toBeUndefined();
 }
 function commandFrom(text: string, command: string): string {
-	const line = text.split("\n").find(value => value.startsWith(`/spec ${command} `));
-	if (!line) throw new Error(`No public /spec ${command} decision in ${text}`);
+	const line = text.split("\n").find(value => value.startsWith(`/dev ${command} `));
+	if (!line) throw new Error(`No public /dev ${command} decision in ${text}`);
 	return line;
 }
 
@@ -687,7 +748,7 @@ describe("spec-driven actual OMP public entry", () => {
 				await using peer = new PublicPeer(cwd, config.env, provider);
 				await peer.ready();
 				const session = await peer.create(cwd);
-				const first = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+				const first = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
 				const specification = await peer.phase(session, "awaiting-specification", first);
 				if (failure === "save-error")
 					// A directory at the exact durable destination makes native result
@@ -743,7 +804,7 @@ describe("spec-driven actual OMP public entry", () => {
 				try {
 					await peer.ready();
 					const session = await peer.create(config.cwd);
-					const first = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+					const first = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
 					const specification = await peer.phase(session, "awaiting-specification", first);
 					const confirming = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
 					// A non-consuming observer cannot steal the interrupt command's
@@ -757,7 +818,8 @@ describe("spec-driven actual OMP public entry", () => {
 					]);
 					if (ingress.kind !== "handoff")
 						throw new Error(`Command stopped before native handoff ingress: ${bounded(ingress.stopped)}`);
-					const interrupting = await peer.send(session, `/spec ${interruption}`);
+					const interrupting = await peer.send(session, `/dev ${interruption}`);
+					if (interruption === "cancel") await confirmCancellation(peer, session);
 					const paused = await peer.phase(
 						session,
 						interruption === "cancel" ? "cancelled" : ["team", "awaiting-specification"],
@@ -813,7 +875,7 @@ describe("spec-driven actual OMP public entry", () => {
 						),
 					).toBe(true);
 					release.resolve();
-					const statusStart = await peer.send(session, "/spec status");
+					const statusStart = await peer.send(session, "/dev status");
 					const late = await peer.phase(
 						session,
 						interruption === "cancel" ? "cancelled" : ["team", "awaiting-specification"],
@@ -827,7 +889,7 @@ describe("spec-driven actual OMP public entry", () => {
 					);
 					await absent(config.cwd, `openspec/changes/${CHANGE_ID}/solution.md`);
 					if (interruption === "pause") {
-						const resuming = await peer.send(session, "/spec resume");
+						const resuming = await peer.send(session, "/dev resume");
 						await peer.phase(session, "awaiting-choice", resuming);
 						expect(provider.handoffs).toHaveLength(2);
 						const successor = provider.requests.find(
@@ -934,7 +996,7 @@ describe("spec-driven actual OMP public entry", () => {
 				const session = await peer.create(config.cwd);
 				const first = await peer.send(
 					session,
-					`/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
+					`/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`,
 				);
 				const specification = await peer.phase(session, "awaiting-specification", first);
 				const runtimeDirs = (await fs.readdir(path.join(config.cwd, ".omp/spec-sessions"))).filter(
@@ -976,7 +1038,7 @@ describe("spec-driven actual OMP public entry", () => {
 				await absent(config.cwd, TEST_PATH);
 				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/design.md`);
 				await absent(config.cwd, `openspec/changes/${CHANGE_ID}/tasks.md`);
-				const stale = await peer.send(session, "/spec confirm-spec obsolete-version");
+				const stale = await peer.send(session, "/dev confirm-spec obsolete-version");
 				const rejected = await peer.phase(session, "awaiting-specification", stale);
 				expect(rejected.state.specificationVersion).toBe(specification.state.specificationVersion);
 				expect(
@@ -1003,9 +1065,11 @@ describe("spec-driven actual OMP public entry", () => {
 					provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
 						.length,
 				).toBeGreaterThanOrEqual(2);
-				expect(choice.text).toContain('"adoptable":true');
-				expect(choice.text).toContain('"reviewSucceeded":true');
-				expect(choice.text).toContain('"recheckSucceeded":true');
+				expect(choice.state.candidates).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({ adoptable: true, reviewSucceeded: true, recheckSucceeded: true }),
+					]),
+				);
 				const planStart = await peer.send(session, commandFrom(choice.text, "choose"));
 				const plan = await peer.phase(session, "awaiting-plan", planStart);
 				await assertNativeTransition(
@@ -1036,7 +1100,7 @@ describe("spec-driven actual OMP public entry", () => {
 				).toBe(runtimeState.plan.documentVersion);
 				const visible = await git(config.cwd, config.env, ["status", "--porcelain", "--untracked-files=all"]);
 				expect(visible).not.toContain(".omp/spec-sessions/");
-				const badPlan = await peer.send(session, "/spec confirm-plan obsolete-version");
+				const badPlan = await peer.send(session, "/dev confirm-plan obsolete-version");
 				await peer.phase(session, "awaiting-plan", badPlan);
 				await absent(config.cwd, IMPLEMENTATION_PATH);
 				const executing = await peer.send(
@@ -1044,7 +1108,8 @@ describe("spec-driven actual OMP public entry", () => {
 					`${commandFrom(plan.text, "confirm-plan")}${executionMode === "goal" ? " --goal" : ""}`,
 				);
 				const acceptance = await peer.phase(session, "awaiting-acceptance", executing);
-				expect(acceptance.state.executionMode).toBe(executionMode);
+				const acceptedState = JSON.parse(await fs.readFile(path.join(config.cwd, statePath), "utf8"));
+				expect(acceptedState.status.executionMode).toBe(executionMode);
 				expect([...nativeEntered].sort()).toEqual(["T002", "T003"]);
 				const executionRequests = provider.requests.filter(
 					request => rolePayload(request)?.specDrivenRole === "executor",
@@ -1184,7 +1249,7 @@ describe("spec-driven actual OMP public entry", () => {
 					expect(await fs.readFile(path.join(config.cwd, authorityPath), "utf8")).toBe(originalAuthority);
 				await absent(config.cwd, "openspec/changes/archive");
 				await absent(config.cwd, "openspec/specs/greeting/spec.md");
-				const badAcceptance = await peer.send(session, "/spec accept obsolete-version");
+				const badAcceptance = await peer.send(session, "/dev accept obsolete-version");
 				await peer.phase(session, "awaiting-acceptance", badAcceptance);
 				await absent(config.cwd, "openspec/specs/greeting/spec.md");
 				let currentAcceptance = acceptance;
@@ -1213,7 +1278,7 @@ describe("spec-driven actual OMP public entry", () => {
 							textValues(frame).some(text => text.includes("OMP_SPEC_ORDINARY_CONTROL_DONE")),
 						ordinaryStart,
 					);
-					const resume = await peer.send(session, "/spec resume");
+					const resume = await peer.send(session, "/dev resume");
 					currentAcceptance = await peer.phase(session, "awaiting-acceptance", resume);
 					expect(currentAcceptance.state.acceptanceVersion).not.toBe(acceptance.state.acceptanceVersion);
 					const repairedReport = await fs.readFile(verificationPath, "utf8");
@@ -1293,7 +1358,7 @@ describe("spec-driven actual OMP public entry", () => {
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
 			const session = await peer.create(config.cwd);
-			let since = await peer.send(session, `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+			let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
 			const original = await peer.phase(session, "awaiting-specification", since);
 			since = await peer.send(session, commandFrom(original.text, "confirm-spec"));
 			const priorChoice = await peer.phase(session, "awaiting-choice", since);
@@ -1303,7 +1368,7 @@ describe("spec-driven actual OMP public entry", () => {
 			const teamCount = countTeam();
 			since = await peer.send(
 				session,
-				`/spec amend ${MARKER}: retain the greeting behavior and explicitly exclude networking, logging and side effects.`,
+				`/dev amend ${MARKER}: retain the greeting behavior and explicitly exclude networking, logging and side effects.`,
 			);
 			const changed = await peer.phase(session, "awaiting-specification", since);
 			expect(changed.state.specificationVersion).not.toBe(original.state.specificationVersion);
@@ -1324,7 +1389,8 @@ describe("spec-driven actual OMP public entry", () => {
 			expect(
 				await fs.readFile(path.join(config.cwd, `openspec/changes/${CHANGE_ID}/proposal.md`), "utf8"),
 			).toContain("exclude networking");
-			since = await peer.send(session, "/spec cancel");
+			since = await peer.send(session, "/dev cancel");
+			await confirmCancellation(peer, session);
 			await peer.phase(session, "cancelled", since);
 			expect(provider.failures).toEqual([]);
 		},

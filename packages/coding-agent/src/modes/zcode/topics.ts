@@ -276,11 +276,13 @@ export class ZCodeTopics {
 			const conversation = conversationTopicFrameSchema.parse(frame);
 			const nativeIds = this.#requireTopic(sub.topic).specRunIds;
 			if (conversation.payload.kind === "snapshot") {
+				delete conversation.payload.snapshot.dev;
 				const runs = conversation.payload.snapshot.workflowRuns;
 				if (runs) runs.runs = runs.runs.filter(run => !run.spec);
 			} else {
 				conversation.payload.deltas = conversation.payload.deltas.filter(delta => {
 					if (delta.op === "state.updated") {
+						delete delta.patch.dev;
 						const runs = delta.patch.workflowRuns;
 						if (runs) runs.runs = runs.runs.filter(run => !run.spec);
 					}

@@ -113,6 +113,7 @@ async function createContext() {
 		isGeneratingHandoff: false,
 		isBashRunning: false,
 		isEvalRunning: false,
+		agent: { state: {} },
 		extensionRunner: undefined,
 		prompt,
 		queuedMessageCount: 0,
@@ -185,6 +186,9 @@ async function createContext() {
 		retryEscapeHandler: undefined,
 		session: session as unknown as InteractiveModeContext["session"],
 		viewSession: session as unknown as InteractiveModeContext["viewSession"],
+		sessionManager: {
+			getSessionId: () => "session",
+		} as unknown as InteractiveModeContext["sessionManager"],
 		keybindings: {
 			getKeys(action: string) {
 				return keyMap[action] ? [...keyMap[action]] : [];
@@ -228,6 +232,7 @@ async function createContext() {
 		settings: Settings.isolated(),
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		handleHotkeysCommand: vi.fn(),
+		handleDevInput: async () => false,
 		handlePlanModeCommand: vi.fn(),
 		handleNewCommand: vi.fn(),
 		showTreeSelector: vi.fn(),
@@ -238,6 +243,7 @@ async function createContext() {
 		showDebugSelector: vi.fn(),
 		showHistorySearch: vi.fn(),
 		toggleThinkingBlockVisibility: vi.fn(),
+		syncThinkingPreview: vi.fn(),
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw,

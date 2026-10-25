@@ -143,6 +143,21 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
+	it("requires explicit branch-local invocation for every bundled OpenSpec skill", async () => {
+		const resources = await ensureSpecDrivenResources();
+		for (const entry of resources.manifest.skills.filter(entry => entry.source === "openspec")) {
+			const skill = await loadSpecDrivenSkill("openspec", entry.name);
+			const url = parseInternalUrl(`skill://${skill.name}`);
+			const context = { skills: [skill], getSessionBranch: () => [] };
+			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			const invoked = await buildSkillPromptMessage(skill, { args: "change-name $ARGUMENTS {{literal}}" }, "user");
+			const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invoked.details)] };
+			expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
+			expect(invoked.message).toContain("change-name $ARGUMENTS {{literal}}");
+			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		}
+	});
+
 	it("opens hidden Grill-me and its metadata only after explicit current-branch invocation", async () => {
 		const skill = await loadSpecDrivenSkill("jch", "jch-grill-me");
 		setActiveSkills([skill]);

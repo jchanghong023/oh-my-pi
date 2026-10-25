@@ -284,6 +284,50 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 			hardConstraintViolations: [],
 		});
 	if (!payload) return { text: `${MARKER}_CHAT_READY` };
+	if (payload.input.kind === "repair-scope") return yieldData(request, { taskIds: ["T001"] });
+	if (payload.input.kind === "conversation") {
+		const text = String(payload.input.text ?? "");
+		const latest = request.messages.findLastIndex(
+			message =>
+				message.role === "user" && rolePayload({ ...request, messages: [message] })?.input.kind === "conversation",
+		);
+		const dialogueCalls = calls({ ...request, messages: request.messages.slice(latest + 1) });
+		if (payload.specDrivenRole === "executor" && !dialogueCalls.some(call => call.name === "read"))
+			return tool(request, "read", { i: "Inspecting delivered greeting", path: IMPLEMENTATION_PATH });
+		const revision = text.includes("OMP_DEV_REVISE");
+		if (revision && (payload.specDrivenRole === "requirements" || payload.specDrivenRole === "planner")) {
+			const draft = respond({
+				...request,
+				messages: [
+					...request.messages,
+					{
+						role: "user",
+						content: JSON.stringify({
+							specDrivenRole: payload.specDrivenRole,
+							input: { ...payload.input, kind: "draft", request: text, answer: text },
+						}),
+					},
+				],
+			});
+			const data = draft.tool?.args.data ?? JSON.parse(draft.text ?? "{}");
+			if (!isRecord(data)) throw new Error("Stage revision did not produce structured material");
+			if (payload.specDrivenRole === "requirements")
+				data.proposal = `${String(data.proposal)}\nRevision discussion: ${text}\n`;
+			else data.content = `${String(data.content)}\nRevision discussion: ${text}\n`;
+			return yieldData(request, {
+				text: `The current unapproved material has been revised; explicit approval is still required.`,
+				[payload.specDrivenRole === "requirements" ? "requirements" : "plan"]: data,
+			});
+		}
+		return yieldData(request, {
+			text:
+				payload.specDrivenRole === "solution"
+					? `The current Team candidates are available for comparison. Choosing one explicitly authorizes planning only.`
+					: payload.specDrivenRole === "executor"
+						? `The delivered greet implementation was inspected using the native read tool. Feedback does not authorize writes; repair requires the current acceptance version.`
+						: `The current ${payload.specDrivenRole} material remains unapproved. Discussion does not advance the stage.`,
+		});
+	}
 	const originals = isRecord(payload.input.originals) ? payload.input.originals : undefined;
 	const mappedEntries = Array.isArray(originals?.entries) ? originals.entries : [];
 	const greetingSource = mappedEntries.find(
@@ -511,12 +555,14 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 				message.role === "user" && rolePayload({ ...request, messages: [message] })?.specDrivenRole === "executor",
 		);
 		// Resume is bound to current host task state, not transcript survival after compaction/generation changes.
-		const repairing = currentTasks.some(
-			task =>
-				isRecord(task) &&
-				task.status !== "completed" &&
-				(isRecord(task.execution) || (Array.isArray(task.records) && task.records.length > 0)),
-		);
+		const repairing =
+			isRecord(payload.input.repair) ||
+			currentTasks.some(
+				task =>
+					isRecord(task) &&
+					task.status !== "completed" &&
+					(isRecord(task.execution) || (Array.isArray(task.records) && task.records.length > 0)),
+			);
 		if (repairing) {
 			const repairCalls = calls({ ...request, messages: request.messages.slice(latestInput + 1) });
 			for (const state of currentTasks) {
@@ -533,7 +579,17 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 					call => call.name === "spec_verify" && call.args.validationId === validationId,
 				);
 				if (!validations.length) return tool(request, "spec_verify", { validationId, stage: "green" });
-				if (taskId === "T001" && !repairCalls.some(call => call.name === "write"))
+				if (
+					taskId === "T001" &&
+					isRecord(payload.input.repair) &&
+					!repairCalls.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH)
+				)
+					return tool(request, "write", {
+						i: "Applying explicitly authorized scoped repair",
+						path: IMPLEMENTATION_PATH,
+						content: `// Rechecked under explicit version-bound repair.\n${IMPLEMENTATION}`,
+					});
+				if (taskId === "T001" && !repairCalls.some(call => call.name === "write" && call.args.path === TEST_PATH))
 					return tool(request, "write", {
 						i: "Repairing invalidated behavior assertions",
 						path: TEST_PATH,
@@ -664,6 +720,7 @@ export function createProviderFixture(
 	options: {
 		handoff?: (request: ModelRequest, ordinal: number) => Reply | Promise<Reply>;
 		requirementsQuestion?: string;
+		dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
 		observe?: (request: ModelRequest) => void | Promise<void>;
 	} = {},
 ): ProviderFixture {
@@ -690,7 +747,13 @@ export function createProviderFixture(
 					reply = options.handoff
 						? await options.handoff(body, handoffs.length)
 						: { text: `${respond(body).text}\n\nNative response identity: ${HANDOFF_MARKER}-${handoffs.length}` };
-				} else reply = respond(body, options);
+				} else {
+					const payload = rolePayload(body);
+					reply =
+						payload?.input.kind === "conversation" && options.dialogue
+							? await options.dialogue(body, payload.input, request.signal)
+							: respond(body, options);
+				}
 				const delta = reply.tool
 					? {
 							tool_calls: [

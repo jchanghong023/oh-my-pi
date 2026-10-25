@@ -1874,15 +1874,19 @@ const phase = ${JSON.stringify(phase)};
 // Cross-process file barriers observe real execution; a fake test clock cannot
 // advance the independently spawned command or the native Job's termination.
 const wait = async file => { while (!(await Bun.file(file).exists())) await Bun.sleep(5); };
+const publish = async (file, content) => {
+  await fs.writeFile(file + ".tmp", content);
+  await fs.rename(file + ".tmp", file);
+};
 if (role === "worker") {
-  await fs.writeFile(prefix + ".worker", String(process.pid));
+  await publish(prefix + ".worker", String(process.pid));
   await wait(prefix + ".worker-release");
   process.exit(0);
 }
 if (role === "command") {
   Bun.spawn([process.execPath, import.meta.path, "worker", prefix], {stdin:"ignore",stdout:"ignore",stderr:"ignore"});
   await wait(prefix + ".worker");
-  await fs.writeFile(prefix + ".command", String(process.pid));
+  await publish(prefix + ".command", String(process.pid));
   if (phase !== "replied") await wait(prefix + ".command-release");
   process.exit(0);
 }
@@ -1916,9 +1920,9 @@ try {
     await wait(prefix + ".command");
     if (phase === "running") supervisor.disconnect();
   }
-  await fs.writeFile(prefix + ".disconnected", String(process.pid));
+  await publish(prefix + ".disconnected", String(process.pid));
   const result = await running;
-  await fs.writeFile(prefix + ".result", JSON.stringify(result));
+  await publish(prefix + ".result", JSON.stringify(result));
   // Keep both this parent and its Job handle owner alive until assertions finish.
   await wait(prefix + ".parent-release");
 } finally {

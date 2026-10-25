@@ -211,6 +211,15 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 		};
 	};
 	const ports: SpecDrivenPorts = {
+		conversation: {
+			recipient: role => ({ role, actorId: `fixture-${role}`, sessionId: `fixture-session-${role}` }),
+			async respond(input) {
+				return { text: `Discussed ${input.text}` };
+			},
+			async repairScope() {
+				return ["T001"];
+			},
+		},
 		async handoff(input, context) {
 			events.push(`handoff:${input.transition}`);
 			const role =
@@ -302,7 +311,7 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 					while (state.status !== "completed") {
 						const approvedTask = await control.start(state.id);
 						const result =
-							state.execution && !state.repairReview
+							state.execution && !state.repairReview && !input.repair?.taskIds.includes(state.id)
 								? state.execution
 								: await executeTask(approvedTask, context);
 						state = await control.checkpoint(approvedTask.id, result);
@@ -429,6 +438,179 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 		},
 	};
 }
+
+describe("native current-stage collaboration", () => {
+	it("discusses waiting materials without approval and saves reviewed revisions only at their unapproved stage", async () => {
+		const f = fixture();
+		const initial = await f.orchestrator.start("request", "change");
+		const requirementsActor = f.orchestrator.recipient()!;
+		const signal = new AbortController().signal;
+		await f.orchestrator.converse("同意，继续", "plain-message", requirementsActor, signal);
+		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
+		expect(f.events).not.toContain("team");
+		f.ports.conversation!.respond = async () => ({
+			text: "The revised requirements remain unapproved",
+			requirements: { ...f.getRequirements(), proposal: "Revised requirement proposal" },
+		});
+		await f.orchestrator.converse("revise proposal", "requirements-revision", requirementsActor, signal);
+		const revised = f.orchestrator.status();
+		expect(revised.phase).toBe("awaiting-specification");
+		expect(revised.specification!.version).not.toBe(initial.specification!.version);
+		expect(revised.reviews.filter(review => review.kind === "requirements")).toHaveLength(1);
+		expect(revised.reviews[0]).toMatchObject({
+			id: initial.reviews[0]!.id,
+			model: initial.reviews[0]!.model,
+			revision: 1,
+		});
+		await expect(f.orchestrator.confirmSpecification(initial.specification!.version)).rejects.toThrow();
+		const choice = await f.orchestrator.confirmSpecification(revised.specification!.version);
+		const planned = await f.orchestrator.chooseCandidate(choice.team!.runId, "A", "candidate-v1");
+		f.ports.conversation!.respond = async () => ({
+			text: "The revised plan remains unapproved",
+			plan: { ...f.getPlan(), content: "# Revised unique plan" },
+		});
+		await f.orchestrator.converse("revise plan", "plan-revision", f.orchestrator.recipient()!, signal);
+		const final = f.orchestrator.status();
+		expect(final.phase).toBe("awaiting-plan");
+		expect(final.plan!.version).not.toBe(planned.plan!.version);
+		expect(final.specificationApproval).toBe(revised.specification!.version);
+		expect(final.selection).toEqual(planned.selection);
+		expect(final.planApproval).toBeUndefined();
+		expect(final.reviews.filter(review => review.kind === "plan")).toHaveLength(1);
+		expect(final.reviews.find(review => review.kind === "plan")).toMatchObject({
+			id: planned.reviews.find(review => review.kind === "plan")!.id,
+			model: planned.reviews.find(review => review.kind === "plan")!.model,
+			revision: 1,
+		});
+		expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
+		await expect(f.orchestrator.confirmPlan(planned.plan!.version)).rejects.toThrow();
+		await expect(
+			f.orchestrator.converse("wrong owner", "foreign-message", requirementsActor, signal),
+		).rejects.toThrow();
+	});
+
+	it("keeps acceptance dialogue read-only and invalidates old acceptance before scoped repair dispatch", async () => {
+		const f = fixture();
+		f.setPlan({ ...f.getPlan(), tasks: [task("T001"), task("T002")] });
+		const accepted = await f.toAcceptance();
+		expect(accepted.phase).toBe("awaiting-acceptance");
+		const old = accepted.acceptanceVersion!;
+		const actor = f.orchestrator.recipient()!;
+		const before = [...f.events];
+		await f.orchestrator.converse("explain results", "feedback", actor, new AbortController().signal);
+		expect(f.events).toEqual(before);
+		expect(f.orchestrator.status().acceptanceVersion).toBe(old);
+		await expect(f.orchestrator.repair("stale-token", "fix boundary")).rejects.toMatchObject({
+			code: "invalid_params",
+		});
+		expect(f.events).toEqual(before);
+		const scopeEntered = Promise.withResolvers<void>();
+		const releaseScope = Promise.withResolvers<void>();
+		f.ports.conversation!.repairScope = async input => {
+			expect(input.status.acceptanceVersion).toBeUndefined();
+			expect(input.status.planApproval).toBe(accepted.planApproval);
+			scopeEntered.resolve();
+			await releaseScope.promise;
+			return ["T001"];
+		};
+		const repairing = f.orchestrator.repair(old, "Fix the first approved obligation");
+		expect(f.orchestrator.status().acceptanceVersion).toBeUndefined();
+		await scopeEntered.promise;
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
+		await expect(f.orchestrator.accept(old)).rejects.toThrow();
+		releaseScope.resolve();
+		const repaired = await repairing;
+		expect(repaired.phase).toBe("awaiting-acceptance");
+		expect(repaired.acceptanceVersion).not.toBe(old);
+		expect(repaired.specificationApproval).toBe(accepted.specificationApproval);
+		expect(repaired.planApproval).toBe(accepted.planApproval);
+		expect(repaired.tasks.find(item => item.id === "T002")).toEqual(accepted.tasks.find(item => item.id === "T002"));
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
+		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(1);
+		await expect(f.orchestrator.accept(old)).rejects.toThrow();
+	});
+
+	it("retries failed repair scope on resume without reviving the revoked acceptance", async () => {
+		const f = fixture();
+		const accepted = await f.toAcceptance();
+		const old = accepted.acceptanceVersion!;
+		const scopes: string[] = [];
+		f.ports.conversation!.repairScope = async input => {
+			scopes.push(input.text);
+			expect(input.status.acceptanceVersion).toBeUndefined();
+			if (scopes.length === 1) throw new Error("Scope analysis unavailable");
+			return ["T001"];
+		};
+		const failed = await f.orchestrator.repair(old, "Repair the approved boundary");
+		expect(failed).toMatchObject({
+			phase: "awaiting-acceptance",
+			paused: true,
+			blockedReason: "Scope analysis unavailable",
+		});
+		expect(failed.acceptanceVersion).toBeUndefined();
+		expect(failed.finalApproval).toBeUndefined();
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
+		await expect(f.orchestrator.accept(old)).rejects.toThrow();
+		const retried = await f.orchestrator.resume();
+		expect(scopes).toEqual(["Repair the approved boundary", "Repair the approved boundary"]);
+		expect(retried.phase).toBe("awaiting-acceptance");
+		expect(retried.paused).toBe(false);
+		expect(retried.acceptanceVersion).toBeTruthy();
+		expect(retried.acceptanceVersion).not.toBe(old);
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
+		await expect(f.orchestrator.accept(old)).rejects.toThrow();
+	});
+
+	it("retries interrupted repair scope in the new generation and ignores the stale scope result", async () => {
+		const f = fixture();
+		const accepted = await f.toAcceptance();
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let calls = 0;
+		f.ports.conversation!.repairScope = async () => {
+			if (++calls === 1) {
+				entered.resolve();
+				await release.promise;
+			}
+			return ["T001"];
+		};
+		const repairing = f.orchestrator.repair(accepted.acceptanceVersion!, "Repair after pause");
+		await entered.promise;
+		f.orchestrator.pause();
+		release.resolve();
+		const interrupted = await repairing;
+		expect(interrupted.paused).toBe(true);
+		expect(interrupted.acceptanceVersion).toBeUndefined();
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
+		const resumed = await f.orchestrator.resume();
+		expect(calls).toBe(2);
+		expect(resumed.paused).toBe(false);
+		expect(resumed.acceptanceVersion).toBeTruthy();
+		expect(resumed.acceptanceVersion).not.toBe(accepted.acceptanceVersion);
+		expect(resumed.generation).toBeGreaterThan(accepted.generation);
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
+	});
+
+	it("changes clarification identity even when a new round has identical question bytes", async () => {
+		const f = fixture();
+		const questions = ["1. Which boundary? Recommended: current approved boundary. Reason: preserve scope."];
+		f.setRequirements({ ...f.getRequirements(), questions });
+		const first = await f.orchestrator.start("request", "change");
+		expect(first.clarification?.questions).toEqual(questions);
+		f.ports.conversation!.respond = async () => ({ text: questions[0]!, requirements: f.getRequirements() });
+		await f.orchestrator.converse(
+			"ask again",
+			"round-message",
+			f.orchestrator.recipient()!,
+			new AbortController().signal,
+		);
+		const second = f.orchestrator.status();
+		expect(second.phase).toBe("awaiting-answers");
+		expect(second.clarification?.questions).toEqual(questions);
+		expect(second.clarification?.id).not.toBe(first.clarification?.id);
+		expect(second.specificationApproval).toBeUndefined();
+	});
+});
 
 describe("native status observations", () => {
 	it("publishes completed parent progress before the executor returns without suppressing evidence", async () => {

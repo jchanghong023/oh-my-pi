@@ -3,6 +3,53 @@ import type { SpecNativePublication, SpecNativeSource } from "./git";
 
 export type SpecStageRole = "requirements" | "solution" | "planner" | "executor";
 
+export type SpecInputMode = "chat" | "dev";
+export interface SpecConversationRecipient {
+	role: SpecStageRole;
+	actorId: string;
+	sessionId: string;
+}
+export interface SpecConversationReply {
+	text: string;
+	requirements?: SpecRequirementsDraft;
+	plan?: SpecPlanDraft;
+}
+export interface SpecControllerAction {
+	id: string;
+	label: string;
+	command: string;
+	available: boolean;
+	blockedReason?: string;
+	requiresInput?: boolean;
+	version?: string;
+}
+export interface SpecUserMessage extends SpecConversationRecipient {
+	id: string;
+	text: string;
+	runId: string;
+	generation: number;
+	phase: SpecDrivenPhase;
+	clarificationId?: string;
+	status: "queued" | "processing" | "cancelling" | "cancelled" | "completed" | "failed";
+	reply?: string;
+	error?: string;
+}
+export type SpecTextReceipt = { kind: "draft"; text: string } | { kind: "queued"; messageId: string };
+export interface SpecInteractionState {
+	mode: SpecInputMode;
+	draft: string;
+	recipient?: SpecConversationRecipient;
+	messages: SpecUserMessage[];
+	actions: SpecControllerAction[];
+	blockedReason?: string;
+	clarification?: SpecClarificationRound;
+}
+
+export interface SpecClarificationRound {
+	id: string;
+	/** Complete native question text, including numbering, recommendation and rationale. */
+	questions: string[];
+}
 export type SpecDrivenPhase =
 	| "idle"
 	| "requirements"
@@ -288,6 +335,7 @@ export interface SpecDrivenStatus {
 	acceptanceVersion?: string;
 	finalApproval?: string;
 	questions: string[];
+	clarification?: SpecClarificationRound;
 	tasks: SpecTaskState[];
 	reviews: SpecReviewSlot[];
 	pendingClosure: string[];
@@ -336,6 +384,14 @@ export interface SpecReviewInput {
 	previous?: SpecReview;
 }
 export interface SpecDrivenPorts {
+	conversation?: {
+		recipient(role: SpecStageRole): SpecConversationRecipient | undefined;
+		respond(
+			input: { text: string; role: SpecStageRole; status: SpecDrivenStatus; messageId: string },
+			context: SpecRunContext,
+		): Promise<SpecConversationReply>;
+		repairScope?(input: { text: string; status: SpecDrivenStatus }, context: SpecRunContext): Promise<string[]>;
+	};
 	handoff(
 		input: {
 			transition: SpecHandoffTransition;
@@ -388,6 +444,7 @@ export interface SpecDrivenPorts {
 				solution: SpecSolution;
 				tasks: SpecTaskState[];
 				mode: "normal" | "goal";
+				repair?: { text: string; taskIds: string[] };
 			},
 			context: SpecRunContext,
 			control: SpecExecutionControl,
@@ -429,4 +486,6 @@ export interface SpecDrivenOptions {
 	runId?: string;
 	/** In-process observations only; listener failures never affect native execution or evidence. */
 	onStatusChange?: (status: SpecDrivenStatus) => void;
+	/** Shared native admission guard, rechecked after awaited transition preparation. */
+	assertTransitionAllowed?: () => void;
 }

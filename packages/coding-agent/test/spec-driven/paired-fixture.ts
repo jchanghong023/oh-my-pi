@@ -8,7 +8,7 @@ import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import type { SpecRequestMeasurement, SpecRunMeasurement } from "../../src/spec-driven/metrics";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
-import { ensureSpecDrivenResources, loadOpenSpecCommand, loadSpecDrivenSkill } from "../../src/spec-driven/resources";
+import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import {
 	contentText,
@@ -233,13 +233,11 @@ async function runPairedArm() {
 	const model = registry.find("spec-fixture", "chat-a");
 	if (!model) throw new Error("Isolated paired model was not registered");
 	const selected = [await loadSpecDrivenSkill("superpowers", "brainstorming")];
-	const resources = await ensureSpecDrivenResources();
 	const commands = await Promise.all(
-		["opsx-explore", "opsx-propose", "opsx-update"].map(async name => ({
-			name,
-			filePath: path.join(resources.root, resources.manifest.commands.find(command => command.name === name)!.path),
-			body: await loadOpenSpecCommand(name),
-		})),
+		["opsx-explore", "opsx-propose", "opsx-update"].map(async name => {
+			const skill = await loadSpecDrivenSkill("openspec", name);
+			return { ...skill, body: await fs.readFile(skill.filePath, "utf8") };
+		}),
 	);
 	const { session } = await createAgentSession({
 		cwd,
@@ -288,7 +286,7 @@ async function runPairedArm() {
 		let measurement: SpecRunMeasurement;
 		if (mode === "baseline") {
 			await session.prompt(
-				`OMP_PAIRED_DIRECT\n${PAIRED_TASK}\nUse the retained OpenSpec proposal/specification command prompts and Superpowers brainstorming independently, without /spec or the OMP orchestration runtime. This is not the full upstream distribution before capability removal.\nOMP_PAIRED_RESOURCES ${JSON.stringify([...commands, ...selected].map(resource => resource.filePath))}\n${commands.map(command => `## /${command.name}\n${command.body}`).join("\n\n")}`,
+				`OMP_PAIRED_DIRECT\n${PAIRED_TASK}\nUse the retained OpenSpec proposal/specification skills and Superpowers brainstorming independently, without /dev or the OMP orchestration runtime. This is not the full upstream distribution before capability removal.\nOMP_PAIRED_RESOURCES ${JSON.stringify([...commands, ...selected].map(resource => resource.filePath))}\n${commands.map(command => `## /skill:${command.name}\n${command.body}`).join("\n\n")}`,
 			);
 			measurement = {
 				task: PAIRED_TASK,

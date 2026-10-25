@@ -683,7 +683,11 @@ export class InputController {
 		this.registerExtensionShortcuts();
 		const planModeKeys = this.ctx.keybindings.getKeys("app.plan.toggle");
 		for (const key of planModeKeys) {
-			this.ctx.editor.setCustomKeyHandler(key, () => void this.ctx.handlePlanModeCommand());
+			this.ctx.editor.setCustomKeyHandler(key, () => {
+				void this.ctx.handlePlanModeCommand().catch(error => {
+					this.ctx.showWarning(error instanceof Error ? error.message : String(error));
+				});
+			});
 		}
 
 		for (const key of this.ctx.keybindings.getKeys("app.session.new")) {
@@ -990,6 +994,20 @@ export class InputController {
 				return;
 			}
 
+			// Freeze this submission before routing can yield to the next draft.
+			let inputImages = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
+			let inputImageLinks =
+				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
+			const devSessionId = this.ctx.sessionManager.getSessionId();
+			if (
+				await this.ctx.handleDevInput(text, {
+					images: inputImages,
+					imageLinks: inputImageLinks,
+				})
+			)
+				return;
+			if (this.ctx.sessionManager.getSessionId() !== devSessionId) return;
+
 			// Empty submit while streaming with queued (or live-steered) messages:
 			// abort the active turn and let the post-unwind drain deliver the
 			// agent-core queue.
@@ -1026,9 +1044,6 @@ export class InputController {
 			}
 
 			const runner = this.ctx.session.extensionRunner;
-			let inputImages = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
-			let inputImageLinks =
-				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 			let hasInputImages = (inputImages?.length ?? 0) > 0;
 			const submittedImages = inputImages;
 			// Team owns this submission before hooks can await: a new paste must
@@ -1920,6 +1935,9 @@ export class InputController {
 		// Detach before the first await: another Ctrl+Enter cannot submit the
 		// same draft, and later typing belongs to the next submission.
 		this.ctx.editor.clearDraft();
+		const devSessionId = this.ctx.sessionManager.getSessionId();
+		if (await this.ctx.handleDevInput(text, { images, imageLinks })) return;
+		if (this.ctx.sessionManager.getSessionId() !== devSessionId) return;
 
 		if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
 		if (this.ctx.session.extensionRunner?.hasHandlers("input")) {

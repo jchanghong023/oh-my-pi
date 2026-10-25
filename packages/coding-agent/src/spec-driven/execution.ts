@@ -600,6 +600,8 @@ export class SpecExecutionHost {
 	}
 
 	async commit(taskId: string, message: string, findings: string[], signal: AbortSignal) {
+		this.#current();
+		signal.throwIfAborted();
 		const binding = this.#inline;
 		if (!binding || binding.task.id !== taskId) throw new Error("Task commit has no live target binding");
 		const result = await this.#input.git.commitTask(binding.id, message, findings);

@@ -185,6 +185,7 @@ function createContext(): {
 			abortRetry: vi.fn(),
 		} as unknown as InteractiveModeContext["viewSession"],
 		sessionManager: {
+			getSessionId: () => "session",
 			getSessionName: () => "existing session",
 			flushSync: vi.fn(),
 		} as unknown as InteractiveModeContext["sessionManager"],
@@ -200,6 +201,7 @@ function createContext(): {
 		optimisticUserMessageSignature: undefined,
 		locallySubmittedUserSignatures: new Set<string>(),
 		onInputCallback,
+		handleDevInput: async () => false,
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,

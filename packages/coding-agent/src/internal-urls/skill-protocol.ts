@@ -101,6 +101,7 @@ async function skillTargetPath(
 				source: `bundled-${entry.source}`,
 				hide: true,
 				containRoot: {
+					openspec: resources.openspecRoot,
 					superpowers: resources.superpowersRoot,
 					jch: resources.jchRoot,
 				}[entry.source],

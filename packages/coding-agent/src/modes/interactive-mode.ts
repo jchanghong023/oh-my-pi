@@ -164,7 +164,15 @@ import {
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
 import type { ShakeMode } from "../session/shake-types";
-import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
+import {
+	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
+	buildTuiBuiltinSlashCommands,
+	executeBuiltinSlashCommand,
+} from "../slash-commands/builtin-registry";
+import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../slash-commands/builtin-spec-driven";
+import { parseSlashCommand } from "../slash-commands/helpers/parse";
+import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
+import { observeSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
@@ -1708,6 +1716,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
+	#devObservationUnsubscribe?: () => void;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -3064,9 +3073,110 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return false;
 		}
+		if (newCwd !== previousCwd) {
+			await peekSpecDrivenController(this.sessionManager)?.dispose();
+			this.#bindDevObservation();
+		}
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
 		this.session.refreshRepoLifecycle();
+		return true;
+	}
+
+	#bindDevObservation(): void {
+		this.#devObservationUnsubscribe?.();
+		this.setHookWidget("native-dev-input", undefined);
+		const generation = this.session.sessionGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		this.#devObservationUnsubscribe = observeSpecDrivenController(this.sessionManager, observation => {
+			if (generation !== this.session.sessionGeneration || sessionId !== this.sessionManager.getSessionId()) return;
+			// 释放流程不等于退出开发输入模式；完成或取消后文字仍归草稿。
+			if (
+				(observation.released && observation.interaction.mode === "chat") ||
+				observation.disposed ||
+				observation.cwd !== this.sessionManager.getCwd()
+			) {
+				this.setHookWidget("native-dev-input", undefined);
+				return;
+			}
+			const { interaction, status } = observation;
+			if (interaction.mode === "dev") {
+				const recipient = interaction.recipient;
+				const destination = observation.released
+					? "当前流程已结束，尚无可接收消息的阶段 Agent，输入保留为草稿"
+					: status.paused
+						? `已暂停：${interaction.blockedReason ?? status.blockedReason ?? "输入仅保留草稿，恢复不自动发送"}`
+						: recipient
+							? `${recipient.role} · ${recipient.actorId} · ${recipient.sessionId}`
+							: (interaction.blockedReason ?? "未启动或当前阶段 Agent 尚未准备好，输入保留为草稿");
+				this.setHookWidget("native-dev-input", [`协同开发模式 → ${destination} · /dev help`]);
+			} else {
+				this.setHookWidget(
+					"native-dev-input",
+					observation.runId
+						? [
+								`后台协同开发：${status.phase}${status.paused ? "（暂停）" : ""}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
+							]
+						: undefined,
+				);
+			}
+		});
+	}
+
+	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void {
+		assertDevModeActivationAllowed(this.session, mode);
+		if (mode !== "dev") return;
+		if (this.planModeEnabled || this.planModePaused) throw new Error("请先退出 Plan 模式。");
+		if (this.goalModeEnabled || this.goalModePaused || this.#guidedGoalInterviewActive)
+			throw new Error("请先退出 Goal 模式。");
+		if (this.vibeModeEnabled || this.#vibeModeEntry) throw new Error("请先退出 Vibe 模式。");
+	}
+
+	async handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean> {
+		const controller = peekSpecDrivenController(this.sessionManager);
+		const command = parseSlashCommand(text);
+		if (controller?.inputMode() !== "dev" && command?.name !== "dev") return false;
+		const generation = this.session.sessionGeneration;
+		const sessionId = this.sessionManager.getSessionId();
+		const cwd = this.sessionManager.getCwd();
+		const current = () =>
+			generation === this.session.sessionGeneration &&
+			sessionId === this.sessionManager.getSessionId() &&
+			cwd === this.sessionManager.getCwd() &&
+			!this.isShuttingDown;
+		// Detach only the submitted input before a dialog or native enqueue can yield.
+		// New typing and attachments belong to the next submission, even on failure.
+		if (this.editor.getExpandedText() === text) this.editor.clearDraft();
+		if (input?.images?.every((image, index) => this.editor.pendingImages[index] === image)) {
+			this.editor.pendingImages.splice(0, input.images.length);
+			this.editor.pendingImageLinks.splice(0, input.images.length);
+			this.editor.imageLinks = this.editor.pendingImageLinks.length ? this.editor.pendingImageLinks : undefined;
+		}
+		try {
+			if (text.startsWith("/") && !command) throw new Error("未知命令，请使用 /dev help。");
+			if (command) {
+				assertDevCommandAllowed(this.session, command.name, command.args);
+				const result = await executeBuiltinSlashCommand(text, { ctx: this, input, draftDetached: true });
+				if (result !== true && current()) throw new Error("此命令需要普通聊天模式，请先输入 /dev 返回普通聊天。");
+			} else if (text.trim() || input?.images?.length) {
+				if (input?.images?.length) throw new Error("协同开发消息目前仅支持文字，附件已保留。");
+				if (!controller || !current()) return true;
+				const receipt = await controller.submitText(text);
+				if (current()) {
+					if (receipt.kind === "draft") restoreDetachedDraft(this.editor, text);
+					this.showStatus(
+						receipt.kind === "draft"
+							? "已保留协同开发草稿；启动或恢复后请再次提交，不会自动发送。"
+							: `已排队，尚未被 Agent 接收：${receipt.messageId}`,
+					);
+				}
+			}
+		} catch (error) {
+			if (current()) {
+				restoreDetachedDraft(this.editor, text, input?.images, input?.imageLinks);
+				this.showError(error instanceof Error ? error.message : String(error));
+			}
+		}
 		return true;
 	}
 
@@ -5280,6 +5390,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Reconcile mode state from session entries on resume/switch. */
 	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
+		this.#bindDevObservation();
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
 		this.#vibeScopeSuspendedForSwitch = false;
 		this.#guidedGoalInterviewActive = false;
@@ -5417,6 +5528,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		workflow?: "parallel" | "iterative";
 		preserveRestoredModel?: boolean;
 	}): Promise<void> {
+		this.assertCanActivateMode("plan");
 		if (this.planModeEnabled) {
 			return;
 		}
@@ -6385,6 +6497,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		this.assertCanActivateMode("plan");
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -6462,6 +6575,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		this.assertCanActivateMode("vibe");
 		if (this.vibeModeEnabled) {
 			await this.#exitVibeMode();
 			return false;
@@ -6576,6 +6690,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #enterVibeMode(options?: { persistModeChange?: boolean; previousTools?: string[] }): Promise<void> {
+		this.assertCanActivateMode("vibe");
 		if (this.vibeModeEnabled) {
 			return;
 		}
@@ -6699,6 +6814,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
+		this.assertCanActivateMode("goal");
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -6743,6 +6859,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
+		this.assertCanActivateMode("goal");
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
@@ -7518,6 +7635,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
+		this.#devObservationUnsubscribe?.();
+		this.#devObservationUnsubscribe = undefined;
+		this.setHookWidget("native-dev-input", undefined);
 		this.#hidePlanReview();
 		this.#appearanceRefreshRequest = undefined;
 		// Settle any pending approval prompt as dismissed (deny). The
@@ -7593,6 +7713,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async shutdown(): Promise<void> {
+		this.#devObservationUnsubscribe?.();
+		this.#devObservationUnsubscribe = undefined;
 		if (this.#isShuttingDown) return;
 		// The previous graceful teardown failed AT the memoized session.dispose()
 		// (the session is already disposing), so it re-rejects identically forever
@@ -9166,8 +9288,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController.hideHookSelector();
 	}
 
-	showHookInput(title: string, placeholder?: string): Promise<string | undefined> {
-		return this.#extensionUiController.showHookInput(title, placeholder);
+	showHookInput(
+		title: string,
+		placeholder?: string,
+		dialogOptions?: ExtensionUIDialogOptions,
+	): Promise<string | undefined> {
+		return this.#extensionUiController.showHookInput(title, placeholder, dialogOptions);
 	}
 
 	hideHookInput(): void {

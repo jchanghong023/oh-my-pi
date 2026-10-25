@@ -11,6 +11,8 @@ import { ModelRegistry } from "../../config/model-registry";
 import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
 import { TeamConfigError, TeamConfigService } from "../../team/config";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
+import { peekSpecDrivenController } from "../../spec-driven/controller";
+import { assertDevCommandAllowed } from "../../slash-commands/builtin-spec-driven";
 import { ZCodeCommandHost, workspaceCatalog } from "./commands";
 import { ZCodeCatalogs, zcodeSkillsManageParamsSchema, type ZCodeCatalogOptions } from "./catalogs";
 import { ZCodeQueries } from "./queries";
@@ -683,6 +685,7 @@ export class ZCodeServer {
 		};
 		this.#hosted.set(record.id, hosted);
 		this.specDriven.attach(record, () => {
+			projection.setSpecDrivenInteraction(this.specDriven.interaction(record.id));
 			void this.specDriven
 				.runs(record.id)
 				.then(runs => {
@@ -729,6 +732,7 @@ export class ZCodeServer {
 		await this.workflows.reconcileParentOwnership(record.id);
 		projection.setWorkflowState(await this.workflows.projection(record.id));
 		projection.setSpecDrivenRuns(await this.specDriven.runs(record.id));
+		projection.setSpecDrivenInteraction(this.specDriven.interaction(record.id));
 		if (this.#closed) throw new ZCodeProtocolError(-32000, "Owner disconnected");
 		commands.interactions.setAutoResolutionEnabled(
 			this.configuration.getWorkspacePreferences(record.cwd).askUserQuestionAutoResolutionEnabled,
@@ -1246,6 +1250,12 @@ export class ZCodeServer {
 		hosted.projection.acceptModelSelection(selection);
 		hosted.projection.refresh();
 	}
+	#devInput(hosted: HostedSession, text: string): boolean {
+		return (
+			parseSlashCommand(text)?.name === "dev" ||
+			peekSpecDrivenController(hosted.record.session.sessionManager)?.inputMode() === "dev"
+		);
+	}
 	async #input(
 		hosted: HostedSession,
 		text: string,
@@ -1259,6 +1269,19 @@ export class ZCodeServer {
 		} = {},
 		execution?: ZCodeExecutionSubmission,
 	): Promise<P.CommandResult | undefined> {
+		// Native development admission precedes outer-session queues, stop, references and model dispatch.
+		if (this.#devInput(hosted, text)) {
+			if (attachments?.length || execution)
+				throw new ZCodeProtocolError(
+					-32602,
+					"Development input accepts original text without outer execution material",
+				);
+			options.validateBeforeDispatch?.(text);
+			const receipt = await hosted.commands.dispatch(text, { ...options, inputId, sourceCommand });
+			void receipt.completion.catch(error => process.stderr.write(`${String(error)}\n`));
+			hosted.projection.setSpecDrivenInteraction(this.specDriven.interaction(hosted.record.id));
+			return { type: "inputAccepted", inputId, delivery: "startNow" };
+		}
 		await this.#applySubagentRuntimeConfig(hosted.record);
 		// 原生 parser 同时支持 /tan work 与 /tan:work；必须早于父会话 stop/admission。
 		if (parseSlashCommand(text)?.name === "tan") {
@@ -1377,6 +1400,8 @@ export class ZCodeServer {
 			}
 			if (envelope.type === "startSavedWorkflow") {
 				if (!envelope.sessionId) throw new ZCodeProtocolError(-32602, "Workflow command requires sessionId");
+				const live = this.manager.get(envelope.sessionId);
+				if (live) assertDevCommandAllowed(live.session, "startSavedWorkflow");
 				const params = P.commandPayloadSchemas.startSavedWorkflow.parse(payload);
 				const cwd = this.manager.get(envelope.sessionId)?.cwd ?? (await this.manager.read(envelope.sessionId)).cwd;
 				workflowPreparation = await this.workflows.prepareSaved({ cwd, ...params });
@@ -1500,6 +1525,17 @@ export class ZCodeServer {
 				}
 			} else {
 				if (!hosted) throw new ZCodeProtocolError(-32602, "Command requires sessionId");
+				if (
+					[
+						"switchCollaborationMode",
+						"resumeWorkflowRun",
+						"retryTurn",
+						"editUserQuery",
+						"forkAssistant",
+						"sendQueuedNow",
+					].includes(envelope.type)
+				)
+					assertDevCommandAllowed(hosted.record.session, envelope.type);
 				switch (envelope.type) {
 					case "sendText":
 					case "sendGoalCommand": {
@@ -1511,10 +1547,15 @@ export class ZCodeServer {
 								input.specRun,
 							);
 						const tanControl = envelope.type === "sendText" && parseSlashCommand(input.text)?.name === "tan";
-						if (!tanControl && input.modelSelection && !input.modelExecution)
+						const devControl = this.#devInput(
+							hosted,
+							envelope.type === "sendGoalCommand" ? `/goal set ${input.text}` : input.text,
+						);
+						if (!tanControl && !devControl && input.modelSelection && !input.modelExecution)
 							await this.#model(hosted, input.modelSelection);
 						const target = hosted;
-						const held = !tanControl && hosted.projection.snapshot().inputRouting.mode === "choice";
+						const held =
+							!tanControl && !devControl && hosted.projection.snapshot().inputRouting.mode === "choice";
 						// held 会话仍必带 disposition;但 keepQueueAndSend 语义是「保留队列并直接
 						// 发送」,无 CAS 需要——Host(zcodeTaskServiceAdapter)固定只发 keepQueueAndSend
 						// 且不带 expectedHeldQueueItemIds,此前的双全硬校验会把 choice 会话的派发
@@ -1930,6 +1971,14 @@ export class ZCodeServer {
 					message: error.message,
 					revisionAtDecision: revision,
 				};
+			if (error && typeof error === "object" && "code" in error && error.code === "invalid_params")
+				return {
+					commandId: envelope.commandId,
+					status: "rejected",
+					reasonCode: "fault.command.invalid",
+					message: error instanceof Error ? error.message : String(error),
+					revisionAtDecision: revision,
+				};
 			return {
 				commandId: envelope.commandId,
 				status: "failed",
@@ -2217,6 +2266,7 @@ export class ZCodeServer {
 				const result = await this.workflows.listRuns(params.sessionId, params);
 				const native = params.includeSpecDriven ? await this.specDriven.runs(params.sessionId) : [];
 				return P.v4ConversationWorkflowRunsResultSchema.parse({
+					...(params.includeSpecDriven ? { dev: this.specDriven.interaction(params.sessionId) } : {}),
 					runs: [
 						...result.runs,
 						...native.map(row => ({
@@ -2523,6 +2573,7 @@ export class ZCodeServer {
 			case "session/setMode": {
 				const params = L.zcodeSessionSetModeParamsSchema.parse(raw);
 				const hosted = await this.#active(params.sessionId);
+				assertDevCommandAllowed(hosted.record.session, "switchCollaborationMode");
 				const requestedMode = params.mode;
 				if (requestedMode === "auto")
 					throw new ZCodeProtocolError(-32602, "Auto mode is reserved but not implemented yet", {

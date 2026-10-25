@@ -240,7 +240,7 @@ export async function persistNestedPatches(
 			// leave a truncated file behind, and `force: true` makes removing
 			// a never-created path a no-op.
 			saved.push(destination);
-			await Bun.write(destination, nestedPatch.patch);
+			await fs.writeFile(destination, nestedPatch.patch, "utf8");
 		}
 	} catch (error) {
 		await Promise.all(saved.map(file => fs.rm(file, { force: true }).catch(() => undefined)));
@@ -275,7 +275,8 @@ async function writeIsolationPatch(
 ): Promise<IsolationPatchCapture> {
 	const delta = await captureDeltaPatch(isolationDir, baseline);
 	const patchPath = path.join(artifactsDir, `${agentId}.patch`);
-	await Bun.write(patchPath, delta.rootPatch);
+	// Windows session artifact paths can exceed MAX_PATH; match the native session's long-path-safe Node IO.
+	await fs.writeFile(patchPath, delta.rootPatch, "utf8");
 	const nestedPatchPaths = await persistNestedPatches(artifactsDir, agentId, delta.nestedPatches);
 	return {
 		artifacts: {
@@ -796,7 +797,7 @@ export async function mergeIsolatedChanges(opts: IsolationMergeOptions): Promise
 			changesApplied = false;
 			hadAnyChanges = false;
 		} else {
-			const patchText = await Bun.file(result.patchPath).text();
+			const patchText = await fs.readFile(result.patchPath, "utf8");
 			if (!patchText.trim()) {
 				changesApplied = true;
 				hadAnyChanges = false;

@@ -15,6 +15,7 @@ import { AgentStorage } from "../../src/session/agent-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import type { CustomToolContext } from "../../src/extensibility/custom-tools/types";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 import { assertSpecOwnedPath, createSpecExecutionTools } from "../../src/spec-driven/execution-tools";
 import { SpecEvidenceService } from "../../src/spec-driven/evidence";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
@@ -450,7 +451,10 @@ async function runtimeGit(cwd: string, ...args: string[]): Promise<string> {
 	return output.trimEnd();
 }
 
-async function runtimeConsumer(workspaces: readonly string[] = ["."]) {
+async function runtimeConsumer(
+	workspaces: readonly string[] = ["."],
+	providerOptions?: Parameters<typeof createProviderFixture>[0],
+) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-runtime-consumer-"));
 	roots.push(cwd);
 	const agentDir = path.join(cwd, ".isolated-agent");
@@ -466,7 +470,7 @@ async function runtimeConsumer(workspaces: readonly string[] = ["."]) {
 	await runtimeGit(cwd, "config", "core.hooksPath", path.join(cwd, "disabled-hooks"));
 	await runtimeGit(cwd, "add", ".gitignore", ...workspaces.map(workspace => path.join(workspace, "prerequisite.txt")));
 	await runtimeGit(cwd, "commit", "-m", "runtime fixture baseline");
-	const provider = createProviderFixture();
+	const provider = createProviderFixture(providerOptions);
 	const authStorage = await AuthStorage.create(":memory:");
 	let session: AgentSession | undefined;
 	let runtime: SpecDrivenRuntime | undefined;
@@ -491,6 +495,11 @@ async function runtimeConsumer(workspaces: readonly string[] = ["."]) {
 			"compaction.enabled": false,
 			"prewalk.enabled": false,
 			"tools.xdev": false,
+			// Match the native Provider workflow: await the parallel batch's real
+			// results, and advertise isolation so its requested flag reaches admission.
+			"async.enabled": false,
+			"task.batch": true,
+			"task.isolation.enabled": true,
 		});
 		const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
 		const model = registry.find("spec-fixture", "chat-a");
@@ -516,7 +525,7 @@ async function runtimeConsumer(workspaces: readonly string[] = ["."]) {
 			bindProcessState: false,
 		}));
 		runtime = await createSpecDrivenRuntime({ session, settings, cwd });
-		return { cwd, runtime, provider, [Symbol.asyncDispose]: dispose };
+		return { cwd, runtime, provider, session, [Symbol.asyncDispose]: dispose };
 	} catch (error) {
 		await dispose();
 		throw error;
@@ -812,5 +821,245 @@ test("runtime persists post-archive failure and retries from moved actual origin
 	expect((await ports.artifacts.readPlan(input.context)).version).toBe(input.plan.artifactVersion);
 	expect(existsSync(retired)).toBe(false);
 	expect(await fs.readdir(archiveRoot)).toEqual(archives);
+	expect(consumer.provider.failures).toEqual([]);
+}, 600_000);
+
+test("stage dialogue retains real producers across rounds and solution feedback sees completed Team candidates", async () => {
+	await using consumer = await runtimeConsumer();
+	const orchestrator = new SpecDrivenOrchestrator(consumer.runtime.ports, consumer.runtime.options);
+	const first = await orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "retained-dialogue");
+	expect(first.phase, first.blockedReason).toBe("awaiting-specification");
+	const requirements = orchestrator.recipient()!;
+	expect(requirements.role).toBe("requirements");
+	const outerMessages = consumer.session.messages.length;
+	for (const [index, text] of ["Explain the current requirement.", "Continue without approving anything."].entries()) {
+		const reply = await orchestrator.converse(
+			text,
+			`requirements-${index}`,
+			requirements,
+			new AbortController().signal,
+		);
+		expect(reply.text.length).toBeGreaterThan(0);
+		expect(orchestrator.recipient()).toEqual(requirements);
+		expect(orchestrator.status().phase).toBe("awaiting-specification");
+		expect(orchestrator.status().specificationApproval).toBeUndefined();
+	}
+	const discussed = await orchestrator.confirmSpecification(first.specification!.version);
+	expect(discussed.phase, discussed.blockedReason).toBe("awaiting-choice");
+	const solution = orchestrator.recipient()!;
+	expect(solution.role).toBe("solution");
+	expect(solution.actorId).not.toBe(requirements.actorId);
+	expect(solution.sessionId).not.toBe(requirements.sessionId);
+	const requestStart = consumer.provider.requests.length;
+	for (const [index, text] of ["Explain the reviewed candidates.", "Explain their remaining conditions."].entries()) {
+		await orchestrator.converse(text, `solution-${index}`, solution, new AbortController().signal);
+		expect(orchestrator.recipient()).toEqual(solution);
+		expect(orchestrator.status().phase).toBe("awaiting-choice");
+		expect(orchestrator.status().selection).toBeUndefined();
+	}
+	const requests = consumer.provider.requests
+		.slice(requestStart)
+		.filter(request => rolePayload(request)?.input.kind === "conversation");
+	expect(requests.length).toBeGreaterThanOrEqual(2);
+	for (const request of requests) {
+		const current = rolePayload(request)!.input.status as SpecDrivenStatus;
+		expect(current.team).toEqual(discussed.team);
+		expect(current.specificationApproval).toBe(discussed.specification!.version);
+		expect(current.team!.candidates.some(candidate => candidate.adoptable && candidate.reviewSucceeded)).toBe(true);
+	}
+	const secondRound = requests.find(request => rolePayload(request)?.input.messageId === "solution-1")!;
+	const conversationUsers = secondRound.messages
+		.filter(message => message.role === "user")
+		.map(message => contentText(message.content));
+	expect(conversationUsers.some(text => text.includes('"messageId":"solution-0"'))).toBe(true);
+	expect(conversationUsers.some(text => text.includes('"messageId":"requirements-0"'))).toBe(false);
+	const candidate = discussed.team!.candidates.find(candidate => candidate.adoptable)!;
+	const planned = await orchestrator.chooseCandidate(discussed.team!.runId, candidate.id, candidate.version);
+	expect(planned.phase, planned.blockedReason).toBe("awaiting-plan");
+	const planner = orchestrator.recipient()!;
+	expect(planner.role).toBe("planner");
+	expect(planner.actorId).not.toBe(solution.actorId);
+	for (const [index, text] of ["Explain the approved scope.", "Continue discussing, do not implement."].entries()) {
+		await orchestrator.converse(text, `planner-${index}`, planner, new AbortController().signal);
+		expect(orchestrator.recipient()).toEqual(planner);
+		expect(orchestrator.status().phase).toBe("awaiting-plan");
+		expect(orchestrator.status().planApproval).toBeUndefined();
+	}
+	expect(existsSync(path.join(consumer.cwd, "src/greeting.ts"))).toBe(false);
+	expect(consumer.session.messages.length).toBe(outerMessages);
+	expect(consumer.provider.failures).toEqual([]);
+}, 600_000);
+
+test("awaiting-acceptance feedback denies writes and writable descendants until explicit scoped repair", async () => {
+	const attempts = [
+		{
+			name: "write",
+			args: {
+				i: "Attempting unauthorized feedback mutation",
+				path: "src/greeting.ts",
+				content: "unauthorized feedback\n",
+			},
+		},
+		{
+			name: "edit",
+			args: {
+				i: "Attempting unauthorized feedback edit",
+				path: "src/greeting.ts",
+				old_string: "export",
+				new_string: "unauthorized",
+			},
+		},
+		{ name: "spec_task", args: { action: "start", taskId: "T001" } },
+		{
+			name: "task",
+			args: {
+				context: "Read-only acceptance feedback",
+				tasks: [
+					{
+						name: "T001FeedbackWriter",
+						task: "OMP_DEV_FORBIDDEN_FEEDBACK_CHILD: write src/greeting.ts",
+						solutionSpace: "one forbidden target mutation",
+					},
+				],
+			},
+		},
+	];
+	const turns = new Map<string, number>();
+	await using consumer = await runtimeConsumer(["."], {
+		dialogue(request, input) {
+			const id = String(input.messageId);
+			const index = turns.get(id) ?? 0;
+			turns.set(id, index + 1);
+			const attempt = attempts[index];
+			if (attempt) {
+				const name = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === attempt.name)?.function
+					?.name;
+				if (!name) throw new Error(`Retained executor is missing native ${attempt.name} tool`);
+				return { tool: { name, args: attempt.args } };
+			}
+			return {
+				text: JSON.stringify({ text: "Feedback investigated; explicit repair remains required for changes." }),
+			};
+		},
+	});
+	const orchestrator = new SpecDrivenOrchestrator(consumer.runtime.ports, consumer.runtime.options);
+	const specified = await orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "readonly-feedback");
+	expect(specified.phase, specified.blockedReason).toBe("awaiting-specification");
+	const discussed = await orchestrator.confirmSpecification(specified.specification!.version);
+	expect(discussed.phase, discussed.blockedReason).toBe("awaiting-choice");
+	const candidate = discussed.team!.candidates.find(candidate => candidate.adoptable)!;
+	const planned = await orchestrator.chooseCandidate(discussed.team!.runId, candidate.id, candidate.version);
+	expect(planned.phase, planned.blockedReason).toBe("awaiting-plan");
+	const delivered = await orchestrator.confirmPlan(planned.plan!.version);
+	const deliveryDiagnostic =
+		delivered.phase === "awaiting-acceptance"
+			? delivered.blockedReason
+			: JSON.stringify({
+					blockedReason: delivered.blockedReason,
+					providerFailures: consumer.provider.failures.slice(-3).map(failure => failure.slice(0, 4_000)),
+					recentRequests: consumer.provider.requests.slice(-3).map(request => ({
+						role: rolePayload(request)?.specDrivenRole,
+						input: JSON.stringify(rolePayload(request)?.input ?? null).slice(0, 2_000),
+						messages: request.messages.slice(-8).map(message => ({
+							role: message.role,
+							toolCallId: message.tool_call_id,
+							toolCalls: JSON.stringify(message.tool_calls ?? []).slice(0, 3_000),
+							content: contentText(message.content).slice(0, 3_000),
+						})),
+					})),
+					executorResults: AgentRegistry.global()
+						.list()
+						.filter(
+							ref =>
+								ref.id.startsWith("spec-executor-") && ref.session?.sessionManager.getCwd() === consumer.cwd,
+						)
+						.slice(-2)
+						.map(ref => ({
+							id: ref.id,
+							messages: ref.session?.messages.slice(-4).map(message => JSON.stringify(message).slice(0, 4_000)),
+						})),
+				});
+	expect(delivered.phase, deliveryDiagnostic).toBe("awaiting-acceptance");
+	expect(delivered.tasks.every(task => task.status === "completed")).toBe(true);
+	const executor = orchestrator.recipient()!;
+	const target = path.join(consumer.cwd, "src/greeting.ts");
+	const original = await fs.readFile(target, "utf8");
+	const head = await runtimeGit(consumer.cwd, "rev-parse", "HEAD");
+	const oldEvidence = delivered.tasks.flatMap(task => task.records.map(record => record.artifact.path));
+	expect(oldEvidence.length).toBeGreaterThan(0);
+	const feedback = async (id: string) => {
+		const boundary = consumer.provider.requests.length;
+		await orchestrator.converse(
+			"Explain the result, and try these unauthorized changes.",
+			id,
+			executor,
+			new AbortController().signal,
+		);
+		expect(turns.get(id)).toBe(attempts.length + 1);
+		const requests = consumer.provider.requests.slice(boundary);
+		const final = requests.findLast(request => rolePayload(request)?.input.messageId === id)!;
+		const correlatedResults = final.messages.filter(message => message.role === "tool").slice(-attempts.length);
+		expect(correlatedResults).toHaveLength(attempts.length);
+		for (const result of correlatedResults)
+			expect(contentText(result.content)).toContain("Execution stage ownership has ended");
+		expect(
+			requests.some(request =>
+				request.messages.some(
+					message =>
+						message.role === "user" &&
+						contentText(message.content).includes("OMP_DEV_FORBIDDEN_FEEDBACK_CHILD") &&
+						rolePayload(request)?.specDrivenRole !== "executor",
+				),
+			),
+		).toBe(false);
+		expect(orchestrator.recipient()).toEqual(executor);
+		expect(orchestrator.status().phase).toBe("awaiting-acceptance");
+		await expect(
+			consumer.runtime.ports.git.commit(
+				{ task: delivered.plan!.tasks[0]!, changedPaths: ["src/greeting.ts"], revision: 1 },
+				{
+					runId: orchestrator.runId,
+					generation: orchestrator.status().generation,
+					signal: new AbortController().signal,
+				},
+			),
+		).rejects.toThrow("Execution stage ownership has ended");
+	};
+	await feedback("feedback-before-repair");
+	expect(await fs.readFile(target, "utf8")).toBe(original);
+	expect(await runtimeGit(consumer.cwd, "rev-parse", "HEAD")).toBe(head);
+	expect(orchestrator.status().acceptanceVersion).toBe(delivered.acceptanceVersion);
+	const requestsBeforeStale = consumer.provider.requests.length;
+	await expect(
+		orchestrator.repair("stale-acceptance-token", "Fix the approved greeting implementation."),
+	).rejects.toThrow();
+	expect(consumer.provider.requests.length).toBe(requestsBeforeStale);
+	expect(await fs.readFile(target, "utf8")).toBe(original);
+	const repairing = orchestrator.repair(
+		delivered.acceptanceVersion!,
+		"Apply an in-scope greeting correction without changing the approved interface.",
+	);
+	expect(orchestrator.status().acceptanceVersion).toBeUndefined();
+	expect(orchestrator.status().finalApproval).toBeUndefined();
+	const repaired = await repairing;
+	expect(repaired.phase, repaired.blockedReason).toBe("awaiting-acceptance");
+	expect(repaired.acceptanceVersion).not.toBe(delivered.acceptanceVersion);
+	expect(repaired.specificationApproval).toBe(delivered.specificationApproval);
+	expect(repaired.selection).toEqual(delivered.selection);
+	expect(repaired.planApproval).toBe(delivered.planApproval);
+	expect(repaired.plan).toEqual(delivered.plan);
+	expect(repaired.solution).toEqual(delivered.solution);
+	expect(repaired.tasks.every(task => task.status === "completed")).toBe(true);
+	expect(orchestrator.recipient()).toEqual(executor);
+	const corrected = await fs.readFile(target, "utf8");
+	expect(corrected).not.toBe(original);
+	expect(corrected).toContain("export function greet");
+	expect(corrected).not.toContain("unauthorized");
+	expect(await fs.readFile(path.join(consumer.cwd, "prerequisite.txt"), "utf8")).toBe("approved prerequisite\n");
+	for (const artifact of oldEvidence) expect((await fs.readFile(artifact, "utf8")).length).toBeGreaterThan(0);
+	await expect(orchestrator.accept(delivered.acceptanceVersion!)).rejects.toThrow();
+	await feedback("feedback-after-repair");
+	expect(await fs.readFile(target, "utf8")).toBe(corrected);
+	expect(orchestrator.status().acceptanceVersion).toBe(repaired.acceptanceVersion);
 	expect(consumer.provider.failures).toEqual([]);
 }, 600_000);

@@ -111,6 +111,7 @@ async function createHarness(factory: ExtensionFactory) {
 		clearEditor: () => editor.clearDraft(),
 		withLocalSubmission: async <T>(_text: string, submit: () => Promise<T>) => submit(),
 		isGuidedGoalInterviewActive: () => false,
+		handleDevInput: async () => false,
 	} as unknown as InteractiveModeContext;
 	const helpers = new UiHelpers(ctx);
 	ctx.queueCompactionMessage = (text, mode, images, options) =>

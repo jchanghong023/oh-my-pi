@@ -316,7 +316,7 @@ function adaptOpenSpecEntries(entries: Record<string, Uint8Array>, commands: Ups
 			);
 			return adaptOpenSpecCommandReferences(
 				workflow.module === "verify-change" ? body : `${requirementsAdaptation.common.trim()}\n\n${body}`,
-			).replaceAll("/opsx:", "/opsx-");
+			).replaceAll("/opsx:", "/skill:opsx-");
 		};
 		const command = {
 			...originalCommand,
@@ -595,19 +595,20 @@ async function embed(): Promise<void> {
 	}
 	skills.push({ source: "jch", name: "jch-grill-me", path: "jch/skills/jch-grill-me/SKILL.md" });
 	const methods = embedMethods(entries, executable);
-	const commandEntries: SpecDrivenResourceManifest["commands"][number][] = [];
 	for (const [index, command] of adaptOpenSpecEntries(entries, commands).entries()) {
 		if (!command.content || !command.description) throw new Error("Invalid pinned upstream command template");
 		const name = `opsx-${requirementsWorkflows[index]![0]}`;
-		const relative = `openspec/commands/${name}.md`;
+		const relative = `openspec/skills/${name}/SKILL.md`;
 		const body = command.content.replace(
 			/\[\[opsx:if-workflow ([a-z-]+)\]\]([\s\S]*?)\[\[opsx:else\]\]([\s\S]*?)\[\[opsx:end\]\]/g,
 			(_match, id: string, installed: string, missing: string) =>
 				requirementsWorkflows.some(([workflow]) => workflow === id) ? installed : missing,
 		);
 		if (body.includes("[[opsx:")) throw new Error(`Unresolved OpenSpec command conditional: ${name}`);
-		entries[relative] = Buffer.from(body);
-		commandEntries.push({ name, path: relative });
+		entries[relative] = Buffer.from(
+			`---\n${stringifyYaml({ name, description: command.description, "disable-model-invocation": true })}---\n\n${body}`,
+		);
+		skills.push({ source: "openspec", name, path: relative });
 	}
 	for (const name of superpowersSkills) {
 		const relative = `superpowers/skills/${name}/SKILL.md`;
@@ -662,7 +663,6 @@ async function embed(): Promise<void> {
 		superpowers: { version: superpowersVersion, revision },
 		jch: { revision: jchRevision },
 		methods,
-		commands: commandEntries,
 		skills,
 		files: Object.keys(entries)
 			.sort()
@@ -687,9 +687,7 @@ async function embed(): Promise<void> {
 	await fs.rm(templateRunner);
 	// Staging must not expose upstream examples to the package TypeScript source graph.
 	await fs.rm(staging, { recursive: true, force: true });
-	console.log(
-		`Embedded ${manifest.files.length} complete files, ${skills.length} skills, ${commandEntries.length} commands; archive SHA256 ${sha}`,
-	);
+	console.log(`Embedded ${manifest.files.length} complete files, ${skills.length} skills; archive SHA256 ${sha}`);
 }
 
 if (import.meta.main) {

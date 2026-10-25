@@ -48,10 +48,37 @@ function details(): OmpSpecDetails {
 			{
 				id: "confirm-plan",
 				label: "Confirm plan",
-				command: "/spec confirm-plan native-token",
+				command: "/dev confirm-plan native-token",
 				binding: { runId: "native-run", generation: 2 },
 			},
 		],
+		interaction: {
+			mode: "dev",
+			draft: "Retained paused draft",
+			recipient: { role: "planner", actorId: "planner-actor", sessionId: "planner-session" },
+			messages: [
+				{
+					id: "native-message",
+					text: "Explain task ordering without implementation.",
+					runId: "native-run",
+					generation: 2,
+					phase: "awaiting-plan",
+					role: "planner",
+					actorId: "planner-actor",
+					sessionId: "planner-session",
+					status: "completed",
+					reply: "The dependency is preserved; explicit approval is still required.",
+				},
+			],
+			actions: [
+				{
+					id: "confirm-plan",
+					label: "Approve plan and begin execution",
+					command: "/dev confirm-plan native-token",
+					available: true,
+				},
+			],
+		},
 		materials: [
 			{
 				id: "plan",
@@ -72,7 +99,7 @@ function complete(wire: RoutedTopicWireFrame) {
 	return wire.frame;
 }
 
-describe("local opt-in /spec protocol", () => {
+describe("local opt-in /dev protocol", () => {
 	it("preserves default query shapes and validates explicit opt-in and sendText bindings", () => {
 		const query = { sessionId: "s" };
 		expect(v4ConversationWorkflowRunsParamsSchema.parse(query)).toEqual(
@@ -101,7 +128,7 @@ describe("local opt-in /spec protocol", () => {
 		expect(zcodeWorkflowsRunsParamsSchema.safeParse({ ...workspaceQuery, includeSpecDriven: "true" }).success).toBe(
 			false,
 		);
-		const payload = { text: "/spec confirm-plan native-token", specRun: { runId: "native-run", generation: 2 } };
+		const payload = { text: "/dev confirm-plan native-token", specRun: { runId: "native-run", generation: 2 } };
 		expect(commandPayloadSchemas.sendText.parse(payload)).toEqual(payload);
 		const parsed = parseCommandEnvelope({
 			commandId: "command",
@@ -134,6 +161,43 @@ describe("local opt-in /spec protocol", () => {
 		expect(ompSpecDetailsSchema.parse({ ...details(), live: false, readOnly: true, actions: [] }).actions).toEqual(
 			[],
 		);
+	});
+	it("preserves full actor-bound messages and distinct cancellation states without granting transition authority", () => {
+		const current = details();
+		const message = current.interaction!.messages[0]!;
+		for (const status of ["queued", "processing", "cancelling", "cancelled", "completed", "failed"] as const) {
+			const interaction = {
+				...current.interaction!,
+				messages: [{ ...message, status }],
+				actions: [
+					{
+						id: "confirm-plan",
+						label: "Approve plan and begin execution",
+						command: "/dev confirm-plan native-token",
+						available: false,
+						blockedReason: "A stage message has not settled.",
+					},
+				],
+			};
+			const result = ompSpecDetailsSchema.parse({ ...current, interaction });
+			expect(result.interaction).toEqual(interaction);
+			expect(baseline.workflowRunSchema.safeParse({ ...run(), spec: result }).success).toBe(false);
+		}
+		expect(
+			ompSpecDetailsSchema.safeParse({
+				...current,
+				interaction: { ...current.interaction!, messages: [{ ...message, status: "stopped" }] },
+			}).success,
+		).toBe(false);
+		expect(
+			ompSpecDetailsSchema.safeParse({
+				...current,
+				interaction: {
+					...current.interaction!,
+					recipient: { role: "outer", actorId: "fifth", sessionId: "ordinary" },
+				},
+			}).success,
+		).toBe(false);
 	});
 
 	it("keeps real native artifact versions beyond sixteen without changing byte-read identity or bounds", () => {
@@ -312,7 +376,7 @@ describe("local opt-in /spec protocol", () => {
 	);
 
 	it.each(["desktop-continuous", "web-remote-replayable"] as const)(
-		"isolates /spec metadata per %s subscription across snapshot, delta and replay",
+		"isolates /dev metadata per %s subscription across snapshot, delta and replay",
 		clientMode => {
 			const snapshot = new ZCodeProjection({ sessionId: "s", cwd: "/work" }).snapshot();
 			const dynamic = {

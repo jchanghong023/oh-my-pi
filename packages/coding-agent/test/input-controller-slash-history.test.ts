@@ -69,6 +69,7 @@ function makeCtx(isStreaming = false, messages: AgentMessage[] = []) {
 		locallySubmittedUserSignatures,
 		flushPendingBashComponents: vi.fn(),
 		handleHotkeysCommand: vi.fn(),
+		handleDevInput: async () => false,
 		handleMCPCommand,
 		showStatus: vi.fn(),
 		onInputCallback,

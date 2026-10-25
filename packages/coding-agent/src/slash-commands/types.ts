@@ -61,7 +61,13 @@ export interface ParsedSlashCommand {
  */
 export type SlashCommandResult =
 	| undefined
-	| { consumed: true; agentInvoked?: boolean; failed?: boolean }
+	| {
+			consumed: true;
+			agentInvoked?: boolean;
+			failed?: boolean;
+			/** Preserve pre-admission rejection separately from failures after execution begins. */
+			errorCode?: "invalid_params" | "execution_failed";
+	  }
 	| { prompt: string; goalAutoOrchestrateInitialId?: string };
 
 /**
@@ -81,9 +87,11 @@ export interface SlashCommandRuntime {
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */
-	ui?: Pick<ExtensionUIContext, "select" | "confirm">;
+	ui?: Pick<ExtensionUIContext, "select" | "confirm"> & Partial<Pick<ExtensionUIContext, "input">>;
 	/** Host model-selection policy. */
 	setModel?: (model: Model) => Promise<void>;
+	/** Check host-owned pending/paused mode conflicts before activation without changing either mode. */
+	assertCanActivateMode?: (mode: "dev" | "plan" | "goal" | "vibe") => void;
 	/** Host session-transition lifecycle; falls back to the session outside adapted hosts. */
 	newSession?: (options?: NewSessionOptions) => Promise<boolean>;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */

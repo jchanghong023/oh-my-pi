@@ -102,7 +102,7 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 | `/repo`                        | 建立、更新代码定位索引                               |
 | `/team 需求`                   | 多代理独立调查、交叉审查并汇总方案，只读             |
 | `/goal-autopilot 目标`          | 持久目标、自动编排与无人值守要求，见第 4.7 节         |
-| `/spec start 变更名 需求`       | 主动启用需求、方案、计划、执行四职责流程，见第 4.8 节 |
+| `/dev` / `/dev help`           | 切换协同开发输入模式 / 打开操作界面，见第 4.8 节    |
 | `/advisor on` / `/advisor off` | 开启 / 关闭第二模型复审，默认逐轮，频率可配置        |
 | `/skill:技能名 任务`           | 调用本地技能，从补全中选择技能名                     |
 | `/todo` / `/hub`               | 查看待办进度 / 子代理活动                            |
@@ -404,56 +404,54 @@ OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目�
 
 OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](requirements/goal-autopilot.md)，实现与验收边界见[需求目录](requirements/README.md)。
 
-### 4.8 `/spec`：主动启用规格驱动四职责流程
+### 4.8 `/dev`：协同开发模式
 
-适合需要明确需求、比较方案和独立审查的重要任务；普通对话不会自动进入此流程。在项目目录启动 OMP 后，在 **OMP 输入框**使用：
+适合需要明确需求、比较方案和独立审查的重要任务。在 **OMP 输入框**输入无参数 `/dev`，即可在普通聊天与协同开发输入模式之间切换：程序直接报告状态，不调用模型，也不打开菜单。`/dev help` 只打开操作界面，不切换模式；“开始新流程”收集变更名和需求，明确启动前的普通文字只保存为需求草稿。也可以直接使用：
 
 ```text
-/spec start login-timeout 明确登录超时行为，保留现有权限检查，并通过实际入口验收
-/spec status
-/spec answer 对当前澄清问题的完整回答
+/dev start login-timeout 明确登录超时行为，保留现有权限检查，并通过实际入口验收
+/dev status
 ```
 
-`start` 的第一个参数是本次变更名，后面是需求正文。后台节点完成后，程序展示材料、阻塞原因及**带实际 ID／版本的完整下一步命令**。阅读材料后复制对应命令；以下尖括号只是参数说明，不可原样发送：
+输入区持续显示当前模式、消息去向或等待原因。切回普通聊天、关闭操作窗口均不停止开发流程，后台仍有紧凑状态提示。协同开发输入模式与外层 Plan／Goal／Vibe 互斥，需先退出冲突模式；这不限制执行 Agent 自己使用可选 `--goal`。
+
+**直接与当前阶段对话**：需求、方案、计划、执行各有独立 Agent 和上下文；协同开发模式下普通文字自动交给当前阶段，不要求 `/dev answer` 前缀，也不经过外层聊天模型。需求澄清按轮给出编号问题、推荐答案及理由，可按题号回答或接受本轮全部推荐；“全部是”不等于批准需求或后续阶段。待批准材料可自然语言要求解释、修订，修订后重新审查和更新版本；改变已批准上游约定仍须明确修改操作。
+
+Agent 忙碌时，消息绑定当前运行、阶段及实际 Agent 排队；“已排队”不表示已接收，旧消息不会转交后继阶段。有待处理、处理中或取消中的消息时不能转换阶段。用 `/dev cancel-message <message-id>` 或对应操作取消指定消息，不会取消整个流程；处理中消息必须实际停止处理及自有后代、隔离迟到结果后才显示“已取消”。取消不回滚已落盘内容，材料与版本仍须重新核对。
+
+操作窗口、回复下方提示与 ZCode 协议共用程序生成的动作，提供**带齐当前 ID／版本的完整命令**及阻塞原因，不必手抄参数。只有明确命令或等价界面操作才能转换阶段；普通文字中的“继续”“可以”“同意”及 Agent 自报完成都不构成批准。以下尖括号仅为参数说明，不可原样发送：
 
 | 决策 | 命令与授权边界 |
 | --- | --- |
-| 确认当前需求书 | `/spec confirm-spec <spec-version>`：确认需求书及同版本规格材料，完成需求→方案的原生 handoff 后进入方案比较，不授权实施 |
-| 选择当前候选 | `/spec choose <run-id> <candidate-id> <candidate-version>`：保存选定方案，完成方案→计划的原生 handoff 后只授权编写计划 |
-| 批准计划并启动 | `/spec confirm-plan <plan-version> [--goal]`：默认普通执行，显式添加 `--goal` 才使用可选原生 Goal；完成计划→执行的原生 handoff 后启动，同时授权获批工作区内本任务相关改动的**本地 commit**及既定任务工作区集成，不包含用户无关改动 |
-| 最终用户验收 | `/spec accept <acceptance-version>`：在当前内容的必需验证与整体审查通过后确认；随后仅执行已获授权的规格同步、归档 |
+| 确认需求并进入方案 | `/dev confirm-spec <spec-version>`：确认当前需求及同版本规格材料，完成原生 handoff 后进入方案比较，不授权实施 |
+| 选择此方案并编写计划 | `/dev choose <run-id> <candidate-id> <candidate-version>`：保存选定方案，完成 handoff 后只授权编写计划 |
+| 批准计划并开始执行 | `/dev confirm-plan <plan-version> [--goal]`：默认普通执行，显式 `--goal` 才选择执行 Agent 的原生 Goal；完成 handoff 后授权获批范围内实现、本任务**本地 commit**及既定任务工作区集成，不包含用户无关改动 |
+| 最终验收当前交付 | `/dev accept <acceptance-version>`：当前必需验证与整体审查通过后确认，随后仅执行已授权的规格同步、归档 |
+| 返回执行并修复 | `/dev repair <acceptance-version> <修复说明...>`：只接受当前待验收版本，先撤销旧验收资格，再恢复获批范围内执行；重新验证、审查后生成新验收版本 |
 
-批准绑定当前有效版本，旧命令不能用来批准新材料。需求、方案、计划、执行各有独立职责：需求节点实际加载包内 `jch-grill-me`（Grill-me）技能的受控访谈分支，结合 Brainstorming 澄清需求，按决策依赖分轮给出编号问题、推荐答案和理由；方案节点复用 Team 比较候选并忠实保存用户选择；计划节点根据已确认需求和选定方案编写唯一计划；执行主代理在批准后自主细化、实现或通过原生子代理委派和并行，组织验证、独立审查及修复。前三个节点及独立审查者不能改业务代码、运行任意命令或提交；文档通过限定产物入口写入，不能借上游技能越权。需求、计划、任务和整体结果各有独立审查，任务勾选、模型自报或已有提交都不等于验证通过。普通执行与可选 Goal 均不增加逐任务确认，也不扩大授权；两者完成执行后都等待最终用户验收，Goal 完成不等于自动同步归档。
+**待验收不是继续写代码的授权**：执行 Agent 可分析反馈、解释及只读调查，程序关闭目标工作区写入、提交和可写子代理派发权限；普通反馈不会恢复写权限。需要修复时选择“返回执行并修复”并填写说明，或使用上表命令。旧版本操作、错误归属及未结清消息均会被拒绝；新增需求或改变上游约定不能借 `repair` 绕过重新批准。
 
-模型名单复用 `/team` 的 `team.members`，不另设名单。审查优先使用与作者不同的模型；没有不同模型时明确标注“同模型独立分析”，使用新的独立上下文，不冒称多模型。未配置名单时沿用当前模型回退；显式模型／Provider 无效、缺少证据、必需验证失败或缺工具时停住，不静默换模型或伪造通过。此流程不授权 push、merge、发布、PR 或改写历史。
+四职责仍按原门禁工作：需求节点加载包内 `jch-grill-me` 的受控访谈分支并结合 Brainstorming；方案节点复用 Team 比较候选；计划节点编写唯一计划；执行主代理自主实现、委派、验证和独立审查，不增加逐任务确认。前三个节点及独立审查者不能改业务代码、运行任意命令或提交。模型名单复用 `/team`；没有不同模型时标明“同模型独立分析”。显式模型／Provider 无效、证据缺失、必需验证失败或缺工具时停住，不静默换模型或伪造通过。流程不授权 push、merge、发布、PR 或改写历史。
 
-调整和运行控制同样在输入框使用：
+调整需求用 `/dev amend <修改后的需求和验收标准...>`，重新比较核心方案用 `/dev change-solution <原因...>`；它们撤销受影响的下游批准，但保留材料与代码。`/dev pause` 暂停后不派发后续工作，文字只留作可编辑草稿；`/dev resume` 只恢复当前存活运行，**不会自动发送草稿**，需用户再次提交。`/dev cancel` 停止当前工作并保留文件，不删除或回滚工作区。
 
-```text
-/spec amend 修改后的需求和验收标准
-/spec change-solution 需要重新比较核心方案的原因
-/spec pause
-/spec resume
-/spec cancel
-```
+状态仅属于当前进程内仍存活的原生会话；切换／释放会话、改变工作目录或退出进程后，不承诺续接。材料、提交和聊天记录不是可恢复的控制器检查点，重新打开历史也不恢复旧批准。
 
-需求或核心方案变化会撤销受影响的下游批准，但保留已有材料与代码，不自动重置工作区。暂停后不再派发后续节点；继续不重复仍有效的已完成工作。控制状态只保存在**当前进程内仍存活的原生会话**中；同一会话的宿主共享控制器。切换或释放原生会话、变更其工作目录或退出进程后，不承诺续接原运行；即使文档、提交和聊天记录仍在，重新打开历史也不能恢复原批准和调度进度。取消不等于删除或回滚文件。
-
-正式需求书、选定方案书和唯一计划分别保存为 `<change-dir>/requirements.md`、`<change-dir>/solution.md`、`<change-dir>/plan.md`，默认变更目录为 `openspec/changes/<change-id>/`，不再生成竞争性的 `design`、`tasks` 或第二份计划。需求→方案、方案→计划、计划→执行三次转换均在用户确认对应产物后真实调用上一节点会话的原生 handoff，将原始返回正文分别保存到变更目录的 `handoffs/requirements-to-solution.md`、`handoffs/solution-to-plan.md`、`handoffs/plan-to-execution.md`；交接失败或版本失效时不启动下一节点，交接也不继承上一节点权限。项目已有 Markdown 需求目录时，原目录仍是唯一权威；收尾只按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
+默认变更目录为 `openspec/changes/<change-id>/`：需求材料沿用 OpenSpec 的 `proposal.md` 和 `specs/`，选定 Team 候选原文保存在项目本地运行记录的方案 JSON 中；唯一计划沿用 `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`，不另建竞争性的需求书、方案书、`design`、`tasks` 或第二份计划。三次原生 handoff 的原始正文分别保存到变更目录的 `handoffs/requirements-to-solution.md`、`handoffs/solution-to-plan.md`、`handoffs/plan-to-execution.md`；交接失败或版本失效时不启动下一节点，也不继承上一节点权限。项目已有 Markdown 需求目录时，原目录仍是唯一权威；收尾只按目标文件、完整标题路径、原文定位和基准摘要提出经独立审查、批准的精确补丁，应用前再次核对来源，不整块覆盖非原生文档。
 
 ### 4.9 OpenSpec：独立需求闭环
 
-这是 OMP 内置的 OpenSpec fork，和 `/spec` 是两个独立功能。它不要求 `/spec` 的运行、批准、方案、计划或回写接口；可以只确认需求、同步正式需求并归档，暂不实施代码。
+这是 OMP 内置的 OpenSpec fork，和 `/dev` 是两个独立功能。它不要求 `/dev` 的运行、批准、方案、计划或回写接口；可以只确认需求、同步正式需求并归档，暂不实施代码。
 
-在 OMP 输入框使用 `/opsx-explore [问题]`、`/opsx-propose [需求]`、`/opsx-update [变更名及修改要求]`、`/opsx-sync [变更名]`、`/opsx-archive [变更名]`、`/opsx-verify [变更名]` 六项命令。新建需求用 `/opsx-propose`；修订或继续补齐已有变更用 `/opsx-update`，不再提供 new／continue 逐产物命令。命令开箱可用，无需先运行 `init` 安装模板；新项目确需建立 OpenSpec 变更目录时，再按明确请求初始化项目。同步是将已确认的增量需求合入唯一正式需求书：原生项目更新 `openspec/specs/`，已有 Markdown 权威目录则定位原文并应用最小补丁，不另建一份主规格。归档通过原生校验及归档引擎结束变更记录，失败时保留变更；同步和归档都不等于代码已实现或验收通过。运行中或暂停的 `/spec` 不允许借独立命令绕过其门禁。终端仍可运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等真实 CLI。Superpowers 是另外的独立技能能力，例如 `/skill:writing-plans 按已确认需求编写计划`；OpenSpec 不以其计划为前提。
+在 OMP 输入框手动调用 `/skill:opsx-explore [问题]`、`/skill:opsx-propose [需求]`、`/skill:opsx-update [变更名及修改要求]`、`/skill:opsx-sync [变更名]`、`/skill:opsx-archive [变更名]`、`/skill:opsx-verify [变更名]` 六项内置技能。它们不会自动触发，不提供 `/opsx-*` 内置命令或命令模板。新建需求用 propose，修订或补齐已有变更用 update；无需先运行 `init` 安装技能。同步将已确认增量合入唯一正式需求书：原生项目更新 `openspec/specs/`，已有 Markdown 权威目录则定位原文并最小修改，不另建主规格。归档使用原生校验与归档引擎，失败时保留变更；同步与归档不等于实现或验收通过。运行中或暂停的 `/dev` 不允许借独立技能绕过门禁。终端仍可运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等 CLI；OpenSpec 不以 Superpowers 计划为前提。
 
-mini 版初始化只需 `omp openspec init`（可指定目标路径及 `--language <语言>`），只建立规格目录和配置；不使用 `--tools none`，也不选择或安装 Claude Code 等外部工具适配。命令模板由 OMP 内置，无需执行原生工具安装用的 `update`；该入口及旧 `experimental` 别名已移除，需求修订仍用 `/opsx-update`。
+mini 版初始化只需 `omp openspec init`（可指定目标路径及 `--language <语言>`），只建立规格目录和配置；不使用 `--tools none`，也不选择或安装 Claude Code 等外部工具适配。技能由 OMP 内置，无需执行原生工具安装用的 `update`；该入口及旧 `experimental` 别名已移除，需求修订仍用 `/skill:opsx-update`。
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器；本流程不新增 GUI 页面、协议或工作流设计器，后续 GUI 接入也不能另立审批规则。
+包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器，ZCode 通过显式协商的既有协议扩展读取材料与操作事实；不另建独立 wire 协议、执行／批准状态机、GUI 页面或工作流设计器，后续 GUI 接入也不能另立审批规则。
 
-此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。状态中的实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单；本地模拟模型验证编排也不代表真实模型任务质量已验收。完整门禁与验收条件见[规格驱动编排需求](requirements/spec-driven-orchestration.md)。Windows 源码和编译产物的公开入口、Electron／ZCode 场景、两仓相应门禁及 Computer Use 真实窗口操作均已有通过证据，范围见[需求目录](requirements/README.md)；桌面对话仍使用隔离 localhost 模拟模型，不代表真实模型质量、计费或其他平台已验收。
+此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](requirements/spec-driven-orchestration.md)，各项证据边界见[需求目录](requirements/README.md)。
 
 ## 5. 直接复制的例子
 

@@ -1,6 +1,6 @@
 # Targeted OpenSpec requirements adaptations
 
-The generator applies these checked replacements to fixed upstream command factory bodies. Unlisted text remains source-derived. OpenSpec is distributed only as builtin `/opsx-*` command prompts; init/update never install OpenSpec skills.
+The generator applies these checked replacements to fixed upstream factory bodies. Unlisted text remains source-derived. OpenSpec is distributed as six builtin `opsx-*` skills with `disable-model-invocation: true`, invoked explicitly through `/skill:opsx-*`; init/update never install project-local skills or command templates.
 
 ```yaml
 common: |

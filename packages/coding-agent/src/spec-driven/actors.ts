@@ -73,8 +73,12 @@ export async function createSpecActor(args: {
 		owned(context);
 		if (busy) throw new Error("Specification producer is busy");
 		busy = true;
+		let abortCompletion: Promise<void> | undefined;
 		const abort = () => {
-			void session.abort();
+			// Keep the cancellation barrier until the native prompt, tools and abort unwind settle.
+			session.asyncJobManager?.cancelAll({ ownerId: id });
+			abortCompletion ??= session.abort();
+			void abortCompletion.catch(() => {});
 		};
 		context.signal.addEventListener("abort", abort, { once: true });
 		try {
@@ -82,8 +86,16 @@ export async function createSpecActor(args: {
 			owned(context);
 			return value;
 		} finally {
-			context.signal.removeEventListener("abort", abort);
-			busy = false;
+			if (context.signal.aborted) abort();
+			try {
+				await session.asyncJobManager?.waitForOwnerJobs(id);
+				await abortCompletion;
+				if (abortCompletion) await session.asyncJobManager?.waitForOwnerJobs(id);
+			} finally {
+				context.signal.removeEventListener("abort", abort);
+				busy = false;
+			}
+			context.signal.throwIfAborted();
 		}
 	};
 	return {

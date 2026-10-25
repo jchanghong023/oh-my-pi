@@ -15,6 +15,8 @@ import type { AgentSession } from "../../session/agent-session";
 import type { MCPManager } from "../../mcp";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
+import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../../slash-commands/builtin-spec-driven";
+import { peekSpecDrivenController } from "../../spec-driven/controller";
 import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { TeamConfigService } from "../../team/config";
 import type { TeamConfigPreviewInput, TeamConfigSaveInput } from "../../team/config-types";
@@ -306,6 +308,12 @@ export class ZCodeCommandHost {
 		fail?: (error: unknown) => void,
 	): Promise<void> {
 		if (this.#disposed) throw new Error("Session command host is closed");
+		// 所有普通模型／Skill 派发共用同一模式门禁，后台继续也不能绕过。
+		assertDevCommandAllowed(
+			this.session,
+			parseSlashCommand(text)?.name ?? "ordinary-agent",
+			parseSlashCommand(text)?.args,
+		);
 		// Skill invocations use the same builder and custom-message business path as native hosts.
 		const invocation = parseSkillInvocation(text);
 		const skill =
@@ -377,7 +385,28 @@ export class ZCodeCommandHost {
 	}
 	async #dispatch(text: string, options: ZCodeDispatchOptions, promoting = false): Promise<ZCodeCommandReceipt> {
 		if (this.#disposed) throw new Error("Session command host is closed");
+		const parsed = parseSlashCommand(text);
+		const native = peekSpecDrivenController(this.session.sessionManager);
+		if (native?.inputMode() === "dev" && !parsed && text.startsWith("/"))
+			throw new Error("协同开发模式拒绝无效命令；请使用 /dev help。");
+		if (native?.inputMode() === "dev" && !parsed) {
+			options.validateBeforeDispatch?.(text);
+			const receipt = await native.submitText(text);
+			await this.#output(
+				receipt.kind === "draft"
+					? "已保留协同开发草稿；尚未交给 Agent。使用 /dev help 查看操作。"
+					: `消息已排队，尚未代表 Agent 已接收：${receipt.messageId}`,
+			);
+			if (options.inputId) await this.options.recordInputAdmission?.(options.inputId, options.sourceCommand);
+			options.onPromptAdmitted?.();
+			return { accepted: true, completion: Promise.resolve() };
+		}
+		if (parsed) assertDevCommandAllowed(this.session, parsed.name, parsed.args);
 		const resolved = await this.#catalog.resolve(text, this.session);
+		if (native?.inputMode() === "dev" && resolved.kind !== "builtin")
+			throw Object.assign(new Error("协同开发模式拒绝未知命令或非本地入口；请先输入 /dev 返回普通聊天。"), {
+				code: "invalid_params",
+			});
 		// /tan 是运行中父会话的独立控制入口；必须先于 TUI-only 判定和 prompt admission。
 		if (resolved.kind === "builtin" && resolved.name === "tan" && this.options.startTan) {
 			const command = parseSlashCommand(text);
@@ -443,9 +472,11 @@ export class ZCodeCommandHost {
 					if (known?.source === "builtin")
 						throw Object.assign(new Error(`Invalid arguments for /${token}`), { code: "invalid_params" });
 				}
-				await this.initialize();
+				// /dev 的模式、草稿、帮助和控制操作不得初始化外层 Agent 或扩展。
+				if (resolved.kind !== "builtin" || resolved.name !== "dev") await this.initialize();
 				if (!current()) throw new DOMException("Command cancelled", "AbortError");
 				options.validateBeforeDispatch?.(text);
+				if (command) assertDevCommandAllowed(this.session, command.name, command.args);
 				if (resolved.kind !== "builtin" || !resolved.spec) {
 					this.#loop.capturePrompt(text);
 					await this.#submit(text, options, admit, rejectAdmission);
@@ -465,6 +496,7 @@ export class ZCodeCommandHost {
 						this.session.refreshRepoLifecycle();
 					},
 					signal: operation.signal,
+					assertCanActivateMode: mode => assertDevModeActivationAllowed(this.session, mode),
 					ui: {
 						select: async (...args) => {
 							const answer = this.interactions.ui.select(...args);
@@ -510,6 +542,8 @@ export class ZCodeCommandHost {
 					},
 					runModeCommand: async (mode, args) => {
 						if (!current()) return;
+						if (mode === "plan" || mode === "goal" || mode === "goal-autopilot")
+							assertDevModeActivationAllowed(this.session, mode === "plan" ? "plan" : "goal");
 						if (mode === "plan") return this.#plan.handle(args, operation.signal);
 						if (mode === "loop") {
 							const result = await this.#loop.handle(args);
@@ -525,7 +559,9 @@ export class ZCodeCommandHost {
 					: await resolved.spec.handle?.(command, runtime);
 				// usage() 已输出原生诊断并标记 failed；不能把 consumed 误记为执行成功。
 				if (result && "failed" in result && result.failed) {
-					throw Object.assign(new Error(lastOutput ?? `/${resolved.name} failed`), { code: "execution_failed" });
+					throw Object.assign(new Error(lastOutput ?? `/${resolved.name} failed`), {
+						code: result.errorCode ?? "execution_failed",
+					});
 				}
 				if (current() && result && "prompt" in result) {
 					this.#loop.capturePrompt(result.prompt);
@@ -613,7 +649,9 @@ export class ZCodeCommandHost {
 		return this.#run(async () => {
 			if (this.#disposed) throw new Error("Session command host is closed");
 			signal?.throwIfAborted();
+			if (enabled) assertDevModeActivationAllowed(this.session, "plan");
 			await this.initialize();
+			if (enabled) assertDevModeActivationAllowed(this.session, "plan");
 			const paused = this.session.sessionManager.buildSessionContext().mode === "plan_paused";
 			if (!!this.session.getPlanModeState()?.enabled === enabled && !paused) return;
 			await this.#plan.handle("", signal, atInputBoundary);

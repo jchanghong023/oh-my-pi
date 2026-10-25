@@ -454,6 +454,9 @@ export class ZCodeProjection {
 				}
 			: undefined;
 	}
+	setSpecDrivenInteraction(dev: StatePatch["dev"]): void {
+		if (dev !== undefined) this.setState({ dev });
+	}
 	setSpecDrivenRuns(runs: OmpSpecRun[]): void {
 		this.#specRuns = runs.slice(0, WORKFLOW_RUNS_LIMITS.maxRuns);
 		this.setWorkflowState(this.#workflowState);

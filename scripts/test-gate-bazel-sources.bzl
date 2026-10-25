@@ -528,6 +528,7 @@ def _sources_impl(ctx):
     seen = {}
     mounts = {}
     projections = {}
+    source_directories = {}
     boundaries = {}
     # Fine groups form a separate native filegroup graph: no implicit package,
     # shared, crate or installed closure is added to these explicit inputs.
@@ -576,6 +577,13 @@ def _sources_impl(ctx):
             if relative in required:
                 fail("Required input group source is not a file: " + relative)
             continue
+        # Junctions expose deletions immediately; watch directory membership so
+        # the declared file list follows unstaged removals without watching bytes.
+        directory = source.dirname
+        directory_key = str(directory)
+        if directory_key not in source_directories:
+            ctx.watch(directory)
+            source_directories[directory_key] = True
         if source.is_dir:
             fail("Gate source paths must name files, not a Git submodule directory: " + relative)
         destinations[relative] = _add_source(ctx, relative, source, groups, boundaries, mounts, projections)

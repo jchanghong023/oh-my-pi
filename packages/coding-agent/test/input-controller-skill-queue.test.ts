@@ -66,6 +66,7 @@ function createStubInputControllerContext(opts: {
 	model?: InteractiveModeContext["session"]["model"];
 }) {
 	let editorText = "";
+	const sessionId = crypto.randomUUID();
 	const editor: StubEditor = {
 		setText(text) {
 			editorText = text;
@@ -106,6 +107,8 @@ function createStubInputControllerContext(opts: {
 	const ctx = {
 		editor,
 		ui: { requestRender },
+		sessionManager: { getSessionId: () => sessionId },
+		handleDevInput: async () => false,
 		skillCommands: opts.skillCommands,
 		session: {
 			model: opts.model,

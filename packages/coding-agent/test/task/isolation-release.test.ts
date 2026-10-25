@@ -6,7 +6,7 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import * as executorModule from "@oh-my-pi/pi-coding-agent/task/executor";
-import { runIsolatedSubprocess } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
+import { persistNestedPatches, runIsolatedSubprocess } from "@oh-my-pi/pi-coding-agent/task/isolation-runner";
 import * as worktreeModule from "@oh-my-pi/pi-coding-agent/task/worktree";
 import * as natives from "@oh-my-pi/pi-natives";
 import type { SingleResult } from "@oh-my-pi/pi-tui/tools/task";
@@ -118,5 +118,21 @@ describe("isolated agent release", () => {
 
 	it("commits follow-up work made after the run-end branch", async () => {
 		expect(await commitsAcrossRelease("ReleaseChanged", patch, `${patch}+follow-up\n`)).toBe(2);
+	});
+});
+
+describe("isolated patch artifacts", () => {
+	it("preserves exact patch bytes beyond the Windows MAX_PATH boundary", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-isolation-long-path-"));
+		tempRoots.push(root);
+		const artifactsDir = path.join(root, ...Array.from({ length: 6 }, () => "retained-session-artifacts".repeat(2)));
+		await fs.mkdir(artifactsDir, { recursive: true });
+		const patch = "diff --git a/task.txt b/task.txt\n--- a/task.txt\n+++ b/task.txt\n@@ -1 +1 @@\n-before\n+after\n";
+		const paths = await persistNestedPatches(artifactsDir, "approved-task", [
+			{ relativePath: "nested/repository", patch },
+		]);
+		expect(paths).toHaveLength(1);
+		expect(paths[0]!.length).toBeGreaterThan(260);
+		expect(await fs.readFile(paths[0]!, "utf8")).toBe(patch);
 	});
 });

@@ -28,6 +28,10 @@ import {
 	MARKER,
 	REQUIREMENT,
 	createProviderFixture,
+	contentText,
+	rolePayload,
+	respond,
+	type ModelRequest,
 } from "../spec-driven/provider-fixture";
 
 // The scenario owns one budget including startup, real native actors, Git and cleanup.
@@ -65,7 +69,16 @@ class SpecPeer {
 			},
 		));
 		peers.add(this);
-		this.stderr = new Response(this.child.stderr).text();
+		this.stderr = (async () => {
+			const decoder = new TextDecoder();
+			let text = "";
+			for await (const chunk of child.stderr) {
+				const part = decoder.decode(chunk, { stream: true });
+				text += part;
+			}
+			const part = decoder.decode();
+			return text + part;
+		})();
 		this.pump = (async () => {
 			try {
 				for await (const frame of readJsonl<unknown>(child.stdout)) {
@@ -187,6 +200,24 @@ class SpecPeer {
 			}),
 		).runs;
 	}
+	async interaction(
+		sessionId: string,
+		predicate: (interaction: NonNullable<OmpSpecDetails["interaction"]>) => boolean,
+	) {
+		let cursor = this.frames.length;
+		for (;;) {
+			const result = v4ConversationWorkflowRunsResultSchema.parse(
+				await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
+			);
+			const current = result.dev;
+			if (current && predicate(current)) return current;
+			const event = await this.next(
+				frame => isRecord(frame.params) && frame.params.topic === `conversation/${sessionId}`,
+				cursor,
+			);
+			cursor = this.frames.indexOf(event) + 1;
+		}
+	}
 	async phase(sessionId: string, phase: OmpSpecDetails["phase"], since = 0) {
 		let cursor = since;
 		for (;;) {
@@ -218,6 +249,16 @@ class SpecPeer {
 	}
 }
 
+async function expectRequestError(request: Promise<unknown>, message?: string) {
+	// Bun 1.4.3's async rejection matcher stalls subprocess streams; await I/O before synchronous assertions.
+	const error: unknown = await request.then(
+		() => undefined,
+		error => error,
+	);
+	expect(error).toBeInstanceOf(Error);
+	if (message) expect((error as Error).message).toContain(message);
+}
+
 function workspace(cwd: string) {
 	return { workspacePath: cwd, workspaceKey: cwd };
 }
@@ -233,15 +274,82 @@ function nativeDetails(value: unknown): OmpSpecDetails[] {
 	];
 }
 function action(spec: OmpSpecDetails, verb: string): OmpSpecAction {
-	const found = spec.actions.find(item => (item.command ?? item.commandPrefix ?? "").startsWith(`/spec ${verb}`));
+	const found = spec.actions.find(item => (item.command ?? item.commandPrefix ?? "").startsWith(`/dev ${verb}`));
 	if (!found) throw new Error(`No native ${verb} action in ${JSON.stringify(spec)}`);
 	return found;
 }
 async function execute(peer: SpecPeer, sessionId: string, spec: OmpSpecDetails, verb: string, suffix = "") {
 	const item = action(spec, verb);
-	expect(await peer.send(sessionId, `${item.command ?? item.commandPrefix}${suffix}`, item.binding)).toMatchObject({
-		status: "accepted",
+	const command = `${item.command ?? item.commandPrefix}${suffix}`;
+	const selected = spec.actions.find(candidate => candidate.command === command) ?? item;
+	expect(await peer.send(sessionId, command, selected.binding)).toMatchObject({ status: "accepted" });
+	if (verb === "cancel") await confirmCancellation(peer, sessionId);
+}
+async function confirmCancellation(peer: SpecPeer, sessionId: string) {
+	// Command admission precedes the native UI decision; answer the actual pending confirmation.
+	const confirmation = await peer.subscribe(
+		sessionId,
+		`cancel-confirmation-${crypto.randomUUID()}`,
+		"desktop-continuous",
+	);
+	const frame = await peer.next(
+		frame =>
+			isRecord(frame.params) &&
+			frame.params.subscriptionId === confirmation.subscriptionId &&
+			conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
+		confirmation.since,
+	);
+	const payload = conversationTopicFrameSchema.parse(frame.params).payload;
+	if (payload.kind !== "snapshot") throw new Error("Native confirmation snapshot missing");
+	const pendingConfirmation = payload.snapshot.pendingInteractions.find(
+		interaction =>
+			interaction.payload.kind === "userInput" && interaction.payload.prompt.startsWith("取消协同开发流程\n"),
+	);
+	expect(pendingConfirmation).toBeDefined();
+	expect(
+		commandAckSchema.parse(
+			await peer.request("v4/command", {
+				commandId: crypto.randomUUID(),
+				clientId: "native-spec-consumer",
+				sessionId,
+				type: "resolveInteraction",
+				payload: { interactionId: pendingConfirmation!.interactionId, answer: { optionId: "yes" } },
+				issuedAt: Date.now(),
+			}),
+		),
+	).toMatchObject({ status: "accepted" });
+}
+async function discuss(peer: SpecPeer, sessionId: string, spec: OmpSpecDetails, text: string) {
+	const recipient = spec.interaction?.recipient;
+	expect(recipient).toBeDefined();
+	const before = new Set(spec.interaction?.messages.map(message => message.id));
+	const binding = { runId: spec.actions[0]!.binding.runId, generation: spec.generation };
+	expect(await peer.send(sessionId, text, { ...binding, generation: binding.generation + 1 })).toMatchObject({
+		status: "rejected",
 	});
+	expect(await peer.send(sessionId, text, { ...binding, runId: crypto.randomUUID() })).toMatchObject({
+		status: "rejected",
+	});
+	expect(await peer.send(sessionId, text, spec.actions[0]!.binding)).toMatchObject({ status: "rejected" });
+	expect(await peer.send(sessionId, text, binding)).toMatchObject({ status: "accepted" });
+	const interaction = await peer.interaction(sessionId, current =>
+		current.messages.some(
+			message => !before.has(message.id) && message.text === text && message.status === "completed",
+		),
+	);
+	const message = interaction.messages.findLast(item => !before.has(item.id) && item.text === text)!;
+	expect(message).toMatchObject({
+		role: recipient!.role,
+		actorId: recipient!.actorId,
+		sessionId: recipient!.sessionId,
+		runId: spec.actions[0]!.binding.runId,
+		phase: spec.phase,
+		status: "completed",
+	});
+	expect(message.reply?.length).toBeGreaterThan(0);
+	const row = (await peer.runs(sessionId, message.runId))[0]!;
+	if (!row.spec) throw new Error("Completed dialogue lost its native run");
+	return { ...row, spec: row.spec };
 }
 async function fixture(root: TempDir, baseUrl: string) {
 	const cwd = root.join("project"),
@@ -256,7 +364,7 @@ async function fixture(root: TempDir, baseUrl: string) {
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nasync:\n  enabled: false\ntask:\n  batch: true\n  isolation:\n    enabled: true\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\n",
+		"skillful: false\nmodelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nasync:\n  enabled: false\ntask:\n  batch: true\n  isolation:\n    enabled: true\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,
@@ -349,9 +457,170 @@ async function materialBytes(peer: SpecPeer, sessionId: string, runId: string, s
 	return result;
 }
 
-const startText = `/spec start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`;
+const startText = `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`;
 
 describe("Native spec desktop public-entry acceptance", () => {
+	test(
+		"mode/help and drafts create neither a workflow row nor a model call",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-idle-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new SpecPeer(config.cwd, config.env);
+			await peer.ready();
+			const sessionId = await peer.create(config.cwd);
+			const legacy = await peer.subscribe(sessionId, "legacy-idle", "desktop-continuous", false);
+			for (const profile of ["desktop-continuous", "web-remote-replayable"] as const)
+				await peer.subscribe(sessionId, `idle-${profile}`, profile);
+			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
+			await peer.interaction(sessionId, interaction => interaction.mode === "dev");
+			expect(await peer.send(sessionId, "/spec status")).toMatchObject({ status: "rejected" });
+			expect(await peer.send(sessionId, "/dev help")).toMatchObject({ status: "accepted" });
+			expect(await peer.send(sessionId, "Draft only; do not start any actors.")).toMatchObject({
+				status: "accepted",
+			});
+			const draft = await peer.interaction(sessionId, interaction => interaction.draft.includes("Draft only"));
+			expect(draft).toMatchObject({ mode: "dev", messages: [] });
+			expect(draft.recipient).toBeUndefined();
+			expect(await peer.runs(sessionId)).toEqual([]);
+			expect(provider.requests).toEqual([]);
+			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
+			await peer.interaction(sessionId, interaction => interaction.mode === "chat");
+			const other = await peer.create(config.cwd);
+			const initial = v4ConversationWorkflowRunsResultSchema.parse(
+				await peer.request("v4/conversation/workflowRuns", { sessionId: other, includeSpecDriven: true }),
+			);
+			expect(initial.dev).toBeUndefined();
+			for (const frame of peer.frames.filter(
+				frame => isRecord(frame.params) && frame.params.subscriptionId === legacy.subscriptionId,
+			))
+				Baseline.conversationTopicFrameSchema.parse(frame.params);
+			expect(provider.requests).toEqual([]);
+			await peer.close();
+		},
+		BUDGET,
+	);
+	test(
+		"actor-bound queued and processing cancellation isolate late replies and preserve paused drafts",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-message-");
+			const entered = Promise.withResolvers<ModelRequest>();
+			const aborted = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			await using provider = createProviderFixture({
+				async dialogue(request, input, signal) {
+					if (input.text === "Hold this retained requirements conversation.") {
+						if (request.messages.at(-1)?.role !== "tool") {
+							const read = request.tools?.find(
+								tool => tool.function?.name.replace(/^_/u, "") === "read",
+							)?.function;
+							if (!read) throw new Error("Retained requirements actor lost its read tool");
+							return {
+								tool: { name: read.name, args: { i: "Inspecting isolated baseline", path: "baseline.txt" } },
+							};
+						}
+						entered.resolve(request);
+						if (signal.aborted) aborted.resolve();
+						else signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+						await release.promise;
+					}
+					return respond(request);
+				},
+			});
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new SpecPeer(config.cwd, config.env);
+			try {
+				await peer.ready();
+				const sessionId = await peer.create(config.cwd);
+				const subscriptions = await Promise.all([
+					peer.subscribe(sessionId, "messages-desktop", "desktop-continuous"),
+					peer.subscribe(sessionId, "messages-remote", "web-remote-replayable"),
+				]);
+				expect(await peer.send(sessionId, startText)).toMatchObject({ status: "accepted" });
+				const pending = await peer.phase(sessionId, "awaiting-specification");
+				expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
+				expect(await peer.send(sessionId, "Hold this retained requirements conversation.")).toMatchObject({
+					status: "accepted",
+				});
+				const actual = await entered.promise;
+				expect(rolePayload(actual)?.specDrivenRole).toBe("requirements");
+				expect(contentText(actual.messages.at(-1)?.content)).toContain("Native spec desktop fixture");
+				const processing = await peer.interaction(sessionId, current =>
+					current.messages.some(message => message.status === "processing"),
+				);
+				const first = processing.messages.find(message => message.status === "processing")!;
+				expect(first).toMatchObject({ runId: pending.runId, ...processing.recipient });
+				const queuedText = "This queued text must never reach the Provider.";
+				expect(await peer.send(sessionId, queuedText)).toMatchObject({ status: "accepted" });
+				const queue = await peer.interaction(sessionId, current =>
+					current.messages.some(message => message.text === queuedText && message.status === "queued"),
+				);
+				const second = queue.messages.find(message => message.text === queuedText)!;
+				const confirm = action(pending.spec, "confirm-spec");
+				expect(await peer.send(sessionId, confirm.command!, confirm.binding)).toMatchObject({ status: "rejected" });
+				expect(await peer.send(sessionId, "/dev cancel-message nonexistent-message")).toMatchObject({
+					status: "rejected",
+				});
+				const other = await peer.create(config.cwd);
+				expect(await peer.send(other, `/dev cancel-message ${first.id}`)).toMatchObject({ status: "rejected" });
+				expect(await peer.send(sessionId, `/dev cancel-message ${second.id}`)).toMatchObject({
+					status: "accepted",
+				});
+				await peer.interaction(sessionId, current =>
+					current.messages.some(message => message.id === second.id && message.status === "cancelled"),
+				);
+				expect(await peer.send(sessionId, `/dev cancel-message ${first.id}`)).toMatchObject({ status: "accepted" });
+				await peer.interaction(sessionId, current =>
+					current.messages.some(message => message.id === first.id && message.status === "cancelled"),
+				);
+				await aborted.promise;
+				release.resolve();
+				expect(await peer.send(sessionId, "/dev status")).toMatchObject({ status: "accepted" });
+				const cancelled = await peer.interaction(
+					sessionId,
+					current => current.messages.filter(message => message.status === "cancelled").length === 2,
+				);
+				expect(cancelled.messages.every(message => message.reply === undefined)).toBe(true);
+				expect(provider.requests.some(request => rolePayload(request)?.input.text === queuedText)).toBe(false);
+				expect((await peer.runs(sessionId, pending.runId))[0]?.spec?.phase).toBe("awaiting-specification");
+				for (const subscription of subscriptions) {
+					await peer.next(
+						frame =>
+							isRecord(frame.params) &&
+							frame.params.subscriptionId === subscription.subscriptionId &&
+							nativeDetails(frame).some(
+								spec =>
+									spec.interaction?.messages.some(
+										message => message.id === first.id && message.status === "cancelling",
+									) === true,
+							),
+					);
+				}
+				expect(await peer.send(sessionId, "/dev pause")).toMatchObject({ status: "accepted" });
+				const beforeDraft = provider.requests.length;
+				expect(await peer.send(sessionId, "Paused draft must remain unsent.")).toMatchObject({
+					status: "accepted",
+				});
+				await peer.interaction(sessionId, current => current.draft.includes("Paused draft"));
+				expect(await peer.send(sessionId, "/dev resume")).toMatchObject({ status: "accepted" });
+				await peer.phase(sessionId, "awaiting-specification");
+				expect(provider.requests.length).toBe(beforeDraft);
+				expect(await peer.send(sessionId, "/dev cancel")).toMatchObject({ status: "accepted" });
+				await confirmCancellation(peer, sessionId);
+				await peer.phase(sessionId, "cancelled");
+				const endedInput = v4ConversationWorkflowRunsResultSchema.parse(
+					await peer.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true }),
+				).dev;
+				expect(endedInput).toMatchObject({ mode: "dev", draft: "Paused draft must remain unsent." });
+				expect(endedInput?.recipient).toBeUndefined();
+				expect(provider.failures).toEqual([]);
+				await peer.close();
+			} finally {
+				release.resolve();
+			}
+		},
+		BUDGET,
+	);
 	for (const mode of ["normal", "goal"] as const)
 		test(
 			`${mode}: native actions, real task progress, versioned evidence and readonly cold history`,
@@ -368,19 +637,38 @@ describe("Native spec desktop public-entry acceptance", () => {
 				const continuous = await peer.subscribe(sessionId, "native", "desktop-continuous");
 				const replayable = await peer.subscribe(sessionId, "remote", "web-remote-replayable");
 				expect(await peer.send(sessionId, startText)).toMatchObject({ status: "accepted" });
+				expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
 				const answers = await peer.phase(sessionId, "awaiting-answers");
 				expect(answers.spec.questions).toContain(question);
 				expect(answers.spec.progress).toEqual({ completed: 0, total: 0 });
 				await execute(peer, sessionId, answers.spec, "answer", " Yes; blank names use world.");
-				const specification = await peer.phase(sessionId, "awaiting-specification");
+				let specification = await peer.phase(sessionId, "awaiting-specification");
 				const runId = specification.runId;
 				const original = await materialBytes(peer, sessionId, runId, specification.spec);
 				expect([...original.values()].some(item => item.bytes.toString("utf8").includes(REQUIREMENT))).toBe(true);
+				const oldSpecificationAction = action(specification.spec, "confirm-spec");
+				specification = await discuss(
+					peer,
+					sessionId,
+					specification.spec,
+					"OMP_DEV_REVISE Clarify the unchanged greeting scope.",
+				);
+				expect(specification.spec.phase).toBe("awaiting-specification");
+				expect(specification.spec.versions.specification).not.toBe(
+					oldSpecificationAction.command?.split(" ").at(-1),
+				);
+				expect(
+					await peer.send(sessionId, oldSpecificationAction.command!, oldSpecificationAction.binding),
+				).toMatchObject({ status: "rejected" });
+				const revised = await materialBytes(peer, sessionId, runId, specification.spec);
+				expect(
+					[...revised.values()].some(item => item.bytes.toString("utf8").includes("Revision discussion")),
+				).toBe(true);
 				const requestsBeforeStale = provider.requests.length;
 				expect(
 					await peer.send(
 						sessionId,
-						"/spec confirm-spec obsolete-version",
+						"/dev confirm-spec obsolete-version",
 						action(specification.spec, "confirm-spec").binding,
 					),
 				).toMatchObject({ status: "rejected" });
@@ -393,6 +681,14 @@ describe("Native spec desktop public-entry acceptance", () => {
 						candidate => candidate.adoptable && candidate.reviewSucceeded && candidate.recheckSucceeded,
 					),
 				).toBe(true);
+				const explainedChoice = await discuss(
+					peer,
+					sessionId,
+					choice.spec,
+					"Continue; explain the actual reviewed alternatives before I choose.",
+				);
+				expect(explainedChoice.spec.phase).toBe("awaiting-choice");
+				expect(explainedChoice.spec.candidates).toEqual(choice.spec.candidates);
 				const candidates = await materialBytes(peer, sessionId, runId, choice.spec);
 				for (const candidate of choice.spec.candidates) {
 					expect(candidate.proposal.length).toBeGreaterThan(0);
@@ -407,8 +703,19 @@ describe("Native spec desktop public-entry acceptance", () => {
 					).toBe(true);
 				}
 				await execute(peer, sessionId, choice.spec, "choose");
-				const plan = await peer.phase(sessionId, "awaiting-plan");
+				let plan = await peer.phase(sessionId, "awaiting-plan");
 				expect(plan.spec.selectedCandidate).not.toBeNull();
+				const oldPlanAction = action(plan.spec, "confirm-plan");
+				plan = await discuss(
+					peer,
+					sessionId,
+					plan.spec,
+					"OMP_DEV_REVISE Clarify task ordering without changing approved scope.",
+				);
+				expect(plan.spec.phase).toBe("awaiting-plan");
+				expect(await peer.send(sessionId, oldPlanAction.command!, oldPlanAction.binding)).toMatchObject({
+					status: "rejected",
+				});
 				const state = JSON.parse(
 					await fs.readFile(path.join(config.cwd, ".omp/spec-sessions", runId, "state.json"), "utf8"),
 				);
@@ -506,7 +813,74 @@ describe("Native spec desktop public-entry acceptance", () => {
 					Baseline.conversationTopicFrameSchema.parse(frame.params);
 					expect(nativeDetails(frame)).toEqual([]);
 				}
-				await execute(peer, sessionId, acceptance.spec, "accept");
+				const delivered = await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH));
+				const feedback = await discuss(
+					peer,
+					sessionId,
+					acceptance.spec,
+					"Please inspect the delivered greeting and explain whether repair is needed. Do not change code.",
+				);
+				expect(feedback.spec.phase).toBe("awaiting-acceptance");
+				expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH))).toEqual(delivered);
+				const dialogueRequests = provider.requests.filter(
+					request => rolePayload(request)?.input.kind === "conversation",
+				);
+				expect(new Set(dialogueRequests.map(request => rolePayload(request)?.specDrivenRole))).toEqual(
+					new Set(["requirements", "solution", "planner", "executor"]),
+				);
+				const solutionDiscussion = dialogueRequests.find(
+					request => rolePayload(request)?.specDrivenRole === "solution",
+				)!;
+				expect(JSON.stringify(rolePayload(solutionDiscussion)?.input)).toContain(choice.spec.candidates[0]!.id);
+				const executorInspection = dialogueRequests.findLast(
+					request =>
+						rolePayload(request)?.specDrivenRole === "executor" && request.messages.at(-1)?.role === "tool",
+				);
+				expect(executorInspection).toBeDefined();
+				expect(contentText(executorInspection!.messages.at(-1)?.content)).toContain("name.trim()");
+				const messages = feedback.spec.interaction!.messages.filter(message => message.status === "completed");
+				expect(new Set(messages.map(message => message.actorId)).size).toBe(4);
+				expect(new Set(messages.map(message => message.sessionId)).size).toBe(4);
+				const beforeRepair = provider.requests.length;
+				expect(
+					await peer.send(sessionId, "/dev repair obsolete-version Recheck the existing behavior.", {
+						runId,
+						generation: feedback.spec.generation,
+					}),
+				).toMatchObject({ status: "rejected" });
+				expect(provider.requests.length).toBe(beforeRepair);
+				const repairing = action(feedback.spec, "repair");
+				expect(
+					await peer.send(
+						sessionId,
+						`${repairing.command ?? repairing.commandPrefix} Recheck the existing greeting behavior within its approved scope.`,
+						repairing.binding,
+					),
+				).toMatchObject({ status: "accepted" });
+				expect(
+					await peer.send(
+						sessionId,
+						action(acceptance.spec, "accept").command!,
+						action(acceptance.spec, "accept").binding,
+					),
+				).toMatchObject({ status: "rejected" });
+				await peer.interaction(sessionId, current =>
+					current.actions.some(
+						item =>
+							item.command.startsWith("/dev accept ") &&
+							item.command !== action(acceptance.spec, "accept").command &&
+							item.available,
+					),
+				);
+				const repaired = await peer.phase(sessionId, "awaiting-acceptance");
+				expect(repaired.spec.versions.acceptance).not.toBe(acceptance.spec.versions.acceptance);
+				expect(repaired.spec.versions.specification).toBe(acceptance.spec.versions.specification);
+				expect(repaired.spec.versions.plan).toBe(acceptance.spec.versions.plan);
+				expect(provider.requests.some(request => rolePayload(request)?.input.kind === "repair-scope")).toBe(true);
+				expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH), "utf8")).toContain(
+					"explicit version-bound repair",
+				);
+				await execute(peer, sessionId, repaired.spec, "accept");
 				const completed = await peer.phase(sessionId, "completed");
 				expect(completed.spec.stage).toBe("closure");
 				expect(completed.spec.actions).toEqual([]);
@@ -517,6 +891,9 @@ describe("Native spec desktop public-entry acceptance", () => {
 				await cold.ready();
 				const history = (await cold.runs(sessionId, runId)).find(run => run.runId === runId)!;
 				expect(history.spec).toMatchObject({ live: false, readOnly: true, actions: [], phase: "completed" });
+				expect(history.spec?.interaction?.actions ?? []).toEqual([]);
+				expect(history.spec?.interaction?.recipient).toBeUndefined();
+				expect(history.spec?.interaction?.messages).toEqual(repaired.spec.interaction?.messages);
 				for (const [id, captured] of evidence)
 					expect(await readMaterial(cold, sessionId, runId, id, captured.version)).toEqual(captured.bytes);
 				expect(provider.requests.length).toBe(count);
@@ -554,15 +931,17 @@ describe("Native spec desktop public-entry acceptance", () => {
 			expect(await peer.send(otherWorkspaceSession, approve.command!, approve.binding)).toMatchObject({
 				status: "rejected",
 			});
-			await expect(
+			await expectRequestError(
 				peer.request("v4/conversation/workflowRunArtifacts", { sessionId: otherSession, runId: first.runId }),
-			).rejects.toThrow();
-			await expect(
+				"does not belong",
+			);
+			await expectRequestError(
 				peer.request("v4/conversation/workflowRunArtifacts", {
 					sessionId: otherWorkspaceSession,
 					runId: first.runId,
 				}),
-			).rejects.toThrow();
+				"does not belong",
+			);
 			expect(provider.requests.length).toBe(countBeforeRefusal);
 			expect((await peer.runs(sessionId, first.runId))[0]?.spec?.phase).toBe("awaiting-specification");
 			const wrongWorkspace = zcodeWorkflowsRunsResultSchema.parse(
@@ -614,10 +993,15 @@ describe("Native spec desktop public-entry acceptance", () => {
 				forceSnapshot: true,
 			});
 			const recovered = await peer.next(
-				frame => isRecord(frame.params) && frame.params.subscriptionId === resumed.subscriptionId,
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.subscriptionId === resumed.subscriptionId &&
+					conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
 				resyncSince,
 			);
-			expect(conversationTopicFrameSchema.parse(recovered.params).payload.kind).toBe("snapshot");
+			expect(nativeDetails(recovered).some(spec => spec.sessionId === sessionId && spec.state === "paused")).toBe(
+				true,
+			);
 			await peer.request("v4/conversation/unsubscribe", {
 				topic: resumed.topic,
 				connectionId: resumed.connectionId,
@@ -655,7 +1039,6 @@ describe("Native spec desktop public-entry acceptance", () => {
 			const replacementApproval = action(replacement.spec, "confirm-spec");
 			const replacementBytes = await materialBytes(peer, sessionId, replacement.runId, replacement.spec);
 			const sourceStatePath = path.join(config.cwd, ".omp/spec-sessions", replacement.runId, "state.json");
-			const sourceState = await fs.readFile(sourceStatePath);
 			await peer.request("v4/conversation/unsubscribe", {
 				topic: observer.topic,
 				connectionId: observer.connectionId,
@@ -663,6 +1046,8 @@ describe("Native spec desktop public-entry acceptance", () => {
 			});
 			const beforeRestart = provider.requests.length;
 			await peer.close();
+			// Live-owner shutdown can persist cancellation; only subsequent cold reads must be inert.
+			const sourceState = await fs.readFile(sourceStatePath);
 			await using cold = new SpecPeer(config.cwd, config.env);
 			await cold.ready();
 			const sessionsBefore = await cold.request("session/list", { workspace: workspace(config.cwd) });
@@ -709,9 +1094,9 @@ describe("Native spec desktop public-entry acceptance", () => {
 			expect(missingRun.spec?.materials.some(material => material.readiness === "missing")).toBe(true);
 			const absent = missingRun.spec!.materials.find(material => material.readiness === "missing")!;
 			if (absent.artifactId && absent.version)
-				await expect(
+				await expectRequestError(
 					readMaterial(missing, sessionId, replacement.runId, absent.artifactId, absent.version),
-				).rejects.toThrow();
+				);
 			await missing.close();
 			await fs.mkdir(victim);
 			await using unreadable = new SpecPeer(config.cwd, config.env);
@@ -736,7 +1121,7 @@ describe("Native spec desktop public-entry acceptance", () => {
 			await using peer = new SpecPeer(config.cwd, config.env);
 			await peer.ready();
 			const sessionId = await peer.create(config.cwd);
-			expect(await peer.send(sessionId, `/spec start ${changeId} ${MARKER}: ${REQUIREMENT}`)).toMatchObject({
+			expect(await peer.send(sessionId, `/dev start ${changeId} ${MARKER}: ${REQUIREMENT}`)).toMatchObject({
 				status: "accepted",
 			});
 			const pending = await peer.phase(sessionId, "awaiting-answers");

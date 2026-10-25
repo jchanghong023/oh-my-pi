@@ -1,4 +1,4 @@
-// Local opt-in /spec observation vocabulary; the pinned desktop protocol stays unchanged.
+// Local opt-in /dev observation vocabulary; the pinned desktop protocol stays unchanged.
 import { z } from "zod";
 import * as baseline from "./vendor/zcode-protocol-v4/index";
 import * as legacy from "./vendor/zcode-protocol/index";
@@ -6,7 +6,14 @@ import { createTopicWireFrameSchema } from "./vendor/zcode-protocol-v4/wire";
 
 const id = z.string().min(1);
 const timestamp = z.number().int().nonnegative();
-export const ompSpecRunBindingSchema = z.object({ runId: id, generation: z.number().int().nonnegative() }).strict();
+export const ompSpecRunBindingSchema = z
+	.object({
+		runId: id,
+		generation: z.number().int().nonnegative(),
+		actionId: id.optional(),
+		actionVersion: id.optional(),
+	})
+	.strict();
 export const ompSpecPhaseSchema = z.enum([
 	"idle",
 	"requirements",
@@ -47,18 +54,64 @@ export const ompSpecActionSchema = z
 		label: id,
 		command: z
 			.string()
-			.regex(/^\/spec(?:\s|$)/u)
+			.regex(/^\/dev(?:\s|$)/u)
 			.optional(),
 		commandPrefix: z
 			.string()
-			.regex(/^\/spec(?:\s|$)/u)
+			.regex(/^\/dev(?:\s|$)/u)
 			.optional(),
 		binding: ompSpecRunBindingSchema,
+		available: z.boolean().optional(),
+		blockedReason: z.string().optional(),
+		requiresInput: z.boolean().optional(),
+		version: id.optional(),
 	})
 	.strict()
 	.refine(action => (action.command !== undefined) !== (action.commandPrefix !== undefined), {
 		message: "An action requires exactly one native command or text-input command prefix",
 	});
+const recipientSchema = z
+	.object({
+		role: z.enum(["requirements", "solution", "planner", "executor"]),
+		actorId: id,
+		sessionId: id,
+	})
+	.strict();
+const clarificationSchema = z.object({ id, questions: z.array(z.string()) }).strict();
+const messageSchema = recipientSchema.extend({
+	id,
+	text: z.string(),
+	runId: id,
+	generation: z.number().int().nonnegative(),
+	phase: ompSpecPhaseSchema,
+	status: z.enum(["queued", "processing", "cancelling", "cancelled", "completed", "failed"]),
+	reply: z.string().optional(),
+	error: z.string().optional(),
+	clarificationId: id.optional(),
+});
+const nativeActionSchema = z
+	.object({
+		id,
+		label: id,
+		command: z.string().regex(/^\/dev(?:\s|$)/u),
+		available: z.boolean(),
+		blockedReason: z.string().optional(),
+		requiresInput: z.boolean().optional(),
+		version: id.optional(),
+	})
+	.strict();
+export const ompSpecInteractionSchema = z
+	.object({
+		mode: z.enum(["chat", "dev"]),
+		draft: z.string(),
+		recipient: recipientSchema.optional(),
+		messages: z.array(messageSchema),
+		actions: z.array(nativeActionSchema),
+		blockedReason: z.string().optional(),
+		clarification: clarificationSchema.optional(),
+	})
+	.strict();
+export type OmpSpecInteraction = z.infer<typeof ompSpecInteractionSchema>;
 export const ompSpecMaterialSchema = z
 	.object({
 		id,
@@ -106,9 +159,11 @@ export const ompSpecDetailsSchema = z
 			})
 			.strict(),
 		questions: z.array(z.string()),
+		clarification: clarificationSchema.optional(),
 		candidates: z.array(ompSpecCandidateSchema),
 		selectedCandidate: z.object({ id, version: id }).strict().nullable(),
 		actions: z.array(ompSpecActionSchema),
+		interaction: ompSpecInteractionSchema.optional(),
 		materials: z.array(ompSpecMaterialSchema),
 	})
 	.strict()
@@ -197,7 +252,10 @@ export const workflowRunHeaderPatchSchema = z.union([nativeHeaderSchema.partial(
 export type WorkflowRunHeaderPatch = z.infer<typeof workflowRunHeaderPatchSchema>;
 export const workflowRunHeaderKeySchema = z.enum([...baseline.workflowRunHeaderKeySchema.options, "spec"]);
 export type WorkflowRunHeaderKey = z.infer<typeof workflowRunHeaderKeySchema>;
-export const statePatchSchema = baseline.statePatchSchema.extend({ workflowRuns: workflowRunsStateSchema.optional() });
+export const statePatchSchema = baseline.statePatchSchema.extend({
+	workflowRuns: workflowRunsStateSchema.optional(),
+	dev: ompSpecInteractionSchema.optional(),
+});
 export type StatePatch = z.infer<typeof statePatchSchema>;
 const [
 	appended,
@@ -232,6 +290,7 @@ export type ConversationDelta = z.infer<typeof conversationDeltaSchema>;
 export type WorkflowRunUpdatedDelta = Extract<ConversationDelta, { op: "workflowRun.updated" }>;
 export const conversationSnapshotSchema = baseline.conversationSnapshotSchema.extend({
 	workflowRuns: workflowRunsStateSchema.optional(),
+	dev: ompSpecInteractionSchema.optional(),
 });
 export type ConversationSnapshot = z.infer<typeof conversationSnapshotSchema>;
 
@@ -296,10 +355,14 @@ export function applyConversationDelta(snapshot: ConversationSnapshot, delta: Co
 		return { ...snapshot, workflowRuns: applyWorkflowRunUpdated(snapshot.workflowRuns, delta) };
 	if (delta.op === "workflowRun.removed")
 		return { ...snapshot, workflowRuns: applyWorkflowRunRemoved(snapshot.workflowRuns, delta) };
-	const { workflowRuns, ...base } = snapshot;
+	const { workflowRuns, dev, ...base } = snapshot;
 	const applied = baseline.applyConversationDelta(base, delta);
 	if (applied === base) return snapshot;
-	return workflowRuns === undefined ? applied : { ...applied, workflowRuns };
+	return {
+		...applied,
+		...(workflowRuns === undefined ? {} : { workflowRuns }),
+		...(dev === undefined ? {} : { dev }),
+	};
 }
 
 export function applyConversationDeltas(
@@ -354,6 +417,7 @@ export const v4ConversationWorkflowRunSummarySchema = baseline.v4ConversationWor
 export type V4ConversationWorkflowRunSummary = z.infer<typeof v4ConversationWorkflowRunSummarySchema>;
 export const v4ConversationWorkflowRunsResultSchema = baseline.v4ConversationWorkflowRunsResultSchema.extend({
 	runs: z.array(v4ConversationWorkflowRunSummarySchema),
+	dev: ompSpecInteractionSchema.optional(),
 });
 export type V4ConversationWorkflowRunsResult = z.infer<typeof v4ConversationWorkflowRunsResultSchema>;
 export const zcodeWorkflowsRunsParamsSchema = legacy.zcodeWorkflowsRunsParamsSchema.extend({

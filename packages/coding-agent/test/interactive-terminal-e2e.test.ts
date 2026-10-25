@@ -1,7 +1,8 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -16,6 +17,7 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { peekSpecDrivenController } from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -56,6 +58,8 @@ describe("libkitty end-to-end", () => {
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated(),
 			modelRegistry,
+			// Native /dev requires the root session's real manager; session.dispose owns teardown.
+			ownedAsyncJobManager: new AsyncJobManager({}),
 		});
 		term = new VirtualTerminal(120, 32);
 		const composer = new Composer({ terminal: term });
@@ -63,7 +67,11 @@ describe("libkitty end-to-end", () => {
 	});
 
 	afterEach(async () => {
+		vi.restoreAllMocks();
 		mode?.stop();
+		// Settle fixture-owned input after assertions so its keepalive is disposed.
+		mode?.onInputCallback?.({ text: "", cancelled: true, started: false });
+		await Promise.resolve();
 		await session?.dispose();
 		authStorage?.close();
 		tempDir?.removeSync();
@@ -90,6 +98,271 @@ describe("libkitty end-to-end", () => {
 		const hits = viewport.filter(row => row.includes("hi there omp"));
 		if (hits.length !== 1) dump("viewport after submit", viewport);
 		expect(hits.length).toBe(1);
+	});
+
+	for (const [label, key] of [
+		["Enter", "\r"],
+		["Ctrl+Enter", "\x1b[13;5u"],
+	] as const) {
+		it(`${label} retains unstarted dev text without entering the ordinary model or continuation loop`, async () => {
+			await mode.init({ suppressWelcomeIntro: true });
+			const outerInputs: string[] = [];
+			void mode.getUserInput().then(input => outerInputs.push(input.text));
+			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+			term.sendInput("/dev");
+			term.sendInput("\r");
+			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
+			const controller = peekSpecDrivenController(session.sessionManager);
+			expect(controller?.inputMode()).toBe("dev");
+
+			for (const text of ["new requirement", ".", "c", "继续", "可以", "同意"]) {
+				mode.editor.setText(text);
+				term.sendInput(key);
+				await term.waitForRender(() => controller?.observation().interaction.draft === text);
+				expect(controller?.observation().interaction.draft).toBe(text);
+				expect(controller?.observation().runId).toBeNull();
+				expect(controller?.observation().interaction.messages).toEqual([]);
+				expect(outerInputs).toEqual([]);
+				expect(prompt).not.toHaveBeenCalled();
+				expect(session.agent.state.messages).toEqual([]);
+			}
+
+			controller?.pause();
+			expect(controller?.status().paused).toBe(true);
+			mode.editor.setText("paused requirement");
+			term.sendInput(key);
+			await term.waitForRender(() => controller?.observation().interaction.draft === "paused requirement");
+			expect(controller?.observation().interaction.draft).toBe("paused requirement");
+			expect(controller?.observation().interaction.messages).toEqual([]);
+			expect(prompt).not.toHaveBeenCalled();
+			expect(outerInputs).toEqual([]);
+
+			// This is a persistent composer projection, not only the toggle's
+			// transcript notice: the destination remains after editing and resize.
+			term.resize(110, 30);
+			await term.waitForRender();
+			const viewport = plainRows(term.getViewport()).join("\n");
+			expect(viewport).toContain("协同开发模式 →");
+			expect(mode.editor.getExpandedText()).toBe("paused requirement");
+		});
+
+		it(`${label} rejects unknown and skill commands in dev instead of expanding an outer prompt`, async () => {
+			await mode.init({ suppressWelcomeIntro: true });
+			const outerInputs: string[] = [];
+			void mode.getUserInput().then(input => outerInputs.push(input.text));
+			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+			const customPrompt = vi.spyOn(session, "promptCustomMessage").mockResolvedValue(true);
+			const skillPath = path.join(tempDir.path(), "review-skill.md");
+			await Bun.write(skillPath, "Review the implementation request.\n");
+			mode.skillCommands.set("skill:review", {
+				name: "review",
+				description: "Review the implementation request",
+				filePath: skillPath,
+				baseDir: tempDir.path(),
+				source: "test",
+			});
+			term.sendInput("/dev");
+			term.sendInput("\r");
+			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
+			const controller = peekSpecDrivenController(session.sessionManager);
+			expect(controller?.inputMode()).toBe("dev");
+			const error = vi.spyOn(mode, "showError");
+			const warning = vi.spyOn(mode, "showWarning");
+			for (const text of ["/not-a-real-dev-command", "/skill:review implement this", "/opsx-explore inspect"]) {
+				const notices = error.mock.calls.length + warning.mock.calls.length;
+				mode.editor.setText(text);
+				term.sendInput(key);
+				await term.waitForRender(() => error.mock.calls.length + warning.mock.calls.length > notices);
+				expect(error.mock.calls.length + warning.mock.calls.length).toBeGreaterThan(notices);
+				expect(controller?.observation().interaction.messages).toEqual([]);
+				expect(controller?.observation().interaction.draft).toBe("");
+				expect(outerInputs).toEqual([]);
+				expect(prompt).not.toHaveBeenCalled();
+				expect(customPrompt).not.toHaveBeenCalled();
+			}
+		});
+
+		it(`${label} dispatches dev controls before the ordinary compaction queue`, async () => {
+			await mode.init({ suppressWelcomeIntro: true });
+			const outerInputs: string[] = [];
+			void mode.getUserInput().then(input => outerInputs.push(input.text));
+			term.sendInput("/dev");
+			term.sendInput("\r");
+			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
+			expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).toBe("dev");
+			const controller = peekSpecDrivenController(session.sessionManager);
+			if (!controller) throw new Error("Expected native dev controller");
+			let busy = true;
+			const busyProperties = ["isCompacting", "isStreaming"] as const;
+			const originalDescriptors = busyProperties.map(
+				property => [property, Object.getOwnPropertyDescriptor(session, property)] as const,
+			);
+			try {
+				// Bun cannot spy on accessors. Shadow only this session's admission
+				// boundary without starting model-backed maintenance or replacing /dev.
+				for (const property of busyProperties) {
+					Object.defineProperty(session, property, { configurable: true, get: () => busy });
+				}
+				expect(session.isCompacting).toBe(true);
+				expect(session.isStreaming).toBe(true);
+				const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+				const report = controller.report.bind(controller);
+				let reporting: Promise<void> | undefined;
+				vi.spyOn(controller, "report").mockImplementation(() => {
+					expect(controller.status().paused).toBe(true);
+					expect(session.isCompacting).toBe(true);
+					expect(session.isStreaming).toBe(true);
+					// Pause has been admitted while busy. Release the synthetic state
+					// before real transcript persistence waits for the idle outer agent.
+					busy = false;
+					reporting = report();
+					return reporting;
+				});
+				mode.editor.setText("/dev pause");
+				term.sendInput(key);
+				await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.status().paused === true);
+				expect(peekSpecDrivenController(session.sessionManager)?.status().paused).toBe(true);
+				expect(reporting).toBeDefined();
+				await reporting;
+				mode.editor.setText("/dev");
+				term.sendInput(key);
+				await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "chat");
+				expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).toBe("chat");
+				expect(mode.compactionQueuedMessages).toEqual([]);
+				expect(outerInputs).toEqual([]);
+				expect(prompt).not.toHaveBeenCalled();
+			} finally {
+				for (const [property, descriptor] of originalDescriptors) {
+					if (descriptor) Object.defineProperty(session, property, descriptor);
+					else Reflect.deleteProperty(session, property);
+				}
+			}
+		});
+	}
+
+	for (const changesSession of [false, true]) {
+		it(`a delayed dev submission preserves a newer draft${changesSession ? " across a native session change" : ""}`, async () => {
+			await mode.init({ suppressWelcomeIntro: true });
+			await mode.handleDevInput("/dev");
+			const originalController = peekSpecDrivenController(session.sessionManager);
+			expect(originalController?.inputMode()).toBe("dev");
+			if (!originalController) throw new Error("Expected native dev controller");
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const submit = originalController.submitText.bind(originalController);
+			vi.spyOn(originalController, "submitText").mockImplementation(async text => {
+				entered.resolve();
+				await release.promise;
+				return submit(text);
+			});
+			mode.editor.setText("submitted draft");
+			const submitting = mode.handleDevInput("submitted draft");
+			try {
+				await Promise.race([
+					entered.promise,
+					submitting.then(() => {
+						throw new Error("Dev submission completed without reaching the submitText interception");
+					}),
+				]);
+				if (changesSession) {
+					expect(await session.newSession()).toBe(true);
+					await mode.handleDevInput("/dev");
+					expect(peekSpecDrivenController(session.sessionManager)).not.toBe(originalController);
+				}
+				mode.editor.setText("newer unsent draft");
+			} finally {
+				release.resolve();
+				await submitting;
+			}
+
+			const current = peekSpecDrivenController(session.sessionManager);
+			expect(current?.observation().interaction.draft).toBe(changesSession ? "" : "submitted draft");
+			expect(current?.observation().interaction.messages).toEqual([]);
+			expect(mode.editor.getExpandedText()).toContain("newer unsent draft");
+			expect(session.agent.state.messages).toEqual([]);
+		});
+	}
+
+	it("keeps the released dev draft destination after cancellation and across chat toggles", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		const outerInputs: string[] = [];
+		void mode.getUserInput().then(input => outerInputs.push(input.text));
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		term.sendInput("/dev");
+		term.sendInput("\r");
+		await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
+		const controller = peekSpecDrivenController(session.sessionManager);
+		if (!controller) throw new Error("Expected native dev controller");
+
+		await controller.cancel();
+		expect(controller.observation()).toMatchObject({
+			released: true,
+			disposed: false,
+			runId: null,
+			status: { phase: "cancelled" },
+			interaction: { mode: "dev" },
+		});
+		const viewport = () => plainRows(term.getViewport()).join("\n");
+		await term.waitForRender(() => viewport().includes("协同开发模式 →"));
+		expect(viewport()).toContain("尚无可接收消息的阶段 Agent");
+
+		mode.editor.setText("next requirement after cancellation");
+		term.sendInput("\r");
+		await term.waitForRender(
+			() => controller.observation().interaction.draft === "next requirement after cancellation",
+		);
+		expect(controller.observation().interaction.messages).toEqual([]);
+		expect(controller.observation().interaction.recipient).toBeUndefined();
+		expect(outerInputs).toEqual([]);
+		expect(prompt).not.toHaveBeenCalled();
+		term.resize(110, 30);
+		await term.waitForRender(() => viewport().includes("协同开发模式 →"));
+		expect(mode.editor.getExpandedText()).toBe("next requirement after cancellation");
+
+		mode.editor.setText("/dev");
+		term.sendInput("\r");
+		await term.waitForRender(() => controller.inputMode() === "chat" && !viewport().includes("协同开发模式 →"));
+		expect(peekSpecDrivenController(session.sessionManager)).toBe(controller);
+		expect(viewport()).not.toContain("后台协同开发：");
+
+		mode.editor.setText("/dev");
+		term.sendInput("\r");
+		await term.waitForRender(() => controller.inputMode() === "dev" && viewport().includes("协同开发模式 →"));
+		expect(peekSpecDrivenController(session.sessionManager)).toBe(controller);
+		expect(controller.observation()).toMatchObject({
+			released: true,
+			runId: null,
+			interaction: { draft: "next requirement after cancellation" },
+		});
+		mode.editor.setText("another released draft");
+		term.sendInput("\r");
+		await term.waitForRender(() => controller.observation().interaction.draft === "another released draft");
+		expect(prompt).not.toHaveBeenCalled();
+		expect(outerInputs).toEqual([]);
+		expect(viewport()).toContain("协同开发模式 →");
+
+		await controller.dispose();
+		await term.waitForRender(() => !viewport().includes("协同开发模式 →"));
+	});
+
+	it("keeps dev ownership when ordinary Plan, Goal, and Vibe entrypoints conflict", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		await mode.handleDevInput("/dev");
+		const controller = peekSpecDrivenController(session.sessionManager);
+		expect(controller?.inputMode()).toBe("dev");
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+
+		await expect(mode.handlePlanModeCommand("implement outside dev")).rejects.toThrow();
+		await expect(mode.handleGoalModeCommand("implement outside dev")).rejects.toThrow();
+		await expect(mode.handleGuidedGoalCommand("implement outside dev")).rejects.toThrow();
+		await expect(mode.handleVibeModeCommand("implement outside dev")).rejects.toThrow();
+
+		expect(controller?.inputMode()).toBe("dev");
+		expect(mode.planModeEnabled).toBe(false);
+		expect(mode.goalModeEnabled).toBe(false);
+		expect(mode.vibeModeEnabled).toBe(false);
+		expect(prompt).not.toHaveBeenCalled();
+		expect(controller?.observation().runId).toBeNull();
 	});
 
 	it("keeps the whole buffer clean across non-overflowing width resizes", async () => {

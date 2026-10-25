@@ -43,6 +43,7 @@ type FakeEditor = {
 
 function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 	let editorText = "";
+	const sessionId = crypto.randomUUID();
 	const steer = vi.fn(async (_text: string, _images?: unknown) => {});
 	const prompt = vi.fn(async () => {});
 	const updatePendingMessagesDisplay = vi.fn();
@@ -100,7 +101,11 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 		ui: { requestRender } as unknown as InteractiveModeContext["ui"],
 		session,
 		settings: session.settings,
-		sessionManager: { getSessionName: () => "named-session" } as InteractiveModeContext["sessionManager"],
+		sessionManager: {
+			getSessionId: () => sessionId,
+			getSessionName: () => "named-session",
+		} as InteractiveModeContext["sessionManager"],
+		handleDevInput: async () => false,
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),

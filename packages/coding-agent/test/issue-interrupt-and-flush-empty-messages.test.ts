@@ -49,7 +49,10 @@ function createContext(options?: {
 		get viewSession() {
 			return (this as typeof ctx).session;
 		},
+		sessionManager: { getSessionId: () => "session" },
+		handleDevInput: async () => false,
 		compactionQueuedMessages: [],
+		clearThinkingPreview: vi.fn(),
 		locallySubmittedUserSignatures: new Set<string>(),
 		isBashMode: false,
 		isPythonMode: false,

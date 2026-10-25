@@ -244,6 +244,8 @@ export function createInteractiveModeContext(
 		sessionManager,
 		focusedAgentId: undefined,
 		settings: contextSettings,
+		handleDevInput: async () => false,
+		assertCanActivateMode: () => {},
 		mcpManager: undefined,
 		oauthManualInput: new OAuthManualInputManager(),
 		isInitialized: true,

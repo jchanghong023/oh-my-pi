@@ -164,9 +164,10 @@ interface BazelEvent {
 	id?: {
 		targetCompleted?: { label?: string; configuration?: { id?: string } };
 		testSummary?: { label?: string };
-		actionCompleted?: { primaryOutput?: string };
+		actionCompleted?: { label?: string; primaryOutput?: string };
 		namedSet?: { id?: string };
 	};
+	action?: { success?: boolean };
 	completed?: {
 		success?: boolean;
 		outputGroup?: Array<{ fileSets?: Array<{ id?: string }>; inlineFiles?: BazelOutputFile[] }>;
@@ -836,9 +837,21 @@ export async function runBazelCommands(
 								partial = partial.slice(newline + 1);
 								if (!line.trim()) continue;
 								const event = JSON.parse(line) as BazelEvent;
-								const target = event.id?.targetCompleted?.label;
+								let target = event.id?.targetCompleted?.label;
+								let successful = event.completed?.success === true;
+								const action = event.id?.actionCompleted;
+								// A dependency's target-completion event can trail its successful
+								// primitive action while downstream tests are still running.
+								if (
+									!target &&
+									action?.label &&
+									action.primaryOutput?.endsWith(`/${action.label.slice(3)}.success.json`)
+								) {
+									target = action.label;
+									successful = event.action?.success === true;
+								}
 								if (target && staticTargets.has(target)) {
-									if (event.completed?.success !== true)
+									if (!successful)
 										throw gate.fail(new GateCommandError(`Static Bazel target failed: ${target}`, 1));
 									staticTargets.delete(target);
 									if (staticTargets.size === 0) staticCompletion.resolve();

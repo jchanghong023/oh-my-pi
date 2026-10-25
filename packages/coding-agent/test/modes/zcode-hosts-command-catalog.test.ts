@@ -16,6 +16,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/command-catalog";
 import type { CommandDescriptor } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/types";
 import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
+import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 
 let globalSettingsReady: Promise<unknown> | undefined;
 
@@ -42,30 +43,31 @@ function byName(commands: readonly CommandDescriptor[]): Map<string, CommandDesc
 }
 
 describe("CommandCatalogService", () => {
-	test("offers six OpenSpec commands and rejects removed incremental entrypoints", async () => {
+	test("offers manual OpenSpec skills instead of builtins and rejects removed entrypoints", async () => {
 		const cwd = process.cwd();
 		const service = new CommandCatalogService({ cwd });
+		const visible = ["opsx-explore", "opsx-update", "opsx-propose", "opsx-sync", "opsx-archive", "opsx-verify"];
 		const session = {
 			customCommands: [],
 			setSlashCommands() {},
 			sessionManager: { getCwd: () => cwd },
-			skills: [],
+			skills: await Promise.all(visible.map(name => loadSpecDrivenSkill("openspec", name))),
+			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 		};
 		const catalog = await service.buildCatalog(session);
-		const completion = await service.complete({ text: "/opsx-", cursor: 6, session });
-		const visible = ["opsx-explore", "opsx-update", "opsx-propose", "opsx-sync", "opsx-archive", "opsx-verify"];
+		const completion = await service.complete({ text: "/skill:opsx-", cursor: 12, session });
 		expect(
 			catalog
-				.filter(command => command.name.startsWith("opsx-"))
+				.filter(command => command.source === "skill")
 				.map(command => command.name)
 				.sort(),
-		).toEqual(visible.toSorted());
-		for (const name of ["opsx-new", "opsx-continue"]) {
-			expect(completion.items.some(item => item.label === name || item.label === `/${name}`)).toBe(false);
-			expect(await service.resolve(`/${name} incremental-change`, session)).toMatchObject({
-				kind: "unknown",
-				name,
-			});
+		).toEqual(visible.map(name => `skill:${name}`).toSorted());
+		for (const name of visible) {
+			expect(await service.resolve(`/skill:${name} change-name`, session)).toMatchObject({ kind: "skill" });
+			expect(completion.items.some(item => item.label.includes(name))).toBe(true);
+		}
+		for (const name of [...visible, "opsx-new", "opsx-continue"]) {
+			expect(await service.resolve(`/${name} change-name`, session)).toMatchObject({ kind: "unknown", name });
 		}
 	});
 

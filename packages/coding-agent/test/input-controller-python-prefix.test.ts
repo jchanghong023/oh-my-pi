@@ -18,6 +18,7 @@ type FakeEditor = {
 
 function createContext() {
 	let editorText = "";
+	const sessionId = crypto.randomUUID();
 	const submitted: unknown[] = [];
 	const handlePythonCommand = vi.fn(async (_code: string, _isExcluded: boolean) => {});
 	const handleBashCommand = vi.fn(async (_command: string, _isExcluded: boolean) => {});
@@ -53,7 +54,11 @@ function createContext() {
 			queuedMessageCount: 0,
 			getQueuedMessages: () => ({ steering: [], followUp: [] }),
 		} as unknown as InteractiveModeContext["session"],
-		sessionManager: { getSessionName: () => "named-session" } as unknown as InteractiveModeContext["sessionManager"],
+		sessionManager: {
+			getSessionId: () => sessionId,
+			getSessionName: () => "named-session",
+		} as unknown as InteractiveModeContext["sessionManager"],
+		handleDevInput: async () => false,
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		locallySubmittedUserSignatures: new Set<string>(),
 		onInputCallback,

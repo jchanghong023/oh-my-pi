@@ -2,6 +2,9 @@ import * as crypto from "node:crypto";
 import { parseSpecPlan, parseSpecRequirements, parseSpecReview } from "./schemas";
 import type {
 	SpecCandidate,
+	SpecConversationRecipient,
+	SpecConversationReply,
+	SpecStageRole,
 	SpecDrivenOptions,
 	SpecDrivenPorts,
 	SpecDrivenStatus,
@@ -22,6 +25,10 @@ import type {
 } from "./types";
 
 class StaleRun extends Error {}
+/** Invalid caller identity, state or approval; execution failures keep their original error. */
+export class SpecAdmissionError extends Error {
+	readonly code = "invalid_params";
+}
 const hash = (value: unknown): string => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const substantive = (finding: SpecFinding): boolean => finding.severity !== "minor";
 
@@ -57,6 +64,12 @@ export class SpecDrivenOrchestrator {
 	#preservedTasks = new Map<string, SpecTaskState>();
 	#preservedDependencies = new Map<string, readonly string[]>();
 	#preserving: Promise<void> = Promise.resolve();
+	#dialoguing = false;
+	#repair?: { text: string; taskIds: string[] };
+	// Retain admitted work through failed/interrupted scope analysis; only explicit resume retries it.
+	#pendingRepair?: string;
+	#acceptanceRound = 0;
+	#clarificationRound = 0;
 
 	constructor(ports: SpecDrivenPorts, options: SpecDrivenOptions) {
 		if (!options.currentModel.trim()) throw new Error("A current model is required");
@@ -71,11 +84,188 @@ export class SpecDrivenOrchestrator {
 	}
 
 	status(): SpecDrivenStatus {
-		return structuredClone(this.#state);
+		const state = structuredClone(this.#state);
+		if (state.phase === "awaiting-answers")
+			state.clarification = {
+				id: hash({
+					runId: this.#runId,
+					round: this.#clarificationRound,
+					specification: state.specification?.version,
+					questions: state.questions,
+				}),
+				questions: [...state.questions],
+			};
+		return state;
 	}
 
 	get runId(): string {
 		return this.#runId;
+	}
+
+	currentRole(): SpecStageRole | undefined {
+		const phase = this.#state.phase;
+		if (["idle", "completed", "cancelled"].includes(phase)) return undefined;
+		if (phase === "awaiting-answers") return this.#state.specificationApproval ? "solution" : "requirements";
+		if (["requirements", "requirements-review", "awaiting-specification"].includes(phase)) return "requirements";
+		if (["team", "awaiting-choice"].includes(phase)) return "solution";
+		if (["planning", "plan-review", "awaiting-plan"].includes(phase)) return "planner";
+		return "executor";
+	}
+
+	recipient(): SpecConversationRecipient | undefined {
+		const role = this.currentRole();
+		return role ? this.#ports.conversation?.recipient(role) : undefined;
+	}
+
+	async converse(
+		text: string,
+		messageId: string,
+		recipient: SpecConversationRecipient,
+		signal: AbortSignal,
+	): Promise<SpecConversationReply> {
+		const actual = this.recipient();
+		if (
+			this.#driving ||
+			this.#dialoguing ||
+			this.#state.paused ||
+			!actual ||
+			actual.role !== recipient.role ||
+			actual.actorId !== recipient.actorId ||
+			actual.sessionId !== recipient.sessionId
+		)
+			throw new SpecAdmissionError("Current stage actor is unavailable or message ownership is stale");
+		const conversation = this.#ports.conversation;
+		if (!conversation) throw new Error("Current stage dialogue is unavailable");
+		const phase = this.#state.phase;
+		const context = { ...this.#context(), signal: AbortSignal.any([this.#abort.signal, signal]) };
+		this.#dialoguing = true;
+		try {
+			this.#guard(context);
+			const reply = await this.#checked(
+				conversation.respond({ text, role: actual.role, status: this.status(), messageId }, context),
+				context,
+			);
+			if (reply.requirements) {
+				if (
+					actual.role !== "requirements" ||
+					this.#state.specificationApproval ||
+					!["awaiting-specification", "awaiting-answers"].includes(phase) ||
+					reply.plan
+				)
+					throw new Error("Use explicit amendment to change approved upstream requirements");
+				const draft = parseSpecRequirements(reply.requirements);
+				if (
+					this.#requirementsSlot?.lastReview?.verdict === "pass" &&
+					this.#requirementsSlot.reviewedRevision === this.#requirementsSlot.revision
+				)
+					this.#revise(this.#requirementsSlot);
+				const snapshot = await this.#checked(this.#ports.artifacts.writeRequirements(draft, context), context);
+				await this.#checked(this.#ports.artifacts.validateRequirements(context), context);
+				if (!snapshot.version) throw new Error("Requirements artifact has no content identity");
+				this.#state.specification = { ...draft, version: snapshot.version };
+				this.#clarificationRound++;
+				this.#state.questions = draft.questions;
+				this.#state.phase = draft.questions.length ? "awaiting-answers" : "requirements-review";
+				await this.#drive(context);
+			} else if (reply.plan) {
+				if (actual.role !== "planner" || phase !== "awaiting-plan" || this.#state.planApproval)
+					throw new Error("Only an unapproved current plan can be revised by dialogue");
+				const draft = parseSpecPlan(reply.plan);
+				this.#validatePlan(draft);
+				if (this.#planSlot) this.#revise(this.#planSlot);
+				const snapshot = await this.#checked(this.#ports.artifacts.writePlan(draft, context), context);
+				if (!snapshot.version) throw new Error("Plan artifact has no content identity");
+				const binding = {
+					artifactVersion: snapshot.version,
+					specificationVersion: this.#specification().version,
+					candidateVersion: this.#candidate().version,
+					solutionVersion: this.#solution().version,
+				};
+				this.#state.plan = { ...draft, ...binding, version: hash({ ...binding, draft }) };
+				this.#state.phase = "plan-review";
+				await this.#drive(context);
+			} else if (phase === "awaiting-answers" && actual.role === "solution") {
+				this.#answer = text;
+				this.#state.questions = [];
+				this.#state.phase = "team";
+				await this.#drive(context);
+			}
+			this.#guard(context);
+			await this.#preserve();
+			return reply;
+		} finally {
+			this.#dialoguing = false;
+			this.#notify();
+		}
+	}
+
+	/** Admission invalidates acceptance synchronously, before any read-only scope analysis or renewed execution. */
+	prepareRepair(expectedVersion: string, text: string): () => Promise<SpecDrivenStatus> {
+		this.assertRepair(expectedVersion, text);
+		this.#state.acceptanceVersion = undefined;
+		this.#state.finalApproval = undefined;
+		this.#pendingRepair = text;
+		this.#notify();
+		let available = true;
+		return () => {
+			if (!available) throw new SpecAdmissionError("Repair admission has already been consumed");
+			available = false;
+			return this.#runRepair(text);
+		};
+	}
+
+	async #runRepair(text: string): Promise<SpecDrivenStatus> {
+		return this.#launch(async context => {
+			await this.#checkInputs(context);
+			const scope = this.#ports.conversation?.repairScope;
+			if (!scope) throw new Error("Repair scope analysis is unavailable");
+			const ids = await this.#checked(scope({ text, status: this.status() }, context), context);
+			// Admission already checked outstanding input; #checked retains pause/cancel/generation ownership.
+			const tasks = this.#plan().tasks;
+			if (!ids.length || ids.some(id => !tasks.some(task => task.id === id)))
+				throw new Error("Repair has no valid approved task scope");
+			const affected = new Set(ids);
+			let expanded = true;
+			while (expanded) {
+				expanded = false;
+				for (const task of tasks)
+					if (!affected.has(task.id) && task.dependencies.some(id => affected.has(id))) {
+						affected.add(task.id);
+						expanded = true;
+					}
+			}
+			if (this.#overallSlot) this.#revise(this.#overallSlot);
+			for (const task of this.#state.tasks)
+				if (affected.has(task.id) && task.review?.revision === 2)
+					throw new Error("Task review is still bounded to two repair rounds");
+			for (const task of this.#state.tasks)
+				if (affected.has(task.id)) {
+					task.status = "pending";
+					task.validatedIds = [];
+					if (task.review) {
+						this.#revise(task.review);
+						task.review.reviewedRevision = undefined;
+					}
+				}
+			for (const condition of this.#plan().conditions)
+				if (tasks.some(task => affected.has(task.id) && task.conditionIds.includes(condition.id)))
+					this.#conditionRecords.delete(condition.id);
+			this.#repair = { text, taskIds: [...affected] };
+			this.#finalValidationRecords.clear();
+			this.#finalRecords = [];
+			this.#pendingRepair = undefined;
+			this.#state.phase = "executing";
+		});
+	}
+
+	async repair(expectedVersion: string, text: string): Promise<SpecDrivenStatus> {
+		return this.prepareRepair(expectedVersion, text)();
+	}
+
+	assertRepair(expectedVersion: string, text: string): void {
+		this.#expect("awaiting-acceptance");
+		if (!text.trim() || !expectedVersion || expectedVersion !== this.#state.acceptanceVersion)
+			throw new SpecAdmissionError("Stale final acceptance or missing repair instructions");
 	}
 
 	#notify(): void {
@@ -90,7 +280,7 @@ export class SpecDrivenOrchestrator {
 
 	async start(request: string, changeId: string): Promise<SpecDrivenStatus> {
 		this.#expect("idle");
-		if (!request.trim() || !changeId.trim()) throw new Error("Request and change ID are required");
+		if (!request.trim() || !changeId.trim()) throw new SpecAdmissionError("Request and change ID are required");
 		this.#request = request;
 		this.#state.changeId = changeId;
 		this.#state.phase = "requirements";
@@ -98,7 +288,7 @@ export class SpecDrivenOrchestrator {
 	}
 
 	async answer(text: string): Promise<SpecDrivenStatus> {
-		if (!text.trim()) throw new Error("An explicit answer is required");
+		if (!text.trim()) throw new SpecAdmissionError("An explicit answer is required");
 		this.#expect("awaiting-answers");
 		this.#answer = text;
 		this.#state.questions = [];
@@ -110,9 +300,10 @@ export class SpecDrivenOrchestrator {
 	async confirmSpecification(expectedVersion: string): Promise<SpecDrivenStatus> {
 		this.#expect("awaiting-specification");
 		const specification = this.#specification();
-		if (expectedVersion !== specification.version) throw new Error("Stale specification approval");
+		if (expectedVersion !== specification.version) throw new SpecAdmissionError("Stale specification approval");
 		return this.#launch(async context => {
 			await this.#checkSpecification(context);
+			this.#options.assertTransitionAllowed?.();
 			this.#state.specificationApproval = expectedVersion;
 			this.#state.phase = "team";
 		});
@@ -127,11 +318,11 @@ export class SpecDrivenOrchestrator {
 			team.inputVersion !== this.#specification().version ||
 			this.#state.specificationApproval !== team.inputVersion
 		)
-			throw new Error("Stale discussion choice");
+			throw new SpecAdmissionError("Stale discussion choice");
 		if (team.interpretationDifferences.some(item => item.affectsChoice && !item.resolved))
-			throw new Error("Unresolved choice ambiguity");
+			throw new SpecAdmissionError("Unresolved choice ambiguity");
 		const candidate = team.candidates.find(item => item.id === candidateId && item.version === candidateVersion);
-		if (!candidate || !this.#eligible(candidate)) throw new Error("Stale or ineligible candidate");
+		if (!candidate || !this.#eligible(candidate)) throw new SpecAdmissionError("Stale or ineligible candidate");
 		return this.#launch(async context => {
 			await this.#checkSpecification(context);
 			const draft = {
@@ -144,6 +335,7 @@ export class SpecDrivenOrchestrator {
 			};
 			const snapshot = await this.#checked(this.#ports.artifacts.writeSolution(draft, context), context);
 			if (!snapshot.version) throw new Error("Solution artifact has no content identity");
+			this.#options.assertTransitionAllowed?.();
 			this.#state.solution = {
 				...draft,
 				artifactVersion: snapshot.version,
@@ -158,9 +350,10 @@ export class SpecDrivenOrchestrator {
 	async confirmPlan(expectedVersion: string, options?: { mode?: "normal" | "goal" }): Promise<SpecDrivenStatus> {
 		this.#expect("awaiting-plan");
 		const plan = this.#plan();
-		if (expectedVersion !== plan.version) throw new Error("Stale plan approval");
+		if (expectedVersion !== plan.version) throw new SpecAdmissionError("Stale plan approval");
 		return this.#launch(async context => {
 			await this.#checkInputs(context);
+			this.#options.assertTransitionAllowed?.();
 			this.#state.planApproval = expectedVersion;
 			this.#state.executionMode = options?.mode ?? "normal";
 			this.#state.phase = "executing";
@@ -170,19 +363,20 @@ export class SpecDrivenOrchestrator {
 	async accept(expectedVersion: string): Promise<SpecDrivenStatus> {
 		this.#expect("awaiting-acceptance");
 		if (!this.#state.acceptanceVersion || expectedVersion !== this.#state.acceptanceVersion)
-			throw new Error("Stale final acceptance");
+			throw new SpecAdmissionError("Stale final acceptance");
 		return this.#launch(async context => {
 			await this.#checkInputs(context);
 			if (await this.#refreshEvidence(context))
 				throw new Error("Stale final acceptance: selected input content changed");
 			if (this.#state.acceptanceVersion !== expectedVersion) throw new Error("Stale final acceptance");
+			this.#options.assertTransitionAllowed?.();
 			this.#state.finalApproval = expectedVersion;
 			this.#state.phase = "closing";
 		});
 	}
 
 	async amendRequirements(text: string): Promise<SpecDrivenStatus> {
-		if (!text.trim()) throw new Error("Amendment is required");
+		if (!text.trim()) throw new SpecAdmissionError("Amendment is required");
 		this.#assertMutable();
 		await this.#interrupt();
 		this.#rememberTasks();
@@ -196,9 +390,10 @@ export class SpecDrivenOrchestrator {
 	}
 
 	async changeSolution(text: string): Promise<SpecDrivenStatus> {
-		if (!text.trim()) throw new Error("Solution change is required");
+		if (!text.trim()) throw new SpecAdmissionError("Solution change is required");
 		this.#assertMutable();
-		if (!this.#state.specificationApproval) throw new Error("Confirm requirements before changing the solution");
+		if (!this.#state.specificationApproval)
+			throw new SpecAdmissionError("Confirm requirements before changing the solution");
 		await this.#interrupt();
 		this.#rememberTasks();
 		this.#invalidateDownstream();
@@ -219,30 +414,35 @@ export class SpecDrivenOrchestrator {
 	}
 
 	async resume(): Promise<SpecDrivenStatus> {
-		if (!this.#state.paused) throw new Error("Workflow is not paused");
-		if (this.#state.phase === "cancelled") throw new Error("Cancelled workflow cannot resume");
+		if (!this.#state.paused) throw new SpecAdmissionError("Workflow is not paused");
+		if (this.#state.phase === "cancelled") throw new SpecAdmissionError("Cancelled workflow cannot resume");
 		if (this.#driving) await this.#driving;
 		await this.#preserving;
 		this.#state.paused = false;
 		this.#state.blockedReason = undefined;
 		this.#abort = new AbortController();
-		return this.#launch();
+		return this.#pendingRepair === undefined ? this.#launch() : this.#runRepair(this.#pendingRepair);
 	}
 
 	cancel(): SpecDrivenStatus {
 		this.pause();
 		if (this.#state.phase !== "completed") this.#state.phase = "cancelled";
+		this.#pendingRepair = undefined;
 		if (!this.#driving) this.#preserving = this.#preserving.then(() => this.#preserve());
 		this.#notify();
 		return this.status();
 	}
 
 	#expect(phase: SpecDrivenStatus["phase"]): void {
-		if (this.#state.paused || this.#state.phase !== phase || this.#driving)
-			throw new Error(`Expected active ${phase}; current ${this.#state.phase}`);
+		this.#options.assertTransitionAllowed?.();
+		if (this.#state.paused || this.#state.phase !== phase || this.#driving || this.#dialoguing)
+			throw new SpecAdmissionError(`Expected active ${phase}; current ${this.#state.phase}`);
 	}
 	#assertMutable(): void {
-		if (["idle", "completed", "cancelled"].includes(this.#state.phase)) throw new Error("No mutable active workflow");
+		if (this.#dialoguing) throw new SpecAdmissionError("Current stage dialogue is still processing");
+		this.#options.assertTransitionAllowed?.();
+		if (["idle", "completed", "cancelled"].includes(this.#state.phase))
+			throw new SpecAdmissionError("No mutable active workflow");
 	}
 	async #interrupt(): Promise<void> {
 		this.pause();
@@ -268,6 +468,7 @@ export class SpecDrivenOrchestrator {
 		this.#state.planApproval = undefined;
 		this.#state.acceptanceVersion = undefined;
 		this.#state.finalApproval = undefined;
+		this.#pendingRepair = undefined;
 		this.#state.questions = [];
 		this.#state.pendingClosure = [];
 		this.#state.tasks = [];
@@ -494,6 +695,7 @@ export class SpecDrivenOrchestrator {
 				context,
 			),
 		);
+		this.#clarificationRound++;
 		const snapshot = await this.#checked(this.#ports.artifacts.writeRequirements(draft, context), context);
 		await this.#checked(this.#ports.artifacts.validateRequirements(context), context);
 		if (!snapshot.version) throw new Error("Requirements artifact has no content identity");
@@ -613,6 +815,7 @@ export class SpecDrivenOrchestrator {
 		const review = await this.#review(slot, { records: [], commits: [] }, context);
 		if (review.verdict === "pass") this.#state.phase = "awaiting-specification";
 		else if (review.verdict === "clarify") {
+			this.#clarificationRound++;
 			this.#state.questions = review.questions;
 			this.#state.phase = "awaiting-answers";
 		} else {
@@ -635,6 +838,7 @@ export class SpecDrivenOrchestrator {
 			),
 			context,
 		);
+		this.#clarificationRound++;
 		const team = await this.#checked(
 			this.#ports.team.run({ specification: this.#specification(), answer: this.#answer }, context),
 			context,
@@ -922,6 +1126,7 @@ export class SpecDrivenOrchestrator {
 					plan: this.#plan(),
 					tasks: this.#state.tasks,
 					mode: this.#state.executionMode ?? "normal",
+					repair: this.#repair,
 				}),
 				context,
 				{
@@ -1171,6 +1376,7 @@ export class SpecDrivenOrchestrator {
 		if (review.verdict === "pass") {
 			if (await this.#refreshEvidence(context)) return;
 			this.#state.acceptanceVersion = hash({
+				round: ++this.#acceptanceRound,
 				specification: this.#specification().version,
 				plan: this.#plan().version,
 				tasks: this.#state.tasks.map(task => ({
@@ -1179,6 +1385,7 @@ export class SpecDrivenOrchestrator {
 					commits: task.commits,
 				})),
 				finalRecords: this.#finalRecords.map(record => record.id),
+				runId: this.#runId,
 				review,
 			});
 			this.#state.phase = "awaiting-acceptance";

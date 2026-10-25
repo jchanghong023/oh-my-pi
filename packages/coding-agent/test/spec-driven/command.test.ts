@@ -4,11 +4,12 @@ import {
 	getSpecDrivenController,
 	observeSpecDrivenController,
 	type SpecControllerObservation,
+	peekSpecDrivenController,
 	renderSpecDrivenStatus,
 	type SpecRuntimeFactory,
 } from "../../src/spec-driven/controller";
 import { checkSkillInvocation } from "../../src/spec-driven/skill-policy";
-import type { SpecDrivenPorts, SpecRequirementsDraft } from "../../src/spec-driven/types";
+import type { SpecDrivenPorts, SpecRequirementsDraft, SpecToolRecord } from "../../src/spec-driven/types";
 import {
 	BUILTIN_SLASH_COMMANDS_INTERNAL,
 	BUILTIN_SLASH_COMMAND_DEFS,
@@ -40,6 +41,12 @@ function fixture(
 		throw new Error("Implementation must not be dispatched by a missing or stale approval");
 	};
 	const ports: SpecDrivenPorts = {
+		conversation: {
+			recipient: role => ({ role, actorId: `fixture-${role}`, sessionId: `fixture-session-${role}` }),
+			async respond(input) {
+				return { text: `Reply: ${input.text}` };
+			},
+		},
 		async handoff(input, context) {
 			calls.push(`handoff:${input.transition}`);
 			const role =
@@ -232,8 +239,8 @@ function fixture(
 		}),
 	});
 	const controller = getSpecDrivenController(host, { factory });
-	const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "spec")!;
-	const invoke = (args: string) => command.handle!({ name: "spec", args, text: `/spec ${args}` }, host);
+	const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "dev")!;
+	const invoke = (args: string) => command.handle!({ name: "dev", args, text: `/dev ${args}` }, host);
 	const settle = async () => {
 		await Promise.all(manager.getRunningJobs().map(job => job.promise));
 	};
@@ -243,6 +250,22 @@ function fixture(
 		session,
 		controller,
 		factory,
+		ports,
+		draft,
+		settleMessage: (id: string) => {
+			const { promise, resolve } = Promise.withResolvers<void>();
+			let stop = () => {};
+			stop = observeSpecDrivenController(sessionManager, observation => {
+				const message = observation.interaction.messages.find(item => item.id === id);
+				if (message && ["completed", "cancelled", "failed"].includes(message.status)) {
+					queueMicrotask(() => {
+						stop();
+						resolve();
+					});
+				}
+			});
+			return promise;
+		},
 		output,
 		transcript,
 		requests,
@@ -260,7 +283,147 @@ function fixture(
 	};
 }
 
-describe("/spec shared command surface", () => {
+describe("/dev shared command surface", () => {
+	it("queues input after repair admission and drains it only after the same executor finishes repair", async () => {
+		const f = fixture();
+		const records = new Map<string, SpecToolRecord>();
+		const scopeEntered = Promise.withResolvers<void>();
+		const releaseScope = Promise.withResolvers<void>();
+		let executions = 0;
+		let replies = 0;
+		f.ports.models.execute = async (_input, _context, control) => {
+			executions++;
+			expect(replies).toBe(0);
+			await control.start("T001");
+			await control.checkpoint("T001", {
+				changedPaths: [],
+				recordIds: [],
+				redRecordId: null,
+				greenRecordId: null,
+				implementationStartedAt: null,
+				requestedTddException: null,
+			});
+		};
+		f.ports.validation.run = async (input, context) => {
+			const state = f.controller.status();
+			const id = `validation-${records.size + 1}`;
+			const binding = {
+				actorId: "fixture-executor",
+				taskId: input.purpose === "task" ? "T001" : null,
+				workspace: "/fixture",
+				specificationVersion: state.specification!.version,
+				planVersion: state.plan!.version,
+			};
+			const inputs = {
+				id: `inputs-${id}`,
+				runId: context.runId,
+				generation: context.generation,
+				binding,
+				inputPaths: ["result.txt"],
+				entries: [
+					{
+						path: "result.txt",
+						canonicalPath: "/fixture/result.txt",
+						kind: "file" as const,
+						digest: "fixture-result",
+					},
+				],
+				version: "fixture-result",
+				complete: true,
+			};
+			records.set(id, {
+				id,
+				toolCallId: `call-${id}`,
+				runId: context.runId,
+				generation: context.generation,
+				tool: "spec_verify",
+				args: { command: input.command, cwd: "/fixture" },
+				startedAt: 1,
+				finishedAt: 2,
+				binding,
+				inputsBefore: inputs,
+				inputsAfter: structuredClone(inputs),
+				conditions: { platform: process.platform, shell: "fixture", runtime: "fixture", runtimeVersion: "1" },
+				obligation: { validationId: input.id, approvedCommand: input.command, reason: null },
+				result: {
+					status: "completed",
+					exitCode: 0,
+					stdout: "Approved result verified",
+					stderr: "",
+					isError: false,
+				},
+				artifact: { path: `/fixture/evidence/${id}`, version: id },
+			});
+			return id;
+		};
+		f.ports.evidence.read = async ids => ids.map(id => structuredClone(records.get(id)!));
+		f.ports.conversation!.respond = async input => {
+			replies++;
+			expect(executions).toBe(2);
+			expect(f.controller.status().phase).toBe("awaiting-acceptance");
+			expect(f.controller.observation().active).toBe(false);
+			return { text: input.text };
+		};
+		f.ports.conversation!.repairScope = async () => {
+			scopeEntered.resolve();
+			await releaseScope.promise;
+			return ["T001"];
+		};
+		try {
+			await f.invoke("start repair-race request");
+			await f.settle();
+			await f.invoke("confirm-spec spec-v1");
+			await f.settle();
+			await f.invoke("choose discussion-v1 A candidate-v1");
+			await f.settle();
+			await f.invoke(`confirm-plan ${f.controller.status().plan!.version}`);
+			await f.settle();
+			const old = f.controller.status().acceptanceVersion!;
+			expect(old).toBeTruthy();
+			f.controller.repair(old, "Repair the approved result");
+			const beforeScope = await f.controller.submitText("Question queued immediately after admission");
+			if (beforeScope.kind !== "queued") throw new Error("Expected post-admission queued input");
+			await scopeEntered.promise;
+			expect(f.controller.status().acceptanceVersion).toBeUndefined();
+			const duringScope = await f.controller.submitText("Question queued during scope analysis");
+			if (duringScope.kind !== "queued") throw new Error("Expected busy-stage queued input");
+			const queued = f.controller.observation().interaction.messages;
+			expect(queued).toHaveLength(2);
+			expect(queued.map(message => message.status)).toEqual(["queued", "queued"]);
+			expect(queued.map(message => [message.role, message.actorId, message.sessionId])).toEqual([
+				["executor", "fixture-executor", "fixture-session-executor"],
+				["executor", "fixture-executor", "fixture-session-executor"],
+			]);
+			expect(replies).toBe(0);
+			expect(executions).toBe(1);
+			releaseScope.resolve();
+			await f.settle();
+			await f.settleMessage(duringScope.messageId);
+			const repaired = f.controller.status();
+			expect(repaired.phase).toBe("awaiting-acceptance");
+			expect(repaired.paused).toBe(false);
+			expect(repaired.acceptanceVersion).toBeTruthy();
+			expect(repaired.acceptanceVersion).not.toBe(old);
+			expect(executions).toBe(2);
+			expect(replies).toBe(2);
+			expect(f.controller.observation().interaction.messages.map(message => message.status)).toEqual([
+				"completed",
+				"completed",
+			]);
+			expect(f.controller.observation().interaction.draft).toBe("");
+			expect(f.controller.actions().find(action => action.id === "accept")?.available).toBe(true);
+			expect(f.controller.actions().find(action => action.id === "repair")?.available).toBe(true);
+			await f.invoke(`accept ${old}`);
+			await f.settle();
+			expect(f.controller.status().phase).toBe("awaiting-acceptance");
+			expect(f.controller.status().finalApproval).toBeUndefined();
+			expect(f.controller.status().acceptanceVersion).toBe(repaired.acceptanceVersion);
+		} finally {
+			releaseScope.resolve();
+			await f.dispose();
+		}
+	});
+
 	it("observes without implicit creation, replays state, isolates listeners and follows replacement runs", async () => {
 		const sessionManager = {};
 		const seen: SpecControllerObservation[] = [];
@@ -301,7 +464,7 @@ describe("/spec shared command surface", () => {
 			await f.invoke("pause");
 			expect(seen.at(-1)).toMatchObject({ active: false, status: { paused: true } });
 			await f.invoke("cancel");
-			expect(seen.at(-1)).toMatchObject({ released: true, disposed: true, status: { phase: "cancelled" } });
+			expect(seen.at(-1)).toMatchObject({ released: true, disposed: false, status: { phase: "cancelled" } });
 			const first = seen.at(-1)!;
 			const second = getSpecDrivenController(f.host, {
 				restart: true,
@@ -336,37 +499,37 @@ describe("/spec shared command surface", () => {
 
 	it("refuses independent OpenSpec maintenance while a strict workflow owns approvals, including pause", async () => {
 		const f = fixture();
-		const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "opsx-sync")!;
-		const parsed = { name: "opsx-sync", args: "result-change", text: "/opsx-sync result-change" };
+		const skill = { name: "opsx-sync" };
+		const context = { scope: f.host.sessionManager };
 		try {
 			await f.invoke("start result-change 展示结果");
 			await f.settle();
 			expect(f.controller.status().phase).toBe("awaiting-specification");
-			expect(await command.handle!(parsed, f.host)).toEqual({ consumed: true, failed: true });
+			expect(() => checkSkillInvocation(skill, context)).toThrow("not allowed during");
 			await f.invoke("pause");
-			expect(await command.handle!(parsed, f.host)).toEqual({ consumed: true, failed: true });
+			expect(() => checkSkillInvocation(skill, context)).toThrow("not allowed during");
 			expect(f.controller.status().specification?.version).toBe("spec-v1");
 			expect(f.controller.status().phase).toBe("awaiting-specification");
 			expect(f.calls).not.toContain("plan");
 			await f.invoke("cancel");
-			const independent = await command.handle!(parsed, f.host);
-			expect(independent && "prompt" in independent).toBe(true);
+			expect(() => checkSkillInvocation(skill, context)).not.toThrow();
 		} finally {
 			await f.dispose();
 		}
 	});
 
 	it("is discovered once, has headless dispatch and provides native subcommand completion", async () => {
-		expect(BUILTIN_SLASH_COMMANDS_INTERNAL.filter(item => item.name === "spec")).toHaveLength(1);
-		expect(BUILTIN_SLASH_COMMAND_DEFS.find(item => item.name === "spec")?.allowArgs).toBe(true);
-		const completion = await BUILTIN_SLASH_COMMANDS.find(item => item.name === "spec")?.getArgumentCompletions?.(
+		expect(BUILTIN_SLASH_COMMANDS_INTERNAL.filter(item => item.name === "dev")).toHaveLength(1);
+		expect(BUILTIN_SLASH_COMMANDS_INTERNAL.some(item => item.name === "spec")).toBe(false);
+		expect(BUILTIN_SLASH_COMMAND_DEFS.find(item => item.name === "dev")?.allowArgs).toBe(true);
+		const completion = await BUILTIN_SLASH_COMMANDS.find(item => item.name === "dev")?.getArgumentCompletions?.(
 			"confirm-",
 		);
 		expect(completion?.map(item => item.value)).toContain("confirm-plan ");
 		const f = fixture();
 		try {
 			await f.invoke("status");
-			expect(f.output.join("\n")).toContain('"phase":"idle"');
+			expect(f.controller.status().phase).toBe("idle");
 		} finally {
 			await f.dispose();
 		}
@@ -378,13 +541,15 @@ describe("/spec shared command surface", () => {
 			await f.invoke("start result-change  保留  空白\n第二行需求");
 			await f.settle();
 			expect(f.requests).toEqual(["保留  空白\n第二行需求"]);
-			expect(f.output.join("\n")).toContain("展示真实结果");
+			expect(f.controller.observation().status.specification?.specs[0]?.content).toContain("展示真实结果");
 			await f.invoke("pause");
 			await f.invoke("resume");
 			await f.settle();
 			expect(f.controller.status().phase).toBe("awaiting-specification");
 			expect(f.requests).toHaveLength(1);
-			expect(f.output.join("\n")).toContain("/spec confirm-spec spec-v1");
+			expect(f.controller.actions()).toContainEqual(
+				expect.objectContaining({ command: "/dev confirm-spec spec-v1", available: true }),
+			);
 			await f.invoke("confirm-spec");
 			await f.invoke("confirm-spec old");
 			await f.settle();
@@ -392,7 +557,7 @@ describe("/spec shared command surface", () => {
 			await f.invoke("confirm-spec spec-v1");
 			await f.settle();
 			expect(f.controller.status().phase).toBe("awaiting-choice");
-			expect(f.output.join("\n")).toContain("使用现有结果入口");
+			expect(f.controller.observation().status.team?.candidates[0]?.proposal).toBe("使用现有结果入口");
 			await f.invoke("choose discussion-v1 A old");
 			await f.settle();
 			expect(f.calls).not.toContain("plan");
@@ -401,8 +566,12 @@ describe("/spec shared command surface", () => {
 			const state = f.controller.status();
 			expect(state.phase).toBe("awaiting-plan");
 			expect(state.plan?.version).not.toBe(state.plan?.artifactVersion);
-			expect(f.output.join("\n")).toContain(`/spec confirm-plan ${state.plan!.version}`);
-			expect(f.output.join("\n")).toContain(`/spec confirm-plan ${state.plan!.version} --goal`);
+			expect(f.controller.actions()).toContainEqual(
+				expect.objectContaining({ command: `/dev confirm-plan ${state.plan!.version}`, available: true }),
+			);
+			expect(f.controller.actions()).toContainEqual(
+				expect.objectContaining({ command: `/dev confirm-plan ${state.plan!.version} --goal`, available: true }),
+			);
 			await f.invoke("confirm-plan plan-file-v1");
 			await f.settle();
 			expect(f.controller.status().phase).toBe("awaiting-plan");
@@ -410,8 +579,8 @@ describe("/spec shared command surface", () => {
 				"requirements-to-solution",
 				"solution-to-plan",
 			]);
-			expect(f.output.join("\n")).toContain("handoffs/solution-to-plan.md");
-			expect(f.output.join("\n")).toContain("Detached command-fixture native boundary: solution-to-plan");
+			expect(state.handoffs?.at(-1)?.path).toBe("handoffs/solution-to-plan.md");
+			expect(state.handoffs?.at(-1)?.body).toBe("Detached command-fixture native boundary: solution-to-plan");
 		} finally {
 			await f.dispose();
 		}
@@ -436,7 +605,6 @@ describe("/spec shared command surface", () => {
 				expect(f.executionModes).toEqual([mode]);
 				expect(f.controller.status().executionMode).toBe(mode);
 				expect(f.calls).toContain("handoff:plan-to-execution");
-				expect(f.output.join("\n")).toContain(`"executionMode":"${mode}"`);
 				expect(f.controller.status().tasks.every(task => task.status !== "completed")).toBe(true);
 			} finally {
 				await f.dispose();
@@ -496,10 +664,10 @@ describe("/spec shared command surface", () => {
 			await first.settle();
 			expect(second.controller.status().phase).toBe("awaiting-specification");
 			expect(second.controller.status().paused).toBe(false);
-			expect(first.output.at(-1)).not.toContain('"phase":"awaiting-specification"');
+			expect(first.controller.status().phase).toBe("cancelled");
 			expect(first.disposed()).toBe(1);
 			await first.invoke("status");
-			expect(first.output.at(-1)).toContain('"phase":"cancelled"');
+			expect(first.controller.status().phase).toBe("cancelled");
 		} finally {
 			gate.resolve();
 			await first.dispose();
@@ -518,24 +686,188 @@ describe("/spec shared command surface", () => {
 			await f.settle();
 			expect(f.calls).not.toContain("plan");
 			expect(f.controller.status().paused).toBe(true);
-			expect(f.output.join("\n")).toContain("/spec resume");
+			expect(f.controller.actions()).toContainEqual(
+				expect.objectContaining({ command: "/dev resume", available: true }),
+			);
 		} finally {
 			await f.dispose();
 		}
 	});
 
-	it("renders exact final acceptance identity without claiming unknown quality or costs", () => {
-		const text = renderSpecDrivenStatus({
-			phase: "awaiting-acceptance",
-			paused: false,
-			generation: 1,
-			acceptanceVersion: "accept-v2",
-			questions: [],
-			tasks: [],
-			reviews: [],
-			pendingClosure: [],
+	it("keeps mode and draft session-local without preparing native actors", async () => {
+		const f = fixture();
+		const other = fixture();
+		try {
+			expect(peekSpecDrivenController({})).toBeUndefined();
+			f.controller.setInputMode("dev");
+			expect(await f.controller.submitText("draft request")).toEqual({ kind: "draft", text: "draft request" });
+			expect(f.controller.observation().interaction.draft).toBe("draft request");
+			expect(other.controller.inputMode()).toBe("chat");
+			expect(other.controller.observation().interaction.draft).toBe("");
+			expect(f.requests).toEqual([]);
+			expect(f.manager.getRunningJobs()).toHaveLength(0);
+			f.controller.setInputMode("chat");
+			expect(f.controller.observation().interaction.draft).toBe("draft request");
+		} finally {
+			await f.dispose();
+			await other.dispose();
+		}
+	});
+
+	it("cancels queued messages immediately but processing only after actual settlement, blocking transitions", async () => {
+		const f = fixture();
+		const entered = Promise.withResolvers<void>();
+		const stopped = Promise.withResolvers<void>();
+		const received: string[] = [];
+		f.ports.conversation!.respond = async (input, context) => {
+			received.push(input.messageId);
+			entered.resolve();
+			await stopped.promise;
+			expect(context.signal.aborted).toBe(true);
+			return { text: "late reply must not publish" };
+		};
+		try {
+			await f.invoke("start queue-test request");
+			await f.settle();
+			const first = await f.controller.submitText("first");
+			if (first.kind !== "queued") throw new Error("Expected native queued receipt");
+			await entered.promise;
+			const second = await f.controller.submitText("second");
+			if (second.kind !== "queued") throw new Error("Expected queued second message");
+			expect(() => f.controller.schedule(core => core.confirmSpecification("spec-v1"))).toThrow();
+			await expect(f.controller.cancelMessage("wrong-owner-id")).rejects.toMatchObject({ code: "invalid_params" });
+			await f.controller.cancelMessage(second.messageId);
+			let cancellationSettled = false;
+			const cancellation = f.controller.cancelMessage(first.messageId).then(() => {
+				cancellationSettled = true;
+			});
+			await Promise.resolve();
+			expect(cancellationSettled).toBe(false);
+			expect(f.controller.observation().interaction.messages[0]?.status).toBe("cancelling");
+			expect(f.controller.actions().find(action => action.id === "confirm-spec")?.available).toBe(false);
+			expect(() => f.controller.schedule(core => core.confirmSpecification("spec-v1"))).toThrow();
+			stopped.resolve();
+			await cancellation;
+			expect(f.controller.observation().interaction.messages.map(message => message.status)).toEqual([
+				"cancelled",
+				"cancelled",
+			]);
+			expect(received).toEqual([first.messageId]);
+			expect(f.transcript.join("\n")).not.toContain("late reply must not publish");
+			await f.controller.cancelMessage(first.messageId);
+			expect(f.controller.actions().find(action => action.id === "confirm-spec")?.available).toBe(true);
+		} finally {
+			stopped.resolve();
+			await f.dispose();
+		}
+	});
+
+	it("revises current unapproved requirements through native dialogue and rejects old approval", async () => {
+		const f = fixture();
+		let revision = 1;
+		f.ports.artifacts.writeRequirements = async () => ({ version: `spec-v${++revision}` });
+		f.ports.artifacts.readRequirements = async () => ({ version: `spec-v${revision}` });
+		f.ports.conversation!.respond = async () => ({
+			text: "revised",
+			requirements: { ...f.draft, proposal: "Updated exact proposal" },
 		});
-		expect(text).toContain('"phase":"awaiting-acceptance"');
-		expect(text).toContain("/spec accept accept-v2");
+		try {
+			await f.invoke("start revise-test request");
+			await f.settle();
+			const old = f.controller.status().specification!.version;
+			const receipt = await f.controller.submitText("revise it");
+			if (receipt.kind !== "queued") throw new Error("Expected native dialogue");
+			await f.settleMessage(receipt.messageId);
+			expect(f.controller.status().phase).toBe("awaiting-specification");
+			expect(f.controller.status().specification!.version).not.toBe(old);
+			expect(f.calls).not.toContain("team");
+			await f.invoke(`confirm-spec ${old}`);
+			await f.settle();
+			expect(f.controller.status().specificationApproval).toBeUndefined();
+			expect(f.calls).not.toContain("team");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("retains paused drafts and never sends them automatically on resume", async () => {
+		const f = fixture();
+		const received: string[] = [];
+		f.ports.conversation!.respond = async input => {
+			received.push(input.text);
+			return { text: "reply" };
+		};
+		try {
+			await f.invoke("start paused-draft request");
+			await f.settle();
+			f.controller.pause();
+			expect(await f.controller.submitText("paused draft")).toEqual({ kind: "draft", text: "paused draft" });
+			f.controller.resume();
+			await f.settle();
+			expect(f.controller.observation().interaction.draft).toBe("paused draft");
+			expect(received).toEqual([]);
+			const receipt = await f.controller.submitText("paused draft");
+			if (receipt.kind !== "queued") throw new Error("Expected explicit resubmission");
+			await f.settleMessage(receipt.messageId);
+			expect(received).toEqual(["paused draft"]);
+		} finally {
+			await f.dispose();
+		}
+	});
+	it("keeps full native materials available while chat reports only state and shared actions", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("start material-projection request");
+			await f.settle();
+			const state = f.controller.observation().status;
+			const full = renderSpecDrivenStatus(state);
+			expect(full).toContain(state.specification!.proposal);
+			expect(full).toContain(state.specification!.specs[0]!.content.replaceAll("\n", "\\n"));
+			await f.controller.report();
+			const summary = f.output.at(-1)!;
+			expect(summary).not.toContain(state.specification!.proposal);
+			expect(summary).not.toContain(state.specification!.specs[0]!.content);
+			for (const action of f.controller.actions()) expect(summary).toContain(action.command);
+			expect(f.controller.observation().status.specification).toEqual(state.specification);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("rejects queued text from an earlier clarification round instead of delivering it to the next round", async () => {
+		const f = fixture();
+		f.draft.questions = ["1. Scope? Recommendation: approved scope. Reason: retain permission boundary."];
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const received: string[] = [];
+		f.ports.conversation!.respond = async input => {
+			received.push(input.messageId);
+			entered.resolve();
+			await release.promise;
+			return { text: "new question round", requirements: { ...f.draft } };
+		};
+		try {
+			await f.invoke("start clarification-round request");
+			await f.settle();
+			const initialRound = f.controller.observation().interaction.clarification!.id;
+			const first = await f.controller.submitText("explain question");
+			if (first.kind !== "queued") throw new Error("Expected dialogue receipt");
+			await entered.promise;
+			const second = await f.controller.submitText("accept this round's recommendation");
+			if (second.kind !== "queued") throw new Error("Expected queued answer");
+			release.resolve();
+			await f.settleMessage(second.messageId);
+			expect(received).toEqual([first.messageId]);
+			const interaction = f.controller.observation().interaction;
+			expect(interaction.clarification!.id).not.toBe(initialRound);
+			expect(interaction.messages.find(message => message.id === second.messageId)?.status).toBe("failed");
+			expect(interaction.messages.find(message => message.id === second.messageId)?.clarificationId).toBe(
+				initialRound,
+			);
+			expect(f.controller.status().specificationApproval).toBeUndefined();
+		} finally {
+			release.resolve();
+			await f.dispose();
+		}
 	});
 });

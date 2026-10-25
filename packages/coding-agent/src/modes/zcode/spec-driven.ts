@@ -4,8 +4,11 @@ import * as path from "node:path";
 import { constants } from "node:fs";
 import { getOmpProfileStorageIdentity } from "./profiles";
 import { containedSpecPath } from "../../spec-driven/artifacts";
-import { observeSpecDrivenController, type SpecControllerObservation } from "../../spec-driven/controller";
-import type { SpecDrivenStatus } from "../../spec-driven/types";
+import {
+	observeSpecDrivenController,
+	peekSpecDrivenController,
+	type SpecControllerObservation,
+} from "../../spec-driven/controller";
 import { writeFileAtomically } from "../../utils/atomic-file";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
@@ -63,49 +66,6 @@ function stage(phase: string): OmpSpecDetails["stage"] {
 	if (["closing", "completed", "cancelled"].includes(phase)) return "closure";
 	return "requirements";
 }
-function actions(status: SpecDrivenStatus, runId: string, live: boolean): OmpSpecDetails["actions"] {
-	if (!live || terminal(status.phase)) return [];
-	const binding = { runId, generation: status.generation };
-	const result: OmpSpecDetails["actions"] = [];
-	const add = (id: string, command: string) => result.push({ id, label: id, command, binding });
-	if (status.paused) add("resume", "/spec resume");
-	else add("pause", "/spec pause");
-	add("cancel", "/spec cancel");
-	result.push({ id: "amend", label: "amend", commandPrefix: "/spec amend ", binding });
-	if (status.specificationApproval)
-		result.push({
-			id: "change-solution",
-			label: "change-solution",
-			commandPrefix: "/spec change-solution ",
-			binding,
-		});
-	if (status.paused) return result;
-	if (status.phase === "awaiting-answers")
-		result.push({ id: "answer", label: "answer", commandPrefix: "/spec answer ", binding });
-	if (status.phase === "awaiting-specification" && status.specification)
-		add("confirm-spec", `/spec confirm-spec ${status.specification.version}`);
-	if (status.phase === "awaiting-choice" && status.team)
-		for (const candidate of status.team.candidates) {
-			if (
-				status.team.status === "completed" &&
-				status.team.inputVersion === status.specification?.version &&
-				status.specificationApproval === status.team.inputVersion &&
-				!status.team.interpretationDifferences.some(item => item.affectsChoice && !item.resolved) &&
-				candidate.adoptable &&
-				candidate.reviewSucceeded &&
-				candidate.recheckSucceeded &&
-				!candidate.unresolvedBlocking.length
-			)
-				add(`choose:${candidate.id}`, `/spec choose ${status.team.runId} ${candidate.id} ${candidate.version}`);
-		}
-	if (status.phase === "awaiting-plan" && status.plan) {
-		add("confirm-plan", `/spec confirm-plan ${status.plan.version}`);
-		add("confirm-plan-goal", `/spec confirm-plan ${status.plan.version} --goal`);
-	}
-	if (status.phase === "awaiting-acceptance" && status.acceptanceVersion)
-		add("accept", `/spec accept ${status.acceptanceVersion}`);
-	return result;
-}
 
 /** Read-only native observations. This class never creates or restores a controller. */
 export class OmpSpecDrivenBridge {
@@ -136,6 +96,7 @@ export class OmpSpecDrivenBridge {
 			if (observation.runId && observation.runId !== owner.current?.runId)
 				owner.sourceGeneration = record.session.sessionGeneration;
 			owner.current = observation;
+			owner.onChange();
 			// Clone at observation time: queued filesystem work must not see a later native version.
 			const captured = structuredClone(observation);
 			owner.tail = owner.tail
@@ -144,6 +105,17 @@ export class OmpSpecDrivenBridge {
 					process.stderr.write(`Native specification observation: ${String(error)}\n`);
 				});
 		});
+	}
+	interaction(sessionId: string): SpecControllerObservation["interaction"] | undefined {
+		const owner = this.#owners.get(sessionId);
+		if (
+			!owner ||
+			owner.sourceGeneration !== owner.record.session.sessionGeneration ||
+			this.manager.get(sessionId) !== owner.record ||
+			owner.current?.disposed
+		)
+			return undefined;
+		return owner.current ? structuredClone(owner.current.interaction) : undefined;
 	}
 	async #directory(cwd: string, runId: string): Promise<string> {
 		if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid native run identity");
@@ -457,7 +429,30 @@ export class OmpSpecDrivenBridge {
 			selectedCandidate: status.selection
 				? { id: status.selection.candidateId, version: status.selection.candidateVersion }
 				: null,
-			actions: actions(status, runId, live),
+			actions:
+				live && !terminal(status.phase)
+					? observation.interaction.actions.map(action => ({
+							...action,
+							binding: {
+								runId,
+								generation: status.generation,
+								actionId: action.id,
+								actionVersion: action.version ?? action.command,
+							},
+						}))
+					: [],
+			interaction:
+				live && !terminal(status.phase)
+					? observation.interaction
+					: {
+							...observation.interaction,
+							recipient: undefined,
+							actions: [],
+							blockedReason: live
+								? "Terminal run; controls unavailable"
+								: "Read-only historical observation; no live native owner",
+						},
+			clarification: status.clarification,
 			materials,
 		};
 		const row = ompSpecRunSchema.parse({
@@ -546,8 +541,19 @@ export class OmpSpecDrivenBridge {
 				...saved.row.spec,
 				live: false,
 				readOnly: true,
+				...(!terminal(saved.row.spec.phase) ? { state: "blocked" as const } : {}),
 				explanation: `Read-only historical observation; no live native owner. Last native state: ${saved.row.spec.explanation}`,
 				actions: [],
+				...(saved.row.spec.interaction
+					? {
+							interaction: {
+								...saved.row.spec.interaction,
+								recipient: undefined,
+								actions: [],
+								blockedReason: "Read-only historical observation; no live native owner",
+							},
+						}
+					: {}),
 				materials,
 			},
 		};
@@ -563,7 +569,8 @@ export class OmpSpecDrivenBridge {
 			entries = await readdir(await containedSpecPath(source.cwd, ".omp/spec-sessions"));
 		} catch (error) {
 			// Missing/inaccessible project storage must not break independently persisted chat history.
-			if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+			if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? ""))
+				throw error;
 		}
 		for (const runId of entries) {
 			if (!/^[a-zA-Z0-9_-]+$/.test(runId) || this.#runs.has(runId)) continue;
@@ -704,14 +711,24 @@ export class OmpSpecDrivenBridge {
 			terminal(observation.status.phase)
 		)
 			throw new OmpSpecActionRejection("guard.specRun", "Native specification action binding is stale or readonly");
+		// Ordinary dialogue binds the live run, not an advertised command/version.
+		// Keep action-bearing input on the strict command path, even when its text is prose.
+		if (binding.actionId === undefined && binding.actionVersion === undefined && !text.startsWith("/")) return;
 		if (
-			!actions(observation.status, binding.runId, true).some(
-				action =>
-					action.command === text ||
-					(action.commandPrefix &&
-						text.startsWith(action.commandPrefix) &&
-						text.slice(action.commandPrefix.length).trim()),
-			)
+			!peekSpecDrivenController(record.session.sessionManager)
+				?.actions()
+				.some(
+					action =>
+						action.available &&
+						(!binding.actionId || binding.actionId === action.id) &&
+						(action.version !== undefined
+							? binding.actionVersion === action.version
+							: !binding.actionVersion || binding.actionVersion === action.command) &&
+						(action.command === text ||
+							(action.requiresInput &&
+								text.startsWith(`${action.command} `) &&
+								text.slice(action.command.length).trim())),
+				)
 		)
 			throw new OmpSpecActionRejection(
 				"guard.specAction",
@@ -726,7 +743,25 @@ export class OmpSpecDrivenBridge {
 		await owner.tail;
 		for (const saved of this.#runs.values())
 			if (saved.row.spec.sessionId === sessionId) {
-				saved.row = { ...saved.row, spec: { ...saved.row.spec, live: false, readOnly: true, actions: [] } };
+				saved.row = {
+					...saved.row,
+					spec: {
+						...saved.row.spec,
+						live: false,
+						readOnly: true,
+						actions: [],
+						...(saved.row.spec.interaction
+							? {
+									interaction: {
+										...saved.row.spec.interaction,
+										recipient: undefined,
+										actions: [],
+										blockedReason: "Read-only historical observation; no live native owner",
+									},
+								}
+							: {}),
+					},
+				};
 				await writeFileAtomically(
 					await containedSpecPath(
 						saved.row.spec.workspacePath,

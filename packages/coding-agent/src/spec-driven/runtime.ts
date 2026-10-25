@@ -33,6 +33,7 @@ import { createSpecActor, type SpecActor } from "./actors";
 import { bindSpecSkillPolicy, grantSpecSkillAccess } from "./skill-policy";
 import type {
 	SpecDrivenOptions,
+	SpecConversationReply,
 	SpecDrivenPorts,
 	SpecPlan,
 	SpecExecutionControl,
@@ -423,8 +424,12 @@ export async function createSpecDrivenRuntime(args: {
 			);
 		const id = `spec-${role}-${crypto.randomUUID()}`;
 		let observedSessionId: string | null = null;
+		const deferredCleanup: Promise<void>[] = [];
 		const result = await tracked(
 			runSubprocess({
+				onCleanupDeferred(completion) {
+					deferredCleanup.push(completion);
+				},
 				cwd,
 				agent: {
 					...definition,
@@ -519,6 +524,8 @@ export async function createSpecDrivenRuntime(args: {
 						releasePolicy();
 					};
 				},
+			}).finally(async () => {
+				await Promise.all(deferredCleanup);
 			}),
 		);
 		const name = `review-${result.id}-${crypto.randomUUID()}.json`;
@@ -565,6 +572,56 @@ export async function createSpecDrivenRuntime(args: {
 		return result.structuredOutput.data;
 	};
 	const ports: SpecDrivenPorts = {
+		conversation: {
+			recipient(role) {
+				const actor = actors.get(role);
+				if (!actor || actor.session.isDisposed || disposed) return undefined;
+				return { role, actorId: actor.id, sessionId: actor.session.sessionId };
+			},
+			async respond(input, context) {
+				if (!actors.has(input.role)) throw new Error(`No retained ${input.role} conversation actor`);
+				// Dialogue inherits current authority; it never renews a stopped execution host.
+				if (input.status.phase === "awaiting-acceptance") executionHost?.stop();
+				return (await requestActor(
+					input.role,
+					{
+						kind: "conversation",
+						...input,
+						originals: originals(),
+						uniquePlanPath: requireStore().planPath,
+					},
+					{
+						type: "object",
+						properties: {
+							text: { type: "string", minLength: 1 },
+							requirements: SPEC_REQUIREMENTS_SCHEMA,
+							plan: SPEC_PLAN_SCHEMA,
+						},
+						required: ["text"],
+						additionalProperties: false,
+					},
+					context,
+				)) as SpecConversationReply;
+			},
+			async repairScope(input, context) {
+				if (!actors.has("executor") || !executionHost) throw new Error("No retained executor for repair analysis");
+				executionHost.stop();
+				const reply = (await requestActor(
+					"executor",
+					{ kind: "repair-scope", ...input, originals: originals() },
+					{
+						type: "object",
+						properties: {
+							taskIds: { type: "array", items: { type: "string" }, minItems: 1, uniqueItems: true },
+						},
+						required: ["taskIds"],
+						additionalProperties: false,
+					},
+					context,
+				)) as { taskIds: string[] };
+				return reply.taskIds;
+			},
+		},
 		async handoff(input, context) {
 			const ctx = contextFor(context);
 			const artifacts = requireStore();

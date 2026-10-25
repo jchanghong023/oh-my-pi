@@ -8,7 +8,7 @@ import type { Skill } from "../extensibility/skills";
 import type { SpecStageRole } from "./types";
 import { archiveBase64, archiveSha256, resourceManifest } from "./vendor/archive.generated";
 
-export type SpecDrivenResourceSource = "superpowers" | "jch";
+export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
 export interface SpecDrivenSkillEntry {
 	source: SpecDrivenResourceSource;
 	name: string;
@@ -26,7 +26,6 @@ export interface SpecDrivenResourceManifest {
 	superpowers: { version: string; revision: string };
 	jch: { revision: string };
 	methods: readonly SpecDrivenMethodEntry[];
-	commands: readonly { name: string; path: string }[];
 	skills: readonly SpecDrivenSkillEntry[];
 	files: readonly { path: string; sha256: string; executable: boolean }[];
 }
@@ -120,22 +119,6 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	};
 }
 
-export async function loadOpenSpecCommand(name: string): Promise<string> {
-	const resources = await ensureSpecDrivenResources();
-	const entry = resources.manifest.commands.find(command => command.name === name);
-	if (!entry) throw new Error(`Unknown bundled OpenSpec command: ${name}`);
-	const filePath = await resolveSpecDrivenResourcePath(resources.root, entry.path);
-	if (!inside(await fs.realpath(resources.openspecRoot), filePath))
-		throw new Error("Bundled command escapes OpenSpec root");
-	const content = await fs.readFile(filePath, "utf8");
-	const digest = resources.manifest.files.find(file => file.path === entry.path)?.sha256;
-	if (!digest || crypto.createHash("sha256").update(content).digest("hex") !== digest)
-		throw new Error(`Bundled resource digest mismatch: ${entry.path}`);
-	const parsed = parseFrontmatter(content, { source: filePath, repair: false, level: "off" });
-	if (!parsed.body.trim()) throw new Error(`Empty bundled OpenSpec command: ${name}`);
-	return parsed.body.trim();
-}
-
 export async function loadSpecDrivenSkill(
 	source: SpecDrivenResourceSource,
 	name: string,
@@ -153,6 +136,7 @@ export async function loadSpecDrivenSkill(
 		throw new Error(`Bundled ${source} skill ${name} is not allowed for role ${options.role}`);
 	const entry = method ?? original;
 	const containRoot = {
+		openspec: resources.openspecRoot,
 		superpowers: resources.superpowersRoot,
 		jch: resources.jchRoot,
 	}[source];

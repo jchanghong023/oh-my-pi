@@ -6,7 +6,6 @@ import * as path from "node:path";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import {
 	ensureSpecDrivenResources,
-	loadOpenSpecCommand,
 	loadSpecDrivenSkill,
 	resolveSpecDrivenResourcePath,
 	runOpenSpec,
@@ -15,7 +14,7 @@ import {
 import { archiveBase64 } from "../../src/spec-driven/vendor/archive.generated";
 
 const retainedWorkflows = ["archive", "explore", "propose", "sync", "update", "verify"];
-const retainedOpenSpecCommands = retainedWorkflows.map(name => `opsx-${name}`);
+const retainedOpenSpecSkills = retainedWorkflows.map(name => `opsx-${name}`);
 const removedOpenSpecSkills = [
 	"openspec-new-change",
 	"openspec-continue-change",
@@ -96,7 +95,7 @@ describe("pinned upstream resources", () => {
 				.filter(entry => String(entry.source) === "openspec")
 				.map(entry => entry.name)
 				.sort(),
-		).toEqual([]);
+		).toEqual(retainedOpenSpecSkills);
 		expect(resources.manifest.skills.some(entry => entry.source === "superpowers")).toBe(true);
 		for (const entry of resources.manifest.skills) {
 			const skill = await loadSpecDrivenSkill(entry.source, entry.name);
@@ -195,15 +194,12 @@ describe("pinned upstream resources", () => {
 		});
 	}
 
-	it("does not distribute OpenSpec skills or removed implementation commands", async () => {
+	it("does not distribute removed OpenSpec skills or implementation workflows", async () => {
 		const resources = await ensureSpecDrivenResources();
-		expect(resources.manifest.files.some(file => /^openspec\/(?:original-)?skills\//.test(file.path))).toBe(false);
-		for (const name of [...removedOpenSpecSkills, ...retainedOpenSpecCommands]) {
-			for (const tree of ["skills", "original-skills"]) {
-				expect(resources.manifest.files.some(file => file.path.startsWith(`openspec/${tree}/${name}/`))).toBe(
-					false,
-				);
-			}
+		for (const name of removedOpenSpecSkills) {
+			expect(resources.manifest.skills.some(skill => skill.source === "openspec" && skill.name === name)).toBe(
+				false,
+			);
 		}
 		for (const module of [
 			"new-change",
@@ -222,22 +218,10 @@ describe("pinned upstream resources", () => {
 		}
 	});
 
-	it("loads exactly the six builtin OpenSpec command prompts and rejects unknown names", async () => {
-		const resources = await ensureSpecDrivenResources();
-		expect(resources.manifest.commands.map(command => command.name).sort()).toEqual(retainedOpenSpecCommands);
-		for (const command of resources.manifest.commands) {
-			const body = await loadOpenSpecCommand(command.name);
-			expect(body.length).toBeGreaterThan(100);
-			expect(body).not.toMatch(/\/opsx-(?:new|continue)\b/);
-			expect(body).not.toContain("/opsx:");
-			expect(body).not.toContain("[[opsx:");
-			expect(body).not.toMatch(/(?<![\w/.-])(?<!omp )openspec (?=[a-z-])/);
-			expect(body).toBe((await fs.readFile(path.join(resources.root, command.path), "utf8")).trim());
+	it("rejects unknown and removed OpenSpec skill identities", async () => {
+		for (const name of ["opsx-apply", "opsx-new", "opsx-continue", "../opsx-new"]) {
+			await expect(loadSpecDrivenSkill("openspec", name)).rejects.toThrow("Unknown bundled openspec skill");
 		}
-		await expect(loadOpenSpecCommand("opsx-apply")).rejects.toThrow("Unknown bundled OpenSpec command");
-		await expect(loadOpenSpecCommand("opsx-new")).rejects.toThrow("Unknown bundled OpenSpec command");
-		await expect(loadOpenSpecCommand("opsx-continue")).rejects.toThrow("Unknown bundled OpenSpec command");
-		await expect(loadOpenSpecCommand("../opsx-new")).rejects.toThrow("Unknown bundled OpenSpec command");
 	});
 
 	it("initializes requirements directories and config without installing external tool integrations", async () => {
