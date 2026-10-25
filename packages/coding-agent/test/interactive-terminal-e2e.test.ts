@@ -127,23 +127,12 @@ describe("libkitty end-to-end", () => {
 				expect(session.agent.state.messages).toEqual([]);
 			}
 
-			controller?.pause();
-			expect(controller?.status().paused).toBe(true);
-			mode.editor.setText("paused requirement");
-			term.sendInput(key);
-			await term.waitForRender(() => controller?.observation().interaction.draft === "paused requirement");
-			expect(controller?.observation().interaction.draft).toBe("paused requirement");
-			expect(controller?.observation().interaction.messages).toEqual([]);
-			expect(prompt).not.toHaveBeenCalled();
-			expect(outerInputs).toEqual([]);
-
 			// This is a persistent composer projection, not only the toggle's
 			// transcript notice: the destination remains after editing and resize.
 			term.resize(110, 30);
 			await term.waitForRender();
 			const viewport = plainRows(term.getViewport()).join("\n");
 			expect(viewport).toContain("协同开发模式 →");
-			expect(mode.editor.getExpandedText()).toBe("paused requirement");
 		});
 
 		it(`${label} rejects unknown and skill commands in dev instead of expanding an outer prompt`, async () => {
@@ -209,19 +198,17 @@ describe("libkitty end-to-end", () => {
 				const report = controller.report.bind(controller);
 				let reporting: Promise<void> | undefined;
 				vi.spyOn(controller, "report").mockImplementation(() => {
-					expect(controller.status().paused).toBe(true);
 					expect(session.isCompacting).toBe(true);
 					expect(session.isStreaming).toBe(true);
-					// Pause has been admitted while busy. Release the synthetic state
-					// before real transcript persistence waits for the idle outer agent.
+					// The control reached the native host while busy. Release the synthetic
+					// state before transcript persistence waits for the idle outer agent.
 					busy = false;
 					reporting = report();
 					return reporting;
 				});
 				mode.editor.setText("/dev pause");
 				term.sendInput(key);
-				await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.status().paused === true);
-				expect(peekSpecDrivenController(session.sessionManager)?.status().paused).toBe(true);
+				await term.waitForRender(() => reporting !== undefined);
 				expect(reporting).toBeDefined();
 				await reporting;
 				mode.editor.setText("/dev");

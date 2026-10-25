@@ -669,6 +669,7 @@ export async function createSpecDrivenRuntime(args: {
 				saved &&
 				saved.actorId === actor.id &&
 				saved.runId === ctx.runId &&
+				saved.generation === ctx.generation &&
 				JSON.stringify(saved.versions) === JSON.stringify(versions) &&
 				(await fs.readFile(target, "utf8").catch(() => null)) === saved.body
 			)
@@ -1145,6 +1146,9 @@ export async function createSpecDrivenRuntime(args: {
 							const before = previous && {
 								task: previous,
 								workspace: approvedPlan.workspace,
+								conditions: previous.conditionIds.map(id =>
+									approvedPlan!.conditions.find(item => item.id === id),
+								),
 								requirements: previous.requirementIds.map(id =>
 									approvedRequirements!.requirements.find(item => item.id === id),
 								),
@@ -1152,6 +1156,7 @@ export async function createSpecDrivenRuntime(args: {
 							const after = {
 								task,
 								workspace: input.plan.workspace,
+								conditions: task.conditionIds.map(id => input.plan.conditions.find(item => item.id === id)),
 								requirements: task.requirementIds.map(id =>
 									input.specification.requirements.find(item => item.id === id),
 								),
@@ -1367,7 +1372,7 @@ export async function createSpecDrivenRuntime(args: {
 							command: approved.command,
 							toolCallId: `host-${input.purpose}-${input.id}-${crypto.randomUUID()}`,
 							inputPaths,
-							obligation: { validationId: input.id, approvedCommand: approved.command, reason: null },
+							obligation: { validationId: input.id, approvedCommand: approved.command },
 						},
 						ctx,
 					),

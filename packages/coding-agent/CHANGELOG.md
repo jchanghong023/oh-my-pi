@@ -16,6 +16,9 @@
 
 ### Changed
 
+- Support single-developer `/dev revise-plan <plan-version> <amendment...>` without restarting unchanged requirements or solution approvals: stop old execution, retain the previous plan and valid work, invalidate plan approval and acceptance, and await approval after independent review.
+- Keep two review-repair rounds per reviewer slot by default, with explicit `/dev extend-review <review-id> <revision> <repair-limit>` adding exactly one round to an exhausted blocked or repair-limited review. Preserve counts, issues, evidence and reviewer identity without waiving checks, granting permissions or reopening writes while awaiting acceptance.
+- Restrict `/dev` verification to commands resolved from approved validation IDs; command or argument changes require plan revision and renewed approval rather than model-selected equivalent commands.
 - Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
 - Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; only active real thinking appears in a self-clearing two-row dock above the input. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.

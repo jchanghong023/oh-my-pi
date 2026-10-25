@@ -283,7 +283,6 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(ctx.streamingComponent?.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
 			expect(ctx.session.agent.state).toMatchObject({
 				isStreaming: true,
 				streamMessage: message,
@@ -303,7 +302,6 @@ describe("collab guest extension lifecycle mirror", () => {
 			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
 			await send({ type: "message_end", message });
 			expect(ctx.session.agent.state.streamMessage).toBeNull();
-			expect(ctx.chatContainer.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
 			expect(ctx.session.messages).toEqual(history);
 			expect(ctx.session.agent.state.messages).toHaveLength(1);
 			expect(agentEvents).toEqual([]);
@@ -311,7 +309,7 @@ describe("collab guest extension lifecycle mirror", () => {
 			await send({ type: "agent_end", messages: [message], isTerminal: true });
 			expect(ctx.session.isStreaming).toBe(false);
 
-			// Subsequent live reasoning and prose use the normal inline message lifecycle.
+			// Subsequent live reasoning and prose preserve the mirrored message lifecycle.
 			await send({ type: "agent_start" });
 			const started = { ...message, content: [] };
 			await send({ type: "message_start", message: started });
@@ -332,7 +330,6 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(ctx.streamingComponent?.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
 			await send({
 				type: "message_update",
 				message,

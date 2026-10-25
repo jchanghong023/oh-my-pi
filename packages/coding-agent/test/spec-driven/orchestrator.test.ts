@@ -178,7 +178,6 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 			obligation: {
 				validationId: evidence.validationId ?? validation?.id ?? condition?.id ?? command,
 				approvedCommand: command,
-				reason: null,
 				...(evidence.stage ? { stage: evidence.stage } : {}),
 			},
 			result: {
@@ -438,6 +437,178 @@ function fixture(options: Partial<SpecDrivenOptions> = {}) {
 		},
 	};
 }
+
+describe("single-developer plan revision and explicit review allowance", () => {
+	it("retains unchanged work and upstream approvals while requiring approval of the revised plan", async () => {
+		const f = fixture();
+		const draft = f.getPlan();
+		draft.tasks.push(task("T002"));
+		f.setPlan(draft);
+		const ready = await f.toAcceptance();
+		const preserved = structuredClone(ready.tasks[0]!);
+		const changed = f.getPlan();
+		changed.content += "\nRevised task instructions";
+		changed.tasks[1]!.instructions += "; handle boundary";
+		f.setPlan(changed);
+		const planner = f.ports.models.plan;
+		f.ports.models.plan = async (input, context) => {
+			expect(input.amendment).toBe("Change only T002");
+			expect(input.previous?.version).toBe(ready.plan!.version);
+			return planner(input, context);
+		};
+		const revised = await f.orchestrator.revisePlan(ready.plan!.version, "Change only T002");
+		expect(revised.phase).toBe("awaiting-plan");
+		expect(revised.specificationApproval).toBe(ready.specificationApproval);
+		expect(revised.selection).toEqual(ready.selection);
+		expect(revised.solution).toEqual(ready.solution);
+		expect(revised.planApproval).toBeUndefined();
+		expect(revised.acceptanceVersion).toBeUndefined();
+		expect(revised.tasks[0]!.status).toBe("completed");
+		expect(revised.tasks[0]!.records).toEqual(preserved.records);
+		expect(revised.tasks[0]!.commits).toEqual(preserved.commits);
+		expect(revised.tasks[1]!.status).toBe("pending");
+		expect(revised.tasks[1]!.review!.id).toBe(ready.tasks[1]!.review!.id);
+		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(1);
+		const snapshot = f.orchestrator.status();
+		const events = [...f.events];
+		await expect(f.orchestrator.revisePlan(ready.plan!.version, "Stale request")).rejects.toThrow();
+		await expect(f.orchestrator.confirmPlan(ready.plan!.version)).rejects.toThrow();
+		await expect(f.orchestrator.accept(ready.acceptanceVersion!)).rejects.toThrow();
+		expect(f.orchestrator.status()).toEqual(snapshot);
+		expect(f.events).toEqual(events);
+		const accepted = await f.orchestrator.confirmPlan(revised.plan!.version);
+		expect(accepted.phase).toBe("awaiting-acceptance");
+		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
+		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(2);
+	});
+
+	it("resumes each exhausted current seat only after an explicit identity-bound extra round", async () => {
+		for (const kind of ["requirements", "plan", "task", "overall"] as const) {
+			const f = fixture();
+			const review = f.ports.models.review;
+			f.ports.models.review = async (input, context) => {
+				if (input.kind !== kind) return review(input, context);
+				f.capturedReviews.push(structuredClone(input));
+				return input.slot.revision < 3 ? failure(kind === "overall" ? ["T001"] : []) : pass(input);
+			};
+			const ready = kind === "requirements" ? await f.orchestrator.start("Request", "change") : await f.toPlan();
+			const blocked =
+				kind === "task" || kind === "overall" ? await f.orchestrator.confirmPlan(ready.plan!.version) : ready;
+			const slot = blocked.reviews.find(item => item.kind === kind)!;
+			expect(blocked.paused).toBe(true);
+			expect(slot.revision).toBe(2);
+			expect(slot.repairLimit).toBe(2);
+			const events = [...f.events];
+			await expect(f.orchestrator.extendReview(slot.id, 1, 2)).rejects.toThrow();
+			await expect(f.orchestrator.extendReview("foreign", 2, 2)).rejects.toThrow();
+			expect(f.orchestrator.status()).toEqual(blocked);
+			expect(f.events).toEqual(events);
+			const extended = await f.orchestrator.extendReview(slot.id, slot.revision, slot.repairLimit);
+			expect(extended.paused).toBe(false);
+			expect(extended.phase).toBe(
+				kind === "requirements"
+					? "awaiting-specification"
+					: kind === "plan"
+						? "awaiting-plan"
+						: "awaiting-acceptance",
+			);
+			const current = extended.reviews.find(item => item.id === slot.id)!;
+			expect(current.model).toBe(slot.model);
+			expect(current.revision).toBe(3);
+			expect(current.repairLimit).toBe(3);
+			expect(current.lastReview?.verdict).toBe("pass");
+			expect(current.lastReview?.resolutions).toEqual([
+				{ findingId: "F1", resolved: true, evidence: "Inspected repair and rerun" },
+			]);
+			if (kind === "task" || kind === "overall") {
+				expect(f.events.filter(event => event === "validate:task:T001:unit")).toHaveLength(4);
+				expect(extended.finalApproval).toBeUndefined();
+			}
+			const snapshot = f.orchestrator.status();
+			await expect(f.orchestrator.extendReview(slot.id, 2, 2)).rejects.toThrow();
+			expect(f.orchestrator.status()).toEqual(snapshot);
+		}
+	});
+
+	it("adds allowance at acceptance without modifying files or accepting the result", async () => {
+		const f = fixture();
+		const review = f.ports.models.review;
+		f.ports.models.review = async (input, context) =>
+			input.kind === "overall" && input.slot.revision < 2 ? failure(["T001"]) : review(input, context);
+		const ready = await f.toAcceptance();
+		const slot = ready.reviews.find(item => item.kind === "overall")!;
+		const events = [...f.events];
+		const extended = await f.orchestrator.extendReview(slot.id, slot.revision, slot.repairLimit);
+		expect(extended.phase).toBe("awaiting-acceptance");
+		expect(extended.acceptanceVersion).toBe(ready.acceptanceVersion);
+		expect(extended.finalApproval).toBeUndefined();
+		expect(f.events).toEqual(events);
+		const repaired = await f.orchestrator.repair(extended.acceptanceVersion!, "Repair T001 boundary");
+		expect(repaired.phase).toBe("awaiting-acceptance");
+		expect(repaired.acceptanceVersion).not.toBe(ready.acceptanceVersion);
+		expect(f.events.filter(event => event === "validate:task:T001:unit")).toHaveLength(4);
+		expect(repaired.reviews.find(item => item.id === slot.id)!.revision).toBe(3);
+	});
+	it("does not reset a plan seat budget by repeatedly revising the plan", async () => {
+		const f = fixture();
+		let state = await f.toPlan();
+		const slot = state.reviews.find(item => item.kind === "plan")!;
+		for (const amendment of ["First change", "Second change"]) {
+			const draft = f.getPlan();
+			draft.content += `\n${amendment}`;
+			f.setPlan(draft);
+			state = await f.orchestrator.revisePlan(state.plan!.version, amendment);
+		}
+		expect(state.reviews.find(item => item.id === slot.id)!.revision).toBe(2);
+		const snapshot = f.orchestrator.status();
+		await expect(f.orchestrator.revisePlan(state.plan!.version, "Third change")).rejects.toThrow();
+		expect(f.orchestrator.status()).toEqual(snapshot);
+		const extended = await f.orchestrator.extendReview(slot.id, 2, 2);
+		expect(extended.planApproval).toBeUndefined();
+		expect(extended.reviews.find(item => item.id === slot.id)!.repairLimit).toBe(3);
+		const revised = await f.orchestrator.revisePlan(state.plan!.version, "Third change");
+		expect(revised.reviews.find(item => item.id === slot.id)!.revision).toBe(3);
+		expect(revised.phase).toBe("awaiting-plan");
+	});
+
+	it("isolates old executor callbacks before replacing an in-flight plan", async () => {
+		const f = fixture();
+		const planned = await f.toPlan();
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		f.ports.models.execute = async (_input, context, control) => {
+			started.resolve();
+			await release.promise;
+			expect(context.signal.aborted).toBe(true);
+			await expect(control.start("T001")).rejects.toThrow();
+		};
+		const executing = f.orchestrator.confirmPlan(planned.plan!.version);
+		await started.promise;
+		const draft = f.getPlan();
+		draft.content += "\nStop old execution and revise";
+		f.setPlan(draft);
+		const revising = f.orchestrator.revisePlan(planned.plan!.version, "Revise while running");
+		release.resolve();
+		await executing;
+		const revised = await revising;
+		expect(revised.phase).toBe("awaiting-plan");
+		expect(revised.paused).toBe(false);
+		expect(revised.planApproval).toBeUndefined();
+		expect(revised.tasks[0]!.status).toBe("pending");
+		expect(f.events.some(event => event.startsWith("commit:"))).toBe(false);
+	});
+	it("rejects an unchanged native publication when no prior real task range exists", async () => {
+		const f = fixture();
+		f.ports.git.commit = async () => null;
+		const blocked = await f.toAcceptance();
+		expect(blocked.paused).toBe(true);
+		expect(blocked.blockedReason).toBe("Unchanged task publication has no prior real commit range");
+		expect(blocked.tasks[0]!.commits).toEqual([]);
+		expect(blocked.tasks[0]!.status).toBe("verified");
+		expect(blocked.acceptanceVersion).toBeUndefined();
+		expect(f.capturedReviews.some(review => review.kind === "task")).toBe(false);
+	});
+});
 
 describe("native current-stage collaboration", () => {
 	it("reports accumulated user-decision wait from real phase time", async () => {
@@ -848,7 +1019,6 @@ async function contentFixture() {
 						obligation: {
 							validationId: validation.id,
 							approvedCommand: validation.command,
-							reason: null,
 							...(stage ? { stage } : {}),
 						},
 					}
@@ -1657,7 +1827,7 @@ describe("SpecDrivenOrchestrator", () => {
 		};
 		const state = await f.orchestrator.start("Request", "change");
 		expect(state.paused).toBe(true);
-		expect(state.blockedReason).toContain("two repair rounds");
+		expect(state.blockedReason).toContain("repair allowance is exhausted");
 		expect(reviews).toBe(3);
 		expect(f.capturedReviews.map(input => input.slot.revision)).toEqual([0, 1, 2]);
 		expect(new Set(f.capturedReviews.map(input => input.slot.id)).size).toBe(1);
@@ -1698,7 +1868,7 @@ describe("SpecDrivenOrchestrator", () => {
 			const ready = await f.toPlan();
 			const state = kind === "plan" ? ready : await f.orchestrator.confirmPlan(ready.plan!.version);
 			expect(state.paused).toBe(true);
-			expect(state.blockedReason).toContain("two repair rounds");
+			expect(state.blockedReason).toContain("repair allowance is exhausted");
 			const reviews = f.capturedReviews.filter(input => input.kind === kind);
 			expect(reviews.map(input => input.slot.revision)).toEqual([0, 1, 2]);
 			expect(new Set(reviews.map(input => input.slot.id)).size).toBe(1);

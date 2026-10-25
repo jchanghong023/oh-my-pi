@@ -345,7 +345,8 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "clean", description: "隐藏思考与工具活动" },
 			{
 				name: "compact",
-				description: "连续工具段末两条预览，写入段末三次修改；输入区上方显示活跃思考两行，用户消息超六行显示前五行与折叠提示",
+				description:
+					"连续工具段末两条预览，写入段末三次修改；输入区上方显示活跃思考两行，用户消息超六行显示前五行与折叠提示",
 			},
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],

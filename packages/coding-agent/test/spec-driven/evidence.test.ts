@@ -137,7 +137,7 @@ describe("runner-owned selected input evidence", () => {
 							command,
 							toolCallId: "must-not-admit",
 							inputPaths,
-							obligation: { validationId: "selected-output", approvedCommand: command, reason: null },
+							obligation: { validationId: "selected-output", approvedCommand: command },
 						},
 						context,
 					),
@@ -242,7 +242,7 @@ describe("aggregate runner-owned evidence", () => {
 					command: cancelledCommand,
 					toolCallId: "source-command",
 					inputPaths: ["input.txt"],
-					obligation: { validationId: "source-validation", approvedCommand: cancelledCommand, reason: null },
+					obligation: { validationId: "source-validation", approvedCommand: cancelledCommand },
 				},
 				{ runId: "aggregate-run", generation: 1, signal: controller.signal },
 			);
@@ -261,7 +261,7 @@ describe("aggregate runner-owned evidence", () => {
 					command: currentCommand,
 					toolCallId: "target-command",
 					inputPaths: ["input.txt"],
-					obligation: { validationId: "target-validation", approvedCommand: currentCommand, reason: null },
+					obligation: { validationId: "target-validation", approvedCommand: currentCommand },
 				},
 				{ runId: "aggregate-run", generation: 2, signal: new AbortController().signal },
 			);
@@ -297,6 +297,7 @@ describe("aggregate runner-owned evidence", () => {
 							model: "isolated-review",
 							sameModelIndependent: true,
 							revision: 0,
+							repairLimit: 2,
 							findings: [
 								{
 									id: "finding-1",
@@ -373,7 +374,7 @@ describe("aggregate runner-owned evidence", () => {
 					command,
 					toolCallId: "save-command",
 					inputPaths: ["input.txt"],
-					obligation: { validationId: "save-validation", approvedCommand: command, reason: null },
+					obligation: { validationId: "save-validation", approvedCommand: command },
 				},
 				context,
 			);
@@ -435,7 +436,7 @@ describe("aggregate runner-owned evidence", () => {
 					command,
 					toolCallId: "archive-command",
 					inputPaths: ["input.txt"],
-					obligation: { validationId: "archive-validation", approvedCommand: command, reason: null },
+					obligation: { validationId: "archive-validation", approvedCommand: command },
 				},
 				context,
 			);

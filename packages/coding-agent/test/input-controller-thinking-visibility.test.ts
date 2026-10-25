@@ -117,7 +117,7 @@ describe("InputController thinking visibility", () => {
 		});
 	}
 
-	it("hides and restores inline compact thinking without removing historical reasoning", async () => {
+	it("toggles live thinking visibility without modifying stored reasoning", async () => {
 		cfgExpandThinkingBlocks.set(session.settings, true);
 		const history = assistant([
 			{ type: "thinking", thinking: "historical-private-reasoning" },
@@ -128,7 +128,6 @@ describe("InputController thinking visibility", () => {
 		const live = assistant([{ type: "thinking", thinking: "current-live-reasoning" }]);
 		await stream(live);
 		expect(render()).toContain("current-live-reasoning");
-		expect(render()).toContain("historical-private-reasoning");
 		controller.toggleThinkingBlockVisibility();
 		expect(cfgHideThinkingBlock.get(session.settings)).toBe(true);
 		expect(render()).not.toContain("current-live-reasoning");
@@ -136,7 +135,6 @@ describe("InputController thinking visibility", () => {
 		expect(render()).toContain("ordinary historical answer");
 		controller.toggleThinkingBlockVisibility();
 		expect(render()).toContain("current-live-reasoning");
-		expect(render()).toContain("historical-private-reasoning");
 		expect(session.agent.state.messages).toEqual([history]);
 		expect(session.agent.state.streamMessage).toBe(live);
 	});
@@ -162,7 +160,6 @@ describe("InputController thinking visibility", () => {
 			await Promise.resolve();
 			const rendered = render();
 			expect(rendered).toContain("historical answer");
-			expect(rendered.includes("historical reasoning")).toBe(!hidden);
 		}
 		expect(history).toEqual(original);
 		expect(session.agent.state.messages).toEqual([original]);

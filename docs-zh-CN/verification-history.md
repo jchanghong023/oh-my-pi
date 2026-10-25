@@ -2,6 +2,14 @@
 
 本页保存原需求目录索引中的定向验收和历史运行证据。各条结论只适用于其中列明的源码、平台和范围；当前批准需求以相应 OpenSpec 规格为准。
 
+## 单人 `/dev` 计划修订与修复额度验收（2026-10-26）
+
+Windows 真实源码 `bun run dev`＋`tui-test` 使用隔离配置及 localhost 模拟模型，验证 `/dev revise-plan` 保留需求／方案批准与三个已完成任务的有效记录、撤销旧计划批准和验收版本；旧计划批准、旧验收和重复追加额度均被拒绝。审查用尽两轮后保持阻断，显式追加一轮后通过真实验证和审查进入待验收；另一场景追加后仍有阻断问题，保持暂停且没有验收版本。`spec_verify` 的原始证据包含 16 次实际获批命令执行、两次替代命令拒绝，没有执行模型提供的替代命令。重新批准后最终验收与授权归档完成。
+
+证据：`node_modules/.cache/single-dev-workflow-20261026/tui-verified/` 的 `accepted-candidate-evidence.json`、`replanned-evidence.json`、`completed.png`；失败边界为同级 `tui-denied/extra-round-still-blocked.png` 及运行状态。一次最终文案可见断言超时，实际状态已完成；随后通过“开始新流程”操作及归档状态核对，不将该次超时算作通过。TUI 退出等待后未获得退出码，最终仅关闭本次自有 session，不宣称 CLI 自然 exit=0。本地模拟只证明编排和真实工具边界，不证明真实模型质量、效率、公司服务或其他平台。
+
+Windows `scope=fork-affected` 连续两轮真实 `bun run fulltest` 均 PASS：外部启动至退出墙钟分别为 **798.935 秒、17.248 秒**，第二轮严格小于 30 秒；两轮源码指纹均为 `799b4fc9d473f61395d6f60e0ee3bdf48a55a52efa83e8e96080d95b699cedc0`，537 个必需目标及配置一致，四个持久 Bazel Server 身份一致。第二轮 513 个测试目标全部有效缓存命中、没有重新执行测试；不将旧用例重放计为本轮执行。当前源码 native 准备及安装核验仍走原入口；未清缓存、缩小范围或放宽 900 秒上限。原生缓存已满足热运行目标，未新增推测性缓存机制。完整原生 profile、BEP、执行日志、外部计时及对照断言见 `node_modules/.cache/single-dev-workflow-20261026/cache-pair-evidence.json` 与对应 `fulltest-*` 目录；Bazel 汇总分别为 `build/runs/fe3f21c9-9e3b-4620-90db-c8bbf035b01a/bazel-run-88306bb1-db99-434d-91f3-3b22d559ad38.metrics.json`、`build/runs/8463ecdc-caa7-4538-bdda-e0a964c4c952/bazel-run-37c64900-0ff1-41d0-a1ff-61c075e0b439.metrics.json`（均在 `node_modules/.cache/test-gate-bazel/` 下）。`runs/test-timing/2026-10-25T18-31-00.521Z-46068-a36eac94/run.json`、`2026-10-25T18-44-33.496Z-52700-692d4c1b/run.json` 按 Bazel 委托 XML 契约保持 partial，不冒称完整 JUnit 汇总。本轮修正公开验收读取原生 actor journal 的运行目录，移除与当前紧凑模式和未启动运行语义冲突的旧断言，保留生命周期、显示切换、输入路由及真实命令验收；失败报告保留。本段仅为通过后的证据记录，不在上述源码指纹内；未运行 slowtest、其他平台、真实模型或 GUI 验收。
+
 ## Team 配置实施与定向验收记录（2026-10-19）
 
 `/team configure`、共享 Team 配置服务、Settings／YAML 保存与 CLI 接入已实现，包含严格重复键拒绝、无损原槽位、完整候选、只读草稿预览、版本冲突及双端保存回执；原 RPC 接口已随独立 RPC 场景退役删除（见 [ZCode 接入：独立 RPC 退役](../openspec/specs/zcode-app-server/spec.md)）。GUI 当前接入与验收状态见 [ZCode 接入需求](../openspec/specs/zcode-app-server/spec.md)，不沿用本节当日“未来规划”的判断。行为权威仍为 [Team](../openspec/specs/team-discussion/spec.md)、[GUI 接口字段契约（设计参考）](../openspec/specs/zcode-model-configuration/spec.md)及 [offline 用户配置双写](../openspec/specs/offline-shm/spec.md)，本节只集中记录证据，不建立第二份契约；保留含“规划未实现”的历史章节标题以维持现有指南和 README 链接。下述 RPC 证据均对应独立 RPC 场景退役前的源码。

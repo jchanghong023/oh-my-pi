@@ -197,6 +197,8 @@ export interface CustomTool<TParams extends TSchema = TSchema, TDetails = any> {
 	label: string;
 	/** If true, tool is strictly typed and validated against the parameters schema before execution */
 	strict?: boolean;
+	/** Preserve raw arguments on schema mismatch for tools that enforce their own input boundary. */
+	lenientArgValidation?: boolean;
 	/** Description for LLM */
 	description: string;
 	/** Parameter schema (arktype, TypeBox, or legacy formats). */

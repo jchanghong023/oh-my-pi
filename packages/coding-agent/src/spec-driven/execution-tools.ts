@@ -15,8 +15,7 @@ import type { SpecEvidenceService } from "./evidence";
 const verifySchema = type({
 	validationId: "string",
 	stage: "'red' | 'green'",
-	"command?": "string",
-	"reason?": "string",
+	"+": "reject",
 });
 export interface SpecExecutionTools {
 	tools: CustomTool[];
@@ -209,26 +208,21 @@ export function createSpecExecutionTools(input: {
 		description: verifyDescription.trim(),
 		parameters: verifySchema,
 		strict: true,
+		lenientArgValidation: true,
 		async execute(toolCallId, params, _update, _ctx, signal) {
+			verifySchema.assert(params);
 			const validation = input.task.validation.find(item => item.id === params.validationId);
 			if (!validation) throw new Error(`Unapproved validation ID: ${params.validationId}`);
 			const context = {
 				...input.context,
 				signal: AbortSignal.any([input.context.signal, ...(signal ? [signal] : [])]),
 			};
-			if (params.command !== undefined && !params.command.trim())
-				throw new Error("Equivalent verification command must not be empty");
-			if (params.command !== undefined && params.command !== validation.command && !params.reason?.trim())
-				throw new Error("Equivalent verification requires a reason preserving the approved obligation");
-			if (params.reason !== undefined && params.command === undefined)
-				throw new Error("Equivalent verification reason requires a command");
 			const commandInput = {
-				command: params.command ?? validation.command,
+				command: validation.command,
 				toolCallId,
 				obligation: {
 					validationId: validation.id,
 					approvedCommand: validation.command,
-					reason: params.reason ?? null,
 					stage: params.stage,
 				},
 			};

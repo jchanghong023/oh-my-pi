@@ -56,6 +56,7 @@ export class SpecDrivenOrchestrator {
 	#requirementsSlot?: SpecReviewSlot;
 	#planSlot?: SpecReviewSlot;
 	#overallSlot?: SpecReviewSlot;
+	#planAmendment?: string;
 	#conditionRecords = new Map<string, SpecToolRecord>();
 	#finalRecords: SpecToolRecord[] = [];
 	#finalValidationRecords = new Map<string, SpecToolRecord>();
@@ -289,11 +290,13 @@ export class SpecDrivenOrchestrator {
 						expanded = true;
 					}
 			}
-			const exhausted = this.#state.tasks.filter(task => affected.has(task.id) && task.review?.revision === 2);
+			const exhausted = this.#state.tasks.filter(
+				task => affected.has(task.id) && task.review && task.review.revision >= task.review.repairLimit,
+			);
 			if (exhausted.length) {
 				this.#clarificationRound++;
 				this.#state.questions = [
-					`任务 ${exhausted.map(task => task.id).join("、")} 已用尽两轮修订。请修改修复说明，或通过 amend／change-solution 修改已批准约定；旧验收版本已撤销。`,
+					`任务 ${exhausted.map(task => task.id).join("、")} 已用尽修订额度。请明确追加对应审查席位额度或修改修复范围；旧验收版本已撤销。`,
 				];
 				this.#state.phase = "awaiting-answers";
 				return;
@@ -327,8 +330,8 @@ export class SpecDrivenOrchestrator {
 		this.#expect("awaiting-acceptance");
 		if (!text.trim() || !expectedVersion || expectedVersion !== this.#state.acceptanceVersion)
 			throw new SpecAdmissionError("Stale final acceptance or missing repair instructions");
-		if (this.#overallSlot?.revision === 2)
-			throw new SpecAdmissionError("Overall review is still bounded to two repair rounds");
+		if (this.#overallSlot && this.#overallSlot.revision >= this.#overallSlot.repairLimit)
+			throw new SpecAdmissionError("Overall review repair allowance is exhausted");
 	}
 
 	#notify(): void {
@@ -445,6 +448,101 @@ export class SpecDrivenOrchestrator {
 		});
 	}
 
+	assertRevisePlan(version: string, text: string): void {
+		this.#assertMutable();
+		if (!text.trim() || !version || version !== this.#state.plan?.version)
+			throw new SpecAdmissionError("Stale plan identity or missing plan amendment");
+		if (!this.#state.specificationApproval || !this.#state.selection || !this.#state.solution)
+			throw new SpecAdmissionError("Plan revision requires approved upstream inputs");
+		if (this.#planSlot && this.#planSlot.revision >= this.#planSlot.repairLimit)
+			throw new SpecAdmissionError("Plan review repair allowance is exhausted; explicitly extend it first");
+	}
+
+	async revisePlan(version: string, text: string): Promise<SpecDrivenStatus> {
+		this.assertRevisePlan(version, text);
+		await this.#interrupt();
+		this.#rememberTasks();
+		this.#planAmendment = text;
+		this.#state.planApproval = undefined;
+		this.#state.acceptanceVersion = undefined;
+		this.#state.finalApproval = undefined;
+		this.#pendingRepair = undefined;
+		this.#repair = undefined;
+		this.#reviewClarification = undefined;
+		this.#reviewAnswer = undefined;
+		this.#state.questions = [];
+		this.#state.pendingClosure = [];
+		if (this.#planSlot) this.#revise(this.#planSlot);
+		if (this.#overallSlot) this.#overallSlot.reviewedRevision = undefined;
+		this.#conditionRecords.clear();
+		this.#finalRecords = [];
+		this.#finalValidationRecords.clear();
+		this.#gitPrepared = false;
+		this.#state.handoffs = this.#state.handoffs?.filter(item => item.transition !== "plan-to-execution");
+		this.#state.phase = "planning";
+		return this.#launch();
+	}
+
+	#currentReview(id: string): SpecReviewSlot | undefined {
+		return [
+			this.#requirementsSlot,
+			this.#planSlot,
+			this.#overallSlot,
+			...this.#state.tasks.map(task => task.review),
+		].find(slot => slot?.id === id);
+	}
+
+	assertExtendReview(id: string, revision: number, repairLimit: number): void {
+		this.#assertMutable();
+		const slot = this.#currentReview(id);
+		if (
+			this.#driving ||
+			!slot ||
+			slot.revision !== revision ||
+			slot.repairLimit !== repairLimit ||
+			slot.revision < slot.repairLimit ||
+			!(
+				slot.lastReview?.verdict === "revise" ||
+				slot.findings.some(substantive) ||
+				(slot.kind === "plan" && slot.lastReview?.verdict === "pass") ||
+				(this.#state.phase === "awaiting-acceptance" &&
+					slot.kind !== "requirements" &&
+					slot.lastReview?.verdict === "pass") ||
+				(this.#pendingRepair !== undefined && slot.kind === "task")
+			)
+		)
+			throw new SpecAdmissionError("Stale review identity or review repair allowance is not exhausted");
+	}
+
+	async extendReview(id: string, revision: number, repairLimit: number): Promise<SpecDrivenStatus> {
+		this.assertExtendReview(id, revision, repairLimit);
+		const slot = this.#currentReview(id)!;
+		slot.repairLimit++;
+		// Increasing the allowance never passes a review or authorizes writes at the acceptance boundary.
+		if (["awaiting-acceptance", "awaiting-plan"].includes(this.#state.phase)) {
+			await this.#preserve();
+			return this.status();
+		}
+		const task = this.#state.tasks.find(item => item.review?.id === id);
+		if (
+			task &&
+			slot.lastReview?.verdict === "revise" &&
+			slot.reviewedRevision === slot.revision &&
+			this.#pendingRepair === undefined
+		) {
+			this.#revise(slot);
+			task.status = "pending";
+			task.validatedIds = [];
+			task.repairReview = slot.lastReview;
+		}
+		if (this.#state.paused) {
+			this.#state.paused = false;
+			this.#state.blockedReason = undefined;
+			this.#abort = new AbortController();
+		}
+		return this.#pendingRepair === undefined ? this.#launch() : this.#runRepair(this.#pendingRepair);
+	}
+
 	async amendRequirements(text: string): Promise<SpecDrivenStatus> {
 		if (!text.trim()) throw new SpecAdmissionError("Amendment is required");
 		this.#assertMutable();
@@ -549,6 +647,7 @@ export class SpecDrivenOrchestrator {
 		this.#state.pendingClosure = [];
 		this.#state.tasks = [];
 		this.#state.plan = undefined;
+		this.#planAmendment = undefined;
 		this.#planSlot = undefined;
 		this.#overallSlot = undefined;
 		this.#conditionRecords.clear();
@@ -797,6 +896,7 @@ export class SpecDrivenOrchestrator {
 			model,
 			sameModelIndependent: model === author,
 			revision: 0,
+			repairLimit: 2,
 			findings: [],
 		};
 		this.#state.reviews.push(slot);
@@ -821,7 +921,11 @@ export class SpecDrivenOrchestrator {
 			if (!affected.has(task.id)) continue;
 			task.status = task.execution ? "implemented" : "pending";
 			task.validatedIds = [];
-			if (task.review?.lastReview?.verdict === "pass") task.review.reviewedRevision = undefined;
+			if (task.review?.lastReview?.verdict === "pass") {
+				task.review.reviewedRevision = undefined;
+				const slot = this.#state.reviews.find(item => item.id === task.review?.id);
+				if (slot) slot.reviewedRevision = undefined;
+			}
 		}
 		for (const condition of this.#state.plan?.conditions ?? [])
 			if (this.#state.plan?.tasks.some(task => affected.has(task.id) && task.conditionIds.includes(condition.id)))
@@ -844,8 +948,9 @@ export class SpecDrivenOrchestrator {
 		const invalidated = await this.#refreshEvidence(context);
 		if (invalidated && slot.kind !== "requirements" && slot.kind !== "plan")
 			throw new Error("Review inputs changed before independent analysis");
-		if (slot.reviewedRevision === 2 && slot.lastReview?.verdict === "revise") {
-			throw new Error(`${slot.kind} review still blocked after two repair rounds`);
+		if (slot.reviewedRevision === slot.revision && slot.lastReview?.verdict === "revise") {
+			if (slot.revision >= slot.repairLimit) throw new Error(`${slot.kind} review repair allowance is exhausted`);
+			return slot.lastReview;
 		}
 		const review = parseSpecReview(
 			await this.#checked(
@@ -891,7 +996,7 @@ export class SpecDrivenOrchestrator {
 		return review;
 	}
 	#revise(slot: SpecReviewSlot): void {
-		if (slot.revision >= 2) throw new Error(`${slot.kind} review still blocked after two repair rounds`);
+		if (slot.revision >= slot.repairLimit) throw new Error(`${slot.kind} review repair allowance is exhausted`);
 		slot.revision++;
 	}
 	async #reviewRequirements(context: SpecRunContext): Promise<void> {
@@ -1001,6 +1106,7 @@ export class SpecDrivenOrchestrator {
 						candidate: this.#candidate(),
 						solution: this.#solution(),
 						previous: this.#state.plan,
+						amendment: this.#planAmendment,
 						review: this.#planSlot?.lastReview,
 					},
 					context,
@@ -1017,7 +1123,11 @@ export class SpecDrivenOrchestrator {
 			candidateVersion: this.#candidate().version,
 			solutionVersion: this.#solution().version,
 		};
-		this.#state.plan = { ...draft, ...binding, version: hash({ ...binding, draft }) };
+		this.#state.plan = {
+			...draft,
+			...binding,
+			version: hash({ ...binding, draft, amendment: this.#planAmendment, revision: this.#planSlot?.revision }),
+		};
 		this.#state.phase = "plan-review";
 	}
 	#validatePlan(plan: SpecPlanDraft): void {
@@ -1099,7 +1209,8 @@ export class SpecDrivenOrchestrator {
 		const requirements = task.requirementIds.map(id =>
 			this.#specification().requirements.find(item => item.id === id),
 		);
-		return hash({ task, requirements, workspace: this.#plan().workspace });
+		const conditions = task.conditionIds.map(id => this.#plan().conditions.find(item => item.id === id));
+		return hash({ task, requirements, conditions, workspace: this.#plan().workspace });
 	}
 	#bindTasks(): void {
 		const plan = this.#plan();
@@ -1108,12 +1219,14 @@ export class SpecDrivenOrchestrator {
 			const existing = rebound.get(task.id);
 			if (existing) return existing;
 			const fingerprint = this.#fingerprint(task);
-			const previous = this.#preservedTasks.get(task.id);
+			const previous = this.#state.tasks.find(item => item.id === task.id) ?? this.#preservedTasks.get(task.id);
 			const dependenciesValid = task.dependencies.every(id => {
 				const dependency = plan.tasks.find(item => item.id === id)!;
 				return bind(dependency).status === "completed";
 			});
 			const retained = previous?.fingerprint === fingerprint ? structuredClone(previous) : undefined;
+			if (retained?.review)
+				retained.review = this.#state.reviews.find(slot => slot.id === retained.review?.id) ?? retained.review;
 			if (retained && !dependenciesValid) {
 				retained.status = retained.execution ? "implemented" : "pending";
 				retained.validatedIds = [];
@@ -1128,6 +1241,10 @@ export class SpecDrivenOrchestrator {
 				specificationVersion: "",
 				planVersion: "",
 			};
+			if (!retained && previous?.review) {
+				state.review = this.#state.reviews.find(slot => slot.id === previous.review?.id) ?? previous.review;
+				state.review.reviewedRevision = undefined;
+			}
 			state.specificationVersion = this.#specification().version;
 			state.planVersion = plan.version;
 			rebound.set(task.id, state);
@@ -1144,13 +1261,22 @@ export class SpecDrivenOrchestrator {
 		if (new Set(records.map(record => record.toolCallId)).size !== records.length)
 			throw new Error("Duplicate native tool call identities");
 		for (const record of records) {
+			const retained = this.#state.tasks.some(state => {
+				const task = this.#plan().tasks.find(item => item.id === state.id);
+				return (
+					task &&
+					state.fingerprint === this.#fingerprint(task) &&
+					state.records.some(previous => previous.id === record.id && hash(previous) === hash(record))
+				);
+			});
 			if (
 				!ids.includes(record.id) ||
 				record.runId !== context.runId ||
 				record.generation > context.generation ||
 				!record.binding ||
-				record.binding.planVersion !== this.#plan().version ||
-				record.binding.specificationVersion !== this.#specification().version ||
+				(!retained &&
+					(record.binding.planVersion !== this.#plan().version ||
+						record.binding.specificationVersion !== this.#specification().version)) ||
 				!record.toolCallId ||
 				!record.tool ||
 				!record.args.command ||
@@ -1191,6 +1317,16 @@ export class SpecDrivenOrchestrator {
 		await this.#checkInputs(context);
 		if (this.#state.planApproval !== this.#plan().version)
 			throw new Error("Execution requires explicit current-plan startup approval");
+		for (const task of this.#state.tasks) {
+			const slot = task.review;
+			if (
+				task.status !== "completed" &&
+				slot?.lastReview?.verdict === "revise" &&
+				slot.reviewedRevision === slot.revision &&
+				slot.revision >= slot.repairLimit
+			)
+				throw new Error("Task review repair allowance is exhausted");
+		}
 		if (!this.#gitPrepared) {
 			await this.#checked(
 				this.#ports.git.preflight({ specification: this.#specification(), plan: this.#plan() }, context),
@@ -1312,17 +1448,21 @@ export class SpecDrivenOrchestrator {
 					),
 					context,
 				);
-				if (
-					!commit.base ||
-					!commit.head ||
-					commit.base === commit.head ||
-					!commit.reviewPackage ||
-					commit.taskId !== task.id ||
-					commit.paths.some(path => !task.ownedPaths.includes(path)) ||
-					execution.changedPaths.some(path => !commit.paths.includes(path))
-				)
-					throw new Error("Invalid or contaminated task commit range");
-				state.commits.push(commit);
+				if (commit === null) {
+					if (!state.commits.length) throw new Error("Unchanged task publication has no prior real commit range");
+				} else {
+					if (
+						!commit.base ||
+						!commit.head ||
+						commit.base === commit.head ||
+						!commit.reviewPackage ||
+						commit.taskId !== task.id ||
+						commit.paths.some(path => !task.ownedPaths.includes(path)) ||
+						execution.changedPaths.some(path => !commit.paths.includes(path))
+					)
+						throw new Error("Invalid or contaminated task commit range");
+					state.commits.push(commit);
+				}
 				(state.committedExecutionIds ??= []).push(executionIdentity);
 			}
 			const slot = (state.review ??= this.#slot("task"));
@@ -1390,8 +1530,8 @@ export class SpecDrivenOrchestrator {
 			red.obligation.validationId !== green.obligation.validationId ||
 			red.obligation.stage !== "red" ||
 			green.obligation.stage !== "green" ||
-			(red.args.command !== red.obligation.approvedCommand && !red.obligation.reason?.trim()) ||
-			(green.args.command !== green.obligation.approvedCommand && !green.obligation.reason?.trim()) ||
+			red.args.command !== red.obligation.approvedCommand ||
+			green.args.command !== green.obligation.approvedCommand ||
 			red.tool !== "spec_verify" ||
 			green.tool !== "spec_verify" ||
 			!task.validation.some(
@@ -1411,15 +1551,6 @@ export class SpecDrivenOrchestrator {
 		}
 	}
 	#checkSemanticEvidence(task: SpecTask, execution: SpecExecution, review: SpecReview): void {
-		const state = this.#state.tasks.find(item => item.id === task.id)!;
-		for (const record of state.records.filter(
-			item => item.obligation && item.args.command !== item.obligation.approvedCommand,
-		))
-			if (
-				!record.obligation?.reason?.trim() ||
-				!review.evidenceChecks.some(check => check.recordId === record.id && check.valid && check.reason.trim())
-			)
-				throw new Error(`Independent review did not establish equivalent verification ${record.id}`);
 		if (task.tdd.mode !== "required") return;
 		const behavior = task.tdd.behavior;
 		for (const recordId of [execution.redRecordId, execution.greenRecordId]) {

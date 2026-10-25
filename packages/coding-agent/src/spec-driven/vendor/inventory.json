@@ -38,7 +38,7 @@
       "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
       "originalPath": "superpowers/original-skills/writing-plans/SKILL.md",
       "originalSha256": "a6c67c1900064347c2a329990dd3c555657c51c3ec53b259a08aa01a2c26139a",
-      "sha256": "b049fe8837fafa8367ddbe2960724415af8adceca2eefe0a2a207cd8294b8086",
+      "sha256": "9edce3e85bb3b25c92aa8c34d0d702589e00b65b8c6d80bd3f5f0ea0ef8d6057",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -48,7 +48,7 @@
       "path": "superpowers/methods/executor/skills/subagent-driven-development/SKILL.md",
       "originalPath": "superpowers/original-skills/subagent-driven-development/SKILL.md",
       "originalSha256": "ba41f697136cba88a7962d60c8e2f97488ba04a8688b1d0fbeb27f6953808e75",
-      "sha256": "ec9e837f29d87edbdbc89da9c9198b64db7242cbf66f5e4ba2edc1d8ff7a23af",
+      "sha256": "1e104b21d041a9a0251498e457dcfbe0c2cea7a75ec30bcd0427dd2ca3d6ce88",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -58,7 +58,7 @@
       "path": "superpowers/methods/executor/skills/test-driven-development/SKILL.md",
       "originalPath": "superpowers/original-skills/test-driven-development/SKILL.md",
       "originalSha256": "64b03fce4aee5a97a93160cea8111f3ba13a17b7c001db4bd5836d67fd10705d",
-      "sha256": "3a03349237251250404051abc82e04ab690d1670b51831ad6b7756d2bd0e38b8",
+      "sha256": "5317c347e365b1aab80fc7ecf5a03e40b83a2dce96719a1a9a5cbd6b149b0593",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -68,7 +68,7 @@
       "path": "superpowers/methods/executor/skills/systematic-debugging/SKILL.md",
       "originalPath": "superpowers/original-skills/systematic-debugging/SKILL.md",
       "originalSha256": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202",
-      "sha256": "e518bc80c7e690b26a9e294ecd361ebf17e3539dc85c8f2370ecdd86f536fc0f",
+      "sha256": "0b24932f72fa5b6c3bffc4a76614b1f7a0b7f27c5f5ebc0586451374755cc1cc",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -78,7 +78,7 @@
       "path": "superpowers/methods/executor/skills/verification-before-completion/SKILL.md",
       "originalPath": "superpowers/original-skills/verification-before-completion/SKILL.md",
       "originalSha256": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3",
-      "sha256": "0b94248bffc7c587727f1c87b00c63b16d54c16d23c55127748b169a09461994",
+      "sha256": "fbaeadaa93e44c433ebde062993639af4b99419b589adce92627c98ba6b661d5",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -88,7 +88,7 @@
       "path": "superpowers/methods/reviewer/skills/requesting-code-review/SKILL.md",
       "originalPath": "superpowers/original-skills/requesting-code-review/SKILL.md",
       "originalSha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc",
-      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "sha256": "f943465c1ce51e2134283e28efd97a5f4cda3b8aa8def42cc94256380f226aa8",
       "adaptation": "omp-four-role-v1"
     },
     {
@@ -98,7 +98,7 @@
       "path": "superpowers/methods/executor/skills/requesting-code-review/SKILL.md",
       "originalPath": "superpowers/original-skills/requesting-code-review/SKILL.md",
       "originalSha256": "2180e14a448e9410bec88e6646a2d1f0ce7fdd58de27388c1e052e929679d2bc",
-      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "sha256": "f943465c1ce51e2134283e28efd97a5f4cda3b8aa8def42cc94256380f226aa8",
       "adaptation": "omp-four-role-v1"
     }
   ],
@@ -11607,32 +11607,32 @@
     },
     {
       "path": "superpowers/methods/executor/skills/requesting-code-review/SKILL.md",
-      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "sha256": "f943465c1ce51e2134283e28efd97a5f4cda3b8aa8def42cc94256380f226aa8",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/requesting-code-review/code-reviewer.md",
-      "sha256": "f0fe9b182b8f4dfec21daab0a3b2f0d43ac4a7f36049e783916f1afa5b84bbd0",
+      "sha256": "9e6e9476010d51226a684add0df3054fc2932717b488289a4b4f1d7cf938c59d",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/SKILL.md",
-      "sha256": "ec9e837f29d87edbdbc89da9c9198b64db7242cbf66f5e4ba2edc1d8ff7a23af",
+      "sha256": "1e104b21d041a9a0251498e457dcfbe0c2cea7a75ec30bcd0427dd2ca3d6ce88",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/implementer-prompt.md",
-      "sha256": "bd4f812cfbd5ecd7c01d31607dff440c6a81f67b8d9a64846d8e6ff20525dce1",
+      "sha256": "c2e452981485911b96f7bd5bde57c6ada1fdef52c646872ac6cf610d9b1fa5c2",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/re-review-prompt.md",
-      "sha256": "064c720fa3285047c70da36e09d2c72d6471cf662c462f8a59072b58a4286f47",
+      "sha256": "6f4350101b96bedc19eb10bebcffc4e329e9783a9fd4da0d7dc7768f26fe2bc4",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/references/batching.md",
-      "sha256": "ab5133f085e20b8582a26287235108f05e2002d57ee93d09546fac584fb7a97d",
+      "sha256": "ca963420a3915c07a3b2f2fce3d130216901cb37d9c237ba4d12b50d5a64f3c7",
       "executable": false
     },
     {
@@ -11642,12 +11642,12 @@
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/references/final-review.md",
-      "sha256": "1d78ce598e9754dfa4141a8abbcdc9b9a59a673323441ffd7f5c64ead543f22a",
+      "sha256": "be172c68a2d22ce13c22dc975c5de3d7743c4974faf0b691eda1e8321e396248",
       "executable": false
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/references/fix-loop.md",
-      "sha256": "977cc6f6041c07ba48dee4d7642bf92663fe590676450e4e74f2b6c6cec67c48",
+      "sha256": "e9ce1de55be488d3181a411b356b896ce3c6192a425cbdf2ea87abde4484953d",
       "executable": false
     },
     {
@@ -11662,7 +11662,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/references/resuming.md",
-      "sha256": "44e37d969f00a957e512c05cedf64a7ec1480d9b06172b81f985bcae3a7d437a",
+      "sha256": "a62776100afb367fa19764ce34e8379a052a7bd53e0692fa3b16236d368be1f7",
       "executable": false
     },
     {
@@ -11682,7 +11682,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/subagent-driven-development/task-reviewer-prompt.md",
-      "sha256": "9843c9f6a3534ede713389f58ac9bf5bb92fe2735b227b544bc74eee0c2ccd7a",
+      "sha256": "6609923368b85619c00f0e889665944fc503e44bfe93c53219410bc02e835dac",
       "executable": false
     },
     {
@@ -11692,7 +11692,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/systematic-debugging/SKILL.md",
-      "sha256": "e518bc80c7e690b26a9e294ecd361ebf17e3539dc85c8f2370ecdd86f536fc0f",
+      "sha256": "0b24932f72fa5b6c3bffc4a76614b1f7a0b7f27c5f5ebc0586451374755cc1cc",
       "executable": false
     },
     {
@@ -11742,7 +11742,7 @@
     },
     {
       "path": "superpowers/methods/executor/skills/test-driven-development/SKILL.md",
-      "sha256": "3a03349237251250404051abc82e04ab690d1670b51831ad6b7756d2bd0e38b8",
+      "sha256": "5317c347e365b1aab80fc7ecf5a03e40b83a2dce96719a1a9a5cbd6b149b0593",
       "executable": false
     },
     {
@@ -11752,12 +11752,12 @@
     },
     {
       "path": "superpowers/methods/executor/skills/verification-before-completion/SKILL.md",
-      "sha256": "0b94248bffc7c587727f1c87b00c63b16d54c16d23c55127748b169a09461994",
+      "sha256": "fbaeadaa93e44c433ebde062993639af4b99419b589adce92627c98ba6b661d5",
       "executable": false
     },
     {
       "path": "superpowers/methods/planner/skills/writing-plans/SKILL.md",
-      "sha256": "b049fe8837fafa8367ddbe2960724415af8adceca2eefe0a2a207cd8294b8086",
+      "sha256": "9edce3e85bb3b25c92aa8c34d0d702589e00b65b8c6d80bd3f5f0ea0ef8d6057",
       "executable": false
     },
     {
@@ -11802,12 +11802,12 @@
     },
     {
       "path": "superpowers/methods/reviewer/skills/requesting-code-review/SKILL.md",
-      "sha256": "701c0b7199ab1b6fffe97508222a2da30a0c1731246c623e877180c52194cc1a",
+      "sha256": "f943465c1ce51e2134283e28efd97a5f4cda3b8aa8def42cc94256380f226aa8",
       "executable": false
     },
     {
       "path": "superpowers/methods/reviewer/skills/requesting-code-review/code-reviewer.md",
-      "sha256": "f0fe9b182b8f4dfec21daab0a3b2f0d43ac4a7f36049e783916f1afa5b84bbd0",
+      "sha256": "9e6e9476010d51226a684add0df3054fc2932717b488289a4b4f1d7cf938c59d",
       "executable": false
     },
     {

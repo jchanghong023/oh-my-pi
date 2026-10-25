@@ -40,6 +40,7 @@ function fixture(
 	const requests: string[] = [];
 	const calls: string[] = [];
 	const executionModes: string[] = [];
+	const planAmendments: Array<string | undefined> = [];
 	let disposed = 0;
 	let specificationVersion = "";
 	const draft: SpecRequirementsDraft = {
@@ -127,10 +128,11 @@ function fixture(
 					evidenceChecks: [],
 				};
 			},
-			async plan() {
+			async plan(input) {
 				calls.push("plan");
+				planAmendments.push(input.amendment);
 				return {
-					content: "# 唯一计划\n写入结果说明并核对入口。",
+					content: `# 唯一计划\n写入结果说明并核对入口。${input.amendment ? `\n${input.amendment}` : ""}`,
 					workspace: { executionPath: ".", isolation: "native", integration: "native" },
 					tasks: [
 						{
@@ -292,6 +294,7 @@ function fixture(
 		requests,
 		calls,
 		executionModes,
+		planAmendments,
 		invoke,
 		settle,
 		entered: entered.promise,
@@ -305,6 +308,156 @@ function fixture(
 }
 
 describe("/dev shared command surface", () => {
+	for (const menu of [false, true])
+		it(`revises only the current plan through ${menu ? "the native action menu" : "the command"}`, async () => {
+			const amendment = "保留  范围\n调整任务顺序";
+			const f = fixture(undefined, {
+				ui: menu
+					? {
+							select: async (_title, labels) =>
+								labels.find(
+									(label): label is string => typeof label === "string" && label.includes("/dev revise-plan "),
+								),
+							confirm: async () => true,
+							input: async () => amendment,
+						}
+					: undefined,
+			});
+			try {
+				await f.invoke("start plan-revision request");
+				await f.settle();
+				await f.invoke("confirm-spec spec-v1");
+				await f.settle();
+				await f.invoke("choose discussion-v1 A candidate-v1");
+				await f.settle();
+				const before = f.controller.status();
+				const action = f.controller.actions().find(item => item.id === "revise-plan")!;
+				expect(action).toMatchObject({
+					command: `/dev revise-plan ${before.plan!.version}`,
+					available: true,
+					requiresInput: true,
+				});
+				await f.invoke(menu ? "help" : `${action.command.slice("/dev ".length)} ${amendment}`);
+				await f.settle();
+				const after = f.controller.status();
+				expect(after.phase).toBe("awaiting-plan");
+				expect(after.plan!.version).not.toBe(before.plan!.version);
+				expect(after.specificationApproval).toBe(before.specificationApproval);
+				expect(after.selection).toEqual(before.selection);
+				expect(after.solution).toEqual(before.solution);
+				expect(after.planApproval).toBeUndefined();
+				expect(after.acceptanceVersion).toBeUndefined();
+				expect(f.planAmendments).toEqual([undefined, amendment]);
+				expect(f.executionModes).toEqual([]);
+				await f.invoke(`confirm-plan ${before.plan!.version}`);
+				await f.settle();
+				expect(f.executionModes).toEqual([]);
+			} finally {
+				await f.dispose();
+			}
+		});
+
+	it("rejects stale plan revision before interruption and admits the current revision while execution runs", async () => {
+		const f = fixture();
+		const entered = Promise.withResolvers<void>();
+		let aborted = false;
+		f.ports.models.execute = async (_input, context) => {
+			entered.resolve();
+			await new Promise<void>(resolve => {
+				context.signal.addEventListener(
+					"abort",
+					() => {
+						aborted = true;
+						resolve();
+					},
+					{ once: true },
+				);
+			});
+			throw new Error("Execution stopped by explicit plan revision");
+		};
+		try {
+			await f.invoke("start active-revision request");
+			await f.settle();
+			await f.invoke("confirm-spec spec-v1");
+			await f.settle();
+			await f.invoke("choose discussion-v1 A candidate-v1");
+			await f.settle();
+			const version = f.controller.status().plan!.version;
+			await f.invoke(`confirm-plan ${version}`);
+			await entered.promise;
+			const generation = f.controller.status().generation;
+			await f.invoke("revise-plan foreign-version change order");
+			expect(aborted).toBe(false);
+			expect(f.controller.observation().active).toBe(true);
+			expect(f.controller.status().generation).toBe(generation);
+			expect(f.controller.actions().find(action => action.id === "revise-plan")?.available).toBe(true);
+			await f.invoke(`revise-plan ${version} change order`);
+			await f.settle();
+			expect(aborted).toBe(true);
+			expect(f.controller.status()).toMatchObject({ phase: "awaiting-plan", paused: false });
+			expect(f.controller.status().planApproval).toBeUndefined();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("exposes only exhausted review actions, adds one repair round without passing and rejects replay", async () => {
+		const f = fixture(undefined, {
+			ui: {
+				select: async (_title, labels) =>
+					labels.find(
+						(label): label is string => typeof label === "string" && label.includes("/dev extend-review "),
+					),
+				confirm: async () => true,
+				input: async () => {
+					throw new Error("Review actions must include their complete identity");
+				},
+			},
+		});
+		f.ports.models.review = async () => ({
+			verdict: "revise",
+			summary: "Blocking issue remains",
+			findings: [{ id: "F1", severity: "blocking", issue: "Missing result behavior", evidence: "R1", taskIds: [] }],
+			resolutions: [],
+			questions: [],
+			evidenceChecks: [],
+		});
+		try {
+			expect(f.controller.actions().some(action => action.id.startsWith("extend-review:"))).toBe(false);
+			await f.invoke("start exhausted-review request");
+			await f.settle().catch(() => {});
+			const before = f.controller.status().reviews[0]!;
+			expect(before).toMatchObject({ revision: 2, repairLimit: 2 });
+			const action = f.controller.actions().find(item => item.id === `extend-review:${before.id}`)!;
+			expect(action).toMatchObject({
+				command: `/dev extend-review ${before.id} 2 2`,
+				available: true,
+			});
+			for (const args of [`${before.id} -1 2`, `${before.id} 2 2.5`, `${before.id} 2 9007199254740992`]) {
+				await f.invoke(`extend-review ${args}`);
+				expect(f.controller.status().reviews[0]!.repairLimit).toBe(2);
+			}
+			await f.invoke(`extend-review ${before.id} 1 2`);
+			expect(f.controller.status().reviews[0]!.repairLimit).toBe(2);
+			await f.invoke("help");
+			await f.settle().catch(() => {});
+			const after = f.controller.status();
+			expect(after.phase).not.toBe("awaiting-specification");
+			expect(after.specificationApproval).toBeUndefined();
+			expect(after.reviews[0]).toMatchObject({
+				id: before.id,
+				revision: 3,
+				repairLimit: 3,
+				findings: before.findings,
+				lastReview: { verdict: "revise" },
+			});
+			await f.invoke(action.command.slice("/dev ".length));
+			expect(f.controller.status().reviews[0]!.repairLimit).toBe(3);
+		} finally {
+			await f.dispose();
+		}
+	});
+
 	it("queues input after repair admission and drains it only after the same executor finishes repair", async () => {
 		const f = fixture();
 		const records = new Map<string, SpecToolRecord>();
@@ -365,7 +518,7 @@ describe("/dev shared command surface", () => {
 				inputsBefore: inputs,
 				inputsAfter: structuredClone(inputs),
 				conditions: { platform: process.platform, shell: "fixture", runtime: "fixture", runtimeVersion: "1" },
-				obligation: { validationId: input.id, approvedCommand: input.command, reason: null },
+				obligation: { validationId: input.id, approvedCommand: input.command },
 				result: {
 					status: "completed",
 					exitCode: 0,

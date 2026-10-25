@@ -890,6 +890,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	description: string;
 	/** Parameter schema (Zod, or TypeBox for legacy/extension compat). */
 	parameters: TParams;
+	/** Preserve raw arguments on schema mismatch for tools that enforce their own input boundary. */
+	lenientArgValidation?: boolean;
 	/** If true, tool is excluded unless explicitly listed in --tools or agent's tools field */
 	hidden?: boolean;
 	/** If true, tool is registered but not auto-included in the initial active set.

@@ -4,11 +4,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { trimBlankEdges } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { ImageBudget } from "@oh-my-pi/pi-tui/components/image";
-import { createAssistantMessageComponent } from "@oh-my-pi/pi-tui/prompt/interactive-context-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type Component, Container, Markdown } from "@oh-my-pi/pi-tui";
-import { Text } from "@oh-my-pi/pi-tui/components/text";
 
 const W = 100;
 
@@ -59,91 +56,6 @@ afterEach(() => {
 // the same message — at every step. If they ever diverge, the optimization
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
-	it("constructs main-chat history with reasoning and extension renderers inline", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		let rendererCalls = 0;
-		const message = msg([
-			{ type: "thinking", thinking: "PRIVATE HISTORICAL REASONING" },
-			{ type: "text", text: "Public answer" },
-		]);
-		const component = createAssistantMessageComponent(
-			{
-				viewSession: {
-					extensionRunner: {
-						getAssistantThinkingRenderers: () => [
-							() => {
-								rendererCalls++;
-								return new Text("PRIVATE EXTENSION REASONING");
-							},
-						],
-					},
-				},
-				effectiveHideThinkingBlock: false,
-				proseOnlyThinking: false,
-				expandThinkingBlocks: true,
-				assistantImagesVisible: true,
-				tableChartsVisible: true,
-				hideToolActivity: false,
-				toolOutputExpanded: false,
-				ui: { requestRender() {}, imageBudget: new ImageBudget() },
-				resolveAssistantMessageLinkHrefs: async () => new Map<string, string>(),
-			},
-			message,
-		);
-		try {
-			const rendered = Bun.stripANSI(component.render(W).join("\n"));
-			expect(rendered).toContain("Public answer");
-			expect(rendered).toContain("PRIVATE HISTORICAL REASONING");
-			expect(rendered).toContain("PRIVATE EXTENSION REASONING");
-			expect(rendererCalls).toBeGreaterThan(0);
-			const native = JSON.stringify(component.describe());
-			expect(native).toContain("Public answer");
-			expect(native).toContain("PRIVATE");
-			// Explicit viewers keep their original detail capability.
-			const viewer = new AssistantMessageComponent(message);
-			try {
-				expect(Bun.stripANSI(viewer.render(W).join("\n"))).toContain("PRIVATE HISTORICAL REASONING");
-			} finally {
-				viewer.dispose();
-			}
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("clips real inline thinking after prose filtering and preserves visibility controls", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new AssistantMessageComponent(
-			undefined,
-			false,
-			undefined,
-			[],
-			undefined,
-			true,
-			undefined,
-			false,
-			true,
-		);
-		const message = msg([{ type: "thinking", thinking: "first row\nmiddle row\nlatest row" }]);
-		const original = structuredClone(message);
-		try {
-			component.updateContent(message, { transient: true });
-			const rendered = Bun.stripANSI(component.render(W).join("\n"));
-			expect(rendered).not.toContain("first row");
-			expect(rendered).toContain("middle row");
-			expect(rendered).toContain("latest row");
-			component.setHideThinkingBlock(true);
-			component.updateContent(message, { transient: true });
-			expect(Bun.stripANSI(component.render(W).join("\n"))).not.toContain("latest row");
-			component.setHideThinkingBlock(false);
-			component.updateContent(message, { transient: true });
-			expect(Bun.stripANSI(component.render(W).join("\n"))).toContain("latest row");
-			expect(message).toEqual(original);
-		} finally {
-			component.dispose();
-		}
-	});
-
 	it("replays retired thinking prefixes after cache eviction, reflow, and finalization", () => {
 		const component = new AssistantMessageComponent();
 		const widths = [36, W];

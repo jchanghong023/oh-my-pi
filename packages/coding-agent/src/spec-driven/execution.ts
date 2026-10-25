@@ -223,6 +223,24 @@ export class SpecExecutionHost {
 					onRecord: record => this.#input.onRecord(record, evidence),
 				}),
 			};
+			// Reopening the same approved parent preserves its native RED/implementation facts,
+			// including repair rounds, but never supplies a historical GREEN for the new checkpoint.
+			const retained = this.#input.control.status().find(state => state.id === task.id);
+			if (
+				!native &&
+				workspace === this.#input.workspace &&
+				retained?.execution &&
+				retained.planVersion === this.#input.plan.version &&
+				retained.specificationVersion === this.#input.specificationVersion
+			) {
+				const execution = retained.execution;
+				binding.tools.records.push(
+					...retained.records.filter(
+						record => record.id === execution.redRecordId && execution.recordIds.includes(record.id),
+					),
+				);
+				binding.tools.implementationStartedAt = execution.implementationStartedAt;
+			}
 			this.#bindings.set(id, binding);
 			return binding;
 		} catch (error) {
@@ -605,8 +623,7 @@ export class SpecExecutionHost {
 		const binding = this.#inline;
 		if (!binding || binding.task.id !== taskId) throw new Error("Task commit has no live target binding");
 		const result = await this.#input.git.commitTask(binding.id, message, findings);
-		if (result.base === result.head)
-			return { base: result.base, head: result.head, taskId, paths: [], reviewPackage: "" };
+		if (result.base === result.head && result.changedPaths.length === 0) return null;
 		const review = await this.#input.git.reviewPackage(
 			binding.id,
 			this.#input.planPath,

@@ -14,6 +14,8 @@ const usages = [
 	["confirm-spec", "<version>", "确认需求并进入方案"],
 	["choose", "<run-id> <candidate-id> <candidate-version>", "选择此方案并编写计划"],
 	["confirm-plan", "<version> [--goal]", "批准计划并开始执行，可选 Goal；授权本任务本地 commit"],
+	["revise-plan", "<plan-version> <修改说明...>", "仅修订计划，审查后等待重新批准，不自动执行"],
+	["extend-review", "<review-id> <revision> <repair-limit>", "为当前耗尽的审查明确追加一轮自动修复，不代表通过"],
 	["accept", "<acceptance-version>", "最终验收当前交付版本"],
 	["repair", "<acceptance-version> <text>", "撤销本轮验收资格，返回获批范围内执行并修复"],
 	["amend", "<text>", "修改需求，撤销受影响下游批准"],
@@ -273,6 +275,25 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 				controller.schedule(core =>
 					core.confirmPlan(values[0]!, { mode: values.length === 2 ? "goal" : "normal" }),
 				);
+				break;
+			}
+			case "revise-plan": {
+				const revision = /^\s*(\S+)\s+([\s\S]+)$/.exec(text);
+				if (!revision || !revision[2]!.trim())
+					throw invalidDevInput("用法：/dev revise-plan <plan-version> <修改说明...>");
+				controller.revisePlan(revision[1]!, revision[2]!);
+				break;
+			}
+			case "extend-review": {
+				const [id, revision, repairLimit] = exact(3);
+				if (
+					!/^\d+$/.test(revision!) ||
+					!/^\d+$/.test(repairLimit!) ||
+					!Number.isSafeInteger(Number(revision)) ||
+					!Number.isSafeInteger(Number(repairLimit))
+				)
+					throw invalidDevInput("审查轮次与修复额度必须是非负安全整数。");
+				controller.extendReview(id!, Number(revision), Number(repairLimit));
 				break;
 			}
 			case "accept": {

@@ -699,6 +699,8 @@ export class OmpSpecDrivenBridge {
 	validate(record: ZCodeSessionRecord | undefined, text: string, binding: OmpSpecRunBinding): void {
 		const owner = record ? this.#owners.get(record.id) : undefined;
 		const observation = owner?.current;
+		const controller = record ? peekSpecDrivenController(record.session.sessionManager) : undefined;
+		const current = controller?.observation();
 		if (
 			!record ||
 			!owner ||
@@ -711,6 +713,9 @@ export class OmpSpecDrivenBridge {
 			!observation ||
 			observation.runId !== binding.runId ||
 			observation.status.generation !== binding.generation ||
+			!current ||
+			current.runId !== binding.runId ||
+			current.status.generation !== binding.generation ||
 			observation.disposed ||
 			observation.released ||
 			terminal(observation.status.phase)
@@ -720,7 +725,7 @@ export class OmpSpecDrivenBridge {
 		// Keep action-bearing input on the strict command path, even when its text is prose.
 		if (binding.actionId === undefined && binding.actionVersion === undefined && !text.startsWith("/")) return;
 		if (
-			!peekSpecDrivenController(record.session.sessionManager)
+			!controller
 				?.actions()
 				.some(
 					action =>

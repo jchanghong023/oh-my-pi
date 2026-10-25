@@ -17,6 +17,7 @@ import inventory from "../../src/spec-driven/vendor/inventory.json";
 import type { Skill } from "../../src/extensibility/skills";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
+	BEHAVIOR_TEST,
 	CHANGE_ID,
 	contentText,
 	createProviderFixture,
@@ -30,6 +31,7 @@ import {
 	REQUIREMENT,
 	rolePayload,
 	TEST_PATH,
+	VALIDATION_COMMAND,
 } from "./provider-fixture";
 
 const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
@@ -57,8 +59,39 @@ function test(name: string, body: () => Promise<void>, budget: number): void {
 				const report = () => {
 					if (reported) return;
 					reported = true;
+					const observations = diagnostics.map(snapshot => snapshot());
 					console.error(
-						`Public acceptance diagnostics: ${bounded({ case: name, observations: diagnostics.map(snapshot => snapshot()) })}`,
+						`Public acceptance final status: ${JSON.stringify({
+							case: name,
+							observations: observations.map(observation =>
+								isRecord(observation)
+									? {
+											command: observation.command,
+											phase: observation.phase,
+											phaseText: observation.phaseText,
+										}
+									: observation,
+							),
+						})}`,
+					);
+					console.error(
+						`Public acceptance diagnostics: ${bounded({
+							case: name,
+							observations: observations.map(observation =>
+								isRecord(observation)
+									? {
+											...observation,
+											phase: isRecord(observation.phase)
+												? {
+														...observation.phase,
+														statusMaterial: undefined,
+														publishedText: undefined,
+													}
+												: observation.phase,
+										}
+									: observation,
+							),
+						})}`,
 					);
 				};
 				// Diagnostic-only timer at the existing gate boundary, not a new execution deadline.
@@ -328,6 +361,30 @@ class PublicPeer {
 		).toMatchObject({ status: "accepted" });
 		return since;
 	}
+	async reject(sessionId: string, text: string): Promise<void> {
+		this.#currentCommand = { sessionId, text };
+		const before = v4ConversationWorkflowRunsResultSchema.parse(
+			await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
+		);
+		const current = v4ConversationRowsRangeResultSchema.parse(
+			await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
+		);
+		expect(
+			await this.request("v4/command", {
+				commandId: crypto.randomUUID(),
+				clientId: "omp-spec-acceptance",
+				sessionId,
+				type: "sendText",
+				payload: { text },
+				...(COMMANDS_REQUIRING_BASE_REVISION.has("sendText") ? { baseRevision: current.atRevision } : {}),
+				issuedAt: Date.now(),
+			}),
+		).toMatchObject({ status: "rejected", reasonCode: "fault.command.invalid" });
+		const after = v4ConversationWorkflowRunsResultSchema.parse(
+			await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
+		);
+		expect(after.runs.filter(run => run.spec)).toEqual(before.runs.filter(run => run.spec));
+	}
 	async phase(
 		sessionId: string,
 		phase: string | readonly string[],
@@ -455,7 +512,7 @@ async function publishedStatus(
 			phase: spec.phase,
 			ready: spec.actions.every(action => action.available !== false),
 			paused: spec.state === "paused" || spec.phase === "cancelled",
-			blockedReason: spec.state === "blocked" ? spec.explanation : undefined,
+			blockedReason: spec.state === "blocked" || spec.state === "paused" ? spec.explanation : undefined,
 			generation: spec.generation,
 			runId: run.runId,
 			specificationVersion: spec.versions.specification,
@@ -463,6 +520,8 @@ async function publishedStatus(
 			acceptanceVersion: spec.versions.acceptance,
 			selection: spec.selectedCandidate ?? undefined,
 			candidates: spec.candidates,
+			statusMaterial: run,
+			publishedText: latest?.text,
 		},
 		// Decisions come from negotiated native actions, never from UI wording.
 		text: spec.actions
@@ -1281,6 +1340,7 @@ describe("spec-driven actual OMP public entry", () => {
 					const resume = await peer.send(session, "/dev resume");
 					currentAcceptance = await peer.phase(session, "awaiting-acceptance", resume);
 					expect(currentAcceptance.state.acceptanceVersion).not.toBe(acceptance.state.acceptanceVersion);
+					expect(await fs.readFile(path.join(config.cwd, TEST_PATH), "utf8")).toBe(BEHAVIOR_TEST);
 					const repairedReport = await fs.readFile(verificationPath, "utf8");
 					const rawLinks = [...repairedReport.matchAll(/\]\(([^)]+)\)/gu)].map(match => match[1]!);
 					const actualEvidence = (
@@ -1392,6 +1452,250 @@ describe("spec-driven actual OMP public entry", () => {
 			since = await peer.send(session, "/dev cancel");
 			await confirmCancellation(peer, session);
 			await peer.phase(session, "cancelled", since);
+			expect(provider.failures).toEqual([]);
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"plan-only revision retains approved specification and candidate, rejects stale plans and model command overrides",
+		async () => {
+			await using root = await TempDir.create("@omp-spec-plan-revision-");
+			await using provider = createProviderFixture({ rejectValidationOverride: true });
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+			const specification = await peer.phase(session, "awaiting-specification", since);
+			since = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+			const choice = await peer.phase(session, "awaiting-choice", since);
+			since = await peer.send(session, commandFrom(choice.text, "choose"));
+			const original = await peer.phase(session, "awaiting-plan", since);
+			const teamCount = provider.requests.filter(request =>
+				JSON.stringify(request.tools ?? []).includes("noViableProposal"),
+			).length;
+			const requestsBeforeRejection = provider.requests.length;
+			await peer.reject(session, "/dev revise-plan stale-plan keep greeting behavior");
+			expect(provider.requests).toHaveLength(requestsBeforeRejection);
+			const amendment = "Retain all tasks and behavior; explicitly document the no-network implementation boundary.";
+			since = await peer.send(session, `/dev revise-plan ${String(original.state.planVersion)} ${amendment}`);
+			const revised = await peer.phase(session, "awaiting-plan", since);
+			expect(revised.state.planVersion).not.toBe(original.state.planVersion);
+			expect(revised.state.specificationVersion).toBe(specification.state.specificationVersion);
+			expect(revised.state.selection).toEqual(original.state.selection);
+			expect(revised.state.candidates).toEqual(original.state.candidates);
+			expect(
+				provider.requests.filter(request => JSON.stringify(request.tools ?? []).includes("noViableProposal"))
+					.length,
+			).toBe(teamCount);
+			expect(
+				provider.requests
+					.map(rolePayload)
+					.some(payload => payload?.specDrivenRole === "planner" && payload.input.amendment === amendment),
+			).toBe(true);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			since = await peer.send(session, commandFrom(original.text, "confirm-plan"));
+			const stale = await peer.phase(session, "awaiting-plan", since);
+			expect(stale.state.planVersion).toBe(revised.state.planVersion);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
+			since = await peer.send(session, commandFrom(revised.text, "confirm-plan"));
+			const acceptance = await peer.phase(session, "awaiting-acceptance", since);
+			expect(acceptance.state.acceptanceVersion).toBeString();
+			const executor = provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor");
+			expect(executor).toBeDefined();
+			const attempts = executor!.messages.flatMap(message => message.tool_calls ?? []).filter(isRecord);
+			const override = attempts.find(call => {
+				if (!isRecord(call.function) || typeof call.function.arguments !== "string") return false;
+				const args: unknown = JSON.parse(call.function.arguments);
+				return isRecord(args) && args.command !== undefined;
+			});
+			expect(override).toBeDefined();
+			const rejection = executor!.messages.find(
+				message => message.role === "tool" && message.tool_call_id === override!.id,
+			);
+			expect(contentText(rejection?.content)).toMatch(
+				/reject|unknown|unexpected|invalid|not allowed|must be removed|error/iu,
+			);
+			// Actor journals use the run's workspace state directory, not PI_CODING_AGENT_DIR.
+			// OpenAI wire messages omit isError, so read the actual native journal for this run.
+			const nativeResults: Record<string, unknown>[] = [];
+			expect(acceptance.state.runId).toBeString();
+			const journalDir = path.join(config.cwd, ".omp", "spec-sessions", String(acceptance.state.runId));
+			for (const relative of await fs.readdir(journalDir, { recursive: true })) {
+				if (!relative.endsWith(".jsonl")) continue;
+				for (const line of (await fs.readFile(path.join(journalDir, relative), "utf8")).split("\n")) {
+					if (!line.trim()) continue;
+					const entry: unknown = JSON.parse(line);
+					if (
+						isRecord(entry) &&
+						entry.type === "message" &&
+						isRecord(entry.message) &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolCallId === override!.id
+					)
+						nativeResults.push(entry.message);
+				}
+			}
+			expect(nativeResults.length).toBeGreaterThan(0);
+			for (const result of nativeResults)
+				expect(result).toMatchObject({ toolCallId: override!.id, toolName: "spec_verify", isError: true });
+			const checks = path.join(config.cwd, `openspec/changes/${CHANGE_ID}/checks`);
+			const executedProbeRecords: Record<string, unknown>[] = [];
+			const approvedValidationRecords: Record<string, unknown>[] = [];
+			const inspectRecord = (value: unknown): void => {
+				if (Array.isArray(value)) {
+					for (const item of value) inspectRecord(item);
+				} else if (isRecord(value)) {
+					if (value.tool === "spec_verify" && value.toolCallId === override!.id) executedProbeRecords.push(value);
+					if (
+						value.tool === "spec_verify" &&
+						isRecord(value.obligation) &&
+						value.obligation.validationId === "greeting-behavior"
+					)
+						approvedValidationRecords.push(value);
+					for (const item of Object.values(value)) inspectRecord(item);
+				}
+			};
+			for (const relative of await fs.readdir(checks, { recursive: true })) {
+				if (relative.endsWith(".json"))
+					inspectRecord(JSON.parse(await fs.readFile(path.join(checks, relative), "utf8")));
+			}
+			expect(executedProbeRecords).toEqual([]);
+			for (const stage of ["red", "green"] as const) {
+				const record = approvedValidationRecords.find(
+					value => isRecord(value.obligation) && value.obligation.stage === stage,
+				);
+				expect(record).toMatchObject({
+					args: { command: VALIDATION_COMMAND },
+					obligation: { validationId: "greeting-behavior", approvedCommand: VALIDATION_COMMAND, stage },
+					result: { status: "completed", isError: false },
+				});
+				if (!record || !isRecord(record.result)) throw new Error(`Missing native ${stage} validation result`);
+				if (stage === "red") expect(record.result.exitCode).toBeGreaterThan(0);
+				else expect(record.result.exitCode).toBe(0);
+			}
+			const validations = attempts.flatMap(call => {
+				if (
+					!isRecord(call.function) ||
+					typeof call.function.arguments !== "string" ||
+					typeof call.function.name !== "string" ||
+					call.function.name.replace(/^_/u, "") !== "spec_verify"
+				)
+					return [];
+				const args: unknown = JSON.parse(call.function.arguments);
+				return isRecord(args) && args.command === undefined ? [args] : [];
+			});
+			expect(validations).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ validationId: "greeting-behavior", stage: "red" }),
+					expect.objectContaining({ validationId: "greeting-behavior", stage: "green" }),
+				]),
+			);
+			expect(provider.failures).toEqual([]);
+		},
+		GATE_BUDGET,
+	);
+
+	for (const kind of ["requirements", "plan", "task"] as const) {
+		test(
+			`${kind} review retains its blocking seat at two repairs and only an explicit extension permits a third repair`,
+			async () => {
+				await using root = await TempDir.create("@omp-spec-review-extension-");
+				await using provider = createProviderFixture({ reviewFailures: { [kind]: 3 } });
+				const config = await fixture(root, provider.baseUrl);
+				await using peer = new PublicPeer(config.cwd, config.env, provider);
+				await peer.ready();
+				const session = await peer.create(config.cwd);
+				const stoppedPhases = ["requirements-review", "plan-review", "executing", "blocked", "failed"];
+				const extend = async (since: number, target: string) => {
+					const blocked = await peer.phase(session, stoppedPhases, since, true, true);
+					const command = commandFrom(blocked.text, "extend-review");
+					const [, , id, revision, limit] = command.split(" ");
+					expect(Number(revision)).toBe(2);
+					expect(Number(limit)).toBe(2);
+					const reviewRequests = () =>
+						provider.requests
+							.map(rolePayload)
+							.filter(
+								payload =>
+									payload?.specDrivenRole === "reviewer" &&
+									isRecord(payload.input.slot) &&
+									payload.input.slot.id === id,
+							);
+					const before = reviewRequests();
+					expect(before.some(payload => isRecord(payload?.input.slot) && payload.input.slot.revision === 2)).toBe(
+						true,
+					);
+					const next = await peer.send(session, command);
+					const resumed = await peer.phase(session, target, next);
+					const after = reviewRequests();
+					expect(
+						after.some(
+							payload =>
+								isRecord(payload?.input.slot) &&
+								payload.input.slot.revision === 3 &&
+								payload.input.slot.repairLimit === 3,
+						),
+					).toBe(true);
+					const count = after.length;
+					await peer.reject(session, command);
+					expect(reviewRequests()).toHaveLength(count);
+					return resumed;
+				};
+				let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+				const specification =
+					kind === "requirements"
+						? await extend(since, "awaiting-specification")
+						: await peer.phase(session, "awaiting-specification", since);
+				since = await peer.send(session, commandFrom(specification.text, "confirm-spec"));
+				const choice = await peer.phase(session, "awaiting-choice", since);
+				since = await peer.send(session, commandFrom(choice.text, "choose"));
+				const plan =
+					kind === "plan"
+						? await extend(since, "awaiting-plan")
+						: await peer.phase(session, "awaiting-plan", since);
+				await absent(config.cwd, IMPLEMENTATION_PATH);
+				since = await peer.send(session, commandFrom(plan.text, "confirm-plan"));
+				if (kind === "task") await extend(since, "awaiting-acceptance");
+				else await peer.phase(session, "awaiting-acceptance", since);
+				expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH), "utf8")).toContain(
+					"export function greet",
+				);
+				if (kind === "task") {
+					for (const failure of provider.failures)
+						expect(failure).toMatch(
+							/^Error: Native spec_task checkpoint failed: task review repair allowance is exhausted$/iu,
+						);
+				} else expect(provider.failures).toEqual([]);
+			},
+			GATE_BUDGET,
+		);
+	}
+
+	test(
+		"an extended review that still fails remains blocked and replaying its old extension cannot grant another repair",
+		async () => {
+			await using root = await TempDir.create("@omp-spec-review-still-blocked-");
+			await using provider = createProviderFixture({ reviewFailures: { requirements: 4 } });
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+			const phases = ["requirements-review", "blocked", "failed"];
+			const original = await peer.phase(session, phases, since, true, true);
+			const command = commandFrom(original.text, "extend-review");
+			since = await peer.send(session, command);
+			const blocked = await peer.phase(session, phases, since, true, true);
+			const nextCommand = commandFrom(blocked.text, "extend-review");
+			expect(nextCommand.split(" ").slice(-2)).toEqual(["3", "3"]);
+			expect(nextCommand.split(" ")[2]).toBe(command.split(" ")[2]);
+			expect(provider.requests.some(request => rolePayload(request)?.specDrivenRole === "solution")).toBe(false);
+			const count = provider.requests.length;
+			await peer.reject(session, command);
+			expect(provider.requests).toHaveLength(count);
+			await absent(config.cwd, IMPLEMENTATION_PATH);
 			expect(provider.failures).toEqual([]);
 		},
 		GATE_BUDGET,

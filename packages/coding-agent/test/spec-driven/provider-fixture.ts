@@ -30,6 +30,14 @@ export interface Reply {
 	text?: string;
 	tool?: { name: string; args: Record<string, unknown> };
 }
+
+export interface ProviderScenario {
+	requirementsQuestion?: string;
+	/** Number of independently rejected revisions; 3 exhausts the default two repairs. */
+	reviewFailures?: Partial<Record<"requirements" | "plan" | "task", number>>;
+	/** Probe removed model-selected command/reason fields before using the approved validation ID. */
+	rejectValidationOverride?: boolean;
+}
 export function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content))
@@ -128,8 +136,9 @@ function taskResult(request: ModelRequest, action: string): Record<string, unkno
 				const value: unknown = JSON.parse(text);
 				if (isRecord(value)) return value;
 			} catch {
-				/* Tool presentation may surround JSON; never infer success from prose. */
+				throw new Error(`Native spec_task ${action} failed: ${text}`);
 			}
+			throw new Error(`Native spec_task ${action} returned no structured result: ${text}`);
 		}
 	}
 	return undefined;
@@ -159,7 +168,7 @@ export function isNativeHandoff(request: ModelRequest): boolean {
 	return contentText(lastUser?.content).includes("Write a handoff document for another instance of yourself.");
 }
 /** Provider output only: no filesystem access, processes, Git, orchestration or fabricated tool results. */
-export function respond(request: ModelRequest, options?: { requirementsQuestion?: string }): Reply {
+export function respond(request: ModelRequest, options?: ProviderScenario): Reply {
 	const payload = rolePayload(request);
 	if (isNativeHandoff(request))
 		return {
@@ -296,19 +305,22 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 			return tool(request, "read", { i: "Inspecting delivered greeting", path: IMPLEMENTATION_PATH });
 		const revision = text.includes("OMP_DEV_REVISE");
 		if (revision && (payload.specDrivenRole === "requirements" || payload.specDrivenRole === "planner")) {
-			const draft = respond({
-				...request,
-				messages: [
-					...request.messages,
-					{
-						role: "user",
-						content: JSON.stringify({
-							specDrivenRole: payload.specDrivenRole,
-							input: { ...payload.input, kind: "draft", request: text, answer: text },
-						}),
-					},
-				],
-			});
+			const draft = respond(
+				{
+					...request,
+					messages: [
+						...request.messages,
+						{
+							role: "user",
+							content: JSON.stringify({
+								specDrivenRole: payload.specDrivenRole,
+								input: { ...payload.input, kind: "draft", request: text, answer: text },
+							}),
+						},
+					],
+				},
+				options,
+			);
 			const data = draft.tool?.args.data ?? JSON.parse(draft.text ?? "{}");
 			if (!isRecord(data)) throw new Error("Stage revision did not produce structured material");
 			if (payload.specDrivenRole === "requirements")
@@ -362,7 +374,7 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 	if (payload.specDrivenRole === "requirements")
 		return yieldData(request, {
 			...(sourcePatches ? { sourceMapVersion: originals!.version, sourcePatches } : {}),
-			proposal: `# ${MARKER}\n\n## Why\nProvide a deterministic greeting.\n\nRequested scope: ${String(payload.input.request ?? "")}\n\n## What Changes\nAdd greet(name), real Bun behavior tests and independent blank-input/whitespace coverage.\n\n## Capabilities\n### New Capabilities\n- greeting: normalized greeting\n\n## Impact\nOnly ${[IMPLEMENTATION_PATH, TEST_PATH, ...parallelCoverage.map(task => task.path)].join(", ")}.\n`,
+			proposal: `# ${MARKER}\n\n## Why\nProvide a deterministic greeting.\n\nRequested scope: ${String(payload.input.request ?? "")}\n\n## What Changes\nAdd greet(name), real Bun behavior tests and independent blank-input/whitespace coverage.\n\n## Capabilities\n### New Capabilities\n- greeting: normalized greeting\n\n## Impact\nOnly ${[IMPLEMENTATION_PATH, TEST_PATH, ...parallelCoverage.map(task => task.path)].join(", ")}.\n${payload.input.review ? `\nReview repair: ${JSON.stringify(payload.input.review)}\n` : ""}`,
 			specs: [
 				{
 					path: "specs/greeting/spec.md",
@@ -377,7 +389,7 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 	if (payload.specDrivenRole === "solution") return yieldData(request, { questions: [] });
 	if (payload.specDrivenRole === "planner")
 		return yieldData(request, {
-			content: `# ${MARKER} implementation plan\n\nT001: implement inline; create ${TEST_PATH}; run ${VALIDATION_COMMAND} RED; create ${IMPLEMENTATION_PATH}; rerun GREEN and checkpoint. T002 and T003 depend on T001's stable greet interface, are independent of one another and must run concurrently in isolated native tasks. Each writes only its own approved coverage file, runs GREEN and seals its genuine source checkpoint. The retained executor integrates each opaque source and checkpoints the actual target. OMP commits only task-owned files and independently reviews each parent range in one seat. Final validation uses the real Bun entry. After final user acceptance synchronize specs and archive.\n`,
+			content: `# ${MARKER} implementation plan\n\nT001: implement inline; create ${TEST_PATH}; run ${VALIDATION_COMMAND} RED; create ${IMPLEMENTATION_PATH}; rerun GREEN and checkpoint. T002 and T003 depend on T001's stable greet interface, are independent of one another and must run concurrently in isolated native tasks. Each writes only its own approved coverage file, runs GREEN and seals its genuine source checkpoint. The retained executor integrates each opaque source and checkpoints the actual target. OMP commits only task-owned files and independently reviews each parent range in one seat. Final validation uses the real Bun entry. After final user acceptance synchronize specs and archive.\n${typeof payload.input.amendment === "string" ? `\nRequested amendment: ${payload.input.amendment}\n` : ""}${payload.input.review ? `\nReview repair: ${JSON.stringify(payload.input.review)}\n` : ""}`,
 			workspace: { executionPath: ".", isolation: "native", integration: "native" },
 			tasks: [
 				{
@@ -537,23 +549,132 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 				});
 			}
 		}
+		const kind = payload.input.kind;
+		const slot = isRecord(payload.input.slot) ? payload.input.slot : undefined;
+		const revision = typeof slot?.revision === "number" ? slot.revision : 0;
+		const failures =
+			kind === "requirements" ||
+			kind === "plan" ||
+			(kind === "task" && isRecord(payload.input.task) && payload.input.task.id === "T001")
+				? (options?.reviewFailures?.[kind] ?? 0)
+				: 0;
+		const findingId = `fixture-${String(slot?.id)}-blocking`;
+		const blocked = revision < failures;
 		return yieldData(request, {
-			verdict: "pass",
-			summary:
-				"Independent review of source, behavior assertions, task-owned range and actual command results passes.",
-			findings: [],
-			resolutions: [],
+			verdict: blocked ? "revise" : "pass",
+			summary: blocked
+				? "Independent review still requires repair."
+				: "Independent review of repaired material and actual command results passes.",
+			findings: blocked
+				? [
+						{
+							id: findingId,
+							severity: "blocking",
+							issue: "The requested review repair is not yet complete.",
+							evidence: `Inspected current ${String(kind)} material at repair revision ${revision}.`,
+							taskIds: kind === "task" && isRecord(payload.input.task) ? [payload.input.task.id] : [],
+						},
+					]
+				: [],
+			resolutions:
+				!blocked && failures > 0
+					? [{ findingId, resolved: true, evidence: `Re-inspected repaired material at revision ${revision}.` }]
+					: [],
 			questions: [],
 			evidenceChecks,
 		});
 	}
 	if (payload.specDrivenRole === "executor") {
-		const executed = calls(request);
-		const currentTasks = Array.isArray(payload.input.tasks) ? payload.input.tasks : [];
-		const latestInput = request.messages.findLastIndex(
+		const executed = calls(request).filter(call => call.args.command === undefined);
+		if (
+			options?.rejectValidationOverride &&
+			executed.some(call => call.name === "spec_task" && call.args.action === "start" && call.args.taskId === "T001")
+		) {
+			const probe = request.messages
+				.flatMap(message => message.tool_calls ?? [])
+				.find(call => {
+					if (!isRecord(call) || !isRecord(call.function) || typeof call.function.arguments !== "string")
+						return false;
+					const args: unknown = JSON.parse(call.function.arguments);
+					return (
+						isRecord(args) &&
+						args.command !== undefined &&
+						typeof call.function.name === "string" &&
+						call.function.name.replace(/^_/u, "") === "spec_verify"
+					);
+				});
+			if (!probe)
+				return tool(request, "spec_verify", {
+					validationId: "greeting-behavior",
+					stage: "red",
+					command: "bun -e \"throw new Error('MODEL_SELECTED_COMMAND_EXECUTED')\"",
+					reason: "Model claims this is equivalent to the approved command.",
+				});
+			const rejected =
+				isRecord(probe) &&
+				request.messages.some(
+					message =>
+						message.role === "tool" &&
+						message.tool_call_id === probe.id &&
+						/reject|unknown|unexpected|invalid|not allowed|must be removed|error/iu.test(
+							contentText(message.content),
+						),
+				);
+			if (!rejected) throw new Error("Validation override probe was not rejected by the native tool");
+		}
+		let latestInput = request.messages.findLastIndex(
 			message =>
 				message.role === "user" && rolePayload({ ...request, messages: [message] })?.specDrivenRole === "executor",
 		);
+		const checkpointTask = taskResult(
+			{ ...request, messages: request.messages.slice(latestInput + 1) },
+			"checkpoint",
+		)?.task;
+		const checkpointTasks = new Map<string, Record<string, unknown>>();
+		for (const message of request.messages.slice(latestInput + 1)) {
+			if (message.role !== "assistant") continue;
+			for (const call of message.tool_calls ?? []) {
+				if (
+					!isRecord(call) ||
+					!isRecord(call.function) ||
+					typeof call.function.name !== "string" ||
+					call.function.name.replace(/^_/u, "") !== "spec_task" ||
+					typeof call.function.arguments !== "string"
+				)
+					continue;
+				const args: unknown = JSON.parse(call.function.arguments);
+				if (!isRecord(args) || args.action !== "checkpoint") continue;
+				const result = request.messages.find(item => item.role === "tool" && item.tool_call_id === call.id);
+				if (!result) continue;
+				const value: unknown = JSON.parse(contentText(result.content));
+				if (isRecord(value) && isRecord(value.task) && typeof value.task.id === "string")
+					checkpointTasks.set(value.task.id, value.task);
+			}
+		}
+		const currentTasks = Array.isArray(payload.input.tasks)
+			? payload.input.tasks.map(state =>
+					isRecord(state) && typeof state.id === "string" ? (checkpointTasks.get(state.id) ?? state) : state,
+				)
+			: [];
+		if (isRecord(checkpointTask) && checkpointTask.status !== "completed") {
+			const checkpointIndex = request.messages.findLastIndex(
+				message =>
+					message.role === "assistant" &&
+					(message.tool_calls ?? []).some(call => {
+						if (!isRecord(call) || !isRecord(call.function) || typeof call.function.arguments !== "string")
+							return false;
+						const args: unknown = JSON.parse(call.function.arguments);
+						return (
+							typeof call.function.name === "string" &&
+							call.function.name.replace(/^_/u, "") === "spec_task" &&
+							isRecord(args) &&
+							args.action === "checkpoint" &&
+							args.taskId === checkpointTask.id
+						);
+					}),
+			);
+			latestInput = Math.max(latestInput, checkpointIndex);
+		}
 		// Resume is bound to current host task state, not transcript survival after compaction/generation changes.
 		const repairing =
 			isRecord(payload.input.repair) ||
@@ -566,7 +687,15 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 		if (repairing) {
 			const repairCalls = calls({ ...request, messages: request.messages.slice(latestInput + 1) });
 			for (const state of currentTasks) {
-				if (!isRecord(state) || state.status === "completed" || typeof state.id !== "string") continue;
+				if (
+					!isRecord(state) ||
+					state.status === "completed" ||
+					typeof state.id !== "string" ||
+					(!isRecord(state.execution) &&
+						!isRecord(state.repairReview) &&
+						(!Array.isArray(state.records) || state.records.length === 0))
+				)
+					continue;
 				const taskId = state.id;
 				if (
 					!repairCalls.some(
@@ -581,13 +710,16 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 				if (!validations.length) return tool(request, "spec_verify", { validationId, stage: "green" });
 				if (
 					taskId === "T001" &&
-					isRecord(payload.input.repair) &&
+					(isRecord(payload.input.repair) || isRecord(state.repairReview)) &&
 					!repairCalls.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH)
 				)
 					return tool(request, "write", {
 						i: "Applying explicitly authorized scoped repair",
 						path: IMPLEMENTATION_PATH,
-						content: `// Rechecked under explicit version-bound repair.\n${IMPLEMENTATION}`,
+						content:
+							isRecord(state.repairReview) && isRecord(state.review)
+								? `// Independently requested repair revision ${String(state.review.revision)}.\n${IMPLEMENTATION}`
+								: `// Rechecked under explicit version-bound repair.\n${IMPLEMENTATION}`,
 					});
 				if (taskId === "T001" && !repairCalls.some(call => call.name === "write" && call.args.path === TEST_PATH))
 					return tool(request, "write", {
@@ -608,55 +740,61 @@ export function respond(request: ModelRequest, options?: { requirementsQuestion?
 				summary: "Current target revalidated after scoped repair; host must issue a fresh acceptance version.",
 			});
 		}
-		if (
-			!executed.some(
-				call => call.name === "spec_task" && call.args.action === "start" && call.args.taskId === "T001",
+		if (currentTasks.length && currentTasks.every(state => isRecord(state) && state.status === "completed"))
+			return yieldData(request, {
+				summary: "All actual parent checkpoints completed; host must validate and request acceptance.",
+			});
+		if (!currentTasks.some(state => isRecord(state) && state.id === "T001" && state.status === "completed")) {
+			if (
+				!executed.some(
+					call => call.name === "spec_task" && call.args.action === "start" && call.args.taskId === "T001",
+				)
 			)
-		)
-			return tool(request, "spec_task", { action: "start", taskId: "T001" });
-		for (const [name, reason] of [
-			["T999", "unknown"],
-			["T002", "non-ready"],
-			["T001", "overlap"],
-		] as const) {
-			if (!executed.some(call => call.name === "task" && call.args.context === `OMP_SPEC_REJECT_${reason}`))
-				return tool(request, "task", {
-					context: `OMP_SPEC_REJECT_${reason}`,
-					tasks: [
-						{
-							name,
-							task: `OMP_SPEC_FORBIDDEN_${reason}: must be rejected before native effects.`,
-							solutionSpace: "admission refusal probe",
-							isolated: true,
-						},
-					],
+				return tool(request, "spec_task", { action: "start", taskId: "T001" });
+			for (const [name, reason] of [
+				["T999", "unknown"],
+				["T002", "non-ready"],
+				["T001", "overlap"],
+			] as const) {
+				if (!executed.some(call => call.name === "task" && call.args.context === `OMP_SPEC_REJECT_${reason}`))
+					return tool(request, "task", {
+						context: `OMP_SPEC_REJECT_${reason}`,
+						tasks: [
+							{
+								name,
+								task: `OMP_SPEC_FORBIDDEN_${reason}: must be rejected before native effects.`,
+								solutionSpace: "admission refusal probe",
+								isolated: true,
+							},
+						],
+					});
+			}
+			if (!executed.some(call => call.name === "write" && call.args.path === TEST_PATH))
+				return tool(request, "write", {
+					i: "Writing actual greeting behavior tests",
+					path: TEST_PATH,
+					content: BEHAVIOR_TEST,
 				});
-		}
-		if (!executed.some(call => call.name === "write" && call.args.path === TEST_PATH))
-			return tool(request, "write", {
-				i: "Writing actual greeting behavior tests",
-				path: TEST_PATH,
-				content: BEHAVIOR_TEST,
-			});
-		if (!executed.some(call => call.name === "spec_verify" && call.args.stage === "red"))
-			return tool(request, "spec_verify", { validationId: "greeting-behavior", stage: "red" });
-		if (!executed.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH))
-			return tool(request, "write", {
-				i: "Implementing approved greeting behavior",
-				path: IMPLEMENTATION_PATH,
-				content: IMPLEMENTATION,
-			});
-		if (!executed.some(call => call.name === "spec_verify" && call.args.stage === "green"))
-			return tool(request, "spec_verify", { validationId: "greeting-behavior", stage: "green" });
-		if (
-			!executed.some(
-				call => call.name === "spec_task" && call.args.action === "checkpoint" && call.args.taskId === "T001",
+			if (!executed.some(call => call.name === "spec_verify" && call.args.stage === "red"))
+				return tool(request, "spec_verify", { validationId: "greeting-behavior", stage: "red" });
+			if (!executed.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH))
+				return tool(request, "write", {
+					i: "Implementing approved greeting behavior",
+					path: IMPLEMENTATION_PATH,
+					content: IMPLEMENTATION,
+				});
+			if (!executed.some(call => call.name === "spec_verify" && call.args.stage === "green"))
+				return tool(request, "spec_verify", { validationId: "greeting-behavior", stage: "green" });
+			if (
+				!executed.some(
+					call => call.name === "spec_task" && call.args.action === "checkpoint" && call.args.taskId === "T001",
+				)
 			)
-		)
-			return tool(request, "spec_task", { action: "checkpoint", taskId: "T001" });
-		const checkpoint = taskResult(request, "checkpoint");
-		if (isRecord(checkpoint?.task) && checkpoint.task.status !== "completed" && checkpoint.task.id === "T001")
-			throw new Error(`Actual inline checkpoint refused: ${JSON.stringify(checkpoint)}`);
+				return tool(request, "spec_task", { action: "checkpoint", taskId: "T001" });
+			const checkpoint = taskResult(request, "checkpoint");
+			if (isRecord(checkpoint?.task) && checkpoint.task.status !== "completed" && checkpoint.task.id === "T001")
+				throw new Error(`Actual inline checkpoint refused: ${JSON.stringify(checkpoint)}`);
+		}
 		const mode = payload.input.mode;
 		const continuation = request.messages.some(
 			message => message.role === "user" && contentText(message.content).includes("Continue active goal."),
@@ -717,9 +855,8 @@ export interface ProviderFixture {
 }
 /** Standard OpenAI SSE; only localhost is accepted and every request is recorded for consumer assertions. */
 export function createProviderFixture(
-	options: {
+	options: ProviderScenario & {
 		handoff?: (request: ModelRequest, ordinal: number) => Reply | Promise<Reply>;
-		requirementsQuestion?: string;
 		dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
 		observe?: (request: ModelRequest) => void | Promise<void>;
 	} = {},

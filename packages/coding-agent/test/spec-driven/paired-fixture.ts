@@ -11,13 +11,16 @@ import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import {
+	CHANGE_ID,
 	contentText,
+	createProviderFixture,
 	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
 	REQUIREMENT,
 	respond,
 	rolePayload,
 	type ModelRequest,
+	type ProviderScenario,
 } from "./provider-fixture";
 
 export const PAIRED_CHANGE = "paired-greeting";
@@ -334,4 +337,96 @@ async function runPairedArm() {
 		authStorage.close();
 	}
 }
-if (import.meta.main) await runPairedArm();
+/** Localhost-only provider/config entry for a separate real TUI process; preserves all observations. */
+async function runInteractiveFixture(): Promise<void> {
+	const root = process.argv[3];
+	if (!root || !path.isAbsolute(root))
+		throw new Error("Expected tui <absolute disposable root> [requirements|plan|task|blocked]");
+	const scenario = process.argv[4] ?? "task";
+	if (!["requirements", "plan", "task", "blocked"].includes(scenario))
+		throw new Error("Unknown interactive review scenario");
+	const cwd = path.join(root, "project");
+	const home = path.join(root, "home");
+	const configRoot = path.join(root, "config");
+	const agentDir = path.join(configRoot, "agent");
+	const temp = path.join(root, "tmp");
+	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
+	const evidencePath = path.join(root, "provider.jsonl");
+	const options: ProviderScenario = {
+		reviewFailures: scenario === "blocked" ? { task: 4 } : { [scenario]: 3 },
+		rejectValidationOverride: true,
+	};
+	const provider = createProviderFixture({
+		...options,
+		observe: request => fs.appendFile(evidencePath, `${JSON.stringify({ at: Date.now(), request })}\n`),
+	});
+	await fs.writeFile(
+		path.join(agentDir, "models.yml"),
+		`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 200000\n`,
+	);
+	await fs.writeFile(
+		path.join(agentDir, "config.yml"),
+		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nasync:\n  enabled: false\ntask:\n  batch: true\n  isolation:\n    enabled: true\nteam:\n  members:\n    - spec-fixture/chat-a\n    - spec-fixture/chat-b\ncompaction:\n  enabled: false\n",
+	);
+	const env: NodeJS.ProcessEnv = {
+		PATH: process.env.PATH,
+		SystemRoot: process.env.SystemRoot,
+		WINDIR: process.env.WINDIR,
+		ProgramFiles: process.env.ProgramFiles,
+		HOME: home,
+		USERPROFILE: home,
+		LOCALAPPDATA: home,
+		TEMP: temp,
+		TMP: temp,
+		OMP_CONFIG_ROOT: configRoot,
+		PI_CODING_AGENT_DIR: agentDir,
+		PI_CONFIG_DIR: ".omp",
+		OMP_OFFLINE: "0",
+		PI_NO_TITLE: "1",
+		NO_PROXY: "127.0.0.1,localhost",
+		GIT_CONFIG_NOSYSTEM: "1",
+		GIT_CONFIG_GLOBAL: path.join(root, "empty-gitconfig"),
+		GIT_TERMINAL_PROMPT: "0",
+		GIT_AUTHOR_NAME: "OMP Acceptance",
+		GIT_AUTHOR_EMAIL: "omp-acceptance@example.invalid",
+		GIT_COMMITTER_NAME: "OMP Acceptance",
+		GIT_COMMITTER_EMAIL: "omp-acceptance@example.invalid",
+		OPENSPEC_TELEMETRY: "0",
+		DO_NOT_TRACK: "1",
+	};
+	await fs.writeFile(env.GIT_CONFIG_GLOBAL!, "");
+	for (const args of [
+		["init", "--initial-branch=main"],
+		["add", "baseline.txt"],
+		["-c", "core.hooksPath=", "commit", "-m", "Fixture baseline"],
+	]) {
+		if (args[0] === "add") await fs.writeFile(path.join(cwd, "baseline.txt"), "Isolated TUI fixture baseline.\n");
+		const child = Bun.spawn(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+		const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+		if (exitCode !== 0) throw new Error(`Fixture git failed: ${stderr}`);
+	}
+	await fs.writeFile(
+		path.join(root, "launch.json"),
+		JSON.stringify(
+			{
+				cwd,
+				env,
+				baseUrl: provider.baseUrl,
+				evidencePath,
+				request: `/dev start ${CHANGE_ID} ${REQUIREMENT}`,
+			},
+			null,
+			2,
+		),
+	);
+	console.log(
+		JSON.stringify({ root, cwd, baseUrl: provider.baseUrl, evidencePath, launch: path.join(root, "launch.json") }),
+	);
+	process.on("SIGINT", () => {
+		void provider[Symbol.asyncDispose]().then(() => process.exit(0));
+	});
+}
+if (import.meta.main) {
+	if (process.argv[2] === "tui") await runInteractiveFixture();
+	else await runPairedArm();
+}

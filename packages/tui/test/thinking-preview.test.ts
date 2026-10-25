@@ -45,7 +45,17 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
 
 function assistant(compact: boolean, hide = false): AssistantMessageComponent {
 	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-	const component = new AssistantMessageComponent(undefined, hide, undefined, [], undefined, true, undefined, false, compact);
+	const component = new AssistantMessageComponent(
+		undefined,
+		hide,
+		undefined,
+		[],
+		undefined,
+		true,
+		undefined,
+		false,
+		compact,
+	);
 	components.push(component);
 	return component;
 }
@@ -112,7 +122,13 @@ describe("compact transient thinking preview", () => {
 			{ transient: true },
 		);
 		const textOnly = assistant(true);
-		textOnly.updateContent(message([{ type: "text", text: "before" }, { type: "text", text: "after" }]), { transient: true });
+		textOnly.updateContent(
+			message([
+				{ type: "text", text: "before" },
+				{ type: "text", text: "after" },
+			]),
+			{ transient: true },
+		);
 		expect(component.render(40)).toEqual(textOnly.render(40));
 		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
 		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
@@ -121,9 +137,18 @@ describe("compact transient thinking preview", () => {
 	it("clears on answer text, tool activity, empty content, and the non-transient final update", () => {
 		const component = assistant(true);
 		const transitions: AssistantMessage["content"][] = [
-			[{ type: "thinking", thinking: "reasoning" }, { type: "text", text: "answer" }],
-			[{ type: "thinking", thinking: "reasoning" }, { type: "toolCall", id: "call", name: "read", arguments: {} }],
-			[{ type: "toolCall", id: "call", name: "read", arguments: {} }, { type: "thinking", thinking: "reasoning" }],
+			[
+				{ type: "thinking", thinking: "reasoning" },
+				{ type: "text", text: "answer" },
+			],
+			[
+				{ type: "thinking", thinking: "reasoning" },
+				{ type: "toolCall", id: "call", name: "read", arguments: {} },
+			],
+			[
+				{ type: "toolCall", id: "call", name: "read", arguments: {} },
+				{ type: "thinking", thinking: "reasoning" },
+			],
 			[{ type: "thinking", thinking: "   " }],
 			[],
 		];

@@ -95,7 +95,7 @@ files:
       body: |
         ## Execution Handoff
 
-        Preserve the author self-review above. Return the unique plan to the host with requirements/solution version bindings and all adoption conditions covered. Present it for explicit user approval and wait; do not ask for another execution-method decision or start execution yourself. The host owns normal versus optional Goal execution and the real planner-to-executor handoff. Review is initial review plus at most two fix/re-review rounds in the same stable review seat; open findings remain blockers, never parked completion.
+        Preserve the author self-review above. Return the unique plan to the host with requirements/solution version bindings and all adoption conditions covered. Present it for explicit developer approval and wait; do not start execution yourself. On /dev revise-plan <plan-version> <instructions...>, revise only the plan from the supplied amendment and previous plan; preserve approved requirements, selected solution, and unchanged valid work/evidence. The host revokes old plan approval and acceptance; the reviewed replacement requires fresh plan approval before execution. The host owns execution and the planner-to-executor handoff. Each review seat defaults to repairLimit=2; revision counts consumed repairs. Open findings remain blockers.
   superpowers/skills/subagent-driven-development/SKILL.md:
     - before: 'description: Use when executing implementation plans with independent tasks in the current session'
       after: 'description: Authorized OMP executor method; implement or delegate native parent tasks with host-owned evidence and bounded independent review.'
@@ -106,7 +106,7 @@ files:
     - start: '**Rulings, not stalls.**'
       end: '## The Process'
       body: |
-        **Decisions within authority.** Settle ordinary implementation choices, task-local refinements, authorized equivalent verification, and approved native integration without repeated user approval. Record reasons. Requirements changes return to requirements approval; core solution changes return to solution selection; material parent-task contract changes return to plan approval. Destructive, security-sensitive, external, or otherwise unauthorized operations require their own authorization. Do not expand permission through Goal, delegation, or a ruling.
+        **Decisions within authority.** Settle ordinary implementation choices, task-local refinements, and approved native integration without repeated approval. Run only the exact approved validation command by its validationId; a different command requires a revised, approved plan. Requirements changes return to requirements approval; core solution changes return to solution selection; material parent-task contract changes use /dev revise-plan <plan-version> <instructions...> and fresh plan approval. Destructive, security-sensitive, external, or otherwise unauthorized operations require their own authorization. Do not expand permission through Goal, delegation, or a ruling.
 
         The host owns the only task state, review seats, review-round counters, and approval versions. A child report or model claim cannot advance them. Native Task provides concurrency, isolation, lifecycle and results; this method does not install a second scheduler or force delegation.
 
@@ -116,8 +116,8 @@ files:
         1. Read approved documents and enter a ready stable parent task through spec_task.
         2. Implement directly or delegate through native Task with current parent binding.
         3. Integrate native sources through spec_task; parallel-source success is not integrated-target verification.
-        4. Capture authorized validation through spec_verify and preserve raw output and input identity.
-        5. Use the host's one task-review seat: initial review plus at most two fix/re-review rounds.
+        4. Capture exact approved validation commands through spec_verify by validationId and preserve raw output and input identity.
+        5. Use the host's one task-review seat with its current repairLimit (default 2); revision counts consumed repairs.
         6. Request checkpoint; only host checks can mark complete. Open findings, parked work, checkboxes, and model success are not completion.
         7. After all pre-acceptance tasks, perform overall review and wait for final user acceptance. See references/final-review.md.
 
@@ -136,7 +136,7 @@ files:
       body: |
         ## Model Selection
 
-        Reuse configured native model selection and team.members where applicable. Do not invent another model router. A review node has one seat and initial review plus at most two fix/re-review rounds. Recovery, replacement sessions, Goal, and redispatch do not reset its identity or counter.
+        Reuse configured native model selection and team.members where applicable. Do not invent another model router. Each review seat defaults to repairLimit=2; revision counts consumed repairs. Only the developer's explicit /dev extend-review <review-id> <revision> <repair-limit> adds one round to an exhausted current seat. It preserves seat/finding IDs, counters and open issues; it never passes review or grants write/command permissions. Recovery, replacement sessions, Goal, and redispatch never reset identity or counters. This does not increase Team discussion budgets.
 
     - before: "Record BASE (`git rev-parse HEAD`) before dispatching — the review package\nand fix-round diffs need it."
       after: "Read the approved parent-task object in the supplied plan and its approved documents before implementation or delegation. Use spec_task status for progress and native sources; call spec_task start only to open direct inline implementation, not before native delegation. Native delegation names the approved parent task and host hooks admit it. The trusted Git service owns baseline and commit facts; never run Git, manufacture missing facts, or require an actor-readable baseline before starting."
@@ -155,7 +155,7 @@ files:
     - before: 'Template: [task-reviewer-prompt.md](task-reviewer-prompt.md)'
       after: 'Host review-seat method: [task-reviewer-prompt.md](task-reviewer-prompt.md); not an executor dispatch instruction.'
     - before: "- Record the implementer's agent identity from the dispatch result —\n  fix-loop rounds 1-3 resume this agent."
-      after: '- Record native source identity and stable parent-task binding for integration and evidence; use the existing review seat for at most two fix/re-review rounds.'
+      after: '- Record native source identity and stable parent-task binding for integration and evidence; use the existing review seat within its current repairLimit, default 2.'
     - before: '- Never dispatch multiple implementation subagents in parallel (conflicts).'
       after: '- Use native parallelism only for independent authorized slices; reconcile shared interfaces and integrate their recorded sources into the approved target before validation.'
     - start: '### 5. Complete the task'
@@ -170,7 +170,7 @@ files:
         Read [references/final-review.md](references/final-review.md). Overall review and current required evidence precede final user acceptance. Acceptance precedes approved synchronization/archive cleanup; those cleanup tasks cannot be prerequisites for acceptance.
 
     - before: '| "Close enough on spec compliance" | Reviewer found spec gaps = not done. Fix or hit the cap and adjudicate — those are the only exits. |'
-      after: '| "Close enough on spec compliance" | Open required findings block completion, including after the two-round cap. |'
+      after: '| "Close enough on spec compliance" | Open required findings block completion, including after the current repairLimit is exhausted. |'
     - before: '| "I''ll fix it myself, dispatching is overhead" | Controller fixes pollute your context and skip review. Resume the implementer. |'
       after: '| "I fixed it myself, no review needed" | Direct implementation is allowed; independent review and evidence are still required. |'
     - before: '| "This finding is obviously wrong, I''ll drop it" | You adjudicate only at the cap, and every ruling is a ledger entry. Silent discards are forbidden. |'
@@ -186,13 +186,13 @@ files:
 
     - start: 'Everything else enters the loop.'
       body: |
-        Everything else enters the existing parent task's host-owned review loop. Initial review plus at most TWO fix/re-review rounds; no third round or fresh seat. Preserve counters across redispatch, recovery and Goal. A round is one fix wave plus scoped re-review by the same logical seat.
+        Everything else enters the existing parent task's host-owned review loop. Initial review has repairLimit=2 by default; revision counts consumed fix/re-review rounds. Only the developer's explicit /dev extend-review <review-id> <revision> <repair-limit> adds one round to an exhausted current seat; never create a fresh seat or reset counters across redispatch, recovery or Goal. A round is one fix wave plus scoped re-review by the same logical seat. Extension preserves findings and does not pass review, expand permissions or increase Team budgets.
 
         Send findings verbatim with the original brief, report and parent ID. The executor may fix directly or use native subagents. Run only authorized covering validations whose evidence is missing or invalidated; retain valid evidence for unchanged inputs. Append actual commands, output paths, exit codes, input identities and limitations before re-review.
 
         Read spec_task status for progress and existing reports/native evidence when supplied. Request checkpoint for the host to seal changed inputs and supply the existing seat with the approved task object, previous findings, execution, records and commits/reviewPackage content with trusted Git facts; never assemble review paths, dispatch another reviewer or run packaging scripts, bash or Git. Missing or stale required inputs are host evidence gaps, not permission to manufacture facts. The host uses [re-review-prompt.md](../re-review-prompt.md) in the existing seat. Re-review judges each finding and any regression in the fix; unrelated observations are recorded without expanding scope.
 
-        After each round record its actual number and result in host state and supporting reports. If required findings remain after round two, stop this parent task as blocked with all evidence intact. Parking, severity relabeling, a new child or self-ruling cannot mark it complete. Route material requirement, solution or parent-task contract changes to the corresponding host approval gate; ordinary authorized implementation decisions do not require user confirmation.
+        After each round retain its actual number and result in host state and supporting reports. If required findings remain when revision reaches repairLimit, stop this parent task as blocked with all evidence intact. Explicit extension permits one more round of the same work within existing permissions; while awaiting acceptance, remain read-only until the developer requests repair. Parking, severity relabeling, a new child or self-ruling cannot mark it complete. Material plan changes require a revised, approved plan; requirement and solution changes retain their own gates.
   superpowers/skills/subagent-driven-development/references/final-review.md:
     - start: '# Final Review and Finish'
       body: |
@@ -200,7 +200,7 @@ files:
 
         Use the approved integrated target and complete original branch base, not the last commit. Read spec_task status, approved requirements, solution, plan, existing reports, raw validation records, unresolved findings and integration provenance. Request the host checkpoint to seal inputs and create the overall review record/package and trusted Git facts for its one overall-review seat. Consume the readable existing package and evidence; never generate them with scripts, bash or Git or manufacture missing facts. Missing or stale required inputs block review. Use the controlled requesting-code-review [template](../../requesting-code-review/code-reviewer.md).
 
-        Apply the same initial review plus at most two fix/re-review rounds as [fix-loop.md](fix-loop.md); do not reset counters or silently park required findings. Required open findings or missing/currently invalid evidence block delivery. Revalidate affected inputs after fixes; unchanged valid evidence need not be rerun.
+        Apply the same review-seat repairLimit and explicit one-round extension rules as [fix-loop.md](fix-loop.md); do not reset counters or silently park required findings. Required open findings or missing/currently invalid evidence block delivery. Revalidate affected inputs after fixes; unchanged valid evidence need not be rerun.
 
         Before any cleanup, persist task-local raw output, content identities, review packages, findings and decisions through the host evidence service; then publish verification.md from those records. A save failure blocks success and cleanup of the only evidence. Reports, checkboxes, ledger lines, parked work, native Goal completion and model claims cannot complete the run.
 
@@ -212,7 +212,7 @@ files:
 
         Part of the controlled subagent-driven-development method. Resume only within an existing live host run using its current task and evidence state. A ledger, if supplied, is optional supporting evidence, never recovery or approval authority. This reference does not authorize cold process recovery or reconstruction of a lost run.
 
-        Read only records belonging to this live run and approved plan. Revalidate current content identity, approvals, native integration and required evidence before relying on completion. Keep stable parent IDs, review seat and round count (initial review plus at most two fix/re-review rounds). A replacement actor session or Goal restart within the live run never resets these. If the host run or a required binding is unavailable or stale, report blocked to the host rather than reconstructing authorization from a ledger, git history, parked report, checkbox or other prose. Preserve other runs and all unique evidence.
+        Read only records belonging to this live run and current approved documents. Revalidate current content identity, approvals, native integration and required evidence before relying on completion. Keep stable parent IDs, review seat, revision and repairLimit (default 2). Only an explicit developer extension adds one repair round without clearing findings or counters. A replacement actor session or Goal restart never resets these. If the host run or a required binding is unavailable or stale, report blocked rather than reconstructing authorization from a ledger, git history, parked report, checkbox or prose. Preserve other runs and all unique evidence.
   superpowers/skills/subagent-driven-development/references/handling-reports.md:
     - before: '4. If the plan itself is wrong, rule on the correction, ledger it, and re-dispatch with the ruling carried in the dispatch'
       after: '4. If the plan itself is wrong, distinguish ordinary task-local refinement from a material parent-task contract change; route material changes to the host plan gate before re-dispatch. Requirements or core solution changes return to their own gates.'
@@ -225,7 +225,7 @@ files:
   superpowers/skills/subagent-driven-development/references/batching.md:
     - start: '**Batch small same-shape work.**'
       body: |
-        Batch small same-shape edits within a stable parent task when native scheduling makes that useful. Independent parent tasks may share a worker only if each retains its own binding, required evidence, integration record, review seat and initial review plus at most two fix/re-review rounds. Do not merge their acceptance gates, invent a second scheduler, or treat a combined worker report as completion.
+        Batch small same-shape edits within a stable parent task when native scheduling makes that useful. Independent parent tasks may share a worker only if each retains its own binding, required evidence, integration record, review seat, revision and repairLimit (default 2). Do not merge their acceptance gates, reset or self-extend budgets, invent a second scheduler, or treat a combined worker report as completion.
   superpowers/skills/subagent-driven-development/implementer-prompt.md:
     - before: '    4. Commit your work'
       after: '    4. Perform only the Git operations authorized by the host assignment'
@@ -234,7 +234,7 @@ files:
     - before: '    fresh reviewer against your diff. A reviewer you spawn duplicates'
       after: '    reviewer in the existing stable review seat against your diff. A reviewer you spawn duplicates'
     - before: '    Fix them, re-run the tests that cover the amended code, and append a fix'
-      after: '    Fix within the existing two-round host cap, obtain authorized covering validation, and append a fix'
+      after: '    Fix within the existing host repairLimit, obtain exact approved covering validation by ID, and append a fix'
   superpowers/skills/subagent-driven-development/task-reviewer-prompt.md:
     - before: "Use this template when dispatching a task reviewer subagent. The reviewer\nreads the task's diff once and returns two verdicts: spec compliance and\ncode quality."
       after: "Use this template within the existing host-owned task-review seat. Read the host-supplied frozen task diff and return spec compliance and code quality judgments; never dispatch another reviewer."
@@ -260,7 +260,7 @@ files:
       body: |
             ## Tests
 
-            This is the host's existing independent review seat: initial review plus at most two fix/re-review rounds. You MUST remain read-only and MUST NOT run commands or tests; inspect provided native evidence and source with authorized read-only tools. Evidence gaps are findings, not permission to rerun suites. Report exact requirements, file references, raw output paths and unresolved uncertainty. Never infer success from model reports, parked findings, checkboxes or a ledger.
+            This is the host's existing independent review seat with repairLimit=2 by default; revision counts consumed repairs, and only explicit developer extension adds one round without resetting findings or counters. You MUST remain read-only and NEVER run commands or tests; inspect provided native evidence and source with authorized read-only tools. Evidence gaps are findings, not permission to rerun suites. Report exact requirements, file references, raw output paths and unresolved uncertainty. Never infer success from model reports, parked findings, checkboxes or a ledger.
 
   superpowers/skills/subagent-driven-development/re-review-prompt.md:
     - before: "Use this template when dispatching a re-review after a fix round. The\nre-reviewer verifies the findings were addressed and checks the fix diff for\nnew breakage. It is not a fresh review — the full review already happened."
@@ -287,7 +287,7 @@ files:
       body: |
             ## Tests
 
-            Read actual native records covering the fix and their relevant input identities. Treat model reports as claims. You MUST NOT execute commands or tests. Missing or stale records are findings for the host. Reuse unchanged valid records; do not force reruns. This is the existing stable review seat's scoped re-review within its maximum two fix/re-review rounds; replacement sessions, Goal and redispatch do not reset counters.
+            Read actual native records covering the fix and their relevant input identities. Treat model reports as claims. You MUST remain read-only and NEVER execute commands or tests. Missing or stale records are findings for the host. Reuse unchanged valid records; do not force reruns. This is the existing seat's scoped re-review within its current repairLimit (default 2); explicit developer extension adds one round without resetting revision, findings or permissions. Replacement sessions, Goal and redispatch never reset counters.
 
   superpowers/skills/subagent-driven-development/scripts/review-package:
     - start: 'if [ $# -eq 4 ]; then'
@@ -335,7 +335,7 @@ files:
     - before: '- [ ] All tests pass'
       after: '- [ ] All approved required tests have current valid passing evidence; unrun boundaries remain explicit'
     - before: "No exceptions without your human partner's permission."
-      after: 'Use the host-approved validation obligations and current authority; do not request repeated user approval for ordinary authorized verification choices.'
+      after: 'Use the exact host-approved validation command by validationId; changing it requires a revised, approved plan, not a model-selected equivalent.'
   superpowers/skills/verification-before-completion/SKILL.md:
     - before: 'description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always'
       after: 'description: Authorized OMP executor evidence gate; use current native records, preserve raw proof, and never substitute model success for host completion.'
@@ -344,7 +344,7 @@ files:
     - before: "If you haven't run the verification command in this message, you cannot claim it passes."
       after: 'Use actual native records bound to relevant content and execution conditions. Reuse valid unchanged evidence; rerun affected obligations only when missing or invalidated and authorized. A command need not be rerun in this message. Never elevate source-only review, child reports or model claims to successful verification.'
     - before: '2. RUN: Execute the FULL command (fresh, complete)'
-      after: '2. OBTAIN: Read valid complete native evidence, or execute the authorized affected command if its evidence is absent or invalidated'
+      after: '2. OBTAIN: Read valid complete native evidence, or execute the exact approved affected command by validationId if its evidence is absent or invalidated'
     - before: '| Tests pass | Test command output: 0 failures | Previous run, "should pass" |'
       after: '| Tests pass | Current native command output and input identity: 0 failures | Stale run, model assertion, "should pass" |'
     - before: '| Agent completed | VCS diff shows changes | Agent reports "success" |'
@@ -363,7 +363,7 @@ files:
       body: |
         ## Evidence, Acceptance and Cleanup
 
-        Apply before any completion, fixed or passing claim. Use the host's current task/evidence state, not a new ledger. Review is one seat, initial review plus at most two fix/re-review rounds; unresolved required findings block completion even at the cap.
+        Apply before any completion, fixed or passing claim. Use the host's current task/evidence state, not a new ledger. Verification uses only exact approved validation commands by ID; command changes require plan revision and approval. Each review seat defaults to repairLimit=2; revision counts consumed repairs. Only explicit developer extension adds one round without clearing findings or granting permissions. Required unresolved findings block completion even at the limit.
 
         Persist original task-local command output, exit codes, input identities and review records before publishing verification.md or cleanup. If persistence fails, do not claim success or remove the only records. Parallel source success is not integrated-target success. Final overall review and current required evidence precede final user acceptance; approved synchronization/archive happens only after acceptance. Never take over host transitions, merge/publish, or turn Goal completion into acceptance.
   superpowers/skills/systematic-debugging/SKILL.md:
@@ -374,14 +374,14 @@ files:
     - before: '   - If < 3: Return to Phase 1, re-analyze with new information'
       after: '   - Within the current host review round: Return to Phase 1 with concrete new evidence; diagnosis never resets the stable review seat or round counter.'
     - before: '   - **If ≥ 3: STOP and question the architecture (step 5 below)**'
-      after: '   - **The host review cap is initial review plus at most two fix/re-review rounds; unresolved findings then block the parent task.** Investigate architecture within that boundary (step 5 below).'
+      after: '   - **The host review repairLimit defaults to 2; unresolved findings at that limit block the parent task unless the developer explicitly extends the current seat by one round.** Investigate architecture within that boundary (step 5 below).'
     - before: '   - DON''T attempt Fix #4 without architectural discussion'
       after: '   - Do not extend or reset the host review cap through debugging attempts, redispatch or Goal.'
     - before: '   **Discuss with your human partner before attempting more fixes**'
       after: '   **Route a material requirements, core solution, or parent-task contract change to its host gate. Settle ordinary authorized implementation details without another user approval; exhausted review rounds remain blocked.**'
   superpowers/skills/requesting-code-review/SKILL.md:
     - before: 'description: Use when completing tasks, implementing major features, or before merging to verify work meets requirements'
-      after: 'description: Authorized OMP independent review method; use the existing read-only review seat and current evidence, with at most two fix/re-review rounds.'
+      after: 'description: Authorized OMP independent review method; use the existing read-only review seat, current evidence and host repairLimit, default 2.'
     - before: "Dispatch a code reviewer subagent to catch issues before they cascade. The reviewer gets precisely crafted context for evaluation — never your session's history."
       after: "Use the existing host-owned independent review seat to catch issues before they cascade. Read its supplied approved task facts and frozen review inputs, never the executor's session history. Do not dispatch another reviewer."
     - before: '| "I''ll just review the diff myself instead of dispatching a reviewer" | You''re the coordinator — reviewing the diff inline burns the context window you need to keep driving the work. Dispatch a reviewer subagent: the diff and the evaluation live in its context, and only the findings come back to you. |'
@@ -391,11 +391,11 @@ files:
       body: |
         ## Host-Owned Review
 
-        Review the assigned node only. Use the existing stable review seat: initial review plus at most two fix/re-review rounds. Do not dispatch another reviewer, run commands, implement fixes, expand scope, reset counters, park required findings as complete, or take over execution. The host owns model selection and transition decisions.
+        Review the assigned node only. Use the existing stable review seat with its current repairLimit (default 2); revision counts consumed repair rounds. Only explicit developer extension adds one round while preserving findings and counters. Never dispatch another reviewer, run commands, implement fixes, expand scope, self-extend or reset counters, park required findings as complete, or take over execution. The host owns model selection and transition decisions.
 
         Read approved requirements, selected solution, plan, exact task brief, integrated-target review package, report and native validation records with permitted read-only tools. Use [code-reviewer.md](code-reviewer.md). Check spec compliance and quality separately. Treat model reports as claims; trace file evidence and original command output. Missing evidence remains a finding; do not run tests yourself. A final review covers the integrated result, not parallel sources alone.
 
-        Return findings with severity, exact file references, the violated obligation and concrete evidence; distinguish unknowns. Resolve challenges with technical evidence in the same seat. Unresolved required findings after the two-round cap block delivery, not an invitation to start a new review loop. Never claim implementation complete or user acceptance on behalf of the host.
+        Return findings with severity, exact file references, the violated obligation and concrete evidence; distinguish unknowns. Resolve challenges with technical evidence in the same seat. Required unresolved findings at the current repairLimit block delivery, not an invitation to start another review loop. Explicit extension never passes review or grants permissions. Never claim implementation complete or user acceptance on behalf of the host.
 
   superpowers/skills/requesting-code-review/code-reviewer.md:
     - before: 'Use this template when dispatching a code reviewer subagent.'
@@ -412,7 +412,7 @@ files:
       body: |
             ## Review Authority
 
-            You are the existing host-owned read-only review seat. Judge the assigned approved requirements, solution and parent-task contract, without inventing scope or authorizing new behavior. Initial review plus at most two fix/re-review rounds; a replacement session never resets this count. Report uncertainty and material contract defects to the host. Do not dispatch agents, execute commands, implement changes, or claim host completion.
+            You are the existing host-owned read-only review seat. Judge the assigned approved requirements, solution and parent-task contract, without inventing scope or authorizing new behavior. Its repairLimit defaults to 2; revision counts consumed repairs. Only explicit developer extension adds one round without clearing findings or counters; replacement sessions never reset them. Report uncertainty and material contract defects to the host. Never dispatch agents, execute commands, implement changes, or claim host completion.
 
     - before: '    Your review is read-only on this checkout. Do not mutate the working tree, the index, HEAD, or branch state in any way. Use tools like `git show`, `git diff`, and `git log` to inspect history. If you need a working copy of a different revision, check it out into a separate temporary directory (e.g. `git worktree add /tmp/review-[SHA] [SHA]`) — never move HEAD on this checkout.'
       after: '    Your review is read-only. Use the supplied exact review package and native evidence plus authorized read-only source tools; no commands, tests, worktrees or mutations. Missing evidence is a finding for the host, not permission to regenerate it.'

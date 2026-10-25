@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { validateAgentToolArguments } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { createAgentSession } from "../../src/sdk";
@@ -15,6 +16,7 @@ import { AgentStorage } from "../../src/session/agent-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import type { CustomToolContext } from "../../src/extensibility/custom-tools/types";
+import { CustomToolAdapter } from "../../src/extensibility/custom-tools/wrapper";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { assertSpecOwnedPath, createSpecExecutionTools } from "../../src/spec-driven/execution-tools";
 import { SpecEvidenceService } from "../../src/spec-driven/evidence";
@@ -149,6 +151,49 @@ test("verification refuses unapproved IDs without running a command or producing
 		verify.execute("bad-verify", { validationId: "unapproved", stage: "green" }, undefined, unusedContext),
 	).rejects.toThrow("Unapproved");
 	expect(tools.records).toEqual([]);
+});
+
+test("verification rejects replacement parameters at the native argument boundary without executing", async () => {
+	const { cwd, tools } = await fixture();
+	const verify = tools.tools.find(tool => tool.name === "spec_verify")!;
+	const adapter = new CustomToolAdapter(verify, () => unusedContext);
+	const replacement = `"${process.execPath}" -e "require('node:fs').writeFileSync('unapproved-executed', 'yes')"`;
+	for (const extras of [
+		{ command: replacement, reason: "claimed equivalent invocation" },
+		{ command: replacement },
+		{ reason: "claimed equivalent invocation" },
+		{ unexpected: "value" },
+	]) {
+		const call = {
+			type: "toolCall" as const,
+			id: "replacement-verify",
+			name: "spec_verify",
+			arguments: { validationId: "V1", stage: "green", ...extras },
+		};
+		const params = validateAgentToolArguments(adapter, call);
+		await expect(adapter.execute(call.id, params)).rejects.toThrow();
+	}
+	expect(existsSync(path.join(cwd, "unapproved-executed"))).toBe(false);
+	expect(existsSync(path.join(cwd, "change", "checks"))).toBe(false);
+	expect(tools.records).toEqual([]);
+});
+
+test("verification runs only the approved command for RED and GREEN", async () => {
+	const { tools } = await fixture();
+	const verify = tools.tools.find(tool => tool.name === "spec_verify")!;
+	const adapter = new CustomToolAdapter(verify, () => unusedContext);
+	for (const stage of ["red", "green"] as const) {
+		const call = {
+			type: "toolCall" as const,
+			id: `approved-${stage}`,
+			name: "spec_verify",
+			arguments: { validationId: "V1", stage },
+		};
+		await adapter.execute(call.id, validateAgentToolArguments(adapter, call));
+	}
+	expect(tools.records.map(record => record.args.command)).toEqual(["exit 0", "exit 0"]);
+	expect(tools.records.map(record => record.obligation?.stage)).toEqual(["red", "green"]);
+	expect(tools.records.every(record => record.result.exitCode === 0)).toBe(true);
 });
 
 test("native Team differences retain structured questions and stop choice until a real answer and new discussion", async () => {
@@ -650,6 +695,7 @@ test("runtime condition inputs qualify before dependent owned files exist and na
 		model: "spec-fixture/chat-a",
 		sameModelIndependent: true,
 		revision: 0,
+		repairLimit: 2,
 		findings: [],
 	};
 	const review = parseSpecReview(
@@ -750,6 +796,7 @@ test("runtime persists post-archive failure and retries from moved actual origin
 		model: "spec-fixture/chat-a",
 		sameModelIndependent: true,
 		revision: 0,
+		repairLimit: 2,
 		findings: [],
 	};
 	const review = parseSpecReview(

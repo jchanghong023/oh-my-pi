@@ -166,6 +166,7 @@ export interface SpecReviewSlot {
 	model: string;
 	sameModelIndependent: boolean;
 	revision: number;
+	repairLimit: number;
 	findings: SpecFinding[];
 	lastReview?: SpecReview;
 	reviewedRevision?: number;
@@ -221,7 +222,6 @@ export interface SpecToolRecord {
 	obligation: {
 		validationId: string;
 		approvedCommand: string;
-		reason: string | null;
 		stage?: "red" | "green";
 	} | null;
 	result: {
@@ -417,6 +417,7 @@ export interface SpecDrivenPorts {
 				candidate: SpecCandidate;
 				solution: SpecSolution;
 				previous?: SpecPlan;
+				amendment?: string;
 				review?: SpecReview;
 			},
 			context: SpecRunContext,
@@ -443,10 +444,11 @@ export interface SpecDrivenPorts {
 	};
 	git: {
 		preflight(input: { specification: SpecRequirements; plan: SpecPlan }, context: SpecRunContext): Promise<void>;
+		/** Null means native Git observed no publishable difference; it never establishes a first commit range. */
 		commit(
 			input: { task: SpecTask; changedPaths: string[]; revision: number },
 			context: SpecRunContext,
-		): Promise<SpecCommitRange>;
+		): Promise<SpecCommitRange | null>;
 	};
 	/** Execution records live in a runner-owned ledger. Model output can reference but cannot insert them. */
 	evidence: {

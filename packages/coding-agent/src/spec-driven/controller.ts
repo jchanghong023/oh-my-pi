@@ -124,12 +124,16 @@ export function renderSpecDrivenSummary(state: SpecDrivenStatus): string {
 	lines.push(...state.questions.map(question => `待回答：${question}`));
 	if (state.tasks.length)
 		lines.push(`任务完成：${state.tasks.filter(task => task.status === "completed").length}/${state.tasks.length}`);
-	for (const review of state.reviews)
+	for (const review of state.reviews) {
+		lines.push(
+			`审查 ${review.id}（${review.kind}）：已用修复 ${review.revision} 轮；当前额度 ${review.repairLimit} 轮`,
+		);
 		if (review.lastReview)
 			lines.push(
-				`审查 ${review.kind}：${review.lastReview.verdict}；${review.lastReview.summary}`,
+				`审查结果：${review.lastReview.verdict}；${review.lastReview.summary}`,
 				...review.findings.map(finding => `[${finding.severity}] ${finding.issue}\n依据：${finding.evidence}`),
 			);
+	}
 	if (state.phase === "awaiting-plan")
 		lines.push("批准计划会开始执行并授权范围内任务的本地提交；不授权推送、发布、PR、改写历史或无关改动。");
 	if (state.pendingClosure.length) lines.push(`待收尾：${state.pendingClosure.join("；")}`);
@@ -220,14 +224,22 @@ export class SpecDrivenController {
 			? "流程所有者已释放"
 			: (this.#messageBlock() ?? (this.#active ? "阶段操作正在运行" : undefined));
 		const result: SpecControllerAction[] = [];
-		const add = (id: string, label: string, command: string, requiresInput = false, control = false): void => {
+		const add = (
+			id: string,
+			label: string,
+			command: string,
+			requiresInput = false,
+			control = false,
+			interrupt = false,
+		): void => {
+			const actionBlocked = interrupt && !this.#disposed ? this.#messageBlock() : blocked;
 			result.push({
 				id,
 				label,
 				command: `/dev ${command}`,
-				available: control ? !this.#disposed : !blocked,
+				available: control ? !this.#disposed : !actionBlocked,
 				version: id === "answer" ? `${command}:${state.clarification?.id ?? ""}` : `/dev ${command}`,
-				...(blocked && !control ? { blockedReason: blocked } : {}),
+				...(actionBlocked && !control ? { blockedReason: actionBlocked } : {}),
 				...(requiresInput ? { requiresInput: true } : {}),
 			});
 		};
@@ -268,6 +280,28 @@ export class SpecDrivenController {
 			}
 			add("amend", "修改需求并撤销受影响下游批准", "amend", true);
 			if (state.specificationApproval) add("change-solution", "重新讨论方案并撤销下游批准", "change-solution", true);
+			if (state.plan)
+				add(
+					"revise-plan",
+					"仅修订当前计划并重新审查（需重新批准）",
+					`revise-plan ${state.plan.version}`,
+					true,
+					false,
+					true,
+				);
+			if (this.#core)
+				for (const review of state.reviews) {
+					try {
+						this.#core.assertExtendReview(review.id, review.revision, review.repairLimit);
+					} catch {
+						continue;
+					}
+					add(
+						`extend-review:${review.id}`,
+						`审查 ${review.id}（已用 ${review.revision}/${review.repairLimit} 轮）追加一轮自动修复（不代表通过）`,
+						`extend-review ${review.id} ${review.revision} ${review.repairLimit}`,
+					);
+				}
 			add("cancel", "停止流程并保留已有文件（需确认）", "cancel", false, true);
 		}
 		for (const message of this.#messages)
@@ -403,6 +437,24 @@ export class SpecDrivenController {
 					`${action.label}：${action.command}${action.available ? "" : `（不可用：${action.blockedReason}）`}`,
 			)
 			.join("\n");
+	}
+	revisePlan(version: string, text: string): string {
+		if (!this.#core) throw new SpecAdmissionError("尚无可修订的计划");
+		try {
+			this.#core.assertRevisePlan(version, text);
+		} catch (error) {
+			throw new SpecAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
+		}
+		return this.schedule(core => core.revisePlan(version, text), true);
+	}
+	extendReview(id: string, revision: number, repairLimit: number): string {
+		if (!this.#core) throw new SpecAdmissionError("尚无可追加修复轮次的审查");
+		try {
+			this.#core.assertExtendReview(id, revision, repairLimit);
+		} catch (error) {
+			throw new SpecAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
+		}
+		return this.schedule(core => core.extendReview(id, revision, repairLimit));
 	}
 	repair(acceptanceVersion: string, text: string): string {
 		if (this.#active || this.#outstanding() || !this.#core) throw new SpecAdmissionError("流程或用户消息尚未结清");
