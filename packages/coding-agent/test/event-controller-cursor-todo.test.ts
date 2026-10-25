@@ -8,7 +8,6 @@ import {
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -407,114 +406,31 @@ describe("EventController + Cursor todo bridge", () => {
 	});
 });
 
-describe("compact Todo failure projection", () => {
-	/** Newest activity rows owned by the active turn. */
-	function renderDock(ctx: InteractiveModeContext, width = 180): string {
-		return Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(width) ?? []).join("\n"));
-	}
-
-	it("hides the warning only while its own failed execution is a dock row", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+describe("compact Todo failure feedback", () => {
+	it("keeps the failed execution and original diagnostics inline", async () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
 		await f.controller.handleEvent(todoFailure("PROVIDER_FAILURE_REASON\nFULL_DETAIL_LINE"));
-		const warning = f.ctx.chatContainer.children.at(-1) as ToolActivityContainer;
-
-		const compact = renderTranscript(f.ctx);
 		expect(f.ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent)).toHaveLength(1);
-		expect(compact).not.toContain("PROVIDER_FAILURE_REASON");
-		expect(compact).not.toContain("FULL_DETAIL_LINE");
-		expect(renderDock(f.ctx)).not.toBe("");
-		expect(warning.render(180)).toHaveLength(0);
-		f.ctx.chatContainer.nativeBlocks();
-		expect(warning.describe().p?.hidden).toBe(true);
+		expect(renderTranscript(f.ctx)).toContain("PROVIDER_FAILURE_REASON");
+		expect(renderTranscript(f.ctx)).toContain("FULL_DETAIL_LINE");
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		const detailed = renderTranscript(f.ctx);
-		expect(detailed).toContain("FULL_DETAIL_LINE");
-		expect(warning.render(180).length).toBeGreaterThan(0);
-		expect(warning.describe().p?.hidden).not.toBe(true);
-
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
-		expect(warning.describe().p?.hidden).toBe(true);
-		f.ctx.chatContainer.setToolActivityVisible(false);
-		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
-		f.ctx.chatContainer.setToolActivityVisible(true);
-		expect(renderTranscript(f.ctx)).not.toContain("PROVIDER_FAILURE_REASON");
-		expect(warning.describe().p?.hidden).toBe(true);
+		expect(renderTranscript(f.ctx)).toContain("FULL_DETAIL_LINE");
 	});
 
-	it("keeps independent warnings, unknown identities and separate identical failures", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+	it("does not hide earlier failures when newer tool calls complete", async () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		const ids = ["todo-1", "todo-2"];
+		const ids = ["todo-1", "todo-2", "todo-3"];
 		for (const [index, id] of ids.entries()) {
 			await f.controller.handleEvent(streamedTodoBlock(id, ids.slice(0, index)));
-			await f.controller.handleEvent(todoFailure("SAME_FAILURE_REASON", id));
+			await f.controller.handleEvent(todoFailure(`FAILURE_${id}`, id));
 		}
-		f.ctx.showWarning("SAME_FAILURE_REASON");
-		f.ctx.showWarning("SAME_FAILURE_REASON", {
-			hideWithToolActivity: true,
-			toolFailure: { toolCallId: "unknown-call" },
-		});
-		f.ctx.showWarning("SAME_FAILURE_REASON", {
-			hideWithToolActivity: true,
-			toolFailure: { toolCallId: "" },
-		});
-		expect(renderTranscript(f.ctx).match(/SAME_FAILURE_REASON/g)).toHaveLength(3);
+		const rendered = renderTranscript(f.ctx);
+		for (const id of ids) expect(rendered).toContain(`FAILURE_${id}`);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-	});
-
-	it("does not merge a warning into a pending or successful execution with the same identity", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		f.ctx.showWarning("UNMERGED_REASON", {
-			hideWithToolActivity: true,
-			toolFailure: { toolCallId: "todo-1" },
-		});
-		expect(renderTranscript(f.ctx)).toContain("UNMERGED_REASON");
-		await f.controller.handleEvent(todoEnd("todo-1", []));
-		expect(renderTranscript(f.ctx)).toContain("UNMERGED_REASON");
-	});
-
-	it("keeps an already committed warning visible instead of rewriting scrollback", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		await f.controller.handleEvent(todoFailure("LATE_FAILURE_REASON"));
-		const warning = f.ctx.chatContainer.children[0] as ToolActivityContainer;
-		const batch = f.ctx.chatContainer.peekFinalizedBatch(180, 0);
-		expect(batch?.rows.join("\n")).toContain("LATE_FAILURE_REASON");
-		f.ctx.chatContainer.acknowledgeFinalizedBatch(batch!.id);
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		await f.controller.handleEvent(todoFailure("LATE_FAILURE_REASON", "todo-1"));
-
-		// The failed execution is docked now, but the warning already entered
-		// immutable history; hiding it would require clearing and replaying.
-		expect(warning.render(180).length).toBeGreaterThan(0);
-		expect(warning.describe().p?.hidden).not.toBe(true);
-		expect(f.ctx.chatContainer.peekReplayBatch(180)).toBeUndefined();
-		expect(f.ctx.pendingTools.size).toBe(0);
-		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-	});
-
-	it("keeps a rebuilt warning independent until its exact failed execution is docked", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		f.ctx.viewSession.buildTranscriptSessionContext = () => f.ctx.sessionManager.buildSessionContext();
-		await f.controller.handleEvent(todoFailure("REBUILD_FAILURE_REASON"));
-		await f.helpers.renderInitialMessages();
-		expect(renderTranscript(f.ctx)).toContain("REBUILD_FAILURE_REASON");
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		expect(renderTranscript(f.ctx)).not.toContain("REBUILD_FAILURE_REASON");
-		expect(f.ctx.pendingTools.size).toBe(0);
 	});
 
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {
@@ -558,7 +474,7 @@ describe("compact Todo failure projection", () => {
 		const storedResult = JSON.stringify(context.messages[1]);
 		f.ctx.viewSession.buildTranscriptSessionContext = () => context;
 		await f.helpers.renderInitialMessages();
-		// Compact replay keeps the warning as the failure trace; history hides tool rows.
+		// Rebuilding retains the original failure feedback in transcript order.
 		expect(renderTranscript(f.ctx)).toContain("HISTORY_FAILURE_REASON");
 		setChatTranscriptDisplayPreferences({
 			compactToolActivity: presentation === "clean",
@@ -583,58 +499,8 @@ describe("compact Todo failure projection", () => {
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
+		expect(renderTranscript(f.ctx)).toContain("HISTORY_FAILURE_REASON");
 		expect(JSON.stringify(context.messages[1])).toBe(storedResult);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-	});
-
-	it("does not treat a different successful update as recovery of the failed execution", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		await f.controller.handleEvent(todoFailure("UNRESOLVED_FAILURE_REASON"));
-		await f.controller.handleEvent(streamedTodoBlock("todo-success", ["todo-1"]));
-		await f.controller.handleEvent(todoEnd("todo-success", []));
-		const rendered = renderTranscript(f.ctx);
-		expect(rendered).not.toContain("UNRESOLVED_FAILURE_REASON");
-		expect(renderDock(f.ctx)).not.toBe("");
-	});
-
-	it("keeps a warning visible once newer calls evict its failed execution from the dock", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		const ids = ["todo-1", "todo-2", "todo-3"];
-		for (const [index, id] of ids.entries()) {
-			await f.controller.handleEvent(streamedTodoBlock(id, ids.slice(0, index)));
-			await f.controller.handleEvent(todoFailure(id === "todo-1" ? "EVICTED_REASON" : `LATER_REASON_${id}`, id));
-		}
-		const rendered = renderTranscript(f.ctx);
-		expect(rendered).toContain("EVICTED_REASON");
-		expect(rendered).not.toContain("LATER_REASON_todo-2");
-		expect(rendered).not.toContain("LATER_REASON_todo-3");
-		expect(renderDock(f.ctx)).not.toBe("");
-		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-	});
-
-	it("reveals the exact failure warning while a short viewport hides its dock", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const f = createPresentationFixture();
-		f.ctx.chatContainer.setCompactTurnActive(true);
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		await f.controller.handleEvent(todoFailure("SHORT_VIEWPORT_FAILURE"));
-		const frame = { tick: 0, now: 0 };
-		expect(Bun.stripANSI(f.ctx.chatContainer.renderViewport(100, 2, frame).join("\n"))).toContain(
-			"SHORT_VIEWPORT_FAILURE",
-		);
-		expect(Bun.stripANSI(f.ctx.chatContainer.renderViewport(100, 8, frame).join("\n"))).not.toContain(
-			"SHORT_VIEWPORT_FAILURE",
-		);
-		// Native main blocks are reconciled before the separately mounted dock.
-		f.ctx.chatContainer.setCompactToolActivityVisibleInViewport(false);
-		f.ctx.chatContainer.nativeBlocks();
-		const warning = f.ctx.chatContainer.children.find(child => child instanceof ToolActivityContainer);
-		expect(warning?.render(100).join("\n")).toContain("SHORT_VIEWPORT_FAILURE");
 	});
 });

@@ -44,6 +44,7 @@ interface Harness {
 		hasHandlers: () => boolean;
 		emit: (event: MappedExtensionEvent) => Promise<unknown>;
 		setToolApprovalPreviewWaiter: (waiter: (toolCallId: string) => Promise<void>) => () => void;
+		getAssistantThinkingRenderers: () => [];
 	};
 	emitted: MappedExtensionEvent[];
 
@@ -75,9 +76,10 @@ async function makeHarness(
 	const link = formatCollabLink("ws://localhost:8788", roomId, roomKey);
 
 	const emitted: MappedExtensionEvent[] = [];
-	const runner = {
+	const runner: Harness["runner"] = {
 		hasHandlers: () => true,
 		setToolApprovalPreviewWaiter: (_waiter: (toolCallId: string) => Promise<void>) => () => {},
+		getAssistantThinkingRenderers: () => [],
 		emit: (event: MappedExtensionEvent) => {
 			emitted.push(event);
 			return Promise.resolve();
@@ -217,6 +219,7 @@ describe("collab guest extension lifecycle mirror", () => {
 				createContext(base) {
 					const agent = new Agent();
 					const fixture = createInteractiveModeContext({
+						expandThinkingBlocks: true,
 						session: {
 							switchSession: base.session.switchSession,
 							newSession: base.session.newSession,
@@ -280,7 +283,7 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(ctx.thinkingPreview.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
+			expect(ctx.streamingComponent?.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
 			expect(ctx.session.agent.state).toMatchObject({
 				isStreaming: true,
 				streamMessage: message,
@@ -297,42 +300,81 @@ describe("collab guest extension lifecycle mirror", () => {
 					partial: message,
 				},
 			});
-			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
 			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
 			await send({ type: "message_end", message });
 			expect(ctx.session.agent.state.streamMessage).toBeNull();
-			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
+			expect(ctx.chatContainer.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
 			expect(ctx.session.messages).toEqual(history);
 			expect(ctx.session.agent.state.messages).toHaveLength(1);
 			expect(agentEvents).toEqual([]);
 			unsubscribe();
 			await send({ type: "agent_end", messages: [message], isTerminal: true });
-			expect(ctx.thinkingPreview.render(60)).toEqual([]);
 			expect(ctx.session.isStreaming).toBe(false);
 
-			// A later real stream must discard the old stub, and prose collapses
-			// the next thinking window (retained dimmed) even when its start
-			// arrived mid-message; agent_end clears it.
+			// Subsequent live reasoning and prose use the normal inline message lifecycle.
 			await send({ type: "agent_start" });
-			await send({ type: "message_start", message });
+			const started = { ...message, content: [] };
+			await send({ type: "message_start", message: started });
+			const thinkingStart = { ...message, content: [{ type: "thinking" as const, thinking: "" }] };
+			await send({
+				type: "message_update",
+				message: thinkingStart,
+				assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: thinkingStart },
+			});
+			expect(ctx.session.agent.state.activeThinkingIndex).toBe(0);
 			await send({
 				type: "message_update",
 				message,
-				assistantMessageEvent: { type: "thinking_start", contentIndex: 0, partial: message },
+				assistantMessageEvent: {
+					type: "thinking_delta",
+					contentIndex: 0,
+					delta: "REMOTE_THINKING_BODY",
+					partial: message,
+				},
 			});
-			expect(ctx.session.agent.state.activeThinkingIndex).toBe(0);
-			expect(ctx.thinkingPreview.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
+			expect(ctx.streamingComponent?.render(60).join("\n")).toContain("REMOTE_THINKING_BODY");
+			await send({
+				type: "message_update",
+				message,
+				assistantMessageEvent: {
+					type: "thinking_end",
+					contentIndex: 0,
+					content: "REMOTE_THINKING_BODY",
+					partial: message,
+				},
+			});
 			const prose = {
 				...message,
 				content: [...message.content, { type: "text" as const, text: "REMOTE_ANSWER" }],
 			};
+			const proseStart = { ...message, content: [...message.content, { type: "text" as const, text: "" }] };
+			await send({
+				type: "message_update",
+				message: proseStart,
+				assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: proseStart },
+			});
+			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
 			await send({
 				type: "message_update",
 				message: prose,
-				assistantMessageEvent: { type: "text_start", contentIndex: 1, partial: prose },
+				assistantMessageEvent: {
+					type: "text_delta",
+					contentIndex: 1,
+					delta: "REMOTE_ANSWER",
+					partial: prose,
+				},
 			});
-			expect(ctx.session.agent.state.activeThinkingIndex).toBeUndefined();
-			expect(ctx.thinkingPreview.render(60)).toEqual([expect.stringContaining("REMOTE_THINKING_BODY"), ""]);
+			expect(ctx.streamingComponent?.render(60).join("\n")).toContain("REMOTE_ANSWER");
+			await send({
+				type: "message_update",
+				message: prose,
+				assistantMessageEvent: {
+					type: "text_end",
+					contentIndex: 1,
+					content: "REMOTE_ANSWER",
+					partial: prose,
+				},
+			});
 			await send({ type: "message_end", message: prose });
 			await send({ type: "agent_end", messages: [prose], isTerminal: true });
 			expect(ctx.session.agent.state.messages).toEqual(history);

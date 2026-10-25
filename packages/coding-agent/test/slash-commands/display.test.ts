@@ -188,10 +188,10 @@ describe("/display slash command", () => {
 			display: { hideToolActivity: false, compactToolActivity: true },
 		});
 		expect(h.showStatus).not.toHaveBeenCalled();
+		expect(h.showWarning).toHaveBeenCalledTimes(1);
 		const warning = h.showWarning.mock.calls[0]?.[0];
 		expect(warning).toContain("hideThinkingBlock");
 		expect(warning).toContain("项目配置");
-		expect(warning).toMatch(/实时思考窗口隐藏.*工具单行/);
 		await settings.flush();
 	});
 

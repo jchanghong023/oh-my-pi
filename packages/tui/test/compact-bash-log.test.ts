@@ -3,6 +3,8 @@ import { setChatTranscriptDisplayPreferences } from "../src/chat/display-prefere
 import { ToolExecutionComponent, stopSharedSpinnerTicker } from "../src/chat/tool-execution";
 import { initTheme } from "../src/theme";
 import { TranscriptContainer } from "../src/chrome/transcript-container";
+import { TspDocument } from "../src/native/apply";
+import { Reconciler } from "../src/native/reconcile";
 
 const components: ToolExecutionComponent[] = [];
 
@@ -31,13 +33,15 @@ function output(component: ToolExecutionComponent, text: string, details?: unkno
 }
 
 function nativeActivity(component: ToolExecutionComponent): string {
-	return JSON.stringify(component.describe({
-		cols: 80,
-		dark: true,
-		reduceMotion: false,
-		supports: () => true,
-		feature: () => true,
-	}));
+	return JSON.stringify(
+		component.describe({
+			cols: 80,
+			dark: true,
+			reduceMotion: false,
+			supports: () => true,
+			feature: () => true,
+		}),
+	);
 }
 
 beforeAll(async () => {
@@ -97,18 +101,29 @@ describe("compact upstream tool feedback", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();
 		const blocked = bash().component;
-		output(blocked, "Confirm command");
+		output(blocked, "ORIGINAL_BLOCKED_OUTPUT: Confirm command");
 		blocked.setCompactNeedsUserInput("Confirm command");
 		transcript.addChild(blocked);
 		transcript.addChild(bash().component);
 		transcript.addChild(bash().component);
 		expect(blocked.hasCompactCriticalFeedback()).toBe(true);
-		expect(Bun.stripANSI(transcript.render(80).join("\n"))).toContain("Confirm command");
-		expect(JSON.stringify(transcript.describe())).toContain("Confirm command");
+		expect(Bun.stripANSI(transcript.render(80).join("\n"))).toContain("ORIGINAL_BLOCKED_OUTPUT: Confirm command");
+		const document = new TspDocument("s:input-blocked");
+		const ops = new Reconciler("s:input-blocked").reconcile(
+			{ main: transcript.nativeBlocks(), dock: [], layer: [] },
+			{
+				cols: 80,
+				dark: true,
+				reduceMotion: false,
+				supports: () => true,
+				feature: () => true,
+			},
+		);
+		expect(document.applyFrame({ sf: "s:input-blocked", s: 1, ops })).toEqual([]);
+		expect(JSON.stringify(document.snapshot())).toContain("ORIGINAL_BLOCKED_OUTPUT: Confirm command");
 		blocked.setCompactNeedsUserInput(undefined);
 		expect(blocked.hasCompactCriticalFeedback()).toBe(false);
 	});
-
 
 	it("offers the complete multi-line command through the existing expand control", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });

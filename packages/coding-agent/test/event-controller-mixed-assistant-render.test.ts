@@ -4,6 +4,10 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolCall, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -82,18 +86,27 @@ function createFixture(
 }
 
 describe("EventController mixed assistant text/tool rendering", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeAll(async () => {
 		await initTheme(false);
 	});
 
 	beforeEach(async () => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "display.smoothStreaming": false } });
+		// These contracts exercise full upstream results, custom cards and images,
+		// not the compact mode's intentional one-line tool previews.
+		await Settings.init({
+			inMemory: true,
+			overrides: { "display.smoothStreaming": false, "display.compactToolActivity": false },
+		});
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	});
 
 	afterEach(() => {
 		vi.restoreAllMocks();
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	});
 
 	it("finalizes and removes an orphaned streaming component on the next message_start", async () => {

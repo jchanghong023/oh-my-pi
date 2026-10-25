@@ -5,9 +5,6 @@ import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { ThinkingPreviewComponent } from "@oh-my-pi/pi-tui/chat/thinking-preview";
-import { Loader } from "@oh-my-pi/pi-tui/components/loader";
-import type { DescribeContext, NativeChild } from "@oh-my-pi/pi-tui/native/node";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { EditorTopGap } from "@oh-my-pi/pi-tui/prompt/editor-top-gap";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
@@ -172,10 +169,10 @@ beforeAll(async () => {
 });
 
 describe("composer inline shrink (#11007)", () => {
-	it("keeps compact prose complete while self-clearing chrome expands and collapses", async () => {
+	it("keeps finalized compact prose available and input visible after self-clearing chrome changes", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const h = makeHarness(60, 18, 0);
+		const h = makeHarness(60, 18, 0, ["SHELL_BEFORE_COMPACT_REPLY"]);
 		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
 			selfClearingChrome: [h.hud],
 			transientChrome: [h.editor],
@@ -196,23 +193,42 @@ describe("composer inline shrink (#11007)", () => {
 			);
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
-			const prose = () => h.terminal.getScrollBuffer().flatMap(row => Bun.stripANSI(row).match(/PARA\d{2}/g) ?? []);
-			expect(prose()).toEqual(paragraphs);
+			// Upstream may clip mutable prose while the unfinished table and HUD
+			// share the viewport; compact must not add its own publication budget.
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
 			h.hud.rows = 0;
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
-			expect(prose()).toEqual(paragraphs);
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
 			h.hud.rows = 3;
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
-			expect(prose()).toEqual(paragraphs);
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
+			message.updateContent(
+				reply(`${paragraphs.join("\n\n")}\n\n| Item | Value |\n| --- | --- |\n| active | table |\n`),
+			);
+			message.markTranscriptBlockFinalized();
+			h.hud.rows = 0;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			// Full semantic rendering is the existing export/full-content boundary,
+			// independent of how much unfinished Markdown reached native scrollback.
+			for (const compactToolActivity of [true, false]) {
+				setChatTranscriptDisplayPreferences({ compactToolActivity });
+				const full = Bun.stripANSI(h.transcript.render(60).join("\n"));
+				expect(Array.from(full.match(/PARA\d{2}/g) ?? [])).toEqual(paragraphs);
+				expect(full).toContain("active");
+				expect(full).toContain("table");
+			}
+			expect(h.terminal.getScrollBuffer().join("\n")).toContain("SHELL_BEFORE_COMPACT_REPLY");
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
 		} finally {
 			h.composer.stop();
 			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 
-	it("keeps the final live table cell visible beside narrow activity, draft, and status chrome", async () => {
+	it("keeps finalized table content available and the draft visible beside narrow activity and status chrome", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const terminal = new VirtualTerminal(100, 24);
@@ -246,7 +262,6 @@ describe("composer inline shrink (#11007)", () => {
 			true,
 			undefined,
 			false,
-			false,
 			true,
 		);
 		transcript.addChild(message);
@@ -270,180 +285,21 @@ describe("composer inline shrink (#11007)", () => {
 				composer.ui.requestRender();
 				await scheduler.settle(terminal);
 			}
+			message.updateContent(reply(source));
+			message.markTranscriptBlockFinalized();
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
 			terminal.resize(24, 12);
 			composer.ui.requestRender();
 			await scheduler.settle(terminal);
-			const visible = terminal.getScrollBuffer().join("\n");
-			expect(visible).toContain("W5");
+			const full = Bun.stripANSI(transcript.render(100).join("\n"));
+			expect(Array.from(full.match(/P\d+ 正文不能丢失。/g) ?? [])).toEqual(
+				Array.from({ length: 24 }, (_, index) => `P${index} 正文不能丢失。`),
+			);
+			for (let index = 1; index <= 5; index++) expect(full).toContain(`ROW${index}`);
 			expect(composer.editor.getText()).toBe("draft-kept");
 			expect(terminal.getViewport().some(row => row.includes("draft-kept"))).toBe(true);
 		} finally {
-			composer.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("reserves compact transcript space beside narrow-screen placeholder and status decorations", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const terminal = new VirtualTerminal(24, 12);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { quiet: true },
-		});
-		const status = createStartupStatusLine({
-			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
-			gitEnabled: false,
-			autoThinking: false,
-			fastMode: false,
-			usingSubscription: false,
-			autoCompactEnabled: false,
-			compactionBoundaries: null,
-		});
-		for (let i = 0; i < 7; i++) status.setHookStatus(`narrow-${i}`, `STATUS ${i}`);
-		composer.setStatusComponent(status);
-		composer.editor.placeholder = () => "Type a message, use slash commands, or ask a question about your project";
-		const transcript = new TranscriptContainer();
-		transcript.addChild(new Text("CURRENT BODY", 0, 0));
-		composer.setRuntimeChildren([transcript, composer.editor], { transientChrome: [composer.editor] });
-		composer.ui.setFocus(composer.editor);
-		composer.start({ playWelcomeIntro: false });
-		try {
-			await scheduler.settle(terminal);
-			expect(terminal.getViewport().some(row => row.includes("CURRENT BODY"))).toBe(true);
-			expect(composer.renderFrame({ columns: 24, rows: 12 }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
-				true,
-			);
-			const compactEditorRows = composer.editor.render(24).length;
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-			const detailedEditorRows = composer.editor.render(24).length;
-			expect(detailedEditorRows).toBeGreaterThan(compactEditorRows);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-			expect(composer.editor.render(24).length).toBe(detailedEditorRows);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-			composer.editor.handleInput("draft");
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(terminal.getViewport().some(row => row.includes("draft"))).toBe(true);
-			expect(terminal.getViewport().some(row => row.includes("CURRENT BODY"))).toBe(true);
-			expect(composer.editor.getText()).toBe("draft");
-		} finally {
-			composer.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("protects compact prose and draft from a huge self-clearing HUD before dropping thinking", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const terminal = new VirtualTerminal(24, 12);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { quiet: true },
-		});
-		const transcript = new TranscriptContainer();
-		transcript.addChild(new Text("CURRENT BODY", 0, 0));
-		const thinking = new ThinkingPreviewComponent();
-		thinking.setText("first thought\nlatest thought");
-		const hud = new InlineWidget();
-		hud.rows = 80;
-		composer.editor.setText("draft");
-		composer.setRuntimeChildren([transcript, thinking, hud, composer.editor], {
-			transientChrome: [composer.editor],
-			selfClearingChrome: [thinking, hud],
-		});
-		composer.ui.setFocus(composer.editor);
-		composer.start({ playWelcomeIntro: false });
-		try {
-			await scheduler.settle(terminal);
-			const view = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(view.some(row => row.includes("CURRENT BODY"))).toBe(true);
-			expect(view.some(row => row.includes("draft"))).toBe(true);
-			expect(view.filter(row => row.includes("thought"))).toHaveLength(2);
-			expect(composer.renderFrame({ columns: 24, rows: 12 }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
-				true,
-			);
-			expect(composer.editor.getText()).toBe("draft");
-			terminal.resize(24, 6);
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			const shortView = terminal.getViewport().map(row => Bun.stripANSI(row));
-			expect(shortView.some(row => row.includes("CURRENT BODY"))).toBe(true);
-			expect(shortView.some(row => row.includes("draft"))).toBe(true);
-			expect(shortView.filter(row => row.includes("thought"))).toHaveLength(0);
-			expect(composer.editor.getText()).toBe("draft");
-		} finally {
-			composer.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("protects real compact assistant prose and draft from the actual working loader at 24x6", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const terminal = new VirtualTerminal(24, 6);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { quiet: true },
-		});
-		const transcript = new TranscriptContainer();
-		const prose = new AssistantMessageComponent();
-		prose.updateContent(reply("REAL ASSISTANT BODY"));
-		transcript.addChild(prose);
-		const thinking = new ThinkingPreviewComponent();
-		thinking.setText("first thought\nlatest thought");
-		const statusRoot = new (class extends Container {
-			override render(width: number): readonly string[] {
-				return ["Working status", ...super.render(width)];
-			}
-		})();
-		const loader = new Loader(
-			composer.ui,
-			text => text,
-			text => text,
-			"Inspecting first local fixture",
-			[" ⎋"],
-		);
-		statusRoot.addChild(loader);
-		const status = createStartupStatusLine({
-			settings: { leftSegments: [], rightSegments: [], showHookStatus: true },
-			gitEnabled: false,
-			autoThinking: false,
-			fastMode: false,
-			usingSubscription: false,
-			autoCompactEnabled: false,
-			compactionBoundaries: null,
-		});
-		status.setHookStatus("runtime-status", "Runtime status detail");
-		composer.setStatusComponent(status);
-		composer.editor.setText("draft");
-		composer.setRuntimeChildren([transcript, thinking, statusRoot, composer.editor], {
-			transientChrome: [composer.editor],
-			selfClearingChrome: [thinking],
-		});
-		composer.ui.setFocus(composer.editor);
-		composer.start({ playWelcomeIntro: false });
-		try {
-			for (const rows of [6, 12]) {
-				terminal.resize(24, rows);
-				composer.ui.requestRender();
-				await scheduler.settle(terminal);
-				const view = terminal.getViewport().map(row => Bun.stripANSI(row));
-				expect(view.some(row => row.includes("REAL ASSISTANT BODY"))).toBe(true);
-				expect(view.some(row => row.includes("draft"))).toBe(true);
-				expect(composer.renderFrame({ columns: 24, rows }).viewport.some(row => row.includes(CURSOR_MARKER))).toBe(
-					true,
-				);
-				expect(composer.editor.getText()).toBe("draft");
-			}
-		} finally {
-			loader.stop();
 			composer.stop();
 			setChatTranscriptDisplayPreferences(previous);
 		}
@@ -1344,187 +1200,5 @@ describe("composer inline shrink (#11007)", () => {
 		expect(longest).toBeLessThanOrEqual(1);
 		expect(view.findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
 		h.composer.stop();
-	});
-});
-
-describe("composer compact chrome budget", () => {
-	it("uses the same thinking boundary for native dock, normal ANSI and resize with preceding messages", () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const terminal = new VirtualTerminal(60, 12);
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: new VirtualRenderScheduler() },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
-		});
-		const transcript = new TranscriptContainer();
-		transcript.addChild(new Text("CURRENT BODY", 0, 0));
-		const pending = new Text("queued one\nqueued two\nqueued three", 0, 0);
-		const thinking = new ThinkingPreviewComponent();
-		thinking.setText("first thought\nlatest thought");
-		composer.editor.setText("editable draft");
-		composer.setRuntimeChildren([transcript, pending, thinking, composer.editor], {
-			nativeDock: [thinking, pending, composer.editor],
-			selfClearingChrome: [thinking],
-			transientChrome: [composer.editor],
-		});
-		const cx: DescribeContext = {
-			cols: 60,
-			reduceMotion: true,
-			dark: true,
-			supports: () => true,
-			feature: () => true,
-		};
-		const nativeRows = (child: NativeChild): string[] => {
-			if (!("k" in child)) {
-				const described = child.describe?.(cx);
-				return described ? nativeRows(described) : [...child.render(cx.cols)];
-			}
-			if (child.k === "rows") return [...(child.p?.lines ?? [])];
-			return (child.c ?? []).flatMap(nativeRows);
-		};
-		composer.start({ playWelcomeIntro: false });
-		try {
-			for (const [rows, visible] of [
-				[12, false],
-				[14, true],
-				[12, false],
-			] as const) {
-				terminal.resize(60, rows);
-				const viewport = composer.renderFrame({ columns: 60, rows }).viewport;
-				expect(viewport.join("\n").includes("latest thought")).toBe(visible);
-				const dock = composer.describeSurface().dock.flatMap(nativeRows);
-				expect(dock.join("\n").includes("latest thought")).toBe(visible);
-				expect(composer.editor.getText()).toBe("editable draft");
-				const resized = composer.renderResizeFrame({ columns: 60, rows });
-				expect(resized.join("\n").includes("latest thought")).toBe(visible);
-				if (visible) {
-					expect(dock.some(line => Bun.stripANSI(line) === " latest thought ")).toBe(true);
-					expect(dock.some(line => Bun.stripANSI(line) === " first thought ")).toBe(true);
-				}
-			}
-		} finally {
-			composer.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("keeps working, retry and compaction status visible when thinking exceeds the compact budget", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const terminal = new VirtualTerminal(60, 12);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
-		});
-		const transcript = new TranscriptContainer();
-		const pressure = new InlineWidget();
-		pressure.rows = 6;
-		const thinking = new ThinkingPreviewComponent();
-		thinking.setText("thinking first\nthinking second");
-		const status = new (class extends Container {
-			override render(width: number): readonly string[] {
-				return super.render(width);
-			}
-
-			isCompactBudgetedChrome(): boolean {
-				return false;
-			}
-		})();
-		const loader = new Loader(
-			composer.ui,
-			text => text,
-			text => text,
-			"处理中…",
-		);
-		status.addChild(loader);
-		const editor = new Container();
-		editor.addChild(new Text("EDITOR", 0, 0));
-		composer.setRuntimeChildren([transcript, pressure, thinking, status, editor], {
-			transientChrome: [editor],
-			selfClearingChrome: [thinking],
-		});
-		composer.start({ playWelcomeIntro: false });
-		try {
-			for (const message of ["处理中…", "Retrying", "Compacting context…"]) {
-				loader.setMessage(message);
-				composer.ui.requestRender();
-				await scheduler.settle(terminal);
-				const view = terminal
-					.getViewport()
-					.map(row => Bun.stripANSI(row))
-					.join("\n");
-				expect(view).toContain(message);
-				expect(view).toContain("EDITOR");
-				expect(view).not.toContain("thinking first");
-			}
-			loader.stop();
-			status.removeChild(loader);
-			composer.ui.requestRender();
-			await scheduler.settle(terminal);
-			expect(terminal.getViewport().join("\n")).not.toContain("Compacting context…");
-		} finally {
-			loader.stop();
-			composer.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	function statusRows(terminal: VirtualTerminal): string[] {
-		return terminal
-			.getViewport()
-			.filter(row => Bun.stripANSI(row).includes("Live widget row"))
-			.map(row => Bun.stripANSI(row));
-	}
-
-	async function renderStatus(rows: number, optIn: boolean): Promise<{ visible: string[]; stop: () => void }> {
-		const terminal = new VirtualTerminal(60, 12);
-		const scheduler = new VirtualRenderScheduler();
-		const composer = new Composer({
-			terminal,
-			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
-		});
-		const transcript = new TranscriptContainer();
-		const editor = new Container();
-		editor.addChild(new Text("EDITOR", 0, 0));
-		const status = new (class extends InlineWidget {
-			isCompactBudgetedChrome(): boolean {
-				return optIn;
-			}
-		})();
-		status.rows = rows;
-		composer.setRuntimeChildren([transcript, status, editor], { transientChrome: [editor] });
-		composer.start({ playWelcomeIntro: false });
-		composer.ui.requestRender();
-		await scheduler.settle(terminal);
-		return { visible: statusRows(terminal), stop: () => composer.stop() };
-	}
-
-	it("trims opted-in status chrome to the short-screen budget", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const status = await renderStatus(8, true);
-		try {
-			// 12 rows keep 4 for prose and 3 for input, so five status rows fit.
-			expect(status.visible).toHaveLength(5);
-		} finally {
-			status.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("renders status chrome that did not opt in in full", async () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const status = await renderStatus(8, false);
-		try {
-			expect(status.visible).toHaveLength(8);
-		} finally {
-			status.stop();
-			setChatTranscriptDisplayPreferences(previous);
-		}
 	});
 });

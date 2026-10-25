@@ -7,11 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import {
-	cfgDisplayCompactToolActivity,
-	cfgDisplayHideToolActivity,
-	cfgDisplaySmoothStreaming,
-} from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -61,7 +57,7 @@ describe("InputController thinking visibility", () => {
 		const settings = await Settings.init({
 			inMemory: true,
 			cwd: tempDir.path(),
-			overrides: { "startup.quiet": true },
+			overrides: { "startup.quiet": true, "display.smoothStreaming": false },
 		});
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
@@ -69,12 +65,14 @@ describe("InputController thinking visibility", () => {
 		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
 		session = new AgentSession({
 			agent: new Agent({
-				initialState: { model, thinkingLevel: Effort.High, systemPrompt: ["Test"], tools: [], messages: [] },
+				initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 			}),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings,
 			modelRegistry,
 		});
+		// AgentSession owns the effective level and normalizes the agent's initial state.
+		session.setThinkingLevel(Effort.High);
 		mode = new InteractiveMode(session, "test");
 		await mode.init({ suppressWelcomeIntro: true });
 		controller = new InputController(mode);
@@ -93,263 +91,107 @@ describe("InputController thinking visibility", () => {
 		return Bun.stripANSI(mode.ui.render(120).join("\n"));
 	}
 
-	function stream(message: AssistantMessage, activeThinkingIndex?: number): void {
+	async function stream(message: AssistantMessage, activeThinkingIndex = 0): Promise<void> {
+		session.agent.state.isStreaming = true;
 		session.agent.state.streamMessage = message;
 		session.agent.state.activeThinkingIndex = activeThinkingIndex;
-		mode.syncThinkingPreview(message, activeThinkingIndex);
+		const started = assistant([]);
+		await mode.eventController.handleEvent({ type: "message_start", message: started });
+		const thinkingStart = assistant([{ type: "thinking", thinking: "" }]);
+		await mode.eventController.handleEvent({
+			type: "message_update",
+			message: thinkingStart,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: activeThinkingIndex, partial: thinkingStart },
+		});
+		const thinking = message.content[activeThinkingIndex];
+		if (thinking?.type !== "thinking") throw new Error("Expected a live thinking block");
+		await mode.eventController.handleEvent({
+			type: "message_update",
+			message,
+			assistantMessageEvent: {
+				type: "thinking_delta",
+				contentIndex: activeThinkingIndex,
+				delta: thinking.thinking,
+				partial: message,
+			},
+		});
 	}
 
-	it("shows live thinking in a fresh compact profile and hides/restores only that window", () => {
+	it("hides and restores inline compact thinking without removing historical reasoning", async () => {
+		cfgExpandThinkingBlocks.set(session.settings, true);
 		const history = assistant([
 			{ type: "thinking", thinking: "historical-private-reasoning" },
 			{ type: "text", text: "ordinary historical answer" },
 		]);
 		session.agent.state.messages.push(history);
 		mode.addMessageToChat(history);
-		const live = assistant([
-			{ type: "thinking", thinking: "earlier-live-block" },
-			{ type: "text", text: "intervening ordinary text" },
-			{ type: "thinking", thinking: "current-live-reasoning" },
-		]);
-		stream(live, 2);
+		const live = assistant([{ type: "thinking", thinking: "current-live-reasoning" }]);
+		await stream(live);
 		expect(render()).toContain("current-live-reasoning");
-		expect(render()).toContain("ordinary historical answer");
-		expect(render()).not.toContain("historical-private-reasoning");
-		expect(render()).not.toContain("earlier-live-block");
-
+		expect(render()).toContain("historical-private-reasoning");
 		controller.toggleThinkingBlockVisibility();
 		expect(cfgHideThinkingBlock.get(session.settings)).toBe(true);
 		expect(render()).not.toContain("current-live-reasoning");
-		expect(render()).toContain("ordinary historical answer");
-
-		controller.toggleThinkingBlockVisibility();
-		expect(cfgHideThinkingBlock.get(session.settings)).toBe(false);
-		expect(render()).toContain("current-live-reasoning");
 		expect(render()).not.toContain("historical-private-reasoning");
-		expect(render()).not.toContain("earlier-live-block");
+		expect(render()).toContain("ordinary historical answer");
+		controller.toggleThinkingBlockVisibility();
+		expect(render()).toContain("current-live-reasoning");
+		expect(render()).toContain("historical-private-reasoning");
 		expect(session.agent.state.messages).toEqual([history]);
 		expect(session.agent.state.streamMessage).toBe(live);
 	});
 
-	it.each(["clean"] as const)(
-		"does not reveal active reasoning or its retained tail through Alt+P in %s mode",
-		async display => {
-			cfgDisplayHideToolActivity.set(session.settings, display === "clean");
-			cfgDisplayCompactToolActivity.set(session.settings, true);
-			cfgHideThinkingBlock.set(session.settings, true);
-			await Promise.resolve();
-			session.agent.state.isStreaming = true;
-			const message = assistant([{ type: "thinking", thinking: "mode-private-reasoning" }]);
-			stream(message, 0);
-			controller.toggleThinkingBlockVisibility();
-			expect(cfgHideThinkingBlock.get(session.settings)).toBe(false);
-			expect(render()).not.toContain("mode-private-reasoning");
-			stream(assistant([{ type: "thinking", thinking: "mode-private-delta" }]), 0);
-			expect(render()).not.toContain("mode-private-delta");
-			session.agent.state.activeThinkingIndex = undefined;
-			mode.collapseThinkingPreview();
-			mode.syncThinkingPreview();
-			expect(render()).not.toContain("mode-private");
-			session.agent.state.isStreaming = false;
-		},
-	);
-
-	it("restores upstream reasoning and its visibility toggle in detailed mode across live mode changes", async () => {
-		session.setThinkingLevel(Effort.High);
-		cfgDisplaySmoothStreaming.set(session.settings, false);
-		cfgDisplayCompactToolActivity.set(session.settings, false);
-		cfgHideThinkingBlock.set(session.settings, false);
-		await Promise.resolve();
+	it("preserves reasoning and answers across compact, clean and detailed rebuilds", async () => {
 		const history = assistant([
-			{ type: "thinking", thinking: "detailed historical reasoning" },
+			{ type: "thinking", thinking: "historical reasoning" },
 			{ type: "text", text: "historical answer" },
 		]);
 		session.agent.state.messages.push(history);
 		session.sessionManager.appendMessage(history);
 		mode.addMessageToChat(history);
-		expect(render()).toContain("detailed historical reasoning");
-
-		session.agent.state.isStreaming = true;
-		const live = assistant([{ type: "thinking", thinking: "detailed live reasoning" }]);
-		session.agent.state.streamMessage = live;
-		session.agent.state.activeThinkingIndex = 0;
-		await mode.eventController.handleEvent({ type: "agent_start" });
-		await mode.eventController.handleEvent({ type: "message_start", message: live });
-		expect(render()).toContain("detailed live reasoning");
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).not.toContain("detailed historical reasoning");
-		expect(render()).not.toContain("detailed live reasoning");
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).toContain("detailed historical reasoning");
-		expect(render()).toContain("detailed live reasoning");
-
-		cfgDisplayCompactToolActivity.set(session.settings, true);
-		await Promise.resolve();
-		expect(render()).not.toContain("detailed historical reasoning");
-		expect(render()).toContain("detailed live reasoning");
-		cfgDisplayHideToolActivity.set(session.settings, true);
-		await Promise.resolve();
-		expect(render()).not.toContain("detailed live reasoning");
-		cfgDisplayHideToolActivity.set(session.settings, false);
-		cfgDisplayCompactToolActivity.set(session.settings, false);
-		await Promise.resolve();
-		expect(render()).toContain("detailed historical reasoning");
-		expect(render()).toContain("detailed live reasoning");
-		expect(session.agent.state.messages).toEqual([history]);
-		expect(session.agent.state.streamMessage).toBe(live);
-		session.agent.state.isStreaming = false;
+		expect(render()).toContain("historical answer");
+		cfgExpandThinkingBlocks.set(session.settings, true);
+		const original = structuredClone(history);
+		for (const [compact, hidden] of [
+			[true, false],
+			[true, true],
+			[false, false],
+		] as const) {
+			cfgDisplayCompactToolActivity.set(session.settings, compact);
+			cfgDisplayHideToolActivity.set(session.settings, hidden);
+			await Promise.resolve();
+			const rendered = render();
+			expect(rendered).toContain("historical answer");
+			expect(rendered.includes("historical reasoning")).toBe(!hidden);
+		}
+		expect(history).toEqual(original);
+		expect(session.agent.state.messages).toEqual([original]);
 	});
 
-	it("applies live prose settings before taking the latest two preview rows without changing history", async () => {
-		const history = assistant([
-			{ type: "thinking", thinking: "historical-prose\n```ts\nhistorical-code\n```" },
-			{ type: "text", text: "historical answer remains unchanged" },
-		]);
-		session.agent.state.messages.push(history);
-		mode.addMessageToChat(history);
+	it("applies prose filtering before clipping inline reasoning without modifying its source", async () => {
 		const prose = Array.from({ length: 7 }, (_, index) => `preview-prose-${index + 1}`);
 		const code = Array.from({ length: 7 }, (_, index) => `preview-code-${index + 1}`);
 		const message = assistant([{ type: "thinking", thinking: [...prose, "```ts", ...code, "```"].join("\n") }]);
-		const original = structuredClone({ message, history });
-		const previewRows = () =>
-			render()
-				.split("\n")
-				.map(line => line.trim().replace(/^│\s*/, ""))
-				.filter(line => line.startsWith("preview-") || line === "```");
-		stream(message, 0);
-
-		const filteredRows = [prose[5]!, `${prose[6]}...`];
-		expect(previewRows()).toEqual(filteredRows);
+		const original = structuredClone(message);
+		await stream(message);
+		expect(render()).toContain("preview-prose-7");
+		expect(render()).not.toContain("preview-prose-1");
 		expect(render()).not.toContain("preview-code-");
-		expect(render()).not.toContain("```");
-
 		cfgProseOnlyThinking.set(session.settings, false);
 		await Promise.resolve();
-		expect(previewRows()).toEqual([code[6]!, "```"]);
+		expect(render()).toContain("preview-code-7");
 		expect(render()).not.toContain("preview-prose-");
-
+		controller.toggleThinkingBlockVisibility();
 		cfgProseOnlyThinking.set(session.settings, true);
 		await Promise.resolve();
-		expect(previewRows()).toEqual(filteredRows);
+		expect(render()).not.toContain("preview-prose-");
 		expect(render()).not.toContain("preview-code-");
-		expect(render()).toContain("historical answer remains unchanged");
-		expect(render()).not.toContain("historical-prose");
-		expect(render()).not.toContain("historical-code");
-		expect(session.agent.state.streamMessage).toBe(message);
-		expect(session.agent.state.activeThinkingIndex).toBe(0);
-		expect(session.agent.state.messages).toEqual([original.history]);
-		expect(message).toEqual(original.message);
+		expect(message).toEqual(original);
 	});
 
-	it("does not reopen hidden or finished thinking when the prose setting changes", async () => {
-		const message = assistant([{ type: "thinking", thinking: "active-prose\n```ts\nactive-code\n```" }]);
-		stream(message, 0);
-		expect(render()).toContain("active-prose...");
-		expect(render()).not.toContain("active-code");
-
-		controller.toggleThinkingBlockVisibility();
-		for (const proseOnly of [false, true]) {
-			cfgProseOnlyThinking.set(session.settings, proseOnly);
-			await Promise.resolve();
-			expect(render()).not.toContain("active-prose");
-			expect(render()).not.toContain("active-code");
-		}
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).toContain("active-prose...");
-		expect(render()).not.toContain("active-code");
-
-		stream(message);
-		for (const proseOnly of [false, true]) {
-			cfgProseOnlyThinking.set(session.settings, proseOnly);
-			await Promise.resolve();
-			expect(render()).not.toContain("active-prose");
-			expect(render()).not.toContain("active-code");
-		}
-
-		stream(message, 0);
-		session.agent.state.streamMessage = null;
-		session.agent.state.activeThinkingIndex = undefined;
-		mode.clearThinkingPreview();
-		for (const proseOnly of [false, true]) {
-			cfgProseOnlyThinking.set(session.settings, proseOnly);
-			await Promise.resolve();
-			expect(render()).not.toContain("active-prose");
-			expect(render()).not.toContain("active-code");
-		}
-		expect(session.agent.state.streamMessage).toBeNull();
-		expect(message.content).toEqual([{ type: "thinking", thinking: "active-prose\n```ts\nactive-code\n```" }]);
-	});
-
-	it("keeps both finished thinking rows through settings refreshes during a running turn", async () => {
-		const message = assistant([{ type: "thinking", thinking: "earlier thought\nretained-tool-bridge" }]);
-		session.agent.state.isStreaming = true;
-		try {
-			stream(message, 0);
-			session.agent.state.activeThinkingIndex = undefined;
-			mode.collapseThinkingPreview();
-			cfgProseOnlyThinking.set(session.settings, false);
-			await Promise.resolve();
-			expect(render()).toContain("retained-tool-bridge");
-			expect(render()).toContain("earlier thought");
-
-			stream(message, 0);
-			session.agent.state.streamMessage = null;
-			session.agent.state.activeThinkingIndex = undefined;
-			mode.syncThinkingPreview();
-			cfgExpandThinkingBlocks.set(session.settings, true);
-			await Promise.resolve();
-			expect(render()).toContain("retained-tool-bridge");
-			expect(render()).toContain("earlier thought");
-
-			session.agent.state.isStreaming = false;
-			mode.syncThinkingPreview();
-			expect(render()).not.toContain("retained-tool-bridge");
-		} finally {
-			session.agent.state.isStreaming = false;
-		}
-	});
-
-	it("restores the latest active snapshot after hidden streaming, not the previously visible block", () => {
-		stream(assistant([{ type: "thinking", thinking: "previously-visible-reasoning" }]), 0);
-		controller.toggleThinkingBlockVisibility();
-		stream(
-			assistant([
-				{ type: "thinking", thinking: "previously-visible-reasoning" },
-				{ type: "text", text: "a completed text phase" },
-				{ type: "thinking", thinking: "newest-hidden-reasoning" },
-			]),
-			2,
-		);
-		expect(render()).not.toContain("newest-hidden-reasoning");
-
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).toContain("newest-hidden-reasoning");
-		expect(render()).not.toContain("previously-visible-reasoning");
-	});
-
-	it("does not revive completed thinking when toggled during text or after the stream ends", () => {
-		const message = assistant([
-			{ type: "thinking", thinking: "finished-reasoning-must-stay-gone" },
-			{ type: "text", text: "current answer" },
-		]);
-		stream(message, 0);
-		controller.toggleThinkingBlockVisibility();
-		stream(message);
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).not.toContain("finished-reasoning-must-stay-gone");
-
-		session.agent.state.streamMessage = null;
-		session.agent.state.activeThinkingIndex = undefined;
-		mode.clearThinkingPreview();
-		controller.toggleThinkingBlockVisibility();
-		controller.toggleThinkingBlockVisibility();
-		expect(render()).not.toContain("finished-reasoning-must-stay-gone");
-		expect(cfgHideThinkingBlock.get(session.settings)).toBe(false);
-	});
-
-	it("allows hiding and restoring observed live thinking even when the model thinking level is off", () => {
+	it("allows hiding and restoring observed live thinking even when the model thinking level is off", async () => {
 		session.setThinkingLevel("off");
-		stream(assistant([{ type: "thinking", thinking: "observed-provider-reasoning" }]), 0);
+		await stream(assistant([{ type: "thinking", thinking: "observed-provider-reasoning" }]), 0);
 		expect(render()).toContain("observed-provider-reasoning");
 		controller.toggleThinkingBlockVisibility();
 		expect(cfgHideThinkingBlock.get(session.settings)).toBe(true);

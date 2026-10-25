@@ -272,6 +272,100 @@ describe("native transcript", () => {
 		expect(h.errors).toEqual([]);
 	});
 
+	it("keeps replayed read groups in call order across prose and writes when results arrive in reverse order", async () => {
+		const calls: AssistantMessage["content"] = [
+			{ type: "text", text: "Before reads" },
+			{ type: "toolCall", id: "a0", name: "read", arguments: { path: "a0.ts" } },
+			{ type: "toolCall", id: "a1", name: "read", arguments: { path: "a1.ts" } },
+			{ type: "text", text: "Between reads" },
+			{ type: "toolCall", id: "c0", name: "read", arguments: { path: "c0.ts" } },
+			{ type: "toolCall", id: "c1", name: "read", arguments: { path: "c1.ts" } },
+			{ type: "toolCall", id: "w0", name: "write", arguments: { path: "w0.ts", content: "written" } },
+			{ type: "toolCall", id: "b0", name: "read", arguments: { path: "b0.ts" } },
+			{ type: "toolCall", id: "b1", name: "read", arguments: { path: "b1.ts" } },
+			{ type: "text", text: "After reads" },
+		];
+		const first: TranscriptEntryLike = {
+			type: "message",
+			id: "interleaved",
+			parentId: null,
+			timestamp: "2026-01-01T00:00:00Z",
+			message: assistant(calls),
+		};
+		const results: TranscriptEntryLike[] = ["b1", "b0", "w0", "c1", "c0", "a1", "a0"].map(id => ({
+			type: "message",
+			id: `result-${id}`,
+			parentId: first.id,
+			timestamp: "2026-01-01T00:00:01Z",
+			message: {
+				role: "toolResult",
+				toolCallId: id,
+				toolName: id === "w0" ? "write" : "read",
+				content: [{ type: "text", text: `result-for-${id}` }],
+				isError: false,
+				timestamp: 2,
+			},
+		}));
+		let builder: ChatTranscriptBuilder | undefined;
+		const h = await startWith(h => {
+			builder = new ChatTranscriptBuilder({
+				ui: h.tui,
+				cwd: "/tmp",
+				toolActivityDisplay: {
+					hideToolActivity: false,
+					compactToolActivity: false,
+					readToolResultPreview: true,
+				},
+				requestRender: () => h.tui.requestRender(),
+			});
+			builder.setExpanded(true);
+			builder.rebuild([first]);
+			h.tui.addChild(builder.container);
+		});
+		const blocks = () =>
+			h.findAll(node => ["omp.assistant", "omp.tool.read", "omp.tool.write"].includes(String(node.p?.role)));
+		const expectedRoles = [
+			"omp.assistant",
+			"omp.tool.read",
+			"omp.assistant",
+			"omp.tool.read",
+			"omp.tool.write",
+			"omp.tool.read",
+			"omp.assistant",
+		];
+		expect(blocks().map(node => node.p?.role)).toEqual(expectedRoles);
+		const originalIds = blocks().map(node => node.id);
+		builder!.append(results);
+		await h.render();
+		expect(blocks().map(node => node.id)).toEqual(originalIds);
+
+		const assertResolved = () => {
+			expect(blocks().map(node => node.p?.role)).toEqual(expectedRoles);
+			const groups = h.findAll(node => node.p?.role === "omp.tool.read");
+			expect(groups).toHaveLength(3);
+			for (const [index, ids] of [
+				["a0", "a1"],
+				["c0", "c1"],
+				["b0", "b1"],
+			].entries()) {
+				expect(groups[index].p).toMatchObject({ status: "done", target: "2 files" });
+				const sections = groups[index].c?.filter(node => node.k === "section") ?? [];
+				expect(sections).toHaveLength(2);
+				for (const [entryIndex, id] of ids.entries()) {
+					expect(JSON.stringify(sections[entryIndex].p?.head)).toContain(`${id}.ts`);
+					expect(JSON.stringify(sections[entryIndex].c)).toContain(`result-for-${id}`);
+					expect(JSON.stringify(sections[entryIndex].c)).not.toContain(`result-for-${ids[1 - entryIndex]}`);
+				}
+			}
+			expect(h.find(node => node.p?.role === "omp.tool.write")?.p).toMatchObject({ status: "done" });
+			expect(h.errors).toEqual([]);
+		};
+		assertResolved();
+		builder!.rebuild([first, ...results]);
+		await h.render();
+		assertResolved();
+	});
+
 	it("keeps a streaming write open until it settles, then folds it like a finished thought", () => {
 		const ui = { requestRender: () => {}, requestComponentRender: () => {}, resetDisplay: () => {} };
 		const content = Array.from({ length: 40 }, (_, i) => `const v${i} = ${i};`).join("\n");

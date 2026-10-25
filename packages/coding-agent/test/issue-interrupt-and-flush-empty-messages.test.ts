@@ -52,7 +52,6 @@ function createContext(options?: {
 		sessionManager: { getSessionId: () => "session" },
 		handleDevInput: async () => false,
 		compactionQueuedMessages: [],
-		clearThinkingPreview: vi.fn(),
 		locallySubmittedUserSignatures: new Set<string>(),
 		isBashMode: false,
 		isPythonMode: false,

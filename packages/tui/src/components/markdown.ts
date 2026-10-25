@@ -504,7 +504,6 @@ function repairOrphanClosingFence(text: string): string {
 // and hoisting SGR out of the OSC payload), and padding would append trailing
 // cells past the doubled glyph.
 
-
 interface HtmlListState {
 	type: "ol" | "ul";
 	next: number;

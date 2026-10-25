@@ -17,7 +17,7 @@
 ### Changed
 
 - Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
-- Keep one compact activity area through interjections and until the next task starts. Prioritize running calls in the ordinary tool preview, show muted call/failure totals only when some calls are outside that preview, and show the latest two thinking lines. Retain three actual file writes with only the newest expanded in the original card. Running Bash logs appear after 30 seconds; failures and input requests appear immediately, with elapsed and idle time shown without model polling. Clean hides tools and thinking; detailed uses upstream rendering. These display changes leave model context, tool results, and execution behavior unchanged.
+- Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; only active real thinking appears in a self-clearing two-row dock above the input. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 - Deliver OpenSpec explore, update, propose, sync, archive and verify as built-in skills with Chinese descriptions. Enable default discovery and on-demand instruction reads only when the session working directory directly contains an `openspec/` directory; elsewhere keep manual `/skill:opsx-*` access. Preserve native CLI guidance, validation and `/dev` phase restrictions without installing built-in commands or command templates.
@@ -41,7 +41,7 @@
 
 - Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
 - Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.
-- Hide a tool-failure warning while its exact failed execution is one of the visible compact activity rows, and show it again once the dock no longer represents that call; independent warnings and already-committed history are never hidden or rewritten.
+- Preserve original read-call order and segment boundaries when rebuilding or switching display modes, even when results arrive out of order; clean rebuilds continue to hide reasoning.
 - Route bundled Superpowers implementation tasks to `task` and code reviews to `reviewer`, instead of requesting an unavailable `general-purpose` agent.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
 - Preserve quoted Windows verification commands, complete per-owner command evidence and external edits during failed specification publication.

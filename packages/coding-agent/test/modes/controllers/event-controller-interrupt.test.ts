@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -77,11 +77,10 @@ describe("EventController aborted-turn working messages", () => {
 		expect(clear).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not start a second compact activity when the optimistic user row is reconciled", async () => {
+	it("reconciles an optimistic user row without adding another message", async () => {
 		const prompt = "follow up";
 		const { ctx } = createContext();
 		ctx.optimisticUserMessageSignature = `${prompt}\u00000`;
-		const boundary = vi.spyOn(ctx.chatContainer, "noteCompactUserTurnStart");
 		const controller = new EventController(ctx);
 
 		await controller.handleEvent({
@@ -94,7 +93,7 @@ describe("EventController aborted-turn working messages", () => {
 			},
 		});
 
-		expect(boundary).not.toHaveBeenCalled();
+		expect(ctx.addMessageToChat).not.toHaveBeenCalled();
 		expect(ctx.clearOptimisticUserMessage).toHaveBeenCalledTimes(1);
 	});
 
@@ -109,8 +108,10 @@ describe("EventController aborted-turn working messages", () => {
 			toolName: "ask",
 			args: { questions: [{ question: "Confirm the action?" }] },
 		} as AgentSessionEvent);
-		const active = Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(100) ?? []).join("\n"));
-		expect(active).toContain("等待用户输入");
+		const component = ctx.pendingTools.get("question-1");
+		expect(component).toBeInstanceOf(ToolExecutionComponent);
+		expect((component as ToolExecutionComponent).hasCompactCriticalFeedback()).toBe(true);
+		expect(ctx.chatContainer.render(100).length).toBeGreaterThan(0);
 
 		await controller.handleEvent({
 			type: "tool_execution_end",
@@ -119,48 +120,9 @@ describe("EventController aborted-turn working messages", () => {
 			result: { content: [{ type: "text", text: "confirmed" }] },
 			isError: false,
 		} as AgentSessionEvent);
-		const settled = Bun.stripANSI((ctx.chatContainer.compactToolActivityBlock()?.render(100) ?? []).join("\n"));
-		expect(settled).not.toContain("等待用户输入");
-	});
-
-	it("keeps one compact task across a steered message and ordinary assistant text", async () => {
-		const { ctx } = createContext();
-		const active = vi.spyOn(ctx.chatContainer, "setCompactTurnActive");
-		const boundary = vi.spyOn(ctx.chatContainer, "noteCompactUserTurnStart");
-		const controller = new EventController(ctx);
-		await controller.handleEvent(AGENT_START);
-		await controller.handleEvent({
-			type: "message_start",
-			message: {
-				role: "user",
-				content: [{ type: "text", text: "one more detail" }],
-				attribution: "user",
-				liveSteered: true,
-				timestamp: Date.now(),
-			},
-		});
-		const message: AssistantMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: "Working through that detail." }],
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			model: "test",
-			stopReason: "stop",
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			timestamp: Date.now(),
-		};
-		await controller.handleEvent({ type: "message_start", message });
-		await controller.handleEvent({ type: "message_end", message });
-		await controller.handleEvent({ type: "turn_end", message, toolResults: [] });
-		expect(active.mock.calls).toEqual([[true]]);
-		expect(boundary).not.toHaveBeenCalled();
+		expect((component as ToolExecutionComponent).hasCompactCriticalFeedback()).toBe(false);
+		(component as ToolExecutionComponent).setExpanded(true);
+		expect(Bun.stripANSI(ctx.chatContainer.render(100).join("\n"))).toContain("confirmed");
 	});
 
 	it("suppresses late intent-driven working-message updates while aborting", async () => {

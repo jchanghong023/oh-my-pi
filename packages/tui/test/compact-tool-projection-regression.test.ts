@@ -1,18 +1,17 @@
 import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
-import type { CustomMessage } from "../src/chat/messages";
+import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
-import { buildLaunchCompletionBlock } from "../src/chat/transcript-render-helpers";
 import { TranscriptContainer } from "../src/chrome/transcript-container";
+import { Text } from "../src/components/text";
 import { TspDocument } from "../src/native/apply";
 import { Reconciler } from "../src/native/reconcile";
 import { initTheme } from "../src/theme";
 
-const originalPreferences = { ...chatTranscriptDisplayPreferences };
+const preferences = { ...chatTranscriptDisplayPreferences };
 const components: ToolExecutionComponent[] = [];
-
-function tool(name: string, args: unknown): ToolExecutionComponent {
-	const component = new ToolExecutionComponent(name, args, {}, undefined, {
+function tool(name: string, args: unknown, compactToolActivity?: boolean): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(name, args, { compactToolActivity }, undefined, {
 		requestRender() {},
 		requestComponentRender() {},
 		resetDisplay() {},
@@ -20,26 +19,41 @@ function tool(name: string, args: unknown): ToolExecutionComponent {
 	components.push(component);
 	return component;
 }
-
+function output(root: TranscriptContainer): string {
+	return Bun.stripANSI(root.render(80).join("\n"));
+}
+function native(root: TranscriptContainer): string {
+	const document = new TspDocument("s:regression");
+	const ops = new Reconciler("s:regression").reconcile(
+		{ main: root.nativeBlocks(), dock: [], layer: [] },
+		{
+			cols: 80,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		},
+	);
+	expect(document.applyFrame({ sf: "s:regression", s: 1, ops })).toEqual([]);
+	return JSON.stringify(document.snapshot());
+}
 beforeAll(async () => {
 	await initTheme(false);
 });
-
 afterEach(() => {
 	for (const component of components.splice(0)) component.dispose();
 	stopSharedSpinnerTicker();
-	setChatTranscriptDisplayPreferences(originalPreferences);
+	setChatTranscriptDisplayPreferences(preferences);
 });
 
-describe("compact tool projection regressions", () => {
-	it("omits an interrupted synthetic wait without displacing the two latest actual calls", () => {
+describe("compact tool component integration", () => {
+	it("omits synthetic waits without counting them as actual calls", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const transcript = new TranscriptContainer();
-		transcript.setCompactTurnActive(true);
+		const root = new TranscriptContainer();
 		for (const path of ["first.ts", "second.ts"]) {
 			const read = tool("read", { path });
 			read.updateResult({ content: [{ type: "text", text: "read result" }] });
-			transcript.addChild(read);
+			root.addChild(read);
 		}
 		const wait = tool("wait", { jobs: ["bg_1"] });
 		wait.updateResult({
@@ -47,33 +61,109 @@ describe("compact tool projection regressions", () => {
 			isError: true,
 			details: { source: "interrupt_skipped", __synthetic: true },
 		});
-		transcript.addChild(wait);
-		const rows =
-			transcript
-				.compactToolActivityBlock()
-				?.render(80)
-				.filter(row => Bun.stripANSI(row).trim()) ?? [];
-		expect(rows).toHaveLength(2);
-		expect(Bun.stripANSI(rows.join("\n"))).toMatch(/first\.ts[^]*second\.ts/);
-		expect(Bun.stripANSI(rows.join("\n"))).not.toContain("Wait");
-		expect(Bun.stripANSI(rows.join("\n"))).not.toContain("工具调用");
+		root.addChild(wait);
+		expect(output(root)).toMatch(/first\.ts[^]*second\.ts/);
+		expect(output(root)).not.toContain("工具调用");
+		expect(output(root)).not.toContain("internal retry guidance");
 	});
 
-	it("keeps running Bash output out of the single-line activity and restores it in detailed mode", () => {
+	it("preserves raw structured Bash errors outside the ordinary preview quota", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const bash = tool("bash", { command: "bun test", i: "检查测试" });
-		bash.setExecutionStarted();
-		bash.updateResult({ content: [{ type: "text", text: "OUTPUT_FIRST\nOUTPUT_SECOND\nOUTPUT_THIRD" }] }, true);
-		const rows = bash.renderCompactActivityRows(80);
-		expect(rows).toHaveLength(1);
-		expect(Bun.stripANSI(rows[0]!)).toContain("检查测试");
-		expect(Bun.stripANSI(rows.join("\n"))).not.toContain("OUTPUT_");
-		expect(JSON.stringify(bash.describe())).not.toContain("OUTPUT_");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(Bun.stripANSI(bash.render(80).join("\n"))).toContain("OUTPUT_THIRD");
+		const root = new TranscriptContainer();
+		const bash = tool("bash", { command: "failing-command" });
+		const result = {
+			content: [{ type: "text" as const, text: '{"error":{"code":"RAW_DIAGNOSTIC","detail":["reason"]}}' }],
+			isError: true,
+		};
+		const original = JSON.stringify(result);
+		bash.updateResult(result);
+		root.addChild(bash);
+		for (const path of ["latest-a.ts", "latest-b.ts"]) {
+			const read = tool("read", { path });
+			read.updateResult({ content: [] });
+			root.addChild(read);
+		}
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("RAW_DIAGNOSTIC");
+			expect(view).toContain("latest-a.ts");
+			expect(view).toContain("latest-b.ts");
+			expect(view).toContain("工具调用 3 次 · 失败 1 次");
+		}
+		expect(JSON.stringify(result)).toBe(original);
 	});
 
-	it("projects a single-file edit diff delivered through the write device transport", () => {
+	it("retains input-wait feedback immediately when newer calls arrive", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const root = new TranscriptContainer();
+		const bash = tool("bash", { command: "needs-input" });
+		bash.setCompactNeedsUserInput("INPUT_REQUIRED");
+		root.addChild(bash);
+		for (const command of ["new-one", "new-two", "new-three"]) root.addChild(tool("bash", { command }));
+		expect(output(root)).toContain("needs-input");
+		expect(bash.hasCompactCriticalFeedback()).toBe(true);
+	});
+
+	it("shares per-entry read selection across groups and preserves identity on provider rename", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const root = new TranscriptContainer();
+		const group = new ReadToolGroupComponent();
+		for (const id of ["read-a", "read-b", "read-c"]) group.updateArgs({ path: `${id}.ts` }, id);
+		const identities = group.getCompactToolCalls().map(call => call.id);
+		root.addChild(group);
+		expect(output(root)).not.toContain("read-a.ts");
+		group.renameEntry("read-c", "corrected-provider-id");
+		group.updateArgs({ path: "renamed.ts" }, "corrected-provider-id");
+		expect(group.getCompactToolCalls().map(call => call.id)).toEqual(identities);
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("工具调用 3 次");
+			expect(view).toContain("read-b.ts");
+			expect(view).toContain("renamed.ts");
+			expect(view).not.toContain("read-a.ts");
+		}
+		root.addChild(tool("bash", { command: "last-command" }));
+		expect(output(root)).not.toContain("read-b.ts");
+		expect(output(root)).toContain("renamed.ts");
+		expect(output(root)).toContain("last-command");
+	});
+
+	it("keeps original grouped-read error details rather than an extracted failure line", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const root = new TranscriptContainer();
+		// Upstream ANSI/fallback read groups show result bodies only with content previews enabled.
+		const group = new ReadToolGroupComponent({ showContentPreview: true });
+		group.updateArgs({ path: "missing.ts" }, "missing");
+		group.updateResult(
+			{ content: [{ type: "text", text: "RAW_READ_ERROR: missing source file" }], isError: true },
+			false,
+			"missing",
+		);
+		for (const id of ["later-a", "later-b", "later-c"]) group.updateArgs({ path: `${id}.ts` }, id);
+		root.addChild(group);
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("RAW_READ_ERROR");
+			expect(view).toContain("later-b.ts");
+			expect(view).toContain("later-c.ts");
+			expect(view).not.toContain("later-a.ts");
+		}
+		group.setExpanded(true);
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("RAW_READ_ERROR: missing source file");
+			expect(view).toContain("later-a.ts");
+		}
+	});
+
+	it("keeps explicit detailed components outside compact quotas", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const root = new TranscriptContainer();
+		const detailed = tool("bash", { command: "explicit-detail" }, false);
+		detailed.updateResult({ content: [{ type: "text", text: "FULL_DETAIL" }] });
+		root.addChild(detailed);
+		root.addChild(new Text("PROSE", 0, 0));
+		for (const command of ["old", "one", "two"]) root.addChild(tool("bash", { command }));
+		expect(output(root)).toContain("FULL_DETAIL");
+	});
+
+	it("retains device-dispatched edit cards without changing their results", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const edit = tool("write", { path: "xd://edit", content: JSON.stringify({ path: "sample.ts" }) });
 		const result = {
@@ -88,66 +178,11 @@ describe("compact tool projection regressions", () => {
 		};
 		const original = JSON.stringify(result);
 		edit.updateResult(result);
-		const transcript = new TranscriptContainer();
-		transcript.setCompactTurnActive(true);
-		transcript.addChild(edit);
-		expect(Bun.stripANSI(transcript.render(80).join("\n"))).toContain("new_value");
-		expect(
-			JSON.stringify(
-				transcript.nativeBlocks().map(block =>
-					block.describe?.({
-						cols: 80,
-						reduceMotion: false,
-						dark: true,
-						supports: () => true,
-						feature: () => true,
-					}),
-				),
-			),
-		).toContain("sample.ts");
+		const root = new TranscriptContainer();
+		root.addChild(edit);
+		expect(edit.isCompactActualFileWrite()).toBe(true);
+		expect(output(root)).toContain("new_value");
+		expect(native(root)).toContain("sample.ts");
 		expect(JSON.stringify(result)).toBe(original);
-	});
-
-	it("projects per-file apply_patch results through write while excluding device-help receipts", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const patch = tool("write", { path: "xd://apply_patch", content: "{}" });
-		const inner = {
-			perFileResults: [
-				{ path: "first.ts", diff: "@@ -1 +1 @@\n-first_old\n+first_new" },
-				{ path: "second.ts", diff: "@@ -1 +1 @@\n-second_old\n+second_new" },
-			],
-		};
-		patch.updateResult({ content: [], details: { xdev: { tool: "apply_patch", mode: "execute", inner } } });
-		const transcript = new TranscriptContainer();
-		transcript.setCompactTurnActive(true);
-		transcript.addChild(patch);
-		expect(Bun.stripANSI(transcript.render(80).join("\n"))).toMatch(/first_new[^]*second_new/);
-		patch.updateResult({ content: [], details: { xdev: { tool: "apply_patch", mode: "help", inner } } });
-		expect(Bun.stripANSI(transcript.render(80).join("\n"))).not.toContain("first_new");
-	});
-
-	it("hides historical launch receipts in compact mode while an explicit detailed viewer retains them", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const message: CustomMessage = {
-			role: "custom",
-			customType: "launch-completion",
-			content: "supervised process finished",
-			display: true,
-			timestamp: 1,
-			details: { daemons: [{ name: "build-server", state: "exited", exitCode: 0 }] },
-		};
-		const compact = buildLaunchCompletionBlock(message);
-		const detailed = buildLaunchCompletionBlock(message, false);
-		expect(compact.render(80)).toEqual([]);
-		expect(Bun.stripANSI(detailed.render(80).join("\n"))).toContain("build-server");
-		const surface = "s:detailed-launch";
-		const document = new TspDocument(surface);
-		const reconciler = new Reconciler(surface);
-		const ops = reconciler.reconcile(
-			{ main: [detailed], dock: [], layer: [] },
-			{ cols: 80, dark: true, reduceMotion: false, supports: () => false, feature: () => false },
-		);
-		expect(document.applyFrame({ sf: surface, s: 1, ops })).toEqual([]);
-		expect(JSON.stringify(document.snapshot())).toContain("build-server");
 	});
 });

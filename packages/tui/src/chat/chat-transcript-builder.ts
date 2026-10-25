@@ -42,7 +42,6 @@ import {
 	buildFileMentionBlock,
 	buildIrcMessageCard,
 	buildLaunchCompletionBlock,
-	normalizeToolArgs,
 	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
 } from "./transcript-render-helpers";
@@ -97,7 +96,6 @@ export interface ChatTranscriptBuilderDeps {
 export class ChatTranscriptBuilder {
 	readonly container = new TranscriptContainer();
 	#pendingTools = new Map<string, ToolExecutionComponent | ReadToolGroupComponent>();
-	#readArgs = new Map<string, Record<string, unknown>>();
 	#readGroup: ReadToolGroupComponent | null = null;
 	#pendingUsage: Usage | undefined;
 	#pendingUsageDuration: number | undefined;
@@ -135,16 +133,15 @@ export class ChatTranscriptBuilder {
 	rebuild(entries: TranscriptEntry[]): void {
 		this.reset();
 		for (const entry of entries) this.#appendEntry(entry);
-		// Flush the trailing turn's usage row only once its tools are materialized
-		// (a read whose result has not arrived stays pending); otherwise the row
-		// would sit above its tools. The drain happens here at the end of the pass.
-		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
+		// Flush the trailing turn's usage row once its pending tool results have
+		// arrived, keeping it below the tool blocks reserved during call traversal.
+		if (this.#pendingTools.size === 0) this.#flushPendingUsage();
 	}
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
 	append(entries: TranscriptEntry[]): void {
 		for (const entry of entries) this.#appendEntry(entry);
-		if (this.#readArgs.size === 0 && this.#pendingTools.size === 0) this.#flushPendingUsage();
+		if (this.#pendingTools.size === 0) this.#flushPendingUsage();
 	}
 
 	/**
@@ -175,7 +172,6 @@ export class ChatTranscriptBuilder {
 	reset(): void {
 		for (const pending of this.#pendingTools.values()) pending.seal();
 		this.#pendingTools.clear();
-		this.#readArgs.clear();
 		this.#readGroup = null;
 		this.#pendingUsage = undefined;
 		this.#pendingUsageDuration = undefined;
@@ -428,7 +424,6 @@ export class ChatTranscriptBuilder {
 			proseOnlyThinking,
 			this.#deps.linkTargets,
 			expandThinkingBlocks,
-			false,
 			this.#deps.toolActivityDisplay?.compactToolActivity,
 		);
 		assistantComponent.setImagesVisible(displayPreferences.showImages);
@@ -460,6 +455,8 @@ export class ChatTranscriptBuilder {
 		const errorMessage = hasErrorStop ? errorPresentation.text : null;
 		const appendAssistantSegment = (segment: Extract<AgentMessage, { role: "assistant" }> | undefined) => {
 			if (!segment || !assistantHasVisibleContent(segment)) return;
+			this.#readGroup?.seal();
+			this.#readGroup = null;
 			const component = new AssistantMessageComponent(
 				segment,
 				hideThinkingBlock,
@@ -469,7 +466,6 @@ export class ChatTranscriptBuilder {
 				proseOnlyThinking,
 				this.#deps.linkTargets,
 				expandThinkingBlocks,
-				false,
 				this.#deps.toolActivityDisplay?.compactToolActivity,
 			);
 			component.setImagesVisible(displayPreferences.showImages);
@@ -486,21 +482,16 @@ export class ChatTranscriptBuilder {
 
 			const afterToolSegment = timeline.afterToolCalls.get(content.id);
 			if (content.name === "read" && readArgsCollapseIntoGroup(content.arguments)) {
+				const group = this.#ensureReadGroup();
+				group.updateArgs(content.arguments, content.id);
 				if (hasErrorStop && errorMessage) {
-					const group = this.#ensureReadGroup();
-					group.updateArgs(content.arguments, content.id);
 					group.updateResult(
 						{ content: [{ type: "text", text: errorMessage }], isError: true },
 						false,
 						content.id,
 					);
-				} else if (afterToolSegment) {
-					const group = this.#ensureReadGroup();
-					group.updateArgs(content.arguments, content.id);
-					this.#pendingTools.set(content.id, group);
 				} else {
-					const normalizedArgs = normalizeToolArgs(content.arguments);
-					this.#readArgs.set(content.id, normalizedArgs);
+					this.#pendingTools.set(content.id, group);
 				}
 				appendAssistantSegment(afterToolSegment);
 				continue;
@@ -554,16 +545,9 @@ export class ChatTranscriptBuilder {
 		const pending = this.#pendingTools.get(message.toolCallId);
 		const isReadGroupResult = message.toolName === "read" && (!pending || pending instanceof ReadToolGroupComponent);
 		if (isReadGroupResult) {
-			let component = pending;
-			if (!component) {
-				const group = this.#ensureReadGroup();
-				const args = this.#readArgs.get(message.toolCallId);
-				if (args) group.updateArgs(args, message.toolCallId);
-				component = group;
-			}
+			const component = pending ?? this.#ensureReadGroup();
 			component.updateResult(message, false, message.toolCallId);
 			this.#pendingTools.delete(message.toolCallId);
-			this.#readArgs.delete(message.toolCallId);
 			return;
 		}
 		if (!pending) return;

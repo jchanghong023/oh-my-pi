@@ -126,6 +126,7 @@ import {
 } from "../eval/judgment-batch-events";
 import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
+import { CompactThinkingPreview } from "./compact-thinking-preview";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
@@ -1287,6 +1288,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Judge-batch and automatic-download progress rows above the working line. */
 	progressHudContainer: Container;
 	statusContainer: Container;
+	/** Current compact thinking only; this self-clearing dock never enters the transcript. */
+	readonly compactThinkingPreview = new CompactThinkingPreview(this);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
 	todoContainer: Container;
@@ -2324,6 +2327,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the prompt while keeping the one-line gap above the editor (the band
 				// composer collapses that gap so its status band sits flush).
 				this.statusContainer,
+				this.compactThinkingPreview,
 				this.attachmentChipsContainer,
 				this.hookWidgetContainerAbove,
 				this.editorContainer,
@@ -2355,6 +2359,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.subagentContainer,
 					this.modelCycleContainer,
 					this.progressHudContainer,
+					this.compactThinkingPreview,
 				],
 				// Natively the HUD pills lead the dock, queued messages sit between
 				// the working row and the composer, and the attachment chips live
@@ -2369,6 +2374,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.deferredCommandContainer,
 					this.progressHudContainer,
 					this.statusContainer,
+					this.compactThinkingPreview,
 					this.pendingMessagesContainer,
 					this.hookWidgetContainerAbove,
 					this.editorContainer,

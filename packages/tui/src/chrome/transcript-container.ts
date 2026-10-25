@@ -13,7 +13,6 @@ import { isUsageRowBlock } from "../overlays/usage-row";
 import { isToolActivityComponent, isCompactToolActivityComponent, type CompactToolCall } from "./tool-activity";
 import { directPlacementLift, ImageProtocol, iterm2ImagePayload, TERMINAL } from "../terminal-capabilities";
 
-
 interface CompactRunComponent extends Component {
 	getCompactToolCalls(): readonly CompactToolCall[];
 	hasCompactCriticalFeedback?(): boolean;
@@ -23,8 +22,10 @@ interface CompactRunComponent extends Component {
 }
 
 function isCompactRunComponent(component: Component): component is CompactRunComponent {
-	return isCompactToolActivityComponent(component) &&
-		typeof (component as Partial<CompactRunComponent>).getCompactToolCalls === "function";
+	return (
+		isCompactToolActivityComponent(component) &&
+		typeof (component as Partial<CompactRunComponent>).getCompactToolCalls === "function"
+	);
 }
 
 /** Shared animation time supplied by the constrained transcript root. */
@@ -319,13 +320,18 @@ export class TranscriptContainer extends Container {
 	#nativeNode: NativeNode | undefined;
 
 	/** Local display decisions only; committed entries retain their archived selection. */
-	#compactSelection = new Map<Component, { visible: boolean; count: number; failures: number }>();
+	#compactSelection = new Map<
+		Component,
+		{ visible: boolean; count: number; failures: number; ids: ReadonlySet<string | object> }
+	>();
 	#compactNative = new WeakMap<Component, Component>();
 
 	#selectCompactRuns(): void {
-		const compact = displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity && this.#toolActivityVisible;
+		const compact =
+			displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity && this.#toolActivityVisible;
 		if (!compact) {
-			for (const child of this.children) {
+			for (let index = this.#frontier; index < this.#entries.length; index++) {
+				const child = this.#entries[index]!.component;
 				if (isCompactRunComponent(child)) child.setCompactToolSelection?.(undefined);
 			}
 			return;
@@ -339,10 +345,12 @@ export class TranscriptContainer extends Container {
 			const writes = run.filter(component => component.isCompactActualFileWrite?.()).slice(-3);
 			for (const component of run) {
 				component.setCompactToolSelection?.(selected);
-				const visible = component.hasCompactCriticalFeedback?.() === true ||
-					(writeRun ? !component.isCompactActualFileWrite?.() || writes.includes(component) :
-						component.getCompactToolCalls().some(call => selected.has(call.id)));
-				this.#compactSelection.set(component, { visible, count: 0, failures: 0 });
+				const visible =
+					component.hasCompactCriticalFeedback?.() === true ||
+					(writeRun
+						? !component.isCompactActualFileWrite?.() || writes.includes(component)
+						: component.getCompactToolCalls().some(call => selected.has(call.id)));
+				this.#compactSelection.set(component, { visible, count: 0, failures: 0, ids: selected });
 			}
 			if (!writeRun && facts.length > 2) {
 				const first = this.#compactSelection.get(run[0]!)!;
@@ -351,12 +359,22 @@ export class TranscriptContainer extends Container {
 			}
 			run = [];
 		};
-		for (const entry of this.#entries) {
-			if (entry.state === "committed" || entry.split !== undefined) { flush(); continue; }
+		for (let index = this.#frontier; index < this.#entries.length; index++) {
+			const entry = this.#entries[index]!;
+			if (entry.state === "committed" || entry.split !== undefined) {
+				flush();
+				continue;
+			}
 			const component = entry.component;
 			if (!isCompactRunComponent(component)) {
 				// Empty upstream blocks (hidden thinking, attached feedback) are not boundaries.
-				if (!isToolActivityComponent(component) && component.render(this.#frameRowsWidth || 80).some(row => /\S/.test(row))) flush();
+				if (
+					run.length &&
+					((!isToolActivityComponent(component) &&
+						component.render(this.#frameRowsWidth || 80).some(row => /\S/.test(row))) ||
+						(isToolActivityComponent(component) && component.isCompactToolActivity?.() === false))
+				)
+					flush();
 				continue;
 			}
 			const write = component.isCompactWriteCall?.() === true || component.isCompactActualFileWrite?.() === true;
@@ -368,13 +386,19 @@ export class TranscriptContainer extends Container {
 	}
 
 	#compactDecision(component: Component) {
-		return displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity && this.#toolActivityVisible
-			? this.#compactSelection.get(component) : undefined;
+		return displayPreferences.compactToolActivity &&
+			!displayPreferences.hideToolActivity &&
+			this.#toolActivityVisible &&
+			isCompactRunComponent(component)
+			? this.#compactSelection.get(component)
+			: undefined;
 	}
 
 	#compactSummary(component: Component, width: number): string | undefined {
 		const selection = this.#compactDecision(component);
-		return selection?.count ? truncateToWidth(theme.fg("dim", `工具调用 ${selection.count} 次 · 失败 ${selection.failures} 次`), width) : undefined;
+		return selection?.count
+			? truncateToWidth(theme.fg("dim", `工具调用 ${selection.count} 次 · 失败 ${selection.failures} 次`), width)
+			: undefined;
 	}
 
 	#renderComponent(component: Component, width: number): readonly string[] {
@@ -1435,7 +1459,9 @@ export class TranscriptContainer extends Container {
 			// keeps a complete-ledger replay at one render per block. These rows go
 			// to native scrollback, where nothing can repaint them.
 			const rendered = renderForScrollback(() =>
-				index === start ? this.#renderEntry(entry, width) : trimBlankEdges(this.#renderComponent(entry.component, width)),
+				index === start
+					? this.#renderEntry(entry, width)
+					: trimBlankEdges(this.#renderComponent(entry.component, width)),
 			);
 			const emittedRows = index === start ? this.#emittedRowCount(entry, width) : 0;
 			const block = rendered.slice(emittedRows);
@@ -1665,18 +1691,21 @@ export class TranscriptContainer extends Container {
 	 * them keeps this proportional to the live tail rather than the session.
 	 */
 	#syncEntries(): void {
-		this.#selectCompactRuns();
 		const children = this.children;
 		if (
 			!this.#entriesUnverified &&
 			children === this.#syncedChildren &&
 			this.#entriesMatch(children, this.#frontier)
 		) {
+			this.#selectCompactRuns();
 			return;
 		}
 		this.#entriesUnverified = false;
 		this.#syncedChildren = children;
-		if (this.#entriesMatch(children, 0)) return;
+		if (this.#entriesMatch(children, 0)) {
+			this.#selectCompactRuns();
+			return;
+		}
 		const existing = new Map(this.#entries.map(entry => [entry.component, entry]));
 		this.#entries = this.children.map(
 			component =>
@@ -1692,9 +1721,9 @@ export class TranscriptContainer extends Container {
 					split: undefined,
 				},
 		);
-		this.#selectCompactRuns();
 		this.#frontier = this.#entries.findIndex(entry => entry.state !== "committed");
 		if (this.#frontier < 0) this.#frontier = this.#entries.length;
+		this.#selectCompactRuns();
 	}
 
 	/** Whether `#entries` has `children`'s length and components from `start` on. */

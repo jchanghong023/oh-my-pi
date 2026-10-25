@@ -243,7 +243,6 @@ async function createContext() {
 		showDebugSelector: vi.fn(),
 		showHistorySearch: vi.fn(),
 		toggleThinkingBlockVisibility: vi.fn(),
-		syncThinkingPreview: vi.fn(),
 		showModelSelector,
 		updateEditorBorderColor: vi.fn(),
 		hasActiveBtw,

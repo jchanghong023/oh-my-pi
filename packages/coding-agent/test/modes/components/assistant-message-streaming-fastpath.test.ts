@@ -59,7 +59,7 @@ afterEach(() => {
 // the same message — at every step. If they ever diverge, the optimization
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
-	it("constructs main-chat history with external thinking before any renderer mounts", () => {
+	it("constructs main-chat history with reasoning and extension renderers inline", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		let rendererCalls = 0;
 		const message = msg([
@@ -93,13 +93,12 @@ describe("AssistantMessageComponent streaming fast path", () => {
 		try {
 			const rendered = Bun.stripANSI(component.render(W).join("\n"));
 			expect(rendered).toContain("Public answer");
-			expect(rendered).not.toContain("PRIVATE");
-			expect(rendererCalls).toBe(0);
+			expect(rendered).toContain("PRIVATE HISTORICAL REASONING");
+			expect(rendered).toContain("PRIVATE EXTENSION REASONING");
+			expect(rendererCalls).toBeGreaterThan(0);
 			const native = JSON.stringify(component.describe());
 			expect(native).toContain("Public answer");
-			expect(native).not.toContain("PRIVATE");
-			expect(native).not.toContain("omp.thinking");
-			expect(native).not.toContain("Thought");
+			expect(native).toContain("PRIVATE");
 			// Explicit viewers keep their original detail capability.
 			const viewer = new AssistantMessageComponent(message);
 			try {
@@ -112,7 +111,7 @@ describe("AssistantMessageComponent streaming fast path", () => {
 		}
 	});
 
-	it("never emits inline thinking, live pulses or retired reasoning after display toggles", () => {
+	it("clips real inline thinking after prose filtering and preserves visibility controls", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const component = new AssistantMessageComponent(
 			undefined,
@@ -125,89 +124,21 @@ describe("AssistantMessageComponent streaming fast path", () => {
 			false,
 			true,
 		);
+		const message = msg([{ type: "thinking", thinking: "first row\nmiddle row\nlatest row" }]);
+		const original = structuredClone(message);
 		try {
-			for (const thinking of ["", "PRIVATE first paragraph.\n\nPRIVATE second.\n\nPending", "PRIVATE newer tail"]) {
-				const message = msg([{ type: "thinking", thinking }]);
-				for (const hidden of [false, true, false]) {
-					component.setHideThinkingBlock(hidden);
-					component.setProseOnlyThinking(!hidden);
-					component.setExpandThinkingBlocks(!hidden);
-					component.updateContent(message, { transient: true });
-					const rendered = Bun.stripANSI(component.render(W).join("\n"));
-					expect(rendered.trim()).toBe("");
-					expect(component.getTranscriptStableRows()).toEqual([]);
-					expect(component.renderTranscriptStableRows(10, W)).toEqual([]);
-					const native = JSON.stringify(component.describe());
-					expect(native).not.toContain("PRIVATE");
-					expect(native).not.toContain("omp.thinking");
-					expect(native).not.toContain("spinner");
-				}
-			}
-			component.updateContent(
-				msg([
-					{ type: "thinking", thinking: "PRIVATE old reasoning" },
-					{ type: "text", text: "Visible tool preamble" },
-					{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "file.txt" } },
-					{ type: "thinking", thinking: "PRIVATE next reasoning" },
-					{ type: "text", text: "Visible final answer" },
-				]),
-				{ transient: true },
-			);
+			component.updateContent(message, { transient: true });
 			const rendered = Bun.stripANSI(component.render(W).join("\n"));
-			expect(rendered).toContain("Visible tool preamble");
-			expect(rendered).toContain("Visible final answer");
-			expect(rendered).not.toContain("PRIVATE");
-			expect(rendered).not.toContain("Thinking");
-			component.markTranscriptBlockFinalized();
-			expect(JSON.stringify(component.describe())).not.toContain("Thought");
-		} finally {
-			component.dispose();
-		}
-	});
-
-	it("still publishes safe ordinary answer rows while excluding every earlier thinking row", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const component = new AssistantMessageComponent(
-			undefined,
-			false,
-			undefined,
-			[],
-			undefined,
-			true,
-			undefined,
-			false,
-			true,
-		);
-		try {
-			const thinking = "PRIVATE old paragraph.\n\nPRIVATE old second paragraph.\n\nPRIVATE tail";
-			component.updateContent(msg([{ type: "thinking", thinking }]), { transient: true });
-			component.render(W);
-			expect(component.getTranscriptStableRows()).toEqual([]);
-			const text = "Public first paragraph.\n\nPublic second paragraph.\n\nPublic pending paragraph";
-			component.updateContent(
-				msg([
-					{ type: "thinking", thinking },
-					{ type: "text", text },
-				]),
-				{ transient: true },
-			);
-			const rows = trimBlankEdges(component.render(W));
-			const count = component.getTranscriptStableRows().length;
-			expect(count).toBeGreaterThan(0);
-			const stable = [...component.renderTranscriptStableRows(count, W)];
-			expect(rows.slice(0, stable.length)).toEqual(stable);
-			expect(Bun.stripANSI(stable.join("\n"))).toContain("Public");
-			expect(Bun.stripANSI(stable.join("\n"))).not.toContain("PRIVATE");
-			component.updateContent(
-				msg([
-					{ type: "thinking", thinking: `${thinking}\n\nPRIVATE later` },
-					{ type: "text", text: `${text} finishes.` },
-				]),
-				{ transient: true },
-			);
-			component.render(W);
-			expect(component.renderTranscriptStableRows(count, W)).toEqual(stable);
-			expect(Bun.stripANSI(component.render(20).join("\n"))).not.toContain("PRIVATE");
+			expect(rendered).not.toContain("first row");
+			expect(rendered).toContain("middle row");
+			expect(rendered).toContain("latest row");
+			component.setHideThinkingBlock(true);
+			component.updateContent(message, { transient: true });
+			expect(Bun.stripANSI(component.render(W).join("\n"))).not.toContain("latest row");
+			component.setHideThinkingBlock(false);
+			component.updateContent(message, { transient: true });
+			expect(Bun.stripANSI(component.render(W).join("\n"))).toContain("latest row");
+			expect(message).toEqual(original);
 		} finally {
 			component.dispose();
 		}

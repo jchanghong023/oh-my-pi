@@ -20,7 +20,6 @@ import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
@@ -329,7 +328,6 @@ export class InputController {
 	};
 
 	#abortStreamingTurn(): void {
-		if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 		void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 	}
 
@@ -431,14 +429,6 @@ export class InputController {
 					if (this.ctx.ui.getFocused() instanceof TreeSelectorComponent && matchesKey(data, "alt+l"))
 						return undefined;
 					this.ctx.resetDisplayAfterAppearanceRefresh();
-					return { consume: true };
-				}
-				if (
-					!this.ctx.ui.hasOverlay() &&
-					this.ctx.ui.getFocused() === this.ctx.editor &&
-					this.ctx.chatContainer.handleCompactScroll(data)
-				) {
-					this.ctx.ui.requestRender();
 					return { consume: true };
 				}
 				return undefined;
@@ -803,7 +793,6 @@ export class InputController {
 		if (this.ctx.ui.hasOverlay()) return undefined;
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
-		if (event.wheel && this.ctx.chatContainer.scrollCompact(event.wheel * 3)) this.ctx.ui.requestRender();
 		if (event.motion) this.#updateHoverHighlight(event.row);
 		else if (event.leftClick) this.#focusClickedAgent(event.row);
 		return { consume: true };
@@ -1023,7 +1012,6 @@ export class InputController {
 			// agent-core queue.
 			if (!text && !hasPendingImages && this.ctx.session.isStreaming) {
 				if (this.ctx.session.hasInterruptibleInput) {
-					if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 					const aborting = this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 					await aborting;
 					this.ctx.updatePendingMessagesDisplay();
@@ -1490,7 +1478,6 @@ export class InputController {
 			images && this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
 		if (!text && !images) {
 			if (target.isStreaming && target.hasInterruptibleInput) {
-				this.ctx.clearThinkingPreview();
 				const aborting = target.abort({ reason: USER_INTERRUPT_LABEL });
 				await aborting;
 				this.ctx.updatePendingMessagesDisplay();
@@ -2060,7 +2047,6 @@ export class InputController {
 		];
 		const restored = this.#restoreEntriesToEditor(allQueued, options?.currentText);
 		if (options?.abort) {
-			if (this.ctx.viewSession === this.ctx.session) this.ctx.clearThinkingPreview();
 			void this.ctx.session.abort({ reason: USER_INTERRUPT_LABEL });
 		}
 		return restored;
@@ -2810,12 +2796,6 @@ export class InputController {
 		}
 		this.ctx.chatContainer.setToolActivityVisible(!this.ctx.hideToolActivity);
 
-		const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
-		this.ctx.syncThinkingPreview(
-			streamMessage?.role === "assistant" ? streamMessage : undefined,
-			activeThinkingIndex,
-		);
-
 		if (this.ctx.hideToolActivity) this.ctx.ui.clearInlineImages();
 		// A viewport-only repaint leaves tool rows already retired to terminal history unchanged.
 		this.ctx.ui.resetDisplay();
@@ -2849,13 +2829,7 @@ export class InputController {
 		this.ctx.hideThinkingBlock = !this.ctx.hideThinkingBlock;
 		cfgHideThinkingBlock.set(this.ctx.settings, this.ctx.hideThinkingBlock);
 
-		const { streamMessage, activeThinkingIndex } = this.ctx.viewSession.agent.state;
-		this.ctx.syncThinkingPreview(
-			streamMessage?.role === "assistant" ? streamMessage : undefined,
-			activeThinkingIndex,
-		);
-
-		if (!this.ctx.hideToolActivity && !chatTranscriptDisplayPreferences.compactToolActivity) {
+		if (!this.ctx.hideToolActivity) {
 			this.ctx.eventController.refreshThinkingVisibility();
 			this.ctx.chatContainer.resetStableEmission();
 			this.ctx.ui.resetDisplay();

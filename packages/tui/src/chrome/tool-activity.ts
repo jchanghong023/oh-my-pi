@@ -16,7 +16,6 @@ export interface CompactToolCall {
 	failed: boolean;
 }
 
-
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
 	/** Whether this activity uses compact rows rather than the upstream detail renderer. */

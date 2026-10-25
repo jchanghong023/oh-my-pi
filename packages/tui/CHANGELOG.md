@@ -5,21 +5,17 @@
 ### Added
 
 - Selection-only model pickers can use a complete caller-provided catalog and shared search without changing the session model or refreshing providers.
-- Added cached, width-aware two-row live thinking and tool activity in compact mode, without publishing transient activity into transcript history.
-- Compact ordinary user previews use at most ten rendered physical rows including padding (first five, omission row, last four); `Ctrl+Alt+U` reuses displayed transcript bubbles, including compacted history, and native bubble actions open scrollable full originals without changing drafts, chat position, model input, session data, or full-copy text. Skill, synthetic messages, explicit full viewers, clean, and detailed mode bypass previews.
+- Compact user messages longer than six screen rows show the first five rows and a folded-line hint; existing full-view and copy actions retain complete originals without changing input, model context, or session data.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
 
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
-- Compact tool feedback uses stable short task labels and Chinese status text while preserving meaningful Bash failure reasons before trailing JSON delimiters.
-- Compact tools show the latest two actual calls, including pending, failed, write, and edit calls; thinking shows the latest two rendered rows and leaves its lower row blank after the first item. Tool previews, counts, logs, and thinking align with prose using one-cell horizontal gutters and single-row section gaps, without headings or frames; narrow screens prioritize tools and editable input.
-- A running `bash` call shows its latest three non-empty output lines under the summary row, temporarily expanding the compact tool activity dock from two to four rows and returning to two when the call settles; ANSI and native surfaces agree.
+- Compact tools retain the last two calls per continuous run at their original positions, with a dim run-local summary only above two calls; errors, approvals, and input requests keep original feedback.
 - Compact `bash` summaries without an explicit intent skip leading assignments and context-only builtins (`cd`, `export`, `set`, …) and keep the remaining command text on one line, collapsed and truncated to the row width; leading assignment values stay hidden.
-- Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals; thinking and input follow the transcript. The actual busy loader shows tool intent without duplicating it.
-- Compact mode keeps the latest three actual write/edit/apply_patch calls fully expanded, including complete file contents and diffs. Long writes remain accessible through PageUp/PageDown or enabled mouse scrolling without collapsing older calls, truncating their bodies, changing drafts, or publishing transient writes into history; native cards cannot be collapsed.
-- Compact history retains only user messages and assistant prose, including prose around tools and failures; original records and clean/detailed behavior remain unchanged.
-- The compact thinking tail filters blank lines while preserving indentation, original content, and theme-aware latest-line emphasis without collapsing to a stub.
+- Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals. The actual busy loader shows tool intent without duplicating it.
+- Each continuous write/edit run retains the last three actual-write cards with upstream expansion and scrolling behavior; tool history is not cleared on the next input.
+- Compact thinking appears only as a live two-row preview above the input, without accumulating thinking blocks in history; detailed mode retains original thinking, and Bash output, timing, and background feedback use upstream rendering.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
@@ -31,39 +27,23 @@
 
 ### Fixed
 
-- Keep compact tool feedback, expanded writes, and prose in one component layout while sharing short-screen thinking budgets across ANSI and native terminals.
-- Keep overflowing compact tool activity within the viewport and reachable by paging, and preserve ordinary tool previews during terminal resizing.
 - Keep working, retry, and compaction status visible when compact previews run out of screen space.
 
-- Keep all three recent write cards visible when the newest diff fills the compact viewport, without appending a display-mode command hint.
-- Preserve compact streaming prose, tables, and code across viewport pressure and resizing without dropping content between the screen and scrollback.
-- Keep compact live activity mutable until execution ends instead of archiving it or erasing terminal history.
-- Reserve room for compact conversation text, editable input, and cursor on short terminals before decorations, thinking, and tool activity.
-- Compact short-screen budgeting also covers custom HUD wrappers around the working loader; focused thinking restoration respects steering and user-invoked Skill boundaries.
-- Compact short-screen budgeting also yields opted-in status/help chrome before prose and input instead of leaving a functional row outside the budget.
-
-- Compact chat keeps a continuous prose tail under viewport pressure instead of squeezing user messages and assistant replies into one row each.
-- Preserve original tool failure records when late results arrive, without replacing scrollback or archiving compact activity.
 - Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.
-- Keep compact thinking width-safe on very narrow terminals without headings, borders, or guides.
 - Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
 - Keep hashline-wrapped internal device calls compact while retaining full originals in explicit detail views.
 - Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.
 - Preserve IME-safe cursor tails in boxed prompts while retaining the empty row below input.
 - Count each Git path once across the selected change categories, including staged deletions that remain as untracked files.
-- Compact mode reclaims collapsed rows instead of leaving a large blank band between tool activity and the thinking or TODO area.
-- Reuse existing Edit/apply_patch rendering for the active three-file-section diff cap without permanently archiving transient diffs.
 - Preserve compact prose across execution completion and native archival, without partial Markdown documents, dropped or duplicate body text, or clearing external shell history.
 - Preserve independent approvals and execution-affecting errors while retaining full warning and failure records in detailed history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
 - Compact Eval rows, including `xd://eval`, show the supplied intent or title instead of a bare tool name and redundant running hint.
 - Compact search rows show the search pattern or query before the search directory.
 - Compact Wait rows, including device dispatches, show the background job's type, ID, and command instead of a generic waiting message.
-- Compact display no longer inserts blank rows between consecutive tool calls, including after scrolling and terminal resizing.
 - Compact display keeps LSP and other `xd://` device calls on one line instead of showing file-write previews.
 - Explicit agent transcript viewers retain tool details independently of the main chat's hidden or compact display mode.
 - Retransmit retained Kitty images in the same destructive history-replay frame without repeating image data on ordinary paints.
-- Resume incremental thinking-tail updates after completed control sequences while safely handling split ANSI and CRLF boundaries.
 - Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.
 - Kept wide-character composer help within the terminal width when continuation rows have very little space.
 - Preserved the draft and cursor row when full or custom status lines overflow short terminals, restoring the configured layout after expansion.

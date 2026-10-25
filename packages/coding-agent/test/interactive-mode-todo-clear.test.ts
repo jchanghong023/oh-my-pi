@@ -197,8 +197,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		});
 		mode.addMessageToChat(final);
 		const compact = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		// This fixture has no active agent turn/dock. Preserve its independent
-		// failure warning; compact history no longer substitutes tool counters.
+		// Live failures keep the original execution detail and independent warning inline.
 		expect(compact).toContain("REBUILD_FAILURE_CAUSE");
 		expect(compact).toContain("FULL_REBUILD_FAILURE_DETAIL");
 		expect(compact.match(/Warning:/g)).toHaveLength(1);
@@ -206,7 +205,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		mode.rebuildChatFromMessages();
 		const compactRebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
 		expect(compactRebuilt).toContain("REBUILD_FAILURE_CAUSE");
-		expect(compactRebuilt.match(/Warning:/g)).toHaveLength(1);
+		expect(compactRebuilt).not.toContain("Warning:");
 
 		cfgDisplayCompactToolActivity.override(session.settings, presentation === "clean");
 		cfgDisplayHideToolActivity.override(session.settings, presentation === "clean");

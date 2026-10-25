@@ -923,7 +923,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isCompactToolActivity(): boolean {
-		return this.#compactToolActivityOverride !== false;
+		return (!this.#expanded || this.isCompactWriteCall()) && this.#compactToolActivityOverride !== false;
 	}
 
 	/** UI-only marker from the existing blocked prompt decision. */
@@ -1181,31 +1181,28 @@ export class ToolExecutionComponent extends Container {
 		const ms = this.#elapsedMs(this.#nativeStatus());
 		const live = this.#isRunning();
 		const call = dataFirst
-			? node(
-					"tool",
-					{
-						role: `omp.tool.${this.#toolName}`,
-						key: this.#toolCallId,
-						name: this.#toolName,
-						title: truncateToWidth(title, Math.max(1, width - 16)),
-						target: summary.detail
-							? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
-							: undefined,
-						targetKind: "text",
-						status,
-						tone:
-							status === "error"
-								? "error"
-								: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
-									? "warning"
-									: undefined,
-						age: live ? ms : undefined,
-						took: live ? undefined : ms,
-						frame: "inline",
-						collapsible: this.#toolName === "bash",
-						collapsed: this.#toolName === "bash" ? !this.#expanded : undefined,
-					},
-				)
+			? node("tool", {
+					role: `omp.tool.${this.#toolName}`,
+					key: this.#toolCallId,
+					name: this.#toolName,
+					title: truncateToWidth(title, Math.max(1, width - 16)),
+					target: summary.detail
+						? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
+						: undefined,
+					targetKind: "text",
+					status,
+					tone:
+						status === "error"
+							? "error"
+							: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
+								? "warning"
+								: undefined,
+					age: live ? ms : undefined,
+					took: live ? undefined : ms,
+					frame: "inline",
+					collapsible: this.#toolName === "bash",
+					collapsed: this.#toolName === "bash" ? !this.#expanded : undefined,
+				})
 			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
 					text(
 						[

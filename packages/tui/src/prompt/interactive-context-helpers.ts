@@ -5,7 +5,6 @@ import { EMPTY_LINK_TARGETS } from "../render/render-utils";
 import type { ImageBudget } from "../components/image";
 import type { AssistantThinkingRenderer } from "../chat/extension-types";
 import { AssistantMessageComponent } from "../chat/assistant-message";
-import { chatTranscriptDisplayPreferences } from "../chat/display-preferences";
 /** Session display capabilities supplied unchanged by the interactive host. */
 export interface AssistantMessageSession {
 	readonly model?: Model;
@@ -119,14 +118,13 @@ export function createAssistantMessageComponent(
 ): AssistantMessageComponent {
 	const component = new AssistantMessageComponent(
 		message,
-		ctx.effectiveHideThinkingBlock,
+		ctx.hideToolActivity || ctx.effectiveHideThinkingBlock,
 		() => ctx.ui.requestRender(),
 		ctx.viewSession.extensionRunner?.getAssistantThinkingRenderers(),
 		ctx.ui.imageBudget,
 		ctx.proseOnlyThinking,
 		linkTargets,
 		ctx.expandThinkingBlocks,
-		ctx.hideToolActivity || chatTranscriptDisplayPreferences.compactToolActivity,
 	);
 	component.setImagesVisible(ctx.assistantImagesVisible);
 	component.setTableChartsVisible(ctx.tableChartsVisible);

@@ -194,7 +194,6 @@ export class SessionFocusController {
 			};
 			this.ctx.unsubscribe = target.subscribe(async event => {
 				if (generation !== this.#attachGeneration) return;
-				this.ctx.eventController.observeThinkingPreviewEvent(event);
 				if (event.type === "message_start" && event.message.role === "assistant") {
 					assistantStreamSynced = true;
 				} else if (
@@ -217,7 +216,7 @@ export class SessionFocusController {
 			if (generation !== this.#attachGeneration) return false;
 			this.ctx.statusLine.setSession(target, this.#focusedAgentId);
 			// Reset run bookkeeping before replay populates pending tool handles.
-			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" }, { replay: true });
+			if (target.isStreaming) await this.ctx.eventController.handleEvent({ type: "agent_start" });
 			else {
 				setRunStatus({ state: "idle" });
 				this.ctx.eventController.markViewIdle();
@@ -236,11 +235,6 @@ export class SessionFocusController {
 			}
 			await this.ctx.reloadTodos(target);
 			if (generation !== this.#attachGeneration) return false;
-			const { streamMessage, activeThinkingIndex } = target.agent.state;
-			this.ctx.syncThinkingPreview(
-				streamMessage?.role === "assistant" ? streamMessage : undefined,
-				activeThinkingIndex,
-			);
 			this.ctx.updatePendingMessagesDisplay();
 			this.ctx.updateEditorBorderColor();
 			this.ctx.ui.requestRender();

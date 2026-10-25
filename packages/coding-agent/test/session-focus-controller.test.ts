@@ -103,7 +103,6 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 			},
 			restorePendingToolResults() {},
 			markViewIdle() {},
-			observeThinkingPreviewEvent() {},
 		},
 		statusLine: {
 			setSession: (session: AgentSession, focusedAgentId?: string) => {
@@ -125,8 +124,6 @@ function makeHarness(options: { renderInitialMessages?: () => void | Promise<voi
 		},
 		updatePendingMessagesDisplay: () => uiHelpers.updatePendingMessagesDisplay(),
 		updateEditorBorderColor() {},
-		syncThinkingPreview() {},
-		clearThinkingPreview() {},
 		ui: { requestRender() {}, requestComponentRender() {} },
 		showStatus() {},
 		collabGuest: undefined,

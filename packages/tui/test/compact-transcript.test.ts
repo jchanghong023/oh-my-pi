@@ -10,8 +10,12 @@ import { initTheme } from "../src/theme";
 import type { Component } from "../src/tui";
 
 const preferences = { ...chatTranscriptDisplayPreferences };
-beforeAll(async () => { await initTheme(); });
-afterEach(() => { setChatTranscriptDisplayPreferences(preferences); });
+beforeAll(async () => {
+	await initTheme();
+});
+afterEach(() => {
+	setChatTranscriptDisplayPreferences(preferences);
+});
 
 class Call implements Component {
 	visible = true;
@@ -21,15 +25,33 @@ class Call implements Component {
 	write = false;
 	finalized = true;
 	constructor(readonly label: string) {}
-	setToolActivityVisible(visible: boolean) { this.visible = visible; }
-	isCompactToolActivity() { return true; }
-	getCompactToolCalls(): readonly CompactToolCall[] { return [{ id: this, failed: this.failed }]; }
-	hasCompactCriticalFeedback() { return this.critical || this.failed; }
-	isCompactActualFileWrite() { return this.actualWrite; }
-	isCompactWriteCall() { return this.write; }
-	isTranscriptBlockFinalized() { return this.finalized; }
-	render() { return this.visible ? [this.label] : []; }
-	describe() { return text(this.label); }
+	setToolActivityVisible(visible: boolean) {
+		this.visible = visible;
+	}
+	isCompactToolActivity() {
+		return true;
+	}
+	getCompactToolCalls(): readonly CompactToolCall[] {
+		return [{ id: this, failed: this.failed }];
+	}
+	hasCompactCriticalFeedback() {
+		return this.critical || this.failed;
+	}
+	isCompactActualFileWrite() {
+		return this.actualWrite;
+	}
+	isCompactWriteCall() {
+		return this.write;
+	}
+	isTranscriptBlockFinalized() {
+		return this.finalized;
+	}
+	render() {
+		return this.visible ? [this.label] : [];
+	}
+	describe() {
+		return text(this.label);
+	}
 }
 
 function transcript(): TranscriptContainer {
@@ -37,14 +59,27 @@ function transcript(): TranscriptContainer {
 	return new TranscriptContainer();
 }
 function add(root: TranscriptContainer, ...labels: string[]): Call[] {
-	return labels.map(label => { const call = new Call(label); root.addChild(call); return call; });
+	return labels.map(label => {
+		const call = new Call(label);
+		root.addChild(call);
+		return call;
+	});
 }
-function view(root: TranscriptContainer): string { return Bun.stripANSI(root.render(80).join("\n")); }
+function view(root: TranscriptContainer): string {
+	return Bun.stripANSI(root.render(80).join("\n"));
+}
 function native(root: TranscriptContainer): string {
 	const document = new TspDocument("s:local");
-	const ops = new Reconciler("s:local").reconcile({ main: root.nativeBlocks(), dock: [], layer: [] }, {
-		cols: 80, reduceMotion: false, dark: true, supports: () => true, feature: () => true,
-	});
+	const ops = new Reconciler("s:local").reconcile(
+		{ main: root.nativeBlocks(), dock: [], layer: [] },
+		{
+			cols: 80,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		},
+	);
 	expect(document.applyFrame({ sf: "s:local", s: 1, ops })).toEqual([]);
 	return JSON.stringify(document.snapshot());
 }
@@ -65,12 +100,17 @@ describe("compact original-position continuous runs", () => {
 		root.addChild(new Text("PROSE_BOUNDARY", 0, 0));
 		add(root, "B_OLD", "B_TWO", "B_LAST");
 		root.addChild(new Text("FINAL_REPLY", 0, 0));
-		for (const output of [view(root), native(root), Bun.stripANSI(root.renderViewport(80, 40, { tick: 0, now: 0 }).join("\n"))]) {
+		for (const output of [
+			view(root),
+			native(root),
+			Bun.stripANSI(root.renderViewport(80, 40, { tick: 0, now: 0 }).join("\n")),
+		]) {
 			expect(output).not.toContain("A_OLD");
 			expect(output).not.toContain("B_OLD");
 			expect(output.match(/工具调用 3 次/g)).toHaveLength(2);
 			const markers = ["A_TWO", "A_LAST", "PROSE_BOUNDARY", "B_TWO", "B_LAST", "FINAL_REPLY"];
-			for (let i = 1; i < markers.length; i++) expect(output.indexOf(markers[i]!)).toBeGreaterThan(output.indexOf(markers[i - 1]!));
+			for (let i = 1; i < markers.length; i++)
+				expect(output.indexOf(markers[i]!)).toBeGreaterThan(output.indexOf(markers[i - 1]!));
 		}
 	});
 
@@ -106,17 +146,25 @@ describe("compact original-position continuous runs", () => {
 		const root = transcript();
 		add(root, "BEFORE_ONE", "BEFORE_TWO");
 		const writes = add(root, "WRITE_OLD", "WRITE_A", "WRITE_B", "WRITE_C");
-		for (const call of writes) { call.write = true; call.actualWrite = true; }
+		for (const call of writes) {
+			call.write = true;
+			call.actualWrite = true;
+		}
 		add(root, "MIDDLE");
 		const later = add(root, "LATER_A", "LATER_B");
-		for (const call of later) { call.write = true; call.actualWrite = true; }
+		for (const call of later) {
+			call.write = true;
+			call.actualWrite = true;
+		}
 		const pending = add(root, "PENDING_WRITE")[0]!;
 		pending.write = true;
 		add(root, "AFTER_ONE", "AFTER_TWO");
 		const output = view(root);
 		expect(output).not.toContain("WRITE_OLD");
 		expect(output).not.toContain("工具调用");
-		expect(output).toMatch(/BEFORE_ONE[^]*BEFORE_TWO[^]*WRITE_A[^]*WRITE_B[^]*WRITE_C[^]*MIDDLE[^]*LATER_A[^]*LATER_B[^]*PENDING_WRITE[^]*AFTER_ONE[^]*AFTER_TWO/);
+		expect(output).toMatch(
+			/BEFORE_ONE[^]*BEFORE_TWO[^]*WRITE_A[^]*WRITE_B[^]*WRITE_C[^]*MIDDLE[^]*LATER_A[^]*LATER_B[^]*PENDING_WRITE[^]*AFTER_ONE[^]*AFTER_TWO/,
+		);
 	});
 
 	it("archives selected history through upstream retirement without changing older runs", () => {

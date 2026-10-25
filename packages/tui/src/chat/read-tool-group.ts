@@ -417,25 +417,17 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	isCompactToolActivity(): boolean {
-		return this.#compactToolActivityOverride !== false;
+		return !this.#expanded && this.#compactToolActivityOverride !== false;
 	}
 
 	get #compactToolActivity(): boolean {
-		return this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity;
+		return !this.#expanded && (this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity);
 	}
 
 	getCompactToolCount(): number {
 		let count = 0;
 		for (const entry of this.#entries.values()) {
 			if (entry.status === "success") count++;
-		}
-		return count;
-	}
-
-	getCompactToolFailureCount(): number {
-		let count = 0;
-		for (const entry of this.#entries.values()) {
-			if (entry.status === "error") count++;
 		}
 		return count;
 	}
@@ -450,7 +442,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	setCompactToolSelection(ids: ReadonlySet<string | object> | undefined): void {
 		const previous = this.#compactSelection;
-		if (previous === ids || (previous && ids && previous.size === ids.size && [...ids].every(id => previous.has(id)))) return;
+		if (previous === ids || (previous && ids && previous.size === ids.size && [...ids].every(id => previous.has(id))))
+			return;
 		this.#compactSelection = ids;
 		this.#displayVersion++;
 	}
@@ -473,7 +466,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		}
 		return rows;
 	}
-
 
 	*#compactEntries(): IterableIterator<ReadEntry> {
 		for (const entry of this.#entries.values()) {

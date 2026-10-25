@@ -345,14 +345,14 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
 			expect(rendered).toContain("KEPT_USER_REQUEST");
 			expect(rendered).toContain("compacted · Ctrl+O");
+			expect(rendered).toContain("recent.txt");
+			expect(rendered).toContain("RECENT_FILE_BODY");
 			for (const text of [
 				"ORIGINAL_USER_REQUEST",
 				"OLD_PROSE_BEFORE_TOOL",
 				"OLD_PROSE_AFTER_TOOL",
 				"/skill:audit source.ts",
 				"/skill:direct-audit original.ts",
-				"recent.txt",
-				"RECENT_FILE_BODY",
 				"OLD_PRIVATE_THINKING",
 				"OLD_TOOL_PATH",
 				"OLD_TOOL_OUTPUT",
@@ -610,8 +610,83 @@ describe("UiHelpers.renderInitialMessages — responsiveness", () => {
 	});
 });
 
+describe("UiHelpers.renderInitialMessages — read segment replay", () => {
+	it("keeps read slots and per-segment compact statistics across display rebuilds with reversed results", async () => {
+		const readCall = (id: string): AssistantMessage["content"][number] => ({
+			type: "toolCall",
+			id,
+			name: "read",
+			arguments: { path: `${id}.txt` },
+		});
+		const mixed: AssistantMessage = {
+			...assistantToolCall("A0", "read", { path: "A0.txt" }),
+			content: [
+				{ type: "text", text: "BEFORE_READS" },
+				...["A0", "A1", "A2"].map(readCall),
+				{ type: "text", text: "BETWEEN_READ_AND_WRITE" },
+				{ type: "toolCall", id: "W0", name: "write", arguments: { path: "W0.txt", content: "written" } },
+				{ type: "text", text: "BETWEEN_WRITE_AND_READ" },
+				...["B0", "B1", "B2"].map(readCall),
+				{ type: "text", text: "AFTER_READS" },
+			],
+		};
+		const results = ["B2", "B1", "B0", "W0", "A2", "A1", "A0"].map((id): AgentMessage => ({
+			role: "toolResult",
+			toolCallId: id,
+			toolName: id === "W0" ? "write" : "read",
+			content: [{ type: "text", text: id === "A2" || id === "B2" ? `Error: ${id}` : `${id} result` }],
+			isError: id === "A2" || id === "B2",
+			timestamp: 2,
+		}));
+		const transcript = transcriptWith([mixed, ...results]);
+		const original = structuredClone(transcript.messages);
+		const { ctx, chatContainer } = makeRenderCtx(transcript, false, false, true);
+		const helpers = new UiHelpers(ctx);
+		let firstCompact: string | undefined;
+		for (const compact of [true, false, true]) {
+			cfgDisplayCompactToolActivity.override(Settings.instance, compact);
+			cfgDisplayCompactToolActivity.override(ctx.settings, compact);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+			await helpers.renderInitialMessages();
+			const groups = chatContainer.children.filter(
+				(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
+			);
+			expect(groups).toHaveLength(2);
+			expect(groups.map(group => group.getCompactToolCalls().map(call => call.failed))).toEqual([
+				[false, false, true],
+				[false, false, true],
+			]);
+			const rendered = Bun.stripANSI(chatContainer.render(160).join("\n"));
+			const expectedOrder = [
+				"BEFORE_READS",
+				...(compact ? ["A1.txt", "A2.txt"] : ["A0.txt", "A1.txt", "A2.txt"]),
+				"BETWEEN_READ_AND_WRITE",
+				"W0.txt",
+				"BETWEEN_WRITE_AND_READ",
+				...(compact ? ["B1.txt", "B2.txt"] : ["B0.txt", "B1.txt", "B2.txt"]),
+				"AFTER_READS",
+			];
+			let previous = -1;
+			for (const marker of expectedOrder) {
+				const position = rendered.indexOf(marker);
+				expect(position).toBeGreaterThan(previous);
+				previous = position;
+			}
+			if (compact) {
+				expect(rendered.match(/工具调用 3 次 · 失败 1 次/g)).toHaveLength(2);
+				expect(rendered).not.toContain("A0.txt");
+				expect(rendered).not.toContain("B0.txt");
+				if (firstCompact !== undefined) expect(rendered).toBe(firstCompact);
+				firstCompact = rendered;
+			}
+			expect(transcript.messages).toEqual(original);
+		}
+		chatContainer.disposeChildren();
+	});
+});
+
 describe("UiHelpers.renderInitialMessages — image replay", () => {
-	it("hides idle compact image reads while retaining active call restoration and detailed images", async () => {
+	it("retains inline compact image reads and restores detailed images without changing history", async () => {
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
 			assistantToolCall("legacy-image", "read", { path: "legacy.png" }),
@@ -645,29 +720,12 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 				)
 				.join("\n");
 			if (display === "compact") {
-				expect(ansi).not.toContain("legacy.png");
-				expect(native).not.toContain("legacy.png");
+				expect(ansi).toContain("legacy.png");
+				expect(native).toContain("legacy.png");
 				const group = chatContainer.children.find(child => child instanceof ReadToolGroupComponent);
 				expect(group?.getCompactToolCount()).toBe(1);
 				expect(hasImageComponent(chatContainer)).toBe(false);
 				expect(native).not.toContain('"k":"image"');
-				chatContainer.setCompactTurnActive(true);
-				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("legacy.png");
-				expect(
-					JSON.stringify(
-						chatContainer.compactToolActivityBlock()?.describe?.({
-							cols: 120,
-							reduceMotion: true,
-							dark: true,
-							supports: () => false,
-							feature: () => false,
-						}),
-					),
-				).toContain("legacy.png");
-				chatContainer.setCompactTurnActive(false);
-				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("legacy.png");
-				chatContainer.noteCompactUserTurnStart();
-				expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).not.toContain("legacy.png");
 			} else if (hidden) {
 				expect(ansi).not.toContain("legacy.png");
 				expect(hasImageComponent(chatContainer)).toBe(false);

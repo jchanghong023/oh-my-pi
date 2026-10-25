@@ -17,12 +17,28 @@ import { ToolExecutionComponent, type ToolExecutionHandle } from "@oh-my-pi/pi-t
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { cfgDisplayShowTokenUsage } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { createUsageRowBlock } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import type { SessionContext } from "@oh-my-pi/pi-coding-agent/session/session-context";
 import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+
+let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+
+beforeEach(() => {
+	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	// Displacement and replay assertions inspect full upstream wait output.
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+});
+
+afterEach(() => {
+	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
+});
 
 const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 
@@ -74,7 +90,10 @@ describe("wait block lifecycle", () => {
 
 	beforeEach(async () => {
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
+		await Settings.init({
+			inMemory: true,
+			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+		});
 		await initTheme();
 	});
 
@@ -152,7 +171,10 @@ describe("EventController displaces consecutive waiting polls", () => {
 
 	beforeEach(async () => {
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
+		await Settings.init({
+			inMemory: true,
+			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+		});
 		await initTheme();
 	});
 
@@ -404,7 +426,10 @@ describe("EventController displaces consecutive waiting polls", () => {
 describe("#12248 completed wait turn replay", () => {
 	beforeEach(async () => {
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
+		await Settings.init({
+			inMemory: true,
+			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+		});
 		cfgDisplayShowTokenUsage.set(settings, true);
 		await initTheme();
 	});
@@ -482,7 +507,10 @@ describe("#12248 completed wait turn replay", () => {
 describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () => {
 	beforeAll(async () => {
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true });
+		await Settings.init({
+			inMemory: true,
+			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+		});
 		await initTheme();
 	});
 

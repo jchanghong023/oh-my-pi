@@ -212,7 +212,7 @@ export const cfgHideThinkingBlock = register({
 		tab: "model",
 		group: "思考",
 		label: "隐藏思考块",
-		description: "隐藏思考内容；紧凑模式显示最近两行，详细模式沿用上游思考显示",
+		description: "隐藏思考内容；开启显示时，紧凑模式仅在输入区上方展示活跃思考最近两行，全量模式沿用上游完整显示",
 	},
 });
 
@@ -224,7 +224,7 @@ export const cfgExpandThinkingBlocks = register({
 		tab: "model",
 		group: "思考",
 		label: "展开历史思考块",
-		description: "在详细模式和显式历史查看器中展开已完成的思考块，不影响紧凑模式两行尾窗",
+		description: "在全量模式和显式历史查看器中展开已完成的思考块，不影响紧凑模式输入区上方的活跃思考",
 		condition: "nativeRendering",
 	},
 });

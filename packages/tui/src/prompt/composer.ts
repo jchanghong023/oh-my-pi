@@ -1,7 +1,4 @@
-import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
-import { ThinkingPreviewComponent } from "../chat/thinking-preview";
 import { getComposerStyle } from "../components/composer/registry";
-import { Loader } from "../components/loader";
 import { Spacer } from "../components/spacer";
 import type { StatusLineComponent } from "../status-line/component";
 import type { StatusLineSession } from "../status-line/host";
@@ -22,7 +19,6 @@ import {
 } from "../tui";
 import { wrapLiteralLine } from "../utils";
 import type { NativeChild, NativeSurface, NativeSurfaceProvider } from "../native/node";
-import { EMPTY_NODE, node } from "../native/describe";
 import { sameItems } from "../native/memo";
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { CustomEditor } from "./custom-editor";
@@ -120,11 +116,6 @@ export interface RuntimeChildrenOptions {
 	 * here are transient and need not also appear in `transientChrome`.
 	 */
 	readonly selfClearingChrome?: readonly Component[];
-}
-
-/** Controls whether a chrome root yields space on short compact terminals; false preserves status rows. */
-export interface CompactBudgetedChrome {
-	isCompactBudgetedChrome?(): boolean;
 }
 
 /** Controls the first terminal paint for a composer that does not already own the terminal. */
@@ -232,10 +223,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	);
 	#frameRows: number | undefined;
 	#inputTailRows: number | undefined;
-	#inputPrefixRows = 0;
-	#compactThinkingSuppressed = false;
-	readonly #compactChromeRows = new Map<Component, readonly string[]>();
-	readonly #compactChromeUnboundedRows = new Map<Component, number>();
 	readonly #exit: (code: number) => void;
 	readonly #now: () => number;
 	#preferences: ComposerPreferences;
@@ -356,7 +343,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		this.ui.setResizeScrollback(this.#preferences.resizeScrollback);
 
 		this.#editor = new CustomEditor(getEditorTheme());
-		this.#editor.renderHeightProvider = () => this.#editorRowsBudget;
+		this.#editor.renderHeightProvider = () => this.#frameRows ?? this.ui.terminal.rows;
 		this.editor.disableSubmit = true;
 		this.editor.setUseTerminalCursor(this.ui.getShowHardwareCursor());
 		this.editor.setImeSafeCursorLayout(this.#preferences.imeSafeCursor);
@@ -413,28 +400,9 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		return this.#rowsBelow.get(root);
 	}
 
-	/** Keep compact input/help and status decorations from consuming the entire transcript viewport. */
+	/** Available terminal rows shared by input and status decorations. */
 	get #inputRowsBudget(): number {
-		const rows = this.#frameRows ?? this.ui.terminal.rows;
-		if (
-			!displayPreferences.compactToolActivity ||
-			displayPreferences.hideToolActivity ||
-			!this.#runtimeChildren.some(root => root instanceof TranscriptContainer)
-		)
-			return rows;
-		// Leave at least a third of a small screen for prose, without taking the
-		// editor's minimum bordered input row away on exceptionally short screens.
-		const transcriptRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
-		return Math.max(Math.min(rows, 3), rows - transcriptRows - this.#inputPrefixRows);
-	}
-
-	get #editorRowsBudget(): number {
-		const rows = this.#frameRows ?? this.ui.terminal.rows;
-		const inputRows = this.#inputRowsBudget;
-		if (inputRows === rows) return rows;
-		// The editor scrolls real drafts within this cap; empty-buffer help must
-		// not grow through the status budget merely because it wraps narrowly.
-		return Math.min(rows, Math.max(3, Math.floor(inputRows / 2)));
+		return this.#frameRows ?? this.ui.terminal.rows;
 	}
 
 	/** Compose the bounded mutable viewport and the next ordered history append. */
@@ -444,8 +412,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const rows = Math.max(0, viewport.rows);
 		this.#frameRows = rows;
 		this.#inputTailRows = undefined;
-		this.#inputPrefixRows = 0;
-		this.#compactThinkingSuppressed = false;
 		if (this.#resizeRetiredHeaderStart !== undefined) {
 			this.#retiredHeaderStart = this.#resizeRetiredHeaderStart;
 			this.#resizeRetiredHeaderStart = undefined;
@@ -483,11 +449,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const promotedChromeContracted = this.#chromeFloorPromoted && eligibleChrome < (this.#chromeFloor ?? 0);
 		this.#chromeFloor = Math.min(this.#chromeFloor ?? eligibleChrome, eligibleChrome);
 		this.#rebaselineChromeFloor(this.#runActive || transcript.hasActiveBlock(), eligibleChrome);
-		const belowFloor =
-			this.#preferences.completeScrollback ||
-			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity)
-				? after.length
-				: this.#chromeFloor;
+		const belowFloor = this.#preferences.completeScrollback ? after.length : this.#chromeFloor;
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
 		// leaves the mutable viewport in the same frame it is appended, so its
@@ -501,18 +463,13 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
-		// Compact retirement and live allocation both use the actual chrome
-		// height. Otherwise the final physical slice can discard prose that was
-		// never committed to history. Other modes retain their resting-floor
-		// policy so temporary chrome can refill when it closes.
-		let active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
-		if (
-			active.length &&
-			after.length &&
-			!Bun.stripANSI(active[active.length - 1]!).trim() &&
-			!Bun.stripANSI(after[0]!).trim()
-		)
-			active = active.slice(0, -1);
+		// The live tail is laid out against the same baseline retirement is
+		// billed against, so its compaction allocator (one row per block, no
+		// inter-block blanks) engages only when a block genuinely cannot retire.
+		// Rows the chrome above its floor displaces are clipped from the top by
+		// the `drop` slice below; they stay live until the chrome shrinks. With
+		// `completeScrollback` none are held back.
+		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
 			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
@@ -538,11 +495,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// rows back out of native scrollback. Let the editor move up instead of
 		// inserting a seam band; subsequent frames retain that natural anchor
 		// until new output fills the screen again. Shell history stays untouched.
-		// Compact output reclaims collapsed rows instead of pinning the input below a blank band.
 		const slack =
-			filledHistoryRows === undefined ||
-			promotedChromeContracted ||
-			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity)
+			filledHistoryRows === undefined || promotedChromeContracted
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
 		// Park the slack below the live rows rather than above them. Above, it
@@ -602,53 +556,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 				dock.push(...roots);
 			} else {
 				const transcript = roots[transcriptIndex] as TranscriptContainer;
-				const rows = this.ui.terminal.rows;
-				const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
-				transcript.setCompactToolActivityVisibleInViewport(rows - Math.min(rows, 3) - proseRows >= 2);
 				main.push(...roots.slice(0, transcriptIndex), ...transcript.nativeBlocks());
-				const dockRoots = this.#nativeDock ?? roots.slice(transcriptIndex + 1);
-				// Measure the canonical runtime order, not the native dock's different
-				// HUD order. Both backends must make the same short-screen decision.
-				this.#frameRows = rows;
-				this.#inputTailRows = undefined;
-				this.#inputPrefixRows = 0;
-				this.#compactThinkingSuppressed = false;
-				this.#compactChromeRows.clear();
-				for (const root of displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity
-					? roots.slice(transcriptIndex + 1)
-					: []) {
-					if (root === this.editor || (root instanceof Container && root.children.includes(this.editor))) break;
-					const prefix = this.#inputPrefixRows;
-					this.#inputPrefixRows = prefix + this.#renderInputRoot(root, this.ui.terminal.columns).length;
-				}
-				for (const root of dockRoots) {
-					if (
-						!roots.includes(root) &&
-						this.#isBudgetedCompactChrome(root) &&
-						(this.#compactThinkingSuppressed || this.#compactChromeAvailableRows(this.ui.terminal.columns) === 0)
-					) {
-						dock.push(EMPTY_NODE);
-						continue;
-					}
-					const bounded = this.#compactChromeRows.get(root);
-					if (bounded === undefined && !(root instanceof ThinkingPreviewComponent)) {
-						dock.push(root);
-					} else if (
-						(bounded === undefined || bounded.length > 0) &&
-						(!(root instanceof ThinkingPreviewComponent) || root.render(this.ui.terminal.columns).length > 0)
-					) {
-						if (root instanceof ThinkingPreviewComponent) {
-							// Keep the preview's own describe contract and gutters.
-							dock.push(node("col", {}, [node("rows", { cols: this.ui.terminal.columns, lines: [""] }), root]));
-						} else if (bounded?.length === this.#compactChromeUnboundedRows.get(root)) {
-							dock.push(root);
-						} else {
-							dock.push(node("col", { max: { h: bounded?.length ?? 0 } }, [root]));
-						}
-					} else {
-						dock.push(EMPTY_NODE);
-					}
-				}
+				dock.push(...(this.#nativeDock ?? roots.slice(transcriptIndex + 1)));
 			}
 		}
 		const previous = this.#nativeSurface;
@@ -675,18 +584,13 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 */
 	#renderBelowRoot(root: Component, width: number, after: string[], spans: ViewportClickSpan[]): void {
 		const start = after.length;
-		if (this.#inputTailRows === undefined) this.#inputPrefixRows = start;
-		const plainContainer =
-			root instanceof Container &&
-			root.render === Container.prototype.render &&
-			!this.#isBudgetedCompactChrome(root);
+		const plainContainer = root instanceof Container && root.render === Container.prototype.render;
 		const targets = root instanceof Container ? root.children : [root];
 		const resolves = targets.map(rowTargetCandidates);
 		const lastTarget = resolves.findLastIndex(resolve => resolve !== undefined);
 		if (plainContainer) {
 			let offset = start;
 			for (let index = 0; index < targets.length; index++) {
-				if (this.#inputTailRows === undefined) this.#inputPrefixRows = after.length;
 				const childLines = this.#renderInputRoot(targets[index]!, width);
 				after.push(...childLines);
 				if (index > lastTarget) continue;
@@ -784,8 +688,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const rows = Math.max(0, viewport.rows);
 		this.#frameRows = rows;
 		this.#inputTailRows = undefined;
-		this.#inputPrefixRows = 0;
-		this.#compactThinkingSuppressed = false;
 		const tail = this.#runtimeMounted
 			? this.#renderResizeTail(width, rows)
 			: this.#renderRoots([this.#bootstrapInputGap, this.editor, this.#statusHost], width);
@@ -1016,67 +918,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		offered.rows = [...headerRows, ...(transcript?.rows ?? [])];
 	}
 
-	/** Only known HUDs and pure busy roots may yield prose/input space in compact mode. */
-	#isBudgetedCompactChrome(root: Component): boolean {
-		return (
-			displayPreferences.compactToolActivity &&
-			!displayPreferences.hideToolActivity &&
-			((root as Partial<CompactBudgetedChrome>).isCompactBudgetedChrome?.() ??
-				(this.#selfClearingChrome.has(root) ||
-					root instanceof Loader ||
-					(root instanceof Container && root.children.length === 1 && root.children[0] instanceof Loader)))
-		);
-	}
-
-	#compactChromeAvailableRows(width: number): number {
-		const rows = this.#frameRows ?? this.ui.terminal.rows;
-		const proseRows = Math.min(Math.floor(rows / 3), Math.max(0, rows - 3));
-		const transcript = this.#runtimeChildren.find(child => child instanceof TranscriptContainer);
-		const toolRows = transcript?.compactToolActivityRowCount(width) ?? 0;
-		return Math.max(0, rows - proseRows - Math.min(rows, 3) - toolRows - this.#inputPrefixRows);
-	}
-
 	/** Budget mounted rows after the input from the same render used for composition. */
 	#renderInputRoot(root: Component, width: number): readonly string[] {
-		if (
-			root instanceof Container &&
-			root.render === Container.prototype.render &&
-			!this.#isBudgetedCompactChrome(root)
-		) {
+		if (root instanceof Container && root.render === Container.prototype.render) {
 			return this.#renderRoots(root.children, width);
 		}
-		if (this.#inputTailRows === undefined && this.#isBudgetedCompactChrome(root)) {
-			if (!(root instanceof ThinkingPreviewComponent) && this.#compactThinkingSuppressed) {
-				this.#compactChromeRows.set(root, []);
-				return [];
-			}
-			const remaining = this.#compactChromeAvailableRows(width);
-			// Tools have priority over thinking; expendable HUDs yield before either.
-			const reserveThinking =
-				root instanceof ThinkingPreviewComponent
-					? 0
-					: this.#runtimeChildren.some(
-								(child, index) =>
-									index > this.#runtimeChildren.indexOf(root) && child instanceof ThinkingPreviewComponent,
-						  )
-						? 3
-						: 0;
-			const available = Math.max(0, remaining - reserveThinking);
-			const content = root.render(width);
-			const rendered = root instanceof ThinkingPreviewComponent && content.length ? ["", ...content] : content;
-			this.#compactChromeUnboundedRows.set(root, rendered.length);
-			if (root instanceof ThinkingPreviewComponent) {
-				this.#compactThinkingSuppressed = rendered.length > available;
-				const bounded = this.#compactThinkingSuppressed ? [] : rendered;
-				this.#compactChromeRows.set(root, bounded);
-				return bounded;
-			}
-			const bounded = rendered.length <= available ? rendered : rendered.slice(0, available);
-			this.#compactChromeRows.set(root, bounded);
-			return bounded;
-		}
-		const content = root.render(width);
-		const rendered = root instanceof ThinkingPreviewComponent && content.length ? ["", ...content] : content;
+		const rendered = root.render(width);
 		if (root === this.editor || (root instanceof Container && root.children.includes(this.editor))) {
 			this.#inputTailRows = rendered.length;
 			if (!this.#runtimeMounted) this.#recordBootstrapEditorRows(this.editor.renderedRows);
@@ -1091,9 +938,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 
 	#renderRoots(roots: readonly Component[], width: number): string[] {
 		const rows: string[] = [];
-		const prefix = this.#inputPrefixRows;
 		for (const root of roots) {
-			if (this.#inputTailRows === undefined) this.#inputPrefixRows = prefix + rows.length;
 			rows.push(...this.#renderInputRoot(root, width));
 		}
 		return rows;
@@ -1231,7 +1076,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	setEditor(editor: CustomEditor): void {
 		this.ui.replaceHeldFocus(this.#editor, editor);
 		this.#editor = editor;
-		editor.renderHeightProvider = () => this.#editorRowsBudget;
+		editor.renderHeightProvider = () => this.#frameRows ?? this.ui.terminal.rows;
 	}
 
 	/**

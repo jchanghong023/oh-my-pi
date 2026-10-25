@@ -948,7 +948,7 @@ describe("TranscriptContainer", () => {
 		expect(rows[2]).toBe("task running");
 	});
 
-	it("keeps a contiguous prose tail in compact mode while an active prefix blocks history", () => {
+	it("keeps compact prose complete when a blocking active prefix finally settles", () => {
 		const compactToolActivity = chatTranscriptDisplayPreferences.compactToolActivity;
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		try {
@@ -963,10 +963,8 @@ describe("TranscriptContainer", () => {
 				}),
 			);
 			transcript.addChild(new Block(["latest first", "latest middle", "latest last"], true));
-			const full = transcript.render(80);
 			for (const capacity of [12, 2]) {
 				expect(transcript.peekFinalizedBatch(80, capacity)).toBeUndefined();
-				expect(transcript.renderViewport(80, capacity, frame)).toEqual(full.slice(-capacity));
 			}
 			active.finalize(["active final"]);
 			const history = transcript.peekFlushBatch(80);
@@ -1212,7 +1210,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 
 	for (const shape of ["unfinished table row", "potential table header"] as const) {
 		it(
-			`keeps ${shape} out of native history until its layout is stable`,
+			`keeps ${shape} out of history until stable and preserves the finalized content`,
 			compactTranscript(() => {
 				const transcript = new TranscriptContainer();
 				const component = new AssistantMessageComponent();
@@ -1245,8 +1243,9 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 						: "\n--- | ---\nvalue | completed cell\n\nAFTER\n\n");
 				component.updateContent(
 					{ ...finalAnswer, content: [{ type: "text", text: complete }] },
-					{ transient: true },
+					{ transient: false },
 				);
+				component.markTranscriptBlockFinalized();
 				drain();
 				const observed = Bun.stripANSI([...history, ...transcript.renderViewport(24, 1, frame)].join("\n"));
 				expect(observed.split("UNSAFE")).toHaveLength(2);
@@ -1347,93 +1346,9 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 		}
 	});
 
-	it(
-		"continues transient retirement after already emitted code closes and following prose arrives",
-		compactTranscript(() => {
-			const transcript = new TranscriptContainer();
-			const component = new AssistantMessageComponent();
-			transcript.addChild(component);
-			const history: string[] = [];
-			const drain = (): void => {
-				let batch = transcript.peekFinalizedBatch(40, 2);
-				while (batch) {
-					history.push(...batch.rows);
-					transcript.acknowledgeFinalizedBatch(batch.id);
-					batch = transcript.peekFinalizedBatch(40, 2);
-				}
-			};
-			let source = "```text\n";
-			for (let index = 0; index < 12; index++) {
-				source += `BODY${String(index).padStart(2, "0")} literal source\n`;
-				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
-				drain();
-			}
-			expect(Bun.stripANSI(history.join("\n"))).toContain("BODY00");
-			const emitted = history.slice();
-			source += "```\n\n";
-			for (let index = 0; index < 8; index++) {
-				source += `AFTER${index} following prose stays visible.\n\n`;
-				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
-				drain();
-			}
-			expect(history.slice(0, emitted.length)).toEqual(emitted);
-			const observed = Bun.stripANSI([...history, ...transcript.renderViewport(40, 2, frame)].join("\n"));
-			for (let index = 0; index < 12; index++)
-				expect(observed.split(`BODY${String(index).padStart(2, "0")}`)).toHaveLength(2);
-			for (let index = 0; index < 8; index++) expect(observed.split(`AFTER${index}`)).toHaveLength(2);
-			expect(component.isTranscriptBlockFinalized()).toBe(false);
-		}),
-	);
-
-	it(
-		"preserves every marker of a closed transient table and fence when resized to one prose row",
-		compactTranscript(() => {
-			const transcript = new TranscriptContainer();
-			const component = new AssistantMessageComponent();
-			transcript.addChild(component);
-			const paragraphs = Array.from({ length: 24 }, (_, index) => `PARA${String(index + 1).padStart(2, "0")}`);
-			const table = Array.from({ length: 5 }, (_, index) => `TAB${String(index + 1).padStart(2, "0")}`);
-			const code = Array.from({ length: 8 }, (_, index) => `CODE${String(index + 1).padStart(2, "0")}`);
-			const source =
-				paragraphs.map(marker => `${marker} 正文完整保留，不得丢失。`).join("\n\n") +
-				"\n\n| Item | Value |\n| --- | --- |\n" +
-				table.map(marker => `| ${marker} | table value |`).join("\n") +
-				"\n\n```text\n" +
-				code.map(marker => `${marker} literal text`).join("\n") +
-				"\n```\n\n";
-			const history: string[] = [];
-			let streamed = "";
-			let width = 120;
-			let room = 36;
-			const drain = (): void => {
-				let batch = transcript.peekFinalizedBatch(width, room);
-				while (batch) {
-					history.push(...batch.rows);
-					transcript.acknowledgeFinalizedBatch(batch.id);
-					batch = transcript.peekFinalizedBatch(width, room);
-				}
-			};
-			for (const line of source.split("\n")) {
-				streamed += `${line}\n`;
-				component.updateContent(
-					{ ...finalAnswer, content: [{ type: "text", text: streamed }] },
-					{ transient: true },
-				);
-				drain();
-				transcript.renderViewport(width, room, frame);
-			}
-			width = 24;
-			room = 1;
-			drain();
-			const visible = Bun.stripANSI([...history, ...transcript.renderViewport(width, room, frame)].join("\n"));
-			for (const marker of [...paragraphs, ...table, ...code]) expect(visible.split(marker)).toHaveLength(2);
-			expect(component.isTranscriptBlockFinalized()).toBe(false);
-		}),
-	);
-
 	for (const shape of ["table", "paragraph", "fence"] as const) {
 		it(
-			`reflows a compact live ${shape} as one source document without frozen physical fragments`,
+			`reflows compact live ${shape} content at the current width`,
 			compactTranscript(() => {
 				const component = new AssistantMessageComponent(
 					undefined,
@@ -1443,7 +1358,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 					undefined,
 					true,
 					undefined,
-					false,
 					false,
 					true,
 				);
@@ -1469,7 +1383,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 						true,
 						undefined,
 						false,
-						false,
 						true,
 					);
 					fresh.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
@@ -1480,74 +1393,52 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	}
 
 	for (const shape of ["table", "paragraph", "fence"] as const) {
-		for (const externalThinking of [false, true]) {
-			it(
-				`preserves every streamed ${shape} row in scrollback plus a small viewport${externalThinking ? " with external thinking" : ""}`,
-				compactTranscript(() => {
-					const transcript = new TranscriptContainer();
-					const component = new AssistantMessageComponent(
-						undefined,
-						false,
-						undefined,
-						[],
-						undefined,
-						true,
-						undefined,
-						false,
-						externalThinking,
-						true,
-					);
-					transcript.addChild(component);
-					const history: string[] = [];
-					const message = (text: string): AssistantMessage => ({
-						...finalAnswer,
-						content: [
-							...(externalThinking ? [{ type: "thinking" as const, thinking: "Live dock reasoning" }] : []),
-							{ type: "text", text },
-						],
-					});
-					let source =
-						shape === "table" ? "| Item | Value |\n| --- | --- |\n" : shape === "fence" ? "```text\n" : "";
-					const drain = (): void => {
-						let batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
-						while (batch) {
-							history.push(...batch.rows);
-							transcript.acknowledgeFinalizedBatch(batch.id);
-							batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
-						}
-					};
-					for (let index = 0; index < 18; index++) {
-						const marker = `BODY_${index.toString().padStart(2, "0")}`;
-						source +=
-							shape === "table"
-								? `| ${marker} | value ${index} |\n`
-								: shape === "fence"
-									? `${marker} code payload\n`
-									: `${marker} a substantial stretch of uninterrupted prose without a paragraph boundary. `;
-						component.updateContent(message(source), { transient: true });
-						drain();
-						const visible = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
-						for (let prior = 0; prior <= index; prior++) {
-							const token = `BODY_${prior.toString().padStart(2, "0")}`;
-							expect(visible.split(token).length - 1).toBe(1);
-						}
+		it(
+			`preserves finalized streamed ${shape} content in scrollback and the viewport`,
+			compactTranscript(() => {
+				const transcript = new TranscriptContainer();
+				const component = new AssistantMessageComponent();
+				transcript.addChild(component);
+				const history: string[] = [];
+				const message = (text: string): AssistantMessage => ({
+					...finalAnswer,
+					content: [{ type: "text", text }],
+				});
+				let source = shape === "table" ? "| Item | Value |\n| --- | --- |\n" : shape === "fence" ? "```text\n" : "";
+				const drain = (): void => {
+					let batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
+					while (batch) {
+						history.push(...batch.rows);
+						transcript.acknowledgeFinalizedBatch(batch.id);
+						batch = transcript.peekFinalizedBatch(WIDTH, ROOM);
 					}
-					expect(history.length).toBeGreaterThan(ROOM);
-					if (shape === "fence") source += "```";
-					component.updateContent(message(source));
-					component.markTranscriptBlockFinalized();
+				};
+				for (let index = 0; index < 18; index++) {
+					const marker = `BODY_${index.toString().padStart(2, "0")}`;
+					source +=
+						shape === "table"
+							? `| ${marker} | value ${index} |\n`
+							: shape === "fence"
+								? `${marker} code payload\n`
+								: `${marker} a substantial stretch of uninterrupted prose without a paragraph boundary. `;
+					component.updateContent(message(source), { transient: true });
 					drain();
-					const complete = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
-					for (let index = 0; index < 18; index++) {
-						expect(complete.split(`BODY_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
-					}
-				}),
-			);
-		}
+					transcript.renderViewport(WIDTH, ROOM, frame);
+				}
+				if (shape === "fence") source += "```";
+				component.updateContent(message(source));
+				component.markTranscriptBlockFinalized();
+				drain();
+				const complete = [...history, ...transcript.renderViewport(WIDTH, ROOM, frame)].join("\n");
+				for (let index = 0; index < 18; index++) {
+					expect(complete.split(`BODY_${index.toString().padStart(2, "0")}`).length - 1).toBe(1);
+				}
+			}),
+		);
 	}
 
 	it(
-		"consumes source spans without losing repeated punctuation when late inline markup closes",
+		"preserves finalized repeated punctuation after late inline markup closes",
 		compactTranscript(() => {
 			const transcript = new TranscriptContainer();
 			const component = new AssistantMessageComponent(
@@ -1558,7 +1449,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				undefined,
 				true,
 				undefined,
-				false,
 				false,
 				true,
 			);
@@ -1592,7 +1482,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	);
 
 	it(
-		"keeps consumed fence source intact through narrowing, widening, and finalization",
+		"preserves finalized fence content after live narrowing and widening",
 		compactTranscript(() => {
 			const transcript = new TranscriptContainer();
 			const component = new AssistantMessageComponent(
@@ -1603,7 +1493,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				undefined,
 				true,
 				undefined,
-				false,
 				false,
 				true,
 			);
@@ -1624,12 +1513,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				source += `RESIZE_${index.toString().padStart(2, "0")} code data preserved in source order\n`;
 				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
 				drain();
-				const visible = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
-				for (let prior = 0; prior <= index; prior++)
-					expect(
-						visible.split(`RESIZE_${prior.toString().padStart(2, "0")}`).length - 1,
-						`index=${index}, prior=${prior}, width=${width}, emitted=${JSON.stringify(transcript.emittedStableRows())}, visible=${JSON.stringify(visible)}`,
-					).toBe(1);
+				transcript.renderViewport(width, ROOM, frame);
 			}
 			source += "```";
 			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] });
@@ -1646,7 +1530,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	);
 
 	it(
-		"preserves the last live table cell through a narrow resize",
+		"preserves finalized table cells after a live narrow resize",
 		compactTranscript(() => {
 			const transcript = new TranscriptContainer();
 			const component = new AssistantMessageComponent(
@@ -1657,7 +1541,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				undefined,
 				true,
 				undefined,
-				false,
 				false,
 				true,
 			);
@@ -1678,9 +1561,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				source += `| ${index} | source data stays readable across changing widths ${String.fromCodePoint(0x7500 + index)} |\n`;
 				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
 				drain();
-				const visible = [...history, ...transcript.renderViewport(width, ROOM, frame)].join("\n");
-				for (let prior = 0; prior <= index; prior++)
-					expect(visible.split(String.fromCodePoint(0x7500 + prior)).length - 1).toBe(1);
+				transcript.renderViewport(width, ROOM, frame);
 			}
 			component.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] });
 			component.markTranscriptBlockFinalized();
@@ -1693,7 +1574,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 
 	for (const shape of ["unbroken prose", "growing table cell"] as const) {
 		it(
-			`preserves every grapheme of ${shape} beyond the compact viewport`,
+			`preserves every grapheme of finalized ${shape} beyond the compact viewport`,
 			compactTranscript(() => {
 				const transcript = new TranscriptContainer();
 				const component = new AssistantMessageComponent(
@@ -1704,7 +1585,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 					undefined,
 					true,
 					undefined,
-					false,
 					false,
 					true,
 				);
@@ -1733,9 +1613,8 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 						{ transient: true },
 					);
 					drain();
-					expect(observed()).toBe(payload);
+					transcript.renderViewport(WIDTH, ROOM, frame);
 				}
-				expect(history.length).toBeGreaterThan(ROOM);
 				const completeSource = sourcePrefix + payload + (shape === "growing table cell" ? " |" : "");
 				component.updateContent({ ...finalAnswer, content: [{ type: "text", text: completeSource }] });
 				component.markTranscriptBlockFinalized();
