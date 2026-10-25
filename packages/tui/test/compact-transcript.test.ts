@@ -387,6 +387,47 @@ describe("compact transcript activity", () => {
 		}
 	});
 
+	it("shows only the running shell output tail in compact mode and drops it when settled", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const component = new ToolExecutionComponent("bash", { command: "bun test", i: "运行测试" }, {}, undefined, {
+			requestRender() {},
+			requestComponentRender() {},
+			resetDisplay() {},
+		});
+		components.push(component);
+		component.updateArgs({ command: "bun test", i: "运行测试" });
+		component.setExecutionStarted();
+		component.updateResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "old line\n\x1b[31mred line\x1b[0m\n\n\tindented line\nnewest line\n",
+					},
+				],
+			},
+			true,
+		);
+		const rows = component.render(40);
+		const raw = rows.join("\n");
+		expect(rows).toHaveLength(4);
+		expect(raw).not.toContain("\x1b[31m");
+		const view = Bun.stripANSI(raw);
+		expect(view).toContain("red line");
+		expect(view).not.toContain("old line");
+		expect(rows.at(-1)).toContain("newest line");
+		for (const row of rows) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(40);
+		const native = JSON.stringify(component.describe(toolCx));
+		expect(native).toContain("newest line");
+		expect(native).not.toContain("old line");
+
+		component.updateResult({ content: [{ type: "text", text: "old line\nnewest line" }] }, false);
+		const settledRows = component.render(40);
+		expect(settledRows).toHaveLength(1);
+		expect(Bun.stripANSI(settledRows[0]!)).not.toContain("newest line");
+		expect(JSON.stringify(component.describe(toolCx))).not.toContain("newest line");
+	});
+
 	it("retains internal-URL read conflict warnings outside the folded-success budget", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();

@@ -312,6 +312,18 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
  * and one coalesced render frame per tick instead of N unsynchronized timers
  * each independently waking the render scheduler (issue #8731). */
 const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
+
+/**
+ * Compact mode keeps a settled call to one line, but a running call that
+ * streams raw output is otherwise opaque. Show its last few output lines while
+ * it runs; the tail disappears when the call settles (the full output stays
+ * available through expansion / detailed mode).
+ */
+const COMPACT_LIVE_TAIL_LINES = 3;
+/** Only tools whose partial updates carry raw output; other progress text is not a log. */
+const COMPACT_LIVE_TAIL_TOOLS: Readonly<Record<string, true>> = { bash: true };
+/** Bound the text sliced per paint; the tail only needs the end of the stream. */
+const COMPACT_LIVE_TAIL_SLICE = 8192;
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
 
 /** Arm the shared spinner ticker if it is not already running. */
@@ -389,6 +401,7 @@ export class ToolExecutionComponent extends Container {
 	#compactFailures: number | undefined;
 	#compactToolResultListener: (() => void) | undefined;
 	#compactIntent: string | undefined;
+	#compactLiveTailCache?: { version: number; lines: readonly string[] };
 	#showImages: boolean;
 	readonly #compactToolActivityOverride: boolean | undefined;
 	#isPartial = true;
@@ -1192,7 +1205,16 @@ export class ToolExecutionComponent extends Container {
 					),
 					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 				]);
-		return collapsed.length > 0 ? col([...collapsed, call]) : call;
+		const tailLines = this.#compactLiveTail();
+		const tail = tailLines.map((line, index) =>
+			text([span(`  ${line}`, index === tailLines.length - 1 ? "text" : "dim")], {
+				lines: 1,
+				wrap: "none",
+				truncate: "end",
+			}),
+		);
+		const children = [...collapsed, call, ...tail];
+		return children.length > 1 ? col(children) : call;
 	}
 
 	#compactActivity(): ToolActivitySummary {
@@ -1267,6 +1289,33 @@ export class ToolExecutionComponent extends Container {
 		if (details.applied === true || (details.action === "apply" && details.sourceToolName === "ast_edit"))
 			return "已应用";
 		return undefined;
+	}
+
+	/**
+	 * The last non-empty output lines of a running streaming call. Compact mode
+	 * keeps a settled call to one line; while the call still runs, its tail is
+	 * the only honest progress signal, so the card shows it under the summary.
+	 * Only raw-output tools participate, and the parse is cached per result
+	 * version so repaints never re-split the same preview.
+	 */
+	#compactLiveTail(): readonly string[] {
+		if (!COMPACT_LIVE_TAIL_TOOLS[this.#toolName] || !this.#isRunning()) return [];
+		const cached = this.#compactLiveTailCache;
+		if (cached?.version === this.#resultVersion) return cached.lines;
+		const output =
+			this.#result?.content
+				.filter(block => block.type === "text")
+				.map(block => block.text ?? "")
+				.join("\n") ?? "";
+		const lines = output
+			? sanitizeText(output.slice(-COMPACT_LIVE_TAIL_SLICE))
+					.split("\n")
+					.map(line => replaceTabs(line).trimEnd())
+					.filter(line => line.trim().length > 0)
+					.slice(-COMPACT_LIVE_TAIL_LINES)
+			: [];
+		this.#compactLiveTailCache = { version: this.#resultVersion, lines };
+		return lines;
 	}
 
 	/**
@@ -1638,7 +1687,11 @@ export class ToolExecutionComponent extends Container {
 				`${state}${theme.fg(summary.detail ? "dim" : "text", summary.label)}${detail}`,
 				Math.max(1, width - Bun.stringWidth(elapsed)),
 			);
-			return [...collapsed, truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
+			const tailLines = this.#compactLiveTail();
+			const tail = tailLines.map((output, index) =>
+				truncateToWidth(`  ${theme.fg(index === tailLines.length - 1 ? "text" : "dim", output)}`, width),
+			);
+			return [...collapsed, truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width), ...tail];
 		}
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";
