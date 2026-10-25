@@ -775,6 +775,34 @@ function afterCommandSeparator(rest: string): string | undefined {
 	return undefined;
 }
 
+/** Command text after leading assignments/context builtins, or undefined when it would echo quoted content. */
+function compactBashCommandText(command: string): string | undefined {
+	let remaining = command.trim();
+	while (remaining) {
+		const word = readShellWord(remaining);
+		if (!word || word === "unterminated") return undefined;
+		const source = remaining.slice(0, remaining.length - word.rest.length).trimEnd();
+		// The shared word reader resolves quotes, not shell grammar or expansion.
+		if (/[$`;&|()<>{}*?[\]~\r\n]/.test(source)) return undefined;
+		if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(word.value)) {
+			remaining = word.rest;
+			continue;
+		}
+		if (word.value.startsWith("#")) return undefined;
+		if (SHELL_CONTEXT_BUILTINS.has(word.value)) {
+			const next = afterCommandSeparator(word.rest);
+			if (next === undefined) return undefined;
+			remaining = next;
+			continue;
+		}
+		const text = remaining.split("\n", 1)[0]!.trim();
+		// Quoted arguments often carry scripts, tokens or messages; keep only the program then.
+		if (/["'`]/.test(text)) return undefined;
+		return text || undefined;
+	}
+	return undefined;
+}
+
 /** Show only a literal executable, never a leading environment assignment, context builtin or script fragment. */
 function compactBashExecutable(command: string): string {
 	let remaining = command.trim();
@@ -812,12 +840,13 @@ export const bashToolRenderer = {
 	activitySummary(args: BashRenderArgs, context: ToolActivityContext): ToolActivitySummary | undefined {
 		if (!context.compactToolActivity) return undefined;
 		const intent = args?.[INTENT_FIELD];
+		const command = typeof args?.command === "string" ? args.command : "";
 		return {
 			label: "Bash",
 			detail:
 				typeof intent === "string" && intent.trim()
 					? intent
-					: compactBashExecutable(typeof args?.command === "string" ? args.command : ""),
+					: (compactBashCommandText(command) ?? compactBashExecutable(command)),
 		};
 	},
 } satisfies ToolRenderer<BashRenderArgs, BashToolDetails>;

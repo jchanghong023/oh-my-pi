@@ -425,17 +425,19 @@ describe("compact transcript activity", () => {
 		}
 	});
 
-	it("keeps shell assignment values out of executable summaries before and after execution", () => {
+	it("keeps assignment values and quoted content out of compact command summaries", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		for (const [command, executable] of [
-			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun -e "PRIVATE_SCRIPT"', "bun"],
-			['CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py', "python.exe"],
-			["cd /tmp/private-dir && bun test", "bun"],
-			['cd "/tmp/quiet && path" && python3 train.py', "python3"],
-			["export FOO=1; bun run check", "bun"],
-			["true && bun test", "bun"],
-			["cd /tmp/private-dir", "cd"],
-		]) {
+		for (const [command, summary, hidden] of [
+			['ACCESS_TOKEN="PRIVATE value" OTHER=1 bun -e "PRIVATE_SCRIPT"', "bun", "PRIVATE_SCRIPT"],
+			['CUDA_VISIBLE_DEVICES=0 "C:/Program Files/Python/python.exe" train.py', "python.exe", "train.py"],
+			["cd /tmp/private-dir && bun test", "bun test", undefined],
+			['cd "/tmp/quiet && path" && python3 train.py', "python3 train.py", "/tmp/quiet"],
+			["export FOO=1; bun run check", "bun run check", undefined],
+			["true && bun test", "bun test", undefined],
+			["cd /tmp/private-dir", "cd", "private-dir"],
+			["git diff --stat", "git diff --stat", undefined],
+			['git commit -m "PRIVATE commit message"', "git", "PRIVATE commit message"],
+		] as const) {
 			const component = new ToolExecutionComponent("bash", { command }, {}, undefined, {
 				requestRender() {},
 				requestComponentRender() {},
@@ -449,12 +451,13 @@ describe("compact transcript activity", () => {
 					JSON.stringify(component.describe(toolCx)),
 					JSON.stringify(component.describe()),
 				]) {
-					expect(view).toContain(executable!);
+					expect(view).toContain(summary);
 					expect(view).not.toContain("PRIVATE");
 					expect(view).not.toContain("CUDA_VISIBLE_DEVICES");
 					expect(view).not.toContain("ACCESS_TOKEN");
 					expect(view).not.toContain("private-dir");
 					expect(view).not.toContain("/tmp/quiet");
+					if (hidden) expect(view).not.toContain(hidden);
 				}
 			}
 		}
