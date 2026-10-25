@@ -16,6 +16,8 @@
 
 ### Changed
 
+- Require all `/dev` stage agents, Team participants, independent reviewers and execution descendants to write user-facing replies and structured human-readable text in Chinese, while preserving code, commands, identifiers, protocol fields and verbatim evidence.
+- Automatically open the `/dev help` operation dialog when a running workflow waits for user input or decisions, pauses or becomes blocked; preserve drafts and attachments, defer behind other dialogs and avoid reopening a dismissed dialog until the next work round or decision changes.
 - Support single-developer `/dev revise-plan <plan-version> <amendment...>` without restarting unchanged requirements or solution approvals: stop old execution, retain the previous plan and valid work, invalidate plan approval and acceptance, and await approval after independent review.
 - Keep two review-repair rounds per reviewer slot by default, with explicit `/dev extend-review <review-id> <revision> <repair-limit>` adding exactly one round to an exhausted blocked or repair-limited review. Preserve counts, issues, evidence and reviewer identity without waiving checks, granting permissions or reopening writes while awaiting acceptance.
 - Restrict `/dev` verification to commands resolved from approved validation IDs; command or argument changes require plan revision and renewed approval rather than model-selected equivalent commands.

@@ -12,6 +12,7 @@ import { AgentRegistry } from "../registry/agent-registry";
 import { finalizeSubprocessOutput } from "../task/executor";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
+import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
 import type { SpecActorInput, SpecHandoff, SpecHandoffInput, SpecRunContext, SpecStageRole } from "./types";
 
 export interface SpecActor {
@@ -104,7 +105,7 @@ export async function createSpecActor(args: {
 		agentRegistry: registry,
 		sessionManager: SessionManager.create(args.options.cwd!, args.sessionDirectory),
 		requireYieldTool: false,
-		systemPrompt: defaults => [...defaults, fixed, ...args.methods],
+		systemPrompt: defaults => [...defaults, fixed, ...args.methods, communicationPrompt],
 	});
 	const ref = registry.get(id);
 	let disposed = false;

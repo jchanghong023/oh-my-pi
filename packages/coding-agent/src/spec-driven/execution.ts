@@ -13,6 +13,7 @@ import { SpecEvidenceService } from "./evidence";
 import { createSpecExecutionTools, type SpecExecutionTools } from "./execution-tools";
 import type { SpecGitService, SpecNativePublication, SpecNativeSource } from "./git";
 import type { SpecExecution, SpecExecutionControl, SpecPlan, SpecRunContext, SpecTask, SpecToolRecord } from "./types";
+import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
 
 const taskSchema = type({
 	action: "'start' | 'integrate' | 'checkpoint' | 'status'",
@@ -405,6 +406,7 @@ export class SpecExecutionHost {
 						return [
 							...(typeof blocks === "string" ? [blocks] : blocks),
 							...implementationMethods.map(({ method }) => method),
+							communicationPrompt,
 						];
 					},
 					onSessionCreated: child => {

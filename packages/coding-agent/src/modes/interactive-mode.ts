@@ -1645,6 +1645,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
 	#devObservationUnsubscribe?: () => void;
+	#devAutoHelpTimer?: NodeJS.Timeout;
+	#devAutoHelpKey?: string;
+	#devAutoHelpOpen = false;
+	#devInputDepth = 0;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -3011,11 +3015,15 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#bindDevObservation(): void {
 		this.#devObservationUnsubscribe?.();
+		clearTimeout(this.#devAutoHelpTimer);
+		this.#devAutoHelpTimer = undefined;
+		this.#devAutoHelpKey = undefined;
 		this.setHookWidget("native-dev-input", undefined);
 		const generation = this.session.sessionGeneration;
 		const sessionId = this.sessionManager.getSessionId();
 		this.#devObservationUnsubscribe = observeSpecDrivenController(this.sessionManager, observation => {
 			if (generation !== this.session.sessionGeneration || sessionId !== this.sessionManager.getSessionId()) return;
+			this.#scheduleDevHelp();
 			// 释放流程不等于退出开发输入模式；完成或取消后文字仍归草稿。
 			if (
 				(observation.released && observation.interaction.mode === "chat") ||
@@ -3049,6 +3057,70 @@ export class InteractiveMode implements InteractiveModeContext {
 			}
 		});
 	}
+	#scheduleDevHelp(markOpened = false): void {
+		clearTimeout(this.#devAutoHelpTimer);
+		this.#devAutoHelpTimer = undefined;
+		const controller = peekSpecDrivenController(this.sessionManager);
+		const observation = controller?.observation();
+		if (
+			!observation?.runId ||
+			observation.released ||
+			observation.disposed ||
+			observation.cwd !== this.sessionManager.getCwd() ||
+			this.isShuttingDown ||
+			["idle", "completed", "cancelled"].includes(observation.status.phase) ||
+			observation.active ||
+			observation.interaction.messages.some(message =>
+				["queued", "processing", "cancelling"].includes(message.status),
+			)
+		) {
+			this.#devAutoHelpKey = undefined;
+			return;
+		}
+		const { status, interaction } = observation;
+		if (
+			!status.paused &&
+			!status.blockedReason &&
+			!status.phase.startsWith("awaiting-") &&
+			!interaction.actions.some(action => action.available && action.id.startsWith("extend-review:"))
+		)
+			return;
+		const key = JSON.stringify([
+			observation.runId,
+			status.generation,
+			status.phase,
+			status.paused,
+			status.blockedReason,
+			interaction.actions.filter(action => action.available).map(action => action.version),
+		]);
+		if (markOpened) {
+			this.#devAutoHelpKey = key;
+			return;
+		}
+		if (this.#devAutoHelpKey === key || this.#devAutoHelpOpen) return;
+		// Yield past status output and never replace another dialog or clear the user's draft.
+		this.#devAutoHelpTimer = setTimeout(() => {
+			this.#devAutoHelpTimer = undefined;
+			if (peekSpecDrivenController(this.sessionManager) !== controller) return;
+			if (
+				this.#devInputDepth ||
+				this.ui.hasOverlay() ||
+				this.editorContainer.children.length !== 1 ||
+				this.editorContainer.children[0] !== this.editor
+			) {
+				this.#scheduleDevHelp();
+				return;
+			}
+			this.#devAutoHelpKey = key;
+			this.#devAutoHelpOpen = true;
+			void executeBuiltinSlashCommand("/dev help", { ctx: this, draftDetached: true })
+				.catch(error => this.showError(error instanceof Error ? error.message : String(error)))
+				.finally(() => {
+					this.#devAutoHelpOpen = false;
+					if (this.#devObservationUnsubscribe) this.#scheduleDevHelp();
+				});
+		}, 100);
+	}
 
 	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void {
 		assertDevModeActivationAllowed(this.session, mode);
@@ -3080,10 +3152,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.pendingImageLinks.splice(0, input.images.length);
 			this.editor.imageLinks = this.editor.pendingImageLinks.length ? this.editor.pendingImageLinks : undefined;
 		}
+		this.#devInputDepth++;
 		try {
 			if (text.startsWith("/") && !command) throw new Error("未知命令，请使用 /dev help。");
 			if (command) {
 				assertDevCommandAllowed(this.session, command.name, command.args);
+				if (command.name === "dev" && command.args.trim() === "help") this.#scheduleDevHelp(true);
 				const result = await executeBuiltinSlashCommand(text, { ctx: this, input, draftDetached: true });
 				if (result !== true && current()) throw new Error("此命令需要普通聊天模式，请先输入 /dev 返回普通聊天。");
 			} else if (text.trim() || input?.images?.length) {
@@ -3104,6 +3178,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				restoreDetachedDraft(this.editor, text, input?.images, input?.imageLinks);
 				this.showError(error instanceof Error ? error.message : String(error));
 			}
+		} finally {
+			this.#devInputDepth--;
+			this.#scheduleDevHelp();
 		}
 		return true;
 	}
@@ -7569,6 +7646,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	stop(): void {
 		this.#devObservationUnsubscribe?.();
 		this.#devObservationUnsubscribe = undefined;
+		clearTimeout(this.#devAutoHelpTimer);
+		this.#devAutoHelpTimer = undefined;
 		this.setHookWidget("native-dev-input", undefined);
 		this.#hidePlanReview();
 		this.#appearanceRefreshRequest = undefined;
@@ -7646,6 +7725,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	async shutdown(): Promise<void> {
 		this.#devObservationUnsubscribe?.();
 		this.#devObservationUnsubscribe = undefined;
+		clearTimeout(this.#devAutoHelpTimer);
+		this.#devAutoHelpTimer = undefined;
 		if (this.#isShuttingDown) return;
 		// The previous graceful teardown failed AT the memoized session.dispose()
 		// (the session is already disposing), so it re-rejects identically forever

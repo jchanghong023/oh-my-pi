@@ -17,7 +17,10 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { peekSpecDrivenController } from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
+import {
+	peekSpecDrivenController,
+	type SpecControllerObservation,
+} from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -78,6 +81,151 @@ describe("libkitty end-to-end", () => {
 		releaseSessionEffects?.();
 		releaseSessionEffects = undefined;
 		resetSettingsForTest();
+	});
+
+	// Keep the real controller registry, observation subscription, slash-command
+	// dispatch and terminal dialogs; replace only the workflow's local state.
+	async function devHelpFixture() {
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await mode.handleDevInput("/dev");
+		const controller = peekSpecDrivenController(session.sessionManager);
+		if (!controller) throw new Error("Expected native dev controller");
+		controller.setInputMode("chat");
+		const observation: SpecControllerObservation = {
+			...controller.observation(),
+			runId: "automatic-help-run",
+			status: {
+				...controller.status(),
+				phase: "awaiting-specification",
+				generation: 1,
+				specification: {
+					version: "spec-v1",
+					proposal: "Display the result",
+					specs: [],
+					requirements: [{ id: "R1", text: "Display the result" }],
+					questions: [],
+				},
+			},
+		};
+		vi.spyOn(controller, "status").mockImplementation(() => observation.status);
+		vi.spyOn(controller, "observation").mockImplementation(() => ({
+			...observation,
+			interaction: { ...observation.interaction, actions: controller.actions() },
+		}));
+		const selector = vi.spyOn(mode, "showHookSelector");
+		const schedule = vi.spyOn(controller, "schedule").mockReturnValue("automatic-help-job");
+		const cancel = vi.spyOn(controller, "cancel");
+		const title = "协同开发操作（关闭窗口不改变模式或流程）";
+		const visible = () => plainRows(term.getViewport()).some(row => row.includes(title));
+		return { controller, observation, selector, schedule, cancel, visible };
+	}
+
+	it("automatically opens dev help in background chat while preserving the draft and dismisses each wait only once", async () => {
+		const f = await devHelpFixture();
+		const draft = "unsent ordinary chat draft";
+		mode.editor.setText(draft);
+		const image = {
+			type: "image" as const,
+			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE2kAAAAASUVORK5CYII=",
+			mimeType: "image/png",
+		};
+		mode.editor.pendingImages.push(image);
+		mode.editor.pendingImageLinks.push(undefined);
+		f.controller.publishObservation();
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(f.controller.inputMode()).toBe("chat");
+		expect(mode.editor.getExpandedText()).toBe(draft);
+		expect(mode.editor.pendingImages).toEqual([image]);
+
+		term.sendInput("\x1b");
+		await term.waitForRender(() => !f.visible());
+		expect(f.visible()).toBe(false);
+		expect(f.schedule).not.toHaveBeenCalled();
+		expect(f.cancel).not.toHaveBeenCalled();
+		f.observation.updatedAt++;
+		f.controller.publishObservation();
+		f.controller.publishObservation();
+		// Let the deferred automatic-help timer elapse before a negative assertion.
+		await Bun.sleep(150);
+		await term.waitForRender();
+		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(mode.editor.getExpandedText()).toBe(draft);
+		expect(mode.editor.pendingImages).toEqual([image]);
+		expect(mode.editor.pendingImageLinks).toEqual([undefined]);
+
+		// A fresh work round ending at the same decision must notify again.
+		f.observation.active = true;
+		f.controller.publishObservation();
+		f.observation.active = false;
+		f.controller.publishObservation();
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		expect(f.selector).toHaveBeenCalledTimes(2);
+		expect(f.schedule).not.toHaveBeenCalled();
+	});
+
+	it("does not automatically open dev help while active or any user message is unsettled", async () => {
+		const f = await devHelpFixture();
+		f.observation.active = true;
+		f.controller.publishObservation();
+		await Bun.sleep(150);
+		await term.waitForRender();
+		expect(f.selector).not.toHaveBeenCalled();
+		f.observation.active = false;
+		for (const status of ["queued", "processing", "cancelling"] as const) {
+			f.observation.interaction.messages = [
+				{
+					id: "pending-message",
+					text: "clarify the result",
+					runId: f.observation.runId!,
+					generation: 1,
+					phase: "awaiting-specification",
+					role: "requirements",
+					actorId: "requirements-agent",
+					sessionId: "requirements-session",
+					status,
+				},
+			];
+			f.controller.publishObservation();
+			await Bun.sleep(150);
+			await term.waitForRender();
+			expect(f.selector).not.toHaveBeenCalled();
+		}
+		f.observation.interaction.messages[0]!.status = "completed";
+		f.controller.publishObservation();
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(f.schedule).not.toHaveBeenCalled();
+	});
+
+	it("defers automatic help behind another dialog and does not reopen a manually dismissed help window", async () => {
+		const f = await devHelpFixture();
+		const otherDialog = mode.showHookInput("Existing question");
+		f.controller.publishObservation();
+		await Bun.sleep(150);
+		expect(f.selector).not.toHaveBeenCalled();
+		term.sendInput("\x1b");
+		await otherDialog;
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		term.sendInput("\x1b");
+		await term.waitForRender(() => !f.visible());
+
+		await mode.handleDevInput("/dev status");
+		const manualHelp = mode.handleDevInput("/dev help");
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		term.sendInput("\x1b");
+		await manualHelp;
+		await Bun.sleep(150);
+		expect(f.selector).toHaveBeenCalledTimes(2);
+		expect(f.visible()).toBe(false);
+		expect(f.schedule).not.toHaveBeenCalled();
+		expect(f.cancel).not.toHaveBeenCalled();
 	});
 
 	it("paints the submitted user message before any model reply", async () => {

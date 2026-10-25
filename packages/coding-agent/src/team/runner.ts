@@ -62,6 +62,8 @@ export interface TeamRunnerDeps {
 	disableAutoCompaction?: boolean;
 	/** Restricted workflows preserve their already-loaded project constraints verbatim. */
 	preserveContextFiles?: boolean;
+	/** Additional workflow-owned communication constraints; ordinary Team calls omit this. */
+	appendSystemPrompt?: string;
 }
 
 interface ArtifactLease {
@@ -219,7 +221,9 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 					const agent: AgentDefinition = {
 						name: `team-${call.role}`,
 						description: `Team discussion ${call.role} (${call.label})`,
-						systemPrompt: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
+						systemPrompt: deps.appendSystemPrompt
+							? [TEAM_ROLE_SYSTEM_PROMPTS[call.role], deps.appendSystemPrompt].join("\n\n")
+							: TEAM_ROLE_SYSTEM_PROMPTS[call.role],
 						tools: [...TEAM_READ_ONLY_TOOLS],
 						readSummarize: false,
 						source: "bundled",

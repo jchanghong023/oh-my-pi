@@ -14,6 +14,7 @@ import { runTeamDiscussion } from "../team/orchestrator";
 import { createTeamSubagentRunner, modelMatches, TEAM_READ_ONLY_TOOLS } from "../team/runner";
 import type { TeamRunResult } from "../team/types";
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
+import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
 import {
 	artifactVersion,
 	containedSpecPath,
@@ -501,7 +502,11 @@ export async function createSpecDrivenRuntime(args: {
 							systemPrompt: defaults => {
 								const original =
 									typeof nativePrompt === "function" ? nativePrompt(defaults) : (nativePrompt ?? defaults);
-								return [...(typeof original === "string" ? [original] : original), ...methods];
+								return [
+									...(typeof original === "string" ? [original] : original),
+									...methods,
+									communicationPrompt,
+								];
 							},
 						};
 					},
@@ -1089,6 +1094,7 @@ export async function createSpecDrivenRuntime(args: {
 					...parentDeps,
 					preserveContextFiles: true,
 					disableAutoCompaction: true,
+					appendSystemPrompt: communicationPrompt,
 					contextFiles: loadedContext.contextFiles ? [...loadedContext.contextFiles] : [],
 					skills: [],
 					promptTemplates: [],
