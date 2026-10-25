@@ -1,5 +1,6 @@
 // Local opt-in /dev observation vocabulary; the pinned desktop protocol stays unchanged.
 import { z } from "zod";
+import { SPEC_PHASES, SPEC_STAGES } from "../../../spec-driven/stages";
 import * as baseline from "./vendor/zcode-protocol-v4/index";
 import * as legacy from "./vendor/zcode-protocol/index";
 import { createTopicWireFrameSchema } from "./vendor/zcode-protocol-v4/wire";
@@ -14,26 +15,8 @@ export const ompSpecRunBindingSchema = z
 		actionVersion: id.optional(),
 	})
 	.strict();
-export const ompSpecPhaseSchema = z.enum([
-	"idle",
-	"requirements",
-	"requirements-review",
-	"awaiting-answers",
-	"awaiting-specification",
-	"team",
-	"awaiting-choice",
-	"planning",
-	"plan-review",
-	"awaiting-plan",
-	"executing",
-	"validating",
-	"overall-review",
-	"awaiting-acceptance",
-	"closing",
-	"completed",
-	"cancelled",
-]);
-export const ompSpecStageSchema = z.enum(["requirements", "solution", "plan", "execution", "acceptance", "closure"]);
+export const ompSpecPhaseSchema = z.enum(SPEC_PHASES);
+export const ompSpecStageSchema = z.enum(SPEC_STAGES);
 export const ompSpecCandidateSchema = z
 	.object({
 		id,
