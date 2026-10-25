@@ -322,7 +322,13 @@ export class TranscriptContainer extends Container {
 	/** Local display decisions only; committed entries retain their archived selection. */
 	#compactSelection = new Map<
 		Component,
-		{ visible: boolean; count: number; failures: number; ids: ReadonlySet<string | object> }
+		{
+			visible: boolean;
+			count: number;
+			failures: number;
+			ids: ReadonlySet<string | object>;
+			summary?: { archived: boolean };
+		}
 	>();
 	#compactNative = new WeakMap<Component, Component>();
 
@@ -343,6 +349,7 @@ export class TranscriptContainer extends Container {
 			const facts = run.flatMap(component => component.getCompactToolCalls());
 			const selected = new Set(facts.slice(-2).map(call => call.id));
 			const writes = run.filter(component => component.isCompactActualFileWrite?.()).slice(-3);
+			const summary = !writeRun && facts.length > 2 ? { archived: false } : undefined;
 			for (const component of run) {
 				component.setCompactToolSelection?.(selected);
 				const visible =
@@ -350,7 +357,7 @@ export class TranscriptContainer extends Container {
 					(writeRun
 						? !component.isCompactActualFileWrite?.() || writes.includes(component)
 						: component.getCompactToolCalls().some(call => selected.has(call.id)));
-				this.#compactSelection.set(component, { visible, count: 0, failures: 0, ids: selected });
+				this.#compactSelection.set(component, { visible, count: 0, failures: 0, ids: selected, summary });
 			}
 			if (!writeRun && facts.length > 2) {
 				const first = this.#compactSelection.get(run[0]!)!;
@@ -366,6 +373,16 @@ export class TranscriptContainer extends Container {
 				continue;
 			}
 			const component = entry.component;
+			const selection = this.#compactSelection.get(component);
+			if (selection?.summary?.archived && isCompactRunComponent(component)) {
+				// The run's summary already entered immutable history. Keep its
+				// remaining previews, rather than summarizing each shrinking suffix.
+				flush();
+				selection.visible =
+					component.hasCompactCriticalFeedback?.() === true ||
+					component.getCompactToolCalls().some(call => selection.ids.has(call.id));
+				continue;
+			}
 			if (!isCompactRunComponent(component)) {
 				// Empty upstream blocks (hidden thinking, attached feedback) are not boundaries.
 				if (
@@ -1103,7 +1120,11 @@ export class TranscriptContainer extends Container {
 			}
 			this.#frontier = offered.end;
 			const head = offered.split ? this.#entries[offered.end] : undefined;
-			if (head !== undefined) head.split = offered.split;
+			if (head !== undefined) {
+				head.split = offered.split;
+				const summary = this.#compactSelection.get(head.component)?.summary;
+				if (summary) summary.archived = true;
+			}
 		} else {
 			this.#releaseCommittedRenderCaches();
 		}
@@ -1510,6 +1531,8 @@ export class TranscriptContainer extends Container {
 
 	#retireEntry(entry: TranscriptEntry): void {
 		entry.state = "committed";
+		const summary = this.#compactSelection.get(entry.component)?.summary;
+		if (summary) summary.archived = true;
 		entry.emitted = 0;
 		entry.split = undefined;
 		entry.stableRows = EMPTY_STABLE_ROWS;

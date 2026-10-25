@@ -114,17 +114,33 @@ export function getSpecDrivenController(
 		controllers.set(host.sessionManager, controller);
 		controller.publishObservation();
 	}
-	controller.setOutput(host.output);
+	controller.setOutput(host.output, host.observesCustomMessages);
 	return controller;
 }
 
-export function renderSpecDrivenSummary(state: SpecDrivenStatus): string {
-	const lines = [`协同开发模式：${stageLabel(stageForPhase(state.phase))}${state.paused ? "（暂停）" : ""}`];
+export function renderSpecDrivenSummary(state: SpecDrivenStatus, compact = false): string {
+	const phase =
+		state.phase === "idle"
+			? "尚未启动"
+			: state.phase === "completed"
+				? "已完成"
+				: state.phase === "cancelled"
+					? "已取消"
+					: stageLabel(stageForPhase(state.phase));
+	const lines = [`协同开发模式：${phase}${state.paused ? "（暂停）" : ""}`];
 	if (state.blockedReason) lines.push(`阻塞：${state.blockedReason}`);
 	lines.push(...state.questions.map(question => `待回答：${question}`));
 	if (state.tasks.length)
 		lines.push(`任务完成：${state.tasks.filter(task => task.status === "completed").length}/${state.tasks.length}`);
-	for (const review of state.reviews) {
+	if (compact)
+		for (const review of state.reviews)
+			if (review.lastReview?.verdict !== "pass")
+				lines.push(
+					...review.findings
+						.filter(finding => finding.severity === "blocking")
+						.map(finding => `阻塞：${finding.issue}`),
+				);
+	for (const review of compact ? [] : state.reviews) {
 		lines.push(
 			`审查 ${review.id}（${review.kind}）：已用修复 ${review.revision} 轮；当前额度 ${review.repairLimit} 轮`,
 		);
@@ -150,7 +166,8 @@ export class SpecDrivenController {
 	readonly #manager: AsyncJobManager;
 	readonly #factory: SpecRuntimeFactory;
 	readonly #sessionGeneration: number;
-	#output: SlashCommandRuntime["output"];
+	#output!: SlashCommandRuntime["output"];
+	#observesCustomMessages = false;
 	#core?: SpecDrivenOrchestrator;
 	#native?: SpecControllerRuntime;
 	#initializing?: Promise<void>;
@@ -183,7 +200,7 @@ export class SpecDrivenController {
 		this.#host = host;
 		this.#manager = host.session.asyncJobManager;
 		this.#factory = factory;
-		this.#output = host.output;
+		this.setOutput(host.output, host.observesCustomMessages);
 		this.#sessionGeneration = host.session.sessionGeneration;
 		this.#mode = input?.mode ?? "chat";
 		this.#draft = input?.draft ?? "";
@@ -202,8 +219,9 @@ export class SpecDrivenController {
 			this.#host.cwd === host.cwd
 		);
 	}
-	setOutput(output: SlashCommandRuntime["output"]): void {
-		this.#output = output;
+	setOutput(output: SlashCommandRuntime["output"], observesCustomMessages = false): void {
+		this.#observesCustomMessages = observesCustomMessages;
+		this.#output = observesCustomMessages ? () => {} : output;
 	}
 	inputMode(): SpecInputMode {
 		return this.#mode;
@@ -403,7 +421,7 @@ export class SpecDrivenController {
 						message.reply = reply.text;
 						message.status = "completed";
 						await this.#emit(
-							`${reply.text}\n\n${renderSpecDrivenSummary(this.status())}\n${this.#actionSummary()}`,
+							`${reply.text}\n\n${renderSpecDrivenSummary(this.status(), this.#observesCustomMessages)}\n${this.#observesCustomMessages ? this.#nextStep() : this.#actionSummary()}`,
 						);
 					}
 				} catch (error) {
@@ -437,6 +455,14 @@ export class SpecDrivenController {
 					`${action.label}：${action.command}${action.available ? "" : `（不可用：${action.blockedReason}）`}`,
 			)
 			.join("\n");
+	}
+	#nextStep(): string {
+		const state = this.status();
+		if (["idle", "completed", "cancelled"].includes(state.phase))
+			return "下一步：/dev help 打开操作界面，填写需求并明确开始新流程。";
+		if (this.#active) return "后台运行中；完成后会提示下一步。/dev help 查看当前操作。";
+		if (state.paused) return "下一步：/dev help 查看并恢复流程；草稿不会自动发送。";
+		return "下一步：/dev help 查看本轮材料并明确作出决定。";
 	}
 	revisePlan(version: string, text: string): string {
 		if (!this.#core) throw new SpecAdmissionError("尚无可修订的计划");
@@ -516,17 +542,19 @@ export class SpecDrivenController {
 	}
 	async report(options: { rawPhase?: boolean } = {}): Promise<void> {
 		const state = this.status();
+		const compact = this.#observesCustomMessages && !options.rawPhase;
 		const recipient = this.#core?.recipient();
 		const destination = state.paused
 			? "已暂停；新文字仅保留草稿"
 			: recipient
 				? `${roleLabel(recipient.role)} · ${this.#active ? "运行中" : "等待你"}`
 				: "尚无可接收消息的阶段 Agent；文字仅保留草稿";
-		let text = `输入模式：${this.#mode === "dev" ? "协同开发" : "普通聊天"}；接收：${destination}\n${renderSpecDrivenSummary(state)}${options.rawPhase ? `\n阶段键：${state.phase}` : ""}\n${this.#actionSummary()}\n/dev help 打开操作界面`;
-		if (this.#active) text += "\n后台运行中；/dev status、/dev pause、/dev cancel 可立即使用。";
-		for (const message of this.#messages)
-			text += `\n消息 ${message.id}：${message.status}${message.error ? `；${message.error}` : ""}`;
-		if (this.#native) {
+		let text = `输入模式：${this.#mode === "dev" ? "协同开发" : "普通聊天"}；接收：${destination}\n${renderSpecDrivenSummary(state, compact)}${options.rawPhase ? `\n阶段键：${state.phase}\n\n${JSON.stringify(state, null, 2)}` : ""}\n${compact ? this.#nextStep() : `${this.#actionSummary()}\n/dev help 打开操作界面`}`;
+		if (!compact && this.#active) text += "\n后台运行中；/dev status、/dev pause、/dev cancel 可立即使用。";
+		if (!compact)
+			for (const message of this.#messages)
+				text += `\n消息 ${message.id}：${message.status}${message.error ? `；${message.error}` : ""}`;
+		if (this.#native && !compact) {
 			const measurement = this.#native.measurement();
 			const timing = this.#core?.timing();
 			if (timing) {

@@ -830,6 +830,10 @@ export class UiHelpers {
 						parksAsBackground(message.toolName, message.details) &&
 						(frame !== undefined || runningAsyncJobs.some(job => job.id === jobId));
 					const settled = isBackground && isSettledJobFrame(frame?.details);
+					if (isBackground) {
+						const job = runningAsyncJobs.find(job => job.id === jobId);
+						if (job) component.setExecutionStarted(message.toolCallId, job.startTime);
+					}
 					// A background job call's persisted result is only its "still running"
 					// snapshot; the job's latest frame supersedes it. Until that frame
 					// settles, keep the card partial, parked, and in `pendingTools` so

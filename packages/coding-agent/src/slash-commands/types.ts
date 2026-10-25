@@ -96,6 +96,8 @@ export interface SlashCommandRuntime {
 	newSession?: (options?: NewSessionOptions) => Promise<boolean>;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */
 	output: (text: string) => Promise<void> | void;
+	/** Host already renders display:true custom messages; do not also echo controller output. */
+	observesCustomMessages?: boolean;
 	/** Re-advertise the available command list (no-op outside ACP). */
 	refreshCommands: () => Promise<void> | void;
 	/**

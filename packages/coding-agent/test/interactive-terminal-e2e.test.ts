@@ -113,13 +113,78 @@ describe("libkitty end-to-end", () => {
 			...observation,
 			interaction: { ...observation.interaction, actions: controller.actions() },
 		}));
-		const selector = vi.spyOn(mode, "showHookSelector");
+		const panel = vi.spyOn(mode, "showHookCustom");
 		const schedule = vi.spyOn(controller, "schedule").mockReturnValue("automatic-help-job");
 		const cancel = vi.spyOn(controller, "cancel");
-		const title = "协同开发操作（关闭窗口不改变模式或流程）";
-		const visible = () => plainRows(term.getViewport()).some(row => row.includes(title));
-		return { controller, observation, selector, schedule, cancel, visible };
+		const visible = () =>
+			mode.ui.hasOverlay() && plainRows(term.getViewport()).some(row => row.includes("Display the result"));
+		return { controller, observation, panel, schedule, cancel, visible };
 	}
+
+	it("shows an unstarted dev destination without starting a workflow or inventing a requirements stage", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await mode.handleDevInput("/dev");
+		const controller = peekSpecDrivenController(session.sessionManager);
+		if (!controller) throw new Error("Expected native dev controller");
+		const viewport = () => plainRows(term.getViewport()).join("\n");
+		await term.waitForRender(() => viewport().includes("尚未启动"));
+		expect(viewport()).toContain("/dev help");
+		expect(controller.observation()).toMatchObject({
+			runId: null,
+			status: { phase: "idle" },
+			interaction: { mode: "dev" },
+		});
+		expect(viewport()).not.toContain("协同开发模式：需求");
+		expect(mode.ui.hasOverlay()).toBe(false);
+	});
+
+	it("persists one compact TUI report without raw status echo and retains explicit diagnostic facts", async () => {
+		const f = await devHelpFixture();
+		f.observation.status.questions = ["Which result should be displayed, and where?"];
+		const append = vi.spyOn(session, "appendCustomMessage");
+		const rawStatus = vi.spyOn(mode, "showStatus");
+		await f.controller.report();
+		expect(append).toHaveBeenCalledTimes(1);
+		const summary = append.mock.calls[0]![0];
+		if (typeof summary === "string") throw new Error("Expected structured spec-driven custom message");
+		expect(summary).toMatchObject({ customType: "spec-driven", display: true });
+		expect(summary.content).toContain("Which result should be displayed, and where?");
+		expect(summary.content).not.toContain("spec-v1");
+		expect(summary.content).not.toContain("/dev confirm-spec");
+		expect(summary.content).not.toContain("实际投入");
+		expect(rawStatus).not.toHaveBeenCalled();
+
+		await f.controller.report({ rawPhase: true });
+		expect(append).toHaveBeenCalledTimes(2);
+		const detailMessage = append.mock.calls[1]![0];
+		if (typeof detailMessage === "string") throw new Error("Expected structured spec-driven custom message");
+		expect(detailMessage).toMatchObject({ customType: "spec-driven", display: true });
+		const details = detailMessage.content;
+		expect(details).toContain("awaiting-specification");
+		expect(details).toContain("spec-v1");
+		expect(details).toContain("Display the result");
+		expect(details).toContain("/dev confirm-spec spec-v1");
+		expect(rawStatus).not.toHaveBeenCalled();
+		expect(f.schedule).not.toHaveBeenCalled();
+	});
+
+	it("rebinds report output ownership when switching between custom-message and text hosts", async () => {
+		const f = await devHelpFixture();
+		const firstHost = vi.fn();
+		const textHost = vi.fn();
+		f.controller.setOutput(firstHost, true);
+		await f.controller.report();
+		expect(firstHost).not.toHaveBeenCalled();
+		f.controller.setOutput(textHost);
+		await f.controller.report();
+		expect(textHost).toHaveBeenCalledTimes(1);
+		expect(textHost.mock.calls[0]![0]).toContain("/dev confirm-spec spec-v1");
+		f.controller.setOutput(firstHost, true);
+		await f.controller.report();
+		expect(firstHost).not.toHaveBeenCalled();
+		expect(textHost).toHaveBeenCalledTimes(1);
+	});
 
 	it("automatically opens dev help in background chat while preserving the draft and dismisses each wait only once", async () => {
 		const f = await devHelpFixture();
@@ -135,7 +200,13 @@ describe("libkitty end-to-end", () => {
 		f.controller.publishObservation();
 		await term.waitForRender(f.visible);
 		expect(f.visible()).toBe(true);
-		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(f.panel).toHaveBeenCalledTimes(1);
+		expect(plainRows(term.getViewport()).join("\n")).not.toContain("/dev confirm-spec spec-v1");
+		// The initial material inspection must never authorize the transition.
+		term.sendInput("\r");
+		await term.waitForRender(f.visible);
+		expect(f.visible()).toBe(true);
+		expect(f.schedule).not.toHaveBeenCalled();
 		expect(f.controller.inputMode()).toBe("chat");
 		expect(mode.editor.getExpandedText()).toBe(draft);
 		expect(mode.editor.pendingImages).toEqual([image]);
@@ -151,7 +222,7 @@ describe("libkitty end-to-end", () => {
 		// Let the deferred automatic-help timer elapse before a negative assertion.
 		await Bun.sleep(150);
 		await term.waitForRender();
-		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(f.panel).toHaveBeenCalledTimes(1);
 		expect(mode.editor.getExpandedText()).toBe(draft);
 		expect(mode.editor.pendingImages).toEqual([image]);
 		expect(mode.editor.pendingImageLinks).toEqual([undefined]);
@@ -163,7 +234,7 @@ describe("libkitty end-to-end", () => {
 		f.controller.publishObservation();
 		await term.waitForRender(f.visible);
 		expect(f.visible()).toBe(true);
-		expect(f.selector).toHaveBeenCalledTimes(2);
+		expect(f.panel).toHaveBeenCalledTimes(2);
 		expect(f.schedule).not.toHaveBeenCalled();
 	});
 
@@ -173,7 +244,7 @@ describe("libkitty end-to-end", () => {
 		f.controller.publishObservation();
 		await Bun.sleep(150);
 		await term.waitForRender();
-		expect(f.selector).not.toHaveBeenCalled();
+		expect(f.panel).not.toHaveBeenCalled();
 		f.observation.active = false;
 		for (const status of ["queued", "processing", "cancelling"] as const) {
 			f.observation.interaction.messages = [
@@ -192,13 +263,13 @@ describe("libkitty end-to-end", () => {
 			f.controller.publishObservation();
 			await Bun.sleep(150);
 			await term.waitForRender();
-			expect(f.selector).not.toHaveBeenCalled();
+			expect(f.panel).not.toHaveBeenCalled();
 		}
 		f.observation.interaction.messages[0]!.status = "completed";
 		f.controller.publishObservation();
 		await term.waitForRender(f.visible);
 		expect(f.visible()).toBe(true);
-		expect(f.selector).toHaveBeenCalledTimes(1);
+		expect(f.panel).toHaveBeenCalledTimes(1);
 		expect(f.schedule).not.toHaveBeenCalled();
 	});
 
@@ -207,7 +278,7 @@ describe("libkitty end-to-end", () => {
 		const otherDialog = mode.showHookInput("Existing question");
 		f.controller.publishObservation();
 		await Bun.sleep(150);
-		expect(f.selector).not.toHaveBeenCalled();
+		expect(f.panel).not.toHaveBeenCalled();
 		term.sendInput("\x1b");
 		await otherDialog;
 		await term.waitForRender(f.visible);
@@ -222,7 +293,7 @@ describe("libkitty end-to-end", () => {
 		term.sendInput("\x1b");
 		await manualHelp;
 		await Bun.sleep(150);
-		expect(f.selector).toHaveBeenCalledTimes(2);
+		expect(f.panel).toHaveBeenCalledTimes(2);
 		expect(f.visible()).toBe(false);
 		expect(f.schedule).not.toHaveBeenCalled();
 		expect(f.cancel).not.toHaveBeenCalled();

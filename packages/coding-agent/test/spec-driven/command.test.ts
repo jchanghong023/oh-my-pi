@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "bun:test";
+import type { DevDecisionModel, DevDecisionResult } from "@oh-my-pi/pi-tui/overlays/dev-decision-panel";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import {
 	getSpecDrivenController,
@@ -8,6 +9,7 @@ import {
 	renderSpecDrivenStatus,
 	type SpecRuntimeFactory,
 } from "../../src/spec-driven/controller";
+import { parseSpecPlan } from "../../src/spec-driven/schemas";
 import { checkSkillInvocation } from "../../src/spec-driven/skill-policy";
 import type { SpecDrivenPorts, SpecRequirementsDraft, SpecToolRecord } from "../../src/spec-driven/types";
 import {
@@ -26,6 +28,10 @@ function fixture(
 		runId?: string;
 		initFailures?: number;
 		ui?: NonNullable<SlashCommandRuntime["ui"]> & {
+			decision?: (
+				model: DevDecisionModel,
+				options?: { signal?: AbortSignal },
+			) => Promise<DevDecisionResult | undefined>;
 			editor?: (
 				title: string,
 				prefill?: string,
@@ -207,9 +213,15 @@ function fixture(
 		validation: { run: unexpected },
 	};
 	const sessionManager = options.sessionManager ?? {};
+	// Native mode admission reads the same session manager identity and its current mode.
+	Object.assign(sessionManager, { buildSessionContext: () => ({ mode: "chat" }) });
 	const disposers: Array<() => void> = [];
 	const session = {
 		asyncJobManager: manager,
+		sessionManager,
+		getPlanModeState: () => undefined,
+		getGoalModeState: () => undefined,
+		getVibeModeState: () => undefined,
 		sessionGeneration: 0,
 		isDisposed: false,
 		getAgentId: () => "owner",
@@ -1202,4 +1214,386 @@ describe("/dev shared command surface", () => {
 			await f.dispose();
 		}
 	});
+});
+
+describe("/dev decision panel consumer", () => {
+	function panelFixture(decision: (model: DevDecisionModel) => Promise<DevDecisionResult | undefined>) {
+		return fixture(undefined, {
+			ui: {
+				decision,
+				select: async () => {
+					throw new Error("Panel host must not open a selector");
+				},
+				input: async () => {
+					throw new Error("Panel fields must remain in context");
+				},
+				confirm: async () => true,
+			},
+		});
+	}
+
+	it("starts only on explicit submission with need first and a unique editable default name", async () => {
+		const models: DevDecisionModel[] = [];
+		let submit = false;
+		const f = panelFixture(async model => {
+			models.push(model);
+			if (!submit) return undefined;
+			return { actionId: "start", values: { request: "保留  空白\n完整需求", "change-id": "edited-change" } };
+		});
+		try {
+			await f.controller.submitText("已有需求草稿");
+			await f.invoke("help");
+			await f.invoke("help");
+			expect(f.requests).toEqual([]);
+			expect(f.output).toEqual([]);
+			expect(f.transcript).toEqual([]);
+			expect(models[0]!.initialActionId).toBe("start");
+			expect(models[0]!.title).toContain("尚未启动");
+			await f.invoke("");
+			expect(f.output.at(-1)).toContain("/dev help 开始新流程");
+			expect(f.controller.status().phase).toBe("idle");
+			const fields = models[0]!.actions.find(action => action.id === "start")!.fields!;
+			expect(fields.map(field => field.id)).toEqual(["request", "change-id"]);
+			expect(fields[0]!.value).toBe("已有需求草稿");
+			expect(fields[1]!.value).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
+			expect(fields[1]!.value).not.toBe(models[1]!.actions.find(action => action.id === "start")!.fields![1]!.value);
+			submit = true;
+			await f.invoke("help");
+			await f.settle();
+			expect(f.requests).toEqual(["保留  空白\n完整需求"]);
+			expect(f.controller.status().changeId).toBe("edited-change");
+			expect(f.controller.status().specificationApproval).toBeUndefined();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("keeps full clarification questions and recommendation beside the submitted answer", async () => {
+		const models: DevDecisionModel[] = [];
+		const answer = "1. 保留旧入口\n2. 新入口也支持";
+		const f = panelFixture(async model => {
+			models.push(model);
+			return { actionId: "answer", values: { text: answer } };
+		});
+		const questions = ["1. 支持哪些入口？\n建议：保留旧入口。\n原因：已有用户依赖。", "2. 是否新增入口？"];
+		f.draft.questions = questions;
+		try {
+			await f.invoke("start clarify-change request");
+			await f.settle();
+			f.draft.questions = [];
+			await f.invoke("help");
+			await f.settle();
+			const action = models[0]!.actions.find(item => item.id === "answer")!;
+			for (const question of questions) expect(action.detail).toContain(question);
+			expect(action.fields).toMatchObject([{ id: "text", multiline: true }]);
+			expect(models[0]!.initialActionId).toBe("answer");
+			expect(f.controller.status().specificationApproval).toBeUndefined();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("projects real proposal/report and plan authorization while defaulting risky rounds to inspection", async () => {
+		const models: DevDecisionModel[] = [];
+		let selected: string | undefined;
+		const f = panelFixture(async model => {
+			models.push(model);
+			return selected ? { actionId: selected } : undefined;
+		});
+		const runTeam = f.ports.team.run;
+		f.ports.team.run = async (input, context) => {
+			const result = await runTeam(input, context);
+			result.candidates.push({ ...result.candidates[0]!, id: "B", label: "候选 B", version: "candidate-v2" });
+			return result;
+		};
+		const generatePlan = f.ports.models.plan;
+		const longContent = `完整计划正文开始\n${"长计划材料必须仍然完整可读。\n".repeat(100)}`;
+		const longInstructions = `完整任务说明开始\n${"详细任务步骤。\n".repeat(100)}`;
+		f.ports.models.plan = async (input, context) => {
+			const result = parseSpecPlan(await generatePlan(input, context));
+			result.content = longContent;
+			result.tasks[0]!.instructions = longInstructions;
+			return result;
+		};
+		try {
+			await f.invoke("start proposal-change request");
+			await f.settle();
+			await f.invoke("help");
+			const spec = models.at(-1)!;
+			expect(spec.initialActionId).toBe("inspect:specification");
+			expect(spec.actions.find(action => action.id === "confirm-spec")!.detail).toContain(f.draft.specs[0]!.content);
+			selected = "confirm-spec";
+			await f.invoke("help");
+			await f.settle();
+			selected = undefined;
+			await f.invoke("help");
+			const choice = models.at(-1)!;
+			expect(choice.initialActionId).toBe("inspect:comparison");
+			const candidate = choice.actions.find(action => action.id === "choose:A")!;
+			expect(candidate.label).toContain("使用现有结果入口");
+			expect(candidate.label).toContain("候选 A");
+			expect(choice.actions.find(action => action.id === "inspect:candidate:A")!.label).toContain("候选 A");
+			const otherCandidate = choice.actions.find(action => action.id === "choose:B")!;
+			expect(otherCandidate.label).toContain("候选 B");
+			expect(otherCandidate.label).toContain("使用现有结果入口");
+			expect(otherCandidate.label).not.toBe(candidate.label);
+			expect(candidate.detail).toContain("真实候选的审查报告");
+			expect(candidate.detail).toContain("使用现有结果入口");
+			selected = candidate.id;
+			await f.invoke("help");
+			await f.settle();
+			selected = undefined;
+			await f.invoke("help");
+			const plan = models.at(-1)!;
+			expect(plan.initialActionId).toBe("inspect:plan");
+			expect(plan.summary).toContain("result.txt");
+			expect(plan.summary).toContain("本地 commit");
+			expect(plan.summary).toContain("不授权 push");
+			expect(plan.summary).not.toContain(longContent);
+			expect(plan.summary).not.toContain(longInstructions);
+			for (const id of ["confirm-plan", "confirm-plan-goal"]) {
+				const action = plan.actions.find(item => item.id === id)!;
+				for (const fact of [
+					"说明",
+					"result.txt",
+					"check-result",
+					"public-entry",
+					"纯文档",
+					"本地 commit",
+					"不授权 push",
+					"既定任务工作区集成",
+					"发布",
+					"创建 PR",
+					"改写历史",
+					"无关改动",
+				])
+					expect(action.detail).toContain(fact);
+				const detail = action.detail!;
+				expect(detail).toContain(longContent);
+				expect(detail).toContain(longInstructions);
+				for (const fact of ["说明", "result.txt", "check-result", "public-entry", "本地 commit", "不授权 push"]) {
+					expect(detail.indexOf(fact)).toBeLessThan(detail.indexOf(longInstructions));
+					expect(detail.indexOf(fact)).toBeLessThan(detail.indexOf(longContent));
+				}
+			}
+			expect(f.executionModes).toEqual([]);
+			for (const model of models) {
+				for (const action of model.actions) expect(action.label).not.toContain("/dev ");
+				expect(model.actions.find(action => action.id === "inspect:commands")!.detail).toContain("/dev ");
+			}
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	for (const mutation of ["pause", "session", "replacement"] as const)
+		it(`rejects a panel submission after ${mutation} changes its native owner or state`, async () => {
+			const f = panelFixture(async () => {
+				if (mutation === "pause") f.controller.pause();
+				else if (mutation === "session") f.session.sessionGeneration++;
+				else {
+					await f.controller.cancel();
+					getSpecDrivenController(f.host, { restart: true, factory: f.factory });
+				}
+				return { actionId: "confirm-spec" };
+			});
+			try {
+				await f.invoke("start stale-panel request");
+				await f.settle();
+				const result = await f.invoke("help");
+				expect(result).toMatchObject({ failed: true, errorCode: "invalid_params" });
+				expect(f.calls).not.toContain("team");
+			} finally {
+				await peekSpecDrivenController(f.host.sessionManager)?.dispose();
+				await f.dispose();
+			}
+		});
+
+	it("rejects an approval if a message becomes unsettled while the panel is open", async () => {
+		const hold = Promise.withResolvers<void>();
+		let messageId = "";
+		const f = panelFixture(async () => {
+			const receipt = await f.controller.submitText("先解释这份规格");
+			if (receipt.kind !== "queued") throw new Error("Expected queued dialogue");
+			messageId = receipt.messageId;
+			return { actionId: "confirm-spec" };
+		});
+		f.ports.conversation!.respond = async () => {
+			await hold.promise;
+			return { text: "解释完成" };
+		};
+		try {
+			await f.invoke("start pending-panel request");
+			await f.settle();
+			const result = await f.invoke("help");
+			expect(result).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			expect(f.calls).not.toContain("team");
+		} finally {
+			const settled = messageId ? f.settleMessage(messageId) : Promise.resolve();
+			hold.resolve();
+			await settled;
+			await f.dispose();
+		}
+	});
+});
+
+describe("/dev panel execution and acceptance", () => {
+	for (const mode of ["normal", "goal"] as const)
+		it(`dispatches the explicit ${mode} plan action through the native gate`, async () => {
+			let selected: string | undefined;
+			const f = fixture(undefined, {
+				ui: {
+					decision: async () => (selected ? { actionId: selected } : undefined),
+					select: async () => undefined,
+					confirm: async () => true,
+					input: async () => undefined,
+				},
+			});
+			try {
+				await f.invoke("start panel-execute request");
+				await f.settle();
+				selected = "confirm-spec";
+				await f.invoke("help");
+				await f.settle();
+				selected = "choose:A";
+				await f.invoke("help");
+				await f.settle();
+				expect(f.executionModes).toEqual([]);
+				selected = mode === "goal" ? "confirm-plan-goal" : "confirm-plan";
+				await f.invoke("help");
+				await f.settle().catch(() => {});
+				expect(f.executionModes).toEqual([mode]);
+			} finally {
+				await f.dispose();
+			}
+		});
+
+	it("presents the observed delivery state and requires scoped repair text without implicit acceptance", async () => {
+		let captured: DevDecisionModel | undefined;
+		let repair = false;
+		const f = fixture(undefined, {
+			ui: {
+				decision: async model => {
+					captured = model;
+					return repair ? { actionId: "repair", values: { text: " " } } : undefined;
+				},
+				select: async () => undefined,
+				confirm: async () => true,
+				input: async () => undefined,
+			},
+		});
+		const status = f.controller.status();
+		const historicalStderr = `首次 RED 的真实错误\n${"失败堆栈。\n".repeat(200)}`;
+		const evidence = (id: string, stage: "red" | "green" | undefined, exitCode: number): SpecToolRecord => ({
+			id,
+			runId: "run",
+			generation: 0,
+			toolCallId: `call-${id}`,
+			tool: "bash",
+			args: { command: `${id}-check`, cwd: "/fixture" },
+			startedAt: 1,
+			finishedAt: 2,
+			binding: null,
+			inputsBefore: null,
+			inputsAfter: null,
+			conditions: { platform: process.platform, shell: "fixture", runtime: "fixture", runtimeVersion: "1" },
+			obligation: { validationId: id, approvedCommand: `${id}-check`, stage },
+			result: {
+				status: "completed",
+				exitCode,
+				stdout: `${id} 完整标准输出`,
+				stderr: stage === "red" ? historicalStderr : "",
+				isError: exitCode !== 0,
+			},
+			artifact: { path: `/fixture/evidence/${id}`, version: id },
+		});
+		const records = [evidence("red", "red", 1), evidence("green", "green", 0), evidence("final", undefined, 0)];
+		const observation = vi.spyOn(f.controller, "status").mockReturnValue({
+			...status,
+			phase: "awaiting-acceptance",
+			acceptanceVersion: "delivery-v1",
+			tasks: [
+				{
+					id: "T001",
+					fingerprint: "fingerprint",
+					specificationVersion: "spec-v1",
+					planVersion: "plan-v1",
+					status: "verified",
+					records,
+					commits: [],
+					execution: {
+						changedPaths: ["result.txt"],
+						recordIds: [],
+						redRecordId: null,
+						greenRecordId: null,
+						implementationStartedAt: null,
+						requestedTddException: "纯文档",
+					},
+				},
+			],
+			pendingClosure: ["同步正式规格"],
+		});
+		try {
+			await f.invoke("help");
+			expect(captured!.initialActionId).toBe("inspect:acceptance");
+			const accept = captured!.actions.find(action => action.id === "accept")!;
+			expect(accept.detail).toContain("已验证");
+			expect(accept.detail).toContain("result.txt");
+			expect(accept.detail).toContain("同步正式规格");
+			expect(accept.detail).not.toContain(historicalStderr);
+			expect(accept.detail).toContain("RED");
+			expect(accept.detail).toContain("GREEN");
+			expect(accept.detail).toContain("退出码 1");
+			expect(accept.detail).toContain("final-check");
+			expect(accept.detail!.indexOf("final-check")).toBeLessThan(accept.detail!.indexOf("red-check"));
+			const rawEvidence = captured!.actions.find(action => action.id === "inspect:verification-output")!;
+			expect(rawEvidence.inspect).toBe(true);
+			expect(rawEvidence.detail).toContain(historicalStderr);
+			for (const record of records) {
+				expect(rawEvidence.detail).toContain(record.result.stdout);
+				expect(accept.detail).not.toContain(record.result.stdout);
+			}
+			expect(captured!.actions.find(action => action.id === "repair")!.fields).toMatchObject([
+				{ id: "text", multiline: true },
+			]);
+			expect(f.calls).toEqual([]);
+			repair = true;
+			expect(await f.invoke("help")).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			expect(f.calls).toEqual([]);
+		} finally {
+			observation.mockRestore();
+			await f.dispose();
+		}
+	});
+});
+
+describe("/dev inactive panel identity", () => {
+	for (const [phase, title] of [
+		["completed", "已完成"],
+		["cancelled", "已取消"],
+	] as const)
+		it(`shows ${phase} as an inactive outcome rather than a requirements stage`, async () => {
+			let model: DevDecisionModel | undefined;
+			const f = fixture(undefined, {
+				ui: {
+					decision: async value => {
+						model = value;
+						return undefined;
+					},
+					select: async () => undefined,
+					input: async () => undefined,
+					confirm: async () => true,
+				},
+			});
+			const status = vi.spyOn(f.controller, "status").mockReturnValue({ ...f.controller.status(), phase });
+			try {
+				await f.invoke("help");
+				expect(model!.title).toBe(`协同开发 · ${title}`);
+				expect(model!.initialActionId).toBe("start");
+				expect(f.requests).toEqual([]);
+			} finally {
+				status.mockRestore();
+				await f.dispose();
+			}
+		});
 });

@@ -27,6 +27,8 @@
 
 ### Fixed
 
+- Preserve cumulative elapsed time on compact foreground-to-background tool rows, including rebuilt background rows and measured Bash completion times.
+- Keep one compact tool-run summary when its calls retire into history in separate batches.
 - Keep working, retry, and compaction status visible when compact previews run out of screen space.
 
 - Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.

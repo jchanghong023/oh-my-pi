@@ -253,7 +253,7 @@ export interface ToolExecutionHandle extends Component {
 	updateStreamPreview?(update: unknown): void;
 	updateResult(result: ToolResultFrame, isPartial?: boolean, toolCallId?: string): void;
 	setArgsComplete(toolCallId?: string): void;
-	setExecutionStarted(toolCallId?: string): void;
+	setExecutionStarted(toolCallId?: string, startedAt?: number): void;
 	setExpanded(expanded: boolean): void;
 	setToolActivityVisible(visible: boolean): void;
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
@@ -269,13 +269,14 @@ const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", ba
  * Whether a call that returned with `details.async.state === "running"` stays
  * parked ({@link ToolExecutionHandle.parkAsBackground}) so its job's later
  * frames keep filling the card until a `completed`/`failed` frame settles it.
- * Detached `task` spawns always do; backgrounded `bash`/`eval` jobs only under
- * native rendering, where the terminal transcript keeps them frozen instead.
+ * Detached `task` spawns always do; compact Bash/Eval rows also retain the
+ * call's clock on ANSI terminals. Detailed ANSI cards keep upstream snapshots.
  * Shared by the live event controller and the transcript rebuild.
  */
 export function parksAsBackground(toolName: string, details: unknown): boolean {
 	const mode = JOB_CARD_TOOLS[toolName];
-	if (mode === undefined || (mode === "native" && !isNativeRendering())) return false;
+	if (mode === undefined || (mode === "native" && !isNativeRendering() && !displayPreferences.compactToolActivity))
+		return false;
 	return asyncJobState(details) === "running";
 }
 
@@ -607,10 +608,12 @@ export class ToolExecutionComponent extends Container {
 	 * Distinct from {@link setArgsComplete}: exclusive writes are marked complete
 	 * at `message_end` but stay queued until this fires for that call.
 	 */
-	setExecutionStarted(_toolCallId?: string): void {
-		if (this.#executionStarted) return;
+	setExecutionStarted(_toolCallId?: string, startedAt?: number): void {
+		if (this.#executionStarted && startedAt === undefined) return;
+		const now = performance.now();
+		const origin = startedAt === undefined ? now : now - Math.max(0, Date.now() - startedAt);
+		this.#executionStartedAtNow = Math.min(this.#executionStartedAtNow ?? origin, origin);
 		this.#executionStarted = true;
-		this.#executionStartedAtNow = performance.now();
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
 		this.#displayInputVersion++;
@@ -836,7 +839,7 @@ export class ToolExecutionComponent extends Container {
 			this.#executionStarted &&
 			this.#isPartial &&
 			!this.#sealed &&
-			!isBackgroundAsyncRunning &&
+			(!isBackgroundAsyncRunning || this.#compactToolActivity) &&
 			!isNativeRendering();
 		if (needsTicker && !this.#elapsedTicker) {
 			this.#elapsedTicker = setInterval(() => this.#ui.requestComponentRender(this), 1000);
@@ -1166,6 +1169,12 @@ export class ToolExecutionComponent extends Container {
 
 	/** Milliseconds since execution started (running) or its total (settled); undefined before it starts. */
 	#elapsedMs(status: TspCardStatus): number | undefined {
+		// A rebuilt/late-settled Bash row must use the command's measured total,
+		// not the lifetime of its replacement display component.
+		if (status !== "running" && this.#toolName === "bash" && isRecord(this.#rawDetails)) {
+			const wallTimeMs = this.#rawDetails.wallTimeMs;
+			if (typeof wallTimeMs === "number") return wallTimeMs;
+		}
 		const started = this.#executionStartedAtNow;
 		if (started === undefined) return undefined;
 		const ended = status === "running" ? undefined : this.#executionEndedAtNow;

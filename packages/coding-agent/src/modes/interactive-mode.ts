@@ -3040,17 +3040,26 @@ export class InteractiveMode implements InteractiveModeContext {
 					? "当前流程已结束，尚无可接收消息的阶段 Agent，输入保留为草稿"
 					: status.paused
 						? `已暂停：${interaction.blockedReason ?? status.blockedReason ?? "输入仅保留草稿，恢复不自动发送"}`
-						: recipient
-							? `${roleLabel(recipient.role)} · ${observation.active ? "运行中" : "等待你"}`
-							: (interaction.blockedReason ?? "未启动或当前阶段 Agent 尚未准备好，输入保留为草稿");
+						: status.phase === "idle"
+							? "尚未启动；/dev help 填写需求并开始，当前输入仅保留草稿"
+							: recipient
+								? `${roleLabel(recipient.role)} · ${observation.active ? "运行中" : "等待你"}`
+								: (interaction.blockedReason ?? "当前阶段 Agent 尚未准备好，输入保留为草稿");
 				this.setHookWidget("native-dev-input", [`协同开发模式 → ${destination} · /dev help`]);
 			} else {
-				const stage = stageLabel(stageForPhase(status.phase));
+				const stage =
+					status.phase === "completed"
+						? "已完成"
+						: status.phase === "cancelled"
+							? "已取消"
+							: status.phase === "idle"
+								? "尚未启动"
+								: stageLabel(stageForPhase(status.phase));
 				this.setHookWidget(
 					"native-dev-input",
 					observation.runId
 						? [
-								`后台协同开发：${stage}${status.paused ? "（暂停）" : ""}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
+								`后台协同开发：${stage} · ${status.paused ? "已暂停" : observation.active ? "运行中" : "等待你"}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
 							]
 						: undefined,
 				);

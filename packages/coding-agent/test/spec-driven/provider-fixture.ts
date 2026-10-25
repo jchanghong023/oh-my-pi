@@ -1,3 +1,4 @@
+import type { TeamSynthesisOutput } from "../../src/team/types";
 import { isRecord } from "@oh-my-pi/pi-utils";
 
 export const MARKER = "OMP_SPEC_PUBLIC_GREETING";
@@ -33,6 +34,7 @@ export interface Reply {
 
 export interface ProviderScenario {
 	requirementsQuestion?: string;
+	teamSynthesis?: TeamSynthesisOutput;
 	/** Number of independently rejected revisions; 3 exhausts the default two repairs. */
 	reviewFailures?: Partial<Record<"requirements" | "plan" | "task", number>>;
 	/** Probe removed model-selected command/reason fields before using the approved validation ID. */
@@ -284,14 +286,19 @@ export function respond(request: ModelRequest, options?: ProviderScenario): Repl
 			blockingResolutions: [],
 		});
 	if (schema.includes('"reportMarkdown"'))
-		return yieldData(request, {
-			reportMarkdown:
-				"## A\nPure greeting function with real RED/GREEN Bun tests.\n## B\nEquivalent normalization and the same behavioral contract.",
-			recommendedProposal: "A",
-			recommendationReason: "Small pure implementation and verifiable behavior.",
-			recommendationPreconditions: "",
-			hardConstraintViolations: [],
-		});
+		return yieldData(
+			request,
+			options?.teamSynthesis
+				? { ...options.teamSynthesis }
+				: {
+						reportMarkdown:
+							"## A\nPure greeting function with real RED/GREEN Bun tests.\n## B\nEquivalent normalization and the same behavioral contract.",
+						recommendedProposal: "A",
+						recommendationReason: "Small pure implementation and verifiable behavior.",
+						recommendationPreconditions: "",
+						hardConstraintViolations: [],
+					},
+		);
 	if (!payload) return { text: `${MARKER}_CHAT_READY` };
 	if (payload.input.kind === "repair-scope") return yieldData(request, { taskIds: ["T001"] });
 	if (payload.input.kind === "conversation") {

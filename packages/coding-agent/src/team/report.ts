@@ -164,7 +164,7 @@ function synthesisProseConflict(
 			// Remove only the negated predicate, not its clause: a later
 			// affirmative endorsement must still be checked.
 			.replace(
-				/(?:不(?:再|予|能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:选项|首选)|建议采用|推荐|首选)|(?:没有|无)(?:任何)?推荐(?:价值|必要|理由)/gu,
+				/(?:不(?:再|予|能|应(?:当)?|宜|该|可(?:以)?|值得)?|并非|不是)(?:采用|作为(?:最终)?(?:可(?:以)?采用)?(?:选项|首选)|建议采用|推荐|首选)|(?:没有|无)(?:任何)?推荐(?:价值|必要|理由)/gu,
 				"",
 			);
 		const mentions: { index: number; end: number; record: TeamProposalRecord }[] = [];

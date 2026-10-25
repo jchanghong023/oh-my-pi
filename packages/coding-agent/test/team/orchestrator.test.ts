@@ -1144,6 +1144,8 @@ describe("team orchestrator", () => {
 			["不建议采用方案 A。", "completed"],
 			["问题解决后，建议采用方案 A。", "completed"],
 			["方案 A 不作为首选。", "completed"],
+			["### 方案 A（未通过审查，不作为可采用选项）\n不参与最终选择。", "completed"],
+			["方案 A 不作为可采用选项，但仍建议采用方案 A。", "failed"],
 			["问题解决后，方案 A 即可采用。", "completed"],
 		] as const) {
 			const { result } = await run({

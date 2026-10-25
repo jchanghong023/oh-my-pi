@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
@@ -44,9 +44,31 @@ afterEach(() => {
 	for (const component of components.splice(0)) component.dispose();
 	stopSharedSpinnerTicker();
 	setChatTranscriptDisplayPreferences(preferences);
+	vi.restoreAllMocks();
 });
 
 describe("compact tool component integration", () => {
+	it("restores a background row from the job start instead of restarting at zero on replay", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		let now = 61_000;
+		vi.spyOn(performance, "now").mockImplementation(() => now);
+		vi.spyOn(Date, "now").mockImplementation(() => 1_000_000 + now);
+		const bash = tool("bash", { command: "long-running-command" });
+		bash.setExecutionStarted(undefined, 1_001_000);
+		bash.updateResult(
+			{
+				content: [],
+				details: { async: { state: "running", jobId: "bg_1", type: "bash" } },
+			},
+			true,
+		);
+		bash.parkAsBackground();
+		expect(Bun.stripANSI(bash.render(100).join("\n"))).toMatch(/60s$/);
+		now = 63_000;
+		bash.setExecutionStarted();
+		expect(Bun.stripANSI(bash.render(100).join("\n"))).toMatch(/62s$/);
+	});
+
 	it("omits synthetic waits without counting them as actual calls", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();

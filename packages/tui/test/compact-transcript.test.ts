@@ -183,6 +183,29 @@ describe("compact original-position continuous runs", () => {
 		expect(Bun.stripANSI(root.peekReplayBatch(80)!.rows.join("\n"))).toContain("ARCHIVED_A");
 	});
 
+	it("does not publish decreasing summaries when a tool run retires one call at a time", () => {
+		const root = transcript();
+		const calls = add(root, ...Array.from({ length: 8 }, (_, index) => `CALL_${index}`));
+		for (const call of calls) call.finalized = false;
+		const failure = calls[6]!;
+		failure.failed = true;
+		failure.render = () => Array.from({ length: 20 }, (_, index) => `RAW_FAILURE_${index}`);
+		const archived: string[] = [];
+		for (let index = 0; index < 6; index++) {
+			calls[index]!.finalized = true;
+			const batch = root.peekFinalizedBatch(80, 10)!;
+			archived.push(...batch.rows);
+			root.acknowledgeFinalizedBatch(batch.id);
+			expect(view(root).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次"]);
+		}
+		expect(Bun.stripANSI(archived.join("\n")).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次"]);
+		expect(view(root)).toContain("RAW_FAILURE_19");
+		expect(view(root)).toContain("CALL_7");
+		root.addChild(new Text("NEXT_SEGMENT", 0, 0));
+		add(root, "NEXT_OLD", "NEXT_ONE", "NEXT_TWO");
+		expect(view(root).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次", "工具调用 3 次"]);
+	});
+
 	it("uses upstream row ownership and bounded narrow viewport allocation", () => {
 		const root = transcript();
 		const calls = add(root, "OLD", "LAST_A", "LAST_B");

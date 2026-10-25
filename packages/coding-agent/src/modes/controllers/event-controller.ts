@@ -2141,6 +2141,11 @@ export class EventController {
 			this.ctx.pendingTools.delete(event.toolCallId);
 			return;
 		}
+		if (parks) {
+			const jobId = (event.result.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
+			const job = this.ctx.viewSession.getAsyncJobSnapshot?.()?.running.find(job => job.id === jobId);
+			if (job) component.setExecutionStarted(event.toolCallId, job.startTime);
+		}
 		component.updateResult({ ...event.result, isError: event.isError }, parks, event.toolCallId);
 		if (parks) {
 			component.parkAsBackground();
