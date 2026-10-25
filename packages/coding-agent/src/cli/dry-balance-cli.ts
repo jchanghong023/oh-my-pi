@@ -530,7 +530,9 @@ async function runBenchTargets(
 async function createDefaultRuntime(configFiles: string[] | undefined): Promise<DryBalanceRuntime> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd, configFiles });
-	const offline = initializeOfflineModelCommand(settings);
+	const offline = initializeOfflineModelCommand(settings, undefined, message => {
+		process.stderr.write(`${message}\n`);
+	});
 	const authStorage = await discoverAuthStorage(undefined, { settings });
 	try {
 		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });

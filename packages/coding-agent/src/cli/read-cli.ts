@@ -106,7 +106,9 @@ export async function runReadCommand(cmd: ReadCommandArgs): Promise<void> {
 		const urlTarget = parseReadUrlTarget(cmd.path);
 		const imageQuestion = splitImageQuestionTarget(cmd.path).question;
 		if (imageQuestion || (urlTarget && parseXUrl(urlTarget.path))) {
-			const offline = initializeOfflineModelCommand(settings);
+			const offline = initializeOfflineModelCommand(settings, undefined, message => {
+				process.stderr.write(`${message}\n`);
+			});
 			authStorage ??= await discoverAuthStorage(undefined, { settings });
 			const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 			for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);

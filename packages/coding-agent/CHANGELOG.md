@@ -16,13 +16,14 @@
 
 ### Changed
 
+- Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
 - Keep one compact activity area through interjections and until the next task starts. Prioritize running calls in the ordinary tool preview, show muted call/failure totals only when some calls are outside that preview, and show the latest two thinking lines. Retain three actual file writes with only the newest expanded in the original card. Running Bash logs appear after 30 seconds; failures and input requests appear immediately, with elapsed and idle time shown without model polling. Clean hides tools and thinking; detailed uses upstream rendering. These display changes leave model context, tool results, and execution behavior unchanged.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
-- Deliver OpenSpec explore, update, propose, sync, archive and verify as manual-only built-in skills (`/skill:opsx-*`) instead of built-in commands or command templates. Keep native CLI guidance, validation and `/dev` behavior intact.
+- Deliver OpenSpec explore, update, propose, sync, archive and verify as built-in skills with Chinese descriptions. Enable default discovery and on-demand instruction reads only when the session working directory directly contains an `openspec/` directory; elsewhere keep manual `/skill:opsx-*` access. Preserve native CLI guidance, validation and `/dev` phase restrictions without installing built-in commands or command templates.
 - Simplify bundled OpenSpec initialization to `omp openspec init [path] [--language <language>]` with the requirements-only default schema. Remove external-tool selection, installation/update entrypoints and flags; preserve existing project configuration, requirements, history and external-tool files.
 
-- Expose only debugging, completion verification and skill authoring from bundled Superpowers in ordinary chats; keep brainstorming manual-only and reserve all remaining skills for native `/dev` authorization, without changing skill bodies or controlled methods.
+- Keep all bundled Superpowers skills available through manual `/skill:` commands, including standalone planning and execution after OpenSpec requirements updates; only debugging, completion verification and skill authoring enter the default model index. Preserve native `/dev` phase and exact-resource authorization without changing skill bodies.
 - Keep bundled OpenSpec requirements maintenance and the original standalone `verify-change` workflow without implementation fallbacks. Preserve `/dev` runtime observations and original Team selection in project-local records, keep live control state session-local, retain the single plan under `docs/superpowers/plans/`, and preserve read-only delivery snapshots when archiving.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
@@ -32,6 +33,11 @@
 - Existing supported developer check, type-check, lint, build and test commands now route through Bazel by default; explicit `bun run bazel -- <existing-task>` remains available. Original selection and reporting are preserved without expanding fork-affected fulltest. Declared workspace products are restored from real cached artifacts; native installation and version stamping still run, with writable generated bindings. Untracked external environments and side effects rerun rather than claiming cached success. The gate contract requires local-filesystem `--watchfs` (plus `--experimental_windows_watchfs` on Windows hosts), the native 500000-entry computed-digest cache, scoped `.bazelignore` exclusions, actual dependency/glob/macro simplification, and Server preservation on every outcome while cancelling only owned invocations/actions. Full scope, 90/900/1500-second limits and same-source two-run fulltest acceptance with a second external wall clock strictly below 30 seconds remain unchanged; this change does not establish that acceptance.
 
 ### Fixed
+
+- Prevent repeated company-configuration warnings from corrupting the TUI during session and subagent initialization, while retaining startup notifications and standalone CLI diagnostics.
+- Keep `/dev` pause/resume, bounded repairs and review clarification recoverable, prevent Loop and desktop file-rewind bypasses, and retain readable review and archived delivery materials.
+
+- Keep the running status visible in compact mode on short ANSI and native terminals.
 
 - Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
 - Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.

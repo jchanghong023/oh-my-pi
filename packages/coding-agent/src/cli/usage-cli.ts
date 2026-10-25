@@ -1055,7 +1055,9 @@ async function loadUsageSources(
 	settings: Settings,
 	authStorage: AuthStorage,
 ): Promise<ModelRegistry> {
-	const offline = initializeOfflineModelCommand(settings);
+	const offline = initializeOfflineModelCommand(settings, undefined, message => {
+		process.stderr.write(`${message}\n`);
+	});
 	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });
 	for (const warning of modelRegistry.getReservedProviderWarnings()) process.stderr.write(`${warning}\n`);
 	// Extensions contribute usage providers via `registerProvider(name, { usage })`;

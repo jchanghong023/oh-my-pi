@@ -79,7 +79,11 @@ async function runCommand(command: string[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
+	const startedAt = performance.now();
 	const crossBuild = resolveCrossBuild(Bun.env.CROSS_TARGET);
+	const platform = crossBuild?.platform ?? process.platform;
+	const arch = crossBuild?.arch ?? process.arch;
+	console.log(`[build-binary] Starting build for ${platform}-${arch}`);
 	const artifactRoot = Bun.env.ZCODE_ARTIFACT_ROOT;
 	const artifactSource = artifactRoot ? await captureArtifactSource(repoRoot) : undefined;
 	const artifactVersion: string = (await Bun.file(path.join(packageDir, "package.json")).json()).version;
@@ -89,15 +93,19 @@ async function main(): Promise<void> {
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY !== "1";
 	const outName = crossBuild ? `omp-${crossBuild.id}` : "omp";
 	const outputPath = path.join(packageDir, "dist", outName);
+	const executablePath = platform === "win32" ? `${outputPath}.exe` : outputPath;
 	// Generate inside the try so the finally always restores the empty checked-in
 	// placeholders (stats client archive, docs index) even on failure.
 	try {
+		console.log("[build-binary] Generating stats client...");
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats"]);
 		// The in-memory legacy Pi virtual module reaches the coding-agent
 		// `export/html` subpath, whose source imports `tool-views.generated.js`.
 		// Rebuild it before compilation so clean checkouts that skipped install
 		// hooks still contain that generated bundle.
+		console.log("[build-binary] Generating tool views...");
 		await runCommand(["bun", "--cwd=../collab-web", "run", "gen:tool-views"]);
+		console.log(`[build-binary] Compiling executable: ${executablePath}`);
 		await compileCodingAgent({
 			repoRoot,
 			entrypoint: path.join(packageDir, "src", "cli.ts"),
@@ -110,8 +118,10 @@ async function main(): Promise<void> {
 			executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 			skipBuiltinCodesign: shouldAdhocSign,
 		});
+		console.log("[build-binary] Compilation complete");
 
 		if (shouldAdhocSign) {
+			console.log("[build-binary] Signing executable...");
 			await runCommand([
 				"codesign",
 				"--force",
@@ -123,11 +133,11 @@ async function main(): Promise<void> {
 			]);
 		}
 	} finally {
+		console.log("[build-binary] Resetting generated stats client...");
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}
 	if (artifactRoot && artifactSource) {
-		const platform = crossBuild?.platform ?? process.platform;
-		const arch = crossBuild?.arch ?? process.arch;
+		console.log(`[build-binary] Producing ZCode artifacts: ${artifactRoot}`);
 		await produceZCodeArtifacts({
 			source: artifactSource,
 			version: artifactVersion,
@@ -135,11 +145,14 @@ async function main(): Promise<void> {
 			binaries: [
 				{
 					target: `${platform}-${arch}`,
-					executable: platform === "win32" ? `${outputPath}.exe` : outputPath,
+					executable: executablePath,
 				},
 			],
 		});
 	}
+	console.log(
+		`[build-binary] Build complete: ${executablePath} (${((performance.now() - startedAt) / 1000).toFixed(1)}s)`,
+	);
 }
 
 if (import.meta.main) await main();

@@ -1125,15 +1125,16 @@ export function initializeCompanyModelLane(offline: boolean): string | undefined
 	return getCompanyConfigError();
 }
 
-/** Apply command-local company defaults; omitted offline context follows the process environment/lane. */
+/** Apply company defaults; hosts own diagnostic output (shared SDK paths never write terminal streams). */
 export function initializeOfflineModelCommand(
 	settings?: Settings,
 	offline: boolean = offlineFromEnv() || isCompanyLaneActive(),
+	onWarning?: (message: string) => void,
 ): boolean {
 	const companyError = initializeCompanyModelLane(offline);
 	if (!offline) return false;
 	if (companyError) {
-		process.stderr.write(`${companyError}\n`);
+		onWarning?.(companyError);
 	} else if (settings && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID)) {
 		settings.setModelRoleDefaults(COMPANY_OFFLINE_ROLE_DEFAULTS);
 	}

@@ -229,6 +229,42 @@ function anthropicCommitResponse(body: {
 }
 
 describe("offline model-dependent subcommands", () => {
+	it("keeps shared SDK initialization off terminal streams when company configuration is invalid", async () => {
+		const f = await fixture({ modelRoles: { default: "review-local/vision" } });
+		await fs.writeFile(f.companyPath, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "fixture-token" } }));
+		const sourceUrl = (file: string) =>
+			JSON.stringify(pathToFileURL(path.join(import.meta.dir, "../src", file)).href);
+		const script = path.join(f.home, "sdk-company-diagnostics.ts");
+		await fs.writeFile(
+			script,
+			`import { Settings } from ${sourceUrl("config/settings.ts")};
+			import { ModelRegistry } from ${sourceUrl("config/model-registry.ts")};
+			import { getCompanyConfigError } from ${sourceUrl("config/company-provider.ts")};
+			import { discoverAuthStorage, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
+			const settings = await Settings.init({ cwd: process.cwd() });
+			const auth = await discoverAuthStorage(undefined, { settings });
+			try {
+				const registry = new ModelRegistry(auth, undefined, { settings });
+				await loadCliExtensionProviders(registry, settings, process.cwd(), { discoverModels: false });
+				const nested = await discoverAuthStorage(undefined, { settings });
+				nested.close();
+				process.stdout.write(JSON.stringify({
+					companyAvailable: registry.hasProvider("company"),
+					configError: Boolean(getCompanyConfigError()),
+					defaultRole: settings.getModelRole("default"),
+				}));
+			} finally { auth.close(); }`,
+		);
+		const result = await f.run([], script);
+		expect(result.exitCode, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual({
+			companyAvailable: false,
+			configError: true,
+			defaultRole: "review-local/vision",
+		});
+		expect(result.stderr).toBe("");
+	}, 30_000);
+
 	it("activates auth discovery without Settings and reapplies company roles to a prebuilt registry", async () => {
 		const f = await fixture({ companyUrl: "http://127.0.0.1:1" });
 		const script = path.join(f.home, "prebuilt-model-runtime.ts");
@@ -545,7 +581,7 @@ describe("offline model-dependent subcommands", () => {
 				const result = await f.run(["read", `${f.image}?q=describe this image`]);
 				expect(result.exitCode, result.stderr).toBe(0);
 				expect(result.stdout).toContain("offline vision answer");
-				expect(result.stderr).toContain("Company provider unavailable");
+				expect(result.stderr.match(/Company provider unavailable/g)).toHaveLength(1);
 				expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
 				expect(await fs.readFile(f.modelsPath, "utf8")).toBe(f.modelsText);
 				if (companyText) expect(await fs.readFile(f.companyPath, "utf8")).toBe(companyText);
