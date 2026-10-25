@@ -2,9 +2,10 @@ import * as crypto from "node:crypto";
 import type { AsyncJobManager } from "../async/job-manager";
 import type { SlashCommandRuntime } from "../slash-commands/types";
 import { summarizeSpecRun, type SpecRunMeasurement } from "./metrics";
-import { SpecAdmissionError, SpecDrivenOrchestrator } from "./orchestrator";
+import { SpecAdmissionError, SpecDrivenOrchestrator, StaleRun } from "./orchestrator";
 import { createSpecDrivenRuntime } from "./runtime";
 import { bindSpecSkillPolicy } from "./skill-policy";
+import { roleLabel, stageForPhase, stageLabel } from "./stages";
 import type {
 	SpecControllerAction,
 	SpecDrivenOptions,
@@ -28,6 +29,7 @@ export type SpecRuntimeFactory = (input: {
 	settings: SlashCommandRuntime["settings"];
 	cwd: string;
 	onOutput: (text: string) => Promise<void>;
+	onRequest?: () => void;
 }) => Promise<SpecControllerRuntime>;
 
 type Operation = (core: SpecDrivenOrchestrator) => Promise<SpecDrivenStatus>;
@@ -72,6 +74,12 @@ export function observeSpecDrivenController(sessionManager: object, listener: Ob
 		if (!listeners.size && observers.get(sessionManager) === listeners) observers.delete(sessionManager);
 	};
 }
+function formatHeartbeatElapsed(ms: number): string {
+	const seconds = Math.max(0, Math.floor(ms / 1000));
+	const minutes = Math.floor(seconds / 60);
+	return minutes > 0 ? `${minutes}分${seconds % 60}秒` : `${seconds}秒`;
+}
+
 const emptyStatus = (): SpecDrivenStatus => ({
 	phase: "idle",
 	paused: false,
@@ -111,7 +119,7 @@ export function getSpecDrivenController(
 }
 
 export function renderSpecDrivenSummary(state: SpecDrivenStatus): string {
-	const lines = [`协同开发模式：${state.phase}${state.paused ? "（暂停）" : ""}`];
+	const lines = [`协同开发模式：${stageLabel(stageForPhase(state.phase))}${state.paused ? "（暂停）" : ""}`];
 	if (state.blockedReason) lines.push(`阻塞：${state.blockedReason}`);
 	lines.push(...state.questions.map(question => `待回答：${question}`));
 	if (state.tasks.length)
@@ -159,6 +167,8 @@ export class SpecDrivenController {
 	#messages: SpecUserMessage[] = [];
 	#messageAbort?: AbortController;
 	#messageWork?: Promise<void>;
+	#heartbeat?: NodeJS.Timeout;
+	#heartbeatSince = 0;
 
 	constructor(
 		host: SlashCommandRuntime,
@@ -364,8 +374,18 @@ export class SpecDrivenController {
 						);
 					}
 				} catch (error) {
-					if (message.status !== "completed") message.status = abort.signal.aborted ? "cancelled" : "failed";
-					if (!abort.signal.aborted) message.error = error instanceof Error ? error.message : String(error);
+					const aborted = abort.signal.aborted || this.#disposed;
+					const abortError =
+						error !== null && typeof error === "object" && "name" in error && error.name === "AbortError";
+					if (message.status !== "completed") {
+						if (!aborted) message.status = "failed";
+						else if (abortError || error instanceof StaleRun) message.status = "cancelled";
+						else {
+							message.status = "cancelling";
+							message.error = `取消未确认：${error instanceof Error ? error.message : String(error)}`;
+						}
+					}
+					if (!aborted) message.error = error instanceof Error ? error.message : String(error);
 				} finally {
 					this.publishObservation();
 				}
@@ -442,21 +462,27 @@ export class SpecDrivenController {
 		const currentListeners = [...listeners];
 		for (const listener of currentListeners) deliver(listener, this.observation());
 	}
-	async report(): Promise<void> {
+	async report(options: { rawPhase?: boolean } = {}): Promise<void> {
 		const state = this.status();
 		const recipient = this.#core?.recipient();
 		const destination = state.paused
 			? "已暂停；新文字仅保留草稿"
 			: recipient
-				? `${recipient.role} / ${recipient.actorId} / ${recipient.sessionId}`
+				? `${roleLabel(recipient.role)} · ${this.#active ? "运行中" : "等待你"}`
 				: "尚无可接收消息的阶段 Agent；文字仅保留草稿";
-		let text = `输入模式：${this.#mode === "dev" ? "协同开发" : "普通聊天"}；接收：${destination}\n${renderSpecDrivenSummary(state)}\n${this.#actionSummary()}\n/dev help 打开操作界面`;
+		let text = `输入模式：${this.#mode === "dev" ? "协同开发" : "普通聊天"}；接收：${destination}\n${renderSpecDrivenSummary(state)}${options.rawPhase ? `\n阶段键：${state.phase}` : ""}\n${this.#actionSummary()}\n/dev help 打开操作界面`;
 		if (this.#active) text += "\n后台运行中；/dev status、/dev pause、/dev cancel 可立即使用。";
 		for (const message of this.#messages)
 			text += `\n消息 ${message.id}：${message.status}${message.error ? `；${message.error}` : ""}`;
 		if (this.#native) {
-			const summary = summarizeSpecRun(this.#native.measurement());
-			text += `\n实际投入（不代表质量提高）：请求 ${summary.requests}；输入 token ${summary.inputTokens ?? "未知"}；输出 token ${summary.outputTokens ?? "未知"}；耗时 ${summary.elapsedMs}ms；费用 ${
+			const measurement = this.#native.measurement();
+			const timing = this.#core?.timing();
+			if (timing) {
+				measurement.plannedDecisionWaitMs = timing.plannedDecisionWaitMs;
+				measurement.executionWaitMs = timing.executionWaitMs;
+			}
+			const summary = summarizeSpecRun(measurement);
+			text += `\n实际投入（不代表质量提高）：请求 ${summary.requests}；输入 token ${summary.inputTokens ?? "未知"}；输出 token ${summary.outputTokens ?? "未知"}；耗时 ${summary.elapsedMs}ms；等待决策 ${summary.plannedDecisionWaitMs ?? "未评估"}ms；执行 ${summary.executionWaitMs ?? "未评估"}ms；质量观测 ${measurement.assessmentComplete ? "已评估" : "未评估"}；费用 ${
 				Object.entries(summary.costs)
 					.map(([currency, amount]) => `${amount} ${currency}`)
 					.join("，") || "未知"
@@ -476,14 +502,38 @@ export class SpecDrivenController {
 			return;
 		await this.#output(text);
 	}
+	#startHeartbeat(): void {
+		this.#stopHeartbeat();
+		this.#heartbeatSince = Date.now();
+		this.#heartbeat = setInterval(() => {
+			void this.#publishHeartbeat().catch(() => {});
+		}, 15_000);
+	}
+	#stopHeartbeat(): void {
+		clearInterval(this.#heartbeat);
+		this.#heartbeat = undefined;
+	}
+	async #publishHeartbeat(): Promise<void> {
+		if (!this.#active || this.#paused || this.#disposed || !this.#core) return;
+		const recipient = this.#core.recipient();
+		// Team discussion already streams ordered progress through onOutput.
+		if (!recipient || recipient.role === "solution") return;
+		const state = this.status();
+		const requests = this.#native?.measurement().requests.length ?? 0;
+		const elapsed = formatHeartbeatElapsed(Date.now() - this.#heartbeatSince);
+		await this.#output(
+			`${roleLabel(recipient.role)} · ${stageLabel(stageForPhase(state.phase))} · 已用时 ${elapsed} · 第 ${requests} 次请求`,
+		);
+	}
 	#bind(phase: string): void {
 		this.#releasePolicy?.();
 		// 阶段变更先撤销全部旧技能授权；程序节点在自己的独立上下文精确加载所需技能。
 		this.#releasePolicy = bindSpecSkillPolicy(this.#host.sessionManager, { phase, allowedSkills: [] });
 	}
 	async #initialize(): Promise<void> {
-		if (!this.#initializing)
-			this.#initializing = (async () => {
+		const pending =
+			this.#initializing ??
+			(this.#initializing = (async () => {
 				const native = await this.#factory({
 					session: this.#host.session,
 					settings: this.#host.settings,
@@ -491,6 +541,9 @@ export class SpecDrivenController {
 					onOutput: async text => {
 						if (!this.#paused && !this.#disposed && this.#core && !this.#core.status().paused)
 							await this.#emit(text);
+					},
+					onRequest: () => {
+						void this.#publishHeartbeat().catch(() => {});
 					},
 				});
 				if (this.#disposed || this.#released) {
@@ -520,8 +573,13 @@ export class SpecDrivenController {
 					},
 				});
 				this.publishObservation();
-			})();
-		await this.#initializing;
+			})());
+		try {
+			await pending;
+		} catch (error) {
+			if (this.#initializing === pending) this.#initializing = undefined;
+			throw error;
+		}
 	}
 	schedule(operation: Operation, interrupt = false, onAdmission?: () => void): string {
 		if (this.#disposed) throw new SpecAdmissionError("流程已释放");
@@ -535,6 +593,7 @@ export class SpecDrivenController {
 		this.#bind("dispatching");
 		const epoch = ++this.#epoch;
 		this.#active = true;
+		this.#startHeartbeat();
 		onAdmission?.();
 		this.publishObservation();
 		let jobId = "";
@@ -578,12 +637,14 @@ export class SpecDrivenController {
 							this.#active = false;
 							this.publishObservation();
 						}
+						if (epoch === this.#epoch) this.#stopHeartbeat();
 						this.#drainMessages();
 					}
 				},
 				{ ownerId: this.#host.session.getAgentId(), suppressDelivery: true },
 			);
 		} catch (error) {
+			this.#stopHeartbeat();
 			this.#active = false;
 			this.#bind(this.status().phase);
 			this.publishObservation();
@@ -594,6 +655,7 @@ export class SpecDrivenController {
 	}
 	pause(): void {
 		this.#messageAbort?.abort();
+		this.#stopHeartbeat();
 		for (const message of this.#messages) {
 			if (message.status === "processing") message.status = "cancelling";
 		}
@@ -623,6 +685,7 @@ export class SpecDrivenController {
 		await this.#release();
 	}
 	async #release(): Promise<void> {
+		this.#stopHeartbeat();
 		this.#releasePolicy?.();
 		this.#releasePolicy = undefined;
 		if (this.#released) return;

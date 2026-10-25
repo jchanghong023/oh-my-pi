@@ -173,6 +173,7 @@ import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../slas
 import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
 import { observeSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
+import { roleLabel, stageForPhase, stageLabel } from "../spec-driven/stages";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
@@ -3187,15 +3188,16 @@ export class InteractiveMode implements InteractiveModeContext {
 					: status.paused
 						? `已暂停：${interaction.blockedReason ?? status.blockedReason ?? "输入仅保留草稿，恢复不自动发送"}`
 						: recipient
-							? `${recipient.role} · ${recipient.actorId} · ${recipient.sessionId}`
+							? `${roleLabel(recipient.role)} · ${observation.active ? "运行中" : "等待你"}`
 							: (interaction.blockedReason ?? "未启动或当前阶段 Agent 尚未准备好，输入保留为草稿");
 				this.setHookWidget("native-dev-input", [`协同开发模式 → ${destination} · /dev help`]);
 			} else {
+				const stage = stageLabel(stageForPhase(status.phase));
 				this.setHookWidget(
 					"native-dev-input",
 					observation.runId
 						? [
-								`后台协同开发：${status.phase}${status.paused ? "（暂停）" : ""}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
+								`后台协同开发：${stage}${status.paused ? "（暂停）" : ""}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
 							]
 						: undefined,
 				);

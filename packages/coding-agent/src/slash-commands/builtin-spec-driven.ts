@@ -1,5 +1,6 @@
 import type { AgentSession } from "../session/agent-session";
 import { getSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
+import { roleLabel, stageForPhase, stageLabel } from "../spec-driven/stages";
 import { reloadTuiPluginState } from "./builtin-marketplace";
 import { clearSubmittedText } from "./helpers/draft";
 import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
@@ -21,6 +22,19 @@ const usages = [
 	["resume", "", "继续本进程内的暂停流程，不自动发送草稿"],
 	["cancel", "", "停止当前工作，保留已有文件并取消流程"],
 ] as const;
+
+type DevUi = NonNullable<SlashCommandRuntime["ui"]> & {
+	editor?: (title: string, prefill?: string, dialogOptions?: { signal?: AbortSignal }) => Promise<string | undefined>;
+};
+type DevHost = Omit<SlashCommandRuntime, "ui"> & {
+	ui?: DevUi;
+	persist?: (text: string) => Promise<void> | void;
+};
+
+async function emitReference(host: DevHost, text: string): Promise<void> {
+	if (host.persist) await host.persist(text);
+	else await host.output(text);
+}
 
 /** Shared policy for local commands; never infer safety from an unknown command's text. */
 
@@ -70,7 +84,7 @@ function invalidDevInput(message: string): Error & { code: "invalid_params" } {
 	return Object.assign(new Error(message), { code: "invalid_params" as const });
 }
 
-async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime): Promise<SlashCommandResult> {
+async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<SlashCommandResult> {
 	// 只移除命令语法分隔符，不压缩用户正文中的空白或换行。
 	const rawArgs = /^\/dev(?:[:\s]([\s\S]*))?$/.exec(command.text)?.[1] ?? command.args;
 	const match = /^\s*(\S+)(?:\s([\s\S]*))?$/.exec(rawArgs);
@@ -97,10 +111,11 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 			controller.setInputMode(mode);
 			const observation = controller.observation();
 			const recipient = observation.interaction.recipient;
+			const stage = stageLabel(stageForPhase(observation.status.phase));
 			await host.output(
 				[
-					`当前输入模式：${mode === "dev" ? "协同开发" : "普通聊天"}；流程阶段：${observation.status.phase}`,
-					`消息去向：${mode === "chat" ? "普通聊天 Agent" : observation.status.paused ? "暂停，输入保留为草稿" : recipient ? `${recipient.role} Agent (${recipient.actorId})` : (observation.interaction.blockedReason ?? "尚未启动，输入保留为需求草稿")}`,
+					`当前输入模式：${mode === "dev" ? "协同开发" : "普通聊天"}；流程阶段：${stage}`,
+					`消息去向：${mode === "chat" ? "普通聊天 Agent" : observation.status.paused ? "暂停，输入保留为草稿" : recipient ? `${roleLabel(recipient.role)} · ${observation.active ? "运行中" : "等待你"}` : (observation.interaction.blockedReason ?? "尚未启动，输入保留为需求草稿")}`,
 					`后台工作：${observation.active ? "仍在运行" : "当前空闲"}；切换输入模式不取消流程。`,
 					"/dev help",
 				].join("\n"),
@@ -118,7 +133,6 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 			if (!text.trim()) throw invalidDevInput(`用法：/dev ${action} ${usage[1]}`);
 			return text;
 		};
-		let jobId: string | undefined;
 		switch (action) {
 			case "help": {
 				exact(0);
@@ -147,7 +161,8 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 						throw invalidDevInput("操作窗口中的阶段或操作版本已过期，请重新打开 /dev help。");
 				};
 				await controller.report();
-				await host.output(
+				await emitReference(
+					host,
 					actions
 						.map(
 							item =>
@@ -174,9 +189,9 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 						assertCurrentAction(chosen);
 						if (change === undefined) return { consumed: true };
 						if (!/^\S+$/.test(change)) throw invalidDevInput("change-id 必须是单个非空标识。");
-						const request = await host.ui.input("需求正文", original.interaction.draft, {
-							signal: host.signal,
-						});
+						const request = host.ui.editor
+							? await host.ui.editor("需求正文", original.interaction.draft, { signal: host.signal })
+							: await host.ui.input("需求正文", original.interaction.draft, { signal: host.signal });
 						if (request === undefined) return { consumed: true };
 						assertCurrentAction(chosen);
 						invocation = `/dev start ${change} ${request}`;
@@ -193,7 +208,7 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 			}
 			case "status":
 				exact(0);
-				await controller.report();
+				await controller.report({ rawPhase: true });
 				return { consumed: true };
 			case "pause":
 				exact(0);
@@ -223,27 +238,27 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 			}
 			case "resume":
 				exact(0);
-				jobId = controller.resume();
+				controller.resume();
 				break;
 			case "start": {
 				const start = /^\s*(\S+)\s+([\s\S]+)$/.exec(text);
 				if (!start || !start[2]!.trim()) throw invalidDevInput("用法：/dev start <change-id> <request>");
-				jobId = controller.schedule(core => core.start(start[2]!, start[1]!));
+				controller.schedule(core => core.start(start[2]!, start[1]!));
 				break;
 			}
 			case "answer": {
 				const answer = requiredText();
-				jobId = controller.schedule(core => core.answer(answer));
+				controller.schedule(core => core.answer(answer));
 				break;
 			}
 			case "confirm-spec": {
 				const [version] = exact(1);
-				jobId = controller.schedule(core => core.confirmSpecification(version!));
+				controller.schedule(core => core.confirmSpecification(version!));
 				break;
 			}
 			case "choose": {
 				const [run, candidate, version] = exact(3);
-				jobId = controller.schedule(core => core.chooseCandidate(run!, candidate!, version!));
+				controller.schedule(core => core.chooseCandidate(run!, candidate!, version!));
 				break;
 			}
 			case "confirm-plan": {
@@ -255,36 +270,39 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 					(values.length === 2 && values[1] !== "--goal")
 				)
 					throw invalidDevInput("用法：/dev confirm-plan <version> [--goal]");
-				jobId = controller.schedule(core =>
+				controller.schedule(core =>
 					core.confirmPlan(values[0]!, { mode: values.length === 2 ? "goal" : "normal" }),
 				);
 				break;
 			}
 			case "accept": {
 				const [version] = exact(1);
-				jobId = controller.schedule(core => core.accept(version!));
+				controller.schedule(core => core.accept(version!));
 				break;
 			}
 			case "repair": {
 				const repair = /^\s*(\S+)\s+([\s\S]+)$/.exec(text);
 				if (!repair || !repair[2]!.trim())
 					throw invalidDevInput("用法：/dev repair <acceptance-version> <修复说明...>");
-				jobId = controller.repair(repair[1]!, repair[2]!);
+				controller.repair(repair[1]!, repair[2]!);
 				break;
 			}
 			case "amend": {
 				const amendment = requiredText();
-				jobId = controller.schedule(core => core.amendRequirements(amendment), true);
+				controller.schedule(core => core.amendRequirements(amendment), true);
 				break;
 			}
 			case "change-solution": {
 				const reason = requiredText();
-				jobId = controller.schedule(core => core.changeSolution(reason), true);
+				controller.schedule(core => core.changeSolution(reason), true);
 				break;
 			}
 		}
+		const status = controller.status();
 		await host.output(
-			`已提交后台任务 ${JSON.stringify({ jobId, command: action, phase: controller.status().phase })}。`,
+			`已提交后台任务：${usages.find(item => item[0] === action)?.[2] ?? action}；当前阶段：${stageLabel(
+				stageForPhase(status.phase),
+			)}。`,
 		);
 		await controller.report();
 		return { consumed: true };
@@ -316,17 +334,20 @@ export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 			const session = ctx.session;
 			const cancellation = new AbortController();
 			const unregister = session.registerSessionChangeCallback(() => cancellation.abort());
-			const host: SlashCommandRuntime = {
+			const host: DevHost = {
 				session,
 				sessionManager: ctx.sessionManager,
 				settings: ctx.settings,
 				cwd: ctx.sessionManager.getCwd(),
-				output: text => ctx.showStatus(text),
+				output: text => ctx.showStatus(text, { toast: false }),
+				persist: text =>
+					ctx.session.appendCustomMessage({ customType: "spec-driven", content: text, display: true }),
 				signal: cancellation.signal,
 				ui: {
 					select: (...args) => ctx.showHookSelector(...args),
 					confirm: (...args) => ctx.showHookConfirm(...args),
 					input: (...args) => ctx.showHookInput(...args),
+					editor: (title, prefill, dialogOptions) => ctx.showHookEditor(title, prefill, dialogOptions),
 				},
 				assertCanActivateMode: () => ctx.assertCanActivateMode("dev"),
 				refreshCommands: () => ctx.refreshSlashCommandState(),

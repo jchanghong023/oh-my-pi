@@ -32,6 +32,14 @@ export interface SpecRunMeasurement {
 	executionWaitMs: number | null;
 	assessmentComplete: boolean;
 }
+/** Positive provider-priced usage is known; absent or zero pricing stays explicitly unknown. */
+export function specRequestCost(value: unknown): { amount: number; currency: string } | null {
+	if (value === null || typeof value !== "object" || !("total" in value)) return null;
+	const total = value.total;
+	if (typeof total !== "number" || !Number.isFinite(total) || total <= 0) return null;
+	return { amount: total, currency: "USD" };
+}
+
 export interface SpecRunSummary {
 	requests: number;
 	inputTokens: number | null;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, vi } from "bun:test";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import {
 	getSpecDrivenController,
@@ -19,7 +19,20 @@ import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 
 function fixture(
 	manager = new AsyncJobManager({}),
-	options: { hold?: Promise<void>; noCandidates?: boolean; sessionManager?: object; runId?: string } = {},
+	options: {
+		hold?: Promise<void>;
+		noCandidates?: boolean;
+		sessionManager?: object;
+		runId?: string;
+		initFailures?: number;
+		ui?: NonNullable<SlashCommandRuntime["ui"]> & {
+			editor?: (
+				title: string,
+				prefill?: string,
+				dialogOptions?: { signal?: AbortSignal },
+			) => Promise<string | undefined>;
+		};
+	} = {},
 ) {
 	const output: string[] = [];
 	const entered = Promise.withResolvers<void>();
@@ -211,33 +224,41 @@ function fixture(
 		sessionManager,
 		settings: {},
 		cwd: "/fixture",
+		ui: options.ui,
 		output: (text: string) => {
 			output.push(text);
 		},
 		refreshCommands() {},
 		async reloadPlugins() {},
 	} as unknown as SlashCommandRuntime;
-	const factory: SpecRuntimeFactory = async () => ({
-		ports,
-		options: { currentModel: "author", members: ["author", "reviewer"], runId: options.runId },
-		async dispose() {
-			disposed++;
-		},
-		measurement: () => ({
-			task: "fixture",
-			codeBaseline: "fixture",
-			modelConfiguration: "fixture",
-			acceptanceCriteria: "fixture",
-			mode: "workflow",
-			startedAt: 1,
-			endedAt: 2,
-			requests: [],
-			observations: [],
-			plannedDecisionWaitMs: null,
-			executionWaitMs: null,
-			assessmentComplete: false,
-		}),
-	});
+	let initFailures = options.initFailures ?? 0;
+	const factory: SpecRuntimeFactory = async () => {
+		if (initFailures > 0) {
+			initFailures--;
+			throw new Error("fixture initialization failed");
+		}
+		return {
+			ports,
+			options: { currentModel: "author", members: ["author", "reviewer"], runId: options.runId },
+			async dispose() {
+				disposed++;
+			},
+			measurement: () => ({
+				task: "fixture",
+				codeBaseline: "fixture",
+				modelConfiguration: "fixture",
+				acceptanceCriteria: "fixture",
+				mode: "workflow",
+				startedAt: 1,
+				endedAt: 2,
+				requests: [],
+				observations: [],
+				plannedDecisionWaitMs: null,
+				executionWaitMs: null,
+				assessmentComplete: false,
+			}),
+		};
+	};
 	const controller = getSpecDrivenController(host, { factory });
 	const command = BUILTIN_SLASH_COMMANDS_INTERNAL.find(item => item.name === "dev")!;
 	const invoke = (args: string) => command.handle!({ name: "dev", args, text: `/dev ${args}` }, host);
@@ -711,6 +732,102 @@ describe("/dev shared command surface", () => {
 		} finally {
 			await f.dispose();
 			await other.dispose();
+		}
+	});
+
+	it("reports the Chinese stage and role without leaking internal actor ids", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("start label request");
+			await f.settle();
+			await f.controller.report();
+			const text = f.transcript.at(-1)!;
+			expect(text).toContain("需求 Agent");
+			expect(text).toContain("协同开发模式：需求");
+			expect(text).not.toContain("fixture-requirements");
+			expect(text).not.toContain("fixture-session-requirements");
+			await f.invoke("status");
+			expect(f.transcript.at(-1)).toContain("阶段键：awaiting-specification");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("publishes a transient heartbeat during a long requirements turn", async () => {
+		const hold = Promise.withResolvers<void>();
+		const f = fixture(undefined, { hold: hold.promise });
+		vi.useFakeTimers();
+		try {
+			await f.invoke("start heartbeat request");
+			await f.entered;
+			const history = f.transcript.length;
+			vi.advanceTimersByTime(15_000);
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(f.output.join("\n")).toContain("次请求");
+			expect(f.transcript.length).toBe(history);
+		} finally {
+			hold.resolve();
+			await f.dispose();
+			vi.useRealTimers();
+		}
+	});
+
+	it("uses the multiline editor for the start request body", async () => {
+		const f = fixture(undefined, {
+			ui: {
+				select: async (_title, labels) =>
+					labels.find((label): label is string => typeof label === "string" && label.includes("开始新流程")),
+				confirm: async () => true,
+				input: async title => (title.includes("change-id") ? "multiline-change" : undefined),
+				editor: async () => "第一行需求\n第二行需求",
+			},
+		});
+		try {
+			await f.invoke("help");
+			await f.settle();
+			expect(f.requests.at(-1)).toBe("第一行需求\n第二行需求");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("retries initialization after a failed factory instead of reusing the rejection", async () => {
+		const f = fixture(undefined, { initFailures: 1 });
+		try {
+			await f.invoke("start retry-init request");
+			await f.settle().catch(() => {});
+			expect(f.controller.status().blockedReason).toContain("fixture initialization failed");
+			await f.invoke("start retry-init request");
+			await f.settle();
+			expect(f.controller.status().phase).toBe("awaiting-specification");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("keeps a processing message cancelling when the cancellation barrier itself fails", async () => {
+		const f = fixture();
+		const entered = Promise.withResolvers<void>();
+		f.ports.conversation!.respond = async (_input, context) => {
+			entered.resolve();
+			const aborted = Promise.withResolvers<void>();
+			context.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+			await aborted.promise;
+			throw new Error("barrier failed");
+		};
+		try {
+			await f.invoke("start unconfirmed-cancel request");
+			await f.settle();
+			const receipt = await f.controller.submitText("cancel this message");
+			if (receipt.kind !== "queued") throw new Error("Expected native queued receipt");
+			await entered.promise;
+			await f.controller.cancelMessage(receipt.messageId);
+			const message = f.controller.observation().interaction.messages[0];
+			expect(message?.status).toBe("cancelling");
+			expect(message?.error).toContain("取消未确认");
+		} finally {
+			await f.dispose();
 		}
 	});
 

@@ -9,6 +9,7 @@ import {
 	peekSpecDrivenController,
 	type SpecControllerObservation,
 } from "../../spec-driven/controller";
+import { stageForPhase } from "../../spec-driven/stages";
 import { writeFileAtomically } from "../../utils/atomic-file";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
@@ -58,14 +59,6 @@ type Owner = {
 };
 const terminal = (phase: string) => phase === "completed" || phase === "cancelled";
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-function stage(phase: string): OmpSpecDetails["stage"] {
-	if (["team", "awaiting-choice"].includes(phase)) return "solution";
-	if (["planning", "plan-review", "awaiting-plan"].includes(phase)) return "plan";
-	if (phase === "executing") return "execution";
-	if (["validating", "overall-review", "awaiting-acceptance"].includes(phase)) return "acceptance";
-	if (["closing", "completed", "cancelled"].includes(phase)) return "closure";
-	return "requirements";
-}
 
 /** Read-only native observations. This class never creates or restores a controller. */
 export class OmpSpecDrivenBridge {
@@ -362,7 +355,7 @@ export class OmpSpecDrivenBridge {
 		const details: OmpSpecDetails = {
 			changeId: status.changeId,
 			phase: status.phase,
-			stage: stage(status.phase),
+			stage: stageForPhase(status.phase),
 			state,
 			explanation:
 				status.blockedReason ??

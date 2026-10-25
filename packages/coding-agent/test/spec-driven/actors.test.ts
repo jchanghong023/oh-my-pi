@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -13,6 +14,7 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "../../src/session/context-settings";
 import { createSpecActor } from "../../src/spec-driven/actors";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { CustomTool } from "../../src/sdk";
 
 const schema = {
@@ -257,6 +259,44 @@ test("actor cancellation waits for an in-flight native tool to actually settle",
 	expect(result.value).toBeUndefined();
 	expect(toolStopped).toBe(true);
 	expect(fixture.actor.session.isStreaming).toBe(false);
+}, 120_000);
+
+test("actor cancellation reaches an idle child agent's background job", async () => {
+	await using fixture = await consumer();
+	const jobs = fixture.actor.session.asyncJobManager;
+	if (!jobs) throw new Error("Actor fixture requires native async jobs");
+	const childId = `actor-child-${crypto.randomUUID()}`;
+	const childRef = AgentRegistry.global().register({
+		id: childId,
+		displayName: "idle child",
+		kind: "sub",
+		parentId: fixture.actor.id,
+		session: null,
+	});
+	const started = Promise.withResolvers<void>();
+	const jobId = jobs.register(
+		"task",
+		"idle child background work",
+		async ({ signal }) => {
+			started.resolve();
+			const aborted = Promise.withResolvers<void>();
+			signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+			await aborted.promise;
+			return "stopped";
+		},
+		{ ownerId: childId },
+	);
+	try {
+		await started.promise;
+		fixture.onRequest(() => fixture.controller.abort());
+		const request = fixture.request().catch(error => error);
+		await request;
+		expect(jobs.getJob(jobId)?.status).toBe("cancelled");
+	} finally {
+		jobs.cancelAll({ ownerId: childId });
+		await jobs.waitForOwnerJobs(childId).catch(() => {});
+		AgentRegistry.global().unregister(childId, childRef);
+	}
 }, 120_000);
 
 test("actor cancellation waits for owned background work without cancelling an unrelated owner", async () => {
