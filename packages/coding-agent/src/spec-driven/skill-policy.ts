@@ -2,8 +2,49 @@ import * as path from "node:path";
 import type { Skill } from "../extensibility/skills";
 import type { ResolveContext } from "../internal-urls/types";
 import type { SessionEntry } from "../session/session-entries";
+import { resourceManifest } from "./vendor/archive.generated";
 
 export const SPEC_DRIVEN_SKILL_PROVIDER = "spec-driven";
+
+/** The only bundled Superpowers resources admitted to the ordinary skill catalog. */
+export function isOrdinarySuperpowersSkill(name: string): boolean {
+	return (
+		name === "brainstorming" ||
+		name === "systematic-debugging" ||
+		name === "verification-before-completion" ||
+		name === "writing-skills"
+	);
+}
+
+/** Reserved bundled names that ordinary command hosts must not send as plain prompts. */
+export function isDevOnlySuperpowersSkill(name: string): boolean {
+	return (
+		!isOrdinarySuperpowersSkill(name) &&
+		resourceManifest.skills.some(skill => skill.source === "superpowers" && skill.name === name)
+	);
+}
+
+type InvocationSkill = Pick<Skill, "name"> & Partial<Pick<Skill, "source" | "_source" | "filePath">>;
+
+function requiresNativeGrant(skill: InvocationSkill): boolean {
+	const bundled =
+		skill.source === "bundled-superpowers" ||
+		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER && skill._source.pluginName === "superpowers");
+	return bundled && !isOrdinarySuperpowersSkill(skill.name.split("/").at(-1)!);
+}
+
+function checkPhase(skill: Pick<Skill, "name">, state?: ScopeState): void {
+	if (state?.policy && !state.policy.allowedSkills.includes(skill.name)) {
+		throw new SkillAccessDeniedError(skill.name, `not allowed during ${state.policy.phase}`);
+	}
+}
+
+function hasExactGrant(skill: InvocationSkill, state?: ScopeState): boolean {
+	if (!state || !skill.filePath) return false;
+	const filePath = path.resolve(skill.filePath);
+	for (const grant of state.grants) if (grant.name === skill.name && grant.filePath === filePath) return true;
+	return false;
+}
 
 export class SkillAccessDeniedError extends Error {
 	constructor(name: string, reason: string) {
@@ -54,8 +95,11 @@ export function clearSpecSkillAccess(scope: object): void {
 
 /** Native controller capability, not a model tool. Dispose when its autoload/run ends. */
 export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
-	checkSkillInvocation(skill, { scope });
 	const state = stateFor(scope);
+	checkPhase(skill, state);
+	if (requiresNativeGrant(skill) && !state.policy) {
+		throw new SkillAccessDeniedError(skill.name, "native phase binding required");
+	}
 	const grant = { ...skill, filePath: path.resolve(skill.filePath) };
 	state.grants.add(grant);
 	return () => {
@@ -67,7 +111,9 @@ export function grantSpecSkillAccess(scope: object, skill: Skill): () => void {
 export function getGrantedSpecSkill(name: string, context?: SkillAccessContext): Readonly<Skill> | undefined {
 	const state = context?.scope ? scopes.get(context.scope) : undefined;
 	if (!state) return undefined;
-	for (const grant of state.grants) if (grant.name === name) return grant;
+	for (const grant of state.grants) {
+		if (grant.name === name && (!requiresNativeGrant(grant) || state.policy)) return grant;
+	}
 	return undefined;
 }
 
@@ -90,10 +136,11 @@ export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "h
 }
 
 /** Run before reading/injecting any skill, including ordinary single-skill commands. */
-export function checkSkillInvocation(skill: Pick<Skill, "name">, context?: SkillAccessContext): void {
-	const policy = context?.scope ? scopes.get(context.scope)?.policy : undefined;
-	if (policy && !policy.allowedSkills.includes(skill.name)) {
-		throw new SkillAccessDeniedError(skill.name, `not allowed during ${policy.phase}`);
+export function checkSkillInvocation(skill: InvocationSkill, context?: SkillAccessContext): void {
+	const state = context?.scope ? scopes.get(context.scope) : undefined;
+	checkPhase(skill, state);
+	if (requiresNativeGrant(skill) && (!state?.policy || !hasExactGrant(skill, state))) {
+		throw new SkillAccessDeniedError(skill.name, "native phase binding and exact resource grant required");
 	}
 }
 
@@ -117,10 +164,7 @@ export function checkSkillReadAccess(skill: Skill, context?: SkillAccessContext)
 	checkSkillInvocation(skill, context);
 	if (!isExplicitOnlySkill(skill)) return;
 	const state = context?.scope ? scopes.get(context.scope) : undefined;
-	if (state) {
-		const filePath = path.resolve(skill.filePath);
-		for (const grant of state.grants) if (grant.name === skill.name && grant.filePath === filePath) return;
-	}
+	if (hasExactGrant(skill, state)) return;
 	if (hasBranchInvocation(skill, context)) return;
 	throw new SkillAccessDeniedError(skill.name, "explicit current-session invocation required");
 }

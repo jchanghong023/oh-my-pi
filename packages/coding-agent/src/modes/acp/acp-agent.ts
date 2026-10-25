@@ -57,6 +57,7 @@ import {
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
 import { buildSkillPromptMessage, parseSkillInvocation } from "../../extensibility/skills";
+import { isDevOnlySuperpowersSkill, SkillAccessDeniedError } from "../../spec-driven/skill-policy";
 import { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
 import type { MCPServerConfig } from "../../mcp/types";
@@ -1309,6 +1310,9 @@ export class AcpAgent implements Agent {
 		}
 		const skill = record.session.skills.find(candidate => candidate.name === parsed.name);
 		if (!skill) {
+			if (isDevOnlySuperpowersSkill(parsed.name)) {
+				throw new SkillAccessDeniedError(parsed.name, "only available to the native /dev workflow");
+			}
 			return false;
 		}
 		const built = await buildSkillPromptMessage(skill, parsed, "user", {

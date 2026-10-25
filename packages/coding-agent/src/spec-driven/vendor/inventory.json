@@ -12062,7 +12062,7 @@
     },
     {
       "path": "superpowers/skills/executing-plans/SKILL.md",
-      "sha256": "2f544fce4041a0d07fdcdf59f71911b808aa242e2dbf66d801faa2ce2e952fcf",
+      "sha256": "f8a6f2b2f3fcee1576f0e27f488ea92f012db9ecacc177df81c09f9f79565b5c",
       "executable": false
     },
     {
@@ -12077,7 +12077,7 @@
     },
     {
       "path": "superpowers/skills/finishing-a-development-branch/SKILL.md",
-      "sha256": "89c21a973fd4c0692376048c421f03ae72d7cd26ec87b049fd931bff570ac108",
+      "sha256": "37a843b32aa4ba748104b06330aef5c711f238cb78e99ea6a2be7e55ce16ed0a",
       "executable": false
     },
     {
@@ -12087,7 +12087,7 @@
     },
     {
       "path": "superpowers/skills/requesting-code-review/SKILL.md",
-      "sha256": "2ec369dc58c807399a9838b83563d56f1018ffa17f9d8bee92656a2c4a9d1278",
+      "sha256": "0173de3378421f9268db5bdf4573c97092489a0d9b8045d6501bb04de03fcb6f",
       "executable": false
     },
     {
@@ -12097,7 +12097,7 @@
     },
     {
       "path": "superpowers/skills/subagent-driven-development/SKILL.md",
-      "sha256": "458386cfee697fea103e2d8c561f74123725b0d433b6e81dd739e6c4e4066a6d",
+      "sha256": "063013ac3159a6354a68a831a8ab5cede31bcc6ef3bb988162ca1474678d6f51",
       "executable": false
     },
     {
@@ -12222,7 +12222,7 @@
     },
     {
       "path": "superpowers/skills/test-driven-development/SKILL.md",
-      "sha256": "b2c0cc7156aec4b703c47adb7b436e5f782b7e0afd5a7b5197b1d07f9e253916",
+      "sha256": "fb79984222f67297724cc7101dce5d37b0dd1b728ee1a8fa11b923ed58b52a7b",
       "executable": false
     },
     {
@@ -12232,7 +12232,7 @@
     },
     {
       "path": "superpowers/skills/using-git-worktrees/SKILL.md",
-      "sha256": "0ddd771f380419f0e4ead669014252a89138e12ab1f8a2ea5fd41d8069ef4f85",
+      "sha256": "93076242c5b91b58692b74a2309df5bd319a38ec27b3f2a1440d706c1743653f",
       "executable": false
     },
     {
@@ -12282,7 +12282,7 @@
     },
     {
       "path": "superpowers/skills/writing-plans/SKILL.md",
-      "sha256": "dd87fd512a1409a692c2677fe750eaeab0671de08b10f35f66a0dfe8d6943dee",
+      "sha256": "12404dc12ce196b46498ffbe72d2f1ab07955c594338fd9818568bdc1fdd0769",
       "executable": false
     },
     {

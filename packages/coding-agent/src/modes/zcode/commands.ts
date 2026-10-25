@@ -17,6 +17,7 @@ import type { PromptOptions } from "../../session/agent-session-types";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../../slash-commands/builtin-spec-driven";
 import { peekSpecDrivenController } from "../../spec-driven/controller";
+import { isDevOnlySuperpowersSkill, SkillAccessDeniedError } from "../../spec-driven/skill-policy";
 import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { TeamConfigService } from "../../team/config";
 import type { TeamConfigPreviewInput, TeamConfigSaveInput } from "../../team/config-types";
@@ -319,6 +320,12 @@ export class ZCodeCommandHost {
 		const skill =
 			invocation &&
 			this.session.skills.find(candidate => getSkillSlashCommandName(candidate) === `skill:${invocation.name}`);
+		if (invocation && !skill && isDevOnlySuperpowersSkill(invocation.name)) {
+			throw Object.assign(
+				new SkillAccessDeniedError(invocation.name, "only available to the native /dev workflow"),
+				{ code: "invalid_params" },
+			);
+		}
 		if (skill && invocation && this.session.skillsSettings?.enableSkillCommands) {
 			const built = await buildSkillPromptMessage(skill, invocation, "user", {
 				scope: this.session.sessionManager,

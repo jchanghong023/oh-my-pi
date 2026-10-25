@@ -174,8 +174,9 @@ function hidden(content: string): string {
 function adaptSuperpowersSkill(name: string, raw: Uint8Array): Uint8Array {
 	if (name === "verification-before-completion" || name === "systematic-debugging") return raw;
 	const content = Buffer.from(raw).toString("utf8");
+	if (name !== "writing-skills") return Buffer.from(hidden(content));
 	const description = superpowersDescriptions[name];
-	if (description === undefined) return Buffer.from(hidden(content));
+	if (description === undefined) throw new Error("Missing Superpowers writing-skills description");
 	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/u.exec(content);
 	if (!frontmatter) throw new Error("Upstream skill is missing YAML frontmatter");
 	const metadata = parseYaml(frontmatter[1]!) as Record<string, unknown>;

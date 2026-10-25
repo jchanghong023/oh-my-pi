@@ -1409,15 +1409,11 @@ describe("spec-driven actual OMP public entry", () => {
 			const defaultSkills: Record<string, true> = {
 				"verification-before-completion": true,
 				"systematic-debugging": true,
-				"writing-plans": true,
-				"subagent-driven-development": true,
-				"executing-plans": true,
-				"using-git-worktrees": true,
-				"test-driven-development": true,
-				"requesting-code-review": true,
-				"finishing-a-development-branch": true,
 				"writing-skills": true,
 			};
+			const removedSkills = inventory.skills.filter(
+				entry => entry.source === "superpowers" && entry.name !== "brainstorming" && !defaultSkills[entry.name],
+			);
 			const ordinary = await peer.create(config.cwd);
 			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
 			await peer.next(
@@ -1439,6 +1435,10 @@ describe("spec-driven actual OMP public entry", () => {
 			const resourceMetadata = new Map<string, { name: string; description: string }>();
 			for (const entry of inventory.skills) {
 				const skill = catalog.skills.find(item => item.name === entry.name);
+				if (removedSkills.includes(entry)) {
+					expect(skill).toBeUndefined();
+					continue;
+				}
 				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);
 				const canonical = await fs.realpath(skill.path);
 				expect(path.relative(config.root, canonical).startsWith("..")).toBe(false);
@@ -1460,15 +1460,39 @@ describe("spec-driven actual OMP public entry", () => {
 				});
 			}
 			for (const entry of inventory.skills) {
+				if (removedSkills.includes(entry)) {
+					const session = await peer.create(config.cwd);
+					const requestStart = provider.requests.length;
+					const before = v4ConversationRowsRangeResultSchema.parse(
+						await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 100 }),
+					);
+					const response = await peer.request("v4/command", {
+						commandId: crypto.randomUUID(),
+						clientId: "omp-spec-acceptance",
+						sessionId: session,
+						type: "sendText",
+						payload: { text: `/skill:${entry.name} ${MARKER} must not start a model` },
+						...(COMMANDS_REQUIRING_BASE_REVISION.has("sendText") ? { baseRevision: before.atRevision } : {}),
+						issuedAt: Date.now(),
+					});
+					expect(response).toMatchObject({ status: "rejected" });
+					expect(isRecord(response) ? response.message : undefined).toContain(entry.name);
+					const after = v4ConversationRowsRangeResultSchema.parse(
+						await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 100 }),
+					);
+					expect(after.rows.some(row => row.kind === "assistantText" && row.text.includes(entry.name))).toBe(true);
+					expect(provider.requests.length).toBe(requestStart);
+					continue;
+				}
 				const session = await peer.create(config.cwd);
 				const requestStart = provider.requests.length;
 				const selectedPath = `skill://${entry.name}:raw`;
-				const allowedPaths = entry.name === "brainstorming" ? ["skill://writing-plans:raw"] : [];
+				const allowedPaths: string[] = [];
 				const others = inventory.skills.filter(other => other.name !== entry.name && !defaultSkills[other.name]);
 				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
 				since = await peer.send(
 					session,
-					`${defaultSkills[entry.name] ? "" : `/skill:${entry.name} `}${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, allowedPaths, deniedPaths })}`,
+					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, allowedPaths, deniedPaths })}`,
 				);
 				await peer.next(
 					frame =>
@@ -1526,15 +1550,11 @@ describe("spec-driven actual OMP public entry", () => {
 				// or a copied body, establish that the real package read succeeded.
 				expect(selected.frontmatter.name).toBe(resourceMetadata.get(entry.name)!.name);
 				expect(typeof selected.frontmatter.description).toBe("string");
-				for (const target of allowedPaths) {
-					const dependency = parseFrontmatter(readResult(target), { source: target, repair: false, level: "off" });
-					expect(dependency.frontmatter.name).toBe("writing-plans");
-				}
 				const denied = readResult(deniedPaths.join(";"));
 				const context = completed.messages.map(message => contentText(message.content)).join("\n");
 				for (const other of others) {
 					expect(denied).toContain(`Skill access denied: ${other.name}`);
-					const description = resourceMetadata.get(other.name)!.description;
+					const description = resourceMetadata.get(other.name)?.description;
 					if (typeof description === "string") expect(context).not.toContain(description);
 				}
 			}

@@ -99,21 +99,6 @@ describe("pinned upstream resources", () => {
 		expect(resources.manifest.skills.some(entry => entry.source === "superpowers")).toBe(true);
 		for (const entry of resources.manifest.skills) {
 			const skill = await loadSpecDrivenSkill(entry.source, entry.name);
-			const ordinarilyVisible =
-				entry.source === "superpowers" &&
-				[
-					"verification-before-completion",
-					"systematic-debugging",
-					"writing-plans",
-					"subagent-driven-development",
-					"executing-plans",
-					"using-git-worktrees",
-					"test-driven-development",
-					"requesting-code-review",
-					"finishing-a-development-branch",
-					"writing-skills",
-				].includes(entry.name);
-			expect(skill.hide).toBe(!ordinarilyVisible);
 			if (entry.source === "superpowers") expect(skill.containRoot).toBe(resources.superpowersRoot);
 		}
 		for (const file of resources.manifest.files) {

@@ -3,7 +3,7 @@ import { registerProvider } from "../capability";
 import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { ensureSpecDrivenResources } from "../spec-driven/resources";
-import { SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
+import { isOrdinarySuperpowersSkill, SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { scanSkillsFromDir } from "./helpers";
 
 /** Low-priority builtins use the ordinary catalog collision rules; native autoload bypasses that catalog. */
@@ -12,6 +12,7 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 	const items: Skill[] = [];
 	const warnings: string[] = [];
 	for (const entry of resources.manifest.skills) {
+		if (entry.source === "superpowers" && !isOrdinarySuperpowersSkill(entry.name)) continue;
 		const filePath = path.resolve(resources.root, entry.path);
 		const result = await scanSkillsFromDir(ctx, {
 			dir: path.dirname(filePath),

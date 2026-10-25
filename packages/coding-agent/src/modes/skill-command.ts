@@ -2,6 +2,7 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import { buildSkillPromptMessage, getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
+import { isDevOnlySuperpowersSkill, SkillAccessDeniedError } from "../spec-driven/skill-policy";
 import type { InteractiveModeContext } from "./types";
 
 type SkillCommandHost = Pick<
@@ -56,7 +57,9 @@ export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolea
 	if (isJchToolsAgentModel(ctx.session.model)) return false;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return false;
-	return ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name }));
+	return (
+		ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name })) || isDevOnlySuperpowersSkill(parsed.name)
+	);
 }
 
 /** Build the user-attributed custom message for a registered `/skill:<name>` command. */
@@ -70,7 +73,12 @@ export async function buildSkillCommandPrompt(
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return undefined;
 	const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));
-	if (!skill) return undefined;
+	if (!skill) {
+		if (isDevOnlySuperpowersSkill(parsed.name)) {
+			throw new SkillAccessDeniedError(parsed.name, "only available to the native /dev workflow");
+		}
+		return undefined;
+	}
 
 	const built = await buildSkillPromptMessage(skill, parsed, "user", {
 		scope: ctx.session.sessionManager,
