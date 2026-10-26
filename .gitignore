@@ -47,6 +47,12 @@ tui-debug.log
 coverage/
 .nyc_output/
 packages/ai/test/.temp-images/
+# tui-test leaves <session>-report-tui-<id>/ (isolated HOME, Bun install cache,
+# app logs) beside the run cwd. These are local artifacts: declaring them as
+# source makes every gate run hash/copy them and invalidates unrelated tests.
+*-report-tui-*/
+# Cached Bun baseline runtimes downloaded by local builds (96 MiB+).
+/.bun-cache/
 
 # Project specific
 !.omp/

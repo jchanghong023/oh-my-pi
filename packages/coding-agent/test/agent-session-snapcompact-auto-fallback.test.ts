@@ -232,7 +232,10 @@ describe("AgentSession auto-snapcompact local-blocker fallback", () => {
 		await session.waitForIdle();
 
 		expect(result).toEqual({ action: "snapcompact", errorMessage: undefined });
-		expect(actions).toEqual(["remote", "snapcompact"]);
+		// Default order is remote -> handoff -> snapcompact (model-and-skill-discovery),
+		// so the failed server compaction first tries handoff; the mocked agent
+		// prompt yields no handoff document and maintenance advances to snapcompact.
+		expect(actions).toEqual(["remote", "handoff", "snapcompact"]);
 		expect(harness.failures.some(message => message.includes("server compaction unavailable"))).toBe(true);
 		const compaction = harness.sessionManager.getBranch().findLast(entry => entry.type === "compaction");
 		if (compaction?.type !== "compaction") throw new Error("Expected committed snapcompact fallback");
