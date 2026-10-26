@@ -41,6 +41,16 @@ OMP MUST 按单层目录发现及优先级加载；禁用时执行侧不扫描�
 - **WHEN** 设置有效共享技能根或禁用该来源
 - **THEN** 按单层目录发现及优先级加载；禁用时执行侧不扫描，管理侧仍可重新启用
 
+### Requirement: Codex GPT-6 Luna 默认上下文窗口
+
+OMP MUST 将 `openai-codex/gpt-6-luna`（含 `-wm` 路由）的默认上下文窗口设为 500000；扩展上下文与显式覆盖仍按原优先级生效。
+
+#### Scenario: 默认窗口与扩展窗口
+
+- **WHEN** 用户选择 `openai-codex/gpt-6-luna` 且未显式覆盖其上下文窗口
+- **THEN** 默认窗口为 500000；开启扩展上下文时使用服务端上报的 872000 上限，关闭时回到 500000。
+- **AND** 其他 provider 的同名模型、`gpt-5.6-luna` 及 `maxTokens` 不变。
+
 ### Requirement: Codex 压缩默认模型
 
 OMP MUST 默认选择规定的 Codex 低思考模型；显式配置不被替换。

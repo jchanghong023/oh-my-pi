@@ -16,6 +16,7 @@
 
 ### Changed
 
+- `openai-codex/gpt-6-luna` and `openai-codex/gpt-6-luna-wm` now default to a 500K context window; extended context still reaches the 872K server maximum, and other Luna routes are unchanged.
 - llama.cpp login instructions now list both default local base URLs (`http://127.0.0.1:8080`, then `http://127.0.0.1:9931`) ([#16675](https://github.com/can1357/oh-my-pi/pull/16675) by [@bartbroere](https://github.com/bartbroere))
 
 ### Fixed

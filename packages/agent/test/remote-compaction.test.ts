@@ -1573,8 +1573,11 @@ describe("Responses Lite remote compaction", () => {
 			const model = makeCodexLiteModel({
 				id: "gpt-6-luna",
 				useResponsesLite: responsesLite,
-				contextWindow: 20_000,
 			});
+			// The catalog pins openai-codex/gpt-6-luna to its 500K default with a
+			// limits-patch, so a spec-level window loses. Explicit overrides land
+			// after building; shrink the window here so the kept tail cannot fit.
+			model.contextWindow = 20_000;
 			const preparation: CompactionPreparation = {
 				firstKeptEntryId: "kept-1",
 				lastSummarizedEntryId: "summarized-last",

@@ -147,6 +147,11 @@ provider "openai-codex" {
 			cache-read 0.01
 			cache-write 0
 		}
+		// Fork: Luna uses the same 500K default window as GPT-6.1 Sol; extended
+		// context still widens it to the advertised 872K maximum.
+		limits-patch {
+			context-window 500000
+		}
 	}
 	class "openai" {
 		revision ">=5.3 <5.7" {

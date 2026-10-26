@@ -365,6 +365,29 @@ describe("Codex model discovery", () => {
 		});
 	});
 
+	it("defaults Codex GPT-6 Luna to the 500K window", async () => {
+		const fetchFn: typeof fetch = Object.assign(
+			async () =>
+				Response.json({
+					// Discovery may still report the pre-fork 272K default.
+					models: ["gpt-6-luna", "gpt-6-luna-wm"].map(slug => ({
+						slug,
+						context_window: 272_000,
+						max_context_window: 872_000,
+					})),
+				}),
+			{ preconnect() {} },
+		);
+		const result = await fetchCodexModels({ accessToken: "test-token", fetchFn });
+		const windows = Object.fromEntries(
+			(result?.models ?? []).map(model => [model.id, buildModel(model).contextWindow]),
+		);
+		expect(windows).toMatchObject({
+			"gpt-6-luna": 500_000,
+			"gpt-6-luna-wm": 500_000,
+		});
+	});
+
 	it("floors stale reported windows for GPT-5.6 luna/sol/terra and honors reports above the floor", async () => {
 		const fetchFn: typeof fetch = Object.assign(
 			async () =>
