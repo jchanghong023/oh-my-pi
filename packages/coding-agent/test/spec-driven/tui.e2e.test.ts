@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { DocsService } from "../../src/docs/service";
 import {
 	CHANGE_ID,
 	createProviderFixture,
@@ -36,6 +37,20 @@ async function withTui(
 	const agentDir = root.join("config", "agent");
 	const temp = root.join("tmp");
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
+	if (scenario.wikiQuery) {
+		const knowledge = root.join("knowledge");
+		await Bun.write(
+			path.join(knowledge, "policy.md"),
+			`# 企业规范\n${scenario.wikiQuery}：保留姓名内部空白，不添加远程服务。\n`,
+		);
+		const service = new DocsService({ agentDir, cwd });
+		try {
+			await service.init(knowledge, "company-policy");
+		} finally {
+			await service.close();
+		}
+		await fs.rm(knowledge, { recursive: true });
+	}
 	const env = {
 		...process.env,
 		OMP_CONFIG_ROOT: root.join("config"),
@@ -49,6 +64,10 @@ async function withTui(
 		TMP: temp,
 		OMP_OFFLINE: "0",
 		PI_NO_TITLE: "1",
+		// The gate marks every bun-test child as a test runtime, which disables
+		// production behavior (network/model discovery, persistent caches). This
+		// harness drives the real CLI on tui-test's PTY, so launch it as production.
+		PI_TEST_RUNTIME: "",
 		NO_PROXY: "127.0.0.1,localhost",
 		OPENSPEC_TELEMETRY: "0",
 		DO_NOT_TRACK: "1",
@@ -140,11 +159,19 @@ async function withTui(
 test.skipIf(!tuiTest)(
 	"TUI four-stage decisions preserve drafts and nonapproval, then accept real delivery",
 	async () => {
-		await withTui({}, async ({ cwd, provider, tui, chooseFirst }) => {
+		await withTui({ wikiQuery: "stagewikibeacon" }, async ({ cwd, provider, tui, chooseFirst }) => {
 			await tui("submit", "/dev");
 			await tui("expect", "text", "尚未启动", "--timeout", "30000");
 			await tui("submit", `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
 			await tui("expect", "text", "确认需求并进入方案", "--timeout", "30000");
+			const requirementsRequest = provider.requests.findLast(
+				request => rolePayload(request)?.specDrivenRole === "requirements",
+			)!;
+			expect(
+				requirementsRequest.messages.some(
+					message => message.role === "tool" && contentText(message.content).includes("保留姓名内部空白"),
+				),
+			).toBe(true);
 			expect(provider.requests.map(rolePayload).some(payload => payload?.specDrivenRole === "solution")).toBe(false);
 			await chooseFirst("确认需求并进入方案");
 			await tui("expect", "text", "协同开发 · 方案", "--timeout", "30000");
@@ -152,6 +179,14 @@ test.skipIf(!tuiTest)(
 			const solution = provider.requests.map(rolePayload).find(payload => payload?.specDrivenRole === "solution");
 			const solutionPath = (solution!.input.outputPaths as string[])[0]!;
 			expect((await Bun.file(path.join(cwd, solutionPath)).json()).candidates).toHaveLength(2);
+			const solutionRequest = provider.requests.findLast(
+				request => rolePayload(request)?.specDrivenRole === "solution",
+			)!;
+			expect(
+				solutionRequest.messages.some(
+					message => message.role === "tool" && contentText(message.content).includes("保留姓名内部空白"),
+				),
+			).toBe(true);
 			// Escape, resize, and an unsubmitted draft cannot select or approve.
 			await tui("key", "press", "Escape");
 			await tui("resize", "100", "28");

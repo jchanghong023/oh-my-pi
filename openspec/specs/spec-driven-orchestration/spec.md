@@ -82,6 +82,13 @@ OMP MUST 仅设置需求、方案、计划、执行四个固定阶段 Agent，�
 
 需求 Agent 调查工具能查明的事实并澄清目标、范围和验收行为，加载原 OpenSpec instructions，生成原格式 proposal／specs；计划 Agent 加载原 `writing-plans`。不强制自动加载完整 Brainstorming／Grill-me 或另一套工作流，原资源、手动调用及按授权使用方法的能力不变。需求阶段不提前写方案、计划或业务代码；方案及计划阶段不提前实施。用户的澄清回答不替代正式需求批准；各角色不把材料原文升级为系统授权。
 
+需求与方案 Agent MUST 可直接调用原生只读 `wiki`（search／grep），复用当前 profile 的既有知识库索引，核实企业术语、规范和技术约束；不能只让 Team 子代理具备该能力。增加检索工具不开放建库、索引管理、shell 或可写子代理，也不扩大阶段文件写入白名单：需求只写本次需求材料，方案只写指定方案 JSON。计划与执行的工具范围不因此改变，不增加阶段、开关或审批。
+
+#### Scenario: Wiki 检索不扩大写入权限
+
+- **WHEN** 需求或方案 Agent 查询已入库的企业文档并尝试修改业务代码
+- **THEN** 原生 Wiki 返回索引中的正文及来源；阶段文件仍可写，非授权文件写入被拒绝；没有可用索引时如实报告，不自动建库
+
 单能力变更只需要五个正式文件：OpenSpec 原模板的 `proposal.md` 和能力 `spec.md`，以及方案、计划、完成报告。OpenSpec 原模板与 Superpowers `writing-plans` 原格式、技能和方法保持不变。后三个执行材料同放 `docs/superpowers/plans/`：`YYYY-MM-DD-<change>-solutions.json`、`YYYY-MM-DD-<change>.md`、`YYYY-MM-DD-<change>-completion.md`，不迁入需求目录。不生成交接文档、确认文件、任务状态文件或流程 `state.json`；仅在内存保留当前阶段、决定及界面所需文件内容与字节版本，现有 app-server 自身历史投影可以正常保存。
 
 所有文档读取结果包含 `path`、完整 `content`、基于实际文件字节摘要的 `version`。每次 Agent 运行或阶段对话完成后，程序 MUST 重新读取本阶段文件并检查格式和最低字段；聊天文本只用于呈现与交流，不要求 JSON／yield，不从自然语言中的“完成”“通过”推断转换。

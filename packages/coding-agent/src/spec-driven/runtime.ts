@@ -134,7 +134,14 @@ export async function createSpecDrivenRuntime(args: {
 					hasUI: false,
 					toolNames: executor
 						? ["read", "grep", "glob", "write", "edit", "bash", "task"]
-						: ["read", "grep", "glob", "write", "edit"],
+						: [
+								"read",
+								"grep",
+								"glob",
+								"write",
+								"edit",
+								...(role === "requirements" || role === "solution" ? ["wiki"] : []),
+							],
 					restrictToolNames: true,
 					enableMCP: false,
 					enableLsp: false,

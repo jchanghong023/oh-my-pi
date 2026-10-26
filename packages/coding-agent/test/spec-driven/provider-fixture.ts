@@ -45,6 +45,7 @@ export type FixtureRole = "requirements" | "solution" | "planner" | "executor";
 export interface ProviderScenario {
 	requirementsQuestion?: string;
 	authFailureOnce?: boolean;
+	wikiQuery?: string;
 	fileFailure?: { role: FixtureRole; kind: "missing" | "malformed" | "unknown" };
 }
 export function contentText(content: unknown): string {
@@ -245,6 +246,12 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 	)
 		return { text: options.requirementsQuestion };
 	const executed = stageCalls(request);
+	if (
+		options.wikiQuery &&
+		(role === "requirements" || role === "solution") &&
+		!executed.some(call => call.name === "wiki")
+	)
+		return tool(request, "wiki", { query: options.wikiQuery, mode: "grep" });
 	if (role === "executor" && input.useGoal && !executed.some(call => call.name === "goal" && call.args.op === "get"))
 		return tool(request, "goal", { op: "get" });
 	const inputs = Array.isArray(input.files) ? input.files : [];

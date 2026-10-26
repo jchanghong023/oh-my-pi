@@ -102,7 +102,7 @@ export async function createSpecActor(args: {
 	let currentInput: SpecAgentInput | undefined;
 	const writeGuard: ExtensionFactory = pi => {
 		pi.on("tool_call", async event => {
-			if (["read", "grep", "glob"].includes(event.toolName)) return undefined;
+			if (["read", "grep", "glob", "wiki"].includes(event.toolName)) return undefined;
 			if (!currentInput || currentInput.readOnly)
 				return { block: true, reason: "当前阶段只允许读取；请通过明确的修改操作恢复写权限。" };
 			if (args.role === "executor") return undefined;

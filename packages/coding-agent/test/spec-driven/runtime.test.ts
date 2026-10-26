@@ -158,25 +158,34 @@ test("missing actual stage files never advance from successful chat text", async
 	expect(status.blockedReason).toBeTruthy();
 }, 120_000);
 
-test("pre-execution native writes cannot touch production code", async () => {
-	let attempted = false;
+test("requirements and solution Wiki access never permits native writes to production code", async () => {
+	const attempted = new Set<string>();
 	const attack = (request: ModelRequest): Reply => {
-		if (!attempted && rolePayload(request)?.specDrivenRole === "requirements") {
-			attempted = true;
+		const role = rolePayload(request)?.specDrivenRole;
+		if ((role === "requirements" || role === "solution") && !attempted.has(role)) {
+			attempted.add(role);
 			const write = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "write")?.function?.name;
-			if (!write) throw new Error("Native write must be advertised for actual requirement files");
+			if (!write) throw new Error("Native write must be advertised for actual stage files");
 			return {
-				tool: { name: write, args: { path: "src/unauthorized.ts", content: "export const unauthorized = true;" } },
+				tool: {
+					name: write,
+					args: { path: `src/unauthorized-${role}.ts`, content: "export const unauthorized = true;" },
+				},
 			};
 		}
 		return respond(request);
 	};
 	await using fixture = await consumer({ reply: attack });
-	const status = await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "guarded-files");
+	let status = await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "guarded-files");
 	expect(status.phase, status.blockedReason).toBe("awaiting-specification");
-	expect(attempted).toBe(true);
-	await expect(fs.stat(path.join(fixture.cwd, "src", "unauthorized.ts"))).rejects.toThrow();
-	expect(JSON.stringify(fixture.provider.requests)).toContain("未授权的阶段文件写入");
+	status = await fixture.orchestrator.confirmSpecification();
+	expect(status.phase, status.blockedReason).toBe("awaiting-choice");
+	for (const role of ["requirements", "solution"]) {
+		await expect(fs.stat(path.join(fixture.cwd, "src", `unauthorized-${role}.ts`))).rejects.toThrow();
+		const request = fixture.provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === role)!;
+		expect(JSON.stringify(request.messages)).toContain("未授权的阶段文件写入");
+	}
+	expect(attempted).toEqual(new Set(["requirements", "solution"]));
 }, 120_000);
 
 function discussionResult(adoptable = true): TeamRunResult {
