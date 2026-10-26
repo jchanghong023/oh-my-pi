@@ -1,5 +1,5 @@
 import { SEANCE_SLASH_COMMAND } from "./seance";
-import { clearSubmittedText } from "./helpers/draft";
+import { clearSubmittedText, refuseImages, runWithDetachedDraft } from "./helpers/draft";
 import { formatResetContextResult, resetContextForCommand } from "./helpers/clear";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -396,6 +396,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 			return commandConsumed({ failed: handoffFailed });
 		},
 		handleTui: async (command, runtime) => {
+			if (refuseImages(command, runtime)) return;
 			const customInstructions = command.args || undefined;
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleHandoffCommand(customInstructions);
@@ -477,8 +478,12 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const question = command.text.slice(`/${command.name}`.length).trim();
-			clearSubmittedText(runtime);
-			await runtime.ctx.handleBtwCommand(question);
+			await runWithDetachedDraft(
+				command,
+				runtime,
+				() => runtime.ctx.handleBtwCommand(question, runtime.input?.images),
+				{ restoreText: true },
+			);
 		},
 	},
 	{
@@ -489,8 +494,9 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
-			clearSubmittedText(runtime);
-			await runtime.ctx.handleTanCommand(work);
+			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images), {
+				restoreText: true,
+			});
 		},
 	},
 	{
@@ -500,6 +506,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		inlineHint: "<complaint>",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
+			if (refuseImages(command, runtime)) return;
 			const complaint = command.text.slice(`/${command.name}`.length).trim();
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleOmfgCommand(complaint);
@@ -512,6 +519,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		inlineHint: "[request] [--all]",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
+			if (refuseImages(command, runtime)) return;
 			const args = command.text.slice(`/${command.name}`.length).trim();
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleCleanseCommand(args);

@@ -41,7 +41,8 @@ export const cfgPowerSleepPrevention = register({
 		tab: "interaction",
 		group: "电源",
 		label: "防止休眠",
-		description: "在活跃会话期间防止系统休眠。各级效果累积：每一级都会包含所有较低级别的标志。",
+		description:
+			"在 Agent 执行当前轮次期间防止系统休眠；空闲会话（包括等待后台任务的会话）不会保持唤醒。各级效果累积：每一级都会包含所有较低级别的标志。",
 		options: [
 			{
 				value: "off",
@@ -51,7 +52,7 @@ export const cfgPowerSleepPrevention = register({
 			{
 				value: "idle",
 				label: "防止空闲休眠",
-				description: "会话打开时保持系统唤醒（macOS `caffeinate -i`）",
+				description: "在 Agent 执行当前轮次期间保持系统唤醒（macOS `caffeinate -i`）",
 			},
 			{
 				value: "display",
@@ -1467,4 +1468,28 @@ export const cfgThinkingBudgets = combine({
 	high: cfgThinkingBudgetsHigh,
 	xhigh: cfgThinkingBudgetsXhigh,
 	max: cfgThinkingBudgetsMax,
+});
+
+/** Rejects a cost threshold that is not a positive USD amount. */
+function validateCostThreshold(id: string): (raw: unknown) => void {
+	return raw => {
+		if (raw === undefined || raw === null || (typeof raw === "number" && Number.isFinite(raw) && raw > 0)) return;
+		throw new Error(`Invalid ${id}: expected a positive USD amount, got ${Bun.inspect(raw)}.`);
+	};
+}
+
+/** Session-tree spend (USD) at which omp warns once; `--warn-cost` overrides it for one run. */
+export const cfgSessionWarnCost = register({
+	id: "session.warnCost",
+	type: "number",
+	default: undefined,
+	validate: validateCostThreshold("session.warnCost"),
+});
+
+/** Session-tree spend (USD) at which omp stops sending model requests; `--max-cost` overrides it for one run. */
+export const cfgSessionMaxCost = register({
+	id: "session.maxCost",
+	type: "number",
+	default: undefined,
+	validate: validateCostThreshold("session.maxCost"),
 });

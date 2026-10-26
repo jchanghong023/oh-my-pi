@@ -72,7 +72,7 @@
 ## 开发约束
 
 - 平台：日常在 Windows x64（PowerShell）上工作，同时支持 Linux x64 与 WSL2；本地验证只在当前操作系统运行对应测试。
-- 工具链版本跟随上游固定，不在 fork 内单独升级：Bun `>=1.4`（`package.json` 的 `packageManager`）、Rust `nightly-2026-10-06`（`rust-toolchain.toml`）、Bazel `9.2.0`（`.bazelversion`）。
+- 工具链版本跟随上游固定，不在 fork 内单独升级：Bun `1.4.4`（`package.json` 的 `packageManager`）、Rust `nightly-2026-10-06`（`rust-toolchain.toml`）、Bazel `9.2.0`（`.bazelversion`）。
 - 上游开发约定（代码质量、Bun 优先、prompt 放 `.md`、模型/Provider 策略在 KDL、生成文件与 changelog 规则等）同样适用于 fork 改动，但不在本文件重复：以 `openspec/specs/fork-upstream-baseline/spec.md` 记录的 Upstream commit 为准，用 `git show <upstream-commit>:AGENTS.md` 读取。fork 改动 MUST 与上游既有风格和机制一致，不引入局部风格。
 
 ## 权威来源与文档职责

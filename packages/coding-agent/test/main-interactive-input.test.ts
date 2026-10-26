@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -160,6 +160,8 @@ describe("system prompt template CLI resolution", () => {
 	});
 });
 
+const skillPromptBuilder = { buildUserSkillPrompt: buildSkillPromptMessage };
+
 function createMode(options?: { pendingStart?: boolean; skillCommands?: Map<string, Skill> }) {
 	return {
 		markPendingSubmissionStarted: vi.fn(() => options?.pendingStart ?? true),
@@ -178,7 +180,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ pendingStart: false });
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -197,7 +199,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ pendingStart: false });
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -216,7 +218,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -245,7 +247,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -262,7 +264,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode();
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: true,
@@ -286,7 +288,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -308,7 +310,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -329,7 +331,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,
@@ -350,7 +352,7 @@ describe("submitInteractiveInput", () => {
 		};
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => {
 				throw new Error("attachment too large");
 			}),
@@ -375,7 +377,7 @@ describe("submitInteractiveInput", () => {
 		const mode = createMode({ skillCommands: new Map([["skill:recap", skill]]) });
 		const session = {
 			model: undefined,
-			sessionManager: SessionManager.inMemory(),
+			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
 			isStreaming: false,

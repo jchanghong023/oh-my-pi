@@ -149,7 +149,7 @@ describe("enumeratePythonRuntimes", () => {
 		const activePy = path.join(activeDir, "bin", "python");
 		const linuxManagedPy = path.join(managedDir, "bin", "python");
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 			[offlinePy, activePy, linuxManagedPy].includes(String(candidate)),
 		);
@@ -181,7 +181,7 @@ describe("enumeratePythonRuntimes", () => {
 		const activePy = path.join(activeDir, "bin", "python");
 		const linuxManagedPy = path.join(managedDir, "bin", "python");
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 			[activePy, linuxManagedPy].includes(String(candidate)),
 		);
@@ -208,7 +208,7 @@ describe("enumeratePythonRuntimes", () => {
 		const activePy = path.join(activeDir, binDir, executable);
 		const candidateManagedPy = path.join(managedDir, binDir, executable);
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockReturnValue(true);
 		const baseEnv = { OMP_OFFLINE: offline, VIRTUAL_ENV: activeDir, PYTHONPATH: "/business/modules" };
 
@@ -240,7 +240,7 @@ describe("enumeratePythonRuntimes", () => {
 		const projectDir = path.join(cwd, ".venv");
 		const projectPython = path.join(projectDir, "bin", "python");
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 			[offlinePy, projectDir, projectPython].includes(String(candidate)),
 		);
@@ -284,7 +284,7 @@ describe("enumeratePythonRuntimes", () => {
 			const installDir = path.join(cwd, "ida");
 			vi.spyOn(cfgIdaInstall, "get").mockReturnValue(installDir);
 			vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-			vi.spyOn(piUtils, "$which").mockReturnValue(systemPy);
+			vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 			vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 				[offlinePy, venvDir, venvPython].includes(String(candidate)),
 			);
@@ -329,7 +329,7 @@ describe("enumeratePythonRuntimes", () => {
 
 	it("enumerates the managed env AND the system interpreter so a broken managed env can fall through", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		// Only the managed interpreter physically exists; no project/active venv.
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate => candidate === managedPy);
 
@@ -352,7 +352,7 @@ describe("enumeratePythonRuntimes", () => {
 
 	it("falls back to the system interpreter when no managed env or venv exists", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockReturnValue(false);
 
 		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {
@@ -363,9 +363,25 @@ describe("enumeratePythonRuntimes", () => {
 		expect(resolvePythonRuntime(path.join(path.sep, "work"), {}).pythonPath).toBe(systemPy);
 	});
 
+	it("enumerates every python and python3 on PATH so a broken first shim cannot hide a working interpreter", () => {
+		const shimDir = path.join(path.sep, "home", "u", ".local", "share", "mise", "shims");
+		const shimPy = path.join(shimDir, "python");
+		const shimPy3 = path.join(shimDir, "python3");
+		const brewPy3 = path.join(path.sep, "opt", "homebrew", "bin", "python3");
+		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin =>
+			bin === "python" ? [shimPy] : bin === "python3" ? [shimPy3, brewPy3, systemPy] : [],
+		);
+		vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+		const runtimes = enumeratePythonRuntimes(path.join(path.sep, "work"), {});
+
+		expect(runtimes.map(r => r.pythonPath)).toEqual([shimPy, shimPy3, brewPy3, systemPy]);
+	});
+
 	it("resolves an explicit interpreter without falling through to discovery", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockImplementation(bin => (bin === "python" ? systemPy : null));
+		vi.spyOn(piUtils, "$whichAll").mockImplementation(bin => (bin === "python" ? [systemPy] : []));
 		vi.spyOn(fs, "existsSync").mockReturnValue(false);
 		const explicitPy = path.join(path.sep, "custom", "python3.13");
 
@@ -416,7 +432,7 @@ describe("enumeratePythonRuntimes", () => {
 
 	it("throws from resolvePythonRuntime when no interpreter can be found", () => {
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(managedDir);
-		vi.spyOn(piUtils, "$which").mockReturnValue(null);
+		vi.spyOn(piUtils, "$whichAll").mockReturnValue([]);
 		vi.spyOn(fs, "existsSync").mockReturnValue(false);
 
 		expect(enumeratePythonRuntimes(path.join(path.sep, "work"), {})).toEqual([]);

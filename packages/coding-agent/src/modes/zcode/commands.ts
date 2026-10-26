@@ -2,12 +2,7 @@ import type { Settings } from "../../config/settings";
 import { cfgDisabledExtensions, cfgSkills } from "../../extensibility/settings";
 import { withActiveSettings } from "../../config/settings-context";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
-import {
-	buildSkillPromptMessage,
-	getSkillSlashCommandName,
-	loadSkills,
-	parseSkillInvocation,
-} from "../../extensibility/skills";
+import { getSkillSlashCommandName, loadSkills, parseSkillInvocation } from "../../extensibility/skills";
 import { parseGoalSubcommand } from "../../goals/state";
 import { SKILL_PROMPT_MESSAGE_TYPE, type CustomMessage } from "../../session/messages";
 import type { ExtensionUIContext } from "../../extensibility/extensions/types";
@@ -327,10 +322,7 @@ export class ZCodeCommandHost {
 			invocation &&
 			this.session.skills.find(candidate => getSkillSlashCommandName(candidate) === `skill:${invocation.name}`);
 		if (skill && invocation && this.session.skillsSettings?.enableSkillCommands) {
-			const built = await buildSkillPromptMessage(skill, invocation, "user", {
-				scope: this.session.sessionManager,
-				getSessionBranch: () => this.session.sessionManager.getBranch(),
-			});
+			const built = await this.session.buildUserSkillPrompt(skill, invocation);
 			const message: ZCodeCustomPrompt = {
 				customType: SKILL_PROMPT_MESSAGE_TYPE,
 				content: options.images?.length

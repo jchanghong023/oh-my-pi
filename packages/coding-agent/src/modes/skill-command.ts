@@ -1,6 +1,6 @@
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
-import { buildSkillPromptMessage, getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
+import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -12,7 +12,10 @@ type SkillCommandHost = Pick<
 	| "clearOptimisticSkillMessage"
 	| "optimisticSkillMessagePending"
 > & {
-	session: Pick<InteractiveModeContext["session"], "model" | "promptCustomMessage" | "isStreaming" | "sessionManager">;
+	session: Pick<
+		InteractiveModeContext["session"],
+		"model" | "buildUserSkillPrompt" | "promptCustomMessage" | "isStreaming"
+	>;
 };
 
 type SkillPromptMessage = Pick<
@@ -72,10 +75,7 @@ export async function buildSkillCommandPrompt(
 	const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));
 	if (!skill) return undefined;
 
-	const built = await buildSkillPromptMessage(skill, parsed, "user", {
-		scope: ctx.session.sessionManager,
-		getSessionBranch: () => ctx.session.sessionManager.getBranch(),
-	});
+	const built = await ctx.session.buildUserSkillPrompt(skill, parsed);
 	const textBlock: TextContent = { type: "text", text: built.message };
 	const promptContent = images && images.length > 0 ? [textBlock, ...images] : built.message;
 

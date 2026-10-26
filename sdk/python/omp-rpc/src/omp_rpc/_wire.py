@@ -814,6 +814,8 @@ class SessionStats:
     session_file: str | None = None
     credits: SessionCredits | None = None
     routed_models: dict[str, float] | None = None
+    edit_rejections: dict[str, float] | None = None
+    """Failed edits by the engine's `errorKind`."""
     context_usage: ContextUsage | None = None
 
 
@@ -899,6 +901,8 @@ class BtwHistoryTurn:
     status: BtwStatus
     created_at: int
     updated_at: int
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
 
 
@@ -912,6 +916,8 @@ class BtwHistoryRecord:
     updated_at: int
     id: str
     leaf_id: str | None
+    images: tuple[ImageContent, ...] | None = None
+    """Images attached to the question."""
     error: str | None = None
     follow_ups: tuple[BtwHistoryTurn, ...] | None = None
 
@@ -1251,6 +1257,8 @@ class PromptError:
     provider: str | None = None
     model: str | None = None
     http_status: int | None = None
+    code: Literal["cost_cap"] | None = None
+    """`cost_cap`: the session reached `session.maxCost` (`--max-cost`) and omp did not send the next request."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -2145,6 +2153,7 @@ def parse_session_stats(value: object, path: str = "SessionStats") -> SessionSta
         session_file=optional(payload, "sessionFile", decode_str, path),
         credits=optional(payload, "credits", parse_session_credits, path),
         routed_models=optional(payload, "routedModels", record(decode_float), path),
+        edit_rejections=optional(payload, "editRejections", record(decode_float), path),
         context_usage=optional(payload, "contextUsage", parse_context_usage, path),
     )
 
@@ -2240,6 +2249,7 @@ def parse_btw_history_turn(value: object, path: str = "BtwHistoryTurn") -> BtwHi
         status=required(payload, "status", _decode_btw_status, path),
         created_at=required(payload, "createdAt", decode_int, path),
         updated_at=required(payload, "updatedAt", decode_int, path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
     )
 
@@ -2254,6 +2264,7 @@ def parse_btw_history_record(value: object, path: str = "BtwHistoryRecord") -> B
         updated_at=required(payload, "updatedAt", decode_int, path),
         id=required(payload, "id", decode_str, path),
         leaf_id=required(payload, "leafId", nullable(decode_str), path),
+        images=optional(payload, "images", array(parse_image_content), path),
         error=optional(payload, "error", decode_str, path),
         follow_ups=optional(payload, "followUps", array(parse_btw_history_turn), path),
     )
@@ -2643,6 +2654,7 @@ def parse_prompt_error(value: object, path: str = "PromptError") -> PromptError:
         provider=optional(payload, "provider", decode_str, path),
         model=optional(payload, "model", decode_str, path),
         http_status=optional(payload, "httpStatus", decode_int, path),
+        code=optional(payload, "code", cast('Decoder[Literal["cost_cap"]]', literal(frozenset({"cost_cap"}))), path),
     )
 
 

@@ -71,6 +71,8 @@ function createContext(opts: {
 	const ctx = {
 		editor,
 		ui: { requestRender },
+		sessionManager: { getSessionId: () => "follow-up-session" },
+		handleDevInput: async () => false,
 		skillCommands: new Map<string, string>(),
 		session: {
 			isStreaming: opts.isStreaming,

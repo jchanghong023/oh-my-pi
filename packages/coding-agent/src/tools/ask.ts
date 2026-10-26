@@ -510,7 +510,8 @@ async function askSingleQuestion(
 }
 
 function formatQuestionResult(result: QuestionResult): string {
-	const noteSuffix = result.note ? ` (note: ${result.note})` : "";
+	const noteOn = result.noteOption === undefined ? "" : ` on ${result.noteOption}`;
+	const noteSuffix = result.note ? ` (note${noteOn}: ${result.note})` : "";
 	const custom = result.customInput === undefined ? undefined : `"${result.customInput}"`;
 	const timeoutSuffix = result.timedOut ? " (automatic reply after timeout)" : "";
 	if (result.selectedOptions.length === 0) {
@@ -527,6 +528,7 @@ function formatSingleQuestionResponse(result: {
 	selectedOptions: string[];
 	customInput?: string;
 	note?: string;
+	noteOption?: string;
 	timedOut?: boolean;
 	multi: boolean;
 }): string {
@@ -552,13 +554,14 @@ function formatSingleQuestionResponse(result: {
 		);
 	}
 	if (result.note) {
+		const label = `User added note${result.noteOption === undefined ? "" : ` on ${result.noteOption}`}:`;
 		responseParts.push(
 			result.note.includes("\n")
-				? `User added note:\n${result.note
+				? `${label}\n${result.note
 						.split("\n")
 						.map(line => `  ${line}`)
 						.join("\n")}`
-				: `User added note: ${result.note}`,
+				: `${label} ${result.note}`,
 		);
 	}
 	if (responseParts.length > 0) return responseParts.join("\n");
@@ -655,6 +658,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						activeModelString: this.session.getActiveModelString?.(),
 						telemetryConfig: this.session.getTelemetry?.(),
 						sessionId: this.session.getSessionId?.() ?? undefined,
+						costGate: this.session.costGate,
 					},
 					signal,
 				);
@@ -878,6 +882,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 							result.note === undefined
 								? undefined
 								: shiftImageMarkers(result.note, noteOffset, result.noteImages?.length ?? 0),
+						noteOption: result.noteOption,
 						timedOut: result.timedOut,
 					});
 				}

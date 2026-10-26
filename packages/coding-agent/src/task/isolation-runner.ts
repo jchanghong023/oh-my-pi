@@ -424,6 +424,8 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 		}
 		return runOutcome;
 	};
+	/** The run's IRC wake hold, released only once the run-end capture is done. */
+	let releaseIrcWakes: (() => void) | undefined;
 	const releaseBase = (): Promise<void> => {
 		baseReleasePromise ??= opts.baseOptions.onRelease?.() ?? Promise.resolve();
 		return baseReleasePromise;
@@ -555,6 +557,9 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 					: opts.onBeforeCapture || opts.onAfterResult
 						? () => (sourceResult ? releaseIsolation() : releaseBase())
 						: releaseIsolation,
+			deferIrcWakeRelease: release => {
+				releaseIrcWakes = release;
+			},
 		});
 		opts.onSubprocessResult?.(result);
 		sourceResult = result;
@@ -690,6 +695,10 @@ export async function runIsolatedSubprocess(opts: IsolatedRunOptions): Promise<S
 				await cleanupHandle();
 			}
 		}
+		// The worktree is captured: a held peer message may now wake a turn in it.
+		if (releaseIrcWakes && opts.baseOptions.deferIrcWakeRelease)
+			opts.baseOptions.deferIrcWakeRelease(releaseIrcWakes);
+		else releaseIrcWakes?.();
 	}
 }
 

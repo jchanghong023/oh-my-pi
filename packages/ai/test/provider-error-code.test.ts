@@ -222,6 +222,35 @@ describe("structured stream errors and recovered requests", () => {
 		});
 	}
 
+	it("Anthropic retains the structured code when a retryable error truncates committed output", async () => {
+		let requests = 0;
+		const prefix = successBody("anthropic-messages").split("event: message_delta\n")[0];
+		const frame = {
+			type: "error",
+			error: { code: "Exact.Overload_CODE", type: "overloaded_error", message: "Overloaded" },
+		};
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				requests++;
+				return new Response(`${prefix}event: error\ndata: ${JSON.stringify(frame)}\n\n`, {
+					headers: { "content-type": "text/event-stream" },
+				});
+			},
+		});
+		try {
+			const message = await terminal("anthropic-messages", server.url.origin);
+			expect(requests).toBe(1);
+			expect(message.stopReason).toBe("error");
+			expect(message.content).toContainEqual(expect.objectContaining({ type: "text", text: "ok" }));
+			expect(message.providerErrorCode).toBe("Exact.Overload_CODE");
+			expect(message.errorMessage).toContain("error frame received before message_stop");
+		} finally {
+			await server.stop(true);
+		}
+	});
+
 	it("Anthropic successful HTTP retry does not retain the earlier provider code", async () => {
 		let requests = 0;
 		const server = Bun.serve({

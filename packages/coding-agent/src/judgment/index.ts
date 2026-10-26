@@ -63,6 +63,7 @@ import {
 import { roleCandidatePool } from "../config/model-roles";
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings } from "../config/settings";
+import type { CostGate } from "../session/cost-gate";
 import type { SessionManager } from "../session/session-manager";
 import { getTinyLocalModelSpec } from "../tiny/models";
 import localPromptTemplate from "../prompts/system/judgment-local.md" with { type: "text" };
@@ -103,6 +104,8 @@ export interface JudgeDeps {
 	telemetry?: AgentTelemetryConfig;
 	/** Answer cache for native judgments; omitted runs every question against the provider. */
 	cache?: JudgmentCache;
+	/** The session tree's cost gate: refuses each candidate attempt at the cap and adds billed attempts' cost. */
+	costGate?: CostGate;
 }
 
 /**
@@ -467,6 +470,8 @@ export class ChainJudge implements Judge {
 				}
 				rejections.delete(identity);
 			}
+			// Outside the candidate's failure handling: a refusal ends the judgment.
+			this.#deps.costGate?.admit();
 			try {
 				const judge = await this.#createJudge(candidate, signal);
 				if (!judge) {
@@ -513,7 +518,10 @@ export class ChainJudge implements Judge {
 	#report(attempt: JudgmentAttempt): void {
 		const { startedAt, responseModel, questions, cachedQuestions, ...rest } = attempt;
 		const usage: JudgmentUsage = { purpose: this.#deps.purpose, ...rest };
-		if (questions === undefined || cachedQuestions !== questions) this.#deps.onUsage?.(usage);
+		if (questions === undefined || cachedQuestions !== questions) {
+			this.#deps.costGate?.record(usage.usage.cost.total);
+			this.#deps.onUsage?.(usage);
+		}
 		recordJudgmentTelemetry(this.#telemetry, {
 			provider: usage.provider,
 			model: usage.model,

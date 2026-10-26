@@ -20,6 +20,7 @@ import { sanitizeText } from "@oh-my-pi/pi-utils";
 import { handleMcpAcp } from "./helpers/mcp";
 import { formatLogoutCommandResult, logoutProviderForCommand } from "./helpers/logout";
 import { markdownFenceFor } from "../utils/markdown-fence";
+import { openLocalFileInEditor } from "../modes/local-file-editor";
 import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers/parse";
 import {
 	describeRedeemOutcome,
@@ -624,6 +625,17 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleTui: (command, runtime) => {
 			runtime.ctx.showGitUi(command.args.trim() || undefined);
 			clearSubmittedText(runtime);
+		},
+	},
+	{
+		name: "local",
+		icon: "pencil",
+		description: "Open a session local:// file in $EDITOR (picker when no name given)",
+		inlineHint: "[name]",
+		allowArgs: true,
+		handleTui: async (command, runtime) => {
+			clearSubmittedText(runtime);
+			await openLocalFileInEditor(runtime.ctx, command.args);
 		},
 	},
 	{

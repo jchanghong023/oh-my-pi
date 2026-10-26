@@ -132,6 +132,7 @@ export function createSessionStub(
 		runIdleCompaction: vi.fn(async () => {}),
 		waitForIdle: async () => {},
 		hasPendingAsyncWork: () => false,
+		getAsyncJobSnapshot: () => null,
 		settleAsyncWork: async () => {},
 		subscribe: vi.fn(() => () => {}),
 	} satisfies SessionOverrides;
