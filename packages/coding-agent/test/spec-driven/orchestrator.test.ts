@@ -1,2266 +1,362 @@
-import * as crypto from "node:crypto";
+import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SpecArtifactStore } from "../../src/spec-driven/artifacts";
-import { describe, expect, it, setSystemTime } from "bun:test";
-import { SpecEvidenceService } from "../../src/spec-driven/evidence";
-import { recordSpecCommand } from "../../src/spec-driven/execution-tools";
-import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
-import type {
-	SpecDrivenOptions,
-	SpecDrivenPorts,
-	SpecDrivenStatus,
-	SpecExecution,
-	SpecPlanDraft,
-	SpecRequirementsDraft,
-	SpecReview,
-	SpecReviewInput,
-	SpecRunContext,
-	SpecTask,
-	SpecToolRecord,
-} from "../../src/spec-driven/types";
+import { SpecAdmissionError, SpecDrivenOrchestrator, StaleRun } from "../../src/spec-driven/orchestrator";
+import type { SpecAgentInput, SpecDrivenPorts, SpecRunContext, SpecStageRole } from "../../src/spec-driven/types";
 
-const digest = (value: unknown): string => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
-function task(id = "T001", dependencies: string[] = []): SpecTask {
-	return {
-		id,
-		title: `Implement ${id}`,
-		instructions: `Implement approved behavior ${id}`,
-		requirementIds: ["R1", "R2"],
-		dependencies,
-		conditionIds: [],
-		ownedPaths: [`src/${id}.ts`, `test/${id}.test.ts`],
-		implementationPaths: [`src/${id}.ts`],
-		solutionBinding: "stable-interface",
-		validation: [
-			{
-				id: "unit",
-				command: `test ${id}`,
-				behavior: `approved ${id}`,
-				inputPaths: [`src/${id}.ts`, `test/${id}.test.ts`, "package.json"],
-			},
-		],
-		tdd: { mode: "required", behavior: `approved ${id}` },
-	};
-}
-function pass(input?: SpecReviewInput): SpecReview {
-	const tdd = input?.task?.tdd;
-	return {
-		verdict: "pass",
-		summary: "Independent source and execution review",
-		findings: [],
-		resolutions:
-			input?.slot.findings
-				.filter(item => item.severity !== "minor")
-				.map(item => ({ findingId: item.id, resolved: true, evidence: "Inspected repair and rerun" })) ?? [],
-		questions: [],
-		evidenceChecks:
-			tdd?.mode === "required"
-				? [input?.execution?.redRecordId, input?.execution?.greenRecordId].map(id => ({
-						recordId: id!,
-						behavior: tdd.behavior,
-						valid: true,
-						reason: "Failure is the missing approved behavior; identical test passes after production write",
-					}))
-				: [],
-	};
-}
-function failure(taskIds: string[] = []): SpecReview {
-	return {
-		verdict: "revise",
-		summary: "A behavior is missing",
-		findings: [
-			{
-				id: "F1",
-				severity: "blocking",
-				issue: "Missing boundary behavior",
-				evidence: "Source branch and failing boundary scenario",
-				taskIds,
-			},
-		],
-		resolutions: [],
-		questions: [],
-		evidenceChecks: [],
-	};
-}
-function fixture(options: Partial<SpecDrivenOptions> = {}) {
-	const events: string[] = [];
-	const ledger = new Map<string, SpecToolRecord>();
-	const capturedReviews: SpecReviewInput[] = [];
-	const documents = new Map<string, string>();
-	let specVersion = "";
-	let planVersion = "";
-	let counter = 0;
-	let solutionVersion = "";
-	let time = 10;
-	let requirementsDraft: SpecRequirementsDraft = {
-		proposal: "Add approved behavior",
-		specs: [{ path: "specs/capability/spec.md", content: "### Requirement: behavior\n#### Scenario: normal\nWorks" }],
-		requirements: [
-			{ id: "R1", text: "Approved behavior" },
-			{ id: "R2", text: "Unrelated behavior" },
-		],
-		questions: [],
-	};
-	let planDraft: SpecPlanDraft = {
-		content: "# Plan\n- [x] checkbox is not execution",
-		workspace: { executionPath: ".", isolation: "native", integration: "native" },
-		tasks: [task()],
-		conditions: [],
-		finalValidation: [
-			{
-				id: "entry",
-				command: "run public-entry",
-				behavior: "Actual public entry",
-				inputPaths: ["src", "test", "package.json"],
-				realEntry: true,
-			},
-		],
-		closure: { sync: true, archive: true },
-	};
-	const record = (
-		command: string,
-		context: SpecRunContext,
-		exitCode = 0,
-		evidence: { task?: SpecTask; validationId?: string; stage?: "red" | "green" } = {},
-	): SpecToolRecord => {
-		const id = `tool-${++counter}`;
-		const state: SpecDrivenStatus = orchestrator.status();
-		const currentTask =
-			evidence.task ?? state.plan?.tasks.find(item => item.validation.some(check => check.command === command));
-		const validation =
-			currentTask?.validation.find(check => check.command === command) ??
-			state.plan?.finalValidation.find(check => check.command === command);
-		const condition = state.plan?.conditions.find(check => check.command === command);
-		const binding = {
-			actorId: currentTask ? "fixture-executor" : "fixture-validation",
-			taskId: currentTask?.id ?? null,
-			workspace: "/fixture",
-			specificationVersion: state.specification!.version,
-			planVersion: state.plan!.version,
-		};
-		// Explicit local evidence for state-machine tests, not disk-content qualification.
-		const inputPaths = validation?.inputPaths ?? [];
-		const inputs = {
-			id: `fixture-inputs-${counter}`,
-			runId: context.runId,
-			generation: context.generation,
-			binding,
-			inputPaths: [...inputPaths],
-			entries: inputPaths.map(file => ({
-				path: file,
-				canonicalPath: `/fixture/${file}`,
-				kind: "file" as const,
-				digest: digest({ file, content: documents.get(file) ?? "declared fixture input" }),
-			})),
-			version: digest(inputPaths.map(file => [file, documents.get(file) ?? "declared fixture input"])),
-			complete: true,
-		};
-		const item: SpecToolRecord = {
-			id,
-			toolCallId: `call-${counter}`,
-			runId: context.runId,
-			generation: context.generation,
-			tool: "spec_verify",
-			args: { command, cwd: "/fixture" },
-			startedAt: time++,
-			finishedAt: time++,
-			binding,
-			inputsBefore: structuredClone(inputs),
-			inputsAfter: structuredClone(inputs),
-			conditions: {
-				platform: process.platform,
-				shell: "fixture-shell",
-				runtime: "fixture-runner",
-				runtimeVersion: "1",
-			},
-			obligation: {
-				validationId: evidence.validationId ?? validation?.id ?? condition?.id ?? command,
-				approvedCommand: command,
-				...(evidence.stage ? { stage: evidence.stage } : {}),
-			},
-			result: {
-				status: "completed",
-				exitCode,
-				stdout: exitCode
-					? "Expected approved behavior, received missing implementation"
-					: "Passed approved behavior",
-				stderr: "",
-				isError: false,
-			},
-			artifact: { path: `/evidence/${id}`, version: digest(id) },
-		};
-		ledger.set(id, item);
-		return item;
-	};
-	const executeTask = async (approvedTask: SpecTask, context: SpecRunContext): Promise<SpecExecution> => {
-		events.push(`execute:${approvedTask.id}`);
-		const red = record(approvedTask.validation[0]!.command, context, 1, { task: approvedTask, stage: "red" });
-		const implementationStartedAt = time++;
-		documents.set(approvedTask.implementationPaths[0] ?? approvedTask.ownedPaths[0]!, "Actual owned implementation");
-		const green = record(approvedTask.validation[0]!.command, context, 0, { task: approvedTask, stage: "green" });
-		return {
-			changedPaths: [approvedTask.ownedPaths[0]!],
-			recordIds: [red.id, green.id],
-			redRecordId: red.id,
-			greenRecordId: green.id,
-			implementationStartedAt,
-			requestedTddException: null,
-		};
-	};
-	const ports: SpecDrivenPorts = {
-		conversation: {
-			recipient: role => ({ role, actorId: `fixture-${role}`, sessionId: `fixture-session-${role}` }),
-			async respond(input) {
-				return { text: `Discussed ${input.text}` };
-			},
-			async repairScope() {
-				return ["T001"];
-			},
+const roots: string[] = [];
+afterEach(async () => {
+	await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
+});
+const REQUIREMENTS =
+	"# Requirements\n\n## Requirement: Four file stages\nThe workflow SHALL preserve complete upstream documents.\n\n### Scenario: Original user confirmation\n- WHEN a user chooses an option\n- THEN the planner receives that exact reply.\n";
+const PROPOSAL =
+	"# File workflow\n\n## Why\nPreserve complete requirements and original decisions across four stages.\n\n## What Changes\n- Add file-validated workflow transitions.\n\n## Capabilities\n\n### New Capabilities\n- `workflow`: Four-stage file orchestration.\n\n### Modified Capabilities\nNone.\n\n## Impact\nThe spec-driven orchestrator and its tests.\n";
+const DELTA =
+	"## ADDED Requirements\n\n### Requirement: Four file stages\nThe workflow SHALL preserve complete upstream documents.\n\n#### Scenario: Original user confirmation\n- **WHEN** a user chooses an option\n- **THEN** the planner receives that exact reply.\n";
+const SOLUTION = JSON.stringify({
+	candidates: [
+		{
+			id: "small",
+			title: "Simple file flow",
+			content: "Retain full documents, including this final detail: Ω.\nNo summary is allowed.",
 		},
-		async handoff(input, context) {
-			events.push(`handoff:${input.transition}`);
-			const role =
-				input.transition === "requirements-to-solution"
-					? "requirements"
-					: input.transition === "solution-to-plan"
-						? "solution"
-						: "planner";
-			const body = `Detached state-fixture native boundary: ${input.transition}`;
-			return {
-				actorId: `fixture-${role}`,
-				sessionId: `fixture-session-${role}`,
-				role,
-				runId: context.runId,
-				generation: context.generation,
-				transition: input.transition,
-				path: `handoffs/${input.transition}.md`,
-				digest: crypto.createHash("sha256").update(body).digest("hex"),
-				body,
-				versions: {
-					"proposal.md": input.specification.version,
-					...(input.solution ? { "state.json#/solution": input.solution.artifactVersion } : {}),
-					...(input.plan ? { "plan.md": input.plan.artifactVersion } : {}),
-				},
-			};
+		{ id: "alternative", title: "Another implementation", content: "A second complete approach." },
+	],
+});
+const PLAN =
+	"# Implementation Plan\n\n## Tasks\n1. Implement file-backed transitions in orchestrator.ts.\n2. Add consumer-visible file gate tests.\n\n## Validation\nRun the targeted orchestrator tests and inspect file handoffs.\n";
+const REPORT =
+	"# 完成报告\n\n## 完成情况\nImplemented the four file stages.\n\n## 验证结果\nCommand: not run. Status: not executed. Result: no software validation claimed. Limitation: this report fixture tests only the workflow.\n\n## 未完成项\n无。\n";
+async function fixture() {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "spec-file-core-"));
+	roots.push(cwd);
+	const requirementsDir = "requirements";
+	await fs.mkdir(path.join(cwd, requirementsDir), { recursive: true });
+	await fs.writeFile(path.join(cwd, requirementsDir, "workflow.md"), REQUIREMENTS);
+	const store = new SpecArtifactStore({ cwd, changeId: "file-workflow", requirementsDir });
+	const inputs: SpecAgentInput[] = [];
+	const omitted = new Set<SpecStageRole>();
+	const contents: Record<SpecStageRole, string> = {
+		requirements: REQUIREMENTS,
+		solution: SOLUTION,
+		planner: PLAN,
+		executor: REPORT,
+	};
+	let beforeRun: ((input: SpecAgentInput, context: SpecRunContext) => Promise<void>) | undefined;
+	let closeCalls = 0;
+	const ports: SpecDrivenPorts = {
+		agents: {
+			recipient: role => ({ role, actorId: `actor-${role}`, sessionId: `session-${role}` }),
+			async run(input, context) {
+				inputs.push(structuredClone(input));
+				await beforeRun?.(input, context);
+				if (!input.readOnly && !omitted.has(input.role))
+					for (const file of input.outputPaths) {
+						const target = path.resolve(cwd, file.replace("*", "workflow"));
+						await fs.mkdir(path.dirname(target), { recursive: true });
+						const content = contents[input.role];
+						await fs.writeFile(
+							target,
+							input.role !== "requirements" || !content
+								? content
+								: file.endsWith("/proposal.md")
+									? PROPOSAL
+									: file.endsWith("/spec.md")
+										? DELTA
+										: content,
+						);
+					}
+				return { text: "请查看文件；此回复不是 JSON，也不是阶段完成凭据。" };
+			},
 		},
 		artifacts: {
-			async initialize() {
-				events.push("initialize");
-			},
-			async writeRequirements(draft) {
-				events.push("write-requirements");
-				documents.set("proposal", draft.proposal);
-				specVersion = digest(draft);
-				return { version: specVersion };
-			},
-			async readRequirements() {
-				return { version: specVersion };
-			},
-			async validateRequirements() {
-				events.push("validate-requirements");
-			},
-			async writeSolution(solution) {
-				events.push("write-solution");
-				documents.set("solution", JSON.stringify(solution));
-				solutionVersion = digest(solution);
-				return { version: solutionVersion };
-			},
-			async readSolution() {
-				return { version: solutionVersion };
-			},
-			async writePlan(draft) {
-				events.push("write-plan");
-				documents.set("plan", draft.content);
-				planVersion = digest(draft);
-				return { version: planVersion };
-			},
-			async readPlan() {
-				return { version: planVersion };
-			},
-			async close(input) {
-				events.push("close");
-				expect(input.requirementsReview.lastReview?.verdict).toBe("pass");
-				documents.set("archived", input.acceptanceVersion);
-			},
-		},
-		models: {
-			async requirements() {
-				events.push("requirements");
-				return structuredClone(requirementsDraft);
-			},
-			async plan() {
-				events.push("planner");
-				return structuredClone(planDraft);
-			},
-			async execute(input, context, control) {
-				while (true) {
-					const states = control.status();
-					const incomplete = states.filter(state => state.status !== "completed");
-					if (incomplete.length === 0) return;
-					const initial = incomplete.find(state => {
-						const approved = input.plan.tasks.find(item => item.id === state.id)!;
-						return approved.dependencies.every(id =>
-							states.some(item => item.id === id && item.status === "completed"),
-						);
-					});
-					if (!initial) throw new Error("Fixture executor has no dependency-ready approved task");
-					let state = initial;
-					while (state.status !== "completed") {
-						const approvedTask = await control.start(state.id);
-						const result =
-							state.execution && !state.repairReview && !input.repair?.taskIds.includes(state.id)
-								? state.execution
-								: await executeTask(approvedTask, context);
-						state = await control.checkpoint(approvedTask.id, result);
-						if (orchestrator.status().paused) return;
-					}
-				}
-			},
-			async review(input) {
-				events.push(`review:${input.kind}:${input.slot.model}:${input.slot.revision}`);
-				capturedReviews.push(structuredClone(input));
-				return pass(input);
-			},
-		},
-		team: {
-			async run(input) {
-				events.push("team");
-				return {
-					runId: "discussion",
-					inputVersion: input.specification.version,
-					status: "completed",
-					report: "A reviewed direction",
-					interpretationDifferences: [],
-					candidates: [
-						{
-							id: "A",
-							label: "A",
-							version: "candidate-v1",
-							proposal: "Reviewed implementation direction",
-							adoptable: true,
-							reviewSucceeded: true,
-							recheckSucceeded: true,
-							unresolvedBlocking: [],
-							conditions: [],
-						},
-					],
-				};
-			},
-		},
-		git: {
-			async preflight() {
-				events.push("git-preflight");
-			},
-			async commit(input) {
-				events.push(`commit:${input.task.id}`);
-				return {
-					taskId: input.task.id,
-					base: digest(`base-${counter}`),
-					head: digest(`head-${counter}`),
-					paths: input.changedPaths,
-					reviewPackage: "Actual base/head review material",
-				};
-			},
-		},
-		evidence: {
-			async read(ids) {
-				return ids.flatMap(id => {
-					const item = ledger.get(id);
-					return item ? [structuredClone(item)] : [];
-				});
-			},
-			async revalidate() {
-				return { taskIds: [], reasons: [], overall: false };
-			},
-			async flush() {},
-		},
-		validation: {
-			async run(input, context) {
-				events.push(`validate:${input.purpose}:${input.id}`);
-				return record(input.command, context, 0, { validationId: input.id }).id;
+			initialize: () => store.initialize(),
+			readRequirements: () => store.readRequirements(),
+			readSolution: () => store.readSolution(),
+			readPlan: () => store.readPlan(),
+			readReport: () => store.readReport(),
+			async close() {
+				closeCalls++;
+				return { archivedChangePath: "archive/file-workflow" };
 			},
 		},
 	};
-	const orchestrator = new SpecDrivenOrchestrator(ports, {
-		currentModel: "author",
-		members: ["author", "reviewer", "third"],
-		runId: "test-run",
-		...options,
-	});
-	const toChoice = async () => {
-		const state = await orchestrator.start("Implement approved behavior", "change");
-		return orchestrator.confirmSpecification(state.specification!.version);
-	};
-	const toPlan = async () => {
-		const state = await toChoice();
-		const candidate = state.team!.candidates[0]!;
-		return orchestrator.chooseCandidate(state.team!.runId, candidate.id, candidate.version);
-	};
-	const toAcceptance = async () => {
-		const state = await toPlan();
-		return orchestrator.confirmPlan(state.plan!.version);
-	};
+	const orchestrator = new SpecDrivenOrchestrator(ports, { currentModel: "test-model", runId: "test-run" });
 	return {
-		ports,
+		cwd,
 		orchestrator,
-		events,
-		ledger,
-		capturedReviews,
-		documents,
-		record,
-		executeTask,
-		toChoice,
-		toPlan,
-		toAcceptance,
-		setRequirements(value: SpecRequirementsDraft) {
-			requirementsDraft = value;
-		},
-		getRequirements() {
-			return structuredClone(requirementsDraft);
-		},
-		setPlan(value: SpecPlanDraft) {
-			planDraft = value;
-		},
-		getPlan() {
-			return structuredClone(planDraft);
-		},
-		editSpec() {
-			specVersion = "external-spec-edit";
-		},
-		editPlan() {
-			planVersion = "external-plan-edit";
-		},
-		editSolution() {
-			solutionVersion = "external-solution-edit";
+		store,
+		inputs,
+		omitted,
+		contents,
+		closeCalls: () => closeCalls,
+		beforeRun: (callback: typeof beforeRun) => {
+			beforeRun = callback;
 		},
 	};
 }
+async function reachPlan(f: { orchestrator: SpecDrivenOrchestrator }) {
+	await f.orchestrator.start("Implement the file workflow", "file-workflow");
+	await f.orchestrator.confirmSpecification("需求原文确认");
+	await f.orchestrator.chooseCandidate("small", " 选择 small；保留 Ω 和所有原文，不要总结。\n这是原始第二行。 \n");
+}
+async function reachAcceptance(f: { orchestrator: SpecDrivenOrchestrator }) {
+	await reachPlan(f);
+	await f.orchestrator.confirmPlan("按这个完整计划执行");
+}
 
-describe("single-developer plan revision and explicit review allowance", () => {
-	it("retains unchanged work and upstream approvals while requiring approval of the revised plan", async () => {
-		const f = fixture();
-		const draft = f.getPlan();
-		draft.tasks.push(task("T002"));
-		f.setPlan(draft);
-		const ready = await f.toAcceptance();
-		const preserved = structuredClone(ready.tasks[0]!);
-		const changed = f.getPlan();
-		changed.content += "\nRevised task instructions";
-		changed.tasks[1]!.instructions += "; handle boundary";
-		f.setPlan(changed);
-		const planner = f.ports.models.plan;
-		f.ports.models.plan = async (input, context) => {
-			expect(input.amendment).toBe("Change only T002");
-			expect(input.previous?.version).toBe(ready.plan!.version);
-			return planner(input, context);
-		};
-		const revised = await f.orchestrator.revisePlan(ready.plan!.version, "Change only T002");
-		expect(revised.phase).toBe("awaiting-plan");
-		expect(revised.specificationApproval).toBe(ready.specificationApproval);
-		expect(revised.selection).toEqual(ready.selection);
-		expect(revised.solution).toEqual(ready.solution);
-		expect(revised.planApproval).toBeUndefined();
-		expect(revised.acceptanceVersion).toBeUndefined();
-		expect(revised.tasks[0]!.status).toBe("completed");
-		expect(revised.tasks[0]!.records).toEqual(preserved.records);
-		expect(revised.tasks[0]!.commits).toEqual(preserved.commits);
-		expect(revised.tasks[1]!.status).toBe("pending");
-		expect(revised.tasks[1]!.review!.id).toBe(ready.tasks[1]!.review!.id);
-		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(1);
-		const snapshot = f.orchestrator.status();
-		const events = [...f.events];
-		await expect(f.orchestrator.revisePlan(ready.plan!.version, "Stale request")).rejects.toThrow();
-		await expect(f.orchestrator.confirmPlan(ready.plan!.version)).rejects.toThrow();
-		await expect(f.orchestrator.accept(ready.acceptanceVersion!)).rejects.toThrow();
-		expect(f.orchestrator.status()).toEqual(snapshot);
-		expect(f.events).toEqual(events);
-		const accepted = await f.orchestrator.confirmPlan(revised.plan!.version);
-		expect(accepted.phase).toBe("awaiting-acceptance");
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
-		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(2);
-	});
-
-	it("resumes each exhausted current seat only after an explicit identity-bound extra round", async () => {
-		for (const kind of ["requirements", "plan", "task", "overall"] as const) {
-			const f = fixture();
-			const review = f.ports.models.review;
-			f.ports.models.review = async (input, context) => {
-				if (input.kind !== kind) return review(input, context);
-				f.capturedReviews.push(structuredClone(input));
-				return input.slot.revision < 3 ? failure(kind === "overall" ? ["T001"] : []) : pass(input);
-			};
-			const ready = kind === "requirements" ? await f.orchestrator.start("Request", "change") : await f.toPlan();
-			const blocked =
-				kind === "task" || kind === "overall" ? await f.orchestrator.confirmPlan(ready.plan!.version) : ready;
-			const slot = blocked.reviews.find(item => item.kind === kind)!;
-			expect(blocked.paused).toBe(true);
-			expect(slot.revision).toBe(2);
-			expect(slot.repairLimit).toBe(2);
-			const events = [...f.events];
-			await expect(f.orchestrator.extendReview(slot.id, 1, 2)).rejects.toThrow();
-			await expect(f.orchestrator.extendReview("foreign", 2, 2)).rejects.toThrow();
-			expect(f.orchestrator.status()).toEqual(blocked);
-			expect(f.events).toEqual(events);
-			const extended = await f.orchestrator.extendReview(slot.id, slot.revision, slot.repairLimit);
-			expect(extended.paused).toBe(false);
-			expect(extended.phase).toBe(
-				kind === "requirements"
-					? "awaiting-specification"
-					: kind === "plan"
-						? "awaiting-plan"
-						: "awaiting-acceptance",
-			);
-			const current = extended.reviews.find(item => item.id === slot.id)!;
-			expect(current.model).toBe(slot.model);
-			expect(current.revision).toBe(3);
-			expect(current.repairLimit).toBe(3);
-			expect(current.lastReview?.verdict).toBe("pass");
-			expect(current.lastReview?.resolutions).toEqual([
-				{ findingId: "F1", resolved: true, evidence: "Inspected repair and rerun" },
-			]);
-			if (kind === "task" || kind === "overall") {
-				expect(f.events.filter(event => event === "validate:task:T001:unit")).toHaveLength(4);
-				expect(extended.finalApproval).toBeUndefined();
-			}
-			const snapshot = f.orchestrator.status();
-			await expect(f.orchestrator.extendReview(slot.id, 2, 2)).rejects.toThrow();
-			expect(f.orchestrator.status()).toEqual(snapshot);
-		}
-	});
-
-	it("adds allowance at acceptance without modifying files or accepting the result", async () => {
-		const f = fixture();
-		const review = f.ports.models.review;
-		f.ports.models.review = async (input, context) =>
-			input.kind === "overall" && input.slot.revision < 2 ? failure(["T001"]) : review(input, context);
-		const ready = await f.toAcceptance();
-		const slot = ready.reviews.find(item => item.kind === "overall")!;
-		const events = [...f.events];
-		const extended = await f.orchestrator.extendReview(slot.id, slot.revision, slot.repairLimit);
-		expect(extended.phase).toBe("awaiting-acceptance");
-		expect(extended.acceptanceVersion).toBe(ready.acceptanceVersion);
-		expect(extended.finalApproval).toBeUndefined();
-		expect(f.events).toEqual(events);
-		const repaired = await f.orchestrator.repair(extended.acceptanceVersion!, "Repair T001 boundary");
-		expect(repaired.phase).toBe("awaiting-acceptance");
-		expect(repaired.acceptanceVersion).not.toBe(ready.acceptanceVersion);
-		expect(f.events.filter(event => event === "validate:task:T001:unit")).toHaveLength(4);
-		expect(repaired.reviews.find(item => item.id === slot.id)!.revision).toBe(3);
-	});
-	it("does not reset a plan seat budget by repeatedly revising the plan", async () => {
-		const f = fixture();
-		let state = await f.toPlan();
-		const slot = state.reviews.find(item => item.kind === "plan")!;
-		for (const amendment of ["First change", "Second change"]) {
-			const draft = f.getPlan();
-			draft.content += `\n${amendment}`;
-			f.setPlan(draft);
-			state = await f.orchestrator.revisePlan(state.plan!.version, amendment);
-		}
-		expect(state.reviews.find(item => item.id === slot.id)!.revision).toBe(2);
-		const snapshot = f.orchestrator.status();
-		await expect(f.orchestrator.revisePlan(state.plan!.version, "Third change")).rejects.toThrow();
-		expect(f.orchestrator.status()).toEqual(snapshot);
-		const extended = await f.orchestrator.extendReview(slot.id, 2, 2);
-		expect(extended.planApproval).toBeUndefined();
-		expect(extended.reviews.find(item => item.id === slot.id)!.repairLimit).toBe(3);
-		const revised = await f.orchestrator.revisePlan(state.plan!.version, "Third change");
-		expect(revised.reviews.find(item => item.id === slot.id)!.revision).toBe(3);
-		expect(revised.phase).toBe("awaiting-plan");
-	});
-
-	it("isolates old executor callbacks before replacing an in-flight plan", async () => {
-		const f = fixture();
-		const planned = await f.toPlan();
-		const started = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		f.ports.models.execute = async (_input, context, control) => {
-			started.resolve();
-			await release.promise;
-			expect(context.signal.aborted).toBe(true);
-			await expect(control.start("T001")).rejects.toThrow();
-		};
-		const executing = f.orchestrator.confirmPlan(planned.plan!.version);
-		await started.promise;
-		const draft = f.getPlan();
-		draft.content += "\nStop old execution and revise";
-		f.setPlan(draft);
-		const revising = f.orchestrator.revisePlan(planned.plan!.version, "Revise while running");
-		release.resolve();
-		await executing;
-		const revised = await revising;
-		expect(revised.phase).toBe("awaiting-plan");
-		expect(revised.paused).toBe(false);
-		expect(revised.planApproval).toBeUndefined();
-		expect(revised.tasks[0]!.status).toBe("pending");
-		expect(f.events.some(event => event.startsWith("commit:"))).toBe(false);
-	});
-	it("rejects an unchanged native publication when no prior real task range exists", async () => {
-		const f = fixture();
-		f.ports.git.commit = async () => null;
-		const blocked = await f.toAcceptance();
-		expect(blocked.paused).toBe(true);
-		expect(blocked.blockedReason).toBe("Unchanged task publication has no prior real commit range");
-		expect(blocked.tasks[0]!.commits).toEqual([]);
-		expect(blocked.tasks[0]!.status).toBe("verified");
-		expect(blocked.acceptanceVersion).toBeUndefined();
-		expect(f.capturedReviews.some(review => review.kind === "task")).toBe(false);
-	});
-});
-
-describe("native current-stage collaboration", () => {
-	it("reports accumulated user-decision wait from real phase time", async () => {
-		const base = Date.now();
-		const f = fixture();
-		try {
-			await f.orchestrator.start("request", "change");
-			setSystemTime(base + 30);
-			const timing = f.orchestrator.timing();
-			expect(timing.plannedDecisionWaitMs).toBeGreaterThanOrEqual(20);
-			expect(timing.executionWaitMs).toBe(0);
-		} finally {
-			setSystemTime();
-		}
-	});
-
-	it("discusses waiting materials without approval and saves reviewed revisions only at their unapproved stage", async () => {
-		const f = fixture();
-		const initial = await f.orchestrator.start("request", "change");
-		const requirementsActor = f.orchestrator.recipient()!;
-		const signal = new AbortController().signal;
-		await f.orchestrator.converse("同意，继续", "plain-message", requirementsActor, signal);
-		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
-		expect(f.events).not.toContain("team");
-		f.ports.conversation!.respond = async () => ({
-			text: "The revised requirements remain unapproved",
-			requirements: { ...f.getRequirements(), proposal: "Revised requirement proposal" },
-		});
-		await f.orchestrator.converse("revise proposal", "requirements-revision", requirementsActor, signal);
-		const revised = f.orchestrator.status();
-		expect(revised.phase).toBe("awaiting-specification");
-		expect(revised.specification!.version).not.toBe(initial.specification!.version);
-		expect(revised.reviews.filter(review => review.kind === "requirements")).toHaveLength(1);
-		expect(revised.reviews[0]).toMatchObject({
-			id: initial.reviews[0]!.id,
-			model: initial.reviews[0]!.model,
-			revision: 1,
-		});
-		await expect(f.orchestrator.confirmSpecification(initial.specification!.version)).rejects.toThrow();
-		const choice = await f.orchestrator.confirmSpecification(revised.specification!.version);
-		const planned = await f.orchestrator.chooseCandidate(choice.team!.runId, "A", "candidate-v1");
-		f.ports.conversation!.respond = async () => ({
-			text: "The revised plan remains unapproved",
-			plan: { ...f.getPlan(), content: "# Revised unique plan" },
-		});
-		await f.orchestrator.converse("revise plan", "plan-revision", f.orchestrator.recipient()!, signal);
-		const final = f.orchestrator.status();
-		expect(final.phase).toBe("awaiting-plan");
-		expect(final.plan!.version).not.toBe(planned.plan!.version);
-		expect(final.specificationApproval).toBe(revised.specification!.version);
-		expect(final.selection).toEqual(planned.selection);
-		expect(final.planApproval).toBeUndefined();
-		expect(final.reviews.filter(review => review.kind === "plan")).toHaveLength(1);
-		expect(final.reviews.find(review => review.kind === "plan")).toMatchObject({
-			id: planned.reviews.find(review => review.kind === "plan")!.id,
-			model: planned.reviews.find(review => review.kind === "plan")!.model,
-			revision: 1,
-		});
-		expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-		await expect(f.orchestrator.confirmPlan(planned.plan!.version)).rejects.toThrow();
-		await expect(
-			f.orchestrator.converse("wrong owner", "foreign-message", requirementsActor, signal),
-		).rejects.toThrow();
-	});
-
-	it("keeps acceptance dialogue read-only and invalidates old acceptance before scoped repair dispatch", async () => {
-		const f = fixture();
-		f.setPlan({ ...f.getPlan(), tasks: [task("T001"), task("T002")] });
-		const accepted = await f.toAcceptance();
-		expect(accepted.phase).toBe("awaiting-acceptance");
-		const old = accepted.acceptanceVersion!;
-		const actor = f.orchestrator.recipient()!;
-		const before = [...f.events];
-		await f.orchestrator.converse("explain results", "feedback", actor, new AbortController().signal);
-		expect(f.events).toEqual(before);
-		expect(f.orchestrator.status().acceptanceVersion).toBe(old);
-		await expect(f.orchestrator.repair("stale-token", "fix boundary")).rejects.toMatchObject({
-			code: "invalid_params",
-		});
-		expect(f.events).toEqual(before);
-		const scopeEntered = Promise.withResolvers<void>();
-		const releaseScope = Promise.withResolvers<void>();
-		f.ports.conversation!.repairScope = async input => {
-			expect(input.status.acceptanceVersion).toBeUndefined();
-			expect(input.status.planApproval).toBe(accepted.planApproval);
-			scopeEntered.resolve();
-			await releaseScope.promise;
-			return ["T001"];
-		};
-		const repairing = f.orchestrator.repair(old, "Fix the first approved obligation");
-		expect(f.orchestrator.status().acceptanceVersion).toBeUndefined();
-		await scopeEntered.promise;
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
-		await expect(f.orchestrator.accept(old)).rejects.toThrow();
-		releaseScope.resolve();
-		const repaired = await repairing;
-		expect(repaired.phase).toBe("awaiting-acceptance");
-		expect(repaired.acceptanceVersion).not.toBe(old);
-		expect(repaired.specificationApproval).toBe(accepted.specificationApproval);
-		expect(repaired.planApproval).toBe(accepted.planApproval);
-		expect(repaired.tasks.find(item => item.id === "T002")).toEqual(accepted.tasks.find(item => item.id === "T002"));
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
-		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(1);
-		await expect(f.orchestrator.accept(old)).rejects.toThrow();
-	});
-
-	it("retries failed repair scope on resume without reviving the revoked acceptance", async () => {
-		const f = fixture();
-		const accepted = await f.toAcceptance();
-		const old = accepted.acceptanceVersion!;
-		const scopes: string[] = [];
-		f.ports.conversation!.repairScope = async input => {
-			scopes.push(input.text);
-			expect(input.status.acceptanceVersion).toBeUndefined();
-			if (scopes.length === 1) throw new Error("Scope analysis unavailable");
-			return ["T001"];
-		};
-		const failed = await f.orchestrator.repair(old, "Repair the approved boundary");
-		expect(failed).toMatchObject({
-			phase: "awaiting-acceptance",
-			paused: true,
-			blockedReason: "Scope analysis unavailable",
-		});
-		expect(failed.acceptanceVersion).toBeUndefined();
-		expect(failed.finalApproval).toBeUndefined();
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
-		await expect(f.orchestrator.accept(old)).rejects.toThrow();
-		const retried = await f.orchestrator.resume();
-		expect(scopes).toEqual(["Repair the approved boundary", "Repair the approved boundary"]);
-		expect(retried.phase).toBe("awaiting-acceptance");
-		expect(retried.paused).toBe(false);
-		expect(retried.acceptanceVersion).toBeTruthy();
-		expect(retried.acceptanceVersion).not.toBe(old);
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
-		await expect(f.orchestrator.accept(old)).rejects.toThrow();
-	});
-
-	it("rejects an exhausted overall repair before revoking the current acceptance", async () => {
-		const f = fixture();
-		let ready = await f.toAcceptance();
-		for (let round = 0; round < 2; round++)
-			ready = await f.orchestrator.repair(ready.acceptanceVersion!, "Repair approved behavior");
-		const before = [...f.events];
-		await expect(f.orchestrator.repair(ready.acceptanceVersion!, "One more repair")).rejects.toMatchObject({
-			code: "invalid_params",
-		});
-		expect(f.orchestrator.status().acceptanceVersion).toBe(ready.acceptanceVersion);
-		expect(f.orchestrator.status().paused).toBe(false);
-		expect(f.events).toEqual(before);
-		expect((await f.orchestrator.accept(ready.acceptanceVersion!)).phase).toBe("completed");
-	});
-
-	it("allows correcting exhausted task repair scope without restoring acceptance or resetting review limits", async () => {
-		const f = fixture();
-		f.setPlan({ ...f.getPlan(), tasks: [task("T001"), task("T002")] });
-		const review = f.ports.models.review;
-		f.ports.models.review = async (input, context) => {
-			if (input.kind === "task" && input.task!.id === "T001" && input.slot.revision < 2) return failure();
-			return review(input, context);
-		};
-		const ready = await f.toAcceptance();
-		expect(ready.tasks[0]!.review!.revision).toBe(2);
-		f.ports.conversation!.repairScope = async input => [input.text === "Repair T002 only" ? "T002" : "T001"];
-		const blocked = await f.orchestrator.repair(ready.acceptanceVersion!, "Repair T001");
-		expect(blocked.phase).toBe("awaiting-answers");
-		expect(blocked.acceptanceVersion).toBeUndefined();
-		expect(blocked.questions.join(" ")).toContain("T001");
-		expect(f.orchestrator.currentRole()).toBe("executor");
-		await expect(f.orchestrator.accept(ready.acceptanceVersion!)).rejects.toThrow();
-		const repeated = await f.orchestrator.answer("Repair T001 again");
-		expect(repeated.phase).toBe("awaiting-answers");
-		expect(repeated.tasks[0]!.review!.revision).toBe(2);
-		await f.orchestrator.converse(
-			"Repair T002 only",
-			"scope-correction",
-			f.orchestrator.recipient()!,
-			new AbortController().signal,
+describe("four-stage file workflow", () => {
+	it("runs only four actors and gives the planner complete files and the exact user selection", async () => {
+		const f = await fixture();
+		await reachAcceptance(f);
+		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner", "executor"]);
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		expect(f.closeCalls()).toBe(0);
+		const planner = f.inputs[2]!;
+		expect(planner.files.map(file => file.content)).toEqual([PROPOSAL, DELTA, REQUIREMENTS, SOLUTION]);
+		expect(planner.userReply).toBe(" 选择 small；保留 Ω 和所有原文，不要总结。\n这是原始第二行。 \n");
+		expect(planner.candidateId).toBe("small");
+		expect(f.inputs[1]!.userReply).toBe("需求原文确认");
+		const executor = f.inputs[3]!;
+		expect(executor.files.map(file => file.content)).toEqual([PROPOSAL, DELTA, REQUIREMENTS, SOLUTION, PLAN]);
+		expect(executor.userReply).toBe("按这个完整计划执行");
+		const paths = f.orchestrator.status().paths!;
+		expect(path.dirname(paths.solution)).toBe(path.dirname(paths.plan));
+		expect(path.dirname(paths.report)).toBe(path.dirname(paths.plan));
+		const executionFiles = await fs.readdir(path.dirname(path.resolve(f.cwd, paths.plan)));
+		expect(executionFiles.sort()).toEqual(
+			[paths.solution, paths.plan, paths.report].map(file => path.basename(file)).sort(),
 		);
-		const repaired = f.orchestrator.status();
-		expect(repaired.phase).toBe("awaiting-acceptance");
-		expect(repaired.acceptanceVersion).not.toBe(ready.acceptanceVersion);
-		expect(repaired.tasks[0]).toEqual(ready.tasks[0]);
-		expect(f.events.filter(event => event === "execute:T002")).toHaveLength(2);
+		const generated = await fs.readdir(f.cwd, { recursive: true });
+		expect(generated.some(file => /handoff|confirmation|state\.json/i.test(file))).toBe(false);
+		await f.orchestrator.accept("验收通过");
+		expect(f.closeCalls()).toBe(1);
+		expect(f.orchestrator.status().phase).toBe("completed");
 	});
 
-	for (const kind of ["plan", "overall"] as const) {
-		it(`routes ${kind} review clarification to its author and rechecks the answer without implicit approval`, async () => {
-			const f = fixture();
-			const question = "Which approved boundary applies?";
-			const review = f.ports.models.review;
-			const responses: string[] = [];
-			f.ports.models.review = async (input, context) => {
-				if (input.kind === kind && !input.answer)
-					return { ...pass(input), verdict: "clarify", questions: [question] };
-				if (input.kind === kind) responses.push(input.answer!);
-				return review(input, context);
-			};
-			const waiting = kind === "plan" ? await f.toPlan() : await f.toAcceptance();
-			expect(waiting.phase).toBe("awaiting-answers");
-			expect(waiting.paused).toBe(false);
-			expect(waiting.clarification?.questions).toEqual([question]);
-			expect(f.orchestrator.currentRole()).toBe(kind === "plan" ? "planner" : "executor");
-			if (kind === "plan") await f.orchestrator.answer("Use the current approved boundary");
-			else
-				await f.orchestrator.converse(
-					"Use the current approved boundary",
-					"review-answer",
-					f.orchestrator.recipient()!,
-					new AbortController().signal,
-				);
-			const answered = f.orchestrator.status();
-			expect(answered.phase).toBe(kind === "plan" ? "awaiting-plan" : "awaiting-acceptance");
-			expect(answered.questions).toEqual([]);
-			expect(responses).toEqual(["Use the current approved boundary"]);
-			expect(answered.finalApproval).toBeUndefined();
-			if (kind === "plan") {
-				expect(answered.planApproval).toBeUndefined();
-				expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-			} else expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
+	it("keeps an invalid requirements file at the requirements stage until the user continues", async () => {
+		const f = await fixture();
+		f.contents.requirements = "";
+		await f.orchestrator.start("Request", "file-workflow");
+		expect(f.orchestrator.status().phase).toBe("requirements");
+		expect(f.orchestrator.status().blockedReason).toBeTruthy();
+		await expect(f.orchestrator.confirmSpecification()).rejects.toBeInstanceOf(SpecAdmissionError);
+		expect(f.inputs.map(input => input.role)).toEqual(["requirements"]);
+		f.contents.requirements = REQUIREMENTS;
+		await f.orchestrator.answer("补齐原始权威需求文件");
+		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
+		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "requirements"]);
+	});
+
+	it("does not use fluent agent text as a substitute for a missing output file", async () => {
+		const f = await fixture();
+		f.omitted.add("solution");
+		await f.orchestrator.start("Request", "file-workflow");
+		const blocked = await f.orchestrator.confirmSpecification();
+		expect(blocked.phase).toBe("solution");
+		expect(blocked.blockedReason).toBeTruthy();
+		await expect(f.orchestrator.chooseCandidate("small", "选择 small")).rejects.toBeInstanceOf(SpecAdmissionError);
+		expect(f.inputs.some(input => input.role === "planner")).toBe(false);
+		f.omitted.delete("solution");
+		await f.orchestrator.answer("请补齐方案文件");
+		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
+		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "solution"]);
+	});
+
+	it("rejects malformed candidates and never automatically retries the agent", async () => {
+		const f = await fixture();
+		f.contents.solution = JSON.stringify({
+			candidates: [
+				{ id: "same", title: "One", content: "A" },
+				{ id: "same", title: "Two", content: "B" },
+			],
 		});
-	}
-
-	it("drops previous repair instructions when changing the approved solution", async () => {
-		const f = fixture();
-		const first = await f.toAcceptance();
-		await f.orchestrator.repair(first.acceptanceVersion!, "Previous repair instructions");
-		const execute = f.ports.models.execute;
-		const repairs: Array<{ text: string; taskIds: string[] } | undefined> = [];
-		f.ports.models.execute = async (input, context, control) => {
-			repairs.push(input.repair);
-			await execute(input, context, control);
-		};
-		const choices = await f.orchestrator.changeSolution("Reconsider the approved direction");
-		const candidate = choices.team!.candidates[0]!;
-		const planned = await f.orchestrator.chooseCandidate(choices.team!.runId, candidate.id, candidate.version);
-		expect((await f.orchestrator.confirmPlan(planned.plan!.version)).phase).toBe("awaiting-acceptance");
-		expect(repairs).toEqual([undefined]);
+		await f.orchestrator.start("Request", "file-workflow");
+		await f.orchestrator.confirmSpecification();
+		expect(f.orchestrator.status().phase).toBe("solution");
+		expect(f.orchestrator.status().blockedReason).toBeTruthy();
+		expect(f.inputs.length).toBe(2);
+		f.contents.solution = SOLUTION;
+		await f.orchestrator.resume();
+		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
 	});
 
-	it("retries interrupted repair scope in the new generation and ignores the stale scope result", async () => {
-		const f = fixture();
-		const accepted = await f.toAcceptance();
+	it("requires real plan and report contents before exposing their decisions", async () => {
+		const f = await fixture();
+		f.contents.planner = "";
+		await reachPlan(f);
+		expect(f.orchestrator.status().phase).toBe("planning");
+		await expect(f.orchestrator.confirmPlan()).rejects.toBeInstanceOf(SpecAdmissionError);
+		f.contents.planner = PLAN;
+		await f.orchestrator.answer("写出完整计划");
+		f.contents.executor = "# Report\nEverything passed!";
+		await f.orchestrator.confirmPlan();
+		expect(f.orchestrator.status().phase).toBe("executing");
+		await expect(f.orchestrator.accept()).rejects.toBeInstanceOf(SpecAdmissionError);
+		expect(f.closeCalls()).toBe(0);
+		f.contents.executor = REPORT;
+		await f.orchestrator.answer("补齐完成、验证和剩余事项章节");
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+	});
+
+	it("rejects changed upstream bytes and asks for a new confirmation", async () => {
+		const f = await fixture();
+		await reachPlan(f);
+		const state = f.orchestrator.status();
+		await fs.writeFile(
+			path.resolve(f.cwd, state.solution!.path),
+			SOLUTION.replace("Simple file flow", "Changed option"),
+		);
+		await expect(f.orchestrator.confirmPlan()).rejects.toBeInstanceOf(SpecAdmissionError);
+		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
+		expect(f.orchestrator.status().selection).toBeUndefined();
+		expect(f.orchestrator.status().plan).toBeUndefined();
+		expect(f.inputs.some(input => input.role === "executor")).toBe(false);
+		await f.orchestrator.chooseCandidate("small", "重新确认修改后的完整方案");
+		expect(f.inputs.at(-1)?.userReply).toBe("重新确认修改后的完整方案");
+	});
+
+	it("revision and repair reuse their fixed actors without archiving", async () => {
+		const f = await fixture();
+		await reachPlan(f);
+		await f.orchestrator.revisePlan("减少一项实现工作");
+		expect(f.inputs.at(-1)?.role).toBe("planner");
+		expect(f.inputs.at(-1)?.feedback).toBe("减少一项实现工作");
+		await f.orchestrator.confirmPlan();
+		await f.orchestrator.repair("修复实际使用中的缺陷");
+		expect(f.inputs.at(-1)?.role).toBe("executor");
+		expect(f.inputs.at(-1)?.readOnly).toBe(false);
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		expect(f.closeCalls()).toBe(0);
+	});
+
+	it("acceptance conversation is read-only and cannot close the change", async () => {
+		const f = await fixture();
+		await reachAcceptance(f);
+		const reply = await f.orchestrator.converse({
+			text: "说明报告中的验证",
+			messageId: "question-1",
+			recipient: f.orchestrator.recipient()!,
+			signal: new AbortController().signal,
+		});
+		expect(reply.text).toContain("不是 JSON");
+		expect(f.inputs.at(-1)?.readOnly).toBe(true);
+		expect(f.inputs.at(-1)?.files.at(-1)?.content).toBe(REPORT);
+		expect(f.closeCalls()).toBe(0);
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+	});
+
+	it("changed completion report needs another explicit acceptance", async () => {
+		const f = await fixture();
+		await reachAcceptance(f);
+		await fs.appendFile(
+			path.resolve(f.cwd, f.orchestrator.status().report!.path),
+			"\nAdditional remaining work disclosed.\n",
+		);
+		await expect(f.orchestrator.accept()).rejects.toBeInstanceOf(SpecAdmissionError);
+		expect(f.closeCalls()).toBe(0);
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		await f.orchestrator.accept();
+		expect(f.closeCalls()).toBe(1);
+	});
+
+	it("cancel waits for native mutation settlement and discards its late reply", async () => {
+		const f = await fixture();
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
-		let calls = 0;
-		f.ports.conversation!.repairScope = async () => {
-			if (++calls === 1) {
-				entered.resolve();
-				await release.promise;
-			}
-			return ["T001"];
-		};
-		const repairing = f.orchestrator.repair(accepted.acceptanceVersion!, "Repair after pause");
-		await entered.promise;
-		f.orchestrator.pause();
-		release.resolve();
-		const interrupted = await repairing;
-		expect(interrupted.paused).toBe(true);
-		expect(interrupted.acceptanceVersion).toBeUndefined();
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(1);
-		const resumed = await f.orchestrator.resume();
-		expect(calls).toBe(2);
-		expect(resumed.paused).toBe(false);
-		expect(resumed.acceptanceVersion).toBeTruthy();
-		expect(resumed.acceptanceVersion).not.toBe(accepted.acceptanceVersion);
-		expect(resumed.generation).toBeGreaterThan(accepted.generation);
-		expect(f.events.filter(event => event === "execute:T001")).toHaveLength(2);
-	});
-
-	it("changes clarification identity even when a new round has identical question bytes", async () => {
-		const f = fixture();
-		const questions = ["1. Which boundary? Recommended: current approved boundary. Reason: preserve scope."];
-		f.setRequirements({ ...f.getRequirements(), questions });
-		const first = await f.orchestrator.start("request", "change");
-		expect(first.clarification?.questions).toEqual(questions);
-		f.ports.conversation!.respond = async () => ({ text: questions[0]!, requirements: f.getRequirements() });
-		await f.orchestrator.converse(
-			"ask again",
-			"round-message",
-			f.orchestrator.recipient()!,
-			new AbortController().signal,
-		);
-		const second = f.orchestrator.status();
-		expect(second.phase).toBe("awaiting-answers");
-		expect(second.clarification?.questions).toEqual(questions);
-		expect(second.clarification?.id).not.toBe(first.clarification?.id);
-		expect(second.specificationApproval).toBeUndefined();
-	});
-});
-
-describe("native status observations", () => {
-	it("publishes completed parent progress before the executor returns without suppressing evidence", async () => {
-		const observations: SpecDrivenStatus[] = [];
-		const f = fixture({
-			onStatusChange(status) {
-				observations.push(structuredClone(status));
-				status.phase = "cancelled";
-				throw new Error("An observer cannot own native phase or persistence");
-			},
-		});
-		const reached = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		const execute = f.ports.models.execute;
-		f.ports.models.execute = async (...args) => {
-			const result = await execute(...args);
-			reached.resolve();
+		f.beforeRun(async () => {
+			entered.resolve();
 			await release.promise;
-			return result;
-		};
-		let flushed = 0;
-		f.ports.evidence.flush = async () => {
-			flushed++;
-		};
-		const running = f.toAcceptance();
+		});
+		const running = f.orchestrator.start("Request", "file-workflow");
+		const outcome = running.then(
+			() => undefined,
+			error => error,
+		);
+		await entered.promise;
+		let settled = false;
+		const cancelling = f.orchestrator.cancel().then(status => {
+			settled = true;
+			return status;
+		});
 		try {
-			await reached.promise;
-			expect(f.orchestrator.runId).toBe("test-run");
-			expect(observations.some(state => state.phase === "requirements")).toBe(true);
-			expect(
-				observations.some(
-					state => state.phase === "executing" && state.tasks.some(task => task.status === "completed"),
-				),
-			).toBe(true);
-			expect(f.orchestrator.status().phase).toBe("executing");
-			expect(observations.some(state => state.phase === "awaiting-acceptance")).toBe(false);
-			expect(flushed).toBeGreaterThan(0);
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			await expect(f.orchestrator.resume()).rejects.toBeInstanceOf(SpecAdmissionError);
 		} finally {
 			release.resolve();
 		}
-		expect((await running).phase).toBe("awaiting-acceptance");
-		expect(observations.at(-1)?.phase).toBe("awaiting-acceptance");
-	});
-});
-
-/** A runner-owned filesystem ledger; model responses only reference its record IDs. */
-async function contentFixture() {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-content-"));
-	const f = fixture();
-	const store = new SpecArtifactStore({ cwd, changeId: "change" });
-	const artifactDir = path.join(cwd, store.changeDir, "checks");
-	const plan = f.getPlan();
-	plan.tasks = [task("T001"), task("T002", ["T001"]), task("T003")];
-	await fs.mkdir(path.join(cwd, "src"), { recursive: true });
-	await fs.mkdir(path.join(cwd, "test"), { recursive: true });
-	await fs.mkdir(path.join(cwd, "config"), { recursive: true });
-	await fs.writeFile(path.join(cwd, "package.json"), "{}\n");
-	for (const item of plan.tasks) {
-		await fs.mkdir(path.join(cwd, "src", item.id), { recursive: true });
-		await fs.writeFile(path.join(cwd, `src/${item.id}.ts`), "missing\n");
-		await fs.writeFile(path.join(cwd, `config/${item.id}.json`), "{}\n");
-		await fs.writeFile(
-			path.join(cwd, `test/${item.id}.test.ts`),
-			`const fs = require('node:fs');\nconst actual = fs.readFileSync('src/${item.id}.ts', 'utf8');\nif (actual !== 'approved\\n') { console.error('Expected approved behavior; missing implementation'); process.exit(1); }\nconsole.log('Passed approved behavior');\n`,
-		);
-		item.validation[0]!.command = `"${process.execPath}" "test/${item.id}.test.ts"`;
-		item.validation[0]!.inputPaths.push(`src/${item.id}`, `config/${item.id}.json`);
-	}
-	plan.finalValidation[0]!.command = plan.tasks.map(item => item.validation[0]!.command).join(" && ");
-	plan.finalValidation[0]!.inputPaths.push("config");
-	f.setPlan(plan);
-	f.ports.artifacts.writeRequirements = async draft => store.writeRequirements(draft);
-	f.ports.artifacts.readRequirements = async () => store.readRequirements();
-	f.ports.artifacts.writeSolution = async solution => store.writeSolution(solution);
-	f.ports.artifacts.readSolution = async () => store.readSolution();
-	f.ports.artifacts.writePlan = async draft => store.writePlan(draft);
-	f.ports.artifacts.readPlan = async () => store.readPlan();
-
-	// Match the runtime's consuming qualification pointers, while retaining real service originals.
-	const qualifications = new Map<string, SpecEvidenceService>();
-	let call = 0;
-	const run = async (command: string, context: SpecRunContext, destination = artifactDir, stage?: "red" | "green") => {
-		const status = f.orchestrator.status();
-		const approvedTask = status.plan?.tasks.find(item => item.validation.some(check => check.command === command));
-		const validation =
-			approvedTask?.validation.find(check => check.command === command) ??
-			status.plan?.finalValidation.find(check => check.command === command);
-		const binding =
-			validation && status.plan && status.specification
-				? {
-						actorId: approvedTask ? `filesystem-executor-${approvedTask.id}` : "filesystem-validation",
-						taskId: approvedTask?.id ?? null,
-						workspace: cwd,
-						specificationVersion: status.specification.version,
-						planVersion: status.plan.version,
-					}
-				: undefined;
-		const service = binding
-			? new SpecEvidenceService({
-					cwd,
-					changeDir: path.join(cwd, store.changeDir),
-					owner: binding,
-					run: { runId: context.runId, generation: context.generation },
-				})
-			: undefined;
-		const record = await recordSpecCommand({
-			cwd,
-			command,
-			context,
-			toolCallId: `filesystem-call-${++call}`,
-			artifactDir: destination,
-			...(service && binding && validation
-				? {
-						evidence: {
-							binding,
-							capture: () =>
-								service.capture({ inputPaths: validation.inputPaths, validationId: validation.id }, context),
-						},
-						obligation: {
-							validationId: validation.id,
-							approvedCommand: validation.command,
-							...(stage ? { stage } : {}),
-						},
-					}
-				: {}),
-		});
-		f.ledger.set(record.id, record);
-		if (service && stage !== "red") qualifications.set(approvedTask?.id ?? "final", service);
-		return record;
-	};
-	const evidence = {
-		...f.ports.evidence,
-		async revalidate(context: SpecRunContext) {
-			const taskIds = new Set<string>();
-			const reasons: string[] = [];
-			let overall = false;
-			for (const [id, service] of qualifications) {
-				const invalid = await service.revalidate(context);
-				if (!invalid.reasons.length) continue;
-				qualifications.delete(id);
-				for (const taskId of invalid.taskIds) taskIds.add(taskId);
-				reasons.push(...invalid.reasons);
-				overall ||= invalid.overall;
-			}
-			return { taskIds: [...taskIds], reasons, overall };
-		},
-		async flush(_status: unknown, _context: SpecRunContext) {
-			// Preserve actual originals before publishing the fixture's observed command index.
-			for (const record of f.ledger.values()) await fs.readFile(record.artifact.path);
-			await fs.writeFile(
-				path.join(cwd, store.changeDir, "verification.md"),
-				[...f.ledger.values()].map(record => `- checks/${path.basename(record.artifact.path)}\n`).join(""),
-			);
-		},
-	};
-	f.ports.evidence = evidence;
-	f.ports.models.execute = async (_input, context, control) => {
-		for (const state of control.status()) {
-			if (state.status === "completed") continue;
-			const approvedTask = await control.start(state.id);
-			f.events.push(`execute:${approvedTask.id}`);
-			if (state.execution) {
-				const checkpoint = await control.checkpoint(approvedTask.id, state.execution);
-				if (checkpoint.status !== "completed") return;
-				continue;
-			}
-			await fs.writeFile(path.join(cwd, approvedTask.implementationPaths[0]!), "missing\n");
-			const red = await run(approvedTask.validation[0]!.command, context, artifactDir, "red");
-			const implementationStartedAt = Date.now();
-			await fs.writeFile(path.join(cwd, approvedTask.implementationPaths[0]!), "approved\n");
-			const green = await run(approvedTask.validation[0]!.command, context, artifactDir, "green");
-			const checkpoint = await control.checkpoint(approvedTask.id, {
-				changedPaths: approvedTask.implementationPaths,
-				recordIds: [red.id, green.id],
-				redRecordId: red.id,
-				greenRecordId: green.id,
-				implementationStartedAt,
-				requestedTddException: null,
-			});
-			if (checkpoint.status !== "completed") return;
-		}
-	};
-	f.ports.validation.run = async (input, context) => {
-		f.events.push(`validate:${input.purpose}:${input.id}`);
-		return (await run(input.command, context)).id;
-	};
-	const context: SpecRunContext = { runId: "test-run", generation: 0, signal: new AbortController().signal };
-	const diagnostics = (state: SpecDrivenStatus) =>
-		JSON.stringify(
-			{
-				phase: state.phase,
-				blockedReason: state.blockedReason,
-				records: [...f.ledger.values()].map(record => ({
-					id: record.id,
-					command: record.args,
-					result: record.result,
-					artifact: record.artifact.path,
-				})),
-			},
-			null,
-			2,
-		);
-	return { ...f, cwd, store, artifactDir, run, context, evidence, diagnostics, preparedPlan: plan };
-}
-
-describe("current-content evidence qualification", () => {
-	for (const boundary of ["solution discussion", "planner", "plan reviewer"] as const) {
-		it(`demotes preserved same-fingerprint tasks and dependents after input mutation during ${boundary}`, async () => {
-			const f = await contentFixture();
-			try {
-				const ready = await f.toAcceptance();
-				expect(ready.phase, f.diagnostics(ready)).toBe("awaiting-acceptance");
-				const mutate = () => fs.writeFile(path.join(f.cwd, "config/T001.json"), '{"changed":true}\n');
-				if (boundary === "solution discussion") {
-					const run = f.ports.team.run;
-					f.ports.team.run = async (input, context) => {
-						await mutate();
-						return run(input, context);
-					};
-				} else if (boundary === "planner") {
-					const plan = f.ports.models.plan;
-					f.ports.models.plan = async (input, context) => {
-						await mutate();
-						return plan(input, context);
-					};
-				} else {
-					const review = f.ports.models.review;
-					let changed = false;
-					f.ports.models.review = async (input, context) => {
-						if (input.kind === "plan" && !changed) {
-							changed = true;
-							await mutate();
-						}
-						return review(input, context);
-					};
-				}
-				const choice = await f.orchestrator.changeSolution("Reconsider the same approved implementation");
-				const candidate = choice.team!.candidates[0]!;
-				let rebound = await f.orchestrator.chooseCandidate(choice.team!.runId, candidate.id, candidate.version);
-				if (rebound.paused) rebound = await f.orchestrator.resume();
-				expect(rebound.phase, f.diagnostics(rebound)).toBe("awaiting-plan");
-				expect(rebound.specificationApproval).toBe(ready.specificationApproval);
-				expect(rebound.acceptanceVersion).toBeUndefined();
-				for (const id of ["T001", "T002"]) {
-					const before = ready.tasks.find(item => item.id === id)!;
-					const after = rebound.tasks.find(item => item.id === id)!;
-					expect(after.fingerprint).toBe(before.fingerprint);
-					expect(after.status).toBe("implemented");
-					expect(after.validatedIds).toEqual([]);
-					expect(after.review?.id).toBe(before.review?.id);
-					expect(after.review?.revision).toBe(before.review?.revision);
-					expect(after.review?.reviewedRevision).toBeUndefined();
-				}
-				const unrelated = rebound.tasks.find(item => item.id === "T003")!;
-				const before = ready.tasks.find(item => item.id === "T003")!;
-				expect(unrelated.status).toBe("completed");
-				expect(unrelated.records).toEqual(before.records);
-				expect(unrelated.review).toEqual(before.review);
-				const validations = f.events.filter(event => event.startsWith("validate:task:")).length;
-				const renewed = await f.orchestrator.confirmPlan(rebound.plan!.version);
-				expect(renewed.phase, f.diagnostics(renewed)).toBe("awaiting-acceptance");
-				expect(f.events.filter(event => event.startsWith("validate:task:")).length).toBe(validations + 2);
-				expect(renewed.acceptanceVersion).not.toBe(ready.acceptanceVersion);
-			} finally {
-				await fs.rm(f.cwd, { recursive: true, force: true });
-			}
-		});
-	}
-
-	for (const boundary of ["task", "overall"] as const) {
-		it(`aborts ${boundary} review when selected input changes immediately before independent invocation`, async () => {
-			const f = await contentFixture();
-			let reviewContext: SpecRunContext | undefined;
-			try {
-				if (boundary === "task") {
-					const commit = f.ports.git.commit;
-					f.ports.git.commit = async (input, context) => {
-						reviewContext = context;
-						const result = await commit(input, context);
-						if (input.task.id === "T001")
-							await fs.writeFile(path.join(f.cwd, "config/T001.json"), '{"changed":true}\n');
-						return result;
-					};
-				} else {
-					const validate = f.ports.validation.run;
-					f.ports.validation.run = async (input, context) => {
-						reviewContext = context;
-						const id = await validate(input, context);
-						if (input.purpose === "final")
-							await fs.writeFile(path.join(f.cwd, "config/T001.json"), '{"changed":true}\n');
-						return id;
-					};
-				}
-				const blocked = await f.toAcceptance();
-				expect(blocked.paused, f.diagnostics(blocked)).toBe(true);
-				expect(blocked.blockedReason).toContain("Review inputs changed before independent analysis");
-				expect(blocked.acceptanceVersion).toBeUndefined();
-				expect(blocked.finalApproval).toBeUndefined();
-				expect(blocked.tasks.find(item => item.id === "T001")!.status).toBe("implemented");
-				expect(f.capturedReviews.filter(input => input.kind === boundary)).toHaveLength(0);
-				expect(f.events).not.toContain("close");
-				// The runtime consumes stale qualification pointers; a second refresh cannot rediscover this edit.
-				expect(await f.evidence.revalidate(reviewContext!)).toEqual({ taskIds: [], reasons: [], overall: false });
-			} finally {
-				await fs.rm(f.cwd, { recursive: true, force: true });
-			}
-		});
-	}
-
-	for (const mutation of ["implementation", "test", "config", "untracked creation", "input deletion"] as const) {
-		it(`rejects stale accept after actual ${mutation} and invalidates only affected dependent work`, async () => {
-			const f = await contentFixture();
-			try {
-				if (mutation === "untracked creation") {
-					const initialized = await f.run("git init && git add src test config package.json", f.context);
-					expect(initialized.result.exitCode).toBe(0);
-				}
-				const ready = await f.toAcceptance();
-				expect(ready.phase, f.diagnostics(ready)).toBe("awaiting-acceptance");
-				const original = ready.tasks.find(item => item.id === "T003")!;
-				if (mutation === "implementation") await fs.appendFile(path.join(f.cwd, "src/T001.ts"), "// changed\n");
-				if (mutation === "test") await fs.appendFile(path.join(f.cwd, "test/T001.test.ts"), "// changed\n");
-				if (mutation === "config") await fs.writeFile(path.join(f.cwd, "config/T001.json"), '{"mode":"new"}\n');
-				if (mutation === "untracked creation") {
-					await fs.writeFile(path.join(f.cwd, "src/T001/new-input.ts"), "new dependency\n");
-					const status = await f.run(
-						"git status --porcelain --untracked-files=all -- src/T001/new-input.ts",
-						f.context,
-					);
-					expect(status.result.exitCode).toBe(0);
-					expect(status.result.stdout).toContain("?? src/T001/new-input.ts");
-				}
-				if (mutation === "input deletion") await fs.unlink(path.join(f.cwd, "config/T001.json"));
-				const blocked = await f.orchestrator.accept(ready.acceptanceVersion!);
-				expect(blocked.phase).not.toBe("completed");
-				expect(blocked.acceptanceVersion).not.toBe(ready.acceptanceVersion);
-				expect(f.events).not.toContain("close");
-				expect(blocked.specificationApproval).toBe(ready.specificationApproval);
-				expect(blocked.planApproval).toBe(ready.planApproval);
-				for (const id of ["T001", "T002"]) {
-					const current = blocked.tasks.find(item => item.id === id)!;
-					const previous = ready.tasks.find(item => item.id === id)!;
-					expect(current.status !== "completed" || digest(current.records) !== digest(previous.records)).toBe(
-						true,
-					);
-					expect(current.review?.revision ?? previous.review!.revision).toBeGreaterThanOrEqual(
-						previous.review!.revision,
-					);
-				}
-				expect(blocked.tasks.find(item => item.id === "T003")).toEqual(original);
-				for (const record of ready.tasks.flatMap(item => item.records))
-					expect((await fs.readFile(record.artifact.path, "utf8")).length).toBeGreaterThan(0);
-			} finally {
-				await fs.rm(f.cwd, { recursive: true, force: true });
-			}
-		});
-	}
-
-	it("preserves approvals and evidence for unrelated docs, same-content commits and generated reports", async () => {
-		const f = await contentFixture();
-		try {
-			const baseline = await f.run(
-				"git init && git add src test config package.json && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m baseline && git rev-parse HEAD",
-				f.context,
-			);
-			expect(baseline.result.exitCode).toBe(0);
-			const ready = await f.toAcceptance();
-			expect(ready.phase, f.diagnostics(ready)).toBe("awaiting-acceptance");
-			const executions = f.events.filter(event => event.startsWith("execute:"));
-			await fs.writeFile(path.join(f.cwd, "unrelated.md"), "Unrelated explanation\n");
-			const commit = await f.run(
-				"git -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m same-content && git rev-parse HEAD",
-				f.context,
-			);
-			expect(commit.result.exitCode).toBe(0);
-			expect(commit.result.stdout.trim().split(/\r?\n/).at(-1)).not.toBe(
-				baseline.result.stdout.trim().split(/\r?\n/).at(-1),
-			);
-			await f.evidence.flush(ready, f.context);
-			await fs.appendFile(path.join(f.cwd, f.store.changeDir, "verification.md"), "\nReport-only annotation\n");
-			const closed = await f.orchestrator.accept(ready.acceptanceVersion!);
-			expect(closed.phase).toBe("completed");
-			expect(closed.specificationApproval).toBe(ready.specificationApproval);
-			expect(closed.planApproval).toBe(ready.planApproval);
-			expect(closed.tasks).toEqual(ready.tasks);
-			expect(f.events.filter(event => event.startsWith("execute:"))).toEqual(executions);
-		} finally {
-			await fs.rm(f.cwd, { recursive: true, force: true });
-		}
+		expect(await outcome).toBeInstanceOf(StaleRun);
+		expect((await cancelling).phase).toBe("cancelled");
+		expect(f.orchestrator.status().lastReply).toBeUndefined();
+		expect(f.closeCalls()).toBe(0);
 	});
 
-	it("revokes final-only qualifications without revoking unchanged task or document approvals", async () => {
-		const f = await contentFixture();
-		try {
-			await fs.writeFile(path.join(f.cwd, "entry.config.json"), '{"enabled":true}\n');
-			f.preparedPlan.finalValidation[0]!.inputPaths.push("entry.config.json");
-			f.preparedPlan.finalValidation[0]!.command += ` && "${process.execPath}" -e "if (!JSON.parse(require('node:fs').readFileSync('entry.config.json', 'utf8')).enabled) process.exit(1)"`;
-			f.setPlan(f.preparedPlan);
-			const ready = await f.toAcceptance();
-			expect(ready.phase, f.diagnostics(ready)).toBe("awaiting-acceptance");
-			await fs.writeFile(path.join(f.cwd, "entry.config.json"), '{"enabled":false}\n');
-			const blocked = await f.orchestrator.accept(ready.acceptanceVersion!);
-			expect(blocked.phase).not.toBe("completed");
-			expect(blocked.acceptanceVersion).not.toBe(ready.acceptanceVersion);
-			expect(blocked.tasks).toEqual(ready.tasks);
-			expect(blocked.specificationApproval).toBe(ready.specificationApproval);
-			expect(blocked.planApproval).toBe(ready.planApproval);
-			expect(f.events).not.toContain("close");
-		} finally {
-			await fs.rm(f.cwd, { recursive: true, force: true });
-		}
-	});
-
-	it("does not qualify new input bytes produced by an otherwise successful verification command", async () => {
-		const f = await contentFixture();
-		try {
-			f.preparedPlan.finalValidation[0]!.command += ` && "${process.execPath}" -e "require('node:fs').appendFileSync('src/T001.ts', '// rewritten by verification\\n')"`;
-			f.setPlan(f.preparedPlan);
-			const blocked = await f.toAcceptance();
-			expect(await fs.readFile(path.join(f.cwd, "src/T001.ts"), "utf8"), f.diagnostics(blocked)).toContain(
-				"rewritten by verification",
-			);
-			expect(blocked.acceptanceVersion).toBeUndefined();
-			expect(blocked.phase).not.toBe("awaiting-acceptance");
-		} finally {
-			await fs.rm(f.cwd, { recursive: true, force: true });
-		}
-	});
-
-	it("blocks publication when raw persistence fails and retains the original evidence", async () => {
-		const f = await contentFixture();
-		try {
-			const obstruction = path.join(f.cwd, "not-a-directory");
-			await fs.writeFile(obstruction, "preserve obstruction\n");
-			const run = f.ports.validation.run;
-			f.ports.validation.run = async (input, context) =>
-				input.purpose === "final" ? (await f.run(input.command, context, obstruction)).id : run(input, context);
-			const blocked = await f.toAcceptance();
-			expect(blocked.paused, f.diagnostics(blocked)).toBe(true);
-			expect(blocked.acceptanceVersion).toBeUndefined();
-			expect(f.capturedReviews.some(input => input.kind === "overall")).toBe(false);
-			expect(await fs.readFile(obstruction, "utf8")).toBe("preserve obstruction\n");
-			for (const record of f.ledger.values())
-				expect((await fs.readFile(record.artifact.path, "utf8")).length).toBeGreaterThan(0);
-			expect(f.events).not.toContain("close");
-		} finally {
-			await fs.rm(f.cwd, { recursive: true, force: true });
-		}
-	});
-
-	it("does not close or replace the previous report when flushing raw evidence fails", async () => {
-		const f = await contentFixture();
-		try {
-			const ready = await f.toAcceptance();
-			expect(ready.phase, f.diagnostics(ready)).toBe("awaiting-acceptance");
-			const report = path.join(f.cwd, f.store.changeDir, "verification.md");
-			await fs.writeFile(report, "Previous published evidence\n");
-			const obstruction = path.join(f.cwd, "blocked-raw-destination");
-			await fs.writeFile(obstruction, "not a directory\n");
-			f.evidence.flush = async () => {
-				await fs.mkdir(path.join(obstruction, "checks"), { recursive: true });
-				await fs.writeFile(report, "Must not publish success\n");
-			};
-			const blocked = await f.orchestrator.accept(ready.acceptanceVersion!);
-			expect(blocked.paused).toBe(true);
-			expect(blocked.phase).not.toBe("completed");
-			expect(f.events).not.toContain("close");
-			expect(await fs.readFile(report, "utf8")).toBe("Previous published evidence\n");
-			for (const record of f.ledger.values())
-				expect((await fs.readFile(record.artifact.path, "utf8")).length).toBeGreaterThan(0);
-		} finally {
-			await fs.rm(f.cwd, { recursive: true, force: true });
-		}
-	});
-});
-
-describe("formal approval and complete parent-task contracts", () => {
-	for (const target of [
-		"proposal.md",
-		"selected candidate",
-		"task projection",
-		"plan body",
-		"coverage table",
-	] as const) {
-		it(`rejects old confirm-plan after actual ${target} byte tampering`, async () => {
-			const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-formal-"));
-			try {
-				const f = fixture();
-				const store = new SpecArtifactStore({ cwd, changeId: "change" });
-				f.ports.artifacts.writeRequirements = async draft => store.writeRequirements(draft);
-				f.ports.artifacts.readRequirements = async () => store.readRequirements();
-				f.ports.artifacts.writeSolution = async solution => store.writeSolution(solution);
-				f.ports.artifacts.readSolution = async () => store.readSolution();
-				f.ports.artifacts.writePlan = async draft => store.writePlan(draft);
-				f.ports.artifacts.readPlan = async () => store.readPlan();
-				const ready = await f.toPlan();
-				expect(ready.phase).toBe("awaiting-plan");
-				const runtime = target === "selected candidate" || target === "task projection";
-				const relative = runtime
-					? store.statePath
-					: target === "proposal.md"
-						? `${store.changeDir}/proposal.md`
-						: store.planPath;
-				const file = path.join(cwd, relative);
-				const bytes = await fs.readFile(file, "utf8");
-				if (runtime) {
-					const state = JSON.parse(bytes);
-					if (target === "selected candidate") state.solution.proposal += "\nUnapproved interface.";
-					else state.plan.tasks[0].instructions += "\nUnapproved obligation.";
-					await fs.writeFile(file, JSON.stringify(state));
-				} else if (target === "coverage table") {
-					const row = bytes.split(/\r?\n/).find(line => line.startsWith("|") && line.includes("R1"));
-					expect(row).toBeDefined();
-					await fs.writeFile(file, bytes.replace(row!, "| R1 | T999 |"));
-				} else {
-					await fs.writeFile(file, `${bytes}\nUnapproved ${target} change.\n`);
-				}
-				const blocked = await f.orchestrator.confirmPlan(ready.plan!.version);
-				expect(blocked.paused).toBe(true);
-				expect(blocked.planApproval).toBeUndefined();
-				expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-				expect(f.events).not.toContain("git-preflight");
-			} finally {
-				await fs.rm(cwd, { recursive: true, force: true });
-			}
-		});
-	}
-
-	function coveredFixture() {
-		const f = fixture();
-		const requirements = f.getRequirements();
-		requirements.requirements.push({ id: "R3", text: "Explicitly affected existing scenario" });
-		requirements.proposal += "\nPreserve the affected existing scenario.\n";
-		f.setRequirements(requirements);
-		const plan = f.getPlan();
-		plan.tasks = [
-			{ ...task("T001"), requirementIds: ["R1", "R3"] },
-			{ ...task("T002"), requirementIds: ["R2", "R3"] },
-		];
-		f.setPlan(plan);
-		return f;
-	}
-
-	it("allows many-to-many coverage of new and explicitly affected existing requirements before review", async () => {
-		const f = coveredFixture();
-		expect((await f.toPlan()).phase).toBe("awaiting-plan");
-		const reviewed = f.capturedReviews.find(input => input.kind === "plan")!;
-		expect(reviewed.plan!.tasks.map(item => [item.id, item.requirementIds])).toEqual([
-			["T001", ["R1", "R3"]],
-			["T002", ["R2", "R3"]],
-		]);
-		expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-	});
-
-	for (const defect of [
-		"omitted affected R3",
-		"empty references",
-		"duplicate references",
-		"unknown reference",
-		"duplicate task ID",
-	] as const) {
-		it(`blocks ${defect} before independent plan review or implementation`, async () => {
-			const f = coveredFixture();
-			const plan = f.getPlan();
-			if (defect === "omitted affected R3") {
-				plan.tasks[0]!.requirementIds = ["R1"];
-				plan.tasks[1]!.requirementIds = ["R2"];
-			}
-			if (defect === "empty references") plan.tasks[0]!.requirementIds = [];
-			if (defect === "duplicate references") plan.tasks[0]!.requirementIds.push("R1");
-			if (defect === "unknown reference") plan.tasks[0]!.requirementIds.push("HISTORICAL-OUT-OF-SCOPE");
-			if (defect === "duplicate task ID") plan.tasks[1]!.id = "T001";
-			f.setPlan(plan);
-			const state = await f.toPlan();
-			expect(state.paused).toBe(true);
-			expect(state.planApproval).toBeUndefined();
-			expect(f.capturedReviews.some(input => input.kind === "plan")).toBe(false);
-			expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-		});
-	}
-
-	it("allows same-ID coverage repair after an incomplete draft is rejected before plan review", async () => {
-		const f = coveredFixture();
-		const plan = f.getPlan();
-		plan.tasks[0]!.requirementIds = ["R1"];
-		plan.tasks[1]!.requirementIds = ["R2"];
-		f.setPlan(plan);
-		const rejected = await f.toPlan();
-		expect(rejected.paused).toBe(true);
-		expect(rejected.blockedReason).toBe("Plan omits requirement R3");
-		expect(rejected.plan).toBeUndefined();
-		expect(rejected.planApproval).toBeUndefined();
-		expect(f.events).not.toContain("write-plan");
-		expect(f.capturedReviews.some(input => input.kind === "plan")).toBe(false);
-
-		plan.tasks[0]!.requirementIds = ["R1", "R3"];
-		f.setPlan(plan);
-		const repaired = await f.orchestrator.resume();
-		expect(repaired.paused).toBe(false);
-		expect(repaired.phase).toBe("awaiting-plan");
-		expect(repaired.planApproval).toBeUndefined();
-		const reviews = f.capturedReviews.filter(input => input.kind === "plan");
-		expect(reviews).toHaveLength(1);
-		expect(reviews[0]!.plan!.tasks.map(item => [item.id, item.requirementIds])).toEqual([
-			["T001", ["R1", "R3"]],
-			["T002", ["R2"]],
-		]);
-		expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-
-		const approved = await f.orchestrator.confirmPlan(repaired.plan!.version);
-		expect(approved.paused).toBe(false);
-		expect(approved.planApproval).toBe(repaired.plan!.version);
-		expect(approved.phase).toBe("awaiting-acceptance");
-
-		plan.tasks[0]!.requirementIds = ["R1"];
-		plan.tasks[1]!.requirementIds = ["R2", "R3"];
-		f.setPlan(plan);
-		const choice = await f.orchestrator.changeSolution("Reconsider the implementation direction");
-		const candidate = choice.team!.candidates[0]!;
-		const reassigned = await f.orchestrator.chooseCandidate(choice.team!.runId, candidate.id, candidate.version);
-		expect(reassigned.paused).toBe(true);
-		expect(reassigned.blockedReason).toBe("Stable task ID T001 was reassigned");
-		expect(reassigned.planApproval).toBeUndefined();
-		expect(f.capturedReviews.filter(input => input.kind === "plan")).toHaveLength(1);
-	});
-
-	it("saves selected candidate bytes and conditions before dispatching the planner", async () => {
-		const f = fixture();
-		const proposal =
-			"# Chosen design\r\n\r\nInterface: `getSample()` → `{ value: 1 }`.\r\n\r\nTrade-off: explicit ordering.  \r\n";
-		const conditions = [
-			{ id: "C1", description: "Existing entry remains compatible", command: "check compatibility" },
-		];
-		const run = f.ports.team.run;
-		f.ports.team.run = async (input, context) => {
-			const result = await run(input, context);
-			result.candidates[0]!.proposal = proposal;
-			result.candidates[0]!.conditions = conditions;
-			return result;
-		};
-		const plan = f.getPlan();
-		plan.conditions = [{ ...conditions[0]!, inputPaths: ["package.json"] }];
-		plan.tasks[0]!.conditionIds = ["C1"];
-		f.setPlan(plan);
-		const planner = f.ports.models.plan;
-		f.ports.models.plan = async (input, context) => {
-			expect(f.events).toContain("write-solution");
-			expect(JSON.parse(f.documents.get("solution")!)).toEqual({
-				specificationVersion: input.specification.version,
-				runId: "discussion",
-				candidateId: "A",
-				candidateVersion: "candidate-v1",
-				proposal,
-				conditions,
-			});
-			expect(input.candidate.proposal).toBe(proposal);
-			return planner(input, context);
-		};
-		expect((await f.toPlan()).phase).toBe("awaiting-plan");
-		expect(f.events.indexOf("write-solution")).toBeLessThan(f.events.indexOf("planner"));
-	});
-
-	it("does not dispatch the planner when selected solution publication fails", async () => {
-		const f = fixture();
-		f.ports.artifacts.writeSolution = async () => {
-			throw new Error("solution publication failed");
-		};
-		expect((await f.toPlan()).paused).toBe(true);
-		expect(f.events).not.toContain("planner");
-	});
-
-	it("rejects old confirm-plan after an external solution edit without dispatch", async () => {
-		const f = fixture();
-		const state = await f.toPlan();
-		f.editSolution();
-		const blocked = await f.orchestrator.confirmPlan(state.plan!.version);
-		expect(blocked.paused).toBe(true);
-		expect(blocked.planApproval).toBeUndefined();
-		expect(f.events.some(event => event.startsWith("execute:"))).toBe(false);
-	});
-
-	for (const defect of [
-		"escaped workspace",
-		"absolute workspace",
-		"empty inputs",
-		"escaped input",
-		"shell input",
-		"absolute input",
-	] as const) {
-		it(`rejects ${defect} before plan review`, async () => {
-			const f = fixture();
-			const plan = f.getPlan();
-			if (defect === "escaped workspace") plan.workspace.executionPath = "../other-checkout";
-			if (defect === "absolute workspace") plan.workspace.executionPath = "/other-checkout";
-			if (defect === "empty inputs") plan.tasks[0]!.validation[0]!.inputPaths = [];
-			if (defect === "escaped input") plan.tasks[0]!.validation[0]!.inputPaths = ["../credentials"];
-			if (defect === "shell input") plan.tasks[0]!.validation[0]!.inputPaths = ["$(cat secret)"];
-			if (defect === "absolute input") plan.finalValidation[0]!.inputPaths = ["C:\\outside\\input"];
-			f.setPlan(plan);
-			expect((await f.toPlan()).paused).toBe(true);
-			expect(f.capturedReviews.some(input => input.kind === "plan")).toBe(false);
-		});
-	}
-
-	for (const defect of ["empty reason", "missing alternative"] as const) {
-		it(`rejects a preapproved TDD exception with ${defect}`, async () => {
-			const f = fixture();
-			const plan = f.getPlan();
-			plan.tasks[0]!.tdd = {
-				mode: "exception",
-				reason: defect === "empty reason" ? "" : "Documentation-only task",
-				alternativeCommands: defect === "missing alternative" ? [] : ["inspect rendered documentation"],
-			};
-			f.setPlan(plan);
-			expect((await f.toPlan()).paused).toBe(true);
-			expect(f.capturedReviews.some(input => input.kind === "plan")).toBe(false);
-		});
-	}
-});
-
-describe("whole-stage autonomous execution", () => {
-	for (const mode of ["normal", "goal"] as const) {
-		it(`lets one ${mode} stage choose inline then overlapping dispatch without another approval`, async () => {
-			const f = fixture();
-			const plan = f.getPlan();
-			plan.tasks = [task("T001"), task("T002", ["T001"]), task("T003", ["T001"])];
-			f.setPlan(plan);
-			let stages = 0;
-			const order: string[] = [];
-			f.ports.models.execute = async (input, context, control) => {
-				stages++;
-				expect(input.mode).toBe(mode);
-				expect(input.tasks.map(state => state.id)).toEqual(["T001", "T002", "T003"]);
-				const first = await control.start("T001");
-				order.push("inline:T001");
-				const firstState = await control.checkpoint(first.id, await f.executeTask(first, context));
-				expect(firstState.status).toBe("completed");
-				expect(f.events).toContain("validate:task:T001:unit");
-				expect(
-					f.capturedReviews.filter(review => review.kind === "task" && review.task?.id === first.id),
-				).toHaveLength(1);
-				const release = Promise.withResolvers<void>();
-				let admitted = 0;
-				const dispatch = async (id: string) => {
-					const approved = await control.start(id);
-					order.push(`dispatch:${id}`);
-					if (++admitted === 2) release.resolve();
-					await release.promise;
-					const completed = await control.checkpoint(id, await f.executeTask(approved, context));
-					expect(completed.status).toBe("completed");
-				};
-				await Promise.all([dispatch("T003"), dispatch("T002")]);
-			};
-			const ready = await f.toPlan();
-			const result =
-				mode === "normal"
-					? await f.orchestrator.confirmPlan(ready.plan!.version)
-					: await f.orchestrator.confirmPlan(ready.plan!.version, { mode });
-			expect(result.phase).toBe("awaiting-acceptance");
-			expect(result.executionMode).toBe(mode);
-			expect(stages).toBe(1);
-			expect(order).toEqual(["inline:T001", "dispatch:T003", "dispatch:T002"]);
-			expect(result.tasks.every(state => state.status === "completed")).toBe(true);
-			expect(f.events).not.toContain("close");
-			for (const id of ["T001", "T002", "T003"])
-				expect(f.capturedReviews.filter(review => review.kind === "task" && review.task?.id === id)).toHaveLength(
-					1,
-				);
-		});
-	}
-
-	it("refuses an unready dependent and does not trust detached status or final prose", async () => {
-		const f = fixture();
-		const plan = f.getPlan();
-		plan.tasks = [task("T001"), task("T002", ["T001"])];
-		f.setPlan(plan);
-		f.ports.models.execute = async (_input, _context, control) => {
-			await expect(control.start("T002")).rejects.toThrow();
-			await expect(control.start("unknown")).rejects.toThrow();
-			const projection = control.status();
-			projection[0]!.status = "completed";
-			expect(control.status()[0]!.status).toBe("pending");
-			await expect(control.start("T002")).rejects.toThrow();
-		};
-		const result = await f.toAcceptance();
-		expect(result.phase).not.toBe("awaiting-acceptance");
-		expect(result.tasks.every(state => state.status !== "completed")).toBe(true);
-		expect(f.events).not.toContain("validate:final:entry");
-		expect(f.capturedReviews.some(review => review.kind === "task")).toBe(false);
-	});
-	it("keeps approved material contracts authoritative over executor snapshot edits", async () => {
-		const f = fixture();
-		const plan = f.getPlan();
-		plan.tasks = [task("T001"), task("T002", ["T001"])];
-		f.setPlan(plan);
-		f.ports.models.execute = async (input, context, control) => {
-			const claimed = input.plan.tasks[1]!;
-			claimed.dependencies = [];
-			claimed.ownedPaths.push("outside-approved-scope.ts");
-			claimed.validation = [];
-			claimed.tdd = { mode: "exception", reason: "Executor preference", alternativeCommands: ["true"] };
-			await expect(control.start("T002")).rejects.toThrow();
-			const first = await control.start("T001");
-			await control.checkpoint(first.id, await f.executeTask(first, context));
-			const approved = await control.start("T002");
-			expect(approved).toEqual(plan.tasks[1]!);
-			const result = await f.executeTask(approved, context);
-			result.changedPaths.push("outside-approved-scope.ts");
-			await control.checkpoint(approved.id, result);
-		};
-		const result = await f.toAcceptance();
-		expect(result.tasks[1]!.status).not.toBe("completed");
-		expect(result.phase).not.toBe("awaiting-acceptance");
-		expect(result.acceptanceVersion).toBeUndefined();
-		expect(result.plan!.tasks[1]).toEqual(plan.tasks[1]!);
-		expect(f.events).not.toContain("validate:final:entry");
-	});
-});
-describe("SpecDrivenOrchestrator", () => {
-	it("runs every gate, keeps document readiness separate, and closes only after explicit acceptance", async () => {
-		const f = fixture();
-		const specification = await f.orchestrator.start("Implement behavior", "change");
-		expect(specification.phase).toBe("awaiting-specification");
-		expect(f.events).not.toContain("team");
-		const choices = await f.orchestrator.confirmSpecification(specification.specification!.version);
-		expect(choices.phase).toBe("awaiting-choice");
-		expect(f.events).not.toContain("planner");
-		const plan = await f.orchestrator.chooseCandidate("discussion", "A", "candidate-v1");
-		expect(plan.phase).toBe("awaiting-plan");
-		expect(plan.tasks[0]!.status).toBe("pending");
-		expect(f.events).not.toContain("git-preflight");
-		const ready = await f.orchestrator.confirmPlan(plan.plan!.version);
-		expect(ready.phase).toBe("awaiting-acceptance");
-		expect(ready.tasks[0]!.status).toBe("completed");
-		expect(f.events).not.toContain("close");
-		expect(f.events.indexOf("validate:final:entry")).toBeLessThan(
-			f.events.findIndex(item => item.startsWith("review:overall")),
-		);
-		const closed = await f.orchestrator.accept(ready.acceptanceVersion!);
-		expect(closed.phase).toBe("completed");
-		expect(f.documents.get("archived")).toBe(ready.acceptanceVersion);
-		expect(f.capturedReviews.map(input => input.kind)).toEqual(["requirements", "plan", "task", "overall"]);
-	});
-
-	it("rejects stale spec, discussion, candidate, plan and final approvals without dispatch", async () => {
-		const f = fixture();
-		await f.orchestrator.start("Request", "change");
-		await expect(f.orchestrator.confirmSpecification("stale")).rejects.toThrow("Stale specification");
-		expect(f.events).not.toContain("team");
-		await f.orchestrator.confirmSpecification(f.orchestrator.status().specification!.version);
-		await expect(f.orchestrator.chooseCandidate("old", "A", "candidate-v1")).rejects.toThrow("Stale discussion");
-		await expect(f.orchestrator.chooseCandidate("discussion", "A", "old")).rejects.toThrow("Stale or ineligible");
-		const plan = await f.orchestrator.chooseCandidate("discussion", "A", "candidate-v1");
-		await expect(f.orchestrator.confirmPlan("old")).rejects.toThrow("Stale plan");
-		expect(f.events.some(item => item.startsWith("execute:"))).toBe(false);
-		await f.orchestrator.confirmPlan(plan.plan!.version);
-		await expect(f.orchestrator.accept("old")).rejects.toThrow("Stale final");
-		expect(f.events).not.toContain("close");
-	});
-
-	it("rejects zero candidates, failed rechecks and stale Team inputs", async () => {
-		for (const mode of ["zero", "recheck", "stale", "failed"] as const) {
-			const f = fixture();
-			const original = f.ports.team.run;
-			f.ports.team.run = async (input, context) => {
-				const result = await original(input, context);
-				if (mode === "zero") result.candidates = [];
-				if (mode === "recheck") result.candidates[0]!.recheckSucceeded = false;
-				if (mode === "stale") result.inputVersion = "old";
-				if (mode === "failed") result.status = "failed";
-				return result;
-			};
-			const state = await f.toChoice();
-			expect(state.paused).toBe(true);
-			expect(f.events).not.toContain("planner");
-		}
-	});
-
-	it("requires an actual answer and a fresh Team run for choice-affecting ambiguity", async () => {
-		const f = fixture();
-		const original = f.ports.team.run;
-		f.ports.team.run = async (input, context) => {
-			const result = await original(input, context);
-			if (!input.answer)
-				result.interpretationDifferences = [
-					{ id: "D1", question: "Which behavior is intended?", affectsChoice: true, resolved: false },
-				];
-			return result;
-		};
-		const state = await f.toChoice();
-		expect(state.phase).toBe("awaiting-answers");
-		await expect(f.orchestrator.chooseCandidate("discussion", "A", "candidate-v1")).rejects.toThrow();
-		const answered = await f.orchestrator.answer("The documented behavior");
-		expect(answered.phase).toBe("awaiting-choice");
-		expect(f.events.filter(item => item === "team")).toHaveLength(2);
-	});
-
-	it("retries Team discussion after zero eligible candidates instead of clearing an unresolved block", async () => {
-		const f = fixture();
-		const run = f.ports.team.run;
-		let attempts = 0;
-		f.ports.team.run = async (input, context) => {
-			const result = await run(input, context);
-			if (++attempts < 3) result.candidates = [];
-			return result;
-		};
-		const blocked = await f.toChoice();
-		expect(blocked.phase).toBe("team");
-		expect(blocked.blockedReason).toContain("zero adoptable candidates");
-		const stillBlocked = await f.orchestrator.resume();
-		expect(stillBlocked.paused).toBe(true);
-		expect(stillBlocked.blockedReason).toContain("zero adoptable candidates");
-		const recovered = await f.orchestrator.resume();
-		expect(recovered.phase).toBe("awaiting-choice");
-		expect(recovered.paused).toBe(false);
-		expect(recovered.team!.candidates[0]!.id).toBe("A");
-		expect(attempts).toBe(3);
-	});
-
-	it("pins a single reviewer through two repairs and never reopens a failed cap on resume", async () => {
-		const f = fixture();
-		let reviews = 0;
-		f.ports.models.review = async input => {
-			f.capturedReviews.push(structuredClone(input));
-			reviews++;
-			return failure();
-		};
-		const state = await f.orchestrator.start("Request", "change");
-		expect(state.paused).toBe(true);
-		expect(state.blockedReason).toContain("repair allowance is exhausted");
-		expect(reviews).toBe(3);
-		expect(f.capturedReviews.map(input => input.slot.revision)).toEqual([0, 1, 2]);
-		expect(new Set(f.capturedReviews.map(input => input.slot.id)).size).toBe(1);
-		expect(new Set(f.capturedReviews.map(input => input.slot.model))).toEqual(new Set(["reviewer"]));
-		await f.orchestrator.resume();
-		expect(reviews).toBe(3);
-	});
-
-	it("requires explicit resolution evidence and stable finding IDs during recheck", async () => {
-		for (const mode of ["missing", "renamed", "invalid"] as const) {
-			const f = fixture();
-			let reviews = 0;
-			f.ports.models.review = async () => {
-				if (reviews++ === 0) return failure();
-				if (mode === "invalid") return { verdict: "pass" };
-				if (mode === "renamed") {
-					const result = failure();
-					result.findings[0]!.id = "new-id";
-					return result;
-				}
-				return pass();
-			};
-			const state = await f.orchestrator.start("Request", "change");
-			expect(state.paused).toBe(true);
-			expect(f.events).not.toContain("team");
-		}
-	});
-
-	it("enforces the same two-repair cap at plan, task and overall slots", async () => {
-		for (const kind of ["plan", "task", "overall"] as const) {
-			const f = fixture();
-			const original = f.ports.models.review;
-			f.ports.models.review = async (input, context) => {
-				if (input.kind !== kind) return original(input, context);
-				f.capturedReviews.push(structuredClone(input));
-				return failure(kind === "overall" ? ["T001"] : []);
-			};
-			const ready = await f.toPlan();
-			const state = kind === "plan" ? ready : await f.orchestrator.confirmPlan(ready.plan!.version);
-			expect(state.paused).toBe(true);
-			expect(state.blockedReason).toContain("repair allowance is exhausted");
-			const reviews = f.capturedReviews.filter(input => input.kind === kind);
-			expect(reviews.map(input => input.slot.revision)).toEqual([0, 1, 2]);
-			expect(new Set(reviews.map(input => input.slot.id)).size).toBe(1);
-			expect(new Set(reviews.map(input => input.slot.model)).size).toBe(1);
-			expect(state.acceptanceVersion).toBeUndefined();
-		}
-	});
-
-	it("applies a requirements repair and mandatory evidence-backed recheck in the original seat", async () => {
-		const f = fixture();
-		const original = f.ports.models.review;
-		let first = true;
-		f.ports.models.review = async (input, context) => {
-			if (input.kind === "requirements" && first) {
-				first = false;
-				f.capturedReviews.push(structuredClone(input));
-				const amended = f.getRequirements();
-				amended.specs[0]!.content += "\n#### Scenario: boundary\nBoundary is preserved";
-				f.setRequirements(amended);
-				return failure();
-			}
-			return original(input, context);
-		};
-		const state = await f.orchestrator.start("Request", "change");
-		expect(state.phase).toBe("awaiting-specification");
-		expect(state.specification!.specs[0]!.content).toContain("Scenario: boundary");
-		const reviews = f.capturedReviews.filter(input => input.kind === "requirements");
-		expect(reviews).toHaveLength(2);
-		expect(reviews[0]!.slot.id).toBe(reviews[1]!.slot.id);
-		expect(reviews[1]!.slot.findings[0]!.id).toBe("F1");
-		expect(state.reviews[0]!.lastReview!.resolutions[0]!.resolved).toBe(true);
-	});
-
-	it("rotates ordered configured reviewers and labels a same-model independent context", async () => {
-		const f = fixture();
-		await f.toAcceptance();
-		expect(f.capturedReviews.map(input => input.slot.model)).toEqual(["reviewer", "reviewer", "third", "reviewer"]);
-		const single = fixture({ members: undefined });
-		await single.toAcceptance();
-		expect(
-			single.capturedReviews.every(input => input.slot.sameModelIndependent && input.slot.model === "author"),
-		).toBe(true);
-		expect(() => fixture({ unavailableMembers: ["bad"] })).toThrow("Unavailable team.members");
-	});
-
-	it("runs dependencies serially and never unlocks a rejected predecessor", async () => {
-		const f = fixture();
-		const plan = f.getPlan();
-		plan.tasks = [task("T002", ["T001"]), task("T001")];
-		f.setPlan(plan);
-		await f.toAcceptance();
-		expect(f.events.filter(item => item.startsWith("execute:"))).toEqual(["execute:T001", "execute:T002"]);
-		const blocked = fixture();
-		blocked.setPlan(plan);
-		const original = blocked.ports.models.review;
-		blocked.ports.models.review = async (input, context) =>
-			input.kind === "task" ? failure(["T001"]) : original(input, context);
-		const state = await blocked.toAcceptance();
-		expect(state.paused).toBe(true);
-		expect(blocked.events).not.toContain("execute:T002");
-	});
-
-	it("rejects missing and cyclic dependency graphs before execution", async () => {
-		for (const dependency of ["T999", "T002"]) {
-			const f = fixture();
-			const plan = f.getPlan();
-			plan.tasks = [task("T001", [dependency]), task("T002", ["T001"])];
-			f.setPlan(plan);
-			const state = await f.toPlan();
-			expect(state.paused).toBe(true);
-			expect(f.events.some(item => item.startsWith("execute:"))).toBe(false);
-		}
-	});
-
-	it("turns candidate assumptions into executable plan conditions and blocks on real failed checks", async () => {
-		for (const complete of [false, true]) {
-			const f = fixture();
-			const original = f.ports.team.run;
-			f.ports.team.run = async (input, context) => {
-				const result = await original(input, context);
-				result.candidates[0]!.conditions = [{ id: "C1", description: "Required platform exists" }];
-				return result;
-			};
-			const plan = f.getPlan();
-			if (complete) {
-				plan.conditions = [
-					{
-						id: "C1",
-						description: "Required platform exists",
-						command: "check platform",
-						inputPaths: ["package.json"],
-					},
-				];
-				plan.tasks[0]!.conditionIds = ["C1"];
-			}
-			f.setPlan(plan);
-			f.ports.validation.run = async (input, context) =>
-				f.record(input.command, context, input.purpose === "condition" ? 1 : 0).id;
-			const ready = await f.toPlan();
-			const state = complete ? await f.orchestrator.confirmPlan(ready.plan!.version) : ready;
-			expect(state.paused).toBe(true);
-			expect(f.events.some(item => item.startsWith("execute:"))).toBe(false);
-		}
-	});
-
-	it("rejects counterfeit ledger evidence, arbitrary RED, missing semantics and new TDD exemptions", async () => {
-		for (const mode of [
-			"missing-ledger",
-			"future-generation",
-			"arbitrary-red",
-			"late-red",
-			"no-semantic-review",
-			"new-exemption",
-		] as const) {
-			const f = fixture();
-			f.ports.models.execute = async (_input, context, control) => {
-				const approvedTask = await control.start("T001");
-				const result = await f.executeTask(approvedTask, context);
-				if (mode === "missing-ledger") f.ledger.clear();
-				if (mode === "future-generation") f.ledger.get(result.redRecordId!)!.generation++;
-				if (mode === "arbitrary-red") f.ledger.get(result.redRecordId!)!.args.command = "unrelated failing command";
-				if (mode === "late-red") result.implementationStartedAt = 0;
-				if (mode === "new-exemption") result.requestedTddException = "Skip TDD now";
-				await control.checkpoint(approvedTask.id, result);
-			};
-			if (mode === "no-semantic-review")
-				f.ports.models.review = async input => ({ ...pass(input), evidenceChecks: [] });
-			const state = await f.toAcceptance();
-			expect(state.paused).toBe(true);
-			expect(state.tasks[0]!.status).not.toBe("completed");
-			expect(f.events).not.toContain("validate:final:entry");
-		}
-	});
-
-	it("honors preapproved TDD exceptions with actual alternate and final validation", async () => {
-		const f = fixture();
-		const plan = f.getPlan();
-		plan.tasks[0]!.tdd = {
-			mode: "exception",
-			reason: "Documentation only",
-			alternativeCommands: ["check documentation"],
-		};
-		plan.tasks[0]!.implementationPaths = [];
-		plan.tasks[0]!.validation = [
-			{
-				id: "docs",
-				command: "check documentation",
-				behavior: "Published documentation is valid",
-				inputPaths: ["docs"],
-			},
-		];
-		f.setPlan(plan);
-		f.ports.models.execute = async (_input, _context, control) => {
-			await control.start("T001");
-			await control.checkpoint("T001", {
-				changedPaths: [],
-				recordIds: [],
-				redRecordId: null,
-				greenRecordId: null,
-				implementationStartedAt: null,
-				requestedTddException: null,
-			});
-		};
-		const state = await f.toAcceptance();
-		expect(state.phase).toBe("awaiting-acceptance");
-		expect(f.events).toContain("validate:task:T001:docs");
-		expect(f.events.some(event => event.startsWith("commit:"))).toBe(false);
-		expect(f.capturedReviews.find(input => input.kind === "task")!.records.length).toBeGreaterThan(0);
-	});
-
-	it("cancels in-flight dispatch, rejects late model writes, and resumes without repeating valid work", async () => {
-		const f = fixture();
-		const original = f.ports.models.execute;
-		const started = Promise.withResolvers<void>();
-		const lateResult = Promise.withResolvers<SpecExecution>();
-		f.ports.models.execute = async (_input, context, control) => {
-			const approvedTask = await control.start("T001");
-			const result = await f.executeTask(approvedTask, context);
-			started.resolve();
-			await lateResult.promise;
-			await control.checkpoint(approvedTask.id, result);
-		};
-		const ready = await f.toPlan();
-		const active = f.orchestrator.confirmPlan(ready.plan!.version);
-		await started.promise;
-		f.orchestrator.pause();
-		lateResult.resolve({
-			changedPaths: [],
-			recordIds: [],
-			redRecordId: null,
-			greenRecordId: null,
-			implementationStartedAt: null,
-			requestedTddException: null,
-		});
-		await active;
-		expect(f.orchestrator.status().tasks[0]!.status).toBe("pending");
-		expect(f.events).not.toContain("commit:T001");
-		f.ports.models.execute = original;
-		const state = await f.orchestrator.resume();
-		expect(state.phase).toBe("awaiting-acceptance");
-		expect(f.events.filter(item => item === "requirements")).toHaveLength(1);
-		expect(f.events.filter(item => item === "planner")).toHaveLength(1);
-		f.orchestrator.pause();
-		await expect(f.orchestrator.accept(state.acceptanceVersion!)).rejects.toThrow();
-		await f.orchestrator.resume();
-		expect(f.events.filter(item => item === "commit:T001")).toHaveLength(1);
-	});
-
-	it("preserves completed unrelated work and files while invalidating downstream approvals on amendment", async () => {
-		const f = fixture();
-		const originalPlan = f.getPlan();
-		originalPlan.tasks = [
-			{ ...task("T001"), requirementIds: ["R1"] },
-			{ ...task("T002"), requirementIds: ["R2"] },
-		];
-		f.setPlan(originalPlan);
-		const before = await f.toAcceptance();
-		const requirements = f.getRequirements();
-		requirements.requirements[1]!.text = "Changed unrelated requirement";
-		requirements.proposal = "Clarified unrelated behavior";
-		f.setRequirements(requirements);
-		const amended = await f.orchestrator.amendRequirements("Change R2 only");
-		expect(amended.phase).toBe("awaiting-specification");
-		expect(amended.specificationApproval).toBeUndefined();
-		expect(amended.planApproval).toBeUndefined();
-		expect(amended.acceptanceVersion).toBeUndefined();
-		expect(f.documents.has("src/T001.ts")).toBe(true);
-		await expect(f.orchestrator.confirmSpecification(before.specification!.version)).rejects.toThrow();
-		await f.orchestrator.confirmSpecification(amended.specification!.version);
-		const plan = await f.orchestrator.chooseCandidate("discussion", "A", "candidate-v1");
-		expect(plan.tasks[0]!.status).toBe("completed");
-		expect(plan.plan!.version).not.toBe(before.plan!.version);
-		await expect(f.orchestrator.confirmPlan(before.plan!.version)).rejects.toThrow("Stale plan");
-		await f.orchestrator.confirmPlan(plan.plan!.version);
-		expect(f.events.filter(item => item === "execute:T001")).toHaveLength(1);
-	});
-
-	it("invalidates changed task inputs and dependent work without deleting existing files", async () => {
-		const f = fixture();
-		await f.toAcceptance();
-		const requirements = f.getRequirements();
-		requirements.requirements[0]!.text = "Changed relevant behavior";
-		f.setRequirements(requirements);
-		const amended = await f.orchestrator.amendRequirements("Change R1");
-		await f.orchestrator.confirmSpecification(amended.specification!.version);
-		const plan = await f.orchestrator.chooseCandidate("discussion", "A", "candidate-v1");
-		expect(plan.tasks[0]!.status).toBe("pending");
-		expect(f.documents.has("src/T001.ts")).toBe(true);
-	});
-
-	it("detects external spec/plan edits at approval and revokes old dependent authorization", async () => {
-		const f = fixture();
-		const ready = await f.toPlan();
-		f.editPlan();
-		const blocked = await f.orchestrator.confirmPlan(ready.plan!.version);
-		expect(blocked.paused).toBe(true);
-		expect(blocked.planApproval).toBeUndefined();
-		expect(f.events.some(item => item.startsWith("execute:"))).toBe(false);
-		const s = fixture();
-		const spec = await s.orchestrator.start("Request", "change");
-		s.editSpec();
-		const invalid = await s.orchestrator.confirmSpecification(spec.specification!.version);
-		expect(invalid.specificationApproval).toBeUndefined();
-		expect(invalid.phase).toBe("requirements");
-		expect(s.events).not.toContain("team");
-	});
-
-	it("requires real overall validation and blocks closure conflicts after acceptance", async () => {
-		const f = fixture();
-		f.ports.validation.run = async (input, context) =>
-			f.record(input.command, context, input.purpose === "final" ? 1 : 0).id;
-		const failed = await f.toAcceptance();
-		expect(failed.paused).toBe(true);
-		expect(failed.acceptanceVersion).toBeUndefined();
-		expect(f.capturedReviews.some(input => input.kind === "overall")).toBe(false);
-		const conflict = fixture();
-		conflict.ports.artifacts.close = async () => {
-			throw new Error("Original Markdown source changed; unique match is no longer valid");
-		};
-		const ready = await conflict.toAcceptance();
-		const blocked = await conflict.orchestrator.accept(ready.acceptanceVersion!);
-		expect(blocked.phase).toBe("closing");
-		expect(blocked.paused).toBe(true);
-		expect(blocked.blockedReason).toContain("Original Markdown source changed");
-		expect(conflict.documents.has("archived")).toBe(false);
-	});
-
-	it("drops a paused requirements result before publishing any document", async () => {
-		const f = fixture();
+	it("pause waits for actual agent mutation settlement before resume", async () => {
+		const f = await fixture();
 		const entered = Promise.withResolvers<void>();
-		const result = Promise.withResolvers<SpecRequirementsDraft>();
-		f.ports.models.requirements = async () => {
+		const release = Promise.withResolvers<void>();
+		f.beforeRun(async () => {
 			entered.resolve();
-			return result.promise;
-		};
-		const active = f.orchestrator.start("Request", "change");
+			await release.promise;
+		});
+		const running = f.orchestrator.start("Request", "file-workflow");
+		const outcome = running.then(
+			() => undefined,
+			error => error,
+		);
 		await entered.promise;
-		f.orchestrator.pause();
-		result.resolve(f.getRequirements());
-		await active;
-		expect(f.events).not.toContain("write-requirements");
-		expect(f.orchestrator.status().specification).toBeUndefined();
-	});
-
-	it("retains valid command results across a failed validation and resume", async () => {
-		const f = fixture();
-		const plan = f.getPlan();
-		plan.tasks[0]!.validation.push({
-			id: "integration",
-			command: "integration",
-			behavior: "Integration contract",
-			inputPaths: ["src", "test"],
+		let settled = false;
+		const pausing = f.orchestrator.pause().then(status => {
+			settled = true;
+			return status;
 		});
-		plan.finalValidation.push({
-			id: "second-entry",
-			command: "run second-entry",
-			behavior: "Second real entry",
-			inputPaths: ["src", "test", "package.json"],
-			realEntry: true,
+		try {
+			await Promise.resolve();
+			expect(settled).toBe(false);
+			await expect(f.orchestrator.resume()).rejects.toBeInstanceOf(SpecAdmissionError);
+		} finally {
+			release.resolve();
+		}
+		expect(await outcome).toBeInstanceOf(StaleRun);
+		expect((await pausing).paused).toBe(true);
+		expect(f.orchestrator.status().lastReply).toBeUndefined();
+		f.beforeRun(undefined);
+		await f.orchestrator.resume();
+		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
+	});
+
+	it("a cancelled conversation rejects even when its provider returns normally", async () => {
+		const f = await fixture();
+		await reachAcceptance(f);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		f.beforeRun(async () => {
+			entered.resolve();
+			await release.promise;
 		});
-		f.setPlan(plan);
-		const original = f.ports.validation.run;
-		let failedTask = false;
-		let failedFinal = false;
-		f.ports.validation.run = async (input, context) => {
-			if (input.id === "T001:integration" && !failedTask) {
-				failedTask = true;
-				throw new Error("Temporary task validation failure");
-			}
-			if (input.id === "second-entry" && !failedFinal) {
-				failedFinal = true;
-				throw new Error("Temporary final validation failure");
-			}
-			return original(input, context);
-		};
-		const failed = await f.toAcceptance();
-		expect(failed.paused).toBe(true);
-		const finalFailed = await f.orchestrator.resume();
-		expect(finalFailed.paused).toBe(true);
-		const ready = await f.orchestrator.resume();
-		expect(ready.phase).toBe("awaiting-acceptance");
-		expect(f.events.filter(item => item === "validate:task:T001:unit")).toHaveLength(1);
-		expect(f.events.filter(item => item === "validate:final:entry")).toHaveLength(1);
-		expect(f.events.filter(item => item === "execute:T001")).toHaveLength(1);
-		expect(f.events.filter(item => item === "commit:T001")).toHaveLength(1);
-	});
-
-	it("pauses honestly on missing tools, malformed model results, and cancelled runs", async () => {
-		const f = fixture();
-		f.ports.models.requirements = async () => "not JSON";
-		const malformed = await f.orchestrator.start("Request", "change");
-		expect(malformed.paused).toBe(true);
-		expect(malformed.blockedReason).toContain("malformed JSON");
-		const missing = fixture();
-		missing.ports.validation.run = async () => {
-			throw new Error("Required executable is unavailable");
-		};
-		const failed = await missing.toAcceptance();
-		expect(failed.blockedReason).toContain("Required executable is unavailable");
-		missing.orchestrator.cancel();
-		await expect(missing.orchestrator.resume()).rejects.toThrow("Cancelled");
-	});
-
-	it("carries reviewed Markdown source patches into final authorized closure", async () => {
-		const f = fixture();
-		const draft = f.getRequirements();
-		draft.sourceMapVersion = digest("original authoritative Markdown");
-		draft.sourcePatches = [
-			{
-				operation: "modify",
-				sourceId: "existing-requirement",
-				replacement: "Approved replacement with original scenarios",
-			},
-		];
-		f.setRequirements(draft);
-		let reviewed = false;
-		const review = f.ports.models.review;
-		f.ports.models.review = async (input, context) => {
-			if (input.kind === "requirements") {
-				expect(input.specification.sourcePatches).toEqual(draft.sourcePatches);
-				expect(input.specification.sourceMapVersion).toBe(draft.sourceMapVersion);
-				reviewed = true;
-			}
-			return review(input, context);
-		};
-		const close = f.ports.artifacts.close;
-		f.ports.artifacts.close = async (input, context) => {
-			expect(reviewed).toBe(true);
-			expect(input.specification.sourcePatches).toEqual(draft.sourcePatches);
-			return close(input, context);
-		};
-		const ready = await f.toAcceptance();
-		expect((await f.orchestrator.accept(ready.acceptanceVersion!)).phase).toBe("completed");
+		const abort = new AbortController();
+		const pending = f.orchestrator.converse({
+			text: "说明验证",
+			messageId: "cancelled-message",
+			recipient: f.orchestrator.recipient()!,
+			signal: abort.signal,
+		});
+		const outcome = pending.then(
+			() => undefined,
+			error => error,
+		);
+		try {
+			await entered.promise;
+			abort.abort();
+		} finally {
+			release.resolve();
+		}
+		expect(await outcome).toBeInstanceOf(StaleRun);
+		expect(f.closeCalls()).toBe(0);
+		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
 	});
 });

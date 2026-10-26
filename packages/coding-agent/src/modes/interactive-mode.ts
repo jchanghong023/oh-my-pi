@@ -3091,7 +3091,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			!status.paused &&
 			!status.blockedReason &&
 			!status.phase.startsWith("awaiting-") &&
-			!interaction.actions.some(action => action.available && action.id.startsWith("extend-review:"))
+			!["requirements", "solution", "planning", "executing"].includes(status.phase)
 		)
 			return;
 		const key = JSON.stringify([

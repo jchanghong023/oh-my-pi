@@ -20,15 +20,8 @@ export const ompSpecStageSchema = z.enum(SPEC_STAGES);
 export const ompSpecCandidateSchema = z
 	.object({
 		id,
-		label: id,
-		version: id,
-		proposal: z.string(),
-		adoptable: z.boolean(),
-		reviewSucceeded: z.boolean(),
-		recheckSucceeded: z.boolean(),
-		unresolvedBlocking: z.array(z.object({ id, evidence: z.string() }).strict()),
-		exclusionReason: z.string().optional(),
-		conditions: z.array(z.object({ id, description: z.string(), command: z.string().optional() }).strict()),
+		title: id,
+		content: z.string().min(1),
 	})
 	.strict();
 export const ompSpecActionSchema = z
@@ -60,7 +53,6 @@ const recipientSchema = z
 		sessionId: id,
 	})
 	.strict();
-const clarificationSchema = z.object({ id, questions: z.array(z.string()) }).strict();
 const messageSchema = recipientSchema.extend({
 	id,
 	text: z.string(),
@@ -70,7 +62,6 @@ const messageSchema = recipientSchema.extend({
 	status: z.enum(["queued", "processing", "cancelling", "cancelled", "completed", "failed"]),
 	reply: z.string().optional(),
 	error: z.string().optional(),
-	clarificationId: id.optional(),
 });
 const nativeActionSchema = z
 	.object({
@@ -91,7 +82,6 @@ export const ompSpecInteractionSchema = z
 		messages: z.array(messageSchema),
 		actions: z.array(nativeActionSchema),
 		blockedReason: z.string().optional(),
-		clarification: clarificationSchema.optional(),
 	})
 	.strict();
 export type OmpSpecInteraction = z.infer<typeof ompSpecInteractionSchema>;
@@ -112,6 +102,7 @@ export const ompSpecDetailsSchema = z
 		stage: ompSpecStageSchema,
 		state: z.enum(["active", "waiting", "paused", "blocked", "terminal"]),
 		explanation: z.string(),
+		lastReply: z.string().optional(),
 		generation: z.number().int().nonnegative(),
 		live: z.boolean(),
 		readOnly: z.boolean(),
@@ -120,31 +111,16 @@ export const ompSpecDetailsSchema = z
 		sessionId: id,
 		createdAt: timestamp,
 		updatedAt: timestamp,
-		progress: z.object({ completed: z.number().int().nonnegative(), total: z.number().int().nonnegative() }).strict(),
-		tasks: z.array(
-			z
-				.object({
-					id,
-					title: z.string(),
-					dependencies: z.array(id),
-					requirementIds: z.array(id),
-					status: z.enum(["pending", "implemented", "verified", "completed", "running", "blocked", "failed"]),
-				})
-				.strict(),
-		),
 		versions: z
 			.object({
 				specification: id.optional(),
 				solution: id.optional(),
 				plan: id.optional(),
-				candidate: id.optional(),
-				acceptance: id.optional(),
+				report: id.optional(),
 			})
 			.strict(),
-		questions: z.array(z.string()),
-		clarification: clarificationSchema.optional(),
 		candidates: z.array(ompSpecCandidateSchema),
-		selectedCandidate: z.object({ id, version: id }).strict().nullable(),
+		selectedCandidate: z.object({ id, userReply: z.string() }).strict().nullable(),
 		actions: z.array(ompSpecActionSchema),
 		interaction: ompSpecInteractionSchema.optional(),
 		materials: z.array(ompSpecMaterialSchema),
@@ -160,8 +136,6 @@ export const ompSpecDetailsSchema = z
 				path: ["actions"],
 				message: "Readonly or terminal observations cannot expose controls",
 			});
-		if (details.progress.completed > details.progress.total)
-			context.addIssue({ code: "custom", path: ["progress"], message: "Completed tasks exceed total tasks" });
 	});
 export type OmpSpecRunBinding = z.infer<typeof ompSpecRunBindingSchema>;
 export type OmpSpecDetails = z.infer<typeof ompSpecDetailsSchema>;

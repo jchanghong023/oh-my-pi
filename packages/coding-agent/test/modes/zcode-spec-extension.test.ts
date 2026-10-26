@@ -38,17 +38,14 @@ function details(): OmpSpecDetails {
 		sessionId: "s",
 		createdAt: 1,
 		updatedAt: 2,
-		progress: { completed: 0, total: 1 },
-		tasks: [{ id: "T1", title: "Implement", dependencies: [], requirementIds: ["R1"], status: "pending" }],
 		versions: { plan: "native-token" },
-		questions: [],
 		candidates: [],
 		selectedCandidate: null,
 		actions: [
 			{
 				id: "confirm-plan",
 				label: "Confirm plan",
-				command: "/dev confirm-plan native-token",
+				command: "/dev confirm-plan",
 				binding: { runId: "native-run", generation: 2 },
 			},
 		],
@@ -74,7 +71,7 @@ function details(): OmpSpecDetails {
 				{
 					id: "confirm-plan",
 					label: "Approve plan and begin execution",
-					command: "/dev confirm-plan native-token",
+					command: "/dev confirm-plan",
 					available: true,
 				},
 			],
@@ -128,7 +125,7 @@ describe("local opt-in /dev protocol", () => {
 		expect(zcodeWorkflowsRunsParamsSchema.safeParse({ ...workspaceQuery, includeSpecDriven: "true" }).success).toBe(
 			false,
 		);
-		const payload = { text: "/dev confirm-plan native-token", specRun: { runId: "native-run", generation: 2 } };
+		const payload = { text: "/dev confirm-plan", specRun: { runId: "native-run", generation: 2 } };
 		expect(commandPayloadSchemas.sendText.parse(payload)).toEqual(payload);
 		const parsed = parseCommandEnvelope({
 			commandId: "command",
@@ -173,7 +170,7 @@ describe("local opt-in /dev protocol", () => {
 					{
 						id: "confirm-plan",
 						label: "Approve plan and begin execution",
-						command: "/dev confirm-plan native-token",
+						command: "/dev confirm-plan",
 						available: false,
 						blockedReason: "A stage message has not settled.",
 					},

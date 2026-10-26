@@ -1,26 +1,25 @@
-import { createHash } from "node:crypto";
+import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AsyncJobManager } from "../async/job-manager";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
+import { cfgEditMode } from "../edit/settings";
+import type { ExtensionFactory } from "../extensibility/extensions";
+import { containedSpecPath } from "./artifacts";
 import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
-import type { HandoffResult } from "../session/agent-session-types";
 import { SessionManager } from "../session/session-manager";
-import { cfgCompactionKeepRecentTokens } from "../session/context-settings";
 import { AgentRegistry } from "../registry/agent-registry";
-import { finalizeSubprocessOutput } from "../task/executor";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
 import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
-import type { SpecActorInput, SpecHandoff, SpecHandoffInput, SpecRunContext, SpecStageRole } from "./types";
+import type { SpecAgentInput, SpecConversationReply, SpecRunContext, SpecStageRole } from "./types";
 
 export interface SpecActor {
 	readonly id: string;
 	readonly role: SpecStageRole;
 	readonly session: AgentSession;
-	request(input: SpecActorInput, context: SpecRunContext, schema?: unknown): Promise<unknown>;
-	handoff(input: SpecHandoffInput, context: SpecRunContext): Promise<SpecHandoff>;
+	request(input: SpecAgentInput, context: SpecRunContext): Promise<SpecConversationReply>;
 	dispose(): Promise<void>;
 }
 
@@ -84,7 +83,7 @@ export async function createSpecActor(args: {
 	role: SpecStageRole;
 	options: CreateAgentSessionOptions;
 	sessionDirectory: string;
-	methods: readonly string[];
+	methods?: readonly string[];
 	onSessionCreated?: (session: AgentSession) => (() => void) | void;
 }): Promise<SpecActor> {
 	const id = `spec-${args.role}-${crypto.randomUUID()}`;
@@ -95,6 +94,46 @@ export async function createSpecActor(args: {
 			args.options.settingsManager ??
 			Settings.loadIsolated({ cwd: args.options.cwd, agentDir: args.options.agentDir }))
 	).overlay();
+	cfgEditMode.override(settings, "replace");
+	let currentInput: SpecAgentInput | undefined;
+	const writeGuard: ExtensionFactory = pi => {
+		pi.on("tool_call", async event => {
+			if (["read", "grep", "glob"].includes(event.toolName)) return undefined;
+			if (!currentInput || currentInput.readOnly)
+				return { block: true, reason: "当前阶段只允许读取；请通过明确的修改操作恢复写权限。" };
+			if (args.role === "executor") return undefined;
+			if (event.toolName !== "write" && event.toolName !== "edit")
+				return { block: true, reason: "执行确认前只能写本阶段的指定产物。" };
+			const requested = event.input.path;
+			if (
+				typeof requested !== "string" ||
+				requested.includes("://") ||
+				/[\0:#?\[\]]/.test(requested.replace(/^[A-Za-z]:/, ""))
+			)
+				return { block: true, reason: "阶段产物必须使用精确文件路径。" };
+			const cwd = args.options.cwd!;
+			const relative = (path.isAbsolute(requested) ? path.relative(cwd, requested) : requested).replaceAll(
+				"\\",
+				"/",
+			);
+			const allowed = currentInput.outputPaths.some(output => {
+				if (!output.includes("*")) return output === relative;
+				const prefix = output.slice(0, output.indexOf("*"));
+				return (
+					output.endsWith("*/spec.md") &&
+					relative.startsWith(prefix) &&
+					/^[a-z0-9]+(?:-[a-z0-9]+)*\/spec\.md$/.test(relative.slice(prefix.length))
+				);
+			});
+			if (!allowed) return { block: true, reason: `未授权的阶段文件写入：${requested}` };
+			try {
+				await containedSpecPath(cwd, relative);
+			} catch (error) {
+				return { block: true, reason: error instanceof Error ? error.message : String(error) };
+			}
+			return undefined;
+		});
+	};
 	const { session } = await createAgentSession({
 		...args.options,
 		settings,
@@ -105,7 +144,22 @@ export async function createSpecActor(args: {
 		agentRegistry: registry,
 		sessionManager: SessionManager.create(args.options.cwd!, args.sessionDirectory),
 		requireYieldTool: false,
-		systemPrompt: defaults => [...defaults, fixed, ...args.methods, communicationPrompt],
+		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
+		// factories without admitting ambient tools or extension discovery.
+		...(args.options.restrictToolNames
+			? {
+					preloadedPreparedExtensions: [
+						...(args.options.preloadedPreparedExtensions ?? []),
+						{
+							path: "<spec-stage-write-guard>",
+							resolvedPath: "<spec-stage-write-guard>",
+							factory: writeGuard,
+							error: null,
+						},
+					],
+				}
+			: { extensions: [...(args.options.extensions ?? []), writeGuard] }),
+		systemPrompt: defaults => [...defaults, fixed, ...(args.methods ?? []), communicationPrompt],
 	});
 	const ref = registry.get(id);
 	let disposed = false;
@@ -176,17 +230,15 @@ export async function createSpecActor(args: {
 		id,
 		role: args.role,
 		session,
-		request(input, context, schema) {
+		request(input, context) {
 			return perform(context, async () => {
-				const business =
-					input.payload !== null && typeof input.payload === "object" ? input.payload : { payload: input.payload };
-				const task = prompt.render(taskTemplate, {
-					payload: JSON.stringify({
-						specDrivenRole: args.role,
-						input: { ...business, documents: input.documents, handoff: input.handoff },
-					}),
-					skills: [],
-				});
+				currentInput = input;
+				await session.setActiveToolsByName(
+					input.readOnly
+						? ["read", "grep", "glob"]
+						: [...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"])],
+				);
+				const task = prompt.render(taskTemplate, { payload: JSON.stringify(input, null, 2) });
 				let message: AssistantMessage | undefined;
 				// 压缩会替换并缩短历史，不能用调用前的数组下标划分当前请求。
 				// 只捕获本次原生请求产生的终结消息，维护移除历史后仍保留真实结果。
@@ -194,11 +246,10 @@ export async function createSpecActor(args: {
 					if (event.type === "message_end" && event.message.role === "assistant") message = event.message;
 				});
 				try {
-					await session.prompt(`${task}\n\nOutput JSON matching this schema:\n${JSON.stringify(schema ?? {})}`, {
-						throwOnDrop: true,
-					});
+					await session.prompt(task, { throwOnDrop: true });
 				} finally {
 					unsubscribe();
+					currentInput = undefined;
 				}
 				context.signal.throwIfAborted();
 				if (
@@ -206,63 +257,24 @@ export async function createSpecActor(args: {
 					message.role !== "assistant" ||
 					message.stopReason === "error" ||
 					message.stopReason === "aborted"
-				)
-					throw new Error(`Native ${args.role} produced no successful assistant result`);
+				) {
+					const detail = message?.errorMessage?.trim();
+					throw new Error(
+						`Native ${args.role} produced no successful assistant result${detail ? `: ${detail}` : ""}`,
+					);
+				}
 				const text = message.content
 					.filter(item => item.type === "text")
 					.map(item => item.text)
 					.join("\n");
-				const result = finalizeSubprocessOutput({
-					rawOutput: text,
-					lastAssistantText: text,
-					exitCode: 0,
-					stderr: "",
-					doneAborted: false,
-					signalAborted: context.signal.aborted,
-					outputSchema: schema,
-					outputSchemaMode: "strict",
-					outputSchemaSource: "caller",
-				});
-				if (result.exitCode !== 0 || result.structuredOutput?.status !== "valid")
-					throw new Error(result.stderr || `Invalid native ${args.role} result`);
-				return result.structuredOutput.data;
-			});
-		},
-		handoff(input, context) {
-			return perform(context, async () => {
-				await session.appendCustomMessage(
-					{ customType: "spec-approved-handoff", content: JSON.stringify(input), display: false },
-					{ signal: context.signal },
-				);
-				// 短阶段会被默认保留预算全部保留，原生 handoff 因无可压缩内容而提前退出。
-				// 仅在本生产者交接期间保留原生最小尾部；父设置和普通压缩策略不变。
-				cfgCompactionKeepRecentTokens.override(settings, 0);
-				let result: HandoffResult | undefined;
-				try {
-					result = await session.handoff(JSON.stringify(input), { signal: context.signal });
-				} finally {
-					cfgCompactionKeepRecentTokens.clearOverride(settings);
-				}
-				context.signal.throwIfAborted();
-				if (!result?.document?.trim()) throw new Error("Native specification handoff returned no document");
-				return {
-					actorId: id,
-					sessionId: session.sessionId,
-					role: args.role,
-					runId: context.runId,
-					generation: context.generation,
-					transition: input.transition,
-					path: input.path,
-					body: result.document,
-					digest: createHash("sha256").update(result.document).digest("hex"),
-					versions: Object.fromEntries(input.documents.map(document => [document.path, document.version])),
-				};
+				return { text };
 			});
 		},
 		async dispose() {
 			if (disposed) return;
 			disposed = true;
 			await session.abort();
+			if (session.asyncJobManager) await cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
 			try {
 				await session.dispose();
 			} finally {

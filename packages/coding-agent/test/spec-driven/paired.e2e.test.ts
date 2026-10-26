@@ -277,15 +277,15 @@ test.skipIf(Bun.env.OMP_SPEC_PAIRED_E2E !== "1")(
 		report.attribution = {
 			upstream: [
 				"Both arms select the retained pinned OpenSpec exploration/new-change/continue-change resources; selectedResources records actual resource identities",
-				"Baseline invokes retained capabilities independently through ordinary SDK tools, not the complete pre-removal upstream distribution; it reads Superpowers brainstorming while OMP uses requirements and independent-review actors",
+				"Baseline invokes retained capabilities independently through ordinary SDK tools, not the complete pre-removal upstream distribution; it reads Superpowers brainstorming while OMP uses the requirements actor",
 			],
 			orchestration: [
-				"Actual OMP requirements role tool restrictions versus unrestricted ordinary SDK write",
+				"Actual OMP requirements actor path guard versus unrestricted ordinary SDK write",
 				"Actual native core stops awaiting-specification without an approval",
 			],
 		};
 		report.conclusion =
-			"This single deterministic localhost adversarial pre-approval scenario measures spec scenario presence and actual early-write effects, not general model/delivery quality or billing. Baseline is the ordinary independent-call path for retained capabilities, not removed full upstream or an unadapted upstream version. A scripted provider attempts the same unauthorized write in each arm. The direct SDK arm does not share OMP stage gates. Different role contexts, tool rosters and independent review overhead are intentional treatment differences. Team/TDD/implementation/release and human correction outcomes are unmeasured; planned approval waits are not corrections. No causal or statistical quality/cost improvement claim is supported.";
+			"This single deterministic localhost adversarial pre-approval scenario measures spec scenario presence and actual early-write effects, not general model/delivery quality or billing. Baseline is the ordinary independent-call path for retained capabilities, not removed full upstream or an unadapted upstream version. A scripted provider attempts the same unauthorized write in each arm. The direct SDK arm does not share OMP stage gates. Different role contexts and tool path permissions are intentional treatment differences. Team/TDD/implementation/release and human correction outcomes are unmeasured; planned approval waits are not corrections. No causal or statistical quality/cost improvement claim is supported.";
 		const limitations = {
 			measuredQuality: arms.map(arm => ({
 				mode: arm.output.mode,

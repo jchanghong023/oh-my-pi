@@ -101,10 +101,7 @@ describe("libkitty end-to-end", () => {
 				generation: 1,
 				specification: {
 					version: "spec-v1",
-					proposal: "Display the result",
-					specs: [],
-					requirements: [{ id: "R1", text: "Display the result" }],
-					questions: [],
+					files: [{ path: "requirements.md", content: "Display the result", version: "requirements-v1" }],
 				},
 			},
 		};
@@ -141,7 +138,7 @@ describe("libkitty end-to-end", () => {
 
 	it("persists one compact TUI report without raw status echo and retains explicit diagnostic facts", async () => {
 		const f = await devHelpFixture();
-		f.observation.status.questions = ["Which result should be displayed, and where?"];
+		f.observation.status.blockedReason = "Which result should be displayed, and where?";
 		const append = vi.spyOn(session, "appendCustomMessage");
 		const rawStatus = vi.spyOn(mode, "showStatus");
 		await f.controller.report();
@@ -164,7 +161,7 @@ describe("libkitty end-to-end", () => {
 		expect(details).toContain("awaiting-specification");
 		expect(details).toContain("spec-v1");
 		expect(details).toContain("Display the result");
-		expect(details).toContain("/dev confirm-spec spec-v1");
+		expect(details).toContain("/dev confirm-spec");
 		expect(rawStatus).not.toHaveBeenCalled();
 		expect(f.schedule).not.toHaveBeenCalled();
 	});
@@ -179,7 +176,7 @@ describe("libkitty end-to-end", () => {
 		f.controller.setOutput(textHost);
 		await f.controller.report();
 		expect(textHost).toHaveBeenCalledTimes(1);
-		expect(textHost.mock.calls[0]![0]).toContain("/dev confirm-spec spec-v1");
+		expect(textHost.mock.calls[0]![0]).toContain("/dev confirm-spec");
 		f.controller.setOutput(firstHost, true);
 		await f.controller.report();
 		expect(firstHost).not.toHaveBeenCalled();
@@ -201,7 +198,7 @@ describe("libkitty end-to-end", () => {
 		await term.waitForRender(f.visible);
 		expect(f.visible()).toBe(true);
 		expect(f.panel).toHaveBeenCalledTimes(1);
-		expect(plainRows(term.getViewport()).join("\n")).not.toContain("/dev confirm-spec spec-v1");
+		expect(plainRows(term.getViewport()).join("\n")).not.toContain("/dev confirm-spec");
 		// The initial material inspection must never authorize the transition.
 		term.sendInput("\r");
 		await term.waitForRender(f.visible);
@@ -237,6 +234,25 @@ describe("libkitty end-to-end", () => {
 		expect(f.panel).toHaveBeenCalledTimes(2);
 		expect(f.schedule).not.toHaveBeenCalled();
 	});
+
+	for (const phase of ["requirements", "solution", "planning", "executing"] as const) {
+		it(`opens help when ${phase} waits for files without pausing or approving`, async () => {
+			const f = await devHelpFixture();
+			f.observation.status.phase = phase;
+			f.observation.status.paused = false;
+			f.observation.status.blockedReason = "阶段文件缺失；请补充说明并继续当前阶段。";
+			f.observation.status.lastReply = "Display the result: 请补充当前阶段信息。";
+			f.controller.publishObservation();
+			await term.waitForRender(f.visible);
+			expect(f.panel).toHaveBeenCalledTimes(1);
+			expect(f.schedule).not.toHaveBeenCalled();
+			expect(f.controller.actions().some(action => action.id === "answer")).toBe(true);
+			term.sendInput("\x1b");
+			await term.waitForRender(() => !mode.ui.hasOverlay());
+			expect(f.observation.status.phase).toBe(phase);
+			expect(f.schedule).not.toHaveBeenCalled();
+		});
+	}
 
 	it("does not automatically open dev help while active or any user message is unsettled", async () => {
 		const f = await devHelpFixture();

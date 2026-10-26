@@ -112,7 +112,7 @@ export function createPairedProvider() {
 				const executed = calls(body);
 				let reply: { text?: string; tool?: { name: string; args: Record<string, unknown> } };
 				// SDK labels quote role inputs too; only the known tool-free label contract is auxiliary.
-				// A real role request missing yield must still fail rather than receive a fallback.
+				// A real role request must still fail rather than receive an auxiliary fallback.
 				const labelRequest =
 					!body.tools?.length &&
 					body.messages.some(
@@ -126,7 +126,7 @@ export function createPairedProvider() {
 				captured.kind = labelRequest ? "auxiliary" : baseline ? "baseline" : payload ? "stage" : "unclassified";
 				if (labelRequest)
 					reply = {
-						text: `<title>${payload?.specDrivenRole === "reviewer" ? "Review" : "Draft"} greeting specification</title>`,
+						text: "<title>Draft greeting specification</title>",
 					};
 				else if (
 					(baseline || payload?.specDrivenRole === "requirements") &&
@@ -341,10 +341,10 @@ async function runPairedArm() {
 async function runInteractiveFixture(): Promise<void> {
 	const root = process.argv[3];
 	if (!root || !path.isAbsolute(root))
-		throw new Error("Expected tui <absolute disposable root> [requirements|plan|task|blocked]");
-	const scenario = process.argv[4] ?? "task";
-	if (!["requirements", "plan", "task", "blocked"].includes(scenario))
-		throw new Error("Unknown interactive review scenario");
+		throw new Error("Expected tui <absolute disposable root> [requirements|solution|planner|executor|missing]");
+	const scenario = process.argv[4] ?? "requirements";
+	if (!["requirements", "solution", "planner", "executor", "missing"].includes(scenario))
+		throw new Error("Unknown interactive file-stage scenario");
 	const cwd = path.join(root, "project");
 	const home = path.join(root, "home");
 	const configRoot = path.join(root, "config");
@@ -352,10 +352,12 @@ async function runInteractiveFixture(): Promise<void> {
 	const temp = path.join(root, "tmp");
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
 	const evidencePath = path.join(root, "provider.jsonl");
-	const options: ProviderScenario = {
-		reviewFailures: scenario === "blocked" ? { task: 4 } : { [scenario]: 3 },
-		rejectValidationOverride: true,
-	};
+	const options: ProviderScenario =
+		scenario === "missing"
+			? { fileFailure: { role: "requirements", kind: "missing" } }
+			: scenario === "requirements"
+				? {}
+				: { fileFailure: { role: scenario as "solution" | "planner" | "executor", kind: "malformed" } };
 	const provider = createProviderFixture({
 		...options,
 		observe: request => fs.appendFile(evidencePath, `${JSON.stringify({ at: Date.now(), request })}\n`),

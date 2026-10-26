@@ -10,7 +10,6 @@ import {
 	type SpecControllerObservation,
 } from "../spec-driven/controller";
 import { roleLabel, stageForPhase, stageLabel } from "../spec-driven/stages";
-import type { SpecToolRecord } from "../spec-driven/types";
 import { reloadTuiPluginState } from "./builtin-marketplace";
 import { clearSubmittedText } from "./helpers/draft";
 import type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec } from "./types";
@@ -21,13 +20,12 @@ const usages = [
 	["status", "", "查看当前阶段、材料和准确的下一步命令"],
 	["answer", "<text>", "回答当前澄清问题"],
 	["cancel-message", "<message-id>", "停止指定消息处理，保留已有文件，不取消流程"],
-	["confirm-spec", "<version>", "确认需求并进入方案"],
-	["choose", "<run-id> <candidate-id> <candidate-version>", "选择此方案并编写计划"],
-	["confirm-plan", "<version> [--goal]", "批准计划并开始执行，可选 Goal；授权本任务本地 commit"],
-	["revise-plan", "<plan-version> <修改说明...>", "仅修订计划，审查后等待重新批准，不自动执行"],
-	["extend-review", "<review-id> <revision> <repair-limit>", "为当前耗尽的审查明确追加一轮自动修复，不代表通过"],
-	["accept", "<acceptance-version>", "最终验收当前交付版本"],
-	["repair", "<acceptance-version> <text>", "撤销本轮验收资格，返回获批范围内执行并修复"],
+	["confirm-spec", "[confirmation...]", "确认当前需求文件并进入方案"],
+	["choose", "<candidate-id> [confirmation...]", "选择实际方案文件中的候选并编写计划"],
+	["confirm-plan", "[confirmation...]", "批准当前计划文件并开始执行"],
+	["revise-plan", "<修改说明...>", "修订计划后等待重新批准，不自动执行"],
+	["accept", "", "验收当前完成报告，随后同步需求并归档"],
+	["repair", "<text>", "返回当前范围内执行并修复"],
 	["amend", "<text>", "修改需求，撤销受影响下游批准"],
 	["change-solution", "<reason>", "重新讨论核心方案，撤销相关下游批准"],
 	["pause", "", "暂停并停止后续派发"],
@@ -97,7 +95,7 @@ function invalidDevInput(message: string): Error & { code: "invalid_params" } {
 	return Object.assign(new Error(message), { code: "invalid_params" as const });
 }
 
-/** Presentation only: all executable actions and their versions remain owned by the controller. */
+/** Presentation only: material views never approve a transition. */
 function decisionModel(observation: SpecControllerObservation): DevDecisionModel {
 	const { status: state, interaction } = observation;
 	const stage =
@@ -108,108 +106,19 @@ function decisionModel(observation: SpecControllerObservation): DevDecisionModel
 				: state.phase === "cancelled"
 					? "已取消"
 					: stageLabel(stageForPhase(state.phase));
-	const questions = (state.clarification?.questions ?? state.questions).join("\n\n");
-	const specification = state.specification
-		? [state.specification.proposal, ...state.specification.specs.map(doc => `## ${doc.path}\n${doc.content}`)].join(
-				"\n\n",
-			)
-		: "尚无需求规格材料。";
-	const plan = state.plan;
-	const planAuthorization =
-		"批准即授权在上述范围内实现、验证、本任务本地 commit 及既定任务工作区集成；不授权 push、发布、创建 PR、改写历史或无关改动。普通执行与 Goal 均须遵守同一计划及版本门禁。";
-	const planScope = plan ? [...new Set(plan.tasks.flatMap(task => task.ownedPaths))].join("、") || "无文件改动" : "";
-	const planDetail = plan
-		? [
-				`任务摘要：\n${plan.tasks.map(task => `${task.title}；负责路径：${task.ownedPaths.join("、") || "无"}`).join("\n")}`,
-				`执行工作区：${plan.workspace.executionPath}\n隔离：${plan.workspace.isolation === "native" ? "原生隔离" : "不隔离"}；集成：原生`,
-				`核心验证：${[...new Set([...plan.tasks.flatMap(task => task.validation.map(validation => validation.command)), ...plan.finalValidation.map(validation => validation.command)])].join("；") || "未列出"}`,
-				planAuthorization,
-				"## 完整任务与验证要求",
-				...plan.tasks.map(task =>
-					[
-						`### ${task.title}`,
-						task.instructions,
-						`负责路径：${task.ownedPaths.join("、") || "无"}`,
-						`验证：\n${task.validation.map(v => `${v.behavior}：${v.command}`).join("\n")}`,
-						task.tdd.mode === "required"
-							? `TDD：先失败再实现；${task.tdd.behavior}`
-							: `TDD 例外：${task.tdd.reason}\n替代验证：${task.tdd.alternativeCommands.join("\n")}`,
-					].join("\n"),
-				),
-				`前置条件：\n${plan.conditions.map(c => `${c.description}：${c.command}`).join("\n") || "无"}`,
-				`最终验证：\n${plan.finalValidation.map(v => `${v.behavior}：${v.command}${v.realEntry ? "（真实入口）" : ""}`).join("\n")}`,
-				`## 完整计划正文\n${plan.content}`,
-			].join("\n\n")
-		: "尚无执行计划。";
-	const recordSummary = (record: SpecToolRecord): string => {
-		const stage =
-			record.obligation?.stage === "red"
-				? "RED（历史先失败阶段，不据此单独判定交付失败）"
-				: record.obligation?.stage === "green"
-					? "GREEN（实现后验证阶段）"
-					: "验证记录";
-		return `${record.args.command}；${stage}；${record.result.status === "completed" ? "已结束" : record.result.status === "cancelled" ? "已取消" : "结果未知"}；退出码 ${record.result.exitCode ?? "未知"}${record.result.isError ? "；工具报告错误" : ""}`;
-	};
-	const records = state.tasks.flatMap(task => task.records);
-	const acceptance = [
-		"交付与验证事实",
-		...state.tasks.map(task => {
-			const title = plan?.tasks.find(item => item.id === task.id)?.title ?? "任务";
-			return [
-				`### ${title}：${({ pending: "待执行", implemented: "已实现", verified: "已验证", completed: "已完成" } as const)[task.status]}`,
-				`交付路径：${task.execution?.changedPaths.join("、") || "尚无执行记录"}`,
-				task.records.length ? `最新验证记录：${recordSummary(task.records.at(-1)!)}` : "尚无验证记录",
-				task.review
-					? `审查：${task.review.findings.map(f => `${f.issue}\n${f.evidence}`).join("\n") || "无发现"}`
-					: "尚无任务审查记录",
-			].join("\n");
-		}),
-		...state.reviews.map(review =>
-			review.lastReview
-				? `审查结论：${({ pass: "通过", revise: "需要修订", clarify: "需要澄清" } as const)[review.lastReview.verdict]}\n${review.lastReview.summary}\n${review.lastReview.findings.map(finding => `${finding.issue}\n${finding.evidence}`).join("\n")}`
-				: "审查尚无结论",
-		),
-		...(plan?.finalValidation.map(validation => {
-			const record = records.findLast(
-				item =>
-					item.obligation?.validationId === validation.id &&
-					item.obligation.approvedCommand === validation.command,
-			);
-			return `最终验证：${validation.behavior}${validation.realEntry ? "（真实入口）" : ""}；${record ? recordSummary(record) : `${validation.command}；尚无匹配的执行记录`}`;
-		}) ?? []),
-		...(state.reviewArtifacts?.map(artifact => `审查材料：${artifact.path}`) ?? []),
-		`待收尾：${state.pendingClosure.join("、") || "无"}`,
-		"验收仅针对当前交付版本；要求修复将撤销本轮验收资格，并限定在已批准范围内。",
-		"## 历史验证记录概要",
-		"以下按实际阶段和退出状态列出历史记录；RED 不等于当前交付失败，也不自动表示先失败验证有效。完整标准输出与错误输出请查看“完整验证原始输出”。",
-		...records.map(recordSummary),
-	].join("\n\n");
-	const candidateDetail = (candidate: NonNullable<typeof state.team>["candidates"][number]): string =>
-		[
-			candidate.proposal,
-			`审查：${candidate.reviewSucceeded ? "通过" : "未通过"}；复核：${candidate.recheckSucceeded ? "通过" : "未通过"}；可采用：${candidate.adoptable ? "是" : "否"}`,
-			`适用条件：\n${candidate.conditions.map(c => `${c.description}${c.command ? `：${c.command}` : ""}`).join("\n") || "未列出额外条件"}`,
-			`阻塞：${candidate.exclusionReason ?? ""}\n${candidate.unresolvedBlocking.map(b => b.evidence).join("\n") || "无未解决阻塞"}`,
-			`方案讨论报告：\n${state.team?.report ?? "尚无报告"}`,
-			...(state.team?.interpretationDifferences.map(
-				d => `${d.question}；${d.affectsChoice ? "影响选择" : "不影响选择"}；${d.resolved ? "已解决" : "未解决"}`,
-			) ?? []),
-		].join("\n\n");
+	const specification =
+		state.specification?.files.map(file => `## ${file.path}\n${file.content}`).join("\n\n") ?? "尚无需求文件。";
+	const solution = state.solution ? `## ${state.solution.path}\n${state.solution.content}` : "尚无方案文件。";
+	const plan = state.plan ? `## ${state.plan.path}\n${state.plan.content}` : "尚无计划文件。";
+	const report = state.report ? `## ${state.report.path}\n${state.report.content}` : "尚无完成报告。";
 	const model: DevDecisionModel = {
 		title: `协同开发 · ${stage}`,
 		summary: [
-			["idle", "completed", "cancelled"].includes(state.phase)
-				? state.phase === "idle"
-					? "尚未启动。填写需求并提交后才开始新流程。"
-					: state.phase === "completed"
-						? "本轮已完成，可查看交付或开始新流程。"
-						: "本轮已取消，已有文件保留。"
-				: `当前阶段：${stage}；${state.paused ? "已暂停" : observation.active ? "后台工作中" : "等待你的决定"}。`,
-			state.phase === "awaiting-plan" && plan ? `计划范围：${plan.tasks.length} 项任务；${planScope}` : "",
-			state.phase === "awaiting-plan" && plan ? planAuthorization : "",
+			`当前阶段：${stage}；${state.paused ? "已暂停" : observation.active ? "后台工作中" : "等待你的决定"}。`,
 			state.blockedReason ?? "",
 			interaction.recipient ? `消息接收方：${roleLabel(interaction.recipient.role)}` : "",
-			"查看材料不会批准；只有明确提交操作才会推进流程。关闭窗口不改变流程。",
+			"查看材料、编辑草稿、调整窗口或关闭窗口不会批准。只有明确提交操作才推进流程。",
+			"批准计划不授权推送、发布、PR 或无关改动；验收后才同步需求并归档。",
 		]
 			.filter(Boolean)
 			.join("\n"),
@@ -218,77 +127,35 @@ function decisionModel(observation: SpecControllerObservation): DevDecisionModel
 	const material = (id: string, label: string, detail: string): void => {
 		model.actions.push({ id: `inspect:${id}`, label, group: "material", detail, inspect: true });
 	};
-	if (state.specification) material("specification", "查看完整需求规格", specification);
-	if (state.team) {
-		material("comparison", "查看方案比较与审查报告", state.team.report);
-		for (const candidate of state.team.candidates)
-			material(
-				`candidate:${candidate.id}`,
-				`查看${candidate.label}：${
-					candidate.proposal
-						.split(/\r?\n/)
-						.find(line => line.trim())
-						?.replace(/^#+\s*/, "")
-						.slice(0, 60) || candidate.label
-				}`,
-				candidateDetail(candidate),
-			);
+	if (state.lastReply) material("reply", "查看当前阶段完整回复", state.lastReply);
+	if (state.specification) material("specification", "查看完整需求文件", specification);
+	if (state.solution) {
+		material("solution", "查看完整方案文件与所有候选", solution);
+		for (const candidate of state.solution.candidates)
+			material(`candidate:${candidate.id}`, `查看方案：${candidate.title}`, candidate.content);
 	}
-	if (plan) material("plan", "查看计划、验证与授权", planDetail);
-	if (state.tasks.length || state.acceptanceVersion) material("acceptance", "查看交付与验收事实", acceptance);
-	if (records.length)
-		material(
-			"verification-output",
-			"完整验证原始输出",
-			records
-				.map(record =>
-					[
-						recordSummary(record),
-						`证据材料：${record.artifact.path}`,
-						`标准输出：\n${record.result.stdout}`,
-						`错误输出：\n${record.result.stderr}`,
-					].join("\n\n"),
-				)
-				.join("\n\n---\n\n"),
-		);
+	if (state.plan) material("plan", "查看完整计划文件", plan);
+	if (state.report) material("report", "查看完整完成报告", report);
 	for (const action of interaction.actions) {
 		if (action.id === "status") continue;
-		const candidate = state.team?.candidates.find(item => action.id === `choose:${item.id}`);
+		const candidate = state.solution?.candidates.find(item => action.id === `choose:${item.id}`);
 		const detail =
-			action.id === "answer"
-				? questions
-				: action.id === "confirm-spec"
-					? specification
-					: candidate
-						? candidateDetail(candidate)
-						: ["confirm-plan", "confirm-plan-goal", "revise-plan"].includes(action.id)
-							? planDetail
-							: ["accept", "repair"].includes(action.id)
-								? acceptance
-								: action.id === "start"
-									? "先描述需求；流程名称已自动生成，可按需修改。提交后开始澄清需求，不会自动批准后续阶段。"
-									: action.id === "amend"
-										? "修改需求会撤销受影响的下游批准，请说明新的需求。"
-										: "此操作会改变当前流程，请明确提交。";
+			action.id === "confirm-spec"
+				? specification
+				: candidate
+					? `${solution}\n\n选择：${candidate.title}\n可填写原始确认与补充说明；提交的选择和说明将原样交给计划 Agent。`
+					: ["confirm-plan", "revise-plan"].includes(action.id)
+						? plan
+						: ["accept", "repair"].includes(action.id)
+							? report
+							: action.id === "answer"
+								? (state.lastReply ?? "补充当前阶段所需信息；不会批准下一阶段。")
+								: "明确提交才执行此操作。关闭窗口不改变流程。";
 		model.actions.push({
 			id: action.id,
-			label: candidate
-				? `采用${candidate.label}：${
-						candidate.proposal
-							.split(/\r?\n/)
-							.find(line => line.trim())
-							?.replace(/^#+\s*/, "")
-							.slice(0, 60) || candidate.label
-					}`
-				: action.id.startsWith("cancel-message:")
-					? "停止处理当前消息（保留已有副作用）"
-					: action.id.startsWith("extend-review:")
-						? "为当前审查追加一轮修复（不代表通过）"
-						: action.label,
+			label: action.label,
 			group:
-				["start", "answer", "confirm-spec", "confirm-plan", "confirm-plan-goal", "accept", "repair"].includes(
-					action.id,
-				) || candidate
+				["start", "answer", "confirm-spec", "confirm-plan", "accept", "repair"].includes(action.id) || candidate
 					? "decision"
 					: "manage",
 			detail,
@@ -299,46 +166,33 @@ function decisionModel(observation: SpecControllerObservation): DevDecisionModel
 							{ id: "request", label: "需求正文", value: interaction.draft, multiline: true },
 							{ id: "change-id", label: "流程名称（可修改）", value: `change-${crypto.randomUUID()}` },
 						]
-					: action.requiresInput
-						? [
-								{
-									id: "text",
-									label:
-										action.id === "answer"
-											? "本轮完整回答"
-											: action.id === "repair"
-												? "获批范围内的修复说明"
-												: "说明",
-									multiline: true,
-								},
-							]
-						: undefined,
+					: candidate
+						? [{ id: "confirmation", label: "确认与补充说明（可选）", multiline: true }]
+						: action.requiresInput
+							? [{ id: "text", label: "说明或回答", multiline: true }]
+							: undefined,
 		});
 	}
 	material(
 		"commands",
-		"查看完整命令、版本与原始材料",
-		[
-			...interaction.actions.map(
-				action => `${action.label}：${action.command}${action.available ? "" : `（${action.blockedReason}）`}`,
-			),
-			JSON.stringify(state, null, 2),
-		].join("\n\n"),
+		"查看命令与完整原始材料",
+		[...interaction.actions.map(action => `${action.label}：${action.command}`), JSON.stringify(state, null, 2)].join(
+			"\n\n",
+		),
 	);
-	model.initialActionId =
-		state.phase === "awaiting-answers"
+	model.initialActionId = ["idle", "completed", "cancelled"].includes(state.phase)
+		? "start"
+		: ["requirements", "solution", "planning", "executing"].includes(state.phase) && !state.paused
 			? "answer"
-			: ["idle", "completed", "cancelled"].includes(state.phase)
-				? "start"
+			: state.phase === "awaiting-choice"
+				? "inspect:solution"
 				: state.phase === "awaiting-plan"
 					? "inspect:plan"
-					: state.phase === "awaiting-choice"
-						? "inspect:comparison"
-						: state.phase === "awaiting-acceptance"
-							? "inspect:acceptance"
-							: state.specification
-								? "inspect:specification"
-								: "inspect:commands";
+					: state.phase === "awaiting-acceptance"
+						? "inspect:report"
+						: state.specification
+							? "inspect:specification"
+							: "inspect:commands";
 	return model;
 }
 
@@ -444,6 +298,9 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 							throw invalidDevInput("流程名称必须由小写 ASCII 字母、数字及分隔连字符组成，例如 change-result。");
 						if (!request.trim()) throw invalidDevInput("请填写需求正文。");
 						invocation = `/dev start ${change} ${request}`;
+					} else if (chosen.id.startsWith("choose:")) {
+						const confirmation = selected.values?.confirmation ?? "";
+						if (confirmation) invocation = `${invocation} ${confirmation}`;
 					} else if (chosen.requiresInput) {
 						const input = selected.values?.text ?? "";
 						if (!input.trim()) throw invalidDevInput("请填写本次操作的说明或回答。");
@@ -546,69 +403,37 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 				controller.schedule(core => core.answer(answer));
 				break;
 			}
-			case "confirm-spec": {
-				const [version] = exact(1);
-				controller.schedule(core => core.confirmSpecification(version!));
+			case "confirm-spec":
+				controller.schedule(core => core.confirmSpecification(command.text));
 				break;
-			}
 			case "choose": {
-				const [run, candidate, version] = exact(3);
-				controller.schedule(core => core.chooseCandidate(run!, candidate!, version!));
+				const choice = /^\s*(\S+)(?:\s([\s\S]*))?$/.exec(text);
+				if (!choice) throw invalidDevInput("用法：/dev choose <candidate-id> [confirmation...]");
+				controller.schedule(core => core.chooseCandidate(choice[1]!, command.text));
 				break;
 			}
-			case "confirm-plan": {
-				const values = text.trim().split(/\s+/);
-				if (
-					!values[0] ||
-					values[0].startsWith("-") ||
-					values.length > 2 ||
-					(values.length === 2 && values[1] !== "--goal")
-				)
-					throw invalidDevInput("用法：/dev confirm-plan <version> [--goal]");
-				controller.schedule(core =>
-					core.confirmPlan(values[0]!, { mode: values.length === 2 ? "goal" : "normal" }),
-				);
+			case "confirm-plan":
+				if (/(?:^|\s)--goal(?:\s|$)/.test(text))
+					throw invalidDevInput("/dev confirm-plan 不支持 --goal；批准当前计划后直接开始执行。");
+				controller.schedule(core => core.confirmPlan(command.text));
 				break;
-			}
-			case "revise-plan": {
-				const revision = /^\s*(\S+)\s+([\s\S]+)$/.exec(text);
-				if (!revision || !revision[2]!.trim())
-					throw invalidDevInput("用法：/dev revise-plan <plan-version> <修改说明...>");
-				controller.revisePlan(revision[1]!, revision[2]!);
+			case "revise-plan":
+				controller.revisePlan(requiredText());
 				break;
-			}
-			case "extend-review": {
-				const [id, revision, repairLimit] = exact(3);
-				if (
-					!/^\d+$/.test(revision!) ||
-					!/^\d+$/.test(repairLimit!) ||
-					!Number.isSafeInteger(Number(revision)) ||
-					!Number.isSafeInteger(Number(repairLimit))
-				)
-					throw invalidDevInput("审查轮次与修复额度必须是非负安全整数。");
-				controller.extendReview(id!, Number(revision), Number(repairLimit));
+			case "accept":
+				controller.schedule(core => core.accept(command.text));
 				break;
-			}
-			case "accept": {
-				const [version] = exact(1);
-				controller.schedule(core => core.accept(version!));
+			case "repair":
+				controller.repair(requiredText());
 				break;
-			}
-			case "repair": {
-				const repair = /^\s*(\S+)\s+([\s\S]+)$/.exec(text);
-				if (!repair || !repair[2]!.trim())
-					throw invalidDevInput("用法：/dev repair <acceptance-version> <修复说明...>");
-				controller.repair(repair[1]!, repair[2]!);
-				break;
-			}
 			case "amend": {
 				const amendment = requiredText();
-				controller.schedule(core => core.amendRequirements(amendment), true);
+				controller.schedule(core => core.amendRequirements(amendment));
 				break;
 			}
 			case "change-solution": {
 				const reason = requiredText();
-				controller.schedule(core => core.changeSolution(reason), true);
+				controller.schedule(core => core.changeSolution(reason));
 				break;
 			}
 		}
@@ -638,7 +463,7 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 	{
 		name: "dev",
-		description: "协同开发模式：独立四阶段 Agent、显式版本批准及原生操作",
+		description: "协同开发模式：四阶段 Agent、真实文件交接与明确批准",
 		allowArgs: true,
 		subcommandOptional: true,
 		subcommands: usages.map(([name, usage, description]) => ({ name, usage, description })),

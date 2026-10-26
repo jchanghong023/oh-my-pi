@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title description">
   <title id="title">OpenSpec + Superpowers + OMP 受控协同工作流</title>
-  <desc id="description">需求 Agent 使用 Brainstorming、Grill-me 和 OpenSpec 编写规格，独立审查后由用户确认；方案 Agent 使用 OMP Team 比较候选，由用户选择；计划 Agent 使用 Superpowers 形成唯一计划并完成覆盖检查和独立审查，由用户批准并启动。前三次阶段转换分别调用原生 handoff。执行主 Agent 自主实现或并行派发，组织 TDD、验证、独立审查和修复，可选 Goal。当前有效证据齐备后交用户最终验收，验收后才由 OpenSpec 执行获批的同步与归档。OMP 程序控制权限、批准、唯一任务状态及可信证据。</desc>
+  <desc id="description">四个固定 Agent：需求、方案、计划、执行。程序每步检查真实文件、格式和最低字段，等待明确用户决定。切阶段直接传完整原文件与用户原始回复，方案到计划另传候选 ID，不生成交接文档或模型摘要。单能力五个正式文件：OpenSpec 原 proposal/spec，及同放 Superpowers 计划目录的方案、原格式计划与完成报告。报告就绪后等待验收，接受后原生同步归档需求。文件存在不证明软件正确。</desc>
   <defs>
     <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#5198f6"/>
@@ -75,33 +75,33 @@
 
   <text x="212.5" y="512" class="english">requirements</text>
   <text x="212.5" y="556" class="heading white">需求澄清与规格</text>
-  <text x="212.5" y="601" font-size="23" class="white">Brainstorming＋Grill-me</text>
-  <text x="212.5" y="637" class="detail white">OpenSpec · 独立审查</text>
+  <text x="212.5" y="601" font-size="23" class="white">调查项目 · 澄清目标</text>
+  <text x="212.5" y="637" class="detail white">OpenSpec 原规格文件</text>
 
   <text x="542.5" y="512" class="english">solution</text>
   <text x="542.5" y="556" class="heading white">方案比较</text>
-  <text x="542.5" y="601" class="detail white">OMP Team</text>
-  <text x="542.5" y="637" class="detail white">候选与采用条件</text>
+  <text x="542.5" y="601" class="detail white">完整方案 JSON</text>
+  <text x="542.5" y="637" class="detail white">候选与真实取舍</text>
 
-  <text x="857.5" y="512" class="english">write-plan</text>
+  <text x="857.5" y="512" class="english">planner</text>
   <text x="857.5" y="556" class="heading">执行计划</text>
-  <text x="857.5" y="601" class="detail">唯一计划 · 覆盖检查</text>
-  <text x="857.5" y="637" font-size="21">Superpowers · 独立审查</text>
+  <text x="857.5" y="601" class="detail">Superpowers 原计划</text>
+  <text x="857.5" y="637" font-size="21">完整方案＋用户原始回复</text>
 
-  <text x="1207.5" y="512" class="english">orchestrate</text>
+  <text x="1207.5" y="512" class="english">executor</text>
   <text x="1207.5" y="556" class="heading">主代理自主执行</text>
   <text x="1207.5" y="601" class="detail">自行实现／并行派发</text>
-  <text x="1207.5" y="637" class="detail">验证 · 独立审查 · 修复</text>
+  <text x="1207.5" y="637" class="detail">实际验证 · 完成报告</text>
 
   <text x="1522.5" y="512" class="english">accept</text>
   <text x="1522.5" y="556" font-size="27" font-weight="700" class="white">用户最终验收</text>
-  <text x="1522.5" y="601" class="detail white">当前内容</text>
-  <text x="1522.5" y="637" class="detail white">有效证据齐备</text>
+  <text x="1522.5" y="601" class="detail white">阅读报告</text>
+  <text x="1522.5" y="637" class="detail white">核对实际结果</text>
 
   <text x="1772.5" y="512" class="english">archive</text>
   <text x="1772.5" y="556" font-size="32" font-weight="700" class="white">同步与归档</text>
   <text x="1772.5" y="601" class="detail white">OpenSpec</text>
-  <text x="1772.5" y="637" font-size="22" class="white">仅执行获批收尾</text>
+  <text x="1772.5" y="637" font-size="22" class="white">只归档需求变更</text>
 
   <path d="M355 520 H415" class="connector"/>
   <path d="M660 520 H720" class="connector"/>
@@ -124,14 +124,14 @@
   <g>
     <path d="M390 540 V712 M695 540 V712 M1020 540 V712" stroke="#a4c4df" stroke-width="2" stroke-dasharray="5 7" fill="none"/>
     <rect x="285" y="712" width="210" height="48" rx="24" class="handoff"/>
-    <text x="390" y="744" font-size="25" fill="#30688f">原生 handoff ①</text>
+    <text x="390" y="744" font-size="25" fill="#30688f">原文件＋原回复</text>
     <rect x="590" y="712" width="210" height="48" rx="24" class="handoff"/>
-    <text x="695" y="744" font-size="25" fill="#30688f">原生 handoff ②</text>
+    <text x="695" y="744" font-size="25" fill="#30688f">原文件＋原回复</text>
     <rect x="915" y="712" width="210" height="48" rx="24" class="handoff"/>
-    <text x="1020" y="744" font-size="25" fill="#30688f">原生 handoff ③</text>
+    <text x="1020" y="744" font-size="25" fill="#30688f">原文件＋原回复</text>
     <rect x="1128" y="681" width="159" height="48" rx="24" fill="#22a573" stroke="#fff" stroke-width="3"/>
-    <text x="1207.5" y="714" font-size="28" font-weight="700" class="white">✓ TDD</text>
-    <text x="1207.5" y="765" font-size="25" class="muted">Goal 可选</text>
+    <text x="1207.5" y="714" font-size="25" font-weight="700" class="white">工程责任</text>
+    <text x="1207.5" y="765" font-size="25" class="muted">不另建执行引擎</text>
   </g>
 
   <path d="M85 790 V806 Q85 826 108 826 H1822 Q1845 826 1845 806 V790" fill="none" stroke="#329b75" stroke-width="4"/>
@@ -143,9 +143,9 @@
   <text x="675" y="951" font-size="23" class="muted">各节点只做获准工作</text>
   <text x="1005" y="911" font-size="28" font-weight="700">有效批准与交接</text>
   <text x="1005" y="951" font-size="23" class="muted">版本一致才允许推进</text>
-  <text x="1335" y="911" font-size="28" font-weight="700">唯一任务状态</text>
-  <text x="1335" y="951" font-size="23" class="muted">原生调度与依赖准入</text>
-  <text x="1665" y="911" font-size="28" font-weight="700">可信验证证据</text>
-  <text x="1665" y="951" font-size="23" class="muted">实际结果绑定当前内容</text>
-  <text x="960" y="1032" font-size="24" class="muted">四类职责节点 · 三次真实交接 · 用户最终验收 · 验收后获批收尾</text>
+  <text x="1335" y="911" font-size="28" font-weight="700">真实文件检查</text>
+  <text x="1335" y="951" font-size="23" class="muted">格式与最低字段</text>
+  <text x="1665" y="911" font-size="28" font-weight="700">原文交接与报告</text>
+  <text x="1665" y="951" font-size="23" class="muted">文件存在不证明正确</text>
+  <text x="960" y="1032" font-size="24" class="muted">四个 Agent · 五个正式文件 · 直接传递完整原文 · 验收后原生需求归档</text>
 </svg>

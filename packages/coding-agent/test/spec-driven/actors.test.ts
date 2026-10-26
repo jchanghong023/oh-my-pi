@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -16,21 +16,17 @@ import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "../../src/se
 import { createSpecActor } from "../../src/spec-driven/actors";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import type { CustomTool } from "../../src/sdk";
+import type { SpecAgentInput, SpecStageRole } from "../../src/spec-driven/types";
 
-const schema = {
-	type: "object",
-	properties: { value: { type: "string" } },
-	required: ["value"],
-	additionalProperties: false,
-};
-
-async function consumer(customTools?: CustomTool[]) {
+async function consumer(customTools?: CustomTool[], role: SpecStageRole = customTools ? "executor" : "requirements") {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-actor-compaction-"));
 	const agentDir = path.join(cwd, "agent");
 	await fs.mkdir(agentDir);
 	let text = '{"value":"prior"}';
 	let fail = false;
 	let onRequest: (() => void) | undefined;
+	let nativeTool: { name: string; args: Record<string, unknown> } | undefined;
+	let advertisedTools: string[] = [];
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
 		port: 0,
@@ -44,13 +40,24 @@ async function consumer(customTools?: CustomTool[]) {
 			onRequest?.();
 			if (fail)
 				return Response.json(
-					{ error: { message: "actor fixture rejected request", type: "invalid_request_error" } },
-					{ status: 400 },
+					{
+						error: {
+							message: "This API key has expired. Create a new API key.",
+							type: "authentication_error",
+							param: "api_key_expired",
+						},
+						providerPayload: "private-provider-payload",
+					},
+					{ status: 401 },
 				);
-			const pendingTool = customTools?.[0];
-			const useTool = pendingTool && !body.messages.some(message => message.role === "tool");
-			const toolName = body.tools?.find(tool => tool.function.name.replace(/^_/u, "") === pendingTool?.name)
-				?.function.name;
+			advertisedTools = (body.tools ?? []).map(tool => tool.function.name.replace(/^_/u, ""));
+			const queuedTool = nativeTool;
+			nativeTool = undefined;
+			const pendingTool = queuedTool ?? customTools?.[0];
+			const useTool = queuedTool || (pendingTool && !body.messages.some(message => message.role === "tool"));
+			const toolName =
+				body.tools?.find(tool => tool.function.name.replace(/^_/u, "") === pendingTool?.name)?.function.name ??
+				pendingTool?.name;
 			const chunks = [
 				{
 					choices: [
@@ -64,7 +71,7 @@ async function consumer(customTools?: CustomTool[]) {
 												index: 0,
 												id: "blocking-call",
 												type: "function",
-												function: { name: toolName, arguments: "{}" },
+												function: { name: toolName, arguments: JSON.stringify(queuedTool?.args ?? {}) },
 											},
 										],
 									}
@@ -107,7 +114,7 @@ async function consumer(customTools?: CustomTool[]) {
 	if (!model) throw new Error("Local actor fixture model unavailable");
 	const asyncJobManager = new AsyncJobManager({});
 	const actor = await createSpecActor({
-		role: "requirements",
+		role,
 		sessionDirectory: path.join(cwd, "sessions"),
 		methods: [],
 		options: {
@@ -129,10 +136,11 @@ async function consumer(customTools?: CustomTool[]) {
 			autoTitle: false,
 			offline: true,
 			customTools,
+			toolNames: ["read", "grep", "glob", "write", "edit"],
+			restrictToolNames: true,
 			...(customTools
 				? {
 						toolNames: customTools.map(tool => tool.name),
-						restrictToolNames: true,
 						allowRestrictedCustomTools: true,
 					}
 				: {}),
@@ -140,9 +148,25 @@ async function consumer(customTools?: CustomTool[]) {
 	});
 	const controller = new AbortController();
 	const context = { runId: "actor-compaction", generation: 1, signal: controller.signal };
-	const request = () =>
-		actor.request({ payload: { instruction: "Return the requested JSON value." }, documents: [] }, context, schema);
+	const request = (input: Partial<SpecAgentInput> = {}) =>
+		actor.request(
+			{
+				role,
+				request: "请回复当前阶段结果。",
+				files: [],
+				outputPaths: [],
+				...input,
+			},
+			context,
+		);
 	return {
+		cwd,
+		setNativeTool(name: string, args: Record<string, unknown>) {
+			nativeTool = { name, args };
+		},
+		get advertisedTools() {
+			return advertisedTools;
+		},
 		actor,
 		context,
 		controller,
@@ -173,9 +197,9 @@ async function consumer(customTools?: CustomTool[]) {
 	};
 }
 
-test("actor request retains its current schema-valid result through real native compaction", async () => {
+test("actor request retains its current ordinary reply through real native compaction", async () => {
 	await using fixture = await consumer();
-	for (let index = 0; index < 8; index++) expect(await fixture.request()).toEqual({ value: "prior" });
+	for (let index = 0; index < 8; index++) expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
 	const boundary = fixture.actor.session.messages.length;
 	let compactions = 0;
 	const unsubscribe = fixture.actor.session.subscribe(event => {
@@ -185,7 +209,7 @@ test("actor request retains its current schema-valid result through real native 
 		fixture.setText('{"value":"current"}');
 		cfgCompactionThresholdTokens.set(fixture.actor.session.settings, 1);
 		cfgCompactionEnabled.set(fixture.actor.session.settings, true);
-		expect(await fixture.request()).toEqual({ value: "current" });
+		expect(await fixture.request()).toEqual({ text: '{"value":"current"}' });
 		expect(compactions).toBeGreaterThan(0);
 		expect(fixture.actor.session.messages.length).toBeLessThan(boundary);
 		expect(fixture.actor.session.sessionManager.getEntries().some(entry => entry.type === "compaction")).toBe(true);
@@ -196,17 +220,62 @@ test("actor request retains its current schema-valid result through real native 
 
 test("actor request rejects a current provider failure rather than reusing a prior valid assistant", async () => {
 	await using fixture = await consumer();
-	expect(await fixture.request()).toEqual({ value: "prior" });
+	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
 	fixture.fail();
-	await expect(fixture.request()).rejects.toThrow();
+	const error = await fixture.request().catch(error => error);
+	expect(error).toBeInstanceOf(Error);
+	if (!(error instanceof Error)) throw new Error("Expected current provider failure");
+	expect(error.message).toContain("Native requirements");
+	expect(error.message).toContain("401");
+	expect(error.message).toContain("This API key has expired. Create a new API key.");
+	expect(error.message).not.toContain("private-provider-payload");
 }, 120_000);
 
-test("actor request rejects current cancellation and invalid schema despite a prior valid assistant", async () => {
+test("actor request retains the missing-result fallback rather than reusing a prior valid assistant", async () => {
 	await using fixture = await consumer();
-	expect(await fixture.request()).toEqual({ value: "prior" });
-	fixture.setText('{"wrong":"invalid schema"}');
-	await expect(fixture.request()).rejects.toThrow();
-	fixture.setText('{"value":"cancelled"}');
+	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
+	const prompt = spyOn(fixture.actor.session, "prompt").mockResolvedValue(true);
+	try {
+		await expect(fixture.request()).rejects.toThrow("Native requirements produced no successful assistant result");
+	} finally {
+		prompt.mockRestore();
+	}
+}, 120_000);
+
+test("actor accepts ordinary final prose without requiring JSON or yield", async () => {
+	await using fixture = await consumer();
+	fixture.setText("需求文件已更新，请确认。");
+	expect(await fixture.request()).toEqual({ text: "需求文件已更新，请确认。" });
+}, 120_000);
+
+test("restricted requirements actor writes only its allowed native proposal and capability files", async () => {
+	await using fixture = await consumer();
+	const proposal = "openspec/changes/native-guard/proposal.md";
+	const spec = "openspec/changes/native-guard/specs/greeting/spec.md";
+	const outputPaths = [proposal, "openspec/changes/native-guard/specs/*/spec.md"];
+	for (const file of [proposal, spec]) {
+		fixture.setNativeTool("write", { path: file, content: `Allowed ${file}` });
+		await fixture.request({ outputPaths });
+		expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(`Allowed ${file}`);
+		expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob", "write", "edit"]));
+	}
+}, 120_000);
+
+test("read-only pending acceptance executor cannot mutate even when the provider requests native write", async () => {
+	await using fixture = await consumer(undefined, "executor");
+	const file = "src/accepted.ts";
+	await fs.mkdir(path.join(fixture.cwd, "src"));
+	await fs.writeFile(path.join(fixture.cwd, file), "original");
+	fixture.setNativeTool("write", { path: file, content: "unauthorized change" });
+	await fixture.request({ readOnly: true, outputPaths: [file] });
+	expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe("original");
+	expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob"]));
+}, 120_000);
+
+test("actor request rejects current cancellation despite a prior successful reply", async () => {
+	await using fixture = await consumer();
+	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
+	fixture.setText("这次回复不能被当作成功");
 	fixture.onRequest(() => fixture.controller.abort());
 	await expect(fixture.request()).rejects.toThrow();
 }, 120_000);

@@ -84,10 +84,6 @@ const emptyStatus = (): SpecDrivenStatus => ({
 	phase: "idle",
 	paused: false,
 	generation: 0,
-	questions: [],
-	tasks: [],
-	reviews: [],
-	pendingClosure: [],
 });
 
 export function peekSpecDrivenController(sessionManager: object): SpecDrivenController | undefined {
@@ -101,6 +97,10 @@ export function getSpecDrivenController(
 ): SpecDrivenController {
 	let controller = controllers.get(host.sessionManager);
 	const retainedInput = controller?.belongsTo(host) ? controller.observation().interaction : undefined;
+	if (controller?.belongsTo(host) && options.restart) {
+		const blocked = controller.restartBlock();
+		if (blocked) throw new SpecAdmissionError(blocked);
+	}
 	if (
 		controller &&
 		(!controller.belongsTo(host) ||
@@ -129,30 +129,12 @@ export function renderSpecDrivenSummary(state: SpecDrivenStatus, compact = false
 					: stageLabel(stageForPhase(state.phase));
 	const lines = [`协同开发模式：${phase}${state.paused ? "（暂停）" : ""}`];
 	if (state.blockedReason) lines.push(`阻塞：${state.blockedReason}`);
-	lines.push(...state.questions.map(question => `待回答：${question}`));
-	if (state.tasks.length)
-		lines.push(`任务完成：${state.tasks.filter(task => task.status === "completed").length}/${state.tasks.length}`);
-	if (compact)
-		for (const review of state.reviews)
-			if (review.lastReview?.verdict !== "pass")
-				lines.push(
-					...review.findings
-						.filter(finding => finding.severity === "blocking")
-						.map(finding => `阻塞：${finding.issue}`),
-				);
-	for (const review of compact ? [] : state.reviews) {
-		lines.push(
-			`审查 ${review.id}（${review.kind}）：已用修复 ${review.revision} 轮；当前额度 ${review.repairLimit} 轮`,
-		);
-		if (review.lastReview)
-			lines.push(
-				`审查结果：${review.lastReview.verdict}；${review.lastReview.summary}`,
-				...review.findings.map(finding => `[${finding.severity}] ${finding.issue}\n依据：${finding.evidence}`),
-			);
-	}
-	if (state.phase === "awaiting-plan")
-		lines.push("批准计划会开始执行并授权范围内任务的本地提交；不授权推送、发布、PR、改写历史或无关改动。");
-	if (state.pendingClosure.length) lines.push(`待收尾：${state.pendingClosure.join("；")}`);
+	if (state.lastReply && !compact) lines.push(state.lastReply);
+	if (state.specification) lines.push(`需求文件：${state.specification.files.map(file => file.path).join("、")}`);
+	if (state.solution) lines.push(`方案文件：${state.solution.path}`);
+	if (state.plan) lines.push(`计划文件：${state.plan.path}`);
+	if (state.report) lines.push(`完成报告：${state.report.path}`);
+	if (state.phase === "awaiting-acceptance") lines.push("完成报告等待明确验收；验收后才同步需求并归档。");
 	return lines.join("\n");
 }
 
@@ -176,6 +158,7 @@ export class SpecDrivenController {
 	#epoch = 0;
 	#disposed = false;
 	#released = false;
+	#releaseWork?: Promise<void>;
 	#paused = false;
 	#pending?: Operation;
 	#active = false;
@@ -188,6 +171,7 @@ export class SpecDrivenController {
 	#messages: SpecUserMessage[] = [];
 	#messageAbort?: AbortController;
 	#messageWork?: Promise<void>;
+	#controlWork?: Promise<unknown>;
 	#heartbeat?: NodeJS.Timeout;
 	#heartbeatSince = 0;
 
@@ -237,10 +221,20 @@ export class SpecDrivenController {
 	#messageBlock(): string | undefined {
 		return this.#outstanding() ? "用户消息尚未结清；请等待或取消指定消息" : undefined;
 	}
+	/** Terminal phase alone is not evidence that the old owner has finished releasing resources. */
+	restartBlock(): string | undefined {
+		if (!this.#disposed && !["completed", "cancelled"].includes(this.status().phase)) return;
+		const unsettled = this.#messageBlock();
+		if (unsettled) {
+			const failure = this.#messages.find(message => message.status === "cancelling" && message.error)?.error;
+			return `${unsettled}${failure ? `；${failure}` : ""}；旧流程清理确认完成前不能开始新流程`;
+		}
+		if (!this.#released) return "旧流程资源尚未释放；请等待清理完成后重新 /dev start；若取消失败，请重试 /dev cancel";
+	}
 	actions(state = this.status()): SpecControllerAction[] {
 		const blocked = this.#disposed
 			? "流程所有者已释放"
-			: (this.#messageBlock() ?? (this.#active ? "阶段操作正在运行" : undefined));
+			: (this.restartBlock() ?? this.#messageBlock() ?? (this.#active ? "阶段操作正在运行" : undefined));
 		const result: SpecControllerAction[] = [];
 		const add = (
 			id: string,
@@ -256,7 +250,7 @@ export class SpecDrivenController {
 				label,
 				command: `/dev ${command}`,
 				available: control ? !this.#disposed : !actionBlocked,
-				version: id === "answer" ? `${command}:${state.clarification?.id ?? ""}` : `/dev ${command}`,
+				version: `${state.generation}:${state.specification?.version ?? ""}:${state.solution?.version ?? ""}:${state.plan?.version ?? ""}:${state.report?.version ?? ""}:${command}`,
 				...(actionBlocked && !control ? { blockedReason: actionBlocked } : {}),
 				...(requiresInput ? { requiresInput: true } : {}),
 			});
@@ -266,60 +260,24 @@ export class SpecDrivenController {
 		else if (!["completed", "cancelled"].includes(state.phase)) {
 			if (state.paused) add("resume", "恢复流程（不自动发送草稿）", "resume", false, !this.#outstanding());
 			else {
-				if (state.phase === "awaiting-answers") add("answer", "回答本轮澄清（不批准转换）", "answer", true);
+				if (["requirements", "solution", "planning", "executing"].includes(state.phase))
+					add("answer", "补充说明并继续当前阶段（不批准转换）", "answer", true);
 				if (state.phase === "awaiting-specification" && state.specification)
-					add("confirm-spec", "确认需求并进入方案", `confirm-spec ${state.specification.version}`);
-				if (state.phase === "awaiting-choice" && state.team) {
-					for (const candidate of state.team.candidates)
-						if (
-							state.team.status === "completed" &&
-							candidate.adoptable &&
-							candidate.reviewSucceeded &&
-							candidate.recheckSucceeded &&
-							!candidate.exclusionReason &&
-							!candidate.unresolvedBlocking.length &&
-							!state.team.interpretationDifferences.some(item => item.affectsChoice && !item.resolved)
-						)
-							add(
-								`choose:${candidate.id}`,
-								`选择 ${candidate.label} 并编写计划`,
-								`choose ${state.team.runId} ${candidate.id} ${candidate.version}`,
-							);
-				}
-				if (state.phase === "awaiting-plan" && state.plan) {
-					add("confirm-plan", "批准计划并开始普通执行", `confirm-plan ${state.plan.version}`);
-					add("confirm-plan-goal", "批准计划并启用原生 Goal 执行", `confirm-plan ${state.plan.version} --goal`);
-				}
-				if (state.phase === "awaiting-acceptance" && state.acceptanceVersion) {
-					add("accept", "验收当前交付并执行已授权收尾", `accept ${state.acceptanceVersion}`);
-					add("repair", "撤销当前验收资格并返回获批范围内修复", `repair ${state.acceptanceVersion}`, true);
+					add("confirm-spec", "确认需求并进入方案", "confirm-spec");
+				if (state.phase === "awaiting-choice" && state.solution)
+					for (const candidate of state.solution.candidates)
+						add(`choose:${candidate.id}`, `选择 ${candidate.title} 并编写计划`, `choose ${candidate.id}`);
+				if (state.phase === "awaiting-plan" && state.plan)
+					add("confirm-plan", "批准计划并开始执行", "confirm-plan");
+				if (state.phase === "awaiting-acceptance" && state.report) {
+					add("accept", "验收交付并同步需求、归档", "accept");
+					add("repair", "返回当前范围内执行并修复", "repair", true);
 				}
 				add("pause", "立即暂停流程", "pause", false, true);
 			}
 			add("amend", "修改需求并撤销受影响下游批准", "amend", true);
-			if (state.specificationApproval) add("change-solution", "重新讨论方案并撤销下游批准", "change-solution", true);
-			if (state.plan)
-				add(
-					"revise-plan",
-					"仅修订当前计划并重新审查（需重新批准）",
-					`revise-plan ${state.plan.version}`,
-					true,
-					false,
-					true,
-				);
-			if (this.#core)
-				for (const review of state.reviews) {
-					try {
-						this.#core.assertExtendReview(review.id, review.revision, review.repairLimit);
-					} catch {
-						continue;
-					}
-					add(
-						`extend-review:${review.id}`,
-						`审查 ${review.id}（已用 ${review.revision}/${review.repairLimit} 轮）追加一轮自动修复（不代表通过）`,
-						`extend-review ${review.id} ${review.revision} ${review.repairLimit}`,
-					);
-				}
+			if (state.specification) add("change-solution", "重新讨论方案并撤销下游批准", "change-solution", true);
+			if (state.plan) add("revise-plan", "修订当前计划（需重新批准）", "revise-plan", true);
 			add("cancel", "停止流程并保留已有文件（需确认）", "cancel", false, true);
 		}
 		for (const message of this.#messages)
@@ -355,7 +313,6 @@ export class SpecDrivenController {
 			generation: state.generation,
 			phase: state.phase,
 			status: "queued",
-			clarificationId: state.clarification?.id,
 		};
 		this.#messages.push(message);
 		this.#draft = "";
@@ -398,7 +355,6 @@ export class SpecDrivenController {
 			!recipient ||
 			message.runId !== core.runId ||
 			message.generation !== core.status().generation ||
-			message.clarificationId !== core.status().clarification?.id ||
 			message.role !== recipient.role ||
 			message.actorId !== recipient.actorId ||
 			message.sessionId !== recipient.sessionId
@@ -415,7 +371,12 @@ export class SpecDrivenController {
 		this.#messageWork = Promise.resolve()
 			.then(async () => {
 				try {
-					const reply = await core.converse(message.text, message.id, recipient, abort.signal);
+					const reply = await core.converse({
+						text: message.text,
+						messageId: message.id,
+						recipient,
+						signal: abort.signal,
+					});
 					if (abort.signal.aborted || this.#disposed) message.status = "cancelled";
 					else {
 						message.reply = reply.text;
@@ -464,39 +425,13 @@ export class SpecDrivenController {
 		if (state.paused) return "下一步：/dev help 查看并恢复流程；草稿不会自动发送。";
 		return "下一步：/dev help 查看本轮材料并明确作出决定。";
 	}
-	revisePlan(version: string, text: string): string {
+	revisePlan(text: string): string {
 		if (!this.#core) throw new SpecAdmissionError("尚无可修订的计划");
-		try {
-			this.#core.assertRevisePlan(version, text);
-		} catch (error) {
-			throw new SpecAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
-		}
-		return this.schedule(core => core.revisePlan(version, text), true);
+		return this.schedule(core => core.revisePlan(text));
 	}
-	extendReview(id: string, revision: number, repairLimit: number): string {
-		if (!this.#core) throw new SpecAdmissionError("尚无可追加修复轮次的审查");
-		try {
-			this.#core.assertExtendReview(id, revision, repairLimit);
-		} catch (error) {
-			throw new SpecAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
-		}
-		return this.schedule(core => core.extendReview(id, revision, repairLimit));
-	}
-	repair(acceptanceVersion: string, text: string): string {
+	repair(text: string): string {
 		if (this.#active || this.#outstanding() || !this.#core) throw new SpecAdmissionError("流程或用户消息尚未结清");
-		try {
-			this.#core.assertRepair(acceptanceVersion, text);
-		} catch (error) {
-			throw new SpecAdmissionError(error instanceof Error ? error.message : String(error), { cause: error });
-		}
-		let run: (() => Promise<SpecDrivenStatus>) | undefined;
-		return this.schedule(
-			() => run!(),
-			false,
-			() => {
-				run = this.#core!.prepareRepair(acceptanceVersion, text);
-			},
-		);
+		return this.schedule(core => core.repair(text));
 	}
 	status(): SpecDrivenStatus {
 		const state = this.#core?.status() ?? emptyStatus();
@@ -522,7 +457,6 @@ export class SpecDrivenController {
 				recipient: this.#core?.recipient(),
 				messages: structuredClone(this.#messages),
 				actions: this.actions(status),
-				clarification: status.clarification,
 				blockedReason:
 					this.#messageBlock() ??
 					status.blockedReason ??
@@ -596,8 +530,7 @@ export class SpecDrivenController {
 	async #publishHeartbeat(): Promise<void> {
 		if (!this.#active || this.#paused || this.#disposed || !this.#core) return;
 		const recipient = this.#core.recipient();
-		// Team discussion already streams ordered progress through onOutput.
-		if (!recipient || recipient.role === "solution") return;
+		if (!recipient) return;
 		const state = this.status();
 		const requests = this.#native?.measurement().requests.length ?? 0;
 		const elapsed = formatHeartbeatElapsed(Date.now() - this.#heartbeatSince);
@@ -661,12 +594,10 @@ export class SpecDrivenController {
 			throw error;
 		}
 	}
-	schedule(operation: Operation, interrupt = false, onAdmission?: () => void): string {
+	schedule(operation: Operation): string {
 		if (this.#disposed) throw new SpecAdmissionError("流程已释放");
 		if (this.#outstanding()) throw new SpecAdmissionError(this.#messageBlock());
-		if (this.#active && !interrupt)
-			throw new SpecAdmissionError("流程正在运行；请使用 /dev status、/dev pause 或 /dev cancel");
-		if (interrupt) this.pause();
+		if (this.#active) throw new SpecAdmissionError("流程正在运行；请使用 /dev status、/dev pause 或 /dev cancel");
 		this.#paused = false;
 		this.#failure = undefined;
 		this.#pending = operation;
@@ -674,7 +605,6 @@ export class SpecDrivenController {
 		const epoch = ++this.#epoch;
 		this.#active = true;
 		this.#startHeartbeat();
-		onAdmission?.();
 		this.publishObservation();
 		let jobId = "";
 		try {
@@ -688,9 +618,9 @@ export class SpecDrivenController {
 					signal.addEventListener("abort", abort, { once: true });
 					try {
 						await this.#initialize();
+						await this.#controlWork;
 						if (epoch !== this.#epoch || signal.aborted || !this.#core) return "已停止旧调度";
-						// Synchronously admitted repair owns messages queued afterward; drain them after its operation.
-						if (!onAdmission && this.#outstanding()) throw new Error(this.#messageBlock());
+						if (this.#outstanding()) throw new Error(this.#messageBlock());
 						this.#pending = undefined;
 						await operation(this.#core);
 						if (epoch !== this.#epoch || signal.aborted) return "已停止旧调度";
@@ -748,7 +678,10 @@ export class SpecDrivenController {
 		}
 		this.#paused = true;
 		this.#epoch++;
-		this.#core?.pause();
+		this.#controlWork = this.#core?.pause().catch(error => {
+			this.#failure = error instanceof Error ? error.message : String(error);
+			this.publishObservation();
+		});
 		this.#active = false;
 		this.#bind(this.status().phase);
 		for (const id of this.#jobs) this.#manager.cancel(id, { ownerId: this.#host.session.getAgentId() });
@@ -763,12 +696,14 @@ export class SpecDrivenController {
 		this.pause();
 		this.#cancelled = true;
 		this.#pending = undefined;
-		this.#core?.cancel();
+		const cancelled = this.#core?.cancel();
 		if (!this.#core) this.#failure = "已取消初始化中的流程";
 		this.publishObservation();
 		await this.report();
 		for (const message of this.#messages) if (message.status === "queued") message.status = "cancelled";
 		await this.#messageWork;
+		await cancelled;
+		await this.#controlWork;
 		await this.#release();
 	}
 	async #release(): Promise<void> {
@@ -776,9 +711,20 @@ export class SpecDrivenController {
 		this.#releasePolicy?.();
 		this.#releasePolicy = undefined;
 		if (this.#released) return;
-		this.#released = true;
-		this.publishObservation();
-		await this.#native?.dispose();
+		const work =
+			this.#releaseWork ??
+			(this.#releaseWork = (async () => {
+				await this.#initializing;
+				await this.#native?.dispose();
+				this.#released = true;
+				this.publishObservation();
+			})());
+		try {
+			await work;
+		} catch (error) {
+			if (this.#releaseWork === work) this.#releaseWork = undefined;
+			throw error;
+		}
 	}
 	async dispose(): Promise<void> {
 		if (this.#disposed) return;
@@ -787,7 +733,7 @@ export class SpecDrivenController {
 		this.#disposed = true;
 		for (const message of this.#messages) if (message.status === "queued") message.status = "cancelled";
 		await this.#messageWork;
-		this.#core?.cancel();
+		await this.#core?.cancel();
 		this.publishObservation();
 		await this.#release();
 	}

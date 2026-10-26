@@ -137,16 +137,6 @@ export class OmpSpecDrivenBridge {
 						: "active";
 		const artifacts = structuredClone(previous?.artifacts ?? []);
 		const materials: OmpSpecMaterial[] = [];
-		let nativeState:
-			| { solution?: unknown; plan?: { path?: string; documentVersion?: string }; status?: SpecDrivenStatus }
-			| undefined;
-		try {
-			nativeState = JSON.parse(
-				await readFile(await containedSpecPath(owner.record.cwd, `.omp/spec-sessions/${runId}/state.json`), "utf8"),
-			);
-		} catch {
-			/* Readiness is represented below, not as fabricated content. */
-		}
 		await mkdir(path.join(directory, "zcode-artifacts"), { recursive: true });
 		const capture = async (
 			id: string,
@@ -223,147 +213,36 @@ export class OmpSpecDrivenBridge {
 			}
 		};
 		const originalChange = `openspec/changes/${status.changeId}`;
-		const archivedChange = nativeState?.status?.archivedChangePath;
-		const archiveMatch = /^openspec\/changes\/archive\/\d{4}-\d{2}-\d{2}-([a-z0-9-]+)$/.exec(archivedChange ?? "");
-		const change = archivedChange && archiveMatch?.[1] === status.changeId ? archivedChange : originalChange;
-		await capture(
-			"proposal",
-			"Proposal",
-			`${change}/proposal.md`,
-			status.specification?.version ?? null,
-			!!status.specification,
-			undefined,
-			status.specification ? digest(Buffer.from(status.specification.proposal)) : undefined,
-		);
-		for (const spec of status.specification?.specs ?? [])
+		const archive = status.archivedChangePath;
+		const filePath = (sourcePath: string): string =>
+			archive && sourcePath.startsWith(`${originalChange}/`)
+				? `${archive}/${sourcePath.slice(originalChange.length + 1)}`
+				: sourcePath;
+		for (const file of status.specification?.files ?? [])
 			await capture(
-				`spec:${spec.path}`,
-				spec.path,
-				`${change}/${spec.path}`,
-				status.specification!.version,
+				`requirement:${file.path}`,
+				file.path,
+				filePath(file.path),
+				file.version,
 				true,
 				undefined,
-				digest(Buffer.from(spec.content)),
+				file.version,
 			);
-		await capture(
-			"solution",
-			"Selected solution",
-			`.omp/spec-sessions/${runId}/state.json#/solution`,
-			status.solution?.version ?? null,
-			!!status.solution,
-			nativeState?.solution === undefined ? undefined : Buffer.from(JSON.stringify(nativeState.solution)),
-			status.solution?.artifactVersion,
-		);
-		const planPath =
-			nativeState?.plan?.path &&
-			/^docs\/superpowers\/plans\/\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md$/.test(nativeState.plan.path) &&
-			nativeState.plan.path.endsWith(`-${status.changeId}.md`)
-				? nativeState.plan.path
-				: undefined;
-		if (status.plan && planPath && nativeState?.plan) {
-			try {
-				const bytes = await readFile(await containedSpecPath(owner.record.cwd, planPath));
-				const snapshot = { path: planPath, content: bytes.toString("utf8"), version: digest(bytes) };
-				if (digest(Buffer.from(JSON.stringify([snapshot, nativeState.plan]))) !== status.plan.artifactVersion) {
-					materials.push({
-						id: "plan",
-						title: "Implementation plan",
-						readiness: "unknown",
-						sourceVersion: status.plan.version,
-					});
-				} else
-					await capture(
-						"plan",
-						"Implementation plan",
-						planPath,
-						status.plan.version,
-						true,
-						bytes,
-						nativeState.plan.documentVersion,
-					);
-			} catch (error) {
-				materials.push({
-					id: "plan",
-					title: "Implementation plan",
-					readiness: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable",
-					sourceVersion: status.plan.version,
-				});
-			}
-		} else
+		if (!status.specification) await capture("requirements", "需求文件", "", null, false);
+		for (const [id, title, document, plannedPath] of [
+			["solution", "完整方案文件", status.solution, status.paths?.solution],
+			["plan", "完整计划文件", status.plan, status.paths?.plan],
+			["report", "完成报告", status.report, status.paths?.report],
+		] as const)
 			await capture(
-				"plan",
-				"Implementation plan",
-				`.omp/spec-sessions/${runId}/unavailable-plan`,
-				status.plan?.version ?? null,
-				!!status.plan,
-			);
-		for (const [index, candidate] of (status.team?.candidates ?? []).entries())
-			await capture(
-				`candidate:${candidate.id}`,
-				candidate.label,
-				`.omp/spec-sessions/${runId}/state.json#/status/team/candidates/${index}`,
-				candidate.version,
-				true,
-				Buffer.from(JSON.stringify(candidate)),
-			);
-		for (const handoff of status.handoffs ?? [])
-			await capture(
-				`handoff:${handoff.actorId}:${handoff.transition}`,
-				handoff.transition,
-				handoff.path.startsWith(`${originalChange}/`)
-					? `${change}/${handoff.path.slice(originalChange.length + 1)}`
-					: handoff.path,
-				handoff.digest,
-				true,
+				id,
+				title,
+				filePath(document?.path ?? plannedPath ?? ""),
+				document?.version ?? null,
+				!!document,
 				undefined,
-				handoff.digest,
+				document?.version,
 			);
-		const reviewArtifacts = new Map(
-			(status.reviewArtifacts ?? nativeState?.status?.reviewArtifacts ?? []).map(review => [review.slotId, review]),
-		);
-		for (const review of reviewArtifacts.values())
-			await capture(
-				`review:${review.slotId}`,
-				review.slotId,
-				`${change}/${review.path}`,
-				review.version,
-				true,
-				undefined,
-				review.version,
-			);
-		await capture(
-			"verification",
-			"Verification",
-			`${change}/verification.md`,
-			status.acceptanceVersion ?? null,
-			!!status.acceptanceVersion,
-		);
-		try {
-			const checks = await readdir(await containedSpecPath(owner.record.cwd, `${change}/checks`), {
-				withFileTypes: true,
-			});
-			for (const check of checks)
-				if (check.isFile())
-					await capture(`check:${check.name}`, check.name, `${change}/checks/${check.name}`, null, true);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-				materials.push({ id: "checks", title: "Check references", readiness: "unreadable", sourceVersion: null });
-		}
-		const evidence = {
-			tasks: status.tasks,
-			reviews: status.reviews,
-			executionEvidence: status.executionEvidence ?? null,
-			gitEvidence: status.gitEvidence ?? null,
-			pendingClosure: status.pendingClosure,
-		};
-		await capture(
-			"evidence",
-			"Verification and check references",
-			`.omp/spec-sessions/${runId}/state.json#/status`,
-			status.acceptanceVersion ?? status.plan?.version ?? null,
-			true,
-			Buffer.from(JSON.stringify(evidence)),
-		);
 		const details: OmpSpecDetails = {
 			changeId: status.changeId,
 			phase: status.phase,
@@ -376,6 +255,7 @@ export class OmpSpecDrivenBridge {
 					: state === "waiting"
 						? "Waiting for native user input"
 						: status.phase),
+			lastReply: status.lastReply,
 			generation: status.generation,
 			live,
 			readOnly: !live || terminal(status.phase),
@@ -384,55 +264,16 @@ export class OmpSpecDrivenBridge {
 			sessionId: owner.record.id,
 			createdAt: observation.createdAt,
 			updatedAt: observation.updatedAt,
-			progress: {
-				completed: (status.plan?.tasks ?? []).filter(task =>
-					status.tasks.some(item => item.id === task.id && item.status === "completed"),
-				).length,
-				total: status.plan?.tasks.length ?? 0,
-			},
-			tasks: (status.plan?.tasks ?? []).map(task => ({
-				id: task.id,
-				title: task.title,
-				dependencies: task.dependencies,
-				requirementIds: task.requirementIds,
-				status: status.tasks.find(item => item.id === task.id)?.status ?? "pending",
-			})),
+			// File stages are observed directly; there is no separate per-task execution engine.
 			versions: {
 				...(status.specification ? { specification: status.specification.version } : {}),
 				...(status.solution ? { solution: status.solution.version } : {}),
 				...(status.plan ? { plan: status.plan.version } : {}),
-				...(status.selection ? { candidate: status.selection.candidateVersion } : {}),
-				...(status.acceptanceVersion ? { acceptance: status.acceptanceVersion } : {}),
+				...(status.report ? { report: status.report.version } : {}),
 			},
-			questions: status.questions,
-			// Team results retain internal fields; publish only the native candidate contract.
-			candidates: (status.team?.candidates ?? []).map(
-				({
-					id,
-					label,
-					version,
-					proposal,
-					adoptable,
-					reviewSucceeded,
-					recheckSucceeded,
-					unresolvedBlocking,
-					exclusionReason,
-					conditions,
-				}) => ({
-					id,
-					label,
-					version,
-					proposal,
-					adoptable,
-					reviewSucceeded,
-					recheckSucceeded,
-					unresolvedBlocking,
-					exclusionReason,
-					conditions,
-				}),
-			),
+			candidates: status.solution?.candidates ?? [],
 			selectedCandidate: status.selection
-				? { id: status.selection.candidateId, version: status.selection.candidateVersion }
+				? { id: status.selection.candidateId, userReply: status.selection.userReply }
 				: null,
 			actions:
 				live && !terminal(status.phase)
@@ -457,7 +298,6 @@ export class OmpSpecDrivenBridge {
 								? "Terminal run; controls unavailable"
 								: "Read-only historical observation; no live native owner",
 						},
-			clarification: status.clarification,
 			materials,
 		};
 		const row = ompSpecRunSchema.parse({
@@ -735,7 +575,7 @@ export class OmpSpecDrivenBridge {
 							? binding.actionVersion === action.version
 							: !binding.actionVersion || binding.actionVersion === action.command) &&
 						(action.command === text ||
-							(action.requiresInput &&
+							((action.requiresInput || action.id.startsWith("choose:")) &&
 								text.startsWith(`${action.command} `) &&
 								text.slice(action.command.length).trim())),
 				)

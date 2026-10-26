@@ -1146,6 +1146,10 @@ describe("team orchestrator", () => {
 			["方案 A 不作为首选。", "completed"],
 			["### 方案 A（未通过审查，不作为可采用选项）\n不参与最终选择。", "completed"],
 			["方案 A 不作为可采用选项，但仍建议采用方案 A。", "failed"],
+			["方案 A 不列入可采用选项。", "completed"],
+			["方案 A 不具备可采用条件。", "completed"],
+			["方案 A 不被推荐。", "completed"],
+			["方案 A 不列入可采用选项，仍建议采用方案 A。", "failed"],
 			["问题解决后，方案 A 即可采用。", "completed"],
 		] as const) {
 			const { result } = await run({

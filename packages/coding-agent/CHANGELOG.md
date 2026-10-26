@@ -4,10 +4,10 @@
 
 ### Added
 
-- Added opt-in `/dev` orchestration with four owned requirements, solution, planning and execution actors, OpenSpec proposal/specs, one Superpowers implementation plan, three native handoffs, version-bound approvals and content-bound evidence. The execution actor can implement inline or delegate native tasks through scoped lifecycle hooks; `/dev confirm-plan <version> --goal` explicitly selects its optional actor-scoped Goal. Native records own `checks/` outputs and generated `verification.md`; final acceptance remains explicit. Pause/resume is limited to the live native session; restarting does not restore workflow progress.
-- Added `/dev` chat-mode switching, a parameter-collecting operation dialog, persistent input-destination/background status and direct stage conversations. Shared native actions supply complete current commands; owned message queues distinguish receipt, processing and actual-stop cancellation. Paused input stays a draft until explicitly resubmitted after resume. Awaiting-acceptance feedback is read-only; version-bound `/dev repair` restores only approved-scope execution and requires fresh affected evidence and review before renewed acceptance.
+- Added opt-in `/dev` orchestration with four persistent requirements, solution, planner and executor actors. Each stage checks real files and minimum fields before waiting for an explicit user decision. Transitions directly pass complete original files and untrimmed user confirmations, including the full solutions file and candidate ID for the planner, without intermediate handoff documents or summary calls. Native requirements sync/archive runs only after final acceptance.
+- Added `/dev` input-mode switching, a phase decision panel, shared native actions and direct stage conversations. Owned messages distinguish queued, received, cancelling and actually stopped work. Pause keeps drafts until explicitly resubmitted; awaiting-acceptance feedback is read-only until explicit repair. Runtime ownership, descendant cancellation and cleanup settlement remain in-process only.
 - Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
-- Expose native `/dev` runs through opt-in ZCode workflow queries and subscriptions, including input modes, owned messages, shared native actions, parent-task progress, full versioned artifacts and read-only restart history. Controls reuse the existing command path and reject stale or foreign bindings; desktop UI integration remains separate.
+- Expose native `/dev` runs through opt-in ZCode workflow queries and subscriptions, including four-stage facts, input modes, owned messages, shared actions, full file artifacts and read-only restart history. Controls reuse the native command path and reject stale or foreign bindings; desktop UI integration remains separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
@@ -16,11 +16,11 @@
 
 ### Changed
 
-- Require all `/dev` stage agents, Team participants, independent reviewers and execution descendants to write user-facing replies and structured human-readable text in Chinese, while preserving code, commands, identifiers, protocol fields and verbatim evidence.
-- Replace the TUI `/dev help` menu with a phase decision panel: keep clarification questions beside editable answers, show truthful candidate comparisons and full materials, expose plan contents and execution/commit/no-push authorization before approval, group decisions/materials/management with safe inspection defaults, and start from the request with an editable generated change ID. Deduplicate automatic output, move commands/IDs/statistics into explicit details, and provide Chinese key hints with scrollable ANSI/native layouts at 120×36 and 100×28. Preserve per-round automatic opening, drafts/attachments, native command arguments, version/ownership gates, full ZCode facts and explicit approvals; never restore historical approval or auto-start idle workflows.
-- Support single-developer `/dev revise-plan <plan-version> <amendment...>` without restarting unchanged requirements or solution approvals: stop old execution, retain the previous plan and valid work, invalidate plan approval and acceptance, and await approval after independent review.
-- Keep two review-repair rounds per reviewer slot by default, with explicit `/dev extend-review <review-id> <revision> <repair-limit>` adding exactly one round to an exhausted blocked or repair-limited review. Preserve counts, issues, evidence and reviewer identity without waiving checks, granting permissions or reopening writes while awaiting acceptance.
-- Restrict `/dev` verification to commands resolved from approved validation IDs; command or argument changes require plan revision and renewed approval rather than model-selected equivalent commands.
+- Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
+- Keep the TUI `/dev help` phase decision panel, complete materials, safe inspection defaults, editable generated change IDs, per-round automatic opening and draft/attachment safety. TUI and ZCode consume the same native actions; explicit details retain commands and diagnostics with scrollable Chinese-key layouts at 120×36 and 100×28.
+- Simplify `/dev` decisions to `confirm-spec`, `choose <candidate-id> [confirmation...]`, `confirm-plan` and `accept`, with internal file-digest checks instead of user-supplied version arguments. `revise-plan <text>` preserves unchanged upstream approvals but requires renewed plan approval; `repair <text>` explicitly reopens approved-scope execution.
+- Keep OpenSpec proposal/specs templates and the original Superpowers plan format unchanged. A single-capability run needs five formal files: proposal, spec, solutions JSON, plan and completion report. The last three share `docs/superpowers/plans/`; no handoff, confirmation or task-state files are generated. Reports require the fixed Chinese title and completion, validation and unfinished-items sections; requirements archive does not relocate execution materials.
+- Remove the `/dev` task/evidence execution engine, fixed reviewer seats and repair quotas, forced commits, output-JSON chat protocol and optional Goal branch. The executor uses ordinary native engineering tools and reports actual checks honestly; file validity is not proof of software correctness.
 - Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
 - Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; only active real thinking appears in a self-clearing two-row dock above the input. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
@@ -29,7 +29,7 @@
 - Simplify bundled OpenSpec initialization to `omp openspec init [path] [--language <language>]` with the requirements-only default schema. Remove external-tool selection, installation/update entrypoints and flags; preserve existing project configuration, requirements, history and external-tool files.
 
 - Keep all bundled Superpowers skills available through manual `/skill:` commands, including standalone planning and execution after OpenSpec requirements updates; only debugging, completion verification and skill authoring enter the default model index. Preserve native `/dev` phase and exact-resource authorization without changing skill bodies.
-- Keep bundled OpenSpec requirements maintenance and the original standalone `verify-change` workflow without implementation fallbacks. Preserve `/dev` runtime observations and original Team selection in project-local records, keep live control state session-local, retain the single plan under `docs/superpowers/plans/`, and preserve read-only delivery snapshots when archiving.
+- Keep bundled OpenSpec requirements maintenance and standalone `verify-change` independent of `/dev`; preserve live session-local control and read-only history without restoring old approvals.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
@@ -39,10 +39,13 @@
 
 ### Fixed
 
-- Let `/team` and `/dev` finish valid discussions that explicitly exclude an unavailable proposal as “不作为可采用选项”, while still rejecting a later endorsement of that proposal.
+- Let `/team` finish valid discussions that explicitly exclude an unavailable proposal, while still rejecting a later endorsement of it.
+- Preserve current `/dev` file revisions and original user replies across visible file/save failures without reusing stale model replies or generating model handoff summaries.
+- Prevent a new `/dev` run from replacing one whose cancellation or runtime cleanup has not settled, and expose actionable native model/provider failure details.
+- Reject missing or malformed `/dev` stage artifacts using their actual on-disk contents, and keep complete solution files and raw user confirmations available to the planner.
 - Keep compact background tool rows running on their original clock instead of restarting or settling the display at the foreground handoff.
 - Prevent repeated company-configuration warnings from corrupting the TUI during session and subagent initialization, while retaining startup notifications and standalone CLI diagnostics.
-- Keep `/dev` pause/resume, bounded repairs and review clarification recoverable, prevent Loop and desktop file-rewind bypasses, and retain readable review and archived delivery materials.
+- Keep `/dev` pause/resume, explicit repair, cancellation ownership and archived requirements observable without reviving old acceptance or permitting Loop/desktop rewind bypasses.
 
 - Keep the running status visible in compact mode on short ANSI and native terminals.
 
@@ -51,9 +54,9 @@
 - Preserve original read-call order and segment boundaries when rebuilding or switching display modes, even when results arrive out of order; clean rebuilds continue to hide reasoning.
 - Route bundled Superpowers implementation tasks to `task` and code reviews to `reviewer`, instead of requesting an unavailable `general-purpose` agent.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
-- Preserve quoted Windows verification commands, complete per-owner command evidence and external edits during failed specification publication.
+- Preserve quoted Windows verification commands and external edits during failed specification publication.
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.
-- Preserve admitted `/dev` repair work across queued input, pauses and failed scope analysis without reviving old acceptance; retain Dev input mode and drafts in TUI and ZCode after a run ends.
+- Preserve admitted `/dev` repair intent across queued input and pauses without reviving old acceptance; retain Dev input mode and drafts in TUI and ZCode after a run ends.
 - Refresh Bazel source overlays when source directory membership changes, preserving incremental caches and the running Server.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
 - Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
