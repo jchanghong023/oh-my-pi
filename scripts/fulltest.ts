@@ -163,6 +163,14 @@ export function fulltestCommands(
 				file.slice(separator + 1),
 			],
 			cwd: path.join(root, packageRoot),
+			sourceEntrypoints: [
+				"packages/coding-agent/test/spec-driven/tui.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
+			].includes(file)
+				? [path.join(root, "packages/coding-agent/src/cli.ts")]
+				: undefined,
 			env: localTestEnvironment(testHome),
 		});
 	}
@@ -182,6 +190,7 @@ export function fulltestCommands(
 			label: "smoke/isolated dev TUI PTY",
 			argv: ["bun", "scripts/test-report-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
 			cwd: root,
+			sourceEntrypoints: [path.join(root, "packages/coding-agent/src/cli.ts")],
 			env,
 		},
 	);

@@ -952,10 +952,19 @@ test("local business, asset and installed dependency edits invalidate only their
 			`
 import { test, expect } from "bun:test";
 import { value } from "fixture-used";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startWorker } from "./left";
+function parseAsset(contents: string) { return JSON.parse(contents); }
+function command(plan: { argv: string[] }) { return { cmd: plan.argv, cwd: import.meta.dir, stdout: "pipe" }; }
 test("left consumer", async () => {
+ const generated = path.resolve(import.meta.dir, "../../node_modules/.cache/omp-gate-wrappers", \`\${process.platform}-\${process.arch}\`);
+ mkdirSync(generated, {recursive:true});
+ const temporary = path.join(generated, \`fixture-\${randomUUID()}.txt\`);
+ writeFileSync(temporary, "generated from declared source");
+ expect(readFileSync(temporary, "utf8")).toBe("generated from declared source");
  const worker = startWorker();
  try {
   const { promise, resolve, reject } = Promise.withResolvers();
@@ -963,12 +972,13 @@ test("left consumer", async () => {
   worker.onerror = reject;
   expect(await promise).toBe(2);
  } finally { worker.terminate(); }
- const child = Bun.spawn({ cmd: [process.execPath, fileURLToPath(new URL("./child.tsx", import.meta.url))], cwd: import.meta.dir, stdout: "pipe" });
+ const child = Bun.spawn(command({ argv: [process.execPath, fileURLToPath(new URL("./child.tsx", import.meta.url))] }));
  const output = await new Response(child.stdout).text();
  expect(await child.exited).toBe(0);
  expect(output.trim()).toBe("2");
  expect(value).toBe(42);
- expect((await Bun.file(new URL("./fixtures/value.json", import.meta.url)).json()).value).toBe(2);
+ const contents = await Bun.file(new URL("./fixtures/value.json", import.meta.url)).text();
+ expect(parseAsset(contents).value).toBe(2);
  mkdirSync(${JSON.stringify(path.join(root, ".state"))}, {recursive:true});
  appendFileSync(${JSON.stringify(path.join(root, ".state/left.runs"))}, "run\\n");
 });
@@ -1115,6 +1125,148 @@ test("require factory input", () => expect(${name === "alias" ? "load" : `${fact
 	}
 }, 240_000);
 
+test("temporary shell probes cache independently while real shell script edits invalidate their consumer", async () => {
+	const root = await fixture();
+	try {
+		await copyReporter(root);
+		const runs = path.join(root, ".state/temporary-probe.runs");
+		const independentRuns = path.join(root, ".state/temporary-independent.runs");
+		await Bun.write(path.join(root, "packages/a/worker.ts"), "console.log(42);\n");
+		await Bun.write(
+			path.join(root, "packages/a/probe.test.ts"),
+			`import { test, expect } from "bun:test";
+import { $ } from "bun";
+import os from "node:os";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("temporary capability probe and repository script", async () => {
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+ const probe = await $\`bun --version\`.cwd(os.tmpdir()).quiet().nothrow();
+ expect(probe.exitCode).toBe(0);
+ const child = await $\`bun ./worker.ts\`.cwd(import.meta.dir).quiet().nothrow();
+ expect(child.exitCode).toBe(0);
+ expect(child.stdout.toString().trim()).toBe("42");
+});
+`,
+		);
+		await Bun.write(
+			path.join(root, "packages/b/independent.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("independent consumer", () => {
+ expect(6 * 7).toBe(42);
+ mkdirSync(${JSON.stringify(path.dirname(independentRuns))}, {recursive:true});
+ appendFileSync(${JSON.stringify(independentRuns)}, "run\\n");
+});
+`,
+		);
+		const commands: GateCommand[] = ["a/probe", "b/independent"].map(entry => {
+			const [name, testName] = entry.split("/");
+			return {
+				label: `test/fork packages/${name}/${testName}.test.ts`,
+				argv: [process.execPath, "../../scripts/test-report-bun.ts", `${testName}.test.ts`, "--bail=1"],
+				cwd: path.join(root, "packages", name!),
+			};
+		});
+		expect((await batch(root, commands, "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, commands, "fulltest")).targets.map(target => target.status)).toEqual([
+			"cached",
+			"cached",
+		]);
+		await Bun.write(path.join(root, "shared.json"), '{"unrelated":true}\n');
+		await Bun.write(path.join(root, "crates/unrelated/src/lib.rs"), "pub const VALUE: u8 = 2;\n");
+		const unrelated = await batch(root, commands, "fulltest");
+		expect(unrelated.exitCode).toBe(0);
+		expect(unrelated.targets.map(target => target.status)).toEqual(["cached", "cached"]);
+		expect(await Bun.file(runs).text()).toBe("run\n");
+		await Bun.write(path.join(root, "packages/a/worker.ts"), "console.log(99);\n");
+		const changed = await batch(root, commands, "fulltest");
+		expect(changed.exitCode).not.toBe(0);
+		expect(await Bun.file(runs).text()).toBe("run\nrun\n");
+		// Fail-fast may omit the independent target from the failed batch.
+		// Request it directly to observe its retained cache without rerunning it.
+		const independent = await batch(root, [commands[1]!], "fulltest");
+		expect(independent.exitCode).toBe(0);
+		expect(independent.targets[0]?.status).toBe("cached");
+		expect(await Bun.file(independentRuns).text()).toBe("run\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 120_000);
+
+test("explicit indirect source entries retain transitive script assets without caching unrelated source edits", async () => {
+	const root = await fixture();
+	try {
+		const directory = path.join(root, "packages/dependency");
+		const source = path.join(directory, "indirect.ts");
+		const runs = path.join(root, ".state/indirect.runs");
+		const entrySource = `import { $ } from "bun";
+const child = await $\`bun ./worker.ts\`.cwd(import.meta.dir).quiet();
+console.log(child.stdout.toString().trim());
+`;
+		await Bun.write(source, entrySource);
+		await Bun.write(
+			path.join(directory, "worker.ts"),
+			'import { readFileSync } from "node:fs"; console.log(readFileSync(import.meta.dir + "/value.txt", "utf8").trim());\n',
+		);
+		await Bun.write(path.join(directory, "value.txt"), "42\n");
+		await Bun.write(
+			path.join(root, "packages/a/indirect.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("indirect launch", async () => {
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+ const child = Bun.spawn([process.execPath, process.env.INDIRECT_SOURCE!], {stdout:"pipe", stderr:"inherit"});
+ const output = await new Response(child.stdout).text();
+ expect(await child.exited).toBe(0);
+ expect(output.trim()).toBe("42");
+});
+`,
+		);
+		const command: GateCommand = {
+			label: "test/fork packages/a/indirect.test.ts",
+			argv: [process.execPath, "test", "indirect.test.ts", "--bail=1"],
+			cwd: path.join(root, "packages/a"),
+			sourceEntrypoints: ["../dependency/indirect.ts"],
+			env: { INDIRECT_SOURCE: source },
+		};
+		expect((await batch(root, [command], "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, [command], "fulltest")).targets[0]?.status).toBe("cached");
+		await Bun.write(path.join(directory, "unrelated.ts"), "export const value = 99;\n");
+		const unrelated = await batch(root, [command], "fulltest");
+		expect(unrelated.exitCode).toBe(0);
+		expect(unrelated.targets[0]?.status).toBe("cached");
+		expect(await Bun.file(runs).text()).toBe("run\n");
+		// The indirect entry launches a static script which reads this asset.
+		await Bun.write(path.join(directory, "value.txt"), "42\n\n");
+		const resource = await batch(root, [command], "fulltest");
+		expect(resource.exitCode).toBe(0);
+		expect(resource.targets[0]?.status).not.toBe("cached");
+		expect(await Bun.file(runs).text()).toBe("run\nrun\n");
+		await Bun.write(source, entrySource.replace("console.log(child.stdout.toString().trim());", "console.log(99);"));
+		expect((await batch(root, [command], "fulltest")).exitCode).not.toBe(0);
+		expect(await Bun.file(runs).text()).toBe("run\nrun\nrun\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 120_000);
+
+test("missing explicit source entries fail discovery instead of dropping the indirect dependency", async () => {
+	const root = await fixture();
+	try {
+		const command: GateCommand = {
+			label: "test/indirect missing source",
+			argv: [process.execPath, "check.ts"],
+			cwd: path.join(root, "packages/a"),
+			sourceEntrypoints: ["missing-cli.ts"],
+		};
+		await expect(discoverGateInputs(root, [command], [])).rejects.toThrow("Missing source entrypoint");
+	} finally {
+		await cleanup(root);
+	}
+});
+
 test("opaque package loading reuses unrelated shared edits but observes transitive cyclic package inputs", async () => {
 	const root = await fixture();
 	try {
@@ -1250,6 +1402,9 @@ for (const scenario of [
 	"resource-edit",
 	"resource-create",
 	"resource-directory",
+	"structured-literal-argv",
+	"module-require-installed",
+	"module-alias-require-installed",
 ] as const) {
 	test(`native cached consumers observe ignored resolution changes: ${scenario}`, async () => {
 		const root = await fixture();
@@ -1258,6 +1413,7 @@ for (const scenario of [
 			const directory = path.join(root, "packages/a");
 			let changed: string;
 			let source: string;
+			let restoredContents: string | undefined;
 			if (scenario === "resource-edit" || scenario === "resource-create") {
 				const relative = "value.local-asset";
 				changed = path.join(directory, relative);
@@ -1272,6 +1428,28 @@ const value = existsSync(resource) ? Number(readFileSync(resource, "utf8")) : 1;
 const resource = new URL("./ignored-resources/", import.meta.url);
 const names = readdirSync(resource, { recursive: true, withFileTypes: true });
 const value = names.filter(entry => entry.isFile()).reduce((value, entry) => value + Number(readFileSync(entry.parentPath + "/" + entry.name, "utf8")), 1);`;
+			} else if (scenario === "structured-literal-argv") {
+				changed = path.join(directory, "worker.ts");
+				restoredContents = "console.log(1);\n";
+				await Bun.write(changed, restoredContents);
+				source = `function command(plan: { argv: string[]; cwd: string }) { return { cmd: plan.argv, cwd: plan.cwd, stdout: "pipe" as const }; }
+const child = Bun.spawn(command({ argv: ["bun", "./worker.ts"], cwd: import.meta.dir }));
+const output = await new Response(child.stdout).text();
+if (await child.exited) throw new Error("structured worker failed");
+const value = Number(output.trim());`;
+			} else if (scenario === "module-require-installed" || scenario === "module-alias-require-installed") {
+				await Bun.write(path.join(root, "node_modules/fixture-loader/package.json"), '{"main":"index.cjs"}\n');
+				await Bun.write(
+					path.join(root, "node_modules/fixture-loader/index.cjs"),
+					scenario === "module-require-installed"
+						? "module.exports = module.require(process.env.FIXTURE_DEP);\n"
+						: "const m = module; module.exports = m.require(process.env.FIXTURE_DEP);\n",
+				);
+				await Bun.write(path.join(root, "node_modules/fixture-leaf/package.json"), '{"main":"index.cjs"}\n');
+				changed = path.join(root, "node_modules/fixture-leaf/index.cjs");
+				restoredContents = "exports.value = 1;\n";
+				await Bun.write(changed, restoredContents);
+				source = 'const value = require("fixture-loader").value;';
 			} else if (scenario === "extension") {
 				await Bun.write(path.join(directory, "priority.ts"), "export const value = 1;\n");
 				changed = path.join(directory, "priority.tsx");
@@ -1303,6 +1481,9 @@ test("resolution input", () => expect(value).toBe(1));\n`,
 				label: "test/fork packages/a/resolution.test.ts",
 				argv: [process.execPath, "test", "resolution.test.ts", "--bail=1"],
 				cwd: directory,
+				...(scenario === "module-require-installed" || scenario === "module-alias-require-installed"
+					? { env: { FIXTURE_DEP: "fixture-leaf" } }
+					: {}),
 			};
 			await Bun.write(
 				path.join(root, "packages/b/independent.test.ts"),
@@ -1324,11 +1505,14 @@ test("resolution input", () => expect(value).toBe(1));\n`,
 					: "2\n"
 				: scenario === "extension"
 					? "export const value = 2;\n"
-					: "exports.value = 2;\n";
+					: scenario === "structured-literal-argv"
+						? "console.log(2);\n"
+						: "exports.value = 2;\n";
 			await Bun.write(changed, changedContents);
 			const invalidated = await batch(root, commands, "fulltest");
 			expect(invalidated.exitCode).not.toBe(0);
-			if (scenario === "nested-installed") await Bun.write(changed, "exports.value = 1;\n");
+			if (restoredContents !== undefined) await Bun.write(changed, restoredContents);
+			else if (scenario === "nested-installed") await Bun.write(changed, "exports.value = 1;\n");
 			else if (scenario === "resource-edit") await Bun.write(changed, "1\n");
 			else await fs.unlink(changed);
 			const restored = await batch(root, commands, "fulltest");
@@ -1380,6 +1564,203 @@ test("resource fast paths preserve anchored syntax, literal inputs and opaque lo
 		fallback: false,
 		repositoryFallback: false,
 	});
+});
+
+test("resource contents and child output do not widen their declared path inputs", () => {
+	const root = path.resolve(os.tmpdir(), "gate-resource-data");
+	const filename = path.join(root, "packages/a/source.ts");
+	const inventory = new Set(["packages/a/fixtures/value.json", "packages/a/worker.ts"]);
+	const scan = (text: string) => gateResources(filename, text, inventory, root);
+	for (const source of [
+		'const contents = await Bun.file(import.meta.dir + "/fixtures/value.json").text(); parse(contents);',
+		'import { readFile as read } from "node:fs/promises"; const contents = await read(import.meta.dir + "/fixtures/value.json"); parse(contents);',
+		'import * as fs from "node:fs"; const contents = fs.readFileSync(import.meta.dir + "/fixtures/value.json"); parse(contents);',
+	]) {
+		const result = scan(source);
+		expect(result.files).toEqual(["packages/a/fixtures/value.json"]);
+		expect(result.fallback).toBe(false);
+	}
+	for (const source of [
+		'const child = Bun.spawn(["bun", import.meta.dir + "/worker.ts"], { cwd: import.meta.dir }); forward(child.stdout);',
+		'import { spawn } from "node:child_process"; const child = spawn("bun", [import.meta.dir + "/worker.ts"], { cwd: import.meta.dir }); forward(child.stdout);',
+	]) {
+		const result = scan(source);
+		expect(result.entries).toEqual(["packages/a/worker.ts"]);
+		expect(result.fallback).toBe(false);
+	}
+	expect(
+		scan("const contents = await Bun.file(import.meta.dir + runtimePath).text(); parse(contents);").fallback,
+	).toBe(true);
+	expect(scan("readFile(resolvePath(import.meta.dir, runtimePath));").fallback).toBe(true);
+});
+
+test("finite copy loops and structured subprocess plans retain their actual module inputs", () => {
+	const root = path.resolve(os.tmpdir(), "gate-resource-plans");
+	const filename = path.join(root, "packages/a/source.ts");
+	const inventory = new Set([
+		"packages/a/fixtures/one.json",
+		"packages/a/fixtures/two.json",
+		"packages/a/first.ts",
+		"packages/a/second.ts",
+	]);
+	const scan = (text: string) => gateResources(filename, text, inventory, root);
+	const helper = 'function command(plan) { return { argv: ["bun", temporaryStub, JSON.stringify(plan)] }; }';
+	const result = scan(`${helper}
+		for (const name of ["one.json", "two.json"])
+			copyFile(import.meta.dir + "/fixtures/" + name, temporaryTarget);
+		function first() {
+			const entry = import.meta.dir + "/first.ts";
+			gate.run(command({ argv: ["bun", entry] }));
+		}
+		function second() {
+			const entry = import.meta.dir + "/second.ts";
+			Bun.spawn(["bun", temporaryStub, JSON.stringify({ runtime: entry })]);
+		}`);
+	expect(result.files).toEqual([...inventory].sort());
+	expect(result.entries).toEqual(["packages/a/first.ts", "packages/a/second.ts"]);
+	expect(result.fallback).toBe(false);
+	expect(scan(`${helper} gate.run(command({ runtime: import.meta.dir + unknownPath }));`).fallback).toBe(true);
+	expect(scan("for (const name of runtimeNames) copyFile(import.meta.dir + name, temporaryTarget);").fallback).toBe(
+		true,
+	);
+	expect(
+		scan(
+			"function derive(base, name) { return { path: base + name }; } readFile(derive(import.meta.dir, unknownPath));",
+		).fallback,
+	).toBe(true);
+	expect(scan('const report = {dir: import.meta.dir + "/runs/" + runId}; writeReport(report);').fallback).toBe(false);
+});
+
+test("Bun shell output remains data while static command inputs are retained", () => {
+	const root = path.resolve(os.tmpdir(), "gate-resource-shell");
+	const filename = path.join(root, "packages/a/source.ts");
+	const inventory = new Set(["packages/a/worker.ts"]);
+	const scan = (text: string) => gateResources(filename, text, inventory, root);
+	const result = scan(
+		'import { $ } from "bun"; const child = await $`bun ./worker.ts`.cwd(import.meta.dir).quiet().nothrow(); forward(child.stdout);',
+	);
+	expect(result.files).toEqual(["packages/a/worker.ts"]);
+	expect(result.entries).toEqual(["packages/a/worker.ts"]);
+	expect(result.fallback).toBe(false);
+	expect(scan('import { $ } from "bun"; $`bun ${runtimePath}`.cwd(import.meta.dir);').fallback).toBe(true);
+	expect(scan('import { $ } from "bun"; $`bun "./worker.ts"`.cwd(import.meta.dir);').fallback).toBe(true);
+	expect(scan('import { $ } from "bun"; $`bun ./worker.ts`.cwd("../b");').repositoryFallback).toBe(true);
+});
+
+test("known Node temporary shell cwd excludes runtime probes but retains source boundaries", () => {
+	const root = path.join(path.parse(os.tmpdir()).root, "gate-resource-temporary-shell");
+	const filename = path.join(root, "packages/a/source.ts");
+	const worker = path.join(root, "packages/a/worker.ts").replaceAll("\\", "/");
+	const inventory = new Set(["packages/a/worker.ts"]);
+	const scan = (text: string) => gateResources(filename, text, inventory, root);
+	for (const [declaration, expression] of [
+		['import * as operatingSystem from "node:os";', "operatingSystem.tmpdir()"],
+		['import operatingSystem from "os";', "operatingSystem.tmpdir()"],
+		['import { tmpdir as temporaryDirectory } from "node:os";', "temporaryDirectory()"],
+	]) {
+		const source = `import { $ } from "bun"; ${declaration}`;
+		expect(scan(`${source} $\`bun --version\`.cwd(${expression});`)).toEqual({
+			files: [],
+			entries: [],
+			fallback: false,
+			repositoryFallback: false,
+		});
+		const absolute = scan(`${source} $\`bun ${worker}\`.cwd(${expression});`);
+		expect(absolute.entries).toEqual(["packages/a/worker.ts"]);
+		expect(absolute.repositoryFallback).toBe(false);
+		for (const relative of ["./worker.ts", "../a/worker.ts"])
+			expect(scan(`${source} $\`bun ${relative}\`.cwd(${expression});`).repositoryFallback).toBe(true);
+	}
+	expect(
+		scan(`
+import { $ } from "bun";
+import * as os from "node:os";
+function getBinaryName() {
+ let os: string;
+ os = "platform";
+ return os;
+}
+async function npmSupportsReleaseAgeOverride() {
+ return await $\`npm config get min-release-age\`.cwd(os.tmpdir()).quiet().nothrow();
+}
+`),
+	).toEqual({ files: [], entries: [], fallback: false, repositoryFallback: false });
+	for (const source of [
+		'import { $ } from "bun"; $`bun --version`.cwd(runtimeDirectory());',
+		'import { $ } from "bun"; const os = { tmpdir: runtimeDirectory }; $`bun --version`.cwd(os.tmpdir());',
+		'import { $ } from "bun"; import os from "node:os"; function probe(os) { $`bun --version`.cwd(os.tmpdir()); }',
+		'import { $ } from "bun"; import { tmpdir } from "node:os"; function probe(tmpdir) { $`bun --version`.cwd(tmpdir()); }',
+	])
+		expect(scan(source).repositoryFallback).toBe(true);
+});
+
+test("generated wrapper outputs do not hide undeclared cached inputs or actual compiler sources", () => {
+	const root = path.resolve(os.tmpdir(), "gate-resource-outputs");
+	const filename = path.join(root, "scripts/runtime.ts");
+	const inventory = new Set(["scripts/compiler.rs", "node_modules/.cache/omp-gate-wrappers/prebuilt.exe"]);
+	const scan = (text: string) => gateResources(filename, text, inventory, root);
+	const result = scan(`
+		import * as path from "node:path";
+		import { randomUUID } from "node:crypto";
+		const directory = path.resolve(import.meta.dir, "../node_modules/.cache/omp-gate-wrappers", \`\${process.platform}-\${process.arch}\`);
+		mkdirSync(directory);
+		const temporary = path.join(directory, \`launcher-\${randomUUID()}.exe\`);
+		const image = path.join(directory, "compiler.exe");
+		const source = path.join(import.meta.dir, "compiler.rs");
+		Bun.spawn(["rustc", source, "-o", temporary]);
+		renameSync(temporary, image);
+		readFileSync(image);
+		readFileSync(path.resolve(import.meta.dir, "../node_modules/.cache/omp-gate-wrappers/prebuilt.exe"));
+	`);
+	expect(result.files).toEqual(["node_modules/.cache/omp-gate-wrappers/prebuilt.exe", "scripts/compiler.rs"]);
+	expect(result.fallback).toBe(false);
+	expect(
+		scan(`
+		import * as path from "node:path";
+		const directory = path.resolve(import.meta.dir, "../node_modules/.cache/omp-gate-wrappers");
+		const output = path.join(directory, runtimeName);
+		writeFileSync(output, "");
+		readFileSync(output);
+	`).fallback,
+	).toBe(true);
+	expect(scan("const repo = { require(cwd) {} }; repo.require(runtimeCwd);").fallback).toBe(false);
+	expect(scan("require(runtimeModule);").fallback).toBe(true);
+});
+
+test("quoted command plans retain source tools while worker and timer handles remain data", () => {
+	const root = path.resolve(os.tmpdir(), "gate-resource-command-format");
+	const filename = path.join(root, "scripts/runtime.ts");
+	const scan = (text: string) => gateResources(filename, text, new Set(["scripts/compiler.ts"]), root);
+	const result = scan(`
+		import * as path from "node:path";
+		const wrapper = [process.execPath, path.join(import.meta.dir, "compiler.ts"), "--go"]
+			.map(arg => {
+				if (arg.includes("'") && arg.includes('"')) throw new Error("cannot quote");
+				return arg.includes("'") ? \`"\${arg}"\` : \`'\${arg}'\`;
+			}).join(" ");
+		Bun.spawn(["go", "test", \`-toolexec=\${wrapper}\`]);
+		const worker = new Worker(new URL("./compiler.ts", import.meta.url));
+		forward(worker);
+		const timer = setInterval(() => readFile(import.meta.dir + unknownPath), 1000);
+		clearInterval(timer);
+	`);
+	expect(result.entries).toEqual(["scripts/compiler.ts"]);
+	// The genuinely opaque read in the callback is scanned independently.
+	expect(result.fallback).toBe(true);
+	expect(
+		scan(`
+		const worker = new Worker(new URL("./compiler.ts", import.meta.url)); forward(worker);
+		const timer = setInterval(() => import.meta.dir, 1000); clearInterval(timer);
+	`).fallback,
+	).toBe(false);
+	const formatted = scan(`
+		import * as path from "node:path";
+		const wrapper = [process.execPath, path.join(import.meta.dir, "compiler.ts")]
+			.map(arg => \`"\${arg}"\`).join(" ");
+		Bun.spawn(["go", \`-toolexec=\${wrapper}\`]);
+	`);
+	expect(formatted.entries).toEqual(["scripts/compiler.ts"]);
+	expect(formatted.fallback).toBe(false);
 });
 
 test.skipIf(process.platform !== "win32")(

@@ -56,6 +56,8 @@ export interface GateCommand {
 	persistentBazel?: { outputBase: string };
 	/** External state cannot be represented reliably in Bazel's test inputs. */
 	resultReuse?: "disabled";
+	/** Additional real source entries launched indirectly by the command. */
+	sourceEntrypoints?: readonly string[];
 	/** Real producer outputs declared and retained by the native Bazel action. */
 	artifactFiles?: readonly string[];
 }

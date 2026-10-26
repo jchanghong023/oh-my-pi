@@ -334,16 +334,18 @@ export async function discoverGateInputs(
 		resolutionPaths.add(path.dirname(candidate));
 	};
 	for (const command of commands) {
-		if (!/^(?:test|smoke)\//.test(command.label)) continue;
+		if (!/^(?:test|smoke)\//.test(command.label) && !command.sourceEntrypoints?.length) continue;
 		const entries: string[] = [];
 		for (const arg of command.argv.slice(1)) {
 			if (!/\.[cm]?[jt]sx?$/.test(arg) || arg.startsWith("-")) continue;
 			const filename = path.resolve(root, command.cwd ?? ".", arg);
 			if (await Bun.file(filename).exists()) entries.push(filename);
 		}
-		if (command.label.startsWith("smoke/")) {
-			const cli = path.join(root, "packages/coding-agent/src/cli.ts");
-			if (await Bun.file(cli).exists()) entries.push(cli);
+		for (const entry of command.sourceEntrypoints ?? []) {
+			const filename = path.resolve(root, command.cwd ?? ".", entry);
+			if (!(await Bun.file(filename).exists()))
+				throw new Error(`Missing source entrypoint for ${command.label}: ${filename}`);
+			entries.push(filename);
 		}
 		if (entries.length) {
 			commandEntries[command.label] = entries;
