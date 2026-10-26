@@ -256,6 +256,8 @@ export class OmpSpecDrivenBridge {
 						? "Waiting for native user input"
 						: status.phase),
 			lastReply: status.lastReply,
+			useTeam: status.useTeam,
+			useGoal: status.useGoal,
 			generation: status.generation,
 			live,
 			readOnly: !live || terminal(status.phase),
@@ -334,6 +336,16 @@ export class OmpSpecDrivenBridge {
 	}
 	async #readonly(saved: Saved): Promise<OmpSpecRun> {
 		const owner = this.#owners.get(saved.row.spec.sessionId);
+		// Completion may enqueue its capture while a query awaits an older one.
+		// Drain the current owner's captures before classifying live versus history.
+		if (owner) {
+			for (;;) {
+				const pending = owner.tail;
+				await pending;
+				if (pending === owner.tail) break;
+			}
+			saved = this.#runs.get(saved.row.runId) ?? saved;
+		}
 		const live =
 			owner &&
 			owner.sourceGeneration === owner.record.session.sessionGeneration &&
@@ -575,7 +587,10 @@ export class OmpSpecDrivenBridge {
 							? binding.actionVersion === action.version
 							: !binding.actionVersion || binding.actionVersion === action.command) &&
 						(action.command === text ||
-							((action.requiresInput || action.id.startsWith("choose:")) &&
+							((action.requiresInput ||
+								action.id.startsWith("choose:") ||
+								action.id === "confirm-spec" ||
+								action.id === "confirm-plan") &&
 								text.startsWith(`${action.command} `) &&
 								text.slice(action.command.length).trim())),
 				)

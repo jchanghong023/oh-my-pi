@@ -225,11 +225,16 @@ describe("four-stage file workflow", () => {
 		await f.orchestrator.revisePlan("减少一项实现工作");
 		expect(f.inputs.at(-1)?.role).toBe("planner");
 		expect(f.inputs.at(-1)?.feedback).toBe("减少一项实现工作");
-		await f.orchestrator.confirmPlan();
+		await f.orchestrator.confirmPlan("按计划执行", { useGoal: true });
 		await f.orchestrator.repair("修复实际使用中的缺陷");
 		expect(f.inputs.at(-1)?.role).toBe("executor");
 		expect(f.inputs.at(-1)?.readOnly).toBe(false);
 		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		expect(f.orchestrator.status().useGoal).toBe(true);
+		await f.orchestrator.revisePlan("调整计划后重新选择执行方式");
+		expect(f.orchestrator.status().useGoal).toBeUndefined();
+		await f.orchestrator.confirmPlan();
+		expect(f.orchestrator.status().useGoal).toBe(false);
 		expect(f.closeCalls()).toBe(0);
 	});
 

@@ -60,6 +60,88 @@ function beginAnswer(h: ReturnType<typeof mount>) {
 }
 
 describe("DevDecisionPanel", () => {
+	it("renders an unchecked checkbox, toggles locally by Space/Enter, and submits only explicitly", () => {
+		const h = mount({
+			title: "批准需求",
+			summary: "仅确认提交才推进。",
+			actions: [
+				{
+					id: "confirm-spec",
+					label: "确认需求",
+					group: "decision",
+					fields: [
+						{ id: "useTeam", label: "本次方案启用 Team", kind: "checkbox", value: "false" },
+						{ id: "confirmation", label: "确认说明", multiline: true },
+					],
+				},
+			],
+		});
+		expect(h.text()).toContain("本次方案启用 Team");
+		h.panel.handleInput(ENTER);
+		h.panel.handleInput(" ");
+		h.panel.handleInput(ENTER);
+		h.panel.pasteText("true");
+		expect(h.results).toEqual([]);
+		h.panel.handleInput("\x1b[13;5u");
+		expect(h.results).toEqual([{ actionId: "confirm-spec", values: { useTeam: "false", confirmation: "" } }]);
+	});
+
+	it("cancels checked boxes without submitting and starts a fresh panel unchecked", () => {
+		const decision: DevDecisionModel = {
+			title: "批准计划",
+			summary: "默认关闭 Goal",
+			actions: [
+				{
+					id: "confirm-plan",
+					label: "批准计划",
+					group: "decision",
+					fields: [{ id: "useGoal", label: "本次执行启用原生 Goal", kind: "checkbox" }],
+				},
+			],
+		};
+		const h = mount(decision);
+		h.panel.handleInput(ENTER);
+		h.panel.handleInput(" ");
+		expect(h.results).toEqual([]);
+		h.panel.handleInput("\x1b");
+		h.panel.handleNativeEvent({ type: "action", key: "submit", act: "submit", mods: [] });
+		expect(h.results).toEqual([undefined]);
+		const fresh = mount(decision);
+		fresh.panel.handleInput("\x1b[13;5u");
+		expect(fresh.results).toEqual([{ actionId: "confirm-plan", values: { useGoal: "false" } }]);
+	});
+
+	it("toggles native checkbox controls without approving, retaining text fields and explicit submit", () => {
+		const h = mount({
+			title: "批准计划",
+			summary: "同一表单",
+			actions: [
+				{
+					id: "confirm-plan",
+					label: "批准计划",
+					group: "decision",
+					fields: [
+						{ id: "useGoal", label: "本次执行启用原生 Goal", kind: "checkbox" },
+						{ id: "confirmation", label: "确认说明", value: " 原始说明  " },
+					],
+				},
+			],
+		});
+		const native = h.panel.describe();
+		const checkbox = native.c?.[2];
+		if (!checkbox || !("k" in checkbox)) throw new Error("Missing checkbox control");
+		expect(checkbox.p?.actions).toEqual({ click: "checkbox-0" });
+		h.panel.handleNativeEvent({ type: "action", key: "checkbox-0", act: "checkbox-0", mods: [] });
+		expect(h.results).toEqual([]);
+		h.panel.handleNativeEvent({ type: "action", key: "submit", act: "submit", mods: [] });
+		expect(h.results).toEqual([
+			{
+				actionId: "confirm-plan",
+				values: { useGoal: "true", confirmation: " 原始说明  " },
+			},
+		]);
+	});
+
 	it("defaults to material inspection without dispatching Enter, including repeated Enter", () => {
 		const h = mount(model());
 		expect(h.text()).toContain("› 【查看材料】查看本轮完整问题");

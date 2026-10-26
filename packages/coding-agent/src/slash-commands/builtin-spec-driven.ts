@@ -20,9 +20,9 @@ const usages = [
 	["status", "", "查看当前阶段、材料和准确的下一步命令"],
 	["answer", "<text>", "回答当前澄清问题"],
 	["cancel-message", "<message-id>", "停止指定消息处理，保留已有文件，不取消流程"],
-	["confirm-spec", "[confirmation...]", "确认当前需求文件并进入方案"],
+	["confirm-spec", "[--team] [confirmation...]", "确认当前需求文件并进入方案；--team 仅本次启用 Team"],
 	["choose", "<candidate-id> [confirmation...]", "选择实际方案文件中的候选并编写计划"],
-	["confirm-plan", "[confirmation...]", "批准当前计划文件并开始执行"],
+	["confirm-plan", "[--goal] [confirmation...]", "批准当前计划文件并开始执行；--goal 仅本次启用原生 Goal"],
 	["revise-plan", "<修改说明...>", "修订计划后等待重新批准，不自动执行"],
 	["accept", "", "验收当前完成报告，随后同步需求并归档"],
 	["repair", "<text>", "返回当前范围内执行并修复"],
@@ -95,6 +95,20 @@ function invalidDevInput(message: string): Error & { code: "invalid_params" } {
 	return Object.assign(new Error(message), { code: "invalid_params" as const });
 }
 
+/** Only leading option tokens configure execution; confirmation prose stays opaque. */
+function confirmationOption(text: string, supported: "--team" | "--goal"): boolean {
+	let remaining = text;
+	let enabled = false;
+	for (;;) {
+		const option = /^\s*(--\S*)(?:\s|$)/.exec(remaining);
+		if (!option) return enabled;
+		if (option[1] === "--") return enabled;
+		if (option[1] !== supported) throw invalidDevInput(`不支持选项 ${option[1]}；此确认仅支持 ${supported}。`);
+		enabled = true;
+		remaining = remaining.slice(option[0].length);
+	}
+}
+
 /** Presentation only: material views never approve a transition. */
 function decisionModel(observation: SpecControllerObservation): DevDecisionModel {
 	const { status: state, interaction } = observation;
@@ -116,6 +130,10 @@ function decisionModel(observation: SpecControllerObservation): DevDecisionModel
 		summary: [
 			`当前阶段：${stage}；${state.paused ? "已暂停" : observation.active ? "后台工作中" : "等待你的决定"}。`,
 			state.blockedReason ?? "",
+			state.useTeam === undefined ? "" : `本轮方案 Team：${state.useTeam ? "已启用" : "关闭"}（确认需求时确定）。`,
+			state.useGoal === undefined
+				? ""
+				: `本轮执行原生 Goal：${state.useGoal ? "已启用" : "关闭"}（批准计划时确定）。`,
 			interaction.recipient ? `消息接收方：${roleLabel(interaction.recipient.role)}` : "",
 			"查看材料、编辑草稿、调整窗口或关闭窗口不会批准。只有明确提交操作才推进流程。",
 			"批准计划不授权推送、发布、PR 或无关改动；验收后才同步需求并归档。",
@@ -166,11 +184,24 @@ function decisionModel(observation: SpecControllerObservation): DevDecisionModel
 							{ id: "request", label: "需求正文", value: interaction.draft, multiline: true },
 							{ id: "change-id", label: "流程名称（可修改）", value: `change-${crypto.randomUUID()}` },
 						]
-					: candidate
-						? [{ id: "confirmation", label: "确认与补充说明（可选）", multiline: true }]
-						: action.requiresInput
-							? [{ id: "text", label: "说明或回答", multiline: true }]
-							: undefined,
+					: action.id === "confirm-spec" || action.id === "confirm-plan"
+						? [
+								{
+									id: action.id === "confirm-spec" ? "useTeam" : "useGoal",
+									label:
+										action.id === "confirm-spec"
+											? "本次方案启用 Team（默认关闭）"
+											: "本次执行启用原生 Goal（默认关闭）",
+									kind: "checkbox",
+									value: "false",
+								},
+								{ id: "confirmation", label: "确认与补充说明（可选）", multiline: true },
+							]
+						: candidate
+							? [{ id: "confirmation", label: "确认与补充说明（可选）", multiline: true }]
+							: action.requiresInput
+								? [{ id: "text", label: "说明或回答", multiline: true }]
+								: undefined,
 		});
 	}
 	material(
@@ -298,6 +329,12 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 							throw invalidDevInput("流程名称必须由小写 ASCII 字母、数字及分隔连字符组成，例如 change-result。");
 						if (!request.trim()) throw invalidDevInput("请填写需求正文。");
 						invocation = `/dev start ${change} ${request}`;
+					} else if (chosen.id === "confirm-spec" || chosen.id === "confirm-plan") {
+						const useTeam = chosen.id === "confirm-spec";
+						if (selected.values?.[useTeam ? "useTeam" : "useGoal"] === "true")
+							invocation += useTeam ? " --team" : " --goal";
+						const confirmation = selected.values?.confirmation ?? "";
+						if (confirmation) invocation += ` -- ${confirmation}`;
 					} else if (chosen.id.startsWith("choose:")) {
 						const confirmation = selected.values?.confirmation ?? "";
 						if (confirmation) invocation = `${invocation} ${confirmation}`;
@@ -324,16 +361,30 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 				);
 				assertCurrentAction();
 				if (!host.ui) return { consumed: true };
-				const choices = actions.filter(item => item.available);
+				const choices = actions
+					.filter(item => item.available)
+					.flatMap(action => [
+						{ action, command: action.command, label: `${action.label} — ${action.command}` },
+						...(action.id === "confirm-spec" || action.id === "confirm-plan"
+							? [
+									{
+										action,
+										command: `${action.command} ${action.id === "confirm-spec" ? "--team" : "--goal"}`,
+										label: `${action.label}（本次启用 ${action.id === "confirm-spec" ? "Team" : "原生 Goal"}）`,
+									},
+								]
+							: []),
+					]);
 				if (!choices.length) return { consumed: true };
-				const labels = choices.map(item => `${item.label} — ${item.command}`);
+				const labels = choices.map(item => item.label);
 				const selected = await host.ui.select("协同开发操作（关闭窗口不改变模式或流程）", labels, {
 					signal: host.signal,
 				});
-				const chosen = choices[labels.indexOf(selected ?? "")];
-				if (!chosen) return { consumed: true };
+				const choice = choices[labels.indexOf(selected ?? "")];
+				if (!choice) return { consumed: true };
+				const chosen = choice.action;
 				assertCurrentAction(chosen);
-				let invocation = chosen.command;
+				let invocation = choice.command;
 				if (chosen.requiresInput) {
 					if (!host.ui.input) return { consumed: true };
 					if (chosen.id === "start") {
@@ -403,20 +454,22 @@ async function handleDev(command: ParsedSlashCommand, host: DevHost): Promise<Sl
 				controller.schedule(core => core.answer(answer));
 				break;
 			}
-			case "confirm-spec":
-				controller.schedule(core => core.confirmSpecification(command.text));
+			case "confirm-spec": {
+				const useTeam = confirmationOption(text, "--team");
+				controller.schedule(core => core.confirmSpecification(command.text, { useTeam }));
 				break;
+			}
 			case "choose": {
 				const choice = /^\s*(\S+)(?:\s([\s\S]*))?$/.exec(text);
 				if (!choice) throw invalidDevInput("用法：/dev choose <candidate-id> [confirmation...]");
 				controller.schedule(core => core.chooseCandidate(choice[1]!, command.text));
 				break;
 			}
-			case "confirm-plan":
-				if (/(?:^|\s)--goal(?:\s|$)/.test(text))
-					throw invalidDevInput("/dev confirm-plan 不支持 --goal；批准当前计划后直接开始执行。");
-				controller.schedule(core => core.confirmPlan(command.text));
+			case "confirm-plan": {
+				const useGoal = confirmationOption(text, "--goal");
+				controller.schedule(core => core.confirmPlan(command.text, { useGoal }));
 				break;
+			}
 			case "revise-plan":
 				controller.revisePlan(requiredText());
 				break;

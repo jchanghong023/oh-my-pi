@@ -59,3 +59,17 @@ OMP MUST 默认选择规定的 Codex 低思考模型；显式配置不被替换�
 
 - **WHEN** 压缩候选为可用的 openai-codex 且用户未显式选择压缩模型
 - **THEN** 默认选择规定的 Codex 低思考模型；显式配置不被替换
+
+### Requirement: 默认压缩方法顺序
+
+OMP MUST 使用 `remote → handoff → snapcompact → shake → soft` 作为缺省压缩方法回退顺序，仅将 handoff 调整到 snapcompact 之前；压缩参数和各方法实现保持不变。
+
+#### Scenario: 未显式配置方法顺序
+
+- **WHEN** 未配置 `compaction.methodOrder`
+- **THEN** 远程压缩仍优先；远程不可用或失败时，在 handoff 可用的情况下先尝试 handoff，再回退到 snapcompact。
+
+#### Scenario: 显式配置优先
+
+- **WHEN** 用户或项目显式配置 `compaction.methodOrder`
+- **THEN** 沿用既有配置优先级和显式顺序，不自动重排或改写配置文件。

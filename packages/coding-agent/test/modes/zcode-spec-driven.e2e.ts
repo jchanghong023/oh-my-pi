@@ -558,9 +558,11 @@ describe("Native spec desktop public-entry acceptance", () => {
 			const plannerInput = rolePayload(plannerRequest)?.input;
 			expect(JSON.stringify(plannerInput)).toContain(JSON.stringify(completeSolution).slice(1, -1));
 			expect(action(plan.spec, "confirm-plan").command).toBe("/dev confirm-plan");
-			await execute(peer, sessionId, plan.spec, "confirm-plan");
+			await execute(peer, sessionId, plan.spec, "confirm-plan", " --goal 按完整获批计划执行");
 			const acceptance = await peer.phase(sessionId, "awaiting-acceptance");
 			expect(acceptance.spec.stage).toBe("execution");
+			expect(acceptance.spec.useGoal).toBe(true);
+			expect(acceptance.spec.useTeam).toBe(false);
 			expect(acceptance.spec).not.toHaveProperty("tasks");
 			expect(acceptance.spec).not.toHaveProperty("progress");
 			const materials = await materialBytes(peer, sessionId, runId, acceptance.spec);

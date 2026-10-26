@@ -5,6 +5,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
 import type { ExtensionFactory } from "../extensibility/extensions";
+import { cfgGoalEnabled } from "../goals/settings";
 import { containedSpecPath } from "./artifacts";
 import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
@@ -13,13 +14,14 @@ import { AgentRegistry } from "../registry/agent-registry";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
 import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
+import type { TeamRunResult } from "../team/types";
 import type { SpecAgentInput, SpecConversationReply, SpecRunContext, SpecStageRole } from "./types";
 
 export interface SpecActor {
 	readonly id: string;
 	readonly role: SpecStageRole;
 	readonly session: AgentSession;
-	request(input: SpecAgentInput, context: SpecRunContext): Promise<SpecConversationReply>;
+	request(input: SpecAgentInput, context: SpecRunContext, teamResult?: TeamRunResult): Promise<SpecConversationReply>;
 	dispose(): Promise<void>;
 }
 
@@ -95,6 +97,8 @@ export async function createSpecActor(args: {
 			Settings.loadIsolated({ cwd: args.options.cwd, agentDir: args.options.agentDir }))
 	).overlay();
 	cfgEditMode.override(settings, "replace");
+	// Grant native Goal only inside the executor; activation remains per request.
+	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
 	let currentInput: SpecAgentInput | undefined;
 	const writeGuard: ExtensionFactory = pi => {
 		pi.on("tool_call", async event => {
@@ -137,6 +141,14 @@ export async function createSpecActor(args: {
 	const { session } = await createAgentSession({
 		...args.options,
 		settings,
+		...(args.role === "executor"
+			? {
+					allowRestrictedGoal: true,
+					toolNames: [
+						...new Set([...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]), "goal"]),
+					],
+				}
+			: {}),
 		agentId: id,
 		parentTaskPrefix: id,
 		expectedAgentRef: null,
@@ -230,15 +242,25 @@ export async function createSpecActor(args: {
 		id,
 		role: args.role,
 		session,
-		request(input, context) {
+		request(input, context, teamResult) {
 			return perform(context, async () => {
-				currentInput = input;
+				const goalEnabled = args.role === "executor" && input.useGoal === true && !input.readOnly;
+				// A request is the approved execution boundary, never an unattended outer Goal.
+				if (args.role === "executor" && session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
 				await session.setActiveToolsByName(
 					input.readOnly
 						? ["read", "grep", "glob"]
-						: [...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"])],
+						: [
+								...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]).filter(
+									name => name !== "goal",
+								),
+								...(goalEnabled ? ["goal"] : []),
+							],
 				);
-				const task = prompt.render(taskTemplate, { payload: JSON.stringify(input, null, 2) });
+				const task = prompt.render(taskTemplate, {
+					payload: JSON.stringify(input, null, 2),
+					teamResult: teamResult ? JSON.stringify(teamResult, null, 2) : undefined,
+				});
 				let message: AssistantMessage | undefined;
 				// 压缩会替换并缩短历史，不能用调用前的数组下标划分当前请求。
 				// 只捕获本次原生请求产生的终结消息，维护移除历史后仍保留真实结果。
@@ -246,10 +268,37 @@ export async function createSpecActor(args: {
 					if (event.type === "message_end" && event.message.role === "assistant") message = event.message;
 				});
 				try {
+					currentInput = input;
+					if (goalEnabled) {
+						// Full original files include the complete approved plan, not a model summary.
+						const objective = JSON.stringify(
+							{
+								request: input.request,
+								files: input.files,
+								userReply: input.userReply,
+								candidateId: input.candidateId,
+								feedback: input.feedback,
+							},
+							null,
+							2,
+						);
+						const previous = session.getGoalModeState();
+						if (previous?.goal && previous.goal.status !== "dropped" && previous.goal.status !== "complete")
+							await session.goalRuntime.dropGoal();
+						await session.goalRuntime.createGoal({ objective });
+					}
 					await session.prompt(task, { throwOnDrop: true });
 				} finally {
 					unsubscribe();
 					currentInput = undefined;
+					if (args.role === "executor" && session.getGoalModeState()?.enabled)
+						await session.goalRuntime.pauseGoal();
+					if (goalEnabled)
+						await session.setActiveToolsByName(
+							(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]).filter(
+								name => name !== "goal",
+							),
+						);
 				}
 				context.signal.throwIfAborted();
 				if (
@@ -273,6 +322,7 @@ export async function createSpecActor(args: {
 		async dispose() {
 			if (disposed) return;
 			disposed = true;
+			if (args.role === "executor" && session.getGoalModeState()?.goal) await session.goalRuntime.dropGoal();
 			await session.abort();
 			if (session.asyncJobManager) await cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
 			try {

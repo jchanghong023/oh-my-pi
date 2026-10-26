@@ -3,7 +3,11 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { formatModelStringWithRouting } from "../config/model-resolver";
 import type { AgentSession } from "../session/agent-session";
-import { buildRunnerDeps } from "../team/controller";
+import { buildRunnerDeps, resolveTeamParticipantsForSession } from "../team/controller";
+import { cfgTaskMaxConcurrency } from "../task/settings";
+import { runTeamDiscussion } from "../team/orchestrator";
+import { createTeamSubagentRunner } from "../team/runner";
+import type { TeamRunResult } from "../team/types";
 import { containedSpecPath, SpecArtifactStore } from "./artifacts";
 import { createSpecActor, type SpecActor } from "./actors";
 import { specRequestCost, type SpecRunMeasurement, type SpecRequestMeasurement } from "./metrics";
@@ -191,7 +195,43 @@ export async function createSpecDrivenRuntime(args: {
 						let files = input.files;
 						if (input.role === "requirements" && !requireStore().native && !files.length)
 							files = await requireStore().readAuthorityDocuments();
-						const reply = await actor.request({ ...input, files }, ctx);
+						let teamResult: TeamRunResult | undefined;
+						if (input.role === "solution" && input.useTeam) {
+							const members = resolveTeamParticipantsForSession(session, settings);
+							if (!members.ok) throw new Error(members.error);
+							// All Team descendants belong to the persistent solution producer.
+							const runner = createTeamSubagentRunner({
+								...buildRunnerDeps(actor.session, settings, cwd),
+								parentAgentId: actor.id,
+								isCurrentSession: () => !disposed && !ctx.signal.aborted && !actor.session.isDisposed,
+							});
+							teamResult = await runTeamDiscussion({
+								question: JSON.stringify({ ...input, files }, null, 2),
+								cwd,
+								participants: members.participants,
+								sessionModelPattern: currentModel,
+								runner,
+								signal: ctx.signal,
+								maxConcurrency: cfgTaskMaxConcurrency.get(settings),
+								onProgress(update) {
+									if (!ctx.signal.aborted) void args.onOutput?.(update.text);
+								},
+							});
+							ctx.signal.throwIfAborted();
+							if (teamResult.status !== "completed")
+								throw new Error(`Team ${teamResult.status}: ${teamResult.failureReason ?? "讨论未成功完成"}`);
+							if (!teamResult.candidates.some(candidate => candidate.adoptable))
+								throw new Error("Team 未产生可采用候选；不能退回单代理方案");
+						}
+						const reply = await actor.request({ ...input, files }, ctx, teamResult);
+						if (teamResult && !input.readOnly) {
+							const solution = await requireStore().readSolution();
+							for (const candidate of solution.candidates) {
+								const source = teamResult.candidates.find(item => item.id === candidate.id);
+								if (!source?.adoptable || !candidate.content.includes(source.proposal))
+									throw new Error(`Team 候选 ${candidate.id} 未获采用资格或未保留完整获审方案`);
+							}
+						}
 						ctx.signal.throwIfAborted();
 						if (reply.text) await args.onOutput?.(reply.text);
 						return reply;

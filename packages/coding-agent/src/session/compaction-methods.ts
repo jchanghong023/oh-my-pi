@@ -44,8 +44,8 @@ export type CompactionMethod = (typeof COMPACTION_METHOD_CHOICES)[number]["value
 /** Default fallback order: server-native first, portable summary last. */
 export const DEFAULT_COMPACTION_METHOD_ORDER: CompactionMethod[] = [
 	"remote",
-	"snapcompact",
 	"handoff",
+	"snapcompact",
 	"shake",
 	"soft",
 ];

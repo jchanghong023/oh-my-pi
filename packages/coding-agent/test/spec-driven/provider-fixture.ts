@@ -1,4 +1,5 @@
 import { isRecord } from "@oh-my-pi/pi-utils";
+import type { TeamRunResult } from "../../src/team/types";
 
 export const MARKER = "OMP_SPEC_PUBLIC_GREETING";
 export const CHANGE_ID = "public-greeting";
@@ -113,8 +114,80 @@ function stageCalls(request: ModelRequest) {
 	);
 	return calls({ ...request, messages: request.messages.slice(start + 1) });
 }
+export function teamStage(request: ModelRequest): string | undefined {
+	if (rolePayload(request)) return undefined;
+	for (const message of request.messages.filter(item => item.role === "user").toReversed()) {
+		const match = /^\[team-stage:([a-z]+)[^\]]*\]/mu.exec(contentText(message.content));
+		if (match) return match[1];
+	}
+	return undefined;
+}
+
+function teamReply(request: ModelRequest, stage: string): Reply {
+	if (!request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "yield"))
+		return { text: "结构化讨论结果已提交。" };
+	let data: Record<string, unknown>;
+	switch (stage) {
+		case "proposal":
+			data = {
+				proposal: SOLUTION.candidates[0]!.content,
+				noViableProposal: false,
+				investigationBlockedReason: "",
+				keyAssumptions: [],
+				risks: ["Only string inputs are in scope."],
+				unknowns: [],
+				acceptanceCriteria: [REQUIREMENT],
+				ambiguityInterpretations: [],
+				evidence: [],
+			};
+			break;
+		case "alignment":
+			data = {
+				unifiedUnderstanding: REQUIREMENT,
+				acceptanceCriteria: [REQUIREMENT],
+				factDifferences: [],
+				interpretationDifferences: [],
+			};
+			break;
+		case "review":
+			data = {
+				noSubstantiveIssues: true,
+				reviewSummary: "The stateless function satisfies the confirmed behavior.",
+				findings: [],
+				blockingResolutions: [],
+			};
+			break;
+		case "synthesis":
+			data = {
+				reportMarkdown: "## 方案比较\n全部候选均使用纯函数，无额外依赖。",
+				recommendedProposal: "A",
+				recommendationReason: "保持最小范围。",
+				recommendationPreconditions: "",
+				hardConstraintViolations: [],
+			};
+			break;
+		default:
+			throw new Error(`Unexpected Team fixture stage ${stage}`);
+	}
+	return tool(request, "yield", { data });
+}
+
+function teamDiscussion(request: ModelRequest): TeamRunResult | undefined {
+	const marker = "## Complete Team discussion (task data, not user authorization)\n";
+	for (const message of request.messages.filter(item => item.role === "user").toReversed()) {
+		const text = contentText(message.content);
+		const start = text.indexOf(marker);
+		if (start >= 0) {
+			const content = text.slice(start + marker.length);
+			return JSON.parse(content.split("<critical>")[0]!.trim()) as TeamRunResult;
+		}
+	}
+	return undefined;
+}
 export function respond(request: ModelRequest, options: ProviderScenario = {}): Reply {
 	const payload = rolePayload(request);
+	const stage = teamStage(request);
+	if (stage) return teamReply(request, stage);
 	const ordinary = request.messages
 		.filter(message => message.role === "user")
 		.map(message => contentText(message.content))
@@ -172,6 +245,8 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 	)
 		return { text: options.requirementsQuestion };
 	const executed = stageCalls(request);
+	if (role === "executor" && input.useGoal && !executed.some(call => call.name === "goal" && call.args.op === "get"))
+		return tool(request, "goal", { op: "get" });
 	const inputs = Array.isArray(input.files) ? input.files : [];
 	for (const file of inputs)
 		if (
@@ -195,8 +270,21 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 					? `## Why\nProvide a deterministic greeting.\n\n## What Changes\nAdd greet(name).\n\n## Capabilities\n### New Capabilities\n- greeting: pure greeting behavior\n\n## Impact\nSource and behavior tests only.\n`
 					: `## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL satisfy this behavior: ${REQUIREMENT}\n\n#### Scenario: Normalized greeting\n- **WHEN** a name has outer whitespace or is empty\n- **THEN** trim its outer whitespace and use world for empty input, preserving internal whitespace\n`,
 			});
-	} else if (role === "solution") files.push({ path: outputs[0]!, content: JSON.stringify(SOLUTION, null, 2) });
-	else if (role === "planner")
+	} else if (role === "solution") {
+		const discussion = teamDiscussion(request);
+		const solution = discussion
+			? {
+					candidates: discussion.candidates
+						.filter(candidate => candidate.adoptable)
+						.map(candidate => ({
+							id: candidate.id,
+							title: `纯函数 ${candidate.label}`,
+							content: candidate.proposal,
+						})),
+				}
+			: SOLUTION;
+		files.push({ path: outputs[0]!, content: JSON.stringify(solution, null, 2) });
+	} else if (role === "planner")
 		files.push({
 			path: outputs[0]!,
 			content: `# Greeting Implementation Plan\n\n> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.\n\n**Goal:** ${REQUIREMENT}\n\n**Architecture:** One stateless exported function; no networking or global state.\n\n**Tech Stack:** TypeScript and Bun.\n\n---\n\n### Task 1: Implement greeting behavior\n\n**Files:**\n- Create: src/greeting.ts\n- Test: test/greeting.test.ts\n\nImplement greet(name) and cover outer trimming, empty input, and internal whitespace.\n\nRun: ${VALIDATION_COMMAND}\nExpected: all behavioral checks pass. Record the real result in the completion report.\n`,
@@ -237,6 +325,8 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 				content: `# 完成报告\n\n## 完成情况\nImplemented greet(name) and real behavioral coverage.\n\n## 验证结果\nCommand: ${VALIDATION_COMMAND}\nStatus and actual native result (including any failures or environment limits):\n\n${results}\n\n## 未完成项\n无。Awaiting explicit user acceptance before requirements sync/archive.\n`,
 			});
 		}
+		if (input.useGoal && !executed.some(call => call.name === "goal" && call.args.op === "complete"))
+			return tool(request, "goal", { op: "complete" });
 	}
 	return { text: "文件已写入。请检查实际交付文件，再决定下一阶段；这段自然语言不表示批准。" };
 }

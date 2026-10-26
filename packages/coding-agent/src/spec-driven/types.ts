@@ -75,6 +75,8 @@ export interface SpecAgentInput {
 	candidateId?: string;
 	feedback?: string;
 	readOnly?: boolean;
+	useTeam?: boolean;
+	useGoal?: boolean;
 }
 export interface SpecDrivenStatus {
 	phase: SpecDrivenPhase;
@@ -90,6 +92,8 @@ export interface SpecDrivenStatus {
 	report?: SpecDocument;
 	lastReply?: string;
 	archivedChangePath?: string;
+	useTeam?: boolean;
+	useGoal?: boolean;
 }
 export interface SpecDrivenPorts {
 	agents: {

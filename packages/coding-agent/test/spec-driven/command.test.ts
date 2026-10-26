@@ -244,7 +244,7 @@ describe("/dev file-stage commands", () => {
 		}
 	});
 
-	it("rejects removed review controls and goal mode without dispatching another stage", async () => {
+	it("rejects removed review controls and enables Goal only on explicit plan approval", async () => {
 		const f = fixture();
 		try {
 			await f.transition("start change requirement");
@@ -253,8 +253,169 @@ describe("/dev file-stage commands", () => {
 			await f.transition("confirm-spec");
 			await f.transition("choose existing");
 			expect(f.controller.status().phase).toBe("awaiting-plan");
-			expect(await f.invoke("confirm-plan --goal")).toMatchObject({ consumed: true, failed: true });
-			expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner"]);
+			expect(await f.invoke("confirm-plan --goal")).toMatchObject({ consumed: true });
+			await f.settle();
+			expect(f.inputs.at(-1)).toMatchObject({
+				role: "executor",
+				useGoal: true,
+				userReply: "/dev confirm-plan --goal",
+			});
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it.each([
+		["--team", "--goal", true, true],
+		["--team  同意\n --goal 保留  ", "--goal  同意\n --team 保留  ", true, true],
+		['"引用 --team" --team', '"引用 --goal" --goal', false, false],
+		["同意 --team", "同意 --goal", false, false],
+		["-- --team", "-- --goal", false, false],
+		["", "", false, false],
+	])(
+		"parses only leading confirmation options and preserves every reply byte: %s / %s",
+		async (spec, plan, useTeam, useGoal) => {
+			const f = fixture();
+			try {
+				await f.transition("start change requirement");
+				const specificationReply = `confirm-spec ${spec}`;
+				await f.transition(specificationReply);
+				expect(f.inputs.at(-1)).toMatchObject({
+					role: "solution",
+					useTeam,
+					userReply: `/dev ${specificationReply}`,
+				});
+				await f.transition("choose existing");
+				const planReply = `confirm-plan ${plan}`;
+				await f.transition(planReply);
+				expect(f.inputs.at(-1)).toMatchObject({ role: "executor", useGoal, userReply: `/dev ${planReply}` });
+			} finally {
+				await f.dispose();
+			}
+		},
+	);
+
+	it.each(["--goal", "--unknown", "--team=true", "--team --goal"])(
+		"rejects unsupported leading specification options before scheduling: %s",
+		async option => {
+			const f = fixture();
+			try {
+				await f.transition("start change requirement");
+				expect(await f.invoke(`confirm-spec ${option}`)).toMatchObject({
+					consumed: true,
+					failed: true,
+					errorCode: "invalid_params",
+				});
+				expect(f.inputs).toHaveLength(1);
+				expect(f.controller.status().phase).toBe("awaiting-specification");
+			} finally {
+				await f.dispose();
+			}
+		},
+	);
+
+	it.each(["--team", "--unknown", "--goal=true", "--goal --team"])(
+		"rejects unsupported leading plan options without execution: %s",
+		async option => {
+			const f = fixture();
+			try {
+				await f.transition("start change requirement");
+				await f.transition("confirm-spec");
+				await f.transition("choose existing");
+				expect(await f.invoke(`confirm-plan ${option}`)).toMatchObject({
+					consumed: true,
+					failed: true,
+					errorCode: "invalid_params",
+				});
+				expect(f.inputs).toHaveLength(3);
+				expect(f.controller.status().phase).toBe("awaiting-plan");
+			} finally {
+				await f.dispose();
+			}
+		},
+	);
+
+	it("submits checked Team and Goal in their existing forms only, resetting defaults for each panel", async () => {
+		let selected: DevDecisionResult | undefined;
+		let current: DevDecisionModel | undefined;
+		const f = fixture(async model => {
+			current = model;
+			return selected;
+		});
+		try {
+			await f.transition("start change requirement");
+			await f.invoke("help");
+			expect(current!.actions.find(action => action.id === "confirm-spec")?.fields?.[0]).toMatchObject({
+				id: "useTeam",
+				kind: "checkbox",
+				value: "false",
+			});
+			expect(f.inputs).toHaveLength(1);
+			selected = { actionId: "confirm-spec", values: { useTeam: "true", confirmation: "  同意\n原文  " } };
+			await f.transition("help");
+			expect(f.inputs.at(-1)).toMatchObject({
+				role: "solution",
+				useTeam: true,
+				userReply: "/dev confirm-spec --team --   同意\n原文  ",
+			});
+			await f.transition("choose existing");
+			selected = undefined;
+			await f.invoke("help");
+			expect(current!.actions.find(action => action.id === "confirm-plan")?.fields?.[0]).toMatchObject({
+				id: "useGoal",
+				kind: "checkbox",
+				value: "false",
+			});
+			expect(f.inputs).toHaveLength(3);
+			selected = { actionId: "confirm-plan", values: { useGoal: "true" } };
+			await f.transition("help");
+			expect(f.inputs.at(-1)).toMatchObject({
+				role: "executor",
+				useGoal: true,
+				userReply: "/dev confirm-plan --goal",
+			});
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("never interprets unchecked panel confirmation prose as an option", async () => {
+		const f = fixture(async () => ({
+			actionId: "confirm-spec",
+			values: { useTeam: "false", confirmation: "--team 原样保留  " },
+		}));
+		try {
+			await f.transition("start change requirement");
+			await f.transition("help");
+			expect(f.inputs.at(-1)).toMatchObject({
+				role: "solution",
+				useTeam: false,
+				userReply: "/dev confirm-spec -- --team 原样保留  ",
+			});
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("offers basic selector opt-ins in the same approval selection without another confirmation", async () => {
+		const f = fixture();
+		let selections = 0;
+		f.host.ui = {
+			select: async (_title, options) => {
+				selections++;
+				return options.find(
+					(option): option is string => typeof option === "string" && option.includes("本次启用 Team"),
+				);
+			},
+			confirm: async () => {
+				throw new Error("Unexpected second approval");
+			},
+		} as NonNullable<SlashCommandRuntime["ui"]>;
+		try {
+			await f.transition("start change requirement");
+			await f.transition("help");
+			expect(selections).toBe(1);
+			expect(f.inputs.at(-1)).toMatchObject({ role: "solution", useTeam: true });
 		} finally {
 			await f.dispose();
 		}

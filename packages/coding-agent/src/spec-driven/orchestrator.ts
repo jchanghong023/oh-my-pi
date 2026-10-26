@@ -165,6 +165,8 @@ export class SpecDrivenOrchestrator {
 			candidateId: role === "planner" || role === "executor" ? this.#state.selection?.candidateId : undefined,
 			feedback,
 			readOnly,
+			useTeam: role === "solution" ? this.#state.useTeam : undefined,
+			useGoal: role === "executor" ? this.#state.useGoal : undefined,
 		};
 		const reply = await this.#checked(this.#ports.agents.run(input, context), context);
 		this.#state.lastReply = reply.text;
@@ -192,6 +194,8 @@ export class SpecDrivenOrchestrator {
 		const index = order.indexOf(role);
 		for (const downstream of order.slice(index + 1)) delete this.#confirmations[downstream];
 		if (index <= 0) this.#state.solution = undefined;
+		if (index <= 0) this.#state.useTeam = undefined;
+		if (index <= 2) this.#state.useGoal = undefined;
 		if (index <= 1) this.#state.selection = undefined;
 		if (index <= 1) this.#state.plan = undefined;
 		this.#state.report = undefined;
@@ -271,11 +275,12 @@ export class SpecDrivenOrchestrator {
 		);
 		return { text: result.lastReply ?? "" };
 	}
-	confirmSpecification(userReply = "确认需求"): Promise<SpecDrivenStatus> {
+	confirmSpecification(userReply = "确认需求", options: { useTeam?: boolean } = {}): Promise<SpecDrivenStatus> {
 		return this.#mutate(async context => {
 			this.#requirePhase("awaiting-specification");
 			await this.#checkUpstream("solution", context);
 			this.#confirmations.solution = userReply;
+			this.#state.useTeam = options.useTeam === true;
 			await this.#runStage("solution", context);
 		});
 	}
@@ -290,11 +295,12 @@ export class SpecDrivenOrchestrator {
 			await this.#runStage("planner", context);
 		});
 	}
-	confirmPlan(userReply = "确认计划"): Promise<SpecDrivenStatus> {
+	confirmPlan(userReply = "确认计划", options: { useGoal?: boolean } = {}): Promise<SpecDrivenStatus> {
 		return this.#mutate(async context => {
 			this.#requirePhase("awaiting-plan");
 			await this.#checkUpstream("executor", context);
 			this.#confirmations.executor = userReply;
+			this.#state.useGoal = options.useGoal === true;
 			await this.#runStage("executor", context);
 		});
 	}

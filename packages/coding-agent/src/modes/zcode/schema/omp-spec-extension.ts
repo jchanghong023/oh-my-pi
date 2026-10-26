@@ -103,6 +103,8 @@ export const ompSpecDetailsSchema = z
 		state: z.enum(["active", "waiting", "paused", "blocked", "terminal"]),
 		explanation: z.string(),
 		lastReply: z.string().optional(),
+		useTeam: z.boolean().optional(),
+		useGoal: z.boolean().optional(),
 		generation: z.number().int().nonnegative(),
 		live: z.boolean(),
 		readOnly: z.boolean(),

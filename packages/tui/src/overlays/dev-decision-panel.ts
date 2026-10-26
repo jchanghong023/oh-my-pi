@@ -23,6 +23,7 @@ import { Ellipsis, truncateToWidth } from "../utils";
 export interface DevDecisionField {
 	id: string;
 	label: string;
+	kind?: "checkbox";
 	value?: string;
 	multiline?: boolean;
 }
@@ -59,7 +60,8 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 	readonly #model: DevDecisionModel;
 	readonly #done: (result: DevDecisionResult | undefined) => void;
 	readonly #actions: DevDecisionAction[];
-	readonly #editors = new Map<DevDecisionAction, Editor[]>();
+	readonly #editors = new Map<DevDecisionAction, (Editor | undefined)[]>();
+	readonly #checked = new Map<DevDecisionAction, Set<string>>();
 	readonly #rows = new PanelRows();
 	readonly #material: Markdown;
 	readonly #view: ScrollView;
@@ -98,12 +100,13 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		return this.#actions[this.#selected];
 	}
 
-	#fields(): Editor[] {
+	#fields(): (Editor | undefined)[] {
 		const action = this.#action;
 		if (!action) return [];
 		let editors = this.#editors.get(action);
 		if (!editors) {
 			editors = (action.fields ?? []).map(field => {
+				if (field.kind === "checkbox") return undefined;
 				const editor = new Editor(getEditorTheme());
 				editor.setText(field.value ?? "");
 				editor.setBorderVisible(false);
@@ -117,6 +120,14 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 				return editor;
 			});
 			this.#editors.set(action, editors);
+			this.#checked.set(
+				action,
+				new Set(
+					action.fields
+						?.filter(field => field.kind === "checkbox" && field.value === "true")
+						.map(field => field.id),
+				),
+			);
 		}
 		return editors;
 	}
@@ -143,7 +154,25 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		const count = fields.length + 3;
 		this.#focus = (index + count) % count;
 		if (this.#focus >= 2 && this.#focus < fields.length + 2) this.#visibleField = this.#focus - 2;
-		for (let i = 0; i < fields.length; i++) fields[i]!.focused = this.focused && this.#focus === i + 2;
+		for (let i = 0; i < fields.length; i++) {
+			const editor = fields[i];
+			if (editor) editor.focused = this.focused && this.#focus === i + 2;
+		}
+	}
+
+	#toggleCheckbox(index: number): void {
+		const action = this.#action;
+		const field = action?.fields?.[index];
+		if (!action || field?.kind !== "checkbox" || action.disabledReason) return;
+		this.#fields();
+		const checked = this.#checked.get(action)!;
+		if (checked.has(field.id)) checked.delete(field.id);
+		else checked.add(field.id);
+	}
+
+	#checkboxLabel(field: DevDecisionField): string {
+		const checked = this.#action && this.#checked.get(this.#action)?.has(field.id);
+		return `${checked ? theme.checkbox.checked : theme.checkbox.unchecked} ${field.label}`;
 	}
 
 	#finish(result: DevDecisionResult | undefined): void {
@@ -157,7 +186,12 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		if (!action || action.inspect || action.disabledReason) return;
 		const editors = this.#fields();
 		const values = Object.fromEntries(
-			(action.fields ?? []).map((field, i) => [field.id, editors[i]!.getExpandedText()]),
+			(action.fields ?? []).map((field, i) => [
+				field.id,
+				field.kind === "checkbox"
+					? String(this.#checked.get(action)?.has(field.id) ?? false)
+					: editors[i]!.getExpandedText(),
+			]),
 		);
 		this.#finish({ actionId: action.id, ...(editors.length ? { values } : {}) });
 	}
@@ -208,7 +242,9 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 			else if (matchesKey(data, "end")) this.#scrollBody("end");
 		} else if (this.#focus < this.#fields().length + 2) {
 			const index = this.#focus - 2;
-			if (getKeybindings().matches(data, "tui.input.submit")) {
+			if (this.#action?.fields?.[index]?.kind === "checkbox") {
+				if (data === " " || getKeybindings().matches(data, "tui.select.confirm")) this.#toggleCheckbox(index);
+			} else if (getKeybindings().matches(data, "tui.input.submit")) {
 				if (this.#action?.fields?.[index]?.multiline) this.#fields()[index]!.handleInput("\x1b\r");
 				else this.#setFocus(this.#focus + 1);
 			} else this.#fields()[index]!.handleInput(data);
@@ -217,7 +253,12 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 	}
 
 	pasteText(text: string): void {
-		if (!this.#closed && this.#focus >= 2 && this.#focus < this.#fields().length + 2) {
+		if (
+			!this.#closed &&
+			this.#focus >= 2 &&
+			this.#focus < this.#fields().length + 2 &&
+			this.#action?.fields?.[this.#focus - 2]?.kind !== "checkbox"
+		) {
 			this.#fields()[this.#focus - 2]!.pasteText(text);
 			this.#tui.requestRender();
 		}
@@ -227,7 +268,7 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		super.invalidate();
 		this.#view.invalidate();
 		for (const editors of this.#editors.values()) {
-			for (const editor of editors) editor.invalidate();
+			for (const editor of editors) editor?.invalidate();
 		}
 	}
 
@@ -262,7 +303,14 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		const fieldRows = field
 			? [
 					truncateToWidth(`填写 ${this.#visibleField + 1}/${editors.length}：${field.label}`, inner),
-					...editors[this.#visibleField]!.render(inner),
+					...(field.kind === "checkbox"
+						? [
+								theme.fg(
+									this.#focus === this.#visibleField + 2 ? "accent" : "muted",
+									truncateToWidth(`${this.#checkboxLabel(field)}（空格/回车切换）`, inner),
+								),
+							]
+						: editors[this.#visibleField]!.render(inner)),
 				]
 			: [];
 		const footer = [
@@ -303,6 +351,10 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 			{ ...col([this.#material], { role: "omp.dev-decision.material" }), key: "material", scroll: this.#scroll },
 		];
 		for (const [i, field] of (this.#action?.fields ?? []).entries()) {
+			if (field.kind === "checkbox") {
+				children.push(actionButton(this.#checkboxLabel(field), `checkbox-${i}`, { keys: "space" }));
+				continue;
+			}
 			children.push(
 				node(
 					"col",
@@ -334,6 +386,10 @@ export class DevDecisionPanel extends OverlayPanel implements Focusable {
 		} else if (event.type === "action") {
 			if (event.act === "cancel") this.#finish(undefined);
 			else if (event.act === "submit") this.#submit();
+			else {
+				const match = /^checkbox-(\d+)$/.exec(event.act);
+				if (match) this.#toggleCheckbox(Number(match[1]));
+			}
 		}
 		this.#tui.requestRender();
 	}

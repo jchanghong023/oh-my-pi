@@ -8,6 +8,8 @@ import {
 	IMPLEMENTATION_PATH,
 	MARKER,
 	REQUIREMENT,
+	contentText,
+	teamStage,
 	rolePayload,
 	type ProviderFixture,
 	type ProviderScenario,
@@ -24,7 +26,7 @@ async function withTui(
 		cwd: string;
 		provider: ProviderFixture;
 		tui: (...args: string[]) => Promise<string>;
-		chooseFirst: (label: string) => Promise<void>;
+		chooseFirst: (label: string, submit?: boolean) => Promise<void>;
 	}) => Promise<void>,
 ): Promise<void> {
 	await using root = await TempDir.create("@omp-dev-four-stage-tui-");
@@ -79,7 +81,8 @@ async function withTui(
 		if (code !== 0) throw new Error(`tui-test ${args.join(" ")} exited ${code}:\n${stdout}\n${stderr}`);
 		return stdout;
 	}
-	async function chooseFirst(label: string): Promise<void> {
+	async function chooseFirst(label: string, submit = true): Promise<void> {
+		await tui("expect", "text", "操作（", "--timeout", "30000");
 		const screen = await tui("text");
 		const selection = /操作（(\d+)\//u.exec(screen);
 		if (!selection) throw new Error(`Decision panel is not visible:\n${screen}`);
@@ -87,6 +90,8 @@ async function withTui(
 		if (up) await tui("key", "press", ...Array<string>(up).fill("Up"));
 		await tui("expect", "text", `› 【阶段决策】${label}`, "--timeout", "30000");
 		await tui("key", "press", "Enter");
+		if (submit && ["确认需求并进入方案", "批准计划并开始执行"].includes(label))
+			await tui("key", "press", "Ctrl+Enter");
 	}
 	try {
 		await tui(
@@ -182,6 +187,69 @@ test.skipIf(!tuiTest)(
 			await tui("expect", "text", "已完成", "--timeout", "30000");
 			console.log("Native TUI after requirements sync/archive:\n", await tui("text"));
 			expect((await fs.readdir(path.join(cwd, "docs/superpowers/plans"))).length).toBe(3);
+			expect(await Bun.file(path.join(cwd, "openspec/specs/greeting/spec.md")).text()).toContain(REQUIREMENT);
+			expect(provider.failures).toEqual([]);
+		});
+	},
+	300_000,
+);
+
+test.skipIf(!tuiTest)(
+	"TUI enables Team and executor Goal in the existing approvals without extra stages or automatic acceptance",
+	async () => {
+		await withTui({}, async ({ cwd, provider, tui, chooseFirst }) => {
+			await tui("submit", `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
+			await tui("expect", "text", "确认需求并进入方案", "--timeout", "30000");
+			await chooseFirst("确认需求并进入方案", false);
+			await tui("expect", "text", "☐ 本次方案启用 Team", "--timeout", "30000");
+			await tui("key", "press", "Space");
+			await tui("expect", "text", "☑ 本次方案启用 Team", "--timeout", "30000");
+			expect(provider.requests.some(teamStage)).toBe(false);
+			await tui("key", "press", "Ctrl+Enter");
+			await tui("expect", "text", "协同开发 · 方案", "--timeout", "30000");
+			await tui("expect", "text", "查看完整方案文件与所有候选", "--timeout", "30000");
+			const stages = provider.requests
+				.filter(request => request.tools?.some(tool => tool.function?.name.replace(/^_/u, "") === "yield"))
+				.map(teamStage)
+				.filter(Boolean);
+			expect(stages.filter(stage => stage === "proposal")).toHaveLength(3);
+			expect(stages).toContain("alignment");
+			expect(stages.filter(stage => stage === "review")).toHaveLength(3);
+			expect(stages).toContain("synthesis");
+			const solutionInput = provider.requests
+				.map(rolePayload)
+				.find(payload => payload?.specDrivenRole === "solution")!;
+			const solutionPath = (solutionInput.input.outputPaths as string[])[0]!;
+			const solution = await Bun.file(path.join(cwd, solutionPath)).json();
+			expect(solution.candidates).toHaveLength(3);
+			await tui("key", "press", "Escape");
+			await tui("submit", `/dev choose ${solution.candidates[0].id} 采用完整 Team 候选`);
+			await tui("expect", "text", "协同开发 · 计划", "--timeout", "30000");
+			await chooseFirst("批准计划并开始执行", false);
+			await tui("expect", "text", "☐ 本次执行启用原生 Goal", "--timeout", "30000");
+			await tui("key", "press", "Space");
+			await tui("expect", "text", "☑ 本次执行启用原生 Goal", "--timeout", "30000");
+			expect(provider.requests.map(rolePayload).some(payload => payload?.specDrivenRole === "executor")).toBe(false);
+			await tui("key", "press", "Escape");
+			expect(provider.requests.map(rolePayload).some(payload => payload?.specDrivenRole === "executor")).toBe(false);
+			await tui("submit", "/dev help");
+			await chooseFirst("批准计划并开始执行", false);
+			await tui("expect", "text", "☐ 本次执行启用原生 Goal", "--timeout", "30000");
+			await tui("key", "press", "Space", "Ctrl+Enter");
+			await tui("expect", "text", "查看完整完成报告", "--timeout", "30000");
+			const executor = provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor")!;
+			const results = executor.messages
+				.filter(message => message.role === "tool")
+				.map(message => contentText(message.content))
+				.join("\n");
+			expect(results).toContain("Status: active");
+			expect(results).toContain("Greeting Implementation Plan");
+			expect(results).toContain("Status: complete");
+			expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toContain("export function greet");
+			expect(await Bun.file(path.join(cwd, "openspec/specs/greeting/spec.md")).exists()).toBe(false);
+			console.log("Native Team/Goal decision result before acceptance:\n", await tui("text"));
+			await chooseFirst("验收交付并同步需求、归档");
+			await tui("expect", "text", "已完成", "--timeout", "30000");
 			expect(await Bun.file(path.join(cwd, "openspec/specs/greeting/spec.md")).text()).toContain(REQUIREMENT);
 			expect(provider.failures).toEqual([]);
 		});

@@ -128,6 +128,8 @@ export function renderSpecDrivenSummary(state: SpecDrivenStatus, compact = false
 					? "已取消"
 					: stageLabel(stageForPhase(state.phase));
 	const lines = [`协同开发模式：${phase}${state.paused ? "（暂停）" : ""}`];
+	if (state.useTeam !== undefined) lines.push(`方案 Team：${state.useTeam ? "开启" : "关闭"}`);
+	if (state.useGoal !== undefined) lines.push(`执行 Goal：${state.useGoal ? "开启" : "关闭"}`);
 	if (state.blockedReason) lines.push(`阻塞：${state.blockedReason}`);
 	if (state.lastReply && !compact) lines.push(state.lastReply);
 	if (state.specification) lines.push(`需求文件：${state.specification.files.map(file => file.path).join("、")}`);

@@ -242,6 +242,58 @@ test("actor request retains the missing-result fallback rather than reusing a pr
 	}
 }, 120_000);
 
+test("executor native Goal is request-scoped, carries the full approved plan and pauses before acceptance dialogue", async () => {
+	await using fixture = await consumer(undefined, "executor");
+	const plan = {
+		path: "approved-plan.md",
+		content: "# Approved plan\n\nImplement the exact approved behavior.\n\nFinal detail must survive.",
+		version: "plan-bytes",
+	};
+	let activeObjective: string | undefined;
+	fixture.onRequest(() => {
+		const state = fixture.actor.session.getGoalModeState();
+		if (state?.enabled) activeObjective = state.goal.objective;
+	});
+	await fixture.request();
+	expect(fixture.actor.session.getGoalModeState()).toBeUndefined();
+	expect(fixture.advertisedTools).not.toContain("goal");
+	await fixture.request({ useGoal: true, files: [plan], userReply: " 原始批准\n保留全部 " });
+	expect(activeObjective).toContain(plan.content.replaceAll("\n", "\\n"));
+	expect(activeObjective).toContain(" 原始批准\\n保留全部 ");
+	expect(fixture.advertisedTools).toContain("goal");
+	const first = fixture.actor.session.getGoalModeState()!;
+	expect(first.enabled).toBe(false);
+	expect(first.goal.status).toBe("paused");
+	activeObjective = undefined;
+	await fixture.request({ useGoal: true, readOnly: true, files: [plan] });
+	expect(activeObjective).toBeUndefined();
+	expect(fixture.advertisedTools).not.toContain("goal");
+	expect(fixture.advertisedTools).not.toContain("write");
+	await fixture.request({ useGoal: true, files: [plan], feedback: "只修复获批范围内的问题" });
+	const repaired = fixture.actor.session.getGoalModeState()!;
+	expect(repaired.goal.id).not.toBe(first.goal.id);
+	expect(repaired.goal.objective).toContain("只修复获批范围内的问题");
+	expect(repaired.goal.objective).toContain(plan.content.replaceAll("\n", "\\n"));
+	expect(repaired.enabled).toBe(false);
+}, 120_000);
+
+test("Goal opt-in never activates a non-executor producer", async () => {
+	await using fixture = await consumer();
+	await fixture.request({ useGoal: true });
+	expect(fixture.actor.session.getGoalModeState()).toBeUndefined();
+	expect(fixture.advertisedTools).not.toContain("goal");
+}, 120_000);
+
+test("cancelling an executor request pauses its native Goal before the request settles", async () => {
+	await using fixture = await consumer(undefined, "executor");
+	fixture.onRequest(() => fixture.controller.abort());
+	await expect(fixture.request({ useGoal: true })).rejects.toThrow();
+	const state = fixture.actor.session.getGoalModeState();
+	expect(state?.enabled).toBe(false);
+	expect(state?.goal.status).toBe("paused");
+	expect(fixture.actor.session.getEnabledToolNames()).not.toContain("goal");
+}, 120_000);
+
 test("actor accepts ordinary final prose without requiring JSON or yield", async () => {
 	await using fixture = await consumer();
 	fixture.setText("需求文件已更新，请确认。");
