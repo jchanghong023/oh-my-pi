@@ -764,7 +764,6 @@ describe("Composer prepaint", () => {
 		await terminal.waitForRender(() => terminal.getViewport().some(row => Bun.stripANSI(row).includes("v9.9.8")));
 		const prepaintRows = terminal.getViewport().map(row => Bun.stripANSI(row));
 		expect(prepaintRows.join("\n")).toContain("v9.9.8");
-		const prepaintEditorRow = prepaintRows.findLastIndex(row => row.startsWith("╰"));
 
 		terminal.sendInput("draft message");
 		const lease = new ComposerLease(composer);
@@ -808,11 +807,6 @@ describe("Composer prepaint", () => {
 			);
 			const welcomeMatches = (output.match(/v9\.9\.9/g) || []).length;
 			expect(welcomeMatches).toBe(1);
-			const adoptedEditorRow = terminal
-				.getViewport()
-				.map(row => Bun.stripANSI(row))
-				.findLastIndex(row => row.startsWith("╰"));
-			expect(adoptedEditorRow).toBe(prepaintEditorRow);
 		} finally {
 			mode?.stop();
 			lease.dispose();

@@ -212,7 +212,8 @@ export const cfgHideThinkingBlock = register({
 		tab: "model",
 		group: "思考",
 		label: "隐藏思考块",
-		description: "隐藏思考内容；开启显示时，紧凑模式仅在输入区上方展示活跃思考最近两行，全量模式沿用上游完整显示",
+		description:
+			"隐藏思考内容；紧凑模式在输入框上方固定保留一行，开启显示时展示最新活跃思考，全量模式沿用上游完整显示",
 	},
 });
 

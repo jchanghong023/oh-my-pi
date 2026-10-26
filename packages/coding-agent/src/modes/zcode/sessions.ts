@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -13,6 +14,7 @@ import {
 	type CreateAgentSessionResult,
 } from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
+import { peekSpecDrivenController } from "../../spec-driven/controller";
 import { AgentStorage } from "../../session/agent-storage";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { readSessionInfo, type SessionInfo } from "../../session/session-listing";
@@ -275,6 +277,18 @@ export class ZCodeSessionManager {
 		return this.#records.get(id)?.creationResult.interactionUI !== undefined;
 	}
 
+	/** Existing SDK owners are authoritative even before lazy journal materialization. */
+	#liveSession(id: string): AgentSession | undefined {
+		const root = this.#records.get(id);
+		if (root) return root.session;
+		for (const record of this.#records.values()) {
+			for (const ref of record.registry.list()) {
+				if (ref.kind === "sub" && ref.session?.sessionManager.getSessionId() === id) return ref.session;
+			}
+		}
+		return undefined;
+	}
+
 	/** Resolve the native tree owner; viewing a child must never create a second runtime. */
 	async nativeChild(id: string): Promise<ZCodeNativeChild | undefined> {
 		if (this.#records.has(id)) return undefined;
@@ -286,6 +300,8 @@ export class ZCodeSessionManager {
 			}
 		}
 		for (const info of await this.list()) {
+			if (info.id === id && /(?:^|[\\/])\.omp[\\/]dev[\\/]sessions[\\/]/.test(info.path))
+				return { agentId: id, file: info.path };
 			const children = await collectSubSessions(info.path);
 			for (const [key, child] of Object.entries(children)) {
 				if (child.header?.id !== id) continue;
@@ -306,8 +322,8 @@ export class ZCodeSessionManager {
 
 	/** Direct descendants and progress→session identity derive from the native journal and registry. */
 	async childIdentities(id: string): Promise<Record<string, string>> {
-		const info = await this.#find(id);
-		const children = await collectSubSessions(info.path, key => {
+		const file = this.#liveSession(id)?.sessionManager.getSessionFile() ?? (await this.#find(id)).path;
+		const children = await collectSubSessions(file, key => {
 			throw new Error(`Subagent history is unreadable: ${key}`);
 		});
 		const identities: Record<string, string> = {};
@@ -371,6 +387,7 @@ export class ZCodeSessionManager {
 
 	async create(options: ZCodeSessionCreateOptions = {}): Promise<ZCodeSessionRecord> {
 		this.#assertOpen();
+		await this.exitDev(options.cwd ?? this.#options.cwd);
 		// A recreation waits outside #opening: the earlier deletion must never wait back on it.
 		const deletion = options.sessionId ? this.#deletions.get(options.sessionId) : undefined;
 		if (deletion) {
@@ -446,6 +463,7 @@ export class ZCodeSessionManager {
 			if (await this.nativeChild(id))
 				throw new Error("Native child sessions are read-only; control them from their parent");
 			const info = await this.#find(id);
+			await this.exitDev(info.cwd);
 			await this.#assertDirectory(info.cwd);
 			const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
 				throwIfMissing: true,
@@ -821,10 +839,30 @@ export class ZCodeSessionManager {
 
 	async list(): Promise<SessionInfo[]> {
 		const local = await SessionManager.list(this.#options.cwd, this.#sessionDir, this.#storage);
-		if (path.resolve(this.#agentDir) !== path.resolve(getAgentDir())) return local;
-		const all = await SessionManager.listAll(this.#storage);
+		const all =
+			path.resolve(this.#agentDir) === path.resolve(getAgentDir())
+				? await SessionManager.listAll(this.#storage)
+				: [];
 		const merged = new Map(all.map(info => [info.id, info]));
 		for (const info of local) merged.set(info.id, info);
+		const workspaces = new Set([this.#options.cwd, ...[...merged.values()].map(info => info.cwd)]);
+		const roots = new Set<string>();
+		for (const cwd of workspaces) roots.add(vcs.gitInfo(cwd)?.repoRoot ?? cwd);
+		for (const root of roots) {
+			const directory = path.join(root, ".omp", "dev", "sessions");
+			let entries: string[];
+			try {
+				entries = await fs.readdir(directory, { recursive: true });
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			for (const entry of entries) {
+				if (!entry.endsWith(".jsonl")) continue;
+				const info = await readSessionInfo(path.join(directory, entry));
+				if (info) merged.set(info.id, info);
+			}
+		}
 		return [...merged.values()];
 	}
 
@@ -884,14 +922,14 @@ export class ZCodeSessionManager {
 
 	/** Resolve native ID/path linkage and the inherited boundary without IO in the projection. */
 	async forkProjection(id: string): Promise<{ parentSessionId?: string; inheritedMessageCount?: number }> {
-		const live = this.#records.get(id);
+		const live = this.#liveSession(id);
 		const info = live ? undefined : await this.#find(id);
 		const loaded = live ? undefined : await loadEntriesFromFile(info!.path, this.#storage, { throwIfMissing: true });
-		const header = live?.session.sessionManager.getHeader() ?? loaded?.find(entry => entry.type === "session");
+		const header = live?.sessionManager.getHeader() ?? loaded?.find(entry => entry.type === "session");
 		const linkage = header?.parentSession;
 		if (!linkage) return {};
 		const journal = live
-			? live.session.sessionManager.getBranch()
+			? live.sessionManager.getBranch()
 			: loaded!.filter((entry): entry is SessionEntry => entry.type !== "session");
 		const byId = new Map(journal.map(entry => [entry.id, entry]));
 		const branch: SessionEntry[] = [];
@@ -946,6 +984,8 @@ export class ZCodeSessionManager {
 
 	/** Existing-only journal facts; never constructs a session manager or takes its writer lease. */
 	async readEntries(id: string): Promise<readonly SessionEntry[]> {
+		const live = this.#liveSession(id);
+		if (live) return live.sessionManager.getEntries();
 		const info = await this.#find(id);
 		const entries = await loadEntriesFromFile(info.path, this.#storage, { throwIfMissing: true });
 		return entries.filter((entry): entry is SessionEntry => entry.type !== "session");
@@ -1020,16 +1060,17 @@ export class ZCodeSessionManager {
 		sourceCommand?: PromptOptions["sourceCommand"],
 		entryId?: string,
 		highspeedMeta?: HighspeedMessageMeta,
+		session: AgentSession = this.#inputSession(record),
 	): Promise<void> {
 		await record.run(async () => {
-			const queued = record.session
+			const queued = session
 				.getQueuedInputMessages()
 				.some(message => (message as AgentMessage & { inputId?: string }).inputId === inputId);
-			const guided = record.session.agent
+			const guided = session.agent
 				.peekSteeringQueue()
 				.some(message => (message as AgentMessage & { inputId?: string }).inputId === inputId);
 			const delivery = state === "admitted" ? (queued ? (guided ? "guide" : "queue") : "startNow") : undefined;
-			record.session.sessionManager.appendCustomEntry("session_input", {
+			session.sessionManager.appendCustomEntry("session_input", {
 				inputId,
 				state,
 				sourceCommand,
@@ -1038,15 +1079,41 @@ export class ZCodeSessionManager {
 				// 卡属于已接受的 inputId，不属于当前模型；拒绝的输入绝不能制造卡事实。
 				...(highspeedMeta ? { highspeed: highspeedMessageMetaSchema.parse(highspeedMeta) } : {}),
 			});
-			await record.session.sessionManager.flush();
+			await session.sessionManager.flush();
 		});
 	}
 
 	async #find(id: string): Promise<SessionInfo> {
 		const info = (await this.list()).find(item => item.id === id);
 		if (info) return info;
+		const manager = this.#liveSession(id)?.sessionManager;
+		const header = manager?.getHeader();
+		const file = manager?.getSessionFile();
+		if (manager && header && file) {
+			const journal = manager.getEntries();
+			const messages = journal.flatMap(entry => (entry.type === "message" ? [entry.message] : []));
+			const text = (message: AgentMessage) => {
+				if (!("content" in message)) return "";
+				if (typeof message.content === "string") return message.content;
+				return message.content.flatMap(part => (part.type === "text" ? [part.text] : [])).join("\n");
+			};
+			const firstUser = messages.find(message => message.role === "user");
+			return {
+				id: header.id,
+				path: file,
+				cwd: manager.getCwd(),
+				title: manager.getSessionName(),
+				created: new Date(header.timestamp),
+				modified: new Date(journal.at(-1)?.timestamp ?? header.timestamp),
+				messageCount: messages.length,
+				assistantTurns: messages.filter(message => message.role === "assistant").length,
+				size: 0,
+				firstMessage: firstUser ? text(firstUser) : "",
+				allMessagesText: messages.map(text).join("\n"),
+			};
+		}
 		const child = await this.nativeChild(id);
-		await child?.session?.sessionManager.flush();
+		// Cold history reads must not flush or materialize an SDK journal.
 		const persisted = child ? await readSessionInfo(child.file) : undefined;
 		if (!persisted || persisted.id !== id) throw new Error(`Session not found: ${id}`);
 		return persisted;
@@ -1060,11 +1127,15 @@ export class ZCodeSessionManager {
 		entries: SessionEntry[];
 		info: SessionInfo;
 	}> {
+		const live = this.#liveSession(id);
 		const info = await this.#find(id);
-		// No writable manager, lease, Goal restore, or registry registration on a history read.
-		const entries = await loadEntriesFromFile(info.path, this.#storage, { throwIfMissing: true });
-		await resolveBlobRefsInEntries(entries, new BlobStore(getBlobsDir()));
-		const journal = entries.filter((entry): entry is SessionEntry => entry.type !== "session");
+		// Reuse the native manager's selected branch; cold reads never create an owner.
+		const journal = live
+			? live.sessionManager.getBranch()
+			: (await loadEntriesFromFile(info.path, this.#storage, { throwIfMissing: true })).filter(
+					(entry): entry is SessionEntry => entry.type !== "session",
+				);
+		if (!live) await resolveBlobRefsInEntries(journal, new BlobStore(getBlobsDir()));
 		const byId = new Map(journal.map(entry => [entry.id, entry]));
 		const branch: SessionEntry[] = [];
 		const visited = new Set<string>();
@@ -1104,7 +1175,7 @@ export class ZCodeSessionManager {
 		this.#executions.get(id)?.policy.userTakeover();
 		const record = this.#require(id);
 		return this.#beginSubmission(id, options, admitted =>
-			record.session.prompt(text, { ...options, throwOnDrop: true, onPromptAdmitted: admitted }),
+			this.#inputSession(record).prompt(text, { ...options, throwOnDrop: true, onPromptAdmitted: admitted }),
 		);
 	}
 
@@ -1116,7 +1187,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		const start = (scoped: ZCodeInputOptions) =>
 			this.#beginSubmission(id, scoped, admitted =>
-				this.#require(id).session.promptCustomMessage(message, {
+				this.#inputSession(this.#require(id)).promptCustomMessage(message, {
 					...scoped,
 					queueChipText: options.queueChipText,
 					onPromptAdmitted: admitted,
@@ -1135,7 +1206,11 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		return this.#execute(id, options, execution, scoped =>
 			this.#beginSubmission(id, scoped, admitted =>
-				this.#require(id).session.prompt(text, { ...scoped, throwOnDrop: true, onPromptAdmitted: admitted }),
+				this.#inputSession(this.#require(id)).prompt(text, {
+					...scoped,
+					throwOnDrop: true,
+					onPromptAdmitted: admitted,
+				}),
 			),
 		);
 	}
@@ -1151,6 +1226,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		this.#assertOpen();
 		const record = this.#require(id);
+		const session = this.#inputSession(record);
 		let accepted = false;
 		const { promise: admitted, resolve, reject } = Promise.withResolvers<void>();
 		const completion = record.run(() =>
@@ -1159,10 +1235,15 @@ export class ZCodeSessionManager {
 				// Host 清空输入框后却没有 user row，且无法按失败 ACK 恢复输入。
 				options.onPromptAdmitted?.();
 				accepted = true;
-				void this.recordInputAdmission(id, options.inputId, options.sourceCommand, options.highspeedMeta).then(
-					resolve,
-					reject,
-				);
+				void this.#recordInputState(
+					record,
+					options.inputId,
+					"admitted",
+					options.sourceCommand,
+					undefined,
+					options.highspeedMeta,
+					session,
+				).then(resolve, reject);
 			}),
 		);
 		void completion.then(
@@ -1172,9 +1253,15 @@ export class ZCodeSessionManager {
 			error => {
 				if (!accepted) reject(error);
 				else if (this.get(id) === record) {
-					void this.#recordInputState(record, options.inputId, "failed", options.sourceCommand).catch(
-						receiptError => process.stderr.write(`Input failure receipt failed: ${String(receiptError)}\n`),
-					);
+					void this.#recordInputState(
+						record,
+						options.inputId,
+						"failed",
+						options.sourceCommand,
+						undefined,
+						undefined,
+						session,
+					).catch(receiptError => process.stderr.write(`Input failure receipt failed: ${String(receiptError)}\n`));
 				}
 			},
 		);
@@ -1191,19 +1278,20 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		this.#assertOpen();
 		const record = this.#require(id);
-		if (record.session.isBusyForSnapshot || record.session.hasPendingAsyncWork() || this.#executions.has(id)) {
+		const session = this.#inputSession(record);
+		if (session.isBusyForSnapshot || session.hasPendingAsyncWork() || this.#executions.has(id)) {
 			throw new Error("Execution materials require an idle session");
 		}
 		if (execution.offPeak && !this.#options.onOffPeakEvent)
 			throw new Error("Off-peak lifecycle transport is unavailable");
 		const controller = new AbortController();
 		let activeSelection = execution.selection;
-		const resident = record.session.model;
+		const resident = session.model;
 		const capturedSelection: ModelSelection | undefined = resident && {
 			providerId: resident.provider,
 			modelId: resident.id,
-			...(record.session.thinkingLevel
-				? { options: { reasoningLevel: toZCodeReasoningLevel(record.session.thinkingLevel) } }
+			...(session.thinkingLevel
+				? { options: { reasoningLevel: toZCodeReasoningLevel(session.thinkingLevel) } }
 				: {}),
 		};
 		const policy = createExecutionPolicies({
@@ -1215,10 +1303,10 @@ export class ZCodeSessionManager {
 			onOffPeakEvent: notification => this.#options.onOffPeakEvent?.(notification),
 			onCancel: () => {
 				controller.abort(new Error("Execution cancelled"));
-				void record.session.abort();
+				void session.abort();
 			},
 			onSelectionFallback: fallback => {
-				record.session.sessionManager.appendCustomEntry("input_model_selection_fallback", {
+				session.sessionManager.appendCustomEntry("input_model_selection_fallback", {
 					inputId: options.inputId,
 					sourceCommand: options.sourceCommand,
 					...fallback,
@@ -1236,24 +1324,24 @@ export class ZCodeSessionManager {
 			}
 			const supplied = await record.resolveRequestAuth(model, requestSignal);
 			if (supplied) return supplied;
-			const apiKey = await record.session.modelRegistry.getApiKey(model, id, { signal: requestSignal });
+			const apiKey = await session.modelRegistry.getApiKey(model, id, { signal: requestSignal });
 			return apiKey ? { apiKey } : undefined;
 		};
 		const { promise: admitted, resolve, reject } = Promise.withResolvers<void>();
 		const completion = record
 			.run(async () => {
-				let model = record.session.modelRegistry.find(activeSelection.providerId, activeSelection.modelId);
+				let model = session.modelRegistry.find(activeSelection.providerId, activeSelection.modelId);
 				if (!model) {
 					const fallback = policy.recoverSelectionUnavailable(activeSelection.providerId);
 					if (fallback) activeSelection = fallback.target;
-					model = record.session.modelRegistry.find(activeSelection.providerId, activeSelection.modelId);
+					model = session.modelRegistry.find(activeSelection.providerId, activeSelection.modelId);
 				}
 				if (!model) throw new Error("Execution model selection is unavailable");
 				const thinking = activeSelection.options?.reasoningLevel;
 				const thinkingLevel = thinking === undefined ? undefined : parseZCodeThinkingLevel(thinking);
 				if (thinking !== undefined && thinkingLevel === undefined)
 					throw new Error("Execution reasoning level is unavailable");
-				return record.session.withExecutionModel(
+				return session.withExecutionModel(
 					{
 						model,
 						thinkingLevel,
@@ -1286,7 +1374,7 @@ export class ZCodeSessionManager {
 							});
 							if (!recovery) return undefined;
 							if (recovery.kind === "fallback") activeSelection = recovery.target;
-							const replacement = record.session.modelRegistry.find(
+							const replacement = session.modelRegistry.find(
 								activeSelection.providerId,
 								activeSelection.modelId,
 							);
@@ -1309,14 +1397,14 @@ export class ZCodeSessionManager {
 						});
 						void submission.admitted.then(resolve, reject);
 						const result = await submission.completion;
-						while (record.session.hasPendingAsyncWork() && !controller.signal.aborted) {
+						while (session.hasPendingAsyncWork() && !controller.signal.aborted) {
 							policy.setBackgroundWaiting(true);
 							const interrupted = Promise.withResolvers<never>();
 							const abortWait = () => interrupted.reject(controller.signal.reason);
 							controller.signal.addEventListener("abort", abortWait, { once: true });
 							try {
 								controller.signal.throwIfAborted();
-								await Promise.race([record.session.settleAsyncWork(), interrupted.promise]);
+								await Promise.race([session.settleAsyncWork(), interrupted.promise]);
 							} finally {
 								controller.signal.removeEventListener("abort", abortWait);
 							}
@@ -1355,6 +1443,11 @@ export class ZCodeSessionManager {
 
 	async rename(id: string, title: string): Promise<void> {
 		this.#assertOpen();
+		const native = this.get(id) ? undefined : await this.nativeChild(id);
+		if (native?.session) {
+			await native.session.sessionManager.setSessionName(title, "user");
+			return;
+		}
 		const live = this.get(id);
 		if (live) {
 			await live.session.sessionManager.setSessionName(title, "user");
@@ -1434,20 +1527,21 @@ export class ZCodeSessionManager {
 
 	async stop(id: string): Promise<void> {
 		const record = this.#require(id);
+		const dev = peekSpecDrivenController(record.session.sessionManager);
+		const session = dev?.inputMode() === "dev" ? (dev.nativeSession() ?? record.session) : record.session;
 		this.#executions.get(id)?.controller.abort(new Error("Session stopped"));
-		const queued = record.session
+		const queued = session
 			.getQueuedInputMessages()
 			.map(
 				message => message as AgentMessage & { inputId?: string; sourceCommand?: PromptOptions["sourceCommand"] },
 			);
-		await record.run(() => record.session.abort({ preserveQueuedInputs: true }));
+		await dev?.interrupt(session);
+		await record.run(() => session.abort({ preserveQueuedInputs: true }));
 		const remaining = new Set(
-			record.session
-				.getQueuedInputMessages()
-				.map(message => (message as AgentMessage & { inputId?: string }).inputId),
+			session.getQueuedInputMessages().map(message => (message as AgentMessage & { inputId?: string }).inputId),
 		);
 		const promoted = new Set(
-			record.session.sessionManager
+			session.sessionManager
 				.getEntries()
 				.flatMap(entry =>
 					entry.type === "message" ? [(entry.message as AgentMessage & { inputId?: string }).inputId] : [],
@@ -1455,7 +1549,15 @@ export class ZCodeSessionManager {
 		);
 		for (const input of queued) {
 			if (input.inputId && !remaining.has(input.inputId) && !promoted.has(input.inputId)) {
-				await this.#recordInputState(record, input.inputId, "cancelled", input.sourceCommand);
+				await this.#recordInputState(
+					record,
+					input.inputId,
+					"cancelled",
+					input.sourceCommand,
+					undefined,
+					undefined,
+					session,
+				);
 			}
 		}
 	}
@@ -1493,14 +1595,17 @@ export class ZCodeSessionManager {
 		promoteQueuedCommand?: (inputId: string) => Promise<void>,
 	): Promise<unknown> {
 		const record = this.#require(id);
+		const session = this.#inputSession(record);
+		const dev = peekSpecDrivenController(record.session.sessionManager);
+		if (dev?.inputMode() === "dev") await dev.checkConversationAllowed();
 		return record.run(async () => {
-			if (payload.execution && (record.session.isBusyForSnapshot || record.session.hasPendingAsyncWork())) {
+			if (payload.execution && (session.isBusyForSnapshot || session.hasPendingAsyncWork())) {
 				throw new Error("Execution materials require an idle session");
 			}
-			if (type === "sendQueuedNow" && record.session.isStreaming && promoteQueuedCommand) {
+			if (type === "sendQueuedNow" && session.isStreaming && promoteQueuedCommand) {
 				if (!payload.queueItemId) throw new Error("Queue input identity is required");
 				if (
-					!record.session
+					!session
 						.getQueuedInputMessages()
 						.some(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId)
 				)
@@ -1508,7 +1613,7 @@ export class ZCodeSessionManager {
 				await promoteQueuedCommand(payload.queueItemId);
 				// A native control-only command may consume its queued input without a model prompt.
 				if (
-					!record.session
+					!session
 						.getQueuedInputMessages()
 						.some(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId)
 				)
@@ -1516,10 +1621,10 @@ export class ZCodeSessionManager {
 			}
 			if (
 				type === "sendQueuedNow" &&
-				(payload.execution || (!record.session.isBusyForSnapshot && !record.session.hasPendingAsyncWork()))
+				(payload.execution || (!session.isBusyForSnapshot && !session.hasPendingAsyncWork()))
 			) {
 				if (!payload.queueItemId) throw new Error("Queue input identity is required");
-				const queued = record.session
+				const queued = session
 					.getQueuedInputMessages()
 					.find(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId);
 				if (!queued) throw new Error("Queue item was already delivered or removed");
@@ -1533,11 +1638,11 @@ export class ZCodeSessionManager {
 					toolDenylist: source.toolDenylist,
 					highspeedMeta:
 						payload.highspeedMeta ??
-						readHighspeedInputFacts(record.session.sessionManager.getBranch()).get(payload.queueItemId),
+						readHighspeedInputFacts(session.sessionManager.getBranch()).get(payload.queueItemId),
 				};
 				// Stop 的 held 会阻止 steering 自动投递；显式提升只借出所选输入，不释放其余队列。
 				const start = (scoped: ZCodeInputOptions) => {
-					const taken = record.session.takeQueuedInput(payload.queueItemId!);
+					const taken = session.takeQueuedInput(payload.queueItemId!);
 					if (!taken) throw new Error("Queue item was already delivered or removed");
 					const accepted = this.#beginSubmission(id, scoped, admitted =>
 						taken.prompt({ ...scoped, throwOnDrop: true, onPromptAdmitted: admitted }),
@@ -1554,13 +1659,13 @@ export class ZCodeSessionManager {
 			}
 			if (type === "setAutoDrain") {
 				if (typeof payload.autoDrain !== "boolean") throw new Error("autoDrain must be a boolean");
-				record.session.setQueueAutoDrain(payload.autoDrain);
+				session.setQueueAutoDrain(payload.autoDrain);
 				return { autoDrain: payload.autoDrain };
 			}
 			if (type === "setFollowupMode") {
 				if (payload.mode !== "queue" && payload.mode !== "guide") throw new Error("Invalid follow-up mode");
-				record.session.setSteeringMode(payload.mode === "guide" ? "one-at-a-time" : "all", false);
-				record.session.setFollowUpMode("one-at-a-time", false);
+				session.setSteeringMode(payload.mode === "guide" ? "one-at-a-time" : "all", false);
+				session.setFollowUpMode("one-at-a-time", false);
 				return { mode: payload.mode };
 			}
 			const operations = {
@@ -1571,10 +1676,10 @@ export class ZCodeSessionManager {
 			} as const;
 			if (type in operations) {
 				if (!payload.queueItemId) throw new Error("Queue input identity is required");
-				const queued = record.session
+				const queued = session
 					.getQueuedInputMessages()
 					.find(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId);
-				const changed = record.session.mutateQueuedInput(
+				const changed = session.mutateQueuedInput(
 					payload.queueItemId,
 					operations[type as keyof typeof operations],
 					{
@@ -1594,23 +1699,24 @@ export class ZCodeSessionManager {
 				return { queueItemId: payload.queueItemId };
 			}
 			if (!payload.entryId) throw new Error("Resolved journal entry is required");
-			const entry = record.session.sessionManager.getEntry(payload.entryId);
+			const entry = session.sessionManager.getEntry(payload.entryId);
 			if (!entry || entry.type !== "message") throw new Error("Conversation target is no longer available");
 			if (type === "setHighspeedMetrics") {
 				const inputId = (entry.message as AgentMessage & { inputId?: string }).inputId;
-				const card = inputId && readHighspeedInputFacts(record.session.sessionManager.getBranch()).get(inputId);
+				const card = inputId && readHighspeedInputFacts(session.sessionManager.getBranch()).get(inputId);
 				if (entry.message.role !== "user" || !card || !payload.highspeedMetrics)
 					throw new Error("Highspeed metrics require an accepted card input");
 				const highspeed = highspeedMessageMetaSchema.parse({ ...card, ...payload.highspeedMetrics });
-				record.session.sessionManager.appendCustomEntry("input_highspeed_metrics", { inputId, highspeed });
-				await record.session.sessionManager.flush();
+				session.sessionManager.appendCustomEntry("input_highspeed_metrics", { inputId, highspeed });
+				await session.sessionManager.flush();
 				return { inputId };
 			}
 			if (type === "forkAssistant") {
 				if (entry.message.role !== "assistant") throw new Error("Fork requires an assistant target");
-				await record.session.sessionManager.flush();
-				const source = record.session.sessionManager.getSessionFile();
+				await session.sessionManager.flush();
+				const source = session.sessionManager.getSessionFile();
 				if (!source) throw new Error("Fork source has no durable journal");
+				await peekSpecDrivenController(record.session.sessionManager)?.exit();
 				const manager = await SessionManager.forkFrom(source, record.cwd, this.#sessionDir, this.#storage, {
 					entryId: entry.id,
 					suppressBreadcrumb: true,
@@ -1619,14 +1725,14 @@ export class ZCodeSessionManager {
 				await manager.flush();
 				const child = await this.#host(
 					manager,
-					{ additionalDirectories: record.session.sessionManager.getHeader()?.additionalDirectories },
+					{ additionalDirectories: session.sessionManager.getHeader()?.additionalDirectories },
 					record.settings,
 				);
 				return { sessionId: child.id };
 			}
 			if (type !== "editUserQuery" && type !== "retryTurn") throw new Error(`Unknown session mutation: ${type}`);
-			if (record.session.isStreaming) throw new Error("Conversation is running");
-			const branch = record.session.sessionManager.getBranch(entry.id);
+			if (session.isStreaming) throw new Error("Conversation is running");
+			const branch = session.sessionManager.getBranch(entry.id);
 			const user =
 				type === "editUserQuery"
 					? entry
@@ -1646,7 +1752,7 @@ export class ZCodeSessionManager {
 				throw new Error("Replacement text and stable input identity are required");
 			const submit = async (scoped: ZCodeInputOptions): Promise<ZCodeInputSubmission> =>
 				this.#beginSubmission(id, scoped, admitted =>
-					record.session.promptEditedUserQuery(user.id, text, { ...scoped, onPromptAdmitted: admitted }),
+					session.promptEditedUserQuery(user.id, text, { ...scoped, onPromptAdmitted: admitted }),
 				);
 			const inputOptions = {
 				inputId: payload.inputId,
@@ -1677,6 +1783,7 @@ export class ZCodeSessionManager {
 		}
 		const record = this.#records.get(id);
 		if (!record) return;
+		await peekSpecDrivenController(record.session.sessionManager)?.exit();
 		this.#records.delete(id);
 		const closing = record.run(async () => {
 			const modelIo = this.#modelIo.get(id);
@@ -1731,7 +1838,25 @@ export class ZCodeSessionManager {
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
 	}
+	/** Only an explicit session lifecycle mutation settles an active workspace owner. */
+	async exitDev(cwd: string): Promise<void> {
+		const workspace = await fs.realpath(vcs.gitInfo(cwd)?.repoRoot ?? cwd);
+		for (const record of this.#records.values()) {
+			const controller = peekSpecDrivenController(record.session.sessionManager);
+			if (controller?.inputMode() !== "dev") continue;
+			const ownerWorkspace = await fs.realpath(vcs.gitInfo(record.cwd)?.repoRoot ?? record.cwd);
+			if (workspace === ownerWorkspace) await controller.exit();
+		}
+	}
 
+	/** Routing changes execution ownership, never the ordinary root's transcript or identity. */
+	#inputSession(record: ZCodeSessionRecord): AgentSession {
+		const controller = peekSpecDrivenController(record.session.sessionManager);
+		if (controller?.inputMode() !== "dev") return record.session;
+		const session = controller.nativeSession();
+		if (!session) throw new Error("Development has no active native stage session");
+		return session;
+	}
 	#require(id: string): ZCodeSessionRecord {
 		const record = this.get(id);
 		if (!record) throw new Error(`Session is not active: ${id}`);

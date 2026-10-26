@@ -16,6 +16,7 @@ import {
 	zcodeWorkflowsRunsParamsSchema,
 	v4ConversationWorkflowRunArtifactsResultSchema,
 	v4ConversationWorkflowRunArtifactReadParamsSchema,
+	type CommandPayloadMap,
 	type ConversationDelta,
 	type OmpSpecDetails,
 	type OmpSpecRun,
@@ -26,13 +27,15 @@ import * as baseline from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4
 function details(): OmpSpecDetails {
 	return {
 		changeId: "change",
-		phase: "awaiting-plan",
+		phase: "planning",
 		stage: "plan",
 		state: "waiting",
 		explanation: "Plan approval required",
 		generation: 2,
 		live: true,
 		readOnly: false,
+		useTeam: true,
+		teamMutable: false,
 		workspaceIdentity: "/work",
 		workspacePath: "/work",
 		sessionId: "s",
@@ -43,35 +46,20 @@ function details(): OmpSpecDetails {
 		selectedCandidate: null,
 		actions: [
 			{
-				id: "confirm-plan",
+				id: "next",
 				label: "Confirm plan",
-				command: "/dev confirm-plan",
-				binding: { runId: "native-run", generation: 2 },
+				command: "/dev next",
+				binding: { runId: "native-run", generation: 2, phase: "planning", files: [] },
 			},
 		],
 		interaction: {
 			mode: "dev",
-			draft: "Retained paused draft",
 			recipient: { role: "planner", actorId: "planner-actor", sessionId: "planner-session" },
-			messages: [
-				{
-					id: "native-message",
-					text: "Explain task ordering without implementation.",
-					runId: "native-run",
-					generation: 2,
-					phase: "awaiting-plan",
-					role: "planner",
-					actorId: "planner-actor",
-					sessionId: "planner-session",
-					status: "completed",
-					reply: "The dependency is preserved; explicit approval is still required.",
-				},
-			],
 			actions: [
 				{
-					id: "confirm-plan",
+					id: "next",
 					label: "Approve plan and begin execution",
-					command: "/dev confirm-plan",
+					command: "/dev next",
 					available: true,
 				},
 			],
@@ -125,8 +113,22 @@ describe("local opt-in /dev protocol", () => {
 		expect(zcodeWorkflowsRunsParamsSchema.safeParse({ ...workspaceQuery, includeSpecDriven: "true" }).success).toBe(
 			false,
 		);
-		const payload = { text: "/dev confirm-plan", specRun: { runId: "native-run", generation: 2 } };
+		const payload: CommandPayloadMap["sendText"] = {
+			text: "/dev next",
+			specRun: { runId: "native-run", generation: 2, phase: "planning", files: [] },
+		};
 		expect(commandPayloadSchemas.sendText.parse(payload)).toEqual(payload);
+		const candidatePayload: CommandPayloadMap["sendText"] = {
+			text: "/dev next pure",
+			specRun: {
+				runId: "native-run",
+				generation: 2,
+				phase: "solution",
+				actionId: "next",
+				files: [{ path: "docs/superpowers/plans/solutions.json", version: "current-file-digest" }],
+			},
+		};
+		expect(commandPayloadSchemas.sendText.parse(candidatePayload)).toEqual(candidatePayload);
 		const parsed = parseCommandEnvelope({
 			commandId: "command",
 			clientId: "client",
@@ -159,38 +161,35 @@ describe("local opt-in /dev protocol", () => {
 			[],
 		);
 	});
-	it("preserves full actor-bound messages and distinct cancellation states without granting transition authority", () => {
+	it("projects native identity without a Dev transcript or Goal configuration", () => {
 		const current = details();
-		const message = current.interaction!.messages[0]!;
-		for (const status of ["queued", "processing", "cancelling", "cancelled", "completed", "failed"] as const) {
-			const interaction = {
-				...current.interaction!,
-				messages: [{ ...message, status }],
-				actions: [
-					{
-						id: "confirm-plan",
-						label: "Approve plan and begin execution",
-						command: "/dev confirm-plan",
-						available: false,
-						blockedReason: "A stage message has not settled.",
-					},
-				],
-			};
-			const result = ompSpecDetailsSchema.parse({ ...current, interaction });
-			expect(result.interaction).toEqual(interaction);
-			expect(baseline.workflowRunSchema.safeParse({ ...run(), spec: result }).success).toBe(false);
+		expect(ompSpecDetailsSchema.parse(current).interaction?.recipient).toEqual({
+			role: "planner",
+			actorId: "planner-actor",
+			sessionId: "planner-session",
+		});
+		for (const field of ["draft", "messages"]) {
+			expect(
+				ompSpecDetailsSchema.safeParse({
+					...current,
+					interaction: { ...current.interaction, [field]: field === "draft" ? "" : [] },
+				}).success,
+			).toBe(false);
+		}
+		for (const field of ["useGoal", "lastReply"]) {
+			expect(ompSpecDetailsSchema.safeParse({ ...current, [field]: true }).success).toBe(false);
 		}
 		expect(
-			ompSpecDetailsSchema.safeParse({
-				...current,
-				interaction: { ...current.interaction!, messages: [{ ...message, status: "stopped" }] },
+			commandPayloadSchemas.sendText.safeParse({
+				text: "/dev next",
+				specRun: { runId: "native-run", generation: 2, actionVersion: "old" },
 			}).success,
 		).toBe(false);
 		expect(
 			ompSpecDetailsSchema.safeParse({
 				...current,
 				interaction: {
-					...current.interaction!,
+					...current.interaction,
 					recipient: { role: "outer", actorId: "fifth", sessionId: "ordinary" },
 				},
 			}).success,

@@ -233,44 +233,42 @@ describe("pinned skill discovery and access", () => {
 		await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 	});
 
-	it("requires a /dev exact resource grant despite branch provenance, without authorizing the ordinary twin", async () => {
-		const ordinary = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
-		const effective = await loadSpecDrivenSkill("superpowers", ordinary.name, { role: "executor" });
+	it("requires an exact resource grant despite branch provenance and rejects same-name resource substitution", async () => {
+		const skill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+		const substitute = { ...(await fixture()), name: skill.name, source: skill.source };
 		const scope = {};
-		const end = bindSpecSkillPolicy(scope, { phase: "executor", allowedSkills: [effective.name] });
-		const access = { scope, getSessionBranch: () => [provenance(effective), provenance(ordinary)] };
+		const end = bindSpecSkillPolicy(scope, { phase: "executing", allowedSkills: [skill.name] });
+		const access = { scope, getSessionBranch: () => [provenance(skill), provenance(substitute)] };
 		try {
-			await expect(buildSkillPromptMessage(effective, { args: "" }, "autoload", access)).rejects.toBeInstanceOf(
+			await expect(buildSkillPromptMessage(skill, { args: "" }, "autoload", access)).rejects.toBeInstanceOf(
 				SkillAccessDeniedError,
 			);
-			const revoke = grantSpecSkillAccess(scope, effective);
+			const revoke = grantSpecSkillAccess(scope, skill);
 			try {
-				expect((await buildSkillPromptMessage(effective, { args: "" }, "autoload", access)).details.path).toBe(
-					effective.filePath,
+				expect((await buildSkillPromptMessage(skill, { args: "" }, "autoload", access)).details.path).toBe(
+					skill.filePath,
 				);
-				await expect(buildSkillPromptMessage(ordinary, { args: "" }, "user", access)).rejects.toBeInstanceOf(
+				await expect(buildSkillPromptMessage(substitute, { args: "" }, "user", access)).rejects.toBeInstanceOf(
 					SkillAccessDeniedError,
 				);
-				expect(() => checkSkillReadAccess(ordinary, access)).toThrow(SkillAccessDeniedError);
+				expect(() => checkSkillReadAccess(substitute, access)).toThrow(SkillAccessDeniedError);
 			} finally {
 				revoke();
 			}
-			expect(() => checkSkillReadAccess(effective, access)).toThrow(SkillAccessDeniedError);
-			const revokeOrdinary = grantSpecSkillAccess(scope, ordinary);
+			expect(() => checkSkillReadAccess(skill, access)).toThrow(SkillAccessDeniedError);
+			const revokeSubstitute = grantSpecSkillAccess(scope, substitute);
 			try {
-				expect((await buildSkillPromptMessage(ordinary, { args: "" }, "user", access)).details.path).toBe(
-					ordinary.filePath,
+				expect((await buildSkillPromptMessage(substitute, { args: "" }, "user", access)).details.path).toBe(
+					substitute.filePath,
 				);
-				expect(() => checkSkillReadAccess(effective, access)).toThrow(SkillAccessDeniedError);
+				expect(() => checkSkillReadAccess(skill, access)).toThrow(SkillAccessDeniedError);
 			} finally {
-				revokeOrdinary();
+				revokeSubstitute();
 			}
 		} finally {
 			end();
 		}
-		expect(() => checkSkillReadAccess(effective, { scope, getSessionBranch: () => [] })).toThrow(
-			SkillAccessDeniedError,
-		);
+		expect(() => checkSkillReadAccess(skill, { scope, getSessionBranch: () => [] })).toThrow(SkillAccessDeniedError);
 	});
 
 	it("keeps same-name personal skills callable and readable without enabling bundled brainstorming handoffs", async () => {
@@ -338,10 +336,9 @@ describe("pinned skill discovery and access", () => {
 		await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 	});
 
-	it("resolves adapted SDD references and scripts inside the granted effective branch, never the ordinary tree", async () => {
-		const ordinary = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
-		const effective = await loadSpecDrivenSkill("superpowers", ordinary.name, { role: "executor" });
-		expect(effective.filePath).not.toBe(ordinary.filePath);
+	it("resolves granted skill references and scripts without granting another skill or session", async () => {
+		const skill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+		const other = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
 			hasUI: false,
@@ -349,8 +346,8 @@ describe("pinned skill discovery and access", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated(),
 		};
-		const end = bindSpecSkillPolicy(session, { phase: "executor", allowedSkills: [effective.name] });
-		const revoke = grantSpecSkillAccess(session, effective);
+		const end = bindSpecSkillPolicy(session, { phase: "executing", allowedSkills: [skill.name, other.name] });
+		const revoke = grantSpecSkillAccess(session, skill);
 		try {
 			for (const relative of [
 				"SKILL.md",
@@ -358,26 +355,24 @@ describe("pinned skill discovery and access", () => {
 				"references/final-review.md",
 				"scripts/review-package",
 			]) {
-				const url = parseInternalUrl(`skill://${effective.name}/${relative}`);
-				const context = { session, skills: [ordinary] };
+				const url = parseInternalUrl(`skill://${skill.name}/${relative}`);
+				const context = { session, skills: [skill, other] };
 				const located = await handler.locate(url, context);
-				expect(located).toBe(path.join(effective.baseDir, relative));
-				expect(located).not.toBe(path.join(ordinary.baseDir, relative));
+				expect(located).toBe(path.join(skill.baseDir, relative));
+				await expect(handler.locate(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
+					SkillAccessDeniedError,
+				);
 			}
-			for (const relative of ["references/fix-loop.md", "references/final-review.md"]) {
-				expect(
-					(await fs.readFile(path.join(effective.baseDir, relative))).equals(
-						await fs.readFile(path.join(ordinary.baseDir, relative)),
-					),
-				).toBe(false);
-			}
+			await expect(
+				handler.resolve(parseInternalUrl(`skill://${other.name}`), { session, skills: [skill, other] }),
+			).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		} finally {
 			revoke();
 			end();
 		}
 	});
 
-	it("denies phase-incompatible effective loading and invocation without leaking grants into solution or another session", async () => {
+	it("invalidates prior grants on policy replacement without leaking access into another session", async () => {
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
 			hasUI: false,
@@ -385,7 +380,7 @@ describe("pinned skill discovery and access", () => {
 			getSessionSpawns: () => "*",
 			settings: Settings.isolated(),
 		};
-		const allowed = await loadSpecDrivenSkill("jch", "jch-grill-me", { role: "requirements" });
+		const allowed = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const endRequirements = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: [allowed.name] });
 		const revoke = grantSpecSkillAccess(session, allowed);
 		const url = parseInternalUrl(`skill://${allowed.name}`);
@@ -398,14 +393,7 @@ describe("pinned skill discovery and access", () => {
 			try {
 				// A stale disposer must not restore the requirements grant or remove the replacement policy.
 				endRequirements();
-				for (const [source, name] of [
-					["jch", "jch-grill-me"],
-					["superpowers", "brainstorming"],
-					["superpowers", "writing-plans"],
-					["superpowers", "subagent-driven-development"],
-				] as const) {
-					await expect(loadSpecDrivenSkill(source, name, { role: "solution" })).rejects.toThrow();
-				}
+				expect(() => grantSpecSkillAccess(session, allowed)).toThrow(SkillAccessDeniedError);
 				await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
 					SkillAccessDeniedError,
 				);

@@ -82,6 +82,10 @@ export interface SlashCommandRuntime {
 	sessionManager: SessionManager;
 	settings: Settings;
 	cwd: string;
+	/** Bind the actual prepared Dev stage (or original ordinary session) in the native host. */
+	bindMainSession?: (session: AgentSession) => Promise<void>;
+	/** Native attachments supplied with this slash submission. */
+	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
 	/** Rebind a session-scoped host after native relocation; absent hosts retain process cwd binding. */
 	rebindCwd?: (cwd: string) => Promise<void> | void;
 	/** Cancellation of the host prompt/request, when supported. */

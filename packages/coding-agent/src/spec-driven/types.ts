@@ -1,11 +1,13 @@
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { SpecCloseProgress } from "./artifacts";
 import type { SpecDrivenPhase, SpecStageRole } from "./stages";
 export type { SpecDrivenPhase, SpecStageRole } from "./stages";
-
 export type SpecInputMode = "chat" | "dev";
 export interface SpecConversationRecipient {
 	role: SpecStageRole;
 	actorId: string;
 	sessionId: string;
+	sessionFile?: string;
 }
 export interface SpecConversationReply {
 	text: string;
@@ -17,31 +19,19 @@ export interface SpecControllerAction {
 	available: boolean;
 	blockedReason?: string;
 	requiresInput?: boolean;
-	version?: string;
 }
-export interface SpecUserMessage extends SpecConversationRecipient {
-	id: string;
-	text: string;
-	runId: string;
-	generation: number;
-	phase: SpecDrivenPhase;
-	status: "queued" | "processing" | "cancelling" | "cancelled" | "completed" | "failed";
-	reply?: string;
-	error?: string;
-}
-export type SpecTextReceipt = { kind: "draft"; text: string } | { kind: "queued"; messageId: string };
 export interface SpecInteractionState {
 	mode: SpecInputMode;
-	draft: string;
 	recipient?: SpecConversationRecipient;
-	messages: SpecUserMessage[];
 	actions: SpecControllerAction[];
 	blockedReason?: string;
 }
-export interface SpecDocument {
+export interface SpecFileVersion {
 	path: string;
-	content: string;
 	version: string;
+}
+export interface SpecDocument extends SpecFileVersion {
+	content: string;
 }
 export interface SpecRequirements {
 	files: SpecDocument[];
@@ -68,6 +58,7 @@ export interface SpecRunContext {
 }
 export interface SpecAgentInput {
 	role: SpecStageRole;
+	entry: boolean;
 	request: string;
 	files: SpecDocument[];
 	outputPaths: string[];
@@ -76,11 +67,21 @@ export interface SpecAgentInput {
 	feedback?: string;
 	readOnly?: boolean;
 	useTeam?: boolean;
-	useGoal?: boolean;
+	decisions?: Partial<Record<SpecStageRole, string>>;
+	images?: ImageContent[];
+	imageLinks?: (string | undefined)[];
+}
+export interface SpecVersionCheck {
+	matches: boolean;
+	changed: { path: string; reason: string }[];
+}
+export interface SpecApproval {
+	files: SpecFileVersion[];
+	userReply: string;
+	candidateId?: string;
 }
 export interface SpecDrivenStatus {
 	phase: SpecDrivenPhase;
-	paused: boolean;
 	generation: number;
 	changeId?: string;
 	blockedReason?: string;
@@ -90,14 +91,30 @@ export interface SpecDrivenStatus {
 	selection?: { candidateId: string; userReply: string };
 	plan?: SpecDocument;
 	report?: SpecDocument;
-	lastReply?: string;
+	awaitingAcceptance?: boolean;
+	accepted?: SpecApproval;
+	closing?: SpecCloseProgress;
 	archivedChangePath?: string;
-	useTeam?: boolean;
-	useGoal?: boolean;
+	useTeam: boolean;
+}
+/** Only durable references and explicit decisions; native session files own all conversation text. */
+export interface SpecSavedRun {
+	runId: string;
+	phase: SpecDrivenPhase;
+	changeId?: string;
+	paths?: SpecArtifactPaths;
+	approvals: Partial<Record<SpecStageRole, SpecApproval>>;
+	sessions: Partial<Record<SpecStageRole, SpecConversationRecipient>>;
+	awaitingAcceptance?: boolean;
+	reportNeedsUpdate?: boolean;
+	closing?: SpecCloseProgress;
+	archivedChangePath?: string;
 }
 export interface SpecDrivenPorts {
 	agents: {
+		prepare(role: SpecStageRole, context: SpecRunContext, saved?: SpecConversationRecipient): Promise<void>;
 		recipient(role: SpecStageRole): SpecConversationRecipient | undefined;
+		originalRequest(): string;
 		run(input: SpecAgentInput, context: SpecRunContext): Promise<SpecConversationReply>;
 	};
 	artifacts: {
@@ -106,17 +123,21 @@ export interface SpecDrivenPorts {
 		readSolution(context: SpecRunContext): Promise<SpecSolution>;
 		readPlan(context: SpecRunContext): Promise<SpecDocument>;
 		readReport(context: SpecRunContext): Promise<SpecDocument>;
+		checkVersions(files: readonly SpecFileVersion[], archivedChangePath?: string): Promise<SpecVersionCheck>;
 		close(
-			input: { specification: SpecRequirements; report: SpecDocument },
+			input: {
+				acceptedVersions: readonly SpecFileVersion[];
+				progress?: SpecCloseProgress;
+				onProgress?: (progress: SpecCloseProgress) => void | Promise<void>;
+			},
 			context: SpecRunContext,
-		): Promise<{ archivedChangePath?: string }>;
+		): Promise<{ archivedChangePath: string }>;
 	};
 }
 export interface SpecDrivenOptions {
-	currentModel: string;
-	members?: readonly string[];
-	unavailableMembers?: readonly string[];
 	runId?: string;
+	getUseTeam: () => boolean;
+	persist: (run: SpecSavedRun) => Promise<void>;
 	onStatusChange?: (status: SpecDrivenStatus) => void;
 	assertTransitionAllowed?: () => void;
 }

@@ -1,367 +1,489 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
-import { SpecArtifactStore } from "../../src/spec-driven/artifacts";
-import { SpecAdmissionError, SpecDrivenOrchestrator, StaleRun } from "../../src/spec-driven/orchestrator";
-import type { SpecAgentInput, SpecDrivenPorts, SpecRunContext, SpecStageRole } from "../../src/spec-driven/types";
+import { describe, expect, it } from "bun:test";
+import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
+import type {
+	SpecAgentInput,
+	SpecDocument,
+	SpecDrivenPorts,
+	SpecSavedRun,
+	SpecSolution,
+	SpecStageRole,
+} from "../../src/spec-driven/types";
 
-const roots: string[] = [];
-afterEach(async () => {
-	await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
-});
-const REQUIREMENTS =
-	"# Requirements\n\n## Requirement: Four file stages\nThe workflow SHALL preserve complete upstream documents.\n\n### Scenario: Original user confirmation\n- WHEN a user chooses an option\n- THEN the planner receives that exact reply.\n";
-const PROPOSAL =
-	"# File workflow\n\n## Why\nPreserve complete requirements and original decisions across four stages.\n\n## What Changes\n- Add file-validated workflow transitions.\n\n## Capabilities\n\n### New Capabilities\n- `workflow`: Four-stage file orchestration.\n\n### Modified Capabilities\nNone.\n\n## Impact\nThe spec-driven orchestrator and its tests.\n";
-const DELTA =
-	"## ADDED Requirements\n\n### Requirement: Four file stages\nThe workflow SHALL preserve complete upstream documents.\n\n#### Scenario: Original user confirmation\n- **WHEN** a user chooses an option\n- **THEN** the planner receives that exact reply.\n";
-const SOLUTION = JSON.stringify({
-	candidates: [
-		{
-			id: "small",
-			title: "Simple file flow",
-			content: "Retain full documents, including this final detail: Ω.\nNo summary is allowed.",
-		},
-		{ id: "alternative", title: "Another implementation", content: "A second complete approach." },
-	],
-});
-const PLAN =
-	"# Implementation Plan\n\n## Tasks\n1. Implement file-backed transitions in orchestrator.ts.\n2. Add consumer-visible file gate tests.\n\n## Validation\nRun the targeted orchestrator tests and inspect file handoffs.\n";
-const REPORT =
-	"# 完成报告\n\n## 完成情况\nImplemented the four file stages.\n\n## 验证结果\nCommand: not run. Status: not executed. Result: no software validation claimed. Limitation: this report fixture tests only the workflow.\n\n## 未完成项\n无。\n";
-async function fixture() {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "spec-file-core-"));
-	roots.push(cwd);
-	const requirementsDir = "requirements";
-	await fs.mkdir(path.join(cwd, requirementsDir), { recursive: true });
-	await fs.writeFile(path.join(cwd, requirementsDir, "workflow.md"), REQUIREMENTS);
-	const store = new SpecArtifactStore({ cwd, changeId: "file-workflow", requirementsDir });
-	const inputs: SpecAgentInput[] = [];
-	const omitted = new Set<SpecStageRole>();
-	const contents: Record<SpecStageRole, string> = {
-		requirements: REQUIREMENTS,
-		solution: SOLUTION,
-		planner: PLAN,
-		executor: REPORT,
+function fixture(saved?: SpecSavedRun) {
+	const document = (path: string): SpecDocument => ({ path, version: `${path}-v1`, content: `完整原文 ${path} Ω` });
+	const docs = {
+		proposal: document("proposal.md"),
+		spec: document("spec.md"),
+		solution: document("solutions.json"),
+		plan: document("plan.md"),
+		report: document("completion.md"),
 	};
-	let beforeRun: ((input: SpecAgentInput, context: SpecRunContext) => Promise<void>) | undefined;
-	let closeCalls = 0;
+	const inputs: SpecAgentInput[] = [];
+	const events: string[] = [];
+	const reads: string[] = [];
+	const persisted: SpecSavedRun[] = [];
+	const settings = {
+		team: false,
+		saveFailure: false,
+		prepareFailure: false,
+		closeFailure: false,
+		runFailure: false,
+		sessionSuffix: "",
+		bad: "",
+		busy: false,
+		candidates: ["one"],
+		closeCalls: 0,
+		syncCalls: 0,
+	};
+	let onRead: ((name: keyof typeof docs) => void) | undefined;
+	const sessions = new Set<SpecStageRole>();
+	const read = (name: keyof typeof docs) => {
+		reads.push(name);
+		onRead?.(name);
+		if (settings.bad === name) throw new Error(`${docs[name].path}: invalid structure`);
+		return structuredClone(docs[name]);
+	};
 	const ports: SpecDrivenPorts = {
 		agents: {
-			recipient: role => ({ role, actorId: `actor-${role}`, sessionId: `session-${role}` }),
-			async run(input, context) {
+			async prepare(role) {
+				events.push(`prepare:${role}`);
+				if (settings.prepareFailure) throw new Error("prepare failed");
+				sessions.add(role);
+			},
+			recipient: role =>
+				sessions.has(role)
+					? {
+							role,
+							actorId: role,
+							sessionId: `session-${role}${settings.sessionSuffix}`,
+							sessionFile: `${role}${settings.sessionSuffix}.jsonl`,
+						}
+					: undefined,
+			originalRequest: () => "原始需求 Ω",
+			async run(input) {
+				events.push(`run:${input.role}`);
 				inputs.push(structuredClone(input));
-				await beforeRun?.(input, context);
-				if (!input.readOnly && !omitted.has(input.role))
-					for (const file of input.outputPaths) {
-						const target = path.resolve(cwd, file.replace("*", "workflow"));
-						await fs.mkdir(path.dirname(target), { recursive: true });
-						const content = contents[input.role];
-						await fs.writeFile(
-							target,
-							input.role !== "requirements" || !content
-								? content
-								: file.endsWith("/proposal.md")
-									? PROPOSAL
-									: file.endsWith("/spec.md")
-										? DELTA
-										: content,
-						);
-					}
-				return { text: "请查看文件；此回复不是 JSON，也不是阶段完成凭据。" };
+				if (settings.runFailure) throw new Error("provider failed");
+				return { text: "同意，完成" };
 			},
 		},
 		artifacts: {
-			initialize: () => store.initialize(),
-			readRequirements: () => store.readRequirements(),
-			readSolution: () => store.readSolution(),
-			readPlan: () => store.readPlan(),
-			readReport: () => store.readReport(),
-			async close() {
-				closeCalls++;
-				return { archivedChangePath: "archive/file-workflow" };
+			async initialize() {
+				return {
+					requirements: [docs.proposal.path, docs.spec.path],
+					solution: docs.solution.path,
+					plan: docs.plan.path,
+					report: docs.report.path,
+				};
+			},
+			async readRequirements() {
+				return { files: [read("proposal"), read("spec")], version: "requirements-v1" };
+			},
+			async readSolution() {
+				return {
+					...read("solution"),
+					candidates: settings.candidates.map(id => ({ id, title: id, content: `完整方案 ${id}` })),
+				};
+			},
+			async readPlan() {
+				return read("plan");
+			},
+			async readReport() {
+				return read("report");
+			},
+			async checkVersions(files) {
+				const changed = files
+					.filter(file => !Object.values(docs).some(doc => doc.path === file.path && doc.version === file.version))
+					.map(file => ({ path: file.path, reason: "bytes changed" }));
+				return { matches: !changed.length, changed };
+			},
+			async close(input) {
+				settings.closeCalls++;
+				if (!input.progress?.synced) {
+					settings.syncCalls++;
+					await input.onProgress?.({ synced: true });
+				}
+				if (settings.closeFailure) throw new Error("archive failed");
+				await input.onProgress?.({ synced: true, archivedChangePath: "archive/change" });
+				return { archivedChangePath: "archive/change" };
 			},
 		},
 	};
-	const orchestrator = new SpecDrivenOrchestrator(ports, { currentModel: "test-model", runId: "test-run" });
+	const core = new SpecDrivenOrchestrator(ports, {
+		runId: saved?.runId ?? "run",
+		getUseTeam: () => settings.team,
+		async persist(run) {
+			events.push(`save:${run.phase}`);
+			if (settings.saveFailure) throw new Error("disk full");
+			persisted.push(structuredClone(run));
+		},
+		onStatusChange: status => events.push(`notify:${status.phase}`),
+		assertTransitionAllowed() {
+			if (settings.busy) throw new Error("native work pending");
+		},
+	});
 	return {
-		cwd,
-		orchestrator,
-		store,
+		core,
+		docs,
 		inputs,
-		omitted,
-		contents,
-		closeCalls: () => closeCalls,
-		beforeRun: (callback: typeof beforeRun) => {
-			beforeRun = callback;
+		reads,
+		events,
+		persisted,
+		settings,
+		onRead(callback: typeof onRead) {
+			onRead = callback;
 		},
 	};
 }
-async function reachPlan(f: { orchestrator: SpecDrivenOrchestrator }) {
-	await f.orchestrator.start("Implement the file workflow", "file-workflow");
-	await f.orchestrator.confirmSpecification("需求原文确认");
-	await f.orchestrator.chooseCandidate("small", " 选择 small；保留 Ω 和所有原文，不要总结。\n这是原始第二行。 \n");
-}
-async function reachAcceptance(f: { orchestrator: SpecDrivenOrchestrator }) {
-	await reachPlan(f);
-	await f.orchestrator.confirmPlan("按这个完整计划执行");
+async function execution(f: { core: SpecDrivenOrchestrator }) {
+	await f.core.start("原始需求 Ω", "change");
+	await f.core.next();
+	await f.core.next();
+	await f.core.next();
 }
 
-describe("four-stage file workflow", () => {
-	it("runs only four actors and gives the planner complete files and the exact user selection", async () => {
-		const f = await fixture();
-		await reachAcceptance(f);
+describe("explicit Dev file decisions", () => {
+	it("advances four times only and closes without another model call", async () => {
+		const f = fixture();
+		await execution(f);
+		expect(f.core.status().phase).toBe("executing");
 		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner", "executor"]);
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
-		expect(f.closeCalls()).toBe(0);
-		const planner = f.inputs[2]!;
-		expect(planner.files.map(file => file.content)).toEqual([PROPOSAL, DELTA, REQUIREMENTS, SOLUTION]);
-		expect(planner.userReply).toBe(" 选择 small；保留 Ω 和所有原文，不要总结。\n这是原始第二行。 \n");
-		expect(planner.candidateId).toBe("small");
-		expect(f.inputs[1]!.userReply).toBe("需求原文确认");
-		const executor = f.inputs[3]!;
-		expect(executor.files.map(file => file.content)).toEqual([PROPOSAL, DELTA, REQUIREMENTS, SOLUTION, PLAN]);
-		expect(executor.userReply).toBe("按这个完整计划执行");
-		const paths = f.orchestrator.status().paths!;
-		expect(path.dirname(paths.solution)).toBe(path.dirname(paths.plan));
-		expect(path.dirname(paths.report)).toBe(path.dirname(paths.plan));
-		const executionFiles = await fs.readdir(path.dirname(path.resolve(f.cwd, paths.plan)));
-		expect(executionFiles.sort()).toEqual(
-			[paths.solution, paths.plan, paths.report].map(file => path.basename(file)).sort(),
-		);
-		const generated = await fs.readdir(f.cwd, { recursive: true });
-		expect(generated.some(file => /handoff|confirmation|state\.json/i.test(file))).toBe(false);
-		await f.orchestrator.accept("验收通过");
-		expect(f.closeCalls()).toBe(1);
-		expect(f.orchestrator.status().phase).toBe("completed");
+		expect(f.settings.closeCalls).toBe(0);
+		await f.core.next();
+		expect(f.core.status().phase).toBe("idle");
+		expect(f.inputs).toHaveLength(4);
 	});
-
-	it("keeps an invalid requirements file at the requirements stage until the user continues", async () => {
-		const f = await fixture();
-		f.contents.requirements = "";
-		await f.orchestrator.start("Request", "file-workflow");
-		expect(f.orchestrator.status().phase).toBe("requirements");
-		expect(f.orchestrator.status().blockedReason).toBeTruthy();
-		await expect(f.orchestrator.confirmSpecification()).rejects.toBeInstanceOf(SpecAdmissionError);
-		expect(f.inputs.map(input => input.role)).toEqual(["requirements"]);
-		f.contents.requirements = REQUIREMENTS;
-		await f.orchestrator.answer("补齐原始权威需求文件");
-		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
-		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "requirements"]);
+	it("never reads structure on stage replies or ordinary agreement", async () => {
+		const f = fixture();
+		f.settings.bad = "proposal";
+		await f.core.start("原始需求 Ω", "change");
+		await f.core.converse("同意，继续");
+		expect(f.reads).toEqual([]);
+		expect(f.core.status().phase).toBe("requirements");
+		await expect(f.core.next()).rejects.toThrow("proposal.md");
+		expect(f.core.status().phase).toBe("requirements");
+		expect(f.core.save().approvals).toEqual({});
 	});
-
-	it("does not use fluent agent text as a substitute for a missing output file", async () => {
-		const f = await fixture();
-		f.omitted.add("solution");
-		await f.orchestrator.start("Request", "file-workflow");
-		const blocked = await f.orchestrator.confirmSpecification();
-		expect(blocked.phase).toBe("solution");
-		expect(blocked.blockedReason).toBeTruthy();
-		await expect(f.orchestrator.chooseCandidate("small", "选择 small")).rejects.toBeInstanceOf(SpecAdmissionError);
-		expect(f.inputs.some(input => input.role === "planner")).toBe(false);
-		f.omitted.delete("solution");
-		await f.orchestrator.answer("请补齐方案文件");
-		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
-		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "solution"]);
+	it("hands complete files and exact selection text to the planner", async () => {
+		const f = fixture();
+		await f.core.start("原始需求 Ω", "change");
+		await f.core.next(undefined, "需求决定原文\n Ω ");
+		const raw = " /dev next one\n 保留 Ω ";
+		await f.core.next("one", raw);
+		const solution: SpecSolution = {
+			...f.docs.solution,
+			candidates: [{ id: "one", title: "one", content: "完整方案 one" }],
+		};
+		expect(f.inputs[2].files).toEqual([f.docs.proposal, f.docs.spec, solution]);
+		expect(f.inputs[2].userReply).toBe(raw);
+		expect(f.inputs[2].candidateId).toBe("one");
 	});
-
-	it("rejects malformed candidates and never automatically retries the agent", async () => {
-		const f = await fixture();
-		f.contents.solution = JSON.stringify({
-			candidates: [
-				{ id: "same", title: "One", content: "A" },
-				{ id: "same", title: "Two", content: "B" },
+	it("hands approved executor originals, raw decisions and report path without narrowing business scope", async () => {
+		const f = fixture();
+		await f.core.start("原始需求 Ω", "change");
+		await f.core.next(undefined, "需求决定 Ω");
+		await f.core.next("one", "方案决定 Ω");
+		await f.core.next(undefined, "计划决定 Ω");
+		expect(f.inputs.at(-1)).toMatchObject({
+			role: "executor",
+			request: "原始需求 Ω",
+			files: [
+				f.docs.proposal,
+				f.docs.spec,
+				{ ...f.docs.solution, candidates: [{ id: "one", title: "one", content: "完整方案 one" }] },
+				f.docs.plan,
 			],
+			userReply: "计划决定 Ω",
+			decisions: { requirements: "需求决定 Ω", solution: "方案决定 Ω", planner: "计划决定 Ω" },
+			candidateId: "one",
+			outputPaths: ["completion.md"],
 		});
-		await f.orchestrator.start("Request", "file-workflow");
-		await f.orchestrator.confirmSpecification();
-		expect(f.orchestrator.status().phase).toBe("solution");
-		expect(f.orchestrator.status().blockedReason).toBeTruthy();
-		expect(f.inputs.length).toBe(2);
-		f.contents.solution = SOLUTION;
-		await f.orchestrator.resume();
-		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
 	});
-
-	it("requires real plan and report contents before exposing their decisions", async () => {
-		const f = await fixture();
-		f.contents.planner = "";
-		await reachPlan(f);
-		expect(f.orchestrator.status().phase).toBe("planning");
-		await expect(f.orchestrator.confirmPlan()).rejects.toBeInstanceOf(SpecAdmissionError);
-		f.contents.planner = PLAN;
-		await f.orchestrator.answer("写出完整计划");
-		f.contents.executor = "# Report\nEverything passed!";
-		await f.orchestrator.confirmPlan();
-		expect(f.orchestrator.status().phase).toBe("executing");
-		await expect(f.orchestrator.accept()).rejects.toBeInstanceOf(SpecAdmissionError);
-		expect(f.closeCalls()).toBe(0);
-		f.contents.executor = REPORT;
-		await f.orchestrator.answer("补齐完成、验证和剩余事项章节");
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
-	});
-
-	it("rejects changed upstream bytes and asks for a new confirmation", async () => {
-		const f = await fixture();
-		await reachPlan(f);
-		const state = f.orchestrator.status();
-		await fs.writeFile(
-			path.resolve(f.cwd, state.solution!.path),
-			SOLUTION.replace("Simple file flow", "Changed option"),
-		);
-		await expect(f.orchestrator.confirmPlan()).rejects.toBeInstanceOf(SpecAdmissionError);
-		expect(f.orchestrator.status().phase).toBe("awaiting-choice");
-		expect(f.orchestrator.status().selection).toBeUndefined();
-		expect(f.orchestrator.status().plan).toBeUndefined();
-		expect(f.inputs.some(input => input.role === "executor")).toBe(false);
-		await f.orchestrator.chooseCandidate("small", "重新确认修改后的完整方案");
-		expect(f.inputs.at(-1)?.userReply).toBe("重新确认修改后的完整方案");
-	});
-
-	it("revision and repair reuse their fixed actors without archiving", async () => {
-		const f = await fixture();
-		await reachPlan(f);
-		await f.orchestrator.revisePlan("减少一项实现工作");
-		expect(f.inputs.at(-1)?.role).toBe("planner");
-		expect(f.inputs.at(-1)?.feedback).toBe("减少一项实现工作");
-		await f.orchestrator.confirmPlan("按计划执行", { useGoal: true });
-		await f.orchestrator.repair("修复实际使用中的缺陷");
-		expect(f.inputs.at(-1)?.role).toBe("executor");
-		expect(f.inputs.at(-1)?.readOnly).toBe(false);
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
-		expect(f.orchestrator.status().useGoal).toBe(true);
-		await f.orchestrator.revisePlan("调整计划后重新选择执行方式");
-		expect(f.orchestrator.status().useGoal).toBeUndefined();
-		await f.orchestrator.confirmPlan();
-		expect(f.orchestrator.status().useGoal).toBe(false);
-		expect(f.closeCalls()).toBe(0);
-	});
-
-	it("acceptance conversation is read-only and cannot close the change", async () => {
-		const f = await fixture();
-		await reachAcceptance(f);
-		const reply = await f.orchestrator.converse({
-			text: "说明报告中的验证",
-			messageId: "question-1",
-			recipient: f.orchestrator.recipient()!,
-			signal: new AbortController().signal,
+	for (const phase of ["solution", "planning", "executing"] as const) {
+		it(`rejects requirement bytes changed during ${phase} reads without approving, handing off or closing`, async () => {
+			const f = fixture();
+			await f.core.start("request", "change");
+			await f.core.next();
+			if (phase !== "solution") await f.core.next();
+			if (phase === "executing") await f.core.next();
+			const before = f.core.save();
+			const runs = f.inputs.length;
+			f.onRead(name => {
+				if (name === "proposal") {
+					f.docs.spec.version = "spec-v2";
+					f.docs.spec.content = "unapproved v2";
+				}
+			});
+			await expect(f.core.next()).rejects.toThrow("重新确认");
+			expect(f.core.save()).toEqual(before);
+			expect(f.inputs).toHaveLength(runs);
+			expect(f.settings.closeCalls).toBe(0);
+			expect(f.core.status().phase).toBe(phase);
 		});
-		expect(reply.text).toContain("不是 JSON");
+	}
+	for (const material of ["solution", "plan"] as const) {
+		it(`rejects ${material} bytes changed after the approval check at final acceptance`, async () => {
+			const f = fixture();
+			await execution(f);
+			const before = f.core.save();
+			f.onRead(name => {
+				if (name === material) f.docs[material].version = "unapproved-v2";
+			});
+			await expect(f.core.next()).rejects.toThrow("重新确认");
+			expect(f.core.save()).toEqual(before);
+			expect(f.settings.closeCalls).toBe(0);
+		});
+	}
+	it("compares actual handoff versions even when disk versions return to approved bytes after the read", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		await f.core.next();
+		const original = structuredClone(f.docs.proposal);
+		f.onRead(name => {
+			if (name === "proposal") f.docs.proposal.version = "transient-unapproved-v2";
+			if (name === "spec") Object.assign(f.docs.proposal, original);
+		});
+		await expect(f.core.next()).rejects.toThrow("重新确认");
+		expect((await f.core.checkApproved()).matches).toBe(true);
+		expect(f.inputs).toHaveLength(2);
+		expect(f.core.status().phase).toBe("solution");
+	});
+	it("clears a recovered native failure after successful conversation but retains approval mismatch", async () => {
+		const f = fixture();
+		await execution(f);
+		f.settings.prepareFailure = true;
+		await expect(f.core.back()).rejects.toThrow("prepare failed");
+		expect(f.core.status().blockedReason).toBe("prepare failed");
+		f.settings.prepareFailure = false;
+		await f.core.converse("重试原生对话");
+		expect(f.core.status().blockedReason).toBeUndefined();
+		f.docs.spec.version = "changed";
+		await expect(f.core.next()).rejects.toThrow("重新确认");
+		const blocked = f.core.status().blockedReason;
+		await f.core.converse("解释材料变化");
+		expect(f.core.status().blockedReason).toBe(blocked);
+	});
+	it("defaults a single candidate but rejects invalid and missing multi-candidate IDs", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		await f.core.next();
+		await expect(f.core.next("missing")).rejects.toThrow("有效方案 ID");
+		f.settings.candidates = ["one", "two"];
+		await expect(f.core.next()).rejects.toThrow("有效方案 ID");
+		expect(f.core.status().phase).toBe("solution");
+		await f.core.next("two");
+		expect(f.core.status().selection?.candidateId).toBe("two");
+	});
+	it("rejects stage-inapplicable parameters and native unsettled work", async () => {
+		const f = fixture();
+		await expect(f.core.next()).rejects.toThrow("/dev new");
+		await f.core.start("request", "change");
+		await expect(f.core.next("one")).rejects.toThrow("仅方案阶段");
+		f.settings.busy = true;
+		await expect(f.core.next()).rejects.toThrow("native work pending");
+		expect(f.core.status().phase).toBe("requirements");
+	});
+	it("checks approved bytes without changing phase or decisions", async () => {
+		const f = fixture();
+		await execution(f);
+		const before = f.core.save();
+		f.docs.spec.version = "changed";
+		f.reads.length = 0;
+		expect((await f.core.checkApproved()).matches).toBe(false);
+		await expect(f.core.next()).rejects.toThrow("重新确认");
+		await f.core.converse("解释不一致原因");
 		expect(f.inputs.at(-1)?.readOnly).toBe(true);
-		expect(f.inputs.at(-1)?.files.at(-1)?.content).toBe(REPORT);
-		expect(f.closeCalls()).toBe(0);
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		await expect(f.core.converse("修复", undefined, undefined, "repair")).rejects.toThrow("重新确认");
+		expect(f.core.save()).toEqual(before);
+		expect(f.core.status().phase).toBe("executing");
+		expect(f.reads).toEqual([]);
 	});
-
-	it("changed completion report needs another explicit acceptance", async () => {
-		const f = await fixture();
-		await reachAcceptance(f);
-		await fs.appendFile(
-			path.resolve(f.cwd, f.orchestrator.status().report!.path),
-			"\nAdditional remaining work disclosed.\n",
-		);
-		await expect(f.orchestrator.accept()).rejects.toBeInstanceOf(SpecAdmissionError);
-		expect(f.closeCalls()).toBe(0);
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
-		await f.orchestrator.accept();
-		expect(f.closeCalls()).toBe(1);
+	it("backs only one stage, revokes target approval, and runs no work", async () => {
+		const f = fixture();
+		await execution(f);
+		const count = f.inputs.length;
+		await f.core.back();
+		expect(f.core.status().phase).toBe("planning");
+		expect(Object.keys(f.core.save().approvals)).toEqual(["requirements", "solution"]);
+		await f.core.back();
+		expect(f.core.status().phase).toBe("solution");
+		expect(Object.keys(f.core.save().approvals)).toEqual(["requirements"]);
+		await f.core.back();
+		expect(f.core.status().phase).toBe("requirements");
+		await expect(f.core.back()).rejects.toThrow("不能回退");
+		expect(f.inputs).toHaveLength(count);
 	});
-
-	it("cancel waits for native mutation settlement and discards its late reply", async () => {
-		const f = await fixture();
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		f.beforeRun(async () => {
-			entered.resolve();
-			await release.promise;
-		});
-		const running = f.orchestrator.start("Request", "file-workflow");
-		const outcome = running.then(
-			() => undefined,
-			error => error,
-		);
-		await entered.promise;
-		let settled = false;
-		const cancelling = f.orchestrator.cancel().then(status => {
-			settled = true;
-			return status;
-		});
-		try {
-			await Promise.resolve();
-			expect(settled).toBe(false);
-			await expect(f.orchestrator.resume()).rejects.toBeInstanceOf(SpecAdmissionError);
-		} finally {
-			release.resolve();
-		}
-		expect(await outcome).toBeInstanceOf(StaleRun);
-		expect((await cancelling).phase).toBe("cancelled");
-		expect(f.orchestrator.status().lastReply).toBeUndefined();
-		expect(f.closeCalls()).toBe(0);
+	it("prepares and saves before publishing and running", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		expect(f.events.slice(0, 4)).toEqual([
+			"prepare:requirements",
+			"save:requirements",
+			"notify:requirements",
+			"run:requirements",
+		]);
+		f.settings.saveFailure = true;
+		await expect(f.core.next()).rejects.toThrow("disk full");
+		expect(f.core.status().phase).toBe("requirements");
+		expect(f.inputs).toHaveLength(1);
+		expect(f.core.save().approvals).toEqual({});
 	});
-
-	it("pause waits for actual agent mutation settlement before resume", async () => {
-		const f = await fixture();
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		f.beforeRun(async () => {
-			entered.resolve();
-			await release.promise;
-		});
-		const running = f.orchestrator.start("Request", "file-workflow");
-		const outcome = running.then(
-			() => undefined,
-			error => error,
-		);
-		await entered.promise;
-		let settled = false;
-		const pausing = f.orchestrator.pause().then(status => {
-			settled = true;
-			return status;
-		});
-		try {
-			await Promise.resolve();
-			expect(settled).toBe(false);
-			await expect(f.orchestrator.resume()).rejects.toBeInstanceOf(SpecAdmissionError);
-		} finally {
-			release.resolve();
-		}
-		expect(await outcome).toBeInstanceOf(StaleRun);
-		expect((await pausing).paused).toBe(true);
-		expect(f.orchestrator.status().lastReply).toBeUndefined();
-		f.beforeRun(undefined);
-		await f.orchestrator.resume();
-		expect(f.orchestrator.status().phase).toBe("awaiting-specification");
+	it("does not change phase or call a model when session preparation fails", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		f.settings.prepareFailure = true;
+		await expect(f.core.next()).rejects.toThrow("prepare failed");
+		expect(f.core.status().phase).toBe("requirements");
+		expect(f.inputs).toHaveLength(1);
 	});
-
-	it("a cancelled conversation rejects even when its provider returns normally", async () => {
-		const f = await fixture();
-		await reachAcceptance(f);
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		f.beforeRun(async () => {
-			entered.resolve();
-			await release.promise;
+	it("uses one Team configuration source and never reruns Team for conversation", async () => {
+		const f = fixture();
+		f.settings.team = true;
+		await f.core.start("request", "change");
+		await f.core.next();
+		expect(f.inputs[1].useTeam).toBe(true);
+		f.reads.length = 0;
+		await f.core.converse("原始追问");
+		expect(f.inputs[2]).toMatchObject({ entry: false, feedback: "原始追问", files: [], request: "", useTeam: false });
+		expect(f.reads).toEqual([]);
+	});
+	it("marks report writes without structure reads and revokes stale report eligibility on business repair", async () => {
+		const f = fixture();
+		await execution(f);
+		f.reads.length = 0;
+		await f.core.observeReport();
+		expect(f.reads).toEqual([]);
+		await f.core.converse("解释验证限制");
+		expect(f.inputs.at(-1)?.readOnly).toBe(true);
+		await f.core.converse("修复范围内缺陷", undefined, undefined, "repair");
+		expect(f.core.status().awaitingAcceptance).toBe(true);
+		expect(f.core.save().reportNeedsUpdate).toBeUndefined();
+		await f.core.beginRepair();
+		expect(f.core.status().awaitingAcceptance).toBe(false);
+		await expect(f.core.next()).rejects.toThrow("更新完成报告");
+		await f.core.observeReport();
+		await f.core.next();
+		expect(f.core.status().phase).toBe("idle");
+	});
+	it("preserves acceptance and actual closing progress, keeps executor conversation, retries remaining work", async () => {
+		const f = fixture();
+		await execution(f);
+		f.settings.closeFailure = true;
+		await expect(f.core.next()).rejects.toThrow("archive failed");
+		const accepted = f.core.save().approvals.executor;
+		expect(f.core.currentRole()).toBe("executor");
+		expect(f.core.save().closing).toEqual({ synced: true });
+		await expect(f.core.back()).rejects.toThrow("实际结果");
+		await f.core.converse("解释收尾错误");
+		expect(f.inputs.at(-1)?.readOnly).toBe(true);
+		await f.core.converse("修复直接收尾故障", undefined, undefined, "repair");
+		await f.core.beginRepair();
+		expect(f.core.save().approvals.executor).toEqual(accepted);
+		f.settings.closeFailure = false;
+		const modelCalls = f.inputs.length;
+		await f.core.next(undefined, "重试，不重新验收");
+		expect(f.settings.syncCalls).toBe(1);
+		expect(f.inputs).toHaveLength(modelCalls);
+		expect(f.core.save().approvals.executor).toEqual(accepted);
+	});
+	it("refuses changed accepted material during closing without losing progress", async () => {
+		const f = fixture();
+		await execution(f);
+		f.settings.closeFailure = true;
+		await expect(f.core.next()).rejects.toThrow();
+		f.docs.report.version = "external-change";
+		await expect(f.core.next()).rejects.toThrow("重新确认");
+		expect(f.settings.closeCalls).toBe(1);
+		expect(f.core.status().phase).toBe("executing");
+		expect(f.core.save().closing?.synced).toBe(true);
+	});
+	it("restores native session references without models, structure reads, or stored bodies", async () => {
+		const f = fixture();
+		await execution(f);
+		const saved = f.core.save();
+		expect(JSON.stringify(saved)).not.toContain("完整原文");
+		expect(JSON.stringify(saved)).not.toContain("原始需求");
+		const restored = fixture(saved);
+		await restored.core.restore(saved);
+		expect(restored.core.status().phase).toBe("executing");
+		expect(restored.core.recipient()?.sessionFile).toBe("executor.jsonl");
+		expect(restored.inputs).toEqual([]);
+		expect(restored.reads).toEqual([]);
+	});
+	it("restores mismatched approvals without clearing decisions or running work", async () => {
+		const f = fixture();
+		await execution(f);
+		const saved = f.core.save();
+		const restored = fixture(saved);
+		restored.docs.spec.version = "changed";
+		await restored.core.restore(saved);
+		expect(restored.core.status().blockedReason).toContain("bytes changed");
+		expect(restored.core.save().approvals).toEqual(saved.approvals);
+		expect(restored.inputs).toEqual([]);
+	});
+	it("resumes only remaining closing work after restoration without reading structure", async () => {
+		const f = fixture();
+		await execution(f);
+		f.settings.closeFailure = true;
+		await expect(f.core.next()).rejects.toThrow("archive failed");
+		const saved = f.core.save();
+		const restored = fixture(saved);
+		await restored.core.restore(saved);
+		await restored.core.next();
+		expect(restored.reads).toEqual([]);
+		expect(restored.inputs).toEqual([]);
+		expect(restored.settings.syncCalls).toBe(0);
+		expect(restored.settings.closeCalls).toBe(1);
+		expect(restored.core.status().phase).toBe("idle");
+	});
+	it("sends native attachments and busy follow-ups without a Dev queue", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		f.settings.busy = true;
+		const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+		await f.core.converse("  原始输入 Ω\n", images, ["https://example.test/image.png"]);
+		expect(f.inputs.at(-1)).toMatchObject({
+			entry: false,
+			feedback: "  原始输入 Ω\n",
+			images,
+			imageLinks: ["https://example.test/image.png"],
+			files: [],
+			request: "",
+			useTeam: false,
 		});
-		const abort = new AbortController();
-		const pending = f.orchestrator.converse({
-			text: "说明验证",
-			messageId: "cancelled-message",
-			recipient: f.orchestrator.recipient()!,
-			signal: abort.signal,
-		});
-		const outcome = pending.then(
-			() => undefined,
-			error => error,
-		);
-		try {
-			await entered.promise;
-			abort.abort();
-		} finally {
-			release.resolve();
-		}
-		expect(await outcome).toBeInstanceOf(StaleRun);
-		expect(f.closeCalls()).toBe(0);
-		expect(f.orchestrator.status().phase).toBe("awaiting-acceptance");
+		expect(f.reads).toEqual([]);
+		expect(f.core.save().phase).toBe("requirements");
+	});
+	it("retains the saved target phase when native model work fails after entry", async () => {
+		const f = fixture();
+		await f.core.start("request", "change");
+		f.settings.runFailure = true;
+		await expect(f.core.next()).rejects.toThrow("provider failed");
+		expect(f.core.status().phase).toBe("solution");
+		expect(f.core.save().approvals.requirements?.userReply).toBe("/dev next");
+		expect(f.persisted.at(-1)?.phase).toBe("solution");
+	});
+	it("persists actual re-prepared native session references on restore", async () => {
+		const f = fixture();
+		await execution(f);
+		const saved = f.core.save();
+		const restored = fixture(saved);
+		restored.settings.sessionSuffix = "-recovered";
+		await restored.core.restore(saved);
+		expect(restored.core.save().sessions.executor?.sessionFile).toBe("executor-recovered.jsonl");
+		expect(restored.persisted.at(-1)?.sessions.executor?.sessionFile).toBe("executor-recovered.jsonl");
+		expect(restored.inputs).toEqual([]);
+	});
+	it("retains the saved phase and decisions when native history preparation fails", async () => {
+		const f = fixture();
+		await execution(f);
+		const saved = f.core.save();
+		const restored = fixture(saved);
+		restored.settings.prepareFailure = true;
+		await expect(restored.core.restore(saved)).rejects.toThrow("prepare failed");
+		expect(restored.core.status().phase).toBe("executing");
+		expect(restored.core.save().approvals).toEqual(saved.approvals);
+		expect(restored.core.status().blockedReason).toBe("prepare failed");
+		expect(restored.inputs).toEqual([]);
 	});
 });

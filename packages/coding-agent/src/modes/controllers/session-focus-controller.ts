@@ -130,6 +130,15 @@ export class SessionFocusController {
 		return this.#detachToMain();
 	}
 
+	/** Replay the active native owner through the same path as agent focus. */
+	async bindMainSession(target: AgentSession): Promise<void> {
+		await target.settleInFlightMessagePersistence();
+		this.#focusRequestSeq++;
+		this.#focusedAgentId = undefined;
+		this.#attachedSession = undefined;
+		await this.#attach(target);
+	}
+
 	/**
 	 * Detach back to the main session without invalidating pending focus
 	 * requests. Reactive teardown (a focused agent dying under us) must not

@@ -1970,6 +1970,11 @@ const embeddingSessionHooks = new WeakMap<
 	>
 >();
 
+/** Preserve the embedding caller's tool boundary when preparing an isolated native child. */
+export function cloneEmbeddingToolRestrictions(modelRegistry: ModelRegistry | undefined): ToolRestrictions | undefined {
+	return modelRegistry ? embeddingSessionHooks.get(modelRegistry)?.toolRestrictions?.clone() : undefined;
+}
+
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const execution = currentExecutionModel();
 	if (options.parentTaskPrefix && execution?.policies?.subagents?.foregroundModel === "submission") {
@@ -4743,6 +4748,17 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 
 		const transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
+			if (options.toolRestrictions?.hasInputScope) {
+				// The loop's context already includes its admitted input; public agent
+				// state can still lag behind while message events are being consumed.
+				const latestInput = messages.findLast(
+					message => typeof (message as AgentMessage & { inputId?: string }).inputId === "string",
+				);
+				if (latestInput)
+					options.toolRestrictions.replaceCurrentInput(
+						(latestInput as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist ?? [],
+					);
+			}
 			if (isJchToolsAgentModel(agent?.state.model ?? model)) return messages;
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
@@ -4959,14 +4975,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		};
 		const settingsAwareStreamFn: StreamFn = (streamModel, context, streamOptions) => {
 			if (options.toolRestrictions) {
-				const latestInput = agent?.state.messages.findLast(
-					message => typeof (message as AgentMessage & { inputId?: string }).inputId === "string",
-				);
-				if (latestInput && options.toolRestrictions.hasInputScope) {
-					options.toolRestrictions.replaceCurrentInput(
-						(latestInput as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist ?? [],
-					);
-				}
 				if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 			}
 			if (isJchToolsAgentModel(streamModel)) {

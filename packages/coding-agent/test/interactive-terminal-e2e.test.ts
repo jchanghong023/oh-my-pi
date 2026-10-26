@@ -17,11 +17,8 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import {
-	peekSpecDrivenController,
-	type SpecControllerObservation,
-} from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
-import { TempDir } from "@oh-my-pi/pi-utils";
+import { peekSpecDrivenController } from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
+import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
@@ -71,6 +68,7 @@ describe("libkitty end-to-end", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
+		await peekSpecDrivenController(session.sessionManager)?.dispose();
 		mode?.stop();
 		// Settle fixture-owned input after assertions so its keepalive is disposed.
 		mode?.onInputCallback?.({ text: "", cancelled: true, started: false });
@@ -83,508 +81,282 @@ describe("libkitty end-to-end", () => {
 		resetSettingsForTest();
 	});
 
-	// Keep the real controller registry, observation subscription, slash-command
-	// dispatch and terminal dialogs; replace only the workflow's local state.
-	async function devHelpFixture() {
+	async function emptyDev() {
 		await mode.init({ suppressWelcomeIntro: true });
-		void mode.getUserInput();
 		await mode.handleDevInput("/dev");
 		const controller = peekSpecDrivenController(session.sessionManager);
 		if (!controller) throw new Error("Expected native dev controller");
-		controller.setInputMode("chat");
-		const observation: SpecControllerObservation = {
-			...controller.observation(),
-			runId: "automatic-help-run",
-			status: {
-				...controller.status(),
-				phase: "awaiting-specification",
-				generation: 1,
-				specification: {
-					version: "spec-v1",
-					files: [{ path: "requirements.md", content: "Display the result", version: "requirements-v1" }],
-				},
-			},
-		};
-		vi.spyOn(controller, "status").mockImplementation(() => observation.status);
-		vi.spyOn(controller, "observation").mockImplementation(() => ({
-			...observation,
-			interaction: { ...observation.interaction, actions: controller.actions() },
-		}));
-		const panel = vi.spyOn(mode, "showHookCustom");
-		const schedule = vi.spyOn(controller, "schedule").mockReturnValue("automatic-help-job");
-		const cancel = vi.spyOn(controller, "cancel");
-		const visible = () =>
-			mode.ui.hasOverlay() && plainRows(term.getViewport()).some(row => row.includes("Display the result"));
-		return { controller, observation, panel, schedule, cancel, visible };
+		return controller;
 	}
 
-	it("shows an unstarted dev destination without starting a workflow or inventing a requirements stage", async () => {
+	it("shows rejected Dev subcommands before a controller exists and entry conflicts in ordinary chat", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
-		void mode.getUserInput();
+		const rows = () => plainRows(term.getViewport()).join("\n");
+		await mode.handleDevInput("/dev next");
+		await term.waitForRender(() => rows().includes("请先输入 /dev"));
+		expect(peekSpecDrivenController(session.sessionManager)).toBeUndefined();
+		const failure = vi.spyOn(mode, "showError");
+		mode.loopModeEnabled = true;
 		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager);
-		if (!controller) throw new Error("Expected native dev controller");
-		const viewport = () => plainRows(term.getViewport()).join("\n");
-		await term.waitForRender(() => viewport().includes("尚未启动"));
-		expect(viewport()).toContain("/dev help");
-		expect(controller.observation()).toMatchObject({
-			runId: null,
-			status: { phase: "idle" },
-			interaction: { mode: "dev" },
+		await term.waitForRender(() => rows().includes("协同开发操作失败"));
+		expect(failure).toHaveBeenCalled();
+		expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).not.toBe("dev");
+		expect(rows()).not.toContain("Dev ·");
+	});
+
+	it("finishes root disposal and reports failure when Dev disposal rejects", async () => {
+		const controller = await emptyDev();
+		const failure = new Error("Dev teardown unavailable");
+		vi.spyOn(controller, "dispose").mockRejectedValue(failure);
+		const rootDispose = vi.spyOn(session, "dispose");
+		const quit = vi.spyOn(postmortem, "quit").mockResolvedValue(undefined);
+		const showError = vi.spyOn(mode, "showError");
+		await mode.shutdown();
+		expect(rootDispose).toHaveBeenCalledTimes(1);
+		expect(session.isDisposed).toBe(true);
+		expect(showError.mock.calls.some(call => call[0].includes(failure.message))).toBe(true);
+		expect(quit).not.toHaveBeenCalled();
+	});
+
+	it("restores dropped drafts only from the adopted session and restores the binding after rollback", async () => {
+		await mode.init({ suppressWelcomeIntro: true });
+		const stage = new AgentSession({
+			agent: new Agent({
+				initialState: { model: session.model!, systemPrompt: ["Stage"], tools: [], messages: [] },
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated(),
+			modelRegistry: session.modelRegistry,
 		});
-		expect(viewport()).not.toContain("协同开发模式：需求");
+		const rootHooks = vi.spyOn(session, "setPromptDropped");
+		const stageHooks = vi.spyOn(stage, "setPromptDropped");
+		try {
+			await mode.bindMainSession(stage);
+			const stageDrop = stageHooks.mock.calls.findLast(call => call[0])?.[0];
+			expect(stageDrop).toBeDefined();
+			const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+			stageDrop!({ text: "recovered stage draft", images: [image] });
+			expect(mode.editor.getText()).toBe("recovered stage draft");
+			expect(mode.editor.pendingImages).toEqual([image]);
+			mode.editor.setText("new user draft");
+			stageDrop!({ text: "must not overwrite" });
+			expect(mode.editor.getText()).toBe("new user draft");
+			await mode.bindMainSession(session);
+			mode.editor.setText("");
+			stageDrop!({ text: "hidden stage late drop" });
+			expect(mode.editor.getText()).toBe("");
+			expect(stageHooks.mock.calls.at(-1)?.[0]).toBeUndefined();
+			const subscribe = vi.spyOn(stage, "subscribe").mockImplementationOnce(() => {
+				throw new Error("stage subscription failed");
+			});
+			await expect(mode.bindMainSession(stage)).rejects.toThrow("stage subscription failed");
+			subscribe.mockRestore();
+			expect(mode.session).toBe(session);
+			const rootDrop = rootHooks.mock.calls.findLast(call => call[0])?.[0];
+			rootDrop!({ text: "recovered root draft" });
+			expect(mode.editor.getText()).toBe("recovered root draft");
+			const rolledBackDrop = stageHooks.mock.calls.findLast(call => call[0])?.[0];
+			mode.editor.setText("");
+			rolledBackDrop!({ text: "rolled-back stage late drop" });
+			expect(mode.editor.getText()).toBe("");
+		} finally {
+			await mode.bindMainSession(session);
+			await stage.dispose();
+		}
+	});
+
+	it("shows an empty native Dev surface only after entry and restores ordinary root history on exit", async () => {
+		session.sessionManager.appendMessage({ role: "user", content: "ORDINARY_ROOT_HISTORY", timestamp: Date.now() });
+		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
+		await mode.init({ suppressWelcomeIntro: true });
+		const rows = () => plainRows(term.getViewport()).join("\n");
+		await term.waitForRender(() => rows().includes("ORDINARY_ROOT_HISTORY"));
+		await mode.handleDevInput("/dev");
+		const controller = peekSpecDrivenController(session.sessionManager)!;
+		await term.waitForRender(() => rows().includes("Dev ·") && !rows().includes("ORDINARY_ROOT_HISTORY"));
+		const clear = vi.spyOn(mode, "resetTranscript");
+		controller.publishObservation();
+		mode.showDevCommandStatus("progress without a transcript switch");
+		controller.publishObservation();
+		expect(clear).not.toHaveBeenCalled();
+		expect(session.sessionManager.buildSessionContext().messages).toHaveLength(1);
+		await controller.exit();
+		await term.waitForRender(() => rows().includes("ORDINARY_ROOT_HISTORY"));
+		expect(
+			rows()
+				.split("\n")
+				.filter(row => row.includes("ORDINARY_ROOT_HISTORY")),
+		).toHaveLength(1);
+	});
+
+	it("extends the existing session info viewer with full material and diagnostics without sending drafts", async () => {
+		const controller = await emptyDev();
+		const snapshot = controller.observation();
+		const fullError = `FULL_ERROR_START ${"diagnostic ".repeat(60)} FULL_ERROR_END`;
+		await Bun.write(
+			path.join(tempDir.path(), "solution.md"),
+			"# Candidates\n\n## candidate-alpha\n\nFULL_MATERIAL_END",
+		);
+		vi.spyOn(controller, "observation").mockReturnValue({
+			...snapshot,
+			error: fullError,
+			status: {
+				...snapshot.status,
+				paths: { requirements: [], solution: "solution.md", plan: "plan.md", report: "report.md" },
+			},
+		});
+		const report = vi.spyOn(mode, "showSessionInfo");
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		const next = vi.spyOn(controller, "next");
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		mode.editor.setText("UNSENT_VIEWER_DRAFT");
+		mode.editor.pendingImages.push(image);
+		mode.editor.pendingImageLinks.push(undefined);
+		expect(await mode.handleDevInput("/session", { images: [image] })).toBe(true);
+		expect(report).toHaveBeenCalledTimes(1);
+		const overlay = mode.ui.overlayStack.at(-1)?.component;
+		if (!overlay?.describe) throw new Error("Expected native session info viewer");
+		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
+		expect(content).toContain(session.sessionId);
+		expect(content).toContain("Provider");
+		expect(content).toContain("读取错误");
+		expect(content).toContain("FULL_ERROR_START");
+		expect(content).toContain("FULL_ERROR_END");
+		expect(content).toContain("candidate-alpha");
+		expect(content).toContain("FULL_MATERIAL_END");
+		expect(content).toContain("/dev next");
+		expect(mode.editor.getExpandedText()).toBe("UNSENT_VIEWER_DRAFT");
+		expect(mode.editor.pendingImages).toEqual([image]);
+		expect(next).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(session.messages).toEqual([]);
+	});
+
+	it("keeps empty Dev input and attachments without calling a model or opening a panel", async () => {
+		const controller = await emptyDev();
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		const panel = vi.spyOn(mode, "showHookCustom");
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		mode.editor.setText("unsent requirement");
+		mode.editor.pendingImages.push(image);
+		mode.editor.pendingImageLinks.push(undefined);
+		await mode.handleDevInput("unsent requirement", { images: [image] });
+		expect(mode.editor.getExpandedText()).toContain("unsent requirement");
+		expect(mode.editor.pendingImages).toEqual([image]);
+		expect(controller.status().phase).toBe("idle");
+		expect(prompt).not.toHaveBeenCalled();
+		expect(panel).not.toHaveBeenCalled();
+		expect(session.messages).toEqual([]);
 		expect(mode.ui.hasOverlay()).toBe(false);
 	});
 
-	it("persists one compact TUI report without raw status echo and retains explicit diagnostic facts", async () => {
-		const f = await devHelpFixture();
-		f.observation.status.blockedReason = "Which result should be displayed, and where?";
-		const append = vi.spyOn(session, "appendCustomMessage");
-		const rawStatus = vi.spyOn(mode, "showStatus");
-		await f.controller.report();
-		expect(append).toHaveBeenCalledTimes(1);
-		const summary = append.mock.calls[0]![0];
-		if (typeof summary === "string") throw new Error("Expected structured spec-driven custom message");
-		expect(summary).toMatchObject({ customType: "spec-driven", display: true });
-		expect(summary.content).toContain("Which result should be displayed, and where?");
-		expect(summary.content).not.toContain("spec-v1");
-		expect(summary.content).not.toContain("/dev confirm-spec");
-		expect(summary.content).not.toContain("实际投入");
-		expect(rawStatus).not.toHaveBeenCalled();
-
-		await f.controller.report({ rawPhase: true });
-		expect(append).toHaveBeenCalledTimes(2);
-		const detailMessage = append.mock.calls[1]![0];
-		if (typeof detailMessage === "string") throw new Error("Expected structured spec-driven custom message");
-		expect(detailMessage).toMatchObject({ customType: "spec-driven", display: true });
-		const details = detailMessage.content;
-		expect(details).toContain("awaiting-specification");
-		expect(details).toContain("spec-v1");
-		expect(details).toContain("Display the result");
-		expect(details).toContain("/dev confirm-spec");
-		expect(rawStatus).not.toHaveBeenCalled();
-		expect(f.schedule).not.toHaveBeenCalled();
-	});
-
-	it("rebinds report output ownership when switching between custom-message and text hosts", async () => {
-		const f = await devHelpFixture();
-		const firstHost = vi.fn();
-		const textHost = vi.fn();
-		f.controller.setOutput(firstHost, true);
-		await f.controller.report();
-		expect(firstHost).not.toHaveBeenCalled();
-		f.controller.setOutput(textHost);
-		await f.controller.report();
-		expect(textHost).toHaveBeenCalledTimes(1);
-		expect(textHost.mock.calls[0]![0]).toContain("/dev confirm-spec");
-		f.controller.setOutput(firstHost, true);
-		await f.controller.report();
-		expect(firstHost).not.toHaveBeenCalled();
-		expect(textHost).toHaveBeenCalledTimes(1);
-	});
-
-	it("automatically opens dev help in background chat while preserving the draft and dismisses each wait only once", async () => {
-		const f = await devHelpFixture();
-		const draft = "unsent ordinary chat draft";
-		mode.editor.setText(draft);
-		const image = {
-			type: "image" as const,
-			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aE2kAAAAASUVORK5CYII=",
-			mimeType: "image/png",
-		};
-		mode.editor.pendingImages.push(image);
-		mode.editor.pendingImageLinks.push(undefined);
-		f.controller.publishObservation();
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		expect(f.panel).toHaveBeenCalledTimes(1);
-		expect(plainRows(term.getViewport()).join("\n")).not.toContain("/dev confirm-spec");
-		// The initial material inspection must never authorize the transition.
-		term.sendInput("\r");
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		expect(f.schedule).not.toHaveBeenCalled();
-		expect(f.controller.inputMode()).toBe("chat");
-		expect(mode.editor.getExpandedText()).toBe(draft);
-		expect(mode.editor.pendingImages).toEqual([image]);
-
-		term.sendInput("\x1b");
-		await term.waitForRender(() => !f.visible());
-		expect(f.visible()).toBe(false);
-		expect(f.schedule).not.toHaveBeenCalled();
-		expect(f.cancel).not.toHaveBeenCalled();
-		f.observation.updatedAt++;
-		f.controller.publishObservation();
-		f.controller.publishObservation();
-		// Let the deferred automatic-help timer elapse before a negative assertion.
-		await Bun.sleep(150);
-		await term.waitForRender();
-		expect(f.panel).toHaveBeenCalledTimes(1);
-		expect(mode.editor.getExpandedText()).toBe(draft);
-		expect(mode.editor.pendingImages).toEqual([image]);
-		expect(mode.editor.pendingImageLinks).toEqual([undefined]);
-
-		// A fresh work round ending at the same decision must notify again.
-		f.observation.active = true;
-		f.controller.publishObservation();
-		f.observation.active = false;
-		f.controller.publishObservation();
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		expect(f.panel).toHaveBeenCalledTimes(2);
-		expect(f.schedule).not.toHaveBeenCalled();
-	});
-
-	for (const phase of ["requirements", "solution", "planning", "executing"] as const) {
-		it(`opens help when ${phase} waits for files without pausing or approving`, async () => {
-			const f = await devHelpFixture();
-			f.observation.status.phase = phase;
-			f.observation.status.paused = false;
-			f.observation.status.blockedReason = "阶段文件缺失；请补充说明并继续当前阶段。";
-			f.observation.status.lastReply = "Display the result: 请补充当前阶段信息。";
-			f.controller.publishObservation();
-			await term.waitForRender(f.visible);
-			expect(f.panel).toHaveBeenCalledTimes(1);
-			expect(f.schedule).not.toHaveBeenCalled();
-			expect(f.controller.actions().some(action => action.id === "answer")).toBe(true);
-			term.sendInput("\x1b");
-			await term.waitForRender(() => !mode.ui.hasOverlay());
-			expect(f.observation.status.phase).toBe(phase);
-			expect(f.schedule).not.toHaveBeenCalled();
+	for (const [width, height] of [
+		[100, 28],
+		[120, 36],
+	] as const) {
+		it(`keeps three Dev lines and the composer visible at ${width}x${height} and after resize`, async () => {
+			term.resize(width, height);
+			const controller = await emptyDev();
+			const widget = vi.spyOn(mode, "setHookWidget");
+			mode.editor.setText("NATIVE_DRAFT");
+			controller.publishObservation();
+			const rows = () => plainRows(term.getViewport());
+			await term.waitForRender(() => rows().some(row => row.includes("Dev ·")));
+			const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
+			expect(typeof call?.[1]).toBe("function");
+			if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
+			expect(call[1](mode.ui, {} as never).render(width)).toHaveLength(3);
+			expect(rows().filter(row => row.includes("Dev ·"))).toHaveLength(1);
+			expect(rows().some(row => row.includes("NATIVE_DRAFT"))).toBe(true);
+			term.resize(width === 100 ? 120 : 100, height === 28 ? 36 : 28);
+			controller.publishObservation();
+			await term.waitForRender();
+			expect(mode.editor.getExpandedText()).toBe("NATIVE_DRAFT");
+			expect(rows().filter(row => row.includes("Dev ·"))).toHaveLength(1);
+			expect(mode.ui.hasOverlay()).toBe(false);
 		});
 	}
 
-	it("does not automatically open dev help while active or any user message is unsettled", async () => {
-		const f = await devHelpFixture();
-		f.observation.active = true;
-		f.controller.publishObservation();
-		await Bun.sleep(150);
-		await term.waitForRender();
-		expect(f.panel).not.toHaveBeenCalled();
-		f.observation.active = false;
-		for (const status of ["queued", "processing", "cancelling"] as const) {
-			f.observation.interaction.messages = [
-				{
-					id: "pending-message",
-					text: "clarify the result",
-					runId: f.observation.runId!,
-					generation: 1,
-					phase: "awaiting-specification",
-					role: "requirements",
-					actorId: "requirements-agent",
-					sessionId: "requirements-session",
-					status,
-				},
-			];
-			f.controller.publishObservation();
-			await Bun.sleep(150);
-			await term.waitForRender();
-			expect(f.panel).not.toHaveBeenCalled();
+	it("binds real native session, manager and agent without copying replies into root", async () => {
+		const controller = await emptyDev();
+		const stage = new AgentSession({
+			agent: new Agent({
+				initialState: { model: session.model!, systemPrompt: ["Stage"], tools: [], messages: [] },
+			}),
+			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
+			settings: Settings.isolated(),
+			modelRegistry: session.modelRegistry,
+			ownedAsyncJobManager: new AsyncJobManager({}),
+		});
+		try {
+			const settle = vi
+				.spyOn(stage, "settleInFlightMessagePersistence")
+				.mockRejectedValueOnce(new Error("storage unavailable"));
+			await expect(mode.bindMainSession(stage)).rejects.toThrow("storage unavailable");
+			expect(mode.session).toBe(session);
+			expect(mode.sessionManager).toBe(session.sessionManager);
+			settle.mockRestore();
+			stage.sessionManager.appendMessage({ role: "user", content: "STAGE_NATIVE_MESSAGE", timestamp: Date.now() });
+			stage.agent.replaceMessages(stage.sessionManager.buildSessionContext().messages);
+			mode.editor.setText("preserved draft");
+			await mode.bindMainSession(stage);
+			expect(mode.session).toBe(stage);
+			expect(mode.sessionManager).toBe(stage.sessionManager);
+			expect(mode.agent).toBe(stage.agent);
+			expect(mode.settings).toBe(stage.settings);
+			expect(mode.viewSession).toBe(stage);
+			await term.waitForRender(() =>
+				plainRows(term.getViewport()).some(row => row.includes("STAGE_NATIVE_MESSAGE")),
+			);
+			expect(plainRows(term.getViewport()).filter(row => row.includes("STAGE_NATIVE_MESSAGE"))).toHaveLength(1);
+			const native = vi.spyOn(controller, "nativeSession").mockReturnValue(stage);
+			const guard = vi.spyOn(controller, "checkConversationAllowed").mockResolvedValue();
+			const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+			mode.editor.pendingImages.push(image);
+			mode.editor.pendingImageLinks.push(undefined);
+			expect(await mode.handleDevInput("preserved draft", { images: [image] })).toBe(false);
+			expect(guard).toHaveBeenCalledTimes(1);
+			expect(mode.editor.pendingImages).toEqual([image]);
+			native.mockRestore();
+			guard.mockRestore();
+			expect(session.messages).toEqual([]);
+			expect(session.sessionManager.getEntries().some(entry => entry.type === "message")).toBe(false);
+			await mode.bindMainSession(session);
+			expect(mode.session).toBe(session);
+			expect(mode.sessionManager).toBe(session.sessionManager);
+			expect(mode.agent).toBe(session.agent);
+			expect(mode.editor.getExpandedText()).toBe("preserved draft");
+		} finally {
+			await mode.bindMainSession(session);
+			await stage.dispose();
 		}
-		f.observation.interaction.messages[0]!.status = "completed";
-		f.controller.publishObservation();
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		expect(f.panel).toHaveBeenCalledTimes(1);
-		expect(f.schedule).not.toHaveBeenCalled();
 	});
 
-	it("defers automatic help behind another dialog and does not reopen a manually dismissed help window", async () => {
-		const f = await devHelpFixture();
-		const otherDialog = mode.showHookInput("Existing question");
-		f.controller.publishObservation();
-		await Bun.sleep(150);
-		expect(f.panel).not.toHaveBeenCalled();
-		term.sendInput("\x1b");
-		await otherDialog;
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		term.sendInput("\x1b");
-		await term.waitForRender(() => !f.visible());
-
-		await mode.handleDevInput("/dev status");
-		const manualHelp = mode.handleDevInput("/dev help");
-		await term.waitForRender(f.visible);
-		expect(f.visible()).toBe(true);
-		term.sendInput("\x1b");
-		await manualHelp;
-		await Bun.sleep(150);
-		expect(f.panel).toHaveBeenCalledTimes(2);
-		expect(f.visible()).toBe(false);
-		expect(f.schedule).not.toHaveBeenCalled();
-		expect(f.cancel).not.toHaveBeenCalled();
+	it("exit restores ordinary native history and removes Dev chrome without submitting a reply", async () => {
+		const controller = await emptyDev();
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		mode.editor.setText("ordinary draft");
+		await controller.exit();
+		expect(mode.session).toBe(session);
+		expect(mode.agent).toBe(session.agent);
+		expect(mode.sessionManager).toBe(session.sessionManager);
+		expect(mode.editor.getExpandedText()).toBe("ordinary draft");
+		expect(prompt).not.toHaveBeenCalled();
+		await term.waitForRender();
+		expect(plainRows(term.getViewport()).some(row => row.includes("Dev ·"))).toBe(false);
 	});
 
 	it("paints the submitted user message before any model reply", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
 		const pending = mode.getUserInput();
 		await term.waitForRender();
-
 		term.sendInput("hi there omp");
 		await term.waitForRender();
 		term.sendInput("\r");
 		const input = await pending;
 		expect(input.text).toBe("hi there omp");
-
-		// The optimistic user-message block must be on the physical screen now,
-		// before any assistant output exists.
 		await term.waitForRender(() => plainRows(term.getViewport()).some(row => row.includes("hi there omp")));
-		const viewport = plainRows(term.getViewport());
-		const hits = viewport.filter(row => row.includes("hi there omp"));
-		if (hits.length !== 1) dump("viewport after submit", viewport);
-		expect(hits.length).toBe(1);
-	});
-
-	for (const [label, key] of [
-		["Enter", "\r"],
-		["Ctrl+Enter", "\x1b[13;5u"],
-	] as const) {
-		it(`${label} retains unstarted dev text without entering the ordinary model or continuation loop`, async () => {
-			await mode.init({ suppressWelcomeIntro: true });
-			const outerInputs: string[] = [];
-			void mode.getUserInput().then(input => outerInputs.push(input.text));
-			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-			term.sendInput("/dev");
-			term.sendInput("\r");
-			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
-			const controller = peekSpecDrivenController(session.sessionManager);
-			expect(controller?.inputMode()).toBe("dev");
-
-			for (const text of ["new requirement", ".", "c", "继续", "可以", "同意"]) {
-				mode.editor.setText(text);
-				term.sendInput(key);
-				await term.waitForRender(() => controller?.observation().interaction.draft === text);
-				expect(controller?.observation().interaction.draft).toBe(text);
-				expect(controller?.observation().runId).toBeNull();
-				expect(controller?.observation().interaction.messages).toEqual([]);
-				expect(outerInputs).toEqual([]);
-				expect(prompt).not.toHaveBeenCalled();
-				expect(session.agent.state.messages).toEqual([]);
-			}
-
-			// This is a persistent composer projection, not only the toggle's
-			// transcript notice: the destination remains after editing and resize.
-			term.resize(110, 30);
-			await term.waitForRender();
-			const viewport = plainRows(term.getViewport()).join("\n");
-			expect(viewport).toContain("协同开发模式 →");
-		});
-
-		it(`${label} rejects unknown and skill commands in dev instead of expanding an outer prompt`, async () => {
-			await mode.init({ suppressWelcomeIntro: true });
-			const outerInputs: string[] = [];
-			void mode.getUserInput().then(input => outerInputs.push(input.text));
-			const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-			const customPrompt = vi.spyOn(session, "promptCustomMessage").mockResolvedValue(true);
-			const skillPath = path.join(tempDir.path(), "review-skill.md");
-			await Bun.write(skillPath, "Review the implementation request.\n");
-			mode.skillCommands.set("skill:review", {
-				name: "review",
-				description: "Review the implementation request",
-				filePath: skillPath,
-				baseDir: tempDir.path(),
-				source: "test",
-			});
-			term.sendInput("/dev");
-			term.sendInput("\r");
-			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
-			const controller = peekSpecDrivenController(session.sessionManager);
-			expect(controller?.inputMode()).toBe("dev");
-			const error = vi.spyOn(mode, "showError");
-			const warning = vi.spyOn(mode, "showWarning");
-			for (const text of ["/not-a-real-dev-command", "/skill:review implement this", "/opsx-explore inspect"]) {
-				const notices = error.mock.calls.length + warning.mock.calls.length;
-				mode.editor.setText(text);
-				term.sendInput(key);
-				await term.waitForRender(() => error.mock.calls.length + warning.mock.calls.length > notices);
-				expect(error.mock.calls.length + warning.mock.calls.length).toBeGreaterThan(notices);
-				expect(controller?.observation().interaction.messages).toEqual([]);
-				expect(controller?.observation().interaction.draft).toBe("");
-				expect(outerInputs).toEqual([]);
-				expect(prompt).not.toHaveBeenCalled();
-				expect(customPrompt).not.toHaveBeenCalled();
-			}
-		});
-
-		it(`${label} dispatches dev controls before the ordinary compaction queue`, async () => {
-			await mode.init({ suppressWelcomeIntro: true });
-			const outerInputs: string[] = [];
-			void mode.getUserInput().then(input => outerInputs.push(input.text));
-			term.sendInput("/dev");
-			term.sendInput("\r");
-			await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
-			expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).toBe("dev");
-			const controller = peekSpecDrivenController(session.sessionManager);
-			if (!controller) throw new Error("Expected native dev controller");
-			let busy = true;
-			const busyProperties = ["isCompacting", "isStreaming"] as const;
-			const originalDescriptors = busyProperties.map(
-				property => [property, Object.getOwnPropertyDescriptor(session, property)] as const,
-			);
-			try {
-				// Bun cannot spy on accessors. Shadow only this session's admission
-				// boundary without starting model-backed maintenance or replacing /dev.
-				for (const property of busyProperties) {
-					Object.defineProperty(session, property, { configurable: true, get: () => busy });
-				}
-				expect(session.isCompacting).toBe(true);
-				expect(session.isStreaming).toBe(true);
-				const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-				const report = controller.report.bind(controller);
-				let reporting: Promise<void> | undefined;
-				vi.spyOn(controller, "report").mockImplementation(() => {
-					expect(session.isCompacting).toBe(true);
-					expect(session.isStreaming).toBe(true);
-					// The control reached the native host while busy. Release the synthetic
-					// state before transcript persistence waits for the idle outer agent.
-					busy = false;
-					reporting = report();
-					return reporting;
-				});
-				mode.editor.setText("/dev pause");
-				term.sendInput(key);
-				await term.waitForRender(() => reporting !== undefined);
-				expect(reporting).toBeDefined();
-				await reporting;
-				mode.editor.setText("/dev");
-				term.sendInput(key);
-				await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "chat");
-				expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).toBe("chat");
-				expect(mode.compactionQueuedMessages).toEqual([]);
-				expect(outerInputs).toEqual([]);
-				expect(prompt).not.toHaveBeenCalled();
-			} finally {
-				for (const [property, descriptor] of originalDescriptors) {
-					if (descriptor) Object.defineProperty(session, property, descriptor);
-					else Reflect.deleteProperty(session, property);
-				}
-			}
-		});
-	}
-
-	for (const changesSession of [false, true]) {
-		it(`a delayed dev submission preserves a newer draft${changesSession ? " across a native session change" : ""}`, async () => {
-			await mode.init({ suppressWelcomeIntro: true });
-			await mode.handleDevInput("/dev");
-			const originalController = peekSpecDrivenController(session.sessionManager);
-			expect(originalController?.inputMode()).toBe("dev");
-			if (!originalController) throw new Error("Expected native dev controller");
-			const entered = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			const submit = originalController.submitText.bind(originalController);
-			vi.spyOn(originalController, "submitText").mockImplementation(async text => {
-				entered.resolve();
-				await release.promise;
-				return submit(text);
-			});
-			mode.editor.setText("submitted draft");
-			const submitting = mode.handleDevInput("submitted draft");
-			try {
-				await Promise.race([
-					entered.promise,
-					submitting.then(() => {
-						throw new Error("Dev submission completed without reaching the submitText interception");
-					}),
-				]);
-				if (changesSession) {
-					expect(await session.newSession()).toBe(true);
-					await mode.handleDevInput("/dev");
-					expect(peekSpecDrivenController(session.sessionManager)).not.toBe(originalController);
-				}
-				mode.editor.setText("newer unsent draft");
-			} finally {
-				release.resolve();
-				await submitting;
-			}
-
-			const current = peekSpecDrivenController(session.sessionManager);
-			expect(current?.observation().interaction.draft).toBe(changesSession ? "" : "submitted draft");
-			expect(current?.observation().interaction.messages).toEqual([]);
-			expect(mode.editor.getExpandedText()).toContain("newer unsent draft");
-			expect(session.agent.state.messages).toEqual([]);
-		});
-	}
-
-	it("keeps the released dev draft destination after cancellation and across chat toggles", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
-		const outerInputs: string[] = [];
-		void mode.getUserInput().then(input => outerInputs.push(input.text));
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		term.sendInput("/dev");
-		term.sendInput("\r");
-		await term.waitForRender(() => peekSpecDrivenController(session.sessionManager)?.inputMode() === "dev");
-		const controller = peekSpecDrivenController(session.sessionManager);
-		if (!controller) throw new Error("Expected native dev controller");
-
-		await controller.cancel();
-		expect(controller.observation()).toMatchObject({
-			released: true,
-			disposed: false,
-			runId: null,
-			status: { phase: "cancelled" },
-			interaction: { mode: "dev" },
-		});
-		const viewport = () => plainRows(term.getViewport()).join("\n");
-		await term.waitForRender(() => viewport().includes("协同开发模式 →"));
-		expect(viewport()).toContain("尚无可接收消息的阶段 Agent");
-
-		mode.editor.setText("next requirement after cancellation");
-		term.sendInput("\r");
-		await term.waitForRender(
-			() => controller.observation().interaction.draft === "next requirement after cancellation",
-		);
-		expect(controller.observation().interaction.messages).toEqual([]);
-		expect(controller.observation().interaction.recipient).toBeUndefined();
-		expect(outerInputs).toEqual([]);
-		expect(prompt).not.toHaveBeenCalled();
-		term.resize(110, 30);
-		await term.waitForRender(() => viewport().includes("协同开发模式 →"));
-		expect(mode.editor.getExpandedText()).toBe("next requirement after cancellation");
-
-		mode.editor.setText("/dev");
-		term.sendInput("\r");
-		await term.waitForRender(() => controller.inputMode() === "chat" && !viewport().includes("协同开发模式 →"));
-		expect(peekSpecDrivenController(session.sessionManager)).toBe(controller);
-		expect(viewport()).not.toContain("后台协同开发：");
-
-		mode.editor.setText("/dev");
-		term.sendInput("\r");
-		await term.waitForRender(() => controller.inputMode() === "dev" && viewport().includes("协同开发模式 →"));
-		expect(peekSpecDrivenController(session.sessionManager)).toBe(controller);
-		expect(controller.observation()).toMatchObject({
-			released: true,
-			runId: null,
-			interaction: { draft: "next requirement after cancellation" },
-		});
-		mode.editor.setText("another released draft");
-		term.sendInput("\r");
-		await term.waitForRender(() => controller.observation().interaction.draft === "another released draft");
-		expect(prompt).not.toHaveBeenCalled();
-		expect(outerInputs).toEqual([]);
-		expect(viewport()).toContain("协同开发模式 →");
-
-		await controller.dispose();
-		await term.waitForRender(() => !viewport().includes("协同开发模式 →"));
-	});
-
-	it("keeps dev ownership when ordinary Plan, Goal, and Vibe entrypoints conflict", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
-		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager);
-		expect(controller?.inputMode()).toBe("dev");
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-
-		await expect(mode.handlePlanModeCommand("implement outside dev")).rejects.toThrow();
-		await expect(mode.handleGoalModeCommand("implement outside dev")).rejects.toThrow();
-		await expect(mode.handleGuidedGoalCommand("implement outside dev")).rejects.toThrow();
-		await expect(mode.handleVibeModeCommand("implement outside dev")).rejects.toThrow();
-
-		expect(controller?.inputMode()).toBe("dev");
-		expect(mode.planModeEnabled).toBe(false);
-		expect(mode.goalModeEnabled).toBe(false);
-		expect(mode.vibeModeEnabled).toBe(false);
-		expect(prompt).not.toHaveBeenCalled();
-		expect(controller?.observation().runId).toBeNull();
+		expect(plainRows(term.getViewport()).filter(row => row.includes("hi there omp"))).toHaveLength(1);
 	});
 
 	it("keeps the whole buffer clean across non-overflowing width resizes", async () => {

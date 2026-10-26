@@ -10512,7 +10512,7 @@ export class AgentSession implements SettingsScope {
 	/** Append a displayable context message and drain persistence without starting a model turn. */
 	async appendCustomMessage<T = unknown>(
 		message: CustomMessagePayload<T>,
-		options?: { signal?: AbortSignal },
+		options?: { signal?: AbortSignal; waitForIdle?: boolean },
 	): Promise<void> {
 		return this.#admitSubmission(async () => {
 			const generation = this.#sessionGeneration;
@@ -10535,7 +10535,7 @@ export class AgentSession implements SettingsScope {
 			const normalized = await this.#normalizeAgentMessageImages(appMessage);
 			for (;;) {
 				assertCurrent();
-				if (!this.isStreaming) break;
+				if (options?.waitForIdle === false || !this.isStreaming) break;
 				await untilAborted(options?.signal, () => this.waitForIdle());
 			}
 			manager.appendCustomMessageEntry(

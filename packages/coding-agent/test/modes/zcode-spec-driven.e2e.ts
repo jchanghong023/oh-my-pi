@@ -15,19 +15,19 @@ import {
 	v4ConversationWorkflowRunsResultSchema,
 	v4ConversationWorkflowRunArtifactsResultSchema,
 	v4ConversationWorkflowRunArtifactReadResultSchema,
-	zcodeWorkflowsRunsResultSchema,
-	type OmpSpecAction,
 	type OmpSpecDetails,
-	type OmpSpecRunBinding,
 } from "../../src/modes/zcode/schema";
 import * as Baseline from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/index";
 import {
-	CHANGE_ID,
+	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
 	MARKER,
 	REQUIREMENT,
 	createProviderFixture,
+	contentText,
 	rolePayload,
+	continuationText,
+	teamStage,
 } from "../spec-driven/provider-fixture";
 
 // The scenario owns one budget including startup, real native actors, Git and cleanup.
@@ -53,6 +53,45 @@ class SpecPeer {
 	#ended = false;
 	#closed = false;
 	#id = 0;
+	#waiting = "startup";
+	#boundaries: { operation: string; frameCount: number }[] = [];
+	#stderrTail = "";
+	trace(operation: string) {
+		this.#waiting = operation;
+		this.#boundaries.push({ operation, frameCount: this.frames.length });
+		if (this.#boundaries.length > 24) this.#boundaries.shift();
+	}
+	diagnose() {
+		console.error(
+			"Native Dev stdio diagnostics:",
+			JSON.stringify({
+				waiting: this.#waiting,
+				boundaries: this.#boundaries,
+				frames: this.frames.slice(-12).map(frame => {
+					const params = isRecord(frame.params) ? frame.params : undefined;
+					const payload = params && isRecord(params.payload) ? params.payload : undefined;
+					return {
+						id: frame.id,
+						method: frame.method,
+						topic: params?.topic,
+						subscriptionId: params?.subscriptionId,
+						kind: payload?.kind,
+						error: frame.error,
+						markers: ["文件已写入。", "RAW_FOLLOWUP_DONE", "READONLY_DONE", "REPAIR_DONE"].filter(marker =>
+							strings(frame).some(text => text.includes(marker)),
+						),
+						dev: nativeDetails(frame).map(spec => ({
+							phase: spec.phase,
+							state: spec.state,
+							recipient: spec.interaction?.recipient?.sessionId,
+							available: spec.actions.filter(action => action.available).map(action => action.id),
+						})),
+					};
+				}),
+				stderr: this.#stderrTail,
+			}),
+		);
+	}
 	constructor(cwd: string, env: NodeJS.ProcessEnv) {
 		const child = (this.child = Bun.spawn(
 			[...launch, "app-server", "--stdio", "--surface", "desktop", "--cwd", cwd],
@@ -71,6 +110,7 @@ class SpecPeer {
 			for await (const chunk of child.stderr) {
 				const part = decoder.decode(chunk, { stream: true });
 				text += part;
+				this.#stderrTail = `${this.#stderrTail}${part}`.slice(-3000);
 			}
 			const part = decoder.decode();
 			return text + part;
@@ -110,7 +150,8 @@ class SpecPeer {
 	write(frame: Frame) {
 		this.child.stdin.write(`${JSON.stringify(frame)}\n`);
 	}
-	async next(predicate: (frame: Frame) => boolean, since = 0): Promise<Frame> {
+	async next(predicate: (frame: Frame) => boolean, since = 0, waiting = "public frame"): Promise<Frame> {
+		this.trace(waiting);
 		let cursor = since;
 		for (;;) {
 			if (this.#failure) throw this.#failure;
@@ -121,8 +162,16 @@ class SpecPeer {
 	}
 	async request(method: string, params: unknown): Promise<unknown> {
 		const id = `native-spec-${++this.#id}`;
+		const target = isRecord(params) ? (params.sessionId ?? params.topic ?? "") : "";
+		const payload = isRecord(params) && isRecord(params.payload) ? params.payload : undefined;
+		const command =
+			payload && typeof payload.text === "string"
+				? payload.text.startsWith("/dev")
+					? payload.text.split(/\s+/).slice(0, 3).join(" ")
+					: "native dialogue"
+				: "";
 		this.write({ id, method, params });
-		const response = await this.next(frame => frame.id === id);
+		const response = await this.next(frame => frame.id === id, 0, `${method} ${String(target)} ${command} (${id})`);
 		if (response.error) throw new Error(`${method}: ${JSON.stringify(response.error)}`);
 		return response.result;
 	}
@@ -168,7 +217,7 @@ class SpecPeer {
 			mode: result.ack.mode,
 		};
 	}
-	async send(sessionId: string, text: string, specRun?: OmpSpecRunBinding) {
+	async send(sessionId: string, text: string) {
 		const rows = COMMANDS_REQUIRING_BASE_REVISION.has("sendText")
 			? v4ConversationRowsRangeResultSchema.parse(
 					await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
@@ -180,7 +229,7 @@ class SpecPeer {
 				clientId: "native-spec-consumer",
 				sessionId,
 				type: "sendText",
-				payload: { text, ...(specRun ? { specRun } : {}) },
+				payload: { text },
 				issuedAt: Date.now(),
 				...(rows ? { baseRevision: rows.atRevision } : {}),
 			}),
@@ -198,7 +247,7 @@ class SpecPeer {
 	}
 	async interaction(
 		sessionId: string,
-		predicate: (interaction: NonNullable<OmpSpecDetails["interaction"]>) => boolean,
+		predicate: (interaction: OmpSpecDetails["interaction"] | undefined) => boolean,
 	) {
 		let cursor = this.frames.length;
 		for (;;) {
@@ -206,10 +255,11 @@ class SpecPeer {
 				await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
 			);
 			const current = result.dev;
-			if (current && predicate(current)) return current;
+			if (predicate(current)) return current;
 			const event = await this.next(
 				frame => isRecord(frame.params) && frame.params.topic === `conversation/${sessionId}`,
 				cursor,
+				`interaction ${sessionId}`,
 			);
 			cursor = this.frames.indexOf(event) + 1;
 		}
@@ -219,18 +269,22 @@ class SpecPeer {
 		for (;;) {
 			const rows = await this.runs(sessionId);
 			const row = rows.findLast(run => run.spec?.phase === phase);
-			if (row?.spec) return { ...row, spec: row.spec };
-			const stopped = rows.findLast(run => run.spec?.state === "blocked" || run.spec?.state === "paused");
-			if (stopped) throw new Error(`Native run stopped before ${phase}: ${JSON.stringify(stopped)}`);
+			if (
+				row?.spec &&
+				(row.spec.actions.some(action => action.id === "next" && action.available) || row.spec.state === "terminal")
+			)
+				return { ...row, spec: row.spec };
 			const event = await this.next(
 				frame => nativeDetails(frame).some(spec => spec.sessionId === sessionId),
 				cursor,
+				`phase ${phase} ${sessionId}; observed ${row?.spec?.phase ?? "none"}/${row?.spec?.state ?? "none"}`,
 			);
 			cursor = this.frames.indexOf(event) + 1;
 		}
 	}
 	async close() {
 		if (this.#closed) return;
+		this.trace("app-server EOF settlement");
 		this.child.stdin.end();
 		expect(await this.child.exited).toBe(0);
 		await this.pump;
@@ -238,21 +292,12 @@ class SpecPeer {
 		this.#closed = true;
 	}
 	async [Symbol.asyncDispose]() {
+		if (!this.#closed) this.diagnose();
 		peers.delete(this);
 		if (!this.#closed && this.child.exitCode === null) this.child.kill("SIGKILL");
 		await this.child.exited;
 		await this.pump;
 	}
-}
-
-async function expectRequestError(request: Promise<unknown>, message?: string) {
-	// Bun 1.4.3's async rejection matcher stalls subprocess streams; await I/O before synchronous assertions.
-	const error: unknown = await request.then(
-		() => undefined,
-		error => error,
-	);
-	expect(error).toBeInstanceOf(Error);
-	if (message) expect((error as Error).message).toContain(message);
 }
 
 function workspace(cwd: string) {
@@ -268,84 +313,6 @@ function nativeDetails(value: unknown): OmpSpecDetails[] {
 			.filter(([key]) => key !== "spec")
 			.flatMap(([, item]) => nativeDetails(item)),
 	];
-}
-function action(spec: OmpSpecDetails, verb: string): OmpSpecAction {
-	const found = spec.actions.find(item => (item.command ?? item.commandPrefix ?? "").startsWith(`/dev ${verb}`));
-	if (!found) throw new Error(`No native ${verb} action in ${JSON.stringify(spec)}`);
-	return found;
-}
-async function execute(peer: SpecPeer, sessionId: string, spec: OmpSpecDetails, verb: string, suffix = "") {
-	const item = action(spec, verb);
-	const command = `${item.command ?? item.commandPrefix}${suffix}`;
-	const selected = spec.actions.find(candidate => candidate.command === command) ?? item;
-	expect(await peer.send(sessionId, command, selected.binding)).toMatchObject({ status: "accepted" });
-	if (verb === "cancel") await confirmCancellation(peer, sessionId);
-}
-async function confirmCancellation(peer: SpecPeer, sessionId: string) {
-	// Command admission precedes the native UI decision; answer the actual pending confirmation.
-	const confirmation = await peer.subscribe(
-		sessionId,
-		`cancel-confirmation-${crypto.randomUUID()}`,
-		"desktop-continuous",
-	);
-	const frame = await peer.next(
-		frame =>
-			isRecord(frame.params) &&
-			frame.params.subscriptionId === confirmation.subscriptionId &&
-			conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
-		confirmation.since,
-	);
-	const payload = conversationTopicFrameSchema.parse(frame.params).payload;
-	if (payload.kind !== "snapshot") throw new Error("Native confirmation snapshot missing");
-	const pendingConfirmation = payload.snapshot.pendingInteractions.find(
-		interaction =>
-			interaction.payload.kind === "userInput" && interaction.payload.prompt.startsWith("取消协同开发流程\n"),
-	);
-	expect(pendingConfirmation).toBeDefined();
-	expect(
-		commandAckSchema.parse(
-			await peer.request("v4/command", {
-				commandId: crypto.randomUUID(),
-				clientId: "native-spec-consumer",
-				sessionId,
-				type: "resolveInteraction",
-				payload: { interactionId: pendingConfirmation!.interactionId, answer: { optionId: "yes" } },
-				issuedAt: Date.now(),
-			}),
-		),
-	).toMatchObject({ status: "accepted" });
-}
-async function discuss(peer: SpecPeer, sessionId: string, spec: OmpSpecDetails, text: string) {
-	const recipient = spec.interaction?.recipient;
-	expect(recipient).toBeDefined();
-	const before = new Set(spec.interaction?.messages.map(message => message.id));
-	const binding = { runId: spec.actions[0]!.binding.runId, generation: spec.generation };
-	expect(await peer.send(sessionId, text, { ...binding, generation: binding.generation + 1 })).toMatchObject({
-		status: "rejected",
-	});
-	expect(await peer.send(sessionId, text, { ...binding, runId: crypto.randomUUID() })).toMatchObject({
-		status: "rejected",
-	});
-	expect(await peer.send(sessionId, text, spec.actions[0]!.binding)).toMatchObject({ status: "rejected" });
-	expect(await peer.send(sessionId, text, binding)).toMatchObject({ status: "accepted" });
-	const interaction = await peer.interaction(sessionId, current =>
-		current.messages.some(
-			message => !before.has(message.id) && message.text === text && message.status === "completed",
-		),
-	);
-	const message = interaction.messages.findLast(item => !before.has(item.id) && item.text === text)!;
-	expect(message).toMatchObject({
-		role: recipient!.role,
-		actorId: recipient!.actorId,
-		sessionId: recipient!.sessionId,
-		runId: spec.actions[0]!.binding.runId,
-		phase: spec.phase,
-		status: "completed",
-	});
-	expect(message.reply?.length).toBeGreaterThan(0);
-	const row = (await peer.runs(sessionId, message.runId))[0]!;
-	if (!row.spec) throw new Error("Completed dialogue lost its native run");
-	return { ...row, spec: row.spec };
 }
 async function fixture(root: TempDir, baseUrl: string) {
 	const cwd = root.join("project"),
@@ -367,6 +334,8 @@ async function fixture(root: TempDir, baseUrl: string) {
 		SystemRoot: Bun.env.SystemRoot,
 		WINDIR: Bun.env.WINDIR,
 		ProgramFiles: Bun.env.ProgramFiles,
+		// Native OpenSpec uses process-local dates; pin this private consumer and its target calculation to UTC.
+		TZ: "UTC",
 		HOME: home,
 		USERPROFILE: home,
 		LOCALAPPDATA: home,
@@ -453,433 +422,670 @@ async function materialBytes(peer: SpecPeer, sessionId: string, runId: string, s
 	return result;
 }
 
-const startText = `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT} Authorize specification sync and archive only after my final acceptance.`;
+const startText = `/dev new ${MARKER}: ${REQUIREMENT} Authorize sync/archive only after explicit final next.`;
 
-describe("Native spec desktop public-entry acceptance", () => {
+function strings(value: unknown): string[] {
+	if (typeof value === "string") return [value];
+	if (Array.isArray(value)) return value.flatMap(strings);
+	return isRecord(value) ? Object.values(value).flatMap(strings) : [];
+}
+async function stageReady(peer: SpecPeer, sessionId: string, phase: OmpSpecDetails["phase"]) {
+	const run = await peer.phase(sessionId, phase);
+	const id = run.spec.interaction?.recipient?.sessionId;
+	if (!id) throw new Error(`No real native session for ${phase}`);
+	const subscription = await peer.subscribe(id, crypto.randomUUID(), "desktop-continuous");
+	await peer.next(
+		frame =>
+			isRecord(frame.params) &&
+			frame.params.subscriptionId === subscription.subscriptionId &&
+			strings(frame).some(text => text.includes("文件已写入。")),
+		subscription.since,
+		`stageReady ${phase}: native written reply ${id}`,
+	);
+	return { ...run, stageId: id };
+}
+async function command(peer: SpecPeer, sessionId: string, text: string) {
+	expect(await peer.send(sessionId, text)).toMatchObject({ status: "accepted" });
+}
+async function rows(peer: SpecPeer, sessionId: string) {
+	return v4ConversationRowsRangeResultSchema.parse(
+		await peer.request("v4/conversation/rowsRange", { sessionId, limit: 200 }),
+	).rows;
+}
+async function blocked(peer: SpecPeer, sessionId: string, explanation?: RegExp) {
+	let cursor = 0;
+	for (;;) {
+		const run = (await peer.runs(sessionId)).findLast(row => row.spec?.state === "blocked");
+		if (run?.spec && (!explanation || explanation.test(run.spec.explanation))) return { ...run, spec: run.spec };
+		const event = await peer.next(
+			frame => isRecord(frame.params) && frame.params.topic === `conversation/${sessionId}`,
+			cursor,
+			`blocked workflow ${sessionId}`,
+		);
+		cursor = peer.frames.indexOf(event) + 1;
+	}
+}
+async function rejectChangedApproval(
+	peer: SpecPeer,
+	cwd: string,
+	sessionId: string,
+	phase: OmpSpecDetails["phase"],
+	file: string,
+	text: string,
+	requestCount: () => number,
+) {
+	const target = path.join(cwd, file);
+	const original = await fs.readFile(target);
+	const count = requestCount();
+	try {
+		await fs.appendFile(target, "\nChanged approved bytes without approval.\n");
+		expect(await peer.send(sessionId, text)).toMatchObject({ status: "rejected" });
+		expect((await blocked(peer, sessionId)).spec.phase).toBe(phase);
+		expect(requestCount()).toBe(count);
+	} finally {
+		await fs.writeFile(target, original);
+	}
+}
+
+describe("Native Dev public stdio acceptance", () => {
 	test(
-		"mode/help and drafts create neither a workflow row nor a model call and reject file rewind",
+		"idle controls preserve baseline/replay; one workspace owner restores Team for another ordinary session",
 		async () => {
-			await using root = await TempDir.create("@omp-dev-idle-");
+			await using root = await TempDir.create("@omp-dev-owner-");
 			await using provider = createProviderFixture();
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new SpecPeer(config.cwd, config.env);
 			await peer.ready();
-			const sessionId = await peer.create(config.cwd);
-			const legacy = await peer.subscribe(sessionId, "legacy-idle", "desktop-continuous", false);
-			for (const profile of ["desktop-continuous", "web-remote-replayable"] as const)
-				await peer.subscribe(sessionId, `idle-${profile}`, profile);
-			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
-			await peer.interaction(sessionId, interaction => interaction.mode === "dev");
-			const rows = v4ConversationRowsRangeResultSchema.parse(
-				await peer.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
-			);
-			const rewind = commandAckSchema.parse(
-				await peer.request("v4/command", {
-					commandId: crypto.randomUUID(),
-					clientId: "native-spec-consumer",
-					sessionId,
-					type: "applyFileRewind",
-					payload: { target: { rowId: 0, entityId: "unavailable-rewind-target" } },
-					baseRevision: rows.atRevision,
-					baseLogEpoch: rows.atLogEpoch,
-					issuedAt: Date.now(),
-				}),
-			);
-			expect(rewind).toMatchObject({
-				status: "rejected",
-				reasonCode: "fault.command.invalid",
-				message: expect.stringContaining("协同开发模式不能执行 /applyFileRewind"),
-			});
-			expect(await peer.send(sessionId, "/spec status")).toMatchObject({ status: "rejected" });
-			expect(await peer.send(sessionId, "/dev help")).toMatchObject({ status: "accepted" });
-			expect(await peer.send(sessionId, "Draft only; do not start any actors.")).toMatchObject({
-				status: "accepted",
-			});
-			const draft = await peer.interaction(sessionId, interaction => interaction.draft.includes("Draft only"));
-			expect(draft).toMatchObject({ mode: "dev", messages: [] });
-			expect(draft.recipient).toBeUndefined();
-			expect(await peer.runs(sessionId)).toEqual([]);
-			expect(provider.requests).toEqual([]);
-			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
-			await peer.interaction(sessionId, interaction => interaction.mode === "chat");
+			const first = await peer.create(config.cwd);
 			const other = await peer.create(config.cwd);
-			const initial = v4ConversationWorkflowRunsResultSchema.parse(
-				await peer.request("v4/conversation/workflowRuns", { sessionId: other, includeSpecDriven: true }),
+			const baseline = await peer.subscribe(first, "baseline-owner", "desktop-continuous", false);
+			await peer.subscribe(first, "desktop-owner", "desktop-continuous");
+			const remote = await peer.subscribe(first, "remote-owner", "web-remote-replayable");
+			await command(peer, first, "/dev");
+			await peer.interaction(first, current => current?.mode === "dev");
+			await command(peer, first, "/dev config");
+			const configuration = await peer.subscribe(first, "config-selection", "desktop-continuous");
+			const pending = await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.subscriptionId === configuration.subscriptionId &&
+					strings(frame).includes("方案 Team"),
+				configuration.since,
 			);
-			expect(initial.dev).toBeUndefined();
+			const payload = conversationTopicFrameSchema.parse(pending.params).payload;
+			if (payload.kind !== "snapshot") throw new Error("Missing native selector snapshot");
+			const interaction = payload.snapshot.pendingInteractions.find(
+				item => item.payload.kind === "userInput" && item.payload.prompt === "方案 Team",
+			);
+			if (!interaction) throw new Error("Missing real configuration interaction");
+			expect(
+				commandAckSchema.parse(
+					await peer.request("v4/command", {
+						commandId: crypto.randomUUID(),
+						clientId: "native-spec-consumer",
+						sessionId: first,
+						type: "resolveInteraction",
+						payload: { interactionId: interaction.interactionId, answer: { optionId: "开启" } },
+						issuedAt: Date.now(),
+					}),
+				),
+			).toMatchObject({ status: "accepted" });
+			await peer.interaction(
+				first,
+				current => !!current?.actions.some(action => action.id === "config" && action.available),
+			);
+			expect(JSON.parse(await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8")).team).toBe(true);
+			expect(await peer.send(other, "/dev")).toMatchObject({ status: "rejected" });
+			expect(await peer.runs(first)).toEqual([]);
+			expect(provider.requests).toEqual([]);
+			const initial = await peer.next(
+				frame => isRecord(frame.params) && frame.params.subscriptionId === remote.subscriptionId,
+				remote.since,
+			);
+			const snapshot = conversationTopicFrameSchema.parse(initial.params);
+			if (snapshot.payload.kind !== "snapshot") throw new Error("Missing replay snapshot");
+			const base = { logEpoch: snapshot.payload.snapshot.logEpoch, seq: snapshot.toSeq };
+			await command(peer, first, "/dev");
+			await peer.interaction(first, current => !current || current.mode === "chat");
+			const replay = await peer.subscribe(first, "remote-owner", "web-remote-replayable", true, base);
+			expect(replay.mode).toBe("resume");
+			await peer.request("v4/conversation/resync", {
+				topic: replay.topic,
+				connectionId: replay.connectionId,
+				subscriptionId: replay.subscriptionId,
+				base: null,
+				forceSnapshot: true,
+			});
+			await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.subscriptionId === replay.subscriptionId &&
+					conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
+				replay.since,
+			);
+			await command(peer, other, "/dev");
+			await peer.interaction(other, current => current?.mode === "dev");
+			expect(JSON.parse(await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8")).team).toBe(true);
+			await command(peer, other, "/dev");
 			for (const frame of peer.frames.filter(
-				frame => isRecord(frame.params) && frame.params.subscriptionId === legacy.subscriptionId,
+				frame => isRecord(frame.params) && frame.params.subscriptionId === baseline.subscriptionId,
 			))
 				Baseline.conversationTopicFrameSchema.parse(frame.params);
 			expect(provider.requests).toEqual([]);
+			await command(peer, other, "/dev");
+			await command(peer, other, startText);
+			const restoredTeam = await stageReady(peer, other, "requirements");
+			expect(restoredTeam.spec.useTeam).toBe(true);
+			expect(restoredTeam.spec.teamMutable).toBe(true);
+			await command(peer, other, "/dev");
+			expect(provider.failures).toEqual([]);
 			await peer.close();
 		},
 		BUDGET,
 	);
+
 	test(
-		"four file-backed agents preserve complete solution and original confirmation, then wait for acceptance",
+		"four native sessions retain raw dialogue and complete materials; final next archives without a model",
 		async () => {
-			await using root = await TempDir.create("@omp-zcode-four-files-");
-			await using provider = createProviderFixture();
+			await using root = await TempDir.create("@omp-dev-native-stages-");
+			let obstruction = "";
+			const obstructionSentinel = "omp-owned-archive-conflict.txt";
+			const obstructionContents = "Deliberate native Dev archive conflict fixture\n";
+			await using provider = createProviderFixture({
+				dialogue: request => {
+					const raw = continuationText(request) ?? "";
+					const latest = request.messages.findLastIndex(
+						message => message.role === "user" && contentText(message.content) === raw,
+					);
+					const completed = request.messages.slice(latest + 1).some(message => message.role === "tool");
+					if (raw.includes("仅修复归档目录阻塞")) {
+						if (completed) return { text: "REPAIR_DONE" };
+						const name = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "bash")?.function
+							?.name;
+						if (!name) throw new Error("Native bash unavailable for authorized repair");
+						const repair = [
+							'const fs = require("node:fs")',
+							`const target = ${JSON.stringify(obstruction)}`,
+							`const sentinel = target + "/" + ${JSON.stringify(obstructionSentinel)}`,
+							`if (fs.readdirSync(target).length !== 1 || fs.readFileSync(sentinel, "utf8") !== ${JSON.stringify(obstructionContents)}) throw new Error("Archive conflict fixture ownership changed")`,
+							"fs.unlinkSync(sentinel)",
+							"fs.rmdirSync(target)",
+						].join(";");
+						return {
+							tool: {
+								name,
+								args: {
+									i: "Removing owned archive obstruction",
+									command: `"${process.execPath}" -e '${repair}'`,
+									timeout: 60,
+								},
+							},
+						};
+					}
+					if (raw.includes("解释收尾失败")) {
+						if (completed) return { text: "READONLY_DONE" };
+						const name = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "write")?.function
+							?.name;
+						if (!name) throw new Error("Native write unavailable for readonly boundary probe");
+						return {
+							tool: {
+								name,
+								args: {
+									i: "Probing readonly completion boundary",
+									path: "forbidden-after-report.txt",
+									content: "must not exist",
+								},
+							},
+						};
+					}
+					return { text: "RAW_FOLLOWUP_DONE" };
+				},
+			});
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new SpecPeer(config.cwd, config.env);
 			await peer.ready();
-			const sessionId = await peer.create(config.cwd);
-			const baseline = await peer.subscribe(sessionId, "baseline", "desktop-continuous", false);
-			const subscriptions = await Promise.all([
-				peer.subscribe(sessionId, "native", "desktop-continuous"),
-				peer.subscribe(sessionId, "remote", "web-remote-replayable"),
-			]);
-			expect(await peer.send(sessionId, startText)).toMatchObject({ status: "accepted" });
-			expect(await peer.send(sessionId, "/dev")).toMatchObject({ status: "accepted" });
-			const specification = await peer.phase(sessionId, "awaiting-specification");
-			expect(specification.spec.stage).toBe("requirements");
-			const runId = specification.runId;
-			const original = await materialBytes(peer, sessionId, runId, specification.spec);
-			expect([...original.values()].some(item => item.bytes.toString().includes(REQUIREMENT))).toBe(true);
-			expect(action(specification.spec, "confirm-spec").command).toBe("/dev confirm-spec");
-			await execute(peer, sessionId, specification.spec, "confirm-spec");
-			const choice = await peer.phase(sessionId, "awaiting-choice");
-			expect(choice.spec.stage).toBe("solution");
-			expect(choice.spec.candidates.map(candidate => candidate.id)).toEqual(["pure", "normalizer"]);
-			const completeSolution = (await materialBytes(peer, sessionId, runId, choice.spec))
-				.get("solution")!
-				.bytes.toString();
-			const selected = action(choice.spec, "choose pure");
-			const originalReply = `${selected.command}  同意完整方案，保留此原始回复。\\n  额外说明不得总结。  `;
-			expect(await peer.send(sessionId, originalReply, selected.binding)).toMatchObject({ status: "accepted" });
-			const plan = await peer.phase(sessionId, "awaiting-plan");
-			expect(plan.spec.stage).toBe("plan");
-			expect(plan.spec.selectedCandidate).toEqual({ id: "pure", userReply: originalReply });
-			const plannerRequest = provider.requests.find(request => rolePayload(request)?.specDrivenRole === "planner")!;
-			expect(JSON.stringify(rolePayload(plannerRequest)?.input)).toContain(
-				JSON.stringify(originalReply).slice(1, -1),
+			const session = await peer.create(config.cwd);
+			await peer.subscribe(session, "root-native", "desktop-continuous");
+			const ordinaryBefore = await rows(peer, session);
+			await command(peer, session, "/dev");
+			await command(peer, session, startText);
+			const requirements = await stageReady(peer, session, "requirements");
+			expect(requirements.spec.changeId?.length).toBeGreaterThan(0);
+			const changeId = requirements.spec.changeId!;
+			const beforeRestore = provider.requests.length;
+			await command(peer, session, "/dev");
+			await command(peer, session, "/dev");
+			expect((await peer.phase(session, "requirements")).spec.interaction?.recipient?.sessionId).toBe(
+				requirements.stageId,
 			);
-			const plannerInput = rolePayload(plannerRequest)?.input;
-			expect(JSON.stringify(plannerInput)).toContain(JSON.stringify(completeSolution).slice(1, -1));
-			expect(action(plan.spec, "confirm-plan").command).toBe("/dev confirm-plan");
-			await execute(peer, sessionId, plan.spec, "confirm-plan", " --goal 按完整获批计划执行");
-			const acceptance = await peer.phase(sessionId, "awaiting-acceptance");
-			expect(acceptance.spec.stage).toBe("execution");
-			expect(acceptance.spec.useGoal).toBe(true);
-			expect(acceptance.spec.useTeam).toBe(false);
-			expect(acceptance.spec).not.toHaveProperty("tasks");
-			expect(acceptance.spec).not.toHaveProperty("progress");
-			const materials = await materialBytes(peer, sessionId, runId, acceptance.spec);
-			expect(materials.get("report")!.bytes.toString()).toContain("## 验证结果");
-			expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH), "utf8")).toContain("name.trim()");
+			expect(provider.requests.length).toBe(beforeRestore);
+			const raw = "需求可以，但这只是讨论，不是批准。 保留  内部空格。";
+			const since = peer.frames.length;
+			await command(peer, session, raw);
+			await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.topic === `conversation/${requirements.stageId}` &&
+					strings(frame).includes("RAW_FOLLOWUP_DONE"),
+				since,
+				`native RAW_FOLLOWUP_DONE ${requirements.stageId}`,
+			);
+			const continuation = provider.requests.at(-1)!;
+			expect(continuationText(continuation)).toBe(raw);
 			expect(
-				new Set(provider.requests.map(request => rolePayload(request)?.specDrivenRole).filter(Boolean)),
-			).toEqual(new Set(["requirements", "solution", "planner", "executor"]));
-			const beforeDiscussion = await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH));
-			const feedback = await discuss(peer, sessionId, acceptance.spec, "查看当前交付材料，不批准也不修改。");
-			expect(feedback.spec.phase).toBe("awaiting-acceptance");
-			expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH))).toEqual(beforeDiscussion);
-			for (const subscription of subscriptions) {
-				const event = await peer.next(
-					frame =>
-						isRecord(frame.params) &&
-						frame.params.subscriptionId === subscription.subscriptionId &&
-						nativeDetails(frame).some(spec => spec.phase === "awaiting-acceptance"),
+				continuation.messages.filter(
+					message => rolePayload({ ...continuation, messages: [message] }) !== undefined,
+				),
+			).toHaveLength(1);
+			expect((await peer.runs(session))[0]?.spec?.phase).toBe("requirements");
+			const original = await materialBytes(peer, session, requirements.runId, requirements.spec);
+			await command(peer, session, "/dev next");
+			const solution = await stageReady(peer, session, "solution");
+			const solutionBytes = await materialBytes(peer, session, solution.runId, solution.spec);
+			const countBeforeViews = provider.requests.length;
+			await peer.request("session/resume", { sessionId: session });
+			expect((await peer.phase(session, "solution")).spec.interaction?.recipient?.sessionId).toBe(solution.stageId);
+			await peer.request("session/close", { sessionId: requirements.stageId });
+			expect((await peer.phase(session, "solution")).spec.interaction?.recipient?.sessionId).toBe(solution.stageId);
+			const mutateQueue = async (id: string, base: { baseRevision?: number; baseLogEpoch?: string } = {}) => {
+				await peer.subscribe(id, `native-stage-cas-${id}`, "desktop-continuous");
+				const state = v4ConversationRowsRangeResultSchema.parse(
+					await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 1 }),
 				);
-				expect(nativeDetails(event).find(spec => spec.phase === "awaiting-acceptance")!.versions.report).toBe(
-					acceptance.spec.versions.report,
+				return commandAckSchema.parse(
+					await peer.request("v4/command", {
+						commandId: crypto.randomUUID(),
+						clientId: "native-stage-cas",
+						issuedAt: Date.now(),
+						sessionId: id,
+						baseRevision: state.atRevision,
+						baseLogEpoch: state.atLogEpoch,
+						...base,
+						type: "setAutoDrain",
+						payload: { autoDrain: true },
+					}),
 				);
-			}
-			for (const frame of peer.frames.filter(
-				frame => isRecord(frame.params) && frame.params.subscriptionId === baseline.subscriptionId,
-			)) {
-				Baseline.conversationTopicFrameSchema.parse(frame.params);
-				expect(nativeDetails(frame)).toEqual([]);
-			}
-			const workspaceRuns = zcodeWorkflowsRunsResultSchema.parse(
-				await peer.request("workflows/runs", {
-					workspace: workspace(config.cwd),
-					includeSpecDriven: true,
-					limit: 50,
-				}),
+			};
+			const rootWatermark = v4ConversationRowsRangeResultSchema.parse(
+				await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 1 }),
 			);
-			expect(workspaceRuns.runs).toContainEqual(expect.objectContaining({ runId }));
-			await execute(peer, sessionId, feedback.spec, "accept");
-			const completed = await peer.phase(sessionId, "completed");
-			expect(completed.spec.actions).toEqual([]);
-			expect(completed.spec.stage).toBe("execution");
-			expect(completed.spec.materials.find(material => material.id === "report")?.readiness).toBe("present");
-			for (const [id, captured] of original)
-				expect(await readMaterial(peer, sessionId, runId, id, captured.version)).toEqual(captured.bytes);
+			expect(await mutateQueue(solution.stageId, { baseRevision: Number.MAX_SAFE_INTEGER })).toMatchObject({
+				status: "stale",
+				reasonCode: "guard.revision",
+			});
+			expect(await mutateQueue(solution.stageId, { baseLogEpoch: rootWatermark.atLogEpoch })).toMatchObject({
+				status: "stale",
+				reasonCode: "guard.logEpoch",
+			});
+			expect(await mutateQueue(solution.stageId)).toMatchObject({ status: "accepted" });
+			expect(await mutateQueue(session)).toMatchObject({ status: "accepted" });
+			expect(provider.requests.length).toBe(countBeforeViews);
+			const beforeBack = provider.requests.length;
+			await command(peer, session, "/dev back");
+			expect((await peer.phase(session, "requirements")).spec.interaction?.recipient?.sessionId).toBe(
+				requirements.stageId,
+			);
+			expect(provider.requests.length).toBe(beforeBack);
+			await command(peer, session, "/dev next");
+			await stageReady(peer, session, "solution");
+			const beforeCandidateRefusals = provider.requests.length;
+			for (const text of ["/dev next", "/dev next no-such-candidate"]) {
+				expect(await peer.send(session, text)).toMatchObject({ status: "rejected" });
+				expect((await peer.runs(session))[0]?.spec?.phase).toBe("solution");
+			}
+			expect(provider.requests.length).toBe(beforeCandidateRefusals);
+			await rejectChangedApproval(
+				peer,
+				config.cwd,
+				session,
+				"solution",
+				`openspec/changes/${changeId}/proposal.md`,
+				"/dev next pure",
+				() => provider.requests.length,
+			);
+			const decision = "/dev next pure";
+			await command(peer, session, decision);
+			const plan = await stageReady(peer, session, "planning");
+			const input = rolePayload(
+				provider.requests.find(request => rolePayload(request)?.specDrivenRole === "planner")!,
+			)!.input;
+			expect(input.userReply).toBe(decision);
+			expect(JSON.stringify(input.files)).toContain(
+				JSON.stringify(solutionBytes.get("solution")!.bytes.toString()).slice(1, -1),
+			);
+			const solutionPath = rolePayload(
+				provider.requests.find(request => rolePayload(request)?.specDrivenRole === "solution")!,
+			)!.input.outputPaths;
+			if (!Array.isArray(solutionPath) || typeof solutionPath[0] !== "string")
+				throw new Error("No native solution path");
+			await rejectChangedApproval(
+				peer,
+				config.cwd,
+				session,
+				"planning",
+				solutionPath[0],
+				"/dev next",
+				() => provider.requests.length,
+			);
+			await command(peer, session, "/dev next");
+			const execution = await stageReady(peer, session, "executing");
+			const materials = await materialBytes(peer, session, execution.runId, execution.spec);
+			expect(materials.get("report")!.bytes.toString()).toContain("## 验证结果");
+			expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH), "utf8")).toBe(IMPLEMENTATION);
+			const ids = [requirements.stageId, solution.stageId, plan.stageId, execution.stageId];
+			expect(new Set(ids).size).toBe(4);
+			const listed = strings(await peer.request("session/list", { workspace: workspace(config.cwd) }));
+			for (const id of ids) {
+				expect(listed).toContain(id);
+				const history = await rows(peer, id);
+				expect(history.some(row => row.kind === "assistantText")).toBe(true);
+				expect(history.some(row => row.kind === "toolCall" && row.status === "success")).toBe(true);
+			}
+			const planPaths = input.outputPaths;
+			if (!Array.isArray(planPaths) || typeof planPaths[0] !== "string") throw new Error("No native plan path");
+			await rejectChangedApproval(
+				peer,
+				config.cwd,
+				session,
+				"executing",
+				planPaths[0],
+				"/dev next",
+				() => provider.requests.length,
+			);
+			expect(await rows(peer, session)).toEqual(ordinaryBefore);
+			const date = new Date().toISOString().slice(0, 10);
+			obstruction = `openspec/changes/archive/${date}-${changeId}`;
+			await fs.mkdir(path.join(config.cwd, obstruction), { recursive: true });
+			await fs.writeFile(path.join(config.cwd, obstruction, obstructionSentinel), obstructionContents);
+			const failedCount = provider.requests.length;
+			const approvedBeforeClosing = JSON.parse(
+				await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8"),
+			).run.approvals;
+			const historiesBeforeClosing = await Promise.all(
+				ids.map(async id => (await rows(peer, id)).map(row => ({ ...row, actions: undefined }))),
+			);
+			const closingAck = await peer.send(session, "/dev next");
+			expect(closingAck).toMatchObject({
+				status: "failed",
+				reasonCode: "fault.command.execution",
+			});
+			expect(closingAck.message).toContain("OpenSpec archive failed");
+			const failed = await blocked(peer, session, /OpenSpec archive failed/u);
+			expect(failed.spec.phase).toBe("executing");
+			expect(failed.spec.explanation).toContain("OpenSpec archive failed");
+			expect(failed.spec.explanation).toContain(changeId);
+			expect(failed.spec.explanation).toContain("already exists");
+			expect(await fs.readFile(path.join(config.cwd, obstruction, obstructionSentinel), "utf8")).toBe(
+				obstructionContents,
+			);
+			expect(failed.spec.archivedChangePath).toBeUndefined();
+			const approvedAfterClosing = JSON.parse(
+				await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8"),
+			).run.approvals;
+			for (const role of ["requirements", "solution", "planner"])
+				expect(approvedAfterClosing[role]).toEqual(approvedBeforeClosing[role]);
+			expect(approvedAfterClosing.executor.userReply).toBe("/dev next");
+			for (const [index, id] of ids.entries())
+				expect((await rows(peer, id)).map(row => ({ ...row, actions: undefined }))).toEqual(
+					historiesBeforeClosing[index],
+				);
+			for (const [id, captured] of materials)
+				expect(await readMaterial(peer, session, execution.runId, id, captured.version)).toEqual(captured.bytes);
+			expect(provider.requests.length).toBe(failedCount);
+			let cursor = peer.frames.length;
+			await command(peer, session, "解释收尾失败；不要批准，也不要修改任何文件。");
+			await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.topic === `conversation/${execution.stageId}` &&
+					strings(frame).includes("READONLY_DONE"),
+				cursor,
+				`native READONLY_DONE ${execution.stageId}`,
+			);
+			expect(await Bun.file(path.join(config.cwd, "forbidden-after-report.txt")).exists()).toBe(false);
+			expect((await peer.runs(session))[0]?.spec?.phase).toBe("executing");
+			cursor = peer.frames.length;
+			await command(
+				peer,
+				session,
+				"修复：仅修复归档目录阻塞，删除刚才夹具自有的标记文件和目标目录；不修改已验收材料、不执行业务实现、不运行同步归档，等待我 /dev next。",
+			);
+			await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.topic === `conversation/${execution.stageId}` &&
+					strings(frame).includes("REPAIR_DONE"),
+				cursor,
+				`native REPAIR_DONE ${execution.stageId}`,
+			);
+			expect(
+				await fs.stat(path.join(config.cwd, obstruction)).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+			for (const [id, captured] of materials)
+				expect(await readMaterial(peer, session, execution.runId, id, captured.version)).toEqual(captured.bytes);
 			const count = provider.requests.length;
+			await command(peer, session, "/dev next");
+			const complete = await peer.phase(session, "idle");
+			expect(complete.spec.archivedChangePath).toBeString();
+			expect(provider.requests.length).toBe(count);
+			expect(await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
+				REQUIREMENT,
+			);
+			expect(await Bun.file(path.join(config.cwd, `openspec/changes/${changeId}/proposal.md`)).exists()).toBe(false);
+			for (const [id, captured] of original)
+				expect(await readMaterial(peer, session, complete.runId, id, captured.version)).toEqual(captured.bytes);
+			for (const [id, captured] of materials)
+				expect(await readMaterial(peer, session, complete.runId, id, captured.version)).toEqual(captured.bytes);
+			await command(peer, session, "/dev");
+			expect(await mutateQueue(session)).toMatchObject({ status: "accepted" });
+			await command(peer, session, "/dev");
+			expect(provider.requests.length).toBe(count);
 			await peer.close();
 			await using cold = new SpecPeer(config.cwd, config.env);
 			await cold.ready();
-			const history = (await cold.runs(sessionId, runId))[0]!;
-			expect(history.spec).toMatchObject({ live: false, readOnly: true, actions: [], phase: "completed" });
+			const sessionsBefore = await cold.request("session/list", { workspace: workspace(config.cwd) });
+			const history = (await cold.runs(session, complete.runId))[0]!;
+			expect(history.spec).toMatchObject({ live: false, readOnly: true, actions: [], phase: "idle" });
 			for (const [id, captured] of materials)
-				expect(await readMaterial(cold, sessionId, runId, id, captured.version)).toEqual(captured.bytes);
+				expect(await readMaterial(cold, session, complete.runId, id, captured.version)).toEqual(captured.bytes);
+			for (const id of ids) expect((await rows(cold, id)).length).toBeGreaterThan(0);
+			expect(await cold.request("session/list", { workspace: workspace(config.cwd) })).toEqual(sessionsBefore);
+			const coldOrdinary = await cold.create(config.cwd);
+			await command(cold, coldOrdinary, "/dev");
+			await command(cold, coldOrdinary, "/dev");
 			expect(provider.requests.length).toBe(count);
 			expect(provider.failures).toEqual([]);
 		},
 		BUDGET,
 	);
 	test(
-		"ownership, late observation, replay/resync, lifecycle replacement and cold material diagnostics",
+		"ordinary public stop settles Team without leaving Dev or replaying the discussion",
 		async () => {
-			await using root = await TempDir.create("@omp-zcode-spec-lifecycle-");
-			await using provider = createProviderFixture();
+			await using root = await TempDir.create("@omp-dev-team-stop-");
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const cancellations: Promise<void>[] = [];
+			let hold = true;
+			await using provider = createProviderFixture({
+				delay: async (request, signal) => {
+					if (!hold || !teamStage(request)) return;
+					const cancelled = Promise.withResolvers<void>();
+					cancellations.push(cancelled.promise);
+					if (signal.aborted) cancelled.resolve();
+					else signal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+					entered.resolve();
+					await Promise.race([cancelled.promise, release.promise]);
+				},
+			});
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new SpecPeer(config.cwd, config.env);
-			await peer.ready();
-			const sessionId = await peer.create(config.cwd);
-			const observer = await peer.subscribe(sessionId, "lifecycle", "desktop-continuous");
-			expect(await peer.send(sessionId, startText)).toMatchObject({ status: "accepted" });
-			const first = await peer.phase(sessionId, "awaiting-specification");
-			const approve = action(first.spec, "confirm-spec");
-			const captured = await materialBytes(peer, sessionId, first.runId, first.spec);
-			expect(captured.size).toBeGreaterThan(0);
-			const countBeforeRefusal = provider.requests.length;
-			for (const binding of [
-				{ ...approve.binding, runId: "not-this-run" },
-				{ ...approve.binding, generation: approve.binding.generation + 1 },
-			])
-				expect(await peer.send(sessionId, approve.command!, binding)).toMatchObject({ status: "rejected" });
-			const otherSession = await peer.create(config.cwd);
-			expect(await peer.send(otherSession, approve.command!, approve.binding)).toMatchObject({ status: "rejected" });
-			const otherCwd = root.join("another-workspace");
-			await fs.mkdir(otherCwd);
-			const otherWorkspaceSession = await peer.create(otherCwd);
-			expect(await peer.send(otherWorkspaceSession, approve.command!, approve.binding)).toMatchObject({
-				status: "rejected",
-			});
-			await expectRequestError(
-				peer.request("v4/conversation/workflowRunArtifacts", { sessionId: otherSession, runId: first.runId }),
-				"does not belong",
-			);
-			await expectRequestError(
-				peer.request("v4/conversation/workflowRunArtifacts", {
-					sessionId: otherWorkspaceSession,
-					runId: first.runId,
-				}),
-				"does not belong",
-			);
-			expect(provider.requests.length).toBe(countBeforeRefusal);
-			expect((await peer.runs(sessionId, first.runId))[0]?.spec?.phase).toBe("awaiting-specification");
-			const wrongWorkspace = zcodeWorkflowsRunsResultSchema.parse(
-				await peer.request("workflows/runs", {
-					workspace: workspace(otherCwd),
-					includeSpecDriven: true,
-					limit: 50,
-				}),
-			);
-			expect(wrongWorkspace.runs.some(run => run.runId === first.runId)).toBe(false);
-
-			const late = await peer.subscribe(sessionId, "late", "web-remote-replayable");
-			const initial = await peer.next(
-				frame => isRecord(frame.params) && frame.params.subscriptionId === late.subscriptionId,
-				late.since,
-			);
-			const snapshotFrame = conversationTopicFrameSchema.parse(initial.params);
-			if (snapshotFrame.payload.kind !== "snapshot") throw new Error("Late subscriber did not receive a snapshot");
-			expect(
-				nativeDetails(snapshotFrame).some(
-					spec => spec.versions.specification === first.spec.versions.specification,
-				),
-			).toBe(true);
-			const base = { logEpoch: snapshotFrame.payload.snapshot.logEpoch, seq: snapshotFrame.toSeq };
-			const sincePause = peer.frames.length;
-			await execute(peer, sessionId, first.spec, "pause");
-			await peer.next(
-				frame => nativeDetails(frame).some(spec => spec.sessionId === sessionId && spec.state === "paused"),
-				sincePause,
-			);
-			const paused = (await peer.runs(sessionId, first.runId))[0]!;
-			expect(paused.spec?.state).toBe("paused");
-			expect(provider.requests.length).toBe(countBeforeRefusal);
-			const resumed = await peer.subscribe(sessionId, "late", "web-remote-replayable", true, base);
-			expect(resumed.mode).toBe("resume");
-			await peer.next(
-				frame =>
-					isRecord(frame.params) &&
-					frame.params.subscriptionId === resumed.subscriptionId &&
-					nativeDetails(frame).some(spec => spec.state === "paused"),
-				resumed.since,
-			);
-			const resyncSince = peer.frames.length;
-			await peer.request("v4/conversation/resync", {
-				topic: resumed.topic,
-				connectionId: resumed.connectionId,
-				subscriptionId: resumed.subscriptionId,
-				base: null,
-				forceSnapshot: true,
-			});
-			const recovered = await peer.next(
-				frame =>
-					isRecord(frame.params) &&
-					frame.params.subscriptionId === resumed.subscriptionId &&
-					conversationTopicFrameSchema.parse(frame.params).payload.kind === "snapshot",
-				resyncSince,
-			);
-			expect(nativeDetails(recovered).some(spec => spec.sessionId === sessionId && spec.state === "paused")).toBe(
-				true,
-			);
-			await peer.request("v4/conversation/unsubscribe", {
-				topic: resumed.topic,
-				connectionId: resumed.connectionId,
-				subscriptionId: resumed.subscriptionId,
-			});
-			const unsubscribeCursor = peer.frames.length;
-			const resumeSince = peer.frames.length;
-			await execute(peer, sessionId, paused.spec!, "resume");
-			await peer.next(
-				frame => nativeDetails(frame).some(spec => spec.sessionId === sessionId && spec.state === "waiting"),
-				resumeSince,
-			);
-			const running = (await peer.runs(sessionId, first.runId))[0]!;
-			expect(running.spec?.phase).toBe("awaiting-specification");
-			expect(
-				peer.frames
-					.slice(unsubscribeCursor)
-					.some(frame => isRecord(frame.params) && frame.params.subscriptionId === resumed.subscriptionId),
-			).toBe(false);
-			const cancelling = peer.frames.length;
-			await execute(peer, sessionId, running.spec!, "cancel");
-			await peer.phase(sessionId, "cancelled", cancelling);
-			expect((await peer.runs(sessionId, first.runId))[0]?.spec?.actions).toEqual([]);
-			expect(await peer.send(sessionId, approve.command!, approve.binding)).toMatchObject({ status: "rejected" });
-			const replacing = peer.frames.length;
-			expect(await peer.send(sessionId, startText)).toMatchObject({ status: "accepted" });
-			const replacement = await peer.phase(sessionId, "awaiting-specification", replacing);
-			expect(replacement.runId).not.toBe(first.runId);
-			expect(replacement.spec.changeId).toBe(first.spec.changeId);
-			const retained = await peer.runs(sessionId);
-			expect(retained.some(run => run.runId === first.runId && run.spec?.phase === "cancelled")).toBe(true);
-			for (const [id, item] of captured)
-				expect(await readMaterial(peer, sessionId, first.runId, id, item.version)).toEqual(item.bytes);
-			expect(await peer.send(sessionId, approve.command!, approve.binding)).toMatchObject({ status: "rejected" });
-			const replacementApproval = action(replacement.spec, "confirm-spec");
-			const replacementBytes = await materialBytes(peer, sessionId, replacement.runId, replacement.spec);
-			await peer.request("v4/conversation/unsubscribe", {
-				topic: observer.topic,
-				connectionId: observer.connectionId,
-				subscriptionId: observer.subscriptionId,
-			});
-			const beforeRestart = provider.requests.length;
-			await peer.close();
-			await using cold = new SpecPeer(config.cwd, config.env);
-			await cold.ready();
-			const sessionsBefore = await cold.request("session/list", { workspace: workspace(config.cwd) });
-			const history = (await cold.runs(sessionId, replacement.runId))[0]!;
-			expect(history.spec).toMatchObject({
-				phase: "awaiting-specification",
-				live: false,
-				readOnly: true,
-				actions: [],
-			});
-			for (const [id, item] of replacementBytes)
-				expect(await readMaterial(cold, sessionId, replacement.runId, id, item.version)).toEqual(item.bytes);
-			expect(await cold.request("session/list", { workspace: workspace(config.cwd) })).toEqual(sessionsBefore);
-			expect(provider.requests.length).toBe(beforeRestart);
-			expect(await cold.send(sessionId, replacementApproval.command!, replacementApproval.binding)).toMatchObject({
-				status: "rejected",
-			});
-			expect(provider.requests.length).toBe(beforeRestart);
-			expect((await cold.runs(sessionId, replacement.runId))[0]?.spec?.actions).toEqual([]);
-			await cold.close();
-
-			// Remove only observed evidence bytes in this temporary fixture. Historical queries must
-			// diagnose lost/unreadable material, not silently replace it with current source content.
-			const runDirectory = path.join(config.cwd, ".omp/spec-sessions", replacement.runId);
-			const saved = JSON.parse(await fs.readFile(path.join(runDirectory, "zcode.json"), "utf8")) as {
-				artifacts: Array<{ id: string; versions: Array<{ version: number; digest: string }> }>;
-			};
-			const capturedEntry = replacementBytes.entries().next().value;
-			if (!capturedEntry) throw new Error("No captured replacement material to diagnose");
-			const [artifactId, capturedVersion] = capturedEntry;
-			const recordedVersion = saved.artifacts
-				.find(artifact => artifact.id === artifactId)
-				?.versions.find(version => version.version === capturedVersion.version);
-			if (!recordedVersion || !/^[a-f0-9]{64}$/u.test(recordedVersion.digest))
-				throw new Error("Captured material has no valid persisted version record");
-			const victim = path.join(runDirectory, "zcode-artifacts", recordedVersion.digest);
-			const victimBytes = await fs.readFile(victim);
-			expect(victimBytes).toEqual(capturedVersion.bytes);
-			await fs.unlink(victim);
-			await using missing = new SpecPeer(config.cwd, config.env);
-			await missing.ready();
-			const missingRun = (await missing.runs(sessionId, replacement.runId))[0]!;
-			expect(missingRun.spec?.materials.some(material => material.readiness === "missing")).toBe(true);
-			const absent = missingRun.spec!.materials.find(material => material.readiness === "missing")!;
-			if (absent.artifactId && absent.version)
-				await expectRequestError(
-					readMaterial(missing, sessionId, replacement.runId, absent.artifactId, absent.version),
+			try {
+				await peer.ready();
+				const session = await peer.create(config.cwd);
+				await peer.subscribe(session, "team-stop-root", "desktop-continuous");
+				await command(peer, session, "/dev");
+				await peer.interaction(session, current => current?.mode === "dev");
+				await command(peer, session, "/dev config");
+				const configuration = await peer.subscribe(session, "team-stop-config", "desktop-continuous");
+				const pending = await peer.next(
+					frame =>
+						isRecord(frame.params) &&
+						frame.params.subscriptionId === configuration.subscriptionId &&
+						strings(frame).includes("方案 Team"),
+					configuration.since,
 				);
-			await missing.close();
-			await fs.mkdir(victim);
-			await using unreadable = new SpecPeer(config.cwd, config.env);
-			await unreadable.ready();
-			const unreadableRun = (await unreadable.runs(sessionId, replacement.runId))[0]!;
-			expect(unreadableRun.spec?.materials.some(material => material.readiness === "unreadable")).toBe(true);
-			expect(provider.requests.length).toBe(beforeRestart);
-			expect(provider.failures).toEqual([]);
-			await unreadable.close();
-			await fs.rmdir(victim);
-			await fs.writeFile(victim, victimBytes);
+				const payload = conversationTopicFrameSchema.parse(pending.params).payload;
+				if (payload.kind !== "snapshot") throw new Error("Missing native selector snapshot");
+				const interaction = payload.snapshot.pendingInteractions.find(
+					item => item.payload.kind === "userInput" && item.payload.prompt === "方案 Team",
+				);
+				if (!interaction) throw new Error("Missing real Team configuration interaction");
+				expect(
+					commandAckSchema.parse(
+						await peer.request("v4/command", {
+							commandId: crypto.randomUUID(),
+							clientId: "native-spec-consumer",
+							sessionId: session,
+							type: "resolveInteraction",
+							payload: { interactionId: interaction.interactionId, answer: { optionId: "开启" } },
+							issuedAt: Date.now(),
+						}),
+					),
+				).toMatchObject({ status: "accepted" });
+				await peer.interaction(
+					session,
+					current => !!current?.actions.some(action => action.id === "config" && action.available),
+				);
+				await command(peer, session, startText);
+				const requirements = await stageReady(peer, session, "requirements");
+				const captured = await materialBytes(peer, session, requirements.runId, requirements.spec);
+				// Dev control completion is not admitted until its awaited handler settles.
+				// Keep the public request live while independently interrupting its actual Team work.
+				const advancing = peer.send(session, "/dev next");
+				void advancing.catch(() => {});
+				peer.trace("Team proposal entering before public stop");
+				await entered.promise;
+				const before = JSON.parse(await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8"));
+				expect(before.run.phase).toBe("solution");
+				expect(
+					commandAckSchema.parse(
+						await peer.request("v4/command", {
+							commandId: crypto.randomUUID(),
+							clientId: "native-spec-consumer",
+							sessionId: session,
+							type: "stop",
+							payload: {},
+							issuedAt: Date.now(),
+						}),
+					),
+				).toMatchObject({ status: "accepted" });
+				expect(await advancing).toMatchObject({
+					status: "failed",
+					reasonCode: "fault.command.execution",
+					message: "Command cancelled",
+				});
+				peer.trace("Held Team HTTP requests cancelling after public stop");
+				await Promise.all(cancellations);
+				const stopped = await peer.phase(session, "solution");
+				expect(stopped.spec.interaction?.mode).toBe("dev");
+				expect(stopped.spec.useTeam).toBe(true);
+				const after = JSON.parse(await fs.readFile(path.join(config.cwd, ".omp/dev/state.json"), "utf8"));
+				expect(after).toEqual(before);
+				for (const [id, material] of captured)
+					expect(await readMaterial(peer, session, requirements.runId, id, material.version)).toEqual(
+						material.bytes,
+					);
+				expect(provider.requests.some(request => rolePayload(request)?.specDrivenRole === "solution")).toBe(false);
+				const count = provider.requests.length;
+				const followup = await peer.subscribe(
+					stopped.spec.interaction!.recipient!.sessionId,
+					"team-stop-followup",
+					"desktop-continuous",
+				);
+				await command(peer, session, "OMP_SPEC_ORDINARY_CHILD：只解释当前阶段，不重新启动讨论。");
+				await peer.next(
+					frame =>
+						isRecord(frame.params) &&
+						frame.params.subscriptionId === followup.subscriptionId &&
+						strings(frame).some(text => text.includes("OMP_SPEC_ORDINARY_CHILD_DONE")),
+					followup.since,
+				);
+				await peer.phase(session, "solution");
+				expect(provider.requests.filter(request => teamStage(request)).length).toBe(cancellations.length);
+				expect(provider.requests.length).toBeGreaterThan(count);
+				hold = false;
+				await command(peer, session, "/dev back");
+				await peer.phase(session, "requirements");
+				await command(peer, session, "/dev next");
+				await stageReady(peer, session, "solution");
+				expect(provider.requests.filter(request => teamStage(request)).length).toBeGreaterThan(
+					cancellations.length,
+				);
+				expect(provider.failures).toEqual([]);
+				await command(peer, session, "/dev");
+				await peer.close();
+			} finally {
+				release.resolve();
+			}
 		},
 		BUDGET,
 	);
 	test(
-		"bounds native labels, retains readonly runs on session resume and reads history without its workspace",
+		"exit settles the native request; reentry restores history without a model and drop preserves files",
 		async () => {
-			await using root = await TempDir.create("@omp-spec-boundaries-");
-			await using provider = createProviderFixture();
+			await using root = await TempDir.create("@omp-dev-settlement-");
+			const entered = Promise.withResolvers<void>();
+			let aborted = false;
+			await using provider = createProviderFixture({
+				delay: async (request, signal) => {
+					if (continuationText(request) !== "HOLD_NATIVE_FOLLOWUP") return;
+					entered.resolve();
+					await new Promise<void>(resolve => {
+						const stop = () => {
+							aborted = true;
+							resolve();
+						};
+						if (signal.aborted) stop();
+						else signal.addEventListener("abort", stop, { once: true });
+					});
+				},
+			});
 			const config = await fixture(root, provider.baseUrl);
-			const changeId = `long-${"a".repeat(165)}`;
 			await using peer = new SpecPeer(config.cwd, config.env);
 			await peer.ready();
-			const sessionId = await peer.create(config.cwd);
-			expect(await peer.send(sessionId, `/dev start ${changeId} ${MARKER}: ${REQUIREMENT}`)).toMatchObject({
-				status: "accepted",
+			const session = await peer.create(config.cwd);
+			await peer.subscribe(session, "settlement-root", "desktop-continuous");
+			await command(peer, session, "/dev");
+			await command(peer, session, startText);
+			const current = await stageReady(peer, session, "requirements");
+			const captured = await materialBytes(peer, session, current.runId, current.spec);
+			await command(peer, session, "HOLD_NATIVE_FOLLOWUP");
+			await entered.promise;
+			expect(await peer.send(session, "/dev next")).toMatchObject({
+				status: "rejected",
+				reasonCode: "fault.command.invalid",
 			});
-			const pending = await peer.phase(sessionId, "awaiting-specification");
-			expect(pending.spec.changeId).toBe(changeId);
-			expect(pending.label).toBe(changeId.slice(0, 160));
-			await peer.close();
-			const requests = provider.requests.length;
-			await using resumed = new SpecPeer(config.cwd, config.env);
-			await resumed.ready();
-			await resumed.request("session/resume", { sessionId });
-			const subscription = await resumed.subscribe(sessionId, "resumed-history", "desktop-continuous");
-			const snapshot = await resumed.next(
-				frame => isRecord(frame.params) && frame.params.subscriptionId === subscription.subscriptionId,
-				subscription.since,
-			);
-			expect(nativeDetails(snapshot)).toContainEqual(
-				expect.objectContaining({ changeId, live: false, readOnly: true, actions: [] }),
-			);
-			const history = v4ConversationRowsRangeResultSchema.parse(
-				await resumed.request("v4/conversation/rowsRange", { sessionId, limit: 100 }),
-			);
-			expect(provider.requests.length).toBe(requests);
-			await resumed.close();
-			const moved = root.join("moved-project");
-			await fs.rename(config.cwd, moved);
-			try {
-				await using missing = new SpecPeer(root.join("."), config.env);
-				await missing.ready();
-				expect(
-					LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
-						await missing.request("session/read", { sessionId }),
-					).session.sessionId,
-				).toBe(sessionId);
-				expect(
-					v4ConversationRowsRangeResultSchema.parse(
-						await missing.request("v4/conversation/rowsRange", { sessionId, limit: 100 }),
-					).rows,
-				).toEqual(history.rows);
-				expect(await missing.runs(sessionId)).toEqual([]);
-				expect(provider.requests.length).toBe(requests);
-				await missing.close();
-			} finally {
-				await fs.rename(moved, config.cwd);
-			}
+			expect(aborted).toBe(false);
+			await peer.request("session/close", { sessionId: current.stageId });
+			expect(aborted).toBe(true);
+			const count = provider.requests.length;
+			// Action affordances derive from live ownership; the native transcript itself must remain identical.
+			const history = async () => (await rows(peer, current.stageId)).map(row => ({ ...row, actions: undefined }));
+			const nativeHistory = await history();
+			await command(peer, session, "/dev");
+			const restored = await peer.phase(session, "requirements");
+			expect(restored.spec.interaction?.recipient?.sessionId).toBe(current.stageId);
+			expect(await history()).toEqual(nativeHistory);
+			expect(provider.requests.length).toBe(count);
+			await command(peer, session, "/dev drop");
+			await peer.interaction(session, state => state?.mode === "dev" && !state.recipient);
+			for (const [id, material] of captured)
+				expect(await readMaterial(peer, session, current.runId, id, material.version)).toEqual(material.bytes);
+			expect(await history()).toEqual(nativeHistory);
+			expect(provider.requests.length).toBe(count);
 			expect(provider.failures).toEqual([]);
 		},
 		BUDGET,

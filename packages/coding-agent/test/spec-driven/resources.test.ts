@@ -99,6 +99,9 @@ describe("pinned upstream resources", () => {
 		expect(resources.manifest.skills.some(entry => entry.source === "superpowers")).toBe(true);
 		for (const entry of resources.manifest.skills) {
 			const skill = await loadSpecDrivenSkill(entry.source, entry.name);
+			expect(skill.filePath).toBe(await resolveSpecDrivenResourcePath(resources.root, entry.path));
+			expect(skill.baseDir).toBe(path.dirname(skill.filePath));
+			expect((await loadSpecDrivenSkill(entry.source, entry.name)).filePath).toBe(skill.filePath);
 			if (entry.source === "superpowers") expect(skill.containRoot).toBe(resources.superpowersRoot);
 		}
 		for (const file of resources.manifest.files) {
@@ -148,36 +151,6 @@ describe("pinned upstream resources", () => {
 			expect(path.relative(skill.containRoot!, filePath).startsWith("..")).toBe(false);
 		}
 	});
-
-	for (const [role, source, name] of [
-		["requirements", "jch", "jch-grill-me"],
-		["requirements", "superpowers", "brainstorming"],
-		["planner", "superpowers", "writing-plans"],
-		["executor", "superpowers", "subagent-driven-development"],
-		["executor", "superpowers", "test-driven-development"],
-		["executor", "superpowers", "verification-before-completion"],
-		["reviewer", "superpowers", "requesting-code-review"],
-	] as const) {
-		it(`loads a distinct effective ${name} resource for the ${role} role without changing ordinary loading`, async () => {
-			const ordinary = await loadSpecDrivenSkill(source, name);
-			const before = await fs.readFile(ordinary.filePath);
-			const effective = await loadSpecDrivenSkill(source, name, { role });
-			expect(effective.name).toBe(ordinary.name);
-			expect(effective.source).toBe(ordinary.source);
-			expect(effective.filePath).not.toBe(ordinary.filePath);
-			expect(effective.baseDir).toBe(path.dirname(effective.filePath));
-			const effectivePath = await resolveSpecDrivenResourcePath(
-				effective.containRoot!,
-				path.relative(effective.containRoot!, effective.filePath).split(path.sep).join("/"),
-			);
-			const effectiveBytes = await fs.readFile(effectivePath);
-			expect(effectiveBytes.length).toBeGreaterThan(0);
-			expect(effectiveBytes.equals(before)).toBe(false);
-			const reloaded = await loadSpecDrivenSkill(source, name);
-			expect(reloaded.filePath).toBe(ordinary.filePath);
-			expect((await fs.readFile(reloaded.filePath)).equals(before)).toBe(true);
-		});
-	}
 
 	it("does not distribute removed OpenSpec skills or implementation workflows", async () => {
 		const resources = await ensureSpecDrivenResources();

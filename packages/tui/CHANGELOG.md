@@ -15,7 +15,7 @@
 - Compact `bash` summaries without an explicit intent skip leading assignments and context-only builtins (`cd`, `export`, `set`, …) and keep the remaining command text on one line, collapsed and truncated to the row width; leading assignment values stay hidden.
 - Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals. The actual busy loader shows tool intent without duplicating it.
 - Each continuous write/edit run retains the last three actual-write cards with upstream expansion and scrolling behavior; tool history is not cleared on the next input.
-- Compact thinking appears only as a live two-row preview above the input, without accumulating thinking blocks in history; detailed mode retains original thinking, and Bash output, timing, and background feedback use upstream rendering.
+- Compact thinking shows only the latest nonempty physical line above the input, skipping trailing whitespace and ANSI-only rows, with the host reserving its row even when thinking is empty or hidden to prevent layout jumps; detailed mode retains original thinking, and Bash output, timing, and background feedback use upstream rendering.
 - Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
@@ -27,6 +27,11 @@
 
 ### Fixed
 
+- Keep UI status notices in place without splitting surrounding compact tool runs or consuming preview slots.
+- Keep Agent `Message` calls in the surrounding compact tool run instead of treating them as file-write boundaries.
+- Keep `Process` input, mode changes, and cancellation in the surrounding compact tool run without changing process behavior or critical feedback.
+- Keep `Config`, non-file device calls, and device help in compact ordinary tool runs while preserving file-write boundaries and critical feedback.
+- Keep compact tool-run summaries and ordinary preview rows adjacent, without blank lines between them; surrounding messages, write cards, and critical feedback retain their spacing.
 - Preserve cumulative elapsed time on compact foreground-to-background tool rows, including rebuilt background rows and measured Bash completion times.
 - Keep one compact tool-run summary when its calls retire into history in separate batches.
 - Keep working, retry, and compaction status visible when compact previews run out of screen space.

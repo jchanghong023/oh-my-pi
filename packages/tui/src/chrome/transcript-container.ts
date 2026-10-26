@@ -12,6 +12,7 @@ import { isNativeSettled, settleNative } from "../native/settle";
 import { isUsageRowBlock } from "../overlays/usage-row";
 import { isToolActivityComponent, isCompactToolActivityComponent, type CompactToolCall } from "./tool-activity";
 import { directPlacementLift, ImageProtocol, iterm2ImagePayload, TERMINAL } from "../terminal-capabilities";
+import { StatusNotice } from "./status-notice";
 
 interface CompactRunComponent extends Component {
 	getCompactToolCalls(): readonly CompactToolCall[];
@@ -328,6 +329,7 @@ export class TranscriptContainer extends Container {
 			failures: number;
 			ids: ReadonlySet<string | object>;
 			summary?: { archived: boolean };
+			run?: Component;
 		}
 	>();
 	#compactNative = new WeakMap<Component, Component>();
@@ -350,6 +352,7 @@ export class TranscriptContainer extends Container {
 			const selected = new Set(facts.slice(-2).map(call => call.id));
 			const writes = run.filter(component => component.isCompactActualFileWrite?.()).slice(-3);
 			const summary = !writeRun && facts.length > 2 ? { archived: false } : undefined;
+			const runId = writeRun ? undefined : (this.#compactSelection.get(run[0]!)?.run ?? run[0]!);
 			for (const component of run) {
 				component.setCompactToolSelection?.(selected);
 				const visible =
@@ -357,7 +360,14 @@ export class TranscriptContainer extends Container {
 					(writeRun
 						? !component.isCompactActualFileWrite?.() || writes.includes(component)
 						: component.getCompactToolCalls().some(call => selected.has(call.id)));
-				this.#compactSelection.set(component, { visible, count: 0, failures: 0, ids: selected, summary });
+				this.#compactSelection.set(component, {
+					visible,
+					count: 0,
+					failures: 0,
+					ids: selected,
+					summary,
+					run: runId,
+				});
 			}
 			if (!writeRun && facts.length > 2) {
 				const first = this.#compactSelection.get(run[0]!)!;
@@ -383,6 +393,8 @@ export class TranscriptContainer extends Container {
 					component.getCompactToolCalls().some(call => selection.ids.has(call.id));
 				continue;
 			}
+			// UI notices stay in place without ending the surrounding tool run.
+			if (component instanceof StatusNotice) continue;
 			if (!isCompactRunComponent(component)) {
 				// Empty upstream blocks (hidden thinking, attached feedback) are not boundaries.
 				if (
@@ -409,6 +421,19 @@ export class TranscriptContainer extends Container {
 			isCompactRunComponent(component)
 			? this.#compactSelection.get(component)
 			: undefined;
+	}
+
+	/** Only ordinary previews in the same compact run share a line-tight boundary. */
+	#blockGap(previous: Component | undefined, current: Component | undefined): number {
+		if (previous === undefined || current === undefined) return 1;
+		const before = this.#compactDecision(previous);
+		const after = this.#compactDecision(current);
+		return before?.run !== undefined &&
+			before.run === after?.run &&
+			!(previous as CompactRunComponent).hasCompactCriticalFeedback?.() &&
+			!(current as CompactRunComponent).hasCompactCriticalFeedback?.()
+			? 0
+			: 1;
 	}
 
 	#compactSummary(component: Component, width: number): string | undefined {
@@ -661,9 +686,13 @@ export class TranscriptContainer extends Container {
 		this.#syncEntries();
 		this.#settleFinalized();
 		let total = 0;
+		let previous: Component | undefined;
 		for (const { entry, index } of this.#liveEntries()) {
 			const block = this.#liveBlock(entry, index, width).rows;
-			if (block.length > 0) total += block.length + (total > 0 ? 1 : 0);
+			if (block.length > 0) {
+				total += block.length + (total > 0 ? this.#blockGap(previous, entry.component) : 0);
+				previous = entry.component;
+			}
 			if (total > limit) break;
 		}
 		return total;
@@ -802,12 +831,18 @@ export class TranscriptContainer extends Container {
 			);
 		}
 		let total = 0;
-		for (const block of blocks) total += block.length + (total > 0 ? 1 : 0);
+		for (let index = 0; index < blocks.length; index++)
+			total +=
+				blocks[index]!.length +
+				(index > 0 ? this.#blockGap(shown[index - 1]!.entry.component, shown[index]!.entry.component) : 0);
 		if (total <= capacity) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
 			for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
-				if (output.length > 0) {
+				if (
+					output.length > 0 &&
+					this.#blockGap(shown[blockIndex - 1]!.entry.component, shown[blockIndex]!.entry.component)
+				) {
 					output.push("");
 					owners.push(undefined);
 				}
@@ -972,17 +1007,24 @@ export class TranscriptContainer extends Container {
 		let liveRows = 0;
 		let keep = 0;
 		let fits = true;
+		let nextComponent: Component | undefined;
+		let tailHead: Component | undefined;
 		for (let cursor = live.length - 1; cursor >= 0; cursor--) {
 			const candidate = live[cursor]!;
 			const height = this.#liveBlock(candidate.entry, candidate.index, width).rows.length;
-			if (height > 0) liveRows += height + (liveRows > 0 ? 1 : 0);
+			const gap = height > 0 && liveRows > 0 ? this.#blockGap(candidate.entry.component, nextComponent) : 0;
+			if (height > 0) {
+				liveRows += height + gap;
+				nextComponent = candidate.entry.component;
+			}
 			if (fits) {
-				const next = height > 0 ? tailRows + height + (tailRows > 0 ? 1 : 0) : tailRows;
+				const next = height > 0 ? tailRows + height + (tailRows > 0 ? gap : 0) : tailRows;
 				if (next > room) {
 					fits = false;
 					keep = cursor + 1;
 				} else {
 					tailRows = next;
+					if (height > 0) tailHead = candidate.entry.component;
 				}
 			}
 			if (!fits && appendHead === undefined) break;
@@ -1033,7 +1075,7 @@ export class TranscriptContainer extends Container {
 		let split: { index: number; rows: readonly string[]; split: RowSplit } | undefined;
 		if (policy === "pressure" && keep > 0 && limit === this.#frontier + keep) {
 			const boundary = live[keep - 1]!;
-			const visible = room - tailRows - (tailRows > 0 ? 1 : 0);
+			const visible = room - tailRows - (tailRows > 0 ? this.#blockGap(boundary.entry.component, tailHead) : 0);
 			if (boundary.entry.state === "settled" && visible > 0) {
 				const offer = this.#splitOffer(boundary.entry, width, visible);
 				if (offer === "whole") {
@@ -1142,14 +1184,16 @@ export class TranscriptContainer extends Container {
 		const cap = Math.max(0, Math.trunc(maxRows));
 		if (cap === 0) return EMPTY_ROWS;
 		const rows: string[] = [];
+		let next: Component | undefined;
 		for (let index = this.#entries.length - 1; index >= 0; index--) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			const block = trimBlankEdges(this.#renderComponent(entry.component, width));
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (rows.length > 0) rows.unshift("");
+			if (rows.length > 0 && this.#blockGap(entry.component, next)) rows.unshift("");
 			rows.unshift(...block);
+			next = entry.component;
 			if (rows.length >= cap) break;
 		}
 		return rows.length > cap ? rows.slice(rows.length - cap) : rows;
@@ -1195,14 +1239,16 @@ export class TranscriptContainer extends Container {
 		this.#syncEntries();
 		this.#childStartRows.clear();
 		const rows: string[] = [];
+		let previous: Component | undefined;
 		for (const entry of this.#entries) {
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
 			const block = this.#renderEntry(entry, width);
 			if (entry.state === "committed") this.#releaseRenderCaches(entry);
 			if (block.length === 0) continue;
-			if (rows.length > 0) rows.push("");
+			if (rows.length > 0 && this.#blockGap(previous, entry.component)) rows.push("");
 			this.#childStartRows.set(entry.component, rows.length);
 			rows.push(...block);
+			previous = entry.component;
 		}
 		return rows;
 	}
@@ -1471,6 +1517,7 @@ export class TranscriptContainer extends Container {
 		const rows: string[] = [];
 		const startedAt = budgetMs === undefined ? 0 : performance.now();
 		let reached = start;
+		let previous: Component | undefined;
 		for (let index = start; index < end; index++) {
 			const entry = this.#entries[index]!;
 			this.#setAllocation(entry.component, Number.MAX_SAFE_INTEGER, this.#lastFrame);
@@ -1488,12 +1535,23 @@ export class TranscriptContainer extends Container {
 			const block = rendered.slice(emittedRows);
 			reached = index + 1;
 			if (block.length > 0) {
-				if (rows.length > 0) rows.push("");
+				if (rows.length > 0 && this.#blockGap(previous, entry.component)) rows.push("");
 				rows.push(...block);
+				previous = entry.component;
 			}
 			if (budgetMs !== undefined && performance.now() - startedAt >= budgetMs) break;
 		}
-		if (trailingBlank && rows.length > 0) rows.push("");
+		if (trailingBlank && rows.length > 0) {
+			let next: Component | undefined;
+			for (let index = reached; index < this.#entries.length; index++) {
+				const component = this.#entries[index]!.component;
+				if (this.#renderComponent(component, width).length > 0) {
+					next = component;
+					break;
+				}
+			}
+			if (this.#blockGap(previous, next)) rows.push("");
+		}
 		return { rows, end: reached };
 	}
 

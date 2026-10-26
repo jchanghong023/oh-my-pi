@@ -729,7 +729,7 @@ describe("ZCode session interactions", () => {
 		expect(receipt.accepted).toBe(true);
 		await receipt.completion;
 	});
-	it("runs registered native extensions, Goal controls and compact validation without model fallback", async () => {
+	it("runs native extensions, enforces Loop/Dev exclusion and controls Goal without model fallback", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-native-command-"));
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "native-command-test-key");
@@ -798,6 +798,15 @@ describe("ZCode session interactions", () => {
 		// 不发现外部插件；以下保留真实 native handler、状态所有者和 compaction 引擎。
 		host.initialize = async () => {};
 		try {
+			await (
+				await host.dispatch("/loop 2")
+			).completion;
+			await expect(host.dispatch("/dev")).rejects.toThrow("Loop");
+			host.cancel();
+			await expect(host.dispatch("/dev")).rejects.toThrow("Loop");
+			await (
+				await host.dispatch("/loop")
+			).completion;
 			await session.prompt("first turn");
 			await session.prompt("second turn");
 			expect(await host.catalog()).toContainEqual(
@@ -973,6 +982,19 @@ describe("ZCode session interactions", () => {
 				work = busy === "streaming" ? session.prompt("busy turn") : session.compact().catch(error => error);
 				await started.promise;
 				expect(session.isStreaming).toBe(busy === "streaming");
+				if (busy === "streaming") {
+					await session.appendCustomMessage(
+						{ customType: "zcode-command-output", content: "live command feedback", display: true },
+						{ waitForIdle: false, signal: AbortSignal.timeout(5000) },
+					);
+					expect(session.isStreaming).toBe(true);
+					expect(session.messages).toContainEqual(
+						expect.objectContaining({ role: "custom", content: "live command feedback" }),
+					);
+					expect(sessionManager.getBranch()).toContainEqual(
+						expect.objectContaining({ type: "custom_message", content: "live command feedback" }),
+					);
+				}
 				expect(session.isCompacting).toBe(busy === "compacting");
 				const inputs = [
 					{ text: "/goal set replacement objective", inputId: "goal-set" },

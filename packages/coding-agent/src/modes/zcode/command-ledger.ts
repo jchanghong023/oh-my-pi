@@ -12,6 +12,9 @@ const PRODUCED_TYPE = "zcode_produced_session";
 
 interface LedgerManager {
 	get(id: string): { session: { sessionManager: SessionManager; isStreaming: boolean } } | undefined;
+	nativeChild?(
+		id: string,
+	): Promise<{ session?: { sessionManager: SessionManager; isStreaming: boolean } } | undefined>;
 	list(): Promise<readonly Pick<SessionInfo, "id" | "path">[]>;
 	readCommandEntries(info: Pick<SessionInfo, "id" | "path">): Promise<readonly SessionEntry[] | undefined>;
 	listCommandJournals?(): Promise<readonly string[]>;
@@ -148,15 +151,21 @@ export class ZCodeCommandLedger {
 					ack.result?.type === "forkAssistant"
 						? ack.result.sessionId
 						: envelope.sessionId;
-				if (destination && this.manager.get(destination))
-					await this.#persist(destination, RECEIPT_TYPE, {
-						version: 1,
-						key: { sessionId: envelope.sessionId, commandId: envelope.commandId },
-						fingerprint: identity.fingerprint,
-						epoch: this.#epoch,
-						ack,
-						journalSessionId: destination,
-					});
+				const writer = destination ? await this.#journalManager(destination) : undefined;
+				if (destination && writer)
+					await this.#persist(
+						destination,
+						RECEIPT_TYPE,
+						{
+							version: 1,
+							key: { sessionId: envelope.sessionId, commandId: envelope.commandId },
+							fingerprint: identity.fingerprint,
+							epoch: this.#epoch,
+							ack,
+							journalSessionId: destination,
+						},
+						writer,
+					);
 				else if (ack.status === "accepted" && envelope.type !== "deleteSession")
 					throw new Error("Accepted command has no writable result journal");
 				return ack;
@@ -224,11 +233,11 @@ export class ZCodeCommandLedger {
 			ack.result?.type === "forkAssistant"
 				? ack.result.sessionId
 				: key.sessionId;
-		const live = destination ? this.manager.get(destination) : undefined;
+		const live = destination ? await this.#journalManager(destination) : undefined;
 		if (!destination || !inputId(ack)) return ack;
 		// 冷 owner 的缓存仍须核对输入终态，但只读取执行时确认的目标，不能重新枚举无关 journal。
 		const entries = live
-			? live.session.sessionManager.getEntries()
+			? live.getEntries()
 			: cached.journal
 				? await this.manager.readCommandEntries(cached.journal)
 				: undefined;
@@ -239,8 +248,14 @@ export class ZCodeCommandLedger {
 		).ack;
 	}
 
-	async #persist(id: string, customType: string, fact: Fact): Promise<void> {
-		const manager = this.manager.get(id)?.session.sessionManager;
+	async #journalManager(id: string): Promise<SessionManager | undefined> {
+		return (
+			this.manager.get(id)?.session.sessionManager ?? (await this.manager.nativeChild?.(id))?.session?.sessionManager
+		);
+	}
+
+	async #persist(id: string, customType: string, fact: Fact, writer?: SessionManager): Promise<void> {
+		const manager = writer ?? (await this.#journalManager(id));
 		if (!manager) throw new Error(`No active journal for command result: ${id}`);
 		const file = manager.getSessionFile();
 		const cached = this.#decisions.get(keyOf(fact.key));

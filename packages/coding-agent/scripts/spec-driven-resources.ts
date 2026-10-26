@@ -5,8 +5,8 @@
  *   bun install --cwd packages/coding-agent/src/spec-driven/vendor/staging/openspec --ignore-scripts --production
  *   bun install --cwd packages/coding-agent/src/spec-driven/vendor/staging/openspec --ignore-scripts --lockfile-only --save-text-lockfile
  *   bun packages/coding-agent/scripts/spec-driven-resources.ts --embed
- *   bun packages/coding-agent/scripts/spec-driven-resources.ts --refresh-methods
- * --refresh-methods rebuilds only controlled methods from verified bundled originals, offline.
+ *   bun packages/coding-agent/scripts/spec-driven-resources.ts --refresh
+ * --refresh verifies the current bundle and removes obsolete duplicate resource trees offline.
  * Check in archive.generated.ts AND dependency-lock.bun with the implementation.
  * Regeneration restores the checked-in lock and requires --frozen-lockfile at install.
  */
@@ -15,14 +15,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import type {
-	SpecDrivenMethodEntry,
-	SpecDrivenResourceManifest,
-	SpecDrivenSkillEntry,
-} from "../src/spec-driven/resources";
+import type { SpecDrivenResourceManifest, SpecDrivenSkillEntry } from "../src/spec-driven/resources";
 import superpowersDescriptionSource from "../src/prompts/skills/superpowers-descriptions.md" with { type: "text" };
 import openspecAdaptationSource from "../src/prompts/spec-driven-openspec.md" with { type: "text" };
-import methodAdaptationSource from "../src/prompts/spec-driven-methods.md" with { type: "text" };
+import agentMappingSource from "../src/prompts/spec-driven-methods.md" with { type: "text" };
+import * as bundled from "../src/spec-driven/vendor/archive.generated";
 
 const vendor = path.resolve(import.meta.dir, "../src/spec-driven/vendor");
 const staging = path.join(vendor, "staging");
@@ -36,16 +33,8 @@ const jchFiles = {
 	"SKILL.md": "c23875b96e374af17fd10aaa3efa7daaf4c54ad086ef47d001dc69be97e01e58",
 	"agents/openai.yaml": "0c035fc04e9bd95ab107eb1232bc2df0ee61e4e74ba218cd61d80410a136fdb1",
 };
-type MethodPatch = { before: string; after: string } | { start: string; end?: string; body: string };
-const methodAdaptation = parseYaml(methodAdaptationSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
-	adaptation: string;
+const agentMapping = parseYaml(agentMappingSource.match(/```yaml\n([\s\S]*?)\n```/)![1]!) as {
 	agents: Record<string, "task" | "reviewer">;
-	methods: {
-		source: "jch" | "superpowers";
-		name: string;
-		roles: SpecDrivenMethodEntry["role"][];
-	}[];
-	files: Record<string, MethodPatch[]>;
 };
 const superpowersSkills = [
 	"brainstorming",
@@ -187,76 +176,13 @@ function adaptSuperpowersSkill(name: string, raw: Uint8Array): Uint8Array {
 }
 
 function adaptSuperpowersAgent(relative: string, raw: Uint8Array): Uint8Array {
-	const agent = methodAdaptation.agents[relative];
+	const agent = agentMapping.agents[relative];
 	if (!agent) return raw;
 	const content = Buffer.from(raw).toString("utf8");
 	if (!content.includes("general-purpose")) throw new Error(`Upstream dispatch agent missing: ${relative}`);
 	return Buffer.from(content.replaceAll("general-purpose", agent));
 }
 
-function adaptMethodFile(relative: string, raw: Uint8Array): Uint8Array {
-	const patches = methodAdaptation.files[relative];
-	if (!patches) return raw;
-	let content = Buffer.from(raw).toString("utf8").replace(/\r\n/g, "\n");
-	for (const patch of patches) {
-		const anchor = "before" in patch ? patch.before : patch.start;
-		const start = content.indexOf(anchor);
-		if (start < 0 || content.indexOf(anchor, start + anchor.length) >= 0)
-			throw new Error(`Controlled method anchor missing or ambiguous: ${relative}: ${anchor}`);
-		if ("before" in patch) {
-			content = content.slice(0, start) + patch.after + content.slice(start + anchor.length);
-		} else {
-			const end = patch.end === undefined ? content.length : content.indexOf(patch.end, start + anchor.length);
-			if (end < 0) throw new Error(`Controlled method section end missing: ${relative}: ${patch.end}`);
-			content = content.slice(0, start) + patch.body + content.slice(end);
-		}
-	}
-	return Buffer.from(content);
-}
-
-function embedMethods(
-	entries: Record<string, Uint8Array>,
-	executable: Set<string>,
-	originals: Record<string, Uint8Array> = { ...entries },
-	alreadyAdaptedAgents: ReadonlySet<string> = new Set(),
-): SpecDrivenMethodEntry[] {
-	const methods: SpecDrivenMethodEntry[] = [];
-	for (const method of methodAdaptation.methods) {
-		const originalPath = `${method.source}/skills/${method.name}/SKILL.md`;
-		const original = originals[originalPath];
-		if (!original) throw new Error(`Missing controlled method source: ${originalPath}`);
-		for (const role of method.roles) {
-			const prefix = `${method.source}/methods/${role}/skills/${method.name}/`;
-			const originalPrefix = `${method.source}/skills/${method.name}/`;
-			for (const [relative, raw] of Object.entries(originals)) {
-				if (!relative.startsWith(originalPrefix)) continue;
-				const target = prefix + relative.slice(originalPrefix.length);
-				entries[target] = adaptMethodFile(
-					relative,
-					alreadyAdaptedAgents.has(relative) ? raw : adaptSuperpowersAgent(relative, raw),
-				);
-				if (executable.has(relative)) executable.add(target);
-			}
-			const effectivePath = `${prefix}SKILL.md`;
-			const effective = Buffer.from(entries[effectivePath]!).toString("utf8");
-			entries[effectivePath] = Buffer.from(
-				/^disable-model-invocation: true$/m.test(effective) ? effective : hidden(effective),
-			);
-			methods.push({
-				source: method.source,
-				name: method.name,
-				role,
-				path: effectivePath,
-				originalPath:
-					method.source === "superpowers" ? `superpowers/original-skills/${method.name}/SKILL.md` : originalPath,
-				originalSha256: crypto.createHash("sha256").update(original).digest("hex"),
-				sha256: crypto.createHash("sha256").update(entries[effectivePath]!).digest("hex"),
-				adaptation: methodAdaptation.adaptation,
-			});
-		}
-	}
-	return methods;
-}
 function normalizeTar(bytes: Uint8Array): void {
 	for (let offset = 0; offset + 512 <= bytes.length;) {
 		const header = bytes.subarray(offset, offset + 512);
@@ -604,7 +530,6 @@ async function embed(): Promise<void> {
 		entries[`jch/skills/jch-grill-me/${relative}`] = raw;
 	}
 	skills.push({ source: "jch", name: "jch-grill-me", path: "jch/skills/jch-grill-me/SKILL.md" });
-	const methods = embedMethods(entries, executable);
 	for (const [index, command] of adaptOpenSpecEntries(entries, commands).entries()) {
 		if (!command.content || !command.description) throw new Error("Invalid pinned upstream command template");
 		const name = `opsx-${requirementsWorkflows[index]![0]}`;
@@ -628,7 +553,7 @@ async function embed(): Promise<void> {
 		entries[relative] = adaptSuperpowersSkill(name, raw);
 		skills.push({ source: "superpowers", name, path: relative });
 	}
-	for (const relative of Object.keys(methodAdaptation.agents)) {
+	for (const relative of Object.keys(agentMapping.agents)) {
 		const raw = entries[relative];
 		if (!raw) throw new Error(`Missing upstream Superpowers dispatch resource: ${relative}`);
 		entries[relative] = adaptSuperpowersAgent(relative, raw);
@@ -672,7 +597,6 @@ async function embed(): Promise<void> {
 		openspec: { version, integrity: source.integrity },
 		superpowers: { version: superpowersVersion, revision },
 		jch: { revision: jchRevision },
-		methods,
 		skills,
 		files: [],
 	};
@@ -712,8 +636,7 @@ async function writeEmbeddedArchive(
 	);
 }
 
-async function refreshMethods(): Promise<void> {
-	const bundled = await import("../src/spec-driven/vendor/archive.generated");
+async function refresh(): Promise<void> {
 	const bytes = Buffer.from(bundled.archiveBase64, "base64");
 	if (crypto.createHash("sha256").update(bytes).digest("hex") !== bundled.archiveSha256)
 		throw new Error("Bundled resource archive digest mismatch");
@@ -738,24 +661,6 @@ async function refreshMethods(): Promise<void> {
 		entries[file.path] = raw;
 		if (file.executable) executable.add(file.path);
 	}
-	const originals = { ...entries };
-	const alreadyAdaptedAgents = new Set(Object.keys(methodAdaptation.agents));
-	for (const method of methodAdaptation.methods) {
-		const sourcePath = `${method.source}/skills/${method.name}/SKILL.md`;
-		const originalPath =
-			method.source === "superpowers" ? `superpowers/original-skills/${method.name}/SKILL.md` : sourcePath;
-		const original = entries[originalPath];
-		const prior = manifest.methods.find(item => item.source === method.source && item.name === method.name);
-		if (
-			!original ||
-			!prior ||
-			prior.originalPath !== originalPath ||
-			crypto.createHash("sha256").update(original).digest("hex") !== prior.originalSha256
-		)
-			throw new Error(`Missing verified bundled method original: ${originalPath}`);
-		originals[sourcePath] = original;
-		alreadyAdaptedAgents.delete(sourcePath);
-	}
 	for (const [relative, digest] of Object.entries(jchFiles)) {
 		const raw = entries[`jch/skills/jch-grill-me/${relative}`];
 		if (!raw || crypto.createHash("sha256").update(raw).digest("hex") !== digest)
@@ -766,18 +671,18 @@ async function refreshMethods(): Promise<void> {
 		delete entries[name];
 		executable.delete(name);
 	}
-	// Ordinary nested dispatch resources already carry the pinned OMP agent mapping;
-	// all other method patches start from their untouched bundled bytes.
-	manifest.methods = embedMethods(entries, executable, originals, alreadyAdaptedAgents);
-	await writeEmbeddedArchive(entries, manifest, executable);
+	// Preserve every remaining byte, including ordinary dispatch mappings and upstream originals.
+	const { openspec, superpowers, jch, skills } = manifest;
+	const refreshed: SpecDrivenResourceManifest = { openspec, superpowers, jch, skills, files: [] };
+	await writeEmbeddedArchive(entries, refreshed, executable);
 }
 
 if (import.meta.main) {
 	if (process.argv.slice(2).join(" ") === "--prepare") await prepare();
 	else if (process.argv.slice(2).join(" ") === "--embed") await embed();
-	else if (process.argv.slice(2).join(" ") === "--refresh-methods") await refreshMethods();
+	else if (process.argv.slice(2).join(" ") === "--refresh") await refresh();
 	else
 		throw new Error(
-			"Expected exactly --prepare, --embed or --refresh-methods (dependency installation is a separate parent-owned step)",
+			"Expected exactly --prepare, --embed or --refresh (dependency installation is a separate parent-owned step)",
 		);
 }

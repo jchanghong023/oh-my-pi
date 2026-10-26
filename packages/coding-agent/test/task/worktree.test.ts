@@ -839,17 +839,31 @@ describe("detachGitDir", () => {
 
 	it("isolates recursive submodule git state from a linked worktree", async () => {
 		const leaf = await createGitRepo();
-		await runGit(leaf, ["config", "user.email", "src@example.com"]);
-		await runGit(leaf, ["config", "user.name", "Source User"]);
 		await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
 		await runGit(leaf, ["add", "."]);
-		await runGit(leaf, ["commit", "-q", "-m", "leaf"]);
+		await runGit(leaf, [
+			"-c",
+			"user.email=src@example.com",
+			"-c",
+			"user.name=Source User",
+			"commit",
+			"-q",
+			"-m",
+			"leaf",
+		]);
 
 		const middle = await createGitRepo();
-		await runGit(middle, ["config", "user.email", "src@example.com"]);
-		await runGit(middle, ["config", "user.name", "Source User"]);
 		await runGit(middle, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "nested"]);
-		await runGit(middle, ["commit", "-q", "-am", "middle"]);
+		await runGit(middle, [
+			"-c",
+			"user.email=src@example.com",
+			"-c",
+			"user.name=Source User",
+			"commit",
+			"-q",
+			"-am",
+			"middle",
+		]);
 
 		const { wt } = await makeLinkedWorktree();
 		await runGit(wt, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", middle, "packages/module"]);
@@ -892,11 +906,7 @@ describe("detachGitDir", () => {
 					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
 					expect(admin.startsWith(rootReal + path.sep)).toBe(true);
 				}
-				// Submodule clones don't inherit the superproject's identity; CI has no global one.
-				for (const dir of [module, nested]) {
-					await runGit(dir, ["config", "user.email", "src@example.com"]);
-					await runGit(dir, ["config", "user.name", "Source User"]);
-				}
+				// Submodule clones don't inherit identity; supply it only to the commits below.
 				await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
 				expect(await runGit(nested, ["diff", "--", "leaf.txt"])).toContain("+isolated");
 				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);
@@ -904,10 +914,28 @@ describe("detachGitDir", () => {
 				// A Windows checkout may apply core.autocrlf to the source tree.
 				const sourceLeaf = await fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8");
 				expect(sourceLeaf.replace(/\r\n/g, "\n")).toBe("leaf\n");
-				await runGit(nested, ["commit", "-q", "-am", "isolated leaf"]);
+				await runGit(nested, [
+					"-c",
+					"user.email=src@example.com",
+					"-c",
+					"user.name=Source User",
+					"commit",
+					"-q",
+					"-am",
+					"isolated leaf",
+				]);
 				lastLeafCommit = await runGit(nested, ["rev-parse", "HEAD"]);
 				await runGit(module, ["add", "nested"]);
-				await runGit(module, ["commit", "-q", "-m", "isolated module"]);
+				await runGit(module, [
+					"-c",
+					"user.email=src@example.com",
+					"-c",
+					"user.name=Source User",
+					"commit",
+					"-q",
+					"-m",
+					"isolated module",
+				]);
 				lastModuleCommit = await runGit(module, ["rev-parse", "HEAD"]);
 				await runGit(root, ["add", "packages/module"]);
 				const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;

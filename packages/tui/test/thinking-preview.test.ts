@@ -83,7 +83,7 @@ describe("compact transient thinking preview", () => {
 		}
 	});
 
-	it("lays out formatted Markdown at the current width before selecting the latest two physical rows", () => {
+	it("lays out formatted Markdown at the current width before selecting the latest physical row", () => {
 		const source = "alpha **beta** gamma delta epsilon zeta eta theta iota kappa";
 		const component = assistant(true);
 		component.updateContent(thinking(source), { transient: true });
@@ -94,21 +94,30 @@ describe("compact transient thinking preview", () => {
 		markdown.transientRenderCache = true;
 		for (const width of [18, 32, 12]) {
 			const rows = component.renderCompactThinkingPreview(width);
-			expect(plain(rows)).toEqual(plain(markdown.render(width).slice(-2)));
-			expect(rows[0]).toBe(theme.fg("dim", Bun.stripANSI(rows[0]!)));
-			expect(rows[1]).toBe(theme.fg("thinkingText", Bun.stripANSI(rows[1]!)));
+			expect(plain(rows)).toEqual(plain(markdown.render(width).slice(-1)));
+			expect(rows[0]).toBe(theme.fg("thinkingText", Bun.stripANSI(rows[0]!)));
 		}
 	});
 
-	it("reserves a blank second row for one line and keeps actual blank rows in the tail", () => {
+	it("keeps short thinking and multiline thinking within a single row", () => {
 		const component = assistant(true);
 		component.updateContent(thinking("reasoning"), { transient: true });
-		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["reasoning", ""]);
+		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["reasoning"]);
 		component.updateContent(thinking("first\n\nlatest"), { transient: true });
 		const rows = plain(component.renderCompactThinkingPreview(40));
-		expect(rows).toHaveLength(2);
-		expect(rows[0]!.trim()).toBe("");
-		expect(rows[1]).toContain("latest");
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toContain("latest");
+	});
+
+	it("skips trailing styled blank rows without losing the latest visible thinking during streaming", () => {
+		const component = assistant(true);
+		const source = "older\n\n**latest 最新**\n\n<!-- pending -->";
+		component.updateContent(thinking(source), { transient: true });
+		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["latest 最新"]);
+		component.updateContent(thinking(`${source}\n\nnewest`), { transient: true });
+		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["newest"]);
+		component.updateContent(thinking("<!-- no visible text -->"), { transient: true });
+		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 	});
 
 	it("does not treat thinking between answer blocks as a visible transcript boundary", () => {
@@ -154,7 +163,7 @@ describe("compact transient thinking preview", () => {
 		];
 		for (const content of transitions) {
 			component.updateContent(thinking("reasoning"), { transient: true });
-			expect(component.renderCompactThinkingPreview(40)).toHaveLength(2);
+			expect(component.renderCompactThinkingPreview(40)).toHaveLength(1);
 			component.updateContent(message(content), { transient: true });
 			expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 		}
@@ -170,7 +179,7 @@ describe("compact transient thinking preview", () => {
 			expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 		}
 		component.updateContent(thinking("old reasoning"), { transient: true });
-		expect(component.renderCompactThinkingPreview(40)).toHaveLength(2);
+		expect(component.renderCompactThinkingPreview(40)).toHaveLength(1);
 		component.setHideThinkingBlock(true);
 		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 		component.updateContent(thinking("new reasoning"), { transient: true });

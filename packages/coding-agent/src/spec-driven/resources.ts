@@ -6,7 +6,6 @@ import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import type { Skill } from "../extensibility/skills";
 import { isModelInvocableSuperpowersSkill } from "./skill-policy";
-import type { SpecStageRole } from "./types";
 import { archiveBase64, archiveSha256, resourceManifest } from "./vendor/archive.generated";
 
 export type SpecDrivenResourceSource = "openspec" | "superpowers" | "jch";
@@ -15,18 +14,10 @@ export interface SpecDrivenSkillEntry {
 	name: string;
 	path: string;
 }
-export interface SpecDrivenMethodEntry extends SpecDrivenSkillEntry {
-	role: SpecStageRole | "reviewer";
-	originalPath: string;
-	originalSha256: string;
-	sha256: string;
-	adaptation: string;
-}
 export interface SpecDrivenResourceManifest {
 	openspec: { version: string; integrity: string };
 	superpowers: { version: string; revision: string };
 	jch: { revision: string };
-	methods: readonly SpecDrivenMethodEntry[];
 	skills: readonly SpecDrivenSkillEntry[];
 	files: readonly { path: string; sha256: string; executable: boolean }[];
 }
@@ -120,22 +111,10 @@ async function extractResources(): Promise<SpecDrivenResources> {
 	};
 }
 
-export async function loadSpecDrivenSkill(
-	source: SpecDrivenResourceSource,
-	name: string,
-	options: { role?: SpecStageRole | "reviewer" } = {},
-): Promise<Skill> {
+export async function loadSpecDrivenSkill(source: SpecDrivenResourceSource, name: string): Promise<Skill> {
 	const resources = await ensureSpecDrivenResources();
-	const original = resources.manifest.skills.find(skill => skill.source === source && skill.name === name);
-	if (!original) throw new Error(`Unknown bundled ${source} skill: ${name}`);
-	const method = options.role
-		? resources.manifest.methods.find(
-				skill => skill.source === source && skill.name === name && skill.role === options.role,
-			)
-		: undefined;
-	if (options.role && !method)
-		throw new Error(`Bundled ${source} skill ${name} is not allowed for role ${options.role}`);
-	const entry = method ?? original;
+	const entry = resources.manifest.skills.find(skill => skill.source === source && skill.name === name);
+	if (!entry) throw new Error(`Unknown bundled ${source} skill: ${name}`);
 	const containRoot = {
 		openspec: resources.openspecRoot,
 		superpowers: resources.superpowersRoot,
@@ -147,18 +126,6 @@ export async function loadSpecDrivenSkill(
 	const digest = resources.manifest.files.find(file => file.path === entry.path)?.sha256;
 	if (!digest || crypto.createHash("sha256").update(content).digest("hex") !== digest)
 		throw new Error(`Bundled resource digest mismatch: ${entry.path}`);
-	if (method) {
-		const originalPath = await resolveSpecDrivenResourcePath(resources.root, method.originalPath);
-		if (
-			!inside(await fs.realpath(containRoot), originalPath) ||
-			crypto
-				.createHash("sha256")
-				.update(await fs.readFile(originalPath))
-				.digest("hex") !== method.originalSha256 ||
-			digest !== method.sha256
-		)
-			throw new Error(`Bundled method provenance mismatch: ${name}`);
-	}
 	const parsed = parseFrontmatter(content, { source: filePath, repair: false, level: "off" });
 	return {
 		name,

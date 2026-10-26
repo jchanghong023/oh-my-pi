@@ -1,27 +1,28 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import * as path from "node:path";
-import { constants } from "node:fs";
-import { getOmpProfileStorageIdentity } from "./profiles";
-import { containedSpecPath } from "../../spec-driven/artifacts";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { ZodError } from "zod";
+import { containedSpecPath, formalMaterialPaths } from "../../spec-driven/artifacts";
 import {
 	observeSpecDrivenController,
 	peekSpecDrivenController,
 	type SpecControllerObservation,
 } from "../../spec-driven/controller";
-import { stageForPhase } from "../../spec-driven/stages";
+import { SPEC_PHASES, stageForPhase } from "../../spec-driven/stages";
 import type { SpecDrivenStatus } from "../../spec-driven/types";
 import { writeFileAtomically } from "../../utils/atomic-file";
+import { getOmpProfileStorageIdentity } from "./profiles";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
+	ompSpecCandidateSchema,
 	ompSpecRunSchema,
-	type OmpSpecRun,
 	type OmpSpecDetails,
 	type OmpSpecMaterial,
+	type OmpSpecRun,
 	type OmpSpecRunBinding,
 } from "./schema";
 
-/** A nonadmitted bound action, distinct from native execution or storage failures. */
 export class OmpSpecActionRejection extends Error {
 	constructor(
 		readonly reasonCode: "guard.specRun" | "guard.specAction",
@@ -37,31 +38,48 @@ type ArtifactVersion = {
 	sourceVersion: string | null;
 	createdAt: number;
 };
-type Artifact = { id: string; title: string; sourcePath: string; contentType: string; versions: ArtifactVersion[] };
+type Artifact = {
+	id: string;
+	materialId: string;
+	title: string;
+	sourcePath: string;
+	contentType: string;
+	expectedVersion?: string;
+	versions: ArtifactVersion[];
+};
+/** Query index of observed identities and versions only. Formal files and SDK sessions own all bodies. */
 type Saved = {
-	format: 1;
+	format: 2;
 	storage: string;
 	sourceFile: string;
 	workspaceIdentity: string;
 	remoteSessionId: string | null;
-	row: OmpSpecRun;
+	runId: string;
+	sessionId: string;
+	cwd: string;
+	changeId: string;
+	phase: SpecDrivenStatus["phase"];
+	createdAt: number;
+	updatedAt: number;
+	generation: number;
+	archivedChangePath?: string;
+	specificationVersion?: string;
+	selection?: SpecDrivenStatus["selection"];
+	closing?: SpecDrivenStatus["closing"];
+	awaitingAcceptance?: boolean;
 	artifacts: Artifact[];
 };
 type Owner = {
 	record: ZCodeSessionRecord;
 	sourceGeneration: number;
-	storage: string;
-	workspaceIdentity: string;
-	remoteSessionId: string | null;
 	unsubscribe: () => void;
 	tail: Promise<void>;
 	current: SpecControllerObservation | null;
 	onChange: () => void;
 };
-const terminal = (phase: string) => phase === "completed" || phase === "cancelled";
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-/** Read-only native observations. This class never creates or restores a controller. */
+/** Observes the native workspace controller; cold queries never create or restore one. */
 export class OmpSpecDrivenBridge {
 	readonly #owners = new Map<string, Owner>();
 	readonly #runs = new Map<string, Saved>();
@@ -72,14 +90,10 @@ export class OmpSpecDrivenBridge {
 	) {}
 	attach(record: ZCodeSessionRecord, onChange: () => void): void {
 		if (this.#owners.get(record.id)?.record === record) return;
-		const previous = this.#owners.get(record.id);
-		if (previous) throw new Error("Native specification source owner has not been released");
+		if (this.#owners.has(record.id)) throw new Error("Native specification source owner has not been released");
 		const owner: Owner = {
 			record,
 			sourceGeneration: record.session.sessionGeneration,
-			storage: JSON.stringify(getOmpProfileStorageIdentity()),
-			workspaceIdentity: this.identity(record.cwd),
-			remoteSessionId: this.remote(record.cwd),
 			onChange,
 			current: null,
 			tail: Promise.resolve(),
@@ -87,11 +101,9 @@ export class OmpSpecDrivenBridge {
 		};
 		this.#owners.set(record.id, owner);
 		owner.unsubscribe = observeSpecDrivenController(record.session.sessionManager, observation => {
-			if (observation.runId && observation.runId !== owner.current?.runId)
-				owner.sourceGeneration = record.session.sessionGeneration;
+			if (observation.runId !== owner.current?.runId) owner.sourceGeneration = record.session.sessionGeneration;
 			owner.current = observation;
 			owner.onChange();
-			// Clone at observation time: queued filesystem work must not see a later native version.
 			const captured = structuredClone(observation);
 			owner.tail = owner.tail
 				.then(() => this.#capture(owner, captured))
@@ -100,16 +112,20 @@ export class OmpSpecDrivenBridge {
 				});
 		});
 	}
+	#live(owner: Owner | undefined, runId?: string): owner is Owner {
+		return (
+			!!owner &&
+			owner.sourceGeneration === owner.record.session.sessionGeneration &&
+			this.manager.get(owner.record.id) === owner.record &&
+			!!owner.current &&
+			!owner.current.disposed &&
+			!owner.current.released &&
+			(!runId || owner.current.runId === runId)
+		);
+	}
 	interaction(sessionId: string): SpecControllerObservation["interaction"] | undefined {
 		const owner = this.#owners.get(sessionId);
-		if (
-			!owner ||
-			owner.sourceGeneration !== owner.record.session.sessionGeneration ||
-			this.manager.get(sessionId) !== owner.record ||
-			owner.current?.disposed
-		)
-			return undefined;
-		return owner.current ? structuredClone(owner.current.interaction) : undefined;
+		return this.#live(owner) ? structuredClone(owner.current!.interaction) : undefined;
 	}
 	async #directory(cwd: string, runId: string): Promise<string> {
 		if (!/^[a-zA-Z0-9_-]+$/.test(runId)) throw new Error("Invalid native run identity");
@@ -118,355 +134,324 @@ export class OmpSpecDrivenBridge {
 	async #capture(owner: Owner, observation: SpecControllerObservation): Promise<void> {
 		const { runId, status } = observation;
 		if (!runId || !status.changeId) return;
-		const directory = await this.#directory(owner.record.cwd, runId);
 		const previous = this.#runs.get(runId);
-		const live =
-			this.#owners.get(owner.record.id) === owner &&
-			owner.sourceGeneration === owner.record.session.sessionGeneration &&
-			owner.current?.runId === runId &&
-			!observation.disposed &&
-			!observation.released;
-		const state: OmpSpecDetails["state"] = terminal(status.phase)
-			? "terminal"
-			: status.paused
-				? "paused"
-				: status.blockedReason
-					? "blocked"
-					: status.phase.startsWith("awaiting-")
-						? "waiting"
-						: "active";
 		const artifacts = structuredClone(previous?.artifacts ?? []);
-		const materials: OmpSpecMaterial[] = [];
-		await mkdir(path.join(directory, "zcode-artifacts"), { recursive: true });
-		const capture = async (
-			id: string,
-			title: string,
-			sourcePath: string,
-			sourceVersion: string | null,
-			generated: boolean,
-			content?: Buffer,
-			expectedHash?: string,
-		) => {
-			if (!generated) {
-				materials.push({ id, title, readiness: "not_generated", sourceVersion });
-				return;
-			}
+		const original = `openspec/changes/${status.changeId}/`;
+		const archive = status.archivedChangePath ?? status.closing?.archivedChangePath;
+		const relocated = (file: string) =>
+			archive && file.startsWith(original) ? `${archive}/${file.slice(original.length)}` : file;
+		const approvedVersions = new Map(
+			Object.values(observation.approvals).flatMap(approval =>
+				approval.files.map(file => [relocated(file.path), file.version] as const),
+			),
+		);
+		const formalPaths =
+			status.paths && !observation.approvals.requirements
+				? await formalMaterialPaths(observation.cwd, status.paths, status.changeId, archive)
+				: [];
+		const requirements =
+			observation.approvals.requirements?.files ??
+			formalPaths.slice(0, -3).map(file => ({ path: file, version: "" }));
+		const requirementIdentity = (file: string) =>
+			archive && file.startsWith(`${archive}/`) ? `${original}${file.slice(archive.length + 1)}` : file;
+		const documents = [
+			...requirements.map(file => {
+				const identity = requirementIdentity(file.path);
+				return { id: `requirement:${identity}`, title: identity, file };
+			}),
+			...(
+				[
+					["solution", "完整方案文件", status.solution, status.paths?.solution],
+					["plan", "完整计划文件", status.plan, status.paths?.plan],
+					["report", "完成报告", status.report, status.paths?.report],
+				] as const
+			).flatMap(([id, title, document, planned]) => {
+				const file = document ?? (planned ? { path: planned, version: "" } : undefined);
+				return file ? [{ id, title, file }] : [];
+			}),
+		];
+		for (const artifact of artifacts) artifact.sourcePath = relocated(artifact.sourcePath);
+		for (const { id, title, file } of documents) {
 			const artifactId = id.length <= 64 ? id : `native:${digest(Buffer.from(id)).slice(0, 48)}`;
+			let artifact = artifacts.find(item => item.id === artifactId);
+			if (!artifact) {
+				artifact = {
+					id: artifactId,
+					materialId: id,
+					title: title.slice(0, 120),
+					sourcePath: relocated(file.path),
+					contentType: file.path.endsWith(".md") ? "text/markdown" : "application/json",
+					versions: [],
+				};
+				artifacts.push(artifact);
+			}
+			artifact.sourcePath = relocated(file.path);
+			const expectedVersion = approvedVersions.get(artifact.sourcePath);
+			artifact.expectedVersion = expectedVersion;
 			try {
-				const bytes = content ?? (await readFile(await containedSpecPath(owner.record.cwd, sourcePath)));
+				const bytes = await readFile(await containedSpecPath(observation.cwd, artifact.sourcePath));
 				const hash = digest(bytes);
-				if (expectedHash && hash !== expectedHash) {
-					const historical = artifacts
-						.find(item => item.id === artifactId)
-						?.versions.find(item => item.digest === expectedHash && item.sourceVersion === sourceVersion);
-					materials.push({
-						id,
-						title,
-						readiness: historical ? "present" : "unknown",
-						sourceVersion,
-						...(historical ? { artifactId, version: historical.version } : {}),
-					});
-					return;
-				}
-				let artifact = artifacts.find(item => item.id === artifactId);
-				if (!artifact) {
-					artifact = {
-						id: artifactId,
-						title: title.slice(0, 120),
-						sourcePath,
-						contentType: sourcePath.endsWith(".md") ? "text/markdown" : "application/json",
-						versions: [],
-					};
-					artifacts.push(artifact);
-				}
-				artifact.sourcePath = sourcePath;
-				let version = artifact.versions.at(-1);
-				if (!version || version.digest !== hash || version.sourceVersion !== sourceVersion) {
-					const target = await containedSpecPath(
-						owner.record.cwd,
-						`.omp/spec-sessions/${runId}/zcode-artifacts/${hash}`,
-					);
-					try {
-						await writeFile(target, bytes, { flag: "wx" });
-					} catch (error) {
-						if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-						if (digest(await readFile(target)) !== hash)
-							throw new Error("Existing native artifact capture is corrupt");
-					}
-					version = {
-						version: artifact.versions.length + 1,
+				if (expectedVersion && hash !== expectedVersion) continue;
+				const last = artifact.versions.at(-1);
+				if (!last || last.digest !== hash)
+					artifact.versions.push({
+						version: (last?.version ?? 0) + 1,
 						digest: hash,
 						bytes: bytes.length,
-						sourceVersion,
+						sourceVersion: expectedVersion || hash,
 						createdAt: observation.updatedAt,
-					};
-					artifact.versions.push(version);
-				}
-				materials.push({ id, title, readiness: "present", sourceVersion, artifactId, version: version.version });
-			} catch (error) {
-				materials.push({
-					id,
-					title,
-					readiness: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "unreadable",
-					sourceVersion,
-				});
+					});
+			} catch {
+				/* Readiness is determined independently by each query; no workflow failure. */
 			}
-		};
-		const originalChange = `openspec/changes/${status.changeId}`;
-		const archive = status.archivedChangePath;
-		const filePath = (sourcePath: string): string =>
-			archive && sourcePath.startsWith(`${originalChange}/`)
-				? `${archive}/${sourcePath.slice(originalChange.length + 1)}`
-				: sourcePath;
-		for (const file of status.specification?.files ?? [])
-			await capture(
-				`requirement:${file.path}`,
-				file.path,
-				filePath(file.path),
-				file.version,
-				true,
-				undefined,
-				file.version,
-			);
-		if (!status.specification) await capture("requirements", "需求文件", "", null, false);
-		for (const [id, title, document, plannedPath] of [
-			["solution", "完整方案文件", status.solution, status.paths?.solution],
-			["plan", "完整计划文件", status.plan, status.paths?.plan],
-			["report", "完成报告", status.report, status.paths?.report],
-		] as const)
-			await capture(
-				id,
-				title,
-				filePath(document?.path ?? plannedPath ?? ""),
-				document?.version ?? null,
-				!!document,
-				undefined,
-				document?.version,
-			);
-		const details: OmpSpecDetails = {
+		}
+		const saved: Saved = {
+			format: 2,
+			storage: JSON.stringify(getOmpProfileStorageIdentity()),
+			sourceFile: owner.record.session.sessionManager.getSessionFile() ?? "",
+			workspaceIdentity: this.identity(owner.record.cwd),
+			remoteSessionId: this.remote(owner.record.cwd),
+			runId,
+			sessionId: owner.record.id,
+			cwd: observation.cwd,
 			changeId: status.changeId,
 			phase: status.phase,
-			stage: stageForPhase(status.phase),
-			state,
-			explanation:
-				status.blockedReason ??
-				(status.paused
-					? "Native execution is paused"
-					: state === "waiting"
-						? "Waiting for native user input"
-						: status.phase),
-			lastReply: status.lastReply,
-			useTeam: status.useTeam,
-			useGoal: status.useGoal,
-			generation: status.generation,
-			live,
-			readOnly: !live || terminal(status.phase),
-			workspaceIdentity: owner.workspaceIdentity,
-			workspacePath: owner.record.cwd,
-			sessionId: owner.record.id,
 			createdAt: observation.createdAt,
 			updatedAt: observation.updatedAt,
-			// File stages are observed directly; there is no separate per-task execution engine.
-			versions: {
-				...(status.specification ? { specification: status.specification.version } : {}),
-				...(status.solution ? { solution: status.solution.version } : {}),
-				...(status.plan ? { plan: status.plan.version } : {}),
-				...(status.report ? { report: status.report.version } : {}),
-			},
-			candidates: status.solution?.candidates ?? [],
-			selectedCandidate: status.selection
-				? { id: status.selection.candidateId, userReply: status.selection.userReply }
-				: null,
-			actions:
-				live && !terminal(status.phase)
-					? observation.interaction.actions.map(action => ({
-							...action,
-							binding: {
-								runId,
-								generation: status.generation,
-								actionId: action.id,
-								actionVersion: action.version ?? action.command,
-							},
-						}))
-					: [],
-			interaction:
-				live && !terminal(status.phase)
-					? observation.interaction
-					: {
-							...observation.interaction,
-							recipient: undefined,
-							actions: [],
-							blockedReason: live
-								? "Terminal run; controls unavailable"
-								: "Read-only historical observation; no live native owner",
-						},
-			materials,
+			generation: status.generation,
+			archivedChangePath: archive,
+			closing: status.closing,
+			awaitingAcceptance: status.awaitingAcceptance,
+			specificationVersion: status.specification?.version ?? previous?.specificationVersion,
+			selection: status.selection,
+			artifacts,
 		};
-		const row = ompSpecRunSchema.parse({
-			runId,
-			status:
-				status.phase === "completed"
-					? "completed"
-					: status.phase === "cancelled"
-						? "stopped"
-						: state === "active"
-							? "running"
-							: "pending",
-			...(status.phase === "cancelled" ? { stopReason: "user" } : {}),
+		this.#runs.set(runId, saved);
+		const directory = await this.#directory(saved.cwd, runId);
+		await mkdir(directory, { recursive: true });
+		await writeFileAtomically(path.join(directory, "zcode.json"), JSON.stringify(saved));
+		owner.onChange();
+	}
+	async #row(saved: Saved): Promise<OmpSpecRun> {
+		const owner = this.#owners.get(saved.sessionId);
+		const live = this.#live(owner, saved.runId);
+		const status = live ? owner.current!.status : undefined;
+		let useTeam = status?.useTeam;
+		if (!live) {
+			try {
+				const workspace = JSON.parse(
+					await readFile(await containedSpecPath(saved.cwd, ".omp/dev/state.json"), "utf8"),
+				);
+				if (workspace.version === 1 && typeof workspace.team === "boolean" && workspace.run?.runId === saved.runId)
+					useTeam = workspace.team;
+			} catch {
+				/* Historical facts remain readable when current workspace state is absent or damaged. */
+			}
+		}
+		const materials: OmpSpecMaterial[] = [];
+		let candidates: OmpSpecDetails["candidates"] = [];
+		for (const artifact of saved.artifacts) {
+			const version = artifact.versions.at(-1);
+			let readiness: OmpSpecMaterial["readiness"] = "unknown";
+			try {
+				const bytes = await readFile(await containedSpecPath(saved.cwd, artifact.sourcePath));
+				readiness = version && digest(bytes) === version.digest ? "present" : "unknown";
+				if (artifact.id === "solution" && readiness === "present") {
+					try {
+						const value = JSON.parse(bytes.toString("utf8"));
+						candidates = ompSpecCandidateSchema.array().parse(value.candidates);
+					} catch {
+						readiness = "unreadable";
+					}
+				}
+			} catch (error) {
+				readiness =
+					(error as NodeJS.ErrnoException).code === "ENOENT"
+						? version || artifact.expectedVersion
+							? "missing"
+							: "not_generated"
+						: "unreadable";
+			}
+			materials.push({
+				id: artifact.materialId,
+				title: artifact.title,
+				readiness,
+				sourceVersion: artifact.expectedVersion ?? version?.sourceVersion ?? null,
+				...(version ? { artifactId: artifact.id, version: version.version } : {}),
+			});
+		}
+		for (const [id, title] of [
+			["requirements", "需求文件"],
+			["solution", "完整方案文件"],
+			["plan", "完整计划文件"],
+			["report", "完成报告"],
+		]) {
+			if (
+				!materials.some(material =>
+					id === "requirements" ? material.id.startsWith("requirement:") : material.id === id,
+				)
+			)
+				materials.push({ id: id!, title: title!, readiness: "not_generated", sourceVersion: null });
+		}
+		const terminal = saved.phase === "idle" && !!saved.archivedChangePath;
+		const state: OmpSpecDetails["state"] = terminal
+			? "terminal"
+			: !live || status?.blockedReason || owner?.current?.error
+				? "blocked"
+				: status?.awaitingAcceptance
+					? "waiting"
+					: "active";
+		const versions = Object.fromEntries(
+			saved.artifacts.flatMap(artifact => {
+				const last = artifact.versions.at(-1);
+				return last && ["solution", "plan", "report"].includes(artifact.id) ? [[artifact.id, last.digest]] : [];
+			}),
+		);
+		return ompSpecRunSchema.parse({
+			runId: saved.runId,
+			status: terminal ? "completed" : live ? "running" : "stopped",
+			...(!live && !terminal ? { stopReason: "interrupted" } : {}),
 			usage: null,
 			actors: [],
 			nodes: [],
-			spec: details,
+			spec: {
+				changeId: saved.changeId,
+				phase: status?.phase ?? saved.phase,
+				stage: (status?.phase ?? saved.phase) === "idle" ? null : stageForPhase(status?.phase ?? saved.phase),
+				state,
+				explanation:
+					status?.blockedReason ??
+					(live
+						? (owner.current!.error ?? owner.current!.notice ?? state)
+						: "Read-only historical observation; no live native owner"),
+				useTeam,
+				teamMutable: live && owner.current!.teamMutable,
+				generation: status?.generation ?? saved.generation,
+				live,
+				readOnly: !live || terminal,
+				workspaceIdentity: saved.workspaceIdentity,
+				workspacePath: saved.cwd,
+				sessionId: saved.sessionId,
+				createdAt: saved.createdAt,
+				updatedAt: saved.updatedAt,
+				awaitingAcceptance: status?.awaitingAcceptance ?? saved.awaitingAcceptance,
+				closing: status?.closing ?? saved.closing,
+				archivedChangePath: saved.archivedChangePath,
+				versions: {
+					...versions,
+					...(saved.specificationVersion ? { specification: saved.specificationVersion } : {}),
+				},
+				candidates,
+				selectedCandidate: saved.selection
+					? { id: saved.selection.candidateId, userReply: saved.selection.userReply }
+					: null,
+				actions:
+					live && !terminal
+						? owner.current!.interaction.actions.map(action => ({
+								...action,
+								binding: {
+									runId: saved.runId,
+									generation: status!.generation,
+									phase: status!.phase,
+									files: saved.artifacts.flatMap(artifact => {
+										const version = artifact.versions.at(-1);
+										return version ? [{ path: artifact.sourcePath, version: version.digest }] : [];
+									}),
+									actionId: action.id,
+								},
+							}))
+						: [],
+				...(live ? { interaction: owner.current!.interaction } : {}),
+				materials,
+			},
 		});
-		const saved: Saved = {
-			format: 1,
-			storage: owner.storage,
-			sourceFile: owner.record.session.sessionManager.getSessionFile() ?? "",
-			workspaceIdentity: details.workspaceIdentity,
-			remoteSessionId: owner.remoteSessionId,
-			row,
-			artifacts: artifacts.filter(artifact => artifact.versions.length > 0),
-		};
-		this.#runs.set(runId, saved);
-		await writeFileAtomically(
-			await containedSpecPath(owner.record.cwd, `.omp/spec-sessions/${runId}/zcode.json`),
-			JSON.stringify(saved),
-		);
-		owner.onChange();
 	}
-	async #readonly(saved: Saved): Promise<OmpSpecRun> {
-		const owner = this.#owners.get(saved.row.spec.sessionId);
-		// Completion may enqueue its capture while a query awaits an older one.
-		// Drain the current owner's captures before classifying live versus history.
+	async runs(sessionId: string): Promise<OmpSpecRun[]> {
+		const owner = this.#owners.get(sessionId);
 		if (owner) {
 			for (;;) {
 				const pending = owner.tail;
 				await pending;
 				if (pending === owner.tail) break;
 			}
-			saved = this.#runs.get(saved.row.runId) ?? saved;
 		}
-		const live =
-			owner &&
-			owner.sourceGeneration === owner.record.session.sessionGeneration &&
-			owner.current?.runId === saved.row.runId &&
-			!owner.current.disposed &&
-			!owner.current.released &&
-			this.manager.get(owner.record.id) === owner.record;
-		if (live) return saved.row;
-		const materials = await Promise.all(
-			saved.row.spec.materials.map(async material => {
-				if (!material.artifactId || !material.version) return material;
-				const artifact = saved.artifacts.find(item => item.id === material.artifactId);
-				const version = artifact?.versions.find(item => item.version === material.version);
-				if (!artifact || !version || !/^[a-f0-9]{64}$/.test(version.digest))
-					return { ...material, readiness: "unknown" as const };
-				try {
-					const bytes = await readFile(
-						await containedSpecPath(
-							saved.row.spec.workspacePath,
-							`.omp/spec-sessions/${saved.row.runId}/zcode-artifacts/${version.digest}`,
-						),
-					);
-					if (digest(bytes) !== version.digest) return { ...material, readiness: "unreadable" as const };
-					// Inspect current readiness only; historical byte responses always use the immutable capture.
-					if (
-						!artifact.sourcePath.includes("#") &&
-						(artifact.sourcePath.startsWith("openspec/changes/") ||
-							artifact.sourcePath.startsWith("docs/superpowers/plans/"))
-					) {
-						const source = await containedSpecPath(saved.row.spec.workspacePath, artifact.sourcePath);
-						if (!(await stat(source)).isFile()) throw new Error("Native material is not a readable file");
-						await access(source, constants.R_OK);
-					}
-					return material;
-				} catch (error) {
-					return {
-						...material,
-						readiness:
-							(error as NodeJS.ErrnoException).code === "ENOENT"
-								? ("missing" as const)
-								: ("unreadable" as const),
-					};
-				}
-			}),
-		);
-		return {
-			...saved.row,
-			...(!terminal(saved.row.spec.phase) ? { status: "stopped" as const, stopReason: "interrupted" as const } : {}),
-			spec: {
-				...saved.row.spec,
-				live: false,
-				readOnly: true,
-				...(!terminal(saved.row.spec.phase) ? { state: "blocked" as const } : {}),
-				explanation: `Read-only historical observation; no live native owner. Last native state: ${saved.row.spec.explanation}`,
-				actions: [],
-				...(saved.row.spec.interaction
-					? {
-							interaction: {
-								...saved.row.spec.interaction,
-								recipient: undefined,
-								actions: [],
-								blockedReason: "Read-only historical observation; no live native owner",
-							},
-						}
-					: {}),
-				materials,
-			},
-		};
-	}
-	async runs(sessionId: string): Promise<OmpSpecRun[]> {
-		const owner = this.#owners.get(sessionId);
-		await owner?.tail;
 		const source = owner
 			? { cwd: owner.record.cwd, file: owner.record.session.sessionManager.getSessionFile() ?? "" }
 			: await this.manager.read(sessionId).then(read => ({ cwd: read.cwd, file: read.info.path }));
+		const root = await realpath(vcs.gitInfo(source.cwd)?.repoRoot ?? source.cwd);
 		let entries: string[] = [];
 		try {
-			entries = await readdir(await containedSpecPath(source.cwd, ".omp/spec-sessions"));
+			entries = await readdir(await containedSpecPath(root, ".omp/spec-sessions"));
 		} catch (error) {
-			// Missing/inaccessible project storage must not break independently persisted chat history.
 			if (!["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? ""))
 				throw error;
 		}
+		const coldRows = new Map<string, OmpSpecRun>();
 		for (const runId of entries) {
 			if (!/^[a-zA-Z0-9_-]+$/.test(runId) || this.#runs.has(runId)) continue;
+			let saved: Saved;
 			try {
-				const saved = JSON.parse(
-					await readFile(await containedSpecPath(source.cwd, `.omp/spec-sessions/${runId}/zcode.json`), "utf8"),
+				saved = JSON.parse(
+					await readFile(path.join(await this.#directory(root, runId), "zcode.json"), "utf8"),
 				) as Saved;
-				const row = ompSpecRunSchema.parse(saved.row);
 				if (
-					saved.format !== 1 ||
-					saved.storage !== JSON.stringify(getOmpProfileStorageIdentity()) ||
-					saved.remoteSessionId !== this.remote(source.cwd) ||
+					saved.format !== 2 ||
+					saved.runId !== runId ||
+					saved.sessionId !== sessionId ||
 					saved.sourceFile !== source.file ||
+					saved.cwd !== root ||
+					saved.storage !== JSON.stringify(getOmpProfileStorageIdentity()) ||
 					saved.workspaceIdentity !== this.identity(source.cwd) ||
-					row.spec.sessionId !== sessionId ||
-					row.spec.workspacePath !== source.cwd ||
-					row.runId !== runId
+					saved.remoteSessionId !== this.remote(source.cwd) ||
+					!SPEC_PHASES.includes(saved.phase) ||
+					!Array.isArray(saved.artifacts)
 				)
 					continue;
-				this.#runs.set(runId, {
-					...saved,
-					row: { ...row, spec: { ...row.spec, live: false, readOnly: true, actions: [] } },
-				});
+				if (
+					!saved.artifacts.every(
+						artifact =>
+							typeof artifact.id === "string" &&
+							typeof artifact.materialId === "string" &&
+							typeof artifact.sourcePath === "string" &&
+							typeof artifact.title === "string" &&
+							typeof artifact.contentType === "string" &&
+							Array.isArray(artifact.versions) &&
+							artifact.versions.every(
+								version =>
+									Number.isSafeInteger(version.version) &&
+									version.version > 0 &&
+									/^[a-f0-9]{64}$/.test(version.digest) &&
+									Number.isSafeInteger(version.bytes) &&
+									version.bytes >= 0 &&
+									Number.isFinite(version.createdAt),
+							),
+					)
+				)
+					continue;
 			} catch {
-				/* Foreign, incomplete, or corrupt observations are not native runs owned by this source. */
+				/* Foreign or incomplete observations are not owned by this source. */
+				continue;
 			}
+			try {
+				coldRows.set(runId, await this.#row(saved));
+			} catch (error) {
+				if (error instanceof ZodError) continue;
+				throw error;
+			}
+			this.#runs.set(runId, saved);
 		}
 		return (
 			await Promise.all(
 				[...this.#runs.values()]
 					.filter(
 						saved =>
-							saved.row.spec.sessionId === sessionId &&
+							saved.sessionId === sessionId &&
 							saved.sourceFile === source.file &&
 							saved.storage === JSON.stringify(getOmpProfileStorageIdentity()) &&
-							saved.remoteSessionId === this.remote(source.cwd) &&
-							saved.workspaceIdentity === this.identity(source.cwd),
+							saved.workspaceIdentity === this.identity(source.cwd) &&
+							saved.remoteSessionId === this.remote(source.cwd),
 					)
-					.map(saved => this.#readonly(saved)),
+					.map(saved => coldRows.get(saved.runId) ?? this.#row(saved)),
 			)
 		).sort((a, b) => b.spec.updatedAt - a.spec.updatedAt);
 	}
@@ -481,36 +466,40 @@ export class OmpSpecDrivenBridge {
 		)
 			return [];
 		const sessions = await this.manager.list();
-		const rows = await Promise.all(
-			sessions
-				.filter(info => path.resolve(info.cwd) === path.resolve(workspacePath))
-				.map(info => this.runs(info.id)),
-		);
-		return rows.flat().sort((a, b) => b.spec.updatedAt - a.spec.updatedAt);
+		return (
+			await Promise.all(
+				sessions
+					.filter(info => this.identity(info.cwd) === this.identity(workspacePath))
+					.map(info => this.runs(info.id)),
+			)
+		)
+			.flat()
+			.sort((a, b) => b.spec.updatedAt - a.spec.updatedAt);
 	}
 	async #owned(sessionId: string, runId: string): Promise<Saved | undefined> {
-		if (!(await this.runs(sessionId)).some(row => row.runId === runId)) return undefined;
-		return this.#runs.get(runId);
+		return (await this.runs(sessionId)).some(row => row.runId === runId) ? this.#runs.get(runId) : undefined;
 	}
 	async artifacts(sessionId: string, runId: string) {
 		const saved = await this.#owned(sessionId, runId);
 		if (!saved) return undefined;
 		return {
-			artifacts: saved.artifacts.map(artifact => ({
-				id: artifact.id,
-				title: artifact.title,
-				kind: artifact.contentType === "text/markdown" ? ("markdown" as const) : ("file" as const),
-				version: artifact.versions.at(-1)!.version,
-				contentType: artifact.contentType,
-				sourcePath: artifact.sourcePath,
-				versions: artifact.versions.map(version => ({
-					version: version.version,
-					publishedAt: version.createdAt,
-					bytes: version.bytes,
+			artifacts: saved.artifacts
+				.filter(artifact => artifact.versions.length)
+				.map(artifact => ({
+					id: artifact.id,
+					title: artifact.title,
+					kind: artifact.contentType === "text/markdown" ? ("markdown" as const) : ("file" as const),
+					version: artifact.versions.at(-1)!.version,
 					contentType: artifact.contentType,
+					sourcePath: artifact.sourcePath,
+					versions: artifact.versions.map(version => ({
+						version: version.version,
+						publishedAt: version.createdAt,
+						bytes: version.bytes,
+						contentType: artifact.contentType,
+					})),
+					itemCount: 0,
 				})),
-				itemCount: 0,
-			})),
 		};
 	}
 	async artifactRead(input: {
@@ -525,15 +514,10 @@ export class OmpSpecDrivenBridge {
 		if (!saved) return undefined;
 		const artifact = saved.artifacts.find(item => item.id === input.artifactId);
 		const version = artifact?.versions.find(item => item.version === input.version);
-		if (!artifact || !version || !/^[a-f0-9]{64}$/.test(version.digest))
-			throw new Error("Native artifact version not found");
-		const bytes = await readFile(
-			await containedSpecPath(
-				saved.row.spec.workspacePath,
-				`.omp/spec-sessions/${input.runId}/zcode-artifacts/${version.digest}`,
-			),
-		);
-		if (digest(bytes) !== version.digest) throw new Error("Native artifact historical bytes are corrupt");
+		if (!artifact || !version) throw new Error("Native artifact version not found");
+		const bytes = await readFile(await containedSpecPath(saved.cwd, artifact.sourcePath));
+		if (digest(bytes) !== version.digest)
+			throw new Error("Native artifact version is no longer available from the formal material");
 		const end = Math.min(bytes.length, input.offset + Math.min(input.limit, 512 * 1024));
 		return {
 			dataBase64: bytes.subarray(input.offset, end).toString("base64"),
@@ -548,51 +532,58 @@ export class OmpSpecDrivenBridge {
 		if (!saved.artifacts.some(item => item.id === input.artifactId)) throw new Error("Native artifact not found");
 		throw new Error("Native file artifacts have no report-item data; use workflowRunArtifactRead");
 	}
-	validate(record: ZCodeSessionRecord | undefined, text: string, binding: OmpSpecRunBinding): void {
+	async validate(record: ZCodeSessionRecord | undefined, text: string, binding: OmpSpecRunBinding): Promise<void> {
 		const owner = record ? this.#owners.get(record.id) : undefined;
-		const observation = owner?.current;
 		const controller = record ? peekSpecDrivenController(record.session.sessionManager) : undefined;
-		const current = controller?.observation();
+		const assertCurrent = () => {
+			const current = controller?.observation();
+			if (
+				!this.#live(owner, binding.runId) ||
+				owner.record !== record ||
+				!current ||
+				current.runId !== binding.runId ||
+				current.status.generation !== binding.generation ||
+				current.status.phase !== binding.phase ||
+				current.released ||
+				current.disposed
+			)
+				throw new OmpSpecActionRejection(
+					"guard.specRun",
+					"Native specification action binding is stale or readonly",
+				);
+		};
+		assertCurrent();
+		if (binding.actionId === undefined && !text.startsWith("/")) return;
+		const saved = this.#runs.get(binding.runId);
+		const expected =
+			saved?.artifacts.flatMap(artifact => {
+				const version = artifact.versions.at(-1);
+				return version ? [{ path: artifact.sourcePath, version: version.digest }] : [];
+			}) ?? [];
+		if (JSON.stringify(expected) !== JSON.stringify(binding.files))
+			throw new OmpSpecActionRejection("guard.specRun", "Native specification material binding is stale");
+		for (const file of binding.files) {
+			try {
+				if (digest(await readFile(await containedSpecPath(saved!.cwd, file.path))) !== file.version)
+					throw new Error("changed");
+			} catch {
+				throw new OmpSpecActionRejection("guard.specRun", "Native specification material binding is stale");
+			}
+		}
+		assertCurrent();
 		if (
-			!record ||
-			!owner ||
-			owner.record !== record ||
-			owner.sourceGeneration !== record.session.sessionGeneration ||
-			owner.storage !== JSON.stringify(getOmpProfileStorageIdentity()) ||
-			owner.workspaceIdentity !== this.identity(record.cwd) ||
-			owner.remoteSessionId !== this.remote(record.cwd) ||
-			this.manager.get(record.id) !== record ||
-			!observation ||
-			observation.runId !== binding.runId ||
-			observation.status.generation !== binding.generation ||
-			!current ||
-			current.runId !== binding.runId ||
-			current.status.generation !== binding.generation ||
-			observation.disposed ||
-			observation.released ||
-			terminal(observation.status.phase)
-		)
-			throw new OmpSpecActionRejection("guard.specRun", "Native specification action binding is stale or readonly");
-		// Ordinary dialogue binds the live run, not an advertised command/version.
-		// Keep action-bearing input on the strict command path, even when its text is prose.
-		if (binding.actionId === undefined && binding.actionVersion === undefined && !text.startsWith("/")) return;
-		if (
-			!controller
-				?.actions()
+			!controller!
+				.actions()
 				.some(
 					action =>
 						action.available &&
-						(!binding.actionId || binding.actionId === action.id) &&
-						(action.version !== undefined
-							? binding.actionVersion === action.version
-							: !binding.actionVersion || binding.actionVersion === action.command) &&
+						(!binding.actionId || action.id === binding.actionId) &&
 						(action.command === text ||
-							((action.requiresInput ||
-								action.id.startsWith("choose:") ||
-								action.id === "confirm-spec" ||
-								action.id === "confirm-plan") &&
+							((action.requiresInput || (action.id === "next" && binding.phase === "solution")) &&
 								text.startsWith(`${action.command} `) &&
-								text.slice(action.command.length).trim())),
+								(action.requiresInput
+									? text.slice(action.command.length).trim()
+									: /^\S+$/.test(text.slice(action.command.length).trim())))),
 				)
 		)
 			throw new OmpSpecActionRejection(
@@ -606,35 +597,6 @@ export class OmpSpecDrivenBridge {
 		owner.unsubscribe();
 		this.#owners.delete(sessionId);
 		await owner.tail;
-		for (const saved of this.#runs.values())
-			if (saved.row.spec.sessionId === sessionId) {
-				saved.row = {
-					...saved.row,
-					spec: {
-						...saved.row.spec,
-						live: false,
-						readOnly: true,
-						actions: [],
-						...(saved.row.spec.interaction
-							? {
-									interaction: {
-										...saved.row.spec.interaction,
-										recipient: undefined,
-										actions: [],
-										blockedReason: "Read-only historical observation; no live native owner",
-									},
-								}
-							: {}),
-					},
-				};
-				await writeFileAtomically(
-					await containedSpecPath(
-						saved.row.spec.workspacePath,
-						`.omp/spec-sessions/${saved.row.runId}/zcode.json`,
-					),
-					JSON.stringify(saved),
-				);
-			}
 	}
 	async dispose(): Promise<void> {
 		await Promise.all([...this.#owners.keys()].map(id => this.detach(id)));

@@ -1,6 +1,9 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { InteractiveModeContext } from "./types";
+
+const EMPTY_THINKING_ROW: readonly string[] = [""];
 
 /** A live composer projection, never a transcript child or a retained thinking snapshot. */
 export class CompactThinkingPreview implements Component {
@@ -12,6 +15,7 @@ export class CompactThinkingPreview implements Component {
 	) {}
 
 	render(width: number): readonly string[] {
+		if (!displayPreferences.compactToolActivity || displayPreferences.hideToolActivity) return [];
 		// A completed thinking block remains the message tail until the next block
 		// arrives; transient reveal updates alone do not mean it is still active.
 		if (
@@ -19,9 +23,10 @@ export class CompactThinkingPreview implements Component {
 			this.ctx.viewSession.isAborting ||
 			this.ctx.viewSession.agent.state.activeThinkingIndex === undefined
 		) {
-			return [];
+			return EMPTY_THINKING_ROW;
 		}
-		return this.ctx.streamingComponent?.renderCompactThinkingPreview(width) ?? [];
+		const rows = this.ctx.streamingComponent?.renderCompactThinkingPreview(width);
+		return rows?.length ? rows : EMPTY_THINKING_ROW;
 	}
 
 	describe(cx: DescribeContext): NativeNode {

@@ -55,8 +55,9 @@ import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
-import { parseXdUrl } from "../tools/xd-url";
+import { isXdHelpContent, parseXdUrl } from "../tools/xd-url";
 import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
+import { splitUrlScheme } from "../tools/url-scheme-host";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -948,7 +949,23 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isCompactWriteCall(): boolean {
-		return this.#toolName === "write" || this.#toolName === "edit" || this.#toolName === "apply_patch";
+		if (this.#toolName === "write") {
+			const args = isRecord(this.#args) ? this.#args : undefined;
+			const path = args?.path ?? args?.file_path;
+			if (typeof path !== "string") return true;
+			const normalized = unwrapHashlineHeaderPath(path);
+			const scheme = splitUrlScheme(normalized)?.scheme;
+			if (scheme === "xd") {
+				const details = this.#result?.details;
+				const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
+				if (dispatch?.mode === "help" || (typeof args?.content === "string" && isXdHelpContent(args.content)))
+					return false;
+				const name = typeof dispatch?.tool === "string" ? dispatch.tool : parseXdUrl(normalized)?.name;
+				return !name || name === "write" || name === "edit" || name === "apply_patch";
+			}
+			return scheme !== "agent" && scheme !== "proc" && scheme !== "cfg";
+		}
+		return this.#toolName === "edit" || this.#toolName === "apply_patch";
 	}
 
 	/** Successful write/edit executions retain their upstream card in the compact live run. */

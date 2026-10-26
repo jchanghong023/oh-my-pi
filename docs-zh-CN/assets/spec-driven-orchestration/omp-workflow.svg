@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title description">
   <title id="title">OpenSpec + Superpowers + OMP 受控协同工作流</title>
-  <desc id="description">四个固定 Agent：需求、方案、计划、执行。程序每步检查真实文件、格式和最低字段，等待明确用户决定。切阶段直接传完整原文件与用户原始回复，方案到计划另传候选 ID，不生成交接文档或模型摘要。单能力五个正式文件：OpenSpec 原 proposal/spec，及同放 Superpowers 计划目录的方案、原格式计划与完成报告。报告就绪后等待验收，接受后原生同步归档需求。文件存在不证明软件正确。</desc>
+  <desc id="description">无代理、需求、方案、计划、执行五种状态，四个固定 Agent 使用原生会话。仅用户 next 集中检查真实产物并明确推进；阶段进入直接交接完整原文件、全部方案候选、选中 ID 与用户原始决定，同阶段追问不重复注入材料或重跑 Team。工作区仅一个未结束流程及控制者，不创建工作树；配置只保存 Team，Goal 由用户手动使用。执行 next 为唯一最终验收，程序不调用模型，直接原生同步、校验及归档；失败保留执行对话，再次 next 只继续剩余收尾。文件存在不证明软件正确。</desc>
   <defs>
     <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#5198f6"/>
@@ -52,7 +52,7 @@
   </style>
   <rect width="1920" height="1080" fill="#fff"/>
   <text x="960" y="145" font-size="53" font-weight="700">OpenSpec + Superpowers + OMP 受控协同工作流</text>
-  <text x="960" y="205" font-size="28" class="muted">规格与工程方法之上，加上明确职责、用户决策与程序门禁</text>
+  <text x="960" y="205" font-size="28" class="muted">原生阶段聊天 · 工作区唯一控制者 · 用户 next 检查并推进</text>
 
   <rect x="710" y="355" width="670" height="350" rx="48" fill="#e4f6eb"/>
   <g filter="url(#shadow)">
@@ -89,18 +89,18 @@
   <text x="857.5" y="637" font-size="21">完整方案＋用户原始回复</text>
 
   <text x="1207.5" y="512" class="english">executor</text>
-  <text x="1207.5" y="556" class="heading">主代理自主执行</text>
-  <text x="1207.5" y="601" class="detail">自行实现／并行派发</text>
+  <text x="1207.5" y="556" class="heading">获批范围内执行</text>
+  <text x="1207.5" y="601" class="detail">原生实施／子代理协作</text>
   <text x="1207.5" y="637" class="detail">实际验证 · 完成报告</text>
 
-  <text x="1522.5" y="512" class="english">accept</text>
+  <text x="1522.5" y="512" class="english">next</text>
   <text x="1522.5" y="556" font-size="27" font-weight="700" class="white">用户最终验收</text>
   <text x="1522.5" y="601" class="detail white">阅读报告</text>
   <text x="1522.5" y="637" class="detail white">核对实际结果</text>
 
   <text x="1772.5" y="512" class="english">archive</text>
   <text x="1772.5" y="556" font-size="32" font-weight="700" class="white">同步与归档</text>
-  <text x="1772.5" y="601" class="detail white">OpenSpec</text>
+  <text x="1772.5" y="601" class="detail white">程序原生收尾</text>
   <text x="1772.5" y="637" font-size="22" class="white">只归档需求变更</text>
 
   <path d="M355 520 H415" class="connector"/>
@@ -112,13 +112,13 @@
   <g>
     <path d="M390 350 V500 M695 350 V500 M1020 350 V500 M1650 350 V500" stroke="#8bc5a8" stroke-width="2" stroke-dasharray="5 7" fill="none"/>
     <rect x="310" y="300" width="160" height="50" rx="25" class="gate"/>
-    <text x="390" y="334" class="gate-text">确认需求</text>
+    <text x="390" y="334" class="gate-text">next 确认</text>
     <rect x="615" y="300" width="160" height="50" rx="25" class="gate"/>
-    <text x="695" y="334" class="gate-text">选定方案</text>
+    <text x="695" y="334" class="gate-text">next 选定</text>
     <rect x="930" y="300" width="180" height="50" rx="25" class="gate"/>
-    <text x="1020" y="334" class="gate-text">批准并启动</text>
+    <text x="1020" y="334" class="gate-text">next 批准</text>
     <rect x="1570" y="300" width="160" height="50" rx="25" class="gate"/>
-    <text x="1650" y="334" class="gate-text">验收确认后</text>
+    <text x="1650" y="334" class="gate-text">不调用模型</text>
   </g>
 
   <g>
@@ -143,9 +143,9 @@
   <text x="675" y="951" font-size="23" class="muted">各节点只做获准工作</text>
   <text x="1005" y="911" font-size="28" font-weight="700">有效批准与交接</text>
   <text x="1005" y="951" font-size="23" class="muted">版本一致才允许推进</text>
-  <text x="1335" y="911" font-size="28" font-weight="700">真实文件检查</text>
+  <text x="1335" y="911" font-size="28" font-weight="700">next 检查产物</text>
   <text x="1335" y="951" font-size="23" class="muted">格式与最低字段</text>
   <text x="1665" y="911" font-size="28" font-weight="700">原文交接与报告</text>
   <text x="1665" y="951" font-size="23" class="muted">文件存在不证明正确</text>
-  <text x="960" y="1032" font-size="24" class="muted">四个 Agent · 五个正式文件 · 直接传递完整原文 · 验收后原生需求归档</text>
+  <text x="960" y="1032" font-size="24" class="muted">五种角色状态 · 四个 Agent · 单能力五个正式文件 · 三行固定区 · 失败保留执行对话</text>
 </svg>

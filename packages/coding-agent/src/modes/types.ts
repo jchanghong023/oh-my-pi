@@ -163,6 +163,8 @@ export interface InteractiveModeContext {
 	// Session access
 	session: AgentSession;
 	sessionManager: SessionManager;
+	/** Atomically retarget the native owner, commands and transcript together. */
+	bindMainSession(target: AgentSession): Promise<void>;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */
@@ -629,6 +631,7 @@ export interface InteractiveModeContext {
 	): Promise<boolean>;
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
+	showDevCommandStatus(text: string): void;
 	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;

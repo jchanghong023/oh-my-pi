@@ -29,6 +29,7 @@ import {
 import { conversationTelemetryFactSchema } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/telemetry";
 import { SessionManager } from "../../src/session/session-manager";
 import { discoverAuthStorage } from "../../src/sdk";
+import { DevWorkspace } from "../../src/spec-driven/workspace";
 
 type Frame = Record<string, unknown>;
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
@@ -2001,6 +2002,52 @@ describe("ZCode actual public app-server process", () => {
 		expect(await fs.readFile(proof, "utf8")).toBe("ZCODE_TEST_CACHE_TOOL");
 		expect((await fs.stat(proof)).mtimeMs).toBe(modified);
 		expect(config.requests).toHaveLength(count);
+	}, 120_000);
+
+	test("cold native Dev stage history is queryable without acquiring a workspace owner", async () => {
+		await using root = await TempDir.create("@zcode-native-dev-history-");
+		await using config = await fixture(root);
+		const directory = path.join(config.cwdA, ".omp", "dev", "sessions", "cold-run");
+		const stage = SessionManager.create(config.cwdA, directory);
+		stage.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "native-stage-history" }],
+			timestamp: Date.now(),
+		});
+		await stage.ensureOnDisk();
+		await stage.flush();
+		const id = stage.getSessionId();
+		const file = stage.getSessionFile()!;
+		await stage.close();
+		const before = await fs.readFile(file, "utf8");
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const requests = config.requests.length;
+		const listed = LegacyProtocol.zcodeSessionListResultSchema.parse(
+			await peer.request("session/list", {
+				workspace: workspace(config.cwdA),
+			}),
+		);
+		expect(listed.sessions.some(session => session.sessionId === id)).toBe(true);
+		for (const clientMode of ["desktop-continuous", "web-remote-replayable"]) {
+			await peer.request("v4/conversation/subscribe", {
+				topic: `conversation/${id}`,
+				connectionId: `native-stage-${clientMode}`,
+				clientMode,
+				includeSpecDriven: true,
+			});
+			const rows = v4ConversationRowsRangeResultSchema.parse(
+				await peer.request("v4/conversation/rowsRange", {
+					sessionId: id,
+					limit: 100,
+				}),
+			);
+			expect(rows.rows.some(row => row.kind === "userInput" && row.text === "native-stage-history")).toBe(true);
+		}
+		expect(config.requests).toHaveLength(requests);
+		expect(await fs.readFile(file, "utf8")).toBe(before);
+		const owner = await DevWorkspace.acquire(config.cwdA);
+		owner.release();
 	}, 120_000);
 
 	test("equal user text has distinct durable command identities, including input queued during streaming", async () => {

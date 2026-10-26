@@ -568,6 +568,14 @@ export class ZCodeServer {
 			pendingInteractions => projection.setState({ pendingInteractions }),
 			{
 				run: record.run,
+				bindMainSession: async session => {
+					if (session === record.session) return;
+					const id = session.sessionManager.getSessionId();
+					const child = await this.manager.nativeChild(id);
+					if (!child?.session || child.session !== session)
+						throw new Error("Development stage has no native registry owner");
+					await this.#nativeProjection(id, child);
+				},
 				mcpManager: record.creationResult.mcpManager,
 				startTan: work => this.tan.start(record, work, () => projection.refresh()),
 				resourcesReloaded: async () => {
@@ -684,6 +692,16 @@ export class ZCodeServer {
 		};
 		this.#hosted.set(record.id, hosted);
 		this.specDriven.attach(record, () => {
+			const native = peekSpecDrivenController(record.session.sessionManager)?.nativeSession();
+			if (native) {
+				const id = native.sessionManager.getSessionId();
+				void this.manager
+					.nativeChild(id)
+					.then(child => {
+						if (child && !this.#closed) return this.#nativeProjection(id, child);
+					})
+					.catch(error => process.stderr.write(`${String(error)}\n`));
+			}
 			projection.setSpecDrivenInteraction(this.specDriven.interaction(record.id));
 			void this.specDriven
 				.runs(record.id)
@@ -887,6 +905,14 @@ export class ZCodeServer {
 		);
 	}
 	async #active(id: string): Promise<HostedSession> {
+		const live = this.manager.get(id);
+		if (live) return this.#attach(live);
+		const native = await this.manager.nativeChild(id);
+		if (native?.root && native.session) {
+			const dev = peekSpecDrivenController(native.root.session.sessionManager);
+			if (dev?.inputMode() === "dev" && dev.nativeSession() === native.session) return this.#attach(native.root);
+			throw new ZCodeProtocolError(-32602, "Only the current native development stage accepts control");
+		}
 		return this.#attach(this.manager.get(id) ?? (await this.manager.resume(id)));
 	}
 	#sessionInfo(info: SessionInfo) {
@@ -1229,7 +1255,9 @@ export class ZCodeServer {
 		hosted: HostedSession,
 		selection: { providerId: string; modelId: string; options?: { reasoningLevel?: string } },
 	): Promise<void> {
-		const model = hosted.record.session.modelRegistry.find(selection.providerId, selection.modelId);
+		const session =
+			peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession() ?? hosted.record.session;
+		const model = session.modelRegistry.find(selection.providerId, selection.modelId);
 		if (!model) throw new ZCodeProtocolError(-32602, "Model not found");
 		const thought = selection.options?.reasoningLevel
 			? this.configuration.resolveThinkingLevel(
@@ -1241,21 +1269,22 @@ export class ZCodeServer {
 		if (selection.options?.reasoningLevel && thought === undefined)
 			throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
 		await hosted.record.run(async () => {
-			await hosted.record.session.setModelTemporary(model, thought);
+			await session.setModelTemporary(model, thought);
 			// 缺陷1:合同(session-config.ts)规定 sessionConfig.modelSelection 是已接受的稀疏
 			// 选择意图。这里把接受结果作为会话事实持久化(custom entry,与 workspace-file-rewind
 			// 同机制),渲染器刷新与冷恢复都从 journal 还原;不写全局配置,也不用 effective 字段伪造。
-			hosted.record.session.sessionManager.appendCustomEntry("zcode_model_selection", selection);
-			await hosted.record.session.sessionManager.flush();
+			session.sessionManager.appendCustomEntry("zcode_model_selection", selection);
+			await session.sessionManager.flush();
 		});
-		hosted.projection.acceptModelSelection(selection);
-		hosted.projection.refresh();
+		const projection =
+			session === hosted.record.session
+				? hosted.projection
+				: await this.#projection(session.sessionManager.getSessionId());
+		projection.acceptModelSelection(selection);
+		projection.refresh();
 	}
-	#devInput(hosted: HostedSession, text: string): boolean {
-		return (
-			parseSlashCommand(text)?.name === "dev" ||
-			peekSpecDrivenController(hosted.record.session.sessionManager)?.inputMode() === "dev"
-		);
+	#devInput(_hosted: HostedSession, text: string): boolean {
+		return parseSlashCommand(text)?.name === "dev";
 	}
 	async #input(
 		hosted: HostedSession,
@@ -1266,23 +1295,36 @@ export class ZCodeServer {
 		sourceCommand?: PromptOptions["sourceCommand"],
 		options: PromptOptions & {
 			highspeedMeta?: HighspeedMessageMeta;
-			validateBeforeDispatch?: (text: string) => void;
+			validateBeforeDispatch?: (text: string) => void | Promise<void>;
 		} = {},
 		execution?: ZCodeExecutionSubmission,
 	): Promise<P.CommandResult | undefined> {
-		// Native development admission precedes outer-session queues, stop, references and model dispatch.
+		const dev = peekSpecDrivenController(hosted.record.session.sessionManager);
+		const native = dev?.inputMode() === "dev" ? dev.nativeSession() : undefined;
 		if (this.#devInput(hosted, text)) {
-			if (attachments?.length || execution)
-				throw new ZCodeProtocolError(
-					-32602,
-					"Development input accepts original text without outer execution material",
-				);
-			options.validateBeforeDispatch?.(text);
-			const receipt = await hosted.commands.dispatch(text, { ...options, inputId, sourceCommand });
+			if (execution) throw new ZCodeProtocolError(-32602, "Development control does not execute model material");
+			const materials = attachments?.length
+				? await this.attachments.resolveInputAttachments(hosted.record.id, attachments)
+				: undefined;
+			await options.validateBeforeDispatch?.(text);
+			const receipt = await hosted.commands.dispatch(materials?.text ? `${text}\n${materials.text}` : text, {
+				...options,
+				inputId,
+				sourceCommand,
+				images: materials?.images,
+				attachments: materials?.attachments,
+			});
 			void receipt.completion.catch(error => process.stderr.write(`${String(error)}\n`));
 			hosted.projection.setSpecDrivenInteraction(this.specDriven.interaction(hosted.record.id));
 			return { type: "inputAccepted", inputId, delivery: "startNow" };
 		}
+		if (dev?.inputMode() === "dev") {
+			await dev.checkConversationAllowed();
+			if (!native) throw new ZCodeProtocolError(-32602, "Development has no active native stage session");
+			const child = await this.manager.nativeChild(native.sessionManager.getSessionId());
+			if (child) await this.#nativeProjection(native.sessionManager.getSessionId(), child);
+		}
+		const session = native ?? hosted.record.session;
 		await this.#applySubagentRuntimeConfig(hosted.record);
 		// 原生 parser 同时支持 /tan work 与 /tan:work；必须早于父会话 stop/admission。
 		if (parseSlashCommand(text)?.name === "tan") {
@@ -1294,13 +1336,13 @@ export class ZCodeServer {
 		}
 		const references = await hosted.record.run(() =>
 			this.catalogs.prepareReferences(hosted.record.cwd, text, {
-				session: hosted.record.session,
+				session,
 				settings: hosted.record.settings,
 				sessionId: hosted.record.id,
 			}),
 		);
 		text = references.text;
-		const wasBusy = hosted.record.session.isStreaming || hosted.record.session.isCompacting;
+		const wasBusy = session.isStreaming || session.isCompacting;
 		if (execution && wasBusy) throw new ZCodeProtocolError(-32602, "Execution material requires an idle session");
 		delivery ??= hosted.projection.snapshot().config.followupMode;
 		if (wasBusy && delivery === "startNow") await this.manager.stop(hosted.record.id);
@@ -1310,7 +1352,7 @@ export class ZCodeServer {
 		const reminder = references.reminder;
 		if (reminder)
 			await hosted.record.run(() =>
-				hosted.record.session.sendCustomMessage(
+				session.sendCustomMessage(
 					{ customType: "plugin_reference", content: reminder, display: false },
 					{ deliverAs: "nextTurn" },
 				),
@@ -1365,6 +1407,34 @@ export class ZCodeServer {
 		if (!parsed.ok) throw new ZCodeProtocolError(-32602, parsed.error.message);
 		const envelope = parsed.envelope;
 		return this.ledger.execute(envelope, () => {
+			if (envelope.type === "sendText") {
+				const input = P.commandPayloadSchemas.sendText.parse(envelope.payload);
+				// Never serialize repeated Dev decisions into approvals of later phases.
+				const command = parseSlashCommand(input.text);
+				if (command?.name === "dev") {
+					const record = envelope.sessionId ? this.manager.get(envelope.sessionId) : undefined;
+					const owner = record && peekSpecDrivenController(record.session.sessionManager);
+					const before = owner?.observation();
+					const controls = /^(?:new|next|back)(?:\s|$)/.test(command.args);
+					const guard = controls
+						? () => {
+								const current = record && peekSpecDrivenController(record.session.sessionManager);
+								const observation = current?.observation();
+								if (
+									current !== owner ||
+									observation?.runId !== before?.runId ||
+									observation?.status.phase !== before?.status.phase
+								)
+									throw Object.assign(
+										new Error("Development owner or phase changed after command submission"),
+										{ code: "invalid_params" },
+									);
+								current?.assertControlAllowed();
+							}
+						: undefined;
+					return this.#decide(envelope, guard);
+				}
+			}
 			if (!envelope.sessionId || !P.COMMANDS_REQUIRING_BASE_REVISION.has(envelope.type))
 				return this.#decide(envelope);
 			const sessionId = envelope.sessionId;
@@ -1379,11 +1449,13 @@ export class ZCodeServer {
 			return gate;
 		});
 	}
-	async #decide(envelope: P.CommandEnvelope): Promise<P.CommandAck> {
+	async #decide(envelope: P.CommandEnvelope, devAdmission?: () => void): Promise<P.CommandAck> {
 		let revision = 0;
 		try {
+			devAdmission?.();
 			const payload = envelope.payload as Record<string, unknown>;
 			let hosted: HostedSession | undefined;
+			let targetSnapshot: P.ConversationSnapshot | undefined;
 			let workflowPreparation: Awaited<ReturnType<ZCodeWorkflowService["prepareSaved"]>> | undefined;
 			// Bound controls must be checked without resuming a cold source or acquiring its lease.
 			if (envelope.type === "sendText" || envelope.type === "sendGoalCommand") {
@@ -1392,7 +1464,7 @@ export class ZCodeServer {
 					revision = envelope.sessionId
 						? (this.#hosted.get(envelope.sessionId)?.projection.snapshot().revision ?? 0)
 						: 0;
-					this.specDriven.validate(
+					await this.specDriven.validate(
 						envelope.sessionId ? this.manager.get(envelope.sessionId) : undefined,
 						envelope.type === "sendGoalCommand" ? `/goal set ${input.text}` : input.text,
 						input.specRun,
@@ -1415,7 +1487,16 @@ export class ZCodeServer {
 						revisionAtDecision: revision,
 					};
 			}
-			if (envelope.type === "stop" && envelope.sessionId && !this.manager.get(envelope.sessionId))
+			const nativeTarget =
+				envelope.sessionId && !this.manager.get(envelope.sessionId)
+					? await this.manager.nativeChild(envelope.sessionId)
+					: undefined;
+			if (
+				envelope.type === "stop" &&
+				envelope.sessionId &&
+				!this.manager.get(envelope.sessionId) &&
+				!nativeTarget?.root
+			)
 				return {
 					commandId: envelope.commandId,
 					status: "stale",
@@ -1424,8 +1505,11 @@ export class ZCodeServer {
 				};
 			if (envelope.sessionId) {
 				hosted =
-					envelope.type === "stop" ? this.#hosted.get(envelope.sessionId) : await this.#active(envelope.sessionId);
-				revision = hosted?.projection.snapshot().revision ?? 0;
+					envelope.type === "stop"
+						? this.#hosted.get(nativeTarget?.root?.id ?? envelope.sessionId)
+						: await this.#active(envelope.sessionId);
+				targetSnapshot = hosted ? (await this.#projection(envelope.sessionId)).snapshot() : undefined;
+				revision = targetSnapshot?.revision ?? 0;
 			}
 			if (envelope.baseRevision !== undefined && envelope.baseRevision !== revision)
 				return {
@@ -1434,7 +1518,7 @@ export class ZCodeServer {
 					reasonCode: "guard.revision",
 					revisionAtDecision: revision,
 				};
-			if (envelope.baseLogEpoch && envelope.baseLogEpoch !== hosted?.projection.snapshot().logEpoch)
+			if (envelope.baseLogEpoch && envelope.baseLogEpoch !== targetSnapshot?.logEpoch)
 				return {
 					commandId: envelope.commandId,
 					status: "stale",
@@ -1537,13 +1621,17 @@ export class ZCodeServer {
 						"applyFileRewind",
 					].includes(envelope.type)
 				)
-					assertDevCommandAllowed(hosted.record.session, envelope.type);
+					assertDevCommandAllowed(
+						peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession() ??
+							hosted.record.session,
+						envelope.type,
+					);
 				switch (envelope.type) {
 					case "sendText":
 					case "sendGoalCommand": {
 						const input = P.commandPayloadSchemas.sendText.parse(payload);
 						if (input.specRun)
-							this.specDriven.validate(
+							await this.specDriven.validate(
 								hosted.record,
 								envelope.type === "sendGoalCommand" ? `/goal set ${input.text}` : input.text,
 								input.specRun,
@@ -1610,9 +1698,14 @@ export class ZCodeServer {
 							{
 								inputClientId: envelope.clientId,
 								onPromptAdmitted,
-								validateBeforeDispatch: input.specRun
-									? text => this.specDriven.validate(target.record, text, input.specRun!)
-									: undefined,
+								validateBeforeDispatch:
+									devAdmission || input.specRun
+										? async text => {
+												devAdmission?.();
+												if (input.specRun)
+													await this.specDriven.validate(target.record, text, input.specRun);
+											}
+										: undefined,
 								highspeedMeta: input.highspeedMeta,
 								toolDenylist: input.automationId
 									? [...new Set([...(input.toolDisallowlist ?? []), "CronCreate", "CronUpdate", "CronDelete"])]
@@ -1624,17 +1717,21 @@ export class ZCodeServer {
 					}
 					case "stop": {
 						const stop = P.commandPayloadSchemas.stop.parse(payload);
+						const native = peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession();
+						const conversation = native
+							? await this.#projection(native.sessionManager.getSessionId())
+							: hosted.projection;
 						if (
 							stop.expectedForegroundExecutionId &&
-							!hosted.projection
+							!conversation
 								.snapshot()
 								.control.activeWorks.some(
 									work => work.foregroundExecutionId === stop.expectedForegroundExecutionId,
 								)
 						)
 							throw new ZCodeProtocolError(-32000, "Foreground execution changed");
-						hosted.projection.setState({
-							control: { ...hosted.projection.snapshot().control, stopState: "stopping" },
+						conversation.setState({
+							control: { ...conversation.snapshot().control, stopState: "stopping" },
 						});
 						hosted.commands.cancel();
 						await this.manager.stop(hosted.record.id);
@@ -1687,7 +1784,11 @@ export class ZCodeServer {
 					case "forkAssistant":
 					case "editUserQuery":
 					case "retryTurn": {
-						const target = hosted.projection.resolveTarget(P.conversationRowTargetSchema.parse(payload.target));
+						const native = peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession();
+						const conversation = native
+							? await this.#projection(native.sessionManager.getSessionId())
+							: hosted.projection;
+						const target = conversation.resolveTarget(P.conversationRowTargetSchema.parse(payload.target));
 						if (!target) throw new ZCodeProtocolError(-32602, "Conversation target no longer exists");
 						const edit =
 							envelope.type === "editUserQuery"
@@ -1749,9 +1850,8 @@ export class ZCodeServer {
 							);
 						} else if (envelope.type === "editUserQuery")
 							result = { type: "editUserQuery", disposition: "rewind", sessionId: hosted.record.id };
-						if (envelope.type === "editUserQuery" || envelope.type === "retryTurn")
-							hosted.projection.resetEpoch();
-						else hosted.projection.refresh();
+						if (envelope.type === "editUserQuery" || envelope.type === "retryTurn") conversation.resetEpoch();
+						else conversation.refresh();
 						break;
 					}
 					case "applyFileRewind": {
@@ -1832,12 +1932,14 @@ export class ZCodeServer {
 						break;
 					}
 					case "renameSession":
-						await this.manager.rename(hosted.record.id, String(payload.title));
+						await this.manager.rename(envelope.sessionId ?? hosted.record.id, String(payload.title));
 						break;
-					case "deleteSession":
-						await this.#close(hosted.record.id);
-						await this.manager.delete(hosted.record.id);
+					case "deleteSession": {
+						const id = envelope.sessionId ?? hosted.record.id;
+						await this.#close(id);
+						await this.manager.delete(id);
 						break;
+					}
 					case "switchModelConfig": {
 						const selection = P.commandPayloadSchemas.switchModelConfig.parse(payload);
 						await this.#model(hosted, {
@@ -1961,7 +2063,12 @@ export class ZCodeServer {
 				commandId: envelope.commandId,
 				memoryEnabled: hosted?.record.memory.memoryEnabled,
 				status: "accepted",
-				revisionAtDecision: hosted?.projection.snapshot().revision ?? revision,
+				revisionAtDecision:
+					envelope.type === "deleteSession"
+						? revision
+						: envelope.sessionId && hosted
+							? (await this.#projection(envelope.sessionId)).snapshot().revision
+							: (hosted?.projection.snapshot().revision ?? revision),
 				...(result ? { result } : {}),
 			});
 		} catch (error) {
@@ -2003,6 +2110,13 @@ export class ZCodeServer {
 		return record.run(() => read({ sessionId, session: record.session, settings: record.settings }));
 	}
 	async #close(id: string): Promise<void> {
+		const child = this.manager.get(id) ? undefined : await this.manager.nativeChild(id);
+		if (child?.root) {
+			const dev = peekSpecDrivenController(child.root.session.sessionManager);
+			if (child.session && dev?.inputMode() === "dev" && dev.nativeSession() === child.session) await dev.exit();
+			this.#releaseNativeProjection(id);
+			return;
+		}
 		await this.specDriven.detach(id);
 		await this.workflows.cancelSession(id);
 		const hosted = this.#hosted.get(id);
@@ -2429,6 +2543,7 @@ export class ZCodeServer {
 			}
 			case "session/resume": {
 				const params = L.zcodeSessionResumeParamsSchema.parse(raw);
+				if (await this.manager.nativeChild(params.sessionId)) return this.#snapshot(params.sessionId);
 				await this.#attach(
 					await this.manager.resume(params.sessionId, {
 						additionalDirectories: params.additionalDirectories,
@@ -2565,11 +2680,18 @@ export class ZCodeServer {
 			}
 			case "session/stop": {
 				const params = L.zcodeSessionStopParamsSchema.parse(raw);
-				const hosted = this.#hosted.get(params.sessionId);
+				const child = this.manager.get(params.sessionId)
+					? undefined
+					: await this.manager.nativeChild(params.sessionId);
+				const hosted = this.#hosted.get(child?.root?.id ?? params.sessionId);
 				if (!hosted) throw new ZCodeProtocolError(-32004, "Session is not active");
-				hosted.projection.setState({ control: { ...hosted.projection.snapshot().control, stopState: "stopping" } });
+				const native = peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession();
+				const conversation = native
+					? await this.#projection(native.sessionManager.getSessionId())
+					: hosted.projection;
+				conversation.setState({ control: { ...conversation.snapshot().control, stopState: "stopping" } });
 				hosted.commands.cancel();
-				await this.manager.stop(params.sessionId);
+				await this.manager.stop(hosted.record.id);
 				return {};
 			}
 			case "session/setMode": {
@@ -2894,9 +3016,16 @@ export class ZCodeServer {
 					})
 				: await this.#coldProjection(id);
 			// registry 的 release/revive 可跨 await 换代；旧详情不能重新接管已释放的 child。
-			if (this.#closed || this.#nativeProjections.get(id) !== current || current.generation !== generation) {
+			if (this.#closed) {
 				projection.dispose();
-				throw new Error("Native child projection owner changed");
+				throw new Error("ZCode server is closed");
+			}
+			if (this.#nativeProjections.get(id) !== current || current.generation !== generation) {
+				if (this.#nativeProjections.get(id)?.projection !== projection) {
+					if (this.#cold.get(id)?.projection === projection) this.#cold.delete(id);
+					projection.dispose();
+				}
+				return this.#projection(id);
 			}
 			if (child.session && child.root?.registry.get(child.agentId)?.session !== child.session) {
 				projection.dispose();
@@ -2999,7 +3128,9 @@ export class ZCodeServer {
 		projection.setWorkflowState(await this.workflows.projection(id));
 		projection.setSpecDrivenRuns(await this.specDriven.runs(id));
 		this.#cold.set(id, { projection, version });
-		if (this.topics.hasSubscribers(`conversation/${id}`))
+		// Native children publish only after #nativeProjection validates their owner generation.
+		// A cold read started during exit must not overwrite a newer restored live source.
+		if (this.topics.hasSubscribers(`conversation/${id}`) && !this.#nativeProjections.has(id))
 			this.topics.register(`conversation/${id}`, {
 				snapshot: () => projection.snapshot(),
 				logEpoch: () => projection.logEpoch(),

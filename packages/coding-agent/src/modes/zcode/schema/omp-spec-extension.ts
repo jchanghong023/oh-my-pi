@@ -11,8 +11,9 @@ export const ompSpecRunBindingSchema = z
 	.object({
 		runId: id,
 		generation: z.number().int().nonnegative(),
+		phase: z.enum(SPEC_PHASES),
+		files: z.array(z.object({ path: id, version: id }).strict()),
 		actionId: id.optional(),
-		actionVersion: id.optional(),
 	})
 	.strict();
 export const ompSpecPhaseSchema = z.enum(SPEC_PHASES);
@@ -40,7 +41,6 @@ export const ompSpecActionSchema = z
 		available: z.boolean().optional(),
 		blockedReason: z.string().optional(),
 		requiresInput: z.boolean().optional(),
-		version: id.optional(),
 	})
 	.strict()
 	.refine(action => (action.command !== undefined) !== (action.commandPrefix !== undefined), {
@@ -51,18 +51,9 @@ const recipientSchema = z
 		role: z.enum(["requirements", "solution", "planner", "executor"]),
 		actorId: id,
 		sessionId: id,
+		sessionFile: id.optional(),
 	})
 	.strict();
-const messageSchema = recipientSchema.extend({
-	id,
-	text: z.string(),
-	runId: id,
-	generation: z.number().int().nonnegative(),
-	phase: ompSpecPhaseSchema,
-	status: z.enum(["queued", "processing", "cancelling", "cancelled", "completed", "failed"]),
-	reply: z.string().optional(),
-	error: z.string().optional(),
-});
 const nativeActionSchema = z
 	.object({
 		id,
@@ -71,15 +62,12 @@ const nativeActionSchema = z
 		available: z.boolean(),
 		blockedReason: z.string().optional(),
 		requiresInput: z.boolean().optional(),
-		version: id.optional(),
 	})
 	.strict();
 export const ompSpecInteractionSchema = z
 	.object({
 		mode: z.enum(["chat", "dev"]),
-		draft: z.string(),
 		recipient: recipientSchema.optional(),
-		messages: z.array(messageSchema),
 		actions: z.array(nativeActionSchema),
 		blockedReason: z.string().optional(),
 	})
@@ -99,12 +87,24 @@ export const ompSpecDetailsSchema = z
 	.object({
 		changeId: id,
 		phase: ompSpecPhaseSchema,
-		stage: ompSpecStageSchema,
-		state: z.enum(["active", "waiting", "paused", "blocked", "terminal"]),
+		stage: ompSpecStageSchema.nullable(),
+		state: z.enum(["active", "waiting", "blocked", "terminal"]),
 		explanation: z.string(),
-		lastReply: z.string().optional(),
 		useTeam: z.boolean().optional(),
-		useGoal: z.boolean().optional(),
+		teamMutable: z.boolean(),
+		awaitingAcceptance: z.boolean().optional(),
+		closing: z
+			.object({
+				synced: z.boolean().optional(),
+				archivedChangePath: id.optional(),
+				retirementCleanup: z
+					.object({ paths: z.array(id), diagnostic: id })
+					.strict()
+					.optional(),
+			})
+			.strict()
+			.optional(),
+		archivedChangePath: id.optional(),
 		generation: z.number().int().nonnegative(),
 		live: z.boolean(),
 		readOnly: z.boolean(),
@@ -129,10 +129,7 @@ export const ompSpecDetailsSchema = z
 	})
 	.strict()
 	.superRefine((details, context) => {
-		if (
-			(!details.live || details.readOnly || details.phase === "cancelled" || details.phase === "completed") &&
-			details.actions.length
-		)
+		if ((!details.live || details.readOnly) && details.actions.length)
 			context.addIssue({
 				code: "custom",
 				path: ["actions"],

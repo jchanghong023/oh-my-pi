@@ -44,9 +44,11 @@ import manualContinuePrompt from "../../prompts/system/manual-continue.md" with 
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
+import { peekSpecDrivenController } from "../../spec-driven/controller";
 import { PINNED_HUD_TOGGLE_ID } from "@oh-my-pi/pi-tui/prompt/composer";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
 import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import { assertDevCommandAllowed } from "../../slash-commands/builtin-spec-driven";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
 import { isTinyLocalModelKey } from "../../tiny/models";
@@ -571,6 +573,15 @@ export class InputController {
 				if (this.ctx.collabGuest.state?.isStreaming || this.ctx.loadingAnimation) {
 					this.ctx.collabGuest.sendAbort();
 				}
+				return;
+			}
+			// A Dev Team discussion precedes the visible actor's streaming turn.
+			// Its current owner, not loadingAnimation, owns interruption and settlement.
+			const dev = peekSpecDrivenController(this.ctx.session.sessionManager);
+			if (dev?.hasPendingTeam(this.ctx.session)) {
+				void dev.interrupt(this.ctx.session).catch(error => {
+					this.ctx.showError(error instanceof Error ? error.message : String(error));
+				});
 				return;
 			}
 			if (this.ctx.loadingAnimation) {
@@ -1761,6 +1772,12 @@ export class InputController {
 			this.ctx.showStatus("/retry is host-only during a collab session");
 			return;
 		}
+		try {
+			assertDevCommandAllowed(this.ctx.viewSession, "retry");
+		} catch (error) {
+			this.ctx.showDevCommandStatus(error instanceof Error ? error.message : String(error));
+			return;
+		}
 		const didRetry = await this.ctx.viewSession.retry();
 		if (didRetry) {
 			this.ctx.editor.clearDraft();
@@ -1803,6 +1820,15 @@ export class InputController {
 		if (this.ctx.collabGuest) {
 			this.ctx.showStatus("/queue is host-only during a collab session");
 			this.ctx.editor.setText(options.detachedText ?? options.historyText ?? text);
+			return;
+		}
+		try {
+			assertDevCommandAllowed(this.ctx.session, "queue");
+		} catch (error) {
+			if (options.detachedText !== undefined) {
+				restoreDetachedDraft(this.ctx.editor, options.detachedText, options.images, options.imageLinks);
+			}
+			this.ctx.showDevCommandStatus(error instanceof Error ? error.message : String(error));
 			return;
 		}
 

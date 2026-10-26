@@ -379,6 +379,7 @@ describe("InteractiveMode goal mode integration", () => {
 	);
 
 	it("toggles goal tool exposure when goal mode enters and pauses", async () => {
+		const previousTools = harness.session.getEnabledToolNames();
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 
 		await harness.mode.handleGoalModeCommand("Ship the release");
@@ -393,6 +394,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(true);
 		expect(harness.session.getGoalModeState()?.goal.status).toBe("paused");
+		expect(harness.session.getEnabledToolNames()).toEqual(previousTools);
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 	});
 
@@ -485,6 +487,7 @@ describe("InteractiveMode goal mode integration", () => {
 		await executeBuiltinSlashCommand("/goal-autopilot drop", { ctx: harness.mode });
 		expect(harness.session.getGoalModeState()).toBeUndefined();
 		expect(harness.mode.goalModePaused).toBe(false);
+		expect(await toolNamesFor(harness)).not.toContain("goal");
 	});
 
 	it("keeps existing goal guards and failed creation from enabling auto orchestration", async () => {
@@ -1426,6 +1429,8 @@ describe("InteractiveMode goal mode integration", () => {
 	});
 
 	it("returns the completion report from the goal tool and exits goal mode before the next turn rebuild", async () => {
+		await harness.mode.init({ suppressWelcomeIntro: true });
+		const previousTools = harness.session.getEnabledToolNames();
 		await harness.mode.handleGoalModeCommand("Ship the release");
 		await harness.mode.handleGoalModeCommand("budget 50");
 		const appendCustomEntry = vi.spyOn(harness.session.sessionManager, "appendCustomEntry");
@@ -1449,6 +1454,7 @@ describe("InteractiveMode goal mode integration", () => {
 		// existing toolset for the in-flight turn is unaffected — what we care about here
 		// is that the next createTools observation reflects the deactivation.
 		expect(harness.session.getGoalModeState()?.enabled).toBe(false);
+		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 
 		const nextTurn = harness.mode.getUserInput();
@@ -1460,6 +1466,7 @@ describe("InteractiveMode goal mode integration", () => {
 		expect(harness.mode.goalModeEnabled).toBe(false);
 		expect(harness.mode.goalModePaused).toBe(false);
 		expect(harness.session.getGoalModeState()).toBeUndefined();
+		expect(harness.session.getEnabledToolNames()).toEqual(previousTools);
 		expect(await toolNamesFor(harness)).not.toContain("goal");
 		expect(appendCustomEntry).toHaveBeenCalledWith(
 			"goal-completed",

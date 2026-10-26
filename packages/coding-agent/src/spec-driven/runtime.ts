@@ -8,21 +8,30 @@ import { cfgTaskMaxConcurrency } from "../task/settings";
 import { runTeamDiscussion } from "../team/orchestrator";
 import { createTeamSubagentRunner } from "../team/runner";
 import type { TeamRunResult } from "../team/types";
-import { containedSpecPath, SpecArtifactStore } from "./artifacts";
+import { artifactVersion, containedSpecPath, formalMaterialPaths, SpecArtifactStore } from "./artifacts";
 import { createSpecActor, type SpecActor } from "./actors";
-import { specRequestCost, type SpecRunMeasurement, type SpecRequestMeasurement } from "./metrics";
 import { loadSpecDrivenSkill, runOpenSpec } from "./resources";
 import { grantSpecSkillAccess } from "./skill-policy";
-import type { SpecDrivenOptions, SpecDrivenPorts, SpecRunContext, SpecStageRole } from "./types";
+import type {
+	SpecConversationRecipient,
+	SpecDrivenPorts,
+	SpecDrivenStatus,
+	SpecRunContext,
+	SpecSavedRun,
+	SpecStageRole,
+} from "./types";
 
 export interface SpecDrivenRuntime {
 	ports: SpecDrivenPorts;
-	options: SpecDrivenOptions;
+	options: { runId: string };
+	nativeSession(role: SpecStageRole): AgentSession | undefined;
+	sessionRefs(): SpecSavedRun["sessions"];
+	originalRequest(): string;
+	hasPendingTeam(session: AgentSession): boolean;
+	interruptTeam(session: AgentSession): Promise<boolean>;
+	stop(): Promise<void>;
 	dispose(): Promise<void>;
-	measurement(): SpecRunMeasurement;
 }
-
-/** Preserve an existing authority without introducing editable requirement mirrors. */
 async function requirementsAuthority(cwd: string): Promise<string | undefined> {
 	const found: string[] = [];
 	for (const candidate of ["docs-zh-CN/requirements", "docs/requirements", "requirements"]) {
@@ -35,86 +44,144 @@ async function requirementsAuthority(cwd: string): Promise<string | undefined> {
 	if (found.length > 1) throw new Error(`Ambiguous Markdown requirement authorities: ${found.join(", ")}`);
 	return found[0];
 }
-
-function object(value: unknown): Record<string, unknown> | undefined {
-	return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-function observedNumber(value: unknown): number | null {
-	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
 export async function createSpecDrivenRuntime(args: {
 	session: AgentSession;
 	settings: Settings;
 	cwd: string;
-	onOutput?: (text: string) => Promise<void>;
-	onRequest?: () => void;
+	saved?: SpecSavedRun;
+	checkApproved?: () => Promise<unknown>;
+	getStatus?: () => SpecDrivenStatus | undefined;
+	getSavedRun?: () => SpecSavedRun | undefined;
+	observeReport?: () => void | Promise<void>;
+	beginRepair?: () => Promise<void>;
+	onSessionCreated?: (role: SpecStageRole, session: AgentSession) => void;
 }): Promise<SpecDrivenRuntime> {
 	const { session, settings } = args;
-	if (!session.asyncJobManager)
-		throw new Error("Specification workflow requires its owning SDK session's AsyncJobManager");
-	if (!session.model) throw new Error("Specification workflow requires a current model");
+	if (!session.asyncJobManager) throw new Error("Dev requires the owning SDK AsyncJobManager");
 	const loadedContext = session.loadedProjectContext;
-	if (!loadedContext)
-		throw new Error("Loaded project hard constraints are unavailable for isolated specification roles");
+	if (!loadedContext) throw new Error("Loaded project hard constraints are unavailable for Dev roles");
 	const cwd = await fs.realpath(args.cwd);
-	const currentModel = formatModelStringWithRouting(session.model);
 	const deps = buildRunnerDeps(session, settings, cwd);
-	const lifetime = new AbortController();
-	const runId = crypto.randomUUID();
+	let lifetime = new AbortController();
+	const active = new Set<Promise<unknown>>();
+	const runId = args.saved?.runId ?? crypto.randomUUID();
 	const actors = new Map<SpecStageRole, SpecActor>();
-	const actorPending = new Map<SpecStageRole, Promise<SpecActor>>();
-	const pending = new Set<Promise<unknown>>();
-	const startedAt = Date.now();
-	const requests: SpecRequestMeasurement[] = [];
-	let requestText = "";
-	let store: SpecArtifactStore | undefined;
+	const preparing = new Map<SpecStageRole, Promise<SpecActor>>();
 	let disposed = false;
-	const requireStore = (): SpecArtifactStore => {
-		if (!store) throw new Error("Specification artifacts are not initialized");
+	let pendingTeam:
+		| { session: AgentSession; controller: AbortController; settled: PromiseWithResolvers<void> }
+		| undefined;
+	let store = args.saved?.changeId
+		? new SpecArtifactStore({
+				cwd,
+				changeId: args.saved.changeId,
+				requirementsDir: await requirementsAuthority(cwd),
+				paths: args.saved.paths,
+			})
+		: undefined;
+	const requireStore = () => {
+		if (!store) throw new Error("Dev artifacts are not initialized");
 		return store;
 	};
 	const contextFor = (context: SpecRunContext): SpecRunContext => {
-		if (disposed) throw new Error("Specification runtime disposed");
+		if (disposed) throw new Error("Dev runtime disposed");
 		const signal = AbortSignal.any([context.signal, lifetime.signal]);
 		signal.throwIfAborted();
 		return { ...context, signal };
 	};
-	const tracked = async <T>(operation: Promise<T>): Promise<T> => {
-		pending.add(operation);
-		try {
-			return await operation;
-		} finally {
-			pending.delete(operation);
+	const recoveryContext = async (role: SpecStageRole, sessionFile?: string): Promise<string> => {
+		const saved = args.getSavedRun?.() ?? args.saved;
+		const materials: Array<{ path: string; content?: string; version?: string; error?: string }> = [];
+		if (saved?.paths && saved.changeId) {
+			try {
+				const paths = await formalMaterialPaths(
+					cwd,
+					saved.paths,
+					saved.changeId,
+					saved.closing?.archivedChangePath ?? saved.archivedChangePath,
+				);
+				for (const file of paths) {
+					try {
+						const bytes = await fs.readFile(await containedSpecPath(cwd, file));
+						materials.push({ path: file, content: bytes.toString("utf8"), version: artifactVersion(bytes) });
+					} catch (error) {
+						materials.push({ path: file, error: error instanceof Error ? error.message : String(error) });
+					}
+				}
+			} catch (error) {
+				materials.push({ path: "formal materials", error: error instanceof Error ? error.message : String(error) });
+			}
 		}
+		return JSON.stringify({
+			notice:
+				"原生聊天历史不可用；不记得缺失的对话。以下仅为当前真实正式文件和已保存的原始批准，不是新的阶段进入或批准。缺失产物不阻止本阶段澄清，结构门禁仍仅在 next。",
+			role,
+			unavailableSessionFile: sessionFile ?? null,
+			phase: saved?.phase,
+			paths: saved?.paths,
+			approvals: saved?.approvals ?? {},
+			materials,
+		});
 	};
-	const getActor = async (role: SpecStageRole): Promise<SpecActor> => {
+	const getActor = async (role: SpecStageRole, saved = args.saved?.sessions[role]): Promise<SpecActor> => {
 		const existing = actors.get(role);
 		if (existing) return existing;
-		const creating = actorPending.get(role);
-		if (creating) return creating;
+		const pending = preparing.get(role);
+		if (pending) return pending;
 		const operation = (async () => {
-			const skills = role === "planner" ? [await loadSpecDrivenSkill("superpowers", "writing-plans")] : [];
+			const skills =
+				role === "requirements"
+					? [
+							await loadSpecDrivenSkill("superpowers", "brainstorming"),
+							await loadSpecDrivenSkill("jch", "jch-grill-me"),
+						]
+					: role === "planner"
+						? [await loadSpecDrivenSkill("superpowers", "writing-plans")]
+						: role === "executor"
+							? [await loadSpecDrivenSkill("superpowers", "subagent-driven-development")]
+							: [];
 			const methods = await Promise.all(skills.map(skill => fs.readFile(skill.filePath, "utf8")));
-			if (role === "requirements") {
-				for (const artifact of ["proposal", "specs"]) {
-					const instruction = await runOpenSpec(
-						["instructions", artifact, "--change", requireStore().changeId, "--json"],
-						cwd,
-						lifetime.signal,
-					);
-					if (instruction.exitCode !== 0)
-						throw new Error(
-							`OpenSpec ${artifact} instructions failed: ${instruction.stdout}\n${instruction.stderr}`,
-						);
-					methods.push(instruction.stdout);
+			let sessionFile = saved?.sessionFile;
+			if (sessionFile) {
+				try {
+					await fs.stat(sessionFile);
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+					sessionFile = undefined;
 				}
 			}
+			const missingHistory = !!(saved || args.saved) && !sessionFile;
 			const executor = role === "executor";
 			const actor = await createSpecActor({
 				role,
 				methods,
-				sessionDirectory: await containedSpecPath(cwd, `.omp/spec-sessions/${runId}/sessions`),
+				sessionFile,
+				entryMethods:
+					role === "requirements"
+						? async () => {
+								const instructions: string[] = [];
+								for (const artifact of ["proposal", "specs"]) {
+									const result = await runOpenSpec(
+										["instructions", artifact, "--change", requireStore().changeId, "--json"],
+										cwd,
+										lifetime.signal,
+									);
+									if (result.exitCode !== 0)
+										throw new Error(
+											`OpenSpec ${artifact} instructions failed: ${result.stdout}\n${result.stderr}`,
+										);
+									instructions.push(result.stdout);
+								}
+								return instructions;
+							}
+						: undefined,
+				sessionDirectory: await containedSpecPath(cwd, `.omp/dev/sessions/${runId}`),
+				checkApproved: args.checkApproved,
+				getStatus: args.getStatus,
+				observeReport: args.observeReport,
+				beginRepair: args.beginRepair,
+				recoverContext: missingHistory ? () => recoveryContext(role, saved?.sessionFile) : undefined,
+				reportPath: args.saved?.paths?.report ?? requireStore().planPath.replace(/\.md$/, "-completion.md"),
 				options: {
 					cwd,
 					settings: settings.overlay(),
@@ -126,8 +193,8 @@ export async function createSpecDrivenRuntime(args: {
 					parentAgentId: session.getAgentId(),
 					eventBus: deps.eventBus,
 					subagentEventBus: deps.subagentEventBus,
-					contextFiles: loadedContext.contextFiles ? [...loadedContext.contextFiles] : [],
-					rules: loadedContext.activeRules ? [...loadedContext.activeRules] : [],
+					contextFiles: [...(loadedContext.contextFiles ?? [])],
+					rules: [...(loadedContext.activeRules ?? [])],
 					skills: executor ? [...session.skills] : skills,
 					promptTemplates: [],
 					spawns: executor ? "*" : "",
@@ -150,27 +217,13 @@ export async function createSpecDrivenRuntime(args: {
 				},
 				onSessionCreated(child) {
 					const grants = skills.map(skill => grantSpecSkillAccess(child.sessionManager, skill));
-					let requestStarted = Date.now();
-					const unsubscribe = child.subscribe(event => {
-						if (event.type === "message_start") requestStarted = Date.now();
-						if (event.type !== "message_end" || event.message.role !== "assistant") return;
-						const usage = object(event.message.usage);
-						requests.push({
-							id: crypto.randomUUID(),
-							node: role,
-							model: currentModel,
-							startedAt: requestStarted,
-							endedAt: Date.now(),
-							inputTokens: observedNumber(usage?.input),
-							outputTokens: observedNumber(usage?.output),
-							cacheReadTokens: observedNumber(usage?.cacheRead),
-							cacheWriteTokens: observedNumber(usage?.cacheWrite),
-							cost: specRequestCost(usage?.cost),
-							evidence: `session:${child.sessionId}`,
-						});
-					});
+					try {
+						args.onSessionCreated?.(role, child);
+					} catch (error) {
+						for (const release of grants) release();
+						throw error;
+					}
 					return () => {
-						unsubscribe();
 						for (const release of grants) release();
 					};
 				},
@@ -178,89 +231,127 @@ export async function createSpecDrivenRuntime(args: {
 			actors.set(role, actor);
 			return actor;
 		})();
-		actorPending.set(role, operation);
+		preparing.set(role, operation);
 		try {
 			return await operation;
 		} finally {
-			actorPending.delete(role);
+			preparing.delete(role);
 		}
+	};
+	const recipient = (role: SpecStageRole): SpecConversationRecipient | undefined => {
+		const actor = actors.get(role);
+		return actor
+			? { role, actorId: actor.id, sessionId: actor.session.sessionId, sessionFile: actor.session.sessionFile }
+			: undefined;
+	};
+	const originalRequest = () => {
+		const history = actors.get("requirements")?.session.sessionManager.getEntries() ?? [];
+		// A recovery continuation is not the lost original request, including after reopening.
+		if (history.some(entry => entry.type === "custom_message" && entry.customType === "dev-history-recovery"))
+			return "";
+		for (const entry of history) {
+			if (entry.type !== "message" || entry.message.role !== "user") continue;
+			const content = entry.message.content;
+			const text =
+				typeof content === "string"
+					? content
+					: content
+							.filter(item => item.type === "text")
+							.map(item => item.text)
+							.join("\n");
+			return text;
+		}
+		return "";
 	};
 	const ports: SpecDrivenPorts = {
 		agents: {
-			recipient(role) {
-				const actor = actors.get(role);
-				return actor ? { role, actorId: actor.id, sessionId: actor.session.sessionId } : undefined;
+			async prepare(role, context, saved) {
+				contextFor(context);
+				await getActor(role, saved);
+				contextFor(context);
 			},
+			recipient,
+			originalRequest,
 			async run(input, context) {
 				const ctx = contextFor(context);
-				return tracked(
-					(async () => {
-						const actor = await getActor(input.role);
-						ctx.signal.throwIfAborted();
-						args.onRequest?.();
-						requestText ||= input.request;
-						let files = input.files;
-						if (input.role === "requirements" && !requireStore().native && !files.length)
-							files = await requireStore().readAuthorityDocuments();
-						let teamResult: TeamRunResult | undefined;
-						if (input.role === "solution" && input.useTeam) {
-							const members = resolveTeamParticipantsForSession(session, settings);
-							if (!members.ok) throw new Error(members.error);
-							// All Team descendants belong to the persistent solution producer.
+				const actor = await getActor(input.role);
+				ctx.signal.throwIfAborted();
+				const operation = (async () => {
+					let files = input.files;
+					if (input.entry && input.role === "requirements" && !requireStore().native && !files.length)
+						files = await requireStore().readAuthorityDocuments();
+					let teamResult: TeamRunResult | undefined;
+					if (input.entry && input.role === "solution" && input.useTeam) {
+						const approved = await args.checkApproved?.();
+						if (approved && typeof approved === "object" && "matches" in approved && !approved.matches)
+							throw new Error("正式批准版本已变化");
+						const members = resolveTeamParticipantsForSession(session, settings);
+						if (!members.ok) throw new Error(members.error);
+						if (!session.model) throw new Error("Team requires a current model");
+						const team = {
+							session: actor.session,
+							controller: new AbortController(),
+							settled: Promise.withResolvers<void>(),
+						};
+						const teamSignal = AbortSignal.any([ctx.signal, team.controller.signal]);
+						pendingTeam = team;
+						try {
 							const runner = createTeamSubagentRunner({
-								...buildRunnerDeps(actor.session, settings, cwd),
+								...buildRunnerDeps(actor.session, actor.session.settings, cwd),
 								parentAgentId: actor.id,
-								isCurrentSession: () => !disposed && !ctx.signal.aborted && !actor.session.isDisposed,
+								isCurrentSession: () => !disposed && !teamSignal.aborted && !actor.session.isDisposed,
 							});
 							teamResult = await runTeamDiscussion({
 								question: JSON.stringify({ ...input, files }, null, 2),
 								cwd,
 								participants: members.participants,
-								sessionModelPattern: currentModel,
-								runner,
-								signal: ctx.signal,
-								maxConcurrency: cfgTaskMaxConcurrency.get(settings),
-								onProgress(update) {
-									if (!ctx.signal.aborted) void args.onOutput?.(update.text);
+								sessionModelPattern: formatModelStringWithRouting(session.model),
+								runner: async (call, signal) => {
+									const approval = await args.checkApproved?.();
+									if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
+										throw new Error("正式批准版本已变化");
+									return runner(call, signal);
 								},
+								signal: teamSignal,
+								maxConcurrency: cfgTaskMaxConcurrency.get(settings),
 							});
-							ctx.signal.throwIfAborted();
-							if (teamResult.status !== "completed")
-								throw new Error(`Team ${teamResult.status}: ${teamResult.failureReason ?? "讨论未成功完成"}`);
-							if (!teamResult.candidates.some(candidate => candidate.adoptable))
-								throw new Error("Team 未产生可采用候选；不能退回单代理方案");
-						}
-						const reply = await actor.request({ ...input, files }, ctx, teamResult);
-						if (teamResult && !input.readOnly) {
-							const solution = await requireStore().readSolution();
-							for (const candidate of solution.candidates) {
-								const source = teamResult.candidates.find(item => item.id === candidate.id);
-								if (!source?.adoptable || !candidate.content.includes(source.proposal))
-									throw new Error(`Team 候选 ${candidate.id} 未获采用资格或未保留完整获审方案`);
-							}
+							teamSignal.throwIfAborted();
+						} finally {
+							if (pendingTeam === team) pendingTeam = undefined;
+							team.settled.resolve();
 						}
 						ctx.signal.throwIfAborted();
-						if (reply.text) await args.onOutput?.(reply.text);
-						return reply;
-					})(),
-				);
+						if (teamResult.status !== "completed")
+							throw new Error(`Team ${teamResult.status}: ${teamResult.failureReason ?? "讨论未成功完成"}`);
+						if (!teamResult.candidates.some(candidate => candidate.adoptable))
+							throw new Error("Team 未产生可采用候选");
+					}
+					return actor.request({ ...input, files }, ctx, teamResult);
+				})();
+				active.add(operation);
+				try {
+					return await operation;
+				} finally {
+					active.delete(operation);
+				}
 			},
 		},
 		artifacts: {
 			async initialize(changeId, context) {
 				contextFor(context);
-				if (store) throw new Error("Specification artifacts are already initialized");
+				if (store) throw new Error("Dev artifacts already initialized");
 				store = new SpecArtifactStore({ cwd, changeId, requirementsDir: await requirementsAuthority(cwd) });
-				const paths = await store.initialize();
-				contextFor(context);
-				return paths;
+				return store.initialize();
 			},
 			async readRequirements(context) {
 				return requireStore().readRequirements(contextFor(context).signal);
 			},
 			async readSolution(context) {
 				contextFor(context);
-				return requireStore().readSolution();
+				const solution = await requireStore().readSolution();
+				const actor = await getActor("solution");
+				actor.checkSolutionCandidates(solution.candidates);
+				return solution;
 			},
 			async readPlan(context) {
 				contextFor(context);
@@ -270,37 +361,44 @@ export async function createSpecDrivenRuntime(args: {
 				contextFor(context);
 				return requireStore().readReport();
 			},
+			async checkVersions(files, archivedChangePath) {
+				return requireStore().checkVersions(files, archivedChangePath);
+			},
 			async close(input, context) {
-				return tracked(requireStore().close(input, contextFor(context).signal));
+				return requireStore().close(input, contextFor(context).signal);
 			},
 		},
 	};
 	return {
 		ports,
-		options: { currentModel, runId },
+		options: { runId },
+		nativeSession: role => actors.get(role)?.session,
+		sessionRefs() {
+			return Object.fromEntries([...actors.keys()].map(role => [role, recipient(role)]));
+		},
+		originalRequest,
+		hasPendingTeam: owner => pendingTeam?.session === owner,
+		async interruptTeam(owner) {
+			const team = pendingTeam;
+			if (!team || team.session !== owner) return false;
+			team.controller.abort(new Error("Team discussion interrupted"));
+			await team.settled.promise;
+			return true;
+		},
+		async stop() {
+			lifetime.abort();
+			await Promise.all(preparing.values());
+			await Promise.all([...actors.values()].map(actor => actor.stop()));
+			await Promise.allSettled(active);
+			lifetime = new AbortController();
+		},
 		async dispose() {
 			if (disposed) return;
-			disposed = true;
 			lifetime.abort();
-			await Promise.allSettled(pending);
-			await Promise.allSettled(actorPending.values());
+			await Promise.all(preparing.values());
 			await Promise.all([...actors.values()].map(actor => actor.dispose()));
-		},
-		measurement() {
-			return structuredClone({
-				task: requestText,
-				codeBaseline: "",
-				modelConfiguration: JSON.stringify({ currentModel }),
-				acceptanceCriteria: "",
-				mode: "workflow",
-				startedAt,
-				endedAt: Date.now(),
-				requests,
-				observations: [],
-				plannedDecisionWaitMs: null,
-				executionWaitMs: null,
-				assessmentComplete: false,
-			});
+			await Promise.allSettled(active);
+			disposed = true;
 		},
 	};
 }

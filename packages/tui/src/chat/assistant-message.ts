@@ -14,7 +14,7 @@ import {
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
-import { formatDuration, formatNumber } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, sanitizeText } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AssistantThinkingRenderer } from "./extension-types";
@@ -42,7 +42,6 @@ import { svgFigureRendering } from "./svg-figure";
 import { hasSvgFence } from "./svg-source";
 import { chartFence, hasChartTable, lookupTableChart, splitTableCharts } from "./table-chart";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { clipThinkingRows } from "./thinking-preview";
 
 /**
  * Max wrapped rows of a turn-ending provider error rendered inline in the
@@ -831,10 +830,13 @@ export class AssistantMessageComponent extends Container {
 		const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
 		if (!display.visible) return EMPTY_STABLE_RENDER;
 		if (!this.#compactThinkingPreview) {
-			this.#compactThinkingPreview = new Markdown(display.text, 1, 0, getMarkdownTheme(), {
-				color: value => theme.fg("thinkingText", value),
-				italic: true,
-			});
+			this.#compactThinkingPreview = new Markdown(
+				display.text,
+				1,
+				0,
+				{ ...getMarkdownTheme(), codeBlockBorder: () => "" },
+				{ color: value => theme.fg("thinkingText", value), italic: true },
+			);
 			this.#compactThinkingPreview.transientRenderCache = true;
 		} else {
 			this.#compactThinkingPreview.setText(display.text);
@@ -842,7 +844,13 @@ export class AssistantMessageComponent extends Container {
 		const rows = this.#compactThinkingPreview.render(width);
 		if (rows !== this.#compactThinkingPreviewSourceRows) {
 			this.#compactThinkingPreviewSourceRows = rows;
-			this.#compactThinkingPreviewRows = clipThinkingRows(rows, true);
+			this.#compactThinkingPreviewRows = EMPTY_STABLE_RENDER;
+			for (let index = rows.length - 1; index >= 0; index--) {
+				const row = sanitizeText(rows[index]!);
+				if (!row.trim()) continue;
+				this.#compactThinkingPreviewRows = [theme.fg("thinkingText", row)];
+				break;
+			}
 		}
 		return this.#compactThinkingPreviewRows;
 	}

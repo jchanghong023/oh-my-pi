@@ -14,19 +14,10 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
+import type { SpecSavedRun } from "../../src/spec-driven/types";
 import * as teamOrchestrator from "../../src/team/orchestrator";
-import type { TeamRunResult } from "../../src/team/types";
+import { createProviderFixture } from "./provider-fixture";
 import { cfgTeamMembers } from "../../src/team/settings";
-import {
-	createProviderFixture,
-	MARKER,
-	REQUIREMENT,
-	SOLUTION,
-	respond,
-	rolePayload,
-	type ModelRequest,
-	type Reply,
-} from "./provider-fixture";
 
 async function consumer(options: Parameters<typeof createProviderFixture>[0] = {}) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-four-native-"));
@@ -90,7 +81,11 @@ async function consumer(options: Parameters<typeof createProviderFixture>[0] = {
 			runtime,
 			session,
 			provider,
-			orchestrator: new SpecDrivenOrchestrator(runtime.ports, runtime.options),
+			orchestrator: new SpecDrivenOrchestrator(runtime.ports, {
+				...runtime.options,
+				getUseTeam: () => false,
+				persist: async () => {},
+			}),
 			[Symbol.asyncDispose]: dispose,
 		};
 	} catch (error) {
@@ -99,216 +94,380 @@ async function consumer(options: Parameters<typeof createProviderFixture>[0] = {
 	}
 }
 
-function lastInput(requests: ModelRequest[], role: string) {
-	return requests.map(rolePayload).findLast(item => item?.specDrivenRole === role)?.input;
-}
-
-test("four real SDK actors write files, preserve full choice input and wait for acceptance", async () => {
+test("preparation creates four persistent native sessions without calling the model", async () => {
 	await using fixture = await consumer();
-	const flow = fixture.orchestrator;
-	let status = await flow.start(`${MARKER}: ${REQUIREMENT}`, "runtime-files");
-	expect(status.phase, status.blockedReason).toBe("awaiting-specification");
-	const requirementsActor = flow.recipient();
-	status = await flow.confirmSpecification(" 原始需求确认\n保留原文 ");
-	expect(status.phase, status.blockedReason).toBe("awaiting-choice");
-	const fullSolution = status.solution!.content;
-	const rawChoice = "  选用 pure，完整方案原文照办\n不要删去其他候选。  ";
-	status = await flow.chooseCandidate("pure", rawChoice);
-	expect(status.phase, status.blockedReason).toBe("awaiting-plan");
-	const planner = lastInput(fixture.provider.requests, "planner");
-	expect(planner?.userReply).toBe(rawChoice);
-	expect(planner?.candidateId).toBe("pure");
-	expect(JSON.stringify(planner?.files)).toContain("normalizer");
-	expect(JSON.stringify(planner?.files)).toContain(JSON.stringify(fullSolution));
-	status = await flow.confirmPlan("确认此完整计划");
-	expect(status.phase, status.blockedReason).toBe("awaiting-acceptance");
-	expect(await fs.readFile(path.join(fixture.cwd, "src/greeting.ts"), "utf8")).toContain("export function greet");
-	const paths = status.paths!;
-	const materialDirectory = path.join(fixture.cwd, path.dirname(paths.plan));
-	expect((await fs.readdir(materialDirectory)).sort()).toEqual(
-		[paths.solution, paths.plan, paths.report].map(file => path.basename(file)).sort(),
-	);
-	const executionBytes = await Promise.all(
-		[paths.solution, paths.plan, paths.report].map(file => fs.readFile(path.join(fixture.cwd, file), "utf8")),
-	);
-	expect(
-		new Set(
-			fixture.provider.requests
-				.map(rolePayload)
-				.filter(Boolean)
-				.map(item => item!.specDrivenRole),
-		),
-	).toEqual(new Set(["requirements", "solution", "planner", "executor"]));
-	expect(requirementsActor?.actorId).not.toBe(flow.recipient()?.actorId);
-	status = await flow.accept();
-	expect(status.phase, status.blockedReason).toBe("completed");
-	expect(status.archivedChangePath).toContain("openspec/changes/archive/");
-	expect(
-		await Promise.all(
-			[paths.solution, paths.plan, paths.report].map(file => fs.readFile(path.join(fixture.cwd, file), "utf8")),
-		),
-	).toEqual(executionBytes);
-	expect(fixture.provider.failures).toEqual([]);
-}, 120_000);
-
-test("missing actual stage files never advance from successful chat text", async () => {
-	await using fixture = await consumer({ fileFailure: { role: "requirements", kind: "missing" } });
-	const status = await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "missing-files");
-	expect(status.phase).toBe("requirements");
-	expect(status.blockedReason).toBeTruthy();
-}, 120_000);
-
-test("requirements and solution Wiki access never permits native writes to production code", async () => {
-	const attempted = new Set<string>();
-	const attack = (request: ModelRequest): Reply => {
-		const role = rolePayload(request)?.specDrivenRole;
-		if ((role === "requirements" || role === "solution") && !attempted.has(role)) {
-			attempted.add(role);
-			const write = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "write")?.function?.name;
-			if (!write) throw new Error("Native write must be advertised for actual stage files");
-			return {
-				tool: {
-					name: write,
-					args: { path: `src/unauthorized-${role}.ts`, content: "export const unauthorized = true;" },
-				},
-			};
-		}
-		return respond(request);
-	};
-	await using fixture = await consumer({ reply: attack });
-	let status = await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "guarded-files");
-	expect(status.phase, status.blockedReason).toBe("awaiting-specification");
-	status = await fixture.orchestrator.confirmSpecification();
-	expect(status.phase, status.blockedReason).toBe("awaiting-choice");
-	for (const role of ["requirements", "solution"]) {
-		await expect(fs.stat(path.join(fixture.cwd, "src", `unauthorized-${role}.ts`))).rejects.toThrow();
-		const request = fixture.provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === role)!;
-		expect(JSON.stringify(request.messages)).toContain("未授权的阶段文件写入");
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("prepared-native", context);
+	for (const role of ["requirements", "solution", "planner", "executor"] as const) {
+		await fixture.runtime.ports.agents.prepare(role, context);
+		const native = fixture.runtime.nativeSession(role)!;
+		expect(native).toBeDefined();
+		await fixture.runtime.ports.agents.prepare(role, context);
+		expect(fixture.runtime.nativeSession(role)).toBe(native);
+		expect(fixture.runtime.sessionRefs()[role]?.sessionFile).toBe(native.sessionFile);
 	}
-	expect(attempted).toEqual(new Set(["requirements", "solution"]));
+	expect(fixture.provider.requests).toHaveLength(0);
+	expect(new Set(Object.values(fixture.runtime.sessionRefs()).map(ref => ref?.sessionId)).size).toBe(4);
 }, 120_000);
 
-function discussionResult(adoptable = true): TeamRunResult {
-	return {
-		runId: "discussion-fixture",
-		inputVersion: "confirmed-requirements",
-		status: "completed",
-		reportMarkdown: "# 完整 Team 报告\n所有原始方向与审查记录。",
-		interpretationDifferences: [],
-		candidates: SOLUTION.candidates.map(candidate => ({
-			id: candidate.id,
-			label: candidate.title,
-			version: "reviewed-proposal",
-			proposal: candidate.content,
-			adoptable,
-			reviewSucceeded: adoptable,
-			recheckSucceeded: adoptable,
-			unresolvedBlocking: [],
-			conditions: [],
-			assumptions: [],
-			evidence: [],
-		})),
-	};
-}
-
-test("Team opt-in supplies complete originals and real configured participants, then keeps the solution actor and choice gate", async () => {
-	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion").mockResolvedValue(discussionResult());
-	try {
-		await using fixture = await consumer();
-		cfgTeamMembers.set(
-			fixture.settings,
-			Array.from({ length: 4 }, () => "spec-fixture/chat-a"),
-		);
-		let status = await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "team-solutions");
-		const original = status.specification!.files;
-		const approval = " 原始需求确认\n所有条件保持 ";
-		status = await fixture.orchestrator.confirmSpecification(approval, { useTeam: true });
-		expect(status.phase, status.blockedReason).toBe("awaiting-choice");
-		expect(discussion).toHaveBeenCalledTimes(1);
-		const call = discussion.mock.calls[0]![0];
-		expect(JSON.parse(call.question).files).toEqual(original);
-		expect(JSON.parse(call.question).userReply).toBe(approval);
-		expect(call.participants).toHaveLength(4);
-		expect(call.participants.every(member => member.modelPattern.includes("spec-fixture/chat-a"))).toBe(true);
-		expect(typeof call.runner).toBe("function");
-		expect(call.signal.aborted).toBe(false);
-		const actor = fixture.orchestrator.recipient();
-		expect(actor?.role).toBe("solution");
-		expect(JSON.stringify(fixture.provider.requests)).toContain("完整 Team 报告");
-		status = await fixture.orchestrator.answer("请解释风险，并保留所有候选");
-		expect(status.phase, status.blockedReason).toBe("awaiting-choice");
-		expect(fixture.orchestrator.recipient()?.actorId).toBe(actor?.actorId);
-		expect(discussion).toHaveBeenCalledTimes(2);
-		expect(JSON.parse(discussion.mock.calls[1]![0].question).feedback).toBe("请解释风险，并保留所有候选");
-		expect(fixture.session.getGoalModeState()).toBeUndefined();
-	} finally {
-		discussion.mockRestore();
-	}
+test("original request remains in native requirements history, not saved workspace state", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "请补充验收条件。" }) });
+	const request = "  原始需求\n保留完整正文和空格  ";
+	await fixture.orchestrator.start(request, "native-request");
+	expect(fixture.runtime.originalRequest()).toBe(request);
+	const saved = fixture.orchestrator.save();
+	expect(JSON.stringify(saved)).not.toContain(request);
+	expect(saved.sessions.requirements?.sessionFile).toBe(fixture.runtime.nativeSession("requirements")?.sessionFile);
 }, 120_000);
 
-test("failed Team and ineligible directions never become usable solo candidates", async () => {
+test("ordinary solution follow-up never reruns Team or validates missing solution files", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "仍在澄清。" }) });
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("followup-native", context);
 	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion");
 	try {
-		let smuggleIneligible = false;
-		await using fixture = await consumer({
-			reply(request) {
-				const reply = respond(request);
-				if (
-					smuggleIneligible &&
-					rolePayload(request)?.specDrivenRole === "solution" &&
-					reply.tool?.name.replace(/^_/u, "") === "write"
-				)
-					reply.tool.args.content = JSON.stringify(SOLUTION);
-				return reply;
+		await fixture.runtime.ports.agents.run(
+			{
+				role: "solution",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: [],
+				useTeam: true,
+				feedback: "只解释这个风险",
 			},
-		});
-		await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "team-failure");
-		discussion.mockResolvedValueOnce({ ...discussionResult(), status: "failed", failureReason: "review failed" });
-		await expect(fixture.orchestrator.confirmSpecification("确认", { useTeam: true })).rejects.toThrow(
-			"review failed",
+			context,
 		);
-		let status = fixture.orchestrator.status();
-		expect(status.phase).toBe("solution");
-		expect(status.blockedReason).toContain("review failed");
-		expect(lastInput(fixture.provider.requests, "solution")).toBeUndefined();
-		discussion.mockResolvedValueOnce(discussionResult(false));
-		await expect(fixture.orchestrator.answer("重新讨论")).rejects.toThrow("未产生可采用候选");
-		status = fixture.orchestrator.status();
-		expect(status.phase).toBe("solution");
-		expect(status.blockedReason).toContain("未产生可采用候选");
-		expect(lastInput(fixture.provider.requests, "solution")).toBeUndefined();
-		const mixed = discussionResult();
-		mixed.candidates[1]!.adoptable = false;
-		discussion.mockResolvedValueOnce(mixed);
-		smuggleIneligible = true;
-		await expect(fixture.orchestrator.answer("再次讨论")).rejects.toThrow("normalizer");
-		status = fixture.orchestrator.status();
-		expect(status.phase).toBe("solution");
-		expect(status.blockedReason).toContain("normalizer");
+		expect(discussion).not.toHaveBeenCalled();
+		const user = fixture.runtime.nativeSession("solution")!.messages.findLast(message => message.role === "user");
+		expect(JSON.stringify(user)).toContain("只解释这个风险");
+		expect(JSON.stringify(user)).not.toContain("## Stage request");
 	} finally {
 		discussion.mockRestore();
 	}
 }, 120_000);
 
-test("cancelling a Team request aborts discussion and never invokes the solution writer", async () => {
-	const entered = Promise.withResolvers<void>();
-	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion").mockImplementation(async options => {
-		entered.resolve();
-		const aborted = Promise.withResolvers<void>();
-		options.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-		await aborted.promise;
-		return { ...discussionResult(), status: "cancelled" };
+test("missing native transcript prepares the stage without model work", async () => {
+	await using fixture = await consumer();
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("missing-native-history", context);
+	await fixture.runtime.ports.agents.prepare("requirements", context, {
+		role: "requirements",
+		actorId: "old",
+		sessionId: "missing",
+		sessionFile: path.join(fixture.cwd, "missing.jsonl"),
 	});
+	expect(fixture.runtime.nativeSession("requirements")).toBeDefined();
+	expect(fixture.runtime.originalRequest()).toBe("");
+	expect(fixture.provider.requests).toHaveLength(0);
+}, 120_000);
+
+test("missing native history reconstructs real materials and saved approval only on the first active continuation", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "依据正式文件继续澄清。" }) });
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize("recover-real-materials", context);
+	const proposal = paths.requirements[0]!;
+	await fs.writeFile(path.join(fixture.cwd, proposal), "# 当前正式需求\n正文不得由聊天副本替代");
+	await fs.mkdir(path.dirname(path.join(fixture.cwd, paths.solution)), { recursive: true });
+	await fs.writeFile(path.join(fixture.cwd, paths.solution), "尚未结构合格的真实方案正文");
+	const missingSession = path.join(fixture.cwd, "lost-native.jsonl");
+	const saved: SpecSavedRun = {
+		runId: context.runId,
+		phase: "solution",
+		changeId: "recover-real-materials",
+		paths,
+		approvals: {
+			requirements: {
+				files: [{ path: proposal, version: "saved-approved-version" }],
+				userReply: "  原始批准\n保留空格  ",
+			},
+		},
+		sessions: { solution: { role: "solution", actorId: "old", sessionId: "lost", sessionFile: missingSession } },
+	};
+	await fixture.runtime.dispose();
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+		getSavedRun: () => saved,
+	});
+	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion");
 	try {
-		await using fixture = await consumer();
-		await fixture.orchestrator.start(`${MARKER}: ${REQUIREMENT}`, "team-cancel");
-		const pending = fixture.orchestrator.confirmSpecification("确认", { useTeam: true }).catch(error => error);
-		await entered.promise;
-		const status = await fixture.orchestrator.cancel();
-		expect(await pending).toBeInstanceOf(Error);
-		expect(status.phase).toBe("cancelled");
-		expect(lastInput(fixture.provider.requests, "solution")).toBeUndefined();
+		await restored.ports.agents.prepare("solution", context, saved.sessions.solution);
+		const native = restored.nativeSession("solution")!;
+		expect(fixture.provider.requests).toHaveLength(0);
+		expect(native.messages).toHaveLength(0);
+		// Preparation did not snapshot bodies; recovery must read what is actually on disk now.
+		await fs.writeFile(path.join(fixture.cwd, proposal), "# 当前正式需求\n准备后更新的真实正文");
+		await restored.ports.agents.run(
+			{
+				role: "solution",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: [paths.solution],
+				feedback: "  请依据现有材料继续  ",
+				useTeam: true,
+			},
+			context,
+		);
+		const recovered = native.messages.filter(
+			message => message.role === "custom" && message.customType === "dev-history-recovery",
+		);
+		expect(recovered).toHaveLength(1);
+		const content = JSON.parse((recovered[0] as { content: string }).content);
+		expect(content.unavailableSessionFile).toBe(missingSession);
+		expect(content.approvals).toEqual(saved.approvals);
+		expect(content.materials).toContainEqual(
+			expect.objectContaining({ path: proposal, content: "# 当前正式需求\n准备后更新的真实正文" }),
+		);
+		expect(content.materials).toContainEqual(
+			expect.objectContaining({ path: paths.solution, content: "尚未结构合格的真实方案正文" }),
+		);
+		expect(content.materials).toContainEqual(
+			expect.objectContaining({ path: paths.plan, error: expect.any(String) }),
+		);
+		expect(JSON.stringify(native.messages.findLast(message => message.role === "user"))).toContain(
+			"  请依据现有材料继续  ",
+		);
+		await restored.ports.agents.run(
+			{
+				role: "solution",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: [paths.solution],
+				feedback: "下一句普通追问",
+				useTeam: true,
+			},
+			context,
+		);
+		expect(
+			native.messages.filter(message => message.role === "custom" && message.customType === "dev-history-recovery"),
+		).toHaveLength(1);
+		expect(
+			native.messages.some(message => message.role === "custom" && message.customType === "dev-stage-context"),
+		).toBe(false);
+		expect(discussion).not.toHaveBeenCalled();
 	} finally {
 		discussion.mockRestore();
+		await restored.dispose();
+	}
+}, 120_000);
+
+test("Team receives complete entry materials exactly once and follow-ups reuse the native solution session", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "方案讨论完成。" }) });
+	cfgTeamMembers.set(
+		fixture.settings,
+		Array.from({ length: 4 }, () => "spec-fixture/chat-a"),
+	);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize("team-entry-native", context);
+	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion").mockResolvedValue({
+		runId: "discussion",
+		inputVersion: "v1",
+		status: "completed",
+		reportMarkdown: "# 真实协作结果",
+		interpretationDifferences: [],
+		candidates: [
+			{
+				id: "chosen",
+				label: "候选",
+				version: "v1",
+				proposal: "完整候选方案",
+				adoptable: true,
+				reviewSucceeded: true,
+				recheckSucceeded: true,
+				unresolvedBlocking: [],
+				conditions: [],
+				assumptions: [],
+				evidence: [],
+			},
+			{
+				id: "excluded",
+				label: "不可采用",
+				version: "v1",
+				proposal: "不可采用候选",
+				adoptable: false,
+				reviewSucceeded: false,
+				recheckSucceeded: false,
+				unresolvedBlocking: [],
+				conditions: [],
+				assumptions: [],
+				evidence: [],
+			},
+		],
+	});
+	try {
+		const input = {
+			role: "solution" as const,
+			entry: true,
+			request: "完整原始需求",
+			files: [{ path: "requirement.md", version: "bytes", content: "# 完整材料\n末尾也必须保留" }],
+			outputPaths: ["solution.json"],
+			userReply: " 原文批准\n保留 ",
+			useTeam: true,
+		};
+		await fixture.runtime.ports.agents.run(input, context);
+		const native = fixture.runtime.nativeSession("solution");
+		await fixture.runtime.ports.agents.run({ ...input, entry: false, feedback: "解释风险" }, context);
+		expect(fixture.runtime.nativeSession("solution")).toBe(native);
+		expect(discussion).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(discussion.mock.calls[0]![0].question)).toEqual(input);
+		const writeSolution = async (id: string, content: string) => {
+			await fs.mkdir(path.dirname(path.join(fixture.cwd, paths.solution)), { recursive: true });
+			await fs.writeFile(
+				path.join(fixture.cwd, paths.solution),
+				JSON.stringify({ candidates: [{ id, title: "候选", content }] }),
+			);
+		};
+		await writeSolution("excluded", "不可采用候选");
+		await expect(fixture.runtime.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
+		await writeSolution("invented", "完整候选方案");
+		await expect(fixture.runtime.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
+		await writeSolution("chosen", "被替换的正文");
+		await expect(fixture.runtime.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
+		await writeSolution("chosen", "完整候选方案\n条件与风险补充");
+		expect((await fixture.runtime.ports.artifacts.readSolution(context)).candidates[0]!.id).toBe("chosen");
+		const saved: SpecSavedRun = {
+			runId: context.runId,
+			changeId: "team-entry-native",
+			phase: "solution",
+			paths,
+			approvals: {},
+			sessions: fixture.runtime.sessionRefs(),
+		};
+		await fixture.runtime.dispose();
+		const restored = await createSpecDrivenRuntime({
+			session: fixture.session,
+			settings: fixture.settings,
+			cwd: fixture.cwd,
+			saved,
+		});
+		try {
+			expect((await restored.ports.artifacts.readSolution(context)).candidates[0]!.id).toBe("chosen");
+			await writeSolution("excluded", "不可采用候选");
+			await expect(restored.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
+			expect(discussion).toHaveBeenCalledTimes(1);
+		} finally {
+			await restored.dispose();
+		}
+	} finally {
+		discussion.mockRestore();
+	}
+}, 120_000);
+
+test("saved session references reopen native history without model calls", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "澄清需求。" }) });
+	await fixture.orchestrator.start("原始需求只保存在原生历史", "restored-native");
+	const saved = fixture.orchestrator.save();
+	const count = fixture.provider.requests.length;
+	await fixture.runtime.dispose();
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		const core = new SpecDrivenOrchestrator(restored.ports, {
+			...restored.options,
+			getUseTeam: () => false,
+			persist: async () => {},
+		});
+		await core.restore(saved);
+		expect(core.status().phase).toBe("requirements");
+		expect(restored.originalRequest()).toBe("原始需求只保存在原生历史");
+		expect(restored.nativeSession("requirements")?.sessionFile).toBe(saved.sessions.requirements?.sessionFile);
+		expect(fixture.provider.requests).toHaveLength(count);
+		const native = restored.nativeSession("requirements")!;
+		const handoffs = native.messages.filter(
+			message => message.role === "custom" && message.customType === "dev-stage-context",
+		).length;
+		await core.converse("历史有效时直接追问");
+		expect(
+			native.messages.filter(message => message.role === "custom" && message.customType === "dev-stage-context"),
+		).toHaveLength(handoffs);
+		expect(
+			native.messages.some(message => message.role === "custom" && message.customType === "dev-history-recovery"),
+		).toBe(false);
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
+test("archived executing recovery prepares old roles without active change instructions or automatic turns", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "恢复后的只读说明。" }) });
+	await fixture.orchestrator.start("归档前的原始需求", "archived-recovery");
+	const saved = fixture.orchestrator.save();
+	const archivedChangePath = "openspec/changes/archive/2026-10-26-archived-recovery";
+	const proposal = saved.paths!.requirements[0]!;
+	await fs.writeFile(path.join(fixture.cwd, proposal), "# 真实归档需求");
+	await fs.mkdir(path.dirname(path.join(fixture.cwd, archivedChangePath)), { recursive: true });
+	await fs.rename(
+		path.join(fixture.cwd, "openspec/changes/archived-recovery"),
+		path.join(fixture.cwd, archivedChangePath),
+	);
+	saved.phase = "executing";
+	saved.closing = { synced: true, archivedChangePath };
+	saved.approvals.executor = { files: [], userReply: "原始验收" };
+	const count = fixture.provider.requests.length;
+	await fixture.runtime.dispose();
+	for (const missing of [false, true]) {
+		const recovery = structuredClone(saved);
+		if (missing) recovery.sessions.requirements!.sessionFile = path.join(fixture.cwd, "missing-history.jsonl");
+		const restored = await createSpecDrivenRuntime({
+			session: fixture.session,
+			settings: fixture.settings,
+			cwd: fixture.cwd,
+			saved: recovery,
+		});
+		try {
+			const core = new SpecDrivenOrchestrator(restored.ports, {
+				...restored.options,
+				getUseTeam: () => false,
+				persist: async () => {},
+			});
+			await core.restore(recovery);
+			expect(core.status().phase).toBe("executing");
+			expect(core.status().closing).toEqual(saved.closing);
+			expect(fixture.provider.requests).toHaveLength(count);
+			if (!missing) expect(restored.originalRequest()).toBe("归档前的原始需求");
+			else {
+				const context = { runId: saved.runId, generation: 1, signal: new AbortController().signal };
+				await restored.ports.agents.run(
+					{
+						role: "requirements",
+						entry: false,
+						request: "",
+						files: [],
+						outputPaths: [],
+						feedback: "解释归档材料",
+					},
+					context,
+				);
+				const native = restored.nativeSession("requirements")!;
+				const recovered = native.messages.find(
+					message => message.role === "custom" && message.customType === "dev-history-recovery",
+				);
+				expect(recovered).toBeDefined();
+				expect(JSON.stringify(recovered)).toContain("# 真实归档需求");
+				expect(JSON.stringify(recovered)).toContain(archivedChangePath);
+			}
+			const closing = spyOn(restored.ports.artifacts, "close").mockResolvedValue({ archivedChangePath });
+			try {
+				const requestsBeforeRetry = fixture.provider.requests.length;
+				await core.next();
+				expect(core.status().phase).toBe("idle");
+				expect(closing).toHaveBeenCalledTimes(1);
+				expect(closing.mock.calls[0]![0].progress).toEqual(saved.closing);
+				expect(fixture.provider.requests).toHaveLength(requestsBeforeRetry);
+			} finally {
+				closing.mockRestore();
+			}
+		} finally {
+			await restored.dispose();
+		}
 	}
 }, 120_000);

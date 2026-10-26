@@ -891,7 +891,7 @@ async function runInteractiveMode(
 
 	while (true) {
 		const input = await mode.getUserInput();
-		await submitInteractiveInput(mode, session, input);
+		await submitInteractiveInput(mode, mode.session, input);
 	}
 }
 

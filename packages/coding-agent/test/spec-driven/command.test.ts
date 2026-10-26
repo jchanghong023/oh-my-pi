@@ -1,99 +1,39 @@
-import { describe, expect, it } from "bun:test";
-import type { DevDecisionModel, DevDecisionResult } from "@oh-my-pi/pi-tui/overlays/dev-decision-panel";
+import { describe, expect, it, mock, spyOn } from "bun:test";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "../../src/async/job-manager";
+import { getSpecDrivenController } from "../../src/spec-driven/controller";
+import type { SpecDrivenPhase } from "../../src/spec-driven/stages";
 import {
-	getSpecDrivenController,
-	observeSpecDrivenController,
-	type SpecRuntimeFactory,
-} from "../../src/spec-driven/controller";
-import type { SpecAgentInput, SpecDrivenPorts } from "../../src/spec-driven/types";
-import { BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS } from "../../src/slash-commands/builtin-spec-driven";
-import type { SlashCommandRuntime } from "../../src/slash-commands/types";
+	assertDevCommandAllowed,
+	assertDevModeActivationAllowed,
+	BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS,
+	isDevSessionTransitionCommand,
+} from "../../src/slash-commands/builtin-spec-driven";
+import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "../../src/slash-commands/types";
 
-function fixture(decision?: (model: DevDecisionModel) => Promise<DevDecisionResult | undefined>) {
-	const manager = new AsyncJobManager({});
+function fixture() {
+	const jobs = new AsyncJobManager({});
 	const output: string[] = [];
-	const inputs: SpecAgentInput[] = [];
-	const files = {
-		requirements: {
-			files: [{ path: "requirements.md", content: "# 原始需求\n保留精确内容", version: "requirements-v1" }],
-			version: "requirements-v1",
-		},
-		solution: {
-			path: "docs/superpowers/plans/2026-10-26-change-solutions.json",
-			content:
-				'{"candidates":[{"id":"existing","title":"复用入口","content":"# 完整方案\\n实现细节与风险"},{"id":"alternate","title":"另一方案","content":"完整备选"}]}',
-			version: "solution-v1",
-			candidates: [
-				{ id: "existing", title: "复用入口", content: "# 完整方案\n实现细节与风险" },
-				{ id: "alternate", title: "另一方案", content: "完整备选" },
-			],
-		},
-		plan: {
-			path: "docs/superpowers/plans/2026-10-26-change.md",
-			content: "# Implementation Plan\n保留 Superpowers 计划正文",
-			version: "plan-v1",
-		},
-		report: {
-			path: "docs/superpowers/plans/2026-10-26-change-completion.md",
-			content: "# 完成报告\n## 完成情况\n已实现\n## 验证结果\n真实命令和限制\n## 未完成项\n无",
-			version: "report-v1",
-		},
-	};
-	let missing = false;
-	let run = async (input: SpecAgentInput) => ({ text: `当前 ${input.role} 等待明确决定` });
-	let release = async () => {};
-	let closed = 0;
-	const ports: SpecDrivenPorts = {
-		agents: {
-			recipient: role => ({ role, actorId: `actor-${role}`, sessionId: `session-${role}` }),
-			async run(input) {
-				inputs.push(input);
-				return run(input);
-			},
-		},
-		artifacts: {
-			async initialize() {
-				return {
-					requirements: ["requirements.md"],
-					solution: files.solution.path,
-					plan: files.plan.path,
-					report: files.report.path,
-				};
-			},
-			async readRequirements() {
-				if (missing) throw new Error("requirements.md 缺失");
-				return structuredClone(files.requirements);
-			},
-			async readSolution() {
-				return structuredClone(files.solution);
-			},
-			async readPlan() {
-				return structuredClone(files.plan);
-			},
-			async readReport() {
-				return structuredClone(files.report);
-			},
-			async close() {
-				closed++;
-				return {};
-			},
-		},
-	};
-	const sessionManager = { buildSessionContext: () => ({ mode: "chat" }) };
+	const sessionManager = { buildSessionContext: () => ({ mode: "chat" }), getCwd: () => "/fixture" };
+	const select = mock(async (): Promise<string | undefined> => undefined);
 	const host = {
 		sessionManager,
 		cwd: "/fixture",
 		settings: {},
 		session: {
-			asyncJobManager: manager,
+			asyncJobManager: jobs,
 			sessionManager,
 			sessionGeneration: 0,
 			isDisposed: false,
 			getAgentId: () => "owner",
 			addDisposer() {},
 			registerSessionChangeCallback: () => () => {},
-			appendCustomMessage: async () => {},
+			subscribe: () => () => {},
+			hasPendingAsyncWork: () => false,
+			getAsyncJobTree: () => null,
+			isBusyForSnapshot: false,
+			hasAdmittedSubmission: false,
+			queuedMessageCount: 0,
 			getPlanModeState: () => undefined,
 			getGoalModeState: () => undefined,
 			getVibeModeState: () => undefined,
@@ -101,443 +41,292 @@ function fixture(decision?: (model: DevDecisionModel) => Promise<DevDecisionResu
 		output: (text: string) => {
 			output.push(text);
 		},
-		ui: decision ? { decision, select: async () => undefined, confirm: async () => true } : undefined,
+		refreshCommands() {},
+		reloadPlugins: async () => {},
+		ui: { select, confirm: async () => true },
 	} as unknown as SlashCommandRuntime;
-	const factory: SpecRuntimeFactory = async () => ({
-		ports,
-		options: { currentModel: "fixture" },
-		dispose: () => release(),
-		measurement: () => ({
-			task: "fixture",
-			codeBaseline: "fixture",
-			modelConfiguration: "fixture",
-			acceptanceCriteria: "fixture",
-			mode: "workflow",
-			startedAt: 1,
-			endedAt: 2,
-			requests: [],
-			observations: [],
-			plannedDecisionWaitMs: null,
-			executionWaitMs: null,
-			assessmentComplete: false,
-		}),
+	const controller = getSpecDrivenController(host);
+	let mode: "chat" | "dev" = "chat";
+	let phase: SpecDrivenPhase = "idle";
+	let useTeam = false;
+	let frozen = false;
+	let native = true;
+	const spies: { mockRestore(): void }[] = [
+		spyOn(controller, "inputMode").mockImplementation(() => mode),
+		spyOn(controller, "status").mockImplementation(() => ({ phase, generation: 0, useTeam })),
+		spyOn(controller, "actions").mockImplementation(() => [
+			{
+				id: "config",
+				label: "Team",
+				command: "/dev config",
+				available: !frozen,
+				blockedReason: frozen ? "方案已开始，Team 已冻结" : undefined,
+			},
+		]),
+		spyOn(controller, "nativeSession").mockImplementation(() => (native ? host.session : undefined)),
+	];
+	const enter = spyOn(controller, "enter").mockImplementation(async () => {
+		mode = "dev";
 	});
-	const controller = getSpecDrivenController(host, { factory });
-	const invoke = (args: string) =>
-		BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS[0]!.handle!({ name: "dev", args, text: `/dev ${args}` }, host);
-	const settle = () => Promise.all(manager.getRunningJobs().map(job => job.promise));
-	const transition = async (args: string) => {
-		await invoke(args);
-		await settle();
-	};
-	const settleMessage = (id: string) =>
-		new Promise<void>(resolve => {
-			const stop = observeSpecDrivenController(sessionManager, observation => {
-				if (
-					observation.interaction.messages.some(
-						message => message.id === id && ["completed", "cancelled", "failed"].includes(message.status),
-					)
-				)
-					queueMicrotask(() => {
-						stop();
-						resolve();
-					});
-			});
-		});
+	const exit = spyOn(controller, "exit").mockImplementation(async () => {
+		mode = "chat";
+	});
+	const start = spyOn(controller, "new").mockImplementation(async () => {});
+	const next = spyOn(controller, "next").mockImplementation(async () => {});
+	const back = spyOn(controller, "back").mockImplementation(async () => {});
+	const drop = spyOn(controller, "drop").mockImplementation(async () => {});
+	const setTeam = spyOn(controller, "setTeam").mockImplementation(async value => {
+		useTeam = value;
+	});
+	spies.push(enter, exit, start, next, back, drop, setTeam);
+	const invoke = (args: string, text = args ? `/dev ${args}` : "/dev") =>
+		BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS[0]!.handle!({ name: "dev", args, text }, host);
 	return {
-		controller,
 		host,
-		files,
-		inputs,
 		output,
+		controller,
+		enter,
+		exit,
+		start,
+		next,
+		back,
+		drop,
+		setTeam,
 		invoke,
-		settle,
-		transition,
-		settleMessage,
-		closed: () => closed,
-		missing: (value: boolean) => {
-			missing = value;
+		select,
+		phase: (value: SpecDrivenPhase) => {
+			phase = value;
 		},
-		run: (value: typeof run) => {
-			run = value;
+		freeze: () => {
+			frozen = true;
 		},
-		release: (value: typeof release) => {
-			release = value;
+		team: () => useTeam,
+		native: (value: boolean) => {
+			native = value;
 		},
-		dispose: async () => {
+		async dispose() {
+			for (const spy of spies) spy.mockRestore();
 			await controller.dispose();
-			await manager.dispose();
+			await jobs.dispose();
 		},
 	};
 }
 
-describe("/dev file-stage commands", () => {
-	it("uses current files and sends complete solution plus original choice to planner without version arguments", async () => {
+describe("/dev six-entry boundary", () => {
+	it("requires explicit entry for every subcommand, including new", async () => {
 		const f = fixture();
 		try {
-			await f.transition("start change 原始需求");
-			expect(f.controller.status().phase).toBe("awaiting-specification");
-			expect(f.inputs.map(input => input.role)).toEqual(["requirements"]);
-			expect(f.controller.actions().find(action => action.id === "confirm-spec")?.command).toBe("/dev confirm-spec");
-			await f.transition("confirm-spec");
+			for (const args of ["config", "new 完整需求", "next", "back", "drop"]) {
+				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			}
+			expect(f.enter).not.toHaveBeenCalled();
+			expect(f.start).not.toHaveBeenCalled();
+			await f.invoke("");
+			await f.invoke("");
+			expect(f.enter).toHaveBeenCalledTimes(1);
+			expect(f.exit).toHaveBeenCalledTimes(1);
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("rejects unknown input and the removed start entry without compatibility dispatch", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			for (const args of ["unknown", "start change request"]) {
+				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			}
+			expect(f.start).not.toHaveBeenCalled();
+			expect(f.next).not.toHaveBeenCalled();
+			expect(f.back).not.toHaveBeenCalled();
+			expect(f.drop).not.toHaveBeenCalled();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("rejects missing and surplus arguments before any partial operation", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			for (const args of ["new", "new   ", "config extra", "back extra", "drop extra", "next one two"]) {
+				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			}
+			expect(f.start).not.toHaveBeenCalled();
+			expect(f.next).not.toHaveBeenCalled();
+			expect(f.setTeam).not.toHaveBeenCalled();
+			expect(f.back).not.toHaveBeenCalled();
+			expect(f.drop).not.toHaveBeenCalled();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("extracts multiline requirements from raw command text without treating prose as approval", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			const images: ImageContent[] = [{ type: "image", data: "image", mimeType: "image/png" }];
+			const imageLinks = ["image.png"];
+			f.host.input = { images, imageLinks };
+			await f.invoke("new 我同意 保留格式与 [Image #1]", "/dev \tnew\n我同意\n  保留格式与 [Image #1]  ");
+			expect(f.start).toHaveBeenCalledWith("我同意\n  保留格式与 [Image #1]  ", images, imageLinks);
+			expect(f.next).not.toHaveBeenCalled();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("rejects candidate IDs outside solution without advancing", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			for (const phase of ["idle", "requirements", "planning", "executing"] as const) {
+				f.phase(phase);
+				expect(await f.invoke("next candidate")).toMatchObject({ failed: true, errorCode: "invalid_params" });
+			}
+			expect(f.next).not.toHaveBeenCalled();
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("uses only native Team select; cancellation does not save and frozen config only explains", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			await f.invoke("config");
+			expect(f.select).toHaveBeenCalledWith("方案 Team", ["开启", "关闭"], { signal: undefined });
+			expect(f.setTeam).not.toHaveBeenCalled();
+			f.select.mockResolvedValueOnce("开启");
+			await f.invoke("config");
+			expect(f.team()).toBe(true);
+			f.select.mockResolvedValueOnce("关闭");
+			await f.invoke("config");
+			expect(f.team()).toBe(false);
+			f.freeze();
+			await f.invoke("config");
+			expect(f.select).toHaveBeenCalledTimes(3);
+			expect(f.output.at(-1)).toContain("冻结");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("reports config save failure without claiming a saved choice", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			f.select.mockResolvedValueOnce("开启");
+			f.setTeam.mockRejectedValueOnce(new Error("state write failed"));
+			expect(await f.invoke("config")).toMatchObject({ failed: true, errorCode: "execution_failed" });
+			expect(f.team()).toBe(false);
+			expect(f.output.at(-1)).toContain("state write failed");
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("restores a detached failed new submission and its attachments without erasing a newer draft", async () => {
+		const f = fixture();
+		try {
+			await f.invoke("");
+			f.start.mockRejectedValueOnce(new Error("cannot create change"));
+			let draft = "newer draft";
+			const images: ImageContent[] = [{ type: "image", data: "image", mimeType: "image/png" }];
+			const editor = {
+				pendingImages: [] as ImageContent[],
+				pendingImageLinks: [] as (string | undefined)[],
+				imageLinks: [] as (string | undefined)[],
+				getExpandedText: () => draft,
+				setCollapsedText: (text: string) => {
+					draft = text;
+				},
+				setText: mock((text: string) => {
+					draft = text;
+				}),
+			};
+			const runtime = {
+				draftDetached: true,
+				input: { images, imageLinks: ["image.png"] },
+				ctx: {
+					session: f.host.session,
+					sessionManager: { ...f.host.sessionManager, getCwd: () => "/fixture" },
+					settings: f.host.settings,
+					editor,
+					showDevCommandStatus: (text: string) => {
+						f.output.push(text);
+					},
+					bindMainSession: async () => {},
+					showHookSelector: f.select,
+					showHookConfirm: async () => true,
+					assertCanActivateMode() {},
+					refreshSlashCommandState() {},
+				},
+			} as unknown as TuiSlashCommandRuntime;
+			// Retain the actual manager identity used to find the existing workspace owner.
+			runtime.ctx.sessionManager = f.host.sessionManager;
+			Object.assign(f.host.sessionManager, { getCwd: () => "/fixture" });
+			const text = "/dev new request [Image #1]";
 			expect(
-				f.controller
-					.actions()
-					.filter(action => action.id.startsWith("choose:"))
-					.map(action => action.command),
-			).toEqual(["/dev choose existing", "/dev choose alternate"]);
-			const reply = "choose existing  同意该完整方案\n 保留这段原始说明  ";
-			await f.transition(reply);
-			const planner = f.inputs.find(input => input.role === "planner")!;
-			expect(planner.files).toContainEqual(f.files.solution);
-			expect(planner.userReply).toBe(`/dev ${reply}`);
-			expect(planner.candidateId).toBe("existing");
-			expect(f.controller.status().selection?.userReply).toBe(`/dev ${reply}`);
-			await f.transition("confirm-plan");
-			expect(f.controller.status().phase).toBe("awaiting-acceptance");
-			expect(f.closed()).toBe(0);
-			expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner", "executor"]);
-			await f.transition("accept");
-			expect(f.closed()).toBe(1);
-			expect(f.controller.status().phase).toBe("completed");
+				await BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS[0]!.handleTui!(
+					{ name: "dev", args: "new request [Image #1]", text },
+					runtime,
+				),
+			).toMatchObject({ failed: true });
+			expect(draft).toBe(`${text}\n\nnewer draft`);
+			expect(editor.pendingImages).toEqual(images);
+			expect(editor.pendingImageLinks).toEqual(["image.png"]);
+			expect(editor.setText).not.toHaveBeenCalled();
 		} finally {
 			await f.dispose();
 		}
 	});
 
-	it.each(["需求没问题，请按文件继续，保留  内部空格。\n 原始补充  ", "opaque-version"])(
-		"preserves optional confirmation as the original reply without interpreting versions: %s",
-		async confirmation => {
-			const f = fixture();
-			try {
-				await f.transition("start change 原始需求");
-				const specificationReply = `confirm-spec ${confirmation}`;
-				expect(await f.invoke(specificationReply)).toMatchObject({ consumed: true });
-				await f.settle();
-				expect(f.controller.status().phase).toBe("awaiting-choice");
-				expect(f.inputs.find(input => input.role === "solution")?.userReply).toBe(`/dev ${specificationReply}`);
-				await f.transition("choose existing");
-				const planReply = `confirm-plan ${confirmation}`;
-				expect(await f.invoke(planReply)).toMatchObject({ consumed: true });
-				await f.settle();
-				expect(f.controller.status().phase).toBe("awaiting-acceptance");
-				expect(f.inputs.find(input => input.role === "executor")?.userReply).toBe(`/dev ${planReply}`);
-			} finally {
-				await f.dispose();
-			}
-		},
-	);
-
-	it("keeps missing files at the active stage and exposes ordinary answer, not approval", async () => {
+	it("rejects model-generating native commands when Dev has no visible stage", async () => {
 		const f = fixture();
 		try {
-			f.missing(true);
-			await f.transition("start change requirement");
-			expect(f.controller.status()).toMatchObject({ phase: "requirements", blockedReason: "requirements.md 缺失" });
-			expect(f.controller.actions().some(action => action.id === "confirm-spec")).toBe(false);
-			f.missing(false);
-			await f.transition("answer 补充所需说明");
-			expect(f.controller.status().phase).toBe("awaiting-specification");
-			expect(f.inputs.map(input => input.role)).toEqual(["requirements", "requirements"]);
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("rejects removed review controls and enables Goal only on explicit plan approval", async () => {
-		const f = fixture();
-		try {
-			await f.transition("start change requirement");
-			expect(await f.invoke("extend-review R1 2 2")).toMatchObject({ consumed: true, failed: true });
-			expect(f.inputs.map(input => input.role)).toEqual(["requirements"]);
-			await f.transition("confirm-spec");
-			await f.transition("choose existing");
-			expect(f.controller.status().phase).toBe("awaiting-plan");
-			expect(await f.invoke("confirm-plan --goal")).toMatchObject({ consumed: true });
-			await f.settle();
-			expect(f.inputs.at(-1)).toMatchObject({
-				role: "executor",
-				useGoal: true,
-				userReply: "/dev confirm-plan --goal",
-			});
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it.each([
-		["--team", "--goal", true, true],
-		["--team  同意\n --goal 保留  ", "--goal  同意\n --team 保留  ", true, true],
-		['"引用 --team" --team', '"引用 --goal" --goal', false, false],
-		["同意 --team", "同意 --goal", false, false],
-		["-- --team", "-- --goal", false, false],
-		["", "", false, false],
-	])(
-		"parses only leading confirmation options and preserves every reply byte: %s / %s",
-		async (spec, plan, useTeam, useGoal) => {
-			const f = fixture();
-			try {
-				await f.transition("start change requirement");
-				const specificationReply = `confirm-spec ${spec}`;
-				await f.transition(specificationReply);
-				expect(f.inputs.at(-1)).toMatchObject({
-					role: "solution",
-					useTeam,
-					userReply: `/dev ${specificationReply}`,
-				});
-				await f.transition("choose existing");
-				const planReply = `confirm-plan ${plan}`;
-				await f.transition(planReply);
-				expect(f.inputs.at(-1)).toMatchObject({ role: "executor", useGoal, userReply: `/dev ${planReply}` });
-			} finally {
-				await f.dispose();
-			}
-		},
-	);
-
-	it.each(["--goal", "--unknown", "--team=true", "--team --goal"])(
-		"rejects unsupported leading specification options before scheduling: %s",
-		async option => {
-			const f = fixture();
-			try {
-				await f.transition("start change requirement");
-				expect(await f.invoke(`confirm-spec ${option}`)).toMatchObject({
-					consumed: true,
-					failed: true,
-					errorCode: "invalid_params",
-				});
-				expect(f.inputs).toHaveLength(1);
-				expect(f.controller.status().phase).toBe("awaiting-specification");
-			} finally {
-				await f.dispose();
-			}
-		},
-	);
-
-	it.each(["--team", "--unknown", "--goal=true", "--goal --team"])(
-		"rejects unsupported leading plan options without execution: %s",
-		async option => {
-			const f = fixture();
-			try {
-				await f.transition("start change requirement");
-				await f.transition("confirm-spec");
-				await f.transition("choose existing");
-				expect(await f.invoke(`confirm-plan ${option}`)).toMatchObject({
-					consumed: true,
-					failed: true,
-					errorCode: "invalid_params",
-				});
-				expect(f.inputs).toHaveLength(3);
-				expect(f.controller.status().phase).toBe("awaiting-plan");
-			} finally {
-				await f.dispose();
-			}
-		},
-	);
-
-	it("submits checked Team and Goal in their existing forms only, resetting defaults for each panel", async () => {
-		let selected: DevDecisionResult | undefined;
-		let current: DevDecisionModel | undefined;
-		const f = fixture(async model => {
-			current = model;
-			return selected;
-		});
-		try {
-			await f.transition("start change requirement");
-			await f.invoke("help");
-			expect(current!.actions.find(action => action.id === "confirm-spec")?.fields?.[0]).toMatchObject({
-				id: "useTeam",
-				kind: "checkbox",
-				value: "false",
-			});
-			expect(f.inputs).toHaveLength(1);
-			selected = { actionId: "confirm-spec", values: { useTeam: "true", confirmation: "  同意\n原文  " } };
-			await f.transition("help");
-			expect(f.inputs.at(-1)).toMatchObject({
-				role: "solution",
-				useTeam: true,
-				userReply: "/dev confirm-spec --team --   同意\n原文  ",
-			});
-			await f.transition("choose existing");
-			selected = undefined;
-			await f.invoke("help");
-			expect(current!.actions.find(action => action.id === "confirm-plan")?.fields?.[0]).toMatchObject({
-				id: "useGoal",
-				kind: "checkbox",
-				value: "false",
-			});
-			expect(f.inputs).toHaveLength(3);
-			selected = { actionId: "confirm-plan", values: { useGoal: "true" } };
-			await f.transition("help");
-			expect(f.inputs.at(-1)).toMatchObject({
-				role: "executor",
-				useGoal: true,
-				userReply: "/dev confirm-plan --goal",
-			});
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("never interprets unchecked panel confirmation prose as an option", async () => {
-		const f = fixture(async () => ({
-			actionId: "confirm-spec",
-			values: { useTeam: "false", confirmation: "--team 原样保留  " },
-		}));
-		try {
-			await f.transition("start change requirement");
-			await f.transition("help");
-			expect(f.inputs.at(-1)).toMatchObject({
-				role: "solution",
-				useTeam: false,
-				userReply: "/dev confirm-spec -- --team 原样保留  ",
-			});
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("offers basic selector opt-ins in the same approval selection without another confirmation", async () => {
-		const f = fixture();
-		let selections = 0;
-		f.host.ui = {
-			select: async (_title, options) => {
-				selections++;
-				return options.find(
-					(option): option is string => typeof option === "string" && option.includes("本次启用 Team"),
-				);
-			},
-			confirm: async () => {
-				throw new Error("Unexpected second approval");
-			},
-		} as NonNullable<SlashCommandRuntime["ui"]>;
-		try {
-			await f.transition("start change requirement");
-			await f.transition("help");
-			expect(selections).toBe(1);
-			expect(f.inputs.at(-1)).toMatchObject({ role: "solution", useTeam: true });
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("retains drafts and ordinary-mode ownership without approving from plain text", async () => {
-		const f = fixture();
-		try {
-			expect(await f.controller.submitText("unsent draft")).toEqual({ kind: "draft", text: "unsent draft" });
 			await f.invoke("");
-			expect(f.controller.inputMode()).toBe("dev");
+			f.native(false);
+			for (const name of [
+				"compact",
+				"retry",
+				"retryTurn",
+				"compactSession",
+				"sendQueuedNow",
+				"editUserQuery",
+				"setAutoDrain",
+			]) {
+				expect(() => assertDevCommandAllowed(f.host.session, name)).toThrow("不会调用普通会话模型");
+			}
+			for (const name of ["status", "settings", "help", "stop", "new"]) {
+				expect(() => assertDevCommandAllowed(f.host.session, name)).not.toThrow();
+			}
+		} finally {
+			await f.dispose();
+		}
+	});
+
+	it("permits native safe operations and lifecycle exit routing, with Goal restricted to visible executor", async () => {
+		const f = fixture();
+		try {
 			await f.invoke("");
-			expect(f.controller.inputMode()).toBe("chat");
-			await f.transition("start change requirement");
-			const receipt = await f.controller.submitText("同意");
-			if (receipt.kind !== "queued") throw new Error("Expected queued message");
-			await f.settleMessage(receipt.messageId);
-			expect(f.controller.status().phase).toBe("awaiting-specification");
-			expect(f.inputs.every(input => input.role === "requirements")).toBe(true);
+			for (const command of ["model", "switch", "compact", "retry", "stop", "settings"])
+				expect(() => assertDevCommandAllowed(f.host.session, command)).not.toThrow();
+			for (const command of ["new", "resume", "fork", "delete", "move", "cwd", "worktree"]) {
+				expect(isDevSessionTransitionCommand(command)).toBe(true);
+				expect(() => assertDevCommandAllowed(f.host.session, command)).not.toThrow();
+			}
+			expect(isDevSessionTransitionCommand("session", "delete")).toBe(true);
+			expect(isDevSessionTransitionCommand("switch")).toBe(false);
+			expect(() => assertDevCommandAllowed(f.host.session, "unknown")).toThrow();
+			expect(() => assertDevModeActivationAllowed(f.host.session, "goal")).toThrow();
+			f.phase("executing");
+			expect(() => assertDevCommandAllowed(f.host.session, "goal")).not.toThrow();
+			expect(() => assertDevModeActivationAllowed(f.host.session, "goal")).not.toThrow();
+			expect(() => assertDevModeActivationAllowed(f.host.session, "dev")).not.toThrow();
 		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("shows complete materials and preserves optional original panel confirmation", async () => {
-		const models: DevDecisionModel[] = [];
-		let selected: DevDecisionResult | undefined;
-		const f = fixture(async model => {
-			models.push(model);
-			return selected;
-		});
-		try {
-			await f.transition("start change requirement");
-			await f.invoke("help");
-			expect(f.inputs).toHaveLength(1);
-			expect(models.at(-1)!.actions.find(action => action.id === "inspect:specification")?.detail).toContain(
-				f.files.requirements.files[0]!.content,
-			);
-			await f.transition("confirm-spec");
-			await f.invoke("help");
-			const choice = models.at(-1)!;
-			expect(choice.actions.find(action => action.id === "inspect:solution")?.detail).toContain(
-				f.files.solution.content,
-			);
-			expect(choice.actions.find(action => action.id === "choose:existing")?.detail).toContain(
-				f.files.solution.content,
-			);
-			selected = { actionId: "choose:existing", values: { confirmation: "  用户原始确认\n保留说明  " } };
-			await f.invoke("help");
-			await f.settle();
-			expect(f.controller.status().selection?.userReply).toBe("/dev choose existing   用户原始确认\n保留说明  ");
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("treats material inspection as non-approving even if returned by a host", async () => {
-		const f = fixture(async () => ({ actionId: "inspect:specification" }));
-		try {
-			await f.transition("start change requirement");
-			expect(await f.invoke("help")).toMatchObject({ consumed: true, failed: true });
-			expect(f.controller.status().phase).toBe("awaiting-specification");
-			expect(f.inputs).toHaveLength(1);
-		} finally {
-			await f.dispose();
-		}
-	});
-
-	it("retains the old owner after failed native release and permits an explicit cancellation retry", async () => {
-		const f = fixture();
-		try {
-			await f.transition("start change requirement");
-			f.release(async () => {
-				throw new Error("native cancellation failed");
-			});
-			const error = await f.controller.cancel().then(
-				() => undefined,
-				error => error,
-			);
-			expect(error).toBeInstanceOf(Error);
-			expect(f.controller.observation().released).toBe(false);
-			expect(() => getSpecDrivenController(f.host, { restart: true })).toThrow();
-			f.release(async () => {});
-			await f.controller.cancel();
-			expect(f.controller.observation().released).toBe(true);
-			expect(f.controller.restartBlock()).toBeUndefined();
-		} finally {
-			f.release(async () => {});
-			await f.dispose();
-		}
-	});
-
-	it("keeps cancellation and restart blocked until an in-flight message and native release settle", async () => {
-		const f = fixture();
-		const entered = Promise.withResolvers<void>();
-		const response = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		try {
-			await f.transition("start change requirement");
-			f.run(async () => {
-				entered.resolve();
-				await response.promise;
-				return { text: "旧回复不得复用" };
-			});
-			f.release(() => release.promise);
-			const receipt = await f.controller.submitText("等待取消的消息");
-			if (receipt.kind !== "queued") throw new Error("Expected queued message");
-			await entered.promise;
-			const cancelling = f.controller.cancel();
-			expect(f.controller.restartBlock()).toContain("尚未结清");
-			expect(() => getSpecDrivenController(f.host, { restart: true })).toThrow();
-			response.resolve();
-			await f.settleMessage(receipt.messageId);
-			expect(f.controller.restartBlock()).toContain("尚未释放");
-			release.resolve();
-			await cancelling;
-			expect(f.controller.restartBlock()).toBeUndefined();
-			expect(f.controller.observation().interaction.messages[0]).toMatchObject({ status: "cancelled" });
-			expect(f.controller.observation().interaction.messages[0]?.reply).toBeUndefined();
-		} finally {
-			response.resolve();
-			release.resolve();
 			await f.dispose();
 		}
 	});

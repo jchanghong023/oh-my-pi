@@ -1,39 +1,19 @@
 import * as crypto from "node:crypto";
-import type { AsyncJobManager } from "../async/job-manager";
+import type { ImageContent } from "@oh-my-pi/pi-ai";
+import type { AgentSession } from "../session/agent-session";
 import type { SlashCommandRuntime } from "../slash-commands/types";
-import { summarizeSpecRun, type SpecRunMeasurement } from "./metrics";
-import { SpecAdmissionError, SpecDrivenOrchestrator, StaleRun } from "./orchestrator";
-import { createSpecDrivenRuntime } from "./runtime";
-import { bindSpecSkillPolicy } from "./skill-policy";
-import { roleLabel, stageForPhase, stageLabel } from "./stages";
-import type {
-	SpecControllerAction,
-	SpecDrivenOptions,
-	SpecDrivenPorts,
-	SpecDrivenStatus,
-	SpecInputMode,
-	SpecInteractionState,
-	SpecTextReceipt,
-	SpecUserMessage,
-} from "./types";
-export type { SpecControllerAction, SpecTextReceipt } from "./types";
-
-export interface SpecControllerRuntime {
-	ports: SpecDrivenPorts;
-	options: SpecDrivenOptions;
-	dispose(): Promise<void>;
-	measurement(): SpecRunMeasurement;
+import { hasExplicitRepairIntent, SpecAdmissionError, SpecDrivenOrchestrator } from "./orchestrator";
+import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "./runtime";
+import { SPEC_PHASES } from "./stages";
+import type { SpecControllerAction, SpecDrivenStatus, SpecInteractionState, SpecSavedRun } from "./types";
+import { DevWorkspace } from "./workspace";
+export type { SpecControllerAction } from "./types";
+export type SpecRuntimeFactory = typeof createSpecDrivenRuntime;
+interface WorkspaceState {
+	version: 1;
+	team: boolean;
+	run?: SpecSavedRun;
 }
-export type SpecRuntimeFactory = (input: {
-	session: SlashCommandRuntime["session"];
-	settings: SlashCommandRuntime["settings"];
-	cwd: string;
-	onOutput: (text: string) => Promise<void>;
-	onRequest?: () => void;
-}) => Promise<SpecControllerRuntime>;
-
-type Operation = (core: SpecDrivenOrchestrator) => Promise<SpecDrivenStatus>;
-const controllers = new WeakMap<object, SpecDrivenController>();
 export interface SpecControllerObservation {
 	runId: string | null;
 	cwd: string;
@@ -43,700 +23,605 @@ export interface SpecControllerObservation {
 	released: boolean;
 	disposed: boolean;
 	status: SpecDrivenStatus;
+	approvals: SpecSavedRun["approvals"];
 	interaction: SpecInteractionState;
+	teamMutable: boolean;
+	error?: string;
+	notice?: string;
 }
-
-type ObservationListener = (observation: SpecControllerObservation) => void;
-const observers = new WeakMap<object, Set<ObservationListener>>();
-
-function deliver(listener: ObservationListener, observation: SpecControllerObservation): void {
+type Listener = (observation: SpecControllerObservation) => void;
+const controllers = new WeakMap<object, SpecDrivenController>();
+const observers = new WeakMap<object, Set<Listener>>();
+function deliver(listener: Listener, value: SpecControllerObservation): void {
 	try {
-		listener(observation);
+		listener(value);
 	} catch {
-		// An observer is not an execution or approval owner.
+		/* Presentation cannot own execution. */
 	}
 }
-
-/** Attaches to the manager identity without creating a controller or native runtime. */
-export function observeSpecDrivenController(sessionManager: object, listener: ObservationListener): () => void {
-	let listeners = observers.get(sessionManager);
+export function observeSpecDrivenController(manager: object, listener: Listener): () => void {
+	let listeners = observers.get(manager);
 	if (!listeners) {
 		listeners = new Set();
-		observers.set(sessionManager, listeners);
+		observers.set(manager, listeners);
 	}
-	// Each registration owns its lifetime, even when the same callback is registered twice.
-	const registered: ObservationListener = observation => listener(observation);
+	const registered: Listener = value => listener(value);
 	listeners.add(registered);
-	const controller = controllers.get(sessionManager);
+	const controller = controllers.get(manager);
 	if (controller) deliver(registered, controller.observation());
 	return () => {
 		listeners.delete(registered);
-		if (!listeners.size && observers.get(sessionManager) === listeners) observers.delete(sessionManager);
+		if (!listeners.size) observers.delete(manager);
 	};
 }
-function formatHeartbeatElapsed(ms: number): string {
-	const seconds = Math.max(0, Math.floor(ms / 1000));
-	const minutes = Math.floor(seconds / 60);
-	return minutes > 0 ? `${minutes}分${seconds % 60}秒` : `${seconds}秒`;
+export function peekSpecDrivenController(manager: object): SpecDrivenController | undefined {
+	return controllers.get(manager);
 }
-
-const emptyStatus = (): SpecDrivenStatus => ({
-	phase: "idle",
-	paused: false,
-	generation: 0,
-});
-
-export function peekSpecDrivenController(sessionManager: object): SpecDrivenController | undefined {
-	const controller = controllers.get(sessionManager);
-	return controller && !controller.observation().disposed ? controller : undefined;
-}
-/** One in-memory workflow per native session-manager identity, shared by every host. */
 export function getSpecDrivenController(
 	host: SlashCommandRuntime,
-	options: { factory?: SpecRuntimeFactory; restart?: boolean } = {},
+	options: { factory?: SpecRuntimeFactory } = {},
 ): SpecDrivenController {
 	let controller = controllers.get(host.sessionManager);
-	const retainedInput = controller?.belongsTo(host) ? controller.observation().interaction : undefined;
-	if (controller?.belongsTo(host) && options.restart) {
-		const blocked = controller.restartBlock();
-		if (blocked) throw new SpecAdmissionError(blocked);
-	}
-	if (
-		controller &&
-		(!controller.belongsTo(host) ||
-			(options.restart && ["completed", "cancelled"].includes(controller.status().phase)))
-	) {
-		void controller.dispose();
-		controller = undefined;
-	}
 	if (!controller) {
-		controller = new SpecDrivenController(host, options.factory, retainedInput);
+		controller = new SpecDrivenController(host, options.factory);
 		controllers.set(host.sessionManager, controller);
-		controller.publishObservation();
 	}
-	controller.setOutput(host.output, host.observesCustomMessages);
 	return controller;
 }
-
-export function renderSpecDrivenSummary(state: SpecDrivenStatus, compact = false): string {
-	const phase =
-		state.phase === "idle"
-			? "尚未启动"
-			: state.phase === "completed"
-				? "已完成"
-				: state.phase === "cancelled"
-					? "已取消"
-					: stageLabel(stageForPhase(state.phase));
-	const lines = [`协同开发模式：${phase}${state.paused ? "（暂停）" : ""}`];
-	if (state.useTeam !== undefined) lines.push(`方案 Team：${state.useTeam ? "开启" : "关闭"}`);
-	if (state.useGoal !== undefined) lines.push(`执行 Goal：${state.useGoal ? "开启" : "关闭"}`);
-	if (state.blockedReason) lines.push(`阻塞：${state.blockedReason}`);
-	if (state.lastReply && !compact) lines.push(state.lastReply);
-	if (state.specification) lines.push(`需求文件：${state.specification.files.map(file => file.path).join("、")}`);
-	if (state.solution) lines.push(`方案文件：${state.solution.path}`);
-	if (state.plan) lines.push(`计划文件：${state.plan.path}`);
-	if (state.report) lines.push(`完成报告：${state.report.path}`);
-	if (state.phase === "awaiting-acceptance") lines.push("完成报告等待明确验收；验收后才同步需求并归档。");
-	return lines.join("\n");
+const object = (value: unknown): value is Record<string, unknown> =>
+	!!value && typeof value === "object" && !Array.isArray(value);
+const text = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+function validState(value: unknown): value is WorkspaceState {
+	if (
+		!object(value) ||
+		value.version !== 1 ||
+		typeof value.team !== "boolean" ||
+		Object.keys(value).some(key => !["version", "team", "run"].includes(key))
+	)
+		return false;
+	if (value.run === undefined) return true;
+	const run = value.run;
+	if (
+		!object(run) ||
+		!text(run.runId) ||
+		!SPEC_PHASES.includes(run.phase as SpecDrivenStatus["phase"]) ||
+		!object(run.sessions) ||
+		!object(run.approvals)
+	)
+		return false;
+	if (
+		Object.keys(run).some(
+			key =>
+				![
+					"runId",
+					"phase",
+					"changeId",
+					"paths",
+					"approvals",
+					"sessions",
+					"awaitingAcceptance",
+					"reportNeedsUpdate",
+					"closing",
+					"archivedChangePath",
+				].includes(key),
+		)
+	)
+		return false;
+	for (const flag of ["awaitingAcceptance", "reportNeedsUpdate"])
+		if (run[flag] !== undefined && typeof run[flag] !== "boolean") return false;
+	if (run.archivedChangePath !== undefined && typeof run.archivedChangePath !== "string") return false;
+	if (
+		run.closing !== undefined &&
+		(!object(run.closing) ||
+			(run.closing.synced !== undefined && typeof run.closing.synced !== "boolean") ||
+			(run.closing.archivedChangePath !== undefined && typeof run.closing.archivedChangePath !== "string"))
+	)
+		return false;
+	if (object(run.closing) && run.closing.retirementCleanup !== undefined) {
+		const cleanup = run.closing.retirementCleanup;
+		if (!object(cleanup) || !Array.isArray(cleanup.paths) || !cleanup.paths.every(text) || !text(cleanup.diagnostic))
+			return false;
+	}
+	const roles = ["requirements", "solution", "planner", "executor"];
+	for (const [role, ref] of Object.entries(run.sessions))
+		if (
+			!roles.includes(role) ||
+			!object(ref) ||
+			ref.role !== role ||
+			!text(ref.actorId) ||
+			!text(ref.sessionId) ||
+			!text(ref.sessionFile)
+		)
+			return false;
+	for (const [role, approval] of Object.entries(run.approvals))
+		if (
+			!roles.includes(role) ||
+			!object(approval) ||
+			!text(approval.userReply) ||
+			!Array.isArray(approval.files) ||
+			!approval.files.length ||
+			!approval.files.every(file => object(file) && text(file.path) && text(file.version)) ||
+			(approval.candidateId !== undefined && !text(approval.candidateId))
+		)
+			return false;
+	if (run.phase !== "idle" && (!text(run.changeId) || !object(run.paths))) return false;
+	const paths = run.paths;
+	if (
+		paths !== undefined &&
+		(!object(paths) ||
+			!Array.isArray(paths.requirements) ||
+			!paths.requirements.length ||
+			!paths.requirements.every(text) ||
+			!["solution", "plan", "report"].every(key => text(paths[key])))
+	)
+		return false;
+	if (run.phase !== "idle") {
+		const stage = SPEC_PHASES.indexOf(run.phase as SpecDrivenStatus["phase"]) - 1;
+		if (!run.sessions[roles[stage]]) return false;
+		// Advancing commits the original decision and exact formal-file versions before model work.
+		const requiredFiles = [paths!.requirements as string[], [paths!.solution], [paths!.plan]];
+		for (let index = 0; index < stage; index++) {
+			const approval = run.approvals[roles[index]];
+			if (!object(approval) || !Array.isArray(approval.files)) return false;
+			const files = approval.files;
+			if (
+				!requiredFiles[index].every(required => {
+					const pattern =
+						index === 0 && typeof required === "string" && required.includes("*")
+							? new Bun.Glob(required)
+							: undefined;
+					return files.some(
+						file =>
+							object(file) &&
+							(pattern
+								? typeof file.path === "string" && !file.path.includes("*") && pattern.match(file.path)
+								: file.path === required),
+					);
+				})
+			)
+				return false;
+			if (roles[index] === "solution" && !text(approval.candidateId)) return false;
+		}
+	}
+	return true;
 }
-
-/** Full native material projection; chat uses the summary instead. */
-export function renderSpecDrivenStatus(state: SpecDrivenStatus): string {
-	return `${renderSpecDrivenSummary(state)}\n\n${JSON.stringify(state, null, 2)}`;
+function nativeBusy(session: AgentSession): boolean {
+	return (
+		session.isBusyForSnapshot ||
+		session.hasAdmittedSubmission ||
+		session.queuedMessageCount > 0 ||
+		session.hasPendingAsyncWork() ||
+		(session.getAsyncJobTree()?.running.length ?? 0) > 0
+	);
 }
-
+/** One held workspace lease; all conversation, admission and cancellation remain native. */
 export class SpecDrivenController {
 	readonly #host: SlashCommandRuntime;
-	readonly #manager: AsyncJobManager;
 	readonly #factory: SpecRuntimeFactory;
-	readonly #sessionGeneration: number;
-	#output!: SlashCommandRuntime["output"];
-	#observesCustomMessages = false;
-	#core?: SpecDrivenOrchestrator;
-	#native?: SpecControllerRuntime;
-	#initializing?: Promise<void>;
-	#releasePolicy?: () => void;
-	#jobs = new Set<string>();
-	#epoch = 0;
-	#disposed = false;
-	#released = false;
-	#releaseWork?: Promise<void>;
-	#paused = false;
-	#pending?: Operation;
-	#active = false;
-	#cancelled = false;
-	#failure?: string;
+	readonly #root: AgentSession;
+	readonly #managers = new Set<object>();
+	readonly #subscriptions = new Map<AgentSession, () => void>();
 	readonly #createdAt = Date.now();
 	#updatedAt = this.#createdAt;
-	#mode: SpecInputMode = "chat";
-	#draft = "";
-	#messages: SpecUserMessage[] = [];
-	#messageAbort?: AbortController;
-	#messageWork?: Promise<void>;
-	#controlWork?: Promise<unknown>;
-	#heartbeat?: NodeJS.Timeout;
-	#heartbeatSince = 0;
-
-	constructor(
-		host: SlashCommandRuntime,
-		factory: SpecRuntimeFactory = createSpecDrivenRuntime,
-		input?: Pick<SpecInteractionState, "mode" | "draft">,
-	) {
-		if (!host.session.asyncJobManager) throw new Error("当前会话缺少原生 AsyncJobManager，无法启动 /dev");
+	#workspace?: DevWorkspace;
+	#state: WorkspaceState = { version: 1, team: false };
+	#core?: SpecDrivenOrchestrator;
+	#native?: SpecDrivenRuntime;
+	#mode: "chat" | "dev" = "chat";
+	#control = false;
+	#stopping = false;
+	#halted = false;
+	#controlSettled?: PromiseWithResolvers<void>;
+	#teamInterrupt?: { session: AgentSession; promise: Promise<boolean> };
+	#error?: string;
+	#notice?: string;
+	constructor(host: SlashCommandRuntime, factory: SpecRuntimeFactory = createSpecDrivenRuntime) {
 		this.#host = host;
-		this.#manager = host.session.asyncJobManager;
+		this.#root = host.session;
 		this.#factory = factory;
-		this.setOutput(host.output, host.observesCustomMessages);
-		this.#sessionGeneration = host.session.sessionGeneration;
-		this.#mode = input?.mode ?? "chat";
-		this.#draft = input?.draft ?? "";
-		const unregister = host.session.registerSessionChangeCallback(() => {
-			void this.dispose();
-		});
-		host.session.addDisposer(() => {
-			unregister();
-			void this.dispose();
-		});
+		this.#register(this.#root);
 	}
-	belongsTo(host: SlashCommandRuntime): boolean {
+	#register(session: AgentSession): void {
+		controllers.set(session.sessionManager, this);
+		this.#managers.add(session.sessionManager);
+		if (!this.#subscriptions.has(session))
+			this.#subscriptions.set(
+				session,
+				session.subscribe(event => {
+					this.publishObservation();
+					if (event.type !== "agent_end") return;
+					// agent_end can precede the admitting prompt's finally block. Do not
+					// return this barrier to the event dispatcher: waitForIdle drains it.
+					void Promise.allSettled([session.waitForAdmittedSubmissions(), session.waitForIdle()]).then(() => {
+						if (this.#subscriptions.has(session)) this.publishObservation();
+					});
+				}),
+			);
+	}
+	rootSession(): AgentSession {
+		return this.#root;
+	}
+	nativeSession(): AgentSession | undefined {
+		const role = this.#core?.currentRole();
+		return role ? this.#native?.nativeSession(role) : undefined;
+	}
+	hasPendingTeam(session: AgentSession): boolean {
 		return (
-			this.#host.session === host.session &&
-			this.#sessionGeneration === host.session.sessionGeneration &&
-			this.#host.cwd === host.cwd
+			this.#mode === "dev" &&
+			session === this.nativeSession() &&
+			(this.#teamInterrupt?.session === session || this.#native?.hasPendingTeam(session) === true)
 		);
 	}
-	setOutput(output: SlashCommandRuntime["output"], observesCustomMessages = false): void {
-		this.#observesCustomMessages = observesCustomMessages;
-		this.#output = observesCustomMessages ? () => {} : output;
+	/** Interrupt only the current owner's external discussion, retaining the Dev run. */
+	interrupt(session: AgentSession): Promise<boolean> {
+		if (!this.hasPendingTeam(session)) return Promise.resolve(false);
+		if (this.#teamInterrupt) return this.#teamInterrupt.promise;
+		// An existing leave owns the stop barrier; ordinary interruption must not release it.
+		if (this.#stopping) return Promise.resolve(false);
+		const native = this.#native!;
+		const controlSettled = this.#controlSettled;
+		this.#stopping = true;
+		const promise = (async () => {
+			try {
+				if (!(await native.interruptTeam(session))) return false;
+				await controlSettled?.promise;
+				return true;
+			} finally {
+				this.#stopping = false;
+				this.#teamInterrupt = undefined;
+				this.publishObservation();
+			}
+		})();
+		this.#teamInterrupt = { session, promise };
+		this.publishObservation();
+		return promise;
 	}
-	inputMode(): SpecInputMode {
+	inputMode(): "chat" | "dev" {
 		return this.#mode;
 	}
-	setInputMode(mode: SpecInputMode): void {
-		if (this.#disposed) throw new SpecAdmissionError("流程已释放");
-		this.#mode = mode;
-		this.publishObservation();
+	status(): SpecDrivenStatus {
+		return (
+			this.#core?.status() ?? {
+				phase: this.#state.run?.phase ?? "idle",
+				generation: 0,
+				useTeam: this.#state.team,
+				changeId: this.#state.run?.changeId,
+				paths: this.#state.run?.paths,
+				closing: this.#state.run?.closing,
+				archivedChangePath: this.#state.run?.archivedChangePath,
+				awaitingAcceptance: this.#state.run?.awaitingAcceptance,
+			}
+		);
 	}
-	#outstanding(): boolean {
-		return this.#messages.some(message => ["queued", "processing", "cancelling"].includes(message.status));
+	#teamMutable(): boolean {
+		return (
+			["idle", "requirements"].includes(this.status().phase) && !this.#control && !this.#stopping && !this.#halted
+		);
 	}
-	#messageBlock(): string | undefined {
-		return this.#outstanding() ? "用户消息尚未结清；请等待或取消指定消息" : undefined;
+	#busy(): boolean {
+		return [...this.#subscriptions.keys()].some(session => session !== this.#root && nativeBusy(session));
 	}
-	/** Terminal phase alone is not evidence that the old owner has finished releasing resources. */
-	restartBlock(): string | undefined {
-		if (!this.#disposed && !["completed", "cancelled"].includes(this.status().phase)) return;
-		const unsettled = this.#messageBlock();
-		if (unsettled) {
-			const failure = this.#messages.find(message => message.status === "cancelling" && message.error)?.error;
-			return `${unsettled}${failure ? `；${failure}` : ""}；旧流程清理确认完成前不能开始新流程`;
-		}
-		if (!this.#released) return "旧流程资源尚未释放；请等待清理完成后重新 /dev start；若取消失败，请重试 /dev cancel";
+	assertControlAllowed(): void {
+		if (this.#control || this.#stopping) throw new SpecAdmissionError("当前控制操作尚未结清");
+		if (this.#halted) throw new SpecAdmissionError("停止尚未完成，请重试退出或丢弃");
+		if (this.#busy()) throw new SpecAdmissionError("原生会话、已接收输入或异步任务尚未结清");
 	}
 	actions(state = this.status()): SpecControllerAction[] {
-		const blocked = this.#disposed
-			? "流程所有者已释放"
-			: (this.restartBlock() ?? this.#messageBlock() ?? (this.#active ? "阶段操作正在运行" : undefined));
-		const result: SpecControllerAction[] = [];
-		const add = (
-			id: string,
-			label: string,
-			command: string,
-			requiresInput = false,
-			control = false,
-			interrupt = false,
-		): void => {
-			const actionBlocked = interrupt && !this.#disposed ? this.#messageBlock() : blocked;
-			result.push({
-				id,
-				label,
-				command: `/dev ${command}`,
-				available: control ? !this.#disposed : !actionBlocked,
-				version: `${state.generation}:${state.specification?.version ?? ""}:${state.solution?.version ?? ""}:${state.plan?.version ?? ""}:${state.report?.version ?? ""}:${command}`,
-				...(actionBlocked && !control ? { blockedReason: actionBlocked } : {}),
-				...(requiresInput ? { requiresInput: true } : {}),
-			});
-		};
-		add("status", "查看当前阶段摘要", "status", false, true);
-		if (["idle", "completed", "cancelled"].includes(state.phase)) add("start", "开始新流程", "start", true);
-		else if (!["completed", "cancelled"].includes(state.phase)) {
-			if (state.paused) add("resume", "恢复流程（不自动发送草稿）", "resume", false, !this.#outstanding());
-			else {
-				if (["requirements", "solution", "planning", "executing"].includes(state.phase))
-					add("answer", "补充说明并继续当前阶段（不批准转换）", "answer", true);
-				if (state.phase === "awaiting-specification" && state.specification)
-					add("confirm-spec", "确认需求并进入方案", "confirm-spec");
-				if (state.phase === "awaiting-choice" && state.solution)
-					for (const candidate of state.solution.candidates)
-						add(`choose:${candidate.id}`, `选择 ${candidate.title} 并编写计划`, `choose ${candidate.id}`);
-				if (state.phase === "awaiting-plan" && state.plan)
-					add("confirm-plan", "批准计划并开始执行", "confirm-plan");
-				if (state.phase === "awaiting-acceptance" && state.report) {
-					add("accept", "验收交付并同步需求、归档", "accept");
-					add("repair", "返回当前范围内执行并修复", "repair", true);
-				}
-				add("pause", "立即暂停流程", "pause", false, true);
-			}
-			add("amend", "修改需求并撤销受影响下游批准", "amend", true);
-			if (state.specification) add("change-solution", "重新讨论方案并撤销下游批准", "change-solution", true);
-			if (state.plan) add("revise-plan", "修订当前计划（需重新批准）", "revise-plan", true);
-			add("cancel", "停止流程并保留已有文件（需确认）", "cancel", false, true);
-		}
-		for (const message of this.#messages)
-			if (
-				!["completed", "cancelled"].includes(state.phase) &&
-				["queued", "processing", "cancelling"].includes(message.status)
-			)
-				add(
-					`cancel-message:${message.id}`,
-					`取消消息 ${message.id}（保留已发生副作用）`,
-					`cancel-message ${message.id}`,
-					false,
-					true,
-				);
-		return result;
-	}
-	async submitText(text: string): Promise<SpecTextReceipt> {
-		if (this.#disposed) throw new SpecAdmissionError("流程已释放");
-		if (!text.trim()) throw new SpecAdmissionError("消息不能为空");
-		const state = this.status();
-		if (["idle", "completed", "cancelled"].includes(state.phase) || state.paused) {
-			this.#draft = text;
-			this.publishObservation();
-			return { kind: "draft", text };
-		}
-		const recipient = this.#core?.recipient();
-		if (!recipient || !this.#core) throw new SpecAdmissionError("当前阶段 Agent 尚未准备好或已不可用");
-		const message: SpecUserMessage = {
-			...recipient,
-			id: crypto.randomUUID(),
-			text,
-			runId: this.#core.runId,
-			generation: state.generation,
-			phase: state.phase,
-			status: "queued",
-		};
-		this.#messages.push(message);
-		this.#draft = "";
-		this.publishObservation();
-		this.#drainMessages();
-		return { kind: "queued", messageId: message.id };
-	}
-	async cancelMessage(messageId: string): Promise<void> {
-		const message = this.#messages.find(item => item.id === messageId);
-		if (!message || !this.#core || message.runId !== this.#core.runId)
-			throw new SpecAdmissionError("未知消息或消息归属不匹配");
-		if (message.status === "completed" || message.status === "failed")
-			throw new SpecAdmissionError("消息已经处理完成，不能取消");
-		if (message.status === "cancelled") return;
-		const recipient = this.#core.recipient();
-		if (
-			!recipient ||
-			message.role !== recipient.role ||
-			message.actorId !== recipient.actorId ||
-			message.sessionId !== recipient.sessionId
-		)
-			throw new SpecAdmissionError("消息所属阶段或 Agent 已变化");
-		if (message.status === "queued") {
-			message.status = "cancelled";
-			this.publishObservation();
-			return;
-		}
-		message.status = "cancelling";
-		this.#messageAbort?.abort();
-		this.publishObservation();
-		await this.#messageWork;
-	}
-	#drainMessages(): void {
-		if (this.#messageWork || this.#active || this.#disposed || this.status().paused) return;
-		const message = this.#messages.find(item => item.status === "queued");
-		if (!message || !this.#core) return;
-		const core = this.#core;
-		const recipient = core.recipient();
-		if (
-			!recipient ||
-			message.runId !== core.runId ||
-			message.generation !== core.status().generation ||
-			message.role !== recipient.role ||
-			message.actorId !== recipient.actorId ||
-			message.sessionId !== recipient.sessionId
-		) {
-			message.status = "failed";
-			message.error = "消息所属阶段或 Agent 已变化；未投递";
-			this.publishObservation();
-			this.#drainMessages();
-			return;
-		}
-		const abort = new AbortController();
-		this.#messageAbort = abort;
-		message.status = "processing";
-		this.#messageWork = Promise.resolve()
-			.then(async () => {
-				try {
-					const reply = await core.converse({
-						text: message.text,
-						messageId: message.id,
-						recipient,
-						signal: abort.signal,
-					});
-					if (abort.signal.aborted || this.#disposed) message.status = "cancelled";
-					else {
-						message.reply = reply.text;
-						message.status = "completed";
-						await this.#emit(
-							`${reply.text}\n\n${renderSpecDrivenSummary(this.status(), this.#observesCustomMessages)}\n${this.#observesCustomMessages ? this.#nextStep() : this.#actionSummary()}`,
-						);
-					}
-				} catch (error) {
-					const aborted = abort.signal.aborted || this.#disposed;
-					const abortError =
-						error !== null && typeof error === "object" && "name" in error && error.name === "AbortError";
-					if (message.status !== "completed") {
-						if (!aborted) message.status = "failed";
-						else if (abortError || error instanceof StaleRun) message.status = "cancelled";
-						else {
-							message.status = "cancelling";
-							message.error = `取消未确认：${error instanceof Error ? error.message : String(error)}`;
-						}
-					}
-					if (!aborted) message.error = error instanceof Error ? error.message : String(error);
-				} finally {
-					this.publishObservation();
-				}
-			})
-			.finally(() => {
-				this.#messageWork = undefined;
-				this.#messageAbort = undefined;
-				this.#drainMessages();
-			});
-		this.publishObservation();
-	}
-	#actionSummary(): string {
-		return this.actions()
-			.map(
-				action =>
-					`${action.label}：${action.command}${action.available ? "" : `（不可用：${action.blockedReason}）`}`,
-			)
-			.join("\n");
-	}
-	#nextStep(): string {
-		const state = this.status();
-		if (["idle", "completed", "cancelled"].includes(state.phase))
-			return "下一步：/dev help 打开操作界面，填写需求并明确开始新流程。";
-		if (this.#active) return "后台运行中；完成后会提示下一步。/dev help 查看当前操作。";
-		if (state.paused) return "下一步：/dev help 查看并恢复流程；草稿不会自动发送。";
-		return "下一步：/dev help 查看本轮材料并明确作出决定。";
-	}
-	revisePlan(text: string): string {
-		if (!this.#core) throw new SpecAdmissionError("尚无可修订的计划");
-		return this.schedule(core => core.revisePlan(text));
-	}
-	repair(text: string): string {
-		if (this.#active || this.#outstanding() || !this.#core) throw new SpecAdmissionError("流程或用户消息尚未结清");
-		return this.schedule(core => core.repair(text));
-	}
-	status(): SpecDrivenStatus {
-		const state = this.#core?.status() ?? emptyStatus();
-		if (this.#cancelled) state.phase = "cancelled";
-		if (this.#paused) state.paused = true;
-		if (this.#failure) state.blockedReason = this.#failure;
-		return state;
+		const reason =
+			this.#control || this.#stopping
+				? "当前控制操作尚未结清"
+				: this.#halted
+					? "停止尚未完成，请重试退出或丢弃"
+					: this.#busy()
+						? "原生输入或任务尚未结清"
+						: undefined;
+		const closing = !!(state.closing?.synced || state.closing?.archivedChangePath);
+		return [
+			{ id: "new", label: "新需求", command: "/dev new", requiresInput: true, allowed: state.phase === "idle" },
+			{ id: "next", label: "确认并继续", command: "/dev next", allowed: state.phase !== "idle" && !!this.#native },
+			{
+				id: "back",
+				label: "返回上一阶段",
+				command: "/dev back",
+				allowed: !closing && ["solution", "planning", "executing"].includes(state.phase) && !!this.#native,
+			},
+			{ id: "config", label: "配置 Team", command: "/dev config", allowed: this.#teamMutable() },
+			{ id: "drop", label: "丢弃跟踪（已发生的同步和归档不会撤销）", command: "/dev drop", allowed: true },
+			{ id: "exit", label: "退出 Dev", command: "/dev", allowed: true },
+		].map(({ allowed, ...action }) => ({
+			...action,
+			available: allowed && (!reason || action.id === "exit" || action.id === "drop"),
+			...(!allowed || reason ? { blockedReason: reason ?? "当前阶段不允许此操作" } : {}),
+		}));
 	}
 	observation(): SpecControllerObservation {
 		const status = this.status();
 		return {
-			runId: this.#core?.runId ?? null,
-			cwd: this.#host.cwd,
+			runId: this.#state.run?.runId ?? null,
+			cwd: this.#workspace?.root ?? this.#root.sessionManager.getCwd(),
 			createdAt: this.#createdAt,
 			updatedAt: this.#updatedAt,
-			active: this.#active,
-			released: this.#released,
-			disposed: this.#disposed,
+			active: this.#control || this.#busy(),
+			released: !this.#workspace,
+			disposed: false,
 			status,
+			approvals: this.#core?.save().approvals ?? this.#state.run?.approvals ?? {},
+			teamMutable: this.#teamMutable(),
+			error: this.#error,
+			notice: this.#notice,
 			interaction: {
 				mode: this.#mode,
-				draft: this.#draft,
-				recipient: this.#core?.recipient(),
-				messages: structuredClone(this.#messages),
+				recipient: this.#mode === "dev" ? this.#core?.recipient() : undefined,
 				actions: this.actions(status),
-				blockedReason:
-					this.#messageBlock() ??
-					status.blockedReason ??
-					(!this.#core?.recipient() ? "尚无可接收消息的阶段 Agent" : undefined),
+				blockedReason: this.#error ?? status.blockedReason,
 			},
 		};
 	}
-	/** Publishes only through this manager's current controller, never through a global current run. */
 	publishObservation(): void {
 		this.#updatedAt = Date.now();
-		if (controllers.get(this.#host.sessionManager) !== this) return;
-		const listeners = observers.get(this.#host.sessionManager);
-		if (!listeners?.size) return;
-		// Keep registrations stable while callbacks subscribe or unsubscribe.
-		const currentListeners = [...listeners];
-		for (const listener of currentListeners) deliver(listener, this.observation());
+		const value = this.observation();
+		for (const manager of this.#managers)
+			for (const listener of observers.get(manager) ?? []) deliver(listener, value);
 	}
-	async report(options: { rawPhase?: boolean } = {}): Promise<void> {
-		const state = this.status();
-		const compact = this.#observesCustomMessages && !options.rawPhase;
-		const recipient = this.#core?.recipient();
-		const destination = state.paused
-			? "已暂停；新文字仅保留草稿"
-			: recipient
-				? `${roleLabel(recipient.role)} · ${this.#active ? "运行中" : "等待你"}`
-				: "尚无可接收消息的阶段 Agent；文字仅保留草稿";
-		let text = `输入模式：${this.#mode === "dev" ? "协同开发" : "普通聊天"}；接收：${destination}\n${renderSpecDrivenSummary(state, compact)}${options.rawPhase ? `\n阶段键：${state.phase}\n\n${JSON.stringify(state, null, 2)}` : ""}\n${compact ? this.#nextStep() : `${this.#actionSummary()}\n/dev help 打开操作界面`}`;
-		if (!compact && this.#active) text += "\n后台运行中；/dev status、/dev pause、/dev cancel 可立即使用。";
-		if (!compact)
-			for (const message of this.#messages)
-				text += `\n消息 ${message.id}：${message.status}${message.error ? `；${message.error}` : ""}`;
-		if (this.#native && !compact) {
-			const measurement = this.#native.measurement();
-			const timing = this.#core?.timing();
-			if (timing) {
-				measurement.plannedDecisionWaitMs = timing.plannedDecisionWaitMs;
-				measurement.executionWaitMs = timing.executionWaitMs;
-			}
-			const summary = summarizeSpecRun(measurement);
-			text += `\n实际投入（不代表质量提高）：请求 ${summary.requests}；输入 token ${summary.inputTokens ?? "未知"}；输出 token ${summary.outputTokens ?? "未知"}；耗时 ${summary.elapsedMs}ms；等待决策 ${summary.plannedDecisionWaitMs ?? "未评估"}ms；执行 ${summary.executionWaitMs ?? "未评估"}ms；质量观测 ${measurement.assessmentComplete ? "已评估" : "未评估"}；费用 ${
-				Object.entries(summary.costs)
-					.map(([currency, amount]) => `${amount} ${currency}`)
-					.join("，") || "未知"
-			}；费用未知的请求 ${summary.unknownCostRequests}`;
-		}
-		await this.#emit(text);
+	async #save(run: SpecSavedRun | undefined, team = this.#state.team): Promise<void> {
+		if (!this.#workspace) throw new Error("Dev 工作区尚未取得控制权");
+		const state: WorkspaceState = { version: 1, team, ...(run ? { run } : {}) };
+		await this.#workspace.save(state);
+		this.#state = state;
 	}
-	async #emit(text: string): Promise<void> {
-		if (this.#host.session.isDisposed || this.#sessionGeneration !== this.#host.session.sessionGeneration) return;
-		const epoch = this.#epoch;
-		await this.#host.session.appendCustomMessage({ customType: "spec-driven", content: text, display: true });
-		if (
-			epoch !== this.#epoch ||
-			this.#host.session.isDisposed ||
-			this.#sessionGeneration !== this.#host.session.sessionGeneration
-		)
-			return;
-		await this.#output(text);
+	async #bind(): Promise<void> {
+		await this.#host.bindMainSession?.(this.#mode === "dev" ? (this.nativeSession() ?? this.#root) : this.#root);
 	}
-	#startHeartbeat(): void {
-		this.#stopHeartbeat();
-		this.#heartbeatSince = Date.now();
-		this.#heartbeat = setInterval(() => {
-			void this.#publishHeartbeat().catch(() => {});
-		}, 15_000);
-	}
-	#stopHeartbeat(): void {
-		clearInterval(this.#heartbeat);
-		this.#heartbeat = undefined;
-	}
-	async #publishHeartbeat(): Promise<void> {
-		if (!this.#active || this.#paused || this.#disposed || !this.#core) return;
-		const recipient = this.#core.recipient();
-		if (!recipient) return;
-		const state = this.status();
-		const requests = this.#native?.measurement().requests.length ?? 0;
-		const elapsed = formatHeartbeatElapsed(Date.now() - this.#heartbeatSince);
-		await this.#output(
-			`${roleLabel(recipient.role)} · ${stageLabel(stageForPhase(state.phase))} · 已用时 ${elapsed} · 第 ${requests} 次请求`,
-		);
-	}
-	#bind(phase: string): void {
-		this.#releasePolicy?.();
-		// 阶段变更先撤销全部旧技能授权；程序节点在自己的独立上下文精确加载所需技能。
-		this.#releasePolicy = bindSpecSkillPolicy(this.#host.sessionManager, { phase, allowedSkills: [] });
-	}
-	async #initialize(): Promise<void> {
-		const pending =
-			this.#initializing ??
-			(this.#initializing = (async () => {
-				const native = await this.#factory({
-					session: this.#host.session,
-					settings: this.#host.settings,
-					cwd: this.#host.cwd,
-					onOutput: async text => {
-						if (!this.#paused && !this.#disposed && this.#core && !this.#core.status().paused)
-							await this.#emit(text);
-					},
-					onRequest: () => {
-						void this.#publishHeartbeat().catch(() => {});
-					},
-				});
-				if (this.#disposed || this.#released) {
-					await native.dispose();
-					return;
-				}
-				this.#native = native;
-				const controller = this;
-				const notify = (status: SpecDrivenStatus): void => {
-					try {
-						native.options.onStatusChange?.(structuredClone(status));
-					} catch {
-						// A factory listener must not suppress manager observers.
-					}
-					controller.publishObservation();
-				};
-				this.#core = new SpecDrivenOrchestrator(native.ports, {
-					...native.options,
-					assertTransitionAllowed: () => {
-						native.options.assertTransitionAllowed?.();
-						if (this.#outstanding()) throw new SpecAdmissionError(this.#messageBlock());
-					},
-					get onStatusChange() {
-						return native.options.onStatusChange || observers.get(controller.#host.sessionManager)?.size
-							? notify
-							: undefined;
-					},
-				});
-				this.publishObservation();
-			})());
-		try {
-			await pending;
-		} catch (error) {
-			if (this.#initializing === pending) this.#initializing = undefined;
-			throw error;
-		}
-	}
-	schedule(operation: Operation): string {
-		if (this.#disposed) throw new SpecAdmissionError("流程已释放");
-		if (this.#outstanding()) throw new SpecAdmissionError(this.#messageBlock());
-		if (this.#active) throw new SpecAdmissionError("流程正在运行；请使用 /dev status、/dev pause 或 /dev cancel");
-		this.#paused = false;
-		this.#failure = undefined;
-		this.#pending = operation;
-		this.#bind("dispatching");
-		const epoch = ++this.#epoch;
-		this.#active = true;
-		this.#startHeartbeat();
-		this.publishObservation();
-		let jobId = "";
-		try {
-			jobId = this.#manager.register(
-				"task",
-				"协同开发 /dev",
-				async ({ signal, reportProgress }) => {
-					const abort = () => {
-						if (epoch === this.#epoch) this.pause();
-					};
-					signal.addEventListener("abort", abort, { once: true });
-					try {
-						await this.#initialize();
-						await this.#controlWork;
-						if (epoch !== this.#epoch || signal.aborted || !this.#core) return "已停止旧调度";
-						if (this.#outstanding()) throw new Error(this.#messageBlock());
-						this.#pending = undefined;
-						await operation(this.#core);
-						if (epoch !== this.#epoch || signal.aborted) return "已停止旧调度";
-						this.#bind(this.#core.status().phase);
-						await reportProgress(`phase=${this.#core.status().phase}`);
-						this.#active = false;
-						this.publishObservation();
-						await this.report();
-						if (["completed", "cancelled"].includes(this.#core.status().phase)) await this.#release();
-						return renderSpecDrivenStatus(this.#core.status());
-					} catch (error) {
-						if (epoch === this.#epoch && !this.#disposed) {
-							this.#failure = error instanceof Error ? error.message : String(error);
-							this.#bind(this.status().phase);
-							this.#active = false;
-							this.publishObservation();
-							await this.report();
-						}
-						throw error;
-					} finally {
-						signal.removeEventListener("abort", abort);
-						this.#jobs.delete(jobId);
-						if (epoch === this.#epoch && this.#active) {
-							this.#active = false;
-							this.publishObservation();
-						}
-						if (epoch === this.#epoch) this.#stopHeartbeat();
-						this.#drainMessages();
-					}
-				},
-				{ ownerId: this.#host.session.getAgentId(), suppressDelivery: true },
-			);
-		} catch (error) {
-			this.#stopHeartbeat();
-			this.#active = false;
-			this.#bind(this.status().phase);
-			this.publishObservation();
-			throw error;
-		}
-		this.#jobs.add(jobId);
-		return jobId;
-	}
-	pause(): void {
-		const phase = this.status().phase;
-		if (["completed", "cancelled"].includes(phase) || (phase === "idle" && !this.#active)) return;
-		this.#messageAbort?.abort();
-		this.#stopHeartbeat();
-		for (const message of this.#messages) {
-			if (message.status === "processing") message.status = "cancelling";
-			else if (message.status === "queued") {
-				// Pausing invalidates this generation; retain undelivered input as an explicit failure.
-				message.status = "failed";
-				message.error = "流程已暂停，消息未投递；恢复后请重新提交";
-			}
-		}
-		this.#paused = true;
-		this.#epoch++;
-		this.#controlWork = this.#core?.pause().catch(error => {
-			this.#failure = error instanceof Error ? error.message : String(error);
-			this.publishObservation();
+	async #initialize(saved?: SpecSavedRun): Promise<void> {
+		const native = await this.#factory({
+			session: this.#root,
+			settings: this.#host.settings,
+			cwd: this.#workspace!.root,
+			saved,
+			checkApproved: () => this.#core!.checkApproved(),
+			observeReport: () => this.#core!.observeReport(),
+			getStatus: () => this.status(),
+			getSavedRun: () => this.#core?.save(),
+			beginRepair: () => this.#core!.beginRepair(),
+			onSessionCreated: (_role, session) => this.#register(session),
 		});
-		this.#active = false;
-		this.#bind(this.status().phase);
-		for (const id of this.#jobs) this.#manager.cancel(id, { ownerId: this.#host.session.getAgentId() });
+		this.#native = native;
+		this.#core = new SpecDrivenOrchestrator(native.ports, {
+			...native.options,
+			getUseTeam: () => this.#state.team,
+			// Restoring references must not rewrite a valid saved run before entry succeeds.
+			persist: async run => {
+				if (this.#mode === "dev") {
+					await this.#bind();
+					await this.#save(run);
+				}
+			},
+			onStatusChange: () => this.publishObservation(),
+		});
+		if (saved) await this.#core.restore(saved);
+	}
+	async #operation<T>(work: () => Promise<T>, retryEntryCleanup = false): Promise<T> {
+		if (this.#control || this.#stopping) throw new SpecAdmissionError("当前控制操作尚未结清");
+		if (!(retryEntryCleanup && this.#mode === "chat" && this.#halted && this.#workspace)) this.assertControlAllowed();
+		this.#control = true;
+		this.#error = undefined;
+		this.#notice = undefined;
 		this.publishObservation();
-	}
-	resume(): string {
-		if (!this.#paused && !this.#core?.status().paused) throw new SpecAdmissionError("流程未暂停");
-		const pending = this.#pending;
-		return this.schedule(pending ?? (core => core.resume()));
-	}
-	async cancel(): Promise<void> {
-		this.pause();
-		this.#cancelled = true;
-		this.#pending = undefined;
-		const cancelled = this.#core?.cancel();
-		if (!this.#core) this.#failure = "已取消初始化中的流程";
-		this.publishObservation();
-		await this.report();
-		for (const message of this.#messages) if (message.status === "queued") message.status = "cancelled";
-		await this.#messageWork;
-		await cancelled;
-		await this.#controlWork;
-		await this.#release();
-	}
-	async #release(): Promise<void> {
-		this.#stopHeartbeat();
-		this.#releasePolicy?.();
-		this.#releasePolicy = undefined;
-		if (this.#released) return;
-		const work =
-			this.#releaseWork ??
-			(this.#releaseWork = (async () => {
-				await this.#initializing;
-				await this.#native?.dispose();
-				this.#released = true;
-				this.publishObservation();
-			})());
+		const settled = Promise.withResolvers<void>();
+		this.#controlSettled = settled;
 		try {
-			await work;
+			return await work();
 		} catch (error) {
-			if (this.#releaseWork === work) this.#releaseWork = undefined;
+			this.#error = error instanceof Error ? error.message : String(error);
+			try {
+				await this.#bind();
+			} catch (bindError) {
+				this.#error += `；恢复会话绑定失败：${bindError instanceof Error ? bindError.message : String(bindError)}`;
+				throw new AggregateError([error, bindError], this.#error);
+			}
+			throw error;
+		} finally {
+			this.#control = false;
+			settled.resolve();
+			if (this.#controlSettled === settled) this.#controlSettled = undefined;
+			this.publishObservation();
+		}
+	}
+	async #cleanupFailedEntry(): Promise<void> {
+		try {
+			// Failed entry must retain ordinary chat while its owned work is settled.
+			await this.#stopNative();
+			await this.#disposeNative();
+			await this.#bind();
+			this.#workspace!.release();
+			this.#workspace = undefined;
+		} catch (error) {
+			this.#halted = true;
 			throw error;
 		}
+	}
+	async enter(): Promise<void> {
+		return this.#operation(async () => {
+			if (this.#mode === "dev") return;
+			if (this.#halted && this.#workspace) await this.#cleanupFailedEntry();
+			if (nativeBusy(this.#root)) throw new SpecAdmissionError("普通会话仍有原生输入或任务，不能进入 Dev");
+			this.#host.assertCanActivateMode?.("dev");
+			const workspace = await DevWorkspace.acquire(this.#root.sessionManager.getCwd());
+			this.#workspace = workspace;
+			try {
+				let saved: unknown;
+				let cleared = false;
+				try {
+					saved = await workspace.read();
+				} catch (error) {
+					if (!(error instanceof SyntaxError)) throw error;
+					await workspace.clear();
+					cleared = true;
+				}
+				if (saved !== undefined && !validState(saved)) {
+					await workspace.clear();
+					saved = undefined;
+					cleared = true;
+				}
+				this.#state = saved === undefined ? { version: 1, team: false } : (saved as WorkspaceState);
+				if (this.#state.run && this.#state.run.phase !== "idle") await this.#initialize(this.#state.run);
+				this.#mode = "dev";
+				await this.#bind();
+				if (this.#core) await this.#save(this.#core.save());
+				if (cleared)
+					this.#notice =
+						"旧 Dev 状态无法恢复，已清除；配置已恢复默认，可执行 `/dev config` 或 `/dev new <需求内容>`。";
+			} catch (error) {
+				this.#mode = "chat";
+				await this.#cleanupFailedEntry();
+				throw error;
+			}
+		}, true);
+	}
+	async new(request: string, images?: ImageContent[], imageLinks?: (string | undefined)[]): Promise<void> {
+		if (this.#mode !== "dev") throw new SpecAdmissionError("请先 /dev 进入开发模式");
+		return this.#operation(async () => {
+			if (!request.trim()) throw new SpecAdmissionError("需求不能为空");
+			if (this.status().phase !== "idle" || (this.#state.run && !this.#state.run.archivedChangePath))
+				throw new SpecAdmissionError("已有流程，请先丢弃");
+			if (this.#native) await this.#disposeNative();
+			try {
+				await this.#initialize();
+				const changeId = `dev-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+				await this.#core!.start(request, changeId, images, imageLinks);
+			} catch (error) {
+				if (!this.#state.run || this.#state.run.archivedChangePath) {
+					await this.#stopNative();
+					await this.#disposeNative();
+					await this.#save(undefined);
+					await this.#bind();
+				}
+				throw error;
+			}
+		});
+	}
+	async next(candidateId?: string, raw?: string): Promise<void> {
+		return this.#operation(async () => {
+			if (!this.#core || !this.#native) throw new SpecAdmissionError("请先建立或恢复阶段会话");
+			await this.#core.next(candidateId, raw);
+			await this.#bind();
+		});
+	}
+	async back(): Promise<void> {
+		return this.#operation(async () => {
+			if (!this.#core || !this.#native) throw new SpecAdmissionError("没有可回退流程");
+			await this.#core.back();
+			await this.#bind();
+		});
+	}
+	async setTeam(team: boolean): Promise<void> {
+		return this.#operation(async () => {
+			if (!["idle", "requirements"].includes(this.status().phase))
+				throw new SpecAdmissionError("方案阶段起 Team 配置冻结");
+			if (!this.#workspace) throw new SpecAdmissionError("请先进入 Dev");
+			await this.#save(this.#state.run, team);
+		});
+	}
+	async checkConversationAllowed(): Promise<void> {
+		if (this.#stopping || this.#halted) throw new SpecAdmissionError("原生停止尚未结清");
+		if (this.#mode !== "dev" || !this.#core || !this.nativeSession())
+			throw new SpecAdmissionError("请先 /dev new <需求内容>");
+		if (this.#core.isTransitioning()) throw new SpecAdmissionError("当前控制操作尚未结清");
+		const core = this.#core;
+		const phase = core.status().phase;
+		const generation = core.status().generation;
+		// Mismatches permit native read-only diagnosis; actor tool guards enforce writes.
+		await this.#core.checkApproved();
+		if (core.isTransitioning()) throw new SpecAdmissionError("当前控制操作尚未结清");
+		if (
+			this.#stopping ||
+			this.#halted ||
+			core !== this.#core ||
+			phase !== core.status().phase ||
+			generation !== core.status().generation
+		)
+			throw new SpecAdmissionError("阶段已改变，请重新提交");
+	}
+	async submitText(text: string, images?: ImageContent[], imageLinks?: (string | undefined)[]): Promise<void> {
+		const core = this.#core;
+		const phase = this.status().phase;
+		const generation = this.status().generation;
+		await this.checkConversationAllowed();
+		if (core !== this.#core || phase !== this.status().phase || generation !== this.status().generation)
+			throw new SpecAdmissionError("阶段已改变，请重新提交");
+		const intent = hasExplicitRepairIntent(text) ? "repair" : undefined;
+		try {
+			await core!.converse(text, images, imageLinks, intent);
+			this.#error = undefined;
+		} catch (error) {
+			this.#error = error instanceof Error ? error.message : String(error);
+			throw error;
+		} finally {
+			this.publishObservation();
+		}
+	}
+	async #stopNative(): Promise<void> {
+		this.#halted = true;
+		await this.#core?.stop();
+		await this.#native?.stop();
+	}
+	async #disposeNative(): Promise<void> {
+		await this.#native?.dispose();
+		this.#native = undefined;
+		this.#core = undefined;
+		this.#halted = false;
+		for (const [session, unsubscribe] of this.#subscriptions)
+			if (session !== this.#root) {
+				unsubscribe();
+				this.#subscriptions.delete(session);
+				controllers.delete(session.sessionManager);
+				this.#managers.delete(session.sessionManager);
+			}
+	}
+	async #leave(drop: boolean): Promise<void> {
+		if (this.#stopping) throw new SpecAdmissionError("停止操作尚未结清");
+		if (!this.#workspace) {
+			if (drop) throw new SpecAdmissionError("尚未进入 Dev");
+			return;
+		}
+		this.#stopping = true;
+		this.#notice = undefined;
+		try {
+			const empty = drop && (await this.#workspace.read()) === undefined;
+			await this.#stopNative();
+			await this.#controlSettled?.promise;
+			await this.#save(drop ? undefined : (this.#core?.save() ?? this.#state.run), drop ? false : this.#state.team);
+			await this.#disposeNative();
+			const previousMode = this.#mode;
+			this.#mode = drop ? "dev" : "chat";
+			try {
+				await this.#host.bindMainSession?.(this.#root);
+			} catch (error) {
+				this.#mode = previousMode;
+				this.#halted = true;
+				throw error;
+			}
+			if (!drop) {
+				this.#workspace.release();
+				this.#workspace = undefined;
+			}
+			this.#error = undefined;
+			if (empty) this.#notice = "没有 Dev 状态，无需清除。";
+		} catch (error) {
+			this.#error = error instanceof Error ? error.message : String(error);
+			throw error;
+		} finally {
+			this.#stopping = false;
+			this.publishObservation();
+		}
+	}
+	async exit(): Promise<void> {
+		await this.#leave(false);
+	}
+	async drop(): Promise<void> {
+		await this.#leave(true);
 	}
 	async dispose(): Promise<void> {
-		if (this.#disposed) return;
-		this.pause();
-		this.#mode = "chat";
-		this.#disposed = true;
-		for (const message of this.#messages) if (message.status === "queued") message.status = "cancelled";
-		await this.#messageWork;
-		await this.#core?.cancel();
-		this.publishObservation();
-		await this.#release();
+		await this.exit();
 	}
 }

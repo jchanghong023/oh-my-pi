@@ -6,22 +6,34 @@ import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
 import type { ExtensionFactory } from "../extensibility/extensions";
 import { cfgGoalEnabled } from "../goals/settings";
-import { containedSpecPath } from "./artifacts";
-import { createAgentSession, type CreateAgentSessionOptions } from "../sdk";
+import { cfgTaskIsolationEnabled, cfgWorktreeOnStart } from "../task/settings";
+import { assertSpecWritePath } from "./artifacts";
+import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { SessionManager } from "../session/session-manager";
+import { ToolRestrictions } from "../session/tool-restrictions";
 import { AgentRegistry } from "../registry/agent-registry";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
 import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
 import type { TeamRunResult } from "../team/types";
-import type { SpecAgentInput, SpecConversationReply, SpecRunContext, SpecStageRole } from "./types";
+import { hasExplicitRepairIntent } from "./orchestrator";
+import type {
+	SpecAgentInput,
+	SpecCandidate,
+	SpecConversationReply,
+	SpecDrivenStatus,
+	SpecRunContext,
+	SpecStageRole,
+} from "./types";
 
 export interface SpecActor {
 	readonly id: string;
 	readonly role: SpecStageRole;
 	readonly session: AgentSession;
 	request(input: SpecAgentInput, context: SpecRunContext, teamResult?: TeamRunResult): Promise<SpecConversationReply>;
+	checkSolutionCandidates(candidates: readonly SpecCandidate[]): void;
+	stop(): Promise<void>;
 	dispose(): Promise<void>;
 }
 
@@ -74,6 +86,17 @@ export async function cancelSpecDescendantJobs(
 	for (let pass = 0; pass < 3; pass++) {
 		for (const id of specDescendantAgentIds(registry, ownerId)) targets.add(id);
 		for (const id of targets) manager.cancelAll({ ownerId: id });
+		await Promise.all(
+			[...targets]
+				.filter(id => id !== ownerId)
+				.map(async id => {
+					const child = registry.get(id)?.session;
+					if (!child || child.isDisposed) return;
+					if (child.getGoalModeState()?.enabled) await child.goalRuntime.pauseGoal();
+					child.clearQueue();
+					await child.abort();
+				}),
+		);
 		for (const id of targets) await waitOwnedSettled(manager, id);
 		if (!specDescendantAgentIds(registry, ownerId).some(id => !targets.has(id))) return true;
 	}
@@ -86,6 +109,14 @@ export async function createSpecActor(args: {
 	options: CreateAgentSessionOptions;
 	sessionDirectory: string;
 	methods?: readonly string[];
+	entryMethods?: () => Promise<readonly string[]>;
+	sessionFile?: string;
+	checkApproved?: () => Promise<unknown>;
+	getStatus?: () => SpecDrivenStatus | undefined;
+	observeReport?: () => void | Promise<void>;
+	beginRepair?: () => Promise<void>;
+	reportPath?: string;
+	recoverContext?: () => Promise<string>;
 	onSessionCreated?: (session: AgentSession) => (() => void) | void;
 }): Promise<SpecActor> {
 	const id = `spec-${args.role}-${crypto.randomUUID()}`;
@@ -97,14 +128,62 @@ export async function createSpecActor(args: {
 			Settings.loadIsolated({ cwd: args.options.cwd, agentDir: args.options.agentDir }))
 	).overlay();
 	cfgEditMode.override(settings, "replace");
-	// Grant native Goal only inside the executor; activation remains per request.
+	cfgTaskIsolationEnabled.override(settings, false);
+	cfgWorktreeOnStart.override(settings, "off");
 	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
-	let currentInput: SpecAgentInput | undefined;
+	let stageOutputPaths: readonly string[] | undefined;
+	let reportTurn: unknown;
+	let needsRecovery = !!args.recoverContext;
+	let guardStop: Promise<void> | undefined;
+	const lastUser = () => session?.messages.findLast(message => message.role === "user");
+	const repairAuthorized = () => {
+		const user = lastUser();
+		if (!user || user.role !== "user") return false;
+		const text =
+			typeof user.content === "string"
+				? user.content
+				: user.content
+						.filter(item => item.type === "text")
+						.map(item => item.text)
+						.join("\n");
+		return hasExplicitRepairIntent(text);
+	};
 	const writeGuard: ExtensionFactory = pi => {
+		pi.on("before_agent_start", async () => {
+			if (!needsRecovery || !args.recoverContext) return;
+			const content = await args.recoverContext();
+			needsRecovery = false;
+			return { message: { customType: "dev-history-recovery", display: false, content } };
+		});
 		pi.on("tool_call", async event => {
 			if (["read", "grep", "glob", "wiki"].includes(event.toolName)) return undefined;
-			if (!currentInput || currentInput.readOnly)
-				return { block: true, reason: "当前阶段只允许读取；请通过明确的修改操作恢复写权限。" };
+			try {
+				const approval = await args.checkApproved?.();
+				if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
+					return { block: true, reason: "正式批准版本已变化，请返回对应阶段重新确认。" };
+			} catch (error) {
+				return { block: true, reason: error instanceof Error ? error.message : String(error) };
+			}
+			const status = args.getStatus?.();
+			if ((status?.awaitingAcceptance || status?.accepted || reportTurn) && !repairAuthorized())
+				return { block: true, reason: "交付后只允许读取；只有明确请求修复或继续实施已批准计划才能修改。" };
+			if (status?.accepted) {
+				if (!["write", "edit", "bash"].includes(event.toolName))
+					return { block: true, reason: "收尾修复不得派发业务任务、协作或 Goal。" };
+				const requested = String("path" in event.input ? (event.input.path ?? "") : "");
+				if (
+					status.accepted.files.some(
+						file => path.resolve(args.options.cwd!, file.path) === path.resolve(args.options.cwd!, requested),
+					)
+				)
+					return { block: true, reason: "收尾修复不得修改已验收材料。" };
+			}
+			if (reportTurn && lastUser() === reportTurn)
+				return { block: true, reason: "当前阶段只允许读取；请在新一轮明确请求修复。" };
+			if (event.toolName === "task" && event.input.worktree)
+				return { block: true, reason: "Dev 协作不得创建 worktree。" };
+			if (event.toolName === "bash" && /\bgit\s+worktree\s+add\b/i.test(String(event.input.command ?? "")))
+				return { block: true, reason: "Dev 不得创建 worktree。" };
 			if (args.role === "executor") return undefined;
 			if (event.toolName !== "write" && event.toolName !== "edit")
 				return { block: true, reason: "执行确认前只能写本阶段的指定产物。" };
@@ -120,7 +199,15 @@ export async function createSpecActor(args: {
 				"\\",
 				"/",
 			);
-			const allowed = currentInput.outputPaths.some(output => {
+			const paths = status?.paths;
+			const outputPaths =
+				stageOutputPaths ??
+				(paths
+					? args.role === "requirements"
+						? paths.requirements
+						: [args.role === "solution" ? paths.solution : paths.plan]
+					: []);
+			const allowed = outputPaths.some(output => {
 				if (!output.includes("*")) return output === relative;
 				const prefix = output.slice(0, output.indexOf("*"));
 				return (
@@ -131,16 +218,99 @@ export async function createSpecActor(args: {
 			});
 			if (!allowed) return { block: true, reason: `未授权的阶段文件写入：${requested}` };
 			try {
-				await containedSpecPath(cwd, relative);
+				await assertSpecWritePath(cwd, relative);
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
 			}
 			return undefined;
 		});
+		pi.on("tool_result", async event => {
+			if (args.getStatus?.()?.accepted && ["write", "edit", "bash"].includes(event.toolName)) {
+				let failure: string | undefined;
+				try {
+					const approval = await args.checkApproved?.();
+					if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
+						failure = "已验收正式材料发生变化；必须返回对应阶段重新确认。";
+				} catch (error) {
+					failure = error instanceof Error ? error.message : String(error);
+				}
+				if (failure) {
+					// Signal synchronously; awaiting session.abort() here would wait on this very hook.
+					session.agent.abort(failure);
+					session.clearQueue();
+					if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+					guardStop = session.abort({ goalReason: "internal", reason: failure });
+					void guardStop.catch(() => {});
+					return;
+				}
+			}
+			if (event.isError || !["write", "edit"].includes(event.toolName) || !args.reportPath) return;
+			const requested = event.input.path;
+			if (typeof requested !== "string") return;
+			if (path.resolve(args.options.cwd!, requested) !== path.resolve(args.options.cwd!, args.reportPath)) return;
+			reportTurn = lastUser();
+			await args.observeReport?.();
+			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+		});
+		pi.on("before_agent_start", async event => {
+			let valid = true;
+			try {
+				const approval = await args.checkApproved?.();
+				valid = !(approval && typeof approval === "object" && "matches" in approval && !approval.matches);
+			} catch {
+				valid = false;
+			}
+			const status = args.getStatus?.();
+			const explicitRepair = hasExplicitRepairIntent(event.prompt);
+			if (valid && status?.awaitingAcceptance && !status.accepted && explicitRepair) await args.beginRepair?.();
+			// Keep read-only explanations available after invalidation; tool_call is authoritative for writes.
+			if (
+				(!valid || status?.awaitingAcceptance || status?.accepted || (reportTurn && lastUser() === reportTurn)) &&
+				session.getGoalModeState()?.enabled
+			)
+				await session.goalRuntime.pauseGoal();
+			const facts = args.getStatus?.();
+			if (facts && (facts.blockedReason || facts.closing || facts.awaitingAcceptance || facts.accepted)) {
+				return {
+					message: {
+						customType: "dev-lifecycle-facts",
+						display: false,
+						content: JSON.stringify({
+							error: facts.blockedReason,
+							closing: facts.closing,
+							awaitingAcceptance: facts.awaitingAcceptance === true,
+							accepted: !!facts.accepted,
+							approvedVersionsMatch: valid,
+							explicitRepair,
+						}),
+					},
+				};
+			}
+		});
+		pi.on("before_subagent_spawn", async () => {
+			try {
+				const approval = await args.checkApproved?.();
+				if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
+					return { block: true, reason: "正式批准版本已变化，不得继续协作。" };
+			} catch (error) {
+				return { block: true, reason: error instanceof Error ? error.message : String(error) };
+			}
+			const status = args.getStatus?.();
+			if (
+				status?.accepted ||
+				((status?.awaitingAcceptance || reportTurn) && !repairAuthorized()) ||
+				(reportTurn && lastUser() === reportTurn)
+			)
+				return { block: true, reason: "当前交付边界不允许继续派发协作。" };
+		});
 	};
-	const { session } = await createAgentSession({
+	const created = await createAgentSession({
 		...args.options,
 		settings,
+		toolRestrictions:
+			args.options.toolRestrictions?.clone() ??
+			cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
+			new ToolRestrictions(),
 		...(args.role === "executor"
 			? {
 					allowRestrictedGoal: true,
@@ -154,7 +324,9 @@ export async function createSpecActor(args: {
 		expectedAgentRef: null,
 		bindProcessState: false,
 		agentRegistry: registry,
-		sessionManager: SessionManager.create(args.options.cwd!, args.sessionDirectory),
+		sessionManager: args.sessionFile
+			? await SessionManager.open(args.sessionFile, args.sessionDirectory)
+			: SessionManager.create(args.options.cwd!, args.sessionDirectory),
 		requireYieldTool: false,
 		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
 		// factories without admitting ambient tools or extension discovery.
@@ -171,11 +343,14 @@ export async function createSpecActor(args: {
 					],
 				}
 			: { extensions: [...(args.options.extensions ?? []), writeGuard] }),
-		systemPrompt: defaults => [...defaults, fixed, ...(args.methods ?? []), communicationPrompt],
+		systemPrompt: defaults =>
+			args.role === "requirements"
+				? [...defaults, fixed, communicationPrompt, ...(args.methods ?? [])]
+				: [...defaults, ...(args.methods ?? []), fixed, communicationPrompt],
 	});
+	const session = created.session;
 	const ref = registry.get(id);
 	let disposed = false;
-	let busy = false;
 	let runId: string | undefined;
 	let release: (() => void) | void;
 	try {
@@ -194,8 +369,6 @@ export async function createSpecActor(args: {
 	};
 	const perform = async <T>(context: SpecRunContext, operation: () => Promise<T>): Promise<T> => {
 		owned(context);
-		if (busy) throw new Error("Specification producer is busy");
-		busy = true;
 		let abortCompletion: Promise<void> | undefined;
 		let cancellationCompletion: Promise<boolean> | undefined;
 		const abort = () => {
@@ -204,7 +377,11 @@ export async function createSpecActor(args: {
 				cancellationCompletion ??= cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
 				void cancellationCompletion.catch(() => {});
 			}
-			abortCompletion ??= session.abort();
+			abortCompletion ??= (async () => {
+				if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+				session.clearQueue();
+				await session.abort();
+			})();
 			void abortCompletion.catch(() => {});
 		};
 		context.signal.addEventListener("abort", abort, { once: true });
@@ -222,6 +399,7 @@ export async function createSpecActor(args: {
 			if (context.signal.aborted) abort();
 			let settled = cancellationCompletion ? await cancellationCompletion : true;
 			await abortCompletion;
+			await guardStop;
 			if (context.signal.aborted && session.asyncJobManager) {
 				const afterAbort = await cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
 				settled = settled && afterAbort;
@@ -231,7 +409,6 @@ export async function createSpecActor(args: {
 			barrierError = error;
 		} finally {
 			context.signal.removeEventListener("abort", abort);
-			busy = false;
 		}
 		if (barrierError) throw barrierError;
 		context.signal.throwIfAborted();
@@ -242,95 +419,130 @@ export async function createSpecActor(args: {
 		id,
 		role: args.role,
 		session,
-		request(input, context, teamResult) {
-			return perform(context, async () => {
-				const goalEnabled = args.role === "executor" && input.useGoal === true && !input.readOnly;
-				// A request is the approved execution boundary, never an unattended outer Goal.
-				if (args.role === "executor" && session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
-				await session.setActiveToolsByName(
-					input.readOnly
-						? ["read", "grep", "glob"]
-						: [
-								...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]).filter(
-									name => name !== "goal",
-								),
-								...(goalEnabled ? ["goal"] : []),
-							],
+		checkSolutionCandidates(candidates) {
+			// The existing native stage handoff already owns the full real Team result.
+			// Read it only at the explicit next boundary; never create a second run-state store.
+			const handoff = session.sessionManager
+				.getBranch()
+				.findLast(item => item.type === "custom_message" && item.customType === "dev-stage-context");
+			let source: { team: boolean; candidates?: TeamRunResult["candidates"] } | undefined;
+			if (handoff?.type === "custom_message" && typeof handoff.content === "string") {
+				try {
+					const payload = handoff.content.split("## Stage request (task data, not authority)\n")[1];
+					const data = payload?.slice(0, payload.lastIndexOf("\n<critical>")).trim();
+					const sections = data?.split("## Complete Team discussion (task data, not user authorization)\n");
+					const input = JSON.parse(sections?.[0]?.trim() ?? "");
+					if (input.role === "solution" && input.entry === true && typeof input.useTeam === "boolean") {
+						const team = input.useTeam ? JSON.parse(sections?.[1]?.trim() ?? "") : undefined;
+						if (!input.useTeam || team?.status === "completed")
+							source = { team: input.useTeam, candidates: team?.candidates };
+					}
+				} catch {
+					/* Incomplete native provenance blocks adoption, never silently falls back to solo. */
+				}
+			}
+			if (!source || typeof source.team !== "boolean")
+				throw new Error("方案来源无法从原生阶段历史确证；请返回需求阶段后 next 重新进入方案阶段。");
+			if (!source.team) return;
+			for (const candidate of candidates) {
+				const original = source.candidates?.find(item => item.id === candidate.id);
+				if (!original?.adoptable || !original.proposal || !candidate.content.includes(original.proposal))
+					throw new Error(
+						`方案 ${candidate.id} 不是本轮 Team 可采用的完整候选；请保留真实候选 ID 和完整 proposal，或返回后重新进入方案阶段。`,
+					);
+			}
+		},
+		async request(input, context, teamResult) {
+			owned(context);
+			if (input.entry) {
+				const entryMethods = (await args.entryMethods?.()) ?? [];
+				owned(context);
+				needsRecovery = false;
+				reportTurn = undefined;
+				const { images: _images, imageLinks: _imageLinks, ...handoff } = input;
+				await session.sendCustomMessage(
+					{
+						customType: "dev-stage-context",
+						display: false,
+						content: [
+							...entryMethods,
+							prompt.render(taskTemplate, {
+								payload: JSON.stringify(handoff, null, 2),
+								teamResult: teamResult ? JSON.stringify(teamResult, null, 2) : undefined,
+							}),
+						].join("\n\n"),
+					},
+					{ triggerTurn: false },
 				);
-				const task = prompt.render(taskTemplate, {
-					payload: JSON.stringify(input, null, 2),
-					teamResult: teamResult ? JSON.stringify(teamResult, null, 2) : undefined,
+			}
+			owned(context);
+			const task = input.entry ? input.userReply || input.request : (input.feedback ?? "");
+			// Queue restrictions travel with the native input, never mutate the running turn.
+			const toolDenylist = input.readOnly
+				? [...new Set([...(args.options.toolNames ?? []), "write", "edit", "bash", "task", "goal"])].filter(
+						name => !["read", "grep", "glob", "wiki"].includes(name),
+					)
+				: [];
+			if (input.entry || !stageOutputPaths) stageOutputPaths = input.outputPaths;
+			const queued = session.isStreaming;
+			if (queued) {
+				await session.prompt(task, {
+					images: input.images,
+					streamingBehavior: "followUp",
+					toolDenylist,
+					expandPromptTemplates: false,
+					runCommands: false,
+					throwOnDrop: true,
 				});
+				return { text: "" };
+			}
+			return perform(context, async () => {
 				let message: AssistantMessage | undefined;
-				// 压缩会替换并缩短历史，不能用调用前的数组下标划分当前请求。
-				// 只捕获本次原生请求产生的终结消息，维护移除历史后仍保留真实结果。
 				const unsubscribe = session.subscribe(event => {
 					if (event.type === "message_end" && event.message.role === "assistant") message = event.message;
 				});
 				try {
-					currentInput = input;
-					if (goalEnabled) {
-						// Full original files include the complete approved plan, not a model summary.
-						const objective = JSON.stringify(
-							{
-								request: input.request,
-								files: input.files,
-								userReply: input.userReply,
-								candidateId: input.candidateId,
-								feedback: input.feedback,
-							},
-							null,
-							2,
-						);
-						const previous = session.getGoalModeState();
-						if (previous?.goal && previous.goal.status !== "dropped" && previous.goal.status !== "complete")
-							await session.goalRuntime.dropGoal();
-						await session.goalRuntime.createGoal({ objective });
-					}
-					await session.prompt(task, { throwOnDrop: true });
+					await session.prompt(task, {
+						images: input.images,
+						streamingBehavior: "followUp",
+						toolDenylist,
+						expandPromptTemplates: false,
+						runCommands: false,
+						throwOnDrop: true,
+					});
 				} finally {
 					unsubscribe();
-					currentInput = undefined;
-					if (args.role === "executor" && session.getGoalModeState()?.enabled)
-						await session.goalRuntime.pauseGoal();
-					if (goalEnabled)
-						await session.setActiveToolsByName(
-							(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]).filter(
-								name => name !== "goal",
-							),
-						);
 				}
-				context.signal.throwIfAborted();
-				if (
-					!message ||
-					message.role !== "assistant" ||
-					message.stopReason === "error" ||
-					message.stopReason === "aborted"
-				) {
-					const detail = message?.errorMessage?.trim();
+				if (!message || message.stopReason === "error" || message.stopReason === "aborted")
 					throw new Error(
-						`Native ${args.role} produced no successful assistant result${detail ? `: ${detail}` : ""}`,
+						`Native ${args.role} produced no successful assistant result${message?.errorMessage ? `: ${message.errorMessage}` : ""}`,
 					);
-				}
-				const text = message.content
-					.filter(item => item.type === "text")
-					.map(item => item.text)
-					.join("\n");
-				return { text };
+				return {
+					text: message.content
+						.filter(item => item.type === "text")
+						.map(item => item.text)
+						.join("\n"),
+				};
 			});
+		},
+		async stop() {
+			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+			session.clearQueue();
+			await session.abort();
+			if (session.asyncJobManager && !(await cancelSpecDescendantJobs(session.asyncJobManager, id, registry)))
+				throw new Error("Descendant cancellation was not confirmed");
 		},
 		async dispose() {
 			if (disposed) return;
-			disposed = true;
-			if (args.role === "executor" && session.getGoalModeState()?.goal) await session.goalRuntime.dropGoal();
+			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+			session.clearQueue();
 			await session.abort();
-			if (session.asyncJobManager) await cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
-			try {
-				await session.dispose();
-			} finally {
-				release?.();
-				registry.unregister(id, ref ?? session);
-			}
+			if (session.asyncJobManager && !(await cancelSpecDescendantJobs(session.asyncJobManager, id, registry)))
+				throw new Error("Descendant cancellation was not confirmed");
+			await session.dispose();
+			disposed = true;
+			release?.();
+			registry.unregister(id, ref ?? session);
 		},
 	};
 }

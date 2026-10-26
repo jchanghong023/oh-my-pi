@@ -15,7 +15,11 @@ import type { AgentSession } from "../../session/agent-session";
 import type { MCPManager } from "../../mcp";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
-import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../../slash-commands/builtin-spec-driven";
+import {
+	assertDevCommandAllowed,
+	assertDevModeActivationAllowed,
+	isDevSessionTransitionCommand,
+} from "../../slash-commands/builtin-spec-driven";
 import { peekSpecDrivenController } from "../../spec-driven/controller";
 import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { TeamConfigService } from "../../team/config";
@@ -32,14 +36,16 @@ import type { ModelExecution } from "./schema/vendor/model-execution";
 import type { ToolSession } from "../../tools";
 
 export interface ZCodeDispatchOptions extends PromptOptions {
+	imageLinks?: string[];
 	execution?: ModelExecution & { selection: ModelSelection; offPeakTaskId?: string };
 	/** Recheck owner-bound native controls after asynchronous command preparation. */
-	validateBeforeDispatch?: (text: string) => void;
+	validateBeforeDispatch?: (text: string) => void | Promise<void>;
 }
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export interface ZCodeCommandHostOptions {
 	output?: (text: string) => void | Promise<void>;
 	settingsChanged?: (frame: object) => void;
+	bindMainSession?: (session: AgentSession) => Promise<void>;
 	run?: <T>(operation: () => T) => T;
 	mcpManager?: MCPManager;
 	/** Native Tan adapter; execution remains owned by TanCommandController. */
@@ -102,6 +108,8 @@ export class ZCodeCommandHost {
 	readonly #unsubscribeQueue: () => void;
 	#disposed = false;
 	#initialized: Promise<void> | undefined;
+	#nativeCommands?: ZCodeCommandHost;
+	#devControlPending = false;
 	constructor(
 		readonly session: AgentSession,
 		cwd: string,
@@ -308,12 +316,11 @@ export class ZCodeCommandHost {
 		fail?: (error: unknown) => void,
 	): Promise<void> {
 		if (this.#disposed) throw new Error("Session command host is closed");
-		// 所有普通模型／Skill 派发共用同一模式门禁，后台继续也不能绕过。
-		assertDevCommandAllowed(
-			this.session,
-			parseSlashCommand(text)?.name ?? "ordinary-agent",
-			parseSlashCommand(text)?.args,
-		);
+		const command = parseSlashCommand(text);
+		const dev = peekSpecDrivenController(this.session.sessionManager);
+		if (!command && dev?.inputMode() === "dev" && dev.nativeSession() === this.session)
+			await dev.checkConversationAllowed();
+		else assertDevCommandAllowed(this.session, command?.name ?? "ordinary-agent", command?.args);
 		// Skill invocations use the same builder and custom-message business path as native hosts.
 		const invocation = parseSkillInvocation(text);
 		const skill =
@@ -381,25 +388,66 @@ export class ZCodeCommandHost {
 		});
 	}
 	dispatch(text: string, options: ZCodeDispatchOptions = {}): Promise<ZCodeCommandReceipt> {
-		return this.#run(() => this.#dispatch(text, options));
+		const parsed = parseSlashCommand(text);
+		const control = parsed?.name === "dev" && /^(?:new|next|back)(?:\s|$)/.test(parsed.args);
+		if (control && this.#devControlPending)
+			return Promise.reject(
+				Object.assign(new Error("Development control is already running"), { code: "invalid_params" }),
+			);
+		if (control) this.#devControlPending = true;
+		return this.#run(() => this.#dispatch(text, options)).then(
+			receipt => {
+				if (control)
+					void receipt.completion
+						.finally(() => {
+							this.#devControlPending = false;
+						})
+						.catch(() => {});
+				return receipt;
+			},
+			error => {
+				if (control) this.#devControlPending = false;
+				throw error;
+			},
+		);
 	}
 	async #dispatch(text: string, options: ZCodeDispatchOptions, promoting = false): Promise<ZCodeCommandReceipt> {
 		if (this.#disposed) throw new Error("Session command host is closed");
 		const parsed = parseSlashCommand(text);
 		const native = peekSpecDrivenController(this.session.sessionManager);
 		if (native?.inputMode() === "dev" && !parsed && text.startsWith("/"))
-			throw new Error("协同开发模式拒绝无效命令；请使用 /dev help。");
-		if (native?.inputMode() === "dev" && !parsed) {
-			options.validateBeforeDispatch?.(text);
-			const receipt = await native.submitText(text);
-			await this.#output(
-				receipt.kind === "draft"
-					? "已保留协同开发草稿；尚未交给 Agent。使用 /dev help 查看操作。"
-					: `消息已排队，尚未代表 Agent 已接收：${receipt.messageId}`,
-			);
-			if (options.inputId) await this.options.recordInputAdmission?.(options.inputId, options.sourceCommand);
-			options.onPromptAdmitted?.();
-			return { accepted: true, completion: Promise.resolve() };
+			throw new Error("协同开发模式拒绝无效命令。");
+		if (parsed?.name === "dev" && parsed.args && !/^(?:config|drop)(?:\s|$)/.test(parsed.args))
+			native?.assertControlAllowed();
+		if (native?.inputMode() === "dev" && parsed && isDevSessionTransitionCommand(parsed.name, parsed.args))
+			await native.exit();
+		else if (native?.inputMode() === "dev" && parsed?.name !== "dev") {
+			await native.checkConversationAllowed();
+			const stage = native.nativeSession();
+			if (!stage) throw new Error("Development has no active native stage session");
+			if (stage !== this.session) {
+				if (this.#nativeCommands?.session !== stage) {
+					this.#nativeCommands?.dispose();
+					this.#nativeCommands = new ZCodeCommandHost(stage, stage.sessionManager.getCwd(), () => {}, {
+						run: this.options.run,
+						uiContext: this.options.uiContext,
+						submit: this.options.submit,
+						submitCustom: this.options.submitCustom,
+						recordInputAdmission: this.options.recordInputAdmission,
+						output: text =>
+							stage.appendCustomMessage(
+								{
+									customType: "zcode-command-output",
+									content: text,
+									display: true,
+									attribution: "agent",
+								},
+								{ waitForIdle: false },
+							),
+					});
+				}
+				return this.#nativeCommands.dispatch(text, options);
+			}
 		}
 		if (parsed) assertDevCommandAllowed(this.session, parsed.name, parsed.args);
 		const resolved = await this.#catalog.resolve(text, this.session);
@@ -472,10 +520,10 @@ export class ZCodeCommandHost {
 					if (known?.source === "builtin")
 						throw Object.assign(new Error(`Invalid arguments for /${token}`), { code: "invalid_params" });
 				}
-				// /dev 的模式、草稿、帮助和控制操作不得初始化外层 Agent 或扩展。
+				// Dev control never initializes or writes an ordinary root conversation.
 				if (resolved.kind !== "builtin" || resolved.name !== "dev") await this.initialize();
 				if (!current()) throw new DOMException("Command cancelled", "AbortError");
-				options.validateBeforeDispatch?.(text);
+				await options.validateBeforeDispatch?.(text);
 				if (command) assertDevCommandAllowed(this.session, command.name, command.args);
 				if (resolved.kind !== "builtin" || !resolved.spec) {
 					this.#loop.capturePrompt(text);
@@ -485,7 +533,9 @@ export class ZCodeCommandHost {
 				let lastOutput: string | undefined;
 				const runtime: RpcSlashCommandRuntime = {
 					session: this.session,
+					bindMainSession: this.options.bindMainSession,
 					sessionManager: this.session.sessionManager,
+					input: { images: options.images, imageLinks: options.imageLinks },
 					settings: this.session.settings,
 					mcpManager: this.options.mcpManager,
 					get cwd(): string {
@@ -496,7 +546,11 @@ export class ZCodeCommandHost {
 						this.session.refreshRepoLifecycle();
 					},
 					signal: operation.signal,
-					assertCanActivateMode: mode => assertDevModeActivationAllowed(this.session, mode),
+					assertCanActivateMode: mode => {
+						if (mode === "dev" && this.#loop.enabled)
+							throw new Error("请先退出 Loop 模式，再进入协同开发模式；现有模式保持不变。");
+						assertDevModeActivationAllowed(this.session, mode);
+					},
 					ui: {
 						select: async (...args) => {
 							const answer = this.interactions.ui.select(...args);
@@ -516,7 +570,7 @@ export class ZCodeCommandHost {
 					},
 					output: message => {
 						lastOutput = message;
-						if (current()) return this.#output(message);
+						if (current() && command?.name !== "dev") return this.#output(message);
 					},
 					refreshCommands: async () => {
 						await this.catalog();
@@ -589,7 +643,7 @@ export class ZCodeCommandHost {
 			} catch (error) {
 				// 拒绝若在 completion 外抛出，桌面只能收到通用发送失败，所属会话没有诊断。
 				// 复用 native output 并等待落盘；仍抛出原错误，绝不能把拒绝记成 admission。
-				if (current() && !(error instanceof Error && error.name === "AbortError")) {
+				if (current() && command?.name !== "dev" && !(error instanceof Error && error.name === "AbortError")) {
 					await this.#output(String(error));
 				}
 				throw error;
@@ -667,6 +721,7 @@ export class ZCodeCommandHost {
 		this.#run(() => this.#cancel());
 	}
 	#cancel(): void {
+		this.#nativeCommands?.cancel();
 		for (const operation of this.#operations) operation.abort();
 		this.#operations.clear();
 		this.interactions.cancel();
@@ -676,6 +731,8 @@ export class ZCodeCommandHost {
 	}
 	dispose(): void {
 		this.#run(() => {
+			this.#nativeCommands?.dispose();
+			this.#nativeCommands = undefined;
 			this.#cancel();
 			this.#disposed = true;
 			this.#loop.clear();

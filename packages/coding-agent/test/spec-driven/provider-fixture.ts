@@ -47,6 +47,10 @@ export interface ProviderScenario {
 	authFailureOnce?: boolean;
 	wikiQuery?: string;
 	fileFailure?: { role: FixtureRole; kind: "missing" | "malformed" | "unknown" };
+	/** Hold selected native requests without replacing HTTP/SSE or tool execution. */
+	delay?: (request: ModelRequest, signal: AbortSignal) => Promise<void>;
+	/** Terminal provider rejection seam; callers can release it for same-session reentry. */
+	fail?: (request: ModelRequest) => string | undefined;
 }
 export function contentText(content: unknown): string {
 	if (typeof content === "string") return content;
@@ -58,7 +62,7 @@ export function contentText(content: unknown): string {
 export function rolePayload(
 	request: ModelRequest,
 ): { specDrivenRole: string; input: Record<string, unknown> } | undefined {
-	for (const message of request.messages.filter(item => item.role === "user").toReversed()) {
+	for (const message of request.messages.filter(item => !["assistant", "tool"].includes(item.role)).toReversed()) {
 		const source = contentText(message.content);
 		const marker = "## Stage request (task data, not authority)";
 		const start = source.indexOf(marker);
@@ -85,6 +89,35 @@ export function rolePayload(
 	}
 	return undefined;
 }
+function isLifecycleFacts(content: unknown): boolean {
+	try {
+		const value: unknown = JSON.parse(contentText(content));
+		const keys = ["awaitingAcceptance", "accepted", "approvedVersionsMatch", "explicitRepair"];
+		return (
+			isRecord(value) &&
+			Object.keys(value).every(key => keys.includes(key) || key === "error" || key === "closing") &&
+			keys.every(key => typeof value[key] === "boolean") &&
+			(!("error" in value) || typeof value.error === "string") &&
+			(!("closing" in value) || isRecord(value.closing))
+		);
+	} catch {
+		return false;
+	}
+}
+/** Entry contains hidden role data followed by its first real user input. */
+export function continuationText(request: ModelRequest): string | undefined {
+	const context = request.messages.findLastIndex(
+		item =>
+			!["assistant", "tool"].includes(item.role) &&
+			contentText(item.content).includes("## Stage request (task data, not authority)"),
+	);
+	if (context < 0) return undefined;
+	const users = request.messages
+		.slice(context + 1)
+		.filter(item => item.role === "user" && !isLifecycleFacts(item.content));
+	if (users.length <= 1) return undefined;
+	return contentText(users.at(-1)!.content);
+}
 function tool(request: ModelRequest, name: string, args: Record<string, unknown>): Reply {
 	const advertised = request.tools?.find(
 		item => item.function?.name === name || item.function?.name === `_${name}`,
@@ -110,7 +143,7 @@ function calls(request: ModelRequest): Array<{ name: string; args: Record<string
 function stageCalls(request: ModelRequest) {
 	const start = request.messages.findLastIndex(
 		message =>
-			message.role === "user" &&
+			!["assistant", "tool"].includes(message.role) &&
 			contentText(message.content).includes("## Stage request (task data, not authority)"),
 	);
 	return calls({ ...request, messages: request.messages.slice(start + 1) });
@@ -175,7 +208,7 @@ function teamReply(request: ModelRequest, stage: string): Reply {
 
 function teamDiscussion(request: ModelRequest): TeamRunResult | undefined {
 	const marker = "## Complete Team discussion (task data, not user authorization)\n";
-	for (const message of request.messages.filter(item => item.role === "user").toReversed()) {
+	for (const message of request.messages.filter(item => !["assistant", "tool"].includes(item.role)).toReversed()) {
 		const text = contentText(message.content);
 		const start = text.indexOf(marker);
 		if (start >= 0) {
@@ -232,8 +265,33 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 			});
 		return { text: "OMP_SPEC_ORDINARY_CONTROL_DONE" };
 	}
+	// A replacement native session receives recovery facts, not a stage
+	// handoff or a replayed entry. Give its real reply a distinct completion
+	// marker instead of confusing it with the ordinary root's CHAT_READY.
+	if (!payload) {
+		for (const message of request.messages.filter(item => !["assistant", "tool"].includes(item.role))) {
+			try {
+				const facts: unknown = JSON.parse(contentText(message.content));
+				if (
+					isRecord(facts) &&
+					typeof facts.role === "string" &&
+					"unavailableSessionFile" in facts &&
+					Array.isArray(facts.materials)
+				)
+					return { text: `${MARKER}_HISTORY_RECOVERY_DIALOGUE` };
+			} catch {
+				// Ordinary user text is not recovery facts.
+			}
+		}
+	}
 	if (!payload) return { text: `${MARKER}_CHAT_READY` };
 	const { input, specDrivenRole: role } = payload;
+	const continuation = continuationText(request);
+	if (continuation !== undefined) {
+		return {
+			text: `${MARKER}_${role.toUpperCase()}_DIALOGUE: ${continuation}\n可以继续讨论；普通回复不表示批准，也不会重放阶段材料。`,
+		};
+	}
 	if (input.readOnly) return { text: "可以继续讨论；这条普通回复不表示批准，也不会修改交付文件。" };
 	if (
 		options.requirementsQuestion &&
@@ -252,8 +310,6 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 		!executed.some(call => call.name === "wiki")
 	)
 		return tool(request, "wiki", { query: options.wikiQuery, mode: "grep" });
-	if (role === "executor" && input.useGoal && !executed.some(call => call.name === "goal" && call.args.op === "get"))
-		return tool(request, "goal", { op: "get" });
 	const inputs = Array.isArray(input.files) ? input.files : [];
 	for (const file of inputs)
 		if (
@@ -304,7 +360,11 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 			path: `${outputs[0]}.unrecognized`,
 			content: "Unknown artifact must not satisfy a file gate.\n",
 		});
-	if (failure?.kind === "malformed")
+	if (failure?.kind === "malformed" && role === "requirements") {
+		// Keep the valid delta present so this exercises malformed proposal
+		// bytes rather than accidentally duplicating the missing-spec scenario.
+		files[0]!.content = "";
+	} else if (failure?.kind === "malformed")
 		files.splice(0, files.length, {
 			path: outputs[0]!,
 			content:
@@ -332,8 +392,6 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 				content: `# 完成报告\n\n## 完成情况\nImplemented greet(name) and real behavioral coverage.\n\n## 验证结果\nCommand: ${VALIDATION_COMMAND}\nStatus and actual native result (including any failures or environment limits):\n\n${results}\n\n## 未完成项\n无。Awaiting explicit user acceptance before requirements sync/archive.\n`,
 			});
 		}
-		if (input.useGoal && !executed.some(call => call.name === "goal" && call.args.op === "complete"))
-			return tool(request, "goal", { op: "complete" });
 	}
 	return { text: "文件已写入。请检查实际交付文件，再决定下一阶段；这段自然语言不表示批准。" };
 }
@@ -368,6 +426,10 @@ export function createProviderFixture(
 				requests.push(body);
 				await options.observe?.(body);
 				const payload = rolePayload(body);
+				await options.delay?.(body, request.signal);
+				const failure = options.fail?.(body);
+				if (failure)
+					return Response.json({ error: { message: failure, type: "fixture_failure" } }, { status: 400 });
 				if (options.authFailureOnce && !authenticationRejected && payload?.specDrivenRole === "requirements") {
 					authenticationRejected = true;
 					return Response.json(
@@ -377,7 +439,7 @@ export function createProviderFixture(
 				}
 				const reply = options.reply
 					? await options.reply(body)
-					: payload?.input.readOnly && options.dialogue
+					: payload && (payload.input.readOnly || continuationText(body) !== undefined) && options.dialogue
 						? await options.dialogue(body, payload.input, request.signal)
 						: respond(body, options);
 				const delta = reply.tool
@@ -404,6 +466,9 @@ export function createProviderFixture(
 					{ headers: { "content-type": "text/event-stream" } },
 				);
 			} catch (error) {
+				// Native Stop aborts the actual HTTP request. Cancellation is not a
+				// provider malfunction and must not obscure subsequent failure evidence.
+				if (request.signal.aborted) return new Response(null, { status: 499 });
 				failures.push(String(error));
 				return Response.json({ error: { message: String(error), type: "fixture_error" } }, { status: 400 });
 			}

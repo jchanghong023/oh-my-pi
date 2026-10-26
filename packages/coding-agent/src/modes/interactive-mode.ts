@@ -170,11 +170,16 @@ import {
 	buildTuiBuiltinSlashCommands,
 	executeBuiltinSlashCommand,
 } from "../slash-commands/builtin-registry";
-import { assertDevCommandAllowed, assertDevModeActivationAllowed } from "../slash-commands/builtin-spec-driven";
+import {
+	assertDevCommandAllowed,
+	assertDevModeActivationAllowed,
+	isDevSessionTransitionCommand,
+} from "../slash-commands/builtin-spec-driven";
 import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
+import { containedSpecPath, formalMaterialPaths } from "../spec-driven/artifacts";
 import { observeSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
-import { roleLabel, stageForPhase, stageLabel } from "../spec-driven/stages";
+import { roleLabel } from "../spec-driven/stages";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
@@ -1645,10 +1650,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
 	#devObservationUnsubscribe?: () => void;
-	#devAutoHelpTimer?: NodeJS.Timeout;
-	#devAutoHelpKey?: string;
-	#devAutoHelpOpen = false;
-	#devInputDepth = 0;
+	readonly #rootSession: AgentSession;
+	readonly #rootEventBus: EventBus | undefined;
+	readonly #rootSubagentEventBus: EventBus | undefined;
+	#sessionBindingUnsubscribers: Array<() => void> = [];
+	#sessionEventBusUnsubscribers: Array<() => void> = [];
+	#devError?: string;
+	#devNotice?: string;
+	#devEmptyView = false;
+	#devSessionDetails?: string;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -1885,6 +1895,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	) {
 		this.refreshScopedModelsAfterLogin = refreshScopedModelsAfterLogin;
 		this.session = session;
+		this.#rootSession = session;
 		this.sessionManager = session.sessionManager;
 		this.settings = session.settings;
 		this.#initialComposerModel = session.model;
@@ -1932,25 +1943,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		);
 		this.#eventBus = eventBus;
 		this.#subagentEventBus = subagentEventBus;
-		if (eventBus) {
-			this.#eventBusUnsubscribers.push(
-				eventBus.on(LSP_STARTUP_EVENT_CHANNEL, data => {
-					if (cfgStartupQuiet.get(this.settings)) return;
-					this.#handleLspStartupEvent(data as LspStartupEvent);
-				}),
-			);
-			this.#eventBusUnsubscribers.push(
-				eventBus.on(MCP_CONNECTION_STATUS_EVENT_CHANNEL, data => {
-					if (!isMcpConnectionStatusEvent(data)) {
-						logger.warn("Ignoring malformed mcp:connection-status event", {
-							data,
-						});
-						return;
-					}
-					this.#handleMcpConnectionStatusEvent(data);
-				}),
-			);
-		}
+		this.#rootEventBus = eventBus ?? session.eventBus;
+		this.#rootSubagentEventBus = subagentEventBus ?? session.subagentEventBus;
 
 		setTuiTight(cfgTuiTight.get(settings));
 		setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(settings));
@@ -1963,20 +1957,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// subscription rather than resolving the setting per render.
 		// Session settings overlay the global layer and forward its changes.
 		this.#mouseCapture = cfgTuiMouse.get(this.settings);
-		this.#eventBusUnsubscribers.push(
-			cfgTuiMouse.listen(this.settings, on => {
-				this.#mouseCapture = on;
-				// Dropping capture must also drop the band: with reporting off no
-				// motion event will ever arrive to clear a mid-hover highlight.
-				// The controller cache goes too, or a re-enable plus motion over
-				// the same card would look unchanged and skip restoring the band.
-				if (!on) {
-					this.composer.setHoveredClickId(undefined);
-					this.#inputController?.clearHoverHighlight();
-				}
-				this.ui.requestRender();
-			}),
-		);
 		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
@@ -1994,17 +1974,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.modelCycleContainer = new AnchoredLiveContainer();
 		this.deferredCommandContainer = new AnchoredLiveContainer();
 		this.reportContainer = new AnchoredLiveContainer();
-		if (eventBus) {
-			this.#eventBusUnsubscribers.push(
-				eventBus.on(JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL, data => {
-					if (!isJudgmentBatchProgress(data)) {
-						logger.warn("Ignoring malformed eval:judgment-batch-progress event", { data });
-						return;
-					}
-					this.#handleJudgmentBatchProgress(data);
-				}),
-			);
-		}
 		this.#applyVimMode(this.editor);
 		this.editor.viewportRowsProvider = () => this.ui.terminal.rows;
 		this.editor.onAutocompleteCancel = () => {
@@ -2112,8 +2081,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#focusController = new SessionFocusController(this);
 		this.#inputController = new InputController(this);
 		this.collabController = new CollabController(this);
-		this.session.setPromptDropped?.(prompt => this.#restoreDroppedPrompt(prompt));
+		this.session.setPromptDropped?.(prompt => {
+			if (this.session === this.#rootSession) this.#restoreDroppedPrompt(prompt);
+		});
 		this.#observerRegistry = new SessionObserverRegistry();
+		this.#bindSessionEventBus();
 	}
 
 	#handleJudgmentBatchProgress(progress: JudgmentBatchProgress): void {
@@ -2231,16 +2203,29 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#signalTeardown = createSessionTeardown({
 			getDraftText: () => this.#inputController.getDraftText(),
 			beginDispose: () => {
-				this.session.beginDispose();
+				this.#rootSession.beginDispose();
 				this.statusLine.dispose();
 			},
-			saveDraft: text => this.sessionManager.saveDraft(text),
+			saveDraft: text => this.#rootSession.sessionManager.saveDraft(text),
 			disposeSession: async reason => {
-				await this.#btwController.dispose();
-				await this.session.dispose({
-					mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS,
-					reason,
-				});
+				const errors: unknown[] = [];
+				for (const dispose of [
+					() => peekSpecDrivenController(this.#rootSession.sessionManager)?.dispose(),
+					() => this.#btwController.dispose(),
+					() =>
+						this.#rootSession.dispose({
+							mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+							reason,
+						}),
+				]) {
+					try {
+						await dispose();
+					} catch (error) {
+						errors.push(error);
+					}
+				}
+				if (errors.length === 1) throw errors[0];
+				if (errors.length > 1) throw new AggregateError(errors, "Failed to dispose session resources");
 			},
 		});
 		// Forward the postmortem reason (SIGTERM/SIGHUP/uncaughtException/…) so the
@@ -2331,9 +2316,9 @@ export class InteractiveMode implements InteractiveModeContext {
 				// the prompt while keeping the one-line gap above the editor (the band
 				// composer collapses that gap so its status band sits flush).
 				this.statusContainer,
-				this.compactThinkingPreview,
 				this.attachmentChipsContainer,
 				this.hookWidgetContainerAbove,
+				this.compactThinkingPreview,
 				this.editorContainer,
 				this.hookWidgetContainerBelow,
 			],
@@ -2378,9 +2363,9 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.deferredCommandContainer,
 					this.progressHudContainer,
 					this.statusContainer,
-					this.compactThinkingPreview,
 					this.pendingMessagesContainer,
 					this.hookWidgetContainerAbove,
+					this.compactThinkingPreview,
 					this.editorContainer,
 					this.hookWidgetContainerBelow,
 				],
@@ -2478,24 +2463,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// refresh) gets the terminal title + accent updates from here. Registered
 		// before initHooksAndCustomTools/#reconcileModeFromSession/#enterPlanMode —
 		// all of which can reach setSessionName during init.
-		this.#eventBusUnsubscribers.push(
-			this.sessionManager.onPersistenceError(error => {
-				const detail = truncateToWidth(
-					replaceTabs(sanitizeText(error.message)).replace(/[\r\n]+/g, " "),
-					TRUNCATE_LENGTHS.LINE,
-				);
-				this.showWarning(
-					`Session persistence failed: ${detail}. Unsaved entries remain in memory; persistence will retry on the next entry.`,
-				);
-			}),
-			this.sessionManager.onPersistenceNotice(notice => this.showWarning(formatPersistenceNotice(notice))),
-			this.sessionManager.onSessionNameChanged(() => {
-				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
-				this.#handleSessionAccentInputsChanged();
-			}),
-			// Fork and branch adopt a new session file without retitling.
-			this.session.registerSessionChangeCallback(reportTernSession),
-		);
+		this.#bindSessionSubscriptions();
 		this.#syncEditorMaxHeight();
 		this.isInitialized = true;
 		// The startup composer is already visible. Commit the complete runtime
@@ -2525,16 +2493,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			})) ?? undefined;
 		if (this.#streamPublisher) {
 			this.ui.renderNow();
-			// Live stream redaction follows `stream.redactPatterns` edits; only the
-			// newest edit's load applies, however the async loads interleave.
-			let redactorLoads = 0;
-			this.#eventBusUnsubscribers.push(
-				cfgStreamRedactPatterns.listen(this.settings, async patterns => {
-					const load = ++redactorLoads;
-					const redactor = await StreamRedactor.load(streamCwd, patterns);
-					if (load === redactorLoads) this.#streamPublisher?.setRedactor(redactor);
-				}),
-			);
 		}
 
 		// Prewarm the local tiny-title worker off the submit hot path: spawn it
@@ -2614,19 +2572,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#jobWidgetsListener = undefined;
 		});
 
-		this.#eventBusUnsubscribers.push(
-			this.session.subscribe(event => {
-				if (event.type === "model_changed") {
-					this.#scheduleComposerStatusPersist();
-					this.session.prewarmModelConnection();
-				}
-				if (event.type === "config_warnings_changed") {
-					this.#syncConfigWarningHeader();
-				}
-				void this.#handleGoalSessionEvent(event);
-			}),
-			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
-		);
 		// Cache the live model for the next status-bar prepaint: init-time
 		// reconciliations (#reconcileModeFromSession, #enterPlanMode for
 		// plan.defaultOnStartup) can change the model before this subscription
@@ -2635,18 +2580,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Config warnings can change during the same pre-subscription window; the
 		// event is not replayed, so rebuild from the live array once here too.
 		this.#syncConfigWarningHeader();
-		this.#eventBusUnsubscribers.push(
-			cfgModelRoles.listen(this.settings, () => this.#reapplyPlanModeModelOnRoleChange()),
-		);
-		this.#eventBusUnsubscribers.push(
-			this.session.subscribeCommandMetadataChanged(() => {
-				// Skills/commands rediscovery (live `skills.*`/`commands.*`/extension edits,
-				// `/move`, manage_skill, MCP prompts) lands here; rebuild the picker from session state.
-				this.#pendingSlashCommands = this.#buildPendingSlashCommands();
-				this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
-				this.ui.requestRender();
-			}),
-		);
 		// Set up theme file watcher
 		this.#eventBusUnsubscribers.push(
 			onThemeChange(event => {
@@ -2933,6 +2866,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reflect `newCwd` before this is called.
 	 */
 	async applyCwdChange(newCwd: string): Promise<boolean> {
+		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -3003,132 +2937,198 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return false;
 		}
-		if (newCwd !== previousCwd) {
-			await peekSpecDrivenController(this.sessionManager)?.dispose();
-			this.#bindDevObservation();
-		}
+		if (newCwd !== previousCwd) this.#bindDevObservation();
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
 		this.session.refreshRepoLifecycle();
 		return true;
 	}
 
+	showDevCommandStatus(text: string): void {
+		const controller = peekSpecDrivenController(this.#rootSession.sessionManager);
+		if (controller?.inputMode() !== "dev") {
+			if (text.startsWith("协同开发操作失败：")) this.showError(text);
+			else this.showStatus(text);
+			return;
+		}
+		this.#devNotice = text;
+		controller.publishObservation();
+	}
+
 	#bindDevObservation(): void {
-		this.#devObservationUnsubscribe?.();
-		clearTimeout(this.#devAutoHelpTimer);
-		this.#devAutoHelpTimer = undefined;
-		this.#devAutoHelpKey = undefined;
-		this.setHookWidget("native-dev-input", undefined);
-		const generation = this.session.sessionGeneration;
-		const sessionId = this.sessionManager.getSessionId();
-		this.#devObservationUnsubscribe = observeSpecDrivenController(this.sessionManager, observation => {
-			if (generation !== this.session.sessionGeneration || sessionId !== this.sessionManager.getSessionId()) return;
-			this.#scheduleDevHelp();
-			// 释放流程不等于退出开发输入模式；完成或取消后文字仍归草稿。
-			if (
-				(observation.released && observation.interaction.mode === "chat") ||
-				observation.disposed ||
-				observation.cwd !== this.sessionManager.getCwd()
-			) {
+		if (this.#devObservationUnsubscribe) return;
+		this.#devObservationUnsubscribe = observeSpecDrivenController(this.#rootSession.sessionManager, observation => {
+			if (observation.disposed || observation.interaction.mode !== "dev") {
 				this.setHookWidget("native-dev-input", undefined);
 				return;
 			}
-			const { interaction, status } = observation;
-			if (interaction.mode === "dev") {
-				const recipient = interaction.recipient;
-				const destination = observation.released
-					? "当前流程已结束，尚无可接收消息的阶段 Agent，输入保留为草稿"
-					: status.paused
-						? `已暂停：${interaction.blockedReason ?? status.blockedReason ?? "输入仅保留草稿，恢复不自动发送"}`
-						: status.phase === "idle"
-							? "尚未启动；/dev help 填写需求并开始，当前输入仅保留草稿"
-							: recipient
-								? `${roleLabel(recipient.role)} · ${observation.active ? "运行中" : "等待你"}`
-								: (interaction.blockedReason ?? "当前阶段 Agent 尚未准备好，输入保留为草稿");
-				this.setHookWidget("native-dev-input", [`协同开发模式 → ${destination} · /dev help`]);
-			} else {
-				const stage =
-					status.phase === "completed"
-						? "已完成"
-						: status.phase === "cancelled"
-							? "已取消"
-							: status.phase === "idle"
-								? "尚未启动"
-								: stageLabel(stageForPhase(status.phase));
-				this.setHookWidget(
-					"native-dev-input",
-					observation.runId
-						? [
-								`后台协同开发：${stage} · ${status.paused ? "已暂停" : observation.active ? "运行中" : "等待你"}${status.blockedReason ? ` · ${status.blockedReason}` : ""} · /dev help`,
-							]
-						: undefined,
-				);
-			}
+			const { status, interaction } = observation;
+			const recipient = interaction.recipient;
+			const role = recipient ? roleLabel(recipient.role) : "空阶段";
+			const action = interaction.actions.find(action => action.available);
+			const consequences: Record<string, string> = {
+				next:
+					status.phase === "requirements"
+						? "确认需求，进入方案阶段"
+						: status.phase === "solution"
+							? "批准指定候选方案，进入计划阶段"
+							: status.phase === "planning"
+								? "批准计划，开始执行"
+								: status.phase === "executing"
+									? "验收完成报告，同步正式需求并归档"
+									: "先用 /dev new 创建流程",
+				back: "返回上一阶段，不调用模型",
+				exit: "停止并保存流程，恢复普通会话",
+				new: "创建新流程，启动需求 Agent",
+				config: "仅修改后续方案 Team 开关",
+			};
+			const lines = [
+				`Dev · ${role} · ${observation.active ? "运行中" : "等待输入"} · Team ${status.useTeam ? "开" : "关"}`,
+				action
+					? `${action.command} · ${consequences[action.id] ?? action.label}`
+					: "/dev new <需求> · 新建流程，随后才调用需求 Agent",
+				`/session 完整详情 · ${
+					this.#devError ??
+					observation.error ??
+					status.blockedReason ??
+					interaction.blockedReason ??
+					observation.notice ??
+					this.#devNotice ??
+					(recipient
+						? "输入发送当前会话；/dev 停止保存并返回普通会话"
+						: "当前无接收者；输入和附件保留，请使用 /dev new")
+				}`,
+			].map(line => replaceTabs(sanitizeText(line)).replace(/[\r\n]+/g, " "));
+			this.setHookWidget("native-dev-input", () => ({
+				render: width => lines.map(line => truncateToWidth(line, Math.max(1, width))),
+				invalidate() {},
+			}));
 		});
 	}
-	#scheduleDevHelp(markOpened = false): void {
-		clearTimeout(this.#devAutoHelpTimer);
-		this.#devAutoHelpTimer = undefined;
-		const controller = peekSpecDrivenController(this.sessionManager);
-		const observation = controller?.observation();
-		if (
-			!observation?.runId ||
-			observation.released ||
-			observation.disposed ||
-			observation.cwd !== this.sessionManager.getCwd() ||
-			this.isShuttingDown ||
-			["idle", "completed", "cancelled"].includes(observation.status.phase) ||
-			observation.active ||
-			observation.interaction.messages.some(message =>
-				["queued", "processing", "cancelling"].includes(message.status),
-			)
-		) {
-			this.#devAutoHelpKey = undefined;
-			return;
+
+	/** Switch all native command and rendering identities as one recoverable binding. */
+	async bindMainSession(target: AgentSession): Promise<void> {
+		const emptyView =
+			target === this.#rootSession &&
+			peekSpecDrivenController(this.#rootSession.sessionManager)?.inputMode() === "dev";
+		if (target === this.session && !this.focusedAgentId && emptyView === this.#devEmptyView) return;
+		await target.settleInFlightMessagePersistence();
+		const previous = this.session;
+		const previousEmptyView = this.#devEmptyView;
+		const adopt = (session: AgentSession) => {
+			this.session.setPromptDropped?.(undefined);
+			this.session = session;
+			this.sessionManager = session.sessionManager;
+			this.agent = session.agent;
+			session.setPromptDropped?.(prompt => {
+				if (this.session === session) this.#restoreDroppedPrompt(prompt);
+			});
+			this.settings = session.settings;
+			this.#eventBus = session.eventBus ?? (session === this.#rootSession ? this.#rootEventBus : undefined);
+			this.#subagentEventBus =
+				session.subagentEventBus ?? (session === this.#rootSession ? this.#rootSubagentEventBus : undefined);
+			this.#bindSessionSubscriptions();
+		};
+		try {
+			adopt(target);
+			this.#devEmptyView = emptyView;
+			await this.#focusController.bindMainSession(target);
+			await this.#reconcileModeFromSession();
+			this.#syncJobWidgetsListener();
+			this.#pendingSlashCommands = this.#buildPendingSlashCommands();
+			this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
+			setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+		} catch (error) {
+			this.#devEmptyView = previousEmptyView;
+			adopt(previous);
+			await this.#focusController.bindMainSession(previous);
+			throw error;
 		}
-		const { status, interaction } = observation;
-		if (
-			!status.paused &&
-			!status.blockedReason &&
-			!status.phase.startsWith("awaiting-") &&
-			!["requirements", "solution", "planning", "executing"].includes(status.phase)
-		)
-			return;
-		const key = JSON.stringify([
-			observation.runId,
-			status.generation,
-			status.phase,
-			status.paused,
-			status.blockedReason,
-			interaction.actions.filter(action => action.available).map(action => action.version),
-		]);
-		if (markOpened) {
-			this.#devAutoHelpKey = key;
-			return;
-		}
-		if (this.#devAutoHelpKey === key || this.#devAutoHelpOpen) return;
-		// Yield past status output and never replace another dialog or clear the user's draft.
-		this.#devAutoHelpTimer = setTimeout(() => {
-			this.#devAutoHelpTimer = undefined;
-			if (peekSpecDrivenController(this.sessionManager) !== controller) return;
-			if (
-				this.#devInputDepth ||
-				this.ui.hasOverlay() ||
-				this.editorContainer.children.length !== 1 ||
-				this.editorContainer.children[0] !== this.editor
-			) {
-				this.#scheduleDevHelp();
-				return;
-			}
-			this.#devAutoHelpKey = key;
-			this.#devAutoHelpOpen = true;
-			void executeBuiltinSlashCommand("/dev help", { ctx: this, draftDetached: true })
-				.catch(error => this.showError(error instanceof Error ? error.message : String(error)))
-				.finally(() => {
-					this.#devAutoHelpOpen = false;
-					if (this.#devObservationUnsubscribe) this.#scheduleDevHelp();
-				});
-		}, 100);
+	}
+
+	#bindSessionEventBus(): void {
+		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
+		this.#sessionEventBusUnsubscribers = [];
+		const bus = this.session.eventBus ?? this.#eventBus;
+		if (bus)
+			this.#sessionEventBusUnsubscribers.push(
+				bus.on(LSP_STARTUP_EVENT_CHANNEL, data => {
+					if (!cfgStartupQuiet.get(this.settings)) this.#handleLspStartupEvent(data as LspStartupEvent);
+				}),
+				bus.on(MCP_CONNECTION_STATUS_EVENT_CHANNEL, data => {
+					if (!isMcpConnectionStatusEvent(data)) {
+						logger.warn("Ignoring malformed mcp:connection-status event", { data });
+						return;
+					}
+					this.#handleMcpConnectionStatusEvent(data);
+				}),
+				bus.on(JUDGMENT_BATCH_PROGRESS_EVENT_CHANNEL, data => {
+					if (!isJudgmentBatchProgress(data)) {
+						logger.warn("Ignoring malformed eval:judgment-batch-progress event", { data });
+						return;
+					}
+					this.#handleJudgmentBatchProgress(data);
+				}),
+			);
+	}
+
+	#bindSessionSubscriptions(): void {
+		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
+		this.#sessionBindingUnsubscribers = [
+			this.session.subscribe(event => {
+				if (event.type === "model_changed") {
+					this.#scheduleComposerStatusPersist();
+					this.session.prewarmModelConnection();
+				}
+				if (event.type === "config_warnings_changed") this.#syncConfigWarningHeader();
+				void this.#handleGoalSessionEvent(event);
+			}),
+			this.session.subscribeCommandMetadataChanged(() => {
+				this.#pendingSlashCommands = this.#buildPendingSlashCommands();
+				this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
+				this.ui.requestRender();
+			}),
+			this.sessionManager.onPersistenceError(error => {
+				const detail = truncateToWidth(
+					replaceTabs(sanitizeText(error.message)).replace(/[\r\n]+/g, " "),
+					TRUNCATE_LENGTHS.LINE,
+				);
+				this.showWarning(
+					`Session persistence failed: ${detail}. Unsaved entries remain in memory; persistence will retry on the next entry.`,
+				);
+			}),
+			this.sessionManager.onPersistenceNotice(notice => this.showWarning(formatPersistenceNotice(notice))),
+			this.sessionManager.onSessionNameChanged(() => {
+				setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
+				this.#handleSessionAccentInputsChanged();
+			}),
+			this.session.registerSessionChangeCallback(reportTernSession),
+			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
+			cfgModelRoles.listen(this.settings, () => this.#reapplyPlanModeModelOnRoleChange()),
+			cfgTuiMouse.listen(this.settings, on => {
+				this.#mouseCapture = on;
+				if (!on) {
+					this.composer.setHoveredClickId(undefined);
+					this.#inputController.clearHoverHighlight();
+				}
+				this.ui.requestRender();
+			}),
+		];
+		this.#bindSessionEventBus();
+		const boundSession = this.session;
+		let redactorLoads = 0;
+		this.#sessionBindingUnsubscribers.push(
+			() => {
+				redactorLoads++;
+			},
+			cfgStreamRedactPatterns.listen(this.settings, async patterns => {
+				const load = ++redactorLoads;
+				const redactor = await StreamRedactor.load(boundSession.sessionManager.getCwd(), patterns);
+				if (load === redactorLoads && this.session === boundSession) this.#streamPublisher?.setRedactor(redactor);
+			}),
+		);
+		this.#mouseCapture = cfgTuiMouse.get(this.settings);
+		this.#syncConfigWarningHeader();
 	}
 
 	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void {
@@ -3142,54 +3142,126 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean> {
-		const controller = peekSpecDrivenController(this.sessionManager);
+		const controller = peekSpecDrivenController(this.#rootSession.sessionManager);
 		const command = parseSlashCommand(text);
 		if (controller?.inputMode() !== "dev" && command?.name !== "dev") return false;
-		const generation = this.session.sessionGeneration;
-		const sessionId = this.sessionManager.getSessionId();
-		const cwd = this.sessionManager.getCwd();
-		const current = () =>
-			generation === this.session.sessionGeneration &&
-			sessionId === this.sessionManager.getSessionId() &&
-			cwd === this.sessionManager.getCwd() &&
-			!this.isShuttingDown;
-		// Detach only the submitted input before a dialog or native enqueue can yield.
-		// New typing and attachments belong to the next submission, even on failure.
-		if (this.editor.getExpandedText() === text) this.editor.clearDraft();
-		if (input?.images?.every((image, index) => this.editor.pendingImages[index] === image)) {
-			this.editor.pendingImages.splice(0, input.images.length);
-			this.editor.pendingImageLinks.splice(0, input.images.length);
-			this.editor.imageLinks = this.editor.pendingImageLinks.length ? this.editor.pendingImageLinks : undefined;
-		}
-		this.#devInputDepth++;
-		try {
-			if (text.startsWith("/") && !command) throw new Error("未知命令，请使用 /dev help。");
-			if (command) {
-				assertDevCommandAllowed(this.session, command.name, command.args);
-				if (command.name === "dev" && command.args.trim() === "help") this.#scheduleDevHelp(true);
-				const result = await executeBuiltinSlashCommand(text, { ctx: this, input, draftDetached: true });
-				if (result !== true && current()) throw new Error("此命令需要普通聊天模式，请先输入 /dev 返回普通聊天。");
-			} else if (text.trim() || input?.images?.length) {
-				if (input?.images?.length) throw new Error("协同开发消息目前仅支持文字，附件已保留。");
-				if (!controller || !current()) return true;
-				const receipt = await controller.submitText(text);
-				if (current()) {
-					if (receipt.kind === "draft") restoreDetachedDraft(this.editor, text);
-					this.showStatus(
-						receipt.kind === "draft"
-							? "已保留协同开发草稿；启动或恢复后请再次提交，不会自动发送。"
-							: `已排队，尚未被 Agent 接收：${receipt.messageId}`,
+		const restore = () => {
+			if (
+				this.editor.getExpandedText() === text &&
+				(!input?.images?.length || input.images.every((image, index) => this.editor.pendingImages[index] === image))
+			)
+				return;
+			restoreDetachedDraft(this.editor, text, input?.images, input?.imageLinks);
+		};
+		if (command && command.name !== "dev") {
+			try {
+				if (command.name === "session" && !command.args.trim() && controller) {
+					const owner = this.session;
+					const observation = controller.observation();
+					const state = observation.status;
+					const paths = state.paths;
+					const materialPaths = paths
+						? await formalMaterialPaths(
+								observation.cwd,
+								paths,
+								state.changeId!,
+								state.archivedChangePath ?? state.closing?.archivedChangePath,
+							)
+						: [];
+					const materials = await Promise.all(
+						materialPaths.map(async file => {
+							try {
+								return `## ${file}\n\n${sanitizeText(await Bun.file(await containedSpecPath(observation.cwd, file)).text())}`;
+							} catch (error) {
+								return `## ${file}\n\n读取错误: ${error instanceof Error ? error.message : String(error)}`;
+							}
+						}),
 					);
+					if (
+						this.session !== owner ||
+						controller.inputMode() !== "dev" ||
+						controller.observation().runId !== observation.runId
+					)
+						return true;
+					const details = [
+						`Dev: ${observation.interaction.recipient ? roleLabel(observation.interaction.recipient.role) : "空阶段"}`,
+						`阶段: ${state.phase} · Team ${state.useTeam ? "开" : "关"}`,
+						...[
+							...new Set(
+								[
+									this.#devError,
+									observation.error,
+									state.blockedReason,
+									observation.interaction.blockedReason,
+								].filter(Boolean),
+							),
+						].map(error => `错误/阻塞: ${error}`),
+						`提示: ${this.#devNotice ?? "查看不会调用模型、发送草稿或批准材料；Esc 关闭，方向键滚动。"}`,
+						"入口: /dev 停止保存并返回普通会话；再次进入恢复原流程",
+						"入口: /dev new <需求> 创建新流程（已有流程需先 drop）",
+						"入口: /dev next 确认需求；方案阶段 /dev next <候选ID> 批准指定方案；计划阶段批准计划开始执行；执行阶段验收、同步并归档",
+						"入口: /dev back 返回上一阶段，不调用模型",
+						"入口: /dev drop 删除流程状态，保留材料与原生会话",
+						"入口: /dev config 修改后续方案 Team 开关",
+						...observation.interaction.actions.map(
+							action =>
+								`动作: ${action.command} · ${action.label}${action.blockedReason ? ` · ${action.blockedReason}` : ""}`,
+						),
+						...materials,
+					].join("\n\n");
+					this.#devSessionDetails = sanitizeText(details);
+					try {
+						await this.#commandController.handleSessionCommand();
+					} finally {
+						this.#devSessionDetails = undefined;
+					}
+					return true;
 				}
+				assertDevCommandAllowed(this.session, command.name, command.args);
+				if (isDevSessionTransitionCommand(command.name, command.args)) {
+					await controller?.exit();
+					await executeBuiltinSlashCommand(text, { ctx: this, input });
+					return true;
+				}
+				return false;
+			} catch (error) {
+				restore();
+				this.#devError = error instanceof Error ? error.message : String(error);
+				controller?.publishObservation();
+				return true;
 			}
+		}
+		if (!command && controller?.nativeSession()) {
+			try {
+				await controller.checkConversationAllowed();
+				return false;
+			} catch (error) {
+				restore();
+				this.#devError = error instanceof Error ? error.message : String(error);
+				controller.publishObservation();
+				return true;
+			}
+		}
+		if (!command) {
+			restore();
+			this.#devError = "当前无阶段 Agent；输入和附件已保留，请使用 /dev new <需求>。";
+			controller?.publishObservation();
+			return true;
+		}
+		if (this.editor.getExpandedText() === text) this.editor.clearDraft();
+		try {
+			if (
+				!command.args.trim() ||
+				["new", "next", "back", "drop"].includes(command.args.trim().split(/\s+/, 1)[0] ?? "")
+			) {
+				this.#devError = undefined;
+				this.#devNotice = undefined;
+			}
+			await executeBuiltinSlashCommand(text, { ctx: this, input, draftDetached: true });
 		} catch (error) {
-			if (current()) {
-				restoreDetachedDraft(this.editor, text, input?.images, input?.imageLinks);
-				this.showError(error instanceof Error ? error.message : String(error));
-			}
-		} finally {
-			this.#devInputDepth--;
-			this.#scheduleDevHelp();
+			restore();
+			this.#devError = error instanceof Error ? error.message : String(error);
+			controller?.publishObservation();
 		}
 		return true;
 	}
@@ -5201,8 +5273,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (event.type === "goal_updated") {
 			if (event.state) this.#guidedGoalInterviewActive = false;
-			// Handle drop before clearing goalModeEnabled so #exitGoalMode can
-			// still restore the previous tool set while the flag is true.
+			// Drop exits immediately; completion waits for the turn/input boundary.
 			if (event.state?.goal?.status === "dropped") {
 				await this.#exitGoalMode({ reason: "dropped", silent: true });
 				return;
@@ -5839,7 +5910,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		reason?: "completed" | "paused" | "dropped";
 	}): Promise<void> {
 		const previousTools = this.#goalModePreviousTools;
-		if (this.goalModeEnabled && previousTools) {
+		// goal_updated may already have cleared the UI flag before exit.
+		if (previousTools !== undefined) {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		const currentState = this.session.getGoalModeState();
@@ -7655,8 +7727,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	stop(): void {
 		this.#devObservationUnsubscribe?.();
 		this.#devObservationUnsubscribe = undefined;
-		clearTimeout(this.#devAutoHelpTimer);
-		this.#devAutoHelpTimer = undefined;
+		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
+		this.#sessionBindingUnsubscribers = [];
+		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
+		this.#sessionEventBusUnsubscribers = [];
 		this.setHookWidget("native-dev-input", undefined);
 		this.#hidePlanReview();
 		this.#appearanceRefreshRequest = undefined;
@@ -7734,8 +7808,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	async shutdown(): Promise<void> {
 		this.#devObservationUnsubscribe?.();
 		this.#devObservationUnsubscribe = undefined;
-		clearTimeout(this.#devAutoHelpTimer);
-		this.#devAutoHelpTimer = undefined;
 		if (this.#isShuttingDown) return;
 		// The previous graceful teardown failed AT the memoized session.dispose()
 		// (the session is already disposing), so it re-rejects identically forever
@@ -8123,6 +8195,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 	showSessionInfo(info: string, context?: ContextUsage): void {
+		if (this.#devSessionDetails) {
+			info += `\n\n${theme.bold("Dev 工作区")}\n${this.#devSessionDetails
+				.split("\n")
+				.map(line => `${theme.fg("dim", "│")} ${line}`)
+				.join("\n")}`;
+		}
 		this.#hideSessionInfo();
 		const overlay = new SessionInfoOverlay(this.ui, info, () => this.#hideSessionInfo(), context);
 		this.#sessionInfoOverlayHandle = this.ui.showOverlay(overlay, {
@@ -8506,6 +8584,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveExistingChat?: boolean;
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
+		if (this.#devEmptyView && this.viewSession === this.#rootSession) {
+			this.resetTranscript();
+			this.initialChatRendered = true;
+			this.syncRetryHintRow();
+			this.ui.requestRender(true, { clearScrollback: options?.clearTerminalHistory === true });
+			return;
+		}
 		const owner = this.viewSession;
 		await this.#uiHelpers.renderInitialMessages(options);
 		if (this.viewSession !== owner) return;
@@ -8520,7 +8605,11 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * dispatched by the editor to `InputController.handleRetry`.
 	 */
 	syncRetryHintRow(): void {
-		const show = !this.collabGuest && !this.viewSession.isStreaming && this.viewSession.hasAbortedToolCallTail;
+		const show =
+			!(this.#devEmptyView && this.viewSession === this.#rootSession) &&
+			!this.collabGuest &&
+			!this.viewSession.isStreaming &&
+			this.viewSession.hasAbortedToolCallTail;
 		if (this.#retryHintRow) {
 			const mounted = this.statusContainer.children.includes(this.#retryHintRow);
 			if (mounted && show) return;
@@ -8634,6 +8723,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async prepareSessionSwitch(planReviewOwner?: object): Promise<void> {
+		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
 		this.#hidePlanReview(planReviewOwner);
 		this.#clearJudgmentBatchProgress(true);
 		await this.#btwController.dispose();

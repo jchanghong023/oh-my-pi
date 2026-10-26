@@ -13,6 +13,7 @@ import { closeSessionIndex } from "../../src/session/session-index";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ZCodeQueries } from "../../src/modes/zcode/queries";
 import { TextTap } from "../../src/job-widgets/text-tap";
+import * as controllers from "../../src/spec-driven/controller";
 
 const resources: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -56,6 +57,40 @@ async function fixture() {
 }
 
 describe("ZCodeSessionManager", () => {
+	it("restores ordinary mutations after the retained Dev controller exits", async () => {
+		const { manager } = await fixture();
+		const record = await manager.create();
+		let mode: "chat" | "dev" = "dev";
+		const setQueueAutoDrain = spyOn(record.session, "setQueueAutoDrain");
+		const controller = {
+			inputMode: () => mode,
+			nativeSession: () => record.session,
+			checkConversationAllowed: async () => {
+				throw new Error("Development has no active native stage session");
+			},
+			exit: async () => {
+				mode = "chat";
+			},
+		};
+		const peek = spyOn(controllers, "peekSpecDrivenController").mockReturnValue(
+			controller as unknown as controllers.SpecDrivenController,
+		);
+		try {
+			await expect(manager.mutate(record.id, "setAutoDrain", { autoDrain: false })).rejects.toThrow(
+				"Development has no active native stage session",
+			);
+			expect(setQueueAutoDrain).not.toHaveBeenCalled();
+			await controller.exit();
+			await expect(manager.mutate(record.id, "setAutoDrain", { autoDrain: false })).resolves.toEqual({
+				autoDrain: false,
+			});
+			expect(setQueueAutoDrain).toHaveBeenCalledWith(false);
+		} finally {
+			peek.mockRestore();
+			setQueueAutoDrain.mockRestore();
+		}
+	});
+
 	it("reads cold child Bash output only from its existing execution tree across registry eviction and revival", async () => {
 		const { manager, cwd } = await fixture();
 		const [root, foreign] = await Promise.all([manager.create(), manager.create()]);

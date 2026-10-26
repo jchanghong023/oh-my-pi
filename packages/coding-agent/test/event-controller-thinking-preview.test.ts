@@ -107,6 +107,7 @@ function focusFixture() {
 			});
 		},
 		rendered: () => Bun.stripANSI(dock.render(60).join("\n")),
+		rows: () => dock.render(60),
 	};
 }
 
@@ -131,6 +132,39 @@ afterEach(() => {
 });
 
 describe("compact thinking dock focus restoration", () => {
+	it("reserves one row through idle, thinking, completion, hiding, cancellation, and session switching", async () => {
+		const h = focusFixture();
+		expect(h.rows()).toEqual([""]);
+		const message = thinkingMessage("first\n\nlatest");
+		const live = liveSession(message, 0);
+		h.register("Thinking", live);
+		await h.focus.focusAgent("Thinking");
+		expect(h.rows()).toHaveLength(1);
+		expect(h.rendered()).toContain("latest");
+		expect(h.rendered()).not.toContain("first");
+
+		live.session.agent.state.activeThinkingIndex = undefined;
+		await live.emit(update(message, "thinking_end"));
+		expect(h.rows()).toEqual([""]);
+		live.session.agent.state.activeThinkingIndex = 0;
+		await live.emit(update(message, "thinking_delta"));
+		h.ctx.hideThinkingBlock = true;
+		h.ctx.eventController.refreshThinkingVisibility();
+		expect(h.rows()).toEqual([""]);
+		h.ctx.hideThinkingBlock = false;
+		h.ctx.eventController.refreshThinkingVisibility();
+		expect(h.rendered()).toContain("latest");
+		Object.defineProperty(live.session, "isAborting", { value: true });
+		expect(h.rows()).toEqual([""]);
+		await h.focus.focusAgent(MAIN_AGENT_ID);
+		expect(h.rows()).toEqual([""]);
+
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(h.rows()).toEqual([]);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		expect(h.rows()).toEqual([]);
+	});
+
 	it("ignores late delta and end callbacks from the previously focused session", async () => {
 		const h = focusFixture();
 		const oldMessage = thinkingMessage("OLD_SESSION");

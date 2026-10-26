@@ -15,19 +15,14 @@ import {
 } from "../../src/modes/zcode/schema";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
 import {
-	CHANGE_ID,
 	contentText,
 	createProviderFixture,
-	IMPLEMENTATION,
-	IMPLEMENTATION_PATH,
 	MARKER,
 	type ModelRequest,
-	type ProviderFixture,
-	type FixtureRole,
+	type Reply,
 	REQUIREMENT,
+	respond,
 	rolePayload,
-	SOLUTION,
-	TEST_PATH,
 } from "./provider-fixture";
 
 const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
@@ -39,11 +34,15 @@ const GATE_BUDGET = 600_000;
 type Frame = Record<string, unknown>;
 const caseDiagnostics = new AsyncLocalStorage<Array<() => unknown>>();
 function bounded(value: unknown): string {
-	return JSON.stringify(value, (key, item: unknown) => {
-		if (/authorization|apiKey|token|secret|password/iu.test(key)) return "[redacted]";
-		if (typeof item === "string") return item.length > 2_000 ? `${item.slice(0, 2_000)}…[truncated]` : item;
-		return item;
-	}).slice(0, 24_000);
+	return JSON.stringify(
+		value,
+		(key, item: unknown) => {
+			if (/authorization|apiKey|token|secret|password/iu.test(key)) return "[redacted]";
+			if (typeof item === "string") return item.length > 2_000 ? `${item.slice(0, 2_000)}…[truncated]` : item;
+			return item;
+		},
+		2,
+	).slice(0, 24_000);
 }
 function test(name: string, body: () => Promise<void>, budget: number): void {
 	bunTest(
@@ -125,12 +124,9 @@ class PublicPeer {
 	#id = 0;
 	#pump: Promise<void>;
 	#currentCommand?: Frame;
-	#currentPhase?: Frame;
-	#currentPhaseText?: string;
 	#waiting?: string;
 	#stderrText = "";
 	#observed: Frame[] = [];
-	#statusRowIds = new Map<string, number>();
 	#assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
 	constructor(cwd: string, env: NodeJS.ProcessEnv, provider: { requests: ModelRequest[]; failures: string[] }) {
 		const child = Bun.spawn([...launch, "app-server", "--stdio", "--surface", "desktop", "--cwd", cwd], {
@@ -143,10 +139,15 @@ class PublicPeer {
 		this.child = child;
 		caseDiagnostics.getStore()?.push(() => ({
 			command: this.#currentCommand,
-			phase: this.#currentPhase,
-			phaseText: this.#currentPhaseText,
-			phaseTextTail: this.#currentPhaseText?.slice(-4_000),
 			waiting: this.#waiting,
+			conversationTopics: [
+				...new Set(
+					this.seen
+						.filter(frame => frame.method === "v4/conversation/frame")
+						.map(frame => (isRecord(frame.params) ? frame.params.topic : undefined)),
+				),
+			],
+			conversationFrames: this.seen.filter(frame => frame.method === "v4/conversation/frame").slice(-8),
 			providerFailures: provider.failures.slice(-12),
 			executorTools: executorToolDiagnostics(
 				provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor"),
@@ -154,7 +155,6 @@ class PublicPeer {
 			providerRequests: provider.requests.slice(-8).map(request => ({
 				model: request.model,
 				role: rolePayload(request)?.specDrivenRole,
-				kind: rolePayload(request)?.input.kind,
 				tools: request.tools?.map(tool => tool.function?.name),
 				lastUser: contentText(request.messages.findLast(message => message.role === "user")?.content),
 				messages: request.messages.slice(-4).map(message => ({
@@ -261,12 +261,18 @@ class PublicPeer {
 			topic: `conversation/${id}`,
 			connectionId: `spec-${id}`,
 			clientMode: "desktop-continuous",
+			includeSpecDriven: true,
 		});
 		return id;
 	}
-	async send(sessionId: string, text: string): Promise<number> {
+	async send(
+		sessionId: string,
+		text: string,
+		status: "accepted" | "rejected" | "failed" = "accepted",
+	): Promise<number> {
 		const since = this.seen.length;
-		this.#currentCommand = { sessionId, text };
+		const issuedAt = Date.now();
+		this.#currentCommand = { sessionId, text, issuedAt, since };
 		const type = "sendText";
 		const current = COMMANDS_REQUIRING_BASE_REVISION.has(type)
 			? v4ConversationRowsRangeResultSchema.parse(
@@ -281,92 +287,65 @@ class PublicPeer {
 				type,
 				payload: { text },
 				...(current ? { baseRevision: current.atRevision } : {}),
-				issuedAt: Date.now(),
+				issuedAt,
 			}),
-		).toMatchObject({ status: "accepted" });
+		).toMatchObject({ status, ...(status === "failed" ? { reasonCode: "fault.command.execution" } : {}) });
 		return since;
 	}
-	async reject(sessionId: string, text: string): Promise<void> {
-		this.#currentCommand = { sessionId, text };
-		const before = v4ConversationWorkflowRunsResultSchema.parse(
-			await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
-		);
-		const current = v4ConversationRowsRangeResultSchema.parse(
-			await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
-		);
-		expect(
-			await this.request("v4/command", {
-				commandId: crypto.randomUUID(),
-				clientId: "omp-spec-acceptance",
-				sessionId,
-				type: "sendText",
-				payload: { text },
-				...(COMMANDS_REQUIRING_BASE_REVISION.has("sendText") ? { baseRevision: current.atRevision } : {}),
-				issuedAt: Date.now(),
-			}),
-		).toMatchObject({ status: "rejected", reasonCode: "fault.command.invalid" });
-		const after = v4ConversationWorkflowRunsResultSchema.parse(
-			await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
-		);
-		expect(after.runs.filter(run => run.spec)).toEqual(before.runs.filter(run => run.spec));
-	}
-	async phase(
-		sessionId: string,
-		phase: string | readonly string[],
-		since: number,
-		allowStopped = false,
-		requireStopped = false,
-	): Promise<{ state: Frame; text: string }> {
-		const expected = typeof phase === "string" ? [phase] : phase;
-		this.#waiting = `session ${sessionId} phase ${phase}`;
-		let observed: { state: Frame; text: string } | undefined;
-		await this.next(async item => {
-			const latest = await publishedStatus(item, sessionId, this.#statusRowIds.get(sessionId) ?? 0, this);
-			if (!latest) return false;
-			this.#statusRowIds.set(sessionId, latest.rowId);
-			this.#currentPhase = latest.state;
-			this.#currentPhaseText = latest.text;
-			const state = latest.state;
-			// A phase may publish before its native operation releases the decision gate.
-			if (state.ready === false) return false;
-			// A refused stale command can report a reason while leaving the workflow
-			// active at its gate. Real workflow pauses and terminal failures still fail fast.
-			// /dev cancel 的终态自身带 paused；仅该明确请求的终态可以通过，
-			// 执行中的真实暂停仍立即失败，并保留状态正文里的阻塞原因。
+	async stage(sessionId: string, phase: string, ready = true) {
+		let cursor = 0;
+		for (;;) {
+			const result = v4ConversationWorkflowRunsResultSchema.parse(
+				await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
+			);
+			const run = result.runs.findLast(row => row.spec?.phase === phase);
 			if (
-				(state.paused === true &&
-					!(expected.includes("cancelled") && state.phase === "cancelled") &&
-					!allowStopped) ||
-				((state.phase === "failed" || state.phase === "blocked" || state.blockedReason !== undefined) &&
-					!expected.includes(String(state.phase)))
+				run?.spec &&
+				(!ready ||
+					run.spec.actions.some(action => action.id === "next" && action.available) ||
+					run.spec.state === "terminal" ||
+					run.spec.state === "blocked")
 			)
-				throw new Error(`Workflow stopped before ${phase}: ${bounded({ state, text: latest.text })}`);
-			// 初始 gate-status 和运行中阶段不是本条命令的停止结果。
-			if (requireStopped && !isStoppedStatus(state)) return false;
-			if (!expected.includes(String(state.phase))) return false;
-			observed = { state, text: latest.text };
-			return true;
-		}, since);
-		if (!observed) throw new Error(`No current public status for ${phase}`);
-		this.#waiting = undefined;
-		return observed;
+				return { ...run, spec: run.spec };
+			this.#waiting = `stage ${phase}: conversation/${sessionId}`;
+			const event = await this.next(frame => isConversation(frame, sessionId), cursor);
+			cursor = this.seen.indexOf(event) + 1;
+		}
 	}
-	async stopped(sessionId: string, since: number): Promise<{ state: Frame; text: string }> {
-		// Observe without consuming phase()'s row cursor: the later pause/cancel
-		// command must still read its own published result.
-		const minimumRowId = this.#statusRowIds.get(sessionId) ?? 0;
-		let observed: { state: Frame; text: string } | undefined;
-		await this.next(async item => {
-			const latest = await publishedStatus(item, sessionId, minimumRowId, this);
-			if (!latest) return false;
-			this.#currentPhase = latest.state;
-			this.#currentPhaseText = latest.text;
-			if (!isStoppedStatus(latest.state)) return false;
-			observed = latest;
-			return true;
-		}, since);
-		if (!observed) throw new Error("No stopped command result");
-		return observed;
+	async settled(sessionId: string, since: number) {
+		const command = this.#currentCommand;
+		if (command?.since !== since || typeof command.issuedAt !== "number")
+			throw new Error(`Native settlement has no matching public command: ${bounded({ sessionId, since, command })}`);
+		await this.request("v4/conversation/subscribe", {
+			topic: `conversation/${sessionId}`,
+			connectionId: crypto.randomUUID(),
+			clientMode: "desktop-continuous",
+		});
+		let cursor = this.seen.length;
+		for (;;) {
+			const result = v4ConversationRowsRangeResultSchema.parse(
+				await this.request("v4/conversation/rowsRange", { sessionId, limit: 200 }),
+			);
+			const header = result.rows.findLast(row => row.kind === "turnHeader");
+			if (header?.kind === "turnHeader" && header.startedAt >= command.issuedAt) {
+				const rows = result.rows.filter(row => row.turnId === header.turnId);
+				const hasInput = rows.some(row => row.kind === "userInput" && row.text.trim().length > 0);
+				if (header.state === "failed" || header.state === "completedInterrupted")
+					throw new Error(
+						`Native turn did not complete successfully: ${bounded({ sessionId, command, header, rows })}`,
+					);
+				const hasResult = rows.some(
+					row => row.kind === "assistantText" && row.state === "complete" && row.text.trim().length > 0,
+				);
+				if (hasInput && hasResult && header.state === "completedSuccess") {
+					this.#waiting = undefined;
+					return;
+				}
+			}
+			this.#waiting = `settled: native turn completion on conversation/${sessionId}`;
+			const event = await this.next(frame => isConversation(frame, sessionId), cursor);
+			cursor = this.seen.indexOf(event) + 1;
+		}
 	}
 	async [Symbol.asyncDispose](): Promise<void> {
 		if (this.child.exitCode === null) this.child.kill();
@@ -381,79 +360,6 @@ function textValues(value: unknown): string[] {
 	if (typeof value === "string") return [value];
 	if (Array.isArray(value)) return value.flatMap(textValues);
 	return isRecord(value) ? Object.values(value).flatMap(textValues) : [];
-}
-function isStoppedStatus(state: Frame): boolean {
-	if (state.ready === false) return false;
-	return (
-		state.paused === true ||
-		state.blockedReason !== undefined ||
-		[
-			"awaiting-choice",
-			"awaiting-plan",
-			"awaiting-acceptance",
-			"completed",
-			"cancelled",
-			"blocked",
-			"failed",
-		].includes(String(state.phase))
-	);
-}
-async function publishedStatus(
-	item: Frame,
-	sessionId: string,
-	minimumRowId: number,
-	peer: PublicPeer,
-): Promise<{ rowId: number; state: Frame; text: string } | undefined> {
-	if (!isConversation(item, sessionId) || !isRecord(item.params)) return undefined;
-	const frame = item.params;
-	if (!isRecord(frame.payload) || frame.payload.kind !== "deltas" || !Array.isArray(frame.payload.deltas))
-		return undefined;
-	let latest: { rowId: number; text: string } | undefined;
-	let workflowUpdated = false;
-	for (const delta of frame.payload.deltas) {
-		if (!isRecord(delta)) continue;
-		if (
-			delta.op === "workflowRun.updated" ||
-			(delta.op === "state.updated" && isRecord(delta.patch) && delta.patch.workflowRuns !== undefined)
-		)
-			workflowUpdated = true;
-		if (delta.op !== "row.appended" && delta.op !== "row.upserted") continue;
-		const row = delta.row;
-		if (!isRecord(row) || row.kind !== "assistantText" || typeof row.text !== "string") continue;
-		if (typeof row.rowId !== "number" || row.rowId <= minimumRowId) continue;
-		if (!latest || row.rowId >= latest.rowId) latest = { rowId: row.rowId, text: row.text };
-	}
-	// Terminal transitions need not append a new assistant row.
-	if (!latest && !workflowUpdated) return undefined;
-	const result = v4ConversationWorkflowRunsResultSchema.parse(
-		await peer.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
-	);
-	const run = result.runs.findLast(run => run.spec);
-	if (!run?.spec) return undefined;
-	const spec = run.spec;
-	return {
-		rowId: latest?.rowId ?? minimumRowId,
-		state: {
-			phase: spec.phase,
-			ready: spec.actions.every(action => action.available !== false),
-			paused: spec.state === "paused" || spec.phase === "cancelled",
-			blockedReason: spec.state === "blocked" || spec.state === "paused" ? spec.explanation : undefined,
-			generation: spec.generation,
-			runId: run.runId,
-			specificationVersion: spec.versions.specification,
-			planVersion: spec.versions.plan,
-			reportVersion: spec.versions.report,
-			selection: spec.selectedCandidate ?? undefined,
-			candidates: spec.candidates,
-			statusMaterial: run,
-			publishedText: latest?.text,
-		},
-		// Decisions come from negotiated native actions, never from UI wording.
-		text: spec.actions
-			.filter(action => action.available !== false && action.command)
-			.map(action => action.command)
-			.join("\n"),
-	};
 }
 function isConversation(frame: Frame, sessionId: string): boolean {
 	return (
@@ -526,19 +432,6 @@ async function git(cwd: string, env: NodeJS.ProcessEnv, args: string[]): Promise
 	if (result.exitCode !== 0) throw new Error(`Fixture Git ${args.join(" ")}: ${result.stderr}`);
 	return result.stdout.trim();
 }
-async function absent(cwd: string, relative: string): Promise<void> {
-	const stat = await fs.lstat(path.join(cwd, relative)).catch((error: NodeJS.ErrnoException) => {
-		if (error.code === "ENOENT") return undefined;
-		throw error;
-	});
-	expect(stat).toBeUndefined();
-}
-function outputPath(provider: ProviderFixture, role: FixtureRole): string {
-	const payload = provider.requests.map(rolePayload).find(payload => payload?.specDrivenRole === role);
-	const paths = payload?.input.outputPaths;
-	if (!Array.isArray(paths) || typeof paths[0] !== "string") throw new Error(`No native ${role} output path`);
-	return paths[0];
-}
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
@@ -580,160 +473,193 @@ describe("spec-driven actual OMP public entry", () => {
 		},
 		GATE_BUDGET,
 	);
-
 	test(
-		"four native actors hand off complete files, await decisions, execute behavior and archive only after acceptance",
+		"first Dev entry binds the native recipient before its first reply and keeps root history independent",
 		async () => {
-			await using root = await TempDir.create("@omp-spec-four-stage-");
+			await using root = await TempDir.create("@omp-dev-native-first-entry-");
 			await using provider = createProviderFixture();
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
 			const session = await peer.create(config.cwd);
-			let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
-			await peer.phase(session, "awaiting-specification", since);
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			const rawSpecification = "/dev confirm-spec 需求没问题，请按文件继续，保留内部空格。";
-			since = await peer.send(session, rawSpecification);
-			await peer.phase(session, "awaiting-choice", since);
-			const solutionPath = outputPath(provider, "solution");
-			expect(solutionPath).toMatch(/^docs\/superpowers\/plans\/\d{4}-\d{2}-\d{2}-public-greeting-solutions\.json$/u);
-			const fullSolution = await fs.readFile(path.join(config.cwd, solutionPath), "utf8");
-			expect(JSON.parse(fullSolution)).toEqual(SOLUTION);
-			const rawSelection = "/dev choose pure 我选纯函数；不要把这句确认改写成摘要，也别丢掉其他方案的取舍。";
-			since = await peer.send(session, rawSelection);
-			await peer.phase(session, "awaiting-plan", since);
-			const planner = provider.requests.map(rolePayload).find(payload => payload?.specDrivenRole === "planner");
-			expect(planner).toBeDefined();
-			expect(planner!.input.userReply).toBe(rawSelection);
-			expect(planner!.input.candidateId).toBe("pure");
-			const originals = planner!.input.files;
-			expect(Array.isArray(originals)).toBe(true);
-			expect(
-				(originals as Array<{ path: string; content: string }>).find(file => file.path === solutionPath)?.content,
-			).toBe(fullSolution);
-			expect(JSON.stringify(planner!.input.files)).toContain(JSON.stringify(fullSolution).slice(1, -1));
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			since = await peer.send(session, "/dev confirm-plan 计划可以，按真实行为验证并给出完成报告。");
-			await peer.phase(session, "awaiting-acceptance", since);
-			expect(await fs.readFile(path.join(config.cwd, IMPLEMENTATION_PATH), "utf8")).toBe(IMPLEMENTATION);
-			const actual = await run(config.cwd, config.env, [process.execPath, "test", TEST_PATH]);
-			expect(actual.exitCode).toBe(0);
-			expect(`${actual.stdout}\n${actual.stderr}`).toContain("1 pass");
-			const reportPath = outputPath(provider, "executor");
-			expect(path.dirname(reportPath)).toBe("docs/superpowers/plans");
-			expect(outputPath(provider, "planner")).toMatch(
-				/^docs\/superpowers\/plans\/\d{4}-\d{2}-\d{2}-public-greeting\.md$/u,
+			await peer.send(session, "/dev");
+			const since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
+			const current = await peer.stage(session, "requirements", false);
+			const stageId = current.spec.interaction?.recipient?.sessionId;
+			if (!stageId) throw new Error("Native stage session missing");
+			expect(stageId).not.toBe(session);
+			await peer.settled(stageId, since);
+			const read = (id: string) =>
+				peer
+					.request("v4/conversation/rowsRange", { sessionId: id, limit: 200 })
+					.then(value => v4ConversationRowsRangeResultSchema.parse(value));
+			const stage = await read(stageId);
+			expect(stage.rows.some(row => row.kind === "toolCall" && row.status === "success")).toBe(true);
+			expect(JSON.stringify(stage.rows)).toContain("文件已写入。");
+			expect(JSON.stringify((await read(session)).rows)).not.toContain("文件已写入。");
+			const feedback = "Keep the current requirements; explain their whitespace rule.";
+			const replySince = peer.seen.length;
+			const nativeCommand = {
+				commandId: crypto.randomUUID(),
+				clientId: "omp-spec-acceptance",
+				sessionId: stageId,
+				type: "sendText",
+				payload: { text: feedback },
+				baseRevision: (await read(stageId)).atRevision,
+				issuedAt: Date.now(),
+			};
+			expect(await peer.request("v4/command", nativeCommand)).toMatchObject({ status: "accepted" });
+			await peer.next(
+				frame =>
+					isConversation(frame, stageId) &&
+					textValues(frame).some(text => text.includes(`${MARKER}_REQUIREMENTS_DIALOGUE`)),
+				replySince,
 			);
-			const report = await fs.readFile(path.join(config.cwd, reportPath), "utf8");
-			expect(report).toStartWith("# 完成报告");
-			expect(report).toContain("## 完成情况");
-			expect(report).toContain("## 验证结果");
-			expect(report).toContain("1 pass");
-			expect(report).toContain("## 未完成项");
-			await absent(config.cwd, "openspec/specs/greeting/spec.md");
-			expect([
-				...new Set(
-					provider.requests
-						.map(rolePayload)
-						.filter(Boolean)
-						.map(payload => payload!.specDrivenRole),
-				),
-			]).toEqual(["requirements", "solution", "planner", "executor"]);
-			since = await peer.send(session, "/dev accept 我已检查交付，同意同步需求并归档。");
-			await peer.phase(session, "completed", since);
-			expect(await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
-				REQUIREMENT,
+			expect(JSON.stringify((await read(stageId)).rows)).toContain(feedback);
+			expect(JSON.stringify((await read(session)).rows)).not.toContain(`${MARKER}_REQUIREMENTS_DIALOGUE`);
+			const replyCount = provider.requests.length;
+			expect(await peer.request("v4/command", nativeCommand)).toMatchObject({ status: "duplicate" });
+			const key = { sessionId: stageId, commandId: nativeCommand.commandId };
+			expect(await peer.request("v4/commands/query", { commands: [key] })).toMatchObject({
+				results: [{ key, result: { status: "accepted" } }],
+			});
+			expect(provider.requests.length).toBe(replyCount);
+			await peer.send(session, "/dev");
+			const ordinarySince = await peer.send(session, "ordinary conversation after Dev exit");
+			await peer.next(
+				frame =>
+					isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+				ordinarySince,
 			);
-			await absent(config.cwd, `openspec/changes/${CHANGE_ID}`);
-			const archived = (await fs.readdir(path.join(config.cwd, "openspec/changes/archive"))).filter(name =>
-				name.endsWith(`-${CHANGE_ID}`),
-			);
-			expect(archived).toHaveLength(1);
-			expect(await fs.readFile(path.join(config.cwd, reportPath), "utf8")).toBe(report);
-			expect(await fs.readFile(path.join(config.cwd, solutionPath), "utf8")).toBe(fullSolution);
-			expect(await fs.readdir(path.join(config.cwd, "docs/superpowers/plans"))).toHaveLength(3);
-			await absent(config.cwd, `openspec/changes/archive/${archived[0]}/completion.md`);
+			expect(JSON.stringify((await read(stageId)).rows)).not.toContain(`${MARKER}_CHAT_READY`);
 			expect(provider.failures).toEqual([]);
 		},
 		GATE_BUDGET,
 	);
 
-	for (const role of ["requirements", "solution", "planner", "executor"] as const) {
+	test(
+		"linked requirements cannot change business files and resume after the link is removed",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-document-link-");
+			let cwd = "";
+			let linkedDirectory = "";
+			let blockedWrite: Reply["tool"];
+			let repairing = false;
+			let repairDispatched = false;
+			await using provider = createProviderFixture({
+				async reply(request) {
+					const role = rolePayload(request)?.specDrivenRole;
+					if (repairing && role === "requirements") {
+						if (!repairDispatched && blockedWrite) {
+							repairDispatched = true;
+							return { tool: blockedWrite };
+						}
+						return { text: "需求文档已在正常目录中补齐，请确认。" };
+					}
+					const reply = respond(request);
+					const requested = reply.tool?.args.path;
+					if (
+						role === "requirements" &&
+						typeof requested === "string" &&
+						requested.endsWith("/spec.md") &&
+						!blockedWrite
+					) {
+						blockedWrite = reply.tool;
+						linkedDirectory = path.dirname(path.join(cwd, requested));
+						await fs.mkdir(path.dirname(linkedDirectory), { recursive: true });
+						await fs.symlink(
+							path.join(cwd, "src"),
+							linkedDirectory,
+							process.platform === "win32" ? "junction" : "dir",
+						);
+					}
+					return reply;
+				},
+			});
+			const config = await fixture(root, provider.baseUrl);
+			cwd = config.cwd;
+			await fs.mkdir(path.join(cwd, "src"));
+			const business = path.join(cwd, "src/spec.md");
+			await fs.writeFile(business, "business bytes");
+			await using peer = new PublicPeer(cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(cwd);
+			await peer.send(session, "/dev");
+			const since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
+			const current = await peer.stage(session, "requirements", false);
+			const stageId = current.spec.interaction?.recipient?.sessionId;
+			if (!stageId) throw new Error("Native requirements session missing");
+			await peer.settled(stageId, since);
+			if (!blockedWrite || !linkedDirectory) throw new Error("Native specification write was not exercised");
+			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
+			await peer.send(session, "/dev next", "failed");
+			expect((await peer.stage(session, "requirements", false)).spec.interaction?.recipient?.sessionId).toBe(
+				stageId,
+			);
+			await fs.rm(linkedDirectory, { recursive: true, force: true });
+			repairing = true;
+			const repairSince = await peer.send(session, "请在已移除链接的原路径补齐需求文档");
+			await peer.settled(stageId, repairSince);
+			const nextSince = await peer.send(session, "/dev next");
+			const solution = await peer.stage(session, "solution", false);
+			const solutionId = solution.spec.interaction?.recipient?.sessionId;
+			if (!solutionId) throw new Error("Native solution session missing");
+			await peer.settled(solutionId, nextSince);
+			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
+			expect(provider.failures).toEqual([]);
+			await peer.send(session, "/dev");
+		},
+		GATE_BUDGET,
+	);
+
+	for (const [index, role] of (["requirements", "solution", "planner", "executor"] as const).entries()) {
 		for (const kind of ["missing", "malformed", "unknown"] as const) {
 			test(
-				`${role} rejects ${kind} files without admitting a successor`,
+				`${role} next rejects ${kind} native files without advancing or calling a successor`,
 				async () => {
-					await using root = await TempDir.create("@omp-spec-file-gate-");
+					await using root = await TempDir.create("@omp-dev-invalid-file-");
 					await using provider = createProviderFixture({ fileFailure: { role, kind } });
 					const config = await fixture(root, provider.baseUrl);
 					await using peer = new PublicPeer(config.cwd, config.env, provider);
 					await peer.ready();
 					const session = await peer.create(config.cwd);
-					let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
-					if (role !== "requirements") {
-						await peer.phase(session, "awaiting-specification", since);
-						since = await peer.send(session, "/dev confirm-spec 需求可行，继续看方案。");
-						if (role !== "solution") {
-							await peer.phase(session, "awaiting-choice", since);
-							since = await peer.send(session, "/dev choose pure 采用纯函数方案。");
-							if (role !== "planner") {
-								await peer.phase(session, "awaiting-plan", since);
-								since = await peer.send(session, "/dev confirm-plan 允许开始实现。");
-							}
-						}
+					await peer.send(session, "/dev");
+					let since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
+					const phases = ["requirements", "solution", "planning", "executing"];
+					for (let position = 0; position < index; position++) {
+						const current = await peer.stage(session, phases[position]!);
+						const stageId = current.spec.interaction?.recipient?.sessionId;
+						if (!stageId) throw new Error("Native stage session missing");
+						await peer.settled(stageId, since);
+						since = await peer.send(session, position === 1 ? "/dev next pure" : "/dev next");
 					}
-					const stopped = await peer.stopped(session, since);
-					expect(stopped.state.phase).toBe(
-						(
-							{
-								requirements: "requirements",
-								solution: "solution",
-								planner: "planning",
-								executor: "executing",
-							} satisfies Record<FixtureRole, string>
-						)[role],
-					);
-					expect(typeof stopped.state.blockedReason).toBe("string");
-					expect(String(stopped.state.blockedReason).length).toBeGreaterThan(0);
-					console.log("Fresh native stage refusal:", stopped.state.blockedReason);
-					const order = ["requirements", "solution", "planner", "executor"];
+					const current = await peer.stage(session, phases[index]!);
+					const stageId = current.spec.interaction?.recipient?.sessionId;
+					if (!stageId) throw new Error("Native stage session missing");
+					await peer.settled(stageId, since);
+					const count = provider.requests.length;
+					await peer.send(session, index === 1 ? "/dev next pure" : "/dev next", "failed");
+					const refused = await peer.stage(session, phases[index]!);
+					expect(refused.spec.phase).toBe(current.spec.phase);
+					expect(refused.spec.explanation?.length).toBeGreaterThan(0);
+					expect(provider.requests.length).toBe(count);
 					expect(
 						provider.requests
 							.map(rolePayload)
 							.filter(Boolean)
-							.every(payload => order.indexOf(payload!.specDrivenRole) <= order.indexOf(role)),
+							.every(
+								payload =>
+									(["requirements", "solution", "planner", "executor"] as readonly string[]).indexOf(
+										payload!.specDrivenRole,
+									) <= index,
+							),
 					).toBe(true);
-					await absent(config.cwd, "openspec/specs/greeting/spec.md");
 					expect(provider.failures).toEqual([]);
 				},
 				GATE_BUDGET,
 			);
 		}
 	}
-
-	test(
-		"ordinary clarification prose does not approve a stage and missing files can be supplied on continuation",
-		async () => {
-			await using root = await TempDir.create("@omp-spec-natural-dialogue-");
-			await using provider = createProviderFixture({ requirementsQuestion: "空白名字使用 world，可以吗？" });
-			const config = await fixture(root, provider.baseUrl);
-			await using peer = new PublicPeer(config.cwd, config.env, provider);
-			await peer.ready();
-			const session = await peer.create(config.cwd);
-			await peer.send(session, "/dev");
-			let since = await peer.send(session, `/dev start ${CHANGE_ID} ${MARKER}: ${REQUIREMENT}`);
-			const stopped = await peer.stopped(session, since);
-			expect(stopped.state.phase).toBe("requirements");
-			expect(stopped.state.blockedReason).toBeTruthy();
-			since = await peer.send(session, "可以呀，空白名字就叫 world，其他名字保留内部空格；先把需求写好让我看看。");
-			await peer.phase(session, "awaiting-specification", since);
-			expect(provider.requests.map(rolePayload).some(payload => payload?.specDrivenRole === "solution")).toBe(false);
-			await absent(config.cwd, IMPLEMENTATION_PATH);
-			expect(provider.failures).toEqual([]);
-		},
-		GATE_BUDGET,
-	);
 
 	for (const hasOpenSpec of [true, false]) {
 		test(

@@ -94,6 +94,55 @@ describe("compact original-position continuous runs", () => {
 		if (count > 2) expect(output.indexOf("工具调用")).toBeLessThan(output.indexOf(`CALL_${count - 2}`));
 	});
 
+	it("keeps compact summaries and ordinary previews adjacent without removing surrounding gaps", () => {
+		const root = transcript();
+		root.addChild(new Text("BEFORE", 0, 0));
+		const calls = add(root, "OLD", "ONE", "TWO");
+		for (const call of calls) call.finalized = false;
+		root.addChild(new Text("AFTER", 0, 0));
+		const expected = ["BEFORE", "", "工具调用 3 次 · 失败 0 次", "ONE", "TWO", "", "AFTER"];
+		expect(root.render(80).map(row => Bun.stripANSI(row).trimEnd())).toEqual(expected);
+		expect(root.renderViewport(80, 20, { tick: 0, now: 0 }).map(row => Bun.stripANSI(row).trimEnd())).toEqual(
+			expected,
+		);
+		expect(root.liveRowCount(80)).toBe(expected.length);
+		expect(root.renderTail(80, 20).map(row => Bun.stripANSI(row).trimEnd())).toEqual(expected);
+		const archived: string[] = [];
+		for (const call of calls) {
+			call.finalized = true;
+			const batch = root.peekFlushBatch(80)!;
+			archived.push(...batch.rows.map(row => Bun.stripANSI(row).trimEnd()));
+			root.acknowledgeFinalizedBatch(batch.id);
+		}
+		expect(archived).toEqual([...expected, ""]);
+		root.beginReplay();
+		expect(root.peekReplayBatch(80)!.rows.map(row => Bun.stripANSI(row).trimEnd())).toEqual([...expected, ""]);
+	});
+
+	it("preserves gaps around critical feedback, writes, and detailed calls", () => {
+		const root = transcript();
+		const failure = add(root, "FAILURE")[0]!;
+		failure.failed = true;
+		add(root, "ONE", "TWO");
+		const write = add(root, "WRITE")[0]!;
+		write.write = write.actualWrite = true;
+		add(root, "THREE", "FOUR");
+		expect(view(root).split("\n")).toEqual([
+			"工具调用 3 次 · 失败 1 次",
+			"FAILURE",
+			"",
+			"ONE",
+			"TWO",
+			"",
+			"WRITE",
+			"",
+			"THREE",
+			"FOUR",
+		]);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(view(root).split("\n")).toEqual(["FAILURE", "", "ONE", "", "TWO", "", "WRITE", "", "THREE", "", "FOUR"]);
+	});
+
 	it("keeps independent segment summaries and previews before their replies on both surfaces", () => {
 		const root = transcript();
 		add(root, "A_OLD", "A_TWO", "A_LAST");
