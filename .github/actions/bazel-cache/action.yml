@@ -18,6 +18,12 @@ outputs:
    save-needed:
       description: Whether this build needs to save a new cache entry
       value: ${{ steps.restore.outputs.cache-hit != 'true' }}
+   cache-hit:
+      description: Whether the primary cache key matched exactly
+      value: ${{ steps.restore.outputs.cache-hit }}
+   matched-key:
+      description: Restored cache key, if any
+      value: ${{ steps.restore.outputs.cache-matched-key }}
 
 runs:
    using: composite
@@ -36,6 +42,7 @@ runs:
            key: ${{ env.CACHE_PREFIX }}-${{ hashFiles('crates/**') }}
            restore-keys: |
               ${{ env.CACHE_PREFIX }}-
+              omp-bazel-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.scope }}-
 
       - name: Compose cache config
         id: compose

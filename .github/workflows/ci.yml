@@ -80,9 +80,6 @@ jobs:
          fail-fast: false
          matrix:
             include:
-               - { target_id: linux-arm64, target: natives-linux-arm64 }
-               - { target_id: linux-musl-arm64, target: natives-linux-musl-arm64 }
-               - { target_id: linux-musl-x64-baseline, target: natives-linux-musl-x64-baseline }
                - { target_id: linux-x64-baseline, target: natives-linux-x64-baseline }
                - { target_id: linux-x64-modern, target: natives-linux-x64-modern }
                - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline }
@@ -103,17 +100,30 @@ jobs:
          # it visible in the run summary instead of discovering it weeks in.
          - name: Report bazel cache stats
            shell: bash
+           env:
+              CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+              CACHE_MATCHED_KEY: ${{ steps.cache.outputs.matched-key }}
            run: |
               # Bazel runs with --color=yes (config=ci); strip ANSI before
               # matching — escapes split "INFO:" from the process count in
               # the raw log.
               summary=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/bazel-build.log" | grep -E '[0-9]+ processes:' | tail -1 || true)
               echo "::notice title=Bazel build summary::${summary:-no process summary found}"
+              {
+                echo "### Bazel cache: ${{ matrix.target_id }}"
+                echo "Exact hit: ${CACHE_HIT:-false}"
+                echo "Restored key: ${CACHE_MATCHED_KEY:-none}"
+                echo "Build processes: ${summary:-unavailable}"
+                echo 'Cache directory sizes:'
+                echo '```'
+                du -sh ~/.cache/omp-bazel-disk ~/.cache/omp-bazel-repo ~/.cargo/registry ~/.cargo/git 2>/dev/null || true
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
 
-         # Each leg saves its own complete target cache; distinct keys avoid
-         # concurrent saves colliding or leaving cross-target builds uncached.
+         # Save only on main: branch-specific copies consume quota but cannot
+         # be restored by main. Each target retains an independent cache.
          - name: Save bazel disk cache
-           if: steps.cache.outputs.save-needed == 'true'
+           if: github.ref == 'refs/heads/main' && steps.cache.outputs.save-needed == 'true'
            uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               # Must mirror the restore path list in the bazel-cache action.
@@ -172,7 +182,7 @@ jobs:
               if-no-files-found: error
               retention-days: 1
 
-   # Build every non-macOS target. Each artifact remains downloadable even when
+   # Build the two personal release targets. Each artifact remains downloadable even when
    # publish_release is false.
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
@@ -188,21 +198,6 @@ jobs:
                     target_id: linux-x64,
                     binary_path: packages/coding-agent/binaries/omp-linux-x64,
                     native_targets: linux-x64-baseline linux-x64-modern,
-                 }
-               - {
-                    target_id: linux-musl-x64,
-                    binary_path: packages/coding-agent/binaries/omp-linux-musl-x64,
-                    native_targets: linux-musl-x64-baseline,
-                 }
-               - {
-                    target_id: linux-arm64,
-                    binary_path: packages/coding-agent/binaries/omp-linux-arm64,
-                    native_targets: linux-arm64,
-                 }
-               - {
-                    target_id: linux-musl-arm64,
-                    binary_path: packages/coding-agent/binaries/omp-linux-musl-arm64,
-                    native_targets: linux-musl-arm64,
                  }
                - {
                     target_id: win32-x64,
@@ -237,7 +232,6 @@ jobs:
               RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
               RELEASE_TIMESTAMP: ${{ needs.release_metadata.outputs.release-timestamp }}
               UPDATE_REPOSITORY: ${{ github.repository }}
-              ZCODE_ARTIFACT_ROOT: packages/coding-agent/binaries/zcode
               RELEASE_COMMIT: ${{ github.sha }}
            run: bun run ci:release:build-binaries
          - name: Upload release binary artifact
@@ -245,15 +239,6 @@ jobs:
            with:
               name: omp-binary-${{ matrix.target_id }}
               path: ${{ matrix.binary_path }}
-         # Separate payload: preserve standalone binary publishing/checksum globs.
-         # Contains the final executable plus its target manifest and immutable release pin.
-         # These build artifacts do not assert Windows signing or macOS notarization.
-         - name: Upload ZCode OMP artifact
-           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-           with:
-              name: omp-zcode-${{ matrix.target_id }}
-              path: packages/coding-agent/binaries/zcode/
-              if-no-files-found: error
          # Main-only save, after the build so it is off the leg's critical
          # path: caches saved on a tag or branch are readable only by that ref
          # yet count against the shared 10 GB quota (see bazel-cache).
@@ -266,43 +251,46 @@ jobs:
               key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
 
 
+   browser_relay:
+      name: Build browser relay extension
+      runs-on: ubuntu-22.04
+      steps:
+         - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+           with:
+              bun-version: 1.4.4
+         - run: bun run --cwd packages/browser-relay build
+         - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+           with:
+              name: omp-browser-relay-extension
+              path: packages/browser-relay/dist/omp-browser-relay-extension.zip
+              if-no-files-found: error
+
    release_github:
       name: Publish GitHub release
       if: ${{ inputs.publish_release &&
          github.ref == 'refs/heads/main' &&
          !cancelled() &&
          needs.release_metadata.result == 'success' &&
-         needs.release_binary.result == 'success' }}
-      needs: [release_metadata, release_binary]
+         needs.release_binary.result == 'success' &&
+         needs.browser_relay.result == 'success' }}
+      needs: [release_metadata, release_binary, browser_relay]
       runs-on: ubuntu-22.04
       permissions:
          contents: write
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-         - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-           with:
-              bun-version: 1.4.4
-
          - name: Download release binaries
            uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
            with:
               pattern: omp-binary-*
               path: packages/coding-agent/binaries
               merge-multiple: true
-         # Dependency-free build (bun APIs + zip only), so no `bun install`
-         # is needed on this runner.
-         - name: Build browser relay artifacts
-           run: bun run --cwd packages/browser-relay build
-         # Generated after every other release asset is in place and before
-         # the release is created, so SHA256SUMS.txt itself ships as an asset
-         # and covers every other file uploaded alongside it.
-         - name: Generate checksums
-           run: |
-              bun run ci:release:checksums SHA256SUMS.txt \
-                packages/coding-agent/binaries/omp-* \
-                packages/browser-relay/dist/omp-browser-relay-extension.zip \
-                LICENSE \
-                THIRD-PARTY-NOTICES.txt
+         - name: Download browser relay extension
+           uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+           with:
+              name: omp-browser-relay-extension
+              path: packages/browser-relay/dist
          - name: Create GitHub Release
            uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
            with:
@@ -310,9 +298,8 @@ jobs:
               target_commitish: ${{ github.sha }}
               prerelease: false
               files: |
-                 packages/coding-agent/binaries/omp-*
+                 packages/coding-agent/binaries/omp-linux-x64
+                 packages/coding-agent/binaries/omp-windows-x64.exe
                  packages/browser-relay/dist/omp-browser-relay-extension.zip
-                 LICENSE
-                 THIRD-PARTY-NOTICES.txt
-                 SHA256SUMS.txt
+              fail_on_unmatched_files: true
               generate_release_notes: true
