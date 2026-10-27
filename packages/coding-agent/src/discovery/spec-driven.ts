@@ -7,15 +7,16 @@ import { ensureSpecDrivenResources } from "../spec-driven/resources";
 import { SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { loadFilesFromDir, scanSkillsFromDir } from "./helpers";
 
-// OpenSpec 1.15.0's default core profile; other bundled resources remain available to its CLI.
+// The ordinary OpenSpec profile manages requirements; other bundled resources remain available to its CLI.
 const OPEN_SPEC_CORE_SKILLS = new Set([
 	"openspec-propose",
 	"openspec-explore",
-	"openspec-apply-change",
 	"openspec-update-change",
 	"openspec-sync-specs",
 	"openspec-archive-change",
 ]);
+
+const OPEN_SPEC_CORE_COMMANDS = new Set(["opsx-propose", "opsx-explore", "opsx-update", "opsx-sync", "opsx-archive"]);
 
 /** Low-priority builtins use the ordinary catalog collision rules; native autoload bypasses that catalog. */
 export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult<Skill>> {
@@ -61,7 +62,7 @@ registerProvider<Skill>(skillCapability.id, {
 
 export async function loadSpecDrivenCommands(ctx: LoadContext): Promise<LoadResult<SlashCommand>> {
 	const resources = await ensureSpecDrivenResources();
-	return loadFilesFromDir<SlashCommand>(
+	const result = await loadFilesFromDir<SlashCommand>(
 		ctx,
 		path.join(resources.openspecRoot, "commands"),
 		SPEC_DRIVEN_SKILL_PROVIDER,
@@ -78,6 +79,7 @@ export async function loadSpecDrivenCommands(ctx: LoadContext): Promise<LoadResu
 			}),
 		},
 	);
+	return { ...result, items: result.items.filter(command => OPEN_SPEC_CORE_COMMANDS.has(command.name)) };
 }
 
 registerProvider<SlashCommand>(slashCommandCapability.id, {

@@ -1,0 +1,33 @@
+name: mini
+version: 1
+description: Requirements-only proposal and capability specifications
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: Proposal describing the motivation and affected capabilities
+    template: proposal.md
+    instruction: |
+      Explain why the change is needed, the observable changes, affected new
+      and existing capabilities, and its scope and impact. Research existing
+      specifications before selecting capability paths. Use existing paths for
+      modified capabilities and kebab-case paths for new capabilities.
+      Record acceptance boundaries and unresolved questions. Do not create
+      implementation designs or task plans.
+    requires: []
+  - id: specs
+    generates: "specs/**/*.md"
+    description: Requirement delta specifications for affected capabilities
+    template: spec.md
+    instruction: |
+      Write one delta spec for each affected capability using its exact path.
+      Read existing authoritative specifications before changing requirements.
+      Use ADDED, MODIFIED, REMOVED and RENAMED Requirements sections as needed.
+      Each requirement has a SHALL or MUST statement and at least one
+      `#### Scenario:` with WHEN and THEN. MODIFIED requirements contain the
+      complete replacement; REMOVED requirements include Reason and Migration;
+      RENAMED requirements use FROM and TO. New capabilities include a
+      meaningful `## Purpose` of at least 50 characters. Preserve unaffected
+      requirements and existing capability paths. Do not write implementation
+      designs or task plans.
+    requires:
+      - proposal

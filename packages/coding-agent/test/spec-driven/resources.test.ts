@@ -100,9 +100,9 @@ describe("pinned upstream resources", () => {
 			if (entry.source === "openspec") {
 				expect(entry.path).toBe(`openspec/skills/${entry.name}/SKILL.md`);
 				const content = await fs.readFile(skill.filePath, "utf8");
-				expect(parseFrontmatter(content, { source: skill.filePath, repair: false, level: "off" }).frontmatter.name).toBe(
-					entry.name,
-				);
+				expect(
+					parseFrontmatter(content, { source: skill.filePath, repair: false, level: "off" }).frontmatter.name,
+				).toBe(entry.name);
 			}
 		}
 		for (const file of resources.manifest.files) {
@@ -154,12 +154,7 @@ describe("pinned upstream resources", () => {
 	});
 
 	it("rejects legacy aliases and unknown OpenSpec skill identities", async () => {
-		for (const name of [
-			"opsx-verify",
-			"opsx-new",
-			"opsx-continue",
-			"../openspec-new-change",
-		]) {
+		for (const name of ["opsx-verify", "opsx-new", "opsx-continue", "../openspec-new-change"]) {
 			await expect(loadSpecDrivenSkill("openspec", name)).rejects.toThrow("Unknown bundled openspec skill");
 		}
 	});
@@ -176,6 +171,36 @@ describe("pinned upstream resources", () => {
 		}
 		expect((await fs.readdir(project)).sort()).toEqual([".consumer-home", "openspec"]);
 	}, 30_000);
+
+	it("defaults the public wrapper to the mini graph and keeps native archive validation", async () => {
+		const project = path.join(temporary, "mini-wrapper");
+		await fs.mkdir(project);
+		const cli = (args: string[]) => runOpenSpec(args, project);
+		expect((await cli(["init"])).exitCode).toBe(0);
+		expect((await cli(["schema", "validate", "mini", "--json"])).exitCode).toBe(0);
+		expect((await cli(["new", "change", "mini-change"])).exitCode).toBe(0);
+		const change = path.join(project, "openspec", "changes", "mini-change");
+		const initial = JSON.parse((await cli(["status", "--change", "mini-change", "--json"])).stdout);
+		expect(initial.schemaName).toBe("mini");
+		expect(initial.artifacts.map((entry: { id: string }) => entry.id).sort()).toEqual(["proposal", "specs"]);
+		for (const artifact of ["proposal", "specs"]) {
+			const instructions = await cli(["instructions", artifact, "--change", "mini-change", "--json"]);
+			expect(instructions.exitCode).toBe(0);
+			expect(JSON.parse(instructions.stdout).artifactId).toBe(artifact);
+		}
+		await fs.writeFile(path.join(change, "proposal.md"), proposalContent);
+		const specDir = path.join(change, "specs", "offline-resources");
+		await fs.mkdir(specDir, { recursive: true });
+		await fs.writeFile(path.join(specDir, "spec.md"), deltaContent.slice(0, deltaContent.indexOf("#### Scenario:")));
+		expect((await cli(["archive", "mini-change", "--yes"])).exitCode).not.toBe(0);
+		expect(await Bun.file(path.join(change, "proposal.md")).exists()).toBe(true);
+		await fs.writeFile(path.join(specDir, "spec.md"), deltaContent);
+		expect((await cli(["validate", "mini-change", "--strict", "--json"])).exitCode).toBe(0);
+		expect(JSON.parse((await cli(["status", "--change", "mini-change", "--json"])).stdout).isComplete).toBe(true);
+		expect((await cli(["archive", "mini-change", "--yes"])).exitCode).toBe(0);
+		const spec = await fs.readFile(path.join(project, "openspec", "specs", "offline-resources", "spec.md"), "utf8");
+		expect(spec).toContain("#### Scenario: Read requirements offline");
+	}, 60_000);
 
 	it("installs and updates native tool integrations", async () => {
 		const project = path.join(temporary, "native-tool-integration");
@@ -339,12 +364,11 @@ describe("pinned upstream resources", () => {
 			expect(instructions.unlocks).toContain("tasks");
 			const status = await cli(["status", "--change", "legacy-change", "--json"]);
 			expect(status.exitCode).toBe(0);
-			expect(JSON.parse(status.stdout).artifacts.map((entry: { id: string }) => entry.id).sort()).toEqual([
-				"design",
-				"proposal",
-				"specs",
-				"tasks",
-			]);
+			expect(
+				JSON.parse(status.stdout)
+					.artifacts.map((entry: { id: string }) => entry.id)
+					.sort(),
+			).toEqual(["design", "proposal", "specs", "tasks"]);
 			const apply = await cli(["instructions", "apply", "--change", "legacy-change", "--json"]);
 			expect(apply.exitCode).toBe(0);
 			expect(JSON.parse(apply.stdout).tasks).toHaveLength(1);

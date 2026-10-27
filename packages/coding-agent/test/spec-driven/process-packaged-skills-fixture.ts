@@ -36,7 +36,6 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const coreOpenSpec = new Set([
 				"openspec-propose",
 				"openspec-explore",
-				"openspec-apply-change",
 				"openspec-update-change",
 				"openspec-sync-specs",
 				"openspec-archive-change",
@@ -44,7 +43,9 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const isHiddenOpenSpec = (entry: { source: string; name: string }) =>
 				entry.source === "openspec" && !coreOpenSpec.has(entry.name);
 			const defaultSkills: Record<string, true> = {};
-			for (const entry of inventory.skills.filter(entry => coreOpenSpec.has(entry.name) || entry.source === "superpowers"))
+			for (const entry of inventory.skills.filter(
+				entry => coreOpenSpec.has(entry.name) || entry.source === "superpowers",
+			))
 				defaultSkills[entry.name] = true;
 			const ordinary = await peer.create(config.cwd);
 			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
@@ -70,7 +71,9 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 				if (isHiddenOpenSpec(entry)) {
 					expect(skill).toBeUndefined();
 					for (const request of ordinaryRequests)
-						expect(request.messages.map(message => contentText(message.content)).join("\n")).not.toContain(entry.name);
+						expect(request.messages.map(message => contentText(message.content)).join("\n")).not.toContain(
+							entry.name,
+						);
 					continue;
 				}
 				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);

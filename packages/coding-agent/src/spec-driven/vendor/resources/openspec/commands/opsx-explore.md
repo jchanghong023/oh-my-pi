@@ -4,7 +4,7 @@ description: "Enter explore mode - think through ideas, investigate problems, cl
 
 Enter explore mode. Think deeply. Visualize freely. Follow the conversation wherever it goes.
 
-**IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, investigate the codebase, and run read-only commands or tools without confirmation, but you must NEVER write code or implement features. If the user asks you to implement something, do not start it here: say that explore mode does not implement, and point them at `/opsx-propose`, which turns the discussion into a change. The work happens from that change, never from explore mode. You MAY create or update OpenSpec change artifacts (proposals, designs, specs) within a confirmed scope—that's capturing thinking, not implementing. Answering design or clarifying questions is never consent to write. Before the first write-capable action, name the artifacts or files you would change and what you would do, ask a direct yes/no question, and wait for the user's confirmation in a separate message. Confirmation covers only the scope you described; ask again before expanding it. An explicit request from the user to capture the exploration as a new change is itself that confirmation, covering the change and the change artifacts the request names; scaffold it first as described below.
+**IMPORTANT: Explore mode is for thinking, not implementing.** You may read files, search code, investigate the codebase, and run read-only commands or tools without confirmation, but you must NEVER write code, implement features, or validate software. If the user asks you to implement, explain this boundary. You MAY create or update proposal and delta spec artifacts within a confirmed scope; never create or update design or task artifacts. Answering design or clarifying questions is never consent to write. Before the first write-capable action, name the artifacts or files you would change and what you would do, ask a direct yes/no question, and wait for the user's confirmation in a separate message. Confirmation covers only the scope you described; ask again before expanding it. An explicit request from the user to capture the exploration as a new change is itself that confirmation, covering the change and the requirement artifacts the request names; scaffold it first as described below.
 
 **This is a stance, not a workflow.** There are no fixed steps, no required sequence, no mandatory outputs. You're a thinking partner helping the user explore.
 
@@ -162,7 +162,7 @@ If the user asks you to capture the exploration as a new change, that request is
 3. Follow the returned `template` and `instruction` fields. Read completed dependency files listed in `dependencies`, and apply `context` and `rules` as constraints without copying them into the artifact. Choose the output path before creating anything: when `resolvedOutputPath` is a glob, use the instruction to choose a concrete path inside `changeRoot` and verify it remains inside `changeRoot` after resolving symlinks, both in its parent directories and in the file itself if it already exists; if it does not, stop and tell the user. Otherwise the output path is `resolvedOutputPath`. If the instruction delegates creation to a specific skill or command, invoke it only if it can write the artifact to that output path; otherwise stop and tell the user. Otherwise write the artifact to that output path. Verify that the selected concrete output exists at that output path.
 4. After creating each artifact, re-run `omp openspec status --change "<name>" --json` (append the confirmed `--store "<id>"` only for a registered standalone store) and continue until every requested artifact is `done`, `skipped`, or was deliberately skipped because its own `instruction` stated a condition that did not apply. Tell the user about a deliberate conditional skip, remember it, and do not reconsider it. Dependencies are enablers, not gates: if a requested artifact is still `blocked` only because you deliberately skipped a conditional prerequisite, run `omp openspec instructions "<artifact-id>" --change "<name>" --json` (append the confirmed `--store "<id>"` only for a registered standalone store) despite the blocked status, then create it using step 3 only when those recorded conditional skips are its sole missing dependencies. If a requested artifact is blocked by a prerequisite the user did not ask to capture and cannot be conditionally skipped, explain that dependency and ask before expanding the capture.
 
-Capture the artifact(s) the user requested without asking them to invoke another workflow command. If they asked only to start a change, stop after scaffolding and show its status. When the requested capture is done, stop there and name where the work continues: `/opsx-propose` writes the remaining planning artifacts, and `/opsx-apply` implements the change once tasks exist. Capturing artifacts never starts implementing them.
+Capture the requested proposal or delta specs without asking the user to invoke another workflow command. If they asked only to start a change, stop after scaffolding and show its status. When capture is done, stop; `/opsx-propose` can write remaining requirements artifacts.
 
 ### When a change exists
 
@@ -174,26 +174,23 @@ If the user mentions a change or you detect one is relevant:
    - Read existing files from `artifactPaths.<artifact>.existingOutputPaths`.
 
 2. **Reference them naturally in conversation**
-   - "Your design mentions using Redis, but we just realized SQLite fits better..."
+   - "The spec says this is limited to premium users, but we're now thinking everyone..."
    - "The proposal scopes this to premium users, but we're now thinking everyone..."
 
 3. **Offer to capture when decisions are made**
 
    `<capability-path>` is the spec directory relative to `specs/` (for example, `user-auth` or `identity/user-auth`). Preserve an existing capability's full path and follow the project's established organization for new capabilities.
 
-   The files below are the default spec-driven schema's. With another schema, capture each insight in whichever artifact from `artifactPaths` fits it, and name that artifact in your offer; never create an artifact the schema does not define.
+   The files below are the default mini schema's. Capture only proposal and delta spec insights; never create an artifact the selected schema does not define.
 
     | Insight Type               | Where to Capture                    |
     |----------------------------|-------------------------------------|
     | New requirement discovered | `specs/<capability-path>/spec.md` |
     | Requirement changed        | `specs/<capability-path>/spec.md` |
-    | Design decision made       | `design.md`                       |
     | Scope changed              | `proposal.md`                     |
-    | New work identified        | `tasks.md`                        |
     | Assumption invalidated     | Relevant artifact                   |
 
    Example offers (default schema):
-   - "That's a design decision. Capture it in design.md?"
    - "This is a new requirement. Add it to specs?"
    - "This changes scope. Update the proposal?"
 
@@ -217,7 +214,7 @@ If the user mentions a change or you detect one is relevant:
 There's no required ending. Discovery might:
 
 - **Flow into a proposal**: "Ready to start? Run `/opsx-propose` and this becomes a change."
-- **Result in artifact updates**: "Updated the design with these decisions"
+- **Result in artifact updates**: "Updated the requirements with these decisions"
 - **Just provide clarity**: User has what they need, moves on
 - **Continue later**: "We can pick this up anytime"
 
@@ -227,7 +224,7 @@ When things crystallize, you might offer a summary - but it's optional. Sometime
 
 ## Guardrails
 
-- **Don't implement** - Never write code or implement features. Workflow configuration counts too: creating or editing schemas, templates, or `openspec/config.yaml` is a change, not thinking. Creating or updating OpenSpec change artifacts within the confirmed scope is fine, writing anything else is not. When the user is ready to build, name the handoff rather than starting: `/opsx-propose` turns the discussion into a change, and the work happens there.
+- **Don't implement** - Never write code, implement features, or validate software. Workflow configuration counts too: creating or editing schemas, templates, or `openspec/config.yaml` is a change, not thinking. Creating or updating proposal and delta spec artifacts within the confirmed scope is fine; writing anything else is not. `/opsx-propose` turns the discussion into requirements, not implementation.
 - **Don't fake understanding** - If something is unclear, dig deeper
 - **Don't rush** - Discovery is thinking time, not task time
 - **Don't force structure** - Let patterns emerge naturally

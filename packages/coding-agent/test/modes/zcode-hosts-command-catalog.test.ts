@@ -47,7 +47,6 @@ describe("CommandCatalogService", () => {
 		const cwd = process.cwd();
 		const service = new CommandCatalogService({ cwd });
 		const visible = [
-			"openspec-apply-change",
 			"openspec-archive-change",
 			"openspec-explore",
 			"openspec-propose",
@@ -74,7 +73,7 @@ describe("CommandCatalogService", () => {
 			expect(await service.resolve(`/skill:${name} change-name`, session)).toMatchObject({ kind: "skill" });
 			expect(completion.items.some(item => item.label.includes(name))).toBe(true);
 		}
-		const companionNames = ["opsx-apply", "opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
+		const companionNames = ["opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
 		expect(
 			catalog
 				.filter(command => command.source === "file" && command.name.startsWith("opsx-"))
@@ -88,7 +87,7 @@ describe("CommandCatalogService", () => {
 			session,
 		});
 		expect(companionCompletion.items.map(item => item.label).sort()).toEqual(companionNames);
-		for (const name of [...visible, "opsx-new", "opsx-continue"]) {
+		for (const name of [...visible, "openspec-apply-change", "opsx-apply", "opsx-new", "opsx-continue"]) {
 			expect(await service.resolve(`/${name} change-name`, session)).toMatchObject({ kind: "unknown", name });
 		}
 	});

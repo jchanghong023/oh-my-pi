@@ -14,17 +14,19 @@ OMP MUST 保留独立 OpenSpec、Superpowers、JCH 及普通会话能力；用�
 
 - **WHEN** 用户使用独立能力或进入 Dev
 - **THEN** 以下职责、来源及授权边界适用：
-  - 独立内置 OpenSpec 的 CLI、默认 `spec-driven` schema、模板工厂及解析、校验、合并、归档等底层能力 MUST 与固定上游 1.15.0 一致；OMP 通过 `omp openspec` 封装，不要求另装 OpenSpec，不只复制说明文字，不依赖开发机绝对路径。`init` 的技能及命令生成例外遵循下文包内资源规则。Dev 单独使用 `omp-spec` 需求 schema，阶段职责及权限仍由 Dev 控制。
+  - 独立内置 OpenSpec 通过 `omp openspec` 封装固定上游 1.15.0，不要求另装 OpenSpec，不只复制说明文字，不依赖开发机绝对路径；除需求流程、默认 schema 和下文 `init` 的技能及命令生成适配外，CLI、模板工厂及解析、校验、同步、合并、归档等底层能力 MUST 保持上游行为。原生 `spec-driven` schema 和资源保留可用；Dev 单独使用 `omp-spec` 需求 schema，阶段职责及权限仍由 Dev 控制。
   - 固定来源为 OpenSpec 1.15.0、Superpowers 7.0.1（`2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`）；JCH `jch-grill-me` 的真实 `SKILL.md` 和 `agents/openai.yaml` 一并交付并绑定来源修订；固定版本不代表平台验收通过。
   - Dev 执行阶段必须由实施子代理按测试先行实施，并由独立审查子代理审查，不因此增加阶段、强制提交或固定修复轮次。
-  - 独立 OpenSpec 不依赖 Dev 状态、Team 或批准；独立同步归档不代表软件交付。`openspec-verify-change` 不要求 Dev 记录，也不改变 Dev 验收状态。
+  - 独立 OpenSpec 不依赖 Dev 状态、Team 或批准；只维护需求，不实施或验证软件。用户自行实施和验证后显式请求同步或归档，独立同步归档不代表软件交付，也不改变 Dev 验收状态。
   - 普通 bug 修复若预期行为未变，不强制修改需求或新建 change。普通代码实施、原生 task／reviewer、独立 Team／Goal、SDK、TUI 与其他宿主保持原语义，不附加 Dev 阶段状态、系统规则、后台工作或证据采集。
   - Dev 不提供轻量跳阶段变体，不强制 Team，不建立第五阶段、逐任务状态机或强制 Git 提交。启用能力、进入模式或批准计划不扩大项目规则及工程授权，不隐含 commit、push、PR、合并、发布或不可逆操作授权。
 
 #### Scenario: 独立需求维护
 
 - **WHEN** 用户未进入 Dev 而请求维护需求
-- **THEN** 独立 OpenSpec 不创建 Dev 流程、不要求四阶段批准；实际写入范围及授权由用户和项目规则确定，需求接受不代表软件已实现
+- **THEN** 独立 OpenSpec 不创建 Dev 流程、不要求四阶段批准；默认 `mini` schema 只生成 proposal 与 specs 两类需求文档，可含多个能力的增量规格，不生成 design 或 tasks，不实施或验证软件。实际写入范围及授权由用户和项目规则确定，需求接受不代表软件已实现
+- **AND** 用户自行实施和验证后显式请求同步或归档；同步沿用原生 OpenSpec，同步及归档不绕过原生校验，归档只检查需求材料完整性及原生格式，不以代码实施、任务完成或软件验证作为门禁，不使用 `--no-validate` 或直接移动目录伪造归档
+- **AND** 现有 change 和显式选择的 schema 不强制转换；原生 `spec-driven` 仍可显式使用，不删除或裁剪其资源
 
 #### Scenario: 显式启动
 
@@ -43,14 +45,14 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因四�
 | 范围 | 技能 | 规则 |
 | --- | --- | --- |
 | 普通模型可发现 | 固定上游全部 Superpowers 技能 | 默认索引提供名称与描述，正文按需读取 |
-| 普通模型可发现 | 固定上游 OpenSpec `core` 六项技能：`openspec-propose`、`openspec-explore`、`openspec-apply-change`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change` | 以包内固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `SKILL.md` 为基准，生成时按 core 集合解析可选工作流分支。唯一内容适配为将技能内 CLI 调用统一写为 `omp openspec ...`，同步 `allowed-tools`、兼容性说明及描述中明确指向 CLI 的用法；不要求另装 OpenSpec。技能名称、作者及版本元数据、自然语言触发词、`openspec/` 路径、`.openspec.yaml`、跨技能引用和其余流程保持上游原样。任意目录提供名称与描述，正文按需读取，通过原生 `/skill:<name>` 调用；其他六项包内 OpenSpec 技能不注册、不提供手动调用 |
+| 普通模型可发现 | 固定上游 OpenSpec `core` 中五项技能：`openspec-propose`、`openspec-explore`、`openspec-update-change`、`openspec-sync-specs`、`openspec-archive-change` | 以包内固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `SKILL.md` 为基准，生成时按 core 集合解析可选工作流分支；CLI 调用统一写为 `omp openspec ...`，同步工具声明及兼容性说明，并仅为独立需求流程适配正文和描述。同步保留原生行为，归档只检查需求完整性及原生格式，不要求实施或软件验证。任意目录提供名称与描述，正文按需读取，通过原生 `/skill:<name>` 调用；`openspec-apply-change` 及其他非所列技能不注册、不提供手动调用 |
 | 普通会话仅手动调用 | `jch-grill-me` | 保留原资源和显式调用，不默认发现；Dev 需求代理必须自动注入，正文置于系统提示最后 |
 
 普通会话可按技能引用读取包内 Superpowers 资源，不要求逐项显式调用；Dev 阶段仍遵循其准确资源授权与工具权限，进入 `/dev` 输入模式本身不授予资源权限。其他隐藏技能仍按既有规则授权。
 
-配套六项 `/opsx-propose`、`/opsx-explore`、`/opsx-apply`、`/opsx-update`、`/opsx-sync`、`/opsx-archive` MUST 在任意工作目录通过既有文件 slash-command 发现、补全及执行链路提供。六份命令文件 MUST 以同一次固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `.omp/commands/opsx-*.md` 为基准，唯一内容适配为将 CLI 调用统一写为 `omp openspec ...`；原描述、命令名称、路径、跨命令引用、`$@` 参数占位及其余正文保持不变。不另建分发表、不自动执行 init、不向用户项目复制文件。命令使用既有参数展开、扩展禁用及同名用户／项目命令覆盖机制；不注册其余六项可选工作流命令，也不改变 `/dev` 的阶段权限或批准边界。
+配套五项 `/opsx-propose`、`/opsx-explore`、`/opsx-update`、`/opsx-sync`、`/opsx-archive` MUST 在任意工作目录通过既有文件 slash-command 发现、补全及执行链路提供。五份命令文件以同一次固定上游 `init --tools oh-my-pi --profile core` 在隔离默认配置下生成的 `.omp/commands/opsx-*.md` 为基准，CLI 调用统一写为 `omp openspec ...`，正文和描述仅按独立需求流程适配；同步保留原生行为，归档只检查需求完整性及原生格式。命令使用既有参数展开、扩展禁用及同名用户／项目命令覆盖机制；不另建分发表、不自动执行 init、不向用户项目复制文件，不注册 `/opsx-apply` 或其他可选工作流命令，也不改变 `/dev` 的阶段权限或批准边界。
 
-独立 `omp openspec init` MUST 复用固定上游初始化实现，但由 OMP 封装层固定使用 `--tools=none`：技能和命令已内置，不再交互选择工具，也不在用户项目或全局目录生成技能和命令；显式传入 `--tools` 也不得重新启用生成。目录、配置、目标路径、语言及原生错误处理保持不变，不主动删除已有技能和命令。`update` 及其余 CLI 能力遵循固定上游，默认 schema 为原生 `spec-driven`；`omp-spec` 是供 Dev 使用的独立需求 schema，不替换或裁剪原生默认 schema。Dev 需求阶段仍只生成获授权的 proposal／增量规格，其他阶段及原有写入、用户批准和验收边界不因原生能力恢复而扩大。
+独立 `omp openspec init` MUST 复用固定上游初始化实现，但由 OMP 封装层固定使用 `--tools=none`：技能和命令已内置，不再交互选择工具，也不在用户项目或全局目录生成技能和命令；显式传入 `--tools` 也不得重新启用生成。目录、配置、目标路径、语言及原生错误处理保持不变，不主动删除已有技能和命令。独立 OpenSpec 默认 schema 为 `mini`；现有 change 及显式选择的 schema 不强制转换，原生 `spec-driven` 资源仍保留。`update` 及其余 CLI 能力遵循固定上游；`omp-spec` 是供 Dev 使用的独立需求 schema，Dev 需求阶段仍只生成获授权的 proposal／增量规格，其他阶段及原有写入、用户批准和验收边界不变。
 
 Superpowers 的技能、上游插件及扩展保留固定版本原始文件，不为 OMP 改写工具名称、子代理名称或脚本调用；依赖宿主提供的能力及实际可用性不改变上游基线。
 

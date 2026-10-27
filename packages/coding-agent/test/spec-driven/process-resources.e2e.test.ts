@@ -18,7 +18,15 @@ import {
 	workspace,
 } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { contentText, createProviderFixture, MARKER, type Reply, REQUIREMENT, respond, rolePayload } from "./provider-fixture";
+import {
+	contentText,
+	createProviderFixture,
+	MARKER,
+	type Reply,
+	REQUIREMENT,
+	respond,
+	rolePayload,
+} from "./provider-fixture";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
@@ -112,20 +120,21 @@ describe("spec-driven actual OMP public entry", () => {
 			const argumentsText = `${MARKER} proposal with spaces 中文需求`;
 			const since = await peer.send(session, `/opsx-propose "${argumentsText}"`);
 			await peer.next(
-				frame => isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+				frame =>
+					isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
 				since,
 			);
 			const request = provider.requests.find(item =>
-				item.messages.some(message => message.role === "user" && contentText(message.content).includes(argumentsText)),
+				item.messages.some(
+					message => message.role === "user" && contentText(message.content).includes(argumentsText),
+				),
 			);
 			if (!request) throw new Error("The companion command never reached the native model request");
 			const input = request.messages
 				.filter(message => message.role === "user")
 				.map(message => contentText(message.content))
 				.join("\n");
-			expect(input).toContain(`**Provided arguments**: ${argumentsText}`);
-			expect(input).toContain("openspec instructions");
-			expect(input).not.toContain("**Provided arguments**: $@");
+			expect(input).toContain(argumentsText);
 			expect(rolePayload(request)).toBeUndefined();
 			expect(provider.failures).toEqual([]);
 			expect(await git(config.cwd, config.env, ["status", "--porcelain"])).toBe("");
@@ -147,7 +156,7 @@ describe("spec-driven actual OMP public entry", () => {
 			expect(initialized.exitCode).toBe(0);
 			const configPath = path.join(config.cwd, "openspec/config.yaml");
 			const contents = await fs.readFile(configPath, "utf8");
-			expect(contents).toMatch(/^schema:\s*spec-driven\s*$/m);
+			expect(contents).toMatch(/^schema:\s*mini\s*$/m);
 			expect(contents).toContain("Language: Chinese");
 			for (const directory of ["specs", "changes/archive"])
 				expect((await fs.stat(path.join(config.cwd, "openspec", directory))).isDirectory()).toBe(true);
@@ -159,6 +168,33 @@ describe("spec-driven actual OMP public entry", () => {
 			expect(await fs.readdir(path.join(config.cwd, ".omp"))).toEqual(["commands"]);
 			expect(await fs.readdir(commands)).toEqual(["custom.md"]);
 			expect(await fs.readFile(custom, "utf8")).toBe("Keep my command.\n");
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"implicit defaults and existing configurations preserve native schema selection",
+		async () => {
+			await using root = await TempDir.create("@omp-openspec-compat-");
+			const config = await fixture(root, "http://127.0.0.1:1");
+			const invoke = (args: string[]) => run(config.cwd, config.env, [...launch, "openspec", ...args]);
+			expect((await invoke(["new", "change", "implicit"])).exitCode).toBe(0);
+			const initial = await invoke(["status", "--change", "implicit", "--json"]);
+			expect(JSON.parse(initial.stdout).schemaName).toBe("mini");
+			const configPath = path.join(config.cwd, "openspec/config.yaml");
+			expect(await fs.readFile(configPath, "utf8")).toMatch(/^schema:\s*mini\s*$/m);
+			expect((await invoke(["new", "change", "implicit-second"])).exitCode).toBe(0);
+			const second = await invoke(["status", "--change", "implicit-second", "--json"]);
+			expect(JSON.parse(second.stdout).schemaName).toBe("mini");
+			const oldConfig = "schema: spec-driven\n";
+			await fs.writeFile(configPath, oldConfig);
+			expect((await invoke(["init"])).exitCode).toBe(0);
+			expect(await fs.readFile(configPath, "utf8")).toBe(oldConfig);
+			expect((await invoke(["new", "change", "configured"])).exitCode).toBe(0);
+			const configured = await invoke(["status", "--change", "configured", "--json"]);
+			expect(JSON.parse(configured.stdout).schemaName).toBe("spec-driven");
+			const unchanged = await invoke(["status", "--change", "implicit", "--json"]);
+			expect(JSON.parse(unchanged.stdout).schemaName).toBe("mini");
 		},
 		GATE_BUDGET,
 	);
@@ -205,15 +241,13 @@ describe("spec-driven actual OMP public entry", () => {
 				expect((await fs.realpath(resourceRoot)).startsWith(await fs.realpath(config.root))).toBe(true);
 			}
 			const catalogRequestCount = provider.requests.length;
-			const bundledSchema = path.join(resourceRoot, "omp-spec");
-			const schema = path.join(config.cwd, "openspec/schemas/omp-spec");
-			await fs.mkdir(path.dirname(schema), { recursive: true });
-			await fs.cp(bundledSchema, schema, { recursive: true });
-			const created = await invoke(["new", "change", "distribution-check", "--schema", "omp-spec"]);
+			expect((await invoke(["init"])).exitCode).toBe(0);
+			const created = await invoke(["new", "change", "distribution-check"]);
 			expect(created.exitCode).toBe(0);
 			const status = await invoke(["status", "--change", "distribution-check", "--json"]);
 			expect(status.exitCode).toBe(0);
-			const state = JSON.parse(status.stdout) as { artifacts: Array<{ id: string }> };
+			const state = JSON.parse(status.stdout) as { schemaName: string; artifacts: Array<{ id: string }> };
+			expect(state.schemaName).toBe("mini");
 			expect(state.artifacts.map(artifact => artifact.id).sort()).toEqual(["proposal", "specs"]);
 			for (const artifact of ["proposal", "specs"]) {
 				const instruction = await invoke(["instructions", artifact, "--change", "distribution-check", "--json"]);
@@ -223,9 +257,11 @@ describe("spec-driven actual OMP public entry", () => {
 				expect(JSON.stringify(value)).toContain(artifact);
 				expect(JSON.stringify(value)).toContain("template");
 			}
-			const schemas = await invoke(["schema", "which", "omp-spec", "--json"]);
+			const schemas = await invoke(["schema", "which", "mini", "--json"]);
 			expect(schemas.exitCode).toBe(0);
-			expect(schemas.stdout.replaceAll("\\\\", "/").replaceAll("\\", "/")).toContain("omp-spec");
+			const resolved = JSON.parse(schemas.stdout) as { source: string; path: string };
+			expect(resolved.source).toBe("package");
+			expect(path.relative(resourceRoot, resolved.path).startsWith("..")).toBe(false);
 			const invalid = await invoke(["validate", "distribution-check", "--json"]);
 			expect(invalid.exitCode).not.toBe(0);
 			const change = path.join(config.cwd, "openspec/changes/distribution-check");
@@ -236,11 +272,37 @@ describe("spec-driven actual OMP public entry", () => {
 			await fs.mkdir(path.join(change, "specs/greeting"), { recursive: true });
 			await fs.writeFile(
 				path.join(change, "specs/greeting/spec.md"),
-				"## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL return a greeting.\n\n#### Scenario: Greeting requested\n- **WHEN** greeting is requested\n- **THEN** return a greeting\n",
+				"## Purpose\nDescribe greeting behavior for users and downstream systems in the fixture.\n\n## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL return a greeting.\n\n#### Scenario: Greeting requested\n- **WHEN** greeting is requested\n- **THEN** return a greeting\n",
 			);
 			const valid = await invoke(["validate", "distribution-check", "--json"]);
 			expect(valid.exitCode).toBe(0);
 			expect(valid.stdout).toContain("true");
+			const complete = await invoke(["status", "--change", "distribution-check", "--json"]);
+			expect(JSON.parse(complete.stdout).isComplete).toBe(true);
+			expect(
+				await fs.stat(path.join(change, "design.md")).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+			expect(
+				await fs.stat(path.join(change, "tasks.md")).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+			expect((await invoke(["archive", "distribution-check", "--yes"])).exitCode).toBe(0);
+			const synced = await fs.readFile(path.join(config.cwd, "openspec/specs/greeting/spec.md"), "utf8");
+			expect(synced).toContain("### Requirement: Greeting");
+			const archive = await fs.readdir(path.join(config.cwd, "openspec/changes/archive"));
+			expect(archive.some(name => name.endsWith("-distribution-check"))).toBe(true);
+			expect((await invoke(["new", "change", "legacy-explicit", "--schema", "spec-driven"])).exitCode).toBe(0);
+			const legacy = await invoke(["status", "--change", "legacy-explicit", "--json"]);
+			expect(
+				JSON.parse(legacy.stdout)
+					.artifacts.map((item: { id: string }) => item.id)
+					.sort(),
+			).toEqual(["design", "proposal", "specs", "tasks"]);
 			expect(provider.requests).toHaveLength(catalogRequestCount);
 		},
 		GATE_BUDGET,

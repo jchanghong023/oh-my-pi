@@ -1,8 +1,10 @@
 ---
-description: "Sync delta specs from a change to main specs"
+description: "Sync a change's delta requirements to main specs on request"
 ---
 
 Sync delta specs from a change to main specs.
+
+Sync only on the user's explicit request. The user handles implementation and software validation separately; this workflow does neither.
 
 This is an **agent-driven** operation - you will read delta specs and directly edit main specs to apply the changes. This allows intelligent merging (e.g., adding a scenario without copying the entire requirement).
 
@@ -60,8 +62,7 @@ In both branches, never create the root as a side effect: do not run `omp opensp
    this inline, and a user can too (for example, by selecting the entry ending
    in `/specs/billing/invoices/spec.md`).
    Then sync only the named paths and leave the remaining delta specs untouched:
-   bulk archive excludes a delta whose implementation it could not find, and
-   syncing it anyway would write a main spec the caller deliberately withheld.
+   syncing any other delta would write a main spec the caller deliberately withheld.
    Carry that narrowed selection through step 4; never widen it back to the full
    list. If a named path is not in `existingOutputPaths`, do not sync it —
    report it and stop, rather than dropping it silently. If the named list is
@@ -266,7 +267,7 @@ Updated main specs:
 - Created new spec file
 - Added requirement: "Another Feature"
 
-Main specs are now updated. The change remains active - archive when implementation is complete.
+Main specs are now updated. The change remains active; archive only on explicit request.
 ```
 
 **Guardrails**

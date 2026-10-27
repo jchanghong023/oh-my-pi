@@ -19,10 +19,10 @@
 
 ### Changed
 
-- Expose OpenSpec's six default core skills under their original `openspec-*` names, retaining upstream core workflow contents while routing skill CLI examples and compatibility declarations through bundled `omp openspec`; other bundled OpenSpec skills remain unregistered.
-- Make OpenSpec's six upstream companion `/opsx-*` commands available in every workspace, routing CLI examples through bundled `omp openspec` while preserving upstream workflows, argument expansion and user/project overrides.
-- Make `omp openspec init` initialize project directories and configuration without installing duplicate skills or commands, even when tools are detected or explicitly selected; use the built-in resources instead.
-- Update the bundled OpenSpec resource to the upstream 1.15.0 package exactly: `update --dry-run`/`--json` planning, config-schema-aware `new change` progress, exact REMOVED-baseline matching in the verify workflow and the bug-form `feedback` template. The `openspec/` tree now contains only upstream package files; omp-specific schema, dependency install and skill copies are removed pending re-adaptation.
+- Default standalone `omp openspec` to the requirements-only `mini` schema: proposals and delta specs can cover multiple capabilities, without generating design or tasks documents or implementing or validating software. Users carry out implementation and verification themselves, then explicitly request sync or archive.
+- Expose five OpenSpec core requirements skills and their `/opsx-*` commands in every workspace; remove `openspec-apply-change` and `/opsx-apply` from discovery. Adapt the workflows for requirements maintenance while retaining native sync and requiring only complete, natively valid requirements for archive, without bypassing validation.
+- Preserve the bundled OpenSpec 1.15.0 native parsing, validation, synchronization, archive and other CLI behavior, including the original `spec-driven` schema. Existing changes and explicitly selected schemas are not forcibly converted; Dev continues to use its separate `omp-spec` schema and unchanged four stages.
+- Keep `omp openspec init` from installing duplicate skills or commands, even when tools are detected or explicitly selected; use the built-in resources instead.
 - Track the vendored spec-driven resources, including OpenSpec's production `node_modules`, as checked-in source: builds only pack the tree and never install or regenerate dependencies.
 - Keep only the required OpenSpec runtime and skills, Superpowers skills and referenced runtime resources, and JCH/OMP resources as directly browsable files under `src/spec-driven/vendor/resources/`; package them at build time and extract them into a versioned offline cache at runtime rather than committing a large Base64 generated source. Generate MD5 on copying, reuse unchanged resources and replace the affected resource cache directory when its MD5 changes. No separate upstream installation is required; independent Dev stage boundaries remain intact.
 
@@ -30,7 +30,7 @@
 - Restore the pinned upstream Superpowers plugins, extensions and runtime resources without rewriting their tool, agent or script instructions.
 
 
-- Bundle all twelve OpenSpec skills directly from the pinned upstream revision, retaining their names, descriptions and files.
+- Retain the bundled upstream OpenSpec skill resources while limiting ordinary discovery to the five requirements workflows.
 
 - Require `/dev` requirements clarification, explicit solution recommendations, and implementation and review delegation with test-first execution.
 - Guide `/dev` execution to follow approved task order, TDD and delegation requirements, and disclose steps that could not be performed.
@@ -54,11 +54,9 @@
 - Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; active real thinking uses a permanently reserved single row with an ultrathink-style static gradient and a fixed gap above the input, clearing text without collapsing when idle or hidden. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
-- Enable default discovery of bundled OpenSpec skills and on-demand instruction reads only when the session working directory directly contains an `openspec/` directory; elsewhere keep manual `/skill:openspec-*` access. Discovery does not imply bundled upstream slash commands or restrict native CLI capabilities.
-- Restore the bundled standalone OpenSpec CLI, default `spec-driven` schema, template factory and underlying capabilities to pinned upstream 1.14.3, exposed through `omp openspec`; retain the separate requirements-only `omp-spec` schema for Dev without expanding Dev phase permissions.
 
-- Keep all bundled Superpowers skills available through manual `/skill:` commands, including standalone planning and execution after OpenSpec requirements updates; only debugging, completion verification and skill authoring enter the default model index. Preserve native `/dev` phase and exact-resource authorization without changing skill bodies.
-- Keep bundled OpenSpec requirements maintenance and standalone `verify-change` independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
+- Keep all bundled Superpowers skills available for ordinary sessions, including independent planning and execution; preserve native `/dev` phase and exact-resource authorization without changing skill bodies.
+- Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
 - Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.

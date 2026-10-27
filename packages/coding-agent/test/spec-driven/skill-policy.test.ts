@@ -25,6 +25,7 @@ import {
 } from "../../src/spec-driven/skill-policy";
 import { buildSystemPrompt } from "../../src/system-prompt";
 import type { Skill as CapabilitySkill } from "../../src/capability/skill";
+import type { SlashCommand } from "../../src/capability/slash-command";
 import { Settings } from "../../src/config/settings";
 import type { ToolSession } from "../../src/tools";
 
@@ -71,7 +72,6 @@ async function fixture(): Promise<Skill> {
 describe("pinned skill discovery and access", () => {
 	it("catalogs and exposes all Superpowers while preserving other discovery boundaries", async () => {
 		const ordinaryNames = [
-			"openspec-apply-change",
 			"openspec-archive-change",
 			"openspec-explore",
 			"openspec-propose",
@@ -81,7 +81,9 @@ describe("pinned skill discovery and access", () => {
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
-		ordinaryNames.push(...resources.manifest.skills.filter(entry => entry.source === "superpowers").map(entry => entry.name));
+		ordinaryNames.push(
+			...resources.manifest.skills.filter(entry => entry.source === "superpowers").map(entry => entry.name),
+		);
 		ordinaryNames.sort();
 		const cwd = (await fixture()).baseDir;
 		await fs.mkdir(path.join(cwd, "openspec"));
@@ -89,6 +91,17 @@ describe("pinned skill discovery and access", () => {
 			cwd,
 			providers: [SPEC_DRIVEN_SKILL_PROVIDER],
 		});
+		const commands = await loadCapability<SlashCommand>("slash-commands", {
+			cwd,
+			providers: [SPEC_DRIVEN_SKILL_PROVIDER],
+		});
+		expect(commands.all.map(command => command.name).sort()).toEqual([
+			"opsx-archive",
+			"opsx-explore",
+			"opsx-propose",
+			"opsx-sync",
+			"opsx-update",
+		]);
 		expect(
 			discovered.all
 				.filter(skill => skill._source.pluginName === "superpowers")
@@ -183,7 +196,9 @@ describe("pinned skill discovery and access", () => {
 			expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, context)).toBe(skill.filePath);
 			expect((await handler.resolve(url, { ...context, session: { ...session } })).sourcePath).toBe(skill.filePath);
-			expect((await handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).sourcePath).toBe(planning.filePath);
+			expect((await handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).sourcePath).toBe(
+				planning.filePath,
+			);
 		} finally {
 			revoke();
 		}
@@ -247,10 +262,14 @@ describe("pinned skill discovery and access", () => {
 		expect((await handler.resolve(url, bundledContext)).sourcePath).toBe(bundled.filePath);
 		expect(await handler.locate(url, bundledContext)).toBe(bundled.filePath);
 		const personalInvocation = await buildSkillPromptMessage(custom, { args: "" }, "user");
-		expect((await handler.resolve(url, {
-			skills: [bundled],
-			getSessionBranch: () => [provenance(custom, personalInvocation.details)],
-		})).sourcePath).toBe(bundled.filePath);
+		expect(
+			(
+				await handler.resolve(url, {
+					skills: [bundled],
+					getSessionBranch: () => [provenance(custom, personalInvocation.details)],
+				})
+			).sourcePath,
+		).toBe(bundled.filePath);
 		const explicit = await buildSkillPromptMessage(bundled, { args: "" }, "user", {
 			getSessionBranch: () => branch,
 		});
@@ -314,7 +333,9 @@ describe("pinned skill discovery and access", () => {
 				const context = { session, skills: [skill, other] };
 				const located = await handler.locate(url, context);
 				expect(located).toBe(path.join(skill.baseDir, relative));
-				expect(await handler.locate(url, { ...context, session: { ...session } })).toBe(path.join(skill.baseDir, relative));
+				expect(await handler.locate(url, { ...context, session: { ...session } })).toBe(
+					path.join(skill.baseDir, relative),
+				);
 			}
 			await expect(
 				handler.resolve(parseInternalUrl(`skill://${other.name}`), { session, skills: [skill, other] }),
@@ -339,7 +360,9 @@ describe("pinned skill discovery and access", () => {
 		const url = parseInternalUrl(`skill://${allowed.name}`);
 		try {
 			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
-			expect((await handler.resolve(url, { session: { ...session }, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
+			expect((await handler.resolve(url, { session: { ...session }, skills: [allowed] })).sourcePath).toBe(
+				allowed.filePath,
+			);
 			const endSolution = bindSpecSkillPolicy(session, { phase: "solution", allowedSkills: [] });
 			try {
 				// A stale disposer must not restore the requirements grant or remove the replacement policy.
@@ -429,7 +452,9 @@ describe("pinned skill discovery and access", () => {
 			expect((await handler.resolve(url, { session, skills: [skill] })).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, { session, skills: [skill] })).toBe(skill.filePath);
 			expect((await handler.resolve(url, { session, skills: [override] })).sourcePath).toBe(skill.filePath);
-			expect((await handler.resolve(url, { session: { ...session }, skills: [skill] })).sourcePath).toBe(skill.filePath);
+			expect((await handler.resolve(url, { session: { ...session }, skills: [skill] })).sourcePath).toBe(
+				skill.filePath,
+			);
 			revoke();
 			await expect(handler.locate(url, { session, skills: [skill] })).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		} finally {
