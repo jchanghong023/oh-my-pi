@@ -197,7 +197,13 @@ export async function runOpenSpec(
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
-	return run([process.execPath, entry, ...args], cwd, signal, { BUN_BE_BUN: "1" });
+	const commandArgs = [...args];
+	if (commandArgs[0] === "init") {
+		// OMP already supplies these surfaces; keep native project setup without installing duplicate files.
+		const positionalOnly = commandArgs.indexOf("--");
+		commandArgs.splice(positionalOnly < 0 ? commandArgs.length : positionalOnly, 0, "--tools=none");
+	}
+	return run([process.execPath, entry, ...commandArgs], cwd, signal, { BUN_BE_BUN: "1" });
 }
 
 /** Refuse a project/user override instead of silently using a different Dev workflow. */

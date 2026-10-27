@@ -70,7 +70,14 @@ async function fixture(): Promise<Skill> {
 
 describe("pinned skill discovery and access", () => {
 	it("catalogs and exposes all Superpowers while preserving other discovery boundaries", async () => {
-		const ordinaryNames = ["opsx-apply", "opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
+		const ordinaryNames = [
+			"openspec-apply-change",
+			"openspec-archive-change",
+			"openspec-explore",
+			"openspec-propose",
+			"openspec-sync-specs",
+			"openspec-update-change",
+		];
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
@@ -257,7 +264,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("preserves explicit OpenSpec invocation arguments without requiring invocation for reads", async () => {
-		const skill = await loadSpecDrivenSkill("openspec", "opsx-propose");
+		const skill = await loadSpecDrivenSkill("openspec", "openspec-propose");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const context = { skills: [skill], getSessionBranch: () => [] };
 		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);

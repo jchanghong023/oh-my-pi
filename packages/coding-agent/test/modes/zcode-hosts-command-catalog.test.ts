@@ -43,10 +43,17 @@ function byName(commands: readonly CommandDescriptor[]): Map<string, CommandDesc
 }
 
 describe("CommandCatalogService", () => {
-	test("offers manual OpenSpec skills instead of builtins and rejects removed entrypoints", async () => {
+	test("offers OpenSpec skills and companion file commands while rejecting optional entrypoints", async () => {
 		const cwd = process.cwd();
 		const service = new CommandCatalogService({ cwd });
-		const visible = ["opsx-apply", "opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
+		const visible = [
+			"openspec-apply-change",
+			"openspec-archive-change",
+			"openspec-explore",
+			"openspec-propose",
+			"openspec-sync-specs",
+			"openspec-update-change",
+		];
 		const session = {
 			customCommands: [],
 			setSlashCommands() {},
@@ -55,7 +62,7 @@ describe("CommandCatalogService", () => {
 			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 		};
 		const catalog = await service.buildCatalog(session);
-		const text = "/skill:opsx-";
+		const text = "/skill:openspec-";
 		const completion = await service.complete({ text, cursor: text.length, session });
 		expect(
 			catalog
@@ -67,6 +74,20 @@ describe("CommandCatalogService", () => {
 			expect(await service.resolve(`/skill:${name} change-name`, session)).toMatchObject({ kind: "skill" });
 			expect(completion.items.some(item => item.label.includes(name))).toBe(true);
 		}
+		const companionNames = ["opsx-apply", "opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
+		expect(
+			catalog
+				.filter(command => command.source === "file" && command.name.startsWith("opsx-"))
+				.map(command => command.name)
+				.sort(),
+		).toEqual(companionNames);
+		const companionText = "/opsx-";
+		const companionCompletion = await service.complete({
+			text: companionText,
+			cursor: companionText.length,
+			session,
+		});
+		expect(companionCompletion.items.map(item => item.label).sort()).toEqual(companionNames);
 		for (const name of [...visible, "opsx-new", "opsx-continue"]) {
 			expect(await service.resolve(`/${name} change-name`, session)).toMatchObject({ kind: "unknown", name });
 		}

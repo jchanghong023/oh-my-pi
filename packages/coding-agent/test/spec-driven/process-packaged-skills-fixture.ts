@@ -34,12 +34,12 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
 			const coreOpenSpec = new Set([
-				"opsx-propose",
-				"opsx-explore",
-				"opsx-apply",
-				"opsx-update",
-				"opsx-sync",
-				"opsx-archive",
+				"openspec-propose",
+				"openspec-explore",
+				"openspec-apply-change",
+				"openspec-update-change",
+				"openspec-sync-specs",
+				"openspec-archive-change",
 			]);
 			const isHiddenOpenSpec = (entry: { source: string; name: string }) =>
 				entry.source === "openspec" && !coreOpenSpec.has(entry.name);

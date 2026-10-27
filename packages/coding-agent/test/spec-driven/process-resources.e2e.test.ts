@@ -7,15 +7,18 @@ import inventory from "../../src/spec-driven/vendor/inventory.json";
 import {
 	fixture,
 	GATE_BUDGET,
+	git,
+	isConversation,
 	launch,
 	PublicPeer,
 	registerInvalidFileTests,
 	run,
 	test,
+	textValues,
 	workspace,
 } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { createProviderFixture, MARKER, type Reply, REQUIREMENT, respond, rolePayload } from "./provider-fixture";
+import { contentText, createProviderFixture, MARKER, type Reply, REQUIREMENT, respond, rolePayload } from "./provider-fixture";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
@@ -96,6 +99,69 @@ describe("spec-driven actual OMP public entry", () => {
 	registerInvalidFileTests(["solution", "planner"]);
 
 	registerPackagedSkillTest(false);
+
+	test(
+		"packaged OpenSpec command expands quoted arguments through the actual OMP entry",
+		async () => {
+			await using root = await TempDir.create("@omp-openspec-command-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new PublicPeer(config.cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			const argumentsText = `${MARKER} proposal with spaces 中文需求`;
+			const since = await peer.send(session, `/opsx-propose "${argumentsText}"`);
+			await peer.next(
+				frame => isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+				since,
+			);
+			const request = provider.requests.find(item =>
+				item.messages.some(message => message.role === "user" && contentText(message.content).includes(argumentsText)),
+			);
+			if (!request) throw new Error("The companion command never reached the native model request");
+			const input = request.messages
+				.filter(message => message.role === "user")
+				.map(message => contentText(message.content))
+				.join("\n");
+			expect(input).toContain(`**Provided arguments**: ${argumentsText}`);
+			expect(input).toContain("openspec instructions");
+			expect(input).not.toContain("**Provided arguments**: $@");
+			expect(rolePayload(request)).toBeUndefined();
+			expect(provider.failures).toEqual([]);
+			expect(await git(config.cwd, config.env, ["status", "--porcelain"])).toBe("");
+		},
+		GATE_BUDGET,
+	);
+
+	test(
+		"public omp openspec init preserves project setup without installing skills or commands",
+		async () => {
+			await using root = await TempDir.create("@omp-openspec-init-");
+			const config = await fixture(root, "http://127.0.0.1:1");
+			const commands = path.join(config.cwd, ".omp/commands");
+			await fs.mkdir(commands, { recursive: true });
+			const custom = path.join(commands, "custom.md");
+			await fs.writeFile(custom, "Keep my command.\n");
+			const invoke = (args: string[]) => run(config.cwd, config.env, [...launch, "openspec", ...args]);
+			const initialized = await invoke(["init", "--language", "Chinese"]);
+			expect(initialized.exitCode).toBe(0);
+			const configPath = path.join(config.cwd, "openspec/config.yaml");
+			const contents = await fs.readFile(configPath, "utf8");
+			expect(contents).toMatch(/^schema:\s*spec-driven\s*$/m);
+			expect(contents).toContain("Language: Chinese");
+			for (const directory of ["specs", "changes/archive"])
+				expect((await fs.stat(path.join(config.cwd, "openspec", directory))).isDirectory()).toBe(true);
+			expect(await fs.readdir(path.join(config.cwd, ".omp"))).toEqual(["commands"]);
+			expect(await fs.readdir(commands)).toEqual(["custom.md"]);
+			const repeated = await invoke(["init", "--tools=oh-my-pi", "--", "."]);
+			expect(repeated.exitCode).toBe(0);
+			expect(await fs.readFile(configPath, "utf8")).toBe(contents);
+			expect(await fs.readdir(path.join(config.cwd, ".omp"))).toEqual(["commands"]);
+			expect(await fs.readdir(commands)).toEqual(["custom.md"]);
+			expect(await fs.readFile(custom, "utf8")).toBe("Keep my command.\n");
+		},
+		GATE_BUDGET,
+	);
 
 	test(
 		"detached public omp openspec dispatch supplies native commands, schema and instructions",

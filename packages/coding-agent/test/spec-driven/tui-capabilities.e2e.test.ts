@@ -86,7 +86,7 @@ test.skipIf(!tuiTest)(
 			"The system SHALL preserve internal whitespace.",
 			"The system SHALL trim outer whitespace while preserving internal whitespace.",
 		);
-		const skill = "skill://opsx-update:raw";
+		const skill = "skill://openspec-update-change:raw";
 		await withTui(
 			{
 				async setup(cwd) {
@@ -124,7 +124,7 @@ test.skipIf(!tuiTest)(
 			async ({ cwd, provider, tui, state }) => {
 				await tui(
 					"submit",
-					"/skill:opsx-update manual-maintenance-beacon 修改已有 manual-maintenance 需求：增加外侧空白裁剪，保持内部空白；仅维护需求，不实施、不测试、不建 Dev 流程。",
+					"/skill:openspec-update-change manual-maintenance-beacon 修改已有 manual-maintenance 需求：增加外侧空白裁剪，保持内部空白；仅维护需求，不实施、不测试、不建 Dev 流程。",
 				);
 				await tui("expect", "text", "manual-maintenance-complete", "--timeout", "60000");
 				await tui("wait", "idle", "--timeout", "30000");
@@ -132,7 +132,7 @@ test.skipIf(!tuiTest)(
 				expect(
 					parseFrontmatter(result(completed, "read", skill), { source: skill, repair: false, level: "off" })
 						.frontmatter.name,
-				).toBe("opsx-update");
+				).toBe("openspec-update-change");
 				expect(result(completed, "read", `${target}:raw`)).toContain(
 					"The system SHALL preserve internal whitespace.",
 				);
