@@ -20,8 +20,15 @@ export async function buildSpecDrivenArchive(): Promise<Uint8Array> {
 	for (let offset = 0; offset + 512 <= tar.length;) {
 		const header = tar.subarray(offset, offset + 512);
 		if (header.every(byte => byte === 0)) break;
-		const size = Number.parseInt(Buffer.from(header.subarray(124, 136)).toString("ascii").replace(/\0.*$/, "").trim() || "0", 8);
-		for (const [start, width] of [[108, 8], [116, 8], [136, 12]] as const) {
+		const size = Number.parseInt(
+			Buffer.from(header.subarray(124, 136)).toString("ascii").replace(/\0.*$/, "").trim() || "0",
+			8,
+		);
+		for (const [start, width] of [
+			[108, 8],
+			[116, 8],
+			[136, 12],
+		] as const) {
 			header.fill(0x30, start, start + width - 1);
 			header[start + width - 2] = 0x30;
 			header[start + width - 1] = 0;

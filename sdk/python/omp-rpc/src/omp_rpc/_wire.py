@@ -88,7 +88,7 @@ _decode_cache_warming_mode = cast("Decoder[CacheWarmingMode]", literal(_CACHE_WA
 
 
 MessageUpdates: TypeAlias = Literal["full", "delta"]
-"""`set_event_filter` projection: `delta` drops the accumulated snapshots from `message_update`."""
+"""`set_event_filter` projection: `delta` replaces the accumulated snapshots with the block a start/end event touches."""
 _MESSAGE_UPDATES_VALUES: Final[frozenset[str]] = frozenset({"full", "delta"})
 _decode_message_updates = cast("Decoder[MessageUpdates]", literal(_MESSAGE_UPDATES_VALUES))
 
@@ -608,7 +608,6 @@ class GoalModeState:
     mode: Literal["active", "exiting"]
     goal: Goal
     reason: Literal["completed"] | None = None
-    auto_orchestrate: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -781,6 +780,15 @@ class BranchMessage:
 class BranchResult:
     text: str
     cancelled: bool
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class NavigateTreeResult:
+    cancelled: bool
+    aborted: bool | None = None
+    """Only ever `true`: `abort_branch_summary` stopped the summary; nothing moved."""
+    editor_text: str | None = None
+    """The target was a user message: its text, for the editor; the leaf moved to its parent."""
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1049,37 +1057,10 @@ class ToolExecutionEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
-class SessionAbortEvent:
-    """Cancellation began for this session; this does not by itself mean the session has settled."""
-    type: Literal["session_abort"] = "session_abort"
-    reason: str | None = None
-
-
-@dataclass(slots=True, frozen=True, kw_only=True)
-class ManualCompactionStartEvent:
-    type: Literal["manual_compaction_start"] = "manual_compaction_start"
-    operation_id: str
-
-
-@dataclass(slots=True, frozen=True, kw_only=True)
-class ManualCompactionEndEvent:
-    type: Literal["manual_compaction_end"] = "manual_compaction_end"
-    operation_id: str
-    aborted: bool
-    result: CompactionResult | None = None
-    summary_ref: str | None = None
-    """Canonical journal compaction entry committed by this operation, when present."""
-    error_message: str | None = None
-    skipped: bool | None = None
-    """Compaction was skipped for a benign reason."""
-
-
-@dataclass(slots=True, frozen=True, kw_only=True)
 class AutoCompactionStartEvent:
     type: Literal["auto_compaction_start"] = "auto_compaction_start"
     reason: AutoCompactionReason
     action: AutoCompactionAction
-    operation_id: str | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1088,9 +1069,6 @@ class AutoCompactionEndEvent:
     action: AutoCompactionAction
     aborted: bool
     will_retry: bool
-    operation_id: str | None = None
-    summary_ref: str | None = None
-    """Canonical journal compaction entry committed by this operation, when present."""
     result: CompactionResult | None = None
     error_message: str | None = None
     skipped: bool | None = None
@@ -1381,6 +1359,31 @@ class LiveEndEvent:
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
+class DictationStateEvent:
+    """State of one draft-only microphone capture."""
+    type: Literal["dictation_state"] = "dictation_state"
+    capture_id: str
+    state: Literal["starting", "recording", "transcribing"]
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class DictationTranscriptEvent:
+    """Full accumulated draft preview; replaces the previous preview for this capture."""
+    type: Literal["dictation_transcript"] = "dictation_transcript"
+    capture_id: str
+    text: str
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
+class DictationEndEvent:
+    """Exactly one terminal frame per capture; text is the accumulated result."""
+    type: Literal["dictation_end"] = "dictation_end"
+    capture_id: str
+    text: str
+    error: str | None = None
+
+
+@dataclass(slots=True, frozen=True, kw_only=True)
 class BtwDeltaEvent:
     """Text appended to the running side question's latest answer."""
     type: Literal["btw_delta"] = "btw_delta"
@@ -1474,6 +1477,7 @@ class InputUiRequest:
     title: str
     placeholder: str | None = None
     timeout: int | None = None
+    secret: bool | None = None
 
 
 @dataclass(slots=True, frozen=True, kw_only=True)
@@ -1572,6 +1576,7 @@ class ExtensionUiRequest(ExtensionUiRequestMixin):
     timeout: int | None = None
     message: str | None = None
     placeholder: str | None = None
+    secret: bool | None = None
     prefill: str | None = None
     prompt_style: bool | None = None
     questions: tuple[AskQuestion, ...] | None = None
@@ -1644,11 +1649,11 @@ UsageLimitState: TypeAlias = UsageLimitLowPriority | UsageLimitWrapUp
 """Provider-neutral state of an account past its usage limit, discriminated by `stage`."""
 
 
-RpcAgentEvent: TypeAlias = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | SessionAbortEvent | ManualCompactionStartEvent | ManualCompactionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
+RpcAgentEvent: TypeAlias = AgentStartEvent | AgentEndEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolStreamUpdateEvent | ToolExecutionEndEvent | AutoCompactionStartEvent | AutoCompactionEndEvent | AutoRetryStartEvent | AutoRetryEndEvent | CacheWarmingStartEvent | CacheWarmingEndEvent | RetryFallbackAppliedEvent | RetryFallbackSucceededEvent | ModelChangedEvent | ConfigWarningsChangedEvent | AdvisorCostChangedEvent | AdvisorYieldedEvent | TtsrTriggeredEvent | TodoReminderEvent | TodoAutoClearEvent | IrcMessageEvent | NoticeEvent | ThinkingLevelChangedEvent | GoalUpdatedEvent | QueueUpdateEvent
 """A session event, discriminated by `type`; `set_event_filter` selects which are sent."""
 
 
-RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
+RpcNotification: TypeAlias = ReadyEvent | PromptResultEvent | SessionSettledEvent | ExtensionError | ExtensionUiRequest | AvailableCommandsUpdateEvent | SubagentLifecycleEvent | SubagentProgressEvent | SubagentEvent | LivePhaseEvent | LiveLevelsEvent | LiveTranscriptEvent | LiveEndEvent | DictationStateEvent | DictationTranscriptEvent | DictationEndEvent | BtwDeltaEvent | BtwRecordEvent | CommandOutputEvent | SessionInfoUpdateEvent | ConfigUpdateEvent | RpcFrameErrorEvent | RpcAgentEvent | UnknownNotification
 """Unsolicited outbound frame (everything except responses and host tool/URI requests), discriminated by `type`."""
 
 
@@ -1929,7 +1934,6 @@ def parse_goal_mode_state(value: object, path: str = "GoalModeState") -> GoalMod
         mode=required(payload, "mode", cast('Decoder[Literal["active", "exiting"]]', literal(frozenset({"active", "exiting"}))), path),
         goal=required(payload, "goal", parse_goal, path),
         reason=optional(payload, "reason", cast('Decoder[Literal["completed"]]', literal(frozenset({"completed"}))), path),
-        auto_orchestrate=optional(payload, "autoOrchestrate", decode_bool, path),
     )
 
 
@@ -2114,6 +2118,15 @@ def parse_branch_result(value: object, path: str = "BranchResult") -> BranchResu
     return BranchResult(
         text=required(payload, "text", decode_str, path),
         cancelled=required(payload, "cancelled", decode_bool, path),
+    )
+
+
+def parse_navigate_tree_result(value: object, path: str = "NavigateTreeResult") -> NavigateTreeResult:
+    payload = expect_object(value, path)
+    return NavigateTreeResult(
+        cancelled=required(payload, "cancelled", decode_bool, path),
+        aborted=optional(payload, "aborted", decode_bool, path),
+        editor_text=optional(payload, "editorText", decode_str, path),
     )
 
 
@@ -2415,42 +2428,12 @@ def parse_tool_execution_end_event(value: object, path: str = "ToolExecutionEndE
     )
 
 
-def parse_session_abort_event(value: object, path: str = "SessionAbortEvent") -> SessionAbortEvent:
-    payload = expect_object(value, path)
-    required(payload, "type", cast('Decoder[Literal["session_abort"]]', literal(frozenset({"session_abort"}))), path)
-    return SessionAbortEvent(
-        reason=optional(payload, "reason", decode_str, path),
-    )
-
-
-def parse_manual_compaction_start_event(value: object, path: str = "ManualCompactionStartEvent") -> ManualCompactionStartEvent:
-    payload = expect_object(value, path)
-    required(payload, "type", cast('Decoder[Literal["manual_compaction_start"]]', literal(frozenset({"manual_compaction_start"}))), path)
-    return ManualCompactionStartEvent(
-        operation_id=required(payload, "operationId", decode_str, path),
-    )
-
-
-def parse_manual_compaction_end_event(value: object, path: str = "ManualCompactionEndEvent") -> ManualCompactionEndEvent:
-    payload = expect_object(value, path)
-    required(payload, "type", cast('Decoder[Literal["manual_compaction_end"]]', literal(frozenset({"manual_compaction_end"}))), path)
-    return ManualCompactionEndEvent(
-        operation_id=required(payload, "operationId", decode_str, path),
-        aborted=required(payload, "aborted", decode_bool, path),
-        result=optional(payload, "result", parse_compaction_result, path),
-        summary_ref=optional(payload, "summaryRef", decode_str, path),
-        error_message=optional(payload, "errorMessage", decode_str, path),
-        skipped=optional(payload, "skipped", decode_bool, path),
-    )
-
-
 def parse_auto_compaction_start_event(value: object, path: str = "AutoCompactionStartEvent") -> AutoCompactionStartEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["auto_compaction_start"]]', literal(frozenset({"auto_compaction_start"}))), path)
     return AutoCompactionStartEvent(
         reason=required(payload, "reason", _decode_auto_compaction_reason, path),
         action=required(payload, "action", _decode_auto_compaction_action, path),
-        operation_id=optional(payload, "operationId", decode_str, path),
     )
 
 
@@ -2461,8 +2444,6 @@ def parse_auto_compaction_end_event(value: object, path: str = "AutoCompactionEn
         action=required(payload, "action", _decode_auto_compaction_action, path),
         aborted=required(payload, "aborted", decode_bool, path),
         will_retry=required(payload, "willRetry", decode_bool, path),
-        operation_id=optional(payload, "operationId", decode_str, path),
-        summary_ref=optional(payload, "summaryRef", decode_str, path),
         result=optional(payload, "result", parse_compaction_result, path),
         error_message=optional(payload, "errorMessage", decode_str, path),
         skipped=optional(payload, "skipped", decode_bool, path),
@@ -2793,6 +2774,34 @@ def parse_live_end_event(value: object, path: str = "LiveEndEvent") -> LiveEndEv
     )
 
 
+def parse_dictation_state_event(value: object, path: str = "DictationStateEvent") -> DictationStateEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_state"]]', literal(frozenset({"dictation_state"}))), path)
+    return DictationStateEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        state=required(payload, "state", cast('Decoder[Literal["starting", "recording", "transcribing"]]', literal(frozenset({"starting", "recording", "transcribing"}))), path),
+    )
+
+
+def parse_dictation_transcript_event(value: object, path: str = "DictationTranscriptEvent") -> DictationTranscriptEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_transcript"]]', literal(frozenset({"dictation_transcript"}))), path)
+    return DictationTranscriptEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        text=required(payload, "text", decode_str, path),
+    )
+
+
+def parse_dictation_end_event(value: object, path: str = "DictationEndEvent") -> DictationEndEvent:
+    payload = expect_object(value, path)
+    required(payload, "type", cast('Decoder[Literal["dictation_end"]]', literal(frozenset({"dictation_end"}))), path)
+    return DictationEndEvent(
+        capture_id=required(payload, "captureId", decode_str, path),
+        text=required(payload, "text", decode_str, path),
+        error=optional(payload, "error", decode_str, path),
+    )
+
+
 def parse_btw_delta_event(value: object, path: str = "BtwDeltaEvent") -> BtwDeltaEvent:
     payload = expect_object(value, path)
     required(payload, "type", cast('Decoder[Literal["btw_delta"]]', literal(frozenset({"btw_delta"}))), path)
@@ -2900,6 +2909,7 @@ def parse_input_ui_request(value: object, path: str = "InputUiRequest") -> Input
         title=required(payload, "title", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
         timeout=optional(payload, "timeout", decode_int, path),
+        secret=optional(payload, "secret", decode_bool, path),
     )
 
 
@@ -3014,6 +3024,7 @@ def parse_extension_ui_request(value: object, path: str = "ExtensionUiRequest") 
         timeout=optional(payload, "timeout", decode_int, path),
         message=optional(payload, "message", decode_str, path),
         placeholder=optional(payload, "placeholder", decode_str, path),
+        secret=optional(payload, "secret", decode_bool, path),
         prefill=optional(payload, "prefill", decode_str, path),
         prompt_style=optional(payload, "promptStyle", decode_bool, path),
         questions=optional(payload, "questions", array(parse_ask_question), path),
@@ -3112,9 +3123,6 @@ _RPC_AGENT_EVENT_CASES: Final[dict[str, Decoder[RpcAgentEvent]]] = {
         "tool_execution_update": parse_tool_execution_update_event,
         "tool_stream_update": parse_tool_stream_update_event,
         "tool_execution_end": parse_tool_execution_end_event,
-        "session_abort": parse_session_abort_event,
-        "manual_compaction_start": parse_manual_compaction_start_event,
-        "manual_compaction_end": parse_manual_compaction_end_event,
         "auto_compaction_start": parse_auto_compaction_start_event,
         "auto_compaction_end": parse_auto_compaction_end_event,
         "auto_retry_start": parse_auto_retry_start_event,
@@ -3152,6 +3160,9 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "live_levels": parse_live_levels_event,
         "live_transcript": parse_live_transcript_event,
         "live_end": parse_live_end_event,
+        "dictation_state": parse_dictation_state_event,
+        "dictation_transcript": parse_dictation_transcript_event,
+        "dictation_end": parse_dictation_end_event,
         "btw_delta": parse_btw_delta_event,
         "btw_record": parse_btw_record_event,
         "command_output": parse_command_output_event,
@@ -3169,9 +3180,6 @@ _RPC_NOTIFICATION_CASES: Final[dict[str, Decoder[RpcNotification]]] = {
         "tool_execution_update": parse_rpc_agent_event,
         "tool_stream_update": parse_rpc_agent_event,
         "tool_execution_end": parse_rpc_agent_event,
-        "session_abort": parse_rpc_agent_event,
-        "manual_compaction_start": parse_rpc_agent_event,
-        "manual_compaction_end": parse_rpc_agent_event,
         "auto_compaction_start": parse_rpc_agent_event,
         "auto_compaction_end": parse_rpc_agent_event,
         "auto_retry_start": parse_rpc_agent_event,
@@ -3374,6 +3382,17 @@ class WireClient:
             params["muted"] = muted
         return required(expect_object(self._command("live_mute", params), "live_mute"), "muted", decode_bool, "live_mute")
 
+    def dictation_start(self, capture_id: str) -> None:
+        """Start draft-only speech-to-text; resolves once the microphone is recording."""
+        params: dict[str, object] = {}
+        params["captureId"] = capture_id
+        self._command("dictation_start", params, timeout=600)
+
+    def dictation_stop(self) -> str:
+        """Stop and flush draft-only dictation, returning the accumulated text."""
+        params: dict[str, object] = {}
+        return required(expect_object(self._command("dictation_stop", params, timeout=600), "dictation_stop"), "text", decode_str, "dictation_stop")
+
     def set_model(self, provider: str, model_id: str) -> ModelInfo:
         """Select a model by provider and id."""
         params: dict[str, object] = {}
@@ -3502,6 +3521,29 @@ class WireClient:
         if entry_id is not None:
             params["entryId"] = entry_id
         return parse_cancellation_result(self._command("fork", params), "fork")
+
+    def navigate_tree(self, entry_id: str, *, summarize: bool | None = None, custom_instructions: str | None = None) -> NavigateTreeResult:
+        """Move the session's leaf to an entry in the same file, optionally summarizing the branch it leaves; refused while busy."""
+        params: dict[str, object] = {}
+        params["entryId"] = entry_id
+        if summarize is not None:
+            params["summarize"] = summarize
+        if custom_instructions is not None:
+            params["customInstructions"] = custom_instructions
+        return parse_navigate_tree_result(self._command("navigate_tree", params, timeout=600), "navigate_tree")
+
+    def abort_branch_summary(self) -> None:
+        """Stop a running `navigate_tree` branch summary; the navigation is cancelled."""
+        params: dict[str, object] = {}
+        self._command("abort_branch_summary", params)
+
+    def set_label(self, entry_id: str, *, label: str | None = None) -> None:
+        """Set or clear (omit `label`) an entry's label."""
+        params: dict[str, object] = {}
+        params["entryId"] = entry_id
+        if label is not None:
+            params["label"] = label
+        self._command("set_label", params)
 
     def get_branch_messages(self) -> tuple[BranchMessage, ...]:
         """List user messages that can be branched from."""
@@ -3648,6 +3690,18 @@ class WireClient:
         """Subscribe to `live_end`: Sent exactly once when a live session ends; `error` carries the failure cause."""
         return self._listen("live_end", listener)
 
+    def on_dictation_state(self, listener: Callable[[DictationStateEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_state`: State of one draft-only microphone capture."""
+        return self._listen("dictation_state", listener)
+
+    def on_dictation_transcript(self, listener: Callable[[DictationTranscriptEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_transcript`: Full accumulated draft preview; replaces the previous preview for this capture."""
+        return self._listen("dictation_transcript", listener)
+
+    def on_dictation_end(self, listener: Callable[[DictationEndEvent], None]) -> Callable[[], None]:
+        """Subscribe to `dictation_end`: Exactly one terminal frame per capture; text is the accumulated result."""
+        return self._listen("dictation_end", listener)
+
     def on_btw_delta(self, listener: Callable[[BtwDeltaEvent], None]) -> Callable[[], None]:
         """Subscribe to `btw_delta`: Text appended to the running side question's latest answer."""
         return self._listen("btw_delta", listener)
@@ -3715,18 +3769,6 @@ class WireClient:
     def on_tool_execution_end(self, listener: Callable[[ToolExecutionEndEvent], None]) -> Callable[[], None]:
         """Subscribe to `tool_execution_end` frames."""
         return self._listen("tool_execution_end", listener)
-
-    def on_session_abort(self, listener: Callable[[SessionAbortEvent], None]) -> Callable[[], None]:
-        """Subscribe to `session_abort`: Cancellation began for this session; this does not by itself mean the session has settled."""
-        return self._listen("session_abort", listener)
-
-    def on_manual_compaction_start(self, listener: Callable[[ManualCompactionStartEvent], None]) -> Callable[[], None]:
-        """Subscribe to `manual_compaction_start` frames."""
-        return self._listen("manual_compaction_start", listener)
-
-    def on_manual_compaction_end(self, listener: Callable[[ManualCompactionEndEvent], None]) -> Callable[[], None]:
-        """Subscribe to `manual_compaction_end` frames."""
-        return self._listen("manual_compaction_end", listener)
 
     def on_auto_compaction_start(self, listener: Callable[[AutoCompactionStartEvent], None]) -> Callable[[], None]:
         """Subscribe to `auto_compaction_start` frames."""
@@ -3874,6 +3916,9 @@ __all__ = [
     "ContextUsage",
     "CustomMessage",
     "DeveloperMessage",
+    "DictationEndEvent",
+    "DictationStateEvent",
+    "DictationTranscriptEvent",
     "EditorUiRequest",
     "Effort",
     "ExtensionError",
@@ -3906,8 +3951,6 @@ __all__ = [
     "LoginProvider",
     "LogoutAccount",
     "LogoutResult",
-    "ManualCompactionEndEvent",
-    "ManualCompactionStartEvent",
     "MessageContent",
     "MessageEndEvent",
     "MessageStartEvent",
@@ -3918,6 +3961,7 @@ __all__ = [
     "ModelCost",
     "ModelCycleResult",
     "ModelInfo",
+    "NavigateTreeResult",
     "NegotiateProtocolResult",
     "NoticeEvent",
     "NotifyType",
@@ -3945,7 +3989,6 @@ __all__ = [
     "RpcNotification",
     "SelectOptionDetail",
     "SelectUiRequest",
-    "SessionAbortEvent",
     "SessionCredits",
     "SessionEntries",
     "SessionInfoUpdateEvent",
@@ -4060,6 +4103,9 @@ __all__ = [
     "parse_context_usage",
     "parse_custom_message",
     "parse_developer_message",
+    "parse_dictation_end_event",
+    "parse_dictation_state_event",
+    "parse_dictation_transcript_event",
     "parse_editor_ui_request",
     "parse_extension_error",
     "parse_extension_ui_request",
@@ -4085,8 +4131,6 @@ __all__ = [
     "parse_login_provider",
     "parse_logout_account",
     "parse_logout_result",
-    "parse_manual_compaction_end_event",
-    "parse_manual_compaction_start_event",
     "parse_message_end_event",
     "parse_message_start_event",
     "parse_message_update_event",
@@ -4095,6 +4139,7 @@ __all__ = [
     "parse_model_cost",
     "parse_model_cycle_result",
     "parse_model_info",
+    "parse_navigate_tree_result",
     "parse_negotiate_protocol_result",
     "parse_notice_event",
     "parse_notification",
@@ -4118,7 +4163,6 @@ __all__ = [
     "parse_rpc_frame_error_event",
     "parse_select_option_detail",
     "parse_select_ui_request",
-    "parse_session_abort_event",
     "parse_session_credits",
     "parse_session_entries",
     "parse_session_info_update_event",

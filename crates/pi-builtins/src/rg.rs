@@ -26,8 +26,8 @@ use grep_searcher::{
 	BinaryDetection, Encoding, Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch,
 };
 use crate::grep::{
-	CompiledMatcher, RecordFormat, SEARCH_BUFFER_LIMIT, describe_search_error, exit_status,
-	for_each_nonempty_match, pcre2_jit_enabled, read_pattern_source,
+	BoundedSearchReader, CompiledMatcher, RecordFormat, SEARCH_HEAP_LIMIT, describe_search_error,
+	exit_status, for_each_nonempty_match, pcre2_jit_enabled, read_pattern_source,
 };
 use crate::host::{Host, StreamWriter, Utility, forward_slash_display};
 
@@ -914,11 +914,11 @@ fn build_searcher(cli: &Rg, opts: &SearchOptions, mode: BinaryMode) -> Result<Se
 		.passthru(opts.passthru)
 		.invert_match(cli.invert_match)
 		.multi_line(cli.multiline)
-		.heap_limit(Some(SEARCH_BUFFER_LIMIT))
 		.binary_detection(binary_detection(cli, mode))
 		.max_matches(cli.max_count)
 		.encoding(encoding)
-		.bom_sniffing(bom_sniffing);
+		.bom_sniffing(bom_sniffing)
+		.heap_limit(Some(SEARCH_HEAP_LIMIT));
 	if cli.null_data {
 		builder.line_terminator(LineTerminator::byte(b'\0'));
 	} else if cli.crlf && !cli.no_crlf {
@@ -931,13 +931,15 @@ fn read_pattern_file(host: &mut Host, path: &OsStr) -> Result<Vec<String>, Strin
 	let bytes = if path == OsStr::new("-") {
 		read_pattern_source(&mut host.stdin)
 	} else {
-		let resolved = host.resolve(path);
-		host.fs().open(&resolved).and_then(read_pattern_source)
-	}
-	.map_err(|err| format!("rg: {}: {err}", path.to_string_lossy()))?;
-	let text = String::from_utf8(bytes).map_err(|_| {
-		format!("rg: {}: stream did not contain valid UTF-8", path.to_string_lossy())
-	})?;
+		host.fs().open(host.resolve(path)).and_then(read_pattern_source)
+	};
+	let text = bytes
+		.and_then(|bytes| {
+			String::from_utf8(bytes).map_err(|_| {
+				io::Error::new(io::ErrorKind::InvalidData, "stream did not contain valid UTF-8")
+			})
+		})
+		.map_err(|err| format!("rg: {}: {err}", path.to_string_lossy()))?;
 	Ok(text
 		.lines()
 		.map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
@@ -1228,6 +1230,7 @@ fn process_reader<M: Matcher, R: Read, W: Write>(
 	stats: &mut Stats,
 	out: &mut W,
 ) -> io::Result<bool> {
+	let reader = BoundedSearchReader::new(reader, searcher, matcher);
 	if opts.json {
 		let mut builder = JSONBuilder::new();
 		builder.replacement(opts.replacement.clone());
@@ -1305,12 +1308,13 @@ fn process_file<M: Matcher, W: Write>(
 	match result {
 		Ok(any_match) => Ok(SearchOutcome { any_match, had_error: false }),
 		Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Err(error),
-		Err(error) => Ok(SearchOutcome {
-			any_match: false,
-			had_error: report_path_error(
-				host, display, path, error, opts, searcher.multi_line_with_matcher(matcher),
-			),
-		}),
+		Err(error) => {
+			let message = describe_search_error(&error);
+			Ok(SearchOutcome {
+				any_match: false,
+				had_error: report_path_error(host, display, path, &message, opts),
+			})
+		},
 	}
 }
 
@@ -1382,16 +1386,14 @@ fn report_path_error(
 	host: &mut Host,
 	display: Option<&[u8]>,
 	fallback: &Path,
-	err: io::Error,
+	err: &str,
 	opts: &SearchOptions,
-	multiline: bool,
 ) -> bool {
 	if !opts.no_messages {
 		let name = display
 			.map(|bytes| String::from_utf8_lossy(bytes).into_owned())
 			.unwrap_or_else(|| fallback.display().to_string());
-		let message = describe_search_error(&err, multiline);
-		let _ = writeln!(host.stderr, "rg: {name}: {message}");
+		let _ = writeln!(host.stderr, "rg: {name}: {err}");
 	}
 	true
 }
@@ -1750,11 +1752,7 @@ fn execute_search<M: Matcher, W: Write>(
 				Err(error) => {
 					had_error = true;
 					if !opts.no_messages {
-						let message = describe_search_error(
-							&error,
-							explicit_searcher.multi_line_with_matcher(matcher),
-						);
-						let _ = writeln!(host.stderr, "rg: <stdin>: {message}");
+						let _ = writeln!(host.stderr, "rg: <stdin>: {}", describe_search_error(&error));
 					}
 				},
 			}
@@ -1934,6 +1932,8 @@ impl Utility for Rg {
 mod tests {
 	use super::*;
 	use crate::host::{Host, run_util};
+	#[cfg(unix)]
+	use crate::host::tree_with_sparse_file;
 
 	fn run(args: &[&str], stdin: &str) -> (i32, String, String) {
 		let (code, capture) = run_util::<Rg>(args, stdin, "/");
@@ -1953,7 +1953,7 @@ mod tests {
 		let (code, capture) = run_util::<Rg>(&["-a", "hit", "large", "small"], "", tree.path());
 		assert_eq!(code, 2);
 		assert_eq!(capture.out(), "small:hit\n");
-		assert!(capture.err().contains("search buffer limit"), "{}", capture.err());
+		assert!(capture.err().contains("line longer than 256 MiB"), "{}", capture.err());
 
 		let mut file = std::fs::File::create(&large).unwrap();
 		io::copy(
@@ -1967,7 +1967,7 @@ mod tests {
 			run_util::<Rg>(&["-a", "-U", "hit\\nnext", "large", "small"], "", tree.path());
 		assert_eq!(code, 2);
 		assert_eq!(capture.out(), "small:hit\nnext\n");
-		assert!(capture.err().contains("search buffer limit"), "{}", capture.err());
+		assert!(capture.err().contains("file larger than 256 MiB"), "{}", capture.err());
 
 		std::fs::File::create(&large)
 			.unwrap()
@@ -1987,7 +1987,7 @@ mod tests {
 			.unwrap();
 		let (code, capture) = run_util::<Rg>(&["-f", "patterns", "input"], "", tree.path());
 		assert_eq!(code, 2);
-		assert!(capture.err().contains("pattern source larger than"), "{}", capture.err());
+		assert!(capture.err().contains("pattern file larger than"), "{}", capture.err());
 
 		std::fs::write(tree.path().join("patterns"), [0xff]).unwrap();
 		let (code, capture) = run_util::<Rg>(&["-f", "patterns", "input"], "", tree.path());
@@ -2261,6 +2261,52 @@ mod tests {
 		);
 		assert_eq!(code, 0, "{}", capture.err());
 		assert_eq!(capture.out(), "sub|a.txt:hit\n");
+	}
+
+	/// `rg -a` searches a sparse file as one endless line of NUL bytes; with no
+	/// bound on the line buffer the host process grew until the kernel killed
+	/// it. Now that file is a per-file error and the other files are searched.
+	#[cfg(unix)]
+	#[test]
+	fn text_search_of_a_line_longer_than_the_limit_is_a_file_error() {
+		let tree = tree_with_sparse_file();
+
+		let (code, capture) = run_util::<Rg>(&["-a", "needle", "."], "", tree.path());
+
+		assert_eq!(code, 2, "{}", capture.err());
+		assert!(capture.out().lines().any(|line| line.ends_with("small:needle")), "{}", capture.out());
+		let err = capture.err();
+		assert!(err.contains("big: line longer than 256 MiB, not searched"), "{err}");
+	}
+
+	/// A multi-line search (`-U`) that can match across lines buffers the whole
+	/// file, which on a sparse file grew the host without bound.
+	#[cfg(unix)]
+	#[test]
+	fn multiline_text_search_of_a_file_larger_than_the_limit_is_a_file_error() {
+		let tree = tree_with_sparse_file();
+
+		let (code, capture) = run_util::<Rg>(&["-U", "-a", "needle\\n", "."], "", tree.path());
+
+		assert_eq!(code, 2, "{}", capture.err());
+		assert!(capture.out().lines().any(|line| line.ends_with("small:needle")), "{}", capture.out());
+		let err = capture.err();
+		assert!(err.contains("big: file larger than 256 MiB, not searched"), "{err}");
+	}
+
+	/// `-f` used to read the whole pattern file into memory; on a sparse file
+	/// that killed the host. Now an over-size pattern file is refused.
+	#[cfg(unix)]
+	#[test]
+	fn pattern_file_larger_than_the_limit_is_refused() {
+		let tree = tree_with_sparse_file();
+
+		let (code, capture) = run_util::<Rg>(&["-f", "big", "small"], "", tree.path());
+
+		assert_eq!(code, 2);
+		assert_eq!(capture.out(), "");
+		let err = capture.err();
+		assert!(err.contains("rg: big: pattern file larger than 256 MiB"), "{err}");
 	}
 }
 

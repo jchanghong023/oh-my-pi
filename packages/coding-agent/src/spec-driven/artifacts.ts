@@ -205,7 +205,9 @@ export class SpecArtifactStore {
 		await fs.mkdir(changeDir);
 		const now = new Date();
 		const created = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-		await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, { flag: "wx" });
+		await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, {
+			flag: "wx",
+		});
 		return {
 			requirements: [
 				`${this.changeDir}/proposal.md`,

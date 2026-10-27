@@ -13,6 +13,8 @@ const CWD = "/tmp/eval-startup-warning";
 
 let savedPiPy: string | undefined;
 let savedPiJs: string | undefined;
+let savedOffline: string | undefined;
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 function restoreEnv(name: "PI_PY" | "PI_JS", value: string | undefined): void {
 	if (value === undefined) delete Bun.env[name];
@@ -26,6 +28,8 @@ function mockProbe(reason = "Python executable not found on PATH") {
 beforeEach(() => {
 	savedPiPy = Bun.env.PI_PY;
 	savedPiJs = Bun.env.PI_JS;
+	savedOffline = process.env.OMP_OFFLINE;
+	delete process.env.OMP_OFFLINE;
 	delete Bun.env.PI_PY;
 	delete Bun.env.PI_JS;
 });
@@ -34,6 +38,9 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	restoreEnv("PI_PY", savedPiPy);
 	restoreEnv("PI_JS", savedPiJs);
+	if (savedOffline === undefined) delete process.env.OMP_OFFLINE;
+	else process.env.OMP_OFFLINE = savedOffline;
+	Object.defineProperty(process, "platform", platformDescriptor);
 });
 
 describe("resolvePythonEvalWarning", () => {
@@ -42,6 +49,19 @@ describe("resolvePythonEvalWarning", () => {
 		expect(await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated({ "eval.js": false }) })).toBe(
 			`Eval tool unavailable: Python executable not found on PATH, and JavaScript eval is disabled. ${FIX_HINT}`,
 		);
+	});
+
+	it.each([
+		["linux", " TrUe ", "3.11"],
+		["linux", "0", "3.8"],
+		["darwin", "1", "3.8"],
+		["win32", "1", "3.8"],
+	] as const)("recommends the required Python version on %s offline=%s", async (platform, offline, version) => {
+		Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+		process.env.OMP_OFFLINE = offline;
+		mockProbe();
+		const warning = await resolvePythonEvalWarning({ cwd: CWD, settings: Settings.isolated({ "eval.js": false }) });
+		expect(warning).toContain(`Install Python ${version}+ or set python.interpreter`);
 	});
 
 	it("stays silent without probing when Python eval is intentionally disabled", async () => {

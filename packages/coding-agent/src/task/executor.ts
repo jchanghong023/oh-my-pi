@@ -3487,14 +3487,22 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 				// Once registered, the wake job carries this turn's outcome to the
 				// parent whatever it is: the yield result, the failure that
 				// superseded it, or, for a turn that never yielded, the answer a
-				// relay would have carried.
+				// relay would have carried. `agentOutputPublished` tells the
+				// delivery whether this turn wrote `<id>.md`: a turn that neither
+				// yielded nor produced a message result leaves the previous turn's
+				// output there, which `agent://<id>` must not be offered for.
+				const outputPublished = result?.outputPath !== undefined;
 				if (wakeJob && (yielded || messageResult) && result) {
 					const text = formatTaskResultSummary(result, { totalDurationMs: result.durationMs });
 					const structured = result.structuredOutput;
 					if (result.aborted || result.exitCode !== 0 || result.error !== undefined) {
 						wakeJob.outcome.reject(new AsyncJobError(text, structured));
 					} else {
-						wakeJob.outcome.resolve(structured ? { text, structured } : { text });
+						wakeJob.outcome.resolve({
+							text,
+							agentOutputPublished: outputPublished,
+							...(structured ? { structured } : {}),
+						});
 					}
 				} else if (wakeJob && yielded) {
 					const message = finalizeError instanceof Error ? finalizeError.message : String(finalizeError);
@@ -3511,7 +3519,7 @@ export function attachIrcWakeTurnMonitor(session: AgentSession, options: IrcWake
 						alreadyMessaged: IrcBus.global().sentSince(id, wakeJob.ownerId, turnStartTime),
 					});
 					if (wakeTurnFailed(outcome)) wakeJob.outcome.reject(new Error(text));
-					else wakeJob.outcome.resolve({ text });
+					else wakeJob.outcome.resolve({ text, agentOutputPublished: outputPublished });
 				}
 				// Unconditional: a failed, cancelled, empty, or even un-finalized
 				// wake turn must still tell whoever woke it, or a `send await:true`
@@ -3972,15 +3980,17 @@ function buildSubagentSessionOptions(
 		resolveServiceTierByFamily: launch?.resolveServiceTierByFamily,
 		onFirstChatDispatch: launch?.onFirstChatDispatch,
 		systemPrompt: defaultPrompt => {
-			// A revive shows the roster the parked session's prompt held, as the cached prompt prefix
-			// does: a live one would make every revival a cache miss for a change it would not have
-			// seen had it stayed live.
-			const ircRoster =
-				inputs.reviving && inputs.ircRoster
+			// A revive shows the roster the parked session's prompt held, and a rebuild that leaves the
+			// rest of the prompt unchanged keeps the roster the prompt it replaces showed: peer rows carry
+			// each peer's live activity, so a re-collected roster changed the prompt's bytes on every such
+			// rebuild and the provider wrote the whole conversation to its prompt cache again. A rebuild
+			// whose default blocks changed loses the cached prefix anyway, so it catches the roster up.
+			const ircRoster = !inputs.ircEnabled
+				? undefined
+				: inputs.reviving && inputs.ircRoster
 					? inputs.ircRoster
-					: inputs.ircEnabled
-						? collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile)
-						: undefined;
+					: (heldIrcRoster(inputs, defaultPrompt) ??
+						collectIrcPeerRoster(AgentRegistry.global(), inputs.id, inputs.ircRoot.sessionFile));
 			const subagentPrompt = prompt.render(subagentSystemPromptTemplate, {
 				agent: inputs.agentSystemPrompt,
 				context: inputs.context,
@@ -4046,6 +4056,18 @@ async function configureNativeSubagentSession(
 		configured.mcpTools = undefined;
 	}
 	return { options: configured, onSessionCreated: overrides.onSessionCreated };
+}
+
+/**
+ * The roster the live session's base prompt shows, when that prompt starts with `defaultPrompt`:
+ * reusing it then keeps the whole prompt byte-identical. `undefined` before the first render or
+ * when the default blocks changed.
+ */
+function heldIrcRoster(inputs: SubagentPromptInputs, defaultPrompt: readonly string[]): IrcPeerRosterData | undefined {
+	const held = AgentRegistry.global().get(inputs.id)?.session?.baseSystemPrompt;
+	if (!held || held.length <= defaultPrompt.length) return undefined;
+	if (defaultPrompt.some((block, index) => held[index] !== block)) return undefined;
+	return held.map(block => inputs.ircRenders.get(block)).find(roster => roster !== undefined);
 }
 
 /** Remembers the roster `block` shows, dropping blocks the live session's base prompt no longer holds. */
@@ -4216,6 +4238,7 @@ async function reviveAdmittedSubagent(
 			: undefined;
 	let revived: AgentSession;
 	let interactionUI: CreateAgentSessionResult["interactionUI"];
+	let revivedRestrictedToolNames = false;
 	// Account pools are owner policy: take the live exact-name entry, as
 	// dispatch and persisted revival do, never the spawn-time copy.
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
@@ -4248,6 +4271,7 @@ async function reviveAdmittedSubagent(
 					configuredOptions.mcpTools = createMCPProxyTools(mcpManager);
 				}
 			}
+			revivedRestrictedToolNames = configuredOptions.restrictToolNames === true;
 			sessionPromise = createAgentSession(configuredOptions);
 			({ session: revived, interactionUI } = await sessionPromise);
 			const disposeObserver = observeSession?.(revived);
@@ -4265,10 +4289,14 @@ async function reviveAdmittedSubagent(
 		trackSubagentSettings(revived, capture);
 		trackSubagentPendingCandidate(revived, capture);
 		trackSubagentIrcRoster(revived, capture.spec.prompt);
-		const withoutParentOwnedTools = (toolNames: string[]): string[] =>
-			capture.keepTodo ? toolNames : toolNames.filter(name => name !== "todo");
-		// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
 		const revivedToolNames = revived.getEnabledToolNames();
+		const revivedAllowedToolNames = revivedRestrictedToolNames ? new Set(revivedToolNames) : undefined;
+		const withoutParentOwnedTools = (toolNames: string[]): string[] =>
+			toolNames.filter(
+				name =>
+					(capture.keepTodo || name !== "todo") && (!revivedAllowedToolNames || revivedAllowedToolNames.has(name)),
+			);
+		// Strip what the spawn stripped, before extensions start: the rebuilt session enables its defaults again.
 		const subagentToolNames = withoutParentOwnedTools(revivedToolNames);
 		if (subagentToolNames.length !== revivedToolNames.length) {
 			await revived.setActiveToolsByName(subagentToolNames);
@@ -4900,7 +4928,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			let session: AgentSession;
 			let interactionUI: CreateAgentSessionResult["interactionUI"];
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
-			let configuredToolNames = toolNames;
+			let configuredRestrictToolNames = restrictToolNames;
 			try {
 				const sessionOptions = buildSubagentSessionOptions(sessionSpec, subagentSettings, sessionManager, null, {
 					workPoolYieldItems: options.workPoolYieldItems ?? [],
@@ -4924,7 +4952,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						configuredOptions.mcpTools = createMCPProxyTools(mcpManager);
 					}
 				}
-				configuredToolNames = configuredOptions.toolNames;
+				configuredRestrictToolNames = configuredOptions.restrictToolNames === true;
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, interactionUI } = await awaitAbortable(sessionPromise));
 				disposeSessionObserver = observeSession?.(session) ?? undefined;
@@ -5096,6 +5124,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				};
 			}
 
+			const configuredAllowedToolNames = configuredRestrictToolNames
+				? new Set(session.getEnabledToolNames())
+				: undefined;
+
 			// No closure in this block may capture `session`: JSC gives every closure in a
 			// block one shared scope object, so the lifecycle reviver built above would
 			// then pin the parked, disposed session for the life of the process.
@@ -5113,7 +5145,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						activeToolNames.filter(
 							name =>
 								!isParentOwnedTool(name) &&
-								(!restrictToolNames || configuredToolNames?.includes(name) === true),
+								(!configuredAllowedToolNames || configuredAllowedToolNames.has(name)),
 						),
 				}),
 			);
@@ -5131,7 +5163,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					if (isExplicitOnlySkill(skill)) {
 						skillAccessDisposers.push(grantSpecSkillAccess(sessionManager, skill));
 					}
-					const { message } = await buildSkillPromptMessage(skill, { args: "" }, "autoload", {
+					const { message, details } = await buildSkillPromptMessage(skill, { args: "" }, "autoload", session, {
 						scope: sessionManager,
 						getSessionBranch: () => sessionManager.getBranch(),
 					});
@@ -5140,7 +5172,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							customType: SKILL_PROMPT_MESSAGE_TYPE,
 							content: message,
 							display: false,
-							details: { name: skill.name, path: skill.filePath },
+							details: { name: details.name, path: details.path },
 						},
 						{ triggerTurn: false },
 					);

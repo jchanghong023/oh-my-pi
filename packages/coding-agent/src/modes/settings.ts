@@ -35,7 +35,8 @@ export const cfgAutoResume = register({
 		tab: "interaction",
 		group: "启动与更新",
 		label: "自动恢复",
-		description: "自动恢复当前目录中最近的会话",
+		description:
+			"自动恢复当前目录中最近的会话。若无法恢复其模型且已禁用模型回退，交互式启动会发出警告并新建会话，不加载已保存的历史",
 	},
 });
 

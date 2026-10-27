@@ -17,6 +17,12 @@
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 - Report rejected offline diagnostic database and data paths as structured failures without opening unsafe paths or closing caller-owned databases.
 
+## [18.13.2] - 2026-10-27
+
+### Fixed
+
+- Fixed local embeddings using one spinning CPU thread per core, so a single recall query cost several CPU-seconds on a many-core machine ([#17109](https://github.com/can1357/oh-my-pi/pull/17109) by [@sjawhar](https://github.com/sjawhar))
+
 ## [18.13.0] - 2026-10-26
 
 ### Fixed

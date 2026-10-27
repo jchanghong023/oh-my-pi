@@ -481,7 +481,7 @@ interface CloudCodeAssistResponseChunk {
 		promptFeedback?: { blockReason?: string; blockReasonMessage?: string };
 	};
 	/** In-band stream failure (quota, internal error) delivered as a final JSON event. */
-	error?: { code?: number; message?: string; status?: string };
+	error?: { code?: number; message?: string; status?: string; details?: unknown[] };
 	traceId?: string;
 }
 
@@ -804,8 +804,15 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 				);
 				for await (const chunk of chunks) {
 					if (chunk.error) {
-						const detail = chunk.error.message || chunk.error.status || "unknown error";
-						const message = `Cloud Code Assist stream error: ${detail}`;
+						const detail =
+							chunk.error.message && chunk.error.status
+								? `${chunk.error.message} (${chunk.error.status})`
+								: chunk.error.message || chunk.error.status || "unknown error";
+						const residue =
+							Array.isArray(chunk.error.details) && chunk.error.details.length > 0
+								? ` ${JSON.stringify({ error: { status: chunk.error.status, details: chunk.error.details } })}`
+								: "";
+						const message = `Cloud Code Assist stream error: ${detail}${residue}`;
 						const providerErrorCode = AIError.OpenAIHttpError.parseEnvelope(chunk, undefined).code;
 						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
 							? new AIError.GeminiCliApiError(message, chunk.error.code, { code: providerErrorCode })

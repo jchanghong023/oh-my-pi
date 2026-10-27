@@ -238,14 +238,17 @@ describe("dialogs under a native surface", () => {
 				inputGuard: {
 					isBlocked: () => draft.length > 0,
 					handleInput: key => routed.push(key),
-					hint: "Finish or clear the current prompt to answer",
+					hint: "typing edits your prompt",
 				},
 			},
 		);
 		const line = () => stripVTControlCharacters(dialog.render(200).join("\n"));
 
 		dialog.handleInput("\x1bh");
-		expect(line()).toContain("Finish or clear the current prompt to answer");
+		expect(line()).toContain("typing edits your prompt");
+		// A Submit delivered after Hide is stale: it must not hand input to the question.
+		dialog.handleNativeEvent({ type: "action", key: "x", act: "submit", mods: [] });
+		expect(line()).not.toContain("/⏎ 显示");
 		dialog.handleInput(ENTER);
 		expect(routed).toEqual([ENTER]);
 		expect(dialog.render(200)).toHaveLength(1);
@@ -253,6 +256,68 @@ describe("dialogs under a native surface", () => {
 		draft = "";
 		dialog.handleInput("\x1bh");
 		expect(dialog.render(200).length).toBeGreaterThan(1);
+	});
+
+	it("ask: draft typing keeps its cursor until an arrow hands input to the question", () => {
+		let draft = "draft";
+		let focused = false;
+		const onSubmit = vi.fn();
+		const dialog = new AskDialogComponent(
+			[QUESTIONS[0]!],
+			{ onSubmit, onCancel: vi.fn(), onPrompt: async () => undefined },
+			{
+				inputGuard: {
+					isBlocked: () => draft.length > 0,
+					handleInput: key => {
+						draft += key;
+					},
+					hint: "typing edits your prompt",
+					syncPresentation: blocked => {
+						focused = blocked;
+					},
+				},
+			},
+		);
+		dialog.render(120);
+		expect(focused).toBe(true);
+		dialog.handleInput("x");
+		expect(draft).toBe("draftx");
+		expect(onSubmit).not.toHaveBeenCalled();
+		dialog.handleInput(DOWN);
+		dialog.describe(CX);
+		expect(focused).toBe(false);
+		expect(draft).toBe("draftx");
+		dialog.handleInput(ENTER);
+		expect(onSubmit.mock.calls[0]?.[0].results[0].selectedOptions).toEqual(["Park them"]);
+	});
+
+	it("ask: selecting a native option hands input from the draft to the dialog", () => {
+		let focused = false;
+		const routed: string[] = [];
+		const onSubmit = vi.fn();
+		const dialog = new AskDialogComponent(
+			QUESTIONS,
+			{ onSubmit, onCancel: vi.fn(), onPrompt: async () => undefined },
+			{
+				inputGuard: {
+					isBlocked: () => true,
+					handleInput: key => routed.push(key),
+					hint: "typing edits your prompt",
+					syncPresentation: blocked => {
+						focused = blocked;
+					},
+				},
+			},
+		);
+		const options = find(dialog.describe(CX), node => node.p?.role === "omp.ask.options");
+		expect(focused).toBe(true);
+		dialog.handleNativeEvent({ type: "activate", key: options!.path, item: "option:0" });
+		dialog.describe(CX);
+		expect(focused).toBe(false);
+		dialog.handleInput(ENTER);
+		dialog.handleInput(ENTER);
+		expect(onSubmit.mock.calls[0]?.[0].results[0].selectedOptions).toEqual(["Drop them"]);
+		expect(routed).toEqual([]);
 	});
 
 	it("approval: Enter and the follow-up chord are ignored until armed; then Enter takes the highlighted choice", () => {

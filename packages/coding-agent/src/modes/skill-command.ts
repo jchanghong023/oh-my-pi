@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
@@ -46,6 +47,8 @@ interface InvokeSkillCommandOptions {
 	 * does not leave the submission invisible (issue #8895).
 	 */
 	optimistic?: boolean;
+	/** With `queueOnly`: called with the messages the skill prompt pushed onto a queue (see `PromptOptions.onPromptQueued`). */
+	onPromptQueued?: (queued: readonly AgentMessage[]) => void;
 }
 
 /** Built custom-message payload and delivery options for a `/skill:` command. */
@@ -103,9 +106,12 @@ export async function invokeSkillCommandFromText(
 		const built = await buildSkillCommandPrompt(ctx, text, streamingBehavior, options?.images);
 		if (!built) return false;
 		const promptOptions: SkillPromptOptions &
-			Pick<InvokeSkillCommandOptions, "queueOnly" | "goalAutoOrchestrateInitialId"> =
+			Pick<InvokeSkillCommandOptions, "queueOnly" | "goalAutoOrchestrateInitialId" | "onPromptQueued"> =
 			options?.queueOnly || options?.goalAutoOrchestrateInitialId ? { ...built.options } : built.options;
-		if (options?.queueOnly) promptOptions.queueOnly = true;
+		if (options?.queueOnly) {
+			promptOptions.queueOnly = true;
+			promptOptions.onPromptQueued = options.onPromptQueued;
+		}
 		if (options?.goalAutoOrchestrateInitialId)
 			promptOptions.goalAutoOrchestrateInitialId = options.goalAutoOrchestrateInitialId;
 		optimistic = options?.optimistic === true && !options?.queueOnly && !ctx.session.isStreaming;

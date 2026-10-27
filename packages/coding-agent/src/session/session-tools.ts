@@ -13,6 +13,7 @@ import type { CustomTool, CustomToolContext } from "../extensibility/custom-tool
 import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import type { ExtensionRunner, SourceInfo, ToolInfo } from "../extensibility/extensions";
 import { type EvalPreludeDefinition, evalPreludeSummary } from "../eval/preludes";
+import { isEvalBridgeToolCallable } from "../eval/tool-bridge-policy";
 import { ExtensionToolWrapper } from "../extensibility/extensions/wrapper";
 import { loadSkills, type Skill, type SkillWarning, setActiveSkills } from "../extensibility/skills";
 import { type LocalProtocolOptions } from "../internal-urls";
@@ -424,6 +425,8 @@ export class SessionTools {
 	#promptSurfaceScope = new AsyncLocalStorage<PromptSurface>();
 	#toolRegistryMutationTail: Promise<void> = Promise.resolve();
 	#promptModelKey: string | undefined;
+	/** Inline-descriptor decision of the model the base prompt was rendered for. */
+	#promptInlineDescriptors: boolean | undefined;
 	#rebuildSystemPrompt: SessionToolsOptions["rebuildSystemPrompt"];
 	#getMcpServerInstructions: SessionToolsOptions["getMcpServerInstructions"];
 	/**
@@ -459,6 +462,8 @@ export class SessionTools {
 	#skillWarnings: SkillWarning[];
 	#skillsSettings: SkillsSettings | undefined;
 	#skillsReloadable: boolean;
+	/** The skill rediscovery in flight, shared by concurrent misses (see {@link shareSkillRediscovery}). */
+	#skillsRediscovery: Promise<readonly Skill[]> | undefined;
 	/**
 	 * Prompt surface committed by the last system-prompt rebuild. The
 	 * provider-visible system prompt is deliberately byte-stable across
@@ -529,6 +534,7 @@ export class SessionTools {
 		for (const tool of host.agent.state.tools) this.#enabledToolNames.add(tool.name);
 		for (const name of this.#xdev?.mountedNames ?? []) this.#enabledToolNames.add(name);
 		this.#promptModelKey = this.#currentPromptModelKey();
+		this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 	}
 
 	/** Mutable registry shared with controller hosts that inspect available tools. */
@@ -583,6 +589,29 @@ export class SessionTools {
 	/** Skills currently rendered into the system prompt. */
 	get skills(): Skill[] {
 		return this.#skills;
+	}
+
+	/** Whether {@link refreshSkills} rediscovers the list; false when it was fixed at creation (a subagent's). */
+	get skillsReloadable(): boolean {
+		return this.#skillsReloadable;
+	}
+
+	/** Stores a re-pointed fixed skill list (see `rediscoverSkills`) and refreshes prompt metadata. */
+	async replaceSkills(skills: readonly Skill[]): Promise<void> {
+		this.#skills = [...skills];
+		if (this.#host.agentKind() === "main") {
+			setActiveSkills(this.#skills);
+		}
+		await this.refreshBaseSystemPrompt();
+		this.#host.notifyCommandMetadataChanged();
+	}
+
+	/** Runs `rediscover`, or joins the rediscovery already in flight, so concurrent misses share one pass. */
+	shareSkillRediscovery(rediscover: () => Promise<readonly Skill[]>): Promise<readonly Skill[]> {
+		this.#skillsRediscovery ??= rediscover().finally(() => {
+			this.#skillsRediscovery = undefined;
+		});
+		return this.#skillsRediscovery;
 	}
 
 	/** Diagnostics produced while loading the current skills. */
@@ -696,14 +725,36 @@ export class SessionTools {
 
 	/** Looks up an enabled tool through the same ACP permission gate as direct calls. */
 	getToolForEvalBridge(name: string): AgentTool | undefined {
-		if (!this.getEnabledToolNames().includes(name)) return undefined;
-		const tool = this.#toolRegistry.get(name);
-		return tool ? this.#wrapToolForAcpPermission(tool) : undefined;
+		const tool = this.#resolveToolWireName(name);
+		if (!tool || !this.getEnabledToolNames().includes(tool.name)) return undefined;
+		return this.#wrapToolForAcpPermission(tool);
 	}
 
-	/** Canonical allowlist advertised by and enforced for the eval bridge. */
+	/** Canonical and unambiguous wire names accepted by the eval bridge. */
 	getEvalBridgeToolNames(): string[] {
-		return this.getEnabledToolNames();
+		const names = new Set<string>();
+		for (const name of this.getEnabledToolNames()) {
+			const tool = this.#toolRegistry.get(name);
+			if (!tool || !isEvalBridgeToolCallable(tool)) continue;
+			names.add(name);
+			if (tool.customWireName && this.#resolveToolWireName(tool.customWireName) === tool) {
+				names.add(tool.customWireName);
+			}
+		}
+		return [...names];
+	}
+
+	/** Exact registry names shadow wire aliases, including when the exact tool is disabled. */
+	#resolveToolWireName(name: string): AgentTool | undefined {
+		const exact = this.#toolRegistry.get(name);
+		if (exact) return exact;
+		let resolved: AgentTool | undefined;
+		for (const tool of this.#toolRegistry.values()) {
+			if (tool.customWireName !== name) continue;
+			if (resolved) return undefined;
+			resolved = tool;
+		}
+		return resolved;
 	}
 
 	#isCurrentBuiltInTool(name: string, tool: AgentTool | undefined = this.#toolRegistry.get(name)): boolean {
@@ -727,14 +778,8 @@ export class SessionTools {
 	 * over a built-in alias and does not inherit the replaced tool's provenance.
 	 */
 	hasBuiltInTool(name: string): boolean {
-		const exact = this.#toolRegistry.get(name);
-		if (exact) return this.#isCurrentBuiltInTool(name, exact);
-		for (const [builtInName, builtInTool] of this.#builtInToolInstances) {
-			if (this.#toolRegistry.get(builtInName) === builtInTool && builtInTool.customWireName === name) {
-				return true;
-			}
-		}
-		return false;
+		const tool = this.#resolveToolWireName(name);
+		return tool !== undefined && this.#isCurrentBuiltInTool(tool.name, tool);
 	}
 
 	/** Updates source provenance when a live registry entry is replaced or restored. */
@@ -846,7 +891,15 @@ export class SessionTools {
 				scope: "temporary",
 				origin: "top-level",
 			};
-			return { name, description: tool.description, parameters: tool.parameters, sourceInfo };
+			const info: ToolInfo = { name, description: tool.description, parameters: tool.parameters, sourceInfo };
+			// MCP-backed tools (MCPTool, DeferredMCPTool and their adapters) carry the
+			// server, original name and read-only annotation; expose them so
+			// extensions can act on the hint the runtime already keeps.
+			const mcp = tool as { mcpServerName?: unknown; mcpToolName?: unknown; mcpReadOnlyHint?: unknown };
+			if (typeof mcp.mcpServerName === "string") info.mcpServerName = mcp.mcpServerName;
+			if (typeof mcp.mcpToolName === "string") info.mcpToolName = mcp.mcpToolName;
+			if (typeof mcp.mcpReadOnlyHint === "boolean") info.mcpReadOnlyHint = mcp.mcpReadOnlyHint;
+			return info;
 		});
 	}
 
@@ -922,22 +975,40 @@ export class SessionTools {
 		return resolveEditMode(this.#getEditModeSession());
 	}
 
+	/** Whether the active model inlines tool descriptors into the prompt and prunes them from the provider schemas. */
+	#currentInlineDescriptors(): boolean | undefined {
+		const activeModel = this.#host.model();
+		if (!activeModel) return undefined;
+		return shouldInlineToolDescriptors(cfgInlineToolDescriptors.get(this.#host.settings), activeModel.id);
+	}
+
 	#currentPromptModelKey(): string | undefined {
 		const activeModel = this.#host.model();
 		if (!activeModel) return undefined;
 		if (cfgIncludeModelInPrompt.get(this.#host.settings)) return formatModelString(activeModel);
 		// The inline-descriptor decision is per model and selects both the prompt's
 		// tool catalog and provider-side description pruning (see `sdk.ts`).
-		const inlineDescriptors = shouldInlineToolDescriptors(
-			cfgInlineToolDescriptors.get(this.#host.settings),
-			activeModel.id,
-		);
-		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${inlineDescriptors}`;
+		return `delegation-bias:${resolveDelegationBias(activeModel)}|inline-descriptors:${this.#currentInlineDescriptors()}`;
 	}
 
-	/** Rebuilds model-dependent tool prompts after a model change. */
-	async syncAfterModelChange(previousEditMode: EditMode): Promise<void> {
+	/**
+	 * Rebuilds model-dependent tool prompts after a model change.
+	 *
+	 * `retryFallback` marks a hop down the retry fallback chain. It keeps the Model line and the
+	 * Delegation wording the prompt was rendered with: re-rendering them changed the prompt's bytes,
+	 * and the provider then wrote the whole cached conversation again on every hop. It still rebuilds
+	 * when the hop changes what the request must carry for the new model: the edit-mode policy
+	 * (#11983), or the inline-descriptor decision, which also turns provider-side description pruning
+	 * on or off (#14200). The kept key makes a later switch back to the rendered model a no-op, and a
+	 * deliberate switch (`/model`, `setModel`) compares against the model the prompt describes.
+	 */
+	async syncAfterModelChange(previousEditMode: EditMode, options?: { retryFallback?: boolean }): Promise<void> {
 		const currentEditMode = this.resolveActiveEditMode();
+		if (options?.retryFallback) {
+			const inlineDescriptorsChanged = this.#currentInlineDescriptors() !== this.#promptInlineDescriptors;
+			if (previousEditMode !== currentEditMode || inlineDescriptorsChanged) await this.refreshBaseSystemPrompt();
+			return;
+		}
 		const editModeChanged = previousEditMode !== currentEditMode && this.getActiveToolNames().includes("edit");
 		// The system prompt selects model-specific policy even when it does not display the model id.
 		const modelChanged = this.#currentPromptModelKey() !== this.#promptModelKey;
@@ -1429,6 +1500,7 @@ export class SessionTools {
 				invalidateToolSchemaMetadata(this.#host.agent.state.tools);
 				this.#lastAppliedToolSignature = rebuiltSignature;
 				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 				this.#setBasePromptXdevNames(rebuiltXdevCatalogNames);
 				// The rebuilt prompt is a fresh roster snapshot. Keep the complete
 				// pending delta for a turn override that hides it, while separately
@@ -1975,7 +2047,7 @@ export class SessionTools {
 	}
 
 	/** Rediscovers reloadable skills and refreshes prompt metadata. */
-	async refreshSkills(): Promise<void> {
+	refreshSkills(): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
 			resetCapabilities();
 			if (this.#skillsReloadable) {
@@ -2049,14 +2121,25 @@ export class SessionTools {
 		}, signal);
 	}
 
-	/** Restores a non-MCP presentation snapshot while retaining the current MCP selection. */
-	restoreNonMCPToolPresentation(nonMCPToolNames: string[], nonMCPMountedToolNames: string[]): Promise<void> {
+	/** Restores a non-MCP presentation snapshot plus the MCP selection and non-built-in tools registered after it. */
+	restoreNonMCPToolPresentation(
+		nonMCPToolNames: string[],
+		nonMCPMountedToolNames: string[],
+		registeredToolNames: readonly string[],
+	): Promise<void> {
 		return this.runToolRegistryMutation(async () => {
+			const registered = new Set(registeredToolNames);
+			const isLateNonBuiltIn = (name: string) =>
+				!isMCPToolName(name) && !this.hasBuiltInTool(name) && !registered.has(name);
 			const currentMCPToolNames = this.getSelectedMCPToolNames();
 			const currentMountedMCPToolNames = this.getMountedXdevToolNames().filter(isMCPToolName);
 			await this.setActiveToolPresentation(
-				[...nonMCPToolNames, ...currentMCPToolNames],
-				[...nonMCPMountedToolNames, ...currentMountedMCPToolNames],
+				[...nonMCPToolNames, ...currentMCPToolNames, ...this.getEnabledToolNames().filter(isLateNonBuiltIn)],
+				[
+					...nonMCPMountedToolNames,
+					...currentMountedMCPToolNames,
+					...this.getMountedXdevToolNames().filter(isLateNonBuiltIn),
+				],
 			);
 		});
 	}
@@ -2269,6 +2352,7 @@ export class SessionTools {
 				this.#basePromptReflectsRosterDelta = true;
 				this.#pendingToolRosterDeltaAfterBase = undefined;
 				this.#promptModelKey = this.#currentPromptModelKey();
+				this.#promptInlineDescriptors = this.#currentInlineDescriptors();
 				this.#lastAppliedToolSignature = signature;
 				return true;
 			},

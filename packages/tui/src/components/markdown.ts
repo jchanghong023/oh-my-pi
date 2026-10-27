@@ -4307,7 +4307,13 @@ export class Markdown implements Component {
 
 			// Process item tokens; nested-list lines arrive structurally tagged and
 			// already carry their own full indent.
-			const itemLines = this.#renderListItem(item.tokens || [], depth, width, styleContext);
+			const itemLines = this.#renderListItem(
+				item.tokens || [],
+				depth,
+				width,
+				Math.max(1, width - visibleWidth(continuationIndent)),
+				styleContext,
+			);
 
 			if (itemLines.length > 0) {
 				const firstLine = itemLines[0]!;
@@ -4359,11 +4365,13 @@ export class Markdown implements Component {
 		tokens: Token[],
 		parentDepth: number,
 		width: number,
+		contentWidth: number,
 		styleContext?: InlineStyleContext,
 	): RenderedListItemLine[] {
 		const lines: RenderedListItemLine[] = [];
 
-		for (const token of tokens) {
+		for (let i = 0; i < tokens.length; i++) {
+			const token = tokens[i]!;
 			if (token.type === "list") {
 				// Nested list - render with one additional indent level
 				// These lines carry their own indent, so tag them for pass-through
@@ -4403,6 +4411,10 @@ export class Markdown implements Component {
 					lines.push({ ...bodyLine, nested: false });
 				}
 				lines.push({ text: this.#theme.codeBlockBorder("```"), nested: false });
+			} else if (token.type === "table") {
+				for (const row of this.#renderTable(token as TableToken, contentWidth, tokens[i + 1]?.type, styleContext)) {
+					lines.push({ text: row, nested: false });
+				}
 			} else if (isMathToken(token)) {
 				// Display math block inside a list item: stack fractions / matrix rows.
 				const apply = styleContext?.applyText ?? ((t: string) => this.#applyDefaultStyle(t));

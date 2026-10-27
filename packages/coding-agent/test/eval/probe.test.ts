@@ -12,7 +12,11 @@ import * as path from "node:path";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import * as runtimeProbe from "../../src/eval/probe";
-import { checkPythonKernelAvailability, PythonKernel } from "../../src/eval/py/kernel";
+import {
+	checkPythonKernelAvailability,
+	getCachedPythonKernelAvailability,
+	PythonKernel,
+} from "../../src/eval/py/kernel";
 import { probeCandidates, runBoundedProbe } from "../../src/eval/probe";
 import * as runnerCache from "../../src/eval/runner-cache";
 
@@ -130,12 +134,7 @@ describe("probeCandidates", () => {
 			{ cwd: process.cwd(), timeoutMs: 300 },
 		);
 		const elapsed = Date.now() - start;
-		expect(result).toEqual({ ok: false, aborted: false, failures: expect.any(Array) });
-		// The wider Windows teardown allowance must not admit spending a fresh
-		// budget on each candidate: only the first hangs, the next is not probed.
-		expect(result).toMatchObject({
-			failures: ["cand-a (probe timed out)", "cand-b (probe budget exhausted)"],
-		});
+		expect(result).toMatchObject({ ok: false, aborted: false, timedOut: true });
 		// One 300ms budget total, not 3×: the whole discovery stays well under the
 		// combined per-candidate cost it would incur without a shared deadline.
 		// Windows child-process spawn/teardown overhead needs a wider bound.
@@ -221,6 +220,50 @@ describe("P2-21 Python Eval runtime scope", () => {
 		});
 		expect(result.runtime?.env).toEqual(candidates[0].env);
 		expect(env).toEqual(originalEnv);
+	});
+
+	test("does not probe the fixed interpreter twice when it is also on PATH", async () => {
+		vi.spyOn(piUtils, "$whichAll").mockReturnValue([offlinePython, systemPython]);
+		const probe = vi.spyOn(runtimeProbe, "probeCandidates").mockResolvedValue({ ok: true, index: 0 });
+
+		const result = await checkPythonKernelAvailability(cwd, undefined, { forceProbe: true });
+
+		expect(result).toMatchObject({ ok: true, pythonPath: offlinePython });
+		const candidates = probe.mock.calls[0][0];
+		expect(candidates.map(candidate => candidate.command[0])).toEqual([offlinePython, activePython, systemPython]);
+		expect(result.runtime?.env).toEqual({ PATH: env.PATH, LD_LIBRARY_PATH: env.LD_LIBRARY_PATH });
+	});
+
+	test("does not cache a timed-out probe and retries on the next request", async () => {
+		vi.spyOn(piUtils, "isBunTestRuntime").mockReturnValue(false);
+		vi.spyOn(piUtils, "$flag").mockReturnValue(false);
+		const probe = vi
+			.spyOn(runtimeProbe, "probeCandidates")
+			.mockResolvedValueOnce({ ok: false, aborted: false, timedOut: true, failures: ["probe timed out"] })
+			.mockResolvedValueOnce({ ok: true, index: 0 });
+
+		const timedOut = await checkPythonKernelAvailability(cwd, undefined, { forceProbe: true });
+		expect(timedOut).toMatchObject({ ok: false, transient: true });
+		expect(getCachedPythonKernelAvailability(cwd)).toBeUndefined();
+
+		const retried = await checkPythonKernelAvailability(cwd);
+		expect(retried).toMatchObject({ ok: true, pythonPath: offlinePython });
+		expect(probe).toHaveBeenCalledTimes(2);
+		expect(getCachedPythonKernelAvailability(cwd)).toMatchObject({ ok: true, pythonPath: offlinePython });
+	});
+
+	test("does not reuse an offline availability result after switching to normal mode", async () => {
+		vi.spyOn(piUtils, "isBunTestRuntime").mockReturnValue(false);
+		vi.spyOn(piUtils, "$flag").mockReturnValue(false);
+		const probe = vi
+			.spyOn(runtimeProbe, "probeCandidates")
+			.mockResolvedValueOnce({ ok: true, index: 0 })
+			.mockResolvedValueOnce({ ok: true, index: 0 });
+
+		expect(await checkPythonKernelAvailability(cwd)).toMatchObject({ ok: true, pythonPath: offlinePython });
+		process.env.OMP_OFFLINE = "0";
+		expect(await checkPythonKernelAvailability(cwd)).toMatchObject({ ok: true, pythonPath: activePython });
+		expect(probe).toHaveBeenCalledTimes(2);
 	});
 
 	test.each(["automatic", "explicit"] as const)(
@@ -340,6 +383,46 @@ describe("P2-21 Python Eval runtime scope", () => {
 				expect(result.ok).toBe(false);
 				expect(result.reason).toContain("Python 3.11+");
 			}
+		},
+	);
+
+	test.skipIf(!hostPython).each([
+		["linux", "1", 10, false],
+		["linux", "1", 11, true],
+		["linux", "0", 7, false],
+		["linux", "0", 8, true],
+		["darwin", "1", 7, false],
+		["darwin", "1", 8, true],
+		["win32", "1", 7, false],
+		["win32", "1", 8, true],
+	] as const)(
+		"enforces the interpreter version on %s offline=%s Python 3.%i",
+		async (platform, offline, minor, ok) => {
+			Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
+			process.env.OMP_OFFLINE = offline;
+			const explicitPython = path.join(cwd, "explicit-python");
+			const probe = runtimeProbe.probeCandidates;
+			vi.spyOn(runtimeProbe, "probeCandidates").mockImplementation((candidates, options) =>
+				probe(
+					candidates.map(candidate => ({
+						...candidate,
+						command: [
+							hostPython!,
+							"-c",
+							`import sys;sys.version_info=(3,${minor});exec(${JSON.stringify(candidate.command[2])})`,
+						],
+						env: { ...process.env },
+					})),
+					{ ...options, cwd: process.cwd() },
+				),
+			);
+
+			const result = await checkPythonKernelAvailability(cwd, explicitPython, { forceProbe: true });
+
+			expect(result.ok).toBe(ok);
+			expect(result.pythonPath).toBe(explicitPython);
+			if (!ok)
+				expect(result.reason).toContain(platform === "linux" && offline === "1" ? "Python 3.11+" : "Python 3.8+");
 		},
 	);
 

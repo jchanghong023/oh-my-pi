@@ -928,6 +928,7 @@ export class TUI extends Container {
 	/** True from the end of start() until stop(): the terminal modes start listeners enable are live. */
 	#started = false;
 	#paintListeners = new Set<PaintListener>();
+	#frameWriteListeners = new Set<(data: string) => void>();
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	onDebug?: () => void;
@@ -1144,6 +1145,14 @@ export class TUI extends Container {
 		this.#paintListeners.add(listener);
 		return () => {
 			this.#paintListeners.delete(listener);
+		};
+	}
+
+	/** Observe actual ANSI frame writes, including transient resize paints; returns the unsubscribe. */
+	addFrameWriteListener(listener: (data: string) => void): () => void {
+		this.#frameWriteListeners.add(listener);
+		return () => {
+			this.#frameWriteListeners.delete(listener);
 		};
 	}
 
@@ -3434,6 +3443,16 @@ export class TUI extends Container {
 		}
 	}
 
+	#notifyFrameWrite(data: string): void {
+		for (const listener of this.#frameWriteListeners) {
+			try {
+				listener(data);
+			} catch (err) {
+				logger.error("TUI frame write listener failed", { err });
+			}
+		}
+	}
+
 	#renderProviderFrame(width: number, height: number): void {
 		const provider = this.#frameProvider;
 		if (!provider || width <= 0 || height <= 0) return;
@@ -3797,6 +3816,7 @@ export class TUI extends Container {
 			this.terminal.write(this.#rebuildNoticeSequence(width, height));
 		}
 		this.terminal.write(buffer);
+		this.#notifyFrameWrite(buffer);
 		this.#debugPaint = {
 			lines: prepared.lines,
 			windowTop: this.#debugNextWindowTop,
@@ -4614,9 +4634,9 @@ export class TUI extends Container {
 		} else if (hideCursor) {
 			cursorBuffer = "\x1b[?25l";
 		}
-		this.terminal.write(
-			`${this.#paintBeginSequence}${prelude}${full ? "\x1b[H" : ""}${rowsBuffer}${cursorBuffer}${this.#paintEndSequence}`,
-		);
+		const frame = `${this.#paintBeginSequence}${prelude}${full ? "\x1b[H" : ""}${rowsBuffer}${cursorBuffer}${this.#paintEndSequence}`;
+		this.terminal.write(frame);
+		this.#notifyFrameWrite(frame);
 		this.#debugPaint = {
 			lines: prepared.lines,
 			windowTop: 0,

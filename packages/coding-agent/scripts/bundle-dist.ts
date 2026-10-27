@@ -100,7 +100,11 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
-			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin(), createSpecDrivenArchivePlugin(specDrivenArchive)],
+			plugins: [
+				createJsonParsePlugin(),
+				await createLegacyPiVirtualModulePlugin(),
+				createSpecDrivenArchivePlugin(specDrivenArchive),
+			],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),

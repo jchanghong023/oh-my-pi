@@ -908,6 +908,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						selectedOptions: result.selectedOptions,
 						customInput: result.customInput,
 						note: result.note,
+						noteOption: result.noteOption,
 						timedOut: result.timedOut,
 					};
 					const responseText = formatSingleQuestionResponse(result);

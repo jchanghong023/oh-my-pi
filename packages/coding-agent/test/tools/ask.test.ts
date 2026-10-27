@@ -1578,7 +1578,7 @@ describe("AskTool rich ask dialog", () => {
 		});
 	});
 
-	it("names the option a note is on in the text the model reads", async () => {
+	it("names the option a note is on in the text the model reads and in single-question details", async () => {
 		const askDialog = vi.fn().mockResolvedValue({
 			kind: "submit",
 			results: [
@@ -1614,6 +1614,7 @@ describe("AskTool rich ask dialog", () => {
 			type: "text",
 			text: "User selected: X, Y\nUser added note on Y: Y only on weekends",
 		});
+		expect(single.details?.noteOption).toBe("Y");
 	});
 
 	it("returns custom-answer and note images after text, numbering markers across answers in text and details", async () => {

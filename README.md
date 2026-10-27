@@ -37,7 +37,7 @@
 
 安装本 fork 通过 [`jchanghong023/oh-my-pi` releases](https://github.com/jchanghong023/oh-my-pi/releases) 发布的最新二进制。以下命令直接使用 fork 的 GitHub release 资产，不会安装上游的 npm、Homebrew、Nix 或 `omp.sh` 构建。
 
-**Linux（x64 · arm64，自动区分 glibc / musl）**
+**Linux（glibc x64）**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/jchanghong023/oh-my-pi/main/scripts/install.sh | sh -s -- --binary
@@ -59,7 +59,7 @@ curl -fsSL -o "%TEMP%\install-omp.ps1" https://raw.githubusercontent.com/jchangh
 
 fork 发布版二进制报告的版本号为 `omp/<upstream-version>+fork.<build-number>`。工作区包版本仍与上游兼容，因为本 fork 不向 npm 发布包。
 
-Alpine / musl 的预编译二进制动态链接 `libstdc++` / `libgcc`，请先运行 `apk add libstdc++ libgcc`。macOS 与 Windows arm64 不在本 fork 的二进制发布范围；Linux 安装器会在 macOS 联网前拒绝安装。
+本 fork 的预编译二进制仅支持 Linux glibc x64 与 Windows x64；不提供 Linux arm64、musl、macOS 或 Windows arm64 的新版本资产。Linux 安装器会在 macOS 联网前拒绝安装。
 
 安装器在替换前验证下载的 `omp --version` 与所选 Release 完全一致，失败保留旧安装。运行中的会话通常继续使用旧映像，安装后退出并重新打开才能使用新版本；Windows 仅在旧映像无法重命名时回退为按安装路径匹配的进程终止。已有 fork 二进制可用 `omp update --stable` 更新，完成后运行 `omp --version` 核对 PATH 实际命中的版本。
 
@@ -603,7 +603,7 @@ bun setup
 bun dev
 ```
 
-用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（链接 libpipewire 会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
+用 `nix build .#omp` 构建可分发的 Nix 包并做冒烟测试。Wayland screencast 支持默认关闭（链接 libpipewire 会让运行时闭包增加约 750 MB）；可用 `omp.override { withWaylandScreencast = true; }` 启用。发布构建以 fat LTO 链接 `pi-natives`；本地可用 `omp.override { withFatLto = false; }` 改用 thin LTO，大幅加快重新构建。Rust 依赖与 native addon 在独立 derivation 中构建，因此修改 Rust 时可复用已编译依赖，修改 TypeScript 时可复用 addon。`nix/bun.nix` 只在 `bun.lock` 变化时生成；发版时会自动重新生成。若改动了依赖，请运行：
 
 ```sh
 bun run gen:nix
