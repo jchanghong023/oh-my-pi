@@ -4,5 +4,10 @@
 		"src",
 		"test",
 		"scripts"
+	],
+	"exclude": [
+		"node_modules",
+		"dist",
+		"src/spec-driven/vendor"
 	]
 }
