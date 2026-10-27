@@ -1,5 +1,5 @@
 ---
-name: openspec-update-change
+name: opsx-update
 description: Update an OpenSpec change by revising its existing planning artifacts and keeping them coherent with one another. Use when the user wants to revise a change's plan, fold new decisions into it, or reconcile its artifacts after an edit. Also use when the user says "openspec update change" or "opsx update". If the user means the openspec update CLI command, which refreshes generated files, run that command instead. Never edits code.
 allowed-tools: Bash(openspec:*)
 license: MIT
@@ -44,7 +44,7 @@ This workflow revises artifacts that already exist; `/openspec-continue-change` 
 
    Mark the most recently modified change as "(Recommended)" since it's likely what the user wants to update.
 
-   Always announce: "Using change: <name>" and how to override (e.g., `/openspec-update-change <other>`).
+   Always announce: "Using change: <name>" and how to override (e.g., `/skill:opsx-update <other>`).
 
 2. **Get the change's artifacts**
    ```bash
@@ -88,8 +88,8 @@ This workflow revises artifacts that already exist; `/openspec-continue-change` 
 
 6. **Point to the next step (guidance only - NEVER act on it)**
    - Artifacts with empty `existingOutputPaths` and status `ready` or `blocked` -> suggest `/openspec-continue-change` to create them.
-   - Change already implemented (tasks checked off / already applied) -> the code may no longer match the revised plan; suggest `/openspec-apply-change` to carry the delta into code.
-   - Everything done and implemented -> suggest `/openspec-archive-change`.
+   - Change already implemented (tasks checked off / already applied) -> the code may no longer match the revised plan; suggest `/skill:opsx-apply` to carry the delta into code.
+   - Everything done and implemented -> suggest `/skill:opsx-archive`.
 
 **Output**
 
@@ -100,7 +100,7 @@ After each invocation, show:
 - Where the change stands and the recommended next command
 
 **Guardrails**
-- Planning artifacts only - NEVER edit implementation code. If the revised plan implies code changes, stop and point to `/openspec-apply-change`.
+- Planning artifacts only - NEVER edit implementation code. If the revised plan implies code changes, stop and point to `/skill:opsx-apply`.
 - Use the artifact ids and paths reported by `openspec status`; never branch on hardcoded artifact names.
 - Edit only the concrete files in `existingOutputPaths`, plus any confirmed concrete path allowed under a partly populated glob artifact (step 4); never write to a glob `resolvedOutputPath`.
 - Do not advance the build frontier: if an artifact has empty `existingOutputPaths` and status `ready` or `blocked`, that is `/openspec-continue-change`'s job. Leave `skipped` artifacts untouched. The only new-file scope is a confirmed concrete path under a glob artifact whose `existingOutputPaths` is non-empty.

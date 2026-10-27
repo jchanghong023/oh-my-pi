@@ -13,18 +13,18 @@ import {
 } from "../../src/spec-driven/resources";
 
 const upstreamOpenSpecSkills = [
-	"openspec-apply-change",
-	"openspec-archive-change",
 	"openspec-bulk-archive-change",
 	"openspec-continue-change",
-	"openspec-explore",
 	"openspec-ff-change",
 	"openspec-new-change",
 	"openspec-onboard",
-	"openspec-propose",
-	"openspec-sync-specs",
-	"openspec-update-change",
 	"openspec-verify-change",
+	"opsx-apply",
+	"opsx-archive",
+	"opsx-explore",
+	"opsx-propose",
+	"opsx-sync",
+	"opsx-update",
 ];
 const proposalContent =
 	"## Why\nKeep requirements available offline.\n\n## What Changes\n- Document offline access.\n\n## Capabilities\n### New Capabilities\n- `offline-resources`: offline requirements access\n### Modified Capabilities\nNone.\n\n## Impact\nRequirements documentation only.\n";
@@ -155,13 +155,7 @@ describe("pinned upstream resources", () => {
 
 	it("rejects legacy aliases and unknown OpenSpec skill identities", async () => {
 		for (const name of [
-			"opsx-explore",
-			"opsx-update",
-			"opsx-propose",
-			"opsx-sync",
-			"opsx-archive",
 			"opsx-verify",
-			"opsx-apply",
 			"opsx-new",
 			"opsx-continue",
 			"../openspec-new-change",

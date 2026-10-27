@@ -19,6 +19,7 @@
 
 ### Changed
 
+- Expose OpenSpec's six default core skills as `/skill:opsx-propose`, `/skill:opsx-explore`, `/skill:opsx-apply`, `/skill:opsx-update`, `/skill:opsx-sync` and `/skill:opsx-archive`; other bundled OpenSpec skills are not registered.
 - Update the bundled OpenSpec resource to the upstream 1.15.0 package exactly: `update --dry-run`/`--json` planning, config-schema-aware `new change` progress, exact REMOVED-baseline matching in the verify workflow and the bug-form `feedback` template. The `openspec/` tree now contains only upstream package files; omp-specific schema, dependency install and skill copies are removed pending re-adaptation.
 - Track the vendored spec-driven resources, including OpenSpec's production `node_modules`, as checked-in source: builds only pack the tree and never install or regenerate dependencies.
 - Keep only the required OpenSpec runtime and skills, Superpowers skills and referenced runtime resources, and JCH/OMP resources as directly browsable files under `src/spec-driven/vendor/resources/`; package them at build time and extract them into a versioned offline cache at runtime rather than committing a large Base64 generated source. Generate MD5 on copying, reuse unchanged resources and replace the affected resource cache directory when its MD5 changes. No separate upstream installation is required; independent Dev stage boundaries remain intact.

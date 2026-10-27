@@ -70,20 +70,7 @@ async function fixture(): Promise<Skill> {
 
 describe("pinned skill discovery and access", () => {
 	it("catalogs and exposes all Superpowers while preserving other discovery boundaries", async () => {
-		const ordinaryNames = [
-			"openspec-apply-change",
-			"openspec-archive-change",
-			"openspec-bulk-archive-change",
-			"openspec-continue-change",
-			"openspec-explore",
-			"openspec-ff-change",
-			"openspec-new-change",
-			"openspec-onboard",
-			"openspec-propose",
-			"openspec-sync-specs",
-			"openspec-update-change",
-			"openspec-verify-change",
-		];
+		const ordinaryNames = ["opsx-apply", "opsx-archive", "opsx-explore", "opsx-propose", "opsx-sync", "opsx-update"];
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
@@ -107,7 +94,9 @@ describe("pinned skill discovery and access", () => {
 				.sort(),
 		);
 		for (const entry of resources.manifest.skills.filter(entry => entry.source !== "superpowers")) {
-			expect(discovered.all.some(skill => skill.name === entry.name)).toBe(true);
+			expect(discovered.all.some(skill => skill.name === entry.name)).toBe(
+				entry.source !== "openspec" || ordinaryNames.includes(entry.name),
+			);
 		}
 		expect(
 			discovered.all
@@ -164,50 +153,6 @@ describe("pinned skill discovery and access", () => {
 				await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			}
 		}
-	});
-
-	it("enables OpenSpec only for a direct directory and keeps other workspaces manual-only across reloads", async () => {
-		const root = (await fixture()).baseDir;
-		await fs.mkdir(path.join(root, "openspec"));
-		const cwd = path.join(root, "child");
-		await fs.mkdir(cwd);
-		const marker = path.join(cwd, "openspec");
-		const load = async () => {
-			const { skills } = await loadSkills({
-				cwd,
-				enablePiUser: false,
-				enablePiProject: false,
-			});
-			return skills.filter(skill => skill._source?.pluginName === "openspec");
-		};
-		// An ancestor's OpenSpec directory must not opt this workspace in.
-		const hidden = await load();
-		expect(hidden.map(skill => skill.hide)).toEqual(Array(12).fill(true));
-		for (const skill of hidden) {
-			const url = parseInternalUrl(`skill://${skill.name}`);
-			await expect(handler.resolve(url, { skills: hidden })).rejects.toBeInstanceOf(SkillAccessDeniedError);
-			const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
-			expect(
-				(
-					await handler.resolve(url, {
-						skills: hidden,
-						getSessionBranch: () => [provenance(skill, invoked.details)],
-					})
-				).sourcePath,
-			).toBe(skill.filePath);
-		}
-		await fs.writeFile(marker, "not a directory");
-		expect((await load()).map(skill => skill.hide)).toEqual(Array(12).fill(true));
-		await fs.rm(marker);
-		await fs.mkdir(marker);
-		const visible = await load();
-		expect(visible.map(skill => skill.hide)).toEqual(Array(12).fill(false));
-		for (const skill of visible) {
-			const url = parseInternalUrl(`skill://${skill.name}`);
-			expect((await handler.resolve(url, { skills: visible })).sourcePath).toBe(skill.filePath);
-		}
-		await fs.rmdir(marker);
-		expect((await load()).map(skill => skill.hide)).toEqual(Array(12).fill(true));
 	});
 
 	it("allows execution and planning resources in ordinary sessions independently of scoped autoload grants", async () => {
@@ -312,7 +257,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("preserves explicit OpenSpec invocation arguments without requiring invocation for reads", async () => {
-		const skill = await loadSpecDrivenSkill("openspec", "openspec-propose");
+		const skill = await loadSpecDrivenSkill("openspec", "opsx-propose");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const context = { skills: [skill], getSessionBranch: () => [] };
 		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);

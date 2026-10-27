@@ -21,7 +21,7 @@ import { contentText, createProviderFixture, MARKER, rolePayload } from "./provi
 
 export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 	test(
-		`packaged skills preserve directory-scoped OpenSpec discovery and manual access (${hasOpenSpec ? "with" : "without"} openspec)`,
+		`packaged skills expose OpenSpec discovery and manual access (${hasOpenSpec ? "with" : "without"} openspec)`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(
 				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
@@ -33,14 +33,19 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
-			const defaultSkills: Record<string, true> = {
-				"verification-before-completion": true,
-				"systematic-debugging": true,
-				"writing-skills": true,
-			};
-			if (hasOpenSpec)
-				for (const entry of inventory.skills.filter(entry => entry.source === "openspec"))
-					defaultSkills[entry.name] = true;
+			const coreOpenSpec = new Set([
+				"opsx-propose",
+				"opsx-explore",
+				"opsx-apply",
+				"opsx-update",
+				"opsx-sync",
+				"opsx-archive",
+			]);
+			const isHiddenOpenSpec = (entry: { source: string; name: string }) =>
+				entry.source === "openspec" && !coreOpenSpec.has(entry.name);
+			const defaultSkills: Record<string, true> = {};
+			for (const entry of inventory.skills.filter(entry => coreOpenSpec.has(entry.name) || entry.source === "superpowers"))
+				defaultSkills[entry.name] = true;
 			const ordinary = await peer.create(config.cwd);
 			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
 			await peer.next(
@@ -62,6 +67,12 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const resourceMetadata = new Map<string, { name: string; description: string }>();
 			for (const entry of inventory.skills) {
 				const skill = catalog.skills.find(item => item.name === entry.name);
+				if (isHiddenOpenSpec(entry)) {
+					expect(skill).toBeUndefined();
+					for (const request of ordinaryRequests)
+						expect(request.messages.map(message => contentText(message.content)).join("\n")).not.toContain(entry.name);
+					continue;
+				}
 				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);
 				const canonical = await fs.realpath(skill.path);
 				expect(path.relative(config.root, canonical).startsWith("..")).toBe(false);
@@ -82,7 +93,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					description: metadata.frontmatter.description,
 				});
 			}
-			for (const entry of inventory.skills) {
+			for (const entry of inventory.skills.filter(entry => !isHiddenOpenSpec(entry))) {
 				const session = await peer.create(config.cwd);
 				const requestStart = provider.requests.length;
 				const selectedPath = `skill://${entry.name}:raw`;
@@ -91,7 +102,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
 				since = await peer.send(
 					session,
-					`${entry.source === "openspec" && hasOpenSpec ? "Use OpenSpec; read the relevant skill instructions." : `/skill:${entry.name}`} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, allowedPaths, deniedPaths })}`,
+					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, allowedPaths, deniedPaths })}`,
 				);
 				await peer.next(
 					frame =>

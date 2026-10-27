@@ -1,5 +1,5 @@
 ---
-name: openspec-apply-change
+name: opsx-apply
 description: Implement tasks from an OpenSpec change. Use when the user wants to start implementing, continue implementation, or work through tasks. Also use when the user says "openspec apply", "opsx apply", or "openspec implement".
 allowed-tools: Bash(openspec:*)
 license: MIT
@@ -24,7 +24,7 @@ Otherwise, with no root, what happens next depends on how this workflow was reac
 
 In both branches, never create the root as a side effect: do not run `openspec init` until the user asks for it, do not hand-create `openspec/` files, and do not let a command create it.
 
-**Input**: Optionally specify a change name (e.g., `/openspec-apply-change add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
+**Input**: Optionally specify a change name (e.g., `/skill:opsx-apply add-auth`). If omitted, check if it can be inferred from conversation context. If vague or ambiguous you MUST prompt for available changes.
 
 **Steps**
 
@@ -35,7 +35,7 @@ In both branches, never create the root as a side effect: do not run `openspec i
    - Auto-select if only one active change exists
    - If ambiguous, run `openspec list --json` to get available changes and ask the user to select one
 
-   Always announce: "Using change: <name>" and how to override (e.g., `/openspec-apply-change <other>`).
+   Always announce: "Using change: <name>" and how to override (e.g., `/skill:opsx-apply <other>`).
 
 2. **Check status to understand the schema**
    ```bash
@@ -156,7 +156,7 @@ Working on task 4/7: <task description>
 ...
 
 All tracked tasks are complete. Review or verify the change as appropriate
-before archiving. You can archive this change with `/openspec-archive-change`.
+before archiving. You can archive this change with `/skill:opsx-archive`.
 ```
 
 **Output On Pause (Issue Encountered)**
