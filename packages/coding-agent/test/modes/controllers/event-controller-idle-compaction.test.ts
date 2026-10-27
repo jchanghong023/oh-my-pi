@@ -326,6 +326,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const present = vi.fn(recordPresented);
@@ -353,6 +354,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const present = vi.fn(recordPresented);
@@ -380,6 +382,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const present = vi.fn(recordPresented);
@@ -411,6 +414,7 @@ describe("EventController idle compaction teardown", () => {
 			overrides: {
 				"compaction.idleEnabled": false,
 				"completion.notify": "off",
+				"recap.enabled": true,
 			},
 		});
 		const present = vi.fn(recordPresented);

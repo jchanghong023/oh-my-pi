@@ -197,7 +197,7 @@ export async function createSpecDrivenRuntime(args: {
 					rules: [...(loadedContext.activeRules ?? [])],
 					skills: executor ? [...session.skills] : skills,
 					promptTemplates: [],
-					spawns: executor ? "*" : "",
+					spawns: executor ? "*" : "scout",
 					hasUI: false,
 					toolNames: executor
 						? ["read", "grep", "glob", "write", "edit", "bash", "task"]
@@ -207,6 +207,7 @@ export async function createSpecDrivenRuntime(args: {
 								"glob",
 								"write",
 								"edit",
+								"task",
 								...(role === "requirements" || role === "solution" ? ["wiki"] : []),
 							],
 					restrictToolNames: true,

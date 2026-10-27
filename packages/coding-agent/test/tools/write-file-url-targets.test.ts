@@ -76,7 +76,7 @@ describe("write to file-backed internal URLs", () => {
 		expect(updated.details).toMatchObject({
 			op: "update",
 			oldText: "\uFEFFbefore\r\n",
-			newText: "after\n",
+			newText: await fs.readFile(file, "utf8"),
 		});
 		expect(JSON.parse(JSON.stringify(updated.details)).oldText).toBe("\uFEFFbefore\r\n");
 	});

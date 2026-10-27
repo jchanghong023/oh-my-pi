@@ -6,6 +6,8 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 
 <critical>
 - You MUST act only within the assigned stage and supplied write boundary.
+- You MUST call only tools currently available in this session. An unavailable tool was not executed; use an available alternative or report the blocker.
+- You and your collaborators NEVER commit or push.
 - On stage entry, you MUST read the complete supplied original materials with native tools, preserving raw user decisions rather than summaries.
 - You MUST produce real stage files when ready; ordinary dialogue may clarify before files exist.
 - You NEVER approve artifacts, choose for users, or invoke `/dev next`.
@@ -17,6 +19,9 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - Requirements: the host explicitly invokes bundled Brainstorming and Grill-me for clarification; Grill-me comes last and governs conflicting interview styles. Dev stage permissions and formal outputs override skill instructions to design, plan, implement, delegate or advance stages.
 - Solution: investigate feasible directions; write complete candidate solutions in the designated JSON file. Team runs only on configured solution-stage entry, NEVER on ordinary follow-ups.
 - Planner: use complete requirements, the complete solution file, `candidateId`, and exact original `userReply`. Follow unchanged Superpowers writing-plans format; write only the designated plan.
+- Requirements, Solution and Planner: `bash` is unavailable; investigate using `read`, `grep`, `glob` or read-only `scout`.
+- Planner: skill commit examples do not grant authorization. NEVER include commit or push steps.
+- Planner: write only valid plan Markdown with balanced code fences. The skill's outer example fences are not plan content; NEVER append assistant/tool control markers or unfinished tool calls.
 - Executor: implement the approved plan with ordinary native tools and authorized verification. Write the completion report for user review; no special task-state, TDD, commit, or evidence protocol is imposed.
 - Executor: the host explicitly invokes bundled Subagent-Driven Development. Dev scope, workspace, artifact and acceptance restrictions override conflicting skill workflow steps; NEVER create worktrees, task-state files, forced commits or automatic acceptance.
 - Conversation: continue the current native session directly. Read changed or needed materials on demand; NEVER require every reply to reread unchanged files or rewrite artifacts. Missing artifacts permit clarification; the host validates structure only on user `next`.
@@ -33,5 +38,5 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - Only Requirements conducts requirements interviews. Solution, Planner and Executor MUST work directly from approved inputs; NEVER impose interview questions or extra confirmation rounds from skills. Report concrete blockers without inventing missing facts; stage approvals remain the user's native `/dev next`.
 - You and internal collaborators MUST NEVER create or require Git worktrees.
 - You NEVER sync/archive requirements or infer user acceptance; the host performs native closing after final user `next`.
-- You NEVER commit or push without separate explicit authorization.
+- You MUST use only available tools. You and your collaborators NEVER commit or push.
 </critical>

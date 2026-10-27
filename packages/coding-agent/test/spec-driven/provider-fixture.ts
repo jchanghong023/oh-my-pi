@@ -148,6 +148,75 @@ function stageCalls(request: ModelRequest) {
 	);
 	return calls({ ...request, messages: request.messages.slice(start + 1) });
 }
+
+/** Identify the actual delegated assignment, not a title request quoting the same task. */
+export function isScoutProbeRequest(request: ModelRequest): boolean {
+	return (
+		!rolePayload(request) &&
+		request.messages.some(
+			message =>
+				message.role === "user" &&
+				contentText(message.content).includes("Complete assignment thoroughly:\n\nOMP_SPEC_SCOUT_READ_PROBE"),
+		)
+	);
+}
+
+/** Exercise a real native scout, including its read result and structured handoff. */
+export function scoutProbeReply(request: ModelRequest, attack = false): Reply | undefined {
+	const marker = "OMP_SPEC_SCOUT_READ_PROBE";
+	const payload = rolePayload(request);
+	const child = isScoutProbeRequest(request);
+	const executed = calls(request);
+	if (
+		!payload &&
+		request.messages.some(
+			message => message.role === "system" && contentText(message.content).includes("Label the delegated work"),
+		) &&
+		request.messages.some(message => message.role === "user" && contentText(message.content).includes(marker))
+	)
+		return { text: "<title>Inspect scout probe</title>" };
+	if (child) {
+		if (!executed.some(call => call.name === "read"))
+			return tool(request, "read", { i: "Reading scout probe", path: "scout-probe.txt" });
+		if (attack && !executed.some(call => call.name === "write"))
+			return {
+				tool: {
+					name: "write",
+					args: { i: "Attempting unauthorized write", path: "scout-probe.txt", content: "corrupted" },
+				},
+			};
+		if (attack && !executed.some(call => call.name === "task"))
+			return {
+				tool: {
+					name: "task",
+					args: {
+						context: "nested write",
+						tasks: [{ agent: "task", task: "Write scout-probe.txt", solutionSpace: "write" }],
+					},
+				},
+			};
+		const observed = request.messages
+			.filter(message => message.role === "tool")
+			.map(message => contentText(message.content))
+			.join("\n");
+		const data = {
+			summary: observed.includes("scout-visible-bytes") ? "scout-visible-bytes" : "scout-read-failed",
+			files: [{ path: "scout-probe.txt", description: "Real native read" }],
+			architecture: "Read-only investigation",
+		};
+		if (request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "yield"))
+			return tool(request, "yield", { type: "result", data });
+		return { text: JSON.stringify(data) };
+	}
+	if (!payload) return undefined;
+	if (!stageCalls(request).some(call => call.name === "task"))
+		return tool(request, "task", {
+			i: "Inspecting scout probe",
+			context: "Read the probe without modifying the workspace.",
+			tasks: [{ name: "ReadProbe", agent: "scout", task: marker, solutionSpace: "read only" }],
+		});
+	return undefined;
+}
 export function teamStage(request: ModelRequest): string | undefined {
 	if (rolePayload(request)) return undefined;
 	for (const message of request.messages.filter(item => item.role === "user").toReversed()) {

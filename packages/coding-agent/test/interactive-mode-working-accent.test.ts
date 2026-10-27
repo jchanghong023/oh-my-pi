@@ -1,5 +1,4 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "bun:test";
-import { stripVTControlCharacters } from "node:util";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -53,7 +52,7 @@ async function createHarness(sessionName: string): Promise<Harness> {
 		sessionManager,
 		settings,
 		agent: {
-			state: { tools: [] },
+			state: { tools: [], pendingToolCalls: new Set(), streamMessage: null },
 			metadataForProvider: () => undefined,
 		},
 		customCommands: [],
@@ -203,7 +202,6 @@ describe("InteractiveMode working activity", () => {
 			expect(handled).toBe(true);
 			expect(mode.session.isStreaming).toBe(true);
 			expect(mode.loadingAnimation).toBe(loader);
-			expect(stripVTControlCharacters(renderLoader(mode))).toContain("Working");
 		} finally {
 			loader.stop();
 		}

@@ -5,8 +5,10 @@ import {
 	contentText,
 	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
+	isScoutProbeRequest,
 	REQUIREMENT,
 	respond,
+	scoutProbeReply,
 	rolePayload,
 	type ModelRequest,
 	type Reply,
@@ -438,3 +440,63 @@ for (const mode of ["loop", "goal", "vibe"] as const) {
 		180_000,
 	);
 }
+
+test.skipIf(!tuiTest)(
+	"native Dev stages receive real read-only scout findings without changing business files",
+	async () => {
+		const attempted = new Set<string>();
+		await withTui(
+			{
+				async setup(cwd) {
+					await Bun.write(path.join(cwd, "scout-probe.txt"), "scout-visible-bytes");
+				},
+				reply(request) {
+					const scout = scoutProbeReply(request);
+					if (scout) return scout;
+					const role = rolePayload(request)?.specDrivenRole;
+					if (role && ["requirements", "solution", "planner"].includes(role) && !attempted.has(role)) {
+						attempted.add(role);
+						return nativeWrite(request, `business-unauthorized-${role}.txt`, "must not be written");
+					}
+					return respond(request);
+				},
+			},
+			[120, 36],
+			async ({ cwd, provider, tui, stage, idle }) => {
+				await tui("submit", "/dev");
+				await idle();
+				await tui("submit", `/dev new ${REQUIREMENT}`);
+				await stage("requirements");
+				await tui("submit", "/dev next");
+				await stage("solution");
+				await tui("submit", "/dev next pure");
+				await stage("planning");
+				for (const role of ["requirements", "solution", "planner"]) {
+					const resultRequest = provider.requests.find(
+						request =>
+							rolePayload(request)?.specDrivenRole === role &&
+							request.messages.some(
+								message =>
+									message.role === "tool" && contentText(message.content).includes("scout-visible-bytes"),
+							),
+					);
+					expect(resultRequest).toBeDefined();
+					expect(await Bun.file(path.join(cwd, `business-unauthorized-${role}.txt`)).exists()).toBe(false);
+					for (const output of entry(provider, role).outputPaths as string[]) {
+						expect(await Bun.file(path.join(cwd, output.replace("*", "greeting"))).exists()).toBe(true);
+					}
+				}
+				const scouts = provider.requests.filter(isScoutProbeRequest);
+				expect(scouts.length).toBeGreaterThanOrEqual(3);
+				for (const request of scouts) {
+					const names = (request.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
+					expect(names).toContain("read");
+					for (const forbidden of ["write", "edit", "bash", "task", "eval"])
+						expect(names).not.toContain(forbidden);
+				}
+				expect(await Bun.file(path.join(cwd, "scout-probe.txt")).text()).toBe("scout-visible-bytes");
+			},
+		);
+	},
+	240_000,
+);

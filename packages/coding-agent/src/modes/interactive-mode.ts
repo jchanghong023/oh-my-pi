@@ -134,6 +134,7 @@ import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
+import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
@@ -1450,6 +1451,48 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	/** Message the working row shows; mirrors what the loader was last given. */
 	#workingMessage: string | (() => string) = DEFAULT_WORKING_MESSAGE;
+	#workingLabel = () =>
+		this.hideToolActivity || !cfgDisplayCompactToolActivity.get(this.settings)
+			? typeof this.#workingMessage === "function"
+				? this.#workingMessage()
+				: this.#workingMessage
+			: this.#compactWorkingLabel();
+	/** Display-only projection of the viewed agent; never aggregate other agents' activity. */
+	#compactWorkingLabel = this.#oneRowWorkingLabel(() => {
+		const message = typeof this.#workingMessage === "function" ? this.#workingMessage() : this.#workingMessage;
+		const session = this.viewSession;
+		if (session.isAborting) return "正在停止…";
+		if (session === this.session) {
+			if (this.approvalOwnsComposer) return "等待授权确认…";
+			if (
+				this.hookSelector ||
+				this.hookInput ||
+				this.hookEditor ||
+				this.editorContainer.children.some(child => child instanceof AskDialogComponent)
+			) {
+				return "等待用户回答…";
+			}
+		}
+		if (!session.isStreaming && session.hasPendingAsyncWork()) return "等待后台任务…";
+		if (message !== DEFAULT_WORKING_MESSAGE) return message;
+		const state = session.agent.state;
+		if (state.activeThinkingIndex !== undefined) return "模型思考中…";
+		if (state.streamMessage?.role === "assistant") {
+			const block = state.streamMessage.content.at(-1);
+			if (block?.type === "toolCall") return "生成工具调用…";
+			if (block?.type === "text") return "模型回复中…";
+		}
+		const count = state.pendingToolCalls.size;
+		if (count > 1) return `工具执行中 · ${count} 项`;
+		if (count === 1) {
+			const id = state.pendingToolCalls.values().next().value;
+			const call = session
+				.getLastAssistantMessage()
+				?.content.find(block => block.type === "toolCall" && block.id === id);
+			return call?.type === "toolCall" ? `工具执行中 · ${sanitizeStatusText(call.name)}` : "工具执行中…";
+		}
+		return session.isStreaming ? "等待模型响应…" : message;
+	});
 	/**
 	 * The native row's `elapsed` origin: the viewed session's run start, so a
 	 * loader recreated by a focus switch keeps the real elapsed time.
@@ -1494,7 +1537,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#workingRowSpec(): WorkingRowSpec {
 		const accent = this.#getWorkingMessageAccent() !== undefined;
 		return {
-			label: typeof this.#workingMessage === "function" ? this.#workingMessage() : this.#workingMessage,
+			label: this.#workingLabel(),
 			startedAt: this.#workingStartedAt,
 			palette: accent ? NATIVE_ACCENT_SHIMMER : undefined,
 			interruptKey: this.keybindings.getKeys("app.interrupt")[0] ?? "escape",
@@ -8473,7 +8516,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					return accent ? `${accent.dim}${spinner}\x1b[39m` : theme.fg("muted", spinner);
 				},
 				messageColorFn,
-				DEFAULT_WORKING_MESSAGE,
+				this.#workingLabel,
 				// The brand spinner lives in the status line while working; this row
 				// leads with the interrupt affordance instead of a second spinner.
 				// The leading space nudges the row one column right of the flush-left
@@ -8515,16 +8558,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (message === undefined) {
 			this.#pendingWorkingMessage = undefined;
 			if (this.loadingAnimation) {
-				this.loadingAnimation.setMessage(DEFAULT_WORKING_MESSAGE);
 				this.#workingMessage = DEFAULT_WORKING_MESSAGE;
+				this.loadingAnimation.setMessage(() => this.#workingLabel());
 			}
 			return;
 		}
 
 		if (this.loadingAnimation) {
-			const label = typeof message === "function" ? this.#oneRowWorkingLabel(message) : message;
-			this.loadingAnimation.setMessage(label);
-			this.#workingMessage = label;
+			this.#workingMessage = typeof message === "function" ? this.#oneRowWorkingLabel(message) : message;
+			this.loadingAnimation.setMessage(() => this.#workingLabel());
 			return;
 		}
 

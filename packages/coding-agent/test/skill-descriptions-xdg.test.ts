@@ -370,7 +370,7 @@ describe("skill description compressor model selection", () => {
 				settings,
 			},
 		);
-		return createSkillDescriptionCompressor(registry, settings).modelKey();
+		return createSkillDescriptionCompressor(registry, settings, () => os.tmpdir()).modelKey();
 	}
 
 	it("uses the configured default for an unset smol role instead of the built-in smol chain", () => {

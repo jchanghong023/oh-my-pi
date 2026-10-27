@@ -1018,7 +1018,9 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 		const target = router.writeTarget(path);
 		const policy = target?.spec.write;
 		if (rawContent === undefined && !(target && policy?.contentOptional?.(target.url))) {
-			throw new ToolError(`content is required for ${path}.`);
+			throw new ToolError(
+				`content is required for ${path}. The write was not run. Retry with separate JSON fields "path" and "content"; "i", when present, is only a short intent, not the content.`,
+			);
 		}
 		const content = rawContent ?? "";
 		// Coordination writes (peer messages, background-work cancellation) touch no

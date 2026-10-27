@@ -479,6 +479,7 @@ describe("SessionManager legacy session migration persistence", () => {
 			expect(freshFile).not.toBe(deletedFile);
 			expect(fs.existsSync(deletedFile)).toBe(false);
 			session.appendMessage({ role: "user", content: "new conversation", timestamp: 2 });
+			session.appendMessage(makeAssistantMessage());
 			await session.flush();
 
 			const entries = await loadEntriesFromFile(freshFile);

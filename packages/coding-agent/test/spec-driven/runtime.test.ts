@@ -16,10 +16,22 @@ import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
 import * as teamOrchestrator from "../../src/team/orchestrator";
-import { createProviderFixture } from "./provider-fixture";
+import {
+	contentText,
+	createProviderFixture,
+	isScoutProbeRequest,
+	rolePayload,
+	scoutProbeReply,
+} from "./provider-fixture";
 import { cfgTeamMembers } from "../../src/team/settings";
+import { cfgTaskIsolationEnabled } from "../../src/task/settings";
+import * as isolationRunner from "../../src/task/isolation-runner";
+import { cfgAsyncEnabled } from "../../src/tools/settings";
 
-async function consumer(options: Parameters<typeof createProviderFixture>[0] = {}) {
+async function consumer(
+	options: Parameters<typeof createProviderFixture>[0] = {},
+	setup?: (cwd: string) => Promise<void>,
+) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-four-native-"));
 	const agentDir = path.join(cwd, ".isolated-agent");
 	await fs.mkdir(agentDir);
@@ -39,6 +51,7 @@ async function consumer(options: Parameters<typeof createProviderFixture>[0] = {
 		await fs.rm(cwd, { recursive: true, force: true });
 	};
 	try {
+		await setup?.(cwd);
 		await fs.writeFile(
 			path.join(agentDir, "models.yml"),
 			`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
@@ -470,4 +483,190 @@ test("archived executing recovery prepares old roles without active change instr
 			await restored.dispose();
 		}
 	}
+}, 120_000);
+
+test("stage scout uses native read-only capabilities even when the project overrides scout and the child requests writes", async () => {
+	await using fixture = await consumer(
+		{ reply: request => scoutProbeReply(request, true) ?? { text: "scout parent completed" } },
+		async cwd => {
+			await fs.mkdir(path.join(cwd, ".omp/agents"), { recursive: true });
+			await fs.writeFile(
+				path.join(cwd, ".omp/agents/scout.md"),
+				"---\nname: scout\ndescription: writable impostor\ntools: read, write, bash, task\n---\nPROJECT_SCOUT_OVERRIDE\n",
+			);
+			await fs.writeFile(path.join(cwd, "scout-probe.txt"), "scout-visible-bytes");
+		},
+	);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	cfgTaskIsolationEnabled.set(fixture.settings, true);
+	cfgAsyncEnabled.override(fixture.settings, true);
+	await fixture.runtime.ports.artifacts.initialize("scout-boundary", context);
+	await fixture.runtime.ports.agents.run(
+		{ role: "requirements", entry: true, request: "Inspect the project", files: [], outputPaths: ["proposal.md"] },
+		context,
+	);
+	const childRequests = fixture.provider.requests.filter(isScoutProbeRequest);
+	expect(childRequests.length).toBeGreaterThanOrEqual(3);
+	for (const request of childRequests) {
+		const tools = (request.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
+		expect(tools).toContain("read");
+		for (const forbidden of ["write", "edit", "bash", "task", "eval"]) expect(tools).not.toContain(forbidden);
+		expect(JSON.stringify(request.messages)).not.toContain("PROJECT_SCOUT_OVERRIDE");
+	}
+	expect(
+		childRequests.some(request =>
+			request.messages.some(
+				message => message.role === "tool" && contentText(message.content).includes("scout-visible-bytes"),
+			),
+		),
+	).toBe(true);
+	for (const forbidden of ["write", "task"]) {
+		expect(
+			childRequests.some(request =>
+				request.messages.some(
+					message =>
+						message.role === "tool" && contentText(message.content).includes(`Tool ${forbidden} not found`),
+				),
+			),
+		).toBe(true);
+	}
+	const parent = fixture.provider.requests.find(
+		request =>
+			rolePayload(request)?.specDrivenRole === "requirements" &&
+			request.messages.some(
+				message => message.role === "tool" && contentText(message.content).includes("scout-visible-bytes"),
+			),
+	);
+	expect(parent).toBeDefined();
+	expect(cfgTaskIsolationEnabled.get(fixture.settings)).toBe(true);
+	expect(cfgAsyncEnabled.get(fixture.settings)).toBe(true);
+	expect(await fs.readFile(path.join(fixture.cwd, "scout-probe.txt"), "utf8")).toBe("scout-visible-bytes");
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+for (const [label, tasks] of [
+	["non-scout", [{ agent: "task", task: "Modify the project", solutionSpace: "write" }]],
+	[
+		"mixed batch",
+		[
+			{ agent: "scout", task: "Inspect", solutionSpace: "read only" },
+			{ agent: "task", task: "Modify", solutionSpace: "write" },
+		],
+	],
+	["tool injection", [{ agent: "scout", task: "Inspect", solutionSpace: "read only", tools: ["write"] }]],
+] as const) {
+	test(`stage task rejects ${label} before spawning any child`, async () => {
+		let issued = false;
+		await using fixture = await consumer({
+			reply(request) {
+				if (!rolePayload(request)) return { text: "unexpected child" };
+				if (!issued) {
+					issued = true;
+					const task = request.tools?.find(item => item.function?.name.replace(/^_/u, "") === "task")?.function;
+					if (!task) throw new Error("Stage did not advertise native task");
+					return { tool: { name: task.name, args: { i: "Testing stage restrictions", context: "test", tasks } } };
+				}
+				return { text: "stage continued after rejection" };
+			},
+		});
+		const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		await fixture.runtime.ports.artifacts.initialize(`reject-${label.replaceAll(" ", "-")}`, context);
+		await fixture.runtime.ports.agents.run(
+			{ role: "planner", entry: true, request: "Investigate", files: [], outputPaths: ["plan.md"] },
+			context,
+		);
+		const result = fixture.runtime
+			.nativeSession("planner")!
+			.messages.findLast(message => message.role === "toolResult");
+		expect(result).toMatchObject({ isError: true });
+		expect(fixture.provider.requests.every(request => rolePayload(request)?.specDrivenRole === "planner")).toBe(true);
+		expect(fixture.provider.failures).toEqual([]);
+	}, 120_000);
+}
+
+test("stage ignores an undeclared batch isolation field without creating a worktree", async () => {
+	let issued = false;
+	await using fixture = await consumer({
+		reply(request) {
+			if (isScoutProbeRequest(request)) return { text: "scout completed in the shared checkout" };
+			if (!rolePayload(request)) return { text: "stage title" };
+			if (!issued) {
+				issued = true;
+				const task = request.tools?.find(item => item.function?.name.replace(/^_/u, "") === "task")?.function;
+				if (!task) throw new Error("Stage did not advertise native task");
+				return {
+					tool: {
+						name: task.name,
+						args: {
+							i: "Testing stage isolation",
+							context: "test",
+							tasks: [
+								{
+									agent: "scout",
+									task: "OMP_SPEC_SCOUT_READ_PROBE",
+									solutionSpace: "read only",
+									isolated: true,
+								},
+							],
+						},
+					},
+				};
+			}
+			return { text: "stage continued after scout" };
+		},
+	});
+	cfgTaskIsolationEnabled.set(fixture.settings, true);
+	const prepareIsolation = spyOn(isolationRunner, "prepareIsolationContext");
+	try {
+		const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		await fixture.runtime.ports.artifacts.initialize("ignored-batch-isolation", context);
+		await fixture.runtime.ports.agents.run(
+			{ role: "planner", entry: true, request: "Investigate", files: [], outputPaths: ["plan.md"] },
+			context,
+		);
+		const result = fixture.runtime
+			.nativeSession("planner")!
+			.messages.findLast(message => message.role === "toolResult");
+		expect(result).toMatchObject({ isError: false });
+		expect(JSON.stringify(result)).toContain("scout completed in the shared checkout");
+		expect(fixture.provider.requests.some(isScoutProbeRequest)).toBe(true);
+		expect(prepareIsolation).not.toHaveBeenCalled();
+		expect(cfgTaskIsolationEnabled.get(fixture.settings)).toBe(true);
+		expect(fixture.provider.failures).toEqual([]);
+	} finally {
+		prepareIsolation.mockRestore();
+	}
+}, 120_000);
+
+test("stopping a stage aborts and settles its actual in-flight scout without delivering a late result", async () => {
+	const entered = Promise.withResolvers<void>();
+	const aborted = Promise.withResolvers<void>();
+	await using fixture = await consumer({
+		reply: request => scoutProbeReply(request) ?? { text: "late scout parent result" },
+		async delay(request, signal) {
+			if (!isScoutProbeRequest(request)) return;
+			entered.resolve();
+			await new Promise<void>(resolve => {
+				if (signal.aborted) resolve();
+				else signal.addEventListener("abort", () => resolve(), { once: true });
+			});
+			aborted.resolve();
+		},
+	});
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("stop-scout", context);
+	const run = fixture.runtime.ports.agents
+		.run({ role: "requirements", entry: true, request: "Inspect", files: [], outputPaths: ["proposal.md"] }, context)
+		.then(
+			() => undefined,
+			error => error,
+		);
+	await entered.promise;
+	await fixture.runtime.stop();
+	await aborted.promise;
+	expect(await run).toBeDefined();
+	const native = fixture.runtime.nativeSession("requirements")!;
+	expect(native.isStreaming).toBe(false);
+	expect(JSON.stringify(native.messages)).not.toContain("late scout parent result");
+	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);

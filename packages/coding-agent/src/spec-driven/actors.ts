@@ -6,7 +6,9 @@ import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
 import type { ExtensionFactory } from "../extensibility/extensions";
 import { cfgGoalEnabled } from "../goals/settings";
-import { cfgTaskIsolationEnabled, cfgWorktreeOnStart } from "../task/settings";
+import { cfgTaskIsolationEnabled, cfgTaskSpeculativeLaunch, cfgWorktreeOnStart } from "../task/settings";
+import { getBundledAgent } from "../task/agents";
+import type { NativeSubagentHooks } from "../task/types";
 import { assertSpecWritePath } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
@@ -130,6 +132,7 @@ export async function createSpecActor(args: {
 	cfgEditMode.override(settings, "replace");
 	cfgTaskIsolationEnabled.override(settings, false);
 	cfgWorktreeOnStart.override(settings, "off");
+	if (args.role !== "executor") cfgTaskSpeculativeLaunch.override(settings, false);
 	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
 	let stageOutputPaths: readonly string[] | undefined;
 	let reportTurn: unknown;
@@ -148,6 +151,64 @@ export async function createSpecActor(args: {
 						.join("\n");
 		return hasExplicitRepairIntent(text);
 	};
+	const validateScoutTask = (input: unknown): string | undefined => {
+		if (!input || typeof input !== "object") return undefined;
+		const call = input as Record<string, unknown>;
+		const items = Array.isArray(call.tasks) ? [call, ...call.tasks] : [call];
+		for (const item of items) {
+			if (!item || typeof item !== "object") continue;
+			const fields = item as Record<string, unknown>;
+			if (typeof fields.agent === "string" && fields.agent.trim() && fields.agent.trim() !== "scout")
+				return "执行确认前只能派发 scout 调查子代理。";
+			if ("tools" in fields || fields.isolated === true || fields.worktree)
+				return "scout 不允许注入工具或创建 worktree。";
+		}
+		return undefined;
+	};
+	const checkScoutAdmission = async () => {
+		const approval = await args.checkApproved?.();
+		if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
+			throw new Error("正式批准版本已变化，不得继续协作。");
+		const status = args.getStatus?.();
+		if (
+			status?.closing ||
+			status?.accepted ||
+			((status?.awaitingAcceptance || reportTurn) && !repairAuthorized()) ||
+			(reportTurn && lastUser() === reportTurn)
+		)
+			throw new Error("当前交付边界不允许继续派发协作。");
+	};
+	const restrictions =
+		args.options.toolRestrictions?.clone() ??
+		cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
+		new ToolRestrictions();
+	const scout = args.role === "executor" ? undefined : getBundledAgent("scout");
+	if (args.role !== "executor" && !scout) throw new Error("Bundled scout agent is unavailable");
+	const scoutHooks: NativeSubagentHooks = {
+		async beforeSpawn(request) {
+			await checkScoutAdmission();
+			if (
+				request.invocationKind !== "task" ||
+				(request.agent?.trim() || "scout") !== "scout" ||
+				request.isolation?.requested ||
+				request.customTools?.length
+			)
+				throw new Error("执行确认前只能派发无额外工具和 worktree 的 scout。");
+		},
+		async configureSession() {
+			return {
+				toolNames: ["read", "find", "grep", "glob", "web_search", "yield"],
+				toolRestrictions: restrictions.clone(),
+				restrictToolNames: true,
+				allowRestrictedCustomTools: false,
+				customTools: [],
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				subagentHooks: undefined,
+			};
+		},
+	};
 	const writeGuard: ExtensionFactory = pi => {
 		pi.on("before_agent_start", async () => {
 			if (!needsRecovery || !args.recoverContext) return;
@@ -155,7 +216,11 @@ export async function createSpecActor(args: {
 			needsRecovery = false;
 			return { message: { customType: "dev-history-recovery", display: false, content } };
 		});
-		pi.on("tool_call", async event => {
+		pi.on("tool_call", async (event, ctx) => {
+			if (args.role !== "executor" && ctx.sessionManager.getSessionId() !== session.sessionId) {
+				if (["read", "find", "grep", "glob", "web_search", "yield"].includes(event.toolName)) return undefined;
+				return { block: true, reason: "scout 只允许使用只读调查工具。" };
+			}
 			if (["read", "grep", "glob", "wiki"].includes(event.toolName)) return undefined;
 			try {
 				const approval = await args.checkApproved?.();
@@ -184,6 +249,12 @@ export async function createSpecActor(args: {
 				return { block: true, reason: "Dev 协作不得创建 worktree。" };
 			if (event.toolName === "bash" && /\bgit\s+worktree\s+add\b/i.test(String(event.input.command ?? "")))
 				return { block: true, reason: "Dev 不得创建 worktree。" };
+			if (event.toolName === "task" && args.role !== "executor") {
+				const error = validateScoutTask(event.input);
+				if (error) return { block: true, reason: error };
+				if (status?.closing) return { block: true, reason: "当前阶段不可派发协作。" };
+				return undefined;
+			}
 			if (args.role === "executor") return undefined;
 			if (event.toolName !== "write" && event.toolName !== "edit")
 				return { block: true, reason: "执行确认前只能写本阶段的指定产物。" };
@@ -287,7 +358,9 @@ export async function createSpecActor(args: {
 				};
 			}
 		});
-		pi.on("before_subagent_spawn", async () => {
+		pi.on("before_subagent_spawn", async event => {
+			if (args.role !== "executor" && (event.invocationKind !== "task" || event.agent !== "scout"))
+				return { block: true, reason: "执行确认前只能派发 scout 调查子代理。" };
 			try {
 				const approval = await args.checkApproved?.();
 				if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
@@ -307,10 +380,23 @@ export async function createSpecActor(args: {
 	const created = await createAgentSession({
 		...args.options,
 		settings,
-		toolRestrictions:
-			args.options.toolRestrictions?.clone() ??
-			cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
-			new ToolRestrictions(),
+		toolRestrictions: restrictions,
+		...(scout
+			? {
+					restrictToolNames: true,
+					disableExtensionDiscovery: true,
+					allowRestrictedCustomTools: false,
+					customTools: [],
+					enableMCP: false,
+					enableLsp: false,
+					enableIrc: false,
+					spawns: "scout",
+					getAgentDefinitions: () => [
+						{ ...scout, tools: ["read", "find", "grep", "glob", "web_search"], spawns: [], blocking: true },
+					],
+					subagentHooks: scoutHooks,
+				}
+			: {}),
 		...(args.role === "executor"
 			? {
 					allowRestrictedGoal: true,
@@ -330,10 +416,10 @@ export async function createSpecActor(args: {
 		requireYieldTool: false,
 		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
 		// factories without admitting ambient tools or extension discovery.
-		...(args.options.restrictToolNames
+		...(args.options.restrictToolNames || scout
 			? {
 					preloadedPreparedExtensions: [
-						...(args.options.preloadedPreparedExtensions ?? []),
+						...(scout ? [] : (args.options.preloadedPreparedExtensions ?? [])),
 						{
 							path: "<spec-stage-write-guard>",
 							resolvedPath: "<spec-stage-write-guard>",

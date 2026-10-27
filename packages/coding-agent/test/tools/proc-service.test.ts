@@ -476,9 +476,10 @@ describe("proc:// background jobs", () => {
 		const file = path.join(temp.path(), "keep.txt");
 		await Bun.write(file, "keep this");
 		const write = new WriteTool(toolSession(temp.path(), undefined, { launch: false }));
-		await expect(write.execute("missing-content", write.parameters.assert({ path: file }))).rejects.toThrow(
-			"content is required",
-		);
+		const error = await rejectionMessage(write.execute("missing-content", write.parameters.assert({ path: file })));
+		expect(error).toMatch(/not (?:run|executed)/i);
+		expect(error).toContain('"path"');
+		expect(error).toContain('"content"');
 		expect(await Bun.file(file).text()).toBe("keep this");
 		await write.execute("empty-file", { path: file, content: "" });
 		expect(await Bun.file(file).text()).toBe("");

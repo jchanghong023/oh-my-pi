@@ -18,8 +18,12 @@ async function runAffectedFixture(mode: "error" | "invalid-json" | "invalid-shap
 		const extension = process.platform === "win32" ? ".exe" : "";
 		const cargo = path.join(bin, `cargo${extension}`);
 		const rustup = path.join(bin, `rustup${extension}`);
-		// Node interprets fixture subcommands without Bun's built-in `test` discovery.
-		const node = Bun.which("node");
+		// Bun's node shim treats the fixture's `test` subcommand as `bun test`.
+		const nodePath = (process.env.PATH ?? process.env.Path ?? "")
+			.split(path.delimiter)
+			.filter(entry => path.basename(entry).toLowerCase() !== "bun-node")
+			.join(path.delimiter);
+		const node = Bun.which("node", { PATH: nodePath });
 		if (!node) throw new Error("The fake Cargo CLI fixture requires a Node executable.");
 		fs.copyFileSync(node, cargo);
 		fs.copyFileSync(node, rustup);

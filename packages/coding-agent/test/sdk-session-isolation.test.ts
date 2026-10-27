@@ -259,7 +259,14 @@ describe("createAgentSession session storage isolation", () => {
 			expect(newFile).not.toBe(oldFile);
 			expect(fs.existsSync(oldFile)).toBe(true);
 			expect(await loadEntriesFromFile(oldFile)).toEqual(oldEntries);
-			expect((await loadEntriesFromFile(newFile))[0]?.type).toBe("session");
+			session.sessionManager.appendMessage({ role: "user", content: "new conversation", timestamp: 2 });
+			await session.sessionManager.ensureOnDisk();
+			expect(await loadEntriesFromFile(newFile)).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({ role: "user", content: "new conversation" }),
+				}),
+			);
 		} finally {
 			await session.dispose();
 		}

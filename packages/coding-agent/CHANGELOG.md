@@ -8,6 +8,7 @@
 - Use native stage chat, streaming, tool events, attachments, queues, drafts, history, compaction and stopping without relaying or duplicating replies. A three-line Dev area shows role/runtime/Team, the main action and its consequence, and errors or progress; configuration and details are manual native interactions, without automatic dialogs or a separate decision panel.
 - Persist only the workspace solution-Team toggle, default off and editable in no-agent or requirements phases when runtime conditions allow. New flows inherit it; successful completion preserves it and drop clears it. Team starts only on solution entry, not follow-up turns. Goal remains a user-controlled native executor-session capability, with no Dev setting or per-turn recreation.
 - Let `/dev` requirements and solution agents query existing Wiki indexes directly while retaining their stage-specific file write restrictions.
+- Let `/dev` requirements, solution and planning agents delegate investigation to read-only Scout subagents without expanding stage write access.
 - Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
 - Expose native `/dev` through opt-in ZCode queries and subscriptions using the same workspace controller, five role states, Team configuration, native messages, approvals and recovery rules. Cold history remains read-only and never acquires control or starts models; unrelated dynamic workflows and desktop UI integration remain separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
@@ -18,6 +19,10 @@
 
 ### Changed
 
+- Clarify write tool arguments and guide models to retry missing content without treating the intent field as file contents.
+- Explain unavailable tool calls, list the request's tools and guide models toward available alternatives without changing tool permissions.
+- In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
+- Compact working status now distinguishes the viewed agent's model waiting, thinking, replies, tool-call generation, tool execution and user/background waits without aggregating other agents or changing execution.
 - Prefer Handoff before Snapcompact in the default compaction fallback order; remote compaction remains first and explicit preferences are unchanged.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
 - Automatically inject the original stage skills in `/dev`: Brainstorming then Grill-me at the end of the requirements system prompt, writing-plans for planning and subagent-driven-development for execution. Solutions receive no interview skill; solution, planning and execution proceed from approved inputs without mandatory interviews or extra skill confirmation rounds. Fixed stage boundaries follow non-requirements skill text. No manual skill invocation is required; ordinary-session discovery and Dev authorization boundaries remain unchanged.

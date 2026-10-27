@@ -188,6 +188,7 @@ describe("P2-21 Python Eval runtime scope", () => {
 		vi.spyOn(settings, "getShellConfig").mockReturnValue({ ...shellConfig, env });
 		vi.spyOn(piUtils, "getPythonEnvDir").mockReturnValue(path.join(cwd, "missing-managed"));
 		vi.spyOn(piUtils, "$which").mockReturnValue(systemPython);
+		vi.spyOn(piUtils, "$whichAll").mockReturnValue([systemPython]);
 		vi.spyOn(fs, "existsSync").mockImplementation(candidate =>
 			[offlinePython, activePython].includes(String(candidate)),
 		);

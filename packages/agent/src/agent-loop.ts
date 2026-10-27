@@ -3007,9 +3007,17 @@ function formatToolNotFoundMessage(
 	fallbackNames?: Iterable<string>,
 ): string {
 	const suggestions = suggestToolNames(name, tools, fallbackNames);
-	if (suggestions.length === 0) return `Tool ${name} not found`;
-	if (suggestions.length === 1) return `Tool ${name} not found. Did you mean ${suggestions[0]}?`;
-	return `Tool ${name} not found. Closest available: ${suggestions.slice(0, MAX_TOOL_NAME_SUGGESTIONS).join(", ")}`;
+	const suggestion =
+		suggestions.length === 0
+			? ""
+			: suggestions.length === 1
+				? ` Did you mean ${suggestions[0]}?`
+				: ` Closest available: ${suggestions.slice(0, MAX_TOOL_NAME_SUGGESTIONS).join(", ")}.`;
+	const offered = tools?.slice(0, 20).map(tool => tool.name).join(", ");
+	const roster = offered
+		? `Tools in this request: ${offered}${tools && tools.length > 20 ? ", ..." : ""}.`
+		: "No tools were listed in this request.";
+	return `Tool ${name} not found.${suggestion} The tool was not executed. ${roster} Use an appropriate available tool instead; do not repeat the unavailable call.`;
 }
 
 /**
