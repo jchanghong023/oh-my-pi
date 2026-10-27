@@ -68,7 +68,8 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordH
 		const n = word.length;
 		let out = "";
 		let prev = "";
-		for (let i = 0; i < n; i++) {
+		for (let i = 0; i < n;) {
+			const char = String.fromCodePoint(word.codePointAt(i)!);
 			const t = (i / n + phase) % 1;
 			const color = stopsArr[Math.floor(t * m) % m] ?? stopsArr[0] ?? "";
 			// Coalesce consecutive characters that resolve to the same stop.
@@ -76,7 +77,8 @@ export function createGradientHighlighter(spec: GradientHighlightSpec): KeywordH
 				out += color;
 				prev = color;
 			}
-			out += word[i];
+			out += char;
+			i += char.length;
 		}
 		return `${out}${resetTo}`;
 	};

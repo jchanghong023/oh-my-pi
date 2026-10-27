@@ -316,7 +316,7 @@ test.skipIf(!tuiTest)(
 				await idle();
 				await tui("submit", "/dev config");
 				await tui("expect", "text", "方案 Team", "--timeout", "30000");
-				await tui("key", "press", "Home", "Enter");
+				await tui("key", "press", "Up", "Enter");
 				await eventually(state, value => value.team);
 				await tui("submit", `/dev new ${REQUIREMENT} 运行时不得联网。`);
 				await stage("requirements");

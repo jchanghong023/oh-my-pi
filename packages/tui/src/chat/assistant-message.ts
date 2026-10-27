@@ -25,6 +25,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { isNativeRendering } from "../native/state";
 import { NativeImageCache, nativeMediaNode } from "../native/blobs";
 import { linkedImageText } from "../prompt/image-references";
+import { createGradientHighlighter } from "../prompt/gradient-highlight";
 import { Memo } from "../native/memo";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
 import { WidthAwareText } from "../render";
@@ -52,6 +53,12 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
  */
 const MAX_TRANSCRIPT_ERROR_ROWS = 8;
 const EMPTY_STABLE_RENDER: readonly string[] = [];
+const paintCompactThinking = createGradientHighlighter({
+	probe: "",
+	highlight: /[^\n]+/gu,
+	stops: 14,
+	hue: t => t * 330,
+});
 
 /** The native head of a finished thinking block: "Thought for 12s", or "Thought" when it was never seen streaming. */
 function thoughtLabel(clock: { start: number; end?: number } | undefined): string {
@@ -848,7 +855,7 @@ export class AssistantMessageComponent extends Container {
 			for (let index = rows.length - 1; index >= 0; index--) {
 				const row = sanitizeText(rows[index]!);
 				if (!row.trim()) continue;
-				this.#compactThinkingPreviewRows = [theme.fg("thinkingText", row)];
+				this.#compactThinkingPreviewRows = [paintCompactThinking(row)];
 				break;
 			}
 		}

@@ -929,6 +929,8 @@ export interface CreateAgentSessionOptions {
 	 * @internal
 	 */
 	expectedAgentRef?: AgentRef | null;
+	/** Initial registry status for sessions created before they have work to run. @internal */
+	initialAgentStatus?: "running" | "idle";
 	/** Parent task ID prefix for nested artifact naming (e.g., "Extensions") */
 	parentTaskPrefix?: string;
 	/** Child output namespace for independent top-level roots; does not change agent kind. */
@@ -4682,7 +4684,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			parentId: options.parentAgentId,
 			session: null,
 			sessionFile: sessionManager.getSessionFile() ?? null,
-			status: "running" as const,
+			status: options.initialAgentStatus ?? "running",
 		};
 		registeredAgentRef =
 			options.expectedAgentRef === undefined
@@ -5822,7 +5824,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				sessionManager.getSessionFile() ?? null,
 				registeredAgentRef,
 			) ||
-			!agentRegistry.setStatus(resolvedAgentId, "running", registeredAgentRef)
+			!agentRegistry.setStatus(resolvedAgentId, options.initialAgentStatus ?? "running", registeredAgentRef)
 		) {
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}

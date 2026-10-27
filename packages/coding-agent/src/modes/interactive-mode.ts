@@ -3010,6 +3010,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			const recipient = interaction.recipient;
 			const role = recipient ? roleLabel(recipient.role) : "空阶段";
 			const action = interaction.actions.find(action => action.available);
+			const dev = peekSpecDrivenController(this.session.sessionManager);
+			const interruptible =
+				this.session.isStreaming ||
+				this.session.isBashRunning ||
+				this.session.isEvalRunning ||
+				dev?.hasPendingTeam(this.session);
 			const consequences: Record<string, string> = {
 				next:
 					status.phase === "requirements"
@@ -3028,9 +3034,13 @@ export class InteractiveMode implements InteractiveModeContext {
 			};
 			const lines = [
 				`Dev · ${role} · ${observation.active ? "运行中" : "等待输入"} · Team ${status.useTeam ? "开" : "关"}`,
-				action
-					? `${action.command} · ${consequences[action.id] ?? action.label}`
-					: "/dev new <需求> · 新建流程，随后才调用需求 Agent",
+				observation.active
+					? interruptible
+						? `${this.keybindings.getKeys("app.interrupt")[0] === "escape" ? "Esc" : appKey(this.keybindings, "app.interrupt") || "Esc"} · 停止当前操作，保留流程`
+						: "正在处理，等待当前操作结清"
+					: action
+						? `${action.id === "new" ? "/dev new <需求>" : action.id === "next" && status.phase === "solution" ? "/dev next [方案ID]" : action.command} · ${consequences[action.id] ?? action.label}`
+						: "/dev new <需求> · 新建流程，随后才调用需求 Agent",
 				`/session 完整详情 · ${
 					this.#devError ??
 					observation.error ??
@@ -3240,7 +3250,7 @@ export class InteractiveMode implements InteractiveModeContext {
 								].filter(Boolean),
 							),
 						].map(error => `错误/阻塞: ${error}`),
-						`提示: ${this.#devNotice ?? "查看不会调用模型、发送草稿或批准材料；Esc 关闭，方向键滚动。"}`,
+						`提示: ${observation.notice ?? (this.#devNotice?.startsWith("协同开发操作失败：") ? undefined : this.#devNotice) ?? "查看不会调用模型、发送草稿或批准材料；Esc 关闭，方向键滚动。"}`,
 						"入口: /dev 停止保存并返回普通会话；再次进入恢复原流程",
 						"入口: /dev new <需求> 创建新流程（已有流程需先 drop）",
 						"入口: /dev next 确认需求；方案阶段 /dev next <候选ID> 批准指定方案；计划阶段批准计划开始执行；执行阶段验收、同步并归档",
@@ -4470,10 +4480,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Fixed help for the empty composer; the editor hides it while typing. */
 	#composerHint(): string {
-		return theme.fg(
-			"dim",
-			"Ctrl+T 临时模型 Ctrl+Q 排队发送 Esc Esc 回退对话 /tree 会话历史 /goal-autopilot 目标 双击左方向键<- 子代理 /wiki 文档检索 /repo 代码索引 有使用问题反馈j00808874",
-		);
+		return theme.fg("dim", "Ctrl+T 模型  Ctrl+Q 排队  Esc Esc 回退  /display 显示模式  /tree 历史");
 	}
 
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {
@@ -8257,10 +8264,10 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	showSessionInfo(info: string, context?: ContextUsage): void {
 		if (this.#devSessionDetails) {
-			info += `\n\n${theme.bold("Dev 工作区")}\n${this.#devSessionDetails
+			info = `${theme.bold("Dev 工作区")}\n${this.#devSessionDetails
 				.split("\n")
 				.map(line => `${theme.fg("dim", "│")} ${line}`)
-				.join("\n")}`;
+				.join("\n")}\n\n${info}`;
 		}
 		this.#hideSessionInfo();
 		const overlay = new SessionInfoOverlay(this.ui, info, () => this.#hideSessionInfo(), context);

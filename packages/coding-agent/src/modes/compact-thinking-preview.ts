@@ -3,10 +3,13 @@ import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { InteractiveModeContext } from "./types";
 
-const EMPTY_THINKING_ROW: readonly string[] = [""];
+const EMPTY_THINKING_ROW: readonly string[] = ["", ""];
 
 /** A live composer projection, never a transcript child or a retained thinking snapshot. */
 export class CompactThinkingPreview implements Component {
+	#sourceRows?: readonly string[];
+	#rows: readonly string[] = EMPTY_THINKING_ROW;
+
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
@@ -15,7 +18,11 @@ export class CompactThinkingPreview implements Component {
 	) {}
 
 	render(width: number): readonly string[] {
-		if (!displayPreferences.compactToolActivity || displayPreferences.hideToolActivity) return [];
+		if (!displayPreferences.compactToolActivity || displayPreferences.hideToolActivity) {
+			this.#sourceRows = undefined;
+			this.#rows = EMPTY_THINKING_ROW;
+			return [];
+		}
 		// A completed thinking block remains the message tail until the next block
 		// arrives; transient reveal updates alone do not mean it is still active.
 		if (
@@ -23,10 +30,21 @@ export class CompactThinkingPreview implements Component {
 			this.ctx.viewSession.isAborting ||
 			this.ctx.viewSession.agent.state.activeThinkingIndex === undefined
 		) {
+			this.#sourceRows = undefined;
+			this.#rows = EMPTY_THINKING_ROW;
 			return EMPTY_THINKING_ROW;
 		}
 		const rows = this.ctx.streamingComponent?.renderCompactThinkingPreview(width);
-		return rows?.length ? rows : EMPTY_THINKING_ROW;
+		if (!rows?.length) {
+			this.#sourceRows = undefined;
+			this.#rows = EMPTY_THINKING_ROW;
+			return EMPTY_THINKING_ROW;
+		}
+		if (rows !== this.#sourceRows) {
+			this.#sourceRows = rows;
+			this.#rows = [rows[0]!, ""];
+		}
+		return this.#rows;
 	}
 
 	describe(cx: DescribeContext): NativeNode {

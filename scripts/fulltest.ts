@@ -8,6 +8,7 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
+import { normalizeRustScopeChangedPaths } from "./rust-test-scope";
 import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
@@ -168,6 +169,9 @@ export function fulltestCommands(
 				"packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-materials.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts",
 			].includes(file)
 				? [path.join(root, "packages/coding-agent/src/cli.ts")]
 				: undefined,
@@ -183,7 +187,9 @@ export function fulltestCommands(
 			env: {
 				...env,
 				CI: "1",
-				OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths.filter(file => !isDocumentation(file))),
+				OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(
+					normalizeRustScopeChangedPaths(changedPaths.filter(file => !isDocumentation(file))),
+				),
 			},
 		},
 		{

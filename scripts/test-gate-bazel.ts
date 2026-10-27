@@ -11,7 +11,7 @@ import { gateCommandRisk } from "./test-gate-scheduler";
 import { registerBazelInvocation } from "./test-gate-bazel-report";
 import { openGateLibc } from "./test-gate-libc";
 import { discoverBazelHelperInputs } from "./test-gate-bazel-inputs";
-import { bazelShell, bazelToolPath } from "./test-gate-bazel-tools";
+import { bazelShell, bazelToolPath, isNativeTuiTest, requiresTuiTest } from "./test-gate-bazel-tools";
 import { createGateEventRelay, type GateEventRelay } from "./test-gate-events";
 
 function bazelNamespace(commands: readonly GateCommand[]): string {
@@ -340,6 +340,22 @@ async function declareTargets(
 	const files = [...new Set(inventory.stdout.split("\0").filter(Boolean))].sort();
 	const tools: Record<string, string> = { [process.platform === "win32" ? "bun.exe" : "bun"]: process.execPath };
 	const toolPath = bazelToolPath(process.env.PATH ?? process.env.Path ?? "");
+	const tuiTools = new Map<GateCommand, { name?: string; reusable: boolean }>();
+	for (const command of commands.filter(command => requiresTuiTest(command.label))) {
+		const pathOverride = Object.entries(command.env ?? {}).find(([key]) =>
+			process.platform === "win32" ? key.toUpperCase() === "PATH" : key === "PATH",
+		);
+		const executionPath = pathOverride ? (pathOverride[1] ?? "") : (process.env.PATH ?? process.env.Path ?? "");
+		const executable = Bun.which("tui-test", { PATH: executionPath });
+		if (!executable) throw new GateCommandError(`tui-test is required for ${command.label}`, 127, "MISSING_TOOL");
+		const filtered = Bun.which("tui-test", { PATH: bazelToolPath(executionPath) });
+		const native = isNativeTuiTest(executable);
+		const name = native ? `tui-test-${Bun.hash(executable).toString(16)}.exe` : undefined;
+		if (name) tools[name] = executable;
+		// Unknown wrappers and differing PATH resolution cannot safely reuse a
+		// result: their actual implementation closure is not represented here.
+		tuiTools.set(command, { name, reusable: Boolean(name && filtered === executable) });
+	}
 	for (const name of [
 		"git",
 		"node",
@@ -482,6 +498,8 @@ async function declareTargets(
 		if (shell) names.add(path.basename(shell));
 		if (windows) names.add("bash.exe");
 		else names.add("bash");
+		const tuiTool = tuiTools.get(command)?.name;
+		if (tuiTool) names.add(tuiTool);
 		if (/^(test|smoke)\//.test(command.label)) {
 			for (const name of ["git", "node", "python", "python3"]) names.add(windows ? `${name}.exe` : name);
 			if (windows) names.add("powershell.exe");
@@ -561,7 +579,8 @@ async function declareTargets(
 		const noCache =
 			command.resultReuse === "disabled" ||
 			command.label.startsWith("build/") ||
-			(/Rust/.test(command.label) && !cacheRust);
+			(/Rust/.test(command.label) && !cacheRust) ||
+			tuiTools.get(command)?.reusable === false;
 		if (noCache) uncachedTargets.add(command.label);
 		// Always-run commands read the real workspace, not their runfiles.
 		// Cache only the launcher closure: declaring command inputs here would

@@ -3,10 +3,12 @@ import * as path from "node:path";
 
 import {
 	affectedRustTestCommands,
+	normalizeRustScopeChangedPaths,
 	parseFulltestChangedPaths,
 	selectRustTestScope,
 	type CargoLockPackageForRustScope,
 	type CargoMetadataForRustScope,
+	type RustTestScope,
 } from "./rust-test-scope";
 
 const REPO_ROOT = "/repo";
@@ -60,6 +62,117 @@ async function runRustTaskRunner(args: string[], changedPaths: string[] = []) {
 }
 
 describe("Rust affected test scope", () => {
+	it("preserves scope and command arguments while dropping unrelated paths from the Rust key", () => {
+		const metadata = workspace([
+			{ name: "leaf", path: "crates/leaf" },
+			{ name: "native", path: "crates/native", targets: [{ kind: ["cdylib"], doctest: true }] },
+			{ name: "cfg_aliases", path: "crates/vendor/cfg_aliases" },
+			{ name: "consumer", path: "crates/consumer", dependencies: ["nix"] },
+		]);
+		const lockPackages: CargoLockPackageForRustScope[] = [
+			{ name: "cfg_aliases", version: "1.0.0" },
+			{
+				name: "nix",
+				version: "0.28.0",
+				source: "registry+https://github.com/rust-lang/crates.io-index",
+				dependencies: ["cfg_aliases 1.0.0"],
+			},
+			{ name: "consumer", version: "1.0.0", dependencies: ["nix 0.28.0"] },
+			{ name: "leaf", version: "1.0.0" },
+			{ name: "native", version: "1.0.0" },
+		];
+		const cases: { paths: string[]; key: string[]; scope: RustTestScope }[] = [
+			{
+				paths: ["scripts/change.ts", "crates/leaf/src/lib.rs", "crates/native/src/lib.rs", "scripts/change.ts"],
+				key: ["crates/leaf/src/lib.rs", "crates/native/src/lib.rs"],
+				scope: { kind: "affected", crates: ["leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", "crates/vendor/cfg_aliases/src/lib.rs"],
+				key: ["crates/vendor/cfg_aliases/src/lib.rs"],
+				scope: { kind: "affected", crates: ["consumer"] },
+			},
+			{
+				paths: ["scripts/change.ts", "./Cargo.lock"],
+				key: ["./Cargo.lock"],
+				scope: { kind: "all", crates: ["consumer", "leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", "../invalid"],
+				key: ["../invalid"],
+				scope: { kind: "all", crates: ["consumer", "leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", "crates/removed/resource.txt"],
+				key: ["crates/removed/resource.txt"],
+				scope: { kind: "all", crates: ["consumer", "leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", "crates"],
+				key: ["crates"],
+				scope: { kind: "all", crates: ["consumer", "leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", "tools/build.rs"],
+				key: ["tools/build.rs"],
+				scope: { kind: "all", crates: ["consumer", "leaf", "native"] },
+			},
+			{
+				paths: ["scripts/change.ts", ".\\crates\\leaf\\prompts\\patch.md"],
+				key: [".\\crates\\leaf\\prompts\\patch.md"],
+				scope: { kind: "affected", crates: ["leaf"] },
+			},
+			{
+				paths: ["scripts/z.ts", "scripts/a.ts", "scripts/z.ts"],
+				key: ["scripts/a.ts", "scripts/z.ts"],
+				scope: { kind: "none", crates: [] },
+			},
+			{ paths: [], key: [], scope: { kind: "none", crates: [] } },
+		];
+
+		for (const { paths, key, scope } of cases) {
+			const normalized = normalizeRustScopeChangedPaths(paths);
+			expect(normalized).toEqual(key);
+			const originalScope = selectRustTestScope(paths, metadata, REPO_ROOT, VENDORED_EXCLUDES, lockPackages);
+			const normalizedScope = selectRustTestScope(normalized, metadata, REPO_ROOT, VENDORED_EXCLUDES, lockPackages);
+			expect(originalScope).toEqual(scope);
+			expect(normalizedScope).toEqual(originalScope);
+			expect(affectedRustTestCommands(normalizedScope.crates, metadata)).toEqual(
+				affectedRustTestCommands(originalScope.crates, metadata),
+			);
+		}
+
+		const rustPaths = ["crates/leaf/src/lib.rs", "crates/native/src/lib.rs"];
+		expect(normalizeRustScopeChangedPaths([...rustPaths, "scripts/another.ts"])).toEqual(
+			normalizeRustScopeChangedPaths(rustPaths),
+		);
+		const vendorPaths = ["scripts/change.ts", "crates/vendor/cfg_aliases/src/lib.rs"];
+		for (const lock of [null, undefined]) {
+			const original = selectRustTestScope(vendorPaths, metadata, REPO_ROOT, VENDORED_EXCLUDES, lock);
+			const normalized = selectRustTestScope(
+				normalizeRustScopeChangedPaths(vendorPaths),
+				metadata,
+				REPO_ROOT,
+				VENDORED_EXCLUDES,
+				lock,
+			);
+			expect(original).toEqual({ kind: "all", crates: ["consumer", "leaf", "native"] });
+			expect(normalized).toEqual(original);
+			expect(affectedRustTestCommands(normalized.crates, metadata)).toEqual(
+				affectedRustTestCommands(original.crates, metadata),
+			);
+		}
+		const invalidMetadata = { ...metadata, workspace_members: [...metadata.workspace_members, "missing"] };
+		const unrelated = normalizeRustScopeChangedPaths(["scripts/change.ts"]);
+		expect(unrelated).toEqual(["scripts/change.ts"]);
+		expect(() => selectRustTestScope(["scripts/change.ts"], invalidMetadata, REPO_ROOT, VENDORED_EXCLUDES)).toThrow(
+			"cargo metadata omitted",
+		);
+		expect(() => selectRustTestScope(unrelated, invalidMetadata, REPO_ROOT, VENDORED_EXCLUDES)).toThrow(
+			"cargo metadata omitted",
+		);
+	});
+
 	it("tests source, test, config, build, and manifest changes of the changed crate only", () => {
 		const metadata = workspace([
 			{ name: "leaf", path: "crates/leaf" },

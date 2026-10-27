@@ -5,13 +5,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { GateCommand, GateLevel, GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import {
-	GateEventParser,
-	GATE_LIMIT_SECONDS,
-	runBazelTask,
-	runGate,
-	withRustCompilerEvents,
-} from "./test-gate-runtime";
+import { GateEventParser, GATE_LIMIT_SECONDS, runBazelTask, runGate } from "./test-gate-runtime";
+import { withRustCompilerEvents } from "./test-gate-native-events";
 import { splitGoCommand } from "./test-gate-go";
 import { finalizeTestRun, writeCommandCase, type TestReportRun } from "./test-reporting";
 
@@ -121,7 +116,7 @@ if (plan.rustCargo) {
     }
   } else {
     // Load at this isolated module boundary; consumer stubs must not import the runtime.
-    const {withRustCompilerEvents} = await import(plan.runtime);
+    const {withRustCompilerEvents} = await import(plan.nativeEvents);
     let cargoEnv = {...process.env};
     if (plan.prepareRustCargo) {
       await withRustCompilerEvents({
@@ -449,6 +444,7 @@ async function windowsLauncherFixture() {
 	);
 	for (const name of [
 		"runtime.ts",
+		"native-events.ts",
 		"watchdog.ts",
 		"events.ts",
 		"failure-events.ts",
@@ -523,7 +519,8 @@ fn main() {
 		`
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import {runGate,withRustCompilerEvents} from "./test-gate-runtime";
+import {runGate} from "./test-gate-runtime";
+import {withRustCompilerEvents} from "./test-gate-native-events";
 import {GateCommandError} from "./test-gate-failure-events";
 const result = await runGate("fulltest", async gate => {
   await gate.charged(() => withRustCompilerEvents({...process.env}, async env => {
@@ -1686,7 +1683,7 @@ it("charges unwrapped Cargo build-script work overlapping observed compiler even
 			await gate.run(
 				command({
 					rustCargo: "mixed",
-					runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
+					nativeEvents: pathToFileURL(path.join(import.meta.dir, "test-gate-native-events.ts")).href,
 					dispatcher: path.join(import.meta.dir, "test-gate-compiler.ts"),
 				}),
 			);
@@ -1707,9 +1704,9 @@ it.each(["completed", "failure"])(
 			stop: path.join(root, "stop"),
 			events: path.join(root, "preparation.jsonl"),
 		};
-		const runtime = pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href;
+		const nativeEvents = pathToFileURL(path.join(import.meta.dir, "test-gate-native-events.ts")).href;
 		const prepared = Bun.spawn(
-			[...command({ rustCargo, runtime, rustCargoHandshake, prepareRustCargo: true }).argv],
+			[...command({ rustCargo, nativeEvents, rustCargoHandshake, prepareRustCargo: true }).argv],
 			{
 				env: {
 					...process.env,

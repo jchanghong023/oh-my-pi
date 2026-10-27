@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Make `/dev` configuration, interruption, candidate selection, missing-material diagnostics, completion receipts and active-agent counts reflect the current workflow.
+- Shorten the empty input hint and make `/display` easier to discover.
 - Clarify write tool arguments and guide models to retry missing content without treating the intent field as file contents.
 - Explain unavailable tool calls, list the request's tools and guide models toward available alternatives without changing tool permissions.
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
@@ -33,7 +35,7 @@
 - Keep OpenSpec proposal/specs templates and the original Superpowers plan format unchanged. A single-capability run needs five formal files: proposal, spec, solutions JSON, plan and completion report. The last three share `docs/superpowers/plans/`; no handoff, confirmation or task-state files are generated. Reports require the fixed Chinese title and completion, validation and unfinished-items sections; requirements archive does not relocate execution materials.
 - Remove the `/dev` task/evidence execution engine, fixed reviewer seats and repair quotas, forced commits and output-JSON chat protocol. The executor uses ordinary native engineering tools and reports actual checks honestly; file validity is not proof of software correctness.
 - Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
-- Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; active real thinking uses a permanently reserved single row directly above the input, clearing text without collapsing the row when idle or hidden. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
+- Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; active real thinking uses a permanently reserved single row with an ultrathink-style static gradient and a fixed gap above the input, clearing text without collapsing when idle or hidden. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 - Deliver OpenSpec explore, update, propose, sync, archive and verify as built-in skills with Chinese descriptions. Enable default discovery and on-demand instruction reads only when the session working directory directly contains an `openspec/` directory; elsewhere keep manual `/skill:opsx-*` access. Preserve native CLI guidance, validation and `/dev` phase restrictions without installing built-in commands or command templates.

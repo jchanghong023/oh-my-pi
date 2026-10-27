@@ -151,7 +151,11 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 					break;
 				}
 				if (!host.ui) throw invalidDevInput("当前宿主不支持原生配置选择。");
-				const selected = await host.ui.select("方案 Team", ["开启", "关闭"], { signal: host.signal });
+				const useTeam = controller.status().useTeam;
+				const selected = await host.ui.select(`方案 Team · 当前${useTeam ? "开启" : "关闭"}`, ["开启", "关闭"], {
+					signal: host.signal,
+					initialIndex: useTeam ? 0 : 1,
+				});
 				if (selected === undefined) break;
 				if (selected !== "开启" && selected !== "关闭") throw invalidDevInput("无效的 Team 配置。");
 				if (

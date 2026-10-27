@@ -94,10 +94,20 @@ describe("shared per-test budget", () => {
 
 describe("complete fork-delta TS selection", () => {
 	test("selects existing changed tests anywhere in a package, with package-local execution", () => {
+		const tuiTests = [
+			"packages/coding-agent/test/spec-driven/tui.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-materials.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
+			"packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts",
+		];
 		const changedTests = [
 			"packages/metaharness/adapters/edit/runner.test.ts",
 			"packages/coding-agent/src/edit/auto-repair.test.ts",
 			"packages/collab-web/test/markdown.test.tsx",
+			...tuiTests,
 		];
 		const desktop = "packages/natives/test/desktop.test.ts";
 		const log = spyOn(console, "log").mockImplementation(() => {});
@@ -120,6 +130,11 @@ describe("complete fork-delta TS selection", () => {
 					`--timeout=${testTimeoutMs()}`,
 					file.slice(separator + 1),
 				]);
+				expect(tests[index].sourceEntrypoints).toEqual(
+					tuiTests.includes(file)
+						? [path.resolve(import.meta.dir, "../packages/coding-agent/src/cli.ts")]
+						: undefined,
+				);
 			}
 			expect(log.mock.calls).toContainEqual([`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${desktop}`]);
 		} finally {
@@ -136,6 +151,21 @@ describe("complete fork-delta TS selection", () => {
 			"test/Rust affected crates",
 			"smoke/isolated dev TUI PTY",
 		]);
+	});
+
+	test("normalizes the Rust scope only after filtering documentation", () => {
+		const rust = (files: string[]) =>
+			fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), files).find(
+				command => command.label === "test/Rust affected crates",
+			)!.env!.OMP_FULLTEST_CHANGED_PATHS;
+		expect(JSON.parse(rust(["packages/x/a.ts", "crates/pi-edit/src/lib.rs", "crates/pi-edit/README.md"])!)).toEqual([
+			"crates/pi-edit/src/lib.rs",
+		]);
+		expect(JSON.parse(rust(["packages/x/b.ts", "packages/x/a.ts", "packages/x/b.ts", "README.md"])!)).toEqual([
+			"packages/x/a.ts",
+			"packages/x/b.ts",
+		]);
+		expect(JSON.parse(rust(["README.md"])!)).toEqual([]);
 	});
 });
 

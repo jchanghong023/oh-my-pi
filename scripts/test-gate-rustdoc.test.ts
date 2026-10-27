@@ -2,8 +2,7 @@ import { afterAll, beforeAll, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { forwardNextestOutput } from "./test-gate-native-events";
-import { withRustCompilerEvents } from "./test-gate-runtime";
+import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
 import type { GateCommandError } from "./test-gate-failure-events";
 
 let directory: string;

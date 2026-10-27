@@ -56,6 +56,20 @@ export function parseFulltestChangedPaths(value: string | undefined): string[] {
 	return [...new Set(parsed)];
 }
 
+export function normalizeRustScopeChangedPaths(changedPaths: readonly string[]): string[] {
+	const relevant = changedPaths.filter(changedPath => {
+		const normalized = normalizeChangedPath(changedPath);
+		return (
+			normalized === null ||
+			isSharedRustConfigPath(normalized) ||
+			normalized === "crates" ||
+			normalized.startsWith("crates/") ||
+			normalized.endsWith(".rs")
+		);
+	});
+	return [...new Set(relevant.length > 0 ? relevant : changedPaths)].sort();
+}
+
 export function affectedRustTestCommands(
 	crates: readonly string[],
 	metadata: CargoMetadataForRustScope,

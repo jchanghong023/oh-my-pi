@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { bazelShell, bazelToolPath } from "./test-gate-bazel-tools";
+import { bazelShell, bazelToolPath, isNativeTuiTest, requiresTuiTest } from "./test-gate-bazel-tools";
 
 test("WindowsApps-first PATH retains later installed Python candidates in order", () => {
 	const installed = "C:\\Python313;C:\\Python312;C:\\Program Files\\Git\\cmd";
@@ -23,6 +23,43 @@ test("WindowsApps matching is case-insensitive without excluding neighboring ins
 test("non-Windows tool lookup preserves PATH verbatim", () => {
 	const value = "/opt/Microsoft/WindowsApps:/usr/local/bin::/usr/bin";
 	expect(bazelToolPath(value, "linux")).toBe(value);
+});
+
+test("only native Dev TUI fork E2E targets require tui-test", () => {
+	const prefix = "test/fork packages/coding-agent/test/spec-driven/";
+	for (const suffix of ["", "-capabilities", "-lifecycle", "-closing", "-materials", "-interactions", "-resources"]) {
+		expect(requiresTuiTest(`${prefix}tui${suffix}.e2e.test.ts`)).toBe(true);
+	}
+	for (const label of [
+		`${prefix}tui-other.e2e.test.ts`,
+		`${prefix}tui.test.ts`,
+		"test/fork packages/other/test/spec-driven/tui.e2e.test.ts",
+		"smoke/isolated dev TUI PTY",
+	]) {
+		expect(requiresTuiTest(label)).toBe(false);
+	}
+});
+
+test("only a Windows native executable can use the closed tui-test tool input", () => {
+	const temporary = mkdtempSync(path.join(os.tmpdir(), "bazel-tui-test-"));
+	try {
+		const executable = path.join(temporary, "tui-test.exe");
+		const wrapper = path.join(temporary, "tui-test.cmd");
+		const pe = Buffer.alloc(132);
+		pe.write("MZ");
+		pe.writeUInt32LE(128, 0x3c);
+		pe.write("PE\0\0", 128);
+		writeFileSync(executable, pe);
+		writeFileSync(wrapper, "@node implementation.js");
+		expect(isNativeTuiTest(executable, "win32")).toBe(true);
+		expect(isNativeTuiTest(executable, "linux")).toBe(false);
+		expect(isNativeTuiTest(wrapper, "win32")).toBe(false);
+		writeFileSync(executable, "#! script wrapper");
+		expect(isNativeTuiTest(executable, "win32")).toBe(false);
+		expect(isNativeTuiTest(path.join(temporary, "missing.exe"), "win32")).toBe(false);
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
 });
 
 test("Windows shell selection crosses real installed-Git filesystem boundaries, never app aliases", () => {

@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, realpathSync, statSync, type Stats } from "node:fs";
+import { builtinModules, createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { packageCommandKind, packageScriptInputs } from "./test-gate-bazel-script-inputs";
 import { ts } from "@ts-morph/common";
 
 export interface GateResources {
@@ -41,17 +43,21 @@ export function gateResources(
 	const namespaces = new Set<string>();
 	const assertions = new Set<string>();
 	const requireFactories = new Set<string>();
-	const destructuredRequireFactories = new Map<string, ts.Expression>();
 	const requireNamespaces = new Set<string>();
 	const globFactories = new Set<string>();
 	const globNamespaces = new Set<string>();
 	const shellTags = new Set<string>();
 	const temporaryDirectoryFunctions = new Set<string>();
 	const osNamespaces = new Set<string>();
+	const temporaryFactories = new Set<string>();
+	const temporaryNamespaces = new Set<string>();
 	const dataFunctions = new Set<string>();
 	const dataNamespaces = new Map<string, ReadonlySet<string>>();
 	const parents = new Map<ts.Node, ts.Node>();
 	const scopedConstants = new Map<ts.Node, Map<string, ts.Expression | undefined>>();
+	const destructuredValues = new Map<ts.Node, Map<string, { object: ts.Expression; property: string }>>();
+	const assignedNames = new Set<string>();
+	const fixtureFunctions = new Map<string, ts.FunctionDeclaration | undefined>();
 	const loopValues = new Map<ts.Node, ts.Expression>();
 	const structuredFunctions = new Map<string, ts.FunctionDeclaration | undefined>();
 	// Literal arguments usually are not filenames. Enumerate each candidate
@@ -102,13 +108,7 @@ export function gateResources(
 		collect(node, parent);
 		ts.forEachChild(node, child => visit(child, node));
 	};
-	const bind = (
-		name: ts.BindingName,
-		constant: boolean,
-		initializer?: ts.Expression,
-		module?: ts.Expression,
-		scope?: ts.Node,
-	) => {
+	const bind = (name: ts.BindingName, constant: boolean, initializer?: ts.Expression, scope?: ts.Node) => {
 		if (ts.isIdentifier(name)) {
 			const duplicate = constants.has(name.text);
 			constants.set(name.text, duplicate || !constant ? undefined : initializer);
@@ -117,20 +117,27 @@ export function gateResources(
 				if (!declarations) scopedConstants.set(scope, (declarations = new Map()));
 				declarations.set(name.text, declarations.has(name.text) || !constant ? undefined : initializer);
 			}
-			if (duplicate || !constant) destructuredRequireFactories.delete(name.text);
-			else if (module) destructuredRequireFactories.set(name.text, module);
 			return;
 		}
 		for (const element of name.elements) {
 			if (ts.isOmittedExpression(element)) continue;
 			const property = element.propertyName ?? element.name;
-			const factory =
+			bind(element.name, constant, undefined, scope);
+			if (
+				scope &&
+				constant &&
+				initializer &&
 				ts.isObjectBindingPattern(name) &&
+				ts.isIdentifier(element.name) &&
 				!element.dotDotDotToken &&
 				!element.initializer &&
-				(ts.isIdentifier(property) || ts.isStringLiteral(property)) &&
-				property.text === "createRequire";
-			bind(element.name, constant, undefined, factory ? initializer : undefined, scope);
+				(ts.isIdentifier(property) || ts.isStringLiteral(property))
+			) {
+				let values = destructuredValues.get(scope);
+				if (!values) destructuredValues.set(scope, (values = new Map()));
+				if (values.has(element.name.text)) values.delete(element.name.text);
+				else values.set(element.name.text, { object: initializer, property: property.text });
+			}
 		}
 	};
 	// A plan wrapper may forward paths in fields, but a helper that computes
@@ -162,7 +169,21 @@ export function gateResources(
 	const collect = (node: ts.Node, parent?: ts.Node) => {
 		if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isTaggedTemplateExpression(node))
 			calls.push(node);
+		if (
+			ts.isBinaryExpression(node) &&
+			node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+			node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+			ts.isIdentifier(node.left)
+		)
+			assignedNames.add(node.left.text);
+		if (
+			(ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+			(node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) &&
+			ts.isIdentifier(node.operand)
+		)
+			assignedNames.add(node.operand.text);
 		if (ts.isFunctionDeclaration(node) && node.name && node.body) {
+			fixtureFunctions.set(node.name.text, fixtureFunctions.has(node.name.text) ? undefined : node);
 			const statement = node.body.statements.length === 1 ? node.body.statements[0] : undefined;
 			const structured =
 				!!statement &&
@@ -187,6 +208,15 @@ export function gateResources(
 						: module === "bun"
 							? bunDataCalls
 							: undefined;
+			if (module === "fs" || module === "fs/promises") {
+				const bindings = node.importClause?.namedBindings;
+				if (node.importClause?.name) temporaryNamespaces.add(node.importClause.name.text);
+				if (bindings && ts.isNamespaceImport(bindings)) temporaryNamespaces.add(bindings.name.text);
+				if (bindings && ts.isNamedImports(bindings))
+					for (const binding of bindings.elements)
+						if (["mkdtemp", "mkdtempSync"].includes((binding.propertyName ?? binding.name).text))
+							temporaryFactories.add(binding.name.text);
+			}
 			if (dataCalls) {
 				const bindings = node.importClause?.namedBindings;
 				if (node.importClause?.name) dataNamespaces.set(node.importClause.name.text, dataCalls);
@@ -252,7 +282,7 @@ export function gateResources(
 				!ts.isForOfStatement(scope)
 			)
 				scope = parents.get(scope);
-			bind(node.name, constant, node.initializer, undefined, scope);
+			bind(node.name, constant, node.initializer, scope);
 		}
 	};
 	visit(source);
@@ -277,72 +307,51 @@ export function gateResources(
 			if (scopedConstants.get(scope)?.has(node.text)) return true;
 		return false;
 	};
-	const runtimeTemporaryDirectory = (node: ts.Expression): boolean => {
-		if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node))
-			return runtimeTemporaryDirectory(node.expression);
-		if (!ts.isCallExpression(node) || node.arguments.length !== 0) return false;
-		const call = node.expression;
-		return ts.isIdentifier(call)
-			? !hasScopedBinding(call) && temporaryDirectoryFunctions.has(call.text)
-			: ts.isPropertyAccessExpression(call) &&
-					ts.isIdentifier(call.expression) &&
-					!hasScopedBinding(call.expression) &&
-					osNamespaces.has(call.expression.text) &&
-					call.name.text === "tmpdir";
-	};
 	// Resolve roles only after every binding is collected: aliases can precede
 	// declarations, and duplicate/parameter bindings must invalidate imports.
 	// Module namespaces, createRequire factories/loaders and CommonJS Module
 	// instances propagate roles; ordinary data/function aliases stay unrelated.
 	type RequireRole = "namespace" | "factory" | "loader" | "module";
-	const requireRoles = new Map<string, RequireRole | undefined>();
-	const resolvingRequireNames = new Set<string>();
-	const requireRole = (node: ts.Expression): RequireRole | undefined => {
+	const requireRole = (node: ts.Expression, seen = new Set<ts.Node>()): RequireRole | undefined => {
+		if (seen.has(node)) return undefined;
+		seen.add(node);
 		if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node))
-			return requireRole(node.expression);
+			return requireRole(node.expression, seen);
 		if (ts.isIdentifier(node)) {
-			const name = node.text;
-			if (resolvingRequireNames.has(name)) return undefined;
-			if (requireRoles.has(name)) return requireRoles.get(name);
-			resolvingRequireNames.add(name);
-			const expression = constants.get(name);
-			const destructured = destructuredRequireFactories.get(name);
-			const role = destructured
-				? requireRole(destructured) === "namespace"
-					? "factory"
-					: undefined
-				: constants.has(name)
-					? expression
-						? requireRole(expression)
-						: undefined
-					: requireFactories.has(name)
-						? "factory"
-						: requireNamespaces.has(name)
-							? "namespace"
-							: name === "module" && !hasScopedBinding(node)
-								? "module"
-								: undefined;
-			resolvingRequireNames.delete(name);
-			requireRoles.set(name, role);
-			return role;
+			for (let scope = parents.get(node); scope; scope = parents.get(scope)) {
+				const declarations = scopedConstants.get(scope);
+				if (!declarations?.has(node.text)) continue;
+				const destructured = destructuredValues.get(scope)?.get(node.text);
+				if (destructured?.property === "createRequire" && requireRole(destructured.object, seen) === "namespace")
+					return "factory";
+				const expression = declarations.get(node.text);
+				return expression ? requireRole(expression, seen) : undefined;
+			}
+			return requireFactories.has(node.text)
+				? "factory"
+				: requireNamespaces.has(node.text)
+					? "namespace"
+					: node.text === "module"
+						? "module"
+						: undefined;
 		}
 		if (
 			ts.isPropertyAccessExpression(node) &&
 			node.name.text === "createRequire" &&
-			requireRole(node.expression) === "namespace"
+			requireRole(node.expression, seen) === "namespace"
 		)
 			return "factory";
 		if (ts.isCallExpression(node)) {
 			if (
 				ts.isIdentifier(node.expression) &&
 				node.expression.text === "require" &&
-				!constants.has("require") &&
+				!hasScopedBinding(node.expression) &&
 				node.arguments.length === 1 &&
 				ts.isStringLiteralLike(node.arguments[0]) &&
 				/^(?:node:)?module$/.test(node.arguments[0].text)
 			)
 				return "namespace";
-			if (requireRole(node.expression) === "factory") return "loader";
+			if (requireRole(node.expression, seen) === "factory") return "loader";
 		}
 		return undefined;
 	};
@@ -462,6 +471,108 @@ export function gateResources(
 			if (name === "pathToFileURL" && strings[0]) return pathToFileURL(strings[0]).href;
 		}
 		return undefined;
+	};
+	// A fixture's individual returned property is temporary only if every
+	// return proves that property; arbitrary function results are not paths.
+	const runtimeTemporaryDirectory = (node: ts.Expression, seen = new Set<ts.Node>()): boolean => {
+		if (seen.has(node)) return false;
+		seen.add(node);
+		if (
+			ts.isParenthesizedExpression(node) ||
+			ts.isAsExpression(node) ||
+			ts.isNonNullExpression(node) ||
+			ts.isAwaitExpression(node)
+		)
+			return runtimeTemporaryDirectory(node.expression, seen);
+		if (ts.isIdentifier(node)) {
+			if (assignedNames.has(node.text)) return false;
+			for (let scope = parents.get(node); scope; scope = parents.get(scope)) {
+				if (!scopedConstants.get(scope)?.has(node.text)) continue;
+				const binding = destructuredValues.get(scope)?.get(node.text);
+				if (binding) return temporaryProperty(binding.object, binding.property, seen);
+				const expression = scopedConstants.get(scope)?.get(node.text);
+				return !!expression && runtimeTemporaryDirectory(expression, seen);
+			}
+			return false;
+		}
+		if (ts.isPropertyAccessExpression(node)) return temporaryProperty(node.expression, node.name.text, seen);
+		if (!ts.isCallExpression(node)) return false;
+		const call = node.expression;
+		if (
+			node.arguments.length === 0 &&
+			(ts.isIdentifier(call)
+				? !hasScopedBinding(call) && temporaryDirectoryFunctions.has(call.text)
+				: ts.isPropertyAccessExpression(call) &&
+					ts.isIdentifier(call.expression) &&
+					!hasScopedBinding(call.expression) &&
+					osNamespaces.has(call.expression.text) &&
+					call.name.text === "tmpdir")
+		)
+			return true;
+		const factory = ts.isIdentifier(call)
+			? !hasScopedBinding(call) && temporaryFactories.has(call.text)
+			: ts.isPropertyAccessExpression(call) &&
+				ts.isIdentifier(call.expression) &&
+				!hasScopedBinding(call.expression) &&
+				temporaryNamespaces.has(call.expression.text) &&
+				["mkdtemp", "mkdtempSync"].includes(call.name.text);
+		if (factory) return node.arguments.length === 1 && runtimeTemporaryDirectory(node.arguments[0]!, seen);
+		const name = ts.isIdentifier(call)
+			? !hasScopedBinding(call)
+				? paths.get(call.text)
+				: undefined
+			: ts.isPropertyAccessExpression(call) &&
+				  ts.isIdentifier(call.expression) &&
+				  !hasScopedBinding(call.expression) &&
+				  namespaces.has(call.expression.text)
+				? call.name.text
+				: undefined;
+		if (name !== "join" || node.arguments.length === 0 || !runtimeTemporaryDirectory(node.arguments[0]!, seen))
+			return false;
+		return node.arguments.slice(1).every(argument => {
+			const part = value(argument);
+			return part !== undefined && !path.isAbsolute(part) && !part.split(/[\\/]/).includes("..");
+		});
+	};
+	const temporaryProperty = (node: ts.Expression, property: string, seen: Set<ts.Node>): boolean => {
+		if (seen.has(node)) return false;
+		seen.add(node);
+		if (ts.isAwaitExpression(node) || ts.isParenthesizedExpression(node) || ts.isAsExpression(node))
+			return temporaryProperty(node.expression, property, seen);
+		if (ts.isIdentifier(node)) {
+			if (assignedNames.has(node.text)) return false;
+			const expression = initializer(node);
+			return !!expression && temporaryProperty(expression, property, seen);
+		}
+		if (ts.isObjectLiteralExpression(node)) {
+			if (node.properties.some(item => ts.isSpreadAssignment(item))) return false;
+			const matches = node.properties.filter(
+				item =>
+					(ts.isPropertyAssignment(item) || ts.isShorthandPropertyAssignment(item)) &&
+					(ts.isIdentifier(item.name) || ts.isStringLiteral(item.name)) &&
+					item.name.text === property,
+			);
+			if (matches.length !== 1) return false;
+			const item = matches[0]!;
+			return ts.isPropertyAssignment(item)
+				? runtimeTemporaryDirectory(item.initializer, seen)
+				: ts.isShorthandPropertyAssignment(item) && runtimeTemporaryDirectory(item.name, seen);
+		}
+		if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression) || hasScopedBinding(node.expression))
+			return false;
+		const declaration = fixtureFunctions.get(node.expression.text);
+		if (!declaration?.body) return false;
+		const returns: ts.ReturnStatement[] = [];
+		const collectReturns = (child: ts.Node): void => {
+			if (child !== declaration.body && ts.isFunctionLike(child)) return;
+			if (ts.isReturnStatement(child)) returns.push(child);
+			ts.forEachChild(child, collectReturns);
+		};
+		collectReturns(declaration.body);
+		return (
+			returns.length > 0 &&
+			returns.every(item => !!item.expression && temporaryProperty(item.expression, property, new Set(seen)))
+		);
 	};
 	const anchored = (node: ts.Node, seen = new Set<string>()): boolean => {
 		if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return false;
@@ -865,25 +976,57 @@ export function gateResources(
 				!/^[\p{L}\p{N}_./:@%+=, \t-]+$/u.test(command)
 			) {
 				fallback = true;
+				if (
+					ts.isTemplateExpression(node.template) &&
+					/^(?:bun|node|npm|pnpm|yarn)\s/.test(node.template.head.text.trimStart())
+				)
+					repositoryFallback = true;
 				return;
 			}
 			let cwd: string | undefined;
+			let temporaryCwd = false;
 			for (let parent = parents.get(node); parent; parent = parents.get(parent)) {
 				if (ts.isPropertyAccessExpression(parent)) continue;
 				if (!ts.isCallExpression(parent)) break;
 				if (ts.isPropertyAccessExpression(parent.expression) && parent.expression.name.text === "cwd") {
 					const argument = parent.arguments[0];
 					cwd = argument ? value(argument) : undefined;
+					temporaryCwd = !!argument && runtimeTemporaryDirectory(argument);
 					// A known Node temporary cwd is runtime state, not the repository.
 					// Do not evaluate TEMP on this host. Relative script words below
 					// still retain the unknown-cwd boundary; absolute inputs are scanned.
-					if ((!cwd || !path.isAbsolute(cwd)) && !(argument && runtimeTemporaryDirectory(argument))) {
+					if ((!cwd || !path.isAbsolute(cwd)) && !temporaryCwd) {
 						fallback = repositoryFallback = true;
 						return;
 					}
 				}
 			}
-			for (const word of command.trim().split(/[ \t]+/)) {
+			const commandWords = command.trim().split(/[ \t]+/);
+			const executable = path
+				.basename(commandWords[0]!)
+				.replace(/\.exe$/i, "")
+				.toLowerCase();
+			if (["bun", "node", "npm", "pnpm", "yarn"].includes(executable)) {
+				let index = 1;
+				while (commandWords[index]?.startsWith("--cwd")) index += commandWords[index] === "--cwd" ? 2 : 1;
+				const subcommand = commandWords[index];
+				if (
+					packageCommandKind(executable, subcommand) === "script" &&
+					packageScriptInputs(commandWords, root, cwd, (file, isEntry) => add(file, false, isEntry)) === false
+				)
+					fallback = repositoryFallback = true;
+			}
+			for (const [index, word] of commandWords.entries()) {
+				// Git's relative operands in a proved temporary worktree are data,
+				// not scripts. Absolute operands and escaping paths remain inputs.
+				if (temporaryCwd && commandWords[0] === "git" && index > 0) {
+					const operand = word.includes("=") ? word.slice(word.indexOf("=") + 1) : word;
+					if (!path.isAbsolute(operand) && !operand.split(/[\\/]/).includes("..")) continue;
+					if (path.isAbsolute(operand)) {
+						add(operand, false, true);
+						continue;
+					}
+				}
 				if (!cwd && !path.isAbsolute(word) && /[./\\]/.test(word)) {
 					fallback = repositoryFallback = true;
 					return;
@@ -918,8 +1061,50 @@ export function gateResources(
 			receiverRole === "loader" ||
 			(ts.isPropertyAccessExpression(call) && name === "require" && receiverRole === "module");
 		if (opaqueRequire) {
-			// Bun does not include createRequire() or Module.require() loads
-			// in its module graph, including statically named dependencies.
+			const argument = node.arguments?.[0];
+			const specifier = argument && value(argument);
+			const builtin =
+				specifier !== undefined &&
+				builtinModules.some(
+					item => item === specifier || (specifier.startsWith("node:") && item === specifier.slice(5)),
+				);
+			if (builtin) return;
+			// Only an explicit local filename with a statically known loader base
+			// has a closed resolution here; package resolution also depends on
+			// manifests and resolution alternatives and remains opaque.
+			const loader = dereference(requireReceiver);
+			if (
+				specifier &&
+				/^\.\.?[\\/]/.test(specifier) &&
+				/\.[cm]?[jt]sx?$/.test(specifier) &&
+				ts.isCallExpression(loader) &&
+				requireRole(loader.expression) === "factory" &&
+				loader.arguments[0]
+			) {
+				const base = value(loader.arguments[0]);
+				if (base) {
+					try {
+						const resolved = createRequire(base).resolve(specifier);
+						const lexical = path.resolve(
+							path.dirname(base.startsWith("file:") ? fileURLToPath(base) : base),
+							specifier,
+						);
+						const real = realpathSync(resolved);
+						const withinRoot = (file: string): boolean => {
+							const relative = path.relative(root, file);
+							return !relative.startsWith("..") && !path.isAbsolute(relative);
+						};
+						if (withinRoot(lexical) && withinRoot(resolved) && withinRoot(real) && existsSync(resolved)) {
+							add(lexical, false, true);
+							add(resolved, false, true);
+							add(real, false, true);
+							return;
+						}
+					} catch {
+						// Resolution failure must retain the original opaque boundary.
+					}
+				}
+			}
 			fallback = true;
 			return;
 		}
@@ -962,20 +1147,85 @@ export function gateResources(
 				: undefined;
 		const entry = /^(?:spawn|spawnSync|exec|execFile|execFileSync|fork|Worker|URL)$/.test(name);
 		let processCwd: string | undefined;
+		let temporaryProcessCwd = false;
 		if (entry)
 			for (const argument of node.arguments ?? []) {
 				const cwd = structuredProperty(argument, "cwd");
 				if (!cwd) continue;
 				processCwd = value(cwd);
-				if (processCwd === undefined && anchored(cwd)) {
+				temporaryProcessCwd = runtimeTemporaryDirectory(cwd);
+				if (processCwd === undefined && !temporaryProcessCwd && anchored(cwd)) {
 					fallback = repositoryFallback = true;
 				} else if (processCwd !== undefined && !path.isAbsolute(processCwd)) {
-					// A shared module can run under different caller working directories.
-					// Never resolve relative cwd against this discovery process's cwd.
-					fallback = repositoryFallback = true;
+					// Do not resolve a relative cwd against the discovery process.
+					// Relative source operands and package scripts below retain the
+					// conservative boundary when their real base is unknown.
 					processCwd = undefined;
 				}
 			}
+		if (/^(?:spawn|spawnSync|execFile|execFileSync)$/.test(name)) {
+			const args = node.arguments ?? [];
+			const first = args[0];
+			const command = first && (structuredProperty(first, "cmd") ?? first);
+			const array = command && dereference(command);
+			let argv: (string | undefined)[] | undefined;
+			if (array && ts.isArrayLiteralExpression(array))
+				argv = array.elements.map(element => (ts.isExpression(element) ? value(element) : undefined));
+			else if (command) {
+				const extra = args[1] && dereference(args[1]);
+				if (extra && ts.isArrayLiteralExpression(extra))
+					argv = [
+						value(command),
+						...extra.elements.map(element => (ts.isExpression(element) ? value(element) : undefined)),
+					];
+			}
+			const knownProcess = ts.isIdentifier(call)
+				? !hasScopedBinding(call) && dataFunctions.has(call.text)
+				: ts.isPropertyAccessExpression(call) &&
+					ts.isIdentifier(call.expression) &&
+					!hasScopedBinding(call.expression) &&
+					(call.expression.text === "Bun" ||
+						dataNamespaces.get(call.expression.text) === processDataCalls ||
+						dataNamespaces.get(call.expression.text) === bunDataCalls);
+			if (
+				knownProcess &&
+				argv?.length &&
+				argv[0] === undefined &&
+				(argv[1] === "run" || argv[1] === "run-script" || argv[1] === "--run")
+			)
+				fallback = repositoryFallback = true;
+			if (argv?.length) {
+				const executable =
+					argv[0] &&
+					path
+						.basename(argv[0])
+						.replace(/\.exe$/i, "")
+						.toLowerCase();
+				if (executable && ["bun", "node", "npm", "pnpm", "yarn"].includes(executable)) {
+					let index = 1;
+					while (argv[index]?.startsWith("--cwd")) index += argv[index] === "--cwd" ? 2 : 1;
+					const subcommand = argv[index];
+					if (
+						!processCwd &&
+						argv
+							.slice(index)
+							.some(
+								word => word && !word.startsWith("-") && /\.[cm]?[jt]sx?$/.test(word) && !path.isAbsolute(word),
+							)
+					)
+						fallback = repositoryFallback = true;
+					// An opaque forwarded argv need not be a repository script;
+					// literal script commands are handled by the expansion below.
+					if (
+						packageCommandKind(executable, subcommand) === "script" &&
+						packageScriptInputs(argv, root, processCwd, (file, isEntry) => add(file, false, isEntry)) === false
+					)
+						fallback = repositoryFallback = true;
+				}
+				if (!executable && !processCwd && argv[1] && /\.[cm]?[jt]sx?$/.test(argv[1]) && !path.isAbsolute(argv[1]))
+					fallback = repositoryFallback = true;
+			}
+		}
 		const consume = (argument: ts.Expression, structured = false): void => {
 			if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) return;
 			if (ts.isParenthesizedExpression(argument) || ts.isAsExpression(argument) || ts.isNonNullExpression(argument))

@@ -178,9 +178,22 @@ export class SpecArtifactStore {
 	}
 	async readRequirements(signal?: AbortSignal): Promise<SpecRequirements> {
 		signal?.throwIfAborted();
-		const root = await containedSpecPath(this.cwd, `${this.changeDir}/specs`);
-		const specs = (await filesBelow(root)).filter(file => /^[a-z0-9]+(?:-[a-z0-9]+)*[\\/]spec\.md$/.test(file));
-		if (!specs.length) throw new Error("Missing native specification: specs/<capability>/spec.md");
+		const directory = `${this.changeDir}/specs`;
+		const root = await containedSpecPath(this.cwd, directory);
+		let entries: string[];
+		try {
+			entries = await filesBelow(root);
+		} catch (error) {
+			if (!isEnoent(error) || (error as NodeJS.ErrnoException).path !== root) throw error;
+			throw new Error(`缺少需求规格，请补齐后重试 /dev next。路径：${directory}/*/spec.md；原因：${error.message}`, {
+				cause: error,
+			});
+		}
+		const specs = entries.filter(file => /^[a-z0-9]+(?:-[a-z0-9]+)*[\\/]spec\.md$/.test(file));
+		if (!specs.length)
+			throw new Error(
+				`缺少需求规格，请补齐后重试 /dev next。路径：${directory}/*/spec.md；原因：目录中没有有效规格文件`,
+			);
 		const paths = [
 			`${this.changeDir}/proposal.md`,
 			...specs.map(file => `${this.changeDir}/specs/${file.replaceAll(path.sep, "/")}`),
@@ -240,7 +253,7 @@ export class SpecArtifactStore {
 		return this.#read(this.planPath);
 	}
 	async readReport(): Promise<SpecDocument> {
-		const report = await this.#read(this.paths?.report ?? this.planPath.replace(/\.md$/, "-completion.md"));
+		const report = await this.#read(this.paths?.report ?? this.planPath.replace(/\.md$/, "-completion.md"), true);
 		if (!/^# 完成报告\s*$/m.test(report.content)) throw new Error("Completion report requires title: # 完成报告");
 		for (const heading of ["完成情况", "验证结果", "未完成项"]) {
 			const section = report.content.match(
@@ -457,8 +470,17 @@ export class SpecArtifactStore {
 		if (!verified.matches) throw new Error(verified.changed.map(file => file.reason).join("\n"));
 		return { archivedChangePath: progress.archivedChangePath };
 	}
-	async #read(file: string): Promise<SpecDocument> {
-		const bytes = await fs.readFile(await containedSpecPath(this.cwd, file));
+	async #read(file: string, report = false): Promise<SpecDocument> {
+		const resolved = await containedSpecPath(this.cwd, file);
+		let bytes: Buffer;
+		try {
+			bytes = await fs.readFile(resolved);
+		} catch (error) {
+			if (!report || !isEnoent(error)) throw error;
+			throw new Error(`缺少完成报告，请补齐后重试 /dev next。路径：${file}；原因：${error.message}`, {
+				cause: error,
+			});
+		}
 		const content = bytes.toString("utf8");
 		if (!content.trim()) throw new Error(`Empty specification artifact: ${file}`);
 		return { path: file, content, version: artifactVersion(bytes) };

@@ -1137,15 +1137,26 @@ test("temporary shell probes cache independently while real shell script edits i
 			`import { test, expect } from "bun:test";
 import { $ } from "bun";
 import os from "node:os";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+function fixture() {
+ const temp = mkdtempSync(path.join(os.tmpdir(), "gate-fixture-"));
+ const root = path.join(temp, "project");
+ mkdirSync(root);
+ return {temp, root};
+}
 test("temporary capability probe and repository script", async () => {
  mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
  appendFileSync(${JSON.stringify(runs)}, "run\\n");
- const probe = await $\`bun --version\`.cwd(os.tmpdir()).quiet().nothrow();
+ const {temp, root} = fixture();
+ const alias = root;
+ const probe = await $\`bun --version\`.cwd(alias).quiet().nothrow();
  expect(probe.exitCode).toBe(0);
- const child = await $\`bun ./worker.ts\`.cwd(import.meta.dir).quiet().nothrow();
- expect(child.exitCode).toBe(0);
- expect(child.stdout.toString().trim()).toBe("42");
+ const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "worker.ts")], {cwd: alias, stdout:"pipe"});
+ const output = await new Response(child.stdout).text();
+ expect(await child.exited).toBe(0);
+ rmSync(temp, {recursive:true, force:true});
+ expect(output.trim()).toBe("42");
 });
 `,
 		);
@@ -1821,3 +1832,417 @@ test("resource enumeration stats local and installed assets outside inventory", 
 		await fs.rm(root, { recursive: true, force: true });
 	}
 });
+
+test("package script subprocess consumers track recursive manifests and CLI entries without widening unrelated targets", async () => {
+	const root = await fixture();
+	try {
+		await copyReporter(root);
+		const runs = path.join(root, ".state/script-consumer.runs");
+		const independentRuns = path.join(root, ".state/script-independent.runs");
+		await Bun.write(
+			path.join(root, "package.json"),
+			JSON.stringify({
+				scripts: { dev: "bun --cwd=packages/dependency run inner", test: "bun packages/dependency/script-test.ts" },
+			}),
+		);
+		await Bun.write(
+			path.join(root, "packages/dependency/package.json"),
+			JSON.stringify({
+				name: "@fixture/dependency",
+				scripts: { inner: "bun cli.ts" },
+			}),
+		);
+		await Bun.write(
+			path.join(root, "packages/dependency/cli.ts"),
+			'import { value } from "./value"; console.log(value);\n',
+		);
+		await Bun.write(path.join(root, "packages/dependency/value.ts"), 'export const value = "42";\n');
+		await Bun.write(path.join(root, "packages/dependency/script-test.ts"), 'console.log("script test");\n');
+		await Bun.write(
+			path.join(root, "packages/b/builtin.test.ts"),
+			'import { test, expect } from "bun:test"; test("nested builtin", () => expect(6 * 7).toBe(42));\n',
+		);
+		await Bun.write(
+			path.join(root, "packages/a/script.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
+test("package script", async () => {
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+ const child = Bun.spawn({cmd:[process.execPath, "run", "dev"], cwd:path.resolve(import.meta.dir, "../.."), stdout:"pipe", stderr:"inherit"});
+ expect((await new Response(child.stdout).text()).trim()).toBe("42");
+ expect(await child.exited).toBe(0);
+ const script = Bun.spawn({cmd:[process.execPath, "run", "test"], cwd:path.resolve(import.meta.dir, "../.."), stdout:"pipe", stderr:"inherit"});
+ expect((await new Response(script.stdout).text()).trim()).toBe("script test");
+ expect(await script.exited).toBe(0);
+});
+`,
+		);
+		await Bun.write(
+			path.join(root, "packages/b/script-independent.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
+test("independent builtin test", async () => {
+ const child = Bun.spawn({cmd:[process.execPath, "test", path.resolve(import.meta.dir, "builtin.test.ts")], cwd:path.resolve(import.meta.dir, "../.."), stdout:"pipe", stderr:"pipe"});
+ expect(await child.exited).toBe(0);
+ mkdirSync(${JSON.stringify(path.dirname(independentRuns))}, {recursive:true});
+ appendFileSync(${JSON.stringify(independentRuns)}, "run\\n");
+});
+`,
+		);
+		const commands: GateCommand[] = [
+			{
+				label: "test/fork packages/a/script.test.ts",
+				argv: [process.execPath, "test", "script.test.ts"],
+				cwd: path.join(root, "packages/a"),
+			},
+			{
+				label: "test/fork packages/b/script-independent.test.ts",
+				argv: [process.execPath, "test", "script-independent.test.ts"],
+				cwd: path.join(root, "packages/b"),
+			},
+		];
+		expect((await batch(root, commands, "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, commands, "fulltest")).targets.map(target => target.status)).toEqual([
+			"cached",
+			"cached",
+		]);
+		await Bun.write(path.join(root, "packages/dependency/value.ts"), 'export const value = "4" + "2";\n');
+		const changed = await batch(root, commands, "fulltest");
+		expect(changed.exitCode).toBe(0);
+		expect(changed.targets[0]?.status).not.toBe("cached");
+		expect(changed.targets[1]?.status).toBe("cached");
+		expect(await Bun.file(runs).text()).toBe("run\nrun\n");
+		await Bun.write(
+			path.join(root, "packages/dependency/cli.ts"),
+			'import { value } from "./value"; console.log(String(value));\n',
+		);
+		const cliChanged = await batch(root, commands, "fulltest");
+		expect(cliChanged.exitCode).toBe(0);
+		expect(cliChanged.targets[0]?.status).not.toBe("cached");
+		expect(cliChanged.targets[1]?.status).toBe("cached");
+		await Bun.write(
+			path.join(root, "packages/dependency/package.json"),
+			JSON.stringify({
+				name: "@fixture/dependency",
+				scripts: { inner: "bun ./cli.ts" },
+			}),
+		);
+		const scriptChanged = await batch(root, commands, "fulltest");
+		expect(scriptChanged.exitCode).toBe(0);
+		expect(scriptChanged.targets[0]?.status).not.toBe("cached");
+		expect(scriptChanged.targets[1]?.status).toBe("cached");
+		expect(await Bun.file(runs).text()).toBe("run\nrun\nrun\nrun\n");
+		await Bun.write(path.join(root, "packages/dependency/script-test.ts"), 'console.log("script " + "test");\n');
+		const explicitTestChanged = await batch(root, commands, "fulltest");
+		expect(explicitTestChanged.exitCode).toBe(0);
+		expect(explicitTestChanged.targets.map(target => target.status)).toEqual(["new", "cached"]);
+		expect(await Bun.file(runs).text()).toBe("run\nrun\nrun\nrun\nrun\n");
+		expect(await Bun.file(independentRuns).text()).toBe("run\n");
+		await Bun.write(
+			path.join(root, "packages/b/builtin.test.ts"),
+			'import { test, expect } from "bun:test"; test("nested builtin", () => expect(40 + 2).toBe(42));\n',
+		);
+		const builtinTestChanged = await batch(root, commands, "fulltest");
+		expect(builtinTestChanged.exitCode).toBe(0);
+		expect(builtinTestChanged.targets.map(target => target.status)).toEqual(["cached", "new"]);
+		expect(await Bun.file(runs).text()).toBe("run\nrun\nrun\nrun\nrun\n");
+		expect(await Bun.file(independentRuns).text()).toBe("run\nrun\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 120_000);
+
+test("script discovery and temporary fixture proofs fail closed for dynamic paths and mixed require calls", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-resource-precision-"));
+	try {
+		const dir = path.join(root, "packages/a");
+		await fs.mkdir(dir, { recursive: true });
+		await Bun.write(
+			path.join(root, "package.json"),
+			JSON.stringify({
+				scripts: {
+					dev: "bun --cwd=packages/a run inner",
+					predev: "bun packages/a/pre.ts",
+					postdev: "bun packages/a/post.ts",
+					cycle: "bun run cycle",
+					test: "bun packages/a/pre.ts",
+					build: "bun packages/a/post.ts",
+					builtinBuild: "bun build packages/a/cli.ts",
+					dynamic: "bun $ENTRY",
+				},
+			}),
+		);
+		await Bun.write(path.join(dir, "package.json"), JSON.stringify({ scripts: { inner: "bun cli.ts" } }));
+		for (const file of ["cli.ts", "pre.ts", "post.ts", "local.js"])
+			await Bun.write(path.join(dir, file), "export {};\n");
+		await Bun.write(path.join(dir, "launcher.rs"), "fn main() {}\n");
+		const filename = path.join(dir, "source.ts");
+		const scan = (text: string) => gateResources(filename, text, new Set<string>(), root);
+		for (const spawn of [
+			'Bun.spawn([process.execPath, "run", "dev"], {cwd: root});',
+			'Bun.spawn({cmd: [process.execPath, "run", "dev"], cwd: root});',
+		]) {
+			const result = scan(
+				`import path from "node:path"; const root = path.resolve(import.meta.dir, "../.."); ${spawn}`,
+			);
+			expect(result.entries).toEqual(["packages/a/cli.ts", "packages/a/post.ts", "packages/a/pre.ts"]);
+			expect(result.files).toContain("package.json");
+			expect(result.files).toContain("packages/a/package.json");
+			expect(result.repositoryFallback).toBe(false);
+		}
+		const shell = scan(
+			'import { $ } from "bun"; import path from "node:path"; $`bun run dev`.cwd(path.resolve(import.meta.dir, "../.."));',
+		);
+		expect(shell.entries).toEqual(["packages/a/cli.ts", "packages/a/post.ts", "packages/a/pre.ts"]);
+		expect(shell.repositoryFallback).toBe(false);
+		const childProcess = scan(
+			'import { spawn } from "node:child_process"; import path from "node:path"; spawn("bun", ["run", "dev"], {cwd:path.resolve(import.meta.dir, "../..")});',
+		);
+		expect(childProcess.entries).toEqual(["packages/a/cli.ts", "packages/a/post.ts", "packages/a/pre.ts"]);
+		expect(childProcess.repositoryFallback).toBe(false);
+		for (const command of ["test", "build"]) {
+			const sourceBuiltin = scan(
+				`Bun.spawn(["bun", "${command}", "packages/a/cli.ts"], {cwd: ${JSON.stringify(root)}});`,
+			);
+			expect(sourceBuiltin.repositoryFallback).toBe(false);
+			expect(sourceBuiltin.entries).toContain("packages/a/cli.ts");
+			expect(sourceBuiltin.entries).not.toContain(command === "test" ? "packages/a/pre.ts" : "packages/a/post.ts");
+			const shellBuiltin = scan(
+				`import { $ } from "bun"; $\`bun ${command} packages/a/cli.ts\`.cwd(${JSON.stringify(root)});`,
+			);
+			expect(shellBuiltin.repositoryFallback).toBe(false);
+			expect(shellBuiltin.entries).toContain("packages/a/cli.ts");
+			expect(shellBuiltin.entries).not.toContain(command === "test" ? "packages/a/pre.ts" : "packages/a/post.ts");
+			const explicit = scan(`Bun.spawn(["bun", "run", "${command}"], {cwd: ${JSON.stringify(root)}});`);
+			expect(explicit.repositoryFallback).toBe(false);
+			expect(explicit.entries).toContain(command === "test" ? "packages/a/pre.ts" : "packages/a/post.ts");
+		}
+		const nestedBuiltin = scan(`Bun.spawn(["bun", "run", "builtinBuild"], {cwd: ${JSON.stringify(root)}});`);
+		expect(nestedBuiltin.repositoryFallback).toBe(false);
+		expect(nestedBuiltin.entries).toContain("packages/a/cli.ts");
+		expect(nestedBuiltin.entries).not.toContain("packages/a/post.ts");
+		const nodeBuiltin = scan(`Bun.spawn(["node", "--test", "packages/a/cli.ts"], {cwd: ${JSON.stringify(root)}});`);
+		expect(nodeBuiltin.repositoryFallback).toBe(false);
+		expect(nodeBuiltin.entries).toContain("packages/a/cli.ts");
+		expect(nodeBuiltin.entries).not.toContain("packages/a/pre.ts");
+		const nodeRun = scan(`Bun.spawn(["node", "--run", "test"], {cwd: ${JSON.stringify(root)}});`);
+		expect(nodeRun.repositoryFallback).toBe(false);
+		expect(nodeRun.entries).toContain("packages/a/pre.ts");
+		for (const source of [
+			'const python = process.platform === "win32" ? "python" : "python3"; Bun.spawnSync([python, "-c", verifier, run.dir]);',
+			'const compiler = env.RUSTC || "rustc"; Bun.spawn([compiler, "--version"]);',
+			'Bun.spawn(["bun", ...args], {cwd: process.cwd()});',
+			"Bun.spawn([process.execPath, process.env.INDIRECT_SOURCE], {cwd: process.cwd()});",
+			'Bun.spawn(["git", "--version"], {cwd: "../runtime"});',
+		]) {
+			const result = scan(source);
+			expect(result.fallback).toBe(false);
+			expect(result.repositoryFallback).toBe(false);
+		}
+		const compiler = scan(
+			'import path from "node:path"; const compiler = env.RUSTC || "rustc"; const source = path.join(import.meta.dir, "launcher.rs"); Bun.spawn([compiler, "--edition=2021", "-o", temporary, source]);',
+		);
+		expect(compiler.repositoryFallback).toBe(false);
+		expect(compiler.files).toContain("packages/a/launcher.rs");
+		expect(scan('Bun.spawn(["bun", "test", "./cli.ts"], {cwd: "../unknown"});').repositoryFallback).toBe(true);
+		expect(scan('Bun.spawn([unknownCommand, "./cli.ts"], {cwd: "../unknown"});').repositoryFallback).toBe(true);
+		expect(scan('Bun.spawn(["bun", "run", script], {cwd: import.meta.dir});').repositoryFallback).toBe(true);
+		for (const script of ["cycle", "dynamic", "missing"])
+			expect(
+				scan(`Bun.spawn(["bun", "run", "${script}"], {cwd: ${JSON.stringify(root)}});`).repositoryFallback,
+			).toBe(true);
+		expect(scan('Bun.spawn(["bun", "run", script], {cwd: "../unknown"});').repositoryFallback).toBe(true);
+		const imports =
+			'import { $ } from "bun"; import os from "node:os"; import path from "node:path"; import { mkdtempSync } from "node:fs";';
+		const helper =
+			'function fixture() { const temp = mkdtempSync(path.join(os.tmpdir(), "fixture-")); const root = path.join(temp, "project"); return {temp, root}; }';
+		expect(
+			scan(`${imports} ${helper} const {root} = fixture(); const alias = root; $\`git add entry.py\`.cwd(alias);`)
+				.repositoryFallback,
+		).toBe(false);
+		expect(
+			scan(`${imports} ${helper} const {root} = fixture(); $\`bun ./worker.ts\`.cwd(root);`).repositoryFallback,
+		).toBe(true);
+		expect(
+			scan(
+				`${imports} function fixture() { return {root: path.join(os.tmpdir(), "..", "outside")}; } const {root} = fixture(); $\`bun --version\`.cwd(root);`,
+			).repositoryFallback,
+		).toBe(true);
+		expect(
+			scan(
+				`${imports} function fixture(flag) { if (flag) return {root: os.tmpdir()}; return {root: process.cwd()}; } const {root} = fixture(true); $\`bun --version\`.cwd(root);`,
+			).repositoryFallback,
+		).toBe(true);
+		expect(
+			scan(`${imports} ${helper} let {root} = fixture(); root = other; $\`bun --version\`.cwd(root);`)
+				.repositoryFallback,
+		).toBe(true);
+		expect(
+			scan(`${imports} function probe(os) { const root = os.tmpdir(); $\`bun --version\`.cwd(root); }`)
+				.repositoryFallback,
+		).toBe(true);
+		expect(
+			scan(`${imports} ${helper} const {root} = fixture(); Bun.spawn(["bun", "./worker.ts"], {cwd: root});`)
+				.repositoryFallback,
+		).toBe(true);
+		expect(scan('Bun.spawn([unknownCommand, "run", "dev"], {cwd: import.meta.dir});').repositoryFallback).toBe(true);
+		expect(
+			scan(`${imports} ${helper} const {root} = fixture(); $\`bun \${unknownModule}\`.cwd(root);`).fallback,
+		).toBe(true);
+		const loader =
+			'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); const alias = load;';
+		expect(scan(`${loader} alias("bun:ffi"); alias("node:fs");`).fallback).toBe(false);
+		expect(scan(`${loader} alias("bun:ffi"); alias(dynamicName);`).fallback).toBe(true);
+		expect(scan(`${loader} alias("node:not-a-builtin");`).fallback).toBe(true);
+		expect(scan(`${loader} function shadow(alias) { alias("bun:ffi"); } alias(dynamicName);`).fallback).toBe(true);
+		const local = scan(`${loader} alias("./local.js");`);
+		expect(local.entries).toContain("packages/a/local.js");
+		expect(local.fallback).toBe(false);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test.skipIf(process.platform !== "win32")(
+	"Dev TUI native tool changes invalidate only its consumer and a missing tool fails explicitly",
+	async () => {
+		const root = await fixture();
+		try {
+			await copyReporter(root);
+			const toolDir = path.join(root, ".state/tui-bin");
+			await fs.mkdir(toolDir, { recursive: true });
+			const tool = path.join(toolDir, "tui-test.exe");
+			await fs.copyFile(process.execPath, tool);
+			const runs = path.join(root, ".state/tui-consumer.runs");
+			const otherRuns = path.join(root, ".state/tui-independent.runs");
+			await Bun.write(path.join(root, "packages/coding-agent/package.json"), '{"name":"fixture-coding-agent"}');
+			await Bun.write(
+				path.join(root, "packages/coding-agent/test/spec-driven/tui.e2e.test.ts"),
+				`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("native tool", async () => {
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+ const child = Bun.spawn(["tui-test", "--version"], {env:process.env, stdout:"pipe", stderr:"inherit"});
+ expect((await new Response(child.stdout).text()).trim()).toBe(Bun.version);
+ expect(await child.exited).toBe(0);
+});
+`,
+			);
+			await Bun.write(
+				path.join(root, "packages/b/tui-independent.test.ts"),
+				`import { test } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+test("independent", () => {
+ mkdirSync(${JSON.stringify(path.dirname(otherRuns))}, {recursive:true});
+ appendFileSync(${JSON.stringify(otherRuns)}, "run\\n");
+});
+`,
+			);
+			const label = "test/fork packages/coding-agent/test/spec-driven/tui.e2e.test.ts";
+			const command: GateCommand = {
+				label,
+				argv: [process.execPath, "test", "test/spec-driven/tui.e2e.test.ts"],
+				cwd: path.join(root, "packages/coding-agent"),
+				env: { PATH: `${toolDir};${process.env.PATH ?? process.env.Path ?? ""}` },
+			};
+			const independent: GateCommand = {
+				label: "test/fork packages/b/tui-independent.test.ts",
+				argv: [process.execPath, "test", "tui-independent.test.ts"],
+				cwd: path.join(root, "packages/b"),
+			};
+			const commands = [command, independent];
+			expect((await batch(root, commands, "fulltest")).exitCode).toBe(0);
+			expect((await batch(root, commands, "fulltest")).targets.map(target => target.status)).toEqual([
+				"cached",
+				"cached",
+			]);
+			await fs.appendFile(tool, Buffer.from([0]));
+			const changed = await batch(root, commands, "fulltest");
+			expect(changed.exitCode).toBe(0);
+			expect(changed.targets[0]?.status).not.toBe("cached");
+			expect(changed.targets[1]?.status).toBe("cached");
+			expect(await Bun.file(runs).text()).toBe("run\nrun\n");
+			expect(await Bun.file(otherRuns).text()).toBe("run\n");
+			let missing: unknown;
+			const result = await runGate("fulltest", async gate => {
+				try {
+					await runBazelCommands(gate, [{ ...command, env: { PATH: "" } }], {
+						root,
+						concurrency: 2,
+						serverIdleSeconds: fixtureServerIdleSeconds,
+					});
+				} catch (error) {
+					missing = error;
+					throw error;
+				}
+			});
+			expect(result.exitCode).not.toBe(0);
+			expect(missing).toBeInstanceOf(GateCommandError);
+			expect(missing).toMatchObject({
+				message: `tui-test is required for ${label}`,
+				status: "MISSING_TOOL",
+				exitCode: 127,
+			});
+			expect((await batch(root, [independent], "fulltest")).targets[0]?.status).toBe("cached");
+		} finally {
+			await cleanup(root);
+		}
+	},
+	120_000,
+);
+
+test("builtin-only require consumers stay cached while a mixed dynamic loader retains its package boundary", async () => {
+	const root = await fixture();
+	try {
+		await copyReporter(root);
+		for (const [pkg, dynamic] of [
+			["a", false],
+			["b", true],
+		] as const) {
+			const runs = path.join(root, `.state/require-${pkg}.runs`);
+			await Bun.write(
+				path.join(root, `packages/${pkg}/require.test.ts`),
+				`import { test, expect } from "bun:test";
+import { createRequire } from "node:module";
+import { appendFileSync, mkdirSync } from "node:fs";
+const load = createRequire(import.meta.url);
+const alias = load;
+test("loader boundary", () => {
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+ const {read, ptr} = alias("bun:ffi");
+ const bytes = Uint8Array.of(42);
+ expect(read.u8(ptr(bytes))).toBe(42);
+ ${dynamic ? 'const name = process.env.FIXTURE_MODULE ?? "node:fs"; expect(JSON.parse(alias(name).readFileSync(new URL("./payload.json", import.meta.url), "utf8")).value).toBe(42);' : ""}
+});
+`,
+			);
+			await Bun.write(path.join(root, `packages/${pkg}/unrelated.ts`), "export const unrelated = 1;\n");
+			if (dynamic) await Bun.write(path.join(root, `packages/${pkg}/payload.json`), JSON.stringify({ value: 42 }));
+		}
+		const commands: GateCommand[] = ["a", "b"].map(pkg => ({
+			label: `test/fork packages/${pkg}/require.test.ts`,
+			argv: [process.execPath, "test", "require.test.ts"],
+			cwd: path.join(root, `packages/${pkg}`),
+		}));
+		expect((await batch(root, commands, "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, commands, "fulltest")).targets.map(target => target.status)).toEqual([
+			"cached",
+			"cached",
+		]);
+		for (const pkg of ["a", "b"])
+			await Bun.write(path.join(root, `packages/${pkg}/unrelated.ts`), "export const unrelated = 2;\n");
+		const changed = await batch(root, commands, "fulltest");
+		expect(changed.exitCode).toBe(0);
+		expect(changed.targets[0]?.status).toBe("cached");
+		expect(changed.targets[1]?.status).not.toBe("cached");
+		expect(await Bun.file(path.join(root, ".state/require-a.runs")).text()).toBe("run\n");
+		expect(await Bun.file(path.join(root, ".state/require-b.runs")).text()).toBe("run\nrun\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 120_000);

@@ -408,6 +408,7 @@ export async function createSpecActor(args: {
 		agentId: id,
 		parentTaskPrefix: id,
 		expectedAgentRef: null,
+		initialAgentStatus: "idle",
 		bindProcessState: false,
 		agentRegistry: registry,
 		sessionManager: args.sessionFile
@@ -436,6 +437,11 @@ export async function createSpecActor(args: {
 	});
 	const session = created.session;
 	const ref = registry.get(id);
+	const unsubscribeRunState = registry.syncSessionStatus(id, session);
+	session.addDisposer(() => {
+		unsubscribeRunState();
+		registry.unregister(id, ref ?? session);
+	});
 	let disposed = false;
 	let runId: string | undefined;
 	let release: (() => void) | void;

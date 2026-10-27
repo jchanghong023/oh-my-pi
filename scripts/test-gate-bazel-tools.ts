@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import * as path from "node:path";
 
 const windowsAppAlias = /[\\/]Microsoft[\\/]WindowsApps(?:[\\/]|$)/i;
@@ -19,6 +19,37 @@ export function bazelToolPath(value: string, platform: NodeJS.Platform = process
 		.split(";")
 		.filter(directory => !windowsAppAlias.test(directory.replace(/^"(.*)"$/, "$1")))
 		.join(";");
+}
+
+/** Only the fork E2E files using the shared native Dev TUI harness require this tool. */
+export function requiresTuiTest(label: string): boolean {
+	return /^test\/fork packages\/coding-agent\/test\/spec-driven\/tui(?:-capabilities|-lifecycle|-closing|-materials|-interactions|-resources)?\.e2e\.test\.ts$/.test(
+		label,
+	);
+}
+
+/** A script or unknown executable may delegate to an untracked implementation.
+ * Never infer a closed tool input from its wrapper. */
+export function isNativeTuiTest(filename: string, platform: NodeJS.Platform = process.platform): boolean {
+	if (platform !== "win32" || !filename.toLowerCase().endsWith(".exe")) return false;
+	let fd: number | undefined;
+	try {
+		fd = openSync(filename, "r");
+		const header = Buffer.alloc(64);
+		if (readSync(fd, header, 0, header.length, 0) !== header.length || header.toString("ascii", 0, 2) !== "MZ")
+			return false;
+		const offset = header.readUInt32LE(0x3c);
+		if (offset < header.length || offset > 1024 * 1024) return false;
+		const signature = Buffer.alloc(4);
+		return (
+			readSync(fd, signature, 0, signature.length, offset) === signature.length &&
+			signature.equals(Buffer.from("PE\0\0"))
+		);
+	} catch {
+		return false;
+	} finally {
+		if (fd !== undefined) closeSync(fd);
+	}
 }
 
 /** Preserve explicit installed shells; otherwise select Bash from a real Git installation. */

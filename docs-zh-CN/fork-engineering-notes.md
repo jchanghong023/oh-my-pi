@@ -24,6 +24,14 @@
 
 以下材料仅供查找实现和验证入口，不构成需求基线，也不表示本次已运行或通过。
 
+### Fork 门禁输入与 Dev TUI 分片
+
+- `scripts/test-gate-bazel-resources.ts` 和 `scripts/test-gate-bazel-script-inputs.ts` 负责静态资源与字面 package-manager 脚本输入发现；脚本追踪 manifest、CLI 入口及可解析的递归调用，无法证明的加载、动态路径与逃逸仍保守。已证明的临时 fixture 路径不当作仓库输入；已证明的内置模块与显式本地 `createRequire` 可精确追踪，第三方不透明包、已安装依赖与动态原生候选仍保留。
+- `scripts/rust-test-scope.ts` 归一化 affected 选择键；纯无关非空变更仍走原选择及 metadata 错误路径。`scripts/test-gate-native-events.ts` 承载轻量编译事件转发，实际 Rust 资源、工具链、SDK 和 vendor 输入仍由 Bazel 声明。
+- Dev TUI 的 41 个场景分布在 `packages/coding-agent/test/spec-driven/tui.e2e.test.ts`、`tui-materials.e2e.test.ts`、`tui-interactions.e2e.test.ts`、`tui-resources.e2e.test.ts`，按文件形成独立目标；`tui-harness.ts` 维持隔离及超时，`scripts/test-gate-bazel-tools.ts` 和 `scripts/test-gate-bazel.ts` 处理实际 `tui-test` 工具输入与不可闭合时的复用边界。并发仍由 Bazel 原有四槽预算控制。
+- OpenSpec 资源授权 E2E 先确认多行草稿及光标已进入真实输入框，再单独发送 Enter；每轮关联独立输入和完成标记后检查原生读取结果，不用旧回复或画面 idle 代替当前工具轮完成。缺失完成报告的 E2E 检查状态区材料提示、`/session` 完整读取诊断及阶段／批准不变，不要求原始 `ENOENT` 直接出现在状态区。
+- 验证时按授权运行对应局部测试及真实 Bazel 消费者增量回归：分别修改业务模块、资产、已安装依赖、脚本入口和工具，核对实际消费者重跑、无关目标复用及动态／逃逸保守边界；检查四个 E2E 目标的场景、隔离与超时，并以原生执行证据核对槽位。完整门禁与热缓存验收仍按正式规格和原授权执行，入口存在不代表已通过。
+
 ### Repo 索引验证入口
 
 现有 UT/集成入口为 `packages/coding-agent/test/repo-index.test.ts`、`repo-lifecycle.test.ts`、`repo-tool.test.ts`、`repo-review-regressions.test.ts`、`lsp/edits.test.ts` 和 `packages/natives/test/python-symbols.test.ts`，涵盖最佳匹配、扫描中取消、外部变化复核、真实强杀后的代次回收、并发读快照、设备执行状态、LSP 部分提交／回滚、删除路径身份及长路径确认；真实 TUI E2E 为 `scripts/repo-ui-smoke.ts`，已由 `scripts/fulltest-ui-smoke.ts` 接入 `bun run fulltest`。`scripts/repo-index-perf.ts` 提供合成语料基准。这些入口的存在不代表本次运行通过，执行仍遵循 `AGENTS.md` 的授权限制。

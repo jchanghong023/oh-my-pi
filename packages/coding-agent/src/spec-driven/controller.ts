@@ -505,6 +505,10 @@ export class SpecDrivenController {
 			if (!this.#core || !this.#native) throw new SpecAdmissionError("请先建立或恢复阶段会话");
 			await this.#core.next(candidateId, raw);
 			await this.#bind();
+			const completed = this.status();
+			if (completed.phase === "idle" && completed.archivedChangePath) {
+				this.#notice = `验收完成，需求已归档：${completed.archivedChangePath}`;
+			}
 		});
 	}
 	async back(): Promise<void> {

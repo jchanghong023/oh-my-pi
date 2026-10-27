@@ -18,7 +18,7 @@ import * as path from "node:path";
 import { $ } from "bun";
 import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
-import { withRustCompilerEvents } from "../../../scripts/test-gate-runtime";
+import { withRustCompilerEvents } from "../../../scripts/test-gate-native-events";
 import { generateEnumExports } from "./gen-enums";
 
 // pcre2-sys prefers a system libpcre2 when pkg-config finds one. Keep the

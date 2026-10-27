@@ -89,6 +89,31 @@ describe("stage files are the sole artifact inputs", () => {
 		await expect(fs.stat(path.join(cwd, ".omp", "spec-sessions"))).rejects.toThrow();
 	});
 
+	test("explains missing requirement specs and report without hiding other errors", async () => {
+		const { cwd, store, paths, write } = await fixture(true);
+		const specs = `${store.changeDir}/specs`;
+		await fs.rm(path.join(cwd, specs), { recursive: true });
+		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格，请补齐后重试 /dev next");
+		await expect(store.readRequirements()).rejects.toThrow(`${specs}/*/spec.md`);
+		await expect(store.readRequirements()).rejects.toThrow("ENOENT");
+
+		await fs.mkdir(path.join(cwd, specs));
+		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格，请补齐后重试 /dev next");
+		await expect(store.readRequirements()).rejects.toThrow(`${specs}/*/spec.md`);
+		await fs.rm(path.join(cwd, specs), { recursive: true });
+		await fs.writeFile(path.join(cwd, specs), "not a directory");
+		await expect(store.readRequirements()).rejects.toThrow("ENOTDIR");
+
+		await expect(store.readReport()).rejects.toThrow("缺少完成报告，请补齐后重试 /dev next");
+		await expect(store.readReport()).rejects.toThrow(paths.report);
+		await expect(store.readReport()).rejects.toThrow("ENOENT");
+		await fs.mkdir(path.join(cwd, paths.report), { recursive: true });
+		await expect(store.readReport()).rejects.toThrow("EISDIR");
+		await fs.rm(path.join(cwd, paths.report), { recursive: true });
+		await write(paths.report, "# Invalid report\n");
+		await expect(store.readReport()).rejects.toThrow("Completion report requires title");
+	});
+
 	test("rejects absent, malformed, empty and duplicate candidates, accepts any positive count", async () => {
 		const { store, paths, write } = await fixture();
 		await expect(store.readSolution()).rejects.toThrow();

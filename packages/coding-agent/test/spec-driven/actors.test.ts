@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
+import { getRunningSubagentBadgeAgentIds } from "@oh-my-pi/pi-tui/overlays/running-subagent-badge";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
@@ -26,7 +27,11 @@ async function consumer(
 	hooks: Pick<
 		Parameters<typeof createSpecActor>[0],
 		"reportPath" | "observeReport" | "checkApproved" | "getStatus" | "beginRepair" | "recoverContext" | "entryMethods"
-	> & { toolRestrictions?: ToolRestrictions; inheritedToolRestrictions?: ToolRestrictions } = {},
+	> & {
+		toolRestrictions?: ToolRestrictions;
+		inheritedToolRestrictions?: ToolRestrictions;
+		registry?: AgentRegistry;
+	} = {},
 ) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-actor-compaction-"));
 	const agentDir = path.join(cwd, "agent");
@@ -149,42 +154,46 @@ async function consumer(
 				})
 			).session
 		: undefined;
-	const actor = await createSpecActor({
-		role,
-		...hooks,
-		sessionDirectory: path.join(cwd, "sessions"),
-		methods: [],
-		options: {
-			toolRestrictions: hooks.toolRestrictions,
-			cwd,
-			agentDir,
-			settings,
-			model,
-			authStorage,
-			modelRegistry,
-			parentAgentId: parent?.getAgentId(),
-			asyncJobManager,
-			contextFiles: [],
-			rules: [],
-			skills: [],
-			promptTemplates: [],
-			slashCommands: [],
-			disableExtensionDiscovery: true,
-			enableMCP: false,
-			enableLsp: false,
-			autoTitle: false,
-			offline: true,
-			customTools,
-			toolNames: ["read", "grep", "glob", "write", "edit", ...(role === "executor" ? ["bash"] : [])],
-			restrictToolNames: true,
-			...(customTools
-				? {
-						toolNames: customTools.map(tool => tool.name),
-						allowRestrictedCustomTools: true,
-					}
-				: {}),
-		},
-	});
+	const createActor = (sessionFile?: string) =>
+		createSpecActor({
+			role,
+			...hooks,
+			sessionFile,
+			sessionDirectory: path.join(cwd, "sessions"),
+			methods: [],
+			options: {
+				toolRestrictions: hooks.toolRestrictions,
+				cwd,
+				agentDir,
+				settings,
+				model,
+				authStorage,
+				modelRegistry,
+				agentRegistry: hooks.registry,
+				parentAgentId: parent?.getAgentId(),
+				asyncJobManager,
+				contextFiles: [],
+				rules: [],
+				skills: [],
+				promptTemplates: [],
+				slashCommands: [],
+				disableExtensionDiscovery: true,
+				enableMCP: false,
+				enableLsp: false,
+				autoTitle: false,
+				offline: true,
+				customTools,
+				toolNames: ["read", "grep", "glob", "write", "edit", ...(role === "executor" ? ["bash"] : [])],
+				restrictToolNames: true,
+				...(customTools
+					? {
+							toolNames: customTools.map(tool => tool.name),
+							allowRestrictedCustomTools: true,
+						}
+					: {}),
+			},
+		});
+	let actor = await createActor();
 	const controller = new AbortController();
 	const context = { runId: "actor-compaction", generation: 1, signal: controller.signal };
 	const request = (input: Partial<SpecAgentInput> = {}) =>
@@ -207,7 +216,12 @@ async function consumer(
 		get advertisedTools() {
 			return advertisedTools;
 		},
-		actor,
+		get actor() {
+			return actor;
+		},
+		async reopen(sessionFile: string) {
+			actor = await createActor(sessionFile);
+		},
 		context,
 		controller,
 		request,
@@ -237,6 +251,49 @@ async function consumer(
 		},
 	};
 }
+
+test("stage badge follows native turns rather than persistent session lifetime", async () => {
+	const registry = new AgentRegistry();
+	const registrations: string[] = [];
+	registry.onChange(event => {
+		if (event.type === "registered") registrations.push(event.ref.status);
+	});
+	await using fixture = await consumer(undefined, "requirements", { registry });
+	const id = fixture.actor.id;
+	expect(registrations).toEqual(["idle"]);
+	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
+
+	const runTurn = async (start: () => Promise<unknown>) => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		fixture.onRequest(async () => {
+			entered.resolve();
+			await release.promise;
+		});
+		const running = start();
+		try {
+			await entered.promise;
+			expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([fixture.actor.id]);
+		} finally {
+			release.resolve();
+		}
+		await running;
+		expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
+		expect(registry.get(fixture.actor.id)?.status).toBe("idle");
+	};
+	await runTurn(() => fixture.request());
+	// A focused stage session can also be prompted directly, outside actor.request.
+	await runTurn(() => fixture.actor.session.prompt("继续"));
+	const sessionFile = fixture.actor.session.sessionManager.getSessionFile();
+	if (!sessionFile) throw new Error("Expected a persistent stage transcript");
+	await fixture.actor.dispose();
+	expect(registry.get(id)).toBeUndefined();
+	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
+	await fixture.reopen(sessionFile);
+	expect(registrations).toEqual(["idle", "idle"]);
+	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
+	await runTurn(() => fixture.request({ entry: false, feedback: "恢复后继续" }));
+}, 120_000);
 
 test("actor request retains its current ordinary reply through real native compaction", async () => {
 	await using fixture = await consumer();
@@ -406,6 +463,7 @@ test("actor cancellation waits for an in-flight native tool to actually settle",
 	);
 	try {
 		await entered.promise;
+		expect(getRunningSubagentBadgeAgentIds(AgentRegistry.global())).toContain(fixture.actor.id);
 		fixture.controller.abort();
 		await aborted.promise;
 		const turn = Promise.withResolvers<void>();
@@ -421,6 +479,7 @@ test("actor cancellation waits for an in-flight native tool to actually settle",
 	expect(result.value).toBeUndefined();
 	expect(toolStopped).toBe(true);
 	expect(fixture.actor.session.isStreaming).toBe(false);
+	expect(getRunningSubagentBadgeAgentIds(AgentRegistry.global())).not.toContain(fixture.actor.id);
 }, 120_000);
 
 test("actor cancellation reaches an idle child agent's background job", async () => {

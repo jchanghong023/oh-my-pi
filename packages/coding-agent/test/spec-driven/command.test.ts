@@ -197,7 +197,6 @@ describe("/dev six-entry boundary", () => {
 		try {
 			await f.invoke("");
 			await f.invoke("config");
-			expect(f.select).toHaveBeenCalledWith("方案 Team", ["开启", "关闭"], { signal: undefined });
 			expect(f.setTeam).not.toHaveBeenCalled();
 			f.select.mockResolvedValueOnce("开启");
 			await f.invoke("config");

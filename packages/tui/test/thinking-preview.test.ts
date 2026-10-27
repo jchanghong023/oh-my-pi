@@ -95,8 +95,15 @@ describe("compact transient thinking preview", () => {
 		for (const width of [18, 32, 12]) {
 			const rows = component.renderCompactThinkingPreview(width);
 			expect(plain(rows)).toEqual(plain(markdown.render(width).slice(-1)));
-			expect(rows[0]).toBe(theme.fg("thinkingText", Bun.stripANSI(rows[0]!)));
 		}
+	});
+
+	it("keeps non-BMP characters intact while coloring the live thinking row", () => {
+		const component = assistant(true);
+		component.updateContent(thinking("abcdefghij😀"), { transient: true });
+		const [row] = component.renderCompactThinkingPreview(40);
+		expect(row).toContain("😀");
+		expect(Bun.stripANSI(row!)).toContain("abcdefghij😀");
 	});
 
 	it("keeps short thinking and multiline thinking within a single row", () => {
