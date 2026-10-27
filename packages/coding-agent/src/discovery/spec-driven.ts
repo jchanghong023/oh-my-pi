@@ -5,7 +5,7 @@ import { registerProvider } from "../capability";
 import { type Skill, skillCapability } from "../capability/skill";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { ensureSpecDrivenResources } from "../spec-driven/resources";
-import { isModelInvocableSuperpowersSkill, SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
+import { SPEC_DRIVEN_SKILL_PROVIDER } from "../spec-driven/skill-policy";
 import { scanSkillsFromDir } from "./helpers";
 
 /** Low-priority builtins use the ordinary catalog collision rules; native autoload bypasses that catalog. */
@@ -37,10 +37,6 @@ export async function loadSpecDrivenSkills(ctx: LoadContext): Promise<LoadResult
 			items.push({
 				...skill,
 				name: entry.name,
-				...(entry.source === "superpowers" &&
-					!isModelInvocableSuperpowersSkill(entry.name) && {
-						frontmatter: { ...skill.frontmatter, disableModelInvocation: true },
-					}),
 				...(entry.source === "openspec" &&
 					!hasOpenSpec && {
 						frontmatter: { ...skill.frontmatter, hide: true },

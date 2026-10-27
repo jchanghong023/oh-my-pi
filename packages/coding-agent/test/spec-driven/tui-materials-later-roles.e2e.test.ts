@@ -21,7 +21,7 @@ test.skipIf(!tuiTest)(
 			await Bun.write(path.join(cwd, "openspec"), "real initializer path obstruction\n");
 			const calls = provider.requests.length;
 			await tui("submit", `/dev new ${REQUIREMENT}`);
-			await expectNativeFailure(tui, /OpenSpec change creation failed/, "openspec", `/dev new ${REQUIREMENT}`);
+			await expectNativeFailure(tui, /ENOTDIR|not a directory/i, "openspec", `/dev new ${REQUIREMENT}`);
 			await idle();
 			expect(await state()).toEqual(configured);
 			expect(provider.requests).toHaveLength(calls);

@@ -6,6 +6,7 @@ import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { loadSpecDrivenSkill } from "@oh-my-pi/pi-coding-agent/spec-driven/resources";
 import { Shell } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
 import { bashToolRenderer } from "@oh-my-pi/pi-tui/tools/bash";
@@ -288,6 +289,41 @@ describe("BashTool skill:// working directory", () => {
 			await fs.rm(dir, { recursive: true, force: true });
 		}
 	});
+});
+
+describe("BashTool bundled Superpowers scripts", () => {
+	it.skipIf(process.platform === "win32" || !Bun.which("bash") || !Bun.which("git"))(
+		"runs the original script from a physical skill directory and from the project directory",
+		async () => {
+			const project = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-superpowers-project-")));
+			try {
+				const init = Bun.spawn(["git", "init", "-q", project], { stdout: "pipe", stderr: "pipe" });
+				expect(await init.exited).toBe(0);
+				const plan = path.join(project, "plan.md");
+				await fs.writeFile(plan, "# Plan\n");
+				const skill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+				const tool = new BashTool({ ...makeSession(), cwd: project, skills: [skill] });
+				const usage = await tool.execute("skill-script-usage", {
+					command: "bash scripts/sdd-workspace",
+					cwd: skill.baseDir,
+				});
+				expect(usage.isError).toBe(true);
+				expect(usage.content.find(c => c.type === "text")?.text).toContain("usage: sdd-workspace PLAN_FILE");
+
+				const quote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+				const run = await tool.execute("skill-script-project", {
+					command: `bash ${quote(path.join(skill.baseDir, "scripts", "sdd-workspace"))} ${quote(plan)}`,
+					cwd: project,
+				});
+				expect(run.isError).toBeUndefined();
+				expect(await fs.readFile(path.join(project, ".superpowers", "sdd", "plan", "plan-path"), "utf8")).toBe(
+					"plan.md\n",
+				);
+			} finally {
+				await fs.rm(project, { recursive: true, force: true });
+			}
+		},
+	);
 });
 
 describe("BashTool skill:// containment failures", () => {

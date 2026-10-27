@@ -421,15 +421,13 @@ Dev 只有六个入口，普通模式下子命令不会隐式进入：
 
 ### 4.9 OpenSpec：独立需求闭环
 
-这是 OMP 内置的 OpenSpec fork，和 `/dev` 是两个独立功能。它不要求 `/dev` 的运行、批准、方案、计划或回写接口；可以只确认需求、同步正式需求并归档，暂不实施代码。
+内置 OpenSpec 与 `/dev` 是独立功能，不依赖 `/dev` 的运行或批准。OMP 提供上游十二项 `openspec-*` 技能，可通过 `/skill:openspec-explore`、`/skill:openspec-propose` 等入口调用；当前工作目录直接包含 `openspec/` 时也可按需自动发现。技能原文及完整名称沿用上游，实际操作仍受用户授权和项目规则约束。
 
-在 OMP 输入框手动调用 `/skill:opsx-explore [问题]`、`/skill:opsx-propose [需求]`、`/skill:opsx-update [变更名及修改要求]`、`/skill:opsx-sync [变更名]`、`/skill:opsx-archive [变更名]`、`/skill:opsx-verify [变更名]` 六项内置技能。它们不会自动触发，不提供 `/opsx-*` 内置命令或命令模板。新建需求用 propose，修订或补齐已有变更用 update；无需先运行 `init` 安装技能。同步将已确认增量合入唯一正式需求书：原生项目更新 `openspec/specs/`，已有 Markdown 权威目录则定位原文并最小修改，不另建主规格。归档使用原生校验与归档引擎，失败时保留变更；同步与归档不等于实现或验收通过。未结束的 `/dev` 不允许借独立技能绕过门禁。终端仍可运行 `omp openspec --help`、`omp openspec status --change <change-id> --json` 等 CLI；OpenSpec 不以 Superpowers 计划为前提。
-
-mini 版初始化只需 `omp openspec init`（可指定目标路径及 `--language <语言>`），只建立规格目录和配置；不使用 `--tools none`，也不选择或安装 Claude Code 等外部工具适配。技能由 OMP 内置，无需执行原生工具安装用的 `update`；该入口及旧 `experimental` 别名已移除，需求修订仍用 `/skill:opsx-update`。
+终端使用 `omp openspec --help` 查看上游 CLI 能力；`omp openspec init` 支持原生工具配置选项，默认使用 `spec-driven` schema。内置技能无需通过初始化额外安装。需求同步或归档不等于软件实现及验收，未结束的 `/dev` 不允许借独立技能绕过阶段权限。
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **1.14.3**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器，ZCode 通过显式协商的既有协议扩展读取材料与操作事实；不另建独立 wire 协议、执行／批准状态机、GUI 页面或工作流设计器，后续 GUI 接入也不能另立审批规则。
+包内资源清单固定为 OpenSpec **1.15.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器，ZCode 通过显式协商的既有协议扩展读取材料与操作事实；不另建独立 wire 协议、执行／批准状态机、GUI 页面或工作流设计器，后续 GUI 接入也不能另立审批规则。
 
 此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 

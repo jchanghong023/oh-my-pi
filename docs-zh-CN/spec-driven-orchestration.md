@@ -26,13 +26,13 @@
 
 ## 二、几套能力各自做什么
 
-**OpenSpec 保存“要做什么”。** 提案说明动机与范围，规格描述可观察行为和验收场景；长期主规格与本次变更分开管理。在 OMP 中，它也能独立完成需求探索、修订、同步、核对与归档，不承担代码实施。需求文档已同步或变更已归档，不等于软件交付。
+**OpenSpec 保存“要做什么”。** 提案说明动机与范围，规格描述可观察行为和验收场景；长期主规格与本次变更分开管理。独立内置 CLI、默认 `spec-driven` schema、模板工厂和底层能力采用固定上游 OpenSpec 1.15.0，终端通过 `omp openspec` 使用；Dev 另用需求专用 `omp-spec` schema，阶段和授权边界不因此扩大。上游技能的 OMP 发现范围与原生 CLI 能力是不同的边界。需求文档已同步或变更已归档，不等于软件交付。
 
-**Superpowers 提供工程方法。** Dev 按职责自动注入完整原版技能，无需用户手动调用：需求为 `brainstorming`＋`jch-grill-me`（Grill-me 最后），计划为 `writing-plans`，执行为 `subagent-driven-development`。方案不注入需求访谈技能，直接根据已确认需求调查并产出候选；方案、计划、执行均不要求访谈提问或技能附加确认轮次，真实缺口如实报告，阶段批准仍由用户 `/dev next` 完成。非需求阶段的固定职责约束放在技能正文之后，避免技能中的提问或交接步骤覆盖当前阶段职责。普通会话仍按既有规则发现或手动调用。
+**Superpowers 提供工程方法。** Dev 按职责自动注入原版技能，无需用户手动调用：需求为 `brainstorming`＋`jch-grill-me`（Grill-me 最后），计划为 `writing-plans` 的执行交接章节之前正文，执行为完整的 `subagent-driven-development`。方案不注入需求访谈技能，直接根据已确认需求调查并产出候选；方案、计划、执行均不要求访谈提问或技能附加确认轮次，真实缺口如实报告，阶段批准仍由用户 `/dev next` 完成。非需求阶段的固定职责约束放在技能正文之后，避免技能中的提问或交接步骤覆盖当前阶段职责。普通会话仍按既有规则发现或手动调用。
 
-**Brainstorming 与 Grill-me 自动用于 Dev 需求澄清。** 需求 Agent 必须自动注入包内原版 `brainstorming` 和 `jch-grill-me` 全文：Brainstorming 在前，Grill-me 放在系统提示最后；无需用户再手动调用，新建及恢复需求会话均适用。提问方式冲突时以最后的 Grill-me 为准；技能只用于当前阶段需求澄清，不提前编写方案、计划或额外设计文件，不替用户批准阶段。需求产物仍使用原 OpenSpec instructions 编写 proposal／specs，计划 Agent 使用原 `writing-plans`。两项技能在普通会话中仍仅手动调用，不进入默认模型索引；技能本身的原文和发现策略不变，Dev 的准确资源授权仅限对应会话。澄清回答不替代正式文件确认。
+**Brainstorming 与 Grill-me 自动用于 Dev 需求澄清。** 需求 Agent 必须自动注入包内原版 `brainstorming` 和 `jch-grill-me` 全文：Brainstorming 在前，Grill-me 放在系统提示最后；无需用户再手动调用，新建及恢复需求会话均适用。提问方式冲突时以最后的 Grill-me 为准；技能只用于当前阶段需求澄清，不提前编写方案、计划或额外设计文件，不替用户批准阶段。需求产物仍使用原 OpenSpec instructions 编写 proposal／specs，计划 Agent 使用原 `writing-plans`。普通会话可发现 Brainstorming，Grill-me 仍仅手动调用；Dev 的准确资源授权仅限对应会话。澄清回答不替代正式文件确认。
 
-**OMP 连接文件与决定。** 这些技能及必要资源随包交付，内网不要求临时克隆来源仓库。普通会话按既有规则发现技能，阶段会话按职责获得准确资源。固定版本和系统规则提供的是可追溯输入，不是模型一定遵循或质量已经提高的保证。
+**OMP 连接文件与决定。** 功能所需的上游原始资源直接保存在仓库 `packages/coding-agent/src/spec-driven/vendor/resources/` 下，按 `openspec/`、`superpowers/`、`jch/` 等相对路径查找。只纳入 OpenSpec 运行包及技能、Superpowers 技能、上游插件／扩展及其运行资源，以及 JCH／OMP 所需资源与必要元数据，不复制无关上游仓库文件；构建时打包，运行时离线解压复制到按版本划分的缓存并生成 MD5，后续 MD5 不变时复用缓存，变化时删除该资源的缓存目录并重新复制。内网无需临时克隆或额外安装上游项目，也不提交 Base64 巨型生成源。Superpowers 以固定上游原始文件为基线，不为 OMP 改写工具、子代理或脚本指令；Dev 阶段权限与受控资源授权仍独立适用。固定版本和系统规则提供的是可追溯输入，不是模型一定遵循或质量已经提高的保证。
 
 ## 三、四个 Agent，四次明确决定
 
@@ -91,7 +91,7 @@ OpenSpec 原 proposal／specs 模板、Superpowers 原 `writing-plans` 格式和
 
 ### 4. 执行：真正实施，然后写完成报告
 
-执行 Agent 直接收到完整原文件、用户原始确认回复与获批材料，并自动注入包内原版 `subagent-driven-development` 全文，用原生工具按计划组织实施和审查，不以 `executing-plans` 替代。新建及恢复执行会话均加载，准确资源授权仅限当前会话；技能在普通会话中仍仅手动调用。如何拆分、并行、测试和审查，服从获批计划、用户授权和目标项目规则；不因技能中的工作流步骤创建 worktree、逐任务状态文件、强制提交或自动验收，外层程序不另建工程执行引擎。
+执行 Agent 直接收到完整原文件、用户原始确认回复与获批材料，并自动注入包内原版 `subagent-driven-development` 全文，用原生工具按计划组织实施和审查，不以 `executing-plans` 替代。新建及恢复执行会话均加载，准确资源授权仅限当前会话；普通会话也可发现该技能。如何拆分、并行、测试和审查，服从获批计划、用户授权和目标项目规则；不因技能中的工作流步骤创建 worktree、逐任务状态文件、强制提交或自动验收，外层程序不另建工程执行引擎。
 
 结束工作时，执行 Agent 必须写出真实报告：
 
@@ -186,9 +186,11 @@ ZCode 开放入口投影同一工作区控制者、原生阶段及动作事实�
 
 ## 七、不需要每次都使用 `/dev`
 
-小修复可以继续用普通对话和原生工具。独立需求维护使用 `/skill:opsx-explore`、`opsx-propose`、`opsx-update`、`opsx-sync`、`opsx-archive`、`opsx-verify`；终端入口为 `omp openspec ...`。当前工作目录直接包含 `openspec/` 时，这六项技能也会按既有规则进入默认索引，正文按需读取，其他目录保留手动调用。
+小修复可以继续用普通对话和原生工具。内置完整的十二项上游 `openspec-*` 技能，通过 `/skill:<name>` 调用，例如 `/skill:openspec-explore`、`/skill:openspec-propose`、`/skill:openspec-sync-specs`、`/skill:openspec-archive-change` 和 `/skill:openspec-verify-change`；终端入口为 `omp openspec ...`。当前工作目录直接包含 `openspec/` 时，OMP 将上游名称和描述放入默认索引，正文按需读取，其他目录保留手动调用。
 
-普通会话保留全部包内 Superpowers 手动入口，例如独立更新需求后用 `writing-plans` 编写计划、用 `executing-plans` 实施。默认发现仍只有调试、完成验证、技能编写三项 Superpowers 技能，不因为安装了 OMP 就自动运行整套方法。
+这些技能原文中的 `openspec` 和 `/opsx:` 引用不等于 OMP 内置同名 slash 命令；OMP 的发现包装不改写上游技能。原生 CLI 的初始化、更新及外部工具配置遵循固定上游；Dev 仍遵守自身阶段权限和用户批准。同步或归档时应遵循项目需求权威及用户授权。
+
+普通会话发现全部包内 Superpowers 技能，并保留手动入口；原版 Pi 扩展定义了启动和压缩后的 `using-superpowers` 引导。例如独立更新需求后可用 `writing-plans` 编写计划、用 `executing-plans` 实施。实际操作仍受用户授权和项目规则约束。
 
 这套设计希望减少阶段越权和交接信息损失，不承诺减少 token、费用或等待，也不承诺提高任意真实模型的能力。文件合同、模拟模型测试、真实模型质量和实际软件交付是不同层面的证据，不能互相替代。收益仍需用真实任务中的遗漏、返工、人工纠偏、交付缺陷与实际成本衡量。
 

@@ -197,6 +197,7 @@ describe("stage files are the sole artifact inputs", () => {
 		const context = await fixture();
 		const input = await acceptance(context);
 		const archivePath = path.join(context.cwd, "openspec/changes/archive");
+		await fs.mkdir(archivePath, { recursive: true });
 		const archiveEntries = await fs.readdir(archivePath);
 		await context.write(context.paths.report, `${report}\nChanged after review.\n`);
 		await expect(context.store.close(input)).rejects.toThrow("changed");

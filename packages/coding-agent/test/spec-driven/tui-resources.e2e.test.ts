@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
-import inventory from "../../src/spec-driven/vendor/inventory.json";
+import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { contentText, MARKER, respond, rolePayload, type ModelRequest } from "./provider-fixture";
 import { eventually, nativeDraftSnapshot, tuiTest, withTui } from "./tui-harness";
 
@@ -26,6 +26,9 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 	test.skipIf(!tuiTest)(
 		`ordinary TUI discovers OpenSpec only at a direct directory and scopes manual resource grants (${location})`,
 		async () => {
+			const { manifest: inventory } = await collectSpecDrivenResources(
+				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
+			);
 			await withTui(
 				{
 					async setup(cwd) {

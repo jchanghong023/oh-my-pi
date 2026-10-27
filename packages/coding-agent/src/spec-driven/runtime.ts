@@ -10,7 +10,7 @@ import { createTeamSubagentRunner } from "../team/runner";
 import type { TeamRunResult } from "../team/types";
 import { artifactVersion, containedSpecPath, formalMaterialPaths, SpecArtifactStore } from "./artifacts";
 import { createSpecActor, type SpecActor } from "./actors";
-import { loadSpecDrivenSkill, runOpenSpec } from "./resources";
+import { assertDevSpecSchema, loadSpecDrivenSkill, runOpenSpec } from "./resources";
 import { grantSpecSkillAccess } from "./skill-policy";
 import type {
 	SpecConversationRecipient,
@@ -167,10 +167,11 @@ export async function createSpecDrivenRuntime(args: {
 				entryMethods:
 					role === "requirements"
 						? async () => {
+								await assertDevSpecSchema(cwd, lifetime.signal);
 								const instructions: string[] = [];
 								for (const artifact of ["proposal", "specs"]) {
 									const result = await runOpenSpec(
-										["instructions", artifact, "--change", requireStore().changeId, "--json"],
+										["instructions", artifact, "--change", requireStore().changeId, "--schema", "omp-spec", "--json"],
 										cwd,
 										lifetime.signal,
 									);

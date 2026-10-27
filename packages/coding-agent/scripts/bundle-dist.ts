@@ -6,6 +6,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -64,6 +65,8 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 				entry =>
 					entry === "cli.js" ||
 					entry === "docs-index.generated.txt" ||
+					entry === "spec-driven-resources.tar.gz" ||
+					/^spec-driven-resources.*\.gz$/.test(entry) ||
 					entry.endsWith(".node") ||
 					entry.endsWith(".js.map") ||
 					/\.json-[^/]+\.zst$/.test(entry) ||
@@ -88,6 +91,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
 	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 	try {
+		const specDrivenArchive = await buildSpecDrivenArchive();
 		const docsPayload = await buildDocsIndexPayload();
 		// Build in-process: the docs embed payload is far larger than Linux's
 		// 128KiB per-argv-string cap, so it can never be passed as a CLI
@@ -96,7 +100,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			entrypoints: [path.join(packageDir, "src/cli.ts")],
 			outdir: outDir,
 			target: "bun",
-			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin()],
+			plugins: [createJsonParsePlugin(), await createLegacyPiVirtualModulePlugin(), createSpecDrivenArchivePlugin(specDrivenArchive)],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
@@ -116,6 +120,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		}
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
+		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}

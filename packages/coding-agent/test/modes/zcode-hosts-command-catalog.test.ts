@@ -46,7 +46,20 @@ describe("CommandCatalogService", () => {
 	test("offers manual OpenSpec skills instead of builtins and rejects removed entrypoints", async () => {
 		const cwd = process.cwd();
 		const service = new CommandCatalogService({ cwd });
-		const visible = ["opsx-explore", "opsx-update", "opsx-propose", "opsx-sync", "opsx-archive", "opsx-verify"];
+		const visible = [
+			"openspec-apply-change",
+			"openspec-archive-change",
+			"openspec-bulk-archive-change",
+			"openspec-continue-change",
+			"openspec-explore",
+			"openspec-ff-change",
+			"openspec-new-change",
+			"openspec-onboard",
+			"openspec-propose",
+			"openspec-sync-specs",
+			"openspec-update-change",
+			"openspec-verify-change",
+		];
 		const session = {
 			customCommands: [],
 			setSlashCommands() {},
@@ -55,7 +68,8 @@ describe("CommandCatalogService", () => {
 			skillsSettings: { ...cfgSkills.get(Settings.isolated()), enableSkillCommands: true },
 		};
 		const catalog = await service.buildCatalog(session);
-		const completion = await service.complete({ text: "/skill:opsx-", cursor: 12, session });
+		const text = "/skill:openspec-";
+		const completion = await service.complete({ text, cursor: text.length, session });
 		expect(
 			catalog
 				.filter(command => command.source === "skill")

@@ -13,7 +13,7 @@ import {
 import { parseInternalUrl } from "../../src/internal-urls/parse";
 import { SkillProtocolHandler } from "../../src/internal-urls/skill-protocol";
 import { MCPManager } from "../../src/mcp/manager";
-import type { CustomMessageEntry, SessionEntry } from "../../src/session/session-entries";
+import type { CustomMessageEntry } from "../../src/session/session-entries";
 import { ensureSpecDrivenResources, loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
 	bindSpecSkillPolicy,
@@ -69,21 +69,26 @@ async function fixture(): Promise<Skill> {
 }
 
 describe("pinned skill discovery and access", () => {
-	it("catalogs all Superpowers while exposing only ordinary skills at model discovery and read boundaries", async () => {
+	it("catalogs and exposes all Superpowers while preserving other discovery boundaries", async () => {
 		const ordinaryNames = [
-			"writing-skills",
-			"systematic-debugging",
-			"verification-before-completion",
-			"opsx-explore",
-			"opsx-update",
-			"opsx-propose",
-			"opsx-sync",
-			"opsx-archive",
-			"opsx-verify",
-		].sort();
+			"openspec-apply-change",
+			"openspec-archive-change",
+			"openspec-bulk-archive-change",
+			"openspec-continue-change",
+			"openspec-explore",
+			"openspec-ff-change",
+			"openspec-new-change",
+			"openspec-onboard",
+			"openspec-propose",
+			"openspec-sync-specs",
+			"openspec-update-change",
+			"openspec-verify-change",
+		];
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
+		ordinaryNames.push(...resources.manifest.skills.filter(entry => entry.source === "superpowers").map(entry => entry.name));
+		ordinaryNames.sort();
 		const cwd = (await fixture()).baseDir;
 		await fs.mkdir(path.join(cwd, "openspec"));
 		const discovered = await loadCapability<CapabilitySkill>("skills", {
@@ -177,31 +182,35 @@ describe("pinned skill discovery and access", () => {
 		};
 		// An ancestor's OpenSpec directory must not opt this workspace in.
 		const hidden = await load();
-		expect(hidden.map(skill => skill.hide)).toEqual(Array(6).fill(true));
-		const skill = hidden.find(skill => skill.name === "opsx-propose")!;
-		const url = parseInternalUrl(`skill://${skill.name}`);
-		await expect(handler.resolve(url, { skills: hidden })).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
-		expect(
-			(
-				await handler.resolve(url, {
-					skills: hidden,
-					getSessionBranch: () => [provenance(skill, invoked.details)],
-				})
-			).sourcePath,
-		).toBe(skill.filePath);
+		expect(hidden.map(skill => skill.hide)).toEqual(Array(12).fill(true));
+		for (const skill of hidden) {
+			const url = parseInternalUrl(`skill://${skill.name}`);
+			await expect(handler.resolve(url, { skills: hidden })).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			const invoked = await buildSkillPromptMessage(skill, { args: "" }, "user");
+			expect(
+				(
+					await handler.resolve(url, {
+						skills: hidden,
+						getSessionBranch: () => [provenance(skill, invoked.details)],
+					})
+				).sourcePath,
+			).toBe(skill.filePath);
+		}
 		await fs.writeFile(marker, "not a directory");
-		expect((await load()).map(skill => skill.hide)).toEqual(Array(6).fill(true));
+		expect((await load()).map(skill => skill.hide)).toEqual(Array(12).fill(true));
 		await fs.rm(marker);
 		await fs.mkdir(marker);
 		const visible = await load();
-		expect(visible.map(skill => skill.hide)).toEqual(Array(6).fill(false));
-		expect((await handler.resolve(url, { skills: visible })).sourcePath).toBe(skill.filePath);
+		expect(visible.map(skill => skill.hide)).toEqual(Array(12).fill(false));
+		for (const skill of visible) {
+			const url = parseInternalUrl(`skill://${skill.name}`);
+			expect((await handler.resolve(url, { skills: visible })).sourcePath).toBe(skill.filePath);
+		}
 		await fs.rmdir(marker);
-		expect((await load()).map(skill => skill.hide)).toEqual(Array(6).fill(true));
+		expect((await load()).map(skill => skill.hide)).toEqual(Array(12).fill(true));
 	});
 
-	it("allows scoped execution skill autoload outside /dev without granting another session or resource", async () => {
+	it("allows execution and planning resources in ordinary sessions independently of scoped autoload grants", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "executing-plans");
 		const planning = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const session: ToolSession = {
@@ -213,7 +222,7 @@ describe("pinned skill discovery and access", () => {
 		};
 		const context = { session, skills: [skill, planning] };
 		const url = parseInternalUrl(`skill://${skill.name}`);
-		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 		const revoke = grantSpecSkillAccess(session, skill);
 		try {
 			expect((await buildSkillPromptMessage(skill, { args: "" }, "autoload", { scope: session })).details.path).toBe(
@@ -221,16 +230,12 @@ describe("pinned skill discovery and access", () => {
 			);
 			expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, context)).toBe(skill.filePath);
-			await expect(handler.resolve(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
-			await expect(handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			expect((await handler.resolve(url, { ...context, session: { ...session } })).sourcePath).toBe(skill.filePath);
+			expect((await handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).sourcePath).toBe(planning.filePath);
 		} finally {
 			revoke();
 		}
-		await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		expect(await handler.locate(url, context)).toBe(skill.filePath);
 	});
 
 	it("requires an exact resource grant despite branch provenance and rejects same-name resource substitution", async () => {
@@ -268,10 +273,10 @@ describe("pinned skill discovery and access", () => {
 		} finally {
 			end();
 		}
-		expect(() => checkSkillReadAccess(skill, { scope, getSessionBranch: () => [] })).toThrow(SkillAccessDeniedError);
+		expect(() => checkSkillReadAccess(skill, { scope, getSessionBranch: () => [] })).not.toThrow();
 	});
 
-	it("keeps same-name personal skills callable and readable without enabling bundled brainstorming handoffs", async () => {
+	it("keeps same-name personal skills callable while allowing bundled brainstorming handoffs", async () => {
 		const bundled = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const custom = { ...(await fixture()), name: bundled.name, source: "custom:project" };
 		const brainstorming = await loadSpecDrivenSkill("superpowers", "brainstorming");
@@ -287,15 +292,13 @@ describe("pinned skill discovery and access", () => {
 		expect((await handler.resolve(url, context)).sourcePath).toBe(custom.filePath);
 		expect(await handler.locate(url, context)).toBe(custom.filePath);
 		const bundledContext = { skills: [bundled], getSessionBranch: () => branch };
-		await expect(handler.resolve(url, bundledContext)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		await expect(handler.locate(url, bundledContext)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		expect((await handler.resolve(url, bundledContext)).sourcePath).toBe(bundled.filePath);
+		expect(await handler.locate(url, bundledContext)).toBe(bundled.filePath);
 		const personalInvocation = await buildSkillPromptMessage(custom, { args: "" }, "user");
-		await expect(
-			handler.resolve(url, {
-				skills: [bundled],
-				getSessionBranch: () => [provenance(custom, personalInvocation.details)],
-			}),
-		).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		expect((await handler.resolve(url, {
+			skills: [bundled],
+			getSessionBranch: () => [provenance(custom, personalInvocation.details)],
+		})).sourcePath).toBe(bundled.filePath);
 		const explicit = await buildSkillPromptMessage(bundled, { args: "" }, "user", {
 			getSessionBranch: () => branch,
 		});
@@ -309,7 +312,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("preserves explicit OpenSpec invocation arguments without requiring invocation for reads", async () => {
-		const skill = await loadSpecDrivenSkill("openspec", "opsx-propose");
+		const skill = await loadSpecDrivenSkill("openspec", "openspec-propose");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const context = { skills: [skill], getSessionBranch: () => [] };
 		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
@@ -336,7 +339,7 @@ describe("pinned skill discovery and access", () => {
 		await expect(handler.resolve(metadataUrl, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 	});
 
-	it("resolves granted skill references and scripts without granting another skill or session", async () => {
+	it("resolves Dev-granted skill resources while denying another ungranted skill", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
 		const other = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const session: ToolSession = {
@@ -359,9 +362,7 @@ describe("pinned skill discovery and access", () => {
 				const context = { session, skills: [skill, other] };
 				const located = await handler.locate(url, context);
 				expect(located).toBe(path.join(skill.baseDir, relative));
-				await expect(handler.locate(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
-					SkillAccessDeniedError,
-				);
+				expect(await handler.locate(url, { ...context, session: { ...session } })).toBe(path.join(skill.baseDir, relative));
 			}
 			await expect(
 				handler.resolve(parseInternalUrl(`skill://${other.name}`), { session, skills: [skill, other] }),
@@ -372,7 +373,7 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("invalidates prior grants on policy replacement without leaking access into another session", async () => {
+	it("invalidates prior grants on policy replacement while ordinary sessions retain access", async () => {
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
 			hasUI: false,
@@ -386,9 +387,7 @@ describe("pinned skill discovery and access", () => {
 		const url = parseInternalUrl(`skill://${allowed.name}`);
 		try {
 			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
-			await expect(handler.resolve(url, { session: { ...session }, skills: [allowed] })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			expect((await handler.resolve(url, { session: { ...session }, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
 			const endSolution = bindSpecSkillPolicy(session, { phase: "solution", allowedSkills: [] });
 			try {
 				// A stale disposer must not restore the requirements grant or remove the replacement policy.
@@ -406,9 +405,7 @@ describe("pinned skill discovery and access", () => {
 			} finally {
 				endSolution();
 			}
-			await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
 		} finally {
 			revoke();
 			endRequirements();
@@ -455,30 +452,15 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("opens manual planning only for exact current-branch invocation provenance, including program autoload", async () => {
+	it("opens ordinary planning and its resources without current-branch invocation", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const url = parseInternalUrl(`skill://${skill.name}`);
-		const uninvoked = { skills: [skill], getSessionBranch: () => [] };
-		await expect(handler.resolve(url, uninvoked)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		await expect(handler.locate(url, uninvoked)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		for (const invocation of ["user", "autoload"] as const) {
-			const built = await buildSkillPromptMessage(skill, { args: "" }, invocation);
-			let branch: readonly SessionEntry[] = [provenance(skill, built.details)];
-			const context = { skills: [skill], getSessionBranch: () => branch };
-			expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
-			expect(await handler.locate(url, context)).toBe(skill.filePath);
-			await expect(handler.resolve(url, { skills: [skill], getSessionBranch: () => [] })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
-			branch = [provenance(skill, { name: skill.name, path: `${skill.filePath}.old` })];
-			await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-			await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-			branch = [];
-			await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		}
+		const context = { skills: [skill], getSessionBranch: () => [] };
+		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
+		expect(await handler.locate(url, context)).toBe(skill.filePath);
 	});
 
-	it("uses scoped program grants for real resource resolve and locate without leaking to another tool session", async () => {
+	it("uses scoped program grants for real resources while ordinary sessions remain readable", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "brainstorming");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const override = { ...(await fixture()), name: skill.name, source: "custom:project" };
@@ -495,9 +477,7 @@ describe("pinned skill discovery and access", () => {
 			expect((await handler.resolve(url, { session, skills: [skill] })).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, { session, skills: [skill] })).toBe(skill.filePath);
 			expect((await handler.resolve(url, { session, skills: [override] })).sourcePath).toBe(skill.filePath);
-			await expect(handler.resolve(url, { session: { ...session }, skills: [skill] })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			expect((await handler.resolve(url, { session: { ...session }, skills: [skill] })).sourcePath).toBe(skill.filePath);
 			revoke();
 			await expect(handler.locate(url, { session, skills: [skill] })).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		} finally {
@@ -549,7 +529,14 @@ describe("pinned skill discovery and access", () => {
 				loadSpecDrivenSkill("superpowers", name),
 			),
 		);
-		skills.push(await loadSpecDrivenSkill("openspec", "opsx-sync"));
+		const resources = await ensureSpecDrivenResources();
+		skills.push(
+			...(await Promise.all(
+				resources.manifest.skills
+					.filter(entry => entry.source === "openspec")
+					.map(entry => loadSpecDrivenSkill("openspec", entry.name)),
+			)),
+		);
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
 			hasUI: false,
@@ -578,7 +565,7 @@ describe("pinned skill discovery and access", () => {
 	});
 
 	it("does not enumerate hidden names and keeps user-authored hidden resources readable", async () => {
-		const pinned = await loadSpecDrivenSkill("superpowers", "brainstorming");
+		const pinned = await loadSpecDrivenSkill("jch", "jch-grill-me");
 		const custom = { ...(await fixture()), name: "my-hidden-skill", source: "custom:project" };
 		setActiveSkills([pinned, custom]);
 		expect(await handler.complete()).toEqual([]);
@@ -594,7 +581,7 @@ describe("pinned skill discovery and access", () => {
 			expect(failure).toBeInstanceOf(Error);
 			for (const name of [pinned.name, custom.name]) expect((failure as Error).message).not.toContain(name);
 			await expect(
-				handler.resolve(parseInternalUrl("skill://brainstorming"), { skills: [] }),
+				handler.resolve(parseInternalUrl(`skill://${pinned.name}`), { skills: [] }),
 			).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			expect(mcp).toHaveBeenCalledTimes(1);
 		} finally {

@@ -2,7 +2,8 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { runOpenSpec, type SpecDrivenProcessResult } from "./resources";
+import { parse as parseYaml } from "yaml";
+import { assertDevSpecSchema, runOpenSpec, type SpecDrivenProcessResult } from "./resources";
 import type {
 	SpecArtifactPaths,
 	SpecDocument,
@@ -195,10 +196,16 @@ export class SpecArtifactStore {
 				await containedSpecPath(this.cwd, file);
 			return structuredClone(this.paths);
 		}
-		await containedSpecPath(this.cwd, this.changeDir);
-		const created = await runOpenSpec(["new", "change", this.changeId], this.cwd);
-		if (created.exitCode !== 0)
-			throw new Error(`OpenSpec change creation failed: ${created.stdout}\n${created.stderr}`);
+		await assertDevSpecSchema(this.cwd);
+		// Native `new change` also creates a project config when one is absent.
+		// Dev owns only this change, so create its native metadata without initializing the project.
+		const changesDir = await containedSpecPath(this.cwd, "openspec/changes");
+		await fs.mkdir(changesDir, { recursive: true });
+		const changeDir = await containedSpecPath(this.cwd, this.changeDir);
+		await fs.mkdir(changeDir);
+		const now = new Date();
+		const created = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+		await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, { flag: "wx" });
 		return {
 			requirements: [
 				`${this.changeDir}/proposal.md`,
@@ -209,6 +216,30 @@ export class SpecArtifactStore {
 			plan: this.planPath,
 			report: this.planPath.replace(/\.md$/, "-completion.md"),
 		};
+	}
+	async #assertOwnSchema(signal?: AbortSignal): Promise<void> {
+		let metadata: string;
+		try {
+			metadata = await fs.readFile(await containedSpecPath(this.cwd, `${this.changeDir}/.openspec.yaml`), "utf8");
+		} catch (error) {
+			if (isEnoent(error)) return;
+			throw error;
+		}
+		let value: unknown;
+		try {
+			value = parseYaml(metadata);
+		} catch {
+			// Let the native command handle pre-existing invalid metadata.
+			return;
+		}
+		if (
+			value &&
+			typeof value === "object" &&
+			"schema" in value &&
+			typeof value.schema === "string" &&
+			value.schema.replace(/\.ya?ml$/, "") === "omp-spec"
+		)
+			await assertDevSpecSchema(this.cwd, signal);
 	}
 	async #markdownPaths(): Promise<string[]> {
 		const root = await containedSpecPath(this.cwd, this.requirementsDir);
@@ -244,6 +275,7 @@ export class SpecArtifactStore {
 			...specs.map(file => `${this.changeDir}/specs/${file.replaceAll(path.sep, "/")}`),
 			...(!this.native ? await this.#markdownPaths() : []),
 		];
+		await this.#assertOwnSchema(signal);
 		const result = await runOpenSpec(
 			["validate", this.changeId, "--type", "change", "--strict", "--json"],
 			this.cwd,
@@ -407,6 +439,7 @@ export class SpecArtifactStore {
 			await publish();
 		}
 		if (!progress.archivedChangePath) {
+			await this.#assertOwnSchema(signal);
 			let result: SpecDrivenProcessResult | undefined;
 			let failure: unknown;
 			try {

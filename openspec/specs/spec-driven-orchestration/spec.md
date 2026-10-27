@@ -14,18 +14,17 @@ OMP MUST 保留独立 OpenSpec、Superpowers、JCH 及普通会话能力；用�
 
 - **WHEN** 用户使用独立能力或进入 Dev
 - **THEN** 以下职责、来源及授权边界适用：
-  - OpenSpec 负责需求探索、提案、规格、同步、独立核对与归档，不承担代码实施。`opsx-propose` 只形成 proposal／specs，`opsx-update` 修订或补齐已确认范围内的需求，不新建 design／tasks 或实施代码。
-  - 包内保留真实 schema、解析、校验、合并、归档引擎及运行依赖；命令指向 `omp openspec`，不要求另装 OpenSpec，不只复制说明文字，不依赖开发机绝对路径。
-  - 固定来源清单为 OpenSpec 1.14.3、Superpowers 7.0.1（`2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`）；来源、版本、校验与适配由 `packages/coding-agent/src/spec-driven/vendor/inventory.json` 及现有生成链管理。JCH `jch-grill-me` 的真实 `SKILL.md` 和 `agents/openai.yaml` 一并交付并绑定来源修订；固定版本不代表平台验收通过。
-  - Superpowers 全部原有技能、必要脚本和 `using-superpowers/references/` 保留；Dev 执行阶段必须由实施子代理按测试先行实施，并由独立审查子代理审查，不因此增加阶段、强制提交或固定修复轮次。
-  - 独立 OpenSpec 不依赖 Dev 状态、实施计划、Team 或批准；独立同步归档可早于代码实施，不代表软件交付。独立 `opsx-verify` 保留固定上游核对行为，不要求 Dev 记录，也不改变 Dev 验收状态。
+  - 独立内置 OpenSpec 的 CLI、默认 `spec-driven` schema、模板工厂及解析、校验、合并、归档等底层能力 MUST 与固定上游 1.15.0 一致；OMP 通过 `omp openspec` 封装，不要求另装 OpenSpec，不只复制说明文字，不依赖开发机绝对路径。Dev 单独使用 `omp-spec` 需求 schema，阶段职责及权限仍由 Dev 控制。
+  - 固定来源为 OpenSpec 1.15.0、Superpowers 7.0.1（`2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`）；JCH `jch-grill-me` 的真实 `SKILL.md` 和 `agents/openai.yaml` 一并交付并绑定来源修订；固定版本不代表平台验收通过。
+  - Dev 执行阶段必须由实施子代理按测试先行实施，并由独立审查子代理审查，不因此增加阶段、强制提交或固定修复轮次。
+  - 独立 OpenSpec 不依赖 Dev 状态、Team 或批准；独立同步归档不代表软件交付。`openspec-verify-change` 不要求 Dev 记录，也不改变 Dev 验收状态。
   - 普通 bug 修复若预期行为未变，不强制修改需求或新建 change。普通代码实施、原生 task／reviewer、独立 Team／Goal、SDK、TUI 与其他宿主保持原语义，不附加 Dev 阶段状态、系统规则、后台工作或证据采集。
   - Dev 不提供轻量跳阶段变体，不强制 Team，不建立第五阶段、逐任务状态机或强制 Git 提交。启用能力、进入模式或批准计划不扩大项目规则及工程授权，不隐含 commit、push、PR、合并、发布或不可逆操作授权。
 
 #### Scenario: 独立需求维护
 
 - **WHEN** 用户未进入 Dev 而请求维护需求
-- **THEN** 独立 OpenSpec 可完成需求维护闭环，不创建 Dev 流程、不要求四阶段批准；纯需求文档操作不修改业务代码、不运行软件测试、不宣称软件已实现
+- **THEN** 独立 OpenSpec 不创建 Dev 流程、不要求四阶段批准；实际写入范围及授权由用户和项目规则确定，需求接受不代表软件已实现
 
 #### Scenario: 显式启动
 
@@ -43,25 +42,20 @@ OMP MUST 复用既有发现、补全、按需读取与资源授权，不因四�
 
 | 范围 | 技能 | 规则 |
 | --- | --- | --- |
-| 普通模型可发现 | `systematic-debugging`、`verification-before-completion`、`writing-skills` | 默认索引只提供名称与描述，正文按需读取 |
-| 普通会话仅手动调用 | 其余十二项 Superpowers 技能（含 `brainstorming`） | 保留 `/skill:<name>` 补全和管理，不默认发现；显式调用后仅当前分支可读准确资源；Dev 仅需求代理自动注入 `brainstorming`，计划代理自动注入 `writing-plans`，执行代理自动注入 `subagent-driven-development` |
-| 按当前目录发现 | `opsx-explore`、`opsx-update`、`opsx-propose`、`opsx-sync`、`opsx-archive`、`opsx-verify` | 当前会话工作目录直接有 `openspec/` 目录时提供名称和中文描述，正文按需读取；其他目录仅手动调用 |
+| 普通模型可发现 | 固定上游全部 Superpowers 技能 | 默认索引提供名称与描述，正文按需读取 |
+| 按当前目录发现 | 固定上游 OpenSpec 的十二项 `openspec-*` 技能 | 当前会话工作目录直接有 `openspec/` 目录时提供名称和上游描述，正文按需读取；其他目录仅手动调用 `/skill:<name>` |
 | 普通会话仅手动调用 | `jch-grill-me` | 保留原资源和显式调用，不默认发现；Dev 需求代理必须自动注入，正文置于系统提示最后 |
 
-手动 Superpowers 包括 `diagnosing-superpowers`、`dispatching-parallel-agents`、`executing-plans`、`finishing-a-development-branch`、`receiving-code-review`、`requesting-code-review`、`subagent-driven-development`、`test-driven-development`、`using-git-worktrees`、`using-superpowers`、`writing-plans` 与 `brainstorming`。限制按包内来源身份，不限制用户或项目同名技能。跨技能引用不自动授权另一项手动资源；不新增递归加载或整套预加载。
+OpenSpec 目录条件不向父目录查找，普通同名文件不满足条件，每次发现／重载重新计算，不依赖进程全局 cwd。普通会话可按技能引用读取包内 Superpowers 资源，不要求逐项显式调用；Dev 阶段仍遵循其准确资源授权与工具权限，进入 `/dev` 输入模式本身不授予资源权限。其他隐藏技能仍按既有规则授权。
 
-目录条件不向父目录查找，普通同名文件不满足条件，每次发现／重载重新计算，不依赖进程全局 cwd。条件满足时自然语言任务可以触发模型按需读取，无需先输入 slash 命令。条件不满足时保留技能管理和手动补全；`skill://` 读取需当前分支显式调用记录或宿主准确资源授权。授权限定所属会话及生命周期，不泄漏到其他阶段或运行；进入 `/dev` 输入模式本身不授予资源权限。
+独立 `omp openspec init`、`update`、选项及工具安装能力遵循固定上游，默认 schema 为原生 `spec-driven`；`omp-spec` 是供 Dev 使用的独立需求 schema，不替换或裁剪原生默认 schema。Dev 需求阶段仍只生成获授权的 proposal／增量规格，其他阶段及原有写入、用户批准和验收边界不因原生能力恢复而扩大。
 
-只保留 `/skill:opsx-*`，不提供 `/opsx-*` 命令、旧 `/skill:openspec-*`、`opsx-new`、`opsx-continue` 或实施类 `apply`／`ff`／`bulk-archive`／`onboard`／`feedback` 工作流入口。底层 `omp openspec new change`、`status`、`instructions` 等原生能力保留。删除范围不包括用户独立 OpenSpec 工作区、项目既有需求或历史实施产物。
+Superpowers 的技能、上游插件及扩展保留固定版本原始文件，不为 OMP 改写工具名称、子代理名称或脚本调用；依赖宿主提供的能力及实际可用性不改变上游基线。
 
-`omp openspec init [路径] [--language <语言>]` 默认使用需求专用 `omp-spec` schema，只声明 proposal／specs 及依赖；不提供 `--tools`、外部工具选择安装、迁移、Copilot／profile 配置、原生 `update` 工具安装更新入口及 `experimental` 安装别名。重复初始化保留已有配置、需求、历史和外部工具文件，保留原生外部 store／语言配置边界，不在 pointer 项目内创建另一规格根。旧 schema 无法安全隔离需求部分时报告不兼容，不静默迁移或删除历史产物。
+#### Scenario: 普通会话发现
 
-保留 `omp superpowers <relative-skill-script> [args...]`；JavaScript 使用 OMP 自带 Bun，Shell 仍依赖 Bash／POSIX，部分脚本需 Git／Graphviz。缺失条件报告真实错误，不在线补装或伪造成功。普通技能的原生任务名适配为 `task`／`reviewer`，不创建 `general-purpose` 别名，不强制 `/dev` 使用这些角色。
-
-#### Scenario: 发现范围不扩大
-
-- **WHEN** 用户启动普通会话、手动调用技能或重载目录技能
-- **THEN** 按上述发现及准确资源授权读取正文，不因安装 `/dev` 自动启用完整工程流程；原有独立技能与普通多代理行为不变
+- **WHEN** 用户启动普通会话或重载技能
+- **THEN** 普通会话提供全部包内 Superpowers 技能索引；跨技能引用可读取对应资源，原生宿主与 Dev 阶段授权边界仍适用
 
 ### Requirement: 四个固定 Agent 与真实文件门禁
 
@@ -81,9 +75,9 @@ OMP MUST 仅设置需求、方案、计划、执行四个固定阶段 Agent，�
 
 - **AND** 需求 Agent 加载原 OpenSpec instructions，需求文件真实、可读、非空且通过原生结构校验；已有明确 Markdown 需求权威继续原位维护，proposal／增量描述变更并引用原权威，不复制第二套主规格，也不以原权威替代这两个正式产物
 - **AND** 需求阶段不提前写实现方案、计划或业务代码，方案及计划阶段不提前实施；澄清回答不等于最终需求批准，材料原文不升级为系统授权
-- **AND** 需求 Agent 必须自动注入包内原版 `brainstorming` 与 `jch-grill-me` 全文，顺序为 Brainstorming 在前、Grill-me 在系统提示最后，无需用户另行调用技能；新建及恢复需求会话均适用，资源授权仅限该会话。两项技能用于当前阶段需求澄清，不越权生成方案、计划、额外设计文件或自动推进阶段；冲突的澄清提问方式以最后注入的 Grill-me 为准。普通会话仍仅手动调用，不改变技能本身的发现策略、原文或其他阶段权限
+- **AND** 需求 Agent 必须自动注入包内原版 `brainstorming` 与 `jch-grill-me` 全文，顺序为 Brainstorming 在前、Grill-me 在系统提示最后，无需用户另行调用技能；新建及恢复需求会话均适用，资源授权仅限该会话。两项技能用于当前阶段需求澄清，不越权生成方案、计划、额外设计文件或自动推进阶段；冲突的澄清提问方式以最后注入的 Grill-me 为准。普通会话的 Superpowers 发现与引导不改变技能原文或 Dev 阶段权限
 - **AND** 新需求的需求 Agent 必须至少提出一个与请求相关的问题，等待用户回答后再撰写需求；不得询问可从工作区取得的事实。方案、计划、执行 Agent 不向用户提问或要求额外确认，以已批准输入与可用证据工作；确有缺口时直接报告阻塞，不编造答案。原生 `/dev next` 的用户阶段批准不变。方案 Agent 不自动注入 Brainstorming／Grill-me，直接依据已确认需求调查并写出完整候选与推荐；需求、计划及执行所需技能由宿主自动注入，非需求阶段的固定职责约束置于技能正文之后，覆盖冲突技能步骤
-- **AND** 计划 Agent 自动注入原 `writing-plans` 中执行交接章节之前的正文，跳过要求用户选择执行方式的 `Execution Handoff`；执行 Agent 自动注入原 `subagent-driven-development` 全文，不以 `executing-plans` 替代。新建及恢复阶段会话均适用，准确资源授权限定当前会话，不递归自动启用其他技能或改变普通会话手动调用策略。子代理驱动仍受 Dev 获批范围、既有工作区、正式产物及用户验收边界约束，不创建工作树、逐任务状态文件、强制提交或自动验收
+- **AND** 计划 Agent 自动注入原 `writing-plans` 中执行交接章节之前的正文，跳过要求用户选择执行方式的 `Execution Handoff`；执行 Agent 自动注入原 `subagent-driven-development` 全文，不以 `executing-plans` 替代。新建及恢复阶段会话均适用，准确资源授权限定当前会话，不递归自动启用其他阶段技能。子代理驱动仍受 Dev 获批范围、既有工作区、正式产物及用户验收边界约束，不创建工作树、逐任务状态文件、强制提交或自动验收
 - **AND** 不生成额外交接、确认、逐任务状态或计划 JSON 文件；必要流程持久状态不属于新的正式交付材料，不建立逐任务证据执行引擎
 
 #### Scenario: 阶段子代理提示词与简化规则一致

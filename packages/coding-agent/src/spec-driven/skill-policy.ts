@@ -5,8 +5,8 @@ import type { SessionEntry } from "../session/session-entries";
 
 export const SPEC_DRIVEN_SKILL_PROVIDER = "spec-driven";
 
-/** Bundled Superpowers skills included in the default model index; all others are manual-only. */
-export function isModelInvocableSuperpowersSkill(name: string): boolean {
+/** Skills that retain their existing native-phase access without an exact grant. */
+function hasNativePhaseAccess(name: string): boolean {
 	return name === "systematic-debugging" || name === "verification-before-completion" || name === "writing-skills";
 }
 
@@ -16,7 +16,7 @@ function requiresNativeGrant(skill: InvocationSkill): boolean {
 	const bundled =
 		skill.source === "bundled-superpowers" ||
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER && skill._source.pluginName === "superpowers");
-	return bundled && !isModelInvocableSuperpowersSkill(skill.name.split("/").at(-1)!);
+	return bundled && !hasNativePhaseAccess(skill.name.split("/").at(-1)!);
 }
 
 function checkPhase(skill: Pick<Skill, "name">, state?: ScopeState): void {

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
 import { LegacyProtocol, v4ConversationRowsRangeResultSchema } from "../../src/modes/zcode/schema";
-import inventory from "../../src/spec-driven/vendor/inventory.json";
+import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import {
 	bounded,
 	fixture,
@@ -23,6 +23,9 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 	test(
 		`packaged skills preserve directory-scoped OpenSpec discovery and manual access (${hasOpenSpec ? "with" : "without"} openspec)`,
 		async () => {
+			const { manifest: inventory } = await collectSpecDrivenResources(
+				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
+			);
 			await using root = await TempDir.create("@omp-spec-skills-");
 			await using provider = createProviderFixture();
 			const config = await fixture(root, provider.baseUrl);

@@ -366,7 +366,6 @@ describe("structured subagent primitive", () => {
 			expect(advisors).toHaveLength(3);
 		});
 	});
-
 	it("resolves user-tagged model agents for task and eval but rejects untagged names", async () => {
 		mockDiscovery();
 		const taggedSession = session();

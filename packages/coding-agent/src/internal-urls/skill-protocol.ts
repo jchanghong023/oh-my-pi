@@ -18,7 +18,6 @@ import { getActiveSkills, type Skill } from "../extensibility/skills";
 import { MCPManager } from "../mcp/manager";
 import skillDoc from "../prompts/internal-urls/skill.md" with { type: "text" };
 import { ensureSpecDrivenResources } from "../spec-driven/resources";
-import { resourceManifest } from "../spec-driven/vendor/archive.generated";
 import {
 	checkSkillReadAccess,
 	getGrantedSpecSkill,
@@ -89,9 +88,9 @@ async function skillTargetPath(
 	skill ??= getGrantedSpecSkill(skillName, access) ?? skills.find(s => s.name === skillName);
 	// A disabled/unloaded pinned name is still protected, not an MCP fallback opportunity.
 	if (!skill) {
-		const entry = resourceManifest.skills.find(entry => entry.name === skillName);
+		const resources = await ensureSpecDrivenResources();
+		const entry = resources.manifest.skills.find(entry => entry.name === skillName);
 		if (entry) {
-			const resources = await ensureSpecDrivenResources();
 			const filePath = path.resolve(resources.root, entry.path);
 			skill = {
 				name: entry.name,
