@@ -19,6 +19,7 @@ test("greeting behavior", () => {
 });
 `;
 export const SOLUTION = {
+	recommendedCandidateId: "pure",
 	candidates: [
 		{
 			id: "pure",
@@ -406,6 +407,7 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 		const discussion = teamDiscussion(request);
 		const solution = discussion
 			? {
+					recommendedCandidateId: discussion.candidates.find(candidate => candidate.adoptable)?.id,
 					candidates: discussion.candidates
 						.filter(candidate => candidate.adoptable)
 						.map(candidate => ({

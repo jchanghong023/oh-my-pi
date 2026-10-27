@@ -1715,6 +1715,27 @@ describe("agent frontmatter structured opt-in", () => {
 		);
 	}, 30_000);
 
+	it("reports the final invocation result without waiting for warm-child release", async () => {
+		await withNativeHookFixture(
+			async ({ parent }) => {
+				const outcomes: Array<SingleResult | undefined> = [];
+				parent.subagentHooks = {
+					beforeSpawn: async () => ({ keepAlive: true }),
+					configureSession: async () => ({}),
+					onSettled: async (_request, result) => {
+						outcomes.push(result);
+					},
+				};
+				const result = await runStructuredSubagent(
+					request({ session: parent, structured: false, keepAlive: true }),
+				);
+				expect(outcomes).toEqual([result.result]);
+				expect(outcomes[0]?.exitCode).toBe(0);
+			},
+			() => ({ content: ["real native result"] }),
+		);
+	}, 30_000);
+
 	it.each([false, true])(
 		"awaits settled shared-checkout observations (failure=%s)",
 		async fail => {

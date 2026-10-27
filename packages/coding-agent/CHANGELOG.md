@@ -19,6 +19,9 @@
 
 ### Changed
 
+- Require `/dev` requirements clarification, explicit solution recommendations, and implementation and review delegation with test-first execution.
+- Guide `/dev` execution to follow approved task order, TDD and delegation requirements, and disclose steps that could not be performed.
+- Restore native tool access for default `/dev` execution subagents so delegated work can actually run.
 - Make `/dev` configuration, interruption, candidate selection, missing-material diagnostics, completion receipts and active-agent counts reflect the current workflow.
 - Shorten the empty input hint and make `/display` easier to discover.
 - Clarify write tool arguments and guide models to retry missing content without treating the intent field as file contents.

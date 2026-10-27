@@ -57,7 +57,10 @@ async function fixture(native = false): Promise<Fixture> {
 
 async function acceptance(context: Fixture) {
 	const { store, paths, write } = context;
-	await write(paths.solution, '{"candidates":[{"id":"sample","title":"Sample","content":"Complete solution."}]}');
+	await write(
+		paths.solution,
+		'{"recommendedCandidateId":"sample","candidates":[{"id":"sample","title":"Sample","content":"Complete solution."}]}',
+	);
 	await write(paths.plan, "# Sample Implementation Plan\n\nUse the approved sample public API.\n");
 	await write(paths.report, report);
 	const specification = await store.readRequirements();
@@ -135,13 +138,32 @@ describe("stage files are the sole artifact inputs", () => {
 		}
 		const content = JSON.stringify({
 			candidates: [{ id: "a", title: "原方案", content: "# 完整方案\n\n未经摘要的全文。" }],
+			recommendedCandidateId: "a",
 		});
 		await write(paths.solution, content);
 		expect(await store.readSolution()).toMatchObject({
 			path: paths.solution,
 			content,
 			version: artifactVersion(content),
+			candidates: [{ id: "a", title: "原方案", content: "# 完整方案\n\n未经摘要的全文。" }],
+			recommendedCandidateId: "a",
 		});
+	});
+
+	test("requires an explicit valid recommendation for one or multiple candidates", async () => {
+		const { store, paths, write } = await fixture();
+		const candidates = [
+			{ id: "a", title: "A", content: "完整 A" },
+			{ id: "b", title: "B", content: "完整 B" },
+		];
+		for (const recommendedCandidateId of [undefined, "", "missing", " a", 1, null]) {
+			await write(paths.solution, JSON.stringify({ candidates, recommendedCandidateId }));
+			await expect(store.readSolution()).rejects.toThrow("recommendedCandidateId");
+		}
+		await write(paths.solution, JSON.stringify({ candidates: [candidates[0]] }));
+		await expect(store.readSolution()).rejects.toThrow("recommendedCandidateId");
+		await write(paths.solution, JSON.stringify({ candidates, recommendedCandidateId: "b" }));
+		expect(await store.readSolution()).toMatchObject({ candidates, recommendedCandidateId: "b" });
 	});
 
 	test("versions the actual readable plan without any task projection", async () => {

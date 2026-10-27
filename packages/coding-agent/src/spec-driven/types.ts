@@ -44,6 +44,7 @@ export interface SpecCandidate {
 }
 export interface SpecSolution extends SpecDocument {
 	candidates: SpecCandidate[];
+	recommendedCandidateId: string;
 }
 export interface SpecArtifactPaths {
 	requirements: string[];
@@ -116,6 +117,7 @@ export interface SpecDrivenPorts {
 		recipient(role: SpecStageRole): SpecConversationRecipient | undefined;
 		originalRequest(): string;
 		run(input: SpecAgentInput, context: SpecRunContext): Promise<SpecConversationReply>;
+		checkExecution?: () => Promise<void>;
 	};
 	artifacts: {
 		initialize(changeId: string, context: SpecRunContext): Promise<SpecArtifactPaths>;

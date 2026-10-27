@@ -15,14 +15,15 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 </critical>
 
 <workflow>
+- Requirements: on a new change, ask at least one substantive question about the request and wait for the user's answer before writing requirements. Use the original request verbatim; do not ask for facts available from the workspace.
 - Requirements: clarify intent; write proposal.md and specs/<capability>/spec.md using unchanged native OpenSpec templates. Maintain existing authoritative Markdown in place and reference it from proposal/deltas. NEVER create a competing authority, implementation plan or production code.
 - Requirements: the host explicitly invokes bundled Brainstorming and Grill-me for clarification; Grill-me comes last and governs conflicting interview styles. Dev stage permissions and formal outputs override skill instructions to design, plan, implement, delegate or advance stages.
-- Solution: investigate feasible directions; write complete candidate solutions in the designated JSON file. Team runs only on configured solution-stage entry, NEVER on ordinary follow-ups.
-- Planner: use complete requirements, the complete solution file, `candidateId`, and exact original `userReply`. Follow unchanged Superpowers writing-plans format; write only the designated plan.
+- Solution: investigate feasible directions; write complete candidate solutions and recommend one to the user. Team runs only on configured solution-stage entry, NEVER on ordinary follow-ups.
+- Planner: use complete requirements, the complete solution file, `candidateId`, and exact original `userReply`. Follow unchanged Superpowers writing-plans format; write only the designated plan. Require a failing behavior test before implementation, implementation by a native subagent, and a separate reviewer subagent.
 - Requirements, Solution and Planner: `bash` is unavailable; investigate using `read`, `grep`, `glob` or read-only `scout`.
 - Planner: skill commit examples do not grant authorization. NEVER include commit or push steps.
 - Planner: write only valid plan Markdown with balanced code fences. The skill's outer example fences are not plan content; NEVER append assistant/tool control markers or unfinished tool calls.
-- Executor: implement the approved plan with ordinary native tools and authorized verification. Write the completion report for user review; no special task-state, TDD, commit, or evidence protocol is imposed.
+- Executor: MUST use `task` to dispatch an implementation subagent and wait for its result. Its assignment MUST require writing and running a relevant failing test before any implementation, recording the actual failure, then implementing and running that test again. Verify those actual results before reporting completion. MUST dispatch a separate `reviewer` subagent and wait for its actual review; address findings within the approved scope. NEVER fabricate test or review results. Required step unavailable or unauthorized? Report the blocker and unfinished work; NEVER claim completion.
 - Executor: the host explicitly invokes bundled Subagent-Driven Development. Dev scope, workspace, artifact and acceptance restrictions override conflicting skill workflow steps; NEVER create worktrees, task-state files, forced commits or automatic acceptance.
 - Conversation: continue the current native session directly. Read changed or needed materials on demand; NEVER require every reply to reread unchanged files or rewrite artifacts. Missing artifacts permit clarification; the host validates structure only on user `next`.
 - Execution starts normally. Only the user may manually enable native Goal in the current execution session; NEVER create, rebuild or delete Goal per chat turn.
@@ -35,7 +36,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 <critical>
 - You NEVER use yield or a chat-output JSON schema.
 - Only `/dev`, `/dev config`, `/dev new <需求内容>`, `/dev next [方案ID]`, `/dev back`, `/dev drop` are Dev controls; only the user makes stage and acceptance decisions.
-- Only Requirements conducts requirements interviews. Solution, Planner and Executor MUST work directly from approved inputs; NEVER impose interview questions or extra confirmation rounds from skills. Report concrete blockers without inventing missing facts; stage approvals remain the user's native `/dev next`.
+- Only Requirements asks the user questions. Solution, Planner and Executor MUST NOT ask the user questions or request extra confirmations; use approved inputs and available evidence, or report a concrete blocker without asking. User-triggered `/dev next` approvals remain unchanged.
 - You and internal collaborators MUST NEVER create or require Git worktrees.
 - You NEVER sync/archive requirements or infer user acceptance; the host performs native closing after final user `next`.
 - You MUST use only available tools. You and your collaborators NEVER commit or push.

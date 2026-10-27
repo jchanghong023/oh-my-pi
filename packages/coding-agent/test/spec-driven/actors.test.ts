@@ -580,6 +580,21 @@ test("actor cancellation waits for owned background work without cancelling an u
 	expect(jobs.getJob(otherId)?.status).toBe("completed");
 }, 120_000);
 
+test("an incomplete executor report does not enter acceptance without settled task and reviewer", async () => {
+	let reports = 0;
+	await using fixture = await consumer(undefined, "executor", {
+		reportPath: "report.md",
+		observeReport: () => {
+			reports++;
+		},
+	});
+	fixture.setNativeTool("write", { path: "report.md", content: "Work remains incomplete." });
+	await fixture.request({ outputPaths: ["report.md"] });
+	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("Work remains incomplete.");
+	expect(reports).toBe(0);
+	expect(() => fixture.actor.checkExecution()).toThrow("可写 task");
+}, 120_000);
+
 test("successful native report write closes autonomous writes without parsing the report, explicit repair reopens only its input", async () => {
 	let reports = 0;
 	await using fixture = await consumer(undefined, "executor", {
@@ -588,8 +603,10 @@ test("successful native report write closes autonomous writes without parsing th
 			reports++;
 		},
 	});
+	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "worker");
+	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "reviewer");
 	fixture.setNativeTool("write", { path: "report.md", content: "Not yet structurally valid" });
-	await fixture.request({ outputPaths: ["report.md"] });
+	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
 	expect(reports).toBe(1);
 	fixture.setNativeTool("write", { path: "report.md", content: "Forbidden ordinary change" });
 	await fixture.request({ entry: false, feedback: "解释如何修复这个报告", readOnly: false });
@@ -615,8 +632,10 @@ test("queued repair authorization starts only when delivered and a new report lo
 			reports++;
 		},
 	});
+	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "worker");
+	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "reviewer");
 	fixture.setNativeTool("write", { path: "report.md", content: "first report" });
-	await fixture.request({ outputPaths: ["report.md"] });
+	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
 	let hold = true;
 	let repairWrites = 0;
 	fixture.onRequest(async messages => {

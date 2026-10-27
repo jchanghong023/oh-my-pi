@@ -11,6 +11,7 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { actionBar, actionButton } from "../native/overlay";
 import { plainText, styledSpans } from "../native/spans";
 import type { ContextUsage } from "../status-line/types";
+import { wrapGuidedLine } from "../render/hanging-wrap";
 const PANEL_CHROME_ROWS = 4;
 
 /** One headed block of a key/value report. */
@@ -141,7 +142,7 @@ export class SessionInfoOverlay implements Component {
 		this.#onClose = onClose;
 		this.#context = context;
 		this.#infoSource = info;
-		this.#info = new Text(info, 0, 0);
+		this.#info = new Text(info, 0, 0).setWrapLine((line, width) => wrapGuidedLine(line, width, theme));
 		this.#scrollView = new ScrollView([], {
 			height: 0,
 			scrollbar: "auto",

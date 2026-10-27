@@ -43,6 +43,7 @@ function details(): OmpSpecDetails {
 		updatedAt: 2,
 		versions: { plan: "native-token" },
 		candidates: [],
+		recommendedCandidateId: null,
 		selectedCandidate: null,
 		actions: [
 			{

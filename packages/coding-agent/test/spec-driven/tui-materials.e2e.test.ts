@@ -41,9 +41,21 @@ test.skipIf(!tuiTest)(
 				[[{ ...valid, title: "" }], /nonempty title\/content/],
 				[[{ ...valid, content: "" }], /nonempty title\/content/],
 			] as const) {
-				await Bun.write(path.join(cwd, solutionPath), JSON.stringify({ candidates }));
+				await Bun.write(path.join(cwd, solutionPath), JSON.stringify({ candidates, recommendedCandidateId: "pure" }));
 				await tui("submit", "/dev next pure");
 				await expectNativeFailure(tui, reason, solutionPath, "/dev next pure");
+				await idle();
+				expect(await state()).toEqual(solution);
+				expect(provider.requests).toHaveLength(solutionCalls);
+				await clearNativeDraft(tui);
+			}
+			for (const recommendedCandidateId of [undefined, "missing"]) {
+				await Bun.write(path.join(cwd, solutionPath), JSON.stringify({
+					candidates: JSON.parse(completeSolution).candidates,
+					recommendedCandidateId,
+				}));
+				await tui("submit", "/dev next pure");
+				await expectNativeFailure(tui, /recommendedCandidateId/, solutionPath, "/dev next pure");
 				await idle();
 				expect(await state()).toEqual(solution);
 				expect(provider.requests).toHaveLength(solutionCalls);

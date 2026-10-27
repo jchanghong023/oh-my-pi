@@ -91,10 +91,14 @@ test.skipIf(!tuiTest)(
 					const calls = provider.requests.length;
 					const normalize = (text: string) => text.replace(/[│┃║┆┊\s]/gu, "");
 					const expected = await Promise.all(
-						files.map(async file => ({
-							path: file,
-							lines: (await Bun.file(path.join(cwd, file)).text()).split("\n").filter(line => line.trim()),
-						})),
+						files.map(async file => {
+							const content = await Bun.file(path.join(cwd, file)).text();
+							return {
+								path: file,
+								lines: content.split("\n").filter(line => line.trim()),
+								solution: file.endsWith("-solutions.json") ? JSON.parse(content) : undefined,
+							};
+						}),
 					);
 					await tui("submit", "/session");
 					await tui("expect", "text", "Session Info", "--timeout", "30000");
@@ -122,6 +126,14 @@ test.skipIf(!tuiTest)(
 					for (const file of expected) {
 						expect(details).toContain(normalize(file.path));
 						for (const line of file.lines) expect(details).toContain(normalize(line));
+						if (file.solution) {
+							const recommendation = file.solution.candidates.find(
+								(candidate: { id: string }) => candidate.id === file.solution.recommendedCandidateId,
+							);
+							expect(details).toContain(normalize(`${recommendation.title} (${recommendation.id}) · 推荐`));
+							for (const candidate of file.solution.candidates)
+								expect(details).toContain(normalize(`${candidate.title} (${candidate.id})`));
+						}
 					}
 					expect(details).not.toContain("specs/*/spec.md");
 					expect(provider.requests).toHaveLength(calls);

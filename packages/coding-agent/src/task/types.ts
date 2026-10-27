@@ -50,6 +50,8 @@ export interface NativeSubagentHooks {
 	beforeSpawn(request: StructuredSubagentRequest): Promise<NativeSpawnOverrides | void>;
 	/** Release invocation-local admission after an actual failure before a child result exists. */
 	onSpawnFailed?(request: StructuredSubagentRequest, error: unknown): Promise<void>;
+	/** Observe the final invocation outcome, independently of warm-child capture. */
+	onSettled?(request: StructuredSubagentRequest, result: SingleResult | undefined): Promise<void>;
 	configureSession(
 		request: StructuredSubagentRequest,
 		options: Readonly<CreateAgentSessionOptions>,

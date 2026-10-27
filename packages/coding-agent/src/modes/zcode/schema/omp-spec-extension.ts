@@ -122,6 +122,7 @@ export const ompSpecDetailsSchema = z
 			})
 			.strict(),
 		candidates: z.array(ompSpecCandidateSchema),
+		recommendedCandidateId: id.nullable(),
 		selectedCandidate: z.object({ id, userReply: z.string() }).strict().nullable(),
 		actions: z.array(ompSpecActionSchema),
 		interaction: ompSpecInteractionSchema.optional(),

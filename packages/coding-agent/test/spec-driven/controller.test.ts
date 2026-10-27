@@ -135,7 +135,11 @@ async function fixture(cwd?: string) {
 					return { files: paths.requirements.map(file => doc(file.replace("*", "greeting"))), version: "bytes-1" };
 				},
 				async readSolution() {
-					return { ...doc("solution.md"), candidates: [{ id: "one", title: "One", content: "One" }] };
+					return {
+						...doc("solution.md"),
+						candidates: [{ id: "one", title: "One", content: "One" }],
+						recommendedCandidateId: "one",
+					};
 				},
 				async readPlan() {
 					return doc("plan.md");

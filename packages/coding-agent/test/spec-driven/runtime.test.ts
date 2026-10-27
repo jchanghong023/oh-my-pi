@@ -332,7 +332,7 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 			await fs.mkdir(path.dirname(path.join(fixture.cwd, paths.solution)), { recursive: true });
 			await fs.writeFile(
 				path.join(fixture.cwd, paths.solution),
-				JSON.stringify({ candidates: [{ id, title: "候选", content }] }),
+				JSON.stringify({ candidates: [{ id, title: "候选", content }], recommendedCandidateId: id }),
 			);
 		};
 		await writeSolution("excluded", "不可采用候选");
@@ -541,6 +541,59 @@ test("stage scout uses native read-only capabilities even when the project overr
 	expect(cfgTaskIsolationEnabled.get(fixture.settings)).toBe(true);
 	expect(cfgAsyncEnabled.get(fixture.settings)).toBe(true);
 	expect(await fs.readFile(path.join(fixture.cwd, "scout-probe.txt"), "utf8")).toBe("scout-visible-bytes");
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test("executor delegates writable work to a native task child within the stage tool boundary", async () => {
+	const marker = "OMP_EXECUTOR_WRITE_PROBE";
+	let dispatched = false;
+	await using fixture = await consumer({
+		reply(request) {
+			const child = request.messages.some(
+				message =>
+					message.role === "user" &&
+					contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+			);
+			if (child) {
+				if (!request.messages.some(message => message.role === "tool"))
+					return {
+						tool: { name: "write", args: { i: "Writing probe", path: "probe.txt", content: "child wrote this" } },
+					};
+				return { text: "wrote the probe" };
+			}
+			if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
+				dispatched = true;
+				return {
+					tool: {
+						name: "task",
+						args: {
+							i: "Delegating probe",
+							context: "Write the probe in the current workspace.",
+							tasks: [{ agent: "task", task: marker, solutionSpace: "write one file" }],
+						},
+					},
+				};
+			}
+			return { text: "finished" };
+		},
+	});
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("executor-child", context);
+	await fixture.runtime.ports.agents.run(
+		{ role: "executor", entry: true, request: "Write a probe", files: [], outputPaths: ["completion.md"] },
+		context,
+	);
+	expect(await fs.readFile(path.join(fixture.cwd, "probe.txt"), "utf8")).toBe("child wrote this");
+	const child = fixture.provider.requests.find(request =>
+		request.messages.some(
+			message =>
+				message.role === "user" &&
+				contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+		),
+	);
+	const tools = (child?.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
+	expect(tools).toContain("write");
+	expect(tools).not.toContain("eval");
 	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);
 

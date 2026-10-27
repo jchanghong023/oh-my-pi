@@ -83,6 +83,7 @@ function fixture(saved?: SpecSavedRun) {
 				return {
 					...read("solution"),
 					candidates: settings.candidates.map(id => ({ id, title: id, content: `完整方案 ${id}` })),
+					recommendedCandidateId: settings.candidates[0]!,
 				};
 			},
 			async readPlan() {
@@ -173,10 +174,27 @@ describe("explicit Dev file decisions", () => {
 		const solution: SpecSolution = {
 			...f.docs.solution,
 			candidates: [{ id: "one", title: "one", content: "完整方案 one" }],
+			recommendedCandidateId: "one",
 		};
 		expect(f.inputs[2].files).toEqual([f.docs.proposal, f.docs.spec, solution]);
 		expect(f.inputs[2].userReply).toBe(raw);
 		expect(f.inputs[2].candidateId).toBe("one");
+	});
+	it("passes all alternatives and the recommendation while respecting a different user selection", async () => {
+		const f = fixture();
+		f.settings.candidates = ["one", "two"];
+		await f.core.start("原始需求", "change");
+		await f.core.next();
+		await f.core.next("two", "/dev next two");
+		expect(f.inputs[2].files.at(-1)).toMatchObject({
+			candidates: [
+				{ id: "one", title: "one", content: "完整方案 one" },
+				{ id: "two", title: "two", content: "完整方案 two" },
+			],
+			recommendedCandidateId: "one",
+		});
+		expect(f.inputs[2].candidateId).toBe("two");
+		expect(f.inputs[2].userReply).toBe("/dev next two");
 	});
 	it("hands approved executor originals, raw decisions and report path without narrowing business scope", async () => {
 		const f = fixture();
@@ -190,7 +208,11 @@ describe("explicit Dev file decisions", () => {
 			files: [
 				f.docs.proposal,
 				f.docs.spec,
-				{ ...f.docs.solution, candidates: [{ id: "one", title: "one", content: "完整方案 one" }] },
+				{
+					...f.docs.solution,
+					candidates: [{ id: "one", title: "one", content: "完整方案 one" }],
+					recommendedCandidateId: "one",
+				},
 				f.docs.plan,
 			],
 			userReply: "计划决定 Ω",

@@ -29,6 +29,51 @@ export function artifactVersion(content: string | Uint8Array): string {
 	return crypto.createHash("sha256").update(content).digest("hex");
 }
 
+/** Parse the authoritative solution bytes consistently for stage admission and material views. */
+export function parseSpecSolution(document: SpecDocument): SpecSolution {
+	let value: unknown;
+	try {
+		value = JSON.parse(document.content);
+	} catch {
+		throw new Error(`Solution must be valid JSON: ${document.path}`);
+	}
+	if (
+		!value ||
+		typeof value !== "object" ||
+		!("candidates" in value) ||
+		!Array.isArray(value.candidates) ||
+		!value.candidates.length
+	)
+		throw new Error("Solution requires at least one candidate");
+	const ids = new Set<string>();
+	const candidates = value.candidates.map((item: unknown) => {
+		if (
+			!item ||
+			typeof item !== "object" ||
+			!("id" in item) ||
+			!("title" in item) ||
+			!("content" in item) ||
+			typeof item.id !== "string" ||
+			!/^\S+$/.test(item.id) ||
+			typeof item.title !== "string" ||
+			!item.title.trim() ||
+			typeof item.content !== "string" ||
+			!item.content.trim()
+		)
+			throw new Error("Each solution candidate requires a nonempty whitespace-free id and nonempty title/content");
+		if (ids.has(item.id)) throw new Error(`Duplicate solution candidate ID: ${item.id}`);
+		ids.add(item.id);
+		return { id: item.id, title: item.title, content: item.content };
+	});
+	if (
+		!("recommendedCandidateId" in value) ||
+		typeof value.recommendedCandidateId !== "string" ||
+		!ids.has(value.recommendedCandidateId)
+	)
+		throw new Error("Solution requires a recommendedCandidateId matching a candidate ID");
+	return { ...document, candidates, recommendedCandidateId: value.recommendedCandidateId };
+}
+
 function inside(root: string, target: string): boolean {
 	const relative = path.relative(root, target);
 	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
@@ -211,43 +256,7 @@ export class SpecArtifactStore {
 	}
 	async readSolution(): Promise<SpecSolution> {
 		const document = await this.#read(this.paths?.solution ?? this.planPath.replace(/\.md$/, "-solutions.json"));
-		let value: unknown;
-		try {
-			value = JSON.parse(document.content);
-		} catch {
-			throw new Error(`Solution must be valid JSON: ${document.path}`);
-		}
-		if (
-			!value ||
-			typeof value !== "object" ||
-			!("candidates" in value) ||
-			!Array.isArray(value.candidates) ||
-			!value.candidates.length
-		)
-			throw new Error("Solution requires at least one candidate");
-		const ids = new Set<string>();
-		const candidates = value.candidates.map((item: unknown) => {
-			if (
-				!item ||
-				typeof item !== "object" ||
-				!("id" in item) ||
-				!("title" in item) ||
-				!("content" in item) ||
-				typeof item.id !== "string" ||
-				!/^\S+$/.test(item.id) ||
-				typeof item.title !== "string" ||
-				!item.title.trim() ||
-				typeof item.content !== "string" ||
-				!item.content.trim()
-			)
-				throw new Error(
-					"Each solution candidate requires a nonempty whitespace-free id and nonempty title/content",
-				);
-			if (ids.has(item.id)) throw new Error(`Duplicate solution candidate ID: ${item.id}`);
-			ids.add(item.id);
-			return { id: item.id, title: item.title, content: item.content };
-		});
-		return { ...document, candidates };
+		return parseSpecSolution(document);
 	}
 	async readPlan(): Promise<SpecDocument> {
 		return this.#read(this.planPath);

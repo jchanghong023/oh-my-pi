@@ -27,6 +27,7 @@
 
 ### Fixed
 
+- Keep tree guides aligned on wrapped `/session` detail lines.
 - Keep UI status notices in place without splitting surrounding compact tool runs or consuming preview slots.
 - Keep Agent `Message` calls in the surrounding compact tool run instead of treating them as file-write boundaries.
 - Keep `Process` input, mode changes, and cancellation in the surrounding compact tool run without changing process behavior or critical feedback.

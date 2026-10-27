@@ -846,8 +846,15 @@ export async function runStructuredSubagent(request: StructuredSubagentRequest):
 	const hooks = request.session.subagentHooks;
 	const spawnOverrides = await hooks?.beforeSpawn(request);
 	try {
-		return await runAdmittedSubagent(request, spawnOverrides);
+		const result = await runAdmittedSubagent(request, spawnOverrides);
+		await hooks?.onSettled?.(request, result.result);
+		return result;
 	} catch (error) {
+		try {
+			await hooks?.onSettled?.(request, undefined);
+		} catch {
+			// Do not replace the original invocation failure.
+		}
 		if (!(error instanceof StructuredSubagentError && error.result)) {
 			try {
 				await hooks?.onSpawnFailed?.(request, error);

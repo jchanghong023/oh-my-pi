@@ -4900,6 +4900,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			let session: AgentSession;
 			let interactionUI: CreateAgentSessionResult["interactionUI"];
 			let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
+			let configuredToolNames = toolNames;
 			try {
 				const sessionOptions = buildSubagentSessionOptions(sessionSpec, subagentSettings, sessionManager, null, {
 					workPoolYieldItems: options.workPoolYieldItems ?? [],
@@ -4923,6 +4924,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						configuredOptions.mcpTools = createMCPProxyTools(mcpManager);
 					}
 				}
+				configuredToolNames = configuredOptions.toolNames;
 				sessionPromise = createAgentSession(configuredOptions);
 				({ session, interactionUI } = await awaitAbortable(sessionPromise));
 				disposeSessionObserver = observeSession?.(session) ?? undefined;
@@ -5109,7 +5111,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					},
 					filterActiveTools: activeToolNames =>
 						activeToolNames.filter(
-							name => !isParentOwnedTool(name) && (!restrictToolNames || toolNames?.includes(name) === true),
+							name =>
+								!isParentOwnedTool(name) &&
+								(!restrictToolNames || configuredToolNames?.includes(name) === true),
 						),
 				}),
 			);

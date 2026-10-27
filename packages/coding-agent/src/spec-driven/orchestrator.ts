@@ -276,6 +276,8 @@ export class SpecDrivenOrchestrator {
 			const plan = await this.#ports.artifacts.readPlan(context);
 			this.#requireApprovedDocuments("planner", [plan]);
 			const report = await this.#ports.artifacts.readReport(context);
+			await this.#ports.agents.checkExecution?.();
+			this.#guard(context);
 			const accepted = {
 				files: [...specification.files, solution, plan, report].map(version),
 				userReply: rawDecision,

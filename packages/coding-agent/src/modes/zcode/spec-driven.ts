@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, realpath } from "node:fs/promises";
 import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { ZodError } from "zod";
-import { containedSpecPath, formalMaterialPaths } from "../../spec-driven/artifacts";
+import { containedSpecPath, formalMaterialPaths, parseSpecSolution } from "../../spec-driven/artifacts";
 import {
 	observeSpecDrivenController,
 	peekSpecDrivenController,
@@ -15,7 +15,6 @@ import { writeFileAtomically } from "../../utils/atomic-file";
 import { getOmpProfileStorageIdentity } from "./profiles";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
-	ompSpecCandidateSchema,
 	ompSpecRunSchema,
 	type OmpSpecDetails,
 	type OmpSpecMaterial,
@@ -250,6 +249,7 @@ export class OmpSpecDrivenBridge {
 		}
 		const materials: OmpSpecMaterial[] = [];
 		let candidates: OmpSpecDetails["candidates"] = [];
+		let recommendedCandidateId: string | null = null;
 		for (const artifact of saved.artifacts) {
 			const version = artifact.versions.at(-1);
 			let readiness: OmpSpecMaterial["readiness"] = "unknown";
@@ -258,8 +258,13 @@ export class OmpSpecDrivenBridge {
 				readiness = version && digest(bytes) === version.digest ? "present" : "unknown";
 				if (artifact.id === "solution" && readiness === "present") {
 					try {
-						const value = JSON.parse(bytes.toString("utf8"));
-						candidates = ompSpecCandidateSchema.array().parse(value.candidates);
+						const solution = parseSpecSolution({
+							path: artifact.sourcePath,
+							content: bytes.toString("utf8"),
+							version: version!.digest,
+						});
+						candidates = solution.candidates;
+						recommendedCandidateId = solution.recommendedCandidateId;
 					} catch {
 						readiness = "unreadable";
 					}
@@ -342,6 +347,7 @@ export class OmpSpecDrivenBridge {
 					...(saved.specificationVersion ? { specification: saved.specificationVersion } : {}),
 				},
 				candidates,
+				recommendedCandidateId,
 				selectedCandidate: saved.selection
 					? { id: saved.selection.candidateId, userReply: saved.selection.userReply }
 					: null,

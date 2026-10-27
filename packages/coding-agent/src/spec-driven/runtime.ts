@@ -140,7 +140,15 @@ export async function createSpecDrivenRuntime(args: {
 						: role === "executor"
 							? [await loadSpecDrivenSkill("superpowers", "subagent-driven-development")]
 							: [];
-			const methods = await Promise.all(skills.map(skill => fs.readFile(skill.filePath, "utf8")));
+			const methods = await Promise.all(
+				skills.map(async skill => {
+					const content = await fs.readFile(skill.filePath, "utf8");
+					if (role !== "planner") return content;
+					const handoff = content.indexOf("\n## Execution Handoff");
+					if (handoff < 0) throw new Error("writing-plans execution handoff section is missing");
+					return content.slice(0, handoff);
+				}),
+			);
 			let sessionFile = saved?.sessionFile;
 			if (sessionFile) {
 				try {
@@ -273,6 +281,9 @@ export async function createSpecDrivenRuntime(args: {
 			},
 			recipient,
 			originalRequest,
+			async checkExecution() {
+				(await getActor("executor")).checkExecution();
+			},
 			async run(input, context) {
 				const ctx = contextFor(context);
 				const actor = await getActor(input.role);

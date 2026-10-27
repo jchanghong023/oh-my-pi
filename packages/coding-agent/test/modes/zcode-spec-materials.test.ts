@@ -39,8 +39,12 @@ function fixture(cwd: string) {
 	const proposal = document(`${change}/proposal.md`, "Approved proposal");
 	const spec = document(`${change}/specs/capability/spec.md`, "Approved specification");
 	const solution = {
-		...document(`${stem}-solutions.json`, '{"candidates":[{"id":"reuse","title":"复用","content":"完整方案"}]}'),
+		...document(
+			`${stem}-solutions.json`,
+			'{"recommendedCandidateId":"reuse","candidates":[{"id":"reuse","title":"复用","content":"完整方案"}]}',
+		),
 		candidates: [{ id: "reuse", title: "复用", content: "完整方案" }],
+		recommendedCandidateId: "reuse",
 	};
 	const plan = document(`${stem}.md`, "# Superpowers Plan\n原有模板不变");
 	const report = document(
@@ -217,6 +221,7 @@ describe("desktop real file materials", () => {
 			await f.initialize();
 			const run = await f.capture();
 			expect(run.spec.candidates).toEqual(f.observation.status.solution!.candidates);
+			expect(run.spec.recommendedCandidateId).toBe("reuse");
 			expect(run.spec.selectedCandidate).toEqual({ id: "reuse", userReply: "用户原始确认" });
 			expect(run.spec).not.toHaveProperty("tasks");
 			expect(run.spec).not.toHaveProperty("progress");
@@ -349,6 +354,7 @@ describe("desktop real file materials", () => {
 			expect(history.spec).not.toHaveProperty("interaction");
 			expect(history.spec.selectedCandidate).toEqual({ id: "reuse", userReply: "用户原始确认" });
 			expect(history.spec.candidates).toEqual(f.observation.status.solution!.candidates);
+			expect(history.spec.recommendedCandidateId).toBe("reuse");
 			expect(observe).not.toHaveBeenCalled();
 			expect(peek).not.toHaveBeenCalled();
 			const workspace = await DevWorkspace.acquire(root.path());
@@ -422,7 +428,7 @@ describe("desktop real file materials", () => {
 			expect(empty.spec.phase).toBe("executing");
 			expect(empty.spec.state).toBe("waiting");
 			const broken = document(`${stem}-solutions.json`, "{broken JSON");
-			f.observation.status.solution = { ...broken, candidates: [] };
+			f.observation.status.solution = { ...broken, candidates: [], recommendedCandidateId: "reuse" };
 			await f.write(broken.path, broken.content);
 			expect((await f.capture()).spec.materials.find(material => material.id === "solution")?.readiness).toBe(
 				"unreadable",
@@ -431,6 +437,23 @@ describe("desktop real file materials", () => {
 			expect((await f.capture()).spec.materials.find(material => material.id === "solution")?.readiness).toBe(
 				"missing",
 			);
+		} finally {
+			await f.bridge.dispose();
+		}
+	});
+	it("marks solutions with missing or invalid recommendations unreadable without exposing candidates", async () => {
+		await using root = await TempDir.create("@omp-spec-recommendation-gaps-");
+		const f = fixture(root.path());
+		try {
+			f.observation.approvals = {};
+			const candidates = [{ id: "one", title: "方案", content: "完整正文" }];
+			for (const recommendedCandidateId of [undefined, "other"]) {
+				await f.write(f.observation.status.paths!.solution, JSON.stringify({ candidates, recommendedCandidateId }));
+				const run = await f.capture();
+				expect(run.spec.materials.find(material => material.id === "solution")?.readiness).toBe("unreadable");
+				expect(run.spec.candidates).toEqual([]);
+				expect(run.spec.recommendedCandidateId).toBeNull();
+			}
 		} finally {
 			await f.bridge.dispose();
 		}
@@ -447,7 +470,7 @@ describe("desktop real file materials", () => {
 			delete f.observation.approvals.solution;
 			delete f.observation.approvals.planner;
 			const candidates = [{ id: "pure", title: "纯实现", content: "回退后修订的完整方案" }];
-			const content = JSON.stringify({ candidates });
+			const content = JSON.stringify({ candidates, recommendedCandidateId: "pure" });
 			await f.write(f.observation.status.paths!.solution, content);
 			f.observation.interaction.actions = [{ id: "next", label: "Next", command: "/dev next", available: true }];
 			vi.spyOn(controllers, "peekSpecDrivenController").mockReturnValue({
@@ -456,6 +479,7 @@ describe("desktop real file materials", () => {
 			} as ReturnType<typeof controllers.peekSpecDrivenController>);
 			const current = await f.capture();
 			expect(current.spec.candidates).toEqual(candidates);
+			expect(current.spec.recommendedCandidateId).toBe("pure");
 			expect(current.spec.materials.find(material => material.id === "solution")).toMatchObject({
 				readiness: "present",
 				sourceVersion: hash(content),

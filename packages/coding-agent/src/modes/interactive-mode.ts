@@ -178,7 +178,7 @@ import {
 } from "../slash-commands/builtin-spec-driven";
 import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
-import { containedSpecPath, formalMaterialPaths } from "../spec-driven/artifacts";
+import { containedSpecPath, formalMaterialPaths, parseSpecSolution } from "../spec-driven/artifacts";
 import { observeSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
 import { roleLabel } from "../spec-driven/stages";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
@@ -3225,7 +3225,22 @@ export class InteractiveMode implements InteractiveModeContext {
 					const materials = await Promise.all(
 						materialPaths.map(async file => {
 							try {
-								return `## ${file}\n\n${sanitizeText(await Bun.file(await containedSpecPath(observation.cwd, file)).text())}`;
+								const content = await Bun.file(await containedSpecPath(observation.cwd, file)).text();
+								if (file === paths?.solution) {
+									try {
+										const solution = parseSpecSolution({ path: file, content, version: "" });
+										const candidates = solution.candidates
+											.map(
+												candidate =>
+													`### ${candidate.title} (${candidate.id})${candidate.id === solution.recommendedCandidateId ? " · 推荐" : ""}\n\n${candidate.content}`,
+											)
+											.join("\n\n");
+										return `## 方案候选\n\n${sanitizeText(candidates)}\n\n## ${file}（原始 JSON）\n\n${sanitizeText(content)}`;
+									} catch {
+										// Invalid material remains visible as raw bytes, without presenting a recommendation as valid.
+									}
+								}
+								return `## ${file}\n\n${sanitizeText(content)}`;
 							} catch (error) {
 								return `## ${file}\n\n读取错误: ${error instanceof Error ? error.message : String(error)}`;
 							}
