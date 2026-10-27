@@ -2392,7 +2392,6 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.subagentContainer,
 					this.modelCycleContainer,
 					this.progressHudContainer,
-					this.compactThinkingPreview,
 				],
 				// Natively the HUD pills lead the dock, queued messages sit between
 				// the working row and the composer, and the attachment chips live

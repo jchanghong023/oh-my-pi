@@ -2,6 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -11,9 +12,11 @@ import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
+import { CURRENT_SESSION_VERSION } from "../../src/session/session-entries";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
+import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
 import * as teamOrchestrator from "../../src/team/orchestrator";
 import {
@@ -24,7 +27,7 @@ import {
 	scoutProbeReply,
 } from "./provider-fixture";
 import { cfgTeamMembers } from "../../src/team/settings";
-import { cfgTaskIsolationEnabled } from "../../src/task/settings";
+import { cfgTaskIsolationEnabled, cfgTaskMaxRecursionDepth } from "../../src/task/settings";
 import * as isolationRunner from "../../src/task/isolation-runner";
 import { cfgAsyncEnabled } from "../../src/tools/settings";
 
@@ -596,6 +599,288 @@ test("executor delegates writable work to a native task child within the stage t
 	expect(tools).not.toContain("eval");
 	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);
+
+test("Superpowers discovery and reads follow the executor through recursive task children only", async () => {
+	const skill = "requesting-code-review";
+	const childMarker = "OMP_EXECUTION_SKILL_CHILD";
+	const grandchildMarker = "OMP_EXECUTION_SKILL_GRANDCHILD";
+	const scoutMarker = "OMP_REQUIREMENTS_SKILL_SCOUT";
+	const ordinaryMarker = "OMP_ORDINARY_SKILL_ROOT";
+	const ordinaryChildMarker = "OMP_ORDINARY_SKILL_CHILD";
+	const actions = new Set<string>();
+	await using fixture = await consumer({
+		reply(request) {
+			const assignment = (marker: string) =>
+				request.messages.some(
+					message =>
+						message.role === "user" &&
+						contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+				);
+			const role = assignment(grandchildMarker)
+				? "grandchild"
+				: assignment(childMarker)
+					? "child"
+					: assignment(scoutMarker)
+						? "scout"
+						: assignment(ordinaryChildMarker)
+							? "ordinary-child"
+							: request.messages.some(
+										message =>
+											message.role === "user" && contentText(message.content).includes(ordinaryMarker),
+								  )
+								? "ordinary"
+								: rolePayload(request)?.specDrivenRole;
+			if (!role) return { text: "finished" };
+			if (!actions.has(`${role}:read`)) {
+				actions.add(`${role}:read`);
+				return { tool: { name: "read", args: { i: "Reading skill", path: `skill://${skill}:raw` } } };
+			}
+			const next =
+				role === "ordinary"
+					? { marker: ordinaryChildMarker, agent: "task" }
+					: role === "requirements"
+						? { marker: scoutMarker, agent: "scout" }
+						: role === "executor"
+							? { marker: childMarker, agent: "task" }
+							: role === "child"
+								? { marker: grandchildMarker, agent: "task" }
+								: undefined;
+			if (next && !actions.has(`${role}:task`)) {
+				actions.add(`${role}:task`);
+				return {
+					tool: {
+						name: "task",
+						args: {
+							i: "Delegating skill probe",
+							context: "Inspect the skill access boundary.",
+							tasks: [{ agent: next.agent, task: next.marker, solutionSpace: "read one skill" }],
+						},
+					},
+				};
+			}
+			return { text: "probe complete" };
+		},
+	});
+	cfgTaskMaxRecursionDepth.set(fixture.settings, 5);
+	await fixture.session.prompt(ordinaryMarker);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("recursive-skill-visibility", context);
+	for (const role of ["requirements", "solution", "planner", "executor"] as const) {
+		await fixture.runtime.ports.agents.run(
+			{ role, entry: true, request: "Inspect skill access", files: [], outputPaths: ["probe.md"] },
+			context,
+		);
+	}
+
+	for (const role of [
+		"ordinary",
+		"ordinary-child",
+		"requirements",
+		"solution",
+		"planner",
+		"executor",
+		"scout",
+		"child",
+		"grandchild",
+	] as const) {
+		const marker =
+			role === "scout"
+				? scoutMarker
+				: role === "child"
+					? childMarker
+					: role === "grandchild"
+						? grandchildMarker
+						: role === "ordinary-child"
+							? ordinaryChildMarker
+							: undefined;
+		const requests = fixture.provider.requests.filter(request =>
+			marker
+				? request.messages.some(
+						message =>
+							message.role === "user" &&
+							contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+					)
+				: role === "ordinary"
+					? request.messages.some(
+							message => message.role === "user" && contentText(message.content).includes(ordinaryMarker),
+						)
+					: rolePayload(request)?.specDrivenRole === role,
+		);
+		expect(requests.length).toBeGreaterThanOrEqual(2);
+		const system = requests[0]!.messages
+			.filter(message => message.role === "system")
+			.map(message => contentText(message.content))
+			.join("\n");
+		const toolResults = requests.flatMap(request =>
+			request.messages.filter(message => message.role === "tool").map(message => contentText(message.content)),
+		);
+		if (role === "executor" || role === "child" || role === "grandchild") {
+			expect(system).toContain(`- ${skill}:`);
+			expect(toolResults.some(text => text.includes("# Requesting Code Review"))).toBe(true);
+		} else {
+			expect(system).not.toContain(`- ${skill}:`);
+			expect(toolResults.some(text => text.includes(`Skill access denied: ${skill}`))).toBe(true);
+		}
+	}
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test("executor seance discovers and reads all bundled Superpowers without changing ordinary seance isolation", async () => {
+	const { manifest } = await collectSpecDrivenResources(
+		path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
+	);
+	const skills = manifest.skills.filter(entry => entry.source === "superpowers").map(entry => entry.name);
+	expect(skills.length).toBeGreaterThan(0);
+	const executorMarker = "OMP_EXECUTOR_SEANCE_SKILLS";
+	const ordinaryMarker = "OMP_ORDINARY_SEANCE_SKILLS";
+	const ordinaryRoot = "OMP_ORDINARY_SEANCE_ROOT";
+	const nextSkill = new Map<string, number>();
+	const dispatched = new Set<string>();
+	let sourceFile = "";
+	let sourceText = "";
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				const assignment = (marker: string) =>
+					request.messages.some(
+						message =>
+							message.role === "user" &&
+							contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+					);
+				const seance = assignment(executorMarker)
+					? executorMarker
+					: assignment(ordinaryMarker)
+						? ordinaryMarker
+						: undefined;
+				if (seance) {
+					const index = nextSkill.get(seance) ?? 0;
+					if (index < skills.length) {
+						nextSkill.set(seance, index + 1);
+						return { tool: { name: "read", args: { i: "Reading skill", path: `skill://${skills[index]}:raw` } } };
+					}
+					return { text: "Historical skill probe complete" };
+				}
+				const parent =
+					rolePayload(request)?.specDrivenRole === "executor"
+						? executorMarker
+						: request.messages.some(
+									message => message.role === "user" && contentText(message.content).includes(ordinaryRoot),
+							  )
+							? ordinaryMarker
+							: undefined;
+				if (parent && !dispatched.has(parent)) {
+					dispatched.add(parent);
+					return {
+						tool: {
+							name: "task",
+							args: {
+								i: "Consulting history",
+								context: "Inspect the historical skill access boundary.",
+								tasks: [
+									{
+										agent: "seance",
+										task: parent,
+										solutionSpace: "inspect historical context",
+										sourceSession: sourceFile,
+										model: ["spec-fixture/chat-a"],
+									},
+								],
+							},
+						},
+					};
+				}
+				return { text: "finished" };
+			},
+		},
+		async cwd => {
+			sourceFile = path.join(cwd, "source.jsonl");
+			sourceText =
+				[
+					{
+						type: "session",
+						version: CURRENT_SESSION_VERSION,
+						id: "skill-source",
+						timestamp: "2026-10-01T00:00:00.000Z",
+						cwd,
+					},
+					{
+						type: "message",
+						id: "source-user",
+						parentId: null,
+						timestamp: "2026-10-01T00:00:01.000Z",
+						message: { role: "user", content: "Historical source request", timestamp: 1 },
+					},
+				]
+					.map(entry => JSON.stringify(entry))
+					.join("\n") + "\n";
+			await fs.writeFile(sourceFile, sourceText);
+		},
+	);
+	await fixture.session.prompt(ordinaryRoot);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("seance-skill-visibility", context);
+	await fixture.runtime.ports.agents.run(
+		{ role: "executor", entry: true, request: "Consult history", files: [], outputPaths: ["probe.md"] },
+		context,
+	);
+
+	const toolSets: string[][] = [];
+	for (const [marker, allowed] of [
+		[executorMarker, true],
+		[ordinaryMarker, false],
+	] as const) {
+		const requests = fixture.provider.requests.filter(request =>
+			request.messages.some(
+				message =>
+					message.role === "user" &&
+					contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+			),
+		);
+		expect(requests.length).toBeGreaterThan(skills.length);
+		const first = requests[0]!;
+		const last = requests.at(-1)!;
+		const system = first.messages
+			.filter(message => message.role === "system")
+			.map(message => contentText(message.content))
+			.join("\n");
+		const tools = (first.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, "") ?? "").toSorted();
+		toolSets.push(tools);
+		expect(tools).toContain("read");
+		for (const name of ["write", "bash", "task"]) expect(tools).not.toContain(name);
+		const calls = last.messages.flatMap(message => (message.role === "assistant" ? (message.tool_calls ?? []) : []));
+		for (const name of skills) {
+			if (allowed) expect(system).toContain(`- ${name}:`);
+			else expect(system).not.toContain(`- ${name}:`);
+			const target = `skill://${name}:raw`;
+			const call = calls.find(item => {
+				if (
+					!isRecord(item) ||
+					!isRecord(item.function) ||
+					typeof item.function.name !== "string" ||
+					typeof item.function.arguments !== "string"
+				)
+					return false;
+				return (
+					item.function.name.replace(/^_/u, "") === "read" && JSON.parse(item.function.arguments).path === target
+				);
+			});
+			expect(isRecord(call) && typeof call.id === "string").toBe(true);
+			if (!isRecord(call) || typeof call.id !== "string") throw new Error(`Missing read call for ${target}`);
+			const result = last.messages.find(message => message.role === "tool" && message.tool_call_id === call.id);
+			expect(result).toBeDefined();
+			const text = contentText(result?.content);
+			if (allowed) {
+				expect(text).not.toContain("Skill access denied:");
+				expect(parseFrontmatter(text, { source: target, repair: false, level: "off" }).frontmatter.name).toBe(name);
+			} else {
+				expect(text).toContain(`Skill access denied: ${name}`);
+			}
+		}
+	}
+	expect(toolSets[0]).toEqual(toolSets[1]);
+	expect(await fs.readFile(sourceFile, "utf8")).toBe(sourceText);
+	expect(fixture.provider.failures).toEqual([]);
+}, 300_000);
 
 for (const [label, tasks] of [
 	["non-scout", [{ agent: "task", task: "Modify the project", solutionSpace: "write" }]],

@@ -10,8 +10,8 @@ import { createTeamSubagentRunner } from "../team/runner";
 import type { TeamRunResult } from "../team/types";
 import { artifactVersion, containedSpecPath, formalMaterialPaths, SpecArtifactStore } from "./artifacts";
 import { createSpecActor, type SpecActor } from "./actors";
-import { assertDevSpecSchema, loadSpecDrivenSkill, runOpenSpec } from "./resources";
-import { grantSpecSkillAccess } from "./skill-policy";
+import { assertDevSpecSchema, ensureSpecDrivenResources, loadSpecDrivenSkill, runOpenSpec } from "./resources";
+import { exposeSpecExecutionSkill, grantSpecExecutionSkills, grantSpecSkillAccess } from "./skill-policy";
 import type {
 	SpecConversationRecipient,
 	SpecDrivenPorts,
@@ -131,14 +131,14 @@ export async function createSpecDrivenRuntime(args: {
 		const operation = (async () => {
 			const skills =
 				role === "requirements"
-					? [
-							await loadSpecDrivenSkill("superpowers", "brainstorming"),
-							await loadSpecDrivenSkill("jch", "jch-grill-me"),
-						]
+					? [await loadSpecDrivenSkill("jch", "jch-grill-me")]
 					: role === "planner"
 						? [await loadSpecDrivenSkill("superpowers", "writing-plans")]
 						: role === "executor"
-							? [await loadSpecDrivenSkill("superpowers", "subagent-driven-development")]
+							? [
+									await loadSpecDrivenSkill("superpowers", "using-superpowers"),
+									await loadSpecDrivenSkill("superpowers", "subagent-driven-development"),
+								]
 							: [];
 			const methods = await Promise.all(
 				skills.map(async skill => {
@@ -160,6 +160,42 @@ export async function createSpecDrivenRuntime(args: {
 			}
 			const missingHistory = !!(saved || args.saved) && !sessionFile;
 			const executor = role === "executor";
+			const executionResources = executor
+				? await Promise.all(
+						(await ensureSpecDrivenResources()).manifest.skills
+							.filter(entry => entry.source === "superpowers")
+							.map(entry => loadSpecDrivenSkill("superpowers", entry.name)),
+					)
+				: [];
+			const executionSkills = [...session.skills];
+			const executionPaths = executor
+				? await Promise.all(
+						executionSkills.map(skill =>
+							skill.source === "bundled-superpowers" ||
+							(skill._source?.provider === "spec-driven" && skill._source.pluginName === "superpowers")
+								? fs.realpath(skill.filePath)
+								: undefined,
+						),
+					)
+				: [];
+			const executionGrants = executionResources.map(resource => {
+				const existing = executionPaths.indexOf(resource.filePath);
+				if (existing >= 0) {
+					const visible = exposeSpecExecutionSkill(executionSkills[existing]);
+					executionSkills[existing] = visible;
+					return visible;
+				}
+				let name = resource.name;
+				if (executionSkills.some(skill => skill.name === name)) {
+					name = `superpowers/${name}`;
+					const base = name;
+					let suffix = 2;
+					while (executionSkills.some(skill => skill.name === name)) name = `${base}~${suffix++}`;
+				}
+				const visible = exposeSpecExecutionSkill({ ...resource, name });
+				executionSkills.push(visible);
+				return visible;
+			});
 			const actor = await createSpecActor({
 				role,
 				methods,
@@ -171,7 +207,15 @@ export async function createSpecDrivenRuntime(args: {
 								const instructions: string[] = [];
 								for (const artifact of ["proposal", "specs"]) {
 									const result = await runOpenSpec(
-										["instructions", artifact, "--change", requireStore().changeId, "--schema", "omp-spec", "--json"],
+										[
+											"instructions",
+											artifact,
+											"--change",
+											requireStore().changeId,
+											"--schema",
+											"omp-spec",
+											"--json",
+										],
 										cwd,
 										lifetime.signal,
 									);
@@ -204,7 +248,7 @@ export async function createSpecDrivenRuntime(args: {
 					subagentEventBus: deps.subagentEventBus,
 					contextFiles: [...(loadedContext.contextFiles ?? [])],
 					rules: [...(loadedContext.activeRules ?? [])],
-					skills: executor ? [...session.skills] : skills,
+					skills: executor ? executionSkills : skills,
 					promptTemplates: [],
 					spawns: executor ? "*" : "scout",
 					hasUI: false,
@@ -225,8 +269,11 @@ export async function createSpecDrivenRuntime(args: {
 					enableIrc: false,
 					disableExtensionDiscovery: true,
 				},
+				executionSkills: executor ? executionGrants : undefined,
 				onSessionCreated(child) {
-					const grants = skills.map(skill => grantSpecSkillAccess(child.sessionManager, skill));
+					const grants = executor
+						? [grantSpecExecutionSkills(child.sessionManager, executionGrants)]
+						: skills.map(skill => grantSpecSkillAccess(child.sessionManager, skill));
 					try {
 						args.onSessionCreated?.(role, child);
 					} catch (error) {

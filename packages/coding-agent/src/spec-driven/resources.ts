@@ -151,7 +151,7 @@ async function extractResources(): Promise<SpecDrivenResources> {
 		superpowersRoot: path.join(root, "superpowers"),
 		jchRoot: path.join(root, "jch"),
 		manifest,
-		specSchemaPath: path.join(root, "omp-spec", "schema.yaml"),
+		specSchemaPath: path.join(root, "openspec", "schemas", "omp-spec", "schema.yaml"),
 	};
 }
 

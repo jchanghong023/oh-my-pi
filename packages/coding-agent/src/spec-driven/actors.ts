@@ -5,9 +5,11 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
 import type { ExtensionFactory } from "../extensibility/extensions";
+import type { Skill } from "../extensibility/skills";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgTaskIsolationEnabled, cfgTaskSpeculativeLaunch, cfgWorktreeOnStart } from "../task/settings";
 import { getBundledAgent } from "../task/agents";
+import { isSeanceIsolationSkills } from "../task/seance-policy";
 import type { NativeSubagentHooks } from "../task/types";
 import { assertSpecWritePath } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
@@ -21,6 +23,7 @@ import communicationPrompt from "../prompts/spec-driven-communication.md" with {
 import type { TeamRunResult } from "../team/types";
 import { hasExplicitRepairIntent } from "./orchestrator";
 import { ExecutionEvidence } from "./execution-evidence";
+import { grantSpecExecutionSkills } from "./skill-policy";
 import type {
 	SpecAgentInput,
 	SpecCandidate,
@@ -121,6 +124,7 @@ export async function createSpecActor(args: {
 	beginRepair?: () => Promise<void>;
 	reportPath?: string;
 	recoverContext?: () => Promise<string>;
+	executionSkills?: readonly Skill[];
 	onSessionCreated?: (session: AgentSession) => (() => void) | void;
 }): Promise<SpecActor> {
 	const id = `spec-${args.role}-${crypto.randomUUID()}`;
@@ -223,13 +227,25 @@ export async function createSpecActor(args: {
 				toolNames: options.toolNames ?? args.options.toolNames ?? [],
 				toolRestrictions: restrictions.clone(),
 				restrictToolNames: true,
+				// Seance isolation strips the inherited catalog. Restore only the
+				// execution resources explicitly granted to this Dev chain.
+				skills: isSeanceIsolationSkills(options.skills)
+					? [...(args.executionSkills ?? [])]
+					: (options.skills ?? args.options.skills),
 				subagentHooks: executorHooks,
 				onSessionCreated(child) {
-					const tools = child.getEnabledToolNames();
-					executionEvidence?.observeSession(
-						request,
-						["write", "edit", "bash"].some(name => tools.includes(name) && restrictions.allows(name)),
-					);
+					const release = grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []);
+					try {
+						const tools = child.getEnabledToolNames();
+						executionEvidence?.observeSession(
+							request,
+							["write", "edit", "bash"].some(name => tools.includes(name) && restrictions.allows(name)),
+						);
+					} catch (error) {
+						release();
+						throw error;
+					}
+					return release;
 				},
 			};
 		},
@@ -472,10 +488,7 @@ export async function createSpecActor(args: {
 					],
 				}
 			: { extensions: [...(args.options.extensions ?? []), writeGuard] }),
-		systemPrompt: defaults =>
-			args.role === "requirements"
-				? [...defaults, fixed, communicationPrompt, ...(args.methods ?? [])]
-				: [...defaults, ...(args.methods ?? []), fixed, communicationPrompt],
+		systemPrompt: defaults => [...defaults, ...(args.methods ?? []), fixed, communicationPrompt],
 	});
 	const session = created.session;
 	if (args.role === "executor") executionEvidence = new ExecutionEvidence(session.sessionManager, session.sessionId);

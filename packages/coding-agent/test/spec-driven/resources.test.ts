@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import {
 	ensureSpecDrivenResources,
@@ -400,6 +401,64 @@ describe("pinned upstream resources", () => {
 		);
 		await expect(runSuperpowersScript("skills/../package.json", [], temporary)).rejects.toThrow();
 	});
+
+	it("resolves the bundled Dev schema and rejects a project override", async () => {
+		const cwd = path.join(temporary, "dev-schema");
+		const home = path.join(cwd, ".consumer-home");
+		await fs.mkdir(cwd);
+		const moduleUrl = pathToFileURL(path.resolve(import.meta.dir, "../../src/spec-driven/resources.ts")).href;
+		const script = `
+			const { assertDevSpecSchema, ensureSpecDrivenResources, runOpenSpec } = await import(${JSON.stringify(moduleUrl)});
+			const result = await runOpenSpec(["schema", "which", "omp-spec", "--json"], process.cwd());
+			let error = null;
+			try { await assertDevSpecSchema(process.cwd()); } catch (e) { error = String(e); }
+			console.log(JSON.stringify({ result, error, schemaPath: (await ensureSpecDrivenResources()).specSchemaPath }));
+		`;
+		async function resolve() {
+			const child = Bun.spawn([process.execPath, "--eval", script], {
+				cwd,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				env: {
+					...process.env,
+					BUN_BE_BUN: "1",
+					NODE_PATH: "",
+					HOME: home,
+					USERPROFILE: home,
+					APPDATA: path.join(home, "appdata"),
+					LOCALAPPDATA: path.join(home, "localappdata"),
+					XDG_CONFIG_HOME: path.join(home, "config"),
+					XDG_DATA_HOME: path.join(home, "data"),
+					XDG_CACHE_HOME: path.join(home, "cache"),
+					DO_NOT_TRACK: "1",
+					OPENSPEC_TELEMETRY: "0",
+				},
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			if (exitCode !== 0) throw new Error(stderr);
+			return JSON.parse(stdout);
+		}
+
+		const bundled = await resolve();
+		expect(bundled.result.exitCode).toBe(0);
+		const resolution = JSON.parse(bundled.result.stdout);
+		expect(resolution.source).toBe("package");
+		expect(await fs.realpath(resolution.path)).toBe(await fs.realpath(path.dirname(bundled.schemaPath)));
+		expect(bundled.error).toBeNull();
+
+		const override = path.join(cwd, "openspec", "schemas", "omp-spec");
+		await fs.mkdir(path.dirname(override), { recursive: true });
+		await fs.cp(path.dirname(bundled.schemaPath), override, { recursive: true });
+		const shadowed = await resolve();
+		expect(shadowed.result.exitCode).toBe(0);
+		expect(JSON.parse(shadowed.result.stdout).source).toBe("project");
+		expect(shadowed.error).toContain("an external schema shadows it");
+	}, 30_000);
 
 	it("uses the real CLI for requirements-only status and proposal/spec instructions", async () => {
 		const resources = await ensureSpecDrivenResources();

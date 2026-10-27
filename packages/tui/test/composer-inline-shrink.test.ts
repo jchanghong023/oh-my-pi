@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -169,6 +170,49 @@ beforeAll(async () => {
 });
 
 describe("composer inline shrink (#11007)", () => {
+	it("keeps every compact user message and reply reachable while bottom chrome grows and shrinks", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const h = makeHarness(100, 28, 0);
+		const expected: string[] = [];
+		h.hud.rows = 2;
+		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
+			selfClearingChrome: [h.hud],
+			transientChrome: [h.editor],
+		});
+		for (let index = 0; index < 12; index++) {
+			const prompt = `PROMPT_${index}`;
+			const answer = `ANSWER_${index}`;
+			expected.push(prompt, answer);
+			h.transcript.addChild(new UserMessageComponent(prompt));
+			h.transcript.addChild(new AssistantMessageComponent(reply(answer)));
+		}
+		const reachable = (): string[] =>
+			Array.from(
+				h.terminal
+					.getScrollBuffer()
+					.join("\n")
+					.matchAll(/(?:PROMPT|ANSWER)_\d+/g),
+				match => match[0],
+			);
+		try {
+			await h.scheduler.settle(h.terminal);
+			expect(reachable()).toEqual(expected);
+			h.widget.rows = 9;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(reachable()).toEqual(expected);
+			h.widget.rows = 0;
+			h.hud.rows = 0;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(reachable()).toEqual(expected);
+		} finally {
+			h.composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	it("keeps finalized compact prose available and input visible after self-clearing chrome changes", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });

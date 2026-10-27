@@ -21,7 +21,7 @@ import { contentText, createProviderFixture, MARKER, rolePayload } from "./provi
 
 export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 	test(
-		`packaged skills expose OpenSpec discovery and manual access (${hasOpenSpec ? "with" : "without"} openspec)`,
+		`packaged skills expose OpenSpec and Superpowers for manual access, but hide Superpowers from model requests (${hasOpenSpec ? "with" : "without"} openspec)`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(
 				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
@@ -43,9 +43,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const isHiddenOpenSpec = (entry: { source: string; name: string }) =>
 				entry.source === "openspec" && !coreOpenSpec.has(entry.name);
 			const defaultSkills: Record<string, true> = {};
-			for (const entry of inventory.skills.filter(
-				entry => coreOpenSpec.has(entry.name) || entry.source === "superpowers",
-			))
+			for (const entry of inventory.skills.filter(entry => coreOpenSpec.has(entry.name)))
 				defaultSkills[entry.name] = true;
 			const ordinary = await peer.create(config.cwd);
 			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
@@ -86,6 +84,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					throw new Error(`Packaged resource lacks skill identity: ${entry.name}`);
 				for (const request of ordinaryRequests) {
 					const context = request.messages.map(message => contentText(message.content)).join("\n");
+					if (entry.source === "superpowers") expect(context).not.toContain(entry.name);
 					if (typeof metadata.frontmatter.description === "string") {
 						if (defaultSkills[entry.name]) expect(context).toContain(entry.name);
 						else expect(context).not.toContain(metadata.frontmatter.description);
@@ -95,6 +94,36 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					name: metadata.frontmatter.name,
 					description: metadata.frontmatter.description,
 				});
+			}
+			const superpowers = inventory.skills.filter(entry => entry.source === "superpowers");
+			expect(superpowers.length).toBeGreaterThan(0);
+			const unauthorizedPaths = superpowers.map(entry => `skill://${entry.name}:raw`);
+			const unauthorizedRequestStart = provider.requests.length;
+			since = await peer.send(
+				ordinary,
+				`${MARKER} inspect resource access without invoking a skill\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({
+					path: unauthorizedPaths[0],
+					allowedPaths: [],
+					deniedPaths: unauthorizedPaths.slice(1),
+				})}`,
+			);
+			await peer.next(
+				frame =>
+					isConversation(frame, ordinary) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+				since,
+			);
+			const unauthorizedRequests = provider.requests
+				.slice(unauthorizedRequestStart)
+				.filter(request => (request.tools?.length ?? 0) > 0);
+			expect(unauthorizedRequests.length).toBeGreaterThan(0);
+			const unauthorizedResults = unauthorizedRequests
+				.at(-1)!
+				.messages.filter(message => message.role === "tool")
+				.map(message => contentText(message.content))
+				.join("\n");
+			for (const entry of superpowers) {
+				expect(unauthorizedResults).toContain(`Skill access denied: ${entry.name}`);
+				expect(unauthorizedResults).not.toContain(resourceMetadata.get(entry.name)!.description);
 			}
 			for (const entry of inventory.skills.filter(entry => !isHiddenOpenSpec(entry))) {
 				const session = await peer.create(config.cwd);

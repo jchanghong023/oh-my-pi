@@ -24,7 +24,7 @@ function nativeReadResult(request: ModelRequest, target: string): string {
 
 for (const location of ["directory", "absent", "file", "parent-only"] as const) {
 	test.skipIf(!tuiTest)(
-		`ordinary TUI discovers OpenSpec only at a direct directory and scopes manual resource grants (${location})`,
+		`ordinary TUI discovers core OpenSpec in any directory and scopes manual resource grants (${location})`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(
 				path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
@@ -49,7 +49,17 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 				},
 				[120, 36],
 				async ({ cwd, provider, tui, state }) => {
-					const openSpec = inventory.skills.filter(skill => skill.source === "openspec");
+					const coreOpenSpec = [
+						"openspec-archive-change",
+						"openspec-explore",
+						"openspec-propose",
+						"openspec-sync-specs",
+						"openspec-update-change",
+					];
+					const openSpec = inventory.skills.filter(
+						skill => skill.source === "openspec" && coreOpenSpec.includes(skill.name),
+					);
+					expect(openSpec.map(skill => skill.name).sort()).toEqual(coreOpenSpec);
 					const ordinary = provider.requests.find(request =>
 						request.messages.some(
 							message =>
@@ -58,18 +68,18 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 					)!;
 					const ordinaryContext = ordinary.messages.map(message => contentText(message.content)).join("\n");
 					for (const skill of openSpec) {
-						if (location === "directory") expect(ordinaryContext).toContain(skill.name);
-						else expect(ordinaryContext).not.toContain(skill.name);
+						expect(ordinaryContext).toContain(skill.name);
 						expect(ordinaryContext).not.toContain(`name: ${skill.name}`);
 					}
-					const ordinarySkills = new Set([
-						"systematic-debugging",
-						"verification-before-completion",
-						"writing-skills",
-					]);
+					for (const skill of inventory.skills.filter(
+						skill => skill.source === "openspec" && !coreOpenSpec.includes(skill.name),
+					)) {
+						expect(ordinaryContext).not.toContain(skill.name);
+					}
+					const superpowers = inventory.skills.filter(skill => skill.source === "superpowers");
+					for (const skill of superpowers) expect(ordinaryContext).not.toContain(skill.name);
 					const manualOnly = inventory.skills.filter(
-						skill =>
-							skill.source === "jch" || (skill.source === "superpowers" && !ordinarySkills.has(skill.name)),
+						skill => skill.source === "jch" || skill.source === "superpowers",
 					);
 					const deniedPaths = manualOnly.map(skill => `skill://${skill.name}:raw`);
 					let previousReply = `${MARKER}_CHAT_READY`;
@@ -81,14 +91,14 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 							screen => screen.includes("New session started") && !screen.includes(previousReply),
 						);
 					}
-					async function readResources(prompt: string, selectedPath: string) {
+					async function readResources(prompt: string, selectedPath: string, denied = deniedPaths) {
 						const turnId = String(turn++);
 						const turnMarker = `OMP_SPEC_RESOURCE_TURN ${turnId}`;
 						const completedMarker = `OMP_SPEC_RESOURCE_COMPLETE_${turnId}`;
 						const requestStart = provider.requests.length;
 						await tui(
 							"type",
-							`${prompt}\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, deniedPaths })}\n${turnMarker}`,
+							`${prompt}\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, deniedPaths: denied })}\n${turnMarker}`,
 						);
 						// A multiline input burst can absorb the trailing Enter as text. Wait
 						// until its last line and caret are in the real composer before submitting.
@@ -126,7 +136,7 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						await newBranch();
 						const selectedPath = `skill://${skill.name}:raw`;
 						const completed = await readResources(
-							`${location === "directory" ? "请按需读取已发现的 OpenSpec 技能，不实施、不同步、不归档。" : `/skill:${skill.name}`} ${MARKER}`,
+							`请按需读取已发现的 OpenSpec 技能，不实施、不同步、不归档。 ${MARKER}`,
 							selectedPath,
 						);
 						const selected = parseFrontmatter(nativeReadResult(completed, selectedPath), {
@@ -141,15 +151,28 @@ for (const location of ["directory", "absent", "file", "parent-only"] as const) 
 						expect((await state()).run).toBeUndefined();
 						expect(await Bun.file(path.join(cwd, ".omp/dev/state.json")).exists()).toBe(false);
 					}
-					// A new native branch cannot borrow the previous explicit invocation.
-					if (location !== "directory") {
+					// Explicit user invocations grant only the selected hidden packaged skill.
+					for (const name of ["systematic-debugging", "brainstorming"]) {
 						await newBranch();
-						const selectedPath = `skill://${openSpec[0]!.name}:raw`;
-						const completed = await readResources("仅探测未授权读取。", selectedPath);
-						expect(nativeReadResult(completed, selectedPath)).toContain(
-							`Skill access denied: ${openSpec[0]!.name}`,
-						);
+						const selectedPath = `skill://${name}:raw`;
+						const remaining = deniedPaths.filter(target => target !== selectedPath);
+						const completed = await readResources(`/skill:${name} ${MARKER}`, selectedPath, remaining);
+						expect(
+							parseFrontmatter(nativeReadResult(completed, selectedPath), {
+								source: selectedPath,
+								repair: false,
+								level: "off",
+							}).frontmatter.name,
+						).toBe(name);
+						const denied = nativeReadResult(completed, remaining.join(";"));
+						for (const other of manualOnly.filter(skill => skill.name !== name))
+							expect(denied).toContain(`Skill access denied: ${other.name}`);
 					}
+					// A new native branch cannot borrow the previous explicit invocation.
+					await newBranch();
+					const hiddenPath = "skill://brainstorming:raw";
+					const hidden = await readResources("仅探测未授权读取。", hiddenPath);
+					expect(nativeReadResult(hidden, hiddenPath)).toContain("Skill access denied: brainstorming");
 					expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 				},
 			);

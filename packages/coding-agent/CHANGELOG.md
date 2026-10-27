@@ -19,6 +19,9 @@
 
 ### Changed
 
+- Guide `/dev` requirements exploration from project evidence using Grill-me's interview process instead of Brainstorming; users can stop the interview in natural language.
+
+- Hide all bundled Superpowers skills from automatic discovery in ordinary sessions, their subagents and the first three `/dev` stages and their descendants; retain explicit user invocation and allow `/dev` executors and all recursive subagents to discover and read them. Preserve stage injection, permissions and same-name custom skill precedence, and retain the disabling frontmatter on future upstream updates.
 - Default standalone `omp openspec` to the requirements-only `mini` schema: proposals and delta specs can cover multiple capabilities, without generating design or tasks documents or implementing or validating software. Users carry out implementation and verification themselves, then explicitly request sync or archive.
 - Expose five OpenSpec core requirements skills and their `/opsx-*` commands in every workspace; remove `openspec-apply-change` and `/opsx-apply` from discovery. Adapt the workflows for requirements maintenance while retaining native sync and requiring only complete, natively valid requirements for archive, without bypassing validation.
 - Preserve the bundled OpenSpec 1.15.0 native parsing, validation, synchronization, archive and other CLI behavior, including the original `spec-driven` schema. Existing changes and explicitly selected schemas are not forcibly converted; Dev continues to use its separate `omp-spec` schema and unchanged four stages.
@@ -55,7 +58,6 @@
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 
-- Keep all bundled Superpowers skills available for ordinary sessions, including independent planning and execution; preserve native `/dev` phase and exact-resource authorization without changing skill bodies.
 - Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
@@ -66,6 +68,7 @@
 
 ### Fixed
 
+- Keep the permanent compact thinking area from obscuring sent messages when idle or between turns.
 - Keep Bazel test caches scoped to real source inputs by distinguishing file contents, process handles, temporary-directory capability probes and generated wrapper outputs from dynamic source paths, while retaining conservative runtime-loading boundaries.
 - Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
 - Keep Dev command failures visible outside Dev, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.

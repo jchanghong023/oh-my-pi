@@ -18,6 +18,8 @@ import { ensureSpecDrivenResources, loadSpecDrivenSkill } from "../../src/spec-d
 import {
 	bindSpecSkillPolicy,
 	checkSkillReadAccess,
+	exposeSpecExecutionSkill,
+	grantSpecExecutionSkills,
 	clearSpecSkillAccess,
 	grantSpecSkillAccess,
 	SkillAccessDeniedError,
@@ -70,7 +72,7 @@ async function fixture(): Promise<Skill> {
 }
 
 describe("pinned skill discovery and access", () => {
-	it("catalogs and exposes all Superpowers while preserving other discovery boundaries", async () => {
+	it("catalogs Superpowers without exposing them to ordinary model discovery", async () => {
 		const ordinaryNames = [
 			"openspec-archive-change",
 			"openspec-explore",
@@ -81,9 +83,6 @@ describe("pinned skill discovery and access", () => {
 		const isHidden = (skill: CapabilitySkill) =>
 			skill.frontmatter?.hide === true || skill.frontmatter?.disableModelInvocation === true;
 		const resources = await ensureSpecDrivenResources();
-		ordinaryNames.push(
-			...resources.manifest.skills.filter(entry => entry.source === "superpowers").map(entry => entry.name),
-		);
 		ordinaryNames.sort();
 		const cwd = (await fixture()).baseDir;
 		await fs.mkdir(path.join(cwd, "openspec"));
@@ -175,7 +174,7 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("allows execution and planning resources in ordinary sessions independently of scoped autoload grants", async () => {
+	it("requires explicit invocation or an exact grant for ordinary Superpowers reads", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "executing-plans");
 		const planning = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const session: ToolSession = {
@@ -187,7 +186,7 @@ describe("pinned skill discovery and access", () => {
 		};
 		const context = { session, skills: [skill, planning] };
 		const url = parseInternalUrl(`skill://${skill.name}`);
-		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
+		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		const revoke = grantSpecSkillAccess(session, skill);
 		try {
 			expect((await buildSkillPromptMessage(skill, { args: "" }, "autoload", { scope: session })).details.path).toBe(
@@ -195,14 +194,16 @@ describe("pinned skill discovery and access", () => {
 			);
 			expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, context)).toBe(skill.filePath);
-			expect((await handler.resolve(url, { ...context, session: { ...session } })).sourcePath).toBe(skill.filePath);
-			expect((await handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).sourcePath).toBe(
-				planning.filePath,
+			await expect(handler.resolve(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
+			);
+			await expect(handler.resolve(parseInternalUrl(`skill://${planning.name}`), context)).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
 			);
 		} finally {
 			revoke();
 		}
-		expect(await handler.locate(url, context)).toBe(skill.filePath);
+		await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 	});
 
 	it("requires an exact resource grant despite branch provenance and rejects same-name resource substitution", async () => {
@@ -240,7 +241,7 @@ describe("pinned skill discovery and access", () => {
 		} finally {
 			end();
 		}
-		expect(() => checkSkillReadAccess(skill, { scope, getSessionBranch: () => [] })).not.toThrow();
+		expect(() => checkSkillReadAccess(skill, { scope, getSessionBranch: () => [] })).toThrow(SkillAccessDeniedError);
 	});
 
 	it("keeps same-name personal skills callable while allowing bundled brainstorming handoffs", async () => {
@@ -259,17 +260,15 @@ describe("pinned skill discovery and access", () => {
 		expect((await handler.resolve(url, context)).sourcePath).toBe(custom.filePath);
 		expect(await handler.locate(url, context)).toBe(custom.filePath);
 		const bundledContext = { skills: [bundled], getSessionBranch: () => branch };
-		expect((await handler.resolve(url, bundledContext)).sourcePath).toBe(bundled.filePath);
-		expect(await handler.locate(url, bundledContext)).toBe(bundled.filePath);
+		await expect(handler.resolve(url, bundledContext)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		await expect(handler.locate(url, bundledContext)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		const personalInvocation = await buildSkillPromptMessage(custom, { args: "" }, "user");
-		expect(
-			(
-				await handler.resolve(url, {
-					skills: [bundled],
-					getSessionBranch: () => [provenance(custom, personalInvocation.details)],
-				})
-			).sourcePath,
-		).toBe(bundled.filePath);
+		await expect(
+			handler.resolve(url, {
+				skills: [bundled],
+				getSessionBranch: () => [provenance(custom, personalInvocation.details)],
+			}),
+		).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		const explicit = await buildSkillPromptMessage(bundled, { args: "" }, "user", {
 			getSessionBranch: () => branch,
 		});
@@ -333,8 +332,8 @@ describe("pinned skill discovery and access", () => {
 				const context = { session, skills: [skill, other] };
 				const located = await handler.locate(url, context);
 				expect(located).toBe(path.join(skill.baseDir, relative));
-				expect(await handler.locate(url, { ...context, session: { ...session } })).toBe(
-					path.join(skill.baseDir, relative),
+				await expect(handler.locate(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
+					SkillAccessDeniedError,
 				);
 			}
 			await expect(
@@ -346,7 +345,7 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("invalidates prior grants on policy replacement while ordinary sessions retain access", async () => {
+	it("invalidates prior grants on policy replacement and after policy disposal", async () => {
 		const session: ToolSession = {
 			cwd: os.tmpdir(),
 			hasUI: false,
@@ -360,8 +359,8 @@ describe("pinned skill discovery and access", () => {
 		const url = parseInternalUrl(`skill://${allowed.name}`);
 		try {
 			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
-			expect((await handler.resolve(url, { session: { ...session }, skills: [allowed] })).sourcePath).toBe(
-				allowed.filePath,
+			await expect(handler.resolve(url, { session: { ...session }, skills: [allowed] })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
 			);
 			const endSolution = bindSpecSkillPolicy(session, { phase: "solution", allowedSkills: [] });
 			try {
@@ -380,11 +379,38 @@ describe("pinned skill discovery and access", () => {
 			} finally {
 				endSolution();
 			}
-			expect((await handler.resolve(url, { session, skills: [allowed] })).sourcePath).toBe(allowed.filePath);
+			await expect(handler.resolve(url, { session, skills: [allowed] })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
+			);
 		} finally {
 			revoke();
 			endRequirements();
 		}
+	});
+
+	it("limits execution visibility and reads to the granted exact bundled resources", async () => {
+		const bundled = await loadSpecDrivenSkill("superpowers", "requesting-code-review");
+		const exposed = exposeSpecExecutionSkill(bundled);
+		const substitute = { ...(await fixture()), name: bundled.name, source: bundled.source };
+		const scope: ToolSession = {
+			cwd: os.tmpdir(),
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+		const otherScope = {};
+		const revoke = grantSpecExecutionSkills(scope, [bundled]);
+		const url = parseInternalUrl(`skill://${bundled.name}`);
+		try {
+			expect(exposed.hide).toBe(false);
+			expect((await handler.resolve(url, { session: scope, skills: [exposed] })).sourcePath).toBe(bundled.filePath);
+			expect(() => checkSkillReadAccess(exposed, { scope: otherScope })).toThrow(SkillAccessDeniedError);
+			expect(() => checkSkillReadAccess(substitute, { scope })).toThrow(SkillAccessDeniedError);
+		} finally {
+			revoke();
+		}
+		expect(() => checkSkillReadAccess(exposed, { scope })).toThrow(SkillAccessDeniedError);
 	});
 
 	it("keeps personal collision precedence while retaining direct bundled resource loading", async () => {
@@ -408,6 +434,22 @@ describe("pinned skill discovery and access", () => {
 		const url = parseInternalUrl("skill://writing-plans");
 		expect((await handler.resolve(url, { skills })).sourcePath).toBe(overridePath);
 		expect(await handler.locate(url, { skills })).toBe(overridePath);
+		const session: ToolSession = {
+			cwd: override.baseDir,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		};
+		const revoke = grantSpecExecutionSkills(session, [original]);
+		try {
+			expect(
+				(await handler.resolve(url, { session, skills: [selected, exposeSpecExecutionSkill(original)] }))
+					.sourcePath,
+			).toBe(overridePath);
+		} finally {
+			revoke();
+		}
 		expect((await loadSpecDrivenSkill("superpowers", "writing-plans")).filePath).toBe(original.filePath);
 	});
 
@@ -427,15 +469,20 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("opens ordinary planning and its resources without current-branch invocation", async () => {
+	it("requires explicit invocation before reading planning resources", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "writing-plans");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const context = { skills: [skill], getSessionBranch: () => [] };
-		expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
-		expect(await handler.locate(url, context)).toBe(skill.filePath);
+		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
+		const invocation = await buildSkillPromptMessage(skill, { args: "example" }, "user");
+		expect(invocation.details.path).toBe(skill.filePath);
+		const authorized = { skills: [skill], getSessionBranch: () => [provenance(skill, invocation.details)] };
+		expect((await handler.resolve(url, authorized)).sourcePath).toBe(skill.filePath);
+		expect(await handler.locate(url, authorized)).toBe(skill.filePath);
 	});
 
-	it("uses scoped program grants for real resources while ordinary sessions remain readable", async () => {
+	it("uses scoped program grants for real resources without granting other sessions", async () => {
 		const skill = await loadSpecDrivenSkill("superpowers", "brainstorming");
 		const url = parseInternalUrl(`skill://${skill.name}`);
 		const override = { ...(await fixture()), name: skill.name, source: "custom:project" };
@@ -452,8 +499,8 @@ describe("pinned skill discovery and access", () => {
 			expect((await handler.resolve(url, { session, skills: [skill] })).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, { session, skills: [skill] })).toBe(skill.filePath);
 			expect((await handler.resolve(url, { session, skills: [override] })).sourcePath).toBe(skill.filePath);
-			expect((await handler.resolve(url, { session: { ...session }, skills: [skill] })).sourcePath).toBe(
-				skill.filePath,
+			await expect(handler.resolve(url, { session: { ...session }, skills: [skill] })).rejects.toBeInstanceOf(
+				SkillAccessDeniedError,
 			);
 			revoke();
 			await expect(handler.locate(url, { session, skills: [skill] })).rejects.toBeInstanceOf(SkillAccessDeniedError);
@@ -500,7 +547,7 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 
-	it("rejects visible bundled skills in the wrong spec stage before ordinary-access exemption", async () => {
+	it("rejects bundled skills in the wrong spec stage regardless of discovery visibility", async () => {
 		const skills = await Promise.all(
 			["verification-before-completion", "systematic-debugging", "writing-skills"].map(name =>
 				loadSpecDrivenSkill("superpowers", name),
@@ -524,7 +571,6 @@ describe("pinned skill discovery and access", () => {
 		const end = bindSpecSkillPolicy(session, { phase: "requirements", allowedSkills: ["jch-grill-me"] });
 		try {
 			for (const skill of skills) {
-				expect(skill.hide).not.toBe(true);
 				const url = parseInternalUrl(`skill://${skill.name}`);
 				const context = { session, skills, getSessionBranch: () => [] };
 				expect(() => checkSkillReadAccess(skill, { scope: session })).toThrow("not allowed during requirements");

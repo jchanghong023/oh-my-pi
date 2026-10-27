@@ -36,9 +36,8 @@ export async function collectSpecDrivenResources(root: string): Promise<{
 		const match = /^(openspec|superpowers|jch)\/skills\/([^/]+)\/SKILL\.md$/.exec(relative);
 		if (match) skills.push({ source: match[1] as SpecDrivenSkillEntry["source"], name: match[2]!, path: relative });
 	}
-	for (const directory of ["openspec", "superpowers", "jch", "omp-spec", "omp-runtime"])
-		await visit(directory, new Set());
-	const comparePath = (a: { path: string }, b: { path: string }) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
+	for (const directory of ["openspec", "superpowers", "jch", "omp-runtime"]) await visit(directory, new Set());
+	const comparePath = (a: { path: string }, b: { path: string }) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 	files.sort(comparePath);
 	skills.sort(comparePath);
 	return {

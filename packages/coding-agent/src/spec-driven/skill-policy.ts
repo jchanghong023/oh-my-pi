@@ -55,6 +55,30 @@ interface ScopeState {
 	policy?: SpecSkillPhasePolicy;
 	grants: Set<Readonly<Skill>>;
 }
+const executionVisible = Symbol("spec-execution-visible");
+type ExecutionVisibleSkill = Skill & { [executionVisible]?: true };
+const executionScopes = new WeakMap<object, Set<string>>();
+const executionKey = (skill: Pick<Skill, "name" | "filePath">): string =>
+	JSON.stringify([skill.name, path.resolve(skill.filePath)]);
+
+/** Make a pinned resource discoverable without removing its read-access requirement. */
+export function exposeSpecExecutionSkill(skill: Skill): Skill {
+	return { ...skill, hide: false, [executionVisible]: true } as ExecutionVisibleSkill;
+}
+
+/** Bind exact resources to one execution session; never changes name resolution precedence. */
+export function grantSpecExecutionSkills(scope: object, skills: readonly Skill[]): () => void {
+	const resources = new Set(skills.map(executionKey));
+	executionScopes.set(scope, resources);
+	return () => {
+		if (executionScopes.get(scope) === resources) executionScopes.delete(scope);
+	};
+}
+
+function hasExecutionAccess(skill: Pick<Skill, "name" | "filePath">, context?: SkillAccessContext): boolean {
+	return !!context?.scope && (executionScopes.get(context.scope)?.has(executionKey(skill)) ?? false);
+}
+
 const scopes = new WeakMap<object, ScopeState>();
 
 function stateFor(scope: object): ScopeState {
@@ -110,7 +134,7 @@ export function skillAccessContext(context?: ResolveContext): SkillAccessContext
 
 export function isExplicitOnlySkill(skill: Pick<Skill, "source" | "_source" | "hide">): boolean {
 	return (
-		skill.hide === true &&
+		(skill.hide === true || (skill as ExecutionVisibleSkill)[executionVisible] === true) &&
 		(skill._source?.provider === SPEC_DRIVEN_SKILL_PROVIDER ||
 			skill.source === "bundled-openspec" ||
 			skill.source === "bundled-superpowers" ||
@@ -147,7 +171,7 @@ export function checkSkillReadAccess(skill: Skill, context?: SkillAccessContext)
 	checkSkillInvocation(skill, context);
 	if (!isExplicitOnlySkill(skill)) return;
 	const state = context?.scope ? scopes.get(context.scope) : undefined;
-	if (hasExactGrant(skill, state)) return;
+	if (hasExactGrant(skill, state) || hasExecutionAccess(skill, context)) return;
 	if (hasBranchInvocation(skill, context)) return;
 	throw new SkillAccessDeniedError(skill.name, "explicit current-session invocation required");
 }

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { DocsSearchEngine } from "../../src/docs/engine";
+import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
+import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
 	contentText,
 	IMPLEMENTATION,
@@ -152,16 +154,20 @@ test.skipIf(!tuiTest)(
 );
 
 const stageSkills: Record<string, string[]> = {
-	requirements: ["brainstorming", "jch-grill-me"],
+	requirements: ["jch-grill-me"],
 	solution: [],
 	planner: ["writing-plans"],
-	executor: ["subagent-driven-development"],
+	executor: ["subagent-driven-development", "using-superpowers"],
 };
-const skills = Object.values(stageSkills).flat();
 
 test.skipIf(!tuiTest)(
 	"four native stages consume indexed Wiki evidence, enforce stage skill grants and preserve existing worktrees",
 	async () => {
+		const { manifest } = await collectSpecDrivenResources(
+			path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
+		);
+		const superpowers = manifest.skills.filter(skill => skill.source === "superpowers").map(skill => skill.name);
+		const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
 		const wikiToken = "OMP_CAPABILITY_WIKI_EVIDENCE";
 		const wikiFact = `${wikiToken}: preserve internal whitespace in Ada  Lovelace; trim outer whitespace only.`;
 		const sentinel = "export const untouched = 'business bytes remain unchanged';\n";
@@ -187,6 +193,22 @@ test.skipIf(!tuiTest)(
 					}
 				},
 				reply(request) {
+					const child = request.messages.some(
+						message =>
+							message.role === "user" &&
+							contentText(message.content).includes(
+								"Complete assignment thoroughly:\n\nOMP_SPEC_IMPLEMENT_CHILD",
+							),
+					);
+					if (child && !rolePayload(request)) {
+						const executed = calls(request);
+						for (const name of superpowers) {
+							const target = `skill://${name}:raw`;
+							if (!executed.some(call => call.name === "read" && call.args.path === target))
+								return invoke(request, "read", { i: "Probing delegated skill access", path: target });
+						}
+						return respond(request);
+					}
 					const payload = rolePayload(request);
 					if (!payload) return respond(request);
 					const executed = calls(request);
@@ -245,6 +267,24 @@ test.skipIf(!tuiTest)(
 				await stage("executing");
 				await eventually(state, value => value.run?.awaitingAcceptance === true);
 				await idle();
+				const executorRequest = provider.requests.find(
+					request => rolePayload(request)?.specDrivenRole === "executor",
+				)!;
+				const usingSuperpowers = await loadSpecDrivenSkill("superpowers", "using-superpowers");
+				const skillContent = await Bun.file(usingSuperpowers.filePath).text();
+				expect(
+					executorRequest.messages.some(
+						message => message.role === "system" && contentText(message.content).includes(skillContent),
+					),
+				).toBe(true);
+				const executorSystem = executorRequest.messages
+					.filter(message => message.role === "system")
+					.map(message => contentText(message.content))
+					.join("\n");
+				const subagentSkill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+				const subagentContent = await Bun.file(subagentSkill.filePath).text();
+				expect(executorSystem.indexOf(skillContent)).toBeLessThan(executorSystem.indexOf(subagentContent));
+				for (const name of superpowers) expect(executorSystem).toContain(name);
 				for (const [role, allowed] of Object.entries(stageSkills)) {
 					const completed = provider.requests
 						.filter(request => rolePayload(request)?.specDrivenRole === role)
@@ -252,13 +292,35 @@ test.skipIf(!tuiTest)(
 					for (const name of skills) {
 						const target = `skill://${name}:raw`;
 						const actual = result(completed, "read", target);
-						if (allowed.includes(name)) {
+						if (allowed.includes(name) || (role === "executor" && superpowers.includes(name))) {
 							expect(actual).not.toContain("Skill access denied:");
 							expect(
 								parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name,
 							).toBe(name);
 						} else expect(actual).toContain(`Skill access denied: ${name}`);
 					}
+				}
+				const childRequest = provider.requests.findLast(request =>
+					request.messages.some(
+						message =>
+							message.role === "user" &&
+							contentText(message.content).includes(
+								"Complete assignment thoroughly:\n\nOMP_SPEC_IMPLEMENT_CHILD",
+							),
+					),
+				)!;
+				const childSystem = childRequest.messages
+					.filter(message => message.role === "system")
+					.map(message => contentText(message.content))
+					.join("\n");
+				for (const name of superpowers) expect(childSystem).toContain(name);
+				for (const name of superpowers) {
+					const target = `skill://${name}:raw`;
+					const actual = result(childRequest, "read", target);
+					expect(actual).not.toContain("Skill access denied:");
+					expect(parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name).toBe(
+						name,
+					);
 				}
 				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
 				expect(await Bun.file(path.join(cwd, "src/untouched.ts")).text()).toBe(sentinel);
