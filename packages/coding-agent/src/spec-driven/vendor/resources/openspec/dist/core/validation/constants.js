@@ -1,0 +1,55 @@
+/**
+ * Validation threshold constants
+ */
+// Minimum character lengths
+export const MIN_WHY_SECTION_LENGTH = 50;
+export const MIN_PURPOSE_LENGTH = 50;
+// Maximum character/item limits
+export const MAX_WHY_SECTION_LENGTH = 1000;
+export const MAX_REQUIREMENT_TEXT_LENGTH = 500;
+export const MAX_DELTAS_PER_CHANGE = 10;
+// The Purpose `openspec archive` writes into a main spec it creates when the
+// delta introduced the capability without a usable `## Purpose`. Named here, and
+// composed from these two halves at the write site, so validation recognises the
+// placeholder through the same definition that produces it: a second, hand-copied
+// spelling would stop matching the day the wording changed, and a check that
+// matches nothing looks exactly like a check that found nothing.
+export const PURPOSE_PLACEHOLDER_PREFIX = 'TBD - created by archiving change ';
+export const PURPOSE_PLACEHOLDER_SUFFIX = '. Update Purpose after archive.';
+// Validation messages
+export const VALIDATION_MESSAGES = {
+    // Required content
+    SCENARIO_EMPTY: 'Scenario text cannot be empty',
+    REQUIREMENT_EMPTY: 'Requirement text cannot be empty',
+    REQUIREMENT_NO_SHALL: 'Requirement must contain SHALL or MUST keyword',
+    REQUIREMENT_NO_SCENARIOS: 'Requirement must have at least one scenario',
+    SPEC_NAME_EMPTY: 'Spec name cannot be empty',
+    SPEC_PURPOSE_EMPTY: 'Purpose section cannot be empty',
+    SPEC_NO_REQUIREMENTS: 'Spec must have at least one requirement',
+    CHANGE_NAME_EMPTY: 'Change name cannot be empty',
+    CHANGE_WHY_TOO_SHORT: `Why section must be at least ${MIN_WHY_SECTION_LENGTH} characters`,
+    CHANGE_WHY_TOO_LONG: `Why section should not exceed ${MAX_WHY_SECTION_LENGTH} characters`,
+    CHANGE_WHAT_EMPTY: 'What Changes section cannot be empty',
+    CHANGE_NO_DELTAS: 'Change must have at least one delta',
+    CHANGE_SKIP_SPECS_CONFLICT: 'skip_specs is set in .openspec.yaml but spec files exist under specs/. Remove skip_specs or delete the delta spec files',
+    CHANGE_SKIP_SPECS_ACCEPTED: 'skip_specs is set in .openspec.yaml: change declares no spec-level behavior changes, zero deltas accepted',
+    CHANGE_SKIP_SPECS_INVALID_METADATA: 'skip_specs is set but .openspec.yaml is not valid change metadata, so the marker is not honored. Fix the metadata',
+    CHANGE_TOO_MANY_DELTAS: `Consider splitting changes with more than ${MAX_DELTAS_PER_CHANGE} deltas`,
+    DELTA_SPEC_EMPTY: 'Spec name cannot be empty',
+    DELTA_DESCRIPTION_EMPTY: 'Delta description cannot be empty',
+    // Warnings
+    PURPOSE_TOO_BRIEF: `Purpose section is too brief (less than ${MIN_PURPOSE_LENGTH} characters)`,
+    PURPOSE_IS_PLACEHOLDER: 'Purpose section is still a placeholder rather than a Purpose anyone wrote (the sentence `openspec archive` ' +
+        'writes for a new capability, or a `TBD`/`TODO` marker left in its place). Replace it with what this ' +
+        'capability is for, editing the main spec directly: a `## Purpose` in a delta is read only when the ' +
+        'capability is created, so it cannot replace this one.',
+    REQUIREMENT_TOO_LONG: `Requirement text is very long (>${MAX_REQUIREMENT_TEXT_LENGTH} characters). Move examples and edge cases into scenarios, or split it into separate requirements that each state one behavior.`,
+    DELTA_DESCRIPTION_TOO_BRIEF: 'Delta description is too brief',
+    DELTA_MISSING_REQUIREMENTS: 'Delta should include requirements',
+    // Guidance snippets (appended to primary messages for remediation)
+    GUIDE_NO_DELTAS: 'No deltas found. Ensure your change has a specs/ directory with capability folders (e.g. specs/http-server/spec.md) containing .md files that use delta headers (## ADDED/MODIFIED/REMOVED/RENAMED Requirements) and that each requirement includes at least one "#### Scenario:" block. If this change intentionally modifies no specs (pure refactor, tooling, docs), set "skip_specs: true" in the change\'s .openspec.yaml instead. Tip: run "openspec change show <change-id> --json --deltas-only" to inspect parsed deltas.',
+    GUIDE_MISSING_SPEC_SECTIONS: 'Missing required sections. Expected headers: "## Purpose" and "## Requirements". Example:\n## Purpose\n[brief purpose]\n\n## Requirements\n### Requirement: Clear requirement statement\nUsers SHALL ...\n\n#### Scenario: Descriptive name\n- **WHEN** ...\n- **THEN** ...',
+    GUIDE_MISSING_CHANGE_SECTIONS: 'Missing required sections. Expected headers: "## Why" and "## What Changes". Ensure deltas are documented in specs/ using delta headers.',
+    GUIDE_SCENARIO_FORMAT: 'Scenarios must use level-4 headers. Convert bullet lists into:\n#### Scenario: Short name\n- **WHEN** ...\n- **THEN** ...\n- **AND** ...',
+};
+//# sourceMappingURL=constants.js.map

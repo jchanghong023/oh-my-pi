@@ -1,0 +1,102 @@
+{
+  "name": "@inquirer/prompts",
+  "version": "8.7.5",
+  "description": "Inquirer prompts, combined in a single package",
+  "keywords": [
+    "answer",
+    "answers",
+    "ask",
+    "base",
+    "cli",
+    "command",
+    "command-line",
+    "confirm",
+    "enquirer",
+    "generate",
+    "generator",
+    "hyper",
+    "input",
+    "inquire",
+    "inquirer",
+    "interface",
+    "iterm",
+    "javascript",
+    "menu",
+    "node",
+    "nodejs",
+    "prompt",
+    "promptly",
+    "prompts",
+    "question",
+    "readline",
+    "scaffold",
+    "scaffolder",
+    "scaffolding",
+    "stdin",
+    "stdout",
+    "terminal",
+    "tty",
+    "types",
+    "typescript",
+    "ui",
+    "yeoman",
+    "yo",
+    "zsh"
+  ],
+  "homepage": "https://github.com/SBoudrias/Inquirer.js/blob/HEAD/packages/prompts/README.md",
+  "license": "MIT",
+  "author": "Simon Boudrias <admin@simonboudrias.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SBoudrias/Inquirer.js.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "tsc": "tsc"
+  },
+  "dependencies": {
+    "@inquirer/checkbox": "^5.2.8",
+    "@inquirer/confirm": "^6.3.5",
+    "@inquirer/editor": "^5.3.6",
+    "@inquirer/expand": "^5.1.8",
+    "@inquirer/input": "^5.1.9",
+    "@inquirer/number": "^4.2.6",
+    "@inquirer/password": "^5.2.5",
+    "@inquirer/rawlist": "^5.3.8",
+    "@inquirer/search": "^4.3.6",
+    "@inquirer/select": "^5.2.8"
+  },
+  "devDependencies": {
+    "@inquirer/type": "^4.2.1",
+    "@repo/tsconfig": "0.0.0",
+    "typescript": "^7.0.2"
+  },
+  "peerDependencies": {
+    "@types/node": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "@types/node": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=23.5.0 || ^22.13.0 || ^20.17.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "gitHead": "672b77f0486388d7f5c35487d89a5ff63f4c54dd"
+}

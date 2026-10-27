@@ -1,0 +1,182 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
+// Constants
+export const GLOBAL_CONFIG_DIR_NAME = 'openspec';
+export const GLOBAL_CONFIG_FILE_NAME = 'config.json';
+export const GLOBAL_DATA_DIR_NAME = 'openspec';
+const DEFAULT_CONFIG = {
+    featureFlags: {},
+    profile: 'core',
+    delivery: 'both',
+};
+/**
+ * Gets the global configuration directory path following XDG Base Directory Specification.
+ *
+ * - All platforms: $XDG_CONFIG_HOME/openspec/ if XDG_CONFIG_HOME is set
+ * - Unix/macOS fallback: ~/.config/openspec/
+ * - Windows fallback: %APPDATA%/openspec/
+ */
+export function getGlobalConfigDir() {
+    // XDG_CONFIG_HOME takes precedence on all platforms when explicitly set
+    const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+    if (xdgConfigHome) {
+        return path.join(xdgConfigHome, GLOBAL_CONFIG_DIR_NAME);
+    }
+    const platform = os.platform();
+    if (platform === 'win32') {
+        // Windows: use %APPDATA%
+        const appData = process.env.APPDATA;
+        if (appData) {
+            return path.join(appData, GLOBAL_CONFIG_DIR_NAME);
+        }
+        // Fallback for Windows if APPDATA is not set
+        return path.join(os.homedir(), 'AppData', 'Roaming', GLOBAL_CONFIG_DIR_NAME);
+    }
+    // Unix/macOS fallback: ~/.config
+    return path.join(os.homedir(), '.config', GLOBAL_CONFIG_DIR_NAME);
+}
+function joinGlobalDataPath(platform, ...segments) {
+    return platform === 'win32'
+        ? path.win32.join(...segments)
+        : path.posix.join(...segments);
+}
+export function getGlobalDataDir(options = {}) {
+    const env = options.env ?? process.env;
+    const platform = options.platform ?? os.platform();
+    // XDG_DATA_HOME takes precedence on all platforms when explicitly set
+    const xdgDataHome = env.XDG_DATA_HOME;
+    if (xdgDataHome) {
+        return joinGlobalDataPath(platform, xdgDataHome, GLOBAL_DATA_DIR_NAME);
+    }
+    const homedir = options.homedir ?? os.homedir();
+    if (platform === 'win32') {
+        // Windows: use %LOCALAPPDATA%
+        const localAppData = env.LOCALAPPDATA;
+        if (localAppData) {
+            return joinGlobalDataPath(platform, localAppData, GLOBAL_DATA_DIR_NAME);
+        }
+        // Fallback for Windows if LOCALAPPDATA is not set
+        return joinGlobalDataPath(platform, homedir, 'AppData', 'Local', GLOBAL_DATA_DIR_NAME);
+    }
+    // Unix/macOS fallback: ~/.local/share
+    return joinGlobalDataPath(platform, homedir, '.local', 'share', GLOBAL_DATA_DIR_NAME);
+}
+/**
+ * Gets the path to the global config file.
+ */
+export function getGlobalConfigPath() {
+    return path.join(getGlobalConfigDir(), GLOBAL_CONFIG_FILE_NAME);
+}
+// Config paths already warned about. One command reads the config several
+// times (telemetry, the update check, the command itself); warn once.
+const warnedInvalidJsonPaths = new Set();
+/**
+ * Loads the global configuration from disk.
+ * Returns default configuration if file doesn't exist or is invalid.
+ * Merges loaded config with defaults to ensure new fields are available.
+ */
+export function getGlobalConfig() {
+    const configPath = getGlobalConfigPath();
+    try {
+        if (!fs.existsSync(configPath)) {
+            return { ...DEFAULT_CONFIG };
+        }
+        const content = fs.readFileSync(configPath, 'utf-8');
+        const parsed = JSON.parse(content);
+        // A root that is not a plain object carries no settings, and spreading it
+        // would leak its shape into the result: a string contributes numeric
+        // character keys. Answer with plain defaults, as for a file that did not
+        // parse at all. Same predicate the writers refuse to save over.
+        if (!isConfigRootObject(parsed)) {
+            return { ...DEFAULT_CONFIG };
+        }
+        // Merge with defaults (loaded values take precedence)
+        const merged = {
+            ...DEFAULT_CONFIG,
+            ...parsed,
+            // Deep merge featureFlags
+            featureFlags: {
+                ...DEFAULT_CONFIG.featureFlags,
+                ...(parsed.featureFlags || {})
+            }
+        };
+        // Schema evolution: apply defaults for new fields if not present in loaded config
+        if (parsed.profile === undefined) {
+            merged.profile = DEFAULT_CONFIG.profile;
+        }
+        if (parsed.delivery === undefined) {
+            merged.delivery = DEFAULT_CONFIG.delivery;
+        }
+        return merged;
+    }
+    catch (error) {
+        // Log warning for parse errors, but not for missing files
+        if (error instanceof SyntaxError && !warnedInvalidJsonPaths.has(configPath)) {
+            warnedInvalidJsonPaths.add(configPath);
+            console.error(`Warning: Invalid JSON in ${configPath}, using defaults`);
+        }
+        return { ...DEFAULT_CONFIG };
+    }
+}
+/**
+ * Whether a parsed JSON root can serve as a global config object.
+ *
+ * Valid JSON that is not a plain object (`null`, an array, a string, a number,
+ * a boolean) still reads as defaults, so it is just as unsafe to save over as
+ * a file that did not parse at all. Every reader and writer of the global
+ * config shares this one predicate so they cannot drift apart.
+ */
+export function isConfigRootObject(parsed) {
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+}
+/**
+ * The one-line, actionable refusal every global-config writer reports when it
+ * declines to overwrite a file it could not read.
+ */
+export function unreadableGlobalConfigMessage(configPath) {
+    return (`Refusing to overwrite ${configPath}: it could not be parsed, so saving would replace every setting in it. ` +
+        'Fix it with "openspec config edit", or reset it with "openspec config reset --all".');
+}
+/**
+ * Whether the global config file exists but cannot be read or parsed.
+ *
+ * getGlobalConfig() answers with defaults for such a file so that reads keep
+ * working, but those defaults are not the user's settings: saving them back
+ * would erase everything the file holds, and the file may contain an opt-out
+ * such as `telemetry.enabled: false` that the defaults do not.
+ */
+export function isGlobalConfigUnreadable() {
+    const configPath = getGlobalConfigPath();
+    if (!fs.existsSync(configPath)) {
+        return false;
+    }
+    try {
+        return !isConfigRootObject(JSON.parse(fs.readFileSync(configPath, 'utf-8')));
+    }
+    catch {
+        return true;
+    }
+}
+/**
+ * Saves the global configuration to disk.
+ * Creates the config directory if it doesn't exist. Refuses to overwrite an
+ * existing file it cannot parse unless `replaceUnreadable` is set.
+ */
+export function saveGlobalConfig(config, options = {}) {
+    const configDir = getGlobalConfigDir();
+    const configPath = getGlobalConfigPath();
+    if (!options.replaceUnreadable && isGlobalConfigUnreadable()) {
+        throw new Error(unreadableGlobalConfigMessage(configPath));
+    }
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+    }
+    fs.writeFileSync(configPath, serializeGlobalConfig(config), 'utf-8');
+}
+/** The bytes `saveGlobalConfig` writes, for a caller that only plans the write. */
+export function serializeGlobalConfig(config) {
+    return JSON.stringify(config, null, 2) + '\n';
+}
+//# sourceMappingURL=global-config.js.map

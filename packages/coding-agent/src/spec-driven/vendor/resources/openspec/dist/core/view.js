@@ -1,0 +1,197 @@
+import * as fs from 'fs';
+import * as path from 'path';
+import chalk from 'chalk';
+import { getTaskProgressForChange } from '../utils/task-progress.js';
+import { MarkdownParser } from './parsers/markdown-parser.js';
+import { discoverSpecFiles } from '../utils/spec-discovery.js';
+import { loadChangeContext, formatChangeStatus } from './artifact-graph/index.js';
+export class ViewCommand {
+    async execute(targetPath = '.') {
+        const openspecDir = path.join(targetPath, 'openspec');
+        if (!fs.existsSync(openspecDir)) {
+            console.error(chalk.red('No openspec directory found'));
+            process.exit(1);
+        }
+        console.log(chalk.bold('\nOpenSpec Dashboard\n'));
+        console.log('═'.repeat(60));
+        // Get changes and specs data
+        const changesData = await this.getChangesData(openspecDir);
+        const specsData = await this.getSpecsData(openspecDir);
+        // Display summary metrics
+        this.displaySummary(changesData, specsData);
+        // Display draft changes
+        if (changesData.draft.length > 0) {
+            console.log(chalk.bold.gray('\nDraft Changes'));
+            console.log('─'.repeat(60));
+            changesData.draft.forEach((change) => {
+                console.log(`  ${chalk.gray('○')} ${change.name}`);
+            });
+        }
+        // Display active changes
+        if (changesData.active.length > 0) {
+            console.log(chalk.bold.cyan('\nActive Changes'));
+            console.log('─'.repeat(60));
+            const maxNameLength = Math.min(48, Math.max(30, ...changesData.active.map((change) => change.name.length)));
+            changesData.active.forEach((change) => {
+                const progressBar = this.createProgressBar(change.progress.completed, change.progress.total);
+                const percentage = change.progress.total > 0
+                    ? Math.round((change.progress.completed / change.progress.total) * 100)
+                    : 0;
+                console.log(`  ${chalk.yellow('◉')} ${chalk.bold(change.name.padEnd(maxNameLength))} ${progressBar} ${chalk.dim(`${percentage}%`)}`);
+                if (change.workflowStatus) {
+                    const { schemaName, artifacts } = change.workflowStatus;
+                    console.log(`    ${chalk.dim(`└─ [${this.sanitizeWorkflowText(schemaName)}]`)} ${this.formatWorkflowArtifacts(artifacts)}`);
+                }
+            });
+        }
+        // Display completed changes
+        if (changesData.completed.length > 0) {
+            console.log(chalk.bold.green('\nCompleted Changes'));
+            console.log('─'.repeat(60));
+            changesData.completed.forEach((change) => {
+                console.log(`  ${chalk.green('✓')} ${change.name}`);
+            });
+        }
+        // Display specifications
+        if (specsData.length > 0) {
+            console.log(chalk.bold.blue('\nSpecifications'));
+            console.log('─'.repeat(60));
+            // Sort specs by requirement count (descending)
+            specsData.sort((a, b) => b.requirementCount - a.requirementCount);
+            specsData.forEach(spec => {
+                const reqLabel = spec.requirementCount === 1 ? 'requirement' : 'requirements';
+                console.log(`  ${chalk.blue('▪')} ${chalk.bold(spec.name.padEnd(30))} ${chalk.dim(`${spec.requirementCount} ${reqLabel}`)}`);
+            });
+        }
+        console.log('\n' + '═'.repeat(60));
+        console.log(chalk.dim(`\nUse ${chalk.white('openspec list --changes')} or ${chalk.white('openspec list --specs')} for detailed views`));
+    }
+    async getChangesData(openspecDir) {
+        const changesDir = path.join(openspecDir, 'changes');
+        const projectRoot = path.dirname(openspecDir);
+        if (!fs.existsSync(changesDir)) {
+            return { draft: [], active: [], completed: [] };
+        }
+        const draft = [];
+        const active = [];
+        const completed = [];
+        const entries = fs.readdirSync(changesDir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.isDirectory() && entry.name !== 'archive') {
+                const progress = await getTaskProgressForChange(changesDir, entry.name, path.dirname(openspecDir));
+                if (progress.total === 0) {
+                    // No tasks defined yet - still in planning/draft phase
+                    draft.push({ name: entry.name });
+                }
+                else if (progress.completed === progress.total) {
+                    // All tasks complete
+                    completed.push({ name: entry.name });
+                }
+                else {
+                    // Has tasks but not all complete
+                    let workflowStatus;
+                    try {
+                        workflowStatus = formatChangeStatus(loadChangeContext(projectRoot, entry.name));
+                    }
+                    catch (error) {
+                        // Preserve task progress even when this change's workflow cannot be loaded.
+                        console.warn(chalk.yellow(this.sanitizeWorkflowText(`Could not load workflow status for "${entry.name}": ${error instanceof Error ? error.message : String(error)}`)));
+                    }
+                    active.push({ name: entry.name, progress, workflowStatus });
+                }
+            }
+        }
+        // Sort all categories by name for deterministic ordering
+        draft.sort((a, b) => a.name.localeCompare(b.name));
+        // Sort active changes by completion percentage (ascending) and then by name
+        active.sort((a, b) => {
+            const percentageA = a.progress.total > 0 ? a.progress.completed / a.progress.total : 0;
+            const percentageB = b.progress.total > 0 ? b.progress.completed / b.progress.total : 0;
+            if (percentageA < percentageB)
+                return -1;
+            if (percentageA > percentageB)
+                return 1;
+            return a.name.localeCompare(b.name);
+        });
+        completed.sort((a, b) => a.name.localeCompare(b.name));
+        return { draft, active, completed };
+    }
+    async getSpecsData(openspecDir) {
+        const specsDir = path.join(openspecDir, 'specs');
+        if (!fs.existsSync(specsDir)) {
+            return [];
+        }
+        const specs = [];
+        for (const { id, specFile } of await discoverSpecFiles(specsDir)) {
+            try {
+                const content = fs.readFileSync(specFile, 'utf-8');
+                const parser = new MarkdownParser(content);
+                const spec = parser.parseSpec(id);
+                const requirementCount = spec.requirements.length;
+                specs.push({ name: id, requirementCount });
+            }
+            catch (error) {
+                // If spec cannot be parsed, include with 0 count
+                specs.push({ name: id, requirementCount: 0 });
+            }
+        }
+        return specs;
+    }
+    displaySummary(changesData, specsData) {
+        const totalChanges = changesData.draft.length + changesData.active.length + changesData.completed.length;
+        const totalSpecs = specsData.length;
+        const totalRequirements = specsData.reduce((sum, spec) => sum + spec.requirementCount, 0);
+        // Calculate total task progress
+        let totalTasks = 0;
+        let completedTasks = 0;
+        changesData.active.forEach((change) => {
+            totalTasks += change.progress.total;
+            completedTasks += change.progress.completed;
+        });
+        changesData.completed.forEach(() => {
+            // Completed changes count as 100% done (we don't know exact task count)
+            // This is a simplification
+        });
+        console.log(chalk.bold('Summary:'));
+        console.log(`  ${chalk.cyan('●')} Specifications: ${chalk.bold(totalSpecs)} specs, ${chalk.bold(totalRequirements)} requirements`);
+        if (changesData.draft.length > 0) {
+            console.log(`  ${chalk.gray('●')} Draft Changes: ${chalk.bold(changesData.draft.length)}`);
+        }
+        console.log(`  ${chalk.yellow('●')} Active Changes: ${chalk.bold(changesData.active.length)} in progress`);
+        console.log(`  ${chalk.green('●')} Completed Changes: ${chalk.bold(changesData.completed.length)}`);
+        if (totalTasks > 0) {
+            const overallProgress = Math.round((completedTasks / totalTasks) * 100);
+            console.log(`  ${chalk.magenta('●')} Task Progress: ${chalk.bold(`${completedTasks}/${totalTasks}`)} (${overallProgress}% complete)`);
+        }
+    }
+    sanitizeWorkflowText(value) {
+        // Metadata may contain terminal controls; mask them before adding our own colors.
+        return value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '?');
+    }
+    formatWorkflowArtifacts(artifacts) {
+        return artifacts.map((artifact) => {
+            const id = this.sanitizeWorkflowText(artifact.id);
+            switch (artifact.status) {
+                case 'done':
+                    return `${id}${chalk.green('✓')}`;
+                case 'ready':
+                    return `${id}${chalk.cyan('→')}`;
+                case 'skipped':
+                    return chalk.dim(`${id} (skipped)`);
+                case 'blocked':
+                    return chalk.dim(id);
+            }
+        }).join(' ');
+    }
+    createProgressBar(completed, total, width = 20) {
+        if (total === 0)
+            return chalk.dim('─'.repeat(width));
+        const percentage = completed / total;
+        const filled = Math.round(percentage * width);
+        const empty = width - filled;
+        const filledBar = chalk.green('█'.repeat(filled));
+        const emptyBar = chalk.dim('░'.repeat(empty));
+        return `[${filledBar}${emptyBar}]`;
+    }
+}
+//# sourceMappingURL=view.js.map

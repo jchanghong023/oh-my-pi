@@ -106,3 +106,6 @@ packages/coding-agent/bench/boot-baseline.json
 /.bazelrc.user
 
 .parity/
+
+# Vendored, pinned spec-driven source and offline runtime assets.
+!/packages/coding-agent/src/spec-driven/vendor/resources/**

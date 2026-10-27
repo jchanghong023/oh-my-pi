@@ -1,0 +1,308 @@
+import { z } from 'zod';
+/**
+ * Zod schema for global OpenSpec configuration.
+ * Uses passthrough() to preserve unknown fields for forward compatibility.
+ */
+export const GlobalConfigSchema = z
+    .object({
+    featureFlags: z
+        .record(z.string(), z.boolean())
+        .optional()
+        .default({}),
+    profile: z
+        .enum(['core', 'custom'])
+        .optional()
+        .default('core'),
+    delivery: z
+        .enum(['both', 'skills', 'commands'])
+        .optional()
+        .default('both'),
+    workflows: z
+        .array(z.string())
+        .optional(),
+    defaultStore: z
+        .string()
+        .optional()
+        .describe('Store id used as fallback root when no explicit --store, local root, or project-level store: pointer resolves'),
+    // passthrough keeps runtime-managed fields (anonymousId, noticeSeen) valid
+    // under CLI validate when users only set telemetry.enabled.
+    telemetry: z
+        .object({
+        enabled: z.boolean().optional(),
+    })
+        .passthrough()
+        .optional(),
+    // Runtime-managed (like telemetry.noticeSeen); not user-settable via CLI set.
+    completionTipSeen: z.boolean().optional(),
+    standaloneTipSeen: z.boolean().optional(),
+})
+    .passthrough();
+/**
+ * Default configuration values.
+ */
+export const DEFAULT_CONFIG = {
+    featureFlags: {},
+    profile: 'core',
+    delivery: 'both',
+};
+const KNOWN_TOP_LEVEL_KEYS = new Set([
+    ...Object.keys(DEFAULT_CONFIG),
+    'workflows',
+    'defaultStore',
+    'telemetry',
+]);
+/** Nested keys users may set under `telemetry` via the CLI. */
+const TELEMETRY_SETTABLE_KEYS = new Set(['enabled']);
+/**
+ * Key segments that would reach the prototype chain instead of the config object.
+ * Never valid as configuration keys, so rejecting them costs nothing.
+ */
+const UNSAFE_KEY_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+function hasUnsafeSegment(keys) {
+    return keys.some((key) => UNSAFE_KEY_SEGMENTS.has(key));
+}
+/**
+ * True when a dot-notation key path contains a prototype-reaching segment.
+ * Callers that bypass key validation (e.g. --allow-unknown) still must not bypass this.
+ */
+export function hasUnsafeKeySegment(path) {
+    return hasUnsafeSegment(path.split('.'));
+}
+/**
+ * Validate a config key path for CLI set operations.
+ * Unknown top-level keys are rejected unless explicitly allowed by the caller.
+ */
+export function validateConfigKeyPath(path) {
+    const rawKeys = path.split('.');
+    if (rawKeys.length === 0 || rawKeys.some((key) => key.trim() === '')) {
+        return { valid: false, reason: 'Key path must not be empty' };
+    }
+    const unsafeKey = rawKeys.find((key) => UNSAFE_KEY_SEGMENTS.has(key));
+    if (unsafeKey) {
+        return { valid: false, reason: `Key segment "${unsafeKey}" is not allowed` };
+    }
+    const rootKey = rawKeys[0];
+    if (!KNOWN_TOP_LEVEL_KEYS.has(rootKey)) {
+        return { valid: false, reason: `Unknown top-level key "${rootKey}"` };
+    }
+    if (rootKey === 'featureFlags') {
+        if (rawKeys.length > 2) {
+            return { valid: false, reason: 'featureFlags values are booleans and do not support nested keys' };
+        }
+        return { valid: true };
+    }
+    if (rootKey === 'telemetry') {
+        if (rawKeys.length === 1) {
+            return { valid: false, reason: 'Set nested keys under telemetry (e.g. telemetry.enabled)' };
+        }
+        if (rawKeys.length !== 2 || !TELEMETRY_SETTABLE_KEYS.has(rawKeys[1])) {
+            return {
+                valid: false,
+                reason: `Unknown telemetry key "${rawKeys.slice(1).join('.')}" (allowed: enabled)`,
+            };
+        }
+        return { valid: true };
+    }
+    if (rawKeys.length > 1) {
+        return { valid: false, reason: `"${rootKey}" does not support nested keys` };
+    }
+    return { valid: true };
+}
+/**
+ * Get a nested value from an object using dot notation.
+ *
+ * @param obj - The object to access
+ * @param path - Dot-separated path (e.g., "featureFlags.someFlag")
+ * @returns The value at the path, or undefined if not found
+ */
+export function getNestedValue(obj, path) {
+    const keys = path.split('.');
+    if (hasUnsafeSegment(keys)) {
+        return undefined;
+    }
+    let current = obj;
+    for (const key of keys) {
+        if (current === null || current === undefined) {
+            return undefined;
+        }
+        if (typeof current !== 'object') {
+            return undefined;
+        }
+        current = current[key];
+    }
+    return current;
+}
+/**
+ * Set a nested value in an object using dot notation.
+ * Creates intermediate objects as needed.
+ *
+ * @param obj - The object to modify (mutated in place)
+ * @param path - Dot-separated path (e.g., "featureFlags.someFlag")
+ * @param value - The value to set
+ */
+export function setNestedValue(obj, path, value) {
+    const keys = path.split('.');
+    // Compared literally rather than through a helper, so the guard is plain to a
+    // reader and to static analysis. Checked for the whole path before anything is
+    // written, so a rejected key never leaves half-created objects behind.
+    for (const key of keys) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            return;
+        }
+    }
+    let current = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        const key = keys[i];
+        if (current[key] === undefined || current[key] === null || typeof current[key] !== 'object') {
+            current[key] = {};
+        }
+        current = current[key];
+    }
+    const lastKey = keys[keys.length - 1];
+    current[lastKey] = value;
+}
+/**
+ * Delete a nested value from an object using dot notation.
+ *
+ * @param obj - The object to modify (mutated in place)
+ * @param path - Dot-separated path (e.g., "featureFlags.someFlag")
+ * @returns true if the key existed and was deleted, false otherwise
+ */
+export function deleteNestedValue(obj, path) {
+    const keys = path.split('.');
+    for (const key of keys) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            return false;
+        }
+    }
+    let current = obj;
+    for (let i = 0; i < keys.length - 1; i++) {
+        const key = keys[i];
+        if (current[key] === undefined || current[key] === null || typeof current[key] !== 'object') {
+            return false;
+        }
+        current = current[key];
+    }
+    const lastKey = keys[keys.length - 1];
+    if (lastKey in current) {
+        delete current[lastKey];
+        return true;
+    }
+    return false;
+}
+/**
+ * Coerce a string value to its appropriate type.
+ * - "true" / "false" -> boolean
+ * - Numeric strings -> number
+ * - JSON arrays/objects -> parsed containers
+ * - Everything else -> string
+ *
+ * @param value - The string value to coerce
+ * @param forceString - If true, always return the value as a string
+ * @returns The coerced value
+ */
+export function coerceValue(value, forceString = false) {
+    if (forceString) {
+        return value;
+    }
+    // Boolean coercion
+    if (value === 'true') {
+        return true;
+    }
+    if (value === 'false') {
+        return false;
+    }
+    // Number coercion - must be a valid finite number
+    const num = Number(value);
+    if (!isNaN(num) && isFinite(num) && value.trim() !== '') {
+        return num;
+    }
+    const jsonContainer = parseJsonContainer(value);
+    if (jsonContainer !== undefined) {
+        return jsonContainer;
+    }
+    return value;
+}
+function parseJsonContainer(value) {
+    const trimmed = value.trim();
+    const looksLikeContainer = (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
+        (trimmed.startsWith('{') && trimmed.endsWith('}'));
+    if (!looksLikeContainer) {
+        return undefined;
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            return parsed;
+        }
+        if (parsed !== null && typeof parsed === 'object') {
+            return parsed;
+        }
+    }
+    catch {
+        return undefined;
+    }
+    return undefined;
+}
+/**
+ * Format a value for YAML-like display.
+ *
+ * @param value - The value to format
+ * @param indent - Current indentation level
+ * @returns Formatted string
+ */
+export function formatValueYaml(value, indent = 0) {
+    const indentStr = '  '.repeat(indent);
+    if (value === null || value === undefined) {
+        return 'null';
+    }
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value);
+    }
+    if (typeof value === 'string') {
+        return value;
+    }
+    if (Array.isArray(value)) {
+        if (value.length === 0) {
+            return '[]';
+        }
+        return value.map((item) => `${indentStr}- ${formatValueYaml(item, indent + 1)}`).join('\n');
+    }
+    if (typeof value === 'object') {
+        const entries = Object.entries(value);
+        if (entries.length === 0) {
+            return '{}';
+        }
+        return entries
+            .map(([key, val]) => {
+            const formattedVal = formatValueYaml(val, indent + 1);
+            if (typeof val === 'object' && val !== null && Object.keys(val).length > 0) {
+                return `${indentStr}${key}:\n${formattedVal}`;
+            }
+            return `${indentStr}${key}: ${formattedVal}`;
+        })
+            .join('\n');
+    }
+    return String(value);
+}
+/**
+ * Validate a configuration object against the schema.
+ *
+ * @param config - The configuration to validate
+ * @returns Validation result with success status and optional error message
+ */
+export function validateConfig(config) {
+    try {
+        GlobalConfigSchema.parse(config);
+        return { success: true };
+    }
+    catch (error) {
+        if (error instanceof z.ZodError) {
+            const zodError = error;
+            const messages = zodError.issues.map((e) => `${e.path.join('.')}: ${e.message}`);
+            return { success: false, error: messages.join('; ') };
+        }
+        return { success: false, error: 'Unknown validation error' };
+    }
+}
+//# sourceMappingURL=config-schema.js.map

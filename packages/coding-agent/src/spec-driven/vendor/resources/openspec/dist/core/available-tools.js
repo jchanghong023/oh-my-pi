@@ -1,0 +1,49 @@
+/**
+ * Available Tools Detection
+ *
+ * Detects which AI tools are available in a project by scanning
+ * for their configuration directories.
+ */
+import path from 'path';
+import { AI_TOOLS } from './config.js';
+import { reconcileSharedSkillTargets } from './shared-skill-target.js';
+import { SKILL_NAMES } from './shared/tool-detection.js';
+import { resolveToolSkillsDir, toolSupportsSkills } from './shared/skill-paths.js';
+import { DISK_VIEW } from './file-view.js';
+/**
+ * Scans the project path for AI tool configuration directories and returns
+ * the tools that are present.
+ *
+ * For tools with `detectionPaths`, checks those specific paths (files or
+ * directories). Otherwise checks the project's `skillsDir`, or managed skill
+ * files in the user's home directory for a global skill target.
+ */
+export function getAvailableTools(projectPath, view = DISK_VIEW) {
+    const available = AI_TOOLS.filter((tool) => {
+        if (!toolSupportsSkills(tool))
+            return false;
+        if (tool.globalSkillsDir) {
+            const skillsDir = resolveToolSkillsDir(projectPath, tool);
+            return SKILL_NAMES.some((skillName) => view.exists(path.join(skillsDir, skillName, 'SKILL.md')));
+        }
+        if (!tool.skillsDir)
+            return false;
+        if (tool.detectionPaths && tool.detectionPaths.length > 0) {
+            // Presence, not type — detection paths can be files or directories
+            return tool.detectionPaths.some((p) => view.exists(path.join(projectPath, p)));
+        }
+        return view.isDirectory(path.join(projectPath, tool.skillsDir));
+    });
+    const activeProjectTools = new Set(reconcileSharedSkillTargets(projectPath, available.filter((tool) => tool.skillsDir), view).map((tool) => tool.value));
+    const hasIndependentDetectionPath = (tool) => (tool.detectionPaths ?? []).some((detectionPath) => {
+        // Skill roots still go through managed-content reconciliation below;
+        // their mere existence is not an independent tool signal.
+        if (detectionPath.endsWith('/skills'))
+            return false;
+        return view.exists(path.join(projectPath, detectionPath));
+    });
+    return available.filter((tool) => tool.globalSkillsDir ||
+        hasIndependentDetectionPath(tool) ||
+        activeProjectTools.has(tool.value));
+}
+//# sourceMappingURL=available-tools.js.map

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -e
+runtime="$OMP_BUN_EXECUTABLE"
+if command -v cygpath >/dev/null 2>&1; then runtime="$(cygpath -u "$runtime")"; fi
+export BUN_BE_BUN=1
+exec "$runtime" "$@"

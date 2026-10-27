@@ -1,0 +1,432 @@
+import * as nodeFs from 'fs';
+import path from 'path';
+import { detectLineEnding, matchLineEnding } from './line-endings.js';
+const fs = nodeFs.promises;
+const { constants: fsConstants } = nodeFs;
+function hasOwnerGroupOrOtherWriteBit(stats) {
+    return (stats.mode & 0o222) !== 0;
+}
+function hasOwnerGroupOrOtherExecuteBit(stats) {
+    return (stats.mode & 0o111) !== 0;
+}
+async function hasWritableModeAndAccess(targetPath) {
+    try {
+        const stats = await fs.stat(targetPath);
+        // POSIX root can often write despite mode bits, but OpenSpec should respect
+        // explicit read-only file/directory modes when deciding whether an install
+        // path is user-writable. This also keeps permission checks deterministic in
+        // root-run CI containers. On Windows, chmod mode bits are not authoritative,
+        // so rely on fs.access below.
+        if (process.platform !== 'win32' && !hasOwnerGroupOrOtherWriteBit(stats)) {
+            return false;
+        }
+        if (process.platform !== 'win32' && stats.isDirectory() && !hasOwnerGroupOrOtherExecuteBit(stats)) {
+            return false;
+        }
+        const accessMode = stats.isDirectory()
+            ? fsConstants.W_OK | fsConstants.X_OK
+            : fsConstants.W_OK;
+        await fs.access(targetPath, accessMode);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+function isMarkerOnOwnLine(content, markerIndex, markerLength) {
+    let leftIndex = markerIndex - 1;
+    while (leftIndex >= 0 && content[leftIndex] !== '\n') {
+        const char = content[leftIndex];
+        if (char !== ' ' && char !== '\t' && char !== '\r') {
+            return false;
+        }
+        leftIndex--;
+    }
+    let rightIndex = markerIndex + markerLength;
+    while (rightIndex < content.length && content[rightIndex] !== '\n') {
+        const char = content[rightIndex];
+        if (char !== ' ' && char !== '\t' && char !== '\r') {
+            return false;
+        }
+        rightIndex++;
+    }
+    return true;
+}
+function findMarkerIndex(content, marker, fromIndex = 0) {
+    let currentIndex = content.indexOf(marker, fromIndex);
+    while (currentIndex !== -1) {
+        if (isMarkerOnOwnLine(content, currentIndex, marker.length)) {
+            return currentIndex;
+        }
+        currentIndex = content.indexOf(marker, currentIndex + marker.length);
+    }
+    return -1;
+}
+export class FileSystemUtils {
+    /**
+     * Converts a path to use forward slashes (POSIX style).
+     * Essential for cross-platform compatibility with glob libraries like tinyglobby.
+     */
+    static toPosixPath(p) {
+        return p.replace(/\\/g, '/');
+    }
+    /**
+     * Returns a canonical absolute path when the target exists.
+     * Falls back to path.resolve() so callers can still produce a stable absolute path.
+     */
+    static canonicalizeExistingPath(targetPath) {
+        try {
+            // Prefer the native resolver so Windows short-path aliases are expanded.
+            return nodeFs.realpathSync.native(targetPath);
+        }
+        catch {
+            try {
+                return nodeFs.realpathSync(targetPath);
+            }
+            catch {
+                return path.resolve(targetPath);
+            }
+        }
+    }
+    /**
+     * Refuses a target that leaves an allowed directory, including through an
+     * existing symlink in either the target or one of its parent directories.
+     * Missing suffixes are resolved from their nearest existing ancestor.
+     */
+    static assertPathWithin(allowedDirectory, targetPath) {
+        const resolvedDirectory = path.resolve(allowedDirectory);
+        const resolvedTarget = path.resolve(targetPath);
+        if (!this.isPathWithin(resolvedDirectory, resolvedTarget)) {
+            throw new Error(`Path is outside the allowed directory: ${targetPath}`);
+        }
+        const canonicalDirectory = this.canonicalizePotentialPath(resolvedDirectory);
+        const canonicalTarget = this.canonicalizePotentialPath(resolvedTarget);
+        if (!this.isPathWithin(canonicalDirectory, canonicalTarget)) {
+            throw new Error(`Path is outside the allowed directory: ${targetPath}`);
+        }
+    }
+    /**
+     * Like assertPathWithin, but a targetPath that is itself a symlink may
+     * resolve outside allowedDirectory, so a project can keep a managed
+     * directory (for example openspec/changes) in another repository. Its parent
+     * must still be confined and the link must resolve to an existing path.
+     */
+    static assertPathWithinAllowingLinkedLeaf(allowedDirectory, targetPath) {
+        const resolvedTarget = path.resolve(targetPath);
+        let isLink = false;
+        try {
+            isLink = nodeFs.lstatSync(resolvedTarget).isSymbolicLink();
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT') {
+                throw error;
+            }
+        }
+        if (!isLink) {
+            this.assertPathWithin(allowedDirectory, resolvedTarget);
+            return;
+        }
+        this.assertPathWithin(allowedDirectory, path.dirname(resolvedTarget));
+        // Throws for a dangling link, which cannot be proven to be a directory.
+        nodeFs.realpathSync.native(resolvedTarget);
+    }
+    static resolveProjectArtifactPath(projectPath, artifactPath) {
+        if (path.isAbsolute(artifactPath)) {
+            throw new Error(`Refusing to manage an artifact outside the project: ${artifactPath}`);
+        }
+        const targetPath = path.join(projectPath, artifactPath);
+        this.assertPathWithin(projectPath, targetPath);
+        return targetPath;
+    }
+    static assertProjectArtifactPath(projectPath, targetPath) {
+        this.assertPathWithin(projectPath, targetPath);
+    }
+    static isPathWithin(allowedDirectory, targetPath) {
+        const relative = path.relative(allowedDirectory, targetPath);
+        return (relative === '' ||
+            (relative !== '..' &&
+                !relative.startsWith(`..${path.sep}`) &&
+                !path.isAbsolute(relative)));
+    }
+    static canonicalizePotentialPath(targetPath) {
+        let existingPath = targetPath;
+        const missingSegments = [];
+        while (true) {
+            try {
+                // lstat distinguishes a missing path from a dangling symlink. A
+                // dangling link cannot be proven confined, so realpath must fail it.
+                nodeFs.lstatSync(existingPath);
+                const canonicalExisting = nodeFs.realpathSync.native(existingPath);
+                return path.resolve(canonicalExisting, ...missingSegments);
+            }
+            catch (error) {
+                const code = error.code;
+                if (code !== 'ENOENT') {
+                    throw error;
+                }
+                try {
+                    if (nodeFs.lstatSync(existingPath).isSymbolicLink()) {
+                        throw new Error(`Cannot verify dangling symbolic link: ${existingPath}`);
+                    }
+                }
+                catch (lstatError) {
+                    if (lstatError.code !== 'ENOENT') {
+                        throw lstatError;
+                    }
+                }
+                const parent = path.dirname(existingPath);
+                if (parent === existingPath) {
+                    throw new Error(`Cannot resolve an existing parent for ${targetPath}`);
+                }
+                missingSegments.unshift(path.basename(existingPath));
+                existingPath = parent;
+            }
+        }
+    }
+    static isWindowsBasePath(basePath) {
+        return /^[A-Za-z]:[\\/]/.test(basePath) || basePath.startsWith('\\');
+    }
+    static normalizeSegments(segments) {
+        return segments
+            .flatMap((segment) => segment.split(/[\\/]+/u))
+            .filter((part) => part.length > 0);
+    }
+    static joinPath(basePath, ...segments) {
+        const normalizedSegments = this.normalizeSegments(segments);
+        if (this.isWindowsBasePath(basePath)) {
+            const normalizedBasePath = path.win32.normalize(basePath);
+            return normalizedSegments.length
+                ? path.win32.join(normalizedBasePath, ...normalizedSegments)
+                : normalizedBasePath;
+        }
+        const posixBasePath = basePath.replace(/\\/g, '/');
+        return normalizedSegments.length
+            ? path.posix.join(posixBasePath, ...normalizedSegments)
+            : path.posix.normalize(posixBasePath);
+    }
+    static async createDirectory(dirPath) {
+        await fs.mkdir(dirPath, { recursive: true });
+    }
+    static async fileExists(filePath) {
+        try {
+            await fs.access(filePath);
+            return true;
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT') {
+                console.debug(`Unable to check if file exists at ${filePath}: ${error.message}`);
+            }
+            return false;
+        }
+    }
+    /**
+     * Finds the first existing parent directory by walking up the directory tree.
+     * @param dirPath Starting directory path
+     * @returns The first existing directory path, or null if root is reached without finding one
+     */
+    static async findFirstExistingDirectory(dirPath) {
+        let currentDir = dirPath;
+        while (true) {
+            try {
+                const stats = await fs.stat(currentDir);
+                if (stats.isDirectory()) {
+                    return currentDir;
+                }
+                // Path component exists but is not a directory (edge case)
+                console.debug(`Path component ${currentDir} exists but is not a directory`);
+                return null;
+            }
+            catch (error) {
+                if (error.code === 'ENOENT') {
+                    // Directory doesn't exist, move up one level
+                    const parentDir = path.dirname(currentDir);
+                    if (parentDir === currentDir) {
+                        // Reached filesystem root without finding existing directory
+                        return null;
+                    }
+                    currentDir = parentDir;
+                }
+                else {
+                    // Unexpected error (permissions, I/O error, etc.)
+                    console.debug(`Error checking directory ${currentDir}: ${error.message}`);
+                    return null;
+                }
+            }
+        }
+    }
+    static async canWriteFile(filePath) {
+        try {
+            const stats = await fs.stat(filePath);
+            if (stats.isDirectory()) {
+                return hasWritableModeAndAccess(filePath);
+            }
+            if (!stats.isFile()) {
+                return true;
+            }
+            return hasWritableModeAndAccess(filePath);
+        }
+        catch (error) {
+            if (error.code === 'ENOENT') {
+                // File doesn't exist - find first existing parent directory and check its permissions
+                const parentDir = path.dirname(filePath);
+                const existingDir = await this.findFirstExistingDirectory(parentDir);
+                if (existingDir === null) {
+                    // No existing parent directory found (edge case)
+                    return false;
+                }
+                // Check if the existing parent directory is writable.
+                return hasWritableModeAndAccess(existingDir);
+            }
+            console.debug(`Unable to determine write permissions for ${filePath}: ${error.message}`);
+            return false;
+        }
+    }
+    static async directoryExists(dirPath) {
+        try {
+            const stats = await fs.stat(dirPath);
+            return stats.isDirectory();
+        }
+        catch (error) {
+            if (error.code !== 'ENOENT') {
+                console.debug(`Unable to check if directory exists at ${dirPath}: ${error.message}`);
+            }
+            return false;
+        }
+    }
+    static async writeFile(filePath, content) {
+        const dir = path.dirname(filePath);
+        await this.createDirectory(dir);
+        await fs.writeFile(filePath, content, 'utf-8');
+    }
+    static async readFile(filePath) {
+        return await fs.readFile(filePath, 'utf-8');
+    }
+    static async updateFileWithMarkers(filePath, content, startMarker, endMarker) {
+        let existingContent = '';
+        // The managed block is composed with '\n', so splicing it into a CRLF file
+        // would leave mixed endings behind. bash reports a stray '\r' in .bashrc as
+        // "$'\r': command not found", so settle the whole file on the convention it
+        // already used. A file that does not exist yet stays LF.
+        let originalContent;
+        if (await this.fileExists(filePath)) {
+            existingContent = await this.readFile(filePath);
+            originalContent = existingContent;
+            const startIndex = findMarkerIndex(existingContent, startMarker);
+            const endIndex = startIndex !== -1
+                ? findMarkerIndex(existingContent, endMarker, startIndex + startMarker.length)
+                : findMarkerIndex(existingContent, endMarker);
+            if (startIndex !== -1 && endIndex !== -1) {
+                if (endIndex < startIndex) {
+                    throw new Error(`Invalid marker state in ${filePath}. End marker appears before start marker.`);
+                }
+                const before = existingContent.substring(0, startIndex);
+                const after = existingContent.substring(endIndex + endMarker.length);
+                existingContent = before + startMarker + '\n' + content + '\n' + endMarker + after;
+            }
+            else if (startIndex === -1 && endIndex === -1) {
+                existingContent = startMarker + '\n' + content + '\n' + endMarker + '\n\n' + existingContent;
+            }
+            else {
+                throw new Error(`Invalid marker state in ${filePath}. Found start: ${startIndex !== -1}, Found end: ${endIndex !== -1}`);
+            }
+        }
+        else {
+            existingContent = startMarker + '\n' + content + '\n' + endMarker;
+        }
+        await this.writeFile(filePath, originalContent === undefined
+            ? existingContent
+            : matchLineEnding(existingContent, originalContent));
+    }
+    static async ensureWritePermissions(dirPath) {
+        try {
+            // If directory doesn't exist, check parent directory permissions
+            if (!await this.directoryExists(dirPath)) {
+                const parentDir = path.dirname(dirPath);
+                if (!await this.directoryExists(parentDir)) {
+                    await this.createDirectory(parentDir);
+                }
+                return await this.ensureWritePermissions(parentDir);
+            }
+            const testFile = path.join(dirPath, '.openspec-test-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+            await fs.writeFile(testFile, '');
+            // On Windows, file may be temporarily locked by antivirus or indexing services.
+            // Retry unlink with a small delay if it fails.
+            const maxRetries = 3;
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    await fs.unlink(testFile);
+                    break;
+                }
+                catch (unlinkError) {
+                    if (attempt === maxRetries - 1) {
+                        // Last attempt failed, but we successfully wrote the file, so permissions are OK
+                        // Just log and continue - the temp file will be cleaned up eventually
+                        console.debug(`Could not clean up test file ${testFile}: ${unlinkError.message}`);
+                    }
+                    else {
+                        // Wait briefly before retrying (Windows file lock release)
+                        await new Promise((resolve) => setTimeout(resolve, 50));
+                    }
+                }
+            }
+            return true;
+        }
+        catch (error) {
+            console.debug(`Insufficient permissions to write to ${dirPath}: ${error.message}`);
+            return false;
+        }
+    }
+}
+/**
+ * Removes a marker block from file content.
+ * Only removes markers that are on their own lines (ignores inline mentions).
+ * Cleans up double blank lines that may result from removal.
+ *
+ * @param content - File content with markers
+ * @param startMarker - The start marker string
+ * @param endMarker - The end marker string
+ * @returns Content with marker block removed, or original content if markers not found/invalid
+ */
+export function removeMarkerBlock(content, startMarker, endMarker) {
+    const startIndex = findMarkerIndex(content, startMarker);
+    const endIndex = startIndex !== -1
+        ? findMarkerIndex(content, endMarker, startIndex + startMarker.length)
+        : findMarkerIndex(content, endMarker);
+    if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+        return content;
+    }
+    // Find the start of the line containing the start marker
+    let lineStart = startIndex;
+    while (lineStart > 0 && content[lineStart - 1] !== '\n') {
+        lineStart--;
+    }
+    // Find the end of the line containing the end marker
+    let lineEnd = endIndex + endMarker.length;
+    while (lineEnd < content.length && content[lineEnd] !== '\n') {
+        lineEnd++;
+    }
+    // Include the trailing newline if present
+    if (lineEnd < content.length && content[lineEnd] === '\n') {
+        lineEnd++;
+    }
+    const before = content.substring(0, lineStart);
+    const after = content.substring(lineEnd);
+    // The file's own newline, used for every ending this function writes. The
+    // blank-line collapse below rebuilds the separator it matched, so spelling it
+    // '\n' would leave a CRLF file with a mixed pair wherever a run was collapsed
+    // - the stray '\r' that bash reports as "$'\r': command not found".
+    //
+    // Dominant rather than "contains a CRLF anywhere", so that one stray CRLF in
+    // an otherwise-LF file does not pull the whole rewrite to CRLF. This is the
+    // same reading matchLineEnding uses, so both write paths agree.
+    const newline = detectLineEnding(content) ?? '\n';
+    // Clean up double blank lines (handle both Unix \n and Windows \r\n)
+    let result = before + after;
+    result = result.replace(/(\r?\n){3,}/g, newline + newline);
+    // Trim trailing whitespace but preserve leading whitespace and original newline style
+    if (result.trimEnd() === '') {
+        return '';
+    }
+    return result.trimEnd() + newline;
+}
+//# sourceMappingURL=file-system.js.map

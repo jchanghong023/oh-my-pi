@@ -1,0 +1,6 @@
+/**
+ * Static template strings for Zsh completion scripts.
+ * These are Zsh-specific helper functions that never change.
+ */
+export declare const ZSH_DYNAMIC_HELPERS = "# Dynamic completion helpers\n\n# Use openspec __complete to get available changes\n_openspec_complete_changes() {\n  local -a changes\n  while IFS=$'\\t' read -r id desc; do\n    changes+=(\"$id:$desc\")\n  done < <(openspec __complete changes 2>/dev/null)\n  _describe \"change\" changes\n}\n\n# Use openspec __complete to get available specs\n_openspec_complete_specs() {\n  local -a specs\n  while IFS=$'\\t' read -r id desc; do\n    specs+=(\"$id:$desc\")\n  done < <(openspec __complete specs 2>/dev/null)\n  _describe \"spec\" specs\n}\n\n# Get both changes and specs\n_openspec_complete_items() {\n  local -a items\n  while IFS=$'\\t' read -r id desc; do\n    items+=(\"$id:$desc\")\n  done < <(openspec __complete changes 2>/dev/null)\n  while IFS=$'\\t' read -r id desc; do\n    items+=(\"$id:$desc\")\n  done < <(openspec __complete specs 2>/dev/null)\n  _describe \"item\" items\n}\n\n# Use openspec __complete to get available schemas\n_openspec_complete_schemas() {\n  local -a schemas\n  while IFS=$'\\t' read -r id desc; do\n    schemas+=(\"$id:$desc\")\n  done < <(openspec __complete schemas 2>/dev/null)\n  _describe \"schema\" schemas\n}";
+//# sourceMappingURL=zsh-templates.d.ts.map
