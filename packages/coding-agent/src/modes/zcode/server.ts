@@ -2267,7 +2267,6 @@ export class ZCodeServer {
 					const service = new TeamConfigService({
 						getSettings: () => settings,
 						getModelRegistry: () => registry,
-						getSessionModel: () => undefined,
 						emit: () => {
 							committed = true;
 						},

@@ -189,9 +189,10 @@ describe("pinned skill discovery and access", () => {
 		await expect(handler.resolve(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		const revoke = grantSpecSkillAccess(session, skill);
 		try {
-			expect((await buildSkillPromptMessage(skill, { args: "" }, "autoload", { scope: session })).details.path).toBe(
-				skill.filePath,
-			);
+			expect(
+				(await buildSkillPromptMessage(skill, { args: "" }, "autoload", undefined, { scope: session })).details
+					.path,
+			).toBe(skill.filePath);
 			expect((await handler.resolve(url, context)).sourcePath).toBe(skill.filePath);
 			expect(await handler.locate(url, context)).toBe(skill.filePath);
 			await expect(handler.resolve(url, { ...context, session: { ...session } })).rejects.toBeInstanceOf(
@@ -213,17 +214,17 @@ describe("pinned skill discovery and access", () => {
 		const end = bindSpecSkillPolicy(scope, { phase: "executing", allowedSkills: [skill.name] });
 		const access = { scope, getSessionBranch: () => [provenance(skill), provenance(substitute)] };
 		try {
-			await expect(buildSkillPromptMessage(skill, { args: "" }, "autoload", access)).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			await expect(
+				buildSkillPromptMessage(skill, { args: "" }, "autoload", undefined, access),
+			).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			const revoke = grantSpecSkillAccess(scope, skill);
 			try {
-				expect((await buildSkillPromptMessage(skill, { args: "" }, "autoload", access)).details.path).toBe(
-					skill.filePath,
-				);
-				await expect(buildSkillPromptMessage(substitute, { args: "" }, "user", access)).rejects.toBeInstanceOf(
-					SkillAccessDeniedError,
-				);
+				expect(
+					(await buildSkillPromptMessage(skill, { args: "" }, "autoload", undefined, access)).details.path,
+				).toBe(skill.filePath);
+				await expect(
+					buildSkillPromptMessage(substitute, { args: "" }, "user", undefined, access),
+				).rejects.toBeInstanceOf(SkillAccessDeniedError);
 				expect(() => checkSkillReadAccess(substitute, access)).toThrow(SkillAccessDeniedError);
 			} finally {
 				revoke();
@@ -231,9 +232,9 @@ describe("pinned skill discovery and access", () => {
 			expect(() => checkSkillReadAccess(skill, access)).toThrow(SkillAccessDeniedError);
 			const revokeSubstitute = grantSpecSkillAccess(scope, substitute);
 			try {
-				expect((await buildSkillPromptMessage(substitute, { args: "" }, "user", access)).details.path).toBe(
-					substitute.filePath,
-				);
+				expect(
+					(await buildSkillPromptMessage(substitute, { args: "" }, "user", undefined, access)).details.path,
+				).toBe(substitute.filePath);
 				expect(() => checkSkillReadAccess(skill, access)).toThrow(SkillAccessDeniedError);
 			} finally {
 				revokeSubstitute();
@@ -269,7 +270,7 @@ describe("pinned skill discovery and access", () => {
 				getSessionBranch: () => [provenance(custom, personalInvocation.details)],
 			}),
 		).rejects.toBeInstanceOf(SkillAccessDeniedError);
-		const explicit = await buildSkillPromptMessage(bundled, { args: "" }, "user", {
+		const explicit = await buildSkillPromptMessage(bundled, { args: "" }, "user", undefined, {
 			getSessionBranch: () => branch,
 		});
 		expect(explicit.details.path).toBe(bundled.filePath);
@@ -374,7 +375,7 @@ describe("pinned skill discovery and access", () => {
 					SkillAccessDeniedError,
 				);
 				await expect(
-					buildSkillPromptMessage(allowed, { args: "" }, "autoload", { scope: session }),
+					buildSkillPromptMessage(allowed, { args: "" }, "autoload", undefined, { scope: session }),
 				).rejects.toBeInstanceOf(SkillAccessDeniedError);
 			} finally {
 				endSolution();
@@ -536,12 +537,12 @@ describe("pinned skill discovery and access", () => {
 		const end = bindSpecSkillPolicy(scope, { phase: "requirements", allowedSkills: ["jch-grill-me"] });
 		await fs.rm(skill.filePath);
 		try {
-			await expect(buildSkillPromptMessage(ordinary, { args: "" }, "user", { scope })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
-			await expect(buildSkillPromptMessage(skill, { args: "" }, "autoload", { scope })).rejects.toBeInstanceOf(
-				SkillAccessDeniedError,
-			);
+			await expect(
+				buildSkillPromptMessage(ordinary, { args: "" }, "user", undefined, { scope }),
+			).rejects.toBeInstanceOf(SkillAccessDeniedError);
+			await expect(
+				buildSkillPromptMessage(skill, { args: "" }, "autoload", undefined, { scope }),
+			).rejects.toBeInstanceOf(SkillAccessDeniedError);
 		} finally {
 			end();
 		}
@@ -578,7 +579,7 @@ describe("pinned skill discovery and access", () => {
 				await expect(handler.locate(url, context)).rejects.toBeInstanceOf(SkillAccessDeniedError);
 				for (const invocation of ["user", "autoload"] as const) {
 					await expect(
-						buildSkillPromptMessage(skill, { args: "" }, invocation, { scope: session }),
+						buildSkillPromptMessage(skill, { args: "" }, invocation, undefined, { scope: session }),
 					).rejects.toBeInstanceOf(SkillAccessDeniedError);
 				}
 			}

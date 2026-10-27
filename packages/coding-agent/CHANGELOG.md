@@ -68,6 +68,12 @@
 
 ### Fixed
 
+- Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
+- Project and save global Team configuration without requiring a chat session; preserve ordered explicit members and defer default model selection until a discussion starts.
+- Use the visible Dev solution session's model and settings for Team participants, alignment and synthesis.
+- Let users accept completion reports that honestly disclose incomplete work without a separate persisted worker/reviewer-success gate, while retaining report structure, version checks and read-only acceptance boundaries.
+- Preserve arrival order between custom messages and user prompts held by idle compaction without adding an unnecessary asynchronous generation check.
+- Exclude vendored dependency test files from fork test dispatch and remove unstaged deleted files from cached Bazel source declarations.
 - Keep the permanent compact thinking area from obscuring sent messages when idle or between turns.
 - Keep Bazel test caches scoped to real source inputs by distinguishing file contents, process handles, temporary-directory capability probes and generated wrapper outputs from dynamic source paths, while retaining conservative runtime-loading boundaries.
 - Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.

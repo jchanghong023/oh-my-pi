@@ -57,7 +57,7 @@ async function consumer(
 		await setup?.(cwd);
 		await fs.writeFile(
 			path.join(agentDir, "models.yml"),
-			`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
+			`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 1000000\n`,
 		);
 		const settings = Settings.isolated({
 			modelRoles: { default: "spec-fixture/chat-a", smol: "spec-fixture/chat-a" },
@@ -96,6 +96,7 @@ async function consumer(
 			settings,
 			runtime,
 			session,
+			registry,
 			provider,
 			orchestrator: new SpecDrivenOrchestrator(runtime.ports, {
 				...runtime.options,
@@ -369,6 +370,114 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 		} finally {
 			await restored.dispose();
 		}
+	} finally {
+		discussion.mockRestore();
+	}
+}, 120_000);
+
+test("solution Team uses the visible session model for participant slots and synthesis", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "方案讨论完成。" }) });
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("team-model-owner", context);
+	await fixture.runtime.ports.agents.prepare("solution", context);
+	const solution = fixture.runtime.nativeSession("solution")!;
+	const selected = fixture.registry.find("spec-fixture", "chat-b");
+	if (!selected) throw new Error("Solution fixture model unavailable");
+	await solution.setModelTemporary(selected);
+	expect(fixture.session.model?.id).toBe("chat-a");
+	expect(solution.model?.id).toBe("chat-b");
+	const realDiscussion = teamOrchestrator.runTeamDiscussion;
+	const calls: Array<{ role: string; modelPattern: string }> = [];
+	const discussion = spyOn(teamOrchestrator, "runTeamDiscussion").mockImplementation(options =>
+		realDiscussion({
+			...options,
+			runner: async call => {
+				calls.push({ role: call.role, modelPattern: call.modelPattern });
+				switch (call.role) {
+					case "proposer":
+						return {
+							ok: true,
+							data: {
+								proposal: "完整候选方案",
+								noViableProposal: false,
+								investigationBlockedReason: "",
+								keyAssumptions: [],
+								risks: [],
+								unknowns: [],
+								acceptanceCriteria: [],
+								ambiguityInterpretations: [],
+								evidence: [],
+							},
+						};
+					case "aligner":
+						return {
+							ok: true,
+							data: {
+								unifiedUnderstanding: "确认需求",
+								acceptanceCriteria: [],
+								factDifferences: [],
+								interpretationDifferences: [],
+							},
+						};
+					case "reviewer":
+						return {
+							ok: true,
+							data: {
+								noSubstantiveIssues: true,
+								reviewSummary: "审查完成",
+								findings: [],
+								blockingResolutions: [],
+							},
+						};
+					case "reviser":
+						return {
+							ok: true,
+							data: {
+								revisedProposal: "完整候选方案",
+								revisionSummary: "无须修改",
+								responses: [],
+								reviewFlags: {
+									changedCoreDesign: false,
+									claimsResolvedBlocking: false,
+									newEvidenceChangesAssumptions: false,
+									disputesBlockingFinding: false,
+								},
+							},
+						};
+					case "synthesizer":
+						return {
+							ok: true,
+							data: {
+								reportMarkdown: "## 方案\n完整候选方案。",
+								recommendedProposal: "",
+								recommendationReason: "",
+								recommendationPreconditions: "",
+								hardConstraintViolations: [],
+							},
+						};
+					default:
+						throw new Error(`Unexpected Team role: ${call.role}`);
+				}
+			},
+		}),
+	);
+	try {
+		const input = {
+			role: "solution" as const,
+			entry: true,
+			request: "完整需求",
+			files: [],
+			outputPaths: ["solution.json"],
+			useTeam: true,
+		};
+		await fixture.runtime.ports.agents.run(input, context);
+		expect(calls.filter(call => call.role === "proposer")).toHaveLength(3);
+		expect(calls.some(call => call.role === "aligner")).toBe(true);
+		expect(calls.some(call => call.role === "synthesizer")).toBe(true);
+		expect(calls.every(call => call.modelPattern === "spec-fixture/chat-b")).toBe(true);
+		await fixture.runtime.ports.agents.run({ ...input, entry: false, feedback: "解释风险" }, context);
+		expect(fixture.runtime.nativeSession("solution")).toBe(solution);
+		expect(discussion).toHaveBeenCalledTimes(1);
 	} finally {
 		discussion.mockRestore();
 	}

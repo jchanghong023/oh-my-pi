@@ -146,6 +146,8 @@ export function fulltestCommands(
 	const root = gateRepoRoot;
 	const commands: GateCommand[] = [];
 	for (const file of changedPaths) {
+		// Packaged dependency sources remain inputs, not fork-owned Bun test entrypoints.
+		if (file.includes("/node_modules/")) continue;
 		if (!/^packages\/[^/]+\/.+\.test\.(ts|tsx)$/.test(file) || !existsSync(path.join(root, file))) continue;
 		if (file === "packages/natives/test/desktop.test.ts") {
 			console.log(`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${file}`);

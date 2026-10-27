@@ -15,6 +15,7 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "../../src/session/context-settings";
 import { ToolRestrictions } from "../../src/session/tool-restrictions";
+import { artifactVersion, SpecArtifactStore } from "../../src/spec-driven/artifacts";
 import { createSpecActor } from "../../src/spec-driven/actors";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { createAgentSession, type CustomTool } from "../../src/sdk";
@@ -580,19 +581,41 @@ test("actor cancellation waits for owned background work without cancelling an u
 	expect(jobs.getJob(otherId)?.status).toBe("completed");
 }, 120_000);
 
-test("an incomplete executor report does not enter acceptance without settled task and reviewer", async () => {
-	let reports = 0;
+test("truthful incomplete report enters read-only acceptance and explicit repair revokes it", async () => {
+	let awaitingAcceptance = false;
+	let repairCount = 0;
 	await using fixture = await consumer(undefined, "executor", {
 		reportPath: "report.md",
+		getStatus: () => ({ phase: "executing", generation: 0, useTeam: false, awaitingAcceptance }),
 		observeReport: () => {
-			reports++;
+			awaitingAcceptance = true;
+		},
+		beginRepair: async () => {
+			repairCount++;
+			awaitingAcceptance = false;
 		},
 	});
-	fixture.setNativeTool("write", { path: "report.md", content: "Work remains incomplete." });
-	await fixture.request({ outputPaths: ["report.md"] });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("Work remains incomplete.");
-	expect(reports).toBe(0);
-	expect(() => fixture.actor.checkExecution()).toThrow("可写 task");
+	const report =
+		"# 完成报告\n\n## 完成情况\n部分实施。\n\n## 验证结果\n测试失败；审查未运行。\n\n## 未完成项\n修复失败测试并完成审查。\n";
+	fixture.setNativeTool("write", { path: "report.md", content: report });
+	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
+	expect(awaitingAcceptance).toBe(true);
+	const store = new SpecArtifactStore({
+		cwd: fixture.cwd,
+		changeId: "incomplete",
+		paths: { requirements: [], solution: "solution.json", plan: "plan.md", report: "report.md" },
+	});
+	const validated = await store.readReport();
+	expect(validated.content).toBe(report);
+	expect(validated.version).toBe(artifactVersion(Buffer.from(report)));
+	fixture.setNativeTool("write", { path: "business.ts", content: "not authorized" });
+	await fixture.request({ entry: false, feedback: "解释验证限制" });
+	await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toThrow();
+	fixture.setNativeTool("write", { path: "business.ts", content: "authorized repair" });
+	await fixture.request({ entry: false, feedback: "请修复批准范围内的失败测试" });
+	expect(repairCount).toBe(1);
+	expect(awaitingAcceptance).toBe(false);
+	expect(await fs.readFile(path.join(fixture.cwd, "business.ts"), "utf8")).toBe("authorized repair");
 }, 120_000);
 
 test("successful native report write closes autonomous writes without parsing the report, explicit repair reopens only its input", async () => {
@@ -603,8 +626,6 @@ test("successful native report write closes autonomous writes without parsing th
 			reports++;
 		},
 	});
-	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "worker");
-	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "reviewer");
 	fixture.setNativeTool("write", { path: "report.md", content: "Not yet structurally valid" });
 	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
 	expect(reports).toBe(1);
@@ -632,8 +653,6 @@ test("queued repair authorization starts only when delivered and a new report lo
 			reports++;
 		},
 	});
-	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "worker");
-	fixture.actor.session.sessionManager.appendCustomEntry("dev-execution-evidence", "reviewer");
 	fixture.setNativeTool("write", { path: "report.md", content: "first report" });
 	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
 	let hold = true;

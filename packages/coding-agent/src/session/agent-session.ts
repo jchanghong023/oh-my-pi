@@ -11022,7 +11022,8 @@ export class AgentSession implements SettingsScope {
 			timestamp: Date.now(),
 		};
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
-		if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
+		if (this.#sessionGeneration !== sessionGeneration && (await this.#sessionGenerationChanged(sessionGeneration)))
+			return false;
 		const remoteNotice = isJchToolsAgentModel(this.model) && normalizedAppMessage.attribution !== "user";
 		if (this.isStreaming && !remoteNotice) {
 			// Queued into a turn the agent owns: that turn holds the session. Busy only

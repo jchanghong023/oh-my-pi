@@ -55,8 +55,6 @@ describe("TeamConfigService", () => {
 		service = new TeamConfigService({
 			getSettings: () => settings,
 			getModelRegistry: () => registry,
-			getSessionModel: () =>
-				registry.getAll().find(model => model.provider === "test" && model.id === "Qwen3.8-27B"),
 			emit: frame => notifications.push(frame),
 		});
 	});
@@ -112,7 +110,8 @@ describe("TeamConfigService", () => {
 		const defaults = await service.getConfig({ clientRevision: "draft-default", members: [] });
 		expect(defaults.userMembers).toHaveLength(3);
 		expect(defaults.preview?.userMembers).toEqual([]);
-		expect(defaults.preview?.participants).toHaveLength(3);
+		expect(defaults.preview?.effectiveMembers).toEqual([]);
+		expect(defaults.preview?.participants).toEqual([]);
 		expect(await Bun.file(file).text()).toBe(bytes);
 		expect(notifications).toEqual([]);
 	});
@@ -129,8 +128,6 @@ describe("TeamConfigService", () => {
 		service = new TeamConfigService({
 			getSettings: () => settings,
 			getModelRegistry: () => registry,
-			getSessionModel: () =>
-				registry.getAll().find(model => model.provider === "test" && model.id === "Qwen3.8-27B"),
 		});
 		const config = await service.getConfig({
 			clientRevision: "covered",
@@ -148,23 +145,103 @@ describe("TeamConfigService", () => {
 		]);
 	});
 
-	it("allows member repair with no session model, without fabricating runtime slots", async () => {
+	it("reads, previews and repairs an invalid roster without a session model", async () => {
 		service = new TeamConfigService({
 			getSettings: () => settings,
 			getModelRegistry: () => registry,
-			getSessionModel: () => undefined,
 		});
 		const config = await service.getConfig();
 		expect(config.sessionModel).toBeNull();
+		expect(config.revision).toBeString();
+		expect(config.source).toBe("global");
+		expect(config.effectiveMembers?.map(slot => slot.rawSelector)).toEqual([
+			"test/Qwen3.8-27B",
+			"retired old selector",
+			"test/Qwen3.8-27B",
+		]);
+		expect(config.participants).toEqual([]);
+		expect(config.issues).toContainEqual(
+			expect.objectContaining({ target: "member", list: "effectiveMembers", index: 1 }),
+		);
+		expect(
+			config.issues.some(issue => issue.target === "session_model" || issue.code === "participants_unavailable"),
+		).toBe(false);
+
+		const first = { provider: "test", modelId: "Qwen3.8-27B" };
+		const second = { provider: "test", modelId: "Qwen3.8-35B" };
+		const preview = await service.getConfig({
+			clientRevision: "ordered",
+			members: [second, first],
+		});
+		expect(preview.revision).toBe(config.revision);
+		expect(preview.preview?.clientRevision).toBe("ordered");
+		expect(preview.preview?.source).toBe("global");
+		expect(preview.preview?.participants.map(slot => slot.model)).toEqual([second, first, second]);
+		expect(preview.preview?.participants.map(slot => slot.label)).toEqual(["A", "B", "C"]);
+		expect(preview.preview?.issues).toEqual([]);
+		expect(preview.participants).toEqual([]);
+
+		const invalid = await service.getConfig({
+			clientRevision: "invalid",
+			members: [first, { rawSelector: "retired old selector" }, first],
+		});
+		expect(invalid.preview?.effectiveMembers?.map(slot => slot.rawSelector)).toEqual([
+			"test/Qwen3.8-27B",
+			"retired old selector",
+			"test/Qwen3.8-27B",
+		]);
+		expect(invalid.preview?.issues).toContainEqual(
+			expect.objectContaining({ list: "preview.effectiveMembers", index: 1, selector: "retired old selector" }),
+		);
+		expect(invalid.preview?.participants).toEqual([]);
+
 		const result = await service.setConfig({
 			scope: "user",
 			expectedRevision: config.revision!,
-			members: [{ provider: "test", modelId: "Qwen3.8-27B" }],
+			members: [second, first, second, first],
 		});
 		expect(result.saveState).toBe("complete");
-		expect(result.config.participants).toEqual([]);
-		expect(result.config.issues).toContainEqual(expect.objectContaining({ target: "session_model" }));
-		expect(result.config.userMembers?.[0]?.status).toBe("available");
+		expect(result.writes.persistent.status).toBe("not_applicable");
+		expect(result.effectiveMatchesRequested).toBe(true);
+		expect(result.config.participants.map(slot => slot.model)).toEqual([second, first, second, first]);
+		expect(result.config.userMembers?.map(slot => slot.model)).toEqual([second, first, second, first]);
+		expect(result.config.issues.some(issue => issue.target === "session_model")).toBe(false);
+	});
+
+	it("projects and saves defaults without depending on a session model", async () => {
+		service = new TeamConfigService({
+			getSettings: () => settings,
+			getModelRegistry: () => registry,
+		});
+		const current = await service.getConfig();
+		const drafts: ([] | null)[] = [[], null];
+		for (const members of drafts) {
+			const snapshot = await service.getConfig({ clientRevision: `default-${members === null}`, members });
+			expect(snapshot.preview?.clientRevision).toBe(`default-${members === null}`);
+			expect(snapshot.preview?.userMembers).toEqual(members);
+			expect(snapshot.preview?.effectiveMembers).toEqual([]);
+			expect(snapshot.preview?.participants).toEqual([]);
+			expect(snapshot.preview?.issues).toEqual([]);
+			expect(snapshot.revision).toBe(current.revision);
+		}
+		const saved = await service.setConfig({ scope: "user", expectedRevision: current.revision!, members: [] });
+		expect(saved.saveState).toBe("complete");
+		expect(saved.effectiveMatchesRequested).toBe(true);
+		expect(saved.config.userMembers).toEqual([]);
+		expect(saved.config.effectiveMembers).toEqual([]);
+		expect(saved.config.participants).toEqual([]);
+		expect(saved.config.issues).toEqual([]);
+		const cleared = await service.setConfig({
+			scope: "user",
+			expectedRevision: saved.config.revision!,
+			members: null,
+		});
+		expect(cleared.saveState).toBe("complete");
+		expect(cleared.effectiveMatchesRequested).toBe(true);
+		expect(cleared.config.userMembers).toBeNull();
+		expect(cleared.config.effectiveMembers).toEqual([]);
+		expect(cleared.config.participants).toEqual([]);
+		expect(cleared.config.issues).toEqual([]);
 	});
 
 	it("rejects stale revisions before writing and does not emit a commit notification", async () => {

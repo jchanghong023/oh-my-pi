@@ -66,6 +66,15 @@ export function teamModelCapabilityIssue(model: Model): { code: string; message:
 	}
 	return undefined;
 }
+
+/** Expand an explicit roster into the ordered proposer slots shared by preview and discussion. */
+export function expandTeamRoster<T, U>(roster: readonly T[], project: (member: T, index: number) => U): U[] {
+	if (roster.length === 0) return [];
+	return Array.from({ length: Math.max(3, roster.length) }, (_, index) =>
+		project(roster[index % roster.length]!, index),
+	);
+}
+
 /** Resolve ordered independent proposer slots. Pure: no I/O, all inputs injected. */
 export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersResult {
 	const sessionModel = input.sessionModel;
@@ -138,8 +147,7 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 		if (issue) return { ok: false, error: issue.message };
 	}
 	const roster = resolvedMembers.length > 0 ? resolvedMembers : [sessionModel];
-	const participants = Array.from({ length: Math.max(3, roster.length) }, (_, index): TeamParticipant => {
-		const model = roster[index % roster.length]!;
+	const participants = expandTeamRoster(roster, (model, index): TeamParticipant => {
 		const modelPattern = formatModelStringWithRouting(model);
 		return {
 			index,

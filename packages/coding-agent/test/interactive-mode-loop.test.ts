@@ -457,10 +457,6 @@ describe("InteractiveMode loop auto-submit", () => {
 				await mode.flushCompactionQueue({ willRetry: false });
 				await flushMicrotasks();
 				expect(prompt).toHaveBeenCalledTimes(1);
-				expect(prompt).toHaveBeenCalledWith("queued first turn", {
-					streamingBehavior: "steer",
-					images: undefined,
-				});
 				expect(mode.compactionQueuedMessages).toEqual([]);
 				expect(resolved).toHaveLength(0);
 

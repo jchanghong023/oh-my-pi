@@ -988,6 +988,7 @@ export class ModelRegistry {
 	 * and patch its context window to what the backend actually serves.
 	 */
 	async refreshSelectedModelMetadata(model: Model<Api>): Promise<Model<Api>> {
+		if (offlineFromEnv() || isCompanyLaneActive()) return model;
 		const discoveryConfig = this.#findLazyRuntimeDiscovery(model.provider);
 		if (!discoveryConfig) {
 			return model;

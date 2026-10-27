@@ -369,6 +369,22 @@ describe("explicit Dev file decisions", () => {
 		expect(f.inputs[2]).toMatchObject({ entry: false, feedback: "原始追问", files: [], request: "", useTeam: false });
 		expect(f.reads).toEqual([]);
 	});
+	it("lets the user explicitly accept a report disclosing failed and unverified work", async () => {
+		const f = fixture();
+		await execution(f);
+		f.docs.report.content =
+			"# 完成报告\n\n## 完成情况\n部分实施。\n\n## 验证结果\n测试失败，审查未运行。\n\n## 未完成项\n修复测试并完成审查。";
+		await f.core.observeReport();
+		expect(f.core.status().awaitingAcceptance).toBe(true);
+		await f.core.converse("解释验证限制");
+		expect(f.inputs.at(-1)?.readOnly).toBe(true);
+		const modelCalls = f.inputs.length;
+		await f.core.next(undefined, "/dev next 接受已披露的限制");
+		expect(f.settings.closeCalls).toBe(1);
+		expect(f.inputs).toHaveLength(modelCalls);
+		expect(f.core.save().approvals.executor?.userReply).toBe("/dev next 接受已披露的限制");
+		expect(f.core.status().phase).toBe("idle");
+	});
 	it("marks report writes without structure reads and revokes stale report eligibility on business repair", async () => {
 		const f = fixture();
 		await execution(f);

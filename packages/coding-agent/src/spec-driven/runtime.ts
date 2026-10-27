@@ -329,9 +329,6 @@ export async function createSpecDrivenRuntime(args: {
 			},
 			recipient,
 			originalRequest,
-			async checkExecution() {
-				(await getActor("executor")).checkExecution();
-			},
 			async run(input, context) {
 				const ctx = contextFor(context);
 				const actor = await getActor(input.role);
@@ -345,9 +342,9 @@ export async function createSpecDrivenRuntime(args: {
 						const approved = await args.checkApproved?.();
 						if (approved && typeof approved === "object" && "matches" in approved && !approved.matches)
 							throw new Error("正式批准版本已变化");
-						const members = resolveTeamParticipantsForSession(session, settings);
+						const members = resolveTeamParticipantsForSession(actor.session, actor.session.settings);
 						if (!members.ok) throw new Error(members.error);
-						if (!session.model) throw new Error("Team requires a current model");
+						if (!actor.session.model) throw new Error("Team requires a current model");
 						const team = {
 							session: actor.session,
 							controller: new AbortController(),
@@ -365,7 +362,7 @@ export async function createSpecDrivenRuntime(args: {
 								question: JSON.stringify({ ...input, files }, null, 2),
 								cwd,
 								participants: members.participants,
-								sessionModelPattern: formatModelStringWithRouting(session.model),
+								sessionModelPattern: formatModelStringWithRouting(actor.session.model),
 								runner: async (call, signal) => {
 									const approval = await args.checkApproved?.();
 									if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
@@ -373,7 +370,7 @@ export async function createSpecDrivenRuntime(args: {
 									return runner(call, signal);
 								},
 								signal: teamSignal,
-								maxConcurrency: cfgTaskMaxConcurrency.get(settings),
+								maxConcurrency: cfgTaskMaxConcurrency.get(actor.session.settings),
 							});
 							teamSignal.throwIfAborted();
 						} finally {

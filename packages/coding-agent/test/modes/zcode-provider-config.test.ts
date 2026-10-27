@@ -487,7 +487,6 @@ describe("ZCode provider configuration consumer", () => {
 		const dependencies = {
 			getSettings: () => f.settings,
 			getModelRegistry: () => f.modelRegistry,
-			getSessionModel: () => currentModel,
 			emit: () => {},
 		};
 		const roles = await new ModelRoleService(dependencies).listRoles({
@@ -523,7 +522,6 @@ describe("ZCode provider configuration consumer", () => {
 		);
 		expect(modelResult.data.models.some(item => !item.selectable && !!item.reasonCode && !!item.reason)).toBe(true);
 		expect(roleResult.data.sessionModel?.model).toEqual(expected[0]);
-		expect(dependencies.getSessionModel()).toBe(currentModel);
 		expect(authRequests).toBe(0);
 		expect(await readFile(path, "utf8")).toBe(JSON.stringify(stored));
 	});

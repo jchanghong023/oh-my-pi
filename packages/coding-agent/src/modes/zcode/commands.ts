@@ -662,7 +662,6 @@ export class ZCodeCommandHost {
 		const team = new TeamConfigService({
 			getSettings: () => this.session.settings,
 			getModelRegistry: () => this.session.modelRegistry,
-			getSessionModel: () => model,
 			isCurrent: () => !this.#disposed,
 			emit: frame => {
 				if (!this.#disposed) this.options.settingsChanged?.(frame);

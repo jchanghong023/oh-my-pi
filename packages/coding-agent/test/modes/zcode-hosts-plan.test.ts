@@ -39,6 +39,7 @@ function createHost(cwd: string) {
 	let state: PlanModeState | undefined;
 	let enabled = ["read", "mcp__server_tool"];
 	let mounted = ["read", "mcp__server_tool"];
+	const registered = new Set(["read", "write", "mcp__server_tool"]);
 	let proposal: PlanProposalHandler | null = null;
 	let manager = SessionManager.inMemory(cwd);
 	let generation = 0;
@@ -80,9 +81,10 @@ function createHost(cwd: string) {
 		getGoalModeState: () => undefined,
 		getVibeModeState: () => undefined,
 		getPlanReferencePath: () => planPath,
+		getAllToolNames: () => [...registered],
 		getEnabledToolNames: () => [...enabled],
 		getMountedXdevToolNames: () => [...mounted],
-		hasBuiltInTool: name => name === "write",
+		hasBuiltInTool: name => name === "read" || name === "write",
 		setActiveToolsByName: async tools => {
 			enabled = [...tools];
 		},
@@ -90,9 +92,12 @@ function createHost(cwd: string) {
 			enabled = [...tools];
 			mounted = [...devices];
 		},
-		restoreNonMCPToolPresentation: async (tools, devices) => {
-			enabled = [...tools, ...enabled.filter(name => name.startsWith("mcp__"))];
-			mounted = [...devices, ...mounted.filter(name => name.startsWith("mcp__"))];
+		restoreNonMCPToolPresentation: async (tools, devices, previousRegistered) => {
+			const isMCP = (name: string) => name.startsWith("mcp__");
+			const isLate = (name: string) =>
+				!isMCP(name) && !session.hasBuiltInTool(name) && !previousRegistered.includes(name);
+			enabled = [...tools, ...enabled.filter(isMCP), ...enabled.filter(isLate)];
+			mounted = [...devices, ...mounted.filter(isMCP), ...mounted.filter(isLate)];
 		},
 		setPlanProposalHandler: handler => {
 			proposal = handler;
@@ -207,6 +212,7 @@ function createHost(cwd: string) {
 		planPath,
 		changeSession,
 		setStreaming,
+		registerTool: (name: string) => registered.add(name),
 	};
 }
 
@@ -228,6 +234,46 @@ describe("ZCode plan mode host", () => {
 		expect(host.session.sessionManager.buildSessionContext().mode).toBe("plan_paused");
 		await host.controller.handle("");
 		expect(host.session.sessionManager.buildSessionContext().mode).toBe("none");
+	});
+
+	test("exit rollback retains the snapshot and restores late tools and current MCP selection on retry", async () => {
+		await using root = await TempDir.create("rpc-plan-presentation-");
+		const host = createHost(root.absolute());
+		host.registerTool("original");
+		host.registerTool("previously_disabled");
+		await host.session.setActiveToolPresentation(["original", "mcp__server_tool"], ["original"]);
+		await host.controller.handle("");
+
+		host.registerTool("late");
+		host.registerTool("mcp__new_tool");
+		const planTools = ["original", "write", "previously_disabled", "late", "mcp__new_tool"];
+		const planMounted = ["previously_disabled", "late", "mcp__new_tool"];
+		await host.session.setActiveToolPresentation(planTools, planMounted);
+		vi.spyOn(host.session, "setModelTemporary").mockRejectedValueOnce(new Error("model restore failed"));
+		await expect(host.controller.beginSessionChange()).rejects.toThrow("model restore failed");
+		expect(host.session.getPlanModeState()?.enabled).toBe(true);
+		expect(host.session.getEnabledToolNames()).toEqual(planTools);
+		expect(host.session.getMountedXdevToolNames()).toEqual(planMounted);
+
+		await host.controller.beginSessionChange();
+		expect(host.session.getPlanModeState()).toBeUndefined();
+		expect(host.session.getEnabledToolNames()).toEqual(["original", "mcp__new_tool", "late"]);
+		expect(host.session.getMountedXdevToolNames()).toEqual(["original", "mcp__new_tool", "late"]);
+		await host.controller.endSessionChange();
+	});
+
+	test("approval restores the prior presentation while enabling read", async () => {
+		await using root = await TempDir.create("rpc-plan-approval-read-");
+		const host = createHost(root.absolute());
+		host.registerTool("original");
+		await host.session.setActiveToolPresentation(["original"], ["original"]);
+		await Bun.write(host.planPath, "# Approved plan");
+		await host.controller.handle("");
+		host.controller.observe(await host.propose());
+		await host.drain();
+		expect(host.session.getEnabledToolNames()).toEqual(["original", "read"]);
+		expect(host.session.getMountedXdevToolNames()).toEqual(["original"]);
+		expect(host.submitted).toHaveLength(1);
 	});
 
 	test("an enabled extension replacement of write is excluded and reported to the host", async () => {

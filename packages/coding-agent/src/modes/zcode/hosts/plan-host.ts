@@ -29,6 +29,7 @@ interface ModelSnapshot {
 interface ToolPresentation {
 	enabled: string[];
 	mounted: string[];
+	registered: string[];
 }
 
 /** Narrow session seam also used by the controller's contract tests. */
@@ -47,6 +48,7 @@ export type PlanHostSession = Pick<
 	| "getPlanModeState"
 	| "setPlanModeState"
 	| "getPlanReferencePath"
+	| "getAllToolNames"
 	| "getEnabledToolNames"
 	| "getMountedXdevToolNames"
 	| "hasBuiltInTool"
@@ -533,6 +535,7 @@ export class PlanHost {
 		this.#previousTools = {
 			enabled: tools.filter(name => !isMCPToolName(name)),
 			mounted: mounted.filter(name => !isMCPToolName(name)),
+			registered: session.getAllToolNames(),
 		};
 		this.#previousModel =
 			previousModel ?? (model ? { model, thinkingLevel: session.configuredThinkingLevel() } : undefined);
@@ -627,7 +630,11 @@ export class PlanHost {
 				// Approved execution keeps the durable plan readable, as in the TUI approval flow.
 				const enabled = this.#previousTools.enabled;
 				const executionTools = ensureRead && !enabled.includes("read") ? [...enabled, "read"] : enabled;
-				await session.restoreNonMCPToolPresentation(executionTools, this.#previousTools.mounted);
+				await session.restoreNonMCPToolPresentation(
+					executionTools,
+					this.#previousTools.mounted,
+					this.#previousTools.registered,
+				);
 			}
 			if (this.#previousModel) {
 				if (session.isStreaming && !atInputBoundary) pendingModel = this.#previousModel;

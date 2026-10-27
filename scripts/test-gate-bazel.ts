@@ -332,12 +332,22 @@ async function declareTargets(
 	const rustInputsEnvironment = rustCommands[0] ? rustEnvironment(rustCommands[0]) : {};
 	if (rustCommands.some(command => JSON.stringify(rustEnvironment(command)) !== JSON.stringify(rustInputsEnvironment)))
 		throw new GateCommandError("Rust primitives require one consistent toolchain discovery environment", 1);
-	const inventory = await gate.capture({
-		label: "scope/Bazel source paths",
-		argv: ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-		cwd: root,
-	});
-	const files = [...new Set(inventory.stdout.split("\0").filter(Boolean))].sort();
+	const [inventory, removed] = await Promise.all([
+		gate.capture({
+			label: "scope/Bazel source paths",
+			argv: ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+			cwd: root,
+		}),
+		gate.capture({
+			label: "scope/Bazel removed source paths",
+			argv: ["git", "ls-files", "--deleted", "-z"],
+			cwd: root,
+		}),
+	]);
+	// Unstaged deletions must change the repository declaration even when a
+	// cached directory-junction overlay still names the formerly tracked files.
+	const removedFiles = new Set(removed.stdout.split("\0").filter(Boolean));
+	const files = [...new Set(inventory.stdout.split("\0").filter(file => file && !removedFiles.has(file)))].sort();
 	const tools: Record<string, string> = { [process.platform === "win32" ? "bun.exe" : "bun"]: process.execPath };
 	const toolPath = bazelToolPath(process.env.PATH ?? process.env.Path ?? "");
 	const tuiTools = new Map<GateCommand, { name?: string; reusable: boolean }>();

@@ -44,6 +44,7 @@ describe("ModelRegistry runtime discovery", () => {
 	let originalOllamaContextLength: string | undefined;
 	let originalAnthropicApiKey: string | undefined;
 	let originalLlamaCppBaseUrl: string | undefined;
+	let originalOffline: string | undefined;
 
 	beforeEach(async () => {
 		resetSettingsForTest();
@@ -51,6 +52,8 @@ describe("ModelRegistry runtime discovery", () => {
 		originalOllamaHost = Bun.env.OLLAMA_HOST;
 		originalOllamaContextLength = Bun.env.OLLAMA_CONTEXT_LENGTH;
 		originalAnthropicApiKey = Bun.env.ANTHROPIC_API_KEY;
+		originalOffline = process.env.OMP_OFFLINE;
+		delete process.env.OMP_OFFLINE;
 		delete Bun.env.OLLAMA_BASE_URL;
 		delete Bun.env.OLLAMA_HOST;
 		delete Bun.env.OLLAMA_CONTEXT_LENGTH;
@@ -95,6 +98,11 @@ describe("ModelRegistry runtime discovery", () => {
 		} else {
 			Bun.env.LLAMA_CPP_BASE_URL = originalLlamaCppBaseUrl;
 		}
+		if (originalOffline === undefined) {
+			delete process.env.OMP_OFFLINE;
+		} else {
+			process.env.OMP_OFFLINE = originalOffline;
+		}
 		authStorage.close();
 		if (tempDir && fs.existsSync(tempDir)) {
 			removeSyncWithRetries(tempDir);
@@ -114,6 +122,7 @@ describe("ModelRegistry runtime discovery", () => {
 			| "LITELLM_BASE_URL"
 			| "LLAMA_CPP_BASE_URL"
 			| "LM_STUDIO_BASE_URL"
+			| "OMP_OFFLINE"
 			| "OLLAMA_BASE_URL"
 			| "OLLAMA_CONTEXT_LENGTH"
 			| "OLLAMA_HOST",
@@ -1960,6 +1969,42 @@ describe("ModelRegistry runtime discovery", () => {
 			});
 		}
 	});
+
+	for (const type of ["llama.cpp", "lm-studio"] as const) {
+		test(`${type} selected model metadata refresh stays cache-only offline`, async () => {
+			writeRawModelsJson({
+				"local-metadata-test": {
+					baseUrl: "http://127.0.0.1:9995",
+					api: "openai-completions",
+					auth: "none",
+					headers: { "X-Test": "!echo metadata-token" },
+					discovery: { type },
+					models: [{ id: "selected-model", reasoning: false, input: ["text"] }],
+				},
+			});
+			const requests: string[] = [];
+			const fetchMock: FetchImpl = async input => {
+				requests.push(String(input));
+				return Response.json({});
+			};
+			const registry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: fetchMock });
+			expect(registry.getError()).toBeUndefined();
+			const model = registry.find("local-metadata-test", "selected-model");
+			expect(registry.hasLazyRuntimeMetadata("local-metadata-test")).toBe(true);
+			if (!model?.resolveHeaders) throw new Error("command-backed model headers missing");
+			const resolveHeaders = vi.fn(model.resolveHeaders);
+			const selected = { ...model, resolveHeaders };
+			const before = { contextWindow: model.contextWindow, maxTokens: model.maxTokens, input: [...model.input] };
+
+			using _offline = withEnv("OMP_OFFLINE", "1");
+			const refreshed = await registry.refreshSelectedModelMetadata(selected);
+
+			expect(refreshed).toBe(selected);
+			expect(resolveHeaders).not.toHaveBeenCalled();
+			expect(requests).toEqual([]);
+			expect(registry.find("local-metadata-test", "selected-model")).toMatchObject(before);
+		});
+	}
 
 	test("runtime metadata refresh probes native /models for a /v1-routed Qwen model", async () => {
 		const requested: string[] = [];

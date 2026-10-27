@@ -112,6 +112,8 @@ describe("complete fork-delta TS selection", () => {
 			...tuiTests,
 		];
 		const desktop = "packages/natives/test/desktop.test.ts";
+		const dependencyTest =
+			"packages/coding-agent/src/spec-driven/vendor/resources/openspec/node_modules/zod/src/v3/tests/all-errors.test.ts";
 		const log = spyOn(console, "log").mockImplementation(() => {});
 		try {
 			const commands = fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), [
@@ -119,6 +121,7 @@ describe("complete fork-delta TS selection", () => {
 				"packages/metaharness/adapters/edit/runner.ts",
 				"packages/metaharness/adapters/edit/removed-runner.test.ts",
 				desktop,
+				dependencyTest,
 			]);
 			const tests = commands.filter(command => command.label.startsWith("test/fork "));
 			expect(tests.map(command => command.label)).toEqual(changedTests.map(file => `test/fork ${file}`));
@@ -139,6 +142,8 @@ describe("complete fork-delta TS selection", () => {
 				);
 			}
 			expect(log.mock.calls).toContainEqual([`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${desktop}`]);
+			const rust = commands.find(command => command.label === "test/Rust affected crates")!;
+			expect(JSON.parse(rust.env!.OMP_FULLTEST_CHANGED_PATHS as string)).toContain(dependencyTest);
 		} finally {
 			log.mockRestore();
 		}

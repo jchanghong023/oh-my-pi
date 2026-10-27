@@ -6,7 +6,7 @@ import { filterAvailableModelsByEnabledPatterns, resolveProviderModelReference }
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings, SettingProvenance } from "../config/settings";
 import { UserSettingError, type UserSettingSaveResult, type UserSettingSide } from "../config/user-settings";
-import { resolveTeamParticipants, teamModelCapabilityIssue } from "./members";
+import { expandTeamRoster, teamModelCapabilityIssue } from "./members";
 import type {
 	TeamConfigErrorCode,
 	TeamConfigErrorData,
@@ -37,7 +37,6 @@ export class TeamConfigError extends Error {
 export interface TeamConfigServiceDependencies {
 	getSettings: () => Settings;
 	getModelRegistry: () => ModelRegistry;
-	getSessionModel: () => Model | undefined;
 	emit?: (frame: object) => void;
 	isCurrent?: () => boolean;
 }
@@ -124,12 +123,10 @@ function label(index: number): string {
 export class TeamConfigService {
 	readonly #settings: Settings;
 	readonly #registry: ModelRegistry;
-	readonly #sessionModel: Model | undefined;
 	readonly #profile: string | null;
 	constructor(readonly deps: TeamConfigServiceDependencies) {
 		this.#settings = deps.getSettings();
 		this.#registry = deps.getModelRegistry();
-		this.#sessionModel = deps.getSessionModel();
 		this.#profile = getActiveProfile() ?? null;
 	}
 
@@ -275,32 +272,15 @@ export class TeamConfigService {
 			return { effectiveMembers: null, source: source(provenance), participants: [] };
 		}
 		const configured = value === undefined ? [] : value;
-		const base = configured.length > 0 ? configured : this.#sessionModel ? [key(this.#sessionModel)] : null;
-		const effectiveMembers = base ? this.#slots(base, list, issues, catalog, provenance) : null;
-		const resolved = resolveTeamParticipants({
-			configuredMembers: configured,
-			sessionModel: this.#sessionModel,
-			availableModels: catalog.eligible,
-		});
-		if (!resolved.ok && !issues.some(issue => issue.target === "member" || issue.target === "session_model")) {
-			issues.push({
-				code: "participants_unavailable",
-				message: resolved.error,
-				target: "config",
-				source: provenance,
-			});
-		}
-		return {
-			effectiveMembers,
-			source: source(provenance),
-			participants: resolved.ok
-				? resolved.participants.map(participant => ({
-						index: participant.index,
-						label: label(participant.index),
-						model: ref(participant.model),
-					}))
-				: [],
-		};
+		const effectiveMembers = this.#slots(configured, list, issues, catalog, provenance);
+		const participants = effectiveMembers.every(slot => slot.status === "available")
+			? expandTeamRoster(effectiveMembers, (slot, index) => ({
+					index,
+					label: label(index),
+					model: slot.model!,
+				}))
+			: [];
+		return { effectiveMembers, source: source(provenance), participants };
 	}
 
 	getConfig(preview?: TeamConfigPreviewInput): Promise<TeamConfigSnapshot> {
@@ -354,20 +334,6 @@ export class TeamConfigService {
 		};
 		const active = readSide(stored.active, "userMembers", "active");
 		const persistent = readSide(stored.persistent, "persistentMembers", "persistent");
-		const session = this.#sessionModel;
-		const sessionResult = resolveTeamParticipants({
-			configuredMembers: [],
-			sessionModel: session,
-			availableModels: catalog.eligible,
-		});
-		if (!sessionResult.ok) {
-			const capability = session ? teamModelCapabilityIssue(session) : undefined;
-			issues.push({
-				code: capability?.code ?? "session_model_unavailable",
-				message: capability?.message ?? sessionResult.error,
-				target: "session_model",
-			});
-		}
 		const projected = this.#settings.projectUserSetting("team.members", stored.active.value);
 		const effective = this.#projection(projected.value, projected.source, issues, catalog, false);
 		if (
@@ -384,7 +350,7 @@ export class TeamConfigService {
 			...(active.members !== undefined ? { userMembers: active.members } : {}),
 			...(persistent.members !== undefined ? { persistentMembers: persistent.members } : {}),
 			...effective,
-			sessionModel: session ? { model: ref(session), name: session.name, available: sessionResult.ok } : null,
+			sessionModel: null,
 			issues,
 			writableScopes: revision === null ? [] : ["user"],
 			storage: {
@@ -395,7 +361,7 @@ export class TeamConfigService {
 			},
 		};
 		if (preview !== undefined) {
-			const previewIssues = issues.filter(issue => issue.target === "session_model");
+			const previewIssues: TeamConfigIssue[] = [];
 			const projection = this.#settings.projectUserSetting("team.members", draft);
 			const draftPreview: TeamConfigPreview = {
 				clientRevision: preview.clientRevision,

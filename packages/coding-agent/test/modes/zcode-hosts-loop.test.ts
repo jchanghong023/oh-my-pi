@@ -4,8 +4,8 @@ import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
 import * as conditions from "@oh-my-pi/pi-coding-agent/modes/loop-condition";
 import { GoalHost, type GoalHostSession } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/goal-host";
 import { LoopHost } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/loop-host";
-import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-settle";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { isSessionSettled } from "@oh-my-pi/pi-coding-agent/session/session-settle";
 
 const agentEnd = { type: "agent_end", isTerminal: true, messages: [] } satisfies AgentSessionEvent;
 
@@ -123,18 +123,18 @@ describe("ZCode host loop continuation", () => {
 			f.controller.observe(agentEnd);
 			await advance(1000);
 			expect(f.controller.continuationPending).toBe(true);
-			expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(false);
+			expect(isSessionSettled(f.session, () => f.controller.continuationPending)).toBe(false);
 			expect(submissions).toEqual([]);
 			if (cancel) {
 				f.controller.pause();
 				expect(f.controller.continuationPending).toBe(false);
-				expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
+				expect(isSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
 			}
 			gate.resolve();
 			await advance(0);
 			expect(submissions).toEqual(cancel ? [] : ["repeat"]);
 			expect(f.controller.continuationPending).toBe(false);
-			expect(isRpcSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
+			expect(isSessionSettled(f.session, () => f.controller.continuationPending)).toBe(true);
 		});
 	}
 

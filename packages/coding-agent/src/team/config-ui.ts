@@ -48,7 +48,6 @@ class TeamConfigPanel implements Component {
 		this.#service = new TeamConfigService({
 			getSettings: () => this.#settings,
 			getModelRegistry: () => this.#session.modelRegistry,
-			getSessionModel: () => this.#session.model,
 			isCurrent: () => this.#current(),
 		});
 	}

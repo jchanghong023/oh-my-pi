@@ -691,9 +691,8 @@ describe("ExtensionUiController tool approval", () => {
 			harness.editor.setText("[Image #1]");
 			return true;
 		};
-		const onSubmit = vi.fn();
-		harness.editor.onSubmit = onSubmit;
-		void harness.controller.showCollabAwareApproval(prompt);
+		harness.editor.onSubmit = text => harness.queueSteer(text);
+		const pending = harness.controller.showCollabAwareApproval(prompt);
 		harness.handleInput("\x1b[200~\x1b[201~");
 		// The composer is still empty, yet this Enter belongs to the paste, not to the empty-composer guard.
 		harness.handleInput("\r");
@@ -701,7 +700,10 @@ describe("ExtensionUiController tool approval", () => {
 		await clipboard.promise;
 		await Promise.resolve();
 		await Promise.resolve();
-		expect(onSubmit).toHaveBeenCalledWith("[Image #1]");
+		expect(await pending).toBe("deny");
+		expect(harness.agent.peekSteeringQueue().map(message => message.role === "user" && message.content)).toEqual([
+			"[Image #1]",
+		]);
 	});
 
 	it("lets ctrl+o reveal a single-line detail the row clips, even when compact and full match", () => {

@@ -22,7 +22,6 @@ import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
 import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
 import type { TeamRunResult } from "../team/types";
 import { hasExplicitRepairIntent } from "./orchestrator";
-import { ExecutionEvidence } from "./execution-evidence";
 import { grantSpecExecutionSkills } from "./skill-policy";
 import type {
 	SpecAgentInput,
@@ -39,7 +38,6 @@ export interface SpecActor {
 	readonly session: AgentSession;
 	request(input: SpecAgentInput, context: SpecRunContext, teamResult?: TeamRunResult): Promise<SpecConversationReply>;
 	checkSolutionCandidates(candidates: readonly SpecCandidate[]): void;
-	checkExecution(): void;
 	stop(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -144,7 +142,6 @@ export async function createSpecActor(args: {
 	let reportTurn: unknown;
 	let needsRecovery = !!args.recoverContext;
 	let guardStop: Promise<void> | undefined;
-	let executionEvidence: ExecutionEvidence | undefined;
 	const lastUser = () => session?.messages.findLast(message => message.role === "user");
 	const repairAuthorized = () => {
 		const user = lastUser();
@@ -220,9 +217,8 @@ export async function createSpecActor(args: {
 		async beforeSpawn(request) {
 			await checkScoutAdmission();
 			if (request.isolation?.requested) throw new Error("Dev 协作不得创建 worktree。");
-			executionEvidence?.start(request);
 		},
-		async configureSession(request, options) {
+		async configureSession(_request, options) {
 			return {
 				toolNames: options.toolNames ?? args.options.toolNames ?? [],
 				toolRestrictions: restrictions.clone(),
@@ -234,27 +230,9 @@ export async function createSpecActor(args: {
 					: (options.skills ?? args.options.skills),
 				subagentHooks: executorHooks,
 				onSessionCreated(child) {
-					const release = grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []);
-					try {
-						const tools = child.getEnabledToolNames();
-						executionEvidence?.observeSession(
-							request,
-							["write", "edit", "bash"].some(name => tools.includes(name) && restrictions.allows(name)),
-						);
-					} catch (error) {
-						release();
-						throw error;
-					}
-					return release;
+					return grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []);
 				},
 			};
-		},
-		async onSpawnFailed(request) {
-			executionEvidence?.failed(request);
-		},
-		async onSettled(request, result) {
-			if (result) executionEvidence?.settled(request, result);
-			else executionEvidence?.failed(request);
 		},
 	};
 	const writeGuard: ExtensionFactory = pi => {
@@ -367,12 +345,6 @@ export async function createSpecActor(args: {
 			const requested = event.input.path;
 			if (typeof requested !== "string") return;
 			if (path.resolve(args.options.cwd!, requested) !== path.resolve(args.options.cwd!, args.reportPath)) return;
-			try {
-				executionEvidence?.check();
-			} catch {
-				// A report can describe incomplete work without creating an acceptance boundary.
-				return;
-			}
 			reportTurn = lastUser();
 			await args.observeReport?.();
 			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
@@ -389,7 +361,6 @@ export async function createSpecActor(args: {
 			const explicitRepair = hasExplicitRepairIntent(event.prompt);
 			if (valid && status?.awaitingAcceptance && !status.accepted && explicitRepair) {
 				await args.beginRepair?.();
-				executionEvidence?.reset();
 			}
 			// Keep read-only explanations available after invalidation; tool_call is authoritative for writes.
 			if (
@@ -491,7 +462,6 @@ export async function createSpecActor(args: {
 		systemPrompt: defaults => [...defaults, ...(args.methods ?? []), fixed, communicationPrompt],
 	});
 	const session = created.session;
-	if (args.role === "executor") executionEvidence = new ExecutionEvidence(session.sessionManager, session.sessionId);
 	const ref = registry.get(id);
 	const unsubscribeRunState = registry.syncSessionStatus(id, session);
 	session.addDisposer(() => {
@@ -567,10 +537,6 @@ export async function createSpecActor(args: {
 		id,
 		role: args.role,
 		session,
-		checkExecution() {
-			if (!executionEvidence) throw new Error("执行阶段会话不可用，无法核实子代理结果。");
-			executionEvidence.check();
-		},
 		checkSolutionCandidates(candidates) {
 			// The existing native stage handoff already owns the full real Team result.
 			// Read it only at the explicit next boundary; never create a second run-state store.
@@ -626,7 +592,6 @@ export async function createSpecActor(args: {
 					},
 					{ triggerTurn: false },
 				);
-				if (input.role === "executor") executionEvidence?.reset();
 			}
 			owned(context);
 			const task = input.entry ? input.userReply || input.request : (input.feedback ?? "");
