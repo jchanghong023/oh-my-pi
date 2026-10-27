@@ -1,0 +1,182 @@
+import { describe, expect } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
+import { LegacyProtocol } from "../../src/modes/zcode/schema";
+import inventory from "../../src/spec-driven/vendor/inventory.json";
+import {
+	fixture,
+	GATE_BUDGET,
+	launch,
+	PublicPeer,
+	registerInvalidFileTests,
+	run,
+	test,
+	workspace,
+} from "./process-fixture";
+import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
+import { createProviderFixture, MARKER, type Reply, REQUIREMENT, respond, rolePayload } from "./provider-fixture";
+
+describe("spec-driven actual OMP public entry", () => {
+	test(
+		"linked requirements cannot change business files and resume after the link is removed",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-document-link-");
+			let cwd = "";
+			let linkedDirectory = "";
+			let blockedWrite: Reply["tool"];
+			let repairing = false;
+			let repairDispatched = false;
+			await using provider = createProviderFixture({
+				async reply(request) {
+					const role = rolePayload(request)?.specDrivenRole;
+					if (repairing && role === "requirements") {
+						if (!repairDispatched && blockedWrite) {
+							repairDispatched = true;
+							return { tool: blockedWrite };
+						}
+						return { text: "需求文档已在正常目录中补齐，请确认。" };
+					}
+					const reply = respond(request);
+					const requested = reply.tool?.args.path;
+					if (
+						role === "requirements" &&
+						typeof requested === "string" &&
+						requested.endsWith("/spec.md") &&
+						!blockedWrite
+					) {
+						blockedWrite = reply.tool;
+						linkedDirectory = path.dirname(path.join(cwd, requested));
+						await fs.mkdir(path.dirname(linkedDirectory), { recursive: true });
+						await fs.symlink(
+							path.join(cwd, "src"),
+							linkedDirectory,
+							process.platform === "win32" ? "junction" : "dir",
+						);
+					}
+					return reply;
+				},
+			});
+			const config = await fixture(root, provider.baseUrl);
+			cwd = config.cwd;
+			await fs.mkdir(path.join(cwd, "src"));
+			const business = path.join(cwd, "src/spec.md");
+			await fs.writeFile(business, "business bytes");
+			await using peer = new PublicPeer(cwd, config.env, provider);
+			await peer.ready();
+			const session = await peer.create(cwd);
+			await peer.send(session, "/dev");
+			const since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
+			const current = await peer.stage(session, "requirements", false);
+			const stageId = current.spec.interaction?.recipient?.sessionId;
+			if (!stageId) throw new Error("Native requirements session missing");
+			await peer.settled(stageId, since);
+			if (!blockedWrite || !linkedDirectory) throw new Error("Native specification write was not exercised");
+			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
+			await peer.send(session, "/dev next", "failed");
+			expect((await peer.stage(session, "requirements", false)).spec.interaction?.recipient?.sessionId).toBe(
+				stageId,
+			);
+			await fs.rm(linkedDirectory, { recursive: true, force: true });
+			repairing = true;
+			const repairSince = await peer.send(session, "请在已移除链接的原路径补齐需求文档");
+			await peer.settled(stageId, repairSince);
+			const nextSince = await peer.send(session, "/dev next");
+			const solution = await peer.stage(session, "solution", false);
+			const solutionId = solution.spec.interaction?.recipient?.sessionId;
+			if (!solutionId) throw new Error("Native solution session missing");
+			await peer.settled(solutionId, nextSince);
+			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
+			expect(provider.failures).toEqual([]);
+			await peer.send(session, "/dev");
+		},
+		GATE_BUDGET,
+	);
+
+	registerInvalidFileTests(["solution", "planner"]);
+
+	registerPackagedSkillTest(false);
+
+	test(
+		"detached public omp openspec dispatch supplies native commands, schema and instructions",
+		async () => {
+			await using root = await TempDir.create("@omp-openspec-distribution-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			const invoke = async (args: string[]) => run(config.cwd, config.env, [...launch, "openspec", ...args]);
+			const help = await invoke(["--help"]);
+			expect(help.exitCode).toBe(0);
+			for (const command of [
+				"init",
+				"list",
+				"view",
+				"show",
+				"change",
+				"spec",
+				"new",
+				"status",
+				"instructions",
+				"schema",
+				"validate",
+				"archive",
+			])
+				expect(help.stdout).toContain(command);
+			const version = await invoke(["--version"]);
+			expect(version.exitCode).toBe(0);
+			expect(version.stdout).toContain(inventory.openspec.version);
+			let resourceRoot: string;
+			{
+				// Locate the distribution through its public skill catalog, not the source resource loader.
+				await using peer = new PublicPeer(config.cwd, config.env, provider);
+				await peer.ready();
+				const session = await peer.create(config.cwd);
+				const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
+					await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: session }),
+				);
+				const entry = catalog.skills.find(skill => skill.name === "brainstorming");
+				if (!entry) throw new Error("Packaged Superpowers skill unavailable through public catalog");
+				resourceRoot = path.resolve(entry.path, "../../../..");
+				expect((await fs.realpath(resourceRoot)).startsWith(await fs.realpath(config.root))).toBe(true);
+			}
+			const catalogRequestCount = provider.requests.length;
+			const bundledSchema = path.join(resourceRoot, "omp-spec");
+			const schema = path.join(config.cwd, "openspec/schemas/omp-spec");
+			await fs.mkdir(path.dirname(schema), { recursive: true });
+			await fs.cp(bundledSchema, schema, { recursive: true });
+			const created = await invoke(["new", "change", "distribution-check", "--schema", "omp-spec"]);
+			expect(created.exitCode).toBe(0);
+			const status = await invoke(["status", "--change", "distribution-check", "--json"]);
+			expect(status.exitCode).toBe(0);
+			const state = JSON.parse(status.stdout) as { artifacts: Array<{ id: string }> };
+			expect(state.artifacts.map(artifact => artifact.id).sort()).toEqual(["proposal", "specs"]);
+			for (const artifact of ["proposal", "specs"]) {
+				const instruction = await invoke(["instructions", artifact, "--change", "distribution-check", "--json"]);
+				expect(instruction.exitCode).toBe(0);
+				const value: unknown = JSON.parse(instruction.stdout);
+				expect(isRecord(value)).toBe(true);
+				expect(JSON.stringify(value)).toContain(artifact);
+				expect(JSON.stringify(value)).toContain("template");
+			}
+			const schemas = await invoke(["schema", "which", "omp-spec", "--json"]);
+			expect(schemas.exitCode).toBe(0);
+			expect(schemas.stdout.replaceAll("\\\\", "/").replaceAll("\\", "/")).toContain("omp-spec");
+			const invalid = await invoke(["validate", "distribution-check", "--json"]);
+			expect(invalid.exitCode).not.toBe(0);
+			const change = path.join(config.cwd, "openspec/changes/distribution-check");
+			await fs.writeFile(
+				path.join(change, "proposal.md"),
+				"## Why\nExercise packaged CLI.\n\n## What Changes\nAdd greeting.\n\n## Capabilities\n### New Capabilities\n- greeting: greeting behavior\n\n## Impact\nFixture only.\n",
+			);
+			await fs.mkdir(path.join(change, "specs/greeting"), { recursive: true });
+			await fs.writeFile(
+				path.join(change, "specs/greeting/spec.md"),
+				"## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL return a greeting.\n\n#### Scenario: Greeting requested\n- **WHEN** greeting is requested\n- **THEN** return a greeting\n",
+			);
+			const valid = await invoke(["validate", "distribution-check", "--json"]);
+			expect(valid.exitCode).toBe(0);
+			expect(valid.stdout).toContain("true");
+			expect(provider.requests).toHaveLength(catalogRequestCount);
+		},
+		GATE_BUDGET,
+	);
+});

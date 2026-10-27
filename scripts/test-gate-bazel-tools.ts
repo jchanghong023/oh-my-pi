@@ -23,7 +23,7 @@ export function bazelToolPath(value: string, platform: NodeJS.Platform = process
 
 /** Only the fork E2E files using the shared native Dev TUI harness require this tool. */
 export function requiresTuiTest(label: string): boolean {
-	return /^test\/fork packages\/coding-agent\/test\/spec-driven\/tui(?:-capabilities|-lifecycle|-closing|-materials|-interactions|-resources)?\.e2e\.test\.ts$/.test(
+	return /^test\/fork packages\/coding-agent\/test\/spec-driven\/tui(?:-capabilities|-lifecycle|-closing|-materials(?:-later-roles)?|-interactions|-resources|-resource-lifecycle)?\.e2e\.test\.ts$/.test(
 		label,
 	);
 }

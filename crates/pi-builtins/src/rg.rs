@@ -26,7 +26,8 @@ use grep_searcher::{
 	BinaryDetection, Encoding, Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch,
 };
 use crate::grep::{
-	CompiledMatcher, RecordFormat, exit_status, for_each_nonempty_match, pcre2_jit_enabled,
+	CompiledMatcher, RecordFormat, SEARCH_BUFFER_LIMIT, describe_search_error, exit_status,
+	for_each_nonempty_match, pcre2_jit_enabled, read_pattern_source,
 };
 use crate::host::{Host, StreamWriter, Utility, forward_slash_display};
 
@@ -913,6 +914,7 @@ fn build_searcher(cli: &Rg, opts: &SearchOptions, mode: BinaryMode) -> Result<Se
 		.passthru(opts.passthru)
 		.invert_match(cli.invert_match)
 		.multi_line(cli.multiline)
+		.heap_limit(Some(SEARCH_BUFFER_LIMIT))
 		.binary_detection(binary_detection(cli, mode))
 		.max_matches(cli.max_count)
 		.encoding(encoding)
@@ -926,18 +928,16 @@ fn build_searcher(cli: &Rg, opts: &SearchOptions, mode: BinaryMode) -> Result<Se
 }
 
 fn read_pattern_file(host: &mut Host, path: &OsStr) -> Result<Vec<String>, String> {
-	let mut text = String::new();
-	if path == OsStr::new("-") {
-		host.stdin
-			.read_to_string(&mut text)
-			.map_err(|err| format!("rg: -: {err}"))?;
+	let bytes = if path == OsStr::new("-") {
+		read_pattern_source(&mut host.stdin)
 	} else {
 		let resolved = host.resolve(path);
-		text = host
-			.fs()
-			.read_to_string(&resolved)
-			.map_err(|err| format!("rg: {}: {err}", path.to_string_lossy()))?;
+		host.fs().open(&resolved).and_then(read_pattern_source)
 	}
+	.map_err(|err| format!("rg: {}: {err}", path.to_string_lossy()))?;
+	let text = String::from_utf8(bytes).map_err(|_| {
+		format!("rg: {}: stream did not contain valid UTF-8", path.to_string_lossy())
+	})?;
 	Ok(text
 		.lines()
 		.map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
@@ -1307,7 +1307,9 @@ fn process_file<M: Matcher, W: Write>(
 		Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Err(error),
 		Err(error) => Ok(SearchOutcome {
 			any_match: false,
-			had_error: report_path_error(host, display, path, error, opts),
+			had_error: report_path_error(
+				host, display, path, error, opts, searcher.multi_line_with_matcher(matcher),
+			),
 		}),
 	}
 }
@@ -1382,12 +1384,14 @@ fn report_path_error(
 	fallback: &Path,
 	err: io::Error,
 	opts: &SearchOptions,
+	multiline: bool,
 ) -> bool {
 	if !opts.no_messages {
 		let name = display
 			.map(|bytes| String::from_utf8_lossy(bytes).into_owned())
 			.unwrap_or_else(|| fallback.display().to_string());
-		let _ = writeln!(host.stderr, "rg: {name}: {err}");
+		let message = describe_search_error(&err, multiline);
+		let _ = writeln!(host.stderr, "rg: {name}: {message}");
 	}
 	true
 }
@@ -1746,7 +1750,11 @@ fn execute_search<M: Matcher, W: Write>(
 				Err(error) => {
 					had_error = true;
 					if !opts.no_messages {
-						let _ = writeln!(host.stderr, "rg: <stdin>: {error}");
+						let message = describe_search_error(
+							&error,
+							explicit_searcher.multi_line_with_matcher(matcher),
+						);
+						let _ = writeln!(host.stderr, "rg: <stdin>: {message}");
 					}
 				},
 			}
@@ -1930,6 +1938,66 @@ mod tests {
 	fn run(args: &[&str], stdin: &str) -> (i32, String, String) {
 		let (code, capture) = run_util::<Rg>(args, stdin, "/");
 		(code, capture.out(), capture.err())
+	}
+
+	#[test]
+	fn search_buffer_limit_reports_error_and_continues() {
+		let tree = tempfile::tempdir().unwrap();
+		let large = tree.path().join("large");
+		std::fs::File::create(&large)
+			.unwrap()
+			.set_len((crate::grep::MAX_LINE_BYTES + 1) as u64)
+			.unwrap();
+		std::fs::write(tree.path().join("small"), "hit\nnext\n").unwrap();
+
+		let (code, capture) = run_util::<Rg>(&["-a", "hit", "large", "small"], "", tree.path());
+		assert_eq!(code, 2);
+		assert_eq!(capture.out(), "small:hit\n");
+		assert!(capture.err().contains("search buffer limit"), "{}", capture.err());
+
+		let mut file = std::fs::File::create(&large).unwrap();
+		io::copy(
+			&mut io::repeat(b'\n').take((crate::grep::MAX_LINE_BYTES + 1) as u64),
+			&mut file,
+		)
+		.unwrap();
+		drop(file);
+
+		let (code, capture) =
+			run_util::<Rg>(&["-a", "-U", "hit\\nnext", "large", "small"], "", tree.path());
+		assert_eq!(code, 2);
+		assert_eq!(capture.out(), "small:hit\nnext\n");
+		assert!(capture.err().contains("search buffer limit"), "{}", capture.err());
+
+		std::fs::File::create(&large)
+			.unwrap()
+			.set_len(crate::grep::MAX_LINE_BYTES as u64)
+			.unwrap();
+		let (code, capture) = run_util::<Rg>(&["-a", "hit", "large"], "", tree.path());
+		assert_eq!(code, 1, "{}", capture.err());
+		assert!(capture.err().is_empty());
+	}
+
+	#[test]
+	fn pattern_file_is_bounded_and_requires_utf8() {
+		let tree = tempfile::tempdir().unwrap();
+		std::fs::File::create(tree.path().join("patterns"))
+			.unwrap()
+			.set_len((crate::grep::MAX_LINE_BYTES + 1) as u64)
+			.unwrap();
+		let (code, capture) = run_util::<Rg>(&["-f", "patterns", "input"], "", tree.path());
+		assert_eq!(code, 2);
+		assert!(capture.err().contains("pattern source larger than"), "{}", capture.err());
+
+		std::fs::write(tree.path().join("patterns"), [0xff]).unwrap();
+		let (code, capture) = run_util::<Rg>(&["-f", "patterns", "input"], "", tree.path());
+		assert_eq!(code, 2);
+		assert!(capture.err().contains("valid UTF-8"), "{}", capture.err());
+
+		std::fs::write(tree.path().join("input"), "hit\nmiss\n").unwrap();
+		let (code, capture) = run_util::<Rg>(&["-f", "-", "input"], "hit\n", tree.path());
+		assert_eq!(code, 0, "{}", capture.err());
+		assert_eq!(capture.out(), "hit\n");
 	}
 
 	#[test]

@@ -27,7 +27,17 @@ test("non-Windows tool lookup preserves PATH verbatim", () => {
 
 test("only native Dev TUI fork E2E targets require tui-test", () => {
 	const prefix = "test/fork packages/coding-agent/test/spec-driven/";
-	for (const suffix of ["", "-capabilities", "-lifecycle", "-closing", "-materials", "-interactions", "-resources"]) {
+	for (const suffix of [
+		"",
+		"-capabilities",
+		"-lifecycle",
+		"-closing",
+		"-materials",
+		"-materials-later-roles",
+		"-interactions",
+		"-resources",
+		"-resource-lifecycle",
+	]) {
 		expect(requiresTuiTest(`${prefix}tui${suffix}.e2e.test.ts`)).toBe(true);
 	}
 	for (const label of [

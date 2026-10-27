@@ -900,19 +900,29 @@ describe("detachGitDir", () => {
 				const baseline = await captureIsolationBaseline(root, wt);
 				// git realpaths the admin dir; a symlinked tmpdir (macOS /var -> /private/var) must match.
 				const rootReal = await fs.realpath(root);
-				for (const dir of [module, nested]) {
-					expect(await runGit(dir, ["status", "--porcelain=v1"])).toBe("");
-					// git prints forward slashes on Windows; resolve to the platform form.
-					const admin = path.resolve(await runGit(dir, ["rev-parse", "--absolute-git-dir"]));
-					expect(admin.startsWith(rootReal + path.sep)).toBe(true);
-				}
+				await Promise.all(
+					[module, nested].map(async dir => {
+						const [status, gitDir] = await Promise.all([
+							runGit(dir, ["status", "--porcelain=v1"]),
+							runGit(dir, ["rev-parse", "--absolute-git-dir"]),
+						]);
+						expect(status).toBe("");
+						// git prints forward slashes on Windows; resolve to the platform form.
+						expect(path.resolve(gitDir).startsWith(rootReal + path.sep)).toBe(true);
+					}),
+				);
 				// Submodule clones don't inherit identity; supply it only to the commits below.
 				await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
-				expect(await runGit(nested, ["diff", "--", "leaf.txt"])).toContain("+isolated");
-				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);
-				expect(await runGit(wt, ["status", "--porcelain=v1"])).toBe(sourceStatus);
+				const [leafDiff, parentHead, parentStatus, sourceLeaf] = await Promise.all([
+					runGit(nested, ["diff", "--", "leaf.txt"]),
+					runGit(wt, ["rev-parse", "HEAD"]),
+					runGit(wt, ["status", "--porcelain=v1"]),
+					fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8"),
+				]);
+				expect(leafDiff).toContain("+isolated");
+				expect(parentHead).toBe(sourceHead);
+				expect(parentStatus).toBe(sourceStatus);
 				// A Windows checkout may apply core.autocrlf to the source tree.
-				const sourceLeaf = await fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8");
 				expect(sourceLeaf.replace(/\r\n/g, "\n")).toBe("leaf\n");
 				await runGit(nested, [
 					"-c",
@@ -946,12 +956,16 @@ describe("detachGitDir", () => {
 					lastBranchName = committed.branchName;
 				}
 				await cleanupIsolation(handle);
-				expect(await runGit(wt, ["rev-parse", "HEAD"])).toBe(sourceHead);
-				expect(await runGit(wt, ["status", "--porcelain=v1"])).toBe(sourceStatus);
-				expect(await runGit(path.join(wt, "packages/module"), ["cat-file", "-t", lastModuleCommit])).toBe("commit");
-				expect(await runGit(path.join(wt, "packages/module/nested"), ["cat-file", "-t", lastLeafCommit])).toBe(
-					"commit",
-				);
+				const [cleanedHead, cleanedStatus, moduleType, leafType] = await Promise.all([
+					runGit(wt, ["rev-parse", "HEAD"]),
+					runGit(wt, ["status", "--porcelain=v1"]),
+					runGit(path.join(wt, "packages/module"), ["cat-file", "-t", lastModuleCommit]),
+					runGit(path.join(wt, "packages/module/nested"), ["cat-file", "-t", lastLeafCommit]),
+				]);
+				expect(cleanedHead).toBe(sourceHead);
+				expect(cleanedStatus).toBe(sourceStatus);
+				expect(moduleType).toBe("commit");
+				expect(leafType).toBe("commit");
 			}
 			const merged = await mergeTaskBranches(wt, [
 				{ branchName: lastBranchName, taskId: "recursive-submodule-pin", baseSha: sourceHead },

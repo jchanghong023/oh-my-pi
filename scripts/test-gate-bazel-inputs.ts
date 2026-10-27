@@ -310,7 +310,7 @@ export async function discoverBazelHelperInputs(entry: string): Promise<string[]
 	return [...inputs].sort();
 }
 
-/** Bun owns import resolution/chunking; Bazel owns the resulting filegroup DAG,
+/** Bun owns source import resolution; Bazel owns the resulting filegroup DAG,
  * transitive digests and successful results. No bundled code is executed/saved. */
 export async function discoverGateInputs(
 	root: string,
@@ -453,8 +453,6 @@ export async function discoverGateInputs(
 		}
 		if (!added) break;
 	}
-	const outputGroups: Record<string, string> = {};
-	const entryGroups: Record<string, string> = {};
 	const configGroups = new Map<string, string>();
 	// Invocation-local filesystem reuse only; every discovery rereads real
 	// configuration inputs and Bazel remains responsible for invalidation.
@@ -524,105 +522,105 @@ export async function discoverGateInputs(
 	const sourceImports = new Map(
 		Object.entries(metafile.inputs).map(([input, metadata]) => [path.resolve(input), metadata.imports]),
 	);
-	const sourceOwners = new Map<string, string>();
-	for (const [output, metadata] of Object.entries(metafile.outputs)) {
-		const inputs = [
-			...new Set([...Object.keys(metadata.inputs), ...(metadata.entryPoint ? [metadata.entryPoint] : [])]),
-		]
-			.map(input => path.relative(root, path.resolve(input)).replaceAll("\\", "/"))
-			.sort();
-		// Labels depend on source paths, never generated chunk-content hashes.
-		const name = `module_${Bun.hash(JSON.stringify([metadata.entryPoint ?? "", inputs])).toString(16)}`;
-		const key = path.posix.normalize(output.replaceAll("\\", "/"));
-		outputGroups[key] = name;
-		groups[name] = inputs;
-		deps[name] = [];
-		if (metadata.entryPoint) entryGroups[path.resolve(metadata.entryPoint)] = name;
-		for (const input of inputs) {
-			const absolute = path.resolve(root, input);
-			const previous = sourceOwners.get(absolute);
-			if (!previous || name < previous) sourceOwners.set(absolute, name);
-		}
+	const sourceGroups = new Map<string, string>();
+	for (const absolute of [...sourceImports.keys()].sort()) {
+		const relative = path.relative(root, absolute).replaceAll("\\", "/");
+		// A source identity is independent of Bun's output chunks and entry set.
+		const name = `module_${Bun.hash(relative).toString(16)}`;
+		sourceGroups.set(absolute, name);
+		groups[name] = [relative];
 	}
-	for (const [output, metadata] of Object.entries(metafile.outputs)) {
-		const key = path.posix.normalize(output.replaceAll("\\", "/"));
-		const name = outputGroups[key]!;
-		const inputs = new Set(groups[name]);
+	const builtins = new Set(builtinModules.map(name => name.replace(/^node:/, "")));
+	for (const [absolute, imports] of sourceImports) {
+		const name = sourceGroups.get(absolute)!;
+		const input = groups[name]![0]!;
+		const inputs = new Set([input]);
 		const dependencies = new Set<string>();
-		for (const imported of metadata.imports) {
-			const importedKey = path.posix.normalize(path.posix.join(path.posix.dirname(key), imported.path));
-			const dependency = outputGroups[importedKey] ?? outputGroups[path.posix.normalize(imported.path)];
-			if (dependency && dependency !== name) {
-				dependencies.add(dependency);
-				if (imported.kind === "dynamic-import") cycleRoots.add(name);
-			}
-		}
-		const pendingInputs = [...groups[name]!];
-		const visitedInputs = new Set(pendingInputs);
-		for (const input of pendingInputs) {
-			const absolute = path.resolve(root, input);
-			// Output inputs describe emitted byte contributions. Side-effect-only
-			// or zero-contribution modules may be absent there; the source graph
-			// still declares their real import dependency on every discovery.
-			for (const imported of sourceImports.get(absolute) ?? []) {
-				if (imported.external) continue;
-				const importedAbsolute = path.resolve(imported.path);
-				if (!sourceImports.has(importedAbsolute)) continue;
-				const owner = sourceOwners.get(importedAbsolute);
-				if (owner && owner !== name) {
-					if (!dependencies.has(owner)) {
-						dependencies.add(owner);
-						cycleRoots.add(name);
-					}
-				} else if (!owner) {
-					const relative = path.relative(root, importedAbsolute).replaceAll("\\", "/");
-					inputs.add(relative);
-					if (!visitedInputs.has(relative)) {
-						visitedInputs.add(relative);
-						pendingInputs.push(relative);
-					}
+		let unknownImport = false;
+		for (const imported of imports) {
+			if (imported.external && (/^(?:node|bun):/.test(imported.path) || builtins.has(imported.path))) continue;
+			let importedAbsolute = path.resolve(imported.path);
+			if (!sourceGroups.has(importedAbsolute)) {
+				try {
+					const resolved = Bun.resolveSync(imported.path, path.dirname(absolute));
+					if (/^(?:node|bun):/.test(resolved) || builtins.has(resolved)) continue;
+					importedAbsolute = path.resolve(resolved);
+				} catch {
+					// The declaring module retains its conservative fallback below.
 				}
 			}
-			const resource = resources.get(absolute);
-			for (const file of resource?.files ?? []) inputs.add(file);
-			for (const entry of resource?.entries ?? []) {
-				const dependency = entryGroups[path.resolve(root, entry)];
-				if (dependency && dependency !== name) {
-					dependencies.add(dependency);
-					cycleRoots.add(name);
-				}
-			}
-			// Keep the previous conservative boundary for genuinely opaque local
-			// loading; unresolved/opaque third-party loading retains installed inputs.
-			if (resource?.fallback || unresolved.has(absolute)) {
-				const owner = input.match(/^packages\/([^/]+)\//)?.[1];
-				dependencies.add(
-					resource?.repositoryFallback
-						? "all"
-						: input.startsWith("node_modules/")
-							? "@installed//:installed"
-							: owner
-								? `fallback_pkg_${owner}`
-								: "all",
-				);
-				dependencies.add("@installed//:installed");
-			}
-			dependencies.add(configuration(path.dirname(absolute)));
+			const dependency = sourceGroups.get(importedAbsolute);
+			if (dependency && dependency !== name) dependencies.add(dependency);
+			else if (!dependency) unknownImport = true;
 		}
+		const resource = resources.get(absolute);
+		for (const file of resource?.files ?? []) inputs.add(file);
+		for (const entry of resource?.entries ?? []) {
+			const dependency = sourceGroups.get(path.resolve(root, entry));
+			if (!dependency) throw new Error(`Missing Bun resource entry dependency: ${entry}`);
+			if (dependency !== name) dependencies.add(dependency);
+		}
+		// Keep the previous conservative boundary for genuinely opaque local
+		// loading; unresolved/opaque third-party loading retains installed inputs.
+		if (resource?.fallback || unresolved.has(absolute) || unknownImport) {
+			const owner = input.match(/^packages\/([^/]+)\//)?.[1];
+			dependencies.add(
+				resource?.repositoryFallback
+					? "all"
+					: input.startsWith("node_modules/")
+						? "@installed//:installed"
+						: owner
+							? `fallback_pkg_${owner}`
+							: "all",
+			);
+			dependencies.add("@installed//:installed");
+		}
+		dependencies.add(configuration(path.dirname(absolute)));
 		groups[name] = [...inputs].sort();
 		deps[name] = [...dependencies].sort();
-		for (const input of inputs) files.add(input);
+		for (const file of inputs) files.add(file);
+	}
+	// Every directed cycle has a DFS back edge. Seed native Bazel's SCC query
+	// only at back-edge destinations, rather than querying every import source.
+	// The native query still discovers and owns all members of each cycle.
+	const moduleNames = new Set(sourceGroups.values());
+	const states = new Map<string, number>();
+	for (const start of [...moduleNames].sort()) {
+		if (states.has(start)) continue;
+		states.set(start, 1);
+		const stack = [{ name: start, next: 0 }];
+		while (stack.length) {
+			const frame = stack[stack.length - 1]!;
+			const edges = deps[frame.name]!;
+			if (frame.next === edges.length) {
+				states.set(frame.name, 2);
+				stack.pop();
+				continue;
+			}
+			const next = edges[frame.next++]!;
+			if (!moduleNames.has(next)) continue;
+			const state = states.get(next);
+			if (state === 1) cycleRoots.add(next);
+			else if (state === undefined) {
+				states.set(next, 1);
+				stack.push({ name: next, next: 0 });
+			}
+		}
 	}
 	for (const command of commands) {
 		const entries = commandEntries[command.label];
 		if (!entries) continue;
 		const name = `command_${Bun.hash(command.label).toString(16)}`;
 		groups[name] = [];
-		deps[name] = entries.map(entry => {
-			const dependency = entryGroups[entry];
-			if (!dependency) throw new Error(`Missing Bun entry dependency: ${entry}`);
-			return dependency;
-		});
+		deps[name] = [
+			...new Set(
+				entries.map(entry => {
+					const dependency = sourceGroups.get(entry);
+					if (!dependency) throw new Error(`Missing Bun entry dependency: ${entry}`);
+					return dependency;
+				}),
+			),
+		].sort();
 		if (/^test\/Rust/.test(command.label)) {
 			groups[name] = inventory.filter(file =>
 				/^(?:crates\/|vendor\/|\.cargo\/|Cargo\.(?:toml|lock)$|rust(?:-toolchain|-toolchain\.toml|fmt\.toml)$)/.test(

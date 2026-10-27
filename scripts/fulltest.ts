@@ -170,8 +170,10 @@ export function fulltestCommands(
 				"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-materials.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-materials-later-roles.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
 				"packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts",
+				"packages/coding-agent/test/spec-driven/tui-resource-lifecycle.e2e.test.ts",
 			].includes(file)
 				? [path.join(root, "packages/coding-agent/src/cli.ts")]
 				: undefined,

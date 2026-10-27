@@ -1112,8 +1112,9 @@ fn search_file_path<M: Matcher, W: Write>(
 					if !opts.no_messages {
 						let _ = writeln!(
 							host.stderr,
-							"grep: {}: {error}",
-							display_path.to_string_lossy()
+							"grep: {}: {}",
+							display_path.to_string_lossy(),
+							describe_search_error(&error, false)
 						);
 					}
 					Ok(false)
@@ -1264,10 +1265,9 @@ fn search_dir<M: Matcher, W: Write>(
 
 fn read_auxiliary_file(host: &mut Host, path: &OsStr) -> Result<Vec<u8>, String> {
 	let result = if path == OsStr::new("-") {
-		let mut bytes = Vec::new();
-		host.stdin.read_to_end(&mut bytes).map(|_| bytes)
+		read_pattern_source(&mut host.stdin)
 	} else {
-		host.fs().read(host.resolve(path))
+		host.fs().open(host.resolve(path)).and_then(read_pattern_source)
 	};
 	result.map_err(|error| format!("{}: {error}", path.to_string_lossy()))
 }
@@ -1362,6 +1362,52 @@ fn build_path_rules(host: &mut Host, cli: &GrepArgs, matches: &ArgMatches) -> Re
 	Ok(PathRules { files: compile_rules(files)?, dirs: compile_rules(dirs)? })
 }
 
+/// Maximum size of a pattern source and the nominal search buffer budget.
+pub(crate) const MAX_LINE_BYTES: usize = 256 * 1024 * 1024;
+
+/// The extra byte allows the searcher to discover EOF at the nominal limit.
+pub(crate) const SEARCH_BUFFER_LIMIT: usize = MAX_LINE_BYTES + 1;
+
+/// Describe the searcher's allocation limit without attributing it to one
+/// line: retained before-context can also occupy the search buffer.
+pub(crate) fn describe_search_error(error: &io::Error, whole_file: bool) -> String {
+	let message = error.to_string();
+	if error.kind() == io::ErrorKind::Other
+		&& message == format!("configured allocation limit ({SEARCH_BUFFER_LIMIT}) exceeded")
+	{
+		let input = if whole_file { "file" } else { "input" };
+		format!(
+			"search buffer limit ({} MiB + 1 byte) exceeded, {input} not fully searched",
+			MAX_LINE_BYTES >> 20
+		)
+	} else {
+		message
+	}
+}
+
+/// Bound pattern and exclude-file reads, probing one byte beyond the limit.
+pub(crate) fn read_pattern_source(mut reader: impl Read) -> io::Result<Vec<u8>> {
+	let mut bytes = Vec::new();
+	(&mut reader).take(MAX_LINE_BYTES as u64).read_to_end(&mut bytes)?;
+	if bytes.len() == MAX_LINE_BYTES {
+		let mut probe = [0u8; 1];
+		loop {
+			match reader.read(&mut probe) {
+				Ok(0) => break,
+				Ok(_) => {
+					return Err(io::Error::other(format!(
+						"pattern source larger than {} MiB",
+						MAX_LINE_BYTES >> 20
+					)));
+				},
+				Err(error) if error.kind() == io::ErrorKind::Interrupted => {},
+				Err(error) => return Err(error),
+			}
+		}
+	}
+	Ok(bytes)
+}
+
 fn build_searcher(cli: &GrepArgs, opts: &Options, max_count: Option<u64>) -> Searcher {
 	let binary_detection = if cli.null_data || opts.binary_files == BinaryFiles::Text {
 		BinaryDetection::none()
@@ -1377,7 +1423,8 @@ fn build_searcher(cli: &GrepArgs, opts: &Options, max_count: Option<u64>) -> Sea
 		.after_context(opts.after)
 		.invert_match(cli.invert)
 		.binary_detection(binary_detection)
-		.max_matches(max_count);
+		.max_matches(max_count)
+		.heap_limit(Some(SEARCH_BUFFER_LIMIT));
 	if cli.null_data {
 		builder.line_terminator(LineTerminator::byte(b'\0'));
 	}
@@ -1434,7 +1481,11 @@ fn execute_search<M: Matcher>(
 				Err(error) => {
 					had_error = true;
 					if !opts.no_messages {
-						let _ = writeln!(host.stderr, "grep: (standard input): {error}");
+						let _ = writeln!(
+							host.stderr,
+							"grep: (standard input): {}",
+							describe_search_error(&error, false)
+						);
 					}
 				},
 			}
@@ -1778,6 +1829,50 @@ mod tests {
 		let (code, capture) = run_util::<Grep>(&["-f", "patterns", "haystack"], "", tree.path());
 		assert_eq!(code, 0, "{}", capture.err());
 		assert_eq!(capture.out(), "alpha\nbeta\n");
+	}
+
+	#[test]
+	fn oversized_input_is_a_file_error_and_other_files_are_searched() {
+		let tree = tempfile::tempdir().unwrap();
+		let big = std::fs::File::create(tree.path().join("big")).unwrap();
+		big.set_len(MAX_LINE_BYTES as u64).unwrap();
+		std::fs::write(tree.path().join("small"), "needle\n").unwrap();
+
+		// The searcher needs one extra byte of budget to observe EOF here.
+		let (code, capture) = run_util::<Grep>(&["-a", "-c", "needle", "big"], "", tree.path());
+		assert_eq!(code, 1, "{}", capture.err());
+		assert_eq!(capture.out(), "0\n");
+
+		big.set_len(SEARCH_BUFFER_LIMIT as u64 + 1).unwrap();
+		let (code, capture) =
+			run_util::<Grep>(&["-a", "-l", "needle", "big", "small"], "", tree.path());
+		assert_eq!(code, 2);
+		assert_eq!(capture.out(), "small\n");
+		let err = capture.err();
+		assert!(err.contains("grep: big: search buffer limit (256 MiB + 1 byte) exceeded"), "{err}");
+	}
+
+	#[test]
+	fn oversized_pattern_and_exclude_sources_are_refused() {
+		let tree = tempfile::tempdir().unwrap();
+		let big = std::fs::File::create(tree.path().join("big")).unwrap();
+		big.set_len(MAX_LINE_BYTES as u64).unwrap();
+		let bytes = read_pattern_source(std::fs::File::open(tree.path().join("big")).unwrap()).unwrap();
+		assert_eq!(bytes.len(), MAX_LINE_BYTES);
+		drop(bytes);
+		big.set_len(MAX_LINE_BYTES as u64 + 1).unwrap();
+		std::fs::write(tree.path().join("small"), "needle\n").unwrap();
+
+		for args in [
+			&["-f", "big", "small"][..],
+			&["--exclude-from", "big", "needle", "small"][..],
+		] {
+			let (code, capture) = run_util::<Grep>(args, "", tree.path());
+			assert_eq!(code, 2);
+			assert!(capture.out().is_empty());
+			let err = capture.err();
+			assert!(err.contains("big: pattern source larger than 256 MiB"), "{err}");
+		}
 	}
 
 	#[test]

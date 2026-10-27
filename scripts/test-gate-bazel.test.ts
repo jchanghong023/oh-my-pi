@@ -1355,6 +1355,91 @@ test("independent consumer", () => {
 	}
 }, 120_000);
 
+test("shared Bun chunks do not spread opaque package inputs to unrelated consumers", async () => {
+	const root = await fixture();
+	try {
+		await copyReporter(root);
+		const runs = path.join(root, ".state/clean.runs");
+		await Bun.write(
+			path.join(root, "packages/a/shared.ts"),
+			'import { meaning } from "./cycle-a"; export const shared = meaning();\n',
+		);
+		await Bun.write(
+			path.join(root, "packages/a/cycle-a.ts"),
+			'import { meaning } from "./cycle-b"; export function marker() {} export { meaning };\n',
+		);
+		await Bun.write(
+			path.join(root, "packages/a/cycle-b.ts"),
+			'import { marker } from "./cycle-a"; export function meaning() { return typeof marker === "function" ? 42 : 0; }\n',
+		);
+		await Bun.write(
+			path.join(root, "packages/a/clean.test.ts"),
+			`import { test, expect } from "bun:test";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { shared } from "./shared";
+test("clean", () => {
+ expect(shared).toBe(42);
+ mkdirSync(${JSON.stringify(path.dirname(runs))}, {recursive:true});
+ appendFileSync(${JSON.stringify(runs)}, "run\\n");
+});
+`,
+		);
+		await Bun.write(path.join(root, "packages/b/value.cjs"), "exports.value = 42;\n");
+		await Bun.write(
+			path.join(root, "packages/b/opaque.ts"),
+			`import { createRequire } from "node:module";
+const load = createRequire(import.meta.url);
+export const value = load("./value.cjs").value;
+`,
+		);
+		for (const name of ["opaque", "extra"])
+			await Bun.write(
+				path.join(root, `packages/b/${name}.test.ts`),
+				`import { test, expect } from "bun:test";
+import { shared } from "../a/shared";
+import { value } from "./opaque";
+test("${name}", () => expect(value).toBe(shared));
+`,
+			);
+		const command = (packageName: string, name: string): GateCommand => ({
+			label: `test/fork packages/${packageName}/${name}.test.ts`,
+			argv: [process.execPath, "../../scripts/test-report-bun.ts", `${name}.test.ts`, "--bail=1"],
+			cwd: path.join(root, "packages", packageName),
+		});
+		const clean = command("a", "clean");
+		const opaque = command("b", "opaque");
+		const extra = command("b", "extra");
+		const initial = [clean, opaque];
+		expect((await batch(root, initial, "fulltest")).exitCode).toBe(0);
+		expect((await batch(root, initial, "fulltest")).targets.map(target => target.status)).toEqual([
+			"cached",
+			"cached",
+		]);
+		const expanded = await batch(root, [clean, opaque, extra], "fulltest");
+		expect(expanded.exitCode).toBe(0);
+		expect(expanded.targets.find(target => target.label === clean.label)?.status).toBe("cached");
+		expect(expanded.targets.find(target => target.label === opaque.label)?.status).toBe("cached");
+		await Bun.write(path.join(root, "packages/b/value.cjs"), "exports.value = 6 * 7;\n");
+		const changedFallback = await batch(root, [clean, opaque, extra], "fulltest");
+		expect(changedFallback.exitCode).toBe(0);
+		expect(changedFallback.targets.map(target => target.status)).toEqual(["cached", "new", "new"]);
+		await Bun.write(
+			path.join(root, "packages/a/cycle-b.ts"),
+			'import { marker } from "./cycle-a"; export function meaning() { return typeof marker === "function" ? 6 * 7 : 0; }\n',
+		);
+		const changedCycle = await batch(root, [clean, opaque, extra], "fulltest");
+		expect(changedCycle.exitCode).toBe(0);
+		expect(changedCycle.targets.map(target => target.status)).toEqual(["new", "new", "new"]);
+		await Bun.write(path.join(root, "packages/a/shared.ts"), "export const shared = 6 * 7;\n");
+		const changedImport = await batch(root, [clean, opaque, extra], "fulltest");
+		expect(changedImport.exitCode).toBe(0);
+		expect(changedImport.targets.map(target => target.status)).toEqual(["new", "new", "new"]);
+		expect(await Bun.file(runs).text()).toBe("run\nrun\nrun\n");
+	} finally {
+		await cleanup(root);
+	}
+}, 240_000);
+
 test("native discovery refreshes installed package resolution before caching a new dependency edge", async () => {
 	const root = await fixture();
 	try {
