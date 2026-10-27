@@ -64,23 +64,30 @@ test.skipIf(!tuiTest)(
 						};
 					}
 					if (!raw?.startsWith("repair")) return respond(request);
-					if (results.length >= 2) return { text: "explicit-native-repair-complete" };
-					const write = request.tools?.find(item => item.function?.name.replace(/^_/u, "") === "write")?.function;
-					if (!write) throw new Error("Explicit executor repair must restore native write access");
-					if (results.length === 1) {
-						if (!repairReport) throw new Error("Repair report was not observed");
-						return { tool: { name: write.name, args: { i: "Refreshing completion report", ...repairReport } } };
-					}
-					return {
-						tool: {
-							name: write.name,
-							args: {
-								i: "Repairing requested implementation",
-								path: IMPLEMENTATION_PATH,
-								content: IMPLEMENTATION,
+					if (results.length >= 3) return { text: "explicit-native-repair-complete" };
+					if (results.length < 2) {
+						const task = request.tools?.find(item => item.function?.name.replace(/^_/u, "") === "task")?.function;
+						if (!task) throw new Error("Explicit executor repair must expose native task");
+						return {
+							tool: {
+								name: task.name,
+								args: {
+									i: results.length === 0 ? "Delegating repair" : "Reviewing repair",
+									context: "Repair and review the approved implementation.",
+									tasks: [
+										{
+											agent: results.length === 0 ? "task" : "reviewer",
+											task: results.length === 0 ? "OMP_SPEC_IMPLEMENT_CHILD" : "OMP_SPEC_REVIEW_CHILD",
+											solutionSpace: "approved greeting repair",
+										},
+									],
+								},
 							},
-						},
-					};
+						};
+					}
+					const write = request.tools?.find(item => item.function?.name.replace(/^_/u, "") === "write")?.function;
+					if (!write || !repairReport) throw new Error("Repair report or native write unavailable");
+					return { tool: { name: write.name, args: { i: "Refreshing completion report", ...repairReport } } };
 				},
 			},
 			[100, 28],

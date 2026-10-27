@@ -311,6 +311,32 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 				return tool(request, "read", { i: "Inspecting packaged resource access", path: target });
 		return { text: `${MARKER}_CHAT_READY` };
 	}
+	if (!payload && ordinary.includes("OMP_SPEC_IMPLEMENT_CHILD") && request.tools?.length) {
+		const executed = calls(request);
+		if (!executed.some(call => call.name === "write" && call.args.path === TEST_PATH))
+			return tool(request, "write", { i: "Writing behavior test", path: TEST_PATH, content: BEHAVIOR_TEST });
+		if (!executed.some(call => call.name === "bash"))
+			return tool(request, "bash", { i: "Running failing test", command: VALIDATION_COMMAND, timeout: 60 });
+		if (!executed.some(call => call.name === "write" && call.args.path === IMPLEMENTATION_PATH))
+			return tool(request, "write", {
+				i: "Implementing greeting",
+				path: IMPLEMENTATION_PATH,
+				content: IMPLEMENTATION,
+			});
+		if (executed.filter(call => call.name === "bash").length < 2)
+			return tool(request, "bash", { i: "Running completed test", command: VALIDATION_COMMAND, timeout: 60 });
+		return { text: "Implementation and behavior tests completed." };
+	}
+	if (!payload && ordinary.includes("OMP_SPEC_REVIEW_CHILD") && request.tools?.length) {
+		if (!calls(request).some(call => call.name === "read"))
+			return tool(request, "read", { i: "Reviewing implementation", path: IMPLEMENTATION_PATH });
+		if (request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "yield"))
+			return tool(request, "yield", {
+				type: "result",
+				data: { overall_correctness: "correct", explanation: "Reviewed the implementation.", confidence: 1 },
+			});
+		return { text: "Reviewed the implementation." };
+	}
 	if (!payload && ordinary.includes("OMP_SPEC_ORDINARY_CHILD")) return { text: "OMP_SPEC_ORDINARY_CHILD_DONE" };
 	if (!payload && ordinary.includes("OMP_SPEC_ORDINARY_CONTROL") && request.tools?.length) {
 		const executed = calls(request);
@@ -393,7 +419,7 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 		.map(value => value.replace("*", "greeting"));
 	if (!outputs.length) throw new Error(`Missing native outputPaths for ${role}`);
 	const failure = options.fileFailure?.role === role ? options.fileFailure : undefined;
-	if (failure?.kind === "missing") return { text: "已讨论需求，但尚未创建阶段交付文件。" };
+	if (failure?.kind === "missing" && role !== "executor") return { text: "已讨论需求，但尚未创建阶段交付文件。" };
 	const files: Array<{ path: string; content: string }> = [];
 	if (role === "requirements") {
 		for (const path of outputs)
@@ -424,7 +450,20 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 			content: `# Greeting Implementation Plan\n\n> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.\n\n**Goal:** ${REQUIREMENT}\n\n**Architecture:** One stateless exported function; no networking or global state.\n\n**Tech Stack:** TypeScript and Bun.\n\n---\n\n### Task 1: Implement greeting behavior\n\n**Files:**\n- Create: src/greeting.ts\n- Test: test/greeting.test.ts\n\nImplement greet(name) and cover outer trimming, empty input, and internal whitespace.\n\nRun: ${VALIDATION_COMMAND}\nExpected: all behavioral checks pass. Record the real result in the completion report.\n`,
 		});
 	else if (role === "executor") {
-		files.push({ path: IMPLEMENTATION_PATH, content: IMPLEMENTATION }, { path: TEST_PATH, content: BEHAVIOR_TEST });
+		const tasks = executed.filter(call => call.name === "task");
+		if (tasks.length === 0)
+			return tool(request, "task", {
+				i: "Delegating implementation",
+				context: "Implement and validate the approved greeting behavior.",
+				tasks: [{ agent: "task", task: "OMP_SPEC_IMPLEMENT_CHILD", solutionSpace: "implement greeting" }],
+			});
+		if (tasks.length === 1)
+			return tool(request, "task", {
+				i: "Delegating review",
+				context: "Review the implemented greeting behavior.",
+				tasks: [{ agent: "reviewer", task: "OMP_SPEC_REVIEW_CHILD", solutionSpace: "review greeting" }],
+			});
+		if (failure?.kind === "missing") return { text: "实施与审查已结清，但尚未创建完成报告。" };
 	} else throw new Error(`Unknown native role ${role}`);
 	if (failure?.kind === "unknown")
 		files.splice(0, files.length, {
