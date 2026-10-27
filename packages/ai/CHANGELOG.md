@@ -6,6 +6,8 @@
 
 - Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
 
+## [18.13.1] - 2026-10-27
+
 ### Fixed
 
 - Codex accounts whose spend cap is used up are no longer picked through credit overage or from usage cached before the upgrade ([#16973](https://github.com/can1357/oh-my-pi/pull/16973) by [@DusKing1](https://github.com/DusKing1))

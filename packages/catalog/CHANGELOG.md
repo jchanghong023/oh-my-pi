@@ -10,9 +10,12 @@
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.
 
+## [18.13.1] - 2026-10-27
+
 ### Added
 
 - Added GPT-6.1 Terra: `openai/gpt-6.1-terra` ships bundled ($1/$5, $0.05 cached, >272K long-context tier, 1.05M window), and Codex-discovered `gpt-6.1-terra`/`-wm` get API-equivalent pricing, the 922K extended-context maximum, and routing to Plus-or-higher accounts.
+- Added Kimi K3.1 Pro and K3.1 Pro Highspeed support on Kimi Code (`k3.1-pro`, `k3.1-pro-highspeed`) and the Moonshot API (`kimi-k3.1-pro`, `kimi-k3.1-pro-highspeed`): official pricing ($2/$10 and $4/$20 per MTok), a 131K output cap, and K3's reasoning and wire contract ([#16901](https://github.com/can1357/oh-my-pi/pull/16901) by [@eggpeat](https://github.com/eggpeat))
 
 ## [18.13.0] - 2026-10-26
 

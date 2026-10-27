@@ -12,6 +12,8 @@
 - Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
 
+## [18.13.1] - 2026-10-27
+
 ### Added
 
 - Hosts can distinguish safely paused agents from turns still draining with `Agent.isPaused` ([#17073](https://github.com/can1357/oh-my-pi/pull/17073) by [@anatoli-tsinovoy](https://github.com/anatoli-tsinovoy)).

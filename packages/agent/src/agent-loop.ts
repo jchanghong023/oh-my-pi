@@ -3013,7 +3013,10 @@ function formatToolNotFoundMessage(
 			: suggestions.length === 1
 				? ` Did you mean ${suggestions[0]}?`
 				: ` Closest available: ${suggestions.slice(0, MAX_TOOL_NAME_SUGGESTIONS).join(", ")}.`;
-	const offered = tools?.slice(0, 20).map(tool => tool.name).join(", ");
+	const offered = tools
+		?.slice(0, 20)
+		.map(tool => tool.name)
+		.join(", ");
 	const roster = offered
 		? `Tools in this request: ${offered}${tools && tools.length > 20 ? ", ..." : ""}.`
 		: "No tools were listed in this request.";
