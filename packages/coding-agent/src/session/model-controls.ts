@@ -46,7 +46,7 @@ import type { AgentSessionEvent } from "./agent-session-events";
 import { ExecutionModelContractError, type ExecutionModelOptions, withExecutionModelContext } from "./execution-model";
 import type { ModelCycleResult, ResolvedRoleModel, RoleModelCycle, RoleModelCycleResult } from "./agent-session-types";
 import { formatRoleModelValue, resolveRoleModelFull } from "./role-models";
-import { EPHEMERAL_MODEL_CHANGE_ROLE } from "./session-entries";
+import { EPHEMERAL_MODEL_CHANGE_ROLE, PREWALK_MODEL_CHANGE_ROLE } from "./session-entries";
 import type { SessionManager } from "./session-manager";
 
 import {
@@ -292,7 +292,7 @@ export class ModelControls {
 	async setModelTemporary(
 		model: Model,
 		thinkingLevel?: ConfiguredThinkingLevel,
-		options?: { ephemeral?: boolean },
+		options?: { ephemeral?: boolean; prewalk?: boolean },
 		selection: "explicit" | "automatic" = "explicit",
 	): Promise<void> {
 		const previousEditMode = this.#host.resolveActiveEditMode();
@@ -308,7 +308,7 @@ export class ModelControls {
 		await this.#host.setModelWithProviderSessionReset(targetModel, selection);
 		this.#host.sessionManager.appendModelChange(
 			`${targetModel.provider}/${targetModel.id}`,
-			options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
+			options?.prewalk ? PREWALK_MODEL_CHANGE_ROLE : options?.ephemeral ? EPHEMERAL_MODEL_CHANGE_ROLE : "temporary",
 		);
 		this.#host.settings.getStorage()?.recordModelUsage(`${targetModel.provider}/${targetModel.id}`);
 

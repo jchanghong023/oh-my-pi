@@ -48,6 +48,7 @@ import type {
 	AfterProviderResponseEvent,
 	AssistantMessageRewriteEvent,
 	AssistantMessageRewriteResult,
+	AssistantTextRenderer,
 	AssistantThinkingRenderer,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -105,7 +106,7 @@ import type {
 	UserPythonEventResult,
 } from "./types";
 
-import { cfgExtensionHandlersToolCallTimeoutMs } from "../settings";
+import { cfgExtensionAssistantTextRenderers, cfgExtensionHandlersToolCallTimeoutMs } from "../settings";
 
 /** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
@@ -464,6 +465,7 @@ const noOpUIContext: ExtensionUIContext = {
 	input: async (_title, _placeholder, _dialogOptions) => undefined,
 	notify: () => {},
 	onTerminalInput: () => () => {},
+	rerenderMessage: () => {},
 	setStatus: () => {},
 	setWorkingMessage: () => {},
 	setWidget: () => {},
@@ -525,6 +527,7 @@ export class ExtensionRunner {
 	#compactFn: (instructionsOrOptions?: string | CompactOptions) => Promise<void> = async () => {};
 	#getSystemPromptFn: () => string[] = () => [];
 	#runEphemeralTurnFn?: ExtensionContextActions["runEphemeralTurn"];
+	#startLiveFn?: ExtensionContextActions["startLive"];
 	#ephemeralTurnBlocker = new AsyncLocalStorage<string | undefined>();
 	#getAsyncJobSnapshotFn: () => AsyncJobSnapshot | null = () => null;
 	#newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
@@ -550,6 +553,7 @@ export class ExtensionRunner {
 	#toolRegistrationSubscribers = new Set<(extension: Extension) => ToolRegistrationListener>();
 	/** Latest `session_start` broadcast, replayed to extensions added afterwards. */
 	#sessionStartEvent: RunnerEmitEvent | undefined;
+	#suspensionListeners = new Set<() => void>();
 	/**
 	 * Buffer for `credential_disabled` events received via {@link emitCredentialDisabled}
 	 * before {@link initialize} has run. Drained through {@link emit} once initialize sets
@@ -848,6 +852,7 @@ export class ExtensionRunner {
 		this.#compactFn = contextActions.compact;
 		this.#getSystemPromptFn = contextActions.getSystemPrompt;
 		this.#runEphemeralTurnFn = contextActions.runEphemeralTurn;
+		this.#startLiveFn = contextActions.startLive;
 
 		// Command context actions (optional, only for interactive mode)
 		if (commandContextActions) {
@@ -1160,7 +1165,8 @@ export class ExtensionRunner {
 	 * Suspend or resume loaded extensions in place (e.g. after a live `disabledExtensions`
 	 * edit). A suspended extension keeps its module state but stops contributing event
 	 * handlers, commands, tools, message renderers, shortcuts, flags, and file fallbacks
-	 * until resumed. Returns the extensions whose state changed.
+	 * until resumed. Returns the extensions whose state changed, after notifying
+	 * {@link onSuspensionChange} listeners when there are any.
 	 */
 	setSuspendedExtensions(shouldSuspend: (extension: Extension) => boolean): {
 		suspended: Extension[];
@@ -1183,8 +1189,18 @@ export class ExtensionRunner {
 		if (suspended.length > 0 || resumed.length > 0) {
 			const active = this.#loadOrder.filter(extension => !this.#suspendedExtensions.has(extension));
 			this.extensions.splice(0, this.extensions.length, ...active);
+			for (const listener of this.#suspensionListeners) listener();
 		}
 		return { suspended, resumed };
+	}
+
+	/**
+	 * Call `listener` whenever {@link setSuspendedExtensions} suspends or resumes an extension, so
+	 * a UI can redraw what their renderers drew. Returns the unsubscribe.
+	 */
+	onSuspensionChange(listener: () => void): () => void {
+		this.#suspensionListeners.add(listener);
+		return () => this.#suspensionListeners.delete(listener);
 	}
 
 	/** Get all registered tools from all extensions. */
@@ -1407,6 +1423,12 @@ export class ExtensionRunner {
 		return this.extensions.flatMap(ext => ext.assistantThinkingRenderers);
 	}
 
+	/** Registered assistant text renderers; none while `extensionRenderers.assistantText` is off. */
+	getAssistantTextRenderers(): AssistantTextRenderer[] {
+		if (!this.settings || !cfgExtensionAssistantTextRenderers.get(this.settings)) return [];
+		return this.extensions.flatMap(ext => ext.assistantTextRenderers);
+	}
+
 	getRegisteredCommands(reserved?: ReadonlySet<string>): RegisteredCommand[] {
 		this.#commandDiagnostics = [];
 
@@ -1539,6 +1561,7 @@ export class ExtensionRunner {
 						return await this.#ephemeralTurnBlocker.run("ephemeral turn", () => runEphemeralTurn(request));
 					}
 				: undefined,
+			startLive: this.#startLiveFn,
 			localProtocolOptions: this.localProtocolOptions,
 			memory: this.#getMemoryFn?.(),
 			// A getter, not a value: `createHandlerContext` scopes a handler via `Object.create(ctx)`, and

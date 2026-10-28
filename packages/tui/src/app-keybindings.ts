@@ -59,6 +59,8 @@ interface AppKeybindings {
 	"app.session.rename": true;
 	"app.session.delete": true;
 	"app.session.deleteNoninvasive": true;
+	"app.session.pin": true;
+	"app.session.unpin": true;
 	"app.tree.previousBranch": true;
 	"app.tree.nextBranch": true;
 	"app.plan.toggle": true;
@@ -238,6 +240,14 @@ export const KEYBINDINGS = {
 	"app.session.deleteNoninvasive": {
 		defaultKeys: "ctrl+backspace",
 		description: "Delete session (non-invasive)",
+	},
+	"app.session.pin": {
+		defaultKeys: "alt+k",
+		description: "Pin the selected session in the resume picker",
+	},
+	"app.session.unpin": {
+		defaultKeys: "alt+shift+k",
+		description: "Unpin the selected session in the resume picker",
 	},
 	"app.tree.previousBranch": {
 		defaultKeys: [],

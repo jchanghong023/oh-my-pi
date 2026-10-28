@@ -11,7 +11,6 @@ import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
 import {
 	buildSessionModelScope,
-	MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelPickerCatalogue,
@@ -437,16 +436,8 @@ export class ModelPickerComponent implements Component {
 				size: "md",
 				layout: "rows",
 				preview: "below",
-				query,
-				cursor,
 				placeholder: mode === "task" || mode === "selection" ? "搜索模型…" : "搜索模型，输入 @ 查找快捷角色…",
-				columns: MODEL_PICKER_COLUMNS,
-				...catalogue,
-				order: view.order,
-				...(view.hits ? { hits: view.hits } : {}),
-				selected,
-				...(current ? { current: [current] } : {}),
-				total: this.#browser.baseCount,
+				...this.#browser.pickerRows(catalogue, view, current),
 				empty: mode === "role" ? `${cycleKey} 轮换中没有快捷角色` : "没有可用模型",
 				actions: compact([
 					pickerAction(

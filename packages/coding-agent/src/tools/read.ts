@@ -1030,9 +1030,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		const rawPath = args && typeof args === "object" && "path" in args ? String(args.path ?? "") : "";
 		if (rawPath.length === 0) return undefined;
 		const withoutImageQuestion = splitImageQuestionTarget(rawPath).path;
+		const router = InternalUrlRouter.instance();
 		// Authorization must key what execution reads: an existing literal file like `notes:1` is
 		// read literally, so its grant belongs to `notes:1`, not to `notes`.
-		const { path: selectorless, sel } = splitPathAndSelPreferringLiteralSync(withoutImageQuestion, this.session.cwd);
+		const { path: selectorless, sel } = router.canHandle(withoutImageQuestion)
+			? router.split(withoutImageQuestion)
+			: splitPathAndSelPreferringLiteralSync(withoutImageQuestion, this.session.cwd);
 		if (isReadableUrlPath(selectorless) && !(sel === undefined && splitPdfImageReadPath(withoutImageQuestion))) {
 			// Nobody needs permission to read a public page, so those stay ungated. A private host —
 			// loopback, a private or link-local address, a single-label intranet name — is reachable

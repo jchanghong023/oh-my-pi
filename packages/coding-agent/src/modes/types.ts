@@ -22,6 +22,8 @@ import type {
 } from "../extensibility/extensions";
 import type {
 	CompactOptions,
+	ExtensionLiveSession,
+	ExtensionLiveStartOptions,
 	ExtensionSessionModes,
 	PlanReviewChoice,
 	PlanReviewRequestedEvent,
@@ -535,6 +537,8 @@ export interface InteractiveModeContext {
 	dictationSpaceHold(target: DictationTarget): SpaceHoldHandler;
 	/** Start or stop the Codex-backed realtime voice session. */
 	handleLiveCommand(): Promise<void>;
+	/** Start a live session whose audio runs on an extension's own WebRTC peer (`ctx.startLive`). */
+	startRemoteLive(options: ExtensionLiveStartOptions): Promise<ExtensionLiveSession>;
 	/** Start a `/record` screen capture, or stop the running one. */
 	toggleRecording(): Promise<void>;
 	executeCompaction(

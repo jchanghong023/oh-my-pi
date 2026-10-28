@@ -70,6 +70,7 @@ function runnerWith(sessionManager: SessionManager, select: ExtensionUIContext["
 			input: async () => undefined,
 			notify: () => {},
 			onTerminalInput: () => () => {},
+			rerenderMessage: () => {},
 			setStatus: () => {},
 			setWorkingMessage: () => {},
 			setWidget: () => {},

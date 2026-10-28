@@ -17,6 +17,8 @@
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 - Report rejected offline diagnostic database and data paths as structured failures without opening unsafe paths or closing caller-owned databases.
 
+## [18.13.3] - 2026-10-28
+
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4

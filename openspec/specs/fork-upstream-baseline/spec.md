@@ -18,6 +18,6 @@
 ## 当前上游基线
 
 - **分支**：`can1357/oh-my-pi@main`
-* **版本**：`v18.13.2`
-- **Upstream commit**：`c3b645cb275e03ac8a176fbfb0a877cfb3a2c2ef`
+* **版本**：`v18.13.3`
+- **Upstream commit**：`5cc72f52ef1eb4abbd71f19bf84e4cd23a4eb71d`
 - **同步日期**：2026-10-28

@@ -117,7 +117,7 @@ Core methods:
 
 - `on(event, handler)`
 - `registerTool`, `registerCommand`, `registerShortcut`, `registerFlag`
-- `registerMessageRenderer`, `registerAssistantThinkingRenderer`
+- `registerMessageRenderer`, `registerAssistantThinkingRenderer`, `registerAssistantTextRenderer`
 - `registerComposerShape`
 - `setLabel`, `getFlag`
 - `sendMessage`, `sendUserMessage`, `appendEntry`, `exec`
@@ -373,6 +373,7 @@ Handlers and tool `execute` receive `ctx` with:
 - `isProjectTrusted()` — always `true`; OMP does not ask for per-directory trust before loading project inputs
 - `agent` — the agent this session runs: `{ kind: "main" | "sub", id, name, depth, parentId? }`. Factories are rebound to every subagent session (task tool, eval `agent()`, `/tan` clones), so a handler can check `ctx.agent.kind === "sub"` or the lowercased agent definition `name` (for example `"explore"`) to act only in subagents. Use `kind`, not `depth`: `depth` counts `task` nesting only, so `/tan` clones are subagents at depth 0 and report `name: "sub"`. An advisor's own tool calls reach the session's `tool_call`/`tool_result` handlers with `{ kind: "sub", id: "advisor", name: "advisor", depth: 0, parentId }`, so `kind === "main"` also excludes advisor activity
 - `runEphemeralTurn(...)` (optional; see below)
+- `startLive(...)` (optional; interactive mode only; see below)
 - `memory` (optional structured memory runtime — status/search/save across the configured backend)
 - `annotations`: `/annotate` as an API, for boards and remote clients. `submit({ source, notes, deliver?, review?, focus? })` builds the feedback `/annotate` would and delivers it without any UI; `open({ source, deliver?, focus? })` mounts the annotation overlay on the source and resolves with the operator's notes (`undefined` when dismissed; `mode === "tui"` only). Text sources are `{ kind: "text", text, label? }`, `{ kind: "file", path }` (resolved against the live session cwd), or `{ kind: "last" }`; diff sources are `{ kind: "diff", diff, label? }`, `{ kind: "uncommitted" }`, or `{ kind: "pr", ref }` (`ref` is a GitHub PR or GitLab MR URL, `pr://owner/repo/N`, or `mr://<host>/<group>/<project>/N/diff`). `review`/`focus` apply to diff sources only (a type error on text sources). Text notes are `{ note, line?, quote? }` (1-based; whole-source when omitted, and the quoted line is filled in); diff notes are `{ path, note, line?, side?, occurrence?, rawLine? }` (`side` defaults to `"new"`; `rawLine` is the diff row including its `+`/`-`/space prefix). Notes that do not match their source reject rather than being dropped. `text` and `diff` sources are frozen snapshots of what you pass; `file`, `last`, `uncommitted`, and `pr` are re-read at call time and line numbers are matched against the current content, so pass `quote`/`rawLine` to reject a note (naming it) when that content drifted. `deliver` defaults to `"auto"`: pasteable notes go into the composer when the interactive TUI editor is available and are sent otherwise; an LLM review request (`review: true` on a diff) is always sent. Sending uses `pi.sendUserMessage` and queues as a follow-up while the agent is streaming. `"paste"`/`"send"` force a channel and `"none"` only returns `text`. The result is discriminated by `kind`: `"text"` carries `TextReviewAnnotation[]` and, after `open`, `editedText` when the operator replaced the source in the external editor (the feedback then refers to that text); `"diff"` carries `CodeReviewAnnotation[]` and `review` (whether `text` is an LLM review request). Both carry the rendered `text` and the `delivered` channel.
   Explicit paste requires `ctx.ui.supportsEditor === true`: the TUI and non-headless RPC expose composers; ACP and no-op UI contexts do not. Supplied diffs used for LLM review reject above 50,000 characters or 20 reviewable files before delivery, and `open` rejects such a patch before mounting the overlay; split larger patches into smaller requests. Notes-only submissions do not have this review-prompt bound.
@@ -405,6 +406,28 @@ Hooks may start a side turn, including from delayed callbacks. Only `context`, `
 Tool calls are always discarded rather than executed. Pass `tools: false` to remove tool definitions after context transforms and set `toolChoice: "none"` at the provider boundary. Omitting it preserves `/btw`'s tool catalog for prompt-cache reuse; disabling it may reduce cache hits. Bedrock Converse rejects tool opt-out if the transformed history still contains tool calls or results. Existing context/provider hooks still run. It is not a sandbox or a guarantee that arbitrary extension hooks have no side effects. Model inference consumes the configured provider's resources. `dedupeReply` defaults to `true`, collapses runs of more than three identical lines, and caps the returned reply at 4 KiB. Set it to `false` to disable those transformations; `replyText` is still trimmed. Callers should use `replyText` for the final result.
 
 Use `history` only for detached prior side-turn messages; it is cloned with `structuredClone`, so pass cloneable message data. A `conversationKey` keeps related side turns on one provider lineage. Rotate it after cancellation or failure before retrying. A side turn also rejects with a retryable error if its session or exact model instance changes before dispatch; callers should retry from a new current-context snapshot rather than reuse the old one.
+
+### Live voice on your own peer (`ctx.startLive`)
+
+Start a `/live` session whose audio runs on a WebRTC peer the extension owns, for example a browser on a phone, instead of the host's microphone and speakers. omp keeps everything else: Codex signaling with the session's OpenAI Codex sign-in, the bundled live prompt, delegations into this session as ordinary turns, and transcripts. The TUI shows its live visualizer, and `/live` or the stop key ends the call.
+
+```ts
+if (!ctx.startLive) throw new Error("This host does not run live sessions");
+const live = await ctx.startLive({
+  sdpOffer, // from the peer: one sendrecv Opus audio track plus an "oai-events" data channel
+  onPhase: phase => relay({ phase }), // "muted": silence the peer's microphone track
+  onTranscript: t => relay({ transcript: t }),
+  onEnd: error => relay({ end: error?.message ?? null }),
+});
+await peer.setRemoteDescription({ type: "answer", sdp: live.sdpAnswer });
+// later: await live.stop();
+```
+
+The promise resolves once the call is signaled and its control socket is open; apply `sdpAnswer` right away. It rejects without a non-empty `sdpOffer` and while another live session is active. `voice` and `instructions` work as for RPC `live_start`. The peer does its own echo cancellation and mute: the TUI mute key only moves the phase to `muted`, so silence the peer's microphone track while that phase lasts. omp reports no audio levels and no `speaking` phase for these calls. `onEnd` is called exactly once, including when the call fails to start (before the promise rejects). Observer callbacks that throw are logged and do not end the call.
+
+omp has no media peer for these calls, so it cannot tell when yours goes away. Call `live.stop()` when the peer disconnects (`connectionstatechange` to `failed` or `closed`, or your relay socket closing); otherwise the call stays open and the TUI keeps the live visualizer up.
+
+Whoever holds the peer steers this session by voice, including delegated work that runs tools, so authenticate the page or relay that hands you the offer.
 
 ### Background work (`ctx.setInterval` / `ctx.setTimeout`)
 
@@ -904,6 +927,7 @@ Supported:
 - notifications/status/editor text/terminal input/custom overlays
 - theme listing/loading by name (`setTheme` supports string names)
 - tools expanded toggle
+- `rerenderMessage(timestamp)`: draws the assistant reply with that `message.timestamp` again, re-running the [assistant text renderers](#assistant-text-renderer); a no-op while `extensionRenderers.assistantText` is off
 
 Current no-op methods in this controller:
 
@@ -1290,6 +1314,25 @@ pi.registerAssistantThinkingRenderer((context, theme) => {
 ```
 
 Used by interactive rendering to add display-only supplemental UI below each visible assistant thinking block. The renderer receives the already-visible thinking text, content/thinking indexes, theme, and a `requestRender()` callback for async renderers. All registered renderers that return a component are appended in registration order. Renderers must not mutate messages; the original thinking block remains the provider/session source of truth.
+
+## Assistant text renderer
+
+Opt-in: renderers run only while the `extensionRenderers.assistantText` setting is on (default off; **Tools → Extensions → Extension Reply Renderers**). Off, they are never called and replies draw exactly as without them.
+
+```ts
+pi.registerAssistantTextRenderer(({ message, contentIndex, text, streaming }) => {
+  // Return the markdown to draw for this text block, or undefined to draw `text` unchanged.
+  return streaming ? text.replace(/\{\{[^}]*$/, "") : text;
+});
+```
+
+A display-only transform of each assistant text block in the main transcript, used by both the terminal renderer and the native (TSP) view. The session, `/export` and the model context keep the text as written; the native Copy action copies it as written too.
+
+- **Context.** `message` is the message being drawn and `message.timestamp` identifies the reply. It is a deep copy: editing it, at any depth, cannot change the stored reply. `contentIndex` is the block's index in the full reply's `content`, also when the reply is drawn as segments around tool calls. For text after a tool call, `message` holds only that segment, so `message.content[contentIndex]` is not the block. `contentIndex` counts the reply's content as currently stored and replayed: when the transcript is rebuilt (for example on resume) and a reply holds tool calls that never got a result, those calls and any redacted thinking are dropped and later blocks move down, so the same block can get a smaller index. Key renderer state on `message.timestamp` and `contentIndex` only for the live session; do not persist the pair as a permanent key. `text` is the block's markdown so far, after any earlier renderer; renderers run in registration order.
+- **Streaming.** The renderer is called with the full text so far each time a streaming update is drawn (`streaming: true`), and once more when the text is final (`streaming: false`): at the end of the reply, or earlier when a tool call or any other block starts after it. Deltas that arrive within one frame are drawn, and rendered, once. A block whose text and `streaming` value are unchanged since its last render reuses that output without calling the renderers again (for example a block sealed at a tool call while the call's arguments stream). Replies stream without `display.smoothStreaming`'s typing reveal while renderers are active, so a renderer never sees a partly revealed prefix. Output may be shorter than the input and may change text drawn earlier, so a reply with renderers stays in the live viewport until its turn ends instead of retiring finished rows to terminal scrollback mid-stream.
+- **Failures.** `registerAssistantTextRenderer` throws for anything but a function, failing the extension's load. A renderer that throws leaves its input drawn; the failure is logged once per renderer.
+- **Redraw.** Call `ctx.ui.rerenderMessage(message.timestamp)` after state the renderer reads changes (for example a click) to draw that reply again in place; it calls the renderers again even for blocks whose text is unchanged. A reply still in the live viewport just repaints; in a plain terminal, a reply with rows already in scrollback rebuilds the scrollback (as toggling thinking visibility does), which is costly, so avoid animating such replies frame by frame.
+- **Links.** Links the renderer draws behave like any model-authored link: they are not routed back to the extension. Relative link targets the renderer adds are not resolved against the session's working directory the way the model's own are, so Tern's native view opens them relative to its own; use absolute paths or URLs.
 
 ## Tool call/result renderer
 

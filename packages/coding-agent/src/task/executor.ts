@@ -4192,6 +4192,7 @@ function createWarmSubagentReviver(capture: WarmReviveCapture): AgentReviver {
 		if (capture.spec.hooks && capture.spec.request) {
 			await capture.spec.hooks.beforeSpawn(capture.spec.request);
 		}
+
 		try {
 			return await reviveAdmittedSubagent(capture, expectedAgentRef);
 		} catch (error) {
@@ -4242,17 +4243,36 @@ async function reviveAdmittedSubagent(
 	// Account pools are owner policy: take the live exact-name entry, as
 	// dispatch and persisted revival do, never the spawn-time copy.
 	const agentAccountPools = validateAgentAccountPools(cfgTaskAgentAccountPools.get(capture.settings.parent));
+	// Session-local handoffs own revival; a seance's source selections do not.
+	const sessionLocalModel = capture.spec.preparedSession ? undefined : reopened.getSessionLocalModelChange()?.model;
 	capture.spec.prompt.reviving = true;
 	try {
 		let sessionPromise: Promise<CreateAgentSessionResult> | undefined;
 		try {
+			const options = buildSubagentSessionOptions(
+				capture.spec,
+				restoreSubagentSettings(capture.settings),
+				reopened,
+				expectedAgentRef,
+			);
 			const sessionOptions: CreateAgentSessionOptions = {
-				...buildSubagentSessionOptions(
-					capture.spec,
-					restoreSubagentSettings(capture.settings),
-					reopened,
-					expectedAgentRef,
-				),
+				...options,
+				...(sessionLocalModel
+					? {
+							model: undefined,
+							modelPattern: [
+								sessionLocalModel,
+								...(options.model
+									? [formatModelStringWithRouting(options.model)]
+									: options.modelPattern === undefined
+										? []
+										: [options.modelPattern].flat()),
+							],
+							modelPatternFallbackRole: undefined,
+							modelPatternDefaultFallbackChain: undefined,
+							thinkingLevel: undefined,
+						}
+					: undefined),
 				oauthAccountPools: Object.hasOwn(agentAccountPools, capture.agentName)
 					? agentAccountPools[capture.agentName]
 					: undefined,

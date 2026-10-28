@@ -2455,8 +2455,13 @@ export class TUI extends Container {
 		}
 	}
 
-	addInputListener(listener: InputListener): () => void {
-		this.#inputListeners.add(listener);
+	/** Registers a key listener; `prepend` gives a foreground input owner first refusal over global shortcuts. */
+	addInputListener(listener: InputListener, options?: { prepend?: boolean }): () => void {
+		if (options?.prepend) {
+			this.#inputListeners = new Set([listener, ...this.#inputListeners]);
+		} else {
+			this.#inputListeners.add(listener);
+		}
 		return () => {
 			this.#inputListeners.delete(listener);
 		};

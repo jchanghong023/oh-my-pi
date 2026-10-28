@@ -36,7 +36,6 @@ import { editorKey, editorKeys } from "../chrome/keybinding-hints";
 import { HookEditorComponent } from "./hook-editor";
 import {
 	buildBrowserItems,
-	MODEL_PICKER_COLUMNS,
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelBrowserSource,
@@ -749,16 +748,8 @@ export class AdvisorConfigOverlayComponent implements Component {
 				size: "md",
 				layout: "rows",
 				preview: "below",
-				query: browser.query,
-				cursor: browser.cursor,
 				placeholder: "搜索模型…",
-				columns: MODEL_PICKER_COLUMNS,
-				...catalogue,
-				order: order.order,
-				...(order.hits ? { hits: order.hits } : {}),
-				selected: browser.pickerSelected,
-				...(this.#modelCurrent ? { current: [this.#modelCurrent] } : {}),
-				total: browser.baseCount,
+				...browser.pickerRows(catalogue, order, this.#modelCurrent),
 				empty: "无可用模型",
 				actions: [
 					pickerAction("use", "用于顾问", "enter", { primary: true }),

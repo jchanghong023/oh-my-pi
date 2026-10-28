@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- `PI_INTENT_DESC` replaces the schema description of the injected `i` intent field
+
+## [18.13.3] - 2026-10-28
+
 ### Changed
 
 - Malformed tool-call JSON errors now tell the model to correct and retry the unexecuted call without repeating successful calls.
@@ -17,6 +23,10 @@
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4
+
+### Fixed
+
+- Fixed chat-completions context estimates counting past thinking that the request drops (no reasoning replay), which triggered compaction far below the threshold ([#15797](https://github.com/can1357/oh-my-pi/issues/15797), [#17231](https://github.com/can1357/oh-my-pi/pull/17231) by [@ghisguth](https://github.com/ghisguth))
 
 ## [18.13.2] - 2026-10-27
 

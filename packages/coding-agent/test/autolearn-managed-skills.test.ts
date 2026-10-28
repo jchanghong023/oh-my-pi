@@ -165,18 +165,51 @@ describe("managed-skills primitives", () => {
 			).rejects.toThrow(/non-empty body/);
 		});
 
-		it("refuses to write when the managed-skills root itself is a symlink", async () => {
+		it("refuses writes and deletes through a symlinked root", async () => {
 			const realRoot = await fs.mkdtemp(path.join(os.tmpdir(), "omp-realroot-"));
 			try {
 				await fs.mkdir(path.dirname(getManagedSkillsDir()), { recursive: true });
-				// A junction needs no symlink privilege on Windows and still trips the lstat guard.
 				await fs.symlink(realRoot, getManagedSkillsDir(), process.platform === "win32" ? "junction" : "dir");
 				await expect(
 					writeManagedSkill({ action: "create", name: "demo", description: "d", body: "b" }),
 				).rejects.toThrow(/managed-skills root is a symlink/);
 				expect(await Bun.file(path.join(realRoot, "demo", "SKILL.md")).exists()).toBe(false);
+				const authoredFile = path.join(realRoot, "authored", "SKILL.md");
+				await fs.mkdir(path.dirname(authoredFile), { recursive: true });
+				await Bun.write(authoredFile, "authored content");
+				await expect(
+					writeManagedSkill({ action: "update", name: "authored", description: "d", body: "b" }),
+				).rejects.toThrow(/managed-skills root is a symlink/);
+				await expect(deleteManagedSkill("authored")).rejects.toThrow(/managed-skills root is a symlink/);
+				expect(await Bun.file(authoredFile).text()).toBe("authored content");
 			} finally {
 				await removeWithRetries(realRoot);
+			}
+		});
+
+		it("refuses to write through a broken symlinked root", async () => {
+			await fs.mkdir(path.dirname(getManagedSkillsDir()), { recursive: true });
+			await fs.symlink(
+				path.join(tempHome, "missing-root"),
+				getManagedSkillsDir(),
+				process.platform === "win32" ? "junction" : "dir",
+			);
+			await expect(
+				writeManagedSkill({ action: "create", name: "demo", description: "d", body: "b" }),
+			).rejects.toThrow(/managed-skills root is a symlink/);
+		});
+
+		it.skipIf(process.platform === "win32")("refuses to write through a root that links to a file", async () => {
+			const file = path.join(await fs.mkdtemp(path.join(os.tmpdir(), "omp-realroot-file-")), "notadir");
+			await Bun.write(file, "x");
+			try {
+				await fs.mkdir(path.dirname(getManagedSkillsDir()), { recursive: true });
+				await fs.symlink(file, getManagedSkillsDir());
+				await expect(
+					writeManagedSkill({ action: "create", name: "demo", description: "d", body: "b" }),
+				).rejects.toThrow(/managed-skills root is a symlink/);
+			} finally {
+				await removeWithRetries(path.dirname(file));
 			}
 		});
 

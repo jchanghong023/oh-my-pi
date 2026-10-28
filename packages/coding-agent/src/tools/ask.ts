@@ -29,6 +29,7 @@ import { editorKey, editorKeys } from "@oh-my-pi/pi-tui/chrome/keybinding-hints"
 import { activeThemeSymbol } from "@oh-my-pi/pi-tui/theme/active-symbols";
 import askDescription from "../prompts/tools/ask.md" with { type: "text" };
 import askTimeoutReply from "../prompts/tools/ask-timeout.md" with { type: "text" };
+import askHeadlessForkMessage from "../prompts/tools/ask-headless-fork.md" with { type: "text" };
 import { vocalizer } from "../tts/vocalizer";
 
 import type { ToolSession } from ".";
@@ -38,6 +39,7 @@ import {
 	TRUNCATE_LENGTHS,
 } from "@oh-my-pi/pi-tui/render/render-utils";
 import { shiftImageMarkers } from "@oh-my-pi/pi-tui/prompt/composer-attachments";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { ToolAbortError } from "./tool-errors";
 
 import { sessionLocalProtocolOptions } from "../internal-urls/context";
@@ -49,6 +51,9 @@ import { describeAttachedImagesForTextModel, shouldDescribeImagesForTextModel } 
 // =============================================================================
 // Types
 // =============================================================================
+
+/** Returned to a headless fork's model instead of aborting its run. */
+const HEADLESS_FORK_ASK_ERROR = prompt.render(askHeadlessForkMessage);
 
 export const OTHER_OPTION = "Other (type your own)";
 const CHAT_ABOUT_THIS_OPTION = "Chat about this";
@@ -689,6 +694,10 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 	): Promise<AgentToolResult<AskToolDetails>> {
 		// Headless fallback
 		if (!context?.hasUI || !context.ui) {
+			// A headless fork (`/tan`) keeps `ask` advertised only to share the parent's
+			// prompt-cache prefix. Aborting would end its run with no final answer, and the
+			// parent would receive an empty result; let the model put the question there.
+			if (this.session.advertiseHeadlessAsk) throw new ToolError(HEADLESS_FORK_ASK_ERROR);
 			context?.abort();
 			throw new ToolAbortError("Ask tool requires interactive mode");
 		}

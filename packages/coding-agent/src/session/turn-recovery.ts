@@ -2262,6 +2262,9 @@ export class TurnRecovery {
 		// policy does not retry (a refusal, a policy denial, a non-retryable error,
 		// a wait past the delay cap, a spent budget) — has no source model to go
 		// back to, so deferring left the whole chain untried and ended the turn.
+		// Under retry.rateLimitWalksChain a rate limit on the signer counts as no
+		// attempt too: the retry re-hits the same cap, while a chain entry may sit
+		// under a different one.
 		const sourceModel = this.#host.model();
 		const signerRetryRemains =
 			options?.sameModelRetryAvailable === true &&
@@ -2305,7 +2308,9 @@ export class TurnRecovery {
 				// cross-provider candidate's message transform can demote the foreign
 				// thinking safely. A refusal, an account-policy denial, a non-retryable
 				// error, a wait past `retry.maxDelayMs` or a spent budget makes no such
-				// attempt, so the chain moves to the candidate.
+				// attempt, and, when `retry.rateLimitWalksChain` is on, a rate limit on
+				// the signer makes only a futile one, so the chain moves to the
+				// candidate.
 				// A classifier refusal is one of those: the source model declines the same
 				// request again, and Anthropic's documented retry for a refusal resends
 				// the history unchanged on another Claude model, which drops the thinking
@@ -2649,6 +2654,14 @@ export class TurnRecovery {
 			((classifierRefusal || AIError.is(id, AIError.Flag.MalformedFunctionCall) || AIError.retriable(id)) &&
 				this.#unexecutedToolCallsReplaySafe(message));
 		const rateLimitReason = parseRateLimitReason(errorMessage);
+		// A rate limit is a cap the next attempt on this model re-hits, so
+		// retry.rateLimitWalksChain lets it skip the signed-thinking deferral in
+		// #tryRetryModelFallback and walk the chain at once. A chain entry may sit
+		// under a different cap; when it shares this one, its own failure walks the
+		// chain on. Off (the default) the deferral holds for a rate limit too.
+		const sourceRateLimited =
+			retrySettings.rateLimitWalksChain &&
+			(message.errorStatus === 429 || rateLimitReason === "RATE_LIMIT_EXCEEDED");
 		const staleOpenAIResponsesReplayError = AIError.is(id, AIError.Flag.StaleResponsesItem);
 		const accountPolicyDenial = AIError.is(id, AIError.Flag.AccountPolicy);
 		const recordedUsageLimitOutcome = await this.#usageLimitOutcomes.get(message);
@@ -2934,12 +2947,15 @@ export class TurnRecovery {
 					preserveFailedTurn,
 					wrapAround: longUsageLimitFallback,
 					// Deferring a chain candidate only pays when the code below makes
-					// another attempt on this model. Each term is a branch below that,
-					// with no switch, ends the turn instead: a spent budget, a refusal
-					// or account-policy denial, a hard-error or Fast-degrade consult the
-					// classifier would not retry, and a wait past the fail-fast cap.
+					// another attempt on this model that can succeed. Each term is a
+					// branch below that, with no switch, ends the turn instead (a spent
+					// budget, a refusal or account-policy denial, a hard-error or
+					// Fast-degrade consult the classifier would not retry, a wait past
+					// the fail-fast cap), or, under `retry.rateLimitWalksChain`, a rate
+					// limit on this model, which the next attempt re-hits.
 					sameModelRetryAvailable:
 						!retryBudgetExhausted &&
+						!sourceRateLimited &&
 						!classifierRefusal &&
 						!accountPolicyDenial &&
 						!(

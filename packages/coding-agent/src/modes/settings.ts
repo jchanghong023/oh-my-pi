@@ -716,6 +716,26 @@ export const cfgDisplayCacheMissMarker = register({
 		description: "在请求丢失（未命中）Prompt 缓存的助手轮次后显示分隔线",
 	},
 });
+
+export const cfgDisplayAdvisorCollapsedLines = register({
+	id: "display.advisorCollapsedLines",
+	type: "number",
+	default: 0,
+	ui: {
+		tab: "appearance",
+		group: "Display",
+		label: "Advisor Collapsed Lines",
+		description:
+			"Maximum note lines a collapsed advisor card shows below its header (0 keeps the full preview; expand with the tool-output toggle)",
+		options: [
+			{ value: "0", label: "No limit", description: "Default." },
+			{ value: "1", label: "1 line" },
+			{ value: "2", label: "2 lines" },
+			{ value: "3", label: "3 lines" },
+			{ value: "5", label: "5 lines" },
+		],
+	},
+});
 effect(
 	combine({
 		hideToolActivity: cfgDisplayHideToolActivity,
@@ -725,6 +745,7 @@ effect(
 		cacheMissMarker: cfgDisplayCacheMissMarker,
 		showTokenUsage: cfgDisplayShowTokenUsage,
 		showTurnTime: cfgDisplayShowTurnTime,
+		advisorCollapsedLines: cfgDisplayAdvisorCollapsedLines,
 	}),
 	setChatTranscriptDisplayPreferences,
 );

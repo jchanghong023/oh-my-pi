@@ -109,10 +109,8 @@ function serializeSkillMutation<T>(name: string, op: () => Promise<T>): Promise<
 }
 
 /**
- * Reject when the managed-skills root itself is a symlink. lstat on a child
- * follows intermediate components, so a symlinked root would let an otherwise
- * valid name write/delete outside the isolated directory (e.g. onto authored
- * skills). Checked before composing any child path.
+ * Reject a symlinked root: following it could let managed-skill mutations
+ * overwrite or delete user-authored skills outside the isolated directory.
  */
 async function assertManagedRootSafe(): Promise<void> {
 	const rootStat = await fs.lstat(getManagedSkillsDir()).catch(err => {

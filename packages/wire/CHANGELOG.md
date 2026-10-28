@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the TSP `json` kind (`TspJsonProps`: a raw JSON `value` and `open`, the container levels expanded below the top-level entries), which the terminal draws as an interactive tree
+
+## [18.13.3] - 2026-10-28
+
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4
+
+### Removed
+
+- Removed `TspPalette` definition and `t` verb from the protocol specification
 
 ## [18.12.3] - 2026-10-19
 

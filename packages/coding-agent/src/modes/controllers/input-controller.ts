@@ -3,6 +3,8 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import {
 	type AutocompleteProvider,
+	BRACKETED_PASTE_END,
+	BRACKETED_PASTE_START,
 	type Component,
 	emergencyTerminalRestore,
 	matchesKey,
@@ -956,14 +958,20 @@ export class InputController {
 		this.#enhancedPaste = new EnhancedPasteController({
 			write: data => this.ctx.ui.terminal.write(data),
 			pasteText: text => {
-				// Route enhanced-paste text to the currently focused component when it
-				// exposes a `pasteText` hook (modal Input prompts: OAuth API-key entry,
-				// Perplexity OTP, GitHub Enterprise URL, manual redirect URL). Falling
-				// back to the main editor would have buried the text in the detached
-				// editor while the modal Input had focus (#2127).
+				// Route enhanced-paste text to the currently focused component: through
+				// its `pasteText` hook (modal Input prompts: OAuth API-key entry,
+				// Perplexity OTP, GitHub Enterprise URL, manual redirect URL), else as
+				// the bracketed paste a terminal without enhanced paste sends it
+				// (dialogs that keep their field inside: the agents hub's New agent,
+				// the /annotate note). Falling back to the main editor would bury the
+				// text in the detached editor while the dialog has focus (#2127). The
+				// main editor takes it as a bracketed paste too, so a pasted or dropped
+				// image path attaches (#3506) instead of landing as text.
 				const focused = this.ctx.ui.getFocused();
-				const target = focused && focused !== this.ctx.editor && hasPasteText(focused) ? focused : this.ctx.editor;
-				target.pasteText(text);
+				if (focused && focused !== this.ctx.editor && hasPasteText(focused)) focused.pasteText(text);
+				else if (focused && focused !== this.ctx.editor && focused.handleInput)
+					focused.handleInput(`${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`);
+				else this.ctx.editor.handleInput(`${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`);
 				this.ctx.ui.requestRender();
 			},
 			pasteImage: image =>

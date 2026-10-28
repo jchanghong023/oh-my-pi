@@ -7,6 +7,13 @@
 - Guide agents to correct and retry tool calls rejected by argument validation.
 - Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
 
+### Fixed
+
+- Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+- Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+
+## [18.13.3] - 2026-10-28
+
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4

@@ -179,9 +179,7 @@ terminal's acknowledgements instead of the render cadence. None of this
 document's history, viewport, resize-replay or CPR machinery runs on that path;
 SIGWINCH only refreshes the width used by `rows` fallback nodes. While a surface
 is live the nerd symbol preset is forced process-locally, and icon glyphs are
-sent as `icon` spans. Each surface receives omp's resolved theme (`t`: every
-theme token as hex, dark and light variants) after `o` and before its first
-frame, and again when the resolved palette changes. The first row paint waits
+sent as `icon` spans. The first row paint waits
 up to 300 ms for the probe. Direct Tern sessions optimistically open a surface
 immediately and fall back to rows if the terminal does not confirm it. Such a
 session needs raw input from the start, so a `deferInput` start holds the

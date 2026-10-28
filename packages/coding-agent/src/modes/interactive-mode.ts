@@ -54,6 +54,7 @@ import {
 	jobWidgetSummary,
 	latestJobWidget,
 } from "@oh-my-pi/pi-tui/tools/job-widget";
+import type { AsyncJobManager } from "../async/job-manager";
 import type { JobWidgetRegistry } from "../job-widgets/types";
 import { sameItems } from "@oh-my-pi/pi-tui/native/memo";
 import { describeSegmentTrack, renderSegmentTrack, type TrackSegment } from "@oh-my-pi/pi-tui/chrome/segment-track";
@@ -99,6 +100,8 @@ import type {
 } from "../extensibility/extensions";
 import type {
 	CompactOptions,
+	ExtensionLiveSession,
+	ExtensionLiveStartOptions,
 	ExtensionSessionModes,
 	PlanReviewChoice,
 	PlanReviewOption,
@@ -232,12 +235,12 @@ import {
 	todoMatchesAnyDescription,
 } from "@oh-my-pi/pi-tui/tools/todo";
 import { vocalizer } from "../tts/vocalizer";
-import { applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
+import { applyFileLinkSetting, applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
 import type { EventBus } from "../utils/event-bus";
-import { getEditorCommand, openInEditor } from "../utils/external-editor";
+import { getEditorCommand, getEditorName, openInEditor } from "../utils/external-editor";
 import { openPath } from "../utils/open";
 import { resumeCommand } from "../utils/resume-command";
 import { getSessionAccentAnsi, getSessionAccentHex } from "@oh-my-pi/pi-tui/theme/session-color";
@@ -385,6 +388,7 @@ import {
 	cfgComposerPredictions,
 	cfgComposerShape,
 	cfgComposerTokenRate,
+	cfgDisplayAdvisorCollapsedLines,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
 	cfgDisplayCompactToolActivity,
@@ -447,6 +451,7 @@ import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
 import { cfgAdvisorEnabled, cfgAdvisorMaxNotesPerUpdate } from "../advisor/settings";
+import { cfgExtensionAssistantTextRenderers } from "../extensibility/settings";
 import { cfgTierAdvisor } from "../session/settings";
 import {
 	cfgCompactionEnabled,
@@ -490,12 +495,14 @@ const cfgLiveUiSettings = combine({
 	hideThinkingBlock: cfgHideThinkingBlock,
 	proseOnlyThinking: cfgProseOnlyThinking,
 	expandThinkingBlocks: cfgExpandThinkingBlocks,
+	"display.advisorCollapsedLines": cfgDisplayAdvisorCollapsedLines,
 	"display.cacheMissMarker": cfgDisplayCacheMissMarker,
 	"display.collapseCompacted": cfgDisplayCollapseCompacted,
 	"display.showTokenUsage": cfgDisplayShowTokenUsage,
 	"display.showTurnTime": cfgDisplayShowTurnTime,
 	"tui.renderMermaid": cfgTuiRenderMermaid,
 	"tui.renderSvg": cfgTuiRenderSvg,
+	"extensionRenderers.assistantText": cfgExtensionAssistantTextRenderers,
 	"tui.autoGraph": cfgTuiAutoGraph,
 	"tui.textSizing": cfgTuiTextSizing,
 	"tui.tight": cfgTuiTight,
@@ -1577,17 +1584,30 @@ export class InteractiveMode implements InteractiveModeContext {
 	#jobsSegment: JobsSegment | undefined;
 	/** The job widget registry this mode repaints on, and how to stop listening to it. */
 	#jobWidgetsListener: { registry: JobWidgetRegistry; unsubscribe: () => void } | undefined;
+	/** The job manager whose settled jobs repaint the running counts, and how to stop listening to it. */
+	#jobSettleListener: { manager: AsyncJobManager; unsubscribe: () => void } | undefined;
 	/**
 	 * Repaint whenever a shown job widget changes (the HUD jobs segment, the
 	 * status line's glance), following the root job manager's current registry.
 	 */
 	#syncJobWidgetsListener(): void {
-		const registry = this.session.asyncJobManager?.widgets;
-		if (this.#jobWidgetsListener?.registry === registry) return;
-		this.#jobWidgetsListener?.unsubscribe();
-		this.#jobWidgetsListener = registry
-			? { registry, unsubscribe: registry.subscribe(() => this.ui.requestRender()) }
-			: undefined;
+		const manager = this.session.asyncJobManager;
+		const registry = manager?.widgets;
+		if (this.#jobWidgetsListener?.registry !== registry) {
+			this.#jobWidgetsListener?.unsubscribe();
+			this.#jobWidgetsListener = registry
+				? { registry, unsubscribe: registry.subscribe(() => this.ui.requestRender()) }
+				: undefined;
+		}
+		// The HUD's and status line's job counts are read at render: a job that
+		// settles without a result delivery (cancelled, a watched task job) would
+		// otherwise stay counted as running until something else repaints.
+		if (this.#jobSettleListener?.manager !== manager) {
+			this.#jobSettleListener?.unsubscribe();
+			this.#jobSettleListener = manager
+				? { manager, unsubscribe: manager.onJobSettled(() => this.ui.requestRender()) }
+				: undefined;
+		}
 	}
 	/** Gen tok/s for the native composer bar, one decimal (a steadier `rate` target): live while running, else the last reading. */
 	#nativeTokenRate(): number | undefined {
@@ -2104,6 +2124,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#applyAutoGraphSetting();
 		this.#applyTextSizingSetting();
 		// Keep generic pi-tui renderers aligned with the coding-agent setting.
+		applyFileLinkSetting();
 		applyHyperlinkSetting();
 		// The TUI polls the provider every frame, so it reads a field kept in sync by
 		// subscription rather than resolving the setting per render.
@@ -2692,6 +2713,23 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Initialize hooks with TUI-based UI context
 		await logger.time("InteractiveMode.init:hooks", () => this.initHooksAndCustomTools());
+		// A live `disabledExtensions` edit suspends or resumes extensions: redraw the transcript
+		// without (or with) their assistant text renderers, as toggling the setting does.
+		const extensionRunner = this.session.extensionRunner;
+		if (extensionRunner) {
+			this.#eventBusUnsubscribers.push(
+				extensionRunner.onSuspensionChange(() => {
+					if (!cfgExtensionAssistantTextRenderers.get(this.settings)) return;
+					this.#eventController.applyAssistantTextRenderers();
+					// A transcript replay in flight builds its components again before it commits.
+					if (this.#uiHelpers.restartTranscriptReplay()) return;
+					// Before the first transcript replay, that replay draws with the current set.
+					if (!this.initialChatRendered) return;
+					this.rebuildChatFromMessages();
+					this.ui.resetDisplay();
+				}),
+			);
+		}
 
 		// Restore mode from session (e.g. plan mode on resume)
 		this.session.setSessionBeforeSwitchReconciler?.(async () => {
@@ -2739,6 +2777,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#eventBusUnsubscribers.push(() => {
 			this.#jobWidgetsListener?.unsubscribe();
 			this.#jobWidgetsListener = undefined;
+			this.#jobSettleListener?.unsubscribe();
+			this.#jobSettleListener = undefined;
 		});
 
 		// Cache the live model for the next status-bar prepaint: init-time
@@ -4623,7 +4663,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		// options are baked in at build time: rebuild, then retire rows already
 		// committed to native scrollback.
 		if (
-			any("display.cacheMissMarker", "display.collapseCompacted", "display.showTokenUsage", "display.showTurnTime")
+			any(
+				"display.advisorCollapsedLines",
+				"display.cacheMissMarker",
+				"display.collapseCompacted",
+				"display.showTokenUsage",
+				"display.showTurnTime",
+			)
 		) {
 			rebuildChat = true;
 		}
@@ -4633,6 +4679,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (any("tui.renderSvg")) {
 			setSvgFigureRendering(cfgTuiRenderSvg.get(this.settings));
+			rebuildChat = true;
+		}
+		// Components take the extension text renderers when built; the rebuild keeps the streaming
+		// reply's components, so hand them the new set directly.
+		if (any("extensionRenderers.assistantText")) {
+			this.#eventController.applyAssistantTextRenderers();
 			rebuildChat = true;
 		}
 		if (any("tui.autoGraph")) {
@@ -4936,6 +4988,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const liveSet = new Set<Component>();
 		if (this.viewSession?.isStreaming) {
 			if (this.streamingComponent) liveSet.add(this.streamingComponent);
+			// Text after a tool call in the streaming reply is drawn by its own components.
+			for (const segment of this.#eventController.liveAssistantSegments()) liveSet.add(segment);
 			for (const [id, component] of this.pendingTools) {
 				livePendingTools.set(id, component);
 				liveSet.add(component as unknown as Component);
@@ -6523,6 +6577,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				initialIndex: dialogOptions?.initialIndex,
 				slider: extra?.slider,
 				externalEditorLabel: appKey(this.keybindings, "app.editor.external") || undefined,
+				externalEditorName: getEditorName(),
 				annotationState: dialogOptions?.annotationState,
 			},
 			{
@@ -8303,6 +8358,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.isInitialized = false;
 	}
 
+	async #quitHostOwned(code: number): Promise<void> {
+		try {
+			await postmortem.quit(code);
+		} catch {
+			// Extension loading guards process.exit; cleanup already ran before
+			// the guarded exit throws, so host shutdown can use the native exit.
+			postmortem.exitProcess(code);
+		}
+	}
+
 	async shutdown(): Promise<void> {
 		this.#devObservationUnsubscribe?.();
 		this.#devObservationUnsubscribe = undefined;
@@ -8314,13 +8379,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// escape hatch: quit without writing the session log. 130 = 128 + SIGINT,
 		// matching the Ctrl+C hard-abort exit code in input-controller.
 		if (this.#teardownFailed) {
-			try {
-				await postmortem.quit(130);
-			} catch {
-				// Extension/hook loading temporarily guards process.exit. Cleanup
-				// has already run; bypass that guard for this host-owned escape.
-				postmortem.exitProcess(130);
-			}
+			await this.#quitHostOwned(130);
 			return;
 		}
 		this.#beginClose();
@@ -8344,7 +8403,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			process.stderr.write(`\n${chalk.dim("Resume this session with")}\n${chalk.dim(resumeCommand(sessionId))}\n`);
 		}
 
-		await postmortem.quit(0);
+		await this.#quitHostOwned(0);
 	}
 
 	#handleTeardownError(action: "close" | "restart", error: unknown): void {
@@ -9445,13 +9504,29 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.showStatus(`Recording to ${this.#recorder.path} · /record again to stop`);
 	}
 
+	/** Why live mode cannot start right now, or `undefined` when it can. */
+	#liveStartBlocker(): string | undefined {
+		if (this.#dictationStarting || (this.#sttController && this.#sttController.state !== "idle")) {
+			return "Finish the current speech-to-text capture before starting live mode.";
+		}
+		return undefined;
+	}
+
 	/** Start or stop the Codex-backed realtime voice surface. */
 	async handleLiveCommand(): Promise<void> {
-		if (this.#dictationStarting || (this.#sttController && this.#sttController.state !== "idle")) {
-			this.showWarning("Finish the current speech-to-text capture before starting live mode.");
+		const blocker = this.#liveStartBlocker();
+		if (blocker) {
+			this.showWarning(blocker);
 			return;
 		}
 		await this.#liveCommandController.handleCommand();
+	}
+
+	/** Start a live session whose audio runs on an extension's own WebRTC peer. */
+	async startRemoteLive(options: ExtensionLiveStartOptions): Promise<ExtensionLiveSession> {
+		const blocker = this.#liveStartBlocker();
+		if (blocker) throw new Error(blocker);
+		return await this.#liveCommandController.startRemote(options);
 	}
 
 	async showDebugSelector(): Promise<void> {

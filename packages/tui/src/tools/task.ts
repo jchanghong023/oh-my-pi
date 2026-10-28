@@ -54,7 +54,7 @@ import type { NativeNode } from "../native/node";
 import { OwnerMemo, sameItems } from "../native/memo";
 import { plainText } from "../native/spans";
 import { errorText, noteText, resultText } from "./native-view";
-import { describeJsonTree } from "./json-tree";
+import { describeJsonValue } from "./json-tree";
 import { taskSummary } from "../overlays/agent-hub-renderer";
 import type { NativeToolView, ToolRenderResult } from "./renderer";
 
@@ -1833,6 +1833,8 @@ interface AgentDescribeState {
 	readonly expanded: boolean;
 	readonly background: boolean;
 	readonly criticalPreview?: boolean;
+	/** The host draws the `json` kind. */
+	readonly json: boolean;
 }
 
 /** Settled and in-flight child snapshots a subagent carries, as nested agent nodes. */
@@ -1983,8 +1985,9 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			warning ? errorLine(warning, "warning") : undefined,
 			result.error ? errorLine(result.error) : undefined,
 			result.retryFailure ? errorLine(`auto-retry gave up: ${result.retryFailure.errorMessage}`) : undefined,
+			// The structured result is the agent's answer: its containers open one level, as in the fallback tree.
 			structured !== undefined
-				? describeJsonTree(structured)
+				? describeJsonValue(structured, { native: state.json, open: 1 })
 				: output
 					? md(output, { role: "omp.task.output" })
 					: undefined,
@@ -2098,6 +2101,7 @@ function describeTaskResult(
 			expanded: options.expanded,
 			background,
 			criticalPreview: options.compactToolActivity,
+			json: options.json === true,
 		},
 		0,
 	);
@@ -2176,8 +2180,10 @@ export const taskToolRenderer = {
 		options: TaskRenderOptions,
 		args?: TaskParams,
 	): NativeToolView | undefined {
-		return taskResultMemo.get(result, [options.renderContext?.nowMs, options.expanded], () =>
-			describeTaskResult(result, options, args),
+		return taskResultMemo.get(
+			result,
+			[options.renderContext?.nowMs, options.expanded, options.json, options.compactToolActivity],
+			() => describeTaskResult(result, options, args),
 		);
 	},
 	mergeCallAndResult: true,
