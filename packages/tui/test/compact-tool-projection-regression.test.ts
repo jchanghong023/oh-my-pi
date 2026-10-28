@@ -23,7 +23,7 @@ function tool(name: string, args: unknown): ToolExecutionComponent {
 function output(root: TranscriptContainer): string {
 	return Bun.stripANSI(root.render(80).join("\n"));
 }
-function native(root: TranscriptContainer): string {
+function native(root: TranscriptContainer, dataFirst = true): string {
 	const document = new TspDocument("s:regression");
 	const ops = new Reconciler("s:regression").reconcile(
 		{ main: root.nativeBlocks(), dock: [], layer: [] },
@@ -31,7 +31,7 @@ function native(root: TranscriptContainer): string {
 			cols: 80,
 			reduceMotion: false,
 			dark: true,
-			supports: () => true,
+			supports: kind => dataFirst || kind !== "tool",
 			feature: () => true,
 		},
 	);
@@ -406,6 +406,228 @@ describe("compact tool component integration", () => {
 		expect(output(root)).toContain("new_value");
 		expect(native(root)).toContain("sample.ts");
 		expect(output(root)).not.toContain("工具调用");
+		expect(JSON.stringify(result)).toBe(original);
+	});
+
+	it("classifies local files and dispatched coordination by their inner targets", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		for (const scheme of ["local://", ""]) {
+			const root = new TranscriptContainer();
+			for (const name of ["one", "two", "three", "four"]) {
+				const call = tool("write", { path: `${scheme}${name}.txt`, content: `BODY_${name}` });
+				call.updateResult({ content: [{ type: "text", text: `written ${name}` }] });
+				root.addChild(call);
+			}
+			for (const view of [output(root), native(root, false), native(root)]) {
+				expect(view).not.toContain("BODY_one");
+				for (const name of ["two", "three", "four"]) expect(view).toContain(`BODY_${name}`);
+			}
+		}
+		for (const target of ["agent://peer", "proc://job", "cfg://display/test"]) {
+			const root = new TranscriptContainer();
+			root.addChild(tool("read", { path: "before.ts" }));
+			const args = { path: target, content: "payload" };
+			const call = tool("write", { path: "xd://write", content: JSON.stringify(args) });
+			root.addChild(call);
+			root.addChild(tool("bash", { command: "echo after" }));
+			expect(call.isCompactWriteCall()).toBe(false);
+			expect(root.render(80)).toHaveLength(3);
+			const result = {
+				content: [{ type: "text" as const, text: "sent" }],
+				details: { xdev: { tool: "write", mode: "execute", args, inner: {} } },
+			};
+			const original = JSON.stringify(result);
+			call.updateResult(result);
+			expect(call.isCompactActualFileWrite()).toBe(false);
+			expect(root.render(80)).toHaveLength(3);
+			for (const view of [output(root), native(root, false), native(root)]) {
+				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("after");
+				expect(view).not.toContain("before.ts");
+			}
+			expect(JSON.stringify(result)).toBe(original);
+		}
+		const file = tool("write", {
+			path: "xd://write",
+			content: JSON.stringify({ path: "local://file.txt", content: "file" }),
+		});
+		file.updateResult({
+			content: [{ type: "text", text: "written" }],
+			details: {
+				xdev: { tool: "write", mode: "execute", args: { path: "local://file.txt", content: "file" }, inner: {} },
+			},
+		});
+		expect(file.isCompactActualFileWrite()).toBe(true);
+	});
+
+	it("retains consumed wait messages and embedded job failures beyond the preview quota", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		for (const details of [
+			{ op: "wait", waited: { id: "42", from: "Worker", to: "Main", body: "MESSAGE_BODY", ts: Date.now() - 5000 } },
+			{
+				op: "wait",
+				jobs: [
+					{
+						id: "failed-job",
+						type: "bash",
+						status: "failed",
+						label: "broken",
+						durationMs: 1000,
+						errorText: "JOB_DIAGNOSTIC",
+					},
+				],
+			},
+			{
+				op: "wait",
+				jobs: [{ id: "cancelled-job", type: "task", status: "cancelled", label: "stopped", durationMs: 1000 }],
+			},
+			{
+				op: "wait",
+				jobs: [
+					{
+						id: "schema-job",
+						type: "task",
+						status: "completed",
+						label: "schema",
+						durationMs: 1000,
+						structured: { status: "invalid", error: "SCHEMA_DIAGNOSTIC" },
+					},
+				],
+			},
+			{
+				op: "wait",
+				jobs: [
+					{
+						id: "artifact-job",
+						type: "task",
+						status: "completed",
+						label: "artifact",
+						durationMs: 1000,
+						artifactError: "write",
+					},
+				],
+			},
+		]) {
+			const root = new TranscriptContainer();
+			const wait = tool("wait", {});
+			const result = { content: [{ type: "text" as const, text: "wait result" }], details };
+			const original = JSON.stringify(result);
+			wait.updateResult(result);
+			root.addChild(wait);
+			root.addChild(tool("bash", { command: "echo latest-one" }));
+			root.addChild(tool("bash", { command: "echo latest-two" }));
+			for (const view of [output(root), native(root, false), native(root)]) {
+				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("latest-two");
+				if ("waited" in details) {
+					expect(view).toContain("Worker");
+					expect(view).toContain("MESSAGE_BODY");
+				} else {
+					expect(view).toContain(details.jobs[0]!.id);
+					if ("errorText" in details.jobs[0]!) expect(view).toContain("JOB_DIAGNOSTIC");
+					if ("structured" in details.jobs[0]!) expect(view).toContain("SCHEMA_DIAGNOSTIC");
+					if ("artifactError" in details.jobs[0]!) expect(view).toContain("artifact write failed");
+				}
+			}
+			expect(JSON.stringify(result)).toBe(original);
+		}
+	});
+
+	it("handles invalid streamed Eval titles directly and through the device without changing counts", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		for (const device of [false, true]) {
+			const root = new TranscriptContainer();
+			root.addChild(tool("read", { path: "first.ts" }));
+			const args = (title: unknown) =>
+				device
+					? { path: "xd://eval", content: JSON.stringify({ title, code: "return 1" }) }
+					: { title, code: "return 1" };
+			const call = tool(device ? "write" : "eval", args({ invalid: true }));
+			root.addChild(call);
+			root.addChild(tool("bash", { command: "echo last" }));
+			for (const view of [output(root), native(root, false), native(root)]) {
+				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("Eval");
+				expect(view).toContain("last");
+			}
+			call.updateArgs(args("VALID_TITLE"));
+			for (const view of [output(root), native(root, false), native(root)]) {
+				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("VALID_TITLE");
+			}
+		}
+	});
+
+	it("keeps task agent failures and cancellations without changing tool-level failure counts", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const root = new TranscriptContainer();
+		const task = tool("task", { tasks: [] });
+		const base = {
+			agent: "task",
+			agentSource: "bundled",
+			task: "investigate",
+			output: "",
+			stderr: "",
+			truncated: false,
+			durationMs: 1000,
+			tokens: 0,
+			requests: 1,
+		};
+		const result = {
+			content: [{ type: "text" as const, text: "subagents returned" }],
+			details: {
+				projectAgentsDir: null,
+				totalDurationMs: 1000,
+				results: [
+					{ ...base, index: 0, id: "FailedWorker", exitCode: 1, error: "AGENT_FAILURE" },
+					{ ...base, index: 1, id: "AbortedWorker", exitCode: 0, aborted: true, abortReason: "AGENT_CANCELLED" },
+					{ ...base, index: 2, id: "MergeWorker", exitCode: 0, error: "MERGE_FAILURE" },
+				],
+			},
+		};
+		const original = JSON.stringify(result);
+		task.updateResult(result);
+		root.addChild(task);
+		root.addChild(tool("bash", { command: "echo later-one" }));
+		root.addChild(tool("bash", { command: "echo later-two" }));
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).toContain("工具调用 3 次 · 失败 0 次");
+			for (const text of [
+				"FailedWorker",
+				"AbortedWorker",
+				"MergeWorker",
+				"AGENT_FAILURE",
+				"AGENT_CANCELLED",
+				"MERGE_FAILURE",
+			]) {
+				expect(view).toContain(text);
+			}
+		}
+		expect(JSON.stringify(result)).toBe(original);
+	});
+
+	it("continues choosing the running job for ordinary wait summaries", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const root = new TranscriptContainer();
+		const wait = tool("wait", {});
+		const result = {
+			content: [{ type: "text" as const, text: "ordinary wait" }],
+			details: {
+				op: "wait",
+				jobs: [
+					{ id: "done-job", type: "bash", status: "completed", label: "done", durationMs: 100 },
+					{ id: "running-job", type: "task", status: "running", label: "RUNNING_LABEL", durationMs: 100 },
+				],
+			},
+		};
+		const original = JSON.stringify(result);
+		wait.updateResult(result);
+		root.addChild(wait);
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).toContain("running-job");
+			expect(view).toContain("RUNNING_LABEL");
+			expect(view).toContain("+1 jobs");
+		}
 		expect(JSON.stringify(result)).toBe(original);
 	});
 });

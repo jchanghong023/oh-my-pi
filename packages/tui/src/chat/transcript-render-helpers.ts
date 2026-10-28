@@ -26,14 +26,14 @@ import { theme } from "../theme";
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
-/** Tool completions stay out of compact history; independent diagnostics remain visible. */
+/** Keep the detailed and compact receipt projections under the same visibility control. */
 class AsyncResultBlock extends ToolActivityContainer {
 	readonly #compactBlock: TranscriptStatusBlock;
 	#visible = true;
 
-	constructor(original: TranscriptStatusBlock, warnings: TranscriptStatusRow[]) {
+	constructor(original: TranscriptStatusBlock, compactRows: TranscriptStatusRow[]) {
 		super(original);
-		this.#compactBlock = new TranscriptStatusBlock(warnings);
+		this.#compactBlock = new TranscriptStatusBlock(compactRows);
 	}
 
 	isCompactToolActivity(): boolean {
@@ -59,7 +59,7 @@ class AsyncResultBlock extends ToolActivityContainer {
 	}
 }
 
-/** Preserve detailed delivery receipts while compact history keeps only independent diagnostics. */
+/** Preserve detailed receipts while compact history retains failures and diagnostics. */
 export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
@@ -74,38 +74,44 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
 	const compactRows: TranscriptStatusRow[] = [];
-	const addWarning = (row: TranscriptStatusRow, original = true) => {
-		if (original) rows.push(row);
+	const addWarning = (row: TranscriptStatusRow) => {
+		rows.push(row);
 		compactRows.push(row);
 	};
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
 		const typeLabel = job.type ? `[${job.type}]` : "[job]";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
+		const failed = job.status === "failed";
+		const cancelled = job.status === "cancelled";
 		const original: TranscriptStatusRow = {
 			parts: [
-				{ text: `${theme.status.done} Background job completed`, color: "success" },
+				failed
+					? { text: `${theme.status.error} Background job failed`, color: "error" }
+					: cancelled
+						? { text: `${theme.status.error} Background job cancelled`, color: "warning" }
+						: job.status === "completed"
+							? { text: `${theme.status.done} Background job completed`, color: "success" }
+							: { text: `Background job ${job.status ?? "result"}`, color: "dim" },
 				{ text: typeLabel, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 		};
 		rows.push(original);
+		if (job.status !== "completed") compactRows.push(original);
 		if (job.meta?.artifactError) {
 			addWarning({ parts: [{ text: formatArtifactErrorNotice(job.meta.artifactError), color: "warning" }] });
 		}
 		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
-			addWarning(
-				{
-					parts: [
-						{
-							text: `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`,
-							color: "warning",
-						},
-					],
-				},
-				false,
-			);
+			addWarning({
+				parts: [
+					{
+						text: `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`,
+						color: "warning",
+					},
+				],
+			});
 		}
 	}
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
@@ -115,15 +121,18 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 }
 
 /**
- * Render a `launch-completion` custom message (terminal supervised-process
- * exits from the launch broker). Receipt rows belong to detailed mode only.
+ * Render terminal supervised-process exits from the launch broker, retaining
+ * failed exits in compact mode.
  */
 export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	const details = (message as CustomMessage<{ daemons?: DaemonSnapshot[] }>).details;
 	const rows: TranscriptStatusRow[] = [];
+	const compactRows: TranscriptStatusRow[] = [];
 	const daemons = details?.daemons ?? [];
 	if (daemons.length === 0 && typeof message.content === "string") {
-		rows.push({ parts: [{ text: `${theme.status.done} ${message.content}`, color: "dim" }] });
+		const row: TranscriptStatusRow = { parts: [{ text: message.content, color: "dim" }] };
+		rows.push(row);
+		compactRows.push(row);
 	}
 	for (const daemon of daemons) {
 		const failed = daemon.state === "failed" || (daemon.exitCode !== undefined && daemon.exitCode !== 0);
@@ -131,18 +140,22 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			daemon.exitedAt !== undefined && daemon.startedAt !== undefined
 				? formatDuration(daemon.exitedAt - daemon.startedAt)
 				: undefined;
-		rows.push({
+		const row: TranscriptStatusRow = {
 			parts: [
 				failed
 					? { text: `${theme.status.error} Supervised process failed`, color: "error" }
-					: { text: `${theme.status.done} Supervised process completed`, color: "success" },
+					: daemon.exitCode === 0
+						? { text: `${theme.status.done} Supervised process completed`, color: "success" }
+						: { text: "Supervised process exited", color: "dim" },
 				{ text: daemon.name, color: "accent" },
 				daemon.exitCode !== undefined ? { text: `(exit ${daemon.exitCode})`, color: "dim" } : undefined,
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
-		});
+		};
+		rows.push(row);
+		if (failed || daemon.exitCode !== 0) compactRows.push(row);
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), []);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows);
 }
 
 /**

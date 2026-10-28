@@ -936,11 +936,20 @@ export class ToolExecutionComponent extends Container {
 
 	/** Critical upstream feedback bypasses ordinary compact previews. */
 	hasCompactCriticalFeedback(): boolean {
-		return (
+		if (
 			this.#result?.isError === true ||
 			this.#compactNeedsUserInput !== undefined ||
 			this.#compactOutcome() === "待确认"
-		);
+		) {
+			return true;
+		}
+		if (!this.#result) return false;
+		if (this.#renderer?.hasCompactCriticalFeedback?.(this.#result)) return true;
+		const details = this.#result.details;
+		const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
+		if (dispatch?.mode !== "execute" || typeof dispatch.tool !== "string") return false;
+		const innerRenderer = toolRenderers[dispatch.tool];
+		return innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true;
 	}
 
 	isCompactWriteCall(): boolean {
@@ -956,7 +965,19 @@ export class ToolExecutionComponent extends Container {
 				if (dispatch?.mode === "help" || (typeof args?.content === "string" && isXdHelpContent(args.content)))
 					return false;
 				const name = typeof dispatch?.tool === "string" ? dispatch.tool : parseXdUrl(normalized)?.name;
-				return !name || name === "write" || name === "edit" || name === "apply_patch";
+				if (name !== "write") return !name || name === "edit" || name === "apply_patch";
+				let innerArgs: unknown = dispatch?.args;
+				if (!isRecord(innerArgs) && typeof args?.content === "string") {
+					try {
+						innerArgs = JSON.parse(args.content);
+					} catch {
+						// Streaming or invalid parameters keep the pending write presentation.
+					}
+				}
+				const innerPath = isRecord(innerArgs) ? (innerArgs.path ?? innerArgs.file_path) : undefined;
+				const innerScheme =
+					typeof innerPath === "string" ? splitUrlScheme(unwrapHashlineHeaderPath(innerPath))?.scheme : undefined;
+				return innerScheme !== "agent" && innerScheme !== "proc" && innerScheme !== "cfg";
 			}
 			return scheme !== "agent" && scheme !== "proc" && scheme !== "cfg";
 		}
@@ -974,7 +995,15 @@ export class ToolExecutionComponent extends Container {
 		if (isRecord(details) && Array.isArray(details.conflictChanges)) return details.conflictChanges.length > 0;
 		if (isRecord(details) && isRecord(details.xdev)) {
 			if (details.xdev.mode !== "execute") return false;
-			if (details.xdev.tool === "write") return true;
+			if (details.xdev.tool === "write") {
+				const inner = details.xdev.inner;
+				if (isRecord(inner) && Array.isArray(inner.conflictChanges)) return inner.conflictChanges.length > 0;
+				const innerArgs = details.xdev.args;
+				const innerPath = isRecord(innerArgs) ? (innerArgs.path ?? innerArgs.file_path) : undefined;
+				if (typeof innerPath !== "string") return false;
+				const scheme = splitUrlScheme(unwrapHashlineHeaderPath(innerPath))?.scheme;
+				return scheme === undefined || scheme === "local" || scheme === "ssh";
+			}
 			return (
 				(details.xdev.tool === "edit" || details.xdev.tool === "apply_patch") &&
 				hasAppliedFileChange(details.xdev.inner)
@@ -982,7 +1011,9 @@ export class ToolExecutionComponent extends Container {
 		}
 		const args = this.#args;
 		const path = isRecord(args) ? (args.path ?? args.file_path) : undefined;
-		return typeof path !== "string" || !/^[a-z][a-z0-9+.-]*:\/\//i.test(unwrapHashlineHeaderPath(path));
+		if (typeof path !== "string") return true;
+		const scheme = splitUrlScheme(unwrapHashlineHeaderPath(path))?.scheme;
+		return scheme === undefined || scheme === "local" || scheme === "ssh";
 	}
 
 	/** Stable actual-call identity survives provider tool-call ID corrections. */
@@ -1490,7 +1521,7 @@ export class ToolExecutionComponent extends Container {
 			media,
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
-			compactToolActivity: this.#compactToolActivity,
+			compactToolActivity: displayPreferences.compactToolActivity,
 			argsComplete: this.#argsComplete,
 			executionStarted: this.#executionStarted,
 			elapsedMs: this.#elapsedMs(status),
@@ -1728,11 +1759,9 @@ export class ToolExecutionComponent extends Container {
 			renderContext: this.#renderState.renderContext,
 		});
 		if (summary !== undefined) {
-			if (summary.detail) return summary;
-			// A detail-less custom summary (e.g. wait before its result
-			// parse) must not fold to a bare `╭─ Label` frame under viewport
-			// pressure — keep the generic liveness hint for in-flight calls.
-			return this.#isRunning() ? { ...summary, detail: "running" } : summary;
+			const label = typeof summary.label === "string" && summary.label.trim() ? summary.label : this.#toolLabel;
+			const detail = typeof summary.detail === "string" ? summary.detail : undefined;
+			return { label, detail: detail || (this.#isRunning() ? "running" : undefined) };
 		}
 		if (isRecord(args)) {
 			for (const key of ["command", "pattern", "query", "path", "input"] as const) {

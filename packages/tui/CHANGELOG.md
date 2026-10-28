@@ -27,6 +27,12 @@
 
 ### Fixed
 
+- Preserve upstream input anchoring and Complete Scrollback behavior in compact mode; clean mode also hides live thinking titles and expandable native thoughts.
+- Keep failed or cancelled task results, consumed peer messages, and mixed background or supervised-process failure receipts visible outside compact preview limits.
+- Retain original cards for file-URL writes, classify nested device operations by their real targets, and safely display incomplete or malformed Eval titles.
+- Show corrected read targets and conflict warnings consistently across ANSI and native views, including calls with explicit intent.
+- Keep selected `/jobs` rows and their details reachable in tall task trees, and keep autocomplete selection visible in short terminals without accepting hidden candidates.
+- Offer one canonical logout entry per stored credential while retaining distinct providers and login methods.
 - Fold successful conflict-resolution writes with other file changes and retain their diffs and error feedback.
 - Keep compact user messages and replies reachable in terminal history when the input, thinking area, or HUD grows, without dropping or duplicating rows at the viewport boundary.
 - Keep tree guides aligned on wrapped `/session` detail lines.

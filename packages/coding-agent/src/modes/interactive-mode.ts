@@ -8727,6 +8727,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					},
 			close: () => this.#hideJobsSheet(),
 		});
+		sheet.renderHeightProvider = () => Math.max(1, Math.floor(this.ui.terminal.rows * 0.9));
 		this.#jobsSheetHandle = this.ui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
 		this.#jobsSheetTimer = setInterval(() => this.ui.requestRender(), JOBS_SHEET_REFRESH_MS);
 		this.ui.setFocus(sheet);

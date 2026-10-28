@@ -1336,7 +1336,6 @@ function selectCollapsedResults(ordered: readonly SingleResult[]): readonly Sing
 	if (ordered.length <= COLLAPSED_AGENT_LIMIT) return ordered;
 	const picked = new Set<SingleResult>();
 	for (const result of ordered) {
-		if (picked.size >= COLLAPSED_AGENT_LIMIT) break;
 		if (result.aborted || result.exitCode !== 0 || result.error) picked.add(result);
 	}
 	for (const result of ordered) {
@@ -1833,6 +1832,7 @@ interface AgentDescribeState {
 	readonly nowMs: number;
 	readonly expanded: boolean;
 	readonly background: boolean;
+	readonly criticalPreview?: boolean;
 }
 
 /** Settled and in-flight child snapshots a subagent carries, as nested agent nodes. */
@@ -1974,7 +1974,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			badges: badges.length > 0 ? badges : undefined,
 			depth: depth > 0 ? depth : undefined,
 			collapsible: true,
-			collapsed: !state.expanded,
+			collapsed: !state.expanded && !(state.criticalPreview && (aborted || !success)),
 		},
 		[
 			describeAssignment(result.assignment ?? result.task),
@@ -2097,6 +2097,7 @@ function describeTaskResult(
 			nowMs: options.renderContext?.nowMs ?? Date.now(),
 			expanded: options.expanded,
 			background,
+			criticalPreview: options.compactToolActivity,
 		},
 		0,
 	);
@@ -2144,7 +2145,10 @@ function describeTaskResult(
 			badges: background ? [{ text: "background" }] : undefined,
 		},
 		tone: aborted + failed > 0 ? "error" : undefined,
-		preview: "none",
+		preview:
+			options.compactToolActivity && details.results?.some(item => item.aborted || item.exitCode !== 0 || item.error)
+				? "children"
+				: "none",
 		body: compact([
 			context,
 			...agents,
@@ -2161,6 +2165,9 @@ const taskResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const taskToolRenderer = {
 	renderCall,
 	renderResult,
+	hasCompactCriticalFeedback(result: ToolRenderResult<TaskToolDetails>): boolean {
+		return result.details?.results?.some(item => item.aborted || item.exitCode !== 0 || Boolean(item.error)) === true;
+	},
 	describeCall(args: TaskParams, options: RenderResultOptions): NativeToolView | undefined {
 		return taskCallMemo.get(args, [options.argsComplete], () => describeTaskCall(args));
 	},

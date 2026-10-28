@@ -874,6 +874,8 @@ export class Editor implements Component, Focusable {
 	#autocompleteAbortController: AbortController | undefined;
 	#autocompleteWaiters: Array<() => void> = [];
 	#autocompleteMaxVisible: number = 10;
+	/** ANSI's last painted frame had no room for a candidate row. */
+	#autocompleteHiddenByHeight = false;
 	onAutocompleteUpdate?: () => void;
 	/** Called after an async text-assist result mutates the document outside an input event, so hosts can schedule a repaint. */
 	onTextAssistApplied?: () => void;
@@ -1887,19 +1889,26 @@ export class Editor implements Component, Focusable {
 		const bottomRow = style.renderBottom(chromeCtx);
 		if (bottomRow !== undefined) result.push(bottomRow);
 
-		// Add autocomplete list if active
+		const frameHeight = this.renderHeightProvider?.();
 		const autocompleteList = this.#visibleAutocompleteList();
+		this.#autocompleteHiddenByHeight = false;
 		if (autocompleteList) {
-			// Clamp the dropdown to the terminal viewport: the editor rows already
-			// rendered above plus a small reserve must stay visible.
 			const viewportRows = this.viewportRowsProvider?.() || process.stdout.rows || Number(Bun.env.LINES) || 24;
-			autocompleteList.setMaxVisible(
-				Math.max(3, Math.min(this.#autocompleteMaxVisible, viewportRows - result.length - 2)),
-			);
-			result.push(...autocompleteList.render(width));
+			const cursorRow = result.findIndex(row => row.includes(CURSOR_MARKER));
+			// Frame clipping can discard rows before the cursor, but must retain the
+			// cursor and the existing rows below it before allocating menu rows.
+			const frameRows =
+				frameHeight === undefined ? viewportRows : Math.min(viewportRows, Math.max(0, Math.floor(frameHeight)));
+			const retainedRows = frameHeight !== undefined && cursorRow >= 0 ? result.length - cursorRow : result.length;
+			const availableRows = Math.max(0, frameRows - retainedRows);
+			this.#autocompleteHiddenByHeight = availableRows === 0;
+			if (availableRows > 0) {
+				const usualLimit = Math.max(3, viewportRows - result.length - 2);
+				autocompleteList.setMaxVisible(Math.min(this.#autocompleteMaxVisible, usualLimit, availableRows));
+				result.push(...autocompleteList.render(width));
+			}
 		}
 
-		const frameHeight = this.renderHeightProvider?.();
 		if (frameHeight !== undefined && result.length > frameHeight) {
 			// At very short heights even the frame and one content row cannot
 			// coexist. Drop chrome/padding before the insertion row, not the input.
@@ -1923,6 +1932,7 @@ export class Editor implements Component, Focusable {
 	 * caret moves change only `text` and `cursor` on the same node.
 	 */
 	describe(cx: DescribeContext): NativeNode {
+		this.#autocompleteHiddenByHeight = false;
 		// The terminal owns the wrap: the surface width only estimates whether a
 		// recalled history entry spans rows, and caret rows are logical lines.
 		this.#lastLayoutWidth = Math.max(1, cx.cols);
@@ -2000,6 +2010,7 @@ export class Editor implements Component, Focusable {
 		const children: NativeChild[] = [...layout.children];
 		const list = this.#visibleAutocompleteList();
 		if (list) {
+			list.setMaxVisible(this.#autocompleteMaxVisible);
 			list.setNativeMark(this.#autocompleteMark());
 			const overlay = this.#nativeOverlay;
 			if (overlay?.list !== list || overlay.caret !== layout.caret) {
@@ -2188,7 +2199,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Handle autocomplete special keys first (but don't block other input)
-		if (this.#autocompleteState && this.#autocompleteList) {
+		if (!this.#autocompleteHiddenByHeight && this.#autocompleteState && this.#autocompleteList) {
 			// Escape - cancel autocomplete. A hidden popup (empty narrowed `@` list) is
 			// dropped too, so its pending refresh cannot pop up afterward, but the key
 			// falls through: the user never saw anything to dismiss.
@@ -2375,7 +2386,10 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Tab key - context-aware completion (but not when already autocompleting)
-		if (kb.matchesCanonical(canonical, "tui.input.tab") && !this.#autocompleteState) {
+		if (
+			kb.matchesCanonical(canonical, "tui.input.tab") &&
+			(!this.#autocompleteState || this.#autocompleteHiddenByHeight)
+		) {
 			void this.#handleTabCompletion();
 			return;
 		}
@@ -2456,7 +2470,7 @@ export class Editor implements Component, Focusable {
 			// Synchronous slash command completion for the race condition where
 			// async autocomplete hasn't resolved yet (user types /q quickly + Enter).
 			// Match the existing selected-item behavior when autocomplete IS showing.
-			if (!this.#autocompleteState) {
+			if (!this.#autocompleteState && !this.#autocompleteHiddenByHeight) {
 				const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 				const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
 				if (
@@ -5313,7 +5327,7 @@ export class Editor implements Component, Focusable {
 	 * not claim keys (Escape, Vim mode switches) meant for the editor or app.
 	 */
 	isShowingAutocomplete(): boolean {
-		return this.#visibleAutocompleteList() !== undefined;
+		return !this.#autocompleteHiddenByHeight && this.#visibleAutocompleteList() !== undefined;
 	}
 
 	/** The open autocomplete list, unless it has no candidate to show. */

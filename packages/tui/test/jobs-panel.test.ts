@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "bun:test";
 import * as os from "node:os";
+import { TUI } from "@oh-my-pi/pi-tui";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import {
 	type JobsPanelDetail,
@@ -10,6 +11,8 @@ import {
 } from "@oh-my-pi/pi-tui/overlays/jobs-panel";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { modelEval } from "./fixtures/job-widget-views";
+import { VirtualRenderScheduler } from "./virtual-render-scheduler";
+import { VirtualTerminal } from "./virtual-terminal";
 
 const DOWN = "\x1b[B";
 const UP = "\x1b[A";
@@ -151,6 +154,83 @@ describe("JobsSheet", () => {
 		expect(lines).toContain("> running  bash");
 		expect(lines).toContain("pid 41");
 		expect(lines).toContain("running 12 tests");
+	});
+
+	it("keeps the selected tree row and its details on the real overlay viewport through navigation and resize", async () => {
+		await initTheme();
+		const terminal = new VirtualTerminal(100, 28);
+		const scheduler = new VirtualRenderScheduler();
+		const tui = new TUI(terminal, false, { renderScheduler: scheduler });
+		const jobs: JobsPanelJob[] = Array.from({ length: 40 }, (_, index) => ({
+			id: `job-${index}`,
+			type: "bash",
+			status: "running",
+			label: `label-${index}`,
+			ownerId: index === 0 ? "Child" : "Main",
+			startTime: NOW + index,
+		}));
+		const cancel = vi.fn();
+		const sheet = new JobsSheet({
+			load: () => ({
+				rootId: "Main",
+				agents: [{ id: "Child", parentId: "Main" }],
+				running: jobs,
+				recent: [],
+			}),
+			inspect: id => ({
+				command: `command-${id}\n${Array.from({ length: 35 }, (_, i) => `step-${i}`).join("\n")}`,
+				cwd: `/work/${id}`,
+				pids: [7],
+				output: `output-${id}\n`,
+			}),
+			cancel,
+			close: vi.fn(),
+		});
+		sheet.renderHeightProvider = () => Math.max(1, Math.floor(terminal.rows * 0.9));
+		const screen = () => terminal.getViewport().join("\n");
+		const assertSelection = (id: string) => {
+			const text = screen();
+			expect(text).toMatch(new RegExp(`>[^\\n]*label-${id}`));
+			expect(text).toContain(`command-job-${id}`);
+			expect(text).toContain(`/work/job-${id}`);
+			expect(text).toContain(`output-job-${id}`);
+		};
+		try {
+			tui.start();
+			tui.showOverlay(sheet, { anchor: "center", width: "90%", maxHeight: "90%" });
+			tui.setFocus(sheet);
+			await scheduler.settle(terminal);
+			assertSelection("0");
+			terminal.sendInput("x");
+			expect(cancel).not.toHaveBeenCalled();
+			for (let i = 0; i < 39; i++) terminal.sendInput(DOWN);
+			await scheduler.settle(terminal);
+			assertSelection("39");
+			expect(prop(list(sheet.describe(CX)), "selected")).toBe("job-39");
+			terminal.sendInput("x");
+			expect(cancel).toHaveBeenCalledTimes(1);
+			expect(cancel).toHaveBeenLastCalledWith("job-39");
+			terminal.resize(120, 36);
+			// resize() sends the notification; the virtual clock must also open
+			// the TUI's deferred resize-settle window before screen assertions.
+			await scheduler.advance(terminal, 300);
+			assertSelection("39");
+			terminal.sendInput("x");
+			expect(cancel).toHaveBeenCalledTimes(2);
+			expect(cancel).toHaveBeenLastCalledWith("job-39");
+			for (let i = 0; i < 39; i++) terminal.sendInput(UP);
+			await scheduler.settle(terminal);
+			assertSelection("0");
+			terminal.sendInput("x");
+			expect(cancel).toHaveBeenCalledTimes(2);
+			terminal.resize(100, 28);
+			await scheduler.advance(terminal, 300);
+			assertSelection("0");
+			terminal.sendInput("x");
+			expect(cancel).toHaveBeenCalledTimes(2);
+		} finally {
+			tui.stop();
+		}
 	});
 
 	it("shows the selected job's full command in the terminal fallback, bounded above its facts", () => {

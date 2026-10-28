@@ -145,7 +145,12 @@ export class OAuthSelectorComponent extends OverlayPanel {
 		if (this.#mode === "logout") {
 			// Logout stays unfiltered by `disabledProviders`: a now-disabled
 			// provider may still hold stored credentials worth removing.
-			this.#menu.setItems(providers.filter(provider => this.#hasSelectableAuth(provider.id)));
+			this.#menu.setItems(
+				providers.filter(
+					provider =>
+						provider.id === getOAuthCredentialProvider(provider.id) && this.#hasSelectableAuth(provider.id),
+				),
+			);
 		} else {
 			const disabled = new Set(disabledProviders);
 			// Hide a login entry when either its own id or the provider id it

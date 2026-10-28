@@ -471,8 +471,8 @@ describe("AgentSession owner-routed async delivery", () => {
 		}
 	});
 
-	it("retains every capture warning on its own live and rebuilt async batch row", async () => {
-		const entries = ["open", "write", undefined].map((artifactError, index): AsyncResultEntry => {
+	it("retains mixed failure receipts and capture warnings in live and rebuilt batches", async () => {
+		const entries = ["open", "write", undefined, undefined].map((artifactError, index): AsyncResultEntry => {
 			const meta: OutputMeta | undefined =
 				artifactError === "open" || artifactError === "write" ? { artifactError } : undefined;
 			const jobId = `batch-${index}`;
@@ -480,13 +480,13 @@ describe("AgentSession owner-routed async delivery", () => {
 			return {
 				jobId,
 				result,
-				durationMs: 1000,
+				durationMs: (index + 1) * 1000,
 				epoch: 0,
 				job: {
 					id: jobId,
 					type: "bash",
 					label: jobId,
-					status: "completed",
+					status: index === 1 ? "failed" : index === 2 ? "cancelled" : "completed",
 					startTime: Date.now(),
 					abortController: new AbortController(),
 					promise: Promise.resolve(),
@@ -502,17 +502,39 @@ describe("AgentSession owner-routed async delivery", () => {
 		await initTheme(false, undefined, undefined, "dark", "light");
 		const persisted = JSON.parse(JSON.stringify(batch)) as typeof batch;
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		const original = JSON.stringify(batch);
 		try {
 			for (const message of [batch, persisted]) {
-				const rendered = buildAsyncResultBlock(message)
+				const block = buildAsyncResultBlock(message);
+				setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+				const detailed = block
 					.render(160)
 					.map(line => Bun.stripANSI(line))
 					.join("\n");
-				expect(rendered).toMatch(/batch-0[^]*artifact open failed[^]*batch-1[^]*artifact write failed[^]*batch-2/);
-				expect(rendered.match(/artifact open failed/g)).toHaveLength(1);
-				expect(rendered.match(/artifact write failed/g)).toHaveLength(1);
+				expect(detailed).toMatch(
+					/Background job completed \[bash\] batch-0[^]*artifact open failed[^]*Background job failed \[bash\] batch-1[^]*artifact write failed[^]*Background job cancelled \[bash\] batch-2[^]*Background job completed \[bash\] batch-3/,
+				);
+				setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+				const compact = block
+					.render(160)
+					.map(line => Bun.stripANSI(line))
+					.join("\n");
+				expect(compact).toMatch(
+					/artifact open failed[^]*Background job failed \[bash\] batch-1 \(2\.0s\)[^]*artifact write failed[^]*Background job cancelled \[bash\] batch-2 \(3\.0s\)/,
+				);
+				expect(compact).not.toContain("batch-0");
+				expect(compact).not.toContain("batch-3");
+				expect(compact.match(/artifact open failed/g)).toHaveLength(1);
+				expect(compact.match(/artifact write failed/g)).toHaveLength(1);
+				setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+				expect(
+					block
+						.render(160)
+						.map(line => Bun.stripANSI(line))
+						.join("\n"),
+				).toBe(detailed);
 			}
+			expect(JSON.stringify(batch)).toBe(original);
 		} finally {
 			setChatTranscriptDisplayPreferences(previous);
 		}

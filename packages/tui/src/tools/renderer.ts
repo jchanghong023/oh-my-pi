@@ -189,6 +189,8 @@ export interface ToolRenderer<TArgs = unknown, TDetails = unknown> {
 	): ToolFigure | undefined;
 	/** Describes current activity without coupling a renderer to terminal layout. */
 	activitySummary?(args: TArgs, context: ToolActivityContext<TDetails>): ToolActivitySummary | undefined;
+	/** Result feedback that must retain the original renderer in compact projection. */
+	hasCompactCriticalFeedback?(result: ToolRenderResult<TDetails>): boolean;
 	/** Render without background box, inline in the response flow */
 	inline?: boolean;
 	/**

@@ -130,6 +130,9 @@ export class JobsSheet implements Component {
 	#native: { key: string; output: string | undefined; node: NativeNode } | undefined;
 	/** Fallback output tail, reused while the selected job's output is unchanged. */
 	#tail: { id: string; output: string; lines: readonly string[] } | undefined;
+	/** The host's current overlay height, including its header. */
+	renderHeightProvider?: () => number;
+	#rowOffset = 0;
 
 	constructor(source: JobsSheetSource) {
 		this.#source = source;
@@ -184,7 +187,54 @@ export class JobsSheet implements Component {
 		const running = jobs.filter(job => job.status === "running").length;
 		const lines = [truncateToWidth(` Background jobs · ${running} running`, width)];
 		if (jobs.length === 0) lines.push(" No background jobs");
-		for (const entry of rows) {
+		const height = this.renderHeightProvider?.();
+		const budget = height === undefined ? undefined : Math.max(1, Math.floor(height));
+		const detail = selected && this.#source.inspect(selected.id);
+		const commandLines: string[] = [];
+		const factLines: string[] = [];
+		const widgetLines: string[] = [];
+		const outputLines: string[] = [];
+		if (detail) {
+			if (detail.command) {
+				const commandRows = wrapTextWithAnsi(
+					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
+					Math.max(1, width - 3),
+				);
+				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) commandLines.push(`   ${line}`);
+				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
+				if (hidden > 0) commandLines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
+			}
+			const facts = compact([
+				detail.cwd && `cwd ${detail.cwd}`,
+				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
+				detail.exitCode !== undefined && `exit ${detail.exitCode}`,
+				detail.artifactId && `artifact://${detail.artifactId}`,
+			]);
+			if (facts.length > 0) factLines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
+			if (detail.widget) {
+				for (const line of renderJobWidgetLines(detail.widget, Math.max(0, width - 3), theme)) {
+					widgetLines.push(`   ${line}`);
+				}
+			}
+			for (const line of this.#tailLines(selected.id, detail.output ?? "")) {
+				if (line) outputLines.push(truncateToWidth(`   ${line}`, width));
+			}
+		}
+		const allDetail = [...commandLines, ...factLines, ...widgetLines, ...outputLines];
+		const detailBudget =
+			budget === undefined ? allDetail.length : Math.min(allDetail.length, Math.max(0, budget - 2));
+		// Keep room for a useful list while giving the selected job's facts and
+		// output priority over extra command and widget preview rows.
+		const listBudget =
+			budget === undefined
+				? rows.length
+				: Math.min(rows.length, Math.max(1, budget - 1 - Math.min(detailBudget, Math.floor(budget / 2))));
+		const selectedRow = rows.findIndex(entry => entry.kind === "job" && entry.job === selected);
+		this.#rowOffset = Math.max(0, Math.min(this.#rowOffset, rows.length - listBudget));
+		if (selectedRow >= 0 && selectedRow < this.#rowOffset) this.#rowOffset = selectedRow;
+		else if (selectedRow >= 0 && selectedRow >= this.#rowOffset + listBudget)
+			this.#rowOffset = selectedRow - listBudget + 1;
+		for (const entry of rows.slice(this.#rowOffset, this.#rowOffset + listBudget)) {
 			const guide = jobTreeGuide(entry, theme);
 			if (entry.kind === "agent") {
 				lines.push(truncateToWidth(`  ${guide}${entry.agent.id}`, width));
@@ -201,34 +251,25 @@ export class JobsSheet implements Component {
 				),
 			);
 		}
-		const detail = selected && this.#source.inspect(selected.id);
-		if (detail) {
-			// Rows show the cut label; the selected job's command wraps here,
-			// bounded so a long script never pushes the facts and output off the sheet.
-			if (detail.command) {
-				const commandRows = wrapTextWithAnsi(
-					shortenEmbeddedPaths(replaceTabs(sanitizeText(detail.command))),
-					Math.max(1, width - 3),
-				);
-				for (const line of commandRows.slice(0, PREVIEW_LIMITS.EXPANDED_LINES)) lines.push(`   ${line}`);
-				const hidden = commandRows.length - PREVIEW_LIMITS.EXPANDED_LINES;
-				if (hidden > 0) lines.push(truncateToWidth(`   … ${hidden} more command lines`, width));
+		if (budget === undefined || lines.length + allDetail.length <= budget) {
+			lines.push(...allDetail);
+		} else {
+			const available = Math.max(0, budget - lines.length);
+			const reserved = Math.min(available, factLines.length + Number(outputLines.length > 0));
+			const commandCount = Math.min(commandLines.length, Math.max(0, available - reserved));
+			if (commandCount > 1 && commandCount < commandLines.length) {
+				lines.push(...commandLines.slice(0, commandCount - 1));
+				lines.push(truncateToWidth("   … command preview truncated (/jobs full)", width));
+			} else {
+				lines.push(...commandLines.slice(0, commandCount));
 			}
-			const facts = compact([
-				detail.cwd && `cwd ${detail.cwd}`,
-				detail.pids.length > 0 && `pid ${detail.pids.join(", ")}`,
-				detail.exitCode !== undefined && `exit ${detail.exitCode}`,
-				detail.artifactId && `artifact://${detail.artifactId}`,
-			]);
-			if (facts.length > 0) lines.push(truncateToWidth(`   ${facts.join(" · ")}`, width));
-			if (detail.widget) {
-				for (const line of renderJobWidgetLines(detail.widget, Math.max(0, width - 3), theme)) {
-					lines.push(`   ${line}`);
-				}
-			}
-			for (const line of this.#tailLines(selected.id, detail.output ?? "")) {
-				if (line) lines.push(truncateToWidth(`   ${line}`, width));
-			}
+			lines.push(...factLines.slice(0, Math.max(0, available - commandCount)));
+			const remaining = Math.max(0, budget - lines.length);
+			const outputCount = Math.min(outputLines.length, remaining);
+			lines.push(
+				...widgetLines.slice(0, remaining - outputCount),
+				...outputLines.slice(-outputCount || outputLines.length),
+			);
 		}
 		return lines;
 	}

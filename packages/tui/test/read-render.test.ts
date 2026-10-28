@@ -5,6 +5,9 @@ import * as url from "node:url";
 import { applyHyperlinkSetting } from "../src/render/hyperlink";
 import { getThemeByName, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { readToolRenderer } from "@oh-my-pi/pi-tui/tools/read";
+import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
+import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
+import { theme } from "../src/theme";
 
 function extractLinkUris(text: string): string[] {
 	return [...text.matchAll(/\x1b\]8;[^;]*;([^\x1b]+)\x1b\\/g)].map(match => match[1]!);
@@ -310,5 +313,132 @@ describe("readToolRenderer success-path sanitization", () => {
 		// on Windows.
 		expect(rendered).toContain("Resolved path: ~/notes.txt");
 		expect(rendered).not.toContain(os.homedir());
+	});
+});
+
+describe("compact grouped read warnings", () => {
+	it("projects corrected paths and conflict counts consistently across terminal and native views", () => {
+		const preferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		try {
+			const cases = [
+				{ intent: "", details: {}, summary: "input", warning: false },
+				{ intent: "Inspect source", details: {}, summary: "Inspect source", warning: false },
+				{
+					intent: "",
+					details: { suffixResolution: { from: "src/input", to: "src/input.ts" } },
+					summary: "src/input.ts · corrected from src/input",
+					warning: true,
+				},
+				{
+					intent: "Inspect source",
+					details: { suffixResolution: { from: "src/input", to: "src/input.ts" }, conflictCount: 1 },
+					summary: "src/input.ts · corrected from src/input · 1 conflict · Inspect source",
+					warning: true,
+				},
+				{
+					intent: "",
+					details: { conflictCount: 1 },
+					summary: "src/input · 1 conflict",
+					warning: true,
+				},
+				{
+					intent: "Inspect source",
+					details: { conflictCount: 2 },
+					summary: "src/input · 2 conflicts · Inspect source",
+					warning: true,
+				},
+			];
+			for (const test of cases) {
+				const group = new ReadToolGroupComponent();
+				const args = { path: "src/input", i: test.intent };
+				group.updateArgs(args, "read");
+				group.updateResult(
+					{ content: [{ type: "text", text: "file contents" }], details: test.details },
+					false,
+					"read",
+				);
+				const ansi = group.render(200).join("\n");
+				const fallback = JSON.stringify(
+					group.describe({
+						cols: 200,
+						reduceMotion: false,
+						dark: true,
+						supports: () => false,
+						feature: () => false,
+					}),
+				);
+				const dataFirst = JSON.stringify(
+					group.describe({
+						cols: 200,
+						reduceMotion: false,
+						dark: true,
+						supports: () => true,
+						feature: () => true,
+					}),
+				);
+				expect(Bun.stripANSI(ansi)).toContain(test.summary);
+				expect(fallback).toContain(test.summary);
+				expect(dataFirst).toContain(test.summary);
+				if (test.warning) {
+					expect(ansi).toContain(theme.fg("warning", "警告 · "));
+					expect(fallback).toContain('"warning"');
+					expect(dataFirst).toContain('"tone":"warning"');
+				} else {
+					expect(Bun.stripANSI(ansi)).toContain("完成");
+					expect(dataFirst).not.toContain('"tone":"warning"');
+				}
+			}
+			const narrow = new ReadToolGroupComponent({ showContentPreview: true });
+			narrow.updateArgs({ path: "src/deep/input" }, "read");
+			narrow.updateResult(
+				{
+					content: [{ type: "text", text: "full source content" }],
+					details: { suffixResolution: { from: "src/deep/input", to: "src/deep/input.ts" } },
+				},
+				false,
+				"read",
+			);
+			expect(Bun.stripANSI(narrow.render(20).join("\n"))).not.toContain("full source content");
+			narrow.setExpanded(true);
+			expect(Bun.stripANSI(narrow.render(80).join("\n"))).toContain("full source content");
+		} finally {
+			setChatTranscriptDisplayPreferences(preferences);
+		}
+	});
+
+	it("keeps original error feedback ahead of warning metadata and retains expanded content", () => {
+		const preferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		try {
+			const group = new ReadToolGroupComponent({ showContentPreview: true });
+			const args = { path: "src/missing", i: "Inspect source" };
+			group.updateArgs(args, "read");
+			group.updateResult(
+				{
+					content: [{ type: "text", text: "READ FAILURE: original diagnostic" }],
+					details: { suffixResolution: { from: "src/missing", to: "src/missing.ts" }, conflictCount: 1 },
+					isError: true,
+				},
+				false,
+				"read",
+			);
+			expect(Bun.stripANSI(group.render(200).join("\n"))).toContain("READ FAILURE: original diagnostic");
+			expect(
+				JSON.stringify(
+					group.describe({
+						cols: 200,
+						reduceMotion: false,
+						dark: true,
+						supports: () => true,
+						feature: () => true,
+					}),
+				),
+			).toContain("READ FAILURE: original diagnostic");
+			group.setExpanded(true);
+			expect(Bun.stripANSI(group.render(200).join("\n"))).toContain("READ FAILURE: original diagnostic");
+		} finally {
+			setChatTranscriptDisplayPreferences(preferences);
+		}
 	});
 });

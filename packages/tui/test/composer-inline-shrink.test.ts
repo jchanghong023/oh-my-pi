@@ -170,45 +170,59 @@ beforeAll(async () => {
 });
 
 describe("composer inline shrink (#11007)", () => {
-	it("keeps every compact user message and reply reachable while bottom chrome grows and shrinks", async () => {
+	it("restores compact messages after transient chrome shrinks under both scrollback settings", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const h = makeHarness(100, 28, 0);
-		const expected: string[] = [];
-		h.hud.rows = 2;
-		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
-			selfClearingChrome: [h.hud],
-			transientChrome: [h.editor],
-		});
-		for (let index = 0; index < 12; index++) {
-			const prompt = `PROMPT_${index}`;
-			const answer = `ANSWER_${index}`;
-			expected.push(prompt, answer);
-			h.transcript.addChild(new UserMessageComponent(prompt));
-			h.transcript.addChild(new AssistantMessageComponent(reply(answer)));
-		}
-		const reachable = (): string[] =>
-			Array.from(
-				h.terminal
-					.getScrollBuffer()
-					.join("\n")
-					.matchAll(/(?:PROMPT|ANSWER)_\d+/g),
-				match => match[0],
-			);
+		const expected = Array.from({ length: 12 }, (_, index) => [`PROMPT_${index}`, `ANSWER_${index}`]).flat();
+		const tokens = (rows: readonly string[]): string[] =>
+			Array.from(rows.join("\n").matchAll(/(?:PROMPT|ANSWER)_\d+/g), match => match[0]);
 		try {
-			await h.scheduler.settle(h.terminal);
-			expect(reachable()).toEqual(expected);
-			h.widget.rows = 9;
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			expect(reachable()).toEqual(expected);
-			h.widget.rows = 0;
-			h.hud.rows = 0;
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			expect(reachable()).toEqual(expected);
+			for (const completeScrollback of [false, true]) {
+				let upstreamGrowth: string[] | undefined;
+				for (const compactToolActivity of [false, true]) {
+					setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: false });
+					const h = makeHarness(100, 28, 0);
+					h.composer.setPreferences({ completeScrollback });
+					h.hud.rows = 2;
+					h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
+						selfClearingChrome: [h.hud],
+						transientChrome: [h.editor],
+					});
+					for (let index = 0; index < 12; index++) {
+						h.transcript.addChild(new UserMessageComponent(`PROMPT_${index}`));
+						h.transcript.addChild(new AssistantMessageComponent(reply(`ANSWER_${index}`)));
+					}
+					const reachable = (): string[] => tokens(h.terminal.getScrollBuffer());
+					const semantic = (): string[] => tokens(h.transcript.render(100));
+					try {
+						await h.scheduler.settle(h.terminal);
+						expect(reachable()).toEqual(expected);
+						expect(semantic()).toEqual(expected);
+						h.widget.rows = 9;
+						h.composer.ui.requestRender();
+						await h.scheduler.settle(h.terminal);
+						const grown = reachable();
+						expect(semantic()).toEqual(expected);
+						expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
+						if (completeScrollback) {
+							expect(grown).toEqual(expected);
+						} else if (!compactToolActivity) {
+							// Upstream holds displaced rows live instead of retiring them.
+							upstreamGrowth = grown;
+						} else {
+							expect(grown).toEqual(upstreamGrowth!);
+						}
+						h.widget.rows = 0;
+						h.hud.rows = 0;
+						h.composer.ui.requestRender();
+						await h.scheduler.settle(h.terminal);
+						expect(reachable()).toEqual(expected);
+						expect(semantic()).toEqual(expected);
+					} finally {
+						h.composer.stop();
+					}
+				}
+			}
 		} finally {
-			h.composer.stop();
 			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
@@ -1174,37 +1188,60 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
-	it("keeps the compact editor adjacent to a collapsed live block under retired history", async () => {
+	it("matches upstream editor anchoring and history through collapse and resize in compact mode", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const h = makeHarness();
 		try {
-			const transcript = new TranscriptContainer();
-			for (let i = 0; i < TRANSCRIPT_ROWS; i++) transcript.addChild({ render: () => [`${TRANSCRIPT_PREFIX}${i}`] });
-			let toolRows = 12;
-			transcript.addChild({ render: () => Array.from({ length: toolRows }, (_, i) => `Tool row ${i}`) });
-			h.composer.setRuntimeChildren([transcript, h.hud, h.editor]);
-			await h.scheduler.settle(h.terminal);
-			toolRows = 4;
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-			const toolEnd = view.findIndex(row => row === "Tool row 3");
-			const editor = view.findIndex(row => row.includes("EDITOR"));
-			expect(toolEnd).toBeGreaterThanOrEqual(0);
-			expect(editor).toBeGreaterThan(toolEnd);
-			expect(editor - toolEnd).toBe(1);
-			expect(view.filter(row => row.startsWith("Tool row "))).toHaveLength(4);
+			for (const completeScrollback of [false, true]) {
+				for (const [columns, rows] of [
+					[100, 28],
+					[120, 36],
+				] as const) {
+					const run = async (compact: boolean) => {
+						setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: false });
+						const h = makeHarness(columns, rows);
+						h.composer.setPreferences({ completeScrollback });
+						let toolRows = 12;
+						h.transcript.addChild({ render: () => Array.from({ length: toolRows }, (_, i) => `Tool row ${i}`) });
+						const positions: number[] = [];
+						const capture = () =>
+							positions.push(h.terminal.getViewport().findIndex(row => row.includes("EDITOR")));
+						try {
+							await h.scheduler.settle(h.terminal);
+							capture();
+							toolRows = 4;
+							h.composer.ui.requestRender();
+							await h.scheduler.settle(h.terminal);
+							capture();
+							h.terminal.resize(columns === 100 ? 120 : 100, rows === 28 ? 36 : 28);
+							await h.scheduler.advance(h.terminal, 300);
+							await h.scheduler.settle(h.terminal);
+							capture();
+							h.terminal.resize(columns, rows);
+							await h.scheduler.advance(h.terminal, 300);
+							await h.scheduler.settle(h.terminal);
+							capture();
+							const history = h.terminal.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
+							const indices = history
+								.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
+								.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
+							expect(indices).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+							return positions;
+						} finally {
+							h.composer.stop();
+						}
+					};
+					const upstream = await run(false);
+					const compact = await run(true);
+					expect(compact).toEqual(upstream);
+					expect(compact.every(position => position >= 0)).toBe(true);
+				}
+			}
 		} finally {
-			h.composer.stop();
 			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 
 	it("parks a collapsing block's slack below the reply instead of banding its history", async () => {
-		// Non-compact path only: compact history lets the input follow the transcript
-		// instead of parking slack, so pin the preference rather than inherit the
-		// module default (which the host overrides).
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const rows = 50;

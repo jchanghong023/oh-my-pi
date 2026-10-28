@@ -152,6 +152,16 @@ export interface CoordinationDetails {
 	interrupted?: boolean;
 }
 
+function hasJobFeedback(job: JobSnapshot): boolean {
+	return (
+		job.status === "failed" ||
+		job.status === "cancelled" ||
+		(job.exitCode !== undefined && job.exitCode !== 0) ||
+		Boolean(job.meta?.artifactError ?? job.artifactError) ||
+		(job.structured !== undefined && job.structured.status !== "valid")
+	);
+}
+
 // =============================================================================
 // TUI Renderer
 // =============================================================================
@@ -268,7 +278,16 @@ function jobsRenderResult(
 	if (jobs.length === 0 && agents.length === 0) {
 		const fallback = result.content?.find(c => c.type === "text")?.text || "No jobs to process";
 		const header = renderStatusLine({ icon: "warning", title: "Wait" }, uiTheme);
-		return new Text([header, formatEmptyMessage(fallback, uiTheme)].join("\n"), 0, 0);
+		const artifact = result.details?.meta?.artifactError;
+		return new Text(
+			[
+				header,
+				formatEmptyMessage(fallback, uiTheme),
+				...(artifact ? [uiTheme.fg("warning", formatArtifactErrorNotice(artifact))] : []),
+			].join("\n"),
+			0,
+			0,
+		);
 	}
 
 	// Sealing freezes the snapshot; still-running rows remain meaningful history.
@@ -377,7 +396,10 @@ function jobsRenderResult(
 		const indent = " ".repeat(visibleWidth(formatStatusIcon("done", uiTheme)) + 1);
 		// Failures sort first, so the cap never hides one behind successes;
 		// Ctrl+O lists the rest.
-		for (const job of settledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {
+		const shownSettled = settledJobs.filter(
+			(job, index) => index < PREVIEW_LIMITS.COLLAPSED_ITEMS || hasJobFeedback(job),
+		);
+		for (const job of shownSettled) {
 			const icon = formatStatusIcon(statusToIcon(job.status), uiTheme);
 			const word = job.status === "completed" ? "done" : job.status;
 			const exit =
@@ -419,8 +441,19 @@ function jobsRenderResult(
 			if (artifactError) {
 				lines.push(uiTheme.fg("warning", truncateToWidth(formatArtifactErrorNotice(artifactError), width)));
 			}
+			if (job.structured && job.structured.status !== "valid") {
+				lines.push(
+					uiTheme.fg(
+						"warning",
+						truncateToWidth(
+							`Structured output: ${job.structured.status}${job.structured.error ? `: ${job.structured.error}` : ""}`,
+							width,
+						),
+					),
+				);
+			}
 		}
-		const hiddenSettled = settledJobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
+		const hiddenSettled = settledJobs.length - shownSettled.length;
 		if (hiddenSettled > 0) lines.push(`${indent}${uiTheme.fg("dim", `… ${hiddenSettled} more settled`)}`);
 		const shownWidgetJobs = widgetJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		for (const job of shownWidgetJobs) {
@@ -771,7 +804,12 @@ function describeJobsResult(
 		return {
 			head: toolHead("Wait"),
 			tone: "warning",
-			body: [text([span(plainText(resultText(result) || "No jobs to process"), "dim")])],
+			body: compact([
+				text([span(plainText(resultText(result) || "No jobs to process"), "dim")]),
+				result.details?.meta?.artifactError
+					? text([span(plainText(formatArtifactErrorNotice(result.details.meta.artifactError)), "warning")])
+					: undefined,
+			]),
 		};
 	}
 	const counts = { completed: 0, failed: 0, cancelled: 0, running: 0 };
@@ -800,11 +838,35 @@ function describeJobsResult(
 	// and errors fill the card of the call that started it (`parksAsBackground`), so no previews.
 	const body: NativeNode[] = [];
 	if (sorted.length > 0) {
-		body.push(keyed(describeJobTiles(sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, isPartial))), "tiles"));
+		const shown = sorted.filter((job, index) => index < TILES_SHOWN || hasJobFeedback(job));
+		body.push(keyed(describeJobTiles(shown.map(job => jobTile(job, isPartial))), "tiles"));
+		for (const job of shown.filter(hasJobFeedback)) {
+			const diagnostics = [
+				job.errorText,
+				job.structured && job.structured.status !== "valid"
+					? `Structured output: ${job.structured.status}${job.structured.error ? `: ${job.structured.error}` : ""}`
+					: undefined,
+			];
+			for (const diagnostic of diagnostics) {
+				if (diagnostic) body.push(text([span(plainText(`${job.id}: ${diagnostic}`), "error")], { wrap: "word" }));
+			}
+			const artifact = job.meta?.artifactError ?? job.artifactError;
+			if (artifact)
+				body.push(text([span(plainText(formatArtifactErrorNotice(artifact)), "warning")], { wrap: "word" }));
+		}
+		if (sorted.length > shown.length) {
+			const rest = sorted.length - shown.length;
+			body.push(
+				text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }),
+			);
+		}
 	}
-	if (sorted.length > TILES_SHOWN) {
-		const rest = sorted.length - TILES_SHOWN;
-		body.push(text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }));
+	if (result.details?.meta?.artifactError) {
+		body.push(
+			text([span(plainText(formatArtifactErrorNotice(result.details.meta.artifactError)), "warning")], {
+				wrap: "word",
+			}),
+		);
 	}
 	for (const agent of agents) {
 		const spans: TspSpan[] = [span(plainText(agent.id), "muted")];
@@ -865,11 +927,19 @@ const waitResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const waitToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
+	hasCompactCriticalFeedback(result: ToolRenderResult<CoordinationDetails>): boolean {
+		const details = result.details;
+		return Boolean(details?.waited || details?.meta?.artifactError || details?.jobs?.some(hasJobFeedback));
+	},
 	activitySummary(_args: object, context: ToolActivityContext<CoordinationDetails>): ToolActivitySummary {
 		const jobs = context.result?.details?.jobs;
-		if (!jobs?.length) return { label: "Wait", detail: "Background work or peer message" };
-		const job = jobs.find(job => job.status === "running") ?? jobs[0]!;
-		const label = job.label.split(/\r?\n/, 1)[0].trim();
+		if (!Array.isArray(jobs) || jobs.length === 0)
+			return { label: "Wait", detail: "Background work or peer message" };
+		const job = jobs.find(job => job?.status === "running") ?? jobs[0];
+		if (!job || typeof job.id !== "string" || typeof job.type !== "string") {
+			return { label: "Wait", detail: "Background work or peer message" };
+		}
+		const label = typeof job.label === "string" ? job.label.split(/\r?\n/, 1)[0].trim() : "";
 		const target = `[${job.type}] ${job.id}${label && label !== job.id ? ` ${label}` : ""}`;
 		return { label: "Wait", detail: `${target}${jobs.length > 1 ? ` · +${jobs.length - 1} jobs` : ""}` };
 	},
@@ -884,7 +954,7 @@ export const waitToolRenderer = {
 		return waitResultMemo.get(result, [options.isPartial, widgetStamp(result.details?.jobs)], () => {
 			if (result.isError) return errorView("Wait", resultText(result));
 			const details = result.details;
-			if (details?.interrupted) {
+			if (details?.interrupted && !details.waited) {
 				return {
 					head: toolHead("Wait", "interrupted by message"),
 					tone: "info",
@@ -905,7 +975,7 @@ export const waitToolRenderer = {
 		options: RenderResultOptions,
 		uiTheme: Theme,
 	): Component {
-		if (result.details?.interrupted && !result.isError) {
+		if (result.details?.interrupted && !result.details.waited && !result.isError) {
 			return new Text(
 				renderStatusLine({ icon: "info", title: "Wait", meta: ["interrupted by message"] }, uiTheme),
 				0,

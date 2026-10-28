@@ -187,6 +187,48 @@ describe("compact transient thinking preview", () => {
 		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 	});
 
+	it("projects cached live and historical thinking away in clean while retaining ordinary answer text", () => {
+		const component = assistant(false);
+		const content = message([
+			{ type: "text", text: "Thinking is part of this ordinary answer." },
+			{ type: "thinking", thinking: "private reasoning" },
+		]);
+		component.updateContent(content, { transient: true });
+		expect(plain(component.render(80)).join("\n")).toContain("private reasoning");
+		expect(JSON.stringify(component.describe())).toContain("private reasoning");
+
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
+		for (const finalized of [false, true]) {
+			if (finalized) component.markTranscriptBlockFinalized();
+			const ansi = plain(component.render(80)).join("\n");
+			const native = JSON.stringify(component.describe());
+			expect(ansi).toContain("Thinking is part of this ordinary answer.");
+			expect(native).toContain("Thinking is part of this ordinary answer.");
+			expect(ansi).not.toContain("private reasoning");
+			expect(native).not.toContain("private reasoning");
+			expect(native).not.toContain("omp.thinking");
+			expect(component.renderCompactThinkingPreview(80)).toEqual([]);
+		}
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: true });
+		expect(plain(component.render(80)).join("\n")).not.toContain("private reasoning");
+		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(plain(component.render(80)).join("\n")).toContain("private reasoning");
+		expect(JSON.stringify(component.describe())).toContain("private reasoning");
+	});
+
+	it("does not leave an ANSI pulse or expandable native node for hidden live thinking in clean", () => {
+		const component = assistant(false, true);
+		component.updateContent(thinking("private reasoning"), { transient: true });
+		expect(plain(component.render(40)).join("\n")).toContain("Thinking");
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
+		expectNoInlineThinking(component);
+		component.updateContent(thinking("private reasoning continues"), { transient: true });
+		expectNoInlineThinking(component);
+		component.markTranscriptBlockFinalized();
+		expectNoInlineThinking(component);
+	});
+
 	it("retains complete thinking only in detailed mode and never exposes the dock in clean mode", () => {
 		const source = "first\n\nsecond\n\nthird";
 		const detailed = assistant(false);

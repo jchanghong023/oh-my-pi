@@ -927,7 +927,15 @@ function evalCellBox(cell: EvalCellRun, index: number, total: number): NativeNod
 export const evalToolRenderer = {
 	activitySummary(args: EvalRenderArgs): ToolActivitySummary {
 		const intent = args?.[INTENT_FIELD];
-		return { label: "Eval", detail: typeof intent === "string" && intent.trim() ? intent : args?.title };
+		return {
+			label: "Eval",
+			detail:
+				typeof intent === "string" && intent.trim()
+					? intent
+					: typeof args?.title === "string"
+						? args.title
+						: undefined,
+		};
 	},
 	animatedPendingPreview: true,
 	animatedPartialResult: true,

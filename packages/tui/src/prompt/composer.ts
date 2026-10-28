@@ -1,4 +1,3 @@
-import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
 import type { StatusLineComponent } from "../status-line/component";
@@ -449,13 +448,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const promotedChromeContracted = this.#chromeFloorPromoted && eligibleChrome < (this.#chromeFloor ?? 0);
 		this.#chromeFloor = Math.min(this.#chromeFloor ?? eligibleChrome, eligibleChrome);
 		this.#rebaselineChromeFloor(this.#runActive || transcript.hasActiveBlock(), eligibleChrome);
-		// Compact chrome must retire every displaced row instead of hiding it
-		// between native history and the visible tail.
-		const belowFloor =
-			this.#preferences.completeScrollback ||
-			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity)
-				? after.length
-				: this.#chromeFloor;
+		const belowFloor = this.#preferences.completeScrollback ? after.length : this.#chromeFloor;
 		// Offer history under capacity pressure only: blocks stay live (and keep
 		// reflowing to the current width) while the screen has room. A batch
 		// leaves the mutable viewport in the same frame it is appended, so its
@@ -473,8 +466,8 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// billed against, so its compaction allocator (one row per block, no
 		// inter-block blanks) engages only when a block genuinely cannot retire.
 		// Rows the chrome above its floor displaces are clipped from the top by
-		// the `drop` slice below; they stay live until the chrome shrinks. Compact
-		// mode and `completeScrollback` bill the actual chrome height instead.
+		// the `drop` slice below; they stay live until the chrome shrinks.
+		// `completeScrollback` bills the actual chrome height instead.
 		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
@@ -484,16 +477,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
-		// Compact mode lets the input follow a shrinking transcript instead of
-		// leaving a blank band between the last message and the working area.
 		const filledHistoryRows =
 			history?.kind === "replay" || !(history !== undefined || this.ui.hasProviderHistory())
 				? undefined
 				: this.ui.getFilledHistoryRows();
 		const slack =
-			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity) ||
-			filledHistoryRows === undefined ||
-			promotedChromeContracted
+			filledHistoryRows === undefined || promotedChromeContracted
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
 		if (slack > 0) {

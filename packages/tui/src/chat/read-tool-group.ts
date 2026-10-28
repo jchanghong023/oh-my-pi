@@ -718,14 +718,15 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	#compactSummary(entry: ReadEntry): string {
-		let summary =
-			plainText(entry.intent ?? "")
-				.replace(/\s+/g, " ")
-				.trim() ||
-			compactToolPath(plainText(entry.path).replace(/\s+/g, " ").trim()) ||
-			"…";
+		const intent = plainText(entry.intent ?? "")
+			.replace(/\s+/g, " ")
+			.trim();
+		const path = plainText(entry.path).replace(/\s+/g, " ").trim();
+		const target = (entry.status === "warning" ? path : compactToolPath(path)) || "…";
+		let summary = entry.status === "warning" ? target : intent || target;
 		if (entry.correctedFrom) summary += ` · corrected from ${plainText(entry.correctedFrom).replace(/\s+/g, " ")}`;
-		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflicts`;
+		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflict${entry.conflictCount === 1 ? "" : "s"}`;
+		if (entry.status === "warning" && intent) summary += ` · ${intent}`;
 		return summary;
 	}
 
@@ -738,7 +739,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const status = this.#compactStatus(entry);
 		const ms = this.#compactElapsed(entry);
 		const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
-		const state = theme.fg(status === "error" ? "error" : "dim", `${COMPACT_STATUS_LABEL[status]} · `);
+		const warning = entry.status === "warning";
+		const state = theme.fg(
+			warning ? "warning" : status === "error" ? "error" : "dim",
+			`${warning ? "警告" : COMPACT_STATUS_LABEL[status]} · `,
+		);
 		const line = truncateToWidth(
 			`${state}${theme.fg("dim", "Read")} ${theme.fg("text", this.#compactSummary(entry))}`,
 			Math.max(1, width - Bun.stringWidth(elapsed)),
@@ -781,12 +786,16 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 							"row",
 							{ role: "omp.tool.read", gap: "sm", align: "baseline" },
 							[
-								text([span(`${COMPACT_STATUS_LABEL[status]} · Read `, "dim"), span(summary, "text")], {
-									lines: 1,
-									wrap: "none",
-									truncate: "end",
-									grow: 1,
-								}),
+								text(
+									[
+										span(
+											`${entry.status === "warning" ? "警告" : COMPACT_STATUS_LABEL[status]} · Read `,
+											entry.status === "warning" ? "warning" : "dim",
+										),
+										span(summary, "text"),
+									],
+									{ lines: 1, wrap: "none", truncate: "end", grow: 1 },
+								),
 								...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
 							],
 							entry.toolCallId,

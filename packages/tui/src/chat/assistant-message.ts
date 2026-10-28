@@ -294,6 +294,7 @@ export class AssistantMessageComponent extends Container {
 	#showImages = true;
 	#showToolResultImages = true;
 	#displayCompactToolActivity = displayPreferences.compactToolActivity;
+	#displayHideToolActivity = displayPreferences.hideToolActivity;
 	/** Charts under numeric tables; off for subagent transcripts. */
 	#showTableCharts = true;
 	#transcriptBlockFinalized: boolean;
@@ -682,7 +683,12 @@ export class AssistantMessageComponent extends Container {
 	 * Once text starts, a tool call streams, or the block is sealed, the pulse ends.
 	 */
 	#shouldAnimateThinking(message: AssistantMessage): boolean {
-		return !this.#compactToolActivity && this.#hideThinkingBlock && this.#thinkingTailIndex(message) !== undefined;
+		return (
+			!displayPreferences.hideToolActivity &&
+			!this.#compactToolActivity &&
+			this.#hideThinkingBlock &&
+			this.#thinkingTailIndex(message) !== undefined
+		);
 	}
 
 	/**
@@ -860,7 +866,12 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (this.#displayCompactToolActivity !== this.#compactToolActivity) this.invalidate();
+		if (
+			this.#displayCompactToolActivity !== this.#compactToolActivity ||
+			this.#displayHideToolActivity !== displayPreferences.hideToolActivity
+		) {
+			this.invalidate();
+		}
 		const rows = super.render(width);
 		this.#publishStableSnapshot(rows, width);
 		return rows;
@@ -873,7 +884,7 @@ export class AssistantMessageComponent extends Container {
 	 * In detailed mode, thinking blocks are quiet collapsible `section`s: a muted
 	 * "Thinking…" shimmer while live, then "Thought for 12s"; tokens and rate ride
 	 * in the head's `title`. With `hideThinkingBlock` only the live head shows
-	 * (collapsed). Compact emits no thinking nodes; its dock uses the preview API.
+	 * (collapsed). Clean and compact emit no thinking nodes; compact uses the dock preview API.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const media = cx?.supports("media") === true;
@@ -889,6 +900,7 @@ export class AssistantMessageComponent extends Container {
 			this.#showImages,
 			this.#showToolResultImages,
 			this.#compactToolActivity,
+			displayPreferences.hideToolActivity,
 			this.#errorExpanded,
 			this.#nativeViewVersion,
 			rate,
@@ -997,7 +1009,7 @@ export class AssistantMessageComponent extends Container {
 						else if (chart) children.push(markdown(slot, slot, chartFence(chart), false));
 					});
 				} else if (content.type === "thinking") {
-					if (this.#compactToolActivity) continue;
+					if (this.#compactToolActivity || displayPreferences.hideToolActivity) continue;
 					const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
 					if (!display.visible) continue;
 					const thinkingLive = streaming && thinkingTail === index;
@@ -1550,7 +1562,9 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
+		return (
+			this.#blockVersion * 4 + Number(this.#compactToolActivity) + 2 * Number(displayPreferences.hideToolActivity)
+		);
 	}
 
 	markTranscriptBlockFinalized(): void {
@@ -1759,7 +1773,7 @@ export class AssistantMessageComponent extends Container {
 
 	#computeShapeKey(message: AssistantMessage): string {
 		const parts: string[] = [
-			`htb:${this.#hideThinkingBlock ? 1 : 0}|pot:${this.#proseOnlyThinking ? 1 : 0}|etb:${this.#expandThinkingBlocks ? 1 : 0}|compact:${this.#compactToolActivity ? 1 : 0}`,
+			`htb:${this.#hideThinkingBlock ? 1 : 0}|pot:${this.#proseOnlyThinking ? 1 : 0}|etb:${this.#expandThinkingBlocks ? 1 : 0}|compact:${this.#compactToolActivity ? 1 : 0}|clean:${displayPreferences.hideToolActivity ? 1 : 0}`,
 		];
 		for (const content of message.content) {
 			if (content.type === "text") {
@@ -1868,6 +1882,7 @@ export class AssistantMessageComponent extends Container {
 
 	updateContent(message: AssistantMessage, opts?: { transient?: boolean }): void {
 		this.#displayCompactToolActivity = this.#compactToolActivity;
+		this.#displayHideToolActivity = displayPreferences.hideToolActivity;
 		this.#blockVersion++;
 		this.#lastMessage = message;
 		this.#lastUpdateTransient = opts?.transient === true;
@@ -1946,6 +1961,7 @@ export class AssistantMessageComponent extends Container {
 				(c.type === "text" && canonicalizeMessage(c.text)) ||
 				(c.type === "image" && c.data && c.mimeType) ||
 				(!this.#hideThinkingBlock &&
+					!displayPreferences.hideToolActivity &&
 					c.type === "thinking" &&
 					resolveThinkingDisplay(c, this.#proseOnlyThinking).visible),
 		);
@@ -1964,7 +1980,7 @@ export class AssistantMessageComponent extends Container {
 				captureItems?.push({ md, contentIndex: i, blockType: "text", lastText: trimmed });
 				hasRenderedContent = true;
 			} else if (content.type === "thinking") {
-				if (this.#hideThinkingBlock || this.#compactToolActivity) {
+				if (this.#hideThinkingBlock || this.#compactToolActivity || displayPreferences.hideToolActivity) {
 					thinkingIndex += 1;
 					continue;
 				}

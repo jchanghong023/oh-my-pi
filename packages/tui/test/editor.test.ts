@@ -623,6 +623,94 @@ describe("Editor component", () => {
 			expect(editor.render(80).some(line => line.includes(CURSOR_MARKER))).toBe(true);
 		});
 
+		for (const height of [3, 4]) {
+			it(`keeps the selected completion visible and accepts it at height ${height}`, async () => {
+				const editor = new Editor(defaultEditorTheme);
+				editor.focused = true;
+				editor.setUseTerminalCursor(true);
+				let rows = height;
+				editor.renderHeightProvider = () => rows;
+				editor.viewportRowsProvider = () => rows;
+				const updated = Promise.withResolvers<void>();
+				const items = ["alpha", "beta", "gamma"].map(value => ({ label: value, value }));
+				editor.setAutocompleteProvider({
+					async getSuggestions() {
+						return { items, prefix: "@" };
+					},
+					applyCompletion(_lines, _line, _col, item) {
+						return { lines: [item.value], cursorLine: 0, cursorCol: item.value.length };
+					},
+				});
+				editor.onAutocompleteUpdate = updated.resolve;
+				editor.handleInput("@");
+				await updated.promise;
+
+				for (const name of ["alpha", "beta", "gamma"]) {
+					const frame = editor.render(80);
+					expect(frame.length).toBeLessThanOrEqual(rows);
+					expect(frame.filter(line => line.includes(CURSOR_MARKER))).toHaveLength(1);
+					expect(frame.some(line => stripVTControlCharacters(line).includes(name))).toBe(true);
+					if (name !== "gamma") editor.handleInput("\x1b[B");
+				}
+				editor.handleInput("\t");
+				expect(editor.getText()).toBe("gamma");
+				expect(editor.getCursor()).toEqual({ line: 0, col: 5 });
+
+				rows = 24;
+				editor.setText("");
+				const reopened = Promise.withResolvers<void>();
+				editor.onAutocompleteUpdate = reopened.resolve;
+				editor.handleInput("@");
+				await reopened.promise;
+				const restored = editor
+					.render(80)
+					.map(line => stripVTControlCharacters(line))
+					.join("\n");
+				for (const name of ["alpha", "beta", "gamma"]) expect(restored).toContain(name);
+			});
+		}
+
+		it("uses non-menu input when the frame cannot show a candidate and restores the menu", async () => {
+			const editor = new Editor(defaultEditorTheme);
+			editor.focused = true;
+			editor.setUseTerminalCursor(true);
+			let rows = 1;
+			editor.renderHeightProvider = () => rows;
+			editor.viewportRowsProvider = () => rows;
+			editor.setAutocompleteProvider(
+				new CombinedAutocompleteProvider([{ name: "model" }, { name: "mode" }, { name: "more" }], "/tmp"),
+			);
+			const updated = Promise.withResolvers<void>();
+			editor.onAutocompleteUpdate = updated.resolve;
+			editor.handleInput("/");
+			await updated.promise;
+			const frame = editor.render(80);
+			expect(frame.filter(line => line.includes(CURSOR_MARKER))).toHaveLength(1);
+			expect(editor.isShowingAutocomplete()).toBe(false);
+			editor.handleInput("\x1b[B");
+			editor.handleInput("\t");
+			expect(editor.getText()).toBe("/");
+			const refreshed = Promise.withResolvers<void>();
+			editor.onAutocompleteUpdate = refreshed.resolve;
+			editor.handleInput("m");
+			expect(editor.getText()).toBe("/m");
+			await refreshed.promise;
+			rows = 24;
+			const restored = editor.render(80);
+			expect(restored.some(line => line.includes(CURSOR_MARKER))).toBe(true);
+			expect(editor.isShowingAutocomplete()).toBe(true);
+			expect(restored.map(line => stripVTControlCharacters(line)).join("\n")).toContain("model");
+
+			rows = 1;
+			editor.render(80);
+			let submitted = "";
+			editor.onSubmit = text => {
+				submitted = text;
+			};
+			editor.handleInput("\r");
+			expect(submitted).toBe("/m");
+		});
+
 		it("caps wrapped slash-command descriptions at two rows with an ellipsis", async () => {
 			const editor = new Editor(defaultEditorTheme);
 			const longDescription =

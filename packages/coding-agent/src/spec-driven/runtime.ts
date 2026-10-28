@@ -253,7 +253,7 @@ export async function createSpecDrivenRuntime(args: {
 					spawns: executor ? "*" : "scout",
 					hasUI: false,
 					toolNames: executor
-						? ["read", "grep", "glob", "write", "edit", "bash", "task"]
+						? ["read", "grep", "glob", "write", "edit", "bash", "task", "wait"]
 						: [
 								"read",
 								"grep",

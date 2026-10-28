@@ -709,6 +709,81 @@ test("executor delegates writable work to a native task child within the stage t
 	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);
 
+test("executor waits for an asynchronous native task result without polling", async () => {
+	const marker = "OMP_EXECUTOR_ASYNC_WAIT_PROBE";
+	const childResult = "asynchronous child completed";
+	const release = Promise.withResolvers<void>();
+	let dispatched = false;
+	let requestedWait = false;
+	let blockedOnWait = false;
+	const executed: string[] = [];
+	await using fixture = await consumer({
+		async reply(request) {
+			if (
+				request.messages.some(
+					message =>
+						message.role === "user" &&
+						contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+				)
+			) {
+				await release.promise;
+				return { text: childResult };
+			}
+			if (rolePayload(request)?.specDrivenRole !== "executor") return { text: "title" };
+			if (!dispatched) {
+				dispatched = true;
+				return {
+					tool: {
+						name: "task",
+						args: {
+							context: "Return the result after the executor starts waiting.",
+							tasks: [{ name: "WaitProbe", task: marker, solutionSpace: "return a result" }],
+						},
+					},
+				};
+			}
+			if (!requestedWait) {
+				requestedWait = true;
+				return { tool: { name: "wait", args: {} } };
+			}
+			return { text: "finished waiting" };
+		},
+	});
+	cfgAsyncEnabled.override(fixture.settings, true);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("executor-async-wait", context);
+	await fixture.runtime.ports.agents.prepare("executor", context);
+	const native = fixture.runtime.nativeSession("executor")!;
+	const unsubscribe = native.subscribe(event => {
+		if (event.type === "tool_execution_start") executed.push(event.toolName);
+		if (event.type === "tool_execution_update" && event.toolName === "wait") {
+			blockedOnWait = true;
+			release.resolve();
+		}
+	});
+	try {
+		await fixture.runtime.ports.agents.run(
+			{
+				role: "executor",
+				entry: true,
+				request: "Wait for the delegated result",
+				files: [],
+				outputPaths: ["completion.md"],
+			},
+			context,
+		);
+		expect(blockedOnWait).toBe(true);
+		expect(executed).toEqual(["task", "wait"]);
+		const result = native.messages.find(message => message.role === "toolResult" && message.toolName === "wait");
+		expect(result).toMatchObject({ isError: false });
+		expect(JSON.stringify(result)).toContain(childResult);
+		expect(fixture.provider.failures).toEqual([]);
+	} finally {
+		release.resolve();
+		unsubscribe();
+	}
+}, 120_000);
+
 test("Superpowers discovery and reads follow the executor through recursive task children only", async () => {
 	const skill = "requesting-code-review";
 	const childMarker = "OMP_EXECUTION_SKILL_CHILD";

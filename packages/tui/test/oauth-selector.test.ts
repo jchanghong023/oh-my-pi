@@ -8,12 +8,7 @@ beforeAll(async () => {
 });
 
 describe("OAuth logout selector", () => {
-	test("allows logging out through a device-login alias with canonical stored credentials", () => {
-		const providers = getOAuthProviders().filter(
-			provider => getOAuthCredentialProvider(provider.id) === "openai-codex",
-		);
-		const aliasIndex = providers.findIndex(provider => provider.id === "openai-codex-device");
-		expect(aliasIndex).toBeGreaterThanOrEqual(0);
+	test("offers one canonical logout entry for shared credentials, including disabled providers", () => {
 		let selected: string | undefined;
 		const selector = new OAuthSelectorComponent(
 			"logout",
@@ -23,6 +18,52 @@ describe("OAuth logout selector", () => {
 			},
 			() => {},
 			{ disabledProviders: ["openai-codex", "openai-codex-device"] },
+		);
+		try {
+			selector.handleInput("\x1b[B");
+			selector.handleInput("\r");
+			expect(selected).toBe("openai-codex");
+		} finally {
+			selector.stopValidation();
+		}
+	});
+
+	test("keeps different canonical credentials independently selectable", () => {
+		const other = getOAuthProviders().find(
+			provider => provider.id !== "openai-codex" && provider.id === getOAuthCredentialProvider(provider.id),
+		)!;
+		const selected: string[] = [];
+		const selector = new OAuthSelectorComponent(
+			"logout",
+			{
+				credentials: { has: provider => provider === "openai-codex" || provider === other.id },
+				keys: { source: () => undefined },
+			},
+			provider => selected.push(provider),
+			() => {},
+		);
+		try {
+			selector.handleInput("\r");
+			selector.handleInput("\x1b[B");
+			selector.handleInput("\r");
+			selector.handleInput("\x1b[B");
+			selector.handleInput("\r");
+			expect(new Set(selected)).toEqual(new Set(["openai-codex", other.id]));
+		} finally {
+			selector.stopValidation();
+		}
+	});
+
+	test("keeps device aliases available as separate login methods", () => {
+		const aliasIndex = getOAuthProviders().findIndex(provider => provider.id === "openai-codex-device");
+		let selected: string | undefined;
+		const selector = new OAuthSelectorComponent(
+			"login",
+			{ credentials: { has: () => false }, keys: { source: () => undefined } },
+			provider => {
+				selected = provider;
+			},
+			() => {},
 		);
 		try {
 			for (let index = 0; index < aliasIndex; index++) selector.handleInput("\x1b[B");
