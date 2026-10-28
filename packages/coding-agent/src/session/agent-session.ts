@@ -142,7 +142,7 @@ import {
 import { expandPromptTemplate, type PromptTemplate } from "../config/prompt-templates";
 import { buildServiceTierByFamily, isServiceTierForFamily, serviceTierSettingToTier } from "../config/service-tier";
 import { combine, type SettingsScope } from "../config/registry";
-import type { Settings } from "../config/settings";
+import { type Settings, withActiveSettings } from "../config/settings";
 import { RawSseDebugBuffer } from "@oh-my-pi/pi-tui/apps/debug/raw-sse-buffer";
 import { getEditStore } from "../edit/store";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
@@ -9906,8 +9906,10 @@ export class AgentSession implements SettingsScope {
 			} as unknown as CustomCommandContext;
 
 			const args = parseCommandArgs(argsString);
+			// Commands that consult findScopedSettings, including /review, must see this
+			// session's cache kill switch instead of the default enabled cache.
 			controller.signal.throwIfAborted();
-			result = await loaded.command.execute(args, ctx, argsString);
+			result = await withActiveSettings(this.settings, () => loaded.command.execute(args, ctx, argsString));
 			controller.signal.throwIfAborted();
 		} catch (err) {
 			if (controller.signal.aborted) return "";

@@ -19,6 +19,8 @@ export interface ResolvedReviewTarget {
 	/** Selected identities for callers that capture their own complete diff. */
 	baseRef?: string;
 	targetRef?: string;
+	/** Leading `?at=<generation>` when `prDiffUrl` is pinned, otherwise empty. */
+	prDiffQuery?: string;
 }
 
 export interface ReviewTargetUI {
@@ -43,7 +45,13 @@ export function createResolvedReviewTarget(
 	emptyMessage: string,
 	options: Pick<
 		ResolvedReviewTarget,
-		"filteredMessage" | "diffInstruction" | "contextInstruction" | "prDiffUrl" | "baseRef" | "targetRef"
+		| "filteredMessage"
+		| "diffInstruction"
+		| "contextInstruction"
+		| "prDiffUrl"
+		| "baseRef"
+		| "targetRef"
+		| "prDiffQuery"
 	> = {},
 ): ResolvedReviewTarget {
 	return {

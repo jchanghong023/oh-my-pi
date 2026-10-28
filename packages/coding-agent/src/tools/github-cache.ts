@@ -13,7 +13,12 @@
  *     synchronously, falling back to the cached row if the live fetch fails.
  *   Expensive PR diff rows past soft TTL but within hard TTL → return cached
  *     row AND schedule a background refresh (errors logged, never thrown).
- *   Past hard TTL → treat as miss and fetch fresh.
+ *     Only `/review` stores the snapshot it froze, keyed by `fetched_at`.
+ *     Cache writes do not. A published generation is insert-only: a later
+ *     snapshot that collides on the same millisecond gets a new id.
+ *   Past hard TTL → treat as miss and fetch fresh. Pinned generation reads
+ *     use that same hard TTL, counted from when `/review` retained the
+ *     snapshot, and honor the cache kill switch.
  */
 
 import { Database } from "bun:sqlite";
@@ -123,7 +128,21 @@ export function openDb(): Database | null {
 				source_url       TEXT,
 				PRIMARY KEY (auth_key, repo, kind, number, include_comments)
 			);
+			CREATE TABLE IF NOT EXISTS github_view_cache_generation (
+				auth_key        TEXT    NOT NULL,
+				repo             TEXT    NOT NULL,
+				kind             TEXT    NOT NULL CHECK (kind IN ('issue','pr','pr-diff')),
+				number           INTEGER NOT NULL,
+				include_comments INTEGER NOT NULL,
+				fetched_at       INTEGER NOT NULL,
+				retained_at      INTEGER NOT NULL,
+				payload          TEXT    NOT NULL,
+				rendered         TEXT    NOT NULL,
+				source_url       TEXT,
+				PRIMARY KEY (auth_key, repo, kind, number, include_comments, fetched_at)
+			);
 			CREATE INDEX IF NOT EXISTS idx_github_view_cache_fetched ON github_view_cache(fetched_at);
+			CREATE INDEX IF NOT EXISTS idx_github_view_cache_generation_retained ON github_view_cache_generation(retained_at);
 			PRAGMA user_version = 4;
 		`);
 		protectDbFiles(dbPath);
@@ -144,6 +163,7 @@ function evictExpired(db: Database, hardTtlMs: number): void {
 	try {
 		const cutoff = Date.now() - hardTtlMs;
 		db.query("DELETE FROM github_view_cache WHERE fetched_at < ?").run(cutoff);
+		db.query("DELETE FROM github_view_cache_generation WHERE retained_at < ?").run(cutoff);
 	} catch (err) {
 		logger.debug("github cache: eviction failed", { err: String(err) });
 	}
@@ -358,6 +378,190 @@ export interface PutCachedInput<T = unknown> {
 	fetchedAt?: number;
 }
 
+/** Caps a pathological run of distinct snapshots claiming the same millisecond. */
+const MAX_GENERATION_ID_STEPS = 1000;
+
+function isSqliteConstraint(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	const code = (err as { code?: string }).code;
+	return (
+		code === "SQLITE_CONSTRAINT_PRIMARYKEY" ||
+		code === "SQLITE_CONSTRAINT" ||
+		err.message.includes("UNIQUE constraint failed")
+	);
+}
+
+/**
+ * Keep one immutable pr-diff generation. The live row is still one-per-PR and
+ * a background refresh replaces it; review URLs address this copy by `fetchedAt`
+ * so that refresh cannot retarget a file index. Does not write the live row.
+ *
+ * A published id is never overwritten. Storing the same snapshot again returns
+ * its existing id and restarts its retention clock. A different snapshot that
+ * lands on the same millisecond gets the next free id, which the caller must
+ * publish. Retention runs from `retained_at` (when `/review` saved it), not from
+ * `fetched_at`, so a stale live row pinned by `/review` keeps its full hard TTL.
+ * Returns that id, or null when the database is unavailable.
+ */
+export function retainCachedGeneration<T = unknown>(input: PutCachedInput<T>): number | null {
+	const db = openDb();
+	if (!db) return null;
+	const authKey = input.authKey ?? DEFAULT_CACHE_AUTH_KEY;
+	const repo = normalizeRepo(input.repo);
+	const includeComments = input.includeComments ? 1 : 0;
+	const payloadJson = JSON.stringify(input.payload);
+	let fetchedAt = input.fetchedAt ?? Date.now();
+	const retainedAt = Date.now();
+	try {
+		for (let step = 0; step < MAX_GENERATION_ID_STEPS; step++) {
+			const existing = db
+				.query(
+					"SELECT (payload = ? AND rendered = ?) AS same FROM github_view_cache_generation WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ? AND fetched_at = ?",
+				)
+				.get(payloadJson, input.rendered, authKey, repo, input.kind, input.number, includeComments, fetchedAt) as
+				| { same: number }
+				| undefined;
+			if (existing?.same === 1) {
+				db.query(
+					"UPDATE github_view_cache_generation SET retained_at = ? WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ? AND fetched_at = ?",
+				).run(retainedAt, authKey, repo, input.kind, input.number, includeComments, fetchedAt);
+				return fetchedAt;
+			}
+			if (existing) {
+				fetchedAt += 1;
+				continue;
+			}
+			try {
+				db.query(
+					"INSERT INTO github_view_cache_generation (auth_key, repo, kind, number, include_comments, fetched_at, retained_at, payload, rendered, source_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				).run(
+					authKey,
+					repo,
+					input.kind,
+					input.number,
+					includeComments,
+					fetchedAt,
+					retainedAt,
+					payloadJson,
+					input.rendered,
+					input.sourceUrl ?? null,
+				);
+				protectDbFiles(getGithubCacheDbPath());
+				return fetchedAt;
+			} catch (err) {
+				if (!isSqliteConstraint(err)) throw err;
+				fetchedAt += 1;
+			}
+		}
+		logger.debug("github cache: generation id retries exhausted", {
+			repo,
+			kind: input.kind,
+			number: input.number,
+		});
+		return null;
+	} catch (err) {
+		logger.debug("github cache: generation write failed", { err: String(err) });
+		return null;
+	}
+}
+
+/** A generation stored by {@link retainCachedGeneration}, with the time it was saved. */
+export interface CachedGeneration<T = unknown> extends CachedView<T> {
+	retainedAt: number;
+}
+
+/** Read a pr-diff generation stored by {@link retainCachedGeneration}. */
+export function getCachedGeneration<T = unknown>(
+	repo: string,
+	kind: CacheKind,
+	number: number,
+	includeComments: boolean,
+	fetchedAt: number,
+	authKey: string = DEFAULT_CACHE_AUTH_KEY,
+): CachedGeneration<T> | null {
+	const db = openDb();
+	if (!db) return null;
+	try {
+		const row = db
+			.query(
+				"SELECT auth_key, repo, kind, number, include_comments, fetched_at, retained_at, payload, rendered, source_url FROM github_view_cache_generation WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ? AND fetched_at = ?",
+			)
+			.get(authKey, normalizeRepo(repo), kind, number, includeComments ? 1 : 0, fetchedAt) as
+			| (Row & { retained_at: number })
+			| undefined;
+		if (!row) return null;
+		let payload: T;
+		try {
+			payload = JSON.parse(row.payload) as T;
+		} catch (err) {
+			logger.debug("github cache: corrupt generation row, ignoring", { err: String(err), repo, kind, number });
+			return null;
+		}
+		return {
+			authKey: row.auth_key,
+			repo: row.repo,
+			kind: row.kind,
+			number: row.number,
+			includeComments: row.include_comments === 1,
+			fetchedAt: row.fetched_at,
+			retainedAt: row.retained_at,
+			payload,
+			rendered: row.rendered,
+			sourceUrl: row.source_url ?? undefined,
+		};
+	} catch (err) {
+		logger.debug("github cache: generation read failed", { err: String(err) });
+		return null;
+	}
+}
+
+function deleteCachedGeneration(
+	repo: string,
+	kind: CacheKind,
+	number: number,
+	includeComments: boolean,
+	fetchedAt: number,
+	authKey: string,
+): void {
+	const db = openDb();
+	if (!db) return;
+	try {
+		db.query(
+			"DELETE FROM github_view_cache_generation WHERE auth_key = ? AND repo = ? AND kind = ? AND number = ? AND include_comments = ? AND fetched_at = ?",
+		).run(authKey, normalizeRepo(repo), kind, number, includeComments ? 1 : 0, fetchedAt);
+	} catch (err) {
+		logger.debug("github cache: generation delete failed", { err: String(err) });
+	}
+}
+
+/**
+ * Read one immutable generation, enforcing the cache kill switch and hard TTL
+ * (measured from when the generation was retained). An expired generation is
+ * deleted. Does not read or refresh the live row.
+ */
+export function getRetainedGeneration<T = unknown>(
+	repo: string,
+	kind: CacheKind,
+	number: number,
+	includeComments: boolean,
+	fetchedAt: number,
+	authKey: string = DEFAULT_CACHE_AUTH_KEY,
+	settings?: Settings,
+): CachedGeneration<T> | null {
+	const ttl = resolveCacheTtl(settings);
+	// Pinned-only sessions never enter `getOrFetchView`, so the sweep has to
+	// run here too. Disabled lookups sweep as well; they just refuse the read.
+	sweepIfDue(ttl.hardMs);
+	if (!ttl.enabled) return null;
+	const row = getCachedGeneration<T>(repo, kind, number, includeComments, fetchedAt, authKey);
+	if (!row) return null;
+	if (Date.now() - row.retainedAt > ttl.hardMs) {
+		deleteCachedGeneration(repo, kind, number, includeComments, fetchedAt, authKey);
+		return null;
+	}
+	return row;
+}
+
 export function putCached<T = unknown>(input: PutCachedInput<T>): void {
 	const db = openDb();
 	if (!db) return;
@@ -442,6 +646,7 @@ export function clearAll(): void {
 	if (!db) return;
 	try {
 		db.query("DELETE FROM github_view_cache").run();
+		db.query("DELETE FROM github_view_cache_generation").run();
 	} catch (err) {
 		logger.debug("github cache: clear failed", { err: String(err) });
 	}

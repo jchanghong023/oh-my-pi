@@ -46,11 +46,12 @@ function renderReviewPromptFile(
 	file: ReviewDiffSnapshot["files"][number],
 	previewLines: number,
 	prDiffUrl?: string,
+	prDiffQuery = "",
 ): ReviewPromptFile {
 	return {
 		path: file.path,
 		diffIndex: file.diffIndex,
-		diffUrl: prDiffUrl ? `${prDiffUrl}/${file.diffIndex}` : undefined,
+		diffUrl: prDiffUrl ? `${prDiffUrl}/${file.diffIndex}${prDiffQuery}` : undefined,
 		linesAdded: file.linesAdded,
 		linesRemoved: file.linesRemoved,
 		ext: file.path.match(/\.([^.]+)$/)?.[1] ?? "",
@@ -123,7 +124,8 @@ export function buildReviewPrompt(
 	const skipDiff = exceedsInlineDiffLimit(target);
 	const linesPerFile = skipDiff ? Math.max(5, Math.floor(100 / target.snapshot.files.length)) : 0;
 	const prDiffUrl = frozenMaterials ? undefined : target.prDiffUrl;
-	const files = target.snapshot.files.map(file => renderReviewPromptFile(file, linesPerFile, prDiffUrl));
+	const prDiffQuery = target.prDiffQuery ?? "";
+	const files = target.snapshot.files.map(file => renderReviewPromptFile(file, linesPerFile, prDiffUrl, prDiffQuery));
 	const agentCount = getRecommendedReviewAgentCount(target.snapshot);
 	return prompt.render(reviewRequestTemplate, {
 		mode: target.mode,
@@ -141,6 +143,7 @@ export function buildReviewPrompt(
 		suppliedPatch: target.kind === "patch",
 		prDiffUrl,
 		frozenMaterials,
+		prDiffQuery,
 		additionalInstructions: additionalInstructions?.trim(),
 	});
 }
