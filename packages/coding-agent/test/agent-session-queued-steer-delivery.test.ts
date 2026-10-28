@@ -584,7 +584,15 @@ describe("AgentSession queued steer delivery", () => {
 
 	it("emits native manual compaction lifecycle while preserving the original failure", async () => {
 		const { session } = await createSession([]);
-		const events: Array<{ type: string; operationId: string; errorMessage?: string }> = [];
+		const events: Array<{
+			type: string;
+			operationId: string;
+			mode?: string;
+			errorMessage?: string;
+			skipped?: boolean;
+			aborted?: boolean;
+			summaryRef?: string;
+		}> = [];
 		session.subscribe(event => {
 			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end") {
 				events.push(event);
@@ -592,14 +600,29 @@ describe("AgentSession queued steer delivery", () => {
 		});
 		let failure: unknown;
 		try {
-			await session.compact();
+			await session.compact(undefined, { mode: "soft" });
 		} catch (error) {
 			failure = error;
 		}
 		expect(failure).toBeInstanceOf(Error);
 		expect(events.map(event => event.type)).toEqual(["manual_compaction_start", "manual_compaction_end"]);
 		expect(events[1].operationId).toBe(events[0].operationId);
+		expect(events[0].mode).toBe("soft");
+		expect(events[1].aborted).toBe(false);
+		expect(events[1].skipped).toBe(true);
+		expect(events[1].summaryRef).toBeUndefined();
 		expect(events[1].errorMessage).toBe((failure as Error).message);
+	});
+
+	it("does not emit a manual lifecycle for rejected admission", async () => {
+		const { session } = await createSession([]);
+		const events: string[] = [];
+		session.subscribe(event => {
+			if (event.type === "manual_compaction_start" || event.type === "manual_compaction_end")
+				events.push(event.type);
+		});
+		await expect(session.compact("focus", { mode: "snapcompact" })).rejects.toThrow();
+		expect(events).toEqual([]);
 	});
 
 	it("does not admit a steer whose preparation crosses a preserving stop", async () => {

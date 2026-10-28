@@ -46,19 +46,34 @@ describe("RPC progress events", () => {
 		const committed = await rpc.compact();
 		expect(committed.summary).toBe("compacted by the test hook");
 		const pair = events.filter(event => event.type.startsWith("manual_compaction_"));
-		expect(pair).toEqual([
-			{ type: "manual_compaction_start" },
-			{ type: "manual_compaction_end", aborted: false, result: committed },
-		]);
+		expect(pair).toHaveLength(2);
+		const [startEvent, endEvent] = pair;
+		if (startEvent?.type !== "manual_compaction_start" || endEvent?.type !== "manual_compaction_end") {
+			throw new Error("Expected a manual compaction start/end pair");
+		}
+		expect(typeof startEvent.operationId).toBe("string");
+		expect(startEvent.operationId.length).toBeGreaterThan(0);
+		expect(endEvent.operationId).toBe(startEvent.operationId);
+		expect(endEvent).toMatchObject({ aborted: false, result: committed });
+		expect(endEvent.skipped).toBeUndefined();
+		expect(endEvent.errorMessage).toBeUndefined();
 		// Automatic compaction keeps its own pair; a manual one never reports through it.
 		expect(events.some(event => event.type.startsWith("auto_compaction_"))).toBe(false);
 
 		// Nothing left to compact: the command fails and the pair still closes, as skipped.
 		events.length = 0;
 		expect(String(await rpc.compact().catch((error: unknown) => error))).toContain("Already compacted");
-		expect(events.filter(event => event.type.startsWith("manual_compaction_"))).toEqual([
-			{ type: "manual_compaction_start" },
-			{ type: "manual_compaction_end", aborted: false, skipped: true, errorMessage: "Already compacted" },
-		]);
+		const skippedPair = events.filter(event => event.type.startsWith("manual_compaction_"));
+		expect(skippedPair).toHaveLength(2);
+		const [skippedStart, skippedEnd] = skippedPair;
+		if (skippedStart?.type !== "manual_compaction_start" || skippedEnd?.type !== "manual_compaction_end") {
+			throw new Error("Expected a skipped manual compaction start/end pair");
+		}
+		expect(typeof skippedStart.operationId).toBe("string");
+		expect(skippedStart.operationId.length).toBeGreaterThan(0);
+		expect(skippedStart.operationId).not.toBe(startEvent.operationId);
+		expect(skippedEnd.operationId).toBe(skippedStart.operationId);
+		expect(skippedEnd).toMatchObject({ aborted: false, skipped: true, errorMessage: "Already compacted" });
+		expect(skippedEnd.result).toBeUndefined();
 	}, 60_000);
 });

@@ -423,6 +423,7 @@ export interface SessionMaintenanceHost {
 	isStreaming(): boolean;
 	isGeneratingHandoff(): boolean;
 	promptGeneration(): number;
+	sessionGeneration(): number;
 	sessionId(): string;
 	messages(): AgentMessage[];
 	baseSystemPrompt(): string[];
@@ -1154,7 +1155,9 @@ export class SessionMaintenance {
 		retryController?: AbortController,
 		onCommitted?: () => void,
 	): Promise<CompactionResult> {
-		const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
+		const inheritedCompactionId = retryController ? logger.getLogContext().compaction_id : undefined;
+		const compactionId = typeof inheritedCompactionId === "string" ? inheritedCompactionId : crypto.randomUUID();
+		const sessionGeneration = this.#host.sessionGeneration();
 		return logger.withLogContext(
 			{
 				operation_id: logger.getLogContext().operation_id ?? compactionId,
@@ -1209,6 +1212,7 @@ export class SessionMaintenance {
 				let manualCompactionStarted = false;
 				let manualCompactionResult: CompactionResult | undefined;
 				let manualCompactionError: unknown;
+				let manualCompactionFailed = false;
 				const finish = (result: CompactionResult): CompactionResult => {
 					manualCompactionResult = result;
 					return result;
@@ -1247,7 +1251,11 @@ export class SessionMaintenance {
 						interruptedTurnGeneration = this.#host.promptGeneration();
 						manualCompactionStarted = true;
 						await this.#emitLifecycleEvent(
-							{ type: "manual_compaction_start", ...(compactMode ? { mode: compactMode.name } : {}) },
+							{
+								type: "manual_compaction_start",
+								operationId: compactionId,
+								...(compactMode ? { mode: compactMode.name } : {}),
+							},
 							false,
 						);
 					}
@@ -1634,6 +1642,7 @@ export class SessionMaintenance {
 					options?.onComplete?.(compactionResult);
 					return finish(compactionResult);
 				} catch (error) {
+					manualCompactionFailed = true;
 					manualCompactionError = error;
 					const err = error instanceof Error ? error : new Error(String(error));
 					if (error instanceof ManualCompactionNoOpError) rejectedAsNoOp = true;
@@ -1670,13 +1679,16 @@ export class SessionMaintenance {
 					throw error;
 				} finally {
 					if (ownsCompactionController) {
-						if (manualCompactionStarted) {
-							await this.#emitManualCompactionEnd(
-								manualCompactionResult,
-								manualCompactionError,
-								compactionAbortController.signal.aborted,
-							);
-						}
+						const entry =
+							manualCompactionStarted &&
+							compactionCommitted &&
+							sessionGeneration === this.#host.sessionGeneration()
+								? this.#host.sessionManager
+										.getBranch()
+										.findLast(
+											candidate => candidate.type === "compaction" && candidate.operationId === compactionId,
+										)
+								: undefined;
 						if (this.#compactionAbortController === compactionAbortController) {
 							this.#compactionAbortController = undefined;
 						}
@@ -1706,6 +1718,22 @@ export class SessionMaintenance {
 								this.#scheduleInterruptedTurnResume(interruptedTurnGeneration);
 							}
 						}
+						// Publish only after reconnecting and releasing the cleanup barrier. Subscriber
+						// delivery is synchronous, before parked prompts can resume in a microtask.
+						if (manualCompactionStarted) {
+							try {
+								await this.#emitManualCompactionEnd(
+									compactionId,
+									entry?.id,
+									manualCompactionResult,
+									manualCompactionError,
+									compactionAbortController.signal.aborted,
+								);
+							} catch (error) {
+								if (!manualCompactionFailed) throw error;
+								logger.warn("Manual compaction end observer failed", { error: String(error) });
+							}
+						}
 					}
 				}
 			},
@@ -1714,21 +1742,31 @@ export class SessionMaintenance {
 
 	/** Close the `manual_compaction_start` a manual pass emitted, with its outcome. */
 	#emitManualCompactionEnd(
+		operationId: string,
+		summaryRef: string | undefined,
 		result: CompactionResult | undefined,
 		error: unknown,
 		signalAborted: boolean,
 	): Promise<void> {
-		if (result) return this.#emitLifecycleEvent({ type: "manual_compaction_end", result, aborted: false }, false);
+		if (result) {
+			return this.#emitLifecycleEvent(
+				{ type: "manual_compaction_end", operationId, summaryRef, result, aborted: false },
+				false,
+			);
+		}
 		const errorMessage =
 			error instanceof Error ? error.message : error === undefined ? "Compaction failed" : String(error);
 		if (error instanceof ManualCompactionNoOpError) {
 			return this.#emitLifecycleEvent(
-				{ type: "manual_compaction_end", aborted: false, skipped: true, errorMessage },
+				{ type: "manual_compaction_end", operationId, summaryRef, aborted: false, skipped: true, errorMessage },
 				false,
 			);
 		}
 		const aborted = signalAborted || error instanceof CompactionCancelledError;
-		return this.#emitLifecycleEvent({ type: "manual_compaction_end", aborted, errorMessage }, false);
+		return this.#emitLifecycleEvent(
+			{ type: "manual_compaction_end", operationId, summaryRef, aborted, errorMessage },
+			false,
+		);
 	}
 
 	/**

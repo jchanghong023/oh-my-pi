@@ -16,6 +16,7 @@ import {
 	v4ConversationWorkflowRunArtifactsResultSchema,
 	v4ConversationWorkflowRunArtifactReadResultSchema,
 	type OmpSpecDetails,
+	type OmpSpecRunBinding,
 } from "../../src/modes/zcode/schema";
 import * as Baseline from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/index";
 import {
@@ -217,7 +218,7 @@ class SpecPeer {
 			mode: result.ack.mode,
 		};
 	}
-	async send(sessionId: string, text: string) {
+	async send(sessionId: string, text: string, specRun?: OmpSpecRunBinding) {
 		const rows = COMMANDS_REQUIRING_BASE_REVISION.has("sendText")
 			? v4ConversationRowsRangeResultSchema.parse(
 					await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
@@ -229,7 +230,7 @@ class SpecPeer {
 				clientId: "native-spec-consumer",
 				sessionId,
 				type: "sendText",
-				payload: { text },
+				payload: { text, ...(specRun ? { specRun } : {}) },
 				issuedAt: Date.now(),
 				...(rows ? { baseRevision: rows.atRevision } : {}),
 			}),
@@ -503,6 +504,63 @@ async function rejectChangedApproval(
 }
 
 describe("Native Dev public stdio acceptance", () => {
+	test(
+		"ordinary desktop text rejects stale material bindings without delivery",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-text-binding-");
+			await using provider = createProviderFixture({
+				dialogue: request => ({ text: `BINDING_REPLY_${continuationText(request)}` }),
+			});
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new SpecPeer(config.cwd, config.env);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			await peer.subscribe(session, "binding-root", "desktop-continuous");
+			await command(peer, session, "/dev");
+			await command(peer, session, startText);
+			const current = await stageReady(peer, session, "requirements");
+			const { actionId: _actionId, ...binding } = current.spec.actions[0]!.binding;
+			expect(binding.files.length).toBeGreaterThan(0);
+			const beforeRows = await rows(peer, current.stageId);
+			const beforeRequests = provider.requests.length;
+			const staleList = { ...binding, files: binding.files.slice(1) };
+			expect(await peer.send(session, "STALE_FILE_LIST", staleList)).toMatchObject({
+				status: "rejected",
+				reasonCode: "guard.specRun",
+			});
+			const target = path.join(config.cwd, binding.files[0]!.path);
+			const original = await fs.readFile(target);
+			try {
+				await fs.appendFile(target, "\nUnapproved external material edit.\n");
+				expect(await peer.send(session, "STALE_FILE_HASH", binding)).toMatchObject({
+					status: "rejected",
+					reasonCode: "guard.specRun",
+				});
+			} finally {
+				await fs.writeFile(target, original);
+			}
+			expect(await rows(peer, current.stageId)).toEqual(beforeRows);
+			expect(provider.requests.length).toBe(beforeRequests);
+			for (const [text, supplied] of [
+				["VALID_BOUND_TEXT", binding],
+				["LEGACY_UNBOUND_TEXT", undefined],
+			] as const) {
+				const since = peer.frames.length;
+				expect(await peer.send(session, text, supplied)).toMatchObject({ status: "accepted" });
+				await peer.next(
+					frame =>
+						isRecord(frame.params) &&
+						frame.params.topic === `conversation/${current.stageId}` &&
+						strings(frame).includes(`BINDING_REPLY_${text}`),
+					since,
+				);
+				expect(provider.requests.some(request => continuationText(request) === text)).toBe(true);
+			}
+			expect(provider.failures).toEqual([]);
+			await peer.close();
+		},
+		BUDGET,
+	);
 	test(
 		"side selection cannot fork or send until the workspace Dev owner exits successfully",
 		async () => {

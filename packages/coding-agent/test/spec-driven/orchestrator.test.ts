@@ -16,6 +16,7 @@ describe("explicit repair intent", () => {
 			"修复这个错误，不要修改公开 API",
 			"修复报告中区别不清的问题",
 			"请修正批准范围内的失败测试",
+			"请继续完成已批准计划",
 			"Please fix the obstruction, without changing the approved files",
 			"修复：仅修复归档目录阻塞，删除刚才夹具自有的标记文件和目标目录；不修改已验收材料、不执行业务实现、不运行同步归档，等待我 /dev next。",
 		]) {

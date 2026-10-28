@@ -74,30 +74,45 @@ test.skipIf(!tuiTest)(
 			const journal = await nativeTranscript(executing, "executor");
 			const journalFile = executing.sessions.executor!.sessionFile!;
 
+			const waitForBash = async (command: string, target: boolean, output?: RegExp) => {
+				await eventually(
+					() => tui("text"),
+					screen => {
+						const lines = screen.split("\n");
+						const start = lines.findLastIndex(line => line.trim() === `$ ${command}`);
+						if (start < 0 || !footerAt(screen, target)) return false;
+						const result = lines.slice(start + 1, -4).join("\n");
+						return (
+							!result.includes("Running") &&
+							!result.includes("(cancelled)") &&
+							!/\(exit \d+\)/.test(result) &&
+							(output === undefined || output.test(result))
+						);
+					},
+				);
+			};
+			const footerAt = (screen: string, target: boolean) =>
+				screen
+					.split("\n")
+					.slice(-4)
+					.some(
+						line =>
+							line.includes(path.basename(cwd)) &&
+							(target ? line.includes("dev-cwd-target") : !line.includes("dev-cwd-target")),
+					);
+
 			await tui("submit", "!cd dev-cwd-target");
-			await eventually(
-				() => tui("text"),
-				screen =>
-					screen
-						.split("\n")
-						.slice(-4)
-						.some(line => line.includes("dev-cwd-target")),
-			);
+			await waitForBash("cd dev-cwd-target", true);
 			expect(await Bun.file(journalFile).exists()).toBe(true);
 			expect(nativeMessageEntries(await nativeTranscript(executing, "executor"))).toEqual(
 				nativeMessageEntries(journal),
 			);
 			await tui("submit", "!pwd");
-			await tui("expect", "text", "[/\\\\]dev-cwd-target", "--regex", "--timeout", "30000");
+			await waitForBash("pwd", true, /[/\\]project[/\\]dev-cwd-target(?:\s|[│┃]|$)/);
 			await tui("submit", "!cd ..");
-			await eventually(
-				() => tui("text"),
-				screen =>
-					screen
-						.split("\n")
-						.slice(-4)
-						.some(line => line.includes(path.basename(cwd))),
-			);
+			await waitForBash("cd ..", false);
+			await tui("submit", "!pwd -P");
+			await waitForBash("pwd -P", false, /[/\\]project(?:\s|[│┃]|$)/);
 			await tui("submit", "/dev");
 			const restored = (await stage("executing")).run!;
 			expect(restored.runId).toBe(executing.runId);

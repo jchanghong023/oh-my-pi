@@ -32,11 +32,15 @@ export function registerMaterialFailureTests(roles: readonly ("requirements" | "
 							const calls = provider.requests.length;
 							const transcript = await nativeTranscript(before.run!, role);
 							await tui("submit", role === "solution" ? "/dev next pure" : "/dev next");
+							// Missing specs are reported against their directory, not the saved recursive glob.
 							const material =
 								role === "requirements"
 									? kind === "malformed"
 										? `openspec/changes/${before.run!.changeId}`
-										: before.run!.paths!.requirements.find(file => file.includes("*"))!
+										: before
+												.run!.paths!.requirements.find(file => file.includes("*"))!
+												.split("*", 1)[0]!
+												.replace(/\/$/u, "")
 									: (entry(provider, role).outputPaths as string[])[0]!;
 							const reason =
 								kind !== "malformed"

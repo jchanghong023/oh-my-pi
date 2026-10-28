@@ -31,17 +31,6 @@ export type AgentSessionEvent =
 	  })
 	/** Target-session cancellation begins before any awaited teardown, including pending UI. */
 	| { type: "session_abort"; reason?: string }
-	| { type: "manual_compaction_start"; operationId: string }
-	| {
-			type: "manual_compaction_end";
-			operationId: string;
-			result: CompactionResult | undefined;
-			/** Canonical journal compaction entry, when this operation committed one. */
-			summaryRef?: string;
-			aborted: boolean;
-			errorMessage?: string;
-			skipped?: boolean;
-	  }
 	| {
 			type: "auto_compaction_start";
 			operationId?: string;
@@ -66,11 +55,15 @@ export type AgentSessionEvent =
 	// the next configured method stay inside the same pair.
 	| {
 			type: "manual_compaction_start";
+			operationId: string;
 			/** The `/compact <mode>` subcommand, when one was given. */
 			mode?: string;
 	  }
 	| {
 			type: "manual_compaction_end";
+			operationId: string;
+			/** Canonical journal compaction entry, when this operation committed one. */
+			summaryRef?: string;
 			/** Present when the compaction committed. */
 			result?: CompactionResult;
 			/** True when the compaction was cancelled (abort, or a `session_before_compact` hook). */

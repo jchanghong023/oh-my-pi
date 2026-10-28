@@ -114,6 +114,7 @@ describe("async speculative compaction", () => {
 			isStreaming: () => false,
 			isGeneratingHandoff: () => false,
 			promptGeneration: () => 0,
+			sessionGeneration: () => 0,
 			hasExperimentalContextRolloverTools: () => options.recoveryTools ?? true,
 			queueExperimentalContextNotesReminder: () => events.push("notes-reminder"),
 			sessionId: () => sessionManager.getSessionId(),

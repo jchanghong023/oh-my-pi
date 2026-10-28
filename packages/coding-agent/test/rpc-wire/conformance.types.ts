@@ -187,7 +187,11 @@ export type SessionEventSet = Assert<
 >;
 // Compaction events carry fork journaling fields (operationId, summaryRef) the wire does
 // not model; they are server-side extras, so those events are checked as a subset.
-type WireSubsetEvents = "auto_compaction_start" | "auto_compaction_end";
+type WireSubsetEvents =
+	| "auto_compaction_start"
+	| "auto_compaction_end"
+	| "manual_compaction_start"
+	| "manual_compaction_end";
 export type SessionEvents = Assert<
 	AllTrue<{
 		[K in Wire.RpcAgentEvent["type"]]: [K] extends [WireSubsetEvents]

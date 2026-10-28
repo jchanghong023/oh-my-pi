@@ -270,6 +270,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			"compaction.supersedeReads": false,
 			"compaction.dropUseless": false,
 		});
+		const maintenanceError = new Error("Summary generation failed.");
 		// Short-circuit only summary generation at the existing extension boundary;
 		// preparation, persisted history rewrite and continuation decisions stay real.
 		const extensionRunner = {
@@ -277,7 +278,7 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 			emit: async (event: { type: string; preparation?: CompactionPreparation }) => {
 				if (event.type !== "session_before_compact" || !event.preparation) return undefined;
 				if (maintenanceOutcome === "cancel") return { cancel: true };
-				if (maintenanceOutcome === "error") throw new Error("Summary generation failed.");
+				if (maintenanceOutcome === "error") throw maintenanceError;
 				return {
 					compaction: {
 						summary: "Previous work summarized.",
@@ -319,16 +320,40 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				updatedAt: now,
 			},
 		});
-		return { session, manager, events, providerCalls: () => calls };
+		return { session, manager, events, maintenanceError, providerCalls: () => calls };
 	}
 
-	it.each(["success", "cancel", "error"] as const)(
+	it.each(["success", "cancel", "error", "post-error"] as const)(
 		"persists only committed manual compaction identity (%s) across journal reload",
 		async outcome => {
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-compaction-identity-"));
 			try {
-				const { manager, events } = await createTerminalSession("length", 100, undefined, outcome, directory);
+				const { manager, events, maintenanceError } = await createTerminalSession(
+					"length",
+					100,
+					undefined,
+					outcome === "post-error" ? "success" : outcome,
+					directory,
+				);
+				const terminalStates: { isCompacting: boolean; committedEntryId: string | undefined }[] = [];
+				session!.subscribe(event => {
+					if (event.type === "manual_compaction_end") {
+						terminalStates.push({
+							isCompacting: session!.isCompacting,
+							committedEntryId: manager.getBranch().findLast(entry => entry.type === "compaction")?.id,
+						});
+					}
+				});
 				if (outcome === "success") await session!.compact();
+				else if (outcome === "post-error") {
+					await expect(
+						session!.compact(undefined, {
+							onComplete: () => {
+								throw maintenanceError;
+							},
+						}),
+					).rejects.toBe(maintenanceError);
+				} else if (outcome === "error") await expect(session!.compact()).rejects.toBe(maintenanceError);
 				else await expect(session!.compact()).rejects.toBeInstanceOf(Error);
 				await manager.flush();
 				const sessionFile = manager.getSessionFile()!;
@@ -337,6 +362,8 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				const restored = await SessionManager.open(sessionFile);
 				const entries = restored.getBranch().filter(entry => entry.type === "compaction");
 				await restored.close();
+				expect(events.filter(event => event.type === "manual_compaction_start")).toHaveLength(1);
+				expect(events.filter(event => event.type === "manual_compaction_end")).toHaveLength(1);
 				const start = events.find(event => event.type === "manual_compaction_start");
 				const end = events.find(event => event.type === "manual_compaction_end");
 				expect(start?.type).toBe("manual_compaction_start");
@@ -344,8 +371,15 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 				if (start?.type !== "manual_compaction_start" || end?.type !== "manual_compaction_end") {
 					throw new Error("Missing manual compaction lifecycle");
 				}
+				expect(terminalStates).toEqual([
+					{
+						isCompacting: false,
+						committedEntryId: outcome === "success" || outcome === "post-error" ? end.summaryRef : undefined,
+					},
+				]);
+				expect(start.operationId).toBeTruthy();
 				expect(end.operationId).toBe(start.operationId);
-				if (outcome === "success") {
+				if (outcome === "success" || outcome === "post-error") {
 					expect(entries).toHaveLength(1);
 					expect(entries[0]).toMatchObject({
 						id: end.summaryRef,
@@ -353,10 +387,16 @@ describe("AgentSession CodeAgent terminal context maintenance", () => {
 						origin: "manual",
 					});
 					expect(end.summaryRef).toBeDefined();
+					if (outcome === "post-error") {
+						expect(end.result).toBeUndefined();
+						expect(end.errorMessage).toBe(maintenanceError.message);
+					}
 				} else {
 					expect(entries).toHaveLength(0);
 					expect(end.result).toBeUndefined();
 					expect(end.summaryRef).toBeUndefined();
+					expect(end.aborted).toBe(outcome === "cancel");
+					expect(end.skipped).toBeUndefined();
 				}
 			} finally {
 				await session?.dispose();

@@ -2752,6 +2752,7 @@ export class AgentSession implements SettingsScope {
 			isStreaming: () => this.isStreaming,
 			isGeneratingHandoff: () => this.isGeneratingHandoff,
 			promptGeneration: () => this.#promptGeneration,
+			sessionGeneration: () => this.#sessionGeneration,
 			sessionId: () => this.sessionId,
 			messages: () => this.messages,
 			baseSystemPrompt: () => this.#tools.baseSystemPrompt,
@@ -7486,41 +7487,8 @@ export class AgentSession implements SettingsScope {
 	}
 
 	/** Compact the active session history. */
-	async compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
-		const operationId = crypto.randomUUID();
-		const sessionGeneration = this.#sessionGeneration;
-		const operation = logger.withLogContext({ operation_id: operationId, compaction_id: operationId }, () =>
-			this.#maintenance.compact(customInstructions, options),
-		);
-		this.#emit({ type: "manual_compaction_start", operationId });
-		try {
-			const result = await operation;
-			const entry =
-				sessionGeneration === this.#sessionGeneration
-					? this.sessionManager
-							.getBranch()
-							.findLast(candidate => candidate.type === "compaction" && candidate.operationId === operationId)
-					: undefined;
-			this.#emit({
-				type: "manual_compaction_end",
-				operationId,
-				result,
-				summaryRef: entry?.id,
-				aborted: false,
-			});
-			return result;
-		} catch (error) {
-			this.#emit({
-				type: "manual_compaction_end",
-				operationId,
-				result: undefined,
-				aborted:
-					error instanceof Error && (error.name === "CompactionCancelledError" || error.name === "AbortError"),
-				skipped: error instanceof Error && error.name === "ManualCompactionNoOpError",
-				errorMessage: error instanceof Error ? error.message : String(error),
-			});
-			throw error;
-		}
+	compact(customInstructions?: string, options?: CompactOptions): Promise<CompactionResult> {
+		return this.#maintenance.compact(customInstructions, options);
 	}
 
 	/** Cancel active manual, automatic, and handoff maintenance, preserving an optional source reason. */

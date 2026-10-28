@@ -48,7 +48,7 @@ export function hasExplicitRepairIntent(text: string): boolean {
 		)
 	)
 		return false;
-	return /^(?:(?:(?:could|would) you\s+)?(?:please\s+)?(?:fix|repair|correct)\b|(?:请(?:你)?(?:帮我)?\s*|帮我\s*)?(?:修复|修正|修好|改正|纠正|继续实施已批准|把[^。！？?\n]{1,80}(?:修复|修正|修好)))/iu.test(
+	return /^(?:(?:(?:could|would) you\s+)?(?:please\s+)?(?:fix|repair|correct)\b|(?:请(?:你)?(?:帮我)?\s*|帮我\s*)?(?:修复|修正|修好|改正|纠正|继续(?:实施|完成)已批准|把[^。！？?\n]{1,80}(?:修复|修正|修好)))/iu.test(
 		value,
 	);
 }

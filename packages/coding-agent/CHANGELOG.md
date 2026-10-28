@@ -87,6 +87,8 @@
 
 - Let `/dev` execution agents wait for asynchronous subagent results without repeatedly polling status or filling the conversation with waiting updates.
 - Fix `/dev` native execution capabilities, recursive requirements handoff and approval checks, report acceptance boundaries, cancellation settlement, stage recovery, and partial sync/archive cleanup so failures and remaining work are retained accurately.
+- Enforce material-version bindings for ordinary `/dev` desktop inputs and recognize explicit requests to continue the approved plan without requiring a fixed repair keyword.
+- Preserve a single native manual-compaction lifecycle after upstream integration, with shared operation identity, committed-only summary references and terminal events after settlement.
 - Show actual diffs for conflict resolutions, including successful files when a bulk resolution partially fails.
 - Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
 - Project and save global Team configuration without requiring a chat session; preserve ordered explicit members and defer default model selection until a discussion starts.

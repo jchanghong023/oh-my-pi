@@ -564,7 +564,6 @@ export class OmpSpecDrivenBridge {
 				);
 		};
 		assertCurrent();
-		if (binding.actionId === undefined && !text.startsWith("/")) return;
 		const saved = this.#runs.get(binding.runId);
 		const expected =
 			saved?.artifacts.flatMap(artifact => {
@@ -582,6 +581,7 @@ export class OmpSpecDrivenBridge {
 			}
 		}
 		assertCurrent();
+		if (binding.actionId === undefined && !text.startsWith("/")) return;
 		if (
 			!controller!
 				.actions()
